@@ -3,10 +3,13 @@
 Governance scope: the **`grande-sertao-veredas`** repo, Veredas 2 — the successor suite to Veredas 1
 (`C:\Source\Repos\Veredas`: its own history, never merged here). Authority: `docs/veredas-plan.md`
 wins on intent, this contract on status, `tools/leis` enforces the laws (`docs/questions.md` Q4).
-The `C-xxx` clauses are the suite's structural laws, each proven by one test file per law under
+C-001..C-006 are the suite's structural laws, each proven by one test file per law under
 `tools/leis/tests/` on synthetic suites (exact violations, by message) plus `real_tree.rs` on the
 tree as it is; one file per law, so a change to one law re-stales only its clause. A law changes
-only with its clause. The eight components and the two suite-wide rules that need code live as
+only with its clause. From C-007 the clauses are a component's capabilities, one test file per
+capability under the component's `tests/`, run against reality (real sockets, the real server),
+never a mock; its plan (`docs/<nome>-plan.md`) says what each absorbed from Veredas 1. The eight
+components and the two suite-wide rules that need code live as
 `P-xxx` under **Pending Contract Deltas**, one per component, each citing the plan's section and
 the Veredas 1 crates it absorbs; none copies the plan's prose. A member arrives this way: its
 `P-xxx` → its `docs/<nome>-plan.md` → its clauses here → `crates/veredas-<nome>` at core's MAJOR →
@@ -61,13 +64,30 @@ refute round found and what it changed is in the clause's evidence note.
 - **Evidence:** .zen/evidence/C-006.md
 - **Status:** verified
 
-## Pending Contract Deltas
-
-### P-001: veredas-core — the foundation
+## C-007: veredas-core — the foundation
 - **Date:** 2026-11-05
-- **Source:** user (docs/veredas-plan.md "veredas-core: the foundation")
-- **Description:** Every class and library more than one component needs, as a library that depends on no other component: shared types (tags, values, timestamps, quality), the TCP telegram and OPC UA client layers, plain-text file schemas with their version stamps, errors, logging and test-fixture plumbing; new functionality designed as if a second consumer already existed. Absorbs Veredas 1's `veredas-telegram` and `veredas-opc`. Exit: `docs/core-plan.md`, `crates/veredas-core` at 2.0.0-alpha.1 building and tested, the laws green, its capabilities as clauses here.
+- **Source:** user (docs/veredas-plan.md "veredas-core: the foundation"; promoted from P-001)
+- **Description:** `crates/veredas-core` holds what more than one component needs (the plan's scope; `docs/core-plan.md` maps what it absorbed from Veredas 1's `veredas-telegram`, `veredas-opc` and core, and the phases still ahead: file schemas, logging), as a library that builds no executable (no `[[bin]]`, `[[example]]`, `src/main.rs`, `src/bin/` or `examples/`) and depends on no other member, its plan before its code, at 2.0.0-alpha.1. Each capability is a clause of its own below.
+- **Verification:** automated → crates/veredas-core/tests/foundation.rs, tools/leis/tests/real_tree.rs | the manifest and the disk carry no executable target, the check sees each way cargo makes one; the laws on the real tree with core in it (name, version, no member dependency, plan in its history)
+- **Evidence:** .zen/evidence/C-007.md
 - **Status:** pending
+
+## C-008: The shared types: one value model, a tag, a sample on two clocks, quality
+- **Date:** 2026-11-05
+- **Source:** user (docs/veredas-plan.md "veredas-core: the foundation", scope; docs/core-plan.md "Scope")
+- **Description:** A `Value` is an int, float, text or naive time, with a numeric view for all but text (a time as the epoch milliseconds of its stamp read as UTC), and displays as the operator reads it; `SeriesType` names the four; a tag is a `SeriesRef`, a series of one source, shown `source/series`, ordered by source then series; a `Sample` indexes on its parsed stamp, else on arrival; `Quality` is good, uncertain or bad, and only good is good; `now_unix_ms` is the unix clock in milliseconds.
+- **Verification:** automated → crates/veredas-core/tests/types.rs | Veredas 1's tests plus the edges: case and ordering of ids, negative ints, text never parsed, times before the epoch, NaN, display of each variant and of fractional seconds, int vs float equality, both index paths with negative clocks, the quality labels, arrival bracketed by the system clock
+- **Status:** pending
+
+## C-009: One stop/join handle for every source worker
+- **Date:** 2026-11-05
+- **Source:** user (docs/core-plan.md "Scope", worker plumbing)
+- **Description:** A source worker is a thread ending in `Result<(), SourceError>`, held by a `SourceHandle`: polling it never blocks a live worker, keeps the outcome once the worker has ended (its error, or `Panicked` for a panic) and gives `join` that same outcome without joining twice; stopping raises the worker's own flag, and dropping the handle raises it without waiting. A `SourceError` names an I/O failure with its path.
+- **Verification:** automated → crates/veredas-core/tests/source_handle.rs | real threads: a live worker polled without blocking, stop reaching a worker, an error kept across polls and join, join alone, a panic as `Panicked`, a drop that does not wait, every error's text and its source chain
+- **Status:** pending
+
+
+## Pending Contract Deltas
 
 ### P-002: veredas-portal — the gateway
 - **Date:** 2026-11-05

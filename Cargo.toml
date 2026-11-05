@@ -5,6 +5,9 @@ members = [
     # docs/veredas-plan.md that a machine can check; .zen/contract.md C-001..C-006).
     # Exempt from the component laws; runs under `cargo test --workspace`.
     "tools/leis",
+    # The foundation (docs/core-plan.md): the shared types and protocol layers more than one
+    # component needs, depending on no other member (law L4).
+    "crates/veredas-core",
 ]
 
 # No [workspace.package] version: each component owns its SemVer from 2.0.0 (the plan,
@@ -15,6 +18,9 @@ edition = "2024"
 # One version of each external crate across the suite; a member writes `x = { workspace = true }`
 # and justifies a new line here in its commit message.
 [workspace.dependencies]
+chrono = "0.4"
+regex = "1"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
+thiserror = "2"
 toml = "1"

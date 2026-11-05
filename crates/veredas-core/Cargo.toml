@@ -1,0 +1,18 @@
+[package]
+name = "veredas-core"
+# Its own SemVer from 2.0.0 (law L3); every component starts at this crate's MAJOR.
+version = "2.0.0-alpha.1"
+edition.workspace = true
+publish = false
+description = "The foundation of Veredas 2: the shared types and protocol layers every component speaks"
+
+# A library, never an executable (docs/core-plan.md, tests/foundation.rs): no [[bin]], no
+# [[example]]. Depends on no other member, in any table (law L4).
+
+[dependencies]
+chrono = { workspace = true }
+regex = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+toml = { workspace = true }
