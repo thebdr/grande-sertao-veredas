@@ -256,6 +256,41 @@ fn l1_the_reader_takes_a_manifest_in_any_case_and_a_submodule_by_its_folder() {
 }
 
 #[test]
+fn l1_two_spellings_of_the_manifest_in_one_folder_are_refused() {
+    // on a filesystem that tells case apart (the CI runner), a decoy cargo.toml beside the real
+    // Cargo.toml would be a different file, and the reader must neither pick the decoy nor stay
+    // silent (refute round 8). Both spellings are put in git's index, which lists them on every
+    // filesystem; on disk a case-blind one keeps a single file
+    let real = format!("{}[workspace]\n", pkg("veredas-portal", "1.0.0"));
+    let decoy = "# not the manifest cargo reads where case is told apart\n[package]\nname = \"serde\"\nversion = \"1.0.0\"\n";
+    let tree = Tree::new(
+        "l1-case-decoy",
+        &[("Cargo.toml", &ws(&["tools/leis"])), ("tools/leis/Cargo.toml", LEIS), ("apps/gw/cargo.toml", decoy), ("apps/gw/Cargo.toml", &real), ("decoy.txt", decoy)],
+    );
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git").arg("-C").arg(tree.path()).args(args).output().expect("git runs");
+        assert!(out.status.success(), "git {:?}: {}", args, String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let real_blob = git(&["hash-object", "-w", "apps/gw/Cargo.toml"]);
+    let decoy_blob = git(&["hash-object", "-w", "decoy.txt"]);
+    std::fs::remove_file(tree.path().join("decoy.txt")).expect("the helper file goes");
+    git(&["update-index", "--add", "--cacheinfo", &format!("100644,{real_blob},apps/gw/Cargo.toml")]);
+    git(&["update-index", "--add", "--cacheinfo", &format!("100644,{decoy_blob},apps/gw/cargo.toml")]);
+    let s = Suite::read(tree.path()).expect("the tree reads");
+    assert_eq!(s.found, vec!["apps/gw", "tools/leis"]);
+    assert_eq!(s.ambiguous, vec!["apps/gw"]);
+    assert_eq!(s.others.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), vec!["veredas-portal"], "the exact Cargo.toml is the text taken");
+    assert_eq!(
+        strings(leis::roots(&s)),
+        vec![
+            "L1 apps/gw: two manifests differ only in case; which one cargo reads depends on the filesystem",
+            "L1 apps/gw: a veredas-* or orcl-* crate is the suite's; it lives under crates/ as a member",
+        ]
+    );
+}
+
+#[test]
 fn l1_a_nested_folder_is_not_a_root() {
     let deep = pkg("veredas-abaco", "2.0.0");
     let s = suite(&ws(&["crates/abaco/veredas-abaco"]), &[("crates/abaco/veredas-abaco", &deep)], &[]);

@@ -137,6 +137,9 @@ pub struct Suite {
     pub others: Vec<Member>,
     /// `docs/*-plan.md` (the suite's own plan left out) and `docs/orcl/README.md`, path to content.
     pub plans: BTreeMap<String, String>,
+    /// Folders the repository holds a manifest in under more than one spelling of its case
+    /// (`Cargo.toml` beside `cargo.toml`): which one cargo reads depends on the filesystem.
+    pub ambiguous: Vec<String>,
 }
 
 /// A law broken: `L2 crates/foo: ...`.
@@ -321,6 +324,7 @@ impl Suite {
             members,
             others,
             plans,
+            ambiguous: Vec::new(),
         })
     }
 
@@ -354,21 +358,32 @@ impl Suite {
             })
             .collect();
         let workspace = read("Cargo.toml")?;
-        let mut crates: Vec<(String, String)> = Vec::new();
+        // the manifest's name as a filesystem that ignores case reads it: cargo builds
+        // `cargo.toml` on Windows. A folder holding more than one spelling is ambiguous (which
+        // one cargo reads depends on the filesystem); the exact `Cargo.toml` is the text taken.
+        let mut manifests: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
         let mut plans = BTreeMap::new();
         for p in &paths {
             let (dir, file) = p.rsplit_once('/').unwrap_or(("", p.as_str()));
-            // the manifest's name as a filesystem that ignores case reads it: cargo builds
-            // `cargo.toml` on Windows
             if file.eq_ignore_ascii_case("Cargo.toml") {
                 if !dir.is_empty() {
-                    crates.push((dir.to_string(), read(p)?));
+                    manifests.entry(dir.to_string()).or_default().push((file.to_string(), read(p)?));
                 }
             } else if p == LANGUAGE_PLAN
                 || (p.starts_with("docs/") && p.ends_with("-plan.md") && !p["docs/".len()..].contains('/') && p != SUITE_PLAN)
             {
                 plans.insert(p.clone(), read(p)?);
             }
+        }
+        let mut ambiguous = Vec::new();
+        let mut crates: Vec<(String, String)> = Vec::new();
+        for (dir, mut spellings) in manifests {
+            if spellings.len() > 1 {
+                ambiguous.push(dir.clone());
+            }
+            spellings.sort();
+            let exact = spellings.iter().position(|(file, _)| file == "Cargo.toml").unwrap_or(0);
+            crates.push((dir, spellings.swap_remove(exact).1));
         }
         for g in gitlinks {
             let manifest = format!("{g}/Cargo.toml");
@@ -378,7 +393,9 @@ impl Suite {
         crates.sort();
         crates.dedup_by(|a, b| a.0 == b.0);
         let refs: Vec<(&str, &str)> = crates.iter().map(|(d, t)| (d.as_str(), t.as_str())).collect();
-        Suite::parse(&workspace, &refs, plans)
+        let mut suite = Suite::parse(&workspace, &refs, plans)?;
+        suite.ambiguous = ambiguous;
+        Ok(suite)
     }
 
     /// The members under `crates/`.
@@ -454,6 +471,9 @@ fn is_suite_crate(m: &Member) -> bool {
 /// member under a root or nothing, wherever in the repository it sits, excluded or not.
 pub fn roots(s: &Suite) -> Vec<Violation> {
     let mut out = Vec::new();
+    for dir in &s.ambiguous {
+        out.push(Violation::new("L1", dir, "two manifests differ only in case; which one cargo reads depends on the filesystem"));
+    }
     for m in &s.listed {
         if !under_a_root(m) {
             out.push(Violation::new("L1", m, "a member lives directly under crates/ or tools/"));
