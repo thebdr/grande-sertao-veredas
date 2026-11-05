@@ -138,8 +138,15 @@ fn l2_a_veredas_crate_under_tools_is_named() {
     let lang = pkg("orcl-std", "2.0.0");
     let lang_upper = pkg("orcl-Std", "2.0.0");
     let lang_bare = pkg("orcl-", "2.0.0");
+    // an underscore reads as the hyphen, as L1 reads it (refute round 4), and the folder counts
+    let underscored = pkg("veredas_abaco", "2.0.0");
+    let lang_underscored = pkg("orcl_std", "2.0.0");
+    let by_folder = pkg("bench", "0.1.0");
     let s = suite(
-        &ws(&["tools/veredas-maquinar", "tools/veredas-Abaco", "tools/veredas-", "tools/orcl-std", "tools/orcl-Std", "tools/orcl-", "tools/leis"]),
+        &ws(&[
+            "tools/veredas-maquinar", "tools/veredas-Abaco", "tools/veredas-", "tools/orcl-std", "tools/orcl-Std", "tools/orcl-",
+            "tools/veredas_abaco", "tools/orcl_std", "tools/veredas-bench", "tools/leis",
+        ]),
         &[
             ("tools/veredas-maquinar", &m),
             ("tools/veredas-Abaco", &upper),
@@ -147,6 +154,9 @@ fn l2_a_veredas_crate_under_tools_is_named() {
             ("tools/orcl-std", &lang),
             ("tools/orcl-Std", &lang_upper),
             ("tools/orcl-", &lang_bare),
+            ("tools/veredas_abaco", &underscored),
+            ("tools/orcl_std", &lang_underscored),
+            ("tools/veredas-bench", &by_folder),
             ("tools/leis", LEIS),
         ],
         &[],
@@ -160,6 +170,9 @@ fn l2_a_veredas_crate_under_tools_is_named() {
             "L2 tools/orcl-std: an orcl-* crate is the language's; it lives under crates/",
             "L2 tools/orcl-Std: an orcl-* crate is the language's; it lives under crates/",
             "L2 tools/orcl-: an orcl-* crate is the language's; it lives under crates/",
+            "L2 tools/veredas_abaco: a veredas-* crate is a component; it lives under crates/",
+            "L2 tools/orcl_std: an orcl-* crate is the language's; it lives under crates/",
+            "L2 tools/veredas-bench: a veredas-* crate is a component; it lives under crates/",
         ]
     );
 }

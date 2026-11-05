@@ -144,7 +144,7 @@ fn l1_an_underscore_spelling_is_the_same_suite_crate() {
 fn l1_the_reader_scans_the_whole_repository_for_suite_crates() {
     let portal = pkg("veredas-portal", "2.0.0");
     let conveyor = pkg("conveyor", "0.1.0");
-    let hidden = pkg("veredas-hidden", "2.0.0");
+    let parked = format!("{}[workspace]\n", pkg("veredas-parked", "1.0.0"));
     let tree = Tree::new(
         "l1-elsewhere",
         &[
@@ -153,15 +153,25 @@ fn l1_the_reader_scans_the_whole_repository_for_suite_crates() {
             ("apps/veredas-portal/Cargo.toml", &portal),
             ("demos/conveyor/Cargo.toml", &conveyor),
             ("docs/veredas-plan.md", "# the plan\n"),
-            (".vendor/veredas-hidden/Cargo.toml", &hidden),
-            ("target/veredas-built/Cargo.toml", &hidden),
+            (".parked/veredas-parked/Cargo.toml", &parked),
+            ("docs/.old/veredas-parked/Cargo.toml", &parked),
+            ("target/veredas-built/Cargo.toml", &parked),
+            ("web/node_modules/veredas-built/Cargo.toml", &parked),
         ],
     );
     let s = Suite::read(tree.path()).expect("the tree reads");
-    assert_eq!(s.found, vec!["apps/veredas-portal", "demos/conveyor", "tools/leis"], "the root's own manifest, hidden and built folders left out");
+    assert_eq!(
+        s.found,
+        vec![".parked/veredas-parked", "apps/veredas-portal", "demos/conveyor", "docs/.old/veredas-parked", "tools/leis"],
+        "the root's own manifest, target/ and node_modules/ left out; a hidden folder is walked (refute round 4)"
+    );
     assert_eq!(
         strings(leis::roots(&s)),
-        vec!["L1 apps/veredas-portal: a veredas-* or orcl-* crate is the suite's; it is a member, never excluded"]
+        vec![
+            "L1 .parked/veredas-parked: a veredas-* or orcl-* crate is the suite's; it lives under crates/ as a member",
+            "L1 apps/veredas-portal: a veredas-* or orcl-* crate is the suite's; it is a member, never excluded",
+            "L1 docs/.old/veredas-parked: a veredas-* or orcl-* crate is the suite's; it lives under crates/ as a member",
+        ]
     );
 }
 
@@ -190,7 +200,7 @@ fn l1_a_nested_unlisted_crate_is_named() {
     assert_eq!(
         strings(leis::roots(&s)),
         vec![
-            "L1 crates/abaco/veredas-abaco: a crate lives directly under crates/ or tools/ (a nested folder is not a root; exclude what is not the suite's)",
+            "L1 crates/abaco/veredas-abaco: a veredas-* or orcl-* crate is the suite's; it lives under crates/ as a member",
             "L1 crates: a crate lives directly under crates/ or tools/ (a nested folder is not a root; exclude what is not the suite's)",
         ]
     );
@@ -219,14 +229,15 @@ fn l1_the_reader_finds_crates_at_any_depth() {
     let s = Suite::read(tree.path()).expect("the tree reads");
     assert_eq!(
         s.found,
-        vec!["crates", "crates/abaco/veredas-abaco", "tools/leis", "tools/leis-extra/inner"],
-        "every manifest under a root at any depth, none under target/, node_modules/ or a hidden folder"
+        vec!["crates", "crates/abaco/veredas-abaco", "tools/.cache", "tools/leis", "tools/leis-extra/inner"],
+        "every manifest under a root at any depth, a hidden folder included, none under target/ or node_modules/"
     );
     assert_eq!(
         strings(leis::roots(&s)),
         vec![
             "L1 crates: a crate lives directly under crates/ or tools/ (a nested folder is not a root; exclude what is not the suite's)",
-            "L1 crates/abaco/veredas-abaco: a crate lives directly under crates/ or tools/ (a nested folder is not a root; exclude what is not the suite's)",
+            "L1 crates/abaco/veredas-abaco: a veredas-* or orcl-* crate is the suite's; it lives under crates/ as a member",
+            "L1 tools/.cache: has a Cargo.toml but is not a workspace member (list it, or exclude it)",
             "L1 tools/leis-extra/inner: a crate lives directly under crates/ or tools/ (a nested folder is not a root; exclude what is not the suite's)",
         ]
     );

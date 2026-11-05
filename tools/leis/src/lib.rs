@@ -37,8 +37,10 @@ use serde::Deserialize;
 
 /// The folders a member may live under.
 pub const ROOTS: [&str; 2] = ["crates", "tools"];
-/// Folders the reader never descends into: build output, a frontend's modules, anything hidden.
-pub const SKIPPED: [&str; 2] = ["target", "node_modules"];
+/// Folders the reader never descends into: git's own store, build output, a frontend's modules.
+/// A hidden folder is walked like any other: `.github` and `.zen` are committed here, and a
+/// suite crate parked under a dot is still parked.
+pub const SKIPPED: [&str; 3] = [".git", "target", "node_modules"];
 /// The foundation: the one member every other may use, and the one that uses none.
 pub const CORE: &str = "veredas-core";
 /// Every component's prefix.
@@ -325,8 +327,8 @@ impl Suite {
     }
 
     /// The real tree: `Cargo.toml`, every other `Cargo.toml` in the repository at any depth
-    /// (`target/`, `node_modules/` and hidden folders skipped), every `docs/*-plan.md` but the
-    /// suite's own, and `docs/orcl/README.md`.
+    /// (`.git/`, `target/` and `node_modules/` skipped), every `docs/*-plan.md` but the suite's
+    /// own, and `docs/orcl/README.md`.
     pub fn read(root: &Path) -> Result<Suite, Error> {
         let read = |rel: &str| -> Result<String, Error> {
             fs::read_to_string(root.join(rel)).map_err(|source| Error::Io { path: rel.to_string(), source })
@@ -334,7 +336,7 @@ impl Suite {
         let workspace = read("Cargo.toml")?;
         let mut dirs = Vec::new();
         for name in folder_entries(root, ".")? {
-            if !name.starts_with('.') && !SKIPPED.contains(&name.as_str()) && root.join(&name).is_dir() {
+            if !SKIPPED.contains(&name.as_str()) && root.join(&name).is_dir() {
                 collect_crates(root, &name, &mut dirs)?;
             }
         }
@@ -388,7 +390,7 @@ fn folder_entries(root: &Path, rel: &str) -> Result<Vec<String>, Error> {
 }
 
 /// Every folder under `root/<rel>` (itself included) that holds a `Cargo.toml`, depth first in
-/// name order, never descending into [`SKIPPED`] or hidden folders.
+/// name order, never descending into [`SKIPPED`].
 fn collect_crates(root: &Path, rel: &str, out: &mut Vec<String>) -> Result<(), Error> {
     if !root.join(rel).is_dir() {
         return Ok(());
@@ -397,7 +399,7 @@ fn collect_crates(root: &Path, rel: &str, out: &mut Vec<String>) -> Result<(), E
         out.push(rel.to_string());
     }
     for name in folder_entries(root, rel)? {
-        if name.starts_with('.') || SKIPPED.contains(&name.as_str()) {
+        if SKIPPED.contains(&name.as_str()) {
             continue;
         }
         let child = format!("{rel}/{name}");
@@ -480,16 +482,13 @@ pub fn roots(s: &Suite) -> Vec<Violation> {
             if suite {
                 out.push(Violation::new("L1", c, "a veredas-* or orcl-* crate is the suite's; it is a member, never excluded"));
             }
-            continue;
-        }
-        if !in_a_root(c) {
+        } else if !under_a_root(c) {
+            // nested under a root, or anywhere else in the repository
             if suite {
                 out.push(Violation::new("L1", c, "a veredas-* or orcl-* crate is the suite's; it lives under crates/ as a member"));
+            } else if in_a_root(c) {
+                out.push(Violation::new("L1", c, "a crate lives directly under crates/ or tools/ (a nested folder is not a root; exclude what is not the suite's)"));
             }
-            continue;
-        }
-        if !under_a_root(c) {
-            out.push(Violation::new("L1", c, "a crate lives directly under crates/ or tools/ (a nested folder is not a root; exclude what is not the suite's)"));
         } else if !s.listed.contains(c) {
             out.push(Violation::new("L1", c, "has a Cargo.toml but is not a workspace member (list it, or exclude it)"));
         }
@@ -503,9 +502,13 @@ pub fn naming(s: &Suite) -> Vec<Violation> {
     let mut out = Vec::new();
     for m in &s.members {
         if !m.is_component() {
-            if m.name.starts_with(PREFIX) {
+            // the suite's prefixes by name or by folder, an underscore reading as the hyphen, as
+            // L1 reads them: a suite crate does not become a tool by its spelling or its folder
+            let folder = m.dir.rsplit('/').next().unwrap_or("");
+            let folded = [m.name.as_str(), folder].map(|n| n.replace('_', "-"));
+            if folded.iter().any(|n| n.starts_with(PREFIX)) {
                 out.push(Violation::new("L2", &m.dir, "a veredas-* crate is a component; it lives under crates/"));
-            } else if m.name.starts_with(LANGUAGE) {
+            } else if folded.iter().any(|n| n.starts_with(LANGUAGE)) {
                 out.push(Violation::new("L2", &m.dir, "an orcl-* crate is the language's; it lives under crates/"));
             }
             continue;
