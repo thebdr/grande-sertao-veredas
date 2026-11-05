@@ -10,15 +10,15 @@
     "telegram_framing"
   ],
   "exitCode": 0,
-  "outputSha": "5d0d8bd666080593c98437a4c0a5a4b9c3a315168394fee9d5b2af4da6f89752",
-  "outputTail": "test a_frame_survives_a_round_trip_in_both_byte_orders ... ok\ntest a_bad_frame_says_exactly_how_far_to_skip ... ok\ntest opaque_fields_take_the_frame_value_or_their_default_and_the_sequence_is_stamped ... ok\ntest a_value_that_does_not_fit_its_field_is_refused_never_clamped ... ok\ntest the_remaining_headers_check_holds_on_both_sides_of_its_boundary ... ok\ntest lengths_that_disagree_are_refused_once_the_header_that_shows_it_is_whole ... ok\ntest the_frame_limit_sits_at_its_exact_edge_both_ways ... ok\ntest the_frame_is_the_configured_layout_byte_for_byte ... ok\ntest every_prefix_of_a_valid_frame_waits ... ok\n\ntest result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.84s\n     Running tests\\telegram_framing.rs (target\\debug\\deps\\telegram_framing-a47bace300c1e181.exe)",
-  "ranAt": "2026-11-05T22:36:54.212Z",
-  "headCommit": "ab5d52115af3aff0daaab4e147a5ce3a781b8c0f",
+  "outputSha": "b54e9f4f00d8f9ee9f7da0d8d476699de500f7a24e7571ed1d3fee22ba89bf98",
+  "outputTail": "test previews_and_dumps_render_exactly ... ok\ntest a_bad_frame_says_exactly_how_far_to_skip ... ok\ntest a_value_that_does_not_fit_its_field_is_refused_never_clamped ... ok\ntest opaque_fields_take_the_frame_value_or_their_default_and_the_sequence_is_stamped ... ok\ntest the_remaining_headers_check_holds_on_both_sides_of_its_boundary ... ok\ntest the_frame_is_the_configured_layout_byte_for_byte ... ok\ntest the_frame_limit_sits_at_its_exact_edge_both_ways ... ok\ntest lengths_that_disagree_are_refused_once_the_header_that_shows_it_is_whole ... ok\ntest every_prefix_of_a_valid_frame_waits ... ok\n\ntest result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.93s\n     Running tests\\telegram_framing.rs (target\\debug\\deps\\telegram_framing-a47bace300c1e181.exe)",
+  "ranAt": "2026-11-05T22:50:14.862Z",
+  "headCommit": "4e1af513dab0ae9fa35c81a9f35fddd1b9878f67",
   "tests": [
     {
       "name": "crates/veredas-core/tests/telegram_framing.rs",
       "file": "crates/veredas-core/tests/telegram_framing.rs",
-      "fileSha": "d1317773e27b10ecb3a5243b1dc98955dfb9da1d840ece5471420a98f6ebc321"
+      "fileSha": "bc23708d404ffb478658dcac2e7472a649aa700f718cca25180ec2772a295404"
     }
   ]
 }

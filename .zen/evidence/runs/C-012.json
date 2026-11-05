@@ -10,15 +10,15 @@
     "telegram_channel"
   ],
   "exitCode": 0,
-  "outputSha": "af758dbfdbdfc1f6844b1028b720c492f22751b11a63e9c0d968dfd3d9c72f1a",
-  "outputTail": "test a_deaf_peer_is_dropped_by_the_write_timeout ... ok\ntest a_steady_stream_neither_drops_a_reading_peer_nor_stops_the_channel_reading ... ok\ntest a_reading_peer_takes_a_burst_past_the_outbox_limit ... ok\ntest two_channels_exchange_telegrams_in_both_directions ... ok\ntest a_peer_that_stops_reading_is_dropped_without_wedging_the_channel ... ok\ntest a_slow_but_reading_peer_is_never_judged_deaf ... ok\ntest a_dialer_retries_until_the_listener_appears ... ok\ntest a_frame_after_a_quiet_spell_of_254_probes_is_not_skipped ... ok\ntest uncounted_probes_never_bring_a_data_frame_back_round_to_the_last ... ok\n\ntest result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.78s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.56s\n     Running tests\\telegram_channel.rs (target\\debug\\deps\\telegram_channel-5a32183d3868a5d8.exe)",
-  "ranAt": "2026-11-05T22:37:09.712Z",
-  "headCommit": "ab5d52115af3aff0daaab4e147a5ce3a781b8c0f",
+  "outputSha": "6ca7d8f66037e38f5f2fbf5330948a00b7f78e6475bd5dde4c8c2b9046a40f83",
+  "outputTail": "test a_deaf_peer_is_dropped_by_the_write_timeout ... ok\ntest a_reading_peer_takes_a_burst_past_the_outbox_limit ... ok\ntest a_steady_stream_neither_drops_a_reading_peer_nor_stops_the_channel_reading ... ok\ntest a_peer_that_stops_reading_is_dropped_without_wedging_the_channel ... ok\ntest two_channels_exchange_telegrams_in_both_directions ... ok\ntest a_slow_but_reading_peer_is_never_judged_deaf ... ok\ntest a_dialer_retries_until_the_listener_appears ... ok\ntest a_frame_after_a_quiet_spell_of_254_probes_is_not_skipped ... ok\ntest uncounted_probes_never_bring_a_data_frame_back_round_to_the_last ... ok\n\ntest result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.89s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.73s\n     Running tests\\telegram_channel.rs (target\\debug\\deps\\telegram_channel-5a32183d3868a5d8.exe)",
+  "ranAt": "2026-11-05T22:50:29.571Z",
+  "headCommit": "4e1af513dab0ae9fa35c81a9f35fddd1b9878f67",
   "tests": [
     {
       "name": "crates/veredas-core/tests/telegram_channel.rs",
       "file": "crates/veredas-core/tests/telegram_channel.rs",
-      "fileSha": "a2eebe2079d6d7525ed7a31cce029e8e48b4097331683c74c34de6bd2dbdb150"
+      "fileSha": "c52f563d5b92ddb03a2aa0f92ac9b5b75e38cef7df069454c20ab36706c663cd"
     }
   ]
 }
