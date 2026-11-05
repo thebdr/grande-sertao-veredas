@@ -189,30 +189,6 @@ fn a_repeated_progressive_number_is_skipped() {
     assert_eq!(server.status().duplicates_skipped, 1);
 }
 
-#[test]
-fn an_idle_link_is_probed_with_a_keepalive() {
-    // §3.2: silence for the receive timeout means send a keep-alive
-    // to prove the link is still there.
-    let port = free_port();
-    let server = listener(port, 150);
-    until("the bind", Duration::from_secs(5), || {
-        server.status().state.contains("listening")
-    });
-    let client = dialer(port, 150);
-    let _ = wait_connected(&client);
-
-    until("keep-alives to flow", Duration::from_secs(10), || {
-        client.status().keepalives_received >= 2 && server.status().keepalives_sent >= 2
-    });
-    // And a keep-alive is a liveness EVENT, so health does not read
-    // a quiet-but-alive link as idle.
-    let seen_keepalive = client
-        .poll()
-        .iter()
-        .any(|e| matches!(e, ChannelEvent::KeepAlive { .. }))
-        || client.status().keepalives_received > 0;
-    assert!(seen_keepalive);
-}
 
 #[test]
 fn a_reply_for_a_departed_peer_is_dropped_not_misdelivered() {
@@ -382,4 +358,242 @@ fn a_bind_failure_is_reported_and_the_channel_stops_cleanly() {
     let t0 = Instant::now();
     ch.stop();
     assert!(t0.elapsed() < Duration::from_secs(3));
+}
+
+// ---------------------------------------------------------------------------
+// Refute round 1 (C-012): a reading peer is never mistaken for a deaf one, the PRG rules
+// pinned exactly, the idle probe bounded.
+// ---------------------------------------------------------------------------
+
+/// The PRG of every frame read off a raw socket for `wait`, keep-alives included, in order.
+fn raw_prgs(sock: &mut std::net::TcpStream, wait: Duration) -> Vec<(u8, bool)> {
+    use std::io::Read;
+    sock.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+    let deadline = Instant::now() + wait;
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while Instant::now() < deadline {
+        match sock.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(_) => {}
+        }
+    }
+    let mut out = Vec::new();
+    let mut at = 0;
+    while let Ok((t, used)) = codec::decode(&buf[at..], Endian::default()) {
+        out.push((t.envelope.prg, t.is_keepalive()));
+        at += used;
+    }
+    assert_eq!(at, buf.len(), "every byte read was a whole frame");
+    out
+}
+
+fn raw_frame(prg: u8, body: &[u8]) -> Vec<u8> {
+    let segments = if body.is_empty() {
+        vec![]
+    } else {
+        vec![DataSegment { msg_id: 7, data: body.to_vec() }]
+    };
+    let t = Telegram { envelope: Envelope { class: 0, source: 9, destination: 1, prg }, segments };
+    codec::encode(&t, Endian::default()).unwrap()
+}
+
+#[test]
+fn the_connect_keepalive_carries_prg_zero_in_both_roles() {
+    // The listener, met by a raw client.
+    let port = free_port();
+    let server = listener(port, 600_000);
+    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+    let mut raw = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    assert_eq!(raw_prgs(&mut raw, Duration::from_millis(500)), [(0, true)]);
+
+    // The dialer, met by a raw listener.
+    let raw_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = raw_listener.local_addr().unwrap().port();
+    let client = dialer(port, 600_000);
+    let (mut raw, _) = raw_listener.accept().unwrap();
+    assert_eq!(raw_prgs(&mut raw, Duration::from_millis(500)), [(0, true)]);
+    drop(client);
+}
+
+#[test]
+fn the_progressive_number_wraps_from_255_to_1() {
+    let raw_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = raw_listener.local_addr().unwrap().port();
+    let client = dialer(port, 600_000);
+    let (mut raw, _) = raw_listener.accept().unwrap();
+    let peer = wait_connected(&client);
+    for i in 0..300u32 {
+        client.send(peer, payload(1, &i.to_le_bytes()));
+    }
+    let prgs: Vec<u8> = raw_prgs(&mut raw, Duration::from_secs(3)).into_iter().map(|(p, _)| p).collect();
+    let expected: Vec<u8> = std::iter::once(0).chain(1..=255).chain(1..=45).collect();
+    assert_eq!(prgs, expected);
+}
+
+#[test]
+fn a_keepalive_between_two_frames_makes_a_repeated_prg_new() {
+    // The receiver's last PRG is the last frame's, keep-alives included: a sender whose idle
+    // probes take PRGs from its counter can come back round to the PRG of its last data frame.
+    // The connect keep-alive's 0 is not a PRG of the sequence.
+    use std::io::Write;
+    let port = free_port();
+    let server = listener(port, 600_000);
+    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+    let mut sock = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let _ = wait_connected(&server);
+    for frame in [
+        raw_frame(5, b"A"),
+        raw_frame(6, b""),  // a probe
+        raw_frame(5, b"B"), // the counter came back round: new
+        raw_frame(5, b"B"), // a true repeat
+        raw_frame(0, b""),  // a connect keep-alive
+        raw_frame(5, b"C"), // still a repeat of B
+    ] {
+        sock.write_all(&frame).unwrap();
+    }
+    let bodies: Vec<Vec<u8>> =
+        collect(&server, Duration::from_secs(2)).iter().map(|t| t.segments[0].data.clone()).collect();
+    assert_eq!(bodies, [b"A".to_vec(), b"B".to_vec()]);
+    assert_eq!(server.status().duplicates_skipped, 2);
+}
+
+#[test]
+fn a_frame_after_a_long_quiet_spell_of_probes_is_not_skipped() {
+    // Two channels of this code: 254 probes between two data frames bring the sender's counter
+    // back to the first frame's PRG.
+    let port = free_port();
+    let server = listener(port, 600_000);
+    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+    let client = dialer(port, 1); // probes every tick
+    let peer = wait_connected(&client);
+    let _ = wait_connected(&server);
+    client.send(peer, payload(1, b"A"));
+    let at_a = client.status().keepalives_sent;
+    until("254 probes", Duration::from_secs(30), || client.status().keepalives_sent >= at_a + 254);
+    client.send(peer, payload(1, b"B"));
+    let bodies: Vec<Vec<u8>> =
+        collect(&server, Duration::from_secs(2)).iter().map(|t| t.segments[0].data.clone()).collect();
+    assert_eq!(bodies, [b"A".to_vec(), b"B".to_vec()]);
+    assert_eq!(server.status().duplicates_skipped, 0);
+}
+
+#[test]
+fn a_reading_peer_takes_a_burst_past_the_outbox_limit() {
+    let port = free_port();
+    let server = listener(port, 600_000);
+    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+    let client = dialer(port, 600_000);
+    let _ = wait_connected(&client);
+    let peer = wait_connected(&server);
+    let n = OUTBOX_LIMIT + 44;
+    for i in 0..n as u32 {
+        server.send(peer, payload(51004, &i.to_le_bytes()));
+    }
+    let got = collect(&client, Duration::from_secs(5));
+    let order: Vec<u32> =
+        got.iter().map(|t| u32::from_le_bytes(t.segments[0].data[..4].try_into().unwrap())).collect();
+    assert_eq!(order, (0..n as u32).collect::<Vec<_>>(), "every frame, in order");
+    assert_eq!(server.status().dropped_peers, 0);
+}
+
+#[test]
+fn a_steady_stream_neither_drops_a_reading_peer_nor_stops_the_channel_reading() {
+    let port = free_port();
+    let server = listener(port, 600_000);
+    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+    let client = dialer(port, 600_000);
+    let client_peer = wait_connected(&client);
+    let server_peer = wait_connected(&server);
+
+    let started = Instant::now();
+    let mut sent = 0u32;
+    let mut ping_at = None;
+    let mut ping_seen = None;
+    let mut received = Vec::new();
+    while started.elapsed() < Duration::from_secs(3) {
+        // A frame every 10 ms, busy-paced so no tick slips in between by luck.
+        let due = started + Duration::from_millis(10 * u64::from(sent));
+        while Instant::now() < due {}
+        server.send(server_peer, payload(51004, &sent.to_le_bytes()));
+        sent += 1;
+        if ping_at.is_none() && started.elapsed() >= Duration::from_millis(500) {
+            client.send(client_peer, payload(50002, b"PING"));
+            ping_at = Some(Instant::now());
+        }
+        for e in server.poll() {
+            if matches!(e, ChannelEvent::Received { .. }) && ping_seen.is_none() {
+                ping_seen = Some(Instant::now());
+            }
+        }
+        received.extend(client.poll().into_iter().filter_map(|e| match e {
+            ChannelEvent::Received { telegram, .. } => Some(telegram),
+            _ => None,
+        }));
+    }
+    received.extend(collect(&client, Duration::from_secs(2)));
+    assert_eq!(server.status().dropped_peers, 0, "{:?}", server.status().last_error);
+    assert_eq!(received.len() as u32, sent, "every frame delivered");
+    let lag = ping_seen.expect("the peer's frame was read") - ping_at.unwrap();
+    assert!(lag < Duration::from_millis(300), "read {lag:?} after it was sent");
+}
+
+#[test]
+fn a_deaf_peer_is_dropped_by_the_write_timeout() {
+    // Paced below the outbox limit, so it is the write timeout that judges the peer, not the
+    // outbox overflowing.
+    let port = free_port();
+    let server = listener(port, 600_000);
+    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+    let deaf = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let peer = wait_connected(&server);
+    let big = payload(52002, &[b'x'; 480]);
+    let started = Instant::now();
+    let mut why = None;
+    'outer: while started.elapsed() < Duration::from_secs(60) {
+        server.send(peer, big.clone());
+        std::thread::sleep(Duration::from_millis(5));
+        for e in server.poll() {
+            if let ChannelEvent::Disconnected { peer: gone, why: w } = e {
+                assert_eq!(gone, peer);
+                why = Some(w);
+                break 'outer;
+            }
+        }
+    }
+    assert_eq!(why.as_deref(), Some("write timed out — the peer is not reading"));
+    drop(deaf);
+}
+
+#[test]
+fn an_idle_link_is_probed_once_per_window_and_never_while_the_peer_talks() {
+    // §3.2. The listener never probes (its window is long); the dialer's is 300 ms.
+    let port = free_port();
+    let server = listener(port, 600_000);
+    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+    let client = dialer(port, 300);
+    let _ = wait_connected(&client);
+    let server_peer = wait_connected(&server);
+    let connected = Instant::now();
+    std::thread::sleep(Duration::from_millis(250));
+    assert_eq!(client.status().keepalives_sent, 0, "no probe before the window");
+    std::thread::sleep(Duration::from_millis(1_750));
+    // About one probe per 300 ms window (plus up to a 20 ms tick) over 2 s.
+    let probes = client.status().keepalives_sent;
+    assert!((4..=7).contains(&probes), "{probes} probes in {:?}", connected.elapsed());
+    // Each is a liveness event at the other end (plus the connect keep-alive).
+    until("the probes to arrive", Duration::from_secs(2), || {
+        server.status().keepalives_received > probes
+    });
+    let keepalive_events = server.poll().iter().filter(|e| matches!(e, ChannelEvent::KeepAlive { .. })).count();
+    assert!(keepalive_events as u64 > probes, "{keepalive_events} events for {probes} probes");
+
+    // While the listener talks every 100 ms, the dialer never probes.
+    let before = client.status().keepalives_sent;
+    for i in 0..15u8 {
+        server.send(server_peer, payload(51004, &[i]));
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(client.status().keepalives_sent, before);
 }

@@ -43,11 +43,12 @@ pub const ENVELOPE_LEN: usize = 12;
 pub const TAIL_LEN: usize = 4;
 pub const SEGMENT_HEADER_LEN: usize = 4;
 
-/// Structural ceiling on a frame — what the u16 fields can express, kept
-/// well under it so a corrupt LENGTH cannot make a receiver wait
-/// forever. The GENIBELT-specific §3.3 bounds (512-byte segments, 5 KB
-/// frames) are enforced by the typed layer on top, not here: generic
-/// channels may speak other vendors' framings.
+/// Structural ceiling on a frame: 64 KiB, just under the 65 551 bytes a
+/// u16 LENGTH could describe, so a LENGTH of 65 521 or more is refused at
+/// once rather than waited for. A corrupt LENGTH below it is caught by the
+/// segment headers as they arrive (`decode`). The GENIBELT-specific §3.3
+/// bounds (512-byte segments, 5 KB frames) are enforced by the typed layer
+/// on top, not here: generic channels may speak other vendors' framings.
 pub const MAX_FRAME: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -207,37 +208,53 @@ pub fn decode(buf: &[u8], endian: Endian) -> Result<(Telegram, usize), DecodeErr
     if num_data == 0 && data_len != 0 {
         return Err(bad(1));
     }
+    let data_end = ENVELOPE_LEN + data_len;
+    // Every segment needs its 4-byte header inside the data area.
+    if num_data * SEGMENT_HEADER_LEN > data_len {
+        return Err(bad(1));
+    }
+
+    // Walk the segment headers as far as they have arrived, so lengths
+    // that disagree are refused as soon as the disagreement is visible:
+    // waiting for a corrupt LENGTH's worth of bytes would hold every real
+    // frame behind it (a controller restarting mid-frame leaves exactly
+    // such a prefix). A valid frame passes every check below.
+    let mut bodies = Vec::with_capacity(num_data.min(64));
+    let mut at = ENVELOPE_LEN;
+    for i in 0..num_data {
+        if at + SEGMENT_HEADER_LEN > buf.len() {
+            return Err(DecodeError::NeedMore);
+        }
+        let msg_id = get_u16(buf, at, endian);
+        let msg_len = get_u16(buf, at + 2, endian) as usize;
+        let start = at + SEGMENT_HEADER_LEN;
+        let end = start + msg_len;
+        let remaining = num_data - i - 1;
+        // The body overruns the data area, the segments still to come
+        // cannot fit their headers, or the last one stops short of the
+        // declared end (slack): the lengths disagree.
+        if end > data_end
+            || remaining * SEGMENT_HEADER_LEN > data_end - end
+            || (remaining == 0 && end != data_end)
+        {
+            return Err(bad(1));
+        }
+        bodies.push((msg_id, start, end));
+        at = end;
+    }
     if buf.len() < total {
         return Err(DecodeError::NeedMore);
     }
     if buf[total - 1] != EOM {
         return Err(bad(1));
     }
-
-    let mut segments = Vec::with_capacity(num_data.min(64));
-    let mut at = ENVELOPE_LEN;
-    let data_end = ENVELOPE_LEN + data_len;
-    for _ in 0..num_data {
-        if at + SEGMENT_HEADER_LEN > data_end {
-            return Err(bad(1));
-        }
-        let msg_id = get_u16(buf, at, endian);
-        let msg_len = get_u16(buf, at + 2, endian) as usize;
-        let start = at + SEGMENT_HEADER_LEN;
-        if start + msg_len > data_end {
-            return Err(bad(1));
-        }
-        segments.push(DataSegment {
+    let segments = bodies
+        .into_iter()
+        .map(|(msg_id, start, end)| DataSegment {
             msg_id,
-            data: buf[start..start + msg_len].to_vec(),
-        });
-        at = start + msg_len;
-    }
-    // The segment walk must land exactly on the declared end — slack in
-    // the data area means the lengths disagree with each other.
-    if at != data_end {
-        return Err(bad(1));
-    }
+            data: buf[start..end].to_vec(),
+        })
+        .collect();
 
     Ok((
         Telegram {

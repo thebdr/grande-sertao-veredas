@@ -464,3 +464,218 @@ fn tier_counters_make_a_silent_fallback_visible() {
     assert_eq!(plan.counts.sticky, 1);
     assert_eq!(plan.counts.weighted, 1);
 }
+
+// ---------------------------------------------------------------------------
+// Refute round 1 (C-014): each claim pinned on an input that tells it apart.
+// ---------------------------------------------------------------------------
+
+fn rule(field: &str, pattern: &str, destination: &str) -> RoutingRule {
+    RoutingRule {
+        field: field.into(),
+        pattern: pattern.into(),
+        destination: destination.into(),
+        enabled: true,
+    }
+}
+
+fn scoped(value: u16, weight: f64, infeed: &str) -> DestinationRow {
+    let mut row = dest(value, weight);
+    row.filters.insert("infeed".into(), infeed.into());
+    row
+}
+
+fn shares(plan: &mut SortPlan, n: u32, fields: &[(&str, &str)]) -> HashMap<u16, u32> {
+    let mut out = HashMap::new();
+    for i in 0..n {
+        *out.entry(plan.decide(&parcel(i, fields)).unwrap().destination).or_default() += 1;
+    }
+    out
+}
+
+#[test]
+fn a_rules_only_plan_decides_by_content() {
+    let mut plan = seeded(vec![], vec![rule("id", "^A", "5")]);
+    assert_eq!(
+        plan.decide(&parcel(1, &[("id", "A1")])),
+        Ok(Decision { destination: 5, tier: Tier::Routing })
+    );
+    assert_eq!(plan.decide(&parcel(2, &[("id", "B1")])), Err(NoDecision::NothingEligible));
+    assert_eq!((plan.counts.routing, plan.counts.undecided), (1, 1));
+    // With no destination, no rule and no reject chute the plan is empty.
+    let mut empty = seeded(vec![], vec![]);
+    assert_eq!(empty.decide(&parcel(1, &[])), Err(NoDecision::EmptyPlan));
+    assert_eq!(empty.counts.undecided, 1);
+}
+
+#[test]
+fn the_first_matching_rule_wins() {
+    let mut plan = seeded(vec![dest(1, 1.0)], vec![rule("id", "^A", "5"), rule("id", "^AB", "6")]);
+    assert_eq!(plan.decide(&parcel(1, &[("id", "AB1")])).unwrap().destination, 5);
+}
+
+#[test]
+fn shares_count_only_enabled_unblocked_rows_of_the_same_infeed() {
+    let mut off = dest(3, 80.0);
+    off.enabled = false;
+    let mut plan = seeded(vec![dest(1, 10.0), dest(2, 10.0), off, dest(4, 80.0)], vec![]);
+    plan.set_blocked(4, Some("full".into()));
+    let got = shares(&mut plan, 6_000, &[]);
+    assert_eq!((got.get(&3), got.get(&4)), (None, None));
+    let one = f64::from(got[&1]) / 6_000.0;
+    assert!((one - 0.5).abs() < 0.03, "{got:?}");
+
+    let mut plan = seeded(
+        vec![scoped(1, 30.0, "1"), scoped(2, 10.0, "1"), scoped(3, 60.0, "2")],
+        vec![],
+    );
+    let got = shares(&mut plan, 8_000, &[("infeed", "1")]);
+    assert_eq!(got.get(&3), None);
+    assert!((f64::from(got[&1]) / 8_000.0 - 0.75).abs() < 0.03, "{got:?}");
+}
+
+#[test]
+fn an_infeed_matches_its_row_however_the_number_is_written() {
+    let mut plan = seeded(vec![scoped(10, 50.0, "1"), scoped(11, 50.0, "1"), dest(99, 1.0)], vec![]);
+    for infeed in ["01", " 1 ", "001", "1"] {
+        let got = shares(&mut plan, 300, &[("infeed", infeed)]);
+        assert!(got.contains_key(&10) && got.contains_key(&11), "{infeed}: {got:?}");
+        assert!(got.get(&99).copied().unwrap_or(0) < 20, "{infeed}: {got:?}");
+    }
+    // Not a number: compared as text, case aside.
+    let mut plan = seeded(vec![scoped(10, 1.0, "North")], vec![]);
+    assert_eq!(plan.decide(&parcel(1, &[("infeed", "NORTH")])).unwrap().destination, 10);
+    assert_eq!(
+        plan.decide(&parcel(2, &[("infeed", "south")])),
+        Err(NoDecision::NothingEligible)
+    );
+}
+
+#[test]
+fn fractional_weights_keep_their_shares() {
+    let mut plan = seeded(vec![dest(1, 1e-6), dest(2, 3e-6)], vec![]);
+    let got = shares(&mut plan, 40_000, &[]);
+    assert!((f64::from(got[&1]) / 40_000.0 - 0.25).abs() < 0.02, "{got:?}");
+    let mut plan = seeded(vec![dest(1, 1e-7), dest(2, 1e-7)], vec![]);
+    let got = shares(&mut plan, 10_000, &[]);
+    assert!((f64::from(got[&1]) / 10_000.0 - 0.5).abs() < 0.03, "{got:?}");
+    // A weight that is not a finite positive number is never drawn.
+    let mut plan = seeded(
+        vec![dest(1, 10.0), dest(2, f64::INFINITY), dest(3, f64::NAN), dest(4, -5.0)],
+        vec![],
+    );
+    assert_eq!(shares(&mut plan, 500, &[]), HashMap::from([(1, 500)]));
+}
+
+#[test]
+fn a_broken_rule_disables_only_itself() {
+    let mut plan = seeded(
+        vec![dest(1, 1.0)],
+        vec![rule("id", "(", "5"), rule("id", "^OK", "6"), rule("id", ".", "@nope")],
+    );
+    assert_eq!((plan.live_rules(), plan.warnings.len()), (1, 2), "{:?}", plan.warnings);
+    assert_eq!(
+        plan.decide(&parcel(1, &[("id", "OK1")])),
+        Ok(Decision { destination: 6, tier: Tier::Routing })
+    );
+}
+
+#[test]
+fn a_remembered_table_answer_keeps_the_limits_of_its_table() {
+    let mut settings = PlanSettings { seed: Some(42), ..Default::default() };
+    let mut light = dest(30, 1.0);
+    light.limits.max_weight_g = Some(1_000);
+    settings.tables.insert("germany".into(), vec![light, dest(31, 1.0)]);
+    let mut plan = SortPlan::new(settings, vec![dest(1, 100.0)], vec![rule("id2", "^DE", "@germany")]);
+    // Find a parcel that draws chute 30 while unmeasured, and send it there.
+    let mut found = None;
+    for i in 0..100 {
+        let p = parcel(i, &[("id2", &format!("DE{i}"))]);
+        let d = plan.decide(&p).unwrap();
+        assert_eq!(d.tier, Tier::Routing);
+        if d.destination == 30 {
+            plan.remember(&p, &d);
+            found = Some(p);
+            break;
+        }
+    }
+    let mut p = found.expect("chute 30 is drawn within 100 parcels");
+    assert_eq!(plan.decide(&p).unwrap(), Decision { destination: 30, tier: Tier::Sticky });
+    // Announced again at 8 kg: chute 30 cannot take it, so the remembered answer is not reused.
+    p.physical.weight_g = Some(8_000);
+    assert_eq!(plan.decide(&p).unwrap(), Decision { destination: 31, tier: Tier::Routing });
+}
+
+#[test]
+fn the_sticky_memory_keeps_the_newest_and_keys_on_the_named_field() {
+    let mut plan = SortPlan::new(
+        PlanSettings { sticky_capacity: 100, seed: Some(3), ..Default::default() },
+        vec![dest(1, 10.0)],
+        vec![rule("id", ".", "5")],
+    );
+    for i in 0..1_000u32 {
+        let p = parcel(i, &[("id", &format!("P{i}"))]);
+        let d = plan.decide(&p).unwrap();
+        plan.remember(&p, &d);
+    }
+    let mut tier =
+        |i: u32| plan.decide(&parcel(i, &[("id", &format!("P{i}"))])).unwrap().tier;
+    assert_eq!(
+        [tier(999), tier(900), tier(899), tier(0)],
+        [Tier::Sticky, Tier::Sticky, Tier::Routing, Tier::Routing]
+    );
+
+    let mut plan = SortPlan::new(
+        PlanSettings { sticky_key: "id2".into(), seed: Some(3), ..Default::default() },
+        vec![dest(1, 10.0)],
+        vec![rule("id2", "^X", "5")],
+    );
+    let first = parcel(1, &[("id2", "X7")]);
+    let d = plan.decide(&first).unwrap();
+    plan.remember(&first, &d);
+    // A second announcement under another object id, the same id2: the same parcel.
+    assert_eq!(plan.decide(&parcel(2, &[("id2", "X7")])).unwrap().tier, Tier::Sticky);
+}
+
+#[test]
+fn every_limit_excludes_and_a_value_at_the_limit_is_admitted() {
+    let size = |w, l, h, g, v| Physical {
+        width_mm: w,
+        length_mm: l,
+        height_mm: h,
+        weight_g: g,
+        volume: v,
+    };
+    let over = [
+        (Limits { max_width_mm: Some(100), ..Default::default() }, size(Some(101), None, None, None, None)),
+        (Limits { max_length_mm: Some(100), ..Default::default() }, size(None, Some(101), None, None, None)),
+        (Limits { max_height_mm: Some(100), ..Default::default() }, size(None, None, Some(101), None, None)),
+        (Limits { max_weight_g: Some(100), ..Default::default() }, size(None, None, None, Some(101), None)),
+        (Limits { max_volume: Some(100), ..Default::default() }, size(None, None, None, None, Some(101))),
+    ];
+    for (limits, physical) in over {
+        let mut row = dest(7, 1.0);
+        row.limits = limits;
+        let mut plan = seeded(vec![row], vec![]);
+        let mut p = parcel(1, &[]);
+        p.physical = physical;
+        assert_eq!(plan.decide(&p), Err(NoDecision::NothingEligible), "{limits:?}");
+        let mut p = parcel(2, &[]);
+        p.physical = size(Some(100), Some(100), Some(100), Some(100), Some(100));
+        assert_eq!(plan.decide(&p).unwrap().destination, 7, "at the limit: {limits:?}");
+    }
+}
+
+#[test]
+fn the_reject_counter_counts() {
+    let mut row = dest(1, 1.0);
+    row.limits.max_weight_g = Some(10);
+    let mut plan = SortPlan::new(
+        PlanSettings { reject_destination: Some(99), seed: Some(1), ..Default::default() },
+        vec![row],
+        vec![],
+    );
+    let mut heavy = parcel(1, &[]);
+    heavy.physical.weight_g = Some(50);
+    assert_eq!(plan.decide(&heavy).unwrap(), Decision { destination: 99, tier: Tier::Reject });
+    assert_eq!(plan.counts, TierCounts { reject: 1, ..Default::default() });
+}

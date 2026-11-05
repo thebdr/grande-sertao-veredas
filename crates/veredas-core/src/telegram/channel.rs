@@ -42,7 +42,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 
 use crate::telegram::codec::{self, DecodeError};
 use crate::telegram::{Endian, Envelope, Telegram};
@@ -313,6 +313,8 @@ struct Peer {
     inbox: Vec<u8>,
     /// Frames waiting to go out, bounded.
     outbox: VecDeque<Vec<u8>>,
+    /// How much of the front frame the socket has already taken.
+    front_sent: usize,
     /// Our own progressive number, stamped at SEND time (§3.1).
     prg: u8,
     /// The last PRG we accepted from this peer, for duplicate skipping.
@@ -335,6 +337,7 @@ impl Peer {
             socket,
             inbox: Vec::new(),
             outbox: VecDeque::new(),
+            front_sent: 0,
             // §3: "Set the Progressive Number field to 0" on connect;
             // the first real frame is 1.
             prg: 0,
@@ -352,32 +355,61 @@ impl Peer {
         self.prg
     }
 
-    fn queue(&mut self, bytes: Vec<u8>) -> Result<(), String> {
-        if self.outbox.len() >= OUTBOX_LIMIT {
+    /// Queue a frame and hand the socket whatever it takes now, without
+    /// waiting. The outbox only fills while the socket refuses bytes, so a
+    /// burst to a peer that reads goes straight out (Veredas 1 queued until
+    /// the next tick, and a burst or a steady stream to a reading peer
+    /// overflowed the outbox and dropped it as "not reading"; C-012, refute
+    /// round 1). `Err` means the peer must be dropped.
+    fn queue(&mut self, bytes: Vec<u8>, status: &Arc<Mutex<ChannelStatus>>) -> Result<(), String> {
+        self.outbox.push_back(bytes);
+        self.push_now(status)?;
+        if self.outbox.len() > OUTBOX_LIMIT {
             return Err(format!(
                 "{} is not reading: {OUTBOX_LIMIT} frames queued",
                 self.addr
             ));
         }
-        self.outbox.push_back(bytes);
         Ok(())
     }
 
-    /// Write what is queued. `Err` means the peer must be dropped.
-    async fn flush(&mut self, status: &Arc<Mutex<ChannelStatus>>) -> Result<(), String> {
-        while let Some(frame) = self.outbox.pop_front() {
-            match tokio::time::timeout(WRITE_TIMEOUT, self.socket.write_all(&frame)).await {
-                Ok(Ok(())) => {
-                    self.last_tx = tokio::time::Instant::now();
-                    bump(status, |s| s.sent += 1);
+    /// Write queued bytes as far as the socket accepts them right now.
+    fn push_now(&mut self, status: &Arc<Mutex<ChannelStatus>>) -> Result<(), String> {
+        while let Some(frame) = self.outbox.front() {
+            match self.socket.try_write(&frame[self.front_sent..]) {
+                Ok(n) => {
+                    self.front_sent += n;
+                    if self.front_sent == frame.len() {
+                        self.outbox.pop_front();
+                        self.front_sent = 0;
+                        self.last_tx = tokio::time::Instant::now();
+                        bump(status, |s| s.sent += 1);
+                    }
                 }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Write everything queued, waiting for the socket at most
+    /// `WRITE_TIMEOUT` in all. `Err` means the peer must be dropped.
+    async fn flush(&mut self, status: &Arc<Mutex<ChannelStatus>>) -> Result<(), String> {
+        let deadline = tokio::time::Instant::now() + WRITE_TIMEOUT;
+        loop {
+            self.push_now(status)?;
+            if self.outbox.is_empty() {
+                return Ok(());
+            }
+            match tokio::time::timeout_at(deadline, self.socket.writable()).await {
+                Ok(Ok(())) => continue,
                 Ok(Err(e)) => return Err(e.to_string()),
                 // The peer stopped reading. Dropping it is the only way
                 // to keep the channel (and shutdown) responsive.
                 Err(_) => return Err("write timed out — the peer is not reading".into()),
             }
         }
-        Ok(())
     }
 
     /// Read what is available and decode every complete frame.
@@ -429,14 +461,18 @@ impl Peer {
                     self.undecodable = 0;
 
                     // §3.1: the receiver skips a repeated progressive
-                    // number. A keep-alive (PRG 0 on connect) is never a
-                    // duplicate.
+                    // number. A keep-alive is never skipped, but its PRG
+                    // (bar the connect keep-alive's 0) is the last one
+                    // seen: idle probes take PRGs from the sender's
+                    // counter, and ignoring them let the frame after 254
+                    // probes carry the last data frame's PRG and be skipped
+                    // (C-012, refute round 1).
                     let prg = telegram.envelope.prg;
                     if !telegram.is_keepalive() && self.last_seen_prg == Some(prg) {
                         bump(status, |s| s.duplicates_skipped += 1);
                         continue;
                     }
-                    if !telegram.is_keepalive() {
+                    if !telegram.is_keepalive() || prg != 0 {
                         self.last_seen_prg = Some(prg);
                     }
 
@@ -513,6 +549,13 @@ async fn run(
         prg,
     };
 
+    // One interval for the life of the channel. Veredas 1 armed a fresh
+    // `sleep(TICK)` on every pass of the loop, so every command restarted
+    // it: under a steady stream of sends the tick never fired, and nothing
+    // was read, flushed or probed (C-012, refute round 1).
+    let mut tick = tokio::time::interval(TICK);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     loop {
         let accepted = async {
             match &listener {
@@ -538,7 +581,7 @@ async fn run(
                                 frame.envelope = envelope(prg);
                                 match codec::encode(&frame, cfg.endian) {
                                     Ok(bytes) => {
-                                        if let Err(e) = p.queue(bytes) {
+                                        if let Err(e) = p.queue(bytes, &status) {
                                             set_error(&status, e.clone());
                                             let id = p.id;
                                             drop_peer(&mut peers, id, &e, &status, &events);
@@ -560,7 +603,7 @@ async fn run(
                             let mut frame = telegram.clone();
                             frame.envelope = envelope(prg);
                             if let Ok(bytes) = codec::encode(&frame, cfg.endian)
-                                && p.queue(bytes).is_err() {
+                                && p.queue(bytes, &status).is_err() {
                                     doomed.push(p.id);
                                 }
                         }
@@ -575,14 +618,14 @@ async fn run(
                 let mut peer = Peer::new(id, addr.clone(), socket);
                 // §3 STEP 1: PRG 0 and a keep-alive on connect.
                 if let Ok(bytes) = codec::encode(&Telegram::keepalive(envelope(0)), cfg.endian) {
-                    let _ = peer.queue(bytes);
+                    let _ = peer.queue(bytes, &status);
                 }
                 peers.push(peer);
                 set_state(&status, format!("{} peer(s)", peers.len()));
                 bump(&status, |s| s.peers = peers.len());
                 let _ = events.send(ChannelEvent::Connected { peer: id, addr });
             }
-            _ = tokio::time::sleep(TICK) => {
+            _ = tick.tick() => {
                 // Dial out when it is time to (client role).
                 if let Role::Connect { host, port } = &cfg.role
                     && peers.is_empty()
@@ -602,7 +645,7 @@ async fn run(
                                 if let Ok(bytes) =
                                     codec::encode(&Telegram::keepalive(envelope(0)), cfg.endian)
                                 {
-                                    let _ = peer.queue(bytes);
+                                    let _ = peer.queue(bytes, &status);
                                 }
                                 peers.push(peer);
                                 set_state(&status, format!("connected to {addr}"));
@@ -641,7 +684,7 @@ async fn run(
                         let prg = p.next_prg();
                         if let Ok(bytes) =
                             codec::encode(&Telegram::keepalive(envelope(prg)), cfg.endian)
-                            && p.queue(bytes).is_ok() {
+                            && p.queue(bytes, &status).is_ok() {
                                 bump(&status, |s| s.keepalives_sent += 1);
                             }
                         // Reset the read clock so the probe is sent once

@@ -76,3 +76,73 @@ fn int_in_covers_both_ends_and_flip_produces_both_faces() {
     }
     assert!(heads && tails);
 }
+
+// ---------------------------------------------------------------------------
+// Refute round 1 (C-016): the sequence pinned, the extremes survived.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn it_is_the_reference_pcg32_and_replays_its_whole_sequence() {
+    // The published output of the reference PCG32 demo for seed 42, stream 54.
+    let mut r = Pcg32::new(42, 54);
+    let first: Vec<u32> = (0..6).map(|_| r.next_u32()).collect();
+    assert_eq!(first, [0xa15c02b7, 0x7b47f409, 0xba1d3330, 0x83d2f293, 0xbfa4784b, 0xcbed606e]);
+
+    let run = || {
+        let mut r = Pcg32::new(7, 1);
+        (0..1_000)
+            .map(|i| match i % 4 {
+                0 => r.next_u32() as i64,
+                1 => r.int_in(-5, 5),
+                2 => r.uniform(0.0, 10.0, 3).to_bits() as i64,
+                _ => r.flip() as i64,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(run(), run(), "every draw of every kind replays");
+}
+
+#[test]
+fn streams_are_taken_modulo_two_to_the_63() {
+    let seq = |stream: u64| {
+        let mut r = Pcg32::new(7, stream);
+        (0..8).map(|_| r.next_u32()).collect::<Vec<_>>()
+    };
+    assert_ne!(seq(0), seq(1));
+    assert_ne!(seq(2), seq(3));
+    assert_eq!(seq(0), seq(1 << 63), "the top bit of a stream id is shifted out");
+    assert_eq!(seq(2), seq(2 | 1 << 63));
+}
+
+#[test]
+fn int_in_survives_ranges_wider_than_i64() {
+    let mut r = Pcg32::new(11, 3);
+    for (low, high) in [(i64::MIN, i64::MAX), (-1, i64::MAX), (i64::MIN, 0), (i64::MAX, i64::MIN)] {
+        let (lo, hi) = (low.min(high), low.max(high));
+        for _ in 0..1_000 {
+            let v = r.int_in(low, high);
+            assert!(lo <= v && v <= hi, "{v} outside [{lo}, {hi}]");
+        }
+    }
+    // Both ends reachable at the extremes.
+    for (lo, hi) in [(i64::MAX - 1, i64::MAX), (i64::MIN, i64::MIN + 1)] {
+        let seen: std::collections::BTreeSet<i64> = (0..64).map(|_| r.int_in(lo, hi)).collect();
+        assert_eq!(seen.into_iter().collect::<Vec<_>>(), [lo, hi]);
+    }
+}
+
+#[test]
+fn uniform_never_returns_nan_when_the_width_overflows() {
+    // This seed leaves the state at 0 after `new`, so the first unit draw is 0: with
+    // `lo + 0 * inf` that was NaN.
+    for decimals in [0, 2, 15] {
+        let v = Pcg32::new(0x3f68_1078_cd61_d75a, 0).uniform(-f64::MAX, f64::MAX, decimals);
+        assert!(!v.is_nan(), "decimals {decimals}");
+        assert_eq!(v, -f64::MAX, "a unit draw of 0 is the low bound");
+    }
+    let mut r = Pcg32::new(5, 5);
+    let draws: Vec<f64> = (0..1_000).map(|_| r.uniform(-1e308, 1e308, 2)).collect();
+    assert!(draws.iter().all(|v| (-1e308..=1e308).contains(v)), "in range, never NaN");
+    let distinct: std::collections::BTreeSet<u64> = draws.iter().map(|v| v.to_bits()).collect();
+    assert!(distinct.len() > 900, "not stuck on one value: {} distinct", distinct.len());
+}

@@ -283,3 +283,149 @@ fn a_bad_pattern_is_a_warning_that_drops_one_capture() {
         Some(HashMap::new())
     );
 }
+
+// ---------------------------------------------------------------------------
+// Refute round 1 (C-013): each claim pinned with exact values.
+// ---------------------------------------------------------------------------
+
+fn one_field(name: &str, at: usize, len: usize, ty: FieldType) -> Capture {
+    Capture::new(&CaptureSpec {
+        fields: vec![BinaryField { name: name.into(), at, len, ty }],
+        ..Default::default()
+    })
+}
+
+fn read_one(at: usize, len: usize, ty: FieldType, body: &[u8], endian: Endian) -> Option<String> {
+    one_field("v", at, len, ty).extract(body, endian).map(|m| m["v"].clone())
+}
+
+#[test]
+fn every_field_type_reads_its_exact_value_in_both_orders() {
+    let body = [0x12, 0x34, 0x56, 0x78, 0xAB, 0xCD];
+    let both = |at, len, ty| {
+        (
+            read_one(at, len, ty, &body, Endian::Little).unwrap(),
+            read_one(at, len, ty, &body, Endian::Big).unwrap(),
+        )
+    };
+    let s = |a: &str, b: &str| (a.to_string(), b.to_string());
+    assert_eq!(both(0, 0, FieldType::U8), s("18", "18"));
+    assert_eq!(both(0, 0, FieldType::U16), s("13330", "4660"));
+    assert_eq!(both(4, 0, FieldType::I16), s("-12885", "-21555"));
+    assert_eq!(both(0, 0, FieldType::U32), s("2018915346", "305419896"));
+    assert_eq!(both(2, 0, FieldType::I32), s("-844400554", "1450748877"));
+    assert_eq!(both(0, 6, FieldType::Hex), s("12345678ABCD", "12345678ABCD"));
+}
+
+#[test]
+fn a_field_running_past_the_end_does_not_match() {
+    let body = b"12345";
+    for (at, len, ty) in [
+        (2, 0, FieldType::U32),
+        (3, 0, FieldType::U32),
+        (4, 0, FieldType::U16),
+        (5, 0, FieldType::I16),
+        (5, 0, FieldType::U8),
+        (3, 4, FieldType::Ascii),
+        (0, usize::MAX, FieldType::Hex),
+        (usize::MAX - 2, 0, FieldType::U32),
+    ] {
+        assert_eq!(read_one(at, len, ty, body, Endian::Little), None, "{ty:?} at {at} len {len}");
+    }
+    // A field that ends exactly at the body's end matches.
+    assert_eq!(read_one(1, 0, FieldType::U32, body, Endian::Little).as_deref(), Some("892613426"));
+    assert_eq!(read_one(4, 0, FieldType::U8, body, Endian::Little).as_deref(), Some("53"));
+}
+
+#[test]
+fn a_repeat_stops_at_its_own_cap() {
+    let capped = |max| {
+        let c = Capture::new(&CaptureSpec {
+            repeat: vec![RepeatSpec { name: "b".into(), pattern: r"BC=(\w+)".into(), max }],
+            ..Default::default()
+        });
+        let mut keys: Vec<String> =
+            c.extract("BC=X ".repeat(20).as_bytes(), Endian::Little).unwrap().into_keys().collect();
+        keys.sort();
+        keys
+    };
+    assert_eq!(capped(3), ["b1", "b2", "b3"]);
+    assert_eq!(capped(0), ["b1"], "a cap of 0 still captures one");
+}
+
+#[test]
+fn a_bad_pattern_drops_only_its_own_capture() {
+    let capture = Capture::new(&CaptureSpec {
+        payload: Some("([".into()),
+        fields: vec![BinaryField { name: "f".into(), at: 0, len: 0, ty: FieldType::U8 }],
+        repeat: vec![
+            RepeatSpec { name: "bad".into(), pattern: "(?P<".into(), max: 4 },
+            RepeatSpec { name: "good".into(), pattern: r"G=(\w+)".into(), max: 4 },
+        ],
+    });
+    assert_eq!(capture.warnings.len(), 2, "{:?}", capture.warnings);
+    let out = capture.extract(b"G=ONE G=TWO", Endian::Little).unwrap();
+    let expected: HashMap<String, String> =
+        [("good1", "ONE"), ("good2", "TWO"), ("f", "71")].map(|(k, v)| (k.into(), v.into())).into();
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn a_binary_field_wins_over_a_repeat_too() {
+    let capture = Capture::new(&CaptureSpec {
+        fields: vec![BinaryField { name: "id1".into(), at: 0, len: 2, ty: FieldType::Ascii }],
+        repeat: vec![RepeatSpec { name: "id".into(), pattern: r"ID=(\w+)".into(), max: 4 }],
+        ..Default::default()
+    });
+    let out = capture.extract(b"XY ID=TEXT", Endian::Little).unwrap();
+    assert_eq!(out.get("id1").map(String::as_str), Some("XY"));
+}
+
+#[test]
+fn the_barcode_format_caps_bounds_and_separates_exactly() {
+    let format = BarcodeFormat { separators: "|".into(), min_len: 3, max_barcodes: 2 };
+    let mut data = vec![b'A'];
+    data.extend_from_slice(b"AB|ABC;X|ABCD|ABCDE");
+    // "AB" is under the minimum, "ABC;X" is exactly kept with its ';' (not a separator here),
+    // and the cap stops before "ABCDE".
+    assert_eq!(format.split(&data), ["ABC;X", "ABCD"]);
+    let exactly = BarcodeFormat { separators: "|".into(), min_len: 3, max_barcodes: 16 };
+    assert_eq!(exactly.split(b"AABC|AB"), ["ABC"], "a barcode of exactly min_len is kept");
+}
+
+#[test]
+fn the_infeed_falls_back_to_the_operator_id_and_the_ispc_reads_in_its_byte_order() {
+    // No induction id in the ISPC block: the request's operator id is the infeed.
+    let req = scanner_with(b"A", IspcMscData::default());
+    let parcel = scanner_parcel(&req, Endian::Little, &BarcodeFormat::default());
+    assert_eq!(parcel.field("infeed"), Some("11"));
+
+    // A big-endian channel: the ISPC block is written and read big-endian.
+    let ispc = IspcMscData { tracking_id: 777, destination: 55, weight_g: 2500, length_mm: 400, ..Default::default() };
+    let mut req = scanner_with(b"A", IspcMscData::default());
+    req.user_data = ispc.encode(SZ_DATA_LEN, Endian::Big);
+    let parcel = scanner_parcel(&req, Endian::Big, &BarcodeFormat::default());
+    assert_eq!(parcel.field("id2"), Some("777"));
+    assert_eq!(parcel.field("id3"), Some("55"));
+    assert_eq!(parcel.physical.weight_g, Some(2500));
+    assert_eq!(parcel.physical.length_mm, Some(400));
+}
+
+#[test]
+fn every_read_status_names_its_reason() {
+    let status_of = |first: Option<u8>| {
+        let mut req = scanner_with(b"", IspcMscData::default());
+        match first {
+            Some(b) => req.msc_data[0] = b,
+            None => req.msc_data.clear(),
+        }
+        scanner_parcel(&req, Endian::Little, &BarcodeFormat::default())
+            .field("read_status")
+            .map(str::to_string)
+    };
+    assert_eq!(status_of(Some(b'T')).as_deref(), Some("timeout"));
+    assert_eq!(status_of(Some(0x01)).as_deref(), Some("virtual"));
+    assert_eq!(status_of(Some(b'!')).as_deref(), Some("no handshake"));
+    assert_eq!(status_of(Some(0x00)).as_deref(), Some("other(0)"));
+    assert_eq!(status_of(None).as_deref(), Some("other(0)"), "an empty block, no panic");
+}

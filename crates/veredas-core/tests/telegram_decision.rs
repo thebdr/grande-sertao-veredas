@@ -21,6 +21,31 @@ fn event(id: u32) -> LifecycleEvent {
     }
 }
 
+/// Read one HTTP request whole, as a real service does: the head up to its blank line, then
+/// exactly the body its Content-Length announces (a client that lied about it would leave this
+/// waiting, or cut the body short).
+async fn read_request(socket: &mut tokio::net::TcpStream) -> String {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        if let Some(split) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&buf[..split]).to_string();
+            let length: usize = head
+                .lines()
+                .find_map(|l| l.strip_prefix("Content-Length: "))
+                .map(|v| v.trim().parse().unwrap())
+                .unwrap_or(0);
+            if buf.len() >= split + 4 + length {
+                assert_eq!(buf.len(), split + 4 + length, "nothing after the announced body");
+                return String::from_utf8_lossy(&buf).to_string();
+            }
+        }
+        let n = socket.read(&mut chunk).await.unwrap();
+        assert!(n > 0, "the client closed before its request was whole");
+        buf.extend_from_slice(&chunk[..n]);
+    }
+}
+
 /// A one-shot service on an ephemeral port: reads the request, answers `reply` verbatim,
 /// closes, and hands back what it was asked.
 async fn serve_once(reply: &'static [u8]) -> (u16, tokio::task::JoinHandle<String>) {
@@ -28,11 +53,10 @@ async fn serve_once(reply: &'static [u8]) -> (u16, tokio::task::JoinHandle<Strin
     let port = listener.local_addr().unwrap().port();
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = vec![0u8; 8192];
-        let n = socket.read(&mut buf).await.unwrap();
+        let request = read_request(&mut socket).await;
         socket.write_all(reply).await.unwrap();
         socket.shutdown().await.unwrap();
-        String::from_utf8_lossy(&buf[..n]).to_string()
+        request
     });
     (port, server)
 }
@@ -316,7 +340,8 @@ async fn a_service_that_never_answers_times_out() {
         .expect_err("must time out");
     assert!(matches!(err, DecisionError::Timeout(t) if t == Duration::from_millis(250)));
     assert_eq!(err.to_string(), "no answer within 250ms");
-    assert!(started.elapsed() < Duration::from_secs(2));
+    let took = started.elapsed();
+    assert!(took >= Duration::from_millis(250) && took < Duration::from_millis(900), "{took:?}");
 }
 
 #[tokio::test]
@@ -390,4 +415,73 @@ async fn a_service_with_no_answer_is_distinguishable_from_a_chute() {
     let answer = client.decide(&DecideRequest::default()).await.expect("ok");
     assert_eq!(answer.destination, None);
     assert!(answer.tier.contains("reject"));
+}
+
+#[tokio::test]
+async fn the_bound_covers_a_reply_that_drips_in() {
+    // A valid answer, one byte every 40 ms: each read makes progress, the whole call does not.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _ = read_request(&mut socket).await;
+        for byte in b"HTTP/1.1 200 OK\r\n\r\n{\"destination\":5}" {
+            if socket.write_all(&[*byte]).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+    });
+    let c = DecisionClient::new(format!("http://127.0.0.1:{port}"), Duration::from_millis(300));
+    let started = std::time::Instant::now();
+    let err = c.decide(&DecideRequest::default()).await.unwrap_err();
+    let took = started.elapsed();
+    assert!(matches!(err, DecisionError::Timeout(t) if t == Duration::from_millis(300)), "{err:?}");
+    assert!(took >= Duration::from_millis(300) && took < Duration::from_millis(900), "{took:?}");
+}
+
+#[tokio::test]
+async fn every_request_announces_its_exact_length() {
+    for path in ["/decide", "/events", "/binstate"] {
+        let (port, server) = serve_once(b"HTTP/1.1 200 OK\r\n\r\n{}").await;
+        let c = client(port);
+        match path {
+            "/decide" => drop(c.decide(&DecideRequest { object_id: 9, ..Default::default() }).await.unwrap()),
+            "/events" => c.post_events(&[event(1), event(2)]).await.unwrap(),
+            _ => c.post_bin_state(3, 1, false).await.unwrap(),
+        }
+        // `read_request` read exactly Content-Length bytes after the head and asserted nothing
+        // followed; here the announced length is the body's.
+        let request = server.await.unwrap();
+        let (head, body) = request.split_once("\r\n\r\n").unwrap();
+        assert!(head.starts_with(&format!("POST {path} HTTP/1.1\r\n")), "{head}");
+        assert!(head.contains(&format!("\r\nContent-Length: {}\r\n", body.len())), "{head}");
+        assert!(head.contains("\r\nContent-Type: application/json\r\n"), "{head}");
+    }
+}
+
+#[test]
+fn a_requeue_onto_a_full_queue_keeps_the_bound_and_drops_the_oldest() {
+    let ids = |q: &EventQueue| q.take(10).iter().map(|e| e.object_id.unwrap()).collect::<Vec<_>>();
+
+    let q = EventQueue::new(3);
+    for i in 0..3 {
+        q.push(event(i));
+    }
+    let batch = q.take(3);
+    q.push(event(3));
+    q.requeue(batch, "down".into());
+    assert_eq!((q.stats().queued, q.stats().dropped), (3, 1));
+    assert_eq!(ids(&q), [1, 2, 3], "the oldest of the batch went, the newer event stayed");
+
+    let q = EventQueue::new(3);
+    for i in 0..3 {
+        q.push(event(i));
+    }
+    let batch = q.take(2);
+    q.push(event(3));
+    q.push(event(4));
+    q.requeue(batch, "down".into());
+    assert_eq!((q.stats().queued, q.stats().dropped), (3, 2));
+    assert_eq!(ids(&q), [2, 3, 4]);
 }

@@ -1,0 +1,24 @@
+{
+  "clause": "C-011",
+  "command": "cargo test -p veredas-core --test telegram_genibelt",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-core",
+    "--test",
+    "telegram_genibelt"
+  ],
+  "exitCode": 0,
+  "outputSha": "2ac5229acc3e6e9dc2a62caa8c90df480862ef1e5a88951e631de465cd5fa894",
+  "outputTail": "test a_no_read_parcel_is_recognisable ... ok\ntest bin_state_bits_decide_whether_a_chute_can_take_parcels ... ok\ntest a_scanner_request_yields_the_parcel_physicals_the_sort_plan_needs ... ok\ntest outcomes_read_as_words_not_codes ... ok\ntest a_wrong_length_body_is_an_error_not_a_panic ... ok\ntest an_unknown_id_is_kept_verbatim_rather_than_dropped ... ok\ntest text_fields_survive_their_fixed_width_blocks ... ok\ntest variable_length_messages_carry_their_custom_tails ... ok\ntest sizes_match_the_specification ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.88s\n     Running tests\\telegram_genibelt.rs (target\\debug\\deps\\telegram_genibelt-c6d6ffedf554dfa4.exe)",
+  "ranAt": "2026-11-05T20:55:14.108Z",
+  "headCommit": "9ba99fbaab6b264895a00bc956a4f4fd95114dca",
+  "tests": [
+    {
+      "name": "crates/veredas-core/tests/telegram_genibelt.rs",
+      "file": "crates/veredas-core/tests/telegram_genibelt.rs",
+      "fileSha": "36ba662253b0a2c374eae75369d85801070032a81653a9cd3dfac161a8898ed3"
+    }
+  ]
+}

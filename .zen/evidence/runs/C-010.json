@@ -1,0 +1,24 @@
+{
+  "clause": "C-010",
+  "command": "cargo test -p veredas-core --test telegram_codec",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-core",
+    "--test",
+    "telegram_codec"
+  ],
+  "exitCode": 0,
+  "outputSha": "b2745d953a67d314b285e0ef913c9481e9ce4cdb26aea72a85f44aad815f144f",
+  "outputTail": "test a_telegram_survives_a_round_trip_in_both_byte_orders ... ok\ntest hex_bodies_parse_and_previews_render_both_ways ... ok\ntest the_frame_is_the_spec_layout_byte_for_byte ... ok\ntest previews_and_dumps_render_exactly ... ok\ntest the_declared_lengths_describe_the_real_frame ... ok\ntest the_size_limits_sit_exactly_at_the_wire_fields ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling serde_core v1.0.229\n   Compiling serde v1.0.229\n   Compiling serde_json v1.0.154\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.25s\n     Running tests\\telegram_codec.rs (target\\debug\\deps\\telegram_codec-9f19cddba39e450b.exe)",
+  "ranAt": "2026-11-05T20:55:12.617Z",
+  "headCommit": "9ba99fbaab6b264895a00bc956a4f4fd95114dca",
+  "tests": [
+    {
+      "name": "crates/veredas-core/tests/telegram_codec.rs",
+      "file": "crates/veredas-core/tests/telegram_codec.rs",
+      "fileSha": "a78ef0121347d587e4f837d87e1c8da6a0a38b65026668c9d2205fb36f197a3c"
+    }
+  ]
+}

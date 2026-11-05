@@ -69,6 +69,9 @@ pub mod ids {
 
 /// §3.3: "The maximum size of the DATA SEGMENT is equal to 512 bytes."
 pub const MAX_DATA_SEGMENT: usize = 512;
+/// The largest message body: a data segment is MSG ID (2) + MSG LENGTH (2) + MSG DATA (§2.3),
+/// so §3.3's 512 bytes leave 508 for the body.
+pub const MAX_BODY: usize = MAX_DATA_SEGMENT - 4;
 /// §3.3: "The maximum size of the PROTOCOL is equal to 5 Kbytes."
 pub const MAX_PROTOCOL: usize = 5 * 1024;
 
@@ -100,7 +103,7 @@ impl std::fmt::Display for MsgError {
             ),
             MsgError::TooLong { msg_id, len } => write!(
                 f,
-                "message {msg_id} carries {len} bytes — over the {MAX_DATA_SEGMENT}-byte segment limit"
+                "message {msg_id} carries {len} bytes — over the {MAX_BODY}-byte body a {MAX_DATA_SEGMENT}-byte segment holds"
             ),
         }
     }
@@ -222,6 +225,12 @@ impl Writer {
         self.u32(if v { 1 } else { 0 })
     }
 
+    /// A fixed-width text block that always ends in NUL: at most `n - 1` bytes of text, then
+    /// zeros (§4.1.1.7: the last byte of the block is always 0).
+    fn asciiz_block(&mut self, data: &[u8], n: usize) -> &mut Self {
+        self.block(&data[..data.len().min(n.saturating_sub(1))], n)
+    }
+
     /// A fixed-width block: truncated or zero-padded to exactly `n`.
     fn block(&mut self, data: &[u8], n: usize) -> &mut Self {
         let take = data.len().min(n);
@@ -292,7 +301,9 @@ pub fn utf16z(bytes: &[u8], endian: Endian) -> String {
 pub fn utf16_block(text: &str, bytes: usize, endian: Endian) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes);
     for unit in text.encode_utf16() {
-        if out.len() + 2 > bytes {
+        // A high surrogate goes out only with room for its pair: a lone one is malformed UTF-16.
+        let need = if (0xD800..=0xDBFF).contains(&unit) { 4 } else { 2 };
+        if out.len() + need > bytes {
             break;
         }
         match endian {
@@ -1003,6 +1014,11 @@ pub mod bin_state {
     pub const BLOCKED_BY_EXT: u32 = 0x0080_0000;
     pub const BLOCKED_BY_TRACKING: u32 = 0x0100_0000;
     pub const OPERATOR_PRESENCE: u32 = 0x0200_0000;
+    // 0x0400_0000 and 0x0800_0000 are reserved (RFU) in §4.2.1.4.
+    pub const MAPPING: u32 = 0x1000_0000;
+    pub const EMERGENCY_TRISTATE: u32 = 0x2000_0000;
+    pub const ALARM_TRISTATE: u32 = 0x4000_0000;
+    pub const WARNING_TRISTATE: u32 = 0x8000_0000;
 
     /// Whether a chute in this state can currently receive parcels —
     /// what the sort plan's eligibility check asks.
@@ -1018,6 +1034,8 @@ pub mod bin_state {
             | BLOCKED_BY_TRACKING
             | MAINTENANCE
             | COMPONENT_FAULT;
+        // DECISION PENDING (docs/questions.md Q7): the spec names the TRISTATE bits without
+        // saying whether they stop a chute; they do not block here, as in Veredas 1.
         state & BLOCKING == 0
     }
 
@@ -1031,7 +1049,7 @@ pub mod bin_state {
 
     /// Every bit with its name, in bit order — the one table a UI that
     /// lets an operator set a state word builds its checkboxes from.
-    pub const BITS: [(u32, &str); 26] = [
+    pub const BITS: [(u32, &str); 30] = [
         (RUNNING, "running"),
         (EMPTYING, "emptying"),
         (STARTUP, "startup"),
@@ -1058,6 +1076,10 @@ pub mod bin_state {
         (BLOCKED_BY_EXT, "blocked externally"),
         (BLOCKED_BY_TRACKING, "blocked by tracking"),
         (OPERATOR_PRESENCE, "operator present"),
+        (MAPPING, "mapping"),
+        (EMERGENCY_TRISTATE, "emergency tristate"),
+        (ALARM_TRISTATE, "alarm tristate"),
+        (WARNING_TRISTATE, "warning tristate"),
     ];
 }
 
@@ -1385,7 +1407,7 @@ impl Message {
     /// Decode a data segment's body.
     pub fn decode(msg_id: u16, data: &[u8], endian: Endian) -> Result<Message, MsgError> {
         use ids::*;
-        if data.len() > MAX_DATA_SEGMENT {
+        if data.len() > MAX_BODY {
             return Err(MsgError::TooLong {
                 msg_id,
                 len: data.len(),
@@ -1790,7 +1812,7 @@ impl Message {
             Message::OutputSignals(m) => w
                 .u8(m.class_id)
                 .u16(m.device_id)
-                .block(m.output_name.as_bytes(), 26)
+                .asciiz_block(m.output_name.as_bytes(), 26)
                 .u8(m.output_state)
                 .u16(m.time_on_ms)
                 .u16(m.time_off_ms)
@@ -1921,7 +1943,7 @@ impl Message {
             Message::Diagnostic(data) => data.clone(),
             Message::Unknown { data, .. } => data.clone(),
         };
-        if out.len() > MAX_DATA_SEGMENT {
+        if out.len() > MAX_BODY {
             return Err(MsgError::TooLong {
                 msg_id: self.msg_id(),
                 len: out.len(),

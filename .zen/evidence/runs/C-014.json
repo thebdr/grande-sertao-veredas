@@ -1,0 +1,24 @@
+{
+  "clause": "C-014",
+  "command": "cargo test -p veredas-core --test telegram_sortplan",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-core",
+    "--test",
+    "telegram_sortplan"
+  ],
+  "exitCode": 0,
+  "outputSha": "a7d00a5fd7c3db307cd06dfeb6d9ff567402142b7f77a10926dcfc1eea078081",
+  "outputTail": "test constraints_exclude_a_chute_that_cannot_take_the_parcel ... ok\ntest only_decisions_actually_sent_become_sticky ... ok\ntest broken_rules_are_warnings_that_disable_one_rule_not_the_plan ... ok\ntest routing_rules_beat_the_spread_and_respect_constraints_too ... ok\ntest tier_counters_make_a_silent_fallback_visible ... ok\ntest a_sticky_answer_is_dropped_when_its_chute_stops_accepting ... ok\ntest the_infeed_column_gives_each_induction_point_its_own_spread ... ok\ntest the_sticky_memory_stays_bounded ... ok\ntest weights_are_shares_of_the_enabled_sum_not_percentages ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.08s\n     Running tests\\telegram_sortplan.rs (target\\debug\\deps\\telegram_sortplan-c16107d2b58eb25c.exe)",
+  "ranAt": "2026-11-05T20:55:27.086Z",
+  "headCommit": "9ba99fbaab6b264895a00bc956a4f4fd95114dca",
+  "tests": [
+    {
+      "name": "crates/veredas-core/tests/telegram_sortplan.rs",
+      "file": "crates/veredas-core/tests/telegram_sortplan.rs",
+      "fileSha": "45c3abcd340c6e63391825180c60c4902cc841248204dd8d7121e4cfc4e9643a"
+    }
+  ]
+}

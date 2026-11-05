@@ -243,9 +243,6 @@ impl Default for PlanSettings {
     }
 }
 
-/// How deep `@table` indirection may go before the plan is judged
-/// circular. A rules file is typed by hand, so a cycle will happen.
-const MAX_TABLE_DEPTH: usize = 8;
 
 /// A loaded, compiled sort plan.
 pub struct SortPlan {
@@ -390,7 +387,13 @@ impl SortPlan {
 
     /// Decide where a parcel goes.
     pub fn decide(&mut self, parcel: &Parcel) -> Result<Decision, NoDecision> {
-        if self.destinations.is_empty() && self.settings.reject_destination.is_none() {
+        // A plan with no destinations, no live rule and no reject chute has nothing to say. A
+        // rules-only plan decides by content (Veredas 1 answered `EmptyPlan` before consulting
+        // its rules; C-014, refute round 1).
+        if self.destinations.is_empty()
+            && self.rules.is_empty()
+            && self.settings.reject_destination.is_none()
+        {
             self.counts.undecided += 1;
             return Err(NoDecision::EmptyPlan);
         }
@@ -415,7 +418,7 @@ impl SortPlan {
         }
 
         // 3. The weighted spread over what is eligible.
-        if let Some(dest) = self.draw_from("destinations", parcel, 0) {
+        if let Some(dest) = self.draw_from("destinations", parcel) {
             self.counts.weighted += 1;
             return Ok(Decision {
                 destination: dest,
@@ -446,7 +449,7 @@ impl SortPlan {
         match destination.strip_prefix('@') {
             Some(table) => {
                 let table = table.to_string();
-                self.draw_from(&table, parcel, 0)
+                self.draw_from(&table, parcel)
                     .map(|destination| Decision {
                         destination,
                         tier: Tier::Routing,
@@ -470,9 +473,11 @@ impl SortPlan {
             return false;
         }
         // Rows are per (destination, filter) — the parcel may match any
-        // row naming this chute.
+        // row naming this chute, in the main table or a named one (a
+        // remembered `@table` answer keeps its table's limits).
         let mut named = false;
-        for row in &self.destinations {
+        let rows = self.destinations.iter().chain(self.settings.tables.values().flatten());
+        for row in rows {
             if row.value != dest {
                 continue;
             }
@@ -488,10 +493,9 @@ impl SortPlan {
     }
 
     /// Draw from a weighted table over the eligible rows.
-    fn draw_from(&mut self, table: &str, parcel: &Parcel, depth: usize) -> Option<u16> {
-        if depth > MAX_TABLE_DEPTH {
-            return None;
-        }
+    ///
+    /// A table row names a chute, never another table, so a draw cannot recurse.
+    fn draw_from(&mut self, table: &str, parcel: &Parcel) -> Option<u16> {
         let rows: Vec<DestinationRow> = if table == "destinations" {
             self.destinations.clone()
         } else {
@@ -501,6 +505,7 @@ impl SortPlan {
             .iter()
             .filter(|row| {
                 row.enabled
+                    && row.weight.is_finite()
                     && row.weight > 0.0
                     && !self.blocked.contains_key(&row.value)
                     && row.limits.admits(&parcel.physical)
@@ -508,12 +513,13 @@ impl SortPlan {
             })
             .collect();
         let total: f64 = eligible.iter().map(|row| row.weight).sum();
-        if total <= 0.0 {
+        if !(total > 0.0 && total.is_finite()) {
             return None;
         }
         // A share of the SUM OF ENABLED weights — the operator's rule,
-        // no normalization to 100.
-        let mut point = self.rng.uniform(0.0, total, 6);
+        // no normalization to 100. Drawn unrounded: rounding the point to
+        // a fixed number of decimals skewed weights that sum below 1e-4.
+        let mut point = self.rng.next_f64() * total;
         for row in &eligible {
             if point <= row.weight {
                 return Some(row.value);
@@ -545,8 +551,9 @@ impl SortPlan {
 /// Do a row's filter columns match this parcel?
 ///
 /// `*` and blank mean "any"; comparison is trimmed and
-/// case-insensitive, because `infeed=01` and `infeed=1` come from
-/// different plants' formatting of the same thing. A filter naming a
+/// case-insensitive, and two integers compare as numbers, because
+/// `infeed=01` and `infeed=1` come from different plants' formatting of
+/// the same thing. A filter naming a
 /// field the parcel does not carry EXCLUDES the row (fail-closed): a
 /// row scoped to infeed 2 must not catch traffic whose infeed is
 /// unknown.
@@ -557,7 +564,14 @@ fn filters_match(row: &DestinationRow, parcel: &Parcel) -> bool {
             return true;
         }
         match parcel.field(column) {
-            Some(have) => have.trim().eq_ignore_ascii_case(want),
+            Some(have) => {
+                let have = have.trim();
+                have.eq_ignore_ascii_case(want)
+                    || matches!(
+                        (have.parse::<i64>(), want.parse::<i64>()),
+                        (Ok(a), Ok(b)) if a == b
+                    )
+            }
             None => false,
         }
     })

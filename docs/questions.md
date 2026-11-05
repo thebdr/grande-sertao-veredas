@@ -89,3 +89,17 @@ are in code and pinned by the telegram tests, so a machine without the file buil
 To read the spec, use the copy beside Veredas 1 or drop one into `docs/vendor/` here.
 
 **Reversible?** Yes: a file and an ignore rule.
+
+---
+
+## Q7 - Do the TRISTATE bin-state bits stop a chute?
+
+**Raised** 2026-11-05 by the refute round of C-011: the GENIBELT specification (§4.2.1.4) names
+bits 28-31 of a bin state (MAPPING, EMERGENCY_TRISTATE, ALARM_TRISTATE, WARNING_TRISTATE) without
+saying what they mean for parcel acceptance. Veredas 1 named none of them.
+
+**Taken (reversible, pending the operator):** they are named (a state word reads as words), and
+`accepts_parcels` ignores them, as Veredas 1 did, so no chute that sorted before stops sorting.
+Marked `// DECISION PENDING` in `veredas_core::telegram::genibelt::bin_state`.
+
+**Reversible?** Yes: one constant set in `accepts_parcels`, and the test that pins it.

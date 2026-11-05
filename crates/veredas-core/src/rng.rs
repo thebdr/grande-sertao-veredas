@@ -16,7 +16,9 @@ pub struct Pcg32 {
 const MULT: u64 = 6_364_136_223_846_793_005;
 
 impl Pcg32 {
-    /// Deterministic: the same (seed, stream) always yields the same draws.
+    /// Deterministic: the same (seed, stream) always yields the same draws. As in the
+    /// reference, there are 2^63 streams: a stream id is taken modulo 2^63 (its top bit is
+    /// shifted out).
     pub fn new(seed: u64, stream: u64) -> Pcg32 {
         let mut rng = Pcg32 {
             state: 0,
@@ -46,7 +48,11 @@ impl Pcg32 {
         xorshifted.rotate_right(rot)
     }
 
-    /// A double in [0, 1) with 53 bits of entropy.
+    /// A double in [0, 1) with 53 bits of entropy, unrounded: what a weighted draw scales.
+    pub fn next_f64(&mut self) -> f64 {
+        self.unit()
+    }
+
     fn unit(&mut self) -> f64 {
         let hi = self.next_u32() as u64;
         let lo = self.next_u32() as u64;
@@ -72,9 +78,14 @@ impl Pcg32 {
         } else {
             (high, low)
         };
-        let raw = lo + self.unit() * (hi - lo);
+        // Interpolated rather than `lo + u * (hi - lo)`: the width of two finite bounds can
+        // overflow to infinity (-1e308..1e308), and `0 * inf` is NaN.
+        let u = self.unit();
+        let raw = lo * (1.0 - u) + hi * u;
         let factor = 10f64.powi(decimals.min(15) as i32);
-        let rounded = (raw * factor).round() / factor;
+        let scaled = raw * factor;
+        // At magnitudes where scaling overflows, decimals mean nothing: keep the draw.
+        let rounded = if scaled.is_finite() { scaled.round() / factor } else { raw };
         rounded.clamp(lo, hi)
     }
 
@@ -85,11 +96,13 @@ impl Pcg32 {
         } else {
             (high, low)
         };
-        let span = (hi - lo) as u128 + 1;
+        // In i128: a range wider than i64::MAX (a bound typed as ±1e19 saturates to the i64
+        // extremes) overflows i64 arithmetic.
+        let span = (hi as i128 - lo as i128) as u128 + 1;
         // Modulo bias is irrelevant at simulator scale — one comment
         // instead of a rejection loop.
         let draw = ((self.next_u32() as u128) << 32 | self.next_u32() as u128) % span;
-        lo + draw as i64
+        (lo as i128 + draw as i128) as i64
     }
 
     pub fn flip(&mut self) -> bool {

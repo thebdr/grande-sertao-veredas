@@ -190,10 +190,12 @@ fn a_wrong_endian_setting_reads_as_bad_frames_not_phantom_data() {
         data: b"payload".to_vec(),
     }]);
     let bytes = encode(&t, Endian::Little).unwrap();
-    assert!(
-        decode(&bytes, Endian::Big).is_err(),
-        "byte-swapped lengths must not decode into invented segments"
-    );
+    // Read big-endian, LENGTH says 2816 and NUM DATA 256: the one frame is a plausible prefix, so
+    // it waits; repeated, the second segment header shows the lengths cannot add up, long before
+    // the 2 832 declared bytes arrive. Never an invented segment.
+    assert_eq!(decode(&bytes, Endian::Big), Err(DecodeError::NeedMore));
+    assert_eq!(decode(&bytes.repeat(68), Endian::Big), Err(DecodeError::BadFrame { resync: 27 }));
+    assert_eq!(decode(&bytes.repeat(149), Endian::Big), Err(DecodeError::BadFrame { resync: 27 }));
 }
 
 #[test]
@@ -417,4 +419,48 @@ fn previews_and_dumps_render_exactly() {
             " ".repeat(45)
         )
     );
+}
+
+#[test]
+fn lengths_that_disagree_are_refused_as_soon_as_the_disagreement_is_visible() {
+    let mut two_good = golden(true);
+    two_good.extend(golden(true));
+
+    // LENGTH 60 000 and NUM DATA 1, the segment declaring 2 bytes: one segment cannot fill the
+    // area. Refused now, not after 60 KB more, so the real frames behind it are not held.
+    let mut buf = vec![0xFD, 0, 0, 0, 0, 0, 0, 0, 0x60, 0xEA, 1, 0, 1, 0, 2, 0];
+    buf.extend(&two_good);
+    assert_eq!(decode(&buf, Endian::Little), Err(DecodeError::BadFrame { resync: 16 }));
+    assert_eq!(decode(&buf[16..], Endian::Little), Ok((sample(vec![DataSegment { msg_id: 0x0102, data: b"AB".to_vec() }]), 22)));
+
+    // A controller restarting mid-frame: a frame whose body holds a SOM, its EOM broken. The
+    // resync lands on that SOM, whose bytes read as a 61 440-byte frame with a zero-length
+    // segment: refused at once, and the next skip reaches the real frames.
+    let t = Telegram {
+        envelope: Envelope::default(),
+        segments: vec![DataSegment { msg_id: 1, data: vec![0xFD, 0, 0, 0, 0, 0, 0, 0, 0, 0xF0, 1, 0] }],
+    };
+    let mut stream = encode(&t, Endian::Little).unwrap();
+    let last = stream.len() - 1;
+    stream[last] = 0;
+    stream.extend(&two_good);
+    assert_eq!(stream.len(), 76);
+    assert_eq!(decode(&stream, Endian::Little), Err(DecodeError::BadFrame { resync: 16 }));
+    assert_eq!(decode(&stream[16..], Endian::Little), Err(DecodeError::BadFrame { resync: 16 }));
+    assert!(decode(&stream[32..], Endian::Little).is_ok());
+
+    // Three segments cannot fit their headers in an 8-byte data area.
+    let short = [0xFD, 0, 0, 0, 0, 0, 0, 0, 8, 0, 3, 0];
+    assert_eq!(decode(&short, Endian::Little), Err(DecodeError::BadFrame { resync: 12 }));
+
+    // A valid two-segment frame still waits on every prefix and decodes whole.
+    let t = sample(vec![
+        DataSegment { msg_id: 1, data: b"ONE".to_vec() },
+        DataSegment { msg_id: 2, data: vec![] },
+    ]);
+    let bytes = encode(&t, Endian::Little).unwrap();
+    for cut in 1..bytes.len() {
+        assert_eq!(decode(&bytes[..cut], Endian::Little), Err(DecodeError::NeedMore), "cut {cut}");
+    }
+    assert_eq!(decode(&bytes, Endian::Little), Ok((t, bytes.len())));
 }
