@@ -150,6 +150,12 @@ fn every_limit_is_accepted_at_its_edge() {
         let s = load(&file(one, &rules)).unwrap().sequence.unwrap();
         assert_eq!((s.connect, s.first, s.last), (connect, first, last));
     }
+    // The frame limit at its floor, exactly the fixed bytes (start, a 2-byte length, end), and
+    // one peer (refute round 3).
+    let spec = load(&file(&format!("max_frame = 4\nstart = \"FD\"\nend = \"FE\"\n{LP}"), "")).unwrap();
+    assert_eq!(spec.framing.max_frame, 4);
+    assert_eq!(spec.framing.encode(&Frame::default(), None).unwrap(), [0xFD, 0, 0, 0xFE]);
+    assert_eq!(load(&file(LP, "[link]\nmax_peers = 1")).unwrap().link.max_peers, 1);
 }
 
 #[test]
@@ -220,6 +226,9 @@ fn an_impossible_layout_is_refused_with_its_place_named() {
         (format!("start = \"\"\n{}", env(l)), "", "framing.start: an empty delimiter; leave it out instead"),
         (format!("end = \"FG\"\n{}", env(l)), "", "framing.end: `FG` is not a hex byte"),
         (format!("max_frame = 3\nstart = \"FD\"\nend = \"FE\"\n{}", env(l)), "", "framing.max_frame: 3 is less than the 4 fixed bytes"),
+        // The tail counts among the fixed bytes; a `connect` too wide for its field (round 3).
+        (format!("max_frame = 4\n{}\ntail = [ {{ name = \"t\", size = 3 }} ]", env(l)), "", "framing.max_frame: 4 is less than the 5 fixed bytes"),
+        (env(&format!("{{ name = \"s\", size = 1, role = \"sequence\" }}, {l}")), "[sequence]\nconnect = 256", "sequence: first 1 .. last 255 (connect 256) does not fit a 1-byte field in order"),
         (env(l), "[sequence]\n", "sequence: rules for a sequence the envelope has no `sequence` field for"),
         (env(&format!("{{ name = \"s\", size = 1, role = \"sequence\" }}, {l}")), "[sequence]\nfirst = 9\nlast = 3", "sequence: first 9 .. last 3 (connect 0) does not fit a 1-byte field in order"),
         (env(&format!("{{ name = \"s\", size = 1, role = \"sequence\" }}, {l}")), "[sequence]\nlast = 256", "sequence: first 1 .. last 256 (connect 0) does not fit a 1-byte field in order"),
