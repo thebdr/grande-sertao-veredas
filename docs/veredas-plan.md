@@ -107,7 +107,9 @@ Tools that simulate real hardware, so every consumer meets its plant on a bench 
   controllable pressure (rates, no-reads, full chutes); later, a 2D/3D plant simulator.
 - Rules: fixtures come before the consumer that needs them; a test tool that owns its
   sockets; speaks the real device's wire, so a consumer cannot tell the difference;
-  test-only and light: no DuckDB, never portal's store or desktop.
+  test-only and light: no DuckDB, never portal's store or desktop; may use aranha's codecs
+  to emulate the devices aranha scans, so the two never drift apart on the wire
+  (`docs/questions.md` Q5).
 - From Veredas 1: `veredas-maquinar`, `veredas-trajetorias` (the automated replies only).
 
 ### veredas-aranha: the network scanner
@@ -186,6 +188,10 @@ storage lives here, never in maquinar; its structure comes from the study, not f
 7. ORCL has its own SemVer; controlador holds the compatibility requirements.
 8. A new component starts at core's current MAJOR.
 9. Supervisão: 2D layouts in SVG, 3D in glTF, one set of object IDs.
+
+2026-11-05, laying the base (`docs/questions.md` Q1–Q5): the laws live in `tools/leis`; the
+review deck is committed; no session log; the plan wins on intent, the contract on status;
+maquinar may use aranha's codecs.
 
 ## Next steps
 1. Record each decision above where it applies (component plans, `docs/questions.md`).

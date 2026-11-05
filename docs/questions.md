@@ -56,3 +56,18 @@ the plan section; it never copies the plan's prose, so there is one place to edi
 `tools/leis` changes only with its clause.
 
 **Reversible?** Yes: wording.
+
+---
+
+## Q5 — May maquinar depend on aranha?
+
+**Raised** 2026-11-05 by the refute round of C-005: the law's map lets maquinar use aranha, and
+`docs/veredas-plan.md` said nothing about it.
+
+Veredas 1's bench emulates PROFINET devices (DCP Identify, LLDP) with aranha's codecs, pulled with
+its service feature off, so the scanner and the bench cannot drift apart on the wire. The
+architecture rule (test tools own their sockets, past portal) is not touched by it.
+
+**Taken:** kept. The plan's maquinar rules now say it, and the map's row stays.
+
+**Reversible?** Yes: one row of `MAP` and one line of the plan.

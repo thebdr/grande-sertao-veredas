@@ -1,26 +1,29 @@
 //! The suite's laws, machine-enforced.
 //!
 //! `docs/veredas-plan.md` states the rules of the Veredas 2 workspace; this crate checks the ones a
-//! machine can check from the shape of the tree, and `tests/leis.rs` is the verdict
-//! (`cargo test -p leis`). Each law is a pure function over a [`Suite`] built from the manifests, so
-//! the tests attack the laws on synthetic suites and then run them on the real tree
-//! ([`Suite::read`]). A law changes only with the contract clause that states it
+//! machine can check from the shape of the tree, and `tests/` is the verdict (`cargo test -p leis`,
+//! one file per law plus `real_tree.rs`). Each law is a pure function over a [`Suite`] built from
+//! the manifests, so the tests attack the laws on synthetic suites and then run them on the real
+//! tree ([`Suite::read`]). A law changes only with the contract clause that states it
 //! (`.zen/contract.md`, C-001..C-006).
 //!
 //! THE LAWS (a component is a member under `crates/`; a member under `tools/` is repo tooling)
-//!   L1 ROOTS       every crate under `crates/` or `tools/` is a workspace member, listed by path: a
-//!                  glob is not a member, an unlisted crate is refused unless excluded, and every member
-//!                  lives under one of those two roots.
-//!   L2 NAMING      a component is `veredas-<nome>`, `<nome>` lowercase ASCII, in a folder of the same
-//!                  name; the language's crates (`orcl-*`) keep their names.
+//!   L1 ROOTS       every `Cargo.toml` under `crates/` or `tools/`, at any depth, is a workspace
+//!                  member listed by path or is excluded: a glob is not a member, an unlisted crate is
+//!                  refused, a nested crate is refused, and every member lives directly under one of
+//!                  those two roots.
+//!   L2 NAMING      a component is `veredas-<nome>`, `<nome>` a lowercase ASCII letter then letters and
+//!                  digits, in a folder of the same name; the language's crates are `orcl-<nome>`; a
+//!                  `veredas-*` crate is a component and lives under `crates/`, never `tools/`.
 //!   L3 VERSIONING  no `[workspace.package] version`; every component states its own SemVer, from 2.0.0.
-//!   L4 CORE        `veredas-core` depends on no other member, in any dependency table.
+//!   L4 CORE        `veredas-core` depends on no other member, in any dependency table, a dependency
+//!                  inherited from `[workspace.dependencies]` or renamed with `package` included.
 //!   L5 DIRECTION   every member→member edge (normal and build dependencies) is in [`MAP`]: anything
 //!                  may use core, the apps use portal, the bench and the scanner never pull portal,
 //!                  controlador embeds portal and aranha and runs ORCL. A dev-dependency is free (a
 //!                  bench is a fixture); a tool may depend on anything.
-//!   L6 PLAN        a component has its `docs/<nome>-plan.md`, non-empty, before its code; the
-//!                  language's crates share `docs/orcl/README.md`.
+//!   L6 PLAN        a component has its `docs/<nome>-plan.md`, not blank, from its first commit; the
+//!                  language's crates share `docs/orcl/README.md`. The suite's own plan is nobody's.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -32,6 +35,8 @@ use serde::Deserialize;
 
 /// The folders a member may live under.
 pub const ROOTS: [&str; 2] = ["crates", "tools"];
+/// Folders the reader never descends into: build output, a frontend's modules, anything hidden.
+pub const SKIPPED: [&str; 2] = ["target", "node_modules"];
 /// The foundation: the one member every other may use, and the one that uses none.
 pub const CORE: &str = "veredas-core";
 /// Every component's prefix.
@@ -40,6 +45,8 @@ pub const PREFIX: &str = "veredas-";
 pub const LANGUAGE: &str = "orcl-";
 /// Where the language's crates document themselves.
 pub const LANGUAGE_PLAN: &str = "docs/orcl/README.md";
+/// The suite's own plan: the authority on intent, and no component's plan.
+pub const SUITE_PLAN: &str = "docs/veredas-plan.md";
 /// Every component starts at 2.0.0 (the plan, "Versioning").
 pub const FIRST_MAJOR: u64 = 2;
 
@@ -77,8 +84,9 @@ impl fmt::Display for DepTable {
     }
 }
 
-/// One declared dependency: the package it names (the `package` rename when there is one, else
-/// the key) and the table it sits in. Target-specific tables count like the plain ones.
+/// One declared dependency: the package it names and the table it sits in. The name is the
+/// member's own `package` rename, else the rename of the `[workspace.dependencies]` entry it
+/// inherits with `workspace = true`, else the key. Target-specific tables count like the plain ones.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dep {
     pub name: String,
@@ -112,15 +120,15 @@ impl Member {
 pub struct Suite {
     /// `[workspace] members`, normalized.
     pub listed: Vec<String>,
-    /// `[workspace] exclude`, normalized.
+    /// `[workspace] exclude`, normalized; an entry covers everything beneath it, as cargo reads it.
     pub excluded: Vec<String>,
     /// `[workspace.package]` carries a `version`.
     pub workspace_version: bool,
-    /// Every folder under a root that holds a `Cargo.toml`.
+    /// Every folder under a root, at any depth, that holds a `Cargo.toml`.
     pub found: Vec<String>,
     /// The listed members whose manifest was found, in listed order.
     pub members: Vec<Member>,
-    /// `docs/*-plan.md` and `docs/orcl/README.md`, path to content.
+    /// `docs/*-plan.md` (the suite's own plan left out) and `docs/orcl/README.md`, path to content.
     pub plans: BTreeMap<String, String>,
 }
 
@@ -184,15 +192,19 @@ struct WorkspaceTable {
     exclude: Vec<String>,
     #[serde(default)]
     package: toml::Table,
+    #[serde(default)]
+    dependencies: toml::Table,
 }
 
+/// The three dependency tables, under the manifest root or under one `[target.<cfg>]`. The
+/// underscore spellings are the ones cargo still accepts before edition 2024.
 #[derive(Deserialize, Default)]
 struct DepTables {
     #[serde(default)]
     dependencies: toml::Table,
-    #[serde(default, rename = "dev-dependencies")]
+    #[serde(default, rename = "dev-dependencies", alias = "dev_dependencies")]
     dev_dependencies: toml::Table,
-    #[serde(default, rename = "build-dependencies")]
+    #[serde(default, rename = "build-dependencies", alias = "build_dependencies")]
     build_dependencies: toml::Table,
 }
 
@@ -219,36 +231,47 @@ fn normalize(path: &str) -> String {
     p.trim_end_matches('/').to_string()
 }
 
-fn deps_of(table: &toml::Table, kind: DepTable) -> Vec<Dep> {
+fn package_of(entry: &toml::Value) -> Option<&str> {
+    entry.as_table().and_then(|t| t.get("package")).and_then(|v| v.as_str())
+}
+
+fn inherits(entry: &toml::Value) -> bool {
+    entry.as_table().and_then(|t| t.get("workspace")).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+fn deps_of(table: &toml::Table, kind: DepTable, workspace: &toml::Table) -> Vec<Dep> {
     let mut keys: Vec<&String> = table.keys().collect();
     keys.sort();
     keys.into_iter()
         .map(|key| {
-            let renamed = table[key].as_table().and_then(|t| t.get("package")).and_then(|v| v.as_str());
-            Dep { name: renamed.unwrap_or(key).to_string(), table: kind }
+            let entry = &table[key];
+            let name = package_of(entry)
+                .or_else(|| if inherits(entry) { workspace.get(key).and_then(package_of) } else { None })
+                .unwrap_or(key);
+            Dep { name: name.to_string(), table: kind }
         })
         .collect()
 }
 
-fn all_deps(tables: &DepTables) -> Vec<Dep> {
-    let mut deps = deps_of(&tables.dependencies, DepTable::Normal);
-    deps.extend(deps_of(&tables.dev_dependencies, DepTable::Dev));
-    deps.extend(deps_of(&tables.build_dependencies, DepTable::Build));
+fn all_deps(tables: &DepTables, workspace: &toml::Table) -> Vec<Dep> {
+    let mut deps = deps_of(&tables.dependencies, DepTable::Normal, workspace);
+    deps.extend(deps_of(&tables.dev_dependencies, DepTable::Dev, workspace));
+    deps.extend(deps_of(&tables.build_dependencies, DepTable::Build, workspace));
     deps
 }
 
 impl Member {
-    fn parse(dir: &str, text: &str) -> Result<Member, Error> {
+    fn parse(dir: &str, text: &str, workspace: &toml::Table) -> Result<Member, Error> {
         let m: Manifest = toml::from_str(text)
             .map_err(|source| Error::Manifest { path: format!("{dir}/Cargo.toml"), source })?;
         let (version, version_from_workspace) = match &m.package.version {
             Some(toml::Value::String(s)) => (Some(s.clone()), false),
-            Some(toml::Value::Table(t)) => (None, t.get("workspace").and_then(|v| v.as_bool()).unwrap_or(false)),
+            Some(v @ toml::Value::Table(_)) => (None, inherits(v)),
             _ => (None, false),
         };
-        let mut deps = all_deps(&m.deps);
+        let mut deps = all_deps(&m.deps, workspace);
         for tables in m.target.values() {
-            deps.extend(all_deps(tables));
+            deps.extend(all_deps(tables, workspace));
         }
         Ok(Member { dir: dir.to_string(), name: m.package.name, version, version_from_workspace, deps })
     }
@@ -269,7 +292,7 @@ impl Suite {
         let mut members = Vec::new();
         for dir in &listed {
             if let Some((_, text)) = crates.iter().find(|(d, _)| normalize(d) == *dir) {
-                members.push(Member::parse(dir, text)?);
+                members.push(Member::parse(dir, text, &ws.workspace.dependencies)?);
             }
         }
         Ok(Suite {
@@ -282,27 +305,27 @@ impl Suite {
         })
     }
 
-    /// The real tree: `Cargo.toml`, every `crates/*/Cargo.toml` and `tools/*/Cargo.toml`, every
-    /// `docs/*-plan.md` and `docs/orcl/README.md`.
+    /// The real tree: `Cargo.toml`, every `Cargo.toml` under `crates/` and `tools/` at any depth
+    /// (`target/`, `node_modules/` and hidden folders skipped), every `docs/*-plan.md` but the
+    /// suite's own, and `docs/orcl/README.md`.
     pub fn read(root: &Path) -> Result<Suite, Error> {
         let read = |rel: &str| -> Result<String, Error> {
             fs::read_to_string(root.join(rel)).map_err(|source| Error::Io { path: rel.to_string(), source })
         };
         let workspace = read("Cargo.toml")?;
-        let mut crates: Vec<(String, String)> = Vec::new();
+        let mut dirs = Vec::new();
         for r in ROOTS {
-            for name in folder_entries(root, r)? {
-                let rel = format!("{r}/{name}");
-                if root.join(&rel).join("Cargo.toml").is_file() {
-                    let text = read(&format!("{rel}/Cargo.toml"))?;
-                    crates.push((rel, text));
-                }
-            }
+            collect_crates(root, r, &mut dirs)?;
+        }
+        let mut crates: Vec<(String, String)> = Vec::new();
+        for rel in dirs {
+            let text = read(&format!("{rel}/Cargo.toml"))?;
+            crates.push((rel, text));
         }
         let mut plans = BTreeMap::new();
         for name in folder_entries(root, "docs")? {
-            if name.ends_with("-plan.md") {
-                let rel = format!("docs/{name}");
+            let rel = format!("docs/{name}");
+            if name.ends_with("-plan.md") && rel != SUITE_PLAN && root.join(&rel).is_file() {
                 plans.insert(rel.clone(), read(&rel)?);
             }
         }
@@ -320,6 +343,10 @@ impl Suite {
 
     fn names(&self) -> BTreeSet<&str> {
         self.members.iter().map(|m| m.name.as_str()).collect()
+    }
+
+    fn is_excluded(&self, dir: &str) -> bool {
+        self.excluded.iter().any(|e| dir == e || dir.starts_with(&format!("{e}/")))
     }
 }
 
@@ -339,6 +366,27 @@ fn folder_entries(root: &Path, rel: &str) -> Result<Vec<String>, Error> {
     Ok(names)
 }
 
+/// Every folder under `root/<rel>` (itself included) that holds a `Cargo.toml`, depth first in
+/// name order, never descending into [`SKIPPED`] or hidden folders.
+fn collect_crates(root: &Path, rel: &str, out: &mut Vec<String>) -> Result<(), Error> {
+    if !root.join(rel).is_dir() {
+        return Ok(());
+    }
+    if root.join(rel).join("Cargo.toml").is_file() {
+        out.push(rel.to_string());
+    }
+    for name in folder_entries(root, rel)? {
+        if name.starts_with('.') || SKIPPED.contains(&name.as_str()) {
+            continue;
+        }
+        let child = format!("{rel}/{name}");
+        if root.join(&child).is_dir() {
+            collect_crates(root, &child, out)?;
+        }
+    }
+    Ok(())
+}
+
 fn under_a_root(dir: &str) -> bool {
     let mut parts = dir.split('/');
     matches!(
@@ -351,6 +399,12 @@ fn is_nome(s: &str) -> bool {
     let mut chars = s.chars();
     matches!(chars.next(), Some(first) if first.is_ascii_lowercase())
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+}
+
+/// Nothing but whitespace, byte-order marks and zero-width characters: what an editor leaves in
+/// a file it calls empty.
+fn is_blank(text: &str) -> bool {
+    text.chars().all(|c| c.is_whitespace() || matches!(c, '\u{FEFF}' | '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}'))
 }
 
 /// `orcl-*` matches the family; anything else matches itself.
@@ -372,35 +426,54 @@ fn allowed_for(name: &str) -> Vec<&'static str> {
     allowed
 }
 
-/// L1: every crate under a root is a listed member, every listed member is under a root.
+/// L1: every crate under a root is a listed member or excluded, every listed member is directly
+/// under a root, and so is every crate found.
 pub fn roots(s: &Suite) -> Vec<Violation> {
     let mut out = Vec::new();
     for m in &s.listed {
         if !under_a_root(m) {
-            out.push(Violation::new("L1", m, "a member lives under crates/ or tools/"));
+            out.push(Violation::new("L1", m, "a member lives directly under crates/ or tools/"));
         } else if !s.found.contains(m) {
             out.push(Violation::new("L1", m, "listed, but no Cargo.toml there (a glob is not a member; list each one)"));
         }
     }
     for c in &s.found {
-        if !s.listed.contains(c) && !s.excluded.contains(c) {
+        if s.is_excluded(c) {
+            continue;
+        }
+        if !under_a_root(c) {
+            out.push(Violation::new("L1", c, "a crate lives directly under crates/ or tools/ (a nested folder is not a root; exclude what is not the suite's)"));
+        } else if !s.listed.contains(c) {
             out.push(Violation::new("L1", c, "has a Cargo.toml but is not a workspace member (list it, or exclude it)"));
         }
     }
     out
 }
 
-/// L2: a component is `veredas-<nome>` in a folder of its own name; `orcl-*` keep their names.
+/// L2: a component is `veredas-<nome>` in a folder of its own name; the language's crates are
+/// `orcl-<nome>`; a `veredas-*` crate is a component and lives under `crates/`.
 pub fn naming(s: &Suite) -> Vec<Violation> {
     let mut out = Vec::new();
-    for m in s.components() {
-        let named = m.name.starts_with(LANGUAGE) || m.name.strip_prefix(PREFIX).is_some_and(is_nome);
-        if !named {
-            out.push(Violation::new(
+    for m in &s.members {
+        if !m.is_component() {
+            if m.name.starts_with(PREFIX) {
+                out.push(Violation::new("L2", &m.dir, "a veredas-* crate is a component; it lives under crates/"));
+            }
+            continue;
+        }
+        match m.name.strip_prefix(LANGUAGE) {
+            Some(rest) if !is_nome(rest) => out.push(Violation::new(
+                "L2",
+                &m.dir,
+                format!("the language's crates are orcl-<nome>, <nome> lowercase ASCII (got `{}`)", m.name),
+            )),
+            Some(_) => {}
+            None if !m.name.strip_prefix(PREFIX).is_some_and(is_nome) => out.push(Violation::new(
                 "L2",
                 &m.dir,
                 format!("a component is named veredas-<nome>, <nome> lowercase ASCII (got `{}`)", m.name),
-            ));
+            )),
+            None => {}
         }
         let folder = m.dir.rsplit('/').next().unwrap_or("");
         if folder != m.name {
@@ -477,7 +550,7 @@ pub fn direction(s: &Suite) -> Vec<Violation> {
     out
 }
 
-/// L6: a component's plan exists, non-empty, before its code.
+/// L6: a component's plan exists, not blank, from its first commit.
 pub fn plans(s: &Suite) -> Vec<Violation> {
     let mut out = Vec::new();
     for m in s.components() {
@@ -491,7 +564,7 @@ pub fn plans(s: &Suite) -> Vec<Violation> {
         };
         match s.plans.get(&plan) {
             None => out.push(Violation::new("L6", &m.dir, format!("no {plan} (a role nobody covers, written before the code)"))),
-            Some(text) if text.trim().is_empty() => out.push(Violation::new("L6", &m.dir, format!("{plan} is empty"))),
+            Some(text) if is_blank(text) => out.push(Violation::new("L6", &m.dir, format!("{plan} is empty"))),
             Some(_) => {}
         }
     }

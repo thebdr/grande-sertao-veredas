@@ -38,8 +38,9 @@ A Rust workspace; each component is a crate with a version of its own. Read this
 
 ## The zen loop here
 - Record a run (the real command; its exit code is the verdict):
-  `node <plugin>/hooks/zen-record-run.js --clause C-00x -- cargo test -p leis --test leis <test>`
-  where `<plugin>` is the implication-machine directory the session-start index prints.
+  `node <plugin>/hooks/zen-record-run.js --clause C-00x -- cargo test -p leis --test l<x>_<law> --test real_tree`
+  where `<plugin>` is the implication-machine directory the session-start index prints. One test
+  file per law, so a change to one law re-stales only its clause's records.
 - A behavioral clause gets a `zen-refuter` pass, then
   `node <plugin>/hooks/zen-record-refute.js --clause C-00x --verdict holds|trivial|refuted`, then
   `zen verify C-00x` flips the status.

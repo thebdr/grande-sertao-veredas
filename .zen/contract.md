@@ -3,56 +3,62 @@
 Governance scope: the **`grande-sertao-veredas`** repo, Veredas 2 — the successor suite to Veredas 1
 (`C:\Source\Repos\Veredas`: its own history, never merged here). Authority: `docs/veredas-plan.md`
 wins on intent, this contract on status, `tools/leis` enforces the laws (`docs/questions.md` Q4).
-The `C-xxx` clauses are the suite's structural laws, each proven by `tools/leis/tests/leis.rs` on
-synthetic suites (exact violations, by message) and on the real tree; a law changes only with its
-clause. The eight components and the two suite-wide rules that need code live as `P-xxx` under
-**Pending Contract Deltas**, one per component, each citing the plan's section and the Veredas 1
-crates it absorbs; none copies the plan's prose. A member arrives this way: its `P-xxx` → its
-`docs/<nome>-plan.md` → its clauses here → `crates/veredas-<nome>` at core's MAJOR → its simulator
-in maquinar → `cargo test -p leis` green → reconciled. Runs are recorded under
-`.zen/evidence/runs/`, refute verdicts under `.zen/evidence/refutes/`, both committed.
+The `C-xxx` clauses are the suite's structural laws, each proven by one test file per law under
+`tools/leis/tests/` on synthetic suites (exact violations, by message) plus `real_tree.rs` on the
+tree as it is; one file per law, so a change to one law re-stales only its clause. A law changes
+only with its clause. The eight components and the two suite-wide rules that need code live as
+`P-xxx` under **Pending Contract Deltas**, one per component, each citing the plan's section and
+the Veredas 1 crates it absorbs; none copies the plan's prose. A member arrives this way: its
+`P-xxx` → its `docs/<nome>-plan.md` → its clauses here → `crates/veredas-<nome>` at core's MAJOR →
+its simulator in maquinar → `cargo test -p leis` green → reconciled. Runs are recorded under
+`.zen/evidence/runs/`, refute verdicts under `.zen/evidence/refutes/`, both committed; what a
+refute round found and what it changed is in the clause's evidence note.
 
 ## C-001: Members live under crates/ or tools/, each listed by path
 - **Date:** 2026-11-05
 - **Source:** user (the plan review of 2026-11-05; docs/veredas-plan.md "Adding a component")
-- **Description:** Every crate under `crates/` (a component) or `tools/` (repo tooling) is a workspace member listed by path in `Cargo.toml`, and every member lives directly under one of those two roots. A listed path with no manifest there (a glob, a typo) is refused; a crate under a root that is neither listed nor in `exclude` is refused. A member is a decision taken through the five conditions, never a folder a glob admits.
-- **Verification:** automated → tools/leis/tests/leis.rs | l1_a_member_outside_the_roots_is_named, l1_a_listed_member_without_a_manifest_is_named, l1_a_crate_that_is_not_listed_is_named, l1_an_excluded_crate_is_not_a_member, l1_a_nested_folder_is_not_a_root, the_real_tree_obeys_every_law; the real walker probed on a scratch copy with three bad crates (the evidence note)
+- **Description:** Every `Cargo.toml` under `crates/` (a component) or `tools/` (repo tooling), at any depth, is a workspace member listed by path in `Cargo.toml` or is covered by an `exclude` entry (which covers everything beneath it, as cargo reads it); every member, and every crate found, lives directly under one of those two roots. A listed path with no manifest there (a glob, a typo) is refused; a crate nested in a folder, or at the root folder itself, is refused unless excluded. A member is a decision taken through the five conditions, never a folder a glob admits.
+- **Verification:** automated → tools/leis/tests/l1_roots.rs, tools/leis/tests/real_tree.rs | synthetic suites for each rule, the reader on a planted tree (nested, root-level, hidden and built manifests), the exclusion as cargo reads it; the real tree
 - **Evidence:** .zen/evidence/C-001.md
 - **Status:** pending verification
 
 ## C-002: A component is named veredas-<nome>, in a folder of its name
 - **Date:** 2026-11-05
 - **Source:** user (docs/veredas-plan.md "Naming")
-- **Description:** A member under `crates/` is `veredas-<nome>`, `<nome>` Portuguese in lowercase ASCII letters and digits, and its folder is `crates/<name>`; screens show the accented name. The language's crates (`orcl-*`) keep their names; a member under `tools/` is not a component; an extension lives inside its host and is not a member.
-- **Verification:** automated → tools/leis/tests/leis.rs | l2_a_component_without_the_prefix_is_named, l2_an_uppercase_or_accented_nome_is_named, l2_a_bare_prefix_is_named, l2_a_folder_not_named_after_its_crate_is_named, l2_the_language_crates_keep_their_names, l2_a_tool_is_not_a_component, the_real_tree_obeys_every_law
+- **Description:** A member under `crates/` is `veredas-<nome>`, `<nome>` a lowercase ASCII letter followed by lowercase letters and digits (no hyphen, underscore, accent or space), in the folder `crates/<name>`, matched exactly whatever the filesystem ignores. The language's crates are `orcl-<nome>` by the same rule. A `veredas-*` crate is a component and lives under `crates/`, never `tools/`; a tool is not a component; an extension lives inside its host and is not a member (L1 refuses it listed). That the nome is Portuguese and names the role, and that screens show the accented name, is checked at the component's review, not by the law.
+- **Verification:** automated → tools/leis/tests/l2_naming.rs, tools/leis/tests/real_tree.rs | the prefix, the nome's character set, the exact folder, the language's names, a tool, a veredas-* crate under tools/, an extension listed; the real tree
+- **Evidence:** .zen/evidence/C-002.md
 - **Status:** pending verification
 
 ## C-003: SemVer per component from 2.0.0, no shared workspace version
 - **Date:** 2026-11-05
 - **Source:** user (docs/veredas-plan.md "Versioning")
 - **Description:** `[workspace.package]` carries no `version`; every component states its own `version`, valid SemVer with MAJOR ≥ 2 (a pre-release such as `2.0.0-alpha.1` counts), never `version.workspace = true`. A tool under `tools/` versions as it likes. That a new component starts at core's current MAJOR is the plan's rule, checked at the component's review, not by the law.
-- **Verification:** automated → tools/leis/tests/leis.rs | l3_a_shared_workspace_version_is_named, l3_a_component_inheriting_its_version_is_named, l3_a_version_below_2_is_named, l3_a_version_that_is_not_semver_is_named, l3_a_component_without_a_version_is_named, l3_a_prerelease_from_2_passes_and_a_tool_is_free, the_real_tree_obeys_every_law
+- **Verification:** automated → tools/leis/tests/l3_versioning.rs, tools/leis/tests/real_tree.rs | the shared version, the inherited version, below 2, not SemVer, absent, a pre-release and a tool; the real tree
 - **Status:** pending verification
 
 ## C-004: veredas-core depends on no other member
 - **Date:** 2026-11-05
 - **Source:** user (docs/veredas-plan.md "veredas-core: the foundation", rules)
-- **Description:** `veredas-core` names no other workspace member in any dependency table: normal, dev, build or target-specific, a renamed dependency (`package = …`) included. Its own self dev-dependency (a test feature) is allowed. The foundation builds and tests alone.
-- **Verification:** automated → tools/leis/tests/leis.rs | l4_core_depending_on_a_member_is_named_in_every_table, l4_core_may_depend_on_itself_for_its_tests, l4_a_target_specific_table_counts, l4_a_renamed_dependency_is_seen_by_its_package, the_real_tree_obeys_every_law
+- **Description:** `veredas-core` names no other workspace member in any dependency table: normal, dev, build or target-specific, in cargo's hyphen or pre-2024 underscore spelling, a dependency renamed with `package` or inherited from `[workspace.dependencies]` (and renamed there) included. Its own self dev-dependency (a test feature) is allowed. The foundation builds and tests alone.
+- **Verification:** automated → tools/leis/tests/l4_core.rs, tools/leis/tests/real_tree.rs | every table, the self dev-dependency, a target table, a rename in the member, a rename in the workspace table, the underscore tables; the real tree
+- **Evidence:** .zen/evidence/C-004.md
 - **Status:** pending verification
 
 ## C-005: Dependencies point one way, along the map
 - **Date:** 2026-11-05
-- **Source:** user (docs/veredas-plan.md "Architecture" and each component's rules)
-- **Description:** Every edge from a component to another member in its normal or build dependencies is in `MAP` (`tools/leis/src/lib.rs`): anything may use core; portal uses core alone; maquinar uses core and aranha; aranha uses core; the apps (comissionador, supervisao, abaco, wms) use portal; controlador uses portal, aranha and the `orcl-*` crates; `orcl-*` use each other. A component absent from the map may use core alone, and adding its row is a contract change. A dev-dependency is free (a bench is a fixture), a tool may depend on anything, and a crate that is not a member is not the map's business.
-- **Verification:** automated → tools/leis/tests/leis.rs | l5_the_planned_suite_breaks_no_law, l5_an_app_depending_on_another_app_is_named, l5_the_bench_never_pulls_portal, l5_portal_never_depends_on_an_app, l5_a_component_outside_the_map_may_use_core_alone, l5_a_build_dependency_counts_and_a_dev_dependency_is_free, l5_a_tool_may_depend_on_anything, l5_an_external_crate_of_a_member_name_shape_is_not_an_edge, the_real_tree_obeys_every_law
+- **Source:** user (docs/veredas-plan.md "Architecture" and each component's rules; docs/questions.md Q5)
+- **Description:** Every edge from a component to another member in its normal or build dependencies, however declared (a path, a `package` rename, a `workspace = true` inheritance), is in `MAP` (`tools/leis/src/lib.rs`): anything may use core; portal uses core alone; maquinar uses core and aranha (its codecs, to emulate the devices aranha scans); aranha uses core; the apps (comissionador, supervisao, abaco, wms) use portal; controlador uses portal, aranha and the `orcl-*` crates; `orcl-*` use each other. A component absent from the map may use core alone, and adding its row is a contract change. A dev-dependency is free (a bench is a fixture), a tool may depend on anything, and a crate that is not a member is not the map's business. The tests carry their own copy of this sentence and walk every pair of the planned suite against it, so a row of `MAP` cannot drift from the clause unnoticed.
+- **Verification:** automated → tools/leis/tests/l5_direction.rs, tools/leis/tests/real_tree.rs | the planned suite, app→app, bench→portal, portal→app, a component outside the map, build vs dev, a tool, a non-member, a workspace-table rename, every pair of the planned suite against the clause's copy of the map; the real tree
+- **Evidence:** .zen/evidence/C-005.md
 - **Status:** pending verification
 
-## C-006: A component's plan exists before its code
+## C-006: No component's code lands without its plan
 - **Date:** 2026-11-05
 - **Source:** user (docs/veredas-plan.md "Adding a component", condition 1)
-- **Description:** Every component `veredas-<nome>` has a non-empty `docs/<nome>-plan.md` (the one-sentence role nobody covers, its scope and rules); the language's crates share `docs/orcl/README.md`. A tool needs no plan.
-- **Verification:** automated → tools/leis/tests/leis.rs | l6_a_component_without_its_plan_is_named, l6_an_empty_plan_is_named, l6_a_plan_with_a_title_passes, l6_the_language_crates_share_docs_orcl, l6_a_tool_needs_no_plan, the_real_tree_obeys_every_law
+- **Description:** Every component `veredas-<nome>` has `docs/<nome>-plan.md`, not blank (whitespace, byte-order marks and zero-width characters are not text), from the first commit that holds the crate: the law checks presence at every commit and the suite is green on every commit, so the plan is never younger than the code. The language's crates share `docs/orcl/README.md`; the suite's own `docs/veredas-plan.md` is no component's plan; a tool needs no plan. What the plan must say (the one-sentence role nobody covers, its scope and rules) is checked at the component's review, not by the law.
+- **Verification:** automated → tools/leis/tests/l6_plans.rs, tools/leis/tests/real_tree.rs | absent, blank, a byte-order mark, a title, the language's shared plan, a tool, a veredas-* crate under tools/ through the laws together, the reader leaving the suite's plan to nobody; the real tree
+- **Evidence:** .zen/evidence/C-006.md
 - **Status:** pending verification
 
 ## Pending Contract Deltas
