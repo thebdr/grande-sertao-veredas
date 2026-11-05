@@ -185,6 +185,40 @@ fn every_rule_is_read_from_the_file_and_every_way_to_end_is_accepted() {
 }
 
 #[test]
+fn the_framing_byte_order_reaches_every_part_and_every_width_reaches_its_top() {
+    // `byte_order` holds for every field that does not say otherwise: segment header and tail
+    // included, byte for byte (refute round 5).
+    let big = load(&file(
+        "byte_order = \"big\"\n\
+         envelope = [ { name = \"l\", size = 2, role = \"length\" }, { name = \"c\", size = 2, role = \"count\" } ]\n\
+         segment = [ { name = \"id\", size = 2 }, { name = \"n\", size = 2, role = \"length\" } ]\n\
+         tail = [ { name = \"t\", size = 2, value = 258 } ]",
+        "",
+    ))
+    .unwrap()
+    .framing;
+    let parts = big.envelope.iter().chain(big.segment.as_ref().unwrap()).chain(&big.tail);
+    assert!(parts.into_iter().all(|x| x.order == Endian::Big));
+    let ab = Frame {
+        fields: BTreeMap::new(),
+        segments: vec![Segment { fields: BTreeMap::from([("id".to_string(), 0x0102)]), body: b"AB".to_vec() }],
+    };
+    assert_eq!(big.encode(&ab, None).unwrap(), [0, 6, 0, 1, 1, 2, 0, 2, 0x41, 0x42, 1, 2]);
+    // An 8-byte opaque field holds u64::MAX; an 8-byte sequence takes its rules; the widest
+    // value of a 1-byte field loads; a 2-byte sequence cycles to 65535.
+    let l = "{ name = \"l\", size = 2, role = \"length\" }";
+    let wide = load(&file(&format!("envelope = [ {{ name = \"x\", size = 8, value = 18446744073709551615 }}, {l} ]"), "")).unwrap();
+    assert_eq!((wide.framing.envelope[0].size, wide.framing.envelope[0].value), (8, u64::MAX));
+    assert_eq!(wide.framing.encode(&Frame::default(), None).unwrap(), [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0]);
+    let s8 = load(&file(&format!("envelope = [ {{ name = \"s\", size = 8, role = \"sequence\" }}, {l} ]"), "[sequence]\n")).unwrap();
+    assert_eq!((s8.framing.envelope[0].size, s8.sequence.map(|s| s.last)), (8, Some(255)));
+    let top = load(&file(&format!("envelope = [ {{ name = \"x\", size = 1, value = 255 }}, {l} ]"), "")).unwrap();
+    assert_eq!(top.framing.envelope[0].value, 255);
+    let s2 = load(&file(&format!("envelope = [ {{ name = \"s\", size = 2, role = \"sequence\" }}, {l} ]"), "[sequence]\nlast = 65535")).unwrap();
+    assert_eq!(s2.sequence.map(|s| (s.first, s.last)), Some((1, 65535)));
+}
+
+#[test]
 fn a_field_may_override_the_byte_order() {
     let spec = load(&file(
         "byte_order = \"big\"\nenvelope = [ { name = \"tag\", size = 2, byte_order = \"little\", value = 258 }, { name = \"length\", size = 2, role = \"length\" } ]",
