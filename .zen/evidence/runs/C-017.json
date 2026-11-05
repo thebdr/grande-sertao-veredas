@@ -10,15 +10,15 @@
     "telegram_schema"
   ],
   "exitCode": 0,
-  "outputSha": "890dc4fb8a2a2e31fee13091c57fa93c067473aaef54510896339a383fcae704",
-  "outputTail": "running 8 tests\ntest a_file_states_its_format_and_a_version_this_reader_knows ... ok\ntest a_field_may_override_the_byte_order ... ok\ntest defaults_fill_what_a_file_leaves_out ... ok\ntest every_rule_is_read_from_the_file_and_every_way_to_end_is_accepted ... ok\ntest a_misspelled_key_is_refused_wherever_it_is ... ok\ntest every_limit_is_accepted_at_its_edge ... ok\ntest the_documented_example_loads_and_frames_as_described ... ok\ntest an_impossible_layout_is_refused_with_its_place_named ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.34s\n     Running tests\\telegram_schema.rs (target\\debug\\deps\\telegram_schema-a9ae070384251154.exe)",
-  "ranAt": "2026-11-05T23:30:09.394Z",
-  "headCommit": "cb30a56b71d8bba7863903ef96a2c1dfac04e414",
+  "outputSha": "60beb73ed98a8b2c1a4081514ead6d1e79c9662b8e5593b9e5f97c977f4fe949",
+  "outputTail": "test a_file_states_its_format_and_a_version_this_reader_knows ... ok\ntest a_field_may_override_the_byte_order ... ok\ntest defaults_fill_what_a_file_leaves_out ... ok\ntest the_framing_byte_order_reaches_every_part_and_every_width_reaches_its_top ... ok\ntest every_limit_is_accepted_at_its_edge ... ok\ntest every_rule_is_read_from_the_file_and_every_way_to_end_is_accepted ... ok\ntest a_misspelled_key_is_refused_wherever_it_is ... ok\ntest the_documented_example_loads_and_frames_as_described ... ok\ntest an_impossible_layout_is_refused_with_its_place_named ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.74s\n     Running tests\\telegram_schema.rs (target\\debug\\deps\\telegram_schema-a9ae070384251154.exe)",
+  "ranAt": "2026-11-05T23:48:51.083Z",
+  "headCommit": "eb45a93a88627cbe3ef068feefaaee13b442e142",
   "tests": [
     {
       "name": "crates/veredas-core/tests/telegram_schema.rs",
       "file": "crates/veredas-core/tests/telegram_schema.rs",
-      "fileSha": "5aad00c806490201c53e26ec727551d915be16e688330b2b6ba7aa9d9672b683"
+      "fileSha": "5282a70483e34a804e417ea7f8f8c04c5483952cc0e973bd722d691db4719312"
     }
   ]
 }
