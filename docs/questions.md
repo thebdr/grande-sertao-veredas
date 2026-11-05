@@ -160,3 +160,35 @@ assumes they do: a keep-alive's number counts as the last one seen).
 
 **Reversible?** Yes: a configuration schema over the same code, or removing the framing from
 core altogether.
+
+**Answered (operator, 2026-11-05):** "Design configurable framing now". Core keeps no frame
+layout of its own. `telegram::framing` is an engine that encodes and decodes any layout a
+channel file describes (optional start and end delimiters; envelope, segment-header and tail
+fields by size, byte order and role: sequence, length, count, opaque); `telegram::schema` reads
+and validates that file (`docs/channel-schema.md`); the channel's sequence, keep-alive and link
+rules are sections of the same file. The layout this question was about is the schema's worked
+example and the engine's first test fixture, named for its shape (a segmented envelope), not for
+its maker: a 12-byte envelope with a sequence, a length and a count is a shape, not a secret.
+The device's own file lives with its other rules, outside the suite's code.
+
+---
+
+## Q10 - How a channel file is written
+
+**Raised** 2026-11-05, designing the channel schema (Q9). The plan fixes that every plain-text
+file states its schema version and that a reader migrates or refuses; it does not fix the
+syntax.
+
+**Taken (reversible, pending the operator):**
+- TOML, the suite's existing configuration syntax (the workspace manifests); a file states
+  `format = "veredas-channel"` and `version = 1`, and a reader refuses another format or an
+  unknown version.
+- A field declares its meaning with `role = "sequence" | "length" | "count"`, default
+  `"opaque"`; an opaque field may carry a default `value`; sizes are 1 to 8 bytes.
+- Delimiters are hex strings (`start = "FD"`), parsed like a typed-in body.
+- The behavioural rules are their own sections (`[sequence]`, `[keepalive]`, `[link]`), every
+  key with a default; a misspelled key is refused, never ignored.
+- The capture rules (`CaptureSpec`) read from the same syntax, their type names spelled as
+  Veredas 1 spelled them (`U16`, `Ascii`, `Hex`).
+
+**Reversible?** Yes while no project file exists: a version 2 of the format, migrated by portal.

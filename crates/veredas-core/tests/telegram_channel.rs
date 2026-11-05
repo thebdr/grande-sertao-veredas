@@ -1,11 +1,62 @@
 //! The telegram channel (contract: the channel clause), from Veredas 1's `veredas-telegram`
-//! tests: two channels, or a channel and a raw socket, over real loopback TCP.
+//! tests: two channels, or a channel and a raw socket, over real loopback TCP, configured by a
+//! channel file (the segmented envelope layout, with sequence and keep-alive rules).
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use veredas_core::telegram::channel::*;
-use veredas_core::telegram::codec::{self, DataSegment};
-use veredas_core::telegram::{Endian, Envelope, Telegram};
+use veredas_core::telegram::framing::{Frame, Framing, Segment};
+use veredas_core::telegram::schema::{ChannelSpec, load};
+
+/// The channel file every test runs with; `idle_ms` 0 never probes.
+fn spec(idle_ms: u64) -> ChannelSpec {
+    load(&format!(
+        r#"
+format = "veredas-channel"
+version = 1
+
+[framing]
+start = "FD"
+end = "FE"
+envelope = [
+  {{ name = "class", size = 1 }},
+  {{ name = "source", size = 1, value = 1 }},
+  {{ name = "destination", size = 1, value = 2 }},
+  {{ name = "sequence", size = 1, role = "sequence" }},
+  {{ name = "spare", size = 3 }},
+  {{ name = "length", size = 2, role = "length" }},
+  {{ name = "count", size = 2, role = "count" }},
+]
+segment = [ {{ name = "id", size = 2 }}, {{ name = "length", size = 2, role = "length" }} ]
+tail = [ {{ name = "tail_spare", size = 2 }}, {{ name = "check", size = 1 }} ]
+
+[sequence]
+connect = 0
+first = 1
+last = 255
+
+[keepalive]
+on_connect = true
+idle_ms = {idle_ms}
+"#
+    ))
+    .unwrap()
+}
+
+/// The layout alone, for raw sockets.
+fn layout() -> Framing {
+    spec(0).framing
+}
+
+/// A frame as a raw peer would send it, with its sequence number.
+fn raw_frame(prg: u8, body: &[u8]) -> Vec<u8> {
+    let segments = if body.is_empty() { vec![] } else { vec![segment(7, body)] };
+    let mut f = Frame { fields: BTreeMap::new(), segments };
+    f.fields.insert("source".into(), 9);
+    f.fields.insert("destination".into(), 1);
+    layout().encode(&f, Some(u64::from(prg))).unwrap()
+}
 
 fn free_port() -> u16 {
     let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
@@ -15,31 +66,23 @@ fn free_port() -> u16 {
 }
 
 fn listener(port: u16, keepalive_idle_ms: u64) -> Channel {
-    Channel::start(ChannelConfig {
-        keepalive_idle_ms,
-        ..ChannelConfig::new(
-            "listener",
-            Role::Listen {
-                bind: "127.0.0.1".into(),
-                port,
-            },
-        )
-    })
+    Channel::start(ChannelConfig::new(
+        "listener",
+        Role::Listen { bind: "127.0.0.1".into(), port },
+        spec(keepalive_idle_ms),
+    ))
 }
 
 fn dialer(port: u16, keepalive_idle_ms: u64) -> Channel {
-    Channel::start(ChannelConfig {
-        keepalive_idle_ms,
-        source_node: 5,
-        destination_node: 6,
-        ..ChannelConfig::new(
-            "dialer",
-            Role::Connect {
-                host: "127.0.0.1".into(),
-                port,
-            },
-        )
-    })
+    let mut spec = spec(keepalive_idle_ms);
+    for f in spec.framing.envelope.iter_mut() {
+        match f.name.as_str() {
+            "source" => f.value = 5,
+            "destination" => f.value = 6,
+            _ => {}
+        }
+    }
+    Channel::start(ChannelConfig::new("dialer", Role::Connect { host: "127.0.0.1".into(), port }, spec))
 }
 
 fn until(what: &str, timeout: Duration, mut f: impl FnMut() -> bool) {
@@ -67,24 +110,27 @@ fn wait_connected(ch: &Channel) -> PeerId {
     panic!("no connection");
 }
 
-fn payload(msg_id: u16, body: &[u8]) -> Telegram {
-    Telegram {
-        envelope: Envelope::default(),
-        segments: vec![DataSegment {
-            msg_id,
-            data: body.to_vec(),
-        }],
-    }
+fn segment(id: u64, body: &[u8]) -> Segment {
+    Segment { fields: BTreeMap::from([("id".to_string(), id)]), body: body.to_vec() }
 }
 
-/// Collect received telegrams for a while.
-fn collect(ch: &Channel, timeout: Duration) -> Vec<Telegram> {
+fn payload(msg_id: u64, body: &[u8]) -> Frame {
+    Frame { fields: BTreeMap::new(), segments: vec![segment(msg_id, body)] }
+}
+
+/// The sequence number a received frame carried.
+fn seq(f: &Frame) -> u8 {
+    f.fields["sequence"] as u8
+}
+
+/// Collect received frames for a while.
+fn collect(ch: &Channel, timeout: Duration) -> Vec<Frame> {
     let deadline = Instant::now() + timeout;
     let mut out = Vec::new();
     while Instant::now() < deadline {
         for event in ch.poll() {
-            if let ChannelEvent::Received { telegram, .. } = event {
-                out.push(telegram);
+            if let ChannelEvent::Received { frame, .. } = event {
+                out.push(frame);
             }
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -104,20 +150,20 @@ fn two_channels_exchange_telegrams_in_both_directions() {
     let server_peer = wait_connected(&server);
     let client_peer = wait_connected(&client);
 
-    server.send(server_peer, payload(51004, b"SCANNER"));
-    client.send(client_peer, payload(50002, b"DESTINATION"));
+    server.send(server_peer, payload(21, b"SCANNER"));
+    client.send(client_peer, payload(22, b"DESTINATION"));
 
     let at_client = collect(&client, Duration::from_secs(3));
     let at_server = collect(&server, Duration::from_secs(1));
     assert_eq!(at_client.len(), 1, "{at_client:?}");
-    assert_eq!(at_client[0].segments[0].msg_id, 51004);
-    assert_eq!(at_client[0].segments[0].data, b"SCANNER");
+    assert_eq!(at_client[0].segments[0].fields["id"], 21);
+    assert_eq!(at_client[0].segments[0].body, b"SCANNER");
     assert_eq!(at_server.len(), 1, "{at_server:?}");
-    assert_eq!(at_server[0].segments[0].msg_id, 50002);
+    assert_eq!(at_server[0].segments[0].fields["id"], 22);
 
     // The envelope carries the sender's configured node ids.
-    assert_eq!(at_server[0].envelope.source, 5);
-    assert_eq!(at_server[0].envelope.destination, 6);
+    assert_eq!(at_server[0].fields["source"], 5);
+    assert_eq!(at_server[0].fields["destination"], 6);
 }
 
 #[test]
@@ -137,7 +183,7 @@ fn the_progressive_number_starts_at_zero_then_counts_from_one() {
     }
     let frames = collect(&server, Duration::from_secs(3));
     assert_eq!(frames.len(), 4, "{frames:?}");
-    let prgs: Vec<u8> = frames.iter().map(|f| f.envelope.prg).collect();
+    let prgs: Vec<u8> = frames.iter().map(seq).collect();
     assert_eq!(prgs, vec![1, 2, 3, 4], "stamped at send, monotonic");
     // The connect keep-alive carried 0 and was counted as such.
     assert!(server.status().keepalives_received >= 1);
@@ -157,30 +203,13 @@ fn a_repeated_progressive_number_is_skipped() {
     let mut sock = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
     let _ = wait_connected(&server);
     use std::io::Write;
-    let frame = |prg: u8, body: &[u8]| {
-        codec::encode(
-            &Telegram {
-                envelope: Envelope {
-                    class: 0,
-                    source: 9,
-                    destination: 1,
-                    prg,
-                },
-                segments: vec![DataSegment {
-                    msg_id: 7,
-                    data: body.to_vec(),
-                }],
-            },
-            Endian::default(),
-        )
-        .unwrap()
-    };
+    let frame = raw_frame;
     sock.write_all(&frame(1, b"first")).unwrap();
     sock.write_all(&frame(1, b"repeat")).unwrap();
     sock.write_all(&frame(2, b"second")).unwrap();
 
     let frames = collect(&server, Duration::from_secs(3));
-    let bodies: Vec<Vec<u8>> = frames.iter().map(|f| f.segments[0].data.clone()).collect();
+    let bodies: Vec<Vec<u8>> = frames.iter().map(|f| f.segments[0].body.clone()).collect();
     assert_eq!(
         bodies,
         vec![b"first".to_vec(), b"second".to_vec()],
@@ -212,7 +241,7 @@ fn a_reply_for_a_departed_peer_is_dropped_not_misdelivered() {
     assert_ne!(first_peer, second_peer, "ids are never reused");
 
     // Sending to the departed peer must not reach the new one.
-    server.send(first_peer, payload(50002, b"STALE"));
+    server.send(first_peer, payload(22, b"STALE"));
     std::thread::sleep(Duration::from_millis(300));
     second
         .set_read_timeout(Some(Duration::from_millis(300)))
@@ -229,7 +258,7 @@ fn a_reply_for_a_departed_peer_is_dropped_not_misdelivered() {
     // Only the connect keep-alive (envelope+tail) may have arrived.
     assert_eq!(
         received.len(),
-        codec::ENVELOPE_LEN + codec::TAIL_LEN,
+        16,
         "the stale reply must not reach the new peer: {received:?}"
     );
     assert!(
@@ -258,7 +287,7 @@ fn a_peer_that_stops_reading_is_dropped_without_wedging_the_channel() {
 
     // Feed it until its socket stops taking bytes and the write timeout judges it: however
     // large the socket buffers (Linux grows loopback ones to megabytes), the peer goes.
-    let big = payload(52002, &[b'x'; 480]);
+    let big = payload(23, &[b'x'; 480]);
     let started = Instant::now();
     while server.status().dropped_peers == 0 {
         assert!(started.elapsed() < Duration::from_secs(60), "the deaf peer was never dropped");
@@ -273,10 +302,10 @@ fn a_peer_that_stops_reading_is_dropped_without_wedging_the_channel() {
     let fresh = dialer(port, 0);
     let fresh_peer = wait_connected(&fresh);
     let server_peer = wait_connected(&server);
-    server.send(server_peer, payload(51000, b"ALIVE"));
+    server.send(server_peer, payload(24, b"ALIVE"));
     let frames = collect(&fresh, Duration::from_secs(3));
     assert!(
-        frames.iter().any(|f| f.segments[0].data == b"ALIVE"),
+        frames.iter().any(|f| f.segments[0].body == b"ALIVE"),
         "the channel survived the deaf peer: {frames:?}"
     );
     drop(deaf);
@@ -301,9 +330,9 @@ fn a_dialer_retries_until_the_listener_appears() {
         server.status().peers == 1
     });
     let server_peer = wait_connected(&server);
-    server.send(server_peer, payload(51004, b"LATE"));
+    server.send(server_peer, payload(21, b"LATE"));
     let frames = collect(&client, Duration::from_secs(5));
-    assert!(frames.iter().any(|f| f.segments[0].data == b"LATE"));
+    assert!(frames.iter().any(|f| f.segments[0].body == b"LATE"));
 }
 
 #[test]
@@ -319,28 +348,13 @@ fn garbage_between_frames_is_resynced_and_counted() {
     let _ = wait_connected(&server);
 
     use std::io::Write;
-    let good = codec::encode(
-        &Telegram {
-            envelope: Envelope {
-                class: 0,
-                source: 1,
-                destination: 2,
-                prg: 4,
-            },
-            segments: vec![DataSegment {
-                msg_id: 3,
-                data: b"REAL".to_vec(),
-            }],
-        },
-        Endian::default(),
-    )
-    .unwrap();
+    let good = raw_frame(4, b"REAL");
     sock.write_all(&[0x11, 0x22, 0x33]).unwrap();
     sock.write_all(&good).unwrap();
 
     let frames = collect(&server, Duration::from_secs(3));
     assert_eq!(frames.len(), 1, "the real frame was recovered");
-    assert_eq!(frames[0].segments[0].data, b"REAL");
+    assert_eq!(frames[0].segments[0].body, b"REAL");
     assert!(server.status().resyncs >= 1);
 }
 
@@ -380,23 +394,14 @@ fn raw_prgs(sock: &mut std::net::TcpStream, wait: Duration) -> Vec<(u8, bool)> {
     }
     let mut out = Vec::new();
     let mut at = 0;
-    while let Ok((t, used)) = codec::decode(&buf[at..], Endian::default()) {
-        out.push((t.envelope.prg, t.is_keepalive()));
+    while let Ok((t, used)) = layout().decode(&buf[at..]) {
+        out.push((seq(&t), t.is_keepalive()));
         at += used;
     }
     assert_eq!(at, buf.len(), "every byte read was a whole frame");
     out
 }
 
-fn raw_frame(prg: u8, body: &[u8]) -> Vec<u8> {
-    let segments = if body.is_empty() {
-        vec![]
-    } else {
-        vec![DataSegment { msg_id: 7, data: body.to_vec() }]
-    };
-    let t = Telegram { envelope: Envelope { class: 0, source: 9, destination: 1, prg }, segments };
-    codec::encode(&t, Endian::default()).unwrap()
-}
 
 #[test]
 fn the_connect_keepalive_carries_prg_zero_in_both_roles() {
@@ -453,7 +458,7 @@ fn a_keepalive_between_two_frames_makes_a_repeated_prg_new() {
         sock.write_all(&frame).unwrap();
     }
     let bodies: Vec<Vec<u8>> =
-        collect(&server, Duration::from_secs(2)).iter().map(|t| t.segments[0].data.clone()).collect();
+        collect(&server, Duration::from_secs(2)).iter().map(|t| t.segments[0].body.clone()).collect();
     assert_eq!(bodies, [b"A".to_vec(), b"B".to_vec()]);
     assert_eq!(server.status().duplicates_skipped, 2);
 }
@@ -469,11 +474,11 @@ fn a_reading_peer_takes_a_burst_past_the_outbox_limit() {
     let peer = wait_connected(&server);
     let n = 300usize;
     for i in 0..n as u32 {
-        server.send(peer, payload(51004, &i.to_le_bytes()));
+        server.send(peer, payload(21, &i.to_le_bytes()));
     }
     let got = collect(&client, Duration::from_secs(5));
     let order: Vec<u32> =
-        got.iter().map(|t| u32::from_le_bytes(t.segments[0].data[..4].try_into().unwrap())).collect();
+        got.iter().map(|t| u32::from_le_bytes(t.segments[0].body[..4].try_into().unwrap())).collect();
     assert_eq!(order, (0..n as u32).collect::<Vec<_>>(), "every frame, in order");
     assert_eq!(server.status().dropped_peers, 0);
 }
@@ -496,10 +501,10 @@ fn a_steady_stream_neither_drops_a_reading_peer_nor_stops_the_channel_reading() 
         // A frame every 10 ms, busy-paced so no tick slips in between by luck.
         let due = started + Duration::from_millis(10 * u64::from(sent));
         while Instant::now() < due {}
-        server.send(server_peer, payload(51004, &sent.to_le_bytes()));
+        server.send(server_peer, payload(21, &sent.to_le_bytes()));
         sent += 1;
         if ping_at.is_none() && started.elapsed() >= Duration::from_millis(500) {
-            client.send(client_peer, payload(50002, b"PING"));
+            client.send(client_peer, payload(22, b"PING"));
             ping_at = Some(Instant::now());
         }
         for e in server.poll() {
@@ -508,7 +513,7 @@ fn a_steady_stream_neither_drops_a_reading_peer_nor_stops_the_channel_reading() 
             }
         }
         received.extend(client.poll().into_iter().filter_map(|e| match e {
-            ChannelEvent::Received { telegram, .. } => Some(telegram),
+            ChannelEvent::Received { frame: telegram, .. } => Some(telegram),
             _ => None,
         }));
     }
@@ -528,7 +533,7 @@ fn a_deaf_peer_is_dropped_by_the_write_timeout() {
     until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
     let deaf = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
     let peer = wait_connected(&server);
-    let big = payload(52002, &[b'x'; 480]);
+    let big = payload(23, &[b'x'; 480]);
     let started = Instant::now();
     let mut why = None;
     'outer: while started.elapsed() < Duration::from_secs(60) {
@@ -573,7 +578,7 @@ fn an_idle_link_is_probed_once_per_window_and_never_while_the_peer_talks() {
     // While the listener talks every 100 ms, the dialer never probes.
     let before = client.status().keepalives_sent;
     for i in 0..15u8 {
-        server.send(server_peer, payload(51004, &[i]));
+        server.send(server_peer, payload(21, &[i]));
         std::thread::sleep(Duration::from_millis(100));
     }
     assert_eq!(client.status().keepalives_sent, before);
@@ -609,8 +614,8 @@ fn raw_prgs_and_bodies(sock: &mut std::net::TcpStream, wait: Duration) -> Vec<(u
     }
     let mut out = Vec::new();
     let mut at = 0;
-    while let Ok((t, used)) = codec::decode(&buf[at..], Endian::default()) {
-        out.push((t.envelope.prg, t.segments.first().map(|s| s.data.clone())));
+    while let Ok((t, used)) = layout().decode(&buf[at..]) {
+        out.push((seq(&t), t.segments.first().map(|s| s.body.clone())));
         at += used;
     }
     out
@@ -732,8 +737,8 @@ fn a_frame_after_a_quiet_spell_of_254_probes_is_not_skipped() {
         let deadline = Instant::now() + Duration::from_secs(5);
         while prg_a.is_none() && Instant::now() < deadline {
             for e in server.poll() {
-                if let ChannelEvent::Received { telegram, .. } = e {
-                    prg_a = Some(telegram.envelope.prg);
+                if let ChannelEvent::Received { frame: telegram, .. } = e {
+                    prg_a = Some(telegram.fields["sequence"]);
 
                 }
             }
@@ -743,7 +748,7 @@ fn a_frame_after_a_quiet_spell_of_254_probes_is_not_skipped() {
         // the number after its first (pA - 1 mod 255) probes, so B takes pA again once probes
         // reach that count + 254 (mod 255). Watch its own probe counter and send B the moment
         // it gets there; the next probe is a tick away.
-        let target = (u64::from(prg_a) + 253) % 255;
+        let target = (prg_a + 253) % 255;
         let since = client.status().keepalives_sent;
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
@@ -758,9 +763,9 @@ fn a_frame_after_a_quiet_spell_of_254_probes_is_not_skipped() {
         let deadline = Instant::now() + Duration::from_secs(3);
         while prg_b.is_none() && Instant::now() < deadline {
             for e in server.poll() {
-                if let ChannelEvent::Received { telegram, .. } = e {
-                    assert_eq!(telegram.segments[0].data, b"B");
-                    prg_b = Some(telegram.envelope.prg);
+                if let ChannelEvent::Received { frame: telegram, .. } = e {
+                    assert_eq!(telegram.segments[0].body, b"B");
+                    prg_b = Some(telegram.fields["sequence"]);
                 }
             }
         }
@@ -772,4 +777,36 @@ fn a_frame_after_a_quiet_spell_of_254_probes_is_not_skipped() {
         eprintln!("attempt {attempt}: B carried {prg_b}, A {prg_a}; aiming again");
     }
     panic!("B never carried A's sequence number in four attempts");
+}
+
+#[test]
+fn a_slow_but_reading_peer_is_never_judged_deaf() {
+    // About 100 KB/s against a 2 MB burst: the socket keeps taking bytes as the peer reads, so
+    // the write timeout must not fire, however the OS signals writability (Linux signals only
+    // once a third of the send buffer is free).
+    use std::io::Read;
+    let port = free_port();
+    let server = listener(port, 0);
+    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+    let reader = std::thread::spawn(move || {
+        let mut sock = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        sock.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+        let mut total = 0usize;
+        let mut chunk = [0u8; 1024];
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(6) {
+            if let Ok(n) = sock.read(&mut chunk) {
+                total += n;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        total
+    });
+    let peer = wait_connected(&server);
+    for _ in 0..400 {
+        server.send(peer, payload(23, &[b'x'; 5_000]));
+    }
+    let read = reader.join().unwrap();
+    assert_eq!(server.status().dropped_peers, 0, "{:?}", server.status().last_error);
+    assert!(read > 300_000, "the reader kept reading: {read} bytes");
 }

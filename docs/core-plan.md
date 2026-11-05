@@ -23,8 +23,9 @@ configuration and names no device (`docs/questions.md` Q8).
 - **Worker plumbing:** the stop/join handle of a worker thread (`SourceHandle`, `stop_flag`)
   and its error (`SourceError`), so every source, a tailed log in portal or an OPC poll here,
   has one health model.
-- **The TCP telegram layer:** the hardened socket runtime (`Channel`), its envelope framing
-  (`codec`; its shape is fixed today, making it configuration is Q9), and the capture rules
+- **The TCP telegram layer:** the hardened socket runtime (`Channel`); a framing engine
+  (`framing`) that runs whatever layout a versioned channel file describes (`schema`,
+  `docs/channel-schema.md`), with no layout of its own (Q9); and the capture rules
   engine that reads message fields by configuration. No device's catalog, state words or
   decision logic: those are the rules a portal channel is configured with (Q8).
 - **Seeded randomness:** the deterministic PCG32 (`rng`), for weighted draws and fixtures.
@@ -63,7 +64,7 @@ where:
 
 | Veredas 1 | Veredas 2 | Why |
 |---|---|---|
-| `veredas-telegram` `codec`, `channel`, `Endian`, `capture` (its `CaptureSpec` rules) | `veredas_core::telegram` | portal and maquinar both hold telegram links and read their fields by rules |
+| `veredas-telegram` `channel`, `Endian`, `capture` (its `CaptureSpec` rules); its `codec` generalised into `framing` and `schema` (Q9) | `veredas_core::telegram` | portal and maquinar both hold telegram links, framed and read by rules |
 | `veredas-telegram` `genibelt`, `sortplan`, `decision_client`, `capture::scanner_parcel` | not carried (Q8) | one vendor's catalog and sorting logic: rules a portal channel is configured with, not suite code; ported, refuted and fixed here first (commits up to b7c6d0a) |
 | `veredas-telegram` `rng` (`Pcg32`) | `veredas_core::rng` | maquinar's simulators seed it; weighted draws scale it |
 | `veredas-opc` `spec`, `value`, `map`, `browse`, `worker` | `veredas_core::opc` | portal polls, browses and writes; aranha discovers OPC servers |
@@ -83,7 +84,7 @@ Changed on the way, each recorded in the clause's evidence note:
 - `Quality` added: Veredas 1 judged an OPC read good or not from its `StatusCode`; the
   three-way severity becomes a shared type and `TagRead::quality` reports it;
 - the vendor's name and specification citations removed from what stayed (Q6, Q8): the
-  framing's layout is described in `codec`'s docs and pinned by golden frames.
+  codec's fixed layout became the channel schema's worked example (Q9), pinned by golden frames.
 
 ## Module map
 ```
@@ -91,7 +92,7 @@ veredas_core
   types       SourceId, SeriesRef, Value, SeriesType, Sample, Quality, now_unix_ms
   source      SourceHandle, stop_flag, SourceError
   rng         Pcg32
-  telegram    Endian; codec, channel, capture
+  telegram    Endian; schema, framing, channel, capture
   opc         spec, value, map, browse, worker; demo (feature "demo-server")
 ```
 

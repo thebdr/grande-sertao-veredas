@@ -16,6 +16,10 @@ regex = { workspace = true }
 # Capture specs and the byte order are configuration, read from plain text.
 serde = { workspace = true }
 thiserror = { workspace = true }
+# Writes go to the socket itself, so the OS (not a readiness cache) says when it is full.
+socket2 = { workspace = true }
+# Channel files are TOML (docs/channel-schema.md).
+toml = { workspace = true }
 # The telegram channel runs on its own current-thread runtime.
 tokio = { workspace = true }
 

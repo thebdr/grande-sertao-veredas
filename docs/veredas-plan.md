@@ -74,9 +74,10 @@ browsers) through **portal**. Two kinds of exception:
 ### veredas-core: the foundation
 Every class and library more than one component needs.
 - Scope: shared types (tags, values, timestamps, quality); shared protocol layers (a
-  hardened TCP socket with its framing and a rules engine that reads message fields by
-  configuration; the OPC UA client); plain-text file schemas with their version stamps,
-  including a telegram channel's configuration; errors, logging and test-fixture plumbing.
+  hardened TCP socket; a framing engine driven by a channel configuration schema, with no
+  frame layout of its own; a rules engine that reads message fields by configuration; the
+  OPC UA client); plain-text file schemas with their version stamps, the channel file being
+  the first (`docs/channel-schema.md`); errors, logging and test-fixture plumbing.
 - Rules: new functionality is designed as if a second consumer already existed; component
   code moves here once a second component needs it; a library container, never an
   executable, with no limit on what it holds; depends on no other component;
@@ -209,7 +210,10 @@ the data in the database, as per the other protocols. veredas shall be a generic
 build on top of, which reliably manages communication with the outside world, while being
 content-agnostic. genibelt does not belong in core, a tcp socket configurable for it does."
 Core keeps the socket, its framing and the capture rules engine; the GENIBELT catalog, the sort
-plan and the decision client are not carried into the suite as code.
+plan and the decision client are not carried into the suite as code. Then, on Q9: "Design
+configurable framing now": core holds no frame layout; a framing engine runs whatever layout a
+versioned channel file describes (`docs/channel-schema.md`), and GENIBELT's layout is such a
+file, outside the suite's code.
 
 ## Next steps
 1. Record each decision above where it applies (component plans, `docs/questions.md`).

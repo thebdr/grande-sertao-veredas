@@ -281,3 +281,33 @@ fn a_repeat_without_a_group_captures_the_whole_match() {
         [("barcode1", "123456"), ("barcode2", "654321")].map(|(k, v)| (k.into(), v.into())).into();
     assert_eq!(out, expected);
 }
+
+#[test]
+fn a_capture_spec_is_read_from_configuration_text() {
+    // How a channel's capture rules are written: TOML, optional keys left out, misspellings refused.
+    let spec: CaptureSpec = toml::from_str(
+        r#"
+payload = 'ID=(?P<id>\w+)'  # a literal string: no escapes, as a regex wants
+fields = [ { name = "n", at = 0, ty = "U16" } ]
+repeat = [ { name = "bc", pattern = "BC=([A-Z]+)" } ]
+"#,
+    )
+    .unwrap();
+    assert_eq!(spec.repeat[0].max, 16, "a repeat without `max` takes the default cap");
+    assert_eq!(spec.fields[0].len, 0);
+    let literal = CaptureSpec {
+        payload: Some(r"ID=(?P<id>\w+)".into()),
+        fields: vec![BinaryField { name: "n".into(), at: 0, len: 0, ty: FieldType::U16 }],
+        repeat: vec![RepeatSpec { name: "bc".into(), pattern: "BC=([A-Z]+)".into(), max: 16 }],
+    };
+    assert_eq!(spec, literal);
+    let body = format!("ID=X1 {}", "BC=AB ".repeat(40));
+    let out = Capture::new(&spec).extract(body.as_bytes(), Endian::Little).unwrap();
+    assert_eq!(out, Capture::new(&literal).extract(body.as_bytes(), Endian::Little).unwrap());
+    assert_eq!(out.len(), 1 + 1 + 16, "id, n, and 16 barcodes");
+    // An empty spec is a spec; a misspelled key or type is refused.
+    assert_eq!(toml::from_str::<CaptureSpec>("").unwrap(), CaptureSpec::default());
+    assert!(toml::from_str::<CaptureSpec>("repeat = [ { name = \"b\", pattern = \"x\", maximum = 3 } ]").is_err());
+    assert!(toml::from_str::<CaptureSpec>("fields = [ { name = \"n\", at = 0, ty = \"u16\" } ]").is_err());
+    assert!(toml::from_str::<CaptureSpec>("payloads = \"x\"").is_err());
+}

@@ -147,26 +147,43 @@ fn the_check_refuses_every_way_cargo_makes_an_executable() {
     );
 }
 
-/// Every `.rs` file under `dir`, recursively.
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+/// Every file under `dir`, recursively, whatever its extension: rustc reads more than `.rs`
+/// (`include!`, `#[path]`), and the manifest is part of the crate too.
+fn crate_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
         if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
+            crate_files(&path, out);
+        } else {
             out.push(path);
         }
     }
 }
 
-/// The lines that name the vendor protocol or cite a vendor document.
+/// Text reversed: the banned terms are written backwards here, so that no line of this file,
+/// however normalised, spells one.
+fn rev(s: &str) -> String {
+    s.chars().rev().collect()
+}
+
+/// The lines that name the vendor protocol or its terms, or cite a vendor document. Each line
+/// is lowercased and stripped to letters and digits first, so no separator, case or spacing
+/// hides a name; a section sign is a specification citation.
 fn vendor_mentions(text: &str) -> Vec<String> {
-    // Spelled in pieces so this file does not match itself.
-    let banned = [["geni", "belt"].concat(), ["docs/", "vendor"].concat()];
+    let banned: Vec<String> =
+        ["tlebineg", "rodnevscod", "lortnoctrosretsam", "ecafretnitsoh", "maootxtr", "xtrotmao"]
+            .iter()
+            .map(|b| rev(b))
+            .collect();
+    let section = char::from_u32(0xA7).unwrap();
     text.lines()
         .filter(|line| {
-            let line = line.to_lowercase();
-            banned.iter().any(|b| line.contains(b.as_str()))
+            let flat: String = line
+                .chars()
+                .filter(|c| c.is_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect();
+            line.contains(section) || banned.iter().any(|b| flat.contains(b.as_str()))
         })
         .map(str::to_string)
         .collect()
@@ -177,18 +194,29 @@ fn core_names_no_vendor_and_cites_no_vendor_document() {
     // docs/questions.md Q8: what a device's telegrams mean is configuration, not core code.
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    rust_files(&root.join("src"), &mut files);
-    rust_files(&root.join("tests"), &mut files);
+    crate_files(&root, &mut files);
+    assert!(files.iter().any(|f| f.ends_with("Cargo.toml")), "{files:?}");
     assert!(files.len() >= 10, "{files:?}");
     let found: Vec<String> = files
         .iter()
         .flat_map(|f| {
-            let text = std::fs::read_to_string(f).unwrap();
+            let text = String::from_utf8_lossy(&std::fs::read(f).unwrap()).to_string();
             vendor_mentions(&text).into_iter().map(move |l| format!("{}: {l}", f.display()))
         })
         .collect();
     assert_eq!(found, Vec::<String>::new());
-    // The check sees both spellings, in any case.
-    let sample = ["// the Geni", "Belt catalog\nfn x() {}\n// see DOCS/VEN", "DOR/spec.txt"].concat();
-    assert_eq!(vendor_mentions(&sample).len(), 2);
+    // The check sees every spelling, in any case, and the vendor's terms and citations.
+    let samples = [
+        format!("// the {} catalog", rev("tleBineG")),
+        format!("const {}: u16 = 1;", rev("TROP_TLEB_INEG")),
+        format!("// see {}/spec.txt", rev("RODNEV/SCOD")),
+        format!("// the {} speaks", rev("lortnoC troS retsaM")),
+        format!("// {} telegrams", rev("MAOOTXTR")),
+        format!("// spec {}3.2", char::from_u32(0xA7).unwrap()),
+        format!("// a {}", rev("ecafretni-tsoh")),
+    ];
+    for s in &samples {
+        assert_eq!(vendor_mentions(s).len(), 1, "{s}");
+    }
+    assert_eq!(vendor_mentions("fn decode(frame: &[u8]) {}\n// a capture spec"), Vec::<String>::new());
 }

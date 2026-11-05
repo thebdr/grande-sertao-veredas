@@ -25,6 +25,7 @@ fn asciiz(bytes: &[u8]) -> String {
 
 /// How to capture fields from a message body: the rules a channel is configured with.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CaptureSpec {
     /// A regex over the body as text; its named groups become fields.
     #[serde(default)]
@@ -40,6 +41,7 @@ pub struct CaptureSpec {
 
 /// One binary field: where it is, how long, and how to read it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BinaryField {
     pub name: String,
     pub at: usize,
@@ -62,6 +64,7 @@ pub enum FieldType {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RepeatSpec {
     pub name: String,
     pub pattern: String,

@@ -1,30 +1,30 @@
-//! The TCP telegram layer: a hardened socket and the rules a device's telegrams are read by.
+//! The TCP telegram layer: a hardened socket, and the rules a device's telegrams are framed and
+//! read by.
 //!
-//! Content-agnostic: no device, vendor or message catalog is named here. What a telegram means
-//! is configuration (plain text, versioned, in a project folder, as an OPC rule maps tags and a
-//! log rule captures fields); this layer moves the bytes reliably and reads them by rules.
+//! Content-agnostic: no device, vendor or message catalog is named here, and no frame layout
+//! is built in. A channel is configured by a plain-text, versioned channel file (as an OPC rule
+//! maps tags and a log rule captures fields); this layer moves the bytes reliably and reads them
+//! by those rules (`docs/questions.md` Q8, Q9; `docs/channel-schema.md`).
 //!
-//! - [`codec`]: the envelope framing (start byte, envelope with sequence number, data area
-//!   length and segment count, segments of id, length and body, tail, end byte), in either
-//!   byte order.
-//! - [`channel`]: one TCP link held correctly in either role: sequence stamping and duplicate
-//!   skip, a keep-alive probe on silence, reconnection, bounded reads, a peer that stops
-//!   reading dropped rather than wedging the link.
+//! - [`schema`]: the channel file: its framing, sequence, keep-alive and link rules, versioned,
+//!   read and validated into a [`schema::ChannelSpec`].
+//! - [`framing`]: the framing engine: frames encoded and decoded by a configured layout
+//!   (delimiters, envelope, segment headers and tail as fields with roles), in any byte order.
+//! - [`channel`]: one TCP link held correctly in either role, by the channel file's rules.
 //! - [`capture`]: message bodies read into named fields by a [`capture::CaptureSpec`].
-//!
-//! The framing's shape is fixed in code today; making it configuration too is
-//! `docs/questions.md` Q9.
 
 pub mod capture;
 pub mod channel;
-pub mod codec;
+pub mod framing;
+pub mod schema;
 
 pub use channel::{Channel, ChannelConfig, ChannelEvent, PeerId, Role};
-pub use codec::{DataSegment, DecodeError, Envelope, Telegram};
+pub use framing::{DecodeError, Frame, Framing, Segment};
+pub use schema::{ChannelSpec, SchemaError};
 
 use serde::{Deserialize, Serialize};
 
-/// Byte order of the 16/32-bit wire fields. Little-endian by default.
+/// Byte order of a multi-byte field. Little-endian by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Endian {
     Big,
