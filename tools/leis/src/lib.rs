@@ -12,7 +12,8 @@
 //!                  member listed by path or is excluded: a glob is not a member, an unlisted crate is
 //!                  refused, a nested crate is refused, and every member lives directly under one of
 //!                  those two roots; a `veredas-*` or `orcl-*` crate (by name or folder, `_` as `-`)
-//!                  anywhere in the repository is a member under a root or nothing, never excluded.
+//!                  anywhere the repository holds or could hold it (git's listing, not a walk) is a
+//!                  member under a root or nothing, never excluded.
 //!   L2 NAMING      a component is `veredas-<nome>`, `<nome>` a lowercase ASCII letter then letters and
 //!                  digits, in a folder of the same name; the language's crates are `orcl-<nome>`; a
 //!                  `veredas-*` or `orcl-*` crate lives under `crates/`, never `tools/`.
@@ -38,12 +39,6 @@ use serde::Deserialize;
 
 /// The folders a member may live under.
 pub const ROOTS: [&str; 2] = ["crates", "tools"];
-/// Folders the reader never descends into: git's own store, build output, a frontend's modules.
-/// The repository never holds them: git refuses a path through `.git`, and `.gitignore` ignores
-/// `target/` and `node_modules/` at any depth (L1 asks git so). A hidden folder is walked like
-/// any other: `.github` and `.zen` are committed here, and a suite crate parked under a dot is
-/// still parked.
-pub const SKIPPED: [&str; 3] = [".git", "target", "node_modules"];
 /// The foundation: the one member every other may use, and the one that uses none.
 pub const CORE: &str = "veredas-core";
 /// Every component's prefix.
@@ -132,8 +127,8 @@ pub struct Suite {
     pub excluded: Vec<String>,
     /// `[workspace.package]` carries a `version`.
     pub workspace_version: bool,
-    /// Every folder in the repository that holds a `Cargo.toml` (the root's own left out), at
-    /// any depth outside the skipped folders: under a root or anywhere else.
+    /// Every folder whose `Cargo.toml` the repository holds or could hold (the root's own left
+    /// out), wherever it sits: under a root or anywhere else.
     pub found: Vec<String>,
     /// The listed members whose manifest was found, in listed order.
     pub members: Vec<Member>,
@@ -329,35 +324,37 @@ impl Suite {
         })
     }
 
-    /// The real tree: `Cargo.toml`, every other `Cargo.toml` in the repository at any depth
-    /// (`.git/`, `target/` and `node_modules/` skipped), every `docs/*-plan.md` but the suite's
-    /// own, and `docs/orcl/README.md`.
+    /// The real tree, as the repository holds it or could: `git ls-files` with the tracked files
+    /// and the untracked ones git does not ignore, so a crate git would never take is nobody's
+    /// business and one it would take is seen wherever it sits, a nested ignore rule or a forced
+    /// add included. `Cargo.toml` (the root's own), every other `Cargo.toml` listed, every
+    /// `docs/*-plan.md` listed but the suite's own, and `docs/orcl/README.md`. A tree that is no
+    /// repository is an error: the laws govern a repository.
     pub fn read(root: &Path) -> Result<Suite, Error> {
         let read = |rel: &str| -> Result<String, Error> {
             fs::read_to_string(root.join(rel)).map_err(|source| Error::Io { path: rel.to_string(), source })
         };
+        let listing = git_bytes(root, &["ls-files", "-z", "--cached", "--others", "--exclude-standard"], None)?
+            .ok_or_else(|| Error::Io { path: root.display().to_string(), source: io::Error::other("not a git repository: the laws read what the repository holds") })?;
+        let paths: Vec<String> = listing
+            .split(|b| *b == 0)
+            .filter(|p| !p.is_empty())
+            .map(|p| String::from_utf8_lossy(p).into_owned())
+            .filter(|p| root.join(p).is_file()) // tracked but deleted from the tree: gone
+            .collect();
         let workspace = read("Cargo.toml")?;
-        let mut dirs = Vec::new();
-        for name in folder_entries(root, ".")? {
-            if !SKIPPED.contains(&name.as_str()) && root.join(&name).is_dir() {
-                collect_crates(root, &name, &mut dirs)?;
-            }
-        }
         let mut crates: Vec<(String, String)> = Vec::new();
-        for rel in dirs {
-            let text = read(&format!("{rel}/Cargo.toml"))?;
-            crates.push((rel, text));
-        }
         let mut plans = BTreeMap::new();
-        for name in folder_entries(root, "docs")? {
-            let rel = format!("docs/{name}");
-            if name.ends_with("-plan.md") && rel != SUITE_PLAN && root.join(&rel).is_file() {
-                plans.insert(rel.clone(), read(&rel)?);
+        for p in &paths {
+            if let Some(dir) = p.strip_suffix("/Cargo.toml") {
+                crates.push((dir.to_string(), read(p)?));
+            } else if p == LANGUAGE_PLAN
+                || (p.starts_with("docs/") && p.ends_with("-plan.md") && !p["docs/".len()..].contains('/') && p != SUITE_PLAN)
+            {
+                plans.insert(p.clone(), read(p)?);
             }
         }
-        if root.join(LANGUAGE_PLAN).is_file() {
-            plans.insert(LANGUAGE_PLAN.to_string(), read(LANGUAGE_PLAN)?);
-        }
+        crates.sort();
         let refs: Vec<(&str, &str)> = crates.iter().map(|(d, t)| (d.as_str(), t.as_str())).collect();
         Suite::parse(&workspace, &refs, plans)
     }
@@ -374,43 +371,6 @@ impl Suite {
     fn is_excluded(&self, dir: &str) -> bool {
         self.excluded.iter().any(|e| dir == e || dir.starts_with(&format!("{e}/")))
     }
-}
-
-/// The entries of `root/<rel>`, sorted by name; an absent folder is empty.
-fn folder_entries(root: &Path, rel: &str) -> Result<Vec<String>, Error> {
-    let dir = root.join(rel);
-    if !dir.is_dir() {
-        return Ok(Vec::new());
-    }
-    let io = |source: io::Error| Error::Io { path: rel.to_string(), source };
-    let mut names: Vec<String> = fs::read_dir(&dir)
-        .map_err(io)?
-        .map(|e| e.map(|e| e.file_name().to_string_lossy().into_owned()))
-        .collect::<Result<_, _>>()
-        .map_err(io)?;
-    names.sort();
-    Ok(names)
-}
-
-/// Every folder under `root/<rel>` (itself included) that holds a `Cargo.toml`, depth first in
-/// name order, never descending into [`SKIPPED`].
-fn collect_crates(root: &Path, rel: &str, out: &mut Vec<String>) -> Result<(), Error> {
-    if !root.join(rel).is_dir() {
-        return Ok(());
-    }
-    if root.join(rel).join("Cargo.toml").is_file() {
-        out.push(rel.to_string());
-    }
-    for name in folder_entries(root, rel)? {
-        if SKIPPED.contains(&name.as_str()) {
-            continue;
-        }
-        let child = format!("{rel}/{name}");
-        if root.join(&child).is_dir() {
-            collect_crates(root, &child, out)?;
-        }
-    }
-    Ok(())
 }
 
 fn under_a_root(dir: &str) -> bool {
@@ -716,13 +676,14 @@ fn batch_objects(raw: &[u8]) -> Vec<Option<(String, String, Vec<u8>)>> {
 }
 
 /// L6 over history: every commit reachable from HEAD that holds a component's folder under
-/// `crates/` (`veredas-*` or `orcl-*`, present at HEAD or not: renamed and deleted components
-/// included) also holds that component's plan as a regular file, not blank, so no component's
-/// code ever landed without it, through merges, re-additions and deletions alike. Three git
-/// conversations whatever the history's length: the `crates`, `docs` and `docs/orcl` trees of
-/// every commit, the distinct trees' entries, the distinct plan blobs. The earliest offending
-/// commit is named, once per component folder. A tree that is no repository, or a shallow clone
-/// with its history cut, is an error.
+/// `crates/` (`veredas-*` or `orcl-*`, a folder, a submodule or a link by that name, present at
+/// HEAD or not: renamed and deleted components included) also holds that component's plan as a
+/// regular file of text, not blank, so no component's code ever landed without it, through
+/// merges, re-additions and deletions alike. A fixed number of git conversations whatever the
+/// history's length: the `crates`, `docs` and `docs/orcl` trees of every commit, the distinct
+/// trees' entries, the distinct plan blobs. The earliest offending commit is named, once per
+/// component folder. A tree that is no repository, or a shallow clone with its history cut, is
+/// an error.
 pub fn history(root: &Path) -> Result<Vec<Violation>, Error> {
     let refuse = |what: &str| Error::Io { path: root.display().to_string(), source: io::Error::other(what.to_string()) };
     git(root, &["rev-parse", "--is-inside-work-tree"], None)?.ok_or_else(|| refuse("not a git repository"))?;
@@ -771,17 +732,22 @@ pub fn history(root: &Path) -> Result<Vec<Violation>, Error> {
             entries.insert(object.0, tree_entries(&object.2));
         }
     }
-    // 3. every commit, every component folder it holds, judged; a plan blob read once
-    let mut blank_of: BTreeMap<String, bool> = BTreeMap::new();
-    let mut named: BTreeSet<String> = BTreeSet::new();
-    let mut out = Vec::new();
+    // 3. every commit, every component folder it holds (a folder, a submodule or a link by that
+    //    name), and the plan blob it finds for it, if a regular file; the suite's own plan is
+    //    nobody's
+    struct Hold {
+        short: String,
+        dir: String,
+        plan: String,
+        blob: Option<String>,
+    }
+    let mut holds: Vec<Hold> = Vec::new();
     for (i, c) in commits.iter().enumerate() {
         let Some(crates) = &trees_at[i * 3] else { continue };
         let docs = trees_at[i * 3 + 1].as_ref().and_then(|t| entries.get(t));
         let orcl = trees_at[i * 3 + 2].as_ref().and_then(|t| entries.get(t));
-        let short = &c[..c.len().min(7)];
         for e in entries.get(crates).map(Vec::as_slice).unwrap_or(&[]) {
-            if e.mode != "40000" {
+            if !matches!(e.mode.as_str(), "40000" | "160000" | "120000") {
                 continue;
             }
             let folded = e.name.replace('_', "-");
@@ -792,29 +758,44 @@ pub fn history(root: &Path) -> Result<Vec<Violation>, Error> {
             } else {
                 continue;
             };
-            let dir = format!("crates/{}", e.name);
-            if named.contains(&dir) {
-                continue;
+            let blob = if plan == SUITE_PLAN {
+                None
+            } else {
+                plan_dir
+                    .and_then(|d| d.iter().find(|x| x.name == plan_file))
+                    .filter(|x| x.mode == "100644" || x.mode == "100755")
+                    .map(|x| x.oid.clone())
+            };
+            holds.push(Hold { short: c[..c.len().min(7)].to_string(), dir: format!("crates/{}", e.name), plan, blob });
+        }
+    }
+    // 4. the distinct plan blobs, read once: blank, or not text at all, is blank
+    let distinct: BTreeSet<&String> = holds.iter().filter_map(|h| h.blob.as_ref()).collect();
+    let mut blank_of: BTreeMap<String, bool> = BTreeMap::new();
+    if !distinct.is_empty() {
+        let asks: String = distinct.iter().map(|b| format!("{b}\n")).collect();
+        let raw = git_bytes(root, &["cat-file", "--batch"], Some(asks.as_bytes()))?.ok_or_else(|| refuse("git cat-file failed"))?;
+        for object in batch_objects(&raw).into_iter().flatten() {
+            blank_of.insert(object.0, std::str::from_utf8(&object.2).map(is_blank).unwrap_or(true));
+        }
+    }
+    // 5. the earliest offending commit, once per folder
+    let mut named: BTreeSet<String> = BTreeSet::new();
+    let mut out = Vec::new();
+    for h in holds {
+        if named.contains(&h.dir) {
+            continue;
+        }
+        match &h.blob {
+            None => {
+                out.push(Violation::new("L6", &h.dir, format!("commit {} holds the code and no {}", h.short, h.plan)));
+                named.insert(h.dir);
             }
-            let regular = plan_dir
-                .and_then(|d| d.iter().find(|x| x.name == plan_file))
-                .filter(|x| x.mode == "100644" || x.mode == "100755");
-            match regular {
-                None => {
-                    out.push(Violation::new("L6", &dir, format!("commit {short} holds the code and no {plan}")));
-                    named.insert(dir);
-                }
-                Some(blob) => {
-                    if !blank_of.contains_key(&blob.oid) {
-                        let text = git(root, &["cat-file", "-p", &blob.oid], None)?.ok_or_else(|| refuse("git cat-file failed"))?;
-                        blank_of.insert(blob.oid.clone(), is_blank(&text));
-                    }
-                    if blank_of[&blob.oid] {
-                        out.push(Violation::new("L6", &dir, format!("commit {short} holds the code and {plan} blank")));
-                        named.insert(dir);
-                    }
-                }
+            Some(oid) if blank_of.get(oid).copied().unwrap_or(true) => {
+                out.push(Violation::new("L6", &h.dir, format!("commit {} holds the code and {} blank", h.short, h.plan)));
+                named.insert(h.dir);
             }
+            Some(_) => {}
         }
     }
     Ok(out)

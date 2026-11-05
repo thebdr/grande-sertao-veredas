@@ -38,7 +38,8 @@ pub fn strings(v: Vec<Violation>) -> Vec<String> {
     v.iter().map(ToString::to_string).collect()
 }
 
-/// A tree on disk under the OS temp folder, removed on drop; files are `(relative path, text)`.
+/// A tree on disk under the OS temp folder, a fresh git repository (the laws read what a
+/// repository holds), removed on drop; files are `(relative path, text)`, none committed.
 pub struct Tree {
     pub root: PathBuf,
 }
@@ -48,12 +49,25 @@ impl Tree {
         let root = std::env::temp_dir().join(format!("leis-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("the tree's root is made");
+        let init = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .expect("git runs");
+        assert!(init.status.success(), "{}", String::from_utf8_lossy(&init.stderr));
         for (rel, text) in files {
             let path = root.join(rel);
             fs::create_dir_all(path.parent().expect("a file has a parent")).expect("the folder is made");
             fs::write(&path, text).expect("the file is written");
         }
         Tree { root }
+    }
+
+    /// The same tree with no repository around it: what the laws refuse to read.
+    pub fn without_git(self) -> Tree {
+        let _ = fs::remove_dir_all(self.root.join(".git"));
+        self
     }
 
     pub fn path(&self) -> &Path {

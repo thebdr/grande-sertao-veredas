@@ -296,6 +296,65 @@ fn l6_history_wants_the_plan_as_a_regular_file() {
 }
 
 #[test]
+fn l6_history_leaves_the_suite_plan_to_nobody() {
+    // the suite's own plan is in every commit; a component named veredas-veredas gets no credit
+    // for it in history either (refute round 5)
+    let own = repo(
+        "l6-history-suite-plan",
+        &[("Cargo.toml", &ws(&["crates/veredas-veredas"])), ("crates/veredas-veredas/Cargo.toml", &pkg("veredas-veredas", "2.0.0")), ("docs/veredas-plan.md", "# Veredas 2: the plan\n")],
+    );
+    let landed = commit(own.path(), "a component named after the suite");
+    assert_eq!(
+        strings(leis::history(own.path()).expect("git history reads")),
+        vec![format!("L6 crates/veredas-veredas: commit {landed} holds the code and no docs/veredas-plan.md")]
+    );
+}
+
+#[test]
+fn l6_history_wants_text() {
+    // a UTF-16 plan holding only its byte-order mark, or only whitespace, is not text the law
+    // can read: blank (refute round 5: a lossy decode read the mark as two characters)
+    for (name, bytes) in [("bom", &b"\xFF\xFE"[..]), ("space", &b"\xFF\xFE\x20\x00\x0D\x00\x0A\x00"[..])] {
+        let tree = repo(
+            &format!("l6-history-utf16-{name}"),
+            &[("Cargo.toml", &ws(&["crates/veredas-abaco"])), ("crates/veredas-abaco/Cargo.toml", ABACO)],
+        );
+        std::fs::create_dir_all(tree.path().join("docs")).expect("docs is made");
+        std::fs::write(tree.path().join("docs/abaco-plan.md"), bytes).expect("the plan is written");
+        let landed = commit(tree.path(), "a plan in UTF-16");
+        write(tree.path(), "docs/abaco-plan.md", PLAN);
+        commit(tree.path(), "a plan in text");
+        assert_eq!(
+            strings(leis::history(tree.path()).expect("git history reads")),
+            vec![format!("L6 crates/veredas-abaco: commit {landed} holds the code and docs/abaco-plan.md blank")],
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn l6_history_judges_a_submodule_or_a_link_named_for_a_component() {
+    // a gitlink (a submodule) or a symlink under crates/ named veredas-* is the component's
+    // presence as much as a folder (refute round 5), staged straight into the index
+    let tree = repo("l6-history-gitlink", &[("Cargo.toml", &ws(&[])), ("README.md", "base\n"), ("target.txt", "../elsewhere")]);
+    let base = commit(tree.path(), "base");
+    let full = git(tree.path(), &["rev-parse", "HEAD"]);
+    let blob = git(tree.path(), &["hash-object", "-w", "target.txt"]);
+    git(tree.path(), &["update-index", "--add", "--cacheinfo", &format!("160000,{full},crates/veredas-abaco")]);
+    git(tree.path(), &["update-index", "--add", "--cacheinfo", &format!("120000,{blob},crates/veredas-ligacao")]);
+    git(tree.path(), &["commit", "-q", "-m", "a submodule and a link, no plans"]);
+    let landed = git(tree.path(), &["rev-parse", "--short=7", "HEAD"]);
+    assert_ne!(landed, base);
+    assert_eq!(
+        strings(leis::history(tree.path()).expect("git history reads")),
+        vec![
+            format!("L6 crates/veredas-abaco: commit {landed} holds the code and no docs/abaco-plan.md"),
+            format!("L6 crates/veredas-ligacao: commit {landed} holds the code and no docs/ligacao-plan.md"),
+        ]
+    );
+}
+
+#[test]
 fn l6_history_answers_on_a_long_history() {
     // thousands of commits in one go (refute round 4: the git conversation deadlocked past a
     // thousand): built with fast-import, judged within a bound
@@ -348,7 +407,7 @@ fn l6_history_refuses_what_it_cannot_judge() {
     );
 
     // no repository at all is an error, never a pass
-    let bare = Tree::new("l6-history-norepo", &[("Cargo.toml", &workspace), ("crates/veredas-abaco/Cargo.toml", ABACO)]);
+    let bare = Tree::new("l6-history-norepo", &[("Cargo.toml", &workspace), ("crates/veredas-abaco/Cargo.toml", ABACO)]).without_git();
     assert!(leis::history(bare.path()).is_err());
 
     // a shallow clone has its history cut: an error, where a full clone names the commit
@@ -358,9 +417,11 @@ fn l6_history_refuses_what_it_cannot_judge() {
     commit(origin.path(), "the plan, late");
     let url = format!("file:///{}", origin.path().display().to_string().replace('\\', "/"));
     let shallow = Tree::new("l6-history-shallow", &[]);
+    std::fs::remove_dir_all(shallow.path()).expect("an empty place for the clone");
     git(shallow.path().parent().expect("temp"), &["clone", "-q", "--depth", "1", &url, &shallow.path().display().to_string()]);
     assert!(leis::history(shallow.path()).is_err(), "a shallow clone is refused");
     let full = Tree::new("l6-history-full", &[]);
+    std::fs::remove_dir_all(full.path()).expect("an empty place for the clone");
     git(full.path().parent().expect("temp"), &["clone", "-q", &url, &full.path().display().to_string()]);
     assert_eq!(
         strings(leis::history(full.path()).expect("git history reads")),
