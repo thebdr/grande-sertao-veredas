@@ -1,0 +1,11 @@
+[package]
+name = "leis"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "The suite's laws, machine-enforced: the structural rules of docs/veredas-plan.md as cargo tests"
+
+[dependencies]
+semver = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }

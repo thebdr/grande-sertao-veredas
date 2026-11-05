@@ -1,0 +1,9 @@
+# build output
+/target
+# web frontends keep their modules local; a dist/ is committed when a crate embeds it
+**/node_modules
+# Python leftovers (abaco's macros, scripts)
+__pycache__/
+# editor state
+.vs/
+*.user
