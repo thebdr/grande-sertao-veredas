@@ -14,15 +14,15 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "76e62dd015dadab065ab69a0f333d4f93cc7e787ab83da10b54c7bf91e683a67",
-  "outputTail": "test the_real_tree_obeys_every_law ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s\n\n\nrunning 2 tests\ntest core_is_one_library_and_builds_no_executable ... ok\ntest the_check_refuses_every_way_cargo_makes_an_executable ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.27s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.31s\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-bc950816e40fd182.exe)\n     Running tests\\foundation.rs (target\\debug\\deps\\foundation-336d09c7dd39cd91.exe)",
-  "ranAt": "2026-11-05T20:49:05.359Z",
-  "headCommit": "dc10c13f25ea8fc22226c487d1d719438a506850",
+  "outputSha": "a793298cd3e1fd2ce2dbce4f6d105a0c12f29baa092cf20490c934fd4b1dad5a",
+  "outputTail": "\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s\n\n\nrunning 3 tests\ntest core_names_no_vendor_and_cites_no_vendor_document ... ok\ntest core_is_one_library_and_builds_no_executable ... ok\ntest the_check_refuses_every_way_cargo_makes_an_executable ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.55s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.74s\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-cbcaee2fd36adbd9.exe)\n     Running tests\\foundation.rs (target\\debug\\deps\\foundation-3d9de5c16a85d077.exe)",
+  "ranAt": "2026-11-05T22:36:51.210Z",
+  "headCommit": "ab5d52115af3aff0daaab4e147a5ce3a781b8c0f",
   "tests": [
     {
       "name": "crates/veredas-core/tests/foundation.rs",
       "file": "crates/veredas-core/tests/foundation.rs",
-      "fileSha": "7a56221817c92801b586001fbfe8897aacda8b59c506cf5922e43433f2a1676d"
+      "fileSha": "e34056c24e357ae6e99bcf8479ca29930061c31cac17bdcc81984c585ce0fe53"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",

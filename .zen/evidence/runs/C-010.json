@@ -1,24 +1,24 @@
 {
   "clause": "C-010",
-  "command": "cargo test -p veredas-core --test telegram_codec",
+  "command": "cargo test -p veredas-core --test telegram_framing",
   "commandArgv": [
     "cargo",
     "test",
     "-p",
     "veredas-core",
     "--test",
-    "telegram_codec"
+    "telegram_framing"
   ],
   "exitCode": 0,
-  "outputSha": "423e37beab5b598970bae4bd0324cf0be85bf847f12d4d4da2db2feeba24fe9f",
-  "outputTail": "test lengths_that_disagree_are_refused_as_soon_as_the_disagreement_is_visible ... ok\ntest inconsistent_frames_are_refused_not_partially_believed ... ok\ntest hex_bodies_parse_and_previews_render_both_ways ... ok\ntest oversize_bodies_are_refused_rather_than_clamped_into_lies ... ok\ntest previews_and_dumps_render_exactly ... ok\ntest the_frame_is_the_spec_layout_byte_for_byte ... ok\ntest a_wrong_endian_setting_reads_as_bad_frames_not_phantom_data ... ok\ntest the_declared_lengths_describe_the_real_frame ... ok\ntest the_size_limits_sit_exactly_at_the_wire_fields ... ok\n\ntest result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.44s\n     Running tests\\telegram_codec.rs (target\\debug\\deps\\telegram_codec-9f19cddba39e450b.exe)",
-  "ranAt": "2026-11-05T21:19:14.280Z",
-  "headCommit": "1ce4826a3a6c67ecaa2322a4cbe41c2c6d3199f1",
+  "outputSha": "5d0d8bd666080593c98437a4c0a5a4b9c3a315168394fee9d5b2af4da6f89752",
+  "outputTail": "test a_frame_survives_a_round_trip_in_both_byte_orders ... ok\ntest a_bad_frame_says_exactly_how_far_to_skip ... ok\ntest opaque_fields_take_the_frame_value_or_their_default_and_the_sequence_is_stamped ... ok\ntest a_value_that_does_not_fit_its_field_is_refused_never_clamped ... ok\ntest the_remaining_headers_check_holds_on_both_sides_of_its_boundary ... ok\ntest lengths_that_disagree_are_refused_once_the_header_that_shows_it_is_whole ... ok\ntest the_frame_limit_sits_at_its_exact_edge_both_ways ... ok\ntest the_frame_is_the_configured_layout_byte_for_byte ... ok\ntest every_prefix_of_a_valid_frame_waits ... ok\n\ntest result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.84s\n     Running tests\\telegram_framing.rs (target\\debug\\deps\\telegram_framing-a47bace300c1e181.exe)",
+  "ranAt": "2026-11-05T22:36:54.212Z",
+  "headCommit": "ab5d52115af3aff0daaab4e147a5ce3a781b8c0f",
   "tests": [
     {
-      "name": "crates/veredas-core/tests/telegram_codec.rs",
-      "file": "crates/veredas-core/tests/telegram_codec.rs",
-      "fileSha": "c7f2dcb2f74eed4d88c088a0e5077572850fd9d98f8b6fbba51b029f2c3719a9"
+      "name": "crates/veredas-core/tests/telegram_framing.rs",
+      "file": "crates/veredas-core/tests/telegram_framing.rs",
+      "fileSha": "d1317773e27b10ecb3a5243b1dc98955dfb9da1d840ece5471420a98f6ebc321"
     }
   ]
 }
