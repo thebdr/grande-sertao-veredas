@@ -54,6 +54,11 @@ fn a_value_has_a_numeric_view_except_text() {
     assert_eq!(Value::Time(at("1970-01-01 00:00:01.250")).as_f64(), Some(1250.0));
     assert_eq!(Value::Time(at("1969-12-31 23:59:59")).as_f64(), Some(-1000.0));
     assert_eq!(Value::Time(at("2026-07-18 00:00:00")).as_f64(), Some(1_784_332_800_000.0));
+    // Below the millisecond the stamp rounds down, before the epoch too.
+    assert_eq!(Value::Time(at("1970-01-01 00:00:00.0009")).as_f64(), Some(0.0));
+    assert_eq!(Value::Time(at("1969-12-31 23:59:59.9995")).as_f64(), Some(-1.0));
+    // An int wider than 32 bits keeps its value.
+    assert_eq!(Value::Int(5_000_000_000).as_f64(), Some(5e9));
     // A NaN float stays NaN: no invented number.
     assert!(Value::Float(f64::NAN).as_f64().unwrap().is_nan());
 }
@@ -98,6 +103,17 @@ fn a_series_ref_is_a_tag_of_one_source() {
     refs.sort();
     let shown: Vec<String> = refs.iter().map(|r| r.to_string()).collect();
     assert_eq!(shown, ["a/b", "a/z", "b/a"]);
+    // Not by the shown text: "plc" sorts before "plc-2" as a source, though "plc-2/temp" sorts
+    // before "plc/temp" as a string ('-' is below '/').
+    let mut refs = [SeriesRef::new("plc-2", "temp"), SeriesRef::new("plc", "temp")];
+    refs.sort();
+    assert_eq!(refs.map(|r| r.to_string()), ["plc/temp", "plc-2/temp"]);
+    let mut as_text = ["plc-2/temp".to_string(), "plc/temp".to_string()];
+    as_text.sort();
+    assert_eq!(as_text, ["plc-2/temp", "plc/temp"], "the fixture tells the two orders apart");
+    let mut refs = [SeriesRef::new("a.b", "c"), SeriesRef::new("a", "z")];
+    refs.sort();
+    assert_eq!(refs.map(|r| r.to_string()), ["a/z", "a.b/c"]);
 }
 
 #[test]
@@ -111,6 +127,9 @@ fn a_sample_indexes_on_its_parsed_stamp_then_on_arrival() {
     assert_eq!(sample(Some(at("1969-12-31 23:59:59.999")), 5).index_ms(), -1);
     // A clock set before 1970 gives a negative arrival, which is the index when no stamp parsed.
     assert_eq!(sample(None, -250).index_ms(), -250);
+    // The index rounds a sub-millisecond stamp down, as the value's numeric view does.
+    assert_eq!(sample(Some(at("1969-12-31 23:59:59.9995")), 0).index_ms(), -1);
+    assert_eq!(sample(Some(at("2026-07-18 10:00:00.0009")), 0).index_ms(), 1_784_368_800_000);
 }
 
 #[test]

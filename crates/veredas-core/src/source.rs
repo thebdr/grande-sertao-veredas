@@ -93,7 +93,7 @@ impl SourceHandle {
         if self.outcome.is_none()
             && let Some(j) = self.join.take_if(|j| j.is_finished())
         {
-            self.outcome = Some(j.join().map_err(|_| SourceError::Panicked).and_then(|r| r));
+            self.outcome = Some(outcome_of(j.join()));
         }
         self.outcome.as_ref()
     }
@@ -107,7 +107,20 @@ impl SourceHandle {
         }
         match self.join.take() {
             None => Ok(()),
-            Some(join) => join.join().map_err(|_| SourceError::Panicked)?,
+            Some(join) => outcome_of(join.join()),
+        }
+    }
+}
+
+/// A joined worker's result. A panic is `Panicked` whatever its payload: the payload is
+/// dropped under `catch_unwind`, so one whose own drop panics cannot unwind into the caller
+/// after the join handle is spent and leave the panic reported as a clean end.
+fn outcome_of(joined: std::thread::Result<Result<(), SourceError>>) -> Result<(), SourceError> {
+    match joined {
+        Ok(result) => result,
+        Err(payload) => {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(payload)));
+            Err(SourceError::Panicked)
         }
     }
 }

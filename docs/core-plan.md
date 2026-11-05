@@ -36,7 +36,8 @@ exactly that reason.
   caller; its docs say what it means on the wire or in the plant, not who uses it.
 - **A library, never an executable.** No `[[bin]]`, no `src/main.rs`, no `src/bin/`, no
   examples: a standing demo plant to drive by hand is maquinar's (the plan, "veredas-maquinar":
-  a configurable OPC UA server). `tests/foundation.rs` checks the manifest.
+  a configurable OPC UA server). `tests/foundation.rs` asks cargo what it would build: one
+  library and tests, nothing else.
 - **Depends on no other member** (law L4). Its tests too: core cannot dev-depend on maquinar, so
   the fixtures its own tests run against (the OPC demo plant) live here, as fixture plumbing,
   and maquinar builds on them rather than the other way round.
@@ -91,7 +92,7 @@ veredas_core
 
 ## Phases of the port
 1. **Foundation and shared types.** The crate at `2.0.0-alpha.1`, `types` and `source` with
-   their tests, `tests/foundation.rs` on the manifest. Clauses: the foundation (P-001
+   their tests, `tests/foundation.rs` on what cargo builds. Clauses: the foundation (P-001
    promoted), shared types, worker plumbing.
 2. **The telegram layer.** Every module with its Veredas 1 tests moved to `tests/telegram_*.rs`,
    the channel and the decision client over loopback. One clause per module.
@@ -108,3 +109,11 @@ clauses recorded, refuted and verified. Push at the end of phase 2 and of phase 
 
 ## Traps
 Recorded as the port meets them.
+
+- **A full disk corrupts the incremental cache.** On 2026-11-05 the C: drive filled mid-build
+  ("no space on device"); the next build failed with "cached cgu ... should have an object file".
+  `cargo clean -p veredas-core` and removing its `target/debug/incremental/` entries fixed it. The
+  OPC layer's dependencies are large: check free space before phase 3.
+- **A rule about what cargo builds is checked by asking cargo.** Re-implementing its target rules
+  missed edition 2021's `crate_type` and `autolib = false` (C-007's first refute round);
+  `cargo metadata --no-deps` sees them all and builds nothing.

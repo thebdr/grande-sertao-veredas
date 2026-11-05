@@ -1,70 +1,140 @@
-//! The foundation's own rules that no suite law checks (contract: the foundation clause; the
+//! The foundation's own rule that no suite law checks (contract: the foundation clause; the
 //! laws in `tools/leis` judge its name, version, dependencies and plan).
 //!
-//! A library container, never an executable (`docs/core-plan.md`, "Rules"): cargo makes a
-//! binary of `[[bin]]`, `src/main.rs`, `src/bin/` and of every example, so none may exist.
+//! A library container, never an executable (`docs/core-plan.md`, "Rules"). Cargo is asked
+//! what it would build (`cargo metadata --no-deps`, which parses and builds nothing) rather than
+//! having its target rules re-implemented here: the targets of `veredas-core` must be exactly
+//! one library, whose crate types are `lib`/`rlib`, and tests. A `[[bin]]`, an `[[example]]`,
+//! `src/main.rs`, `src/bin/`, `examples/`, a `crate-type`/`crate_type` naming `bin`, a bench,
+//! a build script, or a missing library (`autolib = false`) each show as a target that breaks
+//! the rule.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
-fn manifest() -> toml::Table {
-    let text = std::fs::read_to_string(root().join("Cargo.toml")).unwrap();
-    text.parse::<toml::Table>().unwrap()
-}
-
-/// What in the manifest would make cargo build an executable.
-fn executables_declared(m: &toml::Table) -> Vec<String> {
-    let mut found = Vec::new();
-    for key in ["bin", "example"] {
-        if m.contains_key(key) {
-            found.push(format!("[[{key}]]"));
-        }
-    }
-    found
-}
-
-/// What on disk cargo would discover as an executable target.
-fn executables_on_disk(dir: &Path) -> Vec<String> {
-    ["src/main.rs", "src/bin", "examples"]
-        .into_iter()
-        .filter(|p| dir.join(p).exists())
-        .map(String::from)
+/// What cargo would build for the package at `dir`: `(name, kinds, crate types)` per target.
+fn targets(dir: &Path) -> Vec<(String, Vec<String>, Vec<String>)> {
+    let out = Command::new(env!("CARGO"))
+        .args(["metadata", "--no-deps", "--format-version", "1", "--offline", "--manifest-path"])
+        .arg(dir.join("Cargo.toml"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let meta: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let manifest = dir.join("Cargo.toml").canonicalize().unwrap();
+    let package = meta["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| Path::new(p["manifest_path"].as_str().unwrap()).canonicalize().unwrap() == manifest)
+        .unwrap();
+    let strings = |v: &serde_json::Value| -> Vec<String> {
+        v.as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect()
+    };
+    package["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| (t["name"].as_str().unwrap().to_string(), strings(&t["kind"]), strings(&t["crate_types"])))
         .collect()
 }
 
-#[test]
-fn core_is_a_library_and_builds_no_executable() {
-    let m = manifest();
-    assert_eq!(executables_declared(&m), Vec::<String>::new());
-    assert_eq!(executables_on_disk(&root()), Vec::<String>::new());
-    assert!(root().join("src/lib.rs").is_file(), "the library root");
-    let package = m["package"].as_table().unwrap();
-    assert_eq!(package["name"].as_str(), Some("veredas-core"));
-    // A `[lib]` table may tune the library, never turn it into something else.
-    if let Some(lib) = m.get("lib").and_then(|l| l.as_table()) {
-        assert!(lib.get("crate-type").is_none_or(|t| t
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|k| k.as_str() == Some("lib") || k.as_str() == Some("rlib"))));
+/// The rule: exactly one library target of `lib`/`rlib` crate types, everything else a test.
+/// Returns what breaks it, empty when it holds.
+fn breaches(targets: &[(String, Vec<String>, Vec<String>)]) -> Vec<String> {
+    let library = |kinds: &[String]| kinds.iter().all(|k| k == "lib" || k == "rlib");
+    let mut out = Vec::new();
+    let mut libs = 0;
+    for (name, kinds, crate_types) in targets {
+        if kinds == &["test"] {
+            continue;
+        }
+        if library(kinds) && library(crate_types) {
+            libs += 1;
+            continue;
+        }
+        out.push(format!("{name}: {kinds:?} {crate_types:?}"));
     }
+    if libs != 1 {
+        out.push(format!("{libs} library targets"));
+    }
+    out
 }
 
 #[test]
-fn the_check_sees_every_way_to_an_executable() {
-    let m: toml::Table = "[package]\nname = \"x\"\n[[bin]]\nname = \"a\"\n[[example]]\nname = \"b\"\n"
-        .parse()
-        .unwrap();
-    assert_eq!(executables_declared(&m), ["[[bin]]", "[[example]]"]);
+fn core_is_one_library_and_builds_no_executable() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let t = targets(&dir);
+    assert_eq!(breaches(&t), Vec::<String>::new(), "{t:?}");
+    let lib: Vec<_> = t.iter().filter(|(_, k, _)| k != &["test"]).collect();
+    assert_eq!(lib.len(), 1);
+    assert_eq!(lib[0].0, "veredas_core");
+}
 
-    let dir = std::env::temp_dir().join(format!("veredas-core-foundation-{}", std::process::id()));
+/// A throwaway package outside the workspace, with the files given.
+fn planted(case: &str, files: &[(&str, &str)]) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("veredas-core-foundation-{}-{case}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join("src/bin")).unwrap();
-    std::fs::create_dir_all(dir.join("examples")).unwrap();
-    std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
-    assert_eq!(executables_on_disk(&dir), ["src/main.rs", "src/bin", "examples"]);
-    std::fs::remove_dir_all(&dir).unwrap();
+    for (path, text) in files {
+        let p = dir.join(path);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+    dir
+}
+
+const LIB: (&str, &str) = ("src/lib.rs", "pub fn f() {}\n");
+
+fn manifest(edition: &str, extra: &str) -> String {
+    format!("[workspace]\n\n[package]\nname = \"x\"\nversion = \"2.0.0\"\nedition = \"{edition}\"\n{extra}")
+}
+
+#[test]
+fn the_check_refuses_every_way_cargo_makes_an_executable() {
+    let cases: Vec<(&str, Vec<(&str, String)>)> = vec![
+        ("plain", vec![("Cargo.toml", manifest("2024", ""))]),
+        ("bin", vec![("Cargo.toml", manifest("2024", "[[bin]]\nname = \"b\"\npath = \"src/lib.rs\"\n"))]),
+        ("example", vec![("Cargo.toml", manifest("2024", "[[example]]\nname = \"e\"\npath = \"src/lib.rs\"\n"))]),
+        ("main", vec![("Cargo.toml", manifest("2024", "")), ("src/main.rs", "fn main() {}\n".into())]),
+        ("srcbin", vec![("Cargo.toml", manifest("2024", "")), ("src/bin/b.rs", "fn main() {}\n".into())]),
+        ("examples", vec![("Cargo.toml", manifest("2024", "")), ("examples/e.rs", "fn main() {}\n".into())]),
+        ("cratetype", vec![("Cargo.toml", manifest("2024", "[lib]\ncrate-type = [\"rlib\", \"bin\"]\n"))]),
+        ("underscore", vec![("Cargo.toml", manifest("2021", "[lib]\ncrate_type = [\"rlib\", \"bin\"]\n"))]),
+        ("cdylib", vec![("Cargo.toml", manifest("2024", "[lib]\ncrate-type = [\"cdylib\"]\n"))]),
+        ("bench", vec![("Cargo.toml", manifest("2024", "")), ("benches/b.rs", "fn main() {}\n".into())]),
+        ("build", vec![("Cargo.toml", manifest("2024", "")), ("build.rs", "fn main() {}\n".into())]),
+        // Only tests left, no library (with no target at all cargo refuses the package).
+        (
+            "nolib",
+            vec![
+                ("Cargo.toml", manifest("2024", "autolib = false\n")),
+                ("tests/t.rs", "#[test]\nfn t() {}\n".into()),
+            ],
+        ),
+    ];
+    let mut verdicts = Vec::new();
+    for (case, files) in &cases {
+        let mut all: Vec<(&str, &str)> = files.iter().map(|(p, t)| (*p, t.as_str())).collect();
+        all.push(LIB);
+        let dir = planted(case, &all);
+        verdicts.push((*case, breaches(&targets(&dir)).is_empty()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+    assert_eq!(
+        verdicts,
+        [
+            ("plain", true),
+            ("bin", false),
+            ("example", false),
+            ("main", false),
+            ("srcbin", false),
+            ("examples", false),
+            ("cratetype", false),
+            ("underscore", false),
+            ("cdylib", false),
+            ("bench", false),
+            ("build", false),
+            ("nolib", false),
+        ]
+    );
 }

@@ -67,23 +67,25 @@ refute round found and what it changed is in the clause's evidence note.
 ## C-007: veredas-core — the foundation
 - **Date:** 2026-11-05
 - **Source:** user (docs/veredas-plan.md "veredas-core: the foundation"; promoted from P-001)
-- **Description:** `crates/veredas-core` holds what more than one component needs (the plan's scope; `docs/core-plan.md` maps what it absorbed from Veredas 1's `veredas-telegram`, `veredas-opc` and core, and the phases still ahead: file schemas, logging), as a library that builds no executable (no `[[bin]]`, `[[example]]`, `src/main.rs`, `src/bin/` or `examples/`) and depends on no other member, its plan before its code, at 2.0.0-alpha.1. Each capability is a clause of its own below.
-- **Verification:** automated → crates/veredas-core/tests/foundation.rs, tools/leis/tests/real_tree.rs | the manifest and the disk carry no executable target, the check sees each way cargo makes one; the laws on the real tree with core in it (name, version, no member dependency, plan in its history)
+- **Description:** `crates/veredas-core` holds what more than one component needs (the plan's scope; `docs/core-plan.md` maps what it absorbed from Veredas 1's `veredas-telegram`, `veredas-opc` and core, and the phases still ahead: file schemas, logging), as a library that builds no executable: cargo, asked what it would build, names exactly one library target (crate types `lib`/`rlib`) and tests, nothing else. It depends on no other member, its plan came before its code, and it versions on its own from 2.0.0 (L3; it started at 2.0.0-alpha.1). Each capability is a clause of its own below.
+- **Verification:** automated → crates/veredas-core/tests/foundation.rs, tools/leis/tests/real_tree.rs | `cargo metadata --no-deps` on core, and on planted packages that each make an executable another way (`[[bin]]`, `[[example]]`, `src/main.rs`, `src/bin/`, `examples/`, `crate-type` and edition 2021's `crate_type` naming `bin`, a `cdylib`, a bench, a build script, `autolib = false`), all refused; the laws on the real tree with core in it (name, version, no member dependency, plan in its history)
 - **Evidence:** .zen/evidence/C-007.md
 - **Status:** pending
 
 ## C-008: The shared types: one value model, a tag, a sample on two clocks, quality
 - **Date:** 2026-11-05
 - **Source:** user (docs/veredas-plan.md "veredas-core: the foundation", scope; docs/core-plan.md "Scope")
-- **Description:** A `Value` is an int, float, text or naive time, with a numeric view for all but text (a time as the epoch milliseconds of its stamp read as UTC), and displays as the operator reads it; `SeriesType` names the four; a tag is a `SeriesRef`, a series of one source, shown `source/series`, ordered by source then series; a `Sample` indexes on its parsed stamp, else on arrival; `Quality` is good, uncertain or bad, and only good is good; `now_unix_ms` is the unix clock in milliseconds.
-- **Verification:** automated → crates/veredas-core/tests/types.rs | Veredas 1's tests plus the edges: case and ordering of ids, negative ints, text never parsed, times before the epoch, NaN, display of each variant and of fractional seconds, int vs float equality, both index paths with negative clocks, the quality labels, arrival bracketed by the system clock
+- **Description:** A `Value` is an int, float, text or naive time, with a numeric view for all but text (a time as the epoch milliseconds of its stamp read as UTC, rounded down), and displays as the operator reads it; `SeriesType` names the four; a tag is a `SeriesRef`, a series of one source, shown `source/series`, ordered by source then series (not by the shown text); a `Sample` indexes on its parsed stamp, else on arrival, on the same millisecond axis; `Quality` is good, uncertain or bad, and only good is good; `now_unix_ms` is the unix clock in milliseconds.
+- **Verification:** automated → crates/veredas-core/tests/types.rs | Veredas 1's tests plus the edges: case and ordering of ids, tags ordered apart from their shown text (`plc` before `plc-2`), negative and wide ints, text never parsed, times before the epoch and below the millisecond, NaN, display of each variant and of fractional seconds, int vs float equality, both index paths with negative clocks, the quality labels, arrival bracketed by the system clock
+- **Evidence:** .zen/evidence/C-008.md
 - **Status:** pending
 
 ## C-009: One stop/join handle for every source worker
 - **Date:** 2026-11-05
 - **Source:** user (docs/core-plan.md "Scope", worker plumbing)
-- **Description:** A source worker is a thread ending in `Result<(), SourceError>`, held by a `SourceHandle`: polling it never blocks a live worker, keeps the outcome once the worker has ended (its error, or `Panicked` for a panic) and gives `join` that same outcome without joining twice; stopping raises the worker's own flag, and dropping the handle raises it without waiting. A `SourceError` names an I/O failure with its path.
-- **Verification:** automated → crates/veredas-core/tests/source_handle.rs | real threads: a live worker polled without blocking, stop reaching a worker, an error kept across polls and join, join alone, a panic as `Panicked`, a drop that does not wait, every error's text and its source chain
+- **Description:** A source worker is a thread ending in `Result<(), SourceError>`, held by a `SourceHandle`: polling it never blocks a live worker, reads finished once the worker has ended, keeps the outcome (its error, or `Panicked` for a panic, whatever the panic's payload) and gives `join` that same outcome without joining twice; stopping raises the worker's own flag, and dropping the handle raises it without waiting. A `SourceError` names an I/O failure with its path.
+- **Verification:** automated → crates/veredas-core/tests/source_handle.rs | real threads: a live worker polled without blocking, stop reaching a worker, an error kept across polls and join, join alone, an ended worker finished before any poll, a panic as `Panicked` (a payload whose drop panics too included), a drop that does not wait, every error's text and its source chain
+- **Evidence:** .zen/evidence/C-009.md
 - **Status:** pending
 
 

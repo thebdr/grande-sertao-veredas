@@ -127,6 +127,42 @@ fn a_panicking_worker_is_reported_as_panicked_not_as_a_crash() {
     assert!(matches!(h.join(), Err(SourceError::Panicked)));
 }
 
+/// A panic payload whose own drop panics too.
+struct Bomb;
+
+impl Drop for Bomb {
+    fn drop(&mut self) {
+        panic!("the payload's drop panics too");
+    }
+}
+
+#[test]
+fn a_panic_is_panicked_even_when_its_payload_panics_on_drop() {
+    let bomb = || -> Result<(), SourceError> { std::panic::panic_any(Bomb) };
+    let mut h = SourceHandle::new(SourceId::new("b"), stop_flag(), thread::spawn(bomb));
+    wait_finished(&mut h);
+    assert!(matches!(h.poll_outcome(), Some(Err(SourceError::Panicked))));
+    assert!(matches!(h.join(), Err(SourceError::Panicked)), "the kept outcome, not a clean end");
+
+    let h = SourceHandle::new(SourceId::new("b"), stop_flag(), thread::spawn(bomb));
+    assert!(matches!(h.join(), Err(SourceError::Panicked)));
+}
+
+#[test]
+fn a_worker_that_ended_reads_finished_before_any_poll() {
+    let h = ending_with(Ok(()));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !h.is_finished() {
+        assert!(Instant::now() < deadline, "an ended, unpolled worker never read finished");
+        thread::sleep(Duration::from_millis(2));
+    }
+    // A live worker does not.
+    let live = until_stopped("live");
+    assert!(!live.is_finished());
+    assert!(live.join().is_ok());
+    assert!(h.join().is_ok());
+}
+
 #[test]
 fn dropping_the_handle_raises_the_flag_without_waiting() {
     let stop = stop_flag();
