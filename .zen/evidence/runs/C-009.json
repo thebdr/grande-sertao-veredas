@@ -1,0 +1,24 @@
+{
+  "clause": "C-009",
+  "command": "cargo test -p veredas-core --test source_handle",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-core",
+    "--test",
+    "source_handle"
+  ],
+  "exitCode": 0,
+  "outputSha": "ae67059b87d5cd92e8758d63bee76b843319a841f99baf1327e14d2200481816",
+  "outputTail": "test polling_a_live_worker_never_blocks_and_reports_nothing ... ok\ntest a_failed_worker_keeps_its_error_for_every_poll_and_for_join ... ok\ntest join_without_a_poll_surfaces_the_worker_result ... ok\ntest a_worker_that_ended_reads_finished_before_any_poll ... ok\ntest a_panicking_worker_is_reported_as_panicked_not_as_a_crash ... ok\ntest a_panic_is_panicked_even_when_its_payload_panics_on_drop ... ok\ntest request_stop_reaches_the_worker_and_its_end_is_seen ... ok\ntest a_panic_is_panicked_whatever_its_payload_does_on_drop ... ok\ntest dropping_the_handle_raises_the_flag_without_waiting ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.91s\n     Running tests\\source_handle.rs (target\\debug\\deps\\source_handle-e3f9da2e67323f63.exe)",
+  "ranAt": "2026-11-05T20:49:07.530Z",
+  "headCommit": "dc10c13f25ea8fc22226c487d1d719438a506850",
+  "tests": [
+    {
+      "name": "crates/veredas-core/tests/source_handle.rs",
+      "file": "crates/veredas-core/tests/source_handle.rs",
+      "fileSha": "f18c1efd68c1bb75f54393d2771934db6f0d08198eaa8cd21437c98bb787c44e"
+    }
+  ]
+}
