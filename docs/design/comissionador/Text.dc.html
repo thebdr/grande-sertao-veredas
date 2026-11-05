@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Comissionador · text designer</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#1B1B1E}
+a{color:#30D158}a:hover{color:#5FE07F}
+button{font-family:inherit}
+pre{margin:0}
+</style>
+</helmet>
+<div style="min-height: 900px; display: flex; flex-direction: column; background: #1B1B1E; color: #E8E8EC; font-family: 'Geist', system-ui, sans-serif; font-size: 13px">
+
+<div style="height: 34px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; background: #111113; border-bottom: 1px solid #222226">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #9A9AA3">veredas-comissionador v2.0.0 : Sorter A commissioning</span>
+<span aria-hidden="true" style="display: flex; gap: 18px; color: #6F6F77; font-size: 12px"><span>—</span><span>□</span><span>✕</span></span>
+</div>
+
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
+
+<nav aria-label="Sections" style="width: 56px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 0; background: #0F0F11; border-right: 1px solid #222226">
+<div aria-hidden="true" style="width: 15px; height: 15px; background: #30D158; transform: rotate(45deg); margin: 4px 0 16px"></div>
+<a href="Main.dc.html" aria-label="Tests" style="width: 36px; height: 36px; border-radius: 9px; background: #1C3A27; color: #30D158; display: flex; align-items: center; justify-content: center">
+<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6h10M10 12h10M10 18h10M4 6l1.5 1.5L8 5M4 12l1.5 1.5L8 11M4 18l1.5 1.5L8 17"></path></svg>
+</a>
+<a href="Run.dc.html" aria-label="Runs" style="width: 36px; height: 36px; border-radius: 9px; color: #6F6F77; display: flex; align-items: center; justify-content: center">
+<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M10 8.5l5 3.5-5 3.5z"></path></svg>
+</a>
+<button aria-label="Reports" style="width: 36px; height: 36px; border: 0; border-radius: 9px; background: transparent; color: #6F6F77; display: flex; align-items: center; justify-content: center; cursor: pointer">
+<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l5 5v13H7z"></path><path d="M14 3v5h5M10 13h6M10 17h6"></path></svg>
+</button>
+<button aria-label="Functions" style="width: 36px; height: 36px; border: 0; border-radius: 9px; background: transparent; color: #6F6F77; display: flex; align-items: center; justify-content: center; cursor: pointer">
+<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="5" width="10" height="14" rx="2"></rect><path d="M3 9h4M3 15h4M17 12h4"></path></svg>
+</button>
+</nav>
+
+<main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="padding: 16px 20px 14px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #26262A">
+<div style="display: flex; flex-direction: column; gap: 4px; min-width: 0">
+<span style="font-family: 'Geist Mono', monospace; font-size: 11px; color: #7A7A82">sorter-a / outfeed / tests/chk-012.test</span>
+<div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 18px; font-weight: 600">Chute 12 full, parcels reroute</h1>
+<span style="font-family: 'Geist Mono', monospace; font-size: 11px; padding: 3px 8px; border-radius: 6px; background: rgba(255,200,100,.15); color: #FFC864">modified · not saved</span>
+</div>
+</div>
+<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+<div role="group" aria-label="View" style="display: flex; padding: 3px; background: #0F0F11; border: 1px solid #2C2C33; border-radius: 8px">
+<a href="Main.dc.html" style="padding: 6px 12px; border-radius: 6px; color: #9A9AA3; font-size: 12.5px; text-decoration: none">Flow chart</a>
+<span aria-current="true" style="padding: 6px 12px; border-radius: 6px; background: #26262A; color: #FFFFFF; font-size: 12.5px">Text</span>
+</div>
+<div role="group" aria-label="Run mode" style="display: flex; padding: 3px; background: #0F0F11; border: 1px solid #2C2C33; border-radius: 8px">
+<button aria-pressed="true" style="padding: 6px 12px; border: 0; border-radius: 6px; background: #1C3A27; color: #30D158; font-size: 12.5px; cursor: pointer">Live</button>
+<button aria-pressed="false" style="padding: 6px 12px; border: 0; border-radius: 6px; background: transparent; color: #9A9AA3; font-size: 12.5px; cursor: pointer">Replay history</button>
+</div>
+<button style="height: 34px; padding: 0 14px; border: 1px solid #333339; border-radius: 6px; background: #26262A; color: #E8E8EC; font-size: 12.5px; cursor: pointer">Validate</button>
+<a href="Run.dc.html" style="height: 34px; padding: 0 16px; border-radius: 6px; background: #30D158; color: #08130B; font-size: 12.5px; font-weight: 600; text-decoration: none; display: flex; align-items: center; gap: 6px">▶ Run live</a>
+</div>
+</header>
+
+<div style="flex: 1; display: flex; flex-wrap: wrap; gap: 1px; background: #222226; min-height: 0">
+
+<section aria-label="Test file" style="flex: 1 1 560px; min-width: 0; display: flex; flex-direction: column; background: #0F0F11">
+<div style="display: flex; align-items: center; gap: 2px; height: 36px; padding: 0 8px; background: #161618; border-bottom: 1px solid #222226; font-family: 'Geist Mono', monospace; font-size: 12px">
+<span style="padding: 7px 12px; border-radius: 6px 6px 0 0; background: #0F0F11; color: #FFFFFF">chk-012.test ●</span>
+<span style="padding: 7px 12px; color: #8A8A92">induction.test</span>
+</div>
+<div style="flex: 1; overflow: auto; display: flex; gap: 16px; padding: 16px 16px 24px 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; line-height: 21px">
+<pre aria-hidden="true" style="text-align: right; width: 40px; flex: none; color: #5E8A6C; font: inherit">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31</pre>
+<pre style="flex: 1; min-width: 0; color: #D4D4DA; font: inherit"><span style="color: #8A8A92"># CHK-012 · Chute 12 full, parcels reroute</span>
+<span style="color: #6FB1FF">test</span> <span style="color: #7EE787">"Chute 12 full, parcels reroute"</span> {
+  <span style="color: #FFD780">id</span>      CHK-012
+  <span style="color: #FFD780">area</span>    <span style="color: #7EE787">"outfeed"</span>
+  <span style="color: #FFD780">portal</span>  sorter-a
+  <span style="color: #FFD780">modes</span>   live, replay
+  <span style="color: #6FB1FF">use</span>     functions/routing.fn
+  <span style="color: #6FB1FF">let</span>     parcels = <span style="color: #D2A8FF">20</span>
+
+  <span style="color: #6FB1FF">step</span> force_full  <span style="color: #FFC864">write</span> Chute[<span style="color: #D2A8FF">12</span>].ForceFull := <span style="color: #D2A8FF">true</span>
+  <span style="color: #6FB1FF">step</span> wait_pe     <span style="color: #66B2FF">wait</span>  Chute[<span style="color: #D2A8FF">12</span>].FullPE == <span style="color: #D2A8FF">true</span>  <span style="color: #6FB1FF">timeout</span> <span style="color: #D2A8FF">5s</span>
+<span style="background: #1C3A27; display: inline-block; width: 100%">  <span style="color: #6FB1FF">step</span> route       <span style="color: #CC99FF">call</span>  ParcelRoute(chute: <span style="color: #D2A8FF">12</span>, parcels: parcels)</span>
+                     -&gt; diverted, rerouted
+  <span style="color: #6FB1FF">step</span> ratio       <span style="color: #80DEDE">script</span> {
+                       ratio  = rerouted / parcels
+                       margin = ratio - <span style="color: #D2A8FF">0.95</span>
+                     }
+  <span style="color: #6FB1FF">step</span> verdict     <span style="color: #FFB266">branch</span> ratio
+                       &gt;= <span style="color: #D2A8FF">0.95</span>         -&gt; release
+                       <span style="color: #D2A8FF">0.85</span> .. <span style="color: #D2A8FF">0.95</span>    -&gt; <span style="color: #6FB1FF">retry</span> route <span style="color: #6FB1FF">max</span> <span style="color: #D2A8FF">1</span>
+                       <span style="color: #6FB1FF">else</span>            -&gt; fail_log
+  <span style="color: #6FB1FF">step</span> release     <span style="color: #FFC864">write</span> Chute[<span style="color: #D2A8FF">12</span>].ForceFull := <span style="color: #D2A8FF">false</span>
+  <span style="color: #6FB1FF">step</span> report      <span style="color: #9A9AA3">report</span> ratio, margin, rerouted
+  <span style="color: #6FB1FF">step</span> fail_log    <span style="color: #FFC864">write</span> Chute[<span style="color: #D2A8FF">12</span>].ForceFull := <span style="color: #D2A8FF">false</span>
+                     <span style="color: #9A9AA3">report</span> <span style="color: #7EE787">"rerouted {rerouted}/{parcels}"</span>
+                     <span style="color: #6FB1FF">stop</span> fail
+}
+
+<span style="color: #8A8A92"># Flow-chart positions, written by the flow view.</span>
+<span style="color: #6FB1FF">layout</span> { force_full 0,1  wait_pe 0,2  route 0,3  ratio 0,4
+         verdict 0,5  fail_log 1,5  release 0,6  report 0,7 }</pre>
+</div>
+</section>
+
+<section aria-label="Function definition" style="flex: 1 1 440px; min-width: 0; display: flex; flex-direction: column; background: #0F0F11">
+<div style="display: flex; align-items: center; justify-content: space-between; height: 36px; padding: 0 8px 0 8px; background: #161618; border-bottom: 1px solid #222226; font-family: 'Geist Mono', monospace; font-size: 12px">
+<span style="padding: 7px 12px; border-radius: 6px 6px 0 0; background: #0F0F11; color: #CC99FF">functions/routing.fn</span>
+<span style="padding-right: 8px; color: #8A8A92">used by 3 tests</span>
+</div>
+<div style="flex: 1; overflow: auto; display: flex; gap: 16px; padding: 16px 16px 24px 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; line-height: 21px">
+<pre aria-hidden="true" style="text-align: right; width: 40px; flex: none; color: #5E8A6C; font: inherit">10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27</pre>
+<pre style="flex: 1; min-width: 0; color: #D4D4DA; font: inherit"><span style="color: #8A8A92"># Sends parcels to a chute and counts where</span>
+<span style="color: #8A8A92"># they actually end up. Shows as a block.</span>
+<span style="color: #6FB1FF">function</span> <span style="color: #CC99FF">ParcelRoute</span>(chute: <span style="color: #FFD780">int</span>, parcels: <span style="color: #FFD780">int</span>)
+    -&gt; (diverted: <span style="color: #FFD780">int</span>, rerouted: <span style="color: #FFD780">int</span>) {
+  <span style="color: #6FB1FF">reads</span>   Parcel.Announced, Parcel.Outcome
+  <span style="color: #6FB1FF">timeout</span> <span style="color: #D2A8FF">60s</span>
+
+  diverted = <span style="color: #D2A8FF">0</span>
+  rerouted = <span style="color: #D2A8FF">0</span>
+  <span style="color: #6FB1FF">for</span> n <span style="color: #6FB1FF">in</span> <span style="color: #D2A8FF">1</span>..parcels {
+    p = <span style="color: #6FB1FF">await</span> Parcel.Announced <span style="color: #6FB1FF">where</span> p.dest == chute
+    o = <span style="color: #6FB1FF">await</span> Parcel.Outcome <span style="color: #6FB1FF">where</span> o.id == p.id
+    <span style="color: #6FB1FF">if</span> o.chute == chute { diverted += <span style="color: #D2A8FF">1</span> }
+    <span style="color: #6FB1FF">else if</span> o.reason == <span style="color: #7EE787">"dest_full"</span> {
+      rerouted += <span style="color: #D2A8FF">1</span>
+    }
+  }
+}</pre>
+</div>
+<div style="margin: 0 16px 16px; padding: 12px 14px; border: 1px solid #2A2A30; border-radius: 10px; background: #191A1D; display: flex; flex-direction: column; gap: 6px; font-family: 'Geist', sans-serif">
+<span style="font-size: 12px; font-weight: 600">As a block</span>
+<span style="font-size: 12px; color: #8A8A92">Inputs become left ports, outputs right ports. A <span style="font-family: 'Geist Mono', monospace; color: #D4D4DA">reads</span> line declares which portal data it may touch; no writes allowed in a function.</span>
+</div>
+</section>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 8px 20px; background: #161618; border-top: 1px solid #222226; font-family: 'Geist Mono', monospace; font-size: 11.5px; color: #9A9AA3">
+<span><span style="color: #30D158">✓</span> parses</span>
+<span>8 steps · 1 branch · 1 function · 2 gated writes</span>
+<span>layout matches flow view</span>
+<span style="flex: 1"></span>
+<span>Ln 12, Col 27</span>
+</div>
+</main>
+</div>
+
+<footer style="height: 28px; flex: none; display: flex; align-items: center; gap: 18px; padding: 0 14px; background: #161618; border-top: 1px solid #222226; font-family: 'Geist Mono', monospace; font-size: 11px; color: #8A8A92; overflow: hidden; white-space: nowrap">
+<span><span style="color: #30D158">●</span> portal sorter-a · 412 tags</span>
+<span>write switch: off</span>
+<span>last run 14:02 · <span style="color: #FF8F8F">failed at verdict</span></span>
+<span style="flex: 1"></span>
+<span>chk-012.test · git: modified</span>
+</footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>
