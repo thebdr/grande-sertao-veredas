@@ -1,17 +1,11 @@
-//! Turning a frame into the fields a decision is made from.
+//! Turning a message body into named fields, by rules rather than code.
 //!
-//! Two paths, because two kinds of traffic exist:
-//!
-//! - **GENIBELT** ([`scanner_parcel`]): the typed path. A scanner
-//!   request already carries the ids, the infeed and the physicals in
-//!   known places — no operator regex needed. Only the **barcodes** are
-//!   scanner-device-dependent (the spec calls `szMSCData` "Message
-//!   received by the Scanner Device" and stops there), so how they are
-//!   split out is configurable, with the common shape as the default.
-//! - **Generic** ([`CaptureSpec`]): for other vendors' framings — an
-//!   ASCII regex with named groups, binary fields at byte offsets, and
-//!   `repeat` patterns that capture every occurrence as `name1`,
-//!   `name2`, … (sixteen barcodes without a sixteen-group regex).
+//! A channel speaking some device's telegrams is configured, not programmed: a
+//! [`CaptureSpec`] says how to read a body as an ASCII regex with named groups,
+//! binary fields at byte offsets, and `repeat` patterns that capture every
+//! occurrence as `name1`, `name2`, … (sixteen barcodes without a
+//! sixteen-group regex). What the fields mean is the configuration's
+//! business; this module knows no device.
 //!
 //! Every extraction is bounds-checked. These bytes arrive from a LAN: a
 //! short field is a capture that does not match, never a slice panic.
@@ -21,141 +15,15 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::telegram::Endian;
-use crate::telegram::genibelt::{self, ScannerRequest};
-use crate::telegram::sortplan::{Parcel, Physical};
 
-/// How to pull barcodes out of a scanner device's `szMSCData`.
-///
-/// The first byte is the read status (`T`/`A`/SOH/`!` — §4.2.2.1) and is
-/// skipped; the rest is device-specific text. Defaults match the usual
-/// shape: printable ASCII, one barcode per separator run.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BarcodeFormat {
-    /// Characters that separate barcodes.
-    #[serde(default = "default_separators")]
-    pub separators: String,
-    /// Ignore anything shorter than this (stray control bytes, a lone
-    /// status letter) — 0 keeps everything.
-    #[serde(default = "default_min_len")]
-    pub min_len: usize,
-    /// Cap on how many are captured; the spec's plants go to 16.
-    #[serde(default = "default_max_barcodes")]
-    pub max_barcodes: usize,
+/// Text up to the first NUL, without trailing whitespace: how a
+/// fixed-width, NUL-padded text field reads.
+fn asciiz(bytes: &[u8]) -> String {
+    let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).trim_end().to_string()
 }
 
-fn default_separators() -> String {
-    ";,|\t\r\n".to_string()
-}
-
-fn default_min_len() -> usize {
-    1
-}
-
-fn default_max_barcodes() -> usize {
-    16
-}
-
-impl Default for BarcodeFormat {
-    fn default() -> BarcodeFormat {
-        BarcodeFormat {
-            separators: default_separators(),
-            min_len: default_min_len(),
-            max_barcodes: default_max_barcodes(),
-        }
-    }
-}
-
-impl BarcodeFormat {
-    /// Split a `szMSCData` block into barcodes.
-    pub fn split(&self, msc_data: &[u8]) -> Vec<String> {
-        // Skip the status byte, stop at the block's NUL padding.
-        let body = msc_data.get(1..).unwrap_or(&[]);
-        let end = body.iter().position(|b| *b == 0).unwrap_or(body.len());
-        let text = String::from_utf8_lossy(&body[..end]);
-        text.split(|c| self.separators.contains(c))
-            .map(str::trim)
-            .filter(|s| s.len() >= self.min_len.max(1))
-            .take(self.max_barcodes)
-            .map(str::to_string)
-            .collect()
-    }
-}
-
-/// Build the [`Parcel`] a sort plan decides on from a scanner request.
-///
-/// The field names are the ones a plan's `routing.csv` matches on:
-///
-/// | field | source |
-/// |---|---|
-/// | `id` | `dwObjectID` — the MSC's identity for the item |
-/// | `id2` | the induction line's tracking id |
-/// | `id3` | the destination the induction line proposed |
-/// | `id4` | reserved; the induction load flags |
-/// | `infeed` | `byISPC_ID` — the induction point |
-/// | `operator`, `scanner`, `cell`, `zone` | the request's own fields |
-/// | `read_status` | `ok` / `timeout` / `virtual` / `no handshake` |
-/// | `barcode1`…`barcodeN` | split from `szMSCData` |
-pub fn scanner_parcel(req: &ScannerRequest, endian: Endian, barcodes: &BarcodeFormat) -> Parcel {
-    let ispc = req.ispc(endian);
-    let mut fields: HashMap<String, String> = HashMap::new();
-
-    let mut put = |k: &str, v: String| {
-        fields.insert(k.to_string(), v);
-    };
-    put("id", req.object_id.to_string());
-    put("id2", ispc.tracking_id.to_string());
-    put("id3", ispc.destination.to_string());
-    put("id4", ispc.load_flags.to_string());
-    // The induction point: from the ISPC struct when it is populated,
-    // else the request's operator id (which encodes the loading zone,
-    // §5).
-    let infeed = if ispc.ispc_id != 0 {
-        ispc.ispc_id
-    } else {
-        req.operator_id
-    };
-    put("infeed", infeed.to_string());
-    put("operator", req.operator_id.to_string());
-    put("scanner", req.scn_id.to_string());
-    put("cell", req.cell.to_string());
-    put("used_cells", req.used_cells.to_string());
-    put("request_type", req.request_type.to_string());
-    put("anomaly", req.request_anomaly.to_string());
-    put(
-        "read_status",
-        match req.read_status() {
-            genibelt::ReadStatus::Acknowledged => "ok".into(),
-            genibelt::ReadStatus::Timeout => "timeout".into(),
-            genibelt::ReadStatus::Virtual => "virtual".into(),
-            genibelt::ReadStatus::NoHandshake => "no handshake".into(),
-            genibelt::ReadStatus::Other(b) => format!("other({b})"),
-        },
-    );
-    for (i, code) in barcodes.split(&req.msc_data).into_iter().enumerate() {
-        fields.insert(format!("barcode{}", i + 1), code);
-    }
-
-    // Zero means "not measured" in these fields, and an unmeasured
-    // dimension must never exclude a destination.
-    let some_if_set = |v: u32| (v != 0).then_some(v);
-    Parcel {
-        object_id: req.object_id,
-        fields,
-        physical: Physical {
-            width_mm: some_if_set(ispc.width_mm as u32),
-            length_mm: some_if_set(ispc.length_mm as u32),
-            height_mm: some_if_set(ispc.height_mm as u32),
-            weight_g: some_if_set(ispc.weight_g as u32),
-            volume: some_if_set(ispc.volume),
-        },
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The generic path
-// ---------------------------------------------------------------------------
-
-/// How to capture fields from a non-GENIBELT message body.
+/// How to capture fields from a message body: the rules a channel is configured with.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CaptureSpec {
     /// A regex over the body as text; its named groups become fields.
@@ -217,7 +85,7 @@ pub struct Capture {
 
 impl Capture {
     /// Compile a spec. A bad regex is a warning that drops one pattern,
-    /// never a refusal — the same rule the sort plan follows.
+    /// never a refusal: a half-valid configuration still reads what it can.
     pub fn new(spec: &CaptureSpec) -> Capture {
         let mut warnings = Vec::new();
         let payload = spec
@@ -318,7 +186,7 @@ fn read_field(data: &[u8], field: &BinaryField, endian: Endian) -> Option<String
         FieldType::I16 => (u16v(bytes) as i16).to_string(),
         FieldType::U32 => u32v(bytes).to_string(),
         FieldType::I32 => (u32v(bytes) as i32).to_string(),
-        FieldType::Ascii => genibelt::asciiz(bytes),
+        FieldType::Ascii => asciiz(bytes),
         FieldType::Hex => bytes
             .iter()
             .map(|b| format!("{b:02X}"))

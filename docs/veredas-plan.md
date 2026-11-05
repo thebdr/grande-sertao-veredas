@@ -73,21 +73,28 @@ browsers) through **portal**. Two kinds of exception:
 
 ### veredas-core: the foundation
 Every class and library more than one component needs.
-- Scope: shared types (tags, values, timestamps, quality); shared protocol layers (TCP
-  telegrams, the OPC UA client); plain-text file schemas with their version stamps; errors,
-  logging and test-fixture plumbing.
+- Scope: shared types (tags, values, timestamps, quality); shared protocol layers (a
+  hardened TCP socket with its framing and a rules engine that reads message fields by
+  configuration; the OPC UA client); plain-text file schemas with their version stamps,
+  including a telegram channel's configuration; errors, logging and test-fixture plumbing.
 - Rules: new functionality is designed as if a second consumer already existed; component
   code moves here once a second component needs it; a library container, never an
-  executable, with no limit on what it holds; depends on no other component.
-- From Veredas 1: `veredas-telegram`, `veredas-opc`.
+  executable, with no limit on what it holds; depends on no other component;
+  content-agnostic: names no device, vendor or message catalog, because what a device's
+  telegrams mean is configuration (decisions, 2026-11-05).
+- From Veredas 1: `veredas-telegram` (its socket, framing and capture only), `veredas-opc`.
 
 ### veredas-portal: the gateway
 The single point of information exchange between Veredas and the outside world.
-- Scope: the data plane (tailing, log families, regex capture); the DuckDB session store;
-  SSE, windowed REST and the gated write surface; the desktop shell.
+- Scope: the data plane (tailing, log families, regex capture; telegram channels configured
+  by rules); the DuckDB session store; SSE, windowed REST and the gated write surface; the
+  desktop shell.
 - Rules: every component exchanges data through portal, except the test tools and
   controlador's real-time path; writes stay gated (whitelisted tags, master switch off by
-  default); ships a light, embeddable build for controlador.
+  default); a device spoken over TCP is a telegram channel configured by encoding and
+  decoding rules (plain text, versioned, in a project folder, as an OPC rule maps tags and a
+  log rule captures fields), its data stored like any other protocol's, never vendor code;
+  ships a light, embeddable build for controlador.
 - From Veredas 1: `veredas-core`, `veredas-store`, `veredas-server`, `veredas-desktop`.
 
 ### veredas-controlador: the softPLC
@@ -103,7 +110,8 @@ Programmed in ORCL (Open Rust Control Language), and in ladder later.
 ### veredas-maquinar: the bench
 Tools that simulate real hardware, so every consumer meets its plant on a bench first.
 - Scope: log emitters and a configurable OPC UA server; TCP telegram channels up to a full
-  simulated sort controller; automated replies to incoming data, random or rule-based;
+  simulated controller, driven by the same rules a portal telegram channel is configured
+  with, never by vendor code; automated replies to incoming data, random or rule-based;
   controllable pressure (rates, no-reads, full chutes); later, a 2D/3D plant simulator.
 - Rules: fixtures come before the consumer that needs them; a test tool that owns its
   sockets; speaks the real device's wire, so a consumer cannot tell the difference;
@@ -174,7 +182,8 @@ storage lives here, never in maquinar; its structure comes from the study, not f
 | `abaco-oracle` | abaco, as test tooling |
 | `python/veredas-acerto` | `acerto`, an Ábaco extension |
 | `orcl-std`, `orcl-runtime`, `demos/conveyor` | ORCL, used by controlador |
-| `veredas-telegram`, `veredas-opc` | core |
+| `veredas-telegram` (socket, framing, capture), `veredas-opc` | core |
+| `veredas-telegram` (GENIBELT catalog, sort plan, decision client) | not carried: rules a portal channel and maquinar's controller are configured with |
 | (new) | comissionador, controlador app, wms (later) |
 
 ## Decisions log
@@ -192,6 +201,15 @@ storage lives here, never in maquinar; its structure comes from the study, not f
 2026-11-05, laying the base (`docs/questions.md` Q1–Q5): the laws live in `tools/leis`; the
 review deck is committed; no session log; the plan wins on intent, the contract on status;
 maquinar may use aranha's codecs.
+
+2026-11-05, porting core (`docs/questions.md` Q8, Q9): GENIBELT does not belong in core. The
+operator: "genibelt is a machine my company manufactures and the interface via TCP socket
+should only be something veredas-portal manages, using encoding and decoding rules and storing
+the data in the database, as per the other protocols. veredas shall be a generic platform to
+build on top of, which reliably manages communication with the outside world, while being
+content-agnostic. genibelt does not belong in core, a tcp socket configurable for it does."
+Core keeps the socket, its framing and the capture rules engine; the GENIBELT catalog, the sort
+plan and the decision client are not carried into the suite as code.
 
 ## Next steps
 1. Record each decision above where it applies (component plans, `docs/questions.md`).

@@ -11,8 +11,9 @@ that depends on no other member, so the whole suite speaks one wire and one valu
 No other component answers this: portal is the gateway (it *uses* the layers to reach the
 plant), maquinar plays the hardware (it *uses* them to speak the device's wire), aranha scans
 the network (it *uses* the OPC client and the fixtures). Without core each would carry its own
-copy of the codec, and the copies would drift; Veredas 1 split the telegram crate out for
-exactly that reason.
+copy of the socket and the codec, and the copies would drift; Veredas 1 split the telegram
+crate out for exactly that reason. Core is content-agnostic: it moves and reads bytes by
+configuration and names no device (`docs/questions.md` Q8).
 
 ## Scope
 - **Shared types:** the value model (`Value`, `SeriesType`), the sample on its two clocks
@@ -22,18 +23,23 @@ exactly that reason.
 - **Worker plumbing:** the stop/join handle of a worker thread (`SourceHandle`, `stop_flag`)
   and its error (`SourceError`), so every source, a tailed log in portal or an OPC poll here,
   has one health model.
-- **The TCP telegram layer:** the wire codec, the GENIBELT typed catalog, the hardened socket
-  runtime (`Channel`), the generic binary capture layer, the sort decision engine, the small
-  HTTP client of the decision path, the deterministic PCG32.
+- **The TCP telegram layer:** the hardened socket runtime (`Channel`), its envelope framing
+  (`codec`; its shape is fixed today, making it configuration is Q9), and the capture rules
+  engine that reads message fields by configuration. No device's catalog, state words or
+  decision logic: those are the rules a portal channel is configured with (Q8).
+- **Seeded randomness:** the deterministic PCG32 (`rng`), for weighted draws and fixtures.
 - **The OPC UA client layer:** the compiled source shape (`PollSpec`), value conversion, the
   mapping of a poll to rows, the address-space browser, the poll worker with its gated writes.
 - **Test-fixture plumbing:** the in-process OPC UA demo plant (`opc::demo`, behind the
   `demo-server` feature), seeded randomness.
-- **Later phases:** plain-text file schemas with their version stamps, logging.
+- **Later phases:** plain-text file schemas with their version stamps (the first being a
+  telegram channel's configuration, with portal), logging.
 
 ## Rules
 - **Designed as if a second consumer already existed.** A type here never names its first
   caller; its docs say what it means on the wire or in the plant, not who uses it.
+- **Content-agnostic.** No device, vendor, message catalog or vendor specification is named or
+  cited in core (Q8); what a device's telegrams mean is configuration.
 - **A library, never an executable.** No `[[bin]]`, no `src/main.rs`, no `src/bin/`, no
   examples: a standing demo plant to drive by hand is maquinar's (the plan, "veredas-maquinar":
   a configurable OPC UA server). `tests/foundation.rs` asks cargo what it would build: one
@@ -42,24 +48,24 @@ exactly that reason.
   the fixtures its own tests run against (the OPC demo plant) live here, as fixture plumbing,
   and maquinar builds on them rather than the other way round.
 - **Typed errors on the public surface.** Veredas 1 returned `Result<_, String>` from the
-  decision client, the OPC browser and the worker; the port gives each a typed error whose
+  hex parser, the OPC browser and the worker; the port gives each a typed error whose
   `Display` is Veredas 1's text, so the operator reads the same words. No `unwrap`/`expect`
   on an I/O path; tests may unwrap.
-- **Evidence is reality.** The telegram channel and the decision client are tested over real
-  loopback sockets; the OPC layer against the in-process demo plant speaking real OPC UA over
+- **Evidence is reality.** The telegram channel is tested over real loopback sockets; the OPC layer against the in-process demo plant speaking real OPC UA over
   TCP. A mock is never the evidence of a clause.
 - **One test file per capability** under `tests/`, so each contract clause links one file and
   a change to one capability re-stales only its own recorded run.
 
 ## What it absorbs from Veredas 1
-All of `crates/veredas-telegram` and `crates/veredas-opc`, and the slice of Veredas 1's
-`veredas-core` the OPC layer stood on. Read in full before the port; what moves where:
+The generic part of `crates/veredas-telegram`, all of `crates/veredas-opc`, and the slice of
+Veredas 1's `veredas-core` the OPC layer stood on. Read in full before the port; what moves
+where:
 
-| Veredas 1 | Veredas 2 | Why it moves |
+| Veredas 1 | Veredas 2 | Why |
 |---|---|---|
-| `veredas-telegram` `codec`, `genibelt`, `channel`, `capture`, `Endian` | `veredas_core::telegram` | portal (Veredas 1's desktop, the External Unit) and maquinar (the simulated sort controller) both speak it |
-| `veredas-telegram` `sortplan`, `decision_client` | `veredas_core::telegram` | the decision engine and its HTTP contract sit between portal's client and maquinar's automated replies (Veredas 1's trajetorias); one copy so the two ends cannot drift |
-| `veredas-telegram` `rng` (`Pcg32`) | `veredas_core::rng` | the sort plan's weighted spread draws from it; maquinar's simulators seed it |
+| `veredas-telegram` `codec`, `channel`, `Endian`, `capture` (its `CaptureSpec` rules) | `veredas_core::telegram` | portal and maquinar both hold telegram links and read their fields by rules |
+| `veredas-telegram` `genibelt`, `sortplan`, `decision_client`, `capture::scanner_parcel` | not carried (Q8) | one vendor's catalog and sorting logic: rules a portal channel is configured with, not suite code; ported, refuted and fixed here first (commits up to b7c6d0a) |
+| `veredas-telegram` `rng` (`Pcg32`) | `veredas_core::rng` | maquinar's simulators seed it; weighted draws scale it |
 | `veredas-opc` `spec`, `value`, `map`, `browse`, `worker` | `veredas_core::opc` | portal polls, browses and writes; aranha discovers OPC servers |
 | `veredas-opc` `demo` (feature `demo-server`) | `veredas_core::opc::demo`, same feature | the fixture core's own tests and aranha's run against |
 | `veredas-opc` `examples/demo_server.rs` | not carried | an executable; the standing demo plant is maquinar's |
@@ -72,13 +78,12 @@ data plane and goes to portal (P-002); `DERIVED_SOURCE`, a store concept, with i
 
 Changed on the way, each recorded in the clause's evidence note:
 - edition 2024 (Veredas 1 is on 2021);
-- the public `String` errors typed (decision client, OPC browse, worker, node-id parsing,
-  hex parsing, the demo plant's start);
+- the public `String` errors typed (OPC browse, worker, node-id parsing, hex parsing, the
+  demo plant's start);
 - `Quality` added: Veredas 1 judged an OPC read good or not from its `StatusCode`; the
   three-way severity becomes a shared type and `TagRead::quality` reports it;
-- the GENIBELT vendor specification is not copied (`docs/questions.md` Q6): code comments cite
-  its section numbers, the constants are in code and pinned by tests, a machine without the
-  file builds and tests.
+- the vendor's name and specification citations removed from what stayed (Q6, Q8): the
+  framing's layout is described in `codec`'s docs and pinned by golden frames.
 
 ## Module map
 ```
@@ -86,7 +91,7 @@ veredas_core
   types       SourceId, SeriesRef, Value, SeriesType, Sample, Quality, now_unix_ms
   source      SourceHandle, stop_flag, SourceError
   rng         Pcg32
-  telegram    Endian; codec, genibelt, channel, capture, sortplan, decision_client
+  telegram    Endian; codec, channel, capture
   opc         spec, value, map, browse, worker; demo (feature "demo-server")
 ```
 
@@ -94,8 +99,8 @@ veredas_core
 1. **Foundation and shared types.** The crate at `2.0.0-alpha.1`, `types` and `source` with
    their tests, `tests/foundation.rs` on what cargo builds. Clauses: the foundation (P-001
    promoted), shared types, worker plumbing.
-2. **The telegram layer.** Every module with its Veredas 1 tests moved to `tests/telegram_*.rs`,
-   the channel and the decision client over loopback. One clause per module.
+2. **The telegram layer.** Every generic module with its Veredas 1 tests moved to
+   `tests/telegram_*.rs`, the channel over loopback. One clause per module.
 3. **The OPC UA client layer.** Every module with its Veredas 1 tests, `capabilities.rs` (the
    API assumptions pinned against a real server, run first after a version bump), the browse
    and worker end-to-end tests against the demo plant. One clause per module.

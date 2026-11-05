@@ -4,21 +4,21 @@ name = "veredas-core"
 version = "2.0.0-alpha.1"
 edition.workspace = true
 publish = false
-description = "The foundation of Veredas 2: the shared types and protocol layers every component speaks"
+description = "The foundation of Veredas 2: the shared types and content-agnostic protocol layers every component speaks"
 
 # A library, never an executable (docs/core-plan.md, tests/foundation.rs): no [[bin]], no
 # [[example]]. Depends on no other member, in any table (law L4).
 
 [dependencies]
 chrono = { workspace = true }
-# SourceError's pattern variant; the sort plan's routing rules and the capture layer's patterns.
+# SourceError's pattern variant; the capture rules' patterns.
 regex = { workspace = true }
-# The telegram layer's configs (capture specs, sort plan settings) and the decision path's JSON.
+# Capture specs and the byte order are configuration, read from plain text.
 serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
-# The telegram channel and the decision client run on their own current-thread runtimes.
+# The telegram channel runs on its own current-thread runtime.
 tokio = { workspace = true }
 
 [dev-dependencies]
+# cargo metadata's output (tests/foundation.rs).
 serde_json = { workspace = true }

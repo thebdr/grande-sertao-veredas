@@ -1,36 +1,37 @@
-//! The telegram channel: one TCP link, spoken correctly.
+//! The telegram channel: one TCP link, held correctly.
 //!
-//! Shared by both sides — maquinar's simulated MSC and veredas's
-//! External Unit — because the protocol's obligations are the same in
-//! either direction and two copies would drift.
+//! Either side of a link uses it, listening or dialling, because the
+//! obligations are the same in both directions and two copies would drift.
+//! It knows framing and timing, never what a telegram means.
 //!
-//! Spec behaviour (`docs/vendor/genibelt-protocol.txt` §3):
+//! The link rules (sequence numbers and the keep-alive probe are settings
+//! of the envelope framing, `codec`):
 //!
-//! - The MSC is the **client**; the External Unit **listens**. Both
-//!   roles exist here because the simulator plays either side.
-//! - On connect, both sides set PRG to 0 and send a keep-alive; after
-//!   that PRG cycles **1..255** and the RECEIVER skips a frame whose PRG
-//!   repeats the last one (§3.1, duplicate detection).
-//! - A receiver that has heard nothing for **10 seconds** sends a
-//!   keep-alive to probe the link; if the write fails the socket is
-//!   closed — a server re-listens, a client re-dials (§3.2).
+//! - Either role: **listen** for the peer, or **dial** it and re-dial
+//!   with backoff until it answers.
+//! - On connect, both sides send a keep-alive with sequence number 0;
+//!   after that the number cycles **1..255**, stamped at send time, and
+//!   the receiver skips a frame repeating the last number it saw.
+//! - A receiver that has heard nothing for the receive timeout (10 s by
+//!   default) sends a keep-alive to probe the link; if the write fails
+//!   the socket is closed — a listener waits again, a dialler re-dials.
 //!
-//! Hardening the adversarial review demanded, all pinned by tests below:
+//! Hardening, pinned by `tests/telegram_channel.rs`:
 //!
 //! - **Replies are unicast, keyed by a monotonic peer id** — never a
 //!   Vec index (a disconnect shifts indices and a queued reply would
 //!   reach the wrong link) and never a broadcast (a second connection
-//!   would receive another link's sort decisions).
-//! - **A non-reading peer cannot wedge the channel.** Writes go to a
-//!   bounded per-peer outbox drained with a timeout; a peer that stalls
-//!   or overflows is dropped and counted. The previous shape awaited
-//!   `write_all` inside the select arm, so one hung controller froze
-//!   every other peer, the keep-alives, and shutdown itself.
+//!   would receive another link's replies).
+//! - **A non-reading peer cannot wedge the channel.** Frames go to the
+//!   socket as soon as it takes them; a bounded per-peer outbox holds
+//!   only what it refuses, and a peer whose writes cannot complete within
+//!   the write timeout, or whose outbox overflows, is dropped and counted.
 //! - **`set_nodelay(true)`** on every socket: Nagle plus delayed ACK can
-//!   add ~200 ms to a small reply, and a sort controller's destination
-//!   deadline is measured in tens of milliseconds.
-//! - **PRG is stamped at send time**, not when a reply is decided — a
-//!   delayed reply would otherwise leave our own counter non-monotonic.
+//!   add ~200 ms to a small reply, and a device waiting on a reply may
+//!   allow tens of milliseconds.
+//! - **Sequence numbers are stamped at send time**, not when a reply is
+//!   decided — a delayed reply would otherwise leave our own counter
+//!   non-monotonic.
 //! - **Decode is interleaved with reads**, so the "not telegram framed"
 //!   guard only measures an undecodable prefix; a legitimate reconnect
 //!   burst of valid frames is not mistaken for garbage.
@@ -49,8 +50,8 @@ use crate::telegram::{Endian, Envelope, Telegram};
 
 /// How often the channel services its queues.
 pub const TICK: Duration = Duration::from_millis(20);
-/// §3.2: "each receiving side will enable a socket receive timeout (10
-/// Seconds)" — silence this long triggers a keep-alive probe.
+/// The default receive timeout: silence this long triggers a keep-alive
+/// probe.
 pub const RECEIVE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a dial may take before it counts as failed.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -72,9 +73,9 @@ const MAX_PEERS: usize = 8;
 /// Which side of the link this channel is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Role {
-    /// Wait for the peer to connect (the External Unit's role).
+    /// Wait for the peer to connect.
     Listen { bind: String, port: u16 },
-    /// Dial the peer (the MSC's role).
+    /// Dial the peer.
     Connect { host: String, port: u16 },
 }
 
@@ -141,7 +142,7 @@ pub enum ChannelEvent {
         raw: Vec<u8>,
     },
     /// A keep-alive arrived: the link is alive though quiet. Health must
-    /// fold this in, or a quiet-but-healthy MSC reads as Idle.
+    /// fold this in, or a quiet-but-healthy peer reads as idle.
     KeepAlive {
         peer: PeerId,
     },
@@ -175,7 +176,7 @@ pub struct ChannelStatus {
     pub keepalives_sent: u64,
     pub keepalives_received: u64,
     /// Frames skipped because their PRG repeated the previous one
-    /// (§3.1). A climbing count means the peer is retransmitting.
+    /// A climbing count means the peer is retransmitting.
     pub duplicates_skipped: u64,
     /// Bytes discarded to regain framing. A climbing count is the
     /// visible symptom of a wrong endian setting.
@@ -315,7 +316,7 @@ struct Peer {
     outbox: VecDeque<Vec<u8>>,
     /// How much of the front frame the socket has already taken.
     front_sent: usize,
-    /// Our own progressive number, stamped at SEND time (§3.1).
+    /// Our own sequence number, stamped at SEND time.
     prg: u8,
     /// The last PRG we accepted from this peer, for duplicate skipping.
     last_seen_prg: Option<u8>,
@@ -338,7 +339,7 @@ impl Peer {
             inbox: Vec::new(),
             outbox: VecDeque::new(),
             front_sent: 0,
-            // §3: "Set the Progressive Number field to 0" on connect;
+            // Sequence 0 on connect (the connect keep-alive);
             // the first real frame is 1.
             prg: 0,
             last_seen_prg: None,
@@ -460,7 +461,7 @@ impl Peer {
                     self.inbox.drain(..used);
                     self.undecodable = 0;
 
-                    // §3.1: the receiver skips a repeated progressive
+                    // The receiver skips a repeated sequence
                     // number. A keep-alive is never skipped, but its PRG
                     // (bar the connect keep-alive's 0) is the last one
                     // seen: idle probes take PRGs from the sender's
@@ -616,7 +617,7 @@ async fn run(
             Some((socket, addr)) = accepted => {
                 let id = NEXT_PEER.fetch_add(1, Ordering::Relaxed);
                 let mut peer = Peer::new(id, addr.clone(), socket);
-                // §3 STEP 1: PRG 0 and a keep-alive on connect.
+                // Sequence 0 and a keep-alive on connect.
                 if let Ok(bytes) = codec::encode(&Telegram::keepalive(envelope(0)), cfg.endian) {
                     let _ = peer.queue(bytes, &status);
                 }
@@ -676,7 +677,7 @@ async fn run(
                         doomed.push((p.id, e));
                         continue;
                     }
-                    // §3.2: silence for the receive timeout means probe
+                    // Silence for the receive timeout means probe
                     // the link with a keep-alive.
                     if p.last_rx.elapsed() >= keepalive_idle
                         && p.last_tx.elapsed() >= keepalive_idle

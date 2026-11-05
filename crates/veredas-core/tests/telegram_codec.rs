@@ -1,5 +1,5 @@
 //! The wire codec (contract: the codec clause), from Veredas 1's `veredas-telegram` tests, plus
-//! golden frames written byte by byte from the layout of §2.2-2.4 (`src/telegram/codec.rs`).
+//! golden frames written byte by byte from the layout table in `src/telegram/codec.rs`.
 
 use veredas_core::telegram::Endian;
 use veredas_core::telegram::codec::*;
@@ -215,7 +215,7 @@ fn hex_bodies_parse_and_previews_render_both_ways() {
     assert!(dump.trim_end().ends_with("ABC.DEF"), "{dump}");
 }
 
-/// The frame of `sample([seg(0x0102, "AB")])` in one byte order, field by field (§2.2-2.4).
+/// The frame of `sample([seg(0x0102, "AB")])` in one byte order, field by field.
 fn golden(little: bool) -> Vec<u8> {
     let u16b = |v: u16| {
         if little {
@@ -255,7 +255,7 @@ fn the_frame_is_the_spec_layout_byte_for_byte() {
         stream.extend(golden(little)); // a second frame behind it is left alone
         assert_eq!(decode(&stream, endian), Ok((t.clone(), 22)));
     }
-    // GENIBELT is little-endian (§3): the default.
+    // Little-endian is the default.
     assert_eq!(Endian::default(), Endian::Little);
     assert_eq!(
         (Endian::Little.label(), Endian::Big.label()),

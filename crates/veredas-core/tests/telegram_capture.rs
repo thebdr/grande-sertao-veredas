@@ -1,124 +1,11 @@
-//! The binary capture layer (contract: the capture clause), from Veredas 1's `veredas-telegram`
-//! tests.
+//! The capture rules engine (contract: the capture clause): message bodies read into named
+//! fields by configuration, from Veredas 1's `veredas-telegram` tests (its scanner-request path
+//! is device-specific and stayed out of core).
 
 use std::collections::HashMap;
 
 use veredas_core::telegram::Endian;
 use veredas_core::telegram::capture::*;
-use veredas_core::telegram::genibelt::{IspcMscData, SZ_DATA_LEN, ScannerRequest};
-use veredas_core::telegram::sortplan::Physical;
-
-fn scanner_with(msc: &[u8], ispc: IspcMscData) -> ScannerRequest {
-    let mut msc_data = msc.to_vec();
-    msc_data.resize(SZ_DATA_LEN, 0);
-    ScannerRequest {
-        scn_id: 1,
-        operator_id: 11,
-        cell: 500,
-        used_cells: 1,
-        object_id: 4242,
-        request_type: 1,
-        request_anomaly: 0,
-        cell_nif_position: 900,
-        msc_data,
-        user_data: ispc.encode(SZ_DATA_LEN, Endian::Little),
-    }
-}
-
-#[test]
-fn a_scanner_request_becomes_the_fields_a_plan_matches_on() {
-    let req = scanner_with(
-        b"ABC-111;ABC-222;ABC-333",
-        IspcMscData {
-            ispc_id: 21,
-            tracking_id: 777,
-            destination: 55,
-            load_flags: 3,
-            length_mm: 400,
-            width_mm: 300,
-            height_mm: 250,
-            weight_g: 2500,
-            volume: 30_000_000,
-            ..Default::default()
-        },
-    );
-    let parcel = scanner_parcel(&req, Endian::Little, &BarcodeFormat::default());
-
-    assert_eq!(parcel.object_id, 4242);
-    assert_eq!(parcel.field("id"), Some("4242"));
-    assert_eq!(parcel.field("id2"), Some("777"));
-    assert_eq!(parcel.field("id3"), Some("55"));
-    assert_eq!(parcel.field("id4"), Some("3"));
-    assert_eq!(parcel.field("infeed"), Some("21"), "from the ISPC struct");
-    assert_eq!(parcel.field("scanner"), Some("1"));
-    assert_eq!(parcel.field("cell"), Some("500"));
-    // The FIRST byte is the read status (§4.2.2.1), not data — here
-    // the 'A' of "ABC-111" is consumed as Acknowledged, so the
-    // first barcode reads "BC-111". That is the spec's layout, and
-    // seeing it stated is the point: a plant whose scanner data
-    // starts straight into a barcode will look one character short
-    // until its BarcodeFormat is set up for that device.
-    assert_eq!(parcel.field("read_status"), Some("ok"));
-    assert_eq!(parcel.field("barcode1"), Some("BC-111"));
-    assert_eq!(parcel.field("barcode2"), Some("ABC-222"));
-    assert_eq!(parcel.field("barcode3"), Some("ABC-333"));
-    assert_eq!(parcel.field("barcode4"), None);
-
-    assert_eq!(
-        parcel.physical,
-        Physical {
-            width_mm: Some(300),
-            length_mm: Some(400),
-            height_mm: Some(250),
-            weight_g: Some(2500),
-            volume: Some(30_000_000),
-        }
-    );
-}
-
-#[test]
-fn unmeasured_dimensions_stay_unknown_rather_than_becoming_zero() {
-    // Zero in these fields means "not measured", and a zero limit
-    // check would exclude every destination.
-    let req = scanner_with(b"A", IspcMscData::default());
-    let parcel = scanner_parcel(&req, Endian::Little, &BarcodeFormat::default());
-    assert_eq!(parcel.physical, Physical::default());
-    assert!(parcel.physical.weight_g.is_none());
-}
-
-#[test]
-fn a_no_read_parcel_captures_no_barcodes_but_says_why() {
-    // 'T' = the scanner never answered. The plan's (empty) pattern
-    // catches exactly this.
-    let mut req = scanner_with(b"T", IspcMscData::default());
-    req.msc_data[0] = b'T';
-    let parcel = scanner_parcel(&req, Endian::Little, &BarcodeFormat::default());
-    assert_eq!(parcel.field("read_status"), Some("timeout"));
-    assert_eq!(parcel.field("barcode1"), None);
-    assert!(parcel.fields_with_prefix("barcode").next().is_none());
-}
-
-#[test]
-fn barcode_splitting_is_configurable_and_bounded() {
-    let format = BarcodeFormat {
-        separators: "|".into(),
-        min_len: 3,
-        max_barcodes: 2,
-    };
-    let mut data = vec![b'A'];
-    data.extend_from_slice(b"AA|LONGCODE|XX|ANOTHER");
-    assert_eq!(format.split(&data), vec!["LONGCODE", "ANOTHER"]);
-
-    // The 16-barcode plant, at the default cap.
-    let many: Vec<String> = (1..=20).map(|i| format!("CODE{i:02}")).collect();
-    let mut data = vec![b'A'];
-    data.extend_from_slice(many.join(";").as_bytes());
-    data.resize(SZ_DATA_LEN, 0);
-    let split = BarcodeFormat::default().split(&data);
-    assert_eq!(split.len(), 16);
-    assert_eq!(split[0], "CODE01");
-    assert_eq!(split[15], "CODE16");
-}
 
 #[test]
 fn generic_regex_capture_names_its_groups() {
@@ -382,58 +269,9 @@ fn a_binary_field_wins_over_a_repeat_too() {
 }
 
 #[test]
-fn the_barcode_format_caps_bounds_and_separates_exactly() {
-    let format = BarcodeFormat { separators: "|".into(), min_len: 3, max_barcodes: 2 };
-    let mut data = vec![b'A'];
-    data.extend_from_slice(b"AB|ABC;X|ABCD|ABCDE");
-    // "AB" is under the minimum, "ABC;X" is exactly kept with its ';' (not a separator here),
-    // and the cap stops before "ABCDE".
-    assert_eq!(format.split(&data), ["ABC;X", "ABCD"]);
-    let exactly = BarcodeFormat { separators: "|".into(), min_len: 3, max_barcodes: 16 };
-    assert_eq!(exactly.split(b"AABC|AB"), ["ABC"], "a barcode of exactly min_len is kept");
-}
-
-#[test]
-fn the_infeed_falls_back_to_the_operator_id_and_the_ispc_reads_in_its_byte_order() {
-    // No induction id in the ISPC block: the request's operator id is the infeed.
-    let req = scanner_with(b"A", IspcMscData::default());
-    let parcel = scanner_parcel(&req, Endian::Little, &BarcodeFormat::default());
-    assert_eq!(parcel.field("infeed"), Some("11"));
-
-    // A big-endian channel: the ISPC block is written and read big-endian.
-    let ispc = IspcMscData { tracking_id: 777, destination: 55, weight_g: 2500, length_mm: 400, ..Default::default() };
-    let mut req = scanner_with(b"A", IspcMscData::default());
-    req.user_data = ispc.encode(SZ_DATA_LEN, Endian::Big);
-    let parcel = scanner_parcel(&req, Endian::Big, &BarcodeFormat::default());
-    assert_eq!(parcel.field("id2"), Some("777"));
-    assert_eq!(parcel.field("id3"), Some("55"));
-    assert_eq!(parcel.physical.weight_g, Some(2500));
-    assert_eq!(parcel.physical.length_mm, Some(400));
-}
-
-#[test]
-fn every_read_status_names_its_reason() {
-    let status_of = |first: Option<u8>| {
-        let mut req = scanner_with(b"", IspcMscData::default());
-        match first {
-            Some(b) => req.msc_data[0] = b,
-            None => req.msc_data.clear(),
-        }
-        scanner_parcel(&req, Endian::Little, &BarcodeFormat::default())
-            .field("read_status")
-            .map(str::to_string)
-    };
-    assert_eq!(status_of(Some(b'T')).as_deref(), Some("timeout"));
-    assert_eq!(status_of(Some(0x01)).as_deref(), Some("virtual"));
-    assert_eq!(status_of(Some(b'!')).as_deref(), Some("no handshake"));
-    assert_eq!(status_of(Some(0x00)).as_deref(), Some("other(0)"));
-    assert_eq!(status_of(None).as_deref(), Some("other(0)"), "an empty block, no panic");
-}
-
-#[test]
 fn a_repeat_without_a_group_captures_the_whole_match() {
     // Group 1 when the pattern has one, else the whole match: `\d{6}` is how a barcode repeat
-    // is most naturally written, and blanks here would read as a no-read to the sort plan.
+    // is most naturally written, and blanks here would read as no barcode at all.
     let capture = Capture::new(&CaptureSpec {
         repeat: vec![RepeatSpec { name: "barcode".into(), pattern: r"\d{6}".into(), max: 16 }],
         ..Default::default()

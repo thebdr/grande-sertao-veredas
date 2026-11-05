@@ -1,17 +1,17 @@
-//! The wire codec: SOM/envelope/data-segments/tail/EOM framing.
+//! The envelope framing: start byte, envelope, data segments, tail, end byte.
 //!
-//! Spec: `docs/vendor/genibelt-protocol.txt` §2 (message format) and §3
-//! (protocol issues). Layout (§2.2–2.4):
+//! The shape is fixed here (making it configuration is `docs/questions.md` Q9); what the
+//! segments carry is not this module's business. Layout:
 //!
 //! ```text
 //! ENVELOPE (12 bytes)
 //!   0  1  SOM              0xFD
-//!   1  1  CLASS            unused
+//!   1  1  CLASS            carried, not interpreted
 //!   2  1  SOURCE NODE
 //!   3  1  DESTINATION NODE
-//!   4  1  PRG NUMBER       progressive counter (§3.1: cycles 1..255,
-//!                          0 only on the connect keep-alive; the
-//!                          RECEIVER skips duplicate-PRG frames)
+//!   4  1  SEQUENCE         stamped by the channel: 0 on the connect
+//!                          keep-alive, then 1..255; the receiver skips
+//!                          a frame repeating the last one
 //!   5  3  SPARE
 //!   8  2  LENGTH           data area size, bytes
 //!  10  2  NUM DATA         number of data segments
@@ -21,12 +21,12 @@
 //!   +4 n  MSG DATA
 //! TAIL (4 bytes)
 //!   +0 2  SPARE
-//!   +2 1  CKS              unused (§2.4) — written 0, never verified
+//!   +2 1  CKS              written 0, never verified
 //!   +3 1  EOM              0xFE
 //! ```
 //!
-//! A **keep-alive** is envelope + tail only (§2.5); it doubles as the
-//! 10-second receive-timeout link probe (§3.2).
+//! A **keep-alive** is envelope + tail only; it doubles as the channel's
+//! receive-timeout link probe.
 //!
 //! Hardening (the adversarial round): `encode` returns `Result` and
 //! refuses anything the u16 length fields cannot describe — the old
@@ -46,9 +46,9 @@ pub const SEGMENT_HEADER_LEN: usize = 4;
 /// Structural ceiling on a frame: 64 KiB, just under the 65 551 bytes a
 /// u16 LENGTH could describe, so a LENGTH of 65 521 or more is refused at
 /// once rather than waited for. A corrupt LENGTH below it is caught by the
-/// segment headers as they arrive (`decode`). The GENIBELT-specific §3.3
-/// bounds (512-byte segments, 5 KB frames) are enforced by the typed layer
-/// on top, not here: generic channels may speak other vendors' framings.
+/// segment headers as they arrive (`decode`). Tighter bounds a device
+/// imposes on segments or frames belong to that device's configuration,
+/// not here.
 pub const MAX_FRAME: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -72,7 +72,7 @@ pub struct Telegram {
 }
 
 impl Telegram {
-    /// The idle heartbeat / link probe: envelope + tail, no data (§2.5).
+    /// The idle heartbeat / link probe: envelope + tail, no data.
     pub fn keepalive(envelope: Envelope) -> Telegram {
         Telegram {
             envelope,
@@ -148,7 +148,7 @@ pub fn encode(telegram: &Telegram, endian: Endian) -> Result<Vec<u8>, EncodeErro
         out.extend_from_slice(&segment.data);
     }
     out.extend_from_slice(&[0, 0]); // SPARE
-    out.push(0); // CKS — "not used" (§2.4)
+    out.push(0); // CKS: carried, never verified
     out.push(EOM);
     Ok(out)
 }
@@ -316,8 +316,8 @@ pub fn preview(data: &[u8]) -> String {
 }
 
 /// The full two-column dump a debugging view renders: offset · hex ·
-/// ASCII, 16 bytes per row — the "translatable in app" form the parcel
-/// lifecycle store shows for stored raw frames.
+/// ASCII, 16 bytes per row: how a stored raw frame is shown to be read
+/// back by an operator.
 pub fn hex_dump(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len() * 4);
     for (row, chunk) in data.chunks(16).enumerate() {

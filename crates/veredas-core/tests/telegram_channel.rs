@@ -122,7 +122,7 @@ fn two_channels_exchange_telegrams_in_both_directions() {
 
 #[test]
 fn the_progressive_number_starts_at_zero_then_counts_from_one() {
-    // §3: PRG 0 on the connect keep-alive; 1..255 after.
+    // Sequence 0 on the connect keep-alive; 1..255 after.
     let port = free_port();
     let server = listener(port, 0);
     until("the bind", Duration::from_secs(5), || {
@@ -145,8 +145,8 @@ fn the_progressive_number_starts_at_zero_then_counts_from_one() {
 
 #[test]
 fn a_repeated_progressive_number_is_skipped() {
-    // §3.1: "The receiver must check the Progressive Number field in
-    // order to detect a double message and so skip it."
+    // The receiver checks the sequence number to detect a repeated
+    // frame and skip it.
     let port = free_port();
     let server = listener(port, 0);
     until("the bind", Duration::from_secs(5), || {
@@ -568,7 +568,7 @@ fn a_deaf_peer_is_dropped_by_the_write_timeout() {
 
 #[test]
 fn an_idle_link_is_probed_once_per_window_and_never_while_the_peer_talks() {
-    // §3.2. The listener never probes (its window is long); the dialer's is 300 ms.
+    // The listener never probes (its window is long); the dialer's is 300 ms.
     let port = free_port();
     let server = listener(port, 600_000);
     until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));

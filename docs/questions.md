@@ -90,6 +90,9 @@ To read the spec, use the copy beside Veredas 1 or drop one into `docs/vendor/` 
 
 **Reversible?** Yes: a file and an ignore rule.
 
+**Since Q8 (2026-11-05):** core names GENIBELT nowhere and cites none of its sections; the
+specification is for writing the rules a portal channel is configured with.
+
 ---
 
 ## Q7 - Do the TRISTATE bin-state bits stop a chute?
@@ -103,3 +106,57 @@ saying what they mean for parcel acceptance. Veredas 1 named none of them.
 Marked `// DECISION PENDING` in `veredas_core::telegram::genibelt::bin_state`.
 
 **Reversible?** Yes: one constant set in `accepts_parcels`, and the test that pins it.
+
+**Moot (2026-11-05, Q8):** the bin-state words left core with the GENIBELT catalog; whether these
+bits stop a chute is a question for the rules a portal channel is configured with.
+
+---
+
+## Q8 - Does GENIBELT belong in core?
+
+**Raised** 2026-11-05 by the operator, while the telegram layer was being ported into core.
+
+**Taken (operator):** no. "genibelt is a machine my company manufactures and the interface via
+TCP socket should only be something veredas-portal manages, using encoding and decoding rules
+and storing the data in the database, as per the other protocols. veredas shall be a generic
+platform to build on top of, which reliably manages communication with the outside world, while
+being content-agnostic. genibelt does not belong in core, a tcp socket configurable for it
+does." Core keeps the hardened TCP socket (`telegram::channel`), its framing (`telegram::codec`)
+and the rules engine that reads message fields by configuration (`telegram::capture`), named
+for no device. The GENIBELT catalog, the sort plan engine, the decision client and the scanner
+path of the capture layer leave the crate and are not carried into the suite as code: they
+become the rules a portal telegram channel is configured with (plain text, versioned, in a
+project folder), and maquinar's simulated controller is driven by the same rules. Veredas 1
+keeps its own. Recorded in `docs/veredas-plan.md` (core, portal, maquinar, the crate table and
+the decisions log) and in the contract (C-007, P-002, P-004; C-011, C-014 and C-015 shelved).
+The refute rounds' fixes to the carved modules stay in this repo's history (commit b7c6d0a) for
+whoever ports them to Veredas 1.
+
+**Reversible?** Yes: the modules are in history, and the rules can be compiled back into code.
+
+---
+
+## Q9 - The framing is still one device's shape
+
+**Raised** 2026-11-05, carving GENIBELT out of core (Q8).
+
+The framing core keeps (`telegram::codec`) is generic in what it carries but not in its shape:
+the start and end bytes, the 12-byte envelope with its sequence number, the data-area length
+and the segment count, the segments of id, length and body, and the 4-byte tail are the layout
+of the GENIBELT host interface. The sequence and keep-alive rules the channel applies (sequence
+0 on connect then 1..255, a repeated number skipped, a keep-alive probe after silence, a
+keep-alive's number counting as the last seen) are that protocol's rules too. Q8 asks for a
+framing "driven by configuration (delimiters, envelope, length fields, endianness, sequence
+stamping and duplicate skipping as rules)"; designing that is new work, not a split.
+
+**Taken (reversible, pending the operator):** the framing and the channel stay in core as they
+are, with the vendor's name and section citations removed and the shape described in their
+docs; no other framing exists yet to generalise against. When the first telegram channel's
+configuration schema is written (portal, P-002), the framing's constants become that schema's
+fields (start/end bytes, envelope layout, length and count fields, byte order, sequence and
+keep-alive rules as switches), and the current shape becomes one configuration of it. Open
+point for that schema: whether a device's keep-alives consume sequence numbers (the channel
+assumes they do: a keep-alive's number counts as the last one seen).
+
+**Reversible?** Yes: a configuration schema over the same code, or removing the framing from
+core altogether.

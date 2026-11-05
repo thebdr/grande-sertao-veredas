@@ -8,6 +8,9 @@
 //! `src/main.rs`, `src/bin/`, `examples/`, a `crate-type`/`crate_type` naming `bin`, a bench,
 //! a build script, or a missing library (`autolib = false`) each show as a target that breaks
 //! the rule.
+//!
+//! Content-agnostic (`docs/questions.md` Q8): no source or test file names the vendor protocol
+//! the telegram layer was ported from, or cites a vendor document.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -142,4 +145,50 @@ fn the_check_refuses_every_way_cargo_makes_an_executable() {
             ("nolib", false),
         ]
     );
+}
+
+/// Every `.rs` file under `dir`, recursively.
+fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            rust_files(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+/// The lines that name the vendor protocol or cite a vendor document.
+fn vendor_mentions(text: &str) -> Vec<String> {
+    // Spelled in pieces so this file does not match itself.
+    let banned = [["geni", "belt"].concat(), ["docs/", "vendor"].concat()];
+    text.lines()
+        .filter(|line| {
+            let line = line.to_lowercase();
+            banned.iter().any(|b| line.contains(b.as_str()))
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn core_names_no_vendor_and_cites_no_vendor_document() {
+    // docs/questions.md Q8: what a device's telegrams mean is configuration, not core code.
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    rust_files(&root.join("src"), &mut files);
+    rust_files(&root.join("tests"), &mut files);
+    assert!(files.len() >= 10, "{files:?}");
+    let found: Vec<String> = files
+        .iter()
+        .flat_map(|f| {
+            let text = std::fs::read_to_string(f).unwrap();
+            vendor_mentions(&text).into_iter().map(move |l| format!("{}: {l}", f.display()))
+        })
+        .collect();
+    assert_eq!(found, Vec::<String>::new());
+    // The check sees both spellings, in any case.
+    let sample = ["// the Geni", "Belt catalog\nfn x() {}\n// see DOCS/VEN", "DOR/spec.txt"].concat();
+    assert_eq!(vendor_mentions(&sample).len(), 2);
 }
