@@ -10,15 +10,15 @@
     "telegram_schema"
   ],
   "exitCode": 0,
-  "outputSha": "e9492ea0c680d02c25c5f5a0c4d4aed4cdd5b8d97228d99e160f67878f1a8cb7",
-  "outputTail": "\nrunning 7 tests\ntest a_file_states_its_format_and_a_version_this_reader_knows ... ok\ntest a_field_may_override_the_byte_order ... ok\ntest defaults_fill_what_a_file_leaves_out ... ok\ntest a_misspelled_key_is_refused_wherever_it_is ... ok\ntest every_limit_is_accepted_at_its_edge ... ok\ntest the_documented_example_loads_and_frames_as_described ... ok\ntest an_impossible_layout_is_refused_with_its_place_named ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.42s\n     Running tests\\telegram_schema.rs (target\\debug\\deps\\telegram_schema-a9ae070384251154.exe)",
-  "ranAt": "2026-11-05T23:00:02.683Z",
-  "headCommit": "3137fa9fd606de8fc46ea32601880a4511696823",
+  "outputSha": "890dc4fb8a2a2e31fee13091c57fa93c067473aaef54510896339a383fcae704",
+  "outputTail": "running 8 tests\ntest a_file_states_its_format_and_a_version_this_reader_knows ... ok\ntest a_field_may_override_the_byte_order ... ok\ntest defaults_fill_what_a_file_leaves_out ... ok\ntest every_rule_is_read_from_the_file_and_every_way_to_end_is_accepted ... ok\ntest a_misspelled_key_is_refused_wherever_it_is ... ok\ntest every_limit_is_accepted_at_its_edge ... ok\ntest the_documented_example_loads_and_frames_as_described ... ok\ntest an_impossible_layout_is_refused_with_its_place_named ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.34s\n     Running tests\\telegram_schema.rs (target\\debug\\deps\\telegram_schema-a9ae070384251154.exe)",
+  "ranAt": "2026-11-05T23:30:09.394Z",
+  "headCommit": "cb30a56b71d8bba7863903ef96a2c1dfac04e414",
   "tests": [
     {
       "name": "crates/veredas-core/tests/telegram_schema.rs",
       "file": "crates/veredas-core/tests/telegram_schema.rs",
-      "fileSha": "2a0da5035774bba10ed136c6731e88c51e7645d1c3f6f77b2c05902a4feef1e9"
+      "fileSha": "5aad00c806490201c53e26ec727551d915be16e688330b2b6ba7aa9d9672b683"
     }
   ]
 }
