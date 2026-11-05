@@ -71,3 +71,21 @@ architecture rule (test tools own their sockets, past portal) is not touched by 
 **Taken:** kept. The plan's maquinar rules now say it, and the map's row stays.
 
 **Reversible?** Yes: one row of `MAP` and one line of the plan.
+
+---
+
+## Q6 - The GENIBELT vendor specification
+
+**Raised** 2026-11-05, porting the telegram layer into core (P-001).
+
+Veredas 1 keeps the GENIBELT / Master Sort Control host interface specification machine-locally
+at `docs/vendor/genibelt-protocol.txt` there, gitignored because it is proprietary; the code
+cites its section numbers. Veredas 2 needs it for reading, verifying and extending the catalog,
+not for building.
+
+**Taken (reversible, pending the operator):** not copied. `docs/vendor/` is gitignored here as
+there (its README says what belongs in it); the code keeps citing section numbers; the constants
+are in code and pinned by the telegram tests, so a machine without the file builds and tests.
+To read the spec, use the copy beside Veredas 1 or drop one into `docs/vendor/` here.
+
+**Reversible?** Yes: a file and an ignore rule.

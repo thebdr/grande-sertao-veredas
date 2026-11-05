@@ -9,3 +9,6 @@ __pycache__/
 # editor state
 .vs/
 *.user
+# proprietary vendor documents stay machine-local (docs/questions.md Q6)
+docs/vendor/*
+!docs/vendor/README.md
