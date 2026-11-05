@@ -10,15 +10,15 @@
     "telegram_capture"
   ],
   "exitCode": 0,
-  "outputSha": "a667826e9132858eab83e2e84ef65347ee3988803d4e5fbad12db64eb4f598c7",
-  "outputTail": "test a_scanner_request_becomes_the_fields_a_plan_matches_on ... ok\ntest binary_fields_read_at_offsets_in_both_byte_orders ... ok\ntest barcode_splitting_is_configurable_and_bounded ... ok\ntest a_no_read_parcel_captures_no_barcodes_but_says_why ... ok\ntest a_body_too_short_for_a_field_does_not_match_and_does_not_panic ... ok\ntest unmeasured_dimensions_stay_unknown_rather_than_becoming_zero ... ok\ntest a_binary_field_wins_a_name_collision_with_the_regex ... ok\ntest generic_regex_capture_names_its_groups ... ok\ntest repeat_patterns_capture_every_occurrence_in_order ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.02s\n     Running tests\\telegram_capture.rs (target\\debug\\deps\\telegram_capture-294b5adabf74545c.exe)",
-  "ranAt": "2026-11-05T20:55:25.210Z",
-  "headCommit": "9ba99fbaab6b264895a00bc956a4f4fd95114dca",
+  "outputSha": "42a29871baaef5eb2255460476a8213658739129ae998e9a49d5db04cd0c20ad",
+  "outputTail": "test the_barcode_format_caps_bounds_and_separates_exactly ... ok\ntest barcode_splitting_is_configurable_and_bounded ... ok\ntest unmeasured_dimensions_stay_unknown_rather_than_becoming_zero ... ok\ntest a_binary_field_wins_over_a_repeat_too ... ok\ntest a_binary_field_wins_a_name_collision_with_the_regex ... ok\ntest repeat_patterns_capture_every_occurrence_in_order ... ok\ntest a_bad_pattern_drops_only_its_own_capture ... ok\ntest generic_regex_capture_names_its_groups ... ok\ntest a_repeat_stops_at_its_own_cap ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.46s\n     Running tests\\telegram_capture.rs (target\\debug\\deps\\telegram_capture-294b5adabf74545c.exe)",
+  "ranAt": "2026-11-05T21:19:31.175Z",
+  "headCommit": "1ce4826a3a6c67ecaa2322a4cbe41c2c6d3199f1",
   "tests": [
     {
       "name": "crates/veredas-core/tests/telegram_capture.rs",
       "file": "crates/veredas-core/tests/telegram_capture.rs",
-      "fileSha": "e7308977ec361ef169698b8a3434d108bd181382258cd8cdd47b2b9bb6fafe52"
+      "fileSha": "0f651768ce9f57fec8004780b546ee8d39b8a7968d1636fd2eb56220d18dc6bb"
     }
   ]
 }

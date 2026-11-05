@@ -529,7 +529,7 @@ fn golden_bodies_external_unit_to_msc() {
         .u16(0x7788)
         .u8(1)
         .u8(3)
-        .u8(2)
+        .u8(5) // byScnId: distinct from byNumAlternativeDest
         .u8(11)
         .u8(7)
         .u8(0xFB) // cDestUnloadOffset = -5
@@ -550,7 +550,7 @@ fn golden_bodies_external_unit_to_msc() {
             cell: 0x7788,
             used_cells: 1,
             flag: 3,
-            scn_id: 2,
+            scn_id: 5,
             operator_id: 11,
             ramp_id: 7,
             dest_unload_offset: -5,
@@ -907,9 +907,9 @@ fn golden_ispc_msc_data_and_fsg_statistics() {
     // then the plant-custom tail, filling the 240-byte szUserData.
     assert_eq!((IspcMscData::FIXED_LEN, FsgStatisticData::LEN), (44 + 95, 95));
     let body = B::new()
-        .u8(11) // byISPC_ID
+        .u8(31) // byISPC_ID
         .u16(0x0102) // wFirstUsedCell
-        .u8(2) // byUsedCells
+        .u8(1) // byUsedCells
         .u8(0x55) // byUsedGaps
         .u8(0x66) // byLoadFlags
         .u16(0x0304) // wRejectReason
@@ -944,9 +944,9 @@ fn golden_ispc_msc_data_and_fsg_statistics() {
         .done();
     assert_eq!(body.len(), 240);
     let expected = IspcMscData {
-        ispc_id: 11,
+        ispc_id: 31,
         first_used_cell: 0x0102,
-        used_cells: 2,
+        used_cells: 1,
         used_gaps: 0x55,
         load_flags: 0x66,
         reject_reason: 0x0304,
@@ -1249,4 +1249,26 @@ fn an_output_name_keeps_its_terminator() {
         });
         assert_eq!(msg.encode(Endian::Little), Ok(body.clone()), "{long} chars");
     }
+}
+
+#[test]
+fn an_output_name_never_ends_in_half_a_character_and_reads_back_trimmed() {
+    // 24 ASCII then a two-byte character: it would need bytes 24..26 of the 25 usable.
+    let name = format!("{}\u{c1}", "X".repeat(24));
+    let msg = Message::OutputSignals(OutputSignals { output_name: name, ..Default::default() });
+    let body = msg.encode(Endian::Little).unwrap();
+    assert!(body[3..27].iter().all(|b| *b == b'X'));
+    assert_eq!((body[27], body[28]), (0, 0), "the character dropped whole, the block NUL-ended");
+    let Message::OutputSignals(back) = Message::decode(msg.msg_id(), &body, Endian::Little).unwrap() else {
+        panic!("an output signal decodes as one");
+    };
+    assert_eq!(back.output_name, "X".repeat(24));
+    // An ASCIIZ field reads back without trailing spaces (the wire pads with NUL).
+    let msg = Message::OutputSignals(OutputSignals { output_name: "CONV ".into(), ..Default::default() });
+    let Message::OutputSignals(back) =
+        Message::decode(msg.msg_id(), &msg.encode(Endian::Little).unwrap(), Endian::Little).unwrap()
+    else {
+        panic!("an output signal decodes as one");
+    };
+    assert_eq!(back.output_name, "CONV");
 }

@@ -587,7 +587,8 @@ fn an_idle_link_is_probed_once_per_window_and_never_while_the_peer_talks() {
         server.status().keepalives_received > probes
     });
     let keepalive_events = server.poll().iter().filter(|e| matches!(e, ChannelEvent::KeepAlive { .. })).count();
-    assert!(keepalive_events as u64 > probes, "{keepalive_events} events for {probes} probes");
+    // Every probe is an event (the connect keep-alive's may have been drained by `wait_connected`).
+    assert!(keepalive_events as u64 >= probes, "{keepalive_events} events for {probes} probes");
 
     // While the listener talks every 100 ms, the dialer never probes.
     let before = client.status().keepalives_sent;

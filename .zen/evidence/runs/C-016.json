@@ -10,15 +10,15 @@
     "rng"
   ],
   "exitCode": 0,
-  "outputSha": "ee69fd774c4e77a03510c8d9a62c56f1698a0d334034bf56be0293c5d8c92804",
-  "outputTail": "\nrunning 4 tests\ntest int_in_covers_both_ends_and_flip_produces_both_faces ... ok\ntest the_same_seed_replays_and_streams_diverge ... ok\ntest uniform_survives_the_values_a_gui_lets_you_type ... ok\ntest uniform_never_leaves_the_range_even_when_rounding_fights_it ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.03s\n     Running tests\\rng.rs (target\\debug\\deps\\rng-46efd97ad967e6e9.exe)",
-  "ranAt": "2026-11-05T20:55:32.772Z",
-  "headCommit": "9ba99fbaab6b264895a00bc956a4f4fd95114dca",
+  "outputSha": "2b90c6a44265afd220be7646f6ae1d58cd1c1e133befc0a8c6a925cdc4d8f212",
+  "outputTail": "running 8 tests\ntest int_in_covers_both_ends_and_flip_produces_both_faces ... ok\ntest int_in_survives_ranges_wider_than_i64 ... ok\ntest it_is_the_reference_pcg32_and_replays_its_whole_sequence ... ok\ntest streams_are_taken_modulo_two_to_the_63 ... ok\ntest the_same_seed_replays_and_streams_diverge ... ok\ntest uniform_survives_the_values_a_gui_lets_you_type ... ok\ntest uniform_never_returns_nan_when_the_width_overflows ... ok\ntest uniform_never_leaves_the_range_even_when_rounding_fights_it ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.71s\n     Running tests\\rng.rs (target\\debug\\deps\\rng-46efd97ad967e6e9.exe)",
+  "ranAt": "2026-11-05T21:19:39.661Z",
+  "headCommit": "1ce4826a3a6c67ecaa2322a4cbe41c2c6d3199f1",
   "tests": [
     {
       "name": "crates/veredas-core/tests/rng.rs",
       "file": "crates/veredas-core/tests/rng.rs",
-      "fileSha": "b4c3794563287d8361be8e2f31f281a8209053235217fc0ea7bd403c21428bc6"
+      "fileSha": "fb8fb4980639b9cb9e6c855e0621a78b0e970bb16a820ca961b14d4e83b10821"
     }
   ]
 }

@@ -429,3 +429,17 @@ fn every_read_status_names_its_reason() {
     assert_eq!(status_of(Some(0x00)).as_deref(), Some("other(0)"));
     assert_eq!(status_of(None).as_deref(), Some("other(0)"), "an empty block, no panic");
 }
+
+#[test]
+fn a_repeat_without_a_group_captures_the_whole_match() {
+    // Group 1 when the pattern has one, else the whole match: `\d{6}` is how a barcode repeat
+    // is most naturally written, and blanks here would read as a no-read to the sort plan.
+    let capture = Capture::new(&CaptureSpec {
+        repeat: vec![RepeatSpec { name: "barcode".into(), pattern: r"\d{6}".into(), max: 16 }],
+        ..Default::default()
+    });
+    let out = capture.extract(b"x 123456 y 654321 z", Endian::Little).unwrap();
+    let expected: HashMap<String, String> =
+        [("barcode1", "123456"), ("barcode2", "654321")].map(|(k, v)| (k.into(), v.into())).into();
+    assert_eq!(out, expected);
+}

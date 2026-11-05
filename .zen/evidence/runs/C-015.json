@@ -10,15 +10,15 @@
     "telegram_decision"
   ],
   "exitCode": 0,
-  "outputSha": "fec8900e06d613f942de07baefb4eeaf168f3dad53168ec542c873e8803a1540",
-  "outputTail": "test addresses_that_are_not_http_host_port_are_refused_before_dialling ... ok\ntest the_event_queue_drops_the_oldest_rather_than_blocking ... ok\ntest a_real_exchange_carries_the_decision_back ... ok\ntest a_path_after_the_port_still_dials_the_port ... ok\ntest a_service_with_no_answer_is_distinguishable_from_a_chute ... ok\ntest events_and_bin_states_go_to_their_endpoints_as_json ... ok\ntest a_success_yields_its_body_and_a_refusal_is_never_an_answer ... ok\ntest a_service_that_never_answers_times_out ... ok\ntest an_unreachable_service_fails_fast_instead_of_hanging ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.57s\n     Running tests\\telegram_decision.rs (target\\debug\\deps\\telegram_decision-6ce833b82f69b07f.exe)",
-  "ranAt": "2026-11-05T20:55:30.872Z",
-  "headCommit": "9ba99fbaab6b264895a00bc956a4f4fd95114dca",
+  "outputSha": "0b5d286b944d8762fa5784653951e12567ec7cdb9a58fb650f2cf5790153b0f1",
+  "outputTail": "test a_service_with_no_answer_is_distinguishable_from_a_chute ... ok\ntest a_path_after_the_port_still_dials_the_port ... ok\ntest a_real_exchange_carries_the_decision_back ... ok\ntest events_and_bin_states_go_to_their_endpoints_as_json ... ok\ntest every_request_announces_its_exact_length ... ok\ntest a_success_yields_its_body_and_a_refusal_is_never_an_answer ... ok\ntest a_service_that_never_answers_times_out ... ok\ntest an_unreachable_service_fails_fast_instead_of_hanging ... ok\ntest the_bound_covers_a_reply_that_drips_in ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.05s\n     Running tests\\telegram_decision.rs (target\\debug\\deps\\telegram_decision-6ce833b82f69b07f.exe)",
+  "ranAt": "2026-11-05T21:19:37.104Z",
+  "headCommit": "1ce4826a3a6c67ecaa2322a4cbe41c2c6d3199f1",
   "tests": [
     {
       "name": "crates/veredas-core/tests/telegram_decision.rs",
       "file": "crates/veredas-core/tests/telegram_decision.rs",
-      "fileSha": "18f337237a18185db6c82a96a614c0c607f48dcb6af9fddce0db25068cc6667d"
+      "fileSha": "1ad1a73f8e1c1e7840abc48b5c1475c0720fec5d1262729328743a1df3631c9b"
     }
   ]
 }

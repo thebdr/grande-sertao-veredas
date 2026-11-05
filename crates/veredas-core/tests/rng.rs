@@ -146,3 +146,15 @@ fn uniform_never_returns_nan_when_the_width_overflows() {
     let distinct: std::collections::BTreeSet<u64> = draws.iter().map(|v| v.to_bits()).collect();
     assert!(distinct.len() > 900, "not stuck on one value: {} distinct", distinct.len());
 }
+
+#[test]
+fn next_f64_is_in_zero_to_one_and_scales_the_reference_draws() {
+    // Two reference u32 draws make one 53-bit double: for (42, 54) the first two doubles.
+    let mut r = Pcg32::new(42, 54);
+    assert_eq!((r.next_f64(), r.next_f64()), (0.6303102205231708, 0.7270080560154601));
+    // The zero state draws exactly 0, the bottom of the range.
+    assert_eq!(Pcg32::new(0x3f68_1078_cd61_d75a, 0).next_f64(), 0.0);
+    // Never 1: a weighted draw scaled by its total must stay under the total.
+    let mut r = Pcg32::new(9, 9);
+    assert!((0..1_000_000).all(|_| (0.0..1.0).contains(&r.next_f64())));
+}

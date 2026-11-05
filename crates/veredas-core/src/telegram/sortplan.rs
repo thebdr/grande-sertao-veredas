@@ -370,19 +370,30 @@ impl SortPlan {
     pub fn remember(&mut self, parcel: &Parcel, decision: &Decision) {
         if decision.tier == Tier::Routing {
             let key = self.sticky_key(parcel);
-            self.sticky.put(key, decision.destination);
+            // The rule that decided is the first that matches (rules are
+            // fixed and `decide` just ran on this parcel); a `@table` answer
+            // remembers its table, so a replay is judged by that table's rows.
+            let table = self
+                .rules
+                .iter()
+                .find(|rule| rule.matches(parcel))
+                .and_then(|rule| rule.destination.strip_prefix('@'))
+                .map(str::to_string);
+            self.sticky.put(key, decision.destination, table);
         }
     }
 
+    /// The parcel's identity across scan points: the plan's named field when
+    /// the parcel carries it with a value, else the object id. The two live
+    /// in separate namespaces, and a blank value is no identity: blank or
+    /// overlapping keys handed one parcel's answer to another (C-014, refute
+    /// round 2).
     fn sticky_key(&self, parcel: &Parcel) -> String {
         let name = self.settings.sticky_key.trim();
-        if name.is_empty() {
-            return parcel.object_id.to_string();
+        match parcel.field(name).filter(|v| !name.is_empty() && !v.trim().is_empty()) {
+            Some(value) => format!("field:{value}"),
+            None => format!("object:{}", parcel.object_id),
         }
-        parcel
-            .field(name)
-            .map(str::to_string)
-            .unwrap_or_else(|| parcel.object_id.to_string())
     }
 
     /// Decide where a parcel goes.
@@ -401,8 +412,11 @@ impl SortPlan {
         // 1. Already decided for this parcel? Only if it is still able
         //    to take it — a chute that filled since must not be reused.
         let key = self.sticky_key(parcel);
-        if let Some(dest) = self.sticky.get(&key)
-            && self.eligible_dest(dest, parcel)
+        if let Some((dest, table)) = self.sticky.get(&key)
+            && match table {
+                Some(table) => self.eligible_in_table(table, dest, parcel),
+                None => self.eligible_dest(dest, parcel),
+            }
         {
             self.counts.sticky += 1;
             return Ok(Decision {
@@ -473,11 +487,10 @@ impl SortPlan {
             return false;
         }
         // Rows are per (destination, filter) — the parcel may match any
-        // row naming this chute, in the main table or a named one (a
-        // remembered `@table` answer keeps its table's limits).
+        // row naming this chute in the main table. (A `@table` answer is
+        // judged by its own table: `eligible_in_table`.)
         let mut named = false;
-        let rows = self.destinations.iter().chain(self.settings.tables.values().flatten());
-        for row in rows {
+        for row in &self.destinations {
             if row.value != dest {
                 continue;
             }
@@ -490,6 +503,22 @@ impl SortPlan {
         // not list at all; trust the operator's explicit rule, but never
         // trust a blocked chute (checked above).
         !named
+    }
+
+    /// Can this chute, drawn from `table`, take this parcel right now: not
+    /// blocked, and a row of that table naming it admits the parcel. A
+    /// remembered table answer is judged by the table it came from, not by
+    /// another table that lists the same chute (C-014, refute round 2).
+    fn eligible_in_table(&self, table: &str, dest: u16, parcel: &Parcel) -> bool {
+        !self.blocked.contains_key(&dest)
+            && self.settings.tables.get(table).is_some_and(|rows| {
+                rows.iter().any(|row| {
+                    row.value == dest
+                        && row.enabled
+                        && row.limits.admits(&parcel.physical)
+                        && filters_match(row, parcel)
+                })
+            })
     }
 
     /// Draw from a weighted table over the eligible rows.
@@ -512,19 +541,24 @@ impl SortPlan {
                     && filters_match(row, parcel)
             })
             .collect();
-        let total: f64 = eligible.iter().map(|row| row.weight).sum();
-        if !(total > 0.0 && total.is_finite()) {
+        // Weights are taken relative to the largest, so their sum stays
+        // finite however large each finite weight is (two weights of 1e308
+        // summed to infinity and drew nothing; C-014, refute round 2).
+        let largest = eligible.iter().map(|row| row.weight).fold(0.0, f64::max);
+        if largest <= 0.0 {
             return None;
         }
+        let share = |row: &DestinationRow| row.weight / largest;
+        let total: f64 = eligible.iter().map(|row| share(row)).sum();
         // A share of the SUM OF ENABLED weights — the operator's rule,
         // no normalization to 100. Drawn unrounded: rounding the point to
         // a fixed number of decimals skewed weights that sum below 1e-4.
         let mut point = self.rng.next_f64() * total;
         for row in &eligible {
-            if point <= row.weight {
+            if point <= share(row) {
                 return Some(row.value);
             }
-            point -= row.weight;
+            point -= share(row);
         }
         eligible.last().map(|row| row.value)
     }
@@ -604,8 +638,9 @@ impl CompiledRule {
 /// gets the answer it already got.
 struct StickyMemory {
     capacity: usize,
-    map: HashMap<String, u16>,
-    /// Insertion order, for eviction.
+    /// Key → (destination, the `@table` it was drawn from, if any).
+    map: HashMap<String, (u16, Option<String>)>,
+    /// Remembering order, oldest first, for eviction.
     order: std::collections::VecDeque<String>,
 }
 
@@ -618,17 +653,21 @@ impl StickyMemory {
         }
     }
 
-    fn get(&self, key: &str) -> Option<u16> {
-        self.map.get(key).copied()
+    fn get(&self, key: &str) -> Option<(u16, Option<&str>)> {
+        self.map.get(key).map(|(dest, table)| (*dest, table.as_deref()))
     }
 
-    fn put(&mut self, key: String, dest: u16) {
-        if self.map.insert(key.clone(), dest).is_none() {
-            self.order.push_back(key);
-            while self.order.len() > self.capacity {
-                if let Some(old) = self.order.pop_front() {
-                    self.map.remove(&old);
-                }
+    /// Remember an answer as the newest: a key remembered again moves to
+    /// the back of the order, so it is not the next evicted (C-014, refute
+    /// round 2).
+    fn put(&mut self, key: String, dest: u16, table: Option<String>) {
+        if self.map.insert(key.clone(), (dest, table)).is_some() {
+            self.order.retain(|k| k != &key);
+        }
+        self.order.push_back(key);
+        while self.order.len() > self.capacity {
+            if let Some(old) = self.order.pop_front() {
+                self.map.remove(&old);
             }
         }
     }

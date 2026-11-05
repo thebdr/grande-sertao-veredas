@@ -679,3 +679,127 @@ fn the_reject_counter_counts() {
     assert_eq!(plan.decide(&heavy).unwrap(), Decision { destination: 99, tier: Tier::Reject });
     assert_eq!(plan.counts, TierCounts { reject: 1, ..Default::default() });
 }
+
+// ---------------------------------------------------------------------------
+// Refute round 2 (C-014).
+// ---------------------------------------------------------------------------
+
+fn keyed_plan() -> SortPlan {
+    SortPlan::new(
+        PlanSettings { sticky_key: "id2".into(), seed: Some(3), ..Default::default() },
+        vec![dest(1, 10.0)],
+        vec![rule("id", "^A", "5")],
+    )
+}
+
+#[test]
+fn a_blank_or_overlapping_sticky_key_is_no_shared_identity() {
+    for blank in ["", "   "] {
+        let mut plan = keyed_plan();
+        let first = parcel(1, &[("id", "A1"), ("id2", blank)]);
+        let d = plan.decide(&first).unwrap();
+        assert_eq!(d, Decision { destination: 5, tier: Tier::Routing });
+        plan.remember(&first, &d);
+        // Another parcel with a blank id2 is not the same parcel: its own content decides.
+        let other = parcel(2, &[("id", "B1"), ("id2", blank)]);
+        assert_eq!(plan.decide(&other).unwrap(), Decision { destination: 1, tier: Tier::Weighted });
+        // The first, announced again, is still itself (by its object id).
+        assert_eq!(plan.decide(&first).unwrap().tier, Tier::Sticky);
+    }
+    // Object 77 without id2 and another parcel whose id2 is "77" are different keys.
+    let mut plan = keyed_plan();
+    let seventy_seven = parcel(77, &[("id", "A7")]);
+    let d = plan.decide(&seventy_seven).unwrap();
+    plan.remember(&seventy_seven, &d);
+    assert_eq!(
+        plan.decide(&parcel(9, &[("id", "B9"), ("id2", "77")])).unwrap(),
+        Decision { destination: 1, tier: Tier::Weighted }
+    );
+}
+
+#[test]
+fn a_remembered_table_answer_is_judged_by_its_own_table_only() {
+    // Chute 30 is unlimited in the main table, limited to 1 kg in the table the rule draws from.
+    let mut settings = PlanSettings { seed: Some(42), ..Default::default() };
+    let mut light = dest(30, 1.0);
+    light.limits.max_weight_g = Some(1_000);
+    settings.tables.insert("germany".into(), vec![light, dest(31, 1.0)]);
+    let mut plan = SortPlan::new(
+        settings,
+        vec![dest(1, 50.0), dest(30, 50.0)],
+        vec![rule("id2", "^DE", "@germany")],
+    );
+    let mut found = None;
+    for i in 0..100 {
+        let p = parcel(i, &[("id2", &format!("DE{i}"))]);
+        let d = plan.decide(&p).unwrap();
+        if d.destination == 30 {
+            plan.remember(&p, &d);
+            found = Some(p);
+            break;
+        }
+    }
+    let mut p = found.expect("chute 30 is drawn within 100 parcels");
+    p.physical.weight_g = Some(8_000);
+    assert_eq!(plan.decide(&p).unwrap(), Decision { destination: 31, tier: Tier::Routing });
+}
+
+#[test]
+fn a_direct_rule_is_judged_by_the_main_table_and_trusted_when_unlisted_there() {
+    // Chute 30 appears only in a named table, scoped there to infeed 2 and disabled for 40: a
+    // rule naming the chute itself is the operator's explicit word, as in Veredas 1.
+    let mut settings = PlanSettings { seed: Some(1), ..Default::default() };
+    let mut off = dest(40, 1.0);
+    off.enabled = false;
+    settings.tables.insert("germany".into(), vec![scoped(30, 1.0, "2"), off]);
+    let mut plan = SortPlan::new(
+        settings,
+        vec![dest(1, 1.0)],
+        vec![rule("id", "^U", "30"), rule("id", "^V", "40")],
+    );
+    assert_eq!(
+        plan.decide(&parcel(1, &[("id", "U1"), ("infeed", "1")])).unwrap(),
+        Decision { destination: 30, tier: Tier::Routing }
+    );
+    assert_eq!(
+        plan.decide(&parcel(2, &[("id", "V1")])).unwrap(),
+        Decision { destination: 40, tier: Tier::Routing }
+    );
+}
+
+#[test]
+fn an_answer_remembered_again_is_the_newest() {
+    let mut settings = PlanSettings { sticky_capacity: 2, seed: Some(5), ..Default::default() };
+    settings.tables.insert("t".into(), vec![dest(30, 1.0), dest(31, 1.0)]);
+    let mut plan = SortPlan::new(settings, vec![dest(1, 1.0)], vec![rule("id", "^X", "@t")]);
+    let decide_and_remember = |plan: &mut SortPlan, p: &Parcel| {
+        let d = plan.decide(p).unwrap();
+        assert_eq!(d.tier, Tier::Routing);
+        plan.remember(p, &d);
+        d.destination
+    };
+    let (a, b, c) = (parcel(1, &[("id", "XA")]), parcel(2, &[("id", "XB")]), parcel(3, &[("id", "XC")]));
+    let first = decide_and_remember(&mut plan, &a);
+    decide_and_remember(&mut plan, &b);
+    // A's chute blocks: A is decided afresh and remembered again, now the newest.
+    plan.set_blocked(first, Some("full".into()));
+    assert_ne!(decide_and_remember(&mut plan, &a), first);
+    plan.set_blocked(first, None);
+    decide_and_remember(&mut plan, &c);
+    // Capacity 2: the oldest, B, went; A and C stay.
+    let tier = |plan: &mut SortPlan, p: &Parcel| plan.decide(p).unwrap().tier;
+    assert_eq!(
+        [tier(&mut plan, &a), tier(&mut plan, &c), tier(&mut plan, &b)],
+        [Tier::Sticky, Tier::Sticky, Tier::Routing]
+    );
+}
+
+#[test]
+fn huge_finite_weights_keep_their_shares() {
+    let mut plan = seeded(vec![dest(1, 1e308), dest(2, 1e308)], vec![]);
+    let got = shares(&mut plan, 4_000, &[]);
+    assert!((f64::from(got[&1]) / 4_000.0 - 0.5).abs() < 0.04, "{got:?}");
+    let mut plan = seeded(vec![dest(1, f64::MAX), dest(2, f64::MAX / 3.0)], vec![]);
+    let got = shares(&mut plan, 8_000, &[]);
+    assert!((f64::from(got[&1]) / 8_000.0 - 0.75).abs() < 0.03, "{got:?}");
+}

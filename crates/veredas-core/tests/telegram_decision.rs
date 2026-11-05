@@ -485,3 +485,27 @@ fn a_requeue_onto_a_full_queue_keeps_the_bound_and_drops_the_oldest() {
     assert_eq!((q.stats().queued, q.stats().dropped), (3, 2));
     assert_eq!(ids(&q), [2, 3, 4]);
 }
+
+#[tokio::test]
+async fn the_bound_covers_a_connect_that_never_completes() {
+    // A listener that never accepts, its queue filled: the next SYN is dropped (Linux) or left
+    // pending (Windows), so the dial itself hangs, the likeliest stall on a LAN.
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let listener = socket.listen(1).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fillers: Vec<_> = (0..3)
+        .map(|_| tokio::spawn(tokio::net::TcpStream::connect(("127.0.0.1", port))))
+        .collect();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let c = DecisionClient::new(format!("http://127.0.0.1:{port}"), Duration::from_millis(300));
+    let started = std::time::Instant::now();
+    let err = c.decide(&DecideRequest::default()).await.unwrap_err();
+    let took = started.elapsed();
+    assert!(matches!(err, DecisionError::Timeout(t) if t == Duration::from_millis(300)), "{err:?}");
+    assert!(took >= Duration::from_millis(300) && took < Duration::from_millis(900), "{took:?}");
+    for f in fillers {
+        f.abort();
+    }
+    drop(listener);
+}

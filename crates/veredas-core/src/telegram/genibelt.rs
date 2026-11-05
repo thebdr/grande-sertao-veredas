@@ -227,8 +227,14 @@ impl Writer {
 
     /// A fixed-width text block that always ends in NUL: at most `n - 1` bytes of text, then
     /// zeros (§4.1.1.7: the last byte of the block is always 0).
-    fn asciiz_block(&mut self, data: &[u8], n: usize) -> &mut Self {
-        self.block(&data[..data.len().min(n.saturating_sub(1))], n)
+    /// Cut on a character boundary: text that is not ASCII goes out as UTF-8, as in Veredas 1,
+    /// but never as half a character (C-011, refute round 2).
+    fn asciiz_block(&mut self, text: &str, n: usize) -> &mut Self {
+        let mut end = text.len().min(n.saturating_sub(1));
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.block(&text.as_bytes()[..end], n)
     }
 
     /// A fixed-width block: truncated or zero-padded to exactly `n`.
@@ -1812,7 +1818,7 @@ impl Message {
             Message::OutputSignals(m) => w
                 .u8(m.class_id)
                 .u16(m.device_id)
-                .asciiz_block(m.output_name.as_bytes(), 26)
+                .asciiz_block(&m.output_name, 26)
                 .u8(m.output_state)
                 .u16(m.time_on_ms)
                 .u16(m.time_off_ms)

@@ -464,3 +464,14 @@ fn lengths_that_disagree_are_refused_as_soon_as_the_disagreement_is_visible() {
     }
     assert_eq!(decode(&bytes, Endian::Little), Ok((t, bytes.len())));
 }
+
+#[test]
+fn the_remaining_headers_check_holds_on_both_sides_of_its_boundary() {
+    // LENGTH 8, NUM DATA 2, the first segment 1 byte long: 3 bytes left for a 4-byte header.
+    let short = [0xFD, 0, 0, 0, 0, 0, 0, 0, 8, 0, 2, 0, 1, 0, 1, 0];
+    assert_eq!(decode(&short, Endian::Little), Err(DecodeError::BadFrame { resync: 16 }));
+    // The first segment empty: exactly 4 bytes left, a valid frame could still follow.
+    let mut exact = short;
+    exact[14] = 0;
+    assert_eq!(decode(&exact, Endian::Little), Err(DecodeError::NeedMore));
+}
