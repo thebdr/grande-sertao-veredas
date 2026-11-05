@@ -1035,3 +1035,53 @@ idle_ms = 0
     assert_eq!(acks, 254);
     assert_eq!(server.status().duplicates_skipped, 0);
 }
+
+// ---------------------------------------------------------------------------
+// Refute round 6 (C-012): a send the encoder refuses takes no number.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_refused_send_takes_no_number() {
+    // A cycle of 1..=3: A, two frames whose class cannot fit its byte (refused at encode), B.
+    // Had the refused sends taken 2 and 3, B would wrap to 1, repeat A and be skipped. Both a
+    // unicast send (dialler to listener) and a send to all (listener to dialler) are checked.
+    let short_cycle = |idle| {
+        let mut s = spec(idle);
+        let rules = s.sequence.as_mut().unwrap();
+        (rules.first, rules.last) = (1, 3);
+        s
+    };
+    let unfit = || {
+        let mut f = payload(1, b"X");
+        f.fields.insert("class".into(), 300);
+        f
+    };
+    let port = free_port();
+    let server =
+        Channel::start(ChannelConfig::new("listener", Role::Listen { bind: "127.0.0.1".into(), port }, short_cycle(0)));
+    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+    let client =
+        Channel::start(ChannelConfig::new("dialer", Role::Connect { host: "127.0.0.1".into(), port }, short_cycle(0)));
+    let peer = wait_connected(&client);
+    let _ = wait_connected(&server);
+
+    client.send(peer, payload(1, b"A"));
+    client.send(peer, unfit());
+    client.send(peer, unfit());
+    client.send(peer, payload(1, b"B"));
+    server.send_all(payload(2, b"C"));
+    server.send_all(unfit());
+    server.send_all(unfit());
+    server.send_all(payload(2, b"D"));
+
+    let numbered = |frames: Vec<Frame>| -> Vec<(Vec<u8>, u8)> {
+        frames.iter().map(|f| (f.segments[0].body.clone(), seq(f))).collect()
+    };
+    assert_eq!(numbered(collect(&server, Duration::from_secs(2))), [(b"A".to_vec(), 1), (b"B".to_vec(), 2)]);
+    assert_eq!(numbered(collect(&client, Duration::from_millis(500))), [(b"C".to_vec(), 1), (b"D".to_vec(), 2)]);
+    for ch in [&server, &client] {
+        let s = ch.status();
+        assert_eq!(s.duplicates_skipped, 0);
+        assert_eq!(s.last_error.as_deref(), Some("class = 300 does not fit its 1-byte field"));
+    }
+}

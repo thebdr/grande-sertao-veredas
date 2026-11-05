@@ -287,14 +287,13 @@ impl Peer {
         }
     }
 
-    /// The next sequence number to put on the wire: `first..=last`, cycling.
-    fn next_sequence(&mut self, rules: &SequenceRules) -> u64 {
-        let next = match self.sequence {
+    /// The number after the last one stamped: `first..=last`, cycling. Taking it is the
+    /// caller's, once the frame it stamps has encoded.
+    fn following(&self, rules: &SequenceRules) -> u64 {
+        match self.sequence {
             Some(s) if s >= rules.first && s < rules.last => s + 1,
             _ => rules.first,
-        };
-        self.sequence = Some(next);
-        next
+        }
     }
 
     /// Queue a frame and hand the socket whatever it takes now, without waiting. `Err` means
@@ -444,17 +443,23 @@ fn reads_as_keepalive(spec: &ChannelSpec, frame: &Frame) -> bool {
 /// takes the next number when the rules count keep-alives (`keepalive_counts`); when they do
 /// not, it carries the last number stamped (or `connect`) and takes none, so the receiver, which
 /// ignores its number, never meets a data frame that came back round to the previous one
-/// (C-012, refute rounds 4 and 5).
+/// (C-012, refute rounds 4 and 5). A number is taken only once its frame has encoded: a send
+/// the encoder refuses goes out with nothing and takes nothing (round 6).
 fn encode_for(peer: &mut Peer, spec: &ChannelSpec, frame: &Frame) -> Result<Vec<u8>, String> {
     let keepalive = reads_as_keepalive(spec, frame);
-    let sequence = spec.sequence.as_ref().map(|rules| {
+    // The number to stamp, and whether stamping it takes it.
+    let stamp = spec.sequence.as_ref().map(|rules| {
         if keepalive && !rules.keepalive_counts {
-            peer.sequence.unwrap_or(rules.connect)
+            (peer.sequence.unwrap_or(rules.connect), false)
         } else {
-            peer.next_sequence(rules)
+            (peer.following(rules), true)
         }
     });
-    spec.framing.encode(frame, sequence).map_err(|e| e.to_string())
+    let bytes = spec.framing.encode(frame, stamp.map(|(n, _)| n)).map_err(|e| e.to_string())?;
+    if let Some((n, true)) = stamp {
+        peer.sequence = Some(n);
+    }
+    Ok(bytes)
 }
 
 /// A keep-alive probe: an empty frame, numbered as any keep-alive is.
