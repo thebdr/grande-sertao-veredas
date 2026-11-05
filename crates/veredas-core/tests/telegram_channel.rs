@@ -256,18 +256,17 @@ fn a_peer_that_stops_reading_is_dropped_without_wedging_the_channel() {
     let deaf = std::net::TcpStream::connect(("127.0.0.1", port)).expect("deaf peer");
     let deaf_peer = wait_connected(&server);
 
-    // Flood it well past any socket buffer.
-    let big = payload(52002, &vec![b'x'; 480]);
-    for _ in 0..(OUTBOX_LIMIT + 200) {
-        server.send(deaf_peer, big.clone());
+    // Feed it until its socket stops taking bytes and the write timeout judges it: however
+    // large the socket buffers (Linux grows loopback ones to megabytes), the peer goes.
+    let big = payload(52002, &[b'x'; 480]);
+    let started = Instant::now();
+    while server.status().dropped_peers == 0 {
+        assert!(started.elapsed() < Duration::from_secs(60), "the deaf peer was never dropped");
+        for _ in 0..50 {
+            server.send(deaf_peer, big.clone());
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
-
-    // The channel must notice and drop it, not hang.
-    until(
-        "the deaf peer to be dropped",
-        Duration::from_secs(30),
-        || server.status().dropped_peers >= 1,
-    );
     assert_eq!(server.status().peers, 0);
 
     // And the channel is still alive: a new peer works normally.
@@ -459,25 +458,6 @@ fn a_keepalive_between_two_frames_makes_a_repeated_prg_new() {
     assert_eq!(server.status().duplicates_skipped, 2);
 }
 
-#[test]
-fn a_frame_after_a_long_quiet_spell_of_probes_is_not_skipped() {
-    // Two channels of this code: 254 probes between two data frames bring the sender's counter
-    // back to the first frame's PRG.
-    let port = free_port();
-    let server = listener(port, 600_000);
-    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
-    let client = dialer(port, 1); // probes every tick
-    let peer = wait_connected(&client);
-    let _ = wait_connected(&server);
-    client.send(peer, payload(1, b"A"));
-    let at_a = client.status().keepalives_sent;
-    until("254 probes", Duration::from_secs(30), || client.status().keepalives_sent >= at_a + 254);
-    client.send(peer, payload(1, b"B"));
-    let bodies: Vec<Vec<u8>> =
-        collect(&server, Duration::from_secs(2)).iter().map(|t| t.segments[0].data.clone()).collect();
-    assert_eq!(bodies, [b"A".to_vec(), b"B".to_vec()]);
-    assert_eq!(server.status().duplicates_skipped, 0);
-}
 
 #[test]
 fn a_reading_peer_takes_a_burst_past_the_outbox_limit() {
@@ -487,7 +467,7 @@ fn a_reading_peer_takes_a_burst_past_the_outbox_limit() {
     let client = dialer(port, 600_000);
     let _ = wait_connected(&client);
     let peer = wait_connected(&server);
-    let n = OUTBOX_LIMIT + 44;
+    let n = 300usize;
     for i in 0..n as u32 {
         server.send(peer, payload(51004, &i.to_le_bytes()));
     }
@@ -597,4 +577,199 @@ fn an_idle_link_is_probed_once_per_window_and_never_while_the_peer_talks() {
         std::thread::sleep(Duration::from_millis(100));
     }
     assert_eq!(client.status().keepalives_sent, before);
+}
+
+// ---------------------------------------------------------------------------
+// Refute round 2 (C-012): several peers at once, a deaf peer beside a healthy one, a backlog
+// at shutdown.
+// ---------------------------------------------------------------------------
+
+/// A raw client that reads and decodes everything for `wait`, returning the bodies received.
+fn raw_reader(port: u16, wait: Duration) -> std::thread::JoinHandle<Vec<Vec<u8>>> {
+    std::thread::spawn(move || {
+        let mut sock = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        raw_prgs_and_bodies(&mut sock, wait).into_iter().filter_map(|(_, body)| body).collect()
+    })
+}
+
+/// Every frame read off a raw socket for `wait`: its sequence number and its first segment.
+fn raw_prgs_and_bodies(sock: &mut std::net::TcpStream, wait: Duration) -> Vec<(u8, Option<Vec<u8>>)> {
+    use std::io::Read;
+    sock.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+    let deadline = Instant::now() + wait;
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 65536];
+    while Instant::now() < deadline {
+        if let Ok(n) = sock.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+    }
+    let mut out = Vec::new();
+    let mut at = 0;
+    while let Ok((t, used)) = codec::decode(&buf[at..], Endian::default()) {
+        out.push((t.envelope.prg, t.segments.first().map(|s| s.data.clone())));
+        at += used;
+    }
+    out
+}
+
+#[test]
+fn a_burst_reaches_a_reading_peer_quickly_with_other_peers_connected() {
+    let port = free_port();
+    let server = listener(port, 600_000);
+    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+    // Three other readers connected beside the one the burst is for.
+    let others: Vec<_> = (0..3).map(|_| raw_reader(port, Duration::from_secs(3))).collect();
+    until("three peers", Duration::from_secs(5), || server.status().peers == 3);
+    let client = dialer(port, 600_000);
+    let _ = wait_connected(&client);
+    until("four peers", Duration::from_secs(5), || server.status().peers == 4);
+    let peer = loop {
+        // The newest peer is the dialler.
+        let ids: Vec<PeerId> = server
+            .poll()
+            .into_iter()
+            .filter_map(|e| match e {
+                ChannelEvent::Connected { peer, .. } => Some(peer),
+                _ => None,
+            })
+            .collect();
+        if let Some(id) = ids.into_iter().max() {
+            break id;
+        }
+    };
+    let started = Instant::now();
+    for i in 0..300u32 {
+        server.send(peer, payload(1, &i.to_le_bytes()));
+    }
+    let mut got = Vec::new();
+    while got.len() < 300 && started.elapsed() < Duration::from_secs(5) {
+        got.extend(collect(&client, Duration::from_millis(50)));
+    }
+    let took = started.elapsed();
+    assert_eq!(got.len(), 300, "after {took:?}");
+    assert!(took < Duration::from_millis(1_500), "300 frames took {took:?} with 4 peers");
+    assert_eq!(server.status().dropped_peers, 0);
+    for o in others {
+        let _ = o.join();
+    }
+}
+
+#[test]
+fn a_deaf_peer_stalls_no_other_peer_while_it_is_timed_out() {
+    let port = free_port();
+    let server = listener(port, 600_000);
+    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+    let deaf = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let deaf_peer = wait_connected(&server);
+    let client = dialer(port, 600_000);
+    let client_peer = wait_connected(&client);
+    let _ = wait_connected(&server);
+
+    // The healthy dialler talks every 50 ms while the deaf peer is fed until it is dropped;
+    // the longest silence between two of its frames at the server is the stall.
+    let started = Instant::now();
+    let mut last_seen: Option<Instant> = None;
+    let mut worst = Duration::ZERO;
+    let mut i = 0u32;
+    while server.status().dropped_peers == 0 {
+        assert!(started.elapsed() < Duration::from_secs(60), "the deaf peer was never dropped");
+        for _ in 0..20 {
+            server.send(deaf_peer, payload(2, &[b'x'; 480]));
+        }
+        client.send(client_peer, payload(3, &i.to_le_bytes()));
+        i += 1;
+        std::thread::sleep(Duration::from_millis(50));
+        for e in server.poll() {
+            if let ChannelEvent::Received { .. } = e {
+                let now = Instant::now();
+                if let Some(prev) = last_seen {
+                    worst = worst.max(now - prev);
+                }
+                last_seen = Some(now);
+            }
+        }
+    }
+    assert!(i > 20, "the write timeout ran {:?}", started.elapsed());
+    assert!(worst < Duration::from_millis(400), "the healthy peer went unread for {worst:?}");
+    drop(deaf);
+}
+
+#[test]
+fn stop_returns_promptly_behind_a_backlog() {
+    let port = free_port();
+    let server = listener(port, 600_000);
+    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+    let deaf: Vec<_> = (0..4).map(|_| std::net::TcpStream::connect(("127.0.0.1", port)).unwrap()).collect();
+    until("four peers", Duration::from_secs(5), || server.status().peers == 4);
+    for _ in 0..450 {
+        server.send_all(payload(2, &[b'x'; 480]));
+    }
+    let started = Instant::now();
+    server.stop();
+    assert!(started.elapsed() < Duration::from_secs(2), "stop took {:?}", started.elapsed());
+    drop(deaf);
+}
+
+#[test]
+fn a_frame_after_a_quiet_spell_of_254_probes_is_not_skipped() {
+    // Two channels of this code. The dialler probes every tick; B is sent when the listener
+    // has counted 254 probes since A, aiming B at A's own sequence number. The aim races the
+    // next probe, so the attempt repeats until B carried A's number (the raw-socket test above
+    // pins the rule itself deterministically).
+    for attempt in 0..4 {
+        let port = free_port();
+        let server = listener(port, 600_000);
+        until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+        let client = dialer(port, 1);
+        let peer = wait_connected(&client);
+        let _ = wait_connected(&server);
+        client.send(peer, payload(1, b"A"));
+        let mut prg_a = None;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while prg_a.is_none() && Instant::now() < deadline {
+            for e in server.poll() {
+                if let ChannelEvent::Received { telegram, .. } = e {
+                    prg_a = Some(telegram.envelope.prg);
+
+                }
+            }
+        }
+        let prg_a = prg_a.expect("A arrived");
+        // The dialler's numbers are consumed by A and by its probes, one each, from 1: A took
+        // the number after its first (pA - 1 mod 255) probes, so B takes pA again once probes
+        // reach that count + 254 (mod 255). Watch its own probe counter and send B the moment
+        // it gets there; the next probe is a tick away.
+        let target = (u64::from(prg_a) + 253) % 255;
+        let since = client.status().keepalives_sent;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let sent = client.status().keepalives_sent;
+            if sent > since + 2 && sent % 255 == target {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the dialler stopped probing");
+        }
+        client.send(peer, payload(1, b"B"));
+        let mut prg_b = None;
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while prg_b.is_none() && Instant::now() < deadline {
+            for e in server.poll() {
+                if let ChannelEvent::Received { telegram, .. } = e {
+                    assert_eq!(telegram.segments[0].data, b"B");
+                    prg_b = Some(telegram.envelope.prg);
+                }
+            }
+        }
+        let prg_b = prg_b.expect("B was received, not skipped");
+        assert_eq!(server.status().duplicates_skipped, 0);
+        if prg_b == prg_a {
+            return;
+        }
+        eprintln!("attempt {attempt}: B carried {prg_b}, A {prg_a}; aiming again");
+    }
+    panic!("B never carried A's sequence number in four attempts");
 }

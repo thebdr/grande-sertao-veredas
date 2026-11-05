@@ -43,7 +43,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::io::AsyncReadExt;
 
 use crate::telegram::codec::{self, DecodeError};
 use crate::telegram::{Endian, Envelope, Telegram};
@@ -58,11 +57,18 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Reconnect backoff bounds for the client role.
 const RETRY_MIN: Duration = Duration::from_millis(500);
 const RETRY_MAX: Duration = Duration::from_secs(15);
-/// A write that cannot complete in this long means the peer is not
-/// reading; it is dropped rather than allowed to wedge the channel.
-const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
-/// Frames queued for one peer before it is judged unable to keep up.
-pub const OUTBOX_LIMIT: usize = 256;
+/// A peer whose socket has taken no byte of its queued frames for this long
+/// is not reading; it is dropped rather than allowed to wedge the channel.
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+/// Bytes queued for one peer, beyond what its socket has taken, before it is
+/// judged unable to keep up: a memory bound. Whether a peer reads is the
+/// write timeout's judgement, not a frame count (C-012, refute round 2: a
+/// count of 256 frames dropped peers that were reading).
+pub const OUTBOX_LIMIT_BYTES: usize = 16 * 1024 * 1024;
+/// Reads per peer per tick, so one flooding peer cannot starve the others.
+const READS_PER_TICK: usize = 64;
+/// Commands handled per wake-up before the tick gets its turn again.
+const COMMANDS_PER_WAKE: usize = 4096;
 /// Undecodable bytes tolerated before a peer is judged to be speaking
 /// some other protocol. Only ever measures a prefix that yielded no
 /// frame — a valid backlog is decoded as it arrives.
@@ -316,6 +322,11 @@ struct Peer {
     outbox: VecDeque<Vec<u8>>,
     /// How much of the front frame the socket has already taken.
     front_sent: usize,
+    /// Bytes in the outbox not yet taken by the socket.
+    queued_bytes: usize,
+    /// Since when the socket has taken nothing while bytes wait: the write
+    /// timeout runs from here, checked on each tick, never awaited.
+    stalled_since: Option<tokio::time::Instant>,
     /// Our own sequence number, stamped at SEND time.
     prg: u8,
     /// The last PRG we accepted from this peer, for duplicate skipping.
@@ -339,6 +350,8 @@ impl Peer {
             inbox: Vec::new(),
             outbox: VecDeque::new(),
             front_sent: 0,
+            queued_bytes: 0,
+            stalled_since: None,
             // Sequence 0 on connect (the connect keep-alive);
             // the first real frame is 1.
             prg: 0,
@@ -363,23 +376,28 @@ impl Peer {
     /// overflowed the outbox and dropped it as "not reading"; C-012, refute
     /// round 1). `Err` means the peer must be dropped.
     fn queue(&mut self, bytes: Vec<u8>, status: &Arc<Mutex<ChannelStatus>>) -> Result<(), String> {
+        self.queued_bytes += bytes.len();
         self.outbox.push_back(bytes);
         self.push_now(status)?;
-        if self.outbox.len() > OUTBOX_LIMIT {
+        if self.queued_bytes > OUTBOX_LIMIT_BYTES {
             return Err(format!(
-                "{} is not reading: {OUTBOX_LIMIT} frames queued",
-                self.addr
+                "{} is not reading: {} bytes queued",
+                self.addr, self.queued_bytes
             ));
         }
         Ok(())
     }
 
-    /// Write queued bytes as far as the socket accepts them right now.
+    /// Write queued bytes as far as the socket accepts them right now, and
+    /// note since when it has taken nothing while bytes wait.
     fn push_now(&mut self, status: &Arc<Mutex<ChannelStatus>>) -> Result<(), String> {
+        let mut progressed = false;
         while let Some(frame) = self.outbox.front() {
             match self.socket.try_write(&frame[self.front_sent..]) {
                 Ok(n) => {
+                    progressed |= n > 0;
                     self.front_sent += n;
+                    self.queued_bytes -= n;
                     if self.front_sent == frame.len() {
                         self.outbox.pop_front();
                         self.front_sent = 0;
@@ -391,51 +409,52 @@ impl Peer {
                 Err(e) => return Err(e.to_string()),
             }
         }
+        if self.outbox.is_empty() {
+            self.stalled_since = None;
+        } else if progressed || self.stalled_since.is_none() {
+            self.stalled_since = Some(tokio::time::Instant::now());
+        }
         Ok(())
     }
 
-    /// Write everything queued, waiting for the socket at most
-    /// `WRITE_TIMEOUT` in all. `Err` means the peer must be dropped.
-    async fn flush(&mut self, status: &Arc<Mutex<ChannelStatus>>) -> Result<(), String> {
-        let deadline = tokio::time::Instant::now() + WRITE_TIMEOUT;
-        loop {
-            self.push_now(status)?;
-            if self.outbox.is_empty() {
-                return Ok(());
+    /// Push what the socket takes now, and judge the peer: one whose socket
+    /// has taken nothing for `WRITE_TIMEOUT` is not reading. Never waits, so
+    /// a deaf peer stalls nobody else (C-012, refute round 2: awaiting the
+    /// socket here held every other peer for the whole timeout). `Err` means
+    /// the peer must be dropped.
+    fn service_writes(&mut self, status: &Arc<Mutex<ChannelStatus>>) -> Result<(), String> {
+        self.push_now(status)?;
+        match self.stalled_since {
+            Some(since) if since.elapsed() >= WRITE_TIMEOUT => {
+                Err("write timed out — the peer is not reading".into())
             }
-            match tokio::time::timeout_at(deadline, self.socket.writable()).await {
-                Ok(Ok(())) => continue,
-                Ok(Err(e)) => return Err(e.to_string()),
-                // The peer stopped reading. Dropping it is the only way
-                // to keep the channel (and shutdown) responsive.
-                Err(_) => return Err("write timed out — the peer is not reading".into()),
-            }
+            _ => Ok(()),
         }
     }
 
-    /// Read what is available and decode every complete frame.
-    async fn pump(
+    /// Read what is already there and decode every complete frame. Never
+    /// waits: a timed read per peer (Veredas 1 gave each 1 ms, which a coarse
+    /// timer stretches to 15 ms) made the tick outlast its period with two
+    /// peers, and commands backed up behind it (C-012, refute round 2).
+    fn pump(
         &mut self,
         endian: Endian,
         status: &Arc<Mutex<ChannelStatus>>,
         events: &std::sync::mpsc::Sender<ChannelEvent>,
     ) -> Result<(), String> {
         let mut chunk = [0u8; 8192];
-        loop {
-            // Read only what is already there: this must never block the
-            // channel's other work.
-            match tokio::time::timeout(Duration::from_millis(1), self.socket.read(&mut chunk)).await
-            {
-                Err(_) => break,
-                Ok(Ok(0)) => return Err("the peer closed the connection".into()),
-                Ok(Ok(n)) => {
+        for _ in 0..READS_PER_TICK {
+            match self.socket.try_read(&mut chunk) {
+                Ok(0) => return Err("the peer closed the connection".into()),
+                Ok(n) => {
                     self.inbox.extend_from_slice(&chunk[..n]);
                     self.last_rx = tokio::time::Instant::now();
                     // Decode as we read (not after): a legitimate burst
                     // of valid frames must not look like garbage.
                     self.drain_frames(endian, status, events);
                 }
-                Ok(Err(e)) => return Err(e.to_string()),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => return Err(e.to_string()),
             }
             if self.undecodable > MAX_UNDECODABLE {
                 return Err(format!(
@@ -570,48 +589,27 @@ async fn run(
 
         tokio::select! {
             cmd = commands.recv() => {
-                match cmd {
-                    None | Some(ChannelCommand::Stop) => break,
-                    Some(ChannelCommand::Send { peer, telegram }) => {
-                        // Unicast by ID: a peer that has gone is a drop,
-                        // never a delivery to whoever replaced it.
-                        match peers.iter_mut().find(|p| p.id == peer) {
-                            Some(p) => {
-                                let prg = p.next_prg();
-                                let mut frame = telegram.clone();
-                                frame.envelope = envelope(prg);
-                                match codec::encode(&frame, cfg.endian) {
-                                    Ok(bytes) => {
-                                        if let Err(e) = p.queue(bytes, &status) {
-                                            set_error(&status, e.clone());
-                                            let id = p.id;
-                                            drop_peer(&mut peers, id, &e, &status, &events);
-                                        }
-                                    }
-                                    Err(e) => set_error(&status, e.to_string()),
-                                }
-                            }
-                            None => set_error(
-                                &status,
-                                format!("peer {peer} is gone; the reply was dropped"),
-                            ),
+                // Handle this command and every one already queued behind
+                // it, so a burst never waits a tick per frame and a Stop is
+                // never stuck behind a backlog (C-012, refute round 2).
+                let mut next = cmd;
+                let mut stop = false;
+                for _ in 0..COMMANDS_PER_WAKE {
+                    match next {
+                        None | Some(ChannelCommand::Stop) => {
+                            stop = true;
+                            break;
                         }
+                        Some(cmd) => handle_command(cmd, &mut peers, &cfg, &status, &events),
                     }
-                    Some(ChannelCommand::SendAll { telegram }) => {
-                        let mut doomed = Vec::new();
-                        for p in peers.iter_mut() {
-                            let prg = p.next_prg();
-                            let mut frame = telegram.clone();
-                            frame.envelope = envelope(prg);
-                            if let Ok(bytes) = codec::encode(&frame, cfg.endian)
-                                && p.queue(bytes, &status).is_err() {
-                                    doomed.push(p.id);
-                                }
-                        }
-                        for id in doomed {
-                            drop_peer(&mut peers, id, "not reading", &status, &events);
-                        }
+                    match commands.try_recv() {
+                        Ok(cmd) => next = Some(cmd),
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => next = None,
                     }
+                }
+                if stop {
+                    break;
                 }
             }
             Some((socket, addr)) = accepted => {
@@ -673,7 +671,7 @@ async fn run(
                 // Read, decode, then write — and drop whoever failed.
                 let mut doomed: Vec<(PeerId, String)> = Vec::new();
                 for p in peers.iter_mut() {
-                    if let Err(e) = p.pump(cfg.endian, &status, &events).await {
+                    if let Err(e) = p.pump(cfg.endian, &status, &events) {
                         doomed.push((p.id, e));
                         continue;
                     }
@@ -692,7 +690,7 @@ async fn run(
                         // per idle window, not every tick.
                         p.last_rx = tokio::time::Instant::now();
                     }
-                    if let Err(e) = p.flush(&status).await {
+                    if let Err(e) = p.service_writes(&status) {
                         doomed.push((p.id, e));
                     }
                 }
@@ -706,6 +704,68 @@ async fn run(
         }
     }
     set_state(&status, "stopped");
+}
+
+/// The envelope this channel stamps on a frame.
+fn envelope_for(cfg: &ChannelConfig, prg: u8) -> Envelope {
+    Envelope {
+        class: 0,
+        source: cfg.source_node,
+        destination: cfg.destination_node,
+        prg,
+    }
+}
+
+/// One send command: stamp, encode, queue, and drop a peer whose outbox
+/// overflows.
+fn handle_command(
+    cmd: ChannelCommand,
+    peers: &mut Vec<Peer>,
+    cfg: &ChannelConfig,
+    status: &Arc<Mutex<ChannelStatus>>,
+    events: &std::sync::mpsc::Sender<ChannelEvent>,
+) {
+    match cmd {
+        ChannelCommand::Stop => {}
+        ChannelCommand::Send { peer, telegram } => {
+            // Unicast by ID: a peer that has gone is a drop, never a
+            // delivery to whoever replaced it.
+            match peers.iter_mut().find(|p| p.id == peer) {
+                Some(p) => {
+                    let prg = p.next_prg();
+                    let mut frame = telegram;
+                    frame.envelope = envelope_for(cfg, prg);
+                    match codec::encode(&frame, cfg.endian) {
+                        Ok(bytes) => {
+                            if let Err(e) = p.queue(bytes, status) {
+                                set_error(status, e.clone());
+                                let id = p.id;
+                                drop_peer(peers, id, &e, status, events);
+                            }
+                        }
+                        Err(e) => set_error(status, e.to_string()),
+                    }
+                }
+                None => set_error(status, format!("peer {peer} is gone; the reply was dropped")),
+            }
+        }
+        ChannelCommand::SendAll { telegram } => {
+            let mut doomed = Vec::new();
+            for p in peers.iter_mut() {
+                let prg = p.next_prg();
+                let mut frame = telegram.clone();
+                frame.envelope = envelope_for(cfg, prg);
+                if let Ok(bytes) = codec::encode(&frame, cfg.endian)
+                    && let Err(e) = p.queue(bytes, status)
+                {
+                    doomed.push((p.id, e));
+                }
+            }
+            for (id, why) in doomed {
+                drop_peer(peers, id, &why, status, events);
+            }
+        }
+    }
 }
 
 fn drop_peer(
