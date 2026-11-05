@@ -806,7 +806,10 @@ fn a_slow_but_reading_peer_is_never_judged_deaf() {
     for _ in 0..400 {
         server.send(peer, payload(23, &[b'x'; 5_000]));
     }
-    let read = reader.join().unwrap();
+    // Judged while the reader still reads (it reads for 6 s; the write timeout is 2 s): when it
+    // finishes it closes its socket, and a closed peer is rightly dropped.
+    std::thread::sleep(Duration::from_millis(5_000));
     assert_eq!(server.status().dropped_peers, 0, "{:?}", server.status().last_error);
+    let read = reader.join().unwrap();
     assert!(read > 300_000, "the reader kept reading: {read} bytes");
 }
