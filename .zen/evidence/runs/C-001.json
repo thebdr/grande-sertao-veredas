@@ -1,0 +1,31 @@
+{
+  "clause": "C-001",
+  "command": "cargo test -p leis --test l1_roots --test real_tree",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "leis",
+    "--test",
+    "l1_roots",
+    "--test",
+    "real_tree"
+  ],
+  "exitCode": 0,
+  "outputSha": "84ef7090188809a5e336ac1826133da29877804b4cd5ad91b43004ec30f022ee",
+  "outputTail": "test l1_the_reader_sees_what_git_would_take_not_what_a_name_suggests ... ok\ntest l1_the_reader_takes_a_manifest_in_any_case_and_a_submodule_by_its_folder ... ok\n\ntest result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.40s\n\n\nrunning 1 test\ntest the_real_tree_obeys_every_law ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.03s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running tests\\l1_roots.rs (target\\debug\\deps\\l1_roots-47f5cae1cd142f7c.exe)\nwarning: in the working copy of 'web/target/veredas-forced/Cargo.toml', LF will be replaced by CRLF the next time Git touches it\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-74c5871007f3318b.exe)",
+  "ranAt": "2026-11-05T20:05:30.833Z",
+  "headCommit": "7d70f3decd5971d6251d17deafdcaf8c8301b932",
+  "tests": [
+    {
+      "name": "tools/leis/tests/l1_roots.rs",
+      "file": "tools/leis/tests/l1_roots.rs",
+      "fileSha": "fb5ab6a7ade9cda600d2c6bc5f0372a54efdc3e7aafabeddbbf92fcb3f866f0e"
+    },
+    {
+      "name": "tools/leis/tests/real_tree.rs",
+      "file": "tools/leis/tests/real_tree.rs",
+      "fileSha": "1d0099b3c3b1a8ed9531a55c85d6bb7c17c72dce5443d2c1054a5fd589d7c839"
+    }
+  ]
+}

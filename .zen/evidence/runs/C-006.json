@@ -1,0 +1,31 @@
+{
+  "clause": "C-006",
+  "command": "cargo test -p leis --test l6_plans --test real_tree",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "leis",
+    "--test",
+    "l6_plans",
+    "--test",
+    "real_tree"
+  ],
+  "exitCode": 0,
+  "outputSha": "ad5c5ceb364aae03ba0b4fd5118973df13b326320edd71c5a54a0e650f79b2f2",
+  "outputTail": "test l6_history_names_the_commit_that_landed_code_without_its_plan ... ok\ntest l6_history_judges_every_commit_that_holds_the_code ... ok\ntest l6_history_sees_through_merges ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.46s\n\n\nrunning 1 test\ntest the_real_tree_obeys_every_law ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s\n     Running tests\\l6_plans.rs (target\\debug\\deps\\l6_plans-c0b01b2c63de2c08.exe)\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-74c5871007f3318b.exe)",
+  "ranAt": "2026-11-05T19:55:01.117Z",
+  "headCommit": "d68a7e2df9b220ed0bfcd6c33830c31e3dead0be",
+  "tests": [
+    {
+      "name": "tools/leis/tests/l6_plans.rs",
+      "file": "tools/leis/tests/l6_plans.rs",
+      "fileSha": "a0b12a2c65bc5c70979d16b2fdc1c4e2e3b6175108326a349d00a8f4c78c6387"
+    },
+    {
+      "name": "tools/leis/tests/real_tree.rs",
+      "file": "tools/leis/tests/real_tree.rs",
+      "fileSha": "1d0099b3c3b1a8ed9531a55c85d6bb7c17c72dce5443d2c1054a5fd589d7c839"
+    }
+  ]
+}

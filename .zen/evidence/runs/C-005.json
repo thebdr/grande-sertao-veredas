@@ -1,0 +1,31 @@
+{
+  "clause": "C-005",
+  "command": "cargo test -p leis --test l5_direction --test real_tree",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "leis",
+    "--test",
+    "l5_direction",
+    "--test",
+    "real_tree"
+  ],
+  "exitCode": 0,
+  "outputSha": "b06fedf8a3cc62fe2a8770e973efb3b1f781e302f1167a30a3616625ce97f9c5",
+  "outputTail": "test l5_the_bench_never_pulls_portal ... ok\ntest l5_the_planned_suite_breaks_no_law ... ok\ntest l5_every_row_of_the_clause_is_pinned ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s\n\n\nrunning 1 test\ntest the_real_tree_obeys_every_law ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s\n     Running tests\\l5_direction.rs (target\\debug\\deps\\l5_direction-ed02ebaf2cb020ed.exe)\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-74c5871007f3318b.exe)",
+  "ranAt": "2026-11-05T19:19:00.850Z",
+  "headCommit": "8862b155934c547241d658456513401dd64e9b77",
+  "tests": [
+    {
+      "name": "tools/leis/tests/l5_direction.rs",
+      "file": "tools/leis/tests/l5_direction.rs",
+      "fileSha": "b0bff5f6ff70c965f0fa711025866186d322048761725cbe01b24676cbfe4754"
+    },
+    {
+      "name": "tools/leis/tests/real_tree.rs",
+      "file": "tools/leis/tests/real_tree.rs",
+      "fileSha": "1d0099b3c3b1a8ed9531a55c85d6bb7c17c72dce5443d2c1054a5fd589d7c839"
+    }
+  ]
+}

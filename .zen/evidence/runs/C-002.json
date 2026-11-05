@@ -1,0 +1,31 @@
+{
+  "clause": "C-002",
+  "command": "cargo test -p leis --test l2_naming --test real_tree",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "leis",
+    "--test",
+    "l2_naming",
+    "--test",
+    "real_tree"
+  ],
+  "exitCode": 0,
+  "outputSha": "5c2e32926d28ad3424c0ee76b4f333c9191187bbe14ac3b26d4163097a4b560e",
+  "outputTail": "test l2_the_language_crates_follow_the_same_nome_rule ... ok\ntest l2_the_language_crates_keep_their_names ... ok\ntest l2_the_nome_is_a_letter_then_letters_and_digits ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 1 test\ntest the_real_tree_obeys_every_law ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running tests\\l2_naming.rs (target\\debug\\deps\\l2_naming-b8a0d4990a7f82f0.exe)\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-74c5871007f3318b.exe)",
+  "ranAt": "2026-11-05T19:46:22.004Z",
+  "headCommit": "777d5892e29e75b29f62b1e482d81a208270f4b8",
+  "tests": [
+    {
+      "name": "tools/leis/tests/l2_naming.rs",
+      "file": "tools/leis/tests/l2_naming.rs",
+      "fileSha": "476dca15396b99649daa2ed2c5fc70473e292e71516bebad6ddf19633e250804"
+    },
+    {
+      "name": "tools/leis/tests/real_tree.rs",
+      "file": "tools/leis/tests/real_tree.rs",
+      "fileSha": "1d0099b3c3b1a8ed9531a55c85d6bb7c17c72dce5443d2c1054a5fd589d7c839"
+    }
+  ]
+}

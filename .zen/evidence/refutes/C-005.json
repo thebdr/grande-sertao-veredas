@@ -1,0 +1,18 @@
+{
+  "clause": "C-005",
+  "verdict": "holds",
+  "ranAt": "2026-11-05T19:24:57.622Z",
+  "headCommit": "8862b155934c547241d658456513401dd64e9b77",
+  "tests": [
+    {
+      "name": "tools/leis/tests/l5_direction.rs",
+      "file": "tools/leis/tests/l5_direction.rs",
+      "symbolSha": "b0bff5f6ff70c965f0fa711025866186d322048761725cbe01b24676cbfe4754"
+    },
+    {
+      "name": "tools/leis/tests/real_tree.rs",
+      "file": "tools/leis/tests/real_tree.rs",
+      "symbolSha": "1d0099b3c3b1a8ed9531a55c85d6bb7c17c72dce5443d2c1054a5fd589d7c839"
+    }
+  ]
+}
