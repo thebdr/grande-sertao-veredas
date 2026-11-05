@@ -1,0 +1,13 @@
+{
+  "clause": "C-008",
+  "verdict": "holds",
+  "ranAt": "2026-11-05T20:46:30.407Z",
+  "headCommit": "b34c381d0503e3436503c7e877593c6d4041e45b",
+  "tests": [
+    {
+      "name": "crates/veredas-core/tests/types.rs",
+      "file": "crates/veredas-core/tests/types.rs",
+      "symbolSha": "f5f9fbad31606dd3d7aa34f5cb025222f29b25971fd81fa6ddf3a27850a85d9b"
+    }
+  ]
+}

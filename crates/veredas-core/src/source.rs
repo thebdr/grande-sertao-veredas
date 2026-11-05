@@ -113,13 +113,14 @@ impl SourceHandle {
 }
 
 /// A joined worker's result. A panic is `Panicked` whatever its payload: the payload is
-/// dropped under `catch_unwind`, so one whose own drop panics cannot unwind into the caller
-/// after the join handle is spent and leave the panic reported as a clean end.
+/// forgotten, never dropped, so one whose drop panics (or panics with another such payload,
+/// or blocks) cannot unwind into the caller after the join handle is spent and leave the
+/// panic read as a clean end. The cost is one leaked box per panicked worker.
 fn outcome_of(joined: std::thread::Result<Result<(), SourceError>>) -> Result<(), SourceError> {
     match joined {
         Ok(result) => result,
         Err(payload) => {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(payload)));
+            std::mem::forget(payload);
             Err(SourceError::Panicked)
         }
     }

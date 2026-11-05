@@ -148,6 +148,33 @@ fn a_panic_is_panicked_even_when_its_payload_panics_on_drop() {
     assert!(matches!(h.join(), Err(SourceError::Panicked)));
 }
 
+/// A payload whose drop panics with another such payload, `depth` times, then with a string.
+struct Nested(u32);
+
+impl Drop for Nested {
+    fn drop(&mut self) {
+        if self.0 > 0 {
+            std::panic::panic_any(Nested(self.0 - 1));
+        }
+        panic!("leaf");
+    }
+}
+
+#[test]
+fn a_panic_is_panicked_whatever_its_payload_does_on_drop() {
+    for depth in [1, 3] {
+        let worker = move || -> Result<(), SourceError> { std::panic::panic_any(Nested(depth)) };
+        let mut h = SourceHandle::new(SourceId::new("n"), stop_flag(), thread::spawn(worker));
+        wait_finished(&mut h);
+        assert!(matches!(h.poll_outcome(), Some(Err(SourceError::Panicked))), "depth {depth}");
+        assert!(h.is_finished(), "poll and is_finished agree");
+        assert!(matches!(h.join(), Err(SourceError::Panicked)), "depth {depth}");
+
+        let h = SourceHandle::new(SourceId::new("n"), stop_flag(), thread::spawn(worker));
+        assert!(matches!(h.join(), Err(SourceError::Panicked)), "depth {depth}, join alone");
+    }
+}
+
 #[test]
 fn a_worker_that_ended_reads_finished_before_any_poll() {
     let h = ending_with(Ok(()));

@@ -42,7 +42,10 @@ fn targets(dir: &Path) -> Vec<(String, Vec<String>, Vec<String>)> {
 /// The rule: exactly one library target of `lib`/`rlib` crate types, everything else a test.
 /// Returns what breaks it, empty when it holds.
 fn breaches(targets: &[(String, Vec<String>, Vec<String>)]) -> Vec<String> {
-    let library = |kinds: &[String]| kinds.iter().all(|k| k == "lib" || k == "rlib");
+    // An empty list is no library: cargo accepts `crate-type = []` and then builds nothing
+    // for the target (C-007, refute round 2).
+    let library =
+        |kinds: &[String]| !kinds.is_empty() && kinds.iter().all(|k| k == "lib" || k == "rlib");
     let mut out = Vec::new();
     let mut libs = 0;
     for (name, kinds, crate_types) in targets {
@@ -101,6 +104,7 @@ fn the_check_refuses_every_way_cargo_makes_an_executable() {
         ("cratetype", vec![("Cargo.toml", manifest("2024", "[lib]\ncrate-type = [\"rlib\", \"bin\"]\n"))]),
         ("underscore", vec![("Cargo.toml", manifest("2021", "[lib]\ncrate_type = [\"rlib\", \"bin\"]\n"))]),
         ("cdylib", vec![("Cargo.toml", manifest("2024", "[lib]\ncrate-type = [\"cdylib\"]\n"))]),
+        ("emptytype", vec![("Cargo.toml", manifest("2024", "[lib]\ncrate-type = []\n"))]),
         ("bench", vec![("Cargo.toml", manifest("2024", "")), ("benches/b.rs", "fn main() {}\n".into())]),
         ("build", vec![("Cargo.toml", manifest("2024", "")), ("build.rs", "fn main() {}\n".into())]),
         // Only tests left, no library (with no target at all cargo refuses the package).
@@ -132,6 +136,7 @@ fn the_check_refuses_every_way_cargo_makes_an_executable() {
             ("cratetype", false),
             ("underscore", false),
             ("cdylib", false),
+            ("emptytype", false),
             ("bench", false),
             ("build", false),
             ("nolib", false),
