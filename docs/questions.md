@@ -192,3 +192,10 @@ syntax.
   Veredas 1 spelled them (`U16`, `Ascii`, `Hex`).
 
 **Reversible?** Yes while no project file exists: a version 2 of the format, migrated by portal.
+
+**Answered (operator, 2026-11-05):** "TOML, suite-wide". The channel file stays as designed, and
+the rule is wider than that file: every plain-text config and project file of Veredas 2 is TOML,
+stating its `format` and `version` as the channel file does, misspelled keys refused. Veredas 1's
+JSON project files are not carried as they are; whatever portal absorbs of them is read into
+TOML. Recorded in the plan ("Versioned files"), in P-010, and in `docs/channel-schema.md` as the
+pattern the other files follow.

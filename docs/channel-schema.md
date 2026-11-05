@@ -7,6 +7,10 @@ suite (the plan, "Versioned files"). `veredas_core::telegram::schema::load` read
 run by it. Core knows no device: a device's layout is a file like the one below, kept with that
 device's other rules, outside the suite's code.
 
+Every plain-text config and project file of Veredas 2 follows this pattern (`docs/questions.md`
+Q10, "TOML, suite-wide"): TOML, a `format` and a `version` first, documented defaults, a
+misspelled key refused, an unknown format or version refused rather than guessed.
+
 ## The worked example: a segmented envelope
 
 A start byte, a 12-byte envelope (a class byte, source and destination nodes, a sequence number,

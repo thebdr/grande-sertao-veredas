@@ -32,8 +32,11 @@ scheme, one naming rule, and a clear role for each component.
   versions, shipped and installed together.
 - **Core ripples outward.** A MAJOR bump of `veredas-core` means every dependent is rebuilt
   and retested before its own next release.
-- **Versioned files.** Every plain-text config and project file states its schema version.
-  Portal migrates it or refuses it, and never guesses.
+- **Versioned files.** Every plain-text config and project file is TOML and states its
+  schema as `format` and `version`; a misspelled key is refused. Portal migrates it or
+  refuses it, and never guesses. Veredas 1's JSON project files are not carried as they are:
+  what portal absorbs of them is read into TOML (`docs/questions.md` Q10; the pattern is
+  `docs/channel-schema.md`).
 - **New components** start at core's current MAJOR (3.0.0 if core is on 3.x).
 - **ORCL** has its own SemVer as a language; controlador states which ORCL versions it runs.
 

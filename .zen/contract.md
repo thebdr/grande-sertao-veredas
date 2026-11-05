@@ -182,7 +182,7 @@ refute round found and what it changed is in the clause's evidence note.
 ### P-010: Versioned plain-text files
 - **Date:** 2026-11-05
 - **Source:** user (docs/veredas-plan.md "Versioning", "Versioned files")
-- **Description:** Every plain-text config and project file of the suite states its schema version; portal migrates it or refuses it, and never guesses. A portal capability (P-002), parked apart because every component's files obey it and the law that checks the stamp belongs to core's file schemas. First instance: the channel file (`veredas-channel` version 1, C-017), read by core, which refuses an unknown format or version; migration of an older version and the law over every file wait for portal.
+- **Description:** Every plain-text config and project file of the suite is TOML stating its `format` and `version` (misspelled keys refused; the operator, `docs/questions.md` Q10: "TOML, suite-wide"); portal migrates it or refuses it, and never guesses; Veredas 1's JSON project files are not carried as they are, what portal absorbs of them is read into TOML. A portal capability (P-002), parked apart because every component's files obey it and the law that checks the stamp belongs to core's file schemas. First instance: the channel file (`veredas-channel` version 1, C-017, `docs/channel-schema.md`, the pattern the others follow), read by core, which refuses an unknown format or version; migration of an older version and the law over every file wait for portal.
 - **Status:** pending
 
 ### P-011: Suite releases
