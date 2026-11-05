@@ -334,27 +334,49 @@ impl Suite {
         let read = |rel: &str| -> Result<String, Error> {
             fs::read_to_string(root.join(rel)).map_err(|source| Error::Io { path: rel.to_string(), source })
         };
-        let listing = git_bytes(root, &["ls-files", "-z", "--cached", "--others", "--exclude-standard"], None)?
-            .ok_or_else(|| Error::Io { path: root.display().to_string(), source: io::Error::other("not a git repository: the laws read what the repository holds") })?;
+        let not_a_repo = || Error::Io { path: root.display().to_string(), source: io::Error::other("not a git repository: the laws read what the repository holds") };
+        let listing = git_bytes(root, &["ls-files", "-z", "--cached", "--others", "--exclude-standard"], None)?.ok_or_else(not_a_repo)?;
         let paths: Vec<String> = listing
             .split(|b| *b == 0)
             .filter(|p| !p.is_empty())
             .map(|p| String::from_utf8_lossy(p).into_owned())
             .filter(|p| root.join(p).is_file()) // tracked but deleted from the tree: gone
             .collect();
+        // a submodule is a folder the repository holds whose files it never lists: a crate by
+        // its folder, with its manifest when it is checked out
+        let staged = git_bytes(root, &["ls-files", "-z", "-s"], None)?.ok_or_else(not_a_repo)?;
+        let gitlinks: Vec<String> = staged
+            .split(|b| *b == 0)
+            .filter_map(|rec| {
+                let rec = String::from_utf8_lossy(rec);
+                let (info, path) = rec.split_once('\t')?;
+                info.starts_with("160000 ").then(|| path.to_string())
+            })
+            .collect();
         let workspace = read("Cargo.toml")?;
         let mut crates: Vec<(String, String)> = Vec::new();
         let mut plans = BTreeMap::new();
         for p in &paths {
-            if let Some(dir) = p.strip_suffix("/Cargo.toml") {
-                crates.push((dir.to_string(), read(p)?));
+            let (dir, file) = p.rsplit_once('/').unwrap_or(("", p.as_str()));
+            // the manifest's name as a filesystem that ignores case reads it: cargo builds
+            // `cargo.toml` on Windows
+            if file.eq_ignore_ascii_case("Cargo.toml") {
+                if !dir.is_empty() {
+                    crates.push((dir.to_string(), read(p)?));
+                }
             } else if p == LANGUAGE_PLAN
                 || (p.starts_with("docs/") && p.ends_with("-plan.md") && !p["docs/".len()..].contains('/') && p != SUITE_PLAN)
             {
                 plans.insert(p.clone(), read(p)?);
             }
         }
+        for g in gitlinks {
+            let manifest = format!("{g}/Cargo.toml");
+            let text = if root.join(&manifest).is_file() { read(&manifest)? } else { String::new() };
+            crates.push((g, text));
+        }
         crates.sort();
+        crates.dedup_by(|a, b| a.0 == b.0);
         let refs: Vec<(&str, &str)> = crates.iter().map(|(d, t)| (d.as_str(), t.as_str())).collect();
         Suite::parse(&workspace, &refs, plans)
     }

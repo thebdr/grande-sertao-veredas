@@ -215,6 +215,47 @@ fn l1_the_reader_sees_what_git_would_take_not_what_a_name_suggests() {
 }
 
 #[test]
+fn l1_the_reader_takes_a_manifest_in_any_case_and_a_submodule_by_its_folder() {
+    // `cargo.toml` is a manifest cargo builds on a filesystem that ignores case, and a submodule
+    // is a folder the repository holds whose files it never lists (refute round 7)
+    let parked = format!("{}[workspace]\n", pkg("veredas-portal", "1.0.0"));
+    let sub = format!("{}[workspace]\n", pkg("veredas-aranha", "1.0.0"));
+    let git = |root: &std::path::Path, args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["-c", "user.name=leis", "-c", "user.email=leis@veredas", "-c", "protocol.file.allow=always"])
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(out.status.success(), "git {:?}: {}", args, String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let source = Tree::new("l1-subrepo", &[("Cargo.toml", &sub), ("src/lib.rs", "")]);
+    git(source.path(), &["add", "-A"]);
+    git(source.path(), &["commit", "-q", "-m", "the aranha, elsewhere"]);
+    let tree = Tree::new(
+        "l1-case-and-submodule",
+        &[("Cargo.toml", &ws(&["tools/leis"])), ("tools/leis/Cargo.toml", LEIS), ("apps/veredas-portal/cargo.toml", &parked)],
+    );
+    let url = format!("file:///{}", source.path().display().to_string().replace('\\', "/"));
+    git(tree.path(), &["submodule", "-q", "add", &url, "vendor/veredas-aranha"]);
+    // and a submodule pointer with no checkout at all, known by its folder alone
+    let sha = git(source.path(), &["rev-parse", "HEAD"]);
+    git(tree.path(), &["update-index", "--add", "--cacheinfo", &format!("160000,{sha},bench/orcl-bancada")]);
+    let s = Suite::read(tree.path()).expect("the tree reads");
+    assert_eq!(s.found, vec!["apps/veredas-portal", "bench/orcl-bancada", "tools/leis", "vendor/veredas-aranha"]);
+    assert_eq!(
+        strings(leis::roots(&s)),
+        vec![
+            "L1 apps/veredas-portal: a veredas-* or orcl-* crate is the suite's; it lives under crates/ as a member",
+            "L1 bench/orcl-bancada: a veredas-* or orcl-* crate is the suite's; it lives under crates/ as a member",
+            "L1 vendor/veredas-aranha: a veredas-* or orcl-* crate is the suite's; it lives under crates/ as a member",
+        ]
+    );
+}
+
+#[test]
 fn l1_a_nested_folder_is_not_a_root() {
     let deep = pkg("veredas-abaco", "2.0.0");
     let s = suite(&ws(&["crates/abaco/veredas-abaco"]), &[("crates/abaco/veredas-abaco", &deep)], &[]);
