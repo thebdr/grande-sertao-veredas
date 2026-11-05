@@ -166,27 +166,43 @@ fn rev(s: &str) -> String {
     s.chars().rev().collect()
 }
 
-/// The lines that name the vendor protocol or its terms, or cite a vendor document. Each line
-/// is lowercased and stripped to letters and digits first, so no separator, case or spacing
-/// hides a name; a section sign is a specification citation.
+/// Where a text names the vendor protocol or its terms, or cites a vendor document, as
+/// `line N: <term>`. The whole text is lowercased and stripped to letters and digits as one
+/// string first, so no separator, case, spacing or line break hides a name (a doc comment wraps
+/// a phrase across lines); each hit names the line where it starts. A section sign is a
+/// specification citation.
 fn vendor_mentions(text: &str) -> Vec<String> {
     let banned: Vec<String> =
         ["tlebineg", "rodnevscod", "lortnoctrosretsam", "ecafretnitsoh", "maootxtr", "xtrotmao"]
             .iter()
             .map(|b| rev(b))
             .collect();
+    // The flattened text, and for each of its characters the line it came from.
+    let mut flat = String::new();
+    let mut line_of = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        for c in line.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase) {
+            flat.push(c);
+            line_of.push(n + 1);
+        }
+    }
+    let chars: Vec<char> = flat.chars().collect();
+    let mut hits = Vec::new();
+    for term in &banned {
+        let t: Vec<char> = term.chars().collect();
+        for start in 0..chars.len().saturating_sub(t.len() - 1) {
+            if chars[start..start + t.len()] == t[..] {
+                hits.push(format!("line {}: {term}", line_of[start]));
+            }
+        }
+    }
     let section = char::from_u32(0xA7).unwrap();
-    text.lines()
-        .filter(|line| {
-            let flat: String = line
-                .chars()
-                .filter(|c| c.is_alphanumeric())
-                .flat_map(char::to_lowercase)
-                .collect();
-            line.contains(section) || banned.iter().any(|b| flat.contains(b.as_str()))
-        })
-        .map(str::to_string)
-        .collect()
+    for (n, line) in text.lines().enumerate() {
+        if line.contains(section) {
+            hits.push(format!("line {}: section sign", n + 1));
+        }
+    }
+    hits
 }
 
 #[test]
@@ -205,18 +221,24 @@ fn core_names_no_vendor_and_cites_no_vendor_document() {
         })
         .collect();
     assert_eq!(found, Vec::<String>::new());
-    // The check sees every spelling, in any case, and the vendor's terms and citations.
+    // The check sees every spelling, in any case, across line breaks, and the vendor's terms
+    // and citations; each sample holds exactly one, found on the line it starts.
     let samples = [
-        format!("// the {} catalog", rev("tleBineG")),
-        format!("const {}: u16 = 1;", rev("TROP_TLEB_INEG")),
-        format!("// see {}/spec.txt", rev("RODNEV/SCOD")),
-        format!("// the {} speaks", rev("lortnoC troS retsaM")),
-        format!("// {} telegrams", rev("MAOOTXTR")),
-        format!("// spec {}3.2", char::from_u32(0xA7).unwrap()),
-        format!("// a {}", rev("ecafretni-tsoh")),
+        (format!("// the {} catalog", rev("tleBineG")), 1),
+        (format!("const {}: u16 = 1;", rev("TROP_TLEB_INEG")), 1),
+        (format!("// see {}/spec.txt", rev("RODNEV/SCOD")), 1),
+        (format!("// the {} speaks", rev("lortnoC troS retsaM")), 1),
+        (format!("// {} telegrams", rev("MAOOTXTR")), 1),
+        (format!("// spec {}3.2", char::from_u32(0xA7).unwrap()), 1),
+        (format!("// a {}", rev("ecafretni-tsoh")), 1),
+        // A phrase wrapped by a doc comment: found where it starts.
+        (format!("fn x() {{}}\n/// the {}\n/// {} over TCP", rev("troS retsaM"), rev("lortnoC")), 2),
+        (format!("/// the {}\n/// {} catalog", rev("-ineG"), rev("tleB")), 1),
     ];
-    for s in &samples {
-        assert_eq!(vendor_mentions(s).len(), 1, "{s}");
+    for (s, line) in &samples {
+        let hits = vendor_mentions(s);
+        assert_eq!(hits.len(), 1, "{s}: {hits:?}");
+        assert!(hits[0].starts_with(&format!("line {line}: ")), "{s}: {hits:?}");
     }
     assert_eq!(vendor_mentions("fn decode(frame: &[u8]) {}\n// a capture spec"), Vec::<String>::new());
 }

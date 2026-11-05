@@ -781,9 +781,11 @@ fn a_frame_after_a_quiet_spell_of_254_probes_is_not_skipped() {
 
 #[test]
 fn a_slow_but_reading_peer_is_never_judged_deaf() {
-    // About 100 KB/s against a 2 MB burst: the socket keeps taking bytes as the peer reads, so
+    // About 100 KB/s against an 8 MB burst: the socket keeps taking bytes as the peer reads, so
     // the write timeout must not fire, however the OS signals writability (Linux signals only
-    // once a third of the send buffer is free).
+    // once a third of the send buffer is free). The burst is far more than the reader and the
+    // socket buffers together can take in the time, so the outbox still holds most of it when
+    // the peer is judged (refute round 4: a 2 MB burst could sit wholly in the buffers).
     use std::io::Read;
     let port = free_port();
     let server = listener(port, 0);
@@ -803,13 +805,134 @@ fn a_slow_but_reading_peer_is_never_judged_deaf() {
         total
     });
     let peer = wait_connected(&server);
-    for _ in 0..400 {
+    for _ in 0..1_600 {
         server.send(peer, payload(23, &[b'x'; 5_000]));
     }
     // Judged while the reader still reads (it reads for 6 s; the write timeout is 2 s): when it
     // finishes it closes its socket, and a closed peer is rightly dropped.
     std::thread::sleep(Duration::from_millis(5_000));
-    assert_eq!(server.status().dropped_peers, 0, "{:?}", server.status().last_error);
+    let status = server.status();
+    assert_eq!(status.dropped_peers, 0, "{:?}", status.last_error);
+    assert!(status.sent < 1_600, "the burst was still queued when judged: {} sent", status.sent);
     let read = reader.join().unwrap();
     assert!(read > 300_000, "the reader kept reading: {read} bytes");
+}
+
+// ---------------------------------------------------------------------------
+// Refute round 4 (C-012): probes under `keepalive_counts = false`, a segmentless layout's
+// keep-alive, and a slow reader judged while the outbox still holds most of its burst.
+// ---------------------------------------------------------------------------
+
+/// The test file's rules with keep-alives that take no sequence number.
+fn uncounted(idle_ms: u64) -> ChannelSpec {
+    let mut s = spec(idle_ms);
+    s.sequence.as_mut().unwrap().keepalive_counts = false;
+    s
+}
+
+#[test]
+fn uncounted_probes_carry_the_last_number_and_take_none() {
+    let raw_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = raw_listener.local_addr().unwrap().port();
+    let client = Channel::start(ChannelConfig::new(
+        "dialer",
+        Role::Connect { host: "127.0.0.1".into(), port },
+        uncounted(1),
+    ));
+    let (mut raw, _) = raw_listener.accept().unwrap();
+    let peer = wait_connected(&client);
+    // Probes before any data, then A, probes, B, probes: every tick of silence sends one.
+    let probes = |n: u64| {
+        let since = client.status().keepalives_sent;
+        until("probes", Duration::from_secs(5), || client.status().keepalives_sent >= since + n);
+    };
+    probes(3);
+    client.send(peer, payload(1, b"A"));
+    probes(3);
+    client.send(peer, payload(1, b"B"));
+    probes(3);
+    let frames = raw_prgs(&mut raw, Duration::from_millis(500));
+    // The connect keep-alive's 0, probes carrying 0, A on 1, probes carrying 1, B on 2, probes
+    // carrying 2: the data frames number 1, 2 as if no probe had been sent.
+    let data: Vec<u8> = frames.iter().filter(|(_, ka)| !ka).map(|(p, _)| *p).collect();
+    assert_eq!(data, [1, 2], "{frames:?}");
+    let mut last = 0;
+    for (p, ka) in &frames {
+        if *ka {
+            assert_eq!(*p, last, "a probe carries the last number stamped: {frames:?}");
+        } else {
+            last = *p;
+        }
+    }
+    let probes_seen = frames.iter().filter(|(_, ka)| *ka).count();
+    assert!(probes_seen >= 10, "the connect keep-alive and nine probes at least: {frames:?}");
+}
+
+#[test]
+fn uncounted_probes_never_bring_a_data_frame_back_round_to_the_last() {
+    // Two channels of this code, both uncounted: A, then more probes than a whole cycle, then B.
+    // Had the probes taken numbers, B could land on A's and be skipped; they take none, so B
+    // is A's number plus one and arrives.
+    let port = free_port();
+    let server = Channel::start(ChannelConfig::new(
+        "listener",
+        Role::Listen { bind: "127.0.0.1".into(), port },
+        uncounted(600_000),
+    ));
+    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+    let client = Channel::start(ChannelConfig::new(
+        "dialer",
+        Role::Connect { host: "127.0.0.1".into(), port },
+        uncounted(1),
+    ));
+    let peer = wait_connected(&client);
+    let _ = wait_connected(&server);
+    client.send(peer, payload(1, b"A"));
+    let since = client.status().keepalives_sent;
+    until("a cycle of probes", Duration::from_secs(20), || client.status().keepalives_sent >= since + 256);
+    client.send(peer, payload(1, b"B"));
+    let frames = collect(&server, Duration::from_secs(1));
+    let got: Vec<(Vec<u8>, u8)> = frames.iter().map(|f| (f.segments[0].body.clone(), seq(f))).collect();
+    assert_eq!(got, [(b"A".to_vec(), 1), (b"B".to_vec(), 2)]);
+    assert_eq!(server.status().duplicates_skipped, 0);
+    assert!(server.status().keepalives_received >= 256);
+}
+
+#[test]
+fn a_segmentless_empty_body_arrives_as_a_keepalive_with_its_fields() {
+    use std::io::Write;
+    // A bare layout: a kind byte, a two-byte length, the body; no sequence.
+    let bare = load(
+        r#"
+format = "veredas-channel"
+version = 1
+[framing]
+envelope = [ { name = "kind", size = 1 }, { name = "length", size = 2, role = "length" } ]
+"#,
+    )
+    .unwrap();
+    let port = free_port();
+    let server = Channel::start(ChannelConfig::new("bare", Role::Listen { bind: "127.0.0.1".into(), port }, bare));
+    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+    let mut sock = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    sock.write_all(&[0x07, 0, 0, 0x08, 2, 0, b'h', b'i']).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut seen = Vec::new();
+    while seen.len() < 2 && Instant::now() < deadline {
+        for e in server.poll() {
+            match e {
+                ChannelEvent::KeepAlive { frame, .. } => {
+                    seen.push(("keepalive", frame.fields["kind"], frame.segments.len()))
+                }
+                ChannelEvent::Received { frame, .. } => {
+                    assert_eq!(frame.segments[0].body, b"hi");
+                    seen.push(("received", frame.fields["kind"], frame.segments.len()))
+                }
+                _ => {}
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(seen, [("keepalive", 7, 0), ("received", 8, 1)]);
+    assert_eq!((server.status().keepalives_received, server.status().received), (1, 1));
 }

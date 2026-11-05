@@ -13,11 +13,14 @@ misspelled key refused, an unknown format or version refused rather than guessed
 
 ## The worked example: a segmented envelope
 
-A start byte, a 12-byte envelope (a class byte, source and destination nodes, a sequence number,
-three spare bytes, the data area's length, the segment count), segments of a 2-byte id, a 2-byte
-length and the body, a 4-byte tail, an end byte; sequence numbers 1 to 255 after a 0 on connect,
-a keep-alive probe after 10 s of silence. `crates/veredas-core/tests/telegram_schema.rs` loads
-this very block.
+A start byte; an 11-byte envelope after it (a class byte, source and destination nodes, a
+sequence number, three spare bytes, the data area's length, the segment count); segments of a
+2-byte id, a 2-byte length and the body; a 3-byte tail (two spare bytes, a check byte) before
+the end byte. A keep-alive is therefore 16 bytes, and one segment `AB` with id `0x0102` and
+sequence 7 is `FD 00 01 02 07 00 00 00 06 00 01 00 02 01 02 00 41 42 00 00 00 FE`. Sequence
+numbers 1 to 255 after a 0 on connect; a keep-alive probe after 10 s of silence.
+`crates/veredas-core/tests/telegram_schema.rs` loads this very block and checks each of these
+numbers.
 
 ```toml
 format = "veredas-channel"
@@ -73,8 +76,9 @@ version is portal's (P-010).
 - `byte_order`: `"little"` (default) or `"big"`, for every field that does not say otherwise.
 - `start`, `end`: optional delimiter bytes, in hex (`"FD"`, `"02 03"`). Without a start
   delimiter a bad frame is skipped one byte at a time.
-- `max_frame`: the largest frame in bytes, delimiters included (default 65536). Larger frames
-  are refused, never truncated.
+- `max_frame`: the largest frame in bytes, delimiters included (default 65536, at most
+  16777216: a peer may declare a frame this large and its bytes are held while they arrive).
+  Larger frames are refused, never truncated.
 - `envelope`: the fields after the start delimiter, in order (required).
 - `segment`: the fields of each segment's header, in order; each header is followed by its
   body. Leave it out for a layout whose data area is one body.
@@ -82,7 +86,11 @@ version is portal's (P-010).
 
 **A field.** `name` (unique across envelope and tail; unique within the segment header), `size`
 (1 to 8 bytes), `role`, `byte_order` (overrides the framing's), `value` (an opaque field's
-default when a frame does not name it).
+default when a frame does not name it; a computed field states none, not even 0).
+
+**A keep-alive** is a frame with no segments; in a layout without `segment`, a frame with an
+empty body. The channel delivers it as a keep-alive event that carries the frame, so its fields
+are never lost.
 
 **Roles.**
 - `"opaque"` (default): carried by name, read into the frame and written from it.
@@ -95,21 +103,27 @@ A layout must be able to end: without `segment`, the envelope needs a `length`; 
 `segment`, its header needs a `length`, and the envelope a `length`, a `count`, or both (both
 are checked against each other).
 
-**`[sequence]`** (optional; needs an envelope field with role `"sequence"`)
+**`[sequence]`** (required with an envelope field of role `"sequence"`, refused without one; an
+empty `[sequence]` takes every default)
 - `connect` (0): stamped on the connect keep-alive.
-- `first` (1), `last` (255): the cycle frames are stamped with, at send time.
+- `first` (1), `last` (255): the cycle frames are stamped with, at send time; a cycle of one
+  number cannot skip duplicates and is refused with `skip_duplicates`.
 - `skip_duplicates` (true): the receiver skips a frame repeating the last number it saw.
-- `keepalive_counts` (true): a keep-alive's number (other than `connect`) counts as the last
-  seen; whether a device's keep-alives consume numbers is that device's (Q9).
+- `keepalive_counts` (true): keep-alives take numbers in the cycle like any frame, and the
+  receiver counts a keep-alive's number (other than `connect`) as the last seen. With `false`
+  a probe carries the last number stamped without taking one, and the receiver ignores it.
+  Whether a device's keep-alives consume numbers is that device's (Q9).
 
 **`[keepalive]`** (optional) `on_connect` (true): send a keep-alive (a frame with no segments)
 on connect. `idle_ms` (10000): after this long with nothing read and nothing written, send a
 probe; 0 never probes.
 
-**`[link]`** (optional) `write_timeout_ms` (2000): a peer whose socket takes nothing for this
-long is dropped as not reading. `outbox_limit_bytes` (16 MiB): bytes queued for one peer beyond
-what its socket took, a memory bound. `max_peers` (8): simultaneous connections when listening.
+**`[link]`** (optional) `write_timeout_ms` (2000, at least 1): a peer whose socket takes nothing
+for this long is dropped as not reading. `outbox_limit_bytes` (16 MiB, at least one `max_frame`):
+bytes queued for one peer beyond what its socket took, a memory bound. `max_peers` (8, at least
+1): simultaneous connections when listening.
 
 Every key is checked: a misspelled key, an unknown role, a size out of range, a role in the
 wrong part, two fields sharing a role, a computed field given a `value`, a layout that cannot
-end, or sequence rules with no sequence field is refused with its place named.
+end, a sequence field without rules or rules without a field, a frame limit over the ceiling or
+under the fixed bytes, or a zero link setting is refused with its place named.

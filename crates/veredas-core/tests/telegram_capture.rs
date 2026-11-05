@@ -311,3 +311,33 @@ repeat = [ { name = "bc", pattern = "BC=([A-Z]+)" } ]
     assert!(toml::from_str::<CaptureSpec>("fields = [ { name = \"n\", at = 0, ty = \"u16\" } ]").is_err());
     assert!(toml::from_str::<CaptureSpec>("payloads = \"x\"").is_err());
 }
+
+#[test]
+fn every_field_type_and_every_table_reads_from_configuration_exactly() {
+    // The seven type names, as Veredas 1 spelled them (docs/questions.md Q10).
+    for (name, ty) in [
+        ("U8", FieldType::U8),
+        ("U16", FieldType::U16),
+        ("U32", FieldType::U32),
+        ("I16", FieldType::I16),
+        ("I32", FieldType::I32),
+        ("Ascii", FieldType::Ascii),
+        ("Hex", FieldType::Hex),
+    ] {
+        let text = format!("fields = [ {{ name = \"f\", at = 0, len = 2, ty = \"{name}\" }} ]");
+        assert_eq!(toml::from_str::<CaptureSpec>(&text).unwrap().fields[0].ty, ty, "{name}");
+    }
+    for wrong in ["u8", "ASCII", "ascii", "HEX", "hex", "U64"] {
+        let text = format!("fields = [ {{ name = \"f\", at = 0, ty = \"{wrong}\" }} ]");
+        assert!(toml::from_str::<CaptureSpec>(&text).is_err(), "{wrong}");
+    }
+    // A misspelled key is refused in each of the three tables.
+    for text in [
+        "payloads = \"x\"",
+        "fields = [ { name = \"c\", at = 0, length = 4, ty = \"Ascii\" } ]",
+        "repeat = [ { name = \"b\", pattern = \"x\", maximum = 3 } ]",
+    ] {
+        let e = toml::from_str::<CaptureSpec>(text).unwrap_err().to_string();
+        assert!(e.contains("unknown field"), "{text}: {e}");
+    }
+}

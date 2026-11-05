@@ -1,20 +1,31 @@
 //! The channel file (contract: the channel-schema clause): read, versioned, validated, and
 //! documented by a worked example this test loads from `docs/channel-schema.md` itself.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use veredas_core::telegram::Endian;
-use veredas_core::telegram::framing::{FieldRole, Frame};
+use veredas_core::telegram::framing::{FieldRole, Frame, Segment, parse_hex};
 use veredas_core::telegram::schema::*;
+
+/// The schema's documentation, as text.
+fn doc() -> String {
+    let doc = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/channel-schema.md");
+    std::fs::read_to_string(doc).unwrap().replace("\r\n", "\n")
+}
 
 /// The first ```toml block of the schema's documentation.
 fn documented_example() -> String {
-    let doc = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/channel-schema.md");
-    let text = std::fs::read_to_string(doc).unwrap();
-    let start = text.find("```toml\n").or_else(|| text.find("```toml\r\n")).unwrap();
+    let text = doc();
+    let start = text.find("```toml\n").unwrap();
     let body = &text[start..];
     let body = &body[body.find('\n').unwrap() + 1..];
     body[..body.find("```").unwrap()].to_string()
+}
+
+/// The documentation's prose, its lines joined, so a phrase wrapped across lines still reads.
+fn doc_prose() -> String {
+    doc().split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// A minimal valid file with `extra` appended inside `[framing]`'s neighbourhood.
@@ -36,10 +47,15 @@ fn the_documented_example_loads_and_frames_as_described() {
     let spec = load(&documented_example()).unwrap();
     let f = &spec.framing;
     assert_eq!((f.start.as_slice(), f.end.as_slice(), f.max_frame), (&[0xFD][..], &[0xFE][..], 65_536));
-    let names: Vec<(&str, usize, FieldRole)> = f.envelope.iter().map(|x| (x.name.as_str(), x.size, x.role)).collect();
+    let shape = |fields: &[veredas_core::telegram::framing::Field]| -> Vec<(String, usize, FieldRole)> {
+        fields.iter().map(|x| (x.name.clone(), x.size, x.role)).collect()
+    };
+    let named = |v: &[(&str, usize, FieldRole)]| -> Vec<(String, usize, FieldRole)> {
+        v.iter().map(|(n, s, r)| (n.to_string(), *s, *r)).collect()
+    };
     assert_eq!(
-        names,
-        [
+        shape(&f.envelope),
+        named(&[
             ("class", 1, FieldRole::Opaque),
             ("source", 1, FieldRole::Opaque),
             ("destination", 1, FieldRole::Opaque),
@@ -47,12 +63,20 @@ fn the_documented_example_loads_and_frames_as_described() {
             ("spare", 3, FieldRole::Opaque),
             ("length", 2, FieldRole::Length),
             ("count", 2, FieldRole::Count),
-        ]
+        ])
     );
+    assert_eq!(
+        shape(f.segment.as_ref().unwrap()),
+        named(&[("id", 2, FieldRole::Opaque), ("length", 2, FieldRole::Length)])
+    );
+    assert_eq!(shape(&f.tail), named(&[("tail_spare", 2, FieldRole::Opaque), ("check", 1, FieldRole::Opaque)]));
     assert_eq!(f.envelope.iter().map(|x| x.value).collect::<Vec<_>>(), [0, 1, 2, 0, 0, 0, 0]);
-    assert_eq!(f.segment.as_ref().unwrap().len(), 2);
+    let all = || f.envelope.iter().chain(f.segment.as_ref().unwrap()).chain(&f.tail);
+    assert!(all().all(|x| x.order == Endian::Little));
+    // The sums the prose states: an 11-byte envelope after the start byte, a 3-byte tail before
+    // the end byte.
+    assert_eq!(f.envelope.iter().map(|x| x.size).sum::<usize>(), 11);
     assert_eq!(f.tail.iter().map(|x| x.size).sum::<usize>(), 3);
-    assert!(f.envelope.iter().all(|x| x.order == Endian::Little));
     assert_eq!(
         spec.sequence,
         Some(SequenceRules { connect: 0, first: 1, last: 255, skip_duplicates: true, keepalive_counts: true })
@@ -63,19 +87,43 @@ fn the_documented_example_loads_and_frames_as_described() {
         LinkRules { write_timeout: Duration::from_secs(2), outbox_limit_bytes: 16 * 1024 * 1024, max_peers: 8 }
     );
     // The keep-alive it describes: sixteen bytes, the sequence and node defaults in place.
+    let keepalive = f.encode(&Frame::default(), Some(0)).unwrap();
+    assert_eq!(keepalive, [0xFD, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFE]);
+    // The data frame it describes: one segment `AB`, id 0x0102, sequence 7, byte for byte.
+    let ab = Frame {
+        fields: BTreeMap::new(),
+        segments: vec![Segment { fields: BTreeMap::from([("id".to_string(), 0x0102)]), body: b"AB".to_vec() }],
+    };
+    let data = f.encode(&ab, Some(7)).unwrap();
     assert_eq!(
-        f.encode(&Frame::default(), Some(0)).unwrap(),
-        [0xFD, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFE]
+        data,
+        [0xFD, 0, 1, 2, 7, 0, 0, 0, 6, 0, 1, 0, 2, 1, 2, 0, 0x41, 0x42, 0, 0, 0, 0xFE]
     );
+    // And the prose says exactly these numbers.
+    let prose = doc_prose();
+    for phrase in ["an 11-byte envelope after it", "a 3-byte tail", "A keep-alive is therefore 16 bytes"] {
+        assert!(prose.contains(phrase), "the documentation says `{phrase}`");
+    }
+    let quoted = prose.split("sequence 7 is `").nth(1).and_then(|s| s.split('`').next()).unwrap();
+    assert_eq!(parse_hex(quoted).unwrap(), data);
 }
 
 #[test]
 fn defaults_fill_what_a_file_leaves_out() {
     let spec = load(&file(LP, "")).unwrap();
-    assert_eq!((spec.framing.start.len(), spec.framing.end.len(), spec.framing.max_frame), (0, 0, 65_536));
+    let f = &spec.framing;
+    assert_eq!((f.start.len(), f.end.len(), f.max_frame), (0, 0, DEFAULT_MAX_FRAME));
+    assert_eq!(DEFAULT_MAX_FRAME, 65_536);
+    assert_eq!(f.segment, None);
+    assert!(f.tail.is_empty());
+    assert_eq!(f.envelope.len(), 1);
+    assert_eq!((f.envelope[0].order, f.envelope[0].value), (Endian::Little, 0));
     assert_eq!(spec.sequence, None);
     assert_eq!(spec.keepalive, KeepaliveRules { on_connect: true, idle: Duration::from_millis(10_000) });
-    assert_eq!(spec.link.max_peers, 8);
+    assert_eq!(
+        spec.link,
+        LinkRules { write_timeout: Duration::from_millis(2_000), outbox_limit_bytes: 16 * 1024 * 1024, max_peers: 8 }
+    );
     // An empty [sequence] takes every default.
     let spec = load(&file(
         "envelope = [ { name = \"s\", size = 2, role = \"sequence\" }, { name = \"l\", size = 2, role = \"length\" } ]",
@@ -83,6 +131,19 @@ fn defaults_fill_what_a_file_leaves_out() {
     ))
     .unwrap();
     assert_eq!(spec.sequence.unwrap(), SequenceRules { connect: 0, first: 1, last: 255, skip_duplicates: true, keepalive_counts: true });
+}
+
+#[test]
+fn every_limit_is_accepted_at_its_edge() {
+    // The frame limit at its ceiling, the outbox exactly one largest frame, a timeout of 1 ms,
+    // a cycle of one number that does not skip.
+    let spec = load(&file(&format!("max_frame = {MAX_MAX_FRAME}\n{LP}"), "")).unwrap();
+    assert_eq!((spec.framing.max_frame, MAX_MAX_FRAME), (16 * 1024 * 1024, 16 * 1024 * 1024));
+    let spec = load(&file(&format!("max_frame = 2048\n{LP}"), "[link]\noutbox_limit_bytes = 2048\nwrite_timeout_ms = 1")).unwrap();
+    assert_eq!((spec.link.outbox_limit_bytes, spec.link.write_timeout), (2048, Duration::from_millis(1)));
+    let one = "envelope = [ { name = \"s\", size = 1, role = \"sequence\" }, { name = \"l\", size = 2, role = \"length\" } ]";
+    let spec = load(&file(one, "[sequence]\nfirst = 5\nlast = 5\nskip_duplicates = false")).unwrap();
+    assert_eq!(spec.sequence.map(|s| (s.first, s.last, s.skip_duplicates)), Some((5, 5, false)));
 }
 
 #[test]
@@ -152,6 +213,15 @@ fn an_impossible_layout_is_refused_with_its_place_named() {
         (env(&format!("{{ name = \"s\", size = 1, role = \"sequence\" }}, {l}")), "[sequence]\nfirst = 9\nlast = 3", "sequence: first 9 .. last 3 (connect 0) does not fit a 1-byte field in order"),
         (env(&format!("{{ name = \"s\", size = 1, role = \"sequence\" }}, {l}")), "[sequence]\nlast = 256", "sequence: first 1 .. last 256 (connect 0) does not fit a 1-byte field in order"),
         (env(l), "[link]\nmax_peers = 0", "link.max_peers: at least one"),
+        // Refute round 1 (C-017): a sequence field states its rules; a computed field states no
+        // value, not even 0; the frame limit has a ceiling; a cycle of one cannot skip repeats;
+        // a link setting of zero, or an outbox smaller than one frame, is refused.
+        (env(&format!("{{ name = \"s\", size = 1, role = \"sequence\" }}, {l}")), "", "envelope.s: a sequence field needs `[sequence]` rules (an empty `[sequence]` takes the defaults)"),
+        (env("{ name = \"l\", size = 2, role = \"length\", value = 0 }"), "", "envelope.l: a computed field takes no `value`"),
+        (format!("max_frame = 16777217\n{}", env(l)), "", "framing.max_frame: 16777217 is over the 16777216-byte ceiling"),
+        (env(&format!("{{ name = \"s\", size = 1, role = \"sequence\" }}, {l}")), "[sequence]\nfirst = 5\nlast = 5", "sequence: a cycle of one number cannot skip duplicates (every frame would repeat)"),
+        (env(l), "[link]\nwrite_timeout_ms = 0", "link.write_timeout_ms: at least 1"),
+        (format!("max_frame = 2048\n{}", env(l)), "[link]\noutbox_limit_bytes = 2047", "link.outbox_limit_bytes: 2047 cannot hold one largest frame (2048)"),
     ];
     for (framing, rest, expected) in cases {
         assert_eq!(refused(&file(&framing, rest)), expected, "{framing} {rest}");

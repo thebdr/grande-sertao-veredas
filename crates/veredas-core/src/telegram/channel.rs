@@ -95,7 +95,9 @@ pub enum ChannelEvent {
         raw: Vec<u8>,
     },
     /// A keep-alive arrived: the link is alive though quiet.
-    KeepAlive { peer: PeerId },
+    /// The frame is delivered too: in a layout without segments a message with an empty body
+    /// is indistinguishable from a keep-alive, and its fields must not be lost.
+    KeepAlive { peer: PeerId, frame: Frame },
     /// The channel's own trouble (a bind failure, a dial that keeps failing).
     Trouble(String),
 }
@@ -409,7 +411,7 @@ impl Peer {
                     }
                     if keepalive {
                         bump(status, |s| s.keepalives_received += 1);
-                        let _ = events.send(ChannelEvent::KeepAlive { peer: self.id });
+                        let _ = events.send(ChannelEvent::KeepAlive { peer: self.id, frame });
                     } else {
                         bump(status, |s| s.received += 1);
                         let _ = events.send(ChannelEvent::Received { peer: self.id, frame, raw });
@@ -434,6 +436,21 @@ impl Peer {
 fn encode_for(peer: &mut Peer, spec: &ChannelSpec, frame: &Frame) -> Result<Vec<u8>, String> {
     let sequence = spec.sequence.as_ref().map(|rules| peer.next_sequence(rules));
     spec.framing.encode(frame, sequence).map_err(|e| e.to_string())
+}
+
+/// A keep-alive probe. When the rules count keep-alives (`keepalive_counts`), a probe takes the
+/// next number like any frame; when they do not, it carries the last number stamped (or
+/// `connect`) and takes none, so the receiver, which ignores it, never meets a data frame that
+/// came back round to the previous one (C-012, refute round 4).
+fn encode_probe(peer: &mut Peer, spec: &ChannelSpec) -> Result<Vec<u8>, String> {
+    let sequence = spec.sequence.as_ref().map(|rules| {
+        if rules.keepalive_counts {
+            peer.next_sequence(rules)
+        } else {
+            peer.sequence.unwrap_or(rules.connect)
+        }
+    });
+    spec.framing.encode(&Frame::default(), sequence).map_err(|e| e.to_string())
 }
 
 /// A new peer: send the connect keep-alive when the rules ask for one.
@@ -578,7 +595,7 @@ async fn run(
                     }
                     let idle = spec.keepalive.idle;
                     if !idle.is_zero() && p.last_rx.elapsed() >= idle && p.last_tx.elapsed() >= idle {
-                        if let Ok(bytes) = encode_for(p, spec, &Frame::default())
+                        if let Ok(bytes) = encode_probe(p, spec)
                             && p.queue(bytes, spec, &status).is_ok()
                         {
                             bump(&status, |s| s.keepalives_sent += 1);

@@ -1,6 +1,6 @@
 //! The framing engine (contract: the framing clause), on synthetic layouts read from channel
-//! files: the segmented envelope (a start byte, a 12-byte envelope with a sequence number, a
-//! data-area length and a segment count, segments of id, length and body, a 4-byte tail, an end
+//! files: the segmented envelope (a start byte, an 11-byte envelope with a sequence number, a
+//! data-area length and a segment count, segments of id, length and body, a 3-byte tail, an end
 //! byte: the layout Veredas 1's telegram codec hard-coded, now a configuration), a bare
 //! length-prefixed layout, and a delimited layout counted by segments. Veredas 1's codec tests
 //! come along against the first, with golden frames written byte by byte.
@@ -33,6 +33,8 @@ end = "FE"
 ]
 segment = [ {{ name = "id", size = 2 }}, {{ name = "length", size = 2, role = "length" }} ]
 tail = [ {{ name = "tail_spare", size = 2 }}, {{ name = "check", size = 1 }} ]
+
+[sequence]
 "#
     );
     load(&text).unwrap().framing
@@ -379,4 +381,108 @@ fn previews_and_dumps_render_exactly() {
             " ".repeat(45)
         )
     );
+}
+
+// ---------------------------------------------------------------------------
+// Refute round 4 (C-010): a field may be eight bytes wide, so every length and count a peer
+// declares is bounded by the frame limit before any arithmetic, and a declared count or length
+// that can never fit is refused at once, never waited for. Each limit is pinned on both sides.
+// ---------------------------------------------------------------------------
+
+/// A channel file's framing, from its `[framing]` body.
+fn framing_of(body: &str) -> Framing {
+    load(&format!("format = \"veredas-channel\"\nversion = 1\n[framing]\n{body}")).unwrap().framing
+}
+
+#[test]
+fn an_eight_byte_envelope_length_is_bounded_before_it_is_added() {
+    let lp = framing_of("max_frame = 1024\nenvelope = [ { name = \"length\", size = 8, role = \"length\" } ]\n");
+    // u64::MAX would wrap `8 + length`: refused, one byte skipped (no start delimiter).
+    let mut hostile = vec![0xFF; 8];
+    hostile.extend([1, 2, 3]);
+    assert_eq!(lp.decode(&hostile), Err(DecodeError::BadFrame { resync: 1 }));
+    assert_eq!(lp.decode(&(1u64 << 63).to_le_bytes()), Err(DecodeError::BadFrame { resync: 1 }));
+    // 8 + 1016 is exactly the limit and waits; 1017 is one over and is refused.
+    assert_eq!(lp.decode(&1016u64.to_le_bytes()), Err(DecodeError::NeedMore));
+    assert_eq!(lp.decode(&1017u64.to_le_bytes()), Err(DecodeError::BadFrame { resync: 1 }));
+    let mut whole = 1016u64.to_le_bytes().to_vec();
+    whole.extend(vec![0x5A; 1016]);
+    assert_eq!(lp.decode(&whole).map(|(f, used)| (f.segments[0].body.len(), used)), Ok((1016, 1024)));
+}
+
+#[test]
+fn an_eight_byte_segment_length_is_bounded_before_it_is_added() {
+    let c = framing_of(
+        "max_frame = 1024\nenvelope = [ { name = \"count\", size = 1, role = \"count\" } ]\n\
+         segment = [ { name = \"length\", size = 8, role = \"length\" } ]\n",
+    );
+    for hostile in [u64::MAX, 1 << 63, 1025] {
+        let mut buf = vec![1];
+        buf.extend(hostile.to_le_bytes());
+        assert_eq!(c.decode(&buf), Err(DecodeError::BadFrame { resync: 1 }), "{hostile}");
+    }
+    // 1 + 8 + 1015 is exactly the limit and waits; 1016 is one over.
+    let head = |len: u64| {
+        let mut b = vec![1];
+        b.extend(len.to_le_bytes());
+        b
+    };
+    assert_eq!(c.decode(&head(1015)), Err(DecodeError::NeedMore));
+    assert_eq!(c.decode(&head(1016)), Err(DecodeError::BadFrame { resync: 1 }));
+}
+
+#[test]
+fn an_eight_byte_count_is_bounded_before_it_is_multiplied() {
+    let c = framing_of(
+        "max_frame = 1024\nenvelope = [ { name = \"count\", size = 8, role = \"count\" } ]\n\
+         segment = [ { name = \"length\", size = 2, role = \"length\" } ]\n",
+    );
+    // 2^63 two-byte headers would wrap `count * 2`; u64::MAX would wrap any sum.
+    for hostile in [1u64 << 63, u64::MAX, 1025] {
+        assert_eq!(c.decode(&hostile.to_le_bytes()), Err(DecodeError::BadFrame { resync: 1 }), "{hostile}");
+    }
+    // 8 + 508 headers of 2 bytes is exactly the limit and waits; 509 headers cannot fit.
+    assert_eq!(c.decode(&508u64.to_le_bytes()), Err(DecodeError::NeedMore));
+    assert_eq!(c.decode(&509u64.to_le_bytes()), Err(DecodeError::BadFrame { resync: 1 }));
+}
+
+/// A delimited layout counted by two-byte segment counts, its frames at most 1024 bytes.
+fn counted_small() -> Framing {
+    framing_of(
+        "start = \"02\"\nend = \"03\"\nmax_frame = 1024\n\
+         envelope = [ { name = \"count\", size = 2, role = \"count\" } ]\n\
+         segment = [ { name = \"length\", size = 2, role = \"length\" } ]\n",
+    )
+}
+
+#[test]
+fn a_count_whose_headers_cannot_fit_is_refused_at_once() {
+    let c = counted_small();
+    // 3000 segments: refused from the three bytes that declare them, the resync past the buffer
+    // (no start byte after the first), not after a wait for 6 KB that could never be a frame.
+    assert_eq!(c.decode(&[0x02, 0xB8, 0x0B]), Err(DecodeError::BadFrame { resync: 3 }));
+    // 1 + 2 + 510 headers of 2 + 1 is exactly 1024 and waits; 511 headers is two over.
+    assert_eq!(c.decode(&[0x02, 0xFE, 0x01]), Err(DecodeError::NeedMore));
+    assert_eq!(c.decode(&[0x02, 0xFF, 0x01]), Err(DecodeError::BadFrame { resync: 3 }));
+}
+
+#[test]
+fn a_segment_that_leaves_no_room_for_the_headers_still_to_come_is_refused_at_once() {
+    let c = counted_small();
+    // Three segments, the first 1014 bytes: 3 + (2 + 1014) + 2 + 2 + 1 is exactly 1024 and waits.
+    assert_eq!(c.decode(&[0x02, 3, 0, 0xF6, 0x03]), Err(DecodeError::NeedMore));
+    // The first 1015 bytes: the two headers still to come no longer fit, refused before its body.
+    assert_eq!(c.decode(&[0x02, 3, 0, 0xF7, 0x03]), Err(DecodeError::BadFrame { resync: 5 }));
+    // The frame at the edge is whole and decodes; one byte more is refused on encode.
+    let at_edge = frame(vec![
+        Segment { fields: BTreeMap::new(), body: vec![0x5A; 1014] },
+        Segment::default(),
+        Segment::default(),
+    ]);
+    let bytes = c.encode(&at_edge, None).unwrap();
+    assert_eq!(bytes.len(), 1024);
+    assert_eq!(c.decode(&bytes).map(|(f, used)| (f.segments.len(), used)), Ok((3, 1024)));
+    let mut over = at_edge;
+    over.segments[0].body.push(0x5A);
+    assert_eq!(c.encode(&over, None), Err(EncodeError::FrameTooLarge { len: 1025, max: 1024 }));
 }

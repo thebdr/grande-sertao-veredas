@@ -235,8 +235,16 @@ impl Framing {
             at += f.size;
         }
         let tail_len = width(&self.tail) + self.end.len();
-        let length = role(&self.envelope, FieldRole::Length).map(|f| fields[&f.name] as usize);
-        let count = role(&self.envelope, FieldRole::Count).map(|f| fields[&f.name] as usize);
+        // Every length and count read is bounded by the frame limit before any arithmetic: a
+        // field may be 8 bytes wide, and a hostile value must be refused, never wrapped (C-010,
+        // refute round 4).
+        let max = self.max_frame as u64;
+        let length = role(&self.envelope, FieldRole::Length).map(|f| fields[&f.name]);
+        let count = role(&self.envelope, FieldRole::Count).map(|f| fields[&f.name]);
+        if length.is_some_and(|l| l > max) || count.is_some_and(|c| c > max) {
+            return Err(bad(1));
+        }
+        let (length, count) = (length.map(|l| l as usize), count.map(|c| c as usize));
         let data_end = length.map(|l| env_end + l);
         if let Some(de) = data_end
             && de + tail_len > self.max_frame
@@ -255,6 +263,12 @@ impl Framing {
                 let hdr = width(header);
                 if let (Some(c), Some(l)) = (count, length)
                     && (c * hdr > l || (c == 0 && l != 0))
+                {
+                    return Err(bad(1));
+                }
+                // A count whose headers alone cannot fit the frame limit can never end.
+                if let Some(c) = count
+                    && env_end + c * hdr + tail_len > self.max_frame
                 {
                     return Err(bad(1));
                 }
@@ -278,17 +292,22 @@ impl Framing {
                     }
                     let mut seg_fields = BTreeMap::new();
                     let mut h = at;
-                    let mut body_len = 0usize;
+                    let mut body_len = 0u64;
                     for f in header {
                         let v = f.read(&buf[h..h + f.size]);
                         if f.role == FieldRole::Length {
-                            body_len = v as usize;
+                            body_len = v;
                         }
                         seg_fields.insert(f.name.clone(), v);
                         h += f.size;
                     }
-                    let end = h + body_len;
-                    if end + tail_len > self.max_frame {
+                    if body_len > max {
+                        return Err(bad(1));
+                    }
+                    let end = h + body_len as usize;
+                    // The segments still to come need their headers too.
+                    let still = count.map(|c| (c - i - 1) * hdr).unwrap_or(0);
+                    if end + still + tail_len > self.max_frame {
                         return Err(bad(1));
                     }
                     if let Some(de) = data_end {

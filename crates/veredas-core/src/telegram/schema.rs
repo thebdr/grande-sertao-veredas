@@ -169,8 +169,8 @@ struct FieldFile {
     #[serde(default)]
     role: RoleFile,
     byte_order: Option<OrderFile>,
-    #[serde(default)]
-    value: u64,
+    /// `None` when the file does not state one: a computed field stating any value is refused.
+    value: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -216,8 +216,11 @@ impl Default for LinkFile {
     }
 }
 
-/// The largest `max_frame` accepted, and the default: 64 KiB.
+/// The default `max_frame`: 64 KiB.
 pub const DEFAULT_MAX_FRAME: usize = 64 * 1024;
+/// The largest `max_frame` a file may state: 16 MiB. A peer may declare a frame this large and
+/// the channel will hold its bytes while they arrive, so the ceiling bounds that memory.
+pub const MAX_MAX_FRAME: usize = 16 * 1024 * 1024;
 
 fn invalid(msg: impl Into<String>) -> SchemaError {
     SchemaError::Invalid(msg.into())
@@ -256,7 +259,7 @@ fn fields(
         if f.role != RoleFile::Opaque && !roles.insert(f.role) {
             return Err(invalid(format!("{part}: two fields share the role of `{}`", f.name)));
         }
-        if f.role != RoleFile::Opaque && f.value != 0 {
+        if f.role != RoleFile::Opaque && f.value.is_some() {
             return Err(invalid(format!("{part}.{}: a computed field takes no `value`", f.name)));
         }
         let field = Field {
@@ -269,7 +272,7 @@ fn fields(
                 RoleFile::Count => FieldRole::Count,
             },
             order: order(f.byte_order, default),
-            value: f.value,
+            value: f.value.unwrap_or(0),
         };
         if field.size < 8 && field.value >= 1u64 << (8 * field.size) {
             return Err(invalid(format!("{part}.{}: value {} does not fit {} byte(s)", field.name, field.value, field.size)));
@@ -343,6 +346,9 @@ pub fn load(text: &str) -> Result<ChannelSpec, SchemaError> {
         }
     }
     let max_frame = f.max_frame.unwrap_or(DEFAULT_MAX_FRAME);
+    if max_frame > MAX_MAX_FRAME {
+        return Err(invalid(format!("framing.max_frame: {max_frame} is over the {MAX_MAX_FRAME}-byte ceiling")));
+    }
     let start = delimiter("start", f.start)?;
     let end = delimiter("end", f.end)?;
     let fixed: usize = start.len()
@@ -353,7 +359,17 @@ pub fn load(text: &str) -> Result<ChannelSpec, SchemaError> {
     }
 
     let sequence = match file.sequence {
-        None => None,
+        // A sequence field states that frames are numbered: the rules that number them must be
+        // stated too (an empty `[sequence]` takes every default). Never a silent zero.
+        None => match envelope.iter().find(|x| x.role == FieldRole::Sequence) {
+            Some(field) => {
+                return Err(invalid(format!(
+                    "envelope.{}: a sequence field needs `[sequence]` rules (an empty `[sequence]` takes the defaults)",
+                    field.name
+                )));
+            }
+            None => None,
+        },
         Some(s) => {
             let field = envelope.iter().find(|x| x.role == FieldRole::Sequence).ok_or_else(|| {
                 invalid("sequence: rules for a sequence the envelope has no `sequence` field for")
@@ -365,6 +381,9 @@ pub fn load(text: &str) -> Result<ChannelSpec, SchemaError> {
                     s.first, s.last, s.connect, field.size
                 )));
             }
+            if s.first == s.last && s.skip_duplicates {
+                return Err(invalid("sequence: a cycle of one number cannot skip duplicates (every frame would repeat)"));
+            }
             Some(SequenceRules {
                 connect: s.connect,
                 first: s.first,
@@ -374,6 +393,17 @@ pub fn load(text: &str) -> Result<ChannelSpec, SchemaError> {
             })
         }
     };
+    // A zero timeout would judge a peer deaf the moment its socket took bytes; an outbox that
+    // cannot hold one largest frame would drop a peer on its first send (C-012, refute round 4).
+    if file.link.write_timeout_ms == 0 {
+        return Err(invalid("link.write_timeout_ms: at least 1"));
+    }
+    if file.link.outbox_limit_bytes < max_frame {
+        return Err(invalid(format!(
+            "link.outbox_limit_bytes: {} cannot hold one largest frame ({max_frame})",
+            file.link.outbox_limit_bytes
+        )));
+    }
     if file.link.max_peers == 0 {
         return Err(invalid("link.max_peers: at least one"));
     }
