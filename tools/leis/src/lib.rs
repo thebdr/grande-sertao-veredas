@@ -10,8 +10,9 @@
 //! THE LAWS (a component is a member under `crates/`; a member under `tools/` is repo tooling)
 //!   L1 ROOTS       every `Cargo.toml` under `crates/` or `tools/`, at any depth, is a workspace
 //!                  member listed by path or is excluded: a glob is not a member, an unlisted crate is
-//!                  refused, a nested crate is refused, a `veredas-*` or `orcl-*` crate is never
-//!                  excluded, and every member lives directly under one of those two roots.
+//!                  refused, a nested crate is refused, and every member lives directly under one of
+//!                  those two roots; a `veredas-*` or `orcl-*` crate (by name or folder, `_` as `-`)
+//!                  anywhere in the repository is a member under a root or nothing, never excluded.
 //!   L2 NAMING      a component is `veredas-<nome>`, `<nome>` a lowercase ASCII letter then letters and
 //!                  digits, in a folder of the same name; the language's crates are `orcl-<nome>`; a
 //!                  `veredas-*` or `orcl-*` crate lives under `crates/`, never `tools/`.
@@ -22,9 +23,9 @@
 //!                  may use core, the apps use portal, the bench and the scanner never pull portal,
 //!                  controlador embeds portal and aranha and runs ORCL. A dev-dependency is free (a
 //!                  bench is a fixture); a tool may depend on anything.
-//!   L6 PLAN        a component has its `docs/<nome>-plan.md`, not blank, and the commit that first
-//!                  added the component held it too ([`history`], over git); the language's crates
-//!                  share `docs/orcl/README.md`. The suite's own plan is nobody's.
+//!   L6 PLAN        a component has its `docs/<nome>-plan.md`, not blank, and so does every commit
+//!                  reachable from HEAD that holds the component ([`history`], over git); the
+//!                  language's crates share `docs/orcl/README.md`. The suite's own plan is nobody's.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -126,7 +127,8 @@ pub struct Suite {
     pub excluded: Vec<String>,
     /// `[workspace.package]` carries a `version`.
     pub workspace_version: bool,
-    /// Every folder under a root, at any depth, that holds a `Cargo.toml`.
+    /// Every folder in the repository that holds a `Cargo.toml` (the root's own left out), at
+    /// any depth outside the skipped folders: under a root or anywhere else.
     pub found: Vec<String>,
     /// The listed members whose manifest was found, in listed order.
     pub members: Vec<Member>,
@@ -322,7 +324,7 @@ impl Suite {
         })
     }
 
-    /// The real tree: `Cargo.toml`, every `Cargo.toml` under `crates/` and `tools/` at any depth
+    /// The real tree: `Cargo.toml`, every other `Cargo.toml` in the repository at any depth
     /// (`target/`, `node_modules/` and hidden folders skipped), every `docs/*-plan.md` but the
     /// suite's own, and `docs/orcl/README.md`.
     pub fn read(root: &Path) -> Result<Suite, Error> {
@@ -331,8 +333,10 @@ impl Suite {
         };
         let workspace = read("Cargo.toml")?;
         let mut dirs = Vec::new();
-        for r in ROOTS {
-            collect_crates(root, r, &mut dirs)?;
+        for name in folder_entries(root, ".")? {
+            if !name.starts_with('.') && !SKIPPED.contains(&name.as_str()) && root.join(&name).is_dir() {
+                collect_crates(root, &name, &mut dirs)?;
+            }
         }
         let mut crates: Vec<(String, String)> = Vec::new();
         for rel in dirs {
@@ -412,6 +416,11 @@ fn under_a_root(dir: &str) -> bool {
     )
 }
 
+/// Somewhere beneath `crates/` or `tools/`, at any depth, or the root folder itself.
+fn in_a_root(dir: &str) -> bool {
+    ROOTS.iter().any(|r| dir == *r || dir.starts_with(&format!("{r}/")))
+}
+
 fn is_nome(s: &str) -> bool {
     let mut chars = s.chars();
     matches!(chars.next(), Some(first) if first.is_ascii_lowercase())
@@ -443,14 +452,19 @@ fn allowed_for(name: &str) -> Vec<&'static str> {
     allowed
 }
 
-/// A crate the suite's names mark as its own: `veredas-*` or `orcl-*`, by its name or its folder.
+/// A crate the suite's names mark as its own: `veredas-*` or `orcl-*`, by its name or its folder,
+/// an underscore reading as the hyphen (cargo and crates.io treat the two spellings as one name).
 fn is_suite_crate(m: &Member) -> bool {
     let folder = m.dir.rsplit('/').next().unwrap_or("");
-    [m.name.as_str(), folder].iter().any(|n| n.starts_with(PREFIX) || n.starts_with(LANGUAGE))
+    [m.name.as_str(), folder].iter().any(|n| {
+        let n = n.replace('_', "-");
+        n.starts_with(PREFIX) || n.starts_with(LANGUAGE)
+    })
 }
 
-/// L1: every crate under a root is a listed member or excluded (never a suite crate, which is a
-/// member or nothing), every listed member is directly under a root, and so is every crate found.
+/// L1: every crate under a root is a listed member or excluded, every listed member is directly
+/// under a root, and so is every crate found there; a suite crate (`veredas-*`, `orcl-*`) is a
+/// member under a root or nothing, wherever in the repository it sits, excluded or not.
 pub fn roots(s: &Suite) -> Vec<Violation> {
     let mut out = Vec::new();
     for m in &s.listed {
@@ -461,9 +475,16 @@ pub fn roots(s: &Suite) -> Vec<Violation> {
         }
     }
     for c in &s.found {
+        let suite = s.others.iter().any(|o| o.dir == *c && is_suite_crate(o));
         if s.is_excluded(c) {
-            if s.others.iter().any(|o| o.dir == *c && is_suite_crate(o)) {
+            if suite {
                 out.push(Violation::new("L1", c, "a veredas-* or orcl-* crate is the suite's; it is a member, never excluded"));
+            }
+            continue;
+        }
+        if !in_a_root(c) {
+            if suite {
+                out.push(Violation::new("L1", c, "a veredas-* or orcl-* crate is the suite's; it lives under crates/ as a member"));
             }
             continue;
         }
@@ -602,13 +623,24 @@ pub fn plans(s: &Suite) -> Vec<Violation> {
     out
 }
 
-fn git(root: &Path, args: &[&str]) -> Result<Option<String>, Error> {
-    let out = std::process::Command::new("git")
+/// Runs git at `root`; `Some(stdout)` on success, `None` when git said no, an error when it could
+/// not run at all.
+fn git(root: &Path, args: &[&str], stdin: Option<&str>) -> Result<Option<String>, Error> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("git")
         .arg("-C")
         .arg(root)
         .args(args)
-        .output()
+        .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|source| Error::Io { path: "git".to_string(), source })?;
+    if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
+        pipe.write_all(text.as_bytes()).map_err(|source| Error::Io { path: "git".to_string(), source })?;
+    }
+    let out = child.wait_with_output().map_err(|source| Error::Io { path: "git".to_string(), source })?;
     if out.status.success() {
         Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
     } else {
@@ -616,28 +648,73 @@ fn git(root: &Path, args: &[&str]) -> Result<Option<String>, Error> {
     }
 }
 
-/// L6 over history: the commit that first added a component's manifest also holds its plan, not
-/// blank, so no component's code ever landed without it. Asks `git` at `root`; a component not
-/// yet committed is the tree law's business, and a tree that is no repository is an error.
+/// L6 over history: every commit reachable from HEAD that holds a component's manifest also
+/// holds its plan, not blank, so no component's code ever landed without it, through merges,
+/// re-additions and deletions alike. One `git cat-file --batch-check` over every (commit, path)
+/// pair, then each distinct plan blob read once. The earliest offending commit is named. A
+/// component not yet committed is the tree law's business; a tree that is no repository, or a
+/// shallow clone with its history cut, is an error.
 pub fn history(root: &Path) -> Result<Vec<Violation>, Error> {
     let s = Suite::read(root)?;
-    let not_a_repo = || Error::Io { path: root.display().to_string(), source: io::Error::other("not a git repository") };
-    git(root, &["rev-parse", "--is-inside-work-tree"])?.ok_or_else(not_a_repo)?;
-    if git(root, &["rev-parse", "--verify", "-q", "HEAD"])?.is_none() {
+    let refuse = |what: &str| Error::Io { path: root.display().to_string(), source: io::Error::other(what.to_string()) };
+    git(root, &["rev-parse", "--is-inside-work-tree"], None)?.ok_or_else(|| refuse("not a git repository"))?;
+    if git(root, &["rev-parse", "--is-shallow-repository"], None)?.is_some_and(|o| o.trim() == "true") {
+        return Err(refuse("a shallow clone: the history to judge is cut"));
+    }
+    if git(root, &["rev-parse", "--verify", "-q", "HEAD"], None)?.is_none() {
         return Ok(Vec::new()); // no commit yet: nothing has landed
     }
+    let wanted: Vec<(&Member, String)> = s.components().filter_map(|m| plan_of(&m.name).map(|p| (m, p))).collect();
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let commits: Vec<String> = git(root, &["rev-list", "--reverse", "HEAD"], None)?
+        .ok_or_else(|| refuse("git rev-list failed"))?
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect();
+    let mut asks = String::new();
+    for c in &commits {
+        for (m, plan) in &wanted {
+            asks.push_str(&format!("{c}:{}/Cargo.toml\n{c}:{plan}\n", m.dir));
+        }
+    }
+    let answers = git(root, &["cat-file", "--batch-check"], Some(&asks))?.ok_or_else(|| refuse("git cat-file failed"))?;
+    // one answer per ask, in order: `<oid> <type> <size>` or `<ask> missing`
+    let found: Vec<Option<String>> = answers
+        .lines()
+        .map(|l| if l.ends_with(" missing") { None } else { l.split(' ').next().map(String::from) })
+        .collect();
+    if found.len() != commits.len() * wanted.len() * 2 {
+        return Err(refuse("git cat-file answered out of step"));
+    }
+    let mut blank_of: BTreeMap<String, bool> = BTreeMap::new();
     let mut out = Vec::new();
-    for m in s.components() {
-        let Some(plan) = plan_of(&m.name) else { continue };
-        let manifest = format!("{}/Cargo.toml", m.dir);
-        let log = git(root, &["log", "--diff-filter=A", "--format=%H", "--reverse", "--", &manifest])?
-            .ok_or_else(|| Error::Io { path: manifest.clone(), source: io::Error::other("git log failed") })?;
-        let Some(first) = log.lines().next().map(str::trim).filter(|l| !l.is_empty()) else { continue };
-        let short = &first[..first.len().min(7)];
-        match git(root, &["show", &format!("{first}:{plan}")])? {
-            None => out.push(Violation::new("L6", &m.dir, format!("the commit that added it ({short}) holds no {plan}"))),
-            Some(text) if is_blank(&text) => out.push(Violation::new("L6", &m.dir, format!("the commit that added it ({short}) holds {plan} blank"))),
-            Some(_) => {}
+    for (k, (m, plan)) in wanted.iter().enumerate() {
+        for (i, c) in commits.iter().enumerate() {
+            let at = (i * wanted.len() + k) * 2;
+            if found[at].is_none() {
+                continue; // this commit does not hold the component
+            }
+            let short = &c[..c.len().min(7)];
+            match &found[at + 1] {
+                None => {
+                    out.push(Violation::new("L6", &m.dir, format!("commit {short} holds the code and no {plan}")));
+                    break;
+                }
+                Some(oid) => {
+                    if !blank_of.contains_key(oid) {
+                        let text = git(root, &["cat-file", "-p", oid], None)?.ok_or_else(|| refuse("git cat-file failed"))?;
+                        blank_of.insert(oid.clone(), is_blank(&text));
+                    }
+                    if blank_of[oid] {
+                        out.push(Violation::new("L6", &m.dir, format!("commit {short} holds the code and {plan} blank")));
+                        break;
+                    }
+                }
+            }
         }
     }
     Ok(out)

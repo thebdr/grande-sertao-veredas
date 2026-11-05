@@ -136,13 +136,17 @@ fn l2_a_veredas_crate_under_tools_is_named() {
     let upper = pkg("veredas-Abaco", "2.0.0");
     let bare = pkg("veredas-", "2.0.0");
     let lang = pkg("orcl-std", "2.0.0");
+    let lang_upper = pkg("orcl-Std", "2.0.0");
+    let lang_bare = pkg("orcl-", "2.0.0");
     let s = suite(
-        &ws(&["tools/veredas-maquinar", "tools/veredas-Abaco", "tools/veredas-", "tools/orcl-std", "tools/leis"]),
+        &ws(&["tools/veredas-maquinar", "tools/veredas-Abaco", "tools/veredas-", "tools/orcl-std", "tools/orcl-Std", "tools/orcl-", "tools/leis"]),
         &[
             ("tools/veredas-maquinar", &m),
             ("tools/veredas-Abaco", &upper),
             ("tools/veredas-", &bare),
             ("tools/orcl-std", &lang),
+            ("tools/orcl-Std", &lang_upper),
+            ("tools/orcl-", &lang_bare),
             ("tools/leis", LEIS),
         ],
         &[],
@@ -154,6 +158,8 @@ fn l2_a_veredas_crate_under_tools_is_named() {
             "L2 tools/veredas-Abaco: a veredas-* crate is a component; it lives under crates/",
             "L2 tools/veredas-: a veredas-* crate is a component; it lives under crates/",
             "L2 tools/orcl-std: an orcl-* crate is the language's; it lives under crates/",
+            "L2 tools/orcl-Std: an orcl-* crate is the language's; it lives under crates/",
+            "L2 tools/orcl-: an orcl-* crate is the language's; it lives under crates/",
         ]
     );
 }

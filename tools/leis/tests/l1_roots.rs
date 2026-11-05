@@ -90,6 +90,82 @@ fn l1_a_suite_crate_is_never_excluded() {
 }
 
 #[test]
+fn l1_a_suite_crate_outside_the_roots_is_named() {
+    // excluded elsewhere, parked elsewhere with its own [workspace], or simply unlisted elsewhere:
+    // a suite crate is a member under a root or nothing (refute round 3)
+    let portal = pkg("veredas-portal", "1.0.0");
+    let own = format!("{}[workspace]\n", pkg("veredas-aranha", "2.0.0"));
+    let maquinar = pkg("veredas-maquinar", "2.0.0");
+    let conveyor = pkg("conveyor", "0.1.0");
+    let workspace = "[workspace]\nmembers = [\"tools/leis\"]\nexclude = [\"apps/veredas-portal\"]\n[workspace.package]\nedition = \"2024\"\n";
+    let s = suite(
+        workspace,
+        &[
+            ("tools/leis", LEIS),
+            ("apps/veredas-portal", &portal),
+            ("bench/veredas-aranha", &own),
+            ("veredas-maquinar", &maquinar),
+            ("demos/conveyor", &conveyor),
+        ],
+        &[],
+    );
+    assert_eq!(
+        strings(leis::roots(&s)),
+        vec![
+            "L1 apps/veredas-portal: a veredas-* or orcl-* crate is the suite's; it is a member, never excluded",
+            "L1 bench/veredas-aranha: a veredas-* or orcl-* crate is the suite's; it lives under crates/ as a member",
+            "L1 veredas-maquinar: a veredas-* or orcl-* crate is the suite's; it lives under crates/ as a member",
+        ],
+        "a crate elsewhere that is not the suite's (demos/conveyor) is nobody's business"
+    );
+}
+
+#[test]
+fn l1_an_underscore_spelling_is_the_same_suite_crate() {
+    let disguised = pkg("veredas_portal", "2.0.0");
+    let lang = pkg("orcl_std", "2.0.0");
+    let workspace = "[workspace]\nmembers = [\"tools/leis\"]\nexclude = [\"crates/gateway\", \"crates/veredas_portal\", \"crates/lang\"]\n[workspace.package]\nedition = \"2024\"\n";
+    let s = suite(
+        workspace,
+        &[("tools/leis", LEIS), ("crates/gateway", &disguised), ("crates/veredas_portal", &disguised), ("crates/lang/orcl_std", &lang)],
+        &[],
+    );
+    assert_eq!(
+        strings(leis::roots(&s)),
+        vec![
+            "L1 crates/gateway: a veredas-* or orcl-* crate is the suite's; it is a member, never excluded",
+            "L1 crates/veredas_portal: a veredas-* or orcl-* crate is the suite's; it is a member, never excluded",
+            "L1 crates/lang/orcl_std: a veredas-* or orcl-* crate is the suite's; it is a member, never excluded",
+        ]
+    );
+}
+
+#[test]
+fn l1_the_reader_scans_the_whole_repository_for_suite_crates() {
+    let portal = pkg("veredas-portal", "2.0.0");
+    let conveyor = pkg("conveyor", "0.1.0");
+    let hidden = pkg("veredas-hidden", "2.0.0");
+    let tree = Tree::new(
+        "l1-elsewhere",
+        &[
+            ("Cargo.toml", "[workspace]\nmembers = [\"tools/leis\"]\nexclude = [\"apps/veredas-portal\"]\n[workspace.package]\nedition = \"2024\"\n"),
+            ("tools/leis/Cargo.toml", LEIS),
+            ("apps/veredas-portal/Cargo.toml", &portal),
+            ("demos/conveyor/Cargo.toml", &conveyor),
+            ("docs/veredas-plan.md", "# the plan\n"),
+            (".vendor/veredas-hidden/Cargo.toml", &hidden),
+            ("target/veredas-built/Cargo.toml", &hidden),
+        ],
+    );
+    let s = Suite::read(tree.path()).expect("the tree reads");
+    assert_eq!(s.found, vec!["apps/veredas-portal", "demos/conveyor", "tools/leis"], "the root's own manifest, hidden and built folders left out");
+    assert_eq!(
+        strings(leis::roots(&s)),
+        vec!["L1 apps/veredas-portal: a veredas-* or orcl-* crate is the suite's; it is a member, never excluded"]
+    );
+}
+
+#[test]
 fn l1_a_nested_folder_is_not_a_root() {
     let deep = pkg("veredas-abaco", "2.0.0");
     let s = suite(&ws(&["crates/abaco/veredas-abaco"]), &[("crates/abaco/veredas-abaco", &deep)], &[]);
