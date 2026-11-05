@@ -87,11 +87,26 @@ fn l4_a_dependency_renamed_in_the_workspace_table_is_seen() {
         strings(leis::core(&s)),
         vec!["L4 crates/veredas-core: depends on veredas-portal in [dependencies]; core depends on no other member"]
     );
-    // the member's own rename wins over the root's
+    // a `package` written beside `workspace = true` is ignored, as cargo ignores it (refute round 2:
+    // cargo tree still showed core → portal): the root entry names the dependency
     let core = "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\n\
                 [dependencies]\ngw = { workspace = true, package = \"serde\" }\n";
     let s = suite(workspace, &[("crates/veredas-core", core), ("crates/veredas-portal", &portal)], &[]);
-    assert_eq!(strings(leis::core(&s)), NONE);
+    assert_eq!(
+        strings(leis::core(&s)),
+        vec!["L4 crates/veredas-core: depends on veredas-portal in [dependencies]; core depends on no other member"]
+    );
+    // and the evasion of one key in the member, with no rename at the root
+    let workspace = "[workspace]\nmembers = [\"crates/veredas-core\", \"crates/veredas-portal\"]\n\
+                     [workspace.package]\nedition = \"2024\"\n\
+                     [workspace.dependencies]\nveredas-portal = { path = \"crates/veredas-portal\" }\n";
+    let core = "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\n\
+                [dependencies]\nveredas-portal = { workspace = true, package = \"anything\" }\n";
+    let s = suite(workspace, &[("crates/veredas-core", core), ("crates/veredas-portal", &portal)], &[]);
+    assert_eq!(
+        strings(leis::core(&s)),
+        vec!["L4 crates/veredas-core: depends on veredas-portal in [dependencies]; core depends on no other member"]
+    );
 }
 
 #[test]

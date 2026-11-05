@@ -187,6 +187,8 @@ const CLAUSE: &[(&str, &[&str])] = &[
     ("veredas-wms", &["veredas-portal"]),
     ("orcl-std", &["orcl-*"]),
     ("orcl-runtime", &["orcl-*"]),
+    // a third language crate, so the family row cannot be narrowed to two names unnoticed
+    ("orcl-macros", &["orcl-*"]),
 ];
 
 fn clause_allows(pattern: &str, name: &str) -> bool {
@@ -233,7 +235,33 @@ fn l5_every_row_of_the_clause_is_pinned() {
             pairs += 1;
         }
     }
-    assert_eq!(pairs, 110);
+    assert_eq!(pairs, 132);
+}
+
+#[test]
+fn l5_a_name_that_extends_a_row_is_not_that_row() {
+    // the map matches a name exactly unless the row says `*`: veredas-abaco2 is not abaco, and
+    // veredas-portal2 is not portal (refute round 2: a prefix match survived the other tests)
+    let abaco2 = with_deps("veredas-abaco2", &["veredas-core", "veredas-portal"]);
+    let controlador = with_deps("veredas-controlador", &["veredas-core", "veredas-portal2"]);
+    let portal2 = with_deps("veredas-portal2", &["veredas-core"]);
+    let core = pkg("veredas-core", "2.0.0");
+    let portal = with_deps("veredas-portal", &["veredas-core"]);
+    let s = suite(
+        &ws(&["crates/veredas-core", "crates/veredas-portal", "crates/veredas-portal2", "crates/veredas-abaco2", "crates/veredas-controlador"]),
+        &[
+            ("crates/veredas-core", &core), ("crates/veredas-portal", &portal), ("crates/veredas-portal2", &portal2),
+            ("crates/veredas-abaco2", &abaco2), ("crates/veredas-controlador", &controlador),
+        ],
+        &[],
+    );
+    assert_eq!(
+        strings(leis::direction(&s)),
+        vec![
+            "L5 crates/veredas-abaco2: depends on veredas-portal in [dependencies]; the map allows veredas-abaco2 → veredas-core",
+            "L5 crates/veredas-controlador: depends on veredas-portal2 in [dependencies]; the map allows veredas-controlador → veredas-core, veredas-portal, veredas-aranha, orcl-*",
+        ]
+    );
 }
 
 #[test]

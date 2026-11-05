@@ -17,4 +17,5 @@ fn the_real_tree_obeys_every_law() {
     assert!(!s.workspace_version, "the workspace carries no shared version");
     assert!(!s.plans.contains_key("docs/veredas-plan.md"), "the suite plan is nobody's");
     assert_eq!(strings(leis::all(&s)), NONE);
+    assert_eq!(strings(leis::history(&root).expect("the repo's history reads")), NONE);
 }

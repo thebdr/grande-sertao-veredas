@@ -130,10 +130,30 @@ fn l2_an_extension_inside_its_host_is_not_a_member() {
 
 #[test]
 fn l2_a_veredas_crate_under_tools_is_named() {
+    // the prefix alone decides, well-formed or not (refute round 2: a rule keyed on a valid nome
+    // would let tools/veredas-Abaco through both rules), and the language's crates too
     let m = pkg("veredas-maquinar", "2.0.0");
-    let s = suite(&ws(&["tools/veredas-maquinar", "tools/leis"]), &[("tools/veredas-maquinar", &m), ("tools/leis", LEIS)], &[]);
+    let upper = pkg("veredas-Abaco", "2.0.0");
+    let bare = pkg("veredas-", "2.0.0");
+    let lang = pkg("orcl-std", "2.0.0");
+    let s = suite(
+        &ws(&["tools/veredas-maquinar", "tools/veredas-Abaco", "tools/veredas-", "tools/orcl-std", "tools/leis"]),
+        &[
+            ("tools/veredas-maquinar", &m),
+            ("tools/veredas-Abaco", &upper),
+            ("tools/veredas-", &bare),
+            ("tools/orcl-std", &lang),
+            ("tools/leis", LEIS),
+        ],
+        &[],
+    );
     assert_eq!(
         strings(leis::naming(&s)),
-        vec!["L2 tools/veredas-maquinar: a veredas-* crate is a component; it lives under crates/"]
+        vec![
+            "L2 tools/veredas-maquinar: a veredas-* crate is a component; it lives under crates/",
+            "L2 tools/veredas-Abaco: a veredas-* crate is a component; it lives under crates/",
+            "L2 tools/veredas-: a veredas-* crate is a component; it lives under crates/",
+            "L2 tools/orcl-std: an orcl-* crate is the language's; it lives under crates/",
+        ]
     );
 }

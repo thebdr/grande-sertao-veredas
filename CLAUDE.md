@@ -49,7 +49,8 @@ A Rust workspace; each component is a crate with a version of its own. Read this
 
 ## Build, test, commit
 - `cargo build --workspace` · `cargo nextest run --workspace`, run bare, never piped (a pipe hides
-  the exit code).
+  the exit code). The same suite runs on every push (`.github/workflows/leis.yml`); L6 reads git
+  history, so the laws need a repository with its commits.
 - Typed errors in library code, no `unwrap`/`expect` on I/O paths; tests may unwrap.
 - Blocked on ambiguity: write the question to `docs/questions.md`, take the most reversible
   option, mark it `// DECISION PENDING`, continue.

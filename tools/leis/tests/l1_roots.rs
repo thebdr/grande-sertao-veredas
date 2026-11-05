@@ -61,6 +61,35 @@ fn l1_an_excluded_folder_covers_what_is_beneath_it() {
 }
 
 #[test]
+fn l1_a_suite_crate_is_never_excluded() {
+    // by its name, by its folder, and behind an excluded parent folder
+    let abaco = pkg("veredas-abaco", "2.0.0");
+    let disguised = pkg("veredas-portal", "2.0.0");
+    let orcl = pkg("orcl-std", "2.0.0");
+    let workspace = "[workspace]\nmembers = [\"tools/leis\"]\nexclude = [\"crates/veredas-abaco\", \"crates/gateway\", \"crates/lang\"]\n[workspace.package]\nedition = \"2024\"\n";
+    let s = suite(
+        workspace,
+        &[("tools/leis", LEIS), ("crates/veredas-abaco", &abaco), ("crates/gateway", &disguised), ("crates/lang/orcl-std", &orcl)],
+        &[],
+    );
+    assert_eq!(
+        strings(leis::roots(&s)),
+        vec![
+            "L1 crates/veredas-abaco: a veredas-* or orcl-* crate is the suite's; it is a member, never excluded",
+            "L1 crates/gateway: a veredas-* or orcl-* crate is the suite's; it is a member, never excluded",
+            "L1 crates/lang/orcl-std: a veredas-* or orcl-* crate is the suite's; it is a member, never excluded",
+        ]
+    );
+    // the whole root excluded hides nothing of the suite's
+    let workspace = "[workspace]\nmembers = [\"tools/leis\"]\nexclude = [\"crates\"]\n[workspace.package]\nedition = \"2024\"\n";
+    let s = suite(workspace, &[("tools/leis", LEIS), ("crates/veredas-abaco", &abaco)], &[]);
+    assert_eq!(
+        strings(leis::roots(&s)),
+        vec!["L1 crates/veredas-abaco: a veredas-* or orcl-* crate is the suite's; it is a member, never excluded"]
+    );
+}
+
+#[test]
 fn l1_a_nested_folder_is_not_a_root() {
     let deep = pkg("veredas-abaco", "2.0.0");
     let s = suite(&ws(&["crates/abaco/veredas-abaco"]), &[("crates/abaco/veredas-abaco", &deep)], &[]);

@@ -1,0 +1,15 @@
+# The suite on every push: the laws (tools/leis) and every member's tests, bare. Full history,
+# because L6 asks git which commit first added a component (C-006).
+name: leis
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace

@@ -10,11 +10,11 @@
 //! THE LAWS (a component is a member under `crates/`; a member under `tools/` is repo tooling)
 //!   L1 ROOTS       every `Cargo.toml` under `crates/` or `tools/`, at any depth, is a workspace
 //!                  member listed by path or is excluded: a glob is not a member, an unlisted crate is
-//!                  refused, a nested crate is refused, and every member lives directly under one of
-//!                  those two roots.
+//!                  refused, a nested crate is refused, a `veredas-*` or `orcl-*` crate is never
+//!                  excluded, and every member lives directly under one of those two roots.
 //!   L2 NAMING      a component is `veredas-<nome>`, `<nome>` a lowercase ASCII letter then letters and
 //!                  digits, in a folder of the same name; the language's crates are `orcl-<nome>`; a
-//!                  `veredas-*` crate is a component and lives under `crates/`, never `tools/`.
+//!                  `veredas-*` or `orcl-*` crate lives under `crates/`, never `tools/`.
 //!   L3 VERSIONING  no `[workspace.package] version`; every component states its own SemVer, from 2.0.0.
 //!   L4 CORE        `veredas-core` depends on no other member, in any dependency table, a dependency
 //!                  inherited from `[workspace.dependencies]` or renamed with `package` included.
@@ -22,8 +22,9 @@
 //!                  may use core, the apps use portal, the bench and the scanner never pull portal,
 //!                  controlador embeds portal and aranha and runs ORCL. A dev-dependency is free (a
 //!                  bench is a fixture); a tool may depend on anything.
-//!   L6 PLAN        a component has its `docs/<nome>-plan.md`, not blank, from its first commit; the
-//!                  language's crates share `docs/orcl/README.md`. The suite's own plan is nobody's.
+//!   L6 PLAN        a component has its `docs/<nome>-plan.md`, not blank, and the commit that first
+//!                  added the component held it too ([`history`], over git); the language's crates
+//!                  share `docs/orcl/README.md`. The suite's own plan is nobody's.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -84,9 +85,10 @@ impl fmt::Display for DepTable {
     }
 }
 
-/// One declared dependency: the package it names and the table it sits in. The name is the
-/// member's own `package` rename, else the rename of the `[workspace.dependencies]` entry it
-/// inherits with `workspace = true`, else the key. Target-specific tables count like the plain ones.
+/// One declared dependency: the package it names and the table it sits in. An entry with
+/// `workspace = true` is named by the `[workspace.dependencies]` entry it inherits (its `package`
+/// rename, else the key; cargo ignores a `package` written beside `workspace = true`); any other
+/// by its own `package` rename, else the key. Target-specific tables count like the plain ones.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dep {
     pub name: String,
@@ -128,6 +130,9 @@ pub struct Suite {
     pub found: Vec<String>,
     /// The listed members whose manifest was found, in listed order.
     pub members: Vec<Member>,
+    /// Every crate found under a root that is not a member (excluded, or stray), parsed like a
+    /// member so a law can read its name, in found order.
+    pub others: Vec<Member>,
     /// `docs/*-plan.md` (the suite's own plan left out) and `docs/orcl/README.md`, path to content.
     pub plans: BTreeMap<String, String>,
 }
@@ -245,9 +250,13 @@ fn deps_of(table: &toml::Table, kind: DepTable, workspace: &toml::Table) -> Vec<
     keys.into_iter()
         .map(|key| {
             let entry = &table[key];
-            let name = package_of(entry)
-                .or_else(|| if inherits(entry) { workspace.get(key).and_then(package_of) } else { None })
-                .unwrap_or(key);
+            // beside `workspace = true` cargo ignores the member's own `package`: the root entry
+            // names the dependency (its `package`, else the key)
+            let name = if inherits(entry) {
+                workspace.get(key).and_then(package_of).unwrap_or(key)
+            } else {
+                package_of(entry).unwrap_or(key)
+            };
             Dep { name: name.to_string(), table: kind }
         })
         .collect()
@@ -295,12 +304,20 @@ impl Suite {
                 members.push(Member::parse(dir, text, &ws.workspace.dependencies)?);
             }
         }
+        let mut others = Vec::new();
+        for (dir, text) in crates {
+            let dir = normalize(dir);
+            if !listed.contains(&dir) {
+                others.push(Member::parse(&dir, text, &ws.workspace.dependencies)?);
+            }
+        }
         Ok(Suite {
             listed,
             excluded: ws.workspace.exclude.iter().map(|m| normalize(m)).collect(),
             workspace_version: ws.workspace.package.contains_key("version"),
             found,
             members,
+            others,
             plans,
         })
     }
@@ -426,8 +443,14 @@ fn allowed_for(name: &str) -> Vec<&'static str> {
     allowed
 }
 
-/// L1: every crate under a root is a listed member or excluded, every listed member is directly
-/// under a root, and so is every crate found.
+/// A crate the suite's names mark as its own: `veredas-*` or `orcl-*`, by its name or its folder.
+fn is_suite_crate(m: &Member) -> bool {
+    let folder = m.dir.rsplit('/').next().unwrap_or("");
+    [m.name.as_str(), folder].iter().any(|n| n.starts_with(PREFIX) || n.starts_with(LANGUAGE))
+}
+
+/// L1: every crate under a root is a listed member or excluded (never a suite crate, which is a
+/// member or nothing), every listed member is directly under a root, and so is every crate found.
 pub fn roots(s: &Suite) -> Vec<Violation> {
     let mut out = Vec::new();
     for m in &s.listed {
@@ -439,6 +462,9 @@ pub fn roots(s: &Suite) -> Vec<Violation> {
     }
     for c in &s.found {
         if s.is_excluded(c) {
+            if s.others.iter().any(|o| o.dir == *c && is_suite_crate(o)) {
+                out.push(Violation::new("L1", c, "a veredas-* or orcl-* crate is the suite's; it is a member, never excluded"));
+            }
             continue;
         }
         if !under_a_root(c) {
@@ -458,6 +484,8 @@ pub fn naming(s: &Suite) -> Vec<Violation> {
         if !m.is_component() {
             if m.name.starts_with(PREFIX) {
                 out.push(Violation::new("L2", &m.dir, "a veredas-* crate is a component; it lives under crates/"));
+            } else if m.name.starts_with(LANGUAGE) {
+                out.push(Violation::new("L2", &m.dir, "an orcl-* crate is the language's; it lives under crates/"));
             }
             continue;
         }
@@ -550,18 +578,21 @@ pub fn direction(s: &Suite) -> Vec<Violation> {
     out
 }
 
-/// L6: a component's plan exists, not blank, from its first commit.
+/// The plan a component must have: `docs/<nome>-plan.md`, the language's shared one for
+/// `orcl-*`, none for a name L2 refuses anyway.
+fn plan_of(name: &str) -> Option<String> {
+    if name.starts_with(LANGUAGE) {
+        Some(LANGUAGE_PLAN.to_string())
+    } else {
+        name.strip_prefix(PREFIX).map(|nome| format!("docs/{nome}-plan.md"))
+    }
+}
+
+/// L6 on the tree: a component's plan exists and is not blank.
 pub fn plans(s: &Suite) -> Vec<Violation> {
     let mut out = Vec::new();
     for m in s.components() {
-        let plan = if m.name.starts_with(LANGUAGE) {
-            LANGUAGE_PLAN.to_string()
-        } else {
-            match m.name.strip_prefix(PREFIX) {
-                Some(nome) => format!("docs/{nome}-plan.md"),
-                None => continue, // L2 names it
-            }
-        };
+        let Some(plan) = plan_of(&m.name) else { continue }; // L2 names it
         match s.plans.get(&plan) {
             None => out.push(Violation::new("L6", &m.dir, format!("no {plan} (a role nobody covers, written before the code)"))),
             Some(text) if is_blank(text) => out.push(Violation::new("L6", &m.dir, format!("{plan} is empty"))),
@@ -569,6 +600,47 @@ pub fn plans(s: &Suite) -> Vec<Violation> {
         }
     }
     out
+}
+
+fn git(root: &Path, args: &[&str]) -> Result<Option<String>, Error> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .map_err(|source| Error::Io { path: "git".to_string(), source })?;
+    if out.status.success() {
+        Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+    } else {
+        Ok(None)
+    }
+}
+
+/// L6 over history: the commit that first added a component's manifest also holds its plan, not
+/// blank, so no component's code ever landed without it. Asks `git` at `root`; a component not
+/// yet committed is the tree law's business, and a tree that is no repository is an error.
+pub fn history(root: &Path) -> Result<Vec<Violation>, Error> {
+    let s = Suite::read(root)?;
+    let not_a_repo = || Error::Io { path: root.display().to_string(), source: io::Error::other("not a git repository") };
+    git(root, &["rev-parse", "--is-inside-work-tree"])?.ok_or_else(not_a_repo)?;
+    if git(root, &["rev-parse", "--verify", "-q", "HEAD"])?.is_none() {
+        return Ok(Vec::new()); // no commit yet: nothing has landed
+    }
+    let mut out = Vec::new();
+    for m in s.components() {
+        let Some(plan) = plan_of(&m.name) else { continue };
+        let manifest = format!("{}/Cargo.toml", m.dir);
+        let log = git(root, &["log", "--diff-filter=A", "--format=%H", "--reverse", "--", &manifest])?
+            .ok_or_else(|| Error::Io { path: manifest.clone(), source: io::Error::other("git log failed") })?;
+        let Some(first) = log.lines().next().map(str::trim).filter(|l| !l.is_empty()) else { continue };
+        let short = &first[..first.len().min(7)];
+        match git(root, &["show", &format!("{first}:{plan}")])? {
+            None => out.push(Violation::new("L6", &m.dir, format!("the commit that added it ({short}) holds no {plan}"))),
+            Some(text) if is_blank(&text) => out.push(Violation::new("L6", &m.dir, format!("the commit that added it ({short}) holds {plan} blank"))),
+            Some(_) => {}
+        }
+    }
+    Ok(out)
 }
 
 /// Every law, in order.
