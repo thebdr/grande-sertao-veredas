@@ -10,8 +10,9 @@
 //!   answers.
 //! - **Sequence** (when the layout has a sequence field and the file has `[sequence]` rules):
 //!   the connect keep-alive carries `connect`; frames then carry `first..=last`, cycling,
-//!   stamped at send time; the receiver skips a frame repeating the last number it saw, and a
-//!   keep-alive's number counts as seen when `keepalive_counts` says so.
+//!   stamped at send time; the receiver skips a frame repeating the last number it saw. With
+//!   `keepalive_counts` a keep-alive takes a number and counts as seen; without it a keep-alive
+//!   (a probe or one the owner sends) carries the last number, takes none, and is ignored.
 //! - **Keep-alive**: one on connect when `on_connect`; a probe after `idle` of silence (nothing
 //!   read, nothing written), once per window, never while the peer talks.
 //! - **A peer that stops reading** (its socket takes nothing for `write_timeout`) is dropped.
@@ -432,25 +433,33 @@ impl Peer {
     }
 }
 
-/// Encode a frame for a peer, stamping its next sequence number when the rules ask for one.
+/// Whether the peer will read this frame as a keep-alive: no segments, or, in a layout without
+/// segments, an empty body (which decodes as none).
+fn reads_as_keepalive(spec: &ChannelSpec, frame: &Frame) -> bool {
+    frame.segments.is_empty() || (spec.framing.segment.is_none() && frame.segments.iter().all(|s| s.body.is_empty()))
+}
+
+/// Encode a frame for a peer, stamping a sequence number when the rules ask for one. A data
+/// frame takes the next number. A keep-alive, the channel's own probe or one the owner sends,
+/// takes the next number when the rules count keep-alives (`keepalive_counts`); when they do
+/// not, it carries the last number stamped (or `connect`) and takes none, so the receiver, which
+/// ignores its number, never meets a data frame that came back round to the previous one
+/// (C-012, refute rounds 4 and 5).
 fn encode_for(peer: &mut Peer, spec: &ChannelSpec, frame: &Frame) -> Result<Vec<u8>, String> {
-    let sequence = spec.sequence.as_ref().map(|rules| peer.next_sequence(rules));
+    let keepalive = reads_as_keepalive(spec, frame);
+    let sequence = spec.sequence.as_ref().map(|rules| {
+        if keepalive && !rules.keepalive_counts {
+            peer.sequence.unwrap_or(rules.connect)
+        } else {
+            peer.next_sequence(rules)
+        }
+    });
     spec.framing.encode(frame, sequence).map_err(|e| e.to_string())
 }
 
-/// A keep-alive probe. When the rules count keep-alives (`keepalive_counts`), a probe takes the
-/// next number like any frame; when they do not, it carries the last number stamped (or
-/// `connect`) and takes none, so the receiver, which ignores it, never meets a data frame that
-/// came back round to the previous one (C-012, refute round 4).
+/// A keep-alive probe: an empty frame, numbered as any keep-alive is.
 fn encode_probe(peer: &mut Peer, spec: &ChannelSpec) -> Result<Vec<u8>, String> {
-    let sequence = spec.sequence.as_ref().map(|rules| {
-        if rules.keepalive_counts {
-            peer.next_sequence(rules)
-        } else {
-            peer.sequence.unwrap_or(rules.connect)
-        }
-    });
-    spec.framing.encode(&Frame::default(), sequence).map_err(|e| e.to_string())
+    encode_for(peer, spec, &Frame::default())
 }
 
 /// A new peer: send the connect keep-alive when the rules ask for one.

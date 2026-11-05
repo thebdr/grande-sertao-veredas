@@ -142,8 +142,14 @@ fn every_limit_is_accepted_at_its_edge() {
     let spec = load(&file(&format!("max_frame = 2048\n{LP}"), "[link]\noutbox_limit_bytes = 2048\nwrite_timeout_ms = 1")).unwrap();
     assert_eq!((spec.link.outbox_limit_bytes, spec.link.write_timeout), (2048, Duration::from_millis(1)));
     let one = "envelope = [ { name = \"s\", size = 1, role = \"sequence\" }, { name = \"l\", size = 2, role = \"length\" } ]";
-    let spec = load(&file(one, "[sequence]\nfirst = 5\nlast = 5\nskip_duplicates = false")).unwrap();
+    let spec = load(&file(one, "[sequence]\nfirst = 5\nlast = 5\nskip_duplicates = false\nconnect = 4")).unwrap();
     assert_eq!(spec.sequence.map(|s| (s.first, s.last, s.skip_duplicates)), Some((5, 5, false)));
+    // `connect` just outside the cycle, on either side (Q11).
+    for (connect, first, last) in [(0, 1, 2), (3, 1, 2), (255, 0, 254)] {
+        let rules = format!("[sequence]\nconnect = {connect}\nfirst = {first}\nlast = {last}");
+        let s = load(&file(one, &rules)).unwrap().sequence.unwrap();
+        assert_eq!((s.connect, s.first, s.last), (connect, first, last));
+    }
 }
 
 #[test]
@@ -178,6 +184,11 @@ fn a_misspelled_key_is_refused_wherever_it_is() {
         (LP.to_string(), "[keepalive]\nidle = 5".to_string(), "idle"),
         (LP.to_string(), "[link]\nwrite_timeout = 5".to_string(), "write_timeout"),
         (LP.to_string(), "[linc]\nmax_peers = 1".to_string(), "linc"),
+        (
+            "envelope = [ { name = \"s\", size = 1, role = \"sequence\" }, { name = \"l\", size = 2, role = \"length\" } ]".to_string(),
+            "[sequence]\nfirts = 1".to_string(),
+            "firts",
+        ),
     ] {
         let e = refused(&file(&framing, &rest));
         assert!(e.starts_with("not a channel file: ") && e.contains(key), "{key}: {e}");
@@ -222,6 +233,9 @@ fn an_impossible_layout_is_refused_with_its_place_named() {
         (env(&format!("{{ name = \"s\", size = 1, role = \"sequence\" }}, {l}")), "[sequence]\nfirst = 5\nlast = 5", "sequence: a cycle of one number cannot skip duplicates (every frame would repeat)"),
         (env(l), "[link]\nwrite_timeout_ms = 0", "link.write_timeout_ms: at least 1"),
         (format!("max_frame = 2048\n{}", env(l)), "[link]\noutbox_limit_bytes = 2047", "link.outbox_limit_bytes: 2047 cannot hold one largest frame (2048)"),
+        // Refute round 2 (C-017): `connect` inside the cycle (Q11), at each end of it.
+        (env(&format!("{{ name = \"s\", size = 1, role = \"sequence\" }}, {l}")), "[sequence]\nfirst = 1\nlast = 2\nconnect = 2", "sequence: connect 2 lies inside the cycle 1 .. 2 (the connect keep-alive is told by its number)"),
+        (env(&format!("{{ name = \"s\", size = 1, role = \"sequence\" }}, {l}")), "[sequence]\nfirst = 0\nlast = 1", "sequence: connect 0 lies inside the cycle 0 .. 1 (the connect keep-alive is told by its number)"),
     ];
     for (framing, rest, expected) in cases {
         assert_eq!(refused(&file(&framing, rest)), expected, "{framing} {rest}");

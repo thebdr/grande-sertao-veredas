@@ -936,3 +936,102 @@ envelope = [ { name = "kind", size = 1 }, { name = "length", size = 2, role = "l
     assert_eq!(seen, [("keepalive", 7, 0), ("received", 8, 1)]);
     assert_eq!((server.status().keepalives_received, server.status().received), (1, 1));
 }
+
+// ---------------------------------------------------------------------------
+// Refute round 5 (C-012): a keep-alive the owner sends is numbered by the same rule as a probe,
+// so under `keepalive_counts = false` no run of them brings a data frame back round.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn keepalives_the_owner_sends_are_numbered_like_probes() {
+    // A, 254 empty frames sent by the owner, B; no probes (idle 0). Uncounted, the empty frames
+    // take no number and B follows A; counted, they take 2..=255, are counted as seen, and B
+    // wraps to 1. Either way nothing is skipped.
+    for (counts, b_number) in [(false, 2u8), (true, 1u8)] {
+        let rules = |idle| {
+            let mut s = spec(idle);
+            s.sequence.as_mut().unwrap().keepalive_counts = counts;
+            s
+        };
+        let port = free_port();
+        let server = Channel::start(ChannelConfig::new(
+            "listener",
+            Role::Listen { bind: "127.0.0.1".into(), port },
+            rules(0),
+        ));
+        until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+        let client =
+            Channel::start(ChannelConfig::new("dialer", Role::Connect { host: "127.0.0.1".into(), port }, rules(0)));
+        let peer = wait_connected(&client);
+        let _ = wait_connected(&server);
+        client.send(peer, payload(1, b"A"));
+        for _ in 0..254 {
+            client.send(peer, Frame::default());
+        }
+        client.send(peer, payload(1, b"B"));
+        until("all of it", Duration::from_secs(10), || {
+            let s = server.status();
+            s.received + s.duplicates_skipped >= 2 && s.keepalives_received >= 255
+        });
+        let got: Vec<(Vec<u8>, u8)> =
+            collect(&server, Duration::from_millis(200)).iter().map(|f| (f.segments[0].body.clone(), seq(f))).collect();
+        assert_eq!(got, [(b"A".to_vec(), 1), (b"B".to_vec(), b_number)], "keepalive_counts = {counts}");
+        assert_eq!(server.status().duplicates_skipped, 0, "keepalive_counts = {counts}");
+    }
+}
+
+#[test]
+fn empty_messages_of_a_segmentless_layout_never_cost_a_data_message() {
+    // A kind byte, a sequence number, a length, the body; keep-alives do not count. 254 empty
+    // acknowledgements (kind 6) between two data messages arrive as keep-alives carrying their
+    // kind, take no number, and the second data message arrives on the number after the first.
+    let bare = load(
+        r#"
+format = "veredas-channel"
+version = 1
+[framing]
+envelope = [
+  { name = "kind", size = 1 },
+  { name = "sequence", size = 1, role = "sequence" },
+  { name = "length", size = 2, role = "length" },
+]
+[sequence]
+keepalive_counts = false
+[keepalive]
+idle_ms = 0
+"#,
+    )
+    .unwrap();
+    let message = |kind: u64, body: &[u8]| Frame {
+        fields: BTreeMap::from([("kind".to_string(), kind)]),
+        segments: vec![Segment { fields: BTreeMap::new(), body: body.to_vec() }],
+    };
+    let port = free_port();
+    let server = Channel::start(ChannelConfig::new("bare", Role::Listen { bind: "127.0.0.1".into(), port }, bare.clone()));
+    until("the bind", Duration::from_secs(5), || server.status().state.contains("listening"));
+    let client = Channel::start(ChannelConfig::new("dialer", Role::Connect { host: "127.0.0.1".into(), port }, bare));
+    let peer = wait_connected(&client);
+    let _ = wait_connected(&server);
+    client.send(peer, message(8, b"A"));
+    for _ in 0..254 {
+        client.send(peer, message(6, b""));
+    }
+    client.send(peer, message(8, b"B"));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (mut data, mut acks) = (Vec::new(), 0);
+    while (data.len() < 2 || acks < 254) && Instant::now() < deadline {
+        for e in server.poll() {
+            match e {
+                ChannelEvent::KeepAlive { frame, .. } if frame.fields["kind"] == 6 => acks += 1,
+                ChannelEvent::Received { frame, .. } => {
+                    data.push((frame.fields["kind"], frame.segments[0].body.clone(), frame.fields["sequence"]))
+                }
+                _ => {}
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(data, [(8, b"A".to_vec(), 1), (8, b"B".to_vec(), 2)]);
+    assert_eq!(acks, 254);
+    assert_eq!(server.status().duplicates_skipped, 0);
+}

@@ -486,3 +486,74 @@ fn a_segment_that_leaves_no_room_for_the_headers_still_to_come_is_refused_at_onc
     over.segments[0].body.push(0x5A);
     assert_eq!(c.encode(&over, None), Err(EncodeError::FrameTooLarge { len: 1025, max: 1024 }));
 }
+
+// ---------------------------------------------------------------------------
+// Refute round 5 (C-010): with both a data-area length and a segment count, the data area
+// must be fillable as well as reachable: `count` segments, each at most its header and the
+// largest body its length field can declare, bound it from above.
+// ---------------------------------------------------------------------------
+
+/// Delimited, a two-byte data-area length and a one-byte count; segments of a one-byte length
+/// and the body, so one segment takes at most 256 bytes.
+fn narrow_segments() -> Framing {
+    framing_of(
+        "start = \"02\"\nend = \"03\"\nmax_frame = 1024\n\
+         envelope = [ { name = \"length\", size = 2, role = \"length\" }, { name = \"count\", size = 1, role = \"count\" } ]\n\
+         segment = [ { name = \"length\", size = 1, role = \"length\" } ]\n",
+    )
+}
+
+#[test]
+fn a_data_area_its_segments_can_never_fill_is_refused_at_the_envelope() {
+    let n = narrow_segments();
+    let real = [0x02, 0x02, 0x00, 0x01, 0x01, 0x41, 0x03];
+    assert_eq!(n.decode(&real).map(|(_, used)| used), Ok(7));
+    // Two segments fill at most 512 bytes: 512 waits, 513 is refused from the envelope.
+    assert_eq!(n.decode(&[0x02, 0x00, 0x02, 0x02]), Err(DecodeError::NeedMore));
+    assert_eq!(n.decode(&[0x02, 0x01, 0x02, 0x02]), Err(DecodeError::BadFrame { resync: 2 }));
+    // LENGTH 600 with two segments: refused at once, never holding the real frames behind it.
+    let mut stream = vec![0x02, 0x58, 0x02, 0x02, 0xFF];
+    for _ in 0..10 {
+        stream.extend(real);
+    }
+    assert_eq!(stream.len(), 75);
+    assert_eq!(n.decode(&stream), Err(DecodeError::BadFrame { resync: 2 }));
+    // No segments and a data area: nothing can fill it.
+    assert_eq!(n.decode(&[0x02, 0x01, 0x00, 0x00]), Err(DecodeError::BadFrame { resync: 4 }));
+    // The 512-byte data area is reachable: two 255-byte bodies, a 517-byte frame, decoded whole.
+    let full = frame(vec![
+        Segment { fields: BTreeMap::new(), body: vec![0x41; 255] },
+        Segment { fields: BTreeMap::new(), body: vec![0x41; 255] },
+    ]);
+    let bytes = n.encode(&full, None).unwrap();
+    assert_eq!((bytes.len(), &bytes[..4]), (517, &[0x02, 0x00, 0x02, 0x02][..]));
+    assert_eq!(n.decode(&bytes).map(|(f, used)| (f.segments.len(), used)), Ok((2, 517)));
+}
+
+#[test]
+fn a_data_area_the_segments_still_to_come_cannot_fill_is_refused_at_the_header() {
+    let n = narrow_segments();
+    // LENGTH 300, two segments: after a first body of b bytes, 300 - 1 - b bytes are left for
+    // one segment of at most 256. b = 43 leaves exactly 256 and waits; b = 42 leaves 257.
+    assert_eq!(n.decode(&[0x02, 0x2C, 0x01, 0x02, 43]), Err(DecodeError::NeedMore));
+    assert_eq!(n.decode(&[0x02, 0x2C, 0x01, 0x02, 42]), Err(DecodeError::BadFrame { resync: 3 }));
+    // The last segment must end the data area exactly, as before.
+    assert_eq!(n.decode(&[0x02, 0x05, 0x00, 0x01, 0x03]), Err(DecodeError::BadFrame { resync: 5 }));
+}
+
+#[test]
+fn a_framing_built_by_hand_past_the_ceiling_waits_and_never_wraps() {
+    // The channel file caps `max_frame` at 16 MiB; a `Framing` built in code may not. Its sums
+    // saturate: an 8-byte length of u64::MAX waits for bytes that never come, and never panics.
+    let mut hand = framing_of("max_frame = 1024\nenvelope = [ { name = \"length\", size = 8, role = \"length\" } ]\n");
+    hand.max_frame = usize::MAX;
+    assert_eq!(hand.decode(&[0xFF; 8]), Err(DecodeError::NeedMore));
+    let mut counted = framing_of(
+        "max_frame = 1024\nenvelope = [ { name = \"count\", size = 8, role = \"count\" } ]\n\
+         segment = [ { name = \"length\", size = 8, role = \"length\" } ]\n",
+    );
+    counted.max_frame = usize::MAX;
+    let mut buf = u64::MAX.to_le_bytes().to_vec();
+    buf.extend(u64::MAX.to_le_bytes());
+    assert!(counted.decode(&buf).is_err());
+}

@@ -244,10 +244,12 @@ impl Framing {
         if length.is_some_and(|l| l > max) || count.is_some_and(|c| c > max) {
             return Err(bad(1));
         }
+        // Sums saturate, so a `Framing` built by hand with a limit near `usize::MAX` refuses or
+        // waits rather than wrapping (C-010, refute round 5).
         let (length, count) = (length.map(|l| l as usize), count.map(|c| c as usize));
-        let data_end = length.map(|l| env_end + l);
+        let data_end = length.map(|l| env_end.saturating_add(l));
         if let Some(de) = data_end
-            && de + tail_len > self.max_frame
+            && de.saturating_add(tail_len) > self.max_frame
         {
             return Err(bad(1));
         }
@@ -261,14 +263,24 @@ impl Framing {
             },
             Some(header) => {
                 let hdr = width(header);
+                // The most one segment can take: its header and the largest body its length
+                // field can declare (never more than the frame limit).
+                let body_cap = role(header, FieldRole::Length)
+                    .map(|f| if f.size >= 8 { u64::MAX } else { (1u64 << (8 * f.size)) - 1 })
+                    .unwrap_or(0)
+                    .min(max) as usize;
+                let seg_max = hdr.saturating_add(body_cap);
+                // A data area that `count` segments can neither reach (headers alone overrun it)
+                // nor fill (every body at its largest falls short) can never end (C-010, refute
+                // round 5: the upper bound).
                 if let (Some(c), Some(l)) = (count, length)
-                    && (c * hdr > l || (c == 0 && l != 0))
+                    && (c.saturating_mul(hdr) > l || c.saturating_mul(seg_max) < l)
                 {
                     return Err(bad(1));
                 }
                 // A count whose headers alone cannot fit the frame limit can never end.
                 if let Some(c) = count
-                    && env_end + c * hdr + tail_len > self.max_frame
+                    && env_end.saturating_add(c.saturating_mul(hdr)).saturating_add(tail_len) > self.max_frame
                 {
                     return Err(bad(1));
                 }
@@ -283,11 +295,11 @@ impl Framing {
                         break;
                     }
                     if let Some(de) = data_end
-                        && at + hdr > de
+                        && at.saturating_add(hdr) > de
                     {
                         return Err(bad(1));
                     }
-                    if at + hdr > buf.len() {
+                    if at.saturating_add(hdr) > buf.len() {
                         return Err(DecodeError::NeedMore);
                     }
                     let mut seg_fields = BTreeMap::new();
@@ -304,17 +316,19 @@ impl Framing {
                     if body_len > max {
                         return Err(bad(1));
                     }
-                    let end = h + body_len as usize;
+                    let end = h.saturating_add(body_len as usize);
                     // The segments still to come need their headers too.
-                    let still = count.map(|c| (c - i - 1) * hdr).unwrap_or(0);
-                    if end + still + tail_len > self.max_frame {
+                    let still = count.map(|c| (c - i - 1).saturating_mul(hdr)).unwrap_or(0);
+                    if end.saturating_add(still).saturating_add(tail_len) > self.max_frame {
                         return Err(bad(1));
                     }
                     if let Some(de) = data_end {
+                        // The rest of the data area must be reachable by the segments still to
+                        // come, and fillable by them.
                         let remaining = count.map(|c| c - i - 1);
                         if end > de
-                            || remaining.is_some_and(|r| r * hdr > de - end)
-                            || (remaining == Some(0) && end != de)
+                            || remaining.is_some_and(|r| r.saturating_mul(hdr) > de - end)
+                            || remaining.is_some_and(|r| r.saturating_mul(seg_max) < de - end)
                         {
                             return Err(bad(1));
                         }
@@ -327,7 +341,7 @@ impl Framing {
             }
         };
 
-        let total = data_end + tail_len;
+        let total = data_end.saturating_add(tail_len);
         if buf.len() < total {
             return Err(DecodeError::NeedMore);
         }

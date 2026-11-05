@@ -199,3 +199,19 @@ stating its `format` and `version` as the channel file does, misspelled keys ref
 JSON project files are not carried as they are; whatever portal absorbs of them is read into
 TOML. Recorded in the plan ("Versioned files"), in P-010, and in `docs/channel-schema.md` as the
 pattern the other files follow.
+
+---
+
+## Q11 - May `connect` lie inside the sequence cycle?
+
+**Raised** 2026-11-05, refuting the channel (C-012 round 5, C-017 round 2). A receiver tells the
+connect keep-alive from the others by its number alone. When `connect` lies inside
+`first..=last`, a keep-alive that takes that number in the cycle is not counted as seen, and in
+a two-number cycle the next data frame repeats the last one and is skipped.
+
+**Taken (reversible, pending the operator):** the channel file refuses a `connect` inside
+`first..=last`. Every layout seen so far (the worked example: `connect = 0`, cycle 1 to 255)
+keeps it outside. A device that needs it inside would need the receiver to exempt only the
+first keep-alive after connect instead, a version 2 of the rule.
+
+**Reversible?** Yes: loosening a refusal breaks no file that loads today.

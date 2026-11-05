@@ -1,13 +1,13 @@
 {
   "clause": "C-007",
   "verdict": "holds",
-  "ranAt": "2026-11-05T20:50:58.789Z",
-  "headCommit": "dc10c13f25ea8fc22226c487d1d719438a506850",
+  "ranAt": "2026-11-05T22:40:12.203Z",
+  "headCommit": "6c8968df67d440c45c1083c73d54ba2ff97ca940",
   "tests": [
     {
       "name": "crates/veredas-core/tests/foundation.rs",
       "file": "crates/veredas-core/tests/foundation.rs",
-      "symbolSha": "7a56221817c92801b586001fbfe8897aacda8b59c506cf5922e43433f2a1676d"
+      "symbolSha": "e34056c24e357ae6e99bcf8479ca29930061c31cac17bdcc81984c585ce0fe53"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",

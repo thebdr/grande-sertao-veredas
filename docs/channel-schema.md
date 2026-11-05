@@ -105,13 +105,16 @@ are checked against each other).
 
 **`[sequence]`** (required with an envelope field of role `"sequence"`, refused without one; an
 empty `[sequence]` takes every default)
-- `connect` (0): stamped on the connect keep-alive.
+- `connect` (0): stamped on the connect keep-alive; outside `first..=last`, because the receiver
+  tells the connect keep-alive by its number (Q11).
 - `first` (1), `last` (255): the cycle frames are stamped with, at send time; a cycle of one
   number cannot skip duplicates and is refused with `skip_duplicates`.
 - `skip_duplicates` (true): the receiver skips a frame repeating the last number it saw.
 - `keepalive_counts` (true): keep-alives take numbers in the cycle like any frame, and the
   receiver counts a keep-alive's number (other than `connect`) as the last seen. With `false`
-  a probe carries the last number stamped without taking one, and the receiver ignores it.
+  a keep-alive (a probe, or one the application sends, such as an empty acknowledgement in a
+  layout without segments) carries the last number stamped without taking one, and the
+  receiver ignores it.
   Whether a device's keep-alives consume numbers is that device's (Q9).
 
 **`[keepalive]`** (optional) `on_connect` (true): send a keep-alive (a frame with no segments)
@@ -125,5 +128,5 @@ bytes queued for one peer beyond what its socket took, a memory bound. `max_peer
 
 Every key is checked: a misspelled key, an unknown role, a size out of range, a role in the
 wrong part, two fields sharing a role, a computed field given a `value`, a layout that cannot
-end, a sequence field without rules or rules without a field, a frame limit over the ceiling or
+end, a sequence field without rules or rules without a field, `connect` inside the cycle, a frame limit over the ceiling or
 under the fixed bytes, or a zero link setting is refused with its place named.
