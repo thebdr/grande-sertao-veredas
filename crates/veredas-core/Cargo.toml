@@ -11,8 +11,14 @@ description = "The foundation of Veredas 2: the shared types and protocol layers
 
 [dependencies]
 chrono = { workspace = true }
+# SourceError's pattern variant; the sort plan's routing rules and the capture layer's patterns.
 regex = { workspace = true }
+# The telegram layer's configs (capture specs, sort plan settings) and the decision path's JSON.
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+# The telegram channel and the decision client run on their own current-thread runtimes.
+tokio = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

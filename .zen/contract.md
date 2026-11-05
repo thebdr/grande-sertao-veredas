@@ -89,6 +89,62 @@ refute round found and what it changed is in the clause's evidence note.
 - **Status:** verified
 
 
+## C-010: The telegram wire codec: frames that never lie about their size
+- **Date:** 2026-11-05
+- **Source:** user (docs/veredas-plan.md "veredas-core", scope: TCP telegrams; docs/core-plan.md; the GENIBELT spec §2-§3, docs/questions.md Q6)
+- **Description:** A telegram encodes as SOM, a 12-byte envelope (class, source, destination, PRG, LENGTH of the data area, NUM DATA), its segments (id, length, body) and a 4-byte tail ending in EOM, in either byte order (little-endian by default); a keep-alive is envelope and tail alone. Encoding refuses a body or frame its 16-bit fields cannot describe, never clamping; decoding returns the telegram and the bytes it used, asks for more on a partial frame, and refuses a frame whose lengths disagree, saying how far to skip to the next start. Hex bodies parse as two ASCII hex digits per byte; previews and dumps render bodies for an operator.
+- **Verification:** automated → crates/veredas-core/tests/telegram_codec.rs | Veredas 1's tests plus golden frames byte for byte in both orders, the size limits at their exact edges, exact resync distances, every prefix of a frame, inconsistent lengths, a wrong byte order, hex signs and multi-byte characters, exact previews and dumps
+- **Evidence:** .zen/evidence/C-010.md
+- **Status:** pending
+
+## C-011: The GENIBELT catalog: every typed message decoded and encoded per the specification
+- **Date:** 2026-11-05
+- **Source:** user (docs/core-plan.md; the GENIBELT spec §3.3, §4, docs/questions.md Q6)
+- **Description:** Every GENIBELT message the specification defines is a typed `Message` with its id, its exact MSG LENGTH and field layout, decoded from and encoded to a segment body; the variable-length messages carry their tails; a body of the wrong length is an error, never a panic; an unknown id is kept verbatim; fixed-width text fields survive; outcome and bin-state codes read as words, and the bin-state bits say whether a chute takes parcels.
+- **Verification:** automated → crates/veredas-core/tests/telegram_genibelt.rs | Veredas 1's tests: every declared size with a round trip, the destination's fields, the scanner request's physicals and no-read, outcome words, bin-state bits, fixed-width text, wrong lengths, unknown ids, variable tails
+- **Evidence:** .zen/evidence/C-011.md
+- **Status:** pending
+
+## C-012: One TCP telegram link, spoken correctly in either role
+- **Date:** 2026-11-05
+- **Source:** user (docs/core-plan.md; the GENIBELT spec §3.1-§3.2)
+- **Description:** A `Channel` listens or dials on its own thread: on connect each side sends a keep-alive with PRG 0, then stamps PRG 1..255 at send time; the receiver skips a frame repeating the last PRG; silence for the receive timeout sends a keep-alive probe; a dialler retries until the listener appears; replies are unicast by a peer id never reused, so a reply for a departed peer is dropped, never delivered to its successor; a peer that stops reading is dropped without wedging the channel or its shutdown; garbage is resynced past and counted; a bind failure is reported and the channel still stops.
+- **Verification:** automated → crates/veredas-core/tests/telegram_channel.rs | over real loopback TCP: two channels both ways, PRG sequence, a duplicate skipped, the idle probe, the departed peer, a deaf peer flooded past its outbox, a late listener, garbage before a frame, a port already taken
+- **Evidence:** .zen/evidence/C-012.md
+- **Status:** pending
+
+## C-013: Message bodies captured into named fields
+- **Date:** 2026-11-05
+- **Source:** user (docs/core-plan.md)
+- **Description:** A GENIBELT scanner request becomes the parcel a plan decides on (its ids, infeed, physicals, and barcodes split by a configurable format), unmeasured dimensions staying unknown and a no-read saying why; for other framings a `CaptureSpec` reads a regex's named groups, binary fields at byte offsets in either order, and repeated patterns as `name1`, `name2`... up to a cap; a field past the body's end does not match and never panics; a binary field wins a name collision; a bad pattern is a warning that drops that one capture.
+- **Verification:** automated → crates/veredas-core/tests/telegram_capture.rs | Veredas 1's tests
+- **Evidence:** .zen/evidence/C-013.md
+- **Status:** pending
+
+## C-014: The sort plan: how a parcel becomes a destination
+- **Date:** 2026-11-05
+- **Source:** user (docs/core-plan.md; Veredas 1's docs/sort-plan.md)
+- **Description:** Routing rules, ordered and first match wins, decide by content and their answer is sticky once actually sent, until its chute stops accepting; otherwise a weighted spread draws among eligible destinations, each weight a share of the enabled sum, per infeed when the plan says so; constraints exclude a chute that cannot take the parcel in both tiers; a blocked chute leaves the spread until it recovers; nothing eligible reaches the reject destination, or reports no decision when there is none; a rule may send to a named table (`@name`) instead of a chute, a cycle of tables cut at a fixed depth; a broken rule (bad pattern, unknown table, no such chute) is a warning that disables it alone; sticky memory is bounded; a seeded plan replays its draws exactly; tier counters make a fallback visible.
+- **Verification:** automated → crates/veredas-core/tests/telegram_sortplan.rs | Veredas 1's tests
+- **Evidence:** .zen/evidence/C-014.md
+- **Status:** pending
+
+## C-015: The decision path: bounded calls, never an invented destination
+- **Date:** 2026-11-05
+- **Source:** user (docs/core-plan.md)
+- **Description:** A `DecisionClient` posts JSON to `http://host:port` (`/decide`, `/events`, `/binstate`), one fresh connection per call, bounded by its timeout; any failure is a typed `DecisionError` (not http, bad port, connect, write, read, timeout, no headers, unreadable status, a non-2xx refusal, encode, decode), never a guessed destination, and an answer without a destination is an answer. Lifecycle events go through a bounded queue that drops the oldest when full, never blocking, and a failed batch goes back to the front in order.
+- **Verification:** automated → crates/veredas-core/tests/telegram_decision.rs | over real loopback sockets against a stand-in service answering raw bytes: refused addresses, a path after the port, success and every refusal shape, the request each endpoint sends, an unreachable and a silent service, the real exchange, a null destination; the queue's overflow and requeue
+- **Evidence:** .zen/evidence/C-015.md
+- **Status:** pending
+
+## C-016: A deterministic PCG32
+- **Date:** 2026-11-05
+- **Source:** user (docs/core-plan.md, test-fixture plumbing)
+- **Description:** `Pcg32` replays the same sequence from the same seed and stream, and diverges across streams; `uniform` stays within its range at its rounding, `int_in` covers both ends, `flip` gives both faces.
+- **Verification:** automated → crates/veredas-core/tests/rng.rs | Veredas 1's tests
+- **Evidence:** .zen/evidence/C-016.md
+- **Status:** pending
+
 ## Pending Contract Deltas
 
 ### P-002: veredas-portal — the gateway
