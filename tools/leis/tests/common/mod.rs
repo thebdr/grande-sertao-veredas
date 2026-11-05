@@ -47,6 +47,7 @@ impl Tree {
     pub fn new(name: &str, files: &[(&str, &str)]) -> Tree {
         let root = std::env::temp_dir().join(format!("leis-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("the tree's root is made");
         for (rel, text) in files {
             let path = root.join(rel);
             fs::create_dir_all(path.parent().expect("a file has a parent")).expect("the folder is made");

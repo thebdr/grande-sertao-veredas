@@ -1,5 +1,7 @@
-# build output
-/target
+# build output, at any depth: a crate built on its own (an excluded fork) makes one of its own.
+# The laws' reader skips target/ and node_modules/ wherever they sit, and this file is what makes
+# that honest: the repository never holds them (tools/leis, L1 asks git).
+target/
 # web frontends keep their modules local; a dist/ is committed when a crate embeds it
 **/node_modules
 # Python leftovers (abaco's macros, scripts)

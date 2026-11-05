@@ -141,6 +141,35 @@ fn l1_an_underscore_spelling_is_the_same_suite_crate() {
 }
 
 #[test]
+fn l1_the_skipped_folders_are_ignored_by_git_at_any_depth() {
+    // the reader skips target/ and node_modules/ wherever they sit; that is honest only if the
+    // repository can never hold them, which is .gitignore's doing, so ask git (refute round 5:
+    // `/target` ignored the top one alone, and a suite crate under apps/target/ was committed)
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let ignored = |path: &str| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["check-ignore", "-q", "--no-index", path])
+            .status()
+            .expect("git runs")
+            .success()
+    };
+    for path in [
+        "target/Cargo.toml",
+        "apps/target/veredas-portal/Cargo.toml",
+        "crates/veredas-x/target/veredas-y/Cargo.toml",
+        "node_modules/veredas-z/Cargo.toml",
+        "crates/veredas-x/web/node_modules/veredas-z/Cargo.toml",
+    ] {
+        assert!(ignored(path), "{path} must be ignored, or the reader's skip is a way out");
+    }
+    for path in ["apps/veredas-portal/Cargo.toml", ".parked/veredas-portal/Cargo.toml", "crates/veredas-x/Cargo.toml"] {
+        assert!(!ignored(path), "{path} must not be ignored, or a suite crate could never be committed");
+    }
+}
+
+#[test]
 fn l1_the_reader_scans_the_whole_repository_for_suite_crates() {
     let portal = pkg("veredas-portal", "2.0.0");
     let conveyor = pkg("conveyor", "0.1.0");

@@ -142,10 +142,15 @@ fn l2_a_veredas_crate_under_tools_is_named() {
     let underscored = pkg("veredas_abaco", "2.0.0");
     let lang_underscored = pkg("orcl_std", "2.0.0");
     let by_folder = pkg("bench", "0.1.0");
+    // the fold on the name alone and on the folder alone (refute round 5: a fixture with the
+    // underscore in both let either half of the fold carry the test)
+    let name_only = pkg("veredas_bench", "0.1.0");
+    let lang_name_only = pkg("orcl_bench", "0.1.0");
     let s = suite(
         &ws(&[
             "tools/veredas-maquinar", "tools/veredas-Abaco", "tools/veredas-", "tools/orcl-std", "tools/orcl-Std", "tools/orcl-",
-            "tools/veredas_abaco", "tools/orcl_std", "tools/veredas-bench", "tools/leis",
+            "tools/veredas_abaco", "tools/orcl_std", "tools/veredas-bench", "tools/veredas_bench", "tools/bench", "tools/orcl_bench",
+            "tools/lbench", "tools/leis",
         ]),
         &[
             ("tools/veredas-maquinar", &m),
@@ -157,6 +162,10 @@ fn l2_a_veredas_crate_under_tools_is_named() {
             ("tools/veredas_abaco", &underscored),
             ("tools/orcl_std", &lang_underscored),
             ("tools/veredas-bench", &by_folder),
+            ("tools/veredas_bench", &by_folder),
+            ("tools/bench", &name_only),
+            ("tools/orcl_bench", &by_folder),
+            ("tools/lbench", &lang_name_only),
             ("tools/leis", LEIS),
         ],
         &[],
@@ -173,6 +182,10 @@ fn l2_a_veredas_crate_under_tools_is_named() {
             "L2 tools/veredas_abaco: a veredas-* crate is a component; it lives under crates/",
             "L2 tools/orcl_std: an orcl-* crate is the language's; it lives under crates/",
             "L2 tools/veredas-bench: a veredas-* crate is a component; it lives under crates/",
+            "L2 tools/veredas_bench: a veredas-* crate is a component; it lives under crates/",
+            "L2 tools/bench: a veredas-* crate is a component; it lives under crates/",
+            "L2 tools/orcl_bench: an orcl-* crate is the language's; it lives under crates/",
+            "L2 tools/lbench: an orcl-* crate is the language's; it lives under crates/",
         ]
     );
 }

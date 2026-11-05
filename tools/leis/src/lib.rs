@@ -24,8 +24,9 @@
 //!                  controlador embeds portal and aranha and runs ORCL. A dev-dependency is free (a
 //!                  bench is a fixture); a tool may depend on anything.
 //!   L6 PLAN        a component has its `docs/<nome>-plan.md`, not blank, and so does every commit
-//!                  reachable from HEAD that holds the component ([`history`], over git); the
-//!                  language's crates share `docs/orcl/README.md`. The suite's own plan is nobody's.
+//!                  reachable from HEAD that holds a component folder under `crates/`, present at
+//!                  HEAD or not ([`history`], over git's trees); the language's crates share
+//!                  `docs/orcl/README.md`. The suite's own plan is nobody's.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -38,8 +39,10 @@ use serde::Deserialize;
 /// The folders a member may live under.
 pub const ROOTS: [&str; 2] = ["crates", "tools"];
 /// Folders the reader never descends into: git's own store, build output, a frontend's modules.
-/// A hidden folder is walked like any other: `.github` and `.zen` are committed here, and a
-/// suite crate parked under a dot is still parked.
+/// The repository never holds them: git refuses a path through `.git`, and `.gitignore` ignores
+/// `target/` and `node_modules/` at any depth (L1 asks git so). A hidden folder is walked like
+/// any other: `.github` and `.zen` are committed here, and a suite crate parked under a dot is
+/// still parked.
 pub const SKIPPED: [&str; 3] = [".git", "target", "node_modules"];
 /// The foundation: the one member every other may use, and the one that uses none.
 pub const CORE: &str = "veredas-core";
@@ -627,10 +630,13 @@ pub fn plans(s: &Suite) -> Vec<Violation> {
 }
 
 /// Runs git at `root`; `Some(stdout)` on success, `None` when git said no, an error when it could
-/// not run at all.
-fn git(root: &Path, args: &[&str], stdin: Option<&str>) -> Result<Option<String>, Error> {
+/// not run at all. The input is fed from its own thread while the output is read, so a long
+/// `--batch` conversation never deadlocks on a full pipe (refute round 4 of C-006: it hung past a
+/// thousand commits).
+fn git_bytes(root: &Path, args: &[&str], stdin: Option<&[u8]>) -> Result<Option<Vec<u8>>, Error> {
     use std::io::Write;
     use std::process::{Command, Stdio};
+    let failed = |source: io::Error| Error::Io { path: "git".to_string(), source };
     let mut child = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -639,26 +645,85 @@ fn git(root: &Path, args: &[&str], stdin: Option<&str>) -> Result<Option<String>
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|source| Error::Io { path: "git".to_string(), source })?;
-    if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
-        pipe.write_all(text.as_bytes()).map_err(|source| Error::Io { path: "git".to_string(), source })?;
+        .map_err(failed)?;
+    let feeder = match (stdin, child.stdin.take()) {
+        (Some(data), Some(mut pipe)) => {
+            let data = data.to_vec();
+            Some(std::thread::spawn(move || pipe.write_all(&data)))
+        }
+        _ => None,
+    };
+    let out = child.wait_with_output().map_err(failed)?;
+    if let Some(feeder) = feeder {
+        let _ = feeder.join(); // a pipe git closed early is git's answer, read below
     }
-    let out = child.wait_with_output().map_err(|source| Error::Io { path: "git".to_string(), source })?;
-    if out.status.success() {
-        Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
-    } else {
-        Ok(None)
-    }
+    Ok(if out.status.success() { Some(out.stdout) } else { None })
 }
 
-/// L6 over history: every commit reachable from HEAD that holds a component's manifest also
-/// holds its plan, not blank, so no component's code ever landed without it, through merges,
-/// re-additions and deletions alike. One `git cat-file --batch-check` over every (commit, path)
-/// pair, then each distinct plan blob read once. The earliest offending commit is named. A
-/// component not yet committed is the tree law's business; a tree that is no repository, or a
-/// shallow clone with its history cut, is an error.
+fn git(root: &Path, args: &[&str], stdin: Option<&str>) -> Result<Option<String>, Error> {
+    Ok(git_bytes(root, args, stdin.map(str::as_bytes))?.map(|b| String::from_utf8_lossy(&b).into_owned()))
+}
+
+/// One entry of a git tree object: its mode, its name, its object id.
+struct TreeEntry {
+    mode: String,
+    name: String,
+    oid: String,
+}
+
+/// The entries of a raw tree object: `<mode> <name>\0<20-byte id>`, repeated.
+fn tree_entries(raw: &[u8]) -> Vec<TreeEntry> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < raw.len() {
+        let Some(sp) = raw[at..].iter().position(|b| *b == b' ') else { break };
+        let Some(nul) = raw[at + sp..].iter().position(|b| *b == 0) else { break };
+        let mode = String::from_utf8_lossy(&raw[at..at + sp]).into_owned();
+        let name = String::from_utf8_lossy(&raw[at + sp + 1..at + sp + nul]).into_owned();
+        let id_at = at + sp + nul + 1;
+        if id_at + 20 > raw.len() {
+            break;
+        }
+        let oid = raw[id_at..id_at + 20].iter().map(|b| format!("{b:02x}")).collect();
+        out.push(TreeEntry { mode, name, oid });
+        at = id_at + 20;
+    }
+    out
+}
+
+/// The objects a `git cat-file --batch` answers, in the order asked: `None` for a missing one,
+/// else `(oid, type, bytes)`.
+fn batch_objects(raw: &[u8]) -> Vec<Option<(String, String, Vec<u8>)>> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < raw.len() {
+        let Some(nl) = raw[at..].iter().position(|b| *b == b'\n') else { break };
+        let header = String::from_utf8_lossy(&raw[at..at + nl]).into_owned();
+        at += nl + 1;
+        if header.ends_with(" missing") {
+            out.push(None);
+            continue;
+        }
+        let mut parts = header.split(' ');
+        let (Some(oid), Some(kind), Some(size)) = (parts.next(), parts.next(), parts.next().and_then(|s| s.parse::<usize>().ok())) else { break };
+        if at + size > raw.len() {
+            break;
+        }
+        out.push(Some((oid.to_string(), kind.to_string(), raw[at..at + size].to_vec())));
+        at += size + 1; // the body, then its newline
+    }
+    out
+}
+
+/// L6 over history: every commit reachable from HEAD that holds a component's folder under
+/// `crates/` (`veredas-*` or `orcl-*`, present at HEAD or not: renamed and deleted components
+/// included) also holds that component's plan as a regular file, not blank, so no component's
+/// code ever landed without it, through merges, re-additions and deletions alike. Three git
+/// conversations whatever the history's length: the `crates`, `docs` and `docs/orcl` trees of
+/// every commit, the distinct trees' entries, the distinct plan blobs. The earliest offending
+/// commit is named, once per component folder. A tree that is no repository, or a shallow clone
+/// with its history cut, is an error.
 pub fn history(root: &Path) -> Result<Vec<Violation>, Error> {
-    let s = Suite::read(root)?;
     let refuse = |what: &str| Error::Io { path: root.display().to_string(), source: io::Error::other(what.to_string()) };
     git(root, &["rev-parse", "--is-inside-work-tree"], None)?.ok_or_else(|| refuse("not a git repository"))?;
     if git(root, &["rev-parse", "--is-shallow-repository"], None)?.is_some_and(|o| o.trim() == "true") {
@@ -667,10 +732,6 @@ pub fn history(root: &Path) -> Result<Vec<Violation>, Error> {
     if git(root, &["rev-parse", "--verify", "-q", "HEAD"], None)?.is_none() {
         return Ok(Vec::new()); // no commit yet: nothing has landed
     }
-    let wanted: Vec<(&Member, String)> = s.components().filter_map(|m| plan_of(&m.name).map(|p| (m, p))).collect();
-    if wanted.is_empty() {
-        return Ok(Vec::new());
-    }
     let commits: Vec<String> = git(root, &["rev-list", "--reverse", "HEAD"], None)?
         .ok_or_else(|| refuse("git rev-list failed"))?
         .lines()
@@ -678,43 +739,79 @@ pub fn history(root: &Path) -> Result<Vec<Violation>, Error> {
         .filter(|l| !l.is_empty())
         .map(String::from)
         .collect();
+    const FOLDERS: [&str; 3] = ["crates", "docs", "docs/orcl"];
+    // 1. which tree each commit holds at each of the three folders
     let mut asks = String::new();
     for c in &commits {
-        for (m, plan) in &wanted {
-            asks.push_str(&format!("{c}:{}/Cargo.toml\n{c}:{plan}\n", m.dir));
+        for f in FOLDERS {
+            asks.push_str(&format!("{c}:{f}\n"));
         }
     }
     let answers = git(root, &["cat-file", "--batch-check"], Some(&asks))?.ok_or_else(|| refuse("git cat-file failed"))?;
-    // one answer per ask, in order: `<oid> <type> <size>` or `<ask> missing`
-    let found: Vec<Option<String>> = answers
+    let trees_at: Vec<Option<String>> = answers
         .lines()
-        .map(|l| if l.ends_with(" missing") { None } else { l.split(' ').next().map(String::from) })
+        .map(|l| {
+            let mut parts = l.split(' ');
+            match (parts.next(), parts.next()) {
+                (Some(oid), Some("tree")) => Some(oid.to_string()),
+                _ => None, // missing, or a file where a folder was expected
+            }
+        })
         .collect();
-    if found.len() != commits.len() * wanted.len() * 2 {
+    if trees_at.len() != commits.len() * FOLDERS.len() {
         return Err(refuse("git cat-file answered out of step"));
     }
+    // 2. the entries of every distinct tree, read once
+    let distinct: BTreeSet<&String> = trees_at.iter().flatten().collect();
+    let mut entries: BTreeMap<String, Vec<TreeEntry>> = BTreeMap::new();
+    if !distinct.is_empty() {
+        let asks: String = distinct.iter().map(|t| format!("{t}\n")).collect();
+        let raw = git_bytes(root, &["cat-file", "--batch"], Some(asks.as_bytes()))?.ok_or_else(|| refuse("git cat-file failed"))?;
+        for object in batch_objects(&raw).into_iter().flatten() {
+            entries.insert(object.0, tree_entries(&object.2));
+        }
+    }
+    // 3. every commit, every component folder it holds, judged; a plan blob read once
     let mut blank_of: BTreeMap<String, bool> = BTreeMap::new();
+    let mut named: BTreeSet<String> = BTreeSet::new();
     let mut out = Vec::new();
-    for (k, (m, plan)) in wanted.iter().enumerate() {
-        for (i, c) in commits.iter().enumerate() {
-            let at = (i * wanted.len() + k) * 2;
-            if found[at].is_none() {
-                continue; // this commit does not hold the component
+    for (i, c) in commits.iter().enumerate() {
+        let Some(crates) = &trees_at[i * 3] else { continue };
+        let docs = trees_at[i * 3 + 1].as_ref().and_then(|t| entries.get(t));
+        let orcl = trees_at[i * 3 + 2].as_ref().and_then(|t| entries.get(t));
+        let short = &c[..c.len().min(7)];
+        for e in entries.get(crates).map(Vec::as_slice).unwrap_or(&[]) {
+            if e.mode != "40000" {
+                continue;
             }
-            let short = &c[..c.len().min(7)];
-            match &found[at + 1] {
+            let folded = e.name.replace('_', "-");
+            let (plan_dir, plan_file, plan) = if folded.starts_with(LANGUAGE) {
+                (orcl, "README.md".to_string(), LANGUAGE_PLAN.to_string())
+            } else if let Some(nome) = folded.strip_prefix(PREFIX) {
+                (docs, format!("{nome}-plan.md"), format!("docs/{nome}-plan.md"))
+            } else {
+                continue;
+            };
+            let dir = format!("crates/{}", e.name);
+            if named.contains(&dir) {
+                continue;
+            }
+            let regular = plan_dir
+                .and_then(|d| d.iter().find(|x| x.name == plan_file))
+                .filter(|x| x.mode == "100644" || x.mode == "100755");
+            match regular {
                 None => {
-                    out.push(Violation::new("L6", &m.dir, format!("commit {short} holds the code and no {plan}")));
-                    break;
+                    out.push(Violation::new("L6", &dir, format!("commit {short} holds the code and no {plan}")));
+                    named.insert(dir);
                 }
-                Some(oid) => {
-                    if !blank_of.contains_key(oid) {
-                        let text = git(root, &["cat-file", "-p", oid], None)?.ok_or_else(|| refuse("git cat-file failed"))?;
-                        blank_of.insert(oid.clone(), is_blank(&text));
+                Some(blob) => {
+                    if !blank_of.contains_key(&blob.oid) {
+                        let text = git(root, &["cat-file", "-p", &blob.oid], None)?.ok_or_else(|| refuse("git cat-file failed"))?;
+                        blank_of.insert(blob.oid.clone(), is_blank(&text));
                     }
-                    if blank_of[oid] {
-                        out.push(Violation::new("L6", &m.dir, format!("commit {short} holds the code and {plan} blank")));
-                        break;
+                    if blank_of[&blob.oid] {
+                        out.push(Violation::new("L6", &dir, format!("commit {short} holds the code and {plan} blank")));
+                        named.insert(dir);
                     }
                 }
             }
