@@ -159,6 +159,32 @@ fn every_limit_is_accepted_at_its_edge() {
 }
 
 #[test]
+fn every_rule_is_read_from_the_file_and_every_way_to_end_is_accepted() {
+    // Keep-alive and sequence keys away from their defaults are read, not assumed (refute
+    // round 4).
+    let spec = load(&file(LP, "[keepalive]\non_connect = false\nidle_ms = 0")).unwrap();
+    assert_eq!(spec.keepalive, KeepaliveRules { on_connect: false, idle: Duration::ZERO });
+    let spec = load(&file(LP, "[keepalive]\nidle_ms = 1234")).unwrap();
+    assert_eq!(spec.keepalive, KeepaliveRules { on_connect: true, idle: Duration::from_millis(1234) });
+    let seq = "envelope = [ { name = \"s\", size = 1, role = \"sequence\" }, { name = \"l\", size = 2, role = \"length\" } ]";
+    let spec = load(&file(seq, "[sequence]\nkeepalive_counts = false")).unwrap();
+    assert_eq!(
+        spec.sequence,
+        Some(SequenceRules { connect: 0, first: 1, last: 255, skip_duplicates: true, keepalive_counts: false })
+    );
+    // A segmented layout ends by its data-area length, by its segment count, or by both.
+    let header = "segment = [ { name = \"n\", size = 1, role = \"length\" } ]";
+    for envelope in [
+        "envelope = [ { name = \"l\", size = 2, role = \"length\" } ]",
+        "envelope = [ { name = \"c\", size = 1, role = \"count\" } ]",
+        "envelope = [ { name = \"l\", size = 2, role = \"length\" }, { name = \"c\", size = 1, role = \"count\" } ]",
+    ] {
+        let f = load(&file(&format!("{envelope}\n{header}"), "")).unwrap().framing;
+        assert_eq!(f.segment.map(|s| s.len()), Some(1), "{envelope}");
+    }
+}
+
+#[test]
 fn a_field_may_override_the_byte_order() {
     let spec = load(&file(
         "byte_order = \"big\"\nenvelope = [ { name = \"tag\", size = 2, byte_order = \"little\", value = 258 }, { name = \"length\", size = 2, role = \"length\" } ]",
@@ -226,6 +252,13 @@ fn an_impossible_layout_is_refused_with_its_place_named() {
         (format!("start = \"\"\n{}", env(l)), "", "framing.start: an empty delimiter; leave it out instead"),
         (format!("end = \"FG\"\n{}", env(l)), "", "framing.end: `FG` is not a hex byte"),
         (format!("max_frame = 3\nstart = \"FD\"\nend = \"FE\"\n{}", env(l)), "", "framing.max_frame: 3 is less than the 4 fixed bytes"),
+        // Every role a part does not take; a count given a value; a default too wide for a
+        // wider field (round 4).
+        (format!("{}\nsegment = [ {{ name = \"s\", size = 1, role = \"sequence\" }}, {{ name = \"n\", size = 1, role = \"length\" }} ]", env(l)), "", "segment.s: this part takes no such role"),
+        (format!("{}\ntail = [ {{ name = \"t\", size = 1, role = \"length\" }} ]", env(l)), "", "tail.t: this part takes no such role"),
+        (format!("{}\ntail = [ {{ name = \"t\", size = 1, role = \"count\" }} ]", env(l)), "", "tail.t: this part takes no such role"),
+        (format!("{}\nsegment = [ {{ name = \"n\", size = 1, role = \"length\" }} ]", env(&format!("{l}, {{ name = \"c\", size = 1, role = \"count\", value = 0 }}"))), "", "envelope.c: a computed field takes no `value`"),
+        (env(&format!("{{ name = \"x\", size = 2, value = 65536 }}, {l}")), "", "envelope.x: value 65536 does not fit 2 byte(s)"),
         // The tail counts among the fixed bytes; a `connect` too wide for its field (round 3).
         (format!("max_frame = 4\n{}\ntail = [ {{ name = \"t\", size = 3 }} ]", env(l)), "", "framing.max_frame: 4 is less than the 5 fixed bytes"),
         (env(&format!("{{ name = \"s\", size = 1, role = \"sequence\" }}, {l}")), "[sequence]\nconnect = 256", "sequence: first 1 .. last 255 (connect 256) does not fit a 1-byte field in order"),
