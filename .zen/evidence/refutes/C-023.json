@@ -1,13 +1,13 @@
 {
   "clause": "C-023",
   "verdict": "refuted",
-  "ranAt": "2026-11-06T04:34:35.826Z",
-  "headCommit": "a9ffa5cb108cee5c2978b227003eeab2436f7a1b",
+  "ranAt": "2026-11-06T05:04:43.547Z",
+  "headCommit": "902a14754ca5bf8a31fbf74d84cda2a35e3361c1",
   "tests": [
     {
       "name": "crates/veredas-core/tests/opc_capabilities.rs",
       "file": "crates/veredas-core/tests/opc_capabilities.rs",
-      "symbolSha": "6ef660b78a8f3125d8490b1db191d0eecf11b270970e45cb4877af244e14b5dc"
+      "symbolSha": "1d0299a1b2f4003e37f05a44fa7c8b7f88b3bee4870427803e79bfcca4d128f4"
     }
   ]
 }
