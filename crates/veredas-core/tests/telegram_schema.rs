@@ -162,23 +162,22 @@ fn the_key_reference_states_what_the_reader_does() {
     assert_eq!(mib(documented(&prose, "outbox_limit_bytes")), spec.link.outbox_limit_bytes);
     assert_eq!(documented(&prose, "max_peers"), spec.link.max_peers.to_string());
     // The frame limit: its default and its ceiling.
-    let max_frame = prose.split("`max_frame`: ").nth(1).unwrap();
-    let default = max_frame.split("(default ").nth(1).unwrap().split(',').next().unwrap();
+    let max_frame = prose.split("`max_frame` (").nth(1).unwrap();
+    let default = max_frame.split(',').next().unwrap();
     let ceiling = max_frame.split("at most ").nth(1).unwrap().split(':').next().unwrap();
     assert_eq!((default.parse::<usize>().unwrap(), ceiling.parse::<usize>().unwrap()), (spec.framing.max_frame, MAX_MAX_FRAME));
-    // The default byte order and role, and the field sizes.
-    assert!(prose.contains("`byte_order`: `\"little\"` (default) or `\"big\"`"));
-    assert_eq!(spec.framing.envelope[0].order, Endian::Little);
+    // The default role (its entry among the roles), and the field sizes. Each other default is
+    // compared key by key in `every_key_is_required_or_takes_its_documented_default`.
     assert!(prose.contains("`\"opaque\"` (default)"));
     let opaque = load(&file(&format!("envelope = [ {{ name = \"x\", size = 1 }}, {LEN} ]"), "")).unwrap();
     assert_eq!(opaque.framing.envelope[0].role, FieldRole::Opaque);
-    let sizes = prose.split("(1 to ").nth(1).unwrap().split(" bytes)").next().unwrap().parse::<usize>().unwrap();
+    let sizes = prose.split("`size` (required; 1 to ").nth(1).unwrap().split(" bytes)").next().unwrap().parse::<usize>().unwrap();
     let sized = |n: usize| load(&file(&format!("envelope = [ {{ name = \"x\", size = {n} }}, {LEN} ]"), ""));
     assert!(sized(sizes).is_ok() && sized(1).is_ok() && sized(sizes + 1).is_err() && sized(0).is_err());
     // The version this reader knows, and the format it states.
-    let known = prose.split("(this reader knows `").nth(1).unwrap().split('`').next().unwrap();
+    let known = prose.split("this reader knows `").nth(1).unwrap().split('`').next().unwrap();
     assert_eq!(known.parse::<u32>().unwrap(), VERSION);
-    let format = prose.split("(always `\"").nth(1).unwrap().split("\"`").next().unwrap();
+    let format = prose.split("required: always `\"").nth(1).unwrap().split("\"`").next().unwrap();
     assert_eq!(format, FORMAT);
     // Each floor the key reference states, at its edge (refute round 7).
     let floor = |key: &str| {
@@ -523,9 +522,10 @@ fn the_key_reference_names_what_the_reader_accepts() {
     roles.sort();
     assert_eq!(roles, accepted(&file("envelope = [ { name = \"length\", size = 2, role = \"zz\" } ]", "")));
     let framing_block = block(&keys, "**`[framing]`**");
-    let order_entry = framing_block.split("`byte_order`:").nth(1).unwrap().split(" - ").next().unwrap();
+    let order_entry = framing_block.split("`byte_order` (").nth(1).unwrap().split(" - ").next().unwrap();
     let mut orders = quoted(order_entry);
     orders.sort();
+    orders.dedup();
     assert_eq!(orders, accepted(&file(&format!("byte_order = \"zz\"\n{LP}"), "")));
     // The parts each role is documented for: its annotation names them; with none, the parts
     // its entry names; with no part named, every part. The reader takes it exactly there.
@@ -572,13 +572,223 @@ fn the_key_reference_names_what_the_reader_accepts() {
         }
     }
     // The delimiter examples load as delimiters, and the frame limit counts them.
-    let delimiter_entry = framing_block.split("`start`, `end`:").nth(1).unwrap().split(" - ").next().unwrap();
+    let delimiter_entry = framing_block.split("`start`, `end` (").nth(1).unwrap().split(" - ").next().unwrap();
     let examples = quoted(delimiter_entry);
     assert_eq!(examples.len(), 2);
     for hex in &examples {
         assert!(load(&file(&format!("start = \"{hex}\"\nend = \"{hex}\"\n{LP}"), "")).is_ok(), "the example `{hex}`");
     }
-    assert!(framing_block.contains("`max_frame`: the largest frame in bytes, delimiters included"));
+    let limit_entry = framing_block.split("`max_frame` (").nth(1).unwrap().split(" - ").next().unwrap();
+    assert!(limit_entry.contains("): the largest frame in bytes, delimiters included."));
     assert!(load(&file(&format!("max_frame = 4\nstart = \"FD\"\nend = \"FE\"\n{LP}"), "")).is_ok());
     assert!(load(&file(&format!("max_frame = 3\nstart = \"FD\"\nend = \"FE\"\n{LP}"), "")).is_err());
+}
+
+/// What a key's entry states in parentheses, its first clause (up to a comma or semicolon):
+/// "required...", or the value the key takes when left out. A key listed before another
+/// (`start`, `end` (none)) shares that one's parentheses.
+fn status(block: &str, key: &str) -> String {
+    let needle = format!("`{key}`");
+    let mut from = 0;
+    while let Some(at) = block[from..].find(&needle) {
+        let start = from + at;
+        let depth = block[..start].matches('(').count() as i64 - block[..start].matches(')').count() as i64;
+        let mut rest = &block[start + needle.len()..];
+        while let Some(r) = rest.strip_prefix(", `") {
+            rest = r.split_once('`').map_or(r, |(_, after)| after);
+        }
+        if depth == 0
+            && let Some(inner) = rest.strip_prefix(" (")
+        {
+            let mut level = 1;
+            let close = inner
+                .char_indices()
+                .find(|&(_, c)| {
+                    level += match c {
+                        '(' => 1,
+                        ')' => -1,
+                        _ => 0,
+                    };
+                    level == 0
+                })
+                .map(|(i, _)| i)
+                .unwrap();
+            return inner[..close].split([',', ';']).next().unwrap().trim().to_string();
+        }
+        from = start + needle.len();
+    }
+    panic!("`{key}` states neither that it is required nor its default");
+}
+
+#[test]
+fn every_key_is_required_or_takes_its_documented_default() {
+    // For every key the reader knows, in every table: a file without it is refused when the key
+    // reference says it is required, and otherwise loads with exactly the value the reference
+    // states (refute round 9: `tail` and `value` stated none).
+    let prose = doc_prose();
+    let keys = prose.split("## Keys").nth(1).unwrap().to_string();
+    let seq_env = "envelope = [ { name = \"s\", size = 1, role = \"sequence\" }, { name = \"length\", size = 2, role = \"length\" } ]";
+    let order = |o: Endian| if o == Endian::Little { "`\"little\"`".to_string() } else { "`\"big\"`".to_string() };
+    let present = |b: bool| if b { "some".to_string() } else { "none".to_string() };
+    let mib = 1024 * 1024;
+    // Each table: its reference block, every key stated, the file built from the statements
+    // kept, and what the loaded spec says for a key left out (None: nothing to compare).
+    type Build = Box<dyn Fn(&[&str]) -> String>;
+    type Render = Box<dyn Fn(&str, &ChannelSpec) -> Option<String>>;
+    let tables: Vec<(&str, String, Vec<(&str, String)>, Build, Render)> = vec![
+        (
+            "top",
+            block(&keys, "**The header.**"),
+            vec![
+                ("format", "format = \"veredas-channel\"".into()),
+                ("version", "version = 1".into()),
+                ("framing", format!("[framing]\n{seq_env}")),
+                ("sequence", "[sequence]".into()),
+                ("keepalive", "[keepalive]".into()),
+                ("link", "[link]".into()),
+            ],
+            Box::new(|kept| kept.join("\n")),
+            Box::new(|_, _| None),
+        ),
+        (
+            "framing",
+            block(&keys, "**`[framing]`**"),
+            vec![
+                ("byte_order", "byte_order = \"big\"".into()),
+                ("start", "start = \"01\"".into()),
+                ("end", "end = \"02\"".into()),
+                ("max_frame", "max_frame = 2048".into()),
+                ("envelope", "envelope = [ { name = \"l\", size = 2, role = \"length\" } ]".into()),
+                ("segment", "segment = [ { name = \"n\", size = 1, role = \"length\" } ]".into()),
+                ("tail", "tail = [ { name = \"t\", size = 1 } ]".into()),
+            ],
+            Box::new(|kept| file(&kept.join("\n"), "")),
+            Box::new(move |key, spec| {
+                let f = &spec.framing;
+                Some(match key {
+                    "byte_order" => order(f.envelope[0].order),
+                    "start" => present(!f.start.is_empty()),
+                    "end" => present(!f.end.is_empty()),
+                    "max_frame" => f.max_frame.to_string(),
+                    "segment" => present(f.segment.is_some()),
+                    "tail" => present(!f.tail.is_empty()),
+                    other => panic!("no default to render for `{other}`"),
+                })
+            }),
+        ),
+        (
+            "field",
+            block(&keys, "**A field.**"),
+            vec![
+                ("name", "name = \"x\"".into()),
+                ("size", "size = 1".into()),
+                ("role", "role = \"opaque\"".into()),
+                ("byte_order", "byte_order = \"little\"".into()),
+                ("value", "value = 3".into()),
+            ],
+            Box::new(|kept| file(&format!("byte_order = \"big\"\nenvelope = [ {{ {} }}, {LEN} ]", kept.join(", ")), "")),
+            Box::new(move |key, spec| {
+                let (x, plain) = (&spec.framing.envelope[0], &spec.framing.envelope[1]);
+                Some(match key {
+                    "role" => format!("`\"{}\"`", format!("{:?}", x.role).to_lowercase()),
+                    "byte_order" if x.order == plain.order => "the framing's".to_string(),
+                    "byte_order" => order(x.order),
+                    "value" => x.value.to_string(),
+                    other => panic!("no default to render for `{other}`"),
+                })
+            }),
+        ),
+        (
+            "sequence",
+            block(&keys, "**`[sequence]`**"),
+            vec![
+                ("connect", "connect = 0".into()),
+                ("first", "first = 2".into()),
+                ("last", "last = 9".into()),
+                ("skip_duplicates", "skip_duplicates = false".into()),
+                ("keepalive_counts", "keepalive_counts = false".into()),
+            ],
+            Box::new(move |kept| file(seq_env, &format!("[sequence]\n{}", kept.join("\n")))),
+            Box::new(|key, spec| {
+                let s = spec.sequence.as_ref().unwrap();
+                Some(match key {
+                    "connect" => s.connect.to_string(),
+                    "first" => s.first.to_string(),
+                    "last" => s.last.to_string(),
+                    "skip_duplicates" => s.skip_duplicates.to_string(),
+                    "keepalive_counts" => s.keepalive_counts.to_string(),
+                    other => panic!("no default to render for `{other}`"),
+                })
+            }),
+        ),
+        (
+            "keepalive",
+            block(&keys, "**`[keepalive]`**"),
+            vec![("on_connect", "on_connect = false".into()), ("idle_ms", "idle_ms = 5".into())],
+            Box::new(|kept| file(LP, &format!("[keepalive]\n{}", kept.join("\n")))),
+            Box::new(|key, spec| {
+                Some(match key {
+                    "on_connect" => spec.keepalive.on_connect.to_string(),
+                    "idle_ms" => spec.keepalive.idle.as_millis().to_string(),
+                    other => panic!("no default to render for `{other}`"),
+                })
+            }),
+        ),
+        (
+            "link",
+            block(&keys, "**`[link]`**"),
+            vec![
+                ("write_timeout_ms", "write_timeout_ms = 5".into()),
+                ("outbox_limit_bytes", "outbox_limit_bytes = 70000".into()),
+                ("max_peers", "max_peers = 2".into()),
+            ],
+            Box::new(|kept| file(LP, &format!("[link]\n{}", kept.join("\n")))),
+            Box::new(move |key, spec| {
+                let l = &spec.link;
+                Some(match key {
+                    "write_timeout_ms" => l.write_timeout.as_millis().to_string(),
+                    "outbox_limit_bytes" if l.outbox_limit_bytes % mib == 0 => format!("{} MiB", l.outbox_limit_bytes / mib),
+                    "outbox_limit_bytes" => l.outbox_limit_bytes.to_string(),
+                    "max_peers" => l.max_peers.to_string(),
+                    other => panic!("no default to render for `{other}`"),
+                })
+            }),
+        ),
+    ];
+    let reader_keys = |table: &str| match table {
+        "top" => accepted(&format!("zz = 1\n{}", file(LP, ""))),
+        "framing" => accepted(&file(&format!("zz = 1\n{LP}"), "")),
+        "field" => accepted(&file("envelope = [ { name = \"length\", size = 2, role = \"length\", zz = 1 } ]", "")),
+        "sequence" => accepted(&file(seq_env, "[sequence]\nzz = 1")),
+        "keepalive" => accepted(&file(LP, "[keepalive]\nzz = 1")),
+        _ => accepted(&file(LP, "[link]\nzz = 1")),
+    };
+    let mut checked = 0;
+    for (table, doc, statements, build, render) in &tables {
+        let all: Vec<&str> = statements.iter().map(|(_, s)| s.as_str()).collect();
+        assert!(load(&build(&all)).is_ok(), "{table}: the file stating every key loads");
+        let mut stated: Vec<String> = statements.iter().map(|(k, _)| k.to_string()).collect();
+        stated.sort();
+        assert_eq!(stated, reader_keys(table), "{table}: every key the reader knows is stated here");
+        for (key, _) in statements {
+            let documented = if *table == "top" && !["format", "version"].contains(key) {
+                let flag = block(&keys, &format!("**`[{key}]`**"));
+                flag.trim_start().strip_prefix('(').unwrap().split([')', ',']).next().unwrap().to_string()
+            } else {
+                status(doc, key)
+            };
+            let kept: Vec<&str> = statements.iter().filter(|(k, _)| k != key).map(|(_, s)| s.as_str()).collect();
+            let without = load(&build(&kept));
+            if documented.starts_with("required") {
+                assert!(without.is_err(), "{table}.{key} is documented required, yet loads without");
+            } else {
+                let spec = without.unwrap_or_else(|e| panic!("{table}.{key} is documented `{documented}`, yet: {e}"));
+                if let Some(value) = render(key, &spec) {
+                    assert_eq!(value, documented, "{table}.{key}: the default the reference states");
+                }
+            }
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 28);
 }

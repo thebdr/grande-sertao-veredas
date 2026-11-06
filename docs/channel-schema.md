@@ -68,25 +68,28 @@ max_peers = 8
 
 ## Keys
 
-**The header.** `format` (always `"veredas-channel"`) and `version` (this reader knows `1`). A
-file of another format or an unknown version is refused, never guessed; migrating an older
-version is portal's (P-010).
+Each key states in parentheses that it is required, or the value it takes when left out.
+
+**The header.** `format` (required: always `"veredas-channel"`) and `version` (required: this
+reader knows `1`). A file of another format or an unknown version is refused, never guessed;
+migrating an older version is portal's (P-010).
 
 **`[framing]`** (required)
-- `byte_order`: `"little"` (default) or `"big"`, for every field that does not say otherwise.
-- `start`, `end`: optional delimiter bytes, in hex (`"FD"`, `"02 03"`). Without a start
-  delimiter a bad frame is skipped one byte at a time.
-- `max_frame`: the largest frame in bytes, delimiters included (default 65536, at most
-  16777216: a peer may declare a frame this large and its bytes are held while they arrive).
-  Larger frames are refused, never truncated.
-- `envelope`: the fields after the start delimiter, in order (required).
-- `segment`: the fields of each segment's header, in order; each header is followed by its
-  body. Leave it out for a layout whose data area is one body.
-- `tail`: the fields after the data area, before the end delimiter.
+- `byte_order` (`"little"`): `"little"` or `"big"`, for every field that does not say otherwise.
+- `start`, `end` (none): delimiter bytes, in hex (`"FD"`, `"02 03"`). Without a start delimiter
+  a bad frame is skipped one byte at a time.
+- `max_frame` (65536, at most 16777216: a peer may declare a frame this large and its bytes are
+  held while they arrive): the largest frame in bytes, delimiters included. Larger frames are
+  refused, never truncated.
+- `envelope` (required): the fields after the start delimiter, in order.
+- `segment` (none): the fields of each segment's header, in order; each header is followed by
+  its body. Leave it out for a layout whose data area is one body.
+- `tail` (none): the fields after the data area, before the end delimiter.
 
-**A field.** `name` (unique across envelope and tail; unique within the segment header), `size`
-(1 to 8 bytes), `role`, `byte_order` (overrides the framing's), `value` (an opaque field's
-default when a frame does not name it; a computed field states none, not even 0).
+**A field.** `name` (required; unique across envelope and tail; unique within the segment
+header), `size` (required; 1 to 8 bytes), `role` (`"opaque"`), `byte_order` (the framing's,
+which it overrides), `value` (0; an opaque field's default when a frame does not name it; a
+computed field states none, not even 0).
 
 **A keep-alive** is a frame with no segments; in a layout without `segment`, a frame with an
 empty body. The channel delivers it as a keep-alive event that carries the frame, so its fields
