@@ -1,0 +1,24 @@
+{
+  "clause": "C-033",
+  "command": "cargo test -p veredas-maquinar --test bench_file",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-maquinar",
+    "--test",
+    "bench_file"
+  ],
+  "exitCode": 0,
+  "outputSha": "334f0e21ffdc3983ee7d5334d5c6bd3d26f5cfb90162e6e725325fa03e40d1af",
+  "outputTail": "\nrunning 6 tests\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_header_is_refused_four_ways_and_a_misspelled_key_in_any_table ... ok\ntest every_invalid_bench_is_refused_with_its_place_named_before_anything_starts ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest the_documented_bench_loads_starts_and_every_part_does_its_work ... ok\ntest the_executable_checks_and_runs_a_bench_file ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.93s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s\n     Running tests\\bench_file.rs (target\\debug\\deps\\bench_file-076c73deee41788e.exe)",
+  "ranAt": "2026-11-06T14:45:18.643Z",
+  "headCommit": "bdbd036733fefe101c2f6870738a79f1a1e594e3",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/bench_file.rs",
+      "file": "crates/veredas-maquinar/tests/bench_file.rs",
+      "fileSha": "dad27462eb0e6fe5e87b6d6f04a14a23f6032d00a29b9c04a0e7f3bfe726db41"
+    }
+  ]
+}

@@ -10,15 +10,15 @@
     "pressure"
   ],
   "exitCode": 0,
-  "outputSha": "6bddbcade57097d7eefccd9e7921a0dfa0b8b7451519cdc9baa56d739a0efdae",
-  "outputTail": "\nrunning 1 test\ntest the_rate_the_faults_the_full_chutes_and_the_no_reads_are_turned_live_and_measured_on_the_wire ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.38s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s\n     Running tests\\pressure.rs (target\\debug\\deps\\pressure-da6f5c1f1e9fd7ec.exe)",
-  "ranAt": "2026-11-06T14:08:46.138Z",
-  "headCommit": "613c1e78c42432d24f380833d95a7f2d801c6120",
+  "outputSha": "3df760e5e82b881a9233d237f7337a098b7416ef55a76e723cad8534b3f1748a",
+  "outputTail": "\nrunning 1 test\ntest the_rate_the_faults_the_full_chutes_and_the_no_reads_are_turned_live_and_measured_on_the_wire ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.50s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s\n     Running tests\\pressure.rs (target\\debug\\deps\\pressure-695281ea94d6a85b.exe)",
+  "ranAt": "2026-11-06T14:45:15.381Z",
+  "headCommit": "bdbd036733fefe101c2f6870738a79f1a1e594e3",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/pressure.rs",
       "file": "crates/veredas-maquinar/tests/pressure.rs",
-      "fileSha": "44cce3a3f83ce70489582d1dabbc976b1bbd763199bcf9b995a11b9e8c6ce66f"
+      "fileSha": "25cd2561bdefa5fb87d53bfde57bbb4fd592f0c6d13c0ebf28836c68bbbdf819"
     }
   ]
 }

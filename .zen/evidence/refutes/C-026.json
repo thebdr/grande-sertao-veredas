@@ -1,0 +1,13 @@
+{
+  "clause": "C-026",
+  "verdict": "holds",
+  "ranAt": "2026-11-06T14:45:19.310Z",
+  "headCommit": "bdbd036733fefe101c2f6870738a79f1a1e594e3",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/opc_server.rs",
+      "file": "crates/veredas-maquinar/tests/opc_server.rs",
+      "symbolSha": "ff4f713ae4ab4ac1f3b006396282e02aacdfb9490f5f833bbce1208933aa1026"
+    }
+  ]
+}

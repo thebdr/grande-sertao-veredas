@@ -14,10 +14,10 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "b40b6ccb0b8dfc6a40e9fc86e368af854a4a86683ea121c784882434089a02a9",
-  "outputTail": "\n\nrunning 6 tests\ntest the_bench_is_one_library_and_at_most_one_executable ... ok\ntest the_bench_carries_no_database_no_desktop_and_no_member_but_core ... ok\ntest the_check_allows_one_named_binary_and_refuses_every_other_executable ... ok\ntest the_bench_names_no_vendor_and_cites_no_vendor_document ... ok\ntest every_file_rustc_pulls_in_from_outside_the_crate_folder_is_read_too ... ok\ntest the_graph_walk_sees_every_version_every_feature_and_every_table ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.16s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.88s\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-e24e28763702786a.exe)\n     Running tests\\component.rs (target\\debug\\deps\\component-003515051f5dcb73.exe)",
-  "ranAt": "2026-11-06T14:08:07.566Z",
-  "headCommit": "613c1e78c42432d24f380833d95a7f2d801c6120",
+  "outputSha": "a5c962c636c729d7bed0d962728881c90d6ce3df7e4a438f8d81449bd0a51e2d",
+  "outputTail": "\nrunning 6 tests\ntest the_bench_is_one_library_and_at_most_one_executable ... ok\ntest the_bench_carries_no_database_no_desktop_and_no_member_but_core ... ok\ntest the_check_allows_one_named_binary_and_refuses_every_other_executable ... ok\ntest every_file_rustc_pulls_in_from_outside_the_crate_folder_is_read_too ... ok\ntest the_graph_walk_sees_every_version_every_feature_and_every_table ... ok\ntest the_bench_names_no_vendor_and_cites_no_vendor_document ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.02s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.13s\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-e24e28763702786a.exe)\n     Running tests\\component.rs (target\\debug\\deps\\component-35b459021c17c6e0.exe)",
+  "ranAt": "2026-11-06T14:44:35.439Z",
+  "headCommit": "bdbd036733fefe101c2f6870738a79f1a1e594e3",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/component.rs",
