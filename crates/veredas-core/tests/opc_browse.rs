@@ -10,7 +10,7 @@ use opcua_types::{BrowseResult, ByteString, DateTime, LocalizedText, QualifiedNa
 use veredas_core::SeriesType;
 use veredas_core::opc::browse::{
     BRIEF_MAX, BrowseEvent, BrowsedNode, access_level_text, data_type_text, node_class_text, result_refusal,
-    series_type_of, value_rank_text, variant_brief,
+    series_type_of, value_rank_text, variant_brief, worth_expanding,
 };
 use veredas_core::opc::browse::{BROWSE_TIMEOUT, MAX_BROWSE_PAGES};
 use veredas_core::opc::demo::{BULK_COUNT, DemoConfig, DemoPlant, PAGED_FOLDERS, Relay, tags};
@@ -40,6 +40,25 @@ fn builtin_data_types_map_to_series_types() {
             None
         };
         assert_eq!(series_type_of(&builtin(id)), want, "i={id}");
+    }
+}
+
+#[test]
+fn only_objects_views_variables_and_classless_nodes_are_worth_expanding() {
+    use opcua_types::NodeClass;
+    let classes = [
+        (NodeClass::Object, true),
+        (NodeClass::View, true),
+        (NodeClass::Variable, true),
+        (NodeClass::Unspecified, true),
+        (NodeClass::Method, false),
+        (NodeClass::ObjectType, false),
+        (NodeClass::VariableType, false),
+        (NodeClass::ReferenceType, false),
+        (NodeClass::DataType, false),
+    ];
+    for (class, want) in classes {
+        assert_eq!(worth_expanding(class), want, "{class:?}");
     }
 }
 
@@ -528,6 +547,14 @@ async fn methods_are_neither_variables_nor_containers() {
         let c = children.iter().find(|c| c.browse_name == name).unwrap_or_else(|| panic!("no {name} in {children:?}"));
         assert!(c.is_container, "{c:?}");
     }
+
+    // A type is a leaf though it has children: the standard BaseObjectType, in the Types folder.
+    browser.browse(Some("i=88".to_string()));
+    let (_, types) = next_children(&browser, Duration::from_secs(20));
+    let base = types.iter().find(|c| c.browse_name == "BaseObjectType").unwrap_or_else(|| panic!("{types:?}"));
+    assert!(!base.is_container && !base.is_variable, "{base:?}");
+    browser.browse(Some(base.node_id.clone()));
+    assert!(!next_children(&browser, Duration::from_secs(20)).1.is_empty(), "it has subtypes");
 
     // A view is expanded like an object, and holds what it organizes.
     browser.browse(Some("i=87".to_string())); // the standard Views folder

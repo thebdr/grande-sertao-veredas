@@ -179,6 +179,33 @@ fn only_tags_marked_writable_resolve_for_writing() {
 }
 
 #[test]
+fn a_tag_configured_in_a_non_standard_spelling_is_found_by_that_text_and_polled_once() {
+    // `ns=0;i=5` and `i=5` are the same node; the stack prints it `i=5`, and `ns=01;s=cmd` as
+    // `ns=1;s=cmd`. The whitelist holds the text as configured, whatever the stack prints.
+    let s = spec(vec![
+        rule(
+            "line",
+            vec![
+                tag("ns=0;i=5", "five", SeriesType::Int, true, vec![]),
+                tag("ns=01;s=cmd", "cmd", SeriesType::Int, true, vec![]),
+            ],
+        ),
+        rule("again", vec![tag("i=5", "five_again", SeriesType::Int, false, vec![])]),
+        // A spelling the stack never prints, after the others: still the same node.
+        rule("third", vec![tag("ns=00;i=5", "five_third", SeriesType::Int, false, vec![])]),
+    ]);
+    assert_eq!(s.writable_tag("ns=0;i=5").map(|t| t.series.as_str()), Some("five"));
+    assert_eq!(s.writable_tag("ns=01;s=cmd").map(|t| t.series.as_str()), Some("cmd"));
+    assert!(s.writable_tag("ns=1;s=cmd").is_none());
+    // `i=5` is configured too, but not writable: the read-only spelling does not unlock the
+    // writable one, nor the other way round.
+    assert!(s.writable_tag("i=5").is_none());
+    assert_eq!(s.tag("i=5").map(|t| t.series.as_str()), Some("five_again"));
+    // One node, however it is spelled, is polled once.
+    assert_eq!(s.poll_nodes(), vec![NodeId::new(0, 5u32), NodeId::new(1, "cmd")]);
+}
+
+#[test]
 fn a_tag_configured_with_surrounding_whitespace_still_resolves() {
     let mut t = tag("ns=1;s=cmd", "cmd", SeriesType::Int, true, vec![]);
     t.raw = " ns=1;s=cmd ".into();

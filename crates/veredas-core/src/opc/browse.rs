@@ -148,6 +148,14 @@ impl Drop for Browser {
     }
 }
 
+/// Whether a node of this class is worth expanding to find tags: objects and views hold them, a
+/// variable can too (a structured tag), and a server that reports no class gets the benefit of
+/// the doubt. Methods and types are leaves even though they have children (arguments, instance
+/// declarations): nothing under them is a tag to poll.
+pub fn worth_expanding(class: NodeClass) -> bool {
+    matches!(class, NodeClass::Object | NodeClass::View | NodeClass::Variable | NodeClass::Unspecified)
+}
+
 /// The DataType node id → the series type an operator most likely wants.
 ///
 /// Numeric ids in namespace 0 are the standard OPC UA built-ins, so this is a stable mapping
@@ -311,14 +319,7 @@ async fn browse_children(session: &Session, node: NodeId) -> Result<Vec<BrowsedN
             },
             browse_name: r.browse_name.name.as_ref().to_string(),
             is_variable: r.node_class == NodeClass::Variable,
-            // Worth expanding to find tags: objects and views hold them, a Variable can too (a
-            // structured tag), and a server that reports no node class gets the benefit of the
-            // doubt. Methods and types are shown as leaves even though they have children
-            // (arguments, instance declarations): nothing under them is a tag to poll.
-            is_container: matches!(
-                r.node_class,
-                NodeClass::Object | NodeClass::View | NodeClass::Variable | NodeClass::Unspecified
-            ),
+            is_container: worth_expanding(r.node_class),
             series_type: None,
             data_type: String::new(),
         })

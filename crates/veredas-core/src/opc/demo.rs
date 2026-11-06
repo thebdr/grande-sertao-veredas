@@ -81,6 +81,9 @@ pub struct DemoConfig {
     /// The most references the server returns per browse page, whatever the client asks;
     /// `None` keeps the stack's default (1 000).
     pub browse_page: Option<usize>,
+    /// The most sessions the server holds at once, as a controller with few slots does;
+    /// `None` keeps the stack's default.
+    pub max_sessions: Option<usize>,
 }
 
 /// How long a read of [`tags::SLOW`] takes. The server thread that serves it is blocked for that
@@ -164,6 +167,9 @@ impl DemoPlant {
                 NamespaceMetadata { namespace_uri: NAMESPACE.to_owned(), ..Default::default() },
                 "demo-plant",
             ));
+        if let Some(n) = config.max_sessions {
+            builder = builder.max_sessions(n);
+        }
         builder.limits_mut().operational.max_nodes_per_read = MAX_NODES_PER_READ;
         if let Some(page) = config.browse_page {
             builder.limits_mut().operational.max_references_per_browse_node = page;

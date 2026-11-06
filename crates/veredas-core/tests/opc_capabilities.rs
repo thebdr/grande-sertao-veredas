@@ -414,6 +414,29 @@ async fn the_browser_s_requests_are_answered_as_it_reads_them() {
 }
 
 #[tokio::test]
+async fn a_closed_session_frees_its_slot_and_a_dropped_one_keeps_it() {
+    // Why every close sends CloseSession, bounded at the stop's 100 ms: a controller holds few
+    // sessions, and one left behind keeps its slot until the server times it out.
+    let plant = DemoPlant::start_with(DemoConfig { max_sessions: Some(1), ..DemoConfig::default() })
+        .await
+        .expect("demo plant starts");
+    for _ in 0..3 {
+        let (session, handle) = connect(&plant, IdentityToken::Anonymous).await.expect("the one slot is free");
+        let closed = tokio::time::timeout(veredas_core::opc::worker::STOP_CLOSE_TIMEOUT, session.disconnect()).await;
+        assert!(matches!(closed, Ok(Ok(()))), "CloseSession answered within the bound: {closed:?}");
+        handle.abort();
+    }
+    // Dropped without CloseSession, the session keeps the slot: the next one is refused.
+    let (session, handle) = connect(&plant, IdentityToken::Anonymous).await.expect("the slot is free");
+    handle.abort();
+    drop(session);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let refused = connect(&plant, IdentityToken::Anonymous).await.err().expect("no slot left");
+    assert!(refused.contains("BadTooManySessions"), "{refused}");
+    plant.stop().await;
+}
+
+#[tokio::test]
 async fn a_browse_page_past_the_array_limit_kills_the_connection() {
     // Why the browser never asks for more than the limit: a server that serves the page asked
     // for sends an answer this client cannot decode, and the connection dies with it.
