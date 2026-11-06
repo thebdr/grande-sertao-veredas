@@ -10,15 +10,15 @@
     "opc_spec"
   ],
   "exitCode": 0,
-  "outputSha": "a8ee301c2ce26f7f33ae268a38163ad107b3c8cf634dda11861cc8fde224e8eb",
-  "outputTail": "running 8 tests\ntest an_identity_shows_its_user_and_never_its_password ... ok\ntest a_bits_only_tag_contributes_no_raw_column ... ok\ntest a_tag_configured_with_surrounding_whitespace_still_resolves ... ok\ntest the_polled_node_set_is_deduplicated_across_and_within_rules_in_first_seen_order ... ok\ntest columns_follow_tag_order_and_bits_expand_in_place_as_ints ... ok\ntest only_tags_marked_writable_resolve_for_writing ... ok\ntest node_ids_parse_in_every_standard_form ... ok\ntest a_node_id_is_refused_with_the_input_quoted_and_the_form_shown ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.72s\n     Running tests\\opc_spec.rs (target\\debug\\deps\\opc_spec-80c8a00bdb8b1ceb.exe)",
-  "ranAt": "2026-11-06T04:20:59.350Z",
-  "headCommit": "b817836b7e529baa135b8a6534f05e19f6e0ae39",
+  "outputSha": "123d28833c3f6210002981cea106103b1ca643323386d8eaca647ef2791d2068",
+  "outputTail": "test only_tags_marked_writable_resolve_for_writing ... ok\ntest the_polled_node_set_is_deduplicated_across_and_within_rules_in_first_seen_order ... ok\ntest a_node_id_is_refused_with_the_input_quoted_and_the_form_shown ... ok\ntest a_tag_configured_with_surrounding_whitespace_still_resolves ... ok\ntest columns_follow_tag_order_and_bits_expand_in_place_as_ints ... ok\ntest node_ids_parse_in_every_standard_form ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling heapless v0.7.17\n   Compiling postcard v1.1.3\n   Compiling async-opcua-server v0.19.0\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.25s\n     Running tests\\opc_spec.rs (target\\debug\\deps\\opc_spec-80c8a00bdb8b1ceb.exe)",
+  "ranAt": "2026-11-06T04:57:14.348Z",
+  "headCommit": "4fbf84ce4aa282529c4212603ff5f5b3c97a3a4e",
   "tests": [
     {
       "name": "crates/veredas-core/tests/opc_spec.rs",
       "file": "crates/veredas-core/tests/opc_spec.rs",
-      "fileSha": "b144ced838608baf7188a0ca931096a54af7f78d6d0f6e625d4a3c3412fc3de5"
+      "fileSha": "53f3d546ae23b6e5b3dafb2ae2db5311d89ab74f2614b2deecde9289eb3cfec8"
     }
   ]
 }

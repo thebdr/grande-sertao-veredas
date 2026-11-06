@@ -10,15 +10,15 @@
     "opc_map"
   ],
   "exitCode": 0,
-  "outputSha": "31f50fb87c8f5bb80d775ff282474ccb2172f7c15844c7934bbdb969639c1677",
-  "outputTail": "test a_type_mismatch_is_reported_not_truncated ... ok\ntest a_good_status_without_a_value_is_reported_as_no_value ... ok\ntest a_bad_word_polled_only_for_its_bits_is_reported_on_its_first_bit ... ok\ntest one_bad_tag_leaves_the_rest_of_the_row_intact_and_is_reported_once ... ok\ntest a_poll_becomes_one_row_per_rule_with_bits_expanded ... ok\ntest a_node_absent_from_the_poll_is_a_hole_with_nothing_to_report ... ok\ntest an_unchanged_rule_is_skipped_alone_and_still_reports_its_failures ... ok\ntest a_hole_appearing_or_healing_is_a_transition ... ok\ntest store_on_change_skips_identical_polls_until_the_heartbeat ... ok\n\ntest result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.39s\n     Running tests\\opc_map.rs (target\\debug\\deps\\opc_map-9942026109e77ff5.exe)",
-  "ranAt": "2026-11-06T04:21:12.024Z",
-  "headCommit": "b817836b7e529baa135b8a6534f05e19f6e0ae39",
+  "outputSha": "bac209e54d345859a9882fbe3669034bb12bf8844375ad4c00dba3e98302232c",
+  "outputTail": "test a_type_mismatch_is_reported_not_truncated ... ok\ntest a_good_status_without_a_value_is_reported_as_no_value ... ok\ntest an_empty_variant_beside_a_good_status_is_one_report_per_tag ... ok\ntest a_node_absent_from_the_poll_is_a_hole_with_nothing_to_report ... ok\ntest a_bad_word_polled_only_for_its_bits_is_reported_on_its_first_bit ... ok\ntest a_hole_appearing_or_healing_is_a_transition ... ok\ntest the_memory_follows_a_spec_that_gains_rules ... ok\ntest a_float_stuck_at_nan_is_unchanged ... ok\ntest store_on_change_skips_identical_polls_until_the_heartbeat ... ok\n\ntest result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.33s\n     Running tests\\opc_map.rs (target\\debug\\deps\\opc_map-9942026109e77ff5.exe)",
+  "ranAt": "2026-11-06T04:57:22.777Z",
+  "headCommit": "4fbf84ce4aa282529c4212603ff5f5b3c97a3a4e",
   "tests": [
     {
       "name": "crates/veredas-core/tests/opc_map.rs",
       "file": "crates/veredas-core/tests/opc_map.rs",
-      "fileSha": "11c6239a941bcc69df4c04f3361ff7d5cb4308c3c9f222747b121be83064033b"
+      "fileSha": "21d56930a515888bf433e4a8320a2163bb1065a9d2771796ee27f8ca96983007"
     }
   ]
 }
