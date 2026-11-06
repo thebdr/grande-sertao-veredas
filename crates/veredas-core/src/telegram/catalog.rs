@@ -188,9 +188,29 @@ fn invalid(msg: impl Into<String>) -> CatalogError {
     CatalogError::Invalid(msg.into())
 }
 
-/// The names a repeat reads: `name1` to `name<max>`.
-fn numbered(r: &str, max: usize) -> Vec<String> {
-    (1..=max).map(|n| format!("{r}{n}")).collect()
+/// Whether `name` is one of the numbered names the repeat `r` reads, `r1` to `r<max>`: `r`
+/// followed by a decimal with no sign and no leading zero, from 1 to `max`. Decided by parsing,
+/// never by listing the names: `max` may be as large as the file likes.
+fn numbered_by(name: &str, r: &str, max: usize) -> bool {
+    let Some(rest) = name.strip_prefix(r) else { return false };
+    if rest.is_empty() || rest.starts_with('0') || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    rest.parse::<usize>().is_ok_and(|n| n >= 1 && n <= max)
+}
+
+/// A name two repeats would both read, when there is one. The longer name is the shorter one
+/// followed by text `t`; its numbered names are the shorter's only when `t` is digits with no
+/// leading zero, and the least of them, `<long>1`, is `<short><t>1`: within the shorter's `max`
+/// or not, every other is larger.
+fn repeats_meet(a: &str, a_max: usize, b: &str, b_max: usize) -> Option<String> {
+    let meet = |short: &str, short_max: usize, long: &str| {
+        let first = format!("{long}1");
+        numbered_by(&first, short, short_max).then_some(first)
+    };
+    // Each repeat reads at least `<name>1`: `max` is never 0 here.
+    debug_assert!(a_max >= 1 && b_max >= 1);
+    meet(a, a_max, b).or_else(|| meet(b, b_max, a))
 }
 
 /// Read and validate a catalog file.
@@ -253,13 +273,11 @@ pub fn load(text: &str) -> Result<Catalog, CatalogError> {
             if repeat_names.iter().any(|(n, _)| *n == r.name) {
                 return Err(invalid(format!("{place}: two repeats are named `{}`", r.name)));
             }
-            for name in numbered(&r.name, r.max) {
-                if groups.contains(&name) {
-                    return Err(invalid(format!("{where_} (`{}`): the payload pattern reads a group named `{name}`", r.name)));
-                }
-                if let Some((other, _)) = repeat_names.iter().find(|(o, max)| numbered(o, *max).contains(&name)) {
-                    return Err(invalid(format!("{where_} (`{}`): the repeat `{other}` reads `{name}` too", r.name)));
-                }
+            if let Some(name) = groups.iter().find(|g| numbered_by(g, &r.name, r.max)) {
+                return Err(invalid(format!("{where_} (`{}`): the payload pattern reads a group named `{name}`", r.name)));
+            }
+            if let Some((other, name)) = repeat_names.iter().find_map(|(o, max)| repeats_meet(o, *max, &r.name, r.max).map(|n| (o, n))) {
+                return Err(invalid(format!("{where_} (`{}`): the repeat `{other}` reads `{name}` too", r.name)));
             }
             repeat_names.push((r.name.clone(), r.max));
         }
@@ -272,7 +290,7 @@ pub fn load(text: &str) -> Result<Catalog, CatalogError> {
             if groups.contains(&f.name) {
                 return Err(invalid(format!("{place}.{}: the payload pattern reads a group of that name", f.name)));
             }
-            if let Some((r, _)) = repeat_names.iter().find(|(r, max)| numbered(r, *max).contains(&f.name)) {
+            if let Some((r, _)) = repeat_names.iter().find(|(r, max)| numbered_by(&f.name, r, *max)) {
                 return Err(invalid(format!("{place}.{}: the repeat `{r}` reads a field of that name", f.name)));
             }
             let end = f.at.checked_add(width(f)).ok_or_else(|| invalid(format!("{place}.{}: the offset is beyond any body", f.name)))?;

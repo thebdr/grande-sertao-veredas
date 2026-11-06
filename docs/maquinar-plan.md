@@ -157,9 +157,32 @@ Recorded as the port meets them.
 
 - **Check the disk before the first build.** Core's OPC phase filled C: twice (`docs/core-plan.md`,
   "Traps"); each OPC test binary carries a PDB of about 200 MB, and this crate adds a server
-  and a client per test file. 52 GB were free when this plan was written, the target at 6 GB.
+  and a client per test file. 52 GB were free when this plan was written, the target at 6 GB;
+  42 GB after phase 3, the target at 12.6 GB (the debug PDBs), without a clean.
 - **The OPC namespace must not be the application URI** (inherited from Veredas 1's `opcsim`
   and core's demo): the diagnostics node manager registers first and takes a colliding index,
   and every read then answers `BadNodeIdUnknown` with the nodes plainly present.
 - **Bind first, advertise the bound port**: with port 0 the server's advertised endpoint must
   carry the port the OS gave, or a client's endpoint match finds nothing.
+- **The stack takes any scalar into any tag.** async-opcua's write validation refuses arrays and
+  byte strings only; an Int32 lands in a float tag and `get` returns it. A write callback is
+  called *instead of* the write, under the address-space lock, so it cannot store a good value
+  itself: the bench answers `BadTypeMismatch` in the callback and hands a right value to a task
+  on the server's runtime, which lands it the moment the lock is free (C-026, rounds 2 and 3).
+- **A due time taken from the tick's clock drifts by a tick.** `Instant::now()` after a tick is
+  a little past it, so the next due time is just past a boundary and waits one more tick; every
+  interval stretched by 20 ms. Schedule from the last due instant and skip what a stall missed
+  (C-026, round 4). The tick itself lands at the host's timer quantum: 20 ms on Linux, about
+  31 on Windows unless the process raises the resolution (`docs/questions.md` Q13); the rates
+  hold, the jitter differs.
+- **Dep-info is one compilation's view.** The content check reads what rustc read, so it sees
+  only what the `cfg`s of that run compiled in: it builds debug and checks release on the
+  platform of the run (Windows here, Linux in CI); another OS, `cfg(doc)` and `cfg(doctest)`
+  are outside it, and the clause says so rather than claiming more (C-024, rounds 4 and 5).
+- **Never open a log file by name.** A reopen after a failed write appends to whoever took the
+  name meanwhile, or sticks on a file that is gone: leave the file and take a fresh name with
+  `create_new` (C-025, round 4).
+- **Record on CRLF.** `core.autocrlf=true` makes a freshly written LF file show as modified at
+  the next checkout, which stales a record. Before `zen-record-run`: `git ls-files --eol` lists
+  `i/lf w/lf` files, `perl -pi -e 's/\r?\n/\r\n/'` converts them, and `git add -u` must then
+  show nothing.

@@ -254,8 +254,8 @@ impl Compose {
                 Some(end) if end <= max => end,
                 _ => return Err(ComposeError::TooLong { len: field.at.saturating_add(bytes.len()), max }),
             };
-            if let Some((_, _, name)) = written.iter().find(|(s, e, _)| field.at < *e && *s < end) {
-                return Err(ComposeError::Overlap { earlier: name.to_string(), later: field.name.clone(), at: field.at });
+            if let Some((s, _, name)) = written.iter().find(|(s, e, _)| field.at < *e && *s < end) {
+                return Err(ComposeError::Overlap { earlier: name.to_string(), later: field.name.clone(), at: field.at.max(*s) });
             }
             if body.len() < end {
                 body.resize(end, self.pad);

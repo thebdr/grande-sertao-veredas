@@ -213,6 +213,12 @@ fn the_body_is_padded_to_its_length_and_refused_beyond_it() {
     let c = compose(&ComposeSpec { template: Some("X={a};".into()), fields: vec![field("b", 3, 0, FieldType::U16)], len: None, pad: 0 });
     assert_eq!(c.render(&values(&[("a", "12"), ("b", "7")]), Endian::Little), Err(ComposeError::Overlap { earlier: "a".into(), later: "b".into(), at: 3 }));
     assert_eq!(c.render(&values(&[("a", "1"), ("b", "7")]), Endian::Little).unwrap(), [b'X', b'=', b'1', 7, 0], "a shorter value leaves the field clear");
+    let c = compose(&ComposeSpec { template: Some("AB{a}".into()), fields: vec![field("b", 1, 0, FieldType::U16)], len: None, pad: 0 });
+    assert_eq!(
+        c.render(&values(&[("a", "Z"), ("b", "7")]), Endian::Little),
+        Err(ComposeError::Overlap { earlier: "a".into(), later: "b".into(), at: 2 }),
+        "the first shared byte is named, not the field's start over literal text"
+    );
     // Over the length by what the values bring: refused whole, never truncated.
     let c = compose(&ComposeSpec { template: Some("{a}{b}".into()), len: Some(8), ..Default::default() });
     assert_eq!(c.render(&values(&[("a", "ABCDE"), ("b", "FGHI")]), Endian::Little), Err(ComposeError::TooLong { len: 9, max: 8 }));

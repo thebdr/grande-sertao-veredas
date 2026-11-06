@@ -237,3 +237,21 @@ full, issue a command) is a method on the bench's handles, so a UI, when it come
 same library the tests do.
 
 **Reversible?** Yes: a UI is a crate or a module on top of the library; nothing below it changes.
+
+## Q13 - Should the bench raise the Windows timer resolution?
+
+**Context:** the bench ticks every 20 ms (the OPC server's service loop; the channel's
+controller tick). On Windows a timed wait lands at the system timer quantum, 15.6 ms, so a
+20 ms tick lands about 31 ms apart (measured: a tag drawn every 20 ms drew 63 times in 2 s on
+Windows, where Linux draws 100). One call, `timeBeginPeriod(1)` from `winmm` (an `unsafe` FFI
+call, process-wide, a power cost while it holds), would make the tick 20 ms. The rates hold
+either way: every due time is scheduled from the last due time, never from the tick that
+served it, so a 100 ms draw is 20 in 2 s on both platforms and only the jitter differs
+(C-026, round 4; `docs/maquinar-plan.md`, "Traps").
+
+**Taken (reversible, pending the operator):** no FFI. The clause states the quantum, the tests
+pin the rate on both platforms and the per-tick figure per platform, and the bench's two tick
+loops carry a `DECISION PENDING` note. Raising the resolution is one call at the start of the
+executable, behind `cfg(windows)`, when the operator wants 20 ms ticks on the bench.
+
+**Reversible?** Yes: one call, one place, nothing else changes.

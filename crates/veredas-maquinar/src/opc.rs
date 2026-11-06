@@ -764,6 +764,9 @@ async fn service_loop(
     let set = |id: &NodeId, value: Variant| {
         let _ = nodes.set_value(handle.subscriptions(), id, None, DataValue::new_now(value));
     };
+    // DECISION PENDING (docs/questions.md Q13): the timer lands a tick at the host's quantum,
+    // about 31 ms on Windows unless the process raises the resolution; the rates hold anyway,
+    // since every due time is scheduled from the last due time, never from the tick.
     let mut interval = tokio::time::interval(TICK);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -839,7 +842,16 @@ async fn service_loop(
                     if let Ok(mut s) = status.lock() {
                         s.draws += 1;
                     }
-                    due[i] = Some(now + Duration::from_millis(r.interval_ms));
+                    // The next draw is due an interval after this one was due, never after the
+                    // tick that served it: a due time set from the tick's clock falls just past
+                    // a tick boundary and waits one more, stretching every interval by a tick.
+                    // A stall skips the draws it missed and keeps the phase.
+                    let step = Duration::from_millis(r.interval_ms);
+                    let mut next = at + step;
+                    while next <= now {
+                        next += step;
+                    }
+                    due[i] = Some(next);
                 }
                 for (i, r) in reactions.iter().enumerate() {
                     // A step or a draw this tick changed the watched value: seen, not a write.

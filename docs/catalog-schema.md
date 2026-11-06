@@ -23,7 +23,8 @@ file's worked example's segment header. Bytes are `little-endian`. The `answer` 
 destination 3 with flag 1 is `07 00 00 00 03 00 01 00`; the `outcome` for item 7 at destination
 3 with result `SORTED` is the text `ITEM=7;DEST=3;RESULT=SORTED`, and reads back into those three
 fields. `crates/veredas-core/tests/telegram_catalog.rs` loads this very block and checks each of
-these statements, and every key statement below, against the reader.
+these statements, and every key statement below, against the reader; it holds a copy of this
+text, so an edit here is an edit there, beside the behaviour the sentence is held against.
 
 ```toml
 format = "veredas-catalog"

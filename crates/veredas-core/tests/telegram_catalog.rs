@@ -3,6 +3,7 @@
 //! prose and every key statement of its reference read from the text and held against the reader.
 
 use std::collections::{BTreeMap, HashMap};
+use std::time::{Duration, Instant};
 
 use veredas_core::telegram::Endian;
 use veredas_core::telegram::capture::FieldType;
@@ -44,6 +45,30 @@ fn number_after(prose: &str, lead: &str) -> usize {
     let rest = prose[at + lead.len()..].trim_start();
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
     digits.parse().unwrap_or_else(|_| panic!("no number after `{lead}`: {rest:.20}"))
+}
+
+/// The count that follows `lead` in the prose, as digits or as a word (`one` to `ten`).
+fn count_after(prose: &str, lead: &str) -> usize {
+    let at = prose.find(lead).unwrap_or_else(|| panic!("the prose no longer says `{lead}`"));
+    let word = prose[at + lead.len()..].split_whitespace().next().unwrap_or("");
+    let words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+    words
+        .iter()
+        .position(|w| *w == word)
+        .or_else(|| word.parse().ok())
+        .unwrap_or_else(|| panic!("no count after `{lead}`: `{word}`"))
+}
+
+/// A text as paragraphs, each on one line with its whitespace collapsed, the worked example's
+/// TOML block left out (it is loaded, not quoted): what the reference and the copy this test
+/// holds of it are compared as.
+fn paragraphs(text: &str) -> Vec<String> {
+    let mut text = text.replace("\r\n", "\n");
+    if let Some(start) = text.find("```toml\n") {
+        let end = start + text[start + 7..].find("```").unwrap() + 7 + 3;
+        text.replace_range(start..end, "");
+    }
+    text.split("\n\n").map(|p| p.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|p| !p.is_empty()).collect()
 }
 
 /// The reference's tables: for each, the keys it lists with what it says of each (the text in
@@ -99,8 +124,11 @@ fn the_documented_example_loads_and_converses_as_described() {
     assert_eq!(catalog.byte_order, Endian::Little);
     let announce_len = number_after(&prose, "a binary body of");
     let code_len = number_after(&prose, "a code of up to");
+    let read_len = count_after(&prose, "a read flag as");
     let answer_len = number_after(&prose, "answers with a destination (");
-    assert_eq!((announce_len, code_len, answer_len), (32, 16, 8));
+    let outcome_fields = count_after(&prose, "and reads back into those");
+    assert_eq!((announce_len, code_len, read_len, answer_len, outcome_fields), (32, 16, 1, 8, 3));
+    assert!(prose.contains("`id_field` (required): the name of the frame field that carries a message's id: a segment header field in a layout with segments, an envelope field in one without."));
     let shape: Vec<(&str, u64)> = catalog.messages.iter().map(|m| (m.name.as_str(), m.id)).collect();
     assert_eq!(shape, [("announce", 21), ("answer", 22), ("outcome", 23)]);
     // The ids ride the channel file's worked example's segment `id` field: the prose says so,
@@ -119,7 +147,7 @@ fn the_documented_example_loads_and_converses_as_described() {
         [
             ("item", 0, 0, FieldType::U32),
             ("lane", 4, 0, FieldType::U8),
-            ("read", 5, 1, FieldType::Ascii),
+            ("read", 5, read_len, FieldType::Ascii),
             ("code", 8, code_len, FieldType::Ascii),
             ("weight", 24, 0, FieldType::U16),
         ]
@@ -153,6 +181,7 @@ fn the_documented_example_loads_and_converses_as_described() {
     let (message, fields) = catalog.decode(23, &body).unwrap();
     assert_eq!(message.name, "outcome");
     assert_eq!(fields, values(&[("item", "7"), ("dest", "3"), ("result", "SORTED")]));
+    assert_eq!(fields.len(), outcome_fields, "those three fields, as the prose counts them");
     assert_eq!(catalog.by_name("outcome").unwrap().compose_spec.len, None, "as long as what was written");
 
     // What the catalog does not hold, or a body its rules refuse, is nothing.
@@ -170,12 +199,30 @@ fn the_documented_example_loads_and_converses_as_described() {
     // A write missing a value is a refusal through the catalog too.
     let err = catalog.encode("answer", &values(&[("item", "7")])).unwrap().unwrap_err();
     assert_eq!(err.to_string(), "no value for `dest`");
-    // A big-endian catalog writes the same answer the other way round.
+    // A big-endian catalog writes the same answer the other way round: every binary field of
+    // the body, as the reference says.
+    assert!(prose.contains("`byte_order` (`\"little\"`): `\"little\"` or `\"big\"`, for every binary field of every body."));
     let big = load(&documented_example().replace("byte_order = \"little\"", "byte_order = \"big\"")).unwrap();
     assert_eq!(big.byte_order, Endian::Big);
     let (_, body) = big.encode("answer", &values(&[("item", "7"), ("dest", "3"), ("flag", "1")])).unwrap().unwrap();
     assert_eq!(body, [0, 0, 0, 7, 0, 3, 1, 0]);
-    assert_eq!(big.decode(22, &body).unwrap().1["item"], "7");
+    assert_eq!(big.decode(22, &body).unwrap().1, values(&[("item", "7"), ("dest", "3"), ("flag", "1")]));
+    let (_, body) = big.encode("announce", &v).unwrap().unwrap();
+    assert_eq!((&body[..4], &body[24..26]), (&[0, 0, 0, 7][..], &[0x04, 0xE2][..]), "both binary fields of the announcement, big-endian");
+}
+
+#[test]
+fn the_reference_is_the_text_this_test_holds() {
+    // The reference, paragraph by paragraph, is the copy below: a sentence changed, added or
+    // dropped anywhere in it (a default stated a second time, a clause appended after a pinned
+    // sentence) fails here, so every edit to the reference is an edit to this test, beside the
+    // behaviour the sentence is held against.
+    let actual = paragraphs(&doc());
+    let expected = paragraphs(REFERENCE);
+    for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+        assert_eq!(a, e, "paragraph {i} of docs/catalog-schema.md differs from the copy this test holds");
+    }
+    assert_eq!(actual.len(), expected.len(), "docs/catalog-schema.md has {} paragraphs, the copy {}", actual.len(), expected.len());
 }
 
 /// The keys of a table as the reader lists them in its refusal of a misspelled one.
@@ -308,9 +355,12 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             }
         }
     }
-    // The reference's own rule about names, and the constants it states.
+    // The reference's own rules about keys and names, and the constants it states.
     let prose = doc_prose();
+    assert!(prose.contains("Each key states in parentheses that it is required, or the value it takes when left out."));
     assert!(prose.contains("A name (of a message, a field, a repeat) is exact: compared as written, with no surrounding whitespace."));
+    assert!(prose.contains("`message` (none): the messages, as `[[message]]` tables; a catalog may be empty."));
+    assert!(load(&file("")).unwrap().messages.is_empty());
     assert!(prose.contains("`format` (required): always `\"veredas-catalog\"`"));
     assert_eq!(FORMAT, "veredas-catalog");
     assert!(prose.contains("`version` (required): this reader knows `1`"));
@@ -332,6 +382,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
 
 #[test]
 fn the_header_is_refused_four_ways() {
+    assert!(doc_prose().contains("A file of another format or an unknown version is refused, never guessed; migrating an older version is portal's (P-010)."));
     assert_eq!(refused("id_field = \"id\"\n"), "no `format`: a catalog file states `format` and `version`");
     assert_eq!(refused("format = \"veredas-catalog\"\nid_field = \"id\"\n"), "no `version`: a catalog file states `format` and `version`");
     assert_eq!(refused("format = \"veredas-channel\"\nversion = 1\nid_field = \"id\"\n"), "`format` is `veredas-channel`, not `veredas-catalog`");
@@ -426,6 +477,31 @@ fn every_invalid_catalog_is_refused_with_its_place_named() {
         "message[0] (`m`).a1: the repeat `a` reads a field of that name"
     );
     assert!(load(&message("repeat = [ { name = \"a\", pattern = \"(x)\", max = 2 } ]\nfields = [ { name = \"a3\", at = 0, ty = \"U8\" } ]\n")).is_ok(), "beyond the repeat's max");
+    // Whether a name is a repeat's numbered name is decided by parsing it, never by listing
+    // the repeat's names: a `max` in the millions loads at once, and the decision is the same.
+    let started = Instant::now();
+    let millions = "repeat = [ { name = \"a\", pattern = \"x\", max = 1000000 }, { name = \"b\", pattern = \"y\", max = 1000000 } ]\n";
+    let big = load(&message(&format!("{millions}fields = [ {{ name = \"a1000001\", at = 0, ty = \"U8\" }} ]\n"))).unwrap();
+    assert_eq!(big.by_name("m").unwrap().capture_spec.repeat[0].max, 1_000_000);
+    assert_eq!(
+        refused(&message(&format!("{millions}fields = [ {{ name = \"a1000000\", at = 0, ty = \"U8\" }} ]\n"))),
+        "message[0] (`m`).a1000000: the repeat `a` reads a field of that name"
+    );
+    assert!(load(&message(&format!("{millions}fields = [ {{ name = \"a99999999999999999999\", at = 0, ty = \"U8\" }} ]\n"))).is_ok(), "beyond any max");
+    assert!(started.elapsed() < Duration::from_secs(1), "three loads took {:?}", started.elapsed());
+    // Two repeats meet when the longer name is the shorter followed by digits and the least
+    // numbered name of the longer (`<long>1`) is within the shorter's max, in either order.
+    assert_eq!(
+        refused(&message("repeat = [ { name = \"a\", pattern = \"x\", max = 15 }, { name = \"a1\", pattern = \"y\", max = 3 } ]\n")),
+        "message[0] (`m`).repeat[1] (`a1`): the repeat `a` reads `a11` too"
+    );
+    assert_eq!(
+        refused(&message("repeat = [ { name = \"a1\", pattern = \"y\", max = 3 }, { name = \"a\", pattern = \"x\", max = 15 } ]\n")),
+        "message[0] (`m`).repeat[1] (`a`): the repeat `a1` reads `a11` too"
+    );
+    assert!(load(&message("repeat = [ { name = \"a\", pattern = \"x\", max = 10 }, { name = \"a1\", pattern = \"y\", max = 3 } ]\n")).is_ok(), "a11 is past a's max");
+    assert!(load(&message("repeat = [ { name = \"a\", pattern = \"x\" }, { name = \"a0\", pattern = \"y\" } ]\n")).is_ok(), "a01 has a leading zero: no name of a's");
+    assert!(load(&message("repeat = [ { name = \"a\", pattern = \"x\" }, { name = \"ab\", pattern = \"y\" } ]\n")).is_ok(), "ab1 is no number of a's");
     assert_eq!(
         refused(&message("payload = \"(?P<x>\\\\d+)\"\nfields = [ { name = \"x\", at = 0, ty = \"U8\" } ]\n")),
         "message[0] (`m`).x: the payload pattern reads a group of that name"
@@ -465,13 +541,40 @@ fn every_rule_the_reference_states_is_the_reader_s() {
     assert_eq!(mib * 1024 * 1024, MAX_BODY);
     assert!(prose.contains(&format!("past {mib} MiB")));
 
-    // Names and ids are unique.
+    // Names and ids are unique; a field's name is no reader's.
     assert!(prose.contains("`name` (required): what the rules and the bench call the message; unique."));
     assert!(prose.contains("`id` (required): the number the frame carries in `id_field`; unique."));
-    assert!(prose.contains("a repeated id,"));
     assert!(refused(&file("[[message]]\nname = \"m\"\nid = 1\n[[message]]\nname = \"m\"\nid = 2\n")).contains("two messages are named"));
     assert!(refused(&file("[[message]]\nname = \"a\"\nid = 1\n[[message]]\nname = \"b\"\nid = 1\n")).contains("two messages have the id"));
+    assert!(prose.contains("`name` (required): unique within the message, and never a name the payload's groups or a repeat's numbered names would read."));
+    assert!(refused(&message("fields = [ { name = \"f\", at = 0, ty = \"U8\" }, { name = \"f\", at = 1, ty = \"U8\" } ]\n")).contains("two fields are named"));
+    // The closing paragraph, whole: what writing needs and refuses, what reading yields when the
+    // rules fail, and what loading refuses with its place named.
+    assert!(prose.contains("Writing a body needs a value for every placeholder and every field, and refuses one that is missing or does not fit; reading a body that does not satisfy the rules yields nothing, never a partial map."));
+    let both = load(&message("template = \"X={x}\"\nfields = [ { name = \"n\", at = 4, ty = \"U8\" } ]\npayload = \"^X=(?P<x>[a-z]+)\"\n")).unwrap();
+    assert_eq!(both.encode("m", &values(&[("n", "1")])).unwrap().unwrap_err().to_string(), "no value for `x`");
+    assert_eq!(both.encode("m", &values(&[("x", "a")])).unwrap().unwrap_err().to_string(), "no value for `n`");
+    assert!(both.encode("m", &values(&[("x", "a"), ("n", "256")])).unwrap().unwrap_err().to_string().contains("is not a U8"));
+    assert_eq!(both.decode(1, b"X=ab\x07").unwrap().1, values(&[("x", "ab"), ("n", "7")]));
+    assert!(both.decode(1, b"X=9!\x07").is_none(), "the pattern fails: nothing, though the field would read");
+    assert!(prose.contains(&format!(
+        "A misspelled key in any table, an empty or repeated name, a repeated id, a field ending past the body or past {mib} MiB, a bad pattern or a bad template is refused with its place named."
+    )));
+    assert!(refused(&message("zz = 1\n")).contains("unknown field `zz`"));
+    for text in [
+        file("[[message]]\nname = \"\"\nid = 1\n"),
+        file("[[message]]\nname = \"m\"\nid = 1\n[[message]]\nname = \"m\"\nid = 2\n"),
+        file("[[message]]\nname = \"a\"\nid = 1\n[[message]]\nname = \"b\"\nid = 1\n"),
+        message("len = 2\nfields = [ { name = \"f\", at = 1, ty = \"U16\" } ]\n"),
+        message(&format!("fields = [ {{ name = \"f\", at = {MAX_BODY}, ty = \"U8\" }} ]\n")),
+        message("payload = \"(\"\n"),
+        message("repeat = [ { name = \"r\", pattern = \"(\" } ]\n"),
+        message("template = \"{\"\n"),
+    ] {
+        assert!(refused(&text).starts_with("message["), "the place is named: {}", refused(&text));
+    }
     // A text or hex field needs its length.
+    assert!(prose.contains("`len` (`0`; required for an `Ascii` or `Hex` field): their byte count."));
     let len_rule = listed_after(&prose, "`len` (`0`; required for an ");
     assert_eq!(len_rule, ["Ascii", "Hex"]);
     for ty in &len_rule {
@@ -496,9 +599,15 @@ fn every_rule_the_reference_states_is_the_reader_s() {
     assert!(ints.encode("m", &values(&[("u", "+1"), ("i", "1")])).unwrap().unwrap_err().to_string().contains("is not a U8"));
     assert!(ints.encode("m", &values(&[("u", "256"), ("i", "1")])).unwrap().unwrap_err().to_string().contains("is not a U8"));
     assert_eq!(ints.encode("m", &values(&[("u", "1"), ("i", "+1")])).unwrap().unwrap().1, [1, 1, 0]);
+    // Fields at byte offsets, written and read alike.
+    assert!(prose.contains("`fields` (none): binary fields at byte offsets, written and read alike."));
+    assert!(prose.contains("`at` (required): the byte offset."));
+    let (_, body) = ints.encode("m", &values(&[("u", "1"), ("i", "-2")])).unwrap().unwrap();
+    assert_eq!(body, [1, 0xFE, 0xFF], "`u` at byte 0, `i` at byte 1");
+    assert_eq!(ints.decode(1, &body).unwrap().1, values(&[("u", "1"), ("i", "-2")]));
     let hex = load(&message("fields = [ { name = \"h\", at = 0, len = 2, ty = \"Hex\" } ]\n")).unwrap();
     assert!(hex.encode("m", &values(&[("h", "DE")])).unwrap().unwrap_err().to_string().contains("1 hex bytes where 2 are declared"));
-    assert!(prose.contains("Written bodies are padded with `pad` up to it and refused beyond it"));
+    assert!(prose.contains("`len` (none): a fixed body length. Written bodies are padded with `pad` up to it and refused beyond it"));
     let fixed = load(&message("len = 4\ntemplate = \"{t}\"\n")).unwrap();
     assert_eq!(fixed.encode("m", &values(&[("t", "AB")])).unwrap().unwrap().1, [b'A', b'B', 0, 0]);
     assert!(fixed.encode("m", &values(&[("t", "ABCDE")])).unwrap().unwrap_err().to_string().contains("over its 4"));
@@ -509,8 +618,12 @@ fn every_rule_the_reference_states_is_the_reader_s() {
     let open = load(&message("template = \"{t}\"\npayload = \"(?P<t>.*)\"\n")).unwrap();
     assert_eq!(open.encode("m", &values(&[("t", "ABCDEFGH")])).unwrap().unwrap().1.len(), 8);
     assert_eq!(open.decode(1, b"x").unwrap().1["t"], "x");
-    // Placeholders: trimmed names, literal braces, the four refusals.
-    assert!(prose.contains("`{name}` replaced by that value (the name read trimmed) and `{{` and `}}` standing for literal braces"));
+    // A payload is a regex over the text, read into its named groups.
+    assert!(prose.contains("`payload` (none): a regex over the body as text, read back into its named groups."));
+    let groups = load(&message("payload = \"^(?P<k>[A-Z]+)=(?P<v>\\\\d+)$\"\n")).unwrap();
+    assert_eq!(groups.decode(1, b"N=12").unwrap().1, values(&[("k", "N"), ("v", "12")]));
+    // Placeholders: a text body written first, trimmed names, literal braces, the four refusals.
+    assert!(prose.contains("`template` (none): a text body written first, `{name}` replaced by that value (the name read trimmed) and `{{` and `}}` standing for literal braces"));
     let trimmed = load(&message("template = \"{ t }{{\"\n")).unwrap();
     assert_eq!(trimmed.encode("m", &values(&[("t", "x")])).unwrap().unwrap().1, b"x{");
     assert!(prose.contains("an unclosed brace, a stray `}`, an empty `{}` or a `{` inside a placeholder is refused when the file loads"));
@@ -524,7 +637,8 @@ fn every_rule_the_reference_states_is_the_reader_s() {
     assert_eq!(only_repeat.decode(1, b"BC=AAA").unwrap().1["bc1"], "AAA");
     // Repeats: numbered from 1, group 1 else the whole match, the most read, 0 refused, no
     // numbered name another reader's.
-    assert!(prose.contains("patterns captured repeatedly as `name1`, `name2`..., counted from 1; no numbered name may be a payload group's or another repeat's."));
+    assert!(prose.contains("`repeat` (none): patterns captured repeatedly as `name1`, `name2`..., counted from 1; no numbered name may be a payload group's or another repeat's."));
+    assert!(prose.contains("`name` (required): the prefix of the numbered names."));
     assert!(prose.contains("`pattern` (required): the regex captured again and again (group 1, else the whole match)."));
     assert!(prose.contains("`max` (`16`): the most occurrences read; `0` is refused."));
     let grouped = load(&message("repeat = [ { name = \"g\", pattern = \"G=([a-z]+)\", max = 2 }, { name = \"w\", pattern = \"W[0-9]\" } ]\n")).unwrap();
@@ -551,6 +665,7 @@ fn every_rule_the_reference_states_is_the_reader_s() {
 #[test]
 fn what_a_message_writes_it_reads_and_what_it_cannot_write_it_says() {
     // The pad byte fills the gaps and the tail.
+    assert!(doc_prose().contains("`pad` (`0`): the byte that fills the gaps between fields and the padding to `len`."));
     let padded = load(&message("len = 4\npad = 255\nfields = [ { name = \"n\", at = 1, ty = \"U8\" } ]\n")).unwrap();
     let (_, body) = padded.encode("m", &values(&[("n", "7")])).unwrap().unwrap();
     assert_eq!(body, [255, 7, 255, 255]);
@@ -577,3 +692,94 @@ fn what_a_message_writes_it_reads_and_what_it_cannot_write_it_says() {
     assert_eq!((fields["bc1"].as_str(), fields["bc2"].as_str(), fields["n"].as_str()), ("AAA", "BBB", "9"));
     assert!(!fields.contains_key("bc3"));
 }
+
+/// The reference, `docs/catalog-schema.md`, as this test holds it: its paragraphs, the worked
+/// example's TOML block left out. Compared paragraph by paragraph, whitespace collapsed, by
+/// `the_reference_is_the_text_this_test_holds`; every statement in it is held against the reader
+/// in the tests above. An edit to the reference is an edit here, beside its pin.
+const REFERENCE: &str = r#"
+# The catalog file: `veredas-catalog`, version 1
+
+A channel's messages are configured, not programmed (`docs/questions.md` Q8). The channel file
+(`docs/channel-schema.md`) says how frames are framed and the link is held; the catalog file
+says what the frames carry: each message by name, by the id its segment header (or envelope)
+field carries, and by the rules its body is written with and read with.
+`veredas_core::telegram::catalog::load` reads it into a `Catalog`; `telegram::compose` writes a
+body from named fields and `telegram::capture` reads one back, from the same field list, so a
+body a channel sends is a body the same catalog reads. Core knows no device: a device's catalog
+is a file like the one below, kept with its channel file, outside the suite's code.
+
+Every plain-text config and project file of Veredas 2 follows this pattern (`docs/questions.md`
+Q10, "TOML, suite-wide"): TOML, a `format` and a `version` first, documented defaults, a
+misspelled key refused, an unknown format or version refused rather than guessed.
+
+## The worked example: a conversation of three messages
+
+A controller announces an item (a binary body of 32 bytes: the item's number, its lane, a read
+flag as one text character, a code of up to 16 characters, a weight), the unit it talks to
+answers with a destination (8 bytes: the item, the destination, a flag), and the controller
+reports the outcome as a line of text. The ids are carried in the `id` field of the channel
+file's worked example's segment header. Bytes are `little-endian`. The `answer` for item 7 to
+destination 3 with flag 1 is `07 00 00 00 03 00 01 00`; the `outcome` for item 7 at destination
+3 with result `SORTED` is the text `ITEM=7;DEST=3;RESULT=SORTED`, and reads back into those three
+fields. `crates/veredas-core/tests/telegram_catalog.rs` loads this very block and checks each of
+these statements, and every key statement below, against the reader; it holds a copy of this
+text, so an edit here is an edit there, beside the behaviour the sentence is held against.
+
+## Keys
+
+Each key states in parentheses that it is required, or the value it takes when left out. A
+name (of a message, a field, a repeat) is exact: compared as written, with no surrounding
+whitespace.
+
+**The top level**.
+- `format` (required): always `"veredas-catalog"`.
+- `version` (required): this reader knows `1`. A file of another format or an unknown version is
+  refused, never guessed; migrating an older version is portal's (P-010).
+- `id_field` (required): the name of the frame field that carries a message's id: a segment
+  header field in a layout with segments, an envelope field in one without.
+- `byte_order` (`"little"`): `"little"` or `"big"`, for every binary field of every body.
+- `message` (none): the messages, as `[[message]]` tables; a catalog may be empty.
+
+**A message** (`[[message]]`).
+- `name` (required): what the rules and the bench call the message; unique.
+- `id` (required): the number the frame carries in `id_field`; unique.
+- `len` (none): a fixed body length. Written bodies are padded with `pad` up to it and refused
+  beyond it; a received body of another length is not this message and reads as nothing; a
+  field that ends past it, or a template whose literal text is longer, is refused when the file
+  loads. Without it a body is as long as what was written, and read whatever its length.
+- `pad` (`0`): the byte that fills the gaps between fields and the padding to `len`.
+- `fields` (none): binary fields at byte offsets, written and read alike.
+- `template` (none): a text body written first, `{name}` replaced by that value (the name read
+  trimmed) and `{{` and `}}` standing for literal braces; an unclosed brace, a stray `}`, an empty
+  `{}` or a `{` inside a placeholder is refused when the file loads. A field written over the
+  text overwrites its bytes.
+- `payload` (none): a regex over the body as text, read back into its named groups. A message
+  with a payload or a repeat and neither a template nor a field can be read but never written.
+  A text body padded to `len` is read with its padding, so a pattern anchored at the end does
+  not match it.
+- `repeat` (none): patterns captured repeatedly as `name1`, `name2`..., counted from 1; no
+  numbered name may be a payload group's or another repeat's.
+
+**A field** (an entry of `fields`).
+- `name` (required): unique within the message, and never a name the payload's groups or a
+  repeat's numbered names would read.
+- `at` (required): the byte offset.
+- `ty` (required): `U8`, `U16`, `U32`, `I16`, `I32`, `Ascii` or `Hex`. An integer is written from
+  decimal text (a sign only where the type takes one) and refused when it does not fit; a
+  text is read back without its trailing whitespace.
+- `len` (`0`; required for an `Ascii` or `Hex` field): their byte count. Text is padded with NUL
+  to it (a NUL inside the text refused) and refused when longer; hex must spell exactly that
+  many bytes. No two fields may share a byte.
+
+**A repeat** (an entry of `repeat`).
+- `name` (required): the prefix of the numbered names.
+- `pattern` (required): the regex captured again and again (group 1, else the whole match).
+- `max` (`16`): the most occurrences read; `0` is refused.
+
+Writing a body needs a value for every placeholder and every field, and refuses one that is
+missing or does not fit; reading a body that does not satisfy the rules yields nothing, never a
+partial map. A misspelled key in any table, an empty or repeated name, a repeated id, a field
+ending past the body or past 16 MiB, a bad pattern or a bad template is refused with its place
+named.
+"#;
