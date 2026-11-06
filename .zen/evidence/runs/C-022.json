@@ -10,15 +10,15 @@
     "opc_worker"
   ],
   "exitCode": 0,
-  "outputSha": "0d26c9f024d1e58eb4fc4b93adda000578d70f56e88122d2b70570871a9dbc21",
-  "outputTail": "test the_worker_reconnects_after_the_server_comes_back ... ok\ntest a_write_its_caller_gave_up_on_is_never_sent ... ok\ntest the_identity_reaches_the_server ... ok\ntest a_request_without_a_session_is_refused_at_once_and_never_fires_later ... ok\ntest a_silent_server_is_given_up_on_within_the_connect_timeout_and_a_stop_is_prompt ... ok\ntest a_write_without_an_answer_is_unconfirmed_and_ends_the_session ... ok\ntest a_read_that_never_answers_ends_the_session_and_a_stop_mid_poll_is_prompt ... ok\ntest an_unreachable_server_retries_instead_of_dying ... ok\ntest the_backoff_starts_over_after_a_connection ... ok\n\ntest result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.48s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.67s\n     Running tests\\opc_worker.rs (target\\debug\\deps\\opc_worker-22949aad8516f74a.exe)",
-  "ranAt": "2026-11-06T05:12:37.380Z",
-  "headCommit": "7b7d34eecac53bf2a55a9ea4fb249b7846d9a36a",
+  "outputSha": "f23005ce68eeaaebe1ce091b92afd59ef32769401bcb1be13e4e6dd4746f2875",
+  "outputTail": "test the_worker_reconnects_after_the_server_comes_back ... ok\ntest a_write_its_caller_gave_up_on_is_never_sent ... ok\ntest the_identity_reaches_the_server ... ok\ntest a_request_without_a_session_is_refused_at_once_and_never_fires_later ... ok\ntest a_silent_server_is_given_up_on_within_the_connect_timeout_and_a_stop_is_prompt ... ok\ntest a_write_without_an_answer_is_unconfirmed_and_ends_the_session ... ok\ntest a_read_that_never_answers_ends_the_session_and_a_stop_mid_poll_is_prompt ... ok\ntest an_unreachable_server_retries_instead_of_dying ... ok\ntest the_backoff_starts_over_after_a_connection ... ok\n\ntest result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.38s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.56s\n     Running tests\\opc_worker.rs (target\\debug\\deps\\opc_worker-22949aad8516f74a.exe)",
+  "ranAt": "2026-11-06T09:52:59.661Z",
+  "headCommit": "aed4d93c6319896b01d4e40ebbae671a0c55e050",
   "tests": [
     {
       "name": "crates/veredas-core/tests/opc_worker.rs",
       "file": "crates/veredas-core/tests/opc_worker.rs",
-      "fileSha": "b5b783ef08b4eea68a84b30e2130b04644c86f758c8a046c004e448895f35635"
+      "fileSha": "e03d4ded884be6aa8fd957732a0b549d28bd571d299bab878b455259b5bb670b"
     }
   ]
 }
