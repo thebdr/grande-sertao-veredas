@@ -432,6 +432,122 @@ fn every_invalid_catalog_is_refused_with_its_place_named() {
     );
 }
 
+/// The backticked words of the sentence that follows `lead` in the prose, up to its full stop.
+fn listed_after(prose: &str, lead: &str) -> Vec<String> {
+    let at = prose.find(lead).unwrap_or_else(|| panic!("the prose no longer says `{lead}`"));
+    let rest = &prose[at + lead.len()..];
+    let sentence = &rest[..rest.find(". ").unwrap_or(rest.len())];
+    sentence.split('`').skip(1).step_by(2).map(String::from).collect()
+}
+
+/// The names a reader's refusal of an unknown variant lists after "expected".
+fn variants_in(err: &str) -> Vec<String> {
+    let at = err.find("expected").unwrap_or_else(|| panic!("{err}"));
+    err[at..].split('`').skip(1).step_by(2).map(String::from).collect()
+}
+
+#[test]
+fn every_rule_the_reference_states_is_the_reader_s() {
+    // Each statement of the reference is quoted beside the behaviour that pins it, so neither
+    // can drift from the other unnoticed.
+    let prose = doc_prose();
+    let sorted = |mut v: Vec<String>| {
+        v.sort();
+        v
+    };
+    // The sets the reference lists are the reader's own, no more and no fewer.
+    let types = listed_after(&prose, "`ty` (required): ");
+    assert_eq!(sorted(types), sorted(variants_in(&refused(&message("fields = [ { name = \"f\", at = 0, ty = \"u8\" } ]\n")))));
+    let orders = listed_after(&prose, "`byte_order` (`\"little\"`): ");
+    assert_eq!(sorted(orders.iter().map(|o| o.trim_matches('"').to_string()).collect()), sorted(variants_in(&refused(&file("byte_order = \"middle\"\n")))));
+    // The ceiling the prose names is the engine's.
+    let mib = number_after(&prose, "ending past the body or past");
+    assert_eq!(mib * 1024 * 1024, MAX_BODY);
+    assert!(prose.contains(&format!("past {mib} MiB")));
+
+    // Names and ids are unique.
+    assert!(prose.contains("`name` (required): what the rules and the bench call the message; unique."));
+    assert!(prose.contains("`id` (required): the number the frame carries in `id_field`; unique."));
+    assert!(prose.contains("a repeated id,"));
+    assert!(refused(&file("[[message]]\nname = \"m\"\nid = 1\n[[message]]\nname = \"m\"\nid = 2\n")).contains("two messages are named"));
+    assert!(refused(&file("[[message]]\nname = \"a\"\nid = 1\n[[message]]\nname = \"b\"\nid = 1\n")).contains("two messages have the id"));
+    // A text or hex field needs its length.
+    let len_rule = listed_after(&prose, "`len` (`0`; required for an ");
+    assert_eq!(len_rule, ["Ascii", "Hex"]);
+    for ty in &len_rule {
+        assert!(refused(&message(&format!("fields = [ {{ name = \"f\", at = 0, ty = \"{ty}\" }} ]\n"))).contains("declares its length"), "{ty}");
+    }
+    // Fields never share a byte; a field written over the text overwrites its bytes.
+    assert!(prose.contains("No two fields may share a byte."));
+    assert!(refused(&message("fields = [ { name = \"a\", at = 0, ty = \"U16\" }, { name = \"b\", at = 1, ty = \"U8\" } ]\n")).contains("overlaps"));
+    assert!(prose.contains("A field written over the text overwrites its bytes."));
+    let over = load(&message("template = \"ABCD\"\nfields = [ { name = \"n\", at = 1, ty = \"U8\" } ]\n")).unwrap();
+    assert_eq!(over.encode("m", &values(&[("n", "0")])).unwrap().unwrap().1, [b'A', 0, b'C', b'D']);
+    // Padding, NUL, trailing whitespace, signs, hex, too long.
+    assert!(prose.contains("Text is padded with NUL to it (a NUL inside the text refused) and refused when longer; hex must spell exactly that many bytes."));
+    let text = load(&message("fields = [ { name = \"t\", at = 0, len = 4, ty = \"Ascii\" } ]\n")).unwrap();
+    assert_eq!(text.encode("m", &values(&[("t", "AB")])).unwrap().unwrap().1, [b'A', b'B', 0, 0]);
+    assert!(text.encode("m", &values(&[("t", "A\0B")])).unwrap().unwrap_err().to_string().contains("text without NUL"));
+    assert!(text.encode("m", &values(&[("t", "ABCDE")])).unwrap().unwrap_err().to_string().contains("do not fit"));
+    assert!(prose.contains("a text is read back without its trailing whitespace"));
+    assert_eq!(text.decode(1, b"A  \0").unwrap().1["t"], "A");
+    assert!(prose.contains("An integer is written from decimal text (a sign only where the type takes one) and refused when it does not fit"));
+    let ints = load(&message("fields = [ { name = \"u\", at = 0, ty = \"U8\" }, { name = \"i\", at = 1, ty = \"I16\" } ]\n")).unwrap();
+    assert!(ints.encode("m", &values(&[("u", "+1"), ("i", "1")])).unwrap().unwrap_err().to_string().contains("is not a U8"));
+    assert!(ints.encode("m", &values(&[("u", "256"), ("i", "1")])).unwrap().unwrap_err().to_string().contains("is not a U8"));
+    assert_eq!(ints.encode("m", &values(&[("u", "1"), ("i", "+1")])).unwrap().unwrap().1, [1, 1, 0]);
+    let hex = load(&message("fields = [ { name = \"h\", at = 0, len = 2, ty = \"Hex\" } ]\n")).unwrap();
+    assert!(hex.encode("m", &values(&[("h", "DE")])).unwrap().unwrap_err().to_string().contains("1 hex bytes where 2 are declared"));
+    assert!(prose.contains("Written bodies are padded with `pad` up to it and refused beyond it"));
+    let fixed = load(&message("len = 4\ntemplate = \"{t}\"\n")).unwrap();
+    assert_eq!(fixed.encode("m", &values(&[("t", "AB")])).unwrap().unwrap().1, [b'A', b'B', 0, 0]);
+    assert!(fixed.encode("m", &values(&[("t", "ABCDE")])).unwrap().unwrap_err().to_string().contains("over its 4"));
+    assert!(prose.contains("a field that ends past it, or a template whose literal text is longer, is refused when the file loads"));
+    assert!(refused(&message("len = 2\ntemplate = \"ABC\"\n")).contains("over its 2"));
+    assert!(refused(&message("len = 2\nfields = [ { name = \"f\", at = 1, ty = \"U16\" } ]\n")).contains("past the body's 2"));
+    assert!(prose.contains("Without it a body is as long as what was written, and read whatever its length."));
+    let open = load(&message("template = \"{t}\"\npayload = \"(?P<t>.*)\"\n")).unwrap();
+    assert_eq!(open.encode("m", &values(&[("t", "ABCDEFGH")])).unwrap().unwrap().1.len(), 8);
+    assert_eq!(open.decode(1, b"x").unwrap().1["t"], "x");
+    // Placeholders: trimmed names, literal braces, the four refusals.
+    assert!(prose.contains("`{name}` replaced by that value (the name read trimmed) and `{{` and `}}` standing for literal braces"));
+    let trimmed = load(&message("template = \"{ t }{{\"\n")).unwrap();
+    assert_eq!(trimmed.encode("m", &values(&[("t", "x")])).unwrap().unwrap().1, b"x{");
+    assert!(prose.contains("an unclosed brace, a stray `}`, an empty `{}` or a `{` inside a placeholder is refused when the file loads"));
+    for (template, what) in [("{a", "unclosed"), ("a}", "stray"), ("{}", "empty placeholder"), ("{a{b}", "inside the placeholder")] {
+        assert!(refused(&message(&format!("template = \"{template}\"\n"))).contains(what), "{template}");
+    }
+    // Reading only: a payload or a repeat with nothing to write.
+    assert!(prose.contains("A message with a payload or a repeat and neither a template nor a field can be read but never written."));
+    let only_repeat = load(&message("repeat = [ { name = \"bc\", pattern = \"BC=([A-Z]+)\" } ]\n")).unwrap();
+    assert_eq!(only_repeat.encode("m", &values(&[("bc1", "AAA")])).unwrap(), Err(ComposeError::NoRules));
+    assert_eq!(only_repeat.decode(1, b"BC=AAA").unwrap().1["bc1"], "AAA");
+    // Repeats: numbered from 1, group 1 else the whole match, the most read, 0 refused, no
+    // numbered name another reader's.
+    assert!(prose.contains("patterns captured repeatedly as `name1`, `name2`..., counted from 1; no numbered name may be a payload group's or another repeat's."));
+    assert!(prose.contains("`pattern` (required): the regex captured again and again (group 1, else the whole match)."));
+    assert!(prose.contains("`max` (`16`): the most occurrences read; `0` is refused."));
+    let grouped = load(&message("repeat = [ { name = \"g\", pattern = \"G=([a-z]+)\", max = 2 }, { name = \"w\", pattern = \"W[0-9]\" } ]\n")).unwrap();
+    let (_, fields) = grouped.decode(1, b"G=aa W1 G=bb G=cc W2").unwrap();
+    assert_eq!((fields["g1"].as_str(), fields["g2"].as_str(), fields.get("g3"), fields["w1"].as_str(), fields["w2"].as_str()), ("aa", "bb", None, "W1", "W2"));
+    assert!(!fields.contains_key("g0") && !fields.contains_key("w0"));
+    assert!(refused(&message("repeat = [ { name = \"r\", pattern = \"x\", max = 0 } ]\n")).contains("max is 0"));
+    assert_eq!(
+        refused(&message("payload = \"(?P<bc1>Z+)\"\nrepeat = [ { name = \"bc\", pattern = \"BC=(\\\\w+)\" } ]\n")),
+        "message[0] (`m`).repeat[0] (`bc`): the payload pattern reads a group named `bc1`"
+    );
+    assert_eq!(
+        refused(&message("repeat = [ { name = \"a\", pattern = \"x\" }, { name = \"a1\", pattern = \"y\" } ]\n")),
+        "message[0] (`m`).repeat[1] (`a1`): the repeat `a` reads `a11` too"
+    );
+    assert!(load(&message("repeat = [ { name = \"a\", pattern = \"x\", max = 1 }, { name = \"a1\", pattern = \"y\", max = 1 } ]\n")).is_ok(), "a11 is read by neither");
+    assert!(prose.contains("never a name the payload's groups or a repeat's numbered names would read"));
+    assert!(refused(&message("repeat = [ { name = \"a\", pattern = \"(x)\", max = 2 } ]\nfields = [ { name = \"a2\", at = 0, ty = \"U8\" } ]\n")).contains("reads a field of that name"));
+    for ok in ["a0", "a3", "a01", "a+1"] {
+        assert!(load(&message(&format!("repeat = [ {{ name = \"a\", pattern = \"(x)\", max = 2 }} ]\nfields = [ {{ name = \"{ok}\", at = 0, ty = \"U8\" }} ]\n"))).is_ok(), "{ok} is no numbered name");
+    }
+}
+
 #[test]
 fn what_a_message_writes_it_reads_and_what_it_cannot_write_it_says() {
     // The pad byte fills the gaps and the tail.

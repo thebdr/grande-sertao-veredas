@@ -546,11 +546,73 @@ fn a_folder_that_comes_back_with_an_earlier_run_s_file_is_not_appended_to() {
     assert_eq!(writer.status().current_file.as_deref(), Some("x2.log"));
     assert_eq!(std::fs::read(blocker.join("x1.log")).unwrap(), b"EARLIER RUN\r\n", "untouched");
     assert_eq!(std::fs::read_to_string(blocker.join("x2.log")).unwrap().lines().count(), 1);
-    // The file this run opened is its own: a write that fails closes it, and the next line
-    // reopens and appends to it rather than skipping to a third name.
+    // The file stays open across lines: the next line lands in it.
     writer.write_at(&at(2026, 7, 28, 9, 1));
     assert_eq!(writer.status().current_file.as_deref(), Some("x2.log"));
     assert_eq!(std::fs::read_to_string(blocker.join("x2.log")).unwrap().lines().count(), 2);
+}
+
+#[test]
+fn after_a_failed_write_the_file_is_left_and_a_fresh_name_taken() {
+    // A write that fails leaves the file (`release`, what a failed write does): the next line
+    // takes a fresh name, never the old one by name, so a file lost, replaced or taken by
+    // another writer meanwhile is not appended to. Two more lines then stay in that file.
+    let dir = Dir::new("release");
+    let mut writer = Writer::new(cfg("x{n}.log", 0, 0), dir.path().to_path_buf(), 1);
+    writer.write_at(&at(2026, 7, 28, 9, 0));
+    assert_eq!(writer.status().current_file.as_deref(), Some("x1.log"));
+    writer.release();
+    // Gone meanwhile (a share that came back empty): the writer carries on in a new file.
+    std::fs::remove_file(dir.path().join("x1.log")).unwrap();
+    writer.write_at(&at(2026, 7, 28, 9, 1));
+    assert_eq!(writer.status().last_error, None);
+    assert_eq!(writer.status().current_file.as_deref(), Some("x2.log"), "the index moved on");
+    writer.write_at(&at(2026, 7, 28, 9, 2));
+    assert_eq!(std::fs::read_to_string(dir.path().join("x2.log")).unwrap().lines().count(), 2);
+    // Taken by another writer meanwhile: never shared.
+    writer.release();
+    let mut other = Writer::new(cfg("x{n}.log", 0, 0), dir.path().to_path_buf(), 2);
+    other.write_at(&at(2026, 7, 28, 9, 3));
+    assert_eq!(other.status().current_file.as_deref(), Some("x1.log"), "the freed name, created new");
+    writer.write_at(&at(2026, 7, 28, 9, 4));
+    assert_eq!(writer.status().current_file.as_deref(), Some("x3.log"));
+    assert_eq!(std::fs::read_to_string(dir.path().join("x1.log")).unwrap().lines().count(), 1);
+    assert_eq!(std::fs::read_to_string(dir.path().join("x3.log")).unwrap().lines().count(), 1);
+    // A foreign file under the next name is skipped too, and a UTF-16 writer's fresh file
+    // carries its own byte-order mark.
+    std::fs::write(dir.path().join("x4.log"), b"FOREIGN\r\n").unwrap();
+    let mut wide = cfg("x{n}.log", 0, 0);
+    wide.encoding = Encoding::Utf16le;
+    let mut wide_writer = Writer::new(wide, dir.path().to_path_buf(), 3);
+    wide_writer.write_at(&at(2026, 7, 28, 9, 5));
+    assert_eq!(wide_writer.status().current_file.as_deref(), Some("x5.log"));
+    assert_eq!(std::fs::read(dir.path().join("x4.log")).unwrap(), b"FOREIGN\r\n");
+    assert_eq!(&std::fs::read(dir.path().join("x5.log")).unwrap()[..2], &[0xFF, 0xFE]);
+    // A release with nothing open changes nothing.
+    let mut idle = Writer::new(cfg("y{n}.log", 0, 0), dir.path().to_path_buf(), 4);
+    idle.release();
+    idle.write_at(&at(2026, 7, 28, 9, 6));
+    assert_eq!(idle.status().current_file.as_deref(), Some("y1.log"));
+}
+
+#[cfg(windows)]
+#[test]
+fn a_write_that_really_fails_releases_the_file() {
+    // A lock held by someone else makes the writer's write fail (on Windows a lock is
+    // mandatory); the writer leaves the file and the next line takes a fresh name.
+    let dir = Dir::new("locked");
+    let mut writer = Writer::new(cfg("x{n}.log", 0, 0), dir.path().to_path_buf(), 1);
+    writer.write_at(&at(2026, 7, 28, 9, 0));
+    let locker = std::fs::File::open(dir.path().join("x1.log")).unwrap();
+    locker.lock().unwrap();
+    writer.write_at(&at(2026, 7, 28, 9, 1));
+    assert!(matches!(writer.status().last_error, Some(EmitError::Io { action: "writing", .. })), "{:?}", writer.status());
+    locker.unlock().unwrap();
+    drop(locker);
+    writer.write_at(&at(2026, 7, 28, 9, 2));
+    assert_eq!(writer.status().last_error, None);
+    assert_eq!(writer.status().current_file.as_deref(), Some("x2.log"));
+    assert_eq!(std::fs::read_to_string(dir.path().join("x1.log")).unwrap().lines().count(), 1, "the left file is as it was");
 }
 
 #[test]

@@ -413,10 +413,9 @@ pub struct OpcStatus {
     pub draws: u64,
     /// Reactions fired.
     pub reactions_fired: u64,
-    /// Values of the wrong wire type found in a tag and put back: the stack answers a client's
-    /// scalar of another type with Good and stores it, so the bench restores the tag's last
-    /// value of its own type on its next tick and counts the mistake here, where a consumer's
-    /// test can see it.
+    /// Writes of the wrong wire type refused (`BadTypeMismatch`, from a client) or dropped (a
+    /// plant-side `set`): the stack's own validation would have taken them, so the bench checks
+    /// and counts them here, where a consumer's test can see its mistake.
     pub type_mismatches: u64,
     /// The last mismatch: the tag and the variant it was given.
     pub last_mismatch: Option<(String, String)>,
@@ -551,7 +550,8 @@ pub fn start(cfg: &OpcConfig) -> Result<OpcHandle, OpcError> {
                 }
             };
             rt.block_on(async move {
-                let (handle, nodes, endpoint_url, bound, ns) = match serve(&cfg).await {
+                let status = Arc::new(std::sync::Mutex::new(OpcStatus::default()));
+                let (handle, nodes, endpoint_url, bound, ns) = match serve(&cfg, Arc::clone(&status)).await {
                     Ok(v) => v,
                     Err(e) => {
                         let _ = ready_tx.send(Err(e));
@@ -561,7 +561,7 @@ pub fn start(cfg: &OpcConfig) -> Result<OpcHandle, OpcError> {
                 if ready_tx.send(Ok((endpoint_url, bound, ns))).is_err() {
                     return;
                 }
-                service_loop(handle, nodes, cfg, reactions, ns, req_rx, shutdown_rx).await;
+                service_loop(handle, nodes, cfg, reactions, ns, req_rx, shutdown_rx, status).await;
             });
             // Dropping the runtime here takes every client connection with it.
         })
@@ -581,7 +581,7 @@ pub fn start(cfg: &OpcConfig) -> Result<OpcHandle, OpcError> {
 
 type Started = (ServerHandle, Arc<SimpleNodeManager>, String, u16, u16);
 
-async fn serve(cfg: &OpcConfig) -> Result<Started, OpcError> {
+async fn serve(cfg: &OpcConfig, status: Arc<std::sync::Mutex<OpcStatus>>) -> Result<Started, OpcError> {
     let host = cfg.bind.trim();
     // Bind first, then tell the server the port it really got: with port 0 the advertised
     // endpoint urls would otherwise disagree with reality and a client's match would find nothing.
@@ -620,9 +620,45 @@ async fn serve(cfg: &OpcConfig) -> Result<Started, OpcError> {
     let ns = handle.get_namespace_index(NAMESPACE).ok_or(OpcError::NoNamespace)?;
 
     populate(&nodes, ns, &cfg.tags)?;
+    guard_writes(&nodes, &handle, ns, &cfg.tags, status);
     tokio::spawn(server.run_with(listener));
 
     Ok((handle, nodes, format!("opc.tcp://{host}:{bound}/"), bound, ns))
+}
+
+/// A write callback on every writable tag: the stack's own validation takes any scalar into
+/// any typed tag, so the bench checks the wire type itself and answers `BadTypeMismatch`, as a
+/// real controller does. A value of the right type is stored: the callback runs under the
+/// address-space lock and cannot store it itself, so it hands the value to a task on the
+/// server's runtime that lands it the moment the lock is free, before the client's next request
+/// can arrive. A write with an index range is refused.
+fn guard_writes(nodes: &Arc<SimpleNodeManager>, handle: &ServerHandle, ns: u16, tags: &[TagConfig], status: Arc<std::sync::Mutex<OpcStatus>>) {
+    for tag in tags.iter().filter(|t| t.access != Access::Read) {
+        let id = tag.id.trim().to_string();
+        let node = NodeId::new(ns, id.as_str());
+        let ty = tag.ty;
+        let nodes = Arc::clone(nodes);
+        let subscriptions = handle.subscriptions().clone();
+        let status = Arc::clone(&status);
+        nodes.clone().inner().add_write_callback(node.clone(), move |value, range| {
+            if *range != opcua_types::NumericRange::None {
+                return opcua_types::StatusCode::BadIndexRangeInvalid;
+            }
+            let Some(variant) = value.value else { return opcua_types::StatusCode::BadTypeMismatch };
+            if !is_of_type(ty, &variant) {
+                if let Ok(mut s) = status.lock() {
+                    s.type_mismatches += 1;
+                    s.last_mismatch = Some((id.clone(), format!("{variant:?}")));
+                }
+                return opcua_types::StatusCode::BadTypeMismatch;
+            }
+            let (nodes, subscriptions, node) = (Arc::clone(&nodes), subscriptions.clone(), node.clone());
+            tokio::spawn(async move {
+                let _ = nodes.set_value(&subscriptions, &node, None, DataValue::new_now(variant));
+            });
+            opcua_types::StatusCode::Good
+        });
+    }
 }
 
 /// Build the address space from the configured tags.
@@ -698,7 +734,9 @@ fn draw(tag: &TagConfig, r: &Randomize, rng: &mut Pcg32) -> Variant {
 }
 
 /// Service requests, move the randomized tags and fire reactions until shutdown. One loop does
-/// everything, so every await is bounded and there is no timer bookkeeping to leak.
+/// everything, on a tick that keeps its period whatever the body took, so every await is bounded
+/// and there is no timer bookkeeping to leak.
+#[allow(clippy::too_many_arguments)]
 async fn service_loop(
     handle: ServerHandle,
     nodes: Arc<SimpleNodeManager>,
@@ -707,6 +745,7 @@ async fn service_loop(
     ns: u16,
     requests: Receiver<Request>,
     shutdown: tokio::sync::oneshot::Receiver<()>,
+    status: Arc<std::sync::Mutex<OpcStatus>>,
 ) {
     let mut rng = Pcg32::from_entropy(0xA1);
     let start = tokio::time::Instant::now();
@@ -717,32 +756,32 @@ async fn service_loop(
         .iter()
         .map(|t| t.randomize.as_ref().map(|r| start + Duration::from_millis(r.interval_ms)))
         .collect();
-    // What each tag last held of its own type, so a value of another type a client wrote (the
-    // stack takes any scalar) is put back before anything reads it as a value.
-    let mut last_good: Vec<Option<Variant>> = cfg.tags.iter().map(|t| read_node(&nodes, &node(t.id.trim()))).collect();
     // What each watched tag held at the last tick, so a reaction is edge-triggered.
     let mut last_seen: Vec<Option<Variant>> = reactions.iter().map(|r| read_node(&nodes, &node(&r.watched))).collect();
     // Steps scheduled: when, which node, what value.
     let mut pending: Vec<(tokio::time::Instant, NodeId, Variant)> = Vec::new();
-    let mut status = OpcStatus::default();
     let mut shutdown = shutdown;
     let set = |id: &NodeId, value: Variant| {
         let _ = nodes.set_value(handle.subscriptions(), id, None, DataValue::new_now(value));
     };
+    let mut interval = tokio::time::interval(TICK);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
             _ = &mut shutdown => break,
-            _ = tokio::time::sleep(TICK) => {
+            _ = interval.tick() => {
                 while let Ok(req) = requests.try_recv() {
                     match req {
                         Request::Set(id, value) => {
                             // A plant-side set of the wrong type is a mistake of the bench's
-                            // caller: counted and dropped, like a client's.
+                            // caller: counted and dropped, like a client's is refused.
                             match cfg.tags.iter().find(|t| t.id.trim() == id.trim()) {
                                 Some(t) if !is_of_type(t.ty, &value) => {
-                                    status.type_mismatches += 1;
-                                    status.last_mismatch = Some((t.id.trim().to_string(), format!("{value:?}")));
+                                    if let Ok(mut s) = status.lock() {
+                                        s.type_mismatches += 1;
+                                        s.last_mismatch = Some((t.id.trim().to_string(), format!("{value:?}")));
+                                    }
                                 }
                                 _ => set(&node(&id), value),
                             }
@@ -759,25 +798,8 @@ async fn service_loop(
                             let _ = reply.send(rows);
                         }
                         Request::Status(reply) => {
-                            let _ = reply.send(status.clone());
+                            let _ = reply.send(status.lock().map(|s| s.clone()).unwrap_or_default());
                         }
-                    }
-                }
-                // A tag holding a value of another type: put back, counted. The stack answers a
-                // scalar of the wrong type with Good and stores it; a real controller would have
-                // refused it, so the bench at least undoes it and says so.
-                for (i, tag) in cfg.tags.iter().enumerate() {
-                    let id = node(tag.id.trim());
-                    match read_node(&nodes, &id) {
-                        Some(v) if is_of_type(tag.ty, &v) => last_good[i] = Some(v),
-                        Some(v) => {
-                            status.type_mismatches += 1;
-                            status.last_mismatch = Some((tag.id.trim().to_string(), format!("{v:?}")));
-                            if let Some(good) = &last_good[i] {
-                                set(&id, good.clone());
-                            }
-                        }
-                        None => {}
                     }
                 }
                 let now = tokio::time::Instant::now();
@@ -788,7 +810,9 @@ async fn service_loop(
                         None => current != last_seen[i],
                     };
                     if fired {
-                        status.reactions_fired += 1;
+                        if let Ok(mut s) = status.lock() {
+                            s.reactions_fired += 1;
+                        }
                         for (after, value) in &r.steps {
                             pending.push((now + *after, node(&r.target), value.clone()));
                         }
@@ -812,7 +836,9 @@ async fn service_loop(
                         continue;
                     }
                     set(&node(tag.id.trim()), draw(tag, r, &mut rng));
-                    status.draws += 1;
+                    if let Ok(mut s) = status.lock() {
+                        s.draws += 1;
+                    }
                     due[i] = Some(now + Duration::from_millis(r.interval_ms));
                 }
                 for (i, r) in reactions.iter().enumerate() {

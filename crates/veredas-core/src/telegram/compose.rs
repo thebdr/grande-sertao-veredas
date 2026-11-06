@@ -62,8 +62,8 @@ pub enum ComposeError {
     /// pattern says it carries text.
     #[error("the message has no writing rules: no template and no fields")]
     NoRules,
-    /// Two fields share bytes: the later would overwrite the earlier, which would then read
-    /// back as something else.
+    /// Two fields share bytes, or a field would be written over a placeholder's value: the
+    /// later would overwrite the earlier, which would then read back as something else.
     #[error("`{later}` overlaps `{earlier}` at byte {at}")]
     Overlap { earlier: String, later: String, at: usize },
     #[error("no value for `{0}`")]
@@ -154,16 +154,19 @@ pub fn width(f: &BinaryField) -> usize {
     }
 }
 
-/// Check a field list as both engines need it: a text or hex field with a length, and no two
-/// fields sharing a byte.
-pub fn check_fields(fields: &[BinaryField]) -> Result<(), ComposeError> {
+/// Check a field list as both engines need it: a text or hex field with a length, every field
+/// ending within `max` (the fixed length, else the ceiling), and no two fields sharing a byte.
+pub fn check_fields(fields: &[BinaryField], max: usize) -> Result<(), ComposeError> {
     for (i, f) in fields.iter().enumerate() {
         if matches!(f.ty, FieldType::Ascii | FieldType::Hex) && f.len == 0 {
             return Err(ComposeError::NoLength(f.name.clone()));
         }
-        let end = f.at.saturating_add(width(f));
+        let end = match f.at.checked_add(width(f)) {
+            Some(end) if end <= max => end,
+            _ => return Err(ComposeError::TooLong { len: f.at.saturating_add(width(f)), max }),
+        };
         for e in &fields[..i] {
-            let e_end = e.at.saturating_add(width(e));
+            let e_end = e.at + width(e);
             if f.at < e_end && e.at < end {
                 return Err(ComposeError::Overlap { earlier: e.name.clone(), later: f.name.clone(), at: f.at.max(e.at) });
             }
@@ -180,25 +183,20 @@ impl Compose {
             Some(t) => parse_template(t)?,
             None => Vec::new(),
         };
-        check_fields(&spec.fields)?;
-        // What the template writes whatever its values, and what the fields reach: neither may
-        // exceed a fixed length, or no message could ever be written; and no length exceeds the
-        // ceiling, which a body would be padded up to.
-        if let Some(len) = spec.len {
-            if len > MAX_BODY {
-                return Err(ComposeError::TooLong { len, max: MAX_BODY });
-            }
-            let literal: usize = template.iter().map(|p| if let Part::Text(t) = p { t.len() } else { 0 }).sum();
-            if literal > len {
-                return Err(ComposeError::TooLong { len: literal, max: len });
-            }
-            for f in &spec.fields {
-                let end = f.at.saturating_add(width(f));
-                if end > len {
-                    return Err(ComposeError::TooLong { len: end, max: len });
-                }
-            }
+        // No length exceeds the ceiling, which a body would be padded up to; and what the
+        // template writes whatever its values, and what the fields reach, must fit the fixed
+        // length, else the ceiling, or no message could ever be written.
+        if let Some(len) = spec.len
+            && len > MAX_BODY
+        {
+            return Err(ComposeError::TooLong { len, max: MAX_BODY });
         }
+        let max = spec.len.unwrap_or(MAX_BODY);
+        let literal: usize = template.iter().map(|p| if let Part::Text(t) = p { t.len() } else { 0 }).sum();
+        if literal > max {
+            return Err(ComposeError::TooLong { len: literal, max });
+        }
+        check_fields(&spec.fields, max)?;
         Ok(Compose { template, fields: spec.fields.clone(), len: spec.len, pad: spec.pad })
     }
 
@@ -230,12 +228,17 @@ impl Compose {
     pub fn render(&self, values: &HashMap<String, String>, endian: Endian) -> Result<Vec<u8>, ComposeError> {
         let max = self.len.unwrap_or(MAX_BODY).min(MAX_BODY);
         let mut body: Vec<u8> = Vec::new();
+        // Where each placeholder's value landed, so a field is never written over one: the
+        // value would not read back.
+        let mut written: Vec<(usize, usize, &str)> = Vec::new();
         for part in &self.template {
             match part {
                 Part::Text(t) => body.extend_from_slice(t.as_bytes()),
                 Part::Name(n) => {
                     let v = values.get(n).ok_or_else(|| ComposeError::MissingValue(n.clone()))?;
+                    let start = body.len();
                     body.extend_from_slice(v.as_bytes());
+                    written.push((start, body.len(), n));
                 }
             }
             if body.len() > max {
@@ -251,6 +254,9 @@ impl Compose {
                 Some(end) if end <= max => end,
                 _ => return Err(ComposeError::TooLong { len: field.at.saturating_add(bytes.len()), max }),
             };
+            if let Some((_, _, name)) = written.iter().find(|(s, e, _)| field.at < *e && *s < end) {
+                return Err(ComposeError::Overlap { earlier: name.to_string(), later: field.name.clone(), at: field.at });
+            }
             if body.len() < end {
                 body.resize(end, self.pad);
             }

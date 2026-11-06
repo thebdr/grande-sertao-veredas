@@ -89,9 +89,11 @@ whitespace.
   `{}` or a `{` inside a placeholder is refused when the file loads. A field written over the
   text overwrites its bytes.
 - `payload` (none): a regex over the body as text, read back into its named groups. A message
-  with a payload and neither a template nor a field can be read but never written. A text body
-  padded to `len` is read with its padding, so a pattern anchored at the end does not match it.
-- `repeat` (none): patterns captured repeatedly as `name1`, `name2`...
+  with a payload or a repeat and neither a template nor a field can be read but never written.
+  A text body padded to `len` is read with its padding, so a pattern anchored at the end does
+  not match it.
+- `repeat` (none): patterns captured repeatedly as `name1`, `name2`..., counted from 1; no
+  numbered name may be a payload group's or another repeat's.
 
 **A field** (an entry of `fields`).
 - `name` (required): unique within the message, and never a name the payload's groups or a

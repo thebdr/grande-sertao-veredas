@@ -1697,6 +1697,7 @@ dependencies = [
  "async-opcua-server",
  "async-opcua-types",
  "chrono",
+ "regex",
  "serde",
  "serde_json",
  "thiserror",

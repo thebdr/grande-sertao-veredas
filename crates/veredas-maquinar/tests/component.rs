@@ -191,27 +191,49 @@ fn dep_info_paths(line: &str) -> Vec<String> {
     deps.split_whitespace().map(|p| p.replace(marker, " ")).collect()
 }
 
+/// The crate roots of every target of the package at `manifest_dir`, as cargo lists them
+/// (`src_path`, wherever a `path` put them), canonical.
+fn target_roots(manifest_dir: &Path) -> Vec<PathBuf> {
+    let out = Command::new(env!("CARGO"))
+        .args(["metadata", "--no-deps", "--format-version", "1", "--offline", "--manifest-path"])
+        .arg(manifest_dir.join("Cargo.toml"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let meta: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let manifest = manifest_dir.join("Cargo.toml").canonicalize().unwrap();
+    let package = meta["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| Path::new(p["manifest_path"].as_str().unwrap()).canonicalize().unwrap() == manifest)
+        .unwrap();
+    package["targets"].as_array().unwrap().iter().map(|t| PathBuf::from(t["src_path"].as_str().unwrap()).canonicalize().unwrap()).collect()
+}
+
 /// Every source file rustc read for the package at `manifest_dir`, as cargo's dep-info files
-/// record it once `cargo build --all-targets` has run: each target's crate root, its modules,
-/// and every file an `include_str!`, `include_bytes!`, `include!` or `#[path]` pulled in, from
-/// anywhere, in whatever form rustc accepted (a raw string, a `concat!`, an `env!`, a macro, an
-/// alias, a comment between the macro and its argument). The compiler's own list, never a
-/// reading of the text; a build that fails fails the check. Every dep-info file whose crate
-/// root lies under the package (a stale one from an earlier build included: it can only add
-/// files) contributes the files of it that still exist.
+/// record it once `cargo build --all-targets --all-features` has run: each target's crate root
+/// (wherever a `path` put it), its modules, and every file an `include_str!`, `include_bytes!`,
+/// `include!` or `#[path]` pulled in, from anywhere, in whatever form rustc accepted (a raw
+/// string, a `concat!`, an `env!`, a macro, an alias, a comment between the macro and its
+/// argument). The compiler's own list, never a reading of the text; a build that fails fails
+/// the check. Every dep-info whose crate root is one of the package's targets (a stale one from
+/// an earlier build included: it can only add files) contributes the files of it that still
+/// exist. What the build saw is what this platform's `cfg` compiled in: a file pulled in only
+/// on another platform is seen by that platform's run of this check.
 fn files_rustc_read(manifest_dir: &Path, target_dir: &Path, package: &str) -> Vec<PathBuf> {
     let out = Command::new(env!("CARGO"))
-        .args(["build", "--all-targets", "--offline", "-p", package, "--target-dir"])
+        .args(["build", "--all-targets", "--all-features", "--offline", "-p", package, "--target-dir"])
         .arg(target_dir)
         .current_dir(manifest_dir)
         .output()
         .unwrap();
     assert!(out.status.success(), "cargo build --all-targets: {}", String::from_utf8_lossy(&out.stderr));
     let root = workspace_root(manifest_dir);
-    let package_dir = manifest_dir.canonicalize().unwrap();
+    let roots = target_roots(manifest_dir);
     let deps = target_dir.join("debug").join("deps");
     let mut files: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
-    let mut dep_infos = 0;
+    let mut seen_roots: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
     for entry in std::fs::read_dir(&deps).unwrap() {
         let path = entry.unwrap().path();
         if path.extension().and_then(|e| e.to_str()) != Some("d") {
@@ -226,18 +248,34 @@ fn files_rustc_read(manifest_dir: &Path, target_dir: &Path, package: &str) -> Ve
         };
         let Some(crate_root) = listed.first().map(|p| resolve(p)) else { continue };
         let Ok(crate_root) = crate_root.canonicalize() else { continue };
-        if !crate_root.starts_with(&package_dir) {
+        if !roots.contains(&crate_root) {
             continue;
         }
-        dep_infos += 1;
+        seen_roots.insert(crate_root);
         for p in listed {
             if let Ok(canonical) = resolve(&p).canonicalize() {
                 files.insert(canonical);
             }
         }
     }
-    assert!(dep_infos > 0, "no dep-info of {package} under {}", deps.display());
+    for r in &roots {
+        assert!(seen_roots.contains(r), "no dep-info for the target at {}: the build did not compile it", r.display());
+    }
     files.into_iter().collect()
+}
+
+/// The crate has no doctest: a doctest is compiled by rustdoc, outside any dep-info, so a file
+/// it pulled in would escape the check. Asked of `cargo test --doc`, which reports what it ran.
+fn no_doctests(manifest_dir: &Path, target_dir: &Path, package: &str) {
+    let out = Command::new(env!("CARGO"))
+        .args(["test", "--doc", "--all-features", "--offline", "-p", package, "--target-dir"])
+        .arg(target_dir)
+        .current_dir(manifest_dir)
+        .output()
+        .unwrap();
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "cargo test --doc: {text}");
+    assert!(text.contains("running 0 tests"), "the crate has doctests, which this check cannot read: {text}");
 }
 
 /// Where this test's own build put its artifacts: the target dir the nested build reuses, so
@@ -309,6 +347,7 @@ fn vendor_mentions(text: &str) -> Vec<String> {
 #[test]
 fn the_bench_names_no_vendor_and_cites_no_vendor_document() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    no_doctests(&root, &own_target_dir(), BINARY);
     let files = all_crate_files(&root, &own_target_dir(), BINARY);
     assert!(files.iter().any(|f| f.ends_with("Cargo.toml")), "{files:?}");
     assert!(files.iter().any(|f| f.ends_with("lib.rs")) && files.iter().any(|f| f.ends_with("component.rs")), "{files:?}");
@@ -377,7 +416,10 @@ fn every_file_rustc_pulls_in_from_outside_the_crate_folder_is_read_too() {
          pub const T: &str = INCSTR! /* a comment */ (\"../../outside/t.txt\");\n\
          use std::INCSTRALIAS as grab;\n\
          pub const U: &str = grab!(\"../../outside/u.txt\");\n\
-         #[cfg(any())]\npub const V: &str = INCSTR!(\"../../outside/v.txt\");\n",
+         #[cfg(any())]\npub const V: &str = INCSTR!(\"../../outside/v.txt\");\n\
+         #[cfg(feature = \"extra\")]\npub const W: &str = INCSTR!(\"../../outside/w.txt\");\n\
+         #[cfg(windows)]\npub const Y: &str = INCSTR!(\"../../outside/y-windows.txt\");\n\
+         #[cfg(unix)]\npub const Y: &str = INCSTR!(\"../../outside/y-unix.txt\");\n",
         g = abs("g.txt"),
         h = abs("h.txt"),
         m_dir = outside.to_string_lossy().replace('\\', "/"),
@@ -389,8 +431,12 @@ fn every_file_rustc_pulls_in_from_outside_the_crate_folder_is_read_too() {
     let terms = [rev("tleBineG"), rev("MAOOTXTR"), rev("lortnoC troS retsaM"), rev("rodnev/scod"), rev("ecafretni tsoh"), rev("XTROTMAO")];
     let term = |i: usize| format!("x {} y", terms[i % terms.len()]);
     let mut files: Vec<(String, String)> = vec![
-        ("crate/Cargo.toml".into(), "[workspace]\n\n[package]\nname = \"x\"\nversion = \"2.0.0\"\nedition = \"2024\"\n".into()),
+        (
+            "crate/Cargo.toml".into(),
+            "[workspace]\n\n[package]\nname = \"x\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[features]\nextra = []\n\n[[test]]\nname = \"elsewhere\"\npath = \"../outside/elsewhere.rs\"\n".into(),
+        ),
         ("crate/src/lib.rs".into(), lib),
+        ("outside/elsewhere.rs".into(), format!("// {}\n#[test]\nfn t() {{}}\n", term(3))),
         ("crate/src/inner.rs".into(), "// an announcement\n".into()),
         ("outside/e.rs".into(), "// an outcome\n// and a nested one\npub const F: &str = INCSTR!(\"f.txt\");\n".replace("INCSTR!", &inc_str)),
         ("outside/f.txt".into(), format!("{}3.1", char::from_u32(0xA7).unwrap())),
@@ -404,8 +450,13 @@ fn every_file_rustc_pulls_in_from_outside_the_crate_folder_is_read_too() {
         files.push((format!("outside/{name}"), text));
     }
     // The file `cfg(any())` leaves out holds a term too: rustc never reads it, so it is not
-    // the crate's.
+    // the crate's. A file behind a feature that is off by default is read (every feature is
+    // on); of the two platform files, this platform's is read and the other's is not: a file
+    // pulled in only on another platform is that platform's run's to see.
     files.push(("outside/v.txt".into(), term(2)));
+    files.push(("outside/w.txt".into(), term(4)));
+    files.push(("outside/y-windows.txt".into(), term(5)));
+    files.push(("outside/y-unix.txt".into(), term(0)));
     for (path, text) in &files {
         let p = dir.join(path);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -415,13 +466,15 @@ fn every_file_rustc_pulls_in_from_outside_the_crate_folder_is_read_too() {
     let target_dir = dir.join("target");
     let read = files_rustc_read(&manifest_dir, &target_dir, "x");
     let names: Vec<String> = read.iter().map(|f| f.file_name().unwrap().to_string_lossy().to_string()).collect();
-    let mut expected: Vec<String> = vec!["lib.rs".into(), "e.rs".into(), "f.txt".into(), "root.rs".into(), "x.rs".into(), "x.txt".into()];
+    let (here, elsewhere) = if cfg!(windows) { ("y-windows.txt", "y-unix.txt") } else { ("y-unix.txt", "y-windows.txt") };
+    let mut expected: Vec<String> = vec!["lib.rs".into(), "e.rs".into(), "f.txt".into(), "root.rs".into(), "x.rs".into(), "x.txt".into(), "elsewhere.rs".into(), "w.txt".into(), here.into()];
     expected.extend(named.iter().map(|n| n.to_string()));
     for e in &expected {
         assert!(names.contains(e), "{e} missing from what rustc read: {names:?}");
     }
     assert!(!names.contains(&"inner.rs".to_string()), "a module never declared is not read: {names:?}");
     assert!(!names.contains(&"v.txt".to_string()), "a cfg'd-out include is not read: {names:?}");
+    assert!(!names.contains(&elsewhere.to_string()), "another platform's file is not read here: {names:?}");
     // And through the whole reader: every term found, each file reported once.
     let all = all_crate_files(&manifest_dir, &target_dir, "x");
     let found: Vec<String> = all
@@ -432,7 +485,7 @@ fn every_file_rustc_pulls_in_from_outside_the_crate_folder_is_read_too() {
         })
         .collect();
     let mut reported: Vec<String> = named.iter().map(|n| n.to_string()).collect();
-    reported.extend(["f.txt".to_string(), "x.rs".to_string(), "x.txt".to_string()]);
+    reported.extend(["f.txt".to_string(), "x.rs".to_string(), "x.txt".to_string(), "elsewhere.rs".to_string(), "w.txt".to_string(), here.to_string()]);
     assert_eq!(found.len(), reported.len(), "{found:?}");
     for file in reported {
         assert!(found.iter().any(|h| h.starts_with(&format!("{file}: "))), "{file} not reported: {found:?}");

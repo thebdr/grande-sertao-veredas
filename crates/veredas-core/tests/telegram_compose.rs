@@ -204,9 +204,15 @@ fn the_body_is_padded_to_its_length_and_refused_beyond_it() {
     let c = compose(&spec);
     let body = c.render(&values(&[("n", "1")]), Endian::Little).unwrap();
     assert_eq!(body, [b'A', b'B', 0x20, 0x20, 1, 0, 0x20, 0x20], "the gap and the padding take the pad byte");
-    // A field over the text overwrites it.
+    // A field over the literal text overwrites it; over a placeholder's value it is refused,
+    // since that value would not read back.
     let c = compose(&ComposeSpec { template: Some("ABCD".into()), fields: vec![field("n", 1, 0, FieldType::U8)], len: None, pad: 0 });
     assert_eq!(c.render(&values(&[("n", "0")]), Endian::Little).unwrap(), [b'A', 0, b'C', b'D']);
+    let c = compose(&ComposeSpec { template: Some("{a}".into()), fields: vec![field("b", 0, 0, FieldType::U8)], len: None, pad: 0 });
+    assert_eq!(c.render(&values(&[("a", "Z"), ("b", "65")]), Endian::Little), Err(ComposeError::Overlap { earlier: "a".into(), later: "b".into(), at: 0 }));
+    let c = compose(&ComposeSpec { template: Some("X={a};".into()), fields: vec![field("b", 3, 0, FieldType::U16)], len: None, pad: 0 });
+    assert_eq!(c.render(&values(&[("a", "12"), ("b", "7")]), Endian::Little), Err(ComposeError::Overlap { earlier: "a".into(), later: "b".into(), at: 3 }));
+    assert_eq!(c.render(&values(&[("a", "1"), ("b", "7")]), Endian::Little).unwrap(), [b'X', b'=', b'1', 7, 0], "a shorter value leaves the field clear");
     // Over the length by what the values bring: refused whole, never truncated.
     let c = compose(&ComposeSpec { template: Some("{a}{b}".into()), len: Some(8), ..Default::default() });
     assert_eq!(c.render(&values(&[("a", "ABCDE"), ("b", "FGHI")]), Endian::Little), Err(ComposeError::TooLong { len: 9, max: 8 }));
@@ -225,13 +231,18 @@ fn the_body_is_padded_to_its_length_and_refused_beyond_it() {
 #[test]
 fn an_offset_past_the_ceiling_is_refused_not_allocated() {
     assert_eq!(MAX_BODY, 16 * 1024 * 1024);
-    let at = |at: usize| {
-        let c = compose(&ComposeSpec { fields: vec![field("n", at, 0, FieldType::U8)], ..Default::default() });
-        c.render(&values(&[("n", "1")]), Endian::Little)
-    };
-    assert_eq!(at(MAX_BODY - 1).map(|b| b.len()), Ok(MAX_BODY), "the last byte of the largest body");
-    assert_eq!(at(MAX_BODY), Err(ComposeError::TooLong { len: MAX_BODY + 1, max: MAX_BODY }));
-    assert_eq!(at(usize::MAX), Err(ComposeError::TooLong { len: usize::MAX, max: MAX_BODY }), "no wrap");
+    // A field past the ceiling is refused where the spec compiles, with or without a length;
+    // one at its last byte writes a body of exactly the ceiling.
+    let spec_at = |at: usize| Compose::new(&ComposeSpec { fields: vec![field("n", at, 0, FieldType::U8)], ..Default::default() });
+    assert_eq!(spec_at(MAX_BODY).err(), Some(ComposeError::TooLong { len: MAX_BODY + 1, max: MAX_BODY }));
+    assert_eq!(spec_at(usize::MAX).err(), Some(ComposeError::TooLong { len: usize::MAX, max: MAX_BODY }), "no wrap");
+    assert_eq!(spec_at(MAX_BODY - 1).unwrap().render(&values(&[("n", "1")]), Endian::Little).map(|b| b.len()), Ok(MAX_BODY), "the last byte of the largest body");
+    // Two fields at the top of the address space are not read as apart by a wrapped sum.
+    let top = Compose::new(&ComposeSpec { fields: vec![field("a", usize::MAX - 1, 4, FieldType::Ascii), field("b", usize::MAX, 0, FieldType::U8)], ..Default::default() });
+    assert_eq!(top.err(), Some(ComposeError::TooLong { len: usize::MAX, max: MAX_BODY }));
+    // A template of literal text past the ceiling, with no length, refused at compile.
+    let long_literal = "x".repeat(MAX_BODY + 1);
+    assert_eq!(Compose::new(&ComposeSpec { template: Some(long_literal), ..Default::default() }).err(), Some(ComposeError::TooLong { len: MAX_BODY + 1, max: MAX_BODY }));
     // A declared length over the ceiling is refused where the spec compiles: a body would be
     // padded up to it.
     assert_eq!(Compose::new(&ComposeSpec { len: Some(MAX_BODY + 1), ..Default::default() }).err(), Some(ComposeError::TooLong { len: MAX_BODY + 1, max: MAX_BODY }));

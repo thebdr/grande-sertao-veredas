@@ -132,10 +132,11 @@ impl Message {
         self.capture.extract(body, endian)
     }
 
-    /// Write a body from named values. A message that only reads text (a payload pattern, no
-    /// template and no fields) cannot be written: its values would be dropped into an empty body.
+    /// Write a body from named values. A message that only reads (a payload pattern or a repeat,
+    /// no template and no fields) cannot be written: its values would be dropped into an empty
+    /// body.
     pub fn write(&self, values: &HashMap<String, String>, endian: Endian) -> Result<Vec<u8>, ComposeError> {
-        if self.capture_spec.payload.is_some() && !self.compose.writes() {
+        if (self.capture_spec.payload.is_some() || !self.capture_spec.repeat.is_empty()) && !self.compose.writes() {
             return Err(ComposeError::NoRules);
         }
         self.compose.render(values, endian)
@@ -187,6 +188,11 @@ fn invalid(msg: impl Into<String>) -> CatalogError {
     CatalogError::Invalid(msg.into())
 }
 
+/// The names a repeat reads: `name1` to `name<max>`.
+fn numbered(r: &str, max: usize) -> Vec<String> {
+    (1..=max).map(|n| format!("{r}{n}")).collect()
+}
+
 /// Read and validate a catalog file.
 pub fn load(text: &str) -> Result<Catalog, CatalogError> {
     let header: Header = toml::from_str(text).map_err(|e| CatalogError::NotToml(e.to_string()))?;
@@ -231,22 +237,32 @@ pub fn load(text: &str) -> Result<Catalog, CatalogError> {
         if !ids.insert(m.id) {
             return Err(invalid(format!("{place}: two messages have the id {}", m.id)));
         }
-        let mut repeat_names: Vec<(String, usize)> = Vec::new();
-        for (j, r) in m.repeat.iter().enumerate() {
-            exact(&format!("{place}.repeat[{j}]"), "the repeat", &r.name)?;
-            if r.max == 0 {
-                return Err(invalid(format!("{place}.repeat[{j}] (`{}`): max is 0", r.name)));
-            }
-            if repeat_names.iter().any(|(n, _)| *n == r.name) {
-                return Err(invalid(format!("{place}: two repeats are named `{}`", r.name)));
-            }
-            repeat_names.push((r.name.clone(), r.max));
-        }
-        // The names a payload pattern reads, to keep a field from shadowing one.
+        // The names a payload pattern reads, and the numbered names each repeat reads: no two
+        // readers may write one name, or one would silently overwrite the other.
         let groups: Vec<String> = match &m.payload {
             Some(p) => regex::Regex::new(p).map(|re| re.capture_names().flatten().map(String::from).collect()).unwrap_or_default(),
             None => Vec::new(),
         };
+        let mut repeat_names: Vec<(String, usize)> = Vec::new();
+        for (j, r) in m.repeat.iter().enumerate() {
+            let where_ = format!("{place}.repeat[{j}]");
+            exact(&where_, "the repeat", &r.name)?;
+            if r.max == 0 {
+                return Err(invalid(format!("{where_} (`{}`): max is 0", r.name)));
+            }
+            if repeat_names.iter().any(|(n, _)| *n == r.name) {
+                return Err(invalid(format!("{place}: two repeats are named `{}`", r.name)));
+            }
+            for name in numbered(&r.name, r.max) {
+                if groups.contains(&name) {
+                    return Err(invalid(format!("{where_} (`{}`): the payload pattern reads a group named `{name}`", r.name)));
+                }
+                if let Some((other, _)) = repeat_names.iter().find(|(o, max)| numbered(o, *max).contains(&name)) {
+                    return Err(invalid(format!("{where_} (`{}`): the repeat `{other}` reads `{name}` too", r.name)));
+                }
+            }
+            repeat_names.push((r.name.clone(), r.max));
+        }
         let mut field_names = HashSet::new();
         for f in &m.fields {
             exact(&place, "a field", &f.name)?;
@@ -256,12 +272,8 @@ pub fn load(text: &str) -> Result<Catalog, CatalogError> {
             if groups.contains(&f.name) {
                 return Err(invalid(format!("{place}.{}: the payload pattern reads a group of that name", f.name)));
             }
-            for (r, max) in &repeat_names {
-                if let Some(n) = f.name.strip_prefix(r.as_str())
-                    && n.parse::<usize>().is_ok_and(|n| (1..=*max).contains(&n))
-                {
-                    return Err(invalid(format!("{place}.{}: the repeat `{r}` reads a field of that name", f.name)));
-                }
+            if let Some((r, _)) = repeat_names.iter().find(|(r, max)| numbered(r, *max).contains(&f.name)) {
+                return Err(invalid(format!("{place}.{}: the repeat `{r}` reads a field of that name", f.name)));
             }
             let end = f.at.checked_add(width(f)).ok_or_else(|| invalid(format!("{place}.{}: the offset is beyond any body", f.name)))?;
             if let Some(len) = m.len

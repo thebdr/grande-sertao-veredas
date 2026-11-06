@@ -18,6 +18,8 @@ async-opcua-server = { workspace = true }
 async-opcua-types = { workspace = true }
 # Timestamps in log lines and file names are chrono formats the operator types.
 chrono = { workspace = true }
+# The controller's decision rules match a field against a pattern.
+regex = { workspace = true }
 # Every bench file is TOML, read by serde.
 serde = { workspace = true }
 thiserror = { workspace = true }

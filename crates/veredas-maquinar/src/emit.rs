@@ -509,9 +509,6 @@ pub struct Writer {
     rng: Pcg32,
     rotor: Rotor,
     open: Option<(String, std::fs::File)>,
-    /// The name this run last opened and so owns: the one file it may reopen and append to
-    /// (after a write failed and closed it). Any other name is checked for existence first.
-    claimed: Option<String>,
     max_skips: u32,
     status: EmitterStatus,
 }
@@ -528,7 +525,6 @@ impl Writer {
             rng,
             rotor: Rotor::new(1),
             open: None,
-            claimed: None,
             max_skips: MAX_SKIPS,
             status: EmitterStatus::default(),
         }
@@ -559,57 +555,44 @@ impl Writer {
             self.open = None;
         }
         if self.open.as_ref().map(|(n, _)| n != &name).unwrap_or(true) {
-            let claimed = self.claimed.as_deref() == Some(name.as_str());
-            if claimed {
-                // The one file this run opened itself: reopened and appended to.
-                match open_file(&self.out_dir, &name, self.cfg.encoding, false) {
-                    Ok(f) => self.open = Some((name.clone(), f)),
+            // No file open under this name: one is created new, never opened by name. Whether
+            // this run wrote the name before a day change, an earlier run left it, a folder
+            // that was away came back with it, another writer took it this very instant, or
+            // this run's own file was lost after a failed write, a file that exists is not this
+            // run's to append to: the name is skipped. The creation and the claim are one step,
+            // and nothing is written when no name is free.
+            let mut skips = 0;
+            let file = loop {
+                match open_file(&self.out_dir, &name, self.cfg.encoding) {
+                    Ok(f) => break f,
+                    Err(EmitError::Io { message, .. }) if message.starts_with(EXISTS) => {
+                        if skips >= self.max_skips {
+                            self.open = None;
+                            self.status.current_file = None;
+                            self.status.lines_in_file = 0;
+                            self.status.last_error = Some(EmitError::NoFreeName { tried: skips + 1 });
+                            return;
+                        }
+                        name = match self.rotor.skip(&self.cfg.file, now) {
+                            Ok(n) => n,
+                            Err(e) => {
+                                self.status.last_error = Some(e.into());
+                                return;
+                            }
+                        };
+                        skips += 1;
+                    }
                     Err(e) => {
                         self.open = None;
                         self.status.last_error = Some(e);
                         return;
                     }
                 }
-            } else {
-                // A name this run has not opened: never append to a file that already exists,
-                // whether this run wrote it before a day change, an earlier run left it, a
-                // folder that was away came back with it, or another writer took it this very
-                // instant. The file is created new, so the check and the claim are one step; a
-                // name that exists is skipped, and nothing is written when no name is free.
-                let mut skips = 0;
-                let file = loop {
-                    match open_file(&self.out_dir, &name, self.cfg.encoding, true) {
-                        Ok(f) => break f,
-                        Err(EmitError::Io { message, .. }) if message.starts_with(EXISTS) => {
-                            if skips >= self.max_skips {
-                                self.open = None;
-                                self.status.current_file = None;
-                                self.status.lines_in_file = 0;
-                                self.status.last_error = Some(EmitError::NoFreeName { tried: skips + 1 });
-                                return;
-                            }
-                            name = match self.rotor.skip(&self.cfg.file, now) {
-                                Ok(n) => n,
-                                Err(e) => {
-                                    self.status.last_error = Some(e.into());
-                                    return;
-                                }
-                            };
-                            skips += 1;
-                        }
-                        Err(e) => {
-                            self.open = None;
-                            self.status.last_error = Some(e);
-                            return;
-                        }
-                    }
-                };
-                self.open = Some((name.clone(), file));
-                self.claimed = Some(name.clone());
-                self.status.current_file = Some(name);
-                self.status.lines_in_file = 0;
-                self.status.last_error = None;
-            }
+            };
+            self.open = Some((name.clone(), file));
+            self.status.current_file = Some(name);
+            self.status.lines_in_file = 0;
+            self.status.last_error = None;
         }
         if let Some((name, file)) = self.open.as_mut() {
             let values = draw_values(&self.cfg.values, &mut self.rng);
@@ -622,13 +605,23 @@ impl Writer {
                     self.status.last_error = None;
                 }
                 Err(e) => {
-                    // Drop the handle so the next pass reopens: a share that came back just
-                    // resumes.
+                    // The file is left: the next line takes a fresh name, so a file that was
+                    // lost, replaced or taken by another writer meanwhile is never appended to.
                     let path = self.out_dir.join(name.as_str());
-                    self.open = None;
+                    self.release();
                     self.status.last_error = Some(EmitError::io("writing", &path, &e));
                 }
             }
+        }
+    }
+
+    /// Leave the current file: the next line is written to a fresh name, the index moved on. What
+    /// a failed write does, and what a bench may ask for to rotate on demand.
+    pub fn release(&mut self) {
+        if self.open.take().is_some() {
+            // The rotor keeps naming this file until a count or a day moves it on; the next
+            // name must be a new one.
+            let _ = self.rotor.skip(&self.cfg.file, &Local::now());
         }
     }
 }
@@ -654,27 +647,22 @@ fn run(cfg: EmitterConfig, out_dir: PathBuf, stop: Arc<AtomicBool>, status: Arc<
 /// How an open of a file that must not exist yet reports that it does.
 const EXISTS: &str = "already exists: ";
 
-/// Open a file to append to. With `fresh` the file must not exist yet: it is created new, so two
-/// writers racing for one name cannot both take it, and one that exists is reported with
-/// [`EXISTS`] first in the message.
-fn open_file(dir: &Path, name: &str, encoding: Encoding, fresh: bool) -> Result<std::fs::File, EmitError> {
+/// Create a file to append to. It must not exist yet: it is created new, so two writers racing
+/// for one name cannot both take it, and one that exists is reported with [`EXISTS`] first in
+/// the message. A file is never opened by name.
+fn open_file(dir: &Path, name: &str, encoding: Encoding) -> Result<std::fs::File, EmitError> {
     if !dir.as_os_str().is_empty() {
         std::fs::create_dir_all(dir).map_err(|e| EmitError::io("creating", dir, &e))?;
     }
     let path = dir.join(name);
-    let mut options = std::fs::OpenOptions::new();
-    options.append(true);
-    if fresh {
-        options.create_new(true);
-    }
-    let mut file = options.open(&path).map_err(|e| {
-        if fresh && e.kind() == std::io::ErrorKind::AlreadyExists {
+    let mut file = std::fs::OpenOptions::new().append(true).create_new(true).open(&path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
             EmitError::Io { action: "creating", path: path.clone(), message: format!("{EXISTS}{e}") }
         } else {
-            EmitError::io("opening", &path, &e)
+            EmitError::io("creating", &path, &e)
         }
     })?;
-    if fresh && encoding == Encoding::Utf16le {
+    if encoding == Encoding::Utf16le {
         // A UTF-16 plant file carries a byte-order mark; a reader sniffs it.
         file.write_all(&[0xFF, 0xFE]).map_err(|e| EmitError::io("writing the BOM to", &path, &e))?;
     }
