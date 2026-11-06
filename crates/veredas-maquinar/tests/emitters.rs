@@ -529,6 +529,55 @@ fn one_clock_decides_the_file_and_stamps_the_line_across_midnight() {
 }
 
 #[test]
+fn a_folder_that_comes_back_with_an_earlier_run_s_file_is_not_appended_to() {
+    // The open failed (the share was away); the rotor had already moved on. When the folder
+    // returns holding a file of that name from an earlier run, the writer must not take it.
+    let dir = Dir::new("comeback");
+    let blocker = dir.path().join("blocked");
+    std::fs::write(&blocker, b"i am a file").unwrap();
+    let mut writer = Writer::new(cfg("x{n}.log", 0, 0), blocker.clone(), 1);
+    writer.write_at(&at(2026, 7, 28, 9, 0));
+    assert!(matches!(writer.status().last_error, Some(EmitError::Io { action: "creating", .. })), "{:?}", writer.status());
+    std::fs::remove_file(&blocker).unwrap();
+    std::fs::create_dir_all(&blocker).unwrap();
+    std::fs::write(blocker.join("x1.log"), b"EARLIER RUN\r\n").unwrap();
+    writer.write_at(&at(2026, 7, 28, 9, 0));
+    assert_eq!(writer.status().last_error, None);
+    assert_eq!(writer.status().current_file.as_deref(), Some("x2.log"));
+    assert_eq!(std::fs::read(blocker.join("x1.log")).unwrap(), b"EARLIER RUN\r\n", "untouched");
+    assert_eq!(std::fs::read_to_string(blocker.join("x2.log")).unwrap().lines().count(), 1);
+    // The file this run opened is its own: a write that fails closes it, and the next line
+    // reopens and appends to it rather than skipping to a third name.
+    writer.write_at(&at(2026, 7, 28, 9, 1));
+    assert_eq!(writer.status().current_file.as_deref(), Some("x2.log"));
+    assert_eq!(std::fs::read_to_string(blocker.join("x2.log")).unwrap().lines().count(), 2);
+}
+
+#[test]
+fn when_every_name_exists_nothing_is_written_and_the_status_says_so() {
+    let dir = Dir::new("nofree");
+    for i in 1..=4 {
+        std::fs::write(dir.path().join(format!("r{i}.log")), b"OLD\r\n").unwrap();
+    }
+    let mut writer = Writer::new(cfg("r{n}.log", 0, 0), dir.path().to_path_buf(), 1);
+    writer.set_max_skips(3);
+    writer.write_at(&at(2026, 7, 28, 9, 0));
+    assert_eq!(writer.status().last_error, Some(EmitError::NoFreeName { tried: 4 }));
+    assert_eq!(writer.status().total_lines, 0);
+    assert_eq!(writer.status().current_file, None);
+    for i in 1..=4 {
+        assert_eq!(std::fs::read(dir.path().join(format!("r{i}.log"))).unwrap(), b"OLD\r\n", "r{i} untouched");
+    }
+    assert_eq!(files_in(dir.path()).len(), 4, "nothing else written");
+    assert_eq!(EmitError::NoFreeName { tried: 4 }.to_string(), "no free file name after 4 names that exist");
+    // With one more name allowed, the fifth is free and taken.
+    writer.set_max_skips(4);
+    writer.write_at(&at(2026, 7, 28, 9, 0));
+    assert_eq!(writer.status().last_error, None);
+    assert_eq!(writer.status().current_file.as_deref(), Some("r5.log"));
+}
+
+#[test]
 fn a_restart_without_rotation_still_starts_a_new_file() {
     // `max_lines` 0 never rotates on count, and still a restart must not append.
     let dir = Dir::new("restart-unlimited");

@@ -410,6 +410,9 @@ pub enum EmitError {
     /// An I/O failure, with what was being done and where.
     #[error("{action} {path}: {message}")]
     Io { action: &'static str, path: PathBuf, message: String },
+    /// Every name tried already exists: nothing is written, since appending is never done.
+    #[error("no free file name after {tried} names that exist")]
+    NoFreeName { tried: u32 },
 }
 
 impl EmitError {
@@ -506,6 +509,10 @@ pub struct Writer {
     rng: Pcg32,
     rotor: Rotor,
     open: Option<(String, std::fs::File)>,
+    /// The name this run last opened and so owns: the one file it may reopen and append to
+    /// (after a write failed and closed it). Any other name is checked for existence first.
+    claimed: Option<String>,
+    max_skips: u32,
     status: EmitterStatus,
 }
 
@@ -515,16 +522,31 @@ impl Writer {
             Some(seed) => Pcg32::new(seed, stream),
             None => Pcg32::from_entropy(stream),
         };
-        Writer { cfg, out_dir, rng, rotor: Rotor::new(1), open: None, status: EmitterStatus::default() }
+        Writer {
+            cfg,
+            out_dir,
+            rng,
+            rotor: Rotor::new(1),
+            open: None,
+            claimed: None,
+            max_skips: MAX_SKIPS,
+            status: EmitterStatus::default(),
+        }
+    }
+
+    /// How many existing names are skipped before the writer gives up ([`MAX_SKIPS`] unless
+    /// said otherwise; a test lowers it).
+    pub fn set_max_skips(&mut self, max: u32) {
+        self.max_skips = max;
     }
 
     pub fn status(&self) -> &EmitterStatus {
         &self.status
     }
 
-    /// Write one line as of `now`: decide the file (never one that already exists, when moving
-    /// to a new one), open it if needed, write and flush. Trouble goes into the status and the
-    /// next call tries again.
+    /// Write one line as of `now`: decide the file (never one that already exists, unless this
+    /// run opened it itself), open it if needed, write and flush. Trouble goes into the status
+    /// and the next call tries again.
     pub fn write_at(&mut self, now: &DateTime<Local>) {
         let (mut name, rotated) = match self.rotor.file_for(&self.cfg.file, now, self.cfg.max_lines) {
             Ok(v) => v,
@@ -535,24 +557,34 @@ impl Writer {
         };
         if rotated {
             self.open = None;
-            // Never append to a file that already exists, whether this run wrote it before a
-            // day change or an earlier run left it: skip past it to a free name.
-            let mut skips = 0;
-            while self.out_dir.join(&name).exists() && skips < MAX_SKIPS {
-                name = match self.rotor.skip(&self.cfg.file, now) {
-                    Ok(n) => n,
-                    Err(e) => {
-                        self.status.last_error = Some(e.into());
-                        return;
-                    }
-                };
-                skips += 1;
-            }
         }
         if self.open.as_ref().map(|(n, _)| n != &name).unwrap_or(true) {
+            if self.claimed.as_deref() != Some(name.as_str()) {
+                // A name this run has not opened: never append to a file that already exists,
+                // whether this run wrote it before a day change, an earlier run left it, or a
+                // folder that was away came back with it. Skip past it to a free name, and
+                // write nothing when none is found.
+                let mut skips = 0;
+                while self.out_dir.join(&name).exists() {
+                    if skips >= self.max_skips {
+                        self.open = None;
+                        self.status.last_error = Some(EmitError::NoFreeName { tried: skips + 1 });
+                        return;
+                    }
+                    name = match self.rotor.skip(&self.cfg.file, now) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            self.status.last_error = Some(e.into());
+                            return;
+                        }
+                    };
+                    skips += 1;
+                }
+            }
             match open_file(&self.out_dir, &name, self.cfg.encoding) {
                 Ok(f) => {
                     self.open = Some((name.clone(), f));
+                    self.claimed = Some(name.clone());
                     self.status.current_file = Some(name);
                     self.status.lines_in_file = 0;
                     self.status.last_error = None;

@@ -25,9 +25,12 @@ configuration and names no device (`docs/questions.md` Q8).
   has one health model.
 - **The TCP telegram layer:** the hardened socket runtime (`Channel`); a framing engine
   (`framing`) that runs whatever layout a versioned channel file describes (`schema`,
-  `docs/channel-schema.md`), with no layout of its own (Q9); and the capture rules
-  engine that reads message fields by configuration. No device's catalog, state words or
-  decision logic: those are the rules a portal channel is configured with (Q8).
+  `docs/channel-schema.md`), with no layout of its own (Q9); the capture rules engine that
+  reads message fields by configuration, and its inverse, the compose engine (`compose`) that
+  writes a body from named fields; and the catalog file (`catalog`, `docs/catalog-schema.md`),
+  a channel's messages by name, id and body rules, read and written by those two engines.
+  No device's catalog, state words or decision logic: those are the rules a portal channel is
+  configured with (Q8), and the bench's controller is driven by the same files.
 - **Seeded randomness:** the deterministic PCG32 (`rng`), for weighted draws and fixtures.
 - **The OPC UA client layer:** the compiled source shape (`PollSpec`), value conversion, the
   mapping of a poll to rows, the address-space browser, the poll worker with its gated writes.
@@ -139,9 +142,16 @@ veredas_core
   types       SourceId, SeriesRef, Value, SeriesType, Sample, Quality, now_unix_ms
   source      SourceHandle, stop_flag, SourceError
   rng         Pcg32
-  telegram    Endian; schema, framing, channel, capture
+  telegram    Endian; schema, framing, channel, capture, compose, catalog
   opc         spec, value, map, browse, worker, error; demo (feature "demo-server")
 ```
+
+Added for the bench (2026-11-06, `docs/maquinar-plan.md` phase 3), designed for portal's
+channels as much as for the bench's: `telegram::compose` (the inverse of capture: a text
+template and binary fields at offsets, the body padded to a length, every write bounded and
+refused rather than truncated) and `telegram::catalog` (the second plain-text file schema after
+the channel file: `veredas-catalog` version 1, each message holding one field list that both
+engines use, so what a channel sends is what the same catalog reads back).
 
 ## Phases of the port
 1. **Foundation and shared types.** The crate at `2.0.0-alpha.1`, `types` and `source` with
@@ -153,7 +163,9 @@ veredas_core
    API assumptions pinned against a real server, run first after a version bump), the browse
    and worker end-to-end tests against the demo plant. One clause per module.
 4. **File schemas with version stamps**, with P-010, when the first plain-text file format
-   lands (portal's project files): the stamp, the reader that migrates or refuses.
+   lands (portal's project files): the stamp, the reader that migrates or refuses. The channel
+   file and the catalog file (phase 3 of the bench) are the first two, each refusing an unknown
+   version; migration waits for portal.
 5. **Logging**, when the first consumer needs one shape for it (Veredas 1's crates here log
    nothing; their workers report through events and status).
 

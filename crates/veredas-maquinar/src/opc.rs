@@ -191,7 +191,9 @@ fn default_interval() -> u64 {
 
 /// What the plant does when a client writes into a tag: a timed sequence of values, on the same
 /// tag or another. With `equals` the reaction fires when the tag's value becomes that value (and
-/// again each time it does); without it, on any change of the value.
+/// again each time it does); without it, on any change of the value. A change is what a client
+/// wrote or the plant side set: the server's own draws and the steps of any reaction are never
+/// one, so a watched tag that is drawn, or set by another reaction's step, fires nothing.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Reaction {
@@ -346,6 +348,18 @@ fn compile(cfg: &OpcConfig) -> Result<Vec<CompiledReaction>, OpcError> {
             }
             if !r.low.is_finite() || !r.high.is_finite() {
                 return Err(bad(format!("{place}.randomize: the range is not finite")));
+            }
+            if r.low > r.high {
+                return Err(bad(format!("{place}.randomize: the range is empty ({} > {})", r.low, r.high)));
+            }
+            if tag.ty == TagType::Int {
+                let (lo, hi) = int_bounds(r);
+                if lo > hi {
+                    return Err(bad(format!("{place}.randomize: no whole number lies in {}..={}", r.low, r.high)));
+                }
+                if lo < i32::MIN as i64 || hi > i32::MAX as i64 {
+                    return Err(bad(format!("{place}.randomize: {}..={} is outside an int", r.low, r.high)));
+                }
             }
             if r.interval_ms == 0 {
                 return Err(bad(format!("{place}.randomize.interval_ms is 0")));
@@ -649,10 +663,19 @@ fn read_node(nodes: &SimpleNodeManager, node: &NodeId) -> Option<Variant> {
     }
 }
 
+/// The whole numbers an int draw may take: from the ceiling of `low` to the floor of `high`.
+fn int_bounds(r: &Randomize) -> (i64, i64) {
+    (r.low.ceil() as i64, r.high.floor() as i64)
+}
+
 fn draw(tag: &TagConfig, r: &Randomize, rng: &mut Pcg32) -> Variant {
     match tag.ty {
         TagType::Float => Variant::Double(rng.uniform(r.low, r.high, r.decimals)),
-        TagType::Int => Variant::Int32(rng.int_in(r.low as i64, r.high as i64).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
+        TagType::Int => {
+            // The bounds were checked to hold a whole number inside an int at validation.
+            let (lo, hi) = int_bounds(r);
+            Variant::Int32(rng.int_in(lo, hi).clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+        }
         TagType::Bool => Variant::Boolean(rng.flip()),
         // Refused by `validate`; left static if reached.
         TagType::Text => Variant::from(tag.value.clone()),

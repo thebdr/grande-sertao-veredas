@@ -322,6 +322,69 @@ async fn a_reaction_answers_a_write_with_a_timed_sequence() {
     server.stop();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_draw_or_another_reaction_s_step_is_not_a_change() {
+    // Only what a client wrote or the plant side set is a change: a watched tag that is drawn
+    // every tick fires nothing, and a step of one reaction into another's watched tag fires
+    // nothing either.
+    let mut drawn = tag("drawn", TagType::Int, Access::Read, "0");
+    drawn.randomize = Some(Randomize { low: 0.0, high: 1000.0, decimals: 0, interval_ms: 20 });
+    let mut cfg = config(vec![
+        drawn,
+        tag("d_out", TagType::Int, Access::Read, "0"),
+        tag("a", TagType::Int, Access::ReadWrite, "0"),
+        tag("b", TagType::Int, Access::Read, "0"),
+        tag("c", TagType::Int, Access::Read, "0"),
+    ]);
+    cfg.reactions = vec![
+        Reaction { on_write: "drawn".into(), equals: None, tag: Some("d_out".into()), then: vec![Step { after_ms: 0, set: "1".into() }] },
+        Reaction { on_write: "a".into(), equals: Some("1".into()), tag: Some("b".into()), then: vec![Step { after_ms: 0, set: "9".into() }] },
+        Reaction { on_write: "b".into(), equals: None, tag: Some("c".into()), then: vec![Step { after_ms: 0, set: "1".into() }] },
+    ];
+    let server = start(&cfg).expect("starts");
+    until("draws", Duration::from_secs(2), || server.status().draws >= 10);
+    assert_eq!(server.get("d_out"), Some(Variant::Int32(0)), "a draw is not a change");
+    server.set("a", Variant::Int32(1));
+    until("b", Duration::from_secs(2), || server.get("b") == Some(Variant::Int32(9)));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(server.get("c"), Some(Variant::Int32(0)), "a step of another reaction is not a change");
+    assert_eq!(server.status().reactions_fired, 1);
+    // A client's write into `b` is one.
+    let (session, _loop) = anonymous(&server.endpoint_url).await;
+    assert!(write(&session, &NodeId::new(server.namespace, "b"), Variant::Int32(2)).await.is_bad(), "b is read-only to a client");
+    server.set("b", Variant::Int32(2));
+    until("c", Duration::from_secs(2), || server.get("c") == Some(Variant::Int32(1)));
+    assert_eq!(server.status().reactions_fired, 2);
+    server.stop();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn int_draws_take_only_the_whole_numbers_inside_the_range() {
+    let mut int = tag("i", TagType::Int, Access::Read, "0");
+    int.randomize = Some(Randomize { low: 3.5, high: 5.5, decimals: 0, interval_ms: 20 });
+    let mut edge = tag("e", TagType::Int, Access::Read, "0");
+    edge.randomize = Some(Randomize { low: -2147483648.0, high: -2147483647.0, decimals: 0, interval_ms: 20 });
+    let server = start(&config(vec![int, edge])).expect("starts");
+    let mut seen = std::collections::BTreeSet::new();
+    let mut edges = std::collections::BTreeSet::new();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if let Some(Variant::Int32(v)) = server.get("i") {
+            seen.insert(v);
+        }
+        if let Some(Variant::Int32(v)) = server.get("e") {
+            edges.insert(v);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    seen.remove(&0);
+    assert!(!seen.is_empty() && seen.iter().all(|v| (4..=5).contains(v)), "3.5..=5.5 holds 4 and 5 only: {seen:?}");
+    assert!(seen.len() == 2, "both drawn in two seconds: {seen:?}");
+    edges.remove(&0);
+    assert!(edges.iter().all(|v| *v == i32::MIN || *v == i32::MIN + 1), "{edges:?}");
+    server.stop();
+}
+
 // ---------------------------------------------------------------------------------------------
 // Through core's own client layer
 // ---------------------------------------------------------------------------------------------
@@ -584,6 +647,30 @@ fn a_bad_configuration_is_refused_by_name_before_anything_starts() {
     let mut wide = tag("w", TagType::Float, Access::Read, "0");
     wide.randomize = Some(Randomize { low: f64::NEG_INFINITY, high: 1.0, decimals: 0, interval_ms: 10 });
     assert_eq!(refused(&ok(vec![wide], vec![])), "opc.tags[0] (`w`).randomize: the range is not finite");
+    let mut empty = tag("f", TagType::Float, Access::Read, "0");
+    empty.randomize = Some(Randomize { low: 24.0, high: 18.0, decimals: 1, interval_ms: 10 });
+    assert_eq!(refused(&ok(vec![empty], vec![])), "opc.tags[0] (`f`).randomize: the range is empty (24 > 18)");
+    let mut empty_int = tag("i", TagType::Int, Access::Read, "0");
+    empty_int.randomize = Some(Randomize { low: 5.0, high: 3.0, decimals: 0, interval_ms: 10 });
+    assert_eq!(refused(&ok(vec![empty_int], vec![])), "opc.tags[0] (`i`).randomize: the range is empty (5 > 3)");
+    let mut no_whole = tag("i", TagType::Int, Access::Read, "0");
+    no_whole.randomize = Some(Randomize { low: 3.2, high: 3.8, decimals: 0, interval_ms: 10 });
+    assert_eq!(refused(&ok(vec![no_whole], vec![])), "opc.tags[0] (`i`).randomize: no whole number lies in 3.2..=3.8");
+    let mut too_big = tag("i", TagType::Int, Access::Read, "0");
+    too_big.randomize = Some(Randomize { low: 3e9, high: 4e9, decimals: 0, interval_ms: 10 });
+    assert_eq!(refused(&ok(vec![too_big], vec![])), "opc.tags[0] (`i`).randomize: 3000000000..=4000000000 is outside an int");
+    let mut too_low = tag("i", TagType::Int, Access::Read, "0");
+    too_low.randomize = Some(Randomize { low: -3e9, high: 0.0, decimals: 0, interval_ms: 10 });
+    assert_eq!(refused(&ok(vec![too_low], vec![])), "opc.tags[0] (`i`).randomize: -3000000000..=0 is outside an int");
+    let mut one_whole = tag("i", TagType::Int, Access::Read, "0");
+    one_whole.randomize = Some(Randomize { low: 2.5, high: 3.5, decimals: 0, interval_ms: 10 });
+    assert!(validate(&ok(vec![one_whole], vec![])).is_ok(), "3 lies in 2.5..=3.5");
+    let mut flip = tag("b", TagType::Bool, Access::Read, "0");
+    flip.randomize = Some(Randomize { low: 0.0, high: 0.0, decimals: 0, interval_ms: 10 });
+    assert!(validate(&ok(vec![flip], vec![])).is_ok(), "a bool's range is unread, but must not be empty");
+    let mut flip_empty = tag("b", TagType::Bool, Access::Read, "0");
+    flip_empty.randomize = Some(Randomize { low: 1.0, high: 0.0, decimals: 0, interval_ms: 10 });
+    assert_eq!(refused(&ok(vec![flip_empty], vec![])), "opc.tags[0] (`b`).randomize: the range is empty (1 > 0)");
     let mut blank = ok(vec![], vec![]);
     blank.bind = " ".into();
     assert_eq!(refused(&blank), "opc.bind is empty");

@@ -12,13 +12,21 @@
 //!   (delimiters, envelope, segment headers and tail as fields with roles), in any byte order.
 //! - [`channel`]: one TCP link held correctly in either role, by the channel file's rules.
 //! - [`capture`]: message bodies read into named fields by a [`capture::CaptureSpec`].
+//! - [`compose`]: message bodies written from named fields by a [`compose::ComposeSpec`], the
+//!   inverse of capture.
+//! - [`catalog`]: the catalog file: a channel's messages by name, id and body rules, read and
+//!   written by the two engines above.
 
 pub mod capture;
+pub mod catalog;
 pub mod channel;
+pub mod compose;
 pub mod framing;
 pub mod schema;
 
+pub use catalog::{Catalog, CatalogError, Message};
 pub use channel::{Channel, ChannelConfig, ChannelEvent, PeerId, Role};
+pub use compose::{Compose, ComposeError, ComposeSpec};
 pub use framing::{DecodeError, Frame, Framing, Segment};
 pub use schema::{ChannelSpec, SchemaError};
 
