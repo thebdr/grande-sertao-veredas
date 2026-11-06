@@ -1,0 +1,24 @@
+{
+  "clause": "C-026",
+  "command": "cargo test -p veredas-maquinar --test opc_server",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-maquinar",
+    "--test",
+    "opc_server"
+  ],
+  "exitCode": 0,
+  "outputSha": "f6b6cceff8b391cf0d61cad94e63062308b131044b9961ee432ca886b74257a6",
+  "outputTail": "test writes_land_in_the_address_space_and_the_access_is_honoured ... ok\ntest stopping_frees_the_port_for_the_next_start ... ok\ntest a_client_reads_the_tags_the_bench_configured ... ok\ntest the_consumer_s_poll_worker_polls_and_writes_through_the_bench ... ok\ntest the_read_cap_and_the_session_cap_are_the_bench_s_knobs ... ok\ntest the_relay_makes_the_link_go_silent_and_delivers_what_it_held_when_thawed ... ok\ntest a_reaction_answers_a_write_with_a_timed_sequence ... ok\ntest randomized_tags_move_and_stay_inside_their_range ... ok\ntest a_configured_user_is_accepted_and_a_wrong_password_refused ... ok\n\ntest result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.33s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.00s\n     Running tests\\opc_server.rs (target\\debug\\deps\\opc_server-fa4bdf419e644cdf.exe)",
+  "ranAt": "2026-11-06T11:41:39.858Z",
+  "headCommit": "867f2c80b21d61544776ab3e3ae75f5b7844f9c4",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/opc_server.rs",
+      "file": "crates/veredas-maquinar/tests/opc_server.rs",
+      "fileSha": "8a03616d9b2be29dd2f764c51adbf568dea83705e5d2fa5864c33b5eeec57922"
+    }
+  ]
+}

@@ -14,15 +14,15 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "91b84262a8981463db1995f5feae95ae9ebc923a518c0ddd7607fb28e306100c",
-  "outputTail": "\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.89s\n\n\nrunning 3 tests\ntest the_bench_names_no_vendor_and_cites_no_vendor_document ... ok\ntest the_bench_is_one_library_and_at_most_one_executable ... ok\ntest the_check_allows_one_named_binary_and_refuses_every_other_executable ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.77s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.56s\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-e24e28763702786a.exe)\n     Running tests\\component.rs (target\\debug\\deps\\component-49280e9b3a6e991e.exe)",
-  "ranAt": "2026-11-06T11:21:10.041Z",
-  "headCommit": "fcf19e5f580af17a687ce1177654e065e766c0e0",
+  "outputSha": "cd7576d16179be9d4f22f01d1727ccfb6acf750fa4d1cbd1ef51ad5c212c9146",
+  "outputTail": "\n\nrunning 5 tests\ntest the_bench_names_no_vendor_and_cites_no_vendor_document ... ok\ntest a_file_the_crate_pulls_in_from_outside_its_folder_is_read_too ... ok\ntest the_bench_is_one_library_and_at_most_one_executable ... ok\ntest the_bench_carries_no_database_no_desktop_and_no_member_but_core ... ok\ntest the_check_allows_one_named_binary_and_refuses_every_other_executable ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.35s\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-e24e28763702786a.exe)\n     Running tests\\component.rs (target\\debug\\deps\\component-49280e9b3a6e991e.exe)",
+  "ranAt": "2026-11-06T11:41:17.049Z",
+  "headCommit": "867f2c80b21d61544776ab3e3ae75f5b7844f9c4",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/component.rs",
       "file": "crates/veredas-maquinar/tests/component.rs",
-      "fileSha": "c21e90ab8fc5cf177c16f26ad9e4a2dd5b2ccc5fd5fb3bdf328d4d2ea6bd4b92"
+      "fileSha": "0eab7bb4d1f3f47d5e89ade55f828f2d82a8ba0b45501313f3f4874760e4563e"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",
