@@ -1,0 +1,24 @@
+{
+  "clause": "C-030",
+  "command": "cargo test -p veredas-maquinar --test controller_rules",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-maquinar",
+    "--test",
+    "controller_rules"
+  ],
+  "exitCode": 0,
+  "outputSha": "704e0e5f83f829d12aa1ae5551641aecbccdea5a04281b577c44293f3becd1ea",
+  "outputTail": "\nrunning 6 tests\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_documented_example_loads_as_described ... ok\ntest every_rule_the_reference_states_about_loading_is_the_reader_s ... ok\ntest the_header_is_refused_four_ways ... ok\ntest every_invalid_file_is_refused_with_its_place_named ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.84s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s\n     Running tests\\controller_rules.rs (target\\debug\\deps\\controller_rules-dee8f03cdfeafeaf.exe)",
+  "ranAt": "2026-11-06T14:08:28.000Z",
+  "headCommit": "613c1e78c42432d24f380833d95a7f2d801c6120",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/controller_rules.rs",
+      "file": "crates/veredas-maquinar/tests/controller_rules.rs",
+      "fileSha": "e8463bce6226370a5d878a04e3656251d6f66332e9c353e114ac66a2236b7b6e"
+    }
+  ]
+}

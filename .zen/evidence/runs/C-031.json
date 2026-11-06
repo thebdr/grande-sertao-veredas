@@ -1,0 +1,24 @@
+{
+  "clause": "C-031",
+  "command": "cargo test -p veredas-maquinar --test controller",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-maquinar",
+    "--test",
+    "controller"
+  ],
+  "exitCode": 0,
+  "outputSha": "b36832c880f478af30154be564f757ab8708b25b1729ffa41fd779043aa0946f",
+  "outputTail": "\nrunning 7 tests\ntest the_machine_announces_awaits_the_answer_and_reports_the_outcome_tick_by_tick ... ok\ntest the_dispositions_requeue_park_or_deliver_and_a_lap_brings_an_item_round_again ... ok\ntest commands_set_registers_the_gate_stops_the_announcements_and_cyclic_messages_read_them ... ok\ntest the_unit_answers_with_a_decision_sticky_by_code_and_avoiding_what_is_blocked ... ok\ntest a_destination_s_state_forces_the_outcome_and_the_bench_s_knobs_set_it ... ok\ntest faults_mark_their_share_of_items_and_the_rate_is_the_interval_s_whatever_the_tick ... ok\ntest the_machine_and_the_unit_converse_over_a_real_socket_and_the_knobs_turn_live ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.48s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s\n     Running tests\\controller.rs (target\\debug\\deps\\controller-3793b96de865017d.exe)",
+  "ranAt": "2026-11-06T14:08:31.975Z",
+  "headCommit": "613c1e78c42432d24f380833d95a7f2d801c6120",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/controller.rs",
+      "file": "crates/veredas-maquinar/tests/controller.rs",
+      "fileSha": "343082f8878834391ae3bd4d6a4461a8949d797be8a3bb5947290508247aafdb"
+    }
+  ]
+}
