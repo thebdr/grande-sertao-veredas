@@ -353,23 +353,34 @@ pub fn spawn(spec: PollSpec, tx: Sender<OpcEvent>, gate: WriteGate) -> Result<Op
     let join = std::thread::Builder::new()
         .name(format!("opc-{}", spec.source_id))
         .spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| SourceError::NotConfigured(format!("OPC worker runtime: {e}")))?;
-            let outcome = rt.block_on(run(spec, tx, &mut jobs_rx, thread_stop, gate));
+            let outcome = run_on_own_runtime(run(spec, tx, &mut jobs_rx, thread_stop, gate))
+                .map_err(|e| SourceError::NotConfigured(format!("OPC worker runtime: {e}")))
+                .and_then(|ended| ended);
             // Nothing still queued was sent: say so, and refuse whatever comes after.
             jobs_rx.close();
             while let Ok(job) = jobs_rx.try_recv() {
                 job.refuse(OpcError::WorkerGone);
             }
-            // Never wait for a blocking task (a host name being resolved): the stop is now.
-            rt.shutdown_background();
             outcome
         })
         .map_err(|e| SourceError::NotConfigured(format!("spawn OPC worker: {e}")))?;
 
     Ok(OpcWorker { handle: SourceHandle::new(source_id, stop, join), writer })
+}
+
+/// Run `task` to its end on a current-thread runtime of its own, then shut the runtime down
+/// WITHOUT waiting for its blocking tasks, and return the task's output.
+///
+/// The OPC stack resolves a host name on the runtime's blocking pool, and a lookup that fails
+/// can take seconds; dropping a runtime joins that pool, so a stop or a drop would wait as long
+/// as the resolver does. Every thread of this layer that runs the stack (the poll worker, the
+/// browser) runs it through here, so the thread ends as soon as its task does, whatever is still
+/// blocking behind it (left to finish on its own). Errs only when the runtime cannot be built.
+pub fn run_on_own_runtime<F: std::future::Future>(task: F) -> std::io::Result<F::Output> {
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    let output = rt.block_on(task);
+    rt.shutdown_background();
+    Ok(output)
 }
 
 /// Build the client. No keypair: the layer speaks SecurityPolicy None, and a sample keypair

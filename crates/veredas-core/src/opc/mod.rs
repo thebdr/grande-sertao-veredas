@@ -33,7 +33,8 @@ pub use map::{DedupState, HEARTBEAT_POLLS, Mapped, RuleRow, map_poll, map_poll_d
 pub use spec::{Auth, BitSpec, PollSpec, RuleSpec, TagSpec, parse_node_id};
 pub use value::{ValueError, bit_field, opc_to_value};
 pub use worker::{
-    ConnState, OpcEvent, OpcHandle, OpcWorker, TagRead, WriteError, WriteGate, retry_delays, spawn, tag_reads,
+    ConnState, OpcEvent, OpcHandle, OpcWorker, TagRead, WriteError, WriteGate, retry_delays, run_on_own_runtime,
+    spawn, tag_reads,
 };
 
 /// One character of a one-line rendering: a control character, or a Unicode line or paragraph

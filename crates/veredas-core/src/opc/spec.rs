@@ -139,7 +139,9 @@ impl PollSpec {
 
     /// A writable tag by the node id text it was configured with (surrounding whitespace
     /// ignored). `None` when the tag is unknown OR not marked writable: the caller cannot tell
-    /// those apart, and should not, since both mean "not something you may write".
+    /// those apart, and should not, since both mean "not something you may write". A write
+    /// flag is always respected: the same text also configured read-only, anywhere, does not
+    /// hide the writable tag.
     pub fn writable_tag(&self, raw: &str) -> Option<&TagSpec> {
         let raw = raw.trim();
         self.rules.iter().flat_map(|r| r.tags.iter()).find(|t| t.writable && t.raw.trim() == raw)

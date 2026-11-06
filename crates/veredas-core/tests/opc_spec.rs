@@ -233,6 +233,28 @@ fn a_tag_configured_in_a_non_standard_spelling_is_found_by_that_text_and_polled_
 }
 
 #[test]
+fn a_write_flag_is_always_respected() {
+    // The operator's rule (2026-11-06): the same text configured read-only in one place and
+    // writable in another is writable, whichever comes first and in whichever rule.
+    for read_only_first in [true, false] {
+        let read_only = rule("plain", vec![tag("ns=1;s=cmd", "cmd_ro", SeriesType::Int, false, vec![])]);
+        let writable = rule("command", vec![tag(" ns=1;s=cmd", "cmd_rw", SeriesType::Float, true, vec![])]);
+        let s = spec(if read_only_first { vec![read_only, writable] } else { vec![writable, read_only] });
+        let found = s.writable_tag("ns=1;s=cmd").map(|t| (t.series.as_str(), t.ty));
+        assert_eq!(found, Some(("cmd_rw", SeriesType::Float)), "read-only first: {read_only_first}");
+    }
+    // Within one rule too.
+    let s = spec(vec![rule(
+        "line",
+        vec![
+            tag("ns=1;s=cmd", "ro", SeriesType::Int, false, vec![]),
+            tag("ns=1;s=cmd", "rw", SeriesType::Int, true, vec![]),
+        ],
+    )]);
+    assert_eq!(s.writable_tag("ns=1;s=cmd").map(|t| t.series.as_str()), Some("rw"));
+}
+
+#[test]
 fn a_tag_configured_with_surrounding_whitespace_still_resolves() {
     let mut t = tag("ns=1;s=cmd", "cmd", SeriesType::Int, true, vec![]);
     t.raw = " ns=1;s=cmd ".into();

@@ -106,8 +106,8 @@ The OPC layer, on the way in (phase 3; each is pinned by the clause's test):
   worker and the browser. Veredas 1 could hang on a peer that accepts TCP and never answers;
 - a stop of the worker, or a drop of the browser, takes a fraction of a second, whatever the
   peer does. Its CloseSession is bounded at 100 ms (250 ms when a failed session is dropped).
-  The runtime is shut down without waiting for a host name still resolving, and an abandoned
-  session's event loop is aborted. Veredas 1 waited 2 s for a silent peer's close and joined
+  Both threads run on `opc::run_on_own_runtime`, which shuts the runtime down without waiting
+  for a host name still resolving, and an abandoned session's event loop is aborted. Veredas 1 waited 2 s for a silent peer's close and joined
   whatever the browser was doing;
 - the browser reads at most 64 pages under one node, counting the first (Veredas 1 read 65), and
   drops a child listed twice wherever it falls;
@@ -187,5 +187,8 @@ Recorded as the port meets them.
 - **A silent link is a relay, not a mock.** `demo::Relay` listens on `127.0.0.2` at the plant's
   port. The client's endpoint match compares port and path, not host, so the session goes
   through it. Frozen, it holds what it reads, which is how a stalled link delivers late.
+- **A test of DNS timing bites only where a failed lookup is slow.** About 1.2 s on Windows; a
+  Linux resolver may answer at once. So the property is pinned apart from DNS: a 3 s blocking task
+  left on `run_on_own_runtime` must not hold its thread.
 - **A read callback blocks a server thread.** The demo plant's slow tag holds one thread for
   `SLOW_READ`, so the tests that read it run the plant on a multi-threaded runtime.

@@ -622,6 +622,27 @@ async fn a_stalled_server_times_a_browse_out_and_a_drop_does_not_wait_for_it() {
     plant.stop().await;
 }
 
+/// The browser's thread runs on `run_on_own_runtime`, which never waits for a blocking task left
+/// on its runtime (a host-name lookup is one). The lookup test below only bites where a failed
+/// lookup is slow (about 1.2 s on Windows; a Linux resolver may answer at once); this one bites
+/// on any machine, with a blocking task that is certainly still running.
+#[test]
+fn a_blocking_task_left_on_the_runtime_does_not_hold_the_thread() {
+    let t0 = Instant::now();
+    let out = veredas_core::opc::run_on_own_runtime(async {
+        let (started, running) = tokio::sync::oneshot::channel();
+        let _lookup = tokio::task::spawn_blocking(move || {
+            let _ = started.send(());
+            std::thread::sleep(Duration::from_secs(3));
+        });
+        running.await.expect("the blocking task runs");
+        "done"
+    })
+    .expect("a runtime");
+    assert_eq!(out, "done");
+    assert!(t0.elapsed() < Duration::from_secs(1), "{:?}", t0.elapsed());
+}
+
 #[test]
 fn dropping_the_browser_while_a_host_name_resolves_returns_at_once() {
     for host in ["veredas-probe-no-such-host-zz", "nohost.invalid"] {

@@ -19,7 +19,7 @@ use opcua_types::{
 use crate::SeriesType;
 use crate::opc::error::{Call, OpcError};
 use crate::opc::spec::{Auth, PollSpec, parse_node_id};
-use crate::opc::worker::{EventLoop, STOP_CLOSE_TIMEOUT, close_quietly, connect};
+use crate::opc::worker::{EventLoop, STOP_CLOSE_TIMEOUT, close_quietly, connect, run_on_own_runtime};
 
 /// How long one browse or attribute call may take before the browser gives up on it.
 pub const BROWSE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -105,16 +105,10 @@ impl Browser {
         let thread = std::thread::Builder::new()
             .name("opc-browse".into())
             .spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-                    Ok(rt) => rt,
-                    Err(e) => {
-                        let _ = thread_events.send(BrowseEvent::Failed(OpcError::Runtime(e.to_string())));
-                        return;
-                    }
-                };
-                rt.block_on(run(spec, jobs_rx, thread_events, thread_stop));
-                // Never wait for a blocking task (a host name being resolved): the drop is now.
-                rt.shutdown_background();
+                let failure = thread_events.clone();
+                if let Err(e) = run_on_own_runtime(run(spec, jobs_rx, thread_events, thread_stop)) {
+                    let _ = failure.send(BrowseEvent::Failed(OpcError::Runtime(e.to_string())));
+                }
             });
         let thread = match thread {
             Ok(t) => Some(t),

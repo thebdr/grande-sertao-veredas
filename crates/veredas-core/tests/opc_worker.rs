@@ -945,6 +945,27 @@ fn a_stop_while_a_host_name_resolves_is_prompt() {
     assert!(t0.elapsed() < Duration::from_millis(500), "{:?}", t0.elapsed());
 }
 
+/// The worker's thread runs on `run_on_own_runtime`, which never waits for a blocking task left
+/// on its runtime (a host-name lookup is one, on the blocking pool). The lookup test above only
+/// bites where a failed lookup is slow (about 1.2 s on Windows; a Linux resolver may answer at
+/// once); this one bites on any machine, with a blocking task that is certainly still running.
+#[test]
+fn a_blocking_task_left_on_the_runtime_does_not_hold_the_thread() {
+    let t0 = Instant::now();
+    let out = veredas_core::opc::run_on_own_runtime(async {
+        let (started, running) = tokio::sync::oneshot::channel();
+        let _lookup = tokio::task::spawn_blocking(move || {
+            let _ = started.send(());
+            std::thread::sleep(Duration::from_secs(3));
+        });
+        running.await.expect("the blocking task runs");
+        7
+    })
+    .expect("a runtime");
+    assert_eq!(out, 7);
+    assert!(t0.elapsed() < Duration::from_secs(1), "{:?}", t0.elapsed());
+}
+
 /// A request still queued when the worker stops was never sent, and is told so.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_request_still_queued_at_a_stop_is_not_sent() {
