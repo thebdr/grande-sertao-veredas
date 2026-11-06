@@ -41,6 +41,9 @@ fn node_ids_parse_in_every_standard_form() {
     assert_eq!(guid.to_string(), "ns=3;g=72962b91-fa75-4ae6-8d28-b404dc7daf63");
     let opaque = parse_node_id("ns=4;b=M/RbKBsRVkePCePcx24oRA==").unwrap();
     assert_eq!(opaque.namespace, 4);
+    assert!(matches!(opaque.identifier, opcua_types::Identifier::ByteString(_)), "{opaque:?}");
+    assert_eq!(opaque.to_string(), "ns=4;b=M/RbKBsRVkePCePcx24oRA==");
+    assert!(matches!(guid.identifier, opcua_types::Identifier::Guid(_)), "{guid:?}");
     // Surrounding whitespace is the operator's, not the id's.
     assert_eq!(parse_node_id("  ns=2;s=a b \t").unwrap(), NodeId::new(2, "a b"));
     // The text form round-trips: what a browser shows is what a tag stores.
