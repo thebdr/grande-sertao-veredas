@@ -9,7 +9,17 @@ description = "The foundation of Veredas 2: the shared types and content-agnosti
 # A library, never an executable (docs/core-plan.md, tests/foundation.rs): no [[bin]], no
 # [[example]]. Depends on no other member, in any table (law L4).
 
+[features]
+# The in-process OPC UA demo plant (opc::demo): test-fixture plumbing, off by default so a component
+# that only polls carries the client half alone. Core's own tests switch it on through the self
+# dev-dependency below (dev-dependencies resolve apart from the library's own: not a cycle).
+demo-server = ["dep:async-opcua-server"]
+
 [dependencies]
+# The OPC UA client layer (opc): the client, its types, and the server behind demo-server.
+async-opcua-client = { workspace = true }
+async-opcua-server = { workspace = true, optional = true }
+async-opcua-types = { workspace = true }
 chrono = { workspace = true }
 # SourceError's pattern variant; the capture rules' patterns.
 regex = { workspace = true }
@@ -24,5 +34,10 @@ toml = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+# Switches the demo plant on for core's own tests (law L4 allows core itself).
+veredas-core = { path = ".", features = ["demo-server"] }
+# tests/opc_capabilities.rs drives the stack directly, to pin what the opc layer assumes of it.
+async-opcua-client = { workspace = true }
+async-opcua-types = { workspace = true }
 # cargo metadata's output (tests/foundation.rs).
 serde_json = { workspace = true }

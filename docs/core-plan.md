@@ -86,6 +86,28 @@ Changed on the way, each recorded in the clause's evidence note:
 - the vendor's name and specification citations removed from what stayed (Q6, Q8): the
   codec's fixed layout became the channel schema's worked example (Q9), pinned by golden frames.
 
+The OPC layer, on the way in (phase 3; each is pinned by the clause's test):
+- typed errors: `OpcError` (naming the service `Call`), `NodeIdError`, `WriteRefused`, `DemoError`;
+- a write or read asked of a worker with no session is answered at once (`NotConnected`).
+  Veredas 1 queued it and fired a command pulse whenever the plant came back;
+- the worker checks the master switch again just before the wire. Veredas 1 checked only in the
+  handle, so a write already queued fired after a disarm;
+- every connection attempt is bounded (`CONNECT_TIMEOUT`, 10 s) and raced against stop, in the
+  worker and the browser. Veredas 1 could hang on a peer that accepts TCP and never answers.
+  Dropping the browser is prompt, and an abandoned session's event loop is aborted;
+- a zero poll interval is refused at spawn (Veredas 1's worker thread panicked in tokio);
+- bits are read at the wire word's own width. Veredas 1 sign-extended, so bit 20 of an Int16 −1
+  read 1, and gave a UInt64 above `i64::MAX` no bits. A 64-bit field with its top bit set is
+  refused rather than wrapped;
+- a bad read of a word polled only for its bits is reported (Veredas 1 reported nothing), and a
+  good status with no value is reported as "no value";
+- the one-line renderings are one line (a control character reads as a space), and the browser's
+  value brief is cut by characters, not bytes;
+- the demo plant caps a Read below its bulk folder, so the worker's chunking is proven rather than
+  assumed. It also has a slow tag, holds its namespace index, and reports why it did not start;
+- comments that named callers, vendors, products or field sites now say what the code means on
+  the wire or in the plant.
+
 ## Module map
 ```
 veredas_core
@@ -93,7 +115,7 @@ veredas_core
   source      SourceHandle, stop_flag, SourceError
   rng         Pcg32
   telegram    Endian; schema, framing, channel, capture
-  opc         spec, value, map, browse, worker; demo (feature "demo-server")
+  opc         spec, value, map, browse, worker, error; demo (feature "demo-server")
 ```
 
 ## Phases of the port
@@ -123,3 +145,15 @@ Recorded as the port meets them.
 - **A rule about what cargo builds is checked by asking cargo.** Re-implementing its target rules
   missed edition 2021's `crate_type` and `autolib = false` (C-007's first refute round);
   `cargo metadata --no-deps` sees them all and builds nothing.
+- **LNK1140 ("limit exceeded for program database") on one test binary** after a link was cut
+  short: the half-written PDB is reused. Delete that test's `.pdb` under `target/debug/deps` and
+  link again. Each OPC test binary carries a PDB of about 200 MB, and `-p veredas-core` and
+  `--workspace` builds hash apart, so phase 3 took the target from 4.6 to about 10 GB.
+- **async-opcua 0.19 reports any service fault as `BadDecodingError: Request returned
+  ServiceFault`.** The server's own status (`BadTooManyOperations` for a Read past its cap) is
+  lost. In a failure text, it means the server refused the whole call.
+- **The demo stack is lax.** It browses an unknown node as Good and empty, and takes a String
+  written into an Int32 tag. A test that needs a refusal constructs the result, or writes a node
+  the plant holds read-only.
+- **A read callback blocks a server thread.** The demo plant's slow tag holds one thread for
+  `SLOW_READ`, so the tests that read it run the plant on a multi-threaded runtime.
