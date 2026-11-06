@@ -161,9 +161,36 @@ fn file_names_carry_the_date_and_the_index_a_family_orders_by() {
     for c in ['<', '>', '"', '\\', '|', '?', '*'] {
         assert!(matches!(file_name_for(&format!("a{c}b"), &now, 1), Err(NameError::InvalidChars(_))), "{c}");
     }
+    // Windows drops a trailing dot or space, so the file on disk would not be the name reported.
+    assert_eq!(file_name_for("%Y{n}.", &now, 1), Err(NameError::BadEnding));
+    assert_eq!(file_name_for("log_%Y%m%d{n}.", &now, 3), Err(NameError::BadEnding));
+    assert_eq!(file_name_for("%Y%t", &now, 1), Err(NameError::InvalidChars("`\t`".into())), "a tab is a control character");
+    // Names the system reserves whatever the extension.
+    assert_eq!(file_name_for("con.txt", &now, 1), Err(NameError::Reserved("con.txt".into())));
+    assert_eq!(file_name_for("NUL", &now, 1), Err(NameError::Reserved("NUL".into())));
+    assert_eq!(file_name_for("Com1.log", &now, 1), Err(NameError::Reserved("Com1.log".into())));
+    assert_eq!(file_name_for("lpt9.%Y", &now, 1), Err(NameError::Reserved("lpt9.2026".into())));
+    assert_eq!(file_name_for("aux_%Y.log", &now, 1).unwrap(), "aux_2026.log", "a longer stem is not reserved");
+    assert_eq!(file_name_for("con{n}.log", &now, 1).unwrap(), "con1.log");
     assert_eq!(NameError::Empty.to_string(), "the file pattern is empty");
     assert_eq!(NameError::BadFormat.to_string(), "the file pattern is not a valid datetime format");
     assert_eq!(NameError::InvalidChars("`:`".into()).to_string(), "a file name cannot contain `:`");
+    assert_eq!(NameError::BadEnding.to_string(), "a file name cannot end with `.` or a space");
+    assert_eq!(NameError::Reserved("NUL".into()).to_string(), "`NUL` is a name the system reserves");
+}
+
+#[test]
+fn a_rotor_skips_to_the_next_index_without_writing() {
+    let now = at(2026, 7, 28, 9, 0);
+    let mut rotor = Rotor::new(1);
+    let (name, _) = rotor.file_for("t{n}.log", &now, 0).unwrap();
+    assert_eq!(name, "t1.log");
+    rotor.note_line();
+    assert_eq!(rotor.skip("t{n}.log", &now).unwrap(), "t2.log");
+    assert_eq!((rotor.idx(), rotor.lines_in_file()), (2, 0));
+    assert_eq!(rotor.skip("t{n}.log", &now).unwrap(), "t3.log");
+    assert_eq!(rotor.skip("%Q", &now), Err(NameError::BadFormat));
+    assert_eq!(MAX_SKIPS, 10_000);
 }
 
 #[test]
@@ -281,6 +308,15 @@ fn the_family_shape_describes_what_the_pattern_writes() {
     let shape = family_shape("%Y{n}%m.log").unwrap();
     assert_eq!(shape.regex, "(?P<date>\\d{4})(?P<idx>\\d+)\\d{2}\\.log");
     assert_eq!(shape.date_format, "%Y");
+    // A literal that is not ASCII stands for itself (an escaped `ç` is no regex); only the
+    // metacharacters are escaped.
+    let shape = family_shape("Medição_%Y%m%d_{n}.log").unwrap();
+    assert_eq!(shape.regex, "Medição_(?P<date>\\d{4}\\d{2}\\d{2})_(?P<idx>\\d+)\\.log");
+    let shape = family_shape("a&b~c#d$e^f[g]h{n}%Y").unwrap();
+    assert_eq!(shape.regex, "a\\&b\\~c\\#d\\$e\\^f\\[g\\]h(?P<idx>\\d+)(?P<date>\\d{4})");
+    // A second `{n}` renders the same number: matched as digits, since a group name is used once.
+    let shape = family_shape("%Y%m%d_{n}_{n}.log").unwrap();
+    assert_eq!(shape.regex, "(?P<date>\\d{4}\\d{2}\\d{2})_(?P<idx>\\d+)_\\d+\\.log");
 
     // What the shape pins: the regex matches the names the pattern renders, with the groups
     // holding the date (parseable with the format) and the index.
@@ -294,6 +330,10 @@ fn the_family_shape_describes_what_the_pattern_writes() {
         "%Y_T%m.log",
         "a+b(%Y).log",
         "%Y.backup2026",
+        "Medição_%Y%m%d_{n}.log",
+        "%Y%m%d_{n}_{n}.log",
+        "a&b~c#d$e^f[g]h{n}%Y",
+        "{n}%d%m%Y",
     ] {
         let shape = family_shape(pattern).unwrap();
         for idx in [1u32, 2, 10] {
@@ -441,6 +481,54 @@ fn restarting_never_appends_to_a_file_it_already_wrote() {
 }
 
 #[test]
+fn a_restart_never_appends_past_a_gap_in_the_family() {
+    // A collector archived run1; run2 and run3 are still there. Probing to the first free index
+    // alone would take run1 and then, at the first rotation, append to run2.
+    let dir = Dir::new("gap");
+    std::fs::write(dir.path().join("run2.log"), b"OLD2\r\n").unwrap();
+    std::fs::write(dir.path().join("run3.log"), b"OLD3\r\n").unwrap();
+    let handle = spawn(cfg("run{n}.log", 5, 1), dir.path().to_path_buf(), 1).unwrap();
+    until("three new files", Duration::from_secs(10), || files_in(dir.path()).len() >= 5);
+    handle.join();
+    assert_eq!(std::fs::read(dir.path().join("run2.log")).unwrap(), b"OLD2\r\n", "run2 untouched");
+    assert_eq!(std::fs::read(dir.path().join("run3.log")).unwrap(), b"OLD3\r\n", "run3 untouched");
+    let names = files_in(dir.path());
+    assert_eq!(&names[..5], ["run1.log", "run2.log", "run3.log", "run4.log", "run5.log"]);
+    for name in ["run1.log", "run4.log", "run5.log"] {
+        assert_eq!(std::fs::read_to_string(dir.path().join(name)).unwrap().lines().count(), 1, "{name}: one line per file");
+    }
+}
+
+#[test]
+fn one_clock_decides_the_file_and_stamps_the_line_across_midnight() {
+    // The writer apart from its thread, driven at chosen instants: a line at 23:59 lands in that
+    // day's file with that day's stamp, the next at 00:00 in the new day's, and a file of the new
+    // day that already exists is skipped, not appended to.
+    let dir = Dir::new("midnight");
+    std::fs::write(dir.path().join("29072026_Trace1.txt"), b"yesterday's run\r\n").unwrap();
+    let mut c = cfg("%d%m%Y_Trace{n}.txt", 0, 0);
+    c.ts_format = "%Y-%m-%d %H:%M:%S%.3f".into();
+    c.template = "{ts};T={temp}".into();
+    let mut writer = Writer::new(c, dir.path().to_path_buf(), 1);
+    writer.write_at(&at(2026, 7, 28, 23, 59));
+    assert_eq!(writer.status().current_file.as_deref(), Some("28072026_Trace1.txt"));
+    assert_eq!(writer.status().last_error, None);
+    writer.write_at(&at(2026, 7, 29, 0, 0));
+    assert_eq!(writer.status().current_file.as_deref(), Some("29072026_Trace2.txt"), "the new day, past the file that exists");
+    assert_eq!((writer.status().total_lines, writer.status().lines_in_file), (2, 1));
+    let late = std::fs::read_to_string(dir.path().join("28072026_Trace1.txt")).unwrap();
+    assert!(late.starts_with("2026-07-28 23:59:00.000;T="), "{late}");
+    let early = std::fs::read_to_string(dir.path().join("29072026_Trace2.txt")).unwrap();
+    assert!(early.starts_with("2026-07-29 00:00:00.000;T="), "{early}");
+    assert_eq!(std::fs::read(dir.path().join("29072026_Trace1.txt")).unwrap(), b"yesterday's run\r\n");
+    // A bad pattern leaves the writer where it was, reporting it.
+    let mut bad = Writer::new(cfg("%Q{n}.log", 0, 0), dir.path().to_path_buf(), 2);
+    bad.write_at(&at(2026, 7, 29, 0, 0));
+    assert_eq!(bad.status().last_error, Some(EmitError::Name(NameError::BadFormat)));
+    assert_eq!(bad.status().total_lines, 0);
+}
+
+#[test]
 fn a_restart_without_rotation_still_starts_a_new_file() {
     // `max_lines` 0 never rotates on count, and still a restart must not append.
     let dir = Dir::new("restart-unlimited");
@@ -475,8 +563,13 @@ fn a_missing_output_folder_is_reported_and_then_recovered_from() {
     }
     assert!(handle.status().last_error.unwrap().to_string().contains("blocked"), "the message names the path");
     assert!(!handle.is_finished(), "still trying");
-    handle.stop();
-    until("stop", Duration::from_secs(3), || handle.is_finished());
+    // Retried: once the blocker goes, the same emitter writes, and the error clears.
+    std::fs::remove_file(&blocker).unwrap();
+    until("the retry to write", Duration::from_secs(10), || handle.status().total_lines > 0);
+    assert_eq!(handle.status().last_error, None);
+    assert_eq!(handle.status().current_file.as_deref(), Some("x1.log"));
+    assert!(blocker.join("sub").join("x1.log").is_file());
+    handle.join();
 
     // The ordinary case: a folder that simply is not there is created.
     let ok = spawn(cfg("y{n}.log", 10, 0), target.clone(), 2).unwrap();
@@ -535,7 +628,8 @@ fn a_stop_is_prompt_whatever_the_interval() {
     until("a line", Duration::from_secs(10), || handle.status().total_lines == 1);
     let started = Instant::now();
     handle.join();
-    assert!(started.elapsed() < Duration::from_secs(1), "stopped in {:?}", started.elapsed());
+    // One slice plus a margin for a busy machine, never the interval.
+    assert!(started.elapsed() < SLICE + Duration::from_millis(300), "stopped in {:?}", started.elapsed());
     assert_eq!(SLICE, Duration::from_millis(100));
 }
 

@@ -148,10 +148,23 @@ pub enum NameError {
     /// would otherwise fail at open time with a baffling message.
     #[error("a file name cannot contain {0}")]
     InvalidChars(String),
+    /// Windows drops a trailing dot or space, so the file on disk would not be the name reported.
+    #[error("a file name cannot end with `.` or a space")]
+    BadEnding,
+    /// A name Windows reserves whatever its extension (`CON`, `NUL`, `COM1`...): writing it
+    /// opens a device, not a file.
+    #[error("`{0}` is a name the system reserves")]
+    Reserved(String),
 }
 
 /// Characters no file name may hold (Windows forbids them; a name without them opens anywhere).
 const FORBIDDEN: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+
+/// Names Windows reserves whatever the extension, by their stem.
+const RESERVED: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2",
+    "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
 
 /// The one place the naming scheme lives.
 ///
@@ -182,6 +195,13 @@ pub fn file_name_for(pattern: &str, now: &DateTime<Local>, idx: u32) -> Result<S
     }
     if let Some(bad) = rendered.chars().find(|c| FORBIDDEN.contains(c) || c.is_control()) {
         return Err(NameError::InvalidChars(format!("`{bad}`")));
+    }
+    if rendered.ends_with('.') || rendered.ends_with(' ') {
+        return Err(NameError::BadEnding);
+    }
+    let stem = rendered.split('.').next().unwrap_or("").trim().to_ascii_uppercase();
+    if RESERVED.contains(&stem.as_str()) {
+        return Err(NameError::Reserved(rendered));
     }
     Ok(rendered)
 }
@@ -250,6 +270,13 @@ impl Rotor {
     /// Record that a line was written to the current file.
     pub fn note_line(&mut self) {
         self.lines_in_file += 1;
+    }
+
+    /// Move to the next index without writing: how a file that already exists is skipped.
+    pub fn skip(&mut self, pattern: &str, now: &DateTime<Local>) -> Result<String, NameError> {
+        self.idx += 1;
+        self.lines_in_file = 0;
+        file_name_for(pattern, now, self.idx)
     }
 }
 
@@ -344,7 +371,10 @@ pub fn family_shape(pattern: &str) -> Option<FamilyShape> {
         }
         match piece {
             Piece::Lit(c) => {
-                if !c.is_ascii_alphanumeric() && *c != '_' && *c != '-' {
+                // Only a regex metacharacter is escaped (the set `regex::escape` escapes, bar
+                // the hyphen, literal outside a class); any other character, ASCII or not,
+                // stands for itself.
+                if "\\.+*?()|[]{}^$#&~".contains(*c) {
                     regex.push('\\');
                 }
                 regex.push(*c);
@@ -358,7 +388,10 @@ pub fn family_shape(pattern: &str) -> Option<FamilyShape> {
                     let _ = write!(date_format, "%{spec}");
                 }
             }
-            Piece::Idx => regex.push_str("(?P<idx>\\d+)"),
+            // The first `{n}` is the index group; a second renders the same number and is
+            // matched as digits (a group name may be used once).
+            Piece::Idx if !regex.contains("(?P<idx>") => regex.push_str("(?P<idx>\\d+)"),
+            Piece::Idx => regex.push_str("\\d+"),
             Piece::Ext => regex.push_str("(?:_(?P<idx>\\d+))?"),
         }
         if at == last {
@@ -458,96 +491,117 @@ pub fn spawn(cfg: EmitterConfig, out_dir: PathBuf, stream: u64) -> Result<Emitte
     Ok(EmitterHandle { stop, status, join: Some(join) })
 }
 
-fn run(cfg: EmitterConfig, out_dir: PathBuf, stop: Arc<AtomicBool>, status: Arc<Mutex<EmitterStatus>>, stream: u64) {
-    let mut rng = match cfg.seed {
-        Some(seed) => Pcg32::new(seed, stream),
-        None => Pcg32::from_entropy(stream),
-    };
-    let mut rotor = Rotor::new(first_free_index(&cfg, &out_dir));
-    let mut open: Option<(String, std::fs::File)> = None;
+/// The most files skipped on one rotation before the emitter gives up looking for a free name.
+pub const MAX_SKIPS: u32 = 10_000;
 
-    let set_error = |status: &Arc<Mutex<EmitterStatus>>, e: EmitError| {
-        if let Ok(mut s) = status.lock() {
-            s.last_error = Some(e);
+/// The emitter apart from its thread: one line per [`Writer::write_at`], at the clock given.
+///
+/// The worker calls it with the wall clock; a test calls it with any instant, so a line written
+/// at 23:59:59.999 is seen to land in the file of the date it carries. One `now` decides the
+/// file and stamps the line: read twice, a line at midnight could land in the previous day's
+/// file with the next day's timestamp.
+pub struct Writer {
+    cfg: EmitterConfig,
+    out_dir: PathBuf,
+    rng: Pcg32,
+    rotor: Rotor,
+    open: Option<(String, std::fs::File)>,
+    status: EmitterStatus,
+}
+
+impl Writer {
+    pub fn new(cfg: EmitterConfig, out_dir: PathBuf, stream: u64) -> Writer {
+        let rng = match cfg.seed {
+            Some(seed) => Pcg32::new(seed, stream),
+            None => Pcg32::from_entropy(stream),
+        };
+        Writer { cfg, out_dir, rng, rotor: Rotor::new(1), open: None, status: EmitterStatus::default() }
+    }
+
+    pub fn status(&self) -> &EmitterStatus {
+        &self.status
+    }
+
+    /// Write one line as of `now`: decide the file (never one that already exists, when moving
+    /// to a new one), open it if needed, write and flush. Trouble goes into the status and the
+    /// next call tries again.
+    pub fn write_at(&mut self, now: &DateTime<Local>) {
+        let (mut name, rotated) = match self.rotor.file_for(&self.cfg.file, now, self.cfg.max_lines) {
+            Ok(v) => v,
+            Err(e) => {
+                self.status.last_error = Some(e.into());
+                return;
+            }
+        };
+        if rotated {
+            self.open = None;
+            // Never append to a file that already exists, whether this run wrote it before a
+            // day change or an earlier run left it: skip past it to a free name.
+            let mut skips = 0;
+            while self.out_dir.join(&name).exists() && skips < MAX_SKIPS {
+                name = match self.rotor.skip(&self.cfg.file, now) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        self.status.last_error = Some(e.into());
+                        return;
+                    }
+                };
+                skips += 1;
+            }
         }
-    };
-
-    while !stop.load(Ordering::Relaxed) {
-        // One `now` for the rotation decision and the line, or a line written at midnight could
-        // land in the previous day's file with the next day's timestamp.
-        let now = Local::now();
-        match rotor.file_for(&cfg.file, &now, cfg.max_lines) {
-            Ok((name, rotated)) => {
-                if rotated {
-                    open = None;
+        if self.open.as_ref().map(|(n, _)| n != &name).unwrap_or(true) {
+            match open_file(&self.out_dir, &name, self.cfg.encoding) {
+                Ok(f) => {
+                    self.open = Some((name.clone(), f));
+                    self.status.current_file = Some(name);
+                    self.status.lines_in_file = 0;
+                    self.status.last_error = None;
                 }
-                if open.as_ref().map(|(n, _)| n != &name).unwrap_or(true) {
-                    match open_file(&out_dir, &name, cfg.encoding) {
-                        Ok(f) => {
-                            open = Some((name.clone(), f));
-                            if let Ok(mut s) = status.lock() {
-                                s.current_file = Some(name);
-                                s.lines_in_file = 0;
-                                s.last_error = None;
-                            }
-                        }
-                        Err(e) => {
-                            open = None;
-                            set_error(&status, e);
-                        }
-                    }
-                }
-                if let Some((name, file)) = open.as_mut() {
-                    let values = draw_values(&cfg.values, &mut rng);
-                    let line = render_line(&cfg.template, &cfg.ts_format, &now, &values);
-                    match write_line(file, &line, cfg.encoding) {
-                        Ok(()) => {
-                            rotor.note_line();
-                            if let Ok(mut s) = status.lock() {
-                                s.total_lines += 1;
-                                s.lines_in_file = rotor.lines_in_file();
-                                s.last_error = None;
-                            }
-                        }
-                        Err(e) => {
-                            // Drop the handle so the next pass reopens: a share that came back
-                            // just resumes.
-                            let path = out_dir.join(name.as_str());
-                            open = None;
-                            set_error(&status, EmitError::io("writing", &path, &e));
-                        }
-                    }
+                Err(e) => {
+                    self.open = None;
+                    self.status.last_error = Some(e);
+                    return;
                 }
             }
-            Err(e) => set_error(&status, e.into()),
         }
+        if let Some((name, file)) = self.open.as_mut() {
+            let values = draw_values(&self.cfg.values, &mut self.rng);
+            let line = render_line(&self.cfg.template, &self.cfg.ts_format, now, &values);
+            match write_line(file, &line, self.cfg.encoding) {
+                Ok(()) => {
+                    self.rotor.note_line();
+                    self.status.total_lines += 1;
+                    self.status.lines_in_file = self.rotor.lines_in_file();
+                    self.status.last_error = None;
+                }
+                Err(e) => {
+                    // Drop the handle so the next pass reopens: a share that came back just
+                    // resumes.
+                    let path = self.out_dir.join(name.as_str());
+                    self.open = None;
+                    self.status.last_error = Some(EmitError::io("writing", &path, &e));
+                }
+            }
+        }
+    }
+}
 
+fn run(cfg: EmitterConfig, out_dir: PathBuf, stop: Arc<AtomicBool>, status: Arc<Mutex<EmitterStatus>>, stream: u64) {
+    let interval = Duration::from_millis(cfg.interval_ms);
+    let mut writer = Writer::new(cfg, out_dir, stream);
+    while !stop.load(Ordering::Relaxed) {
+        writer.write_at(&Local::now());
+        if let Ok(mut s) = status.lock() {
+            *s = writer.status().clone();
+        }
         // Sleep the interval in slices so stopping is prompt.
-        let mut left = Duration::from_millis(cfg.interval_ms);
+        let mut left = interval;
         while !left.is_zero() && !stop.load(Ordering::Relaxed) {
             let slice = left.min(SLICE);
             std::thread::sleep(slice);
             left -= slice;
         }
     }
-}
-
-/// On (re)start, never append to a file that already exists: a restarted emitter continuing
-/// yesterday's file would defeat rotation. Probe forward to the first free index.
-fn first_free_index(cfg: &EmitterConfig, out_dir: &Path) -> u32 {
-    let now = Local::now();
-    for idx in 1..10_000u32 {
-        match file_name_for(&cfg.file, &now, idx) {
-            Ok(name) => {
-                if !out_dir.join(&name).exists() {
-                    return idx;
-                }
-            }
-            // A bad pattern is reported by the main loop; no need to spin here.
-            Err(_) => return 1,
-        }
-    }
-    1
 }
 
 fn open_file(dir: &Path, name: &str, encoding: Encoding) -> Result<std::fs::File, EmitError> {
