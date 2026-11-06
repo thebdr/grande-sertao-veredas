@@ -35,6 +35,9 @@ fn file(framing: &str, rest: &str) -> String {
 
 const LP: &str = "envelope = [ { name = \"length\", size = 2, role = \"length\" } ]";
 
+/// LP's one field, to sit beside others in an envelope.
+const LEN: &str = "{ name = \"length\", size = 2, role = \"length\" }";
+
 fn refused(text: &str) -> String {
     match load(text) {
         Ok(_) => panic!("accepted: {text}"),
@@ -106,6 +109,71 @@ fn the_documented_example_loads_and_frames_as_described() {
     }
     let quoted = prose.split("sequence 7 is `").nth(1).and_then(|s| s.split('`').next()).unwrap();
     assert_eq!(parse_hex(quoted).unwrap(), data);
+    // Every other number of the prose, derived from the loaded file (refute round 6).
+    let words = ["", "one", "two", "three"];
+    let seg = f.segment.as_ref().unwrap();
+    let seq = spec.sequence.unwrap();
+    let field = |name: &str| f.envelope.iter().chain(&f.tail).find(|x| x.name == name).unwrap().size;
+    assert_eq!((field("class"), field("source"), field("destination"), field("sequence"), field("check")), (1, 1, 1, 1, 1));
+    for phrase in [
+        format!("a class byte, source and destination nodes, a sequence number, {} spare bytes", words[field("spare")]),
+        format!("segments of a {}-byte id, a {}-byte length and the body", seg[0].size, seg[1].size),
+        format!("({} spare bytes, a check byte)", words[field("tail_spare")]),
+        format!("numbers {} to {} after a {} on connect", seq.first, seq.last, seq.connect),
+        format!("a keep-alive probe after {} s of silence", spec.keepalive.idle.as_secs()),
+    ] {
+        assert!(prose.contains(&phrase), "the documentation says `{phrase}`");
+    }
+}
+
+/// What the documentation's key reference gives in parentheses after "`key` (", up to the first
+/// comma or closing parenthesis.
+fn documented(prose: &str, key: &str) -> String {
+    let after = prose.split(&format!("`{key}` (")).nth(1).unwrap_or_else(|| panic!("`{key}` is documented"));
+    after.split([',', ')']).next().unwrap().trim().to_string()
+}
+
+#[test]
+fn the_key_reference_states_what_the_reader_does() {
+    // Each default, limit and range the documentation states, against the reader (refute round
+    // 6: the documentation could drift with the suite green).
+    let prose = doc_prose();
+    let spec = load(&file(LP, "")).unwrap();
+    let seq = load(&file(
+        "envelope = [ { name = \"s\", size = 1, role = \"sequence\" }, { name = \"l\", size = 2, role = \"length\" } ]",
+        "[sequence]\n",
+    ))
+    .unwrap()
+    .sequence
+    .unwrap();
+    let mib = |s: String| s.strip_suffix(" MiB").map(|n| n.parse::<usize>().unwrap() * 1024 * 1024).unwrap();
+    assert_eq!(documented(&prose, "connect"), seq.connect.to_string());
+    assert_eq!(documented(&prose, "first"), seq.first.to_string());
+    assert_eq!(documented(&prose, "last"), seq.last.to_string());
+    assert_eq!(documented(&prose, "skip_duplicates"), seq.skip_duplicates.to_string());
+    assert_eq!(documented(&prose, "keepalive_counts"), seq.keepalive_counts.to_string());
+    assert_eq!(documented(&prose, "on_connect"), spec.keepalive.on_connect.to_string());
+    assert_eq!(documented(&prose, "idle_ms"), spec.keepalive.idle.as_millis().to_string());
+    assert_eq!(documented(&prose, "write_timeout_ms"), spec.link.write_timeout.as_millis().to_string());
+    assert_eq!(mib(documented(&prose, "outbox_limit_bytes")), spec.link.outbox_limit_bytes);
+    assert_eq!(documented(&prose, "max_peers"), spec.link.max_peers.to_string());
+    // The frame limit: its default and its ceiling.
+    let max_frame = prose.split("`max_frame`: ").nth(1).unwrap();
+    let default = max_frame.split("(default ").nth(1).unwrap().split(',').next().unwrap();
+    let ceiling = max_frame.split("at most ").nth(1).unwrap().split(':').next().unwrap();
+    assert_eq!((default.parse::<usize>().unwrap(), ceiling.parse::<usize>().unwrap()), (spec.framing.max_frame, MAX_MAX_FRAME));
+    // The default byte order and role, and the field sizes.
+    assert!(prose.contains("`byte_order`: `\"little\"` (default) or `\"big\"`"));
+    assert_eq!(spec.framing.envelope[0].order, Endian::Little);
+    assert!(prose.contains("`\"opaque\"` (default)"));
+    let opaque = load(&file(&format!("envelope = [ {{ name = \"x\", size = 1 }}, {LEN} ]"), "")).unwrap();
+    assert_eq!(opaque.framing.envelope[0].role, FieldRole::Opaque);
+    let sizes = prose.split("(1 to ").nth(1).unwrap().split(" bytes)").next().unwrap().parse::<usize>().unwrap();
+    let sized = |n: usize| load(&file(&format!("envelope = [ {{ name = \"x\", size = {n} }}, {LEN} ]"), ""));
+    assert!(sized(sizes).is_ok() && sized(1).is_ok() && sized(sizes + 1).is_err() && sized(0).is_err());
+    // The version this reader knows.
+    let known = prose.split("(this reader knows `").nth(1).unwrap().split('`').next().unwrap();
+    assert_eq!(known.parse::<u32>().unwrap(), VERSION);
 }
 
 #[test]
@@ -216,6 +284,25 @@ fn the_framing_byte_order_reaches_every_part_and_every_width_reaches_its_top() {
     assert_eq!(top.framing.envelope[0].value, 255);
     let s2 = load(&file(&format!("envelope = [ {{ name = \"s\", size = 2, role = \"sequence\" }}, {l} ]"), "[sequence]\nlast = 65535")).unwrap();
     assert_eq!(s2.sequence.map(|s| (s.first, s.last)), Some((1, 65535)));
+    // A field's own byte order overrides the framing's in the segment header and the tail too,
+    // and a segment's opaque field takes a default value (refute round 6).
+    let mixed = load(&file(
+        "byte_order = \"big\"\n\
+         envelope = [ { name = \"l\", size = 2, role = \"length\" } ]\n\
+         segment = [ { name = \"id\", size = 2, byte_order = \"little\", value = 7 }, { name = \"n\", size = 2, role = \"length\" } ]\n\
+         tail = [ { name = \"t\", size = 2, byte_order = \"little\", value = 258 } ]",
+        "",
+    ))
+    .unwrap()
+    .framing;
+    let header = mixed.segment.as_ref().unwrap();
+    assert_eq!(
+        (header[0].order, header[0].value, header[1].order, mixed.tail[0].order),
+        (Endian::Little, 7, Endian::Big, Endian::Little)
+    );
+    // Multi-byte delimiters, each written as hex bytes.
+    let wide = load(&file(&format!("start = \"02 03\"\nend = \"03 04\"\n{LP}"), "")).unwrap().framing;
+    assert_eq!(wide.encode(&Frame::default(), None).unwrap(), [0x02, 0x03, 0, 0, 0x03, 0x04]);
 }
 
 #[test]
@@ -240,6 +327,13 @@ fn a_file_states_its_format_and_a_version_this_reader_knows() {
         "version 2 of `veredas-channel` is not known here (this reader knows 1)"
     );
     assert!(refused("format = [").starts_with("not a channel file: "));
+    // Matched exactly: no version below the known one, no trimming, no folding of case.
+    assert_eq!(
+        refused("format = \"veredas-channel\"\nversion = 0\n[framing]\nenvelope = []"),
+        "version 0 of `veredas-channel` is not known here (this reader knows 1)"
+    );
+    assert_eq!(refused("format = \" veredas-channel\"\nversion = 1"), "`format` is ` veredas-channel`, not `veredas-channel`");
+    assert_eq!(refused("format = \"Veredas-Channel\"\nversion = 1"), "`format` is `Veredas-Channel`, not `veredas-channel`");
 }
 
 #[test]
@@ -284,6 +378,17 @@ fn an_impossible_layout_is_refused_with_its_place_named() {
         (format!("{}\ntail = [ {{ name = \"t\", size = 1, role = \"sequence\" }} ]", env(l)), "", "tail.t: this part takes no such role"),
         (format!("{}\ntail = [ {{ name = \"l\", size = 1 }} ]", env(l)), "", "tail.l: the envelope already has a field named `l`"),
         (format!("start = \"\"\n{}", env(l)), "", "framing.start: an empty delimiter; leave it out instead"),
+        (format!("end = \"\"\n{}", env(l)), "", "framing.end: an empty delimiter; leave it out instead"),
+        // Each field check in the segment header and the tail, not only the envelope (round 6).
+        (format!("{}\nsegment = [ {{ name = \"a\", size = 1 }}, {{ name = \"a\", size = 1, role = \"length\" }} ]", env(l)), "", "segment: two fields are named `a`"),
+        (format!("{}\ntail = [ {{ name = \"t\", size = 1 }}, {{ name = \"t\", size = 1 }} ]", env(l)), "", "tail: two fields are named `t`"),
+        (format!("{}\ntail = [ {{ name = \"t\", size = 9 }} ]", env(l)), "", "tail.t: size 9 is not 1 to 8 bytes"),
+        (format!("{}\nsegment = [ {{ name = \"id\", size = 0 }}, {{ name = \"n\", size = 1, role = \"length\" }} ]", env(l)), "", "segment.id: size 0 is not 1 to 8 bytes"),
+        (format!("{}\nsegment = [ {{ name = \"n\", size = 1, role = \"length\" }}, {{ name = \"m\", size = 1, role = \"length\" }} ]", env(l)), "", "segment: two fields share the role of `m`"),
+        (format!("{}\nsegment = [ {{ name = \"n\", size = 1, role = \"length\", value = 3 }} ]", env(l)), "", "segment.n: a computed field takes no `value`"),
+        (format!("{}\ntail = [ {{ name = \"t\", size = 1, value = 256 }} ]", env(l)), "", "tail.t: value 256 does not fit 1 byte(s)"),
+        (format!("{}\nsegment = [ {{ name = \"id\", size = 1, value = 256 }}, {{ name = \"n\", size = 1, role = \"length\" }} ]", env(l)), "", "segment.id: value 256 does not fit 1 byte(s)"),
+        (format!("{}\ntail = [ {{ name = \" \", size = 1 }} ]", env(l)), "", "tail: a field has no name"),
         (format!("end = \"FG\"\n{}", env(l)), "", "framing.end: `FG` is not a hex byte"),
         (format!("max_frame = 3\nstart = \"FD\"\nend = \"FE\"\n{}", env(l)), "", "framing.max_frame: 3 is less than the 4 fixed bytes"),
         // Every role a part does not take; a count given a value; a default too wide for a
