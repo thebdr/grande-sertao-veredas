@@ -88,6 +88,30 @@ fn the_polled_node_set_is_deduplicated_across_and_within_rules_in_first_seen_ord
         vec![NodeId::new(1, "w"), NodeId::new(1, "t"), NodeId::new(1, "x")]
     );
     assert_eq!(spec(vec![]).poll_nodes(), Vec::<NodeId>::new());
+
+    // Different nodes that share an id value are all kept: a namespace per device reuses tag
+    // names, and a numeric id is not the string of its digits.
+    let s = spec(vec![
+        rule(
+            "a",
+            vec![
+                tag("ns=2;s=Temperature", "t2", SeriesType::Float, false, vec![]),
+                tag("ns=3;s=Temperature", "t3", SeriesType::Float, false, vec![]),
+            ],
+        ),
+        rule(
+            "b",
+            vec![
+                tag("ns=1;i=5", "n", SeriesType::Int, false, vec![]),
+                tag("ns=1;s=5", "s", SeriesType::Int, false, vec![]),
+                tag("ns=3;s=Temperature", "t3_again", SeriesType::Float, false, vec![]),
+            ],
+        ),
+    ]);
+    assert_eq!(
+        s.poll_nodes(),
+        vec![NodeId::new(2, "Temperature"), NodeId::new(3, "Temperature"), NodeId::new(1, 5u32), NodeId::new(1, "5")]
+    );
 }
 
 #[test]
