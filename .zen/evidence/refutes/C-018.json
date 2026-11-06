@@ -1,0 +1,13 @@
+{
+  "clause": "C-018",
+  "verdict": "refuted",
+  "ranAt": "2026-11-06T04:34:33.241Z",
+  "headCommit": "a9ffa5cb108cee5c2978b227003eeab2436f7a1b",
+  "tests": [
+    {
+      "name": "crates/veredas-core/tests/opc_spec.rs",
+      "file": "crates/veredas-core/tests/opc_spec.rs",
+      "symbolSha": "b144ced838608baf7188a0ca931096a54af7f78d6d0f6e625d4a3c3412fc3de5"
+    }
+  ]
+}
