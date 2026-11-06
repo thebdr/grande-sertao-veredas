@@ -14,7 +14,8 @@ use opcua_types::Variant;
 
 use crate::{SeriesType, Value};
 
-/// Why one polled value could not become a typed sample.
+/// Why one polled value could not become a typed sample. Every refusal but [`ValueError::Empty`]
+/// names the wire type the server sent.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ValueError {
     /// The server returned no value at all.
@@ -68,8 +69,13 @@ fn wire_name(v: &Variant) -> &'static str {
         Variant::QualifiedName(_) => "QualifiedName",
         Variant::NodeId(_) => "NodeId",
         Variant::ExpandedNodeId(_) => "ExpandedNodeId",
+        Variant::ExtensionObject(_) => "ExtensionObject",
+        Variant::XmlElement(_) => "XmlElement",
+        Variant::Variant(_) => "Variant",
+        Variant::DataValue(_) => "DataValue",
+        Variant::DiagnosticInfo(_) => "DiagnosticInfo",
         Variant::Array(_) => "Array",
-        _ => "unsupported",
+        // No catch-all: a wire type the stack adds must be named here before this compiles.
     }
 }
 

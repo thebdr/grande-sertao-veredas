@@ -19,7 +19,7 @@ use opcua_types::{
 use crate::SeriesType;
 use crate::opc::error::{Call, OpcError};
 use crate::opc::spec::{Auth, PollSpec, parse_node_id};
-use crate::opc::worker::{EventLoop, close_quietly, connect};
+use crate::opc::worker::{EventLoop, STOP_CLOSE_TIMEOUT, close_quietly, connect};
 
 /// How long one browse or attribute call may take before the browser gives up on it.
 pub const BROWSE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -28,9 +28,10 @@ pub const BROWSE_TIMEOUT: Duration = Duration::from_secs(15);
 /// per response and hands out a continuation point for the rest, which the browse follows.
 pub const BROWSE_PAGE: u32 = 1_000;
 
-/// Ceiling on continuation rounds under ONE node (64 pages of up to [`BROWSE_PAGE`]). Past it
-/// something is wrong, and an unbounded loop against a confused server is how workers wedge.
-pub const MAX_BROWSE_ROUNDS: usize = 64;
+/// Ceiling on the pages read under ONE node, the first included (64 pages of up to
+/// [`BROWSE_PAGE`]). A node with more is refused: something is wrong, and an unbounded loop
+/// against a confused server is how workers wedge.
+pub const MAX_BROWSE_PAGES: usize = 64;
 
 /// How often the browser's thread looks for a request or a stop.
 const IDLE_CHECK: Duration = Duration::from_millis(30);
@@ -111,6 +112,8 @@ impl Browser {
                     }
                 };
                 rt.block_on(run(spec, jobs_rx, thread_events, thread_stop));
+                // Never wait for a blocking task (a host name being resolved): the drop is now.
+                rt.shutdown_background();
             });
         let thread = match thread {
             Ok(t) => Some(t),
@@ -194,7 +197,8 @@ async fn run(spec: PollSpec, jobs: Receiver<Job>, events: Sender<BrowseEvent>, s
     if events.send(BrowseEvent::Connected).is_ok() {
         serve(&session, &jobs, &events, &stop).await;
     }
-    close_quietly(&session, event_loop).await;
+    // A short CloseSession, so the server frees the session's slot, never a wait.
+    close_quietly(&session, event_loop, STOP_CLOSE_TIMEOUT).await;
 }
 
 /// Answer requests until the browser is dropped.
@@ -274,14 +278,14 @@ async fn browse_children(session: &Session, node: NodeId) -> Result<Vec<BrowsedN
     // Follow continuation points: a controller hands out small pages, and a client that stops
     // after the first sees a truncated folder.
     let mut cp = first.continuation_point;
-    let mut rounds = 0;
+    let mut pages = 1;
     while !cp.is_null_or_empty() {
-        rounds += 1;
-        if rounds > MAX_BROWSE_ROUNDS {
+        if pages == MAX_BROWSE_PAGES {
             // Release the point server-side rather than leaking it.
             let _ = tokio::time::timeout(BROWSE_TIMEOUT, session.browse_next(true, &[cp])).await;
-            return Err(OpcError::EndlessBrowse { pages: MAX_BROWSE_ROUNDS });
+            return Err(OpcError::EndlessBrowse { pages });
         }
+        pages += 1;
         let next = tokio::time::timeout(BROWSE_TIMEOUT, session.browse_next(false, &[cp]))
             .await
             .map_err(|_| OpcError::TimedOut(Call::BrowseNext))?
@@ -561,7 +565,7 @@ pub fn variant_brief(v: &Variant) -> String {
         }
         other => format!("{other:?}"),
     };
-    let mut out: String = s.chars().take(BRIEF_MAX).map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let mut out: String = s.chars().take(BRIEF_MAX).map(crate::opc::flat).collect();
     if s.chars().nth(BRIEF_MAX).is_some() {
         out.push('…');
     }

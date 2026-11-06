@@ -91,7 +91,7 @@ pub enum OpcError {
     /// The call succeeded with no result at all.
     #[error("{} returned no result", call.failed())]
     NoResult { call: Call },
-    /// A browse kept returning continuation points past the page ceiling.
+    /// A browse still had a continuation point after the page ceiling: `pages` were read.
     #[error(
         "browse did not finish after {pages} pages — the server keeps returning continuation points"
     )]
@@ -109,10 +109,10 @@ pub enum OpcError {
     /// answered at once rather than held until a connection exists.
     #[error("not connected to the server")]
     NotConnected,
-    /// The worker has ended: its request channel is closed.
+    /// The worker has ended, or ended with the request still queued: nothing was sent.
     #[error("the OPC worker is not running")]
     WorkerGone,
-    /// The worker ended while the request was in its queue.
+    /// The worker ended while serving the request (stopped mid-call).
     #[error("the OPC worker dropped the request")]
     WorkerDropped,
 }

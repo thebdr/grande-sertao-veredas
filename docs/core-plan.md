@@ -87,24 +87,45 @@ Changed on the way, each recorded in the clause's evidence note:
   codec's fixed layout became the channel schema's worked example (Q9), pinned by golden frames.
 
 The OPC layer, on the way in (phase 3; each is pinned by the clause's test):
-- typed errors: `OpcError` (naming the service `Call`), `NodeIdError`, `WriteRefused`, `DemoError`;
+- typed errors: `OpcError` (naming the service `Call`), `NodeIdError`, `WriteError`, `DemoError`;
+- a write says what the plant may have seen. Disarmed, not writable, and not sent (no session, or
+  still queued when the worker ended) mean the plant saw nothing. `Unconfirmed` means the call
+  failed or timed out, or the worker stopped mid-call: the write may still land, because a link
+  that stalled unnoticed delivers it when it recovers, and no client can recall bytes on the
+  wire. Veredas 1 called both kinds a refusal;
 - a write or read asked of a worker with no session is answered at once (`NotConnected`).
   Veredas 1 queued it and fired a command pulse whenever the plant came back;
+- a call that fails or times out ends the session, so a wedged session is not reused;
 - the worker checks the master switch again just before the wire. Veredas 1 checked only in the
   handle, so a write already queued fired after a disarm;
 - every connection attempt is bounded (`CONNECT_TIMEOUT`, 10 s) and raced against stop, in the
-  worker and the browser. Veredas 1 could hang on a peer that accepts TCP and never answers.
-  Dropping the browser is prompt, and an abandoned session's event loop is aborted;
+  worker and the browser. Veredas 1 could hang on a peer that accepts TCP and never answers;
+- a stop of the worker, or a drop of the browser, takes a fraction of a second, whatever the
+  peer does. Its CloseSession is bounded at 100 ms (250 ms when a failed session is dropped).
+  The runtime is shut down without waiting for a host name still resolving, and an abandoned
+  session's event loop is aborted. Veredas 1 waited 2 s for a silent peer's close and joined
+  whatever the browser was doing;
+- the browser reads at most 64 pages under one node, counting the first (Veredas 1 read 65), and
+  drops a child listed twice wherever it falls;
 - a zero poll interval is refused at spawn (Veredas 1's worker thread panicked in tokio);
 - bits are read at the wire word's own width. Veredas 1 sign-extended, so bit 20 of an Int16 −1
   read 1, and gave a UInt64 above `i64::MAX` no bits. A 64-bit field with its top bit set is
   refused rather than wrapped;
 - a bad read of a word polled only for its bits is reported (Veredas 1 reported nothing), and a
-  good status with no value is reported as "no value";
-- the one-line renderings are one line (a control character reads as a space), and the browser's
-  value brief is cut by characters, not bytes;
-- the demo plant caps a Read below its bulk folder, so the worker's chunking is proven rather than
-  assumed. It also has a slow tag, holds its namespace index, and reports why it did not start;
+  good status with no value, or with an empty one, is reported once as "no value";
+- a float stuck at NaN counts as unchanged, so storing on change still skips it;
+- every refused wire type is named: Veredas 1 called five of them "unsupported";
+- the identity's password shows in neither its label nor its debug form;
+- the one-line renderings are one line (a control character or a Unicode line separator reads
+  as a space), and the browser's value brief is cut by characters, not bytes;
+- the demo plant caps a Read at 800, below its bulk folder and the stack's array limit, so the
+  worker's chunking is proven rather than assumed. It also has:
+  - folders of 64 and 65 children, for a server set to one reference per page;
+  - a child linked twice;
+  - a slow tag;
+  - a freezable relay, to make a link go silent;
+
+  and it holds its namespace index and reports why it did not start;
 - comments that named callers, vendors, products or field sites now say what the code means on
   the wire or in the plant.
 
@@ -149,11 +170,17 @@ Recorded as the port meets them.
   short: the half-written PDB is reused. Delete that test's `.pdb` under `target/debug/deps` and
   link again. Each OPC test binary carries a PDB of about 200 MB, and `-p veredas-core` and
   `--workspace` builds hash apart, so phase 3 took the target from 4.6 to about 10 GB.
-- **async-opcua 0.19 reports any service fault as `BadDecodingError: Request returned
-  ServiceFault`.** The server's own status (`BadTooManyOperations` for a Read past its cap) is
-  lost. In a failure text, it means the server refused the whole call.
-- **The demo stack is lax.** It browses an unknown node as Good and empty, and takes a String
-  written into an Int32 tag. A test that needs a refusal constructs the result, or writes a node
-  the plant holds read-only.
+- **async-opcua 0.19 cannot encode or decode an array of more than 1 000 elements.** A Read of
+  more nodes fails at the server's decoder, as `BadDecodingError: Request returned ServiceFault`,
+  before any per-call cap is checked. That is the text the field's 3,048-tag source showed. A
+  Read past a lower cap fails with the server's own status (`BadTooManyOperations: ...`). The
+  demo's cap therefore sits at 800: a cap of 1 000 made the first refute round's pin test the
+  decoder, not the cap. Reads are chunked at 500.
+- **The demo stack is lax.** It browses an unknown node as Good and empty (only the null node
+  `i=0` is refused), and takes a String written into an Int32 tag. A test that needs a refusal
+  browses `i=0`, constructs the result, or writes a node the plant holds read-only.
+- **A silent link is a relay, not a mock.** `demo::Relay` listens on `127.0.0.2` at the plant's
+  port. The client's endpoint match compares port and path, not host, so the session goes
+  through it. Frozen, it holds what it reads, which is how a stalled link delivers late.
 - **A read callback blocks a server thread.** The demo plant's slow tag holds one thread for
   `SLOW_READ`, so the tests that read it run the plant on a multi-threaded runtime.

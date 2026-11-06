@@ -10,9 +10,17 @@
 //!   with backoff and reports its state rather than dying, which would need someone to notice.
 //! * **It serves writes.** Reads are a timer; writes and on-demand reads arrive over a channel
 //!   and are answered on a oneshot. Both share the one session, which is why they live in the
-//!   same `select!` rather than opening a connection per request. A request that arrives while
-//!   there is no session is answered at once ([`OpcError::NotConnected`]), never held until one
-//!   exists: a command pulse requested during an outage must not fire when the plant returns.
+//!   same `select!` rather than opening a connection per request.
+//!
+//! What a write's answer means, because a command pulse must never fire when nobody expects it:
+//!
+//! * A request that arrives while there is no session is answered at once,
+//!   [`WriteError::NotSent`] with [`OpcError::NotConnected`], never held until one exists: it
+//!   cannot fire when the plant returns. So is one still queued when the worker ends.
+//! * A write whose call fails or times out is [`WriteError::Unconfirmed`]: it may have reached
+//!   the plant, and a link that stalled without the worker noticing can still deliver it when it
+//!   recovers. No client can recall bytes already on the wire, so the caller is told the truth
+//!   rather than "refused". The worker drops that session and reconnects.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,10 +40,11 @@ use crate::opc::error::{Call, OpcError};
 use crate::opc::spec::{Auth, PollSpec};
 use crate::{Quality, SeriesType, SourceError, SourceHandle, SourceId, now_unix_ms, stop_flag};
 
-/// Backoff bounds for reconnection. Starts fast (a blipped switch is back in a second) and
-/// settles at half a minute, so a plant that is off for the night does not spin.
+/// The first wait before a new connection attempt. Fast, because a blipped switch is back in a
+/// second.
 pub const RETRY_MIN: Duration = Duration::from_millis(500);
-/// The longest wait between two connection attempts.
+/// The longest wait between two connection attempts, so a plant that is off for the night does
+/// not spin.
 pub const RETRY_MAX: Duration = Duration::from_secs(30);
 
 /// How long one Read or Write is given before the worker treats the session as wedged and
@@ -46,19 +55,30 @@ pub const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// accepts TCP and never speaks OPC UA must not hold the worker.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// How long a graceful close may take before the session is abandoned. Short on purpose: by the
-/// time the worker closes, it already believes the peer is gone.
-const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a graceful close (CloseSession, so the server frees the session's slot) may take
+/// when the session is being dropped for a failure. By then the peer is believed gone.
+pub const CLOSE_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// How long a graceful close may take when the worker is stopping: a stop is honoured within a
+/// fraction of a second, whatever the peer does.
+pub const STOP_CLOSE_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// How often a wait checks the stop flag.
 const STOP_CHECK: Duration = Duration::from_millis(50);
 
-/// The most nodes one Read service call carries. Servers cap operations per call
-/// (`MaxNodesPerRead`, message size limits) and refuse a call past the cap whole, so a source of
-/// thousands of tags is read in bounded chunks instead of one all-or-nothing request (a field
-/// source of 3,048 tags was refused whole while one of 839 passed). 500 sits under every stack
-/// met so far while keeping a poll of a few thousand tags at a handful of round trips.
+/// The most nodes one Read service call carries. Servers cap operations per call and refuse a
+/// call past the cap whole, and this stack refuses to encode or decode an array of more than
+/// 1 000 elements either way, so a source of thousands of tags is read in bounded chunks instead
+/// of one all-or-nothing request (a field source of 3,048 tags was refused whole while one of 839
+/// passed). 500 sits under every stack met so far while keeping a poll of a few thousand tags at
+/// a handful of round trips.
 pub const MAX_NODES_PER_READ: usize = 500;
+
+/// The waits between connection attempts, in order: [`RETRY_MIN`], doubling, held at
+/// [`RETRY_MAX`]. The schedule starts over after every connection that reaches a session.
+pub fn retry_delays() -> impl Iterator<Item = Duration> {
+    std::iter::successors(Some(RETRY_MIN), |d| Some((*d * 2).min(RETRY_MAX)))
+}
 
 /// What a worker sends upstream.
 #[derive(Debug, Clone)]
@@ -87,8 +107,9 @@ pub enum OpcEvent {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TagRead {
     pub node_id: NodeId,
-    /// The value, only when the server's status for this node is good: one bad tag never
-    /// invalidates the rest of the poll, and an uncertain value is not passed off as a reading.
+    /// The value, only when the server's status for this node is good and it sent one (an
+    /// empty variant is none): one bad tag never invalidates the rest of the poll, and an
+    /// uncertain value is not passed off as a reading.
     pub value: Option<Variant>,
     /// The server's status, for naming which tag is unhappy.
     pub status: StatusCode,
@@ -97,7 +118,7 @@ pub struct TagRead {
 impl TagRead {
     /// A value, with a good status.
     pub fn is_good(&self) -> bool {
-        self.value.is_some() && self.status.is_good()
+        self.value.as_ref().is_some_and(|v| !matches!(v, Variant::Empty)) && self.status.is_good()
     }
 
     /// How far this reading can be trusted: good only when [`TagRead::is_good`]; uncertain when
@@ -113,6 +134,25 @@ impl TagRead {
     }
 }
 
+/// A Read's answer as one [`TagRead`] per node asked for, positionally: no status is good, a
+/// value is kept only beside a good status (an empty variant is none), and an answer shorter
+/// than the request pads the missing nodes with `BadNoData` rather than shifting every later
+/// node onto the wrong column. Answers beyond the request are ignored.
+pub fn tag_reads(nodes: &[NodeId], values: &[DataValue]) -> Vec<TagRead> {
+    nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node)| match values.get(i) {
+            Some(dv) => {
+                let status = dv.status.unwrap_or(StatusCode::Good);
+                let value = dv.value.as_ref().filter(|v| status.is_good() && !matches!(v, Variant::Empty));
+                TagRead { node_id: node.clone(), status, value: value.cloned() }
+            }
+            None => TagRead { node_id: node.clone(), value: None, status: StatusCode::BadNoData },
+        })
+        .collect()
+}
+
 /// Where a worker's connection stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnState {
@@ -126,7 +166,7 @@ pub enum ConnState {
 #[derive(Debug)]
 struct WriteRequest {
     writes: Vec<(NodeId, Variant)>,
-    reply: oneshot::Sender<Result<Vec<StatusCode>, WriteRefused>>,
+    reply: oneshot::Sender<Result<Vec<StatusCode>, WriteError>>,
 }
 
 /// An on-demand read for the worker, answered on `reply`.
@@ -144,12 +184,12 @@ enum Job {
 }
 
 impl Job {
-    /// Answer without a session.
+    /// Answer without a session: nothing was sent.
     fn refuse(self, why: OpcError) {
         // The requester may have hung up; that is not the worker's problem.
         match self {
             Job::Write(r) => {
-                let _ = r.reply.send(Err(WriteRefused::Transport(why)));
+                let _ = r.reply.send(Err(WriteError::NotSent(why)));
             }
             Job::Read(r) => {
                 let _ = r.reply.send(Err(why));
@@ -182,23 +222,29 @@ impl WriteGate {
     }
 }
 
-/// Why a write never reached the wire, or never came back.
+/// Why a write did not come back with the server's statuses.
 ///
-/// `Disarmed` and `NotWritable` are refusals by the gate, not OPC statuses: nothing was sent and
-/// the plant did not see the request. A server that takes the call and answers a bad status per
-/// write comes back as `Ok(statuses)` instead.
+/// Three of these say the plant never saw the request; one says it may have. A server that
+/// takes the call and answers a bad status per write comes back as `Ok(statuses)` instead.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum WriteRefused {
-    /// The master switch is off.
+pub enum WriteError {
+    /// The master switch is off (checked by the handle, and again by the worker before the
+    /// wire). Nothing was sent.
     #[error("writes are turned off for this project")]
     Disarmed,
     /// The tag is unknown, or known and not marked writable. The caller cannot tell those apart,
-    /// and must not: both mean "not something you may write".
+    /// and must not: both mean "not something you may write". Nothing was sent.
     #[error("`{source_id}` / `{tag}` is not a writable tag in this session")]
     NotWritable { source_id: String, tag: String },
-    /// No session, a stopped worker, a timed-out call, or a call the server refused whole.
+    /// Nothing was sent: no session ([`OpcError::NotConnected`]), or the worker had ended or
+    /// ended with the request still queued ([`OpcError::WorkerGone`]).
     #[error("{0}")]
-    Transport(OpcError),
+    NotSent(OpcError),
+    /// The write went to the wire, or may have, and no answer came: the call failed or timed
+    /// out, or the worker was stopped mid-call. The plant may apply it, now or when a stalled
+    /// link recovers.
+    #[error("the write may have reached the plant: {0}")]
+    Unconfirmed(OpcError),
 }
 
 /// The handle to a running worker: writes and on-demand reads.
@@ -240,18 +286,14 @@ impl OpcHandle {
     /// **The only write path.** The master switch is checked first, then every tag against the
     /// whitelist, all before anything is sent: a batch with one tag not permitted is refused
     /// whole, so a half-permitted batch never half-fires. The worker checks the switch once more
-    /// before the wire. A worker with no session answers at once with `Transport`; a stopped
-    /// worker's channel is closed, which is `Transport` too.
-    pub async fn write_tags(
-        &self,
-        writes: Vec<(String, Variant)>,
-    ) -> Result<Vec<StatusCode>, WriteRefused> {
+    /// before the wire. See [`WriteError`] for what each failure says about the plant.
+    pub async fn write_tags(&self, writes: Vec<(String, Variant)>) -> Result<Vec<StatusCode>, WriteError> {
         if !self.gate.is_armed() {
-            return Err(WriteRefused::Disarmed);
+            return Err(WriteError::Disarmed);
         }
         let mut resolved: Vec<(NodeId, Variant)> = Vec::with_capacity(writes.len());
         for (tag, value) in writes {
-            let spec = self.spec.writable_tag(&tag).ok_or_else(|| WriteRefused::NotWritable {
+            let spec = self.spec.writable_tag(&tag).ok_or_else(|| WriteError::NotWritable {
                 source_id: self.source_id.clone(),
                 tag: tag.clone(),
             })?;
@@ -260,16 +302,15 @@ impl OpcHandle {
         let (reply, rx) = oneshot::channel();
         self.jobs
             .send(Job::Write(WriteRequest { writes: resolved, reply }))
-            .map_err(|_| WriteRefused::Transport(OpcError::WorkerGone))?;
-        rx.await.map_err(|_| WriteRefused::Transport(OpcError::WorkerDropped))?
+            .map_err(|_| WriteError::NotSent(OpcError::WorkerGone))?;
+        // The worker answers every job it takes; one it drops was mid-call when it stopped.
+        rx.await.map_err(|_| WriteError::Unconfirmed(OpcError::WorkerDropped))?
     }
 
     /// Read nodes on demand, on the worker's session, positionally like a poll.
     pub async fn read(&self, nodes: Vec<NodeId>) -> Result<Vec<TagRead>, OpcError> {
         let (reply, rx) = oneshot::channel();
-        self.jobs
-            .send(Job::Read(ReadRequest { nodes, reply }))
-            .map_err(|_| OpcError::WorkerGone)?;
+        self.jobs.send(Job::Read(ReadRequest { nodes, reply })).map_err(|_| OpcError::WorkerGone)?;
         rx.await.map_err(|_| OpcError::WorkerDropped)?
     }
 }
@@ -296,7 +337,7 @@ pub fn spawn(spec: PollSpec, tx: Sender<OpcEvent>, gate: WriteGate) -> Result<Op
     }
     let stop = stop_flag();
     let source_id = SourceId::new(&spec.source_id);
-    let (jobs_tx, jobs_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (jobs_tx, mut jobs_rx) = tokio::sync::mpsc::unbounded_channel();
     let spec = Arc::new(spec);
     let writer = OpcHandle {
         source_id: spec.source_id.clone(),
@@ -313,7 +354,15 @@ pub fn spawn(spec: PollSpec, tx: Sender<OpcEvent>, gate: WriteGate) -> Result<Op
                 .enable_all()
                 .build()
                 .map_err(|e| SourceError::NotConfigured(format!("OPC worker runtime: {e}")))?;
-            rt.block_on(run(spec, tx, jobs_rx, thread_stop, gate))
+            let outcome = rt.block_on(run(spec, tx, &mut jobs_rx, thread_stop, gate));
+            // Nothing still queued was sent: say so, and refuse whatever comes after.
+            jobs_rx.close();
+            while let Ok(job) = jobs_rx.try_recv() {
+                job.refuse(OpcError::WorkerGone);
+            }
+            // Never wait for a blocking task (a host name being resolved): the stop is now.
+            rt.shutdown_background();
+            outcome
         })
         .map_err(|e| SourceError::NotConfigured(format!("spawn OPC worker: {e}")))?;
 
@@ -387,10 +436,9 @@ async fn connect_unbounded(spec: &PollSpec) -> Result<(Arc<Session>, EventLoop),
     }
 }
 
-/// Read a batch of nodes into per-tag results, in chunks of at most [`MAX_NODES_PER_READ`],
-/// each its own call bounded by [`CALL_TIMEOUT`]; results reassemble positionally, so chunking
-/// is invisible to the mapping. A response shorter than its request pads the missing tags with
-/// `BadNoData` rather than shifting every later tag onto the wrong column.
+/// Read a batch of nodes into per-tag results ([`tag_reads`]), in chunks of at most
+/// [`MAX_NODES_PER_READ`], each its own call bounded by [`CALL_TIMEOUT`]; results reassemble in
+/// order, so chunking is invisible to the mapping.
 pub(crate) async fn read_nodes(session: &Session, nodes: &[NodeId]) -> Result<Vec<TagRead>, OpcError> {
     let mut out = Vec::with_capacity(nodes.len());
     for chunk in nodes.chunks(MAX_NODES_PER_READ) {
@@ -406,17 +454,7 @@ pub(crate) async fn read_nodes(session: &Session, nodes: &[NodeId]) -> Result<Ve
             .await
             .map_err(|_| OpcError::TimedOut(Call::Read))?
             .map_err(|e| OpcError::failed(Call::Read, &e))?;
-        out.extend(chunk.iter().enumerate().map(|(i, node)| match values.get(i) {
-            Some(dv) => {
-                let status = dv.status.unwrap_or(StatusCode::Good);
-                TagRead {
-                    node_id: node.clone(),
-                    status,
-                    value: if status.is_good() { dv.value.clone() } else { None },
-                }
-            }
-            None => TagRead { node_id: node.clone(), value: None, status: StatusCode::BadNoData },
-        }));
+        out.extend(tag_reads(chunk, &values));
     }
     Ok(out)
 }
@@ -441,33 +479,46 @@ async fn write_nodes(session: &Session, writes: &[(NodeId, Variant)]) -> Result<
         .map_err(|e| OpcError::failed(Call::Write, &e))
 }
 
-/// Close a session without ever blocking on it, and end its event loop.
+/// Close a session within `bound` without ever blocking on it, and end its event loop.
 ///
-/// A graceful `disconnect` sends CloseSession and waits for the reply, which from a peer that
-/// has vanished never arrives. Unbounded, that wait wedges the worker: no retry is reported, the
-/// stop flag is never re-checked, and stopping hangs too (Veredas 1 met it as silence, not an
-/// error).
-pub(crate) async fn close_quietly(session: &Session, event_loop: EventLoop) {
-    let _ = tokio::time::timeout(DISCONNECT_TIMEOUT, session.disconnect()).await;
+/// A graceful `disconnect` sends CloseSession, so the server frees the session's slot (a
+/// controller has few), and waits for the reply, which from a vanished peer never arrives.
+/// Unbounded, that wait wedges the worker and any stop with it (Veredas 1 met it as silence).
+pub(crate) async fn close_quietly(session: &Session, event_loop: EventLoop, bound: Duration) {
+    let _ = tokio::time::timeout(bound, session.disconnect()).await;
     drop(event_loop);
 }
 
 /// Answer one off-timer job on a live session. A write meets the master switch once more here,
-/// just before the wire.
-async fn serve_job(session: &Session, job: Job, gate: &WriteGate) {
+/// just before the wire. A call that fails or times out is returned: the session is suspect.
+async fn serve_job(session: &Session, job: Job, gate: &WriteGate) -> Option<OpcError> {
     match job {
         Job::Write(req) => {
-            let result = if gate.is_armed() {
-                write_nodes(session, &req.writes).await.map_err(WriteRefused::Transport)
-            } else {
-                Err(WriteRefused::Disarmed)
-            };
-            let _ = req.reply.send(result);
+            if !gate.is_armed() {
+                let _ = req.reply.send(Err(WriteError::Disarmed));
+                return None;
+            }
+            match write_nodes(session, &req.writes).await {
+                Ok(statuses) => {
+                    let _ = req.reply.send(Ok(statuses));
+                    None
+                }
+                Err(e) => {
+                    let _ = req.reply.send(Err(WriteError::Unconfirmed(e.clone())));
+                    Some(e)
+                }
+            }
         }
-        Job::Read(req) => {
-            let result = read_nodes(session, &req.nodes).await;
-            let _ = req.reply.send(result);
-        }
+        Job::Read(req) => match read_nodes(session, &req.nodes).await {
+            Ok(reads) => {
+                let _ = req.reply.send(Ok(reads));
+                None
+            }
+            Err(e) => {
+                let _ = req.reply.send(Err(e.clone()));
+                Some(e)
+            }
+        },
     }
 }
 
@@ -524,16 +575,24 @@ async fn connect_answering(
     }
 }
 
+/// Why a connected session ended.
+enum Ended {
+    /// A stop, or the consumer gone: close briefly and end the worker.
+    Stop,
+    /// The session failed: close briefly, report, wait, reconnect.
+    Lost(OpcError),
+}
+
 /// The worker's whole life: connect, poll, serve jobs, reconnect, stop.
 async fn run(
     spec: Arc<PollSpec>,
     tx: Sender<OpcEvent>,
-    mut jobs: UnboundedReceiver<Job>,
+    jobs: &mut UnboundedReceiver<Job>,
     stop: Arc<AtomicBool>,
     gate: WriteGate,
 ) -> Result<(), SourceError> {
     let nodes = spec.poll_nodes();
-    let mut backoff = RETRY_MIN;
+    let mut delays = retry_delays();
     let status = |state: ConnState| OpcEvent::Status { source_id: spec.source_id.clone(), state };
 
     // A send failure means the consumer is gone: wind down cleanly.
@@ -547,44 +606,47 @@ async fn run(
 
     while !stopped(&stop) {
         emit!(status(ConnState::Connecting));
-        let (session, mut event_loop) = match connect_answering(&spec, &stop, &mut jobs).await {
+        let (session, mut event_loop) = match connect_answering(&spec, &stop, jobs).await {
             None => return Ok(()),
             Some(Ok(connected)) => connected,
             Some(Err(error)) => {
-                emit!(status(ConnState::Retrying { error, in_ms: backoff.as_millis() as u64 }));
-                if !wait_out(backoff, &stop, &mut jobs).await {
+                let wait = delays.next().unwrap_or(RETRY_MAX);
+                emit!(status(ConnState::Retrying { error, in_ms: wait.as_millis() as u64 }));
+                if !wait_out(wait, &stop, jobs).await {
                     return Ok(());
                 }
-                backoff = (backoff * 2).min(RETRY_MAX);
                 continue;
             }
         };
-        backoff = RETRY_MIN;
+        delays = retry_delays();
         emit!(status(ConnState::Connected));
 
         // Connected: poll on the tick, serve jobs in between. A slow server must not queue up
         // missed ticks and then storm the wire catching up.
         let mut ticker = tokio::time::interval(spec.poll);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let lost: Option<OpcError> = loop {
+        let ended = loop {
             tokio::select! {
                 // The stop first: with a fast interval the ticker is almost always ready.
                 biased;
-                _ = wait_for_stop(&stop) => break None,
-                status = &mut event_loop.0 => break Some(OpcError::ConnectionClosed(status.ok())),
+                _ = wait_for_stop(&stop) => break Ended::Stop,
+                status = &mut event_loop.0 => break Ended::Lost(OpcError::ConnectionClosed(status.ok())),
                 Some(job) = jobs.recv() => {
                     // Raced against the stop, so a call on a vanished peer does not hold a
-                    // stop for its whole timeout.
-                    tokio::select! {
+                    // stop for its whole timeout. A write dropped here answers `Unconfirmed`.
+                    let failed = tokio::select! {
                         biased;
-                        _ = wait_for_stop(&stop) => break None,
-                        _ = serve_job(&session, job, &gate) => {}
+                        _ = wait_for_stop(&stop) => break Ended::Stop,
+                        f = serve_job(&session, job, &gate) => f,
+                    };
+                    if let Some(e) = failed {
+                        break Ended::Lost(e);
                     }
                 }
                 _ = ticker.tick() => {
                     let read = tokio::select! {
                         biased;
-                        _ = wait_for_stop(&stop) => break None,
+                        _ = wait_for_stop(&stop) => break Ended::Stop,
                         r = read_nodes(&session, &nodes) => r,
                     };
                     match read {
@@ -596,27 +658,39 @@ async fn run(
                                 values,
                             };
                             if tx.send(poll).is_err() {
-                                break None;
+                                break Ended::Stop;
                             }
                         }
                         // A failed READ (not a bad per-tag status) means the session is
                         // unhealthy: drop it and reconnect rather than emit silence forever.
-                        Err(e) => break Some(e),
+                        Err(e) => break Ended::Lost(e),
                     }
                 }
             }
         };
 
-        close_quietly(&session, event_loop).await;
-        let Some(error) = lost else { return Ok(()) };
+        let error = match ended {
+            Ended::Stop => {
+                close_quietly(&session, event_loop, STOP_CLOSE_TIMEOUT).await;
+                return Ok(());
+            }
+            Ended::Lost(error) => {
+                tokio::select! {
+                    biased;
+                    _ = wait_for_stop(&stop) => {}
+                    _ = close_quietly(&session, event_loop, CLOSE_TIMEOUT) => {}
+                }
+                error
+            }
+        };
         if stopped(&stop) {
             return Ok(());
         }
-        emit!(status(ConnState::Retrying { error, in_ms: backoff.as_millis() as u64 }));
-        if !wait_out(backoff, &stop, &mut jobs).await {
+        let wait = delays.next().unwrap_or(RETRY_MAX);
+        emit!(status(ConnState::Retrying { error, in_ms: wait.as_millis() as u64 }));
+        if !wait_out(wait, &stop, jobs).await {
             return Ok(());
         }
-        backoff = (backoff * 2).min(RETRY_MAX);
     }
     Ok(())
 }

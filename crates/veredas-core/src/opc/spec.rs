@@ -17,12 +17,24 @@ use crate::opc::error::NodeIdError;
 ///
 /// The two identities an unsecured plant endpoint accepts. Certificate-based identities are
 /// absent rather than stubbed: adding one starts here.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Auth {
     Anonymous,
     /// The password lives only in this value, in memory, for as long as the spec does; nothing
-    /// in this layer writes it anywhere or shows it ([`Auth::label`]).
+    /// in this layer writes it anywhere or shows it: neither [`Auth::label`] nor `Debug` (so
+    /// neither does a `PollSpec`'s `Debug`).
     UserPass { username: String, password: String },
+}
+
+impl std::fmt::Debug for Auth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Auth::Anonymous => f.write_str("Anonymous"),
+            Auth::UserPass { username, .. } => {
+                f.debug_struct("UserPass").field("username", username).field("password", &"<hidden>").finish()
+            }
+        }
+    }
 }
 
 impl Auth {

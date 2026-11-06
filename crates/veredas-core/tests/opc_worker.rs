@@ -8,10 +8,15 @@ use std::net::TcpListener;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
-use veredas_core::opc::demo::{BULK_COUNT, DEMO_PASS, DEMO_USER, DemoPlant, DetachedPlant, SLOW_READ, tags};
+use opcua_types::DataValue;
+use veredas_core::opc::demo::{BULK_COUNT, DEMO_PASS, DEMO_USER, DemoPlant, DetachedPlant, Relay, SLOW_READ, tags};
 use veredas_core::opc::spec::{Auth, BitSpec, PollSpec, RuleSpec, TagSpec};
-use veredas_core::opc::worker::{CONNECT_TIMEOUT, ConnState, OpcEvent, OpcHandle, TagRead};
-use veredas_core::opc::{NodeId, OpcError, StatusCode, Variant, WriteGate, WriteRefused, map_poll, parse_node_id};
+use veredas_core::opc::worker::{
+    CALL_TIMEOUT, CONNECT_TIMEOUT, ConnState, OpcEvent, OpcHandle, RETRY_MAX, RETRY_MIN, TagRead,
+};
+use veredas_core::opc::{
+    Call, NodeId, OpcError, StatusCode, Variant, WriteError, WriteGate, map_poll, parse_node_id, retry_delays, tag_reads,
+};
 use veredas_core::{Quality, SeriesType, SourceError, Value, now_unix_ms};
 
 fn tag(node: &str, series: &str, ty: SeriesType, writable: bool, bits: Vec<BitSpec>) -> TagSpec {
@@ -87,7 +92,7 @@ fn next_status(rx: &Receiver<OpcEvent>, within: Duration) -> ConnState {
 
 /// A writer whose worker has stopped: a real worker, spawned through the public path at an
 /// endpoint nobody serves, then joined, so its job channel is closed. Anything that passes the
-/// gates comes back `Transport(WorkerGone)`; only a gate can answer otherwise.
+/// gates comes back `NotSent(WorkerGone)`; only a gate can answer otherwise.
 fn orphan_handle(armed: bool) -> (OpcHandle, WriteGate) {
     let gate = WriteGate::new(armed);
     let spec = one_rule(
@@ -111,12 +116,12 @@ fn orphan_handle(armed: bool) -> (OpcHandle, WriteGate) {
 async fn disarmed_refuses_before_the_wire() {
     let (handle, _gate) = orphan_handle(false);
     let refused = handle.write_tags(vec![("ns=1;s=cmd".into(), Variant::Int32(1))]).await.unwrap_err();
-    assert_eq!(refused, WriteRefused::Disarmed);
+    assert_eq!(refused, WriteError::Disarmed);
     assert_eq!(refused.to_string(), "writes are turned off for this project");
     assert!(!handle.is_armed());
     // Disarmed outranks the whitelist: a read-only tag is refused as Disarmed too.
     let refused = handle.write_tags(vec![("ns=1;s=temp".into(), Variant::Double(1.0))]).await.unwrap_err();
-    assert_eq!(refused, WriteRefused::Disarmed);
+    assert_eq!(refused, WriteError::Disarmed);
 }
 
 /// Armed, but the tag is not marked writable: refused by the whitelist, before the channel.
@@ -124,7 +129,7 @@ async fn disarmed_refuses_before_the_wire() {
 async fn armed_still_refuses_a_read_only_tag() {
     let (handle, _gate) = orphan_handle(true);
     let refused = handle.write_tags(vec![("ns=1;s=temp".into(), Variant::Double(1.0))]).await.unwrap_err();
-    assert_eq!(refused, WriteRefused::NotWritable { source_id: "plc".into(), tag: "ns=1;s=temp".into() });
+    assert_eq!(refused, WriteError::NotWritable { source_id: "plc".into(), tag: "ns=1;s=temp".into() });
     assert_eq!(refused.to_string(), "`plc` / `ns=1;s=temp` is not a writable tag in this session");
 }
 
@@ -134,7 +139,7 @@ async fn armed_still_refuses_a_read_only_tag() {
 async fn unknown_and_read_only_are_indistinguishable() {
     let (handle, _gate) = orphan_handle(true);
     let unknown = handle.write_tags(vec![("ns=1;s=nothing".into(), Variant::Int32(1))]).await.unwrap_err();
-    assert_eq!(unknown, WriteRefused::NotWritable { source_id: "plc".into(), tag: "ns=1;s=nothing".into() });
+    assert_eq!(unknown, WriteError::NotWritable { source_id: "plc".into(), tag: "ns=1;s=nothing".into() });
 }
 
 /// A batch is all-or-nothing at the gate: one tag not permitted refuses the whole call, in
@@ -147,7 +152,7 @@ async fn one_bad_tag_refuses_the_whole_batch() {
         vec![("ns=1;s=temp".to_string(), Variant::Double(2.0)), ("ns=1;s=cmd".to_string(), Variant::Int32(1))],
     ] {
         let refused = handle.write_tags(batch).await.unwrap_err();
-        assert_eq!(refused, WriteRefused::NotWritable { source_id: "plc".into(), tag: "ns=1;s=temp".into() });
+        assert_eq!(refused, WriteError::NotWritable { source_id: "plc".into(), tag: "ns=1;s=temp".into() });
     }
 }
 
@@ -158,10 +163,10 @@ async fn one_bad_tag_refuses_the_whole_batch() {
 async fn a_permitted_write_reaches_the_channel() {
     let (handle, _gate) = orphan_handle(true);
     let err = handle.write_tags(vec![(" ns=1;s=cmd ".into(), Variant::Int32(1))]).await.unwrap_err();
-    assert_eq!(err, WriteRefused::Transport(OpcError::WorkerGone));
+    assert_eq!(err, WriteError::NotSent(OpcError::WorkerGone));
     assert_eq!(err.to_string(), "the OPC worker is not running");
     // An empty batch passes the gates too.
-    assert_eq!(handle.write_tags(vec![]).await, Err(WriteRefused::Transport(OpcError::WorkerGone)));
+    assert_eq!(handle.write_tags(vec![]).await, Err(WriteError::NotSent(OpcError::WorkerGone)));
     assert_eq!(handle.read(vec![NodeId::new(1, "temp")]).await, Err(OpcError::WorkerGone));
 }
 
@@ -170,15 +175,15 @@ async fn a_permitted_write_reaches_the_channel() {
 async fn the_gate_flips_live() {
     let (handle, gate) = orphan_handle(true);
     let write = || handle.write_tags(vec![("ns=1;s=cmd".into(), Variant::Int32(1))]);
-    assert_eq!(write().await, Err(WriteRefused::Transport(OpcError::WorkerGone)));
+    assert_eq!(write().await, Err(WriteError::NotSent(OpcError::WorkerGone)));
     gate.set(false);
-    assert_eq!(write().await, Err(WriteRefused::Disarmed));
+    assert_eq!(write().await, Err(WriteError::Disarmed));
     assert!(!handle.is_armed());
     gate.set(true);
-    assert_eq!(write().await, Err(WriteRefused::Transport(OpcError::WorkerGone)));
+    assert_eq!(write().await, Err(WriteError::NotSent(OpcError::WorkerGone)));
     // A clone of the gate is the same switch.
     gate.clone().set(false);
-    assert_eq!(write().await, Err(WriteRefused::Disarmed));
+    assert_eq!(write().await, Err(WriteError::Disarmed));
 }
 
 #[test]
@@ -365,7 +370,7 @@ async fn a_disarmed_master_switch_blocks_an_in_process_write() {
 
     // Disarmed: refused, and the plant is untouched.
     let refused = worker.writer.write_tags(vec![(cmd_start.clone(), Variant::Int32(1))]).await.unwrap_err();
-    assert_eq!(refused, WriteRefused::Disarmed);
+    assert_eq!(refused, WriteError::Disarmed);
     assert_eq!(plant.get(tags::CMD_START), Some(Variant::Int32(0)), "the write must not have reached the plant");
 
     // Armed live (no new session, no new handle) and the same call lands.
@@ -378,7 +383,7 @@ async fn a_disarmed_master_switch_blocks_an_in_process_write() {
     // rolled back nor written again.
     gate.set(false);
     let refused = worker.writer.write_tags(vec![(cmd_start, Variant::Int32(0))]).await.unwrap_err();
-    assert_eq!(refused, WriteRefused::Disarmed);
+    assert_eq!(refused, WriteError::Disarmed);
     assert_eq!(plant.get(tags::CMD_START), Some(Variant::Int32(1)));
 
     // A tag the spec does not mark writable is refused even while armed, though the server
@@ -390,7 +395,7 @@ async fn a_disarmed_master_switch_blocks_an_in_process_write() {
     let other = veredas_core::opc::spawn(readonly, tx2, gate.clone()).expect("worker spawns");
     plant.set(tags::SETPOINT, 5.0f64);
     let refused = other.writer.write_tags(vec![(plant.node_id_str(tags::SETPOINT), Variant::Double(99.0))]).await.unwrap_err();
-    assert!(matches!(refused, WriteRefused::NotWritable { .. }));
+    assert!(matches!(refused, WriteError::NotWritable { .. }));
     assert_eq!(plant.get(tags::SETPOINT), Some(Variant::Double(5.0)));
 
     other.handle.join().expect("clean shutdown");
@@ -440,7 +445,7 @@ async fn a_queued_write_meets_the_switch_again_before_the_wire() {
         assert_eq!(read.unwrap()[0].value, Some(Variant::Int32(0)));
         assert!(took >= SLOW_READ, "{took:?}");
         if disarm {
-            assert_eq!(written, Err(WriteRefused::Disarmed));
+            assert_eq!(written, Err(WriteError::Disarmed));
             assert_eq!(plant.get(tags::CMD_START), Some(Variant::Int32(0)), "the queued write reached the plant");
         } else {
             assert_eq!(written, Ok(vec![StatusCode::Good]));
@@ -557,7 +562,7 @@ async fn a_request_without_a_session_is_refused_at_once_and_never_fires_later() 
     for _ in 0..3 {
         let t0 = Instant::now();
         let refused = worker.writer.write_tags(vec![(cmd.clone(), Variant::Int32(1))]).await;
-        assert_eq!(refused, Err(WriteRefused::Transport(OpcError::NotConnected)));
+        assert_eq!(refused, Err(WriteError::NotSent(OpcError::NotConnected)));
         assert_eq!(worker.writer.read(vec![NodeId::new(1, "x")]).await, Err(OpcError::NotConnected));
         assert!(t0.elapsed() < Duration::from_millis(500), "{:?}", t0.elapsed());
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -727,5 +732,235 @@ async fn the_worker_ends_when_its_consumer_is_gone() {
     assert!(matches!(worker.handle.poll_outcome(), Some(Ok(()))));
     // Its handle now reports the worker gone.
     assert_eq!(worker.writer.read(vec![NodeId::new(1, "x")]).await, Err(OpcError::WorkerGone));
+    plant.stop().await;
+}
+
+// ---- added in refute round 1 -----------------------------------------------------------------
+
+#[test]
+fn a_reads_answer_becomes_one_tag_read_per_node_in_order() {
+    let nodes: Vec<NodeId> = (0..6).map(|i| NodeId::new(1, i as u32)).collect();
+    let dv = |value: Option<Variant>, status: Option<StatusCode>| DataValue { value, status, ..DataValue::default() };
+    // One answer short; one with no status; a value beside a bad and an uncertain status; an
+    // empty variant beside a good one.
+    let answer = vec![
+        dv(Some(Variant::Int32(1)), None),
+        dv(Some(Variant::Int32(2)), Some(StatusCode::Good)),
+        dv(Some(Variant::Int32(3)), Some(StatusCode::BadOutOfService)),
+        dv(Some(Variant::Int32(4)), Some(StatusCode::UncertainLastUsableValue)),
+        dv(Some(Variant::Empty), Some(StatusCode::Good)),
+    ];
+    let reads = tag_reads(&nodes, &answer);
+    let got: Vec<(NodeId, Option<Variant>, StatusCode, Quality)> =
+        reads.iter().map(|r| (r.node_id.clone(), r.value.clone(), r.status, r.quality())).collect();
+    assert_eq!(
+        got,
+        vec![
+            (nodes[0].clone(), Some(Variant::Int32(1)), StatusCode::Good, Quality::Good),
+            (nodes[1].clone(), Some(Variant::Int32(2)), StatusCode::Good, Quality::Good),
+            (nodes[2].clone(), None, StatusCode::BadOutOfService, Quality::Bad),
+            (nodes[3].clone(), None, StatusCode::UncertainLastUsableValue, Quality::Uncertain),
+            (nodes[4].clone(), None, StatusCode::Good, Quality::Bad),
+            (nodes[5].clone(), None, StatusCode::BadNoData, Quality::Bad),
+        ]
+    );
+    // An answer longer than the request is cut to it; an empty request reads nothing.
+    let mut long = answer.clone();
+    long.push(dv(Some(Variant::Int32(9)), None));
+    long.push(dv(Some(Variant::Int32(9)), None));
+    assert_eq!(tag_reads(&nodes[..2], &long).len(), 2);
+    assert_eq!(tag_reads(&[], &answer), Vec::new());
+}
+
+#[test]
+fn the_backoff_doubles_from_half_a_second_and_holds_at_thirty() {
+    let ms: Vec<u128> = retry_delays().take(9).map(|d| d.as_millis()).collect();
+    assert_eq!(ms, vec![500, 1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000]);
+    assert_eq!((RETRY_MIN, RETRY_MAX), (Duration::from_millis(500), Duration::from_secs(30)));
+}
+
+/// The waits a worker reports in its Retrying statuses, until `n` have come.
+fn retry_waits(rx: &Receiver<OpcEvent>, n: usize, within: Duration) -> Vec<(OpcError, u64)> {
+    let deadline = Instant::now() + within;
+    let mut out = Vec::new();
+    while out.len() < n {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(OpcEvent::Status { state: ConnState::Retrying { error, in_ms }, .. }) => out.push((error, in_ms)),
+            Ok(_) => {}
+            Err(e) => panic!("only {out:?} within {within:?}: {e:?}"),
+        }
+    }
+    out
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_backoff_starts_over_after_a_connection() {
+    let plant = DetachedPlant::start(0).expect("demo plant");
+    let port = plant.port();
+    let spec = line1(&plant.endpoint_url, |t| plant.node_id_str(t), 100);
+    plant.kill();
+
+    let (tx, rx) = channel();
+    let worker = veredas_core::opc::spawn(spec, tx, WriteGate::new(false)).expect("worker spawns");
+    let waits: Vec<u64> = retry_waits(&rx, 3, Duration::from_secs(30)).into_iter().map(|(_, ms)| ms).collect();
+    assert_eq!(waits, vec![500, 1_000, 2_000]);
+
+    let plant = DetachedPlant::start(port).expect("demo plant restarts");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        assert!(Instant::now() < deadline, "never reconnected");
+        if let Ok(OpcEvent::Status { state: ConnState::Connected, .. }) = rx.recv_timeout(Duration::from_secs(1)) {
+            break;
+        }
+    }
+    plant.kill();
+    // The first wait after a lost session is the shortest again.
+    let (_, first) = retry_waits(&rx, 1, Duration::from_secs(30))[0].clone();
+    assert_eq!(first, 500);
+    worker.handle.join().expect("clean shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_that_never_answers_ends_the_session_and_a_stop_mid_poll_is_prompt() {
+    let plant = DemoPlant::start().await.expect("demo plant");
+    let relay = Relay::start(plant.port()).expect("relay");
+    let spec = line1(&relay.endpoint_url, |t| plant.node_id_str(t), 100);
+    let (tx, rx) = channel();
+    let worker = veredas_core::opc::spawn(spec.clone(), tx, WriteGate::new(false)).expect("worker spawns");
+    assert!(next_poll(&rx, Duration::from_secs(15)).iter().all(|r| r.is_good()), "the relay carries the session");
+
+    // The link stalls mid-run: the read in flight never answers, and the worker drops the
+    // session at the call timeout rather than waiting on it forever.
+    relay.freeze();
+    let t0 = Instant::now();
+    let (error, in_ms) = retry_waits(&rx, 1, CALL_TIMEOUT + Duration::from_secs(5))[0].clone();
+    assert!(
+        matches!(error, OpcError::TimedOut(Call::Read) | OpcError::Failed { call: Call::Read, .. }),
+        "a read failure, not the end of the session itself: {error:?}"
+    );
+    assert!(t0.elapsed() <= CALL_TIMEOUT + Duration::from_secs(2), "{:?}", t0.elapsed());
+    assert_eq!(in_ms, 500);
+    worker.handle.join().expect("clean shutdown");
+
+    // A stop while a poll hangs on the stalled link does not wait for it, or for a reply to
+    // the CloseSession.
+    relay.thaw();
+    let (tx, rx) = channel();
+    let worker = veredas_core::opc::spawn(spec, tx, WriteGate::new(false)).expect("worker spawns");
+    next_poll(&rx, Duration::from_secs(15));
+    relay.freeze();
+    std::thread::sleep(Duration::from_millis(500));
+    let t0 = Instant::now();
+    worker.handle.join().expect("clean shutdown");
+    assert!(t0.elapsed() < Duration::from_millis(400), "{:?}", t0.elapsed());
+    drop(relay);
+    plant.stop().await;
+}
+
+/// A write whose call never answers is not "refused": it may still reach the plant. The worker
+/// says so, drops the session, and a stop with a write in flight says so too.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_write_without_an_answer_is_unconfirmed_and_ends_the_session() {
+    let plant = DemoPlant::start().await.expect("demo plant");
+    let relay = Relay::start(plant.port()).expect("relay");
+    let spec = line1(&relay.endpoint_url, |t| plant.node_id_str(t), 60_000);
+    let cmd = plant.node_id_str(tags::CMD_START);
+    let (tx, rx) = channel();
+    let worker = veredas_core::opc::spawn(spec.clone(), tx, WriteGate::new(true)).expect("worker spawns");
+    next_poll(&rx, Duration::from_secs(15));
+
+    relay.freeze();
+    let t0 = Instant::now();
+    let written = worker.writer.write_tags(vec![(cmd.clone(), Variant::Int32(1))]).await;
+    assert_eq!(written, Err(WriteError::Unconfirmed(OpcError::TimedOut(Call::Write))));
+    assert!(t0.elapsed() >= CALL_TIMEOUT && t0.elapsed() < CALL_TIMEOUT + Duration::from_secs(2), "{:?}", t0.elapsed());
+    assert_eq!(written.unwrap_err().to_string(), "the write may have reached the plant: write timed out");
+    let (error, _) = retry_waits(&rx, 1, Duration::from_secs(5))[0].clone();
+    assert_eq!(error, OpcError::TimedOut(Call::Write));
+    worker.handle.join().expect("clean shutdown");
+
+    // Stopped with a write in flight on the stalled link: prompt, and the write unconfirmed.
+    relay.thaw();
+    plant.set(tags::CMD_START, 0i32);
+    let (tx, rx) = channel();
+    let worker = veredas_core::opc::spawn(spec, tx, WriteGate::new(true)).expect("worker spawns");
+    next_poll(&rx, Duration::from_secs(15));
+    relay.freeze();
+    let writer = worker.writer.clone();
+    let target = cmd.clone();
+    let write = tokio::spawn(async move { writer.write_tags(vec![(target, Variant::Int32(1))]).await });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let t0 = Instant::now();
+    worker.handle.join().expect("clean shutdown");
+    assert!(t0.elapsed() < Duration::from_millis(400), "{:?}", t0.elapsed());
+    assert_eq!(write.await.unwrap(), Err(WriteError::Unconfirmed(OpcError::WorkerDropped)));
+    drop(relay);
+    plant.stop().await;
+}
+
+/// A request still queued when the worker stops was never sent, and is told so.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_request_still_queued_at_a_stop_is_not_sent() {
+    let plant = DemoPlant::start().await.expect("demo plant");
+    let (tx, rx) = channel();
+    let worker = veredas_core::opc::spawn(spec_for(&plant, 60_000), tx, WriteGate::new(true)).expect("worker spawns");
+    next_poll(&rx, Duration::from_secs(15));
+    plant.set(tags::CMD_START, 0i32);
+    let slow = parse_node_id(&plant.node_id_str(tags::SLOW)).unwrap();
+
+    let reader = worker.writer.clone();
+    let read = tokio::spawn(async move { reader.read(vec![slow]).await });
+    tokio::time::sleep(Duration::from_millis(100)).await; // the worker is inside the slow read
+    let writer = worker.writer.clone();
+    let cmd = plant.node_id_str(tags::CMD_START);
+    let write = tokio::spawn(async move { writer.write_tags(vec![(cmd, Variant::Int32(1))]).await });
+    tokio::time::sleep(Duration::from_millis(100)).await; // the write waits in the queue
+    worker.handle.join().expect("clean shutdown");
+
+    assert_eq!(read.await.unwrap(), Err(OpcError::WorkerDropped), "the read was in flight");
+    assert_eq!(write.await.unwrap(), Err(WriteError::NotSent(OpcError::WorkerGone)), "the write never left the queue");
+    tokio::time::sleep(SLOW_READ).await;
+    assert_eq!(plant.get(tags::CMD_START), Some(Variant::Int32(0)));
+    plant.stop().await;
+}
+
+/// The plant axis is the local wall clock, the unix arrival its UTC: apart by the offset. On a
+/// machine set to UTC the two coincide and nothing would be proven, so there (on Unix) the test
+/// runs itself again in a zone five and a half hours east.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_plant_axis_is_local_time_and_arrival_is_utc() {
+    let offset_ms = i64::from(chrono::Local::now().offset().local_minus_utc()) * 1_000;
+    if offset_ms == 0 {
+        assert!(std::env::var_os("VEREDAS_TZ_CHILD").is_none(), "TZ was not honoured: the offset is still 0");
+        #[cfg(unix)]
+        {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["the_plant_axis_is_local_time_and_arrival_is_utc", "--exact", "--nocapture"])
+                .env("TZ", "Asia/Kolkata")
+                .env("VEREDAS_TZ_CHILD", "1")
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success() && text.contains("1 passed"), "{text}");
+            return;
+        }
+        #[cfg(not(unix))]
+        panic!("this machine is on UTC: set a zone off UTC to check the plant axis");
+    }
+    let plant = DemoPlant::start().await.expect("demo plant");
+    let (tx, rx) = channel();
+    let worker = veredas_core::opc::spawn(spec_for(&plant, 100), tx, WriteGate::new(false)).expect("worker spawns");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let (index_ms, arrival_ms, before, after) = loop {
+        assert!(Instant::now() < deadline, "no poll");
+        let before = now_unix_ms();
+        if let Ok(OpcEvent::Poll { index_ms, arrival_ms, .. }) = rx.recv_timeout(Duration::from_secs(1)) {
+            break (index_ms, arrival_ms, before, now_unix_ms());
+        }
+    };
+    assert!(arrival_ms <= after && arrival_ms >= before - 1_000, "{before} <= {arrival_ms} <= {after}");
+    assert!((index_ms - arrival_ms - offset_ms).abs() < 1_000, "index {index_ms}, arrival {arrival_ms}, offset {offset_ms}");
+    worker.handle.join().expect("clean shutdown");
     plant.stop().await;
 }

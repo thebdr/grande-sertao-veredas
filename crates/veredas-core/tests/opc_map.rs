@@ -151,6 +151,39 @@ fn a_good_status_without_a_value_is_reported_as_no_value() {
 }
 
 #[test]
+fn an_empty_variant_beside_a_good_status_is_one_report_per_tag() {
+    // A server answering Good with a null value for an uninitialised variable.
+    let s = spec(vec![rule(
+        "line1",
+        false,
+        vec![
+            tag("ns=1;s=w", "word", SeriesType::Int, vec![bit(0, 1, "b0"), bit(1, 1, "b1")]),
+            tag("ns=1;s=f", "", SeriesType::Int, vec![bit(0, 1, "running"), bit(1, 1, "fault")]),
+        ],
+    )]);
+    let empty = |node: &str| TagRead {
+        node_id: parse_node_id(node).unwrap(),
+        value: Some(Variant::Empty),
+        status: StatusCode::Good,
+    };
+    let m = map_poll(&s, &[empty("ns=1;s=w"), empty("ns=1;s=f")], 0, 0);
+    assert_eq!(m.rows[0].values, vec![None, None, None, None, None]);
+    assert_eq!(failures(&m.failures), vec![("word", "no value"), ("running", "no value")]);
+    assert!(m.samples.is_empty());
+}
+
+#[test]
+fn a_bad_tag_mapped_by_two_rules_is_reported_in_each() {
+    // Once per tag in each rule that maps it: each rule's table has its own hole to explain.
+    let s = spec(vec![
+        rule("raw", false, vec![tag("ns=1;s=w", "word", SeriesType::Int, vec![])]),
+        rule("flags", false, vec![tag("ns=1;s=w", "", SeriesType::Int, vec![bit(0, 1, "running"), bit(1, 1, "fault")])]),
+    ]);
+    let m = map_poll(&s, &[read("ns=1;s=w", None)], 0, 0);
+    assert_eq!(failures(&m.failures), vec![("word", "BadNodeIdUnknown"), ("running", "BadNodeIdUnknown")]);
+}
+
+#[test]
 fn a_node_absent_from_the_poll_is_a_hole_with_nothing_to_report() {
     let s = spec(vec![rule(
         "line1",
@@ -221,9 +254,9 @@ fn the_rendered_line_shows_values_and_holes_on_one_line() {
     );
     let row = RuleRow {
         rule_index: 0,
-        values: vec![Some(Value::Float(21.5)), None, Some(Value::Text(Arc::from("B-1\r\nnext\tcol")))],
+        values: vec![Some(Value::Float(21.5)), None, Some(Value::Text(Arc::from("B-1\r\nnext\tcol\u{85}a\u{2028}b\u{2029}c")))],
     };
-    assert_eq!(render_line(&r, &row), "line1 temp=21.5 gone=? batch=B-1  next col");
+    assert_eq!(render_line(&r, &row), "line1 temp=21.5 gone=? batch=B-1  next col a b c");
     let empty = rule("quiet", false, vec![]);
     assert_eq!(render_line(&empty, &RuleRow { rule_index: 0, values: vec![] }), "quiet");
 }
@@ -286,6 +319,20 @@ fn an_unchanged_rule_is_skipped_alone_and_still_reports_its_failures() {
     assert_eq!(second.samples.len(), 1);
     // The skipped rule's bad tag is still reported.
     assert_eq!(failures(&second.failures), vec![("gone", "BadNodeIdUnknown")]);
+}
+
+#[test]
+fn a_float_stuck_at_nan_is_unchanged() {
+    // NaN != NaN, but a reading frozen at NaN (a faulted sensor) has not changed.
+    let s = spec(vec![rule("temps", true, vec![tag("ns=1;s=t", "temp", SeriesType::Float, vec![])])]);
+    let nan = vec![read("ns=1;s=t", Some(Variant::Double(f64::NAN)))];
+    let mut d = DedupState::default();
+    let kept: Vec<u32> =
+        (1..=HEARTBEAT_POLLS + 1).filter(|&i| !map_poll_dedup(&s, &nan, i64::from(i), 0, Some(&mut d)).rows.is_empty()).collect();
+    assert_eq!(kept, vec![1, HEARTBEAT_POLLS + 1]);
+    // A real number after the NaN is a transition, and back again.
+    assert_eq!(map_poll_dedup(&s, &[read("ns=1;s=t", Some(Variant::Double(1.0)))], 0, 0, Some(&mut d)).rows.len(), 1);
+    assert_eq!(map_poll_dedup(&s, &nan, 0, 0, Some(&mut d)).rows.len(), 1);
 }
 
 #[test]

@@ -79,7 +79,9 @@ pub fn map_poll_dedup(
         let mut rule_samples: Vec<Sample> = Vec::new();
         for tag in &rule.tags {
             let read = by_node.get(&tag.node_id);
-            let raw: Option<&Variant> = read.and_then(|r| r.value.as_ref());
+            // An empty variant is no value, whatever the status beside it.
+            let raw: Option<&Variant> =
+                read.and_then(|r| r.value.as_ref()).filter(|v| !matches!(v, Variant::Empty));
 
             // A read with no value is information: report it once per tag, on the tag's first
             // column (its own, else its first bit field), so the operator sees WHICH tag the
@@ -132,7 +134,7 @@ pub fn map_poll_dedup(
         if rule.store_on_change
             && let Some(d) = dedup.as_deref_mut()
         {
-            let unchanged = d.last[rule_index].as_ref() == Some(&values);
+            let unchanged = d.last[rule_index].as_ref().is_some_and(|last| same_row(last, &values));
             if unchanged && d.skipped[rule_index] + 1 < HEARTBEAT_POLLS {
                 d.skipped[rule_index] += 1;
                 continue; // no row, no samples: the transition is what matters
@@ -144,6 +146,16 @@ pub fn map_poll_dedup(
         out.rows.push(RuleRow { rule_index, values });
     }
     out
+}
+
+/// Two rows hold the same reading: equal values, holes in the same places, and a NaN the same
+/// as a NaN (a float stuck at NaN has not changed, though NaN != NaN).
+fn same_row(a: &[Option<Value>], b: &[Option<Value>]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|pair| match pair {
+            (Some(Value::Float(x)), Some(Value::Float(y))) => x == y || (x.is_nan() && y.is_nan()),
+            (x, y) => x == y,
+        })
 }
 
 fn push_sample(
@@ -168,7 +180,8 @@ fn push_sample(
 
 /// One line for one row, `rule column=value ...`, a hole shown as `?`: an OPC source produces
 /// no text of its own, and an operator watching a source should still SEE it doing something.
-/// Always one line: a control character in a value (a newline in a text tag) reads as a space.
+/// Always one line: a control character or a Unicode line or paragraph separator in a value (a
+/// newline in a text tag) reads as a space.
 pub fn render_line(rule: &RuleSpec, row: &RuleRow) -> String {
     let mut out = String::with_capacity(64);
     out.push_str(&rule.name);
@@ -181,5 +194,5 @@ pub fn render_line(rule: &RuleSpec, row: &RuleRow) -> String {
             None => out.push('?'),
         }
     }
-    out.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
+    out.chars().map(crate::opc::flat).collect()
 }

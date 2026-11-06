@@ -32,7 +32,15 @@ pub use error::{Call, NodeIdError, OpcError};
 pub use map::{DedupState, HEARTBEAT_POLLS, Mapped, RuleRow, map_poll, map_poll_dedup, render_line};
 pub use spec::{Auth, BitSpec, PollSpec, RuleSpec, TagSpec, parse_node_id};
 pub use value::{ValueError, bit_field, opc_to_value};
-pub use worker::{ConnState, OpcEvent, OpcHandle, OpcWorker, TagRead, WriteGate, WriteRefused, spawn};
+pub use worker::{
+    ConnState, OpcEvent, OpcHandle, OpcWorker, TagRead, WriteError, WriteGate, retry_delays, spawn, tag_reads,
+};
+
+/// One character of a one-line rendering: a control character, or a Unicode line or paragraph
+/// separator, reads as a space.
+pub(crate) fn flat(c: char) -> char {
+    if c.is_control() || c == '\u{2028}' || c == '\u{2029}' { ' ' } else { c }
+}
 
 /// Re-exported so callers can build values and node ids without depending on
 /// `async-opcua-types` directly: the crate boundary stays one import wide.

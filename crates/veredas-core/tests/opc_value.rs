@@ -193,6 +193,47 @@ fn a_u64_word_has_all_its_bits_and_a_field_too_wide_for_an_int_is_refused() {
 }
 
 #[test]
+fn a_byte_word_has_its_eight_bits() {
+    let w = Variant::Byte(0xFF);
+    assert_eq!(bit_field(&w, 0, 16).unwrap(), Value::Int(0xFF));
+    assert_eq!(bit_field(&w, 7, 1).unwrap(), Value::Int(1));
+    assert_eq!(bit_field(&w, 8, 1).unwrap(), Value::Int(0));
+    assert_eq!(bit_field(&Variant::Byte(0b1010_0000), 5, 3).unwrap(), Value::Int(0b101));
+}
+
+#[test]
+fn every_wire_type_that_is_refused_is_named() {
+    use opcua_types::{ByteString, DataValue, DiagnosticInfo, ExpandedNodeId, ExtensionObject, Guid, NodeId, XmlElement};
+    let refused: Vec<(Variant, &str)> = vec![
+        (Variant::from("x"), "String"),
+        (Variant::from(DateTime::null()), "DateTime"),
+        (Variant::from(Guid::null()), "Guid"),
+        (Variant::from(StatusCode::Good), "StatusCode"),
+        (Variant::from(ByteString::from(vec![1u8, 2])), "ByteString"),
+        (Variant::from(LocalizedText::new("en", "x")), "LocalizedText"),
+        (Variant::from(QualifiedName::new(1, "x")), "QualifiedName"),
+        (Variant::from(NodeId::new(1, "x")), "NodeId"),
+        (Variant::from(ExpandedNodeId::new(NodeId::new(1, "x"))), "ExpandedNodeId"),
+        (Variant::ExtensionObject(ExtensionObject::null()), "ExtensionObject"),
+        (Variant::XmlElement(XmlElement::from("<a/>")), "XmlElement"),
+        (Variant::Variant(Box::new(Variant::Int32(5))), "Variant"),
+        (Variant::DataValue(Box::new(DataValue::new_now(5i32))), "DataValue"),
+        (Variant::DiagnosticInfo(Box::new(DiagnosticInfo::null())), "DiagnosticInfo"),
+        (Variant::from(vec![1i32, 2]), "Array"),
+    ];
+    for (v, wire) in refused {
+        assert_eq!(int(v.clone()), Err(ValueError::Mismatch { wire, want: SeriesType::Int }), "{wire}");
+        assert_eq!(float(v.clone()), Err(ValueError::Mismatch { wire, want: SeriesType::Float }), "{wire}");
+        assert_eq!(bit_field(&v, 0, 1), Err(ValueError::NotIntegral { wire }), "{wire}");
+        if wire != "DateTime" {
+            assert_eq!(opc_to_value(&v, SeriesType::Time), Err(ValueError::Mismatch { wire, want: SeriesType::Time }));
+        }
+        let shown = int(v).unwrap_err().to_string();
+        assert_eq!(shown, format!("{wire} value does not fit a int series"));
+    }
+}
+
+#[test]
 fn bits_refuse_non_integers() {
     let err = bit_field(&Variant::Double(1.5), 0, 1).unwrap_err();
     assert_eq!(err, ValueError::NotIntegral { wire: "Double" });
@@ -201,4 +242,8 @@ fn bits_refuse_non_integers() {
     assert_eq!(bit_field(&Variant::Empty, 0, 1), Err(ValueError::Empty));
     // A string tag cannot have bits either, even one that reads as a number.
     assert_eq!(bit_field(&Variant::from("3"), 0, 1), Err(ValueError::NotIntegral { wire: "String" }));
+    // A non-integer is refused wherever the field starts, past the top of any word included.
+    assert_eq!(bit_field(&Variant::Double(1.5), 64, 1), Err(ValueError::NotIntegral { wire: "Double" }));
+    assert_eq!(bit_field(&Variant::from("x"), 200, 8), Err(ValueError::NotIntegral { wire: "String" }));
+    assert_eq!(bit_field(&Variant::Empty, 64, 1), Err(ValueError::Empty));
 }

@@ -11,13 +11,17 @@
 //!      refuses with a bad status
 //!   6. browse lists a folder's children with what the browser needs (node id, display name,
 //!      node class, type definition)
-//!   7. a server refuses a Read past its per-call cap WHOLE (the reason reads are chunked), and
-//!      takes one at the cap
-//!   8. a browse returns at most the references asked for, with a continuation point that
-//!      BrowseNext follows to the rest (the reason the browser loops)
-//!   9. a status code's severity is its top two bits, 0b11 reading as bad, and it displays as
-//!      its name (what `Quality` and the failure texts rest on)
-//!  10. the wire types the demo plant exposes map as `opc::value` expects
+//!   7. a server refuses a Read past its per-call cap WHOLE, with its own status (the reason
+//!      reads are chunked), and takes one at the cap; past the stack's array limit of 1 000 a
+//!      request fails to decode whatever the cap (the reason the chunk stays under it)
+//!   8. a browse returns at most the references asked for, and at most the server's own page,
+//!      with a continuation point that BrowseNext follows to the rest (the reason the browser
+//!      loops); a released point is gone
+//!   9. a status code's severity is its top two bits, 0b11 reading as bad, a good code with
+//!      sub-status bits still good, and it displays as its name (what `Quality` and the failure
+//!      texts rest on)
+//!  10. the wire types the demo plant exposes map as `opc::value` expects, and the attributes
+//!      the browser reads come in the types its renderers match on
 //!  11. the demo plant's slow tag takes its stated time per read
 
 use std::sync::Arc;
@@ -29,7 +33,7 @@ use opcua_types::{
     MessageSecurityMode, NodeClass, NodeClassMask, NodeId, ObjectId, QualifiedName, ReadValueId, ReferenceTypeId,
     StatusCode, TimestampsToReturn, UserTokenPolicy, Variant, WriteValue,
 };
-use veredas_core::opc::demo::{BULK_COUNT, DEMO_PASS, DEMO_USER, DemoPlant, MAX_NODES_PER_READ, SLOW_READ, tags};
+use veredas_core::opc::demo::{BULK_COUNT, DEMO_PASS, DEMO_USER, DemoConfig, DemoPlant, MAX_NODES_PER_READ, SLOW_READ, tags};
 use veredas_core::opc::{bit_field, opc_to_value};
 use veredas_core::{SeriesType, Value};
 
@@ -169,7 +173,9 @@ async fn username_password_accepts_the_right_pair_and_rejects_the_wrong_one() {
     assert!(t0.elapsed() < Duration::from_secs(10), "rejected promptly: {:?}", t0.elapsed());
     // An unknown user likewise.
     let stranger = IdentityToken::UserName("nobody".into(), DEMO_PASS.into());
+    let t0 = Instant::now();
     assert!(connect(&plant, stranger).await.is_err());
+    assert!(t0.elapsed() < Duration::from_secs(10), "rejected promptly: {:?}", t0.elapsed());
 
     plant.stop().await;
 }
@@ -255,16 +261,20 @@ async fn a_read_past_the_servers_cap_is_refused_whole() {
     let (session, _loop) = connect(&plant, IdentityToken::Anonymous).await.expect("connect");
     let ids: Vec<ReadValueId> =
         (0..BULK_COUNT).map(|i| read_value_id(&plant.node_id(&format!("bulk.v{i:04}")))).collect();
+    // The worker's chunk fits under this cap, which sits under the stack's array limit.
     const {
-        assert!(BULK_COUNT > MAX_NODES_PER_READ && MAX_NODES_PER_READ > veredas_core::opc::worker::MAX_NODES_PER_READ)
+        assert!(
+            BULK_COUNT > MAX_NODES_PER_READ
+                && MAX_NODES_PER_READ > veredas_core::opc::worker::MAX_NODES_PER_READ
+                && ARRAY_LIMIT > MAX_NODES_PER_READ
+        )
     };
 
+    // One past the cap: the server faults the call with its own status, which the stack keeps.
     let over = session.read(&ids[..MAX_NODES_PER_READ + 1], TimestampsToReturn::Both, 0.0).await;
     let err = over.expect_err("one past the cap is refused");
-    // The server faults the call with BadTooManyOperations; this stack surfaces any service
-    // fault as BadDecodingError, which is the text a field server's refusal showed.
-    assert_eq!(err.status(), StatusCode::BadDecodingError, "{err}");
-    assert_eq!(err.to_string(), "BadDecodingError: Request returned ServiceFault");
+    assert_eq!(err.status(), StatusCode::BadTooManyOperations, "{err}");
+    assert_eq!(err.to_string(), "BadTooManyOperations: Request returned ServiceFault");
 
     let at = session.read(&ids[..MAX_NODES_PER_READ], TimestampsToReturn::Both, 0.0).await.expect("at the cap");
     assert_eq!(at.len(), MAX_NODES_PER_READ);
@@ -274,6 +284,28 @@ async fn a_read_past_the_servers_cap_is_refused_whole() {
     let one = session.read(&ids[..1], TimestampsToReturn::Both, 0.0).await.expect("still usable");
     assert_eq!(one[0].value, Some(Variant::Int32(0)));
 
+    plant.stop().await;
+}
+
+/// The stack's own array limit: a request of more than 1 000 elements fails to decode at the
+/// server before any per-call cap is checked (what a 3,048-tag read met in the field, as
+/// "BadDecodingError: Request returned ServiceFault"), and the client decodes no larger answer.
+/// So the worker's chunk must stay at or under it, whatever a server's cap.
+const ARRAY_LIMIT: usize = 1_000;
+
+#[tokio::test]
+async fn a_read_past_the_stacks_array_limit_fails_to_decode_whatever_the_cap() {
+    assert_eq!(opcua_types::constants::MAX_ARRAY_LENGTH, ARRAY_LIMIT);
+    const { assert!(veredas_core::opc::worker::MAX_NODES_PER_READ <= ARRAY_LIMIT) };
+    let plant = DemoPlant::start().await.expect("demo plant starts");
+    let (session, _loop) = connect(&plant, IdentityToken::Anonymous).await.expect("connect");
+    let ids: Vec<ReadValueId> =
+        (0..=ARRAY_LIMIT).map(|i| read_value_id(&plant.node_id(&format!("bulk.v{i:04}")))).collect();
+    let err = session.read(&ids, TimestampsToReturn::Both, 0.0).await.expect_err("refused");
+    assert_eq!(err.status(), StatusCode::BadDecodingError, "{err}");
+    assert_eq!(err.to_string(), "BadDecodingError: Request returned ServiceFault");
+    let one = session.read(&ids[..1], TimestampsToReturn::Both, 0.0).await.expect("still usable");
+    assert_eq!(one[0].value, Some(Variant::Int32(0)));
     plant.stop().await;
 }
 
@@ -301,11 +333,73 @@ async fn a_browse_pages_and_browse_next_follows_to_the_rest() {
     }
     assert_eq!((all, rounds), (BULK_COUNT, 2));
 
-    // Releasing a point mid-way is accepted.
+    // Releasing a point mid-way is accepted, and the point is gone after it.
     let first = session.browse(&[describe(plant.node_id("bulk"))], 100, None).await.expect("browse");
-    let released = session.browse_next(true, &[first[0].continuation_point.clone()]).await.expect("release");
+    let cp = first[0].continuation_point.clone();
+    let released = session.browse_next(true, std::slice::from_ref(&cp)).await.expect("release");
+    assert_eq!(released[0].status_code, StatusCode::Good);
     assert!(released[0].references.as_ref().is_none_or(|r| r.is_empty()));
+    let reused = session.browse_next(false, &[cp]).await.expect("call succeeds");
+    assert_eq!(reused[0].status_code, StatusCode::BadContinuationPointInvalid);
 
+    plant.stop().await;
+}
+
+#[tokio::test]
+async fn a_server_pages_at_its_own_limit_whatever_is_asked() {
+    // A server with a smaller page than the client asks for (the browser asks for 1 000).
+    let plant = DemoPlant::start_with(DemoConfig { browse_page: Some(1), ..DemoConfig::default() })
+        .await
+        .expect("demo plant starts");
+    let (session, _loop) = connect(&plant, IdentityToken::Anonymous).await.expect("connect");
+    let first = session.browse(&[describe(plant.node_id("line1"))], 1_000, None).await.expect("browse");
+    assert_eq!(first[0].references.as_ref().map(|r| r.len()), Some(1));
+    assert!(!first[0].continuation_point.is_null_or_empty());
+    plant.stop().await;
+}
+
+#[tokio::test]
+async fn the_browser_s_requests_are_answered_as_it_reads_them() {
+    // What browse.rs sends and expects, pinned where a version bump would show it first.
+    let plant = DemoPlant::start().await.expect("demo plant starts");
+    let (session, _loop) = connect(&plant, IdentityToken::Anonymous).await.expect("connect");
+
+    // A browse with no class filter (mask 0) lists every child.
+    let mut unfiltered = describe(plant.node_id("line1"));
+    unfiltered.node_class_mask = 0;
+    let refs = session.browse(&[unfiltered], 1_000, None).await.expect("browse")[0].references.clone().unwrap_or_default();
+    assert_eq!(refs.len(), 5);
+
+    // The attributes come back in the types the renderers match on; one a node lacks is
+    // BadAttributeIdInvalid.
+    let attr = |node: NodeId, attribute: AttributeId| ReadValueId {
+        node_id: node,
+        attribute_id: attribute as u32,
+        ..Default::default()
+    };
+    let temp = plant.node_id(tags::TEMPERATURE);
+    let values = session
+        .read(
+            &[
+                attr(temp.clone(), AttributeId::DataType),
+                attr(temp.clone(), AttributeId::NodeClass),
+                attr(temp.clone(), AttributeId::AccessLevel),
+                attr(temp.clone(), AttributeId::ValueRank),
+                attr(temp.clone(), AttributeId::BrowseName),
+                attr(temp, AttributeId::EventNotifier),
+            ],
+            TimestampsToReturn::Neither,
+            0.0,
+        )
+        .await
+        .expect("read");
+    assert_eq!(values[0].value, Some(Variant::from(NodeId::new(0, 11u32))));
+    assert_eq!(values[1].value, Some(Variant::Int32(2)));
+    assert_eq!(values[2].value, Some(Variant::Byte(1)));
+    assert_eq!(values[3].value, Some(Variant::Int32(-1)));
+    assert_eq!(values[4].value, Some(Variant::from(QualifiedName::new(0, "Temperature"))));
+    assert_eq!(values[5].status, Some(StatusCode::BadAttributeIdInvalid));
+    assert!(values[5].value.is_none());
     plant.stop().await;
 }
 
@@ -322,6 +416,13 @@ fn a_status_codes_severity_is_its_top_two_bits_and_it_displays_its_name() {
     // The reserved severity reads as bad.
     let reserved = StatusCode::from(0xC000_0000u32);
     assert!(reserved.is_bad() && !reserved.is_good() && !reserved.is_uncertain());
+    // A good code with sub-status or info bits is still good: a server answering GoodClamped
+    // or GoodLocalOverride has given a value.
+    for (bits, name) in [(0x0030_0000u32, "GoodClamped"), (0x0096_0000, "GoodLocalOverride")] {
+        let code = StatusCode::from(bits);
+        assert!(code.is_good() && !code.is_uncertain() && !code.is_bad(), "{name}");
+        assert_eq!(code.to_string(), name);
+    }
     // Names, as the failure texts and the browser's rows show them.
     assert_eq!(good.to_string(), "Good");
     assert_eq!(bad.to_string(), "BadNodeIdUnknown");

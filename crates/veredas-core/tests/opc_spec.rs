@@ -153,8 +153,17 @@ fn only_tags_marked_writable_resolve_for_writing() {
     // Whitespace around the request does not defeat the check, and is no part of the key.
     assert!(s.writable_tag("  ns=1;s=cmd  ").is_some());
     assert!(s.tag("\tns=1;s=temp\n").is_some());
-    // The lookup is by the configured text, exactly: an equivalent spelling is not the tag.
-    assert!(s.writable_tag("ns=1;s=CMD").is_none());
+    // The lookup is by the configured text, exactly: another node (ids are case-sensitive), a
+    // blank request, a prefix or an extension of the text is not the tag.
+    for other in ["ns=1;s=CMD", "", "   ", "ns=1;s=c", "ns=1;s=cmdX", "ns=1;s=cm d", "ns=1"] {
+        assert!(s.writable_tag(other).is_none(), "{other:?}");
+        assert!(s.tag(other).is_none(), "{other:?}");
+    }
+    // Nor is an equivalent spelling of the same node: the stack reads `ns=01` as namespace 1,
+    // but the whitelist holds text, not nodes.
+    assert_eq!(parse_node_id("ns=01;s=cmd").unwrap(), parse_node_id("ns=1;s=cmd").unwrap());
+    assert!(s.writable_tag("ns=01;s=cmd").is_none());
+    assert!(s.tag("ns=01;s=cmd").is_none());
 }
 
 #[test]
@@ -172,4 +181,11 @@ fn an_identity_shows_its_user_and_never_its_password() {
     let a = Auth::UserPass { username: "operator".into(), password: "s3cret-pw".into() };
     assert_eq!(a.label(), "user operator");
     assert!(!a.label().contains("s3cret"));
+    // Nor does its debug form, or a spec's that carries it.
+    assert_eq!(format!("{a:?}"), r#"UserPass { username: "operator", password: "<hidden>" }"#);
+    assert_eq!(format!("{:?}", Auth::Anonymous), "Anonymous");
+    let mut s = spec(vec![]);
+    s.auth = a;
+    let shown = format!("{s:?} {s:#?}");
+    assert!(shown.contains("operator") && !shown.contains("s3cret"), "{shown}");
 }

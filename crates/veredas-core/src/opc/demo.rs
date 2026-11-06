@@ -8,8 +8,10 @@
 //! The node set is shaped like what the layer must handle: a **float** measurement, a packed
 //! **UInt16 status word** whose bits mean things, **writable command tags** (so a pulse, set 1
 //! then 0, has somewhere real to land), a subtree hung off **HasComponent** references, a folder
-//! larger than one browse page, a read cap per call smaller than that folder, and one tag whose
-//! read is **slow**, so a request can be made to wait behind it.
+//! larger than one browse page and than one Read may carry, folders of exactly 64 and 65
+//! children (for a server configured to serve one reference per page, [`DemoConfig`]), a child
+//! linked to its folder twice, and one tag whose read is **slow**, so a request can be made to
+//! wait behind it. A [`Relay`] puts a link that can go silent between a client and a plant.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -62,8 +64,24 @@ pub mod tags {
 pub const BULK_COUNT: usize = 1_200;
 
 /// The most nodes the demo server takes in one Read call; a call with more is refused whole
-/// (`BadTooManyOperations`). Under [`BULK_COUNT`], over the client's chunk.
-pub const MAX_NODES_PER_READ: usize = 1_000;
+/// (`BadTooManyOperations`). Under [`BULK_COUNT`], over the client's chunk, and under the stack's
+/// own array limit of 1 000 (a request past that fails to decode before any cap is checked).
+pub const MAX_NODES_PER_READ: usize = 800;
+
+/// Folders whose children are numbered `pages64.v00` .. and `pages65.v00` ..: 64 and 65
+/// variables, so a server serving one reference per browse page (see [`DemoConfig`]) takes
+/// exactly 64 and 65 pages to list them.
+pub const PAGED_FOLDERS: [(&str, usize); 2] = [("pages64", 64), ("pages65", 65)];
+
+/// How a demo plant is started.
+#[derive(Clone, Debug, Default)]
+pub struct DemoConfig {
+    /// The port to bind; 0 lets the OS choose.
+    pub port: u16,
+    /// The most references the server returns per browse page, whatever the client asks;
+    /// `None` keeps the stack's default (1 000).
+    pub browse_page: Option<usize>,
+}
 
 /// How long a read of [`tags::SLOW`] takes. The server thread that serves it is blocked for that
 /// long, so only a multi-threaded runtime keeps serving others meanwhile.
@@ -88,6 +106,8 @@ pub enum DemoError {
     Thread(std::io::Error),
     #[error("the demo plant thread died on startup")]
     DiedOnStartup,
+    #[error("relay: {0}")]
+    Relay(std::io::Error),
 }
 
 /// A running demo server on the caller's runtime: the address to point a client at, and the
@@ -111,6 +131,12 @@ impl DemoPlant {
 
     /// Start on a specific port (0 lets the OS choose).
     pub async fn start_on(port: u16) -> Result<DemoPlant, DemoError> {
+        DemoPlant::start_with(DemoConfig { port, ..DemoConfig::default() }).await
+    }
+
+    /// Start as configured.
+    pub async fn start_with(config: DemoConfig) -> Result<DemoPlant, DemoError> {
+        let port = config.port;
         // Bind first, then tell the server the port actually got: otherwise its advertised
         // endpoint urls disagree with reality and `connect_to_matching_endpoint` finds nothing.
         let listener = TcpListener::bind(("127.0.0.1", port))
@@ -139,6 +165,9 @@ impl DemoPlant {
                 "demo-plant",
             ));
         builder.limits_mut().operational.max_nodes_per_read = MAX_NODES_PER_READ;
+        if let Some(page) = config.browse_page {
+            builder.limits_mut().operational.max_references_per_browse_node = page;
+        }
         let (server, handle) = builder.build().map_err(|e| DemoError::Build(e.to_string()))?;
 
         let nodes = handle.node_managers().get_of_type::<SimpleNodeManager>().ok_or(DemoError::NoNodeManager)?;
@@ -338,6 +367,105 @@ impl Drop for DetachedPlant {
     }
 }
 
+/// A TCP relay in front of a plant that can be frozen: a link that goes silent without closing,
+/// the way a stalled switch or a wedged peer looks from a client.
+///
+/// It listens on `127.0.0.2` at the plant's own port and forwards to `127.0.0.1` at that port, so
+/// a client given [`Relay::endpoint_url`] matches the plant's advertised endpoint (the port and
+/// path agree) and still goes through the relay. Frozen, it forwards nothing in either
+/// direction and holds what it has read until thawed; both sockets stay open. Dropping it closes
+/// every connection it carries.
+pub struct Relay {
+    /// `opc.tcp://127.0.0.2:<port>/`.
+    pub endpoint_url: String,
+    frozen: Arc<std::sync::atomic::AtomicBool>,
+    closed: Arc<std::sync::atomic::AtomicBool>,
+    accept: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Relay {
+    /// Relay `127.0.0.2:<port>` to `127.0.0.1:<port>`.
+    pub fn start(port: u16) -> Result<Relay, DemoError> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let listener = std::net::TcpListener::bind(("127.0.0.2", port)).map_err(DemoError::Relay)?;
+        listener.set_nonblocking(true).map_err(DemoError::Relay)?;
+        let frozen = Arc::new(AtomicBool::new(false));
+        let closed = Arc::new(AtomicBool::new(false));
+        let (f, c) = (Arc::clone(&frozen), Arc::clone(&closed));
+        let accept = std::thread::Builder::new()
+            .name("demo-relay".into())
+            .spawn(move || {
+                while !c.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((client, _)) => {
+                            let Ok(server) = std::net::TcpStream::connect(("127.0.0.1", port)) else {
+                                continue;
+                            };
+                            let _ = client.set_nonblocking(false);
+                            for (from, to) in [(&client, &server), (&server, &client)] {
+                                let (Ok(from), Ok(to)) = (from.try_clone(), to.try_clone()) else { continue };
+                                let (f, c) = (Arc::clone(&f), Arc::clone(&c));
+                                let _ = std::thread::Builder::new().name("demo-relay-pump".into()).spawn(move || pump(from, to, &f, &c));
+                            }
+                        }
+                        Err(_) => std::thread::sleep(Duration::from_millis(10)),
+                    }
+                }
+            })
+            .map_err(DemoError::Relay)?;
+        Ok(Relay { endpoint_url: format!("opc.tcp://127.0.0.2:{port}/"), frozen, closed, accept: Some(accept) })
+    }
+
+    /// Stop forwarding, both ways, keeping every connection open.
+    pub fn freeze(&self) {
+        self.frozen.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Forward again, what was held first.
+    pub fn thaw(&self) {
+        self.frozen.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl Drop for Relay {
+    fn drop(&mut self) {
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(t) = self.accept.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// Copy one direction of a relayed connection, holding each chunk while frozen, until either
+/// side closes or the relay is dropped.
+fn pump(
+    mut from: std::net::TcpStream,
+    mut to: std::net::TcpStream,
+    frozen: &std::sync::atomic::AtomicBool,
+    closed: &std::sync::atomic::AtomicBool,
+) {
+    use std::io::{Read, Write};
+    use std::sync::atomic::Ordering;
+    let _ = from.set_read_timeout(Some(Duration::from_millis(20)));
+    let mut buf = [0u8; 16 * 1024];
+    while !closed.load(Ordering::SeqCst) {
+        let n = match from.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => continue,
+            Err(_) => break,
+        };
+        while frozen.load(Ordering::SeqCst) && !closed.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if closed.load(Ordering::SeqCst) || to.write_all(&buf[..n]).is_err() {
+            break;
+        }
+    }
+    let _ = from.shutdown(std::net::Shutdown::Both);
+    let _ = to.shutdown(std::net::Shutdown::Both);
+}
+
 /// Build the plant's node set.
 fn populate(nodes: &SimpleNodeManager, ns: u16) {
     let mut space = nodes.address_space().write();
@@ -397,6 +525,29 @@ fn populate(nodes: &SimpleNodeManager, ns: u16) {
             .organized_by(bulk.clone())
             .insert(&mut *space);
     }
+
+    // Folders of exactly 64 and 65 children, for the browser's page ceiling.
+    for (name, count) in PAGED_FOLDERS {
+        let paged = NodeId::new(ns, name);
+        ObjectBuilder::new(&paged, name, name).organized_by(ObjectId::ObjectsFolder).insert(&mut *space);
+        for i in 0..count {
+            let child = format!("{name}.v{i:02}");
+            variable(&child, &child, &child, DataTypeId::Int32)
+                .value(i as i32)
+                .organized_by(paged.clone())
+                .insert(&mut *space);
+        }
+    }
+
+    // One child linked to its folder twice, by Organizes and by HasComponent: a browse sees two
+    // references to the same node.
+    let twins = NodeId::new(ns, "twins");
+    ObjectBuilder::new(&twins, "Twins", "Twins").organized_by(ObjectId::ObjectsFolder).insert(&mut *space);
+    variable("twins.only", "Only", "Only", DataTypeId::Int32)
+        .value(1i32)
+        .organized_by(twins.clone())
+        .component_of(twins)
+        .insert(&mut *space);
 
     // The slow tag, in a folder of its own.
     let slow = NodeId::new(ns, "slow");

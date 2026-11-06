@@ -12,7 +12,8 @@ use veredas_core::opc::browse::{
     BRIEF_MAX, BrowseEvent, BrowsedNode, access_level_text, data_type_text, node_class_text, result_refusal,
     series_type_of, value_rank_text, variant_brief,
 };
-use veredas_core::opc::demo::{BULK_COUNT, DemoPlant, tags};
+use veredas_core::opc::browse::{BROWSE_TIMEOUT, MAX_BROWSE_PAGES};
+use veredas_core::opc::demo::{BULK_COUNT, DemoConfig, DemoPlant, PAGED_FOLDERS, Relay, tags};
 use veredas_core::opc::spec::Auth;
 use veredas_core::opc::worker::CONNECT_TIMEOUT;
 use veredas_core::opc::{Browser, Call, NodeId, NodeIdError, OpcError, StatusCode, Variant};
@@ -98,14 +99,26 @@ fn detail_rows_render_in_words_not_magic_numbers() {
     assert_eq!(data_type_text(&builtin(26)), "i=26");
     // A custom type in another namespace stays the raw id, no guess.
     assert_eq!(data_type_text(&NodeId::new(3, "DTL")), "ns=3;s=DTL");
+
+    // Every built-in's name, exactly.
+    let names = [
+        "Boolean", "SByte", "Byte", "Int16", "UInt16", "Int32", "UInt32", "Int64", "UInt64", "Float", "Double",
+        "String", "DateTime", "Guid", "ByteString", "XmlElement", "NodeId", "ExpandedNodeId", "StatusCode",
+        "QualifiedName", "LocalizedText", "Structure", "DataValue", "BaseDataType", "DiagnosticInfo",
+    ];
+    for (i, name) in names.iter().enumerate() {
+        let id = i as u32 + 1;
+        let series = series_type_of(&builtin(id)).map(|t| format!(" → {t} series")).unwrap_or_default();
+        assert_eq!(data_type_text(&builtin(id)), format!("{name} (i={id}){series}"));
+    }
 }
 
 #[test]
 fn a_bad_result_status_is_a_named_refusal_not_an_empty_folder() {
     // A strict server refuses a browse with a bad per-result status and zero references;
-    // swallowing the status showed a whole controller as an empty tree. The demo stack is lax
-    // (it answers an unknown node with Good and no references), so the refusal is pinned here
-    // on a constructed result.
+    // swallowing the status showed a whole controller as an empty tree. The demo stack refuses
+    // only the null node (pinned end-to-end below) and never a continuation, so both texts are
+    // pinned here on constructed results.
     let refused = BrowseResult {
         status_code: StatusCode::BadNodeIdUnknown,
         continuation_point: ByteString::null(),
@@ -436,4 +449,133 @@ fn dropping_the_browser_mid_connect_returns_at_once() {
     let t0 = Instant::now();
     drop(browser);
     assert!(t0.elapsed() < Duration::from_millis(500), "{:?}", t0.elapsed());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_refusing_a_browse_is_a_refusal_not_an_empty_folder() {
+    // The demo stack refuses a browse of the null node outright: through the browser, that is
+    // a named refusal, and the next request is still served.
+    let plant = DemoPlant::start().await.expect("demo plant");
+    let browser = Browser::connect(&plant.endpoint_url, Auth::Anonymous);
+    browser.browse(Some("i=0".to_string()));
+    assert_eq!(
+        next_failure(&browser, Duration::from_secs(20)),
+        OpcError::Refused { call: Call::Browse, status: StatusCode::BadNodeIdUnknown }
+    );
+    browser.browse(Some(plant.node_id_str("twins")));
+    let (_, twins) = next_children(&browser, Duration::from_secs(20));
+    // A child linked to its folder twice (Organizes and HasComponent) is listed once.
+    assert_eq!(twins.iter().map(|c| c.node_id.clone()).collect::<Vec<_>>(), vec![plant.node_id_str("twins.only")]);
+    drop(browser);
+    plant.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_attribute_is_shown_beside_the_node_id() {
+    let plant = DemoPlant::start().await.expect("demo plant");
+    let browser = Browser::connect(&plant.endpoint_url, Auth::Anonymous);
+    browser.details("ns=0;i=999999999".to_string());
+    let (node_id, rows) = next_details(&browser, Duration::from_secs(20));
+    assert_eq!(node_id, "ns=0;i=999999999");
+    let mut want = vec![("NodeId".to_string(), "i=999999999".to_string())];
+    for name in [
+        "NodeClass",
+        "BrowseName",
+        "DisplayName",
+        "Description",
+        "DataType",
+        "ValueRank",
+        "ArrayDimensions",
+        "AccessLevel",
+        "UserAccessLevel",
+        "MinimumSamplingInterval",
+        "Historizing",
+        "EventNotifier",
+        "Value",
+    ] {
+        want.push((name.to_string(), "(BadNodeIdUnknown)".to_string()));
+    }
+    assert_eq!(rows, want);
+    drop(browser);
+    plant.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn methods_are_neither_variables_nor_containers() {
+    let plant = DemoPlant::start().await.expect("demo plant");
+    let browser = Browser::connect(&plant.endpoint_url, Auth::Anonymous);
+    browser.browse(Some("i=2253".to_string())); // the standard Server object
+    let (_, children) = next_children(&browser, Duration::from_secs(20));
+    let method = children.iter().find(|c| c.browse_name == "GetMonitoredItems").unwrap_or_else(|| panic!("{children:?}"));
+    assert!(!method.is_container && !method.is_variable, "{method:?}");
+    assert_eq!((method.series_type, method.data_type.as_str()), (None, ""));
+    // Its objects and variables are containers.
+    assert!(children.iter().filter(|c| c.browse_name == "ServerStatus" || c.browse_name == "ServerCapabilities").all(|c| c.is_container));
+    drop(browser);
+    plant.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sixty_four_pages_are_followed_to_the_end_and_a_sixty_fifth_is_refused() {
+    // A server that serves ONE reference per page: a folder of 64 children takes 64 pages (63
+    // BrowseNext rounds), one of 65 takes more than the ceiling.
+    let plant = DemoPlant::start_with(DemoConfig { browse_page: Some(1), ..DemoConfig::default() }).await.expect("demo plant");
+    let browser = Browser::connect(&plant.endpoint_url, Auth::Anonymous);
+    let [(at_limit, n), (past_limit, _)] = PAGED_FOLDERS;
+    assert_eq!(n, MAX_BROWSE_PAGES);
+
+    browser.browse(Some(plant.node_id_str(at_limit)));
+    let (_, children) = next_children(&browser, Duration::from_secs(60));
+    let want: Vec<String> = (0..n).map(|i| plant.node_id_str(&format!("{at_limit}.v{i:02}"))).collect();
+    assert_eq!(children.iter().map(|c| c.node_id.clone()).collect::<Vec<_>>(), want);
+    assert!(children.iter().all(|c| c.series_type == Some(SeriesType::Int)));
+
+    browser.browse(Some(plant.node_id_str(past_limit)));
+    let e = next_failure(&browser, Duration::from_secs(60));
+    assert_eq!(e, OpcError::EndlessBrowse { pages: MAX_BROWSE_PAGES });
+    assert_eq!(e.to_string(), "browse did not finish after 64 pages — the server keeps returning continuation points");
+
+    // The browser still serves the next request.
+    browser.browse(Some(plant.node_id_str("twins")));
+    assert_eq!(next_children(&browser, Duration::from_secs(20)).1.len(), 1);
+    drop(browser);
+    plant.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stalled_server_times_a_browse_out_and_a_drop_does_not_wait_for_it() {
+    let plant = DemoPlant::start().await.expect("demo plant");
+    let relay = Relay::start(plant.port()).expect("relay");
+    let browser = Browser::connect(&relay.endpoint_url, Auth::Anonymous);
+    assert_eq!(browser.events.recv_timeout(Duration::from_secs(20)).unwrap(), BrowseEvent::Connected);
+    browser.browse(Some(plant.node_id_str("line1")));
+    assert_eq!(next_children(&browser, Duration::from_secs(20)).1.len(), 5, "the relay carries the session");
+
+    relay.freeze();
+    let t0 = Instant::now();
+    browser.browse(None);
+    assert_eq!(next_failure(&browser, BROWSE_TIMEOUT + Duration::from_secs(5)), OpcError::TimedOut(Call::Browse));
+    let took = t0.elapsed();
+    assert!(took >= BROWSE_TIMEOUT && took < BROWSE_TIMEOUT + Duration::from_secs(2), "{took:?}");
+
+    // Dropped mid-browse on the stalled link: it does not wait for the call, or for a reply to
+    // its CloseSession.
+    browser.browse(None);
+    std::thread::sleep(Duration::from_millis(300));
+    let t0 = Instant::now();
+    drop(browser);
+    assert!(t0.elapsed() < Duration::from_millis(500), "{:?}", t0.elapsed());
+    drop(relay);
+    plant.stop().await;
+}
+
+#[test]
+fn dropping_the_browser_while_a_host_name_resolves_returns_at_once() {
+    for host in ["veredas-probe-no-such-host-zz", "nohost.invalid"] {
+        let browser = Browser::connect(&format!("opc.tcp://{host}:4840/"), Auth::Anonymous);
+        std::thread::sleep(Duration::from_millis(50));
+        let t0 = Instant::now();
+        drop(browser);
+        assert!(t0.elapsed() < Duration::from_millis(500), "{host}: {:?}", t0.elapsed());
+    }
 }
