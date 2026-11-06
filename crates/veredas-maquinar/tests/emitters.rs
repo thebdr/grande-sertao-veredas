@@ -554,6 +554,46 @@ fn a_folder_that_comes_back_with_an_earlier_run_s_file_is_not_appended_to() {
 }
 
 #[test]
+fn writers_started_together_never_share_a_file() {
+    // Two runs live at once in one folder with one pattern (two benches on one share, a new
+    // bench started before the old one stopped): the name is taken by creating the file new,
+    // so the check and the claim are one step, and a line is one write.
+    let dir = Dir::new("together");
+    for round in 0..20 {
+        let folder = dir.path().join(format!("r{round}"));
+        std::fs::create_dir_all(&folder).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(6));
+        let handles: Vec<_> = (0..6)
+            .map(|w| {
+                let folder = folder.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let mut c = cfg("c{n}.log", 0, 0);
+                    c.template = format!("W{w} {{temp}}");
+                    let mut writer = Writer::new(c, folder, w as u64 + 1);
+                    barrier.wait();
+                    writer.write_at(&at(2026, 7, 28, 9, 0));
+                    writer.status().clone()
+                })
+            })
+            .collect();
+        let statuses: Vec<EmitterStatus> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let mut names: Vec<String> = statuses.iter().map(|s| s.current_file.clone().unwrap_or_else(|| panic!("{s:?}"))).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 6, "round {round}: six writers, six files: {statuses:?}");
+        for s in &statuses {
+            assert_eq!(s.last_error, None);
+            assert_eq!((s.total_lines, s.lines_in_file), (1, 1));
+        }
+        for name in &names {
+            let text = std::fs::read_to_string(folder.join(name)).unwrap();
+            assert!(text.starts_with('W') && text.ends_with("\r\n") && text.lines().count() == 1, "{name}: {text:?}");
+        }
+    }
+}
+
+#[test]
 fn when_every_name_exists_nothing_is_written_and_the_status_says_so() {
     let dir = Dir::new("nofree");
     for i in 1..=4 {
@@ -575,6 +615,17 @@ fn when_every_name_exists_nothing_is_written_and_the_status_says_so() {
     writer.write_at(&at(2026, 7, 28, 9, 0));
     assert_eq!(writer.status().last_error, None);
     assert_eq!(writer.status().current_file.as_deref(), Some("r5.log"));
+    // On a rotation that finds no free name, the status shows no file open, not the old one.
+    let mut rotating = Writer::new(cfg("s{n}.log", 0, 1), dir.path().to_path_buf(), 2);
+    rotating.set_max_skips(1);
+    rotating.write_at(&at(2026, 7, 28, 9, 0));
+    assert_eq!(rotating.status().current_file.as_deref(), Some("s1.log"));
+    std::fs::write(dir.path().join("s2.log"), b"OLD\r\n").unwrap();
+    std::fs::write(dir.path().join("s3.log"), b"OLD\r\n").unwrap();
+    rotating.write_at(&at(2026, 7, 28, 9, 1));
+    assert_eq!(rotating.status().last_error, Some(EmitError::NoFreeName { tried: 2 }));
+    assert_eq!((rotating.status().current_file.as_deref(), rotating.status().lines_in_file, rotating.status().total_lines), (None, 0, 1));
+    assert_eq!(std::fs::read_to_string(dir.path().join("s1.log")).unwrap().lines().count(), 1, "the closed file is left alone");
 }
 
 #[test]

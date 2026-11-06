@@ -46,12 +46,43 @@ fn a_malformed_template_is_refused_where_it_is_compiled() {
     assert_eq!(bad("ab{}"), ComposeError::EmptyPlaceholder(2));
     assert_eq!(bad("ab{ }"), ComposeError::EmptyPlaceholder(2));
     assert_eq!(bad("{a}{"), ComposeError::UnclosedBrace(3));
+    assert_eq!(bad("x{a{b}"), ComposeError::BraceInPlaceholder(1));
     assert_eq!(bad("é}"), ComposeError::StrayBrace(1), "counted in characters, not bytes");
     assert_eq!(bad("a{b").to_string(), "the template has an unclosed `{` at character 1");
     assert_eq!(bad("a}b").to_string(), "the template has a stray `}` at character 1");
     assert_eq!(bad("ab{}").to_string(), "the template has an empty placeholder at character 2");
+    assert_eq!(bad("x{a{b}").to_string(), "the template has a `{` inside the placeholder at character 1");
     // Doubled braces are text, wherever they sit.
     assert!(Compose::new(&ComposeSpec { template: Some("{{}}}}{{".into()), ..Default::default() }).is_ok());
+    // A placeholder's name is read trimmed.
+    let c = compose(&ComposeSpec { template: Some("{ item }".into()), ..Default::default() });
+    assert_eq!(c.names(), ["item"]);
+    assert_eq!(c.render(&values(&[("item", "7")]), Endian::Little).unwrap(), b"7");
+    // A text or hex field without a length, and two fields sharing a byte, are refused where
+    // the spec compiles: neither would read back as written.
+    let spec = |fields: Vec<BinaryField>| Compose::new(&ComposeSpec { fields, ..Default::default() }).err().unwrap();
+    assert_eq!(spec(vec![field("t", 0, 0, FieldType::Ascii)]), ComposeError::NoLength("t".into()));
+    assert_eq!(spec(vec![field("h", 2, 0, FieldType::Hex)]), ComposeError::NoLength("h".into()));
+    assert_eq!(ComposeError::NoLength("t".into()).to_string(), "`t`: a text or hex field declares its length");
+    assert_eq!(
+        spec(vec![field("a", 0, 0, FieldType::U16), field("b", 1, 0, FieldType::U8)]),
+        ComposeError::Overlap { earlier: "a".into(), later: "b".into(), at: 1 }
+    );
+    assert_eq!(
+        spec(vec![field("a", 4, 0, FieldType::U8), field("b", 0, 8, FieldType::Ascii)]),
+        ComposeError::Overlap { earlier: "a".into(), later: "b".into(), at: 4 }
+    );
+    assert_eq!(ComposeError::Overlap { earlier: "a".into(), later: "b".into(), at: 1 }.to_string(), "`b` overlaps `a` at byte 1");
+    assert!(Compose::new(&ComposeSpec { fields: vec![field("a", 0, 0, FieldType::U16), field("b", 2, 0, FieldType::U8)], ..Default::default() }).is_ok(), "adjacent is fine");
+    // A template whose literal text, or a field, cannot fit a fixed length is refused at once.
+    let fixed = |template: Option<&str>, fields: Vec<BinaryField>, len: usize| {
+        Compose::new(&ComposeSpec { template: template.map(String::from), fields, len: Some(len), pad: 0 }).err()
+    };
+    assert_eq!(fixed(Some("ABCDEF"), vec![], 2), Some(ComposeError::TooLong { len: 6, max: 2 }));
+    assert_eq!(fixed(Some("A{x}"), vec![], 1), None, "a placeholder may be empty");
+    assert_eq!(fixed(Some("A"), vec![], 0), Some(ComposeError::TooLong { len: 1, max: 0 }));
+    assert_eq!(fixed(None, vec![field("n", 7, 0, FieldType::U16)], 8), Some(ComposeError::TooLong { len: 9, max: 8 }));
+    assert_eq!(fixed(None, vec![field("n", 6, 0, FieldType::U16)], 8), None);
 }
 
 #[test]
@@ -96,9 +127,17 @@ fn every_integer_type_is_held_to_its_range_and_its_text_form() {
     let bad = |_ty: FieldType, text: &str, label: &'static str| ComposeError::BadValue { field: "f".into(), value: text.into(), ty: label };
     assert_eq!(one(FieldType::U8, "255").unwrap(), [255]);
     assert_eq!(one(FieldType::U8, " 0 ").unwrap(), [0]);
-    assert_eq!(one(FieldType::U8, "+7").unwrap(), [7]);
+    assert_eq!(one(FieldType::U8, "007").unwrap(), [7], "leading zeros are decimal text");
+    // A sign only where the type takes one: an unsigned type refuses `+` and `-`, `-0` too.
+    assert_eq!(one(FieldType::U8, "+7"), Err(bad(FieldType::U8, "+7", "U8")));
+    assert_eq!(one(FieldType::U8, "-0"), Err(bad(FieldType::U8, "-0", "U8")));
+    assert_eq!(one(FieldType::U16, "+1"), Err(bad(FieldType::U16, "+1", "U16")));
+    assert_eq!(one(FieldType::U32, "+1"), Err(bad(FieldType::U32, "+1", "U32")));
+    assert_eq!(one(FieldType::I16, "+7").unwrap(), [7, 0]);
+    assert_eq!(one(FieldType::I32, "-0").unwrap(), [0, 0, 0, 0]);
     assert_eq!(one(FieldType::U8, "256"), Err(bad(FieldType::U8, "256", "U8")));
     assert_eq!(one(FieldType::U8, "-1"), Err(bad(FieldType::U8, "-1", "U8")));
+    assert_eq!(one(FieldType::U8, "1_0"), Err(bad(FieldType::U8, "1_0", "U8")));
     assert_eq!(one(FieldType::U8, "1.0"), Err(bad(FieldType::U8, "1.0", "U8")));
     assert_eq!(one(FieldType::U8, "0x10"), Err(bad(FieldType::U8, "0x10", "U8")));
     assert_eq!(one(FieldType::U8, ""), Err(bad(FieldType::U8, "", "U8")));
@@ -128,11 +167,14 @@ fn text_and_hex_fields_are_held_to_their_lengths() {
     assert_eq!(text(4, "ABCDE"), Err(ComposeError::TextTooLong { field: "t".into(), len: 5, max: 4 }));
     assert_eq!(text(2, "é"), Ok(vec![0xC3, 0xA9]), "counted in bytes");
     assert_eq!(text(1, "é"), Err(ComposeError::TextTooLong { field: "t".into(), len: 2, max: 1 }));
-    assert_eq!(text(0, "open ended").unwrap(), b"open ended", "length 0 writes the text as it is");
+    assert_eq!(text(4, "A\0B"), Err(ComposeError::BadValue { field: "t".into(), value: "A\0B".into(), ty: "text without NUL" }), "a NUL would end the text read back");
     assert_eq!(ComposeError::TextTooLong { field: "t".into(), len: 5, max: 4 }.to_string(), "`t`: 5 bytes of text do not fit 4");
-    // Capture reads a padded text back without the padding.
+    // Capture reads a padded text back without the padding, and without trailing whitespace:
+    // the one way a written text differs when read.
     let capture = Capture::new(&CaptureSpec { fields: vec![field("t", 0, 4, FieldType::Ascii)], ..Default::default() });
     assert_eq!(capture.extract(&text(4, "AB").unwrap(), Endian::Little).unwrap()["t"], "AB");
+    assert_eq!(capture.extract(&text(4, "A  ").unwrap(), Endian::Little).unwrap()["t"], "A");
+    assert_eq!(capture.extract(&text(4, " A").unwrap(), Endian::Little).unwrap()["t"], " A", "leading whitespace stays");
 
     let hex = |len: usize, value: &str| {
         let c = compose(&ComposeSpec { fields: vec![field("h", 0, len, FieldType::Hex)], ..Default::default() });
@@ -142,7 +184,7 @@ fn text_and_hex_fields_are_held_to_their_lengths() {
     assert_eq!(hex(2, "dead").unwrap(), [0xDE, 0xAD]);
     assert_eq!(hex(2, "DE"), Err(ComposeError::HexLength { field: "h".into(), len: 1, max: 2 }));
     assert_eq!(hex(2, "DE AD BE"), Err(ComposeError::HexLength { field: "h".into(), len: 3, max: 2 }));
-    assert_eq!(hex(0, "DE AD BE").unwrap(), [0xDE, 0xAD, 0xBE], "length 0 writes what was spelled");
+    assert_eq!(hex(3, "DE AD BE").unwrap(), [0xDE, 0xAD, 0xBE]);
     assert_eq!(hex(2, "DEA"), Err(ComposeError::Hex { field: "h".into(), source: HexError::OddDigits }));
     assert_eq!(hex(2, "ZZ"), Err(ComposeError::Hex { field: "h".into(), source: HexError::NotHex("ZZ".into()) }));
     assert_eq!(hex(2, "DEA").unwrap_err().to_string(), "`h`: hex needs an even number of digits");
@@ -165,19 +207,19 @@ fn the_body_is_padded_to_its_length_and_refused_beyond_it() {
     // A field over the text overwrites it.
     let c = compose(&ComposeSpec { template: Some("ABCD".into()), fields: vec![field("n", 1, 0, FieldType::U8)], len: None, pad: 0 });
     assert_eq!(c.render(&values(&[("n", "0")]), Endian::Little).unwrap(), [b'A', 0, b'C', b'D']);
-    // Over the length: refused whole, never truncated.
-    let c = compose(&ComposeSpec { template: Some("ABCDEFGHI".into()), len: Some(8), ..Default::default() });
-    assert_eq!(c.render(&HashMap::new(), Endian::Little), Err(ComposeError::TooLong { len: 9, max: 8 }));
-    let c = compose(&ComposeSpec { fields: vec![field("n", 7, 0, FieldType::U16)], len: Some(8), ..Default::default() });
-    assert_eq!(c.render(&values(&[("n", "1")]), Endian::Little), Err(ComposeError::TooLong { len: 9, max: 8 }));
+    // Over the length by what the values bring: refused whole, never truncated.
+    let c = compose(&ComposeSpec { template: Some("{a}{b}".into()), len: Some(8), ..Default::default() });
+    assert_eq!(c.render(&values(&[("a", "ABCDE"), ("b", "FGHI")]), Endian::Little), Err(ComposeError::TooLong { len: 9, max: 8 }));
+    assert_eq!(c.render(&values(&[("a", "ABCDE"), ("b", "FGH")]), Endian::Little).unwrap(), b"ABCDEFGH");
     let c = compose(&ComposeSpec { fields: vec![field("n", 6, 0, FieldType::U16)], len: Some(8), ..Default::default() });
     assert_eq!(c.render(&values(&[("n", "1")]), Endian::Little).unwrap(), [0, 0, 0, 0, 0, 0, 1, 0], "at the edge");
     // A length of zero: an empty body, and anything written refused.
     let c = compose(&ComposeSpec { len: Some(0), ..Default::default() });
     assert_eq!(c.render(&HashMap::new(), Endian::Little).unwrap(), Vec::<u8>::new());
-    let c = compose(&ComposeSpec { template: Some("x".into()), len: Some(0), ..Default::default() });
-    assert_eq!(c.render(&HashMap::new(), Endian::Little), Err(ComposeError::TooLong { len: 1, max: 0 }));
+    let c = compose(&ComposeSpec { template: Some("{x}".into()), len: Some(0), ..Default::default() });
+    assert_eq!(c.render(&values(&[("x", "x")]), Endian::Little), Err(ComposeError::TooLong { len: 1, max: 0 }));
     assert_eq!(ComposeError::TooLong { len: 9, max: 8 }.to_string(), "the body would be 9 bytes, over its 8");
+    assert!(!compose(&ComposeSpec::default()).writes() && compose(&ComposeSpec { template: Some("x".into()), ..Default::default() }).writes());
 }
 
 #[test]
@@ -190,9 +232,12 @@ fn an_offset_past_the_ceiling_is_refused_not_allocated() {
     assert_eq!(at(MAX_BODY - 1).map(|b| b.len()), Ok(MAX_BODY), "the last byte of the largest body");
     assert_eq!(at(MAX_BODY), Err(ComposeError::TooLong { len: MAX_BODY + 1, max: MAX_BODY }));
     assert_eq!(at(usize::MAX), Err(ComposeError::TooLong { len: usize::MAX, max: MAX_BODY }), "no wrap");
-    // A declared length over the ceiling is held to the ceiling.
-    let c = compose(&ComposeSpec { fields: vec![field("n", MAX_BODY, 0, FieldType::U8)], len: Some(usize::MAX), ..Default::default() });
-    assert_eq!(c.render(&values(&[("n", "1")]), Endian::Little), Err(ComposeError::TooLong { len: MAX_BODY + 1, max: MAX_BODY }));
+    // A declared length over the ceiling is refused where the spec compiles: a body would be
+    // padded up to it.
+    assert_eq!(Compose::new(&ComposeSpec { len: Some(MAX_BODY + 1), ..Default::default() }).err(), Some(ComposeError::TooLong { len: MAX_BODY + 1, max: MAX_BODY }));
+    assert_eq!(Compose::new(&ComposeSpec { len: Some(usize::MAX), ..Default::default() }).err(), Some(ComposeError::TooLong { len: usize::MAX, max: MAX_BODY }));
+    let c = compose(&ComposeSpec { fields: vec![field("n", MAX_BODY - 1, 0, FieldType::U8)], len: Some(MAX_BODY), ..Default::default() });
+    assert_eq!(c.render(&values(&[("n", "1")]), Endian::Little).map(|b| b.len()), Ok(MAX_BODY), "a body of exactly the ceiling");
     // Text past the ceiling too.
     let c = compose(&ComposeSpec { template: Some("{t}".into()), ..Default::default() });
     let long = "x".repeat(MAX_BODY + 1);

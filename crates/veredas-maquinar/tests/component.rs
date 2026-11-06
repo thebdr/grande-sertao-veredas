@@ -170,215 +170,96 @@ fn crate_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The string literals in `text` from `from` to the close of the delimiter opened at `from`
-/// (`(`, `[` or `{`), as rustc reads them: plain `"..."` with its escapes, raw `r"..."` and
-/// `r#"..."#` with any number of hashes. Returns the literals and where the delimiter closed;
-/// `None` when it never does.
-fn literals_within(text: &[char], from: usize) -> Option<(Vec<String>, usize)> {
-    let open = text[from];
-    let close = match open {
-        '(' => ')',
-        '[' => ']',
-        '{' => '}',
-        _ => return None,
-    };
-    let mut depth = 0;
-    let mut out = Vec::new();
-    let mut i = from;
-    while i < text.len() {
-        let c = text[i];
-        if c == 'r' && (text.get(i + 1) == Some(&'"') || text.get(i + 1) == Some(&'#')) && (i == 0 || !text[i - 1].is_alphanumeric() && text[i - 1] != '_') {
-            // A raw string: `r`, hashes, a quote, the text, a quote, the same hashes.
-            let mut j = i + 1;
-            let mut hashes = 0;
-            while text.get(j) == Some(&'#') {
-                hashes += 1;
-                j += 1;
-            }
-            if text.get(j) == Some(&'"') {
-                let start = j + 1;
-                let mut k = start;
-                loop {
-                    let ch = text.get(k)?;
-                    if *ch == '"' && (1..=hashes).all(|h| text.get(k + h) == Some(&'#')) {
-                        break;
-                    }
-                    k += 1;
-                }
-                out.push(text[start..k].iter().collect());
-                i = k + 1 + hashes;
-                continue;
-            }
-        }
-        if c == '"' {
-            let start = i + 1;
-            let mut k = start;
-            let mut s = String::new();
-            loop {
-                let ch = text.get(k)?;
-                match ch {
-                    '\\' => {
-                        // The escapes a path may hold; others are kept as they are.
-                        match text.get(k + 1) {
-                            Some('\\') => s.push('\\'),
-                            Some('"') => s.push('"'),
-                            Some('n') => s.push('\n'),
-                            Some('t') => s.push('\t'),
-                            Some(other) => {
-                                s.push('\\');
-                                s.push(*other);
-                            }
-                            None => return None,
-                        }
-                        k += 2;
-                    }
-                    '"' => break,
-                    ch => {
-                        s.push(*ch);
-                        k += 1;
-                    }
-                }
-            }
-            out.push(s);
-            i = k + 1;
+/// The workspace root cargo runs rustc from for the package at `manifest_dir`: the folder
+/// dep-info paths are relative to.
+fn workspace_root(manifest_dir: &Path) -> PathBuf {
+    let out = Command::new(env!("CARGO"))
+        .args(["locate-project", "--workspace", "--message-format", "plain"])
+        .current_dir(manifest_dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()).parent().unwrap().to_path_buf()
+}
+
+/// The paths one dep-info line lists after its target: `target: dep dep ...`, a space in a path
+/// escaped as `\ `.
+fn dep_info_paths(line: &str) -> Vec<String> {
+    let Some(at) = line.find(": ") else { return Vec::new() };
+    let marker = '\u{1}';
+    let deps = line[at + 2..].replace("\\ ", &marker.to_string());
+    deps.split_whitespace().map(|p| p.replace(marker, " ")).collect()
+}
+
+/// Every source file rustc read for the package at `manifest_dir`, as cargo's dep-info files
+/// record it once `cargo build --all-targets` has run: each target's crate root, its modules,
+/// and every file an `include_str!`, `include_bytes!`, `include!` or `#[path]` pulled in, from
+/// anywhere, in whatever form rustc accepted (a raw string, a `concat!`, an `env!`, a macro, an
+/// alias, a comment between the macro and its argument). The compiler's own list, never a
+/// reading of the text; a build that fails fails the check. Every dep-info file whose crate
+/// root lies under the package (a stale one from an earlier build included: it can only add
+/// files) contributes the files of it that still exist.
+fn files_rustc_read(manifest_dir: &Path, target_dir: &Path, package: &str) -> Vec<PathBuf> {
+    let out = Command::new(env!("CARGO"))
+        .args(["build", "--all-targets", "--offline", "-p", package, "--target-dir"])
+        .arg(target_dir)
+        .current_dir(manifest_dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "cargo build --all-targets: {}", String::from_utf8_lossy(&out.stderr));
+    let root = workspace_root(manifest_dir);
+    let package_dir = manifest_dir.canonicalize().unwrap();
+    let deps = target_dir.join("debug").join("deps");
+    let mut files: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
+    let mut dep_infos = 0;
+    for entry in std::fs::read_dir(&deps).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("d") {
             continue;
         }
-        if c == open {
-            depth += 1;
-        } else if c == close {
-            depth -= 1;
-            if depth == 0 {
-                return Some((out, i));
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
-/// What an include or a path attribute names: a file resolved, or an argument that is no
-/// literal this reader can resolve (a macro variable, an expression), which fails closed.
-#[derive(Debug, PartialEq, Eq)]
-enum Included {
-    File(PathBuf),
-    Unresolvable { line: usize, what: String },
-}
-
-/// Where `index` (into `text` as chars) sits, as a 1-based line.
-fn line_of(text: &[char], index: usize) -> usize {
-    text[..index.min(text.len())].iter().filter(|c| **c == '\n').count() + 1
-}
-
-/// The files a crate file pulls in from elsewhere: every `include_str!`, `include_bytes!` and
-/// `include!` argument and every `path = "..."` inside a `#[...]` attribute (`#[path]` itself,
-/// or within `cfg_attr`), with any delimiter and whitespace rustc accepts, the argument's
-/// string literals (plain or raw) joined in order, `env!("CARGO_MANIFEST_DIR")` standing for
-/// the manifest dir; a relative path is resolved from the including file's folder, an absolute
-/// one taken as it is. An argument with no literal in it (a macro variable, an expression)
-/// cannot be read here and is reported as unresolvable, so the check fails closed. A file the
-/// crate compiles in from outside its folder is part of the crate, so it is read too.
-fn included_files(file: &Path, text: &str, manifest_dir: &Path) -> Vec<Included> {
-    let here = file.parent().unwrap_or(manifest_dir);
-    let chars: Vec<char> = text.chars().collect();
-    let flat: String = chars.iter().collect();
-    let mut out = Vec::new();
-    let resolve = |literals: Vec<String>, at: usize, what: &str, out: &mut Vec<Included>| {
-        // The manifest dir stands for `env!("CARGO_MANIFEST_DIR")`; any other literal is a
-        // piece of the path.
-        let manifest = literals.iter().any(|l| l == "CARGO_MANIFEST_DIR");
-        let pieces: Vec<&String> = literals.iter().filter(|l| l.as_str() != "CARGO_MANIFEST_DIR").collect();
-        if pieces.is_empty() {
-            out.push(Included::Unresolvable { line: line_of(&chars, at), what: what.to_string() });
-            return;
-        }
-        let joined: String = pieces.iter().map(|s| s.as_str()).collect();
-        let p = Path::new(&joined);
-        let resolved = if manifest {
-            manifest_dir.join(joined.trim_start_matches(['/', '\\']))
-        } else if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            here.join(&joined)
+        let text = std::fs::read_to_string(&path).unwrap();
+        let Some(first) = text.lines().find(|l| l.contains(": ")) else { continue };
+        let listed = dep_info_paths(first);
+        let resolve = |p: &str| {
+            let p = Path::new(p);
+            if p.is_absolute() { p.to_path_buf() } else { root.join(p) }
         };
-        if resolved.is_file() {
-            out.push(Included::File(resolved));
+        let Some(crate_root) = listed.first().map(|p| resolve(p)) else { continue };
+        let Ok(crate_root) = crate_root.canonicalize() else { continue };
+        if !crate_root.starts_with(&package_dir) {
+            continue;
         }
-    };
-    // The include macros.
-    for marker in ["include_str!", "include_bytes!", "include!"] {
-        let mut from = 0;
-        while let Some(at) = flat[from..].find(marker) {
-            let at = from + at;
-            let index = flat[..at].chars().count();
-            // `include!` must not match inside `include_str!`.
-            let preceded = index > 0 && (chars[index - 1].is_alphanumeric() || chars[index - 1] == '_');
-            let mut j = index + marker.chars().count();
-            while chars.get(j).is_some_and(|c| c.is_whitespace()) {
-                j += 1;
+        dep_infos += 1;
+        for p in listed {
+            if let Ok(canonical) = resolve(&p).canonicalize() {
+                files.insert(canonical);
             }
-            if !preceded && matches!(chars.get(j), Some('(') | Some('[') | Some('{')) {
-                match literals_within(&chars, j) {
-                    Some((literals, _)) => resolve(literals, index, marker, &mut out),
-                    None => out.push(Included::Unresolvable { line: line_of(&chars, index), what: marker.to_string() }),
-                }
-            }
-            from = at + marker.len();
         }
     }
-    // `path = "..."` inside any `#[...]` attribute.
-    let mut from = 0;
-    while let Some(at) = flat[from..].find("#[") {
-        let at = from + at;
-        let index = flat[..at].chars().count();
-        let Some((_, end)) = literals_within(&chars, index + 1) else { break };
-        let attr: String = chars[index + 2..end].iter().collect();
-        let mut scan = 0;
-        while let Some(p) = attr[scan..].find("path") {
-            let p = scan + p;
-            let before = attr[..p].chars().next_back();
-            let rest = attr[p + 4..].trim_start();
-            if before.is_none_or(|c| !c.is_alphanumeric() && c != '_')
-                && let Some(value) = rest.strip_prefix('=')
-            {
-                let value_chars: Vec<char> = format!("({})", value.trim_start()).chars().collect();
-                match literals_within(&value_chars, 0) {
-                    Some((literals, _)) if !literals.is_empty() => resolve(vec![literals[0].clone()], index, "#[path]", &mut out),
-                    _ => out.push(Included::Unresolvable { line: line_of(&chars, index), what: "#[path]".into() }),
-                }
-            }
-            scan = p + 4;
-        }
-        from = at + 2;
-    }
-    out
+    assert!(dep_infos > 0, "no dep-info of {package} under {}", deps.display());
+    files.into_iter().collect()
 }
 
-/// Every file of the crate: those under its folder, and those its files pull in from elsewhere,
-/// each read once; and every include whose path could not be read, which fails the check.
-fn all_crate_files(manifest_dir: &Path) -> (Vec<PathBuf>, Vec<String>) {
+/// Where this test's own build put its artifacts: the target dir the nested build reuses, so
+/// nothing is rebuilt twice.
+fn own_target_dir() -> PathBuf {
+    let exe = std::env::current_exe().unwrap();
+    // <target>/debug/deps/<test>.exe
+    exe.parent().unwrap().parent().unwrap().parent().unwrap().to_path_buf()
+}
+
+/// Every file of the crate: those under its folder (fixtures, the manifest and documents a
+/// test reads included), and every file rustc read for it from anywhere, each once.
+fn all_crate_files(manifest_dir: &Path, target_dir: &Path, package: &str) -> Vec<PathBuf> {
     let mut files = Vec::new();
     crate_files(manifest_dir, &mut files);
     let mut seen: std::collections::BTreeSet<PathBuf> = files.iter().map(|f| f.canonicalize().unwrap()).collect();
-    let mut queue = files.clone();
-    let mut unresolvable = Vec::new();
-    while let Some(file) = queue.pop() {
-        let text = String::from_utf8_lossy(&std::fs::read(&file).unwrap()).to_string();
-        for inc in included_files(&file, &text, manifest_dir) {
-            match inc {
-                Included::File(inc) => {
-                    let key = inc.canonicalize().unwrap();
-                    if seen.insert(key) {
-                        files.push(inc.clone());
-                        queue.push(inc);
-                    }
-                }
-                Included::Unresolvable { line, what } => {
-                    unresolvable.push(format!("{}: line {line}: {what} with a path this reader cannot resolve", file.display()))
-                }
-            }
+    for read in files_rustc_read(manifest_dir, target_dir, package) {
+        if seen.insert(read.clone()) {
+            files.push(read);
         }
     }
-    (files, unresolvable)
+    files
 }
 
 /// Text reversed: the banned terms are written backwards here, so that no line of this file,
@@ -428,10 +309,10 @@ fn vendor_mentions(text: &str) -> Vec<String> {
 #[test]
 fn the_bench_names_no_vendor_and_cites_no_vendor_document() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let (files, unresolvable) = all_crate_files(&root);
+    let files = all_crate_files(&root, &own_target_dir(), BINARY);
     assert!(files.iter().any(|f| f.ends_with("Cargo.toml")), "{files:?}");
+    assert!(files.iter().any(|f| f.ends_with("lib.rs")) && files.iter().any(|f| f.ends_with("component.rs")), "{files:?}");
     assert!(files.len() >= 4, "{files:?}");
-    assert_eq!(unresolvable, Vec::<String>::new(), "every include names a literal path");
     let found: Vec<String> = files
         .iter()
         .flat_map(|f| {
@@ -463,92 +344,105 @@ fn the_bench_names_no_vendor_and_cites_no_vendor_document() {
 }
 
 #[test]
-fn a_file_the_crate_pulls_in_from_outside_its_folder_is_read_too() {
-    // A planted crate whose files include, by every form rustc accepts, files outside its
-    // folder that each hold a vendor term: every one is found; a file that is not there is
-    // left alone; an include whose path is no literal is reported, so the check fails closed.
-    let dir = planted("includes", &[("Cargo.toml", "[package]\nname = \"x\"\n")]);
+fn every_file_rustc_pulls_in_from_outside_the_crate_folder_is_read_too() {
+    // A planted crate, built for real, whose targets pull in files outside its folder by every
+    // form rustc accepts, each holding a vendor term: the compiler's dep-info lists every one.
+    // The markers are built here, never written in this file: the planted sources are not
+    // the bench's, and a planted `include` read as text would be.
+    let (inc_str, inc_bytes, inc_mac) = (["inc", "lude_str!"].concat(), ["inc", "lude_bytes!"].concat(), ["inc", "lude!"].concat());
+    let dir = planted("rustc-includes", &[]);
     let outside = dir.join("outside");
     let abs = |name: &str| outside.join(name).to_string_lossy().replace('\\', "/");
-    // The markers are built here, never written in this file: the reader scans this test too,
-    // and a planted `include` inside a string of it would read as one of the bench's own.
-    let (inc_str, inc_bytes, inc_mac) = (["inc", "lude_str!"].concat(), ["inc", "lude_bytes!"].concat(), ["inc", "lude!"].concat());
     let lib = format!(
-        "const A: &str = INCSTR!(\"../../outside/a.txt\");\n\
-         const B: &[u8] = INCBYTES!( \"../../outside/b.bin\" );\n\
-         #[path = \"../../outside/c.rs\"]\nmod c;\n\
-         const D: &str = INCSTR!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../outside/d.txt\"));\n\
-         const E: &str = INCSTR!(\"../../outside/missing.txt\");\n\
+        "pub const A: &str = INCSTR!(\"../../outside/a.txt\");\n\
+         pub const B: &[u8] = INCBYTES!( \"../../outside/b.bin\" );\n\
+         #[path = \"../../outside/c.rs\"]\npub mod c;\n\
+         pub const D: &str = INCSTR!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../outside/d.txt\"));\n\
          INCMAC!(\"../../outside/e.rs\");\n\
-         const G: &str = INCSTR!(r\"{g}\");\n\
-         const H: &str = INCSTR!(r#\"{h}\"#);\n\
-         const I: &str = INCSTR![\"../../outside/i.txt\"];\n\
-         const J: &str = INCSTR!{{\"../../outside/j.txt\"}};\n\
-         #[ path = \"../../outside/k.rs\" ]\nmod k;\n\
-         #[cfg_attr(all(), path = \"../../outside/l.rs\")]\nmod l;\n\
-         const M: &str = INCSTR!(concat!(\"{m_dir}\", \"/m.txt\"));\n\
-         const N: &str = INCSTR!(concat!( env!(\"CARGO_MANIFEST_DIR\"), \"/../outside\", \"/n.txt\" ));\n\
-         const O: &str = INCSTR!(concat!(\"../../outside/o\", \".txt\"));\n\
-         const P: &str = INCSTR!(\"..\\\\..\\\\outside\\\\p.txt\");\n\
+         pub const G: &str = INCSTR!(r\"{g}\");\n\
+         pub const H: &str = INCSTR!(r#\"{h}\"#);\n\
+         pub const I: &str = INCSTR![\"../../outside/i.txt\"];\n\
+         pub const J: &str = INCSTR!{{\"../../outside/j.txt\"}};\n\
+         #[ path = \"../../outside/k.rs\" ]\npub mod k;\n\
+         #[cfg_attr(all(), path = \"../../outside/l.rs\")]\npub mod l;\n\
+         pub const M: &str = INCSTR!(concat!(\"{m_dir}\", \"/m.txt\"));\n\
+         pub const N: &str = INCSTR!(concat!( env!(\"CARGO_MANIFEST_DIR\"), \"/../outside\", \"/n.txt\" ));\n\
+         pub const O: &str = INCSTR!(concat!(\"../../outside/o\", \".txt\"));\n\
          macro_rules! inc {{ ($p:literal) => {{ INCSTR!($p) }}; }}\n\
-         const Q: &str = inc!(\"../../outside/q.txt\");\n",
+         pub const Q: &str = inc!(\"../../outside/q.txt\");\n\
+         // the attribute opener #[ starts every attribute\n\
+         #[path = \"../../outside/r.rs\"]\npub mod r;\n\
+         #[path = \"../../outside/p/root.rs\"]\npub mod root;\n\
+         pub const S: &str = INCSTR!(concat!(\"{m_dir}/\", env!(\"CARGO_PKG_NAME\"), \".txt\"));\n\
+         pub const T: &str = INCSTR! /* a comment */ (\"../../outside/t.txt\");\n\
+         use std::INCSTRALIAS as grab;\n\
+         pub const U: &str = grab!(\"../../outside/u.txt\");\n\
+         #[cfg(any())]\npub const V: &str = INCSTR!(\"../../outside/v.txt\");\n",
         g = abs("g.txt"),
         h = abs("h.txt"),
         m_dir = outside.to_string_lossy().replace('\\', "/"),
     )
+    .replace("INCSTRALIAS", inc_str.trim_end_matches('!'))
     .replace("INCSTR!", &inc_str)
     .replace("INCBYTES!", &inc_bytes)
     .replace("INCMAC!", &inc_mac);
-    let mut files: Vec<(String, String)> = vec![("crate/src/lib.rs".into(), lib), ("crate/src/inner.rs".into(), "// an announcement\n".into())];
-    let term = |i: usize| -> String {
-        let terms = [rev("tleBineG"), rev("MAOOTXTR"), rev("lortnoC troS retsaM"), rev("rodnev/scod"), rev("ecafretni tsoh"), rev("XTROTMAO")];
-        format!("x {} y", terms[i % terms.len()])
-    };
-    let named = ["a.txt", "b.bin", "c.rs", "d.txt", "g.txt", "h.txt", "i.txt", "j.txt", "k.rs", "l.rs", "m.txt", "n.txt", "o.txt", "p.txt", "q.txt"];
+    let terms = [rev("tleBineG"), rev("MAOOTXTR"), rev("lortnoC troS retsaM"), rev("rodnev/scod"), rev("ecafretni tsoh"), rev("XTROTMAO")];
+    let term = |i: usize| format!("x {} y", terms[i % terms.len()]);
+    let mut files: Vec<(String, String)> = vec![
+        ("crate/Cargo.toml".into(), "[workspace]\n\n[package]\nname = \"x\"\nversion = \"2.0.0\"\nedition = \"2024\"\n".into()),
+        ("crate/src/lib.rs".into(), lib),
+        ("crate/src/inner.rs".into(), "// an announcement\n".into()),
+        ("outside/e.rs".into(), "// an outcome\n// and a nested one\npub const F: &str = INCSTR!(\"f.txt\");\n".replace("INCSTR!", &inc_str)),
+        ("outside/f.txt".into(), format!("{}3.1", char::from_u32(0xA7).unwrap())),
+        ("outside/p/root.rs".into(), "pub mod inline { #[path = \"x.rs\"] pub mod m; }\n".into()),
+        ("outside/p/inline/x.rs".into(), format!("// {}\npub fn f() {{}}\n", term(0))),
+        ("outside/x.txt".into(), term(1)),
+    ];
+    let named = ["a.txt", "b.bin", "c.rs", "d.txt", "g.txt", "h.txt", "i.txt", "j.txt", "k.rs", "l.rs", "m.txt", "n.txt", "o.txt", "q.txt", "r.rs", "t.txt", "u.txt"];
     for (i, name) in named.iter().enumerate() {
         let text = if name.ends_with(".rs") { format!("// {}\npub fn f() {{}}\n", term(i)) } else { term(i) };
         files.push((format!("outside/{name}"), text));
     }
-    files.push(("outside/e.rs".into(), "// an outcome\n// and a nested one\nconst F: &str = include_str!(\"f.txt\");\n".into()));
-    files.push(("outside/f.txt".into(), format!("{}3.1", char::from_u32(0xA7).unwrap())));
+    // The file `cfg(any())` leaves out holds a term too: rustc never reads it, so it is not
+    // the crate's.
+    files.push(("outside/v.txt".into(), term(2)));
     for (path, text) in &files {
         let p = dir.join(path);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, text).unwrap();
     }
     let manifest_dir = dir.join("crate");
-    let (found_files, unresolvable) = all_crate_files(&manifest_dir);
-    let names: Vec<String> = found_files.iter().map(|f| f.file_name().unwrap().to_string_lossy().to_string()).collect();
-    let mut expected: Vec<&str> = vec!["lib.rs", "inner.rs", "e.rs", "f.txt"];
-    expected.extend(named.iter().filter(|n| **n != "q.txt"));
+    let target_dir = dir.join("target");
+    let read = files_rustc_read(&manifest_dir, &target_dir, "x");
+    let names: Vec<String> = read.iter().map(|f| f.file_name().unwrap().to_string_lossy().to_string()).collect();
+    let mut expected: Vec<String> = vec!["lib.rs".into(), "e.rs".into(), "f.txt".into(), "root.rs".into(), "x.rs".into(), "x.txt".into()];
+    expected.extend(named.iter().map(|n| n.to_string()));
     for e in &expected {
-        assert!(names.contains(&e.to_string()), "{e} missing from {names:?}");
+        assert!(names.contains(e), "{e} missing from what rustc read: {names:?}");
     }
-    assert_eq!(found_files.len(), expected.len(), "{names:?}");
-    // The include through a macro variable cannot be read here: reported, never passed over.
-    assert_eq!(unresolvable.len(), 1, "{unresolvable:?}");
-    assert!(unresolvable[0].ends_with(&format!("line 20: {inc_str} with a path this reader cannot resolve")), "{unresolvable:?}");
-    let found: Vec<String> = found_files
+    assert!(!names.contains(&"inner.rs".to_string()), "a module never declared is not read: {names:?}");
+    assert!(!names.contains(&"v.txt".to_string()), "a cfg'd-out include is not read: {names:?}");
+    // And through the whole reader: every term found, each file reported once.
+    let all = all_crate_files(&manifest_dir, &target_dir, "x");
+    let found: Vec<String> = all
         .iter()
         .flat_map(|f| {
             let text = String::from_utf8_lossy(&std::fs::read(f).unwrap()).to_string();
             vendor_mentions(&text).into_iter().map(move |l| format!("{}: {l}", f.file_name().unwrap().to_string_lossy()))
         })
         .collect();
-    let mut reported: Vec<&str> = named.iter().copied().filter(|n| *n != "q.txt").collect();
-    reported.push("f.txt");
+    let mut reported: Vec<String> = named.iter().map(|n| n.to_string()).collect();
+    reported.extend(["f.txt".to_string(), "x.rs".to_string(), "x.txt".to_string()]);
     assert_eq!(found.len(), reported.len(), "{found:?}");
     for file in reported {
         assert!(found.iter().any(|h| h.starts_with(&format!("{file}: "))), "{file} not reported: {found:?}");
     }
-    // `include!` does not match inside `include_str!`; an attribute without `path` is nothing.
-    let plain: Vec<Included> = included_files(&manifest_dir.join("src/x.rs"), "#[derive(Debug)]\nstruct S;\n// an include_str! in a comment with no argument\n", &manifest_dir);
-    assert_eq!(plain, Vec::<Included>::new());
-    let unclosed = included_files(&manifest_dir.join("src/x.rs"), &format!("const X: &str = {inc_str}(\"never closed;\n"), &manifest_dir);
-    assert_eq!(unclosed, vec![Included::Unresolvable { line: 1, what: inc_str.clone() }]);
-    // Inside a longer word, or in a comment with no argument, a marker is nothing.
-    let none = included_files(&manifest_dir.join("src/x.rs"), &format!("fn my_{inc_str}() {{}}\n// an {inc_str} without an argument\nfn f() {{ let x = \"{inc_str}\"; }}\n"), &manifest_dir);
-    assert_eq!(none, Vec::<Included>::new());
+    assert!(all.iter().any(|f| f.ends_with("inner.rs")), "a file in the folder is read whether or not rustc did");
+    // The dep-info reader on its own line forms.
+    assert_eq!(dep_info_paths("C:\\t\\deps\\x.d: crates\\x\\src\\lib.rs C:\\a\\b.txt"), ["crates\\x\\src\\lib.rs", "C:\\a\\b.txt"]);
+    assert_eq!(dep_info_paths("/t/x.d: /a/with\\ space.txt /b.rs"), ["/a/with space.txt", "/b.rs"]);
+    assert_eq!(dep_info_paths("# env-dep:CARGO=x"), Vec::<String>::new());
+    assert_eq!(dep_info_paths("crates\\x\\src\\lib.rs:"), Vec::<String>::new());
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

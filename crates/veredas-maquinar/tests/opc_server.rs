@@ -359,6 +359,49 @@ async fn a_draw_or_another_reaction_s_step_is_not_a_change() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_value_of_the_wrong_wire_type_is_put_back_and_counted() {
+    // The stack answers a scalar of another type with Good and stores it (a real controller
+    // would refuse it); the bench undoes it on its next tick, counts it where a consumer's
+    // test can see it, and never reads it as a value: a reaction on the tag does not fire.
+    let mut cfg = config(vec![
+        tag("f", TagType::Float, Access::ReadWrite, "1.5"),
+        tag("i", TagType::Int, Access::ReadWrite, "7"),
+        tag("b", TagType::Bool, Access::ReadWrite, "true"),
+        tag("t", TagType::Text, Access::ReadWrite, "x"),
+        tag("out", TagType::Int, Access::Read, "0"),
+    ]);
+    cfg.reactions = vec![Reaction { on_write: "f".into(), equals: Some("99".into()), tag: Some("out".into()), then: vec![Step { after_ms: 0, set: "1".into() }] }];
+    let server = start(&cfg).expect("starts");
+    let (session, _loop) = anonymous(&server.endpoint_url).await;
+    let ns = server.namespace;
+    let wrong = [
+        ("f", Variant::Int32(99), Some(Variant::Double(1.5))),
+        ("i", Variant::from("hello"), Some(Variant::Int32(7))),
+        ("b", Variant::Double(3.5), Some(Variant::Boolean(true))),
+        ("t", Variant::Int32(1), Some(Variant::from("x"))),
+        ("i", Variant::Empty, Some(Variant::Int32(7))),
+    ];
+    for (n, (id, value, kept)) in wrong.iter().enumerate() {
+        let status = write(&session, &NodeId::new(ns, *id), value.clone()).await;
+        assert!(status.is_good(), "the stack takes {value:?} into {id}: {status:?}");
+        until("the value put back", Duration::from_secs(2), || server.get(id) == *kept && server.status().type_mismatches as usize > n);
+        let (st, got) = read(&session, &NodeId::new(ns, *id)).await;
+        assert_eq!((st, got), (StatusCode::Good, kept.clone()), "{id} reads its own type again");
+        assert_eq!(server.status().last_mismatch.as_ref().map(|m| m.0.as_str()), Some(*id));
+    }
+    assert_eq!(server.status().type_mismatches, 5);
+    assert_eq!((server.get("out"), server.status().reactions_fired), (Some(Variant::Int32(0)), 0), "an Int32 99 is no Double 99");
+    // The right type fires it, and a plant-side set of the wrong type is counted and dropped.
+    assert_eq!(write(&session, &NodeId::new(ns, "f"), Variant::Double(99.0)).await, StatusCode::Good);
+    until("fired", Duration::from_secs(2), || server.get("out") == Some(Variant::Int32(1)));
+    server.set("i", Variant::Double(2.0));
+    until("the set counted", Duration::from_secs(2), || server.status().type_mismatches == 6);
+    assert_eq!(server.get("i"), Some(Variant::Int32(7)));
+    assert_eq!(server.status().last_mismatch, Some(("i".into(), "Double(2.0)".into())));
+    server.stop();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn int_draws_take_only_the_whole_numbers_inside_the_range() {
     let mut int = tag("i", TagType::Int, Access::Read, "0");
     int.randomize = Some(Randomize { low: 3.5, high: 5.5, decimals: 0, interval_ms: 20 });

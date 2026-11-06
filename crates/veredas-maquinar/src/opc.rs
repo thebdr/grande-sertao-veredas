@@ -413,6 +413,21 @@ pub struct OpcStatus {
     pub draws: u64,
     /// Reactions fired.
     pub reactions_fired: u64,
+    /// Values of the wrong wire type found in a tag and put back: the stack answers a client's
+    /// scalar of another type with Good and stores it, so the bench restores the tag's last
+    /// value of its own type on its next tick and counts the mistake here, where a consumer's
+    /// test can see it.
+    pub type_mismatches: u64,
+    /// The last mismatch: the tag and the variant it was given.
+    pub last_mismatch: Option<(String, String)>,
+}
+
+/// Whether a variant is of a tag's wire type.
+fn is_of_type(ty: TagType, v: &Variant) -> bool {
+    matches!(
+        (ty, v),
+        (TagType::Int, Variant::Int32(_)) | (TagType::Float, Variant::Double(_)) | (TagType::Bool, Variant::Boolean(_)) | (TagType::Text, Variant::String(_))
+    )
 }
 
 enum Request {
@@ -702,6 +717,9 @@ async fn service_loop(
         .iter()
         .map(|t| t.randomize.as_ref().map(|r| start + Duration::from_millis(r.interval_ms)))
         .collect();
+    // What each tag last held of its own type, so a value of another type a client wrote (the
+    // stack takes any scalar) is put back before anything reads it as a value.
+    let mut last_good: Vec<Option<Variant>> = cfg.tags.iter().map(|t| read_node(&nodes, &node(t.id.trim()))).collect();
     // What each watched tag held at the last tick, so a reaction is edge-triggered.
     let mut last_seen: Vec<Option<Variant>> = reactions.iter().map(|r| read_node(&nodes, &node(&r.watched))).collect();
     // Steps scheduled: when, which node, what value.
@@ -718,7 +736,17 @@ async fn service_loop(
             _ = tokio::time::sleep(TICK) => {
                 while let Ok(req) = requests.try_recv() {
                     match req {
-                        Request::Set(id, value) => set(&node(&id), value),
+                        Request::Set(id, value) => {
+                            // A plant-side set of the wrong type is a mistake of the bench's
+                            // caller: counted and dropped, like a client's.
+                            match cfg.tags.iter().find(|t| t.id.trim() == id.trim()) {
+                                Some(t) if !is_of_type(t.ty, &value) => {
+                                    status.type_mismatches += 1;
+                                    status.last_mismatch = Some((t.id.trim().to_string(), format!("{value:?}")));
+                                }
+                                _ => set(&node(&id), value),
+                            }
+                        }
                         Request::Get(id, reply) => {
                             let _ = reply.send(read_node(&nodes, &node(&id)));
                         }
@@ -733,6 +761,23 @@ async fn service_loop(
                         Request::Status(reply) => {
                             let _ = reply.send(status.clone());
                         }
+                    }
+                }
+                // A tag holding a value of another type: put back, counted. The stack answers a
+                // scalar of the wrong type with Good and stores it; a real controller would have
+                // refused it, so the bench at least undoes it and says so.
+                for (i, tag) in cfg.tags.iter().enumerate() {
+                    let id = node(tag.id.trim());
+                    match read_node(&nodes, &id) {
+                        Some(v) if is_of_type(tag.ty, &v) => last_good[i] = Some(v),
+                        Some(v) => {
+                            status.type_mismatches += 1;
+                            status.last_mismatch = Some((tag.id.trim().to_string(), format!("{v:?}")));
+                            if let Some(good) = &last_good[i] {
+                                set(&id, good.clone());
+                            }
+                        }
+                        None => {}
                     }
                 }
                 let now = tokio::time::Instant::now();

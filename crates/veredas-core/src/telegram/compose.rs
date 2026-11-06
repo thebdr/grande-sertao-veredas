@@ -53,6 +53,19 @@ pub enum ComposeError {
     StrayBrace(usize),
     #[error("the template has an empty placeholder at character {0}")]
     EmptyPlaceholder(usize),
+    #[error("the template has a `{{` inside the placeholder at character {0}")]
+    BraceInPlaceholder(usize),
+    /// A text or hex field without a length cannot be read back: capture reads its length.
+    #[error("`{0}`: a text or hex field declares its length")]
+    NoLength(String),
+    /// Nothing says how to write this message: no template and no fields, while its payload
+    /// pattern says it carries text.
+    #[error("the message has no writing rules: no template and no fields")]
+    NoRules,
+    /// Two fields share bytes: the later would overwrite the earlier, which would then read
+    /// back as something else.
+    #[error("`{later}` overlaps `{earlier}` at byte {at}")]
+    Overlap { earlier: String, later: String, at: usize },
     #[error("no value for `{0}`")]
     MissingValue(String),
     #[error("`{field}`: `{value}` is not a {ty}")]
@@ -94,9 +107,14 @@ fn parse_template(template: &str) -> Result<Vec<Part>, ComposeError> {
             '{' => {
                 let start = i;
                 let close = chars[i + 1..].iter().position(|c| *c == '}').ok_or(ComposeError::UnclosedBrace(start))?;
-                let name: String = chars[i + 1..i + 1 + close].iter().collect();
-                if name.trim().is_empty() {
+                let raw: String = chars[i + 1..i + 1 + close].iter().collect();
+                // A name is read trimmed, so `{ item }` names `item`.
+                let name = raw.trim().to_string();
+                if name.is_empty() {
                     return Err(ComposeError::EmptyPlaceholder(start));
+                }
+                if name.contains('{') {
+                    return Err(ComposeError::BraceInPlaceholder(start));
                 }
                 if !text.is_empty() {
                     parts.push(Part::Text(std::mem::take(&mut text)));
@@ -126,14 +144,67 @@ pub struct Compose {
     pad: u8,
 }
 
+/// A binary field's width in bytes, as capture reads it and compose writes it.
+pub fn width(f: &BinaryField) -> usize {
+    match f.ty {
+        FieldType::U8 => 1,
+        FieldType::U16 | FieldType::I16 => 2,
+        FieldType::U32 | FieldType::I32 => 4,
+        FieldType::Ascii | FieldType::Hex => f.len,
+    }
+}
+
+/// Check a field list as both engines need it: a text or hex field with a length, and no two
+/// fields sharing a byte.
+pub fn check_fields(fields: &[BinaryField]) -> Result<(), ComposeError> {
+    for (i, f) in fields.iter().enumerate() {
+        if matches!(f.ty, FieldType::Ascii | FieldType::Hex) && f.len == 0 {
+            return Err(ComposeError::NoLength(f.name.clone()));
+        }
+        let end = f.at.saturating_add(width(f));
+        for e in &fields[..i] {
+            let e_end = e.at.saturating_add(width(e));
+            if f.at < e_end && e.at < end {
+                return Err(ComposeError::Overlap { earlier: e.name.clone(), later: f.name.clone(), at: f.at.max(e.at) });
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Compose {
-    /// Compile a spec. A malformed template is refused here, not met on the first message.
+    /// Compile a spec. A malformed template, a text or hex field without a length and two
+    /// fields that overlap are refused here, not met on the first message.
     pub fn new(spec: &ComposeSpec) -> Result<Compose, ComposeError> {
         let template = match &spec.template {
             Some(t) => parse_template(t)?,
             None => Vec::new(),
         };
+        check_fields(&spec.fields)?;
+        // What the template writes whatever its values, and what the fields reach: neither may
+        // exceed a fixed length, or no message could ever be written; and no length exceeds the
+        // ceiling, which a body would be padded up to.
+        if let Some(len) = spec.len {
+            if len > MAX_BODY {
+                return Err(ComposeError::TooLong { len, max: MAX_BODY });
+            }
+            let literal: usize = template.iter().map(|p| if let Part::Text(t) = p { t.len() } else { 0 }).sum();
+            if literal > len {
+                return Err(ComposeError::TooLong { len: literal, max: len });
+            }
+            for f in &spec.fields {
+                let end = f.at.saturating_add(width(f));
+                if end > len {
+                    return Err(ComposeError::TooLong { len: end, max: len });
+                }
+            }
+        }
         Ok(Compose { template, fields: spec.fields.clone(), len: spec.len, pad: spec.pad })
+    }
+
+    /// Whether anything is written at all: a template or at least one field.
+    pub fn writes(&self) -> bool {
+        !self.template.is_empty() || !self.fields.is_empty()
     }
 
     /// The names a body needs: every placeholder and every binary field, in order, each once.
@@ -208,11 +279,15 @@ fn label(ty: FieldType) -> &'static str {
     }
 }
 
-/// An integer field's bytes, the value parsed as decimal text (a sign allowed where the type
-/// takes one) and held to the type's range.
+/// An integer field's bytes, the value parsed as decimal text (a sign allowed only where the
+/// type takes one: an unsigned type refuses `+` and `-`) and held to the type's range.
 fn integer(field: &BinaryField, value: &str, endian: Endian) -> Result<Vec<u8>, ComposeError> {
     let bad = || ComposeError::BadValue { field: field.name.clone(), value: value.to_string(), ty: label(field.ty) };
-    let n: i64 = value.trim().parse().map_err(|_| bad())?;
+    let text = value.trim();
+    if matches!(field.ty, FieldType::U8 | FieldType::U16 | FieldType::U32) && text.starts_with(['+', '-']) {
+        return Err(bad());
+    }
+    let n: i64 = text.parse().map_err(|_| bad())?;
     let (bytes, width): (u64, usize) = match field.ty {
         FieldType::U8 => (u8::try_from(n).map_err(|_| bad())? as u64, 1),
         FieldType::U16 => (u16::try_from(n).map_err(|_| bad())? as u64, 2),
@@ -233,9 +308,9 @@ fn write_field(field: &BinaryField, value: &str, endian: Endian) -> Result<Vec<u
     match field.ty {
         FieldType::Ascii => {
             let bytes = value.as_bytes();
-            if field.len == 0 {
-                // An open text field: the text as it is, nothing padded.
-                return Ok(bytes.to_vec());
+            // A NUL ends the text when it is read back: the rest would be lost.
+            if bytes.contains(&0) {
+                return Err(ComposeError::BadValue { field: field.name.clone(), value: value.to_string(), ty: "text without NUL" });
             }
             if bytes.len() > field.len {
                 return Err(ComposeError::TextTooLong { field: field.name.clone(), len: bytes.len(), max: field.len });
@@ -246,7 +321,7 @@ fn write_field(field: &BinaryField, value: &str, endian: Endian) -> Result<Vec<u
         }
         FieldType::Hex => {
             let bytes = parse_hex(value).map_err(|source| ComposeError::Hex { field: field.name.clone(), source })?;
-            if field.len != 0 && bytes.len() != field.len {
+            if bytes.len() != field.len {
                 return Err(ComposeError::HexLength { field: field.name.clone(), len: bytes.len(), max: field.len });
             }
             Ok(bytes)

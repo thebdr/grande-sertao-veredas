@@ -31,8 +31,8 @@ use std::collections::{HashMap, HashSet};
 use serde::Deserialize;
 
 use crate::telegram::Endian;
-use crate::telegram::capture::{BinaryField, Capture, CaptureSpec, FieldType, RepeatSpec};
-use crate::telegram::compose::{Compose, ComposeError, ComposeSpec};
+use crate::telegram::capture::{BinaryField, Capture, CaptureSpec, RepeatSpec};
+use crate::telegram::compose::{Compose, ComposeError, ComposeSpec, width};
 
 /// The format name every catalog file states.
 pub const FORMAT: &str = "veredas-catalog";
@@ -132,8 +132,12 @@ impl Message {
         self.capture.extract(body, endian)
     }
 
-    /// Write a body from named values.
+    /// Write a body from named values. A message that only reads text (a payload pattern, no
+    /// template and no fields) cannot be written: its values would be dropped into an empty body.
     pub fn write(&self, values: &HashMap<String, String>, endian: Endian) -> Result<Vec<u8>, ComposeError> {
+        if self.capture_spec.payload.is_some() && !self.compose.writes() {
+            return Err(ComposeError::NoRules);
+        }
         self.compose.render(values, endian)
     }
 
@@ -183,16 +187,6 @@ fn invalid(msg: impl Into<String>) -> CatalogError {
     CatalogError::Invalid(msg.into())
 }
 
-/// A binary field's width in bytes, as capture reads it and compose writes it.
-fn width(f: &BinaryField) -> usize {
-    match f.ty {
-        FieldType::U8 => 1,
-        FieldType::U16 | FieldType::I16 => 2,
-        FieldType::U32 | FieldType::I32 => 4,
-        FieldType::Ascii | FieldType::Hex => f.len,
-    }
-}
-
 /// Read and validate a catalog file.
 pub fn load(text: &str) -> Result<Catalog, CatalogError> {
     let header: Header = toml::from_str(text).map_err(|e| CatalogError::NotToml(e.to_string()))?;
@@ -217,11 +211,19 @@ pub fn load(text: &str) -> Result<Catalog, CatalogError> {
     let mut names = HashSet::new();
     let mut ids = HashSet::new();
     let mut messages = Vec::new();
+    // A name is exact: no surrounding whitespace, compared as written.
+    let exact = |place: &str, what: &str, name: &str| -> Result<(), CatalogError> {
+        if name.trim().is_empty() {
+            return Err(invalid(format!("{place}: {what} has no name")));
+        }
+        if name != name.trim() {
+            return Err(invalid(format!("{place}: the name `{name}` has surrounding whitespace")));
+        }
+        Ok(())
+    };
     for (i, m) in file.message.into_iter().enumerate() {
         let place = format!("message[{i}]");
-        if m.name.trim().is_empty() {
-            return Err(invalid(format!("{place}: the message has no name")));
-        }
+        exact(&place, "the message", &m.name)?;
         let place = format!("{place} (`{}`)", m.name);
         if !names.insert(m.name.clone()) {
             return Err(invalid(format!("{place}: two messages are named `{}`", m.name)));
@@ -229,13 +231,37 @@ pub fn load(text: &str) -> Result<Catalog, CatalogError> {
         if !ids.insert(m.id) {
             return Err(invalid(format!("{place}: two messages have the id {}", m.id)));
         }
+        let mut repeat_names: Vec<(String, usize)> = Vec::new();
+        for (j, r) in m.repeat.iter().enumerate() {
+            exact(&format!("{place}.repeat[{j}]"), "the repeat", &r.name)?;
+            if r.max == 0 {
+                return Err(invalid(format!("{place}.repeat[{j}] (`{}`): max is 0", r.name)));
+            }
+            if repeat_names.iter().any(|(n, _)| *n == r.name) {
+                return Err(invalid(format!("{place}: two repeats are named `{}`", r.name)));
+            }
+            repeat_names.push((r.name.clone(), r.max));
+        }
+        // The names a payload pattern reads, to keep a field from shadowing one.
+        let groups: Vec<String> = match &m.payload {
+            Some(p) => regex::Regex::new(p).map(|re| re.capture_names().flatten().map(String::from).collect()).unwrap_or_default(),
+            None => Vec::new(),
+        };
         let mut field_names = HashSet::new();
         for f in &m.fields {
-            if f.name.trim().is_empty() {
-                return Err(invalid(format!("{place}: a field has no name")));
-            }
+            exact(&place, "a field", &f.name)?;
             if !field_names.insert(f.name.clone()) {
                 return Err(invalid(format!("{place}: two fields are named `{}`", f.name)));
+            }
+            if groups.contains(&f.name) {
+                return Err(invalid(format!("{place}.{}: the payload pattern reads a group of that name", f.name)));
+            }
+            for (r, max) in &repeat_names {
+                if let Some(n) = f.name.strip_prefix(r.as_str())
+                    && n.parse::<usize>().is_ok_and(|n| (1..=*max).contains(&n))
+                {
+                    return Err(invalid(format!("{place}.{}: the repeat `{r}` reads a field of that name", f.name)));
+                }
             }
             let end = f.at.checked_add(width(f)).ok_or_else(|| invalid(format!("{place}.{}: the offset is beyond any body", f.name)))?;
             if let Some(len) = m.len

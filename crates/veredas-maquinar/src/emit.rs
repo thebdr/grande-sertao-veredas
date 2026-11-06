@@ -559,41 +559,56 @@ impl Writer {
             self.open = None;
         }
         if self.open.as_ref().map(|(n, _)| n != &name).unwrap_or(true) {
-            if self.claimed.as_deref() != Some(name.as_str()) {
-                // A name this run has not opened: never append to a file that already exists,
-                // whether this run wrote it before a day change, an earlier run left it, or a
-                // folder that was away came back with it. Skip past it to a free name, and
-                // write nothing when none is found.
-                let mut skips = 0;
-                while self.out_dir.join(&name).exists() {
-                    if skips >= self.max_skips {
+            let claimed = self.claimed.as_deref() == Some(name.as_str());
+            if claimed {
+                // The one file this run opened itself: reopened and appended to.
+                match open_file(&self.out_dir, &name, self.cfg.encoding, false) {
+                    Ok(f) => self.open = Some((name.clone(), f)),
+                    Err(e) => {
                         self.open = None;
-                        self.status.last_error = Some(EmitError::NoFreeName { tried: skips + 1 });
+                        self.status.last_error = Some(e);
                         return;
                     }
-                    name = match self.rotor.skip(&self.cfg.file, now) {
-                        Ok(n) => n,
+                }
+            } else {
+                // A name this run has not opened: never append to a file that already exists,
+                // whether this run wrote it before a day change, an earlier run left it, a
+                // folder that was away came back with it, or another writer took it this very
+                // instant. The file is created new, so the check and the claim are one step; a
+                // name that exists is skipped, and nothing is written when no name is free.
+                let mut skips = 0;
+                let file = loop {
+                    match open_file(&self.out_dir, &name, self.cfg.encoding, true) {
+                        Ok(f) => break f,
+                        Err(EmitError::Io { message, .. }) if message.starts_with(EXISTS) => {
+                            if skips >= self.max_skips {
+                                self.open = None;
+                                self.status.current_file = None;
+                                self.status.lines_in_file = 0;
+                                self.status.last_error = Some(EmitError::NoFreeName { tried: skips + 1 });
+                                return;
+                            }
+                            name = match self.rotor.skip(&self.cfg.file, now) {
+                                Ok(n) => n,
+                                Err(e) => {
+                                    self.status.last_error = Some(e.into());
+                                    return;
+                                }
+                            };
+                            skips += 1;
+                        }
                         Err(e) => {
-                            self.status.last_error = Some(e.into());
+                            self.open = None;
+                            self.status.last_error = Some(e);
                             return;
                         }
-                    };
-                    skips += 1;
-                }
-            }
-            match open_file(&self.out_dir, &name, self.cfg.encoding) {
-                Ok(f) => {
-                    self.open = Some((name.clone(), f));
-                    self.claimed = Some(name.clone());
-                    self.status.current_file = Some(name);
-                    self.status.lines_in_file = 0;
-                    self.status.last_error = None;
-                }
-                Err(e) => {
-                    self.open = None;
-                    self.status.last_error = Some(e);
-                    return;
-                }
+                    }
+                };
+                self.open = Some((name.clone(), file));
+                self.claimed = Some(name.clone());
+                self.status.current_file = Some(name);
+                self.status.lines_in_file = 0;
+                self.status.last_error = None;
             }
         }
         if let Some((name, file)) = self.open.as_mut() {
@@ -636,17 +651,29 @@ fn run(cfg: EmitterConfig, out_dir: PathBuf, stop: Arc<AtomicBool>, status: Arc<
     }
 }
 
-fn open_file(dir: &Path, name: &str, encoding: Encoding) -> Result<std::fs::File, EmitError> {
+/// How an open of a file that must not exist yet reports that it does.
+const EXISTS: &str = "already exists: ";
+
+/// Open a file to append to. With `fresh` the file must not exist yet: it is created new, so two
+/// writers racing for one name cannot both take it, and one that exists is reported with
+/// [`EXISTS`] first in the message.
+fn open_file(dir: &Path, name: &str, encoding: Encoding, fresh: bool) -> Result<std::fs::File, EmitError> {
     if !dir.as_os_str().is_empty() {
         std::fs::create_dir_all(dir).map_err(|e| EmitError::io("creating", dir, &e))?;
     }
     let path = dir.join(name);
-    let fresh = !path.exists();
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|e| EmitError::io("opening", &path, &e))?;
+    let mut options = std::fs::OpenOptions::new();
+    options.append(true);
+    if fresh {
+        options.create_new(true);
+    }
+    let mut file = options.open(&path).map_err(|e| {
+        if fresh && e.kind() == std::io::ErrorKind::AlreadyExists {
+            EmitError::Io { action: "creating", path: path.clone(), message: format!("{EXISTS}{e}") }
+        } else {
+            EmitError::io("opening", &path, &e)
+        }
+    })?;
     if fresh && encoding == Encoding::Utf16le {
         // A UTF-16 plant file carries a byte-order mark; a reader sniffs it.
         file.write_all(&[0xFF, 0xFE]).map_err(|e| EmitError::io("writing the BOM to", &path, &e))?;
@@ -654,20 +681,24 @@ fn open_file(dir: &Path, name: &str, encoding: Encoding) -> Result<std::fs::File
     Ok(file)
 }
 
-/// CRLF, flushed per line, as the plant loggers this stands in for write.
+/// CRLF, flushed per line, as the plant loggers this stands in for write: the line and its
+/// ending in one write, so no other writer's bytes can land between them.
 fn write_line(file: &mut std::fs::File, line: &str, encoding: Encoding) -> std::io::Result<()> {
-    match encoding {
+    let bytes = match encoding {
         Encoding::Utf8 => {
-            file.write_all(line.as_bytes())?;
-            file.write_all(b"\r\n")?;
+            let mut b = Vec::with_capacity(line.len() + 2);
+            b.extend_from_slice(line.as_bytes());
+            b.extend_from_slice(b"\r\n");
+            b
         }
         Encoding::Utf16le => {
-            let mut bytes = Vec::with_capacity(line.len() * 2 + 4);
+            let mut b = Vec::with_capacity(line.len() * 2 + 4);
             for unit in line.encode_utf16().chain([0x000D, 0x000A]) {
-                bytes.extend_from_slice(&unit.to_le_bytes());
+                b.extend_from_slice(&unit.to_le_bytes());
             }
-            file.write_all(&bytes)?;
+            b
         }
-    }
+    };
+    file.write_all(&bytes)?;
     file.flush()
 }
