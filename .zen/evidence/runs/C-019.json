@@ -1,0 +1,24 @@
+{
+  "clause": "C-019",
+  "command": "cargo test -p veredas-core --test opc_value",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-core",
+    "--test",
+    "opc_value"
+  ],
+  "exitCode": 0,
+  "outputSha": "7c188b978bcb644e1475d2a4dbc53a29c50b6197a78c6c940a7a7b872307bd31",
+  "outputTail": "test floats_keep_their_value_in_a_float_series ... ok\ntest every_integer_wire_type_reaches_an_int_series_exactly_at_its_edges ... ok\ntest booleans_are_integers_and_empty_is_an_error_for_every_series ... ok\ntest text_accepts_anything_rendering_text_as_text_and_numbers_as_numbers ... ok\ntest text_is_no_number ... ok\ntest single_bits_read_off_a_status_word ... ok\ntest negative_words_expose_exactly_their_own_twos_complement_bits ... ok\ntest packed_multi_bit_fields ... ok\n\ntest result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n    Blocking waiting for file lock on build directory\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.28s\n     Running tests\\opc_value.rs (target\\debug\\deps\\opc_value-6a4aa695b71ef1db.exe)",
+  "ranAt": "2026-11-06T04:21:06.554Z",
+  "headCommit": "b817836b7e529baa135b8a6534f05e19f6e0ae39",
+  "tests": [
+    {
+      "name": "crates/veredas-core/tests/opc_value.rs",
+      "file": "crates/veredas-core/tests/opc_value.rs",
+      "fileSha": "fed01fc0e6d0117ae7527bf23685c82d679ee94f2049a54af104b3a2aabd7131"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "clause": "C-023",
+  "command": "cargo test -p veredas-core --test opc_capabilities",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-core",
+    "--test",
+    "opc_capabilities"
+  ],
+  "exitCode": 0,
+  "outputSha": "a11d5c943e36ff698f843d4435c105e373ce03f1a7005b93c45a3d6cdfbb9596",
+  "outputTail": "test a_status_codes_severity_is_its_top_two_bits_and_it_displays_its_name ... ok\ntest an_unknown_node_is_a_bad_status_not_a_failed_call ... ok\ntest browse_enumerates_children_with_browser_metadata ... ok\ntest anonymous_connect_read_and_batch_order ... ok\ntest write_lands_in_the_address_space_and_readonly_is_refused ... ok\ntest a_read_past_the_servers_cap_is_refused_whole ... ok\ntest a_browse_pages_and_browse_next_follows_to_the_rest ... ok\ntest the_slow_tag_takes_its_stated_time ... ok\ntest username_password_accepts_the_right_pair_and_rejects_the_wrong_one ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.37s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.48s\n     Running tests\\opc_capabilities.rs (target\\debug\\deps\\opc_capabilities-3c2c7428d99b3a8d.exe)",
+  "ranAt": "2026-11-06T04:22:04.030Z",
+  "headCommit": "b817836b7e529baa135b8a6534f05e19f6e0ae39",
+  "tests": [
+    {
+      "name": "crates/veredas-core/tests/opc_capabilities.rs",
+      "file": "crates/veredas-core/tests/opc_capabilities.rs",
+      "fileSha": "6ef660b78a8f3125d8490b1db191d0eecf11b270970e45cb4877af244e14b5dc"
+    }
+  ]
+}

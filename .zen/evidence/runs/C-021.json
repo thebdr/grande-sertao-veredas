@@ -1,0 +1,24 @@
+{
+  "clause": "C-021",
+  "command": "cargo test -p veredas-core --test opc_browse",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-core",
+    "--test",
+    "opc_browse"
+  ],
+  "exitCode": 0,
+  "outputSha": "bbc3e11e2f3c0c596943ad42f82335027021513ca7b057cf7b9081d8a77f8eca",
+  "outputTail": "test an_unknown_node_on_a_lax_stack_is_an_empty_list_not_an_error ... ok\ntest folders_larger_than_one_page_arrive_whole ... ok\ntest dropping_the_browser_mid_connect_returns_at_once ... ok\ntest details_read_the_standard_attribute_set ... ok\ntest hascomponent_subtrees_browse_like_organizes_ones ... ok\ntest a_malformed_node_id_fails_that_request_and_the_browser_serves_the_next ... ok\ntest the_browser_walks_the_tree_and_prefills_tag_types ... ok\ntest an_unreachable_endpoint_reports_instead_of_hanging ... ok\ntest a_silent_endpoint_fails_within_the_connect_timeout ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.02s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.84s\n     Running tests\\opc_browse.rs (target\\debug\\deps\\opc_browse-444d97496083c3c6.exe)",
+  "ranAt": "2026-11-06T04:21:28.929Z",
+  "headCommit": "b817836b7e529baa135b8a6534f05e19f6e0ae39",
+  "tests": [
+    {
+      "name": "crates/veredas-core/tests/opc_browse.rs",
+      "file": "crates/veredas-core/tests/opc_browse.rs",
+      "fileSha": "07fd76c370f6425d33e99fbd9b71c9c4c90263e1e60dc8ebb3cbbc72507f10a6"
+    }
+  ]
+}
