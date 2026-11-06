@@ -10,15 +10,15 @@
     "opc_capabilities"
   ],
   "exitCode": 0,
-  "outputSha": "8cf96acb5cae3f8e1f218083ba08245da3ef356fc7d770cd79b90df1564041cc",
-  "outputTail": "test the_browser_s_requests_are_answered_as_it_reads_them ... ok\ntest a_server_pages_at_its_own_limit_whatever_is_asked ... ok\ntest write_lands_in_the_address_space_and_readonly_is_refused ... ok\ntest a_read_past_the_stacks_array_limit_fails_to_decode_whatever_the_cap ... ok\ntest an_unknown_node_is_a_bad_status_not_a_failed_call ... ok\ntest a_read_past_the_servers_cap_is_refused_whole ... ok\ntest a_browse_pages_and_browse_next_follows_to_the_rest ... ok\ntest the_slow_tag_takes_its_stated_time ... ok\ntest username_password_accepts_the_right_pair_and_rejects_the_wrong_one ... ok\n\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.37s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.68s\n     Running tests\\opc_capabilities.rs (target\\debug\\deps\\opc_capabilities-3c2c7428d99b3a8d.exe)",
-  "ranAt": "2026-11-06T04:58:18.864Z",
-  "headCommit": "4fbf84ce4aa282529c4212603ff5f5b3c97a3a4e",
+  "outputSha": "ddd73bf658070387157a45d57407d21699954c30956e5b5c7dd39a15e1851f22",
+  "outputTail": "test a_read_past_the_stacks_array_limit_fails_to_decode_whatever_the_cap ... ok\ntest anonymous_connect_read_and_batch_order ... ok\ntest browse_enumerates_children_with_browser_metadata ... ok\ntest a_server_pages_at_its_own_limit_whatever_is_asked ... ok\ntest a_read_past_the_servers_cap_is_refused_whole ... ok\ntest a_browse_pages_and_browse_next_follows_to_the_rest ... ok\ntest a_browse_page_past_the_array_limit_kills_the_connection ... ok\ntest the_slow_tag_takes_its_stated_time ... ok\ntest username_password_accepts_the_right_pair_and_rejects_the_wrong_one ... ok\n\ntest result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.36s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.99s\n     Running tests\\opc_capabilities.rs (target\\debug\\deps\\opc_capabilities-3c2c7428d99b3a8d.exe)",
+  "ranAt": "2026-11-06T05:12:44.738Z",
+  "headCommit": "7b7d34eecac53bf2a55a9ea4fb249b7846d9a36a",
   "tests": [
     {
       "name": "crates/veredas-core/tests/opc_capabilities.rs",
       "file": "crates/veredas-core/tests/opc_capabilities.rs",
-      "fileSha": "1d0299a1b2f4003e37f05a44fa7c8b7f88b3bee4870427803e79bfcca4d128f4"
+      "fileSha": "784a8a7e1741fdeae15b6d4be926b41d8f2023def18bedae1fbfc5914dc935ba"
     }
   ]
 }

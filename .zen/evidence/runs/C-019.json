@@ -10,15 +10,15 @@
     "opc_value"
   ],
   "exitCode": 0,
-  "outputSha": "8ea3bda859f9a80599bc16a56337d01cbc2a553200ab49afb534affd3f92dc4e",
-  "outputTail": "test every_integer_wire_type_reaches_an_int_series_exactly_at_its_edges ... ok\ntest every_wire_type_that_is_refused_is_named ... ok\ntest floats_keep_their_value_in_a_float_series ... ok\ntest integers_widen_but_floats_never_narrow ... ok\ntest booleans_are_integers_and_empty_is_an_error_for_every_series ... ok\ntest single_bits_read_off_a_status_word ... ok\ntest bits_refuse_non_integers ... ok\ntest negative_words_expose_exactly_their_own_twos_complement_bits ... ok\ntest text_is_no_number ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.21s\n     Running tests\\opc_value.rs (target\\debug\\deps\\opc_value-6a4aa695b71ef1db.exe)",
-  "ranAt": "2026-11-06T04:57:18.413Z",
-  "headCommit": "4fbf84ce4aa282529c4212603ff5f5b3c97a3a4e",
+  "outputSha": "da3e29b4ff4056f662f8be202583d5aa140799d9cd0304bf9a550df1af23c883",
+  "outputTail": "test negative_words_expose_exactly_their_own_twos_complement_bits ... ok\ntest bits_refuse_non_integers ... ok\ntest packed_multi_bit_fields ... ok\ntest every_integer_wire_type_reaches_an_int_series_exactly_at_its_edges ... ok\ntest text_is_no_number ... ok\ntest integers_widen_but_floats_never_narrow ... ok\ntest single_bits_read_off_a_status_word ... ok\ntest text_accepts_anything_rendering_text_as_text_and_numbers_as_numbers ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n    Blocking waiting for file lock on build directory\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.27s\n     Running tests\\opc_value.rs (target\\debug\\deps\\opc_value-6a4aa695b71ef1db.exe)",
+  "ranAt": "2026-11-06T05:11:45.744Z",
+  "headCommit": "7b7d34eecac53bf2a55a9ea4fb249b7846d9a36a",
   "tests": [
     {
       "name": "crates/veredas-core/tests/opc_value.rs",
       "file": "crates/veredas-core/tests/opc_value.rs",
-      "fileSha": "78d5de5aa55accfebf3ebff44ad2f056d09ae256717325e89ae95be74cb014c7"
+      "fileSha": "796b34f9800de3486a00494bb513270c42a09c76e7b372109502729721163c78"
     }
   ]
 }
