@@ -1690,6 +1690,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "veredas-maquinar"
+version = "2.0.0-alpha.1"
+dependencies = [
+ "async-opcua-client",
+ "async-opcua-server",
+ "async-opcua-types",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "toml",
+ "veredas-core",
+]
+
+[[package]]
 name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

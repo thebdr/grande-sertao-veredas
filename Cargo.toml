@@ -8,6 +8,9 @@ members = [
     # The foundation (docs/core-plan.md): the shared types and protocol layers more than one
     # component needs, depending on no other member (law L4).
     "crates/veredas-core",
+    # The bench (docs/maquinar-plan.md): simulated hardware on the real wire, by configuration,
+    # built before the consumer that needs it; a test tool that owns its sockets (law L5: core only).
+    "crates/veredas-maquinar",
 ]
 
 # No [workspace.package] version: each component owns its SemVer from 2.0.0 (the plan,

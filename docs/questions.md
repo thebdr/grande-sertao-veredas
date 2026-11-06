@@ -215,3 +215,25 @@ keeps it outside. A device that needs it inside would need the receiver to exemp
 first keep-alive after connect instead, a version 2 of the rule.
 
 **Reversible?** Yes: loosening a refusal breaks no file that loads today.
+
+---
+
+## Q12 - Does the Veredas 2 bench have a desktop UI?
+
+**Raised** 2026-11-06, planning maquinar (P-004).
+
+Veredas 1's bench is an egui desktop (`app.rs`, four `ui_*.rs`, about 2 700 lines on `eframe`):
+a project bar, tabs for logs, OPC UA, TCP and PROFINET, live previews and monitors, chaos buttons
+(every chute full, a random pick), and a JSON project it saves continuously. Whether the Veredas 2
+bench has a desktop UI at all, or is a library plus a TOML-driven executable driven from the
+command line (with its knobs on the library handle, which is what portal's tests and later
+comissionador embed), is the operator's call.
+
+**Taken (reversible, pending the operator):** a library first, with one executable that runs a
+bench file (`veredas-maquinar <bench.toml>`) until stopped; the UI is a later phase of
+`docs/maquinar-plan.md`, named there with no code. Every operator action the Veredas 1 UI had
+(start and stop a part, send a message now, set a destination's state, declare every destination
+full, issue a command) is a method on the bench's handles, so a UI, when it comes, drives the
+same library the tests do.
+
+**Reversible?** Yes: a UI is a crate or a module on top of the library; nothing below it changes.
