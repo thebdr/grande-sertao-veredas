@@ -10,15 +10,15 @@
     "telegram_catalog"
   ],
   "exitCode": 0,
-  "outputSha": "d42e141f5c042100c1d564f0f0e1c39357b63b2a2763a7632eed1c4ce6b97ab1",
-  "outputTail": "\nrunning 5 tests\ntest the_header_is_refused_four_ways ... ok\ntest a_misspelled_key_in_any_table_is_refused ... ok\ntest every_invalid_catalog_is_refused_with_its_place_named ... ok\ntest every_default_and_every_key_the_reference_states ... ok\ntest the_documented_example_loads_and_converses_as_described ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.21s\n     Running tests\\telegram_catalog.rs (target\\debug\\deps\\telegram_catalog-3c3641fdd05cb54e.exe)",
-  "ranAt": "2026-11-06T12:02:01.106Z",
-  "headCommit": "389006c7bd8f9184b40b381b3cf5b922d5f371e8",
+  "outputSha": "e82d53308758d547af5f8ae737bde79d161daf9ed97fa638cfeb7835dda9f8f6",
+  "outputTail": "\nrunning 6 tests\ntest the_header_is_refused_four_ways ... ok\ntest a_misspelled_key_in_any_table_is_refused ... ok\ntest every_invalid_catalog_is_refused_with_its_place_named ... ok\ntest what_a_message_writes_it_reads_and_what_it_cannot_write_it_says ... ok\ntest the_documented_example_loads_and_converses_as_described ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.45s\n     Running tests\\telegram_catalog.rs (target\\debug\\deps\\telegram_catalog-3c3641fdd05cb54e.exe)",
+  "ranAt": "2026-11-06T12:30:44.896Z",
+  "headCommit": "f8139b8191fa63892c2ecce15b0c0cf5fe184663",
   "tests": [
     {
       "name": "crates/veredas-core/tests/telegram_catalog.rs",
       "file": "crates/veredas-core/tests/telegram_catalog.rs",
-      "fileSha": "39ed70d8c9808c94aa7db100781f05deda5d61d1d0bd55422439ecefe826fed0"
+      "fileSha": "b538a7210b52f4ea9317c6326223795698fb03d09dadc7c2e292a6102e0c54d5"
     }
   ]
 }
