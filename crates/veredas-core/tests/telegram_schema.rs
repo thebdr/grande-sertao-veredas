@@ -635,7 +635,8 @@ fn every_key_is_required_or_takes_its_documented_default() {
     // kept, and what the loaded spec says for a key left out (None: nothing to compare).
     type Build = Box<dyn Fn(&[&str]) -> String>;
     type Render = Box<dyn Fn(&str, &ChannelSpec) -> Option<String>>;
-    let tables: Vec<(&str, String, Vec<(&str, String)>, Build, Render)> = vec![
+    type Table = (&'static str, String, Vec<(&'static str, String)>, Build, Render);
+    let tables: Vec<Table> = vec![
         (
             "top",
             block(&keys, "**The header.**"),
