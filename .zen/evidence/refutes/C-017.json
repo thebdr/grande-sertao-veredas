@@ -1,0 +1,13 @@
+{
+  "clause": "C-017",
+  "verdict": "holds",
+  "ranAt": "2026-11-06T01:58:43.204Z",
+  "headCommit": "5f43fd8db1bc57c8cc720b5c3cbe8660913ac137",
+  "tests": [
+    {
+      "name": "crates/veredas-core/tests/telegram_schema.rs",
+      "file": "crates/veredas-core/tests/telegram_schema.rs",
+      "symbolSha": "028192fe6df972bf230acd9339cc4a205bf8fdc566a47ab2277dba43ec8cbc28"
+    }
+  ]
+}
