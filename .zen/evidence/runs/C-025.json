@@ -1,0 +1,24 @@
+{
+  "clause": "C-025",
+  "command": "cargo test -p veredas-maquinar --test emitters",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-maquinar",
+    "--test",
+    "emitters"
+  ],
+  "exitCode": 0,
+  "outputSha": "b237ff26482eadbaec291b6efd57021d41bb3c09503f3d266733f2e53c924489",
+  "outputTail": "test values_are_drawn_within_their_range_to_their_decimals_and_a_seed_replays_them ... ok\ntest a_bad_file_pattern_reports_instead_of_writing_rubbish ... ok\ntest a_restart_without_rotation_still_starts_a_new_file ... ok\ntest restarting_never_appends_to_a_file_it_already_wrote ... ok\ntest a_missing_output_folder_is_reported_and_then_recovered_from ... ok\ntest a_seeded_emitter_replays_the_same_values ... ok\ntest a_stop_is_prompt_whatever_the_interval ... ok\ntest an_emitter_writes_rotating_files_a_plant_would_recognise ... ok\ntest the_family_shape_describes_what_the_pattern_writes ... ok\n\ntest result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.14s\n     Running tests\\emitters.rs (target\\debug\\deps\\emitters-24ead73d90e45f2f.exe)",
+  "ranAt": "2026-11-06T11:21:28.439Z",
+  "headCommit": "fcf19e5f580af17a687ce1177654e065e766c0e0",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/emitters.rs",
+      "file": "crates/veredas-maquinar/tests/emitters.rs",
+      "fileSha": "648d12669550c7524494ccc16bc87d8aa11300e5fc6221fe69d23347856dcee8"
+    }
+  ]
+}

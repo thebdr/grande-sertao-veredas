@@ -1,0 +1,33 @@
+{
+  "clause": "C-024",
+  "command": "cargo test -p veredas-maquinar -p leis --test component --test real_tree",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-maquinar",
+    "-p",
+    "leis",
+    "--test",
+    "component",
+    "--test",
+    "real_tree"
+  ],
+  "exitCode": 0,
+  "outputSha": "91b84262a8981463db1995f5feae95ae9ebc923a518c0ddd7607fb28e306100c",
+  "outputTail": "\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.89s\n\n\nrunning 3 tests\ntest the_bench_names_no_vendor_and_cites_no_vendor_document ... ok\ntest the_bench_is_one_library_and_at_most_one_executable ... ok\ntest the_check_allows_one_named_binary_and_refuses_every_other_executable ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.77s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.56s\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-e24e28763702786a.exe)\n     Running tests\\component.rs (target\\debug\\deps\\component-49280e9b3a6e991e.exe)",
+  "ranAt": "2026-11-06T11:21:10.041Z",
+  "headCommit": "fcf19e5f580af17a687ce1177654e065e766c0e0",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/component.rs",
+      "file": "crates/veredas-maquinar/tests/component.rs",
+      "fileSha": "c21e90ab8fc5cf177c16f26ad9e4a2dd5b2ccc5fd5fb3bdf328d4d2ea6bd4b92"
+    },
+    {
+      "name": "tools/leis/tests/real_tree.rs",
+      "file": "tools/leis/tests/real_tree.rs",
+      "fileSha": "1d0099b3c3b1a8ed9531a55c85d6bb7c17c72dce5443d2c1054a5fd589d7c839"
+    }
+  ]
+}
