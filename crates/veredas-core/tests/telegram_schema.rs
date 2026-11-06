@@ -92,10 +92,15 @@ fn the_documented_example_loads_and_frames_as_described() {
     // The keep-alive it describes: sixteen bytes, the sequence and node defaults in place.
     let keepalive = f.encode(&Frame::default(), Some(0)).unwrap();
     assert_eq!(keepalive, [0xFD, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFE]);
-    // The data frame it describes: one segment `AB`, id 0x0102, sequence 7, byte for byte.
+    // The data frame it describes: one segment `AB`, with the id the prose names, sequence 7,
+    // byte for byte (refute round 7: the id is read from the prose, not assumed).
+    let prose = doc_prose();
+    let id_text = prose.split("one segment `AB` with id `0x").nth(1).and_then(|s| s.split('`').next()).unwrap();
+    let id = u64::from_str_radix(id_text, 16).unwrap();
+    assert_eq!(id, 0x0102);
     let ab = Frame {
         fields: BTreeMap::new(),
-        segments: vec![Segment { fields: BTreeMap::from([("id".to_string(), 0x0102)]), body: b"AB".to_vec() }],
+        segments: vec![Segment { fields: BTreeMap::from([("id".to_string(), id)]), body: b"AB".to_vec() }],
     };
     let data = f.encode(&ab, Some(7)).unwrap();
     assert_eq!(
@@ -103,7 +108,6 @@ fn the_documented_example_loads_and_frames_as_described() {
         [0xFD, 0, 1, 2, 7, 0, 0, 0, 6, 0, 1, 0, 2, 1, 2, 0, 0x41, 0x42, 0, 0, 0, 0xFE]
     );
     // And the prose says exactly these numbers.
-    let prose = doc_prose();
     for phrase in ["an 11-byte envelope after it", "a 3-byte tail", "A keep-alive is therefore 16 bytes"] {
         assert!(prose.contains(phrase), "the documentation says `{phrase}`");
     }
@@ -171,9 +175,26 @@ fn the_key_reference_states_what_the_reader_does() {
     let sizes = prose.split("(1 to ").nth(1).unwrap().split(" bytes)").next().unwrap().parse::<usize>().unwrap();
     let sized = |n: usize| load(&file(&format!("envelope = [ {{ name = \"x\", size = {n} }}, {LEN} ]"), ""));
     assert!(sized(sizes).is_ok() && sized(1).is_ok() && sized(sizes + 1).is_err() && sized(0).is_err());
-    // The version this reader knows.
+    // The version this reader knows, and the format it states.
     let known = prose.split("(this reader knows `").nth(1).unwrap().split('`').next().unwrap();
     assert_eq!(known.parse::<u32>().unwrap(), VERSION);
+    let format = prose.split("(always `\"").nth(1).unwrap().split("\"`").next().unwrap();
+    assert_eq!(format, FORMAT);
+    // Each floor the key reference states, at its edge (refute round 7).
+    let floor = |key: &str| {
+        let entry = prose.split(&format!("`{key}` (")).nth(1).unwrap().split(')').next().unwrap();
+        entry.split(", at least ").nth(1).unwrap_or_else(|| panic!("`{key}` states a floor")).to_string()
+    };
+    let n: u64 = floor("write_timeout_ms").parse().unwrap();
+    assert!(load(&file(LP, &format!("[link]\nwrite_timeout_ms = {}", n - 1))).is_err());
+    assert_eq!(load(&file(LP, &format!("[link]\nwrite_timeout_ms = {n}"))).unwrap().link.write_timeout, Duration::from_millis(n));
+    let n: usize = floor("max_peers").parse().unwrap();
+    assert!(load(&file(LP, &format!("[link]\nmax_peers = {}", n - 1))).is_err());
+    assert_eq!(load(&file(LP, &format!("[link]\nmax_peers = {n}"))).unwrap().link.max_peers, n);
+    assert_eq!(floor("outbox_limit_bytes"), "one `max_frame`");
+    let framing = format!("max_frame = 2048\n{LP}");
+    assert!(load(&file(&framing, "[link]\noutbox_limit_bytes = 2047")).is_err());
+    assert_eq!(load(&file(&framing, "[link]\noutbox_limit_bytes = 2048")).unwrap().link.outbox_limit_bytes, 2048);
 }
 
 #[test]
