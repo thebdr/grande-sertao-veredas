@@ -443,3 +443,142 @@ fn an_impossible_layout_is_refused_with_its_place_named() {
         assert_eq!(refused(&file(&framing, rest)), expected, "{framing} {rest}");
     }
 }
+
+/// The names the reader accepts at one place: the backticked names after "expected" in its
+/// refusal of an unknown key or variant there, sorted.
+fn accepted(text: &str) -> Vec<String> {
+    let e = refused(text);
+    let line = e.lines().find(|l| l.contains("unknown field") || l.contains("unknown variant")).unwrap();
+    let mut names: Vec<String> = line.split("expected ").nth(1).unwrap().split('`').skip(1).step_by(2).map(str::to_string).collect();
+    names.sort();
+    names
+}
+
+/// One block of the key reference: the text after its bold marker, up to the next bold text or
+/// the closing paragraph ("Every key is checked").
+fn block(prose: &str, marker: &str) -> String {
+    let after = prose.split(marker).nth(1).unwrap_or_else(|| panic!("{marker} is documented"));
+    after.split("**").next().unwrap().split("Every key is checked").next().unwrap().to_string()
+}
+
+/// The keys a block names: backticked lowercase names outside parentheses, each followed
+/// directly by " (", ":" or ",", sorted.
+fn named_keys(block: &str) -> Vec<String> {
+    let chars: Vec<char> = block.chars().collect();
+    let (mut out, mut depth, mut i) = (Vec::new(), 0i32, 0);
+    while i < chars.len() {
+        match chars[i] {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            '`' if depth == 0 => {
+                if let Some(len) = chars[i + 1..].iter().position(|&c| c == '`') {
+                    let name: String = chars[i + 1..i + 1 + len].iter().collect();
+                    let next: String = chars[i + 2 + len..].iter().take(2).collect();
+                    let follows = next.starts_with(" (") || next.starts_with(':') || next.starts_with(',');
+                    if !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c == '_') && follows {
+                        out.push(name);
+                    }
+                    i += len + 2;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out.sort();
+    out
+}
+
+/// The quoted names in a text: every backticked `"name"`, without its quotes.
+fn quoted(text: &str) -> Vec<String> {
+    text.split('`').skip(1).step_by(2).filter_map(|t| t.strip_prefix('"')?.strip_suffix('"')).map(str::to_string).collect()
+}
+
+#[test]
+fn the_key_reference_names_what_the_reader_accepts() {
+    // Every section, key, role, byte order, part, flag and example the key reference names,
+    // against what the reader accepts (refute round 8: a name could drift with the suite green).
+    let prose = doc_prose();
+    let keys = prose.split("## Keys").nth(1).unwrap().to_string();
+    let seq_env = "envelope = [ { name = \"s\", size = 1, role = \"sequence\" }, { name = \"length\", size = 2, role = \"length\" } ]";
+    // The sections, and the header keys beside them.
+    let sections: Vec<String> = keys.split("**`[").skip(1).map(|s| s.split("]`**").next().unwrap().to_string()).collect();
+    let mut top = named_keys(&block(&keys, "**The header.**"));
+    top.extend(sections.iter().cloned());
+    top.sort();
+    assert_eq!(top, accepted(&format!("zz = 1\n{}", file(LP, ""))));
+    // Each table's keys.
+    assert_eq!(named_keys(&block(&keys, "**`[framing]`**")), accepted(&file(&format!("zz = 1\n{LP}"), "")));
+    assert_eq!(
+        named_keys(&block(&keys, "**A field.**")),
+        accepted(&file("envelope = [ { name = \"length\", size = 2, role = \"length\", zz = 1 } ]", ""))
+    );
+    assert_eq!(named_keys(&block(&keys, "**`[sequence]`**")), accepted(&file(seq_env, "[sequence]\nzz = 1")));
+    assert_eq!(named_keys(&block(&keys, "**`[keepalive]`**")), accepted(&file(LP, "[keepalive]\nzz = 1")));
+    assert_eq!(named_keys(&block(&keys, "**`[link]`**")), accepted(&file(LP, "[link]\nzz = 1")));
+    // The roles, and the byte orders.
+    let roles_block = block(&keys, "**Roles.**");
+    let mut roles = quoted(&roles_block);
+    roles.sort();
+    assert_eq!(roles, accepted(&file("envelope = [ { name = \"length\", size = 2, role = \"zz\" } ]", "")));
+    let framing_block = block(&keys, "**`[framing]`**");
+    let order_entry = framing_block.split("`byte_order`:").nth(1).unwrap().split(" - ").next().unwrap();
+    let mut orders = quoted(order_entry);
+    orders.sort();
+    assert_eq!(orders, accepted(&file(&format!("byte_order = \"zz\"\n{LP}"), "")));
+    // The parts each role is documented for: its annotation names them; with none, the parts
+    // its entry names; with no part named, every part. The reader takes it exactly there.
+    let base_envelope = "{ name = \"l\", size = 2, role = \"length\" }, { name = \"c\", size = 1, role = \"count\" }, { name = \"s\", size = 1, role = \"sequence\" }";
+    let parts = ["envelope", "segment", "tail"];
+    for role in &roles {
+        let entry = roles_block.split(&format!("`\"{role}\"`")).nth(1).unwrap().split(" - ").next().unwrap();
+        let documented: Vec<&str> = match entry.strip_prefix(" (").and_then(|a| a.split(')').next()) {
+            Some(note) if note != "default" => note.split(", ").collect(),
+            _ => {
+                let named: Vec<&str> = parts.iter().copied().filter(|p| entry.contains(&format!("in the {p}")) || entry.contains(&format!("in a {p}"))).collect();
+                if named.is_empty() { parts.to_vec() } else { named }
+            }
+        };
+        let x = format!("{{ name = \"x\", size = 1, role = \"{role}\" }}");
+        let takes: Vec<&str> = parts
+            .iter()
+            .copied()
+            .filter(|part| {
+                let (envelope, segment, tail) = match *part {
+                    "envelope" => (format!("{base_envelope}, {x}"), "{ name = \"n\", size = 1, role = \"length\" }".to_string(), String::new()),
+                    "segment" => (base_envelope.to_string(), format!("{{ name = \"n\", size = 1, role = \"length\" }}, {x}"), String::new()),
+                    _ => (base_envelope.to_string(), "{ name = \"n\", size = 1, role = \"length\" }".to_string(), x.clone()),
+                };
+                let text = file(&format!("envelope = [ {envelope} ]\nsegment = [ {segment} ]\ntail = [ {tail} ]"), "[sequence]\n");
+                load(&text).err().is_none_or(|e| !e.to_string().contains(&format!("{part}.x: this part takes no such role")))
+            })
+            .collect();
+        assert_eq!(takes, documented, "the role `{role}`");
+    }
+    // Each section flagged required is refused when absent; each flagged optional loads absent
+    // (`[sequence]` is required only with a sequence field).
+    for section in &sections {
+        let flag = block(&keys, &format!("**`[{section}]`**"));
+        let flag = flag.trim_start().strip_prefix('(').unwrap().split(')').next().unwrap();
+        let without = if section == "framing" { "format = \"veredas-channel\"\nversion = 1\n".to_string() } else { file(LP, "") };
+        match flag {
+            "required" => assert!(load(&without).is_err(), "[{section}] is required"),
+            "optional" => assert!(load(&without).is_ok(), "[{section}] is optional"),
+            f if f.starts_with("required with an envelope field of role `\"sequence\"`") => {
+                assert!(load(&without).is_ok() && load(&file(seq_env, "")).is_err() && load(&file(seq_env, "[sequence]")).is_ok());
+            }
+            other => panic!("[{section}] is flagged `{other}`"),
+        }
+    }
+    // The delimiter examples load as delimiters, and the frame limit counts them.
+    let delimiter_entry = framing_block.split("`start`, `end`:").nth(1).unwrap().split(" - ").next().unwrap();
+    let examples = quoted(delimiter_entry);
+    assert_eq!(examples.len(), 2);
+    for hex in &examples {
+        assert!(load(&file(&format!("start = \"{hex}\"\nend = \"{hex}\"\n{LP}"), "")).is_ok(), "the example `{hex}`");
+    }
+    assert!(framing_block.contains("`max_frame`: the largest frame in bytes, delimiters included"));
+    assert!(load(&file(&format!("max_frame = 4\nstart = \"FD\"\nend = \"FE\"\n{LP}"), "")).is_ok());
+    assert!(load(&file(&format!("max_frame = 3\nstart = \"FD\"\nend = \"FE\"\n{LP}"), "")).is_err());
+}
