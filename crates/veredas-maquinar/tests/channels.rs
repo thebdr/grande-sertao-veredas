@@ -123,18 +123,37 @@ fn a_channel_in_either_role_speaks_the_catalog_and_the_monitor_shows_what_came_a
     let sent = got.recent.iter().find(|l| l.direction == Direction::Out && l.message == "heartbeat").unwrap();
     assert_eq!((sent.fields["dest"].as_str(), sent.fields["state"].as_str(), sent.peer), ("2", "1", Some(lpeer)));
     assert_eq!(dialer.status().recent.iter().find(|l| l.message == "heartbeat").unwrap().preview, "02 00 01 00");
-    // What cannot be built is a note and the last error, never a frame.
-    listener.send_now("heartbeat", values(&[("dest", "2")]), None);
+    // What cannot be built is a note and the last error, never a frame: each of the three
+    // refusals read on its own.
+    assert_eq!(listener.status().last_error, None);
+    let last_error = |expected: &str| {
+        assert!(wait(Duration::from_secs(2), || listener.status().last_error.as_deref().map(|e| e.starts_with(expected)).unwrap_or(false)), "{:?}", listener.status().last_error);
+    };
     listener.send_now("nope", HashMap::new(), None);
+    last_error("nope: the catalog has no such message");
+    listener.send_now("heartbeat", values(&[("dest", "2")]), None);
+    last_error("heartbeat: no value for `state`");
     listener.send_now("heartbeat", values(&[("dest", "x"), ("state", "1")]), None);
-    assert!(wait(Duration::from_secs(2), || listener.status().recent.iter().filter(|l| l.direction == Direction::Note && l.preview.contains("not sent")).count() >= 3));
+    last_error("heartbeat: `dest`: `x` is not a U16");
     let notes: Vec<String> = listener.status().recent.iter().filter(|l| l.direction == Direction::Note && l.preview.contains("not sent")).map(|l| l.preview.clone()).collect();
+    assert_eq!(notes.len(), 3, "{notes:?}");
     assert!(notes.contains(&"heartbeat not sent: no value for `state`".to_string()), "{notes:?}");
     assert!(notes.contains(&"nope not sent: the catalog has no such message".to_string()), "{notes:?}");
     assert!(notes.iter().any(|n| n.starts_with("heartbeat not sent: `dest`: `x` is not a U16")), "{notes:?}");
-    assert!(listener.status().last_error.as_deref().unwrap_or("").starts_with("heartbeat: "), "{:?}", listener.status().last_error);
     assert_eq!(listener.status().sent.get("heartbeat"), Some(&1));
     assert_eq!(dialer.status().received.get("heartbeat"), Some(&1));
+    // The monitor keeps the newest 100 lines, newest first.
+    for i in 0..130 {
+        listener.send_now(&format!("nope{i}"), HashMap::new(), None);
+    }
+    assert!(wait(Duration::from_secs(5), || listener.status().last_error.as_deref() == Some("nope129: the catalog has no such message")));
+    let recent = listener.status().recent;
+    assert_eq!(recent.len(), 100);
+    let nopes: Vec<u32> = recent.iter().filter_map(|l| l.preview.strip_prefix("nope")).map(|p| p[..p.find(' ').unwrap()].parse().unwrap()).collect();
+    assert!(nopes.len() >= 90 && nopes.len() <= 100, "the status lines keep going between the notes: {nopes:?}");
+    assert_eq!(nopes[0], 129, "newest first");
+    assert!(nopes.windows(2).all(|w| w[0] == w[1] + 1), "in order: {nopes:?}");
+    assert!(nopes[nopes.len() - 1] >= 30, "the oldest dropped: {nopes:?}");
     // Stopped: the other side sees the peer go; the port is free again.
     listener.stop();
     assert!(wait(Duration::from_secs(5), || dialer.status().peers.is_empty()));
@@ -174,13 +193,54 @@ fn what_the_catalog_cannot_read_is_counted_and_shown_not_decoded() {
     sender.stop();
 }
 
+/// The worked channel file without segments: the id rides in the envelope.
+fn segmentless_spec() -> ChannelSpec {
+    let text = doc_blocks("channel-schema.md")[0].replace("  { name = \"count\", size = 2, role = \"count\" },\n", "  { name = \"id\", size = 2 },\n");
+    let start = text.find("segment = [").unwrap();
+    let end = start + text[start..].find("]\n").unwrap() + 2;
+    let text = format!("{}{}", &text[..start], &text[end..]);
+    load_spec(&text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+}
+
+#[test]
+fn in_a_layout_without_segments_the_id_rides_in_the_envelope() {
+    let port = free_port();
+    let spec = segmentless_spec();
+    assert!(spec.framing.segment.is_none());
+    let with = |name: &str, role: Role| ChannelConfig { name: name.into(), role, spec: spec.clone(), catalog: catalog(), messages: Vec::new(), controller: None, seed: Some(1) };
+    let listener = start(with("plant", listen(port))).unwrap();
+    let dialer = start(with("unit", dial(port))).unwrap();
+    linked(&listener, &dialer);
+    dialer.send_now("command", values(&[("code", "5")]), None);
+    listener.send_now("status", values(&[("running", "1"), ("speed", "9")]), None);
+    assert!(wait(Duration::from_secs(5), || listener.status().received.get("command") == Some(&1) && dialer.status().received.get("status") == Some(&1)), "{:?} / {:?}", listener.status(), dialer.status());
+    let l = listener.status();
+    let command = l.recent.iter().find(|x| x.direction == Direction::In && x.message == "command").unwrap();
+    assert_eq!((command.fields["code"].as_str(), command.preview.as_str()), ("5", "05 00"));
+    let d = dialer.status();
+    assert_eq!(d.recent.iter().find(|x| x.direction == Direction::In && x.message == "status").unwrap().preview, "RUN=1;SPEED=9");
+    assert_eq!((l.unknown_ids, l.undecodable, d.unknown_ids, d.undecodable), (0, 0, 0, 0));
+    // The id must be an envelope field here, and no field the channel fills in itself.
+    let text = doc_blocks("controller-schema.md")[0].replace("id_field = \"id\"", "id_field = \"nope\"");
+    let err = start(ChannelConfig { name: "x".into(), role: listen(free_port()), spec: spec.clone(), catalog: catalog::load(&text).unwrap(), messages: Vec::new(), controller: None, seed: None }).err().unwrap();
+    assert_eq!(err.to_string(), "the catalog's id_field `nope` is no field of the framing's envelope");
+    let text = doc_blocks("controller-schema.md")[0].replace("id_field = \"id\"", "id_field = \"sequence\"");
+    let err = start(ChannelConfig { name: "x".into(), role: listen(free_port()), spec, catalog: catalog::load(&text).unwrap(), messages: Vec::new(), controller: None, seed: None }).err().unwrap();
+    assert_eq!(err.to_string(), "the catalog's id_field `sequence` is the framing's envelope field with the role `sequence`, which the channel fills in itself: an id cannot ride it");
+    listener.stop();
+    dialer.stop();
+}
+
 #[test]
 fn a_channel_refuses_a_configuration_it_cannot_speak_and_reports_a_port_it_cannot_take() {
-    // The catalog's id must ride in the framing.
+    // The catalog's id must ride in the framing, in a field the channel does not fill itself.
     let text = doc_blocks("controller-schema.md")[0].replace("id_field = \"id\"", "id_field = \"nope\"");
     let err = start(config("x", listen(free_port()), catalog::load(&text).unwrap(), Vec::new())).err().unwrap();
     assert!(matches!(err, ChannelError::IdField(_)));
     assert_eq!(err.to_string(), "the catalog's id_field `nope` is no field of the framing's segment header");
+    let text = doc_blocks("controller-schema.md")[0].replace("id_field = \"id\"", "id_field = \"length\"");
+    let err = start(config("x", listen(free_port()), catalog::load(&text).unwrap(), Vec::new())).err().unwrap();
+    assert_eq!(err.to_string(), "the catalog's id_field `length` is the framing's segment header field with the role `length`, which the channel fills in itself: an id cannot ride it");
     // Every cyclic message is the catalog's, with every name written, from sources a plain
     // channel has.
     let bad = |message: &str, spec: &str| start(config("x", listen(free_port()), catalog(), vec![CyclicMessage { message: message.into(), every_ms: 0, fields: fields(spec) }])).err().unwrap().to_string();

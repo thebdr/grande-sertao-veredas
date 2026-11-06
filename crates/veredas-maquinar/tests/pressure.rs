@@ -78,45 +78,59 @@ fn the_rate_the_faults_the_full_chutes_and_the_no_reads_are_turned_live_and_meas
     assert!(wait(Duration::from_secs(5), || announced(&machine) >= 3));
 
     // The rate: one item every 100 ms as configured, 20 in 2 s, then every 50 ms (40 in 2 s),
-    // then every 400 ms (5 in 2 s), each the interval's whatever the host's tick.
+    // every 20 ms (100 in 2 s, below the host's tick on Windows: a pass announces every item
+    // due since the last), then every 400 ms (5 in 2 s), each the interval's whatever the tick.
     let slow = rate(&unit, Duration::from_secs(2));
     assert!((17..=23).contains(&slow), "{slow} items in 2 s at 100 ms");
     machine.set_interval(50).unwrap();
     assert_eq!(machine.status().controller.unwrap().interval_ms, Some(50));
     let fast = rate(&unit, Duration::from_secs(2));
     assert!((34..=46).contains(&fast), "{fast} items in 2 s at 50 ms");
+    machine.set_interval(20).unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    let faster = rate(&unit, Duration::from_secs(2));
+    assert!((85..=115).contains(&faster), "{faster} items in 2 s at 20 ms");
     machine.set_interval(400).unwrap();
     std::thread::sleep(Duration::from_millis(100));
     let slower = rate(&unit, Duration::from_secs(2));
     assert!((4..=6).contains(&slower), "{slower} items in 2 s at 400 ms");
-    // Announce now: one more, whatever the interval.
-    let before = announced(&machine);
+    // Announce now: exactly one more, with the interval too long for a regular item to come.
+    machine.set_interval(60_000).unwrap();
+    std::thread::sleep(Duration::from_millis(600));
+    let before = unit.status().received.get("announce").copied().unwrap_or(0);
     machine.announce_now().unwrap();
-    assert!(wait(Duration::from_secs(2), || announced(&machine) >= before + 1));
+    assert!(wait(Duration::from_millis(500), || unit.status().received.get("announce").copied().unwrap_or(0) == before + 1));
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(unit.status().received.get("announce").copied().unwrap_or(0), before + 1, "one, not a burst");
 
-    // The faults: half the items no-reads over a hundred items, counted by the machine and seen
-    // on the wire by the unit.
-    machine.set_interval(20).unwrap();
+    // The faults: half the items no-reads over a thousand items at 10 ms, counted by the
+    // machine and seen on the wire by the unit; every no-read, and nothing else, rejected to 0.
+    machine.set_interval(10).unwrap();
     let s0 = machine.status().controller.unwrap().stats;
     machine.set_fault("noread", 50).unwrap();
     assert_eq!(machine.status().controller.unwrap().faults["noread"], 50);
-    assert!(wait(Duration::from_secs(10), || announced(&machine) >= s0.announced + 100));
+    assert!(wait(Duration::from_secs(40), || announced(&machine) >= s0.announced + 1000));
     machine.set_fault("noread", 0).unwrap();
     let s1 = machine.status().controller.unwrap().stats;
     let total = s1.announced - s0.announced;
     let noreads = s1.faults["noread"] - s0.faults.get("noread").copied().unwrap_or(0);
-    assert!((30..=70).contains(&(noreads * 100 / total)), "{noreads} no-reads in {total} at 50 %");
+    assert!((44..=56).contains(&(noreads * 100 / total)), "{noreads} no-reads in {total} at 50 %");
     let u = unit.status();
     let items: Vec<_> = u.recent.iter().filter(|l| l.direction == Direction::In && l.message == "announce").collect();
     assert!(items.len() >= 20, "{}", items.len());
     let seen = items.iter().filter(|l| l.fields["read"] == "N" && l.fields["code"].is_empty()).count();
     assert!((15..=85).contains(&(seen * 100 / items.len())), "{seen} no-reads in the {} the unit still shows", items.len());
-    // A no-read is rejected by the unit to destination 0, which the machine counts as unknown.
     assert!(u.recent.iter().any(|l| l.direction == Direction::Out && l.message == "answer" && l.fields["dest"] == "0"), "{:?}", u.recent);
-    assert!(wait(Duration::from_secs(5), || machine.status().controller.unwrap().stats.invalid_destinations + 3 >= s0.invalid_destinations + noreads), "{:?}", machine.status().controller.unwrap().stats);
+    // Once every item is answered (nothing new announced meanwhile): as many invalid
+    // destinations as no-reads, no more, no fewer.
+    machine.set_interval(60_000).unwrap();
+    assert!(wait(Duration::from_secs(5), || machine.status().controller.unwrap().awaiting.is_empty()), "{:?}", machine.status().controller.unwrap().awaiting);
+    let s2 = machine.status().controller.unwrap().stats;
+    assert_eq!(s2.invalid_destinations - s0.invalid_destinations, noreads, "{s2:?}");
 
     // Every chute full: every outcome FULL and every item round again; then every chute back
     // and the outcomes drawn again.
+    machine.set_interval(20).unwrap();
     machine.set_bit_everywhere("full", true).unwrap();
     let s = machine.status().controller.unwrap();
     assert!(s.destinations.values().all(|w| *w & 1 == 1), "{:?}", s.destinations);

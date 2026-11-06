@@ -30,6 +30,9 @@ pub const VERSION: u32 = 1;
 
 /// How many finished items the status keeps.
 pub const HISTORY: usize = 200;
+/// The most items one pass of the engine announces: every item due since the last pass, up to
+/// this many; a longer stall skips the rest and keeps the phase.
+pub const MAX_BURST: usize = 20;
 /// How many decided keys a sticky decision remembers.
 pub const STICKY: usize = 10_000;
 
@@ -382,6 +385,42 @@ struct CompiledDecide {
     sticky: Option<String>,
     remembered: HashMap<String, String>,
     order: VecDeque<String>,
+    /// The rules' patterns as written, for [`DecideView`].
+    patterns: Vec<String>,
+}
+
+/// A decision as a file declared it, read back from the compiled rules.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DecideView {
+    /// `(field, pattern, value)`, in order.
+    pub rules: Vec<(String, String, String)>,
+    /// `(value, weight)`, in order.
+    pub spread: Vec<(String, f64)>,
+    pub reject: Option<String>,
+    pub sticky: Option<String>,
+}
+
+/// Whether a name is one a message's rules read: a field's, or a repeat's numbered name
+/// (`name1` to `name<max>`).
+fn message_reads(spec: &veredas_core::telegram::capture::CaptureSpec, name: &str) -> bool {
+    spec.fields.iter().any(|f| f.name == name)
+        || spec.repeat.iter().any(|r| {
+            name.strip_prefix(&r.name)
+                .filter(|rest| !rest.is_empty() && !rest.starts_with('0') && rest.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|rest| rest.parse::<usize>().ok())
+                .is_some_and(|n| n >= 1 && n <= r.max)
+        })
+}
+
+/// A name as a file writes it: not empty, no surrounding whitespace.
+fn exact(place: &str, what: &str, name: &str) -> Result<(), RulesError> {
+    if name.trim().is_empty() {
+        return Err(invalid(format!("{place}: the {what} has no name")));
+    }
+    if name != name.trim() {
+        return Err(invalid(format!("{place}: the name `{name}` has surrounding whitespace")));
+    }
+    Ok(())
 }
 
 /// One compiled field.
@@ -435,9 +474,7 @@ impl Fields {
         let mut names: Vec<&str> = Vec::new();
         for (i, s) in specs.iter().enumerate() {
             let where_ = format!("{place}.fields[{i}]");
-            if s.name.trim().is_empty() {
-                return Err(invalid(format!("{where_}: the field has no name")));
-            }
+            exact(&where_, "field", &s.name)?;
             if names.contains(&s.name.as_str()) {
                 return Err(invalid(format!("{where_}: two fields are named `{}`", s.name)));
             }
@@ -520,6 +557,7 @@ impl Fields {
                     return Err(invalid(format!("{where_}: `decide` answers a message")));
                 }
                 let mut rules = Vec::new();
+                let mut patterns = Vec::new();
                 for (j, r) in d.rules.iter().enumerate() {
                     let re = if r.pattern.trim() == EMPTY_PATTERN {
                         None
@@ -527,6 +565,7 @@ impl Fields {
                         Some(regex::Regex::new(&r.pattern).map_err(|e| invalid(format!("{where_}.decide.rules[{j}]: {e}")))?)
                     };
                     rules.push((r.field.clone(), re, r.value.text()));
+                    patterns.push(r.pattern.clone());
                 }
                 for (j, sh) in d.spread.iter().enumerate() {
                     if !sh.weight.is_finite() || sh.weight < 0.0 {
@@ -543,6 +582,7 @@ impl Fields {
                     sticky: d.sticky.clone(),
                     remembered: HashMap::new(),
                     order: VecDeque::new(),
+                    patterns,
                 })
             } else {
                 unreachable!("one source was counted")
@@ -563,6 +603,19 @@ impl Fields {
     /// The field names, in order.
     pub fn names(&self) -> Vec<String> {
         self.fields.iter().map(|f| f.name.clone()).collect()
+    }
+
+    /// The decision a field makes, as the file declared it; `None` for a field with another
+    /// source or no field of that name.
+    pub fn decide(&self, name: &str) -> Option<DecideView> {
+        let field = self.fields.iter().find(|f| f.name == name)?;
+        let Source::Decide(d) = &field.source else { return None };
+        Some(DecideView {
+            rules: d.rules.iter().zip(&d.patterns).map(|((field, _, value), pattern)| (field.clone(), pattern.clone(), value.clone())).collect(),
+            spread: d.spread.clone(),
+            reject: d.reject.clone(),
+            sticky: d.sticky.clone(),
+        })
     }
 
     /// Render every field, in order, each later one seeing the earlier ones. `None` when a
@@ -814,9 +867,7 @@ pub fn load(text: &str, catalog: &Catalog) -> Result<Rules, RulesError> {
     }
     let file: FileV1 = toml::from_str(text).map_err(|e| RulesError::NotToml(e.to_string()))?;
     for name in file.registers.keys() {
-        if name.trim().is_empty() {
-            return Err(invalid("registers: a register has no name"));
-        }
+        exact("registers", "register", name)?;
     }
     let registers = file.registers;
 
@@ -835,9 +886,7 @@ pub fn load(text: &str, catalog: &Catalog) -> Result<Rules, RulesError> {
             }
             let mut masks: Vec<u32> = Vec::new();
             for (name, mask) in &d.bits {
-                if name.trim().is_empty() {
-                    return Err(invalid("destinations.bits: a bit has no name"));
-                }
+                exact("destinations.bits", "bit", name)?;
                 if *mask == 0 || mask.count_ones() != 1 {
                     return Err(invalid(format!("destinations.bits.{name}: {mask} is not one bit")));
                 }
@@ -855,7 +904,8 @@ pub fn load(text: &str, catalog: &Catalog) -> Result<Rules, RulesError> {
             }
             let mut initial = BTreeMap::new();
             for (k, names) in &d.initial {
-                let dest: u64 = k.trim().parse().map_err(|_| invalid(format!("destinations.initial: `{k}` is not a destination number")))?;
+                // Exact, like a name: ` 2` and `2` would be one destination named twice.
+                let dest: u64 = k.parse().map_err(|_| invalid(format!("destinations.initial: `{k}` is not a destination number")))?;
                 if !d.list.contains(&dest) {
                     return Err(invalid(format!("destinations.initial: {dest} is not in the list")));
                 }
@@ -899,9 +949,7 @@ pub fn load(text: &str, catalog: &Catalog) -> Result<Rules, RulesError> {
             let mut faults = Vec::new();
             for (j, f) in i.faults.iter().enumerate() {
                 let place = format!("items.faults[{j}]");
-                if f.name.trim().is_empty() {
-                    return Err(invalid(format!("{place}: the fault has no name")));
-                }
+                exact(&place, "fault", &f.name)?;
                 if faults.iter().any(|(n, _, _): &(String, u8, _)| n == &f.name) {
                     return Err(invalid(format!("{place}: two faults are named `{}`", f.name)));
                 }
@@ -921,7 +969,7 @@ pub fn load(text: &str, catalog: &Catalog) -> Result<Rules, RulesError> {
                     let rm = message("items.reply.message", catalog, &r.message)?;
                     let key = r.key.clone().unwrap_or_else(|| i.key.clone());
                     let binary = rm.capture_spec.payload.is_none();
-                    let has = |n: &str| rm.capture_spec.fields.iter().any(|f| f.name == n) || rm.capture_spec.repeat.iter().any(|f| f.name == n);
+                    let has = |n: &str| message_reads(&rm.capture_spec, n);
                     if binary && !has(&key) {
                         return Err(invalid(format!("items.reply.key: `{}` has no field named `{key}`", r.message)));
                     }
@@ -949,9 +997,7 @@ pub fn load(text: &str, catalog: &Catalog) -> Result<Rules, RulesError> {
                     let mut mix = Vec::new();
                     for (j, e) in o.mix.iter().enumerate() {
                         let place = format!("items.outcome.mix[{j}]");
-                        if e.name.trim().is_empty() {
-                            return Err(invalid(format!("{place}: the outcome has no name")));
-                        }
+                        exact(&place, "outcome", &e.name)?;
                         if mix.iter().any(|(n, _, _, _): &(String, f64, _, bool)| n == &e.name) {
                             return Err(invalid(format!("{place}: two outcomes are named `{}`", e.name)));
                         }
@@ -1127,6 +1173,9 @@ pub struct Controller {
     rng: Pcg32,
     now_ms: u64,
     next_item_ms: u64,
+    /// Whether the last pass could announce (a peer there, the gate open): when announcing
+    /// resumes, the first item comes at once rather than as a burst of every due time missed.
+    was_announcing: bool,
     awaiting: Vec<Item>,
     travelling: Vec<(Item, u64)>,
     requeued: VecDeque<(Item, u64)>,
@@ -1156,6 +1205,7 @@ impl Controller {
             },
             now_ms: 0,
             next_item_ms: 0,
+            was_announcing: false,
             awaiting: Vec::new(),
             travelling: Vec::new(),
             requeued: VecDeque::new(),
@@ -1209,15 +1259,31 @@ impl Controller {
                 out.push(o);
             }
         }
-        if self.rules.items.is_some() && announcing && self.now_ms >= self.next_item_ms {
+        if self.rules.items.is_some() && announcing {
             let interval = self.rules.items.as_ref().map(|i| i.interval_ms).unwrap_or(1).max(1);
-            // Due an interval after the last was due, never after the tick that served it, so
-            // a late tick does not stretch the interval; a stall skips what it missed.
-            self.next_item_ms = step_past(self.next_item_ms, interval, self.now_ms);
-            if let Some(o) = self.announce_new() {
-                out.push(o);
+            if !self.was_announcing && self.next_item_ms < self.now_ms {
+                // Announcing resumes (a peer arrived, the gate opened) past the next due time:
+                // the first item at once, not a burst of every due time that passed meanwhile;
+                // a due time still ahead is waited for.
+                self.next_item_ms = self.now_ms;
+            }
+            // Every item due since the last pass, each due an interval after the last was due,
+            // so a pass longer than the interval (the host's tick) announces what it covers and
+            // the rate stays the interval's; a stall beyond the burst skips the rest and keeps
+            // the phase.
+            let mut burst = 0;
+            while self.now_ms >= self.next_item_ms && burst < MAX_BURST {
+                self.next_item_ms = self.next_item_ms.saturating_add(interval);
+                if let Some(o) = self.announce_new() {
+                    out.push(o);
+                }
+                burst += 1;
+            }
+            if self.now_ms >= self.next_item_ms {
+                self.next_item_ms = step_past(self.next_item_ms, interval, self.now_ms);
             }
         }
+        self.was_announcing = announcing;
         // Outcomes that are due.
         let due: Vec<(Item, u64)> = std::mem::take(&mut self.travelling);
         for (item, at) in due {
@@ -1462,10 +1528,14 @@ impl Controller {
                         Action::Deliver => {
                             let dest = reply.destination.as_ref().and_then(|d| fields.get(d)).and_then(|v| v.trim().parse::<u64>().ok());
                             item.destination = dest;
-                            let known = match (&self.rules.destinations, dest) {
-                                (Some(d), Some(n)) => d.list.contains(&n),
-                                (Some(_), None) => false,
-                                (None, _) => true,
+                            // A destination is invalid when the reply names one (its field is
+                            // configured) that is not in the list, or not a number; a reply
+                            // with no destination field names none.
+                            let known = match (&self.rules.destinations, &reply.destination, dest) {
+                                (_, None, _) => true,
+                                (Some(d), Some(_), Some(n)) => d.list.contains(&n),
+                                (Some(_), Some(_), None) => false,
+                                (None, _, _) => true,
                             };
                             if !known {
                                 self.stats.invalid_destinations += 1;

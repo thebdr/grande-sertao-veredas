@@ -96,7 +96,7 @@ fn the_machine_announces_awaits_the_answer_and_reports_the_outcome_tick_by_tick(
     let mut m = Controller::new(machine_rules(), None);
     m.set_fault("noread", 0).unwrap();
     // Nothing is announced into nothing: no peer, no item, however long.
-    assert!(prose.contains("An item is announced only while a peer is connected (announced into nothing it would only time out) and the gate register, if any, is not 0, a requeued item coming round again included; each is due an interval after the last was due."));
+    assert!(prose.contains("An item is announced only while a peer is connected (announced into nothing it would only time out) and the gate register, if any, is not 0, a requeued item coming round again included; each is due an interval after the last was due, and a pass of the engine announces every item due since the last pass, at most twenty (a longer stall skips the rest, keeping the phase); when announcing resumes, the first item comes at once."));
     let out = run(&mut m, 1000, 0);
     assert!(announces(&out).is_empty());
     assert_eq!(sent(&out).len(), 4, "the heartbeats go out, peers or none");
@@ -159,6 +159,57 @@ fn the_machine_announces_awaits_the_answer_and_reports_the_outcome_tick_by_tick(
     // A message nobody reacts to is nothing.
     assert!(m.on_message("status", &values(&[("running", "1"), ("speed", "1")]), None).is_empty());
     assert_eq!(m.rules().sends(), ["announce", "outcome", "heartbeat", "status"]);
+    // A reply that names no destination (no destination field configured) names none: not
+    // invalid, the item travels to `-`.
+    let mut no_dest = Controller::new(
+        rules("[destinations]\nlist = [1]\n[items]\nmessage = \"announce\"\ninterval_ms = 100\nkey = \"item\"\nfields = [ { name = \"item\", counter = {} }, { name = \"lane\", value = 1 }, { name = \"read\", value = \"Y\" }, { name = \"code\", value = \"C\" }, { name = \"weight\", value = 1 } ]\n[items.reply]\nmessage = \"answer\"\n"),
+        Some(1),
+    );
+    no_dest.tick(0, 1);
+    let out = no_dest.on_message("answer", &values(&[("item", "1"), ("dest", "9"), ("flag", "1")]), Some(2));
+    assert_eq!(notes(&out), ["1 to - (0 ms)"]);
+    assert_eq!((no_dest.status().stats.invalid_destinations, no_dest.status().history[0].destination), (0, None));
+}
+
+#[test]
+fn the_outcome_is_drawn_from_the_mix_by_weight() {
+    let prose = doc_prose();
+    assert!(prose.contains("drawn from a mix of 9 `sorted` to 1 `lost`"));
+    // A thousand items delivered to a chute with no bit set: about nine sorted to one lost.
+    let mut m = Controller::new(machine_rules(), Some(2));
+    m.set_fault("noread", 0).unwrap();
+    m.set_interval(100_000).unwrap();
+    let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+    for i in 1..=1000 {
+        m.announce_now().unwrap();
+        m.on_message("answer", &values(&[("item", &i.to_string()), ("dest", "1"), ("flag", "1")]), Some(1));
+        for o in m.tick(500, 1) {
+            if o.message == "outcome" {
+                *counts.entry(field(&o, "result").to_string()).or_default() += 1;
+            }
+        }
+    }
+    assert_eq!(counts.values().sum::<u32>(), 1000, "{counts:?}");
+    assert!((850..=950).contains(&counts["SORTED"]) && (50..=150).contains(&counts["LOST"]), "{counts:?}");
+    assert_eq!((m.status().stats.ended["sorted"], m.status().stats.ended["lost"]), (counts["SORTED"] as u64, counts["LOST"] as u64));
+    // A weight of 0 is never drawn, wherever it sits; the shares hold among the rest.
+    let three = "[items]\nmessage = \"announce\"\ninterval_ms = 100\nkey = \"item\"\nfields = [ { name = \"item\", counter = {} }, { name = \"lane\", value = 1 }, { name = \"read\", value = \"Y\" }, { name = \"code\", value = \"C\" }, { name = \"weight\", value = 1 } ]\n\
+                 [items.reply]\nmessage = \"answer\"\ndestination = \"dest\"\n[items.outcome]\nmessage = \"outcome\"\nfields = [ { name = \"item\", from = \"item\" }, { name = \"dest\", from = \"dest\" }, { name = \"result\", value = \"R\" } ]\n\
+                 mix = [ { name = \"never\", weight = 0, set = { result = \"NEVER\" } }, { name = \"a\", weight = 3, set = { result = \"A\" } }, { name = \"b\", weight = 1, set = { result = \"B\" } } ]\n";
+    let mut t = Controller::new(rules(three), Some(3));
+    t.set_interval(100_000).unwrap();
+    let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+    for i in 1..=400 {
+        t.announce_now().unwrap();
+        t.on_message("answer", &values(&[("item", &i.to_string()), ("dest", "1"), ("flag", "1")]), None);
+        for o in t.tick(0, 1) {
+            if o.message == "outcome" {
+                *counts.entry(field(&o, "result").to_string()).or_default() += 1;
+            }
+        }
+    }
+    assert_eq!(counts.keys().collect::<Vec<_>>(), ["A", "B"], "{counts:?}");
+    assert!((260..=340).contains(&counts["A"]) && (60..=140).contains(&counts["B"]), "{counts:?}");
 }
 
 #[test]
@@ -345,7 +396,7 @@ fn commands_set_registers_the_gate_stops_the_announcements_and_cyclic_messages_r
 #[test]
 fn the_unit_answers_with_a_decision_sticky_by_code_and_avoiding_what_is_blocked() {
     let prose = doc_prose();
-    assert!(prose.contains("an item whose `code` is empty goes to destination 0 (the reject), any other to destination 1, 2 or 3 in the shares 2, 1 and 1, the same destination again for the same `code`."));
+    assert!(prose.contains("an item whose `code` is empty goes to destination 0, any other to destination 1, 2 or 3 in the shares 2, 1 and 1, the same destination again for the same `code`, and to 9, the reject, when every one of those is full."));
     let mut u = Controller::new(unit_rules(), None);
     let announce = |item: &str, code: &str| values(&[("item", item), ("lane", "1"), ("read", "Y"), ("code", code), ("weight", "500")]);
     // An answer to the peer the announcement came from, at once, its fields from the message.
@@ -386,6 +437,14 @@ fn the_unit_answers_with_a_decision_sticky_by_code_and_avoiding_what_is_blocked(
     } else {
         assert_eq!(again, dest);
     }
+    // Every chute full: no rule matches a read code and nothing can be drawn, so the reject;
+    // an empty code still takes its rule.
+    u.set_bit_everywhere("full", true).unwrap();
+    assert_eq!(field(&u.on_message("announce", &announce("6", "Z1"), Some(7))[0], "dest"), "9");
+    assert_eq!(field(&u.on_message("announce", &announce("7", "PKG1"), Some(7))[0], "dest"), "9", "a remembered chute that is full is not taken");
+    assert_eq!(field(&u.on_message("announce", &announce("8", ""), Some(7))[0], "dest"), "0");
+    u.set_bit_everywhere("full", false).unwrap();
+    assert_ne!(field(&u.on_message("announce", &announce("9", "Z2"), Some(7))[0], "dest"), "9");
     // An answer whose field cannot render is not sent, and counted: a rule-only decision with
     // nothing matching and no reject.
     let mut strict = Controller::new(
@@ -429,26 +488,37 @@ fn faults_mark_their_share_of_items_and_the_rate_is_the_interval_s_whatever_the_
     assert!(announces(&run(&mut m, 200, 1)).iter().all(|o| field(o, "read") == "Y" && field(o, "code").starts_with("PKG")));
     assert_eq!(m.status().faults, BTreeMap::from([("noread".to_string(), 0)]));
     // The rate is the interval's, whatever the tick: 100 ms items over 10 s are 100 on ticks
-    // of 10 ms, of 30 ms and of 70 ms alike; a long stall announces one and keeps the phase.
-    for tick in [10, 30, 70] {
+    // of 10 ms, of 30 ms and of 70 ms alike, and 20 ms items on a 31 ms tick (the Windows
+    // quantum) are 500 too, a pass announcing every item due since the last.
+    for (tick, interval) in [(10, 100), (30, 100), (70, 100), (31, 20), (250, 100)] {
         let mut m = Controller::new(machine_rules(), Some(1));
+        m.set_interval(interval).unwrap();
         let mut count = 0;
         let mut elapsed = 0;
-        m.tick(0, 1);
-        count += 1;
+        count += announces(&m.tick(0, 1)).len();
         while elapsed < 10_000 {
             count += announces(&m.tick(tick, 1)).len();
             elapsed += tick;
         }
-        let expected = 1 + 10_000 / 100;
-        assert!((expected - 1..=expected + 1).contains(&count), "tick {tick}: {count} items in {elapsed} ms");
+        let expected = (1 + elapsed / interval) as usize;
+        assert!((expected - 1..=expected + 1).contains(&count), "tick {tick} at {interval} ms: {count} items in {elapsed} ms, not {expected}");
     }
+    // A stall: ten intervals announce ten; fifty announce twenty (the burst's most) and skip
+    // the rest, the phase kept; the first item after an idle comes at once, not as a burst.
     let mut m = Controller::new(machine_rules(), Some(1));
     m.tick(0, 1);
-    assert_eq!(announces(&m.tick(1000, 1)).len(), 1, "a stall of ten intervals announces one");
-    assert_eq!(announces(&m.tick(100, 1)).len(), 1, "and the next is due an interval after the one that was due, not after the stall");
+    assert_eq!(announces(&m.tick(1000, 1)).len(), 10, "a stall of ten intervals announces the ten due");
+    assert_eq!(announces(&m.tick(100, 1)).len(), 1, "and the next is due an interval after the last that was due");
     assert!(announces(&m.tick(50, 1)).is_empty());
     assert_eq!(announces(&m.tick(50, 1)).len(), 1);
+    assert_eq!(announces(&m.tick(5000, 1)).len(), MAX_BURST, "a stall of fifty intervals announces the burst's most");
+    assert_eq!(announces(&m.tick(100, 1)).len(), 1, "and the phase is kept");
+    assert!(announces(&m.tick(50, 1)).is_empty());
+    assert_eq!(announces(&m.tick(50, 1)).len(), 1);
+    assert!(announces(&m.tick(3000, 0)).is_empty());
+    assert_eq!(announces(&m.tick(0, 1)).len(), 1, "after an idle with no peer, one item at once, not thirty");
+    assert!(announces(&m.tick(99, 1)).is_empty());
+    assert_eq!(announces(&m.tick(1, 1)).len(), 1);
     // The interval turned live: the next item comes within the new interval.
     m.set_interval(20).unwrap();
     assert_eq!(announces(&run(&mut m, 200, 1)).len(), 10);

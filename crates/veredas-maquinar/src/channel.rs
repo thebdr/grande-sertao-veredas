@@ -210,20 +210,26 @@ impl Drop for BenchChannel {
 
 /// Where the catalog's id rides in this framing: a segment header field, or an envelope field
 /// in a layout without segments.
-fn check_id_field(spec: &ChannelSpec, id_field: &str) -> Result<(), ChannelError> {
-    match &spec.framing.segment {
-        Some(header) => {
-            if !header.iter().any(|f| f.name == id_field) {
-                return Err(ChannelError::IdField(format!("the catalog's id_field `{id_field}` is no field of the framing's segment header")));
-            }
-        }
-        None => {
-            if !spec.framing.envelope.iter().any(|f| f.name == id_field) {
-                return Err(ChannelError::IdField(format!("the catalog's id_field `{id_field}` is no field of the framing's envelope")));
-            }
-        }
-    }
-    Ok(())
+pub fn check_id_field(spec: &ChannelSpec, id_field: &str) -> Result<(), ChannelError> {
+    use veredas_core::telegram::framing::FieldRole;
+    let (fields, where_) = match &spec.framing.segment {
+        Some(header) => (header, "segment header"),
+        None => (&spec.framing.envelope, "envelope"),
+    };
+    let Some(field) = fields.iter().find(|f| f.name == id_field) else {
+        return Err(ChannelError::IdField(format!("the catalog's id_field `{id_field}` is no field of the framing's {where_}")));
+    };
+    // A field core fills in itself (the sequence, a length, a count) cannot carry an id: the
+    // channel would claim a message by name while the wire carried something else.
+    let role = match field.role {
+        FieldRole::Opaque => return Ok(()),
+        FieldRole::Sequence => "sequence",
+        FieldRole::Length => "length",
+        FieldRole::Count => "count",
+    };
+    Err(ChannelError::IdField(format!(
+        "the catalog's id_field `{id_field}` is the framing's {where_} field with the role `{role}`, which the channel fills in itself: an id cannot ride it"
+    )))
 }
 
 /// Start a bench channel. Returns once its thread runs; a bind failure shows in the status.
@@ -287,7 +293,12 @@ impl Link {
     /// Build and send a message, or say why not.
     fn send(&self, message: &str, fields: &HashMap<String, String>, to: Option<PeerId>) {
         match self.catalog.encode(message, fields) {
-            None => note_text(&self.status, format!("{message} not sent: the catalog has no such message")),
+            None => {
+                if let Ok(mut s) = self.status.lock() {
+                    s.last_error = Some(format!("{message}: the catalog has no such message"));
+                }
+                note_text(&self.status, format!("{message} not sent: the catalog has no such message"));
+            }
             Some(Err(e)) => {
                 if let Ok(mut s) = self.status.lock() {
                     s.last_error = Some(format!("{message}: {e}"));
@@ -421,7 +432,8 @@ fn run(cfg: ChannelConfig, mut cyclic: Vec<(String, u64, Fields)>, status: Arc<M
         // Requests from outside. A knob is answered only once the status pane shows its
         // effect, at the end of this pass, so a caller that reads the status right after the
         // call sees what it set.
-        let mut replies: Vec<(Sender<Result<(), String>>, Result<(), String>)> = Vec::new();
+        type Reply = (Sender<Result<(), String>>, Result<(), String>);
+        let mut replies: Vec<Reply> = Vec::new();
         while let Ok(request) = requests.try_recv() {
             match request {
                 Request::SendNow { message, fields, to } => link.send(&message, &fields, to),
@@ -449,9 +461,11 @@ fn run(cfg: ChannelConfig, mut cyclic: Vec<(String, u64, Fields)>, status: Arc<M
         }
 
         // Time passes: the controller's own traffic, and the channel's cyclic messages.
+        // Whole milliseconds, the remainder carried to the next pass, so the controller's
+        // clock does not fall behind the wall clock by a fraction every pass.
         let now = Instant::now();
         let elapsed = now.duration_since(last).as_millis() as u64;
-        last = now;
+        last += Duration::from_millis(elapsed);
         if let Some(c) = controller.as_mut() {
             outgoing.extend(c.tick(elapsed, peers.len()));
         }

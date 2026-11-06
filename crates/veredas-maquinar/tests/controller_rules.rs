@@ -134,7 +134,7 @@ fn full_file() -> String {
          fields = [ {{ name = \"item\", from = \"item\" }}, {{ name = \"dest\", from = \"dest\" }}, {{ name = \"result\", value = \"S\" }} ]\n\
          mix = [ {{ name = \"o\", weight = 1, set = {{ result = \"O\" }}, requeue = false }} ]\n\n\
          [[answers]]\non = \"announce\"\nsend = \"answer\"\nafter_ms = 0\n\
-         fields = [ {{ name = \"item\", from = \"item\" }}, {{ name = \"dest\", decide = {{ rules = [ {{ field = \"code\", pattern = \"x\", value = 1 }} ], spread = [ {{ value = 1, weight = 1 }} ], reject = 0, sticky = \"code\" }} }}, {{ name = \"flag\", value = 1 }} ]\n\n\
+         fields = [ {{ name = \"item\", from = \"item\" }}, {{ name = \"dest\", decide = {{ rules = [ {{ field = \"code\", pattern = \"x\", value = 1 }} ], spread = [ {{ value = 1, weight = 1 }} ], reject = 9, sticky = \"code\" }} }}, {{ name = \"flag\", value = 1 }} ]\n\n\
          [[commands]]\non = \"command\"\nfield = \"code\"\nwhen = [ {{ equals = 1, set = {{ r = 1 }} }} ]\n\n\
          [[cyclic]]\nmessage = \"status\"\nevery_ms = 1000\nper_destination = false\n\
          fields = [ {{ name = \"running\", register = \"r\" }}, {{ name = \"speed\", register = \"r\" }} ]\n",
@@ -282,8 +282,19 @@ fn the_documented_example_loads_as_described() {
     assert_eq!(unit.sends(), ["answer"]);
     assert_eq!(unit.receives(), ["announce"]);
     assert_eq!(quoted_after(&prose, "an item whose"), "code");
-    assert!(prose.contains("goes to destination 0 (the reject)"));
-    assert!(prose.contains("to destination 1, 2 or 3 in the shares 2, 1 and 1"));
+    assert!(prose.contains("an item whose `code` is empty goes to destination 0, any other to destination 1, 2 or 3 in the shares 2, 1 and 1, the same destination again for the same `code`, and to 9, the reject, when every one of those is full."));
+    assert_eq!(
+        answer.fields.decide("dest"),
+        Some(DecideView {
+            rules: vec![("code".to_string(), "(empty)".to_string(), "0".to_string())],
+            spread: vec![("1".to_string(), 2.0), ("2".to_string(), 1.0), ("3".to_string(), 1.0)],
+            reject: Some("9".to_string()),
+            sticky: Some("code".to_string()),
+        })
+    );
+    assert_eq!(answer.fields.decide("item"), None, "a field with another source decides nothing");
+    assert_eq!(answer.fields.decide("nope"), None);
+    assert_eq!(destinations.blocking.iter().map(|b| b.0.as_str()).collect::<Vec<_>>(), ["full"]);
     // The two files are the test's: the prose says which tests read them.
     assert!(prose.contains("`crates/veredas-maquinar/tests/controller_rules.rs` loads these three blocks"));
     assert!(prose.contains("`crates/veredas-maquinar/tests/controller.rs` runs the two files as the engine"));
@@ -375,7 +386,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             "A setting" => full.replace("{ equals = 1, set", "{ equals = 1, zz = 1, set"),
             "A field" => full.replace("{ name = \"lane\",", "{ name = \"lane\", zz = 1,"),
             "A counter" => full.replace("{ name = \"lane\", value = 1 }", "{ name = \"lane\", counter = { first = 1, zz = 1 } }"),
-            "A decision" => full.replace("reject = 0, sticky", "reject = 0, zz = 1, sticky"),
+            "A decision" => full.replace("reject = 9, sticky", "reject = 0, zz = 1, sticky"),
             "A rule" => full.replace("{ field = \"code\", pattern", "{ field = \"code\", zz = 1, pattern"),
             "A share" => full.replace("{ value = 1, weight = 1 }", "{ value = 1, zz = 1, weight = 1 }"),
             other => panic!("{other}"),
@@ -590,6 +601,46 @@ fn every_invalid_file_is_refused_with_its_place_named() {
     assert_eq!(refused(&field("register = \"x\"")), "items.fields[0] (`item`): no register `x`");
     assert_eq!(refused(&field("now = \"%\"")), "items.fields[0] (`item`): `%` is not a datetime format");
     assert_eq!(refused(&field("decide = { reject = 0 }")), "items.fields[0] (`item`): `decide` answers a message");
+    // Every place, every source it does not take; and the bounds at their included ends.
+    let outcome_with = |spec: &str| with(&format!("[items.reply]\nmessage = \"answer\"\n[items.outcome]\nmessage = \"outcome\"\nfields = [ {{ name = \"item\", {spec} }}, {{ name = \"dest\", value = 1 }}, {{ name = \"result\", value = \"S\" }} ]\n"));
+    assert_eq!(refused(&outcome_with("decide = { reject = 0 }")), "items.outcome.fields[0] (`item`): `decide` answers a message");
+    let cyclic_with = |spec: &str, per: bool| format!("{h}[destinations]\nlist = [1]\n\n[[cyclic]]\nmessage = \"heartbeat\"\nevery_ms = 1000\nper_destination = {per}\nfields = [ {{ name = \"dest\", {spec} }}, {{ name = \"state\", value = 0 }} ]\n");
+    assert_eq!(refused(&cyclic_with("decide = { reject = 0 }", true)), "cyclic[0].fields[0] (`dest`): `decide` answers a message");
+    assert_eq!(refused(&cyclic_with("from = \"destination\"", false)), "cyclic[0].fields[0] (`dest`): a cyclic message reads `destination` or `state`, per destination");
+    assert_eq!(refused(&cyclic_with("from = \"state\"", false)), "cyclic[0].fields[0] (`dest`): a cyclic message reads `destination` or `state`, per destination");
+    assert!(load(&cyclic_with("from = \"state\"", true), &catalog()).is_ok());
+    assert!(load(&field("range = [1, 1]"), &catalog()).is_ok(), "a range of one value");
+    assert!(load(&field("range = [1, 2], decimals = 15"), &catalog()).is_ok(), "fifteen decimals");
+    assert!(load(&field("counter = { first = 3, last = 3 }"), &catalog()).is_ok(), "a counter of one value");
+    assert!(load(&with("faults = [ { name = \"f\", percent = 100, set = { read = \"N\" } } ]\n"), &catalog()).is_ok(), "every item faulted");
+    let weightless = format!("{h}[[answers]]\non = \"announce\"\nsend = \"answer\"\nfields = [ {{ name = \"item\", decide = {{ spread = [ {{ value = 1, weight = 0 }} ] }} }}, {{ name = \"dest\", value = 1 }}, {{ name = \"flag\", value = 1 }} ]\n");
+    assert!(load(&weightless, &catalog()).is_ok(), "a weight of 0");
+    let mix0 = with("[items.reply]\nmessage = \"answer\"\n[items.outcome]\nmessage = \"outcome\"\nfields = [ { name = \"item\", from = \"item\" }, { name = \"dest\", from = \"dest\" }, { name = \"result\", value = \"S\" } ]\nmix = [ { name = \"o\", weight = 0 } ]\n");
+    assert!(load(&mix0, &catalog()).is_ok(), "a mix weight of 0");
+    // A field's decimals reach its draw.
+    let regs: BTreeMap<String, i64> = BTreeMap::new();
+    let mut two = Fields::compile("f", &[toml::from_str::<FieldSpec>("name = \"f\"\nrange = [1, 2]\ndecimals = 2\n").unwrap()], Place::Answer, &regs, None).unwrap();
+    let mut rng = veredas_core::rng::Pcg32::new(1, 1);
+    let empty = std::collections::HashMap::new();
+    let mut ctx = Context { fields: &empty, registers: &regs, blocked: &[], rng: &mut rng };
+    let drawn = two.render(&mut ctx).unwrap()["f"].clone();
+    assert!(drawn.len() == 4 && drawn.as_bytes()[1] == b'.', "two decimals: {drawn}");
+    // Names are exact, in every place a file names one.
+    assert_eq!(refused(&format!("{h}registers = {{ \" r \" = 1 }}\n")), "registers: the name ` r ` has surrounding whitespace");
+    assert_eq!(refused(&format!("{h}[destinations]\nlist = [1]\nbits = {{ \" b \" = 1 }}\n")), "destinations.bits: the name ` b ` has surrounding whitespace");
+    assert_eq!(refused(&format!("{h}[destinations]\nlist = [1]\ninitial = {{ \" 1 \" = [] }}\n")), "destinations.initial: ` 1 ` is not a destination number");
+    assert_eq!(refused(&items("fields = [ { name = \" x \", value = 1 } ]\n")), "items.fields[0]: the name ` x ` has surrounding whitespace");
+    assert_eq!(refused(&with("faults = [ { name = \" f \", set = {} } ]\n")), "items.faults[0]: the name ` f ` has surrounding whitespace");
+    assert_eq!(refused(&mix0.replace("name = \"o\"", "name = \" o \"")), "items.outcome.mix[0]: the name ` o ` has surrounding whitespace");
+    // A binary reply's key may be a repeat's numbered name, never the repeat's own name or one
+    // past its max.
+    let with_repeat = format!("{}\n[[message]]\nname = \"answer2\"\nid = 27\nfields = [ {{ name = \"item\", at = 0, ty = \"U32\" }} ]\nrepeat = [ {{ name = \"bc\", pattern = \"BC=(\\\\w+)\", max = 2 }} ]\n", blocks()[0]);
+    let catalog2 = catalog::load(&with_repeat).unwrap();
+    let keyed = |key: &str| with(&format!("[items.reply]\nmessage = \"answer2\"\nkey = \"{key}\"\n"));
+    assert!(load(&keyed("bc1"), &catalog2).is_ok());
+    assert!(load(&keyed("bc2"), &catalog2).is_ok());
+    assert_eq!(load(&keyed("bc3"), &catalog2).unwrap_err().to_string(), "items.reply.key: `answer2` has no field named `bc3`");
+    assert_eq!(load(&keyed("bc"), &catalog2).unwrap_err().to_string(), "items.reply.key: `answer2` has no field named `bc`");
     let answer = |fields: &str| format!("{h}[[answers]]\non = \"announce\"\nsend = \"answer\"\nfields = [ {fields}, {{ name = \"dest\", value = 1 }}, {{ name = \"flag\", value = 1 }} ]\n");
     assert!(refused(&answer("{ name = \"item\", decide = { rules = [ { field = \"code\", pattern = \"(\", value = 1 } ] } }")).starts_with("answers[0].fields[0] (`item`).decide.rules[0]: regex parse error"));
     assert_eq!(refused(&answer("{ name = \"item\", decide = { spread = [ { value = 1, weight = -1 } ] } }")), "answers[0].fields[0] (`item`).decide.spread[0]: a weight is not a finite, non-negative number");
@@ -615,7 +666,7 @@ fn every_invalid_file_is_refused_with_its_place_named() {
     assert_eq!(refused(&with("faults = [ { name = \"f\", set = {} }, { name = \"f\", set = {} } ]\n")), "items.faults[1]: two faults are named `f`");
     assert_eq!(refused(&with("faults = [ { name = \"f\", percent = 101, set = {} } ]\n")), "items.faults[0].percent is 101, over 100");
     assert_eq!(refused(&with("faults = [ { name = \"f\", set = { x = 1 } } ]\n")), "items.faults[0].set: no announced field named `x`");
-    assert_eq!(refused(&format!("{h}registers = {{ \" \" = 1 }}\n")), "registers: a register has no name");
+    assert_eq!(refused(&format!("{h}registers = {{ \" \" = 1 }}\n")), "registers: the register has no name");
     // The reply and the outcome.
     assert_eq!(refused(&with("[items.reply]\nmessage = \"nope\"\n")), "items.reply.message: the catalog has no message `nope`");
     assert_eq!(refused(&with("[items.reply]\nmessage = \"answer\"\nkey = \"x\"\n")), "items.reply.key: `answer` has no field named `x`");
@@ -649,7 +700,7 @@ fn every_invalid_file_is_refused_with_its_place_named() {
     let dest = |body: &str| format!("{h}[destinations]\n{body}");
     assert_eq!(refused(&dest("list = []\n")), "destinations.list is empty");
     assert_eq!(refused(&dest("list = [1, 1]\n")), "destinations.list: 1 is listed twice");
-    assert_eq!(refused(&dest("list = [1]\nbits = { \" \" = 1 }\n")), "destinations.bits: a bit has no name");
+    assert_eq!(refused(&dest("list = [1]\nbits = { \" \" = 1 }\n")), "destinations.bits: the bit has no name");
     assert_eq!(refused(&dest("list = [1]\nbits = { b = 3 }\n")), "destinations.bits.b: 3 is not one bit");
     assert_eq!(refused(&dest("list = [1]\nbits = { b = 0 }\n")), "destinations.bits.b: 0 is not one bit");
     assert_eq!(refused(&dest("list = [1]\nbits = { b = 1, c = 1 }\n")), "destinations.bits.c: bit 1 is named twice");
@@ -679,8 +730,8 @@ fn every_rule_the_reference_states_about_loading_is_the_reader_s() {
     assert!(prose.contains("`list` (required): the destination numbers, at least one, none twice."));
     assert!(prose.contains("`bits` (none): the named bits of the state word, each one bit (a power of two), no bit named twice."));
     assert!(prose.contains("`resting` (none): the bits a destination has at the start when `initial` does not name it."));
-    assert!(prose.contains("`initial` (none): bits set at the start, by destination number written as text; a number not in the list is refused."));
-    let d = load(&format!("{h}[destinations]\nlist = [1, 2]\nbits = {{ a = 1, b = 4 }}\nresting = [\"a\"]\ninitial = {{ \" 2 \" = [\"a\", \"b\"] }}\n"), &catalog).unwrap();
+    assert!(prose.contains("`initial` (none): bits set at the start, by destination number written as text, exact, with no surrounding whitespace; a number not in the list is refused."));
+    let d = load(&format!("{h}[destinations]\nlist = [1, 2]\nbits = {{ a = 1, b = 4 }}\nresting = [\"a\"]\ninitial = {{ \"2\" = [\"a\", \"b\"] }}\n"), &catalog).unwrap();
     let d = d.destinations.unwrap();
     assert_eq!((d.resting, d.initial), (1, BTreeMap::from([(2, 5)])));
     let c = Controller::new(load(&format!("{h}[destinations]\nlist = [1, 2]\nbits = {{ a = 1, b = 4 }}\nresting = [\"a\"]\ninitial = {{ \"2\" = [\"b\"] }}\n"), &catalog).unwrap(), None);
@@ -698,7 +749,7 @@ fn every_rule_the_reference_states_about_loading_is_the_reader_s() {
     assert!(prose.contains("`name` (required): the fault's name, unique; the bench's knob and the status use it."));
     assert!(prose.contains("`percent` (`0`): the share of announced items, 0 to 100, drawn item by item, fault by fault."));
     assert!(prose.contains("`set` (required): announced fields by name and the value each takes."));
-    assert!(prose.contains("`key` (the items' `key`): the reply's field holding the item's key; for a binary message, one of its fields."));
+    assert!(prose.contains("`key` (the items' `key`): the reply's field holding the item's key; for a binary message, one of its fields or of a repeat's numbered names."));
     assert!(prose.contains("`destination` (none): the reply's field naming the destination; required when there is an outcome and there are destinations."));
     assert!(prose.contains("`when` (none): dispositions by a field's value, in order, as inline tables; the first match decides, else the item is delivered."));
     assert!(prose.contains("`equals` (required): its value, compared as text, trimmed."));
@@ -713,7 +764,7 @@ fn every_rule_the_reference_states_about_loading_is_the_reader_s() {
     assert!(prose.contains("`field` (required): the field read."));
     assert!(prose.contains("`when` (required): settings by value, at least one, as inline tables; a value none matches sets nothing."));
     assert!(prose.contains("`set` (required): registers by name and the value each takes."));
-    assert!(prose.contains("`every_ms` (required): the interval; `0` is refused."));
+    assert!(prose.contains("`every_ms` (required): the interval; `0` is refused. Each is due an interval after the last was due, and sent at most once a pass of the engine: a state message is not worth a burst."));
     assert!(prose.contains("`per_destination` (`false`): one message per destination each time, its fields reading `destination` (the number) and `state` (the word); it needs `[destinations]`."));
     assert!(prose.contains("`fields` (required): the fields sent, one for every name the message writes; they read the registers."));
     // A field and its sources.
@@ -800,10 +851,10 @@ to 70. A `heartbeat` goes out every 1000 ms for each destination with its state 
 The machine:
 
 The unit answers every `announce` at once with an `answer` for the same `item`: an item whose
-`code` is empty goes to destination 0 (the reject), any other to destination 1, 2 or 3 in the
-shares 2, 1 and 1, the same destination again for the same `code`. The unit keeps its own
-`[destinations]`, so the bench may mark one `full` on it too and the spread then avoids it. The
-`flag` is 1.
+`code` is empty goes to destination 0, any other to destination 1, 2 or 3 in the shares 2, 1
+and 1, the same destination again for the same `code`, and to 9, the reject, when every one of
+those is full. The unit keeps its own `[destinations]`, so the bench may mark one `full` on it
+too and the spread then avoids it. The `flag` is 1.
 
 `crates/veredas-maquinar/tests/controller_rules.rs` loads these three blocks and checks each of
 these statements, and every key statement below, against the reader; it holds a copy of this
@@ -839,8 +890,8 @@ the field's value trimmed.
 - `bits` (none): the named bits of the state word, each one bit (a power of two), no bit named
   twice.
 - `resting` (none): the bits a destination has at the start when `initial` does not name it.
-- `initial` (none): bits set at the start, by destination number written as text; a number not
-  in the list is refused.
+- `initial` (none): bits set at the start, by destination number written as text, exact, with
+  no surrounding whitespace; a number not in the list is refused.
 - `blocking` (none): the bits that refuse an item, as inline tables, in order of precedence:
   the first entry whose bit is set in a destination's word decides; a bit blocks once.
 
@@ -854,7 +905,9 @@ the field's value trimmed.
 - `interval_ms` (required): the announcement interval; `0` is refused. An item is announced
   only while a peer is connected (announced into nothing it would only time out) and the gate
   register, if any, is not 0, a requeued item coming round again included; each is due an
-  interval after the last was due.
+  interval after the last was due, and a pass of the engine announces every item due since the
+  last pass, at most twenty (a longer stall skips the rest, keeping the phase); when announcing
+  resumes, the first item comes at once.
 - `key` (required): the announced field that identifies the item; one of the `fields`.
 - `gate` (none): a register that must be non-zero for the controller to announce.
 - `lap_ms` (`30000`): how long a requeued item takes to come round again; `0` is refused.
@@ -872,7 +925,7 @@ the field's value trimmed.
 - `message` (required): a message of the catalog. An answer for an item not awaited is
   counted and dropped.
 - `key` (the items' `key`): the reply's field holding the item's key; for a binary message,
-  one of its fields.
+  one of its fields or of a repeat's numbered names.
 - `destination` (none): the reply's field naming the destination; required when there is an
   outcome and there are destinations. A destination not in the list is counted and the item
   still travels.
@@ -920,7 +973,7 @@ the field's value trimmed.
 **A cyclic message** (`[[cyclic]]`): a message sent on an interval, to every peer.
 - `message` (required): a message of the catalog.
 - `every_ms` (required): the interval; `0` is refused. Each is due an interval after the last
-  was due.
+  was due, and sent at most once a pass of the engine: a state message is not worth a burst.
 - `per_destination` (`false`): one message per destination each time, its fields reading
   `destination` (the number) and `state` (the word); it needs `[destinations]`.
 - `fields` (required): the fields sent, one for every name the message writes; they read the

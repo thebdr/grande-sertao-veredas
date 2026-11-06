@@ -196,6 +196,9 @@ Recorded as the port meets them.
   and a registry cache holds only what this platform fetched to build: on a fresh Linux runner
   the walk failed offline on chrono's Android crate. The walk's metadata call is online; the
   nested build and the `--no-deps` metadata calls stay offline.
+- **serde's `flatten` disarms `deny_unknown_fields`.** The bench's OPC table flattened the
+  server's config under the part's name and accepted a misspelled key; a table that adds a key
+  to another struct's spells that struct's keys out (C-033).
 - **Record on CRLF.** `core.autocrlf=true` makes a freshly written LF file show as modified at
   the next checkout, which stales a record. Before `zen-record-run`: `git ls-files --eol` lists
   `i/lf w/lf` files, `perl -pi -e 's/\r?\n/\r\n/'` converts them, and `git add -u` must then

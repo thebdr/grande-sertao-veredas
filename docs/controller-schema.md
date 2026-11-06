@@ -179,10 +179,10 @@ fields = [
 ```
 
 The unit answers every `announce` at once with an `answer` for the same `item`: an item whose
-`code` is empty goes to destination 0 (the reject), any other to destination 1, 2 or 3 in the
-shares 2, 1 and 1, the same destination again for the same `code`. The unit keeps its own
-`[destinations]`, so the bench may mark one `full` on it too and the spread then avoids it. The
-`flag` is 1.
+`code` is empty goes to destination 0, any other to destination 1, 2 or 3 in the shares 2, 1
+and 1, the same destination again for the same `code`, and to 9, the reject, when every one of
+those is full. The unit keeps its own `[destinations]`, so the bench may mark one `full` on it
+too and the spread then avoids it. The `flag` is 1.
 
 ```toml
 format = "veredas-controller"
@@ -199,7 +199,7 @@ on = "announce"
 send = "answer"
 fields = [
   { name = "item", from = "item" },
-  { name = "dest", decide = { rules = [ { field = "code", pattern = "(empty)", value = 0 } ], spread = [ { value = 1, weight = 2 }, { value = 2, weight = 1 }, { value = 3, weight = 1 } ], reject = 0, sticky = "code" } },
+  { name = "dest", decide = { rules = [ { field = "code", pattern = "(empty)", value = 0 } ], spread = [ { value = 1, weight = 2 }, { value = 2, weight = 1 }, { value = 3, weight = 1 } ], reject = 9, sticky = "code" } },
   { name = "flag", value = 1 },
 ]
 ```
@@ -238,8 +238,8 @@ the field's value trimmed.
 - `bits` (none): the named bits of the state word, each one bit (a power of two), no bit named
   twice.
 - `resting` (none): the bits a destination has at the start when `initial` does not name it.
-- `initial` (none): bits set at the start, by destination number written as text; a number not
-  in the list is refused.
+- `initial` (none): bits set at the start, by destination number written as text, exact, with
+  no surrounding whitespace; a number not in the list is refused.
 - `blocking` (none): the bits that refuse an item, as inline tables, in order of precedence:
   the first entry whose bit is set in a destination's word decides; a bit blocks once.
 
@@ -253,7 +253,9 @@ the field's value trimmed.
 - `interval_ms` (required): the announcement interval; `0` is refused. An item is announced
   only while a peer is connected (announced into nothing it would only time out) and the gate
   register, if any, is not 0, a requeued item coming round again included; each is due an
-  interval after the last was due.
+  interval after the last was due, and a pass of the engine announces every item due since the
+  last pass, at most twenty (a longer stall skips the rest, keeping the phase); when announcing
+  resumes, the first item comes at once.
 - `key` (required): the announced field that identifies the item; one of the `fields`.
 - `gate` (none): a register that must be non-zero for the controller to announce.
 - `lap_ms` (`30000`): how long a requeued item takes to come round again; `0` is refused.
@@ -271,7 +273,7 @@ the field's value trimmed.
 - `message` (required): a message of the catalog. An answer for an item not awaited is
   counted and dropped.
 - `key` (the items' `key`): the reply's field holding the item's key; for a binary message,
-  one of its fields.
+  one of its fields or of a repeat's numbered names.
 - `destination` (none): the reply's field naming the destination; required when there is an
   outcome and there are destinations. A destination not in the list is counted and the item
   still travels.
@@ -319,7 +321,7 @@ the field's value trimmed.
 **A cyclic message** (`[[cyclic]]`): a message sent on an interval, to every peer.
 - `message` (required): a message of the catalog.
 - `every_ms` (required): the interval; `0` is refused. Each is due an interval after the last
-  was due.
+  was due, and sent at most once a pass of the engine: a state message is not worth a burst.
 - `per_destination` (`false`): one message per destination each time, its fields reading
   `destination` (the number) and `state` (the word); it needs `[destinations]`.
 - `fields` (required): the fields sent, one for every name the message writes; they read the

@@ -13,6 +13,7 @@
 //! Nothing here names a device, a vendor or a product: what a controller's telegrams mean is
 //! configuration (a channel file, a catalog, a rules file), as in core (`docs/questions.md` Q8).
 
+pub mod bench;
 pub mod channel;
 pub mod controller;
 pub mod emit;
