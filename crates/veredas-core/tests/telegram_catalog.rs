@@ -166,7 +166,10 @@ fn the_documented_example_loads_and_converses_as_described() {
     let golden = parse_hex(&quoted_after(&prose, "The `answer` for item 7 to destination 3 with flag 1 is")).unwrap();
     assert_eq!(golden, [7, 0, 0, 0, 3, 0, 1, 0]);
     assert_eq!(golden.len(), answer_len);
-    assert_eq!(catalog.by_name("answer").unwrap().compose_spec.len, Some(answer_len));
+    let answer = catalog.by_name("answer").unwrap();
+    assert_eq!(answer.compose_spec.len, Some(answer_len));
+    let fields: Vec<(&str, usize, usize, FieldType)> = answer.compose_spec.fields.iter().map(|f| (f.name.as_str(), f.at, f.len, f.ty)).collect();
+    assert_eq!(fields, [("item", 0, 0, FieldType::U32), ("dest", 4, 0, FieldType::U16), ("flag", 6, 0, FieldType::U8)]);
     let (id, body) = catalog.encode("answer", &values(&[("item", "7"), ("dest", "3"), ("flag", "1")])).unwrap().unwrap();
     assert_eq!((id, body.as_slice()), (22, golden.as_slice()));
     let (message, fields) = catalog.decode(22, &golden).unwrap();
@@ -194,7 +197,10 @@ fn the_documented_example_loads_and_converses_as_described() {
     long.push(0);
     assert!(catalog.decode(22, &long).is_none(), "a long body is not this message");
     assert!(catalog.decode(23, b"nonsense").is_none());
-    assert!(catalog.decode(23, b"ITEM=1;DEST=2;RESULT=X and more").is_none(), "the pattern is anchored");
+    assert!(catalog.decode(23, b"ITEM=1;DEST=2;RESULT=X and more").is_none(), "the pattern is anchored at the end");
+    assert!(catalog.decode(23, b"xxITEM=1;DEST=2;RESULT=X").is_none(), "and at the start");
+    assert!(catalog.decode(23, b"ITEM=;DEST=2;RESULT=X").is_none(), "an item needs its digits");
+    assert_eq!(catalog.decode(23, b"ITEM=1;DEST=2;RESULT=x_9").unwrap().1["result"], "x_9", "a result is a word");
     assert!(prose.contains("a received body of another length is not this message and reads as nothing"));
     // A write missing a value is a refusal through the catalog too.
     let err = catalog.encode("answer", &values(&[("item", "7")])).unwrap().unwrap_err();
@@ -489,6 +495,16 @@ fn every_invalid_catalog_is_refused_with_its_place_named() {
     );
     assert!(load(&message(&format!("{millions}fields = [ {{ name = \"a99999999999999999999\", at = 0, ty = \"U8\" }} ]\n"))).is_ok(), "beyond any max");
     assert!(started.elapsed() < Duration::from_secs(1), "three loads took {:?}", started.elapsed());
+    // And at the top of a usize: a reader that quietly caps `max` fails here. A payload group
+    // is judged the same way, at the repeat's max and one past it.
+    let top = usize::MAX;
+    let at_top = |field: &str| message(&format!("repeat = [ {{ name = \"a\", pattern = \"x\", max = {top} }} ]\nfields = [ {{ name = \"{field}\", at = 0, ty = \"U8\" }} ]\n"));
+    assert_eq!(refused(&at_top(&format!("a{top}"))), format!("message[0] (`m`).a{top}: the repeat `a` reads a field of that name"));
+    assert!(load(&at_top(&format!("a{}", top as u128 + 1))).is_ok(), "one past the top of a usize is no number");
+    let group = |name: &str, max: usize| message(&format!("payload = \"(?P<{name}>x)\"\nrepeat = [ {{ name = \"a\", pattern = \"y\", max = {max} }} ]\n"));
+    assert_eq!(refused(&group("a101", 101)), "message[0] (`m`).repeat[0] (`a`): the payload pattern reads a group named `a101`");
+    assert!(load(&group("a102", 101)).is_ok(), "a group past the repeat's max is its own");
+    assert_eq!(refused(&group(&format!("a{top}"), top)), format!("message[0] (`m`).repeat[0] (`a`): the payload pattern reads a group named `a{top}`"));
     // Two repeats meet when the longer name is the shorter followed by digits and the least
     // numbered name of the longer (`<long>1`) is within the shorter's max, in either order.
     assert_eq!(

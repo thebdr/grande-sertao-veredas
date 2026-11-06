@@ -598,7 +598,8 @@ impl Fields {
                     let bytes = compose.render(&values, veredas_core::telegram::Endian::Little).map_err(|e| format!("`{}`: {e}", field.name))?;
                     String::from_utf8_lossy(&bytes).to_string()
                 }
-                Source::From(name) => match ctx.fields.get(name) {
+                // An earlier field of this list first, then the context.
+                Source::From(name) => match out.get(name).or_else(|| ctx.fields.get(name)) {
                     Some(v) => v.clone(),
                     None => return Err(format!("`{}`: nothing named `{name}` to read from", field.name)),
                 },
@@ -699,55 +700,55 @@ impl Destinations {
 }
 
 #[derive(Clone, Debug)]
-struct Items {
-    message: String,
-    interval_ms: u64,
-    key: String,
-    gate: Option<String>,
-    lap_ms: u64,
-    fields: Fields,
-    faults: Vec<(String, u8, BTreeMap<String, String>)>,
-    reply: Option<Reply>,
-    outcome: Option<Outcome>,
+pub struct Items {
+    pub message: String,
+    pub interval_ms: u64,
+    pub key: String,
+    pub gate: Option<String>,
+    pub lap_ms: u64,
+    pub fields: Fields,
+    pub faults: Vec<(String, u8, BTreeMap<String, String>)>,
+    pub reply: Option<Reply>,
+    pub outcome: Option<Outcome>,
 }
 
 #[derive(Clone, Debug)]
-struct Reply {
-    message: String,
-    key: String,
-    destination: Option<String>,
-    when: Vec<(String, String, Action)>,
+pub struct Reply {
+    pub message: String,
+    pub key: String,
+    pub destination: Option<String>,
+    pub when: Vec<(String, String, Action)>,
 }
 
 #[derive(Clone, Debug)]
-struct Outcome {
-    message: String,
-    after_ms: u64,
-    fields: Fields,
-    mix: Vec<(String, f64, BTreeMap<String, String>, bool)>,
+pub struct Outcome {
+    pub message: String,
+    pub after_ms: u64,
+    pub fields: Fields,
+    pub mix: Vec<(String, f64, BTreeMap<String, String>, bool)>,
 }
 
 #[derive(Clone, Debug)]
-struct Answer {
-    on: String,
-    send: String,
-    after_ms: u64,
-    fields: Fields,
+pub struct Answer {
+    pub on: String,
+    pub send: String,
+    pub after_ms: u64,
+    pub fields: Fields,
 }
 
 #[derive(Clone, Debug)]
-struct Command {
-    on: String,
-    field: String,
-    when: Vec<(String, BTreeMap<String, i64>)>,
+pub struct Command {
+    pub on: String,
+    pub field: String,
+    pub when: Vec<(String, BTreeMap<String, i64>)>,
 }
 
 #[derive(Clone, Debug)]
-struct Cyclic {
-    message: String,
-    every_ms: u64,
-    per_destination: bool,
-    fields: Fields,
+pub struct Cyclic {
+    pub message: String,
+    pub every_ms: u64,
+    pub per_destination: bool,
+    pub fields: Fields,
 }
 
 /// A loaded, validated controller file.
@@ -756,10 +757,10 @@ pub struct Rules {
     pub seed: Option<u64>,
     pub registers: BTreeMap<String, i64>,
     pub destinations: Option<Destinations>,
-    items: Option<Items>,
-    answers: Vec<Answer>,
-    commands: Vec<Command>,
-    cyclic: Vec<Cyclic>,
+    pub items: Option<Items>,
+    pub answers: Vec<Answer>,
+    pub commands: Vec<Command>,
+    pub cyclic: Vec<Cyclic>,
 }
 
 impl Rules {
@@ -1028,6 +1029,19 @@ pub fn load(text: &str, catalog: &Catalog) -> Result<Rules, RulesError> {
 // The engine
 // ---------------------------------------------------------------------------------------------
 
+/// The first instant after `now` in the series `due`, `due + step`, `due + 2 step`...: the next
+/// due time, scheduled from the last one so that a late tick never stretches the interval, and
+/// a stall skips what it missed rather than bunching it.
+fn step_past(due: u64, step: u64, now: u64) -> u64 {
+    let step = step.max(1);
+    let mut next = due.saturating_add(step);
+    if next <= now {
+        let missed = (now - next) / step + 1;
+        next = next.saturating_add(missed.saturating_mul(step));
+    }
+    next
+}
+
 /// An item the controller is tracking.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
@@ -1183,8 +1197,10 @@ impl Controller {
         self.now_ms += elapsed_ms;
         let mut out = Vec::new();
 
-        // Items whose lap has come round.
-        while let Some((_, due)) = self.requeued.front() {
+        // Items whose lap has come round, held like a new item while nobody is there to hear
+        // them or the gate is closed.
+        let announcing = peers > 0 && self.running();
+        while announcing && let Some((_, due)) = self.requeued.front() {
             if *due > self.now_ms {
                 break;
             }
@@ -1193,9 +1209,11 @@ impl Controller {
                 out.push(o);
             }
         }
-        if self.rules.items.is_some() && peers > 0 && self.running() && self.now_ms >= self.next_item_ms {
-            let interval = self.rules.items.as_ref().map(|i| i.interval_ms).unwrap_or(1);
-            self.next_item_ms = self.now_ms + interval.max(1);
+        if self.rules.items.is_some() && announcing && self.now_ms >= self.next_item_ms {
+            let interval = self.rules.items.as_ref().map(|i| i.interval_ms).unwrap_or(1).max(1);
+            // Due an interval after the last was due, never after the tick that served it, so
+            // a late tick does not stretch the interval; a stall skips what it missed.
+            self.next_item_ms = step_past(self.next_item_ms, interval, self.now_ms);
             if let Some(o) = self.announce_new() {
                 out.push(o);
             }
@@ -1224,7 +1242,7 @@ impl Controller {
             if self.now_ms < self.next_cyclic[i] {
                 continue;
             }
-            self.next_cyclic[i] = self.now_ms + self.rules.cyclic[i].every_ms;
+            self.next_cyclic[i] = step_past(self.next_cyclic[i], self.rules.cyclic[i].every_ms, self.now_ms);
             out.extend(self.cyclic(i));
         }
         out
@@ -1417,8 +1435,9 @@ impl Controller {
                 }
                 Some(i) => {
                     let mut item = self.awaiting.remove(i);
+                    // The reply's fields join the item's, trimmed as the controller reads them.
                     for (k, v) in fields {
-                        item.fields.insert(k.clone(), v.clone());
+                        item.fields.insert(k.clone(), v.trim().to_string());
                     }
                     item.answered_ms = Some(self.now_ms);
                     item.peer = peer;

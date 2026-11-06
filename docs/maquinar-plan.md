@@ -182,6 +182,20 @@ Recorded as the port meets them.
 - **Never open a log file by name.** A reopen after a failed write appends to whoever took the
   name meanwhile, or sticks on a file that is gone: leave the file and take a fresh name with
   `create_new` (C-025, round 4).
+- **A knob is answered after the status mirrors it.** The channel's service loop answered a
+  knob as it applied it and mirrored the controller's status at the end of the pass, so a caller
+  reading the status right after `set_bit` saw the pass before; the reply now follows the mirror
+  (C-031's socket test).
+- **Peer ids are core's, counted across the process.** Two channels in one test see ids 1 and 3,
+  never 1 and 1: read the id from the status's peers, never assume it.
+- **An item at no chute gets a drawn outcome.** A destination outside the list (the unit's
+  reject, 0) forces nothing, so "every chute full" leaves it alone; a test of FULL outcomes
+  counts the outcomes at a chute (C-032).
+- **`cargo metadata` spans every platform; `--offline` does not.** The dependency walk resolves
+  the graph for every platform (a banned crate behind another platform's `cfg` must be seen),
+  and a registry cache holds only what this platform fetched to build: on a fresh Linux runner
+  the walk failed offline on chrono's Android crate. The walk's metadata call is online; the
+  nested build and the `--no-deps` metadata calls stay offline.
 - **Record on CRLF.** `core.autocrlf=true` makes a freshly written LF file show as modified at
   the next checkout, which stales a record. Before `zen-record-run`: `git ls-files --eol` lists
   `i/lf w/lf` files, `perl -pi -e 's/\r?\n/\r\n/'` converts them, and `git add -u` must then

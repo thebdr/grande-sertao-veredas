@@ -343,6 +343,9 @@ fn run(cfg: ChannelConfig, mut cyclic: Vec<(String, u64, Fields)>, status: Arc<M
 
     while !shutdown.load(std::sync::atomic::Ordering::SeqCst) {
         // What the wire said (waiting at most a tick for it).
+        // DECISION PENDING (docs/questions.md Q13): the wait lands at the host's timer quantum,
+        // about 31 ms on Windows unless the process raises the resolution; every due time below
+        // is scheduled from the last due time, never from the tick, so the rates hold.
         let mut events = Vec::new();
         if let Some(e) = link.channel.recv_timeout(TICK) {
             events.push(e);
@@ -415,7 +418,10 @@ fn run(cfg: ChannelConfig, mut cyclic: Vec<(String, u64, Fields)>, status: Arc<M
             }
         }
 
-        // Requests from outside.
+        // Requests from outside. A knob is answered only once the status pane shows its
+        // effect, at the end of this pass, so a caller that reads the status right after the
+        // call sees what it set.
+        let mut replies: Vec<(Sender<Result<(), String>>, Result<(), String>)> = Vec::new();
         while let Ok(request) = requests.try_recv() {
             match request {
                 Request::SendNow { message, fields, to } => link.send(&message, &fields, to),
@@ -437,7 +443,7 @@ fn run(cfg: ChannelConfig, mut cyclic: Vec<(String, u64, Fields)>, status: Arc<M
                             }
                         },
                     };
-                    let _ = reply.send(result);
+                    replies.push((reply, result));
                 }
             }
         }
@@ -453,7 +459,13 @@ fn run(cfg: ChannelConfig, mut cyclic: Vec<(String, u64, Fields)>, status: Arc<M
             if *every == 0 || now < due[i] {
                 continue;
             }
-            due[i] = now + Duration::from_millis(*every);
+            // Due an interval after the last was due; a stall skips what it missed.
+            let step = Duration::from_millis(*every);
+            let mut next = due[i] + step;
+            while next <= now {
+                next += step;
+            }
+            due[i] = next;
             let mut ctx = Context { fields: &empty_fields, registers: &empty_registers, blocked: &[], rng: &mut rng };
             match fields.render(&mut ctx) {
                 Ok(values) => link.send(message, &values, None),
@@ -469,11 +481,14 @@ fn run(cfg: ChannelConfig, mut cyclic: Vec<(String, u64, Fields)>, status: Arc<M
             }
         }
 
-        // The status pane.
+        // The status pane, then the knobs' answers.
         if let Ok(mut s) = status.lock() {
             s.wire = link.channel.status();
             s.peers = peers.clone();
             s.controller = controller.as_ref().map(Controller::status);
+        }
+        for (reply, result) in replies {
+            let _ = reply.send(result);
         }
     }
     link.channel.stop();

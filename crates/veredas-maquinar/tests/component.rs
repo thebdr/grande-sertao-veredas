@@ -553,8 +553,11 @@ fn banned_among<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
 /// walked from its node by package id (a crate present in two versions is two nodes, each
 /// walked). Returns the names, and how many nodes the walk visited.
 fn dependency_graph(manifest: &Path) -> (std::collections::BTreeSet<String>, usize) {
+    // Not offline: the graph spans every platform (a crate behind another platform's `cfg` is
+    // walked too), and a registry cache holds only what this platform fetched to build, so a
+    // fresh machine (CI) may have to fetch the rest of the index to resolve it.
     let out = Command::new(env!("CARGO"))
-        .args(["metadata", "--format-version", "1", "--offline", "--all-features", "--manifest-path"])
+        .args(["metadata", "--format-version", "1", "--all-features", "--manifest-path"])
         .arg(manifest)
         .output()
         .unwrap();

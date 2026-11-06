@@ -364,6 +364,11 @@ fn compile(cfg: &OpcConfig) -> Result<Vec<CompiledReaction>, OpcError> {
             if r.interval_ms == 0 {
                 return Err(bad(format!("{place}.randomize.interval_ms is 0")));
             }
+            // At most one draw comes per tick: an interval the tick could never serve is
+            // refused rather than silently drawn once a tick.
+            if r.interval_ms < TICK.as_millis() as u64 {
+                return Err(bad(format!("{place}.randomize.interval_ms {} is shorter than the server's tick of {} ms", r.interval_ms, TICK.as_millis())));
+            }
         }
     }
     let find = |id: &str| cfg.tags.iter().find(|t| t.id.trim() == id.trim());
