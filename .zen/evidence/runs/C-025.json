@@ -10,10 +10,10 @@
     "emitters"
   ],
   "exitCode": 0,
-  "outputSha": "113bdd32b9a2345ead5f96df0d0aab6b052ff6a500930b55b60386a76d401976",
-  "outputTail": "test after_a_failed_write_the_file_is_left_and_a_fresh_name_taken ... ok\ntest a_bad_file_pattern_reports_instead_of_writing_rubbish ... ok\ntest a_restart_without_rotation_still_starts_a_new_file ... ok\ntest a_seeded_emitter_replays_the_same_values ... ok\ntest a_stop_is_prompt_whatever_the_interval ... ok\ntest a_missing_output_folder_is_reported_and_then_recovered_from ... ok\ntest an_emitter_writes_rotating_files_a_plant_would_recognise ... ok\ntest restarting_never_appends_to_a_file_it_already_wrote ... ok\ntest the_family_shape_describes_what_the_pattern_writes ... ok\ntest writers_started_together_never_share_a_file ... ok\n\ntest result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s\n     Running tests\\emitters.rs (target\\debug\\deps\\emitters-b1506998755fd9cb.exe)",
-  "ranAt": "2026-11-06T12:50:31.589Z",
-  "headCommit": "9e4caba02ba12b15bfd773c4a6dc27b9ff0092a7",
+  "outputSha": "98b0eb850c93142500952853a3fe4dd888588270a2d0617e458e508839cd9742",
+  "outputTail": "test when_every_name_exists_nothing_is_written_and_the_status_says_so ... ok\ntest a_bad_file_pattern_reports_instead_of_writing_rubbish ... ok\ntest a_seeded_emitter_replays_the_same_values ... ok\ntest a_restart_without_rotation_still_starts_a_new_file ... ok\ntest a_missing_output_folder_is_reported_and_then_recovered_from ... ok\ntest a_stop_is_prompt_whatever_the_interval ... ok\ntest an_emitter_writes_rotating_files_a_plant_would_recognise ... ok\ntest restarting_never_appends_to_a_file_it_already_wrote ... ok\ntest the_family_shape_describes_what_the_pattern_writes ... ok\ntest writers_started_together_never_share_a_file ... ok\n\ntest result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.06s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s\n     Running tests\\emitters.rs (target\\debug\\deps\\emitters-b1506998755fd9cb.exe)",
+  "ranAt": "2026-11-06T13:19:07.243Z",
+  "headCommit": "36aba248a7db37b82a584a0929bdfcc7f8903fd7",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/emitters.rs",

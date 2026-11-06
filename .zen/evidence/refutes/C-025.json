@@ -1,0 +1,13 @@
+{
+  "clause": "C-025",
+  "verdict": "holds",
+  "ranAt": "2026-11-06T13:19:42.480Z",
+  "headCommit": "36aba248a7db37b82a584a0929bdfcc7f8903fd7",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/emitters.rs",
+      "file": "crates/veredas-maquinar/tests/emitters.rs",
+      "symbolSha": "505449facc47cbef88e5af1af8132020e64e4153ae2893de0c1b0d5a659b7822"
+    }
+  ]
+}

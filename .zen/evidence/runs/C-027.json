@@ -10,15 +10,15 @@
     "telegram_compose"
   ],
   "exitCode": 0,
-  "outputSha": "9edf24c9fdd44e47c5167cb3b3f8e337cc1a4fd1828ed35944acdd9661ffe17f",
-  "outputTail": "test a_template_renders_its_placeholders_and_literal_braces ... ok\ntest a_malformed_template_is_refused_where_it_is_compiled ... ok\ntest binary_fields_are_written_at_their_offsets_in_both_byte_orders ... ok\ntest every_integer_type_is_held_to_its_range_and_its_text_form ... ok\ntest the_body_is_padded_to_its_length_and_refused_beyond_it ... ok\ntest a_spec_reads_from_toml_with_its_defaults_and_refuses_a_misspelled_key ... ok\ntest text_and_hex_fields_are_held_to_their_lengths ... ok\ntest what_compose_writes_capture_reads_back_through_a_template_and_a_payload ... ok\ntest an_offset_past_the_ceiling_is_refused_not_allocated ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.91s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.96s\n     Running tests\\telegram_compose.rs (target\\debug\\deps\\telegram_compose-2eeca950593edae0.exe)",
-  "ranAt": "2026-11-06T12:50:40.405Z",
-  "headCommit": "9e4caba02ba12b15bfd773c4a6dc27b9ff0092a7",
+  "outputSha": "00a7bb02a983ffe9c068647ce0efed372962d66ca250bbc57a66250d537d66fc",
+  "outputTail": "test a_malformed_template_is_refused_where_it_is_compiled ... ok\ntest a_template_renders_its_placeholders_and_literal_braces ... ok\ntest binary_fields_are_written_at_their_offsets_in_both_byte_orders ... ok\ntest every_integer_type_is_held_to_its_range_and_its_text_form ... ok\ntest a_spec_reads_from_toml_with_its_defaults_and_refuses_a_misspelled_key ... ok\ntest text_and_hex_fields_are_held_to_their_lengths ... ok\ntest the_body_is_padded_to_its_length_and_refused_beyond_it ... ok\ntest what_compose_writes_capture_reads_back_through_a_template_and_a_payload ... ok\ntest an_offset_past_the_ceiling_is_refused_not_allocated ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.92s\n     Running tests\\telegram_compose.rs (target\\debug\\deps\\telegram_compose-2eeca950593edae0.exe)",
+  "ranAt": "2026-11-06T13:19:22.635Z",
+  "headCommit": "36aba248a7db37b82a584a0929bdfcc7f8903fd7",
   "tests": [
     {
       "name": "crates/veredas-core/tests/telegram_compose.rs",
       "file": "crates/veredas-core/tests/telegram_compose.rs",
-      "fileSha": "9bc4e6bcf4b2351d7cf5aec5672e307e7beb6de9e9478a23a4d8b03607a50dfb"
+      "fileSha": "4ea8e0e0e4b022c9ae091fdff279dba376ca638e2898073d62ff5a6a6b5080f8"
     }
   ]
 }

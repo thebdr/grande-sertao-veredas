@@ -10,15 +10,15 @@
     "telegram_catalog"
   ],
   "exitCode": 0,
-  "outputSha": "5107c0a88bbafd5138ff1a123d6c9e03a5b13a7d18e51d19b52b47becd977064",
-  "outputTail": "\nrunning 7 tests\ntest the_header_is_refused_four_ways ... ok\ntest a_misspelled_key_in_any_table_is_refused ... ok\ntest every_invalid_catalog_is_refused_with_its_place_named ... ok\ntest every_rule_the_reference_states_is_the_reader_s ... ok\ntest what_a_message_writes_it_reads_and_what_it_cannot_write_it_says ... ok\ntest the_documented_example_loads_and_converses_as_described ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.14s\n     Running tests\\telegram_catalog.rs (target\\debug\\deps\\telegram_catalog-3c3641fdd05cb54e.exe)",
-  "ranAt": "2026-11-06T12:50:43.944Z",
-  "headCommit": "9e4caba02ba12b15bfd773c4a6dc27b9ff0092a7",
+  "outputSha": "e80df051563f11a70c713dfa61462a6e571b4b4df8b0b793dcd71faee470f3e5",
+  "outputTail": "running 8 tests\ntest the_reference_is_the_text_this_test_holds ... ok\ntest a_misspelled_key_in_any_table_is_refused ... ok\ntest the_header_is_refused_four_ways ... ok\ntest every_invalid_catalog_is_refused_with_its_place_named ... ok\ntest every_rule_the_reference_states_is_the_reader_s ... ok\ntest what_a_message_writes_it_reads_and_what_it_cannot_write_it_says ... ok\ntest the_documented_example_loads_and_converses_as_described ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.05s\n     Running tests\\telegram_catalog.rs (target\\debug\\deps\\telegram_catalog-3c3641fdd05cb54e.exe)",
+  "ranAt": "2026-11-06T13:19:28.015Z",
+  "headCommit": "36aba248a7db37b82a584a0929bdfcc7f8903fd7",
   "tests": [
     {
       "name": "crates/veredas-core/tests/telegram_catalog.rs",
       "file": "crates/veredas-core/tests/telegram_catalog.rs",
-      "fileSha": "a91ccc25cc540057043c56aa0eba2b34d7d7c66a325565d3bae81a4666a7fcd5"
+      "fileSha": "a8d1fb10277f29a9b46b4aeed4e2abded0965ac4d146ca2f3c6168ffbe437bef"
     }
   ]
 }
