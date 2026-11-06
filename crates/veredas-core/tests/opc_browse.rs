@@ -116,9 +116,10 @@ fn detail_rows_render_in_words_not_magic_numbers() {
 #[test]
 fn a_bad_result_status_is_a_named_refusal_not_an_empty_folder() {
     // A strict server refuses a browse with a bad per-result status and zero references;
-    // swallowing the status showed a whole controller as an empty tree. The demo stack refuses
-    // only the null node (pinned end-to-end below) and never a continuation, so both texts are
-    // pinned here on constructed results.
+    // swallowing the status showed a whole controller as an empty tree. The browser runs every
+    // page, the first and each continuation, through this one check, so the server refusal of
+    // a first page pinned end-to-end below exercises the check a continuation meets; the demo
+    // stack never refuses a continuation, so its text is pinned here on a constructed result.
     let refused = BrowseResult {
         status_code: StatusCode::BadNodeIdUnknown,
         continuation_point: ByteString::null(),
@@ -363,8 +364,8 @@ async fn details_read_the_standard_attribute_set() {
     assert_eq!(node_id, temp_id, "keyed by the node asked about");
     let names: Vec<&str> = rows.iter().map(|(n, _)| n.as_str()).collect();
     // The node id first, then the attributes in their fixed order; the ones this server holds
-    // no value for (a description, array dimensions, a sampling interval) and the ones a
-    // variable does not have (an EventNotifier) are skipped silently.
+    // no value for (a description, array dimensions) and the ones a variable does not have (an
+    // EventNotifier) are skipped silently.
     assert_eq!(
         names,
         vec![
@@ -376,12 +377,15 @@ async fn details_read_the_standard_attribute_set() {
             "ValueRank",
             "AccessLevel",
             "UserAccessLevel",
+            "MinimumSamplingInterval",
             "Historizing",
             "Value"
         ]
     );
     assert_eq!(rows[5].1, "scalar");
-    assert_eq!(rows[8].1, "false");
+    assert_eq!(rows[7].1, "read (0x01)");
+    assert_eq!(rows[8].1, "100 ms");
+    assert_eq!(rows[9].1, "false");
     let get = |name: &str| {
         rows.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone()).unwrap_or_else(|| panic!("no `{name}` in {rows:?}"))
     };
@@ -393,6 +397,12 @@ async fn details_read_the_standard_attribute_set() {
     assert_eq!(get("AccessLevel"), "read (0x01)");
     assert!(get("Value").starts_with("21.5   (source "), "{rows:?}");
     assert!(!rows.iter().any(|(n, _)| n == "EventNotifier"), "a variable has none: {rows:?}");
+
+    // A negative sampling interval reads as the standard means it.
+    browser.details(plant.node_id_str(tags::STATUS_WORD));
+    let (_, rows) = next_details(&browser, Duration::from_secs(20));
+    let interval = rows.iter().find(|(n, _)| n == "MinimumSamplingInterval").map(|(_, v)| v.clone());
+    assert_eq!(interval.as_deref(), Some("indeterminate"), "{rows:?}");
 
     // A writable command tag says so.
     browser.details(plant.node_id_str(tags::CMD_START));
@@ -509,8 +519,24 @@ async fn methods_are_neither_variables_nor_containers() {
     let method = children.iter().find(|c| c.browse_name == "GetMonitoredItems").unwrap_or_else(|| panic!("{children:?}"));
     assert!(!method.is_container && !method.is_variable, "{method:?}");
     assert_eq!((method.series_type, method.data_type.as_str()), (None, ""));
+    // A method is a leaf here though it has children: its arguments are no tags.
+    browser.browse(Some(method.node_id.clone()));
+    let (_, arguments) = next_children(&browser, Duration::from_secs(20));
+    assert!(arguments.iter().any(|c| c.browse_name == "InputArguments"), "{arguments:?}");
     // Its objects and variables are containers.
-    assert!(children.iter().filter(|c| c.browse_name == "ServerStatus" || c.browse_name == "ServerCapabilities").all(|c| c.is_container));
+    for name in ["ServerStatus", "ServerCapabilities"] {
+        let c = children.iter().find(|c| c.browse_name == name).unwrap_or_else(|| panic!("no {name} in {children:?}"));
+        assert!(c.is_container, "{c:?}");
+    }
+
+    // A view is expanded like an object, and holds what it organizes.
+    browser.browse(Some("i=87".to_string())); // the standard Views folder
+    let (_, views) = next_children(&browser, Duration::from_secs(20));
+    let view = views.iter().find(|c| c.display_name == "Line 1 view").unwrap_or_else(|| panic!("{views:?}"));
+    assert!(view.is_container && !view.is_variable, "{view:?}");
+    browser.browse(Some(view.node_id.clone()));
+    let (_, inside) = next_children(&browser, Duration::from_secs(20));
+    assert_eq!(inside.iter().map(|c| c.node_id.clone()).collect::<Vec<_>>(), vec![plant.node_id_str(tags::TEMPERATURE)]);
     drop(browser);
     plant.stop().await;
 }

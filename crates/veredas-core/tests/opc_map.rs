@@ -322,6 +322,29 @@ fn an_unchanged_rule_is_skipped_alone_and_still_reports_its_failures() {
 }
 
 #[test]
+fn a_steady_float_is_unchanged_and_a_rule_that_gains_a_column_has_changed() {
+    let s = spec(vec![rule("temps", true, vec![tag("ns=1;s=t", "temp", SeriesType::Float, vec![])])]);
+    let steady = vec![read("ns=1;s=t", Some(Variant::Double(21.5)))];
+    let mut d = DedupState::default();
+    let kept: Vec<u32> = (1..=HEARTBEAT_POLLS + 1)
+        .filter(|&i| !map_poll_dedup(&s, &steady, i64::from(i), 0, Some(&mut d)).rows.is_empty())
+        .collect();
+    assert_eq!(kept, vec![1, HEARTBEAT_POLLS + 1]);
+    assert_eq!(map_poll_dedup(&s, &[read("ns=1;s=t", Some(Variant::Double(21.6)))], 0, 0, Some(&mut d)).rows.len(), 1);
+
+    // The same memory under a spec whose rule gained a trailing column: its first values
+    // unchanged, the row is still new.
+    let wider = spec(vec![rule(
+        "temps",
+        true,
+        vec![tag("ns=1;s=t", "temp", SeriesType::Float, vec![]), tag("ns=1;s=u", "other", SeriesType::Float, vec![])],
+    )]);
+    let reads = vec![read("ns=1;s=t", Some(Variant::Double(21.6))), read("ns=1;s=u", Some(Variant::Double(1.0)))];
+    assert_eq!(map_poll_dedup(&wider, &reads, 0, 0, Some(&mut d)).rows.len(), 1);
+    assert_eq!(map_poll_dedup(&wider, &reads, 0, 0, Some(&mut d)).rows.len(), 0);
+}
+
+#[test]
 fn a_float_stuck_at_nan_is_unchanged() {
     // NaN != NaN, but a reading frozen at NaN (a faulted sensor) has not changed.
     let s = spec(vec![rule("temps", true, vec![tag("ns=1;s=t", "temp", SeriesType::Float, vec![])])]);

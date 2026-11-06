@@ -221,6 +221,22 @@ fn every_wire_type_that_is_refused_is_named() {
         (Variant::DiagnosticInfo(Box::new(DiagnosticInfo::null())), "DiagnosticInfo"),
         (Variant::from(vec![1i32, 2]), "Array"),
     ];
+    // A number is refused only as a time: by its own name too.
+    for (v, wire) in [
+        (Variant::Boolean(true), "Boolean"),
+        (Variant::SByte(1), "SByte"),
+        (Variant::Byte(1), "Byte"),
+        (Variant::Int16(1), "Int16"),
+        (Variant::UInt16(1), "UInt16"),
+        (Variant::Int32(1), "Int32"),
+        (Variant::UInt32(1), "UInt32"),
+        (Variant::Int64(1), "Int64"),
+        (Variant::UInt64(1), "UInt64"),
+        (Variant::Float(1.0), "Float"),
+        (Variant::Double(1.0), "Double"),
+    ] {
+        assert_eq!(opc_to_value(&v, SeriesType::Time), Err(ValueError::Mismatch { wire, want: SeriesType::Time }));
+    }
     for (v, wire) in refused {
         assert_eq!(int(v.clone()), Err(ValueError::Mismatch { wire, want: SeriesType::Int }), "{wire}");
         assert_eq!(float(v.clone()), Err(ValueError::Mismatch { wire, want: SeriesType::Float }), "{wire}");

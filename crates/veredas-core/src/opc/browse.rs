@@ -46,7 +46,8 @@ pub struct BrowsedNode {
     pub browse_name: String,
     /// A variable can be polled as a tag.
     pub is_variable: bool,
-    /// Whether it may have children worth expanding.
+    /// Whether it is worth expanding to find tags: an object, a view, a variable or a node of
+    /// no stated class. A method or a type is a leaf here even when it has children.
     pub is_container: bool,
     /// The server's DataType for a variable, as a series type, so a tag's type can be filled in
     /// without knowing that a UInt16 is an `int`.
@@ -269,33 +270,35 @@ async fn browse_children(session: &Session, node: NodeId) -> Result<Vec<BrowsedN
         .await
         .map_err(|_| OpcError::TimedOut(Call::Browse))?
         .map_err(|e| OpcError::failed(Call::Browse, &e))?;
-    let first = results.into_iter().next().ok_or(OpcError::NoResult { call: Call::Browse })?;
-    if let Some(refusal) = result_refusal(&first, Call::Browse) {
-        return Err(refusal);
-    }
-    let mut refs = first.references.unwrap_or_default();
-
-    // Follow continuation points: a controller hands out small pages, and a client that stops
-    // after the first sees a truncated folder.
-    let mut cp = first.continuation_point;
+    let mut page = results.into_iter().next().ok_or(OpcError::NoResult { call: Call::Browse })?;
+    let mut call = Call::Browse;
     let mut pages = 1;
-    while !cp.is_null_or_empty() {
+    let mut refs = Vec::new();
+
+    // Every page, the first and each one a continuation point brings, meets the one refusal
+    // check; and continuation points are followed, because a controller hands out small pages
+    // and a client that stops after the first sees a truncated folder.
+    loop {
+        if let Some(refusal) = result_refusal(&page, call) {
+            return Err(refusal);
+        }
+        refs.extend(page.references.take().unwrap_or_default());
+        let cp = page.continuation_point;
+        if cp.is_null_or_empty() {
+            break;
+        }
         if pages == MAX_BROWSE_PAGES {
             // Release the point server-side rather than leaking it.
             let _ = tokio::time::timeout(BROWSE_TIMEOUT, session.browse_next(true, &[cp])).await;
             return Err(OpcError::EndlessBrowse { pages });
         }
         pages += 1;
+        call = Call::BrowseNext;
         let next = tokio::time::timeout(BROWSE_TIMEOUT, session.browse_next(false, &[cp]))
             .await
-            .map_err(|_| OpcError::TimedOut(Call::BrowseNext))?
-            .map_err(|e| OpcError::failed(Call::BrowseNext, &e))?;
-        let r = next.into_iter().next().ok_or(OpcError::NoResult { call: Call::BrowseNext })?;
-        if let Some(refusal) = result_refusal(&r, Call::BrowseNext) {
-            return Err(refusal);
-        }
-        refs.extend(r.references.unwrap_or_default());
-        cp = r.continuation_point;
+            .map_err(|_| OpcError::TimedOut(call))?
+            .map_err(|e| OpcError::failed(call, &e))?;
+        page = next.into_iter().next().ok_or(OpcError::NoResult { call })?;
     }
 
     let mut out: Vec<BrowsedNode> = refs
@@ -308,12 +311,13 @@ async fn browse_children(session: &Session, node: NodeId) -> Result<Vec<BrowsedN
             },
             browse_name: r.browse_name.name.as_ref().to_string(),
             is_variable: r.node_class == NodeClass::Variable,
-            // Objects hold things; a Variable can too (a structured tag), and a server that
-            // reports no node class gets the benefit of the doubt. Only classes KNOWN to be
-            // leaves (methods, types, views) are not expandable.
+            // Worth expanding to find tags: objects and views hold them, a Variable can too (a
+            // structured tag), and a server that reports no node class gets the benefit of the
+            // doubt. Methods and types are shown as leaves even though they have children
+            // (arguments, instance declarations): nothing under them is a tag to poll.
             is_container: matches!(
                 r.node_class,
-                NodeClass::Object | NodeClass::Variable | NodeClass::Unspecified
+                NodeClass::Object | NodeClass::View | NodeClass::Variable | NodeClass::Unspecified
             ),
             series_type: None,
             data_type: String::new(),

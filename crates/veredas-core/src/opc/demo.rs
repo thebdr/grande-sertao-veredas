@@ -482,10 +482,13 @@ fn populate(nodes: &SimpleNodeManager, ns: u16) {
     };
     variable(tags::TEMPERATURE, "Temperature", "Temperature", DataTypeId::Double)
         .value(21.5f64)
+        .minimum_sampling_interval(100.0)
         .organized_by(folder.clone())
         .insert(&mut *space);
+    // A sampling interval of -1: "indeterminate", as the standard spells it.
     variable(tags::STATUS_WORD, "StatusWord", "Status word", DataTypeId::UInt16)
         .value(0u16)
+        .minimum_sampling_interval(-1.0)
         .organized_by(folder.clone())
         .insert(&mut *space);
     variable(tags::CMD_START, "CmdStart", "Start command", DataTypeId::Int32)
@@ -501,6 +504,13 @@ fn populate(nodes: &SimpleNodeManager, ns: u16) {
     variable(tags::BATCH_ID, "BatchId", "Batch id", DataTypeId::String)
         .value("B-000")
         .organized_by(folder)
+        .insert(&mut *space);
+
+    // A View in the standard Views folder, organizing the temperature: a view's contents are
+    // reached by expanding it.
+    opcua_server::address_space::ViewBuilder::new(&NodeId::new(ns, "line1.view"), "Line1View", "Line 1 view")
+        .organized_by(ObjectId::ViewsFolder)
+        .organizes(NodeId::new(ns, tags::TEMPERATURE))
         .insert(&mut *space);
 
     // A controller's structure on HasComponent references (PLC_1 → data block → tag), not the

@@ -17,6 +17,9 @@
 //! * A request that arrives while there is no session is answered at once,
 //!   [`WriteError::NotSent`] with [`OpcError::NotConnected`], never held until one exists: it
 //!   cannot fire when the plant returns. So is one still queued when the worker ends.
+//! * A request whose caller stopped waiting before the worker reached it (the caller's own
+//!   timeout dropped the future) is never sent: a pulse its operator gave up on, and pressed
+//!   again, does not land twice later.
 //! * A write whose call fails or times out is [`WriteError::Unconfirmed`]: it may have reached
 //!   the plant, and a link that stalled without the worker noticing can still deliver it when it
 //!   recovers. No client can recall bytes already on the wire, so the caller is told the truth
@@ -490,8 +493,17 @@ pub(crate) async fn close_quietly(session: &Session, event_loop: EventLoop, boun
 }
 
 /// Answer one off-timer job on a live session. A write meets the master switch once more here,
-/// just before the wire. A call that fails or times out is returned: the session is suspect.
+/// just before the wire. A request whose caller has stopped waiting (its future dropped, by a
+/// timeout of its own) is not sent at all: nobody expects that pulse any more. A call that fails
+/// or times out is returned: the session is suspect.
 async fn serve_job(session: &Session, job: Job, gate: &WriteGate) -> Option<OpcError> {
+    let abandoned = match &job {
+        Job::Write(req) => req.reply.is_closed(),
+        Job::Read(req) => req.reply.is_closed(),
+    };
+    if abandoned {
+        return None;
+    }
     match job {
         Job::Write(req) => {
             if !gate.is_armed() {

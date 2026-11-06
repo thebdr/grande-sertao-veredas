@@ -96,6 +96,10 @@ The OPC layer, on the way in (phase 3; each is pinned by the clause's test):
 - a write or read asked of a worker with no session is answered at once (`NotConnected`).
   Veredas 1 queued it and fired a command pulse whenever the plant came back;
 - a call that fails or times out ends the session, so a wedged session is not reused;
+- a request whose caller stopped waiting before the worker reached it is never sent, so a pulse
+  an operator gave up on, and pressed again, does not land twice later;
+- the browser treats a view as worth expanding (Veredas 1 showed it as a leaf), and runs every
+  browse page, the first and each continuation, through one refusal check;
 - the worker checks the master switch again just before the wire. Veredas 1 checked only in the
   handle, so a write already queued fired after a disarm;
 - every connection attempt is bounded (`CONNECT_TIMEOUT`, 10 s) and raced against stop, in the
@@ -175,7 +179,8 @@ Recorded as the port meets them.
   before any per-call cap is checked. That is the text the field's 3,048-tag source showed. A
   Read past a lower cap fails with the server's own status (`BadTooManyOperations: ...`). The
   demo's cap therefore sits at 800: a cap of 1 000 made the first refute round's pin test the
-  decoder, not the cap. Reads are chunked at 500.
+  decoder, not the cap. Reads are chunked at 500. The client decodes no array over 1 000 either:
+  a browse answer of 1 001 references kills the connection, so the browser asks for 1 000.
 - **The demo stack is lax.** It browses an unknown node as Good and empty (only the null node
   `i=0` is refused), and takes a String written into an Int32 tag. A test that needs a refusal
   browses `i=0`, constructs the result, or writes a node the plant holds read-only.

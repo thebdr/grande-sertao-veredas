@@ -899,6 +899,52 @@ async fn a_write_without_an_answer_is_unconfirmed_and_ends_the_session() {
     plant.stop().await;
 }
 
+/// A write whose caller gave up on it (its own timeout dropped the future) before the worker
+/// reached it is never sent: the operator who pressed again must not get two pulses later.
+/// The control: the same queued write, still awaited, lands.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_write_its_caller_gave_up_on_is_never_sent() {
+    let plant = DemoPlant::start().await.expect("demo plant");
+    let (tx, rx) = channel();
+    let worker = veredas_core::opc::spawn(spec_for(&plant, 60_000), tx, WriteGate::new(true)).expect("worker spawns");
+    next_poll(&rx, Duration::from_secs(15));
+    let slow = parse_node_id(&plant.node_id_str(tags::SLOW)).unwrap();
+    let cmd = plant.node_id_str(tags::CMD_START);
+
+    for give_up in [true, false] {
+        plant.set(tags::CMD_START, 0i32);
+        let reader = worker.writer.clone();
+        let slow_id = slow.clone();
+        let read = tokio::spawn(async move { reader.read(vec![slow_id]).await });
+        tokio::time::sleep(Duration::from_millis(100)).await; // the worker is inside the slow read
+        let write = worker.writer.write_tags(vec![(cmd.clone(), Variant::Int32(1))]);
+        if give_up {
+            assert!(tokio::time::timeout(Duration::from_millis(50), write).await.is_err(), "it waits behind the read");
+        } else {
+            assert_eq!(write.await, Ok(vec![StatusCode::Good]));
+        }
+        read.await.unwrap().expect("the slow read");
+        tokio::time::sleep(Duration::from_millis(300)).await; // the queue has drained
+        let want = if give_up { 0 } else { 1 };
+        assert_eq!(plant.get(tags::CMD_START), Some(Variant::Int32(want)), "gave up: {give_up}");
+    }
+
+    worker.handle.join().expect("clean shutdown");
+    plant.stop().await;
+}
+
+#[test]
+fn a_stop_while_a_host_name_resolves_is_prompt() {
+    let spec = one_rule("named", "opc.tcp://veredas-probe-no-such-host-zz/", 100, vec![]);
+    let (tx, rx) = channel();
+    let worker = veredas_core::opc::spawn(spec, tx, WriteGate::new(false)).expect("worker spawns");
+    assert_eq!(next_status(&rx, Duration::from_secs(5)), ConnState::Connecting);
+    std::thread::sleep(Duration::from_millis(50));
+    let t0 = Instant::now();
+    worker.handle.join().expect("clean shutdown");
+    assert!(t0.elapsed() < Duration::from_millis(500), "{:?}", t0.elapsed());
+}
+
 /// A request still queued when the worker stops was never sent, and is told so.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_request_still_queued_at_a_stop_is_not_sent() {

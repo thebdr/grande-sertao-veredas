@@ -154,8 +154,20 @@ fn only_tags_marked_writable_resolve_for_writing() {
     assert!(s.writable_tag("  ns=1;s=cmd  ").is_some());
     assert!(s.tag("\tns=1;s=temp\n").is_some());
     // The lookup is by the configured text, exactly: another node (ids are case-sensitive), a
-    // blank request, a prefix or an extension of the text is not the tag.
-    for other in ["ns=1;s=CMD", "", "   ", "ns=1;s=c", "ns=1;s=cmdX", "ns=1;s=cm d", "ns=1"] {
+    // blank request, a prefix, or an extension at either end is not the tag. `ns=2;s=ns=1;s=cmd`
+    // is a valid id for another node that ends with the configured text.
+    for other in [
+        "ns=1;s=CMD",
+        "",
+        "   ",
+        "ns=1;s=c",
+        "ns=1;s=cmdX",
+        "ns=1;s=cm d",
+        "ns=1",
+        "ns=2;s=ns=1;s=cmd",
+        "Xns=1;s=cmd",
+        "ns=1;s=cmd;ns=1;s=cmd",
+    ] {
         assert!(s.writable_tag(other).is_none(), "{other:?}");
         assert!(s.tag(other).is_none(), "{other:?}");
     }

@@ -370,6 +370,12 @@ async fn the_browser_s_requests_are_answered_as_it_reads_them() {
     let refs = session.browse(&[unfiltered], 1_000, None).await.expect("browse")[0].references.clone().unwrap_or_default();
     assert_eq!(refs.len(), 5);
 
+    // A full page of the browser's size decodes: its page sits at the stack's array limit.
+    const { assert!(veredas_core::opc::browse::BROWSE_PAGE as usize <= ARRAY_LIMIT) };
+    let page = veredas_core::opc::browse::BROWSE_PAGE;
+    let full = session.browse(&[describe(plant.node_id("bulk"))], page, None).await.expect("a full page");
+    assert_eq!(full[0].references.as_ref().map(|r| r.len()), Some(page as usize));
+
     // The attributes come back in the types the renderers match on; one a node lacks is
     // BadAttributeIdInvalid.
     let attr = |node: NodeId, attribute: AttributeId| ReadValueId {
@@ -386,7 +392,9 @@ async fn the_browser_s_requests_are_answered_as_it_reads_them() {
                 attr(temp.clone(), AttributeId::AccessLevel),
                 attr(temp.clone(), AttributeId::ValueRank),
                 attr(temp.clone(), AttributeId::BrowseName),
-                attr(temp, AttributeId::EventNotifier),
+                attr(temp.clone(), AttributeId::EventNotifier),
+                attr(temp.clone(), AttributeId::UserAccessLevel),
+                attr(temp, AttributeId::MinimumSamplingInterval),
             ],
             TimestampsToReturn::Neither,
             0.0,
@@ -400,6 +408,24 @@ async fn the_browser_s_requests_are_answered_as_it_reads_them() {
     assert_eq!(values[4].value, Some(Variant::from(QualifiedName::new(0, "Temperature"))));
     assert_eq!(values[5].status, Some(StatusCode::BadAttributeIdInvalid));
     assert!(values[5].value.is_none());
+    assert_eq!(values[6].value, Some(Variant::Byte(1)));
+    assert_eq!(values[7].value, Some(Variant::Double(100.0)));
+    plant.stop().await;
+}
+
+#[tokio::test]
+async fn a_browse_page_past_the_array_limit_kills_the_connection() {
+    // Why the browser never asks for more than the limit: a server that serves the page asked
+    // for sends an answer this client cannot decode, and the connection dies with it.
+    let plant = DemoPlant::start_with(DemoConfig { browse_page: Some(5_000), ..DemoConfig::default() })
+        .await
+        .expect("demo plant starts");
+    let (session, _loop) = connect(&plant, IdentityToken::Anonymous).await.expect("connect");
+    let at = session.browse(&[describe(plant.node_id("bulk"))], ARRAY_LIMIT as u32, None).await.expect("at the limit");
+    assert_eq!(at[0].references.as_ref().map(|r| r.len()), Some(ARRAY_LIMIT));
+    let past = session.browse(&[describe(plant.node_id("bulk"))], ARRAY_LIMIT as u32 + 1, None).await;
+    let err = past.expect_err("one past the limit");
+    assert_eq!(err.status(), StatusCode::BadConnectionClosed, "{err}");
     plant.stop().await;
 }
 
@@ -422,6 +448,11 @@ fn a_status_codes_severity_is_its_top_two_bits_and_it_displays_its_name() {
         let code = StatusCode::from(bits);
         assert!(code.is_good() && !code.is_uncertain() && !code.is_bad(), "{name}");
         assert_eq!(code.to_string(), name);
+    }
+    // Info bits (a limit, an overflow) leave a good code good too.
+    for bits in [0x0000_0100u32, 0x0000_0200, 0x0000_0300, 0x0000_0480] {
+        let code = StatusCode::from(bits);
+        assert!(code.is_good() && !code.is_uncertain() && !code.is_bad(), "{bits:#x}");
     }
     // Names, as the failure texts and the browser's rows show them.
     assert_eq!(good.to_string(), "Good");
