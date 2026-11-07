@@ -133,8 +133,9 @@ fn looks_like_utf16(sample: &[u8]) -> Option<DetectedEncoding> {
     }
 }
 
-/// How many bytes, or which byte, a fresh stream waits for before it decides.
-const FRESH_SAMPLE: usize = 4;
+/// The bytes a decision waits for when nothing earlier tells (a mark is shorter; the UTF-16
+/// pattern needs this many).
+pub const FRESH_SAMPLE: usize = 4;
 
 enum State {
     /// The first bytes of a stream, held until there are enough to tell (a mark or the UTF-16

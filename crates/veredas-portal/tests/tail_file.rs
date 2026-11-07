@@ -1008,3 +1008,34 @@ fn a_fragment_skipped_at_an_end_attach_never_decides_the_encoding() {
     assert_eq!(lines(&rx, 2), ["naïve", "café 25°"]);
     set.stop_all();
 }
+
+#[test]
+fn a_head_under_four_bytes_decides_with_what_follows_it() {
+    // A tail attached while a new UTF-16 file holds under four bytes: the writer caught inside
+    // its mark, or one character in. Too little to decide from, so the bytes vote with what
+    // follows them, as a start from the beginning would. A torn mark is no text yet, and the
+    // first line written is whole; one character is a torn line, whose completion is skipped.
+    let dir = tempfile::tempdir().unwrap();
+    for (name, first, rest) in [
+        ("le.log", vec![0xFFu8], [vec![0xFE], utf16le("new\r\nnext\r\n", false)].concat()),
+        ("be.log", vec![0xFE], [vec![0xFF], utf16be("new\r\nnext\r\n", false)].concat()),
+        ("u8.log", vec![0xEF, 0xBB], [vec![0xBF], b"new\nnext\n".to_vec()].concat()),
+    ] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, &first).unwrap();
+        let (set, rx) = tail(&path, FileStart::End);
+        assert_quiet(&rx, 100);
+        append_bytes(&path, &rest);
+        assert_eq!(lines(&rx, 2), ["new", "next"], "{name}");
+        set.stop_all();
+    }
+    for le in [true, false] {
+        let path = dir.path().join(format!("char-{le}.log"));
+        std::fs::write(&path, if le { utf16le("a", false) } else { utf16be("a", false) }).unwrap();
+        let (set, rx) = tail(&path, FileStart::End);
+        assert_quiet(&rx, 100);
+        append_bytes(&path, &if le { utf16le("bc\r\nnext\r\nmore\r\n", false) } else { utf16be("bc\r\nnext\r\nmore\r\n", false) });
+        assert_eq!(lines(&rx, 2), ["next", "more"], "little-endian {le}");
+        set.stop_all();
+    }
+}

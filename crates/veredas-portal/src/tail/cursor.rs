@@ -17,7 +17,7 @@ use same_file::Handle;
 
 use veredas_core::SourceError;
 
-use crate::encoding::{DetectedEncoding, TextDecoder, mark_len};
+use crate::encoding::{DetectedEncoding, FRESH_SAMPLE, TextDecoder, is_plain_ascii, mark_len};
 use crate::tail::FileStart;
 
 pub(crate) const READ_CHUNK: usize = 64 * 1024;
@@ -142,6 +142,23 @@ impl TailedFile {
         head.truncate(got);
         self.decoder = TextDecoder::from_head(&head);
         let mark = mark_len(&head) as u64;
+        if (len as usize) < FRESH_SAMPLE && mark == 0 && !is_plain_ascii(&head) {
+            // Under four bytes and no complete mark: too little to decide from (a start from the
+            // beginning waits for as much, for the same reason). The bytes are the first of the
+            // file, so they vote with what follows them, pre-fed to a fresh decoder. A torn mark
+            // is no text yet, a clean start; anything else is a torn line, skipped once decoded.
+            let mut decoder = TextDecoder::new();
+            let mut sink = String::new();
+            decoder.feed(&head, &mut sink);
+            self.decoder = decoder;
+            file.seek(SeekFrom::End(0)).map_err(io)?;
+            self.offset = len;
+            let marks: [&[u8]; 3] = [&[0xEF, 0xBB, 0xBF], &[0xFF, 0xFE], &[0xFE, 0xFF]];
+            let torn_mark = marks.iter().any(|m| m.starts_with(&head));
+            self.skip_until_newline = !torn_mark && head.last() != Some(&0x0A);
+            self.skip_raw_until_newline = false;
+            return Ok(());
+        }
         let enc = self.decoder.encoding();
         let unit = enc.map(|e| e.unit_width()).unwrap_or(1) as u64;
         // An attach that falls inside a UTF-16 code unit (the writer caught mid-unit) moves

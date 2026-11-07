@@ -209,6 +209,10 @@ Recorded as the port meets them.
   inside a UTF-8 character of an ASCII-headed file fed the decoder a continuation byte alone,
   which no sequence starts, and the file read as CP1252 for good. While the head leaves the
   encoding undecided the torn fragment is dropped raw, before the decoder sees it.
+- **A head under four bytes decides nothing alone** (C-035, round 4). A start from the beginning
+  waits for four bytes or a line feed before deciding; an attach at the end of a one-to-three-byte
+  file decided on what it held, and a torn mark or a lone UTF-16 character chose wrong for good.
+  Such a head is pre-fed to a fresh decoder and votes with the bytes that follow it.
 - **A wake channel with no sender spins the loop.** The watcher owned the wake channel's only
   sender; where the watcher could not be set up (a parent folder not there yet) the receiver
   read as disconnected and the wait returned at once, every tick, a full core. The loop keeps a
