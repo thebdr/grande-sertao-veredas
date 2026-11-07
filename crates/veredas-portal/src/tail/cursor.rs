@@ -59,6 +59,9 @@ pub(crate) struct TailedFile {
     /// Set when a tail starts at the end mid-line: swallow decoded text up to and including the
     /// first newline, so a torn fragment is never emitted.
     skip_until_newline: bool,
+    /// Set with it when the head left the encoding undecided: the fragment is dropped raw, up to
+    /// and including the first line feed, before the decoder sees it, so it never votes.
+    skip_raw_until_newline: bool,
 }
 
 impl TailedFile {
@@ -74,6 +77,7 @@ impl TailedFile {
             text: String::new(),
             buf: vec![0u8; READ_CHUNK],
             skip_until_newline: false,
+            skip_raw_until_newline: false,
         };
         if start == FileStart::End {
             tf.seek_to_end()?;
@@ -103,6 +107,7 @@ impl TailedFile {
             text: String::new(),
             buf: vec![0u8; READ_CHUNK],
             skip_until_newline: false,
+            skip_raw_until_newline: false,
         };
         if offset > 0 {
             tf.handle.as_file_mut().seek(SeekFrom::Start(offset)).map_err(|e| SourceError::io(path, e))?;
@@ -110,10 +115,9 @@ impl TailedFile {
         Ok(tf)
     }
 
-    /// Jump to the current end. If the last byte is not a newline the file ends mid-line, so the
-    /// fragment skip is armed. (A byte-level check: right for UTF-8 and CP1252; a UTF-16 LE
-    /// newline still ends in 0x0A, and a false "mid-line" verdict only costs skipping until the
-    /// next newline, which the end-start semantics allow.)
+    /// Jump to the current end: the head decides the encoding, the end is aligned to a code
+    /// unit, and the unit before it tells a clean line end from a torn one, whose completion is
+    /// skipped (raw, while the head left the encoding undecided: the skipped bytes never vote).
     fn seek_to_end(&mut self) -> Result<(), SourceError> {
         let len = self.disk_len()?;
         if len == 0 {
@@ -165,7 +169,13 @@ impl TailedFile {
         };
         file.seek(SeekFrom::Start(start)).map_err(io)?;
         self.offset = start;
-        self.skip_until_newline = skip;
+        // The fragment skipped must not vote on the encoding: while the head left it undecided
+        // (plain ASCII), the raw bytes up to the first line feed are dropped before the decoder
+        // sees them, or an attach inside a UTF-8 sequence would hand it a continuation byte alone,
+        // which no sequence starts, and commit CP1252 for the lifetime of the file.
+        let raw = skip && self.decoder.encoding().is_none();
+        self.skip_raw_until_newline = raw;
+        self.skip_until_newline = skip && !raw;
         Ok(())
     }
 
@@ -208,6 +218,16 @@ impl TailedFile {
 
     /// Decode a chunk of raw bytes and emit every completed line.
     fn ingest(&mut self, bytes: &[u8], emit: &mut dyn FnMut(String)) {
+        let mut bytes = bytes;
+        if self.skip_raw_until_newline {
+            match memchr(0x0A, bytes) {
+                Some(pos) => {
+                    bytes = &bytes[pos + 1..];
+                    self.skip_raw_until_newline = false;
+                }
+                None => return,
+            }
+        }
         self.text.clear();
         let mut text = std::mem::take(&mut self.text);
         self.decoder.feed(bytes, &mut text);
@@ -274,6 +294,7 @@ impl TailedFile {
         self.offset = 0;
         self.decoder.reset();
         self.skip_until_newline = false;
+        self.skip_raw_until_newline = false;
         Ok(())
     }
 

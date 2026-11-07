@@ -205,6 +205,10 @@ Recorded as the port meets them.
   The ASCII state decided CP1252 for any high byte held when the stream ended; a valid UTF-8
   prefix cut short is UTF-8 whether or not the stream is ending, and the decoder finishes it as
   U+FFFD. A byte no sequence starts stays CP1252.
+- **A skipped fragment must not vote on the encoding** (C-035, round 3). An attach at the end
+  inside a UTF-8 character of an ASCII-headed file fed the decoder a continuation byte alone,
+  which no sequence starts, and the file read as CP1252 for good. While the head leaves the
+  encoding undecided the torn fragment is dropped raw, before the decoder sees it.
 - **A wake channel with no sender spins the loop.** The watcher owned the wake channel's only
   sender; where the watcher could not be set up (a parent folder not there yet) the receiver
   read as disconnected and the wait returned at once, every tick, a full core. The loop keeps a

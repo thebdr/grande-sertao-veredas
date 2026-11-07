@@ -987,3 +987,24 @@ fn a_torn_utf8_lead_at_the_end_of_an_ascii_opened_file_is_a_replacement_characte
     let rest: Vec<String> = rx.try_iter().map(|e| e.line).collect();
     assert_eq!(rest, ["25°"]);
 }
+
+#[test]
+fn a_fragment_skipped_at_an_end_attach_never_decides_the_encoding() {
+    // An ASCII head longer than the attach reads (over 4 KiB) leaves UTF-8 and CP1252 open, and
+    // the file ends inside a two-byte UTF-8 character: the continuation byte is the first thing
+    // the tail reads, and alone it is a byte no sequence starts. It belongs to the fragment the
+    // attach skips, so it must not commit the file to CP1252.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("head.log");
+    let mut head: Vec<u8> =
+        (0..200).flat_map(|i| format!("2026-07-19 10:{:02}:{:02} seed {i} ascii only\n", i / 60, i % 60).into_bytes()).collect();
+    assert!(head.len() > 4096);
+    head.extend_from_slice(b"caf\xC3");
+    std::fs::write(&path, &head).unwrap();
+    let (set, rx) = tail(&path, FileStart::End);
+    assert_quiet(&rx, 100);
+    append_bytes(&path, b"\xA9\nna\xC3\xAFve\n");
+    append_bytes(&path, "café 25°\n".as_bytes());
+    assert_eq!(lines(&rx, 2), ["naïve", "café 25°"]);
+    set.stop_all();
+}
