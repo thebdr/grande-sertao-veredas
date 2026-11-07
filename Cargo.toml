@@ -31,6 +31,9 @@ async-opcua-client = "=0.19.0"
 async-opcua-server = "=0.19.0"
 async-opcua-types = "=0.19.0"
 chrono = "0.4"
+# The session store (portal): the embedded engine, pinned exactly so the file format and the SQL
+# behave the same on every machine; the bundled build compiles the engine once per target dir.
+duckdb = { version = "=1.10504.0", features = ["bundled"] }
 # The data plane's text decoding (portal): UTF-8, UTF-16 and CP1252, decoded incrementally.
 encoding_rs = "0.8"
 # Newline splitting over bytes (portal's tail).
@@ -51,3 +54,11 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros",
 toml = "1"
 # Whether a drive letter is a network drive (portal's tail polls a share and never watches it).
 windows-sys = "0.59"
+
+# The bundled engine's debug static library is about 2.2 GB and is mapped into every test binary
+# that links it, which exhausts the page file when the test fleet links in parallel; the engine
+# is compiled optimised and without debug info even in dev (about 600 MB), and nothing of the
+# suite's own code changes profile (docs/portal-plan.md, "Traps").
+[profile.dev.package.libduckdb-sys]
+opt-level = 2
+debug = false

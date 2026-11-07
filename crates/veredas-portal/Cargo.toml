@@ -6,6 +6,12 @@ edition.workspace = true
 publish = false
 description = "The gateway of Veredas 2: the one point where the suite reads the plant's logs, telegrams and OPC UA servers, stores their data alike and serves it, writes gated"
 
+[features]
+default = ["store"]
+# The session store, DuckDB embedded. Off, the crate is the light build controlador embeds: the
+# data plane, the channels, the OPC sources and the project file, nothing persisted.
+store = ["dep:duckdb", "dep:serde_json"]
+
 # A library first, one executable on top (docs/portal-plan.md, "Rules"; tests/component.rs asks
 # cargo what it would build). Depends on core alone (law L5, the map); its tests dev-depend on the
 # bench, which plays the plant.
@@ -25,6 +31,10 @@ notify = { workspace = true }
 regex = { workspace = true }
 # Reply rules are configuration, read from plain text.
 serde = { workspace = true }
+# The store, behind its feature.
+duckdb = { workspace = true, optional = true }
+# Typed row pages are JSON cells (the store).
+serde_json = { workspace = true, optional = true }
 # A file's identity (volume and index), so a renamed file is still the one being read.
 same-file = { workspace = true }
 thiserror = { workspace = true }

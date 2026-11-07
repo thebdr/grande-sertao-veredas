@@ -13,6 +13,7 @@
 //! - [`capture`]: a line read into typed series by a regex rule.
 //! - [`channel`]: a telegram channel to a device, by a channel file, a catalog and reply rules.
 //! - [`opc`]: an OPC UA source compiled into core's poll spec, polled into tables by rules.
+//! - [`store`] (feature `store`): the DuckDB session store, every protocol's data stored alike.
 //!
 //! Nothing here names a device, a vendor or a product: what a plant's files and telegrams mean
 //! is configuration (`docs/questions.md` Q8). Reading a plant's file never blocks its writer.
@@ -23,6 +24,8 @@ pub mod encoding;
 pub mod family;
 pub mod opc;
 pub mod source;
+#[cfg(feature = "store")]
+pub mod store;
 pub mod tail;
 pub mod timestamp;
 
