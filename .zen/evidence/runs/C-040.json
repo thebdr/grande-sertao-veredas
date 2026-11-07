@@ -1,0 +1,24 @@
+{
+  "clause": "C-040",
+  "command": "cargo test -p veredas-portal --test opc",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-portal",
+    "--test",
+    "opc"
+  ],
+  "exitCode": 0,
+  "outputSha": "04df2720e00acd591178656acdf2756d62ee7c50669f3482d43a23e33cef48b1",
+  "outputTail": "\nrunning 4 tests\ntest every_configuration_mistake_is_refused_by_name_before_anything_connects ... ok\ntest writes_are_gated_by_the_switch_and_the_whitelist_and_land_on_the_server_side ... ok\ntest the_identity_comes_from_a_named_environment_variable_and_a_wrong_one_never_connects ... ok\ntest the_bench_s_server_is_polled_into_typed_rows_with_bits_and_on_change_kept ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.71s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.28s\n     Running tests\\opc.rs (target\\debug\\deps\\opc-f6e61efd0f537756.exe)",
+  "ranAt": "2026-11-07T21:21:03.698Z",
+  "headCommit": "68ff7067e8c84ceaf89571f2641d5c7e60e9b565",
+  "tests": [
+    {
+      "name": "crates/veredas-portal/tests/opc.rs",
+      "file": "crates/veredas-portal/tests/opc.rs",
+      "fileSha": "dc6a5abc270411e309a65f9a82c103c9894cdb614457230136af3994489da711"
+    }
+  ]
+}
