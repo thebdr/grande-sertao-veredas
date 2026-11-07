@@ -235,7 +235,7 @@ fn what_a_message_reads_and_where_its_ids_ride_are_the_catalog_s_to_say() {
     assert!(m.reads("n") && m.reads("bc1") && m.reads("bc2"));
     assert!(!m.reads("bc3") && !m.reads("bc") && !m.reads("bc01") && !m.reads("bc+1"));
     // Where the ids ride: the channel schema's worked framing, with and without segments.
-    assert!(prose.contains("The catalog knows no framing, so a channel that speaks it asks `Catalog::check_framing` before it starts; the same check refuses, in a layout without segments, a message that writes an empty body, which the wire carries as a keep-alive, not a message."));
+    assert!(prose.contains("The catalog knows no framing, so a channel that speaks it asks `Catalog::check_framing` before it starts; the same check refuses, in a layout without segments, a message whose body is always empty (a length of 0, or no rules at all), which the wire carries as a keep-alive, not a message."));
     let channel_doc = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/channel-schema.md")).unwrap().replace("\r\n", "\n");
     let start = channel_doc.find("```toml\n").unwrap() + 8;
     let block = channel_doc[start..start + channel_doc[start..].find("```").unwrap()].to_string();
@@ -249,11 +249,17 @@ fn what_a_message_reads_and_where_its_ids_ride_are_the_catalog_s_to_say() {
     );
     let narrow = schema::load(&block.replace("{ name = \"id\", size = 2 }", "{ name = \"id\", size = 1 }")).unwrap().framing;
     catalog.check_framing(&narrow).unwrap_or_else(|e| panic!("the worked ids fit one byte: {e}"));
-    let wide = load(&documented_example().replace("id = 22\n", "id = 300\n")).unwrap();
+    let with_answer_id = |id: &str| load(&documented_example().replace("id = 22\n", &format!("id = {id}\n"))).unwrap();
     assert_eq!(
-        wide.check_framing(&narrow).unwrap_err().to_string(),
+        with_answer_id("300").check_framing(&narrow).unwrap_err().to_string(),
         "the catalog's message `answer` has the id 300, which does not fit the framing's segment header field `id` of 1 byte(s)"
     );
+    with_answer_id("255").check_framing(&narrow).unwrap_or_else(|e| panic!("255 is the widest one byte holds: {e}"));
+    assert!(with_answer_id("256").check_framing(&narrow).unwrap_err().to_string().starts_with("the catalog's message `answer` has the id 256, which does not fit"));
+    with_answer_id("65535").check_framing(&framing).unwrap_or_else(|e| panic!("two bytes: {e}"));
+    assert!(with_answer_id("65536").check_framing(&framing).unwrap_err().to_string().contains("of 2 byte(s)"));
+    let eight = schema::load(&block.replace("{ name = \"id\", size = 2 }", "{ name = \"id\", size = 8 }")).unwrap().framing;
+    with_answer_id(&u64::MAX.to_string()).check_framing(&eight).unwrap_or_else(|e| panic!("eight bytes hold every id: {e}"));
     let flat_block = {
         let text = block.replace("  { name = \"count\", size = 2, role = \"count\" },\n", "  { name = \"id\", size = 2 },\n");
         let s = text.find("segment = [").unwrap();
@@ -268,12 +274,18 @@ fn what_a_message_reads_and_where_its_ids_ride_are_the_catalog_s_to_say() {
         with_id("sequence").check_framing(&flat).unwrap_err().to_string(),
         "the catalog's id_field `sequence` is the framing's envelope field with the role `sequence`, which the channel fills in itself: an id cannot ride it"
     );
-    let keep_alive = "the catalog's message `m` writes an empty body, which a layout without segments carries as a keep-alive, not a message";
+    let keep_alive = "the catalog's message `m` has a body that is always empty, which a layout without segments carries as a keep-alive, not a message";
     assert_eq!(load(&message("")).unwrap().check_framing(&flat).unwrap_err().to_string(), keep_alive, "no rules: an empty body");
     assert_eq!(load(&message("len = 0\n")).unwrap().check_framing(&flat).unwrap_err().to_string(), keep_alive);
+    assert_eq!(load(&message("len = 0\npayload = \"x*\"\n")).unwrap().check_framing(&flat).unwrap_err().to_string(), keep_alive, "read-only, and never receivable");
+    assert_eq!(load(&message("len = 0\nrepeat = [ { name = \"r\", pattern = \"x\" } ]\n")).unwrap().check_framing(&flat).unwrap_err().to_string(), keep_alive);
+    assert_eq!(load(&message("template = \"\"\n")).unwrap().check_framing(&flat).unwrap_err().to_string(), keep_alive, "an empty template writes nothing");
     load(&message("")).unwrap().check_framing(&framing).unwrap_or_else(|e| panic!("with segments an empty body is a message: {e}"));
     load(&message("payload = \"x\"\n")).unwrap().check_framing(&flat).unwrap_or_else(|e| panic!("a message that is never written: {e}"));
+    load(&message("repeat = [ { name = \"r\", pattern = \"x\" } ]\n")).unwrap().check_framing(&flat).unwrap_or_else(|e| panic!("a repeat-only message is never written: {e}"));
     load(&message("template = \"{t}\"\n")).unwrap().check_framing(&flat).unwrap_or_else(|e| panic!("a placeholder may render to something: {e}"));
+    load(&message("len = 8\n")).unwrap().check_framing(&flat).unwrap_or_else(|e| panic!("eight pad bytes are a body: {e}"));
+    load(&message("fields = [ { name = \"n\", at = 0, ty = \"U8\" } ]\n")).unwrap().check_framing(&flat).unwrap_or_else(|e| panic!("a field is a body: {e}"));
     // A frame built where the framing takes the id, and the ids read back from a frame.
     let f = catalog.frame(&framing, 22, vec![1, 2]);
     assert!(f.fields.is_empty() && f.segments.len() == 1 && f.segments[0].fields.get("id") == Some(&22) && f.segments[0].body == [1, 2]);
@@ -286,6 +298,9 @@ fn what_a_message_reads_and_where_its_ids_ride_are_the_catalog_s_to_say() {
         ],
     };
     assert_eq!(catalog.messages_of(&framing, &two), vec![(Some(22), vec![1]), (Some(23), vec![2])]);
+    let mut with_envelope_id = two.clone();
+    with_envelope_id.fields.insert("id".to_string(), 99);
+    assert_eq!(catalog.messages_of(&framing, &with_envelope_id), vec![(Some(22), vec![1]), (Some(23), vec![2])], "the segments' ids, not an envelope field of the same name");
     let g = catalog.frame(&flat, 23, b"ITEM=1".to_vec());
     assert!(g.fields.get("id") == Some(&23) && g.segments.len() == 1 && g.segments[0].fields.is_empty());
     assert_eq!(catalog.messages_of(&flat, &g), vec![(Some(23), b"ITEM=1".to_vec())]);
@@ -838,8 +853,9 @@ whitespace.
   the framing leaves to the sender, an opaque one (`docs/channel-schema.md`, "Roles"), never the
   sequence, a length or a count, which a channel fills in itself, and wide enough for every id.
   The catalog knows no framing, so a channel that speaks it asks `Catalog::check_framing`
-  before it starts; the same check refuses, in a layout without segments, a message that writes
-  an empty body, which the wire carries as a keep-alive, not a message.
+  before it starts; the same check refuses, in a layout without segments, a message whose body
+  is always empty (a length of 0, or no rules at all), which the wire carries as a keep-alive,
+  not a message.
 - `byte_order` (`"little"`): `"little"` or `"big"`, for every binary field of every body.
 - `message` (none): the messages, as `[[message]]` tables; a catalog may be empty.
 

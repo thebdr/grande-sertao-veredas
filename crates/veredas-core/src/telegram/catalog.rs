@@ -201,8 +201,9 @@ impl Catalog {
     /// `id_field` must be a field of the framing's segment header (of the envelope in a layout
     /// without segments) that the framing leaves to the sender (an opaque field: never the
     /// sequence, a length or a count, which a channel fills in itself) and wide enough for
-    /// every id; and in a layout without segments no message may write an empty body, which
-    /// the wire carries as a keep-alive, not a message.
+    /// every id; and in a layout without segments no message may have a body that is always
+    /// empty (a length of 0, or no rules at all), which the wire carries as a keep-alive, not a
+    /// message.
     pub fn check_framing(&self, framing: &Framing) -> Result<(), CatalogError> {
         let id_field = &self.id_field;
         let (fields, where_) = match &framing.segment {
@@ -230,11 +231,15 @@ impl Catalog {
                 m.name, m.id, field.size
             )));
         }
+        // A body that is always empty: a length of 0 whatever the rules (such a message could
+        // never be received either), or no rules at all (written empty; a payload or a repeat
+        // makes it read-only, never written).
+        let always_empty = |m: &Message| m.compose_spec.len == Some(0) || (m.compose.writes_empty() && m.capture_spec.payload.is_none() && m.capture_spec.repeat.is_empty());
         if framing.segment.is_none()
-            && let Some(m) = self.messages.iter().find(|m| m.compose.writes_empty() && m.capture_spec.payload.is_none() && m.capture_spec.repeat.is_empty())
+            && let Some(m) = self.messages.iter().find(|m| always_empty(m))
         {
             return Err(invalid(format!(
-                "the catalog's message `{}` writes an empty body, which a layout without segments carries as a keep-alive, not a message",
+                "the catalog's message `{}` has a body that is always empty, which a layout without segments carries as a keep-alive, not a message",
                 m.name
             )));
         }

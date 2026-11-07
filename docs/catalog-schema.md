@@ -80,8 +80,9 @@ whitespace.
   the framing leaves to the sender, an opaque one (`docs/channel-schema.md`, "Roles"), never the
   sequence, a length or a count, which a channel fills in itself, and wide enough for every id.
   The catalog knows no framing, so a channel that speaks it asks `Catalog::check_framing`
-  before it starts; the same check refuses, in a layout without segments, a message that writes
-  an empty body, which the wire carries as a keep-alive, not a message.
+  before it starts; the same check refuses, in a layout without segments, a message whose body
+  is always empty (a length of 0, or no rules at all), which the wire carries as a keep-alive,
+  not a message.
 - `byte_order` (`"little"`): `"little"` or `"big"`, for every binary field of every body.
 - `message` (none): the messages, as `[[message]]` tables; a catalog may be empty.
 
