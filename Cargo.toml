@@ -11,6 +11,10 @@ members = [
     # The bench (docs/maquinar-plan.md): simulated hardware on the real wire, by configuration,
     # built before the consumer that needs it; a test tool that owns its sockets (law L5: core only).
     "crates/veredas-maquinar",
+    # The gateway (docs/portal-plan.md): the one point where the suite reads the plant's logs,
+    # telegrams and OPC UA servers, stores their data alike and serves it, writes gated; depends on
+    # core alone (law L5), its tests on the bench.
+    "crates/veredas-portal",
 ]
 
 # No [workspace.package] version: each component owns its SemVer from 2.0.0 (the plan,
@@ -27,11 +31,23 @@ async-opcua-client = "=0.19.0"
 async-opcua-server = "=0.19.0"
 async-opcua-types = "=0.19.0"
 chrono = "0.4"
+# The data plane's text decoding (portal): UTF-8, UTF-16 and CP1252, decoded incrementally.
+encoding_rs = "0.8"
+# Newline splitting over bytes (portal's tail).
+memchr = "2"
+# The filesystem watcher that wakes a tail's poll loop early on a local path (portal).
+notify = "8"
 regex = "1"
+# A file's identity (volume and index), so a renamed file is still the one being read (portal).
+same-file = "1"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 socket2 = "0.6"
+# Scratch directories for tests, removed when the test ends.
+tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "io-util", "sync"] }
 toml = "1"
+# Whether a drive letter is a network drive (portal's tail polls a share and never watches it).
+windows-sys = "0.59"

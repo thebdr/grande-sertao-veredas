@@ -1,0 +1,160 @@
+//! `FileTailSource`: one growing file at a path followed `tail -F` style, surviving truncation,
+//! replacement, and the file not existing yet. Poll-driven, with a filesystem watcher on top
+//! for local paths.
+
+use std::cell::Cell;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
+
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use same_file::Handle;
+
+use veredas_core::{SourceError, SourceHandle, SourceId};
+
+use crate::source::{Emitter, LineEvent, Source, stop_flag};
+use crate::tail::cursor::{PathStatus, ReadStep, TailedFile};
+use crate::tail::{FileStart, TailConfig};
+use crate::timestamp::TimestampSpec;
+
+pub struct FileTailSource {
+    id: SourceId,
+    name: String,
+    path: PathBuf,
+    cfg: TailConfig,
+    ts: Option<TimestampSpec>,
+}
+
+impl FileTailSource {
+    pub fn new(id: impl AsRef<str>, display_name: impl Into<String>, path: impl Into<PathBuf>, cfg: TailConfig) -> Self {
+        FileTailSource { id: SourceId::new(id), name: display_name.into(), path: path.into(), cfg, ts: None }
+    }
+
+    /// Attach a per-source line-stamp rule; a parse failure leaves `parsed_ts` empty and the
+    /// line flows ordered by `seq`.
+    pub fn with_timestamps(mut self, spec: TimestampSpec) -> Self {
+        self.ts = Some(spec);
+        self
+    }
+}
+
+impl Source for FileTailSource {
+    fn id(&self) -> &SourceId {
+        &self.id
+    }
+
+    fn display_name(&self) -> &str {
+        &self.name
+    }
+
+    fn start(self: Box<Self>, tx: Sender<LineEvent>) -> Result<SourceHandle, SourceError> {
+        let this = *self;
+        let stop = stop_flag();
+        let id = this.id.clone();
+        let thread_stop = stop.clone();
+        let emitter = Emitter::with_timestamps(this.id.clone(), tx, this.ts);
+        let join = std::thread::Builder::new()
+            .name(format!("tail:{id}"))
+            .spawn(move || run(this.path, this.cfg, emitter, thread_stop))
+            .map_err(|e| SourceError::io(Path::new("<thread spawn>"), e))?;
+        Ok(SourceHandle::new(id, stop, join))
+    }
+}
+
+/// Watch the file's parent folder; any event wakes the poll loop early. Failing to set the
+/// watcher up is not an error: polling covers it.
+pub(crate) fn spawn_watcher(dir: &Path, wake: Sender<()>, recursive: bool) -> Option<RecommendedWatcher> {
+    let mut watcher = notify::recommended_watcher(move |_res| {
+        let _ = wake.send(());
+    })
+    .ok()?;
+    let mode = if recursive { RecursiveMode::Recursive } else { RecursiveMode::NonRecursive };
+    watcher.watch(dir, mode).ok()?;
+    Some(watcher)
+}
+
+/// Sleep until the next poll tick or a filesystem event, coalescing bursts.
+pub(crate) fn wait_tick(wake: &Receiver<()>, interval: std::time::Duration) {
+    if wake.recv_timeout(interval).is_ok() {
+        while wake.try_recv().is_ok() {}
+    }
+}
+
+fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBool>) -> Result<(), SourceError> {
+    let (wake_tx, wake_rx) = channel::<()>();
+    // Automatic mode arms the watcher for local paths alone: directory notifications are
+    // unreliable over a share, where polling stays the one mechanism.
+    let notify_wanted = cfg.use_notify.unwrap_or_else(|| crate::tail::pathkind::classify(&path).notify_useful());
+    let _watcher = if notify_wanted { path.parent().and_then(|dir| spawn_watcher(dir, wake_tx, false)) } else { None };
+
+    let disconnected = Cell::new(false);
+    let mut emit = |line: String| {
+        if emitter.emit(line).is_err() {
+            disconnected.set(true);
+        }
+    };
+
+    let mut active: Option<TailedFile> = None;
+    let mut first_open = true;
+
+    loop {
+        if disconnected.get() {
+            return Ok(()); // the consumer is gone: a clean end
+        }
+        if stop.load(Ordering::Relaxed) {
+            // A final sweep, so a stop right after a write loses nothing.
+            if let Some(tf) = active.as_mut() {
+                let _ = tf.read_new(&mut emit);
+                tf.flush_pending(&mut emit);
+            }
+            return Ok(());
+        }
+
+        match active.as_mut() {
+            None => {
+                let start = if first_open { cfg.start } else { FileStart::Begin };
+                if let Ok(tf) = TailedFile::open(&path, start) {
+                    first_open = false;
+                    active = Some(tf);
+                    continue; // read at once, without burning a tick
+                }
+                first_open = false; // absent at attach: whatever appears later is new content
+            }
+            Some(tf) => {
+                match tf.read_new(&mut emit)? {
+                    ReadStep::Truncated => {
+                        tf.handle_truncation(&mut emit)?;
+                        continue; // re-read the fresh content now
+                    }
+                    ReadStep::Progress => {}
+                }
+
+                match tf.check_path() {
+                    PathStatus::Same => {}
+                    PathStatus::Replaced | PathStatus::Missing => {
+                        // Whatever happens next, first take every byte still reachable through
+                        // the old handle.
+                        tf.drain_stable(cfg.drain_grace, &stop, &mut emit)?;
+                        match Handle::from_path(&path) {
+                            Ok(h) if h == *tf.identity() => {
+                                // A transient glitch: the same file is back. Keep the held
+                                // partial line; its completion may still arrive.
+                            }
+                            _ => {
+                                // Truly replaced or gone: the old file never grows again, so the
+                                // held partial is a final (torn) line. Then start over on
+                                // whatever appears at the path.
+                                tf.flush_pending(&mut emit);
+                                active = None;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        wait_tick(&wake_rx, cfg.poll_interval);
+    }
+}

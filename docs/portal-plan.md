@@ -139,6 +139,7 @@ Changed on the way, each recorded in the clause's evidence note:
 veredas_portal
   encoding    detection and streaming decode (UTF-8, UTF-16, CP1252)
   family      FamilySpec: a rotating file family by a name pattern, resolved in order
+  timestamp   TimestampSpec: the stamp a line carries, located and parsed by ordered formats
   tail        FileTailSource, FamilyTailSource, backfill: lines from files, zero lost
   source      Source, SourceSet, Emitter, LineEvent: the line-producing worker model
   capture     CaptureRule: a line into typed series by a regex's named groups

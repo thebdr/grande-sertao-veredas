@@ -1,0 +1,40 @@
+[package]
+name = "veredas-portal"
+# Its own SemVer (law L3), starting at core's current MAJOR (the plan, "Versioning").
+version = "2.0.0-alpha.1"
+edition.workspace = true
+publish = false
+description = "The gateway of Veredas 2: the one point where the suite reads the plant's logs, telegrams and OPC UA servers, stores their data alike and serves it, writes gated"
+
+# A library first, one executable on top (docs/portal-plan.md, "Rules"; tests/component.rs asks
+# cargo what it would build). Depends on core alone (law L5, the map); its tests dev-depend on the
+# bench, which plays the plant.
+
+[dependencies]
+# The shared types, the worker handle, the telegram layer and the OPC client the gateway builds on.
+veredas-core = { path = "../veredas-core" }
+# Timestamps parsed from lines and file names are chrono formats the operator types.
+chrono = { workspace = true }
+# Text decoded from the plant's files: UTF-8, UTF-16 and CP1252, detected lazily.
+encoding_rs = { workspace = true }
+# Newline splitting over decoded text and raw bytes.
+memchr = { workspace = true }
+# The filesystem accelerator over the poll loop, for local paths.
+notify = { workspace = true }
+# Capture rules and family patterns are regexes.
+regex = { workspace = true }
+# A file's identity (volume and index), so a renamed file is still the one being read.
+same-file = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# Whether a drive letter is a network drive, so a share is polled and never watched.
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+# The bench plays the plant: its emitters write the files the tail follows.
+veredas-maquinar = { path = "../veredas-maquinar" }
+# cargo metadata's output (tests/component.rs).
+serde_json = { workspace = true }
+# Scratch directories, removed when a test ends.
+tempfile = { workspace = true }
