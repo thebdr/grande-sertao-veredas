@@ -171,6 +171,28 @@ fn rev(s: &str) -> String {
     s.chars().rev().collect()
 }
 
+/// Where a file names the vendor protocol core's telegram layer came from, its terms, or cites
+/// a vendor document, as `line N: <term>`: core's reader (`tests/foundation.rs`) over the text.
+/// A file that is not UTF-8 (a fixture in a plant's encoding: this crate reads such files for
+/// a living) is read lossily for the names (a UTF-16 NUL is no letter, so the letters join up;
+/// CP1252 names are ASCII), and its section signs are counted in the bytes themselves, where
+/// the lossy reading loses them: the byte 0xA7, which is the sign in CP1252 and the one non-zero
+/// byte of its UTF-16 forms (A7 00, 00 A7), unless it follows 0xC2 (the UTF-8 pair, which the
+/// text reading already counts).
+fn vendor_mentions_in(bytes: &[u8]) -> Vec<String> {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return vendor_mentions(text);
+    }
+    let mut hits = vendor_mentions(&String::from_utf8_lossy(bytes));
+    for (i, b) in bytes.iter().enumerate() {
+        if *b == 0xA7 && !(i > 0 && bytes[i - 1] == 0xC2) {
+            let line = bytes[..i].iter().filter(|b| **b == b'\n').count() + 1;
+            hits.push(format!("line {line}: section sign (byte {i})"));
+        }
+    }
+    hits
+}
+
 /// Where a text names the vendor protocol core's telegram layer came from, its terms, or cites
 /// a vendor document, as `line N: <term>`: the same reader as core's (`tests/foundation.rs`) and
 /// the bench's. The whole text is lowercased and stripped to letters and digits as one string
@@ -218,12 +240,30 @@ fn the_gateway_names_no_vendor_and_cites_no_vendor_document() {
     assert!(files.len() >= 10, "{files:?}");
     let found: Vec<String> = files
         .iter()
-        .flat_map(|f| {
-            let text = String::from_utf8_lossy(&std::fs::read(f).unwrap()).to_string();
-            vendor_mentions(&text).into_iter().map(move |l| format!("{}: {l}", f.display()))
-        })
+        .flat_map(|f| vendor_mentions_in(&std::fs::read(f).unwrap()).into_iter().map(move |l| format!("{}: {l}", f.display())))
         .collect();
     assert_eq!(found, Vec::<String>::new());
+    // The citation is seen in a plant's encodings too, where a UTF-8 reading loses it: CP1252's
+    // one byte, UTF-16 in either order, each exactly once; the UTF-8 pair once, not twice.
+    let section = char::from_u32(0xA7).unwrap();
+    let cp1252: Vec<u8> = b"// spec \xA73.2\n".to_vec();
+    assert_eq!(vendor_mentions_in(&cp1252).len(), 1, "{:?}", vendor_mentions_in(&cp1252));
+    let utf16le: Vec<u8> = format!("// spec {section}3.2\n").encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    assert_eq!(vendor_mentions_in(&utf16le).len(), 1, "{:?}", vendor_mentions_in(&utf16le));
+    let utf16be: Vec<u8> = format!("// spec {section}3.2\n").encode_utf16().flat_map(|u| u.to_be_bytes()).collect();
+    assert_eq!(vendor_mentions_in(&utf16be).len(), 1, "{:?}", vendor_mentions_in(&utf16be));
+    assert_eq!(vendor_mentions_in(format!("// spec {section}3.2\n").as_bytes()).len(), 1, "the UTF-8 pair once");
+    assert_eq!(vendor_mentions_in(&[0xA7]).len(), 1, "a lone first byte");
+    assert_eq!(vendor_mentions_in(b"x\n\xA7\n\xA7").len(), 2, "two signs, on lines 2 and 3");
+    assert_eq!(vendor_mentions_in(b"x\n\xA7\n\xA7")[1], "line 3: section sign (byte 4)");
+    assert_eq!(vendor_mentions_in("// a degree 25\u{B0}C and \u{E9} and \u{167}\n".as_bytes()), Vec::<String>::new(), "other non-ASCII, a 0xA7 continuation byte included, is not a citation");
+    assert_eq!(vendor_mentions_in(b"// cp1252 25\xB0C na\xEFve\n"), Vec::<String>::new());
+    // The names are still read in a plant's encodings.
+    let name16: Vec<u8> = format!("// the {} catalog\n", rev("tleBineG")).encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    assert_eq!(vendor_mentions_in(&name16).len(), 1, "{:?}", vendor_mentions_in(&name16));
+    let mut name1252 = format!("// the {} catalog ", rev("tleBineG")).into_bytes();
+    name1252.extend_from_slice(b"25\xB0C\n");
+    assert_eq!(vendor_mentions_in(&name1252).len(), 1);
     // The reader sees every spelling, in any case, across line breaks, and the vendor's terms
     // and citations; each sample holds exactly one, found on the line it starts.
     let samples = [
