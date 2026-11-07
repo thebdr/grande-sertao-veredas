@@ -115,6 +115,11 @@ impl FamilySpec {
         self.recursive
     }
 
+    /// Whether the pattern has a key group (`date` or `idx`): a family is followed by its keys.
+    pub fn keyed(&self) -> bool {
+        self.pattern.capture_names().flatten().any(|n| n == "date" || n == "idx")
+    }
+
     pub fn dir(&self) -> &Path {
         &self.dir
     }

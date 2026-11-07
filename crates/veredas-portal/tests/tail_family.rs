@@ -597,3 +597,101 @@ fn the_emitter_s_family_shape_resolves_its_files_in_rotation_order() {
         assert_eq!(std::fs::read_to_string(&f.path).unwrap().lines().count(), 5, "{}", f.file_name);
     }
 }
+
+// ---- the start's attach, the keys, the hours ---------------------------------------------------
+
+fn from_the_end() -> FamilyTailConfig {
+    FamilyTailConfig { start: FamilyStart::ActiveEnd, ..cfg(25, 50, 60) }
+}
+
+/// A family's start returns once its folder has been listed, so a line written to the active file
+/// right after it is read, never taken as history.
+#[test]
+fn a_family_start_returns_attached_so_a_line_written_right_after_is_read() {
+    for i in 0..20 {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("app_1.log"), "old\n").unwrap();
+        std::fs::write(dir.path().join("app_2.log"), "history\n").unwrap();
+        let spec = FamilySpec::new(dir.path(), r"app_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+        let (mut set, rx) = SourceSet::new();
+        set.spawn(Box::new(FamilyTailSource::new("f", "family", spec, from_the_end()))).unwrap();
+        let mut f = std::fs::OpenOptions::new().append(true).open(dir.path().join("app_2.log")).unwrap();
+        std::io::Write::write_all(&mut f, b"new\n").unwrap();
+        let ev = rx.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|e| panic!("round {i}: {e:?}"));
+        assert_eq!(ev.line, "new", "round {i}");
+        set.stop_all();
+    }
+}
+
+/// A keyless pattern lists its members by modification time, then name; following it is refused:
+/// a family is followed by its keys, and without them no rotation order holds against a straggler.
+#[test]
+fn a_keyless_family_is_listed_by_time_then_name_and_refused_for_following() {
+    let dir = tempfile::tempdir().unwrap();
+    touch(dir.path(), "b.log");
+    touch(dir.path(), "a.log");
+    let older = std::time::SystemTime::now() - Duration::from_secs(60);
+    std::fs::File::options().write(true).open(dir.path().join("b.log")).unwrap().set_modified(older).unwrap();
+    let spec = FamilySpec::new(dir.path(), r"[ab]\.log", None, ActiveMode::NewestByOrder).unwrap();
+    let files = spec.resolve().unwrap();
+    assert_eq!(names(&files), ["b.log", "a.log"], "the older first, whatever the names");
+    assert!(files[1].is_active);
+    // The same time: the name decides.
+    std::fs::File::options().write(true).open(dir.path().join("a.log")).unwrap().set_modified(older).unwrap();
+    assert_eq!(names(&spec.resolve().unwrap()), ["a.log", "b.log"]);
+    // Following needs a key: refused by text, no worker started.
+    assert!(!spec.keyed());
+    let (mut set, _rx) = SourceSet::new();
+    let err = set.spawn(Box::new(FamilyTailSource::new("k", "keyless", spec, from_the_end()))).err().expect("refused").to_string();
+    assert_eq!(
+        err,
+        "family spec: the pattern has neither a `date` nor an `idx` group: a family is followed by its keys, and one without them has no rotation order to follow (a listing orders it by modification time, then name)"
+    );
+    assert!(set.handles().is_empty());
+}
+
+/// The emitter's hourly shape: an hour without its minutes reads back as the start of the hour,
+/// so the next hour outranks every index of the one before, and its first file is followed; a
+/// pattern whose date is not one run has no shape.
+#[test]
+fn an_hourly_shape_orders_the_hours_and_the_next_hour_is_followed() {
+    use chrono::TimeZone;
+    let dir = tempfile::tempdir().unwrap();
+    let pattern = "trace_%Y%m%d_%H_{n}.log";
+    let shape = family_shape(pattern).unwrap();
+    assert_eq!((shape.regex.as_str(), shape.date_format.as_str()), (r"trace_(?P<date>\d{4}\d{2}\d{2}_\d{2})_(?P<idx>\d+)\.log", "%Y%m%d_%H"));
+    let spec = FamilySpec::new(dir.path(), &shape.regex, Some(&shape.date_format), ActiveMode::NewestByOrder).unwrap();
+    let ten = chrono::Local.with_ymd_and_hms(2026, 11, 8, 10, 15, 0).unwrap();
+    let eleven = ten + chrono::Duration::minutes(50);
+    let at_ten: Vec<String> = (1..=3).map(|i| emit::file_name_for(pattern, &ten, i).unwrap()).collect();
+    let at_eleven = emit::file_name_for(pattern, &eleven, 1).unwrap();
+    let key = |n: &str| spec.parse_key(n).unwrap();
+    assert_eq!(key(&at_eleven).date, Some(chrono::NaiveDate::from_ymd_opt(2026, 11, 8).unwrap().and_hms_opt(11, 0, 0).unwrap()));
+    assert!(key(&at_eleven) > key(&at_ten[2]), "{:?} over {:?}", key(&at_eleven), key(&at_ten[2]));
+    for n in &at_ten {
+        std::fs::write(dir.path().join(n), format!("{n}\n")).unwrap();
+    }
+    assert_eq!(names(&spec.resolve().unwrap()), at_ten.iter().map(String::as_str).collect::<Vec<_>>());
+    // Followed from the end of the active ten o'clock file, the next hour's first file is read.
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FamilyTailSource::new("h", "hourly", spec, from_the_end()))).unwrap();
+    std::fs::write(dir.path().join(&at_eleven), "H11_1\n").unwrap();
+    assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap().line, "H11_1");
+    set.stop_all();
+    assert!(family_shape("%Y_x{n}_%m%d.log").is_none(), "two runs of date specifiers have no shape");
+}
+
+/// A name carries what it carries: a year alone is its first day, a month its first, so names of
+/// every granularity order on one axis with the full stamps.
+#[test]
+fn a_name_carries_what_it_carries_and_orders_with_the_full_stamps() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = |pattern: &str, fmt: &str, name: &str| {
+        FamilySpec::new(dir.path(), pattern, Some(fmt), ActiveMode::NewestByOrder).unwrap().parse_key(name).unwrap().date.unwrap()
+    };
+    let at = |y: i32, m: u32, d: u32, h: u32| chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap().and_hms_opt(h, 0, 0).unwrap();
+    assert_eq!(key(r"y(?P<date>\d{4})\.log", "%Y", "y2026.log"), at(2026, 1, 1, 0));
+    assert_eq!(key(r"m(?P<date>\d{6})\.log", "%Y%m", "m202611.log"), at(2026, 11, 1, 0));
+    assert_eq!(key(r"h(?P<date>\d{10})\.log", "%Y%m%d%H", "h2026110813.log"), at(2026, 11, 8, 13));
+    assert_eq!(key(r"s(?P<date>\d{12})\.log", "%Y%m%d%H%M", "s202611081345.log"), at(2026, 11, 8, 13) + chrono::Duration::minutes(45));
+}

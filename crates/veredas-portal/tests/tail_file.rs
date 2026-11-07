@@ -1105,3 +1105,28 @@ fn a_short_head_decided_on_its_own_line_feed_starts_clean_or_mid_line_as_it_ends
     assert_quiet(&rx, 100);
     set.stop_all();
 }
+
+// ---- the start's attach ------------------------------------------------------------------------
+
+/// A start returns once the worker has looked at the path, so a line written right after it is
+/// read, never taken as history. Found by the server's stream test, which wrote right after the
+/// session started and saw its lines skipped one run in three under load.
+#[test]
+fn a_start_returns_attached_so_a_line_written_right_after_is_read() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..30 {
+        let path = dir.path().join(format!("live-{i}.log"));
+        std::fs::write(&path, "history\n").unwrap();
+        let (set, rx) = tail(&path, FileStart::End);
+        append(&path, "new\n");
+        assert_eq!(recv_line(&rx), "new", "round {i}");
+        set.stop_all();
+    }
+    // Absent at the start: awaited, and read whole when it appears right after.
+    let late = dir.path().join("late").join("a.log");
+    let (set, rx) = tail(&late, FileStart::End);
+    std::fs::create_dir_all(late.parent().unwrap()).unwrap();
+    std::fs::write(&late, "born\n").unwrap();
+    assert_eq!(recv_line(&rx), "born");
+    set.stop_all();
+}

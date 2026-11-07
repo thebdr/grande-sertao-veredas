@@ -299,15 +299,10 @@ fn the_family_shape_describes_what_the_pattern_writes() {
     let shape = family_shape("a+b(%Y).log").unwrap();
     assert_eq!(shape.regex, "a\\+b\\((?P<date>\\d{4})\\)(?:_(?P<idx>\\d+))?\\.log");
     assert_eq!(shape.date_format, "%Y");
-    // A specifier beyond a longer literal is outside the date: digits of the name, not of the
-    // date (a format `%Y%m` would not parse `2026_T07`).
-    let shape = family_shape("%Y_T%m.log").unwrap();
-    assert_eq!(shape.regex, "(?P<date>\\d{4})_T\\d{2}(?:_(?P<idx>\\d+))?\\.log");
-    assert_eq!(shape.date_format, "%Y");
-    // The index between two specifiers ends the date too.
-    let shape = family_shape("%Y{n}%m.log").unwrap();
-    assert_eq!(shape.regex, "(?P<date>\\d{4})(?P<idx>\\d+)\\d{2}\\.log");
-    assert_eq!(shape.date_format, "%Y");
+    // A specifier beyond a longer literal, or beyond the index, would be outside the date: the
+    // reader could not read the date back whole, so such a pattern has no shape.
+    assert!(family_shape("%Y_T%m.log").is_none());
+    assert!(family_shape("%Y{n}%m.log").is_none());
     // A literal that is not ASCII stands for itself (an escaped `ç` is no regex); only the
     // metacharacters are escaped.
     let shape = family_shape("Medição_%Y%m%d_{n}.log").unwrap();
@@ -327,7 +322,6 @@ fn the_family_shape_describes_what_the_pattern_writes() {
         "log_%d.%m.%Y_{n}",
         "log_%d.%m.%Y",
         "%Y-%m-%d_%H%M.txt",
-        "%Y_T%m.log",
         "a+b(%Y).log",
         "%Y.backup2026",
         "Medição_%Y%m%d_{n}.log",
@@ -823,4 +817,17 @@ values = [ { name = "temp", low = 18.0, high = 24.0, decimals = 1 }, { name = "n
     assert!(err.contains("interval_ms"), "{err}");
     let err = toml::from_str::<EmitterConfig>(&text.replace("decimals = 1", "decimal = 1")).unwrap_err().to_string();
     assert!(err.contains("decimal"), "{err}");
+}
+
+/// A shape needs its date in one run of specifiers: an hour in the name is written and read back
+/// as the hour, and date specifiers split by other text have no shape, since the reader could not
+/// read the date back whole.
+#[test]
+fn a_shape_needs_its_date_in_one_run() {
+    let shape = family_shape("trace_%Y%m%d_%H_{n}.log").unwrap();
+    assert_eq!(shape.regex, "trace_(?P<date>\\d{4}\\d{2}\\d{2}_\\d{2})_(?P<idx>\\d+)\\.log");
+    assert_eq!(shape.date_format, "%Y%m%d_%H");
+    assert!(family_shape("%Y_x{n}_%m%d.log").is_none());
+    assert!(family_shape("%Y_log_%m%d.log").is_none());
+    assert!(family_shape("%d.%m.%Y_{n}").is_some(), "a separator inside the date is part of it");
 }

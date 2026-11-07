@@ -221,6 +221,13 @@ Recorded as the port meets them.
   then peeked each member; the fixed-name writer retired the active in between, the peek hit a
   file no longer there and the worker ended in error with no line emitted (one run in six). The
   locate lists again on a not-found peek, with patience.
+- **A line written before the attach is history** (C-035, C-036, found by the suite). A live start
+  attached on the worker thread; a test (or a plant) writing right after the start saw its lines
+  skipped, one run in three under load. The start returns once the path has been looked at.
+- **A family is followed by its keys** (C-036, round 1). A keyless pattern cannot be followed: no
+  rank holds against a straggler; it is listed by time and refused for following.
+- **An hour in a file name needs its minutes filled** (C-036, round 1). The date read back without
+  minutes was midnight for every hour; the reader fills them, and a shape is one run of specifiers.
 - **A wake channel with no sender spins the loop.** The watcher owned the wake channel's only
   sender; where the watcher could not be set up (a parent folder not there yet) the receiver
   read as disconnected and the wait returned at once, every tick, a full core. The loop keeps a

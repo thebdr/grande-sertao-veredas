@@ -54,11 +54,27 @@ impl Source for FileTailSource {
         let id = this.id.clone();
         let thread_stop = stop.clone();
         let emitter = Emitter::with_timestamps(this.id.clone(), tx, this.ts);
+        let (attached_tx, attached_rx) = channel::<()>();
         let join = std::thread::Builder::new()
             .name(format!("tail:{id}"))
-            .spawn(move || run(this.path, this.cfg, emitter, thread_stop))
+            .spawn(move || run(this.path, this.cfg, emitter, thread_stop, attached_tx))
             .map_err(|e| SourceError::io(Path::new("<thread spawn>"), e))?;
+        // The start returns once the worker has looked at its path: a file present is attached
+        // where the start says, an absent one awaited, so a line written after the start is
+        // never taken as history. Bounded: a path that cannot be looked at (a share away) is the
+        // worker's business, not the caller's.
+        let _ = attached_rx.recv_timeout(ATTACH_WAIT);
         Ok(SourceHandle::new(id, stop, join))
+    }
+}
+
+/// How long a start waits for its worker to look at the path before returning anyway.
+pub(crate) const ATTACH_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Tell the start that the worker has looked at its path, once.
+pub(crate) fn attached(slot: &mut Option<Sender<()>>) {
+    if let Some(tx) = slot.take() {
+        let _ = tx.send(());
     }
 }
 
@@ -81,7 +97,7 @@ pub(crate) fn wait_tick(wake: &Receiver<()>, interval: std::time::Duration) {
     }
 }
 
-fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBool>) -> Result<(), SourceError> {
+fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBool>, attached_tx: Sender<()>) -> Result<(), SourceError> {
     let (wake_tx, wake_rx) = channel::<()>();
     // Automatic mode arms the watcher for local paths alone: directory notifications are
     // unreliable over a share, where polling stays the one mechanism.
@@ -100,8 +116,11 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
         }
     };
 
-    let mut active: Option<TailedFile> = None;
-    let mut first_open = true;
+    // The first look, before the loop and before the start returns: present, the file is
+    // attached where the start says; absent, whatever appears later is new content.
+    let mut active: Option<TailedFile> = TailedFile::open(&path, cfg.start).ok();
+    let mut first_open = false;
+    attached(&mut Some(attached_tx));
 
     loop {
         if disconnected.get() {

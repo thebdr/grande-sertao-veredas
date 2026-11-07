@@ -151,6 +151,8 @@ pub fn snapshot(live: &Live) -> Json_ {
             "rows": c.rows,
             "failures": c.failures,
             "store_errors": c.store_errors,
+            "frames": c.frames,
+            "passes": c.passes,
             "last_error": c.last_error,
         });
     }

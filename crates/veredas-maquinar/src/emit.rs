@@ -363,6 +363,15 @@ pub fn family_shape(pattern: &str) -> Option<FamilyShape> {
             _ => break,
         }
     }
+    // The date is one run of specifiers (a separator between two is part of it) that carries a
+    // year: a second run, or a run with no year, could not be read back as one date the reader
+    // orders by, so such a pattern has no shape.
+    if pieces.iter().skip(last + 1).any(|p| matches!(p, Piece::Spec(..))) {
+        return None;
+    }
+    if !pieces[first..=last].iter().any(|p| matches!(p, Piece::Spec('Y' | 'y', _))) {
+        return None;
+    }
     let mut regex = String::new();
     let mut date_format = String::new();
     for (at, piece) in pieces.iter().enumerate() {

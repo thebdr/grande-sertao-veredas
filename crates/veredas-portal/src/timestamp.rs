@@ -16,6 +16,31 @@ pub(crate) fn parse_flexible(s: &str, fmt: &str) -> Option<NaiveDateTime> {
     if let Ok(dt) = NaiveDateTime::parse_from_str(s, fmt) {
         return Some(dt);
     }
+    // A name carries what it carries: a year alone is its first day, a month its first, an hour
+    // without minutes the start of the hour. The missing fields are filled with the first value,
+    // never guessed beyond that, so names of every granularity order on one axis.
+    let has = |f: &str, c: char| f.contains(&format!("%{c}"));
+    let (mut text, mut f) = (s.to_string(), fmt.to_string());
+    if (has(&f, 'Y') || has(&f, 'y')) && !has(&f, 'm') {
+        text.push_str(" 01");
+        f.push_str(" %m");
+    }
+    if has(&f, 'm') && !has(&f, 'd') {
+        text.push_str(" 01");
+        f.push_str(" %d");
+    }
+    if has(&f, 'H') && !has(&f, 'M') {
+        text.push_str(" 00");
+        f.push_str(" %M");
+    }
+    if f != fmt {
+        if let Ok(dt) = NaiveDateTime::parse_from_str(&text, &f) {
+            return Some(dt);
+        }
+        if let Ok(d) = NaiveDate::parse_from_str(&text, &f) {
+            return d.and_hms_opt(0, 0, 0);
+        }
+    }
     if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
         return d.and_hms_opt(0, 0, 0);
     }

@@ -35,7 +35,7 @@ use crate::source::{Emitter, LineEvent, Source, stop_flag};
 use crate::tail::FileStart;
 use crate::tail::backfill::locate_start;
 use crate::tail::cursor::{PathStatus, ReadStep, TailedFile};
-use crate::tail::single::{spawn_watcher, wait_tick};
+use crate::tail::single::{ATTACH_WAIT, attached, spawn_watcher, wait_tick};
 use crate::timestamp::TimestampSpec;
 
 /// Where a family tail starts.
@@ -108,6 +108,11 @@ impl Source for FamilyTailSource {
 
     fn start(self: Box<Self>, tx: Sender<LineEvent>) -> Result<SourceHandle, SourceError> {
         let this = *self;
+        if !this.spec.keyed() {
+            return Err(SourceError::Spec(
+                "the pattern has neither a `date` nor an `idx` group: a family is followed by its keys, and one without them has no rotation order to follow (a listing orders it by modification time, then name)".into(),
+            ));
+        }
         if matches!(this.cfg.start, FamilyStart::Backfill(_)) && this.ts.is_none() {
             return Err(SourceError::NotConfigured(
                 "a Backfill start point requires a timestamp spec (with_timestamps)".into(),
@@ -118,10 +123,14 @@ impl Source for FamilyTailSource {
         let thread_stop = stop.clone();
         let ts_spec = this.ts.clone();
         let emitter = Emitter::with_timestamps(this.id.clone(), tx, this.ts);
+        let (attached_tx, attached_rx) = channel::<()>();
         let join = std::thread::Builder::new()
             .name(format!("family:{id}"))
-            .spawn(move || run_family(this.spec, this.cfg, ts_spec, emitter, thread_stop))
+            .spawn(move || run_family(this.spec, this.cfg, ts_spec, emitter, thread_stop, attached_tx))
             .map_err(|e| SourceError::io(Path::new("<thread spawn>"), e))?;
+        // The start returns once the worker has looked at its folder (listed it, or located its
+        // backfill), so a line written after the start is never taken as history; bounded.
+        let _ = attached_rx.recv_timeout(ATTACH_WAIT);
         Ok(SourceHandle::new(id, stop, join))
     }
 }
@@ -348,6 +357,7 @@ enum BackfillAttach {
 /// seamless live continuation. The planned active may rotate while earlier files replay; both
 /// modes converge on the true active without losing the seek offset owed to the planned file's
 /// remains.
+#[allow(clippy::too_many_arguments)] // the attach has this many inputs; a struct would name them once more
 fn attach_backfill(
     spec: &FamilySpec,
     cfg: &FamilyTailConfig,
@@ -356,11 +366,17 @@ fn attach_backfill(
     stop: &AtomicBool,
     wake_rx: &Receiver<()>,
     emit: &mut dyn FnMut(String),
+    attached_slot: &mut Option<Sender<()>>,
 ) -> Result<BackfillAttach, SourceError> {
     let Some(ts) = ts else {
         return Err(SourceError::NotConfigured("a Backfill start point requires a timestamp spec".into()));
     };
-    let Some(plan) = locate_start(spec, ts, start_at)? else {
+    // Located (or found empty), the folder has been looked at: the start may return while the
+    // replay runs; the planned active is opened at its offset, so nothing written meanwhile is
+    // missed.
+    let located = locate_start(spec, ts, start_at);
+    attached(attached_slot);
+    let Some(plan) = located? else {
         return Ok(BackfillAttach::FamilyEmpty);
     };
 
@@ -484,7 +500,9 @@ fn run_family(
     ts: Option<TimestampSpec>,
     mut emitter: Emitter,
     stop: Arc<AtomicBool>,
+    attached_tx: Sender<()>,
 ) -> Result<(), SourceError> {
+    let mut attached_slot = Some(attached_tx);
     let (wake_tx, wake_rx) = channel::<()>();
     // Automatic mode arms the watcher for local paths alone: directory notifications are
     // unreliable over a share, where polling stays the one mechanism.
@@ -518,7 +536,7 @@ fn run_family(
     // the seam: the same handle, the exact offset, live from here.
     let mut backfilled: Option<(TailedFile, OrderKey, String)> = None;
     if let FamilyStart::Backfill(start_at) = cfg.start {
-        match attach_backfill(&spec, &cfg, ts.as_ref(), start_at, &stop, &wake_rx, &mut emit)? {
+        match attach_backfill(&spec, &cfg, ts.as_ref(), start_at, &stop, &wake_rx, &mut emit, &mut attached_slot)? {
             BackfillAttach::Stopped => return Ok(()),
             BackfillAttach::FamilyEmpty => preexisted = Some(false),
             BackfillAttach::Attached { cursor, key, name, known: consumed } => {
@@ -545,6 +563,8 @@ fn run_family(
             };
 
             if born {
+                // Born: nothing to attach to, everything that appears is new content.
+                attached(&mut attached_slot);
                 match spec.active_mode() {
                     ActiveMode::NewestByOrder => {
                         if files.is_empty() {
@@ -624,6 +644,8 @@ fn run_family(
             }
         },
     };
+    // Attached (the active open at its end or its beginning): the start may return.
+    attached(&mut attached_slot);
     let (mut cursor, mut current_key, mut current_name) = attach;
 
     // ---- live loop ---------------------------------------------------------------------------

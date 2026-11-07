@@ -259,6 +259,10 @@ pub struct Counters {
     /// Values that refused their type, and poll values that could not be mapped.
     pub failures: u64,
     pub store_errors: u64,
+    /// Data frames broadcast to the live stream.
+    pub frames: u64,
+    /// Passes of the pump, a liveness count.
+    pub passes: u64,
     pub last_error: Option<String>,
 }
 
@@ -941,7 +945,9 @@ impl Inner {
             if live.frames.receiver_count() > 0 {
                 for chunk in self.frame_buf.chunks(FRAME_SAMPLES) {
                     let frame = serde_json::json!({ "type": "data", "samples": chunk }).to_string();
-                    let _ = live.frames.send(Arc::from(frame));
+                    if live.frames.send(Arc::from(frame)).is_ok() {
+                        self.counters.frames += 1;
+                    }
                 }
             }
             self.frame_buf.clear();
@@ -1050,6 +1056,7 @@ impl Inner {
         if self.stopped {
             return 0;
         }
+        self.counters.passes += 1;
         let lines = self.pump_lines(live);
         let polls = self.pump_opc();
         let messages = self.pump_channels();

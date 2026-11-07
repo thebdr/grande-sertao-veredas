@@ -297,8 +297,22 @@ fn the_live_stream_says_hello_then_carries_every_numeric_sample() {
             break;
         }
         assert!(Instant::now() < deadline, "timed out waiting for the stream:\n{text}");
-        let n = s.read(&mut chunk).unwrap_or_else(|e| panic!("{e}; lines {} rows {} receivers {}; received so far:
-{text}", live.counters.read().unwrap().lines, total(&live, "readings"), live.frames.receiver_count()));
+        let n = s.read(&mut chunk).unwrap_or_else(|e| {
+            // Diagnostics for a stall: what the ingest saw, and the file as the folder lists it
+            // and as it reads back.
+            let by_path = std::fs::metadata(&log).map(|m| m.len()).unwrap_or(0);
+            let back = std::fs::read_to_string(&log).map(|t| t.lines().count()).unwrap_or(0);
+            let c = live.counters.read().unwrap().clone();
+            let health = live.health.read().unwrap().get("log").map(|h| (h.state.clone(), h.count));
+            panic!(
+                "{e}; lines {} rows {} frames {} receivers {} passes {} health {health:?}; the file by path {by_path} bytes, {back} lines read back; received so far:\n{text}",
+                c.lines,
+                total(&live, "readings"),
+                c.frames,
+                live.frames.receiver_count(),
+                c.passes
+            )
+        });
         assert!(n > 0, "the server closed the stream early");
         buf.extend_from_slice(&chunk[..n]);
     }
