@@ -1,0 +1,24 @@
+{
+  "clause": "C-038",
+  "command": "cargo test -p veredas-portal --test capture",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-portal",
+    "--test",
+    "capture"
+  ],
+  "exitCode": 0,
+  "outputSha": "49ca376527b8b953ad68ad8a03df1a130cb0295c09aa52180b2582629a35b960",
+  "outputTail": "test a_successful_format_stays_preferred_for_the_stream ... ok\ntest construction_refuses_a_bad_pattern_no_groups_and_an_unknown_key_group_by_name ... ok\ntest a_value_refusing_its_type_is_counted_and_the_rest_of_the_line_lands ... ok\ntest a_named_group_locates_the_stamp_and_the_whole_match_is_the_fallback ... ok\ntest formats_are_tried_in_order_and_fractions_and_dates_alone_parse ... ok\ntest an_absent_optional_group_emits_nothing_and_counts_no_failure ... ok\ntest typed_groups_become_samples_carrying_the_key_and_every_ordering_signal ... ok\ntest the_key_is_carried_even_when_every_value_fails_and_an_absent_key_is_none ... ok\ntest named_groups_are_listed_in_pattern_order_and_empty_for_a_bad_or_groupless_pattern ... ok\n\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.45s\n     Running tests\\capture.rs (target\\debug\\deps\\capture-476c9ecfa66a120f.exe)",
+  "ranAt": "2026-11-07T20:54:51.724Z",
+  "headCommit": "94dd381d9e3704551423fe9627473bf33ba5f73f",
+  "tests": [
+    {
+      "name": "crates/veredas-portal/tests/capture.rs",
+      "file": "crates/veredas-portal/tests/capture.rs",
+      "fileSha": "06b16879fbb808a0937cc83c78d9d424bcafb38d891b269403269bdf087bf89b"
+    }
+  ]
+}

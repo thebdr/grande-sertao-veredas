@@ -1,0 +1,29 @@
+{
+  "clause": "C-034",
+  "command": "cargo test -p veredas-portal --test component",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-portal",
+    "--test",
+    "component"
+  ],
+  "exitCode": 0,
+  "outputSha": "05613ccc00a7fcbe3d5056ca2b8cf416c0363a09e8de004f81b990faefd67584",
+  "outputTail": "\nrunning 5 tests\ntest the_gateway_names_no_vendor_and_cites_no_vendor_document ... ok\ntest the_gateway_is_one_library_and_at_most_one_executable ... ok\ntest the_light_build_carries_no_database_no_server_no_desktop_and_no_member_but_core ... ok\ntest the_check_allows_one_named_binary_and_refuses_every_other_executable ... ok\ntest the_graph_walk_follows_normal_and_build_edges_and_skips_dev_ones ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.91s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.80s\n     Running tests\\component.rs (target\\debug\\deps\\component-e49b5faa667d987f.exe)",
+  "ranAt": "2026-11-07T20:56:20.670Z",
+  "headCommit": "0df085af6fb0ea5956385d3395fa76149d16b8b0",
+  "tests": [
+    {
+      "name": "crates/veredas-portal/tests/component.rs",
+      "file": "crates/veredas-portal/tests/component.rs",
+      "fileSha": "49e97f27d48f9abc78bd7d6452bf4e14faab877b1a1b5339cd4868ad7c2b8ff1"
+    },
+    {
+      "name": "tools/leis/tests/real_tree.rs",
+      "file": "tools/leis/tests/real_tree.rs",
+      "fileSha": "1d0099b3c3b1a8ed9531a55c85d6bb7c17c72dce5443d2c1054a5fd589d7c839"
+    }
+  ]
+}

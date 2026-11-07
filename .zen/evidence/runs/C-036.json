@@ -1,0 +1,24 @@
+{
+  "clause": "C-036",
+  "command": "cargo test -p veredas-portal --test tail_family",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-portal",
+    "--test",
+    "tail_family"
+  ],
+  "exitCode": 0,
+  "outputSha": "5e047e5da80d948ced774d7012052ee79f131aa905772b6db88fc88330b792f3",
+  "outputTail": "test fixed_name_clean_rotation_loses_nothing ... ok\ntest indexed_clean_rotation_loses_nothing ... ok\ntest the_bench_emitter_rotating_on_a_line_count_is_followed_whole_in_utf8 ... ok\ntest the_bench_emitter_rotating_on_a_line_count_is_followed_whole_in_utf16 ... ok\ntest fixed_name_straggler_into_the_renamed_file_loses_nothing ... ok\ntest a_family_born_after_attach_is_captured_whole_in_both_modes ... ok\ntest fixed_name_generation_bursts_lose_nothing ... ok\ntest indexed_straggler_and_split_writes_lose_nothing ... ok\ntest indexed_generation_bursts_faster_than_the_rescan_lose_nothing ... ok\n\ntest result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.93s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.28s\n     Running tests\\tail_family.rs (target\\debug\\deps\\tail_family-b8c1c64325ede0c7.exe)",
+  "ranAt": "2026-11-07T20:54:40.457Z",
+  "headCommit": "94dd381d9e3704551423fe9627473bf33ba5f73f",
+  "tests": [
+    {
+      "name": "crates/veredas-portal/tests/tail_family.rs",
+      "file": "crates/veredas-portal/tests/tail_family.rs",
+      "fileSha": "7497b4b90189acae39ac22dbfb3704383f3e7a6fc98502204ad7205921185e74"
+    }
+  ]
+}
