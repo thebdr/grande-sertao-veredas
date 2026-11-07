@@ -144,6 +144,7 @@ fn a_channel_in_either_role_speaks_the_catalog_and_the_monitor_shows_what_came_a
     // shows going out (one snapshot), and no line, out here or in at the peer, carries the long
     // value.
     let l = listener.status();
+    assert!(l.recent.len() < RECENT, "the monitor still holds every line, so its lines out are the count: {}", l.recent.len());
     assert_eq!(l.sent.get("status").copied().unwrap_or(0), l.recent.iter().filter(|x| x.direction == Direction::Out && x.message == "status").count() as u64, "{:?}", l.sent);
     assert!(l.sent.get("status").copied().unwrap_or(0) <= before + 1, "the cyclic status line may have gone meanwhile, the long one never");
     assert!(l.recent.iter().any(|x| x.direction == Direction::Note && x.preview == "status not sent: length = 70012 does not fit its 2-byte field"));
@@ -244,6 +245,9 @@ fn in_a_layout_without_segments_the_id_rides_in_the_envelope() {
     let listener = start(with_t("plant", listen(port))).unwrap();
     let dialer = start(with_t("unit", dial(port))).unwrap();
     linked(&listener, &dialer);
+    // The keep-alive the listener sends on connect lands after the link shows: wait for it, so
+    // the baseline counts it and only a keep-alive for the empty body could move the count.
+    assert!(wait(Duration::from_secs(2), || dialer.status().wire.keepalives_received >= 1), "{:?}", dialer.status().wire);
     let keepalives = dialer.status().wire.keepalives_received;
     listener.send_now("t", values(&[("t", "")]), None);
     assert!(wait(Duration::from_secs(2), || listener.status().last_error.as_deref() == Some("t: an empty body is a keep-alive in a layout without segments")), "{:?}", listener.status().last_error);
