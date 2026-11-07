@@ -10,15 +10,15 @@
     "bench_file"
   ],
   "exitCode": 0,
-  "outputSha": "bf95059cffd70a15f4997ad2d1c83d750129f282de4012653f9d50f89e79b6d3",
-  "outputTail": "running 8 tests\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_header_is_refused_four_ways_and_a_misspelled_key_in_any_table ... ok\ntest the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest every_invalid_bench_is_refused_with_its_place_named_before_anything_starts ... ok\ntest the_documented_bench_loads_starts_and_every_part_does_its_work ... ok\ntest the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own ... ok\ntest the_executable_checks_and_runs_a_bench_file ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.42s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.86s\n     Running tests\\bench_file.rs (target\\debug\\deps\\bench_file-076c73deee41788e.exe)",
-  "ranAt": "2026-11-07T19:23:08.010Z",
-  "headCommit": "5d304b426ebe4688061c0571e9de66f7ae2db794",
+  "outputSha": "4dd95750f7d52777382c9e33ff49d8553499ee5bf8df7835bfdbee785da82066",
+  "outputTail": "running 8 tests\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_header_is_refused_four_ways_and_a_misspelled_key_in_any_table ... ok\ntest the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order ... ok\ntest every_invalid_bench_is_refused_with_its_place_named_before_anything_starts ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest the_documented_bench_loads_starts_and_every_part_does_its_work ... ok\ntest the_executable_checks_and_runs_a_bench_file ... ok\ntest the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.16s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.60s\n     Running tests\\bench_file.rs (target\\debug\\deps\\bench_file-076c73deee41788e.exe)",
+  "ranAt": "2026-11-07T19:26:48.968Z",
+  "headCommit": "dafca116b46aa3d410cc2c5df5bf5460fceb2d45",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/bench_file.rs",
       "file": "crates/veredas-maquinar/tests/bench_file.rs",
-      "fileSha": "4ecd735a16c085f596d1d5cdd4ff952e25cb899c821582fe13d6c3b64df461a9"
+      "fileSha": "54988d8f94b3c753bde1316fa57b3470679ab173157d9d3a34f5bcefb46a820e"
     }
   ]
 }
