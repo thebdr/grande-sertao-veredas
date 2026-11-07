@@ -10,15 +10,15 @@
     "channels"
   ],
   "exitCode": 0,
-  "outputSha": "03e0e261554bad81834662eaef96da5ee1ea236e3960aa05cd2805476e712e15",
-  "outputTail": "\nrunning 4 tests\ntest in_a_layout_without_segments_the_id_rides_in_the_envelope ... ok\ntest what_the_catalog_cannot_read_is_counted_and_shown_not_decoded ... ok\ntest a_channel_in_either_role_speaks_the_catalog_and_the_monitor_shows_what_came_and_went ... ok\ntest a_channel_refuses_a_configuration_it_cannot_speak_and_reports_a_port_it_cannot_take ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.36s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s\n     Running tests\\channels.rs (target\\debug\\deps\\channels-0d86a3e09d84c7cc.exe)",
-  "ranAt": "2026-11-07T18:21:50.685Z",
-  "headCommit": "8cbc70490f4e6f1edc359dd7876a5f3e9c05b203",
+  "outputSha": "5db2936008f95a78176d38e960c0254db16bfbb3f0c528a4f432973b7f9dbbff",
+  "outputTail": "\nrunning 4 tests\ntest what_the_catalog_cannot_read_is_counted_and_shown_not_decoded ... ok\ntest in_a_layout_without_segments_the_id_rides_in_the_envelope ... ok\ntest a_channel_in_either_role_speaks_the_catalog_and_the_monitor_shows_what_came_and_went ... ok\ntest a_channel_refuses_a_configuration_it_cannot_speak_and_reports_a_port_it_cannot_take ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.30s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.09s\n     Running tests\\channels.rs (target\\debug\\deps\\channels-0d86a3e09d84c7cc.exe)",
+  "ranAt": "2026-11-07T18:25:21.111Z",
+  "headCommit": "f75f3b6871fb76b9359fc45ccdee9cec42e53bf1",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/channels.rs",
       "file": "crates/veredas-maquinar/tests/channels.rs",
-      "fileSha": "cc9fc9f63a20cb4e60a02715125a9d47dfd5ef00f9b254371775cec7f15b1e7d"
+      "fileSha": "1f8f2c99402ca52200f0aeac1899a3fba025c8e5d666b5ccf967ac6980d11f27"
     }
   ]
 }
