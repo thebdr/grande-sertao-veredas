@@ -1,13 +1,13 @@
 {
   "clause": "C-030",
   "verdict": "holds",
-  "ranAt": "2026-11-07T19:07:40.587Z",
-  "headCommit": "340781cd916d28d8cd4799ef1102ae8ac4e8f784",
+  "ranAt": "2026-11-07T19:15:19.524Z",
+  "headCommit": "572958f9dd32522a6fa11206400ca56d748d1c2e",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/controller_rules.rs",
       "file": "crates/veredas-maquinar/tests/controller_rules.rs",
-      "symbolSha": "b028c928a844b9fce9200e31595391e91e9f127f0b53f322c43c281265e4f8a9"
+      "symbolSha": "27e4857425e333dad32cc7afe3b115b8b5a0c4da67581a905052ea3fc154da8d"
     }
   ]
 }
