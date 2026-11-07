@@ -1,0 +1,18 @@
+{
+  "clause": "C-034",
+  "verdict": "holds",
+  "ranAt": "2026-11-07T21:19:53.327Z",
+  "headCommit": "d3891362a0547666cb389a7de286e59298b63083",
+  "tests": [
+    {
+      "name": "crates/veredas-portal/tests/component.rs",
+      "file": "crates/veredas-portal/tests/component.rs",
+      "symbolSha": "335622771a6705de832342d7c34d424b2293950004ad258fec9ec5eb03762f72"
+    },
+    {
+      "name": "tools/leis/tests/real_tree.rs",
+      "file": "tools/leis/tests/real_tree.rs",
+      "symbolSha": "1d0099b3c3b1a8ed9531a55c85d6bb7c17c72dce5443d2c1054a5fd589d7c839"
+    }
+  ]
+}
