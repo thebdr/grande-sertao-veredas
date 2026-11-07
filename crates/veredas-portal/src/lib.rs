@@ -11,11 +11,13 @@
 //!   or duplicated; a start point in the past replayed and handed off live.
 //! - [`source`]: the line-producing worker model: a merged, tagged stream of every source.
 //! - [`capture`]: a line read into typed series by a regex rule.
+//! - [`channel`]: a telegram channel to a device, by a channel file, a catalog and reply rules.
 //!
 //! Nothing here names a device, a vendor or a product: what a plant's files and telegrams mean
 //! is configuration (`docs/questions.md` Q8). Reading a plant's file never blocks its writer.
 
 pub mod capture;
+pub mod channel;
 pub mod encoding;
 pub mod family;
 pub mod source;

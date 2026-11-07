@@ -23,6 +23,8 @@ memchr = { workspace = true }
 notify = { workspace = true }
 # Capture rules and family patterns are regexes.
 regex = { workspace = true }
+# Reply rules are configuration, read from plain text.
+serde = { workspace = true }
 # A file's identity (volume and index), so a renamed file is still the one being read.
 same-file = { workspace = true }
 thiserror = { workspace = true }
