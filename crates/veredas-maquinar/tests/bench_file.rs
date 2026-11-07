@@ -645,7 +645,8 @@ fn the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own() {
     assert_eq!(w1, first_weights(7, "seedm2"), "the rules file says seed 7 too, but the bench's seed is the one used");
     assert_ne!(w1, first_weights(8, "seedm3"));
     // A channel's own messages draw from the bench's seed too: a status line with a drawn
-    // speed every 50 ms, read by a peer the test holds.
+    // speed every 300 ms (a margin for the dial: a draw before the peer is there would shift
+    // what it sees), read by a peer the test holds.
     let speeds = |seed: u64, tag: &str| -> Vec<String> {
         let dir = scratch(tag);
         let (_, port) = plant(&dir);
@@ -660,7 +661,7 @@ fn the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own() {
         })
         .unwrap();
         let text = format!(
-            "{}seed = {seed}\n[[channel]]\nname = \"mouth\"\nrole = \"connect\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\nmessages = [ {{ message = \"status\", every_ms = 50, fields = [ {{ name = \"running\", value = 1 }}, {{ name = \"speed\", range = [0, 1000000] }} ] }} ]\n",
+            "{}seed = {seed}\n[[channel]]\nname = \"mouth\"\nrole = \"connect\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\nmessages = [ {{ message = \"status\", every_ms = 300, fields = [ {{ name = \"running\", value = 1 }}, {{ name = \"speed\", range = [0, 1000000] }} ] }} ]\n",
             header()
         );
         let bench = Bench::start(load(&text, &dir).unwrap()).unwrap();
