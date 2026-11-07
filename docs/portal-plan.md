@@ -217,6 +217,10 @@ Recorded as the port meets them.
   is also a CP1252 letter; taking it for a torn mark let text from before the attach open the
   first line. The skip is decided once the encoding is, and a NUL beside a line feed in the first
   bytes waits for the UTF-16 pattern instead of taking the line-feed shortcut.
+- **A locate must survive a rotation** (C-037, found by the suite). The backfill listed the family,
+  then peeked each member; the fixed-name writer retired the active in between, the peek hit a
+  file no longer there and the worker ended in error with no line emitted (one run in six). The
+  locate lists again on a not-found peek, with patience.
 - **A wake channel with no sender spins the loop.** The watcher owned the wake channel's only
   sender; where the watcher could not be set up (a parent folder not there yet) the receiver
   read as disconnected and the wait returned at once, every tick, a full core. The loop keeps a

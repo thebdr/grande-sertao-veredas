@@ -12,7 +12,7 @@ use std::time::Duration;
 use chrono::NaiveDateTime;
 use common::{FamilyWriter, NamingScheme, RotateStyle, collect_until};
 use veredas_portal::encoding::DetectedEncoding;
-use veredas_portal::tail::{line_table, plan_for};
+use veredas_portal::tail::{line_table, plan_for, plan_for_with};
 use veredas_portal::{
     ActiveMode, FamilySpec, FamilyStart, FamilyTailConfig, FamilyTailSource, LineEvent, SourceError, SourceSet,
     TimestampSpec,
@@ -330,4 +330,49 @@ fn a_backfill_into_an_empty_family_reads_whatever_is_born_whole() {
     let events = collect_until(&rx, DONE, Duration::from_secs(30));
     set.stop_all();
     assert_seamless("seam/born", &events, 0, 49);
+}
+
+/// The writer rotates while the backfill locates its start: the active file, listed as
+/// `current.log`, is retired into the pattern before it is peeked. The locate lists again and
+/// plans the family as it now is, instead of ending the worker on a file that is no longer there
+/// (found by the fixed-name seam test, which met the race one run in six).
+#[test]
+fn a_rotation_during_the_locate_is_listed_again_never_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let writer =
+        write_history(dir.path(), NamingScheme::Fixed { active: "current.log".into(), retired_prefix: "done_".into() }, 700, 400);
+    assert!(writer.generations_finished() >= 3);
+    let spec = FamilySpec::new(dir.path(), r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    // The plan at rest: the file holding line 150 at its offset, through the active.
+    let (rest_files, rest_offset, _) = plan_for(&spec, &ts_spec(), stamp(150)).unwrap().unwrap();
+    assert_eq!(rest_files.last().map(String::as_str), Some("current.log"));
+    // The next retired name the writer would use.
+    let next = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter_map(|n| n.strip_prefix("done_")?.strip_suffix(".log")?.parse::<u64>().ok())
+        .max()
+        .unwrap()
+        + 1;
+    let retired = format!("done_{next}.log");
+    let mut rotated = false;
+    let (files, offset, _) = plan_for_with(&spec, &ts_spec(), stamp(150), &mut |path| {
+        if !rotated && path.file_name().is_some_and(|n| n == "current.log") {
+            // Retired between the listing and its peek, the fresh active not born yet: the peek
+            // finds nothing at the path it was given.
+            std::fs::rename(dir.path().join("current.log"), dir.path().join(&retired)).unwrap();
+            rotated = true;
+        }
+    })
+    .unwrap()
+    .unwrap();
+    assert!(rotated, "the hook never saw the active file");
+    // The same start in the same file, and the retired generation planned under its new name as
+    // the last file: the fresh active is not there to plan.
+    assert_eq!(offset, rest_offset);
+    let mut expected = rest_files.clone();
+    expected.pop();
+    expected.push(retired.clone());
+    assert_eq!(files, expected);
+    writer.finish();
 }

@@ -12,7 +12,7 @@ mod pathkind;
 mod single;
 
 #[doc(hidden)]
-pub use backfill::{line_table, plan_for};
+pub use backfill::{line_table, plan_for, plan_for_with};
 pub use family::{FamilyStart, FamilyTailConfig, FamilyTailSource};
 pub use pathkind::{PathKind, classify};
 pub use single::FileTailSource;

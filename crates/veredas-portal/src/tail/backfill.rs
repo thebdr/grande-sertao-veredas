@@ -12,6 +12,7 @@
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use chrono::NaiveDateTime;
 use memchr::memchr_iter;
@@ -181,12 +182,46 @@ pub(crate) fn scan_start_offset(
     Ok(len)
 }
 
+/// How long a locate keeps listing again through rotations before it gives up.
+const LOCATE_PATIENCE: Duration = Duration::from_millis(500);
+
 /// Build the replay plan for `start`. `None` when the family has no members (nothing to
 /// backfill; live tailing decides what to do with whatever appears later).
 pub(crate) fn locate_start(
     spec: &FamilySpec,
     ts: &TimestampSpec,
     start: NaiveDateTime,
+) -> Result<Option<BackfillPlan>, SourceError> {
+    locate_start_with(spec, ts, start, &mut |_| {})
+}
+
+/// `locate_start` with a hook before every peek, for a test that rotates the family mid-locate.
+pub(crate) fn locate_start_with(
+    spec: &FamilySpec,
+    ts: &TimestampSpec,
+    start: NaiveDateTime,
+    before_peek: &mut dyn FnMut(&Path),
+) -> Result<Option<BackfillPlan>, SourceError> {
+    let deadline = Instant::now() + LOCATE_PATIENCE;
+    loop {
+        match locate_once(spec, ts, start, before_peek) {
+            // A member renamed away between the listing and its peek: a rotation during the
+            // locate, the fixed-name mode above all (its active retires under a new name). The
+            // listing is taken again; a family that never holds still for one listing runs the
+            // patience out and the error stands.
+            Err(SourceError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            other => return other,
+        }
+    }
+}
+
+fn locate_once(
+    spec: &FamilySpec,
+    ts: &TimestampSpec,
+    start: NaiveDateTime,
+    before_peek: &mut dyn FnMut(&Path),
 ) -> Result<Option<BackfillPlan>, SourceError> {
     let files = spec.resolve()?;
     if files.is_empty() {
@@ -206,7 +241,11 @@ pub(crate) fn locate_start(
         }
     }
 
-    let peeks: Vec<FilePeek> = candidates.iter().map(|&i| peek_span(&files[i].path, ts)).collect::<Result<_, _>>()?;
+    let mut peeks: Vec<FilePeek> = Vec::with_capacity(candidates.len());
+    for &i in &candidates {
+        before_peek(&files[i].path);
+        peeks.push(peek_span(&files[i].path, ts)?);
+    }
 
     let any_line_ts = peeks.iter().any(|p| p.first_ts.is_some() || p.last_ts.is_some());
 
@@ -264,6 +303,12 @@ pub type PlanView = (Vec<String>, u64, Vec<String>);
 #[doc(hidden)]
 pub fn plan_for(spec: &FamilySpec, ts: &TimestampSpec, start: NaiveDateTime) -> Result<Option<PlanView>, SourceError> {
     Ok(locate_start(spec, ts, start)?.map(|p| (p.files.iter().map(|f| f.name.clone()).collect(), p.first_offset, p.skipped)))
+}
+
+/// The plan, for a test that rotates the family before a peek.
+#[doc(hidden)]
+pub fn plan_for_with(spec: &FamilySpec, ts: &TimestampSpec, start: NaiveDateTime, before_peek: &mut dyn FnMut(&Path)) -> Result<Option<PlanView>, SourceError> {
+    Ok(locate_start_with(spec, ts, start, before_peek)?.map(|p| (p.files.iter().map(|f| f.name.clone()).collect(), p.first_offset, p.skipped)))
 }
 
 /// The raw line table, for a test: (offset, content) per line.
