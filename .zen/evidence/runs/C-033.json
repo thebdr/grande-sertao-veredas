@@ -10,15 +10,15 @@
     "bench_file"
   ],
   "exitCode": 0,
-  "outputSha": "084b55abaebeda42f0f91eef184a3f24ad103412e41330eb8f07e8322488640d",
-  "outputTail": "\nrunning 6 tests\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_header_is_refused_four_ways_and_a_misspelled_key_in_any_table ... ok\ntest every_invalid_bench_is_refused_with_its_place_named_before_anything_starts ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest the_documented_bench_loads_starts_and_every_part_does_its_work ... ok\ntest the_executable_checks_and_runs_a_bench_file ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.87s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s\n     Running tests\\bench_file.rs (target\\debug\\deps\\bench_file-076c73deee41788e.exe)",
-  "ranAt": "2026-11-07T18:22:00.343Z",
-  "headCommit": "8cbc70490f4e6f1edc359dd7876a5f3e9c05b203",
+  "outputSha": "88ee99446fcd705a3c1a5df9e07a3a729f458c4ce11a7871f8ee9c8ed622e624",
+  "outputTail": "running 8 tests\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_header_is_refused_four_ways_and_a_misspelled_key_in_any_table ... ok\ntest every_invalid_bench_is_refused_with_its_place_named_before_anything_starts ... ok\ntest the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own ... ok\ntest the_documented_bench_loads_starts_and_every_part_does_its_work ... ok\ntest the_executable_checks_and_runs_a_bench_file ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.02s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.80s\n     Running tests\\bench_file.rs (target\\debug\\deps\\bench_file-076c73deee41788e.exe)",
+  "ranAt": "2026-11-07T19:20:03.460Z",
+  "headCommit": "d8a0763d8830c07a36e1bfd2930e952033491fc3",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/bench_file.rs",
       "file": "crates/veredas-maquinar/tests/bench_file.rs",
-      "fileSha": "da1c9743810be2935720afe8d3f016d61e0ae1eb7bc32ddfd1ac2c1c80fc3997"
+      "fileSha": "cab8991c199453bf2ac6579eca57848b00ef7d0139942be1de45a5fe4ae9c436"
     }
   ]
 }

@@ -1,0 +1,13 @@
+{
+  "clause": "C-032",
+  "verdict": "holds",
+  "ranAt": "2026-11-07T19:20:04.001Z",
+  "headCommit": "d8a0763d8830c07a36e1bfd2930e952033491fc3",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/pressure.rs",
+      "file": "crates/veredas-maquinar/tests/pressure.rs",
+      "symbolSha": "25cd2561bdefa5fb87d53bfde57bbb4fd592f0c6d13c0ebf28836c68bbbdf819"
+    }
+  ]
+}
