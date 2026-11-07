@@ -681,6 +681,11 @@ fn every_invalid_file_is_refused_with_its_place_named() {
     assert!(load(&format!("{h}[destinations]\nlist = [1]\nbits = {{ full = 1 }}\nblocking = [ {{ bit = \"full\" }} ]\n"), &catalog()).is_ok(), "a blocking bit forcing nothing needs no outcome");
     // A whole range stays within the 64-bit integers a draw takes.
     assert_eq!(refused(&field("range = [1e300, 1e300]")), "items.fields[0] (`item`): the range 1e300..=1e300 reaches outside the 64-bit integers a whole draw takes");
+    assert_eq!(refused(&field("range = [-1e300, -1e300]")), "items.fields[0] (`item`): the range -1e300..=-1e300 reaches outside the 64-bit integers a whole draw takes");
+    let top = 9223372036854775808.0_f64;
+    assert_eq!(refused(&field("range = [9223372036854775808.0, 9223372036854775808.0]")), format!("items.fields[0] (`item`): the range {top:e}..={top:e} reaches outside the 64-bit integers a whole draw takes"), "2^63 is one past the largest");
+    assert!(load(&field("range = [-9223372036854775808.0, -9223372036854775808.0]"), &catalog()).is_ok(), "-2^63 is the smallest");
+    assert!(load(&field("range = [3e9, 3e9]"), &catalog()).is_ok(), "past 32 bits, within 64");
     assert!(load(&field("range = [1e300, 1e300], decimals = 1"), &catalog()).is_ok());
     assert_eq!(refused(&items("fields = [ { name = \" x \", value = 1 } ]\n")), "items.fields[0]: the name ` x ` has surrounding whitespace");
     assert_eq!(refused(&with("faults = [ { name = \" f \", set = {} } ]\n")), "items.faults[0]: the name ` f ` has surrounding whitespace");

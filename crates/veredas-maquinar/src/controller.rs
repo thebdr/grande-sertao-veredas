@@ -501,7 +501,8 @@ impl Fields {
                 if s.decimals == 0 && low.ceil() > high.floor() {
                     return Err(invalid(format!("{where_}: the range {low}..={high} holds no whole number")));
                 }
-                if s.decimals == 0 && (low.ceil() < i64::MIN as f64 || high.floor() > i64::MAX as f64) {
+                // `i64::MAX as f64` is 2^63, one past the largest integer: the top is excluded.
+                if s.decimals == 0 && (low.ceil() < i64::MIN as f64 || high.floor() >= i64::MAX as f64) {
                     return Err(invalid(format!("{where_}: the range {low:e}..={high:e} reaches outside the 64-bit integers a whole draw takes")));
                 }
                 Source::Range { low, high, decimals: s.decimals }
