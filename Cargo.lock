@@ -1883,6 +1883,7 @@ dependencies = [
  "notify",
  "regex",
  "same-file",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror",
