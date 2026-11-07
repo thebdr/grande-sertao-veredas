@@ -10,15 +10,15 @@
     "controller"
   ],
   "exitCode": 0,
-  "outputSha": "b2309a3efbe8218ed2e87ba862df8444e390ebb04084aa3f376e37dadbb74ccd",
-  "outputTail": "running 8 tests\ntest the_dispositions_requeue_park_or_deliver_and_a_lap_brings_an_item_round_again ... ok\ntest the_machine_announces_awaits_the_answer_and_reports_the_outcome_tick_by_tick ... ok\ntest the_unit_answers_with_a_decision_sticky_by_code_and_avoiding_what_is_blocked ... ok\ntest commands_set_registers_the_gate_stops_the_announcements_and_cyclic_messages_read_them ... ok\ntest a_destination_s_state_forces_the_outcome_and_the_bench_s_knobs_set_it ... ok\ntest the_outcome_is_drawn_from_the_mix_by_weight ... ok\ntest faults_mark_their_share_of_items_and_the_rate_is_the_interval_s_whatever_the_tick ... ok\ntest the_machine_and_the_unit_converse_over_a_real_socket_and_the_knobs_turn_live ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.65s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.15s\n     Running tests\\controller.rs (target\\debug\\deps\\controller-976db2a3088943c4.exe)",
-  "ranAt": "2026-11-07T19:03:19.747Z",
-  "headCommit": "d2df415cd260c279ac7d4652a01294ab5ecadee6",
+  "outputSha": "5c1068f4ed0c5874424fee8789236ffe07324bcfd327fdab497882e44c080040",
+  "outputTail": "running 8 tests\ntest the_dispositions_requeue_park_or_deliver_and_a_lap_brings_an_item_round_again ... ok\ntest the_machine_announces_awaits_the_answer_and_reports_the_outcome_tick_by_tick ... ok\ntest the_unit_answers_with_a_decision_sticky_by_code_and_avoiding_what_is_blocked ... ok\ntest commands_set_registers_the_gate_stops_the_announcements_and_cyclic_messages_read_them ... ok\ntest a_destination_s_state_forces_the_outcome_and_the_bench_s_knobs_set_it ... ok\ntest the_outcome_is_drawn_from_the_mix_by_weight ... ok\ntest faults_mark_their_share_of_items_and_the_rate_is_the_interval_s_whatever_the_tick ... ok\ntest the_machine_and_the_unit_converse_over_a_real_socket_and_the_knobs_turn_live ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.79s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.42s\n     Running tests\\controller.rs (target\\debug\\deps\\controller-976db2a3088943c4.exe)",
+  "ranAt": "2026-11-07T19:12:04.375Z",
+  "headCommit": "bf3e2bd4f671e3eff5d48241f7308405f4881c96",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/controller.rs",
       "file": "crates/veredas-maquinar/tests/controller.rs",
-      "fileSha": "78553453bfe67f6f8773e107aa10f5950237f7bd0cae578cf20d30e7f7b05915"
+      "fileSha": "ddd1ccf5d882bb0363b9b5aeb4bcdbd679e88003ee3e5f2b981cb53d51549362"
     }
   ]
 }

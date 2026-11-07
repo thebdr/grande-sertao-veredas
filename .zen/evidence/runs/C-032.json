@@ -10,10 +10,10 @@
     "pressure"
   ],
   "exitCode": 0,
-  "outputSha": "3df760e5e82b881a9233d237f7337a098b7416ef55a76e723cad8534b3f1748a",
-  "outputTail": "\nrunning 1 test\ntest the_rate_the_faults_the_full_chutes_and_the_no_reads_are_turned_live_and_measured_on_the_wire ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.50s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s\n     Running tests\\pressure.rs (target\\debug\\deps\\pressure-695281ea94d6a85b.exe)",
-  "ranAt": "2026-11-06T14:45:15.381Z",
-  "headCommit": "bdbd036733fefe101c2f6870738a79f1a1e594e3",
+  "outputSha": "7e184656e15d5d9f5e59a4b1f2f1c84778d4bde012b93afdf04db772a74943bb",
+  "outputTail": "\nrunning 1 test\ntest the_rate_the_faults_the_full_chutes_and_the_no_reads_are_turned_live_and_measured_on_the_wire ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.52s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.79s\n     Running tests\\pressure.rs (target\\debug\\deps\\pressure-695281ea94d6a85b.exe)",
+  "ranAt": "2026-11-07T19:12:32.289Z",
+  "headCommit": "bf3e2bd4f671e3eff5d48241f7308405f4881c96",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/pressure.rs",
