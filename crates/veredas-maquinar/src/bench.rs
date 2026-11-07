@@ -325,9 +325,11 @@ pub struct Bench {
 }
 
 impl Bench {
-    /// Start every part of a loaded bench, in the file's order; the first part that cannot
-    /// start stops the ones before it and is named. Emitters draw from the bench's seed plus
-    /// their index when they have no seed of their own; channels from the bench's seed.
+    /// Start every part of a loaded bench: emitters first, then servers, then channels, each
+    /// kind in the file's order (TOML groups a kind's tables under one key, so the file keeps
+    /// no order across kinds); the first part that cannot start stops the ones before it and
+    /// is named. Emitters draw from the bench's seed plus their index when they have no seed
+    /// of their own; channels from the bench's seed.
     pub fn start(spec: BenchSpec) -> Result<Bench, BenchError> {
         if !spec.emitters.is_empty() {
             std::fs::create_dir_all(&spec.out_dir).map_err(|source| BenchError::Read { place: "out_dir".into(), path: spec.out_dir.clone(), source })?;

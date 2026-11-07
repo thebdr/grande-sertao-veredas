@@ -549,6 +549,9 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     let err = start_err(spec);
     assert!(err.starts_with(&format!("opc `s`: bind 127.0.0.1:{taken}: ")), "{err}");
     assert!(dir.join("e.log").exists(), "the emitter had started and written its first line before the server failed");
+    let written = std::fs::read_to_string(dir.join("e.log")).unwrap().lines().count();
+    std::thread::sleep(Duration::from_millis(60));
+    assert_eq!(std::fs::read_to_string(dir.join("e.log")).unwrap().lines().count(), written, "and was stopped, every part joined, before the error came back");
     let blocker = dir.join("blocker");
     std::fs::write(&blocker, b"a file where the folder should be").unwrap();
     let spec = load(&emitter("").replace(h, &format!("{h}out_dir = \"blocker\"\n")), &dir).unwrap();
@@ -556,6 +559,73 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     assert!(err.starts_with(&format!("out_dir: read {}: ", blocker.display())), "{err}");
     drop(squatter);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order() {
+    assert!(doc_prose().contains("emitters first, then servers, then channels, each kind in the file's order (TOML groups a kind's tables under one key, so a file keeps no order across kinds)"));
+    let dir = scratch("order");
+    let (_, port) = plant(&dir);
+    let text = format!(
+        "{}[[opc]]\nname = \"first\"\nport = 0\n\n[[channel]]\nname = \"second\"\nrole = \"listen\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n\n[[emitter]]\nname = \"third\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 100\nfile = \"t.log\"\n\n[[emitter]]\nname = \"fourth\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 100\nfile = \"f.log\"\n\n[[opc]]\nname = \"fifth\"\nport = 0\n",
+        header()
+    );
+    let spec = load(&text, &dir).unwrap();
+    let order = |lines: &[String]| lines.iter().map(|l| l.split('`').nth(1).unwrap_or("").to_string()).collect::<Vec<_>>();
+    assert_eq!(order(&spec.plan()), ["third", "fourth", "first", "fifth", "second"]);
+    let bench = Bench::start(spec).unwrap();
+    assert_eq!(bench.status().iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(), ["third", "fourth", "first", "fifth", "second"]);
+    assert_eq!(bench.lines().iter().map(|l| l.split(' ').nth(1).unwrap().trim_end_matches(':').to_string()).collect::<Vec<_>>(), ["third", "fourth", "first", "fifth", "second"]);
+    bench.stop();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own() {
+    assert!(doc_prose().contains("each emitter without a seed of its own draws from this seed plus its index, each channel and its controller from this seed; the clock when absent."));
+    // Two emitters without seeds: the same lines run for run, different lines from each other.
+    let lines_of = |seed: u64, tag: &str| -> (Vec<String>, Vec<String>) {
+        let dir = scratch(tag);
+        let text = format!(
+            "{}seed = {seed}\n[[emitter]]\nname = \"a\"\ntemplate = \"{{v}}\"\nts_format = \"%H\"\nvalues = [ {{ name = \"v\", low = 0, high = 1000000 }} ]\ninterval_ms = 1\nfile = \"a.log\"\n\n[[emitter]]\nname = \"b\"\ntemplate = \"{{v}}\"\nts_format = \"%H\"\nvalues = [ {{ name = \"v\", low = 0, high = 1000000 }} ]\ninterval_ms = 1\nfile = \"b.log\"\n",
+            header()
+        );
+        let bench = Bench::start(load(&text, &dir).unwrap()).unwrap();
+        assert!(wait(Duration::from_secs(5), || bench.emitters.iter().all(|(_, e)| e.status().total_lines >= 5)));
+        bench.stop();
+        let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap().lines().take(5).map(String::from).collect::<Vec<_>>();
+        let out = (read("a.log"), read("b.log"));
+        std::fs::remove_dir_all(&dir).unwrap();
+        out
+    };
+    let (a1, b1) = lines_of(7, "seed1");
+    let (a2, b2) = lines_of(7, "seed2");
+    assert_eq!(a1, a2, "the same bench seed, the same lines");
+    assert_eq!(b1, b2);
+    assert_ne!(a1, b1, "two emitters, two draws");
+    let (a3, _) = lines_of(8, "seed3");
+    assert_ne!(a1, a3, "another bench seed, other lines");
+    // The machine's controller draws from the bench's seed too: the worked example run twice
+    // announces item 1 with the same weight, and with another bench seed another weight.
+    let first_weights = |seed: u64, tag: &str| -> Vec<String> {
+        let dir = scratch(tag);
+        let (path, _) = plant(&dir);
+        let text = std::fs::read_to_string(&path).unwrap().replace("seed = 7\n", &format!("seed = {seed}\n"));
+        std::fs::write(&path, text).unwrap();
+        let bench = Bench::start(load_file(&path).unwrap()).unwrap();
+        let machine = bench.channel("machine").unwrap();
+        assert!(wait(Duration::from_secs(5), || machine.status().controller.map(|c| c.stats.announced >= 2).unwrap_or(false)));
+        let c = machine.status().controller.unwrap();
+        let items: Vec<_> = c.awaiting.iter().chain(c.history.iter()).cloned().collect();
+        let weight = |key: &str| items.iter().find(|i| i.key == key).map(|i| i.fields["weight"].clone()).unwrap_or_default();
+        let out = vec![weight("1"), weight("2")];
+        bench.stop();
+        std::fs::remove_dir_all(&dir).unwrap();
+        out
+    };
+    let w1 = first_weights(7, "seedm1");
+    assert_eq!(w1, first_weights(7, "seedm2"), "the rules file says seed 7 too, but the bench's seed is the one used");
+    assert_ne!(w1, first_weights(8, "seedm3"));
 }
 
 #[test]
@@ -618,6 +688,32 @@ fn the_executable_checks_and_runs_a_bench_file() {
     assert_eq!(rest.last().map(String::as_str), Some("stopped"), "{rest:?}");
     assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(), "the port is free again");
     assert!(std::fs::read_dir(dir.join("logs")).unwrap().count() >= 1, "the scanner wrote its file");
+    // A second run, stopped by stdin closing with nothing written.
+    let mut child = Command::new(exe).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    let started = Instant::now();
+    let mut running = false;
+    while started.elapsed() < Duration::from_secs(15) {
+        if let Ok(line) = rx.recv_timeout(Duration::from_millis(200))
+            && line.starts_with("channel unit: connected to ")
+        {
+            running = true;
+            break;
+        }
+    }
+    assert!(running);
+    drop(child.stdin.take());
+    let status = child.wait().unwrap();
+    assert!(status.success(), "{status:?}");
+    let rest: Vec<String> = rx.try_iter().collect();
+    assert_eq!(rest.last().map(String::as_str), Some("stopped"), "stdin closed: {rest:?}");
+    assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok());
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -644,8 +740,10 @@ device's own files sit beside it: core's channel file (`docs/channel-schema.md`)
 (`docs/controller-schema.md`). `veredas_maquinar::bench::load` reads the bench file and every
 file it points at and checks each part as its own module checks it, so a bench file that loads
 is a bench every part of which can start; `Bench::start` then runs every part behind one handle,
-and the executable `veredas-maquinar <bench.toml>` runs it from the command line (`--check`
-reads, checks and prints the plan without starting anything). No device is named anywhere: a
+emitters first, then servers, then channels, each kind in the file's order (TOML groups a
+kind's tables under one key, so a file keeps no order across kinds), and the executable
+`veredas-maquinar <bench.toml>` runs it from the command line (`--check` reads, checks and
+prints the plan without starting anything). No device is named anywhere: a
 plant's bench is a folder of files like the ones below, kept outside the suite's code.
 
 Every plain-text config and project file of Veredas 2 follows this pattern (`docs/questions.md`

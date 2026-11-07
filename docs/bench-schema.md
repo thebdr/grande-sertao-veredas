@@ -8,8 +8,10 @@ device's own files sit beside it: core's channel file (`docs/channel-schema.md`)
 (`docs/controller-schema.md`). `veredas_maquinar::bench::load` reads the bench file and every
 file it points at and checks each part as its own module checks it, so a bench file that loads
 is a bench every part of which can start; `Bench::start` then runs every part behind one handle,
-and the executable `veredas-maquinar <bench.toml>` runs it from the command line (`--check`
-reads, checks and prints the plan without starting anything). No device is named anywhere: a
+emitters first, then servers, then channels, each kind in the file's order (TOML groups a
+kind's tables under one key, so a file keeps no order across kinds), and the executable
+`veredas-maquinar <bench.toml>` runs it from the command line (`--check` reads, checks and
+prints the plan without starting anything). No device is named anywhere: a
 plant's bench is a folder of files like the ones below, kept outside the suite's code.
 
 Every plain-text config and project file of Veredas 2 follows this pattern (`docs/questions.md`
