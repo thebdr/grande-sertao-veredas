@@ -10,10 +10,10 @@
     "channels"
   ],
   "exitCode": 0,
-  "outputSha": "4629fd63fa02fd7c7c1310a2b437e621543fbc4f9ddbe49e543b8dc188d46c66",
-  "outputTail": "\nrunning 4 tests\ntest what_the_catalog_cannot_read_is_counted_and_shown_not_decoded ... ok\ntest in_a_layout_without_segments_the_id_rides_in_the_envelope ... ok\ntest a_channel_in_either_role_speaks_the_catalog_and_the_monitor_shows_what_came_and_went ... ok\ntest a_channel_refuses_a_configuration_it_cannot_speak_and_reports_a_port_it_cannot_take ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.31s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.17s\n     Running tests\\channels.rs (target\\debug\\deps\\channels-0d86a3e09d84c7cc.exe)",
-  "ranAt": "2026-11-07T18:28:10.293Z",
-  "headCommit": "64e9ecc7c3602df3f2518127cf878daf4d759160",
+  "outputSha": "5ffb7c3542548c7564b870ba62e0dfe699a554c7b680d244e05c03a318b6e33f",
+  "outputTail": "\nrunning 4 tests\ntest what_the_catalog_cannot_read_is_counted_and_shown_not_decoded ... ok\ntest in_a_layout_without_segments_the_id_rides_in_the_envelope ... ok\ntest a_channel_in_either_role_speaks_the_catalog_and_the_monitor_shows_what_came_and_went ... ok\ntest a_channel_refuses_a_configuration_it_cannot_speak_and_reports_a_port_it_cannot_take ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.37s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.67s\n     Running tests\\channels.rs (target\\debug\\deps\\channels-0d86a3e09d84c7cc.exe)",
+  "ranAt": "2026-11-07T19:25:28.373Z",
+  "headCommit": "ba4617d592cbc994cd94bdb0708cbfac7d26d718",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/channels.rs",

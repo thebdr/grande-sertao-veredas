@@ -10,15 +10,15 @@
     "telegram_catalog"
   ],
   "exitCode": 0,
-  "outputSha": "88de1b669b97c1a569b3a11434f4f4ecff88d4ae611ff3d3666e2f466b296b71",
-  "outputTail": "test the_reference_is_the_text_this_test_holds ... ok\ntest the_header_is_refused_four_ways ... ok\ntest a_misspelled_key_in_any_table_is_refused ... ok\ntest every_invalid_catalog_is_refused_with_its_place_named ... ok\ntest what_a_message_writes_it_reads_and_what_it_cannot_write_it_says ... ok\ntest every_rule_the_reference_states_is_the_reader_s ... ok\ntest the_documented_example_loads_and_converses_as_described ... ok\ntest what_a_message_reads_and_where_its_ids_ride_are_the_catalog_s_to_say ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.81s\n     Running tests\\telegram_catalog.rs (target\\debug\\deps\\telegram_catalog-3c3641fdd05cb54e.exe)",
-  "ranAt": "2026-11-07T18:21:47.151Z",
-  "headCommit": "8cbc70490f4e6f1edc359dd7876a5f3e9c05b203",
+  "outputSha": "66104589e72623689587538464ca27f7fc113dcdca0a34de8894cacfaeb3d3e4",
+  "outputTail": "test the_header_is_refused_four_ways ... ok\ntest a_misspelled_key_in_any_table_is_refused ... ok\ntest the_reference_is_the_text_this_test_holds ... ok\ntest every_invalid_catalog_is_refused_with_its_place_named ... ok\ntest every_rule_the_reference_states_is_the_reader_s ... ok\ntest what_a_message_writes_it_reads_and_what_it_cannot_write_it_says ... ok\ntest the_documented_example_loads_and_converses_as_described ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest what_a_message_reads_and_where_its_ids_ride_are_the_catalog_s_to_say ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.05s\n     Running tests\\telegram_catalog.rs (target\\debug\\deps\\telegram_catalog-3c3641fdd05cb54e.exe)",
+  "ranAt": "2026-11-07T19:25:20.179Z",
+  "headCommit": "ba4617d592cbc994cd94bdb0708cbfac7d26d718",
   "tests": [
     {
       "name": "crates/veredas-core/tests/telegram_catalog.rs",
       "file": "crates/veredas-core/tests/telegram_catalog.rs",
-      "fileSha": "4d05375494e7179fd29a1f9a860bd74e29d958a556cf42a1e0f2ff1729f4a6d2"
+      "fileSha": "781134ee489573a1182c45b44f5ad06f11565dbc9b4d00e89721dd7c8490d8e0"
     }
   ]
 }
