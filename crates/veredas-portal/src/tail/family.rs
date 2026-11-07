@@ -490,6 +490,10 @@ fn run_family(
     // unreliable over a share, where polling stays the one mechanism.
     let notify_wanted =
         cfg.use_notify.unwrap_or_else(|| crate::tail::pathkind::classify(spec.dir()).notify_useful());
+    // The loop's own sender keeps the wake channel connected when no watcher could be set up
+    // (the folder not there yet): a disconnected channel would return the wait at once and
+    // spin the loop.
+    let _wake_keep = wake_tx.clone();
     let _watcher = if notify_wanted { spawn_watcher(spec.dir(), wake_tx, spec.recursive()) } else { None };
 
     let disconnected = Cell::new(false);

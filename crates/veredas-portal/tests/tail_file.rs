@@ -749,3 +749,156 @@ fn three_files_tailed_at_once_merge_tagged_with_dense_sequences() {
         r.unwrap();
     }
 }
+
+// ---- the critic's first round ------------------------------------------------------------------
+
+/// UTF-16 text, little- or big-endian, with a mark.
+fn utf16(text: &str, le: bool) -> Vec<u8> {
+    if le { utf16le(text, true) } else { utf16be(text, true) }
+}
+
+#[test]
+fn a_utf16_file_tailed_from_its_end_emits_the_first_new_line_and_skips_a_torn_one() {
+    for le in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        // Ending cleanly on a line feed: the next line is the first new one.
+        let clean = dir.path().join("clean.log");
+        std::fs::write(&clean, utf16("old\r\n", le)).unwrap();
+        let (set, rx) = tail(&clean, FileStart::End);
+        assert_quiet(&rx, 150);
+        append_bytes(&clean, &utf16("new\r\nnext\r\n", le)[2..]);
+        assert_eq!(lines(&rx, 2), ["new", "next"], "little-endian {le}");
+        set.stop_all();
+        // Ending mid-line: the torn line's completion is skipped, the next whole line is first.
+        let torn = dir.path().join("torn.log");
+        std::fs::write(&torn, utf16("old\r\nhalf", le)).unwrap();
+        let (set, rx) = tail(&torn, FileStart::End);
+        assert_quiet(&rx, 150);
+        append_bytes(&torn, &utf16("rest\r\nfresh\r\n", le)[2..]);
+        assert_eq!(lines(&rx, 1), ["fresh"], "little-endian {le}");
+        set.stop_all();
+    }
+}
+
+fn append_bytes(path: &Path, bytes: &[u8]) {
+    let mut f = OpenOptions::new().append(true).open(path).unwrap();
+    f.write_all(bytes).unwrap();
+    f.flush().unwrap();
+}
+
+#[test]
+fn an_ascii_opening_does_not_commit_the_encoding_before_the_first_byte_beyond_ascii() {
+    let dir = tempfile::tempdir().unwrap();
+    // An empty file at attach, a header, then CP1252.
+    let cp = dir.path().join("cp.log");
+    std::fs::write(&cp, "").unwrap();
+    let (set, rx) = tail(&cp, FileStart::Begin);
+    append(&cp, "header\n");
+    assert_eq!(lines(&rx, 1), ["header"]);
+    append_bytes(&cp, b"Temp 25\xB0C\n");
+    assert_eq!(lines(&rx, 1), ["Temp 25°C"]);
+    append_bytes(&cp, b"na\xEFve\n");
+    assert_eq!(lines(&rx, 1), ["naïve"], "committed to CP1252 from the first byte beyond ASCII");
+    set.stop_all();
+    // The same opening, then UTF-8: committed to UTF-8, a later sequence decoded whole.
+    let u8 = dir.path().join("u8.log");
+    std::fs::write(&u8, "header\nsecond\n").unwrap();
+    let (set, rx) = tail(&u8, FileStart::Begin);
+    assert_eq!(lines(&rx, 2), ["header", "second"]);
+    append(&u8, "café\n");
+    assert_eq!(lines(&rx, 1), ["café"]);
+    append(&u8, "naïve ünïcode\n");
+    assert_eq!(lines(&rx, 1), ["naïve ünïcode"]);
+    set.stop_all();
+    // Attached at the end of an ASCII file, the appended CP1252 line decodes.
+    let late = dir.path().join("late.log");
+    std::fs::write(&late, "2026-07-19 10:00:00 seed\n").unwrap();
+    let (set, rx) = tail(&late, FileStart::End);
+    assert_quiet(&rx, 100);
+    append_bytes(&late, b"owner 25\xB0C\n");
+    assert_eq!(lines(&rx, 1), ["owner 25°C"]);
+    set.stop_all();
+}
+
+/// The process's CPU time so far, in milliseconds (user and kernel), as the OS counts it.
+fn process_cpu_ms() -> u64 {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+        let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+        let (mut creation, mut exit, mut kernel, mut user) = (zero, zero, zero, zero);
+        // SAFETY: the current process's pseudo-handle and four valid out-pointers.
+        let ok = unsafe { GetProcessTimes(GetCurrentProcess(), &mut creation, &mut exit, &mut kernel, &mut user) };
+        assert!(ok != 0);
+        let hundreds = |t: FILETIME| ((t.dwHighDateTime as u64) << 32) | t.dwLowDateTime as u64;
+        (hundreds(kernel) + hundreds(user)) / 10_000
+    }
+    #[cfg(not(windows))]
+    {
+        let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+        let after = &stat[stat.rfind(')').unwrap() + 2..];
+        let fields: Vec<&str> = after.split_whitespace().collect();
+        // After the state: utime is the 12th field and stime the 13th, in clock ticks (100 Hz).
+        let ticks: u64 = fields[11].parse::<u64>().unwrap() + fields[12].parse::<u64>().unwrap();
+        ticks * 10
+    }
+}
+
+#[test]
+fn a_tail_without_a_watcher_polls_at_its_interval_and_reads_the_file_when_it_comes() {
+    // The CPU a loop burns is measured on a process that runs nothing else: this test spawns
+    // the test binary again on this one test alone, and that child measures itself and prints
+    // its figure. Three loops that never sleep would burn about a core each for 3 s; three
+    // loops polling every 25 ms cost a fraction of one second.
+    if std::env::var_os("PORTAL_TAIL_CPU_CHILD").is_some() {
+        tails_without_a_watcher();
+        return;
+    }
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["a_tail_without_a_watcher_polls_at_its_interval_and_reads_the_file_when_it_comes", "--exact", "--test-threads", "1", "--nocapture"])
+        .env("PORTAL_TAIL_CPU_CHILD", "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "the child failed:\n{stdout}\n{stderr}");
+    // The figure shares its line with the harness's own text.
+    let at = stdout.find("cpu_ms=").unwrap_or_else(|| panic!("no figure in:\n{stdout}")) + "cpu_ms=".len();
+    let spent: u64 = stdout[at..].chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap();
+    assert!(spent < 1_000, "{spent} ms of CPU over 3 s in a process running the three tails alone: a poll loop is spinning");
+}
+
+/// Three tails no watcher serves: a parent folder not there yet (the watcher cannot be set up),
+/// the watcher switched off, and the watcher asked for on a folder not there. Prints the CPU
+/// the process spent over 3 s, then checks every tail reads its file when it comes.
+fn tails_without_a_watcher() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("later").join("a.log");
+    let plain = dir.path().join("plain.log");
+    let forced = dir.path().join("later").join("b.log");
+    let mut cfg = fast_cfg(FileStart::End);
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FileTailSource::new("missing", "m", &missing, cfg.clone()))).unwrap();
+    cfg.use_notify = Some(false);
+    set.spawn(Box::new(FileTailSource::new("plain", "p", &plain, cfg.clone()))).unwrap();
+    cfg.use_notify = Some(true);
+    set.spawn(Box::new(FileTailSource::new("forced", "f", &forced, cfg))).unwrap();
+    let before = process_cpu_ms();
+    std::thread::sleep(Duration::from_secs(3));
+    let spent = process_cpu_ms() - before;
+    println!("cpu_ms={spent}");
+    assert_quiet(&rx, 50);
+    std::fs::create_dir_all(dir.path().join("later")).unwrap();
+    std::fs::write(&missing, "a1\n").unwrap();
+    std::fs::write(&plain, "p1\n").unwrap();
+    std::fs::write(&forced, "b1\n").unwrap();
+    let mut got: Vec<(String, String)> = (0..3).map(|_| rx.recv_timeout(RECV_TIMEOUT).unwrap()).map(|e| (e.source.to_string(), e.line)).collect();
+    got.sort();
+    assert_eq!(got, [("forced".to_string(), "b1".to_string()), ("missing".to_string(), "a1".to_string()), ("plain".to_string(), "p1".to_string())]);
+    append(&plain, "p2\n");
+    assert_eq!(recv_line(&rx), "p2");
+    for (_, r) in set.stop_all() {
+        r.unwrap();
+    }
+}

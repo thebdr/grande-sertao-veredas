@@ -187,4 +187,22 @@ Recorded as the port meets them.
   repo's target at 19 GB. The bundled DuckDB compiles its C++ once (about six minutes), and its
   debug static library is about 2.2 GB, mapped into every test binary that links it: Veredas 1's
   workspace profile compiles `libduckdb-sys` at `opt-level = 2, debug = false` so the linker does
-  not exhaust the page file; this workspace does the same.
+  not exhaust the page file; this workspace does the same. Phases 1 to 3 took the free space
+  from 45 to 33 GB (the OPC test binaries and a scratch copy's target for the refute rounds).
+- **Plain ASCII tells nothing about an encoding** (C-035, round 1). Veredas 1 committed the
+  decoder at the first four bytes, so a log that opens with an ASCII header was UTF-8 for good
+  and its first degree sign read as U+FFFD. ASCII streams through undecided; the first byte
+  beyond it decides between UTF-8 and CP1252, however far in.
+- **A UTF-16 line feed is two bytes.** A tail attached at the end judged "mid-line" by the last
+  byte alone, so a UTF-16 LE file ending cleanly (its last byte 0x00) lost its first new line.
+  The attach reads the file's head to decide the encoding and compares the last code unit.
+- **A wake channel with no sender spins the loop.** The watcher owned the wake channel's only
+  sender; where the watcher could not be set up (a parent folder not there yet) the receiver
+  read as disconnected and the wait returned at once, every tick, a full core. The loop keeps a
+  sender of its own.
+- **A same-size rewrite is not a truncation to a length check.** A rewrite in place that is back
+  at or past the read offset by the next poll is read as a continuation; every poll-based tail
+  shares the limit, and the clause states it rather than claim past it.
+- **Planted folders of two tests in one binary must not share a name.** The component test's
+  target check and graph walk each planted packages under the process id plus a case name, and
+  one case name was common: run in parallel, one test removed the other's folder.

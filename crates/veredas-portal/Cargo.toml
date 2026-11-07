@@ -41,7 +41,7 @@ thiserror = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # Whether a drive letter is a network drive, so a share is polled and never watched.
-windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_Foundation"] }
 
 [dev-dependencies]
 # The bench plays the plant: its emitters write the files the tail follows.

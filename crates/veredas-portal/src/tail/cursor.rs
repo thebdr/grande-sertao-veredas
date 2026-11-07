@@ -119,12 +119,43 @@ impl TailedFile {
         if len == 0 {
             return Ok(());
         }
+        // The file's head says how it is encoded (a mark, the UTF-16 pattern, a byte beyond
+        // ASCII), which the bytes appended after the attach point never would, and what its
+        // line feed looks like: in UTF-16 the feed is two bytes, and the last byte of a file
+        // ending cleanly on one is 0x00, not 0x0A.
+        let path = self.path.clone();
+        let io = |e: std::io::Error| SourceError::io(&path, e);
         let file = self.handle.as_file_mut();
-        file.seek(SeekFrom::End(-1)).map_err(|e| SourceError::io(&self.path, e))?;
-        let mut last = [0u8; 1];
-        let n = file.read(&mut last).map_err(|e| SourceError::io(&self.path, e))?;
+        let mut head = vec![0u8; len.min(4096) as usize];
+        file.seek(SeekFrom::Start(0)).map_err(io)?;
+        let mut got = 0;
+        while got < head.len() {
+            match file.read(&mut head[got..]).map_err(io)? {
+                0 => break,
+                n => got += n,
+            }
+        }
+        head.truncate(got);
+        self.decoder = TextDecoder::from_head(&head);
+        let newline: &[u8] = self.decoder.encoding().map(|e| e.newline()).unwrap_or(&[0x0A]);
+        let width = newline.len() as u64;
+        let mut last = [0u8; 2];
+        let read = if len >= width {
+            file.seek(SeekFrom::End(-(width as i64))).map_err(io)?;
+            let mut got = 0;
+            while got < width as usize {
+                match file.read(&mut last[got..width as usize]).map_err(io)? {
+                    0 => break,
+                    n => got += n,
+                }
+            }
+            got == width as usize
+        } else {
+            false
+        };
+        file.seek(SeekFrom::End(0)).map_err(io)?;
         self.offset = len;
-        self.skip_until_newline = !(n == 1 && last[0] == b'\n');
+        self.skip_until_newline = !(read && &last[..width as usize] == newline);
         Ok(())
     }
 
@@ -223,9 +254,10 @@ impl TailedFile {
         }
     }
 
-    /// An in-place truncation: flush what was held, rewind, detect afresh. (A rewrite in place
-    /// of the same size or larger is undetectable by length, a limit every poll-based tail
-    /// shares.)
+    /// An in-place truncation, seen as the file shorter than what was read: flush what was held,
+    /// rewind, detect afresh. A rewrite in place that is back at or past the read offset by
+    /// the next poll is undetectable by length and is read as a continuation, a limit every
+    /// poll-based tail shares, and one the clause states rather than claims past.
     pub fn handle_truncation(&mut self, emit: &mut dyn FnMut(String)) -> Result<(), SourceError> {
         self.flush_pending(emit);
         self.handle.as_file_mut().seek(SeekFrom::Start(0)).map_err(|e| SourceError::io(&self.path, e))?;

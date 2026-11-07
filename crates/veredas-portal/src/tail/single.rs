@@ -86,6 +86,11 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
     // Automatic mode arms the watcher for local paths alone: directory notifications are
     // unreliable over a share, where polling stays the one mechanism.
     let notify_wanted = cfg.use_notify.unwrap_or_else(|| crate::tail::pathkind::classify(&path).notify_useful());
+    // The loop keeps a sender of its own: with none alive the wake channel reads as
+    // disconnected and the wait returns at once, every tick, and the loop would spin where
+    // the watcher could not be set up (a parent folder not there yet, a path that cannot be
+    // watched).
+    let _wake_keep = wake_tx.clone();
     let _watcher = if notify_wanted { path.parent().and_then(|dir| spawn_watcher(dir, wake_tx, false)) } else { None };
 
     let disconnected = Cell::new(false);
