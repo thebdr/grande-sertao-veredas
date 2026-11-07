@@ -10,15 +10,15 @@
     "controller_rules"
   ],
   "exitCode": 0,
-  "outputSha": "b8cb270c4720e1fe79d30d1dda4f0ade59b28632f5290989359c044828e2a5a7",
-  "outputTail": "\nrunning 6 tests\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_documented_example_loads_as_described ... ok\ntest every_rule_the_reference_states_about_loading_is_the_reader_s ... ok\ntest the_header_is_refused_four_ways ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest every_invalid_file_is_refused_with_its_place_named ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.59s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s\n     Running tests\\controller_rules.rs (target\\debug\\deps\\controller_rules-a0aad5a3778fcfae.exe)",
-  "ranAt": "2026-11-06T14:44:47.675Z",
-  "headCommit": "bdbd036733fefe101c2f6870738a79f1a1e594e3",
+  "outputSha": "ad4eb7c5dc1e8a94f64731c26f819dee59249b3d95429c343e35e55e0b942bb6",
+  "outputTail": "\nrunning 6 tests\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_documented_example_loads_as_described ... ok\ntest every_rule_the_reference_states_about_loading_is_the_reader_s ... ok\ntest the_header_is_refused_four_ways ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest every_invalid_file_is_refused_with_its_place_named ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.50s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s\n     Running tests\\controller_rules.rs (target\\debug\\deps\\controller_rules-a0aad5a3778fcfae.exe)",
+  "ranAt": "2026-11-07T18:21:53.269Z",
+  "headCommit": "8cbc70490f4e6f1edc359dd7876a5f3e9c05b203",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/controller_rules.rs",
       "file": "crates/veredas-maquinar/tests/controller_rules.rs",
-      "fileSha": "d96b77a275dd5e1ff22c4fa5865e95126992ec3ac7f8ad9e9ba58586096c041d"
+      "fileSha": "11ab2383cb2873fe148deaa6f6c5ce34d843327311e50c984b17f95d036b441b"
     }
   ]
 }

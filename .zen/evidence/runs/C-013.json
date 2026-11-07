@@ -10,10 +10,10 @@
     "telegram_capture"
   ],
   "exitCode": 0,
-  "outputSha": "7e303a1a883d665fc711b0f21638e6a4a32f62f6e9a3a10b2e883430f1ffbca2",
-  "outputTail": "test every_field_type_and_every_table_reads_from_configuration_exactly ... ok\ntest a_repeat_without_a_group_captures_the_whole_match ... ok\ntest repeat_patterns_capture_every_occurrence_in_order ... ok\ntest generic_regex_capture_names_its_groups ... ok\ntest a_binary_field_wins_a_name_collision_with_the_regex ... ok\ntest a_bad_pattern_drops_only_its_own_capture ... ok\ntest a_binary_field_wins_over_a_repeat_too ... ok\ntest a_repeat_stops_at_its_own_cap ... ok\ntest a_capture_spec_is_read_from_configuration_text ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.73s\n     Running tests\\telegram_capture.rs (target\\debug\\deps\\telegram_capture-beadbec9276b5285.exe)",
-  "ranAt": "2026-11-05T22:37:12.586Z",
-  "headCommit": "ab5d52115af3aff0daaab4e147a5ce3a781b8c0f",
+  "outputSha": "14c2aba407a8cfd0749f4a19ecc5e7df1d64624fb8930c67d4e090bd359b8d12",
+  "outputTail": "test every_field_type_and_every_table_reads_from_configuration_exactly ... ok\ntest a_repeat_without_a_group_captures_the_whole_match ... ok\ntest a_binary_field_wins_a_name_collision_with_the_regex ... ok\ntest a_binary_field_wins_over_a_repeat_too ... ok\ntest repeat_patterns_capture_every_occurrence_in_order ... ok\ntest a_bad_pattern_drops_only_its_own_capture ... ok\ntest generic_regex_capture_names_its_groups ... ok\ntest a_repeat_stops_at_its_own_cap ... ok\ntest a_capture_spec_is_read_from_configuration_text ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.95s\n     Running tests\\telegram_capture.rs (target\\debug\\deps\\telegram_capture-e7670bda0b145d93.exe)",
+  "ranAt": "2026-11-07T18:21:38.757Z",
+  "headCommit": "8cbc70490f4e6f1edc359dd7876a5f3e9c05b203",
   "tests": [
     {
       "name": "crates/veredas-core/tests/telegram_capture.rs",
