@@ -26,13 +26,14 @@
 //! ]
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::Deserialize;
 
 use crate::telegram::Endian;
 use crate::telegram::capture::{BinaryField, Capture, CaptureSpec, RepeatSpec};
 use crate::telegram::compose::{Compose, ComposeError, ComposeSpec, width};
+use crate::telegram::framing::{FieldRole, Frame, Framing, Segment};
 
 /// The format name every catalog file states.
 pub const FORMAT: &str = "veredas-catalog";
@@ -106,6 +107,8 @@ pub struct Message {
     pub compose_spec: ComposeSpec,
     capture: std::sync::Arc<Capture>,
     compose: Compose,
+    /// The payload pattern's named groups.
+    groups: Vec<String>,
 }
 
 impl std::fmt::Debug for Message {
@@ -146,6 +149,16 @@ impl Message {
     pub fn names(&self) -> Vec<String> {
         self.compose.names()
     }
+
+    /// Whether a body read by these rules can yield `name`: a binary field's, a payload
+    /// group's, or a repeat's numbered name (`name1` to `name<max>`, by the same parsing rule
+    /// the catalog refuses collisions with). A file read against a catalog asks this rather than
+    /// re-deriving the catalog's names.
+    pub fn reads(&self, name: &str) -> bool {
+        self.capture_spec.fields.iter().any(|f| f.name == name)
+            || self.groups.iter().any(|g| g == name)
+            || self.capture_spec.repeat.iter().any(|r| numbered_by(name, &r.name, r.max))
+    }
 }
 
 /// A loaded catalog.
@@ -181,6 +194,72 @@ impl Catalog {
     pub fn encode(&self, name: &str, values: &HashMap<String, String>) -> Option<Result<(u64, Vec<u8>), ComposeError>> {
         let message = self.by_name(name)?;
         Some(message.write(values, self.byte_order).map(|body| (message.id, body)))
+    }
+
+    /// Where a catalog meets a channel file: the catalog knows no framing, so whether its ids
+    /// can ride the framing is checked here, before a channel that speaks it binds. The
+    /// `id_field` must be a field of the framing's segment header (of the envelope in a layout
+    /// without segments) that the framing leaves to the sender (an opaque field: never the
+    /// sequence, a length or a count, which a channel fills in itself) and wide enough for
+    /// every id; and in a layout without segments no message may write an empty body, which
+    /// the wire carries as a keep-alive, not a message.
+    pub fn check_framing(&self, framing: &Framing) -> Result<(), CatalogError> {
+        let id_field = &self.id_field;
+        let (fields, where_) = match &framing.segment {
+            Some(header) => (header, "segment header"),
+            None => (&framing.envelope, "envelope"),
+        };
+        let Some(field) = fields.iter().find(|f| f.name == *id_field) else {
+            return Err(invalid(format!("the catalog's id_field `{id_field}` is no field of the framing's {where_}")));
+        };
+        let role = match field.role {
+            FieldRole::Opaque => None,
+            FieldRole::Sequence => Some("sequence"),
+            FieldRole::Length => Some("length"),
+            FieldRole::Count => Some("count"),
+        };
+        if let Some(role) = role {
+            return Err(invalid(format!(
+                "the catalog's id_field `{id_field}` is the framing's {where_} field with the role `{role}`, which the channel fills in itself: an id cannot ride it"
+            )));
+        }
+        let widest = if field.size >= 8 { u64::MAX } else { (1u64 << (8 * field.size)) - 1 };
+        if let Some(m) = self.messages.iter().find(|m| m.id > widest) {
+            return Err(invalid(format!(
+                "the catalog's message `{}` has the id {}, which does not fit the framing's {where_} field `{id_field}` of {} byte(s)",
+                m.name, m.id, field.size
+            )));
+        }
+        if framing.segment.is_none()
+            && let Some(m) = self.messages.iter().find(|m| m.compose.writes_empty() && m.capture_spec.payload.is_none() && m.capture_spec.repeat.is_empty())
+        {
+            return Err(invalid(format!(
+                "the catalog's message `{}` writes an empty body, which a layout without segments carries as a keep-alive, not a message",
+                m.name
+            )));
+        }
+        Ok(())
+    }
+
+    /// A frame carrying `id` and `body` where this framing takes them: the id in the segment
+    /// header's field, or in the envelope's in a layout without segments.
+    pub fn frame(&self, framing: &Framing, id: u64, body: Vec<u8>) -> Frame {
+        let id_field = self.id_field.clone();
+        match &framing.segment {
+            Some(_) => Frame { fields: BTreeMap::new(), segments: vec![Segment { fields: BTreeMap::from([(id_field, id)]), body }] },
+            None => Frame { fields: BTreeMap::from([(id_field, id)]), segments: vec![Segment { fields: BTreeMap::new(), body }] },
+        }
+    }
+
+    /// The messages a received frame carries: `(id, body)` per segment, the id from each
+    /// segment header, or from the envelope for the one body of a layout without segments;
+    /// `None` for an id the frame does not carry.
+    pub fn messages_of(&self, framing: &Framing, frame: &Frame) -> Vec<(Option<u64>, Vec<u8>)> {
+        let id_field = &self.id_field;
+        match &framing.segment {
+            Some(_) => frame.segments.iter().map(|s| (s.fields.get(id_field).copied(), s.body.clone())).collect(),
+            None => frame.segments.iter().map(|s| (frame.fields.get(id_field).copied(), s.body.clone())).collect(),
+        }
     }
 }
 
@@ -317,6 +396,7 @@ pub fn load(text: &str) -> Result<Catalog, CatalogError> {
             compose_spec,
             capture: std::sync::Arc::new(capture),
             compose,
+            groups,
         });
     }
     Ok(Catalog { id_field: file.id_field, byte_order, messages })

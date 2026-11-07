@@ -19,7 +19,7 @@ use serde::Deserialize;
 use veredas_core::rng::Pcg32;
 use veredas_core::telegram::catalog::Catalog;
 use veredas_core::telegram::channel::{Channel, ChannelConfig as WireConfig, ChannelEvent, ChannelStatus as WireStatus, PeerId, Role};
-use veredas_core::telegram::framing::{Frame, Segment, preview};
+use veredas_core::telegram::framing::{Frame, preview};
 use veredas_core::telegram::schema::ChannelSpec;
 
 use crate::controller::{Context, Controller, ControllerStatus, FieldSpec, Fields, Outgoing, Place, Rules, RulesError};
@@ -210,31 +210,14 @@ impl Drop for BenchChannel {
 
 /// Where the catalog's id rides in this framing: a segment header field, or an envelope field
 /// in a layout without segments.
-pub fn check_id_field(spec: &ChannelSpec, id_field: &str) -> Result<(), ChannelError> {
-    use veredas_core::telegram::framing::FieldRole;
-    let (fields, where_) = match &spec.framing.segment {
-        Some(header) => (header, "segment header"),
-        None => (&spec.framing.envelope, "envelope"),
-    };
-    let Some(field) = fields.iter().find(|f| f.name == id_field) else {
-        return Err(ChannelError::IdField(format!("the catalog's id_field `{id_field}` is no field of the framing's {where_}")));
-    };
-    // A field core fills in itself (the sequence, a length, a count) cannot carry an id: the
-    // channel would claim a message by name while the wire carried something else.
-    let role = match field.role {
-        FieldRole::Opaque => return Ok(()),
-        FieldRole::Sequence => "sequence",
-        FieldRole::Length => "length",
-        FieldRole::Count => "count",
-    };
-    Err(ChannelError::IdField(format!(
-        "the catalog's id_field `{id_field}` is the framing's {where_} field with the role `{role}`, which the channel fills in itself: an id cannot ride it"
-    )))
+pub fn check_id_field(spec: &ChannelSpec, catalog: &Catalog) -> Result<(), ChannelError> {
+    // The catalog's own check: it knows what portal's channel will need to know too.
+    catalog.check_framing(&spec.framing).map_err(|e| ChannelError::IdField(e.to_string()))
 }
 
 /// Start a bench channel. Returns once its thread runs; a bind failure shows in the status.
 pub fn start(cfg: ChannelConfig) -> Result<BenchChannel, ChannelError> {
-    check_id_field(&cfg.spec, &cfg.catalog.id_field)?;
+    check_id_field(&cfg.spec, &cfg.catalog)?;
     let empty = BTreeMap::new();
     let mut cyclic = Vec::new();
     for (i, m) in cfg.messages.iter().enumerate() {
@@ -281,13 +264,9 @@ struct Link {
 }
 
 impl Link {
-    /// A frame carrying `id` and `body` where this framing takes them.
+    /// A frame carrying `id` and `body` where this framing takes them (the catalog's placing).
     fn frame(&self, id: u64, body: Vec<u8>) -> Frame {
-        let id_field = self.catalog.id_field.clone();
-        match &self.spec.framing.segment {
-            Some(_) => Frame { fields: BTreeMap::new(), segments: vec![Segment { fields: BTreeMap::from([(id_field, id)]), body }] },
-            None => Frame { fields: BTreeMap::from([(id_field, id)]), segments: vec![Segment { fields: BTreeMap::new(), body }] },
-        }
+        self.catalog.frame(&self.spec.framing, id, body)
     }
 
     /// Build and send a message, or say why not.
@@ -306,6 +285,15 @@ impl Link {
                 note_text(&self.status, format!("{message} not sent: {e}"));
             }
             Some(Ok((id, body))) => {
+                if body.is_empty() && self.spec.framing.segment.is_none() {
+                    // The wire carries an empty body as a keep-alive in a layout without
+                    // segments: the peer would never see a message.
+                    if let Ok(mut s) = self.status.lock() {
+                        s.last_error = Some(format!("{message}: an empty body is a keep-alive in a layout without segments"));
+                    }
+                    note_text(&self.status, format!("{message} not sent: an empty body is a keep-alive in a layout without segments"));
+                    return;
+                }
                 let line = RxLine {
                     at: stamp(),
                     direction: Direction::Out,
@@ -315,6 +303,15 @@ impl Link {
                     peer: to,
                 };
                 let frame = self.frame(id, body);
+                // What the framing would refuse (a body over the frame limit) is refused here,
+                // before the message is counted as sent; the sequence is the channel's.
+                if let Err(e) = self.spec.framing.encode(&frame, None) {
+                    if let Ok(mut s) = self.status.lock() {
+                        s.last_error = Some(format!("{message}: {e}"));
+                    }
+                    note_text(&self.status, format!("{message} not sent: {e}"));
+                    return;
+                }
                 match to {
                     Some(peer) => self.channel.send(peer, frame),
                     None => self.channel.send_all(frame),
@@ -328,13 +325,9 @@ impl Link {
     }
 
     /// The messages a received frame carries: `(id, body)` per segment (or the one body of a
-    /// segmentless layout).
+    /// segmentless layout), as the catalog reads them.
     fn messages_of(&self, frame: &Frame) -> Vec<(Option<u64>, Vec<u8>)> {
-        let id_field = &self.catalog.id_field;
-        match &self.spec.framing.segment {
-            Some(_) => frame.segments.iter().map(|s| (s.fields.get(id_field).copied(), s.body.clone())).collect(),
-            None => frame.segments.iter().map(|s| (frame.fields.get(id_field).copied(), s.body.clone())).collect(),
-        }
+        self.catalog.messages_of(&self.spec.framing, frame)
     }
 }
 

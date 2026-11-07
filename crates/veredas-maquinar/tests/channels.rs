@@ -135,8 +135,16 @@ fn a_channel_in_either_role_speaks_the_catalog_and_the_monitor_shows_what_came_a
     last_error("heartbeat: no value for `state`");
     listener.send_now("heartbeat", values(&[("dest", "x"), ("state", "1")]), None);
     last_error("heartbeat: `dest`: `x` is not a U16");
+    // A frame the framing refuses (a body the segment's two-byte length field cannot declare)
+    // is refused before it is counted, and nothing reaches the peer.
+    let before = listener.status().sent.get("status").copied().unwrap_or(0);
+    listener.send_now("status", values(&[("running", "1"), ("speed", &"9".repeat(70_000))]), None);
+    last_error("status: length = 70012 does not fit its 2-byte field");
+    assert!(listener.status().sent.get("status").copied().unwrap_or(0) <= before + 1, "the cyclic status line may have gone meanwhile, the long one never");
+    assert!(listener.status().recent.iter().any(|l| l.direction == Direction::Note && l.preview == "status not sent: length = 70012 does not fit its 2-byte field"));
+    assert!(dialer.status().recent.iter().all(|l| l.preview.len() < 60), "nothing of the long body arrived: {:?}", dialer.status().recent.iter().map(|l| l.preview.len()).max());
     let notes: Vec<String> = listener.status().recent.iter().filter(|l| l.direction == Direction::Note && l.preview.contains("not sent")).map(|l| l.preview.clone()).collect();
-    assert_eq!(notes.len(), 3, "{notes:?}");
+    assert_eq!(notes.len(), 4, "{notes:?}");
     assert!(notes.contains(&"heartbeat not sent: no value for `state`".to_string()), "{notes:?}");
     assert!(notes.contains(&"nope not sent: the catalog has no such message".to_string()), "{notes:?}");
     assert!(notes.iter().any(|n| n.starts_with("heartbeat not sent: `dest`: `x` is not a U16")), "{notes:?}");
@@ -241,6 +249,14 @@ fn a_channel_refuses_a_configuration_it_cannot_speak_and_reports_a_port_it_canno
     let text = doc_blocks("controller-schema.md")[0].replace("id_field = \"id\"", "id_field = \"length\"");
     let err = start(config("x", listen(free_port()), catalog::load(&text).unwrap(), Vec::new())).err().unwrap();
     assert_eq!(err.to_string(), "the catalog's id_field `length` is the framing's segment header field with the role `length`, which the channel fills in itself: an id cannot ride it");
+    // Every id of the catalog must fit the field: the worked file's id at one byte with the
+    // command's id raised to 300.
+    let narrow = load_spec(&doc_blocks("channel-schema.md")[0].replace("{ name = \"id\", size = 2 }", "{ name = \"id\", size = 1 }")).unwrap();
+    let wide = catalog::load(&doc_blocks("controller-schema.md")[0].replace("id = 24\n", "id = 300\n")).unwrap();
+    let err = start(ChannelConfig { name: "x".into(), role: listen(free_port()), spec: narrow.clone(), catalog: wide, messages: Vec::new(), controller: None, seed: None }).err().unwrap();
+    assert_eq!(err.to_string(), "the catalog's message `command` has the id 300, which does not fit the framing's segment header field `id` of 1 byte(s)");
+    let fits = start(ChannelConfig { name: "x".into(), role: listen(free_port()), spec: narrow, catalog: catalog(), messages: Vec::new(), controller: None, seed: None }).unwrap();
+    fits.stop();
     // Every cyclic message is the catalog's, with every name written, from sources a plain
     // channel has.
     let bad = |message: &str, spec: &str| start(config("x", listen(free_port()), catalog(), vec![CyclicMessage { message: message.into(), every_ms: 0, fields: fields(spec) }])).err().unwrap().to_string();

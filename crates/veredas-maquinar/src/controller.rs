@@ -400,18 +400,6 @@ pub struct DecideView {
     pub sticky: Option<String>,
 }
 
-/// Whether a name is one a message's rules read: a field's, or a repeat's numbered name
-/// (`name1` to `name<max>`).
-fn message_reads(spec: &veredas_core::telegram::capture::CaptureSpec, name: &str) -> bool {
-    spec.fields.iter().any(|f| f.name == name)
-        || spec.repeat.iter().any(|r| {
-            name.strip_prefix(&r.name)
-                .filter(|rest| !rest.is_empty() && !rest.starts_with('0') && rest.bytes().all(|b| b.is_ascii_digit()))
-                .and_then(|rest| rest.parse::<usize>().ok())
-                .is_some_and(|n| n >= 1 && n <= r.max)
-        })
-}
-
 /// A name as a file writes it: not empty, no surrounding whitespace.
 fn exact(place: &str, what: &str, name: &str) -> Result<(), RulesError> {
     if name.trim().is_empty() {
@@ -968,16 +956,15 @@ pub fn load(text: &str, catalog: &Catalog) -> Result<Rules, RulesError> {
                 Some(r) => {
                     let rm = message("items.reply.message", catalog, &r.message)?;
                     let key = r.key.clone().unwrap_or_else(|| i.key.clone());
-                    let binary = rm.capture_spec.payload.is_none();
-                    let has = |n: &str| message_reads(&rm.capture_spec, n);
-                    if binary && !has(&key) {
-                        return Err(invalid(format!("items.reply.key: `{}` has no field named `{key}`", r.message)));
+                    // What the reply reads is the catalog's to say: a binary field, a payload
+                    // group, a repeat's numbered name.
+                    if !rm.reads(&key) {
+                        return Err(invalid(format!("items.reply.key: `{}` reads nothing named `{key}`", r.message)));
                     }
                     if let Some(dst) = &r.destination
-                        && binary
-                        && !has(dst)
+                        && !rm.reads(dst)
                     {
-                        return Err(invalid(format!("items.reply.destination: `{}` has no field named `{dst}`", r.message)));
+                        return Err(invalid(format!("items.reply.destination: `{}` reads nothing named `{dst}`", r.message)));
                     }
                     if r.destination.is_none() && i.outcome.is_some() && destinations.is_some() {
                         return Err(invalid("items.reply.destination: an outcome by destination needs the reply's destination field".to_string()));

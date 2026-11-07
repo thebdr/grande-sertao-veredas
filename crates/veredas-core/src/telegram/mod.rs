@@ -1,10 +1,10 @@
-//! The TCP telegram layer: a hardened socket, and the rules a device's telegrams are framed and
-//! read by.
+//! The TCP telegram layer: a hardened socket, and the rules a device's telegrams are framed,
+//! written and read by.
 //!
 //! Content-agnostic: no device, vendor or message catalog is named here, and no frame layout
 //! is built in. A channel is configured by a plain-text, versioned channel file (as an OPC rule
-//! maps tags and a log rule captures fields); this layer moves the bytes reliably and reads them
-//! by those rules (`docs/questions.md` Q8, Q9; `docs/channel-schema.md`).
+//! maps tags and a log rule captures fields); this layer moves the bytes reliably and writes and
+//! reads them by those rules (`docs/questions.md` Q8, Q9; `docs/channel-schema.md`).
 //!
 //! - [`schema`]: the channel file: its framing, sequence, keep-alive and link rules, versioned,
 //!   read and validated into a [`schema::ChannelSpec`].

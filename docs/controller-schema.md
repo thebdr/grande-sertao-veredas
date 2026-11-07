@@ -216,7 +216,8 @@ Each key states in parentheses that it is required, or the value it takes when l
 name (of a register, a bit, a field, a fault, an outcome) is exact, with no surrounding
 whitespace; a message name is one of the catalog's. A value compared with a field's (a
 disposition's or a setting's `equals`, a rule's `pattern`, a reply's key) is compared as text,
-the field's value trimmed.
+the field's value trimmed. A field a disposition, a rule, a command or a `sticky` key names is
+looked up when the message comes: a name the message does not carry simply never matches.
 
 **The top level**.
 - `format` (required): always `"veredas-controller"`.
@@ -272,10 +273,10 @@ the field's value trimmed.
 **The reply** (`[items.reply]`): the answer awaited for an item.
 - `message` (required): a message of the catalog. An answer for an item not awaited is
   counted and dropped.
-- `key` (the items' `key`): the reply's field holding the item's key; for a binary message,
-  one of its fields or of a repeat's numbered names.
-- `destination` (none): the reply's field naming the destination; required when there is an
-  outcome and there are destinations. A destination not in the list is counted and the item
+- `key` (the items' `key`): the reply's field holding the item's key: a name the reply reads,
+  as the catalog says (a binary field, a payload group, a repeat's numbered name).
+- `destination` (none): the reply's field naming the destination, a name the reply reads;
+  required when there is an outcome and there are destinations. A destination not in the list is counted and the item
   still travels.
 - `when` (none): dispositions by a field's value, in order, as inline tables; the first match
   decides, else the item is delivered.
@@ -379,7 +380,7 @@ before it starts, an empty cycle, a bad template, a source its place does not ta
 that does not exist, a decision with a bad pattern or nothing to decide with, a list that leaves
 one of its message's names unwritten, a message the catalog does not hold, an interval or lap of
 0, a key no field announces, a fault's share over 100 or a fault setting a field that is not
-announced, a reply key or destination that is no field of a binary reply, an outcome without a
+announced, a reply key or destination the reply does not read, an outcome without a
 reply, a weight that is not finite or below 0, a command with nothing to set or setting a
 register that does not exist, a destination list that is empty or repeats a number, a bit that
 is not one bit or named twice, a resting or initial or blocking bit that is not named, an

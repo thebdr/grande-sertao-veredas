@@ -205,6 +205,13 @@ impl Compose {
         !self.template.is_empty() || !self.fields.is_empty()
     }
 
+    /// Whether every body these rules write is empty: a length of 0, or no length, no field and
+    /// no template text at all (a placeholder-only template may render to nothing, but need
+    /// not: that is the values' doing, seen when the body is rendered).
+    pub fn writes_empty(&self) -> bool {
+        self.len == Some(0) || (self.len.is_none() && self.fields.is_empty() && self.template.is_empty())
+    }
+
     /// The names a body needs: every placeholder and every binary field, in order, each once.
     pub fn names(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();

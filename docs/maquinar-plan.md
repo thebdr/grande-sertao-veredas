@@ -30,7 +30,7 @@ it never runs in production, owns its sockets, and carries no store and no deskt
   silent; the stack's limits (nodes per read, sessions) as knobs.
 - **Telegram channels** (`channel`): a channel in either role, framed and held by core's channel
   file (`docs/channel-schema.md`), speaking a **catalog** of messages (core's catalog file: a
-  name, a segment id, the body's fields) built from named fields and read back into them;
+  name, the id its frame carries, the body's fields) built from named fields and read back into them;
   cyclic and on-demand messages; a monitor of what arrived, by name and field.
 - **A simulated controller** (`controller`): the controller's behaviour as a versioned rules file
   of its own: **items** it announces at a rate and awaits an answer for (an announcement, a
@@ -131,7 +131,8 @@ veredas_maquinar
   main.rs     veredas-maquinar <bench.toml> [--check]
 veredas_core (added for the bench, kept for portal)
   telegram::compose   a body built from named fields: binary fields at offsets, a text template
-  telegram::catalog   the catalog file: messages by name, their segment id and body rules
+  telegram::catalog   the catalog file: messages by name, the id their frame carries, body rules,
+                      what a message reads, where the ids ride in a channel file
 ```
 
 ## Phases

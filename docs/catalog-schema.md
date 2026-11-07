@@ -6,8 +6,12 @@ says what the frames carry: each message by name, by the id its segment header (
 field carries, and by the rules its body is written with and read with.
 `veredas_core::telegram::catalog::load` reads it into a `Catalog`; `telegram::compose` writes a
 body from named fields and `telegram::capture` reads one back, from the same field list, so a
-body a channel sends is a body the same catalog reads. Core knows no device: a device's catalog
-is a file like the one below, kept with its channel file, outside the suite's code.
+body a channel sends is a body the same catalog reads. A loaded catalog also answers whether a
+message reads a name (a binary field, a payload group, or a repeat's numbered name) and where
+its ids ride in a channel file's framing, so a file read against it (the controller file,
+`docs/controller-schema.md`) and a channel that speaks it never re-derive its rules. Core knows
+no device: a device's catalog is a file like the one below, kept with its channel file, outside
+the suite's code.
 
 Every plain-text config and project file of Veredas 2 follows this pattern (`docs/questions.md`
 Q10, "TOML, suite-wide"): TOML, a `format` and a `version` first, documented defaults, a
@@ -72,7 +76,12 @@ whitespace.
 - `version` (required): this reader knows `1`. A file of another format or an unknown version is
   refused, never guessed; migrating an older version is portal's (P-010).
 - `id_field` (required): the name of the frame field that carries a message's id: a segment
-  header field in a layout with segments, an envelope field in one without.
+  header field in a layout with segments, an envelope field in one without. It must be a field
+  the framing leaves to the sender, an opaque one (`docs/channel-schema.md`, "Roles"), never the
+  sequence, a length or a count, which a channel fills in itself, and wide enough for every id.
+  The catalog knows no framing, so a channel that speaks it asks `Catalog::check_framing`
+  before it starts; the same check refuses, in a layout without segments, a message that writes
+  an empty body, which the wire carries as a keep-alive, not a message.
 - `byte_order` (`"little"`): `"little"` or `"big"`, for every binary field of every body.
 - `message` (none): the messages, as `[[message]]` tables; a catalog may be empty.
 

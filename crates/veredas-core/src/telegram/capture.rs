@@ -39,7 +39,8 @@ pub struct CaptureSpec {
     pub repeat: Vec<RepeatSpec>,
 }
 
-/// One binary field: where it is, how long, and how to read it.
+/// One binary field: where it is, how long, and how it is read and written (`compose` writes
+/// from the same list).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BinaryField {
@@ -57,9 +58,10 @@ pub enum FieldType {
     U32,
     I16,
     I32,
-    /// Trimmed text, stopping at a NUL.
+    /// Text up to the first NUL, without its trailing whitespace (leading kept); written
+    /// NUL-padded to `len`.
     Ascii,
-    /// Uppercase hex, no separators.
+    /// Read as uppercase hex, no separators; written from hex in either case.
     Hex,
 }
 

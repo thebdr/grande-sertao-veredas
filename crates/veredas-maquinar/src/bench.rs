@@ -278,7 +278,7 @@ pub fn load(text: &str, base: &Path) -> Result<BenchSpec, BenchError> {
         let spec = channel_schema::load(&text).map_err(|e| invalid(format!("{place}.channel ({}): {e}", path.display())))?;
         let (path, text) = read_beside(base, &format!("{place}.catalog"), &c.catalog)?;
         let catalog = catalog::load(&text).map_err(|e| invalid(format!("{place}.catalog ({}): {e}", path.display())))?;
-        channel::check_id_field(&spec, &catalog.id_field).map_err(|e| invalid(format!("{place}: {e}")))?;
+        channel::check_id_field(&spec, &catalog).map_err(|e| invalid(format!("{place}: {e}")))?;
         let controller = match &c.controller {
             None => None,
             Some(rel) => {

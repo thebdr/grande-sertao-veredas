@@ -748,8 +748,8 @@ relative to the bench file's folder.
 - `host` (`"127.0.0.1"`): the address to bind, or the host to dial.
 - `port` (required): the port to bind or dial.
 - `channel` (required): the path of core's channel file.
-- `catalog` (required): the path of the catalog file; its `id_field` must ride in the channel
-  file's framing.
+- `catalog` (required): the path of the catalog file; its ids must ride in the channel file's
+  framing, as the catalog's own check says (`docs/catalog-schema.md`, `id_field`).
 - `controller` (none): the path of the controller rules file, read against the catalog; none
   for a channel that only sends its own messages.
 - `messages` (none): the channel's own messages, as inline tables.

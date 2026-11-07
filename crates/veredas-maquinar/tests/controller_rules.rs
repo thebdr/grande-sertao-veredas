@@ -639,8 +639,8 @@ fn every_invalid_file_is_refused_with_its_place_named() {
     let keyed = |key: &str| with(&format!("[items.reply]\nmessage = \"answer2\"\nkey = \"{key}\"\n"));
     assert!(load(&keyed("bc1"), &catalog2).is_ok());
     assert!(load(&keyed("bc2"), &catalog2).is_ok());
-    assert_eq!(load(&keyed("bc3"), &catalog2).unwrap_err().to_string(), "items.reply.key: `answer2` has no field named `bc3`");
-    assert_eq!(load(&keyed("bc"), &catalog2).unwrap_err().to_string(), "items.reply.key: `answer2` has no field named `bc`");
+    assert_eq!(load(&keyed("bc3"), &catalog2).unwrap_err().to_string(), "items.reply.key: `answer2` reads nothing named `bc3`");
+    assert_eq!(load(&keyed("bc"), &catalog2).unwrap_err().to_string(), "items.reply.key: `answer2` reads nothing named `bc`");
     let answer = |fields: &str| format!("{h}[[answers]]\non = \"announce\"\nsend = \"answer\"\nfields = [ {fields}, {{ name = \"dest\", value = 1 }}, {{ name = \"flag\", value = 1 }} ]\n");
     assert!(refused(&answer("{ name = \"item\", decide = { rules = [ { field = \"code\", pattern = \"(\", value = 1 } ] } }")).starts_with("answers[0].fields[0] (`item`).decide.rules[0]: regex parse error"));
     assert_eq!(refused(&answer("{ name = \"item\", decide = { spread = [ { value = 1, weight = -1 } ] } }")), "answers[0].fields[0] (`item`).decide.spread[0]: a weight is not a finite, non-negative number");
@@ -669,9 +669,10 @@ fn every_invalid_file_is_refused_with_its_place_named() {
     assert_eq!(refused(&format!("{h}registers = {{ \" \" = 1 }}\n")), "registers: the register has no name");
     // The reply and the outcome.
     assert_eq!(refused(&with("[items.reply]\nmessage = \"nope\"\n")), "items.reply.message: the catalog has no message `nope`");
-    assert_eq!(refused(&with("[items.reply]\nmessage = \"answer\"\nkey = \"x\"\n")), "items.reply.key: `answer` has no field named `x`");
-    assert_eq!(refused(&with("[items.reply]\nmessage = \"answer\"\ndestination = \"x\"\n")), "items.reply.destination: `answer` has no field named `x`");
-    assert!(load(&with("[items.reply]\nmessage = \"outcome\"\nkey = \"x\"\ndestination = \"y\"\n"), &catalog()).is_ok(), "a text reply's fields are whatever its pattern reads");
+    assert_eq!(refused(&with("[items.reply]\nmessage = \"answer\"\nkey = \"x\"\n")), "items.reply.key: `answer` reads nothing named `x`");
+    assert_eq!(refused(&with("[items.reply]\nmessage = \"answer\"\ndestination = \"x\"\n")), "items.reply.destination: `answer` reads nothing named `x`");
+    assert!(load(&with("[items.reply]\nmessage = \"outcome\"\nkey = \"item\"\ndestination = \"dest\"\n"), &catalog()).is_ok(), "a text reply reads its pattern's groups");
+    assert_eq!(refused(&with("[items.reply]\nmessage = \"outcome\"\nkey = \"x\"\n")), "items.reply.key: `outcome` reads nothing named `x`");
     let outcome = "[items.outcome]\nmessage = \"outcome\"\nfields = [ { name = \"item\", from = \"item\" }, { name = \"dest\", from = \"dest\" }, { name = \"result\", value = \"S\" } ]\n";
     assert_eq!(refused(&with(outcome)), "items.outcome: an outcome needs a reply to follow");
     assert_eq!(
@@ -711,7 +712,7 @@ fn every_invalid_file_is_refused_with_its_place_named() {
     assert_eq!(refused(&dest("list = [1]\nblocking = [ { bit = \"x\" } ]\n")), "destinations.blocking[0]: no bit named `x`");
     assert_eq!(refused(&dest("list = [1]\nbits = { b = 1 }\nblocking = [ { bit = \"b\" }, { bit = \"b\" } ]\n")), "destinations.blocking[1]: `b` blocks twice");
     // The closing paragraph says all of it.
-    assert!(doc_prose().contains("A field with no source or more than one, a range that is empty or not finite, a counter ending before it starts, an empty cycle, a bad template, a source its place does not take, a register that does not exist, a decision with a bad pattern or nothing to decide with, a list that leaves one of its message's names unwritten, a message the catalog does not hold, an interval or lap of 0, a key no field announces, a fault's share over 100 or a fault setting a field that is not announced, a reply key or destination that is no field of a binary reply, an outcome without a reply, a weight that is not finite or below 0, a command with nothing to set or setting a register that does not exist, a destination list that is empty or repeats a number, a bit that is not one bit or named twice, a resting or initial or blocking bit that is not named, an initial destination not in the list, a bit blocking twice, and a misspelled key in any table are refused when the file loads, with the place named."));
+    assert!(doc_prose().contains("A field with no source or more than one, a range that is empty or not finite, a counter ending before it starts, an empty cycle, a bad template, a source its place does not take, a register that does not exist, a decision with a bad pattern or nothing to decide with, a list that leaves one of its message's names unwritten, a message the catalog does not hold, an interval or lap of 0, a key no field announces, a fault's share over 100 or a fault setting a field that is not announced, a reply key or destination the reply does not read, an outcome without a reply, a weight that is not finite or below 0, a command with nothing to set or setting a register that does not exist, a destination list that is empty or repeats a number, a bit that is not one bit or named twice, a resting or initial or blocking bit that is not named, an initial destination not in the list, a bit blocking twice, and a misspelled key in any table are refused when the file loads, with the place named."));
 }
 
 #[test]
@@ -749,8 +750,10 @@ fn every_rule_the_reference_states_about_loading_is_the_reader_s() {
     assert!(prose.contains("`name` (required): the fault's name, unique; the bench's knob and the status use it."));
     assert!(prose.contains("`percent` (`0`): the share of announced items, 0 to 100, drawn item by item, fault by fault."));
     assert!(prose.contains("`set` (required): announced fields by name and the value each takes."));
-    assert!(prose.contains("`key` (the items' `key`): the reply's field holding the item's key; for a binary message, one of its fields or of a repeat's numbered names."));
-    assert!(prose.contains("`destination` (none): the reply's field naming the destination; required when there is an outcome and there are destinations."));
+    assert!(prose.contains("`key` (the items' `key`): the reply's field holding the item's key: a name the reply reads, as the catalog says (a binary field, a payload group, a repeat's numbered name)."));
+    assert!(prose.contains("`destination` (none): the reply's field naming the destination, a name the reply reads; required when there is an outcome and there are destinations."));
+    assert!(prose.contains("A field a disposition, a rule, a command or a `sticky` key names is looked up when the message comes: a name the message does not carry simply never matches."));
+    assert!(load(&format!("{h}[[commands]]\non = \"command\"\nfield = \"nope\"\nwhen = [ {{ equals = 1, set = {{}} }} ]\n"), &catalog).is_ok(), "a command's field is looked up when the message comes");
     assert!(prose.contains("`when` (none): dispositions by a field's value, in order, as inline tables; the first match decides, else the item is delivered."));
     assert!(prose.contains("`equals` (required): its value, compared as text, trimmed."));
     assert!(prose.contains("`after_ms` (`0`): the travel time from the answer to the report."));
@@ -868,7 +871,8 @@ Each key states in parentheses that it is required, or the value it takes when l
 name (of a register, a bit, a field, a fault, an outcome) is exact, with no surrounding
 whitespace; a message name is one of the catalog's. A value compared with a field's (a
 disposition's or a setting's `equals`, a rule's `pattern`, a reply's key) is compared as text,
-the field's value trimmed.
+the field's value trimmed. A field a disposition, a rule, a command or a `sticky` key names is
+looked up when the message comes: a name the message does not carry simply never matches.
 
 **The top level**.
 - `format` (required): always `"veredas-controller"`.
@@ -924,10 +928,10 @@ the field's value trimmed.
 **The reply** (`[items.reply]`): the answer awaited for an item.
 - `message` (required): a message of the catalog. An answer for an item not awaited is
   counted and dropped.
-- `key` (the items' `key`): the reply's field holding the item's key; for a binary message,
-  one of its fields or of a repeat's numbered names.
-- `destination` (none): the reply's field naming the destination; required when there is an
-  outcome and there are destinations. A destination not in the list is counted and the item
+- `key` (the items' `key`): the reply's field holding the item's key: a name the reply reads,
+  as the catalog says (a binary field, a payload group, a repeat's numbered name).
+- `destination` (none): the reply's field naming the destination, a name the reply reads;
+  required when there is an outcome and there are destinations. A destination not in the list is counted and the item
   still travels.
 - `when` (none): dispositions by a field's value, in order, as inline tables; the first match
   decides, else the item is delivered.
@@ -1031,7 +1035,7 @@ before it starts, an empty cycle, a bad template, a source its place does not ta
 that does not exist, a decision with a bad pattern or nothing to decide with, a list that leaves
 one of its message's names unwritten, a message the catalog does not hold, an interval or lap of
 0, a key no field announces, a fault's share over 100 or a fault setting a field that is not
-announced, a reply key or destination that is no field of a binary reply, an outcome without a
+announced, a reply key or destination the reply does not read, an outcome without a
 reply, a weight that is not finite or below 0, a command with nothing to set or setting a
 register that does not exist, a destination list that is empty or repeats a number, a bit that
 is not one bit or named twice, a resting or initial or blocking bit that is not named, an

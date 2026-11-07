@@ -35,8 +35,9 @@ scheme, one naming rule, and a clear role for each component.
 - **Versioned files.** Every plain-text config and project file is TOML and states its
   schema as `format` and `version`; a misspelled key is refused. Portal migrates it or
   refuses it, and never guesses. Veredas 1's JSON project files are not carried as they are:
-  what portal absorbs of them is read into TOML (`docs/questions.md` Q10; the pattern is
-  `docs/channel-schema.md`).
+  what portal absorbs of them is read into TOML (`docs/questions.md` Q10; the pattern is in
+  each `docs/*-schema.md`, from the channel file on: the worked example loaded by the test,
+  every key statement the reader's, and, from the catalog on, the text held as the test's copy).
 - **New components** start at core's current MAJOR (3.0.0 if core is on 3.x).
 - **ORCL** has its own SemVer as a language; controlador states which ORCL versions it runs.
 
