@@ -362,24 +362,24 @@ fn banned_in_planted(case: &str, deps: &str, crates: &[(&str, &str)]) -> Vec<Str
 fn the_graph_walk_follows_normal_and_build_edges_and_skips_dev_ones() {
     let crates = [("duck", "duckdb"), ("ui", "eframe"), ("member", "veredas-maquinar")];
     assert_eq!(
-        banned_in_planted("normal", "[dependencies]\nduckdb = { path = \"../duck\" }\n", &crates),
+        banned_in_planted("graph-normal", "[dependencies]\nduckdb = { path = \"../duck\" }\n", &crates),
         ["duckdb"]
     );
     assert_eq!(
-        banned_in_planted("build", "[build-dependencies]\neframe = { path = \"../ui\" }\n", &crates),
+        banned_in_planted("graph-build", "[build-dependencies]\neframe = { path = \"../ui\" }\n", &crates),
         ["eframe"]
     );
     assert_eq!(
-        banned_in_planted("dev", "[dev-dependencies]\nveredas-maquinar = { path = \"../member\" }\n", &crates),
+        banned_in_planted("graph-dev", "[dev-dependencies]\nveredas-maquinar = { path = \"../member\" }\n", &crates),
         Vec::<String>::new()
     );
     assert_eq!(
         banned_in_planted(
-            "both",
+            "graph-both",
             "[dependencies]\nduckdb = { path = \"../duck\" }\n[dev-dependencies]\nduckdb = { path = \"../duck\" }\n",
             &crates
         ),
         ["duckdb"]
     );
-    assert_eq!(banned_in_planted("clean", "", &crates), Vec::<String>::new());
+    assert_eq!(banned_in_planted("graph-clean", "", &crates), Vec::<String>::new());
 }
