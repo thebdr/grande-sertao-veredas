@@ -10,15 +10,15 @@
     "tail_backfill"
   ],
   "exitCode": 0,
-  "outputSha": "2142d64aba9f9ccfaa2241eab5cc10ecbc504479540b7f31dfa357415bcf62cc",
-  "outputTail": "test a_start_after_everything_is_live_only_from_the_end ... ok\ntest the_prefilter_drops_files_whose_successor_proves_they_ended_before_the_start_day ... ok\ntest a_start_between_files_or_before_everything_begins_at_a_file_s_top ... ok\ntest file_name_dates_are_the_fallback_and_with_neither_the_backfill_refuses ... ok\ntest a_backfill_into_an_empty_family_reads_whatever_is_born_whole ... ok\ntest a_start_after_everything_replays_nothing_and_follows_live ... ok\ntest a_resting_family_replays_exactly_from_the_start ... ok\ntest the_seam_is_exact_in_an_indexed_family ... ok\ntest the_seam_is_exact_in_a_fixed_name_family ... ok\n\ntest result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.68s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.10s\n     Running tests\\tail_backfill.rs (target\\debug\\deps\\tail_backfill-dc4a97a716cffed2.exe)",
-  "ranAt": "2026-11-07T20:54:47.378Z",
-  "headCommit": "94dd381d9e3704551423fe9627473bf33ba5f73f",
+  "outputSha": "7d1b01c0eaf866e61b74bca0d87d1189711048f39906dfc9c654a5456b1ba9af",
+  "outputTail": "test the_prefilter_drops_files_whose_successor_proves_they_ended_before_the_start_day ... ok\ntest a_start_between_files_or_before_everything_begins_at_a_file_s_top ... ok\ntest file_name_dates_are_the_fallback_and_with_neither_the_backfill_refuses ... ok\ntest a_rotation_during_the_locate_is_listed_again_never_an_error ... ok\ntest a_backfill_into_an_empty_family_reads_whatever_is_born_whole ... ok\ntest a_start_after_everything_replays_nothing_and_follows_live ... ok\ntest a_resting_family_replays_exactly_from_the_start ... ok\ntest the_seam_is_exact_in_an_indexed_family ... ok\ntest the_seam_is_exact_in_a_fixed_name_family ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.75s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.49s\n     Running tests\\tail_backfill.rs (target\\debug\\deps\\tail_backfill-6a5940ecd1af8af4.exe)",
+  "ranAt": "2026-11-07T23:26:53.738Z",
+  "headCommit": "84645da3d595ffa8aceb2e3a7e6ec1995a9be801",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/tail_backfill.rs",
       "file": "crates/veredas-portal/tests/tail_backfill.rs",
-      "fileSha": "78a70d34bb957d281b157311f566ace8020f8c3ea7bdd81e2531fdedab80b837"
+      "fileSha": "cbf7aeeecec6e35ded322b9f1bd8f09af1947af1907775c0d22836c945eba58a"
     }
   ]
 }
