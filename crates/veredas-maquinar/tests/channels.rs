@@ -140,9 +140,15 @@ fn a_channel_in_either_role_speaks_the_catalog_and_the_monitor_shows_what_came_a
     let before = listener.status().sent.get("status").copied().unwrap_or(0);
     listener.send_now("status", values(&[("running", "1"), ("speed", &"9".repeat(70_000))]), None);
     last_error("status: length = 70012 does not fit its 2-byte field");
-    assert!(listener.status().sent.get("status").copied().unwrap_or(0) <= before + 1, "the cyclic status line may have gone meanwhile, the long one never");
-    assert!(listener.status().recent.iter().any(|l| l.direction == Direction::Note && l.preview == "status not sent: length = 70012 does not fit its 2-byte field"));
-    assert!(dialer.status().recent.iter().all(|l| l.preview.len() < 60), "nothing of the long body arrived: {:?}", dialer.status().recent.iter().map(|l| l.preview.len()).max());
+    // Not counted: the count of status lines sent is the count of status lines the monitor
+    // shows going out (one snapshot), and no line, out here or in at the peer, carries the long
+    // value.
+    let l = listener.status();
+    assert_eq!(l.sent.get("status").copied().unwrap_or(0), l.recent.iter().filter(|x| x.direction == Direction::Out && x.message == "status").count() as u64, "{:?}", l.sent);
+    assert!(l.sent.get("status").copied().unwrap_or(0) <= before + 1, "the cyclic status line may have gone meanwhile, the long one never");
+    assert!(l.recent.iter().any(|x| x.direction == Direction::Note && x.preview == "status not sent: length = 70012 does not fit its 2-byte field"));
+    assert!(l.recent.iter().all(|x| x.fields.get("speed").map(|v| v.len() < 10).unwrap_or(true)), "no line went out with the long value");
+    assert!(dialer.status().recent.iter().all(|x| x.fields.get("speed").map(|v| v.len() < 10).unwrap_or(true)), "nothing of the long body arrived");
     let notes: Vec<String> = listener.status().recent.iter().filter(|l| l.direction == Direction::Note && l.preview.contains("not sent")).map(|l| l.preview.clone()).collect();
     assert_eq!(notes.len(), 4, "{notes:?}");
     assert!(notes.contains(&"heartbeat not sent: no value for `state`".to_string()), "{notes:?}");
@@ -228,6 +234,26 @@ fn in_a_layout_without_segments_the_id_rides_in_the_envelope() {
     let d = dialer.status();
     assert_eq!(d.recent.iter().find(|x| x.direction == Direction::In && x.message == "status").unwrap().preview, "RUN=1;SPEED=9");
     assert_eq!((l.unknown_ids, l.undecodable, d.unknown_ids, d.undecodable), (0, 0, 0, 0));
+    listener.stop();
+    dialer.stop();
+    // A body that renders empty is a keep-alive on this wire: a note and the last error, no
+    // frame, not counted; the same message with a value goes out and is read by name.
+    let text = format!("{}\n[[message]]\nname = \"t\"\nid = 27\ntemplate = \"{{t}}\"\npayload = \"^(?P<t>.*)$\"\n", doc_blocks("controller-schema.md")[0]);
+    let with_t = |name: &str, role: Role| ChannelConfig { name: name.into(), role, spec: spec.clone(), catalog: catalog::load(&text).unwrap(), messages: Vec::new(), controller: None, seed: Some(1) };
+    let port = free_port();
+    let listener = start(with_t("plant", listen(port))).unwrap();
+    let dialer = start(with_t("unit", dial(port))).unwrap();
+    linked(&listener, &dialer);
+    let keepalives = dialer.status().wire.keepalives_received;
+    listener.send_now("t", values(&[("t", "")]), None);
+    assert!(wait(Duration::from_secs(2), || listener.status().last_error.as_deref() == Some("t: an empty body is a keep-alive in a layout without segments")), "{:?}", listener.status().last_error);
+    assert!(listener.status().recent.iter().any(|x| x.direction == Direction::Note && x.preview == "t not sent: an empty body is a keep-alive in a layout without segments"));
+    assert_eq!(listener.status().sent.get("t"), None);
+    listener.send_now("t", values(&[("t", "hi")]), None);
+    assert!(wait(Duration::from_secs(5), || dialer.status().received.get("t") == Some(&1)));
+    assert_eq!(listener.status().sent.get("t"), Some(&1));
+    assert_eq!(dialer.status().recent.iter().find(|x| x.message == "t").unwrap().fields["t"], "hi");
+    assert_eq!(dialer.status().wire.keepalives_received, keepalives, "no keep-alive went out for the empty body");
     // The id must be an envelope field here, and no field the channel fills in itself.
     let text = doc_blocks("controller-schema.md")[0].replace("id_field = \"id\"", "id_field = \"nope\"");
     let err = start(ChannelConfig { name: "x".into(), role: listen(free_port()), spec: spec.clone(), catalog: catalog::load(&text).unwrap(), messages: Vec::new(), controller: None, seed: None }).err().unwrap();
