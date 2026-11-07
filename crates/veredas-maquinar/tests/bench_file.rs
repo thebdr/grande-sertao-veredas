@@ -551,7 +551,25 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     assert!(dir.join("e.log").exists(), "the emitter had started and written its first line before the server failed");
     let written = std::fs::read_to_string(dir.join("e.log")).unwrap().lines().count();
     std::thread::sleep(Duration::from_millis(60));
-    assert_eq!(std::fs::read_to_string(dir.join("e.log")).unwrap().lines().count(), written, "and was stopped, every part joined, before the error came back");
+    assert_eq!(std::fs::read_to_string(dir.join("e.log")).unwrap().lines().count(), written, "and was stopped before the error came back");
+    // Joined, not merely told to stop: a server started before the failing one has released
+    // its port the moment the error is back.
+    let q = free_port();
+    let spec = load(&format!("{h}[[opc]]\nname = \"a\"\nport = {q}\n\n[[opc]]\nname = \"b\"\nport = {taken}\n"), &dir).unwrap();
+    assert!(start_err(spec).starts_with("opc `b`: bind "));
+    assert!(std::net::TcpListener::bind(("127.0.0.1", q)).is_ok(), "the first server's port is free at once");
+    // Servers start before channels: a channel that would dial the test's own socket never
+    // dials when a server before it fails.
+    let ear = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    ear.set_nonblocking(true).unwrap();
+    let spec = load(
+        &format!("{h}[[opc]]\nname = \"s\"\nport = {taken}\n\n[[channel]]\nname = \"c\"\nrole = \"connect\"\nport = {}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n", ear.local_addr().unwrap().port()),
+        &dir,
+    )
+    .unwrap();
+    assert!(start_err(spec).starts_with("opc `s`: bind "));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(matches!(ear.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock), "nobody dialled: the channel after the server was never started");
     let blocker = dir.join("blocker");
     std::fs::write(&blocker, b"a file where the folder should be").unwrap();
     let spec = load(&emitter("").replace(h, &format!("{h}out_dir = \"blocker\"\n")), &dir).unwrap();
@@ -626,6 +644,39 @@ fn the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own() {
     let w1 = first_weights(7, "seedm1");
     assert_eq!(w1, first_weights(7, "seedm2"), "the rules file says seed 7 too, but the bench's seed is the one used");
     assert_ne!(w1, first_weights(8, "seedm3"));
+    // A channel's own messages draw from the bench's seed too: a status line with a drawn
+    // speed every 50 ms, read by a peer the test holds.
+    let speeds = |seed: u64, tag: &str| -> Vec<String> {
+        let dir = scratch(tag);
+        let (_, port) = plant(&dir);
+        let ear = veredas_maquinar::channel::start(veredas_maquinar::channel::ChannelConfig {
+            name: "ear".into(),
+            role: Role::Listen { bind: "127.0.0.1".into(), port },
+            spec: veredas_core::telegram::schema::load(&blocks("channel-schema.md")[0]).unwrap(),
+            catalog: veredas_core::telegram::catalog::load(&blocks("controller-schema.md")[0]).unwrap(),
+            messages: Vec::new(),
+            controller: None,
+            seed: None,
+        })
+        .unwrap();
+        let text = format!(
+            "{}seed = {seed}\n[[channel]]\nname = \"mouth\"\nrole = \"connect\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\nmessages = [ {{ message = \"status\", every_ms = 50, fields = [ {{ name = \"running\", value = 1 }}, {{ name = \"speed\", range = [0, 1000000] }} ] }} ]\n",
+            header()
+        );
+        let bench = Bench::start(load(&text, &dir).unwrap()).unwrap();
+        assert!(wait(Duration::from_secs(5), || ear.status().received.get("status").copied().unwrap_or(0) >= 4), "{:?}", ear.status());
+        let mut lines: Vec<String> = ear.status().recent.iter().filter(|l| l.message == "status").map(|l| l.fields["speed"].clone()).collect();
+        lines.reverse();
+        lines.truncate(4);
+        bench.stop();
+        ear.stop();
+        std::fs::remove_dir_all(&dir).unwrap();
+        lines
+    };
+    let s1 = speeds(7, "seedc1");
+    assert_eq!(s1.len(), 4);
+    assert_eq!(s1, speeds(7, "seedc2"), "the channel's draws under the bench's seed");
+    assert_ne!(s1, speeds(8, "seedc3"));
 }
 
 #[test]
