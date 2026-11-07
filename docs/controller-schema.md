@@ -366,7 +366,8 @@ decision. At least one of `rules`, `spread` and `reject` is given.
   drawn.
 - `reject` (none): the value when no rule matches and nothing can be drawn.
 - `sticky` (none): the context field whose value keys a remembered decision: the same key
-  decides the same again, while that value is not blocked; the newest 10000 keys are kept.
+  decides the same again, while that value is not blocked; a reject is never remembered; the
+  newest 10000 keys are kept.
 
 **A rule** (an entry of `rules`).
 - `field` (required): the context field it looks at.

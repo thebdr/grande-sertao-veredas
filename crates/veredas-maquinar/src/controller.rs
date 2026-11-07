@@ -712,8 +712,14 @@ fn decide(d: &mut CompiledDecide, ctx: &mut Context<'_>) -> Option<String> {
             }
         }
     }
-    let decided = decided.or_else(|| d.reject.clone())?;
-    if let Some(k) = key
+    // A reject is never remembered: a key rejected while every chute was full decides afresh
+    // when they come back.
+    let (decided, remember) = match decided {
+        Some(v) => (v, true),
+        None => (d.reject.clone()?, false),
+    };
+    if remember
+        && let Some(k) = key
         && d.remembered.insert(k.clone(), decided.clone()).is_none()
     {
         d.order.push_back(k);

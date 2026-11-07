@@ -849,7 +849,7 @@ fn every_rule_the_reference_states_about_loading_is_the_reader_s() {
     assert!(prose.contains("`rules` (none): first-match rules, as inline tables."));
     assert!(prose.contains("`spread` (none): weighted values, as inline tables; a value with a weight of 0 is never drawn."));
     assert!(prose.contains("`reject` (none): the value when no rule matches and nothing can be drawn."));
-    assert!(prose.contains("`sticky` (none): the context field whose value keys a remembered decision: the same key decides the same again, while that value is not blocked; the newest 10000 keys are kept."));
+    assert!(prose.contains("`sticky` (none): the context field whose value keys a remembered decision: the same key decides the same again, while that value is not blocked; a reject is never remembered; the newest 10000 keys are kept."));
     assert!(prose.contains("`field` (required): the context field it looks at."));
     assert!(prose.contains("`pattern` (required): a regex over the field's value, trimmed; `(empty)` matches a field that is absent or blank."));
     assert!(prose.contains("`value` (required): the decision."));
@@ -1081,7 +1081,8 @@ decision. At least one of `rules`, `spread` and `reject` is given.
   drawn.
 - `reject` (none): the value when no rule matches and nothing can be drawn.
 - `sticky` (none): the context field whose value keys a remembered decision: the same key
-  decides the same again, while that value is not blocked; the newest 10000 keys are kept.
+  decides the same again, while that value is not blocked; a reject is never remembered; the
+  newest 10000 keys are kept.
 
 **A rule** (an entry of `rules`).
 - `field` (required): the context field it looks at.

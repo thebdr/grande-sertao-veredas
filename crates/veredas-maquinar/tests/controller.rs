@@ -445,6 +445,10 @@ fn the_unit_answers_with_a_decision_sticky_by_code_and_avoiding_what_is_blocked(
     assert_eq!(field(&u.on_message("announce", &announce("8", ""), Some(7))[0], "dest"), "0");
     u.set_bit_everywhere("full", false).unwrap();
     assert_ne!(field(&u.on_message("announce", &announce("9", "Z2"), Some(7))[0], "dest"), "9");
+    // A reject is never remembered: the code decided while every chute was full draws again,
+    // and the code remembered before keeps its chute.
+    assert!(["1", "2", "3"].contains(&field(&u.on_message("announce", &announce("10", "Z1"), Some(7))[0], "dest")), "a code rejected while full draws again");
+    assert_eq!(field(&u.on_message("announce", &announce("11", "PKG1"), Some(7))[0], "dest"), again, "the chute remembered before the full period");
     // An answer whose field cannot render is not sent, and counted: a rule-only decision with
     // nothing matching and no reject.
     let mut strict = Controller::new(
