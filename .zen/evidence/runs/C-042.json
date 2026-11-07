@@ -1,0 +1,24 @@
+{
+  "clause": "C-042",
+  "command": "cargo test -p veredas-portal --test store_engine",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-portal",
+    "--test",
+    "store_engine"
+  ],
+  "exitCode": 0,
+  "outputSha": "d6b38b006d290d7454212e8cd693f32edebea15b0c65918d1d296b9aa5198813",
+  "outputTail": "test ubigint_and_timestamp_round_trip_and_epoch_ms_converts ... ok\ntest memory_is_reported_and_a_plan_is_inspectable ... ok\ntest an_appender_s_rows_reach_a_cloned_connection_on_another_thread_once_flushed ... ok\ntest time_bucket_snaps_to_an_absolute_grid ... ok\ntest an_asof_join_takes_the_nearest_preceding_row_within_a_tolerance ... ok\ntest the_catalog_functions_list_tables_views_and_columns ... ok\ntest a_file_backed_database_takes_its_limits_and_reopens ... ok\ntest copy_from_database_snapshots_tables_and_views_into_a_readable_file ... ok\ntest a_csv_view_reflects_edits_a_replacement_and_a_new_column_and_never_locks_the_file ... ok\n\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.49s\n     Running tests\\store_engine.rs (target\\debug\\deps\\store_engine-2ef9627313f04290.exe)",
+  "ranAt": "2026-11-07T21:53:24.655Z",
+  "headCommit": "27e5e443d55b0832a6295f39a8fb772b51303726",
+  "tests": [
+    {
+      "name": "crates/veredas-portal/tests/store_engine.rs",
+      "file": "crates/veredas-portal/tests/store_engine.rs",
+      "fileSha": "84b5cfe921c988c0beb4fc312c2b9b482c78db5f8d363019f42f3d5b760e177e"
+    }
+  ]
+}

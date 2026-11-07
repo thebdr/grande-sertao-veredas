@@ -10,15 +10,15 @@
     "tail_file"
   ],
   "exitCode": 0,
-  "outputSha": "fbc2c13d78d024baa0f39298e2e23f4456132d4f39da65200a495207a305a30f",
-  "outputTail": "test utf16_both_orders_with_a_mark_and_little_endian_without ... ok\ntest start_at_end_of_a_file_ending_in_a_newline_emits_the_next_line ... ok\ntest three_files_tailed_at_once_merge_tagged_with_dense_sequences ... ok\ntest a_running_file_source_never_blocks_the_owner ... ok\ntest waits_for_a_file_to_appear_and_reads_it_whole ... ok\ntest start_at_end_skips_history_and_the_torn_fragment ... ok\ntest partial_line_is_held_until_its_newline ... ok\ntest a_deleted_file_is_drained_and_whatever_reappears_is_read_from_its_start ... ok\ntest a_fast_writer_cannot_pin_the_reader_and_every_line_arrives_once ... ok\n\ntest result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.19s\n     Running tests\\tail_file.rs (target\\debug\\deps\\tail_file-0b931435b3c11539.exe)",
-  "ranAt": "2026-11-07T20:54:27.233Z",
-  "headCommit": "94dd381d9e3704551423fe9627473bf33ba5f73f",
+  "outputSha": "db8324d11a76afa696702a14b0123021c576e0a37281ba917d8d2016b533034a",
+  "outputTail": "test utf8_with_and_without_a_byte_order_mark ... ok\ntest a_deleted_file_is_drained_and_whatever_reappears_is_read_from_its_start ... ok\ntest utf16_both_orders_with_a_mark_and_little_endian_without ... ok\ntest three_files_tailed_at_once_merge_tagged_with_dense_sequences ... ok\ntest an_ascii_opening_does_not_commit_the_encoding_before_the_first_byte_beyond_ascii ... ok\ntest waits_for_a_file_to_appear_and_reads_it_whole ... ok\ntest a_fast_writer_cannot_pin_the_reader_and_every_line_arrives_once ... ok\ntest a_utf16_file_tailed_from_its_end_emits_the_first_new_line_and_skips_a_torn_one ... ok\ntest a_tail_without_a_watcher_polls_at_its_interval_and_reads_the_file_when_it_comes ... ok\n\ntest result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.27s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.74s\n     Running tests\\tail_file.rs (target\\debug\\deps\\tail_file-ea396b6e279500ad.exe)",
+  "ranAt": "2026-11-07T21:53:10.649Z",
+  "headCommit": "27e5e443d55b0832a6295f39a8fb772b51303726",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/tail_file.rs",
       "file": "crates/veredas-portal/tests/tail_file.rs",
-      "fileSha": "732a3f48bb837bfe5dcd407fb2364eedf00ddd20b03c521a3632bf6498cd1205"
+      "fileSha": "8f9ce8909e55d821e3726f22c9dc3ca835678887d5d040617dba5dc330f37200"
     }
   ]
 }
