@@ -230,3 +230,6 @@ pub fn assert_exact(name: &str, got: &[String], expected: &[String]) {
         );
     }
 }
+
+/// The plant the session and the server tests meet, and the session over it.
+pub mod plant;

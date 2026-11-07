@@ -7,10 +7,13 @@ publish = false
 description = "The gateway of Veredas 2: the one point where the suite reads the plant's logs, telegrams and OPC UA servers, stores their data alike and serves it, writes gated"
 
 [features]
-default = ["store"]
+default = ["store", "serve"]
 # The session store, DuckDB embedded. Off, the crate is the light build controlador embeds: the
 # data plane, the channels, the OPC sources and the project file, nothing persisted.
-store = ["dep:duckdb", "dep:serde_json"]
+store = ["dep:duckdb", "dep:serde_json", "dep:tokio"]
+# The server over a session: the live stream, windowed REST, the gated write surface. Needs the
+# store it serves.
+serve = ["store", "dep:axum", "dep:tokio-stream"]
 
 # A library first, one executable on top (docs/portal-plan.md, "Rules"; tests/component.rs asks
 # cargo what it would build). Depends on core alone (law L5, the map); its tests dev-depend on the
@@ -42,6 +45,12 @@ thiserror = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 # Whether a drive letter is a network drive, so a share is polled and never watched.
 windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_Foundation"] }
+
+# The session broadcasts its data frames on a tokio channel, which the server streams.
+tokio = { workspace = true, optional = true }
+# The server is axum over tokio; the live stream wraps the frames broadcast as a stream.
+axum = { workspace = true, optional = true }
+tokio-stream = { workspace = true, optional = true }
 
 [dev-dependencies]
 # The bench plays the plant: its emitters write the files the tail follows.

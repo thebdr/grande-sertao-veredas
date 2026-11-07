@@ -14,6 +14,10 @@
 //! - [`channel`]: a telegram channel to a device, by a channel file, a catalog and reply rules.
 //! - [`opc`]: an OPC UA source compiled into core's poll spec, polled into tables by rules.
 //! - [`store`] (feature `store`): the DuckDB session store, every protocol's data stored alike.
+//! - [`session`] (feature `store`): a project's sources running, pumped into the store; health,
+//!   the series listing and the vitals kept by the ingest.
+//! - [`serve`] (feature `serve`): the live stream, windowed REST and the gated write surface over
+//!   a session.
 //!
 //! Nothing here names a device, a vendor or a product: what a plant's files and telegrams mean
 //! is configuration (`docs/questions.md` Q8). Reading a plant's file never blocks its writer.
@@ -24,6 +28,10 @@ pub mod encoding;
 pub mod family;
 pub mod opc;
 pub mod source;
+#[cfg(feature = "store")]
+pub mod session;
+#[cfg(feature = "serve")]
+pub mod serve;
 #[cfg(feature = "store")]
 pub mod store;
 pub mod tail;
