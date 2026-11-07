@@ -259,3 +259,45 @@ loops carry a `DECISION PENDING` note. Raising the resolution is one call at the
 executable, behind `cfg(windows)`, when the operator wants 20 ms ticks on the bench.
 
 **Reversible?** Yes: one call, one place, nothing else changes.
+
+## Q14 - What is the Veredas 2 desktop shell?
+
+**Raised** 2026-11-07, planning portal (P-002).
+
+Veredas 1's `veredas-desktop` is an egui application of about 21 000 lines (`app.rs`, `boot.rs`,
+`style.rs`, fourteen `ui/*.rs` screens: projects, start, trailing, series, grep, viewer, tables,
+the OPC explorer, the layout and SQL editors) over the same session, store and server that portal
+absorbs. The plan names "the desktop shell" in portal's scope without saying whether Veredas 2's
+shell is a port of that desktop, a thinner shell over portal's server (a window that starts a
+project and shows health, the operator working in the browser), or no desktop at all, supervisão's
+web interface (P-008) being the suite's one interface. The grep tab, the trailing view and the
+table browser are operator tooling that goes where the shell goes.
+
+**Taken (reversible, pending the operator):** portal is a library and one executable,
+`veredas-portal <project.toml>`, which serves a project from the command line until stopped; no
+desktop UI is built. Every operator action the Veredas 1 shell had on a session (start, stop, add
+or remove a source, arm the writes, snapshot, export) is a method on the session's handle, so a
+shell, when it comes, drives the same library the tests do. The grep engine and the skew monitor
+wait with it (`docs/portal-plan.md`, "Scope").
+
+**Reversible?** Yes: a shell is a crate or a module on top of the library; nothing below it
+changes.
+
+---
+
+## Q15 - Where does the suite keep a secret?
+
+**Raised** 2026-11-07, designing portal's project file (P-010).
+
+Veredas 1 kept an OPC UA password in the Windows Credential Manager (`keyring`, keyed by endpoint
+and user), so a project folder could be committed and shared. Veredas 2's project file is TOML in
+a project folder, meant for git like Veredas 1's, and runs on Linux in CI: a password cannot go in
+the file, and a platform vault is one platform's.
+
+**Taken (reversible, pending the operator):** the project file names the user and the name of an
+environment variable that holds the password (`password_env`); portal reads the variable when the
+session starts and refuses to start a source whose variable is unset, naming the variable, never
+the value. No vault, no secrets file.
+
+**Reversible?** Yes: a second source of secrets (a vault, a file outside the project) is one more
+way to fill the same field.
