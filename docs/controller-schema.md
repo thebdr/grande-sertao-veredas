@@ -247,8 +247,8 @@ an empty name is refused when the file loads.
 
 **A blocking bit** (an entry of `blocking`).
 - `bit` (required): a named bit.
-- `set` (none): the outcome fields it forces, by name (one the outcome does not render is
-  refused), overriding what the fields rendered.
+- `set` (none): the outcome fields it forces, by name (one the outcome does not render, or any
+  when there is no outcome, is refused), overriding what the fields rendered.
 - `requeue` (`false`): the item comes round again after a lap instead of ending.
 
 **The items** (`[items]`): what the controller announces and awaits an answer for.
@@ -379,12 +379,14 @@ decision. At least one of `rules`, `spread` and `reject` is given.
 - `weight` (required): its share, a finite number of 0 or more.
 
 A field with no source or more than one, a range that is empty, not finite or, at 0 decimals,
-holding no whole number, a counter ending before it starts, an empty cycle, a bad template, a source its place does not take, a register
+holding no whole number or reaching outside the 64-bit integers, a counter ending before it
+starts, an empty cycle, a bad template, a source its place does not take, a register
 that does not exist, a decision with a bad pattern or nothing to decide with, a list that leaves
 one of its message's names unwritten, a message the catalog does not hold, an interval or lap of
 0, a key no field announces, a fault's share over 100 or a fault setting a field that is not
 announced, a reply key or destination the reply does not read, an outcome without a
-reply, a forced field no outcome field renders, a weight that is not finite or below 0, an empty
+reply, a forced field no outcome field renders or forced with no outcome at all, a weight that
+is not finite or below 0, an empty
 field name in a disposition, a rule, a command or a `sticky` key, a command with nothing to
 set or setting a register that does not exist, a destination list that is empty or repeats a number, a bit that
 is not one bit or named twice, a resting or initial or blocking bit that is not named, an

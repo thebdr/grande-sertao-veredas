@@ -501,6 +501,9 @@ impl Fields {
                 if s.decimals == 0 && low.ceil() > high.floor() {
                     return Err(invalid(format!("{where_}: the range {low}..={high} holds no whole number")));
                 }
+                if s.decimals == 0 && (low.ceil() < i64::MIN as f64 || high.floor() > i64::MAX as f64) {
+                    return Err(invalid(format!("{where_}: the range {low:e}..={high:e} reaches outside the 64-bit integers a whole draw takes")));
+                }
                 Source::Range { low, high, decimals: s.decimals }
             } else if let Some(c) = &s.counter {
                 if let Some(last) = c.last
@@ -1043,6 +1046,15 @@ pub fn load(text: &str, catalog: &Catalog) -> Result<Rules, RulesError> {
             })
         }
     };
+
+    // A blocking bit's forced fields need an outcome to force; without one they are a mistake,
+    // not a no-op.
+    if let Some(d) = &destinations
+        && items.as_ref().and_then(|i| i.outcome.as_ref()).is_none()
+        && let Some((j, (bit, _, _, _))) = d.blocking.iter().enumerate().find(|(_, (_, _, set, _))| !set.is_empty())
+    {
+        return Err(invalid(format!("destinations.blocking[{j}] (`{bit}`).set: there is no outcome to force")));
+    }
 
     let mut answers = Vec::new();
     for (i, a) in file.answers.iter().enumerate() {

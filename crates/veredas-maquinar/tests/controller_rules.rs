@@ -125,7 +125,7 @@ fn text_map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
 fn full_file() -> String {
     format!(
         "{}seed = 1\nregisters = {{ r = 0 }}\n\n\
-         [destinations]\nlist = [1]\nbits = {{ b = 1 }}\nresting = [\"b\"]\ninitial = {{ \"1\" = [\"b\"] }}\nblocking = [ {{ bit = \"b\", set = {{ result = \"X\" }}, requeue = false }} ]\n\n\
+         [destinations]\nlist = [1]\nbits = {{ b = 1 }}\nresting = [\"b\"]\ninitial = {{ \"1\" = [\"b\"] }}\nblocking = [ {{ bit = \"b\", set = {{}}, requeue = false }} ]\n\n\
          [items]\nmessage = \"announce\"\ninterval_ms = 100\nkey = \"item\"\ngate = \"r\"\nlap_ms = 30000\n\
          fields = [ {{ name = \"item\", value = 1 }}, {{ name = \"lane\", value = 1 }}, {{ name = \"read\", value = \"Y\" }}, {{ name = \"code\", value = \"C\" }}, {{ name = \"weight\", value = 1 }} ]\n\
          faults = [ {{ name = \"f\", percent = 0, set = {{ read = \"N\" }} }} ]\n\n\
@@ -650,7 +650,7 @@ fn every_invalid_file_is_refused_with_its_place_named() {
     // Names a message may not carry are looked up when it comes; only an empty one is refused.
     assert_eq!(refused(&with("[items.reply]\nmessage = \"answer\"\nwhen = [ { field = \" \", equals = 1, action = \"park\" } ]\n")), "items.reply.when[0].field is empty");
     let ans = |fields: &str| format!("{h}[[answers]]\non = \"announce\"\nsend = \"answer\"\nfields = [ {fields}, {{ name = \"dest\", value = 1 }}, {{ name = \"flag\", value = 1 }} ]\n");
-    assert_eq!(refused(&ans("{ name = \"item\", decide = { rules = [ { field = \"\", pattern = \"x\", value = 1 } ] } }")), "answers[0].fields[0] (`item`).decide.rules[0].field is empty");
+    assert_eq!(refused(&ans("{ name = \"item\", decide = { rules = [ { field = \" \", pattern = \"x\", value = 1 } ] } }")), "answers[0].fields[0] (`item`).decide.rules[0].field is empty");
     assert_eq!(refused(&ans("{ name = \"item\", decide = { reject = 0, sticky = \" \" } }")), "answers[0].fields[0] (`item`).decide.sticky is empty");
     assert!(load(&with("[items.reply]\nmessage = \"answer\"\nwhen = [ { field = \"nope\", equals = 1, action = \"park\" } ]\n"), &catalog()).is_ok());
     assert!(load(&ans("{ name = \"item\", decide = { rules = [ { field = \"nope\", pattern = \"x\", value = 1 } ], sticky = \"nope\" } }"), &catalog()).is_ok());
@@ -662,7 +662,26 @@ fn every_invalid_file_is_refused_with_its_place_named() {
     };
     assert!(load(&forced("{ bit = \"full\", set = { result = \"FULL\" } }", "{ name = \"o\", weight = 1, set = { result = \"O\" } }"), &catalog()).is_ok());
     assert_eq!(refused(&forced("{ bit = \"full\", set = { reslut = \"FULL\" } }", "")), "destinations.blocking[0] (`full`).set: no outcome field named `reslut`");
+    assert_eq!(
+        refused(&forced("{ bit = \"full\", set = { result = \"FULL\" } }, { bit = \"full\", set = { reslut = \"X\" } }", "").replace("bits = { full = 1 }", "bits = { full = 1, fault = 2 }").replace("{ bit = \"full\", set = { reslut", "{ bit = \"fault\", set = { reslut")),
+        "destinations.blocking[1] (`fault`).set: no outcome field named `reslut`",
+        "every entry, not the first alone"
+    );
     assert_eq!(refused(&forced("", "{ name = \"o\", weight = 1, set = { reslut = \"O\" } }")), "items.outcome.mix[0].set: no outcome field named `reslut`");
+    assert_eq!(
+        refused(&format!("{h}[destinations]\nlist = [1]\nbits = {{ full = 1 }}\nblocking = [ {{ bit = \"full\" }}, {{ bit = \"full\", set = {{ result = \"FULL\" }} }} ]\n").replace("{ bit = \"full\", set", "{ bit = \"fault\", set").replace("bits = { full = 1 }", "bits = { full = 1, fault = 2 }")),
+        "destinations.blocking[1] (`fault`).set: there is no outcome to force",
+        "a forced field with no outcome at all, in a file without items"
+    );
+    assert_eq!(
+        refused(&format!("{}[destinations]\nlist = [1]\nbits = {{ full = 1 }}\nblocking = [ {{ bit = \"full\", set = {{ result = \"FULL\" }} }} ]\n", with("[items.reply]\nmessage = \"answer\"\n"))),
+        "destinations.blocking[0] (`full`).set: there is no outcome to force",
+        "with items and a reply but no outcome"
+    );
+    assert!(load(&format!("{h}[destinations]\nlist = [1]\nbits = {{ full = 1 }}\nblocking = [ {{ bit = \"full\" }} ]\n"), &catalog()).is_ok(), "a blocking bit forcing nothing needs no outcome");
+    // A whole range stays within the 64-bit integers a draw takes.
+    assert_eq!(refused(&field("range = [1e300, 1e300]")), "items.fields[0] (`item`): the range 1e300..=1e300 reaches outside the 64-bit integers a whole draw takes");
+    assert!(load(&field("range = [1e300, 1e300], decimals = 1"), &catalog()).is_ok());
     assert_eq!(refused(&items("fields = [ { name = \" x \", value = 1 } ]\n")), "items.fields[0]: the name ` x ` has surrounding whitespace");
     assert_eq!(refused(&with("faults = [ { name = \" f \", set = {} } ]\n")), "items.faults[0]: the name ` f ` has surrounding whitespace");
     assert_eq!(refused(&mix0.replace("name = \"o\"", "name = \" o \"")), "items.outcome.mix[0]: the name ` o ` has surrounding whitespace");
@@ -747,7 +766,7 @@ fn every_invalid_file_is_refused_with_its_place_named() {
     assert_eq!(refused(&dest("list = [1]\nblocking = [ { bit = \"x\" } ]\n")), "destinations.blocking[0]: no bit named `x`");
     assert_eq!(refused(&dest("list = [1]\nbits = { b = 1 }\nblocking = [ { bit = \"b\" }, { bit = \"b\" } ]\n")), "destinations.blocking[1]: `b` blocks twice");
     // The closing paragraph says all of it.
-    assert!(doc_prose().contains("A field with no source or more than one, a range that is empty, not finite or, at 0 decimals, holding no whole number, a counter ending before it starts, an empty cycle, a bad template, a source its place does not take, a register that does not exist, a decision with a bad pattern or nothing to decide with, a list that leaves one of its message's names unwritten, a message the catalog does not hold, an interval or lap of 0, a key no field announces, a fault's share over 100 or a fault setting a field that is not announced, a reply key or destination the reply does not read, an outcome without a reply, a forced field no outcome field renders, a weight that is not finite or below 0, an empty field name in a disposition, a rule, a command or a `sticky` key, a command with nothing to set or setting a register that does not exist, a destination list that is empty or repeats a number, a bit that is not one bit or named twice, a resting or initial or blocking bit that is not named, an initial destination not in the list, a bit blocking twice, and a misspelled key in any table are refused when the file loads, with the place named."));
+    assert!(doc_prose().contains("A field with no source or more than one, a range that is empty, not finite or, at 0 decimals, holding no whole number or reaching outside the 64-bit integers, a counter ending before it starts, an empty cycle, a bad template, a source its place does not take, a register that does not exist, a decision with a bad pattern or nothing to decide with, a list that leaves one of its message's names unwritten, a message the catalog does not hold, an interval or lap of 0, a key no field announces, a fault's share over 100 or a fault setting a field that is not announced, a reply key or destination the reply does not read, an outcome without a reply, a forced field no outcome field renders or forced with no outcome at all, a weight that is not finite or below 0, an empty field name in a disposition, a rule, a command or a `sticky` key, a command with nothing to set or setting a register that does not exist, a destination list that is empty or repeats a number, a bit that is not one bit or named twice, a resting or initial or blocking bit that is not named, an initial destination not in the list, a bit blocking twice, and a misspelled key in any table are refused when the file loads, with the place named."));
 }
 
 #[test]
@@ -774,7 +793,7 @@ fn every_rule_the_reference_states_about_loading_is_the_reader_s() {
     assert_eq!(c.status().destinations, BTreeMap::from([(1, 1), (2, 4)]), "resting where initial does not say");
     assert!(prose.contains("`blocking` (none): the bits that refuse an item, as inline tables, in order of precedence: the first entry whose bit is set in a destination's word decides; a bit blocks once."));
     assert!(prose.contains("`bit` (required): a named bit."));
-    assert!(prose.contains("`set` (none): the outcome fields it forces, by name (one the outcome does not render is refused), overriding what the fields rendered."));
+    assert!(prose.contains("`set` (none): the outcome fields it forces, by name (one the outcome does not render, or any when there is no outcome, is refused), overriding what the fields rendered."));
     assert!(prose.contains("`set` (none): the fields it forces, by name (one the outcome does not render is refused), overriding what the fields rendered."));
     assert!(prose.contains("`requeue` (`false`): the item comes round again after a lap instead of ending."));
     assert!(prose.contains("`message` (required): the announcement, a message of the catalog."));
@@ -938,8 +957,8 @@ an empty name is refused when the file loads.
 
 **A blocking bit** (an entry of `blocking`).
 - `bit` (required): a named bit.
-- `set` (none): the outcome fields it forces, by name (one the outcome does not render is
-  refused), overriding what the fields rendered.
+- `set` (none): the outcome fields it forces, by name (one the outcome does not render, or any
+  when there is no outcome, is refused), overriding what the fields rendered.
 - `requeue` (`false`): the item comes round again after a lap instead of ending.
 
 **The items** (`[items]`): what the controller announces and awaits an answer for.
@@ -1070,12 +1089,14 @@ decision. At least one of `rules`, `spread` and `reject` is given.
 - `weight` (required): its share, a finite number of 0 or more.
 
 A field with no source or more than one, a range that is empty, not finite or, at 0 decimals,
-holding no whole number, a counter ending before it starts, an empty cycle, a bad template, a source its place does not take, a register
+holding no whole number or reaching outside the 64-bit integers, a counter ending before it
+starts, an empty cycle, a bad template, a source its place does not take, a register
 that does not exist, a decision with a bad pattern or nothing to decide with, a list that leaves
 one of its message's names unwritten, a message the catalog does not hold, an interval or lap of
 0, a key no field announces, a fault's share over 100 or a fault setting a field that is not
 announced, a reply key or destination the reply does not read, an outcome without a
-reply, a forced field no outcome field renders, a weight that is not finite or below 0, an empty
+reply, a forced field no outcome field renders or forced with no outcome at all, a weight that
+is not finite or below 0, an empty
 field name in a disposition, a rule, a command or a `sticky` key, a command with nothing to
 set or setting a register that does not exist, a destination list that is empty or repeats a number, a bit that
 is not one bit or named twice, a resting or initial or blocking bit that is not named, an
