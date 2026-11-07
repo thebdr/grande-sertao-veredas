@@ -17,7 +17,7 @@ use same_file::Handle;
 
 use veredas_core::SourceError;
 
-use crate::encoding::{DetectedEncoding, TextDecoder};
+use crate::encoding::{DetectedEncoding, TextDecoder, mark_len};
 use crate::tail::FileStart;
 
 pub(crate) const READ_CHUNK: usize = 64 * 1024;
@@ -137,25 +137,35 @@ impl TailedFile {
         }
         head.truncate(got);
         self.decoder = TextDecoder::from_head(&head);
-        let newline: &[u8] = self.decoder.encoding().map(|e| e.newline()).unwrap_or(&[0x0A]);
-        let width = newline.len() as u64;
-        let mut last = [0u8; 2];
-        let read = if len >= width {
-            file.seek(SeekFrom::End(-(width as i64))).map_err(io)?;
+        let mark = mark_len(&head) as u64;
+        let enc = self.decoder.encoding();
+        let unit = enc.map(|e| e.unit_width()).unwrap_or(1) as u64;
+        // An attach that falls inside a UTF-16 code unit (the writer caught mid-unit) moves
+        // back to the unit's boundary, counted from the mark: from the raw length every unit
+        // after would decode a byte out of step and no line feed would ever show again.
+        let start = mark + (len - mark) / unit * unit;
+        // A file holding its mark alone (a logger writes it when it creates the file) ends on
+        // the mark, not on a line feed, and has no torn line: the first line written after the
+        // attach is whole.
+        let skip = if start <= mark {
+            false
+        } else {
+            let newline: &[u8] = enc.map(|e| e.newline()).unwrap_or(&[0x0A]);
+            let width = newline.len();
+            let mut last = [0u8; 2];
+            file.seek(SeekFrom::Start(start - width as u64)).map_err(io)?;
             let mut got = 0;
-            while got < width as usize {
-                match file.read(&mut last[got..width as usize]).map_err(io)? {
+            while got < width {
+                match file.read(&mut last[got..width]).map_err(io)? {
                     0 => break,
                     n => got += n,
                 }
             }
-            got == width as usize
-        } else {
-            false
+            !(got == width && &last[..width] == newline)
         };
-        file.seek(SeekFrom::End(0)).map_err(io)?;
-        self.offset = len;
-        self.skip_until_newline = !(read && &last[..width as usize] == newline);
+        file.seek(SeekFrom::Start(start)).map_err(io)?;
+        self.offset = start;
+        self.skip_until_newline = skip;
         Ok(())
     }
 

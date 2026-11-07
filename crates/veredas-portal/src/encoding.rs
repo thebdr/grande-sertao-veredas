@@ -32,6 +32,14 @@ impl DetectedEncoding {
         }
     }
 
+    /// The width of a code unit: two bytes in UTF-16, one otherwise.
+    pub fn unit_width(self) -> usize {
+        match self {
+            DetectedEncoding::Utf16Le | DetectedEncoding::Utf16Be => 2,
+            DetectedEncoding::Utf8 | DetectedEncoding::Cp1252 => 1,
+        }
+    }
+
     /// The bytes of a line feed in this encoding.
     pub fn newline(self) -> &'static [u8] {
         match self {
@@ -77,6 +85,18 @@ pub fn detect(sample: &[u8]) -> DetectedEncoding {
         Ok(_) => DetectedEncoding::Utf8,
         Err(e) if e.error_len().is_none() => DetectedEncoding::Utf8,
         Err(_) => DetectedEncoding::Cp1252,
+    }
+}
+
+/// The length of the byte-order mark `head` starts with: three for UTF-8, two for UTF-16, none
+/// otherwise.
+pub fn mark_len(head: &[u8]) -> usize {
+    if head.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        3
+    } else if head.starts_with(&[0xFF, 0xFE]) || head.starts_with(&[0xFE, 0xFF]) {
+        2
+    } else {
+        0
     }
 }
 
@@ -246,7 +266,10 @@ impl TextDecoder {
         let State::Ascii(held) = std::mem::replace(&mut self.state, State::Fresh(Vec::new())) else { return };
         let enc = match std::str::from_utf8(&held) {
             Ok(_) => DetectedEncoding::Utf8,
-            Err(e) if e.error_len().is_none() && !last => DetectedEncoding::Utf8,
+            // A valid prefix cut short is a sequence still arriving, or torn at the end of the
+            // stream: UTF-8 either way, and the decoder finishes the torn one as U+FFFD. A byte no
+            // sequence starts is CP1252.
+            Err(e) if e.error_len().is_none() => DetectedEncoding::Utf8,
             Err(_) => DetectedEncoding::Cp1252,
         };
         let mut decoder = enc.encoding().new_decoder_without_bom_handling();
@@ -358,13 +381,31 @@ mod tests {
         d.feed(b"\xA9 ready\n", &mut out);
         assert_eq!(out, "header\ncafé ready\n");
         assert_eq!(d.encoding(), Some(DetectedEncoding::Utf8));
-        // A high byte at the very end: finished as CP1252 (a torn UTF-8 sequence would be one
-        // byte of a sequence that never completes; the fallback reads it as a character).
+        // A byte no UTF-8 sequence starts, at the very end: CP1252, torn or not.
         let mut d = TextDecoder::new();
         let mut out = String::new();
         d.feed(b"ascii\n\xB0", &mut out);
         d.finish(&mut out);
         assert_eq!(out, "ascii\n°");
+        // A UTF-8 lead the stream ends on, in the ASCII state: torn, so U+FFFD, never a CP1252
+        // character invented from it.
+        let mut d = TextDecoder::new();
+        let mut out = String::new();
+        d.feed(b"ascii\ncaf\xC3", &mut out);
+        assert_eq!(out, "ascii\ncaf");
+        d.finish(&mut out);
+        assert_eq!(out, "ascii\ncaf\u{FFFD}");
+        let mut d = TextDecoder::new();
+        let mut out = String::new();
+        d.feed(b"ascii\n", &mut out);
+        d.feed(b"\xE2\x82", &mut out);
+        d.finish(&mut out);
+        assert_eq!(out, "ascii\n\u{FFFD}");
+        assert_eq!(
+            (mark_len(&[0xEF, 0xBB, 0xBF, b'h']), mark_len(&[0xFF, 0xFE]), mark_len(&[0xFE, 0xFF, 0]), mark_len(b"hi"), mark_len(&[0xFF])),
+            (3, 2, 2, 0, 0)
+        );
+        assert_eq!((DetectedEncoding::Utf16Be.unit_width(), DetectedEncoding::Cp1252.unit_width()), (2, 1));
     }
 
     #[test]

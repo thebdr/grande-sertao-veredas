@@ -448,10 +448,14 @@ fn owner_truncate(path: &Path, to: u64) -> std::io::Result<()> {
     OpenOptions::new().write(true).open(path)?.set_len(to)
 }
 
-fn assert_owner_writes_unblocked(path: &Path) {
+fn assert_owner_writes_unblocked(path: &Path, rx: &Receiver<LineEvent>) {
     for i in 0..3 {
         owner_append(path, &format!("owner line {i} while we read")).expect("the owner's append must not be blocked");
     }
+    // The tail reads the three lines while the handle is held; only then does the owner
+    // truncate: a line overwritten before any poll could see it is lost to every tail.
+    let got: Vec<String> = (0..3).map(|_| recv_line(rx)).collect();
+    assert_eq!(got, ["owner line 0 while we read", "owner line 1 while we read", "owner line 2 while we read"]);
     owner_truncate(path, 8).expect("the owner's truncate must not be blocked");
 }
 
@@ -467,21 +471,20 @@ fn a_running_file_source_never_blocks_the_owner() {
     assert!(recv_line(&rx).contains("seed 0"));
     while rx.recv_timeout(Duration::from_millis(100)).is_ok() {}
 
-    assert_owner_writes_unblocked(&path);
+    assert_owner_writes_unblocked(&path, &rx);
     // A rotation by rename while the source tails, and a delete: unblocked too.
     let rotated = dir.path().join("rotated.log");
     std::fs::rename(&path, &rotated).expect("the owner's rename must not be blocked while tailing");
     std::fs::write(&path, "after\n").unwrap();
-    // Everything the owner wrote meanwhile reached the tail: its three lines, then the eight
-    // bytes the truncation left (a torn line, flushed when the file was renamed away), then
-    // the new file.
+    // What the owner wrote after that reached the tail too: the eight bytes the truncation
+    // left (a torn line, flushed when the file was renamed away), then the new file.
     let mut got = Vec::new();
     while got.last().map(String::as_str) != Some("after") {
         got.push(recv_line(&rx));
     }
     assert_eq!(
         got,
-        ["owner line 0 while we read", "owner line 1 while we read", "owner line 2 while we read", "2026-07-", "after"]
+        ["2026-07-", "after"]
     );
     std::fs::remove_file(&path).expect("the owner's delete must not be blocked while tailing");
 
@@ -901,4 +904,86 @@ fn tails_without_a_watcher() {
     for (_, r) in set.stop_all() {
         r.unwrap();
     }
+}
+
+// ---- the critic's second round -----------------------------------------------------------------
+
+#[test]
+fn a_file_holding_its_mark_alone_tailed_from_its_end_emits_the_first_line_written() {
+    // A logger writes the mark when it creates the file; a tail attached right after sees a
+    // file ending on its mark, not on a line feed, and there is no torn line to skip.
+    let dir = tempfile::tempdir().unwrap();
+    for (name, mark, body) in [
+        ("le.log", vec![0xFFu8, 0xFE], utf16le("new\r\nnext\r\n", false)),
+        ("be.log", vec![0xFE, 0xFF], utf16be("new\r\nnext\r\n", false)),
+        ("u8.log", vec![0xEF, 0xBB, 0xBF], b"new\nnext\n".to_vec()),
+    ] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, &mark).unwrap();
+        let (set, rx) = tail(&path, FileStart::End);
+        assert_quiet(&rx, 100);
+        append_bytes(&path, &body);
+        assert_eq!(lines(&rx, 2), ["new", "next"], "{name}");
+        set.stop_all();
+    }
+}
+
+#[test]
+fn an_attach_inside_a_utf16_code_unit_moves_back_to_the_unit_boundary() {
+    for le in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let whole = utf16("old\r\nhalf", le);
+        // Cut one byte into the last unit of a torn line: that line's completion is skipped and
+        // the next whole line is the first.
+        let torn = dir.path().join("torn.log");
+        let cut = whole.len() - 1;
+        std::fs::write(&torn, &whole[..cut]).unwrap();
+        let (set, rx) = tail(&torn, FileStart::End);
+        assert_quiet(&rx, 100);
+        append_bytes(&torn, &whole[cut..]);
+        append_bytes(&torn, &utf16("rest\r\nfresh\r\nmore\r\n", le)[2..]);
+        assert_eq!(lines(&rx, 2), ["fresh", "more"], "little-endian {le}");
+        set.stop_all();
+        // Cut one byte into the first unit of a line: the attach moves back to that line's
+        // start and the line is whole, not torn.
+        let clean = dir.path().join("clean.log");
+        let cut = utf16("old\r\n", le).len() + 1;
+        std::fs::write(&clean, &whole[..cut]).unwrap();
+        let (set, rx) = tail(&clean, FileStart::End);
+        assert_quiet(&rx, 100);
+        append_bytes(&clean, &whole[cut..]);
+        append_bytes(&clean, &utf16("rest\r\nfresh\r\n", le)[2..]);
+        assert_eq!(lines(&rx, 2), ["halfrest", "fresh"], "little-endian {le}");
+        set.stop_all();
+    }
+}
+
+#[test]
+fn a_torn_utf8_lead_at_the_end_of_an_ascii_opened_file_is_a_replacement_character() {
+    // The file opened in plain ASCII, so the encoding is still open when the lead byte of a
+    // two-byte sequence lands alone and the stop ends the stream before its continuation.
+    let dir = tempfile::tempdir().unwrap();
+    let torn = dir.path().join("torn.log");
+    std::fs::write(&torn, "ok\n").unwrap();
+    let (set, rx) = tail(&torn, FileStart::Begin);
+    assert_eq!(lines(&rx, 1), ["ok"]);
+    append_bytes(&torn, b"caf\xC3");
+    std::thread::sleep(Duration::from_millis(150));
+    for (_, r) in set.stop_all() {
+        r.unwrap();
+    }
+    let rest: Vec<String> = rx.try_iter().map(|e| e.line).collect();
+    assert_eq!(rest, ["caf\u{FFFD}"]);
+    // A byte no UTF-8 sequence starts is a CP1252 character, at the end of the stream or not.
+    let cp = dir.path().join("cp.log");
+    std::fs::write(&cp, "ok\n").unwrap();
+    let (set, rx) = tail(&cp, FileStart::Begin);
+    assert_eq!(lines(&rx, 1), ["ok"]);
+    append_bytes(&cp, b"25\xB0");
+    std::thread::sleep(Duration::from_millis(150));
+    for (_, r) in set.stop_all() {
+        r.unwrap();
+    }
+    let rest: Vec<String> = rx.try_iter().map(|e| e.line).collect();
+    assert_eq!(rest, ["25°"]);
 }

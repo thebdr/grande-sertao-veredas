@@ -196,6 +196,15 @@ Recorded as the port meets them.
 - **A UTF-16 line feed is two bytes.** A tail attached at the end judged "mid-line" by the last
   byte alone, so a UTF-16 LE file ending cleanly (its last byte 0x00) lost its first new line.
   The attach reads the file's head to decide the encoding and compares the last code unit.
+- **A file holding its mark alone, and an attach inside a code unit** (C-035, round 2). A logger
+  writes the mark when it creates the file; a tail attached right after saw a file not ending on
+  a line feed and skipped the first line written. And an attach whose raw length fell inside a
+  UTF-16 code unit decoded every unit after a byte out of step, silent for good. A start at or
+  before the mark is clean; the start offset is rounded to the unit boundary from the mark.
+- **A torn lead in an ASCII-opened file is U+FFFD, not a CP1252 character** (C-035, round 2).
+  The ASCII state decided CP1252 for any high byte held when the stream ended; a valid UTF-8
+  prefix cut short is UTF-8 whether or not the stream is ending, and the decoder finishes it as
+  U+FFFD. A byte no sequence starts stays CP1252.
 - **A wake channel with no sender spins the loop.** The watcher owned the wake channel's only
   sender; where the watcher could not be set up (a parent folder not there yet) the receiver
   read as disconnected and the wait returned at once, every tick, a full core. The loop keeps a
