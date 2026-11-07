@@ -238,6 +238,10 @@ same library the tests do.
 
 **Reversible?** Yes: a UI is a crate or a module on top of the library; nothing below it changes.
 
+**Decided** 2026-11-07 (the operator): library only. The bench is the library and the
+TOML-driven executable; no desktop UI is planned, and `docs/maquinar-plan.md` no longer names
+one as a later phase.
+
 ## Q13 - Should the bench raise the Windows timer resolution?
 
 **Context:** the bench ticks every 20 ms (the OPC server's service loop; the channel's

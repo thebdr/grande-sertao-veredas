@@ -49,8 +49,9 @@ it never runs in production, owns its sockets, and carries no store and no deskt
   <bench.toml>`, until stopped).
 - **Later phases**, named, no code now: the PROFINET device emulation (Veredas 1's `pnsim`,
   which speaks through aranha's codecs and waits for P-005; `docs/questions.md` Q5); the 2D/3D
-  plant simulator; a PKI folder, when the OPC server first needs a secured endpoint; a desktop
-  UI (`docs/questions.md` Q12).
+  plant simulator; a PKI folder, when the OPC server first needs a secured endpoint. A desktop
+  UI is not planned: the operator decided (`docs/questions.md` Q12, 2026-11-07) that the bench
+  is the library and its executable.
 
 ## Rules
 - **Fixtures first.** A consumer's hardware is simulated here before or alongside the consumer;
@@ -79,7 +80,8 @@ it never runs in production, owns its sockets, and carries no store and no deskt
   consumer's tests embed a bench; `src/main.rs` runs a bench file from the command line. No
   other executable, no examples: cargo, asked what it would build, names one library, one
   binary and tests.
-- **Test-only and light**: no DuckDB, never portal's store or desktop, no UI crate (Q12).
+- **Test-only and light**: no DuckDB, never portal's store or desktop, no UI crate (Q12,
+  decided: library only).
 - **Every worker owns a thread and stops promptly**; a handle's drop stops its worker; a
   status is read without blocking; every knob of pressure is live on the handle.
 - **Typed errors on the public surface**; no `unwrap`/`expect` on an I/O path; tests may unwrap.
@@ -104,7 +106,7 @@ Read in full before the port: all of `crates/veredas-maquinar` (`config.rs`, `lo
 | `tests/logsim.rs`, `opcsim.rs`, `tcpsim.rs`, `mscsim_e2e.rs` | `tests/*.rs`, one per clause | real directories, a real client, real sockets |
 | `tests/family_contract.rs` | portal's, when its log families land | the scanner it pins is portal's (P-002) |
 | `pnsim.rs`, `tests/pnsim.rs` | a later phase | waits for aranha's codecs (P-005, Q5) |
-| `app.rs`, `ui_*.rs` (an egui desktop) | not carried now | Q12: the bench is a library and a command-line executable until the operator decides |
+| `app.rs`, `ui_*.rs` (an egui desktop) | not carried | Q12, decided 2026-11-07: the bench is a library and a command-line executable |
 | `pki/` | a later phase | the server serves an unsecured endpoint, as Veredas 1's did |
 
 Changed on the way, each recorded in the clause's evidence note:
@@ -148,7 +150,7 @@ veredas_core (added for the bench, kept for portal)
    controller rules file (`docs/controller-schema.md`); the engine, pure and tick-driven, pinned
    without sleeping, then the whole conversation over a real socket; pressure live.
 5. **The bench file and the executable.** `docs/bench-schema.md`; `Bench::start`; `main.rs`
-   run as a process with a bench file; Q12 asked.
+   run as a process with a bench file; Q12 asked and decided: library only.
 
 Each phase ends with `cargo nextest run --workspace` green bare, `cargo test -p leis` green, and
 its clauses recorded, refuted and verified. Push at the end of each phase.
