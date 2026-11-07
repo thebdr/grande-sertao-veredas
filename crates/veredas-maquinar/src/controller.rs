@@ -498,6 +498,9 @@ impl Fields {
                 if low > high {
                     return Err(invalid(format!("{where_}: the range is empty ({low} > {high})")));
                 }
+                if s.decimals == 0 && low.ceil() > high.floor() {
+                    return Err(invalid(format!("{where_}: the range {low}..={high} holds no whole number")));
+                }
                 Source::Range { low, high, decimals: s.decimals }
             } else if let Some(c) = &s.counter {
                 if let Some(last) = c.last
@@ -552,6 +555,9 @@ impl Fields {
                     } else {
                         Some(regex::Regex::new(&r.pattern).map_err(|e| invalid(format!("{where_}.decide.rules[{j}]: {e}")))?)
                     };
+                    if r.field.trim().is_empty() {
+                        return Err(invalid(format!("{where_}.decide.rules[{j}].field is empty")));
+                    }
                     rules.push((r.field.clone(), re, r.value.text()));
                     patterns.push(r.pattern.clone());
                 }
@@ -562,6 +568,9 @@ impl Fields {
                 }
                 if rules.is_empty() && d.spread.is_empty() && d.reject.is_none() {
                     return Err(invalid(format!("{where_}.decide: nothing to decide with")));
+                }
+                if d.sticky.as_deref().is_some_and(|s| s.trim().is_empty()) {
+                    return Err(invalid(format!("{where_}.decide.sticky is empty")));
                 }
                 Source::Decide(CompiledDecide {
                     rules,
@@ -894,6 +903,11 @@ pub fn load(text: &str, catalog: &Catalog) -> Result<Rules, RulesError> {
             for (k, names) in &d.initial {
                 // Exact, like a name: ` 2` and `2` would be one destination named twice.
                 let dest: u64 = k.parse().map_err(|_| invalid(format!("destinations.initial: `{k}` is not a destination number")))?;
+                // Written exactly (`01` and `+1` are 1 to the parser, and TOML tells them apart
+                // from `1`: one destination named twice, the later silently winning).
+                if dest.to_string() != *k {
+                    return Err(invalid(format!("destinations.initial: `{k}` is not the number {dest} written exactly")));
+                }
                 if !d.list.contains(&dest) {
                     return Err(invalid(format!("destinations.initial: {dest} is not in the list")));
                 }
@@ -969,6 +983,11 @@ pub fn load(text: &str, catalog: &Catalog) -> Result<Rules, RulesError> {
                     if r.destination.is_none() && i.outcome.is_some() && destinations.is_some() {
                         return Err(invalid("items.reply.destination: an outcome by destination needs the reply's destination field".to_string()));
                     }
+                    for (j, w) in r.when.iter().enumerate() {
+                        if w.field.trim().is_empty() {
+                            return Err(invalid(format!("items.reply.when[{j}].field is empty")));
+                        }
+                    }
                     let when = r.when.iter().map(|w| (w.field.clone(), w.equals.text(), w.action)).collect();
                     Some(Reply { message: r.message.clone(), key, destination: r.destination.clone(), when })
                 }
@@ -991,7 +1010,22 @@ pub fn load(text: &str, catalog: &Catalog) -> Result<Rules, RulesError> {
                         if !e.weight.is_finite() || e.weight < 0.0 {
                             return Err(invalid(format!("{place}.weight is not a finite, non-negative number")));
                         }
+                        for k in e.set.keys() {
+                            if !fields.names().contains(k) {
+                                return Err(invalid(format!("{place}.set: no outcome field named `{k}`")));
+                            }
+                        }
                         mix.push((e.name.clone(), e.weight, text_map(&e.set), e.requeue));
+                    }
+                    // What a destination's state forces must be an outcome field too.
+                    if let Some(d) = &destinations {
+                        for (j, (bit, _, set, _)) in d.blocking.iter().enumerate() {
+                            for k in set.keys() {
+                                if !fields.names().contains(k) {
+                                    return Err(invalid(format!("destinations.blocking[{j}] (`{bit}`).set: no outcome field named `{k}`")));
+                                }
+                            }
+                        }
                     }
                     Some(Outcome { message: o.message.clone(), after_ms: o.after_ms, fields, mix })
                 }

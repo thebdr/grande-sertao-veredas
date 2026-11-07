@@ -217,7 +217,8 @@ name (of a register, a bit, a field, a fault, an outcome) is exact, with no surr
 whitespace; a message name is one of the catalog's. A value compared with a field's (a
 disposition's or a setting's `equals`, a rule's `pattern`, a reply's key) is compared as text,
 the field's value trimmed. A field a disposition, a rule, a command or a `sticky` key names is
-looked up when the message comes: a name the message does not carry simply never matches.
+looked up when the message comes: a name the message does not carry simply never matches; only
+an empty name is refused when the file loads.
 
 **The top level**.
 - `format` (required): always `"veredas-controller"`.
@@ -239,14 +240,15 @@ looked up when the message comes: a name the message does not carry simply never
 - `bits` (none): the named bits of the state word, each one bit (a power of two), no bit named
   twice.
 - `resting` (none): the bits a destination has at the start when `initial` does not name it.
-- `initial` (none): bits set at the start, by destination number written as text, exact, with
-  no surrounding whitespace; a number not in the list is refused.
+- `initial` (none): bits set at the start, by destination number written as text, exactly as
+  the number prints (`"2"`, never `" 2"`, `"02"` or `"+2"`); a number not in the list is refused.
 - `blocking` (none): the bits that refuse an item, as inline tables, in order of precedence:
   the first entry whose bit is set in a destination's word decides; a bit blocks once.
 
 **A blocking bit** (an entry of `blocking`).
 - `bit` (required): a named bit.
-- `set` (none): the outcome fields it forces, by name, overriding what the fields rendered.
+- `set` (none): the outcome fields it forces, by name (one the outcome does not render is
+  refused), overriding what the fields rendered.
 - `requeue` (`false`): the item comes round again after a lap instead of ending.
 
 **The items** (`[items]`): what the controller announces and awaits an answer for.
@@ -298,7 +300,8 @@ looked up when the message comes: a name the message does not carry simply never
 **A mixed outcome** (an entry of `mix`).
 - `name` (required): the outcome's name, unique; the status counts items by it.
 - `weight` (required): its share, a finite number of 0 or more.
-- `set` (none): the fields it forces, by name, overriding what the fields rendered.
+- `set` (none): the fields it forces, by name (one the outcome does not render is refused),
+  overriding what the fields rendered.
 - `requeue` (`false`): the item comes round again after a lap instead of ending.
 
 **An answer** (`[[answers]]`): a message sent in answer to another, to the peer it came from.
@@ -375,14 +378,15 @@ decision. At least one of `rules`, `spread` and `reject` is given.
 - `value` (required): the decision.
 - `weight` (required): its share, a finite number of 0 or more.
 
-A field with no source or more than one, a range that is empty or not finite, a counter ending
-before it starts, an empty cycle, a bad template, a source its place does not take, a register
+A field with no source or more than one, a range that is empty, not finite or, at 0 decimals,
+holding no whole number, a counter ending before it starts, an empty cycle, a bad template, a source its place does not take, a register
 that does not exist, a decision with a bad pattern or nothing to decide with, a list that leaves
 one of its message's names unwritten, a message the catalog does not hold, an interval or lap of
 0, a key no field announces, a fault's share over 100 or a fault setting a field that is not
 announced, a reply key or destination the reply does not read, an outcome without a
-reply, a weight that is not finite or below 0, a command with nothing to set or setting a
-register that does not exist, a destination list that is empty or repeats a number, a bit that
+reply, a forced field no outcome field renders, a weight that is not finite or below 0, an empty
+field name in a disposition, a rule, a command or a `sticky` key, a command with nothing to
+set or setting a register that does not exist, a destination list that is empty or repeats a number, a bit that
 is not one bit or named twice, a resting or initial or blocking bit that is not named, an
 initial destination not in the list, a bit blocking twice, and a misspelled key in any table are
 refused when the file loads, with the place named.
