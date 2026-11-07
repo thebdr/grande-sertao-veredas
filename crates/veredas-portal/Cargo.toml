@@ -38,5 +38,10 @@ windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
 veredas-maquinar = { path = "../veredas-maquinar" }
 # cargo metadata's output (tests/component.rs).
 serde_json = { workspace = true }
+# The OPC UA wire types a test writes and reads (tests/opc.rs), and the runtime its handle needs.
+async-opcua-types = { workspace = true }
+tokio = { workspace = true }
+# Configurations read from TOML in the tests.
+toml = { workspace = true }
 # Scratch directories, removed when a test ends.
 tempfile = { workspace = true }

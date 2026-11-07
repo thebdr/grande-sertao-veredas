@@ -1877,6 +1877,7 @@ dependencies = [
 name = "veredas-portal"
 version = "2.0.0-alpha.1"
 dependencies = [
+ "async-opcua-types",
  "chrono",
  "encoding_rs",
  "memchr",
@@ -1887,6 +1888,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "tokio",
+ "toml",
  "veredas-core",
  "veredas-maquinar",
  "windows-sys 0.59.0",
