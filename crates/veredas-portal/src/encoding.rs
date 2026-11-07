@@ -193,8 +193,8 @@ impl TextDecoder {
             State::Fresh(buf) => {
                 buf.extend_from_slice(bytes);
                 // Enough signal? A newline counts too: a complete tiny line must not wait for a
-                // fourth byte.
-                if buf.len() >= FRESH_SAMPLE || buf.contains(&b'\n') {
+                // fourth byte. A NUL riding with it may be half a UTF-16 unit, which waits for the pattern.
+                if buf.len() >= FRESH_SAMPLE || (buf.contains(&0x0A) && !buf.contains(&0)) {
                     self.decide_fresh(false, out);
                 }
             }

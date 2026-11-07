@@ -213,6 +213,10 @@ Recorded as the port meets them.
   waits for four bytes or a line feed before deciding; an attach at the end of a one-to-three-byte
   file decided on what it held, and a torn mark or a lone UTF-16 character chose wrong for good.
   Such a head is pre-fed to a fresh decoder and votes with the bytes that follow it.
+- **A short head is text until it proves a mark** (C-035, round 5). The byte a mark begins with
+  is also a CP1252 letter; taking it for a torn mark let text from before the attach open the
+  first line. The skip is decided once the encoding is, and a NUL beside a line feed in the first
+  bytes waits for the UTF-16 pattern instead of taking the line-feed shortcut.
 - **A wake channel with no sender spins the loop.** The watcher owned the wake channel's only
   sender; where the watcher could not be set up (a parent folder not there yet) the receiver
   read as disconnected and the wait returned at once, every tick, a full core. The loop keeps a

@@ -62,6 +62,9 @@ pub(crate) struct TailedFile {
     /// Set with it when the head left the encoding undecided: the fragment is dropped raw, up to
     /// and including the first line feed, before the decoder sees it, so it never votes.
     skip_raw_until_newline: bool,
+    /// A head under four bytes that was no complete mark, with the bytes that followed it until
+    /// the encoding decided: text from before the attach unless it proves a mark.
+    short_head: Option<Vec<u8>>,
 }
 
 impl TailedFile {
@@ -78,6 +81,7 @@ impl TailedFile {
             buf: vec![0u8; READ_CHUNK],
             skip_until_newline: false,
             skip_raw_until_newline: false,
+            short_head: None,
         };
         if start == FileStart::End {
             tf.seek_to_end()?;
@@ -108,6 +112,7 @@ impl TailedFile {
             buf: vec![0u8; READ_CHUNK],
             skip_until_newline: false,
             skip_raw_until_newline: false,
+            short_head: None,
         };
         if offset > 0 {
             tf.handle.as_file_mut().seek(SeekFrom::Start(offset)).map_err(|e| SourceError::io(path, e))?;
@@ -153,9 +158,17 @@ impl TailedFile {
             self.decoder = decoder;
             file.seek(SeekFrom::End(0)).map_err(io)?;
             self.offset = len;
-            let marks: [&[u8]; 3] = [&[0xEF, 0xBB, 0xBF], &[0xFF, 0xFE], &[0xFE, 0xFF]];
-            let torn_mark = marks.iter().any(|m| m.starts_with(&head));
-            self.skip_until_newline = !torn_mark && head.last() != Some(&0x0A);
+            // What it held is text from before the attach unless it proves a mark: decided with
+            // the bytes that follow, in ingest, where the skip is armed or not.
+            if self.decoder.encoding().is_some() {
+                // Decided on the head alone (a line feed in it, no NUL): its text is sunk, and
+                // the attach is clean when the head ended on that feed, mid-line otherwise.
+                self.short_head = None;
+                self.skip_until_newline = head.last() != Some(&0x0A);
+            } else {
+                self.short_head = Some(head);
+                self.skip_until_newline = false;
+            }
             self.skip_raw_until_newline = false;
             return Ok(());
         }
@@ -247,7 +260,17 @@ impl TailedFile {
         }
         self.text.clear();
         let mut text = std::mem::take(&mut self.text);
+        if let Some(acc) = &mut self.short_head {
+            acc.extend_from_slice(bytes);
+        }
         self.decoder.feed(bytes, &mut text);
+        if self.short_head.is_some() && self.decoder.encoding().is_some() {
+            // The short head decided with what followed it: a mark is no text (a clean start);
+            // anything else is text from before the attach, skipped with the line it opens up to
+            // the first line feed, which is its own when it ended on one.
+            let acc = self.short_head.take().unwrap_or_default();
+            self.skip_until_newline = mark_len(&acc) == 0;
+        }
         self.split_text(&text, emit);
         self.text = text;
     }
@@ -278,6 +301,17 @@ impl TailedFile {
     /// ever arrive for this file (a final drain, a truncation, a stop): a torn last line beats
     /// silently losing data.
     pub fn flush_pending(&mut self, emit: &mut dyn FnMut(String)) {
+        // A short head still undecided at the end: everything held is from before the attach or
+        // a torn fragment after it, with no line feed between, so none of it is a line.
+        if self.short_head.take().is_some() {
+            let mut text = std::mem::take(&mut self.text);
+            text.clear();
+            self.decoder.finish(&mut text);
+            self.text = text;
+            self.pending.clear();
+            self.skip_until_newline = false;
+            return;
+        }
         // The decoder may hold pre-detection bytes or a dangling partial sequence; decode them
         // now (they may even hold whole lines).
         let mut text = std::mem::take(&mut self.text);
@@ -312,6 +346,7 @@ impl TailedFile {
         self.decoder.reset();
         self.skip_until_newline = false;
         self.skip_raw_until_newline = false;
+        self.short_head = None;
         Ok(())
     }
 

@@ -1039,3 +1039,69 @@ fn a_head_under_four_bytes_decides_with_what_follows_it() {
         set.stop_all();
     }
 }
+
+#[test]
+fn a_short_head_that_proves_no_mark_is_text_from_before_the_attach_and_never_emitted() {
+    // One CP1252 thorn (the byte a UTF-16 mark begins with), and one UTF-8 character opening
+    // like the UTF-8 mark: text written before the attach, skipped with the torn line it opens.
+    let dir = tempfile::tempdir().unwrap();
+    for (name, first, rest) in [("thorn.log", vec![0xFEu8], b"rest\nnext\n".to_vec()), ("wide.log", vec![0xEF], b"\xBC\x81rest\nnext\n".to_vec())] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, &first).unwrap();
+        let (set, rx) = tail(&path, FileStart::End);
+        assert_quiet(&rx, 100);
+        append_bytes(&path, &rest);
+        assert_eq!(lines(&rx, 1), ["next"], "{name}");
+        assert_quiet(&rx, 100);
+        set.stop_all();
+    }
+    // A UTF-16 file without a mark opening on a bare line feed: the line-feed shortcut waits for
+    // the pattern when a NUL rides with it, so the file is UTF-16 from the end and from the
+    // beginning alike.
+    let end = dir.path().join("feed-end.log");
+    std::fs::write(&end, [0x0A, 0x00]).unwrap();
+    let (set, rx) = tail(&end, FileStart::End);
+    assert_quiet(&rx, 100);
+    append_bytes(&end, &utf16le("next\r\nmore\r\n", false));
+    assert_eq!(lines(&rx, 2), ["next", "more"]);
+    set.stop_all();
+    let begin = dir.path().join("feed-begin.log");
+    std::fs::write(&begin, [0x0A, 0x00]).unwrap();
+    let (set, rx) = tail(&begin, FileStart::Begin);
+    append_bytes(&begin, &utf16le("next\r\nmore\r\n", false));
+    assert_eq!(lines(&rx, 3), ["", "next", "more"]);
+    set.stop_all();
+    // Stopped before the short head decided: nothing of it is a line.
+    let torn = dir.path().join("torn.log");
+    std::fs::write(&torn, [0xFE]).unwrap();
+    let (set, rx) = tail(&torn, FileStart::End);
+    append_bytes(&torn, b"re");
+    std::thread::sleep(Duration::from_millis(150));
+    for (_, r) in set.stop_all() {
+        r.unwrap();
+    }
+    assert_eq!(rx.try_iter().map(|e| e.line).collect::<Vec<_>>(), Vec::<String>::new());
+}
+
+#[test]
+fn a_short_head_decided_on_its_own_line_feed_starts_clean_or_mid_line_as_it_ends() {
+    // Two CP1252 bytes with a line feed and no NUL decide on their own; the head's text is
+    // discarded, and the attach is clean when the head ended on that feed.
+    let dir = tempfile::tempdir().unwrap();
+    let clean = dir.path().join("clean.log");
+    std::fs::write(&clean, b"\xE9\n").unwrap();
+    let (set, rx) = tail(&clean, FileStart::End);
+    assert_quiet(&rx, 100);
+    append_bytes(&clean, b"Temp 25\xB0C\n");
+    assert_eq!(lines(&rx, 1), ["Temp 25°C"]);
+    set.stop_all();
+    // A byte after the feed is a torn line: its completion is skipped.
+    let torn = dir.path().join("torn.log");
+    std::fs::write(&torn, b"\xE9\nA").unwrap();
+    let (set, rx) = tail(&torn, FileStart::End);
+    assert_quiet(&rx, 100);
+    append_bytes(&torn, b"rest\nnext\n");
+    assert_eq!(lines(&rx, 1), ["next"]);
+    assert_quiet(&rx, 100);
+    set.stop_all();
+}
