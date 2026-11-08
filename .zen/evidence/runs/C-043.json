@@ -10,15 +10,15 @@
     "session"
   ],
   "exitCode": 0,
-  "outputSha": "e97549e6b15a62b140211b31f8529c6c345c02c938074ba3b335d9544f0ffbb8",
-  "outputTail": "\nrunning 4 tests\ntest a_start_is_refused_by_name_before_anything_spawns ... ok\ntest the_three_protocols_run_into_one_store_alike ... ok\ntest the_master_switch_is_off_by_default_and_arms_every_write_path_at_once ... ok\ntest health_reads_waiting_then_live_then_idle_on_the_arrival_clock ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.24s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.58s\n     Running tests\\session.rs (target\\debug\\deps\\session-e32257ff8a4afda5.exe)",
-  "ranAt": "2026-11-08T00:55:20.842Z",
-  "headCommit": "120c77d0024f8edd29770d312041d7d50c5fdceb",
+  "outputSha": "be7f6c8c8b1b9d4a5de916eb4668e7f4167770c7d649c3f7e6395064b3277e47",
+  "outputTail": "\nrunning 4 tests\ntest a_start_is_refused_by_name_before_anything_spawns ... ok\ntest the_three_protocols_run_into_one_store_alike ... ok\ntest the_master_switch_is_off_by_default_and_arms_every_write_path_at_once ... ok\ntest health_reads_waiting_then_live_then_idle_on_the_arrival_clock ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.15s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.09s\n     Running tests\\session.rs (target\\debug\\deps\\session-e32257ff8a4afda5.exe)",
+  "ranAt": "2026-11-08T01:49:08.150Z",
+  "headCommit": "82e4b38d4dda61a770300bed7d797208e058f10b",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/session.rs",
       "file": "crates/veredas-portal/tests/session.rs",
-      "fileSha": "6638277bdc5cef5310070c8a8ffc4bc8ab240879aba4960ff9f80a7b4c7b8b46"
+      "fileSha": "d1864cb6d6ce3cf78f3deee678f7cbb1fa28577f8d49736973352b9f1fb05183"
     }
   ]
 }
