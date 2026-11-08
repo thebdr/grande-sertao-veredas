@@ -1,0 +1,13 @@
+{
+  "clause": "C-037",
+  "verdict": "holds",
+  "ranAt": "2026-11-08T22:58:50.091Z",
+  "headCommit": "57beea7a1d5cd22796ce809510fe5f7afbab81b7",
+  "tests": [
+    {
+      "name": "crates/veredas-portal/tests/tail_backfill.rs",
+      "file": "crates/veredas-portal/tests/tail_backfill.rs",
+      "symbolSha": "97e3f01ae3e310a473d5c02ecc287400293fb906f5c6daf5419e11b4913083d9"
+    }
+  ]
+}
