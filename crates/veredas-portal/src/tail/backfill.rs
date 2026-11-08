@@ -266,23 +266,35 @@ fn locate_once(
         peeks.push(peek_span(&files[i].path, ts)?);
     }
 
-    // No line anywhere yet: nothing to locate in. The live attach reads what is born whole.
-    if peeks.iter().all(|p| p.len == 0) {
-        return Ok(Located::Plan(None));
-    }
-
     let any_line_ts = peeks.iter().any(|p| p.first_ts.is_some() || p.last_ts.is_some());
     let enc_of = |p: &FilePeek| p.encoding.unwrap_or(DetectedEncoding::Utf8);
 
+    // No line in any member yet: nothing to locate in, the live attach reads what is born whole.
+    let all_kept_empty = peeks.iter().all(|p| p.len == 0);
+    if all_kept_empty && candidates.len() == files.len() {
+        return Ok(Located::Plan(None));
+    }
+
     // The index into `candidates` where the replay begins, and the byte offset into that file.
-    let (begin, first_offset) = if any_line_ts {
+    let (begin, first_offset) = if all_kept_empty {
+        // The kept files all empty past history the prefilter dropped: the newest kept file from
+        // its top, the dropped files history (the start is after everything they hold).
+        (candidates.len() - 1, 0)
+    } else if any_line_ts {
         // The newest file whose first stamp is strictly before the start: a file opening on the
         // start's own stamp is reached through its predecessor's scan, so a stamp shared across
         // a seam begins in the earlier file.
         let best = (0..candidates.len()).rev().find(|&i| peeks[i].first_ts.map(|t| t < start).unwrap_or(false));
         match best {
-            // The start predates everything visible: replay from the top.
-            None => (0, 0),
+            // No stamp strictly before the start. A start on the family's first stamp begins at
+            // that line, the unstamped lines above it skipped; a start before every stamp
+            // replays the whole family from the top.
+            None => match (0..candidates.len()).find(|&i| peeks[i].first_ts.is_some()) {
+                Some(i) if peeks[i].first_ts == Some(start) => {
+                    (i, scan_start_offset(&files[candidates[i]].path, enc_of(&peeks[i]), ts, start)?)
+                }
+                _ => (0, 0),
+            },
             Some(i) => {
                 let p = &peeks[i];
                 if p.last_ts.map(|t| t < start).unwrap_or(false) {

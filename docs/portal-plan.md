@@ -288,3 +288,8 @@ Recorded as the port meets them.
   the store or the server (`store`, `store_engine`, `session`, `project`, `serve`) failed to
   build, so the light build had no runnable test set. Each is a `[[test]]` in the manifest with
   `required-features`; the light set is the data plane's eight binaries, 130 tests.
+- **A fix is a change to refute.** Two of the backfill's round-1 fixes broke cases the code before
+  them handled (a shortcut over the kept files forgot the prefilter's drops; a strict comparison
+  lost the start equal to the first stamp), and the existing tests held neither case. A round's
+  fixes go back to the critic as a round of their own, and the test a gap earns asserts the
+  neighbouring cases too (the start on, before and after the edge), not the gap alone.

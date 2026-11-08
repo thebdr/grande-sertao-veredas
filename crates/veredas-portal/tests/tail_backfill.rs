@@ -526,3 +526,53 @@ fn a_long_unstamped_header_does_not_hide_a_file_from_the_locate() {
     assert_eq!(offset, s1.find("2026-07-17 10:00:05").unwrap() as u64);
     assert!(skipped.is_empty(), "{skipped:?}");
 }
+
+// ---- the second refute round -----------------------------------------------------------------
+
+/// History the prefilter dropped stays history when every file it kept is empty: the newest kept
+/// file is followed from its top, never the family read whole as if it had no lines at all.
+#[test]
+fn history_the_prefilter_dropped_is_never_replayed_when_the_kept_files_are_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("p_2026-07-10.log"), "2026-07-10 08:00:00 old\n").unwrap();
+    std::fs::write(dir.path().join("p_2026-07-17.log"), "").unwrap();
+    let spec = FamilySpec::new(dir.path(), r"p_(?P<date>\d{4}-\d{2}-\d{2})\.log", Some("%Y-%m-%d"), ActiveMode::NewestByOrder).unwrap();
+    let start = dt("2026-07-18 09:00:00");
+    assert_eq!(
+        plan_for(&spec, &ts_spec(), start).unwrap().unwrap(),
+        (vec!["p_2026-07-17.log".to_string()], 0, vec!["p_2026-07-10.log".to_string()])
+    );
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FamilyTailSource::new("pf", "pf", spec, cfg(FamilyStart::Backfill(start))).with_timestamps(ts_spec()))).unwrap();
+    std::fs::write(dir.path().join("p_2026-07-17.log"), "2026-07-18 09:30:00 new\nDONE\n").unwrap();
+    let events = collect_until(&rx, DONE, Duration::from_secs(20));
+    set.stop_all();
+    assert_eq!(events.iter().map(|e| e.line.as_str()).collect::<Vec<_>>(), ["2026-07-18 09:30:00 new", DONE]);
+}
+
+/// A start equal to the family's first stamp begins at that line: the unstamped lines above it
+/// are skipped, as they are for any located line; only a start before every stamp replays the
+/// family whole from the top.
+#[test]
+fn a_start_on_the_family_s_first_stamp_skips_the_unstamped_lines_above_it() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("s_1.log"), "header\n2026-07-17 10:00:00 a\n2026-07-17 10:00:01 b\n").unwrap();
+    std::fs::write(dir.path().join("s_2.log"), "2026-07-17 10:00:02 c\n").unwrap();
+    let spec = FamilySpec::new(dir.path(), r"s_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+    let (files, offset, skipped) = plan_for(&spec, &ts_spec(), dt("2026-07-17 10:00:00")).unwrap().unwrap();
+    assert_eq!(files, ["s_1.log", "s_2.log"]);
+    assert_eq!(offset, 7, "line a, past the header");
+    assert!(skipped.is_empty(), "{skipped:?}");
+    // Across files: an unstamped first file, the start on the second file's first stamp.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("s_1.log"), "banner\n").unwrap();
+    std::fs::write(dir.path().join("s_2.log"), "2026-07-17 10:00:00 a\n").unwrap();
+    let spec = FamilySpec::new(dir.path(), r"s_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+    assert_eq!(
+        plan_for(&spec, &ts_spec(), dt("2026-07-17 10:00:00")).unwrap().unwrap(),
+        (vec!["s_2.log".to_string()], 0, vec!["s_1.log".to_string()])
+    );
+    // Before every stamp: the whole family from the top, the banner included.
+    assert_eq!(plan_for(&spec, &ts_spec(), dt("2026-07-17 09:00:00")).unwrap().unwrap().1, 0);
+    assert_eq!(plan_for(&spec, &ts_spec(), dt("2026-07-17 09:00:00")).unwrap().unwrap().0, ["s_1.log", "s_2.log"]);
+}
