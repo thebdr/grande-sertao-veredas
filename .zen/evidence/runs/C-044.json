@@ -10,10 +10,10 @@
     "serve"
   ],
   "exitCode": 0,
-  "outputSha": "79adaeba4035343e22ed610968122d4462b78b4da6cd8af133ff38b126d20310",
-  "outputTail": "\nrunning 3 tests\ntest the_live_stream_says_hello_then_carries_every_numeric_sample ... ok\ntest the_write_surface_is_refused_by_default_on_the_wire_and_whitelisted_when_armed ... ok\ntest the_snapshot_the_listing_the_windows_and_the_tables_over_a_running_session ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.99s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.12s\n     Running tests\\serve.rs (target\\debug\\deps\\serve-e0e087a7af6af638.exe)",
-  "ranAt": "2026-11-07T23:59:18.308Z",
-  "headCommit": "31c2392e7d7a58da4ef7f09c4cd3a07fd2d47cef",
+  "outputSha": "63f5559240bdc0c6ff690114c30392b49fdf244337b63af434481c1c1ca3e105",
+  "outputTail": "\nrunning 3 tests\ntest the_live_stream_says_hello_then_carries_every_numeric_sample ... ok\ntest the_write_surface_is_refused_by_default_on_the_wire_and_whitelisted_when_armed ... ok\ntest the_snapshot_the_listing_the_windows_and_the_tables_over_a_running_session ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.09s\n     Running tests\\serve.rs (target\\debug\\deps\\serve-4353aecb0be7e31e.exe)",
+  "ranAt": "2026-11-08T00:55:34.171Z",
+  "headCommit": "120c77d0024f8edd29770d312041d7d50c5fdceb",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/serve.rs",

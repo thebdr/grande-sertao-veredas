@@ -10,10 +10,10 @@
     "store"
   ],
   "exitCode": 0,
-  "outputSha": "8eae46d1bd7436dab70ca85e11c73dd133bd17f2ea12e2adb47616b7ed51958a",
-  "outputTail": "test csv_exports_per_table_and_of_the_whole_database ... ok\ntest a_snapshot_is_a_standalone_database_any_tool_reads_views_included ... ok\ntest views_join_across_sources_apply_in_any_order_and_a_broken_one_names_itself ... ok\ntest a_disk_store_persists_and_reopens_with_its_rows ... ok\ntest rows_of_a_capture_rule_an_opc_rule_and_a_telegram_message_are_stored_alike_and_feed_the_narrow_surface ... ok\ntest reserved_duplicate_and_empty_names_are_refused_and_type_conflicts_counted ... ok\ntest a_linked_csv_is_read_live_through_a_view_never_held_open_and_previewed_without_a_session ... ok\ntest the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves_a_single_column_alone ... ok\ntest the_csv_sniffer_adopts_a_decimal_comma_only_when_it_strictly_improves_the_typing ... ok\n\ntest result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.85s\n     Running tests\\store.rs (target\\debug\\deps\\store-6489b451585655a0.exe)",
-  "ranAt": "2026-11-07T21:53:19.117Z",
-  "headCommit": "27e5e443d55b0832a6295f39a8fb772b51303726",
+  "outputSha": "eb0640397913ebf615f3cca77d61d29f78d4d9863bec630a66268b14d3b4bd55",
+  "outputTail": "test csv_exports_per_table_and_of_the_whole_database ... ok\ntest a_snapshot_is_a_standalone_database_any_tool_reads_views_included ... ok\ntest views_join_across_sources_apply_in_any_order_and_a_broken_one_names_itself ... ok\ntest a_disk_store_persists_and_reopens_with_its_rows ... ok\ntest rows_of_a_capture_rule_an_opc_rule_and_a_telegram_message_are_stored_alike_and_feed_the_narrow_surface ... ok\ntest reserved_duplicate_and_empty_names_are_refused_and_type_conflicts_counted ... ok\ntest a_linked_csv_is_read_live_through_a_view_never_held_open_and_previewed_without_a_session ... ok\ntest the_csv_sniffer_adopts_a_decimal_comma_only_when_it_strictly_improves_the_typing ... ok\ntest the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves_a_single_column_alone ... ok\n\ntest result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.73s\n     Running tests\\store.rs (target\\debug\\deps\\store-40285ffb18a3c800.exe)",
+  "ranAt": "2026-11-08T00:55:07.603Z",
+  "headCommit": "120c77d0024f8edd29770d312041d7d50c5fdceb",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store.rs",
