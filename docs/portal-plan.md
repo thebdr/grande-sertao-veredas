@@ -307,3 +307,8 @@ Recorded as the port meets them.
   stayed an older one; and the peer was asked for before the catalog, so a misspelled message
   with nobody connected read as "no peer" (C-039, round 1). Every refusal path writes the status,
   and the order of refusals in the clause is the order of the code, tested with nobody connected.
+- **What compile accepts, the poll must read.** Compile allowed bits on a float tag while core
+  carves integer words alone, so such a tag polled a hole per bit forever after compile said yes
+  (C-040, round 1). A compile-time check mirrors the reader it guards, and a test of "misspelled
+  keys refused" misspells optional keys, since a misspelled required key fails for the missing
+  one with or without the unknown-field check.

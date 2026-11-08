@@ -383,7 +383,7 @@ fn every_configuration_mistake_is_refused_by_name_before_anything_connects() {
         OpcError::ColumnName { source_id: sid(), rule: "t".into(), column: "A".into(), reason: "the name must start with a lowercase letter or `_`".into() }
     );
     assert_eq!(
-        refused(&|c| c.rules[0].tags[0].bits = vec![bit(0, 1, "a")]),
+        refused(&|c| { c.rules[0].tags[0].ty = "int".into(); c.rules[0].tags[0].bits = vec![bit(0, 1, "a")]; }),
         OpcError::ColumnTwice { source_id: sid(), rule: "t".into(), column: "a".into() }
     );
     assert_eq!(
@@ -391,15 +391,15 @@ fn every_configuration_mistake_is_refused_by_name_before_anything_connects() {
         OpcError::ColumnTwice { source_id: sid(), rule: "t".into(), column: "a".into() }
     );
     assert_eq!(
-        refused(&|c| c.rules[0].tags[0].bits = vec![bit(0, 1, "f"), bit(1, 1, "f")]),
+        refused(&|c| { c.rules[0].tags[0].ty = "int".into(); c.rules[0].tags[0].bits = vec![bit(0, 1, "f"), bit(1, 1, "f")]; }),
         OpcError::ColumnTwice { source_id: sid(), rule: "t".into(), column: "f".into() }
     );
     assert_eq!(
-        refused(&|c| c.rules[0].tags[0].bits = vec![bit(64, 1, "f")]),
+        refused(&|c| { c.rules[0].tags[0].ty = "int".into(); c.rules[0].tags[0].bits = vec![bit(64, 1, "f")]; }),
         OpcError::BitTooHigh { source_id: sid(), rule: "t".into(), series: "f".into(), bit: 64 }
     );
     assert_eq!(
-        refused(&|c| c.rules[0].tags[0].bits = vec![bit(0, 1, "1f")]),
+        refused(&|c| { c.rules[0].tags[0].ty = "int".into(); c.rules[0].tags[0].bits = vec![bit(0, 1, "1f")]; }),
         OpcError::ColumnName { source_id: sid(), rule: "t".into(), column: "1f".into(), reason: "the name must start with a lowercase letter or `_`".into() }
     );
     // A bits-only tag has no column of its own; a width of 0 reads as 1; bit 63 is the last.
@@ -408,7 +408,7 @@ fn every_configuration_mistake_is_refused_by_name_before_anything_connects() {
     assert_eq!(ok.rules[0].tags[0].bits[0].width, 1);
     // The exact texts.
     assert_eq!(
-        refused(&|c| c.rules[0].tags[0].bits = vec![bit(64, 1, "f")]).to_string(),
+        refused(&|c| { c.rules[0].tags[0].ty = "int".into(); c.rules[0].tags[0].bits = vec![bit(64, 1, "f")]; }).to_string(),
         "source `plc`, rule `t`, bit `f`: bit 64 is past the widest word (0 to 63)"
     );
     assert_eq!(refused(&|c| c.poll_ms = 0).to_string(), "source `plc`: the poll interval of 0 ms is under 50 ms");
@@ -425,4 +425,31 @@ fn every_configuration_mistake_is_refused_by_name_before_anything_connects() {
     let cfg: OpcSourceConfig = toml::from_str(&with_bits).unwrap();
     assert_eq!(cfg.rules[0].tags[0].bits[0].width, 1, "the default width");
     assert!(toml::from_str::<OpcSourceConfig>(&with_bits.replace("bit = 1", "bits = 1")).is_err());
+    // Bits on a float tag: core never carves a float's wire word, so compile refuses it as it
+    // refuses text and time, by the same text.
+    assert_eq!(
+        refused(&|c| {
+            c.rules[0].tags[0].ty = "float".into();
+            c.rules[0].tags[0].bits = vec![bit(0, 1, "f")];
+        }),
+        OpcError::BitsOnText { source_id: sid(), rule: "t".into(), tag: "ns=2;s=a".into(), ty: SeriesType::Float }
+    );
+    assert_eq!(
+        refused(&|c| {
+            c.rules[0].tags[0].ty = "float".into();
+            c.rules[0].tags[0].bits = vec![bit(0, 1, "f")];
+        })
+        .to_string(),
+        "source `plc`, rule `t`, tag `ns=2;s=a`: bits are carved out of an int word, not a float tag"
+    );
+    // A misspelled optional key is refused as an unknown field in every table (a misspelled
+    // required key would be refused for the missing one even without the check).
+    let unknown = |t: &str| toml::from_str::<OpcSourceConfig>(t).unwrap_err().to_string();
+    assert!(unknown(&text.replace("endpoint_url =", "poll = 200\nendpoint_url =")).contains("unknown field `poll`"));
+    assert!(unknown(&text.replace("series = \"a\" }", "series = \"a\", writeable = true }")).contains("unknown field `writeable`"));
+    assert!(unknown(&text.replace("name = \"t\"", "name = \"t\"\nstore_on_changes = true")).contains("unknown field `store_on_changes`"));
+    assert!(unknown(&with_bits.replace("bit = 1", "bit = 1, widht = 3")).contains("unknown field `widht`"));
+    assert!(unknown(&text.replace("endpoint_url", "endpoint")).contains("unknown field `endpoint`"));
+    assert!(unknown(&text.replace("tags = [ { node_id", "tags = [ { nodeid")).contains("unknown field `nodeid`"));
+    assert!(unknown(&with_bits.replace("bit = 1", "bits = 1")).contains("unknown field `bits`"));
 }

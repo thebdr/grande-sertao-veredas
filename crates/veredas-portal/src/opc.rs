@@ -135,7 +135,7 @@ pub enum OpcError {
     ColumnTwice { source_id: String, rule: String, column: String },
     #[error("source `{source_id}`, rule `{rule}`, bit `{series}`: bit {bit} is past the widest word (0 to 63)")]
     BitTooHigh { source_id: String, rule: String, series: String, bit: u8 },
-    #[error("source `{source_id}`, rule `{rule}`, tag `{tag}`: bits are carved out of an int or float word, not a {ty} tag")]
+    #[error("source `{source_id}`, rule `{rule}`, tag `{tag}`: bits are carved out of an int word, not a {ty} tag")]
     BitsOnText { source_id: String, rule: String, tag: String, ty: SeriesType },
 }
 
@@ -226,7 +226,7 @@ pub fn compile(cfg: &OpcSourceConfig, secret: &dyn Fn(&str) -> Option<String>) -
             if series.is_empty() && tag.bits.is_empty() {
                 return Err(OpcError::NoSeriesNoBits { source_id: sid, rule: name, tag: raw });
             }
-            if !tag.bits.is_empty() && !matches!(ty, SeriesType::Int | SeriesType::Float) {
+            if !tag.bits.is_empty() && !matches!(ty, SeriesType::Int) {
                 return Err(OpcError::BitsOnText { source_id: sid, rule: name, tag: raw, ty });
             }
             if !series.is_empty() {
