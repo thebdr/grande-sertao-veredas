@@ -186,6 +186,8 @@ async fn randomized_tags_move_and_stay_inside_their_range() {
     let mut floats: Vec<f64> = Vec::new();
     let mut ints: Vec<i32> = Vec::new();
     let mut bools: Vec<bool> = Vec::new();
+    // The initial value holds until the first draw: read once every randomized tag has drawn.
+    until("the first draws", Duration::from_secs(5), || server.status().draws >= 3);
     for _ in 0..30 {
         match read(&session, &NodeId::new(ns, "t")).await {
             (StatusCode::Good, Some(Variant::Double(v))) => {

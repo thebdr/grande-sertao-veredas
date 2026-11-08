@@ -212,3 +212,7 @@ Recorded as the port meets them.
   runs under one seed disagreed on CI. A stream per purpose keeps a seed meaning "the same run".
   Found with a status read that could not see travelling items and a count taken before the
   list it was read from had caught up: a test that reads a snapshot waits for what it asserts.
+- **A randomized tag holds its initial value until its first draw.** The draws test read a tag
+  right after connecting and, on a slow runner, got the configured 0 outside the range it drew
+  in (C-026, found by CI twice). A test of what a clock moves waits for the move it asserts: the
+  status counts the draws, so the read waits for the first.
