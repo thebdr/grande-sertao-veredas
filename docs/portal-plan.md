@@ -283,3 +283,8 @@ Recorded as the port meets them.
   name (the active recreated between the listing and the peek), a family of one empty file
   refused as unparseable. A fixture set with distinct stamps, non-empty files and a still family
   proves the happy path alone; the round-1 tests of C-037 hold the edges.
+- **A test file that imports a feature's module declares the feature.** `cargo test
+  --no-default-features -p veredas-portal` compiled every integration test, and the five bound to
+  the store or the server (`store`, `store_engine`, `session`, `project`, `serve`) failed to
+  build, so the light build had no runnable test set. Each is a `[[test]]` in the manifest with
+  `required-features`; the light set is the data plane's eight binaries, 130 tests.

@@ -72,3 +72,25 @@ tokio = { workspace = true }
 # Configurations read from TOML in the tests.
 # Scratch directories, removed when a test ends.
 tempfile = { workspace = true }
+
+# The tests bound to the store and the server declare it, so the light build's test set
+# (`cargo test --no-default-features`) compiles and runs the data plane's tests alone.
+[[test]]
+name = "store"
+required-features = ["store"]
+
+[[test]]
+name = "session"
+required-features = ["store"]
+
+[[test]]
+name = "project"
+required-features = ["store"]
+
+[[test]]
+name = "serve"
+required-features = ["serve"]
+
+[[test]]
+name = "store_engine"
+required-features = ["store"]
