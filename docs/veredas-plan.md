@@ -38,6 +38,8 @@ scheme, one naming rule, and a clear role for each component.
   what portal absorbs of them is read into TOML (`docs/questions.md` Q10; the pattern is in
   each `docs/*-schema.md`, from the channel file on: the worked example loaded by the test,
   every key statement the reader's, and, from the catalog on, the text held as the test's copy).
+  Law L7 (`tools/leis`) holds every TOML file that is not a cargo manifest and every TOML block of
+  a reference to the stamp; one reader in core (`veredas_core::schema`) reads it for every file.
 - **New components** start at core's current MAJOR (3.0.0 if core is on 3.x).
 - **ORCL** has its own SemVer as a language; controlador states which ORCL versions it runs.
 

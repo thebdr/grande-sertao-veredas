@@ -9,7 +9,7 @@ A Rust workspace; each component is a crate with a version of its own. Read this
 2. `.zen/contract.md` wins on **status**: a capability is what its clause says, proven by the test
    the clause links. One or two sentences per clause and a pointer to the plan, never a copy of its
    prose.
-3. `tools/leis` **enforces** the structural rules as cargo tests (laws L1–L6). A law changes only
+3. `tools/leis` **enforces** the structural rules as cargo tests (laws L1–L7). A law changes only
    with the contract clause that states it.
 4. There is no session log: the contract, `.zen/evidence/` and git are the record.
 
@@ -25,8 +25,9 @@ A Rust workspace; each component is a crate with a version of its own. Read this
   and the scanner (aranha) own their sockets and never pull portal; controlador embeds portal
   and aranha and runs ORCL. The map is `MAP` in `tools/leis/src/lib.rs`. L5
 - A component's plan, `docs/<nome>-plan.md`, exists before its code. L6
-- Prose: fixture first (its simulator in maquinar before or alongside); every plain-text config
-  and project file states its schema version, portal migrates or refuses; writes stay gated.
+- Every TOML file that is not a cargo manifest, and every TOML block of a reference in `docs/`,
+  states a `veredas-*` `format` and a `version` from 1; portal migrates or refuses, never guesses. L7
+- Prose: fixture first (its simulator in maquinar before or alongside); writes stay gated.
 
 ## Adding a member
 1. `docs/<nome>-plan.md`: the one-sentence role nobody covers, scope, rules, what it absorbs.

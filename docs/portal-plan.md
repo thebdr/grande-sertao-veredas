@@ -228,6 +228,9 @@ Recorded as the port meets them.
   rank holds against a straggler; it is listed by time and refused for following.
 - **An hour in a file name needs its minutes filled** (C-036, round 1). The date read back without
   minutes was midnight for every hour; the reader fills them, and a shape is one run of specifiers.
+- **A derived default is not the file's default** (C-046). The session table absent, `Default::default()`
+  gave the idle window 0 and the project refused itself; a table whose keys have documented
+  defaults implements `Default` by hand, with those defaults.
 - **A fixed active absent at the start is new content** (C-036, round 2). Waiting for it held the
   start five seconds and then attached at its end, losing the first line; a listing with no active
   signals the attach, and the file read from its start when it comes.

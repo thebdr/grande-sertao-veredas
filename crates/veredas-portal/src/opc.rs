@@ -10,7 +10,7 @@
 //! that holds it (`docs/questions.md` Q15), and the lookup is handed in, so a test needs no
 //! environment.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use veredas_core::SeriesType;
@@ -26,7 +26,7 @@ pub const MIN_POLL_MS: u64 = 50;
 pub const MAX_NAME: usize = 64;
 
 /// One OPC UA source, as the project file declares it: the connection and its rules.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OpcSourceConfig {
     pub source_id: String,
@@ -52,7 +52,7 @@ fn default_poll_ms() -> u64 {
 }
 
 /// One rule: a table of this source's tags.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OpcRuleConfig {
     /// The table's name.
@@ -64,7 +64,7 @@ pub struct OpcRuleConfig {
 }
 
 /// One tag of a rule.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OpcTagConfig {
     /// The standard text form, `ns=<n>;s=<name>` (or `i=`, `g=`, `b=`).
@@ -83,7 +83,7 @@ pub struct OpcTagConfig {
 }
 
 /// A bit field carved out of an integer tag.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OpcBitConfig {
     /// The least-significant bit of the field, 0-based.

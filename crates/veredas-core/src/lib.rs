@@ -19,6 +19,7 @@
 
 pub mod opc;
 pub mod rng;
+pub mod schema;
 pub mod source;
 pub mod telegram;
 pub mod types;

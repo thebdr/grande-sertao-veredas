@@ -43,6 +43,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use serde::Deserialize;
+use crate::schema::HeaderError;
 
 use crate::telegram::Endian;
 use crate::telegram::framing::{Field, FieldRole, Framing, parse_hex};
@@ -108,12 +109,6 @@ pub enum SchemaError {
     UnknownVersion(u32),
     #[error("{0}")]
     Invalid(String),
-}
-
-#[derive(Deserialize)]
-struct Header {
-    format: Option<String>,
-    version: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -297,17 +292,12 @@ fn delimiter(name: &str, text: Option<String>) -> Result<Vec<u8>, SchemaError> {
 
 /// Read and validate a channel file.
 pub fn load(text: &str) -> Result<ChannelSpec, SchemaError> {
-    let header: Header = toml::from_str(text).map_err(|e| SchemaError::NotToml(e.to_string()))?;
-    match header.format.as_deref() {
-        Some(FORMAT) => {}
-        Some(other) => return Err(SchemaError::WrongFormat(other.to_string())),
-        None => return Err(invalid("no `format`: a channel file states `format` and `version`")),
-    }
-    match header.version {
-        Some(VERSION) => {}
-        Some(v) => return Err(SchemaError::UnknownVersion(v)),
-        None => return Err(invalid("no `version`: a channel file states `format` and `version`")),
-    }
+    crate::schema::check(text, "a channel file", FORMAT, VERSION).map_err(|e| match e {
+        HeaderError::NotToml { reason, .. } => SchemaError::NotToml(reason),
+        HeaderError::WrongFormat { found, .. } => SchemaError::WrongFormat(found),
+        HeaderError::UnknownVersion { found, .. } => SchemaError::UnknownVersion(found),
+        other => invalid(other.to_string()),
+    })?;
     let file: FileV1 = toml::from_str(text).map_err(|e| SchemaError::NotToml(e.to_string()))?;
 
     let f = file.framing;

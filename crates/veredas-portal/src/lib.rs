@@ -18,6 +18,8 @@
 //!   the series listing and the vitals kept by the ingest.
 //! - [`serve`] (feature `serve`): the live stream, windowed REST and the gated write surface over
 //!   a session.
+//! - [`project`]: the project file, `veredas-project`, checked whole before anything starts, and
+//!   Veredas 1's folder read into it.
 //!
 //! Nothing here names a device, a vendor or a product: what a plant's files and telegrams mean
 //! is configuration (`docs/questions.md` Q8). Reading a plant's file never blocks its writer.
@@ -28,6 +30,7 @@ pub mod encoding;
 pub mod family;
 pub mod opc;
 pub mod source;
+pub mod project;
 #[cfg(feature = "store")]
 pub mod session;
 #[cfg(feature = "serve")]

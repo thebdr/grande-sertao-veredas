@@ -16,7 +16,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use veredas_core::opc::worker::WriteGate;
@@ -38,7 +38,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A constant written into a reply field, as a TOML value: a number, a flag or text, written as
 /// text on the wire.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Literal {
     Int(i64),
@@ -60,7 +60,7 @@ impl Literal {
 
 /// One field of a reply: a name the sent message writes, taken from a field of the message
 /// answered (`from`) or a constant (`value`), exactly one of the two.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplyField {
     pub name: String,
@@ -72,7 +72,7 @@ pub struct ReplyField {
 
 /// A reply rule: when a message named `on` arrives, send the message named `send` back to the
 /// peer it came from, its fields rendered from the incoming message's fields and constants.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplyRule {
     pub on: String,

@@ -32,6 +32,8 @@ memchr = { workspace = true }
 notify = { workspace = true }
 # Capture rules and family patterns are regexes.
 regex = { workspace = true }
+# The project file is TOML, and Veredas 1's folder is written out as one.
+toml = { workspace = true }
 # Reply rules are configuration, read from plain text.
 serde = { workspace = true }
 # The store, behind its feature.
@@ -52,6 +54,12 @@ tokio = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 tokio-stream = { workspace = true, optional = true }
 
+[[bin]]
+name = "veredas-portal"
+path = "src/main.rs"
+# The executable runs a session and serves it; the light build has neither, and no executable.
+required-features = ["serve"]
+
 [dev-dependencies]
 # The bench plays the plant: its emitters write the files the tail follows.
 veredas-maquinar = { path = "../veredas-maquinar" }
@@ -61,6 +69,5 @@ serde_json = { workspace = true }
 async-opcua-types = { workspace = true }
 tokio = { workspace = true }
 # Configurations read from TOML in the tests.
-toml = { workspace = true }
 # Scratch directories, removed when a test ends.
 tempfile = { workspace = true }

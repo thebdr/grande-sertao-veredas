@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use chrono::Local;
 use serde::Deserialize;
+use veredas_core::schema::HeaderError;
 use veredas_core::rng::Pcg32;
 use veredas_core::telegram::PeerId;
 use veredas_core::telegram::catalog::Catalog;
@@ -311,12 +312,6 @@ pub struct CyclicFile {
     #[serde(default)]
     pub per_destination: bool,
     pub fields: Vec<FieldSpec>,
-}
-
-#[derive(Deserialize)]
-struct Header {
-    format: Option<String>,
-    version: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -861,17 +856,12 @@ fn message<'a>(place: &str, catalog: &'a Catalog, name: &str) -> Result<&'a vere
 
 /// Read and validate a controller file against the catalog its messages come from.
 pub fn load(text: &str, catalog: &Catalog) -> Result<Rules, RulesError> {
-    let header: Header = toml::from_str(text).map_err(|e| RulesError::NotToml(e.to_string()))?;
-    match header.format.as_deref() {
-        Some(FORMAT) => {}
-        Some(other) => return Err(RulesError::WrongFormat(other.to_string())),
-        None => return Err(invalid("no `format`: a controller file states `format` and `version`")),
-    }
-    match header.version {
-        Some(VERSION) => {}
-        Some(v) => return Err(RulesError::UnknownVersion(v)),
-        None => return Err(invalid("no `version`: a controller file states `format` and `version`")),
-    }
+    veredas_core::schema::check(text, "a controller file", FORMAT, VERSION).map_err(|e| match e {
+        HeaderError::NotToml { reason, .. } => RulesError::NotToml(reason),
+        HeaderError::WrongFormat { found, .. } => RulesError::WrongFormat(found),
+        HeaderError::UnknownVersion { found, .. } => RulesError::UnknownVersion(found),
+        other => invalid(other.to_string()),
+    })?;
     let file: FileV1 = toml::from_str(text).map_err(|e| RulesError::NotToml(e.to_string()))?;
     for name in file.registers.keys() {
         exact("registers", "register", name)?;

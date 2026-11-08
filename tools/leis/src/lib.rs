@@ -5,7 +5,7 @@
 //! one file per law plus `real_tree.rs`). Each law is a pure function over a [`Suite`] built from
 //! the manifests, so the tests attack the laws on synthetic suites and then run them on the real
 //! tree ([`Suite::read`]). A law changes only with the contract clause that states it
-//! (`.zen/contract.md`, C-001..C-006).
+//! (`.zen/contract.md`, C-001..C-006 and C-046).
 //!
 //! THE LAWS (a component is a member under `crates/`; a member under `tools/` is repo tooling)
 //!   L1 ROOTS       every `Cargo.toml` under `crates/` or `tools/`, at any depth, is a workspace
@@ -28,6 +28,8 @@
 //!                  reachable from HEAD that holds a component folder under `crates/`, present at
 //!                  HEAD or not ([`history`], over git's trees); the language's crates share
 //!                  `docs/orcl/README.md`. The suite's own plan is nobody's.
+//!   L7 STAMPS      every TOML file that is not a cargo manifest, and every TOML block of a reference
+//!                  under `docs/`, states a `veredas-*` `format` and a `version` from 1 ([`stamps`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -140,6 +142,9 @@ pub struct Suite {
     /// Folders the repository holds a manifest in under more than one spelling of its case
     /// (`Cargo.toml` beside `cargo.toml`): which one cargo reads depends on the filesystem.
     pub ambiguous: Vec<String>,
+    /// Every TOML file the repository holds that is not a cargo manifest, and every TOML block of
+    /// a reference under `docs/`, as (place, text): what L7 holds to the stamp.
+    pub stamped: Vec<(String, String)>,
 }
 
 /// A law broken: `L2 crates/foo: ...`.
@@ -325,6 +330,7 @@ impl Suite {
             others,
             plans,
             ambiguous: Vec::new(),
+            stamped: Vec::new(),
         })
     }
 
@@ -363,8 +369,17 @@ impl Suite {
         // one cargo reads depends on the filesystem); the exact `Cargo.toml` is the text taken.
         let mut manifests: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
         let mut plans = BTreeMap::new();
+        let mut stamped: Vec<(String, String)> = Vec::new();
         for p in &paths {
             let (dir, file) = p.rsplit_once('/').unwrap_or(("", p.as_str()));
+            if file.ends_with(".toml") && !file.eq_ignore_ascii_case("Cargo.toml") {
+                stamped.push((p.clone(), read(p)?));
+            }
+            if p.starts_with("docs/") && p.ends_with(".md") {
+                for (i, block) in toml_blocks(&read(p)?).into_iter().enumerate() {
+                    stamped.push((format!("{p} block {}", i + 1), block));
+                }
+            }
             if file.eq_ignore_ascii_case("Cargo.toml") {
                 if !dir.is_empty() {
                     manifests.entry(dir.to_string()).or_default().push((file.to_string(), read(p)?));
@@ -395,6 +410,7 @@ impl Suite {
         let refs: Vec<(&str, &str)> = crates.iter().map(|(d, t)| (d.as_str(), t.as_str())).collect();
         let mut suite = Suite::parse(&workspace, &refs, plans)?;
         suite.ambiguous = ambiguous;
+        suite.stamped = stamped;
         Ok(suite)
     }
 
@@ -843,6 +859,48 @@ pub fn history(root: &Path) -> Result<Vec<Violation>, Error> {
     Ok(out)
 }
 
+/// The ```toml blocks of a Markdown text, in order, whatever its line endings.
+fn toml_blocks(text: &str) -> Vec<String> {
+    let text = text.replace("\r\n", "\n");
+    let mut out = Vec::new();
+    let mut rest = text.as_str();
+    while let Some(start) = rest.find("```toml\n") {
+        let body = &rest[start + "```toml\n".len()..];
+        let Some(end) = body.find("```") else { break };
+        out.push(body[..end].to_string());
+        rest = &body[end + 3..];
+    }
+    out
+}
+
+/// L7: every stamped text parses as TOML and states a `veredas-*` `format` and a `version` from 1.
+pub fn stamps(s: &Suite) -> Vec<Violation> {
+    let mut out = Vec::new();
+    let v = |place: &str, what: String| Violation { law: "L7", member: place.to_string(), what };
+    for (place, text) in &s.stamped {
+        let table: toml::Table = match toml::from_str(text) {
+            Ok(t) => t,
+            Err(e) => {
+                out.push(v(place, format!("not TOML ({})", e.message())));
+                continue;
+            }
+        };
+        match table.get("format") {
+            None => out.push(v(place, "no `format` (a plain-text file of the suite states `format` and `version`)".into())),
+            Some(toml::Value::String(f)) if f.starts_with("veredas-") => {}
+            Some(toml::Value::String(f)) => out.push(v(place, format!("`format` is `{f}`, not a `veredas-*` format"))),
+            Some(_) => out.push(v(place, "`format` is not a string".into())),
+        }
+        match table.get("version") {
+            None => out.push(v(place, "no `version` (a plain-text file of the suite states `format` and `version`)".into())),
+            Some(toml::Value::Integer(n)) if *n >= 1 => {}
+            Some(toml::Value::Integer(n)) => out.push(v(place, format!("`version` is {n}, not a whole number from 1"))),
+            Some(_) => out.push(v(place, "`version` is not a whole number".into())),
+        }
+    }
+    out
+}
+
 /// Every law, in order.
 pub fn all(s: &Suite) -> Vec<Violation> {
     let mut out = roots(s);
@@ -851,5 +909,6 @@ pub fn all(s: &Suite) -> Vec<Violation> {
     out.extend(core(s));
     out.extend(direction(s));
     out.extend(plans(s));
+    out.extend(stamps(s));
     out
 }

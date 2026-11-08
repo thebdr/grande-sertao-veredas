@@ -29,6 +29,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::Deserialize;
+use crate::schema::HeaderError;
 
 use crate::telegram::Endian;
 use crate::telegram::capture::{BinaryField, Capture, CaptureSpec, RepeatSpec};
@@ -52,12 +53,6 @@ pub enum CatalogError {
     UnknownVersion(u32),
     #[error("{0}")]
     Invalid(String),
-}
-
-#[derive(Deserialize)]
-struct Header {
-    format: Option<String>,
-    version: Option<u32>,
 }
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -299,17 +294,12 @@ fn repeats_meet(a: &str, a_max: usize, b: &str, b_max: usize) -> Option<String> 
 
 /// Read and validate a catalog file.
 pub fn load(text: &str) -> Result<Catalog, CatalogError> {
-    let header: Header = toml::from_str(text).map_err(|e| CatalogError::NotToml(e.to_string()))?;
-    match header.format.as_deref() {
-        Some(FORMAT) => {}
-        Some(other) => return Err(CatalogError::WrongFormat(other.to_string())),
-        None => return Err(invalid("no `format`: a catalog file states `format` and `version`")),
-    }
-    match header.version {
-        Some(VERSION) => {}
-        Some(v) => return Err(CatalogError::UnknownVersion(v)),
-        None => return Err(invalid("no `version`: a catalog file states `format` and `version`")),
-    }
+    crate::schema::check(text, "a catalog file", FORMAT, VERSION).map_err(|e| match e {
+        HeaderError::NotToml { reason, .. } => CatalogError::NotToml(reason),
+        HeaderError::WrongFormat { found, .. } => CatalogError::WrongFormat(found),
+        HeaderError::UnknownVersion { found, .. } => CatalogError::UnknownVersion(found),
+        other => invalid(other.to_string()),
+    })?;
     let file: FileV1 = toml::from_str(text).map_err(|e| CatalogError::NotToml(e.to_string()))?;
     if file.id_field.trim().is_empty() {
         return Err(invalid("id_field is empty: name the frame field that carries a message's id"));

@@ -18,7 +18,6 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use chrono::NaiveDateTime;
-use serde::Deserialize;
 use thiserror::Error;
 
 use veredas_core::opc::spec::PollSpec;
@@ -46,76 +45,9 @@ pub const FRAME_SAMPLES: usize = 2_000;
 /// A source alive but silent this long reads as idle (a quiet log, a share away) rather than live.
 pub const DEFAULT_IDLE_MS: i64 = 20_000;
 
-/// The stamp a log line carries: a pattern locating it and the chrono formats to try, in order.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TimestampConfig {
-    pub pattern: String,
-    pub formats: Vec<String>,
-}
-
-/// Which file of a family is the one being written.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ActiveConfig {
-    /// The member with the greatest (date, index) key.
-    Newest,
-    /// The member of this constant name.
-    Fixed(String),
-}
-
-/// What a log source reads.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(rename_all = "lowercase", deny_unknown_fields)]
-pub enum LogKind {
-    /// One growing file.
-    File { path: String },
-    /// A rotating family in a folder, its members named by a pattern.
-    Family {
-        dir: String,
-        pattern: String,
-        #[serde(default)]
-        date_format: Option<String>,
-        #[serde(default = "default_active")]
-        active: ActiveConfig,
-        #[serde(default)]
-        recursive: bool,
-    },
-}
-
-fn default_active() -> ActiveConfig {
-    ActiveConfig::Newest
-}
-
-/// A log source, as the project declares it.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LogSourceConfig {
-    pub id: String,
-    #[serde(default)]
-    pub display_name: String,
-    #[serde(flatten)]
-    pub kind: LogKind,
-    #[serde(default)]
-    pub timestamp: Option<TimestampConfig>,
-}
-
-/// A capture rule, as the project declares it: a table named for the rule.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CaptureRuleConfig {
-    pub name: String,
-    pub pattern: String,
-    /// The one log source the rule reads; absent, every log source.
-    #[serde(default)]
-    pub scope: Option<String>,
-    /// A group's type (`int`, `float`, `text`, `time`); text when absent.
-    #[serde(default)]
-    pub types: BTreeMap<String, String>,
-    /// The group that is the identity key.
-    #[serde(default)]
-    pub key: Option<String>,
-}
+// The declarations the session reads live in the project module, so the light build reads a
+// project without a session.
+pub use crate::project::{ActiveConfig, CaptureRuleConfig, LogKind, LogSourceConfig, TimestampConfig};
 
 /// Everything a session needs to start.
 #[derive(Clone)]

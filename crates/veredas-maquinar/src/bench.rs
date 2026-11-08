@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use veredas_core::schema::HeaderError;
 use veredas_core::telegram::Role;
 use veredas_core::telegram::catalog::{self, Catalog};
 use veredas_core::telegram::schema::{self as channel_schema, ChannelSpec};
@@ -51,12 +52,6 @@ pub enum BenchError {
 
 fn invalid(msg: impl Into<String>) -> BenchError {
     BenchError::Invalid(msg.into())
-}
-
-#[derive(Deserialize)]
-struct Header {
-    format: Option<String>,
-    version: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -210,17 +205,12 @@ fn read_beside(base: &Path, place: &str, rel: &str) -> Result<(PathBuf, String),
 /// folder). Nothing starts: every part is validated as its own module validates it, and every
 /// referenced file is loaded, so what comes back can start.
 pub fn load(text: &str, base: &Path) -> Result<BenchSpec, BenchError> {
-    let header: Header = toml::from_str(text).map_err(|e| BenchError::NotToml(e.to_string()))?;
-    match header.format.as_deref() {
-        Some(FORMAT) => {}
-        Some(other) => return Err(BenchError::WrongFormat(other.to_string())),
-        None => return Err(invalid("no `format`: a bench file states `format` and `version`")),
-    }
-    match header.version {
-        Some(VERSION) => {}
-        Some(v) => return Err(BenchError::UnknownVersion(v)),
-        None => return Err(invalid("no `version`: a bench file states `format` and `version`")),
-    }
+    veredas_core::schema::check(text, "a bench file", FORMAT, VERSION).map_err(|e| match e {
+        HeaderError::NotToml { reason, .. } => BenchError::NotToml(reason),
+        HeaderError::WrongFormat { found, .. } => BenchError::WrongFormat(found),
+        HeaderError::UnknownVersion { found, .. } => BenchError::UnknownVersion(found),
+        other => invalid(other.to_string()),
+    })?;
     let file: FileV1 = toml::from_str(text).map_err(|e| BenchError::NotToml(e.to_string()))?;
     let mut names: BTreeMap<String, String> = BTreeMap::new();
     let mut name = |kind: &str, place: &str, n: &str| -> Result<(), BenchError> {
