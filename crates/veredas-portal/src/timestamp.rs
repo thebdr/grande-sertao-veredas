@@ -98,10 +98,17 @@ impl TimestampSpec {
             Some(m) => m.as_str(),
             None => caps.get(0)?.as_str(),
         };
-        let n = self.formats.len();
-        for off in 0..n {
-            let i = (*hint + off) % n;
-            if let Some(dt) = parse_flexible(text, &self.formats[i]) {
+        // The preferred format first; on a miss, the configured order with the preferred one
+        // skipped, never a rotation from it: a format that never succeeded must not beat an
+        // earlier configured one, or the stream would read ambiguous stamps the way the
+        // stateless spec never does.
+        if let Some(dt) = self.formats.get(*hint).and_then(|f| parse_flexible(text, f)) {
+            return Some(dt);
+        }
+        for (i, format) in self.formats.iter().enumerate() {
+            if i != *hint
+                && let Some(dt) = parse_flexible(text, format)
+            {
                 *hint = i;
                 return Some(dt);
             }

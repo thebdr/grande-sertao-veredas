@@ -237,3 +237,19 @@ fn an_empty_format_list_and_a_bad_pattern_are_refused() {
     }
     assert!(matches!(TimestampSpec::new(r"(unclosed", ["%Y"]), Err(SourceError::Pattern(_))));
 }
+
+/// A preferred format that misses falls back in the configured order, never by rotation from
+/// the preference: a format that never succeeded must not beat an earlier configured one, or the
+/// stream would read an ambiguous stamp the other way round from the stateless spec, and keep
+/// reading it so.
+#[test]
+fn a_failed_preference_falls_back_in_configured_order_not_by_rotation() {
+    let spec = TimestampSpec::new(r"^(?P<ts>\S+)", ["%d.%m.%Y", "%Y-%m-%d", "%m.%d.%Y"]).unwrap();
+    let mut x = TimestampExtractor::new(spec.clone());
+    assert_eq!(x.extract("2026-01-05"), Some(dt("2026-01-05 00:00:00")), "the ISO format now preferred");
+    // The preferred format misses here: the configured order decides, as the stateless spec does.
+    assert_eq!(spec.extract("01.02.2026"), Some(dt("2026-02-01 00:00:00")));
+    assert_eq!(x.extract("01.02.2026"), Some(dt("2026-02-01 00:00:00")), "day.month, first in the configured order");
+    // And day.month is what now stays preferred.
+    assert_eq!(x.extract("03.04.2026"), Some(dt("2026-04-03 00:00:00")));
+}

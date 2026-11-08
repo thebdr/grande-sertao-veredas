@@ -293,3 +293,11 @@ Recorded as the port meets them.
   lost the start equal to the first stamp), and the existing tests held neither case. A round's
   fixes go back to the critic as a round of their own, and the test a gap earns asserts the
   neighbouring cases too (the start on, before and after the edge), not the gap alone.
+- **A preference falls back to the order, not around it.** The extractor's hinted loop went on
+  from the preferred format and wrapped, so with three formats a format that had never matched
+  could win over the first configured one and then stick; the two-format test could not tell a
+  rotation from the order (C-038, round 1). A test of "first this, then the order" needs three.
+- **Two things a capture rule's author meets that no clause promises away:** a timezone in a
+  format (`%z`, `%:z`) is parsed and dropped, the stamp staying naive local; and a bare carriage
+  return the tail keeps (C-035) sits before the end of the line, so a `$`-anchored pattern misses
+  it: match `\r?$`, or do not anchor the end.
