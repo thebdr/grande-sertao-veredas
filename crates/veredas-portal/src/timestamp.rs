@@ -100,8 +100,8 @@ impl TimestampSpec {
         };
         // The preferred format first; on a miss, the configured order with the preferred one
         // skipped, never a rotation from it: a format that never succeeded must not beat an
-        // earlier configured one, or the stream would read ambiguous stamps the way the
-        // stateless spec never does.
+        // earlier configured one, or a format that never matched would decide an ambiguous
+        // stamp, where only a format the stream earned may differ from the configured order.
         if let Some(dt) = self.formats.get(*hint).and_then(|f| parse_flexible(text, f)) {
             return Some(dt);
         }
