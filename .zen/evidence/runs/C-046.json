@@ -1,0 +1,27 @@
+{
+  "clause": "C-046",
+  "command": "cargo nextest run -p veredas-portal -p leis -E binary(project) | binary(l7_stamps) | binary(real_tree)",
+  "commandArgv": [
+    "cargo",
+    "nextest",
+    "run",
+    "-p",
+    "veredas-portal",
+    "-p",
+    "leis",
+    "-E",
+    "binary(project) | binary(l7_stamps) | binary(real_tree)"
+  ],
+  "exitCode": 0,
+  "outputSha": "f3d284e4ec3b7b60f4203665124b3e3d1dcb4cad8f1ca865a3db1c829813715a",
+  "outputTail": " Nextest run ID 0d7f331e-5ecd-46dc-b93d-7859c0b7c250 with nextest profile: default\n    Starting 11 tests across 3 binaries (20 binaries skipped)\n        PASS [   0.128s] ( 1/11) leis::l7_stamps l7_a_stamped_file_passes\n        PASS [   0.132s] ( 2/11) veredas-portal::project the_header_is_refused_before_the_body_by_the_texts_every_file_shares\n        PASS [   0.246s] ( 3/11) leis::l7_stamps l7_every_way_to_miss_the_stamp_is_named\n        PASS [   0.274s] ( 4/11) veredas-portal::project the_reference_is_the_text_this_test_holds\n        PASS [   0.305s] ( 5/11) veredas-portal::project a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_named\n        PASS [   0.365s] ( 6/11) veredas-portal::project the_worked_example_loads_as_its_prose_says\n        PASS [   0.457s] ( 7/11) veredas-portal::project what_cannot_be_a_project_is_refused_by_name\n        PASS [   0.648s] ( 8/11) veredas-portal::project every_key_statement_is_the_readers\n        PASS [   1.088s] ( 9/11) leis::l7_stamps l7_the_reader_collects_toml_files_but_manifests_and_the_blocks_of_a_reference\n        PASS [   1.328s] (10/11) veredas-portal::project the_executable_checks_a_project_and_reads_a_veredas_1_folder\n        PASS [   2.240s] (11/11) leis::real_tree the_real_tree_obeys_every_law\n────────────\n     Summary [   2.246s] 11 tests run: 11 passed, 0 skipped",
+  "ranAt": "2026-11-08T00:19:55.961Z",
+  "headCommit": "48d0eb579b96461eed3f81917f85aec34fe1e824",
+  "tests": [
+    {
+      "name": "crates/veredas-portal/tests/project.rs",
+      "file": "crates/veredas-portal/tests/project.rs",
+      "fileSha": "b701763b5d998bac84b1e84bb7cfd11e83380119cdcbf6b65f55c5ba3a161bb6"
+    }
+  ]
+}

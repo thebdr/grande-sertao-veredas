@@ -1,0 +1,24 @@
+{
+  "clause": "C-045",
+  "command": "cargo test -p veredas-core --lib schema",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-core",
+    "--lib",
+    "schema"
+  ],
+  "exitCode": 0,
+  "outputSha": "746dd9850b70c7cb3adb5be0f73250c9685d87f8bd3f22d248df883faf3c44ce",
+  "outputTail": "\nrunning 1 test\ntest schema::tests::the_header_is_checked_format_first_then_version_with_the_pinned_texts ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.19s\n     Running unittests src\\lib.rs (target\\debug\\deps\\veredas_core-f3622936377c590b.exe)",
+  "ranAt": "2026-11-08T00:18:56.620Z",
+  "headCommit": "48d0eb579b96461eed3f81917f85aec34fe1e824",
+  "tests": [
+    {
+      "name": "crates/veredas-core/src/schema.rs",
+      "file": "crates/veredas-core/src/schema.rs",
+      "fileSha": "7ff9f7f8eb94f8978c98c48c90c21baaf5625636af65aefd2675e8f0e2adca47"
+    }
+  ]
+}
