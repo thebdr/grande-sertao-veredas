@@ -266,7 +266,7 @@ Recorded as the port meets them.
   open through, but an access-control list that denies the reader its attributes refuses even
   that, while the length stays readable from the directory entry. Taking "no identity read" for
   "the same file" attached a successor at the old length and lost its first lines (C-035, round
-  9). Unknown matches nothing; on Unix the device and inode come from the directory entry.
+  9). Unknown matches nothing; on Unix the device and inode come from the directory entry. A look that cannot read even the length records zero and no identity, so whatever opens is read whole (round 10).
 - **The live snapshots are refreshed every 500 ms.** The series, health, vitals and counters a
   session publishes are the pump's last refresh, not the store: a test that reads one right after
   the store shows a row may read the refresh before it (CI, Linux, the counters one pass behind).

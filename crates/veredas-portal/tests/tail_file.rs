@@ -1293,3 +1293,83 @@ fn a_retired_file_found_shorter_than_what_was_read_is_reread_from_its_top() {
         r.unwrap();
     }
 }
+
+/// A look that reads nothing at all (the file denied to its reader in a folder denied its
+/// listing, so not even the length is known) still records the hold: whatever opens at the path
+/// is read whole, never attached at a configured end. A successor renamed over the path during
+/// the denial is read from its first line.
+#[cfg(windows)]
+#[test]
+fn a_look_that_reads_nothing_still_records_the_hold_and_the_replacement_is_read_whole() {
+    struct Undeny(std::path::PathBuf, String);
+    impl Drop for Undeny {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("icacls").arg(&self.0).args(["/remove:d", &self.1]).status();
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let logs = dir.path().join("logs");
+    std::fs::create_dir(&logs).unwrap();
+    let path = logs.join("denied.log");
+    std::fs::write(&path, "history 1\nhistory 2\n").unwrap();
+    let user = std::env::var("USERNAME").unwrap();
+    let status = std::process::Command::new("icacls").arg(&path).args(["/deny", &format!("{user}:(R)")]).status().unwrap();
+    assert!(status.success(), "icacls on the file: {status}");
+    let status = std::process::Command::new("icacls").arg(&logs).args(["/deny", &format!("{user}:(RD)")]).status().unwrap();
+    assert!(status.success(), "icacls on the folder: {status}");
+    let _undeny = Undeny(logs.clone(), user);
+    assert!(File::open(&path).is_err(), "the deny must hold for the reader");
+    assert!(std::fs::metadata(&path).is_err(), "the folder must deny the listing");
+    let cfg = TailConfig {
+        poll_interval: Duration::from_millis(25),
+        drain_grace: Duration::from_millis(60),
+        use_notify: Some(false),
+        start: FileStart::End,
+    };
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FileTailSource::new("t", "tail", &path, cfg))).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    let next = logs.join("denied.log.next");
+    std::fs::write(&next, "successor line one\nsuccessor line two\n").unwrap();
+    std::fs::rename(&next, &path).unwrap();
+    assert_eq!(lines(&rx, 2), ["successor line one", "successor line two"]);
+    append(&path, "third\n");
+    assert_eq!(recv_line(&rx), "third");
+    set.stop_all();
+}
+
+/// The same where a folder's mode denies the search: at the look not even the file's length is
+/// readable; the folder opened again and the file replaced before the next look, the successor
+/// is read whole, never attached at a configured end. Not as root, whom no mode denies.
+#[cfg(unix)]
+#[test]
+fn a_file_in_a_folder_denying_search_at_the_start_is_read_whole_when_it_opens() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let dir = tempfile::tempdir().unwrap();
+    let logs = dir.path().join("logs");
+    std::fs::create_dir(&logs).unwrap();
+    let path = logs.join("denied.log");
+    std::fs::write(&path, "history 1\nhistory 2\n").unwrap();
+    if std::fs::metadata(&path).unwrap().uid() == 0 {
+        return;
+    }
+    std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(std::fs::metadata(&path).is_err(), "the folder must deny the search");
+    let cfg = TailConfig {
+        poll_interval: Duration::from_millis(600),
+        drain_grace: Duration::from_millis(60),
+        use_notify: Some(false),
+        start: FileStart::End,
+    };
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FileTailSource::new("t", "tail", &path, cfg))).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let next = logs.join("denied.log.next");
+    std::fs::write(&next, "successor line one\nsuccessor line two\n").unwrap();
+    std::fs::rename(&next, &path).unwrap();
+    assert_eq!(lines(&rx, 2), ["successor line one", "successor line two"]);
+    append(&path, "third\n");
+    assert_eq!(recv_line(&rx), "third");
+    set.stop_all();
+}

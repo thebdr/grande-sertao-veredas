@@ -130,7 +130,7 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
     let mut first_open = true;
     // A file present but held at the first look: its length and identity then, so the open that
     // succeeds can tell the same file (read from where it stood) from a replacement (read whole).
-    // Attributes are readable through a hold that refuses every read; an identity that is not read matches nothing.
+    // An identity that is not read matches nothing; a length that is not read is zero.
     let mut held: Option<(u64, Option<crate::tail::cursor::Identity>)> = None;
     match TailedFile::open(&path, cfg.start) {
         Ok(tf) => {
@@ -138,7 +138,12 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
             first_open = false;
         }
         Err(e) if is_not_found(&e) => first_open = false,
-        Err(_) => held = std::fs::metadata(&path).ok().map(|m| (m.len(), crate::tail::cursor::identity_at(&path))),
+        Err(_) => {
+            // A look that reads nothing at all (the folder denying its listing, a share's passing
+            // error) records a length of zero and no identity: whatever opens is read whole.
+            let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            held = Some((len, crate::tail::cursor::identity_at(&path)));
+        }
     }
     attached(&mut Some(attached_tx));
     let _watcher = if notify_wanted { path.parent().and_then(|dir| spawn_watcher(dir, wake_tx, false)) } else { None };
