@@ -83,8 +83,16 @@ fn the_three_protocols_run_into_one_store_alike() {
     let h = live.health.read().unwrap()["log"].clone();
     assert_eq!((h.count, h.last_ts), (20, Some(midnight() + chrono::Duration::seconds(10 * 3600 + 19))));
     assert!(live.vitals.read().unwrap().samples >= 40, "{:?}", live.vitals.read().unwrap());
-    let c = live.counters.read().unwrap().clone();
-    assert!(c.lines == 20 && c.polls >= 3 && c.messages >= 1 && c.rows >= 24 && c.store_errors == 0, "{c:?}");
+    // The counters are a snapshot refreshed with the vitals, every 500 ms: the first refresh may
+    // hold the first pass alone while the store already shows the polls that followed it.
+    assert!(
+        wait(Duration::from_secs(5), || {
+            let c = live.counters.read().unwrap();
+            c.lines == 20 && c.polls >= 3 && c.messages >= 1 && c.rows >= 24 && c.store_errors == 0
+        }),
+        "{:?}",
+        live.counters.read().unwrap()
+    );
 
     // The frames: every numeric sample since the last frame, for whoever listens.
     let mut rx = live.subscribe();
