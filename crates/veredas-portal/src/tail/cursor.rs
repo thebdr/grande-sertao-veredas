@@ -22,9 +22,18 @@ use crate::tail::FileStart;
 
 pub(crate) const READ_CHUNK: usize = 64 * 1024;
 
-/// The identity of the file at `path` without opening it for reading: a hold that refuses every
-/// read still lets its attributes be read. `None` when nothing is there, or even that is refused.
-pub(crate) fn identity_at(path: &Path) -> Option<Handle> {
+/// What tells one file from another without opening it for reading: on Windows a handle opened
+/// with no access at all (a hold that refuses every read still lets that through); elsewhere the
+/// device and inode the directory entry carries, which no mode on the file denies.
+#[cfg(windows)]
+pub(crate) type Identity = Handle;
+#[cfg(not(windows))]
+pub(crate) type Identity = (u64, u64);
+
+/// The identity of the file at `path` without opening it for reading. `None` when nothing is
+/// there, or when even that is refused (an access-control list denying the attributes): an
+/// unknown identity never passes for a known one.
+pub(crate) fn identity_at(path: &Path) -> Option<Identity> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
@@ -32,9 +41,27 @@ pub(crate) fn identity_at(path: &Path) -> Option<Handle> {
         let file = std::fs::OpenOptions::new().access_mode(0).custom_flags(FILE_FLAG_BACKUP_SEMANTICS).open(path).ok()?;
         Handle::from_file(file).ok()
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// Whether the open file is the one an identity was read of.
+fn is_identity(handle: &Handle, id: &Identity) -> bool {
+    #[cfg(windows)]
+    {
+        *id == *handle
+    }
     #[cfg(not(windows))]
     {
-        Handle::from_path(path).ok()
+        *id == (handle.dev(), handle.ino())
     }
 }
 
@@ -147,12 +174,12 @@ impl TailedFile {
     /// Open a file that was present but could not be opened at the first look, which recorded its
     /// length and identity then. The same file (its identity, and a length not shrunk) is read
     /// from where it stood at that look, so what was written to it meanwhile is read and its
-    /// history stays history; a file replaced meanwhile is read whole. The identity, never the
+    /// history stays history; a file replaced meanwhile is read whole, and so is one whose identity the look could not read (duplicates over loss). The identity, never the
     /// creation time: a file renamed over another inherits its creation time on one filesystem.
-    pub fn open_held(path: &Path, len_at_look: u64, identity_at_look: Option<&Handle>) -> Result<Self, SourceError> {
+    pub fn open_held(path: &Path, len_at_look: u64, identity_at_look: Option<&Identity>) -> Result<Self, SourceError> {
         let mut tf = TailedFile::open(path, FileStart::Begin)?;
         let meta = tf.handle.as_file().metadata().map_err(|e| SourceError::io(path, e))?;
-        let same = identity_at_look.is_none_or(|id| *id == tf.handle);
+        let same = identity_at_look.is_some_and(|id| is_identity(&tf.handle, id));
         if same && meta.len() >= len_at_look {
             tf.seek_to(len_at_look)?;
         }

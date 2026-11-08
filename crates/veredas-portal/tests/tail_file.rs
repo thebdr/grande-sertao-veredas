@@ -1197,3 +1197,67 @@ fn a_file_held_at_the_start_is_read_from_where_it_stood_and_a_replacement_whole(
     assert_eq!(lines(&rx, 2), ["n1 first line of the new file", "n2"]);
     set.stop_all();
 }
+
+/// A file whose identity the look cannot read (its access-control list denies the reader even
+/// the attributes) is read whole once something readable stands at the path: a successor renamed
+/// over it is read from its first line, duplicates over loss, never attached at the old length.
+#[cfg(windows)]
+#[test]
+fn a_file_denied_at_the_start_has_no_identity_and_its_replacement_is_read_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("denied.log");
+    std::fs::write(&path, "history 1\nhistory 2\n").unwrap();
+    let user = std::env::var("USERNAME").unwrap();
+    let status = std::process::Command::new("icacls").arg(&path).args(["/deny", &format!("{user}:(R)")]).status().unwrap();
+    assert!(status.success(), "icacls: {status}");
+    assert!(File::open(&path).is_err(), "the deny must hold for the reader");
+    let (set, rx) = tail(&path, FileStart::End);
+    std::thread::sleep(Duration::from_millis(200));
+    let next = dir.path().join("denied.log.next");
+    std::fs::write(&next, "successor line one\nsuccessor line two\n").unwrap();
+    std::fs::rename(&next, &path).unwrap();
+    assert_eq!(lines(&rx, 2), ["successor line one", "successor line two"]);
+    append(&path, "third\n");
+    assert_eq!(recv_line(&rx), "third");
+    set.stop_all();
+}
+
+/// Where a mode denies the reader, the directory entry still tells the file's identity: the same
+/// file, made readable again, is read from where it stood at the look (its history stays
+/// history); a successor renamed over it during the hold is read whole. Not as root, whom no mode
+/// denies.
+#[cfg(unix)]
+#[test]
+fn a_file_unreadable_at_the_start_is_told_from_its_replacement_by_the_directory_entry() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("held.log");
+    std::fs::write(&path, "history 1\nhistory 2\n").unwrap();
+    if std::fs::metadata(&path).unwrap().uid() == 0 {
+        return;
+    }
+    // The same file, released: read from where it stood.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert!(File::open(&path).is_err(), "the mode must hold for the reader");
+    let (set, rx) = tail(&path, FileStart::End);
+    std::thread::sleep(Duration::from_millis(200));
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    append(&path, "new\n");
+    assert_eq!(recv_line(&rx), "new");
+    assert_quiet(&rx, 200);
+    set.stop_all();
+    // A successor renamed over the held path: read whole.
+    let path = dir.path().join("replaced.log");
+    std::fs::write(&path, "history 1\nhistory 2\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let (set, rx) = tail(&path, FileStart::End);
+    std::thread::sleep(Duration::from_millis(200));
+    let next = dir.path().join("replaced.log.next");
+    std::fs::write(&next, "successor line one\nsuccessor line two\n").unwrap();
+    std::fs::rename(&next, &path).unwrap();
+    assert_eq!(lines(&rx, 2), ["successor line one", "successor line two"]);
+    append(&path, "third\n");
+    assert_eq!(recv_line(&rx), "third");
+    set.stop_all();
+}

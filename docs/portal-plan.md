@@ -262,3 +262,8 @@ Recorded as the port meets them.
 - **Planted folders of two tests in one binary must not share a name.** The component test's
   target check and graph walk each planted packages under the process id plus a case name, and
   one case name was common: run in parallel, one test removed the other's folder.
+- **An unknown identity is no identity.** A hold that refuses every read still lets a zero-access
+  open through, but an access-control list that denies the reader its attributes refuses even
+  that, while the length stays readable from the directory entry. Taking "no identity read" for
+  "the same file" attached a successor at the old length and lost its first lines (C-035, round
+  9). Unknown matches nothing; on Unix the device and inode come from the directory entry.

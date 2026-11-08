@@ -130,8 +130,8 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
     let mut first_open = true;
     // A file present but held at the first look: its length and identity then, so the open that
     // succeeds can tell the same file (read from where it stood) from a replacement (read whole).
-    // Attributes and the identity are readable through a hold that refuses every read.
-    let mut held: Option<(u64, Option<same_file::Handle>)> = None;
+    // Attributes are readable through a hold that refuses every read; an identity that is not read matches nothing.
+    let mut held: Option<(u64, Option<crate::tail::cursor::Identity>)> = None;
     match TailedFile::open(&path, cfg.start) {
         Ok(tf) => {
             active = Some(tf);
