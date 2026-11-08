@@ -44,15 +44,16 @@ serde_json = { workspace = true, optional = true }
 same-file = { workspace = true }
 thiserror = { workspace = true }
 
-[target.'cfg(windows)'.dependencies]
-# Whether a drive letter is a network drive, so a share is polled and never watched.
-windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_Foundation"] }
-
 # The session broadcasts its data frames on a tokio channel, which the server streams.
 tokio = { workspace = true, optional = true }
 # The server is axum over tokio; the live stream wraps the frames broadcast as a stream.
 axum = { workspace = true, optional = true }
 tokio-stream = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+# Whether a drive letter is a network drive, so a share is polled and never watched.
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_Foundation"] }
+
 
 [[bin]]
 name = "veredas-portal"

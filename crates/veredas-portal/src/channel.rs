@@ -404,13 +404,21 @@ pub struct ChannelWorker {
 /// or dials until it all holds: the catalog's ids ride the framing, every reply rule fits the
 /// catalog, every message's table fits. `gate` is the master write switch, shared with every
 /// other write path of the session.
-pub fn spawn(cfg: ChannelConfig, tx: Sender<ChannelEvent>, gate: WriteGate) -> Result<ChannelWorker, ChannelError> {
+/// Everything a configuration must satisfy before the channel binds or dials: the catalog checked
+/// against the channel file's framing, every reply rule compiled against the catalog, every
+/// message's table within the column cap (the tables come back). `spawn` runs it; a project and a
+/// session run it first, so nothing starts on a configuration that would be refused.
+pub fn check(cfg: &ChannelConfig) -> Result<Vec<MessageTable>, ChannelError> {
     cfg.catalog
         .check_framing(&cfg.spec.framing)
         .map_err(|e| ChannelError::Catalog { source_id: cfg.source_id.clone(), reason: e.to_string() })?;
+    compile_replies(cfg)?;
+    cfg.catalog.messages.iter().map(|m| MessageTable::of(&cfg.source_id, m)).collect()
+}
+
+pub fn spawn(cfg: ChannelConfig, tx: Sender<ChannelEvent>, gate: WriteGate) -> Result<ChannelWorker, ChannelError> {
+    let tables = check(&cfg)?;
     let replies = compile_replies(&cfg)?;
-    let tables: Vec<MessageTable> =
-        cfg.catalog.messages.iter().map(|m| MessageTable::of(&cfg.source_id, m)).collect::<Result<_, _>>()?;
     let status = Arc::new(Mutex::new(ChannelStatus {
         wire: WireStatus { state: "starting".into(), ..Default::default() },
         ..Default::default()

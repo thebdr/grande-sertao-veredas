@@ -251,10 +251,14 @@ fn what_cannot_be_a_project_is_refused_by_name() {
     assert_eq!(r(&without(&text, Some("[[channel]]"), "host")), "channel `sorter`: a connecting channel names its `host`");
     assert_eq!(r(&with(&text, "[[channel]]", "role", "role = \"listen\"")), "channel `sorter`: `host` belongs to a connecting channel; a listening one has `bind`");
     assert_eq!(r(&text.replacen("send = \"answer\"", "send = \"nope\"", 1)), "channel `sorter`: a reply rule's `send` names no message `nope` of its catalog");
-    assert_eq!(r(&with(&text, "[[table]]", "name", "name = \"scans\"")), "two tables would be named `scans`: rule `scans` and table `scans`");
+    assert_eq!(r(&with(&text, "[[table]]", "name", "name = \"scans\"")), "two tables would be named `scans`: capture rule `scans` and table `scans`");
     assert_eq!(r(&with(&text, "[[opc]]", "source_id", "source_id = \"scanner\"")), "two sources share the id `scanner`");
     assert_eq!(r(&text.replacen("scope = \"scanner\"", "scope = \"nope\"", 1)), "rule `scans`: the scope `nope` is no log of this project");
     assert_eq!(r("format = \"veredas-project\"\nversion = 1\nname = \"bare\"\n"), "the project has no source: a `[[log]]`, an `[[opc]]` or a `[[channel]]`");
+    assert_eq!(r(&without(&text, Some("[[log]]"), "timestamp")), "log `scanner`: a start point in the past needs a timestamp rule, to find the line to start at");
+    assert_eq!(r(&text.replacen("weight=(?P<weight>[0-9.]+)", "weight=(?P<weight>[0-9.]+)(?P<Extra>.*)", 1)), "rule `scans`: group `Extra`: the name must start with a lowercase letter or `_`");
+    let unread = r(&text.replacen("from = \"item\"", "from = \"nope\"", 1));
+    assert!(unread.starts_with("channel `sorter`: ") && unread.contains("nope"), "{unread}");
     let missing = r(&text.replacen("channel = \"channel.toml\"", "channel = \"nope.toml\"", 1));
     assert!(missing.starts_with("channel `sorter`: its channel file: cannot read ") && missing.contains("nope.toml"), "{missing}");
     std::fs::write(dir.path().join("catalog.toml"), "format = \"veredas-catalog\"\nversion = 1\n").unwrap();
@@ -528,7 +532,7 @@ file's folder.
   path under `dir`.
 - `timestamp` (optional): `{ pattern = "…", formats = ["…"] }`, the stamp a line carries: a regex
   whose `ts` group locates it, and the chrono formats to try in order. Without it, lines are
-  indexed on their arrival and a start in the past cannot be located in a family.
+  indexed on their arrival, and a start in the past with a family is refused: the stamps locate it.
 
 ### `[[rule]]`: a capture rule, one table named for it
 - `name` (required): the table's name, lowercase `[a-z0-9_]`, taken once across every table.
@@ -556,7 +560,7 @@ file's folder.
 - `catalog` (required): the catalog beside the project, `docs/catalog-schema.md`.
 - `replies` (default none): the reply rules, each `{ on, send, fields = [ … ] }` naming the
   catalog's messages (an unknown one is refused), a field `{ name, from }` copying the trigger's
-  field or `{ name, value }` a literal, as the channel clause reads them (C-038).
+  field or `{ name, value }` a literal, as the channel clause reads them (C-039).
 
 ### `[[table]]`: a view of the project
 - `name` (required): the view's name, taken once across every table.

@@ -142,7 +142,7 @@ file's folder.
   path under `dir`.
 - `timestamp` (optional): `{ pattern = "…", formats = ["…"] }`, the stamp a line carries: a regex
   whose `ts` group locates it, and the chrono formats to try in order. Without it, lines are
-  indexed on their arrival and a start in the past cannot be located in a family.
+  indexed on their arrival, and a start in the past with a family is refused: the stamps locate it.
 
 ### `[[rule]]`: a capture rule, one table named for it
 - `name` (required): the table's name, lowercase `[a-z0-9_]`, taken once across every table.
@@ -170,7 +170,7 @@ file's folder.
 - `catalog` (required): the catalog beside the project, `docs/catalog-schema.md`.
 - `replies` (default none): the reply rules, each `{ on, send, fields = [ … ] }` naming the
   catalog's messages (an unknown one is refused), a field `{ name, from }` copying the trigger's
-  field or `{ name, value }` a literal, as the channel clause reads them (C-038).
+  field or `{ name, value }` a literal, as the channel clause reads them (C-039).
 
 ### `[[table]]`: a view of the project
 - `name` (required): the view's name, taken once across every table.

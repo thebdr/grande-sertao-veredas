@@ -237,6 +237,9 @@ Recorded as the port meets them.
 - **A fixed active born after the start may retire before it is opened** (C-036, round 3). Marking the
   listing known at the open lost every generation born meanwhile; such a family is followed as one
   born after the start, the pre-start retirees seeded as history.
+- **Two validators of one configuration drift** (reconcile of C-043 and C-046). The file and the
+  session each checked names in their own way; one type (`project::Claims`) and one channel check
+  (`channel::check`) now serve both.
 - **A grace tuned on an idle machine loses under the suite** (C-036). The straggler scenarios drained
   a retired file for 120 ms while the straggler lands after 15; the whole suite in parallel held
   the writer past the grace once and the line was lost. Test graces carry headroom for load.

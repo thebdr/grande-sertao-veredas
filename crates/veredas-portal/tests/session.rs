@@ -132,7 +132,7 @@ fn a_start_is_refused_by_name_before_anything_spawns() {
     assert_eq!(refused(twice), "two sources share the id `log`");
     let mut blank = SessionConfig::new("blank");
     blank.logs.push(log_source(" ", &log));
-    assert_eq!(refused(blank), "a source has an empty id");
+    assert_eq!(refused(blank), "a log has an empty id");
     let mut scope = SessionConfig::new("scope");
     scope.logs.push(log_source("log", &log));
     scope.rules.push(readings_rule(Some("nope")));
@@ -168,6 +168,23 @@ fn a_start_is_refused_by_name_before_anything_spawns() {
         timestamp: None,
     });
     assert_eq!(refused(fam), "log source `fam`: a start point in the past needs a timestamp rule, to find the line to start at");
+    // A rule name outside the name shape, and a view named like a base table or another view.
+    let mut named = SessionConfig::new("named");
+    named.logs.push(log_source("log", &log));
+    let mut rule = readings_rule(None);
+    rule.name = "Bad Name".into();
+    named.rules.push(rule);
+    assert_eq!(refused(named), "capture rule `Bad Name`: the name must start with a lowercase letter or `_`");
+    let mut viewed = SessionConfig::new("viewed");
+    viewed.logs.push(log_source("log", &log));
+    viewed.rules.push(readings_rule(None));
+    viewed.tables.push(TableDef { name: "Readings".into(), sql: "SELECT 1".into() });
+    assert_eq!(refused(viewed), "two tables would be named `Readings`: capture rule `readings` and table `Readings`");
+    let mut views = SessionConfig::new("views");
+    views.logs.push(log_source("log", &log));
+    views.tables.push(TableDef { name: "v".into(), sql: "SELECT 1".into() });
+    views.tables.push(TableDef { name: "v".into(), sql: "SELECT 2".into() });
+    assert_eq!(refused(views), "two tables would be named `v`: table `v` and table `v`");
 }
 
 #[test]

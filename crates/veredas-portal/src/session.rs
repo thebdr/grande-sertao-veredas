@@ -27,6 +27,7 @@ use crate::capture::{CaptureError, CaptureRule};
 use crate::channel::{self, ChannelConfig, ChannelError, ChannelEvent, ChannelHandle, LinkState, MessageTable};
 use crate::family::{ActiveMode, FamilySpec};
 use crate::opc::{self, ConnState, DedupState, OpcError, OpcEvent, OpcHandle, OpcSourceConfig, WriteGate};
+use crate::project::{Claims, Clash};
 use crate::source::{LineEvent, SourceSet};
 use crate::store::{BaseTableSpec, DuckStore, Residency, StoreError, StoreSnapshot, TableDef, WideRow};
 use crate::tail::{FamilyStart, FamilyTailConfig, FamilyTailSource, FileStart, FileTailSource, TailConfig};
@@ -43,7 +44,7 @@ pub const KEYS_CAP: usize = 64;
 /// Numeric samples per data frame, so a backfill's flood becomes frames a client parses.
 pub const FRAME_SAMPLES: usize = 2_000;
 /// A source alive but silent this long reads as idle (a quiet log, a share away) rather than live.
-pub const DEFAULT_IDLE_MS: i64 = 20_000;
+pub use crate::project::DEFAULT_IDLE_MS;
 
 // The declarations the session reads live in the project module, so the light build reads a
 // project without a session.
@@ -92,8 +93,8 @@ impl SessionConfig {
 pub enum SessionError {
     #[error("the session has no source")]
     NoSources,
-    #[error("a source has an empty id")]
-    EmptyId,
+    #[error("a {0} has an empty id")]
+    EmptyId(String),
     #[error("two sources share the id `{0}`")]
     DuplicateSource(String),
     #[error("log source `{id}`: {reason}")]
@@ -114,6 +115,16 @@ pub enum SessionError {
     Store(#[from] StoreError),
     #[error("source `{id}`: {source}")]
     Spawn { id: String, source: SourceError },
+}
+
+impl From<Clash> for SessionError {
+    fn from(c: Clash) -> Self {
+        match c {
+            Clash::EmptyId { kind } => SessionError::EmptyId(kind),
+            Clash::DuplicateId(id) => SessionError::DuplicateSource(id),
+            Clash::Table { name, first, second } => SessionError::TableClash { name, first, second },
+        }
+    }
 }
 
 /// One source as the session lists it.
@@ -336,35 +347,25 @@ impl Session {
     /// Check the whole configuration, open the store, spawn every source and the pump. A
     /// failure after a source was spawned stops what was spawned and reports it.
     pub fn start(cfg: SessionConfig) -> Result<Session, SessionError> {
-        // Every source has an id, once.
-        let mut ids: BTreeSet<&str> = BTreeSet::new();
-        let log_ids = cfg.logs.iter().map(|l| l.id.trim());
-        let opc_ids = cfg.opc.iter().map(|o| o.source_id.trim());
-        let channel_ids = cfg.channels.iter().map(|c| c.source_id.trim());
-        let all: Vec<&str> = log_ids.chain(opc_ids).chain(channel_ids).collect();
-        if all.is_empty() {
+        // Every source has an id once and every table a name once: the claims a project file
+        // makes (C-046), made again here through the same type for a configuration built by hand.
+        if cfg.logs.is_empty() && cfg.opc.is_empty() && cfg.channels.is_empty() {
             return Err(SessionError::NoSources);
         }
-        for id in &all {
-            if id.is_empty() {
-                return Err(SessionError::EmptyId);
-            }
-            if !ids.insert(id) {
-                return Err(SessionError::DuplicateSource(id.to_string()));
-            }
+        let mut claims = Claims::default();
+        for l in &cfg.logs {
+            claims.source("log", &l.id)?;
+        }
+        for o in &cfg.opc {
+            claims.source("opc source", &o.source_id)?;
+        }
+        for c in &cfg.channels {
+            claims.source("channel", &c.source_id)?;
         }
 
         // The capture rules, each a table.
         let mut captures: Vec<(CaptureRule, Vec<Arc<str>>)> = Vec::new();
         let mut specs: Vec<BaseTableSpec> = Vec::new();
-        let mut owners: Vec<String> = Vec::new();
-        let claim = |name: &str, owner: String, specs: &[BaseTableSpec], owners: &mut Vec<String>| -> Result<(), SessionError> {
-            if let Some(i) = specs.iter().position(|s| s.name.eq_ignore_ascii_case(name)) {
-                return Err(SessionError::TableClash { name: name.to_string(), first: owners[i].clone(), second: owner });
-            }
-            owners.push(owner);
-            Ok(())
-        };
         for rule in &cfg.rules {
             let name = rule.name.trim();
             opc::check_name(name).map_err(|reason| SessionError::Rule { name: name.to_string(), reason })?;
@@ -386,7 +387,7 @@ impl Session {
             for (series, _) in compiled.series() {
                 opc::check_name(series).map_err(|reason| SessionError::Rule { name: name.to_string(), reason: format!("group `{series}`: {reason}") })?;
             }
-            claim(name, format!("capture rule `{name}`"), &specs, &mut owners)?;
+            claims.table(name, format!("capture rule `{name}`"))?;
             specs.push(BaseTableSpec {
                 name: name.to_string(),
                 columns: compiled.series().map(|(n, t)| (n.to_string(), t)).collect(),
@@ -403,27 +404,28 @@ impl Session {
             let base = specs.len();
             for rule in &spec.rules {
                 let (name, columns) = opc::table_of(rule);
-                claim(&name, format!("OPC rule `{name}` of source `{}`", spec.source_id), &specs, &mut owners)?;
+                claims.table(&name, format!("OPC rule `{name}` of source `{}`", spec.source_id))?;
                 specs.push(BaseTableSpec { name, columns, has_key: false });
             }
             opc_specs.push((spec, base));
         }
 
-        // The channels, each catalog message a table.
+        // The channels, each checked whole (the framing against the channel file, every reply
+        // rule against the catalog, every message's table within the cap) before anything
+        // spawns, each catalog message a table.
         let mut channel_tables: Vec<HashMap<String, (usize, MessageTable)>> = Vec::new();
         for ch in &cfg.channels {
             let mut tables = HashMap::new();
-            for message in &ch.catalog.messages {
-                let table = MessageTable::of(&ch.source_id, message)?;
-                claim(&table.name, format!("message `{}` of channel `{}`", table.name, ch.source_id), &specs, &mut owners)?;
+            for table in channel::check(ch)? {
+                claims.table(&table.name, format!("message `{}` of channel `{}`", table.name, ch.source_id))?;
                 specs.push(BaseTableSpec { name: table.name.clone(), columns: table.columns.clone(), has_key: false });
-                tables.insert(message.name.clone(), (specs.len() - 1, table));
+                tables.insert(table.name.clone(), (specs.len() - 1, table));
             }
             channel_tables.push(tables);
         }
+        // The views, named once too: against the base tables and against each other.
         for def in &cfg.tables {
-            claim(def.name.trim(), format!("table `{}`", def.name.trim()), &specs, &mut owners)?;
-            owners.pop();
+            claims.table(def.name.trim(), format!("table `{}`", def.name.trim()))?;
         }
 
         // The log sources, built before anything spawns so a bad one refuses the whole session.

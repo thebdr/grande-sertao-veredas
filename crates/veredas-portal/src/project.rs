@@ -25,7 +25,7 @@ use veredas_core::telegram::{Role, catalog, schema as channel_schema};
 use veredas_core::{SeriesType, SourceId};
 
 use crate::capture::CaptureRule;
-use crate::channel::{ChannelConfig, ReplyRule};
+use crate::channel::{self, ChannelConfig, ReplyRule};
 use crate::family::{ActiveMode, FamilySpec};
 use crate::opc::{self, OpcSourceConfig};
 use crate::timestamp::TimestampSpec;
@@ -169,6 +169,62 @@ pub enum ProjectError {
 
 fn invalid(msg: impl Into<String>) -> ProjectError {
     ProjectError::Invalid(msg.into())
+}
+
+/// What a project claims once: every source id across its logs, OPC sources and channels, and
+/// every table name across its capture rules, OPC rules, catalog messages and views, compared
+/// without regard to case (the store compares names so, C-041). The session (C-043) claims
+/// through this same type for a configuration built by hand, so the two never drift.
+#[derive(Default)]
+pub struct Claims {
+    ids: BTreeSet<String>,
+    /// (the name lowered, its owner).
+    tables: Vec<(String, String)>,
+}
+
+/// A claim refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Clash {
+    EmptyId { kind: String },
+    DuplicateId(String),
+    Table { name: String, first: String, second: String },
+}
+
+impl std::fmt::Display for Clash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Clash::EmptyId { kind } => write!(f, "a {kind} has an empty id"),
+            Clash::DuplicateId(id) => write!(f, "two sources share the id `{id}`"),
+            Clash::Table { name, first, second } => write!(f, "two tables would be named `{name}`: {first} and {second}"),
+        }
+    }
+}
+
+impl Claims {
+    /// Claim a source id (trimmed, returned): empty or taken, a clash. `kind` names the source in
+    /// the text: `log`, `opc source`, `channel`.
+    pub fn source(&mut self, kind: &str, id: &str) -> Result<String, Clash> {
+        let id = id.trim().to_string();
+        if id.is_empty() {
+            return Err(Clash::EmptyId { kind: kind.to_string() });
+        }
+        if !self.ids.insert(id.clone()) {
+            return Err(Clash::DuplicateId(id));
+        }
+        Ok(id)
+    }
+
+    /// Claim a table name for `owner` (`capture rule `x``, `OPC rule `x` of source `y``,
+    /// `message `x` of channel `y``, `table `x``): taken, whatever the case, a clash naming both.
+    pub fn table(&mut self, name: &str, owner: String) -> Result<(), Clash> {
+        let name = name.trim();
+        let lowered = name.to_ascii_lowercase();
+        if let Some((_, first)) = self.tables.iter().find(|(n, _)| *n == lowered) {
+            return Err(Clash::Table { name: name.to_string(), first: first.clone(), second: owner });
+        }
+        self.tables.push((lowered, owner));
+        Ok(())
+    }
 }
 
 // ---- the file --------------------------------------------------------------------------------
@@ -384,23 +440,14 @@ pub fn load(text: &str, base: &Path) -> Result<Project, ProjectError> {
         ),
     };
 
-    // Every source id once, across the three kinds.
-    let mut ids: BTreeSet<String> = BTreeSet::new();
-    let mut claim = |kind: &str, id: &str| -> Result<String, ProjectError> {
-        let id = id.trim().to_string();
-        if id.is_empty() {
-            return Err(invalid(format!("a {kind} has an empty id")));
-        }
-        if !ids.insert(id.clone()) {
-            return Err(invalid(format!("two sources share the id `{id}`")));
-        }
-        Ok(id)
-    };
+    // Every source id once and every table name once, through the claims the session makes too.
+    let mut claims = Claims::default();
+    let claimed = |c: Clash| invalid(c.to_string());
 
     // The logs: a file, or a family (a folder and a pattern), never both nor neither.
     let mut logs: Vec<LogSourceConfig> = Vec::new();
     for l in &file.log {
-        let id = claim("log", &l.id)?;
+        let id = claims.source("log", &l.id).map_err(claimed)?;
         let place = format!("log `{id}`");
         let display_name = if l.display_name.trim().is_empty() { id.clone() } else { l.display_name.trim().to_string() };
         let kind = match (&l.file, &l.dir, &l.pattern) {
@@ -446,17 +493,18 @@ pub fn load(text: &str, base: &Path) -> Result<Project, ProjectError> {
         }
         logs.push(LogSourceConfig { id, display_name, kind, timestamp: l.timestamp.clone() });
     }
+    // A start in the past is located in a family by its stamps: a family without a timestamp rule
+    // cannot be started there (the session would refuse it; so does the file).
+    if start != Start::Live {
+        for l in &logs {
+            if matches!(l.kind, LogKind::Family { .. }) && l.timestamp.is_none() {
+                return Err(invalid(format!("log `{}`: a start point in the past needs a timestamp rule, to find the line to start at", l.id)));
+            }
+        }
+    }
 
     // The capture rules, each compiled once.
     let mut rules: Vec<CaptureRuleConfig> = Vec::new();
-    let mut tables: BTreeMap<String, String> = BTreeMap::new();
-    let mut table = |name: &str, owner: String| -> Result<(), ProjectError> {
-        if let Some(first) = tables.get(name) {
-            return Err(invalid(format!("two tables would be named `{name}`: {first} and {owner}")));
-        }
-        tables.insert(name.to_string(), owner);
-        Ok(())
-    };
     for r in &file.rule {
         let name = r.name.trim();
         opc::check_name(name).map_err(|reason| invalid(format!("rule `{name}`: {reason}")))?;
@@ -474,8 +522,11 @@ pub fn load(text: &str, base: &Path) -> Result<Project, ProjectError> {
         {
             return Err(invalid(format!("rule `{name}`: the scope `{s}` is no log of this project")));
         }
-        CaptureRule::new(name, r.pattern.trim(), scope.map(SourceId::new), &types, r.key.as_deref().map(str::trim)).map_err(|e| invalid(format!("rule `{name}`: {e}")))?;
-        table(name, format!("rule `{name}`"))?;
+        let compiled = CaptureRule::new(name, r.pattern.trim(), scope.map(SourceId::new), &types, r.key.as_deref().map(str::trim)).map_err(|e| invalid(format!("rule `{name}`: {e}")))?;
+        for (series, _) in compiled.series() {
+            opc::check_name(series).map_err(|reason| invalid(format!("rule `{name}`: group `{series}`: {reason}")))?;
+        }
+        claims.table(name, format!("capture rule `{name}`")).map_err(claimed)?;
         rules.push(CaptureRuleConfig {
             name: name.to_string(),
             pattern: r.pattern.trim().to_string(),
@@ -489,10 +540,10 @@ pub fn load(text: &str, base: &Path) -> Result<Project, ProjectError> {
     // environment when the session starts, and the check verifies everything but its presence.
     let mut opcs: Vec<OpcSourceConfig> = Vec::new();
     for o in &file.opc {
-        let id = claim("opc source", &o.source_id)?;
+        let id = claims.source("opc source", &o.source_id).map_err(claimed)?;
         let spec = opc::compile(o, &|_| Some(String::from("*"))).map_err(|e| invalid(format!("opc `{id}`: {e}")))?;
         for rule in &spec.rules {
-            table(&rule.name, format!("opc rule `{}` of `{id}`", rule.name))?;
+            claims.table(&rule.name, format!("OPC rule `{}` of source `{id}`", rule.name)).map_err(claimed)?;
         }
         let mut cfg = o.clone();
         cfg.source_id = id.clone();
@@ -506,7 +557,7 @@ pub fn load(text: &str, base: &Path) -> Result<Project, ProjectError> {
     // rules checked against the catalog.
     let mut channels: Vec<ChannelConfig> = Vec::new();
     for c in &file.channel {
-        let id = claim("channel", &c.source_id)?;
+        let id = claims.source("channel", &c.source_id).map_err(claimed)?;
         let place = format!("channel `{id}`");
         let role = match c.role {
             RoleFile::Listen => {
@@ -533,9 +584,6 @@ pub fn load(text: &str, base: &Path) -> Result<Project, ProjectError> {
         let spec = channel_schema::load(&channel_text).map_err(|e| ProjectError::Referenced { place: format!("{place}: its channel file"), path: channel_path, reason: e.to_string() })?;
         let (catalog_path, catalog_text) = read("catalog", &c.catalog)?;
         let cat = catalog::load(&catalog_text).map_err(|e| ProjectError::Referenced { place: format!("{place}: its catalog"), path: catalog_path, reason: e.to_string() })?;
-        for message in &cat.messages {
-            table(&message.name, format!("message `{}` of {place}", message.name))?;
-        }
         for reply in &c.replies {
             for (what, message) in [("on", &reply.on), ("send", &reply.send)] {
                 if cat.by_name(message.trim()).is_none() {
@@ -544,7 +592,13 @@ pub fn load(text: &str, base: &Path) -> Result<Project, ProjectError> {
             }
         }
         let display_name = if c.display_name.trim().is_empty() { id.clone() } else { c.display_name.trim().to_string() };
-        channels.push(ChannelConfig { source_id: id, display_name, role, spec, catalog: cat, replies: c.replies.clone() });
+        let cfg = ChannelConfig { source_id: id, display_name, role, spec, catalog: cat, replies: c.replies.clone() };
+        // The channel checked whole, as the session checks it before it spawns: the framing
+        // against the channel file, every reply rule against the catalog, every message a table.
+        for table in channel::check(&cfg).map_err(|e| invalid(format!("{place}: {e}")))? {
+            claims.table(&table.name, format!("message `{}` of channel `{}`", table.name, cfg.source_id)).map_err(claimed)?;
+        }
+        channels.push(cfg);
     }
 
     // The views.
@@ -555,7 +609,7 @@ pub fn load(text: &str, base: &Path) -> Result<Project, ProjectError> {
         if t.sql.trim().is_empty() {
             return Err(invalid(format!("table `{name}`: `sql` is empty")));
         }
-        table(name, format!("table `{name}`"))?;
+        claims.table(name, format!("table `{name}`")).map_err(claimed)?;
         views.push((name.to_string(), t.sql.trim().to_string()));
     }
     if logs.is_empty() && opcs.is_empty() && channels.is_empty() {
