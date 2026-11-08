@@ -10,15 +10,15 @@
     "controller_rules"
   ],
   "exitCode": 0,
-  "outputSha": "c44b3dc4c7870fadb439db6e20fb671ef0d93aab1343516fdaa854cd25d6f686",
-  "outputTail": "\nrunning 6 tests\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_documented_example_loads_as_described ... ok\ntest every_rule_the_reference_states_about_loading_is_the_reader_s ... ok\ntest the_header_is_refused_four_ways ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest every_invalid_file_is_refused_with_its_place_named ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.85s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.67s\n     Running tests\\controller_rules.rs (target\\debug\\deps\\controller_rules-a0aad5a3778fcfae.exe)",
-  "ranAt": "2026-11-08T00:20:19.009Z",
-  "headCommit": "48d0eb579b96461eed3f81917f85aec34fe1e824",
+  "outputSha": "0c941827dc3a0c7fa3f28b6b9890ab4a96361a84f1f71e4be8c616118ccf08ce",
+  "outputTail": "\nrunning 6 tests\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_documented_example_loads_as_described ... ok\ntest every_rule_the_reference_states_about_loading_is_the_reader_s ... ok\ntest the_header_is_refused_four_ways ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest every_invalid_file_is_refused_with_its_place_named ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.83s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.59s\n     Running tests\\controller_rules.rs (target\\debug\\deps\\controller_rules-a0aad5a3778fcfae.exe)",
+  "ranAt": "2026-11-08T22:58:29.547Z",
+  "headCommit": "de33dcb4d968436fc95824a9b5d6c017e9762cec",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/controller_rules.rs",
       "file": "crates/veredas-maquinar/tests/controller_rules.rs",
-      "fileSha": "27e4857425e333dad32cc7afe3b115b8b5a0c4da67581a905052ea3fc154da8d"
+      "fileSha": "baf70d869c5e20d3d8f23a74d3e71164adc4af5ce9da9ea721f869b5a9217a4b"
     }
   ]
 }
