@@ -71,6 +71,12 @@ impl Source for FileTailSource {
 /// How long a start waits for its worker to look at the path before returning anyway.
 pub(crate) const ATTACH_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Whether an open failed because nothing is at the path (as against a file there that cannot
+/// be opened for the moment).
+pub(crate) fn is_not_found(e: &SourceError) -> bool {
+    matches!(e, SourceError::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound)
+}
+
 /// Tell the start that the worker has looked at its path, once.
 pub(crate) fn attached(slot: &mut Option<Sender<()>>) {
     if let Some(tx) = slot.take() {
@@ -107,7 +113,6 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
     // the watcher could not be set up (a parent folder not there yet, a path that cannot be
     // watched).
     let _wake_keep = wake_tx.clone();
-    let _watcher = if notify_wanted { path.parent().and_then(|dir| spawn_watcher(dir, wake_tx, false)) } else { None };
 
     let disconnected = Cell::new(false);
     let mut emit = |line: String| {
@@ -117,10 +122,22 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
     };
 
     // The first look, before the loop and before the start returns: present, the file is
-    // attached where the start says; absent, whatever appears later is new content.
-    let mut active: Option<TailedFile> = TailedFile::open(&path, cfg.start).ok();
-    let mut first_open = false;
+    // attached where the start says; absent, whatever appears later is new content; present but
+    // not openable for the moment (a writer holding it, a share's passing error), awaited at the
+    // configured start, never read whole as if new. The watcher is armed after the signal, so a
+    // slow arm never eats the bound the caller waits on; the poll covers the gap.
+    let mut active: Option<TailedFile> = None;
+    let mut first_open = true;
+    match TailedFile::open(&path, cfg.start) {
+        Ok(tf) => {
+            active = Some(tf);
+            first_open = false;
+        }
+        Err(e) if is_not_found(&e) => first_open = false,
+        Err(_) => {}
+    }
     attached(&mut Some(attached_tx));
+    let _watcher = if notify_wanted { path.parent().and_then(|dir| spawn_watcher(dir, wake_tx, false)) } else { None };
 
     loop {
         if disconnected.get() {
@@ -138,12 +155,17 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
         match active.as_mut() {
             None => {
                 let start = if first_open { cfg.start } else { FileStart::Begin };
-                if let Ok(tf) = TailedFile::open(&path, start) {
-                    first_open = false;
-                    active = Some(tf);
-                    continue; // read at once, without burning a tick
+                match TailedFile::open(&path, start) {
+                    Ok(tf) => {
+                        first_open = false;
+                        active = Some(tf);
+                        continue; // read at once, without burning a tick
+                    }
+                    // Absent at attach: whatever appears later is new content. Any other failure
+                    // (held, a passing error) keeps the configured start for the open that succeeds.
+                    Err(e) if is_not_found(&e) => first_open = false,
+                    Err(_) => {}
                 }
-                first_open = false; // absent at attach: whatever appears later is new content
             }
             Some(tf) => {
                 match tf.read_new(&mut emit)? {

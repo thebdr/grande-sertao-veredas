@@ -1130,3 +1130,27 @@ fn a_start_returns_attached_so_a_line_written_right_after_is_read() {
     assert_eq!(recv_line(&rx), "born");
     set.stop_all();
 }
+
+/// A file present but held against reading at the start (a writer with no sharing, a share's
+/// passing error) is awaited at the configured start, never read whole as if it had just
+/// appeared: its history stays history.
+#[cfg(windows)]
+#[test]
+fn a_file_held_at_the_start_is_awaited_at_its_configured_start_and_its_history_stays_history() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("held.log");
+    std::fs::write(&path, "history 1\nhistory 2\n").unwrap();
+    // No sharing at all: every open fails until the handle is dropped.
+    let lock = OpenOptions::new().read(true).write(true).share_mode(0).open(&path).unwrap();
+    let started = Instant::now();
+    let (set, rx) = tail(&path, FileStart::End);
+    assert!(started.elapsed() < Duration::from_secs(5), "the start waited {:?}", started.elapsed());
+    std::thread::sleep(Duration::from_millis(200));
+    drop(lock);
+    std::thread::sleep(Duration::from_millis(200));
+    append(&path, "new\n");
+    assert_eq!(recv_line(&rx), "new");
+    assert_quiet(&rx, 200);
+    set.stop_all();
+}

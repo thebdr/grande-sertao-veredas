@@ -243,6 +243,9 @@ Recorded as the port meets them.
 - **A grace tuned on an idle machine loses under the suite** (C-036). The straggler scenarios drained
   a retired file for 120 ms while the straggler lands after 15; the whole suite in parallel held
   the writer past the grace once and the line was lost. Test graces carry headroom for load.
+- **An open that fails is not a file that is absent** (C-035, round 7). A held file read as absent
+  was later read whole, its history flooding the stream; only NotFound is absence, any other
+  failure keeps the configured start for the open that succeeds.
 - **A wake channel with no sender spins the loop.** The watcher owned the wake channel's only
   sender; where the watcher could not be set up (a parent folder not there yet) the receiver
   read as disconnected and the wait returned at once, every tick, a full core. The loop keeps a
