@@ -1261,3 +1261,35 @@ fn a_file_unreadable_at_the_start_is_told_from_its_replacement_by_the_directory_
     assert_eq!(recv_line(&rx), "third");
     set.stop_all();
 }
+
+/// A retiring file found shorter than what was read while it is drained (as when a truncation
+/// and a rotation land between a read and the look at the path that follows it, which CI on Linux
+/// did) is reread from its top to its stable end, and its torn line flushed before the new file
+/// is read: the bytes still reachable through the old handle are never dropped as "emptied".
+#[test]
+fn a_retired_file_found_shorter_than_what_was_read_is_reread_from_its_top() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("plant.log");
+    seed(&path, 8);
+    let cfg = TailConfig {
+        poll_interval: Duration::from_millis(50),
+        drain_grace: Duration::from_millis(1500),
+        use_notify: Some(false),
+        start: FileStart::Begin,
+    };
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FileTailSource::new("t", "tail", &path, cfg))).unwrap();
+    let got = lines(&rx, 8);
+    assert!(got[7].contains("seed 7"), "{got:?}");
+    // The owner rotates the file away and starts anew; the retired file is being drained, for
+    // a grace of 1.5 s, when the owner cuts it to a torn line.
+    let rotated = dir.path().join("rotated.log");
+    std::fs::rename(&path, &rotated).unwrap();
+    std::fs::write(&path, "after\n").unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    owner_truncate(&rotated, 8).unwrap();
+    assert_eq!(lines(&rx, 2), ["2026-07-", "after"]);
+    for (_, r) in set.stop_all() {
+        r.unwrap();
+    }
+}

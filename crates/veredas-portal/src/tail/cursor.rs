@@ -444,7 +444,14 @@ impl TailedFile {
                 return Ok(());
             }
             match self.read_new(emit)? {
-                ReadStep::Truncated => return Ok(()), // the writer emptied it; nothing more to drain
+                ReadStep::Truncated => {
+                    // The retiring file was cut shorter than what was read (truncated, then
+                    // replaced, between two looks): what it holds now is reread from its top.
+                    self.handle_truncation(emit)?;
+                    last_len = self.disk_len()?;
+                    stable_since = Instant::now();
+                    continue;
+                }
                 ReadStep::Progress => {}
             }
             let len = self.disk_len()?;

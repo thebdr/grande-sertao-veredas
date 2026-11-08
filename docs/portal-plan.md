@@ -271,3 +271,9 @@ Recorded as the port meets them.
   session publishes are the pump's last refresh, not the store: a test that reads one right after
   the store shows a row may read the refresh before it (CI, Linux, the counters one pass behind).
   Every read of a published snapshot waits for its condition, as the health and series reads do.
+- **A retired file may have shrunk.** The drain of a file renamed away took "shorter than what
+  was read" for "emptied": a truncation and a rotation landing between a poll's read and its
+  look at the path lost the torn line the truncation left (CI on Linux, where no watcher woke the
+  poll between the two). A retiring file found shorter is reread from its top to its stable end.
+  The deterministic test shrinks the retired file during a long drain grace; operations that
+  merely share a poll are seen by the read before the look and never reach that path.
