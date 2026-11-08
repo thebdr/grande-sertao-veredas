@@ -656,3 +656,27 @@ fn the_machine_and_the_unit_converse_over_a_real_socket_and_the_knobs_turn_live(
     unit.stop();
     plain.stop();
 }
+
+/// An item's draws depend on its place alone: an outcome drawn between two announces comes from
+/// a stream of its own, so a long tick that announces ten items before an older item's outcome
+/// lands (a starved host) renders the same weights as short ticks that let the outcome in
+/// between. Two runs under one seed agree whatever the host's timing.
+#[test]
+fn an_item_s_draws_depend_on_its_place_alone_whatever_a_tick_carries_between() {
+    let weights = |ticks: &[u64]| -> Vec<(String, String)> {
+        let mut m = Controller::new(machine_rules(), Some(7));
+        let mut out = m.tick(0, 1);
+        out.extend(m.on_message("answer", &values(&[("item", "1"), ("dest", "2"), ("flag", "1")]), Some(5)));
+        for &ms in ticks {
+            out.extend(m.tick(ms, 1));
+        }
+        assert!(sent(&out).iter().any(|o| o.message == "outcome"), "the outcome of item 1 must have landed");
+        announces(&out).iter().map(|o| (field(o, "item").to_string(), field(o, "weight").to_string())).collect()
+    };
+    // Ten ticks of 100 ms: the outcome of item 1 lands at 500 ms, between items 6 and 7.
+    let short = weights(&[100; 10]);
+    // One tick of 1000 ms: items 2 to 11 are announced first, the outcome after them.
+    let long = weights(&[1000]);
+    assert_eq!(short.len(), 11, "{short:?}");
+    assert_eq!(short, long, "the weights of items 7 to 11 must not depend on where the outcome fell");
+}

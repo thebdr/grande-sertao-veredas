@@ -206,3 +206,9 @@ Recorded as the port meets them.
   the next checkout, which stales a record. Before `zen-record-run`: `git ls-files --eol` lists
   `i/lf w/lf` files, `perl -pi -e 's/\r?\n/\r\n/'` converts them, and `git add -u` must then
   show nothing.
+- **One stream, many purposes, is timing in disguise.** The controller drew items, outcomes,
+  cyclic messages and answers from one seeded stream; a tick long enough to carry an outcome and
+  the next announce in the other order (a starved host) shifted every later item's draw, and two
+  runs under one seed disagreed on CI. A stream per purpose keeps a seed meaning "the same run".
+  Found with a status read that could not see travelling items and a count taken before the
+  list it was read from had caught up: a test that reads a snapshot waits for what it asserts.

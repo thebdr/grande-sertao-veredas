@@ -1200,7 +1200,13 @@ pub struct Controller {
     rules: Rules,
     registers: BTreeMap<String, i64>,
     destinations: BTreeMap<u64, u32>,
-    rng: Pcg32,
+    /// The draws, a stream per purpose, so what one purpose draws never shifts another's: an
+    /// item's fields depend on its place alone, whatever outcomes, cyclic messages or answers a
+    /// tick carried between two items.
+    rng_items: Pcg32,
+    rng_outcomes: Pcg32,
+    rng_cyclic: Pcg32,
+    rng_answers: Pcg32,
     now_ms: u64,
     next_item_ms: u64,
     /// Whether the last pass could announce (a peer there, the gate open): when announcing
@@ -1216,7 +1222,7 @@ pub struct Controller {
 }
 
 impl Controller {
-    /// A controller running `rules`; `seed` (else the file's, else the clock) seeds its draws.
+    /// A controller running `rules`; `seed` (else the file's, else the clock) seeds its draws, a stream per purpose (items, outcomes, cyclic messages, answers).
     pub fn new(rules: Rules, seed: Option<u64>) -> Controller {
         let seed = seed.or(rules.seed);
         let registers = rules.registers.clone();
@@ -1229,10 +1235,10 @@ impl Controller {
         Controller {
             registers,
             destinations,
-            rng: match seed {
-                Some(s) => Pcg32::new(s, 9),
-                None => Pcg32::from_entropy(9),
-            },
+            rng_items: seeded(seed, 9),
+            rng_outcomes: seeded(seed, 10),
+            rng_cyclic: seeded(seed, 11),
+            rng_answers: seeded(seed, 12),
             now_ms: 0,
             next_item_ms: 0,
             was_announcing: false,
@@ -1358,7 +1364,7 @@ impl Controller {
         let blocked = self.blocked();
         let message = self.rules.cyclic[i].message.clone();
         for ctx_fields in contexts {
-            let mut ctx = Context { fields: &ctx_fields, registers: &self.registers, blocked: &blocked, rng: &mut self.rng };
+            let mut ctx = Context { fields: &ctx_fields, registers: &self.registers, blocked: &blocked, rng: &mut self.rng_cyclic };
             match self.rules.cyclic[i].fields.render(&mut ctx) {
                 Ok(fields) => {
                     self.stats.cyclic_sent += 1;
@@ -1378,7 +1384,7 @@ impl Controller {
         let items = self.rules.items.as_mut()?;
         let empty = HashMap::new();
         let blocked: Vec<u64> = Vec::new();
-        let mut ctx = Context { fields: &empty, registers: &self.registers, blocked: &blocked, rng: &mut self.rng };
+        let mut ctx = Context { fields: &empty, registers: &self.registers, blocked: &blocked, rng: &mut self.rng_items };
         let mut fields = match items.fields.render(&mut ctx) {
             Ok(f) => f,
             Err(e) => {
@@ -1387,7 +1393,7 @@ impl Controller {
         };
         let mut faulted = Vec::new();
         for (name, percent, set) in &items.faults {
-            if *percent > 0 && self.rng.int_in(1, 100) <= *percent as i64 {
+            if *percent > 0 && self.rng_items.int_in(1, 100) <= *percent as i64 {
                 for (k, v) in set {
                     fields.insert(k.clone(), v.clone());
                 }
@@ -1454,7 +1460,7 @@ impl Controller {
                 if total <= 0.0 {
                     ("delivered".to_string(), BTreeMap::new(), false)
                 } else {
-                    let mut point = self.rng.uniform(0.0, total, 6);
+                    let mut point = self.rng_outcomes.uniform(0.0, total, 6);
                     let mut chosen = enabled[enabled.len() - 1];
                     for e in &enabled {
                         if point <= e.1 {
@@ -1473,7 +1479,7 @@ impl Controller {
         }
         let blocked = self.blocked();
         let mut fields_spec = outcome.fields.clone();
-        let mut ctx = Context { fields: &ctx_fields, registers: &self.registers, blocked: &blocked, rng: &mut self.rng };
+        let mut ctx = Context { fields: &ctx_fields, registers: &self.registers, blocked: &blocked, rng: &mut self.rng_outcomes };
         let rendered = fields_spec.render(&mut ctx);
         // The outcome's own fields are kept in the rules (counters, cycles).
         if let Some(i) = self.rules.items.as_mut()
@@ -1595,7 +1601,7 @@ impl Controller {
             if self.rules.answers[i].on != name {
                 continue;
             }
-            let mut ctx = Context { fields, registers: &self.registers, blocked: &blocked, rng: &mut self.rng };
+            let mut ctx = Context { fields, registers: &self.registers, blocked: &blocked, rng: &mut self.rng_answers };
             match self.rules.answers[i].fields.render(&mut ctx) {
                 Ok(values) => {
                     let a = &self.rules.answers[i];
@@ -1719,5 +1725,13 @@ impl Controller {
             interval_ms: self.rules.items.as_ref().map(|i| i.interval_ms),
             faults: self.rules.items.as_ref().map(|i| i.faults.iter().map(|(n, p, _)| (n.clone(), *p)).collect()).unwrap_or_default(),
         }
+    }
+}
+
+/// One of the controller's streams: deterministic under a seed, from the clock without one.
+fn seeded(seed: Option<u64>, stream: u64) -> Pcg32 {
+    match seed {
+        Some(s) => Pcg32::new(s, stream),
+        None => Pcg32::from_entropy(stream),
     }
 }

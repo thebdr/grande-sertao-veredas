@@ -225,7 +225,7 @@ an empty name is refused when the file loads.
 - `version` (required): this reader knows `1`. A file of another format or an unknown version is
   refused, never guessed.
 - `seed` (none): the seed of the controller's draws, for a run that repeats; the clock when
-  absent. A seed the bench gives the controller wins over the file's.
+  absent. A seed the bench gives the controller wins over the file's. The draws run on a stream per purpose (the items, the outcomes, the cyclic messages, the answers), so an item's draws depend on its place alone, whatever a tick carried between two items.
 - `registers` (none): a table of named integers, the controller's memory: read by a field's
   `register` and by the items' `gate`, set by a command and by the bench; every register a
   file names must be in this table.

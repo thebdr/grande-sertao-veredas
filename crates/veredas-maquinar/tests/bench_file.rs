@@ -632,7 +632,8 @@ fn the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own() {
         std::fs::write(&path, text).unwrap();
         let bench = Bench::start(load_file(&path).unwrap()).unwrap();
         let machine = bench.channel("machine").unwrap();
-        assert!(wait(Duration::from_secs(5), || machine.status().controller.map(|c| c.stats.announced >= 2).unwrap_or(false)));
+        let seen = |c: &veredas_maquinar::controller::ControllerStatus, key: &str| c.awaiting.iter().chain(c.history.iter()).any(|i| i.key == key);
+        assert!(wait(Duration::from_secs(5), || machine.status().controller.is_some_and(|c| seen(&c, "1") && seen(&c, "2"))), "items 1 and 2 announced and no longer travelling: {:?}", machine.status().controller);
         let c = machine.status().controller.unwrap();
         let items: Vec<_> = c.awaiting.iter().chain(c.history.iter()).cloned().collect();
         let weight = |key: &str| items.iter().find(|i| i.key == key).map(|i| i.fields["weight"].clone()).unwrap_or_default();
@@ -665,7 +666,7 @@ fn the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own() {
             header()
         );
         let bench = Bench::start(load(&text, &dir).unwrap()).unwrap();
-        assert!(wait(Duration::from_secs(5), || ear.status().received.get("status").copied().unwrap_or(0) >= 4), "{:?}", ear.status());
+        assert!(wait(Duration::from_secs(5), || ear.status().recent.iter().filter(|l| l.message == "status").count() >= 4), "{:?}", ear.status());
         let mut lines: Vec<String> = ear.status().recent.iter().filter(|l| l.message == "status").map(|l| l.fields["speed"].clone()).collect();
         lines.reverse();
         lines.truncate(4);
