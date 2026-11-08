@@ -277,3 +277,9 @@ Recorded as the port meets them.
   poll between the two). A retiring file found shorter is reread from its top to its stable end.
   The deterministic test shrinks the retired file during a long drain grace; operations that
   merely share a poll are seen by the read before the look and never reach that path.
+- **A boundary is where the critic looks.** The backfill's first refute round found its gaps at
+  the edges every fixture avoided: two lines on one second across a seam (10 ms steps never made
+  one), a peek of an empty file "detecting" UTF-8, a plan computed on a file the listing did not
+  name (the active recreated between the listing and the peek), a family of one empty file
+  refused as unparseable. A fixture set with distinct stamps, non-empty files and a still family
+  proves the happy path alone; the round-1 tests of C-037 hold the edges.

@@ -376,3 +376,153 @@ fn a_rotation_during_the_locate_is_listed_again_never_an_error() {
     assert_eq!(files, expected);
     writer.finish();
 }
+
+// ---- the first refute round ------------------------------------------------------------------
+
+fn utf16le(text: &str) -> Vec<u8> {
+    let mut out = vec![0xFF, 0xFE];
+    for u in text.encode_utf16() {
+        out.extend_from_slice(&u.to_le_bytes());
+    }
+    out
+}
+
+/// A stamp equal to the start and shared across a seam begins in the earlier file: the located
+/// start is the first line at or after the start, wherever it stands, so the earlier file's
+/// lines on that stamp are replayed, not skipped with the file.
+#[test]
+fn a_start_on_a_stamp_shared_across_the_seam_begins_in_the_earlier_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("s_1.log"), "2026-07-17 10:00:00 a\n2026-07-17 10:00:01 b\n").unwrap();
+    std::fs::write(dir.path().join("s_2.log"), "2026-07-17 10:00:01 c\n2026-07-17 10:00:02 d\n").unwrap();
+    let spec = FamilySpec::new(dir.path(), r"s_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+    let (files, offset, skipped) = plan_for(&spec, &ts_spec(), dt("2026-07-17 10:00:01")).unwrap().unwrap();
+    assert_eq!(files, ["s_1.log", "s_2.log"]);
+    assert_eq!(offset, 22, "line b, the first at 10:00:01");
+    assert!(skipped.is_empty(), "{skipped:?}");
+}
+
+/// A plan taken while the active is still empty (the state right after a rotation) leaves the
+/// encoding to the live tail: the UTF-16 the writer then puts there is decoded as such, never
+/// forced to UTF-8 by a peek that had no bytes to detect from.
+#[test]
+fn a_file_planned_while_empty_is_decoded_by_what_it_later_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("w_1.log"), utf16le("2026-07-17 10:00:00 a\n")).unwrap();
+    std::fs::write(dir.path().join("w_2.log"), b"").unwrap();
+    let spec = FamilySpec::new(dir.path(), r"w_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+    let start = dt("2026-07-17 10:00:30");
+    assert_eq!(plan_for(&spec, &ts_spec(), start).unwrap().unwrap(), (vec!["w_2.log".to_string()], 0, vec!["w_1.log".to_string()]));
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FamilyTailSource::new("w", "w", spec, cfg(FamilyStart::Backfill(start))).with_timestamps(ts_spec()))).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    std::fs::write(dir.path().join("w_2.log"), utf16le("2026-07-17 10:01:00 b\nDONE\n")).unwrap();
+    let events = collect_until(&rx, DONE, Duration::from_secs(20));
+    set.stop_all();
+    assert_eq!(events.iter().map(|e| e.line.as_str()).collect::<Vec<_>>(), ["2026-07-17 10:01:00 b", DONE]);
+    assert_eq!(events[0].parsed_ts, Some(dt("2026-07-17 10:01:00")));
+}
+
+/// The writer rotates while the backfill locates its start and the fresh active is already
+/// there when the retired one is peeked: the peek reads a file the listing did not name. The
+/// locate lists again, and the plan carries the retired generation before the active at the
+/// same offset, so nothing before the start leaks in as a fresh retiree read whole.
+#[test]
+fn a_rotation_with_a_fresh_active_during_the_locate_is_listed_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let writer =
+        write_history(dir.path(), NamingScheme::Fixed { active: "current.log".into(), retired_prefix: "done_".into() }, 700, 400);
+    assert!(writer.generations_finished() >= 3);
+    let spec = FamilySpec::new(dir.path(), r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    let (rest_files, rest_offset, _) = plan_for(&spec, &ts_spec(), stamp(150)).unwrap().unwrap();
+    assert_eq!(rest_files.last().map(String::as_str), Some("current.log"));
+    let next = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter_map(|n| n.strip_prefix("done_")?.strip_suffix(".log")?.parse::<u64>().ok())
+        .max()
+        .unwrap()
+        + 1;
+    let retired = format!("done_{next}.log");
+    let mut rotated = false;
+    let (files, offset, _) = plan_for_with(&spec, &ts_spec(), stamp(150), &mut |path| {
+        if !rotated && path.file_name().is_some_and(|n| n == "current.log") {
+            std::fs::rename(dir.path().join("current.log"), dir.path().join(&retired)).unwrap();
+            std::fs::write(dir.path().join("current.log"), format!("{}\n", line(400))).unwrap();
+            rotated = true;
+        }
+    })
+    .unwrap()
+    .unwrap();
+    assert!(rotated, "the hook never saw the active file");
+    assert_eq!(offset, rest_offset);
+    let mut expected = rest_files.clone();
+    expected.pop();
+    expected.push(retired.clone());
+    expected.push("current.log".into());
+    assert_eq!(files, expected);
+    writer.finish();
+}
+
+/// A family whose only member holds no lines yet is no family to locate in, in either mode: the
+/// backfill falls through to the live attach, the lines then written are read whole and the
+/// worker ends cleanly, instead of refusing for lines that do not exist.
+#[test]
+fn a_backfill_into_a_family_with_no_lines_falls_through_to_live() {
+    let start = dt("2026-07-17 10:00:00");
+    for (pattern, active, mode) in [
+        (r"s_(?P<idx>\d+)\.log", "s_1.log", ActiveMode::NewestByOrder),
+        (r"done_(?P<idx>\d+)\.log", "current.log", ActiveMode::Fixed("current.log".into())),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(active), b"").unwrap();
+        let spec = FamilySpec::new(dir.path(), pattern, None, mode).unwrap();
+        assert!(plan_for(&spec, &ts_spec(), start).unwrap().is_none(), "{active}: nothing to locate in");
+        let (mut set, rx) = SourceSet::new();
+        set.spawn(Box::new(FamilyTailSource::new("e", active, spec, cfg(FamilyStart::Backfill(start))).with_timestamps(ts_spec()))).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        std::fs::write(dir.path().join(active), "2026-07-17 10:00:05 born\nDONE\n").unwrap();
+        let events = collect_until(&rx, DONE, Duration::from_secs(20));
+        assert_eq!(events.iter().map(|e| e.line.as_str()).collect::<Vec<_>>(), ["2026-07-17 10:00:05 born", DONE], "{active}");
+        for (_, r) in set.stop_all() {
+            r.unwrap();
+        }
+    }
+}
+
+/// A start between two files begins at the next file's first stamped line: its unstamped opening
+/// lines belong to the earlier file's last stamp, before the start, and are skipped.
+#[test]
+fn a_start_between_files_skips_the_next_file_s_unstamped_opening_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("s_1.log"), "2026-07-17 10:00:00 a\n").unwrap();
+    let s2 = "  at frame 7\n  at frame 8\n2026-07-17 10:00:02 c\n";
+    std::fs::write(dir.path().join("s_2.log"), s2).unwrap();
+    let spec = FamilySpec::new(dir.path(), r"s_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+    let (files, offset, skipped) = plan_for(&spec, &ts_spec(), dt("2026-07-17 10:00:01")).unwrap().unwrap();
+    assert_eq!(files, ["s_2.log"]);
+    assert_eq!(offset, s2.find("2026-07-17").unwrap() as u64);
+    assert_eq!(skipped, ["s_1.log"]);
+}
+
+/// A head carrying no stamp within the peek's cap, under a tail that does, is scanned forward to
+/// its first stamp: a long unstamped header never hides a file from the locate, so the start
+/// inside it is found rather than the whole family replayed.
+#[test]
+fn a_long_unstamped_header_does_not_hide_a_file_from_the_locate() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s1 = String::new();
+    for i in 0..450 {
+        s1.push_str(&format!("header line {i}\n"));
+    }
+    for s in 0..10 {
+        s1.push_str(&format!("2026-07-17 10:00:0{s} x\n"));
+    }
+    std::fs::write(dir.path().join("s_1.log"), &s1).unwrap();
+    std::fs::write(dir.path().join("s_2.log"), "2026-07-17 10:01:00 y\n").unwrap();
+    let spec = FamilySpec::new(dir.path(), r"s_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+    let (files, offset, skipped) = plan_for(&spec, &ts_spec(), dt("2026-07-17 10:00:05")).unwrap().unwrap();
+    assert_eq!(files, ["s_1.log", "s_2.log"]);
+    assert_eq!(offset, s1.find("2026-07-17 10:00:05").unwrap() as u64);
+    assert!(skipped.is_empty(), "{skipped:?}");
+}

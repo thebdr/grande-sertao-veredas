@@ -38,7 +38,7 @@ pub(crate) struct BackfillPlan {
     /// The byte offset into `files[0]` where the replay begins (a line start).
     pub first_offset: u64,
     /// The encoding of `files[0]`, from the peek: a mid-file seek has no byte-order mark.
-    pub first_encoding: DetectedEncoding,
+    pub first_encoding: Option<DetectedEncoding>,
     /// Members older than the plan: pre-start history, never read. (The fixed-mode convergence
     /// seeds its consumed set with these, or a rotation during the backfill would "discover"
     /// and replay them.)
@@ -50,7 +50,7 @@ pub(crate) struct BackfillPlan {
 pub(crate) struct FilePeek {
     pub first_ts: Option<NaiveDateTime>,
     pub last_ts: Option<NaiveDateTime>,
-    pub encoding: DetectedEncoding,
+    pub encoding: Option<DetectedEncoding>,
     pub len: u64,
 }
 
@@ -146,17 +146,22 @@ fn read_whole(path: &Path) -> Result<Option<(Vec<u8>, u64)>, SourceError> {
 }
 
 /// The first and last parseable line stamps (a buffered read); the scan is capped at
-/// `PEEK_LINE_CAP` lines from each end.
+/// `PEEK_LINE_CAP` lines from each end, except that a head carrying no stamp within the cap
+/// under a tail that does is scanned forward to its first stamp: a long unstamped header must
+/// not hide the file from the locate. No encoding for a file with no bytes to detect it from.
 pub(crate) fn peek_span(path: &Path, ts: &TimestampSpec) -> Result<FilePeek, SourceError> {
     let Some((bytes, len)) = read_whole(path)? else {
-        return Ok(FilePeek { first_ts: None, last_ts: None, encoding: DetectedEncoding::Utf8, len: 0 });
+        return Ok(FilePeek { first_ts: None, last_ts: None, encoding: None, len: 0 });
     };
     let encoding = detect(&bytes[..bytes.len().min(4096)]);
     let lines = split_lines_raw(&bytes, encoding);
-    let first_ts = lines.iter().take(PEEK_LINE_CAP).find_map(|(_, r)| ts.extract(&decode_line(&bytes[r.clone()], encoding)));
-    let last_ts =
-        lines.iter().rev().take(PEEK_LINE_CAP).find_map(|(_, r)| ts.extract(&decode_line(&bytes[r.clone()], encoding)));
-    Ok(FilePeek { first_ts, last_ts, encoding, len })
+    let stamp = |r: &Range<usize>| ts.extract(&decode_line(&bytes[r.clone()], encoding));
+    let last_ts = lines.iter().rev().take(PEEK_LINE_CAP).find_map(|(_, r)| stamp(r));
+    let mut first_ts = lines.iter().take(PEEK_LINE_CAP).find_map(|(_, r)| stamp(r));
+    if first_ts.is_none() && last_ts.is_some() {
+        first_ts = lines.iter().skip(PEEK_LINE_CAP).find_map(|(_, r)| stamp(r));
+    }
+    Ok(FilePeek { first_ts, last_ts, encoding: Some(encoding), len })
 }
 
 /// The byte offset of the first line whose stamp is at or after `start`. Unstamped lines before
@@ -185,8 +190,8 @@ pub(crate) fn scan_start_offset(
 /// How long a locate keeps listing again through rotations before it gives up.
 const LOCATE_PATIENCE: Duration = Duration::from_millis(500);
 
-/// Build the replay plan for `start`. `None` when the family has no members (nothing to
-/// backfill; live tailing decides what to do with whatever appears later).
+/// Build the replay plan for `start`. `None` when the family has no members, or none with a
+/// line in it (nothing to backfill; live tailing decides what to do with whatever appears).
 pub(crate) fn locate_start(
     spec: &FamilySpec,
     ts: &TimestampSpec,
@@ -205,16 +210,30 @@ pub(crate) fn locate_start_with(
     let deadline = Instant::now() + LOCATE_PATIENCE;
     loop {
         match locate_once(spec, ts, start, before_peek) {
-            // A member renamed away between the listing and its peek: a rotation during the
-            // locate, the fixed-name mode above all (its active retires under a new name). The
+            Ok(Located::Plan(plan)) => return Ok(plan),
+            // A rotation during the locate: a member renamed away between the listing and its
+            // peek (the fixed-name mode above all, whose active retires under a new name), or the
+            // members changed under the peeks, so what was read may not be what was listed. The
             // listing is taken again; a family that never holds still for one listing runs the
-            // patience out and the error stands.
+            // patience out.
+            Ok(Located::Changed) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(Located::Changed) => {
+                return Err(SourceError::Backfill(
+                    "cannot locate the start point: the family kept changing under every listing for 500 ms".into(),
+                ));
+            }
             Err(SourceError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(10));
             }
-            other => return other,
+            Err(e) => return Err(e),
         }
     }
+}
+
+/// One pass of the locate: a plan, or the finding that the family changed under it.
+enum Located {
+    Plan(Option<BackfillPlan>),
+    Changed,
 }
 
 fn locate_once(
@@ -222,10 +241,10 @@ fn locate_once(
     ts: &TimestampSpec,
     start: NaiveDateTime,
     before_peek: &mut dyn FnMut(&Path),
-) -> Result<Option<BackfillPlan>, SourceError> {
+) -> Result<Located, SourceError> {
     let files = spec.resolve()?;
     if files.is_empty() {
-        return Ok(None);
+        return Ok(Located::Plan(None));
     }
 
     // The file-name token prefilter (a hint): when a file's successor carries a date from a day
@@ -247,11 +266,20 @@ fn locate_once(
         peeks.push(peek_span(&files[i].path, ts)?);
     }
 
+    // No line anywhere yet: nothing to locate in. The live attach reads what is born whole.
+    if peeks.iter().all(|p| p.len == 0) {
+        return Ok(Located::Plan(None));
+    }
+
     let any_line_ts = peeks.iter().any(|p| p.first_ts.is_some() || p.last_ts.is_some());
+    let enc_of = |p: &FilePeek| p.encoding.unwrap_or(DetectedEncoding::Utf8);
 
     // The index into `candidates` where the replay begins, and the byte offset into that file.
     let (begin, first_offset) = if any_line_ts {
-        let best = (0..candidates.len()).rev().find(|&i| peeks[i].first_ts.map(|t| t <= start).unwrap_or(false));
+        // The newest file whose first stamp is strictly before the start: a file opening on the
+        // start's own stamp is reached through its predecessor's scan, so a stamp shared across
+        // a seam begins in the earlier file.
+        let best = (0..candidates.len()).rev().find(|&i| peeks[i].first_ts.map(|t| t < start).unwrap_or(false));
         match best {
             // The start predates everything visible: replay from the top.
             None => (0, 0),
@@ -259,15 +287,24 @@ fn locate_once(
                 let p = &peeks[i];
                 if p.last_ts.map(|t| t < start).unwrap_or(false) {
                     if i + 1 < candidates.len() {
-                        // The start falls in the gap between file i and i+1.
-                        (i + 1, 0)
+                        // The start falls in the gap between file i and i+1: the next file's
+                        // first stamped line, its unstamped opening lines belonging to the
+                        // earlier file's last stamp. A next file with no stamp at all is taken
+                        // from its top.
+                        let next = &peeks[i + 1];
+                        let off = if next.first_ts.is_some() {
+                            scan_start_offset(&files[candidates[i + 1]].path, enc_of(next), ts, start)?
+                        } else {
+                            0
+                        };
+                        (i + 1, off)
                     } else {
                         // The start is after everything: live-only from the end.
                         (i, p.len)
                     }
                 } else {
                     let file = &files[candidates[i]];
-                    (i, scan_start_offset(&file.path, p.encoding, ts, start)?)
+                    (i, scan_start_offset(&file.path, enc_of(p), ts, start)?)
                 }
             }
         }
@@ -285,6 +322,14 @@ fn locate_once(
         (dated_best.unwrap_or(0), 0)
     };
 
+    // The peeks and the scan read files by the names the listing gave; a rotation meanwhile
+    // (every rotation adds a name) may have put another file under a listed name. The listing
+    // is taken again, and a plan stands only when the members are the ones it was computed for.
+    let after = spec.resolve()?;
+    if after.len() != files.len() || after.iter().zip(&files).any(|(a, b)| a.file_name != b.file_name) {
+        return Ok(Located::Changed);
+    }
+
     let plan_files: Vec<PlanFile> = candidates[begin..]
         .iter()
         .map(|&i| PlanFile { path: files[i].path.clone(), name: files[i].file_name.clone(), key: files[i].key })
@@ -293,7 +338,7 @@ fn locate_once(
     let skipped =
         files.iter().filter(|f| !plan_names.contains(f.file_name.as_str())).map(|f| f.file_name.clone()).collect();
 
-    Ok(Some(BackfillPlan { files: plan_files, first_offset, first_encoding: peeks[begin].encoding, skipped }))
+    Ok(Located::Plan(Some(BackfillPlan { files: plan_files, first_offset, first_encoding: peeks[begin].encoding, skipped })))
 }
 
 /// The plan as a test reads it: the file names in order, the first offset, the skipped names.

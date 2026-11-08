@@ -390,7 +390,7 @@ fn attach_backfill(
         if stop.load(Ordering::Relaxed) {
             return Ok(BackfillAttach::Stopped);
         }
-        let (off, enc) = if i == 0 { (plan.first_offset, Some(plan.first_encoding)) } else { (0, None) };
+        let (off, enc) = if i == 0 { (plan.first_offset, plan.first_encoding) } else { (0, None) };
         read_range_full(&f.path, off, enc, cfg.drain_grace, stop, emit)?;
         consumed.insert(f.name.clone());
     }
@@ -399,7 +399,7 @@ fn attach_backfill(
     // The seek information still owed to the oldest unread part of the planned active (its
     // remains inherit it when it rotates before it is opened).
     let mut pending: Option<(u64, Option<DetectedEncoding>)> =
-        Some(if n == 1 { (plan.first_offset, Some(plan.first_encoding)) } else { (0, None) });
+        Some(if n == 1 { (plan.first_offset, plan.first_encoding) } else { (0, None) });
 
     match spec.active_mode() {
         ActiveMode::NewestByOrder => {
