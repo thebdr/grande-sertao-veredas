@@ -29,7 +29,7 @@ pub(crate) fn parse_flexible(s: &str, fmt: &str) -> Option<NaiveDateTime> {
         text.push_str(" 01");
         f.push_str(" %d");
     }
-    if has(&f, 'H') && !has(&f, 'M') {
+    if (has(&f, 'H') || has(&f, 'I') || has(&f, 'k') || has(&f, 'l')) && !has(&f, 'M') {
         text.push_str(" 00");
         f.push_str(" %M");
     }

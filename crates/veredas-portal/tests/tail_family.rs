@@ -695,3 +695,61 @@ fn a_name_carries_what_it_carries_and_orders_with_the_full_stamps() {
     assert_eq!(key(r"h(?P<date>\d{10})\.log", "%Y%m%d%H", "h2026110813.log"), at(2026, 11, 8, 13));
     assert_eq!(key(r"s(?P<date>\d{12})\.log", "%Y%m%d%H%M", "s202611081345.log"), at(2026, 11, 8, 13) + chrono::Duration::minutes(45));
 }
+
+/// A fixed-name family whose active file is not there at the start: the folder is listed, so
+/// the start returns at once, and the active, when it comes, is new content read from its start.
+#[test]
+fn a_fixed_active_absent_at_the_start_is_new_content_when_it_comes() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("old_1.log"), "R1\n").unwrap();
+    let spec = FamilySpec::new(dir.path(), r"old_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    let (mut set, rx) = SourceSet::new();
+    let started = Instant::now();
+    set.spawn(Box::new(FamilyTailSource::new("f", "fixed", spec, from_the_end()))).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2), "the start waited {:?}", started.elapsed());
+    std::fs::write(dir.path().join("current.log"), "X\n").unwrap();
+    assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap().line, "X");
+    set.stop_all();
+}
+
+/// The keys must separate generations: a pre-existing family on which no key parses is refused
+/// by text; members whose keys tie are followed by name, the lower name history (the listing
+/// breaks the tie by time), so a writer that reuses a key is not followed.
+#[test]
+fn keys_that_tie_are_followed_by_name_and_keys_that_never_parse_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("app_b.log"), "B1\n").unwrap();
+    let spec = FamilySpec::new(dir.path(), r"app_(?P<date>[a-z])\.log", None, ActiveMode::NewestByOrder);
+    assert!(spec.is_err(), "a date group needs its format");
+    let spec = FamilySpec::new(dir.path(), r"app_(?P<date>[a-z])\.log", Some("%Y"), ActiveMode::NewestByOrder).unwrap();
+    assert!(spec.keyed());
+    let (mut set, _rx) = SourceSet::new();
+    set.spawn(Box::new(FamilyTailSource::new("n", "none", spec, from_the_end()))).unwrap();
+    let ended = set.stop_all();
+    assert_eq!(
+        ended[0].1.as_ref().unwrap_err().to_string(),
+        "family spec: the pattern's key groups parse on no member of the family: a family is followed by its keys, and these name none (check the date format against the names)"
+    );
+    // A reused index: the file of the lower name ranks below the active and is history.
+    let dir = tempfile::tempdir().unwrap();
+    let spec = FamilySpec::new(dir.path(), r"[a-z]_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FamilyTailSource::new("t", "tie", spec, from_the_end()))).unwrap();
+    std::fs::write(dir.path().join("b_1.log"), "B1\n").unwrap();
+    assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap().line, "B1");
+    std::fs::write(dir.path().join("a_1.log"), "A1\n").unwrap();
+    std::fs::write(dir.path().join("a_2.log"), "A2\n").unwrap();
+    assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap().line, "A2", "the tie at 1 is broken by name, and a_1 is history");
+    assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
+    set.stop_all();
+}
+
+/// A twelve-hour hour without its minutes is the start of the hour too.
+#[test]
+fn a_twelve_hour_hour_without_minutes_is_the_start_of_the_hour() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = FamilySpec::new(dir.path(), r"t_(?P<date>\d{8}_\d{2}[AP]M)\.log", Some("%Y%m%d_%I%p"), ActiveMode::NewestByOrder).unwrap();
+    let key = |name: &str| spec.parse_key(name).unwrap().date.unwrap();
+    let at = |h: u32| chrono::NaiveDate::from_ymd_opt(2026, 11, 8).unwrap().and_hms_opt(h, 0, 0).unwrap();
+    assert_eq!((key("t_20261108_10AM.log"), key("t_20261108_11AM.log"), key("t_20261108_01PM.log")), (at(10), at(11), at(13)));
+}

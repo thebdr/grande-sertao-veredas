@@ -535,6 +535,9 @@ fn run_family(
     // A backfill start replays history from the located point first; the cursor it returns IS
     // the seam: the same handle, the exact offset, live from here.
     let mut backfilled: Option<(TailedFile, OrderKey, String)> = None;
+    // A fixed-name active absent at the first look: when it comes it is new content, read from
+    // its start whatever the configured start.
+    let mut active_born = false;
     if let FamilyStart::Backfill(start_at) = cfg.start {
         match attach_backfill(&spec, &cfg, ts.as_ref(), start_at, &stop, &wake_rx, &mut emit, &mut attached_slot)? {
             BackfillAttach::Stopped => return Ok(()),
@@ -558,6 +561,8 @@ fn run_family(
             }
             let born = preexisted == Some(false);
             let Some(files) = files else {
+                // Looked at, not there: the start may return; whatever appears is new content.
+                attached(&mut attached_slot);
                 wait_tick(&wake_rx, cfg.poll_interval);
                 continue;
             };
@@ -620,15 +625,29 @@ fn run_family(
             } else {
                 // The family predates the session: retirees are history (a backfill's domain),
                 // only the active file is followed, honouring the configured start.
+                // A family on which no key parses has no rotation order to follow: refused, like
+                // a keyless pattern, rather than followed by name. A fixed-name active carries no
+                // key by design and does not count.
+                let fixed = matches!(spec.active_mode(), ActiveMode::Fixed(_));
+                let mut keyed = files.iter().filter(|f| !(fixed && f.is_active)).peekable();
+                if keyed.peek().is_some() && keyed.all(|f| f.key == OrderKey::NONE) {
+                    return Err(SourceError::Spec(
+                        "the pattern's key groups parse on no member of the family: a family is followed by its keys, and these name none (check the date format against the names)".into(),
+                    ));
+                }
                 let Some(active) = files.iter().find(|f| f.is_active) else {
+                    // Listed, with no active to attach to yet (a fixed name not born): the start
+                    // may return, and the file, when it comes, is new content read from its start.
+                    attached(&mut attached_slot);
+                    active_born = true;
                     wait_tick(&wake_rx, cfg.poll_interval);
                     continue;
                 };
                 let start = match cfg.start {
-                    FamilyStart::ActiveEnd => FileStart::End,
-                    // A backfill reaches here only through the family-empty fallthrough:
-                    // whatever appears now is newer than the (past) start point, so read it whole.
-                    FamilyStart::ActiveBegin | FamilyStart::Backfill(_) => FileStart::Begin,
+                    FamilyStart::ActiveEnd if !active_born => FileStart::End,
+                    // A backfill reaches here only through the family-empty fallthrough, and an
+                    // active born after the start is new content: read whole either way.
+                    _ => FileStart::Begin,
                 };
                 match TailedFile::open(&active.path, start) {
                     Ok(c) => {
