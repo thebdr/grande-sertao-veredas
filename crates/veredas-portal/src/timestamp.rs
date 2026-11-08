@@ -19,7 +19,16 @@ pub(crate) fn parse_flexible(s: &str, fmt: &str) -> Option<NaiveDateTime> {
     // A name carries what it carries: a year alone is its first day, a month its first, an hour
     // without minutes the start of the hour. The missing fields are filled with the first value,
     // never guessed beyond that, so names of every granularity order on one axis.
-    let has = |f: &str, c: char| f.contains(&format!("%{c}"));
+    // A specifier, with or without a padding modifier between the percent and its letter.
+    let has = |f: &str, c: char| {
+        let b = f.as_bytes();
+        (0..b.len()).any(|i| {
+            b[i] == b'%' && {
+                let j = if i + 1 < b.len() && matches!(b[i + 1], b'-' | b'_' | b'0') { i + 2 } else { i + 1 };
+                j < b.len() && b[j] == c as u8
+            }
+        })
+    };
     let (mut text, mut f) = (s.to_string(), fmt.to_string());
     if (has(&f, 'Y') || has(&f, 'y')) && !has(&f, 'm') {
         text.push_str(" 01");

@@ -338,7 +338,7 @@ fn indexed_straggler_and_split_writes_lose_nothing() {
         total_lines: total,
         cap_bytes: 1_500,
         breath_every: 40,
-        cfg: cfg(10, 25, 120), // the grace must comfortably exceed the straggle delay
+        cfg: cfg(10, 25, 400), // the grace must comfortably exceed the straggle delay, under a loaded suite too
     });
     assert_exact("indexed/straggler+split", &collected, &expected_sequence(total));
 }
@@ -397,7 +397,7 @@ fn fixed_name_straggler_into_the_renamed_file_loses_nothing() {
         total_lines: total,
         cap_bytes: 1_200,
         breath_every: 40,
-        cfg: cfg(10, 25, 120),
+        cfg: cfg(10, 25, 400), // the grace must comfortably exceed the straggle delay, under a loaded suite too
     });
     assert_exact("fixed/straggler", &collected, &expected_sequence(total));
 }
@@ -752,4 +752,41 @@ fn a_twelve_hour_hour_without_minutes_is_the_start_of_the_hour() {
     let key = |name: &str| spec.parse_key(name).unwrap().date.unwrap();
     let at = |h: u32| chrono::NaiveDate::from_ymd_opt(2026, 11, 8).unwrap().and_hms_opt(h, 0, 0).unwrap();
     assert_eq!((key("t_20261108_10AM.log"), key("t_20261108_11AM.log"), key("t_20261108_01PM.log")), (at(10), at(11), at(13)));
+}
+
+/// A fixed-name active born after the start may retire before the worker opens it: the family
+/// is followed from the start as one born after it, with the pre-start retirees as history, so
+/// every generation born since is read, in order.
+#[test]
+fn a_fixed_active_born_after_the_start_keeps_the_generations_that_retire_before_it_is_opened() {
+    for round in 0..5 {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("old_1.log"), "R1\n").unwrap();
+        let spec = FamilySpec::new(dir.path(), r"old_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+        // The watcher off, as over a share: the poll alone sees the births.
+        let cfg = FamilyTailConfig { start: FamilyStart::ActiveEnd, use_notify: Some(false), ..cfg(100, 50, 60) };
+        let (mut set, rx) = SourceSet::new();
+        set.spawn(Box::new(FamilyTailSource::new("f", "fixed", spec, cfg))).unwrap();
+        for (i, line) in ["G1", "G2", "G3"].iter().enumerate() {
+            std::fs::write(dir.path().join("current.log"), format!("{line}\n")).unwrap();
+            if i < 2 {
+                std::fs::rename(dir.path().join("current.log"), dir.path().join(format!("old_{}.log", i + 2))).unwrap();
+            }
+        }
+        let got: Vec<String> = (0..3).map(|_| rx.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|e| panic!("round {round}: {e:?}")).line).collect();
+        assert_eq!(got, ["G1", "G2", "G3"], "round {round}");
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "round {round}: nothing twice");
+        set.stop_all();
+    }
+}
+
+/// A padding modifier on the hour (`%-H`) is still an hour: the minutes are filled.
+#[test]
+fn a_padded_hour_specifier_still_gets_its_minutes_filled() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = FamilySpec::new(dir.path(), r"t_(?P<date>\d{8}_\d{1,2})\.log", Some("%Y%m%d_%-H"), ActiveMode::NewestByOrder).unwrap();
+    let key = |name: &str| spec.parse_key(name).unwrap().date.unwrap();
+    let at = |h: u32| chrono::NaiveDate::from_ymd_opt(2026, 11, 8).unwrap().and_hms_opt(h, 0, 0).unwrap();
+    assert_eq!((key("t_20261108_9.log"), key("t_20261108_10.log")), (at(9), at(10)));
+    assert!(key("t_20261108_9.log") < key("t_20261108_10.log"));
 }

@@ -234,6 +234,12 @@ Recorded as the port meets them.
 - **A fixed active absent at the start is new content** (C-036, round 2). Waiting for it held the
   start five seconds and then attached at its end, losing the first line; a listing with no active
   signals the attach, and the file read from its start when it comes.
+- **A fixed active born after the start may retire before it is opened** (C-036, round 3). Marking the
+  listing known at the open lost every generation born meanwhile; such a family is followed as one
+  born after the start, the pre-start retirees seeded as history.
+- **A grace tuned on an idle machine loses under the suite** (C-036). The straggler scenarios drained
+  a retired file for 120 ms while the straggler lands after 15; the whole suite in parallel held
+  the writer past the grace once and the line was lost. Test graces carry headroom for load.
 - **A wake channel with no sender spins the loop.** The watcher owned the wake channel's only
   sender; where the watcher could not be set up (a parent folder not there yet) the receiver
   read as disconnected and the wait returned at once, every tick, a full core. The loop keeps a

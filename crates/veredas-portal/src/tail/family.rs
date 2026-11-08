@@ -535,9 +535,6 @@ fn run_family(
     // A backfill start replays history from the located point first; the cursor it returns IS
     // the seam: the same handle, the exact offset, live from here.
     let mut backfilled: Option<(TailedFile, OrderKey, String)> = None;
-    // A fixed-name active absent at the first look: when it comes it is new content, read from
-    // its start whatever the configured start.
-    let mut active_born = false;
     if let FamilyStart::Backfill(start_at) = cfg.start {
         match attach_backfill(&spec, &cfg, ts.as_ref(), start_at, &stop, &wake_rx, &mut emit, &mut attached_slot)? {
             BackfillAttach::Stopped => return Ok(()),
@@ -637,17 +634,20 @@ fn run_family(
                 }
                 let Some(active) = files.iter().find(|f| f.is_active) else {
                     // Listed, with no active to attach to yet (a fixed name not born): the start
-                    // may return, and the file, when it comes, is new content read from its start.
+                    // may return. The retirees listed are history, and from here the family is
+                    // followed as one born after the start, so a generation that retires before
+                    // the active is opened is read, never taken for history.
                     attached(&mut attached_slot);
-                    active_born = true;
+                    known = member_names(&files);
+                    preexisted = Some(false);
                     wait_tick(&wake_rx, cfg.poll_interval);
                     continue;
                 };
                 let start = match cfg.start {
-                    FamilyStart::ActiveEnd if !active_born => FileStart::End,
-                    // A backfill reaches here only through the family-empty fallthrough, and an
-                    // active born after the start is new content: read whole either way.
-                    _ => FileStart::Begin,
+                    FamilyStart::ActiveEnd => FileStart::End,
+                    // A backfill reaches here only through the family-empty fallthrough: whatever
+                    // appears now is newer than the (past) start point, so read it whole.
+                    FamilyStart::ActiveBegin | FamilyStart::Backfill(_) => FileStart::Begin,
                 };
                 match TailedFile::open(&active.path, start) {
                     Ok(c) => {
@@ -726,8 +726,13 @@ fn run_family(
                     if Instant::now() >= next_rescan {
                         next_rescan = Instant::now() + cfg.rescan_interval;
                         // Members appearing without the fixed path changing were dropped in from
-                        // outside (not a rotation); a live tail does not replay them.
-                        if let Ok(files) = spec.resolve() {
+                        // outside (not a rotation); a live tail does not replay them. The path is
+                        // checked again after the listing: a burst of rotations between the check
+                        // above and the listing would show its generations as dropped in, and they
+                        // would be taken as known without ever being read.
+                        if let Ok(files) = spec.resolve()
+                            && cursor.check_path() == PathStatus::Same
+                        {
                             known = member_names(&files);
                         }
                     }
