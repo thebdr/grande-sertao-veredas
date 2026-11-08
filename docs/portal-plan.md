@@ -245,7 +245,13 @@ Recorded as the port meets them.
   the writer past the grace once and the line was lost. Test graces carry headroom for load.
 - **An open that fails is not a file that is absent** (C-035, round 7). A held file read as absent
   was later read whole, its history flooding the stream; only NotFound is absence, any other
-  failure keeps the configured start for the open that succeeds.
+  failure keeps the configured start for the open that succeeds, and the length and creation time
+  recorded at the look tell the same file (read from where it stood) from a replacement (read whole).
+  Round 8 found the start applied to the replacement, losing its first lines.
+- **A test build right after clippy may not find an rlib.** Clippy leaves check-mode artifacts beside the
+  build ones; a test build (nextest above all) started right after it failed four times with "crate
+  `libduckdb_sys` required to be available in rlib format" and compiler internal errors, and a plain
+  `cargo build --workspace --tests` healed it each time. Clippy runs after the suite, never before it.
 - **A wake channel with no sender spins the loop.** The watcher owned the wake channel's only
   sender; where the watcher could not be set up (a parent folder not there yet) the receiver
   read as disconnected and the wait returned at once, every tick, a full core. The loop keeps a

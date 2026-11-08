@@ -497,8 +497,12 @@ fn a_running_file_source_never_blocks_the_owner() {
 
 #[test]
 fn unc_paths_are_remote_and_the_rest_classify_without_panicking() {
-    assert_eq!(classify(Path::new(r"\\server\share\logs")), PathKind::Remote);
-    assert_eq!(classify(Path::new(r"\\?\UNC\server\share\logs\a.log")), PathKind::Remote);
+    // A UNC path is a Windows shape; elsewhere the same text is a relative name of backslashes.
+    #[cfg(windows)]
+    {
+        assert_eq!(classify(Path::new(r"\\server\share\logs")), PathKind::Remote);
+        assert_eq!(classify(Path::new(r"\\?\UNC\server\share\logs\a.log")), PathKind::Remote);
+    }
     assert!(!PathKind::Remote.notify_useful());
     assert!(PathKind::Local.notify_useful());
     let _ = classify(Path::new("some/relative/file.log"));
@@ -1152,5 +1156,44 @@ fn a_file_held_at_the_start_is_awaited_at_its_configured_start_and_its_history_s
     append(&path, "new\n");
     assert_eq!(recv_line(&rx), "new");
     assert_quiet(&rx, 200);
+    set.stop_all();
+}
+
+/// A file held at the start is read from where it stood at the first look once it opens: what
+/// was written to it during the hold is read, its history is not; and a file replaced by rename
+/// during the hold is read whole.
+#[cfg(windows)]
+#[test]
+fn a_file_held_at_the_start_is_read_from_where_it_stood_and_a_replacement_whole() {
+    use std::os::windows::fs::OpenOptionsExt;
+    // Appended to during the hold (the holder shares writing and deleting, never reading).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("held.log");
+    std::fs::write(&path, "history 1\nhistory 2\n").unwrap();
+    let lock = OpenOptions::new().read(true).share_mode(6).open(&path).unwrap();
+    let (set, rx) = tail(&path, FileStart::End);
+    std::thread::sleep(Duration::from_millis(150));
+    append(&path, "mid\n");
+    std::thread::sleep(Duration::from_millis(150));
+    drop(lock);
+    append(&path, "new\n");
+    assert_eq!(lines(&rx, 2), ["mid", "new"]);
+    assert_quiet(&rx, 200);
+    set.stop_all();
+    // Replaced by a rename over the path during the hold (the holder shares deleting).
+    let path = dir.path().join("replaced.log");
+    std::fs::write(&path, "history 1\nhistory 2\n").unwrap();
+    let lock = OpenOptions::new().read(true).share_mode(4).open(&path).unwrap();
+    let (set, rx) = tail(&path, FileStart::End);
+    std::thread::sleep(Duration::from_millis(150));
+    let successor = dir.path().join("successor.log");
+    std::fs::write(&successor, "n1 first line of the new file\n").unwrap();
+    let hold_successor = OpenOptions::new().read(true).share_mode(4).open(&successor).unwrap();
+    std::fs::rename(&successor, &path).unwrap();
+    std::thread::sleep(Duration::from_millis(150));
+    drop(lock);
+    drop(hold_successor);
+    append(&path, "n2\n");
+    assert_eq!(lines(&rx, 2), ["n1 first line of the new file", "n2"]);
     set.stop_all();
 }

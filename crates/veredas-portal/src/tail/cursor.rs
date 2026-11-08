@@ -22,6 +22,22 @@ use crate::tail::FileStart;
 
 pub(crate) const READ_CHUNK: usize = 64 * 1024;
 
+/// The identity of the file at `path` without opening it for reading: a hold that refuses every
+/// read still lets its attributes be read. `None` when nothing is there, or even that is refused.
+pub(crate) fn identity_at(path: &Path) -> Option<Handle> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        let file = std::fs::OpenOptions::new().access_mode(0).custom_flags(FILE_FLAG_BACKUP_SEMANTICS).open(path).ok()?;
+        Handle::from_file(file).ok()
+    }
+    #[cfg(not(windows))]
+    {
+        Handle::from_path(path).ok()
+    }
+}
+
 /// The outcome of one `read_new` pass.
 #[derive(Debug)]
 pub(crate) enum ReadStep {
@@ -125,6 +141,28 @@ impl TailedFile {
     /// skipped (raw, while the head left the encoding undecided: the skipped bytes never vote).
     fn seek_to_end(&mut self) -> Result<(), SourceError> {
         let len = self.disk_len()?;
+        self.seek_to(len)
+    }
+
+    /// Open a file that was present but could not be opened at the first look, which recorded its
+    /// length and identity then. The same file (its identity, and a length not shrunk) is read
+    /// from where it stood at that look, so what was written to it meanwhile is read and its
+    /// history stays history; a file replaced meanwhile is read whole. The identity, never the
+    /// creation time: a file renamed over another inherits its creation time on one filesystem.
+    pub fn open_held(path: &Path, len_at_look: u64, identity_at_look: Option<&Handle>) -> Result<Self, SourceError> {
+        let mut tf = TailedFile::open(path, FileStart::Begin)?;
+        let meta = tf.handle.as_file().metadata().map_err(|e| SourceError::io(path, e))?;
+        let same = identity_at_look.is_none_or(|id| *id == tf.handle);
+        if same && meta.len() >= len_at_look {
+            tf.seek_to(len_at_look)?;
+        }
+        Ok(tf)
+    }
+
+    /// Attach at byte `len` of the file as if it were its end at the attach: the head decides the
+    /// encoding, `len` is aligned to a code unit, and the unit before it tells a clean line end
+    /// from a torn one, whose completion is skipped.
+    fn seek_to(&mut self, len: u64) -> Result<(), SourceError> {
         if len == 0 {
             return Ok(());
         }

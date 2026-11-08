@@ -128,13 +128,17 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
     // slow arm never eats the bound the caller waits on; the poll covers the gap.
     let mut active: Option<TailedFile> = None;
     let mut first_open = true;
+    // A file present but held at the first look: its length and identity then, so the open that
+    // succeeds can tell the same file (read from where it stood) from a replacement (read whole).
+    // Attributes and the identity are readable through a hold that refuses every read.
+    let mut held: Option<(u64, Option<same_file::Handle>)> = None;
     match TailedFile::open(&path, cfg.start) {
         Ok(tf) => {
             active = Some(tf);
             first_open = false;
         }
         Err(e) if is_not_found(&e) => first_open = false,
-        Err(_) => {}
+        Err(_) => held = std::fs::metadata(&path).ok().map(|m| (m.len(), crate::tail::cursor::identity_at(&path))),
     }
     attached(&mut Some(attached_tx));
     let _watcher = if notify_wanted { path.parent().and_then(|dir| spawn_watcher(dir, wake_tx, false)) } else { None };
@@ -154,8 +158,12 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
 
         match active.as_mut() {
             None => {
-                let start = if first_open { cfg.start } else { FileStart::Begin };
-                match TailedFile::open(&path, start) {
+                let opened = match (first_open, cfg.start, &held) {
+                    (true, FileStart::End, Some((len, identity))) => TailedFile::open_held(&path, *len, identity.as_ref()),
+                    (true, start, _) => TailedFile::open(&path, start),
+                    (false, _, _) => TailedFile::open(&path, FileStart::Begin),
+                };
+                match opened {
                     Ok(tf) => {
                         first_open = false;
                         active = Some(tf);
