@@ -959,21 +959,27 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
                         notes.push(format!("opc rule `{}` was disabled: not carried", r.name));
                         continue;
                     }
-                    source.rules.push(OpcRuleConfig {
-                        name: r.name.clone(),
-                        store_on_change: r.store_on_change,
-                        tags: r
-                            .tags
-                            .iter()
-                            .map(|t| OpcTagConfig {
-                                node_id: t.node_id.clone(),
-                                series: t.series.clone(),
-                                ty: if t.ty.trim().is_empty() { "float".into() } else { t.ty.clone() },
-                                writable: t.writable,
-                                bits: t.bits.iter().map(|b| OpcBitConfig { bit: b.bit, width: b.width.max(1), series: b.series.clone() }).collect(),
-                            })
-                            .collect(),
-                    });
+                    let mut tags = Vec::with_capacity(r.tags.len());
+                    for t in &r.tags {
+                        let mut ty = if t.ty.trim().is_empty() { "float".to_string() } else { t.ty.clone() };
+                        // Veredas 1 accepted bits on a float it could never carve; bits are carved
+                        // out of an int word (C-040), so such a tag is carried as an int, named.
+                        if !t.bits.is_empty() && ty == "float" {
+                            notes.push(format!(
+                                "opc rule `{}`, tag `{}`: bits are carved out of an int word; its type `float` became `int`",
+                                r.name, t.node_id
+                            ));
+                            ty = "int".into();
+                        }
+                        tags.push(OpcTagConfig {
+                            node_id: t.node_id.clone(),
+                            series: t.series.clone(),
+                            ty,
+                            writable: t.writable,
+                            bits: t.bits.iter().map(|b| OpcBitConfig { bit: b.bit, width: b.width.max(1), series: b.series.clone() }).collect(),
+                        });
+                    }
+                    source.rules.push(OpcRuleConfig { name: r.name.clone(), store_on_change: r.store_on_change, tags });
                 }
                 if source.rules.is_empty() {
                     notes.push(format!("opc `{}`: no rule mapped its tags; the source is carried with none, and the session will refuse it until one is written", s.id));

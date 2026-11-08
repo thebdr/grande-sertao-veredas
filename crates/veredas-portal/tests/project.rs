@@ -295,7 +295,8 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
           "opc": [ { "name": "line1", "source_id": "plc-1", "enabled": true, "page": "", "store_on_change": true, "tags": [
             { "node_id": "ns=2;s=line1.temperature", "series": "temperature", "ty": "float", "writable": false, "bits": [] },
             { "node_id": "ns=2;s=line1.status", "series": "status_word", "ty": "int", "writable": false, "bits": [ { "bit": 0, "width": 0, "series": "running" }, { "bit": 4, "width": 3, "series": "mode" } ] },
-            { "node_id": "ns=2;s=line1.cmd.start", "series": "cmd_start", "writable": true } ] } ],
+            { "node_id": "ns=2;s=line1.cmd.start", "series": "cmd_start", "writable": true },
+            { "node_id": "ns=2;s=line1.flags", "series": "flags", "bits": [ { "bit": 1, "width": 1, "series": "alarm" } ] } ] } ],
           "skew_threshold_ms": 2000 }"#,
     );
     w(
@@ -319,7 +320,8 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
     assert_eq!((p.rules.len(), p.rules[0].name.as_str(), p.rules[0].key.as_deref()), (1, "readings", Some("sensor")));
     let plc = &p.opc[0];
     assert_eq!((plc.source_id.as_str(), plc.user.as_deref(), plc.password_env.as_deref(), plc.poll_ms), ("plc-1", Some("operator"), Some("PLC_1_PASSWORD"), 1000));
-    assert_eq!((plc.rules.len(), plc.rules[0].store_on_change, plc.rules[0].tags.len()), (1, true, 3));
+    assert_eq!((plc.rules.len(), plc.rules[0].store_on_change, plc.rules[0].tags.len()), (1, true, 4));
+    assert_eq!((plc.rules[0].tags[3].ty.as_str(), plc.rules[0].tags[3].bits.len()), ("int", 1), "bits on a float carried as an int word");
     assert_eq!((plc.rules[0].tags[1].bits[0].width, plc.rules[0].tags[2].ty.as_str(), plc.rules[0].tags[2].writable), (1, "float", true));
     assert_eq!(p.tables.len(), 2);
     assert_eq!(p.tables[0], ("hot".to_string(), "SELECT * FROM readings WHERE v > 20.0".to_string()));
@@ -328,6 +330,7 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
     let notes = migrated.notes.join("\n");
     for expected in [
         "source `parked` was disabled",
+        "opc rule `line1`, tag `ns=2;s=line1.flags`: bits are carved out of an int word; its type `float` became `int`",
         "source `msc` (a telegram channel `CHM` at `0.0.0.0:2000`) is not carried",
         "opc `plc-1`: the password lived in the machine",
         "`PLC_1_PASSWORD`",
@@ -337,7 +340,7 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
     ] {
         assert!(notes.contains(expected), "no note `{expected}` in:\n{notes}");
     }
-    assert_eq!(migrated.notes.len(), 6, "{notes}");
+    assert_eq!(migrated.notes.len(), 7, "{notes}");
     assert!(migrated.toml.starts_with("# Read into Veredas 2 from a Veredas 1 project folder"));
     // A folder that is no Veredas 1 project, and a manifest of another format.
     let not = project::from_v1(dir.path()).unwrap_err().to_string();
@@ -549,7 +552,7 @@ file's folder.
   reads it when it starts; the check does not need it set.
 - `poll_ms` (default `1000`): how often every tag is read, at least 50.
 - `rules` (required, at least one): each `{ name, store_on_change = false, tags = [ … ] }`, a tag
-  `{ node_id, series, type = "float", writable = false, bits = [ { bit, width = 1, series } ] }`,
+  `{ node_id, series, type = "float", writable = false, bits = [ { bit, width = 1, series } ] }` (bits need `type = "int"`),
   as the OPC clause reads them (C-040).
 
 ### `[[channel]]`: a telegram channel, each catalog message a table named for the message

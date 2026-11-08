@@ -159,7 +159,7 @@ file's folder.
   reads it when it starts; the check does not need it set.
 - `poll_ms` (default `1000`): how often every tag is read, at least 50.
 - `rules` (required, at least one): each `{ name, store_on_change = false, tags = [ … ] }`, a tag
-  `{ node_id, series, type = "float", writable = false, bits = [ { bit, width = 1, series } ] }`,
+  `{ node_id, series, type = "float", writable = false, bits = [ { bit, width = 1, series } ] }` (bits need `type = "int"`),
   as the OPC clause reads them (C-040).
 
 ### `[[channel]]`: a telegram channel, each catalog message a table named for the message
