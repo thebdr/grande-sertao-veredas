@@ -117,16 +117,25 @@ fn the_snapshot_the_listing_the_windows_and_the_tables_over_a_running_session() 
     );
     assert_eq!(v["start_ms"], json!(midnight().and_utc().timestamp_millis()));
     assert!(v["now_ms"].is_i64() && v["arrival_now_ms"].is_i64() && v["started_ms"].is_i64(), "{v}");
-    // The health, the vitals and the counters catch up within a refresh.
+    // The health, the vitals, the counters and the listing catch up within a refresh: every
+    // snapshot the test reads next is waited for here, the channel's series included (its first
+    // message may land after the refresh that showed the log's lines).
     assert!(
         wait(Duration::from_secs(5), || {
             let (_, v) = get(addr, "/api/session");
+            let (_, s) = get(addr, "/api/series");
+            let listed = |source: &str, series: &str| {
+                s["series"].as_array().is_some_and(|a| a.iter().any(|e| e["source"] == source && e["series"] == series))
+            };
             ["log", "plc", "sorter"].iter().all(|id| v["health"][id]["state"] == "live")
                 && v["samples"].as_u64().unwrap_or(0) >= 40
                 && v["counters"]["lines"] == 40
+                && listed("plc", "speed")
+                && listed("sorter", "item")
         }),
-        "{}",
-        get(addr, "/api/session").1
+        "{}\n{}",
+        get(addr, "/api/session").1,
+        get(addr, "/api/series").1
     );
     let (_, v) = get(addr, "/api/session");
     assert_eq!(v["health"]["log"]["count"], 20 + 20);

@@ -270,7 +270,8 @@ Recorded as the port meets them.
 - **The live snapshots are refreshed every 500 ms.** The series, health, vitals and counters a
   session publishes are the pump's last refresh, not the store: a test that reads one right after
   the store shows a row may read the refresh before it (CI, Linux, the counters one pass behind).
-  Every read of a published snapshot waits for its condition, as the health and series reads do.
+  Every read of a published snapshot waits for its condition, as the health and series reads do;
+  the server test read its listing a refresh too early on CI as well (the channel's series).
 - **A retired file may have shrunk.** The drain of a file renamed away took "shorter than what
   was read" for "emptied": a truncation and a rotation landing between a poll's read and its
   look at the path lost the torn line the truncation left (CI on Linux, where no watcher woke the
