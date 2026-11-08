@@ -10,15 +10,15 @@
     "channel"
   ],
   "exitCode": 0,
-  "outputSha": "3c188ff175ad411d113dd834c431f2ac90623830d9e6dbda4f65a035415e8f7f",
-  "outputTail": "test a_message_s_table_is_typed_by_the_catalog_and_a_row_has_a_hole_where_a_name_is_missing ... ok\ntest an_unknown_id_and_a_refused_body_are_counted_and_shown ... ok\ntest every_refusal_names_its_place_and_nothing_dials_before_it_all_holds ... ok\ntest a_listener_waits_for_the_plant_to_dial_and_a_peer_gone_reads_as_waiting ... ok\ntest the_machine_s_messages_are_read_into_rows_and_answered_by_rule_while_the_switch_is_on ... ok\ntest the_handle_s_send_is_gated_and_reaches_the_plant_by_name ... ok\ntest with_the_switch_off_nothing_is_answered_and_arming_it_live_answers_the_next_item ... ok\ntest pressure_turned_on_the_bench_shows_in_the_rows ... ok\ntest a_dialler_with_nobody_there_reports_trouble_and_links_when_the_plant_appears ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.80s\n     Running tests\\channel.rs (target\\debug\\deps\\channel-4ccc353d73f5751e.exe)",
-  "ranAt": "2026-11-08T00:54:56.870Z",
-  "headCommit": "120c77d0024f8edd29770d312041d7d50c5fdceb",
+  "outputSha": "98f5c9f7f2182a5a994a3336156c3295be6731b37898e06717d30b93c17d64a3",
+  "outputTail": "test every_refusal_names_its_place_and_nothing_dials_before_it_all_holds ... ok\ntest a_listener_waits_for_the_plant_to_dial_and_a_peer_gone_reads_as_waiting ... ok\ntest the_machine_s_messages_are_read_into_rows_and_answered_by_rule_while_the_switch_is_on ... ok\ntest the_handle_s_send_is_gated_and_reaches_the_plant_by_name ... ok\ntest with_the_switch_off_nothing_is_answered_and_arming_it_live_answers_the_next_item ... ok\ntest pressure_turned_on_the_bench_shows_in_the_rows ... ok\ntest a_disarmed_send_is_the_last_refusal ... ok\ntest the_peer_is_asked_for_last_so_the_catalog_s_refusals_come_first_with_nobody_there ... ok\ntest a_dialler_with_nobody_there_reports_trouble_and_links_when_the_plant_appears ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.77s\n     Running tests\\channel.rs (target\\debug\\deps\\channel-4ccc353d73f5751e.exe)",
+  "ranAt": "2026-11-08T23:25:48.510Z",
+  "headCommit": "14f6e26aa690a9062c6c5974506d001a64749040",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/channel.rs",
       "file": "crates/veredas-portal/tests/channel.rs",
-      "fileSha": "d748b320e4c023bbf2d4eb61b3111abc769ea7d982ef7d8f5c25e0ccd579eff3"
+      "fileSha": "931776b14f51da4052fdd0dfea8ca78744ca4b3821be168622a67f3a2ef588a0"
     }
   ]
 }
