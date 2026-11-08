@@ -384,7 +384,12 @@ impl ChannelHandle {
     /// peer. The master switch is checked first; nothing is composed while it is off.
     pub fn send(&self, to: Option<PeerId>, message: &str, fields: HashMap<String, String>) -> Result<(), SendError> {
         if !self.gate.is_armed() {
-            return Err(SendError::Disarmed);
+            // Refused here, before the worker is asked: the refusal is still the status's last.
+            let refused = SendError::Disarmed;
+            if let Ok(mut s) = self.status.lock() {
+                s.last_error = Some(refused.to_string());
+            }
+            return Err(refused);
         }
         let (reply, rx) = std::sync::mpsc::channel();
         self.requests
@@ -458,11 +463,6 @@ impl Link {
     /// Compose and send a message of the catalog, or say why not. Nothing reaches the wire on an
     /// error.
     fn send(&self, to: Option<PeerId>, peers: &[PeerId], message: &str, fields: &HashMap<String, String>) -> Result<(), SendError> {
-        match to {
-            Some(p) if !peers.contains(&p) => return Err(SendError::NoPeer(p)),
-            None if peers.is_empty() => return Err(SendError::NoPeers),
-            _ => {}
-        }
         let (id, body) = match self.cfg.catalog.encode(message, fields) {
             None => return Err(SendError::UnknownMessage(message.to_string())),
             Some(Err(e)) => return Err(SendError::Compose { message: message.to_string(), reason: e.to_string() }),
@@ -476,6 +476,14 @@ impl Link {
         // the message is counted as sent; the sequence is the channel's.
         if let Err(e) = self.cfg.spec.framing.encode(&frame, None) {
             return Err(SendError::Framing { message: message.to_string(), reason: e.to_string() });
+        }
+        // The peer last, once the message is known to be sendable: a misspelled message with
+        // nobody connected is the catalog's refusal, not the peer's (the server maps the two to
+        // different answers).
+        match to {
+            Some(p) if !peers.contains(&p) => return Err(SendError::NoPeer(p)),
+            None if peers.is_empty() => return Err(SendError::NoPeers),
+            _ => {}
         }
         match to {
             Some(peer) => self.channel.send(peer, frame),

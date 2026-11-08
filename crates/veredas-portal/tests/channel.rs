@@ -650,3 +650,38 @@ fn every_refusal_names_its_place_and_nothing_dials_before_it_all_holds() {
     assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock), "a refused channel dialled the plant");
     let _ = PathBuf::new();
 }
+
+// ---- the first refute round ------------------------------------------------------------------
+
+/// A disarmed send is a refusal like any other: the status keeps its text as the last refusal,
+/// although the switch stops it before the worker is asked. Nobody connected, no bench.
+#[test]
+fn a_disarmed_send_is_the_last_refusal() {
+    let gate = WriteGate::new(true);
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let worker = spawn(config(dial(free_port()), vec![]), tx, gate.clone()).unwrap();
+    let w = worker.writer.clone();
+    let stop = HashMap::from([("code".to_string(), "0".to_string())]);
+    assert_eq!(w.send(Some(999), "command", stop.clone()), Err(SendError::NoPeer(999)));
+    assert_eq!(w.status().last_error.as_deref(), Some("peer 999 is not connected"));
+    gate.set(false);
+    assert_eq!(w.send(None, "command", stop), Err(SendError::Disarmed));
+    assert_eq!(w.status().last_error.as_deref(), Some("writes are turned off for this project"));
+    worker.handle.join().unwrap();
+}
+
+/// The peer is asked for last: with nobody connected, a message the catalog lacks and a value
+/// missing are the catalog's refusals, and only a message that could go out is refused for want
+/// of a peer. The server maps the two to different answers, so the order is the contract's.
+#[test]
+fn the_peer_is_asked_for_last_so_the_catalog_s_refusals_come_first_with_nobody_there() {
+    let gate = WriteGate::new(true);
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let worker = spawn(config(dial(free_port()), vec![]), tx, gate).unwrap();
+    let w = worker.writer.clone();
+    assert_eq!(w.send(None, "nope", HashMap::new()), Err(SendError::UnknownMessage("nope".into())));
+    assert!(matches!(w.send(None, "command", HashMap::new()), Err(SendError::Compose { .. })), "{:?}", w.status().last_error);
+    assert_eq!(w.send(None, "command", HashMap::from([("code".to_string(), "0".to_string())])), Err(SendError::NoPeers));
+    assert_eq!(w.send(Some(7), "command", HashMap::from([("code".to_string(), "0".to_string())])), Err(SendError::NoPeer(7)));
+    worker.handle.join().unwrap();
+}

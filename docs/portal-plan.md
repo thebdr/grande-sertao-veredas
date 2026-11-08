@@ -301,3 +301,8 @@ Recorded as the port meets them.
   format (`%z`, `%:z`) is parsed and dropped, the stamp staying naive local; and a bare carriage
   return the tail keeps (C-035) sits before the end of the line, so a `$`-anchored pattern misses
   it: match `\r?$`, or do not anchor the end.
+- **A refusal the handle makes alone is still the status's.** The switch stopped a send in the
+  handle, before the worker, so the refusal never reached the shared status and the last refusal
+  stayed an older one; and the peer was asked for before the catalog, so a misspelled message
+  with nobody connected read as "no peer" (C-039, round 1). Every refusal path writes the status,
+  and the order of refusals in the clause is the order of the code, tested with nobody connected.
