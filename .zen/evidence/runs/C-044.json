@@ -10,15 +10,15 @@
     "serve"
   ],
   "exitCode": 0,
-  "outputSha": "63f5559240bdc0c6ff690114c30392b49fdf244337b63af434481c1c1ca3e105",
-  "outputTail": "\nrunning 3 tests\ntest the_live_stream_says_hello_then_carries_every_numeric_sample ... ok\ntest the_write_surface_is_refused_by_default_on_the_wire_and_whitelisted_when_armed ... ok\ntest the_snapshot_the_listing_the_windows_and_the_tables_over_a_running_session ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.09s\n     Running tests\\serve.rs (target\\debug\\deps\\serve-4353aecb0be7e31e.exe)",
-  "ranAt": "2026-11-08T00:55:34.171Z",
-  "headCommit": "120c77d0024f8edd29770d312041d7d50c5fdceb",
+  "outputSha": "a370991ca6b44660ae520314a89dbbeabb1b409158105c541ac458ba037a4e2b",
+  "outputTail": "\nrunning 3 tests\ntest the_live_stream_says_hello_then_carries_every_numeric_sample ... ok\ntest the_write_surface_is_refused_by_default_on_the_wire_and_whitelisted_when_armed ... ok\ntest the_snapshot_the_listing_the_windows_and_the_tables_over_a_running_session ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.03s\n     Running tests\\serve.rs (target\\debug\\deps\\serve-4353aecb0be7e31e.exe)",
+  "ranAt": "2026-11-08T23:31:07.393Z",
+  "headCommit": "c73089a3404e249f58b15e0e3727b165c30b2e50",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/serve.rs",
       "file": "crates/veredas-portal/tests/serve.rs",
-      "fileSha": "f9a2bc4defae55bcdd068953f5798e89a9fd7f5f6f2c963a429b591a27cc1f2d"
+      "fileSha": "aba8ce96ab19ac831e3a29609a396e268493fb11b43e9b282c897b56b0705447"
     }
   ]
 }
