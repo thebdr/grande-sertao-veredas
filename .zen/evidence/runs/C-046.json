@@ -1,22 +1,25 @@
 {
   "clause": "C-046",
-  "command": "cargo nextest run -p veredas-portal -p leis -E binary(project) | binary(l7_stamps) | binary(real_tree)",
+  "command": "cargo test -p veredas-portal -p leis --test project --test l7_stamps --test real_tree",
   "commandArgv": [
     "cargo",
-    "nextest",
-    "run",
+    "test",
     "-p",
     "veredas-portal",
     "-p",
     "leis",
-    "-E",
-    "binary(project) | binary(l7_stamps) | binary(real_tree)"
+    "--test",
+    "project",
+    "--test",
+    "l7_stamps",
+    "--test",
+    "real_tree"
   ],
-  "exitCode": 101,
-  "outputSha": "580a22dccfe8dcec5c550c7d0c98892940c2150ff36caa0cd40a216253848eb4",
-  "outputTail": "error: could not compile `veredas-portal` (test \"project\") due to 1 previous error\nerror: crate `arrow_ord` required to be available in rlib format, but was not found in this form\n\nerror: crate `lexical_parse_float` required to be available in rlib format, but was not found in this form\n\nerror: crate `arrow_schema` required to be available in rlib format, but was not found in this form\n\nerror: could not compile `veredas-portal` (bin \"veredas-portal\") due to 1 previous error\nerror: could not compile `veredas-portal` (bin \"veredas-portal\" test) due to 1 previous error\nerror: could not compile `veredas-portal` (test \"opc\") due to 1 previous error\nerror: could not compile `veredas-portal` (test \"tail_file\") due to 1 previous error\nerror: could not compile `veredas-portal` (test \"serve\") due to 1 previous error\nerror: could not compile `veredas-portal` (test \"tail_backfill\") due to 1 previous error\nerror: could not compile `veredas-portal` (test \"session\") due to 1 previous error\nerror: command `'C:\\Users\\bogdan.dragoi\\.rustup\\toolchains\\stable-x86_64-pc-windows-msvc\\bin\\cargo.exe' test --no-run --message-format json-render-diagnostics --package veredas-portal --package leis` exited with code 101",
-  "ranAt": "2026-11-08T00:55:58.081Z",
-  "headCommit": "120c77d0024f8edd29770d312041d7d50c5fdceb",
+  "exitCode": 0,
+  "outputSha": "d3c54af85f49b181bfce44d9bd9627a1d92f67f6ab2809d56e4008df67f9ca8e",
+  "outputTail": "running 7 tests\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_header_is_refused_before_the_body_by_the_texts_every_file_shares ... ok\ntest a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_named ... ok\ntest the_worked_example_loads_as_its_prose_says ... ok\ntest what_cannot_be_a_project_is_refused_by_name ... ok\ntest every_key_statement_is_the_readers ... ok\ntest the_executable_checks_a_project_and_reads_a_veredas_1_folder ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.58s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.45s\n     Running tests\\l7_stamps.rs (target\\debug\\deps\\l7_stamps-3ac18b9feb45ffc7.exe)\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-d1a4d457ef4f6d46.exe)\n     Running tests\\project.rs (target\\debug\\deps\\project-048f53e2fc452e38.exe)",
+  "ranAt": "2026-11-08T00:58:07.215Z",
+  "headCommit": "9df9826ea3fde853cc261eb988fe1df4fd84ca4d",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/project.rs",
