@@ -356,3 +356,7 @@ Recorded as the port meets them.
   not read and a server with no rule, and `--check` refused the file it had just written (C-046,
   round 1). The import loads what it is about to print and refuses the folder, with its notes,
   when that fails.
+- **What is not carried takes its dependents with it.** The import dropped a disabled source but
+  carried the rule scoped to it, and its own self-check then refused the whole folder (C-046,
+  round 2). Every part left out is followed to what names it; each is left out and named, so the
+  file printed loads and the operator reads why.

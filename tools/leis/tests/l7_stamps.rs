@@ -57,7 +57,14 @@ fn l7_the_reader_collects_toml_files_but_manifests_and_the_blocks_of_a_reference
                 "docs/fences-schema.md",
                 "# Fences\n\n```toml \nformat = \"veredas-fence\"\nversion = 1\n```\n\n```toml title=\"a\"\nformat = \"veredas-fence\"\nversion = 2\n```\n\n~~~toml\nformat = \"veredas-fence\"\nversion = 3\n~~~\n\n```TOML\nformat = \"veredas-fence\"\nversion = 4\n```\n\n````toml\nformat = \"veredas-fence\"\nversion = 5\ntext = \"\"\"\n```\nstill inside\n\"\"\"\n````\n\n```tomlx\nnot = \"toml\"\n```\n\n```json\n{}\n```\n",
             ),
+            // A fence inside a blockquote (its marks taken off the body too), one opening a list
+            // item, one two quotes deep, and a block the text ends before closing.
+            (
+                "docs/held-schema.md",
+                "# Held\n\n> ```toml\n> format = \"veredas-held\"\n> version = 1\n> ```\n\n- ```toml\n  format = \"veredas-held\"\n  version = 2\n  ```\n\n> > ```toml\n> > format = \"veredas-held\"\n> > version = 3\n> > ```\n\n```toml\nformat = \"veredas-held\"\nversion = 4\n",
+            ),
             ("docs/other-plan.md", "# plan\n\n```rust\nfn x() {}\n```\n"),
+            ("docs/upper-schema.MD", "# Upper\n\n```toml\nformat = \"veredas-upper\"\nversion = 1\n```\n"),
             ("fixtures/a.toml", "format = \"veredas-a\"\nversion = 1\n"),
             ("fixtures/B.TOML", "format = \"veredas-b\"\nversion = 1\n"),
             ("tools/leis/tests/data/Cargo.toml", "[package]\nname = \"x\"\n"),
@@ -73,13 +80,21 @@ fn l7_the_reader_collects_toml_files_but_manifests_and_the_blocks_of_a_reference
             "docs/fences-schema.md block 3",
             "docs/fences-schema.md block 4",
             "docs/fences-schema.md block 5",
+            "docs/held-schema.md block 1",
+            "docs/held-schema.md block 2",
+            "docs/held-schema.md block 3",
+            "docs/held-schema.md block 4",
             "docs/thing-schema.md block 1",
             "docs/thing-schema.md block 2",
+            "docs/upper-schema.MD block 1",
             "fixtures/B.TOML",
             "fixtures/a.toml",
         ]
     );
-    let fifth = &s.stamped.iter().find(|(p, _)| p == "docs/fences-schema.md block 5").unwrap().1;
-    assert!(fifth.contains("```\nstill inside"), "a shorter fence inside a longer one is text: {fifth:?}");
+    let block = |place: &str| s.stamped.iter().find(|(p, _)| p == place).unwrap().1.as_str();
+    assert!(block("docs/fences-schema.md block 5").contains("```\nstill inside"), "a shorter fence inside a longer one is text");
+    assert_eq!(block("docs/held-schema.md block 1"), "format = \"veredas-held\"\nversion = 1\n", "the quote marks come off the body");
+    assert_eq!(block("docs/held-schema.md block 3"), "format = \"veredas-held\"\nversion = 3\n");
+    assert_eq!(block("docs/held-schema.md block 4"), "format = \"veredas-held\"\nversion = 4\n", "a block the text ends before closing");
     assert_eq!(strings(leis::stamps(&s)), NONE);
 }

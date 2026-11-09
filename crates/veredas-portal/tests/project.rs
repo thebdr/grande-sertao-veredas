@@ -336,7 +336,8 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
         "rules.json",
         r#"{ "extracts": [
             { "name": "readings", "pattern": "(?P<sensor>\\w+)=(?P<v>-?\\d+\\.\\d+)", "scope": "press-a", "types": { "v": "float" }, "key_group": "sensor", "enabled": true, "page": "" },
-            { "name": "unused", "pattern": "x", "enabled": false } ],
+            { "name": "unused", "pattern": "x", "enabled": false },
+            { "name": "oldrule", "pattern": "y=(?P<y>\\d+)", "scope": "parked", "enabled": true } ],
           "opc": [ { "name": "line1", "source_id": "plc-1", "enabled": true, "page": "", "store_on_change": true, "tags": [
             { "node_id": "ns=2;s=line1.temperature", "series": "temperature", "ty": "float", "writable": false, "bits": [] },
             { "node_id": "ns=2;s=line1.status", "series": "status_word", "ty": "int", "writable": false, "bits": [ { "bit": 0, "width": 0, "series": "running" }, { "bit": 4, "width": 3, "series": "mode" } ] },
@@ -394,10 +395,12 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
         "opc `plc-2`: certificate authentication was never implemented; the source is carried anonymous",
         "opc `plc-3`: security `Sign` was never implemented",
         "opc `plc-3`: no rule mapped its tags: not carried",
+        "rule `oldrule`: its scope `parked` is a log not carried: not carried (write it back with a scope the project has)",
+        "the rules' skew-monitor threshold",
     ] {
         assert!(notes.contains(expected), "no note `{expected}` in:\n{notes}");
     }
-    assert_eq!(migrated.notes.len(), 11, "{notes}");
+    assert_eq!(migrated.notes.len(), 12, "{notes}");
     assert!(migrated.toml.starts_with("# Read into Veredas 2 from a Veredas 1 project folder"));
     // An absolute start in the other spelling is carried too; one that is no date-time is named
     // and the session starts live, never a guess.
@@ -408,6 +411,30 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
     let again = project::from_v1(&v1).unwrap();
     assert_eq!(project::load(&again.toml, &v1).unwrap().start, Start::Live);
     assert!(again.notes.iter().any(|n| n == "session.start: the absolute start `yesterdayish` is not a date-time (`YYYY-MM-DD HH:MM[:SS]`, a `T` or a space between) nor a date; the session starts live"), "{}", again.notes.join("\n"));
+    // Every session setting Veredas 1 had and this file has not is named: a start with an offset
+    // (a date-time, but not on the plant's clock), a store mode it never had, a memory limit on an
+    // in-memory store, the auto-export, and zero hours carried as one.
+    let import = |session: &str| {
+        w("session.json", session);
+        let m = project::from_v1(&v1).unwrap();
+        (project::load(&m.toml, &v1).unwrap(), m.notes.join("\n"))
+    };
+    let (p, notes) = import(r#"{ "start": { "kind": "Absolute", "absolute": "2026-11-08T06:00:00+02:00" } }"#);
+    assert_eq!(p.start, Start::Live);
+    assert!(notes.contains("session.start: the absolute start `2026-11-08T06:00:00+02:00` carries an offset, and this file's times are the plant's clock; set `start` by hand; the session starts live"), "{notes}");
+    let (p, notes) = import(r#"{ "start": { "kind": "LastHours", "last_hours": 0 }, "store": { "mode": "Hybrid", "disk_dir": "d", "memory_limit_mb": 512, "auto_export_mins": 15, "export_dir": "exp" } }"#);
+    assert_eq!((&p.start, &p.store), (&Start::LastHours(1), &Store::Ram));
+    for expected in [
+        "session.start: `last_hours` was 0 and is carried as 1 (a start names at least one hour)",
+        "session.store: mode `Hybrid` is not known (Veredas 1 had `Ram` and `Disk`); the store is in memory",
+        "session.store: the memory limit of 512 MB is not carried: an in-memory store has none here (a limit belongs to a disk store)",
+        "session.store: the auto-export (every 15 minutes to `exp`) is not carried: a snapshot is taken on request (C-041), not on a timer",
+    ] {
+        assert!(notes.contains(expected), "no note `{expected}` in:\n{notes}");
+    }
+    let (p, notes) = import(r#"{ "store": { "mode": "Ram", "memory_limit_mb": 0 } }"#);
+    assert_eq!((&p.start, &p.store), (&Start::Live, &Store::Ram));
+    assert!(!notes.contains("session.store"), "an in-memory store with no limit needs no note:\n{notes}");
     // A folder that leaves nothing to carry yields no file: the import is refused with the
     // reason the file would have been, and its notes.
     let bare = dir.path().join("bare");

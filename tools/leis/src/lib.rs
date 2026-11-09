@@ -376,7 +376,7 @@ impl Suite {
             if file.to_ascii_lowercase().ends_with(".toml") && !file.eq_ignore_ascii_case("Cargo.toml") {
                 stamped.push((p.clone(), read(p)?));
             }
-            if p.starts_with("docs/") && p.ends_with(".md") {
+            if p.starts_with("docs/") && p.to_ascii_lowercase().ends_with(".md") {
                 for (i, block) in toml_blocks(&read(p)?).into_iter().enumerate() {
                     stamped.push((format!("{p} block {}", i + 1), block));
                 }
@@ -862,37 +862,76 @@ pub fn history(root: &Path) -> Result<Vec<Violation>, Error> {
 
 /// The TOML blocks of a Markdown text, in order, whatever its line endings: every fenced block
 /// (three or more backticks or tildes, as CommonMark has it) whose info string's first word is
-/// `toml` in any case, whatever follows it (a title, a space), closed by a fence of its own
-/// character at least as long and nothing else on the line.
+/// `toml` in any case, whatever follows it (a title, a space), inside a blockquote or a list
+/// item as well, closed by a fence of its own character at least as long and nothing else on
+/// the line, or by the end of the text.
 fn toml_blocks(text: &str) -> Vec<String> {
-    fn fence(line: &str) -> Option<(char, usize, &str)> {
-        let t = line.trim_start();
+    /// A line with its container markers taken off: `>` marks (each with its optional space) and
+    /// one list-item mark (`-`, `*`, `+`, or a number with `.` or `)`), with the count of `>`.
+    fn uncontained(line: &str) -> (usize, &str) {
+        let mut t = line.trim_start();
+        let mut quotes = 0;
+        while let Some(rest) = t.strip_prefix('>') {
+            quotes += 1;
+            t = rest.strip_prefix(' ').unwrap_or(rest).trim_start();
+        }
+        if let Some(rest) = t.strip_prefix(['-', '*', '+']).and_then(|r| r.strip_prefix(' ')) {
+            t = rest.trim_start();
+        } else {
+            let digits = t.chars().take_while(char::is_ascii_digit).count();
+            if digits > 0
+                && let Some(rest) = t[digits..].strip_prefix(['.', ')']).and_then(|r| r.strip_prefix(' '))
+            {
+                t = rest.trim_start();
+            }
+        }
+        (quotes, t)
+    }
+    /// A fence line, uncontained: its character, its length and its info string.
+    fn fence(t: &str) -> Option<(char, usize, &str)> {
         let c = t.chars().next().filter(|c| matches!(c, '`' | '~'))?;
         let n = t.chars().take_while(|&x| x == c).count();
         (n >= 3).then(|| (c, n, &t[n..]))
     }
+    /// A body line inside a block opened `quotes` deep: that many `>` marks taken off, the rest
+    /// as written (a list item's indentation is TOML's to ignore).
+    fn unquoted(line: &str, quotes: usize) -> &str {
+        let mut t = line;
+        for _ in 0..quotes {
+            let s = t.trim_start();
+            match s.strip_prefix('>') {
+                Some(rest) => t = rest.strip_prefix(' ').unwrap_or(rest),
+                None => return t,
+            }
+        }
+        t
+    }
     let mut out = Vec::new();
-    let mut open: Option<(char, usize)> = None;
+    let mut open: Option<(char, usize, usize)> = None;
     let mut body = String::new();
     for line in text.lines() {
-        match (open, fence(line)) {
+        let (quotes, t) = uncontained(line);
+        match (open, fence(t)) {
             (None, Some((c, n, info))) => {
                 let word = info.trim().split(|ch: char| ch.is_whitespace() || ch == ',' || ch == '{').next().unwrap_or("");
                 if word.eq_ignore_ascii_case("toml") {
-                    open = Some((c, n));
+                    open = Some((c, n, quotes));
                     body.clear();
                 }
             }
-            (Some((c, n)), Some((fc, fn_, rest))) if fc == c && fn_ >= n && rest.trim().is_empty() => {
+            (Some((c, n, q)), Some((fc, fn_, rest))) if fc == c && fn_ >= n && rest.trim().is_empty() && quotes == q => {
                 out.push(std::mem::take(&mut body));
                 open = None;
             }
-            (Some(_), _) => {
-                body.push_str(line);
+            (Some((_, _, q)), _) => {
+                body.push_str(unquoted(line, q));
                 body.push('\n');
             }
             (None, None) => {}
         }
+    }
+    if open.is_some() {
+        out.push(body);
     }
     out
 }

@@ -12,7 +12,7 @@
 //! The declarations the session reads (a log source, a timestamp rule, a capture rule) live
 //! here too, so the light build, which has no session, still reads the project.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -952,6 +952,10 @@ mod v1 {
         pub disk_dir: String,
         #[serde(default)]
         pub memory_limit_mb: u32,
+        #[serde(default)]
+        pub auto_export_mins: u32,
+        #[serde(default)]
+        pub export_dir: String,
     }
 
     #[derive(Deserialize, Default)]
@@ -1099,10 +1103,18 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
     for r in rules.opc.iter().filter(|r| !sources.iter().any(|s| s.id == r.source_id)) {
         notes.push(format!("opc rule `{}` names a source `{}` the project does not have: not carried", r.name, r.source_id));
     }
+    // What is not carried takes its dependents with it, named: a rule scoped to a log that was
+    // left out would make the file refuse itself.
+    let carried_logs: HashSet<&str> = log.iter().map(|l| l.id.as_str()).collect();
     let mut rule: Vec<CaptureRuleConfig> = Vec::new();
     for e in &rules.extracts {
         if !e.enabled {
             notes.push(format!("rule `{}` was disabled: not carried", e.name));
+            continue;
+        }
+        let scope = e.scope.trim();
+        if !scope.is_empty() && !carried_logs.contains(scope) {
+            notes.push(format!("rule `{}`: its scope `{scope}` is a log not carried: not carried (write it back with a scope the project has)", e.name));
             continue;
         }
         rule.push(CaptureRuleConfig {
@@ -1134,15 +1146,28 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
         Some(s) => match s.kind.as_str() {
             "Now" => None,
             "SinceMidnight" => Some(StartFile::Text("midnight".into())),
-            "LastHours" => Some(StartFile::LastHours { last_hours: s.last_hours.max(1) }),
+            "LastHours" => {
+                if s.last_hours == 0 {
+                    notes.push("session.start: `last_hours` was 0 and is carried as 1 (a start names at least one hour)".into());
+                }
+                Some(StartFile::LastHours { last_hours: s.last_hours.max(1) })
+            }
             "Absolute" => match v1_absolute(&s.absolute) {
                 // Written in the file's own spelling, whichever Veredas 1's operator typed.
                 Some(t) => Some(StartFile::Text(t.format("%Y-%m-%d %H:%M:%S").to_string())),
                 None => {
-                    notes.push(format!(
-                        "session.start: the absolute start `{}` is not a date-time (`YYYY-MM-DD HH:MM[:SS]`, a `T` or a space between) nor a date; the session starts live",
-                        s.absolute.trim()
-                    ));
+                    let text = s.absolute.trim();
+                    // A date-time with an offset is one, but not on the plant's clock, which is
+                    // what this file's times are; it is named as such, not read into a guess.
+                    let with_offset = chrono::DateTime::parse_from_rfc3339(text).is_ok()
+                        || ["%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S%z", "%Y-%m-%dT%H:%M:%S%:z", "%Y-%m-%d %H:%M:%S%:z"]
+                            .iter()
+                            .any(|f| chrono::DateTime::parse_from_str(text, f).is_ok());
+                    notes.push(if with_offset {
+                        format!("session.start: the absolute start `{text}` carries an offset, and this file's times are the plant's clock; set `start` by hand; the session starts live")
+                    } else {
+                        format!("session.start: the absolute start `{text}` is not a date-time (`YYYY-MM-DD HH:MM[:SS]`, a `T` or a space between) nor a date; the session starts live")
+                    });
                     None
                 }
             },
@@ -1152,14 +1177,37 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
             }
         },
     };
+    // The store: Veredas 1 had `Ram` and `Disk`; a mode it never had is named and the store is
+    // in memory; a memory limit on an in-memory store, and the auto-export, have no place in
+    // this file and are named.
     let store = match &session.store {
-        Some(st) if st.mode == "Disk" => {
-            let dir = if st.disk_dir.trim().is_empty() { "cache".to_string() } else { st.disk_dir.trim().to_string() };
-            Some(StoreFile::Disk { disk: format!("{dir}/session.duckdb"), memory_limit_mb: st.memory_limit_mb })
+        None => None,
+        Some(st) => {
+            if st.auto_export_mins > 0 || !st.export_dir.trim().is_empty() {
+                notes.push(format!(
+                    "session.store: the auto-export (every {} minutes to `{}`) is not carried: a snapshot is taken on request (C-041), not on a timer",
+                    st.auto_export_mins,
+                    st.export_dir.trim()
+                ));
+            }
+            match st.mode.as_str() {
+                "Disk" => {
+                    let dir = if st.disk_dir.trim().is_empty() { "cache".to_string() } else { st.disk_dir.trim().to_string() };
+                    Some(StoreFile::Disk { disk: format!("{dir}/session.duckdb"), memory_limit_mb: st.memory_limit_mb })
+                }
+                mode => {
+                    if !matches!(mode, "Ram" | "") {
+                        notes.push(format!("session.store: mode `{mode}` is not known (Veredas 1 had `Ram` and `Disk`); the store is in memory"));
+                    }
+                    if st.memory_limit_mb > 0 {
+                        notes.push(format!("session.store: the memory limit of {} MB is not carried: an in-memory store has none here (a limit belongs to a disk store)", st.memory_limit_mb));
+                    }
+                    None
+                }
+            }
         }
-        _ => None,
     };
-    notes.push("not carried, by design: the dashboard layout, the grep, the command sequencer, the pages and the highlights (the apps own the screens; a command is composed from the write endpoint)".into());
+    notes.push("not carried, by design: the dashboard layout, the grep, the command sequencer, the pages, the highlights and the rules' skew-monitor threshold (the apps own the screens; a command is composed from the write endpoint; the session's snapshot shows both clocks)".into());
     let file = FileV1 {
         format: FORMAT.into(),
         version: VERSION,
