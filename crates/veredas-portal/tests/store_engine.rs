@@ -446,3 +446,82 @@ fn a_long_row_widens_the_schema_in_the_sample_and_refuses_the_read_past_it() {
     let err = conn.query_row(&format!("SELECT count(*) FROM {}", scan(&late)), [], |r| r.get::<_, i64>(0)).err().map(|e| e.to_string()).unwrap_or_default();
     assert!(err.contains("CSV Error on Line: 30002"), "{err}");
 }
+
+// ---- the third refute round ------------------------------------------------------------------
+
+/// The window in which a long row widens the schema is the file's first 2 048 lines, the header
+/// included, whatever the sample size: a long row at line 2 048 widens, one at 2 049 refuses the
+/// read by that line, and sampling the whole file moves nothing.
+#[test]
+fn a_long_row_s_window_is_the_first_2048_lines_whatever_the_sample_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    let file = |name: &str, rows: usize| -> std::path::PathBuf {
+        let p = dir.path().join(name);
+        let mut text = String::from("a;b;c\n");
+        for i in 0..rows {
+            text.push_str(&format!("{i};1;2\n"));
+        }
+        text.push_str("9;9;9;9\n");
+        std::fs::write(&p, text).unwrap();
+        p
+    };
+    let scan = |p: &std::path::Path, extra: &str| format!("read_csv('{}', delim=';', null_padding=true{extra})", sql_path(p));
+    let width = |sql: &str| -> i64 { conn.query_row(&format!("SELECT count(*) FROM (DESCRIBE SELECT * FROM {sql})"), [], |r| r.get(0)).unwrap() };
+    let count = |sql: &str| -> Result<i64, String> { conn.query_row(&format!("SELECT count(*) FROM {sql}"), [], |r| r.get(0)).map_err(|e| e.to_string()) };
+    let inside = file("inside.csv", 2046);
+    assert_eq!(width(&scan(&inside, "")), 4, "a long row at line 2048 widens the schema");
+    assert_eq!(count(&scan(&inside, "")), Ok(2047));
+    let past = file("past.csv", 2047);
+    assert_eq!(width(&scan(&past, "")), 3, "a long row at line 2049 is past the window");
+    let err = count(&scan(&past, "")).unwrap_err();
+    assert!(err.contains("CSV Error on Line: 2049"), "{err}");
+    let late = file("late.csv", 30_000);
+    let err = count(&scan(&late, ", sample_size=-1")).unwrap_err();
+    assert!(err.contains("CSV Error on Line: 30002"), "the whole file sampled moves nothing: {err}");
+}
+
+/// A view binds when it is created: a reference to a table not there yet fails at creation with
+/// the catalog's text and leaves no view behind, a bad column fails with the binder's text, and
+/// the retry once the reference exists succeeds. The store's fixpoint over view definitions
+/// rests on this.
+#[test]
+fn a_view_binds_when_it_is_created_so_a_fixpoint_can_order_them() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE t (a BIGINT)").unwrap();
+    let err = conn.execute_batch("CREATE VIEW v2 AS (SELECT * FROM v1)").err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err.contains("Catalog Error") && err.contains("Table with name v1 does not exist"), "{err}");
+    let left: i64 = conn.query_row("SELECT count(*) FROM duckdb_views() WHERE view_name = 'v2'", [], |r| r.get(0)).unwrap();
+    assert_eq!(left, 0, "a failed create leaves no view behind");
+    let err = conn.execute_batch("CREATE VIEW b AS (SELECT nope FROM t)").err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err.contains("Binder Error") && err.contains("Referenced column \"nope\" not found"), "{err}");
+    conn.execute_batch("CREATE VIEW v1 AS (SELECT a FROM t); CREATE VIEW v2 AS (SELECT * FROM v1);").unwrap();
+    let views: i64 = conn.query_row("SELECT count(*) FROM duckdb_views() WHERE NOT internal", [], |r| r.get(0)).unwrap();
+    assert_eq!(views, 2);
+}
+
+/// The appender takes the store's typed cells through a slice of `ToSql`: a text, a null, a
+/// microsecond timestamp, a double and nulls in typed columns, read back exactly as given.
+#[test]
+fn the_appender_takes_the_store_s_typed_cells_through_a_slice_of_to_sql() {
+    use duckdb::ToSql;
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE w (source VARCHAR, key VARCHAR, ts TIMESTAMP, v DOUBLE, i BIGINT, s VARCHAR, t TIMESTAMP)").unwrap();
+    let vals = vec![
+        Value::Text("src".into()),
+        Value::Null,
+        Value::Timestamp(TimeUnit::Microsecond, 1),
+        Value::Double(2.5),
+        Value::Null,
+        Value::Null,
+        Value::Null,
+    ];
+    {
+        let mut app = conn.appender("w").unwrap();
+        let refs: Vec<&dyn ToSql> = vals.iter().map(|v| v as &dyn ToSql).collect();
+        app.append_row(refs.as_slice()).unwrap();
+        app.flush().unwrap();
+    }
+    let back: Vec<Value> = conn.query_row("SELECT * FROM w", [], |r| Ok((0..7).map(|i| r.get::<_, Value>(i).unwrap()).collect())).unwrap();
+    assert_eq!(back, vals);
+}
