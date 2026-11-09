@@ -83,8 +83,16 @@ fn describe_validates_a_select_without_running_it() {
     let mut stmt = conn.prepare("DESCRIBE (SELECT a, b FROM t)").unwrap();
     let cols: Vec<(String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
     assert_eq!(cols, vec![("a".to_string(), "BIGINT".to_string()), ("b".to_string(), "VARCHAR".to_string())]);
+    // Without running it: a cast that fails on the row the table holds still describes, while
+    // the same select run errors; and the binder names a bad column in its own words.
+    conn.execute_batch("INSERT INTO t VALUES (1, 'x')").unwrap();
+    let mut stmt = conn.prepare("DESCRIBE (SELECT CAST(b AS INTEGER) AS n FROM t)").unwrap();
+    let cols: Vec<(String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(cols, vec![("n".to_string(), "INTEGER".to_string())]);
+    let run = conn.query_row("SELECT CAST(b AS INTEGER) FROM t", [], |r| r.get::<_, i32>(0)).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(run.contains("Conversion Error"), "{run}");
     let err = conn.prepare("DESCRIBE (SELECT nope FROM t)").err().map(|e| e.to_string()).unwrap_or_default();
-    assert!(err.contains("nope"), "{err}");
+    assert!(err.contains("Binder Error") && err.contains("Referenced column \"nope\" not found"), "{err}");
 }
 
 /// The catalog functions list the user's tables and views with their columns, and `NOT
@@ -148,7 +156,9 @@ fn a_file_backed_database_takes_its_limits_and_reopens() {
         let conn = Connection::open(&db).unwrap();
         conn.execute_batch(&format!("SET memory_limit = '512MiB'; SET temp_directory = '{}';", tmp.display().to_string().replace('\'', "''"))).unwrap();
         let limit: String = conn.query_row("SELECT current_setting('memory_limit')", [], |r| r.get(0)).unwrap();
-        assert!(limit.contains("512"), "{limit}");
+        assert_eq!(limit, "512.0 MiB", "the exact text the store reads back");
+        let spill: String = conn.query_row("SELECT current_setting('temp_directory')", [], |r| r.get(0)).unwrap();
+        assert_eq!(spill, tmp.display().to_string(), "the temp directory read back as set");
         conn.execute_batch("CREATE TABLE t (v BIGINT)").unwrap();
         let mut app = conn.appender("t").unwrap();
         for i in 0..100i64 {
@@ -201,6 +211,8 @@ fn a_csv_view_reflects_edits_a_replacement_and_a_new_column_and_never_locks_the_
     std::fs::write(&csv, "sensor,label,limit_mm,notes\n1,inlet,1.0,hi\n").unwrap();
     let cols: i64 = conn.query_row("SELECT count(*) FROM (DESCRIBE SELECT * FROM sensors)", [], |r| r.get(0)).unwrap();
     assert_eq!(cols, 4);
+    let widened: (i64, String, f64, String) = conn.query_row("SELECT * FROM sensors", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap();
+    assert_eq!(widened, (1, "inlet".to_string(), 1.0, "hi".to_string()), "the rows widen with the describe");
 }
 
 /// The engine's version, pinned: a move of the dependency is a deliberate act.
@@ -209,4 +221,173 @@ fn the_engine_is_the_pinned_version() {
     let conn = Connection::open_in_memory().unwrap();
     let version: String = conn.query_row("SELECT version()", [], |r| r.get(0)).unwrap();
     assert_eq!(version, "v1.5.4", "the bundled engine of duckdb 1.10504.0");
+}
+
+// ---- the first refute round: the read side the store relies on -------------------------------
+
+fn sql_path(p: &std::path::Path) -> String {
+    p.display().to_string().replace('\'', "''")
+}
+
+/// The value variants the engine hands back for the types the store's cells and listing match
+/// on: a changed variant would fall into the store's debug-text arm in silence.
+#[test]
+fn the_value_variants_the_store_matches_on_are_these() {
+    let conn = Connection::open_in_memory().unwrap();
+    let row: Vec<Value> = conn
+        .query_row(
+            "SELECT DATE '2026-01-02', TIME '01:02:03.456789', CAST(1.5 AS DECIMAL(38,2)), INTERVAL '-1.5 seconds', CAST(5 AS HUGEINT), TIMESTAMP '2026-01-02 03:04:05.123456'",
+            [],
+            |r| Ok((0..6).map(|i| r.get::<_, Value>(i).unwrap()).collect()),
+        )
+        .unwrap();
+    assert_eq!(row[0], Value::Date32(20455));
+    assert_eq!(row[1], Value::Time64(TimeUnit::Microsecond, 3_723_456_789));
+    assert!(matches!(&row[2], Value::Decimal(d) if d.to_string() == "1.50"), "{:?}", row[2]);
+    assert_eq!(row[3], Value::Interval { months: 0, days: 0, nanos: -1_500_000_000 });
+    assert_eq!(row[4], Value::HugeInt(5));
+    assert_eq!(row[5], Value::Timestamp(TimeUnit::Microsecond, 1_767_323_045_123_456));
+}
+
+/// The listing's aggregate over a union of tables skips null cells in every term and hands the
+/// last value back typed: a double, a text and a timestamp in microseconds.
+#[test]
+fn the_listing_aggregate_over_a_union_skips_null_cells_and_types_the_last_value() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE a (source VARCHAR, key VARCHAR, index_ms BIGINT, v DOUBLE); \
+         CREATE TABLE b (source VARCHAR, key VARCHAR, index_ms BIGINT, v DOUBLE); \
+         INSERT INTO a VALUES ('s', 'k1', 1, 1.5), ('s', 'k2', 2, 2.5); INSERT INTO b VALUES ('s', NULL, 3, NULL); \
+         CREATE TABLE c (source VARCHAR, key VARCHAR, index_ms BIGINT, v TIMESTAMP); \
+         INSERT INTO c VALUES ('s', 'k', 1, TIMESTAMP '2026-01-02 00:00:00.000002'), ('s', NULL, 2, NULL); \
+         CREATE TABLE d (source VARCHAR, key VARCHAR, index_ms BIGINT, v VARCHAR); \
+         INSERT INTO d VALUES ('s', 'k', 1, 'a'), ('s', 'k', 2, 'b'), ('s', NULL, 3, NULL);",
+    )
+    .unwrap();
+    let agg = "SELECT source, count(v), count(DISTINCT key) FILTER (WHERE v IS NOT NULL), max(CASE WHEN v IS NOT NULL THEN index_ms END), arg_max(v, index_ms)";
+    let (src, cnt, keys, last_ms, last): (String, i64, i64, i64, Value) = conn
+        .query_row(&format!("{agg} FROM (SELECT * FROM a UNION ALL SELECT * FROM b) GROUP BY source"), [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+        .unwrap();
+    assert_eq!((src.as_str(), cnt, keys, last_ms, last), ("s", 2, 2, 2, Value::Double(2.5)));
+    let last: Value = conn.query_row(&format!("{agg} FROM c GROUP BY source"), [], |r| r.get(4)).unwrap();
+    assert_eq!(last, Value::Timestamp(TimeUnit::Microsecond, 1_767_312_000_000_002));
+    let last: Value = conn.query_row(&format!("{agg} FROM d GROUP BY source"), [], |r| r.get(4)).unwrap();
+    assert_eq!(last, Value::Text("b".into()));
+}
+
+/// A positional tie-break after the time column orders every column descending with nulls last,
+/// so a page walk is a total order over the cells.
+#[test]
+fn a_positional_tie_break_sorts_nulls_last_under_desc() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE t (index_ms BIGINT, s VARCHAR); INSERT INTO t VALUES (1, 'a'), (1, NULL), (1, 'b'), (2, NULL);").unwrap();
+    let mut stmt = conn.prepare("SELECT * FROM t ORDER BY index_ms DESC, 1 DESC, 2 DESC LIMIT 2 OFFSET 1").unwrap();
+    let rows: Vec<(i64, Option<String>)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(rows, vec![(1, Some("b".to_string())), (1, Some("a".to_string()))]);
+}
+
+/// An empty table copies to a CSV of its header alone.
+#[test]
+fn an_empty_table_copies_to_a_header_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("em.csv");
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(&format!("CREATE TABLE em (a INTEGER, b INTEGER); COPY em TO '{}' (HEADER, FORMAT CSV);", sql_path(&f))).unwrap();
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "a,b\n");
+}
+
+/// `EXPORT DATABASE` writes the schema with its views, a load script and one CSV per table under
+/// a sanitised file name that never leaves the folder.
+#[test]
+fn export_database_writes_the_schema_its_views_and_sanitised_file_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE em (a INTEGER); CREATE VIEW vv AS SELECT a FROM em; CREATE TABLE u1 (x INTEGER); CREATE TABLE u2 (x INTEGER); CREATE TABLE \"we ird/na\"\"me\" (x INTEGER);",
+    )
+    .unwrap();
+    conn.execute_batch(&format!("EXPORT DATABASE '{}' (FORMAT CSV);", sql_path(&out))).unwrap();
+    let schema = std::fs::read_to_string(out.join("schema.sql")).unwrap();
+    assert!(schema.contains("CREATE VIEW vv AS SELECT a FROM em;"), "{schema}");
+    assert!(out.join("load.sql").exists());
+    let mut names: Vec<String> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+    names.sort();
+    assert_eq!(names, ["em.csv", "load.sql", "schema.sql", "u_.csv", "u__1.csv", "we_ird_na_me.csv"]);
+}
+
+/// The CSV reader's options type a decimal comma where the sniffer would read text, and pad a
+/// ragged file's short rows with nulls instead of dropping them.
+#[test]
+fn the_csv_reader_options_type_a_decimal_comma_and_pad_a_ragged_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let eu = dir.path().join("eu.csv");
+    std::fs::write(&eu, "a;b\n1,5;2\n").unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    let ty = |sql: &str| -> String { conn.query_row(&format!("SELECT column_type FROM (DESCRIBE {sql}) LIMIT 1"), [], |r| r.get(0)).unwrap() };
+    assert_eq!(ty(&format!("SELECT * FROM read_csv_auto('{}')", sql_path(&eu))), "VARCHAR");
+    assert_eq!(ty(&format!("SELECT * FROM read_csv('{}', delim=';', null_padding=true, decimal_separator=',')", sql_path(&eu))), "DOUBLE");
+    let a: f64 = conn.query_row(&format!("SELECT a FROM read_csv('{}', delim=';', null_padding=true, decimal_separator=',')", sql_path(&eu)), [], |r| r.get(0)).unwrap();
+    assert_eq!(a, 1.5);
+    let ragged = dir.path().join("ragged.csv");
+    std::fs::write(&ragged, "a;b;c\n1;2;3\n4;5\n").unwrap();
+    let mut stmt = conn.prepare(&format!("SELECT a, b, c FROM read_csv('{}', delim=';', null_padding=true) ORDER BY a", sql_path(&ragged))).unwrap();
+    let rows: Vec<(i64, i64, Option<i64>)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(rows, vec![(1, 2, Some(3)), (4, 5, None)]);
+}
+
+/// The sniffer's outcomes on the edge files the store meets: a byte-order mark read through, a
+/// header alone typed text with no rows, an empty file one text column, a missing file an I/O
+/// error naming the pattern.
+#[test]
+fn the_sniffer_s_outcomes_on_a_marked_a_header_only_an_empty_and_a_missing_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    let describe = |p: &std::path::Path| -> Vec<(String, String)> {
+        let mut stmt = conn.prepare(&format!("DESCRIBE SELECT * FROM read_csv_auto('{}')", sql_path(p))).unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+    };
+    let bom = dir.path().join("bom.csv");
+    std::fs::write(&bom, "\u{feff}a,b\n1,2\n").unwrap();
+    assert_eq!(describe(&bom), vec![("a".to_string(), "BIGINT".to_string()), ("b".to_string(), "BIGINT".to_string())]);
+    let header = dir.path().join("header.csv");
+    std::fs::write(&header, "a,b\n").unwrap();
+    assert_eq!(describe(&header), vec![("a".to_string(), "VARCHAR".to_string()), ("b".to_string(), "VARCHAR".to_string())]);
+    let n: i64 = conn.query_row(&format!("SELECT count(*) FROM read_csv_auto('{}')", sql_path(&header)), [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 0);
+    let empty = dir.path().join("empty.csv");
+    std::fs::write(&empty, "").unwrap();
+    assert_eq!(describe(&empty), vec![("column0".to_string(), "VARCHAR".to_string())]);
+    let gone = dir.path().join("gone.csv");
+    std::fs::write(&gone, "a,b\n1,2\n").unwrap();
+    conn.execute_batch(&format!("CREATE VIEW gone AS SELECT * FROM read_csv_auto('{}')", sql_path(&gone))).unwrap();
+    std::fs::remove_file(&gone).unwrap();
+    // The store's own form: the view's select rebound, so the missing file is met now.
+    let err = match conn.prepare("DESCRIBE SELECT * FROM gone") {
+        Err(e) => e.to_string(),
+        Ok(mut stmt) => stmt.query([]).and_then(|mut rows| rows.next().map(|_| ())).err().map(|e| e.to_string()).unwrap_or_default(),
+    };
+    assert!(err.contains("IO Error") && err.contains("No files found that match the pattern"), "{err}");
+}
+
+/// A copy into a foreign database is refused by the engine on the first table it already holds,
+/// and the attachment detaches afterwards.
+#[test]
+fn a_copy_into_a_foreign_database_is_refused_and_detaches_after() {
+    let dir = tempfile::tempdir().unwrap();
+    let other = dir.path().join("other.duckdb");
+    {
+        let ext = Connection::open(&other).unwrap();
+        ext.execute_batch("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (42);").unwrap();
+    }
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1);").unwrap();
+    let dbname: String = conn.query_row("SELECT current_database()", [], |r| r.get(0)).unwrap();
+    conn.execute_batch(&format!("ATTACH '{}' AS _vsnap;", sql_path(&other))).unwrap();
+    let err = conn.execute_batch(&format!("COPY FROM DATABASE \"{dbname}\" TO _vsnap;")).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err.contains("Catalog Error") && err.contains("Table with name \"t\" already exists"), "{err}");
+    conn.execute_batch("DETACH _vsnap;").unwrap();
+    let ext = Connection::open(&other).unwrap();
+    let x: i64 = ext.query_row("SELECT x FROM t", [], |r| r.get(0)).unwrap();
+    assert_eq!(x, 42, "the foreign file untouched");
 }
