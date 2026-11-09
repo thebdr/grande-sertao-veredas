@@ -66,7 +66,7 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     el.dataset.object = def.id;
     const box = el.getBBox();
     const below = box.y + box.height + fontSize * 1.05;
-    const tag = s("text", { x: box.x + box.width / 2, y: below, class: "sv-tag", "font-size": fontSize, "text-anchor": "middle" }) as SVGTextElement;
+    const tag = s("text", { x: box.x + box.width / 2, y: below, class: "sv-tag", "font-size": fontSize * 0.8, "text-anchor": "middle" }) as SVGTextElement;
     const label = s("text", { x: box.x + box.width / 2, y: box.y - fontSize * 0.35, class: "sv-label", "font-size": fontSize * 0.85, "text-anchor": "middle" }, def.label) as SVGTextElement;
     const b: Bound = { def, el, box, tag, label, clones: new Map(), lastPlace: new Map() };
     if (def.show === "level") {

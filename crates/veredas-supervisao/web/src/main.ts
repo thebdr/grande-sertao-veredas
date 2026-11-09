@@ -85,16 +85,34 @@ async function run(name: string, sessions: SessionEntry[]) {
       h("tbody", {}, ...rows.map((d) => { const o = objs.get(d.id)!; return h("tr", {}, h("td", {}, badge(o)), h("td", {}, d.label), h("td", { class: "mono" }, o.text ?? "—"), h("td", { class: "mono" }, ago(o.since_ms))); }))));
   }
 
+  // The top bar is built once and updated in place: an element replaced every second would
+  // swallow a click whose press and release fell on either side of the swap.
+  const tabs = [["layout", "Layout"], ["dashboards", "Dashboards"], ["tables", "Tables"], ["series", "Series"], ["alarms", "Alarms"]].map(([k, label]) => {
+    const count = h("span", { class: "count" });
+    const a = h("a", { href: `#${k}`, "data-view": k }, label, count);
+    return { k, a, count };
+  });
+  tabsEl.replaceChildren(...tabs.map((t) => t.a));
+  const figs = binding.headline.map((id) => {
+    const d = binding.objects.find((x) => x.id === id)!;
+    const value = h("span", { class: "mono st-text-stale" }, "—");
+    headline.append(h("span", { class: "fig", "data-object": id }, h("span", { class: "muted" }, d.label), value, d.unit ? h("span", { class: "unit" }, d.unit) : null));
+    return { id, value };
+  });
+
   function renderTop() {
     const n = binding.objects.filter((d) => { const o = objs.get(d.id); return o && o.state !== "normal"; }).length;
     const view = (location.hash.replace(/^#/, "").split("/")[0] || "layout");
-    tabsEl.replaceChildren(...[["layout", "Layout"], ["dashboards", "Dashboards"], ["tables", "Tables"], ["series", "Series"], ["alarms", "Alarms"]].map(([k, label]) =>
-      h("a", { href: `#${k}`, class: view === k ? "on" : "" }, label, k === "alarms" && n ? h("span", { class: "count" }, String(n)) : null)));
-    headline.replaceChildren(...binding.headline.map((id) => {
-      const d = binding.objects.find((x) => x.id === id)!;
-      const o = objs.get(id);
-      return h("span", { class: "fig" }, h("span", { class: "muted" }, d.label), h("span", { class: `mono st-text-${o?.state ?? "stale"}` }, o?.text ?? "—", d.unit ? h("span", { class: "unit" }, d.unit) : null));
-    }));
+    for (const t of tabs) {
+      t.a.className = view === t.k ? "on" : "";
+      t.count.textContent = t.k === "alarms" && n ? String(n) : "";
+      t.count.hidden = !(t.k === "alarms" && n);
+    }
+    for (const f of figs) {
+      const o = objs.get(f.id);
+      f.value.className = `mono st-text-${o?.state ?? "stale"}`;
+      f.value.textContent = o?.text ?? "—";
+    }
     liveEl.className = `live mono ${status?.running && connected ? "on" : "off"}`;
     liveEl.textContent = status ? `${status.running && connected ? "● live" : "○ stopped"} ${clock(status.now_ms)}` : "○ connecting";
   }

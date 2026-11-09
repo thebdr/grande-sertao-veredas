@@ -11,7 +11,7 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; background: var(--canvas); color: var(--text); font: 12.5px/1.45 var(--sans); }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--canvas); color: var(--text); font: 12.5px/1.45 var(--sans); }
 #app { display: flex; flex-direction: column; height: 100vh; }
 button { font: inherit; color: var(--text); background: var(--raised); border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
 button:hover:not(:disabled) { border-color: var(--outline); }
@@ -26,7 +26,7 @@ a { color: inherit; text-decoration: none; }
 .error { color: var(--danger-text); font-family: var(--mono); }
 
 /* ---- the top bar ---- */
-.top { display: flex; align-items: center; gap: 14px; height: 40px; padding: 0 14px; background: var(--title); border-bottom: 1px solid var(--hair); white-space: nowrap; }
+.top { display: flex; overflow: hidden; min-width: 0; align-items: center; gap: 14px; height: 40px; padding: 0 14px; background: var(--title); border-bottom: 1px solid var(--hair); white-space: nowrap; }
 .wordmark { font: 600 13px var(--mono); color: var(--strong); }
 select.plant, span.plant { font: 600 13.5px var(--sans); color: var(--text); background: transparent; border: 0; }
 select.plant option { background: var(--chrome); }
@@ -34,7 +34,7 @@ select.plant option { background: var(--chrome); }
 .tabs a { padding: 4px 10px; border-radius: 6px; color: var(--weak); }
 .tabs a.on { background: var(--accent-soft); color: var(--strong); box-shadow: inset 0 0 0 1px var(--accent-outline); }
 .tabs .count { margin-left: 6px; padding: 0 6px; border-radius: 999px; background: rgba(255,107,107,.18); color: var(--danger-text); font: 600 10.5px var(--mono); }
-.headline { margin-left: auto; display: flex; gap: 18px; }
+.headline { margin-left: auto; display: flex; gap: 18px; min-width: 0; overflow: hidden; }
 .fig { display: flex; gap: 6px; align-items: baseline; }
 .fig .mono { font-size: 13px; }
 .unit { margin-left: 3px; font-size: .8em; color: var(--weak2); }
