@@ -276,3 +276,35 @@ fn health_reads_waiting_then_live_then_idle_on_the_arrival_clock() {
         r.unwrap_or_else(|e| panic!("{id}: {e}"));
     }
 }
+
+/// A stop stores every row the workers sent before it: the workers end first, then the pump
+/// drains the channels dry, cap or no cap, and publishes a last refresh, so a reader still
+/// holding the session sees the final counters and every source ended. The backlog is made
+/// deterministic by holding the health lock the pump's refresh takes while the stop begins.
+#[test]
+fn a_stop_stores_every_row_the_workers_sent_and_publishes_the_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("big.log");
+    write_lines(&log, 0..60_000);
+    let mut cfg = SessionConfig::new("big");
+    cfg.logs.push(log_source("log", &log));
+    cfg.rules.push(readings_rule(None));
+    cfg.start = Some(midnight());
+    let session = Session::start(cfg).unwrap();
+    let live = session.live();
+    assert!(wait(Duration::from_secs(10), || live.health.read().unwrap().contains_key("log")), "the first refresh");
+    // The pump's next refresh waits on this lock, the inner lock in hand, while the tail reads
+    // the file into the channel; the stop that begins meanwhile waits for the inner lock too.
+    let held = live.health.read().unwrap();
+    std::thread::sleep(Duration::from_secs(3));
+    let stopper = std::thread::spawn(move || session.stop());
+    std::thread::sleep(Duration::from_millis(300));
+    drop(held);
+    for (id, r) in stopper.join().unwrap() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    let counters = live.counters.read().unwrap().clone();
+    assert_eq!(rows(&live, "readings"), 60_000, "{counters:?}");
+    assert_eq!((counters.lines, counters.rows), (60_000, 60_000), "the counters final after the stop");
+    assert_eq!(live.health.read().unwrap()["log"].state, HealthState::Ended, "a stopped source reads as ended");
+}

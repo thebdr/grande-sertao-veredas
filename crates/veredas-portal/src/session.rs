@@ -603,8 +603,12 @@ impl Session {
                             std::thread::sleep(PUMP_IDLE);
                         }
                     }
-                    // A final pass, so what arrived up to the stop is stored.
-                    lock(&inner).pump(&live);
+                    // The last passes: the workers are stopped and their senders dropped, so
+                    // the channels drain dry, cap or no cap, and every row they sent is stored;
+                    // then the end is published, the refresh timer notwithstanding, so a reader
+                    // still holding the session sees every source ended and the final counters.
+                    while lock(&inner).pump(&live) > 0 {}
+                    lock(&inner).refresh_now(&live);
                 })
                 .map_err(|e| SessionError::Spawn { id: cfg.name.clone(), source: SourceError::NotConfigured(format!("spawn the pump: {e}")) })?
         };
@@ -623,21 +627,24 @@ impl Session {
 
     /// Stop every worker and the pump, join them all, and report each worker's end.
     pub fn stop(mut self) -> Vec<(SourceId, Result<(), SourceError>)> {
+        // The workers first, so every event they sent stands in the channels when the pump
+        // drains them dry; then the pump, whose last passes take everything and publish the end.
+        let ended = lock(&self.inner).stop_workers();
         self.stop.store(true, Ordering::Relaxed);
         if let Some(p) = self.pump.take() {
             let _ = p.join();
         }
-        lock(&self.inner).stop_workers()
+        ended
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
+        lock(&self.inner).stop_workers();
         self.stop.store(true, Ordering::Relaxed);
         if let Some(p) = self.pump.take() {
             let _ = p.join();
         }
-        lock(&self.inner).stop_workers();
     }
 }
 
@@ -888,6 +895,12 @@ impl Inner {
         }
     }
 
+    /// A refresh now, the timer notwithstanding: the last one after a stop.
+    fn refresh_now(&mut self, live: &Live) {
+        self.vitals_at = None;
+        self.refresh(live);
+    }
+
     fn refresh(&mut self, live: &Live) {
         let due = self.vitals_at.is_none_or(|at| at.elapsed() >= VITALS_EVERY);
         if !due {
@@ -987,9 +1000,6 @@ impl Inner {
     /// One pass: drain every source's events into rows and frames, flush, refresh what is
     /// shown. Returns how many events were drained; the cap means more are pending.
     fn pump(&mut self, live: &Live) -> usize {
-        if self.stopped {
-            return 0;
-        }
         self.counters.passes += 1;
         let lines = self.pump_lines(live);
         let polls = self.pump_opc();

@@ -327,3 +327,7 @@ Recorded as the port meets them.
   rotations inside the sweep's drain grace put a generation before the cursor's own (C-036,
   found by CI, reproduced deterministically with a long grace). Order needs the sweep to end at
   the cursor's file; the next sweep, after the cursor has read it, takes the rest.
+- **Stop the producers before the consumer.** The session joined its pump before its workers, so
+  what the workers sent after the pump's last pass, and any backlog past one pass's cap, was lost
+  on a stop, and no refresh ran after the workers ended, so a stopped source read live for ever
+  (C-043, round 1). The workers end first; the consumer drains dry and publishes the end.
