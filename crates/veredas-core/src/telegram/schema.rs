@@ -374,7 +374,7 @@ pub fn load(text: &str) -> Result<ChannelSpec, SchemaError> {
             if s.first == s.last && s.skip_duplicates {
                 return Err(invalid("sequence: a cycle of one number cannot skip duplicates (every frame would repeat)"));
             }
-            // DECISION PENDING (docs/questions.md Q11): the receiver tells the connect keep-alive
+            // The rule (docs/questions.md Q11, decided 2026-11-09): the receiver tells the connect keep-alive
             // by its number, so a cycle that can stamp that number would hide a keep-alive from
             // the duplicate check and let a data frame repeat the last one.
             if (s.first..=s.last).contains(&s.connect) {
