@@ -303,6 +303,9 @@ struct Inner {
     vitals_at: Option<Instant>,
     idle_after_ms: i64,
     stopped: bool,
+    /// Each worker's outcome at the stop (none for a clean end, the text of a failure), read by
+    /// the last refresh once the runtimes are gone, so a failed source stays failed.
+    ended: HashMap<String, Option<String>>,
 }
 
 struct SeriesLastLocal {
@@ -584,6 +587,7 @@ impl Session {
             vitals_at: None,
             idle_after_ms: cfg.idle_after_ms.max(1),
             stopped: false,
+            ended: HashMap::new(),
         }));
         // Hold the senders the workers write to, so a session with no source of a kind never
         // sees its receiver disconnect.
@@ -672,6 +676,9 @@ impl Inner {
         for rt in std::mem::take(&mut self.channels) {
             let id = SourceId::new(&rt.writer.source_id);
             out.push((id, rt.handle.join()));
+        }
+        for (id, r) in &out {
+            self.ended.insert(id.as_str().to_string(), r.as_ref().err().map(|e| e.to_string()));
         }
         out
     }
@@ -944,6 +951,10 @@ impl Inner {
             for r in set.worker_reports() {
                 reports.insert(r.id.as_str().to_string(), (r.finished, r.error));
             }
+        }
+        // The outcomes the stop kept: a failed worker stays failed, a clean one is ended.
+        for (id, err) in &self.ended {
+            reports.insert(id.clone(), (true, err.clone()));
         }
         let mut states: HashMap<String, HealthState> = HashMap::new();
         for rt in &mut self.opc {

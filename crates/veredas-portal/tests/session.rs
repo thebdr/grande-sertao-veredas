@@ -308,3 +308,38 @@ fn a_stop_stores_every_row_the_workers_sent_and_publishes_the_end() {
     assert_eq!((counters.lines, counters.rows), (60_000, 60_000), "the counters final after the stop");
     assert_eq!(live.health.read().unwrap()["log"].state, HealthState::Ended, "a stopped source reads as ended");
 }
+
+/// A worker that failed stays failed after the stop: the stop's last refresh keeps each worker's
+/// outcome, so a reader still holding the session reads the failure's text, never a clean end.
+#[test]
+fn a_failed_worker_still_reads_as_failed_after_the_stop() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("app_notadate.log"), "x\n").unwrap();
+    let mut cfg = SessionConfig::new("failing");
+    cfg.logs.push(LogSourceConfig {
+        id: "fam".into(),
+        display_name: "a family on which no key parses".into(),
+        kind: LogKind::Family {
+            dir: dir.path().to_string_lossy().into_owned(),
+            pattern: r"app_(?P<date>\w+)\.log".into(),
+            date_format: Some("%Y%m%d".into()),
+            active: ActiveConfig::Newest,
+            recursive: false,
+        },
+        timestamp: None,
+    });
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    let live = session.live();
+    let failed = |live: &Live| live.health.read().unwrap().get("fam").map(|h| matches!(h.state, HealthState::Failed(_))).unwrap_or(false);
+    assert!(wait(Duration::from_secs(10), || failed(&live)), "{:?}", live.health.read().unwrap());
+    let text = match &live.health.read().unwrap()["fam"].state {
+        HealthState::Failed(t) => t.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert!(text.contains("key groups parse on no member"), "{text}");
+    let ended = session.stop();
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0].1.as_ref().map_err(|e| e.to_string()), Err(text.clone()), "the stop returns the failure");
+    assert_eq!(live.health.read().unwrap()["fam"].state, HealthState::Failed(text), "and the health keeps it after the stop");
+}
