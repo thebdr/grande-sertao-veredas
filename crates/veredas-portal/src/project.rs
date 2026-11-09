@@ -1140,32 +1140,17 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
                 if let Some(sec) = sec {
                     notes.push(format!("opc `{}`: security `{sec}` was never implemented; the source is carried without it", s.id));
                 }
-                let (user, secret) = match auth {
-                    v1::Auth::Anonymous => (None, None),
-                    v1::Auth::UserPass { username } => {
-                        // The password lived in the machine's credential store, which the file
-                        // cannot carry: the entry is named for the source as a plain word (letters,
-                        // digits, `_`, `-` and `.`; anything else `_`; a word taken gets `_2`, `_3`),
-                        // so the call the note gives seals it in any shell, with no quoting to bend.
-                        let base: String = s.id.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '_' }).collect();
-                        let mut word = base.clone();
-                        let mut n = 2;
-                        while !entries.insert(word.clone()) {
-                            word = format!("{base}_{n}");
-                            n += 1;
-                        }
-                        notes.push(format!(
-                            "opc `{}`: the password lived in the machine's credential store; seal it as the entry `{word}` with `veredas-portal --secret <project.toml> {word}`, the key in the variable `{V1_KEY_ENV}`",
-                            s.id
-                        ));
-                        (Some(username.clone()), Some(word))
-                    }
+                let (user, wants_secret) = match auth {
+                    v1::Auth::Anonymous => (None, false),
+                    // The password lived in the machine's credential store, which the file cannot
+                    // carry: the entry is named below, once the source is known to be carried (Q15).
+                    v1::Auth::UserPass { username } => (Some(username.clone()), true),
                     v1::Auth::Certificate => {
                         notes.push(format!("opc `{}`: certificate authentication was never implemented; the source is carried anonymous", s.id));
-                        (None, None)
+                        (None, false)
                     }
                 };
-                let mut source = OpcSourceConfig { source_id: s.id.clone(), display_name, endpoint_url: endpoint_url.clone(), user, secret, poll_ms: (*poll_ms).max(1) as u64, rules: Vec::new() };
+                let mut source = OpcSourceConfig { source_id: s.id.clone(), display_name, endpoint_url: endpoint_url.clone(), user, secret: None, poll_ms: (*poll_ms).max(1) as u64, rules: Vec::new() };
                 for r in rules.opc.iter().filter(|r| r.source_id == s.id) {
                     if !r.enabled {
                         notes.push(format!("opc rule `{}` was disabled: not carried", r.name));
@@ -1198,6 +1183,26 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
                 if source.rules.is_empty() {
                     notes.push(format!("opc `{}`: no rule mapped its tags: not carried (write its [[opc]] with its rules when it is wanted)", s.id));
                     continue;
+                }
+                if wants_secret {
+                    // The entry is named for the source as a plain word (letters, digits, `_`, `-`
+                    // and `.`; anything else `_`, every leading `-` too, so the tool never reads it
+                    // as an option; a word taken gets `_2`, `_3`), so the call the note gives seals
+                    // it in any shell, with no quoting to bend. A source not carried names no entry.
+                    let mut base: String = s.id.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '_' }).collect();
+                    let dashes = base.len() - base.trim_start_matches('-').len();
+                    base.replace_range(..dashes, &"_".repeat(dashes));
+                    let mut word = base.clone();
+                    let mut n = 2;
+                    while !entries.insert(word.clone()) {
+                        word = format!("{base}_{n}");
+                        n += 1;
+                    }
+                    notes.push(format!(
+                        "opc `{}`: the password lived in the machine's credential store; seal it as the entry `{word}` with `veredas-portal --secret <project.toml> {word}`, the key in the variable `{V1_KEY_ENV}`",
+                        s.id
+                    ));
+                    source.secret = Some(word);
                 }
                 opc.push(source);
             }
