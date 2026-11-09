@@ -380,8 +380,10 @@ fn the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_s
     assert!(matches!(&h["plc"].state, HealthState::Retrying(why) if !why.is_empty()), "{:?}", h["plc"].state);
     assert!(matches!(&h["sorter"].state, HealthState::Retrying(why) if why.contains("connecting")), "{:?}", h["sorter"].state);
     // A listener that never reads: once more than the channel's 256 frames went out, it lags,
-    // and the plant's lines kept flowing meanwhile.
-    let deadline = Instant::now() + Duration::from_secs(60);
+    // and the plant's lines kept flowing meanwhile. The plant is away here, so every frame is a
+    // line: some 260 writes at 55 ms, 15 s on a quiet machine; the bound is for a hang, not a
+    // pace (a loaded machine took over a minute once, with 49 frames in).
+    let deadline = Instant::now() + Duration::from_secs(240);
     let mut i = 70u32;
     while live.counters.read().unwrap().frames <= 260 && Instant::now() < deadline {
         write_lines(&log, i..i + 1);
