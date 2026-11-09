@@ -301,53 +301,37 @@ fn banned_among<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
 
 /// Every crate in a package's resolved normal and build dependency graph with the features
 /// given (dev-dependencies left out: the bench is a fixture, and a fixture may carry anything),
-/// by name: what cargo would build for it, asked with `cargo metadata` and walked from its node
-/// by package id, following only the edges whose kinds are normal or build.
+/// by name: what cargo would build for that package alone, on every platform, asked with
+/// `cargo tree -p <package>` following only normal and build edges. Not `cargo metadata`, which
+/// resolves the whole workspace: once another member (supervisão) uses the gateway's default
+/// features, the workspace's resolve unifies them into the gateway's node, though a build of the
+/// gateway alone without them never compiles them.
 fn dependency_graph(manifest: &Path, features: &[&str]) -> (std::collections::BTreeSet<String>, usize) {
+    let text = std::fs::read_to_string(manifest).unwrap();
+    let name = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("name = \"").and_then(|r| r.strip_suffix('"')))
+        .unwrap_or_else(|| panic!("no package name in {}", manifest.display()))
+        .to_string();
     // Not offline: the graph spans every platform, and a registry cache holds only what this
     // platform fetched to build, so a fresh machine may fetch the rest of the index.
     let mut cmd = Command::new(env!("CARGO"));
-    cmd.args(["metadata", "--format-version", "1"]);
+    cmd.args(["tree", "-e", "normal,build", "--target", "all", "--prefix", "none", "-f", "{p}", "-p", &name]);
     for f in features {
         cmd.arg(f);
     }
     let out = cmd.arg("--manifest-path").arg(manifest).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let meta: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    let packages = meta["packages"].as_array().unwrap();
-    let name_of = |id: &str| -> String {
-        packages.iter().find(|p| p["id"].as_str() == Some(id)).map(|p| p["name"].as_str().unwrap().to_string()).unwrap()
-    };
-    let wanted = manifest.canonicalize().unwrap();
-    let root = packages
-        .iter()
-        .find(|p| Path::new(p["manifest_path"].as_str().unwrap()).canonicalize().unwrap() == wanted)
-        .unwrap()["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let nodes = meta["resolve"]["nodes"].as_array().unwrap();
-    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut packages: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut names = std::collections::BTreeSet::new();
-    let mut queue = vec![root];
-    while let Some(id) = queue.pop() {
-        if !seen.insert(id.clone()) {
-            continue;
-        }
-        names.insert(name_of(&id));
-        let node = nodes.iter().find(|n| n["id"].as_str() == Some(&id)).unwrap();
-        for dep in node["deps"].as_array().unwrap() {
-            // A dependency may be declared in several tables; follow it when any is not dev.
-            let not_dev = dep["dep_kinds"]
-                .as_array()
-                .map(|kinds| kinds.iter().any(|k| k["kind"].as_str() != Some("dev")))
-                .unwrap_or(true);
-            if not_dev {
-                queue.push(dep["pkg"].as_str().unwrap().to_string());
-            }
-        }
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        // `name vX.Y.Z (source)`, a repeated subtree marked `(*)`.
+        let mut words = line.split_whitespace();
+        let (Some(n), Some(v)) = (words.next(), words.next()) else { continue };
+        names.insert(n.to_string());
+        packages.insert(format!("{n} {v}"));
     }
-    (names, seen.len())
+    (names, packages.len())
 }
 
 #[test]
