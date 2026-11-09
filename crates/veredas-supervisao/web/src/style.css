@@ -1,11 +1,12 @@
-/* Supervisão: the Veredas "Console / IDE" look (docs/design/README.md), web magenta accent.
-   Every state has a mark and a word; magenta marks selection, focus and primary actions, never
-   a state; writes are shown gated in the warn colour. */
+/* Supervisão: the Veredas "Console / IDE" look (docs/design/README.md), with Veredas' one green
+   accent (docs/questions.md Q22). Every state has a mark and a word; the accent marks selection,
+   focus and primary actions and draws neutral data series, never a state; writes are shown gated
+   in the warn colour. */
 :root {
   --rail: #0f0f11; --title: #111113; --chrome: #161618; --canvas: #141416; --ground: #1b1b1e;
   --card: #191a1d; --raised: #26262a; --hair: #232329; --border: #2a2a30; --input: #2c2c33; --outline: #333339;
   --text: #e8e8ec; --strong: #ffffff; --data: #d4d4da; --weak: #9a9aa3; --weak2: #8a8a92; --label: #7f8088; --muted: #6f6f77;
-  --accent: #ac007c; --accent-tint: #d94ba0; --accent-soft: #3a0b2c; --accent-outline: #6e1a54; --accent-hover: #e86fb5;
+  --accent: #30d158; --accent-tint: #5fe07f; --accent-soft: #1c3a27; --accent-outline: #2f5a3d; --accent-hover: #5fe07f; --on-accent: #08130b; --pill: #132a1c;
   --warn: #ffc864; --near: #b88f3e; --danger: #ff6b6b; --danger-text: #ff8f8f; --neutral: #4a4e5c;
   --sans: "Geist", "Segoe UI", system-ui, sans-serif; --mono: "Geist Mono", "Cascadia Mono", Consolas, monospace;
   color-scheme: dark;
@@ -187,7 +188,7 @@ table.dt { width: 100%; border-collapse: collapse; }
 .inbar { position: relative; min-width: 80px; }
 .inbar-fill { position: absolute; left: 0; top: 2px; bottom: 2px; background: var(--accent-soft); border-radius: 2px; }
 .inbar span { position: relative; }
-.dist .area { fill: rgba(217,75,160,.18); }
+.dist .area { fill: rgba(48,209,88,.16); }
 .dist .median { stroke: var(--weak2); stroke-dasharray: 2 2; }
 
 /* ---- tables and series ---- */

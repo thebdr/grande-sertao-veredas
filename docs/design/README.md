@@ -42,7 +42,7 @@ Scale: screen title 18/600 · section title 13.5/600 · body 12–13 · label 11
 | Where | Accent | Notes |
 |---|---|---|
 | Desktop apps (comissionador) | green `#30D158` | soft bg `#1C3A27`, on-accent text `#08130B`, outline `#2F5A3D`, hover `#5FE07F` |
-| Web (supervisão) | magenta `#AC007C` solid, `#D94BA0` working tint | soft bg `#3A0B2C`, outline `#6E1A54`, hover `#E86FB5` |
+| Web (supervisão) | the same green, `#5FE07F` as its working tint for data series | as the desktop; the mockups' magenta (`#AC007C`) is superseded (`docs/questions.md` Q22) |
 
 **Status.** Warn `#FFC864` (near-full fill `#B88F3E`), danger `#FF6B6B` (text `#FF8F8F`),
 neutral pill `rgba(154,160,166,.14)`.

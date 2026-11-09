@@ -398,7 +398,7 @@ refute round found and what it changed is in the clause's evidence note.
 - **Date:** 2026-11-09
 - **Source:** user (decision 9; docs/design/supervisao/ "Layout overview")
 - **Description:** The page shows a session's SVG layout with every bound element taking its object's state as a mark and a word, levels filling, markers moving along their paths, a selected object in the side panel with its value, sparkline and offered writes, the objects not normal in a "needs attention" list, and the headline in the top bar, all from the object feed.
-- **Verification:** automated → crates/veredas-supervisao/tests/layout.rs | the SVG served as written; the six objects with an element, each with what its way of showing needs in the feed (a state with a mark and a word, a level's fill, a marker's place), a marker moved by the plant; the bundle reading the binding, the layout and the feed and drawing every class of the vocabulary in the web magenta | manual: the page driven in the browser against a bench-fed session (.zen/evidence/C-051.md)
+- **Verification:** automated → crates/veredas-supervisao/tests/layout.rs | the SVG served as written; the six objects with an element, each with what its way of showing needs in the feed (a state with a mark and a word, a level's fill, a marker's place), a marker moved by the plant; the bundle reading the binding, the layout and the feed and drawing every class of the vocabulary in Veredas' green accent (Q22), no magenta of the mockups left | manual: the page driven in the browser against a bench-fed session (.zen/evidence/C-051.md)
 - **Status:** pending verification
 
 ## C-052: The dashboards: every panel kind computed in Rust from the session's store and drawn

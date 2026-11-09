@@ -93,7 +93,7 @@ the gateway, the desktop, the supervision app) each did.
   and the panels, and is verified by driving it (`zen-verify`), never by a unit test alone.
 - **Every state has a mark and a word** (the design's rule): normal ●, near ■, warn ■, alarm !,
   disabled ▨, stale ◌, selected ◆. A rule names the class and the word ("full", "stopped",
-  "fault"); the accent (magenta `#AC007C`) marks selection, focus and primary actions, never a
+  "fault"); the accent (Veredas' green `#30D158`, Q22) marks selection, focus and primary actions, never a
   state. Writes are shown gated (the warn colour) wherever they appear, and disabled while the
   session's switch is off.
 - **Staleness is judged on the arrival clock.** An object is stale when it has no value yet, when its source

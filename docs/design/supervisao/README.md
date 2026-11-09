@@ -17,8 +17,9 @@ destination.
 ## Fidelity
 **Mid-fidelity.** Layout, object anatomy, states and the concepts below are the intended
 direction; exact sizes and numbers are not. The look is the shared Console / IDE direction
-in `../README.md`, with the **web magenta accent** (supervisão absorbs Veredas 1's
-dashboard, which introduced it).
+in `../README.md`. The mockups draw a **web magenta accent** (supervisão absorbs Veredas 1's
+dashboard, which introduced it); the operator chose Veredas' one **green** accent instead
+(`docs/questions.md` Q22), so the page draws in green wherever a mockup shows magenta.
 
 ## Decisions the design builds on
 - **2D layouts in SVG, 3D in glTF.** Both use the same object IDs, so one plain-text binding
@@ -31,7 +32,7 @@ dashboard, which introduced it).
 - **Top bar, one line:** wordmark (`veredas ›`, the web side carries it), plant name, view
   tabs (Layout, Dashboards, Tables, Alarms with a count), four headline figures, live clock.
 - **Plant view:** fills the screen. Sample: a loop sorter with 24 chutes, 4 inductions and
-  a scanner; parcels move along the loop (one, in magenta, is followed). Each chute shows its
+  a scanner; parcels move along the loop (one, in the accent, is followed). Each chute shows its
   fill level and state; the loop shows speed, carriers, occupancy and laps to sort.
   Floating controls only: layer toggles (parcels, states, labels, heat map) top-left,
   legend bottom-left, zoom bottom-right. A tweak switches moving parcels off.
@@ -71,7 +72,7 @@ Every object: one header line (name, plus its binding or state word), then the d
 One vocabulary in every object, each a mark plus a word: running ●, near full ■,
 stopped ■, full ■, fault !, alarm !, stale ◌ (dashed), disabled ▨ (hatched), selected ◆.
 Warn states use `#FFC864`, faults and alarms `#FF6B6B` / `#FF8F8F`, near full `#B88F3E`,
-neutral fill `#4A4E5C`. **Magenta is never a state**: it marks what is selected or followed,
+neutral fill `#4A4E5C`. **The accent is never a state**: it marks what is selected or followed,
 and draws neutral data series.
 
 ## Open points

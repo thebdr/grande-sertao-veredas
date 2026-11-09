@@ -419,3 +419,16 @@ the project, never over the wire) and on the actions the binding file declares.
 **Decided** 2026-11-09 (the operator): **later**, after the 2D layout, the dashboards, the gated
 writes and the several sessions are verified. The binding file's object IDs are the ones a glTF
 model's nodes will carry; no 3D key exists in the binding format until the view does.
+
+## Q22 - Which accent does supervisão draw?
+
+**Raised** 2026-11-09, by the operator, looking at the first page.
+
+The design references (`docs/design/README.md`, `docs/design/supervisao/`) gave the web side a
+magenta accent, after Veredas 1's dashboard, and the desktop side green.
+
+**Decided** 2026-11-09 (the operator): "veredas accent color shall be green (see veredas-desktop
+1)". Supervisão draws Veredas 1's desktop green (`#30D158`, soft `#1C3A27`, outline `#2F5A3D`,
+hover and data series `#5FE07F`, on-accent text `#08130B`); the mockups' magenta reads as the
+accent wherever it appears. The accent stays what it was: selection, focus, primary actions and
+neutral data series, never a plant state.

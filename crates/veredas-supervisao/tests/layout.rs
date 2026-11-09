@@ -57,6 +57,10 @@ fn everything_the_layout_binds_is_served_and_the_page_reads_it() {
     for class in ["normal", "near", "warn", "alarm", "disabled", "stale"] {
         assert!(web::APP_CSS.contains(&format!("sv-state-{class}")), "{class}");
     }
-    assert!(web::APP_CSS.contains("--accent:#ac007c") || web::APP_CSS.contains("--accent: #ac007c"), "the accent is the web magenta");
+    // Veredas' one green accent (Q22), the desktop's: never the mockups' magenta.
+    assert!(web::APP_CSS.contains("--accent:#30d158") || web::APP_CSS.contains("--accent: #30d158"), "the accent is Veredas' green");
+    for magenta in ["ac007c", "d94ba0", "3a0b2c", "6e1a54", "e86fb5"] {
+        assert!(!web::APP_CSS.to_ascii_lowercase().contains(magenta) && !web::APP_JS.to_ascii_lowercase().contains(magenta), "{magenta}");
+    }
     host.stop();
 }
