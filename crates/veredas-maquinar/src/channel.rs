@@ -234,7 +234,10 @@ pub fn start(cfg: ChannelConfig) -> Result<BenchChannel, ChannelError> {
     let name = cfg.name.clone();
     let thread = std::thread::Builder::new()
         .name(format!("maquinar-channel-{name}"))
-        .spawn(move || run(cfg, cyclic, worker_status, req_rx, worker_shutdown))
+        .spawn(move || {
+            let _timer = crate::timer::FineTimer::hold();
+            run(cfg, cyclic, worker_status, req_rx, worker_shutdown)
+        })
         .map_err(ChannelError::Thread)?;
     Ok(BenchChannel { name, status, requests: req_tx, shutdown, thread: Some(thread) })
 }
@@ -347,8 +350,9 @@ fn run(cfg: ChannelConfig, mut cyclic: Vec<(String, u64, Fields)>, status: Arc<M
 
     while !shutdown.load(std::sync::atomic::Ordering::SeqCst) {
         // What the wire said (waiting at most a tick for it).
-        // DECISION PENDING (docs/questions.md Q13): the wait lands at the host's timer quantum,
-        // about 31 ms on Windows unless the process raises the resolution; every due time below
+        // The wait lands at the host's timer quantum, held at a millisecond while the bench runs
+        // (timer::FineTimer; docs/questions.md Q13, decided 2026-11-09), so 20 ms on both
+        // platforms; every due time below
         // is scheduled from the last due time, never from the tick, so the rates hold.
         let mut events = Vec::new();
         if let Some(e) = link.channel.recv_timeout(TICK) {

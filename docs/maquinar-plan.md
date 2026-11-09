@@ -175,9 +175,17 @@ Recorded as the port meets them.
 - **A due time taken from the tick's clock drifts by a tick.** `Instant::now()` after a tick is
   a little past it, so the next due time is just past a boundary and waits one more tick; every
   interval stretched by 20 ms. Schedule from the last due instant and skip what a stall missed
-  (C-026, round 4). The tick itself lands at the host's timer quantum: 20 ms on Linux, about
-  31 on Windows unless the process raises the resolution (`docs/questions.md` Q13); the rates
-  hold, the jitter differs.
+  (C-026, round 4). The tick itself lands at the host's timer quantum, which the bench holds at a
+  millisecond while any of its parts runs (`timer::FineTimer`: on Windows the process opts out
+  of power throttling's timer coarsening, then `timeBeginPeriod(1)`, paired with its release;
+  `docs/questions.md` Q13, decided 2026-11-09): 20 ms on both platforms, where Windows ticked
+  about every 31 ms before. The request alone still ticked every 30 ms on Windows 11, which
+  ignores it from a process without a foreground window; the opt-out is what makes it count.
+- **A timing test measures the host, so it runs alone.** With the timer held fine, the 20 ms
+  tag still drew 65 times in 2 s under the whole suite's sixteen parallel processes (a 31 ms
+  tick, the scheduler's doing, not the timer's), and 95 alone or beside the bench's own tests.
+  `.config/nextest.toml` gives `draws_come_at_their_interval` the machine to itself
+  (`threads-required = 'num-cpus'`); law L7 leaves that file unstamped, as a tool's own.
 - **Dep-info is one compilation's view.** The content check reads what rustc read, so it sees
   only what the `cfg`s of that run compiled in: it builds debug and checks release on the
   platform of the run (Windows here, Linux in CI); another OS, `cfg(doc)` and `cfg(doctest)`

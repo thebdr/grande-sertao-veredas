@@ -71,6 +71,8 @@ fn l7_the_reader_collects_toml_files_but_manifests_and_the_blocks_of_a_reference
             ("fixtures/a.toml", "format = \"veredas-a\"\nversion = 1\n"),
             ("fixtures/B.TOML", "format = \"veredas-b\"\nversion = 1\n"),
             ("tools/leis/tests/data/Cargo.toml", "[package]\nname = \"x\"\n"),
+            // The test runner's own file: a tool's, like a manifest, and no stamp asked of it.
+            (".config/nextest.toml", "[[profile.default.overrides]]\nfilter = 'test(x)'\nthreads-required = 'num-cpus'\n"),
         ],
     );
     let s = leis::Suite::read(tree.path()).expect("the tree reads");

@@ -227,7 +227,9 @@ async fn draws_come_at_their_interval() {
     // a 100 ms tag draws 20 times in 2 s on either platform (the tick adds nothing to the
     // interval; a due time taken from the tick's clock gave 16), and a 20 ms tag draws on every
     // tick. The tick is 20 ms as asked of the runtime's timer, which lands it at the host's
-    // timer quantum: 20 ms on Linux, about 31 on Windows (`docs/questions.md` Q13).
+    // timer quantum, held at a millisecond while the server runs (`timer::FineTimer`;
+    // `docs/questions.md` Q13, decided): 20 ms on both platforms, where it was about 31 on
+    // Windows before.
     let mut slow = tag("slow", TagType::Int, Access::Read, "0");
     slow.randomize = Some(Randomize { low: 0.0, high: 9.0, decimals: 0, interval_ms: 100 });
     let server = start(&config(vec![slow])).expect("starts");
@@ -242,8 +244,7 @@ async fn draws_come_at_their_interval() {
     tokio::time::sleep(Duration::from_millis(2000)).await;
     let draws = server.status().draws;
     server.stop();
-    let floor = if cfg!(windows) { 55 } else { 90 };
-    assert!((floor..=102).contains(&draws), "a 20 ms tag drew {draws} times in 2 s, not one a tick (the tick lands at the host's timer quantum)");
+    assert!((90..=102).contains(&draws), "a 20 ms tag drew {draws} times in 2 s, not one a tick (the bench holds the host's timer at a millisecond)");
 }
 
 #[tokio::test(flavor = "multi_thread")]

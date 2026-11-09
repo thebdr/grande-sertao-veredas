@@ -372,8 +372,10 @@ impl Suite {
         let mut stamped: Vec<(String, String)> = Vec::new();
         for p in &paths {
             let (dir, file) = p.rsplit_once('/').unwrap_or(("", p.as_str()));
-            // The extension in any case: a `.TOML` is a TOML file to every reader of it.
-            if file.to_ascii_lowercase().ends_with(".toml") && !file.eq_ignore_ascii_case("Cargo.toml") {
+            // The extension in any case: a `.TOML` is a TOML file to every reader of it. A cargo
+            // manifest and the test runner's own `.config/nextest.toml` are the tools' files,
+            // not the suite's, and carry no stamp.
+            if file.to_ascii_lowercase().ends_with(".toml") && !file.eq_ignore_ascii_case("Cargo.toml") && p != ".config/nextest.toml" {
                 stamped.push((p.clone(), read(p)?));
             }
             if p.starts_with("docs/") && p.to_ascii_lowercase().ends_with(".md") {

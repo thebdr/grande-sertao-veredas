@@ -492,7 +492,7 @@ fn faults_mark_their_share_of_items_and_the_rate_is_the_interval_s_whatever_the_
     assert!(announces(&run(&mut m, 200, 1)).iter().all(|o| field(o, "read") == "Y" && field(o, "code").starts_with("PKG")));
     assert_eq!(m.status().faults, BTreeMap::from([("noread".to_string(), 0)]));
     // The rate is the interval's, whatever the tick: 100 ms items over 10 s are 100 on ticks
-    // of 10 ms, of 30 ms and of 70 ms alike, and 20 ms items on a 31 ms tick (the Windows
+    // of 10 ms, of 30 ms and of 70 ms alike, and 20 ms items on a 31 ms tick (a coarse
     // quantum) are 500 too, a pass announcing every item due since the last.
     for (tick, interval) in [(10, 100), (30, 100), (70, 100), (31, 20), (250, 100)] {
         let mut m = Controller::new(machine_rules(), Some(1));

@@ -18,3 +18,4 @@ pub mod channel;
 pub mod controller;
 pub mod emit;
 pub mod opc;
+pub mod timer;

@@ -78,7 +78,7 @@ fn the_rate_the_faults_the_full_chutes_and_the_no_reads_are_turned_live_and_meas
     assert!(wait(Duration::from_secs(5), || announced(&machine) >= 3));
 
     // The rate: one item every 100 ms as configured, 20 in 2 s, then every 50 ms (40 in 2 s),
-    // every 20 ms (100 in 2 s, below the host's tick on Windows: a pass announces every item
+    // every 20 ms (100 in 2 s, one a tick now that the bench holds the timer fine: a pass announces every item
     // due since the last), then every 400 ms (5 in 2 s), each the interval's whatever the tick.
     let slow = rate(&unit, Duration::from_secs(2));
     assert!((17..=23).contains(&slow), "{slow} items in 2 s at 100 ms");

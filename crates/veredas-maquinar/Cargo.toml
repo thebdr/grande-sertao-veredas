@@ -32,3 +32,7 @@ tokio = { workspace = true }
 async-opcua-client = { workspace = true }
 # cargo metadata's output (tests/component.rs).
 serde_json = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# The bench holds the host's timer at a millisecond while it runs (timer.rs, Q13).
+windows-sys = { version = "0.59", features = ["Win32_Media", "Win32_System_Threading", "Win32_Foundation"] }

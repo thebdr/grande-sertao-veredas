@@ -12,6 +12,8 @@ use std::time::Duration;
 use veredas_maquinar::bench::{self, Bench};
 
 fn main() {
+    // The host's timer held fine for the whole run: a 20 ms tick on every platform (Q13).
+    let _timer = veredas_maquinar::timer::FineTimer::hold();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut check = false;
     let mut file: Option<PathBuf> = None;

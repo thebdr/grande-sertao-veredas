@@ -547,6 +547,7 @@ pub fn start(cfg: &OpcConfig) -> Result<OpcHandle, OpcError> {
     let thread = std::thread::Builder::new()
         .name("maquinar-opc".into())
         .spawn(move || {
+            let _timer = crate::timer::FineTimer::hold();
             let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
                 Ok(rt) => rt,
                 Err(e) => {
@@ -769,8 +770,9 @@ async fn service_loop(
     let set = |id: &NodeId, value: Variant| {
         let _ = nodes.set_value(handle.subscriptions(), id, None, DataValue::new_now(value));
     };
-    // DECISION PENDING (docs/questions.md Q13): the timer lands a tick at the host's quantum,
-    // about 31 ms on Windows unless the process raises the resolution; the rates hold anyway,
+    // The tick lands at the host's timer quantum, held at a millisecond while the bench runs
+    // (timer::FineTimer; docs/questions.md Q13, decided 2026-11-09), so 20 ms on both platforms;
+    // the rates hold anyway,
     // since every due time is scheduled from the last due time, never from the tick.
     let mut interval = tokio::time::interval(TICK);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
