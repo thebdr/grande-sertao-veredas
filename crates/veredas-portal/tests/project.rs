@@ -591,24 +591,28 @@ fn the_executable_checks_a_project_and_reads_a_veredas_1_folder() {
     let v1 = dir.path().join("v1");
     std::fs::create_dir_all(&v1).unwrap();
     std::fs::write(v1.join("veredas.json"), r#"{ "format": 1, "name": "old" }"#).unwrap();
-    // A log, and a server with a password whose id is not a plain word.
-    std::fs::write(v1.join("sources.json"), r#"[ { "id": "a", "display_name": "", "kind": { "SingleFile": { "path": "a.log" } } }, { "id": "line 2 plc", "display_name": "", "kind": { "OpcUa": { "endpoint_url": "opc.tcp://192.168.0.12:4840/", "security": "None", "auth": { "UserPass": { "username": "operator" } }, "poll_ms": 1000 } } } ]"#).unwrap();
-    std::fs::write(v1.join("rules.json"), r#"{ "extracts": [], "opc": [ { "name": "line2", "source_id": "line 2 plc", "enabled": true, "page": "", "store_on_change": false, "tags": [ { "node_id": "ns=2;s=x", "series": "x", "ty": "float", "writable": false, "bits": [] } ] } ] }"#).unwrap();
+    // A log, and two servers with passwords: one whose id is not a plain word, one whose id is
+    // the plain word the first one's entry takes.
+    std::fs::write(v1.join("sources.json"), r#"[ { "id": "a", "display_name": "", "kind": { "SingleFile": { "path": "a.log" } } }, { "id": "line 2 plc", "display_name": "", "kind": { "OpcUa": { "endpoint_url": "opc.tcp://192.168.0.12:4840/", "security": "None", "auth": { "UserPass": { "username": "operator" } }, "poll_ms": 1000 } } }, { "id": "line_2_plc", "display_name": "", "kind": { "OpcUa": { "endpoint_url": "opc.tcp://192.168.0.13:4840/", "security": "None", "auth": { "UserPass": { "username": "operator" } }, "poll_ms": 1000 } } } ]"#).unwrap();
+    std::fs::write(v1.join("rules.json"), r#"{ "extracts": [], "opc": [ { "name": "line2", "source_id": "line 2 plc", "enabled": true, "page": "", "store_on_change": false, "tags": [ { "node_id": "ns=2;s=x", "series": "x", "ty": "float", "writable": false, "bits": [] } ] }, { "name": "line2b", "source_id": "line_2_plc", "enabled": true, "page": "", "store_on_change": false, "tags": [ { "node_id": "ns=2;s=y", "series": "y", "ty": "float", "writable": false, "bits": [] } ] } ] }"#).unwrap();
     let out = std::process::Command::new(exe).arg("--from-v1").arg(&v1).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let toml = String::from_utf8_lossy(&out.stdout);
     let p = project::load(&toml, &v1).unwrap_or_else(|e| panic!("{e}\n{toml}"));
-    assert_eq!((p.name.as_str(), p.logs.len(), p.opc[0].secret.as_deref()), ("old", 1, Some("line 2 plc")));
+    // The entries are plain words made from the ids, kept distinct, so the notes' calls need no
+    // shell's quoting; the first call as given seals its entry.
+    assert_eq!((p.name.as_str(), p.logs.len(), p.opc.iter().map(|o| o.secret.as_deref()).collect::<Vec<_>>()), ("old", 1, vec![Some("line_2_plc"), Some("line_2_plc_2")]));
     let notes = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(notes.contains("note: not carried, by design"));
-    // The note's call quotes the entry, and the call as given seals it.
-    assert!(notes.contains("seal it as the entry `line 2 plc` with `veredas-portal --secret <project.toml> \"line 2 plc\"`, the key in the variable `VEREDAS_KEY`"), "{notes}");
+    assert!(notes.contains("opc `line 2 plc`: the password lived in the machine's credential store; seal it as the entry `line_2_plc` with `veredas-portal --secret <project.toml> line_2_plc`, the key in the variable `VEREDAS_KEY`"), "{notes}");
+    assert!(notes.contains("opc `line_2_plc`: the password lived in the machine's credential store; seal it as the entry `line_2_plc_2` with `veredas-portal --secret <project.toml> line_2_plc_2`, the key in the variable `VEREDAS_KEY`"), "{notes}");
     std::fs::write(v1.join("project.toml"), toml.as_bytes()).unwrap();
     let key = String::from_utf8(std::process::Command::new(exe).arg("--new-key").output().unwrap().stdout).unwrap();
-    let mut child = std::process::Command::new(exe).arg("--secret").arg(v1.join("project.toml")).arg("line 2 plc").env("VEREDAS_KEY", key.trim()).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    let mut child = std::process::Command::new(exe).arg("--secret").arg(v1.join("project.toml")).arg("line_2_plc").env("VEREDAS_KEY", key.trim()).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
     std::io::Write::write_all(&mut child.stdin.take().unwrap(), b"pw\n").unwrap();
     let sealed = child.wait_with_output().unwrap();
-    assert!(sealed.status.success() && String::from_utf8_lossy(&sealed.stdout).starts_with("sealed `line 2 plc` in "), "{}", String::from_utf8_lossy(&sealed.stderr));
+    assert!(sealed.status.success() && String::from_utf8_lossy(&sealed.stdout).starts_with("sealed `line_2_plc` in "), "{}", String::from_utf8_lossy(&sealed.stderr));
+    assert_eq!(SecretsFile::load(&v1.join("secrets.toml")).unwrap().names().collect::<Vec<_>>(), ["line_2_plc"]);
 }
 
 /// The run mode: the executable serves where the project says (the address it bound, the port

@@ -1060,8 +1060,8 @@ mod v1 {
 /// What the gateway keeps is carried; what it does not (the screens, the grep, the command
 /// sequencer, a disabled part, a telegram source that had no catalog, a security mode never
 /// implemented) is named in the notes, never guessed at. The passwords Veredas 1 kept in the
-/// machine's credential store become entries of the project's secrets file, named after their
-/// source, for the operator to seal with the tool (Q15).
+/// machine's credential store become entries of the project's secrets file, each named for its
+/// source as a plain word, for the operator to seal with the tool (Q15).
 #[cfg(feature = "store")]
 pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
     use crate::opc::{OpcBitConfig, OpcRuleConfig, OpcTagConfig};
@@ -1095,6 +1095,8 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
     };
     let mut log: Vec<LogFile> = Vec::new();
     let mut opc: Vec<OpcSourceConfig> = Vec::new();
+    // The secrets entries the import names, one per source with a password, each a plain word.
+    let mut entries: BTreeSet<String> = BTreeSet::new();
     for s in &sources {
         if !s.enabled {
             notes.push(format!("source `{}` was disabled: not carried (a project has no disabled parts; add it back when it is wanted)", s.id));
@@ -1142,15 +1144,21 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
                     v1::Auth::Anonymous => (None, None),
                     v1::Auth::UserPass { username } => {
                         // The password lived in the machine's credential store, which the file
-                        // cannot carry: the entry is named after the source, for the operator to
-                        // seal with the tool (Q15); the call quotes an id that is not a plain word.
-                        let plain = s.id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
-                        let word = if plain { s.id.clone() } else { format!("\"{}\"", s.id.replace('"', "\\\"")) };
+                        // cannot carry: the entry is named for the source as a plain word (letters,
+                        // digits, `_`, `-` and `.`; anything else `_`; a word taken gets `_2`, `_3`),
+                        // so the call the note gives seals it in any shell, with no quoting to bend.
+                        let base: String = s.id.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '_' }).collect();
+                        let mut word = base.clone();
+                        let mut n = 2;
+                        while !entries.insert(word.clone()) {
+                            word = format!("{base}_{n}");
+                            n += 1;
+                        }
                         notes.push(format!(
-                            "opc `{}`: the password lived in the machine's credential store; seal it as the entry `{}` with `veredas-portal --secret <project.toml> {}`, the key in the variable `{V1_KEY_ENV}`",
-                            s.id, s.id, word
+                            "opc `{}`: the password lived in the machine's credential store; seal it as the entry `{word}` with `veredas-portal --secret <project.toml> {word}`, the key in the variable `{V1_KEY_ENV}`",
+                            s.id
                         ));
-                        (Some(username.clone()), Some(s.id.clone()))
+                        (Some(username.clone()), Some(word))
                     }
                     v1::Auth::Certificate => {
                         notes.push(format!("opc `{}`: certificate authentication was never implemented; the source is carried anonymous", s.id));
