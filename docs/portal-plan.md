@@ -322,3 +322,8 @@ Recorded as the port meets them.
   stamps repeated and skipped rows until the sequence broke the tie; a failed `COPY FROM
   DATABASE` left its `ATTACH` in place and every later snapshot refused. A statement that must
   run whatever happened before it is its own statement.
+- **A sweep stops at the file the cursor holds.** The pre-read sweep of a freshly adopted active
+  skipped the cursor's own retiree (no duplicate) but read the retirees newer than it, so two
+  rotations inside the sweep's drain grace put a generation before the cursor's own (C-036,
+  found by CI, reproduced deterministically with a long grace). Order needs the sweep to end at
+  the cursor's file; the next sweep, after the cursor has read it, takes the rest.

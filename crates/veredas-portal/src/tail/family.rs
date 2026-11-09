@@ -261,13 +261,17 @@ fn newest_catch_up(
 
 /// One fixed-mode sweep: read every retiree not yet in `known`, oldest first. A file whose
 /// identity matches a handle in `skip` is marked known without being read: a live cursor has
-/// already streamed it (the drained old active) or is about to (the freshly opened new active,
-/// which can be renamed into a retiree while this very sweep runs; invariant 3). Returns whether
-/// anything fresh was found; loop until it reports false. `None` means stopped.
+/// already streamed it (the drained old active). A file whose identity matches `stop_at` is the
+/// cursor just opened, renamed into a retiree while this very sweep runs (invariant 3): it is
+/// marked known without being read, and the sweep ends there, so everything newer than it waits
+/// for the cursor to read its file first and the order holds (a second rotation inside the sweep
+/// inverted two generations once). Returns whether anything fresh was found; loop until it
+/// reports false. `None` means stopped.
 fn sweep_unknown_retirees(
     spec: &FamilySpec,
     known: &mut HashSet<String>,
     skip: &[&Handle],
+    stop_at: Option<&Handle>,
     grace: Duration,
     stop: &AtomicBool,
     emit: &mut dyn FnMut(String),
@@ -283,10 +287,14 @@ fn sweep_unknown_retirees(
         if stop.load(Ordering::Relaxed) {
             return Ok(None);
         }
-        let cursor_owned = match Handle::from_path(&f.path) {
-            Ok(h) => skip.iter().any(|identity| h == **identity),
-            Err(_) => false,
-        };
+        let identity = Handle::from_path(&f.path).ok();
+        if let (Some(own), Some(h)) = (stop_at, identity.as_ref())
+            && *h == *own
+        {
+            known.insert(f.file_name.clone());
+            return Ok(Some(false));
+        }
+        let cursor_owned = identity.as_ref().is_some_and(|h| skip.iter().any(|identity| *h == **identity));
         if !cursor_owned {
             read_full(&f.path, grace, stop, emit)?;
         }
@@ -325,7 +333,8 @@ fn fixed_adopt(
                         match sweep_unknown_retirees(
                             spec,
                             known,
-                            &[old.identity(), new_cursor.identity()],
+                            &[old.identity()],
+                            Some(new_cursor.identity()),
                             cfg.drain_grace,
                             stop,
                             emit,
@@ -584,7 +593,7 @@ fn run_family(
                     ActiveMode::Fixed(fixed_name) => {
                         // Replay the birth-window retirees in order...
                         loop {
-                            match sweep_unknown_retirees(&spec, &mut known, &[], cfg.drain_grace, &stop, &mut emit)? {
+                            match sweep_unknown_retirees(&spec, &mut known, &[], None, cfg.drain_grace, &stop, &mut emit)? {
                                 None => return Ok(()),
                                 Some(true) => continue,
                                 Some(false) => break,
@@ -600,7 +609,8 @@ fn run_family(
                                     match sweep_unknown_retirees(
                                         &spec,
                                         &mut known,
-                                        &[cursor.identity()],
+                                        &[],
+                                        Some(cursor.identity()),
                                         cfg.drain_grace,
                                         &stop,
                                         &mut emit,
@@ -753,6 +763,7 @@ fn run_family(
                             &spec,
                             &mut known,
                             &[cursor.identity()],
+                            None,
                             cfg.drain_grace,
                             &stop,
                             &mut emit,

@@ -790,3 +790,51 @@ fn a_padded_hour_specifier_still_gets_its_minutes_filled() {
     assert_eq!((key("t_20261108_9.log"), key("t_20261108_10.log")), (at(9), at(10)));
     assert!(key("t_20261108_9.log") < key("t_20261108_10.log"));
 }
+
+/// Two rotations inside the pre-read sweep of a freshly adopted active: the sweep reads the
+/// retirees older than the cursor's own file and stops at it, so the generation the cursor holds
+/// comes before the ones that retired after it, every line once and in order (the inversion CI
+/// met on a slow runner: a whole generation after its successor, nothing missing).
+#[test]
+fn a_second_rotation_inside_the_pre_read_sweep_keeps_the_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let current = dir.path().join("current.log");
+    let cfg = FamilyTailConfig { use_notify: Some(false), ..cfg(10, 40, 1500) };
+    let (set, rx) = spawn_tail(dir.path(), r"old_(?P<idx>\d+)\.log", ActiveMode::Fixed("current.log".into()), cfg, "two-rotations");
+    std::thread::sleep(Duration::from_millis(300));
+    let until = |rx: &Receiver<LineEvent>, line: &str| -> Vec<String> {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut got = Vec::new();
+        loop {
+            let ev = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())).unwrap_or_else(|_| panic!("timed out waiting for {line}; got {got:?}"));
+            got.push(ev.line.clone());
+            if ev.line == line {
+                return got;
+            }
+        }
+    };
+    // Generation 1, its last line torn; then retired: the flush of the torn line marks the end of
+    // the drain, and the tail then polls the missing active inside its adopt.
+    std::fs::write(&current, "L000000\r\nL000001\r\nL000002").unwrap();
+    let mut got = until(&rx, "L000001");
+    std::fs::rename(&current, dir.path().join("old_1.log")).unwrap();
+    got.extend(until(&rx, "L000002"));
+    std::thread::sleep(Duration::from_millis(300));
+    // Generation 2 born and retired between two looks, then generation 3 as the active: the adopt
+    // opens generation 3 and its pre-read sweep reads generation 2, holding its 1.5 s grace.
+    let staged = dir.path().join("staged.tmp");
+    std::fs::write(&staged, "L000003\r\nL000004\r\nL000005\r\n").unwrap();
+    std::fs::rename(&staged, dir.path().join("old_2.log")).unwrap();
+    std::fs::write(&current, "L000006\r\nL000007\r\nL000008\r\n").unwrap();
+    got.extend(until(&rx, "L000005"));
+    // Inside that grace: generation 3 retires, generation 4 is written and retires, generation 5
+    // is the active. Without the stop, the sweep's next listing read generation 4 before the
+    // cursor had read generation 3.
+    std::fs::rename(&current, dir.path().join("old_3.log")).unwrap();
+    std::fs::write(&current, "L000009\r\nL000010\r\nL000011\r\n").unwrap();
+    std::fs::rename(&current, dir.path().join("old_4.log")).unwrap();
+    std::fs::write(&current, format!("{DONE}\r\n")).unwrap();
+    got.extend(collect_until(&rx, DONE, Duration::from_secs(30)).into_iter().map(|e| e.line));
+    set.stop_all();
+    assert_exact("fixed/two-rotations-in-a-sweep", &got, &expected_sequence(12));
+}
