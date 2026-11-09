@@ -369,3 +369,53 @@ reads ragged, is one branch in the store's CSV scan and one sentence in C-041.
 first reader; whenever it reads a file ragged (any outcome but a regular table), the padded reader
 takes the file: every row kept, a short one padded, a long one widening the schema within 2 048
 lines, the read refused by its line past them. No row is lost or renamed in silence.
+
+## Q18 - How is Veredas 1's export parsing carried?
+
+**Raised** 2026-11-09, planning supervisão (P-008).
+
+Veredas 1's supervision app compiles its plant model by parsing one company's engineering exports
+and control-software project files (its "Layer P": the sorter tables, the line and conveyor
+exports, the tag and alarm dictionaries, a mechanical workbook). That collides with the
+content-agnostic rule (Q8): such parsing is not suite code. The choices: not at all; an outside
+tool that writes the binding file; or a generic importer inside supervisão driven by rule files.
+
+**Taken while asking:** the plant model comes only from plain-text TOML a person or an outside tool
+writes (the binding file, `docs/binding-schema.md`) and the SVG layout it points to.
+
+**Decided** 2026-11-09 (the operator): **not at all.** No export reader is carried, in the suite or
+beside it; binding files are written by hand or by anything, and supervisão reads nothing else.
+
+## Q19 - Where do supervisão's sessions come from?
+
+**Raised** 2026-11-09, planning supervisão (P-008).
+
+Either each session is a `veredas-portal` executable already running, which supervisão reaches over
+HTTP and owns nothing of, or supervisão runs the portal sessions in its own process from project
+files.
+
+**Decided** 2026-11-09 (the operator): **supervisão starts them.** It loads each plant's project
+file and starts its session through portal's library, one executable serving every session; the
+session's portal router is served under supervisão's address (`/s/<name>/portal/`). Supervisão
+still owns no plant connection: every value and every write is portal's.
+
+**Reversible?** Yes: a session reached over HTTP is a second way to fill the same slot.
+
+## Q20 - Who may open supervisão?
+
+**Raised** 2026-11-09, the design's open point "session and permission model for several sessions
+on one host".
+
+**Decided** 2026-11-09 (the operator): **local, no accounts.** The host binds the loopback by
+default; whoever reaches it sees every session alike; a write rests on portal's switch (armed by
+the project, never over the wire) and on the actions the binding file declares.
+
+**Reversible?** Yes: accounts or a read-only remote mode sit in front of the same routes.
+
+## Q21 - The 3D view now or later?
+
+**Raised** 2026-11-09, planning supervisão (P-008).
+
+**Decided** 2026-11-09 (the operator): **later**, after the 2D layout, the dashboards, the gated
+writes and the several sessions are verified. The binding file's object IDs are the ones a glTF
+model's nodes will carry; no 3D key exists in the binding format until the view does.

@@ -167,8 +167,10 @@ The unified web interface for the whole suite.
   config files.
 - Rules: configuration is plain text, never binary, and 3D models are assets it points to;
   owns no plant connection, every value arrives through portal; every write rides portal's
-  gated surface.
-- From Veredas 1: `veredas-supervisao`, `dashboard/`.
+  gated surface; it starts the plants' portal sessions in its own process from their project
+  files (Q19); its plant model is a binding file and an SVG, never a plant's engineering exports
+  (Q18); local, no accounts (Q20); 3D after the 2D views are verified (Q21).
+- From Veredas 1: `veredas-supervisao` (not its export readers), `dashboard/`.
 - Design: `design/supervisao/`.
 
 ### veredas-wms: later
@@ -221,6 +223,10 @@ plan and the decision client are not carried into the suite as code. Then, on Q9
 configurable framing now": core holds no frame layout; a framing engine runs whatever layout a
 versioned channel file describes (`docs/channel-schema.md`), and GENIBELT's layout is such a
 file, outside the suite's code.
+
+2026-11-09, planning supervisão (`docs/questions.md` Q18–Q21, the operator): Veredas 1's parsing
+of one company's engineering exports is not carried at all; supervisão starts the portal sessions
+in its own process; local, no accounts; the 3D view comes later.
 
 ## Next steps
 1. Record each decision above where it applies (component plans, `docs/questions.md`).
