@@ -348,6 +348,87 @@ fn parse_type(text: &str) -> Option<SeriesType> {
 /// A log source built and checked: the source, its timestamp formats, whether it stamps, its display name.
 type BuiltLog = (Box<dyn crate::source::Source>, Vec<String>, bool, String);
 
+/// What the store is opened over, compiled once from a configuration: every capture rule a
+/// table, every OPC source's rules a table each (the source compiled with its secret from
+/// `env`), every channel checked whole and each catalog message a table, the names claimed as
+/// they go, the views named once too. The session compiles with the process's environment; the
+/// project's import (C-046) compiles the same way with an environment of its own, so the engine
+/// can judge the views over the very tables the file creates before the file is printed.
+pub struct Tables {
+    pub specs: Vec<BaseTableSpec>,
+    captures: Vec<(CaptureRule, Vec<Arc<str>>)>,
+    opc_specs: Vec<(PollSpec, usize)>,
+    channel_tables: Vec<HashMap<String, (usize, MessageTable)>>,
+}
+
+pub fn compile_tables(cfg: &SessionConfig, env: &dyn Fn(&str) -> Option<String>, claims: &mut Claims) -> Result<Tables, SessionError> {
+    // The capture rules, each a table.
+    let mut captures: Vec<(CaptureRule, Vec<Arc<str>>)> = Vec::new();
+    let mut specs: Vec<BaseTableSpec> = Vec::new();
+    for rule in &cfg.rules {
+        let name = rule.name.trim();
+        opc::check_name(name).map_err(|reason| SessionError::Rule { name: name.to_string(), reason })?;
+        let mut types = HashMap::new();
+        for (group, ty) in &rule.types {
+            let t = parse_type(ty).ok_or_else(|| SessionError::Rule {
+                name: name.to_string(),
+                reason: format!("group `{group}`: unknown type `{}` (int, float, text or time)", ty.trim()),
+            })?;
+            types.insert(group.clone(), t);
+        }
+        let scope = rule.scope.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        if let Some(s) = scope
+            && !cfg.logs.iter().any(|l| l.id.trim() == s)
+        {
+            return Err(SessionError::Rule { name: name.to_string(), reason: format!("the scope `{s}` is no log source of this session") });
+        }
+        let compiled = CaptureRule::new(name, rule.pattern.trim(), scope.map(SourceId::new), &types, rule.key.as_deref().map(str::trim))?;
+        for (series, _) in compiled.series() {
+            opc::check_name(series).map_err(|reason| SessionError::Rule { name: name.to_string(), reason: format!("group `{series}`: {reason}") })?;
+        }
+        claims.table(name, format!("capture rule `{name}`"))?;
+        specs.push(BaseTableSpec {
+            name: name.to_string(),
+            columns: compiled.series().map(|(n, t)| (n.to_string(), t)).collect(),
+            has_key: compiled.key_group().is_some(),
+        });
+        let columns = compiled.series().map(|(n, _)| Arc::<str>::from(n)).collect();
+        captures.push((compiled, columns));
+    }
+
+    // The OPC sources, each rule a table.
+    let mut opc_specs: Vec<(PollSpec, usize)> = Vec::new();
+    for source in &cfg.opc {
+        let spec = opc::compile(source, env)?;
+        let base = specs.len();
+        for rule in &spec.rules {
+            let (name, columns) = opc::table_of(rule);
+            claims.table(&name, format!("OPC rule `{name}` of source `{}`", spec.source_id))?;
+            specs.push(BaseTableSpec { name, columns, has_key: false });
+        }
+        opc_specs.push((spec, base));
+    }
+
+    // The channels, each checked whole (the framing against the channel file, every reply rule
+    // against the catalog, every message's table within the cap) before anything spawns, each
+    // catalog message a table.
+    let mut channel_tables: Vec<HashMap<String, (usize, MessageTable)>> = Vec::new();
+    for ch in &cfg.channels {
+        let mut tables = HashMap::new();
+        for table in channel::check(ch)? {
+            claims.table(&table.name, format!("message `{}` of channel `{}`", table.name, ch.source_id))?;
+            specs.push(BaseTableSpec { name: table.name.clone(), columns: table.columns.clone(), has_key: false });
+            tables.insert(table.name.clone(), (specs.len() - 1, table));
+        }
+        channel_tables.push(tables);
+    }
+    // The views, named once too: against the base tables and against each other.
+    for def in &cfg.tables {
+        claims.table(def.name.trim(), format!("table `{}`", def.name.trim()))?;
+    }
+    Ok(Tables { specs, captures, opc_specs, channel_tables })
+}
+
 impl Session {
     /// Check the whole configuration, open the store, spawn every source and the pump. A
     /// failure after a source was spawned stops what was spawned and reports it.
@@ -368,70 +449,9 @@ impl Session {
             claims.source("channel", &c.source_id)?;
         }
 
-        // The capture rules, each a table.
-        let mut captures: Vec<(CaptureRule, Vec<Arc<str>>)> = Vec::new();
-        let mut specs: Vec<BaseTableSpec> = Vec::new();
-        for rule in &cfg.rules {
-            let name = rule.name.trim();
-            opc::check_name(name).map_err(|reason| SessionError::Rule { name: name.to_string(), reason })?;
-            let mut types = HashMap::new();
-            for (group, ty) in &rule.types {
-                let t = parse_type(ty).ok_or_else(|| SessionError::Rule {
-                    name: name.to_string(),
-                    reason: format!("group `{group}`: unknown type `{}` (int, float, text or time)", ty.trim()),
-                })?;
-                types.insert(group.clone(), t);
-            }
-            let scope = rule.scope.as_deref().map(str::trim).filter(|s| !s.is_empty());
-            if let Some(s) = scope
-                && !cfg.logs.iter().any(|l| l.id.trim() == s)
-            {
-                return Err(SessionError::Rule { name: name.to_string(), reason: format!("the scope `{s}` is no log source of this session") });
-            }
-            let compiled = CaptureRule::new(name, rule.pattern.trim(), scope.map(SourceId::new), &types, rule.key.as_deref().map(str::trim))?;
-            for (series, _) in compiled.series() {
-                opc::check_name(series).map_err(|reason| SessionError::Rule { name: name.to_string(), reason: format!("group `{series}`: {reason}") })?;
-            }
-            claims.table(name, format!("capture rule `{name}`"))?;
-            specs.push(BaseTableSpec {
-                name: name.to_string(),
-                columns: compiled.series().map(|(n, t)| (n.to_string(), t)).collect(),
-                has_key: compiled.key_group().is_some(),
-            });
-            let columns = compiled.series().map(|(n, _)| Arc::<str>::from(n)).collect();
-            captures.push((compiled, columns));
-        }
-
-        // The OPC sources, each rule a table.
-        let mut opc_specs: Vec<(PollSpec, usize)> = Vec::new();
-        for source in &cfg.opc {
-            let spec = opc::compile(source, &|var| std::env::var(var).ok())?;
-            let base = specs.len();
-            for rule in &spec.rules {
-                let (name, columns) = opc::table_of(rule);
-                claims.table(&name, format!("OPC rule `{name}` of source `{}`", spec.source_id))?;
-                specs.push(BaseTableSpec { name, columns, has_key: false });
-            }
-            opc_specs.push((spec, base));
-        }
-
-        // The channels, each checked whole (the framing against the channel file, every reply
-        // rule against the catalog, every message's table within the cap) before anything
-        // spawns, each catalog message a table.
-        let mut channel_tables: Vec<HashMap<String, (usize, MessageTable)>> = Vec::new();
-        for ch in &cfg.channels {
-            let mut tables = HashMap::new();
-            for table in channel::check(ch)? {
-                claims.table(&table.name, format!("message `{}` of channel `{}`", table.name, ch.source_id))?;
-                specs.push(BaseTableSpec { name: table.name.clone(), columns: table.columns.clone(), has_key: false });
-                tables.insert(table.name.clone(), (specs.len() - 1, table));
-            }
-            channel_tables.push(tables);
-        }
-        // The views, named once too: against the base tables and against each other.
-        for def in &cfg.tables {
-            claims.table(def.name.trim(), format!("table `{}`", def.name.trim()))?;
-        }
+        // Every table the store is opened over, the names claimed as they are compiled; the
+        // project's import compiles the same way (C-046), so the two never drift.
+        let Tables { specs, captures, opc_specs, channel_tables } = compile_tables(&cfg, &|var| std::env::var(var).ok(), &mut claims)?;
 
         // The log sources, built before anything spawns so a bad one refuses the whole session.
         let mut built: Vec<BuiltLog> = Vec::new();

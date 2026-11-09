@@ -360,3 +360,10 @@ Recorded as the port meets them.
   carried the rule scoped to it, and its own self-check then refused the whole folder (C-046,
   round 2). Every part left out is followed to what names it; each is left out and named, so the
   file printed loads and the operator reads why.
+- **A reading of SQL is the wrong tool.** Five rounds of the project file's import tried to tell
+  the tables a view reads from the words of its SQL, and each round found another FROM (a
+  quoted name, a comma join, EXTRACT, IS DISTINCT FROM, a CTE's column list). The engine that
+  will run the file judges it: the import compiles the tables as the session does and opens an
+  in-memory store, and what the engine refuses is left out with the engine's reason (C-046,
+  round 5). What the engine cannot read where the import runs (a CSV on the plant's machine) is
+  no fault of the file: carried as written, named.

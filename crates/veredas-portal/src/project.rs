@@ -438,7 +438,7 @@ struct ChannelFile {
     replies: Vec<ReplyRule>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 struct TableFile {
     name: String,
@@ -498,50 +498,6 @@ fn names_an_offset(text: &str) -> bool {
     formats.iter().any(|f| chrono::DateTime::parse_from_str(&s, f).is_ok())
 }
 
-/// The tables a query reads: every name after FROM or JOIN that is not a call (no `(` follows),
-/// a subquery, a path or a literal, lowered, the last part of a dotted name; a name the query
-/// makes for itself (`WITH x AS (...)`) is left out. Quotes around a name fall away.
-#[cfg(feature = "store")]
-fn tables_read(sql: &str) -> Vec<String> {
-    let mut tokens: Vec<String> = Vec::new();
-    let mut word = String::new();
-    for c in sql.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' {
-            word.push(c.to_ascii_lowercase());
-        } else {
-            if !word.is_empty() {
-                tokens.push(std::mem::take(&mut word));
-            }
-            if !c.is_whitespace() {
-                tokens.push(c.to_string());
-            }
-        }
-    }
-    if !word.is_empty() {
-        tokens.push(word);
-    }
-    let is_word = |t: &str| t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    let own: HashSet<&str> = tokens.windows(3).filter(|w| is_word(&w[0]) && w[1] == "as" && w[2] == "(").map(|w| w[0].as_str()).collect();
-    let mut out: Vec<String> = Vec::new();
-    for i in 0..tokens.len() {
-        if !matches!(tokens[i].as_str(), "from" | "join") {
-            continue;
-        }
-        let Some(mut next) = tokens.get(i + 1).map(String::as_str) else { continue };
-        let mut after = i + 2;
-        while tokens.get(after).map(String::as_str) == Some(".")
-            && let Some(part) = tokens.get(after + 1)
-        {
-            next = part;
-            after += 2;
-        }
-        let is_call = tokens.get(after).map(String::as_str) == Some("(");
-        if is_word(next) && !is_call && !own.contains(next) && !out.iter().any(|t| t == next) {
-            out.push(next.to_string());
-        }
-    }
-    out
-}
 
 /// Read and check a project file whose referenced files live under `base` (the file's folder).
 /// Nothing runs: every rule is compiled once, every referenced file loaded, every path
@@ -1200,35 +1156,7 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
             notes.push(format!("table `{}` had neither SQL nor a CSV: not carried", t.name));
         }
     }
-    // A view over a table nothing in this file creates would make the file refuse itself where
-    // the store opens (a view's SQL is the store's to resolve, C-041), so such a view is left out
-    // and named, and a view over one of those follows. What the file creates: the carried capture
-    // rules' and OPC rules' tables, the carried views, the store's own samples table; a table is
-    // what the SQL reads after FROM or JOIN, never a call, a path or a literal.
-    let mut created: HashSet<String> = rule.iter().map(|r| r.name.to_ascii_lowercase()).collect();
-    created.extend(opc.iter().flat_map(|s| s.rules.iter().map(|r| r.name.to_ascii_lowercase())));
-    created.insert(crate::store::SAMPLES_TABLE.to_ascii_lowercase());
-    created.extend(pending.iter().map(|v| v.name.to_ascii_lowercase()));
-    loop {
-        let before = pending.len();
-        let mut kept = Vec::with_capacity(before);
-        for v in pending {
-            match tables_read(&v.sql).into_iter().find(|t| !created.contains(t)) {
-                Some(t) => {
-                    notes.push(format!(
-                        "table `{}`: its SQL reads `{t}` after FROM or JOIN, a table nothing in this file creates: not carried (write it back once the table is)",
-                        v.name
-                    ));
-                    created.remove(&v.name.to_ascii_lowercase());
-                }
-                None => kept.push(v),
-            }
-        }
-        pending = kept;
-        if pending.len() == before {
-            break;
-        }
-    }
+    // The views are the engine's to judge, below, once the file stands.
     let table = pending;
     let start = match &session.start {
         None => None,
@@ -1306,14 +1234,59 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
         channel: Vec::new(),
         table,
     };
-    let body = toml::to_string_pretty(&file).map_err(|e| invalid(format!("writing the project file: {e}")))?;
-    let toml = format!("# Read into Veredas 2 from a Veredas 1 project folder: check every path and every secret, then keep this file.\n{body}");
-    // The file printed loads, or nothing is printed: a folder that leaves no source to carry, or
-    // a part the import wrote wrong, is refused with the reason and the notes, never handed over
-    // as a file the gateway would then refuse.
-    if let Err(e) = load(&toml, dir) {
+    let mut file = file;
+    let render = |file: &FileV1| -> Result<String, ProjectError> {
+        let body = toml::to_string_pretty(file).map_err(|e| invalid(format!("writing the project file: {e}")))?;
+        Ok(format!("# Read into Veredas 2 from a Veredas 1 project folder: check every path and every secret, then keep this file.\n{body}"))
+    };
+    let with_notes = |what: &str, e: &dyn std::fmt::Display, notes: &[String]| {
         let notes = notes.iter().map(|n| format!("\nnote: {n}")).collect::<String>();
-        return Err(invalid(format!("the file read from the folder does not load: {e}{notes}")));
+        invalid(format!("the file read from the folder does not {what}: {e}{notes}"))
+    };
+    // The file printed loads and its store opens, or nothing is printed: the file is loaded as
+    // the gateway loads it, its tables compiled as the session compiles them (with a blank in
+    // place of every secret), and an in-memory store opened over them, so the engine that will
+    // run the file judges its views over the very tables it creates. A view the engine refuses
+    // (a table nothing creates, a column no table has, whatever the shape of its SQL) is left
+    // out with the engine's reason, and a view over one of those falls next, until every view
+    // stands. A view over a file the engine cannot read where the import runs (a CSV on the
+    // plant's machine) is no fault of the file: it is carried as written and named, set aside
+    // for the judging, and so is a view that reads it. A folder that leaves no source to carry,
+    // or a part the import wrote wrong, is refused with the reason and the notes, never handed
+    // over as a file the gateway would then refuse.
+    let all: Vec<TableFile> = std::mem::take(&mut file.table);
+    let mut dropped: HashSet<String> = HashSet::new();
+    let mut unjudged: HashSet<String> = HashSet::new();
+    loop {
+        file.table = all.iter().filter(|t| !dropped.contains(t.name.trim()) && !unjudged.contains(t.name.trim())).cloned().collect();
+        let toml = render(&file)?;
+        let project = load(&toml, dir).map_err(|e| with_notes("load", &e, &notes))?;
+        let cfg = project.session_config(chrono::Local::now().naive_local());
+        let tables = crate::session::compile_tables(&cfg, &|_| Some(String::new()), &mut Claims::default()).map_err(|e| with_notes("start", &e, &notes))?;
+        match crate::store::DuckStore::open(&crate::store::Residency::Ram, &tables.specs, &cfg.tables) {
+            Ok(_) => break,
+            Err(crate::store::StoreError::Definition { name, message }) => {
+                let name = name.trim().to_string();
+                let reason = message.lines().next().unwrap_or("").trim().to_string();
+                if !file.table.iter().any(|t| t.name.trim() == name) {
+                    return Err(with_notes("open its store", &format!("table `{name}`: {reason}"), &notes));
+                }
+                let missing = reason.strip_prefix("Catalog Error: Table with name ").and_then(|r| r.strip_suffix(" does not exist!")).map(str::trim);
+                if reason.starts_with("IO Error") {
+                    notes.push(format!("table `{name}`: the engine cannot read its file here ({reason}): carried as written for the plant's machine; check the path"));
+                    unjudged.insert(name);
+                } else if let Some(m) = missing.filter(|m| unjudged.iter().any(|u| u.eq_ignore_ascii_case(m))) {
+                    notes.push(format!("table `{name}`: it reads `{m}`, a view not judged here: carried as written; check it with the file"));
+                    unjudged.insert(name);
+                } else {
+                    notes.push(format!("table `{name}`: the engine refuses it over the tables this file creates ({reason}): not carried (write it back once what it reads is)"));
+                    dropped.insert(name);
+                }
+            }
+            Err(e) => return Err(with_notes("open its store", &e, &notes)),
+        }
     }
+    file.table = all.into_iter().filter(|t| !dropped.contains(t.name.trim())).collect();
+    let toml = render(&file)?;
     Ok(Migrated { toml, notes })
 }
