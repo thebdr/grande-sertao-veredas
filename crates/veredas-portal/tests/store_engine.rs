@@ -610,3 +610,41 @@ fn the_sniffer_s_kept_row_depends_on_the_long_row_and_the_window_ends_at_the_def
     let err = width(&scan(&at_window)).unwrap_err();
     assert!(err.contains("Error when sniffing file"), "a long row at line 20480 is still inside the sniff window: {err}");
 }
+
+// ---- the sixth refute round ------------------------------------------------------------------
+
+/// What decides the sniffer's outcome on a long row: a long row with any row after it collapses
+/// a short file to one column, numeric or text alike, and a long row at line 2 048 with a row
+/// after it makes the file longer than the window and refuses the sniff.
+#[test]
+fn the_sniffer_collapses_a_long_row_followed_by_rows_and_refuses_a_file_past_the_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    let write = |name: &str, text: &str| -> std::path::PathBuf {
+        let p = dir.path().join(name);
+        std::fs::write(&p, text).unwrap();
+        p
+    };
+    let scan = |p: &std::path::Path| format!("read_csv_auto('{}')", sql_path(p));
+    let width = |sql: &str| -> Result<i64, String> {
+        conn.query_row(&format!("SELECT count(*) FROM (DESCRIBE SELECT * FROM {sql})"), [], |r| r.get(0)).map_err(|e| e.to_string())
+    };
+    let lines = |sql: &str| -> Vec<String> {
+        let mut stmt = conn.prepare(&format!("SELECT * FROM {sql}")).unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().map(Result::unwrap).collect()
+    };
+    let numeric = write("numeric_mid.csv", "a;b;c\n1;1;2\n9;9;9;9\n2;1;2\n");
+    assert_eq!(width(&scan(&numeric)), Ok(1), "a numeric long row with a row after it collapses the file");
+    assert_eq!(lines(&scan(&numeric)), ["1;1;2", "9;9;9;9", "2;1;2"]);
+    let text = write("text_first.csv", "a;b;c\na;b;c;d\n1;1;2\n2;1;2\n");
+    assert_eq!(width(&scan(&text)), Ok(1), "a text long row with rows after it collapses the file too");
+    assert_eq!(lines(&scan(&text)), ["a;b;c;d", "1;1;2", "2;1;2"]);
+    let mut long = String::from("a;b;c\n");
+    for i in 0..2046 {
+        long.push_str(&format!("{i};1;2\n"));
+    }
+    long.push_str("9;9;9;9\n2046;1;2\n");
+    let past = write("past_window.csv", &long);
+    let err = width(&scan(&past)).unwrap_err();
+    assert!(err.contains("Error when sniffing file"), "a long row at line 2048 with a row after it: {err}");
+}
