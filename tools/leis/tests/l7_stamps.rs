@@ -58,10 +58,13 @@ fn l7_the_reader_collects_toml_files_but_manifests_and_the_blocks_of_a_reference
                 "# Fences\n\n```toml \nformat = \"veredas-fence\"\nversion = 1\n```\n\n```toml title=\"a\"\nformat = \"veredas-fence\"\nversion = 2\n```\n\n~~~toml\nformat = \"veredas-fence\"\nversion = 3\n~~~\n\n```TOML\nformat = \"veredas-fence\"\nversion = 4\n```\n\n````toml\nformat = \"veredas-fence\"\nversion = 5\ntext = \"\"\"\n```\nstill inside\n\"\"\"\n````\n\n```tomlx\nnot = \"toml\"\n```\n\n```json\n{}\n```\n",
             ),
             // A fence inside a blockquote (its marks taken off the body too), one opening a list
-            // item, one two quotes deep, and a block the text ends before closing.
+            // item, one two quotes deep, one holding a deeper fence line inside a string (not
+            // its closer), one ended by a line without its quote (the blockquote ends there, as
+            // CommonMark has it), a quote inside a list item, a list item inside a list item, a
+            // list mark followed by a tab, and a block the text ends before closing.
             (
                 "docs/held-schema.md",
-                "# Held\n\n> ```toml\n> format = \"veredas-held\"\n> version = 1\n> ```\n\n- ```toml\n  format = \"veredas-held\"\n  version = 2\n  ```\n\n> > ```toml\n> > format = \"veredas-held\"\n> > version = 3\n> > ```\n\n```toml\nformat = \"veredas-held\"\nversion = 4\n",
+                "# Held\n\n> ```toml\n> format = \"veredas-held\"\n> version = 1\n> ```\n\n- ```toml\n  format = \"veredas-held\"\n  version = 2\n  ```\n\n> > ```toml\n> > format = \"veredas-held\"\n> > version = 3\n> > ```\n\n> ```toml\n> format = \"veredas-held\"\n> version = 4\n> text = \"\"\"\n> > ```\n> \"\"\"\n> ```\n\n> ```toml\n> format = \"veredas-held\"\n> version = 5\nplain\n> ```\n\n- > ```toml\n  > format = \"veredas-held\"\n  > version = 6\n  > ```\n\n- - ```toml\n    format = \"veredas-held\"\n    version = 7\n    ```\n\n-\t```toml\n\tformat = \"veredas-held\"\n\tversion = 8\n\t```\n\n```toml\nformat = \"veredas-held\"\nversion = 9\n",
             ),
             ("docs/other-plan.md", "# plan\n\n```rust\nfn x() {}\n```\n"),
             ("docs/upper-schema.MD", "# Upper\n\n```toml\nformat = \"veredas-upper\"\nversion = 1\n```\n"),
@@ -84,6 +87,11 @@ fn l7_the_reader_collects_toml_files_but_manifests_and_the_blocks_of_a_reference
             "docs/held-schema.md block 2",
             "docs/held-schema.md block 3",
             "docs/held-schema.md block 4",
+            "docs/held-schema.md block 5",
+            "docs/held-schema.md block 6",
+            "docs/held-schema.md block 7",
+            "docs/held-schema.md block 8",
+            "docs/held-schema.md block 9",
             "docs/thing-schema.md block 1",
             "docs/thing-schema.md block 2",
             "docs/upper-schema.MD block 1",
@@ -95,6 +103,9 @@ fn l7_the_reader_collects_toml_files_but_manifests_and_the_blocks_of_a_reference
     assert!(block("docs/fences-schema.md block 5").contains("```\nstill inside"), "a shorter fence inside a longer one is text");
     assert_eq!(block("docs/held-schema.md block 1"), "format = \"veredas-held\"\nversion = 1\n", "the quote marks come off the body");
     assert_eq!(block("docs/held-schema.md block 3"), "format = \"veredas-held\"\nversion = 3\n");
-    assert_eq!(block("docs/held-schema.md block 4"), "format = \"veredas-held\"\nversion = 4\n", "a block the text ends before closing");
+    assert!(block("docs/held-schema.md block 4").contains("> ```\n\"\"\"\n"), "a deeper fence line is body, not the closer: {:?}", block("docs/held-schema.md block 4"));
+    assert_eq!(block("docs/held-schema.md block 5"), "format = \"veredas-held\"\nversion = 5\n", "a line without the quote ends the blockquote and the block");
+    assert_eq!(block("docs/held-schema.md block 6"), "format = \"veredas-held\"\nversion = 6\n", "a quote inside a list item");
+    assert_eq!(block("docs/held-schema.md block 9"), "format = \"veredas-held\"\nversion = 9\n", "a block the text ends before closing");
     assert_eq!(strings(leis::stamps(&s)), NONE);
 }

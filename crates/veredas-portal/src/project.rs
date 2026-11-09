@@ -484,6 +484,23 @@ fn v1_absolute(text: &str) -> Option<NaiveDateTime> {
     NaiveDate::parse_from_str(s, "%Y-%m-%d").ok().and_then(|d| d.and_hms_opt(0, 0, 0))
 }
 
+/// Whether a text is a date-time carrying an offset (`Z`, `+02:00`, `+0200`), to the second or
+/// to the minute, with a `T` or a space: a date-time, but not on the plant's clock.
+#[cfg(feature = "store")]
+fn names_an_offset(text: &str) -> bool {
+    let s = text.trim();
+    let s = match s.strip_suffix(['Z', 'z']) {
+        Some(head) => format!("{head}+00:00"),
+        None => s.to_string(),
+    };
+    let formats = [
+        "%Y-%m-%dT%H:%M:%S%.f%:z", "%Y-%m-%d %H:%M:%S%.f%:z", "%Y-%m-%dT%H:%M:%S%:z", "%Y-%m-%d %H:%M:%S%:z",
+        "%Y-%m-%dT%H:%M%:z", "%Y-%m-%d %H:%M%:z", "%Y-%m-%dT%H:%M:%S%.f%z", "%Y-%m-%d %H:%M:%S%.f%z",
+        "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S%z", "%Y-%m-%dT%H:%M%z", "%Y-%m-%d %H:%M%z",
+    ];
+    formats.iter().any(|f| chrono::DateTime::parse_from_str(&s, f).is_ok())
+}
+
 /// Read and check a project file whose referenced files live under `base` (the file's folder).
 /// Nothing runs: every rule is compiled once, every referenced file loaded, every path
 /// resolved, so what comes back can start.
@@ -1125,7 +1142,7 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
             key: (!e.key_group.trim().is_empty()).then(|| e.key_group.trim().to_string()),
         });
     }
-    let mut table: Vec<TableFile> = Vec::new();
+    let mut pending: Vec<TableFile> = Vec::new();
     for t in &tables {
         if !t.enabled {
             notes.push(format!("table `{}` was disabled: not carried", t.name));
@@ -1134,13 +1151,41 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
         if !t.csv_path.trim().is_empty() {
             let d = t.csv_delim.trim();
             let scan = csv_scan_sql(&t.csv_path, &CsvOptions { delim: (!d.is_empty()).then(|| d.to_string()), decimal_comma: t.csv_decimal_comma });
-            table.push(TableFile { name: t.name.clone(), sql: format!("SELECT * FROM {scan}") });
+            pending.push(TableFile { name: t.name.clone(), sql: format!("SELECT * FROM {scan}") });
         } else if !t.sql.trim().is_empty() {
-            table.push(TableFile { name: t.name.clone(), sql: t.sql.trim().to_string() });
+            pending.push(TableFile { name: t.name.clone(), sql: t.sql.trim().to_string() });
         } else {
             notes.push(format!("table `{}` had neither SQL nor a CSV: not carried", t.name));
         }
     }
+    // A view over a table not carried would make the file refuse itself where the store opens
+    // (a view's SQL is the store's to resolve, C-041), so such a view is left out too, named by
+    // the word of its SQL that names the table, and a view over one of those follows; a word is
+    // taken for a table, so a column spelled like one costs a view, which the note says.
+    let carried_rules: HashSet<String> = rule.iter().map(|r| r.name.to_ascii_lowercase()).collect();
+    let carried_opc: HashSet<String> = opc.iter().flat_map(|s| s.rules.iter().map(|r| r.name.to_ascii_lowercase())).collect();
+    let mut dropped: HashSet<String> = rules.extracts.iter().map(|e| e.name.to_ascii_lowercase()).filter(|n| !carried_rules.contains(n)).collect();
+    dropped.extend(rules.opc.iter().map(|r| r.name.to_ascii_lowercase()).filter(|n| !carried_opc.contains(n)));
+    dropped.extend(tables.iter().filter(|t| !t.enabled).map(|t| t.name.to_ascii_lowercase()));
+    loop {
+        let before = pending.len();
+        let mut kept = Vec::with_capacity(before);
+        for v in pending {
+            let words: Vec<String> = v.sql.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).filter(|w| !w.is_empty()).map(str::to_ascii_lowercase).collect();
+            match words.iter().find(|w| dropped.contains(*w)) {
+                Some(w) => {
+                    notes.push(format!("table `{}`: its SQL names `{w}`, a table not carried: not carried (write it back once the table is)", v.name));
+                    dropped.insert(v.name.to_ascii_lowercase());
+                }
+                None => kept.push(v),
+            }
+        }
+        pending = kept;
+        if pending.len() == before {
+            break;
+        }
+    }
+    let table = pending;
     let start = match &session.start {
         None => None,
         Some(s) => match s.kind.as_str() {
@@ -1159,10 +1204,7 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
                     let text = s.absolute.trim();
                     // A date-time with an offset is one, but not on the plant's clock, which is
                     // what this file's times are; it is named as such, not read into a guess.
-                    let with_offset = chrono::DateTime::parse_from_rfc3339(text).is_ok()
-                        || ["%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S%z", "%Y-%m-%dT%H:%M:%S%:z", "%Y-%m-%d %H:%M:%S%:z"]
-                            .iter()
-                            .any(|f| chrono::DateTime::parse_from_str(text, f).is_ok());
+                    let with_offset = names_an_offset(text);
                     notes.push(if with_offset {
                         format!("session.start: the absolute start `{text}` carries an offset, and this file's times are the plant's clock; set `start` by hand; the session starts live")
                     } else {

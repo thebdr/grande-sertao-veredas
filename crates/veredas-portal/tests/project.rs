@@ -351,7 +351,9 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
         "tables.json",
         r#"[ { "name": "hot", "sql": "SELECT * FROM readings WHERE v > 20.0", "enabled": true },
             { "name": "limits", "csv_path": "C:\\ref\\limits.csv", "csv_delim": ";", "csv_decimal_comma": true, "enabled": true },
-            { "name": "gone", "sql": "SELECT 1", "enabled": false } ]"#,
+            { "name": "gone", "sql": "SELECT 1", "enabled": false },
+            { "name": "oldview", "sql": "SELECT y FROM oldrule", "enabled": true },
+            { "name": "older", "sql": "SELECT * FROM OldView", "enabled": true } ]"#,
     );
     // The absolute start as Veredas 1's screens wrote it, with a `T`: carried in this file's spelling.
     w("session.json", r#"{ "start": { "kind": "Absolute", "last_hours": 4, "absolute": "2026-11-08T06:00:00" }, "store": { "mode": "Disk", "disk_dir": "", "memory_limit_mb": 2048, "auto_export_mins": 0, "export_dir": "" } }"#);
@@ -396,11 +398,13 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
         "opc `plc-3`: security `Sign` was never implemented",
         "opc `plc-3`: no rule mapped its tags: not carried",
         "rule `oldrule`: its scope `parked` is a log not carried: not carried (write it back with a scope the project has)",
+        "table `oldview`: its SQL names `oldrule`, a table not carried: not carried (write it back once the table is)",
+        "table `older`: its SQL names `oldview`, a table not carried: not carried (write it back once the table is)",
         "the rules' skew-monitor threshold",
     ] {
         assert!(notes.contains(expected), "no note `{expected}` in:\n{notes}");
     }
-    assert_eq!(migrated.notes.len(), 12, "{notes}");
+    assert_eq!(migrated.notes.len(), 14, "{notes}");
     assert!(migrated.toml.starts_with("# Read into Veredas 2 from a Veredas 1 project folder"));
     // An absolute start in the other spelling is carried too; one that is no date-time is named
     // and the session starts live, never a guess.
@@ -422,6 +426,10 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
     let (p, notes) = import(r#"{ "start": { "kind": "Absolute", "absolute": "2026-11-08T06:00:00+02:00" } }"#);
     assert_eq!(p.start, Start::Live);
     assert!(notes.contains("session.start: the absolute start `2026-11-08T06:00:00+02:00` carries an offset, and this file's times are the plant's clock; set `start` by hand; the session starts live"), "{notes}");
+    // To the minute and with a `Z` too: an offset, not "no date-time".
+    let (p, notes) = import(r#"{ "start": { "kind": "Absolute", "absolute": "2026-11-08T06:00Z" } }"#);
+    assert_eq!(p.start, Start::Live);
+    assert!(notes.contains("the absolute start `2026-11-08T06:00Z` carries an offset"), "{notes}");
     let (p, notes) = import(r#"{ "start": { "kind": "LastHours", "last_hours": 0 }, "store": { "mode": "Hybrid", "disk_dir": "d", "memory_limit_mb": 512, "auto_export_mins": 15, "export_dir": "exp" } }"#);
     assert_eq!((&p.start, &p.store), (&Start::LastHours(1), &Store::Ram));
     for expected in [

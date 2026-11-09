@@ -866,26 +866,31 @@ pub fn history(root: &Path) -> Result<Vec<Violation>, Error> {
 /// item as well, closed by a fence of its own character at least as long and nothing else on
 /// the line, or by the end of the text.
 fn toml_blocks(text: &str) -> Vec<String> {
-    /// A line with its container markers taken off: `>` marks (each with its optional space) and
-    /// one list-item mark (`-`, `*`, `+`, or a number with `.` or `)`), with the count of `>`.
+    /// A line with its container marks taken off, in any order and any number: `>` marks (each
+    /// with its optional space) and list-item marks (`-`, `*`, `+`, or a number with `.` or `)`,
+    /// each followed by a space or a tab), with the count of `>`.
     fn uncontained(line: &str) -> (usize, &str) {
         let mut t = line.trim_start();
         let mut quotes = 0;
-        while let Some(rest) = t.strip_prefix('>') {
-            quotes += 1;
-            t = rest.strip_prefix(' ').unwrap_or(rest).trim_start();
-        }
-        if let Some(rest) = t.strip_prefix(['-', '*', '+']).and_then(|r| r.strip_prefix(' ')) {
-            t = rest.trim_start();
-        } else {
+        loop {
+            if let Some(rest) = t.strip_prefix('>') {
+                quotes += 1;
+                t = rest.strip_prefix(' ').unwrap_or(rest).trim_start();
+                continue;
+            }
+            if let Some(rest) = t.strip_prefix(['-', '*', '+']).and_then(|r| r.strip_prefix([' ', '\t'])) {
+                t = rest.trim_start();
+                continue;
+            }
             let digits = t.chars().take_while(char::is_ascii_digit).count();
             if digits > 0
-                && let Some(rest) = t[digits..].strip_prefix(['.', ')']).and_then(|r| r.strip_prefix(' '))
+                && let Some(rest) = t[digits..].strip_prefix(['.', ')']).and_then(|r| r.strip_prefix([' ', '\t']))
             {
                 t = rest.trim_start();
+                continue;
             }
+            return (quotes, t);
         }
-        (quotes, t)
     }
     /// A fence line, uncontained: its character, its length and its info string.
     fn fence(t: &str) -> Option<(char, usize, &str)> {
@@ -911,6 +916,14 @@ fn toml_blocks(text: &str) -> Vec<String> {
     let mut body = String::new();
     for line in text.lines() {
         let (quotes, t) = uncontained(line);
+        // A line with fewer quote marks than the block was opened under ends the blockquote, and
+        // the block with it, as CommonMark has it; the line itself is then read as what follows.
+        if let Some((_, _, q)) = open
+            && quotes < q
+        {
+            out.push(std::mem::take(&mut body));
+            open = None;
+        }
         match (open, fence(t)) {
             (None, Some((c, n, info))) => {
                 let word = info.trim().split(|ch: char| ch.is_whitespace() || ch == ',' || ch == '{').next().unwrap_or("");
