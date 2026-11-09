@@ -731,3 +731,31 @@ fn a_trailing_run_of_long_rows_from_line_2048_or_before_is_kept_whole_past_the_w
     assert_eq!(width(&scan(&from_2047)), 4);
     assert_eq!(fourth(&scan(&from_2047)), [2047, 2048, 2049], "a run from line 2047 past 2048 is kept whole");
 }
+
+// ---- the ninth refute round ------------------------------------------------------------------
+
+/// A trailing run of text long rows: the run's first row is read as the header and the rest are
+/// kept, so an operator's text row names the view's columns; a single text long row keeps none.
+#[test]
+fn a_trailing_run_of_text_long_rows_reads_its_first_as_the_header_and_keeps_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    let mut text = String::from("a;b;c\n");
+    for line in 2..=101 {
+        text.push_str(&format!("{line};1;2\n"));
+    }
+    text.push_str("p;q;r;s102\np;q;r;s103\n");
+    let p = dir.path().join("text_run.csv");
+    std::fs::write(&p, text).unwrap();
+    let scan = format!("read_csv_auto('{}')", sql_path(&p));
+    let mut stmt = conn.prepare(&format!("DESCRIBE SELECT * FROM {scan}")).unwrap();
+    let cols: Vec<(String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(
+        cols,
+        vec![("p".to_string(), "VARCHAR".to_string()), ("q".to_string(), "VARCHAR".to_string()), ("r".to_string(), "VARCHAR".to_string()), ("s102".to_string(), "VARCHAR".to_string())],
+        "the run's first row read as the header"
+    );
+    let mut stmt = conn.prepare(&format!("SELECT * FROM {scan}")).unwrap();
+    let rows: Vec<(String, String, String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(rows, vec![("p".to_string(), "q".to_string(), "r".to_string(), "s103".to_string())], "the rest of the run kept");
+}
