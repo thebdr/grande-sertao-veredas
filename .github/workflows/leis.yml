@@ -1,9 +1,16 @@
 # The suite on every push: the laws (tools/leis) and every member's tests, bare. Full history,
 # because L6 asks git which commit first added a component (C-006).
+# nextest, as on the desk, so `.config/nextest.toml` reaches CI too (the timer test alone); no
+# fail-fast, so a red run names every failing test. nextest runs no doc tests: they get their own
+# step. The compiled dependencies are cached between runs (DuckDB's bundled library is most of a
+# cold build), saved even when a test fails; a newer push cancels the run it supersedes.
 name: leis
 on:
   push:
   pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -12,4 +19,11 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --workspace
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest run --workspace --no-fail-fast
+      - run: cargo test --workspace --doc

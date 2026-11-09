@@ -187,8 +187,9 @@ Recorded as the port meets them.
   tick, the scheduler's doing, not the timer's), and 95 alone or beside the bench's own tests.
   `.config/nextest.toml` gives `draws_come_at_their_interval` the machine to itself
   (`threads-required = 'num-cpus'`); law L7 leaves that file unstamped, as a tool's own. CI on
-  Linux runs `cargo test --workspace`, which that file does not reach, and a shared runner drew
-  81 in 2 s (the run for c9f39cc): the tick's `MissedTickBehavior::Delay` turns every late
+  Linux ran `cargo test --workspace` then, which that file does not reach, and a shared runner drew
+  81 in 2 s (the run for c9f39cc; CI runs nextest since 2026-11-09, but a shared runner's load is
+  not the suite's alone, so the bound stays): the tick's `MissedTickBehavior::Delay` turns every late
   wake-up into a longer period, so the 20 ms tag's count is a bound against the quantum, not a
   pace: at least 70, where a 31 ms tick (64) cannot reach, at most 102, where two draws a tick
   would; the 100 ms tag's 19 to 21 stays exact, a draw being due from its due time, not from
