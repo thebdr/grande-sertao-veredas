@@ -256,8 +256,8 @@ fn the_machine_s_messages_are_read_into_rows_and_answered_by_rule_while_the_swit
     }
     // Every announcement was answered by the rule, and the outcomes come back to destination 1
     // with a result from the mix, as text rows of the outcome table.
-    let sent: Vec<&(String, String, ReplyOutcome)> = seen.replies.iter().filter(|(on, send, o)| on == "announce" && send == "answer" && *o == ReplyOutcome::Sent).collect();
-    assert!(sent.len() >= announces.len(), "{} replies sent for {} announcements", sent.len(), announces.len());
+    let sent_now = |seen: &Seen| seen.replies.iter().filter(|(on, send, o)| on == "announce" && send == "answer" && *o == ReplyOutcome::Sent).count();
+    assert!(sent_now(&seen) >= announces.len(), "{} replies sent for {} announcements", sent_now(&seen), announces.len());
     assert!(seen.replies.iter().all(|(_, _, o)| *o == ReplyOutcome::Sent), "{:?}", seen.replies);
     let outcome_table = worker.writer.tables().iter().find(|t| t.name == "outcome").unwrap().clone();
     for f in seen.named("outcome") {
@@ -289,10 +289,22 @@ fn the_machine_s_messages_are_read_into_rows_and_answered_by_rule_while_the_swit
     assert!(status.stats.answered >= 5 && status.stats.answered <= status.stats.announced, "{:?}", status.stats);
     assert_eq!(status.stats.unknown_answers, 0);
     assert_eq!(status.stats.invalid_destinations, 0);
-    let portal = worker.writer.status();
-    assert_eq!(portal.replies_sent, sent.len() as u64);
+    // The channel's counters and the replies it reported agree. The machine keeps announcing,
+    // so a reply can be sent between reading the one and draining the other: the test waits for
+    // a moment both read the same count (the whole suite once read 10 against 9).
+    let mut portal = worker.writer.status();
+    assert!(
+        wait(Duration::from_secs(10), || {
+            seen.drain(&rx);
+            portal = worker.writer.status();
+            let n = sent_now(&seen) as u64;
+            portal.replies_sent == n && portal.sent.get("answer").copied() == Some(n)
+        }),
+        "{} replies sent, {:?} in the status",
+        sent_now(&seen),
+        (portal.replies_sent, portal.sent.get("answer"))
+    );
     assert_eq!((portal.replies_withheld, portal.replies_refused, portal.unknown_ids, portal.undecodable), (0, 0, 0, 0));
-    assert_eq!(portal.sent.get("answer").copied(), Some(sent.len() as u64));
     assert!(portal.received.get("announce").copied().unwrap() >= 5);
     assert_eq!(portal.peers.len(), 1);
     assert_eq!(portal.last_error, None);
