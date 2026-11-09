@@ -37,9 +37,10 @@ pub struct OpcSourceConfig {
     /// The user the server knows; absent, the session is anonymous.
     #[serde(default)]
     pub user: Option<String>,
-    /// The environment variable holding the user's password; never the password.
+    /// The entry of the project's secrets file holding the user's password; never the password
+    /// (`docs/questions.md` Q15).
     #[serde(default)]
-    pub password_env: Option<String>,
+    pub secret: Option<String>,
     /// How often the whole tag set is read; one Read per tick covers every tag the rules map.
     #[serde(default = "default_poll_ms")]
     pub poll_ms: u64,
@@ -109,12 +110,12 @@ pub enum OpcError {
     PollTooShort { source_id: String, ms: u64 },
     #[error("source `{source_id}`: the user name is empty")]
     EmptyUser { source_id: String },
-    #[error("source `{source_id}`: `password_env` is given but no `user` is")]
-    PasswordWithoutUser { source_id: String },
-    #[error("source `{source_id}`: the user `{user}` has no `password_env`")]
-    NoPasswordEnv { source_id: String, user: String },
-    #[error("source `{source_id}`: the environment variable `{var}` for the password of `{user}` is not set")]
-    PasswordUnset { source_id: String, user: String, var: String },
+    #[error("source `{source_id}`: `secret` is given but no `user` is")]
+    SecretWithoutUser { source_id: String },
+    #[error("source `{source_id}`: the user `{user}` names no `secret`")]
+    NoSecret { source_id: String, user: String },
+    #[error("source `{source_id}`: the secret `{entry}` for the password of `{user}` is not in the secrets file")]
+    SecretMissing { source_id: String, user: String, entry: String },
     #[error("source `{source_id}`: no rules, so nothing to poll")]
     NoRules { source_id: String },
     #[error("source `{source_id}`, rule `{name}`: {reason}")]
@@ -169,9 +170,9 @@ pub fn parse_type(text: &str) -> Option<SeriesType> {
     }
 }
 
-/// Compile a source's configuration into the spec its worker runs. `secret` answers an
-/// environment variable's name with the password it holds (the session reads the environment;
-/// a test hands in a closure). Nothing connects here.
+/// Compile a source's configuration into the spec its worker runs. `secret` answers an entry's
+/// name with the value the project's secrets file holds (the session opens the file with the
+/// key the environment holds; a test hands in a closure). Nothing connects here.
 pub fn compile(cfg: &OpcSourceConfig, secret: &dyn Fn(&str) -> Option<String>) -> Result<PollSpec, OpcError> {
     let sid = cfg.source_id.trim().to_string();
     let endpoint_url = cfg.endpoint_url.trim().to_string();
@@ -181,19 +182,19 @@ pub fn compile(cfg: &OpcSourceConfig, secret: &dyn Fn(&str) -> Option<String>) -
     if cfg.poll_ms < MIN_POLL_MS {
         return Err(OpcError::PollTooShort { source_id: sid, ms: cfg.poll_ms });
     }
-    let auth = match (&cfg.user, &cfg.password_env) {
+    let auth = match (&cfg.user, &cfg.secret) {
         (None, None) => Auth::Anonymous,
-        (None, Some(_)) => return Err(OpcError::PasswordWithoutUser { source_id: sid }),
-        (Some(user), env) => {
+        (None, Some(_)) => return Err(OpcError::SecretWithoutUser { source_id: sid }),
+        (Some(user), named) => {
             let user = user.trim().to_string();
             if user.is_empty() {
                 return Err(OpcError::EmptyUser { source_id: sid });
             }
-            let Some(var) = env.as_deref().map(str::trim).filter(|v| !v.is_empty()) else {
-                return Err(OpcError::NoPasswordEnv { source_id: sid, user });
+            let Some(entry) = named.as_deref().map(str::trim).filter(|v| !v.is_empty()) else {
+                return Err(OpcError::NoSecret { source_id: sid, user });
             };
-            let Some(password) = secret(var) else {
-                return Err(OpcError::PasswordUnset { source_id: sid, user, var: var.to_string() });
+            let Some(password) = secret(entry) else {
+                return Err(OpcError::SecretMissing { source_id: sid, user, entry: entry.to_string() });
             };
             Auth::UserPass { username: user, password }
         }

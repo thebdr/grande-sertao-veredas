@@ -67,6 +67,9 @@ pub struct SessionConfig {
     pub opc: Vec<OpcSourceConfig>,
     pub channels: Vec<ChannelConfig>,
     pub tables: Vec<TableDef>,
+    /// The project's secrets file and the variable holding its key, opened when the session
+    /// starts (`docs/questions.md` Q15); absent, every source naming a secret is refused by it.
+    pub secrets: Option<crate::secrets::SecretsSource>,
 }
 
 impl SessionConfig {
@@ -83,6 +86,7 @@ impl SessionConfig {
             opc: Vec::new(),
             channels: Vec::new(),
             tables: Vec::new(),
+            secrets: None,
         }
     }
 }
@@ -93,6 +97,9 @@ impl SessionConfig {
 pub enum SessionError {
     #[error("the session has no source")]
     NoSources,
+    /// The secrets file, its key or an entry refused by name, never a value (Q15).
+    #[error(transparent)]
+    Secrets(#[from] crate::secrets::SecretsError),
     #[error("a {0} has an empty id")]
     EmptyId(String),
     #[error("two sources share the id `{0}`")]
@@ -349,11 +356,12 @@ fn parse_type(text: &str) -> Option<SeriesType> {
 type BuiltLog = (Box<dyn crate::source::Source>, Vec<String>, bool, String);
 
 /// What the store is opened over, compiled once from a configuration: every capture rule a
-/// table, every OPC source's rules a table each (the source compiled with its secret from
-/// `env`), every channel checked whole and each catalog message a table, the names claimed as
-/// they go, the views named once too. The session compiles with the process's environment; the
-/// project's import (C-046) compiles the same way with an environment of its own, so the engine
-/// can judge the views over the very tables the file creates before the file is printed.
+/// table, every OPC source's rules a table each (the source compiled with its password from
+/// `secret`, the lookup of an entry of the secrets file by name), every channel checked whole and
+/// each catalog message a table, the names claimed as they go, the views named once too. The
+/// session compiles with the secrets file decrypted in memory (Q15); the project's import (C-046)
+/// compiles the same way with a lookup of its own, so the engine can judge the views over the very
+/// tables the file creates before the file is printed.
 pub struct Tables {
     pub specs: Vec<BaseTableSpec>,
     captures: Vec<(CaptureRule, Vec<Arc<str>>)>,
@@ -361,7 +369,7 @@ pub struct Tables {
     channel_tables: Vec<HashMap<String, (usize, MessageTable)>>,
 }
 
-pub fn compile_tables(cfg: &SessionConfig, env: &dyn Fn(&str) -> Option<String>, claims: &mut Claims) -> Result<Tables, SessionError> {
+pub fn compile_tables(cfg: &SessionConfig, secret: &dyn Fn(&str) -> Option<String>, claims: &mut Claims) -> Result<Tables, SessionError> {
     // The capture rules, each a table.
     let mut captures: Vec<(CaptureRule, Vec<Arc<str>>)> = Vec::new();
     let mut specs: Vec<BaseTableSpec> = Vec::new();
@@ -399,7 +407,7 @@ pub fn compile_tables(cfg: &SessionConfig, env: &dyn Fn(&str) -> Option<String>,
     // The OPC sources, each rule a table.
     let mut opc_specs: Vec<(PollSpec, usize)> = Vec::new();
     for source in &cfg.opc {
-        let spec = opc::compile(source, env)?;
+        let spec = opc::compile(source, secret)?;
         let base = specs.len();
         for rule in &spec.rules {
             let (name, columns) = opc::table_of(rule);
@@ -449,9 +457,19 @@ impl Session {
             claims.source("channel", &c.source_id)?;
         }
 
+        // The secrets file opens first, decrypted in memory under the key the environment holds
+        // (Q15): a session with no `[secrets]` table has none, and a source naming an entry
+        // then refuses by the entry's name. A missing key or a wrong key refuses here, by the
+        // variable's name and the file's path, never by a value.
+        let secrets = match &cfg.secrets {
+            Some(source) => source.open(&|var| std::env::var(var).ok())?,
+            None => crate::secrets::Secrets::none(),
+        };
+
         // Every table the store is opened over, the names claimed as they are compiled; the
         // project's import compiles the same way (C-046), so the two never drift.
-        let Tables { specs, captures, opc_specs, channel_tables } = compile_tables(&cfg, &|var| std::env::var(var).ok(), &mut claims)?;
+        let Tables { specs, captures, opc_specs, channel_tables } =
+            compile_tables(&cfg, &|entry| secrets.get(entry).map(str::to_string), &mut claims)?;
 
         // The log sources, built before anything spawns so a bad one refuses the whole session.
         let mut built: Vec<BuiltLog> = Vec::new();

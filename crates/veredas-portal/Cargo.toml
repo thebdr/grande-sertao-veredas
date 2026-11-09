@@ -43,6 +43,10 @@ serde_json = { workspace = true, optional = true }
 # A file's identity (volume and index), so a renamed file is still the one being read.
 same-file = { workspace = true }
 thiserror = { workspace = true }
+# The secrets file beside a project: its values sealed with ChaCha20-Poly1305, base64 on disk, the key and the nonces from the system's randomness (Q15).
+chacha20poly1305 = { workspace = true }
+base64 = { workspace = true }
+getrandom = { workspace = true }
 
 # The session broadcasts its data frames on a tokio channel, which the server streams.
 tokio = { workspace = true, optional = true }

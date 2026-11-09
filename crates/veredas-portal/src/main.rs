@@ -4,35 +4,67 @@
 //! `--from-v1 <folder>`, read a Veredas 1 project folder into a project file on stdout, the
 //! notes on stderr, and exit.
 //!
-//! Exit codes: 0 when the project ran or the check passed; 2 when the file, a referenced file or
-//! a Veredas 1 folder is refused, or the session or the server could not start, with the reason
-//! on stderr; 1 on a usage error.
+//! The secrets (`docs/questions.md` Q15): `--new-key` prints a fresh key, 64 hexadecimal
+//! characters, and nothing else; `--secret <project.toml> <entry>` reads a value from stdin (to
+//! its end, the final line break dropped), seals it as `<entry>` in the secrets file the project
+//! names, under the key its `key_env` variable holds, and exits; the value is never printed.
+//!
+//! Exit codes: 0 when the project ran, the check passed, a key was printed or an entry sealed; 2
+//! when the file, a referenced file or a Veredas 1 folder is refused, the secrets file or the key
+//! is refused, or the session or the server could not start, with the reason on stderr; 1 on a
+//! usage error.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
 use veredas_portal::project::{self, LogKind, Project, Start, Store};
+use veredas_portal::secrets::{Key256, SecretsFile};
 use veredas_portal::serve;
 use veredas_portal::session::{HealthState, Session};
 
-const USAGE: &str = "usage: veredas-portal <project.toml> [--check] | veredas-portal --from-v1 <folder>";
+const USAGE: &str = "usage: veredas-portal <project.toml> [--check] | veredas-portal --from-v1 <folder> | veredas-portal --new-key | veredas-portal --secret <project.toml> <entry>";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut check = false;
     let mut from_v1: Option<PathBuf> = None;
+    let mut new_key = false;
+    let mut secret: Option<String> = None;
     let mut file: Option<PathBuf> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--check" => check = true,
+            "--new-key" => new_key = true,
+            "--secret" => match (it.next(), it.next()) {
+                (Some(path), Some(entry)) => {
+                    file = Some(PathBuf::from(path));
+                    secret = Some(entry.clone());
+                }
+                _ => usage("`--secret` names a project file and an entry"),
+            },
             "--from-v1" => match it.next() {
                 Some(dir) => from_v1 = Some(PathBuf::from(dir)),
                 None => usage("`--from-v1` names a folder"),
             },
             other if other.starts_with("--") => usage(&format!("unknown option `{other}`")),
             other => file = Some(PathBuf::from(other)),
+        }
+    }
+    if new_key {
+        if file.is_some() || check || from_v1.is_some() {
+            usage("`--new-key` stands alone");
+        }
+        match Key256::fresh() {
+            Ok(key) => {
+                println!("{}", key.to_hex());
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
         }
     }
     if let Some(dir) = from_v1 {
@@ -61,6 +93,12 @@ fn main() {
             std::process::exit(2);
         }
     };
+    if let Some(entry) = secret {
+        if check {
+            usage("`--secret` takes the project file and the entry alone");
+        }
+        seal(&project, &entry);
+    }
     print!("{}", plan(&project));
     if check {
         std::process::exit(0);
@@ -71,6 +109,44 @@ fn main() {
 fn usage(why: &str) -> ! {
     eprintln!("{why}\n{USAGE}");
     std::process::exit(1)
+}
+
+/// Seal the value on stdin as `entry` in the project's secrets file, under the key the project's
+/// variable holds. The value is read to the end of stdin, its final line break dropped, and shows
+/// nowhere: not on stdout, not in an error.
+fn seal(project: &Project, entry: &str) -> ! {
+    let Some(source) = &project.secrets else {
+        eprintln!("the project has no `[secrets]` table: name the file and the `key_env` variable first");
+        std::process::exit(2);
+    };
+    let key = match Key256::from_env(&source.key_env, &|var| std::env::var(var).ok()) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
+    let mut value = String::new();
+    if let Err(e) = std::io::stdin().lock().read_to_string(&mut value) {
+        eprintln!("the value on stdin cannot be read: {e}");
+        std::process::exit(2);
+    }
+    let value = value.strip_suffix('\n').unwrap_or(&value);
+    let value = value.strip_suffix('\r').unwrap_or(value);
+    let sealed = SecretsFile::load_or_empty(&source.file).and_then(|mut f| {
+        f.set(&key, entry, value)?;
+        f.save()
+    });
+    match sealed {
+        Ok(()) => {
+            println!("sealed `{entry}` in {}", source.file.display());
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    }
 }
 
 /// The plan, one line per part: what the project would start.
@@ -91,6 +167,9 @@ fn plan(p: &Project) -> String {
     match p.server {
         Some(addr) => out.push_str(&format!("  server: {addr}\n")),
         None => out.push_str("  server: none\n"),
+    }
+    if let Some(s) = &p.secrets {
+        out.push_str(&format!("  secrets: {} opened with the key `{}` holds\n", s.file.display(), s.key_env));
     }
     for l in &p.logs {
         let what = match &l.kind {

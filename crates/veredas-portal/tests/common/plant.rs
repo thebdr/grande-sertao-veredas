@@ -144,7 +144,7 @@ pub fn opc_source(bench: &Bench) -> OpcSourceConfig {
         display_name: "the plc".into(),
         endpoint_url: bench.server("plc").unwrap().endpoint_url.clone(),
         user: None,
-        password_env: None,
+        secret: None,
         poll_ms: 50,
         rules: vec![OpcRuleConfig {
             name: "plc_main".into(),

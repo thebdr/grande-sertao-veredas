@@ -12,6 +12,7 @@ use chrono::NaiveDate;
 use common::plant::{catalog_text, channel_text};
 use veredas_core::telegram::Role;
 use veredas_portal::project::{self, ActiveConfig, LogKind, Start, Store};
+use veredas_portal::secrets::SecretsSource;
 
 /// The reference, as text.
 fn doc() -> String {
@@ -146,7 +147,9 @@ fn the_worked_example_loads_as_its_prose_says() {
     assert_eq!((rule.name.as_str(), rule.scope.as_deref(), rule.key.as_deref()), ("scans", Some("scanner"), Some("code")));
     assert_eq!(rule.types.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect::<Vec<_>>(), [("code", "int"), ("weight", "float")]);
     let plc = &p.opc[0];
-    assert_eq!((plc.source_id.as_str(), plc.display_name.as_str(), plc.user.as_deref(), plc.password_env.as_deref(), plc.poll_ms), ("plc", "the controller", Some("operator"), Some("PLC_PASSWORD"), 500));
+    assert_eq!((plc.source_id.as_str(), plc.display_name.as_str(), plc.user.as_deref(), plc.secret.as_deref(), plc.poll_ms), ("plc", "the controller", Some("operator"), Some("plc"), 500));
+    // The secrets (Q15): the file the prose names beside the project, the variable it names.
+    assert_eq!(p.secrets, Some(SecretsSource { file: dir.path().join(quoted_after(&prose, "its secrets sit in")), key_env: quoted_after(&prose, "opened with the key the variable") }));
     assert_eq!(plc.rules[0].tags[1].bits[0].series, "running");
     let sorter = &p.channels[0];
     assert_eq!((sorter.source_id.as_str(), sorter.display_name.as_str()), ("sorter", "the sorter"));
@@ -158,6 +161,7 @@ fn the_worked_example_loads_as_its_prose_says() {
     let cfg = p.session_config(now);
     assert_eq!((cfg.name.as_str(), cfg.start, cfg.writes_armed, cfg.idle_after_ms), ("the press hall", NaiveDate::from_ymd_opt(2026, 11, 8).unwrap().and_hms_opt(0, 0, 0), false, 20_000));
     assert_eq!((cfg.logs.len(), cfg.rules.len(), cfg.opc.len(), cfg.channels.len(), cfg.tables.len()), (2, 1, 1, 1, 1));
+    assert_eq!(cfg.secrets, p.secrets, "the session opens the same secrets");
     assert_eq!(cfg.tables[0].name, "heavy");
     // The other starts.
     assert_eq!(Start::Live.resolve(now), None);
@@ -240,6 +244,8 @@ fn every_key_statement_is_the_readers() {
     for (section, table, key) in [
         ("The header and the name", None, "name"),
         ("`[server]`", Some("[server]"), "bind"),
+        ("`[secrets]`", Some("[secrets]"), "key_env"),
+        ("`[[opc]]`", Some("[[opc]]"), "secret"),
         ("`[[log]]`", Some("[[log]]"), "id"),
         ("`[[rule]]`", Some("[[rule]]"), "name"),
         ("`[[rule]]`", Some("[[rule]]"), "pattern"),
@@ -270,6 +276,9 @@ fn every_key_statement_is_the_readers() {
     assert_eq!((&p.start, &p.store, p.writes_armed, p.idle_after_ms), (&Start::Live, &Store::Ram, false, 20_000));
     let no_server = text.replacen("[server]\nbind = \"127.0.0.1:8901\"\n", "", 1);
     assert_eq!(project::load(&no_server, dir.path()).unwrap().server, None);
+    assert!(statement("`[secrets]`", "file").starts_with("default `\"secrets.toml\"`"));
+    let p = project::load(&text.replacen("[secrets]\n", "[secrets]\nfile = \"keys/plant.toml\"\n", 1), dir.path()).unwrap();
+    assert_eq!(p.secrets.unwrap().file, dir.path().join("keys/plant.toml"), "the secrets file resolved beside the project");
     assert!(statement("`[[log]]`", "display_name").starts_with("default the id"));
     assert!(statement("`[[log]]`", "active").starts_with("default `\"newest\"`"));
     assert!(statement("`[[log]]`", "recursive").starts_with("default `false`"));
@@ -312,6 +321,19 @@ fn what_cannot_be_a_project_is_refused_by_name() {
     assert_eq!(r(&text.replacen("name = \"plc_main\"", "name = \"announce\"", 1)), "two tables would be named `announce`: OPC rule `announce` of source `plc` and message `announce` of channel `sorter`");
     assert_eq!(r(&with(&text, "[[opc]]", "source_id", "source_id = \"scanner\"")), "two sources share the id `scanner`");
     assert_eq!(r(&text.replacen("scope = \"scanner\"", "scope = \"nope\"", 1)), "rule `scans`: the scope `nope` is no log of this project");
+    // The secrets (Q15): a source naming an entry needs the table saying where the file and the
+    // key are; the table's own keys are checked; a secret and a user go together.
+    let no_table = text.replacen("[secrets]\nkey_env = \"VEREDAS_KEY\"\n", "", 1);
+    assert!(no_table.len() < text.len());
+    assert_eq!(r(&no_table), "opc `plc`: it names a secret, but the project has no `[secrets]` table (its `file` and `key_env`)");
+    let anonymous = without(&without(&no_table, Some("[[opc]]"), "secret"), Some("[[opc]]"), "user");
+    assert!(project::load(&anonymous, dir.path()).unwrap().secrets.is_none(), "no secret named, no table needed");
+    assert_eq!(r(&with(&text, "[secrets]", "key_env", "key_env = \"  \"")), "secrets: `key_env` is empty: name the environment variable holding the key");
+    assert_eq!(r(&text.replacen("[secrets]\n", "[secrets]\nfile = \" \"\n", 1)), "secrets: `file` is empty: name the secrets file, or leave the key out for `secrets.toml`");
+    let misspelled = r(&text.replacen("[secrets]\n", "[secrets]\nkey_evn = \"X\"\n", 1));
+    assert!(misspelled.contains("`key_evn`"), "{misspelled}");
+    assert_eq!(r(&without(&text, Some("[[opc]]"), "user")), "opc `plc`: source `plc`: `secret` is given but no `user` is");
+    assert_eq!(r(&with(&text, "[[opc]]", "secret", "secret = \" \"")), "opc `plc`: source `plc`: the user `operator` names no `secret`");
     assert_eq!(r("format = \"veredas-project\"\nversion = 1\nname = \"bare\"\n"), "the project has no source: a `[[log]]`, an `[[opc]]` or a `[[channel]]`");
     assert_eq!(r(&without(&text, Some("[[log]]"), "timestamp")), "log `scanner`: a start point in the past needs a timestamp rule, to find the line to start at");
     assert_eq!(r(&text.replacen("weight=(?P<weight>[0-9.]+)", "weight=(?P<weight>[0-9.]+)(?P<Extra>.*)", 1)), "rule `scans`: group `Extra`: the name must start with a lowercase letter or `_`");
@@ -411,7 +433,9 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
     assert_eq!((p.logs[1].display_name.as_str(), p.logs[1].timestamp.is_none()), ("events", true));
     assert_eq!((p.rules.len(), p.rules[0].name.as_str(), p.rules[0].key.as_deref()), (1, "readings", Some("sensor")));
     let plc = &p.opc[0];
-    assert_eq!((plc.source_id.as_str(), plc.user.as_deref(), plc.password_env.as_deref(), plc.poll_ms), ("plc-1", Some("operator"), Some("PLC_1_PASSWORD"), 1000));
+    assert_eq!((plc.source_id.as_str(), plc.user.as_deref(), plc.secret.as_deref(), plc.poll_ms), ("plc-1", Some("operator"), Some("plc-1"), 1000));
+    assert_eq!(p.secrets, Some(SecretsSource { file: v1.join("secrets.toml"), key_env: "VEREDAS_KEY".into() }), "a password to seal: the secrets file beside the project, the suite's variable");
+    assert!(migrated.toml.contains("[secrets]") && migrated.toml.contains("key_env = \"VEREDAS_KEY\"") && migrated.toml.contains("secret = \"plc-1\"") && !migrated.toml.contains("password"), "{}", migrated.toml);
     assert_eq!((plc.rules.len(), plc.rules[0].store_on_change, plc.rules[0].tags.len()), (1, true, 4));
     assert_eq!((plc.rules[0].tags[3].ty.as_str(), plc.rules[0].tags[3].bits.len()), ("int", 1), "bits on a float carried as an int word");
     assert_eq!((plc.rules[0].tags[1].bits[0].width, plc.rules[0].tags[2].ty.as_str(), plc.rules[0].tags[2].writable), (1, "float", true));
@@ -419,7 +443,7 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
     // rule to map its tags, is not carried (a source needs its rules).
     assert_eq!(p.opc.len(), 2, "{}", migrated.toml);
     let plc2 = &p.opc[1];
-    assert_eq!((plc2.source_id.as_str(), plc2.user.as_deref(), plc2.password_env.as_deref(), plc2.poll_ms, plc2.rules.len()), ("plc-2", None, None, 250, 1));
+    assert_eq!((plc2.source_id.as_str(), plc2.user.as_deref(), plc2.secret.as_deref(), plc2.poll_ms, plc2.rules.len()), ("plc-2", None, None, 250, 1));
     assert_eq!(p.tables.len(), 18, "{}", migrated.notes.join("\n"));
     assert_eq!(p.tables[0], ("hot".to_string(), "SELECT * FROM readings WHERE v > 20.0".to_string()));
     assert!(p.tables[1].1.starts_with("SELECT * FROM read_csv(") && p.tables[1].1.contains("decimal_separator"), "{}", p.tables[1].1);
@@ -430,7 +454,7 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
         "opc rule `line1`, tag `ns=2;s=line1.flags`: bits are carved out of an int word; its type `float` became `int`",
         "source `msc` (a telegram channel `CHM` at `0.0.0.0:2000`) is not carried",
         "opc `plc-1`: the password lived in the machine",
-        "`PLC_1_PASSWORD`",
+        "seal it as the entry `plc-1` with `veredas-portal --secret <project.toml> plc-1`, the key in the variable `VEREDAS_KEY`",
         "rule `unused` was disabled",
         "table `gone` was disabled",
         "not carried, by design: the dashboard layout",
@@ -546,7 +570,7 @@ fn the_executable_checks_a_project_and_reads_a_veredas_1_folder() {
     let out = std::process::Command::new(exe).arg(&file).arg("--check").output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
-    for line in ["project `the press hall`", "session: from midnight; store in memory; writes off; idle after 20000 ms", "server: 127.0.0.1:8901", "log `scanner`: family", "rule `scans` on `scanner`", "opc `plc`: opc.tcp://127.0.0.1:4840/ every 500 ms, 1 rule(s)", "channel `sorter`: 6 message(s) in its catalog, 1 reply rule(s)", "table `heavy`"] {
+    for line in ["project `the press hall`", "session: from midnight; store in memory; writes off; idle after 20000 ms", "server: 127.0.0.1:8901", "secrets: ", "opened with the key `VEREDAS_KEY` holds", "log `scanner`: family", "rule `scans` on `scanner`", "opc `plc`: opc.tcp://127.0.0.1:4840/ every 500 ms, 1 rule(s)", "channel `sorter`: 6 message(s) in its catalog, 1 reply rule(s)", "table `heavy`"] {
         assert!(stdout.contains(line), "no `{line}` in:\n{stdout}");
     }
     // A bad file: the reason on stderr, exit 2. No file: usage, exit 1.
@@ -589,8 +613,68 @@ fn the_executable_runs_a_project_serving_and_reporting_until_stdin_closes() {
     let text = with(&text, "[server]", "bind", "bind = \"127.0.0.1:0\"");
     let file = dir.path().join("project.toml");
     std::fs::write(&file, &text).unwrap();
-    // The OPC source's password is the variable the project names, read when the session starts.
-    let mut child = Command::new(exe).arg(&file).env("PLC_PASSWORD", "secret").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    // The secrets (Q15): a fresh key from the executable, the password sealed from stdin into the
+    // file beside the project under it, the key in the variable the project names when it runs.
+    let new_key = || {
+        let out = Command::new(exe).arg("--new-key").output().unwrap();
+        assert!(out.status.success() && out.stderr.is_empty(), "{}", String::from_utf8_lossy(&out.stderr));
+        let key = String::from_utf8(out.stdout).unwrap().trim().to_string();
+        assert!(key.len() == 64 && key.chars().all(|c| c.is_ascii_hexdigit()), "a key, 64 hexadecimal characters: {key}");
+        key
+    };
+    let key = new_key();
+    assert_ne!(key, new_key(), "fresh every time");
+    let seal = |project: &Path, entry: &str, env: Option<&str>| {
+        let mut cmd = Command::new(exe);
+        cmd.arg("--secret").arg(project).arg(entry).env_remove("VEREDAS_KEY").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        if let Some(k) = env {
+            cmd.env("VEREDAS_KEY", k);
+        }
+        let mut child = cmd.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(b"s3cret\n").unwrap();
+        let out = child.wait_with_output().unwrap();
+        (out.status.code(), String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string())
+    };
+    let (code, said, errs) = seal(&file, "plc", Some(key.as_str()));
+    assert_eq!((code, errs.as_str()), (Some(0), ""), "{said}{errs}");
+    assert!(said.starts_with("sealed `plc` in ") && said.contains("secrets.toml") && !said.contains("s3cret"), "{said}");
+    let on_disk = std::fs::read_to_string(dir.path().join("secrets.toml")).unwrap();
+    assert!(on_disk.contains("format = \"veredas-secrets\"") && on_disk.contains("version = 1") && on_disk.contains("\nplc = \"") && !on_disk.contains("s3cret"), "{on_disk}");
+    // The tool's refusals, by name: no key, no `[secrets]` table, no entry.
+    let (code, _, errs) = seal(&file, "plc", None);
+    assert_eq!(code, Some(2));
+    assert!(errs.contains("the variable `VEREDAS_KEY` is not set: it holds the project's key"), "{errs}");
+    let bare = dir.path().join("bare.toml");
+    std::fs::write(&bare, text.replacen("[secrets]\nkey_env = \"VEREDAS_KEY\"\n", "", 1).replacen("secret = \"plc\"\n", "", 1).replacen("user = \"operator\"\n", "", 1)).unwrap();
+    let (code, _, errs) = seal(&bare, "plc", Some(key.as_str()));
+    assert_eq!(code, Some(2));
+    assert!(errs.contains("the project has no `[secrets]` table"), "{errs}");
+    let out = Command::new(exe).arg("--secret").arg(&file).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    // The run refused by name, exit 2, the value nowhere: the variable unset, one holding no key,
+    // a wrong key, and a project naming an entry the file does not hold.
+    let refused_run = |project: &Path, env: Option<&str>| {
+        let mut cmd = Command::new(exe);
+        cmd.arg(project).env_remove("VEREDAS_KEY").stdin(Stdio::null());
+        if let Some(k) = env {
+            cmd.env("VEREDAS_KEY", k);
+        }
+        let out = cmd.output().unwrap();
+        let (said, errs) = (String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string());
+        assert_eq!(out.status.code(), Some(2), "{said}{errs}");
+        assert!(!errs.contains("s3cret") && !said.contains("s3cret"), "{said}{errs}");
+        errs
+    };
+    assert!(refused_run(&file, None).contains("the session did not start: the variable `VEREDAS_KEY` is not set: it holds the project's key"));
+    assert!(refused_run(&file, Some("not-a-key")).contains("the session did not start: the variable `VEREDAS_KEY` does not hold a key (64 hexadecimal characters)"));
+    let other = new_key();
+    let errs = refused_run(&file, Some(other.as_str()));
+    assert!(errs.contains("the session did not start: the secrets file ") && errs.contains(" does not open with the key `VEREDAS_KEY` holds (entry `plc`)") && !errs.contains(&other) && !errs.contains(&key), "{errs}");
+    let renamed = dir.path().join("renamed.toml");
+    std::fs::write(&renamed, with(&text, "[[opc]]", "secret", "secret = \"plc_b\"")).unwrap();
+    assert!(refused_run(&renamed, Some(key.as_str())).contains("the session did not start: source `plc`: the secret `plc_b` for the password of `operator` is not in the secrets file"));
+    // The run itself, the key in the variable.
+    let mut child = Command::new(exe).arg(&file).env("VEREDAS_KEY", &key).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let mut errs = child.stderr.take().unwrap();
     let stderr = std::thread::spawn(move || {
         let mut s = String::new();
@@ -659,8 +743,9 @@ file it points at, resolves every path against the file's folder, and compiles e
 so a project that loads is a session that can start; the executable `veredas-portal <project.toml>`
 starts it (`--check` reads, checks and prints the plan without starting anything;
 `--from-v1 <folder>` reads a Veredas 1 project folder into this file and prints it, naming what it
-did not carry). No device is named anywhere: a plant's project is a folder of files like the ones
-below, kept outside the suite's code.
+did not carry; `--new-key` and `--secret` keep the secrets file, below). No device is named
+anywhere: a plant's project is a folder of files like the ones below, kept outside the suite's
+code.
 
 Every plain-text config and project file of Veredas 2 follows this pattern (`docs/questions.md`
 Q10, "TOML, suite-wide"): TOML, a `format` and a `version` first, documented defaults, a misspelled
@@ -670,14 +755,14 @@ header is read by one reader, `veredas_core::schema`, that every file of the sui
 ## The worked example: a scanner's log family, a controller, and a sorter answered by rule
 
 A scanner writes daily files that rotate on a line count, stamped to the millisecond; a controller
-serves a speed and a run flag over OPC UA under a user whose password the operator sets in the
-environment, never in the file; the machine of the controller reference listens on port 5020 and
-the project dials it, answering every announcement by the reply rule of the channel clause; a
-view keeps the heavy scans. The session starts at the day's midnight, keeps its store in memory,
-and leaves its writes off; the server listens on the loopback. `crates/veredas-portal/tests/project.rs`
-writes the channel file and the catalog beside this block, loads it, checks every statement
-below against what it read, and runs the executable's check on it; it holds a copy of this text,
-so an edit here is an edit there.
+serves a speed and a run flag over OPC UA under a user whose password sits sealed in the secrets
+file beside the project, never in this one; the machine of the controller reference listens on
+port 5020 and the project dials it, answering every announcement by the reply rule of the channel
+clause; a view keeps the heavy scans. The session starts at the day's midnight, keeps its store in
+memory, and leaves its writes off; the server listens on the loopback.
+`crates/veredas-portal/tests/project.rs` writes the channel file and the catalog beside this
+block, loads it, checks every statement below against what it read, and runs the executable's
+check on it; it holds a copy of this text, so an edit here is an edit there.
 
 ```toml
 format = "veredas-project"
@@ -692,6 +777,9 @@ idle_after_ms = 20000
 
 [server]
 bind = "127.0.0.1:8901"
+
+[secrets]
+key_env = "VEREDAS_KEY"
 
 [[log]]
 id = "scanner"
@@ -719,7 +807,7 @@ source_id = "plc"
 display_name = "the controller"
 endpoint_url = "opc.tcp://127.0.0.1:4840/"
 user = "operator"
-password_env = "PLC_PASSWORD"
+secret = "plc"
 poll_ms = 500
 rules = [
   { name = "plc_main", tags = [
@@ -745,15 +833,16 @@ sql = "SELECT * FROM scans WHERE weight > 20.0"
 
 Loaded, this project has two logs, one OPC source with one rule of three columns, one channel
 whose catalog has six messages, one capture rule and one view; its session starts at midnight,
-in memory, writes off, idle after 20000 ms; its server binds `127.0.0.1:8901`. Every table name is
+in memory, writes off, idle after 20000 ms; its server binds `127.0.0.1:8901`; its secrets sit in
+`secrets.toml` beside it, opened with the key the variable `VEREDAS_KEY` holds. Every table name is
 taken once across the rules, the OPC rules, the catalog's messages and the views: a second
 `scans` anywhere is refused, naming both owners.
 
 ## Keys
 
 Every key is spelled as written here; a key the reader does not know is refused with its name.
-A relative path (`file`, `dir`, `disk`, `channel`, `catalog`) is resolved against the project
-file's folder.
+A relative path (`file`, `dir`, `disk`, `channel`, `catalog`, the secrets' `file`) is resolved
+against the project file's folder.
 
 ### The header and the name
 - `format` (required): always `"veredas-project"`.
@@ -779,6 +868,16 @@ file's folder.
 
 ### `[server]` (optional: absent, nothing is served)
 - `bind` (required): the address `host:port` the server listens on.
+
+### `[secrets]` (optional; required once a source names a `secret`)
+- `file` (default `"secrets.toml"`): the sealed secrets file beside the project, in the
+  `veredas-secrets` format below, committed with the project. The session reads it when it
+  starts and opens it in memory; nothing of it is written back, and no value of it reaches a log,
+  a plan, an error or a debug form.
+- `key_env` (required): the name of an environment variable holding the key, 64 hexadecimal
+  characters (256 bits), never the key. The variable unset, or not holding a key, refuses the
+  session by the variable's name; a key that does not open the file refuses it by the file's path
+  and the variable's name. The check needs neither the variable nor the file.
 
 ### `[[log]]`: a log source
 - `id` (required): the source's id, unique across logs, OPC sources and channels.
@@ -806,9 +905,10 @@ file's folder.
 
 ### `[[opc]]`: an OPC UA source, its rules each a table
 - `source_id` (required), `display_name` (default the id), `endpoint_url` (required).
-- `user` (optional) and `password_env` (required with `user`): the name of an environment
-  variable holding the password, never the password (`docs/questions.md` Q15). The session
-  reads it when it starts; the check does not need it set.
+- `user` (optional) and `secret` (required with `user`): the name of an entry of the secrets file
+  holding the user's password, never the password (`docs/questions.md` Q15); a `secret` needs the
+  `[secrets]` table. The session reads the entry when it starts and refuses the source by the
+  entry's name when the file has no such entry; the check does not need it.
 - `poll_ms` (default `1000`): how often every tag is read, at least 50.
 - `rules` (required, at least one): each `{ name, store_on_change = false, tags = [ … ] }`, a tag
   `{ node_id, series, type = "float", writable = false, bits = [ { bit, width = 1, series } ] }` (bits need `type = "int"`),
@@ -827,4 +927,33 @@ file's folder.
 ### `[[table]]`: a view of the project
 - `name` (required): the view's name, taken once across every table.
 - `sql` (required): its SELECT over the base tables and the other views.
+
+## The secrets file: `veredas-secrets`, version 1
+
+The values a project must not show (an OPC user's password) sit sealed in this file, beside the
+project and committed with it; the key that opens them is held in the environment variable the
+project's `[secrets] key_env` names, set where the session runs and nowhere in the repository.
+
+```toml
+format = "veredas-secrets"
+version = 1
+
+[entries]
+plc = "Kx3uDe2bI4YmXjzQ...AQ=="
+```
+
+- `format` (required): always `"veredas-secrets"`; `version` (required): this reader knows `1`.
+  Another format or version is refused before the body is read, as every file of the suite is.
+- `[entries]` (default none): one value per key, the key the entry's name a source's `secret`
+  gives, the value the nonce and the ciphertext of ChaCha20-Poly1305 in base64, sealed under the
+  project's key with a fresh 96-bit nonce at every writing and the entry's name bound in as the
+  associated data, so an entry copied under another name does not open.
+
+The executable writes it, never an editor: `veredas-portal --new-key` prints a fresh key, 64
+hexadecimal characters, to stdout and nothing else; `veredas-portal --secret <project.toml> <entry>`
+reads the value from stdin to its end (the final line break dropped), seals it under the key the
+project's `key_env` variable holds, writes or replaces the entry in the project's secrets file
+(created, stamped, when there is none), prints `sealed` with the entry's name and the file's path,
+and shows the value nowhere. A project that has no `[secrets]` table, a variable unset or not a
+key, and a file that is not a secrets file are refused by name with exit code 2.
 "##;

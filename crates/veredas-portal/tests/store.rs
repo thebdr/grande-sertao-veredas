@@ -118,7 +118,7 @@ fn opc_spec() -> BaseTableSpec {
         display_name: String::new(),
         endpoint_url: "opc.tcp://127.0.0.1:1/".into(),
         user: None,
-        password_env: None,
+        secret: None,
         poll_ms: 1000,
         rules: vec![OpcRuleConfig {
             name: "plc_main".into(),

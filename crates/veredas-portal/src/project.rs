@@ -151,6 +151,8 @@ pub struct Project {
     pub name: String,
     pub start: Start,
     pub store: Store,
+    /// Where the sealed values live and which variable holds the key, when a source names one.
+    pub secrets: Option<crate::secrets::SecretsSource>,
     pub writes_armed: bool,
     pub idle_after_ms: i64,
     /// The server's address, when the project serves.
@@ -251,6 +253,8 @@ struct FileV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session: Option<SessionFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    secrets: Option<SecretsTable>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     server: Option<ServerFile>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     log: Vec<LogFile>,
@@ -287,6 +291,23 @@ impl Default for SessionFile {
 fn default_idle() -> i64 {
     DEFAULT_IDLE_MS
 }
+
+/// `[secrets]`: where the project keeps its sealed values and which variable holds the key
+/// (`docs/questions.md` Q15, decided 2026-11-09).
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SecretsTable {
+    #[serde(default = "default_secrets_file")]
+    file: String,
+    key_env: String,
+}
+
+fn default_secrets_file() -> String {
+    "secrets.toml".to_string()
+}
+
+/// The variable the import names for the key: the operator sets it once for the project.
+pub const V1_KEY_ENV: &str = "VEREDAS_KEY";
 
 #[derive(Serialize)]
 #[serde(untagged)]
@@ -680,10 +701,14 @@ pub fn load(text: &str, base: &Path) -> Result<Project, ProjectError> {
     }
 
     // The OPC sources, compiled once without their secrets: the password is read from the
-    // environment when the session starts, and the check verifies everything but its presence.
+    // project's secrets file when the session starts (Q15), and the check verifies everything
+    // but its presence; a source naming a secret needs the `[secrets]` table that says where.
     let mut opcs: Vec<OpcSourceConfig> = Vec::new();
     for o in &file.opc {
         let id = claims.source("opc source", &o.source_id).map_err(claimed)?;
+        if o.secret.is_some() && file.secrets.is_none() {
+            return Err(invalid(format!("opc `{id}`: it names a secret, but the project has no `[secrets]` table (its `file` and `key_env`)")));
+        }
         let spec = opc::compile(o, &|_| Some(String::from("*"))).map_err(|e| invalid(format!("opc `{id}`: {e}")))?;
         for rule in &spec.rules {
             claims.table(&rule.name, format!("OPC rule `{}` of source `{id}`", rule.name)).map_err(claimed)?;
@@ -759,7 +784,22 @@ pub fn load(text: &str, base: &Path) -> Result<Project, ProjectError> {
         return Err(invalid("the project has no source: a `[[log]]`, an `[[opc]]` or a `[[channel]]`"));
     }
 
-    Ok(Project { name, start, store, writes_armed: session.writes_armed, idle_after_ms: session.idle_after_ms, server, logs, rules, opc: opcs, channels, tables: views })
+    // Where the secrets live: the file beside the project and the variable holding the key, read
+    // when the session starts; nothing of either is opened here.
+    let secrets = match &file.secrets {
+        None => None,
+        Some(s) => {
+            if s.key_env.trim().is_empty() {
+                return Err(invalid("secrets: `key_env` is empty: name the environment variable holding the key"));
+            }
+            if s.file.trim().is_empty() {
+                return Err(invalid("secrets: `file` is empty: name the secrets file, or leave the key out for `secrets.toml`"));
+            }
+            Some(crate::secrets::SecretsSource { file: resolve(base, &s.file), key_env: s.key_env.trim().to_string() })
+        }
+    };
+
+    Ok(Project { name, start, store, secrets, writes_armed: session.writes_armed, idle_after_ms: session.idle_after_ms, server, logs, rules, opc: opcs, channels, tables: views })
 }
 
 /// Read a project file from disk; its folder is where its references live.
@@ -790,6 +830,7 @@ impl Project {
         cfg.opc = self.opc.clone();
         cfg.channels = self.channels.clone();
         cfg.tables = self.tables.iter().map(|(name, sql)| crate::store::TableDef { name: name.clone(), sql: sql.clone() }).collect();
+        cfg.secrets = self.secrets.clone();
         cfg
     }
 }
@@ -1019,7 +1060,8 @@ mod v1 {
 /// What the gateway keeps is carried; what it does not (the screens, the grep, the command
 /// sequencer, a disabled part, a telegram source that had no catalog, a security mode never
 /// implemented) is named in the notes, never guessed at. The passwords Veredas 1 kept in the
-/// machine's credential store become `password_env` names the operator sets.
+/// machine's credential store become entries of the project's secrets file, named after their
+/// source, for the operator to seal with the tool (Q15).
 #[cfg(feature = "store")]
 pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
     use crate::opc::{OpcBitConfig, OpcRuleConfig, OpcTagConfig};
@@ -1096,19 +1138,24 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
                 if let Some(sec) = sec {
                     notes.push(format!("opc `{}`: security `{sec}` was never implemented; the source is carried without it", s.id));
                 }
-                let (user, password_env) = match auth {
+                let (user, secret) = match auth {
                     v1::Auth::Anonymous => (None, None),
                     v1::Auth::UserPass { username } => {
-                        let var: String = format!("{}_PASSWORD", s.id.to_ascii_uppercase()).chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
-                        notes.push(format!("opc `{}`: the password lived in the machine's credential store; set the variable `{var}` in the environment", s.id));
-                        (Some(username.clone()), Some(var))
+                        // The password lived in the machine's credential store, which the file
+                        // cannot carry: the entry is named after the source, for the operator to
+                        // seal with the tool (Q15).
+                        notes.push(format!(
+                            "opc `{}`: the password lived in the machine's credential store; seal it as the entry `{}` with `veredas-portal --secret <project.toml> {}`, the key in the variable `{V1_KEY_ENV}`",
+                            s.id, s.id, s.id
+                        ));
+                        (Some(username.clone()), Some(s.id.clone()))
                     }
                     v1::Auth::Certificate => {
                         notes.push(format!("opc `{}`: certificate authentication was never implemented; the source is carried anonymous", s.id));
                         (None, None)
                     }
                 };
-                let mut source = OpcSourceConfig { source_id: s.id.clone(), display_name, endpoint_url: endpoint_url.clone(), user, password_env, poll_ms: (*poll_ms).max(1) as u64, rules: Vec::new() };
+                let mut source = OpcSourceConfig { source_id: s.id.clone(), display_name, endpoint_url: endpoint_url.clone(), user, secret, poll_ms: (*poll_ms).max(1) as u64, rules: Vec::new() };
                 for r in rules.opc.iter().filter(|r| r.source_id == s.id) {
                     if !r.enabled {
                         notes.push(format!("opc rule `{}` was disabled: not carried", r.name));
@@ -1259,11 +1306,14 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
         }
     };
     notes.push("not carried, by design: the dashboard layout, the grep, the command sequencer, the pages, the highlights and the rules' skew-monitor threshold (the apps own the screens; a command is composed from the write endpoint; the session's snapshot shows both clocks)".into());
+    // A source with a password needs the secrets file: the table names it and the key's variable.
+    let secrets = opc.iter().any(|o| o.secret.is_some()).then(|| SecretsTable { file: default_secrets_file(), key_env: V1_KEY_ENV.into() });
     let file = FileV1 {
         format: FORMAT.into(),
         version: VERSION,
         name,
         session: Some(SessionFile { start, store, writes_armed: commands.allow_writes, idle_after_ms: DEFAULT_IDLE_MS }),
+        secrets,
         server: None,
         log,
         rule,

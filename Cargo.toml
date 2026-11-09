@@ -58,6 +58,9 @@ http-body-util = "0.1"
 tokio-stream = { version = "0.1", features = ["sync"] }
 # Whether a drive letter is a network drive (portal's tail polls a share and never watches it).
 windows-sys = "0.59"
+chacha20poly1305 = "0.10"
+base64 = "0.22"
+getrandom = "0.3"
 
 # The bundled engine's debug static library is about 2.2 GB and is mapped into every test binary
 # that links it, which exhausts the page file when the test fleet links in parallel; the engine

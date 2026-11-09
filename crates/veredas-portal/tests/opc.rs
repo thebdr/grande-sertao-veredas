@@ -1,7 +1,7 @@
 //! OPC UA sources (contract: the OPC sources clause): a source's configuration compiled into
 //! core's poll spec before anything connects, every mistake refused by name; the worker polling
 //! the bench's OPC UA server from a bench file into typed rows with bits carved out, on-change
-//! rules keeping transitions, the identity from a named environment variable, and the writes
+//! rules keeping transitions, the identity from a named entry of the secrets file, and the writes
 //! gated by the master switch and the whitelist, proven on the server side.
 
 use std::path::Path;
@@ -41,7 +41,7 @@ fn tag(node: &str, series: &str, ty: &str) -> OpcTagConfig {
 }
 
 /// The source's configuration against the plant's namespace.
-fn config(bench: &Bench, user: Option<&str>, env: Option<&str>) -> OpcSourceConfig {
+fn config(bench: &Bench, user: Option<&str>, entry: Option<&str>) -> OpcSourceConfig {
     let plc = bench.server("plc").unwrap();
     let node = |id: &str| plc.node_id_str(id);
     OpcSourceConfig {
@@ -49,7 +49,7 @@ fn config(bench: &Bench, user: Option<&str>, env: Option<&str>) -> OpcSourceConf
         display_name: "".into(),
         endpoint_url: plc.endpoint_url.clone(),
         user: user.map(String::from),
-        password_env: env.map(String::from),
+        secret: entry.map(String::from),
         poll_ms: 50,
         rules: vec![
             OpcRuleConfig {
@@ -86,8 +86,8 @@ fn no_secret(_: &str) -> Option<String> {
     None
 }
 
-fn secret(var: &str) -> Option<String> {
-    (var == "PLC_PASSWORD").then(|| "s3cret".to_string())
+fn secret(entry: &str) -> Option<String> {
+    (entry == "plc").then(|| "s3cret".to_string())
 }
 
 /// One poll as mapped: the index clock, the arrival clock, one row per rule kept, which rules, the failures.
@@ -279,10 +279,10 @@ fn writes_are_gated_by_the_switch_and_the_whitelist_and_land_on_the_server_side(
 }
 
 #[test]
-fn the_identity_comes_from_a_named_environment_variable_and_a_wrong_one_never_connects() {
+fn the_identity_comes_from_a_named_secret_and_a_wrong_one_never_connects() {
     let dir = tempfile::tempdir().unwrap();
     let bench = plant(dir.path());
-    let cfg = config(&bench, Some("operator"), Some("PLC_PASSWORD"));
+    let cfg = config(&bench, Some("operator"), Some("plc"));
     let spec = compile(&cfg, &secret).unwrap();
     assert_eq!(spec.auth, Auth::UserPass { username: "operator".into(), password: "s3cret".into() });
     assert!(!format!("{spec:?}").contains("s3cret"), "the password shows in no debug form");
@@ -297,14 +297,14 @@ fn the_identity_comes_from_a_named_environment_variable_and_a_wrong_one_never_co
     }));
     assert!(seen.states.contains(&ConnState::Connected));
     worker.handle.join().unwrap();
-    // The variable unset: refused at compile, naming the variable and never the value.
+    // The entry not in the secrets: refused at compile, naming the entry and never a value.
     assert_eq!(
         compile(&cfg, &no_secret).err(),
-        Some(OpcError::PasswordUnset { source_id: "plc".into(), user: "operator".into(), var: "PLC_PASSWORD".into() })
+        Some(OpcError::SecretMissing { source_id: "plc".into(), user: "operator".into(), entry: "plc".into() })
     );
     assert_eq!(
         compile(&cfg, &no_secret).unwrap_err().to_string(),
-        "source `plc`: the environment variable `PLC_PASSWORD` for the password of `operator` is not set"
+        "source `plc`: the secret `plc` for the password of `operator` is not in the secrets file"
     );
     // A wrong password: the worker retries and never connects.
     let wrong = compile(&cfg, &|_| Some("nope".to_string())).unwrap();
@@ -328,7 +328,7 @@ fn every_configuration_mistake_is_refused_by_name_before_anything_connects() {
         display_name: " Line 1 ".into(),
         endpoint_url: " opc.tcp://127.0.0.1:1/ ".into(),
         user: None,
-        password_env: None,
+        secret: None,
         poll_ms: 100,
         rules: vec![OpcRuleConfig { name: "t".into(), store_on_change: false, tags: vec![tag("ns=2;s=a", "a", "")] }],
     };
@@ -345,9 +345,9 @@ fn every_configuration_mistake_is_refused_by_name_before_anything_connects() {
     assert_eq!(refused(&|c| c.poll_ms = 49), OpcError::PollTooShort { source_id: sid(), ms: 49 });
     assert_eq!(compile(&{ let mut c = base(); c.poll_ms = 50; c }, &no_secret).unwrap().poll, Duration::from_millis(50));
     assert_eq!(refused(&|c| c.user = Some(" ".into())), OpcError::EmptyUser { source_id: sid() });
-    assert_eq!(refused(&|c| c.password_env = Some("X".into())), OpcError::PasswordWithoutUser { source_id: sid() });
-    assert_eq!(refused(&|c| c.user = Some("u".into())), OpcError::NoPasswordEnv { source_id: sid(), user: "u".into() });
-    assert_eq!(refused(&|c| { c.user = Some("u".into()); c.password_env = Some(" ".into()); }), OpcError::NoPasswordEnv { source_id: sid(), user: "u".into() });
+    assert_eq!(refused(&|c| c.secret = Some("X".into())), OpcError::SecretWithoutUser { source_id: sid() });
+    assert_eq!(refused(&|c| c.user = Some("u".into())), OpcError::NoSecret { source_id: sid(), user: "u".into() });
+    assert_eq!(refused(&|c| { c.user = Some("u".into()); c.secret = Some(" ".into()); }), OpcError::NoSecret { source_id: sid(), user: "u".into() });
     assert_eq!(refused(&|c| c.rules.clear()), OpcError::NoRules { source_id: sid() });
     assert_eq!(refused(&|c| c.rules[0].name = "Bad".into()), OpcError::RuleName { source_id: sid(), name: "Bad".into(), reason: "the name must start with a lowercase letter or `_`".into() });
     assert_eq!(refused(&|c| c.rules[0].name = "a-b".into()), OpcError::RuleName { source_id: sid(), name: "a-b".into(), reason: "the name may use lowercase letters, digits and `_` alone".into() });

@@ -116,7 +116,7 @@ Read in full before the port: Veredas 1's `veredas-core` (the data plane), `vere
 | `veredas-server` the embedded dashboard (`rust-embed`, `dashboard/dist`) | not carried | the web interface is supervisão's (P-008); portal serves data, not pages |
 | desktop `session` (the pump, health, add/remove/reconnect), the OPC and telegram runtimes | `veredas_portal::session` | the ingest, UI-free |
 | desktop `telegram` (the vendor's decision client and lifecycle events) | not carried (Q8) | a channel's replies are rules; its data is rows |
-| desktop `config` (the string-level project), `project` (the JSON files, bundles, the legacy migration), `secrets` | `veredas_portal::project` (TOML, P-010) | one project file; passwords stay out of it; Veredas 1's JSON read into TOML |
+| desktop `config` (the string-level project), `project` (the JSON files, bundles, the legacy migration), `secrets` | `veredas_portal::project` (TOML, P-010) | one project file; passwords sealed in a secrets file beside it, the key in the environment (Q15); Veredas 1's JSON read into TOML |
 | desktop `app`, `boot`, `style`, `icon`, `ui/*`, `tables` (the SQL builder), `main` | Q14 decided: not portal's | the executable is the shell; the screens are supervisão's (P-008) to take up or leave |
 
 Changed on the way, each recorded in the clause's evidence note:
@@ -129,8 +129,10 @@ Changed on the way, each recorded in the clause's evidence note:
 - a telegram channel captures by a catalog, never by a `CaptureSpec` typed into a source: the
   catalog closes C-013's warning-on-a-bad-pattern gap (the bench note's follow-up), and portal
   captures outside a catalog nowhere;
-- the OPC password is a project secret: the project file names the user, the password comes from
-  the environment or a prompt (`docs/questions.md` Q15 asks where the suite keeps secrets);
+- the OPC password is a project secret: the project file names the user and an entry of the
+  sealed secrets file beside it (`veredas-secrets`, ChaCha20-Poly1305 under a key held in the
+  environment variable the project names, written by `veredas-portal --secret`; `docs/questions.md`
+  Q15 decided);
 - the project is one TOML file, not a folder of JSON files; a Veredas 1 folder is read into it
   once, by `project::from_v1`, with every field it carries mapped and every field it drops named.
 

@@ -31,6 +31,7 @@ pub mod family;
 pub mod opc;
 pub mod source;
 pub mod project;
+pub mod secrets;
 #[cfg(feature = "store")]
 pub mod session;
 #[cfg(feature = "serve")]

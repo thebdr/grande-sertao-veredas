@@ -10,8 +10,9 @@ file it points at, resolves every path against the file's folder, and compiles e
 so a project that loads is a session that can start; the executable `veredas-portal <project.toml>`
 starts it (`--check` reads, checks and prints the plan without starting anything;
 `--from-v1 <folder>` reads a Veredas 1 project folder into this file and prints it, naming what it
-did not carry). No device is named anywhere: a plant's project is a folder of files like the ones
-below, kept outside the suite's code.
+did not carry; `--new-key` and `--secret` keep the secrets file, below). No device is named
+anywhere: a plant's project is a folder of files like the ones below, kept outside the suite's
+code.
 
 Every plain-text config and project file of Veredas 2 follows this pattern (`docs/questions.md`
 Q10, "TOML, suite-wide"): TOML, a `format` and a `version` first, documented defaults, a misspelled
@@ -21,14 +22,14 @@ header is read by one reader, `veredas_core::schema`, that every file of the sui
 ## The worked example: a scanner's log family, a controller, and a sorter answered by rule
 
 A scanner writes daily files that rotate on a line count, stamped to the millisecond; a controller
-serves a speed and a run flag over OPC UA under a user whose password the operator sets in the
-environment, never in the file; the machine of the controller reference listens on port 5020 and
-the project dials it, answering every announcement by the reply rule of the channel clause; a
-view keeps the heavy scans. The session starts at the day's midnight, keeps its store in memory,
-and leaves its writes off; the server listens on the loopback. `crates/veredas-portal/tests/project.rs`
-writes the channel file and the catalog beside this block, loads it, checks every statement
-below against what it read, and runs the executable's check on it; it holds a copy of this text,
-so an edit here is an edit there.
+serves a speed and a run flag over OPC UA under a user whose password sits sealed in the secrets
+file beside the project, never in this one; the machine of the controller reference listens on
+port 5020 and the project dials it, answering every announcement by the reply rule of the channel
+clause; a view keeps the heavy scans. The session starts at the day's midnight, keeps its store in
+memory, and leaves its writes off; the server listens on the loopback.
+`crates/veredas-portal/tests/project.rs` writes the channel file and the catalog beside this
+block, loads it, checks every statement below against what it read, and runs the executable's
+check on it; it holds a copy of this text, so an edit here is an edit there.
 
 ```toml
 format = "veredas-project"
@@ -43,6 +44,9 @@ idle_after_ms = 20000
 
 [server]
 bind = "127.0.0.1:8901"
+
+[secrets]
+key_env = "VEREDAS_KEY"
 
 [[log]]
 id = "scanner"
@@ -70,7 +74,7 @@ source_id = "plc"
 display_name = "the controller"
 endpoint_url = "opc.tcp://127.0.0.1:4840/"
 user = "operator"
-password_env = "PLC_PASSWORD"
+secret = "plc"
 poll_ms = 500
 rules = [
   { name = "plc_main", tags = [
@@ -96,15 +100,16 @@ sql = "SELECT * FROM scans WHERE weight > 20.0"
 
 Loaded, this project has two logs, one OPC source with one rule of three columns, one channel
 whose catalog has six messages, one capture rule and one view; its session starts at midnight,
-in memory, writes off, idle after 20000 ms; its server binds `127.0.0.1:8901`. Every table name is
+in memory, writes off, idle after 20000 ms; its server binds `127.0.0.1:8901`; its secrets sit in
+`secrets.toml` beside it, opened with the key the variable `VEREDAS_KEY` holds. Every table name is
 taken once across the rules, the OPC rules, the catalog's messages and the views: a second
 `scans` anywhere is refused, naming both owners.
 
 ## Keys
 
 Every key is spelled as written here; a key the reader does not know is refused with its name.
-A relative path (`file`, `dir`, `disk`, `channel`, `catalog`) is resolved against the project
-file's folder.
+A relative path (`file`, `dir`, `disk`, `channel`, `catalog`, the secrets' `file`) is resolved
+against the project file's folder.
 
 ### The header and the name
 - `format` (required): always `"veredas-project"`.
@@ -130,6 +135,16 @@ file's folder.
 
 ### `[server]` (optional: absent, nothing is served)
 - `bind` (required): the address `host:port` the server listens on.
+
+### `[secrets]` (optional; required once a source names a `secret`)
+- `file` (default `"secrets.toml"`): the sealed secrets file beside the project, in the
+  `veredas-secrets` format below, committed with the project. The session reads it when it
+  starts and opens it in memory; nothing of it is written back, and no value of it reaches a log,
+  a plan, an error or a debug form.
+- `key_env` (required): the name of an environment variable holding the key, 64 hexadecimal
+  characters (256 bits), never the key. The variable unset, or not holding a key, refuses the
+  session by the variable's name; a key that does not open the file refuses it by the file's path
+  and the variable's name. The check needs neither the variable nor the file.
 
 ### `[[log]]`: a log source
 - `id` (required): the source's id, unique across logs, OPC sources and channels.
@@ -157,9 +172,10 @@ file's folder.
 
 ### `[[opc]]`: an OPC UA source, its rules each a table
 - `source_id` (required), `display_name` (default the id), `endpoint_url` (required).
-- `user` (optional) and `password_env` (required with `user`): the name of an environment
-  variable holding the password, never the password (`docs/questions.md` Q15). The session
-  reads it when it starts; the check does not need it set.
+- `user` (optional) and `secret` (required with `user`): the name of an entry of the secrets file
+  holding the user's password, never the password (`docs/questions.md` Q15); a `secret` needs the
+  `[secrets]` table. The session reads the entry when it starts and refuses the source by the
+  entry's name when the file has no such entry; the check does not need it.
 - `poll_ms` (default `1000`): how often every tag is read, at least 50.
 - `rules` (required, at least one): each `{ name, store_on_change = false, tags = [ … ] }`, a tag
   `{ node_id, series, type = "float", writable = false, bits = [ { bit, width = 1, series } ] }` (bits need `type = "int"`),
@@ -178,3 +194,32 @@ file's folder.
 ### `[[table]]`: a view of the project
 - `name` (required): the view's name, taken once across every table.
 - `sql` (required): its SELECT over the base tables and the other views.
+
+## The secrets file: `veredas-secrets`, version 1
+
+The values a project must not show (an OPC user's password) sit sealed in this file, beside the
+project and committed with it; the key that opens them is held in the environment variable the
+project's `[secrets] key_env` names, set where the session runs and nowhere in the repository.
+
+```toml
+format = "veredas-secrets"
+version = 1
+
+[entries]
+plc = "Kx3uDe2bI4YmXjzQ...AQ=="
+```
+
+- `format` (required): always `"veredas-secrets"`; `version` (required): this reader knows `1`.
+  Another format or version is refused before the body is read, as every file of the suite is.
+- `[entries]` (default none): one value per key, the key the entry's name a source's `secret`
+  gives, the value the nonce and the ciphertext of ChaCha20-Poly1305 in base64, sealed under the
+  project's key with a fresh 96-bit nonce at every writing and the entry's name bound in as the
+  associated data, so an entry copied under another name does not open.
+
+The executable writes it, never an editor: `veredas-portal --new-key` prints a fresh key, 64
+hexadecimal characters, to stdout and nothing else; `veredas-portal --secret <project.toml> <entry>`
+reads the value from stdin to its end (the final line break dropped), seals it under the key the
+project's `key_env` variable holds, writes or replaces the entry in the project's secrets file
+(created, stamped, when there is none), prints `sealed` with the entry's name and the file's path,
+and shows the value nowhere. A project that has no `[secrets]` table, a variable unset or not a
+key, and a file that is not a secrets file are refused by name with exit code 2.
