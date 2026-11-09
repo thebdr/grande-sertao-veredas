@@ -399,6 +399,7 @@ refute round found and what it changed is in the clause's evidence note.
 - **Source:** user (decision 9; docs/design/supervisao/ "Layout overview")
 - **Description:** The page shows a session's SVG layout with every bound element taking its object's state as a mark and a word, levels filling, markers moving along their paths, a selected object in the side panel with its value, sparkline and offered writes, the objects not normal in a "needs attention" list, and the headline in the top bar, all from the object feed.
 - **Verification:** automated → crates/veredas-supervisao/tests/layout.rs | the SVG served as written; the six objects with an element, each with what its way of showing needs in the feed (a state with a mark and a word, a level's fill, a marker's place), a marker moved by the plant; the bundle reading the binding, the layout and the feed and drawing every class of the vocabulary in Veredas' green accent (Q22), no magenta of the mockups left | manual: the page driven in the browser against a bench-fed session (.zen/evidence/C-051.md)
+- **Evidence:** .zen/evidence/C-051.md
 - **Status:** pending verification
 
 ## C-052: The dashboards: every panel kind computed in Rust from the session's store and drawn
@@ -406,6 +407,7 @@ refute round found and what it changed is in the clause's evidence note.
 - **Source:** user (docs/design/supervisao/ "Dashboard objects"; docs/binding-schema.md "A panel")
 - **Description:** Each panel of a binding's dashboards is computed from the session's store into what the page draws (a value tile in four states, a trend with its limit and breaches, bars per clock-aligned bucket against a target with the running one marked, state over time, a state grid, levels against ticks, a table with inline bars and state words, charts in cells with a median, its sparkline, a distribution on one scale, σ and n) and the page draws it.
 - **Verification:** automated → crates/veredas-supervisao/tests/dashboards.rs | thirteen stamped log lines and the bench's fills read back with the window's edge named: value tiles normal against a target, warn and alarm with their sub-lines and an eight-point sparkline, then stale past a bound with how long ago; the trend's nine points, its limit and its three breaches; thirteen clock-aligned buckets with their means, counts, an empty one and the running one; four state runs to the window's edge; the grid and the levels with their fractions and ticks in each object's range; the view's rows sorted by count with bars against the largest and a state word; per key the median, σ, n, the median per bucket and the distribution in twenty bins; a panel that cannot be computed saying why in its place; the window ending at the store's now by default | manual: the page driven in the browser (.zen/evidence/C-052.md)
+- **Evidence:** .zen/evidence/C-052.md
 - **Status:** pending verification
 
 ## C-053: Tables and series over portal's nested REST
@@ -413,6 +415,7 @@ refute round found and what it changed is in the clause's evidence note.
 - **Source:** user (docs/supervisao-plan.md "Scope": portal's surface, per session)
 - **Description:** The page's Tables and Series views list a session's tables and series, page a table's rows and chart a series' window, reading only the session's portal router nested at `/s/<name>/portal/`.
 - **Verification:** automated → crates/veredas-supervisao/tests/tables.rs | through `/s/<name>/portal/` against the bench and a written log: the catalog's four tables with their kinds and columns, a page of rows newest first and the next, an unknown table's 404, the listing's type and last value, a window's exact points; the bundle reading these four routes | manual: the page driven in the browser (.zen/evidence/C-053.md)
+- **Evidence:** .zen/evidence/C-053.md
 - **Status:** pending verification
 
 ## C-054: Writes, gated: offered by the binding, shown gated, refused by portal's switch on the wire
@@ -420,6 +423,7 @@ refute round found and what it changed is in the clause's evidence note.
 - **Source:** user (docs/veredas-plan.md "every write rides portal's gated surface"; docs/design/README.md "writes shown as gated")
 - **Description:** An object's actions are shown gated and disabled while the session's switch is off; a post to the session's portal write route through supervisão's address is refused 403 by the switch with nothing reaching the plant, and lands at the plant once the project arms the switch; supervisão holds no write path of its own.
 - **Verification:** automated → crates/veredas-supervisao/tests/writes.rs | the binding's write as the page reads it; off, a post of it and a send refused 403 with the switch's text through supervisão's address and nothing at the plant; armed in process, the feed showing it, the post landing at the bench, a tag no rule marks writable refused by name; disarmed, refused again with the plant unchanged; every route of supervisão's own refusing a POST 405; armed by the project, the post landing from the start | manual: the page driven in the browser (.zen/evidence/C-054.md)
+- **Evidence:** .zen/evidence/C-054.md
 - **Status:** pending verification
 
 ## Pending Contract Deltas
