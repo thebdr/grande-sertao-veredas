@@ -93,6 +93,9 @@ To read the spec, use the copy beside Veredas 1 or drop one into `docs/vendor/` 
 **Since Q8 (2026-11-05):** core names GENIBELT nowhere and cites none of its sections; the
 specification is for writing the rules a portal channel is configured with.
 
+**Decided** 2026-11-09 (the operator): not in the repo. `docs/vendor/` stays gitignored with its
+README; whoever writes the device's rules file reads a local copy or the one beside Veredas 1.
+
 ---
 
 ## Q7 - Do the TRISTATE bin-state bits stop a chute?
@@ -109,6 +112,9 @@ Marked `// DECISION PENDING` in `veredas_core::telegram::genibelt::bin_state`.
 
 **Moot (2026-11-05, Q8):** the bin-state words left core with the GENIBELT catalog; whether these
 bits stop a chute is a question for the rules a portal channel is configured with.
+
+**Closed** 2026-11-09: moot since Q8 (the operator's decision of 2026-11-05); nothing is left to
+decide in the suite, the question belongs to the device's rules file.
 
 ---
 
@@ -216,6 +222,10 @@ first keep-alive after connect instead, a version 2 of the rule.
 
 **Reversible?** Yes: loosening a refusal breaks no file that loads today.
 
+**Decided** 2026-11-09 (the operator): keep refusing. A `connect` inside `first..=last` is refused
+by the channel file; the pending note in `veredas_core::telegram::schema` becomes the rule's
+comment.
+
 ---
 
 ## Q12 - Does the Veredas 2 bench have a desktop UI?
@@ -260,6 +270,11 @@ executable, behind `cfg(windows)`, when the operator wants 20 ms ticks on the be
 
 **Reversible?** Yes: one call, one place, nothing else changes.
 
+**Decided** 2026-11-09 (the operator): yes. The bench executable raises the Windows timer
+resolution with `timeBeginPeriod(1)` at its start, behind `cfg(windows)`, paired with
+`timeEndPeriod` at exit; the two tick loops lose their pending notes, and the clause and the bench
+plan state a 20 ms tick on both platforms.
+
 ## Q14 - What is the Veredas 2 desktop shell?
 
 **Raised** 2026-11-07, planning portal (P-002).
@@ -302,6 +317,13 @@ the value. No vault, no secrets file.
 **Reversible?** Yes: a second source of secrets (a vault, a file outside the project) is one more
 way to fill the same field.
 
+**Decided** 2026-11-09 (the operator): an encrypted secrets file in the project folder, committed
+with the project, and the key in an environment variable the project file names. Portal reads the
+key when the session starts, decrypts the file in memory, and refuses to start a source whose
+secret is missing, naming the entry, never a value. `password_env` gives way to the secrets file;
+the file's format, the cipher and the tool that writes an entry are portal's design (P-010,
+C-046), recorded in `docs/project-schema.md`.
+
 ## Q16 - Where does a project's disk store go on a second run?
 
 **Raised** 2026-11-09, the store's first refute round (C-041).
@@ -318,6 +340,11 @@ already stands there and that a session store is fresh; nothing is deleted, noth
 
 **Reversible?** Yes: a per-session file name or an opening mode is one line in the project's
 store section, and the store's check stays as the guard for the fixed-name case.
+
+**Decided** 2026-11-09 (the operator): a file per session. The store's file is named from the
+project's name and the session's start time, so every run leaves its own database and nothing is
+refused, deleted or merged; the refusal stays as the guard when a project pins a fixed name and a
+database already stands there.
 
 ## Q17 - Should a linked CSV with ragged rows be read through the padded path?
 
@@ -337,3 +364,8 @@ stated and pinned; the padded path is forced on a collapse alone, as C-041 says.
 
 **Reversible?** Yes: forcing the padded path for every linked CSV, or for any file the sniffer
 reads ragged, is one branch in the store's CSV scan and one sentence in C-041.
+
+**Decided** 2026-11-09 (the operator): the padded path for any ragged file. The sniffer stays the
+first reader; whenever it reads a file ragged (any outcome but a regular table), the padded reader
+takes the file: every row kept, a short one padded, a long one widening the schema within 2 048
+lines, the read refused by its line past them. No row is lost or renamed in silence.
