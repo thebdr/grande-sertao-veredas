@@ -10,15 +10,15 @@
     "tail_family"
   ],
   "exitCode": 0,
-  "outputSha": "3c49094593f6acf2b4a8101c30d5bf182c71946007cc0397cf97ca0b447cd460",
-  "outputTail": "test indexed_clean_rotation_loses_nothing ... ok\ntest the_bench_emitter_rotating_on_a_line_count_is_followed_whole_in_utf8 ... ok\ntest the_bench_emitter_rotating_on_a_line_count_is_followed_whole_in_utf16 ... ok\ntest a_fixed_active_born_after_the_start_keeps_the_generations_that_retire_before_it_is_opened ... ok\ntest a_family_born_after_attach_is_captured_whole_in_both_modes ... ok\ntest fixed_name_generation_bursts_lose_nothing ... ok\ntest fixed_name_straggler_into_the_renamed_file_loses_nothing ... ok\ntest indexed_generation_bursts_faster_than_the_rescan_lose_nothing ... ok\ntest indexed_straggler_and_split_writes_lose_nothing ... ok\n\ntest result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.33s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.94s\n     Running tests\\tail_family.rs (target\\debug\\deps\\tail_family-8a8c2d4f9b5da671.exe)",
-  "ranAt": "2026-11-08T00:54:43.064Z",
-  "headCommit": "120c77d0024f8edd29770d312041d7d50c5fdceb",
+  "outputSha": "e316b260a8aa37219a5915f977ba3acbcd74015c69f772929606b19c0c74ae87",
+  "outputTail": "test the_bench_emitter_rotating_on_a_line_count_is_followed_whole_in_utf8 ... ok\ntest the_bench_emitter_rotating_on_a_line_count_is_followed_whole_in_utf16 ... ok\ntest a_fixed_active_born_after_the_start_keeps_the_generations_that_retire_before_it_is_opened ... ok\ntest a_family_born_after_attach_is_captured_whole_in_both_modes ... ok\ntest fixed_name_generation_bursts_lose_nothing ... ok\ntest fixed_name_straggler_into_the_renamed_file_loses_nothing ... ok\ntest a_second_rotation_inside_the_pre_read_sweep_keeps_the_order ... ok\ntest indexed_generation_bursts_faster_than_the_rescan_lose_nothing ... ok\ntest indexed_straggler_and_split_writes_lose_nothing ... ok\n\ntest result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.30s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.24s\n     Running tests\\tail_family.rs (target\\debug\\deps\\tail_family-8a8c2d4f9b5da671.exe)",
+  "ranAt": "2026-11-09T01:25:53.263Z",
+  "headCommit": "06e5bf3edde5c938b7fab0b3f81e90a18a20b06e",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/tail_family.rs",
       "file": "crates/veredas-portal/tests/tail_family.rs",
-      "fileSha": "3f3e168d002571761a69c942e4eea286009fe13dd641fb588639c55fca963f6f"
+      "fileSha": "6a20ca4c95b3ea74a9731952542cd3635419304509e9900a13f84dfea9d48206"
     }
   ]
 }
