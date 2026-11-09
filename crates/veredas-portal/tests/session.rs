@@ -343,3 +343,56 @@ fn a_failed_worker_still_reads_as_failed_after_the_stop() {
     assert_eq!(ended[0].1.as_ref().map_err(|e| e.to_string()), Err(text.clone()), "the stop returns the failure");
     assert_eq!(live.health.read().unwrap()["fam"].state, HealthState::Failed(text), "and the health keeps it after the stop");
 }
+
+/// Three claims of the clause the other tests left unasserted: the series cache caps its keys at
+/// 64 and flags the cap; a server away and a peer away read as retrying with the reason; a slow
+/// listener loses frames while the plant is never slowed (the frames keep counting).
+#[test]
+fn the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_says() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = free_port();
+    let bench = plant(dir.path(), port);
+    let log = dir.path().join("keys.log");
+    let mut text = String::new();
+    for i in 0..70 {
+        text.push_str(&format!("2026-07-19 10:00:00 temp=1.0 item=K{i} state=run\n"));
+    }
+    std::fs::write(&log, text).unwrap();
+    let mut cfg = session_config("away", &log, &bench, port);
+    cfg.start = Some(midnight());
+    // The plant is gone before the session starts: the server and the peer are away.
+    bench.stop();
+    let session = Session::start(cfg).unwrap();
+    let live = session.live();
+    let mut frames = live.subscribe();
+    assert!(wait(Duration::from_secs(10), || live.series.read().unwrap().get("log|temp").is_some_and(|e| e.count == 70)), "{:?}", live.series.read().unwrap().get("log|temp"));
+    let temp = live.series.read().unwrap()["log|temp"].clone();
+    assert_eq!((temp.keys, temp.keys_capped), (64, true), "seventy keys: the cache holds 64 and says so");
+    assert!(
+        wait(Duration::from_secs(10), || {
+            let h = live.health.read().unwrap();
+            matches!(h.get("plc").map(|s| &s.state), Some(HealthState::Retrying(_))) && matches!(h.get("sorter").map(|s| &s.state), Some(HealthState::Retrying(_)))
+        }),
+        "{:?}",
+        live.health.read().unwrap()
+    );
+    let h = live.health.read().unwrap().clone();
+    assert!(matches!(&h["plc"].state, HealthState::Retrying(why) if !why.is_empty()), "{:?}", h["plc"].state);
+    assert!(matches!(&h["sorter"].state, HealthState::Retrying(why) if why.contains("connecting")), "{:?}", h["sorter"].state);
+    // A listener that never reads: once more than the channel's 256 frames went out, it lags,
+    // and the plant's lines kept flowing meanwhile.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut i = 70u32;
+    while live.counters.read().unwrap().frames <= 260 && Instant::now() < deadline {
+        write_lines(&log, i..i + 1);
+        i += 1;
+        std::thread::sleep(Duration::from_millis(55));
+    }
+    let counters = live.counters.read().unwrap().clone();
+    assert!(counters.frames > 260, "{counters:?}");
+    assert!(matches!(frames.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) if n > 0), "a listener that never read lags");
+    assert_eq!(counters.lines, 70 + (i - 70) as u64, "every line reached the store meanwhile");
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+}
