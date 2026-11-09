@@ -163,6 +163,23 @@ fn the_worked_example_loads_as_its_prose_says() {
     assert_eq!(Start::Live.resolve(now), None);
     assert_eq!(Start::LastHours(4).resolve(now), Some(now - chrono::Duration::hours(4)));
     assert_eq!(Start::At(now).resolve(now), Some(now));
+    // The start as the file spells it, read through the file: a date-time with or without its
+    // seconds, a date at its midnight, the hours, and a word that is none of them.
+    let day = NaiveDate::from_ymd_opt(2026, 11, 8).unwrap();
+    for (spelled, at) in [
+        ("\"2026-11-08 06:00\"", day.and_hms_opt(6, 0, 0).unwrap()),
+        ("\"2026-11-08 06:00:30\"", day.and_hms_opt(6, 0, 30).unwrap()),
+        ("\"2026-11-08\"", day.and_hms_opt(0, 0, 0).unwrap()),
+    ] {
+        let p = project::load(&with(&text, "[session]", "start", &format!("start = {spelled}")), dir.path()).unwrap();
+        assert_eq!(p.start, Start::At(at), "{spelled}");
+    }
+    let p = project::load(&with(&text, "[session]", "start", "start = { last_hours = 6 }"), dir.path()).unwrap();
+    assert_eq!(p.start, Start::LastHours(6));
+    assert_eq!(
+        refused(&with(&text, "[session]", "start", "start = \"yesterdayish\""), dir.path()),
+        "session.start: `yesterdayish` is neither `midnight`, a date-time `YYYY-MM-DD HH:MM[:SS]`, a date `YYYY-MM-DD`, nor { last_hours = N }"
+    );
 }
 
 #[test]
@@ -178,6 +195,26 @@ fn the_header_is_refused_before_the_body_by_the_texts_every_file_shares() {
     assert!(top.starts_with("not a project file: ") && top.contains("nmae"), "{top}");
     let inside = refused(&text.replacen("pattern = ", "patern = ", 1), dir.path());
     assert!(inside.contains("patern"), "{inside}");
+    // Inside an inline table too: the keys of `start`, `store` and `active` are read by name,
+    // a typo refused with it (an untagged reader would say only that nothing matched).
+    for (table, key, line, typo) in [
+        ("[session]", "start", "start = { last_hourz = 4 }", "last_hourz"),
+        ("[session]", "start", "start = { last_hours = 4, typo = 1 }", "typo"),
+        ("[session]", "store", "store = { disk = \"s.duckdb\", memory_limt_mb = 512 }", "memory_limt_mb"),
+        ("[[log]]", "active", "active = { fixed = \"x1.log\", fixd = \"y\" }", "fixd"),
+    ] {
+        let e = refused(&with(&text, table, key, line), dir.path());
+        assert!(e.starts_with("not a project file: ") && e.contains(&format!("`{typo}`")), "{line}: {e}");
+    }
+    // A key left out of the table, or a shape that is neither word nor table, named too.
+    let e = refused(&with(&text, "[session]", "store", "store = { memory_limit_mb = 1 }"), dir.path());
+    assert!(e.contains("missing field `disk`"), "{e}");
+    let e = refused(&with(&text, "[[log]]", "active", "active = {}"), dir.path());
+    assert!(e.contains("missing field `fixed`"), "{e}");
+    let e = refused(&with(&text, "[session]", "start", "start = 5"), dir.path());
+    assert!(e.contains("invalid type: integer `5`") && e.contains("last_hours"), "{e}");
+    let e = refused(&with(&text, "[session]", "store", "store = { disk = \"s.duckdb\", memory_limit_mb = -1 }"), dir.path());
+    assert!(e.contains("-1") && e.contains("a whole number"), "{e}");
 }
 
 #[test]
@@ -252,6 +289,11 @@ fn what_cannot_be_a_project_is_refused_by_name() {
     assert_eq!(r(&with(&text, "[[channel]]", "role", "role = \"listen\"")), "channel `sorter`: `host` belongs to a connecting channel; a listening one has `bind`");
     assert_eq!(r(&text.replacen("send = \"answer\"", "send = \"nope\"", 1)), "channel `sorter`: a reply rule's `send` names no message `nope` of its catalog");
     assert_eq!(r(&with(&text, "[[table]]", "name", "name = \"scans\"")), "two tables would be named `scans`: capture rule `scans` and table `scans`");
+    // Every kind of owner is named in a clash. (The claims compare names without regard to case,
+    // as the store does, but a table name is lowercase by its shape, so no file can show it.)
+    assert_eq!(r(&with(&text, "[[table]]", "name", "name = \"plc_main\"")), "two tables would be named `plc_main`: OPC rule `plc_main` of source `plc` and table `plc_main`");
+    assert_eq!(r(&with(&text, "[[table]]", "name", "name = \"answer\"")), "two tables would be named `answer`: message `answer` of channel `sorter` and table `answer`");
+    assert_eq!(r(&text.replacen("name = \"plc_main\"", "name = \"announce\"", 1)), "two tables would be named `announce`: OPC rule `announce` of source `plc` and message `announce` of channel `sorter`");
     assert_eq!(r(&with(&text, "[[opc]]", "source_id", "source_id = \"scanner\"")), "two sources share the id `scanner`");
     assert_eq!(r(&text.replacen("scope = \"scanner\"", "scope = \"nope\"", 1)), "rule `scans`: the scope `nope` is no log of this project");
     assert_eq!(r("format = \"veredas-project\"\nversion = 1\nname = \"bare\"\n"), "the project has no source: a `[[log]]`, an `[[opc]]` or a `[[channel]]`");
@@ -283,6 +325,9 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
           { "id": "events", "display_name": "", "kind": { "SingleFile": { "path": "C:\\logs\\events.log" } }, "ts": { "pattern": "", "formats": "" } },
           { "id": "plc-1", "display_name": "Line 1 PLC", "enabled": true,
             "kind": { "OpcUa": { "endpoint_url": "opc.tcp://192.168.0.10:4840/", "security": "None", "auth": { "UserPass": { "username": "operator" } }, "poll_ms": 1000 } } },
+          { "id": "plc-2", "display_name": "Line 2 PLC",
+            "kind": { "OpcUa": { "endpoint_url": "opc.tcp://192.168.0.11:4840/", "security": { "SignAndEncrypt": "Basic256Sha256" }, "auth": "Certificate", "poll_ms": 250 } } },
+          { "id": "plc-3", "display_name": "spare", "kind": { "OpcUa": { "endpoint_url": "opc.tcp://192.168.0.12:4840/", "security": "Sign" } } },
           { "id": "msc", "display_name": "missions", "kind": { "Telegram": { "role": "Listen", "address": "0.0.0.0:2000", "endian": "Little", "channel": "CHM" } } },
           { "id": "parked", "display_name": "parked", "enabled": false, "kind": { "SingleFile": { "path": "C:\\logs\\old.log" } } }
         ]"#,
@@ -296,7 +341,9 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
             { "node_id": "ns=2;s=line1.temperature", "series": "temperature", "ty": "float", "writable": false, "bits": [] },
             { "node_id": "ns=2;s=line1.status", "series": "status_word", "ty": "int", "writable": false, "bits": [ { "bit": 0, "width": 0, "series": "running" }, { "bit": 4, "width": 3, "series": "mode" } ] },
             { "node_id": "ns=2;s=line1.cmd.start", "series": "cmd_start", "writable": true },
-            { "node_id": "ns=2;s=line1.flags", "series": "flags", "bits": [ { "bit": 1, "width": 1, "series": "alarm" } ] } ] } ],
+            { "node_id": "ns=2;s=line1.flags", "series": "flags", "bits": [ { "bit": 1, "width": 1, "series": "alarm" } ] } ] },
+            { "name": "line2", "source_id": "plc-2", "enabled": true, "page": "", "store_on_change": false, "tags": [
+            { "node_id": "ns=2;s=line2.speed", "series": "speed", "ty": "float", "writable": false, "bits": [] } ] } ],
           "skew_threshold_ms": 2000 }"#,
     );
     w(
@@ -305,13 +352,14 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
             { "name": "limits", "csv_path": "C:\\ref\\limits.csv", "csv_delim": ";", "csv_decimal_comma": true, "enabled": true },
             { "name": "gone", "sql": "SELECT 1", "enabled": false } ]"#,
     );
-    w("session.json", r#"{ "start": { "kind": "LastHours", "last_hours": 4, "absolute": "" }, "store": { "mode": "Disk", "disk_dir": "", "memory_limit_mb": 2048, "auto_export_mins": 0, "export_dir": "" } }"#);
+    // The absolute start as Veredas 1's screens wrote it, with a `T`: carried in this file's spelling.
+    w("session.json", r#"{ "start": { "kind": "Absolute", "last_hours": 4, "absolute": "2026-11-08T06:00:00" }, "store": { "mode": "Disk", "disk_dir": "", "memory_limit_mb": 2048, "auto_export_mins": 0, "export_dir": "" } }"#);
     w("commands.json", r#"{ "allow_writes": true, "commands": [] }"#);
     w("layout.json", r#"{ "panels": [] }"#);
 
     let migrated = project::from_v1(&v1).unwrap();
     let p = project::load(&migrated.toml, &v1).unwrap_or_else(|e| panic!("{e}\n{}", migrated.toml));
-    assert_eq!((p.name.as_str(), &p.start, p.writes_armed), ("Press Hall", &Start::LastHours(4), true));
+    assert_eq!((p.name.as_str(), &p.start, p.writes_armed), ("Press Hall", &Start::At(NaiveDate::from_ymd_opt(2026, 11, 8).unwrap().and_hms_opt(6, 0, 0).unwrap()), true));
     assert_eq!(p.store, Store::Disk { path: v1.join("cache/session.duckdb"), memory_limit_mb: 2048 });
     assert_eq!(p.logs.iter().map(|l| l.id.as_str()).collect::<Vec<_>>(), ["press-a", "events"]);
     assert!(matches!(&p.logs[0].kind, LogKind::Family { date_format: Some(f), active: ActiveConfig::Newest, .. } if f == "%Y%m%d"));
@@ -323,6 +371,11 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
     assert_eq!((plc.rules.len(), plc.rules[0].store_on_change, plc.rules[0].tags.len()), (1, true, 4));
     assert_eq!((plc.rules[0].tags[3].ty.as_str(), plc.rules[0].tags[3].bits.len()), ("int", 1), "bits on a float carried as an int word");
     assert_eq!((plc.rules[0].tags[1].bits[0].width, plc.rules[0].tags[2].ty.as_str(), plc.rules[0].tags[2].writable), (1, "float", true));
+    // The second server, carried anonymous and unsecured with its one rule; the third, with no
+    // rule to map its tags, is not carried (a source needs its rules).
+    assert_eq!(p.opc.len(), 2, "{}", migrated.toml);
+    let plc2 = &p.opc[1];
+    assert_eq!((plc2.source_id.as_str(), plc2.user.as_deref(), plc2.password_env.as_deref(), plc2.poll_ms, plc2.rules.len()), ("plc-2", None, None, 250, 1));
     assert_eq!(p.tables.len(), 2);
     assert_eq!(p.tables[0], ("hot".to_string(), "SELECT * FROM readings WHERE v > 20.0".to_string()));
     assert!(p.tables[1].1.starts_with("SELECT * FROM read_csv(") && p.tables[1].1.contains("decimal_separator"), "{}", p.tables[1].1);
@@ -337,11 +390,32 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
         "rule `unused` was disabled",
         "table `gone` was disabled",
         "not carried, by design: the dashboard layout",
+        "opc `plc-2`: security `{\"SignAndEncrypt\":\"Basic256Sha256\"}` was never implemented; the source is carried without it",
+        "opc `plc-2`: certificate authentication was never implemented; the source is carried anonymous",
+        "opc `plc-3`: security `Sign` was never implemented",
+        "opc `plc-3`: no rule mapped its tags: not carried",
     ] {
         assert!(notes.contains(expected), "no note `{expected}` in:\n{notes}");
     }
-    assert_eq!(migrated.notes.len(), 7, "{notes}");
+    assert_eq!(migrated.notes.len(), 11, "{notes}");
     assert!(migrated.toml.starts_with("# Read into Veredas 2 from a Veredas 1 project folder"));
+    // An absolute start in the other spelling is carried too; one that is no date-time is named
+    // and the session starts live, never a guess.
+    w("session.json", r#"{ "start": { "kind": "Absolute", "absolute": "2026-07-17 09:15" } }"#);
+    let again = project::from_v1(&v1).unwrap();
+    assert_eq!(project::load(&again.toml, &v1).unwrap().start, Start::At(NaiveDate::from_ymd_opt(2026, 7, 17).unwrap().and_hms_opt(9, 15, 0).unwrap()));
+    w("session.json", r#"{ "start": { "kind": "Absolute", "absolute": "yesterdayish" } }"#);
+    let again = project::from_v1(&v1).unwrap();
+    assert_eq!(project::load(&again.toml, &v1).unwrap().start, Start::Live);
+    assert!(again.notes.iter().any(|n| n == "session.start: the absolute start `yesterdayish` is not a date-time (`YYYY-MM-DD HH:MM[:SS]`, a `T` or a space between) nor a date; the session starts live"), "{}", again.notes.join("\n"));
+    // A folder that leaves nothing to carry yields no file: the import is refused with the
+    // reason the file would have been, and its notes.
+    let bare = dir.path().join("bare");
+    std::fs::create_dir_all(&bare).unwrap();
+    std::fs::write(bare.join("veredas.json"), r#"{ "format": 1, "name": "bare" }"#).unwrap();
+    std::fs::write(bare.join("sources.json"), r#"[ { "id": "off", "display_name": "", "enabled": false, "kind": { "SingleFile": { "path": "a.log" } } } ]"#).unwrap();
+    let e = project::from_v1(&bare).unwrap_err().to_string();
+    assert!(e.starts_with("the file read from the folder does not load: the project has no source") && e.contains("note: source `off` was disabled"), "{e}");
     // A folder that is no Veredas 1 project, and a manifest of another format.
     let not = project::from_v1(dir.path()).unwrap_err().to_string();
     assert!(not.starts_with("the Veredas 1 project's veredas.json: cannot read "), "{not}");
@@ -382,6 +456,76 @@ fn the_executable_checks_a_project_and_reads_a_veredas_1_folder() {
     let p = project::load(&toml, &v1).unwrap_or_else(|e| panic!("{e}\n{toml}"));
     assert_eq!((p.name.as_str(), p.logs.len()), ("old", 1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("note: not carried, by design"));
+}
+
+/// The run mode: the executable serves where the project says (the address it bound, the port
+/// the system's when asked for 0), prints every source's health once a second, and ends well
+/// when stdin closes.
+#[test]
+fn the_executable_runs_a_project_serving_and_reporting_until_stdin_closes() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpStream;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    let Some(exe) = option_env!("CARGO_BIN_EXE_veredas-portal") else {
+        return; // the light build has no executable
+    };
+    let (dir, text) = example();
+    std::fs::create_dir_all(dir.path().join("logs")).unwrap();
+    std::fs::write(dir.path().join("press.log"), "").unwrap();
+    // The plant and the channel's peer are away, so those two sources retry; the logs wait.
+    let text = with(&text, "[server]", "bind", "bind = \"127.0.0.1:0\"");
+    let file = dir.path().join("project.toml");
+    std::fs::write(&file, &text).unwrap();
+    // The OPC source's password is the variable the project names, read when the session starts.
+    let mut child = Command::new(exe).arg(&file).env("PLC_PASSWORD", "secret").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut errs = child.stderr.take().unwrap();
+    let stderr = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = errs.read_to_string(&mut s);
+        s
+    });
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    let mut before = String::new();
+    let serving = loop {
+        line.clear();
+        if out.read_line(&mut line).unwrap() == 0 {
+            let status = child.wait().unwrap();
+            panic!("the executable ended ({status:?}) before it served:\n{before}\nstderr:\n{}", stderr.join().unwrap());
+        }
+        if let Some(rest) = line.trim().strip_prefix("serving on http://") {
+            break rest.trim_end_matches('/').to_string();
+        }
+        before.push_str(&line);
+    };
+    assert!(serving.starts_with("127.0.0.1:") && serving != "127.0.0.1:0", "the address bound, not the one asked: {serving}");
+    let mut s = TcpStream::connect(&serving).unwrap();
+    s.write_all(format!("GET /api/session HTTP/1.1\r\nHost: {serving}\r\nConnection: close\r\n\r\n").as_bytes()).unwrap();
+    let mut answer = String::new();
+    s.read_to_string(&mut answer).unwrap();
+    assert!(answer.starts_with("HTTP/1.1 200") && answer.contains("the press hall"), "{answer}");
+    // A status line a second, naming every source: two of them, about a second apart.
+    let mut seen = Vec::new();
+    while seen.len() < 2 {
+        line.clear();
+        assert!(out.read_line(&mut line).unwrap() > 0, "the executable ended before two status lines");
+        if line.contains("| ") && line.contains(" values") {
+            for id in ["scanner:", "press:", "plc:", "sorter:"] {
+                assert!(line.contains(id), "no `{id}` in the status line: {line}");
+            }
+            seen.push(Instant::now());
+        }
+    }
+    let gap = seen[1] - seen[0];
+    assert!(gap >= Duration::from_millis(500) && gap <= Duration::from_secs(3), "a status line a second: {gap:?} between two");
+    // Stdin closed: the session stops and the process ends well, nothing on stderr.
+    drop(child.stdin.take());
+    let mut rest = String::new();
+    out.read_to_string(&mut rest).unwrap();
+    let status = child.wait().unwrap();
+    let errs = stderr.join().unwrap();
+    assert!(status.success() && errs.trim().is_empty(), "exit {status:?}; stderr:\n{errs}");
 }
 
 /// The reference is the text this test holds: an edit there is an edit here, beside its pins.

@@ -372,7 +372,8 @@ impl Suite {
         let mut stamped: Vec<(String, String)> = Vec::new();
         for p in &paths {
             let (dir, file) = p.rsplit_once('/').unwrap_or(("", p.as_str()));
-            if file.ends_with(".toml") && !file.eq_ignore_ascii_case("Cargo.toml") {
+            // The extension in any case: a `.TOML` is a TOML file to every reader of it.
+            if file.to_ascii_lowercase().ends_with(".toml") && !file.eq_ignore_ascii_case("Cargo.toml") {
                 stamped.push((p.clone(), read(p)?));
             }
             if p.starts_with("docs/") && p.ends_with(".md") {
@@ -859,16 +860,39 @@ pub fn history(root: &Path) -> Result<Vec<Violation>, Error> {
     Ok(out)
 }
 
-/// The ```toml blocks of a Markdown text, in order, whatever its line endings.
+/// The TOML blocks of a Markdown text, in order, whatever its line endings: every fenced block
+/// (three or more backticks or tildes, as CommonMark has it) whose info string's first word is
+/// `toml` in any case, whatever follows it (a title, a space), closed by a fence of its own
+/// character at least as long and nothing else on the line.
 fn toml_blocks(text: &str) -> Vec<String> {
-    let text = text.replace("\r\n", "\n");
+    fn fence(line: &str) -> Option<(char, usize, &str)> {
+        let t = line.trim_start();
+        let c = t.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+        let n = t.chars().take_while(|&x| x == c).count();
+        (n >= 3).then(|| (c, n, &t[n..]))
+    }
     let mut out = Vec::new();
-    let mut rest = text.as_str();
-    while let Some(start) = rest.find("```toml\n") {
-        let body = &rest[start + "```toml\n".len()..];
-        let Some(end) = body.find("```") else { break };
-        out.push(body[..end].to_string());
-        rest = &body[end + 3..];
+    let mut open: Option<(char, usize)> = None;
+    let mut body = String::new();
+    for line in text.lines() {
+        match (open, fence(line)) {
+            (None, Some((c, n, info))) => {
+                let word = info.trim().split(|ch: char| ch.is_whitespace() || ch == ',' || ch == '{').next().unwrap_or("");
+                if word.eq_ignore_ascii_case("toml") {
+                    open = Some((c, n));
+                    body.clear();
+                }
+            }
+            (Some((c, n)), Some((fc, fn_, rest))) if fc == c && fn_ >= n && rest.trim().is_empty() => {
+                out.push(std::mem::take(&mut body));
+                open = None;
+            }
+            (Some(_), _) => {
+                body.push_str(line);
+                body.push('\n');
+            }
+            (None, None) => {}
+        }
     }
     out
 }

@@ -275,7 +275,7 @@ fn default_idle() -> i64 {
     DEFAULT_IDLE_MS
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(untagged)]
 enum StartFile {
     /// `midnight`, or a date-time.
@@ -283,7 +283,7 @@ enum StartFile {
     LastHours { last_hours: u32 },
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(untagged)]
 enum StoreFile {
     /// `ram`.
@@ -293,6 +293,75 @@ enum StoreFile {
         #[serde(default)]
         memory_limit_mb: u32,
     },
+}
+
+// A key that takes a word or an inline table is read key by key, never through an untagged enum:
+// that would swallow a misspelled key's name into "did not match any variant", where the file's
+// rule is that every misspelled key, anywhere, is refused with its name, in the same words as
+// the rest (serde's own, with the parser's place).
+
+/// Every key of an inline table is one of the allowed, or refused by name.
+fn only_keys<E: serde::de::Error>(t: &toml::Table, allowed: &'static [&'static str]) -> Result<(), E> {
+    match t.keys().find(|k| !allowed.contains(&k.as_str())) {
+        Some(k) => Err(E::unknown_field(k, allowed)),
+        None => Ok(()),
+    }
+}
+
+/// A required string of an inline table.
+fn string_at<E: serde::de::Error>(t: &toml::Table, key: &'static str) -> Result<String, E> {
+    match t.get(key) {
+        None => Err(E::missing_field(key)),
+        Some(toml::Value::String(s)) => Ok(s.clone()),
+        Some(other) => Err(E::invalid_type(unexpected(other), &"a string")),
+    }
+}
+
+/// A whole number of an inline table, a `u32`, with its default when it may be left out.
+fn u32_at<E: serde::de::Error>(t: &toml::Table, key: &'static str, default: Option<u32>) -> Result<u32, E> {
+    match t.get(key) {
+        None => default.ok_or_else(|| E::missing_field(key)),
+        Some(toml::Value::Integer(i)) => u32::try_from(*i).map_err(|_| E::invalid_value(serde::de::Unexpected::Signed(*i), &"a whole number from 0 to 4294967295")),
+        Some(other) => Err(E::invalid_type(unexpected(other), &"a whole number")),
+    }
+}
+
+fn unexpected(v: &toml::Value) -> serde::de::Unexpected<'_> {
+    match v {
+        toml::Value::String(s) => serde::de::Unexpected::Str(s),
+        toml::Value::Integer(i) => serde::de::Unexpected::Signed(*i),
+        toml::Value::Float(f) => serde::de::Unexpected::Float(*f),
+        toml::Value::Boolean(b) => serde::de::Unexpected::Bool(*b),
+        toml::Value::Datetime(_) => serde::de::Unexpected::Other("a date-time"),
+        toml::Value::Array(_) => serde::de::Unexpected::Seq,
+        toml::Value::Table(_) => serde::de::Unexpected::Map,
+    }
+}
+
+impl<'de> Deserialize<'de> for StartFile {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        match toml::Value::deserialize(d)? {
+            toml::Value::String(s) => Ok(StartFile::Text(s)),
+            toml::Value::Table(t) => {
+                only_keys(&t, &["last_hours"])?;
+                Ok(StartFile::LastHours { last_hours: u32_at(&t, "last_hours", None)? })
+            }
+            other => Err(serde::de::Error::invalid_type(unexpected(&other), &"`midnight`, a date-time, a date, or { last_hours = N }")),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for StoreFile {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        match toml::Value::deserialize(d)? {
+            toml::Value::String(s) => Ok(StoreFile::Named(s)),
+            toml::Value::Table(t) => {
+                only_keys(&t, &["disk", "memory_limit_mb"])?;
+                Ok(StoreFile::Disk { disk: string_at(&t, "disk")?, memory_limit_mb: u32_at(&t, "memory_limit_mb", Some(0))? })
+            }
+            other => Err(serde::de::Error::invalid_type(unexpected(&other), &"`ram`, or { disk = \"<file>\", memory_limit_mb = N }")),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -323,12 +392,25 @@ struct LogFile {
     timestamp: Option<TimestampConfig>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(untagged)]
 enum ActiveFile {
     /// `newest`.
     Named(String),
     Fixed { fixed: String },
+}
+
+impl<'de> Deserialize<'de> for ActiveFile {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        match toml::Value::deserialize(d)? {
+            toml::Value::String(s) => Ok(ActiveFile::Named(s)),
+            toml::Value::Table(t) => {
+                only_keys(&t, &["fixed"])?;
+                Ok(ActiveFile::Fixed { fixed: string_at(&t, "fixed")? })
+            }
+            other => Err(serde::de::Error::invalid_type(unexpected(&other), &"`newest`, or { fixed = \"<name>\" }")),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -386,6 +468,20 @@ fn parse_start(text: &str) -> Result<Start, ProjectError> {
         return Ok(Start::At(t));
     }
     Err(invalid(format!("session.start: `{s}` is neither `midnight`, a date-time `YYYY-MM-DD HH:MM[:SS]`, a date `YYYY-MM-DD`, nor {{ last_hours = N }}")))
+}
+
+/// Veredas 1's absolute start as its operator typed it (a free text there): a date-time with a
+/// space or a `T` between, seconds and a fraction optional, or a date. Anything else is no
+/// start, and the import says so rather than guess.
+#[cfg(feature = "store")]
+fn v1_absolute(text: &str) -> Option<NaiveDateTime> {
+    let s = text.trim();
+    for fmt in ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"] {
+        if let Ok(t) = NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(t);
+        }
+    }
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").ok().and_then(|d| d.and_hms_opt(0, 0, 0))
 }
 
 /// Read and check a project file whose referenced files live under `base` (the file's folder).
@@ -936,9 +1032,14 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
                 timestamp: timestamp(&s.ts),
             }),
             v1::Kind::OpcUa { endpoint_url, security, auth, poll_ms } => {
-                if let Some(sec) = security.as_str()
-                    && sec != "None"
-                {
+                // Whatever shape the mode took in the JSON (a word, or an object naming a policy),
+                // anything but `None` is named: the gateway speaks to the server unsecured.
+                let sec = match security {
+                    serde_json::Value::Null => None,
+                    serde_json::Value::String(word) => (word != "None").then(|| word.clone()),
+                    other => Some(other.to_string()),
+                };
+                if let Some(sec) = sec {
                     notes.push(format!("opc `{}`: security `{sec}` was never implemented; the source is carried without it", s.id));
                 }
                 let (user, password_env) = match auth {
@@ -981,8 +1082,11 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
                     }
                     source.rules.push(OpcRuleConfig { name: r.name.clone(), store_on_change: r.store_on_change, tags });
                 }
+                // A source without a rule is no source the file can hold (an `[[opc]]` needs its
+                // rules), so it is not carried, and the note says what to write.
                 if source.rules.is_empty() {
-                    notes.push(format!("opc `{}`: no rule mapped its tags; the source is carried with none, and the session will refuse it until one is written", s.id));
+                    notes.push(format!("opc `{}`: no rule mapped its tags: not carried (write its [[opc]] with its rules when it is wanted)", s.id));
+                    continue;
                 }
                 opc.push(source);
             }
@@ -1031,7 +1135,17 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
             "Now" => None,
             "SinceMidnight" => Some(StartFile::Text("midnight".into())),
             "LastHours" => Some(StartFile::LastHours { last_hours: s.last_hours.max(1) }),
-            "Absolute" => Some(StartFile::Text(s.absolute.trim().to_string())),
+            "Absolute" => match v1_absolute(&s.absolute) {
+                // Written in the file's own spelling, whichever Veredas 1's operator typed.
+                Some(t) => Some(StartFile::Text(t.format("%Y-%m-%d %H:%M:%S").to_string())),
+                None => {
+                    notes.push(format!(
+                        "session.start: the absolute start `{}` is not a date-time (`YYYY-MM-DD HH:MM[:SS]`, a `T` or a space between) nor a date; the session starts live",
+                        s.absolute.trim()
+                    ));
+                    None
+                }
+            },
             other => {
                 notes.push(format!("session.start: kind `{other}` is not known; the session starts live"));
                 None
@@ -1060,5 +1174,12 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
     };
     let body = toml::to_string_pretty(&file).map_err(|e| invalid(format!("writing the project file: {e}")))?;
     let toml = format!("# Read into Veredas 2 from a Veredas 1 project folder: check every path and every secret, then keep this file.\n{body}");
+    // The file printed loads, or nothing is printed: a folder that leaves no source to carry, or
+    // a part the import wrote wrong, is refused with the reason and the notes, never handed over
+    // as a file the gateway would then refuse.
+    if let Err(e) = load(&toml, dir) {
+        let notes = notes.iter().map(|n| format!("\nnote: {n}")).collect::<String>();
+        return Err(invalid(format!("the file read from the folder does not load: {e}{notes}")));
+    }
     Ok(Migrated { toml, notes })
 }

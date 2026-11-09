@@ -139,7 +139,8 @@ fn run(project: Project) {
                 std::process::exit(2);
             }
         };
-        println!("serving on http://{addr}/");
+        // The address bound, not the one asked: a port of 0 is the system's to pick.
+        println!("serving on http://{}/", listener.local_addr().unwrap_or(addr));
         runtime.spawn(serve::serve(listener, session.live()));
     }
     println!("running; close stdin to stop");

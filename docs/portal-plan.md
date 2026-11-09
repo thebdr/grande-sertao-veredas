@@ -347,3 +347,12 @@ Recorded as the port meets them.
   broadcasting during the drain lagged a slow client a second time and took the awaited frame
   with it (CI on Linux, C-044's first round). Scan a growing buffer from where the last scan
   stopped.
+- **An untagged enum swallows the key.** `start = { last_hourz = 4 }` read through
+  `#[serde(untagged)]` gave "did not match any variant of untagged enum StartFile", and an extra
+  key passed unseen (C-046, round 1). A key that takes a word or an inline table is read as a
+  `toml::Value` and judged key by key, with serde's own `unknown_field` and `missing_field` so
+  the words and the parser's place stay those of every other refusal.
+- **An import that does not load its own output guesses.** `--from-v1` printed a start it had
+  not read and a server with no rule, and `--check` refused the file it had just written (C-046,
+  round 1). The import loads what it is about to print and refuses the folder, with its notes,
+  when that fails.

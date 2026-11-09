@@ -50,13 +50,36 @@ fn l7_the_reader_collects_toml_files_but_manifests_and_the_blocks_of_a_reference
             ("Cargo.toml", &ws(&["tools/leis"])),
             ("tools/leis/Cargo.toml", LEIS),
             ("docs/thing-schema.md", "# A thing\n\ntext\n\n```toml\nformat = \"veredas-thing\"\nversion = 1\n```\n\nmore\n\n```toml\nformat = \"veredas-thing\"\nversion = 1\nx = 2\n```\n"),
+            // Every fence CommonMark allows opens a TOML block: a trailing space, a title after
+            // the word, tildes, the word in capitals, a longer fence closed by one as long; a
+            // block of another language, and a fence whose word only starts with `toml`, do not.
+            (
+                "docs/fences-schema.md",
+                "# Fences\n\n```toml \nformat = \"veredas-fence\"\nversion = 1\n```\n\n```toml title=\"a\"\nformat = \"veredas-fence\"\nversion = 2\n```\n\n~~~toml\nformat = \"veredas-fence\"\nversion = 3\n~~~\n\n```TOML\nformat = \"veredas-fence\"\nversion = 4\n```\n\n````toml\nformat = \"veredas-fence\"\nversion = 5\ntext = \"\"\"\n```\nstill inside\n\"\"\"\n````\n\n```tomlx\nnot = \"toml\"\n```\n\n```json\n{}\n```\n",
+            ),
             ("docs/other-plan.md", "# plan\n\n```rust\nfn x() {}\n```\n"),
             ("fixtures/a.toml", "format = \"veredas-a\"\nversion = 1\n"),
+            ("fixtures/B.TOML", "format = \"veredas-b\"\nversion = 1\n"),
             ("tools/leis/tests/data/Cargo.toml", "[package]\nname = \"x\"\n"),
         ],
     );
     let s = leis::Suite::read(tree.path()).expect("the tree reads");
     let places: Vec<&str> = s.stamped.iter().map(|(p, _)| p.as_str()).collect();
-    assert_eq!(places, ["docs/thing-schema.md block 1", "docs/thing-schema.md block 2", "fixtures/a.toml"]);
+    assert_eq!(
+        places,
+        [
+            "docs/fences-schema.md block 1",
+            "docs/fences-schema.md block 2",
+            "docs/fences-schema.md block 3",
+            "docs/fences-schema.md block 4",
+            "docs/fences-schema.md block 5",
+            "docs/thing-schema.md block 1",
+            "docs/thing-schema.md block 2",
+            "fixtures/B.TOML",
+            "fixtures/a.toml",
+        ]
+    );
+    let fifth = &s.stamped.iter().find(|(p, _)| p == "docs/fences-schema.md block 5").unwrap().1;
+    assert!(fifth.contains("```\nstill inside"), "a shorter fence inside a longer one is text: {fifth:?}");
     assert_eq!(strings(leis::stamps(&s)), NONE);
 }
