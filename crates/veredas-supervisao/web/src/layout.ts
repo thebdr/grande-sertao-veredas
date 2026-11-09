@@ -12,6 +12,7 @@ interface Bound {
   tag: SVGTextElement;
   label: SVGTextElement;
   fill?: SVGRectElement;
+  filled?: boolean;
   valueText?: SVGTextElement;
   clones: Map<string, SVGGraphicsElement>;
   lastPlace: Map<string, number>;
@@ -112,7 +113,8 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     const cy = b.box.y + b.box.height / 2;
     const prev = b.lastPlace.get(key);
     // A wrap around the path jumps, never slides back across the drawing.
-    el.classList.toggle("sv-jump", prev !== undefined && Math.abs(prev - place) > 0.5);
+    // The first place and a wrap around the path are set at once; a step slides.
+    el.classList.toggle("sv-jump", prev === undefined || Math.abs(prev - place) > 0.5);
     b.lastPlace.set(key, place);
     el.setAttribute("transform", `translate(${(q.x - cx).toFixed(2)} ${(q.y - cy).toFixed(2)})`);
   }
@@ -127,6 +129,13 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       t.classList.add(cls);
     }
     if (b.fill) {
+      // The first fill is set at once, the next ones slide.
+      if (!b.filled) {
+        b.filled = true;
+        b.fill.classList.add("sv-instant");
+        const fill = b.fill;
+        requestAnimationFrame(() => requestAnimationFrame(() => fill.classList.remove("sv-instant")));
+      }
       const f = o.level ?? 0;
       b.fill.setAttribute("y", String(b.box.y + b.box.height * (1 - f)));
       b.fill.setAttribute("height", String(b.box.height * f));

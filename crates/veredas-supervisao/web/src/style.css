@@ -64,6 +64,7 @@ svg.plant { width: 100%; height: 100%; display: block; user-select: none; }
 .sv-show-move.sv-jump { transition: none; }
 .sv-hidden { display: none; }
 .sv-fill { pointer-events: none; fill: var(--neutral); transition: y .3s, height .3s; }
+.sv-fill.sv-instant { transition: none; }
 .sv-show-state.sv-state-normal, .sv-show-value.sv-state-normal { fill: var(--neutral); }
 .sv-state-near { stroke: var(--near); }
 .sv-show-state.sv-state-near, .sv-fill.sv-state-near { fill: var(--near); }
