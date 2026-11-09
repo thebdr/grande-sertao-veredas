@@ -10,15 +10,15 @@
     "session"
   ],
   "exitCode": 0,
-  "outputSha": "5b6ff6f752a17b137519130c80c0f5e6b99dfc0555aab0140597db065f89dc0c",
-  "outputTail": "\nrunning 6 tests\ntest a_start_is_refused_by_name_before_anything_spawns ... ok\ntest a_failed_worker_still_reads_as_failed_after_the_stop ... ok\ntest the_master_switch_is_off_by_default_and_arms_every_write_path_at_once ... ok\ntest the_three_protocols_run_into_one_store_alike ... ok\ntest health_reads_waiting_then_live_then_idle_on_the_arrival_clock ... ok\ntest a_stop_stores_every_row_the_workers_sent_and_publishes_the_end ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.76s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.36s\n     Running tests\\session.rs (target\\debug\\deps\\session-e32257ff8a4afda5.exe)",
-  "ranAt": "2026-11-09T03:16:39.566Z",
-  "headCommit": "745361cab937d89abe6d9f33d7080840d1cafe22",
+  "outputSha": "570aa784e6f0ec498a4b249da06d3c72c67a7d2eda226e86f46452cc9e47ee1b",
+  "outputTail": "\nrunning 7 tests\ntest a_start_is_refused_by_name_before_anything_spawns ... ok\ntest a_failed_worker_still_reads_as_failed_after_the_stop ... ok\ntest the_master_switch_is_off_by_default_and_arms_every_write_path_at_once ... ok\ntest the_three_protocols_run_into_one_store_alike ... ok\ntest health_reads_waiting_then_live_then_idle_on_the_arrival_clock ... ok\ntest a_stop_stores_every_row_the_workers_sent_and_publishes_the_end ... ok\ntest the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_says ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.43s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.80s\n     Running tests\\session.rs (target\\debug\\deps\\session-e32257ff8a4afda5.exe)",
+  "ranAt": "2026-11-09T03:24:51.397Z",
+  "headCommit": "4cb7a7645e32a8b340d9d9c3e4ff4607989f4735",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/session.rs",
       "file": "crates/veredas-portal/tests/session.rs",
-      "fileSha": "186db74155bd9869cf67ecbc7118dd64cea33cffc9e8f696c2170f374248b1af"
+      "fileSha": "6de0a56c6d8c7e96d1368b770f8c64d4ef0e46d3a57e0bcb14ae2badd6f30302"
     }
   ]
 }
