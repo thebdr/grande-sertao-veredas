@@ -307,6 +307,13 @@ fn the_identity_comes_from_a_named_secret_and_a_wrong_one_never_connects() {
         compile(&cfg, &no_secret).unwrap_err().to_string(),
         "source `plc`: the secret `plc_pw` for the password of `operator` is not in the secrets file"
     );
+    // The entry is the only name asked: secrets that hold every other name, the source id and the
+    // user among them, still refuse the source by its entry, so no fallback hides a renamed entry.
+    let all_but_the_entry = |e: &str| (e != "plc_pw").then(|| "s3cret".to_string());
+    assert_eq!(
+        compile(&cfg, &all_but_the_entry).err(),
+        Some(OpcError::SecretMissing { source_id: "plc".into(), user: "operator".into(), entry: "plc_pw".into() })
+    );
     // A wrong password: the worker retries and never connects.
     let wrong = compile(&cfg, &|_| Some("nope".to_string())).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
