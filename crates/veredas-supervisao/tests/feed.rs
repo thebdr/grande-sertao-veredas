@@ -121,6 +121,21 @@ fn the_fold_reads_every_object_exactly() {
     f.cached("plc", "speed", 2, "9", 30_003);
     assert_eq!(f.view(o("speed"), true, 30_003).value, Some(Reading::Num(1.75)));
 
+    // Away, by the source's health: waiting is away only once the source has delivered (portal
+    // reads an OPC source reconnecting, and a channel whose peer left, as waiting).
+    use veredas_portal::session::HealthState;
+    use veredas_supervisao::feed::away;
+    for (state, before_first, after_first) in [
+        (HealthState::Live, false, false),
+        (HealthState::Waiting, false, true),
+        (HealthState::Idle { silence_ms: 25_000 }, true, true),
+        (HealthState::Retrying("refused".into()), true, true),
+        (HealthState::Ended, true, true),
+        (HealthState::Failed("gone".into()), true, true),
+    ] {
+        assert_eq!((away(&state, 0), away(&state, 1)), (before_first, after_first), "{state:?}");
+    }
+
     // The page's form of a view.
     f.sample("plc", "fill2", None, 1, 85.0, 40_000);
     assert_eq!(f.view(o("outlet-2"), true, 40_000).to_json(), json!({
@@ -214,5 +229,14 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
     let s = snapshot(addr);
     assert_eq!((object(&s, "outlet-1")["text"].clone(), object(&s, "outlet-1")["word"].clone(), object(&s, "outlet-1")["state"].clone()), (json!("35"), json!("stale"), json!("stale")));
     assert_ne!(s["session"]["health"]["plc"]["state"], json!("live"));
+    // And it stays stale while the source tries again, retrying or waiting on a reconnect.
+    let mut states = std::collections::BTreeSet::new();
+    for _ in 0..16 {
+        std::thread::sleep(Duration::from_millis(250));
+        let s = snapshot(addr);
+        assert_eq!(object(&s, "outlet-1")["stale"], json!(true), "{s}");
+        states.insert(s["session"]["health"]["plc"]["state"].as_str().unwrap().to_string());
+    }
+    assert!(states.iter().all(|x| x == "retrying" || x == "waiting"), "{states:?}");
     host.stop();
 }

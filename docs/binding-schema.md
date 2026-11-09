@@ -319,7 +319,8 @@ A path is relative to the binding file's folder.
 
 The states read with a mark and a word everywhere: normal ●, near ■, warn ■, alarm !, disabled ▨,
 stale ◌, and the page's own selected ◆. Stale overrides the rules: an object with no value yet, whose source is away (idle past the
-project's window, retrying, ended or failed), or whose value is older than its `stale_after_ms`, is
+project's window, retrying, ended or failed, or waiting again once it has delivered: an OPC source
+reconnecting, a channel whose peer left), or whose value is older than its `stale_after_ms`, is
 stale, a last value kept and greyed.
 
 **An action** (an entry of `actions`): a write the side panel offers, posted to portal's write

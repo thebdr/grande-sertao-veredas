@@ -97,8 +97,9 @@ the gateway, the desktop, the supervision app) each did.
   state. Writes are shown gated (the warn colour) wherever they appear, and disabled while the
   session's switch is off.
 - **Staleness is judged on the arrival clock.** An object is stale when it has no value yet, when its source
-  is away (idle past the project's window, retrying, ended or failed: a source still waiting has
-  delivered nothing, and its health lags its first value by a refresh), or when the object names a
+  is away (idle past the project's window, retrying, ended or failed, or waiting again once it has
+  delivered, as portal reads a reconnect; a source waiting before its first delivery is not away,
+  its health lagging its first value by a refresh), or when the object names a
   freshness bound and no sample came within it. A quiet plant
   storing on change is not stale (Veredas 1's lesson: on-change storage makes a healthy plant look
   dead when staleness reads sample age).

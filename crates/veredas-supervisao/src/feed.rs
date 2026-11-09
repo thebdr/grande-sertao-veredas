@@ -265,14 +265,24 @@ pub fn status(live: &Live) -> Json {
     })
 }
 
-/// Which sources are away right now: idle past the session's window, retrying, ended or failed.
-/// A source still waiting has delivered nothing an object could show, and the health is the
-/// pump's last refresh, so a first value can arrive before the health reads live: waiting is
-/// not away.
+/// Whether a source is away, by its health and how much it has delivered: idle past the
+/// project's window, retrying, ended or failed; or waiting again once it has delivered (portal
+/// reads an OPC source reconnecting and a channel whose peer left as waiting). A source waiting
+/// before its first delivery is not away: it has given an object nothing to show, and the
+/// health is the pump's last refresh, so a first value can arrive before the health reads live.
+pub fn away(state: &HealthState, count: u64) -> bool {
+    match state {
+        HealthState::Live => false,
+        HealthState::Waiting => count > 0,
+        HealthState::Idle { .. } | HealthState::Retrying(_) | HealthState::Ended | HealthState::Failed(_) => true,
+    }
+}
+
+/// Which sources are away right now.
 fn away_sources(live: &Live) -> BTreeSet<String> {
     live.health
         .read()
-        .map(|h| h.iter().filter(|(_, s)| !matches!(s.state, HealthState::Live | HealthState::Waiting)).map(|(id, _)| id.clone()).collect())
+        .map(|h| h.iter().filter(|(_, s)| away(&s.state, s.count)).map(|(id, _)| id.clone()).collect())
         .unwrap_or_default()
 }
 
