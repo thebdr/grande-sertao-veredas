@@ -388,10 +388,17 @@ fn the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_s
         i += 1;
         std::thread::sleep(Duration::from_millis(55));
     }
+    // The last line written is still on its way when the loop ends: the counters are read once
+    // it has arrived (a published snapshot is read by waiting for what is asserted of it).
+    let expected = 70 + (i - 70) as u64;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while live.counters.read().unwrap().lines < expected && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
     let counters = live.counters.read().unwrap().clone();
     assert!(counters.frames > 260, "{counters:?}");
     assert!(matches!(frames.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) if n > 0), "a listener that never read lags");
-    assert_eq!(counters.lines, 70 + (i - 70) as u64, "every line reached the store meanwhile");
+    assert_eq!(counters.lines, expected, "every line reached the store meanwhile");
     for (id, r) in session.stop() {
         r.unwrap_or_else(|e| panic!("{id}: {e}"));
     }
