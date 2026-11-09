@@ -189,7 +189,7 @@ fn rows_of_a_capture_rule_an_opc_rule_and_a_telegram_message_are_stored_alike_an
     let names: Vec<String> = infos.iter().map(|i| i.series.to_string()).collect();
     assert_eq!(names, ["a/tag", "a/temp", "plc/running", "plc/speed", "plc/word", "sorter/code", "sorter/item"]);
     let temp = infos.iter().find(|i| i.series == SeriesRef::new("a", "temp")).unwrap();
-    assert_eq!((temp.ty, temp.count, temp.keys, temp.last_index_ms, temp.last_value.as_str()), (SeriesType::Float, 2, 1, 2000, "26.0"));
+    assert_eq!((temp.ty, temp.count, temp.keys, temp.last_index_ms, temp.last_value.as_str()), (SeriesType::Float, 2, 1, 2000, "26"));
     let tag = infos.iter().find(|i| i.series == SeriesRef::new("a", "tag")).unwrap();
     assert_eq!((tag.count, tag.last_index_ms, tag.last_value.as_str()), (1, 1000, "ok"), "a hole is not a value");
 
@@ -392,12 +392,15 @@ fn a_disk_store_persists_and_reopens_with_its_rows() {
     let db = dir.path().join("deeper").join("session.duckdb");
     {
         let residency = Residency::Disk { path: db.clone(), memory_limit_mb: 256 };
-        let store = DuckStore::open(&residency, &[capture_spec()], &[]).unwrap();
+        let store = DuckStore::open(&residency, &[capture_spec()], &[TableDef { name: "limits".into(), sql: "SELECT current_setting('memory_limit') AS memory_limit, current_setting('temp_directory') AS temp_directory".into() }]).unwrap();
         assert_eq!(store.residency(), &residency);
         for i in 0..50i64 {
             store.append_wide(0, &[wide("a", Some("s1"), 1000 + i, i as u64, vec![Some(Value::Float(i as f64)), None])]).unwrap();
         }
         assert_eq!(store.query_numeric(&SeriesRef::new("a", "temp"), None, 0, i64::MAX).len(), 50);
+        let limits = store.query_rows("limits", &RowsQuery { limit: 1, ..Default::default() }).unwrap();
+        assert_eq!(limits.rows[0][0], serde_json::json!("256.0 MiB"), "the memory limit as set, read through the store");
+        assert_eq!(limits.rows[0][1], serde_json::json!(db.parent().unwrap().display().to_string()), "the spill folder beside the file");
     }
     assert!(db.exists(), "the folder was created and the file written");
     let back = duckdb::Connection::open(&db).unwrap();
@@ -501,4 +504,168 @@ fn the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves
     let tabs = write("tabs.csv", "a\tb\r\n1\tx\r\n");
     assert!(!csv_looks_unsplit(&tabs, &CsvOptions::default()));
     assert!(!csv_looks_unsplit("nope.csv", &CsvOptions::default()), "a missing file is not unsplit, it is an error elsewhere");
+}
+
+// ---- the first refute round ------------------------------------------------------------------
+
+/// The last value of a base-table column displays as the suite displays it, never as the engine
+/// prints it: 26.0 reads "26", 1e20 reads its digits, as the narrow samples already did.
+#[test]
+fn a_last_value_displays_as_the_suite_does_not_as_the_engine_prints() {
+    let store = DuckStore::open(&Residency::Ram, &[capture_spec()], &[]).unwrap();
+    store.append_wide(0, &[wide("s", None, 1000, 1, vec![Some(Value::Float(26.0)), None])]).unwrap();
+    store.append_wide(0, &[wide("t", None, 1000, 1, vec![Some(Value::Float(1e20)), None])]).unwrap();
+    let infos = store.list();
+    let last = |src: &str| infos.iter().find(|i| i.series == SeriesRef::new(src, "temp")).map(|i| i.last_value.clone()).unwrap_or_default();
+    assert_eq!(last("s"), Value::Float(26.0).to_string());
+    assert_eq!(last("s"), "26");
+    assert_eq!(last("t"), "100000000000000000000");
+}
+
+/// A snapshot never writes over an existing file, a foreign database least of all, refused by
+/// name before anything is attached; and a refused snapshot leaves nothing attached, so the next
+/// one writes.
+#[test]
+fn a_snapshot_refuses_an_existing_file_and_a_refusal_leaves_the_next_one_free() {
+    let dir = tempfile::tempdir().unwrap();
+    let other = dir.path().join("other.duckdb");
+    {
+        let ext = duckdb::Connection::open(&other).unwrap();
+        ext.execute_batch("CREATE TABLE precious(x INTEGER); INSERT INTO precious VALUES (42);").unwrap();
+    }
+    let store = DuckStore::open(&Residency::Ram, &[capture_spec()], &[]).unwrap();
+    store.append_wide(0, &[wide("a", Some("s1"), 1000, 1, vec![Some(Value::Float(25.0)), None])]).unwrap();
+    let err = store.save_to(&other).unwrap_err().to_string();
+    assert!(err.contains("a snapshot never writes over one") && err.contains("other.duckdb"), "{err}");
+    {
+        let ext = duckdb::Connection::open(&other).unwrap();
+        let tables: i64 = ext.query_row("SELECT count(*) FROM duckdb_tables() WHERE NOT internal", [], |r| r.get(0)).unwrap();
+        let x: i64 = ext.query_row("SELECT x FROM precious", [], |r| r.get(0)).unwrap();
+        assert_eq!((tables, x), (1, 42), "the foreign file holds its one table and nothing of the session");
+    }
+    let fresh = dir.path().join("fresh.duckdb");
+    store.save_to(&fresh).unwrap();
+    let ext = duckdb::Connection::open(&fresh).unwrap();
+    let rows: i64 = ext.query_row("SELECT count(*) FROM readings", [], |r| r.get(0)).unwrap();
+    assert_eq!(rows, 1);
+}
+
+/// A linked file gone between a removal and its replacement breaks its own view alone: every
+/// base table still lists, pages and charts, the view is listed with no columns, and the
+/// replacement is seen on the next query.
+#[test]
+fn a_missing_linked_csv_hides_no_other_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let csv = dir.path().join("ref.csv");
+    std::fs::write(&csv, "sensor,label\n1,inlet\n").unwrap();
+    let path = csv.display().to_string();
+    let store = DuckStore::open(
+        &Residency::Ram,
+        &[capture_spec()],
+        &[TableDef { name: "refv".into(), sql: format!("SELECT * FROM {}", csv_scan_sql(&path, &CsvOptions::default())) }],
+    )
+    .unwrap();
+    store.append_wide(0, &[wide("a", Some("1"), 1000, 1, vec![Some(Value::Float(0.5)), None])]).unwrap();
+    std::fs::remove_file(&csv).unwrap();
+    assert_eq!(store.query_rows("readings", &RowsQuery { limit: 10, ..Default::default() }).unwrap().total, 1);
+    assert_eq!(store.query_table_series("readings", "temp", None, 0, i64::MAX).unwrap().len(), 1);
+    let tables = store.list_tables().unwrap();
+    assert!(tables.iter().any(|t| t.name == "readings" && !t.columns.is_empty()), "{tables:?}");
+    let refv = tables.iter().find(|t| t.name == "refv").expect("the view is still listed");
+    assert!(refv.columns.is_empty(), "with no columns while its file is gone: {refv:?}");
+    assert!(store.query_rows("refv", &RowsQuery { limit: 10, ..Default::default() }).is_err(), "the view itself cannot read");
+    std::fs::write(&csv, "sensor,label\n1,inlet\n2,outlet\n").unwrap();
+    assert_eq!(store.query_rows("refv", &RowsQuery { limit: 10, ..Default::default() }).unwrap().total, 2, "the replacement seen on the next query");
+}
+
+/// Rows that share a time read once each across pages: the sequence breaks the tie, so a walk
+/// of one row at a time, or seven, sees every row exactly once.
+#[test]
+fn newest_first_pages_neither_repeat_nor_skip_rows_that_share_a_time() {
+    let store = DuckStore::open(&Residency::Ram, &[capture_spec()], &[]).unwrap();
+    let rows: Vec<WideRow> = (0..50u64).map(|i| wide("a", None, 1000 + (i % 2) as i64, i, vec![Some(Value::Float(i as f64)), None])).collect();
+    store.append_wide(0, &rows).unwrap();
+    for page_size in [1usize, 7] {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut offset = 0;
+        loop {
+            let page = store.query_rows("readings", &RowsQuery { limit: page_size, offset, ..Default::default() }).unwrap();
+            if page.rows.is_empty() {
+                break;
+            }
+            let seq_col = page.columns.iter().position(|c| c.name == "seq").unwrap();
+            for row in &page.rows {
+                assert!(seen.insert(row[seq_col].as_u64().unwrap()), "row {:?} seen twice at page size {page_size}", row[seq_col]);
+            }
+            offset += page_size;
+        }
+        assert_eq!(seen.len(), 50, "page size {page_size}");
+    }
+}
+
+/// Every cell of a page is typed JSON: a date and a time of day as milliseconds like a
+/// timestamp, a decimal a number, an interval an ISO 8601 duration; never the engine's debug
+/// text for a type the suite's tables never make.
+#[test]
+fn a_page_types_dates_decimals_and_intervals_never_as_debug_text() {
+    let store = DuckStore::open(
+        &Residency::Ram,
+        &[capture_spec()],
+        &[TableDef {
+            name: "odd".into(),
+            sql: "SELECT CAST(1 AS BIGINT) AS index_ms, 1.5 AS dec, DATE '2026-01-02' AS d, TIME '01:02:03' AS t, INTERVAL 1 HOUR AS iv".into(),
+        }],
+    )
+    .unwrap();
+    let page = store.query_rows("odd", &RowsQuery { limit: 10, ..Default::default() }).unwrap();
+    let cell = |name: &str| page.rows[0][page.columns.iter().position(|c| c.name == name).unwrap()].clone();
+    assert_eq!(cell("dec"), serde_json::json!(1.5));
+    assert_eq!(cell("d"), serde_json::json!(1_767_312_000_000i64), "2026-01-02 at midnight, in milliseconds");
+    assert_eq!(cell("t"), serde_json::json!(3_723_000i64), "01:02:03 past midnight, in milliseconds");
+    assert_eq!(cell("iv"), serde_json::json!("P0M0DT3600.000000000S"));
+    for c in &page.rows[0] {
+        assert!(!c.to_string().contains("Date32") && !c.to_string().contains("Decimal(") && !c.to_string().contains("Interval {"), "{c}");
+    }
+}
+
+/// A column two tables of one source share is one series on the narrow surface: counted
+/// together, the last value the later one, as the window already merged their points.
+#[test]
+fn a_column_two_tables_of_one_source_share_is_one_series_in_the_listing() {
+    let spec = |name: &str| BaseTableSpec { name: name.into(), columns: vec![("status".into(), SeriesType::Int)], has_key: false };
+    let store = DuckStore::open(&Residency::Ram, &[spec("m1"), spec("m2")], &[]).unwrap();
+    store
+        .append_wide(0, &[wide("tg", None, 10, 1, vec![Some(Value::Int(1))]), wide("tg", None, 20, 2, vec![Some(Value::Int(2))]), wide("tg", None, 30, 3, vec![Some(Value::Int(3))])])
+        .unwrap();
+    store.append_wide(1, &[wide("tg", None, 5, 1, vec![Some(Value::Int(9))])]).unwrap();
+    assert_eq!(store.query_numeric(&SeriesRef::new("tg", "status"), None, 0, i64::MAX).len(), 4);
+    let infos = store.list();
+    let status = infos.iter().filter(|i| i.series == SeriesRef::new("tg", "status")).collect::<Vec<_>>();
+    assert_eq!(status.len(), 1, "{infos:?}");
+    assert_eq!((status[0].count, status[0].last_index_ms, status[0].last_value.as_str()), (4, 30, "3"));
+}
+
+/// A session store is fresh: a database already at its path is refused by name, never a second
+/// session's rows beside the first's.
+#[test]
+fn a_disk_store_refuses_a_database_already_at_its_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("session.duckdb");
+    let residency = Residency::Disk { path: db.clone(), memory_limit_mb: 64 };
+    drop(DuckStore::open(&residency, &[capture_spec()], &[]).unwrap());
+    let err = DuckStore::open(&residency, &[capture_spec()], &[]).err().expect("a database already at the path is refused");
+    assert!(matches!(err, StoreError::Open(_)), "{err}");
+    let text = err.to_string();
+    assert!(text.contains(&db.display().to_string()) && text.contains("already stands there"), "{text}");
+}
+
+/// A key asked of a table or view with no key column is a name the catalog lacks: refused as
+/// one, never a filter silently dropped.
+#[test]
+fn a_chart_s_key_on_a_keyless_table_is_refused_not_dropped() {
+    let store = DuckStore::open(&Residency::Ram, &[capture_spec()], &[TableDef { name: "v".into(), sql: "SELECT index_ms, temp AS f FROM readings".into() }]).unwrap();
+    store.append_wide(0, &[wide("a", Some("k"), 1000, 1, vec![Some(Value::Float(1.0)), None])]).unwrap();
+    assert_eq!(store.query_table_series("v", "f", None, 0, i64::MAX).unwrap().len(), 1);
+    assert_eq!(store.query_table_series("v", "f", Some("zzz"), 0, i64::MAX).unwrap_err().to_string(), "unknown table `v.key`");
+    assert!(store.query_table_series("readings", "temp", Some("zzz"), 0, i64::MAX).unwrap().is_empty(), "a keyed table: empty for an unknown key");
 }

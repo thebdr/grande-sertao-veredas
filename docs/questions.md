@@ -301,3 +301,20 @@ the value. No vault, no secrets file.
 
 **Reversible?** Yes: a second source of secrets (a vault, a file outside the project) is one more
 way to fill the same field.
+
+## Q16 - Where does a project's disk store go on a second run?
+
+**Raised** 2026-11-09, the store's first refute round (C-041).
+
+A project fixes its store's disk path (`[store] path`), and a session store is fresh: its tables
+are created at open. A second run of the same project finds the first run's database at the
+path; opening it would put the new session's rows beside the old ones (or fail on the engine's
+table collision, as it did by accident). The choices: refuse by name until the operator moves the
+file; open fresh by deleting it; or name the file per session (the project's name and the start
+time) so every run leaves its own.
+
+**Taken (reversible, pending the operator):** refuse by name. The store's open says a database
+already stands there and that a session store is fresh; nothing is deleted, nothing merged.
+
+**Reversible?** Yes: a per-session file name or an opening mode is one line in the project's
+store section, and the store's check stays as the guard for the fixed-name case.

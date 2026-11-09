@@ -235,6 +235,11 @@ impl DuckStore {
         let conn = match residency {
             Residency::Ram => Connection::open_in_memory()?,
             Residency::Disk { path, memory_limit_mb } => {
+                // A session store is fresh: a database already at the path is refused by name,
+                // never a second session's rows beside the first's (docs/questions.md Q16).
+                if path.exists() {
+                    return Err(StoreError::Open(format!("open {}: a database already stands there; a session store is fresh, move it or snapshot elsewhere", path.display())));
+                }
                 if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
                     std::fs::create_dir_all(parent).map_err(|e| StoreError::Open(format!("create {}: {e}", parent.display())))?;
                 }
@@ -447,42 +452,74 @@ impl DuckStore {
 
     fn list_on(&self, conn: &Connection) -> Vec<SeriesInfo> {
         let mut acc: BTreeMap<SeriesRef, SeriesInfo> = BTreeMap::new();
+        // One series per (source, column), whatever the number of tables that hold the column:
+        // the later value wins, the counts add up (within one declared type the union below
+        // already counts exactly; across a type conflict the merge is the best the listing can
+        // say, and the conflict is counted apart).
+        fn merge(acc: &mut BTreeMap<SeriesRef, SeriesInfo>, info: SeriesInfo) {
+            match acc.entry(info.series.clone()) {
+                std::collections::btree_map::Entry::Vacant(v) => {
+                    v.insert(info);
+                }
+                std::collections::btree_map::Entry::Occupied(mut o) => {
+                    let e = o.get_mut();
+                    e.count += info.count;
+                    e.keys = e.keys.max(info.keys);
+                    if info.last_index_ms >= e.last_index_ms {
+                        e.last_index_ms = info.last_index_ms;
+                        e.last_value = info.last_value;
+                        e.ty = info.ty;
+                    }
+                }
+            }
+        }
+        // The base tables, grouped by column name and declared type: a column two tables of one
+        // source share is one series, read through one union.
+        let mut groups: BTreeMap<(String, u8), (SeriesType, Vec<String>)> = BTreeMap::new();
         for base in &self.bases {
             for (col, ty) in &base.columns {
-                let sql = format!(
-                    "SELECT source, count({col}) AS cnt, \
-                     count(DISTINCT key) FILTER (WHERE {col} IS NOT NULL) AS keys, \
-                     max(CASE WHEN {col} IS NOT NULL THEN index_ms END) AS last_ms, \
-                     arg_max(CAST({col} AS VARCHAR), index_ms) AS last_disp \
-                     FROM {tbl} GROUP BY source HAVING count({col}) > 0",
-                    col = quote_ident(col),
-                    tbl = quote_ident(&base.name),
-                );
-                let Ok(mut stmt) = conn.prepare(&sql) else { continue };
-                let rows = stmt.query_map([], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, i64>(1)? as u64,
-                        r.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize,
-                        r.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                        r.get::<_, Option<String>>(4)?.unwrap_or_default(),
-                    ))
-                });
-                if let Ok(rows) = rows {
-                    for (source, count, keys, last_ms, last_disp) in rows.flatten() {
-                        acc.insert(
-                            SeriesRef::new(&source, col),
-                            SeriesInfo {
-                                series: SeriesRef::new(&source, col),
-                                ty: *ty,
-                                count,
-                                keys,
-                                keys_capped: false,
-                                last_index_ms: last_ms,
-                                last_value: last_disp,
-                            },
-                        );
-                    }
+                groups.entry((col.clone(), *ty as u8)).or_insert_with(|| (*ty, Vec::new())).1.push(base.name.clone());
+            }
+        }
+        for ((col, _), (ty, tables)) in groups {
+            let qc = quote_ident(&col);
+            let union = tables
+                .iter()
+                .map(|t| format!("SELECT source, key, index_ms, {qc} AS v FROM {}", quote_ident(t)))
+                .collect::<Vec<_>>()
+                .join(" UNION ALL ");
+            // The last value typed, never cast by the engine: the suite's own display of it.
+            let sql = format!(
+                "SELECT source, count(v) AS cnt, \
+                 count(DISTINCT key) FILTER (WHERE v IS NOT NULL) AS keys, \
+                 max(CASE WHEN v IS NOT NULL THEN index_ms END) AS last_ms, \
+                 arg_max(v, index_ms) AS last \
+                 FROM ({union}) GROUP BY source HAVING count(v) > 0"
+            );
+            let Ok(mut stmt) = conn.prepare(&sql) else { continue };
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)? as u64,
+                    r.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize,
+                    r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    r.get::<_, DuckValue>(4).unwrap_or(DuckValue::Null),
+                ))
+            });
+            if let Ok(rows) = rows {
+                for (source, count, keys, last_ms, last) in rows.flatten() {
+                    merge(
+                        &mut acc,
+                        SeriesInfo {
+                            series: SeriesRef::new(&source, &col),
+                            ty,
+                            count,
+                            keys,
+                            keys_capped: false,
+                            last_index_ms: last_ms,
+                            last_value: duck_to_value(&last, ty).map(|v| v.to_string()).unwrap_or_default(),
+                        },
+                    );
                 }
             }
         }
@@ -505,8 +542,8 @@ impl DuckStore {
             });
             if let Ok(rows) = rows {
                 for (source, series, kind, count, keys, last_ms, last_disp) in rows.flatten() {
-                    acc.insert(
-                        SeriesRef::new(&source, &series),
+                    merge(
+                        &mut acc,
                         SeriesInfo {
                             series: SeriesRef::new(&source, &series),
                             ty: kind_series_type(&kind),
@@ -634,7 +671,13 @@ impl DuckStore {
         for (name, kind) in kinds {
             // The columns as they read now: a view over a file the operator widened shows the
             // new column, which the catalog's own record of the view does not.
-            let cols = describe_types(conn, &quote_ident(&name))?.into_iter().map(|(name, data_type)| ColumnInfo { name, data_type }).collect();
+            let cols = match describe_types(conn, &quote_ident(&name)) {
+                Ok(cols) => cols.into_iter().map(|(name, data_type)| ColumnInfo { name, data_type }).collect(),
+                // A view that cannot be described now (a linked file gone between a removal and
+                // its replacement) is listed with no columns; it hides no other table.
+                Err(_) if kind == TableKind::View => Vec::new(),
+                Err(e) => return Err(e),
+            };
             let rows = if kind == TableKind::View {
                 None
             } else {
@@ -676,7 +719,7 @@ impl DuckStore {
             }
         }
         let order = match &time_col {
-            Some(tc) => format!(" ORDER BY {tc} DESC"),
+            Some(tc) => format!(" ORDER BY {tc} DESC{}", if has("seq") { ", seq DESC" } else { "" }),
             None => String::new(),
         };
         let limit = q.limit.clamp(1, MAX_PAGE);
@@ -725,7 +768,12 @@ impl DuckStore {
         } else {
             return Ok(Vec::new());
         };
-        let keyed = key.is_some() && has("key");
+        // A key asked of a table with no key column is a name the catalog lacks, refused as one;
+        // never a filter silently dropped.
+        if key.is_some() && !has("key") {
+            return Err(StoreError::UnknownTable(format!("{table}.key")));
+        }
+        let keyed = key.is_some();
         let key_clause = if keyed { " AND coalesce(key,'') = ?" } else { "" };
         let sql = format!(
             "SELECT {time} AS t, CAST({col} AS DOUBLE) AS v FROM {tbl} \
@@ -783,13 +831,23 @@ impl DuckStore {
     /// Snapshot the whole session database to a standalone `.duckdb` file, base tables as data
     /// and views as views, consistent even mid-session. The target must not exist.
     pub fn save_to(&self, path: &Path) -> Result<(), StoreError> {
+        // Never over an existing file: refused by name before anything is attached (the engine
+        // would attach a foreign database and copy the session into it).
+        if path.exists() {
+            return Err(StoreError::Open(format!("snapshot {}: a file already stands there; a snapshot never writes over one", path.display())));
+        }
         let conn = recover(self.api.lock());
         let dbname: String = conn.query_row("SELECT current_database()", [], |r| r.get(0))?;
-        conn.execute_batch(&format!(
-            "ATTACH '{}' AS _vsnap; COPY FROM DATABASE {} TO _vsnap; DETACH _vsnap;",
-            sql_str(&path.display().to_string()),
-            quote_ident(&dbname),
-        ))?;
+        conn.execute_batch(&format!("ATTACH '{}' AS _vsnap;", sql_str(&path.display().to_string())))?;
+        // The copy may fail; the detach runs regardless, so a refused snapshot leaves nothing
+        // attached and the next one writes. A half-written file is removed.
+        let copied = conn.execute_batch(&format!("COPY FROM DATABASE {} TO _vsnap;", quote_ident(&dbname)));
+        let detached = conn.execute_batch("DETACH _vsnap;");
+        if copied.is_err() {
+            let _ = std::fs::remove_file(path);
+        }
+        copied?;
+        detached?;
         Ok(())
     }
 
@@ -1019,7 +1077,39 @@ fn duck_to_json(v: &DuckValue) -> serde_json::Value {
         DuckValue::Double(f) => serde_json::Number::from_f64(*f).map(J::Number).unwrap_or(J::Null),
         DuckValue::Timestamp(unit, v) => J::from(unit_to_ms(*unit, *v)),
         DuckValue::Text(s) => J::String(s.clone()),
+        DuckValue::Date32(d) => J::from((*d as i64).saturating_mul(86_400_000)),
+        DuckValue::Time64(unit, v) => J::from(unit_to_ms(*unit, *v)),
+        DuckValue::Decimal(d) => {
+            d.to_string().parse::<f64>().ok().and_then(serde_json::Number::from_f64).map(J::Number).unwrap_or_else(|| J::String(d.to_string()))
+        }
+        DuckValue::Interval { months, days, nanos } => {
+            J::String(format!("P{months}M{days}DT{}.{:09}S", nanos.div_euclid(1_000_000_000), nanos.rem_euclid(1_000_000_000)))
+        }
+        DuckValue::Blob(b) => J::String(b.iter().map(|x| format!("{x:02X}")).collect()),
+        DuckValue::Enum(s) => J::String(s.clone()),
+        // A nested value (a list, a struct, a map, a union) as the engine's debug text: no JSON
+        // scalar fits it, and the suite's tables never make one.
         other => J::String(format!("{other:?}")),
+    }
+}
+
+/// A typed cell as the suite's own value, by the series' declared type: what a last value
+/// displays as is the suite's display, never the engine's print.
+fn duck_to_value(v: &DuckValue, ty: SeriesType) -> Option<Value> {
+    match (ty, v) {
+        (_, DuckValue::Null) => None,
+        (SeriesType::Int, DuckValue::BigInt(i)) => Some(Value::Int(*i)),
+        (SeriesType::Int, DuckValue::Int(i)) => Some(Value::Int(*i as i64)),
+        (SeriesType::Int, DuckValue::HugeInt(i)) => Some(Value::Int(*i as i64)),
+        (SeriesType::Int, DuckValue::Double(f)) => Some(Value::Int(*f as i64)),
+        (SeriesType::Float, DuckValue::Double(f)) => Some(Value::Float(*f)),
+        (SeriesType::Float, DuckValue::Float(f)) => Some(Value::Float(*f as f64)),
+        (SeriesType::Float, DuckValue::BigInt(i)) => Some(Value::Float(*i as f64)),
+        (SeriesType::Text, DuckValue::Text(s)) => Some(Value::Text(std::sync::Arc::from(s.as_str()))),
+        (SeriesType::Time, DuckValue::Timestamp(unit, t)) => {
+            chrono::DateTime::from_timestamp_millis(unit_to_ms(*unit, *t)).map(|d| Value::Time(d.naive_utc()))
+        }
+        (_, other) => Some(Value::Text(std::sync::Arc::from(duck_to_json(other).to_string().trim_matches('"')))),
     }
 }
 

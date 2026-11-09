@@ -312,3 +312,13 @@ Recorded as the port meets them.
   (C-040, round 1). A compile-time check mirrors the reader it guards, and a test of "misspelled
   keys refused" misspells optional keys, since a misspelled required key fails for the missing
   one with or without the unknown-field check.
+- **A surface built from the whole catalog fails whole.** The table listing described every
+  view before answering any question, so one linked CSV missing for a moment hid every base
+  table from the server (C-041, round 1). List what can be described and mark the rest; answer a
+  question about one table from that table alone.
+- **A cast in SQL is the engine's display.** `CAST(26.0 AS VARCHAR)` is "26.0" where the suite
+  shows "26", and the test had pinned both; read a value typed and display it in Rust.
+- **Ties need a tiebreaker, and an attach needs its detach.** Newest-first pages over equal
+  stamps repeated and skipped rows until the sequence broke the tie; a failed `COPY FROM
+  DATABASE` left its `ATTACH` in place and every later snapshot refused. A statement that must
+  run whatever happened before it is its own statement.
