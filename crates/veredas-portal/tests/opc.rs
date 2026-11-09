@@ -87,7 +87,7 @@ fn no_secret(_: &str) -> Option<String> {
 }
 
 fn secret(entry: &str) -> Option<String> {
-    (entry == "plc_pw").then(|| "s3cret".to_string())
+    (entry == "Plc-PW").then(|| "s3cret".to_string())
 }
 
 /// One poll as mapped: the index clock, the arrival clock, one row per rule kept, which rules, the failures.
@@ -282,13 +282,14 @@ fn writes_are_gated_by_the_switch_and_the_whitelist_and_land_on_the_server_side(
 fn the_identity_comes_from_a_named_secret_and_a_wrong_one_never_connects() {
     let dir = tempfile::tempdir().unwrap();
     let bench = plant(dir.path());
-    // The entry is named apart from the source id and the user, so a lookup by either fails here.
-    let cfg = config(&bench, Some("operator"), Some("plc_pw"));
+    // The entry is named apart from the source id and the user, so a lookup by either fails here,
+    // and outside the table-name shape (capitals, a dash), so it is asked for exactly as written.
+    let cfg = config(&bench, Some("operator"), Some("Plc-PW"));
     let spec = compile(&cfg, &secret).unwrap();
     assert_eq!(spec.auth, Auth::UserPass { username: "operator".into(), password: "s3cret".into() });
     assert!(!format!("{spec:?}").contains("s3cret"), "the password shows in no debug form");
     // The value is handed through whole: names are trimmed, a password is not.
-    let padded = compile(&cfg, &|e: &str| (e == "plc_pw").then(|| " s3cret\r".to_string())).unwrap();
+    let padded = compile(&cfg, &|e: &str| (e == "Plc-PW").then(|| " s3cret\r".to_string())).unwrap();
     assert_eq!(padded.auth, Auth::UserPass { username: "operator".into(), password: " s3cret\r".into() });
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = spawn(spec.clone(), tx, WriteGate::new(false)).unwrap();
@@ -304,18 +305,18 @@ fn the_identity_comes_from_a_named_secret_and_a_wrong_one_never_connects() {
     // The entry not in the secrets: refused at compile, naming the entry and never a value.
     assert_eq!(
         compile(&cfg, &no_secret).err(),
-        Some(OpcError::SecretMissing { source_id: "plc".into(), user: "operator".into(), entry: "plc_pw".into() })
+        Some(OpcError::SecretMissing { source_id: "plc".into(), user: "operator".into(), entry: "Plc-PW".into() })
     );
     assert_eq!(
         compile(&cfg, &no_secret).unwrap_err().to_string(),
-        "source `plc`: the secret `plc_pw` for the password of `operator` is not in the secrets file"
+        "source `plc`: the secret `Plc-PW` for the password of `operator` is not in the secrets file"
     );
     // The entry is the only name asked: secrets that hold every other name, the source id and the
     // user among them, still refuse the source by its entry, so no fallback hides a renamed entry.
-    let all_but_the_entry = |e: &str| (e != "plc_pw").then(|| "s3cret".to_string());
+    let all_but_the_entry = |e: &str| (e != "Plc-PW").then(|| "s3cret".to_string());
     assert_eq!(
         compile(&cfg, &all_but_the_entry).err(),
-        Some(OpcError::SecretMissing { source_id: "plc".into(), user: "operator".into(), entry: "plc_pw".into() })
+        Some(OpcError::SecretMissing { source_id: "plc".into(), user: "operator".into(), entry: "Plc-PW".into() })
     );
     // A wrong password: the worker retries and never connects.
     let wrong = compile(&cfg, &|_| Some("nope".to_string())).unwrap();
