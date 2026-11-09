@@ -75,3 +75,47 @@ roxmltree = "0.20"
 [profile.dev.package.libduckdb-sys]
 opt-level = 2
 debug = false
+
+# The heaviest libraries of a test binary's debug file build with line tables only in dev: OPC
+# UA's generated types and Arrow (behind the duckdb wrapper). A backtrace still names file and
+# line; the suite's own crates keep full debug info. Named one by one, never `package."*"`: that
+# would also reach serde, serde_json, reqwest and tokio, which libduckdb-sys's build script shares
+# with the runtime, so every target would rebuild the engine for nothing.
+[profile.dev.package.async-opcua-client]
+debug = "line-tables-only"
+[profile.dev.package.async-opcua-core]
+debug = "line-tables-only"
+[profile.dev.package.async-opcua-core-namespace]
+debug = "line-tables-only"
+[profile.dev.package.async-opcua-crypto]
+debug = "line-tables-only"
+[profile.dev.package.async-opcua-nodes]
+debug = "line-tables-only"
+[profile.dev.package.async-opcua-server]
+debug = "line-tables-only"
+[profile.dev.package.async-opcua-types]
+debug = "line-tables-only"
+[profile.dev.package.arrow]
+debug = "line-tables-only"
+[profile.dev.package.arrow-arith]
+debug = "line-tables-only"
+[profile.dev.package.arrow-array]
+debug = "line-tables-only"
+[profile.dev.package.arrow-buffer]
+debug = "line-tables-only"
+[profile.dev.package.arrow-cast]
+debug = "line-tables-only"
+[profile.dev.package.arrow-data]
+debug = "line-tables-only"
+[profile.dev.package.arrow-ord]
+debug = "line-tables-only"
+[profile.dev.package.arrow-row]
+debug = "line-tables-only"
+[profile.dev.package.arrow-schema]
+debug = "line-tables-only"
+[profile.dev.package.arrow-select]
+debug = "line-tables-only"
+[profile.dev.package.arrow-string]
+debug = "line-tables-only"
+[profile.dev.package.duckdb]
+debug = "line-tables-only"
