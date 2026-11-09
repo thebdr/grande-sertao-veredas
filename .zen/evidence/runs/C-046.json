@@ -16,15 +16,15 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "7baacbeef1cab1ccbe99ac6ac4b14457504505cb18c91bd19c0d48114ef5a948",
-  "outputTail": "test what_cannot_be_a_project_is_refused_by_name ... ok\ntest every_key_statement_is_the_readers ... ok\ntest the_executable_checks_a_project_and_reads_a_veredas_1_folder ... ok\ntest a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_named ... ok\ntest the_executable_runs_a_project_serving_and_reporting_until_stdin_closes ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.09s\n\n   Compiling leis v0.1.0 (C:\\Source\\Repos\\grande-sertao-veredas\\tools\\leis)\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 49.60s\n     Running tests\\l7_stamps.rs (target\\debug\\deps\\l7_stamps-3ac18b9feb45ffc7.exe)\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-d1a4d457ef4f6d46.exe)\n     Running tests\\project.rs (target\\debug\\deps\\project-d36b4252de0a2f37.exe)",
-  "ranAt": "2026-11-09T09:17:01.867Z",
-  "headCommit": "de5d4913daf729d9f43ebde725c0fd695bbc6fd7",
+  "outputSha": "a36a68d63b193bc80c75069d8cb8eff91a82024045cf563b1c1823a730ec4691",
+  "outputTail": "test the_header_is_refused_before_the_body_by_the_texts_every_file_shares ... ok\ntest the_worked_example_loads_as_its_prose_says ... ok\ntest every_key_statement_is_the_readers ... ok\ntest what_cannot_be_a_project_is_refused_by_name ... ok\ntest the_executable_checks_a_project_and_reads_a_veredas_1_folder ... ok\ntest a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_named ... ok\ntest the_executable_runs_a_project_serving_and_reporting_until_stdin_closes ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.79s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.34s\n     Running tests\\l7_stamps.rs (target\\debug\\deps\\l7_stamps-3ac18b9feb45ffc7.exe)\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-d1a4d457ef4f6d46.exe)\n     Running tests\\project.rs (target\\debug\\deps\\project-f6dca120f1bc96be.exe)",
+  "ranAt": "2026-11-09T09:53:22.922Z",
+  "headCommit": "c466e0179c0b7a8e4c36ef11fd0f3795453cb834",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/project.rs",
       "file": "crates/veredas-portal/tests/project.rs",
-      "fileSha": "a0cbff0a72ea6e81ee9cf10d7df7d4efa7fde0102708e408da3d1a76d1bcf3c7"
+      "fileSha": "bad0fefbbbd97cfa14502a1b4fc4fa4075b897d158d53fd77dd184b1495cf180"
     }
   ]
 }
