@@ -10,15 +10,15 @@
     "serve"
   ],
   "exitCode": 0,
-  "outputSha": "a370991ca6b44660ae520314a89dbbeabb1b409158105c541ac458ba037a4e2b",
-  "outputTail": "\nrunning 3 tests\ntest the_live_stream_says_hello_then_carries_every_numeric_sample ... ok\ntest the_write_surface_is_refused_by_default_on_the_wire_and_whitelisted_when_armed ... ok\ntest the_snapshot_the_listing_the_windows_and_the_tables_over_a_running_session ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.03s\n     Running tests\\serve.rs (target\\debug\\deps\\serve-4353aecb0be7e31e.exe)",
-  "ranAt": "2026-11-08T23:31:07.393Z",
-  "headCommit": "c73089a3404e249f58b15e0e3727b165c30b2e50",
+  "outputSha": "9f124bad0eec4a3f5433ecba951ab107bb33fe7f4370cef68ca53aca436be7f5",
+  "outputTail": "\nrunning 4 tests\ntest the_live_stream_says_hello_then_carries_every_numeric_sample ... ok\ntest the_write_surface_is_refused_by_default_on_the_wire_and_whitelisted_when_armed ... ok\ntest the_snapshot_the_listing_the_windows_and_the_tables_over_a_running_session ... ok\ntest the_write_surface_s_other_answers_the_budget_the_lag_and_the_end ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.80s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.34s\n     Running tests\\serve.rs (target\\debug\\deps\\serve-4353aecb0be7e31e.exe)",
+  "ranAt": "2026-11-09T03:46:54.842Z",
+  "headCommit": "8d159a7a3521ed7ef00600fb139920974460aedd",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/serve.rs",
       "file": "crates/veredas-portal/tests/serve.rs",
-      "fileSha": "aba8ce96ab19ac831e3a29609a396e268493fb11b43e9b282c897b56b0705447"
+      "fileSha": "30bca12913b3388c2714feb8db71f2f726fca70564fcd501ee6696a6a689e003"
     }
   ]
 }
