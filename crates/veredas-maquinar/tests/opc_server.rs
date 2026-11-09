@@ -229,7 +229,10 @@ async fn draws_come_at_their_interval() {
     // tick. The tick is 20 ms as asked of the runtime's timer, which lands it at the host's
     // timer quantum, held at a millisecond while the server runs (`timer::FineTimer`;
     // `docs/questions.md` Q13, decided): 20 ms on both platforms, where it was about 31 on
-    // Windows before.
+    // Windows before. The 20 ms count is a bound against the quantum, not a pace: the tick's
+    // `MissedTickBehavior::Delay` turns a late wake-up into a longer period, and a loaded host
+    // wakes late (a shared CI runner drew 81), so the floor sits where a 31 ms tick (64 draws)
+    // cannot reach it and the ceiling where two draws a tick would.
     let mut slow = tag("slow", TagType::Int, Access::Read, "0");
     slow.randomize = Some(Randomize { low: 0.0, high: 9.0, decimals: 0, interval_ms: 100 });
     let server = start(&config(vec![slow])).expect("starts");
@@ -244,7 +247,7 @@ async fn draws_come_at_their_interval() {
     tokio::time::sleep(Duration::from_millis(2000)).await;
     let draws = server.status().draws;
     server.stop();
-    assert!((90..=102).contains(&draws), "a 20 ms tag drew {draws} times in 2 s, not one a tick (the bench holds the host's timer at a millisecond)");
+    assert!((70..=102).contains(&draws), "a 20 ms tag drew {draws} times in 2 s: under 70 is a 31 ms tick (64), the host's quantum not held at a millisecond, not a loaded host's late wake-ups (81 on a shared CI runner); over 102 is two draws a tick");
 }
 
 #[tokio::test(flavor = "multi_thread")]
