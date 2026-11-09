@@ -10,15 +10,15 @@
     "store_engine"
   ],
   "exitCode": 0,
-  "outputSha": "b88737d809059ef31617daab72e8cecaaf27845e850fb12c33bd48f76ac6501b",
-  "outputTail": "test copy_from_database_snapshots_tables_and_views_into_a_readable_file ... ok\ntest a_file_backed_database_takes_its_limits_and_reopens ... ok\ntest the_listing_aggregate_over_a_union_skips_null_cells_and_types_the_last_value ... ok\ntest the_catalog_functions_list_tables_views_and_columns ... ok\ntest a_long_row_s_window_is_the_first_2048_lines_whatever_the_sample_size ... ok\ntest a_copy_into_a_foreign_database_is_refused_and_detaches_after ... ok\ntest the_csv_reader_options_type_a_decimal_comma_and_pad_a_ragged_file ... ok\ntest the_sniffer_s_outcomes_on_a_marked_a_header_only_an_empty_and_a_missing_file ... ok\ntest a_csv_view_reflects_edits_a_replacement_and_a_new_column_and_never_locks_the_file ... ok\n\ntest result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.46s\n     Running tests\\store_engine.rs (target\\debug\\deps\\store_engine-2baa1db21f57f15f.exe)",
-  "ranAt": "2026-11-09T02:12:10.641Z",
-  "headCommit": "fecc83f37141392f6c8bf20a2ff612f553f77189",
+  "outputSha": "47b2780657d685eeaaaf39f2b08a98aaa0b87927a45d19a7334b8d65ae6b0654",
+  "outputTail": "test a_long_row_widens_the_schema_in_the_sample_and_refuses_the_read_past_it ... ok\ntest the_listing_aggregate_over_a_union_skips_null_cells_and_types_the_last_value ... ok\ntest the_catalog_functions_list_tables_views_and_columns ... ok\ntest a_copy_into_a_foreign_database_is_refused_and_detaches_after ... ok\ntest the_csv_reader_options_type_a_decimal_comma_and_pad_a_ragged_file ... ok\ntest the_sniffer_s_outcomes_on_a_marked_a_header_only_an_empty_and_a_missing_file ... ok\ntest a_long_row_s_window_is_the_first_2048_lines_whatever_the_sample_size ... ok\ntest a_csv_view_reflects_edits_a_replacement_and_a_new_column_and_never_locks_the_file ... ok\ntest the_sniffer_s_outcomes_on_a_ragged_file ... ok\n\ntest result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.49s\n     Running tests\\store_engine.rs (target\\debug\\deps\\store_engine-2baa1db21f57f15f.exe)",
+  "ranAt": "2026-11-09T02:17:32.664Z",
+  "headCommit": "d7445477cac464203c0dd4ec9d0bd55ddcdf5a34",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store_engine.rs",
       "file": "crates/veredas-portal/tests/store_engine.rs",
-      "fileSha": "283414e226b15b9b70dd855fe03b36fb35121cb5504f4e2a93e9ebddc65c804a"
+      "fileSha": "531eb8fdd067d9bd7f1ca84914e8defb6d66d24b33a77ff0d16a0a585136526e"
     }
   ]
 }
