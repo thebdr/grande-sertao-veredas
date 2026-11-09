@@ -806,3 +806,44 @@ fn a_trailing_run_s_first_row_is_the_header_only_when_the_rows_after_it_type_dif
     let rows: Vec<(String, String, String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
     assert_eq!(rows, vec![("p".to_string(), "q".to_string(), "r".to_string(), "s".to_string())]);
 }
+
+// ---- the eleventh refute round ---------------------------------------------------------------
+
+/// The header rule behind a trailing run: the first long row is the header when every column
+/// the run gives is text or when one of its cells cannot be read as its column's type, and data
+/// otherwise. A numeric first row whose cells all read as the types the rows after it give is
+/// data though it types differently; an all-text run loses its first row to the header though it
+/// types the same.
+#[test]
+fn a_trailing_run_s_header_is_decided_by_text_columns_or_an_unreadable_cell() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    let write = |name: &str, tail: &str| -> String {
+        let mut text = String::from("a;b;c\n");
+        for line in 2..=101 {
+            text.push_str(&format!("{line};1;2\n"));
+        }
+        text.push_str(tail);
+        let p = dir.path().join(name);
+        std::fs::write(&p, text).unwrap();
+        format!("read_csv_auto('{}')", sql_path(&p))
+    };
+    let describe = |scan: &str| -> Vec<(String, String)> {
+        let mut stmt = conn.prepare(&format!("DESCRIBE SELECT * FROM {scan}")).unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+    };
+    let cols = |names: &[&str], types: &[&str]| -> Vec<(String, String)> { names.iter().zip(types).map(|(n, t)| (n.to_string(), t.to_string())).collect() };
+    // A numeric first row before a mixed one: every cell reads as the types after it, so data.
+    let data = write("numeric_then_mixed.csv", "9;9;9;9\np;q;r;105\n");
+    assert_eq!(describe(&data), cols(&["column0", "column1", "column2", "column3"], &["VARCHAR", "VARCHAR", "VARCHAR", "BIGINT"]));
+    let mut stmt = conn.prepare(&format!("SELECT * FROM {data} ORDER BY 4")).unwrap();
+    let rows: Vec<(String, String, String, i64)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(rows, vec![("9".to_string(), "9".to_string(), "9".to_string(), 9), ("p".to_string(), "q".to_string(), "r".to_string(), 105)]);
+    // Two identical all-text rows: every column text, so the first is the header though it types
+    // the same as the row after it.
+    let header = write("same_text.csv", "p;q;r;s\np;q;r;s\n");
+    assert_eq!(describe(&header), cols(&["p", "q", "r", "s"], &["VARCHAR", "VARCHAR", "VARCHAR", "VARCHAR"]));
+    let mut stmt = conn.prepare(&format!("SELECT * FROM {header}")).unwrap();
+    let rows: Vec<(String, String, String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(rows, vec![("p".to_string(), "q".to_string(), "r".to_string(), "s".to_string())]);
+}
