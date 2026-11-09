@@ -614,8 +614,8 @@ fn the_sniffer_s_kept_row_depends_on_the_long_row_and_the_window_ends_at_the_def
 // ---- the sixth refute round ------------------------------------------------------------------
 
 /// What decides the sniffer's outcome on a long row: a long row with any row after it collapses
-/// a short file to one column, numeric or text alike, and a long row at line 2 048 with a row
-/// after it makes the file longer than the window and refuses the sniff.
+/// a short file to one column, numeric or text alike, and a long row on line 2 048 with a row
+/// after it refuses the sniff (the line, not the file's length, decides it; line 2 047 collapses).
 #[test]
 fn the_sniffer_collapses_a_long_row_followed_by_rows_and_refuses_a_file_past_the_window() {
     let dir = tempfile::tempdir().unwrap();
@@ -647,4 +647,52 @@ fn the_sniffer_collapses_a_long_row_followed_by_rows_and_refuses_a_file_past_the
     let past = write("past_window.csv", &long);
     let err = width(&scan(&past)).unwrap_err();
     assert!(err.contains("Error when sniffing file"), "a long row at line 2048 with a row after it: {err}");
+}
+
+// ---- the seventh refute round ----------------------------------------------------------------
+
+/// The long row's line and what follows it decide the sniffer's outcome, not the file's length:
+/// a long row early in a long file with rows after it collapses the file; one on line 2 047 with
+/// a row after it collapses too (line 2 048 refuses); and a run of long rows ending the file is
+/// kept whole, not the last alone.
+#[test]
+fn the_sniffer_s_outcome_follows_the_long_row_s_line_not_the_file_s_length() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    let write = |name: &str, text: &str| -> std::path::PathBuf {
+        let p = dir.path().join(name);
+        std::fs::write(&p, text).unwrap();
+        p
+    };
+    let scan = |p: &std::path::Path| format!("read_csv_auto('{}')", sql_path(p));
+    let width = |sql: &str| -> i64 { conn.query_row(&format!("SELECT count(*) FROM (DESCRIBE SELECT * FROM {sql})"), [], |r| r.get(0)).unwrap() };
+    let count = |sql: &str| -> i64 { conn.query_row(&format!("SELECT count(*) FROM {sql}"), [], |r| r.get(0)).unwrap() };
+    let build = |long_at_data_row: usize, total_data_rows: usize| -> String {
+        let mut text = String::from("a;b;c\n");
+        for i in 0..total_data_rows {
+            if i + 1 == long_at_data_row {
+                text.push_str("9;9;9;9\n");
+            } else {
+                text.push_str(&format!("{i};1;2\n"));
+            }
+        }
+        text
+    };
+    // Line 1002 of a 3 000-line file (data row 1001): collapsed, every data row kept.
+    let early_long = write("early_long.csv", &build(1001, 2999));
+    assert_eq!((width(&scan(&early_long)), count(&scan(&early_long))), (1, 2999), "a long row early in a long file collapses, it does not refuse");
+    // Line 2047 with one row after it (data row 2046 of 2047): collapsed.
+    let at_2047 = write("at_2047.csv", &build(2046, 2047));
+    assert_eq!((width(&scan(&at_2047)), count(&scan(&at_2047))), (1, 2047), "line 2047 with a row after it collapses; line 2048 refuses");
+    // A run of two long rows ending the file: both kept.
+    let mut run = String::from("a;b;c\n");
+    for i in 0..100 {
+        run.push_str(&format!("{i};1;2\n"));
+    }
+    run.push_str("9;9;9;9\n8;8;8;8\n");
+    let trailing = write("trailing_run.csv", &run);
+    assert_eq!(width(&scan(&trailing)), 4);
+    let mut stmt = conn.prepare(&format!("SELECT * FROM {} ORDER BY 1 DESC", scan(&trailing))).unwrap();
+    let rows: Vec<(i64, i64, i64, i64)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(rows, vec![(9, 9, 9, 9), (8, 8, 8, 8)], "a trailing run of long rows is kept whole");
 }
