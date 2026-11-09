@@ -9,16 +9,16 @@
     "--test",
     "session"
   ],
-  "exitCode": 101,
-  "outputSha": "2d621a149be887da651746f8616eee83272e91e6318ba3165e6c7f968d473f60",
-  "outputTail": "\nthread 'the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_says' (39988) panicked at crates\\veredas-portal\\tests\\session.rs:399:5:\nCounters { lines: 118, polls: 0, messages: 0, rows: 118, failures: 0, store_errors: 0, frames: 49, passes: 152, last_error: None }\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_says\n\ntest result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2761.21s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.47s\n     Running tests\\session.rs (target\\debug\\deps\\session-7389c9c760c65095.exe)\nerror: test failed, to rerun pass `-p veredas-portal --test session`",
-  "ranAt": "2026-11-09T07:10:29.670Z",
-  "headCommit": "4668a0e23a7d532cb339b425e730c9b2329a0de9",
+  "exitCode": 0,
+  "outputSha": "cea337145994eef67efca8fdd5f2d7db9b3e9a55a0e295a94d8241ec32b03fa9",
+  "outputTail": "\nrunning 7 tests\ntest a_start_is_refused_by_name_before_anything_spawns ... ok\ntest a_failed_worker_still_reads_as_failed_after_the_stop ... ok\ntest the_three_protocols_run_into_one_store_alike ... ok\ntest the_master_switch_is_off_by_default_and_arms_every_write_path_at_once ... ok\ntest health_reads_waiting_then_live_then_idle_on_the_arrival_clock ... ok\ntest a_stop_stores_every_row_the_workers_sent_and_publishes_the_end ... ok\ntest the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_says ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.35s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.67s\n     Running tests\\session.rs (target\\debug\\deps\\session-7389c9c760c65095.exe)",
+  "ranAt": "2026-11-09T07:14:29.870Z",
+  "headCommit": "029c05c208f022100e6252b0ed56eef0dfa16ecc",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/session.rs",
       "file": "crates/veredas-portal/tests/session.rs",
-      "fileSha": "f0ed78e02d67c8ae5cb048faf5c465164d5d7ae53fee57da9bd98dc155c8968f"
+      "fileSha": "36054be82dc22d746a31f6a6838fbe43cd488681366b2f1705b86532b4e012b4"
     }
   ]
 }
