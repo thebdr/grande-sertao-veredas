@@ -377,6 +377,10 @@ fn every_configuration_mistake_is_refused_by_name_before_anything_connects() {
     assert_eq!(refused_with_all(&|c| c.secret = Some("X".into())), OpcError::SecretWithoutUser { source_id: sid() });
     assert_eq!(refused_with_all(&|c| c.user = Some("u".into())), OpcError::NoSecret { source_id: sid(), user: "u".into() });
     assert_eq!(refused_with_all(&|c| { c.user = Some("u".into()); c.secret = Some(" ".into()); }), OpcError::NoSecret { source_id: sid(), user: "u".into() });
+    // An empty user with an entry named is refused as an empty user, whatever the secrets hold:
+    // no blank user name reaches the server.
+    assert_eq!(refused(&|c| { c.user = Some(" ".into()); c.secret = Some("X".into()); }), OpcError::EmptyUser { source_id: sid() });
+    assert_eq!(refused_with_all(&|c| { c.user = Some(" ".into()); c.secret = Some("X".into()); }), OpcError::EmptyUser { source_id: sid() });
     assert_eq!(refused(&|c| c.rules.clear()), OpcError::NoRules { source_id: sid() });
     assert_eq!(refused(&|c| c.rules[0].name = "Bad".into()), OpcError::RuleName { source_id: sid(), name: "Bad".into(), reason: "the name must start with a lowercase letter or `_`".into() });
     assert_eq!(refused(&|c| c.rules[0].name = "a-b".into()), OpcError::RuleName { source_id: sid(), name: "a-b".into(), reason: "the name may use lowercase letters, digits and `_` alone".into() });
