@@ -525,3 +525,42 @@ fn the_appender_takes_the_store_s_typed_cells_through_a_slice_of_to_sql() {
     let back: Vec<Value> = conn.query_row("SELECT * FROM w", [], |r| Ok((0..7).map(|i| r.get::<_, Value>(i).unwrap()).collect())).unwrap();
     assert_eq!(back, vals);
 }
+
+// ---- the fourth refute round -----------------------------------------------------------------
+
+/// The sniffer's outcomes on a ragged file, the first step the store takes on every linked CSV:
+/// a short row collapses the file to one column (the one case the store recovers), a long row
+/// within the first 2 048 lines keeps that row alone with no error, one up to line 20 480
+/// refuses the sniff, and one past it refuses the read with the line named.
+#[test]
+fn the_sniffer_s_outcomes_on_a_ragged_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    let file = |name: &str, rows: usize| -> std::path::PathBuf {
+        let p = dir.path().join(name);
+        let mut text = String::from("a;b;c\n");
+        for i in 0..rows {
+            text.push_str(&format!("{i};1;2\n"));
+        }
+        text.push_str("9;9;9;9\n");
+        std::fs::write(&p, text).unwrap();
+        p
+    };
+    let scan = |p: &std::path::Path| format!("read_csv_auto('{}')", sql_path(p));
+    let width = |sql: &str| -> Result<i64, String> {
+        conn.query_row(&format!("SELECT count(*) FROM (DESCRIBE SELECT * FROM {sql})"), [], |r| r.get(0)).map_err(|e| e.to_string())
+    };
+    let count = |sql: &str| -> Result<i64, String> { conn.query_row(&format!("SELECT count(*) FROM {sql}"), [], |r| r.get(0)).map_err(|e| e.to_string()) };
+    let short = dir.path().join("short.csv");
+    std::fs::write(&short, "a;b;c\n1;2;3\n4;5\n6;7;8\n").unwrap();
+    assert_eq!((width(&scan(&short)), count(&scan(&short))), (Ok(1), Ok(3)), "a short row collapses the file to one column");
+    let early = file("early.csv", 2046);
+    assert_eq!((width(&scan(&early)), count(&scan(&early))), (Ok(4), Ok(1)), "a long row within the first 2048 lines keeps that row alone");
+    let mid = file("mid.csv", 2047);
+    let err = width(&scan(&mid)).unwrap_err();
+    assert!(err.contains("Error when sniffing file"), "{err}");
+    let late = file("late.csv", 20_479);
+    assert_eq!(width(&scan(&late)), Ok(3));
+    let err = count(&scan(&late)).unwrap_err();
+    assert!(err.contains("CSV Error on Line: 20481"), "{err}");
+}
