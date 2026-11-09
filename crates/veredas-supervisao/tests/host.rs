@@ -103,6 +103,15 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     assert_eq!((status, s["session_name"].clone(), s["running"].clone(), s["writes_armed"].clone()), (200, json!("the loop"), json!(true), json!(false)));
     let (_, s) = get(addr, "/s/hall/portal/api/session");
     assert_eq!(s["session_name"], json!("the hall"));
+    // Portal's own live stream, nested as it is: its hello names the session it belongs to.
+    for (name, title) in [("loop", "the loop"), ("hall", "the hall")] {
+        let mut sse = Sse::open(addr, &format!("/s/{name}/portal/events"));
+        assert_eq!(sse.status, 200);
+        assert!(sse.headers.contains("content-type: text/event-stream"), "{}", sse.headers);
+        let (event, data) = sse.next(Duration::from_secs(10)).unwrap();
+        let hello: Value = serde_json::from_str(&data).unwrap();
+        assert_eq!((event.as_str(), hello["session_name"].clone(), hello["running"].clone()), ("hello", json!(title), json!(true)));
+    }
 
     // The plants' values stay in their own sessions.
     assert!(wait(Duration::from_secs(20), || object(&objects(addr, "loop"), "outlet-1")["value"] == json!(35.0) && object(&objects(addr, "hall"), "outlet-1")["value"] == json!(65.0)));
