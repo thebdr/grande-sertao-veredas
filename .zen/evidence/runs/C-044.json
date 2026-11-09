@@ -10,15 +10,15 @@
     "serve"
   ],
   "exitCode": 0,
-  "outputSha": "7efe0a28ceb4717072fa2b584ae0ba04d40be956fe0a5b27f5651c4f0769f35f",
-  "outputTail": "\nrunning 4 tests\ntest the_live_stream_says_hello_then_carries_every_numeric_sample ... ok\ntest the_snapshot_the_listing_the_windows_and_the_tables_over_a_running_session ... ok\ntest the_write_surface_is_refused_by_default_on_the_wire_and_whitelisted_when_armed ... ok\ntest the_write_surface_s_other_answers_the_budget_the_lag_and_the_end ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.28s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.43s\n     Running tests\\serve.rs (target\\debug\\deps\\serve-cb8f8abc896a0433.exe)",
-  "ranAt": "2026-11-09T04:03:13.912Z",
-  "headCommit": "f4143a3cada5cad1a0f841227fdf2d42e9c7cfc9",
+  "outputSha": "4c8dcb8a85a249fd71b06f2c350332a89008058cd5b417185432f2808204b128",
+  "outputTail": "\nrunning 4 tests\ntest the_live_stream_says_hello_then_carries_every_numeric_sample ... ok\ntest the_write_surface_is_refused_by_default_on_the_wire_and_whitelisted_when_armed ... ok\ntest the_snapshot_the_listing_the_windows_and_the_tables_over_a_running_session ... ok\ntest the_write_surface_s_other_answers_the_budget_the_lag_and_the_end ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.98s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.32s\n     Running tests\\serve.rs (target\\debug\\deps\\serve-cb8f8abc896a0433.exe)",
+  "ranAt": "2026-11-09T04:36:18.597Z",
+  "headCommit": "1cc1c71098c7a4ccba919a6f9ebbaa8b897efb2f",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/serve.rs",
       "file": "crates/veredas-portal/tests/serve.rs",
-      "fileSha": "e35ffbba75c92851e50ef0198992b0ab9d10801610b127a383ee7dc204a0f351"
+      "fileSha": "bf9ccc3b9c9e7284019609afa30a628efc72329a1b2ab036fbc4796cb1782426"
     }
   ]
 }
