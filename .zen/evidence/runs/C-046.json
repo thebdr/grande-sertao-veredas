@@ -16,15 +16,15 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "0ec7d1119a3ecffecc8787d51c330a0257e011e718099b4b1da95facda8e3d65",
-  "outputTail": "test the_header_is_refused_before_the_body_by_the_texts_every_file_shares ... ok\ntest the_worked_example_loads_as_its_prose_says ... ok\ntest every_key_statement_is_the_readers ... ok\ntest what_cannot_be_a_project_is_refused_by_name ... ok\ntest the_executable_checks_a_project_and_reads_a_veredas_1_folder ... ok\ntest a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_named ... ok\ntest the_executable_runs_a_project_serving_and_reporting_until_stdin_closes ... ok\ntest the_sealed_password_reaches_the_source_through_the_session ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.27s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.01s\n     Running tests\\l7_stamps.rs (target\\debug\\deps\\l7_stamps-3ac18b9feb45ffc7.exe)\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-d1a4d457ef4f6d46.exe)\n     Running tests\\project.rs (target\\debug\\deps\\project-f6dca120f1bc96be.exe)",
-  "ranAt": "2026-11-09T15:59:26.205Z",
-  "headCommit": "a39fe4b9383d0667128536273191ae4d6ddc77b6",
+  "outputSha": "a556c8445e7cb21fbe04d4e82569576f9377b0b7dc57bcbc3d853aa28136044d",
+  "outputTail": "test the_header_is_refused_before_the_body_by_the_texts_every_file_shares ... ok\ntest every_key_statement_is_the_readers ... ok\ntest the_worked_example_loads_as_its_prose_says ... ok\ntest what_cannot_be_a_project_is_refused_by_name ... ok\ntest the_executable_checks_a_project_and_reads_a_veredas_1_folder ... ok\ntest a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_named ... ok\ntest the_sealed_password_reaches_the_source_through_the_session ... ok\ntest the_executable_runs_a_project_serving_and_reporting_until_stdin_closes ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.18s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.72s\n     Running tests\\l7_stamps.rs (target\\debug\\deps\\l7_stamps-3ac18b9feb45ffc7.exe)\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-d1a4d457ef4f6d46.exe)\n     Running tests\\project.rs (target\\debug\\deps\\project-f6dca120f1bc96be.exe)",
+  "ranAt": "2026-11-09T16:58:03.051Z",
+  "headCommit": "c9711f6c46d3b55be0160817e9f59a00b0a98373",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/project.rs",
       "file": "crates/veredas-portal/tests/project.rs",
-      "fileSha": "8e36fcef51a88354b88249254d95c557c357e9b05dd63634cec5296b65dc6ca4"
+      "fileSha": "b122e1f0f10a26b9d2f47991b85706f5b645b2e7b62f0430482f7c5db451d5cb"
     }
   ]
 }
