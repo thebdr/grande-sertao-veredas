@@ -329,3 +329,131 @@ fn the_live_stream_says_hello_then_carries_every_numeric_sample() {
         r.unwrap_or_else(|e| panic!("{id}: {e}"));
     }
 }
+
+/// The write surface's other answers, the budget's clamp, the stream's lag and keep-alive, and
+/// the session's end as the snapshot shows it: disarmed, a body that does not parse is refused
+/// by the switch before anything else; armed, an unknown channel is 403 by name, a peer not there
+/// 503, a server away 503, the body's shape 400 in the error form; the budget clamped and
+/// defaulted; a client that never reads lags once and the stream goes on, a comment every five
+/// seconds holding an idle one; after the stop the snapshot says the session no longer runs.
+#[test]
+fn the_write_surface_s_other_answers_the_budget_the_lag_and_the_end() {
+    use veredas_core::opc::{OpcError, WriteError};
+    use veredas_portal::serve::{budget, refused_code};
+    assert_eq!((budget(None), budget(Some(0)), budget(Some(9)), budget(Some(5001)), budget(Some(usize::MAX))), (1000, 10, 10, 5000, 5000));
+    assert_eq!(refused_code(&WriteError::Unconfirmed(OpcError::WorkerDropped)), 504, "a write that may have reached the plant");
+    assert_eq!(refused_code(&WriteError::Disarmed), 403);
+
+    let dir = tempfile::tempdir().unwrap();
+    let port = free_port();
+    let bench = plant(dir.path(), port);
+    let word = node(&bench, "word");
+    let log = dir.path().join("rest.log");
+    write_lines(&log, 0..40);
+    // The channel dials a port nobody listens on: a peer never there.
+    let mut cfg = session_config("rest", &log, &bench, free_port());
+    cfg.start = Some(midnight());
+    let session = Session::start(cfg).unwrap();
+    let live = session.live();
+    let server = serve(Arc::clone(&live));
+    let addr = server.addr;
+    assert!(wait(Duration::from_secs(10), || {
+        let (_, v) = get(addr, "/api/session");
+        v["health"]["log"]["state"] == "live" && v["health"]["plc"]["state"] == "live" && v["counters"]["lines"] == 40
+    }), "{}", get(addr, "/api/session").1);
+
+    // Disarmed: the switch answers before the body is even parsed.
+    let off = json!({ "error": "writes are turned off for this project" });
+    assert_eq!(post(addr, "/api/opc/write", &json!({ "source": "plc", "tag": word, "value": 9 })), (403, off.clone()));
+    assert_eq!(post(addr, "/api/channels/send", &json!({ "source": "sorter" })), (403, off.clone()));
+    let (st, text) = http(addr, "POST", "/api/opc/write", Some("not json"));
+    assert_eq!((st, serde_json::from_str::<Value>(&text).unwrap()), (403, off.clone()));
+
+    session.set_writes_armed(true);
+    // Armed: a body that is not the shape is 400 in the error form.
+    let (st, body) = post(addr, "/api/opc/write", &json!({ "source": "plc", "tag": word, "value": 9 }));
+    assert_eq!(st, 400, "{body}");
+    assert!(body["error"].as_str().unwrap().starts_with("the body is not a tag write"), "{body}");
+    let (st, body) = post(addr, "/api/channels/send", &json!({ "source": "sorter" }));
+    assert_eq!(st, 400, "{body}");
+    assert!(body["error"].as_str().unwrap().starts_with("the body is not a message send"), "{body}");
+    // An unknown channel is 403 by name, as an unknown OPC source is; a peer not there is 503.
+    assert_eq!(
+        post(addr, "/api/channels/send", &json!({ "source": "ghost", "message": "command", "fields": { "code": "0" } })),
+        (403, json!({ "error": "`ghost` is no channel of this session" }))
+    );
+    assert_eq!(
+        post(addr, "/api/channels/send", &json!({ "source": "sorter", "message": "command", "fields": { "code": "0" } })),
+        (503, json!({ "error": "no peer is connected" }))
+    );
+    // The budget over the socket: below the minimum, ten points.
+    let (st, v) = get(addr, &format!("/api/series/data?source=log&series=temp&from=0&to={}&points=3", i64::MAX));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!((v["points"].as_array().unwrap().len(), v["downsampled"].as_bool()), (10, Some(true)), "{v}");
+
+    // The stream: a client that never reads lags once more than the channel holds, and the
+    // stream goes on; an idle connection carries a comment every five seconds.
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    s.write_all(format!("GET /events HTTP/1.1\r\nHost: {addr}\r\nAccept: text/event-stream\r\n\r\n").as_bytes()).unwrap();
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 65536];
+    let mut read_until = |s: &mut TcpStream, buf: &mut Vec<u8>, needle: &str, within: Duration| -> String {
+        let deadline = Instant::now() + within;
+        loop {
+            let text = String::from_utf8_lossy(buf).into_owned();
+            if text.contains(needle) {
+                return text;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for {needle:?}:\n{}", &text[text.len().saturating_sub(2000)..]);
+            match s.read(&mut chunk) {
+                Ok(0) => panic!("the stream closed waiting for {needle:?}"),
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {}
+                Err(e) => panic!("{e}"),
+            }
+        }
+    };
+    read_until(&mut s, &mut buf, "event: hello", Duration::from_secs(15));
+    let big = format!("{{\"type\":\"data\",\"samples\":[],\"pad\":\"{}\"}}", "x".repeat(65_536));
+    for _ in 0..400 {
+        let _ = live.frames.send(Arc::from(big.as_str()));
+    }
+    let _ = live.frames.send(Arc::from("{\"type\":\"data\",\"samples\":[],\"marker\":true}"));
+    let text = read_until(&mut s, &mut buf, "\"marker\":true", Duration::from_secs(30));
+    assert_eq!(text.matches("event: lag").count(), 1, "one lag event for the frames dropped");
+    assert!(text.contains("data: frames dropped"), "{}", &text[text.len().saturating_sub(500)..]);
+    assert!(text.find("event: lag").unwrap() < text.find("\"marker\":true").unwrap(), "the stream goes on after the lag");
+    // The plant stopped first: the OPC source polls it every 50 ms and its frames never let the
+    // stream fall idle; retrying, it sends none, and the keep-alive shows.
+    bench.stop();
+    assert!(wait(Duration::from_secs(10), || get(addr, "/api/session").1["health"]["plc"]["state"] == "retrying"), "{}", get(addr, "/api/session").1);
+    let before = buf.len();
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let saw_comment = loop {
+        let fresh = String::from_utf8_lossy(&buf[before..]).into_owned();
+        if fresh.lines().any(|l| l.starts_with(':')) {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        match s.read(&mut chunk) {
+            Ok(0) => break false,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(_) => {}
+        }
+    };
+    assert!(saw_comment, "a keep-alive comment on an idle stream within twelve seconds; got {:?}", String::from_utf8_lossy(&buf[before..]));
+
+    // The server away: a write the plant never saw.
+    assert_eq!(post(addr, "/api/opc/write", &json!({ "source": "plc", "tag": word, "value": "7" })), (503, json!({ "error": "not connected to the server" })));
+
+    // The end: the snapshot says the session no longer runs.
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    let (_, v) = get(addr, "/api/session");
+    assert_eq!(v["running"], false, "{v}");
+    assert_eq!(v["health"]["log"]["state"], "ended", "{v}");
+}

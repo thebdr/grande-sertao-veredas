@@ -107,7 +107,7 @@ fn health_label(state: &HealthState) -> (&'static str, Option<String>) {
 /// window.
 pub fn snapshot(live: &Live) -> Json_ {
     let mut body = json!({
-        "running": true,
+        "running": !live.stopped.load(std::sync::atomic::Ordering::Relaxed),
         "session_name": live.name,
         "started_ms": live.started_ms,
         "start_ms": live.start_ms,
@@ -172,7 +172,7 @@ async fn sse_events(State(live): State<Arc<Live>>) -> Sse<impl Stream<Item = Res
             Err(_lagged) => Event::default().event("lag").data("frames dropped"),
         })
     });
-    Sse::new(first.chain(data)).keep_alive(KeepAlive::default())
+    Sse::new(first.chain(data)).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(5)))
 }
 
 async fn session(State(live): State<Arc<Live>>) -> Json<Json_> {
@@ -220,7 +220,9 @@ pub struct SeriesDataParams {
     pub points: Option<usize>,
 }
 
-fn budget(points: Option<usize>) -> usize {
+/// The point budget a window is sampled to: the default when none is asked, else clamped.
+#[doc(hidden)]
+pub fn budget(points: Option<usize>) -> usize {
     points.unwrap_or(POINTS_DEFAULT).clamp(POINTS_MIN, POINTS_MAX)
 }
 
@@ -378,12 +380,23 @@ pub fn coerce(value: &str, ty: SeriesType) -> Result<Variant, String> {
 /// exists, it is switched off or not granted. A write the plant never saw is 503; one that may
 /// have reached it is 504, and the text says so.
 fn refused(e: WriteError) -> ApiError {
-    let code = match e {
-        WriteError::Disarmed | WriteError::NotWritable { .. } => StatusCode::FORBIDDEN,
-        WriteError::NotSent(_) => StatusCode::SERVICE_UNAVAILABLE,
-        WriteError::Unconfirmed(_) => StatusCode::GATEWAY_TIMEOUT,
-    };
-    err(code, e.to_string())
+    err(StatusCode::from_u16(refused_code(&e)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), e.to_string())
+}
+
+/// The status an OPC write's refusal answers with, for the test that pins the mapping.
+#[doc(hidden)]
+pub fn refused_code(e: &WriteError) -> u16 {
+    match e {
+        WriteError::Disarmed | WriteError::NotWritable { .. } => 403,
+        WriteError::NotSent(_) => 503,
+        WriteError::Unconfirmed(_) => 504,
+    }
+}
+
+/// The body of a write or a send, read after the switch: a body that is no JSON, or not the
+/// shape, is 400 in the same error form as every other refusal, never the framework's text.
+fn parse_body<T: serde::de::DeserializeOwned>(bytes: &[u8], what: &str) -> Result<T, ApiError> {
+    serde_json::from_slice(bytes).map_err(|e| err(StatusCode::BAD_REQUEST, format!("the body is not {what}: {e}")))
 }
 
 #[derive(Debug, Deserialize)]
@@ -393,12 +406,14 @@ pub struct TagWrite {
     pub value: String,
 }
 
-/// Write one writable tag. The switch is checked first, so a disarmed session answers before
-/// anything is coerced; then the tag against the whitelist; the handle checks both again.
-async fn opc_write(State(live): State<Arc<Live>>, Json(body): Json<TagWrite>) -> Result<Json<Json_>, ApiError> {
+/// Write one writable tag. The switch is checked first, before the body is even parsed, so a
+/// disarmed session answers before anything is coerced; then the tag against the whitelist; the
+/// handle checks both again.
+async fn opc_write(State(live): State<Arc<Live>>, body: axum::body::Bytes) -> Result<Json<Json_>, ApiError> {
     if !live.writes_armed() {
         return Err(refused(WriteError::Disarmed));
     }
+    let body: TagWrite = parse_body(&body, "a tag write (source, tag, value as text)")?;
     let handle = live.opc_handle(&body.source).ok_or_else(|| {
         err(StatusCode::FORBIDDEN, format!("`{}` / `{}` is not a writable tag in this session", body.source, body.tag))
     })?;
@@ -421,25 +436,29 @@ pub struct MessageSend {
     pub fields: std::collections::HashMap<String, String>,
 }
 
+/// A channel send's refusal on a status code: the switch and a peer not there 403 and 503 as a
+/// write's; the catalog's refusals 400; a worker gone or silent 503, a channel's wire carrying
+/// no confirmation of its own, so no send of it is ever "maybe seen".
 fn send_refused(e: SendError) -> ApiError {
     let code = match e {
         SendError::Disarmed => StatusCode::FORBIDDEN,
         SendError::UnknownMessage(_) | SendError::Compose { .. } | SendError::EmptyBody(_) | SendError::Framing { .. } => StatusCode::BAD_REQUEST,
-        SendError::NoPeer(_) | SendError::NoPeers => StatusCode::CONFLICT,
-        SendError::WorkerGone => StatusCode::SERVICE_UNAVAILABLE,
+        SendError::NoPeer(_) | SendError::NoPeers | SendError::WorkerGone => StatusCode::SERVICE_UNAVAILABLE,
     };
     err(code, e.to_string())
 }
 
 /// Compose and send one catalog message on a channel. The same switch gates it: disarmed, the
-/// request is refused before the catalog is consulted.
-async fn channel_send(State(live): State<Arc<Live>>, Json(body): Json<MessageSend>) -> Result<Json<Json_>, ApiError> {
+/// request is refused before the body is parsed or the catalog consulted; an unknown channel is
+/// refused by name as an unknown OPC source is.
+async fn channel_send(State(live): State<Arc<Live>>, body: axum::body::Bytes) -> Result<Json<Json_>, ApiError> {
     if !live.writes_armed() {
         return Err(send_refused(SendError::Disarmed));
     }
+    let body: MessageSend = parse_body(&body, "a message send (source, message, fields, an optional peer)")?;
     let handle = live
         .channel_handle(&body.source)
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("`{}` is no channel of this session", body.source)))?
+        .ok_or_else(|| err(StatusCode::FORBIDDEN, format!("`{}` is no channel of this session", body.source)))?
         .clone();
     let (to, message, fields) = (body.to, body.message, body.fields);
     tokio::task::spawn_blocking(move || handle.send(to, &message, fields))

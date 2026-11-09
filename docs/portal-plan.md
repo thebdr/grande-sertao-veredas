@@ -331,3 +331,8 @@ Recorded as the port meets them.
   what the workers sent after the pump's last pass, and any backlog past one pass's cap, was lost
   on a stop, and no refresh ran after the workers ended, so a stopped source read live for ever
   (C-043, round 1). The workers end first; the consumer drains dry and publishes the end.
+- **An idle stream is one nobody feeds.** The keep-alive comment was asserted on a stream whose
+  session polled the plant every 50 ms: a frame every 60 ms, never five idle seconds, and the wait
+  timed out (C-044, round 1). Stop the producer first, wait for its source to read retrying, then
+  wait for the comment; a disarmed body answered 403 only once the handler took the body as bytes
+  and parsed it after the switch, the framework's extractor having answered 422 before it.

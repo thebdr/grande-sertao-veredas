@@ -232,6 +232,8 @@ pub struct Live {
     /// Data frames for the live stream: JSON, every numeric sample since the last frame. A slow
     /// subscriber drops frames; nothing backpressures the plant.
     pub frames: tokio::sync::broadcast::Sender<Arc<str>>,
+    /// Set once the session has stopped and published its end: the server's running flag.
+    pub stopped: AtomicBool,
 }
 
 impl Live {
@@ -569,6 +571,7 @@ impl Session {
             vitals: RwLock::new(StoreVitals::default()),
             counters: RwLock::new(Counters::default()),
             frames,
+            stopped: AtomicBool::new(false),
         });
         let inner = Arc::new(Mutex::new(Inner {
             set: Some(set),
@@ -613,6 +616,7 @@ impl Session {
                     // still holding the session sees every source ended and the final counters.
                     while lock(&inner).pump(&live) > 0 {}
                     lock(&inner).refresh_now(&live);
+                    live.stopped.store(true, Ordering::Relaxed);
                 })
                 .map_err(|e| SessionError::Spawn { id: cfg.name.clone(), source: SourceError::NotConfigured(format!("spawn the pump: {e}")) })?
         };
