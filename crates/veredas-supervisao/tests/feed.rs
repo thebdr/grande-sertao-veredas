@@ -18,7 +18,7 @@ use veredas_supervisao::{Host, config};
 /// over another series, and shorter freshness bounds for a test's clock.
 fn grown(mut ex: Example) -> Example {
     ex.project.push_str("\n[[rule]]\nname = \"positions\"\npattern = \"POS item=(?P<item>\\\\w+) at=(?P<at>[0-9.]+)\"\nscope = \"sorter\"\ntypes = { at = \"float\" }\nkey = \"item\"\n\n[[rule]]\nname = \"modes\"\npattern = \"MODE (?P<mode>\\\\w+)\"\nscope = \"sorter\"\n");
-    let extra = "\n[[object]]\nid = \"tracked\"\nlabel = \"Tracked\"\nvalue = { source = \"sorter\", series = \"at\" }\nshow = \"move\"\npath = \"loop\"\nstale_after_ms = 1500\n\n[[object]]\nid = \"mode\"\nlabel = \"Mode\"\nvalue = { source = \"sorter\", series = \"mode\" }\nstates = [ { equals = \"jam\", state = \"warn\", word = \"jammed\" } ]\nnormal = \"running\"\n\n[[object]]\nid = \"outlet-9\"\nlabel = \"Outlet 9\"\nvalue = { source = \"plc\", series = \"fill1\" }\nstates = [ { equals = 2, series = \"infeed\", state = \"alarm\", word = \"infeed fault\" }, { at_least = 100, state = \"warn\", word = \"full\" } ]\n\n[[dashboard]]";
+    let extra = "\n[[object]]\nid = \"tracked\"\nlabel = \"Tracked\"\nvalue = { source = \"sorter\", series = \"at\" }\nshow = \"move\"\npath = \"loop\"\nstale_after_ms = 1500\n\n[[object]]\nid = \"tracked-a1\"\nlabel = \"A1\"\nvalue = { source = \"sorter\", series = \"at\", key = \"A1\" }\nshow = \"move\"\npath = \"loop\"\n\n[[object]]\nid = \"at-b2\"\nlabel = \"B2 at\"\nvalue = { source = \"sorter\", series = \"at\", key = \"B2\" }\nstates = [ { above = 40, state = \"warn\", word = \"far\" } ]\n\n[[object]]\nid = \"mode\"\nlabel = \"Mode\"\nvalue = { source = \"sorter\", series = \"mode\" }\nstates = [ { equals = \"jam\", state = \"warn\", word = \"jammed\" } ]\nnormal = \"running\"\n\n[[object]]\nid = \"outlet-9\"\nlabel = \"Outlet 9\"\nvalue = { source = \"plc\", series = \"fill1\" }\nstates = [ { equals = 2, series = \"infeed\", state = \"alarm\", word = \"infeed fault\" }, { at_least = 100, state = \"warn\", word = \"full\" } ]\n\n[[dashboard]]";
     ex.binding = ex.binding.replacen("\n[[dashboard]]", extra, 1).replace("stale_after_ms = 30000", "stale_after_ms = 1500");
     ex
 }
@@ -108,6 +108,15 @@ fn the_fold_reads_every_object_exactly() {
     // A key's older sample never replaces its newer one.
     f.sample("sorter", "at", Some("A1"), 1, 90.0, 22_600);
     assert_eq!(f.view(o("tracked"), true, 22_600).items, vec![], "an older sample is not a new arrival");
+    // Bound to one key, a marker is one place, that key's; a value is that key's, whatever the
+    // other keys did since, and never forgotten while its source is live.
+    let v = f.view(o("tracked-a1"), true, 90_000);
+    assert_eq!((v.place, v.items.clone(), v.text.as_deref()), (Some(0.2), vec![], Some("20")));
+    let v = f.view(o("at-b2"), true, 90_000);
+    assert_eq!((v.text.as_deref(), v.state, v.word.as_str(), v.stale), (Some("50"), StateClass::Warn, "far", false));
+    f.sample("sorter", "at", Some("C3"), 9, 99.0, 90_000);
+    assert_eq!((f.view(o("at-b2"), true, 90_000).text.as_deref(), f.view(o("tracked-a1"), true, 90_000).place), (Some("50"), Some(0.2)));
+    assert_eq!(f.view(o("tracked"), true, 90_000).items, vec![Item { key: "C3".into(), place: 0.99 }]);
 
     // Text arrives through the ingest's cache: compared as text, exactly; a newer cached value of
     // a numeric series heals a missed frame; an older one is ignored.
@@ -187,9 +196,17 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
     let (name, data) = sse.next(Duration::from_secs(10)).unwrap();
     assert_eq!(name, "snapshot");
     let first: Value = serde_json::from_str(&data).unwrap();
-    assert_eq!(first["objects"].as_array().unwrap().len(), 11);
+    assert_eq!(first["objects"].as_array().unwrap().len(), 13);
     assert_eq!(object(&first, "outlet-2")["word"], json!("near full"));
-    assert!(sse.until(Duration::from_secs(5), |n, _| n == "session").is_some(), "a status within the second");
+    let got = sse.until(Duration::from_secs(5), |n, _| n == "session").expect("a status within the second");
+    let (_, st) = got.last().unwrap();
+    assert_eq!((st["running"].clone(), st["writes_armed"].clone(), st["health"]["plc"]["state"].clone(), st["health"]["plc"]["detail"].clone()), (json!(true), json!(false), json!("live"), Value::Null));
+    assert!((st["now_ms"].as_i64().unwrap() - store_now()).abs() < 5_000, "the store's now: {st}");
+    assert!(st["health"].get("sorter").is_some(), "every source's health: {st}");
+    // Armed in process, the next status says so.
+    host.session("loop").unwrap().set_writes_armed(true);
+    assert!(sse.until(Duration::from_secs(5), |n, v| n == "session" && v["writes_armed"] == json!(true)).is_some(), "the switch rides the stream");
+    host.session("loop").unwrap().set_writes_armed(false);
     bench.server("plc").unwrap().set("infeed", 2);
     let got = sse.until(Duration::from_secs(20), |n, v| n == "objects" && v["objects"].as_array().unwrap().iter().any(|o| o["id"] == "infeed" && o["state"] == "alarm")).expect("the fault arrives as a change");
     let (_, last) = got.last().unwrap();
