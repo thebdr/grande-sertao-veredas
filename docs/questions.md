@@ -318,3 +318,22 @@ already stands there and that a session store is fresh; nothing is deleted, noth
 
 **Reversible?** Yes: a per-session file name or an opening mode is one line in the project's
 store section, and the store's check stays as the guard for the fixed-name case.
+
+## Q17 - Should a linked CSV with ragged rows be read through the padded path?
+
+**Raised** 2026-11-09, the engine pins' refute rounds (C-042, rounds 4 to 10).
+
+A linked CSV is read live through a view the store builds from the engine's own sniffer
+(`read_csv_auto`), and the store forces the padded reader (`read_csv` with a delimiter and
+`null_padding`) only where the sniffer collapsed the file to one column. On a ragged file the
+sniffer has more outcomes than a sentence lists (C-042 pins one of each: a collapse, a row kept
+alone, a run kept as data, a run's first row taken as the header, the sniff refused, the read
+refused past the sample), and two of them lose or rename an operator's rows in silence. The
+padded path's behaviour is general: every row kept, a short one padded, a long one widening the
+schema within 2 048 lines and refusing the read by its line past them.
+
+**Taken (reversible, pending the operator):** the sniffer stays the first reader, its outcomes
+stated and pinned; the padded path is forced on a collapse alone, as C-041 says.
+
+**Reversible?** Yes: forcing the padded path for every linked CSV, or for any file the sniffer
+reads ragged, is one branch in the store's CSV scan and one sentence in C-041.

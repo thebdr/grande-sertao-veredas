@@ -759,3 +759,50 @@ fn a_trailing_run_of_text_long_rows_reads_its_first_as_the_header_and_keeps_the_
     let rows: Vec<(String, String, String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
     assert_eq!(rows, vec![("p".to_string(), "q".to_string(), "r".to_string(), "s103".to_string())], "the rest of the run kept");
 }
+
+// ---- the tenth refute round ------------------------------------------------------------------
+
+/// The header heuristic behind a trailing run of long rows: the run's first row becomes the
+/// header when its cells type differently from the long rows after it, and stays data otherwise.
+/// A run of rows mixing text and numbers is kept whole as data under engine-named columns, a
+/// single mixed row too, and a numeric first row becomes the header before a text one, its
+/// duplicate names made unique.
+#[test]
+fn a_trailing_run_s_first_row_is_the_header_only_when_the_rows_after_it_type_differently() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    let write = |name: &str, tail: &str| -> String {
+        let mut text = String::from("a;b;c\n");
+        for line in 2..=101 {
+            text.push_str(&format!("{line};1;2\n"));
+        }
+        text.push_str(tail);
+        let p = dir.path().join(name);
+        std::fs::write(&p, text).unwrap();
+        format!("read_csv_auto('{}')", sql_path(&p))
+    };
+    let describe = |scan: &str| -> Vec<(String, String)> {
+        let mut stmt = conn.prepare(&format!("DESCRIBE SELECT * FROM {scan}")).unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+    };
+    let text_cols = |names: &[&str], ty: &str| -> Vec<(String, String)> { names.iter().map(|n| (n.to_string(), ty.to_string())).collect() };
+    // A run of mixed rows: data under engine-named columns, every row kept.
+    let mixed = write("mixed.csv", "p;q;r;104\np;q;r;105\n");
+    let mut expected = text_cols(&["column0", "column1", "column2"], "VARCHAR");
+    expected.push(("column3".to_string(), "BIGINT".to_string()));
+    assert_eq!(describe(&mixed), expected);
+    let mut stmt = conn.prepare(&format!("SELECT * FROM {mixed} ORDER BY 4")).unwrap();
+    let rows: Vec<(String, String, String, i64)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(rows, vec![("p".to_string(), "q".to_string(), "r".to_string(), 104), ("p".to_string(), "q".to_string(), "r".to_string(), 105)]);
+    // A single mixed row: kept, not dropped.
+    let single = write("single_mixed.csv", "p;q;r;104\n");
+    assert_eq!(describe(&single), expected);
+    let n: i64 = conn.query_row(&format!("SELECT count(*) FROM {single}"), [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+    // A numeric first row before a text one: the numeric row is the header, its names made unique.
+    let numeric_first = write("numeric_first.csv", "9;9;9;9\np;q;r;s\n");
+    assert_eq!(describe(&numeric_first), text_cols(&["9", "9_1", "9_2", "9_3"], "VARCHAR"));
+    let mut stmt = conn.prepare(&format!("SELECT * FROM {numeric_first}")).unwrap();
+    let rows: Vec<(String, String, String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(rows, vec![("p".to_string(), "q".to_string(), "r".to_string(), "s".to_string())]);
+}
