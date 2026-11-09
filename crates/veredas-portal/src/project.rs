@@ -1281,28 +1281,44 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
         };
         let refused = judge(&with_stubs)?;
         let alone = judge(&cfg.tables)?;
-        let reads: HashMap<String, String> = alone
-            .iter()
-            .filter_map(|(name, reason)| catalog_missing(reason).filter(|m| unjudged.iter().any(|u| u.eq_ignore_ascii_case(m))).map(|m| (name.clone(), m)))
-            .collect();
+        // Without the stand-ins, a Catalog Error naming a set-aside view, or a view that in turn
+        // reads one, marks a view as over a file not here, through any number of views between.
+        let mut over_file: HashSet<String> = unjudged.clone();
+        let mut reads: HashMap<String, String> = HashMap::new();
+        loop {
+            let before = reads.len();
+            for (name, reason) in &alone {
+                if !reads.contains_key(name)
+                    && let Some(m) = catalog_missing(reason).filter(|m| over_file.iter().any(|u| u.eq_ignore_ascii_case(m)))
+                {
+                    over_file.insert(name.clone());
+                    reads.insert(name.clone(), m);
+                }
+            }
+            if reads.len() == before {
+                break;
+            }
+        }
+        let over_file_note = |name: &str, m: &str| format!("table `{name}`: it reads `{m}`, a view over a file not here: carried as written; check it with the file");
         if refused.is_empty() {
             for def in &cfg.tables {
                 let name = def.name.trim().to_string();
                 if let Some(m) = reads.get(&name)
                     && noted.insert(name.clone())
                 {
-                    notes.push(format!("table `{name}`: it reads `{m}`, a view not judged here: carried as written; check it with the file"));
+                    notes.push(over_file_note(&name, m));
                 }
             }
             break;
         }
-        // The files not here first, so a reader refused for naming one of them this round is
-        // deferred to the next, where it stands in; then the rest, in the file's order. Only a
-        // view set aside this very round defers a reader: one whose error names a set-aside view
-        // that already stands in (through a schema the stand-in is not in, say) would fail on
-        // the plant the same way, and falls with the reason; so every round decides at least one
-        // view, and the judging ends.
-        let mut set_aside_now: HashSet<String> = HashSet::new();
+        // The files not here first; then every reader refused for naming a view set aside this
+        // round, or one deferred this round, is deferred to the next, where the stand-ins exist
+        // (to a fixpoint among them, whatever their order in the file); then the rest, in the
+        // file's order. A deferral traces back to a view set aside this very round: one whose
+        // error names a set-aside view that already stands in (through a schema the stand-in is
+        // not in, say) would fail on the plant the same way, and falls with the reason. So every
+        // round decides at least one view, and the judging ends.
+        let mut pending_now: HashSet<String> = HashSet::new();
         for def in &cfg.tables {
             let name = def.name.trim().to_string();
             if let Some(reason) = refused.get(&name)
@@ -1310,31 +1326,39 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
             {
                 notes.push(format!("table `{name}`: the engine cannot read its file here ({reason}): carried as written for the plant's machine; check the path"));
                 unjudged.insert(name.clone());
-                set_aside_now.insert(name);
+                pending_now.insert(name);
             }
         }
-        for def in &cfg.tables {
-            let name = def.name.trim().to_string();
-            let Some(reason) = refused.get(&name) else { continue };
-            if reason.starts_with("IO Error") || unjudged.contains(&name) {
-                continue;
+        let mut undecided: Vec<(String, &String)> = cfg
+            .tables
+            .iter()
+            .map(|d| d.name.trim().to_string())
+            .filter_map(|name| refused.get(&name).map(|reason| (name, reason)))
+            .filter(|(name, reason)| !reason.starts_with("IO Error") && !unjudged.contains(name))
+            .collect();
+        loop {
+            let before = undecided.len();
+            undecided.retain(|(name, reason)| match catalog_missing(reason) {
+                Some(m) if pending_now.iter().any(|u| u.eq_ignore_ascii_case(&m)) => {
+                    pending_now.insert(name.clone());
+                    false
+                }
+                _ => true,
+            });
+            if undecided.len() == before {
+                break;
             }
-            match catalog_missing(reason) {
-                Some(m) if set_aside_now.iter().any(|u| u.eq_ignore_ascii_case(&m)) => {} // deferred: judged against the stand-in next
-                Some(_) => {
+        }
+        for (name, reason) in undecided {
+            match (catalog_missing(reason), reads.get(&name)) {
+                (Some(_), _) | (None, None) => {
                     notes.push(format!("table `{name}`: the engine refuses it over the tables this file creates ({reason}): not carried (write it back once what it reads is)"));
                     dropped.insert(name);
                 }
-                None => match reads.get(&name) {
-                    Some(m) => {
-                        notes.push(format!("table `{name}`: it reads `{m}`, a view not judged here: carried as written; check it with the file"));
-                        unjudged.insert(name);
-                    }
-                    None => {
-                        notes.push(format!("table `{name}`: the engine refuses it over the tables this file creates ({reason}): not carried (write it back once what it reads is)"));
-                        dropped.insert(name);
-                    }
-                },
+                (None, Some(m)) => {
+                    notes.push(over_file_note(&name, m));
+                    unjudged.insert(name);
+                }
             }
         }
     }

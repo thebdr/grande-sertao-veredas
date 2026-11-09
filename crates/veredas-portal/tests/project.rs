@@ -364,12 +364,17 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
             { "name": "v_distinct", "sql": "SELECT * FROM readings WHERE v IS DISTINCT FROM 0", "enabled": true },
             { "name": "v_cte", "sql": "WITH x(a) AS (SELECT 1) SELECT * FROM x", "enabled": true },
             { "name": "reader_after", "sql": "SELECT * FROM v_csv", "enabled": true },
+            { "name": "q3", "sql": "SELECT * FROM q2", "enabled": true },
+            { "name": "q2", "sql": "SELECT * FROM q1", "enabled": true },
+            { "name": "q1", "sql": "SELECT * FROM csv2", "enabled": true },
             { "name": "reader_before", "sql": "SELECT * FROM (SELECT * FROM csv2) t", "enabled": true },
             { "name": "csv2", "csv_path": "C:\\ref\\second.csv", "enabled": true },
             { "name": "both1", "sql": "SELECT * FROM v_csv, oldrule", "enabled": true },
             { "name": "both2", "sql": "SELECT * FROM oldrule, v_csv", "enabled": true },
             { "name": "col_stub", "sql": "SELECT missing_col FROM v_csv", "enabled": true },
-            { "name": "rd_temp", "sql": "SELECT * FROM temp.v_csv", "enabled": true } ]"#,
+            { "name": "rd_temp", "sql": "SELECT * FROM temp.v_csv", "enabled": true },
+            { "name": "rr2", "sql": "SELECT * FROM reader_after", "enabled": true },
+            { "name": "rr3", "sql": "SELECT * FROM rr2", "enabled": true } ]"#,
     );
     // The absolute start as Veredas 1's screens wrote it, with a `T`: carried in this file's spelling.
     w("session.json", r#"{ "start": { "kind": "Absolute", "last_hours": 4, "absolute": "2026-11-08T06:00:00" }, "store": { "mode": "Disk", "disk_dir": "", "memory_limit_mb": 2048, "auto_export_mins": 0, "export_dir": "" } }"#);
@@ -395,7 +400,7 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
     assert_eq!(p.opc.len(), 2, "{}", migrated.toml);
     let plc2 = &p.opc[1];
     assert_eq!((plc2.source_id.as_str(), plc2.user.as_deref(), plc2.password_env.as_deref(), plc2.poll_ms, plc2.rules.len()), ("plc-2", None, None, 250, 1));
-    assert_eq!(p.tables.len(), 11, "{}", migrated.notes.join("\n"));
+    assert_eq!(p.tables.len(), 16, "{}", migrated.notes.join("\n"));
     assert_eq!(p.tables[0], ("hot".to_string(), "SELECT * FROM readings WHERE v > 20.0".to_string()));
     assert!(p.tables[1].1.starts_with("SELECT * FROM read_csv(") && p.tables[1].1.contains("decimal_separator"), "{}", p.tables[1].1);
     assert!(p.channels.is_empty());
@@ -423,26 +428,32 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
         "table `limits`: the engine cannot read its file here (IO Error: No files found that match the pattern \"C:\\ref\\limits.csv\"): carried as written for the plant's machine; check the path",
         "table `v_csv`: the engine cannot read its file here (IO Error:",
         "table `csv2`: the engine cannot read its file here (IO Error:",
-        "table `reader_after`: it reads `v_csv`, a view not judged here: carried as written; check it with the file",
-        "table `reader_before`: it reads `csv2`, a view not judged here: carried as written; check it with the file",
+        "table `reader_after`: it reads `v_csv`, a view over a file not here: carried as written; check it with the file",
+        "table `reader_before`: it reads `csv2`, a view over a file not here: carried as written; check it with the file",
+        "table `q1`: it reads `csv2`, a view over a file not here: carried as written; check it with the file",
+        "table `q2`: it reads `q1`, a view over a file not here: carried as written; check it with the file",
+        "table `q3`: it reads `q2`, a view over a file not here: carried as written; check it with the file",
+        "table `rr2`: it reads `reader_after`, a view over a file not here: carried as written; check it with the file",
+        "table `rr3`: it reads `rr2`, a view over a file not here: carried as written; check it with the file",
         "table `both1`: the engine refuses it over the tables this file creates (Catalog Error: Table with name oldrule does not exist!): not carried",
         "table `both2`: the engine refuses it over the tables this file creates (Catalog Error: Table with name oldrule does not exist!): not carried",
-        "table `col_stub`: it reads `v_csv`, a view not judged here: carried as written; check it with the file",
+        "table `col_stub`: it reads `v_csv`, a view over a file not here: carried as written; check it with the file",
         "table `rd_temp`: the engine refuses it over the tables this file creates (Catalog Error: Table with name v_csv does not exist!): not carried",
         "the rules' skew-monitor threshold",
     ] {
         assert!(notes.contains(expected), "no note `{expected}` in:\n{notes}");
     }
-    assert_eq!(migrated.notes.len(), 27, "{notes}");
+    assert_eq!(migrated.notes.len(), 32, "{notes}");
     // The engine, not a reading of the SQL, decides: the three CSV-linked views (their files on
     // the plant's machine, not here) are carried as written and named, and so are the views that
-    // read one, listed after it or before it, or reading a column only the file can show; a view
-    // that reads a set-aside view beside a table nothing creates falls for that table whichever
-    // it names first; a view whose literal and subquery spell a dropped name, EXTRACT's FROM, IS
-    // DISTINCT FROM and a CTE with a column list are carried, all in order.
+    // read one, listed after it or before it, or reading a column only the file can show, or
+    // reading it through other views, three deep in either order; a view that reads a set-aside
+    // view beside a table nothing creates falls for that table whichever it names first; a view
+    // whose literal and subquery spell a dropped name, EXTRACT's FROM, IS DISTINCT FROM and a CTE
+    // with a column list are carried, all in order.
     assert_eq!(
         p.tables.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
-        ["hot", "limits", "v_csv", "v_str", "v_extract", "v_distinct", "v_cte", "reader_after", "reader_before", "csv2", "col_stub"]
+        ["hot", "limits", "v_csv", "v_str", "v_extract", "v_distinct", "v_cte", "reader_after", "q3", "q2", "q1", "reader_before", "csv2", "col_stub", "rr2", "rr3"]
     );
     assert!(migrated.toml.starts_with("# Read into Veredas 2 from a Veredas 1 project folder"));
     // An absolute start in the other spelling is carried too; one that is no date-time is named
