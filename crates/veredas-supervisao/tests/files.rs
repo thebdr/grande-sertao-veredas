@@ -338,3 +338,560 @@ fn host_refusal_in(dir: &Path, ex: &Example) -> String {
         Ok(_) => panic!("loaded"),
     }
 }
+
+// ---- the reference, held here ----
+
+/// A text's paragraphs, each with its whitespace folded: what the reference says, whatever its
+/// line breaks.
+fn paragraphs(text: &str) -> Vec<String> {
+    text.replace("\r\n", "\n").split("\n\n").map(|p| p.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|p| !p.is_empty()).collect()
+}
+
+#[test]
+fn the_reference_is_the_text_this_test_holds() {
+    let actual = paragraphs(&common::doc("binding-schema.md"));
+    let expected = paragraphs(REFERENCE);
+    for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+        assert_eq!(a, e, "paragraph {i} of docs/binding-schema.md differs from the copy this test holds");
+    }
+    assert_eq!(actual.len(), expected.len(), "docs/binding-schema.md has {} paragraphs, the copy {}", actual.len(), expected.len());
+}
+
+/// The keys a reader takes in a table, from its refusal of a misspelled key there.
+fn reader_keys(err: &str) -> std::collections::BTreeSet<String> {
+    let at = err.find("expected ").unwrap_or_else(|| panic!("{err}"));
+    let line = err[at..].lines().next().unwrap();
+    line.split('`').skip(1).step_by(2).map(String::from).collect()
+}
+
+/// The keys a section of the reference lists: every backticked word that opens a bullet, or
+/// follows one before its parenthesis (`a`, `b` (...)), and the braces of an inline table.
+fn listed_keys(section: &str) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for line in section.lines() {
+        let t = line.trim_start();
+        let Some(rest) = t.strip_prefix("- ") else { continue };
+        let head = rest.split(" (").next().unwrap_or("");
+        for k in head.split(',') {
+            let k = k.trim();
+            if let Some(k) = k.strip_prefix('`').and_then(|k| k.strip_suffix('`')) {
+                out.insert(k.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// The text of the reference between two headings or bold labels.
+fn section<'a>(doc: &'a str, from: &str, to: &str) -> &'a str {
+    let a = doc.find(from).unwrap_or_else(|| panic!("{from}"));
+    let b = doc[a + from.len()..].find(to).map(|b| a + from.len() + b).unwrap_or(doc.len());
+    &doc[a..b]
+}
+
+fn keys(names: &[&str]) -> std::collections::BTreeSet<String> {
+    names.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn every_key_the_reference_lists_is_the_reader_s() {
+    let doc = common::doc("binding-schema.md");
+    let host_refusal = |text: &str| -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ex = example();
+        ex.host = text.to_string();
+        load(dir.path(), &ex).err().map(|e| e.to_string()).unwrap_or_else(|| panic!("loaded: {text}"))
+    };
+    let ex = example();
+    // The supervisão file's two tables.
+    let host_top = section(&doc, "## The supervisão file: keys", "**A session**");
+    assert_eq!(listed_keys(host_top), keys(&["format", "version", "bind", "session"]));
+    assert_eq!(reader_keys(&host_refusal(&ex.host.replace("bind = ", "zz = 1\nbind = "))), listed_keys(host_top));
+    let session = section(&doc, "**A session**", "## The binding file: keys");
+    assert_eq!(listed_keys(session), keys(&["name", "project", "binding"]));
+    assert_eq!(reader_keys(&host_refusal(&ex.host.replace("name = \"loop\"", "name = \"loop\"\nzz = 1"))), listed_keys(session));
+    // The binding file's tables, each with a misspelled key placed in it.
+    let walk: Vec<(&str, &str, Box<dyn Fn(&str) -> String>, Vec<&str>)> = vec![
+        ("**The top level.**", "**An object**", Box::new(|b: &str| b.replace("title = ", "zz = 1\ntitle = ")), vec!["format", "version", "title", "layout", "headline", "object", "dashboard"]),
+        ("**An object**", "**A state rule**", Box::new(|b: &str| b.replacen("label = \"Loop speed\"", "label = \"Loop speed\"\nzz = 1", 1)), vec!["id", "label", "value", "unit", "decimals", "show", "range", "path", "states", "normal", "stale_after_ms", "actions"]),
+        ("**A state rule**", "**An action**", Box::new(|b: &str| b.replace("{ below = 0.5, state", "{ below = 0.5, zz = 1, state")), vec!["equals", "above", "below", "at_least", "at_most", "state", "word", "source", "series", "key"]),
+        ("**An action**", "**A dashboard**", Box::new(|b: &str| b.replace("{ label = \"Release\",", "{ label = \"Release\", zz = 1,")), vec!["label", "source", "tag", "value"]),
+        ("**A dashboard**", "**A panel**", Box::new(|b: &str| b.replace("columns = 4", "columns = 4\nzz = 1")), vec!["name", "columns", "panel"]),
+    ];
+    for (from, to, place, expected) in &walk {
+        let listed = listed_keys(section(&doc, from, to));
+        // The object's `value` lists its own keys beneath it; they are the series table's.
+        let listed: std::collections::BTreeSet<String> = listed.into_iter().filter(|k| !(from.starts_with("**An object") && ["source", "series", "key"].contains(&k.as_str()))).collect();
+        assert_eq!(listed, keys(expected), "{from}");
+        let err = binding_refusal(&with_binding(|b| place(b)));
+        assert_eq!(reader_keys(&err), listed, "{from}: {err}");
+    }
+    // The bound series, beneath an object's `value`.
+    let err = binding_refusal(&with_binding(|b| b.replace("value = { source = \"plc\", series = \"speed\" }", "value = { source = \"plc\", series = \"speed\", zz = 1 }")));
+    assert_eq!(reader_keys(&err), keys(&["source", "series", "key"]));
+    // Every panel kind: the three every panel has, and the ones its bullet lists.
+    let panels = section(&doc, "**A panel**", "## Refusals");
+    let common_keys = ["kind", "title", "span"];
+    for (kind, place) in [("value", "object = \"read-rate\"\ntarget = 99.0"), ("trend", "limit = { below = 98.0 }"), ("bars", "aggregate = \"mean\""), ("timeline", "objects = [\"infeed\"]"), ("grid", "kind = \"grid\""), ("levels", "ticks = [80, 90]"), ("table", "table = \"outlets\""), ("cells", "spread = 10.0")] {
+        let bullet = panels.lines().find(|l| l.starts_with(&format!("- `{kind}`:"))).unwrap_or_else(|| panic!("{kind}"));
+        // The bullet runs on in its indented lines.
+        let start = panels.find(bullet).unwrap();
+        let text: String = panels[start..].lines().take_while(|l| l.starts_with(&format!("- `{kind}`")) || l.starts_with("  ")).collect::<Vec<_>>().join(" ");
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut listed: std::collections::BTreeSet<String> = common_keys.iter().map(|s| s.to_string()).collect();
+        let pieces: Vec<&str> = text.split('`').collect();
+        for i in (1..pieces.len()).step_by(2) {
+            // A key: a plain word followed by its parenthesis (an inline table's braces are not one).
+            if pieces[i].chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && pieces.get(i + 1).is_some_and(|after| after.starts_with(" (")) {
+                listed.insert(pieces[i].to_string());
+            }
+        }
+        let err = binding_refusal(&with_binding(|b| b.replacen(place, &format!("{place}\nzz = 1"), 1)));
+        assert!(err.contains(&format!("({kind}): unknown field `zz`")), "{kind}: {err}");
+        assert_eq!(reader_keys(&err), listed, "{kind}: {err}");
+    }
+    // A table panel's column, its sort and a trend's limit.
+    let folded = panels.split_whitespace().collect::<Vec<_>>().join(" ");
+    let err = binding_refusal(&with_binding(|b| b.replace("{ name = \"outlet\" }", "{ name = \"outlet\", zz = 1 }")));
+    assert_eq!(reader_keys(&err), keys(&["name", "label", "bar", "decimals", "states"]));
+    assert!(folded.contains("each `{ name, label, bar, decimals, states }`"));
+    let err = binding_refusal(&with_binding(|b| b.replace("sort = { column = \"sorted\", descending = true }", "sort = { column = \"sorted\", descending = true, zz = 1 }")));
+    assert_eq!(reader_keys(&err), keys(&["column", "descending"]));
+    assert!(folded.contains("`{ column, descending }`"));
+    let err = binding_refusal(&with_binding(|b| b.replace("limit = { below = 98.0 }", "limit = { below = 98.0, zz = 1 }")));
+    assert_eq!(reader_keys(&err), keys(&["above", "below"]));
+    assert!(folded.contains("`{ above = x }` or `{ below = x }`"));
+}
+
+#[test]
+fn the_rest_of_the_refusals_name_their_place() {
+    let cases: Vec<(Box<dyn Fn(&str) -> String>, &str)> = vec![
+        (Box::new(|b| b.replace("id = \"speed\"", "id = \"\"").replace("headline = [\"speed\", \"read-rate\"]", "headline = [\"read-rate\"]").replace("object = \"speed\"", "object = \"read-rate\"")), "object 0: the id is empty"),
+        (Box::new(|b| b.replacen("path = \"loop\"", "path = \"loop\"\nrange = [nan, 1]", 1)), "object `parcel-1`: the range's low is not a finite number"),
+        (Box::new(|b| b.replace("[[dashboard.panel]]\nkind = \"value\"", "[[dashboard.panel]]\nkinds = \"value\"")), "dashboard `Overview`, panel[0]: a panel names its `kind`"),
+        (Box::new(|b| b.replace("kind = \"trend\"\nobject = \"read-rate\"\nminutes = 60", "kind = \"trend\"\nobject = \"read-rate\"\nminutes = 0")), "dashboard `Overview`, panel[1] (trend): `minutes` is 0"),
+        (Box::new(|b| b.replace("bucket_minutes = 5\naggregate", "bucket_minutes = 0\naggregate")), "dashboard `Overview`, panel[2] (bars): `bucket_minutes` is 0"),
+        (Box::new(|b| b.replace("spread = 10.0", "spread = 10.0\nbucket_minutes = 0")), "dashboard `Overview`, panel[7] (cells): `bucket_minutes` is 0"),
+        (Box::new(|b| b.replace("target = 99.0", "target = nan")), "dashboard `Overview`, panel[0] (value): `target` is not a finite number"),
+        (Box::new(|b| b.replace("limit = { below = 98.0 }", "limit = { below = inf }")), "dashboard `Overview`, panel[1] (trend): the limit is not a finite number"),
+        (Box::new(|b| b.replace("ticks = [80, 90]", "ticks = [80, nan]")), "dashboard `Overview`, panel[5] (levels): a tick is not a finite number"),
+        (Box::new(|b| b.replace("sort = { column = \"sorted\", descending = true }", "sort = { column = \"sorted\", descending = true }\nlimit = 0")), "dashboard `Overview`, panel[6] (table): `limit` is 0, not 1 to 1000"),
+        (Box::new(|b| b.replace("sort = { column = \"sorted\", descending = true }", "sort = { column = \"sorted\", descending = true }\nlimit = 1001")), "dashboard `Overview`, panel[6] (table): `limit` is 1001, not 1 to 1000"),
+        (Box::new(|b| b.replace("{ name = \"travel\", decimals = 1 }", "{ name = \"travel\", decimals = 7 }")), "dashboard `Overview`, panel[6] (table), columns[2]: `decimals` is 7, past 6"),
+        (Box::new(|b| b.replace("{ name = \"outlet\" }", "{ name = \" \" }")), "dashboard `Overview`, panel[6] (table), columns[0]: the name is empty"),
+        (Box::new(|b| b.replace("{ name = \"outlet\" }", "{ name = \"outlet\", states = [ { equals = 1, series = \"rate\", state = \"warn\" } ] }")), "dashboard `Overview`, panel[6] (table), columns[0], states[0]: a column's rule compares the column's own value"),
+        (Box::new(|b| b.replace("{ name = \"outlet\" }", "{ name = \"outlet\", states = [ { equals = 1, state = \"full\" } ] }")), "dashboard `Overview`, panel[6] (table), columns[0], states[0]: the state `full` is none of `near`, `warn`, `alarm`, `disabled`"),
+        (Box::new(|b| b.replace("[[dashboard]]\nname = \"Overview\"", "[[dashboard]]\nname = \" \"")), "dashboard 0: the name is empty"),
+        (Box::new(|b| b.replace("columns = 4", "columns = 0")), "dashboard `Overview`: `columns` is 0, not 1 to 12"),
+        (Box::new(|b| b.replace("limit = { below = 98.0 }\nspan = 2", "limit = { below = 98.0 }\nspan = 0")), "dashboard `Overview`, panel[1] (trend): `span` is 0, not 1 to the dashboard's 4 columns"),
+    ];
+    for (i, (change, expected)) in cases.iter().enumerate() {
+        assert_eq!(binding_refusal(&with_binding(|b| change(b))), *expected, "case {i}");
+    }
+    // A timeline and levels read numbers, as a trend does.
+    let mut ex = example();
+    ex.project = ex.project.replace("types = { outlet = \"int\", travel = \"float\", rate = \"float\" }", "types = { outlet = \"int\", travel = \"float\" }");
+    ex.binding = ex.binding.replace("kind = \"trend\"\nobject = \"read-rate\"", "kind = \"trend\"\nobject = \"speed\"").replace("objects = [\"infeed\"]", "objects = [\"read-rate\"]").replace("kind = \"value\"\nobject = \"read-rate\"", "kind = \"value\"\nobject = \"speed\"");
+    assert_eq!(binding_refusal(&ex), "dashboard `Overview`, panel[3] (timeline): `read-rate` reads `rate`, which is text, and the panel charts numbers");
+    let mut ex = example();
+    ex.project = ex.project.replace("types = { outlet = \"int\", travel = \"float\", rate = \"float\" }", "types = { outlet = \"int\", travel = \"float\" }");
+    ex.binding = ex.binding.replace("kind = \"trend\"\nobject = \"read-rate\"", "kind = \"trend\"\nobject = \"speed\"").replace("kind = \"levels\"\nobjects = [\"outlet-*\"]", "kind = \"levels\"\nobjects = [\"read-rate\"]");
+    assert_eq!(binding_refusal(&ex), "dashboard `Overview`, panel[5] (levels): `read-rate` reads `rate`, which is text, and the panel charts numbers");
+    // A pattern of a star alone names every object, in the binding's order.
+    let dir = tempfile::tempdir().unwrap();
+    let ex = with_binding(|b| b.replace("kind = \"grid\"\nobjects = [\"outlet-*\"]", "kind = \"grid\"\nobjects = [\"*\", \"speed\"]"));
+    let b = load(dir.path(), &ex).unwrap().sessions.remove(0).binding;
+    match &b.dashboards[0].panels[4].kind {
+        PanelKind::Grid { objects } => assert_eq!(objects.iter().map(|i| b.objects[*i].id.as_str()).collect::<Vec<_>>(), ["speed", "read-rate", "infeed", "outlet-1", "outlet-2", "outlet-3", "parcel-1", "parcel-2", "speed"]),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The reference, `docs/binding-schema.md`, as this test holds it: an edit there is an edit here.
+const REFERENCE: &str = r###"# The supervisão file and the binding file: `veredas-supervisao` and `veredas-binding`, version 1
+
+Supervisão (`docs/supervisao-plan.md`) runs one or more plants' portal sessions and shows each
+through its objects. Two plain-text files say everything it does. The **supervisão file** names
+the address it serves and the sessions it runs, each a portal project file
+(`docs/project-schema.md`) and a binding file. The **binding file** names a session's objects by
+ID, binds each to a series the session carries, says how its value reads as a state (a mark and a
+word) and how the layout shows it, names the writes it offers, points to the SVG layout whose
+elements carry the same IDs, and lists the dashboards and their panels. No plant is named
+anywhere: a plant's supervisão is a folder of files like the ones below, kept outside the suite's
+code, and nothing of a plant's engineering exports is read (`docs/questions.md` Q18).
+
+`veredas_supervisao::config::load` reads the supervisão file, every project and binding file it
+points at, and every layout a binding points at, and checks each against the others, so a
+supervisão file that loads is a host every session of which can start; the executable
+`veredas-supervisao <supervisao.toml>` starts it (`--check` reads, checks and prints the plan
+without starting anything).
+
+Every plain-text config and project file of Veredas 2 follows this pattern (`docs/questions.md`
+Q10, "TOML, suite-wide"): TOML, a `format` and a `version` first, documented defaults, a
+misspelled key refused, an unknown format or version refused rather than guessed, the header read
+by core's one reader (`veredas_core::schema`).
+
+## The worked example: a loop with three outlets, two parcels and an infeed
+
+A controller serves the loop's speed, two parcels' places along it, three outlets' fill levels, an
+infeed's state and an outlet's release command over OPC UA; the sorter's log records every sort
+with its outlet, its travel time and the read rate. The project below reads both; the binding
+shows the infeed, the outlets and the parcels on the layout, the speed and the read rate in the
+top bar, and one dashboard with a panel of every kind. `crates/veredas-supervisao/tests/files.rs`
+writes the four blocks beside each other under the names the files give (`supervisao.toml`,
+`loop/project.toml`, `loop/binding.toml`, `loop/layout.svg`), loads them, checks every statement
+below against what it read, and runs the executable's check on them; it holds a copy of this text,
+so an edit here is an edit there.
+
+The supervisão file:
+
+```toml
+format = "veredas-supervisao"
+version = 1
+bind = "127.0.0.1:8902"
+
+[[session]]
+name = "loop"
+project = "loop/project.toml"
+binding = "loop/binding.toml"
+```
+
+The session's project, a portal project file like any other (`docs/project-schema.md`):
+
+```toml
+format = "veredas-project"
+version = 1
+name = "the loop"
+
+[session]
+store = "ram"
+writes_armed = false
+
+[[log]]
+id = "sorter"
+file = "sorts.log"
+timestamp = { pattern = "^(?P<ts>\\S+ \\S+)", formats = ["%Y-%m-%d %H:%M:%S%.3f"] }
+
+[[rule]]
+name = "sorts"
+pattern = "SORT outlet=(?P<outlet>\\d+) travel=(?P<travel>[0-9.]+) rate=(?P<rate>[0-9.]+)"
+scope = "sorter"
+types = { outlet = "int", travel = "float", rate = "float" }
+
+[[opc]]
+source_id = "plc"
+endpoint_url = "opc.tcp://127.0.0.1:4855/"
+poll_ms = 200
+rules = [
+  { name = "plc_main", tags = [
+    { node_id = "ns=2;s=speed", series = "speed", type = "float" },
+    { node_id = "ns=2;s=p1", series = "p1", type = "float" },
+    { node_id = "ns=2;s=p2", series = "p2", type = "float" },
+    { node_id = "ns=2;s=fill1", series = "fill1", type = "float" },
+    { node_id = "ns=2;s=fill2", series = "fill2", type = "float" },
+    { node_id = "ns=2;s=fill3", series = "fill3", type = "float" },
+    { node_id = "ns=2;s=infeed", series = "infeed", type = "int" },
+    { node_id = "ns=2;s=release3", series = "release3", type = "int", writable = true },
+  ] },
+]
+
+[[table]]
+name = "outlets"
+sql = "SELECT outlet, count(*) AS sorted, avg(travel) AS travel FROM sorts GROUP BY outlet"
+```
+
+The binding file:
+
+```toml
+format = "veredas-binding"
+version = 1
+title = "The loop"
+layout = "layout.svg"
+headline = ["speed", "read-rate"]
+
+[[object]]
+id = "speed"
+label = "Loop speed"
+value = { source = "plc", series = "speed" }
+unit = "m/s"
+decimals = 1
+states = [ { below = 0.5, state = "warn", word = "slow" } ]
+normal = "running"
+
+[[object]]
+id = "read-rate"
+label = "Read rate"
+value = { source = "sorter", series = "rate" }
+unit = "%"
+decimals = 1
+states = [ { below = 98.0, state = "alarm", word = "under 98 %" } ]
+stale_after_ms = 30000
+
+[[object]]
+id = "infeed"
+label = "Infeed"
+value = { source = "plc", series = "infeed" }
+states = [
+  { equals = 0, state = "warn", word = "stopped" },
+  { equals = 2, state = "alarm", word = "fault" },
+]
+normal = "running"
+
+[[object]]
+id = "outlet-1"
+label = "Outlet 1"
+value = { source = "plc", series = "fill1" }
+unit = "%"
+decimals = 0
+show = "level"
+states = [ { at_least = 100, state = "warn", word = "full" }, { at_least = 80, state = "near", word = "near full" } ]
+
+[[object]]
+id = "outlet-2"
+label = "Outlet 2"
+value = { source = "plc", series = "fill2" }
+unit = "%"
+decimals = 0
+show = "level"
+states = [ { at_least = 100, state = "warn", word = "full" }, { at_least = 80, state = "near", word = "near full" } ]
+
+[[object]]
+id = "outlet-3"
+label = "Outlet 3"
+value = { source = "plc", series = "fill3" }
+unit = "%"
+decimals = 0
+show = "level"
+states = [ { at_least = 100, state = "warn", word = "full" }, { at_least = 80, state = "near", word = "near full" } ]
+actions = [ { label = "Release", source = "plc", tag = "ns=2;s=release3", value = "1" } ]
+
+[[object]]
+id = "parcel-1"
+label = "Parcel 1"
+value = { source = "plc", series = "p1" }
+show = "move"
+path = "loop"
+
+[[object]]
+id = "parcel-2"
+label = "Parcel 2"
+value = { source = "plc", series = "p2" }
+show = "move"
+path = "loop"
+
+[[dashboard]]
+name = "Overview"
+columns = 4
+
+[[dashboard.panel]]
+kind = "value"
+object = "read-rate"
+target = 99.0
+
+[[dashboard.panel]]
+kind = "trend"
+object = "read-rate"
+minutes = 60
+limit = { below = 98.0 }
+span = 2
+
+[[dashboard.panel]]
+kind = "bars"
+object = "speed"
+minutes = 60
+bucket_minutes = 5
+aggregate = "mean"
+target = 1.5
+
+[[dashboard.panel]]
+kind = "timeline"
+objects = ["infeed"]
+minutes = 60
+
+[[dashboard.panel]]
+kind = "grid"
+objects = ["outlet-*"]
+
+[[dashboard.panel]]
+kind = "levels"
+objects = ["outlet-*"]
+ticks = [80, 90]
+
+[[dashboard.panel]]
+kind = "table"
+table = "outlets"
+columns = [ { name = "outlet" }, { name = "sorted", bar = true }, { name = "travel", decimals = 1 } ]
+sort = { column = "sorted", descending = true }
+
+[[dashboard.panel]]
+kind = "cells"
+table = "sorts"
+key = "outlet"
+value = "travel"
+minutes = 60
+spread = 10.0
+```
+
+The layout the binding points at, an SVG whose elements carry the objects' IDs:
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 220">
+  <path id="loop" d="M 80 40 H 320 A 70 70 0 0 1 320 180 H 80 A 70 70 0 0 1 80 40 Z" fill="none" stroke="#26262A" stroke-width="14"/>
+  <rect id="infeed" x="20" y="96" width="40" height="28"/>
+  <rect id="outlet-1" x="130" y="4" width="24" height="28"/>
+  <rect id="outlet-2" x="190" y="4" width="24" height="28"/>
+  <rect id="outlet-3" x="250" y="4" width="24" height="28"/>
+  <circle id="parcel-1" r="5"/>
+  <circle id="parcel-2" r="5"/>
+</svg>
+```
+
+Loaded, this host serves one session, `loop`, at `/s/loop/` on `127.0.0.1:8902`. Its binding has
+eight objects, two of which (`speed`, `read-rate`) have no element in the layout and show in the
+headline and the dashboard alone; one dashboard of eight panels; one write, `Release`, offered on
+`outlet-3`, posting `1` to the tag `ns=2;s=release3` of `plc` through portal's surface, refused there
+while the project leaves its writes off.
+
+## The supervisão file: keys
+
+Each key states in parentheses that it is required, or the value it takes when left out. A path is
+relative to the file's folder.
+
+- `format` (required): always `"veredas-supervisao"`.
+- `version` (required): this reader knows `1`.
+- `bind` (`"127.0.0.1:8902"`): the address and port the host serves, a port of `0` letting the
+  system choose. Supervisão has no accounts (Q20): whoever reaches the address sees every session,
+  and posts to a session's write routes, which portal refuses unless the project armed its writes;
+  an address beyond the loopback opens that to every machine that reaches it.
+- `session` (required, at least one): `[[session]]` tables, served in the file's order.
+
+**A session** (`[[session]]`):
+- `name` (required): the session's path segment, `/s/<name>/`: a lowercase ASCII letter or digit,
+  then lowercase letters, digits and `-`, at most 32; no two sessions share one.
+- `project` (required): the path of the session's portal project file, loaded as portal loads it
+  (its refusals are portal's, named with the session). The project's own `[server]` address is not
+  bound: the session's portal surface is served at `/s/<name>/portal/`.
+- `binding` (required): the path of the session's binding file.
+
+## The binding file: keys
+
+A path is relative to the binding file's folder.
+
+**The top level.**
+- `format` (required): always `"veredas-binding"`.
+- `version` (required): this reader knows `1`.
+- `title` (the project's name): the session's name on the screen.
+- `layout` (none): the path of the SVG layout. Without one the session has dashboards and no
+  layout view.
+- `headline` (none): object IDs shown in the top bar, in order.
+- `object` (none): `[[object]]` tables.
+- `dashboard` (none): `[[dashboard]]` tables.
+
+**An object** (`[[object]]`): something on the plant with a value.
+- `id` (required): an ASCII letter, then ASCII letters, digits, `-`, `_` and `.`, at most 64; no two
+  objects share one, whatever the case. The layout's element with this `id` shows the object.
+- `label` (`id`): the object's name on the screen.
+- `value` (required): the series it reads, an inline table:
+  - `source` (required): a source of the session's project (a log, an OPC source, a channel).
+  - `series` (required): a series that source carries: a capture rule's group (not its key group)
+    for a log the rule reads, an OPC tag's or bit's series for an OPC source, a message's field for
+    a channel.
+  - `key` (none): the one key read, for a series whose samples carry keys; absent, the latest
+    sample whatever its key, or, for a marker, one marker per key.
+- `unit` (`""`): shown after the value.
+- `decimals` (none): the places a number is shown with; absent, as it reads, at most three places,
+  trailing zeros dropped.
+- `show` (`"state"`): how the layout shows the object: `state` (its element takes the state's
+  class, and its mark and word when not normal), `level` (as `state`, and its element fills from
+  the bottom by the value's place in `range`), `value` (as `state`, and the value written over its
+  element) or `move` (its element is a marker placed along `path` by the value's place in
+  `range`). A level and a marker need a numeric series.
+- `range` (`[0, 100]`): the low and the high of a level or a marker, low below high, both finite.
+- `path` (required for `move`, refused otherwise): the `id` of the layout element the marker
+  follows, a `path`, `line`, `polyline`, `polygon`, `rect`, `circle` or `ellipse`.
+- `states` (none): the rules, in order; the first that holds names the state; none holding, the
+  state is normal.
+- `normal` (`"ok"`): the word of the normal state.
+- `stale_after_ms` (none): a freshness bound: with it, the object is stale when no sample of its
+  series arrived within that many milliseconds, even while its source is live; for a marker per
+  key, a key with no sample within it is no longer shown (absent, after 10000 ms).
+- `actions` (none): the writes the object offers, as inline tables.
+
+**A state rule** (an entry of `states`): exactly one comparison, a state and a word.
+- `equals`, `above`, `below`, `at_least`, `at_most` (one, required): the value compared; `equals`
+  takes a number (compared as numbers) or a string (compared as text, exactly), the others a
+  finite number.
+- `state` (required): `near`, `warn`, `alarm` or `disabled`; normal is the absence of a rule, and
+  stale is no rule's: it is judged on the arrival clock.
+- `word` (the state's name): the word shown with the mark.
+- `source`, `series`, `key` (the object's): another series the rule compares instead of the
+  object's value, by the same rules as `value`'s keys.
+
+The states read with a mark and a word everywhere: normal ●, near ■, warn ■, alarm !, disabled ▨,
+stale ◌, and the page's own selected ◆. Stale overrides the rules: an object with no value yet, whose source is away (idle past the
+project's window, retrying, ended or failed, or waiting again once it has delivered: an OPC source
+reconnecting, a channel whose peer left), or whose value is older than its `stale_after_ms`, is
+stale, a last value kept and greyed.
+
+**An action** (an entry of `actions`): a write the side panel offers, posted to portal's write
+surface (`POST /s/<name>/portal/api/opc/write`), never written by supervisão itself.
+- `label` (required): the button's text.
+- `source` (required): an OPC source of the project.
+- `tag` (required): the tag's node id as the project's OPC rule writes it (portal names a tag by it), a tag the rule marks writable.
+- `value` (required): the value written, as text, coerced by portal to the tag's type.
+
+The page shows an action gated (the warn colour) and disabled while the session's switch is off;
+portal answers a post 403 while it is off, whoever sends it.
+
+**A dashboard** (`[[dashboard]]`):
+- `name` (required): its name on the screen, unique in the file.
+- `columns` (`4`): the grid's columns, 1 to 12.
+- `panel` (none): `[[dashboard.panel]]` tables, laid out in order.
+
+**A panel** (`[[dashboard.panel]]`): every panel has a `kind` (required), a `title` (the object's
+label for a panel of one object, the table's name for a table's, else `"State over time"`,
+`"States"` or `"Levels"`) and a `span` (`1`: the columns it takes, 1 to the
+dashboard's `columns`). An entry of `objects` ending in `*` names every object whose ID starts with
+what precedes it, in the binding's order, and must name at least one. A window is the last
+`minutes` up to now on the store's time axis.
+- `value`: a tile with the object's value, unit, state and a sparkline. `object` (required),
+  `minutes` (`30`: the sparkline's window), `target` (none: the tile says how far the value is from
+  it, in percent).
+- `trend`: the object's series over a window with a dashed limit and its breaches marked.
+  `object` (required), `minutes` (`60`), `limit` (none): `{ above = x }` or `{ below = x }`; a
+  breach is a point past it.
+- `bars`: the object's series in buckets of `bucket_minutes` aligned on the clock, the bucket now
+  running marked, against a dashed `target`. `object` (required), `minutes` (`60`),
+  `bucket_minutes` (`5`), `aggregate` (`"mean"`: `mean`, `sum`, `count`, `min`, `max` or `last`),
+  `target` (none).
+- `timeline`: per object one bar of its state over the window. `objects` (required), `minutes`
+  (`60`). The objects' series must be numeric.
+- `grid`: one small cell per object with its value and state. `objects` (required).
+- `levels`: one horizontal bar per object, its value's place in the object's `range`, with ticks.
+  `objects` (required), `ticks` (none: values in the objects' units).
+- `table`: rows of a table of the session, newest first. `table` (required: a capture rule, an OPC
+  rule, a channel message or a view of the project), `columns` (none: every column), each
+  `{ name, label, bar, decimals, states }` (`name` required; `bar` true draws the value as a bar
+  against the column's largest in the page; `states` rules as an object's), `sort` (none:
+  `{ column, descending }`, applied to the rows shown), `limit` (`50`, 1 to 1000).
+- `cells`: charts in cells, one row per value of a key column of a table over a window: the
+  median, a sparkline of the median per `bucket_minutes`, the distribution from median − `spread`
+  to median + `spread` in 20 bins, σ and n. `table` (required), `key` (required), `value`
+  (required: a numeric column), `minutes` (`60`), `bucket_minutes` (`5`), `spread` (required,
+  above 0). It reads at most the newest 50 000 rows of the window, and says so when it did.
+
+## Refusals
+
+A misspelled key anywhere; a header of another format or version; a session name of another shape
+or twice; a project or binding file that cannot be read or does not load (with portal's reason
+for a project); an object ID of another shape or twice whatever the case; a source the project
+lacks; a series its source does not carry (with the series it does carry); a level or a marker on
+a series that is not numeric; a `path` on an object that does not move, a marker without one, or
+one naming no element of the layout or an element no marker can follow; a `range` empty or not
+finite; a rule with no comparison or two, a state outside the four, a comparison that is not a
+finite number; an action whose source is no OPC source of the project or whose tag no rule marks
+writable; a headline or panel naming no object, an `objects` pattern matching none; a panel of an
+unknown kind, or with a key its kind does not take; a span past the columns; a table the project
+lacks; a layout that cannot be read or is not an SVG document: each is refused when the file
+loads, with its place named, before any session starts.
+"###;

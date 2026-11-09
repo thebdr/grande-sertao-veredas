@@ -338,8 +338,9 @@ portal answers a post 403 while it is off, whoever sends it.
 - `columns` (`4`): the grid's columns, 1 to 12.
 - `panel` (none): `[[dashboard.panel]]` tables, laid out in order.
 
-**A panel** (`[[dashboard.panel]]`): every panel has a `kind` (required), a `title` (from what it
-binds: an object's label, a table's name) and a `span` (`1`: the columns it takes, 1 to the
+**A panel** (`[[dashboard.panel]]`): every panel has a `kind` (required), a `title` (the object's
+label for a panel of one object, the table's name for a table's, else `"State over time"`,
+`"States"` or `"Levels"`) and a `span` (`1`: the columns it takes, 1 to the
 dashboard's `columns`). An entry of `objects` ending in `*` names every object whose ID starts with
 what precedes it, in the binding's order, and must name at least one. A window is the last
 `minutes` up to now on the store's time axis.
