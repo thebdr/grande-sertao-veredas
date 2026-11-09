@@ -180,6 +180,22 @@ fn the_worked_example_loads_as_its_prose_says() {
         refused(&with(&text, "[session]", "start", "start = \"yesterdayish\""), dir.path()),
         "session.start: `yesterdayish` is neither `midnight`, a date-time `YYYY-MM-DD HH:MM[:SS]`, a date `YYYY-MM-DD`, nor { last_hours = N }"
     );
+    // The store's two disk forms: a file pinned by name, and a folder holding a file of each
+    // run's own, named from the project and the start (docs/questions.md Q16).
+    let p = project::load(&with(&text, "[session]", "store", "store = { disk = \"s.duckdb\", memory_limit_mb = 64 }"), dir.path()).unwrap();
+    assert_eq!(p.store, Store::Disk { path: dir.path().join("s.duckdb"), memory_limit_mb: 64 });
+    let p = project::load(&with(&text, "[session]", "store", "store = { dir = \"runs\", memory_limit_mb = 256 }"), dir.path()).unwrap();
+    assert_eq!(p.store, Store::PerSession { dir: dir.path().join("runs"), memory_limit_mb: 256 });
+    let started = NaiveDate::from_ymd_opt(2026, 11, 8).unwrap().and_hms_opt(6, 0, 30).unwrap();
+    assert_eq!(project::session_store_file("the press hall", started), "the_press_hall-20261108-060030.duckdb");
+    assert_eq!(project::session_store_file("  ", started), "session-20261108-060030.duckdb");
+    assert_eq!(
+        p.session_config(started).residency,
+        veredas_portal::store::Residency::Disk { path: dir.path().join("runs").join("the_press_hall-20261108-060030.duckdb"), memory_limit_mb: 256 }
+    );
+    let e = refused(&with(&text, "[session]", "store", "store = { disk = \"s.duckdb\", dir = \"runs\" }"), dir.path());
+    assert!(e.contains("`disk` (a file pinned by name) and `dir` (a file per session) exclude each other: name one"), "{e}");
+    assert_eq!(refused(&with(&text, "[session]", "store", "store = { dir = \" \" }"), dir.path()), "session.store: `dir` is empty: name the folder the session files go in");
 }
 
 #[test]
@@ -388,7 +404,7 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
     let migrated = project::from_v1(&v1).unwrap();
     let p = project::load(&migrated.toml, &v1).unwrap_or_else(|e| panic!("{e}\n{}", migrated.toml));
     assert_eq!((p.name.as_str(), &p.start, p.writes_armed), ("Press Hall", &Start::At(NaiveDate::from_ymd_opt(2026, 11, 8).unwrap().and_hms_opt(6, 0, 0).unwrap()), true));
-    assert_eq!(p.store, Store::Disk { path: v1.join("cache/session.duckdb"), memory_limit_mb: 2048 });
+    assert_eq!(p.store, Store::PerSession { dir: v1.join("cache"), memory_limit_mb: 2048 }, "a folder, a file per run, as Veredas 1 had it");
     assert_eq!(p.logs.iter().map(|l| l.id.as_str()).collect::<Vec<_>>(), ["press-a", "events"]);
     assert!(matches!(&p.logs[0].kind, LogKind::Family { date_format: Some(f), active: ActiveConfig::Newest, .. } if f == "%Y%m%d"));
     assert_eq!(p.logs[0].timestamp.as_ref().unwrap().formats.len(), 2, "one format per line");
@@ -750,9 +766,12 @@ file's folder.
   the plant's clock), a date-time `"YYYY-MM-DD HH:MM[:SS]"`, a date `"YYYY-MM-DD"`, or
   `{ last_hours = N }` with N at least 1. A start in the past reads a file whole and backfills a
   family from the located line (a family then needs its `timestamp`).
-- `store` (default `"ram"`): `"ram"`, gone when the session ends, or
-  `{ disk = "<file>", memory_limit_mb = 0 }`, a database file the engine pages out of core,
-  `memory_limit_mb` its ceiling (0 for the engine's default).
+- `store` (default `"ram"`): `"ram"`, gone when the session ends; `{ disk = "<file>",
+  memory_limit_mb = 0 }`, a database file pinned by name that the engine pages out of core,
+  refused when one already stands at the path; or `{ dir = "<folder>", memory_limit_mb = 0 }`,
+  a database file of each run's own in that folder, named from the project's name and the
+  session's start (`<name>-<yyyymmdd>-<hhmmss>.duckdb`, the name's other characters `_`), so
+  every run leaves its own. `memory_limit_mb` is the engine's ceiling (0 for its default).
 - `writes_armed` (default `false`): the master switch. Off, every write path (an OPC write, a
   channel send, a reply rule) is refused before anything reaches the plant; the switch is set in
   process, never over the wire.

@@ -127,9 +127,22 @@ impl Start {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Store {
     Ram,
-    /// A database file (resolved against the project's folder) and the engine's memory ceiling
-    /// in megabytes, 0 for the engine's default.
+    /// A database file pinned by name (resolved against the project's folder) and the engine's
+    /// memory ceiling in megabytes, 0 for the engine's default; a second run finds the first's
+    /// database there and is refused by name (C-041).
     Disk { path: PathBuf, memory_limit_mb: u32 },
+    /// A database file per session in a folder (resolved against the project's folder), named
+    /// from the project's name and the session's start, so every run leaves its own
+    /// (`docs/questions.md` Q16, decided 2026-11-09).
+    PerSession { dir: PathBuf, memory_limit_mb: u32 },
+}
+
+/// The file a per-session store opens: the project's name, with anything but a letter, a digit,
+/// `-` or `_` replaced by `_`, then the start's second, then `.duckdb`.
+pub fn session_store_file(name: &str, started: NaiveDateTime) -> String {
+    let safe: String = name.trim().chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+    let safe = if safe.is_empty() { "session".to_string() } else { safe };
+    format!("{safe}-{}.duckdb", started.format("%Y%m%d-%H%M%S"))
 }
 
 /// A project as read: every reference loaded, every rule compiled once to prove it compiles.
@@ -288,8 +301,15 @@ enum StartFile {
 enum StoreFile {
     /// `ram`.
     Named(String),
+    /// A file pinned by name.
     Disk {
         disk: String,
+        #[serde(default)]
+        memory_limit_mb: u32,
+    },
+    /// A file per session in a folder.
+    Dir {
+        dir: String,
         #[serde(default)]
         memory_limit_mb: u32,
     },
@@ -356,10 +376,16 @@ impl<'de> Deserialize<'de> for StoreFile {
         match toml::Value::deserialize(d)? {
             toml::Value::String(s) => Ok(StoreFile::Named(s)),
             toml::Value::Table(t) => {
-                only_keys(&t, &["disk", "memory_limit_mb"])?;
-                Ok(StoreFile::Disk { disk: string_at(&t, "disk")?, memory_limit_mb: u32_at(&t, "memory_limit_mb", Some(0))? })
+                only_keys(&t, &["disk", "dir", "memory_limit_mb"])?;
+                let memory_limit_mb = u32_at(&t, "memory_limit_mb", Some(0))?;
+                match (t.contains_key("disk"), t.contains_key("dir")) {
+                    (true, true) => Err(serde::de::Error::custom("`disk` (a file pinned by name) and `dir` (a file per session) exclude each other: name one")),
+                    (true, false) => Ok(StoreFile::Disk { disk: string_at(&t, "disk")?, memory_limit_mb }),
+                    (false, true) => Ok(StoreFile::Dir { dir: string_at(&t, "dir")?, memory_limit_mb }),
+                    (false, false) => Err(serde::de::Error::missing_field("disk")),
+                }
             }
-            other => Err(serde::de::Error::invalid_type(unexpected(&other), &"`ram`, or { disk = \"<file>\", memory_limit_mb = N }")),
+            other => Err(serde::de::Error::invalid_type(unexpected(&other), &"`ram`, { disk = \"<file>\", memory_limit_mb = N } or { dir = \"<folder>\", memory_limit_mb = N }")),
         }
     }
 }
@@ -536,6 +562,12 @@ pub fn load(text: &str, base: &Path) -> Result<Project, ProjectError> {
                 return Err(invalid("session.store: `disk` is empty: name the database file"));
             }
             Store::Disk { path: resolve(base, &disk), memory_limit_mb }
+        }
+        Some(StoreFile::Dir { dir, memory_limit_mb }) => {
+            if dir.trim().is_empty() {
+                return Err(invalid("session.store: `dir` is empty: name the folder the session files go in"));
+            }
+            Store::PerSession { dir: resolve(base, &dir), memory_limit_mb }
         }
     };
     if session.idle_after_ms < 1 {
@@ -747,6 +779,9 @@ impl Project {
         cfg.residency = match &self.store {
             Store::Ram => Residency::Ram,
             Store::Disk { path, memory_limit_mb } => Residency::Disk { path: path.clone(), memory_limit_mb: *memory_limit_mb },
+            // A file of its own for this run, named from the project and the start; the store's
+            // guard against a database already standing there still holds for it.
+            Store::PerSession { dir, memory_limit_mb } => Residency::Disk { path: dir.join(session_store_file(&self.name, now)), memory_limit_mb: *memory_limit_mb },
         };
         cfg.writes_armed = self.writes_armed;
         cfg.idle_after_ms = self.idle_after_ms;
@@ -1206,8 +1241,10 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
             }
             match st.mode.as_str() {
                 "Disk" => {
+                    // Veredas 1 kept a folder and wrote a file per session in it; so does this
+                    // file's `dir` form (Q16).
                     let dir = if st.disk_dir.trim().is_empty() { "cache".to_string() } else { st.disk_dir.trim().to_string() };
-                    Some(StoreFile::Disk { disk: format!("{dir}/session.duckdb"), memory_limit_mb: st.memory_limit_mb })
+                    Some(StoreFile::Dir { dir, memory_limit_mb: st.memory_limit_mb })
                 }
                 mode => {
                     if !matches!(mode, "Ram" | "") {
