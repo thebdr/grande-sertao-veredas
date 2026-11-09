@@ -1336,28 +1336,51 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
             .filter_map(|name| refused.get(&name).map(|reason| (name, reason)))
             .filter(|(name, reason)| !reason.starts_with("IO Error") && !unjudged.contains(name))
             .collect();
+        // A Binder Error that names a table: a table the file creates is judged in full here, so
+        // the view falls; a view over a file not here (a stand-in's columns) only the file can
+        // tell, so the view is set aside.
+        let binder_table = |reason: &str| reason.strip_prefix("Binder Error: Table \"").and_then(|r| r.split_once('"')).map(|(t, _)| t.to_string());
+        let refused_note = |name: &str, reason: &str| format!("table `{name}`: the engine refuses it over the tables this file creates ({reason}): not carried (write it back once what it reads is)");
         loop {
-            let before = undecided.len();
-            undecided.retain(|(name, reason)| match catalog_missing(reason) {
-                Some(m) if pending_now.iter().any(|u| u.eq_ignore_ascii_case(&m)) => {
-                    pending_now.insert(name.clone());
-                    false
+            // Defer every reader of a view set aside or deferred this round, to a fixpoint.
+            loop {
+                let before = undecided.len();
+                undecided.retain(|(name, reason)| match catalog_missing(reason) {
+                    Some(m) if pending_now.iter().any(|u| u.eq_ignore_ascii_case(&m)) => {
+                        pending_now.insert(name.clone());
+                        false
+                    }
+                    _ => true,
+                });
+                if undecided.len() == before {
+                    break;
                 }
-                _ => true,
-            });
-            if undecided.len() == before {
+            }
+            if undecided.is_empty() {
                 break;
             }
-        }
-        for (name, reason) in undecided {
-            match (catalog_missing(reason), reads.get(&name)) {
-                (Some(_), _) | (None, None) => {
-                    notes.push(format!("table `{name}`: the engine refuses it over the tables this file creates ({reason}): not carried (write it back once what it reads is)"));
+            // Decide the first view not waiting on another undecided one (a reader cycle leaves
+            // none: every view of it falls with its reason); a view set aside by its own reading
+            // joins the round's pending views, so what reads it is deferred before anything falls.
+            let waits = |reason: &str, rest: &[(String, &String)]| catalog_missing(reason).is_some_and(|m| rest.iter().any(|(n, _)| n.eq_ignore_ascii_case(&m)));
+            let Some(at) = undecided.iter().position(|(_, reason)| !waits(reason, &undecided)) else {
+                for (name, reason) in undecided.drain(..) {
+                    notes.push(refused_note(&name, reason));
                     dropped.insert(name);
                 }
-                (None, Some(m)) => {
+                break;
+            };
+            let (name, reason) = undecided.remove(at);
+            let created_fault = binder_table(reason).is_some_and(|t| !over_file.iter().any(|u| u.eq_ignore_ascii_case(&t)));
+            match (catalog_missing(reason), created_fault, reads.get(&name)) {
+                (None, false, Some(m)) => {
                     notes.push(over_file_note(&name, m));
-                    unjudged.insert(name);
+                    unjudged.insert(name.clone());
+                    pending_now.insert(name);
+                }
+                _ => {
+                    notes.push(refused_note(&name, reason));
+                    dropped.insert(name);
                 }
             }
         }

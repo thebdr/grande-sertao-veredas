@@ -374,7 +374,11 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
             { "name": "col_stub", "sql": "SELECT missing_col FROM v_csv", "enabled": true },
             { "name": "rd_temp", "sql": "SELECT * FROM temp.v_csv", "enabled": true },
             { "name": "rr2", "sql": "SELECT * FROM reader_after", "enabled": true },
-            { "name": "rr3", "sql": "SELECT * FROM rr2", "enabled": true } ]"#,
+            { "name": "rr3", "sql": "SELECT * FROM rr2", "enabled": true },
+            { "name": "bad_mid", "sql": "SELECT reader_after.*, readings.nope FROM reader_after JOIN readings ON true", "enabled": true },
+            { "name": "bad_top", "sql": "SELECT * FROM bad_mid", "enabled": true },
+            { "name": "col_mid", "sql": "SELECT reader_after.a FROM reader_after", "enabled": true },
+            { "name": "col_top", "sql": "SELECT * FROM col_mid", "enabled": true } ]"#,
     );
     // The absolute start as Veredas 1's screens wrote it, with a `T`: carried in this file's spelling.
     w("session.json", r#"{ "start": { "kind": "Absolute", "last_hours": 4, "absolute": "2026-11-08T06:00:00" }, "store": { "mode": "Disk", "disk_dir": "", "memory_limit_mb": 2048, "auto_export_mins": 0, "export_dir": "" } }"#);
@@ -400,7 +404,7 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
     assert_eq!(p.opc.len(), 2, "{}", migrated.toml);
     let plc2 = &p.opc[1];
     assert_eq!((plc2.source_id.as_str(), plc2.user.as_deref(), plc2.password_env.as_deref(), plc2.poll_ms, plc2.rules.len()), ("plc-2", None, None, 250, 1));
-    assert_eq!(p.tables.len(), 16, "{}", migrated.notes.join("\n"));
+    assert_eq!(p.tables.len(), 18, "{}", migrated.notes.join("\n"));
     assert_eq!(p.tables[0], ("hot".to_string(), "SELECT * FROM readings WHERE v > 20.0".to_string()));
     assert!(p.tables[1].1.starts_with("SELECT * FROM read_csv(") && p.tables[1].1.contains("decimal_separator"), "{}", p.tables[1].1);
     assert!(p.channels.is_empty());
@@ -439,11 +443,15 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
         "table `both2`: the engine refuses it over the tables this file creates (Catalog Error: Table with name oldrule does not exist!): not carried",
         "table `col_stub`: it reads `v_csv`, a view over a file not here: carried as written; check it with the file",
         "table `rd_temp`: the engine refuses it over the tables this file creates (Catalog Error: Table with name v_csv does not exist!): not carried",
+        "table `bad_mid`: the engine refuses it over the tables this file creates (Binder Error: Table \"readings\" does not have a column named \"nope\"",
+        "table `bad_top`: the engine refuses it over the tables this file creates (Catalog Error: Table with name bad_mid does not exist!): not carried",
+        "table `col_mid`: it reads `reader_after`, a view over a file not here: carried as written; check it with the file",
+        "table `col_top`: it reads `col_mid`, a view over a file not here: carried as written; check it with the file",
         "the rules' skew-monitor threshold",
     ] {
         assert!(notes.contains(expected), "no note `{expected}` in:\n{notes}");
     }
-    assert_eq!(migrated.notes.len(), 32, "{notes}");
+    assert_eq!(migrated.notes.len(), 36, "{notes}");
     // The engine, not a reading of the SQL, decides: the three CSV-linked views (their files on
     // the plant's machine, not here) are carried as written and named, and so are the views that
     // read one, listed after it or before it, or reading a column only the file can show, or
@@ -453,7 +461,7 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
     // with a column list are carried, all in order.
     assert_eq!(
         p.tables.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
-        ["hot", "limits", "v_csv", "v_str", "v_extract", "v_distinct", "v_cte", "reader_after", "q3", "q2", "q1", "reader_before", "csv2", "col_stub", "rr2", "rr3"]
+        ["hot", "limits", "v_csv", "v_str", "v_extract", "v_distinct", "v_cte", "reader_after", "q3", "q2", "q1", "reader_before", "csv2", "col_stub", "rr2", "rr3", "col_mid", "col_top"]
     );
     assert!(migrated.toml.starts_with("# Read into Veredas 2 from a Veredas 1 project folder"));
     // An absolute start in the other spelling is carried too; one that is no date-time is named
