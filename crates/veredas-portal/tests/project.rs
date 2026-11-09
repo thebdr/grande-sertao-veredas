@@ -671,6 +671,15 @@ fn the_executable_runs_a_project_serving_and_reporting_until_stdin_closes() {
     assert_eq!(out.status.code(), Some(1));
     let out = Command::new(exe).arg("--secret").arg(&file).arg("plc").arg(&file).output().unwrap();
     assert_eq!(out.status.code(), Some(1), "a stray file after `--secret` is a usage error");
+    // Arguments a shell may hand it wrong: a project file before `--secret`, `--secret` twice, an
+    // option where the entry goes, `--new-key` twice: a usage error each, nothing sealed.
+    let file_s = file.to_str().unwrap();
+    for args in [vec![file_s, "--secret", file_s, "e1"], vec!["--secret", file_s, "e2", "--secret", file_s, "e3"], vec!["--secret", file_s, "--check"], vec!["--new-key", "--new-key"]] {
+        let out = Command::new(exe).args(&args).env("VEREDAS_KEY", &key).stdin(Stdio::null()).output().unwrap();
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    let names: Vec<String> = SecretsFile::load(&dir.path().join("secrets.toml")).unwrap().names().map(str::to_string).collect();
+    assert_eq!(names, ["crlf", "multi", "plc", "spaced"], "nothing sealed by a refused call");
     // The run refused by name, exit 2, the value nowhere: the variable unset, one holding no key,
     // a wrong key, and a project naming an entry the file does not hold.
     let refused_run = |project: &Path, env: Option<&str>| {
@@ -694,6 +703,13 @@ fn the_executable_runs_a_project_serving_and_reporting_until_stdin_closes() {
     let renamed = dir.path().join("renamed.toml");
     std::fs::write(&renamed, with(&text, "[[opc]]", "secret", "secret = \"plc_b\"")).unwrap();
     assert!(refused_run(&renamed, Some(key.as_str())).contains("the session did not start: source `plc`: the secret `plc_b` for the password of `operator` is not in the secrets file"));
+    // `--secret` under a key that does not open what is already there: refused by the file's
+    // path, the variable and the first entry, and the file is left as it was.
+    let before = std::fs::read(dir.path().join("secrets.toml")).unwrap();
+    let (code, _, errs) = seal(&file, "zz", Some(other.as_str()), b"x\n");
+    assert_eq!(code, Some(2), "{errs}");
+    assert!(errs.contains("the secrets file ") && errs.contains(" does not open with the key `VEREDAS_KEY` holds (entry `crlf`)") && !errs.contains(&other), "{errs}");
+    assert_eq!(std::fs::read(dir.path().join("secrets.toml")).unwrap(), before, "nothing sealed under a key that does not open the file");
     // The run itself, the key in the variable.
     let mut child = Command::new(exe).arg(&file).env("VEREDAS_KEY", &key).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let mut errs = child.stderr.take().unwrap();
@@ -743,6 +759,40 @@ fn the_executable_runs_a_project_serving_and_reporting_until_stdin_closes() {
     let status = child.wait().unwrap();
     let errs = stderr.join().unwrap();
     assert!(status.success() && errs.trim().is_empty(), "exit {status:?}; stderr:\n{errs}");
+}
+
+/// The secrets file through its own API, the one the executable writes with (Q15): a value sealed
+/// twice gives two blobs with two nonces; the key that sealed opens it; an entry copied under
+/// another name does not open, the name being bound in; another key is refused by the first
+/// entry's name, the value nowhere.
+#[test]
+fn the_secrets_file_seals_each_value_afresh_and_binds_the_entry_s_name() {
+    use base64::Engine;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("secrets.toml");
+    let key = Key256::fresh().unwrap();
+    let blob = |name: &str| -> String {
+        let v: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        v["entries"][name].as_str().unwrap().to_string()
+    };
+    let seal = |name: &str, value: &str| {
+        let mut f = SecretsFile::load_or_empty(&path).unwrap();
+        f.set(&key, name, value).unwrap();
+        f.save().unwrap();
+    };
+    seal("a", "same");
+    let one = blob("a");
+    seal("a", "same");
+    let two = blob("a");
+    assert_ne!(one, two, "a fresh nonce each time");
+    let nonce = |b: &str| base64::engine::general_purpose::STANDARD.decode(b).unwrap()[..12].to_vec();
+    assert_ne!(nonce(&one), nonce(&two), "the first twelve bytes are the nonce");
+    assert_eq!(SecretsFile::load(&path).unwrap().open(&key, "K").unwrap().get("a"), Some("same"));
+    std::fs::write(&path, format!("{}b = {:?}\n", std::fs::read_to_string(&path).unwrap(), two)).unwrap();
+    let e = SecretsFile::load(&path).unwrap().open(&key, "K").unwrap_err().to_string();
+    assert!(e.ends_with("does not open with the key `K` holds (entry `b`)"), "{e}");
+    let e = SecretsFile::load(&path).unwrap().open(&Key256::fresh().unwrap(), "K").unwrap_err().to_string();
+    assert!(e.ends_with("(entry `a`)") && !e.contains("same"), "{e}");
 }
 
 /// The reference is the text this test holds: an edit there is an edit here, beside its pins.
@@ -974,9 +1024,10 @@ The executable writes it, never an editor: `veredas-portal --new-key` prints a f
 hexadecimal characters, to stdout and nothing else; `veredas-portal --secret <project.toml> <entry>`
 reads the value from stdin to its end (the final line break dropped, a line break inside kept),
 seals it under the key the project's `key_env` variable holds, writes or replaces the entry in the
-project's secrets file (created, stamped, when there is none; replaced whole, never half-written),
-prints `sealed` with the entry's name and the file's path, and shows the value nowhere. A project
-that has no `[secrets]` table, a variable unset or not a key, and a file that is not a secrets
-file (named by its path, with the header text every file of the suite shares) are refused by
-name with exit code 2; a stray argument is a usage error, exit code 1.
+project's secrets file (created, stamped, when there is none), prints `sealed` with the entry's
+name and the file's path, and shows the value nowhere. A project that has no `[secrets]` table, a
+variable unset or not a key, a key that does not open the entries already in the file (nothing is
+written then), and a file that is not a secrets file (named by its path, with the header text
+every file of the suite shares) are refused by name with exit code 2; a stray argument, or an
+option given twice or where a name should be, is a usage error, exit code 1.
 "##;

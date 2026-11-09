@@ -7,7 +7,8 @@
 //! The secrets (`docs/questions.md` Q15): `--new-key` prints a fresh key, 64 hexadecimal
 //! characters, and nothing else; `--secret <project.toml> <entry>` reads a value from stdin (to
 //! its end, the final line break dropped), seals it as `<entry>` in the secrets file the project
-//! names, under the key its `key_env` variable holds, and exits; the value is never printed.
+//! names, under the key its `key_env` variable holds (a key that does not open the entries already
+//! there is refused, nothing written), and exits; the value is never printed.
 //!
 //! Exit codes: 0 when the project ran, the check passed, a key was printed or an entry sealed; 2
 //! when the file, a referenced file or a Veredas 1 folder is refused, the secrets file or the key
@@ -36,17 +37,20 @@ fn main() {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--check" => check = true,
+            "--new-key" if new_key => usage("`--new-key` stands alone"),
             "--new-key" => new_key = true,
+            "--secret" if secret.is_some() || file.is_some() => usage("`--secret` once, with the project file and the entry alone"),
             "--secret" => match (it.next(), it.next()) {
-                (Some(path), Some(entry)) => {
+                (Some(path), Some(entry)) if !path.starts_with("--") && !entry.starts_with("--") => {
                     file = Some(PathBuf::from(path));
                     secret = Some(entry.clone());
                 }
                 _ => usage("`--secret` names a project file and an entry"),
             },
+            "--from-v1" if from_v1.is_some() => usage("`--from-v1` once"),
             "--from-v1" => match it.next() {
-                Some(dir) => from_v1 = Some(PathBuf::from(dir)),
-                None => usage("`--from-v1` names a folder"),
+                Some(dir) if !dir.starts_with("--") => from_v1 = Some(PathBuf::from(dir)),
+                _ => usage("`--from-v1` names a folder"),
             },
             other if other.starts_with("--") => usage(&format!("unknown option `{other}`")),
             other if file.is_some() => usage(&format!("one project file, not `{other}` as well")),
@@ -136,6 +140,11 @@ fn seal(project: &Project, entry: &str) -> ! {
     let value = value.strip_suffix('\n').unwrap_or(&value);
     let value = value.strip_suffix('\r').unwrap_or(value);
     let sealed = SecretsFile::load_or_empty(&source.file).and_then(|mut f| {
+        // The key must open what is already there: one entry sealed under another key would
+        // leave a file no session opens, and the tool would have said nothing.
+        if f.names().next().is_some() {
+            f.open(&key, &source.key_env)?;
+        }
         f.set(&key, entry, value)?;
         f.save()
     });

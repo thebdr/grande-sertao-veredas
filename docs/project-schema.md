@@ -220,8 +220,9 @@ The executable writes it, never an editor: `veredas-portal --new-key` prints a f
 hexadecimal characters, to stdout and nothing else; `veredas-portal --secret <project.toml> <entry>`
 reads the value from stdin to its end (the final line break dropped, a line break inside kept),
 seals it under the key the project's `key_env` variable holds, writes or replaces the entry in the
-project's secrets file (created, stamped, when there is none; replaced whole, never half-written),
-prints `sealed` with the entry's name and the file's path, and shows the value nowhere. A project
-that has no `[secrets]` table, a variable unset or not a key, and a file that is not a secrets
-file (named by its path, with the header text every file of the suite shares) are refused by
-name with exit code 2; a stray argument is a usage error, exit code 1.
+project's secrets file (created, stamped, when there is none), prints `sealed` with the entry's
+name and the file's path, and shows the value nowhere. A project that has no `[secrets]` table, a
+variable unset or not a key, a key that does not open the entries already in the file (nothing is
+written then), and a file that is not a secrets file (named by its path, with the header text
+every file of the suite shares) are refused by name with exit code 2; a stray argument, or an
+option given twice or where a name should be, is a usage error, exit code 1.
