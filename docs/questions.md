@@ -273,11 +273,11 @@ project and shows health, the operator working in the browser), or no desktop at
 web interface (P-008) being the suite's one interface. The grep tab, the trailing view and the
 table browser are operator tooling that goes where the shell goes.
 
-**Taken (reversible, pending the operator):** portal is a library and one executable,
+**Decided (2026-11-09, the operator): the executable stands.** Portal is a library and one executable,
 `veredas-portal <project.toml>`, which serves a project from the command line until stopped; no
 desktop UI is built. Every operator action the Veredas 1 shell had on a session (start, stop, add
 or remove a source, arm the writes, snapshot, export) is a method on the session's handle, so a
-shell, when it comes, drives the same library the tests do. The grep engine and the skew monitor
+shell, if one ever comes (P-008's web interface, or a thin window over the server), drives the same library the tests do; none is built in portal. The grep engine and the skew monitor
 wait with it (`docs/portal-plan.md`, "Scope").
 
 **Reversible?** Yes: a shell is a crate or a module on top of the library; nothing below it

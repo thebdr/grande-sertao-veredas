@@ -52,13 +52,13 @@ its sort brain, its supervision app and its desktop each spoke to the plant on t
   `version`, portal migrating an older version or refusing an unknown one; what Veredas 1's JSON
   project carried is read into TOML, never carried as JSON; one header reader in core for every
   versioned file of the suite, and the test that holds every file to the stamp.
-- **The desktop shell and the embeddable build**: what Veredas 1's `veredas-desktop` becomes is
-  the operator's call (`docs/questions.md` Q14): a port of the egui desktop, a thinner shell over
-  the server, or the web interface of supervisão. Until answered, portal is a library and one
-  executable, `veredas-portal <project.toml>`, serving a project from the command line; a build
-  without the default features leaves the store and the server out, for controlador's embedding.
-- **Later, named, no code now:** the grep engine (Veredas 1's grep tab over logs at rest), a
-  shell's concern once Q14 is answered; the clock-skew monitor as a derived source; the
+- **The shell and the embeddable build**: decided (`docs/questions.md` Q14, 2026-11-09): portal
+  is a library and one executable, `veredas-portal <project.toml>`, serving a project from the
+  command line, and that executable is its shell; no desktop UI is built in portal, Veredas 1's
+  `veredas-desktop` screens being supervisão's (P-008) to take up or leave. A build without the
+  default features leaves the store and the server out, for controlador's embedding.
+- **Later, named, no code now:** the grep engine (Veredas 1's grep tab over logs at rest),
+  supervisão's concern now that Q14 is decided; the clock-skew monitor as a derived source; the
   library of templates and recents; bundles.
 
 ## Rules
@@ -106,7 +106,7 @@ Read in full before the port: Veredas 1's `veredas-core` (the data plane), `vere
 | core `tail/{single,family,cursor,backfill}`, `family`, `encoding`, `pathkind`, `timestamp`, `timeparse`, `ring` | `veredas_portal::tail`, `family`, `encoding` | the data plane, as it was, with typed errors |
 | core `source` (`Source`, `SourceSet`, `Emitter`, `WorkerReport`), `LineEvent` | `veredas_portal::source` | the line-producing side of one worker model; the handle itself is core's `SourceHandle` |
 | core `extract` (`ExtractRule`, `GroupType`) | `veredas_portal::capture` | a line into typed series by rules; `GroupType` is core's `SeriesType` |
-| core `capture` (the grep tab's ad-hoc tables, CSV and Markdown), `grep`, `highlight` | later, with the shell (Q14) | operator tooling over logs at rest, not the gateway |
+| core `capture` (the grep tab's ad-hoc tables, CSV and Markdown), `grep`, `highlight` | later, with supervisão (Q14 decided: no shell in portal) | operator tooling over logs at rest, not the gateway |
 | core `store` (`SeriesStore`, `Point`, `SeriesInfo`), `DERIVED_SOURCE` | `veredas_portal::store` | the store's own surface, beside its one implementation |
 | core `skew` | later | a derived source of its own once the store takes derived producers |
 | core `tcp` (the D5 stub) | not carried | a telegram channel is the TCP source |
@@ -117,7 +117,7 @@ Read in full before the port: Veredas 1's `veredas-core` (the data plane), `vere
 | desktop `session` (the pump, health, add/remove/reconnect), the OPC and telegram runtimes | `veredas_portal::session` | the ingest, UI-free |
 | desktop `telegram` (the vendor's decision client and lifecycle events) | not carried (Q8) | a channel's replies are rules; its data is rows |
 | desktop `config` (the string-level project), `project` (the JSON files, bundles, the legacy migration), `secrets` | `veredas_portal::project` (TOML, P-010) | one project file; passwords stay out of it; Veredas 1's JSON read into TOML |
-| desktop `app`, `boot`, `style`, `icon`, `ui/*`, `tables` (the SQL builder), `main` | Q14 | the shell is the operator's call |
+| desktop `app`, `boot`, `style`, `icon`, `ui/*`, `tables` (the SQL builder), `main` | Q14 decided: not portal's | the executable is the shell; the screens are supervisão's (P-008) to take up or leave |
 
 Changed on the way, each recorded in the clause's evidence note:
 - edition 2024; typed errors where Veredas 1 returned `String` (the session's start, the project
@@ -174,8 +174,9 @@ and nothing served.
 6. **The project file (P-010).** `project`: TOML with `format` and `version`, migration and
    refusal, Veredas 1's JSON read in; core's header reader replacing the four copies; the test
    over every file of the suite.
-7. **The shell and the embeddable build.** Q14 asked; the most reversible option taken meanwhile:
-   the executable and the build without default features.
+7. **The shell and the embeddable build.** Q14 decided (the operator, 2026-11-09): the executable
+   stands as the shell, no desktop UI in portal; the build without default features for
+   controlador's embedding.
 
 Each phase ends with `cargo nextest run --workspace` green bare, `cargo test -p leis` green, and
 its clauses recorded, refuted and verified. Push at the end of each phase.

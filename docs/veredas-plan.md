@@ -94,8 +94,9 @@ Every class and library more than one component needs.
 ### veredas-portal: the gateway
 The single point of information exchange between Veredas and the outside world.
 - Scope: the data plane (tailing, log families, regex capture; telegram channels configured
-  by rules); the DuckDB session store; SSE, windowed REST and the gated write surface; the
-  desktop shell.
+  by rules); the DuckDB session store; SSE, windowed REST and the gated write surface; one
+  executable, `veredas-portal <project.toml>`, as its shell (Q14, decided 2026-11-09: no desktop
+  UI in portal; the operator works through the executable and supervisão's web interface).
 - Rules: every component exchanges data through portal, except the test tools and
   controlador's real-time path; writes stay gated (whitelisted tags, master switch off by
   default); a device spoken over TCP is a telegram channel configured by encoding and
