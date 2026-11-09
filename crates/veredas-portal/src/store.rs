@@ -719,7 +719,13 @@ impl DuckStore {
             }
         }
         let order = match &time_col {
-            Some(tc) => format!(" ORDER BY {tc} DESC{}", if has("seq") { ", seq DESC" } else { "" }),
+            // Every other column breaks a tie, positionally, so a page walk sees a row once (two
+            // rows identical in every cell aside): the sequence alone is per source, and a view
+            // may carry none.
+            Some(tc) => {
+                let rest: Vec<String> = (1..=columns.len()).map(|i| format!("{i} DESC")).collect();
+                if rest.is_empty() { format!(" ORDER BY {tc} DESC") } else { format!(" ORDER BY {tc} DESC, {}", rest.join(", ")) }
+            }
             None => String::new(),
         };
         let limit = q.limit.clamp(1, MAX_PAGE);
@@ -1083,7 +1089,7 @@ fn duck_to_json(v: &DuckValue) -> serde_json::Value {
             d.to_string().parse::<f64>().ok().and_then(serde_json::Number::from_f64).map(J::Number).unwrap_or_else(|| J::String(d.to_string()))
         }
         DuckValue::Interval { months, days, nanos } => {
-            J::String(format!("P{months}M{days}DT{}.{:09}S", nanos.div_euclid(1_000_000_000), nanos.rem_euclid(1_000_000_000)))
+            J::String(format!("P{months}M{days}DT{}{}.{:09}S", if *nanos < 0 { "-" } else { "" }, nanos.abs() / 1_000_000_000, nanos.abs() % 1_000_000_000))
         }
         DuckValue::Blob(b) => J::String(b.iter().map(|x| format!("{x:02X}")).collect()),
         DuckValue::Enum(s) => J::String(s.clone()),
@@ -1107,7 +1113,7 @@ fn duck_to_value(v: &DuckValue, ty: SeriesType) -> Option<Value> {
         (SeriesType::Float, DuckValue::BigInt(i)) => Some(Value::Float(*i as f64)),
         (SeriesType::Text, DuckValue::Text(s)) => Some(Value::Text(std::sync::Arc::from(s.as_str()))),
         (SeriesType::Time, DuckValue::Timestamp(unit, t)) => {
-            chrono::DateTime::from_timestamp_millis(unit_to_ms(*unit, *t)).map(|d| Value::Time(d.naive_utc()))
+            chrono::DateTime::from_timestamp_micros(unit_to_us(*unit, *t)).map(|d| Value::Time(d.naive_utc()))
         }
         (_, other) => Some(Value::Text(std::sync::Arc::from(duck_to_json(other).to_string().trim_matches('"')))),
     }
@@ -1119,5 +1125,14 @@ fn unit_to_ms(unit: TimeUnit, v: i64) -> i64 {
         TimeUnit::Millisecond => v,
         TimeUnit::Microsecond => v / 1_000,
         TimeUnit::Nanosecond => v / 1_000_000,
+    }
+}
+
+fn unit_to_us(unit: TimeUnit, v: i64) -> i64 {
+    match unit {
+        TimeUnit::Second => v.saturating_mul(1_000_000),
+        TimeUnit::Millisecond => v.saturating_mul(1_000),
+        TimeUnit::Microsecond => v,
+        TimeUnit::Nanosecond => v / 1_000,
     }
 }

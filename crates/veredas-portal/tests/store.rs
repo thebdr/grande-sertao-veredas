@@ -669,3 +669,75 @@ fn a_chart_s_key_on_a_keyless_table_is_refused_not_dropped() {
     assert_eq!(store.query_table_series("v", "f", Some("zzz"), 0, i64::MAX).unwrap_err().to_string(), "unknown table `v.key`");
     assert!(store.query_table_series("readings", "temp", Some("zzz"), 0, i64::MAX).unwrap().is_empty(), "a keyed table: empty for an unknown key");
 }
+
+// ---- the second refute round -----------------------------------------------------------------
+
+/// Two sources sharing a table share sequence numbers and times: every other column breaks the
+/// tie, so a page walk sees each row once; and a view with a time column and no sequence pages
+/// the same way.
+#[test]
+fn pages_see_each_row_once_across_sources_and_on_a_view_without_a_sequence() {
+    let store = DuckStore::open(
+        &Residency::Ram,
+        &[capture_spec()],
+        &[TableDef { name: "v".into(), sql: "SELECT source, index_ms, temp AS f FROM readings".into() }],
+    )
+    .unwrap();
+    let mut rows = Vec::new();
+    for source in ["a", "b"] {
+        for i in 0..25u64 {
+            rows.push(wide(source, None, 1000 + (i % 2) as i64, i, vec![Some(Value::Float((i * 10) as f64 + if source == "a" { 0.0 } else { 0.5 })), None]));
+        }
+    }
+    store.append_wide(0, &rows).unwrap();
+    for (table, a, b) in [("readings", "source", "seq"), ("v", "source", "f")] {
+        for page_size in [1usize, 7] {
+            let mut seen = std::collections::BTreeSet::new();
+            let mut offset = 0;
+            loop {
+                let page = store.query_rows(table, &RowsQuery { limit: page_size, offset, ..Default::default() }).unwrap();
+                if page.rows.is_empty() {
+                    break;
+                }
+                let ca = page.columns.iter().position(|c| c.name == a).unwrap();
+                let cb = page.columns.iter().position(|c| c.name == b).unwrap();
+                for row in &page.rows {
+                    assert!(seen.insert((row[ca].to_string(), row[cb].to_string())), "{table}: row {:?} seen twice at page size {page_size}", (&row[ca], &row[cb]));
+                }
+                offset += page_size;
+            }
+            assert_eq!(seen.len(), 50, "{table} at page size {page_size}");
+        }
+    }
+}
+
+/// A time's last value keeps its microseconds, as the suite displays a time and as the narrow
+/// samples already listed it.
+#[test]
+fn a_time_s_last_value_keeps_its_microseconds() {
+    let t = NaiveDateTime::parse_from_str("2026-07-18 10:00:00.123456", "%Y-%m-%d %H:%M:%S%.f").unwrap();
+    let store = DuckStore::open(&Residency::Ram, &[BaseTableSpec { name: "times".into(), columns: vec![("at".into(), SeriesType::Time)], has_key: false }], &[]).unwrap();
+    store.append_wide(0, &[wide("s", None, 1000, 1, vec![Some(Value::Time(t))])]).unwrap();
+    store.append_samples(&[sample("tt", 1000, 1, Value::Time(t), None)]).unwrap();
+    let infos = store.list();
+    let last = |series: &str| infos.iter().find(|i| i.series == SeriesRef::new("s", series)).map(|i| i.last_value.clone()).unwrap_or_default();
+    assert_eq!(last("at"), Value::Time(t).to_string());
+    assert_eq!(last("at"), "2026-07-18 10:00:00.123456");
+    assert_eq!(last("at"), last("tt"), "the two surfaces agree");
+}
+
+/// A negative interval reads as a negative duration, its sign on the seconds, never a floored
+/// second with a positive fraction.
+#[test]
+fn a_negative_interval_keeps_its_sign() {
+    let store = DuckStore::open(
+        &Residency::Ram,
+        &[capture_spec()],
+        &[TableDef { name: "odd".into(), sql: "SELECT CAST(1 AS BIGINT) AS index_ms, INTERVAL '-1.5 seconds' AS neg, INTERVAL '1.5 seconds' AS pos".into() }],
+    )
+    .unwrap();
+    let page = store.query_rows("odd", &RowsQuery { limit: 10, ..Default::default() }).unwrap();
+    let cell = |name: &str| page.rows[0][page.columns.iter().position(|c| c.name == name).unwrap()].clone();
+    assert_eq!(cell("neg"), serde_json::json!("P0M0DT-1.500000000S"));
+    assert_eq!(cell("pos"), serde_json::json!("P0M0DT1.500000000S"));
+}
