@@ -169,7 +169,7 @@ async fn sse_events(State(live): State<Arc<Live>>) -> Sse<impl Stream<Item = Res
     let data = BroadcastStream::new(rx).map(|msg| {
         Ok(match msg {
             Ok(frame) => Event::default().event("data").data(frame.as_ref()),
-            Err(_lagged) => Event::default().event("lag").data("frames dropped"),
+            Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => Event::default().event("lag").data(format!("frames dropped: {n}")),
         })
     });
     Sse::new(first.chain(data)).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(5)))

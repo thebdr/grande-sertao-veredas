@@ -340,3 +340,10 @@ Recorded as the port meets them.
   2 MB limit and refused a larger one 413 in plain text before the switch was consulted
   (C-044, round 2). The handler takes the request, checks the switch, then reads the body itself
   under its own limit, every refusal in the error form.
+- **A lag is counted, never "once".** How many lag events a flood raises is the scheduler's: the
+  receiver reads between the sender's pushes and lags each time it falls the channel's depth
+  behind (thirteen and sixteen events in two runs of one test). Pin the sum, frames received
+  plus counts carried, against the frames sent. And stop every live source before a flood: one
+  broadcasting during the drain lagged a slow client a second time and took the awaited frame
+  with it (CI on Linux, C-044's first round). Scan a growing buffer from where the last scan
+  stopped.

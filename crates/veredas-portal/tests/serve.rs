@@ -433,8 +433,13 @@ fn the_write_surface_s_other_answers_the_budget_the_lag_and_the_end() {
     assert_eq!(st, 200, "{v}");
     assert_eq!((v["points"].as_array().unwrap().len(), v["downsampled"].as_bool()), (10, Some(true)), "{v}");
 
-    // The stream: a client that never reads lags once more than the channel holds, and the
-    // stream goes on; an idle connection carries a comment every five seconds.
+    // The plant stopped first: the OPC source polls it every 50 ms and its frames would never let
+    // the stream fall idle, nor let the flood below be the only traffic; retrying, it sends none.
+    bench.stop();
+    assert!(wait(Duration::from_secs(10), || get(addr, "/api/session").1["health"]["plc"]["state"] == "retrying"), "{}", get(addr, "/api/session").1);
+
+    // The stream: a client that never reads lags, every frame it missed counted on a lag event,
+    // and the stream goes on; an idle connection carries a comment every five seconds.
     let mut s = TcpStream::connect(addr).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     s.write_all(format!("GET /events HTTP/1.1\r\nHost: {addr}\r\nAccept: text/event-stream\r\n\r\n").as_bytes()).unwrap();
@@ -442,12 +447,20 @@ fn the_write_surface_s_other_answers_the_budget_the_lag_and_the_end() {
     let mut chunk = [0u8; 65536];
     let mut read_until = |s: &mut TcpStream, buf: &mut Vec<u8>, needle: &str, within: Duration| -> String {
         let deadline = Instant::now() + within;
+        // Only the bytes not yet scanned are searched (the needle may straddle a read), so a
+        // long stream is not re-read on every chunk: a client slow to read makes the server
+        // lag again and lose the frame the test waits for.
+        let mut scanned = 0usize;
         loop {
-            let text = String::from_utf8_lossy(buf).into_owned();
-            if text.contains(needle) {
-                return text;
+            let from = scanned.saturating_sub(needle.len());
+            if String::from_utf8_lossy(&buf[from..]).contains(needle) {
+                return String::from_utf8_lossy(buf).into_owned();
             }
-            assert!(Instant::now() < deadline, "timed out waiting for {needle:?}:\n{}", &text[text.len().saturating_sub(2000)..]);
+            scanned = buf.len();
+            assert!(Instant::now() < deadline, "timed out waiting for {needle:?}:\n{}", {
+                let text = String::from_utf8_lossy(buf);
+                text[text.len().saturating_sub(2000)..].to_string()
+            });
             match s.read(&mut chunk) {
                 Ok(0) => panic!("the stream closed waiting for {needle:?}"),
                 Ok(n) => buf.extend_from_slice(&chunk[..n]),
@@ -457,19 +470,28 @@ fn the_write_surface_s_other_answers_the_budget_the_lag_and_the_end() {
         }
     };
     read_until(&mut s, &mut buf, "event: hello", Duration::from_secs(15));
+    // More frames than the channel holds (256), each larger than the socket buffers can absorb
+    // for long, pushed before the client reads one: a client that does not read makes the server
+    // lag, however the two threads interleave. How many lag events there are is the scheduler's
+    // (one run saw sixteen), so the pin is the sum: the frames received plus the counts the lag
+    // events carry are the four hundred sent, nothing lost unsaid. The plant is stopped, so no
+    // other frame flows: a live source during the drain lagged a slow client a second time and
+    // took the marker with it (CI on Linux, 1f982ec).
     let big = format!("{{\"type\":\"data\",\"samples\":[],\"pad\":\"{}\"}}", "x".repeat(65_536));
     for _ in 0..400 {
         let _ = live.frames.send(Arc::from(big.as_str()));
     }
     let _ = live.frames.send(Arc::from("{\"type\":\"data\",\"samples\":[],\"marker\":true}"));
     let text = read_until(&mut s, &mut buf, "\"marker\":true", Duration::from_secs(30));
-    assert_eq!(text.matches("event: lag").count(), 1, "one lag event for the frames dropped");
-    assert!(text.contains("data: frames dropped"), "{}", &text[text.len().saturating_sub(500)..]);
-    assert!(text.find("event: lag").unwrap() < text.find("\"marker\":true").unwrap(), "the stream goes on after the lag");
-    // The plant stopped first: the OPC source polls it every 50 ms and its frames never let the
-    // stream fall idle; retrying, it sends none, and the keep-alive shows.
-    bench.stop();
-    assert!(wait(Duration::from_secs(10), || get(addr, "/api/session").1["health"]["plc"]["state"] == "retrying"), "{}", get(addr, "/api/session").1);
+    let dropped: Vec<u64> = text
+        .match_indices("data: frames dropped: ")
+        .map(|(i, m)| text[i + m.len()..].split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap())
+        .collect();
+    let pads = text.matches("\"pad\":").count() as u64;
+    assert!(!dropped.is_empty(), "a lag event for the frames dropped; {pads} pads received");
+    assert_eq!(text.matches("event: lag").count(), dropped.len(), "every lag event carries its count");
+    assert_eq!(pads + dropped.iter().sum::<u64>(), 400, "every frame delivered or counted dropped: {pads} received, {dropped:?} dropped");
+    assert!(text.rfind("event: lag").unwrap() < text.find("\"marker\":true").unwrap(), "the stream goes on after the lag");
     // A fresh stream on the idle session: its hello, then a comment every five seconds, the
     // first about five after the hello and the next about five after it.
     let mut s2 = TcpStream::connect(addr).unwrap();
