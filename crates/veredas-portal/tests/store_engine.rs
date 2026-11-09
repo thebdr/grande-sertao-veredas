@@ -564,3 +564,49 @@ fn the_sniffer_s_outcomes_on_a_ragged_file() {
     let err = count(&scan(&late)).unwrap_err();
     assert!(err.contains("CSV Error on Line: 20481"), "{err}");
 }
+
+// ---- the fifth refute round ------------------------------------------------------------------
+
+/// Which row the sniffer keeps on a ragged file depends on the long row's place and content: a
+/// numeric long row after the first data row is kept alone, a text one keeps nothing, a long
+/// first data row collapses the file to one column; and the sniff window ends at the engine's
+/// default sample size, line 20 480 refused and line 20 481 read.
+#[test]
+fn the_sniffer_s_kept_row_depends_on_the_long_row_and_the_window_ends_at_the_default_sample() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    let write = |name: &str, text: &str| -> std::path::PathBuf {
+        let p = dir.path().join(name);
+        std::fs::write(&p, text).unwrap();
+        p
+    };
+    let scan = |p: &std::path::Path| format!("read_csv_auto('{}')", sql_path(p));
+    let width = |sql: &str| -> Result<i64, String> {
+        conn.query_row(&format!("SELECT count(*) FROM (DESCRIBE SELECT * FROM {sql})"), [], |r| r.get(0)).map_err(|e| e.to_string())
+    };
+    let mut body = String::from("a;b;c\n");
+    for i in 0..2046 {
+        body.push_str(&format!("{i};1;2\n"));
+    }
+    let numeric = write("numeric.csv", &format!("{body}9;9;9;9\n"));
+    let mut stmt = conn.prepare(&format!("SELECT * FROM {}", scan(&numeric))).unwrap();
+    let rows: Vec<(i64, i64, i64, i64)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(rows, vec![(9, 9, 9, 9)], "a numeric long row after the first data row is kept alone");
+    let text = write("text.csv", &format!("{body}a;b;c;d\n"));
+    assert_eq!(width(&scan(&text)), Ok(4));
+    let n: i64 = conn.query_row(&format!("SELECT count(*) FROM {}", scan(&text)), [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 0, "a text long row keeps nothing");
+    let first = write("first.csv", "a;b;c\n9;9;9;9\n1;1;2\n2;1;2\n");
+    assert_eq!(width(&scan(&first)), Ok(1), "a long first data row collapses the file");
+    let mut stmt = conn.prepare(&format!("SELECT * FROM {}", scan(&first))).unwrap();
+    let lines: Vec<String> = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().map(Result::unwrap).collect();
+    assert_eq!(lines, ["9;9;9;9", "1;1;2", "2;1;2"]);
+    let mut late = String::from("a;b;c\n");
+    for i in 0..20_478 {
+        late.push_str(&format!("{i};1;2\n"));
+    }
+    late.push_str("9;9;9;9\n");
+    let at_window = write("at_window.csv", &late);
+    let err = width(&scan(&at_window)).unwrap_err();
+    assert!(err.contains("Error when sniffing file"), "a long row at line 20480 is still inside the sniff window: {err}");
+}
