@@ -51,7 +51,7 @@ the gateway, the desktop, the supervision app) each did.
   project's; every write an OPC tag a rule marks writable) and against the SVG (every move path is
   an element of it).
 - **The object feed** (`feed`): per session, every object's live value, its state (a class with a
-  mark and a word, by the first rule that holds), stale when its source is not live or its value
+  mark and a word, by the first rule that holds), stale when its source is away or its value
   older than the object says, and a marker's place along its path (one per key of a keyed series),
   evaluated in Rust from portal's live frames and caches and served as a stream and a snapshot.
   The browser draws; it decides nothing.
@@ -96,8 +96,10 @@ the gateway, the desktop, the supervision app) each did.
   "fault"); the accent (magenta `#AC007C`) marks selection, focus and primary actions, never a
   state. Writes are shown gated (the warn colour) wherever they appear, and disabled while the
   session's switch is off.
-- **Staleness is judged on the arrival clock.** An object is stale when its source's health is not
-  live, or when the object names a freshness bound and no sample came within it. A quiet plant
+- **Staleness is judged on the arrival clock.** An object is stale when it has no value yet, when its source
+  is away (idle past the project's window, retrying, ended or failed: a source still waiting has
+  delivered nothing, and its health lags its first value by a refresh), or when the object names a
+  freshness bound and no sample came within it. A quiet plant
   storing on change is not stale (Veredas 1's lesson: on-change storage makes a healthy plant look
   dead when staleness reads sample age).
 - **Every file is TOML stating `format` and `version`** (Q10, L7), read by core's one header reader

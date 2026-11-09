@@ -15,6 +15,10 @@ members = [
     # telegrams and OPC UA servers, stores their data alike and serves it, writes gated; depends on
     # core alone (law L5), its tests on the bench.
     "crates/veredas-portal",
+    # The web interface (docs/supervisao-plan.md): starts the plants' portal sessions in its own
+    # process and shows them through one set of object IDs, every write portal's own (law L5: core
+    # and portal).
+    "crates/veredas-supervisao",
 ]
 
 # No [workspace.package] version: each component owns its SemVer from 2.0.0 (the plan,
@@ -61,6 +65,8 @@ windows-sys = "0.59"
 chacha20poly1305 = "0.10"
 base64 = "0.22"
 getrandom = "0.3"
+# The SVG layout read as XML (supervisao): its element ids and the geometry a marker follows.
+roxmltree = "0.20"
 
 # The bundled engine's debug static library is about 2.2 GB and is mapped into every test binary
 # that links it, which exhausts the page file when the test fleet links in parallel; the engine

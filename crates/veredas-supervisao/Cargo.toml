@@ -1,0 +1,36 @@
+[package]
+name = "veredas-supervisao"
+# Its own SemVer (law L3), starting at core's current MAJOR (the plan, "Versioning").
+version = "2.0.0-alpha.1"
+edition.workspace = true
+publish = false
+description = "The web interface of Veredas 2 (Supervisão): a plant's portal sessions shown through one set of object IDs, every write portal's own"
+
+# A library first, one executable on top (docs/supervisao-plan.md, "Rules"; tests/component.rs
+# asks cargo what it would build). Depends on core and portal alone (law L5, the map); its tests
+# dev-depend on the bench, which plays the plant.
+
+[dependencies]
+# The header reader every file of the suite shares.
+veredas-core = { path = "../veredas-core" }
+# The sessions, their store and their server: every value and every write is portal's.
+veredas-portal = { path = "../veredas-portal" }
+# The host: the page, the object feed and each session's portal router on one address.
+axum = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The supervisão file and the binding file.
+toml = { workspace = true }
+thiserror = { workspace = true }
+# The store's time axis (the plant's local clock read as UTC) for windows.
+chrono = { workspace = true }
+# The SVG layout read as XML.
+roxmltree = { workspace = true }
+
+[dev-dependencies]
+# The bench plays the plant: its OPC UA server and its log emitters feed the sessions.
+veredas-maquinar = { path = "../veredas-maquinar" }
+# Scratch directories, removed when a test ends.
+tempfile = { workspace = true }

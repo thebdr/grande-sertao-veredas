@@ -362,6 +362,66 @@ refute round found and what it changed is in the clause's evidence note.
 - **Evidence:** .zen/evidence/C-046.md
 - **Status:** verified
 
+## C-047: veredas-supervisao — the web interface
+- **Date:** 2026-11-09
+- **Source:** user (docs/veredas-plan.md "veredas-supervisao: the web interface"; decision 9; docs/questions.md Q18–Q21; promoted from P-008)
+- **Description:** `crates/veredas-supervisao` is the one place a person watches and acts on a running plant (`docs/supervisao-plan.md` maps what it absorbs from Veredas 1's supervision app and dashboard, what it leaves, and the phases): a library and one executable named `veredas-supervisao`, no build script, depending on core and portal alone (L5) and holding no plant connection of its own (no OPC stack, no database engine, no socket crate in its normal graph but what it reaches through portal); content-agnostic over every file git holds or could hold under the crate, the built page included (no device, vendor, product or customer named; Q8, Q18); the page compiled in from a committed `web/dist/` whose recorded source hash equals the hash of the sources in the tree, so the page served is the page written. Its plan came before its code (L6) and it versions on its own from 2.0.0 (L3; it started at 2.0.0-alpha.1).
+- **Verification:** automated → crates/veredas-supervisao/tests/component.rs, tools/leis/tests/real_tree.rs | `cargo metadata --no-deps`: one library and one binary `veredas-supervisao`, no build script, the eight clause test files; its normal dependencies exactly core, portal and the server's crates (axum, tokio, tokio-stream, serde, serde_json, toml, thiserror, chrono, roxmltree), none of a plant stack (no OPC crate, no database engine, no socket or HTTP client crate, no bench), no build dependency, the bench and tempfile as dev-dependencies alone; every file git holds or could hold under the crate (asked of git, so `web/node_modules/` never, `web/dist/` always), read whole, normalised to letters and digits across line breaks, for portal's vendor names and for the export, table, plant and station names of Veredas 1's supervision app, and for a section sign, the reader checked on planted spellings across cases, separators and lines; the source hash recomputed from `web/` equal to the one `web/dist/source.hash` recorded, CRLF read as LF, a byte or a new source changing it; the bundle's names the ones the host serves; the laws on the real tree with supervisão in it
+- **Evidence:** .zen/evidence/C-047.md
+- **Status:** pending verification
+
+## C-048: The supervisão file and the binding file: a host and a session's objects as versioned TOML, checked whole against the project and the layout
+- **Date:** 2026-11-09
+- **Source:** user (docs/supervisao-plan.md "Scope": the host, the binding file; the design's open point "the binding file format")
+- **Description:** `veredas-supervisao` v1 names the address served and the sessions (a name, a portal project file, a binding file); `veredas-binding` v1 names a session's objects by ID, each bound to a series its project carries, with its unit, its state rules, how the layout shows it, the writes it offers, the SVG layout, the headline and the dashboards. Both are read by core's header reader and checked whole before any session starts, every refusal naming its place: the references and keys of `docs/binding-schema.md`, whose worked example loads.
+- **Verification:** automated → crates/veredas-supervisao/tests/files.rs | the reference's four blocks written under the names they give and loaded: the address, the session, the project, every object with every key as written and every default filled, the eight panels with every key, what the project carries as the binding sees it (sources by kind, series with their types, writable tags by node id, tables); the executable's check printing the plan exactly, a refused file naming its reason with exit 2, four call shapes a usage error; forty-one one-line changes to the binding each refused with its exact text (the header, ids, sources, series, keys, shows, paths, ranges, decimals, rules, actions, bounds, headline, patterns, kinds, keys of another kind, spans, limits, aggregates, tables, sort columns, spreads, columns, names), three misspelled keys refused by the parser with their place; a key group carrying no series, a level and a trend on text, an element no marker follows, an object's or a path's id on two elements, a document that is no SVG, a script, an event handler, a layout not there or empty, a marker without a layout, the title's default; the supervisão file's ten refusals by text, a misspelled key, the loopback default, a project not there and one portal refuses with portal's reason, a binding not there
+- **Evidence:** .zen/evidence/C-048.md
+- **Status:** pending verification
+
+## C-049: The host: the sessions of a supervisão file started through portal and served side by side, each under its name with its portal surface nested
+- **Date:** 2026-11-09
+- **Source:** user (docs/questions.md Q19, Q20; docs/supervisao-plan.md "Scope": the host; P-008 "several sessions served side by side from one machine")
+- **Description:** The host starts every session of a loaded supervisão file through portal's library, serves the page, each session's binding, layout and object feed under `/s/<name>/` and the session's own portal router unchanged under `/s/<name>/portal/`, keeps every session's data its own, and stops them all when it stops; the executable runs a file, or checks it and prints the plan (`--check`).
+- **Verification:** automated → crates/veredas-supervisao/tests/host.rs | two sessions from two benches on one address: the page and its bundle with their types at `/`, `/s/<name>/` and `/s/<name>`, the sessions in the file's order, every other path 404 by its path; each session's binding view (the objects, rules, writes and panels as the page reads them), its layout or a 404 naming the session without one, its portal surface nested (the session's own name and switch, a tag read); a value set on one plant reaching its session and never the other; the dashboards per session and a missing one by name; the stop ending every source of both cleanly and freeing the address; a session that does not start named with its reason, an address taken refused before any session starts; the executable printing its address and sessions, serving them, and stopping when stdin closes
+- **Evidence:** .zen/evidence/C-049.md
+- **Status:** pending verification
+
+## C-050: The object feed: every object's value, state, staleness and place, evaluated live in Rust
+- **Date:** 2026-11-09
+- **Source:** user (docs/supervisao-plan.md "Scope": the object feed; the design's state vocabulary)
+- **Description:** Per session, every object's latest value from portal's frames and caches, its state (a class with a mark and a word, by the first rule that holds), stale when it has no value, its source is away (idle, retrying, ended or failed) or its value is older than its bound, and a marker's place along its path (one per key of a keyed series, a key forgotten past its bound), served as a snapshot and a stream of changes (a change is anything but the arrival time) with the session's switch and health.
+- **Verification:** automated → crates/veredas-supervisao/tests/feed.rs | on the fold with a clock the test holds: no value read as stale, a level's fill and state for six values at and across its rules' edges (clamped), an older sample never replacing a newer, an equal one doing so, a source away keeping the value as stale, codes by equals, a rule over another series taking precedence, decimals, a freshness bound fresh at it and stale past it, markers from data frames (an unread series and a malformed frame changing nothing), clamped, none without a value, markers per key forgotten past the bound, a key's older sample no new arrival, text through the cache compared exactly, a newer cached number healing a missed frame and an older one ignored, the page's form of a view, the six marks; live, against the bench and a written log over the snapshot route and the stream: every object of the plant as its rules read it, the session's switch and health, the stream's snapshot then a change for the fault alone (the unchanged fill never riding a change), a status within the second, a rate under its rule, two keyed markers, a text mode, the rate stale past its bound with its source still live and the markers forgotten, the plant away turning its objects stale with their last values
+- **Evidence:** .zen/evidence/C-050.md
+- **Status:** pending verification
+
+## C-051: The 2D layout: the SVG bound by object ID, live
+- **Date:** 2026-11-09
+- **Source:** user (decision 9; docs/design/supervisao/ "Layout overview")
+- **Description:** The page shows a session's SVG layout with every bound element taking its object's state as a mark and a word, levels filling, markers moving along their paths, a selected object in the side panel with its value, sparkline and offered writes, the objects not normal in a "needs attention" list, and the headline in the top bar, all from the object feed.
+- **Verification:** automated → crates/veredas-supervisao/tests/layout.rs | the SVG served as written; the six objects with an element, each with what its way of showing needs in the feed (a state with a mark and a word, a level's fill, a marker's place), a marker moved by the plant; the bundle reading the binding, the layout and the feed and drawing every class of the vocabulary in the web magenta | manual: the page driven in the browser against a bench-fed session (.zen/evidence/C-051.md)
+- **Status:** pending verification
+
+## C-052: The dashboards: every panel kind computed in Rust from the session's store and drawn
+- **Date:** 2026-11-09
+- **Source:** user (docs/design/supervisao/ "Dashboard objects"; docs/binding-schema.md "A panel")
+- **Description:** Each panel of a binding's dashboards is computed from the session's store into what the page draws (a value tile in four states, a trend with its limit and breaches, bars per clock-aligned bucket against a target with the running one marked, state over time, a state grid, levels against ticks, a table with inline bars and state words, charts in cells with a median, its sparkline, a distribution on one scale, σ and n) and the page draws it.
+- **Verification:** automated → crates/veredas-supervisao/tests/dashboards.rs | thirteen stamped log lines and the bench's fills read back with the window's edge named: value tiles normal against a target, warn and alarm with their sub-lines and an eight-point sparkline, then stale past a bound with how long ago; the trend's nine points, its limit and its three breaches; thirteen clock-aligned buckets with their means, counts, an empty one and the running one; four state runs to the window's edge; the grid and the levels with their fractions and ticks in each object's range; the view's rows sorted by count with bars against the largest and a state word; per key the median, σ, n, the median per bucket and the distribution in twenty bins; a panel that cannot be computed saying why in its place; the window ending at the store's now by default | manual: the page driven in the browser (.zen/evidence/C-052.md)
+- **Status:** pending verification
+
+## C-053: Tables and series over portal's nested REST
+- **Date:** 2026-11-09
+- **Source:** user (docs/supervisao-plan.md "Scope": portal's surface, per session)
+- **Description:** The page's Tables and Series views list a session's tables and series, page a table's rows and chart a series' window, reading only the session's portal router nested at `/s/<name>/portal/`.
+- **Verification:** automated → crates/veredas-supervisao/tests/tables.rs | through `/s/<name>/portal/` against the bench and a written log: the catalog's four tables with their kinds and columns, a page of rows newest first and the next, an unknown table's 404, the listing's type and last value, a window's exact points; the bundle reading these four routes | manual: the page driven in the browser (.zen/evidence/C-053.md)
+- **Status:** pending verification
+
+## C-054: Writes, gated: offered by the binding, shown gated, refused by portal's switch on the wire
+- **Date:** 2026-11-09
+- **Source:** user (docs/veredas-plan.md "every write rides portal's gated surface"; docs/design/README.md "writes shown as gated")
+- **Description:** An object's actions are shown gated and disabled while the session's switch is off; a post to the session's portal write route through supervisão's address is refused 403 by the switch with nothing reaching the plant, and lands at the plant once the project arms the switch; supervisão holds no write path of its own.
+- **Verification:** automated → crates/veredas-supervisao/tests/writes.rs | the binding's write as the page reads it; off, a post of it and a send refused 403 with the switch's text through supervisão's address and nothing at the plant; armed in process, the feed showing it, the post landing at the bench, a tag no rule marks writable refused by name; disarmed, refused again with the plant unchanged; every route of supervisão's own refusing a POST 405; armed by the project, the post landing from the start | manual: the page driven in the browser (.zen/evidence/C-054.md)
+- **Status:** pending verification
+
 ## Pending Contract Deltas
 
 ### P-003: veredas-controlador — the softPLC
@@ -388,10 +448,10 @@ refute round found and what it changed is in the clause's evidence note.
 - **Description:** The spreadsheet for engineering work where Excel gets too tight: a fork of IronCalc modified for engineering, Python macros and custom functions, byte-faithful `.xlsx` edits with no Office on the machine, its own `.abaco` workspace file, and extensions starting with `acerto` (plant alignment, no `veredas-` prefix, inside its host). Edits the same workbooks the other components read; fork fixes go upstream where they fit; accuracy is measured against Excel's own cached values. Absorbs Veredas 1's `veredas-abaco`, `veredas-abaco-py`, the IronCalc fork, `abaco-oracle` (as test tooling under `tools/`) and `python/veredas-acerto`. Exit: `docs/abaco-plan.md`, `crates/veredas-abaco` at 2.0.0-alpha.1 at parity with Veredas 1's oracle numbers, the laws green.
 - **Status:** pending
 
-### P-008: veredas-supervisao — the web interface
-- **Date:** 2026-11-05
-- **Source:** user (docs/veredas-plan.md "veredas-supervisao: the web interface"; decision 9; design docs/design/supervisao/)
-- **Description:** The unified web interface for the suite: layouts in 2D (SVG) and 3D (glTF) sharing one set of object IDs, objects that move live, dashboards, charts and tables absorbing Veredas 1's dashboard, several sessions served side by side from one machine, editing in the browser or in plain-text config files. Owns no plant connection; every value arrives through portal and every write rides portal's gated surface; 3D models are assets the config points to. Absorbs Veredas 1's `veredas-supervisao` and `dashboard/`. Exit: `docs/supervisao-plan.md` (the binding file format settled), `crates/veredas-supervisao` at 2.0.0-alpha.1 fed by portal from maquinar, the laws green.
+### P-012: veredas-supervisao, later — the 3D view, editing in the browser
+- **Date:** 2026-11-09
+- **Source:** user (P-008's remainder after its promotion to C-047..C-054; docs/questions.md Q21; docs/supervisao-plan.md "Scope", later)
+- **Description:** What P-008 named and the port left for later: the 3D view in glTF on the binding's object IDs, sharing the 2D view's selection and side panel (Q21: after the 2D views are verified); editing a binding in the browser (the file is the editor until then) and reloading a binding when its file changes; the tracking-accuracy object once its definitions are confirmed; starting, stopping or adding a session from the browser. Exit: each as a C-clause of supervisão, verified in the browser against a bench-fed session.
 - **Status:** pending
 
 ### P-009: veredas-wms — later, after its study

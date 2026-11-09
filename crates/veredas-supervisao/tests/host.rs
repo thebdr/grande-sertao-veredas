@@ -1,0 +1,187 @@
+//! C-049: the host. The sessions of a supervisão file started through portal and served side by
+//! side on one address, each under its name with its own portal router nested unchanged; their
+//! data kept apart; the page and its bundle served; the executable running a file until stdin
+//! closes. Against two benches, over real sockets.
+
+mod common;
+
+use std::io::{BufRead, BufReader, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+use common::*;
+use serde_json::{Value, json};
+use veredas_maquinar::bench::Bench;
+use veredas_supervisao::{Host, HostError, config, web};
+
+/// Two plants in one folder: `loop` as the reference has it, and `hall`, the same plant with
+/// another name, other values, no layout and no markers.
+fn two_plants(dir: &Path, a: &Bench, b: &Bench) -> std::path::PathBuf {
+    let ex = live_example(a, false);
+    write_example(dir, &ex);
+    let hall = live_example(b, false);
+    std::fs::create_dir_all(dir.join("hall")).unwrap();
+    std::fs::write(dir.join("hall/project.toml"), hall.project.replace("name = \"the loop\"", "name = \"the hall\"")).unwrap();
+    let mut binding = hall.binding.replace("title = \"The loop\"", "title = \"The hall\"").replace("layout = \"layout.svg\"\n", "");
+    let cut = binding.find("[[object]]\nid = \"parcel-1\"").unwrap();
+    let rest = binding[cut..].find("[[dashboard]]").unwrap() + cut;
+    binding.replace_range(cut..rest, "");
+    std::fs::write(dir.join("hall/binding.toml"), binding).unwrap();
+    let host = format!("{}\n[[session]]\nname = \"hall\"\nproject = \"hall/project.toml\"\nbinding = \"hall/binding.toml\"\n", ex.host);
+    std::fs::write(dir.join("supervisao.toml"), host).unwrap();
+    dir.join("supervisao.toml")
+}
+
+fn objects(addr: SocketAddr, name: &str) -> Value {
+    let (status, v) = get(addr, &format!("/s/{name}/objects.json"));
+    assert_eq!(status, 200);
+    v
+}
+
+#[test]
+fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = plant(&dir.path().join("bench-a"));
+    let b = plant(&dir.path().join("bench-b"));
+    b.server("plc").unwrap().set("fill1", 65.0);
+    let path = two_plants(dir.path(), &a, &b);
+    let cfg = config::load_file(&path).unwrap();
+    let host = Host::start(cfg).unwrap();
+    let addr = host.addr();
+    assert_ne!(addr.port(), 0);
+
+    // The page and its bundle, compiled in.
+    let (status, headers, body) = http(addr, "GET", "/", None);
+    assert_eq!((status, body.as_str()), (200, web::INDEX_HTML));
+    assert!(headers.contains("content-type: text/html; charset=utf-8"), "{headers}");
+    for page in ["/s/loop/", "/s/loop", "/s/hall/"] {
+        assert_eq!(http(addr, "GET", page, None).2, web::INDEX_HTML, "{page}");
+    }
+    let (status, headers, body) = http(addr, "GET", "/assets/app.js", None);
+    assert_eq!((status, body.as_str()), (200, web::APP_JS));
+    assert!(headers.contains("content-type: text/javascript; charset=utf-8"));
+    let (status, headers, body) = http(addr, "GET", "/assets/app.css", None);
+    assert_eq!((status, body.as_str()), (200, web::APP_CSS));
+    assert!(headers.contains("content-type: text/css; charset=utf-8"));
+
+    // The sessions, in the file's order.
+    assert_eq!(get(addr, "/api/sessions"), (200, json!({ "sessions": [
+        { "name": "loop", "title": "The loop", "path": "/s/loop/" },
+        { "name": "hall", "title": "The hall", "path": "/s/hall/" },
+    ] })));
+    // Nothing else is served, and an unknown session is no session.
+    for p in ["/s/nope/", "/s/nope/binding", "/api/nope", "/s/loop/nope", "/s/loop/portal/api/nope"] {
+        assert_eq!(get(addr, p), (404, json!({ "error": format!("nothing is served at {p}") })), "{p}");
+    }
+
+    // Each session's binding, layout and portal are its own.
+    let (status, v) = get(addr, "/s/loop/binding");
+    assert_eq!(status, 200);
+    assert_eq!((v["name"].clone(), v["title"].clone(), v["layout"].clone(), v["headline"].clone()), (json!("loop"), json!("The loop"), json!("layout.svg"), json!(["speed", "read-rate"])));
+    assert_eq!(v["objects"].as_array().unwrap().len(), 8);
+    assert_eq!(v["objects"][5], json!({
+        "id": "outlet-3", "label": "Outlet 3", "unit": "%", "show": "level", "range": [0.0, 100.0], "path": null,
+        "source": "plc", "series": "fill3", "key": null, "normal": "ok",
+        "rules": [ { "state": "warn", "word": "full", "when": "at least 100 %" }, { "state": "near", "word": "near full", "when": "at least 80 %" } ],
+        "actions": [ { "label": "Release", "source": "plc", "tag": format!("ns={};s=release3", a.server("plc").unwrap().namespace), "value": "1" } ],
+    }));
+    assert_eq!(v["dashboards"], json!([{ "name": "Overview", "columns": 4, "panels": [
+        { "kind": "value", "title": "Read rate", "span": 1 }, { "kind": "trend", "title": "Read rate", "span": 2 },
+        { "kind": "bars", "title": "Loop speed", "span": 1 }, { "kind": "timeline", "title": "State over time", "span": 1 },
+        { "kind": "grid", "title": "States", "span": 1 }, { "kind": "levels", "title": "Levels", "span": 1 },
+        { "kind": "table", "title": "outlets", "span": 1 }, { "kind": "cells", "title": "sorts", "span": 1 },
+    ] }]));
+    let (_, v) = get(addr, "/s/hall/binding");
+    assert_eq!((v["name"].clone(), v["title"].clone(), v["layout"].clone(), v["objects"].as_array().unwrap().len()), (json!("hall"), json!("The hall"), Value::Null, 6));
+    let (status, headers, body) = http(addr, "GET", "/s/loop/layout.svg", None);
+    assert_eq!((status, body.replace("\r\n", "\n")), (200, example().svg));
+    assert!(headers.contains("content-type: image/svg+xml"), "{headers}");
+    assert_eq!(get(addr, "/s/hall/layout.svg"), (404, json!({ "error": "session `hall` has no layout" })));
+    let (status, s) = get(addr, "/s/loop/portal/api/session");
+    assert_eq!((status, s["session_name"].clone(), s["running"].clone(), s["writes_armed"].clone()), (200, json!("the loop"), json!(true), json!(false)));
+    let (_, s) = get(addr, "/s/hall/portal/api/session");
+    assert_eq!(s["session_name"], json!("the hall"));
+
+    // The plants' values stay in their own sessions.
+    assert!(wait(Duration::from_secs(20), || object(&objects(addr, "loop"), "outlet-1")["value"] == json!(35.0) && object(&objects(addr, "hall"), "outlet-1")["value"] == json!(65.0)));
+    a.server("plc").unwrap().set("fill1", 40.0);
+    assert!(wait(Duration::from_secs(20), || object(&objects(addr, "loop"), "outlet-1")["value"] == json!(40.0)));
+    assert_eq!(object(&objects(addr, "hall"), "outlet-1")["value"], json!(65.0));
+    assert!(objects(addr, "hall")["objects"].as_array().unwrap().iter().all(|o| !o["id"].as_str().unwrap().starts_with("parcel")));
+    let (_, s) = get(addr, &format!("/s/hall/portal/api/opc/read?source=plc&tag={}", enc(&format!("ns={};s=fill1", b.server("plc").unwrap().namespace))));
+    assert_eq!(s["value"], json!("65"));
+
+    // The dashboards are computed per session; one that is not there is named.
+    let (status, d) = get(addr, "/s/loop/dashboard/0");
+    assert_eq!((status, d["name"].clone(), d["panels"].as_array().unwrap().len()), (200, json!("Overview"), 8));
+    assert_eq!(get(addr, "/s/loop/dashboard/1"), (404, json!({ "error": "session `loop` has no dashboard 1" })));
+    assert_eq!(get(addr, "/s/loop/dashboard/x"), (404, json!({ "error": "`x` is no dashboard of session `loop`" })));
+
+    // Stopped, every session ends and the address is let go.
+    let ends = host.stop();
+    assert_eq!(ends.iter().map(|(n, e)| (n.as_str(), e.len())).collect::<Vec<_>>(), [("loop", 2), ("hall", 2)]);
+    assert!(ends.iter().all(|(_, e)| e.iter().all(|(_, r)| r.is_ok())), "{:?}", ends.iter().map(|(n, e)| (n, e.iter().map(|(i, r)| (i.to_string(), r.is_ok())).collect::<Vec<_>>())).collect::<Vec<_>>());
+    assert!(wait(Duration::from_secs(5), || TcpStream::connect(addr).is_err()), "the address is free again");
+}
+
+#[test]
+fn a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = plant(&dir.path().join("bench-a"));
+    let b = plant(&dir.path().join("bench-b"));
+    let path = two_plants(dir.path(), &a, &b);
+    // The second session's store is pinned to a file that already stands: its session refuses
+    // to open it, so the host does not start.
+    let hall = dir.path().join("hall/project.toml");
+    let text = std::fs::read_to_string(&hall).unwrap().replace("store = \"ram\"", "store = { disk = \"taken.duckdb\" }");
+    std::fs::write(&hall, text).unwrap();
+    std::fs::write(dir.path().join("hall/taken.duckdb"), b"not a database").unwrap();
+    let cfg = config::load_file(&path).unwrap();
+    match Host::start(cfg) {
+        Err(HostError::Session { name, reason }) => {
+            assert_eq!(name, "hall");
+            assert!(reason.contains("taken.duckdb: a database already stands there"), "{reason}");
+        }
+        other => panic!("{:?}", other.err()),
+    }
+    // An address taken is refused before any session starts.
+    let held = TcpListener::bind("127.0.0.1:0").unwrap();
+    let taken = held.local_addr().unwrap();
+    let mut ex = live_example(&a, false);
+    ex.host = ex.host.replace("bind = \"127.0.0.1:0\"", &format!("bind = \"{taken}\""));
+    let cfg = config::load_file(&write_example(&dir.path().join("taken"), &ex)).unwrap();
+    match Host::start(cfg) {
+        Err(e @ HostError::Bind { .. }) => assert!(e.to_string().starts_with(&format!("cannot bind {taken}: ")), "{e}"),
+        other => panic!("{:?}", other.err()),
+    }
+}
+
+#[test]
+fn the_executable_serves_a_file_until_stdin_closes() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = plant(&dir.path().join("bench"));
+    let path = write_example(dir.path(), &live_example(&a, false));
+    let mut child = Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let mut first = String::new();
+    out.read_line(&mut first).unwrap();
+    let url = first.trim().strip_prefix("serving on http://").and_then(|r| r.strip_suffix('/')).unwrap_or_else(|| panic!("{first}")).to_string();
+    let addr: SocketAddr = url.parse().unwrap();
+    let mut second = String::new();
+    out.read_line(&mut second).unwrap();
+    assert_eq!(second.trim(), format!("session `loop` at http://{addr}/s/loop/"));
+    let mut third = String::new();
+    out.read_line(&mut third).unwrap();
+    assert_eq!(third.trim(), "running; close stdin to stop");
+    assert_eq!(get(addr, "/api/sessions").1["sessions"][0]["name"], json!("loop"));
+    let (_, s) = get(addr, "/s/loop/portal/api/session");
+    assert_eq!(s["session_name"], json!("the loop"));
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.flush().unwrap();
+    drop(stdin);
+    let status = child.wait().unwrap();
+    assert!(status.success(), "{status}");
+    assert!(TcpStream::connect(addr).is_err(), "nothing serves after the stop");
+}

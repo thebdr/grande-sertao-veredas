@@ -153,7 +153,7 @@ unit = "%"
 decimals = 0
 show = "level"
 states = [ { at_least = 100, state = "warn", word = "full" }, { at_least = 80, state = "near", word = "near full" } ]
-actions = [ { label = "Release", source = "plc", tag = "release3", value = "1" } ]
+actions = [ { label = "Release", source = "plc", tag = "ns=2;s=release3", value = "1" } ]
 
 [[object]]
 id = "parcel-1"
@@ -239,7 +239,7 @@ The layout the binding points at, an SVG whose elements carry the objects' IDs:
 Loaded, this host serves one session, `loop`, at `/s/loop/` on `127.0.0.1:8902`. Its binding has
 eight objects, two of which (`speed`, `read-rate`) have no element in the layout and show in the
 headline and the dashboard alone; one dashboard of eight panels; one write, `Release`, offered on
-`outlet-3`, posting `1` to the tag `release3` of `plc` through portal's surface, refused there
+`outlet-3`, posting `1` to the tag `ns=2;s=release3` of `plc` through portal's surface, refused there
 while the project leaves its writes off.
 
 ## The supervisão file: keys
@@ -318,15 +318,15 @@ A path is relative to the binding file's folder.
   object's value, by the same rules as `value`'s keys.
 
 The states read with a mark and a word everywhere: normal ●, near ■, warn ■, alarm !, disabled ▨,
-stale ◌, and the page's own selected ◆. Stale overrides the rules: an object whose source is not
-live, or whose value is older than its `stale_after_ms`, is stale with its last value kept and
-greyed.
+stale ◌, and the page's own selected ◆. Stale overrides the rules: an object with no value yet, whose source is away (idle past the
+project's window, retrying, ended or failed), or whose value is older than its `stale_after_ms`, is
+stale, a last value kept and greyed.
 
 **An action** (an entry of `actions`): a write the side panel offers, posted to portal's write
 surface (`POST /s/<name>/portal/api/opc/write`), never written by supervisão itself.
 - `label` (required): the button's text.
 - `source` (required): an OPC source of the project.
-- `tag` (required): a tag of that source a rule marks writable.
+- `tag` (required): the tag's node id as the project's OPC rule writes it (portal names a tag by it), a tag the rule marks writable.
 - `value` (required): the value written, as text, coerced by portal to the tag's type.
 
 The page shows an action gated (the warn colour) and disabled while the session's switch is off;
