@@ -1,0 +1,24 @@
+{
+  "clause": "C-050",
+  "command": "cargo test -p veredas-supervisao --test feed",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-supervisao",
+    "--test",
+    "feed"
+  ],
+  "exitCode": 0,
+  "outputSha": "c976c89ef943aa436a14b521dd23883509cf5c031159e9184986668d2c1d91ca",
+  "outputTail": "\nrunning 2 tests\ntest the_fold_reads_every_object_exactly ... ok\ntest the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.33s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.15s\n     Running tests\\feed.rs (target\\debug\\deps\\feed-da66e42ccd67b404.exe)",
+  "ranAt": "2026-11-09T21:31:58.574Z",
+  "headCommit": "ded70a0d44b2dbb0b4b801d9058a2c6a784bf347",
+  "tests": [
+    {
+      "name": "crates/veredas-supervisao/tests/feed.rs",
+      "file": "crates/veredas-supervisao/tests/feed.rs",
+      "fileSha": "eb0f87b99cb2eced226a33ba66e81e4f4de3c7c29b484f326aa324c88d9f698c"
+    }
+  ]
+}

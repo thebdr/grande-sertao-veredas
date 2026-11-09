@@ -1,0 +1,24 @@
+{
+  "clause": "C-053",
+  "command": "cargo test -p veredas-supervisao --test tables",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-supervisao",
+    "--test",
+    "tables"
+  ],
+  "exitCode": 0,
+  "outputSha": "14fd178824928b9af960f2d631546ef13a1683157ff8cb58e80dfdf03afb0539",
+  "outputTail": "\nrunning 1 test\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.42s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.19s\n     Running tests\\tables.rs (target\\debug\\deps\\tables-db70113d67886dbf.exe)",
+  "ranAt": "2026-11-09T21:32:49.112Z",
+  "headCommit": "ded70a0d44b2dbb0b4b801d9058a2c6a784bf347",
+  "tests": [
+    {
+      "name": "crates/veredas-supervisao/tests/tables.rs",
+      "file": "crates/veredas-supervisao/tests/tables.rs",
+      "fileSha": "79c1d85604446e53eda1fd96388b91855692bb2aef8a51e4eb032737bfa65ad4"
+    }
+  ]
+}

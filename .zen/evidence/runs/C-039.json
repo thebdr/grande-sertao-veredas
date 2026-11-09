@@ -10,15 +10,15 @@
     "channel"
   ],
   "exitCode": 0,
-  "outputSha": "98f5c9f7f2182a5a994a3336156c3295be6731b37898e06717d30b93c17d64a3",
-  "outputTail": "test every_refusal_names_its_place_and_nothing_dials_before_it_all_holds ... ok\ntest a_listener_waits_for_the_plant_to_dial_and_a_peer_gone_reads_as_waiting ... ok\ntest the_machine_s_messages_are_read_into_rows_and_answered_by_rule_while_the_switch_is_on ... ok\ntest the_handle_s_send_is_gated_and_reaches_the_plant_by_name ... ok\ntest with_the_switch_off_nothing_is_answered_and_arming_it_live_answers_the_next_item ... ok\ntest pressure_turned_on_the_bench_shows_in_the_rows ... ok\ntest a_disarmed_send_is_the_last_refusal ... ok\ntest the_peer_is_asked_for_last_so_the_catalog_s_refusals_come_first_with_nobody_there ... ok\ntest a_dialler_with_nobody_there_reports_trouble_and_links_when_the_plant_appears ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.77s\n     Running tests\\channel.rs (target\\debug\\deps\\channel-4ccc353d73f5751e.exe)",
-  "ranAt": "2026-11-08T23:25:48.510Z",
-  "headCommit": "14f6e26aa690a9062c6c5974506d001a64749040",
+  "outputSha": "8fbd82c661c9d2f227ce07955c83be0fae5eee85c7d6ac350385a9560cc7a00d",
+  "outputTail": "test an_unknown_id_and_a_refused_body_are_counted_and_shown ... ok\ntest every_refusal_names_its_place_and_nothing_dials_before_it_all_holds ... ok\ntest a_listener_waits_for_the_plant_to_dial_and_a_peer_gone_reads_as_waiting ... ok\ntest the_machine_s_messages_are_read_into_rows_and_answered_by_rule_while_the_switch_is_on ... ok\ntest the_handle_s_send_is_gated_and_reaches_the_plant_by_name ... ok\ntest with_the_switch_off_nothing_is_answered_and_arming_it_live_answers_the_next_item ... ok\ntest pressure_turned_on_the_bench_shows_in_the_rows ... ok\ntest a_disarmed_send_is_the_last_refusal ... ok\ntest the_peer_is_asked_for_last_so_the_catalog_s_refusals_come_first_with_nobody_there ... ok\ntest a_dialler_with_nobody_there_reports_trouble_and_links_when_the_plant_appears ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.92s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.21s\n     Running tests\\channel.rs (target\\debug\\deps\\channel-df871f282ee76485.exe)",
+  "ranAt": "2026-11-09T21:47:34.174Z",
+  "headCommit": "ded70a0d44b2dbb0b4b801d9058a2c6a784bf347",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/channel.rs",
       "file": "crates/veredas-portal/tests/channel.rs",
-      "fileSha": "931776b14f51da4052fdd0dfea8ca78744ca4b3821be168622a67f3a2ef588a0"
+      "fileSha": "f558e8d11ee1b911a1216c531a8d910fca344b7978d7abbc96c809921ffe29c9"
     }
   ]
 }
