@@ -13,7 +13,7 @@ use veredas_core::telegram::Role;
 use veredas_maquinar::bench::*;
 use veredas_maquinar::channel::CyclicMessage;
 use veredas_maquinar::emit::{Encoding, ValueField};
-use veredas_maquinar::opc::{Access, Credentials, Randomize, Reaction, Step, TagConfig, TagType};
+use veredas_maquinar::opc::{Access, Credentials, Ramp, Randomize, Reaction, Step, TagConfig, TagType};
 
 fn doc(name: &str) -> String {
     let doc = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs").join(name);
@@ -229,7 +229,7 @@ fn full_file(port: u16) -> String {
         "{}seed = 1\nout_dir = \"out\"\n\n\
          [[emitter]]\nname = \"e\"\ntemplate = \"{{ts}} {{v}}\"\nts_format = \"%H:%M:%S\"\nvalues = [ {{ name = \"v\", low = 1, high = 2, decimals = 1 }} ]\ninterval_ms = 100\nfile = \"e{{n}}.log\"\nmax_lines = 10\nencoding = \"utf-8\"\nseed = 2\n\n\
          [[opc]]\nname = \"s\"\nbind = \"127.0.0.1\"\nport = 0\nuser = {{ name = \"u\", password = \"p\" }}\nmax_nodes_per_read = 10\nmax_sessions = 2\n\
-         tags = [ {{ id = \"t\", name = \"T\", type = \"float\", access = \"read-write\", value = \"1\", randomize = {{ low = 1, high = 2, decimals = 1, interval_ms = 100 }} }} ]\n\
+         tags = [ {{ id = \"t\", name = \"T\", type = \"float\", access = \"read-write\", value = \"1\", randomize = {{ low = 1, high = 2, decimals = 1, interval_ms = 100 }} }}, {{ id = \"r\", type = \"float\", value = \"2\", ramp = {{ low = 0, high = 10, step = 2, decimals = 1, interval_ms = 100 }} }} ]\n\
          reactions = [ {{ on_write = \"t\", equals = \"5\", tag = \"t\", then = [ {{ after_ms = 1, set = \"6\" }} ] }} ]\n\n\
          [[channel]]\nname = \"c\"\nrole = \"listen\"\nhost = \"127.0.0.1\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\ncontroller = \"machine.toml\"\n\
          messages = [ {{ message = \"status\", every_ms = 100, fields = [ {{ name = \"running\", value = 1 }}, {{ name = \"speed\", value = 1 }} ] }} ]\n",
@@ -292,8 +292,8 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
     let tables: Vec<&str> = documented.iter().map(|(t, _)| t.as_str()).collect();
     assert_eq!(
         tables,
-        ["The top level", "An emitter", "A value", "An OPC UA server", "A user", "A tag", "A draw", "A reaction", "A step", "A channel", "A message"],
-        "the reference's eleven tables"
+        ["The top level", "An emitter", "A value", "An OPC UA server", "A user", "A tag", "A draw", "A ramp", "A reaction", "A step", "A channel", "A message"],
+        "the reference's twelve tables"
     );
     let dir = scratch("walk");
     let (_, port) = plant(&dir);
@@ -312,8 +312,9 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
         match table {
             "A value" => "name = \"v\"\nlow = 1\nhigh = 2\ndecimals = 1\n",
             "A user" => "name = \"u\"\npassword = \"p\"\n",
-            "A tag" => "id = \"t\"\nname = \"T\"\ntype = \"float\"\naccess = \"read-write\"\nvalue = \"1\"\nrandomize = { low = 1, high = 2 }\n",
+            "A tag" => "id = \"t\"\nname = \"T\"\ntype = \"float\"\naccess = \"read-write\"\nvalue = \"1\"\nrandomize = { low = 1, high = 2 }\nramp = { low = 1, high = 2 }\n",
             "A draw" => "low = 1\nhigh = 2\ndecimals = 1\ninterval_ms = 100\n",
+            "A ramp" => "low = 1\nhigh = 2\nstep = 1\ndecimals = 1\ninterval_ms = 100\n",
             "A reaction" => "on_write = \"t\"\nequals = \"5\"\ntag = \"t\"\nthen = [ { set = \"6\" } ]\n",
             "A step" => "after_ms = 1\nset = \"6\"\n",
             "A message" => "message = \"status\"\nevery_ms = 100\nfields = [ { name = \"running\", value = 1 } ]\n",
@@ -337,6 +338,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             "A user" => full.replace("{ name = \"u\",", "{ name = \"u\", zz = 1,"),
             "A tag" => full.replace("{ id = \"t\",", "{ id = \"t\", zz = 1,"),
             "A draw" => full.replace("randomize = { low = 1,", "randomize = { low = 1, zz = 1,"),
+            "A ramp" => full.replace("ramp = { low = 0,", "ramp = { low = 0, zz = 1,"),
             "A reaction" => full.replace("{ on_write = \"t\",", "{ on_write = \"t\", zz = 1,"),
             "A step" => full.replace("{ after_ms = 1,", "{ after_ms = 1, zz = 1,"),
             "A message" => full.replace("{ message = \"status\",", "{ message = \"status\", zz = 1,"),
@@ -423,11 +425,16 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                 ("A tag", "access") => check!(TagConfig, |t| default == "\"read\"" && t.access == Access::Read),
                 ("A tag", "value") => check!(TagConfig, |t| default == "the type's zero" && t.value.is_empty()),
                 ("A tag", "randomize") => check!(TagConfig, |t| default == "none" && t.randomize.is_none()),
+                ("A tag", "ramp") => check!(TagConfig, |t| default == "none" && t.ramp.is_none()),
                 ("A tag", _) => check!(TagConfig, |_| false),
                 ("A draw", "low") => check!(Randomize, |r| default == "0" && r.low == 0.0),
                 ("A draw", "high") => check!(Randomize, |r| default == "0" && r.high == 0.0),
                 ("A draw", "decimals") => check!(Randomize, |r| default == "0" && r.decimals == 0),
                 ("A draw", "interval_ms") => check!(Randomize, |r| default == "1000" && r.interval_ms == 1000),
+                ("A ramp", "step") => check!(Ramp, |r| default == "1" && r.step == 1.0),
+                ("A ramp", "decimals") => check!(Ramp, |r| default == "none" && r.decimals.is_none()),
+                ("A ramp", "interval_ms") => check!(Ramp, |r| default == "1000" && r.interval_ms == 1000),
+                ("A ramp", _) => check!(Ramp, |_| false),
                 ("A reaction", "equals") => check!(Reaction, |r| default == "none" && r.equals.is_none()),
                 ("A reaction", "tag") => check!(Reaction, |r| default == "on_write" && r.tag.is_none()),
                 ("A reaction", _) => check!(Reaction, |_| false),
@@ -879,11 +886,23 @@ relative to the bench file's folder.
   `read-write`.
 - `value` (the type's zero): the initial value as text, parsed per the type.
 - `randomize` (none): a fresh value within a range on an interval; a text tag takes none.
+- `ramp` (none): a value stepping through a range on an interval and wrapping, for plant
+  motion (a place along a loop, a level filling); an int or a float, never with `randomize`.
 
 **A draw** (the value of `randomize`).
 - `low` (`0`), `high` (`0`): the range; an int draws the whole numbers in it, a bool flips.
 - `decimals` (`0`): a float's places.
 - `interval_ms` (`1000`): between draws; at least the server's tick of 20 ms.
+
+**A ramp** (the value of `ramp`): each step adds `step` to what the tag holds, wrapped by the
+range's width while past `high`; a value outside the range (a client's write, a plant-side set)
+starts again at `low`, one inside it moves the ramp on from there.
+- `low` (required), `high` (required): the range, finite, `low` below `high`; the tag's initial
+  value inside it.
+- `step` (`1`): above 0 and at most the range's width; an int's range and step are whole numbers.
+- `decimals` (none): a float's places after each step; absent, the sum as it falls. An int takes
+  none.
+- `interval_ms` (`1000`): between steps; at least the server's tick of 20 ms.
 
 **A reaction** (an entry of `reactions`): what the plant does when a client writes a tag.
 - `on_write` (required): the tag watched.

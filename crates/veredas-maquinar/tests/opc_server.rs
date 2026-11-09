@@ -19,7 +19,7 @@ use veredas_core::SeriesType;
 use veredas_maquinar::opc::*;
 
 fn tag(id: &str, ty: TagType, access: Access, value: &str) -> TagConfig {
-    TagConfig { id: id.into(), name: None, ty, access, value: value.into(), randomize: None }
+    TagConfig { id: id.into(), name: None, ty, access, value: value.into(), randomize: None, ramp: None }
 }
 
 /// Port 0: the OS picks, so tests run in parallel without fighting.
@@ -719,6 +719,99 @@ fn values_parse_per_type_and_nonsense_is_refused() {
 }
 
 #[test]
+fn a_ramp_steps_by_its_step_and_wraps_by_the_range_s_width() {
+    let r = Ramp { low: 0.0, high: 100.0, step: 30.0, decimals: None, interval_ms: 100 };
+    let mut v = 0.0;
+    let mut seen = Vec::new();
+    for _ in 0..12 {
+        v = ramp_next(v, &r);
+        seen.push(v);
+    }
+    assert_eq!(seen, [30.0, 60.0, 90.0, 20.0, 50.0, 80.0, 10.0, 40.0, 70.0, 100.0, 30.0, 60.0], "the high is reached, then wrapped past");
+    assert_eq!(ramp_next(100.0, &Ramp { step: 100.0, ..r.clone() }), 100.0, "a step of the whole width comes back to where it was");
+    assert_eq!(ramp_next(150.0, &r), 0.0, "outside the range: the low");
+    assert_eq!(ramp_next(-0.5, &r), 0.0);
+    assert_eq!(ramp_next(f64::NAN, &r), 0.0);
+    let tenths = Ramp { low: 0.0, high: 1.0, step: 0.1, decimals: Some(1), interval_ms: 100 };
+    let mut v = 0.0;
+    for _ in 0..10 {
+        v = ramp_next(v, &tenths);
+    }
+    assert_eq!(v, 1.0, "rounded each step, ten tenths make one");
+    assert_eq!(ramp_next(v, &tenths), 0.1);
+    let ints = Ramp { low: -5.0, high: 5.0, step: 4.0, decimals: None, interval_ms: 100 };
+    assert_eq!([ramp_next(-5.0, &ints), ramp_next(3.0, &ints), ramp_next(5.0, &ints)], [-1.0, -3.0, -1.0]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_ramped_tag_steps_on_the_wire_and_moves_on_from_a_set() {
+    let mut pos = tag("pos", TagType::Float, Access::ReadWrite, "0");
+    pos.ramp = Some(Ramp { low: 0.0, high: 100.0, step: 30.0, decimals: None, interval_ms: 100 });
+    let mut level = tag("level", TagType::Int, Access::Read, "8");
+    level.ramp = Some(Ramp { low: 0.0, high: 10.0, step: 3.0, decimals: None, interval_ms: 100 });
+    let still = tag("still", TagType::Float, Access::Read, "1.5");
+    let server = start(&config(vec![pos, level, still])).expect("starts");
+    let (session, _loop) = anonymous(&server.endpoint_url).await;
+    let ns = server.namespace;
+    let cycle = |r: &Ramp, from: f64, n: usize| { let mut v = from; (0..n).map(|_| { v = ramp_next(v, r); v }).collect::<Vec<f64>>() };
+    let pos_r = Ramp { low: 0.0, high: 100.0, step: 30.0, decimals: None, interval_ms: 100 };
+    let level_r = Ramp { low: 0.0, high: 10.0, step: 3.0, decimals: None, interval_ms: 100 };
+    // Read over the wire until twelve distinct values came: each the ramp's next of the one
+    // before it (a value read twice is the same step; a read never skips more than the steps a
+    // stalled reader missed, each one a step of the ramp).
+    let mut values: Vec<f64> = Vec::new();
+    let mut levels: Vec<i32> = Vec::new();
+    let started = Instant::now();
+    while (values.len() < 12 || levels.len() < 6) && started.elapsed() < Duration::from_secs(20) {
+        if let (StatusCode::Good, Some(Variant::Double(v))) = read(&session, &NodeId::new(ns, "pos")).await
+            && values.last() != Some(&v)
+        {
+            values.push(v);
+        }
+        if let (StatusCode::Good, Some(Variant::Int32(v))) = read(&session, &NodeId::new(ns, "level")).await
+            && levels.last() != Some(&v)
+        {
+            levels.push(v);
+        }
+        tokio::time::sleep(Duration::from_millis(15)).await;
+    }
+    assert!(values.len() >= 12 && levels.len() >= 6, "{values:?} {levels:?}");
+    for w in values.windows(2) {
+        assert!((1..=4).any(|k| cycle(&pos_r, w[0], k)[k - 1] == w[1]), "{} after {}: {values:?}", w[1], w[0]);
+    }
+    for w in levels.windows(2) {
+        assert!((1..=4).any(|k| cycle(&level_r, w[0] as f64, k)[k - 1] == w[1] as f64), "{} after {}: {levels:?}", w[1], w[0]);
+    }
+    assert!(values.iter().all(|v| (0.0..=100.0).contains(v) && v % 10.0 == 0.0), "{values:?}");
+    assert!(levels.iter().all(|v| (0..=10).contains(v)), "{levels:?}");
+    assert!(server.status().ramp_steps >= 16, "{:?}", server.status());
+    assert_eq!(server.status().draws, 0, "a step is no draw");
+    assert_eq!(read(&session, &NodeId::new(ns, "still")).await, (StatusCode::Good, Some(Variant::Double(1.5))));
+    // A plant-side set inside the range: the ramp moves on from it. Outside it: the low.
+    server.set("pos", 55.0);
+    let mut after = Vec::new();
+    let started = Instant::now();
+    while after.len() < 3 && started.elapsed() < Duration::from_secs(10) {
+        if let Some(Variant::Double(v)) = server.get("pos")
+            && after.last() != Some(&v)
+        {
+            after.push(v);
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let from = after.iter().position(|v| *v == 55.0).unwrap_or_else(|| panic!("the set was seen: {after:?}"));
+    assert_eq!(after.get(from + 1), Some(&85.0), "{after:?}");
+    server.set("pos", 250.0);
+    until("the ramp restarts at its low", Duration::from_secs(5), || matches!(server.get("pos"), Some(Variant::Double(v)) if v == 0.0 || v == 30.0));
+    // The cadence: a step every interval, due from the last due time, never two a tick.
+    let before = server.status().ramp_steps;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let n = server.status().ramp_steps - before;
+    assert!((30..=42).contains(&n), "two 100 ms ramps step 40 times in 2 s, a loaded host's late wake-ups fewer: {n}");
+    server.stop();
+}
+
+#[test]
 fn a_bad_configuration_is_refused_by_name_before_anything_starts() {
     let ok = |tags: Vec<TagConfig>, reactions: Vec<Reaction>| OpcConfig { port: 0, tags, reactions, ..OpcConfig::default() };
     let refused = |cfg: &OpcConfig| match start(cfg) {
@@ -741,6 +834,34 @@ fn a_bad_configuration_is_refused_by_name_before_anything_starts() {
     let mut short = tag("s", TagType::Int, Access::Read, "0");
     short.randomize = Some(Randomize { low: 0.0, high: 1.0, decimals: 0, interval_ms: 19 });
     assert_eq!(refused(&ok(vec![short], vec![])), "opc.tags[0] (`s`).randomize.interval_ms 19 is shorter than the server's tick of 20 ms");
+    let ramp = |low: f64, high: f64, step: f64, decimals: Option<u8>, interval_ms: u64| Some(Ramp { low, high, step, decimals, interval_ms });
+    let ramped = |ty: TagType, value: &str, r: Option<Ramp>| { let mut t = tag("r", ty, Access::Read, value); t.ramp = r; t };
+    let mut both = ramped(TagType::Float, "0", ramp(0.0, 1.0, 0.5, None, 20));
+    both.randomize = Some(Randomize { low: 0.0, high: 1.0, decimals: 0, interval_ms: 20 });
+    assert_eq!(refused(&ok(vec![both], vec![])), "opc.tags[0] (`r`): a tag takes a draw or a ramp, not both");
+    for (t, r, expected) in [
+        (TagType::Bool, ramp(0.0, 1.0, 1.0, None, 20), "opc.tags[0] (`r`).ramp: a bool has no range to step through"),
+        (TagType::Text, ramp(0.0, 1.0, 1.0, None, 20), "opc.tags[0] (`r`).ramp: a text has no range to step through"),
+        (TagType::Float, ramp(0.0, f64::INFINITY, 1.0, None, 20), "opc.tags[0] (`r`).ramp: the range and the step are not all finite"),
+        (TagType::Float, ramp(0.0, 10.0, f64::NAN, None, 20), "opc.tags[0] (`r`).ramp: the range and the step are not all finite"),
+        (TagType::Float, ramp(10.0, 10.0, 1.0, None, 20), "opc.tags[0] (`r`).ramp: the range is empty (10 is not below 10)"),
+        (TagType::Float, ramp(0.0, 10.0, 0.0, None, 20), "opc.tags[0] (`r`).ramp: the step 0 is not above 0 and at most the range's width 10"),
+        (TagType::Float, ramp(0.0, 10.0, -1.0, None, 20), "opc.tags[0] (`r`).ramp: the step -1 is not above 0 and at most the range's width 10"),
+        (TagType::Float, ramp(0.0, 10.0, 10.5, None, 20), "opc.tags[0] (`r`).ramp: the step 10.5 is not above 0 and at most the range's width 10"),
+        (TagType::Int, ramp(0.0, 10.0, 1.5, None, 20), "opc.tags[0] (`r`).ramp: an int steps by whole numbers inside an int (0..=10 by 1.5)"),
+        (TagType::Int, ramp(0.5, 10.0, 1.0, None, 20), "opc.tags[0] (`r`).ramp: an int steps by whole numbers inside an int (0.5..=10 by 1)"),
+        (TagType::Int, ramp(0.0, 3e9, 1.0, None, 20), "opc.tags[0] (`r`).ramp: an int steps by whole numbers inside an int (0..=3000000000 by 1)"),
+        (TagType::Int, ramp(0.0, 10.0, 1.0, Some(1), 20), "opc.tags[0] (`r`).ramp.decimals: an int has no places"),
+        (TagType::Float, ramp(0.0, 10.0, 1.0, Some(16), 20), "opc.tags[0] (`r`).ramp.decimals 16 is past 15"),
+        (TagType::Float, ramp(0.0, 10.0, 1.0, None, 0), "opc.tags[0] (`r`).ramp.interval_ms is 0"),
+        (TagType::Float, ramp(0.0, 10.0, 1.0, None, 19), "opc.tags[0] (`r`).ramp.interval_ms 19 is shorter than the server's tick of 20 ms"),
+    ] {
+        assert_eq!(refused(&ok(vec![ramped(t, "0", r)], vec![])), expected);
+    }
+    assert_eq!(refused(&ok(vec![ramped(TagType::Float, "11", ramp(0.0, 10.0, 1.0, None, 20))], vec![])), "opc.tags[0] (`r`).ramp: the initial value 11 lies outside 0..=10");
+    assert_eq!(refused(&ok(vec![ramped(TagType::Int, "-1", ramp(0.0, 10.0, 1.0, None, 20))], vec![])), "opc.tags[0] (`r`).ramp: the initial value -1 lies outside 0..=10");
+    assert!(validate(&ok(vec![ramped(TagType::Float, "", ramp(0.0, 10.0, 10.0, Some(15), 20))], vec![])).is_ok(), "an empty value is the zero, a step of the whole width, fifteen places");
+    assert!(validate(&ok(vec![ramped(TagType::Int, "10", ramp(-5.0, 10.0, 15.0, None, 20))], vec![])).is_ok());
     let mut at_tick = tag("k", TagType::Int, Access::Read, "0");
     at_tick.randomize = Some(Randomize { low: 0.0, high: 1.0, decimals: 0, interval_ms: 20 });
     assert!(validate(&ok(vec![at_tick], vec![])).is_ok(), "an interval of one tick is served on every tick");
@@ -837,7 +958,7 @@ then = [ { set = "99" }, { after_ms = 300, set = "1" } ]
     assert_eq!(cfg.tags[0].name.as_deref(), Some("Temperature"));
     assert_eq!(cfg.tags[0].access, Access::Read);
     assert_eq!(cfg.tags[0].randomize, Some(Randomize { low: 18.0, high: 24.0, decimals: 1, interval_ms: 1000 }));
-    assert_eq!(cfg.tags[1], TagConfig { id: "line1.cmd.start".into(), name: None, ty: TagType::Int, access: Access::ReadWrite, value: "".into(), randomize: None });
+    assert_eq!(cfg.tags[1], TagConfig { id: "line1.cmd.start".into(), name: None, ty: TagType::Int, access: Access::ReadWrite, value: "".into(), randomize: None, ramp: None });
     assert_eq!(cfg.reactions[0].then, vec![Step { after_ms: 0, set: "99".into() }, Step { after_ms: 300, set: "1".into() }]);
     assert_eq!(cfg.reactions[0].tag, None);
     let full: OpcConfig = toml::from_str(&format!("bind = \"10.0.0.5\"\nport = 4840\nuser = {{ name = \"op\", password = \"pw\" }}\nmax_nodes_per_read = 800\nmax_sessions = 2\n{text}")).unwrap();
@@ -845,6 +966,11 @@ then = [ { set = "99" }, { after_ms = 300, set = "1" } ]
     assert_eq!(full.user.as_ref().map(|u| u.name.as_str()), Some("op"));
     assert_eq!(toml::from_str::<OpcConfig>("").unwrap(), OpcConfig::default());
 
+    let ramped: OpcConfig = toml::from_str("[[tags]]\nid = \"p\"\ntype = \"float\"\nramp = { low = 0, high = 100 }\n\n[[tags]]\nid = \"q\"\ntype = \"int\"\nramp = { low = 0, high = 10, step = 3, interval_ms = 200 }\n").unwrap();
+    assert_eq!(ramped.tags[0].ramp, Some(Ramp { low: 0.0, high: 100.0, step: 1.0, decimals: None, interval_ms: 1000 }));
+    assert_eq!(ramped.tags[1].ramp, Some(Ramp { low: 0.0, high: 10.0, step: 3.0, decimals: None, interval_ms: 200 }));
+    assert!(toml::from_str::<OpcConfig>("[[tags]]\nid = \"p\"\ntype = \"float\"\nramp = { low = 0, high = 100, stepp = 2 }\n").unwrap_err().to_string().contains("stepp"));
+    assert!(toml::from_str::<OpcConfig>("[[tags]]\nid = \"p\"\ntype = \"float\"\nramp = { high = 100 }\n").unwrap_err().to_string().contains("low"));
     for (bad, key) in [
         (text.replace("value = \"21.5\"", "valeu = \"21.5\""), "valeu"),
         (text.replace("type = \"float\"", "type = \"double\""), "double"),

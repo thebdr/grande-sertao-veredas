@@ -125,6 +125,10 @@ pub struct TagConfig {
     /// A fresh value within a range on an interval; text has no range and takes none.
     #[serde(default)]
     pub randomize: Option<Randomize>,
+    /// A value stepping through a range on an interval and wrapping, for plant motion (a place
+    /// along a loop, a level filling); an int or a float, never with a draw.
+    #[serde(default)]
+    pub ramp: Option<Ramp>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -187,6 +191,49 @@ pub struct Randomize {
 
 fn default_interval() -> u64 {
     1000
+}
+
+/// A value stepping through `[low, high]` on an interval: each step adds `step` to the tag's
+/// current value, and a value past `high` wraps by the range's width, so a place along a loop
+/// comes round and a level fills, then empties and fills again. It steps from what the tag holds,
+/// so a client's write or a plant-side set inside the range moves the ramp on from there; a value
+/// outside it starts again at `low`.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ramp {
+    pub low: f64,
+    pub high: f64,
+    #[serde(default = "default_step")]
+    pub step: f64,
+    /// A float's places after each step; absent, the sum as it falls.
+    #[serde(default)]
+    pub decimals: Option<u8>,
+    #[serde(default = "default_interval")]
+    pub interval_ms: u64,
+}
+
+fn default_step() -> f64 {
+    1.0
+}
+
+/// The value after one step of a ramp from `v`: `v + step`, wrapped by the range's width while
+/// past `high`, rounded to the ramp's places; a `v` outside the range starts at `low`.
+pub fn ramp_next(v: f64, r: &Ramp) -> f64 {
+    if !(v >= r.low && v <= r.high) {
+        return r.low;
+    }
+    let width = r.high - r.low;
+    let mut n = v + r.step;
+    while n > r.high {
+        n -= width;
+    }
+    match r.decimals {
+        Some(d) => {
+            let f = 10f64.powi(d as i32);
+            (n * f).round() / f
+        }
+        None => n,
+    }
 }
 
 /// What the plant does when a client writes into a tag: a timed sequence of values, on the same
@@ -341,7 +388,52 @@ fn compile(cfg: &OpcConfig) -> Result<Vec<CompiledReaction>, OpcError> {
             return Err(bad(format!("{place}: two tags share this id")));
         }
         seen.push(id);
-        parse_value(tag.ty, &tag.value).map_err(|e| bad(format!("{place}.value: {e}")))?;
+        let initial = parse_value(tag.ty, &tag.value).map_err(|e| bad(format!("{place}.value: {e}")))?;
+        if let Some(r) = &tag.ramp {
+            if tag.randomize.is_some() {
+                return Err(bad(format!("{place}: a tag takes a draw or a ramp, not both")));
+            }
+            if !matches!(tag.ty, TagType::Int | TagType::Float) {
+                return Err(bad(format!("{place}.ramp: a {} has no range to step through", tag.ty.label())));
+            }
+            if !(r.low.is_finite() && r.high.is_finite() && r.step.is_finite()) {
+                return Err(bad(format!("{place}.ramp: the range and the step are not all finite")));
+            }
+            if r.low >= r.high {
+                return Err(bad(format!("{place}.ramp: the range is empty ({} is not below {})", r.low, r.high)));
+            }
+            if !(r.step > 0.0 && r.step <= r.high - r.low) {
+                return Err(bad(format!("{place}.ramp: the step {} is not above 0 and at most the range's width {}", r.step, r.high - r.low)));
+            }
+            if tag.ty == TagType::Int {
+                let whole = |x: f64| x.fract() == 0.0 && x >= i32::MIN as f64 && x <= i32::MAX as f64;
+                if !(whole(r.low) && whole(r.high) && whole(r.step)) {
+                    return Err(bad(format!("{place}.ramp: an int steps by whole numbers inside an int ({}..={} by {})", r.low, r.high, r.step)));
+                }
+                if r.decimals.is_some() {
+                    return Err(bad(format!("{place}.ramp.decimals: an int has no places")));
+                }
+            }
+            if let Some(d) = r.decimals
+                && d > 15
+            {
+                return Err(bad(format!("{place}.ramp.decimals {d} is past 15")));
+            }
+            let v = match &initial {
+                Variant::Int32(x) => *x as f64,
+                Variant::Double(x) => *x,
+                _ => r.low,
+            };
+            if v < r.low || v > r.high {
+                return Err(bad(format!("{place}.ramp: the initial value {v} lies outside {}..={}", r.low, r.high)));
+            }
+            if r.interval_ms == 0 {
+                return Err(bad(format!("{place}.ramp.interval_ms is 0")));
+            }
+            if r.interval_ms < TICK.as_millis() as u64 {
+                return Err(bad(format!("{place}.ramp.interval_ms {} is shorter than the server's tick of {} ms", r.interval_ms, TICK.as_millis())));
+            }
+        }
         if let Some(r) = &tag.randomize {
             if tag.ty == TagType::Text {
                 return Err(bad(format!("{place}.randomize: text has no range to draw from")));
@@ -416,6 +508,8 @@ pub struct TagValue {
 pub struct OpcStatus {
     /// Draws applied to randomized tags.
     pub draws: u64,
+    /// Steps applied to ramped tags.
+    pub ramp_steps: u64,
     /// Reactions fired.
     pub reactions_fired: u64,
     /// Writes of the wrong wire type refused (`BadTypeMismatch`, from a client) or dropped (a
@@ -762,6 +856,12 @@ async fn service_loop(
         .iter()
         .map(|t| t.randomize.as_ref().map(|r| start + Duration::from_millis(r.interval_ms)))
         .collect();
+    // Next-due per ramped tag, scheduled the same way.
+    let mut ramp_due: Vec<Option<tokio::time::Instant>> = cfg
+        .tags
+        .iter()
+        .map(|t| t.ramp.as_ref().map(|r| start + Duration::from_millis(r.interval_ms)))
+        .collect();
     // What each watched tag held at the last tick, so a reaction is edge-triggered.
     let mut last_seen: Vec<Option<Variant>> = reactions.iter().map(|r| read_node(&nodes, &node(&r.watched))).collect();
     // Steps scheduled: when, which node, what value.
@@ -859,6 +959,31 @@ async fn service_loop(
                         next += step;
                     }
                     due[i] = Some(next);
+                }
+                for (i, tag) in cfg.tags.iter().enumerate() {
+                    let (Some(r), Some(at)) = (&tag.ramp, ramp_due[i]) else { continue };
+                    if now < at {
+                        continue;
+                    }
+                    let id = node(tag.id.trim());
+                    let current = match read_node(&nodes, &id) {
+                        Some(Variant::Int32(x)) => x as f64,
+                        Some(Variant::Double(x)) => x,
+                        _ => f64::NAN,
+                    };
+                    let next = ramp_next(current, r);
+                    set(&id, if tag.ty == TagType::Int { Variant::Int32(next as i32) } else { Variant::Double(next) });
+                    if let Ok(mut s) = status.lock() {
+                        s.ramp_steps += 1;
+                    }
+                    // As a draw: due an interval after this one was due, a stall skipping the
+                    // steps it missed and keeping the phase.
+                    let step = Duration::from_millis(r.interval_ms);
+                    let mut n = at + step;
+                    while n <= now {
+                        n += step;
+                    }
+                    ramp_due[i] = Some(n);
                 }
                 for (i, r) in reactions.iter().enumerate() {
                     // A step or a draw this tick changed the watched value: seen, not a write.

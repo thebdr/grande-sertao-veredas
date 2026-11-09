@@ -133,11 +133,23 @@ relative to the bench file's folder.
   `read-write`.
 - `value` (the type's zero): the initial value as text, parsed per the type.
 - `randomize` (none): a fresh value within a range on an interval; a text tag takes none.
+- `ramp` (none): a value stepping through a range on an interval and wrapping, for plant
+  motion (a place along a loop, a level filling); an int or a float, never with `randomize`.
 
 **A draw** (the value of `randomize`).
 - `low` (`0`), `high` (`0`): the range; an int draws the whole numbers in it, a bool flips.
 - `decimals` (`0`): a float's places.
 - `interval_ms` (`1000`): between draws; at least the server's tick of 20 ms.
+
+**A ramp** (the value of `ramp`): each step adds `step` to what the tag holds, wrapped by the
+range's width while past `high`; a value outside the range (a client's write, a plant-side set)
+starts again at `low`, one inside it moves the ramp on from there.
+- `low` (required), `high` (required): the range, finite, `low` below `high`; the tag's initial
+  value inside it.
+- `step` (`1`): above 0 and at most the range's width; an int's range and step are whole numbers.
+- `decimals` (none): a float's places after each step; absent, the sum as it falls. An int takes
+  none.
+- `interval_ms` (`1000`): between steps; at least the server's tick of 20 ms.
 
 **A reaction** (an entry of `reactions`): what the plant does when a client writes a tag.
 - `on_write` (required): the tag watched.

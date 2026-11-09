@@ -23,7 +23,8 @@ it never runs in production, owns its sockets, and carries no store and no deskt
   line count and on the day; a restart never appends to a file it already wrote; the family
   shape (regex and date format) that reads the files back, for portal's log families.
 - **A configurable OPC UA server** (`opc`): a tag list (type, access, initial value, a draw
-  within a range on an interval) served on a real endpoint, anonymous or by user and password;
+  within a range on an interval, or a ramp stepping through a range and wrapping, the plant motion
+  supervisão's layout shows: a place along a loop, a level filling) served on a real endpoint, anonymous or by user and password;
   values set and read on the server side (write-only tags included); **reactions**, a write of a
   given value into a tag answered by a timed sequence of values, so a consumer's pulse and
   handshake have a plant to land on; a relay (core's `opc::demo::Relay`) for a link that goes
