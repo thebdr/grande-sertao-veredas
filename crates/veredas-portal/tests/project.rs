@@ -654,6 +654,24 @@ fn the_executable_runs_a_project_serving_and_reporting_until_stdin_closes() {
     };
     let key = new_key();
     assert_ne!(key, new_key(), "fresh every time");
+    // The run refused by name, exit 2, the value nowhere.
+    let refused_run = |project: &Path, env: Option<&str>| {
+        let mut cmd = Command::new(exe);
+        cmd.arg(project).env_remove("VEREDAS_KEY").stdin(Stdio::null());
+        if let Some(k) = env {
+            cmd.env("VEREDAS_KEY", k);
+        }
+        let out = cmd.output().unwrap();
+        let (said, errs) = (String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string());
+        assert_eq!(out.status.code(), Some(2), "{said}{errs}");
+        assert!(!errs.contains("s3cret") && !said.contains("s3cret"), "{said}{errs}");
+        errs
+    };
+    // Before anything is sealed there is no secrets file (an imported project's first run): it
+    // holds no entry, so the source is refused by the entry it names, as with any entry not there.
+    assert!(!dir.path().join("secrets.toml").exists());
+    let errs = refused_run(&file, Some(key.as_str()));
+    assert!(errs.contains("the session did not start: source `plc`: the secret `plc` for the password of `operator` is not in the secrets file"), "{errs}");
     let seal = |project: &Path, entry: &str, env: Option<&str>, stdin: &[u8]| {
         let mut cmd = Command::new(exe);
         cmd.arg("--secret").arg(project).arg(entry).env_remove("VEREDAS_KEY").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -700,6 +718,9 @@ fn the_executable_runs_a_project_serving_and_reporting_until_stdin_closes() {
     let (code, _, errs) = seal(&badfile, "plc", Some(key.as_str()), b"x\n");
     assert_eq!(code, Some(2));
     assert!(errs.contains("the secrets file ") && errs.contains("bad.toml: `format` is `veredas-project`, not `veredas-secrets`"), "{errs}");
+    // The run refuses the same file by its path and the header text.
+    let errs = refused_run(&badfile, Some(key.as_str()));
+    assert!(errs.contains("the session did not start: the secrets file ") && errs.contains("bad.toml: `format` is `veredas-project`, not `veredas-secrets`"), "{errs}");
     let out = Command::new(exe).arg("--secret").arg(&file).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     let out = Command::new(exe).arg("--secret").arg(&file).arg("plc").arg(&file).output().unwrap();
@@ -722,20 +743,8 @@ fn the_executable_runs_a_project_serving_and_reporting_until_stdin_closes() {
     }
     let names: Vec<String> = SecretsFile::load(&dir.path().join("secrets.toml")).unwrap().names().map(str::to_string).collect();
     assert_eq!(names, ["cr", "crlf", "multi", "plc", "spaced"], "nothing sealed by a refused call");
-    // The run refused by name, exit 2, the value nowhere: the variable unset, one holding no key,
-    // a wrong key, and a project naming an entry the file does not hold.
-    let refused_run = |project: &Path, env: Option<&str>| {
-        let mut cmd = Command::new(exe);
-        cmd.arg(project).env_remove("VEREDAS_KEY").stdin(Stdio::null());
-        if let Some(k) = env {
-            cmd.env("VEREDAS_KEY", k);
-        }
-        let out = cmd.output().unwrap();
-        let (said, errs) = (String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string());
-        assert_eq!(out.status.code(), Some(2), "{said}{errs}");
-        assert!(!errs.contains("s3cret") && !said.contains("s3cret"), "{said}{errs}");
-        errs
-    };
+    // The run refused by name: the variable unset, one holding no key, a wrong key, and a project
+    // naming an entry the file does not hold.
     assert!(refused_run(&file, None).contains("the session did not start: the variable `VEREDAS_KEY` is not set: it holds the project's key"));
     assert!(refused_run(&file, Some("not-a-key")).contains("the session did not start: the variable `VEREDAS_KEY` does not hold a key (64 hexadecimal characters)"));
     let other = new_key();
@@ -1065,7 +1074,8 @@ against the project file's folder.
 - `file` (default `"secrets.toml"`): the sealed secrets file beside the project, in the
   `veredas-secrets` format below, committed with the project. The session reads it when it
   starts and opens it in memory; nothing of it is written back, and no value of it reaches a log,
-  a plan, an error or a debug form.
+  a plan, an error or a debug form. A file not there yet (an imported project before its first
+  `--secret`) holds no entry: a source naming one is refused by that entry's name.
 - `key_env` (required): the name of an environment variable holding the key, 64 hexadecimal
   characters (256 bits), never the key. The variable unset, or not holding a key, refuses the
   session by the variable's name; a key that does not open the file refuses it by the file's path

@@ -140,7 +140,8 @@ against the project file's folder.
 - `file` (default `"secrets.toml"`): the sealed secrets file beside the project, in the
   `veredas-secrets` format below, committed with the project. The session reads it when it
   starts and opens it in memory; nothing of it is written back, and no value of it reaches a log,
-  a plan, an error or a debug form.
+  a plan, an error or a debug form. A file not there yet (an imported project before its first
+  `--secret`) holds no entry: a source naming one is refused by that entry's name.
 - `key_env` (required): the name of an environment variable holding the key, 64 hexadecimal
   characters (256 bits), never the key. The variable unset, or not holding a key, refuses the
   session by the variable's name; a key that does not open the file refuses it by the file's path

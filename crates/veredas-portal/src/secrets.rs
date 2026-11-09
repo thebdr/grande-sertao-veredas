@@ -254,10 +254,12 @@ pub struct SecretsSource {
 
 impl SecretsSource {
     /// Read the key from `env`, load the file and open it: the session's first step when the
-    /// project names secrets. No value reaches any error.
+    /// project names secrets. A file not there yet holds no entry (an imported project before its
+    /// first `--secret`), so a source naming one is refused by that entry's name, as Q15 asks;
+    /// any other read failure refuses by the file's path. No value reaches any error.
     pub fn open(&self, env: &dyn Fn(&str) -> Option<String>) -> Result<Secrets, SecretsError> {
         let key = Key256::from_env(&self.key_env, env)?;
-        SecretsFile::load(&self.file)?.open(&key, &self.key_env)
+        SecretsFile::load_or_empty(&self.file)?.open(&key, &self.key_env)
     }
 }
 
