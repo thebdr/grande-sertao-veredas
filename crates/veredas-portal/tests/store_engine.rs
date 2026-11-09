@@ -614,7 +614,7 @@ fn the_sniffer_s_kept_row_depends_on_the_long_row_and_the_window_ends_at_the_def
 // ---- the sixth refute round ------------------------------------------------------------------
 
 /// What decides the sniffer's outcome on a long row: a long row with any row after it collapses
-/// a short file to one column, numeric or text alike, and a long row on line 2 048 with a row
+/// a short file to one column, numeric or text alike, and a long row on line 2 048 with a short row
 /// after it refuses the sniff (the line, not the file's length, decides it; line 2 047 collapses).
 #[test]
 fn the_sniffer_collapses_a_long_row_followed_by_rows_and_refuses_a_file_past_the_window() {
@@ -695,4 +695,39 @@ fn the_sniffer_s_outcome_follows_the_long_row_s_line_not_the_file_s_length() {
     let mut stmt = conn.prepare(&format!("SELECT * FROM {} ORDER BY 1 DESC", scan(&trailing))).unwrap();
     let rows: Vec<(i64, i64, i64, i64)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
     assert_eq!(rows, vec![(9, 9, 9, 9), (8, 8, 8, 8)], "a trailing run of long rows is kept whole");
+}
+
+// ---- the eighth refute round -----------------------------------------------------------------
+
+/// A run of long rows that ends the file and starts on line 2 048 or before is kept whole, even
+/// when the run goes past line 2 048: lines 2 048 to 2 050, and 2 047 to 2 049.
+#[test]
+fn a_trailing_run_of_long_rows_from_line_2048_or_before_is_kept_whole_past_the_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    let build = |name: &str, total_lines: usize, run_from_line: usize| -> std::path::PathBuf {
+        let mut text = String::from("a;b;c\n");
+        for line in 2..=total_lines {
+            if line >= run_from_line {
+                text.push_str(&format!("9;9;9;{line}\n"));
+            } else {
+                text.push_str(&format!("{line};1;2\n"));
+            }
+        }
+        let p = dir.path().join(name);
+        std::fs::write(&p, text).unwrap();
+        p
+    };
+    let scan = |p: &std::path::Path| format!("read_csv_auto('{}')", sql_path(p));
+    let width = |sql: &str| -> i64 { conn.query_row(&format!("SELECT count(*) FROM (DESCRIBE SELECT * FROM {sql})"), [], |r| r.get(0)).unwrap() };
+    let fourth = |sql: &str| -> Vec<i64> {
+        let mut stmt = conn.prepare(&format!("SELECT * FROM {sql} ORDER BY 4")).unwrap();
+        stmt.query_map([], |r| r.get::<_, i64>(3)).unwrap().map(Result::unwrap).collect()
+    };
+    let from_2048 = build("from_2048.csv", 2050, 2048);
+    assert_eq!(width(&scan(&from_2048)), 4);
+    assert_eq!(fourth(&scan(&from_2048)), [2048, 2049, 2050], "a run from line 2048 ending the file is kept whole");
+    let from_2047 = build("from_2047.csv", 2049, 2047);
+    assert_eq!(width(&scan(&from_2047)), 4);
+    assert_eq!(fourth(&scan(&from_2047)), [2047, 2048, 2049], "a run from line 2047 past 2048 is kept whole");
 }
