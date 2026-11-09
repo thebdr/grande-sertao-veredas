@@ -6,9 +6,9 @@
 //! operator types it, compiles into core's [`PollSpec`] before anything connects, every mistake
 //! refused where it was written and by name; core's `opc::worker` then polls, reconnects and
 //! writes through its gated handle (C-022), and core's `opc::map` turns each poll into rows
-//! (C-020). The password never sits in a project file: the file names the environment variable
-//! that holds it (`docs/questions.md` Q15), and the lookup is handed in, so a test needs no
-//! environment.
+//! (C-020). The password never sits in a project file: the file names an entry of the project's
+//! sealed secrets file (C-046, `docs/questions.md` Q15), and the lookup of an entry is handed in,
+//! so a test needs neither the file nor its key.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

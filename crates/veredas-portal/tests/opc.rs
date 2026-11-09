@@ -87,7 +87,7 @@ fn no_secret(_: &str) -> Option<String> {
 }
 
 fn secret(entry: &str) -> Option<String> {
-    (entry == "plc").then(|| "s3cret".to_string())
+    (entry == "plc_pw").then(|| "s3cret".to_string())
 }
 
 /// One poll as mapped: the index clock, the arrival clock, one row per rule kept, which rules, the failures.
@@ -282,7 +282,8 @@ fn writes_are_gated_by_the_switch_and_the_whitelist_and_land_on_the_server_side(
 fn the_identity_comes_from_a_named_secret_and_a_wrong_one_never_connects() {
     let dir = tempfile::tempdir().unwrap();
     let bench = plant(dir.path());
-    let cfg = config(&bench, Some("operator"), Some("plc"));
+    // The entry is named apart from the source id and the user, so a lookup by either fails here.
+    let cfg = config(&bench, Some("operator"), Some("plc_pw"));
     let spec = compile(&cfg, &secret).unwrap();
     assert_eq!(spec.auth, Auth::UserPass { username: "operator".into(), password: "s3cret".into() });
     assert!(!format!("{spec:?}").contains("s3cret"), "the password shows in no debug form");
@@ -300,11 +301,11 @@ fn the_identity_comes_from_a_named_secret_and_a_wrong_one_never_connects() {
     // The entry not in the secrets: refused at compile, naming the entry and never a value.
     assert_eq!(
         compile(&cfg, &no_secret).err(),
-        Some(OpcError::SecretMissing { source_id: "plc".into(), user: "operator".into(), entry: "plc".into() })
+        Some(OpcError::SecretMissing { source_id: "plc".into(), user: "operator".into(), entry: "plc_pw".into() })
     );
     assert_eq!(
         compile(&cfg, &no_secret).unwrap_err().to_string(),
-        "source `plc`: the secret `plc` for the password of `operator` is not in the secrets file"
+        "source `plc`: the secret `plc_pw` for the password of `operator` is not in the secrets file"
     );
     // A wrong password: the worker retries and never connects.
     let wrong = compile(&cfg, &|_| Some("nope".to_string())).unwrap();
