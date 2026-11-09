@@ -5,7 +5,10 @@
 //! version it knows, names its file (`a catalog file`) for the texts, and maps a refusal onto
 //! its own error; the texts are the ones every reference pins.
 
+use std::fmt;
+
 use serde::Deserialize;
+use serde::de::{self, Deserializer, Visitor};
 use thiserror::Error;
 
 /// The stamp every file opens with.
@@ -33,12 +36,75 @@ pub enum HeaderError {
     UnknownVersion { found: u32, format: String, known: u32 },
 }
 
+/// A header key as the file types it: a string, a whole number of any width the parser reads
+/// (past 64 bits included, so the key's type is judged here and never by a value type's
+/// limits), or something else, taken in whole and set aside.
+enum Keyed {
+    Str(String),
+    Int(i128),
+    Other,
+}
+
+impl<'de> Deserialize<'de> for Keyed {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = Keyed;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a header key")
+            }
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Keyed, E> {
+                Ok(Keyed::Str(v.to_string()))
+            }
+            fn visit_string<E: de::Error>(self, v: String) -> Result<Keyed, E> {
+                Ok(Keyed::Str(v))
+            }
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<Keyed, E> {
+                Ok(Keyed::Int(v.into()))
+            }
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<Keyed, E> {
+                Ok(Keyed::Int(v.into()))
+            }
+            fn visit_i128<E: de::Error>(self, v: i128) -> Result<Keyed, E> {
+                Ok(Keyed::Int(v))
+            }
+            fn visit_u128<E: de::Error>(self, v: u128) -> Result<Keyed, E> {
+                Ok(Keyed::Int(i128::try_from(v).unwrap_or(i128::MAX)))
+            }
+            fn visit_bool<E: de::Error>(self, _: bool) -> Result<Keyed, E> {
+                Ok(Keyed::Other)
+            }
+            fn visit_f64<E: de::Error>(self, _: f64) -> Result<Keyed, E> {
+                Ok(Keyed::Other)
+            }
+            fn visit_unit<E: de::Error>(self) -> Result<Keyed, E> {
+                Ok(Keyed::Other)
+            }
+            fn visit_none<E: de::Error>(self) -> Result<Keyed, E> {
+                Ok(Keyed::Other)
+            }
+            fn visit_bytes<E: de::Error>(self, _: &[u8]) -> Result<Keyed, E> {
+                Ok(Keyed::Other)
+            }
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Keyed, A::Error> {
+                while seq.next_element::<de::IgnoredAny>()?.is_some() {}
+                Ok(Keyed::Other)
+            }
+            fn visit_map<A: de::MapAccess<'de>>(self, mut map: A) -> Result<Keyed, A::Error> {
+                while map.next_entry::<de::IgnoredAny, de::IgnoredAny>()?.is_some() {}
+                Ok(Keyed::Other)
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
 /// The two keys as they are typed in the file; every other key is skipped unread, so a body
 /// value the stamp never looks at (an offset past `i64`, say) is the reader's own to judge.
 #[derive(Deserialize)]
 struct Header {
-    format: Option<toml::Value>,
-    version: Option<toml::Value>,
+    format: Option<Keyed>,
+    version: Option<Keyed>,
 }
 
 fn not(noun: &str, reason: impl ToString) -> HeaderError {
@@ -56,7 +122,7 @@ fn header(text: &str, noun: &str) -> Result<Header, HeaderError> {
 fn format_of<'a>(h: &'a Header, noun: &str) -> Result<&'a str, HeaderError> {
     match &h.format {
         None => Err(HeaderError::NoFormat { noun: noun.to_string() }),
-        Some(toml::Value::String(s)) => Ok(s),
+        Some(Keyed::Str(s)) => Ok(s),
         Some(_) => Err(not(noun, "`format` is not a string")),
     }
 }
@@ -65,7 +131,7 @@ fn format_of<'a>(h: &'a Header, noun: &str) -> Result<&'a str, HeaderError> {
 fn version_of(h: &Header, noun: &str) -> Result<u32, HeaderError> {
     let v = match &h.version {
         None => return Err(HeaderError::NoVersion { noun: noun.to_string() }),
-        Some(toml::Value::Integer(v)) => u32::try_from(*v).ok(),
+        Some(Keyed::Int(v)) => u32::try_from(*v).ok(),
         Some(_) => None,
     };
     v.ok_or_else(|| not(noun, "`version` is not a whole number from 0 to 4294967295"))
@@ -118,10 +184,14 @@ mod tests {
         assert_eq!(refused("[meta]\nformat = \"veredas-thing\"\nversion = 1\n"), "no `format`: a thing file states `format` and `version`");
         // A stamp of the wrong type is no stamp, named by its key with the reader's noun; the
         // format is decided whole before the version is looked at, so another format is refused
-        // for its format whatever its version says.
+        // for its format whatever its version says, an integer past 64 bits included.
         assert_eq!(refused("format = \"veredas-other\"\nversion = \"1\"\n"), "`format` is `veredas-other`, not `veredas-thing`");
+        assert_eq!(refused("format = \"veredas-other\"\nversion = 18446744073709551615\n"), "`format` is `veredas-other`, not `veredas-thing`");
+        assert_eq!(refused("format = \"veredas-other\"\nversion = 18446744073709551616\n"), "`format` is `veredas-other`, not `veredas-thing`");
         assert_eq!(refused("format = 1\nversion = 1\n"), "not a thing file: `format` is not a string");
-        for v in ["\"1\"", "1.5", "-1", "4294967296", "true", "[1]"] {
+        assert_eq!(refused("format = 18446744073709551616\nversion = 1\n"), "not a thing file: `format` is not a string");
+        let wide = ["\"1\"", "1.5", "-1", "4294967296", "18446744073709551615", "18446744073709551616", "-9223372036854775809", "true", "[1]", "{ v = 1 }", "1979-05-27", "nan"];
+        for v in wide {
             assert_eq!(
                 refused(&format!("format = \"veredas-thing\"\nversion = {v}\n")),
                 "not a thing file: `version` is not a whole number from 0 to 4294967295",
@@ -129,6 +199,13 @@ mod tests {
             );
         }
         assert_eq!(check("format = \"veredas-thing\"\nversion = 4294967295\n", "a thing file", "veredas-thing", 4294967295), Ok(()));
+        // The parser reads an integer up to 128 bits and hands it over typed; past that it is
+        // the parser's own refusal, with its reason, before any key, as any text it cannot read.
+        let widest = "340282366920938463463374607431768211455";
+        assert_eq!(refused(&format!("format = \"veredas-other\"\nversion = {widest}\n")), "`format` is `veredas-other`, not `veredas-thing`");
+        assert_eq!(refused(&format!("format = \"veredas-thing\"\nversion = {widest}\n")), "not a thing file: `version` is not a whole number from 0 to 4294967295");
+        let e = refused("format = \"veredas-other\"\nversion = 340282366920938463463374607431768211456\n");
+        assert!(e.starts_with("not a thing file: ") && e.contains("overflow") && !e.contains("`format`"), "{e}");
         // A good header before a body that is not TOML: the parser's reason, before any key; a
         // body value the stamp never looks at is not judged here (an integer past `i64` is the
         // reader's own to refuse or to hold).
@@ -145,5 +222,6 @@ mod tests {
         assert_eq!(stamp("", "a file").unwrap_err().to_string(), "no `format`: a file states `format` and `version`");
         assert_eq!(stamp("format = 1\nversion = 1\n", "a file").unwrap_err().to_string(), "not a file: `format` is not a string");
         assert_eq!(stamp("format = \"x\"\nversion = -1\n", "a file").unwrap_err().to_string(), "not a file: `version` is not a whole number from 0 to 4294967295");
+        assert_eq!(stamp("format = \"x\"\nversion = 18446744073709551616\n", "a file").unwrap_err().to_string(), "not a file: `version` is not a whole number from 0 to 4294967295");
     }
 }
