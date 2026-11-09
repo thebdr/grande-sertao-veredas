@@ -204,3 +204,8 @@ Recorded as the port meets them.
   left on `run_on_own_runtime` must not hold its thread.
 - **A read callback blocks a server thread.** The demo plant's slow tag holds one thread for
   `SLOW_READ`, so the tests that read it run the plant on a multi-threaded runtime.
+- **A header reader that materializes the body judges it.** The first fix of the header reader's
+  order (C-045, round 1) parsed the whole text into a `toml::Table`: every body value became an
+  `i64`, and the catalog's reference carries an offset of 2^64-1 that the stamp then refused for
+  a body it never reads. Deserialize a struct of the two keys as `toml::Value`s and let serde skip
+  the rest unread; judge each key's type yourself, the format whole before the version.

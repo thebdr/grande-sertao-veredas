@@ -18,7 +18,9 @@ pub struct Stamp {
 /// Why a header was refused. `noun` is what the reader calls its file, as in `a bench file`.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum HeaderError {
-    /// The text is not TOML at all, with the parser's reason.
+    /// The text is not TOML at all, with the parser's reason; or its stamp is of the wrong type
+    /// (a `format` that is no string, a `version` that is no whole number), named by its key: a
+    /// stamp of the wrong type is no stamp.
     #[error("not {noun}: {reason}")]
     NotToml { noun: String, reason: String },
     #[error("no `format`: {noun} states `format` and `version`")]
@@ -31,38 +33,66 @@ pub enum HeaderError {
     UnknownVersion { found: u32, format: String, known: u32 },
 }
 
+/// The two keys as they are typed in the file; every other key is skipped unread, so a body
+/// value the stamp never looks at (an offset past `i64`, say) is the reader's own to judge.
 #[derive(Deserialize)]
 struct Header {
-    format: Option<String>,
-    version: Option<u32>,
+    format: Option<toml::Value>,
+    version: Option<toml::Value>,
 }
 
+fn not(noun: &str, reason: impl ToString) -> HeaderError {
+    HeaderError::NotToml { noun: noun.to_string(), reason: reason.to_string() }
+}
+
+/// The text parsed for its syntax, the body included and skipped (a body that is not TOML is
+/// refused here, with the parser's reason, before any key is read); nothing of it interpreted.
 fn header(text: &str, noun: &str) -> Result<Header, HeaderError> {
-    toml::from_str(text).map_err(|e| HeaderError::NotToml { noun: noun.to_string(), reason: e.to_string() })
+    toml::from_str(text).map_err(|e| not(noun, e))
 }
 
-/// The stamp of a file's text, whatever its format: both keys present, nothing else read. For
-/// a reader that knows more than one version and decides what to do with each.
+/// The `format` key, decided whole before the version is looked at: absent, a string, or of
+/// the wrong type.
+fn format_of<'a>(h: &'a Header, noun: &str) -> Result<&'a str, HeaderError> {
+    match &h.format {
+        None => Err(HeaderError::NoFormat { noun: noun.to_string() }),
+        Some(toml::Value::String(s)) => Ok(s),
+        Some(_) => Err(not(noun, "`format` is not a string")),
+    }
+}
+
+/// The `version` key: absent, a whole number a `u32` holds, or of the wrong type.
+fn version_of(h: &Header, noun: &str) -> Result<u32, HeaderError> {
+    let v = match &h.version {
+        None => return Err(HeaderError::NoVersion { noun: noun.to_string() }),
+        Some(toml::Value::Integer(v)) => u32::try_from(*v).ok(),
+        Some(_) => None,
+    };
+    v.ok_or_else(|| not(noun, "`version` is not a whole number from 0 to 4294967295"))
+}
+
+/// The stamp of a file's text, whatever its format: both keys present and of their type, the
+/// format first, nothing else read. For a reader that knows more than one version and decides
+/// what to do with each.
 pub fn stamp(text: &str, noun: &str) -> Result<Stamp, HeaderError> {
     let h = header(text, noun)?;
-    let format = h.format.ok_or_else(|| HeaderError::NoFormat { noun: noun.to_string() })?;
-    let version = h.version.ok_or_else(|| HeaderError::NoVersion { noun: noun.to_string() })?;
+    let format = format_of(&h, noun)?.to_string();
+    let version = version_of(&h, noun)?;
     Ok(Stamp { format, version })
 }
 
 /// Check a file's header against the format and the one version a reader knows, format first:
-/// no `format`, another format, no `version`, another version, each refused by name.
+/// no `format`, another format, no `version`, another version, each refused by name; the format
+/// is decided whole before the version is looked at.
 pub fn check(text: &str, noun: &str, format: &str, version: u32) -> Result<(), HeaderError> {
     let h = header(text, noun)?;
-    match h.format.as_deref() {
-        None => return Err(HeaderError::NoFormat { noun: noun.to_string() }),
-        Some(f) if f == format => {}
-        Some(other) => return Err(HeaderError::WrongFormat { found: other.to_string(), expected: format.to_string() }),
+    let found = format_of(&h, noun)?;
+    if found != format {
+        return Err(HeaderError::WrongFormat { found: found.to_string(), expected: format.to_string() });
     }
-    match h.version {
-        None => Err(HeaderError::NoVersion { noun: noun.to_string() }),
-        Some(v) if v == version => Ok(()),
-        Some(v) => Err(HeaderError::UnknownVersion { found: v, format: format.to_string(), known: version }),
+    match version_of(&h, noun)? {
+        v if v == version => Ok(()),
+        v => Err(HeaderError::UnknownVersion { found: v, format: format.to_string(), known: version }),
     }
 }
 
@@ -78,25 +108,42 @@ mod tests {
         let e = check("not = [toml", "a thing file", "veredas-thing", 1).unwrap_err();
         assert!(matches!(&e, HeaderError::NotToml { noun, .. } if noun == "a thing file"), "{e}");
         assert!(e.to_string().starts_with("not a thing file: "), "{e}");
-        assert_eq!(
-            check("version = 1\n", "a thing file", "veredas-thing", 1).unwrap_err().to_string(),
-            "no `format`: a thing file states `format` and `version`"
-        );
-        assert_eq!(
-            check("format = \"veredas-other\"\n", "a thing file", "veredas-thing", 1).unwrap_err().to_string(),
-            "`format` is `veredas-other`, not `veredas-thing`"
-        );
-        assert_eq!(
-            check("format = \"veredas-thing\"\n", "a thing file", "veredas-thing", 1).unwrap_err().to_string(),
-            "no `version`: a thing file states `format` and `version`"
-        );
-        assert_eq!(
-            check("format = \"veredas-thing\"\nversion = 2\n", "a thing file", "veredas-thing", 1).unwrap_err().to_string(),
-            "version 2 of `veredas-thing` is not known here (this reader knows 1)"
-        );
+        let refused = |text: &str| check(text, "a thing file", "veredas-thing", 1).unwrap_err().to_string();
+        assert_eq!(refused("version = 1\n"), "no `format`: a thing file states `format` and `version`");
+        assert_eq!(refused("format = \"veredas-other\"\n"), "`format` is `veredas-other`, not `veredas-thing`");
+        assert_eq!(refused("format = \"veredas-thing\"\n"), "no `version`: a thing file states `format` and `version`");
+        assert_eq!(refused("format = \"veredas-thing\"\nversion = 2\n"), "version 2 of `veredas-thing` is not known here (this reader knows 1)");
+        // Both keys missing, or neither at the top: the format first.
+        assert_eq!(refused("body = 1\n"), "no `format`: a thing file states `format` and `version`");
+        assert_eq!(refused("[meta]\nformat = \"veredas-thing\"\nversion = 1\n"), "no `format`: a thing file states `format` and `version`");
+        // A stamp of the wrong type is no stamp, named by its key with the reader's noun; the
+        // format is decided whole before the version is looked at, so another format is refused
+        // for its format whatever its version says.
+        assert_eq!(refused("format = \"veredas-other\"\nversion = \"1\"\n"), "`format` is `veredas-other`, not `veredas-thing`");
+        assert_eq!(refused("format = 1\nversion = 1\n"), "not a thing file: `format` is not a string");
+        for v in ["\"1\"", "1.5", "-1", "4294967296", "true", "[1]"] {
+            assert_eq!(
+                refused(&format!("format = \"veredas-thing\"\nversion = {v}\n")),
+                "not a thing file: `version` is not a whole number from 0 to 4294967295",
+                "version = {v}"
+            );
+        }
+        assert_eq!(check("format = \"veredas-thing\"\nversion = 4294967295\n", "a thing file", "veredas-thing", 4294967295), Ok(()));
+        // A good header before a body that is not TOML: the parser's reason, before any key; a
+        // body value the stamp never looks at is not judged here (an integer past `i64` is the
+        // reader's own to refuse or to hold).
+        let e = refused("format = \"veredas-thing\"\nversion = 1\nbody = [\n");
+        assert!(e.starts_with("not a thing file: ") && !e.contains("`format`") && !e.contains("`version`"), "{e}");
+        assert_eq!(check("format = \"veredas-thing\"\nversion = 1\nat = 18446744073709551615\n", "a thing file", "veredas-thing", 1), Ok(()));
         // The stamp alone reads any format, so a migrating reader can decide; both keys are
-        // still required.
+        // still required, the format first, a wrong type refused the same way, a version of 0
+        // read as it stands for the reader to decide.
         assert_eq!(stamp("format = \"veredas-other\"\nversion = 7\n", "a file").unwrap().version, 7);
+        assert_eq!(stamp("format = \"veredas-other\"\nversion = 0\n", "a file").unwrap().version, 0);
         assert_eq!(stamp("format = \"veredas-other\"\n", "a file").unwrap_err().to_string(), "no `version`: a file states `format` and `version`");
+        assert_eq!(stamp("version = 1\n", "a file").unwrap_err().to_string(), "no `format`: a file states `format` and `version`");
+        assert_eq!(stamp("", "a file").unwrap_err().to_string(), "no `format`: a file states `format` and `version`");
+        assert_eq!(stamp("format = 1\nversion = 1\n", "a file").unwrap_err().to_string(), "not a file: `format` is not a string");
+        assert_eq!(stamp("format = \"x\"\nversion = -1\n", "a file").unwrap_err().to_string(), "not a file: `version` is not a whole number from 0 to 4294967295");
     }
 }
