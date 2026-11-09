@@ -548,10 +548,13 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     let spec = load(&format!("{}[[opc]]\nname = \"s\"\nport = {taken}\n", emitter("")), &dir).unwrap();
     let err = start_err(spec);
     assert!(err.starts_with(&format!("opc `s`: bind 127.0.0.1:{taken}: ")), "{err}");
-    assert!(dir.join("e.log").exists(), "the emitter had started and written its first line before the server failed");
-    let written = std::fs::read_to_string(dir.join("e.log")).unwrap().lines().count();
-    std::thread::sleep(Duration::from_millis(60));
-    assert_eq!(std::fs::read_to_string(dir.join("e.log")).unwrap().lines().count(), written, "and was stopped before the error came back");
+    // The emitter was stopped and joined before the error came back: whatever its file holds then
+    // (its first line, or nothing yet when the bind failed before its thread's first tick, as a
+    // loaded runner showed) is all it ever holds; a running emitter adds a line every 100 ms.
+    let lines = |p: &Path| std::fs::read_to_string(p).map(|t| t.lines().count()).unwrap_or(0);
+    let written = lines(&dir.join("e.log"));
+    std::thread::sleep(Duration::from_millis(250));
+    assert_eq!(lines(&dir.join("e.log")), written, "the emitter was stopped and joined before the error came back");
     // Joined, not merely told to stop: a server started before the failing one has released
     // its port the moment the error is back.
     let q = free_port();

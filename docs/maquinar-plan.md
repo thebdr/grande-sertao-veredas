@@ -192,6 +192,12 @@ Recorded as the port meets them.
   pace: at least 70, where a 31 ms tick (64) cannot reach, at most 102, where two draws a tick
   would; the 100 ms tag's 19 to 21 stays exact, a draw being due from its due time, not from
   the tick that serves it.
+- **A thread spawned is not a line written.** The emitter's loop reads its stop flag before its
+  first line, so a part that fails right after it (a server on a taken port) can stop and join
+  it before its thread's first tick, and its file is not there: CI on Linux did exactly that
+  (the run for 4dcdbf8). A test of "stopped and joined before the error came back" asserts the
+  file's state unchanged over two and a half intervals, a first line or none, never that the
+  first line is on disk the moment `Bench::start` returns.
 - **Dep-info is one compilation's view.** The content check reads what rustc read, so it sees
   only what the `cfg`s of that run compiled in: it builds debug and checks release on the
   platform of the run (Windows here, Linux in CI); another OS, `cfg(doc)` and `cfg(doctest)`
