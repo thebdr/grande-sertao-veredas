@@ -299,3 +299,42 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     assert!((now_d["to"].as_i64().unwrap() - store_now()).abs() < 60_000);
     host.stop();
 }
+
+// ---- the computations alone, at their edges (src/panel.rs) ----
+
+use veredas_supervisao::binding::Aggregate;
+use veredas_supervisao::panel::{buckets, distribution, median, sigma};
+
+#[test]
+fn buckets_align_on_the_clock_and_mark_the_running_one() {
+    let b = 300_000;
+    // A window from 07:02:00 to 07:13:00 (in ms past an hour) holds the buckets 07:00, 07:05, 07:10.
+    let (from, to) = (2 * 60_000, 13 * 60_000);
+    let pts = vec![(60_000, 1.0), (200_000, 3.0), (400_000, 5.0), (700_000, 7.0), (780_000, 9.0)];
+    let out = buckets(&pts, from, to, b, Aggregate::Mean);
+    assert_eq!(out.len(), 3);
+    assert_eq!(out[0], json!({ "start": 0, "end": 300_000, "value": 2.0, "n": 2, "running": false }));
+    assert_eq!(out[1], json!({ "start": 300_000, "end": 600_000, "value": 5.0, "n": 1, "running": false }));
+    assert_eq!(out[2], json!({ "start": 600_000, "end": 900_000, "value": 8.0, "n": 2, "running": true }));
+    assert_eq!(buckets(&[], from, to, b, Aggregate::Count)[0]["value"], json!(0.0));
+    assert_eq!(buckets(&[], from, to, b, Aggregate::Sum)[0]["value"], Value::Null);
+    assert_eq!(buckets(&pts, from, to, b, Aggregate::Last)[2]["value"], json!(9.0));
+    assert_eq!(buckets(&pts, from, to, b, Aggregate::Max)[0]["value"], json!(3.0));
+    assert_eq!(buckets(&pts, from, to, b, Aggregate::Min)[2]["value"], json!(7.0));
+    assert_eq!(buckets(&pts, from, to, b, Aggregate::Sum)[2]["value"], json!(16.0));
+    // A bucket ending exactly at `to` is not running; the next one starts there and is.
+    let edge = buckets(&pts, from, 600_000, b, Aggregate::Count);
+    assert_eq!(edge.len(), 3);
+    assert_eq!((edge[1]["running"].clone(), edge[2]["running"].clone(), edge[2]["start"].clone()), (json!(false), json!(true), json!(600_000)));
+}
+
+#[test]
+fn medians_sigmas_and_distributions_are_exact() {
+    assert_eq!(median(&[1.0, 2.0, 9.0]), Some(2.0));
+    assert_eq!(median(&[1.0, 2.0, 3.0, 9.0]), Some(2.5));
+    assert_eq!(median(&[]), None);
+    assert_eq!(sigma(&[2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]), Some(2.0));
+    let (bins, below, above) = distribution(&[-1.0, 0.0, 0.5, 5.0, 9.99, 10.0, 10.5], 5.0, 5.0, 10);
+    assert_eq!((below, above), (1, 1));
+    assert_eq!(bins, vec![2, 0, 0, 0, 0, 1, 0, 0, 0, 2]);
+}

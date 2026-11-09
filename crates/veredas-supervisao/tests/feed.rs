@@ -240,3 +240,35 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
     assert!(states.iter().all(|x| x == "retrying" || x == "waiting"), "{states:?}");
     host.stop();
 }
+
+// ---- the vocabulary alone: numbers as shown, rules over their kind of value (src/state.rs) ----
+
+use veredas_supervisao::state::{Comparand, Compare, format_number};
+
+#[test]
+fn numbers_read_as_they_are_shown() {
+    assert_eq!(format_number(35.0, None), "35");
+    assert_eq!(format_number(2.4, None), "2.4");
+    assert_eq!(format_number(1.23456, None), "1.235");
+    assert_eq!(format_number(1.5, Some(0)), "2");
+    assert_eq!(format_number(97.94, Some(1)), "97.9");
+    assert_eq!(format_number(-0.0004, None), "0");
+    assert_eq!(format_number(-0.04, Some(1)), "0.0");
+    assert_eq!(format_number(-2.5, None), "-2.5");
+    assert_eq!(format_number(8640.0, None), "8640");
+}
+
+#[test]
+fn a_rule_holds_only_over_its_kind_of_value() {
+    assert!(Compare::Equals(Comparand::Num(2.0)).holds(&Reading::Num(2.0)));
+    assert!(!Compare::Equals(Comparand::Num(2.0)).holds(&Reading::Text("2".into())));
+    assert!(Compare::Equals(Comparand::Text("run".into())).holds(&Reading::Text("run".into())));
+    assert!(!Compare::Equals(Comparand::Text("run".into())).holds(&Reading::Text("Run".into())));
+    assert!(Compare::AtLeast(100.0).holds(&Reading::Num(100.0)));
+    assert!(!Compare::Above(100.0).holds(&Reading::Num(100.0)));
+    assert!(Compare::Below(98.0).holds(&Reading::Num(97.9)));
+    assert!(Compare::AtMost(0.0).holds(&Reading::Num(0.0)));
+    assert!(!Compare::Below(98.0).holds(&Reading::Text("97".into())));
+    assert_eq!(Compare::Below(98.0).describe("%"), "below 98 %");
+    assert_eq!(Compare::Above(2.0).describe(""), "above 2");
+}

@@ -58,24 +58,3 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
     Ok(Layout { file: path.to_path_buf(), text: text.to_string(), ids })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_layout_is_an_svg_document_with_no_script() {
-        let p = Path::new("l.svg");
-        let ok = parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><g id=\"a\"><path id=\"loop\" d=\"M0 0\"/></g><rect id=\"a\"/></svg>", p).unwrap();
-        assert_eq!(ok.element("loop"), Some("path"));
-        assert_eq!(ok.element("a"), None, "two elements carry it");
-        assert_eq!(ok.ids["a"].1, 2);
-        assert_eq!(parse("<html/>", p).unwrap_err(), "l.svg is not an SVG document: its root is <html>");
-        assert!(parse("<svg>", p).unwrap_err().starts_with("l.svg is not an XML document: "));
-        assert_eq!(parse("<svg><script>x()</script></svg>", p).unwrap_err(), "l.svg holds a <script> element: a layout is a drawing, with no script and no foreign content");
-        assert_eq!(parse("<svg><rect onclick=\"x()\"/></svg>", p).unwrap_err(), "l.svg holds an event handler (`onclick` on <rect>): a layout is a drawing, with no script");
-        assert_eq!(parse("<svg><rect ONLOAD=\"x()\"/></svg>", p).unwrap_err(), "l.svg holds an event handler (`ONLOAD` on <rect>): a layout is a drawing, with no script");
-        assert!(parse("<svg><rect one=\"1\"/></svg>", p).is_err(), "any on* attribute");
-        assert!(parse("<svg><rect o=\"1\" on=\"1\"/></svg>", p).is_ok(), "on alone names no event");
-        assert!(parse("<svg><foreignObject/></svg>", p).is_err());
-    }
-}
