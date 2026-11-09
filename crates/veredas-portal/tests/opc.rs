@@ -287,6 +287,9 @@ fn the_identity_comes_from_a_named_secret_and_a_wrong_one_never_connects() {
     let spec = compile(&cfg, &secret).unwrap();
     assert_eq!(spec.auth, Auth::UserPass { username: "operator".into(), password: "s3cret".into() });
     assert!(!format!("{spec:?}").contains("s3cret"), "the password shows in no debug form");
+    // The value is handed through whole: names are trimmed, a password is not.
+    let padded = compile(&cfg, &|e: &str| (e == "plc_pw").then(|| " s3cret\r".to_string())).unwrap();
+    assert_eq!(padded.auth, Auth::UserPass { username: "operator".into(), password: " s3cret\r".into() });
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = spawn(spec.clone(), tx, WriteGate::new(false)).unwrap();
     let mut seen = Seen { states: Vec::new(), polls: Vec::new() };
