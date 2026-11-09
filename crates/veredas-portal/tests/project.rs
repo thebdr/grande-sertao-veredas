@@ -368,7 +368,8 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
             { "name": "csv2", "csv_path": "C:\\ref\\second.csv", "enabled": true },
             { "name": "both1", "sql": "SELECT * FROM v_csv, oldrule", "enabled": true },
             { "name": "both2", "sql": "SELECT * FROM oldrule, v_csv", "enabled": true },
-            { "name": "col_stub", "sql": "SELECT missing_col FROM v_csv", "enabled": true } ]"#,
+            { "name": "col_stub", "sql": "SELECT missing_col FROM v_csv", "enabled": true },
+            { "name": "rd_temp", "sql": "SELECT * FROM temp.v_csv", "enabled": true } ]"#,
     );
     // The absolute start as Veredas 1's screens wrote it, with a `T`: carried in this file's spelling.
     w("session.json", r#"{ "start": { "kind": "Absolute", "last_hours": 4, "absolute": "2026-11-08T06:00:00" }, "store": { "mode": "Disk", "disk_dir": "", "memory_limit_mb": 2048, "auto_export_mins": 0, "export_dir": "" } }"#);
@@ -427,11 +428,12 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
         "table `both1`: the engine refuses it over the tables this file creates (Catalog Error: Table with name oldrule does not exist!): not carried",
         "table `both2`: the engine refuses it over the tables this file creates (Catalog Error: Table with name oldrule does not exist!): not carried",
         "table `col_stub`: it reads `v_csv`, a view not judged here: carried as written; check it with the file",
+        "table `rd_temp`: the engine refuses it over the tables this file creates (Catalog Error: Table with name v_csv does not exist!): not carried",
         "the rules' skew-monitor threshold",
     ] {
         assert!(notes.contains(expected), "no note `{expected}` in:\n{notes}");
     }
-    assert_eq!(migrated.notes.len(), 26, "{notes}");
+    assert_eq!(migrated.notes.len(), 27, "{notes}");
     // The engine, not a reading of the SQL, decides: the three CSV-linked views (their files on
     // the plant's machine, not here) are carried as written and named, and so are the views that
     // read one, listed after it or before it, or reading a column only the file can show; a view

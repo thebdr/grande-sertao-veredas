@@ -1297,14 +1297,20 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
             break;
         }
         // The files not here first, so a reader refused for naming one of them this round is
-        // deferred to the next, where it stands in; then the rest, in the file's order.
+        // deferred to the next, where it stands in; then the rest, in the file's order. Only a
+        // view set aside this very round defers a reader: one whose error names a set-aside view
+        // that already stands in (through a schema the stand-in is not in, say) would fail on
+        // the plant the same way, and falls with the reason; so every round decides at least one
+        // view, and the judging ends.
+        let mut set_aside_now: HashSet<String> = HashSet::new();
         for def in &cfg.tables {
             let name = def.name.trim().to_string();
             if let Some(reason) = refused.get(&name)
                 && reason.starts_with("IO Error")
             {
                 notes.push(format!("table `{name}`: the engine cannot read its file here ({reason}): carried as written for the plant's machine; check the path"));
-                unjudged.insert(name);
+                unjudged.insert(name.clone());
+                set_aside_now.insert(name);
             }
         }
         for def in &cfg.tables {
@@ -1314,7 +1320,7 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
                 continue;
             }
             match catalog_missing(reason) {
-                Some(m) if unjudged.iter().any(|u| u.eq_ignore_ascii_case(&m)) => {} // deferred: judged against the stand-in next
+                Some(m) if set_aside_now.iter().any(|u| u.eq_ignore_ascii_case(&m)) => {} // deferred: judged against the stand-in next
                 Some(_) => {
                     notes.push(format!("table `{name}`: the engine refuses it over the tables this file creates ({reason}): not carried (write it back once what it reads is)"));
                     dropped.insert(name);
