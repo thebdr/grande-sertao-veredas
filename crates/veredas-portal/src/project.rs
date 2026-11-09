@@ -493,12 +493,54 @@ fn names_an_offset(text: &str) -> bool {
         Some(head) => format!("{head}+00:00"),
         None => s.to_string(),
     };
-    let formats = [
-        "%Y-%m-%dT%H:%M:%S%.f%:z", "%Y-%m-%d %H:%M:%S%.f%:z", "%Y-%m-%dT%H:%M:%S%:z", "%Y-%m-%d %H:%M:%S%:z",
-        "%Y-%m-%dT%H:%M%:z", "%Y-%m-%d %H:%M%:z", "%Y-%m-%dT%H:%M:%S%.f%z", "%Y-%m-%d %H:%M:%S%.f%z",
-        "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S%z", "%Y-%m-%dT%H:%M%z", "%Y-%m-%d %H:%M%z",
-    ];
+    // `%#z` reads an offset with or without its minutes, with or without the colon.
+    let formats = ["%Y-%m-%dT%H:%M:%S%.f%#z", "%Y-%m-%d %H:%M:%S%.f%#z", "%Y-%m-%dT%H:%M:%S%#z", "%Y-%m-%d %H:%M:%S%#z", "%Y-%m-%dT%H:%M%#z", "%Y-%m-%d %H:%M%#z"];
     formats.iter().any(|f| chrono::DateTime::parse_from_str(&s, f).is_ok())
+}
+
+/// The tables a query reads: every name after FROM or JOIN that is not a call (no `(` follows),
+/// a subquery, a path or a literal, lowered, the last part of a dotted name; a name the query
+/// makes for itself (`WITH x AS (...)`) is left out. Quotes around a name fall away.
+#[cfg(feature = "store")]
+fn tables_read(sql: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut word = String::new();
+    for c in sql.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            word.push(c.to_ascii_lowercase());
+        } else {
+            if !word.is_empty() {
+                tokens.push(std::mem::take(&mut word));
+            }
+            if !c.is_whitespace() {
+                tokens.push(c.to_string());
+            }
+        }
+    }
+    if !word.is_empty() {
+        tokens.push(word);
+    }
+    let is_word = |t: &str| t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let own: HashSet<&str> = tokens.windows(3).filter(|w| is_word(&w[0]) && w[1] == "as" && w[2] == "(").map(|w| w[0].as_str()).collect();
+    let mut out: Vec<String> = Vec::new();
+    for i in 0..tokens.len() {
+        if !matches!(tokens[i].as_str(), "from" | "join") {
+            continue;
+        }
+        let Some(mut next) = tokens.get(i + 1).map(String::as_str) else { continue };
+        let mut after = i + 2;
+        while tokens.get(after).map(String::as_str) == Some(".")
+            && let Some(part) = tokens.get(after + 1)
+        {
+            next = part;
+            after += 2;
+        }
+        let is_call = tokens.get(after).map(String::as_str) == Some("(");
+        if is_word(next) && !is_call && !own.contains(next) && !out.iter().any(|t| t == next) {
+            out.push(next.to_string());
+        }
+    }
+    out
 }
 
 /// Read and check a project file whose referenced files live under `base` (the file's folder).
@@ -1158,24 +1200,26 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
             notes.push(format!("table `{}` had neither SQL nor a CSV: not carried", t.name));
         }
     }
-    // A view over a table not carried would make the file refuse itself where the store opens
-    // (a view's SQL is the store's to resolve, C-041), so such a view is left out too, named by
-    // the word of its SQL that names the table, and a view over one of those follows; a word is
-    // taken for a table, so a column spelled like one costs a view, which the note says.
-    let carried_rules: HashSet<String> = rule.iter().map(|r| r.name.to_ascii_lowercase()).collect();
-    let carried_opc: HashSet<String> = opc.iter().flat_map(|s| s.rules.iter().map(|r| r.name.to_ascii_lowercase())).collect();
-    let mut dropped: HashSet<String> = rules.extracts.iter().map(|e| e.name.to_ascii_lowercase()).filter(|n| !carried_rules.contains(n)).collect();
-    dropped.extend(rules.opc.iter().map(|r| r.name.to_ascii_lowercase()).filter(|n| !carried_opc.contains(n)));
-    dropped.extend(tables.iter().filter(|t| !t.enabled).map(|t| t.name.to_ascii_lowercase()));
+    // A view over a table nothing in this file creates would make the file refuse itself where
+    // the store opens (a view's SQL is the store's to resolve, C-041), so such a view is left out
+    // and named, and a view over one of those follows. What the file creates: the carried capture
+    // rules' and OPC rules' tables, the carried views, the store's own samples table; a table is
+    // what the SQL reads after FROM or JOIN, never a call, a path or a literal.
+    let mut created: HashSet<String> = rule.iter().map(|r| r.name.to_ascii_lowercase()).collect();
+    created.extend(opc.iter().flat_map(|s| s.rules.iter().map(|r| r.name.to_ascii_lowercase())));
+    created.insert(crate::store::SAMPLES_TABLE.to_ascii_lowercase());
+    created.extend(pending.iter().map(|v| v.name.to_ascii_lowercase()));
     loop {
         let before = pending.len();
         let mut kept = Vec::with_capacity(before);
         for v in pending {
-            let words: Vec<String> = v.sql.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).filter(|w| !w.is_empty()).map(str::to_ascii_lowercase).collect();
-            match words.iter().find(|w| dropped.contains(*w)) {
-                Some(w) => {
-                    notes.push(format!("table `{}`: its SQL names `{w}`, a table not carried: not carried (write it back once the table is)", v.name));
-                    dropped.insert(v.name.to_ascii_lowercase());
+            match tables_read(&v.sql).into_iter().find(|t| !created.contains(t)) {
+                Some(t) => {
+                    notes.push(format!(
+                        "table `{}`: its SQL reads `{t}` after FROM or JOIN, a table nothing in this file creates: not carried (write it back once the table is)",
+                        v.name
+                    ));
+                    created.remove(&v.name.to_ascii_lowercase());
                 }
                 None => kept.push(v),
             }

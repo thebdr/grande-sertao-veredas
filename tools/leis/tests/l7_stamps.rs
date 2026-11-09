@@ -64,7 +64,7 @@ fn l7_the_reader_collects_toml_files_but_manifests_and_the_blocks_of_a_reference
             // list mark followed by a tab, and a block the text ends before closing.
             (
                 "docs/held-schema.md",
-                "# Held\n\n> ```toml\n> format = \"veredas-held\"\n> version = 1\n> ```\n\n- ```toml\n  format = \"veredas-held\"\n  version = 2\n  ```\n\n> > ```toml\n> > format = \"veredas-held\"\n> > version = 3\n> > ```\n\n> ```toml\n> format = \"veredas-held\"\n> version = 4\n> text = \"\"\"\n> > ```\n> \"\"\"\n> ```\n\n> ```toml\n> format = \"veredas-held\"\n> version = 5\nplain\n> ```\n\n- > ```toml\n  > format = \"veredas-held\"\n  > version = 6\n  > ```\n\n- - ```toml\n    format = \"veredas-held\"\n    version = 7\n    ```\n\n-\t```toml\n\tformat = \"veredas-held\"\n\tversion = 8\n\t```\n\n```toml\nformat = \"veredas-held\"\nversion = 9\n",
+                "# Held\n\n> ```toml\n> format = \"veredas-held\"\n> version = 1\n> ```\n\n- ```toml\n  format = \"veredas-held\"\n  version = 2\n  ```\n\n> > ```toml\n> > format = \"veredas-held\"\n> > version = 3\n> > ```\n\n> ```toml\n> format = \"veredas-held\"\n> version = 4\n> text = \"\"\"\n> > ```\n> \"\"\"\n> ```\n\n> ```toml\n> format = \"veredas-held\"\n> version = 5\nplain\n> ```\n\n- > ```toml\n  > format = \"veredas-held\"\n  > version = 6\n  > ```\n\n- - ```toml\n    format = \"veredas-held\"\n    version = 7\n    ```\n\n-\t```toml\n\tformat = \"veredas-held\"\n\tversion = 8\n\t```\n\n1. ```toml\n   format = \"veredas-held\"\n   version = 9\n   ```\n\n2) ```toml\n   format = \"veredas-held\"\n   version = 10\n   ```\n\n```toml\nformat = \"veredas-held\"\nversion = 11\n",
             ),
             ("docs/other-plan.md", "# plan\n\n```rust\nfn x() {}\n```\n"),
             ("docs/upper-schema.MD", "# Upper\n\n```toml\nformat = \"veredas-upper\"\nversion = 1\n```\n"),
@@ -92,6 +92,8 @@ fn l7_the_reader_collects_toml_files_but_manifests_and_the_blocks_of_a_reference
             "docs/held-schema.md block 7",
             "docs/held-schema.md block 8",
             "docs/held-schema.md block 9",
+            "docs/held-schema.md block 10",
+            "docs/held-schema.md block 11",
             "docs/thing-schema.md block 1",
             "docs/thing-schema.md block 2",
             "docs/upper-schema.MD block 1",
@@ -106,6 +108,8 @@ fn l7_the_reader_collects_toml_files_but_manifests_and_the_blocks_of_a_reference
     assert!(block("docs/held-schema.md block 4").contains("> ```\n\"\"\"\n"), "a deeper fence line is body, not the closer: {:?}", block("docs/held-schema.md block 4"));
     assert_eq!(block("docs/held-schema.md block 5"), "format = \"veredas-held\"\nversion = 5\n", "a line without the quote ends the blockquote and the block");
     assert_eq!(block("docs/held-schema.md block 6"), "format = \"veredas-held\"\nversion = 6\n", "a quote inside a list item");
-    assert_eq!(block("docs/held-schema.md block 9"), "format = \"veredas-held\"\nversion = 9\n", "a block the text ends before closing");
+    assert_eq!(block("docs/held-schema.md block 9"), "   format = \"veredas-held\"\n   version = 9\n", "an ordered item with a dot");
+    assert_eq!(block("docs/held-schema.md block 10"), "   format = \"veredas-held\"\n   version = 10\n", "an ordered item with a parenthesis");
+    assert_eq!(block("docs/held-schema.md block 11"), "format = \"veredas-held\"\nversion = 11\n", "a block the text ends before closing");
     assert_eq!(strings(leis::stamps(&s)), NONE);
 }
