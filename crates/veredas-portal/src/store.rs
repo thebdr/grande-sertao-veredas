@@ -1019,6 +1019,18 @@ pub fn sniff_csv_options(path: &str) -> Result<CsvOptions, StoreError> {
         }
     }
 
+    // A ragged file of any shape takes the padded reader (docs/questions.md Q17, decided
+    // 2026-11-09): where the sniffer kept, dropped or renamed rows on its own terms, the padded
+    // reader keeps every row, pads a short one and widens the schema for a long one within its
+    // window, refusing the read by its line past it. Raggedness is read off the file itself,
+    // the first 2 048 lines counted in the sniffer's delimiter, quotes honoured.
+    if opts.delim.is_none()
+        && let Some(delim) = sniffed_delimiter(&conn, path)
+        && csv_is_ragged(path, &delim)
+    {
+        opts.delim = Some(delim);
+    }
+
     let plain = describe_types(&conn, &csv_scan_sql(path, &opts))?;
     let comma_opts = CsvOptions { decimal_comma: true, ..opts.clone() };
     let Ok(comma) = describe_types(&conn, &csv_scan_sql(path, &comma_opts)) else {
@@ -1040,6 +1052,56 @@ pub fn sniff_csv_options(path: &str) -> Result<CsvOptions, StoreError> {
     }
     opts.decimal_comma = gained > 0;
     Ok(opts)
+}
+
+/// The delimiter the engine's sniffer settles on for a file, or nothing when it cannot sniff it.
+fn sniffed_delimiter(conn: &Connection, path: &str) -> Option<String> {
+    let lit = path.trim().replace('\'', "''");
+    let mut stmt = conn.prepare(&format!("SELECT Delimiter FROM sniff_csv('{lit}')")).ok()?;
+    let d: String = stmt.query_row([], |r| r.get(0)).ok()?;
+    (!d.is_empty()).then_some(d)
+}
+
+/// The lines the raggedness check reads, the engine's own window for widening the schema.
+pub const CSV_RAGGED_WINDOW: usize = 2048;
+
+/// Whether the file's rows, counted in `delim` over the first 2 048 lines with quotes honoured,
+/// do not all hold the same number of fields (a blank last line is no row). A file that cannot
+/// be read here is not ragged: its reading is refused elsewhere, by name.
+pub fn csv_is_ragged(path: &str, delim: &str) -> bool {
+    let Ok(text) = std::fs::read(path.trim()) else { return false };
+    let text = String::from_utf8_lossy(&text);
+    let mut counts: Vec<usize> = Vec::new();
+    let mut fields = 1usize;
+    let mut quoted = false;
+    let mut at_line_start = true;
+    let mut lines = 0usize;
+    let d = delim.chars().next().unwrap_or(',');
+    for c in text.chars() {
+        if c == '"' {
+            quoted = !quoted;
+            at_line_start = false;
+        } else if !quoted && c == '\n' {
+            if !at_line_start {
+                counts.push(fields);
+            }
+            fields = 1;
+            at_line_start = true;
+            lines += 1;
+            if lines >= CSV_RAGGED_WINDOW {
+                break;
+            }
+        } else if !quoted && c == d {
+            fields += 1;
+            at_line_start = false;
+        } else if c != '\r' {
+            at_line_start = false;
+        }
+    }
+    if !at_line_start && lines < CSV_RAGGED_WINDOW {
+        counts.push(fields);
+    }
+    counts.windows(2).any(|w| w[0] != w[1])
 }
 
 /// Whether reading `path` with `opts` still yields one unsplit column.

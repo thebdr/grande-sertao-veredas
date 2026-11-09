@@ -504,6 +504,41 @@ fn the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves
     let tabs = write("tabs.csv", "a\tb\r\n1\tx\r\n");
     assert!(!csv_looks_unsplit(&tabs, &CsvOptions::default()));
     assert!(!csv_looks_unsplit("nope.csv", &CsvOptions::default()), "a missing file is not unsplit, it is an error elsewhere");
+
+    // Any ragged file takes the padded reader, not the collapsed one alone (docs/questions.md
+    // Q17): a short row and a long row the sniffer would keep, drop or rename on its own terms
+    // are read with every row kept, the short one padded, the long one widening the schema.
+    let short = write("short.csv", "a,b,c\r\n1,2,3\r\n4,5\r\n6,7,8\r\n");
+    assert!(csv_is_ragged(&short, ","), "a short row is ragged");
+    let opts = sniff_csv_options(&short).unwrap();
+    assert_eq!(opts.delim.as_deref(), Some(","), "the padded reader, forced by the sniffer's delimiter");
+    let page = preview_csv(&short, 10, &opts).unwrap();
+    assert_eq!((page.total, page.columns.len()), (3, 3), "{:?}", page.columns);
+    let long = write("long.csv", "a;b\r\n1;2\r\n3;4;5\r\n6;7\r\n");
+    assert!(csv_is_ragged(&long, ";"));
+    let opts = sniff_csv_options(&long).unwrap();
+    assert_eq!(opts.delim.as_deref(), Some(";"));
+    let page = preview_csv(&long, 10, &opts).unwrap();
+    assert_eq!((page.total, page.columns.len()), (3, 3), "the long row widens the schema, every row kept: {:?}", page.columns);
+    // A regular file stays the sniffer's: a delimiter inside quotes is no field, a blank last
+    // line is no row, and a ragged row past the 2 048-line window is not the window's to count.
+    let regular = write("regular.csv", "a,b\r\n\"x,y\",2\r\n3,4\r\n\r\n");
+    assert!(!csv_is_ragged(&regular, ","));
+    assert_eq!(sniff_csv_options(&regular).unwrap().delim, None);
+    let mut far = String::from("a,b\r\n");
+    for i in 0..2100 {
+        far.push_str(&format!("{i},x\r\n"));
+    }
+    far.push_str("1,2,3\r\n");
+    let far = write("far.csv", &far);
+    assert!(!csv_is_ragged(&far, ","), "a long row past the window is the engine's to refuse by its line");
+    let mut near = String::from("a,b\r\n");
+    for i in 0..100 {
+        near.push_str(&format!("{i},x\r\n"));
+    }
+    near.push_str("1,2,3\r\n");
+    assert!(csv_is_ragged(&write("near.csv", &near), ","));
+    assert!(!csv_is_ragged("nope.csv", ","), "a missing file is not ragged, it is an error elsewhere");
 }
 
 // ---- the first refute round ------------------------------------------------------------------
