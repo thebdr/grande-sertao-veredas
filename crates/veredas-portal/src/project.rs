@@ -1143,10 +1143,12 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
                     v1::Auth::UserPass { username } => {
                         // The password lived in the machine's credential store, which the file
                         // cannot carry: the entry is named after the source, for the operator to
-                        // seal with the tool (Q15).
+                        // seal with the tool (Q15); the call quotes an id that is not a plain word.
+                        let plain = s.id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+                        let word = if plain { s.id.clone() } else { format!("\"{}\"", s.id.replace('"', "\\\"")) };
                         notes.push(format!(
                             "opc `{}`: the password lived in the machine's credential store; seal it as the entry `{}` with `veredas-portal --secret <project.toml> {}`, the key in the variable `{V1_KEY_ENV}`",
-                            s.id, s.id, s.id
+                            s.id, s.id, word
                         ));
                         (Some(username.clone()), Some(s.id.clone()))
                     }
