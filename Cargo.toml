@@ -54,6 +54,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros",
 toml = "1"
 # The server (portal): SSE and windowed REST over the session.
 axum = "0.8"
+http-body-util = "0.1"
 tokio-stream = { version = "0.1", features = ["sync"] }
 # Whether a drive letter is a network drive (portal's tail polls a share and never watches it).
 windows-sys = "0.59"

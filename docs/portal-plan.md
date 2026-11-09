@@ -336,3 +336,7 @@ Recorded as the port meets them.
   timed out (C-044, round 1). Stop the producer first, wait for its source to read retrying, then
   wait for the comment; a disarmed body answered 403 only once the handler took the body as bytes
   and parsed it after the switch, the framework's extractor having answered 422 before it.
+- **An extractor answers before the handler.** `Bytes` buffered the body under the framework's
+  2 MB limit and refused a larger one 413 in plain text before the switch was consulted
+  (C-044, round 2). The handler takes the request, checks the switch, then reads the body itself
+  under its own limit, every refusal in the error form.

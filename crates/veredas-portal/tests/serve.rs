@@ -78,6 +78,35 @@ fn post(addr: SocketAddr, path: &str, body: &Value) -> (u16, Value) {
     (status, serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path}: {e}: {text}")))
 }
 
+
+/// A POST whose body is `size` bytes of filler, written from another thread while the answer is
+/// read: a server that answers before the body is through may close on the writer.
+fn post_filler(addr: SocketAddr, path: &str, size: usize) -> (u16, String) {
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut w = s.try_clone().unwrap();
+    let head = format!("POST {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {size}\r\n\r\n");
+    let writer = std::thread::spawn(move || {
+        let _ = w.write_all(head.as_bytes());
+        let filler = vec![b'x'; 65536];
+        let mut left = size;
+        while left > 0 {
+            let n = left.min(filler.len());
+            if w.write_all(&filler[..n]).is_err() {
+                break;
+            }
+            left -= n;
+        }
+    });
+    let mut raw = Vec::new();
+    let _ = s.read_to_end(&mut raw);
+    let _ = writer.join();
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    let (head, body) = text.split_once("\r\n\r\n").expect("a header block");
+    let status: u16 = head.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let body = if head.to_ascii_lowercase().contains("transfer-encoding: chunked") { dechunk(body) } else { body.to_string() };
+    (status, body)
+}
 /// A query value with the characters a node id carries escaped.
 fn enc(s: &str) -> String {
     s.replace('%', "%25").replace('=', "%3D").replace(';', "%3B").replace('&', "%26").replace(' ', "%20")
@@ -368,6 +397,12 @@ fn the_write_surface_s_other_answers_the_budget_the_lag_and_the_end() {
     assert_eq!(post(addr, "/api/channels/send", &json!({ "source": "sorter" })), (403, off.clone()));
     let (st, text) = http(addr, "POST", "/api/opc/write", Some("not json"));
     assert_eq!((st, serde_json::from_str::<Value>(&text).unwrap()), (403, off.clone()));
+    // A body the framework's extractor would refuse by size is still the switch's to answer:
+    // not a byte of it is read before.
+    let (st, text) = post_filler(addr, "/api/opc/write", 3 << 20);
+    assert_eq!((st, serde_json::from_str::<Value>(&text).unwrap_or_else(|e| panic!("{e}: {text}"))), (403, off.clone()));
+    let (st, text) = post_filler(addr, "/api/channels/send", 3 << 20);
+    assert_eq!((st, serde_json::from_str::<Value>(&text).unwrap_or_else(|e| panic!("{e}: {text}"))), (403, off.clone()));
 
     session.set_writes_armed(true);
     // Armed: a body that is not the shape is 400 in the error form.
@@ -377,6 +412,13 @@ fn the_write_surface_s_other_answers_the_budget_the_lag_and_the_end() {
     let (st, body) = post(addr, "/api/channels/send", &json!({ "source": "sorter" }));
     assert_eq!(st, 400, "{body}");
     assert!(body["error"].as_str().unwrap().starts_with("the body is not a message send"), "{body}");
+    // Armed, a body over the limit is 413 in the error form, the limit named.
+    let (st, text) = post_filler(addr, "/api/opc/write", 3 << 20);
+    let body: Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{e}: {text}"));
+    assert_eq!((st, body["error"].as_str()), (413, Some("the body is not a tag write (source, tag, value as text): over 65536 bytes")), "{body}");
+    let (st, text) = post_filler(addr, "/api/channels/send", 3 << 20);
+    let body: Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{e}: {text}"));
+    assert_eq!((st, body["error"].as_str()), (413, Some("the body is not a message send (source, message, fields, an optional peer): over 65536 bytes")), "{body}");
     // An unknown channel is 403 by name, as an unknown OPC source is; a peer not there is 503.
     assert_eq!(
         post(addr, "/api/channels/send", &json!({ "source": "ghost", "message": "command", "fields": { "code": "0" } })),
@@ -428,23 +470,31 @@ fn the_write_surface_s_other_answers_the_budget_the_lag_and_the_end() {
     // stream fall idle; retrying, it sends none, and the keep-alive shows.
     bench.stop();
     assert!(wait(Duration::from_secs(10), || get(addr, "/api/session").1["health"]["plc"]["state"] == "retrying"), "{}", get(addr, "/api/session").1);
-    let before = buf.len();
-    let deadline = Instant::now() + Duration::from_secs(12);
-    let saw_comment = loop {
-        let fresh = String::from_utf8_lossy(&buf[before..]).into_owned();
-        if fresh.lines().any(|l| l.starts_with(':')) {
-            break true;
-        }
-        if Instant::now() >= deadline {
-            break false;
-        }
-        match s.read(&mut chunk) {
-            Ok(0) => break false,
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+    // A fresh stream on the idle session: its hello, then a comment every five seconds, the
+    // first about five after the hello and the next about five after it.
+    let mut s2 = TcpStream::connect(addr).unwrap();
+    s2.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    s2.write_all(format!("GET /events HTTP/1.1\r\nHost: {addr}\r\nAccept: text/event-stream\r\n\r\n").as_bytes()).unwrap();
+    let mut buf2 = Vec::new();
+    read_until(&mut s2, &mut buf2, "event: hello", Duration::from_secs(15));
+    let hello_at = Instant::now();
+    let mut comments: Vec<Duration> = Vec::new();
+    while comments.len() < 2 && hello_at.elapsed() < Duration::from_secs(14) {
+        match s2.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf2.extend_from_slice(&chunk[..n]);
+                let seen = String::from_utf8_lossy(&buf2).lines().filter(|l| l.starts_with(':')).count();
+                while comments.len() < seen {
+                    comments.push(hello_at.elapsed());
+                }
+            }
             Err(_) => {}
         }
-    };
-    assert!(saw_comment, "a keep-alive comment on an idle stream within twelve seconds; got {:?}", String::from_utf8_lossy(&buf[before..]));
+    }
+    assert_eq!(comments.len(), 2, "two keep-alive comments within fourteen seconds of the hello; got {:?}", String::from_utf8_lossy(&buf2));
+    let (first, gap) = (comments[0].as_millis(), (comments[1] - comments[0]).as_millis());
+    assert!((4000..=7000).contains(&first) && (4000..=7000).contains(&gap), "a comment every five seconds: the first {first} ms after the hello, the next {gap} ms later");
 
     // The server away: a write the plant never saw.
     assert_eq!(post(addr, "/api/opc/write", &json!({ "source": "plc", "tag": word, "value": "7" })), (503, json!({ "error": "not connected to the server" })));

@@ -393,10 +393,35 @@ pub fn refused_code(e: &WriteError) -> u16 {
     }
 }
 
-/// The body of a write or a send, read after the switch: a body that is no JSON, or not the
-/// shape, is 400 in the same error form as every other refusal, never the framework's text.
-fn parse_body<T: serde::de::DeserializeOwned>(bytes: &[u8], what: &str) -> Result<T, ApiError> {
-    serde_json::from_slice(bytes).map_err(|e| err(StatusCode::BAD_REQUEST, format!("the body is not {what}: {e}")))
+/// The largest body a write or a send carries: a tag's value or a message's fields, never a
+/// file. The body is read after the switch, so nothing of a disarmed request's is taken in.
+const BODY_LIMIT: usize = 64 * 1024;
+
+/// The body of a write or a send, read after the switch up to the limit and parsed: a body that
+/// is no JSON, or not the shape, is 400 in the same error form as every other refusal, one over
+/// the limit 413 in it, never the framework's text (its extractor would have answered before
+/// the switch, in plain text).
+async fn read_body<T: serde::de::DeserializeOwned>(req: axum::extract::Request, what: &str) -> Result<T, ApiError> {
+    let bytes = axum::body::to_bytes(req.into_body(), BODY_LIMIT).await.map_err(|e| {
+        if over_limit(&e) {
+            err(StatusCode::PAYLOAD_TOO_LARGE, format!("the body is not {what}: over {BODY_LIMIT} bytes"))
+        } else {
+            err(StatusCode::BAD_REQUEST, format!("the body is not {what}: {e}"))
+        }
+    })?;
+    serde_json::from_slice(&bytes).map_err(|e| err(StatusCode::BAD_REQUEST, format!("the body is not {what}: {e}")))
+}
+
+/// Whether a body's read failed on the limit, wherever the limit's error sits in the chain.
+fn over_limit(e: &axum::Error) -> bool {
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(c) = cause {
+        if c.is::<http_body_util::LengthLimitError>() {
+            return true;
+        }
+        cause = c.source();
+    }
+    false
 }
 
 #[derive(Debug, Deserialize)]
@@ -406,14 +431,14 @@ pub struct TagWrite {
     pub value: String,
 }
 
-/// Write one writable tag. The switch is checked first, before the body is even parsed, so a
+/// Write one writable tag. The switch is checked first, before a byte of the body is read, so a
 /// disarmed session answers before anything is coerced; then the tag against the whitelist; the
 /// handle checks both again.
-async fn opc_write(State(live): State<Arc<Live>>, body: axum::body::Bytes) -> Result<Json<Json_>, ApiError> {
+async fn opc_write(State(live): State<Arc<Live>>, req: axum::extract::Request) -> Result<Json<Json_>, ApiError> {
     if !live.writes_armed() {
         return Err(refused(WriteError::Disarmed));
     }
-    let body: TagWrite = parse_body(&body, "a tag write (source, tag, value as text)")?;
+    let body: TagWrite = read_body(req, "a tag write (source, tag, value as text)").await?;
     let handle = live.opc_handle(&body.source).ok_or_else(|| {
         err(StatusCode::FORBIDDEN, format!("`{}` / `{}` is not a writable tag in this session", body.source, body.tag))
     })?;
@@ -449,13 +474,13 @@ fn send_refused(e: SendError) -> ApiError {
 }
 
 /// Compose and send one catalog message on a channel. The same switch gates it: disarmed, the
-/// request is refused before the body is parsed or the catalog consulted; an unknown channel is
+/// request is refused before the body is read or the catalog consulted; an unknown channel is
 /// refused by name as an unknown OPC source is.
-async fn channel_send(State(live): State<Arc<Live>>, body: axum::body::Bytes) -> Result<Json<Json_>, ApiError> {
+async fn channel_send(State(live): State<Arc<Live>>, req: axum::extract::Request) -> Result<Json<Json_>, ApiError> {
     if !live.writes_armed() {
         return Err(send_refused(SendError::Disarmed));
     }
-    let body: MessageSend = parse_body(&body, "a message send (source, message, fields, an optional peer)")?;
+    let body: MessageSend = read_body(req, "a message send (source, message, fields, an optional peer)").await?;
     let handle = live
         .channel_handle(&body.source)
         .ok_or_else(|| err(StatusCode::FORBIDDEN, format!("`{}` is no channel of this session", body.source)))?

@@ -3060,6 +3060,7 @@ dependencies = [
  "chrono",
  "duckdb",
  "encoding_rs",
+ "http-body-util",
  "memchr",
  "notify",
  "regex",

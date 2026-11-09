@@ -13,7 +13,7 @@ default = ["store", "serve"]
 store = ["dep:duckdb", "dep:serde_json", "dep:tokio"]
 # The server over a session: the live stream, windowed REST, the gated write surface. Needs the
 # store it serves.
-serve = ["store", "dep:axum", "dep:tokio-stream"]
+serve = ["store", "dep:axum", "dep:tokio-stream", "dep:http-body-util"]
 
 # A library first, one executable on top (docs/portal-plan.md, "Rules"; tests/component.rs asks
 # cargo what it would build). Depends on core alone (law L5, the map); its tests dev-depend on the
@@ -49,6 +49,8 @@ tokio = { workspace = true, optional = true }
 # The server is axum over tokio; the live stream wraps the frames broadcast as a stream.
 axum = { workspace = true, optional = true }
 tokio-stream = { workspace = true, optional = true }
+# The write surface reads its body itself, after the switch, under its own limit; the limit's error type is http-body-util's.
+http-body-util = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 # Whether a drive letter is a network drive, so a share is polled and never watched.
