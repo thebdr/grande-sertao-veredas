@@ -1263,27 +1263,44 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
         let project = load(&toml, dir).map_err(|e| with_notes("load", &e, &notes))?;
         let cfg = project.session_config(chrono::Local::now().naive_local());
         let tables = crate::session::compile_tables(&cfg, &|_| Some(String::new()), &mut Claims::default()).map_err(|e| with_notes("start", &e, &notes))?;
-        match crate::store::DuckStore::open(&crate::store::Residency::Ram, &tables.specs, &cfg.tables) {
-            Ok(_) => break,
-            Err(crate::store::StoreError::Definition { name, message }) => {
-                let name = name.trim().to_string();
-                let reason = message.lines().next().unwrap_or("").trim().to_string();
-                if !file.table.iter().any(|t| t.name.trim() == name) {
-                    return Err(with_notes("open its store", &format!("table `{name}`: {reason}"), &notes));
-                }
-                let missing = reason.strip_prefix("Catalog Error: Table with name ").and_then(|r| r.strip_suffix(" does not exist!")).map(str::trim);
-                if reason.starts_with("IO Error") {
-                    notes.push(format!("table `{name}`: the engine cannot read its file here ({reason}): carried as written for the plant's machine; check the path"));
-                    unjudged.insert(name);
-                } else if let Some(m) = missing.filter(|m| unjudged.iter().any(|u| u.eq_ignore_ascii_case(m))) {
-                    notes.push(format!("table `{name}`: it reads `{m}`, a view not judged here: carried as written; check it with the file"));
-                    unjudged.insert(name);
-                } else {
-                    notes.push(format!("table `{name}`: the engine refuses it over the tables this file creates ({reason}): not carried (write it back once what it reads is)"));
-                    dropped.insert(name);
-                }
+        // Every view the engine refuses, at once, each with the first line of its reason: the
+        // ones over a file not here are set aside first, then the ones that read a set-aside
+        // view (to a fixpoint among them, whatever their order in the file), and the rest fall.
+        let mut refused: Vec<(String, String)> = crate::store::DuckStore::judge_views(&tables.specs, &cfg.tables)
+            .map_err(|e| with_notes("open its store", &e, &notes))?
+            .into_iter()
+            .map(|(name, message)| (name.trim().to_string(), message.lines().next().unwrap_or("").trim().to_string()))
+            .collect();
+        if refused.is_empty() {
+            break;
+        }
+        for (name, reason) in &refused {
+            if reason.starts_with("IO Error") {
+                notes.push(format!("table `{name}`: the engine cannot read its file here ({reason}): carried as written for the plant's machine; check the path"));
+                unjudged.insert(name.clone());
             }
-            Err(e) => return Err(with_notes("open its store", &e, &notes)),
+        }
+        refused.retain(|(name, _)| !unjudged.contains(name));
+        loop {
+            let before = refused.len();
+            refused.retain(|(name, reason)| {
+                let missing = reason.strip_prefix("Catalog Error: Table with name ").and_then(|r| r.strip_suffix(" does not exist!")).map(str::trim);
+                match missing.filter(|m| unjudged.iter().any(|u| u.eq_ignore_ascii_case(m))) {
+                    Some(m) => {
+                        notes.push(format!("table `{name}`: it reads `{m}`, a view not judged here: carried as written; check it with the file"));
+                        unjudged.insert(name.clone());
+                        false
+                    }
+                    None => true,
+                }
+            });
+            if refused.len() == before {
+                break;
+            }
+        }
+        for (name, reason) in refused {
+            notes.push(format!("table `{name}`: the engine refuses it over the tables this file creates ({reason}): not carried (write it back once what it reads is)"));
+            dropped.insert(name);
         }
     }
     file.table = all.into_iter().filter(|t| !dropped.contains(t.name.trim())).collect();

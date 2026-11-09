@@ -325,30 +325,51 @@ impl DuckStore {
     }
 
     /// Apply the view definitions with a fixpoint, so a reference resolves whatever the order;
-    /// a pass that creates nothing new means the remaining definitions have real binder errors.
+    /// a pass that creates nothing new means the remaining definitions have real binder errors,
+    /// and the last of them is the error.
     fn apply_views(conn: &Connection, defs: &[TableDef]) -> Result<(), StoreError> {
+        match Self::unresolved_views(conn, defs).pop() {
+            None => Ok(()),
+            Some((name, message)) => Err(StoreError::Definition { name, message }),
+        }
+    }
+
+    /// The view definitions the engine refuses over the tables standing in `conn`, in their
+    /// order, each with the engine's last reason, after a fixpoint (a view over another view
+    /// resolves whatever the order); every view that stands is created along the way.
+    fn unresolved_views(conn: &Connection, defs: &[TableDef]) -> Vec<(String, String)> {
         let mut pending: Vec<TableDef> = defs.to_vec();
-        while !pending.is_empty() {
+        loop {
             let before = pending.len();
             let mut still = Vec::new();
-            let mut last_err: Option<(String, String)> = None;
+            let mut reasons = Vec::new();
             for def in pending {
                 let sql = format!("CREATE VIEW {} AS ({})", quote_ident(def.name.trim()), def.sql);
                 match conn.execute_batch(&sql) {
                     Ok(()) => {}
                     Err(e) => {
-                        last_err = Some((def.name.clone(), e.to_string()));
+                        reasons.push((def.name.clone(), e.to_string()));
                         still.push(def);
                     }
                 }
             }
-            if still.len() == before {
-                let (name, message) = last_err.unwrap_or_else(|| (String::new(), "unknown".into()));
-                return Err(StoreError::Definition { name, message });
+            if still.is_empty() || still.len() == before {
+                return reasons;
             }
             pending = still;
         }
-        Ok(())
+    }
+
+    /// Judge view definitions over a fresh store that is never kept: the `samples` and base
+    /// tables created, every view tried to a fixpoint, and the ones the engine refuses returned
+    /// in their order with the engine's reason, all of them at once, so a caller deciding what
+    /// to keep sees the whole picture and not the last failure alone. For the project's import
+    /// (C-046), which lets the engine that will run a file judge the file before printing it.
+    pub fn judge_views(specs: &[BaseTableSpec], defs: &[TableDef]) -> Result<Vec<(String, String)>, StoreError> {
+        let conn = Connection::open_in_memory()?;
+        Self::create_samples(&conn)?;
+        Self::create_bases(&conn, specs)?;
+        Ok(Self::unresolved_views(&conn, defs))
     }
 
     fn build_registry(specs: &[BaseTableSpec]) -> (BTreeMap<String, Vec<SeriesSource>>, u64) {
