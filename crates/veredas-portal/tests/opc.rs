@@ -291,6 +291,12 @@ fn the_identity_comes_from_a_named_secret_and_a_wrong_one_never_connects() {
     // The value is handed through whole: names are trimmed, a password is not.
     let padded = compile(&cfg, &|e: &str| (e == "Plc-PW").then(|| " s3cret\r".to_string())).unwrap();
     assert_eq!(padded.auth, Auth::UserPass { username: "operator".into(), password: " s3cret\r".into() });
+    // An entry that is there is never "missing", whatever its value: an empty one (the import's
+    // stand-in) and one of spaces are handed through as they are.
+    for value in ["", "  "] {
+        let spec = compile(&cfg, &|e: &str| (e == "Plc-PW").then(|| value.to_string())).unwrap();
+        assert_eq!(spec.auth, Auth::UserPass { username: "operator".into(), password: value.into() });
+    }
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = spawn(spec.clone(), tx, WriteGate::new(false)).unwrap();
     let mut seen = Seen { states: Vec::new(), polls: Vec::new() };
