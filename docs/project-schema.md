@@ -218,7 +218,8 @@ plc = "Kx3uDe2bI4YmXjzQ...AQ=="
 
 The executable writes it, never an editor: `veredas-portal --new-key` prints a fresh key, 64
 hexadecimal characters, to stdout and nothing else; `veredas-portal --secret <project.toml> <entry>`
-reads the value from stdin to its end (the final line break dropped, a line break inside kept),
+reads the value from stdin to its end (the final line break dropped, LF or CRLF; a bare carriage
+return and a line break inside kept),
 seals it under the key the project's `key_env` variable holds, writes or replaces the entry in the
 project's secrets file (created, stamped, when there is none), prints `sealed` with the entry's
 name and the file's path, and shows the value nowhere. A project that has no `[secrets]` table, a

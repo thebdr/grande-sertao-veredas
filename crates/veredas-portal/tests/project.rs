@@ -567,12 +567,18 @@ fn the_executable_checks_a_project_and_reads_a_veredas_1_folder() {
     let (dir, text) = example();
     let file = dir.path().join("project.toml");
     std::fs::write(&file, &text).unwrap();
-    let out = std::process::Command::new(exe).arg(&file).arg("--check").output().unwrap();
+    let out = std::process::Command::new(exe).arg(&file).arg("--check").env_remove("VEREDAS_KEY").output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
     for line in ["project `the press hall`", "session: from midnight; store in memory; writes off; idle after 20000 ms", "server: 127.0.0.1:8901", "secrets: ", "opened with the key `VEREDAS_KEY` holds", "log `scanner`: family", "rule `scans` on `scanner`", "opc `plc`: opc.tcp://127.0.0.1:4840/ every 500 ms, 1 rule(s)", "channel `sorter`: 6 message(s) in its catalog, 1 reply rule(s)", "table `heavy`"] {
         assert!(stdout.contains(line), "no `{line}` in:\n{stdout}");
     }
+    // The check needs neither the key (the variable removed above) nor the secrets file: one
+    // beside the project that is no secrets file leaves the check untouched.
+    std::fs::write(dir.path().join("secrets.toml"), "format = \"veredas-project\"\nversion = 1\n").unwrap();
+    let out = std::process::Command::new(exe).arg(&file).arg("--check").env_remove("VEREDAS_KEY").output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    std::fs::remove_file(dir.path().join("secrets.toml")).unwrap();
     // A bad file: the reason on stderr, exit 2. No file: usage, exit 1.
     std::fs::write(&file, text.replacen("version = 1", "version = 2", 1)).unwrap();
     let out = std::process::Command::new(exe).arg(&file).arg("--check").output().unwrap();
@@ -641,15 +647,18 @@ fn the_executable_runs_a_project_serving_and_reporting_until_stdin_closes() {
     let on_disk = std::fs::read_to_string(dir.path().join("secrets.toml")).unwrap();
     assert!(on_disk.contains("format = \"veredas-secrets\"") && on_disk.contains("version = 1") && on_disk.contains("\nplc = \"") && !on_disk.contains("s3cret"), "{on_disk}");
     // What was sealed opens under the key to exactly what stdin carried: the final line break
-    // dropped, LF or CRLF, a line break inside kept; an entry's name trimmed in the file and the echo.
+    // dropped, LF or CRLF, a bare carriage return and a line break inside kept; an entry's name
+    // trimmed in the file and the echo.
     let (code, _, _) = seal(&file, "crlf", Some(key.as_str()), b"s3cret\r\n");
+    assert_eq!(code, Some(0));
+    let (code, _, _) = seal(&file, "cr", Some(key.as_str()), b"abc\r");
     assert_eq!(code, Some(0));
     let (code, _, _) = seal(&file, "multi", Some(key.as_str()), b"a\nb\n");
     assert_eq!(code, Some(0));
     let (code, said, _) = seal(&file, " spaced ", Some(key.as_str()), b"v\n");
     assert!(code == Some(0) && said.starts_with("sealed `spaced` in "), "{said}");
     let opened = SecretsFile::load(&dir.path().join("secrets.toml")).unwrap().open(&Key256::from_env("K", &|_| Some(key.clone())).unwrap(), "K").unwrap();
-    assert_eq!((opened.get("plc"), opened.get("crlf"), opened.get("multi"), opened.get("spaced")), (Some("s3cret"), Some("s3cret"), Some("a\nb"), Some("v")));
+    assert_eq!((opened.get("plc"), opened.get("crlf"), opened.get("cr"), opened.get("multi"), opened.get("spaced")), (Some("s3cret"), Some("s3cret"), Some("abc\r"), Some("a\nb"), Some("v")));
     assert!(!dir.path().join("secrets.toml.new").exists(), "the file is moved into place, nothing left beside it");
     // The tool's refusals, by name: no key, no `[secrets]` table, a file that is not a secrets
     // file (its path and the header text every file of the suite shares), no entry, a stray argument.
@@ -672,14 +681,23 @@ fn the_executable_runs_a_project_serving_and_reporting_until_stdin_closes() {
     let out = Command::new(exe).arg("--secret").arg(&file).arg("plc").arg(&file).output().unwrap();
     assert_eq!(out.status.code(), Some(1), "a stray file after `--secret` is a usage error");
     // Arguments a shell may hand it wrong: a project file before `--secret`, `--secret` twice, an
-    // option where the entry goes, `--new-key` twice: a usage error each, nothing sealed.
+    // option where the entry or the project file goes, `--new-key` twice or with anything after
+    // it: a usage error each, nothing sealed, nothing on stdout.
     let file_s = file.to_str().unwrap();
-    for args in [vec![file_s, "--secret", file_s, "e1"], vec!["--secret", file_s, "e2", "--secret", file_s, "e3"], vec!["--secret", file_s, "--check"], vec!["--new-key", "--new-key"]] {
+    for args in [
+        vec![file_s, "--secret", file_s, "e1"],
+        vec!["--secret", file_s, "e2", "--secret", file_s, "e3"],
+        vec!["--secret", file_s, "--check"],
+        vec!["--secret", "--check", "e4"],
+        vec!["--new-key", "--new-key"],
+        vec!["--new-key", file_s],
+        vec!["--new-key", "--check"],
+    ] {
         let out = Command::new(exe).args(&args).env("VEREDAS_KEY", &key).stdin(Stdio::null()).output().unwrap();
-        assert_eq!(out.status.code(), Some(1), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!((out.status.code(), out.stdout.is_empty()), (Some(1), true), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
     }
     let names: Vec<String> = SecretsFile::load(&dir.path().join("secrets.toml")).unwrap().names().map(str::to_string).collect();
-    assert_eq!(names, ["crlf", "multi", "plc", "spaced"], "nothing sealed by a refused call");
+    assert_eq!(names, ["cr", "crlf", "multi", "plc", "spaced"], "nothing sealed by a refused call");
     // The run refused by name, exit 2, the value nowhere: the variable unset, one holding no key,
     // a wrong key, and a project naming an entry the file does not hold.
     let refused_run = |project: &Path, env: Option<&str>| {
@@ -698,8 +716,8 @@ fn the_executable_runs_a_project_serving_and_reporting_until_stdin_closes() {
     assert!(refused_run(&file, Some("not-a-key")).contains("the session did not start: the variable `VEREDAS_KEY` does not hold a key (64 hexadecimal characters)"));
     let other = new_key();
     let errs = refused_run(&file, Some(other.as_str()));
-    // The entry named is the first in the file's order that the key does not open (`crlf` sorts first).
-    assert!(errs.contains("the session did not start: the secrets file ") && errs.contains(" does not open with the key `VEREDAS_KEY` holds (entry `crlf`)") && !errs.contains(&other) && !errs.contains(&key), "{errs}");
+    // The entry named is the first in the file's order that the key does not open (`cr` sorts first).
+    assert!(errs.contains("the session did not start: the secrets file ") && errs.contains(" does not open with the key `VEREDAS_KEY` holds (entry `cr`)") && !errs.contains(&other) && !errs.contains(&key), "{errs}");
     let renamed = dir.path().join("renamed.toml");
     std::fs::write(&renamed, with(&text, "[[opc]]", "secret", "secret = \"plc_b\"")).unwrap();
     assert!(refused_run(&renamed, Some(key.as_str())).contains("the session did not start: source `plc`: the secret `plc_b` for the password of `operator` is not in the secrets file"));
@@ -708,7 +726,7 @@ fn the_executable_runs_a_project_serving_and_reporting_until_stdin_closes() {
     let before = std::fs::read(dir.path().join("secrets.toml")).unwrap();
     let (code, _, errs) = seal(&file, "zz", Some(other.as_str()), b"x\n");
     assert_eq!(code, Some(2), "{errs}");
-    assert!(errs.contains("the secrets file ") && errs.contains(" does not open with the key `VEREDAS_KEY` holds (entry `crlf`)") && !errs.contains(&other), "{errs}");
+    assert!(errs.contains("the secrets file ") && errs.contains(" does not open with the key `VEREDAS_KEY` holds (entry `cr`)") && !errs.contains(&other), "{errs}");
     assert_eq!(std::fs::read(dir.path().join("secrets.toml")).unwrap(), before, "nothing sealed under a key that does not open the file");
     // The run itself, the key in the variable.
     let mut child = Command::new(exe).arg(&file).env("VEREDAS_KEY", &key).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
@@ -759,6 +777,85 @@ fn the_executable_runs_a_project_serving_and_reporting_until_stdin_closes() {
     let status = child.wait().unwrap();
     let errs = stderr.join().unwrap();
     assert!(status.success() && errs.trim().is_empty(), "exit {status:?}; stderr:\n{errs}");
+}
+
+/// The sealed password reaches the source through the session (Q15): the example's controller is
+/// the bench's server with a user on it, the password sealed as the entry by the tool, and the
+/// executable's run has the source live and polling; sealed wrong, the source retries and never
+/// goes live; neither value shows in any line the run prints.
+#[test]
+fn the_sealed_password_reaches_the_source_through_the_session() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    use veredas_maquinar::bench::{self, Bench};
+    let Some(exe) = option_env!("CARGO_BIN_EXE_veredas-portal") else {
+        return; // the light build has no executable
+    };
+    let (dir, text) = example();
+    std::fs::create_dir_all(dir.path().join("logs")).unwrap();
+    std::fs::write(dir.path().join("press.log"), "").unwrap();
+    // The bench's server `plc` on a free port, the user `operator` on it, two tags.
+    let bench_text = "format = \"veredas-bench\"\nversion = 1\nseed = 3\n\n[[opc]]\nname = \"plc\"\nport = 0\nuser = { name = \"operator\", password = \"s3cret\" }\ntags = [\n  { id = \"speed\", type = \"float\", value = \"1.5\", randomize = { low = 1.0, high = 2.0, decimals = 2, interval_ms = 100 } },\n  { id = \"run\", type = \"int\", value = \"0\" },\n]\n";
+    let bench = Bench::start(bench::load(bench_text, dir.path()).unwrap()).unwrap();
+    let plc = bench.server("plc").unwrap();
+    // The example's controller is that server; its rule reads the two tags; nothing is served.
+    let text = with(&text, "[[opc]]", "endpoint_url", &format!("endpoint_url = {:?}", plc.endpoint_url));
+    let text = with(
+        &text,
+        "[[opc]]",
+        "rules",
+        &format!("rules = [ {{ name = \"plc_main\", tags = [ {{ node_id = {:?}, series = \"speed\", type = \"float\" }}, {{ node_id = {:?}, series = \"run\", type = \"int\" }} ] }} ]", plc.node_id_str("speed"), plc.node_id_str("run")),
+    );
+    let text = text.replacen("[server]\nbind = \"127.0.0.1:8901\"\n", "", 1);
+    let file = dir.path().join("project.toml");
+    std::fs::write(&file, &text).unwrap();
+    let out = Command::new(exe).arg("--new-key").output().unwrap();
+    let key = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let seal = |value: &[u8]| {
+        let mut child = Command::new(exe).arg("--secret").arg(&file).arg("plc").env("VEREDAS_KEY", &key).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(value).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    };
+    // The run, its lines read until `plc` is live or four status lines are in, then stdin closed.
+    let run = |until_live: bool| -> Vec<String> {
+        let mut child = Command::new(exe).arg(&file).env("VEREDAS_KEY", &key).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let mut out = BufReader::new(child.stdout.take().unwrap());
+        let mut lines: Vec<String> = Vec::new();
+        let started = Instant::now();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if out.read_line(&mut line).unwrap() == 0 {
+                break;
+            }
+            lines.push(line.clone());
+            let status = line.contains("| ") && line.contains(" values");
+            if (status && until_live && line.contains("plc: live (")) || (status && !until_live && lines.iter().filter(|l| l.contains(" values")).count() >= 4) || started.elapsed() > Duration::from_secs(30) {
+                break;
+            }
+        }
+        drop(child.stdin.take());
+        let mut rest = String::new();
+        out.read_to_string(&mut rest).unwrap();
+        let status = child.wait().unwrap();
+        let mut errs = String::new();
+        child.stderr.take().unwrap().read_to_string(&mut errs).unwrap();
+        assert!(status.success(), "the run ended {status:?}:\n{errs}");
+        lines.push(rest);
+        lines.push(errs);
+        lines
+    };
+    seal(b"s3cret\n");
+    let lines = run(true);
+    assert!(lines.iter().any(|l| l.contains("plc: live (")), "the source never went live with the sealed password:\n{}", lines.concat());
+    seal(b"nope\n");
+    let lines = run(false);
+    assert!(lines.iter().all(|l| !l.contains("plc: live")), "a wrong password went live:\n{}", lines.concat());
+    assert!(lines.iter().any(|l| l.contains("plc: retrying")), "a wrong password retries:\n{}", lines.concat());
+    assert!(lines.iter().all(|l| !l.contains("s3cret") && !l.contains("nope")), "a value in the run's output:\n{}", lines.concat());
+    bench.stop();
 }
 
 /// The secrets file through its own API, the one the executable writes with (Q15): a value sealed
@@ -1022,7 +1119,8 @@ plc = "Kx3uDe2bI4YmXjzQ...AQ=="
 
 The executable writes it, never an editor: `veredas-portal --new-key` prints a fresh key, 64
 hexadecimal characters, to stdout and nothing else; `veredas-portal --secret <project.toml> <entry>`
-reads the value from stdin to its end (the final line break dropped, a line break inside kept),
+reads the value from stdin to its end (the final line break dropped, LF or CRLF; a bare carriage
+return and a line break inside kept),
 seals it under the key the project's `key_env` variable holds, writes or replaces the entry in the
 project's secrets file (created, stamped, when there is none), prints `sealed` with the entry's
 name and the file's path, and shows the value nowhere. A project that has no `[secrets]` table, a

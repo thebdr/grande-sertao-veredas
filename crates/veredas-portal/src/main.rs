@@ -137,8 +137,11 @@ fn seal(project: &Project, entry: &str) -> ! {
         eprintln!("the value on stdin cannot be read: {e}");
         std::process::exit(2);
     }
-    let value = value.strip_suffix('\n').unwrap_or(&value);
-    let value = value.strip_suffix('\r').unwrap_or(value);
+    // One final line break goes, LF or CRLF; a bare carriage return is part of the value.
+    let value = match value.strip_suffix('\n') {
+        Some(v) => v.strip_suffix('\r').unwrap_or(v),
+        None => value.as_str(),
+    };
     let sealed = SecretsFile::load_or_empty(&source.file).and_then(|mut f| {
         // The key must open what is already there: one entry sealed under another key would
         // leave a file no session opens, and the tool would have said nothing.
