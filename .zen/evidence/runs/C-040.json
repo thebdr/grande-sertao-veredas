@@ -10,15 +10,15 @@
     "opc"
   ],
   "exitCode": 0,
-  "outputSha": "aba8c007b09a4b46b8105657ef1ffe719fe704f02cf28397bf26bb6a4084f6dc",
-  "outputTail": "\nrunning 4 tests\ntest every_configuration_mistake_is_refused_by_name_before_anything_connects ... ok\ntest writes_are_gated_by_the_switch_and_the_whitelist_and_land_on_the_server_side ... ok\ntest the_identity_comes_from_a_named_secret_and_a_wrong_one_never_connects ... ok\ntest the_bench_s_server_is_polled_into_typed_rows_with_bits_and_on_change_kept ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.96s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.40s\n     Running tests\\opc.rs (target\\debug\\deps\\opc-c2878f766fa9a8be.exe)",
-  "ranAt": "2026-11-09T18:24:59.274Z",
-  "headCommit": "f1fff8e9f814d8384d39aaaf42c796084224ad2c",
+  "outputSha": "25550d6ed355482393105f90e31b3942dad289294346de43a2ec056673554c0d",
+  "outputTail": "\nrunning 4 tests\ntest every_configuration_mistake_is_refused_by_name_before_anything_connects ... ok\ntest writes_are_gated_by_the_switch_and_the_whitelist_and_land_on_the_server_side ... ok\ntest the_identity_comes_from_a_named_secret_and_a_wrong_one_never_connects ... ok\ntest the_bench_s_server_is_polled_into_typed_rows_with_bits_and_on_change_kept ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.91s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.86s\n     Running tests\\opc.rs (target\\debug\\deps\\opc-c2878f766fa9a8be.exe)",
+  "ranAt": "2026-11-09T18:46:22.952Z",
+  "headCommit": "1a031feac2e2878bc28f6557ac6a01b1cab9fb8e",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/opc.rs",
       "file": "crates/veredas-portal/tests/opc.rs",
-      "fileSha": "68b873070ddc7d31dcef36ac5d1b7235b07d5a7a0b461bc1bc2552dc69f1026c"
+      "fileSha": "38face2d5fc5f1c1a489dbfd494de37922fba6e1f962b95ca33fa84430667541"
     }
   ]
 }
