@@ -49,6 +49,7 @@ fn main() {
                 None => usage("`--from-v1` names a folder"),
             },
             other if other.starts_with("--") => usage(&format!("unknown option `{other}`")),
+            other if file.is_some() => usage(&format!("one project file, not `{other}` as well")),
             other => file = Some(PathBuf::from(other)),
         }
     }
@@ -115,6 +116,7 @@ fn usage(why: &str) -> ! {
 /// variable holds. The value is read to the end of stdin, its final line break dropped, and shows
 /// nowhere: not on stdout, not in an error.
 fn seal(project: &Project, entry: &str) -> ! {
+    let entry = entry.trim();
     let Some(source) = &project.secrets else {
         eprintln!("the project has no `[secrets]` table: name the file and the `key_env` variable first");
         std::process::exit(2);

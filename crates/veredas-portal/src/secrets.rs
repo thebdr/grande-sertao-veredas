@@ -26,14 +26,16 @@ const NONCE_LEN: usize = 12;
 /// Why a secrets file, its key or an entry was refused. No variant carries a value or a key.
 #[derive(Debug, Error)]
 pub enum SecretsError {
-    #[error("not a secrets file: {0}")]
-    NotToml(String),
-    #[error("`format` is `{0}`, not `veredas-secrets`")]
-    WrongFormat(String),
-    #[error("version {0} of `veredas-secrets` is not known here (this reader knows 1)")]
-    UnknownVersion(u32),
-    #[error("{0}")]
-    Invalid(String),
+    #[error("the secrets file {path}: not a secrets file: {reason}")]
+    NotToml { path: PathBuf, reason: String },
+    #[error("the secrets file {path}: `format` is `{found}`, not `veredas-secrets`")]
+    WrongFormat { path: PathBuf, found: String },
+    #[error("the secrets file {path}: version {found} of `veredas-secrets` is not known here (this reader knows 1)")]
+    UnknownVersion { path: PathBuf, found: u32 },
+    #[error("the secrets file {path}: {reason}")]
+    Invalid { path: PathBuf, reason: String },
+    #[error("no randomness for a key: {0}")]
+    NoRandomness(String),
     #[error("the secrets file {path}: cannot read: {source}")]
     Read { path: PathBuf, source: std::io::Error },
     #[error("the secrets file {path}: cannot write: {source}")]
@@ -79,7 +81,7 @@ impl Key256 {
     /// A fresh key from the operating system's randomness.
     pub fn fresh() -> Result<Key256, SecretsError> {
         let mut bytes = [0u8; 32];
-        getrandom::fill(&mut bytes).map_err(|e| SecretsError::Invalid(format!("no randomness for a key: {e}")))?;
+        getrandom::fill(&mut bytes).map_err(|e| SecretsError::NoRandomness(e.to_string()))?;
         Ok(Key256(bytes))
     }
 
@@ -137,16 +139,18 @@ impl SecretsFile {
     }
 
     fn parse(path: &Path, text: &str) -> Result<SecretsFile, SecretsError> {
+        // Every refusal names the file: the stamp's texts are the suite's (C-045), after the path.
+        let at = || path.to_path_buf();
         schema::check(text, NOUN, FORMAT, VERSION).map_err(|e| match e {
-            HeaderError::NotToml { reason, .. } => SecretsError::NotToml(reason),
-            HeaderError::WrongFormat { found, .. } => SecretsError::WrongFormat(found),
-            HeaderError::UnknownVersion { found, .. } => SecretsError::UnknownVersion(found),
-            other => SecretsError::Invalid(other.to_string()),
+            HeaderError::NotToml { reason, .. } => SecretsError::NotToml { path: at(), reason },
+            HeaderError::WrongFormat { found, .. } => SecretsError::WrongFormat { path: at(), found },
+            HeaderError::UnknownVersion { found, .. } => SecretsError::UnknownVersion { path: at(), found },
+            other => SecretsError::Invalid { path: at(), reason: other.to_string() },
         })?;
-        let file: FileV1 = toml::from_str(text).map_err(|e| SecretsError::NotToml(e.to_string()))?;
+        let file: FileV1 = toml::from_str(text).map_err(|e| SecretsError::NotToml { path: at(), reason: e.to_string() })?;
         for name in file.entries.keys() {
             if name.trim().is_empty() {
-                return Err(SecretsError::Invalid("an entry has an empty name".into()));
+                return Err(SecretsError::Invalid { path: at(), reason: "an entry has an empty name".into() });
             }
         }
         Ok(SecretsFile { path: path.to_path_buf(), entries: file.entries })
@@ -162,14 +166,14 @@ impl SecretsFile {
     pub fn set(&mut self, key: &Key256, name: &str, value: &str) -> Result<(), SecretsError> {
         let name = name.trim();
         if name.is_empty() {
-            return Err(SecretsError::Invalid("an entry needs a name".into()));
+            return Err(SecretsError::Invalid { path: self.path.clone(), reason: "an entry needs a name".into() });
         }
         let mut nonce = [0u8; NONCE_LEN];
-        getrandom::fill(&mut nonce).map_err(|e| SecretsError::Invalid(format!("no randomness for a nonce: {e}")))?;
+        getrandom::fill(&mut nonce).map_err(|e| SecretsError::Invalid { path: self.path.clone(), reason: format!("no randomness for a nonce: {e}") })?;
         let sealed = key
             .cipher()
             .encrypt(Nonce::from_slice(&nonce), Payload { msg: value.as_bytes(), aad: name.as_bytes() })
-            .map_err(|_| SecretsError::Invalid("the value could not be sealed".into()))?;
+            .map_err(|_| SecretsError::Invalid { path: self.path.clone(), reason: "the value could not be sealed".into() })?;
         let mut blob = nonce.to_vec();
         blob.extend_from_slice(&sealed);
         self.entries.insert(name.to_string(), base64::engine::general_purpose::STANDARD.encode(blob));
@@ -179,12 +183,17 @@ impl SecretsFile {
     /// Write the file whole, stamped.
     pub fn save(&self) -> Result<(), SecretsError> {
         let file = FileV1 { format: FORMAT.into(), version: VERSION, entries: self.entries.clone() };
-        let body = toml::to_string_pretty(&file).map_err(|e| SecretsError::Invalid(format!("writing the secrets file: {e}")))?;
+        let body = toml::to_string_pretty(&file).map_err(|e| SecretsError::Invalid { path: self.path.clone(), reason: format!("writing the secrets file: {e}") })?;
         let text = format!("# The project's secrets, sealed under the key the project file's `key_env` names; written by `veredas-portal --secret`.\n{body}");
         if let Some(parent) = self.path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent).map_err(|source| SecretsError::Write { path: self.path.clone(), source })?;
         }
-        std::fs::write(&self.path, text).map_err(|source| SecretsError::Write { path: self.path.clone(), source })
+        // Written beside and moved into place in one step, so no reader ever sees half a file
+        // (two writers at once still race for the last word; the tool is one operator's).
+        let fresh = self.path.with_extension("toml.new");
+        let write = |source| SecretsError::Write { path: self.path.clone(), source };
+        std::fs::write(&fresh, text).map_err(&write)?;
+        std::fs::rename(&fresh, &self.path).map_err(&write)
     }
 
     /// Open every entry under `key` (the variable `var` named it, for the refusal's text): the
@@ -289,9 +298,12 @@ mod tests {
         assert_eq!(Key256::from_env("K", &|_| Some("abc".into())).unwrap_err().to_string(), "the variable `K` does not hold a key (64 hexadecimal characters)");
         // The stamp first, as every file of the suite.
         std::fs::write(&path, "format = \"veredas-other\"\nversion = 1\n").unwrap();
-        assert_eq!(SecretsFile::load(&path).unwrap_err().to_string(), "`format` is `veredas-other`, not `veredas-secrets`");
+        let e = SecretsFile::load(&path).unwrap_err().to_string();
+        assert!(e.starts_with("the secrets file ") && e.ends_with("secrets.toml: `format` is `veredas-other`, not `veredas-secrets`"), "{e}");
         std::fs::write(&path, "format = \"veredas-secrets\"\nversion = 2\n").unwrap();
-        assert_eq!(SecretsFile::load(&path).unwrap_err().to_string(), "version 2 of `veredas-secrets` is not known here (this reader knows 1)");
+        let e = SecretsFile::load(&path).unwrap_err().to_string();
+        assert!(e.starts_with("the secrets file ") && e.ends_with("secrets.toml: version 2 of `veredas-secrets` is not known here (this reader knows 1)"), "{e}");
+        assert!(!path.with_extension("toml.new").exists(), "the file is moved into place, nothing left beside it");
         std::fs::write(&path, "format = \"veredas-secrets\"\nversion = 1\nentrees = {}\n").unwrap();
         assert!(SecretsFile::load(&path).unwrap_err().to_string().contains("entrees"));
         let e = SecretsFile::load(&dir.path().join("none.toml")).unwrap_err().to_string();

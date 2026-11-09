@@ -12,7 +12,7 @@ use chrono::NaiveDate;
 use common::plant::{catalog_text, channel_text};
 use veredas_core::telegram::Role;
 use veredas_portal::project::{self, ActiveConfig, LogKind, Start, Store};
-use veredas_portal::secrets::SecretsSource;
+use veredas_portal::secrets::{Key256, SecretsFile, SecretsSource};
 
 /// The reference, as text.
 fn doc() -> String {
@@ -624,33 +624,53 @@ fn the_executable_runs_a_project_serving_and_reporting_until_stdin_closes() {
     };
     let key = new_key();
     assert_ne!(key, new_key(), "fresh every time");
-    let seal = |project: &Path, entry: &str, env: Option<&str>| {
+    let seal = |project: &Path, entry: &str, env: Option<&str>, stdin: &[u8]| {
         let mut cmd = Command::new(exe);
         cmd.arg("--secret").arg(project).arg(entry).env_remove("VEREDAS_KEY").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         if let Some(k) = env {
             cmd.env("VEREDAS_KEY", k);
         }
         let mut child = cmd.spawn().unwrap();
-        child.stdin.take().unwrap().write_all(b"s3cret\n").unwrap();
+        child.stdin.take().unwrap().write_all(stdin).unwrap();
         let out = child.wait_with_output().unwrap();
         (out.status.code(), String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string())
     };
-    let (code, said, errs) = seal(&file, "plc", Some(key.as_str()));
+    let (code, said, errs) = seal(&file, "plc", Some(key.as_str()), b"s3cret\n");
     assert_eq!((code, errs.as_str()), (Some(0), ""), "{said}{errs}");
     assert!(said.starts_with("sealed `plc` in ") && said.contains("secrets.toml") && !said.contains("s3cret"), "{said}");
     let on_disk = std::fs::read_to_string(dir.path().join("secrets.toml")).unwrap();
     assert!(on_disk.contains("format = \"veredas-secrets\"") && on_disk.contains("version = 1") && on_disk.contains("\nplc = \"") && !on_disk.contains("s3cret"), "{on_disk}");
-    // The tool's refusals, by name: no key, no `[secrets]` table, no entry.
-    let (code, _, errs) = seal(&file, "plc", None);
+    // What was sealed opens under the key to exactly what stdin carried: the final line break
+    // dropped, LF or CRLF, a line break inside kept; an entry's name trimmed in the file and the echo.
+    let (code, _, _) = seal(&file, "crlf", Some(key.as_str()), b"s3cret\r\n");
+    assert_eq!(code, Some(0));
+    let (code, _, _) = seal(&file, "multi", Some(key.as_str()), b"a\nb\n");
+    assert_eq!(code, Some(0));
+    let (code, said, _) = seal(&file, " spaced ", Some(key.as_str()), b"v\n");
+    assert!(code == Some(0) && said.starts_with("sealed `spaced` in "), "{said}");
+    let opened = SecretsFile::load(&dir.path().join("secrets.toml")).unwrap().open(&Key256::from_env("K", &|_| Some(key.clone())).unwrap(), "K").unwrap();
+    assert_eq!((opened.get("plc"), opened.get("crlf"), opened.get("multi"), opened.get("spaced")), (Some("s3cret"), Some("s3cret"), Some("a\nb"), Some("v")));
+    assert!(!dir.path().join("secrets.toml.new").exists(), "the file is moved into place, nothing left beside it");
+    // The tool's refusals, by name: no key, no `[secrets]` table, a file that is not a secrets
+    // file (its path and the header text every file of the suite shares), no entry, a stray argument.
+    let (code, _, errs) = seal(&file, "plc", None, b"s3cret\n");
     assert_eq!(code, Some(2));
     assert!(errs.contains("the variable `VEREDAS_KEY` is not set: it holds the project's key"), "{errs}");
     let bare = dir.path().join("bare.toml");
     std::fs::write(&bare, text.replacen("[secrets]\nkey_env = \"VEREDAS_KEY\"\n", "", 1).replacen("secret = \"plc\"\n", "", 1).replacen("user = \"operator\"\n", "", 1)).unwrap();
-    let (code, _, errs) = seal(&bare, "plc", Some(key.as_str()));
+    let (code, _, errs) = seal(&bare, "plc", Some(key.as_str()), b"s3cret\n");
     assert_eq!(code, Some(2));
     assert!(errs.contains("the project has no `[secrets]` table"), "{errs}");
+    let badfile = dir.path().join("badfile.toml");
+    std::fs::write(&badfile, text.replacen("[secrets]\n", "[secrets]\nfile = \"bad.toml\"\n", 1)).unwrap();
+    std::fs::write(dir.path().join("bad.toml"), "format = \"veredas-project\"\nversion = 1\n").unwrap();
+    let (code, _, errs) = seal(&badfile, "plc", Some(key.as_str()), b"x\n");
+    assert_eq!(code, Some(2));
+    assert!(errs.contains("the secrets file ") && errs.contains("bad.toml: `format` is `veredas-project`, not `veredas-secrets`"), "{errs}");
     let out = Command::new(exe).arg("--secret").arg(&file).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
+    let out = Command::new(exe).arg("--secret").arg(&file).arg("plc").arg(&file).output().unwrap();
+    assert_eq!(out.status.code(), Some(1), "a stray file after `--secret` is a usage error");
     // The run refused by name, exit 2, the value nowhere: the variable unset, one holding no key,
     // a wrong key, and a project naming an entry the file does not hold.
     let refused_run = |project: &Path, env: Option<&str>| {
@@ -669,7 +689,8 @@ fn the_executable_runs_a_project_serving_and_reporting_until_stdin_closes() {
     assert!(refused_run(&file, Some("not-a-key")).contains("the session did not start: the variable `VEREDAS_KEY` does not hold a key (64 hexadecimal characters)"));
     let other = new_key();
     let errs = refused_run(&file, Some(other.as_str()));
-    assert!(errs.contains("the session did not start: the secrets file ") && errs.contains(" does not open with the key `VEREDAS_KEY` holds (entry `plc`)") && !errs.contains(&other) && !errs.contains(&key), "{errs}");
+    // The entry named is the first in the file's order that the key does not open (`crlf` sorts first).
+    assert!(errs.contains("the session did not start: the secrets file ") && errs.contains(" does not open with the key `VEREDAS_KEY` holds (entry `crlf`)") && !errs.contains(&other) && !errs.contains(&key), "{errs}");
     let renamed = dir.path().join("renamed.toml");
     std::fs::write(&renamed, with(&text, "[[opc]]", "secret", "secret = \"plc_b\"")).unwrap();
     assert!(refused_run(&renamed, Some(key.as_str())).contains("the session did not start: source `plc`: the secret `plc_b` for the password of `operator` is not in the secrets file"));
@@ -951,9 +972,11 @@ plc = "Kx3uDe2bI4YmXjzQ...AQ=="
 
 The executable writes it, never an editor: `veredas-portal --new-key` prints a fresh key, 64
 hexadecimal characters, to stdout and nothing else; `veredas-portal --secret <project.toml> <entry>`
-reads the value from stdin to its end (the final line break dropped), seals it under the key the
-project's `key_env` variable holds, writes or replaces the entry in the project's secrets file
-(created, stamped, when there is none), prints `sealed` with the entry's name and the file's path,
-and shows the value nowhere. A project that has no `[secrets]` table, a variable unset or not a
-key, and a file that is not a secrets file are refused by name with exit code 2.
+reads the value from stdin to its end (the final line break dropped, a line break inside kept),
+seals it under the key the project's `key_env` variable holds, writes or replaces the entry in the
+project's secrets file (created, stamped, when there is none; replaced whole, never half-written),
+prints `sealed` with the entry's name and the file's path, and shows the value nowhere. A project
+that has no `[secrets]` table, a variable unset or not a key, and a file that is not a secrets
+file (named by its path, with the header text every file of the suite shares) are refused by
+name with exit code 2; a stray argument is a usage error, exit code 1.
 "##;

@@ -218,8 +218,10 @@ plc = "Kx3uDe2bI4YmXjzQ...AQ=="
 
 The executable writes it, never an editor: `veredas-portal --new-key` prints a fresh key, 64
 hexadecimal characters, to stdout and nothing else; `veredas-portal --secret <project.toml> <entry>`
-reads the value from stdin to its end (the final line break dropped), seals it under the key the
-project's `key_env` variable holds, writes or replaces the entry in the project's secrets file
-(created, stamped, when there is none), prints `sealed` with the entry's name and the file's path,
-and shows the value nowhere. A project that has no `[secrets]` table, a variable unset or not a
-key, and a file that is not a secrets file are refused by name with exit code 2.
+reads the value from stdin to its end (the final line break dropped, a line break inside kept),
+seals it under the key the project's `key_env` variable holds, writes or replaces the entry in the
+project's secrets file (created, stamped, when there is none; replaced whole, never half-written),
+prints `sealed` with the entry's name and the file's path, and shows the value nowhere. A project
+that has no `[secrets]` table, a variable unset or not a key, and a file that is not a secrets
+file (named by its path, with the header text every file of the suite shares) are refused by
+name with exit code 2; a stray argument is a usage error, exit code 1.
