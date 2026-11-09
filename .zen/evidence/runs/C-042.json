@@ -10,15 +10,15 @@
     "store_engine"
   ],
   "exitCode": 0,
-  "outputSha": "c75e92c0affd3f54eb1ca41cec9af6fbac793b617ae545ee1ccbd3d4a0a3b350",
-  "outputTail": "test the_csv_reader_options_type_a_decimal_comma_and_pad_a_ragged_file ... ok\ntest ubigint_and_timestamp_round_trip_and_epoch_ms_converts ... ok\ntest the_value_variants_the_store_matches_on_are_these ... ok\ntest copy_from_database_snapshots_tables_and_views_into_a_readable_file ... ok\ntest time_bucket_snaps_to_an_absolute_grid ... ok\ntest a_file_backed_database_takes_its_limits_and_reopens ... ok\ntest a_copy_into_a_foreign_database_is_refused_and_detaches_after ... ok\ntest a_csv_view_reflects_edits_a_replacement_and_a_new_column_and_never_locks_the_file ... ok\ntest the_sniffer_s_outcomes_on_a_marked_a_header_only_an_empty_and_a_missing_file ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.43s\n     Running tests\\store_engine.rs (target\\debug\\deps\\store_engine-2baa1db21f57f15f.exe)",
-  "ranAt": "2026-11-09T01:58:58.444Z",
-  "headCommit": "dcc15335ec5252eaafb4a85877008c1699fdd1d2",
+  "outputSha": "14b47b9b0a3604f0f4f6febe33bc2384b720b80d08617a55d2f2bfbddced0461",
+  "outputTail": "test the_filtered_distinct_count_leaves_out_a_keyed_row_with_a_null_value ... ok\ntest the_csv_reader_options_type_a_decimal_comma_and_pad_a_ragged_file ... ok\ntest copy_from_database_snapshots_tables_and_views_into_a_readable_file ... ok\ntest a_file_backed_database_takes_its_limits_and_reopens ... ok\ntest a_long_row_widens_the_schema_in_the_sample_and_refuses_the_read_past_it ... ok\ntest the_listing_aggregate_over_a_union_skips_null_cells_and_types_the_last_value ... ok\ntest a_copy_into_a_foreign_database_is_refused_and_detaches_after ... ok\ntest the_sniffer_s_outcomes_on_a_marked_a_header_only_an_empty_and_a_missing_file ... ok\ntest a_csv_view_reflects_edits_a_replacement_and_a_new_column_and_never_locks_the_file ... ok\n\ntest result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.64s\n     Running tests\\store_engine.rs (target\\debug\\deps\\store_engine-2baa1db21f57f15f.exe)",
+  "ranAt": "2026-11-09T02:05:57.754Z",
+  "headCommit": "ffa22d61fa05405c35213d93ab2503e748f82cc0",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store_engine.rs",
       "file": "crates/veredas-portal/tests/store_engine.rs",
-      "fileSha": "0bd9cf743c478eb9a9e9401896bdb6bac28eebf4f172908a8d394346ea33d00b"
+      "fileSha": "44a9e13979f2accfd64628997b3f34ca890ecce6ad02ecfb7923a8c9247b89aa"
     }
   ]
 }
