@@ -1,0 +1,24 @@
+{
+  "clause": "C-051",
+  "command": "cargo test -p veredas-supervisao --test layout",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-supervisao",
+    "--test",
+    "layout"
+  ],
+  "exitCode": 0,
+  "outputSha": "4d0f74222a81b5134ab824856b3eb6a1213386d696238d03a099d26ab96a852d",
+  "outputTail": "\nrunning 1 test\ntest everything_the_layout_binds_is_served_and_the_page_reads_it ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.54s\n     Running tests\\layout.rs (target\\debug\\deps\\layout-2103f74ffb8e66de.exe)",
+  "ranAt": "2026-11-09T21:56:04.793Z",
+  "headCommit": "fabb73bfd1b5ccd204066976cd3969d8f0649fa8",
+  "tests": [
+    {
+      "name": "crates/veredas-supervisao/tests/layout.rs",
+      "file": "crates/veredas-supervisao/tests/layout.rs",
+      "fileSha": "2270c2df6bc66c22affe8712b9c832a113e45ed7ad94d5ce831a2c59b14fc055"
+    }
+  ]
+}

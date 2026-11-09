@@ -10,15 +10,15 @@
     "opc_server"
   ],
   "exitCode": 0,
-  "outputSha": "e6054c76b75b40b99dc49bb4736b1be0192168251f37b9ec1b74991ed53518fc",
-  "outputTail": "test a_draw_or_another_reaction_s_step_is_not_a_change ... ok\ntest a_write_of_the_wrong_wire_type_is_refused_and_counted ... ok\ntest the_consumer_s_poll_worker_polls_and_writes_through_the_bench ... ok\ntest the_read_cap_and_the_session_cap_are_the_bench_s_knobs ... ok\ntest a_reaction_answers_a_write_with_a_timed_sequence ... ok\ntest the_relay_makes_the_link_go_silent_and_delivers_what_it_held_when_thawed ... ok\ntest randomized_tags_move_and_stay_inside_their_range ... ok\ntest int_draws_take_only_the_whole_numbers_inside_the_range ... ok\ntest a_configured_user_is_accepted_and_a_wrong_password_refused ... ok\ntest draws_come_at_their_interval ... ok\n\ntest result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.47s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s\n     Running tests\\opc_server.rs (target\\debug\\deps\\opc_server-84bdbc7ce0349a18.exe)",
-  "ranAt": "2026-11-09T10:15:06.503Z",
-  "headCommit": "935f8b75bed349381aa6e22855247faa294f760d",
+  "outputSha": "ba0f84a6b2460ed1669a15d88fa1b5ab0a891d005e47b5656cfd36eb14a085b9",
+  "outputTail": "test the_consumer_s_poll_worker_polls_and_writes_through_the_bench ... ok\ntest the_read_cap_and_the_session_cap_are_the_bench_s_knobs ... ok\ntest a_reaction_answers_a_write_with_a_timed_sequence ... ok\ntest the_relay_makes_the_link_go_silent_and_delivers_what_it_held_when_thawed ... ok\ntest randomized_tags_move_and_stay_inside_their_range ... ok\ntest int_draws_take_only_the_whole_numbers_inside_the_range ... ok\ntest a_configured_user_is_accepted_and_a_wrong_password_refused ... ok\ntest a_ramped_tag_steps_on_the_wire_and_moves_on_from_a_set ... ok\ntest draws_come_at_their_interval ... ok\n\ntest result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.75s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.99s\n     Running tests\\opc_server.rs (target\\debug\\deps\\opc_server-84bdbc7ce0349a18.exe)",
+  "ranAt": "2026-11-09T21:56:27.160Z",
+  "headCommit": "fabb73bfd1b5ccd204066976cd3969d8f0649fa8",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/opc_server.rs",
       "file": "crates/veredas-maquinar/tests/opc_server.rs",
-      "fileSha": "2373f3053dadd7757967160d0c995868dc34ea48cca562ef34992f610d3f363e"
+      "fileSha": "85cede702cf7edf51f530e145ff8284a02dc1801f3af54c292993c7fba3f821d"
     }
   ]
 }
