@@ -391,3 +391,58 @@ fn a_copy_into_a_foreign_database_is_refused_and_detaches_after() {
     let x: i64 = ext.query_row("SELECT x FROM t", [], |r| r.get(0)).unwrap();
     assert_eq!(x, 42, "the foreign file untouched");
 }
+
+// ---- the second refute round -----------------------------------------------------------------
+
+/// The filtered distinct count the listing uses counts the keys of the rows that hold a value
+/// alone: a row with a key and a null value is left out, which the plain distinct count would
+/// not do, so the pin shows the filter mattering.
+#[test]
+fn the_filtered_distinct_count_leaves_out_a_keyed_row_with_a_null_value() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE a (source VARCHAR, key VARCHAR, index_ms BIGINT, v DOUBLE); \
+         INSERT INTO a VALUES ('s', 'k1', 1, 1.5), ('s', 'k2', 2, 2.5), ('s', 'k3', 4, NULL);",
+    )
+    .unwrap();
+    let (cnt, keys, last_ms, last): (i64, i64, i64, Value) = conn
+        .query_row(
+            "SELECT count(v), count(DISTINCT key) FILTER (WHERE v IS NOT NULL), max(CASE WHEN v IS NOT NULL THEN index_ms END), arg_max(v, index_ms) FROM a GROUP BY source",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!((cnt, keys, last_ms, last), (2, 2, 2, Value::Double(2.5)));
+    let unfiltered: i64 = conn.query_row("SELECT count(DISTINCT key) FROM a", [], |r| r.get(0)).unwrap();
+    assert_eq!(unfiltered, 3, "without the filter the keyed null row would count");
+}
+
+/// A ragged file under the reader's options: a short row is padded, a long row inside the sniff
+/// sample widens the schema by a numbered column and every row is kept, and a long row past the
+/// sample refuses the whole read with the line named.
+#[test]
+fn a_long_row_widens_the_schema_in_the_sample_and_refuses_the_read_past_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    let early = dir.path().join("early.csv");
+    std::fs::write(&early, "a;b;c\n1;2;3\n4;5\n6;7;8;9\n").unwrap();
+    let scan = |p: &std::path::Path| format!("read_csv('{}', delim=';', null_padding=true)", sql_path(p));
+    let mut stmt = conn.prepare(&format!("DESCRIBE SELECT * FROM {}", scan(&early))).unwrap();
+    let cols: Vec<(String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(
+        cols,
+        vec![("a".to_string(), "BIGINT".to_string()), ("b".to_string(), "BIGINT".to_string()), ("c".to_string(), "BIGINT".to_string()), ("column3".to_string(), "BIGINT".to_string())]
+    );
+    let mut stmt = conn.prepare(&format!("SELECT a, b, c, column3 FROM {} ORDER BY a", scan(&early))).unwrap();
+    let rows: Vec<(i64, i64, Option<i64>, Option<i64>)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(rows, vec![(1, 2, Some(3), None), (4, 5, None, None), (6, 7, Some(8), Some(9))]);
+    let late = dir.path().join("late.csv");
+    let mut text = String::from("a;b;c\n");
+    for i in 0..30_000 {
+        text.push_str(&format!("{i};1;2\n"));
+    }
+    text.push_str("9;9;9;9\n");
+    std::fs::write(&late, text).unwrap();
+    let err = conn.query_row(&format!("SELECT count(*) FROM {}", scan(&late)), [], |r| r.get::<_, i64>(0)).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err.contains("CSV Error on Line: 30002"), "{err}");
+}
