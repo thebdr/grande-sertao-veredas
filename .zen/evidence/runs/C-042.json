@@ -10,15 +10,15 @@
     "store_engine"
   ],
   "exitCode": 0,
-  "outputSha": "abff074bf158e3c4dbebbc1ce42b5f79d8ba4964439a9079dc4d5f75c591bf34",
-  "outputTail": "test ubigint_and_timestamp_round_trip_and_epoch_ms_converts ... ok\ntest a_copy_into_a_foreign_database_is_refused_and_detaches_after ... ok\ntest the_csv_reader_options_type_a_decimal_comma_and_pad_a_ragged_file ... ok\ntest a_long_row_s_window_is_the_first_2048_lines_whatever_the_sample_size ... ok\ntest the_sniffer_s_outcomes_on_a_marked_a_header_only_an_empty_and_a_missing_file ... ok\ntest the_sniffer_collapses_a_long_row_followed_by_rows_and_refuses_a_file_past_the_window ... ok\ntest a_csv_view_reflects_edits_a_replacement_and_a_new_column_and_never_locks_the_file ... ok\ntest the_sniffer_s_kept_row_depends_on_the_long_row_and_the_window_ends_at_the_default_sample ... ok\ntest the_sniffer_s_outcomes_on_a_ragged_file ... ok\n\ntest result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.50s\n     Running tests\\store_engine.rs (target\\debug\\deps\\store_engine-2baa1db21f57f15f.exe)",
-  "ranAt": "2026-11-09T02:27:33.142Z",
-  "headCommit": "1ddbf44a5669ba0a87ee315ce435ccf9cb49db17",
+  "outputSha": "9b73224cbcab82ba6eb62230360440ccdd14da4e0a5c5dadd46c416d76e93477",
+  "outputTail": "test a_copy_into_a_foreign_database_is_refused_and_detaches_after ... ok\ntest the_csv_reader_options_type_a_decimal_comma_and_pad_a_ragged_file ... ok\ntest a_long_row_s_window_is_the_first_2048_lines_whatever_the_sample_size ... ok\ntest a_csv_view_reflects_edits_a_replacement_and_a_new_column_and_never_locks_the_file ... ok\ntest the_sniffer_s_outcomes_on_a_marked_a_header_only_an_empty_and_a_missing_file ... ok\ntest the_sniffer_collapses_a_long_row_followed_by_rows_and_refuses_a_file_past_the_window ... ok\ntest the_sniffer_s_outcome_follows_the_long_row_s_line_not_the_file_s_length ... ok\ntest the_sniffer_s_kept_row_depends_on_the_long_row_and_the_window_ends_at_the_default_sample ... ok\ntest the_sniffer_s_outcomes_on_a_ragged_file ... ok\n\ntest result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.68s\n     Running tests\\store_engine.rs (target\\debug\\deps\\store_engine-2baa1db21f57f15f.exe)",
+  "ranAt": "2026-11-09T02:32:18.280Z",
+  "headCommit": "d1252ec89e73ce5eaabb96950399e5f600943ccb",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store_engine.rs",
       "file": "crates/veredas-portal/tests/store_engine.rs",
-      "fileSha": "84a7a16a479cb26b37beeb9f773dafd739302bd31d8114fc09dd9a3566d73754"
+      "fileSha": "1f308d3eece40ab59f352fea9c21441878a483e439746d86f332630a09390964"
     }
   ]
 }
