@@ -1,7 +1,7 @@
 # The test runner's own file (law L7 leaves it unstamped, as it does a cargo manifest).
-# A test that measures the host's timer (the draws' and the ramps' counts) runs with the machine
-# to itself: under the whole suite's parallel processes a 20 ms tick landed every 31 ms, which is
-# the load's doing, not the code's (docs/maquinar-plan.md, "Traps"; docs/questions.md Q13).
+# A test that measures the host's timer (the draws' and the ramps' counts, a stall's phase) runs
+# with the machine to itself: under the whole suite's parallel processes a 20 ms tick landed every
+# 31 ms, which is the load's doing, not the code's (docs/maquinar-plan.md, "Traps"; questions Q13).
 [[profile.default.overrides]]
-filter = 'test(draws_come_at_their_interval) | test(ramps_come_at_their_interval_counted_apart_from_draws)'
+filter = 'test(draws_come_at_their_interval) | test(ramps_come_at_their_interval_counted_apart_from_draws) | test(a_stall_skips_the_draws_and_steps_it_missed)'
 threads-required = 'num-cpus'

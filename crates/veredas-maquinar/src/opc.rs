@@ -236,13 +236,14 @@ pub fn ramp_next(v: f64, r: &Ramp) -> f64 {
             }
             n / f
         }
+        // Without places: an int's ramp (a float's names its places), its whole numbers
+        // summed exactly; the low a floor all the same.
         None => {
             let width = r.high - r.low;
             let mut n = v + r.step;
             while n > r.high {
                 n -= width;
             }
-            // A float sum's last bit can carry a wrap a hair below the low: it lands on the low.
             n.max(r.low)
         }
     }
@@ -452,6 +453,11 @@ fn compile(cfg: &OpcConfig) -> Result<Vec<CompiledReaction>, OpcError> {
                     return Err(bad(format!("{place}.ramp.decimals: an int has no places")));
                 }
             }
+            // A float's steps are counted in its places: a float sum as it falls drifts, and a
+            // step can round away at the range's magnitude, so a float ramp names them.
+            if tag.ty == TagType::Float && r.decimals.is_none() {
+                return Err(bad(format!("{place}.ramp: a float ramp counts its steps in its places: name them (`decimals`)")));
+            }
             if let Some(d) = r.decimals
                 && d > 15
             {
@@ -479,11 +485,6 @@ fn compile(cfg: &OpcConfig) -> Result<Vec<CompiledReaction>, OpcError> {
             };
             if !within {
                 return Err(bad(format!("{place}.ramp: the step {} is not above 0 and at most the range's width {width}", r.step)));
-            }
-            // Without places, a step a float cannot add at the range's magnitude never moves it.
-            let magnitude = r.low.abs().max(r.high.abs());
-            if r.decimals.is_none() && magnitude + r.step == magnitude {
-                return Err(bad(format!("{place}.ramp: the step {} is lost at the range's magnitude ({magnitude})", r.step)));
             }
             let v = match &initial {
                 Variant::Int32(x) => *x as f64,
@@ -646,8 +647,9 @@ impl OpcHandle {
     }
 
     /// Hold the plant's service loop for `d`, as a controller's scan stalls: nothing is set,
-    /// drawn, stepped or answered meanwhile, and the draws and steps it missed are skipped, each
-    /// keeping its phase. Returns once the loop runs again (or after `d` and 5 s more).
+    /// drawn, stepped or answered meanwhile, and the draws and ramp steps it missed are skipped,
+    /// each keeping its phase (a reaction's timed steps due meanwhile land in the first tick
+    /// after, in order). Returns once the loop runs again (or after `d` and 5 s more).
     pub fn stall(&self, d: Duration) {
         let (tx, rx) = std::sync::mpsc::channel();
         if self.requests.send(Request::Stall(d, tx)).is_ok() {
