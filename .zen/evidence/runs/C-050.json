@@ -10,15 +10,15 @@
     "feed"
   ],
   "exitCode": 0,
-  "outputSha": "fc4ff213e3cadc89bdd620894c7a7e9407c6b4d615b8daec756c82681fa79dfa",
-  "outputTail": "\nrunning 4 tests\ntest numbers_read_as_they_are_shown ... ok\ntest a_rule_holds_only_over_its_kind_of_value ... ok\ntest the_fold_reads_every_object_exactly ... ok\ntest the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.27s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.18s\n     Running tests\\feed.rs (target\\debug\\deps\\feed-6f20b3388bccdcc6.exe)",
-  "ranAt": "2026-11-10T00:49:33.514Z",
-  "headCommit": "9a2c2baa43984a772130edc80d682e69788307a3",
+  "outputSha": "bc7ee663a26930188570a5540084be3c53f87694ae62d7faef86fdda9bbcf45a",
+  "outputTail": "\nrunning 4 tests\ntest a_rule_holds_only_over_its_kind_of_value ... ok\ntest numbers_read_as_they_are_shown ... ok\ntest the_fold_reads_every_object_exactly ... ok\ntest the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.43s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.27s\n     Running tests\\feed.rs (target\\debug\\deps\\feed-6f20b3388bccdcc6.exe)",
+  "ranAt": "2026-11-10T02:21:57.595Z",
+  "headCommit": "6e5c2154e65c8a2e968831fbd2e558ea6d05b483",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/feed.rs",
       "file": "crates/veredas-supervisao/tests/feed.rs",
-      "fileSha": "1ba6fb22a63d9cf7581cda4a11c438c7c5825222d39cd8e0fb9239906d2a0ddd"
+      "fileSha": "490a64b54175a8fa0f3fc7cec997f7f06ed0a7b22cfa119e3f893c2872e2cea8"
     }
   ]
 }
