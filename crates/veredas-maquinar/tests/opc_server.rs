@@ -746,6 +746,36 @@ fn a_ramp_steps_by_its_step_and_wraps_by_the_range_s_width() {
     let seen: Vec<f64> = (0..5).map(|_| { v = ramp_next(v, &short); v }).collect();
     assert_eq!(seen, [0.1, 0.2, 0.3, 0.1, 0.2]);
     assert_eq!(ramp_next(0.25, &short), 0.1, "a value between places is counted from its nearest place (0.3)");
+    // Every high and step at two places from 0.01 to 0.6, from 0 and from a low of -0.6, against
+    // the same ramp counted in whole hundredths here (0.29 * 100 falls under 29 as a float).
+    for lo in [0i64, -60] {
+        for hi in 1..=60i64 {
+            for st in 1..=hi - lo {
+                let r = Ramp { low: lo as f64 / 100.0, high: hi as f64 / 100.0, step: st as f64 / 100.0, decimals: Some(2), interval_ms: 100 };
+                let (mut v, mut n) = (r.low, lo);
+                for k in 0..(2 * (hi - lo) / st + 3) {
+                    v = ramp_next(v, &r);
+                    n += st;
+                    while n > hi {
+                        n -= hi - lo;
+                    }
+                    assert_eq!(v, n as f64 / 100.0, "{}..={} by {}, step {k}", r.low, r.high, r.step);
+                }
+            }
+        }
+    }
+    // An int ramp at the edges of an int, summed exactly: 2147483637..=2147483647 by 7, and the
+    // whole of an int by i32::MAX, and a range at its lowest.
+    let top = Ramp { low: 2147483637.0, high: 2147483647.0, step: 7.0, decimals: None, interval_ms: 100 };
+    let mut v = top.low;
+    let walked: Vec<f64> = (0..4).map(|_| { v = ramp_next(v, &top); v }).collect();
+    assert_eq!(walked, [2147483644.0, 2147483641.0, 2147483638.0, 2147483645.0]);
+    let all = Ramp { low: i32::MIN as f64, high: i32::MAX as f64, step: i32::MAX as f64, decimals: None, interval_ms: 100 };
+    let mut v = all.low;
+    let walked: Vec<f64> = (0..3).map(|_| { v = ramp_next(v, &all); v }).collect();
+    assert_eq!(walked, [-1.0, 2147483646.0, -2.0]);
+    let bottom = Ramp { low: i32::MIN as f64, high: i32::MIN as f64 + 10.0, step: 3.0, decimals: None, interval_ms: 100 };
+    assert_eq!([ramp_next(bottom.low, &bottom), ramp_next(bottom.high, &bottom)], [i32::MIN as f64 + 3.0, i32::MIN as f64 + 3.0]);
     // Every high and step at one place from 0.1 to 10, from 0 and from a low of -1, against the
     // same ramp counted in whole tenths here.
     for lo in [0i64, -10] {
@@ -1033,6 +1063,8 @@ fn a_bad_configuration_is_refused_by_name_before_anything_starts() {
         (TagType::Float, ramp(0.0, 2.5, 0.5, Some(0), 20), "opc.tags[0] (`r`).ramp.high 2.5 is not a whole number of the ramp's places (0)"),
         (TagType::Float, ramp(0.0, 1e6, 0.1, Some(15), 20), "opc.tags[0] (`r`).ramp.high 1000000 at 15 places is past what a float counts exactly"),
         (TagType::Float, ramp(0.0, 2.26, 0.01, Some(15), 20), "opc.tags[0] (`r`).ramp.high 2.26 at 15 places is past what a float counts exactly"),
+        (TagType::Float, ramp(-2.26, 0.0, 0.01, Some(15), 20), "opc.tags[0] (`r`).ramp.low -2.26 at 15 places is past what a float counts exactly"),
+        (TagType::Float, ramp(-9.0, -8.0, 1e-15, Some(15), 20), "opc.tags[0] (`r`).ramp.low -9 at 15 places is past what a float counts exactly"),
         (TagType::Float, ramp(4.0, 5.0, 1e-15, Some(15), 20), "opc.tags[0] (`r`).ramp.low 4 at 15 places is past what a float counts exactly"),
         (TagType::Float, ramp(99999999.9, 100000000.06, 0.1, Some(1), 20), "opc.tags[0] (`r`).ramp.high 100000000.06 is not a whole number of the ramp's places (1)"),
         (TagType::Float, ramp(0.0, 1.0, 0.07, Some(1), 20), "opc.tags[0] (`r`).ramp.step 0.07 is not a whole number of the ramp's places (1)"),
@@ -1060,6 +1092,10 @@ fn a_bad_configuration_is_refused_by_name_before_anything_starts() {
     assert!(validate(&ok(vec![ramped(TagType::Float, "", ramp(0.0, 1.0, 1.0, Some(15), 20))], vec![])).is_ok(), "an empty value is the zero, a step of the whole width, fifteen places (a range of 1 counts exactly at them)");
     assert!(validate(&ok(vec![ramped(TagType::Int, "10", ramp(-5.0, 10.0, 15.0, None, 20))], vec![])).is_ok());
     assert!(validate(&ok(vec![ramped(TagType::Float, "0", ramp(0.0, 2.25, 0.01, Some(15), 20))], vec![])).is_ok(), "2.25 at fifteen places counts exactly");
+    assert!(validate(&ok(vec![ramped(TagType::Float, "0", ramp(-2.25, 0.0, 0.01, Some(15), 20))], vec![])).is_ok(), "and -2.25");
+    for (low, high, step) in [(2147483637.0, 2147483647.0, 7.0), (i32::MIN as f64, i32::MAX as f64, i32::MAX as f64), (i32::MIN as f64, i32::MIN as f64 + 10.0, 3.0)] {
+        assert!(validate(&ok(vec![ramped(TagType::Int, &format!("{low}"), ramp(low, high, step, None, 20))], vec![])).is_ok(), "{low}..={high} by {step}, inside an int");
+    }
     assert!(validate(&ok(vec![ramped(TagType::Float, "0", ramp(-2.2, 0.3, 0.1, Some(1), 20))], vec![])).is_ok(), "-2.2, 0.3 and 0.1 at one place");
     // At one and two places, every range from -0.6 to 0.6 (-6 to 6 at one): a step of its whole
     // width accepted, one unit more refused, counted in units (0.07 * 100 is 7.000000000000001).

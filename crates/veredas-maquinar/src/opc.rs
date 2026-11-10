@@ -207,7 +207,8 @@ pub struct Ramp {
     pub high: f64,
     #[serde(default = "default_step")]
     pub step: f64,
-    /// A float's places after each step; absent, the sum as it falls.
+    /// A float's places, which a float ramp names (its steps counted in their units); an int's
+    /// ramp takes none.
     #[serde(default)]
     pub decimals: Option<u8>,
     #[serde(default = "default_interval")]
@@ -474,7 +475,7 @@ fn compile(cfg: &OpcConfig) -> Result<Vec<CompiledReaction>, OpcError> {
                 }
             }
             // At most the range's width: with places, counted in their units (0.3 - 0.1 is a hair
-            // under 0.2 as floats, two tenths as units); without, as the floats fall.
+            // under 0.2 as floats, two tenths as units); an int's, as its whole numbers fall.
             let (within, width) = match r.decimals {
                 Some(d) => {
                     let f = 10f64.powi(d as i32);
