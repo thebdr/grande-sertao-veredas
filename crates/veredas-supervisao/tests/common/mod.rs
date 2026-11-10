@@ -3,6 +3,8 @@
 //! test; and raw HTTP and SSE over real sockets.
 #![allow(dead_code)]
 
+pub mod browser;
+
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};

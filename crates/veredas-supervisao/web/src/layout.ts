@@ -1,6 +1,8 @@
 // The layout view: the session's SVG placed in the page and bound by object ID. Bound once,
 // then mutated, never rebuilt: a state is a class, a level a clipped fill, a marker a transform,
-// a mark and a word a small text beside the element. Nothing here decides a state.
+// a mark and a word a small text beside the element (below a marker, moving with it). What the
+// page adds for an object carries its id in `data-for` (a marker's tag its key in `data-key`).
+// Nothing here decides a state.
 
 import type { ObjectDef, ObjectState } from "./api";
 import { s } from "./dom";
@@ -16,6 +18,8 @@ interface Bound {
   valueText?: SVGTextElement;
   clones: Map<string, SVGGraphicsElement>;
   lastPlace: Map<string, number>;
+  /// A marker's mark and word, one per key ("" for a marker of its own), in the overlay.
+  tags: Map<string, SVGTextElement>;
 }
 
 export interface LayoutView {
@@ -56,7 +60,7 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
   const defsEl = s("defs");
   defsEl.innerHTML = `<pattern id="sv-hatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="4" height="4" fill="#26262A"/><line x1="0" y1="0" x2="0" y2="4" stroke="#6F6F77" stroke-width="1.4"/></pattern>`;
   svg.prepend(defsEl);
-  const overlay = s("g", { class: "sv-overlay" });
+  const overlay = s("g", { class: "sv-overlay" }) as SVGGElement;
   svg.append(overlay);
 
   const bound = new Map<string, Bound>();
@@ -67,18 +71,18 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     el.dataset.object = def.id;
     const box = el.getBBox();
     const below = box.y + box.height + fontSize * 1.05;
-    const tag = s("text", { x: box.x + box.width / 2, y: below, class: "sv-tag", "font-size": fontSize * 0.8, "text-anchor": "middle" }) as SVGTextElement;
-    const label = s("text", { x: box.x + box.width / 2, y: box.y - fontSize * 0.35, class: "sv-label", "font-size": fontSize * 0.85, "text-anchor": "middle" }, def.label) as SVGTextElement;
-    const b: Bound = { def, el, box, tag, label, clones: new Map(), lastPlace: new Map() };
+    const tag = s("text", { x: box.x + box.width / 2, y: below, class: "sv-tag", "font-size": fontSize * 0.8, "text-anchor": "middle", "data-for": def.id }) as SVGTextElement;
+    const label = s("text", { x: box.x + box.width / 2, y: box.y - fontSize * 0.35, class: "sv-label", "font-size": fontSize * 0.85, "text-anchor": "middle", "data-for": def.id }, def.label) as SVGTextElement;
+    const b: Bound = { def, el, box, tag, label, clones: new Map(), lastPlace: new Map(), tags: new Map() };
     if (def.show === "level") {
       const clipId = `sv-clip-${def.id}`;
       const clip = s("clipPath", { id: clipId }, s("use", { href: `#${def.id}` }));
       defsEl.append(clip);
-      b.fill = s("rect", { x: box.x, y: box.y + box.height, width: box.width, height: 0, "clip-path": `url(#${clipId})`, class: "sv-fill" }) as SVGRectElement;
+      b.fill = s("rect", { x: box.x, y: box.y + box.height, width: box.width, height: 0, "clip-path": `url(#${clipId})`, class: "sv-fill", "data-for": def.id }) as SVGRectElement;
       el.after(b.fill);
     }
     if (def.show === "value") {
-      b.valueText = s("text", { x: box.x + box.width / 2, y: box.y + box.height / 2 + fontSize * 0.35, class: "sv-value", "font-size": fontSize, "text-anchor": "middle" }) as SVGTextElement;
+      b.valueText = s("text", { x: box.x + box.width / 2, y: box.y + box.height / 2 + fontSize * 0.35, class: "sv-value", "font-size": fontSize, "text-anchor": "middle", "data-for": def.id }) as SVGTextElement;
       overlay.append(b.valueText);
     }
     if (def.show === "move") {
@@ -97,6 +101,22 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
   }
 
   const pathOf = (id: string) => svg.querySelector(`[id="${CSS.escape(id)}"]`) as SVGGeometryElement | null;
+
+  /// A marker's tag for one key, made on first use.
+  function markerTag(b: Bound, key: string): SVGTextElement {
+    let t = b.tags.get(key);
+    if (!t) {
+      t = s("text", { class: "sv-tag", "font-size": fontSize * 0.8, "text-anchor": "middle", "data-for": b.def.id, "data-key": key }) as SVGTextElement;
+      overlay.append(t);
+      b.tags.set(key, t);
+    }
+    return t;
+  }
+
+  function dropTag(b: Bound, key: string) {
+    b.tags.get(key)?.remove();
+    b.tags.delete(key);
+  }
 
   function placeAt(b: Bound, el: SVGGraphicsElement, key: string, place: number) {
     const p = b.def.path ? pathOf(b.def.path) : null;
@@ -117,6 +137,14 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     el.classList.toggle("sv-jump", prev === undefined || Math.abs(prev - place) > 0.5);
     b.lastPlace.set(key, place);
     el.setAttribute("transform", `translate(${(q.x - cx).toFixed(2)} ${(q.y - cy).toFixed(2)})`);
+    // Its mark and word below it, in the overlay's coordinates.
+    const oc = overlay.getCTM();
+    if (oc) {
+      const r = new DOMPoint(pt.x, pt.y).matrixTransform(oc.inverse().multiply(ec));
+      const t = markerTag(b, key);
+      t.setAttribute("x", r.x.toFixed(2));
+      t.setAttribute("y", (r.y + b.box.height / 2 + fontSize * 0.9).toFixed(2));
+    }
   }
 
   let selected: { id: string | null; key: string | null } = { id: null, key: null };
@@ -143,13 +171,15 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       b.fill.classList.add(cls);
     }
     if (b.valueText) b.valueText.textContent = o.text === null ? "" : `${o.text}${b.def.unit ? " " + b.def.unit : ""}`;
-    b.tag.textContent = o.state === "normal" ? "" : `${o.mark} ${o.word}`;
+    const said = o.state === "normal" ? "" : `${o.mark} ${o.word}`;
+    b.tag.textContent = said;
     b.tag.setAttribute("class", `sv-tag ${cls}`);
     if (b.def.show === "move") {
       if (o.items.length > 0) {
         b.el.classList.add("sv-hidden");
         const keys = new Set(o.items.map((i) => i.key));
-        for (const [k, c] of b.clones) if (!keys.has(k)) { c.remove(); b.clones.delete(k); b.lastPlace.delete(k); }
+        for (const [k, c] of b.clones) if (!keys.has(k)) { c.remove(); b.clones.delete(k); b.lastPlace.delete(k); dropTag(b, k); }
+        dropTag(b, "");
         for (const it of o.items) {
           let c = b.clones.get(it.key);
           if (!c) {
@@ -167,10 +197,16 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
           placeAt(b, c, it.key, it.place);
         }
       } else {
+        for (const k of b.clones.keys()) dropTag(b, k);
         for (const c of b.clones.values()) c.remove();
         b.clones.clear();
         b.el.classList.toggle("sv-hidden", o.place === null);
         if (o.place !== null) placeAt(b, b.el, "", o.place);
+        else dropTag(b, "");
+      }
+      for (const t of b.tags.values()) {
+        t.textContent = said;
+        t.setAttribute("class", `sv-tag ${cls}`);
       }
     }
   }

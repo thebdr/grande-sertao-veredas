@@ -150,6 +150,13 @@ dashboard), and its `docs/supervisao-plan.md`.
   could read is red on every machine, Node or not.
 - Node and npm are needed only to change the page (`npm ci`, `npm run build` in `web/`); the crate,
   its tests and CI never run them. `web/node_modules/` is never committed.
+- The tests run the page itself in a headless Chromium (Edge on Windows, Chrome or Chromium
+  elsewhere, the one `VEREDAS_BROWSER` names first), driven over the DevTools protocol through a
+  WebSocket the tests write in a few lines, and read back what it drew. The suite needs that
+  browser as it needs a socket: a missing one fails, never skips. GitHub's Ubuntu runner carries
+  Chrome.
+- What the page adds to the drawing for an object carries the object's id in `data-for` (a
+  marker's tag its key in `data-key`), so the drawing is read by id, as it is bound.
 - The charts are SVG drawn by the page's own code: the objects are small and specific (dashed
   limits, breach dots, state bars, distributions on one scale), and a chart library would be one
   more thing in the bundle to keep content-agnostic.
