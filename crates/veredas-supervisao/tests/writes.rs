@@ -64,7 +64,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     for entry in std::fs::read_dir(&src).unwrap() {
         let path = entry.unwrap().path();
         let text = std::fs::read_to_string(&path).unwrap();
-        for word in ["write_tags", "opc_handle", "channel_handle", "set_writes_armed", "WriteGate", "/api/opc/write", "/api/channels/send"] {
+        for word in ["write_tags", "opc_handle", "channel_handle", "set_writes_armed", "WriteGate", ".gate", "live.opc", "live.channels", "/api/opc/write", "/api/channels/send"] {
             assert!(!text.contains(word), "{} names `{word}`", path.display());
         }
     }
@@ -72,12 +72,25 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     assert_eq!(bundle.matches("/api/opc/write").count(), 1, "the page posts to one route");
     assert!(bundle.contains("/portal/api/opc/write") && !bundle.contains("/api/channels/send"), "the route is portal's own");
     assert_eq!(bundle.matches("method:\"POST\"").count() + bundle.matches("method: \"POST\"").count(), 1, "one POST in the page");
+    // The page's write button is disabled while the status says the switch is off (the button
+    // itself is verified in the browser, C-054's evidence).
+    let word = |r: &str| r.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '.')).next().unwrap_or("").to_string();
+    assert!(bundle.split("disabled=!").skip(1).any(|r| word(r).ends_with(".writes_armed")), "a button disabled by the switch");
 
     // Supervisão's own routes take no write.
-    for p in ["/", "/api/sessions", "/s/loop/", "/s/loop/binding", "/s/loop/objects", "/s/loop/objects.json", "/s/loop/dashboard/0", "/s/loop/layout.svg"] {
-        let (status, _, _) = http(addr, "POST", p, Some(&body.to_string()));
-        assert_eq!(status, 405, "{p}");
+    for p in ["/", "/assets/app.js", "/assets/app.css", "/api/sessions", "/s/loop", "/s/loop/", "/s/loop/binding", "/s/loop/objects", "/s/loop/objects.json", "/s/loop/dashboard/0", "/s/loop/layout.svg"] {
+        for method in ["POST", "PUT", "DELETE", "PATCH"] {
+            let (status, _, _) = http(addr, method, p, Some(&body.to_string()));
+            assert_eq!(status, 405, "{method} {p}");
+        }
+        // Nor does a read move the switch (the object stream never ends; it is read elsewhere).
+        if p != "/s/loop/objects" {
+            let _ = http(addr, "GET", p, None);
+        }
     }
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(get(addr, "/s/loop/objects.json").1["session"]["writes_armed"], json!(false), "no route of supervisão's armed the switch");
+    assert_eq!(post(addr, "/s/loop/portal/api/opc/write", &body).0, 403);
     host.stop();
 
     // Armed by the project: the post lands from the start.

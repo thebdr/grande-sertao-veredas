@@ -226,12 +226,15 @@ pub struct Live {
     pub start_ms: Option<i64>,
     pub sources: Vec<SourceInfo>,
     pub store: Arc<DuckStore>,
-    /// The master write switch, live, shared with every write path.
-    pub gate: WriteGate,
-    /// Every OPC source's handle, with its compiled spec (the whitelist).
-    pub opc: Vec<OpcHandle>,
-    /// Every telegram channel's handle.
-    pub channels: Vec<ChannelHandle>,
+    /// The master write switch, live, shared with every write path. Crate-private: outside
+    /// portal it is read through `writes_armed` and set through `Session::set_writes_armed`
+    /// alone, so a component serving the session (supervisão) cannot arm it by reaching in.
+    pub(crate) gate: WriteGate,
+    /// Every OPC source's handle, with its compiled spec (the whitelist); reached through
+    /// `opc_handle`.
+    pub(crate) opc: Vec<OpcHandle>,
+    /// Every telegram channel's handle; reached through `channel_handle`.
+    pub(crate) channels: Vec<ChannelHandle>,
     pub health: RwLock<BTreeMap<String, SourceHealth>>,
     pub series: RwLock<BTreeMap<String, SeriesLast>>,
     pub vitals: RwLock<StoreVitals>,
