@@ -1,19 +1,20 @@
 {
   "clause": "C-026",
-  "command": "cargo test -p veredas-maquinar --test opc_server",
+  "command": "cargo nextest run -p veredas-maquinar --test opc_server",
   "commandArgv": [
     "cargo",
-    "test",
+    "nextest",
+    "run",
     "-p",
     "veredas-maquinar",
     "--test",
     "opc_server"
   ],
-  "exitCode": 101,
-  "outputSha": "744aeed27181183ce0121cd4c5ed99e31a49ff8a9fa1bb1e2cfb95d4fc528e20",
-  "outputTail": "---- ramps_come_at_their_interval_counted_apart_from_draws stdout ----\n\nthread 'ramps_come_at_their_interval_counted_apart_from_draws' (37380) panicked at crates\\veredas-maquinar\\tests\\opc_server.rs:964:5:\nan int and a float 100 ms ramp and a 100 ms draw in 2 s: OpcStatus { draws: 18, ramp_steps: 36, reactions_fired: 0, type_mismatches: 0, last_mismatch: None }\n\n\nfailures:\n    draws_come_at_their_interval\n    ramps_come_at_their_interval_counted_apart_from_draws\n\ntest result: FAILED. 20 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.77s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.93s\n     Running tests\\opc_server.rs (target\\debug\\deps\\opc_server-0a424b948228c9c3.exe)\nerror: test failed, to rerun pass `-p veredas-maquinar --test opc_server`",
-  "ranAt": "2026-11-10T11:03:08.626Z",
-  "headCommit": "19b9c4150e480654af537cfe09c4515a42917c6e",
+  "exitCode": 0,
+  "outputSha": "855b57fddf697e955c21960b280c680f4678f5fccd9e6bfb58c334516c8e96be",
+  "outputTail": "        PASS [   2.998s] (10/22) veredas-maquinar::opc_server a_configured_user_is_accepted_and_a_wrong_password_refused\n        PASS [   6.756s] (11/22) veredas-maquinar::opc_server a_ramped_tag_steps_on_the_wire_and_moves_on_from_what_it_holds\n        PASS [   4.500s] (12/22) veredas-maquinar::opc_server draws_come_at_their_interval\n        PASS [   2.415s] (13/22) veredas-maquinar::opc_server int_draws_take_only_the_whole_numbers_inside_the_range\n        PASS [   4.569s] (14/22) veredas-maquinar::opc_server ramps_come_at_their_interval_counted_apart_from_draws\n        PASS [   0.459s] (15/22) veredas-maquinar::opc_server the_configuration_reads_from_toml_with_its_defaults_and_refuses_a_misspelled_key\n        PASS [   0.755s] (16/22) veredas-maquinar::opc_server values_parse_per_type_and_nonsense_is_refused\n        PASS [   1.220s] (17/22) veredas-maquinar::opc_server writes_land_in_the_address_space_and_the_access_is_honoured\n        PASS [   1.384s] (18/22) veredas-maquinar::opc_server the_consumer_s_poll_worker_polls_and_writes_through_the_bench\n        PASS [   1.429s] (19/22) veredas-maquinar::opc_server stopping_frees_the_port_for_the_next_start\n        PASS [   2.011s] (20/22) veredas-maquinar::opc_server the_read_cap_and_the_session_cap_are_the_bench_s_knobs\n        PASS [   2.071s] (21/22) veredas-maquinar::opc_server the_relay_makes_the_link_go_silent_and_delivers_what_it_held_when_thawed\n        PASS [   2.691s] (22/22) veredas-maquinar::opc_server randomized_tags_move_and_stay_inside_their_range\n────────────\n     Summary [  20.945s] 22 tests run: 22 passed, 0 skipped",
+  "ranAt": "2026-11-10T11:05:33.012Z",
+  "headCommit": "aada7c51e1e5b114205b83f0ddd8f6020d8b4bee",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/opc_server.rs",
