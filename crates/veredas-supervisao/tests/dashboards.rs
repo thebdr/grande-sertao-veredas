@@ -290,7 +290,7 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     // A panel that cannot be computed says why in its place; the others stand.
     assert_eq!(d["panels"][11]["error"], json!("`outlets` has no column `nothing` (its columns: outlet, sorted, travel)"));
     assert!(d["panels"][11]["data"].is_null());
-    // A limit above: a breach is a point past it, an equal one is not.
+    // A limit above: a breach is a point past it.
     let up = panel(&d, 12);
     assert_eq!((up["limit"].clone(), up["unit"].clone(), up["total"].clone()), (json!({ "above": 15.0 }), json!("s"), json!(9)));
     assert_eq!(up["breaches"], json!([[at(10.0), 20.0], [at(20.0), 16.0], [at(30.5), 21.0]]));
