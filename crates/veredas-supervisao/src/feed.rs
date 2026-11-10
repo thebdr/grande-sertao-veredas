@@ -41,6 +41,8 @@ struct SeriesSeen {
     any: Option<Seen>,
     by_key: BTreeMap<String, Seen>,
     keyed: bool,
+    /// The ingest's sample count at the last cache poll: a count that moved is a new sample.
+    cache_count: u64,
 }
 
 /// A marker of a keyed series: its key and its place along the path, 0 to 1.
@@ -181,27 +183,33 @@ impl Fold {
     }
 
     /// The ingest's cached last value of a series (whatever its key), taken when it is newer than
-    /// what the frames brought, or when nothing came yet: text arrives only this way. `keys` is
-    /// how many keys the ingest has seen on the series: a series with keys is keyed even before a
-    /// frame carried one (a lag, or a backfill read before anyone listened).
-    pub fn cached(&mut self, source: &str, series: &str, last_index_ms: i64, last_value: &str, keys: usize, now_ms: i64) {
+    /// what the frames brought, or when nothing came yet: text and time arrive only this way.
+    /// `keys` is how many keys the ingest has seen on the series: a series with keys is keyed even
+    /// before a frame carried one (a lag, or a backfill read before anyone listened). `count` is
+    /// how many samples it has stored: none yet is no value (an empty text is a value), and a count
+    /// that moved since the last poll is a new sample, taken at an equal index too (two lines under
+    /// one stamp), while an entry polled again unchanged keeps its arrival.
+    #[allow(clippy::too_many_arguments)]
+    pub fn cached(&mut self, source: &str, series: &str, last_index_ms: i64, last_value: &str, keys: usize, count: u64, now_ms: i64) {
         let k = (source.to_string(), series.to_string());
         if !self.watched.contains(&k) {
             return;
         }
+        let numeric = self.types.get(&k).is_none_or(|t| matches!(t, SeriesType::Int | SeriesType::Float));
+        let s = self.series.entry(k).or_default();
         if keys > 0 {
-            self.series.entry(k.clone()).or_default().keyed = true;
+            s.keyed = true;
         }
-        if last_value.is_empty() {
+        if count == 0 {
             return;
         }
-        let numeric = self.types.get(&k).is_none_or(|t| matches!(t, SeriesType::Int | SeriesType::Float));
+        let moved = count != s.cache_count;
+        s.cache_count = count;
         let reading = match (numeric, last_value.trim().parse::<f64>()) {
             (true, Ok(v)) => Reading::Num(v),
             _ => Reading::Text(last_value.to_string()),
         };
-        let s = self.series.entry(k).or_default();
-        if s.any.as_ref().is_none_or(|a| last_index_ms > a.index_ms) {
+        if s.any.as_ref().is_none_or(|a| last_index_ms > a.index_ms || (moved && last_index_ms >= a.index_ms)) {
             s.any = Some(Seen { reading, index_ms: last_index_ms, arrived_ms: now_ms });
         }
     }
@@ -314,12 +322,28 @@ fn evaluate(fold: &mut Fold, live: &Live, binding: &Binding) -> (Vec<ObjectView>
     let now = now_unix_ms();
     if let Ok(cache) = live.series.read() {
         for s in cache.values() {
-            fold.cached(s.series.source.as_str(), s.series.series.as_ref(), s.last_index_ms, &s.last_value, s.keys, now);
+            fold.cached(s.series.source.as_str(), s.series.series.as_ref(), s.last_index_ms, &s.last_value, s.keys, s.count, now);
         }
     }
     let away = away_sources(live);
     let objects = binding.objects.iter().map(|o| fold.view(o, !away.contains(&o.value.source), now)).collect();
     (objects, status(live))
+}
+
+/// The stream a client of the feed reads, as `(event, data)`: a `snapshot` first, then each
+/// event as the feed sends it; a client that lags past the channel's buffer gets a fresh
+/// `snapshot` in place of what it lost, never a silent gap.
+pub fn stream(rx: broadcast::Receiver<(&'static str, Arc<str>)>, snapshot: impl Fn() -> String + Send + Sync + 'static) -> impl tokio_stream::Stream<Item = (String, String)> + Send {
+    use tokio_stream::StreamExt;
+    use tokio_stream::wrappers::BroadcastStream;
+    use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+    let snapshot = Arc::new(snapshot);
+    let first = tokio_stream::once(("snapshot".to_string(), snapshot()));
+    let rest = BroadcastStream::new(rx).map(move |m| match m {
+        Ok((name, data)) => (name.to_string(), data.to_string()),
+        Err(BroadcastStreamRecvError::Lagged(_)) => ("snapshot".to_string(), snapshot()),
+    });
+    first.chain(rest)
 }
 
 /// What a feed publishes: the objects as they stand and the session's status.

@@ -287,8 +287,9 @@ A path is relative to the binding file's folder.
     for a log the rule reads, an OPC tag's or bit's series for an OPC source, a message's field for
     a channel; typed as portal types it (a type's word in any case), and, where several rules or
     messages carry it, numeric only where every one of them types it so.
-  - `key` (none): the one key read, for a series whose samples carry keys; absent, the latest
-    sample whatever its key, or, for a marker, one marker per key.
+  - `key` (none): the one key read, for a numeric series whose samples carry keys (a text or a
+    time series has no value per key to read); absent, the latest sample whatever its key, or, for
+    a marker, one marker per key.
 - `unit` (`""`): shown after the value.
 - `decimals` (none): the places a number is shown with, 0 to 6; absent, as it reads, at most three
   places, trailing zeros dropped.

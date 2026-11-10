@@ -899,8 +899,9 @@ A path is relative to the binding file's folder.
     for a log the rule reads, an OPC tag's or bit's series for an OPC source, a message's field for
     a channel; typed as portal types it (a type's word in any case), and, where several rules or
     messages carry it, numeric only where every one of them types it so.
-  - `key` (none): the one key read, for a series whose samples carry keys; absent, the latest
-    sample whatever its key, or, for a marker, one marker per key.
+  - `key` (none): the one key read, for a numeric series whose samples carry keys (a text or a
+    time series has no value per key to read); absent, the latest sample whatever its key, or, for
+    a marker, one marker per key.
 - `unit` (`""`): shown after the value.
 - `decimals` (none): the places a number is shown with, 0 to 6; absent, as it reads, at most three
   places, trailing zeros dropped.
@@ -1084,6 +1085,10 @@ fn the_refusals_of_a_kind_of_series_a_panel_and_a_number_name_their_place() {
         (Box::new(|b| b.replacen("show = \"level\"", "show = \"level\"\nrange = [0, inf]", 1)), "object `outlet-1`: the range's high is not a finite number"),
         (Box::new(|b| format!("{b}\n[[dashboard.panel]]\nkind = \"bars\"\nobject = \"outlet-1\"\ntarget = nan\n")), "dashboard `Overview`, panel[8] (bars): `target` is not a finite number"),
         (Box::new(|b| b.replacen("{ equals = 0, state = \"warn\", word = \"stopped\" }", "{ equals = nan, state = \"warn\", word = \"stopped\" }", 1)), "object `infeed`, states[0]: `equals` is not a finite number"),
+        // A key of a text series: portal frames numbers alone and keeps no text per key, so it
+        // would never light up; for an object's value and for a rule alike.
+        (Box::new(|b| b.replace("value = { source = \"sorter\", series = \"mode\" }", "value = { source = \"sorter\", series = \"mode\", key = \"A1\" }")), "object `mode`, value: a `key` reads one key of a numeric series, and `mode` is text"),
+        (Box::new(|b| b.replacen("{ equals = 0, state = \"warn\", word = \"stopped\" }", "{ equals = \"jam\", source = \"sorter\", series = \"mode\", key = \"A1\", state = \"warn\", word = \"stopped\" }", 1)), "object `infeed`, states[0]: a `key` reads one key of a numeric series, and `mode` is text"),
     ];
     for (f, expected) in cases {
         let mut ex = with_modes();
@@ -1111,12 +1116,12 @@ fn every_key_reads_back_as_written_and_every_default_fills() {
         Rule { compare: Compare::Above(5.0), class: StateClass::Warn, word: "warn".into(), series: None, ty: None },
         Rule { compare: Compare::AtMost(1.0), class: StateClass::Alarm, word: "low".into(), series: None, ty: None },
     ]);
-    // Rules over another series: an int one, and a keyed text one compared exactly as written.
+    // Rules over another series: an int one, and a text one compared exactly as written.
     let o = b.object("b").unwrap();
     assert_eq!(o.label, "Bee");
     assert_eq!(o.rules, vec![
         Rule { compare: Compare::Equals(Comparand::Num(2.0)), class: StateClass::Alarm, word: "fault".into(), series: Some(bind("plc", "infeed", None)), ty: Some(SeriesType::Int) },
-        Rule { compare: Compare::Equals(Comparand::Text("Jam".into())), class: StateClass::Near, word: "jam".into(), series: Some(bind("sorter", "mode", Some("B2"))), ty: Some(SeriesType::Text) },
+        Rule { compare: Compare::Equals(Comparand::Text("Jam".into())), class: StateClass::Near, word: "jam".into(), series: Some(bind("sorter", "mode", None)), ty: Some(SeriesType::Text) },
     ]);
     // A dashboard's columns default to 4; every panel's keys as written, its defaults filled.
     let d = &b.dashboards[0];
@@ -1160,7 +1165,7 @@ states = [ { above = 5, state = "warn" }, { at_most = 1, state = "alarm", word =
 id = "b"
 label = "Bee"
 value = { source = "plc", series = "speed" }
-states = [ { equals = 2, series = "infeed", state = "alarm", word = "fault" }, { equals = "Jam", source = "sorter", series = "mode", key = "B2", state = "near", word = "jam" } ]
+states = [ { equals = 2, series = "infeed", state = "alarm", word = "fault" }, { equals = "Jam", source = "sorter", series = "mode", state = "near", word = "jam" } ]
 
 [[dashboard]]
 name = "Keys"

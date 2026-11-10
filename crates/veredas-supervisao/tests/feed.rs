@@ -185,15 +185,31 @@ fn the_fold_reads_every_object_exactly() {
 
     // Text arrives through the ingest's cache: compared as text, exactly; a newer cached value of
     // a numeric series heals a missed frame; an older one is ignored.
-    f.cached("sorter", "mode", 5, "jam", 0, 30_000);
+    f.cached("sorter", "mode", 5, "jam", 0, 1, 30_000);
     let v = f.view(o("mode"), true, 30_000);
     assert_eq!((v.value, v.text.as_deref(), v.state, v.word.as_str()), (Some(Reading::Text("jam".into())), Some("jam"), StateClass::Warn, "jammed"));
-    f.cached("sorter", "mode", 6, "Jam", 0, 30_001);
+    f.cached("sorter", "mode", 6, "Jam", 0, 2, 30_001);
     assert_eq!(f.view(o("mode"), true, 30_001).state, StateClass::Normal);
-    f.cached("plc", "speed", 3, "1.75", 0, 30_002);
+    f.cached("plc", "speed", 3, "1.75", 0, 3, 30_002);
     assert_eq!(f.view(o("speed"), true, 30_002).value, Some(Reading::Num(1.75)));
-    f.cached("plc", "speed", 2, "9", 0, 30_003);
+    f.cached("plc", "speed", 2, "9", 0, 4, 30_003);
     assert_eq!(f.view(o("speed"), true, 30_003).value, Some(Reading::Num(1.75)));
+    // No sample stored is no value; an empty text is a value, taken with its state.
+    let mut t = Fold::new(&b);
+    t.cached("sorter", "mode", 0, "", 0, 0, 1_000);
+    assert_eq!(t.view(o("mode"), true, 1_000).value, None, "nothing stored yet");
+    t.cached("sorter", "mode", 5, "jam", 0, 1, 1_000);
+    t.cached("sorter", "mode", 6, "", 0, 2, 2_000);
+    let v = t.view(o("mode"), true, 2_000);
+    assert_eq!((v.value, v.text.as_deref(), v.state, v.word.as_str(), v.since_ms), (Some(Reading::Text(String::new())), Some(""), StateClass::Normal, "running", Some(2_000)));
+    // A new sample under the same stamp (the count moved) is taken; the same entry polled again
+    // keeps its arrival.
+    t.cached("sorter", "mode", 7, "jam", 0, 3, 3_000);
+    t.cached("sorter", "mode", 7, "run", 0, 4, 4_000);
+    let v = t.view(o("mode"), true, 4_000);
+    assert_eq!((v.text.as_deref(), v.state, v.since_ms), (Some("run"), StateClass::Normal, Some(4_000)));
+    t.cached("sorter", "mode", 7, "run", 0, 4, 9_000);
+    assert_eq!(t.view(o("mode"), true, 9_000).since_ms, Some(4_000), "polled again, not a new arrival");
 
     // Away, by the source's health: waiting is away only once the source has delivered (portal
     // reads an OPC source reconnecting, and a channel whose peer left, as waiting).
@@ -213,12 +229,12 @@ fn the_fold_reads_every_object_exactly() {
     // A series the ingest counts keys on is keyed before any frame carried one: its markers come
     // per key, never one place for the latest sample whatever its key; without keys, one place.
     let mut g = Fold::new(&b);
-    g.cached("sorter", "at", 5, "42", 2, 1_000);
+    g.cached("sorter", "at", 5, "42", 2, 5, 1_000);
     let v = g.view(o("tracked"), true, 1_000);
     assert_eq!((v.place, v.items.clone(), v.text.as_deref()), (None, vec![], Some("42")));
     assert_eq!(g.view(o("tracked"), true, 1_000_000).place, None, "never one place, however long");
     let mut g = Fold::new(&b);
-    g.cached("sorter", "at", 5, "42", 0, 1_000);
+    g.cached("sorter", "at", 5, "42", 0, 6, 1_000);
     assert_eq!(g.view(o("tracked"), true, 1_000).place, Some(0.42));
 
     // A change is anything but the arrival: a value, a level, a place or the markers moving is
@@ -241,7 +257,7 @@ fn the_fold_reads_every_object_exactly() {
     let one = g.view(o("tracked"), true, 1_000);
     g.sample("sorter", "at", Some("B2"), 1, 10.0, 1_000);
     assert!(!one.same(&g.view(o("tracked"), true, 1_000)), "a marker more is a change");
-    g.cached("plc", "fill1", 10, "NaN", 0, 1_000);
+    g.cached("plc", "fill1", 10, "NaN", 0, 7, 1_000);
     let nan = g.view(o("outlet-1"), true, 1_000);
     assert_eq!((nan.to_json()["value"].clone(), nan.text.as_deref()), (Value::Null, Some("NaN")));
     assert!(nan.same(&g.view(o("outlet-1"), true, 5_000)), "NaN is the same as itself");
@@ -280,12 +296,12 @@ fn the_fold_reads_every_object_exactly() {
     }
     // A rule over a text series no object reads compares as text: "0" is the text "0", never the
     // number 0.
-    g.cached("sorter", "door", 5, "0", 0, 1_000);
+    g.cached("sorter", "door", 5, "0", 0, 8, 1_000);
     let (t, n) = (g.view(o("door-text"), true, 1_000), g.view(o("door-num"), true, 1_000));
     assert_eq!((t.state, t.word.as_str(), n.state), (StateClass::Warn, "door code 0", StateClass::Normal));
     // A time reads as the ingest renders it, whichever way it came: a frame's epoch milliseconds
     // are not taken.
-    g.cached("sorter", "done", 5, "2026-11-10 12:00:00", 0, 1_000);
+    g.cached("sorter", "done", 5, "2026-11-10 12:00:00", 0, 9, 1_000);
     g.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"done","k":null,"ms":6,"v":1762776060000.0}]}"#, 2_000);
     let v = g.view(o("done"), true, 2_000);
     assert_eq!((v.value, v.text.as_deref()), (Some(Reading::Text("2026-11-10 12:00:00".into())), Some("2026-11-10 12:00:00")));
@@ -487,4 +503,28 @@ fn a_rule_holds_only_over_its_kind_of_value() {
     assert!(!Compare::Below(98.0).holds(&Reading::Text("97".into())));
     assert_eq!(Compare::Below(98.0).describe("%"), "below 98 %");
     assert_eq!(Compare::Above(2.0).describe(""), "above 2");
+}
+
+// ---- the stream a client reads (src/feed.rs) ----
+
+#[test]
+fn a_stream_client_that_lags_gets_a_fresh_snapshot() {
+    use std::sync::Arc;
+    use tokio_stream::StreamExt;
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    rt.block_on(async {
+        let (tx, rx) = tokio::sync::broadcast::channel::<(&'static str, Arc<str>)>(2);
+        let mut s = Box::pin(veredas_supervisao::feed::stream(rx, || "SNAP".to_string()));
+        // Five events into a channel of two before the client reads: three are lost.
+        for i in 0..5 {
+            tx.send(("objects", Arc::from(i.to_string()))).unwrap();
+        }
+        let pair = |a: &str, b: &str| Some((a.to_string(), b.to_string()));
+        assert_eq!(s.next().await, pair("snapshot", "SNAP"), "a snapshot first");
+        assert_eq!(s.next().await, pair("snapshot", "SNAP"), "a fresh snapshot where events were lost");
+        assert_eq!(s.next().await, pair("objects", "3"));
+        assert_eq!(s.next().await, pair("objects", "4"));
+        tx.send(("session", Arc::from("{}"))).unwrap();
+        assert_eq!(s.next().await, pair("session", "{}"), "then each event as sent");
+    });
 }

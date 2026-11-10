@@ -16,7 +16,6 @@ use axum::routing::get;
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
-use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
 use veredas_core::{SourceError, SourceId, now_unix_ms};
 use veredas_portal::session::{Live, Session};
@@ -193,15 +192,9 @@ async fn objects_json(State(app): State<Arc<SessionApp>>) -> Json<serde_json::Va
 /// `session` (the status) events; a client that lags gets a fresh `snapshot`.
 async fn objects(State(app): State<Arc<SessionApp>>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = app.feed.events.subscribe();
-    let snap = |app: &SessionApp| app.feed.snapshot.read().map(|s| s.to_json().to_string()).unwrap_or_default();
-    let first = tokio_stream::once(Ok(Event::default().event("snapshot").data(snap(&app))));
-    let rest = BroadcastStream::new(rx).map(move |m| {
-        Ok(match m {
-            Ok((name, data)) => Event::default().event(name).data(data.as_ref()),
-            Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(_)) => Event::default().event("snapshot").data(snap(&app)),
-        })
-    });
-    Sse::new(first.chain(rest)).keep_alive(KeepAlive::new().interval(Duration::from_secs(5)))
+    let snapshot = Arc::clone(&app.feed.snapshot);
+    let events = crate::feed::stream(rx, move || snapshot.read().map(|s| s.to_json().to_string()).unwrap_or_default());
+    Sse::new(events.map(|(name, data)| Ok(Event::default().event(name).data(data)))).keep_alive(KeepAlive::new().interval(Duration::from_secs(5)))
 }
 
 #[derive(Deserialize)]

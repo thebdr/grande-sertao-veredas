@@ -597,6 +597,11 @@ fn check_series(place: &str, source: &str, series: &str, key: Option<&str>, u: &
     if key.is_some_and(|k| k.is_empty()) {
         return Err(format!("{place}: the key is empty"));
     }
+    // Portal frames numbers alone and its cache holds no value per key: a key of a text or a
+    // time series would never light up.
+    if key.is_some() && !matches!(ty, SeriesType::Int | SeriesType::Float) {
+        return Err(format!("{place}: a `key` reads one key of a numeric series, and `{series}` is {}", type_word(*ty)));
+    }
     Ok((SeriesBind { source: source.to_string(), series: series.to_string(), key: key.map(String::from) }, *ty))
 }
 
