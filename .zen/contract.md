@@ -414,7 +414,7 @@ refute round found and what it changed is in the clause's evidence note.
 - **Date:** 2026-11-09
 - **Source:** user (docs/supervisao-plan.md "Scope": portal's surface, per session)
 - **Description:** The page's Tables and Series views list a session's tables and series, page a table's rows and chart a series' window, reading only the session's portal router nested at `/s/<name>/portal/`.
-- **Verification:** automated → crates/veredas-supervisao/tests/tables.rs | through `/s/<name>/portal/` against the bench and a written log: the catalog's four tables with their kinds and columns, a page of rows newest first and the next, an unknown table's 404, the listing's type and last value, a window's exact points; the bundle reading these four routes | manual: the page driven in the browser (.zen/evidence/C-053.md)
+- **Verification:** automated → crates/veredas-supervisao/tests/tables.rs | through `/s/<name>/portal/` against the bench and a written log: the catalog's four tables with their kinds and columns, a page of rows newest first and the next, an unknown table's 404, the listing's type and last value, a window's exact points; the bundle reading these four routes, and naming no route of portal's but these and the write it posts, each under the session's nested router | manual: the page driven in the browser (.zen/evidence/C-053.md)
 - **Evidence:** .zen/evidence/C-053.md
 - **Status:** pending verification
 

@@ -72,5 +72,19 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     for route in ["/portal/api/tables", "/portal/api/table/data", "/portal/api/series", "/portal/api/series/data"] {
         assert!(web::APP_JS.contains(route), "{route}");
     }
+    // Every route of portal's the page names is one of those, or the write it posts (C-054):
+    // nothing else of portal's surface, and nothing of it outside the session's nested router.
+    let mut named: Vec<String> = web::APP_JS
+        .match_indices("/api/")
+        .map(|(i, _)| {
+            let rest = &web::APP_JS[i..];
+            let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '/' || c == '_')).unwrap_or(rest.len());
+            let before = &web::APP_JS[i.saturating_sub(7)..i];
+            format!("{}{}", if before == "/portal" { "/portal" } else { "" }, &rest[..end])
+        })
+        .collect();
+    named.sort();
+    named.dedup();
+    assert_eq!(named, ["/api/sessions", "/portal/api/opc/write", "/portal/api/series", "/portal/api/series/data", "/portal/api/table/data", "/portal/api/tables"]);
     host.stop();
 }
