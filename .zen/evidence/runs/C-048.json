@@ -10,15 +10,15 @@
     "files"
   ],
   "exitCode": 0,
-  "outputSha": "9e1e742a940cfa7a72cb5e1a4b35a91f96e47dfaa7641c0e8b0f00a54eb1038e",
-  "outputTail": "running 9 tests\ntest a_layout_is_an_svg_document_with_no_script ... ok\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_worked_example_loads_as_the_reference_states_it ... ok\ntest the_executable_checks_the_example_and_prints_its_plan ... ok\ntest a_supervisao_file_refuses_what_it_cannot_serve_by_its_place ... ok\ntest a_binding_is_checked_against_its_project_and_its_layout ... ok\ntest every_key_the_reference_lists_is_the_reader_s ... ok\ntest the_rest_of_the_refusals_name_their_place ... ok\ntest a_binding_refuses_what_it_cannot_light_up_by_its_place ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.88s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.45s\n     Running tests\\files.rs (target\\debug\\deps\\files-a460a05fec6c1907.exe)",
-  "ranAt": "2026-11-10T00:49:12.047Z",
-  "headCommit": "9a2c2baa43984a772130edc80d682e69788307a3",
+  "outputSha": "56e3fed94709278d7abc3c84196e9347666860c9d57a586fee6e6d990dd263c5",
+  "outputTail": "test a_layout_is_an_svg_document_with_no_script ... ok\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_worked_example_loads_as_the_reference_states_it ... ok\ntest a_supervisao_file_refuses_what_it_cannot_serve_by_its_place ... ok\ntest a_binding_is_checked_against_its_project_and_its_layout ... ok\ntest every_key_the_reference_lists_is_the_reader_s ... ok\ntest the_executable_checks_the_example_and_prints_its_plan ... ok\ntest the_edges_the_types_and_every_kind_of_source_and_column ... ok\ntest the_rest_of_the_refusals_name_their_place ... ok\ntest a_binding_refuses_what_it_cannot_light_up_by_its_place ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.62s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s\n     Running tests\\files.rs (target\\debug\\deps\\files-a460a05fec6c1907.exe)",
+  "ranAt": "2026-11-10T03:00:54.196Z",
+  "headCommit": "647df50920ca85873ce93bf6aaf4c88356ec3f21",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/files.rs",
       "file": "crates/veredas-supervisao/tests/files.rs",
-      "fileSha": "2bae67f5423547d7ce2636567bb270da6751a4ee30bd7455cf5641a277fd52dc"
+      "fileSha": "df8312afe1d718a7648385831c82ed8d1d9595163c72a257bbabd205d6e9a0c5"
     }
   ]
 }
