@@ -11,15 +11,15 @@
     "host"
   ],
   "exitCode": 0,
-  "outputSha": "ca23f70a26ccf9ac74a32ceac05d7c1eb9dfa59d1b07a92f4003e3b8ef68f542",
-  "outputTail": "   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.21s\n────────────\n Nextest run ID 70c7c599-5f74-4a37-843c-93096209c03f with nextest profile: default\n    Starting 4 tests across 1 binary\n        PASS [   1.450s] (1/4) veredas-supervisao::host nothing_starts_before_the_address_is_held_nor_under_check\n        PASS [   2.047s] (2/4) veredas-supervisao::host a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first\n        PASS [   3.631s] (3/4) veredas-supervisao::host two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal\n        PASS [   5.324s] (4/4) veredas-supervisao::host the_executable_serves_a_file_until_stdin_closes\n────────────\n     Summary [   5.325s] 4 tests run: 4 passed, 0 skipped",
-  "ranAt": "2026-11-10T15:02:25.309Z",
-  "headCommit": "3100e1fa541d27ded1a8080fc2f79d33f1845af6",
+  "outputSha": "816ee454da0b9e58ddd07c24b1b119b58ebdf1a7a7207438b7224e65a4dd6d30",
+  "outputTail": "   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 25.54s\n────────────\n Nextest run ID cc76874a-7d9b-4548-8e95-19bc737eb615 with nextest profile: default\n    Starting 4 tests across 1 binary\n        PASS [   2.409s] (1/4) veredas-supervisao::host nothing_starts_before_the_address_is_held_nor_under_check\n        PASS [   3.381s] (2/4) veredas-supervisao::host a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first\n        PASS [   4.317s] (3/4) veredas-supervisao::host two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal\n        PASS [   6.137s] (4/4) veredas-supervisao::host the_executable_serves_a_file_until_stdin_closes\n────────────\n     Summary [   6.138s] 4 tests run: 4 passed, 0 skipped",
+  "ranAt": "2026-11-10T20:39:20.069Z",
+  "headCommit": "a7deaf2c2bc48ac794b6f2cc6b37524e70605a29",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/host.rs",
       "file": "crates/veredas-supervisao/tests/host.rs",
-      "fileSha": "a217c14a734c27c01e2ab68798bc88406f9d860cb7660858357596192735c447"
+      "fileSha": "86a86dc800d7ed271b77cf1af9fb7d21a9af983da6905824d57ea8d3effeee57"
     }
   ]
 }
