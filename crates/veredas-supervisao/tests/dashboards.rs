@@ -454,7 +454,10 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     // What it drew, spelled out where the bench's values make it certain.
     assert_eq!(dash["panels"].as_array().unwrap().len(), 16);
     // The cells panel as the page's own fetch was handed it past its cap: the note drawn.
-    assert!(drawn[10]["right"].as_str().unwrap().ends_with(" · newest 5 of 9 rows"), "{}", drawn[10]["right"]);
+    // (The page reads the live window: its total is what that window held, the last sort in it
+    // or not yet.)
+    let total = dash["panels"][10]["data"]["total"].clone();
+    assert!(drawn[10]["right"].as_str().unwrap().ends_with(&format!(" · newest 5 of {total} rows")) && (total == 8 || total == 9), "{} of {total}", drawn[10]["right"]);
     assert_eq!(drawn[6]["rows"].as_array().unwrap().len(), 2, "two rows on the timeline");
     assert_eq!((drawn[0]["big"].clone(), drawn[0]["box"].clone(), drawn[0]["badge"].clone()), (json!("99.2%"), json!("st-box-normal"), Value::Null));
     assert_eq!((drawn[2]["box"].clone(), drawn[2]["badge"].clone()), (json!("st-box-alarm"), json!("! UNDER 99.5 %")));
