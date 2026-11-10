@@ -248,15 +248,33 @@ fn stamp() -> String {
 
 fn note(status: &Arc<Mutex<ChannelStatus>>, line: RxLine) {
     if let Ok(mut s) = status.lock() {
-        s.recent.push_front(line);
-        while s.recent.len() > RECENT {
-            s.recent.pop_back();
-        }
+        push_line(&mut s, line);
+    }
+}
+
+/// A line onto the monitor, the status already held: a frame's count and its line are written
+/// under one lock, so no status read sees the one without the other.
+fn push_line(s: &mut ChannelStatus, line: RxLine) {
+    s.recent.push_front(line);
+    while s.recent.len() > RECENT {
+        s.recent.pop_back();
     }
 }
 
 fn note_text(status: &Arc<Mutex<ChannelStatus>>, text: String) {
-    note(status, RxLine { at: stamp(), direction: Direction::Note, message: String::new(), fields: BTreeMap::new(), preview: text, peer: None });
+    note(status, text_line(text));
+}
+
+fn text_line(text: String) -> RxLine {
+    RxLine { at: stamp(), direction: Direction::Note, message: String::new(), fields: BTreeMap::new(), preview: text, peer: None }
+}
+
+/// The last error and its note, under one lock: no status read sees the one without the other.
+fn trouble(status: &Arc<Mutex<ChannelStatus>>, error: String, text: String) {
+    if let Ok(mut s) = status.lock() {
+        s.last_error = Some(error);
+        push_line(&mut s, text_line(text));
+    }
 }
 
 struct Link {
@@ -276,25 +294,16 @@ impl Link {
     fn send(&self, message: &str, fields: &HashMap<String, String>, to: Option<PeerId>) {
         match self.catalog.encode(message, fields) {
             None => {
-                if let Ok(mut s) = self.status.lock() {
-                    s.last_error = Some(format!("{message}: the catalog has no such message"));
-                }
-                note_text(&self.status, format!("{message} not sent: the catalog has no such message"));
+                trouble(&self.status, format!("{message}: the catalog has no such message"), format!("{message} not sent: the catalog has no such message"));
             }
             Some(Err(e)) => {
-                if let Ok(mut s) = self.status.lock() {
-                    s.last_error = Some(format!("{message}: {e}"));
-                }
-                note_text(&self.status, format!("{message} not sent: {e}"));
+                trouble(&self.status, format!("{message}: {e}"), format!("{message} not sent: {e}"));
             }
             Some(Ok((id, body))) => {
                 if body.is_empty() && self.spec.framing.segment.is_none() {
                     // The wire carries an empty body as a keep-alive in a layout without
                     // segments: the peer would never see a message.
-                    if let Ok(mut s) = self.status.lock() {
-                        s.last_error = Some(format!("{message}: an empty body is a keep-alive in a layout without segments"));
-                    }
-                    note_text(&self.status, format!("{message} not sent: an empty body is a keep-alive in a layout without segments"));
+                    trouble(&self.status, format!("{message}: an empty body is a keep-alive in a layout without segments"), format!("{message} not sent: an empty body is a keep-alive in a layout without segments"));
                     return;
                 }
                 let line = RxLine {
@@ -309,20 +318,19 @@ impl Link {
                 // What the framing would refuse (a body over the frame limit) is refused here,
                 // before the message is counted as sent; the sequence is the channel's.
                 if let Err(e) = self.spec.framing.encode(&frame, None) {
-                    if let Ok(mut s) = self.status.lock() {
-                        s.last_error = Some(format!("{message}: {e}"));
-                    }
-                    note_text(&self.status, format!("{message} not sent: {e}"));
+                    trouble(&self.status, format!("{message}: {e}"), format!("{message} not sent: {e}"));
                     return;
+                }
+                // Counted and shown before it goes: a peer never counts a frame the sender has
+                // not counted yet.
+                if let Ok(mut s) = self.status.lock() {
+                    *s.sent.entry(message.to_string()).or_default() += 1;
+                    push_line(&mut s, line);
                 }
                 match to {
                     Some(peer) => self.channel.send(peer, frame),
                     None => self.channel.send_all(frame),
                 }
-                if let Ok(mut s) = self.status.lock() {
-                    *s.sent.entry(message.to_string()).or_default() += 1;
-                }
-                note(&self.status, line);
             }
         }
     }
@@ -378,50 +386,46 @@ fn run(cfg: ChannelConfig, mut cyclic: Vec<(String, u64, Fields)>, status: Arc<M
                         let Some(id) = id else {
                             if let Ok(mut s) = status.lock() {
                                 s.unknown_ids += 1;
+                                push_line(&mut s, RxLine { at: stamp(), direction: Direction::In, message: "(no id)".into(), fields: BTreeMap::new(), preview: preview(&body), peer: Some(peer) });
                             }
-                            note(&status, RxLine { at: stamp(), direction: Direction::In, message: "(no id)".into(), fields: BTreeMap::new(), preview: preview(&body), peer: Some(peer) });
                             continue;
                         };
                         match link.catalog.decode(id, &body) {
                             Some((message, fields)) => {
                                 if let Ok(mut s) = status.lock() {
                                     *s.received.entry(message.name.clone()).or_default() += 1;
+                                    push_line(&mut s, RxLine {
+                                        at: stamp(),
+                                        direction: Direction::In,
+                                        message: message.name.clone(),
+                                        fields: fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                                        preview: preview(&body),
+                                        peer: Some(peer),
+                                    });
                                 }
-                                note(&status, RxLine {
-                                    at: stamp(),
-                                    direction: Direction::In,
-                                    message: message.name.clone(),
-                                    fields: fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-                                    preview: preview(&body),
-                                    peer: Some(peer),
-                                });
                                 if let Some(c) = controller.as_mut() {
                                     outgoing.extend(c.on_message(&message.name, &fields, Some(peer)));
                                 }
                             }
                             None => {
-                                let known = link.catalog.by_id(id).is_some();
-                                if let Ok(mut s) = status.lock() {
-                                    if known {
-                                        s.undecodable += 1;
-                                    } else {
-                                        s.unknown_ids += 1;
-                                    }
-                                }
                                 let what = match link.catalog.by_id(id) {
                                     Some(m) => format!("{} (body refused)", m.name),
                                     None => format!("unknown id {id}"),
                                 };
-                                note(&status, RxLine { at: stamp(), direction: Direction::In, message: what, fields: BTreeMap::new(), preview: preview(&body), peer: Some(peer) });
+                                if let Ok(mut s) = status.lock() {
+                                    if link.catalog.by_id(id).is_some() {
+                                        s.undecodable += 1;
+                                    } else {
+                                        s.unknown_ids += 1;
+                                    }
+                                    push_line(&mut s, RxLine { at: stamp(), direction: Direction::In, message: what, fields: BTreeMap::new(), preview: preview(&body), peer: Some(peer) });
+                                }
                             }
                         }
                     }
                 }
                 ChannelEvent::Trouble(e) => {
-                    if let Ok(mut s) = status.lock() {
-                        s.last_error = Some(e.clone());
-                    }
-                    note_text(&status, e);
+                    trouble(&status, e.clone(), e);
                 }
             }
         }
