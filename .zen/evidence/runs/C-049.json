@@ -10,15 +10,15 @@
     "host"
   ],
   "exitCode": 0,
-  "outputSha": "6cedc14736d10c3185fcc19d286ebb8b94807d7863f947d0e62bc6390c6e9f6a",
-  "outputTail": "\nrunning 3 tests\ntest a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first ... ok\ntest the_executable_serves_a_file_until_stdin_closes ... ok\ntest two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.12s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s\n     Running tests\\host.rs (target\\debug\\deps\\host-603cb1cc1a2df926.exe)",
-  "ranAt": "2026-11-10T03:12:52.185Z",
-  "headCommit": "70249c789b26f919542920aec1bc880b1b9d4cca",
+  "outputSha": "8c81ad0aeb7cf42bb5f471b476e33ef936e1c1575d1ce4114c6aac56b1ad8f51",
+  "outputTail": "\nrunning 3 tests\ntest a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first ... ok\ntest two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal ... ok\ntest the_executable_serves_a_file_until_stdin_closes ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.77s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.21s\n     Running tests\\host.rs (target\\debug\\deps\\host-603cb1cc1a2df926.exe)",
+  "ranAt": "2026-11-10T05:31:10.107Z",
+  "headCommit": "c183f6436753067aacbc0c45ae56463cff8866a8",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/host.rs",
       "file": "crates/veredas-supervisao/tests/host.rs",
-      "fileSha": "efbc2f481f01a2a6a31d0929118497c6cb73871caa333c8b66dc150a64f52504"
+      "fileSha": "961f1d73abeee46a75741fe1268f8344e28b754fb105bdc50c7dd88d945acb0c"
     }
   ]
 }
