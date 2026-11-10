@@ -23,6 +23,10 @@ pub const SPARK_POINTS: usize = 60;
 
 const MINUTE_MS: i64 = 60_000;
 
+/// How far before its window a timeline looks for the state holding at the window's start (a
+/// state logged on change lasts until the next sample, however long ago it came).
+pub const TIMELINE_LOOKBACK_MS: i64 = 24 * 60 * MINUTE_MS;
+
 fn window(minutes: u32, to: i64) -> (i64, i64) {
     (to - minutes as i64 * MINUTE_MS, to)
 }
@@ -194,6 +198,15 @@ fn key_text(v: &Json) -> Option<String> {
     }
 }
 
+/// Rows sorted by their column `k`: numbers as numbers, anything else as its text, and nulls
+/// last whichever way the rest goes.
+pub fn sort_rows(rows: &mut [Vec<Json>], k: usize, desc: bool) {
+    rows.sort_by(|a, b| {
+        let o = compare_cells(&a[k], &b[k]);
+        if desc && !a[k].is_null() && !b[k].is_null() { o.reverse() } else { o }
+    });
+}
+
 fn compare_cells(a: &Json, b: &Json) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (a, b) {
@@ -223,11 +236,7 @@ fn table_panel(live: &Live, table: &str, columns: &[Column], sort: &Option<(Stri
         let Some(k) = chosen.iter().position(|c| &c.name == col) else {
             return Err(format!("the sort column `{col}` is not shown"));
         };
-        rows.sort_by(|a, b| {
-            let o = compare_cells(&a[k], &b[k]);
-            // Nulls stay last whichever way the rest goes.
-            if *desc && !a[k].is_null() && !b[k].is_null() { o.reverse() } else { o }
-        });
+        sort_rows(&mut rows, k, *desc);
     }
     let maxes: Vec<f64> = (0..chosen.len()).map(|k| rows.iter().filter_map(|r| r[k].as_f64()).fold(0.0_f64, |m, v| m.max(v.abs()))).collect();
     let out_rows: Vec<Json> = rows
@@ -382,7 +391,15 @@ fn panel_body(live: &Live, b: &Binding, snap: &Snapshot, p: &Panel, to: i64, now
                 .iter()
                 .map(|i| {
                     let o = &b.objects[*i];
-                    json!({ "id": o.id, "label": o.label, "segments": segments(o, &points(live, o, from, to), to), "now": view_json(o, view(*i)) })
+                    let mut pts = points(live, o, from, to);
+                    // The state holding at the window's start: the last sample of the day before
+                    // it, its run opened at `from`.
+                    if pts.first().is_none_or(|p| p.0 > from)
+                        && let Some(&(_, v)) = points(live, o, from - TIMELINE_LOOKBACK_MS, from - 1).last()
+                    {
+                        pts.insert(0, (from, v));
+                    }
+                    json!({ "id": o.id, "label": o.label, "segments": segments(o, &pts, to), "now": view_json(o, view(*i)) })
                 })
                 .collect();
             json!({ "from": from, "to": to, "rows": rows })

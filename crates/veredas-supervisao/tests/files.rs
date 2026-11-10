@@ -971,8 +971,9 @@ view's are the engine's, judged when the panel is computed.
   running marked, against a dashed `target`. `object` (required), `minutes` (`60`),
   `bucket_minutes` (`5`), `aggregate` (`"mean"`: `mean`, `sum`, `count`, `min`, `max` or `last`),
   `target` (none).
-- `timeline`: per object one bar of its state over the window. `objects` (required), `minutes`
-  (`60`). The objects' series must be numeric.
+- `timeline`: per object one bar of its state over the window, each state lasting until the next
+  sample, the one holding at the window's start (its last sample within the day before) drawn from
+  the start. `objects` (required), `minutes` (`60`). The objects' series must be numeric.
 - `grid`: one small cell per object with its value and state. `objects` (required).
 - `levels`: one horizontal bar per object, its value's place in the object's `range`, with ticks.
   `objects` (required), `ticks` (none: values in the objects' units).
