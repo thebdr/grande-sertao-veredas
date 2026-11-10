@@ -11,15 +11,15 @@
     "opc_server"
   ],
   "exitCode": 0,
-  "outputSha": "ae912ab8bc78e85365d6819a6724162dd6346c07e115d23430c723d780f281de",
-  "outputTail": "        PASS [   2.541s] (11/23) veredas-maquinar::opc_server a_stall_skips_the_draws_and_steps_it_missed\n        PASS [   2.197s] (12/23) veredas-maquinar::opc_server a_write_of_the_wrong_wire_type_is_refused_and_counted\n        PASS [   4.727s] (13/23) veredas-maquinar::opc_server draws_come_at_their_interval\n        PASS [   2.293s] (14/23) veredas-maquinar::opc_server int_draws_take_only_the_whole_numbers_inside_the_range\n        PASS [   4.491s] (15/23) veredas-maquinar::opc_server ramps_come_at_their_interval_counted_apart_from_draws\n        PASS [   0.224s] (16/23) veredas-maquinar::opc_server values_parse_per_type_and_nonsense_is_refused\n        PASS [   0.297s] (17/23) veredas-maquinar::opc_server the_configuration_reads_from_toml_with_its_defaults_and_refuses_a_misspelled_key\n        PASS [   0.753s] (18/23) veredas-maquinar::opc_server writes_land_in_the_address_space_and_the_access_is_honoured\n        PASS [   1.285s] (19/23) veredas-maquinar::opc_server stopping_frees_the_port_for_the_next_start\n        PASS [   1.465s] (20/23) veredas-maquinar::opc_server the_consumer_s_poll_worker_polls_and_writes_through_the_bench\n        PASS [   1.776s] (21/23) veredas-maquinar::opc_server the_read_cap_and_the_session_cap_are_the_bench_s_knobs\n        PASS [   2.116s] (22/23) veredas-maquinar::opc_server randomized_tags_move_and_stay_inside_their_range\n        PASS [   2.137s] (23/23) veredas-maquinar::opc_server the_relay_makes_the_link_go_silent_and_delivers_what_it_held_when_thawed\n────────────\n     Summary [  25.417s] 23 tests run: 23 passed, 0 skipped",
-  "ranAt": "2026-11-10T17:20:42.577Z",
-  "headCommit": "af1852b06542799bf0cdea47d8182ab522f3481f",
+  "outputSha": "e05f2109b3fa69a4caf81018480f53dd65dd0f2222fa8d0e61115ddb27375d92",
+  "outputTail": "        PASS [   0.919s] (12/24) veredas-maquinar::opc_server a_write_of_the_wrong_wire_type_is_refused_and_counted\n        PASS [   4.203s] (13/24) veredas-maquinar::opc_server draws_come_at_their_interval\n        PASS [   2.134s] (14/24) veredas-maquinar::opc_server int_draws_take_only_the_whole_numbers_inside_the_range\n        PASS [   4.192s] (15/24) veredas-maquinar::opc_server ramps_come_at_their_interval_counted_apart_from_draws\n        PASS [   0.095s] (16/24) veredas-maquinar::opc_server the_configuration_reads_from_toml_with_its_defaults_and_refuses_a_misspelled_key\n        PASS [   0.210s] (17/24) veredas-maquinar::opc_server values_parse_per_type_and_nonsense_is_refused\n        PASS [   0.502s] (18/24) veredas-maquinar::opc_server writes_land_in_the_address_space_and_the_access_is_honoured\n        PASS [   0.611s] (19/24) veredas-maquinar::opc_server stopping_frees_the_port_for_the_next_start\n        PASS [   1.211s] (20/24) veredas-maquinar::opc_server the_consumer_s_poll_worker_polls_and_writes_through_the_bench\n        PASS [   1.337s] (21/24) veredas-maquinar::opc_server steps_due_in_one_tick_land_in_the_order_of_their_delays\n        PASS [   1.364s] (22/24) veredas-maquinar::opc_server the_read_cap_and_the_session_cap_are_the_bench_s_knobs\n        PASS [   1.536s] (23/24) veredas-maquinar::opc_server the_relay_makes_the_link_go_silent_and_delivers_what_it_held_when_thawed\n        PASS [   1.663s] (24/24) veredas-maquinar::opc_server randomized_tags_move_and_stay_inside_their_range\n────────────\n     Summary [  21.515s] 24 tests run: 24 passed, 0 skipped",
+  "ranAt": "2026-11-10T19:57:10.123Z",
+  "headCommit": "6e219aafe70504272a47e115a6e03c8f87dabe0d",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/opc_server.rs",
       "file": "crates/veredas-maquinar/tests/opc_server.rs",
-      "fileSha": "96c466c31d8fec688e45f63eba621523d5ab79c5d7b132bb7d9bf865856885ba"
+      "fileSha": "748b64134291a112d90183be5316325eb981b70db42f6f3075eb0d59ab6c2b8a"
     }
   ]
 }
