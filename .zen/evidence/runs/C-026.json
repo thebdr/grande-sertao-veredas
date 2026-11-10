@@ -10,15 +10,15 @@
     "opc_server"
   ],
   "exitCode": 0,
-  "outputSha": "781a138fd3d9df86a9d1848d7d8d3e7f719f4df9a951cb3e2c5bc2a98b0d9814",
-  "outputTail": "test the_consumer_s_poll_worker_polls_and_writes_through_the_bench ... ok\ntest the_read_cap_and_the_session_cap_are_the_bench_s_knobs ... ok\ntest a_reaction_answers_a_write_with_a_timed_sequence ... ok\ntest the_relay_makes_the_link_go_silent_and_delivers_what_it_held_when_thawed ... ok\ntest randomized_tags_move_and_stay_inside_their_range ... ok\ntest int_draws_take_only_the_whole_numbers_inside_the_range ... ok\ntest a_configured_user_is_accepted_and_a_wrong_password_refused ... ok\ntest draws_come_at_their_interval ... ok\ntest ramps_come_at_their_interval_counted_apart_from_draws ... ok\ntest a_ramped_tag_steps_on_the_wire_and_moves_on_from_what_it_holds ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.88s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.86s\n     Running tests\\opc_server.rs (target\\debug\\deps\\opc_server-0a424b948228c9c3.exe)",
-  "ranAt": "2026-11-10T07:07:02.307Z",
-  "headCommit": "c9362d4ae8c33b3e9ad2bc4a45ec0662cd3fd0ca",
+  "outputSha": "89b9e0e0f1dc673c79064b087b8043982084619fcdd44b6f7184cf4d22e4fbf7",
+  "outputTail": "test the_consumer_s_poll_worker_polls_and_writes_through_the_bench ... ok\ntest the_read_cap_and_the_session_cap_are_the_bench_s_knobs ... ok\ntest the_relay_makes_the_link_go_silent_and_delivers_what_it_held_when_thawed ... ok\ntest a_reaction_answers_a_write_with_a_timed_sequence ... ok\ntest randomized_tags_move_and_stay_inside_their_range ... ok\ntest int_draws_take_only_the_whole_numbers_inside_the_range ... ok\ntest a_configured_user_is_accepted_and_a_wrong_password_refused ... ok\ntest ramps_come_at_their_interval_counted_apart_from_draws ... ok\ntest draws_come_at_their_interval ... ok\ntest a_ramped_tag_steps_on_the_wire_and_moves_on_from_what_it_holds ... ok\n\ntest result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.65s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s\n     Running tests\\opc_server.rs (target\\debug\\deps\\opc_server-0a424b948228c9c3.exe)",
+  "ranAt": "2026-11-10T08:00:58.223Z",
+  "headCommit": "85395a617d1494c5ab7d48dbd6b70a84efbaef8b",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/opc_server.rs",
       "file": "crates/veredas-maquinar/tests/opc_server.rs",
-      "fileSha": "2007cdfae895f55db0ef219dcb230620ef841cd1daea1c4fefc13d99de63ce41"
+      "fileSha": "cb26f2b0e159c2b4f0569eb76b7f4007ec66283a79948214b0be9cbabf96a0e7"
     }
   ]
 }

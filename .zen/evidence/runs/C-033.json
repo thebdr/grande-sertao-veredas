@@ -10,15 +10,15 @@
     "bench_file"
   ],
   "exitCode": 0,
-  "outputSha": "14411f594a420bcea51bba0ea8ac6aa426f4c65aadd218764e8e9081f59b1659",
-  "outputTail": "\nrunning 8 tests\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_header_is_refused_four_ways_and_a_misspelled_key_in_any_table ... ok\ntest the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest every_invalid_bench_is_refused_with_its_place_named_before_anything_starts ... ok\ntest the_documented_bench_loads_starts_and_every_part_does_its_work ... ok\ntest the_executable_checks_and_runs_a_bench_file ... ok\ntest the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.95s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s\n     Running tests\\bench_file.rs (target\\debug\\deps\\bench_file-fd3108f0df98ce43.exe)",
-  "ranAt": "2026-11-10T07:07:19.600Z",
-  "headCommit": "c9362d4ae8c33b3e9ad2bc4a45ec0662cd3fd0ca",
+  "outputSha": "da17a611e2940d4cee921ce45762e47f18aa748a67eea6f843757cf1fcd7c5e2",
+  "outputTail": "\nrunning 8 tests\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_header_is_refused_four_ways_and_a_misspelled_key_in_any_table ... ok\ntest the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest every_invalid_bench_is_refused_with_its_place_named_before_anything_starts ... ok\ntest the_documented_bench_loads_starts_and_every_part_does_its_work ... ok\ntest the_executable_checks_and_runs_a_bench_file ... ok\ntest the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.57s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s\n     Running tests\\bench_file.rs (target\\debug\\deps\\bench_file-fd3108f0df98ce43.exe)",
+  "ranAt": "2026-11-10T08:01:05.656Z",
+  "headCommit": "85395a617d1494c5ab7d48dbd6b70a84efbaef8b",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/bench_file.rs",
       "file": "crates/veredas-maquinar/tests/bench_file.rs",
-      "fileSha": "c53dace66147665727af17dff5841fa8a31889c5458b3a425e0e2645599a7da0"
+      "fileSha": "9c9dd41ac6f953d671c2fdca3a3841245108a8a6c89e72fe6b6d60a05e796c69"
     }
   ]
 }
