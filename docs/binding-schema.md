@@ -397,6 +397,7 @@ over a series that is not numeric; a table the project lacks; a table panel's li
 1000, a column with an empty name, places past 6 or a rule over another series, a sort column the
 panel or its table lacks; a column, key or value the table lacks where the project states its
 columns, a value that is not numeric; a `spread` not above 0; a layout that cannot be read, is not
-an SVG document (its root an `svg` in the SVG namespace), or holds a script, foreign content, an
-event handler or a script link: each is refused when the file loads, with its place named, before
-any session starts.
+an SVG document (its root an `svg` in the SVG namespace), or holds a script, foreign content (an
+element outside the SVG namespace), an event handler or a script link (a `javascript:` URL in any
+attribute, read as a browser reads a URL): each is refused when the file loads, with its place
+named, before any session starts.

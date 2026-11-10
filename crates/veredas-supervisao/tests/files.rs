@@ -1009,9 +1009,10 @@ over a series that is not numeric; a table the project lacks; a table panel's li
 1000, a column with an empty name, places past 6 or a rule over another series, a sort column the
 panel or its table lacks; a column, key or value the table lacks where the project states its
 columns, a value that is not numeric; a `spread` not above 0; a layout that cannot be read, is not
-an SVG document (its root an `svg` in the SVG namespace), or holds a script, foreign content, an
-event handler or a script link: each is refused when the file loads, with its place named, before
-any session starts.
+an SVG document (its root an `svg` in the SVG namespace), or holds a script, foreign content (an
+element outside the SVG namespace), an event handler or a script link (a `javascript:` URL in any
+attribute, read as a browser reads a URL): each is refused when the file loads, with its place
+named, before any session starts.
 "###;
 
 // ---- the layout alone (src/svg.rs) ----
@@ -1045,6 +1046,156 @@ fn a_layout_is_an_svg_document_with_no_script() {
     assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><a href=\" JavaScript:alert(1)\"><rect/></a></svg>", p).unwrap_err(), "l.svg holds a script link (`JavaScript:alert(1)` on <a>): a layout is a drawing, with no script");
     assert!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\"><a xlink:href=\"javascript:x()\"/></svg>", p).is_err());
     assert!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><a href=\"#loop\"><rect/></a></svg>", p).is_ok(), "a link within the drawing is a drawing's");
+    // As a browser reads a URL: a tab, a line break or a carriage return inside the scheme is
+    // dropped, leading controls trimmed; in any attribute, an animation's `to` among them.
+    for (spelled, shown) in [("java&#9;script:alert(1)", "java\tscript:alert(1)"), ("java&#10;script:alert(1)", "java\nscript:alert(1)"), ("java&#13;script:alert(1)", "java\rscript:alert(1)"), ("&#9; javascript:alert(1)", "javascript:alert(1)")] {
+        let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\"><a href=\"{spelled}\"><rect/></a></svg>");
+        assert_eq!(parse(&svg, p).unwrap_err(), format!("l.svg holds a script link (`{}` on <a>): a layout is a drawing, with no script", shown.trim()), "{spelled}");
+    }
+    assert!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\"><a xlink:href=\"java&#9;script:x()\"/></svg>", p).is_err());
+    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><a><set attributeName=\"href\" to=\"javascript:alert(1)\"/></a></svg>", p).unwrap_err(), "l.svg holds a script link (`javascript:alert(1)` on <set>): a layout is a drawing, with no script");
+    // The root's own handler, the classic one.
+    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\" onload=\"x()\"/>", p).unwrap_err(), "l.svg holds an event handler (`onload` on <svg>): a layout is a drawing, with no script");
+    // Foreign content of any other form: an element outside the SVG namespace, an XHTML frame, a
+    // `path` of another namespace a marker would otherwise follow.
+    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><iframe xmlns=\"http://www.w3.org/1999/xhtml\" srcdoc=\"x\"/></svg>", p).unwrap_err(), "l.svg holds a <iframe> element of the namespace `http://www.w3.org/1999/xhtml`: a layout is a drawing in the SVG namespace, with no foreign content");
+    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:h=\"http://www.w3.org/1999/xhtml\"><h:object data=\"x\"/></svg>", p).unwrap_err(), "l.svg holds a <object> element of the namespace `http://www.w3.org/1999/xhtml`: a layout is a drawing in the SVG namespace, with no foreign content");
+    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:x=\"urn:not-svg\"><x:path id=\"loop\"/></svg>", p).unwrap_err(), "l.svg holds a <path> element of the namespace `urn:not-svg`: a layout is a drawing in the SVG namespace, with no foreign content");
+    assert_eq!(parse("<s:svg xmlns:s=\"http://www.w3.org/2000/svg\"><rect/></s:svg>", p).unwrap_err(), "l.svg holds a <rect> element of the namespace `none`: a layout is a drawing in the SVG namespace, with no foreign content");
     // A document type, as drawing tools export it, is read.
     assert!(parse("<?xml version=\"1.0\"?>\n<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\n<svg xmlns=\"http://www.w3.org/2000/svg\"><rect id=\"x\"/></svg>", p).unwrap().element("x") == Some("rect"));
 }
+
+/// The example with a keyed text series in its log and an object reading it.
+fn with_modes() -> Example {
+    let mut ex = example();
+    ex.project.push_str(MODES_RULE);
+    ex.binding = ex.binding.replacen("\n[[dashboard]]", "\n[[object]]\nid = \"mode\"\nlabel = \"Mode\"\nvalue = { source = \"sorter\", series = \"mode\" }\n\n[[dashboard]]", 1);
+    ex
+}
+
+#[test]
+fn the_refusals_of_a_kind_of_series_a_panel_and_a_number_name_their_place() {
+    let cases: Vec<(Box<dyn Fn(&str) -> String>, &str)> = vec![
+        (Box::new(|b| b.replace("value = { source = \"plc\", series = \"p1\" }", "value = { source = \"sorter\", series = \"mode\" }")), "object `parcel-1`: a marker needs a numeric series, and `mode` is text"),
+        (Box::new(|b| format!("{b}\n[[dashboard.panel]]\nkind = \"bars\"\nobject = \"mode\"\n")), "dashboard `Overview`, panel[8] (bars): `mode` reads `mode`, which is text, and the panel charts numbers"),
+        (Box::new(|b| format!("{b}\n[[dashboard.panel]]\nkind = \"cells\"\ntable = \"nothere\"\nkey = \"outlet\"\nvalue = \"travel\"\nspread = 5\n")), "dashboard `Overview`, panel[8] (cells): `nothere` is no table of the project"),
+        (Box::new(|b| format!("{b}\n[[dashboard.panel]]\nkind = \"value\"\n")), "dashboard `Overview`, panel[8] (value): missing field `object`"),
+        (Box::new(|b| b.replacen("show = \"level\"", "show = \"level\"\nrange = [0, inf]", 1)), "object `outlet-1`: the range's high is not a finite number"),
+        (Box::new(|b| format!("{b}\n[[dashboard.panel]]\nkind = \"bars\"\nobject = \"outlet-1\"\ntarget = nan\n")), "dashboard `Overview`, panel[8] (bars): `target` is not a finite number"),
+        (Box::new(|b| b.replacen("{ equals = 0, state = \"warn\", word = \"stopped\" }", "{ equals = nan, state = \"warn\", word = \"stopped\" }", 1)), "object `infeed`, states[0]: `equals` is not a finite number"),
+    ];
+    for (f, expected) in cases {
+        let mut ex = with_modes();
+        let changed = f(&ex.binding);
+        assert_ne!(changed, ex.binding, "the change applies: {expected}");
+        ex.binding = changed;
+        assert_eq!(binding_refusal(&ex), expected);
+    }
+}
+
+#[test]
+fn every_key_reads_back_as_written_and_every_default_fills() {
+    let mut ex = with_modes();
+    ex.binding = KEYS.to_string();
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = load(dir.path(), &ex).unwrap();
+    let b = &cfg.sessions[0].binding;
+    use veredas_supervisao::binding::{Column, Rule, SeriesBind};
+    let bind = |source: &str, series: &str, key: Option<&str>| SeriesBind { source: source.into(), series: series.into(), key: key.map(String::from) };
+    // An object: its key, its range, how it shows, its label defaulting to its id; its rules each
+    // compared as written, a word defaulting to its state's name.
+    let a = b.object("a").unwrap();
+    assert_eq!((a.label.as_str(), &a.value, a.range, a.show), ("a", &bind("plc", "fill1", Some("A1")), (10.0, 20.0), Show::Value));
+    assert_eq!(a.rules, vec![
+        Rule { compare: Compare::Above(5.0), class: StateClass::Warn, word: "warn".into(), series: None, ty: None },
+        Rule { compare: Compare::AtMost(1.0), class: StateClass::Alarm, word: "low".into(), series: None, ty: None },
+    ]);
+    // Rules over another series: an int one, and a keyed text one compared exactly as written.
+    let o = b.object("b").unwrap();
+    assert_eq!(o.label, "Bee");
+    assert_eq!(o.rules, vec![
+        Rule { compare: Compare::Equals(Comparand::Num(2.0)), class: StateClass::Alarm, word: "fault".into(), series: Some(bind("plc", "infeed", None)), ty: Some(SeriesType::Int) },
+        Rule { compare: Compare::Equals(Comparand::Text("Jam".into())), class: StateClass::Near, word: "jam".into(), series: Some(bind("sorter", "mode", Some("B2"))), ty: Some(SeriesType::Text) },
+    ]);
+    // A dashboard's columns default to 4; every panel's keys as written, its defaults filled.
+    let d = &b.dashboards[0];
+    assert_eq!(d.columns, 4);
+    let kinds: Vec<&PanelKind> = d.panels.iter().map(|p| &p.kind).collect();
+    assert_eq!(d.panels[0].title, "Ay");
+    assert_eq!(kinds[0], &PanelKind::Value { object: 0, minutes: 30, target: None });
+    assert_eq!(kinds[1], &PanelKind::Trend { object: 0, minutes: 60, limit: Some(Limit::Above(3.0)) });
+    assert_eq!(kinds[2], &PanelKind::Bars { object: 0, minutes: 60, bucket_minutes: 5, aggregate: Aggregate::Sum, target: None });
+    assert_eq!(kinds[3], &PanelKind::Timeline { objects: vec![0], minutes: 60 });
+    assert_eq!(kinds[4], &PanelKind::Table {
+        table: "outlets".into(),
+        columns: vec![Column { name: "outlet".into(), label: "Outlet".into(), bar: false, decimals: None, rules: vec![Rule { compare: Compare::Above(2.0), class: StateClass::Warn, word: "far".into(), series: None, ty: None }] }],
+        sort: None,
+        limit: 10,
+    });
+    // Every aggregate word, its kind.
+    for (word, agg) in [("mean", Aggregate::Mean), ("sum", Aggregate::Sum), ("count", Aggregate::Count), ("min", Aggregate::Min), ("max", Aggregate::Max), ("last", Aggregate::Last)] {
+        let mut e = with_modes();
+        e.binding = KEYS.replace("aggregate = \"sum\"", &format!("aggregate = \"{word}\""));
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = load(dir.path(), &e).unwrap();
+        assert!(matches!(&cfg.sessions[0].binding.dashboards[0].panels[2].kind, PanelKind::Bars { aggregate, .. } if *aggregate == agg), "{word}");
+    }
+}
+
+/// A binding writing the keys the worked example leaves to their defaults, and the defaults it
+/// writes left out.
+const KEYS: &str = r#"format = "veredas-binding"
+version = 1
+title = "Keys"
+
+[[object]]
+id = "a"
+value = { source = "plc", series = "fill1", key = "A1" }
+range = [10, 20]
+show = "value"
+states = [ { above = 5, state = "warn" }, { at_most = 1, state = "alarm", word = "low" } ]
+
+[[object]]
+id = "b"
+label = "Bee"
+value = { source = "plc", series = "speed" }
+states = [ { equals = 2, series = "infeed", state = "alarm", word = "fault" }, { equals = "Jam", source = "sorter", series = "mode", key = "B2", state = "near", word = "jam" } ]
+
+[[dashboard]]
+name = "Keys"
+
+[[dashboard.panel]]
+kind = "value"
+object = "a"
+title = "Ay"
+
+[[dashboard.panel]]
+kind = "trend"
+object = "a"
+limit = { above = 3 }
+
+[[dashboard.panel]]
+kind = "bars"
+object = "a"
+aggregate = "sum"
+
+[[dashboard.panel]]
+kind = "timeline"
+objects = ["a"]
+
+[[dashboard.panel]]
+kind = "table"
+table = "outlets"
+limit = 10
+columns = [ { name = "outlet", label = "Outlet", states = [ { above = 2, state = "warn", word = "far" } ] } ]
+"#;
+
+/// A keyed text series for the example's log: a mode per item.
+const MODES_RULE: &str = r#"
+[[rule]]
+name = "modes"
+pattern = 'MODE (?P<mode>\w+) at (?P<item>\w+)'
+scope = "sorter"
+key = "item"
+"#;

@@ -55,10 +55,19 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
         if name == "script" || name == "foreignObject" {
             return Err(format!("{} holds a <{name}> element: a layout is a drawing, with no script and no foreign content", path.display()));
         }
+        // Foreign content in any other form: an element of another namespace (an XHTML frame,
+        // a `path` of no namespace a marker would follow) is no drawing either.
+        if node.tag_name().namespace() != Some(SVG_NS) {
+            let ns = node.tag_name().namespace().unwrap_or("none");
+            return Err(format!("{} holds a <{name}> element of the namespace `{ns}`: a layout is a drawing in the SVG namespace, with no foreign content", path.display()));
+        }
         if let Some(attr) = node.attributes().find(|a| a.name().len() > 2 && a.name().as_bytes()[..2].eq_ignore_ascii_case(b"on")) {
             return Err(format!("{} holds an event handler (`{}` on <{name}>): a layout is a drawing, with no script", path.display(), attr.name()));
         }
-        if let Some(attr) = node.attributes().find(|a| a.name() == "href" && a.value().trim_start().to_ascii_lowercase().starts_with("javascript:")) {
+        // A script link in any attribute (an `href`, an animation's `to` or `values`), read as a
+        // browser reads a URL: tabs and line breaks anywhere dropped, leading controls and spaces
+        // trimmed.
+        if let Some(attr) = node.attributes().find(|a| script_link(a.value())) {
             return Err(format!("{} holds a script link (`{}` on <{name}>): a layout is a drawing, with no script", path.display(), attr.value().trim()));
         }
         if let Some(id) = node.attribute("id") {
@@ -67,5 +76,12 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
         }
     }
     Ok(Layout { file: path.to_path_buf(), text: text.to_string(), ids })
+}
+
+/// Whether an attribute's value is a `javascript:` URL as a browser parses one (the URL standard
+/// drops tabs and line breaks anywhere and trims leading C0 controls and spaces), in any case.
+pub fn script_link(value: &str) -> bool {
+    let kept: String = value.chars().filter(|c| !matches!(c, '\t' | '\n' | '\r')).collect();
+    kept.trim_start_matches(|c: char| c <= ' ').to_ascii_lowercase().starts_with("javascript:")
 }
 
