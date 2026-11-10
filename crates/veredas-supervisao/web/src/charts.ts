@@ -52,6 +52,8 @@ export function trend(pts: Pt[], breaches: Pt[], from: number, to: number, limit
   }
   if (limit !== null) svg.append(s("line", { x1: L, x2: W - R, y1: y(limit), y2: y(limit), class: "limit" }));
   if (pts.length > 1) svg.append(s("path", { d: pts.map((p, i) => `${i ? "L" : "M"}${x(p[0]).toFixed(1)} ${y(p[1]).toFixed(1)}`).join(" "), class: "line" }));
+  // A window of one point has no line to draw: the point itself, where the axes put it.
+  else if (pts.length === 1) svg.append(s("circle", { cx: x(pts[0][0]).toFixed(1), cy: y(pts[0][1]).toFixed(1), r: 3, class: "point" }));
   for (const b of breaches) svg.append(s("circle", { cx: x(b[0]), cy: y(b[1]), r: 3, class: "breach" }));
   const tip = s("g", { class: "tip", visibility: "hidden" });
   const tipDot = s("circle", { r: 3.5, class: "tipdot" });

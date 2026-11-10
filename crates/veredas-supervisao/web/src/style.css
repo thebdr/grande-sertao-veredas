@@ -157,6 +157,7 @@ svg.spark.st-line-stale .line { stroke: var(--muted); }
 .chart .axis { fill: var(--label); font: 10px var(--mono); }
 .chart .limit { stroke: var(--warn); stroke-dasharray: 5 4; }
 .chart .breach { fill: var(--danger); }
+.chart .point { fill: var(--accent-tint); }
 .chart .bar { fill: var(--accent-tint); opacity: .8; }
 .chart .bar.running { fill: transparent; stroke: var(--accent-tint); stroke-dasharray: 3 2; }
 .chart .tipdot { fill: var(--strong); }

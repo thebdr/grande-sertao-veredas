@@ -96,14 +96,18 @@ impl Browser {
     }
 
     /// Every request the page made since it was watched, as (URL, the protocol's resource type:
-    /// Document, Script, Fetch, EventSource, Image, Ping, ...), streams and other origins included.
+    /// Document, Script, Fetch, EventSource, Image, Ping, ...), streams and other origins included;
+    /// a WebSocket, which the protocol reports apart, as (its URL, "WebSocket").
     pub fn requests(&mut self) -> Vec<(String, String)> {
         // An answer comes after every event sent before it: one round trip reads them all.
         self.eval("0");
         self.events
             .iter()
-            .filter(|e| e["method"] == "Network.requestWillBeSent")
-            .map(|e| (e["params"]["request"]["url"].as_str().unwrap_or("").to_string(), e["params"]["type"].as_str().unwrap_or("").to_string()))
+            .filter_map(|e| match e["method"].as_str() {
+                Some("Network.requestWillBeSent") => Some((e["params"]["request"]["url"].as_str().unwrap_or("").to_string(), e["params"]["type"].as_str().unwrap_or("").to_string())),
+                Some("Network.webSocketCreated") => Some((e["params"]["url"].as_str().unwrap_or("").to_string(), "WebSocket".to_string())),
+                _ => None,
+            })
             .collect()
     }
 
