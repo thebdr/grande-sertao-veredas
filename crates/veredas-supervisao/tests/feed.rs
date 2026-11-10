@@ -15,11 +15,70 @@ use veredas_supervisao::state::{Reading, StateClass};
 use veredas_supervisao::{Host, config};
 
 /// The example grown by what the reference's plant lacks: a keyed position, a text mode, a rule
-/// over another series, and shorter freshness bounds for a test's clock.
+/// over another series, a text series only a rule reads, a time, a lighter rule first, ranges not
+/// starting at 0, a rule bound to a key, and shorter freshness bounds for a test's clock.
 fn grown(mut ex: Example) -> Example {
+    ex.project.push_str(r#"
+[[rule]]
+name = "doors"
+pattern = "DOOR (?P<door>\\w+)"
+scope = "sorter"
+
+[[rule]]
+name = "stamps"
+pattern = "DONE at=(?P<done>[0-9: .-]+)$"
+scope = "sorter"
+types = { done = "time" }
+"#);
     ex.project.push_str("\n[[rule]]\nname = \"positions\"\npattern = \"POS item=(?P<item>\\\\w+) at=(?P<at>[0-9.]+)\"\nscope = \"sorter\"\ntypes = { at = \"float\" }\nkey = \"item\"\n\n[[rule]]\nname = \"modes\"\npattern = \"MODE (?P<mode>\\\\w+)\"\nscope = \"sorter\"\n");
     let extra = "\n[[object]]\nid = \"tracked\"\nlabel = \"Tracked\"\nvalue = { source = \"sorter\", series = \"at\" }\nshow = \"move\"\npath = \"loop\"\nstale_after_ms = 1500\n\n[[object]]\nid = \"tracked-default\"\nlabel = \"Tracked, default bound\"\nvalue = { source = \"sorter\", series = \"at\" }\nshow = \"move\"\npath = \"loop\"\n\n[[object]]\nid = \"tracked-a1\"\nlabel = \"A1\"\nvalue = { source = \"sorter\", series = \"at\", key = \"A1\" }\nshow = \"move\"\npath = \"loop\"\n\n[[object]]\nid = \"at-b2\"\nlabel = \"B2 at\"\nvalue = { source = \"sorter\", series = \"at\", key = \"B2\" }\nstates = [ { above = 40, state = \"warn\", word = \"far\" } ]\n\n[[object]]\nid = \"mode\"\nlabel = \"Mode\"\nvalue = { source = \"sorter\", series = \"mode\" }\nstates = [ { equals = \"jam\", state = \"warn\", word = \"jammed\" } ]\nnormal = \"running\"\n\n[[object]]\nid = \"outlet-9\"\nlabel = \"Outlet 9\"\nvalue = { source = \"plc\", series = \"fill1\" }\nstates = [ { equals = 2, series = \"infeed\", state = \"alarm\", word = \"infeed fault\" }, { at_least = 100, state = \"warn\", word = \"full\" } ]\n\n[[dashboard]]";
-    ex.binding = ex.binding.replacen("\n[[dashboard]]", extra, 1).replace("stale_after_ms = 30000", "stale_after_ms = 1500");
+    let more = r#"
+[[object]]
+id = "lighter-first"
+label = "Lighter first"
+value = { source = "plc", series = "fill1" }
+states = [ { at_least = 80, state = "near", word = "high" }, { at_least = 100, state = "alarm", word = "over" } ]
+
+[[object]]
+id = "tank"
+label = "Tank"
+value = { source = "plc", series = "fill2" }
+show = "level"
+range = [50, 150]
+
+[[object]]
+id = "swing"
+label = "Swing"
+value = { source = "plc", series = "p1" }
+show = "move"
+path = "loop"
+range = [-50, 50]
+
+[[object]]
+id = "door-text"
+label = "Door, as text"
+value = { source = "plc", series = "fill1" }
+states = [ { equals = "0", source = "sorter", series = "door", state = "warn", word = "door code 0" } ]
+
+[[object]]
+id = "door-num"
+label = "Door, as a number"
+value = { source = "plc", series = "fill1" }
+states = [ { equals = 0, source = "sorter", series = "door", state = "warn", word = "door zero" } ]
+
+[[object]]
+id = "done"
+label = "Done"
+value = { source = "sorter", series = "done" }
+
+[[object]]
+id = "near-b2"
+label = "Near B2"
+value = { source = "plc", series = "fill1" }
+states = [ { above = 40, source = "sorter", series = "at", key = "B2", state = "warn", word = "B2 far" } ]
+
+[[dashboard]]"#;
+    ex.binding = ex.binding.replacen("\n[[dashboard]]", extra, 1).replacen("\n[[dashboard]]", more, 1).replace("stale_after_ms = 30000", "stale_after_ms = 1500");
     ex
 }
 
@@ -187,6 +246,61 @@ fn the_fold_reads_every_object_exactly() {
     assert_eq!((nan.to_json()["value"].clone(), nan.text.as_deref()), (Value::Null, Some("NaN")));
     assert!(nan.same(&g.view(o("outlet-1"), true, 5_000)), "NaN is the same as itself");
 
+    // A state alone is a change: the same reading with its source away, past its bound, or with
+    // its state flipped by a rule over another series.
+    let mut g = Fold::new(&b);
+    g.sample("plc", "fill1", None, 1, 35.0, 1_000);
+    let here = g.view(o("outlet-1"), true, 1_000);
+    assert!(!here.same(&g.view(o("outlet-1"), false, 1_000)), "stale with its source away");
+    g.sample("sorter", "rate", None, 1, 99.0, 1_000);
+    assert!(!g.view(o("read-rate"), true, 2_500).same(&g.view(o("read-rate"), true, 2_501)), "stale past its bound");
+    g.sample("plc", "fill1", None, 2, 100.0, 1_000);
+    g.sample("plc", "infeed", None, 2, 2.0, 1_000);
+    let alarm = g.view(o("outlet-9"), true, 1_000);
+    g.sample("plc", "infeed", None, 3, 1.0, 1_000);
+    let warn = g.view(o("outlet-9"), true, 1_000);
+    assert_eq!((alarm.state, warn.state, alarm.text.clone(), warn.text.clone()), (StateClass::Alarm, StateClass::Warn, Some("100".to_string()), Some("100".to_string())));
+    assert!(!alarm.same(&warn), "a state flipped by another series, the value unchanged");
+
+    // The first rule that holds, never the weightiest: where the lighter comes first, 100 reads it.
+    let v = g.view(o("lighter-first"), true, 1_000);
+    assert_eq!((v.state, v.word.as_str()), (StateClass::Near, "high"));
+    // `below` is strict: at its bound the speed runs.
+    g.sample("plc", "speed", None, 1, 0.5, 1_000);
+    let v = g.view(o("speed"), true, 1_000);
+    assert_eq!((v.state, v.word.as_str()), (StateClass::Normal, "running"));
+    // A range not starting at 0: a level and a place by the value's place in it, clamped.
+    for (x, at) in [(50.0, 0.0), (100.0, 0.5), (125.0, 0.75), (150.0, 1.0), (40.0, 0.0), (160.0, 1.0)] {
+        g.sample("plc", "fill2", None, 5, x, 1_000);
+        assert_eq!(g.view(o("tank"), true, 1_000).level, Some(at), "{x}");
+    }
+    for (x, at) in [(-50.0, 0.0), (0.0, 0.5), (25.0, 0.75), (50.0, 1.0), (-60.0, 0.0)] {
+        g.sample("plc", "p1", None, 5, x, 1_000);
+        assert_eq!(g.view(o("swing"), true, 1_000).place, Some(at), "{x}");
+    }
+    // A rule over a text series no object reads compares as text: "0" is the text "0", never the
+    // number 0.
+    g.cached("sorter", "door", 5, "0", 0, 1_000);
+    let (t, n) = (g.view(o("door-text"), true, 1_000), g.view(o("door-num"), true, 1_000));
+    assert_eq!((t.state, t.word.as_str(), n.state), (StateClass::Warn, "door code 0", StateClass::Normal));
+    // A time reads as the ingest renders it, whichever way it came: a frame's epoch milliseconds
+    // are not taken.
+    g.cached("sorter", "done", 5, "2026-11-10 12:00:00", 0, 1_000);
+    g.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"done","k":null,"ms":6,"v":1762776060000.0}]}"#, 2_000);
+    let v = g.view(o("done"), true, 2_000);
+    assert_eq!((v.value, v.text.as_deref()), (Some(Reading::Text("2026-11-10 12:00:00".into())), Some("2026-11-10 12:00:00")));
+    // A rule bound to a key reads that key's sample, whatever the other keys did since.
+    g.sample("sorter", "at", Some("B2"), 1, 50.0, 1_000);
+    g.sample("sorter", "at", Some("A1"), 2, 10.0, 1_000);
+    let v = g.view(o("near-b2"), true, 1_000);
+    assert_eq!((v.state, v.word.as_str()), (StateClass::Warn, "B2 far"));
+    // A key's sample at an equal index replaces the one before, its arrival the new one.
+    let mut h = Fold::new(&b);
+    h.sample("sorter", "at", Some("A1"), 2, 20.0, 1_000);
+    h.sample("sorter", "at", Some("A1"), 2, 30.0, 2_000);
+    assert_eq!(h.view(o("tracked"), true, 3_500).items, vec![Item { key: "A1".into(), place: 0.3 }]);
+    assert_eq!(h.view(o("tracked"), true, 3_501).items, vec![]);
+
     // The health labels, as the page reads them.
     use veredas_supervisao::feed::health_label;
     assert_eq!(health_label(&HealthState::Waiting), ("waiting", None));
@@ -247,12 +361,19 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
     let (name, data) = sse.next(Duration::from_secs(10)).unwrap();
     assert_eq!(name, "snapshot");
     let first: Value = serde_json::from_str(&data).unwrap();
-    assert_eq!(first["objects"].as_array().unwrap().len(), 14);
+    assert_eq!(first["objects"].as_array().unwrap().len(), 21);
     assert_eq!(object(&first, "outlet-2")["word"], json!("near full"));
     assert_eq!((first["session"]["running"].clone(), first["session"]["writes_armed"].clone(), first["session"]["health"]["plc"]["state"].clone()), (json!(true), json!(false), json!("live")));
-    // The status at least every second: two in a row arrive within a loaded host's margin of it.
+    // The status every second: over six seconds at least five (a loaded host's late tick
+    // forgiven, a two-second cadence's three refused), never more than 2.5 s apart.
     let mut stamps = Vec::new();
-    assert!(sse.until(Duration::from_secs(10), |n, _| { if n == "session" { stamps.push(std::time::Instant::now()); } stamps.len() == 3 }).is_some());
+    let _ = sse.until(Duration::from_secs(6), |n, _| {
+        if n == "session" {
+            stamps.push(std::time::Instant::now());
+        }
+        false
+    });
+    assert!(stamps.len() >= 5, "{} statuses in 6 s", stamps.len());
     for w in stamps.windows(2) {
         assert!(w[1] - w[0] < Duration::from_millis(2_500), "{:?}", w[1] - w[0]);
     }
@@ -297,6 +418,11 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
     }), "{}", snapshot(addr));
     let s = snapshot(addr);
     assert_eq!((object(&s, "read-rate")["text"].clone(), object(&s, "read-rate")["word"].clone(), s["session"]["health"]["sorter"]["state"].clone()), (json!("97.5"), json!("stale"), json!("live")));
+    // Going stale past its bound, the value unchanged, rides the stream as a change.
+    let got = sse.until(Duration::from_secs(10), |n, v| n == "objects" && v["objects"].as_array().unwrap().iter().any(|o| o["id"] == "read-rate" && o["stale"] == json!(true))).expect("staleness past the bound rides the stream");
+    let (_, last) = got.last().unwrap();
+    let rr = last["objects"].as_array().unwrap().iter().find(|o| o["id"] == "read-rate").unwrap();
+    assert_eq!((rr["mark"].clone(), rr["word"].clone(), rr["text"].clone()), (json!("\u{25CC}"), json!("stale"), json!("97.5")));
 
     // The plant away: every object of its source stale, its last value kept.
     // A value moving inside its state reaches the stream.
@@ -307,6 +433,11 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
     assert_eq!((o2["state"].clone(), o2["word"].clone(), o2["text"].clone()), (json!("near"), json!("near full"), json!("90")));
 
     bench.stop();
+    // Going stale with the plant away, the value unchanged, rides the stream as a change.
+    let got = sse.until(Duration::from_secs(30), |n, v| n == "objects" && v["objects"].as_array().unwrap().iter().any(|o| o["id"] == "outlet-1" && o["stale"] == json!(true))).expect("staleness with the source away rides the stream");
+    let (_, last) = got.last().unwrap();
+    let o1 = last["objects"].as_array().unwrap().iter().find(|o| o["id"] == "outlet-1").unwrap();
+    assert_eq!((o1["mark"].clone(), o1["word"].clone(), o1["text"].clone()), (json!("\u{25CC}"), json!("stale"), json!("35")));
     assert!(wait(Duration::from_secs(30), || object(&snapshot(addr), "outlet-1")["stale"] == json!(true)), "{}", snapshot(addr));
     let s = snapshot(addr);
     assert_eq!((object(&s, "outlet-1")["text"].clone(), object(&s, "outlet-1")["word"].clone(), object(&s, "outlet-1")["state"].clone()), (json!("35"), json!("stale"), json!("stale")));
@@ -351,6 +482,7 @@ fn a_rule_holds_only_over_its_kind_of_value() {
     assert!(Compare::AtLeast(100.0).holds(&Reading::Num(100.0)));
     assert!(!Compare::Above(100.0).holds(&Reading::Num(100.0)));
     assert!(Compare::Below(98.0).holds(&Reading::Num(97.9)));
+    assert!(!Compare::Below(98.0).holds(&Reading::Num(98.0)), "below is strict");
     assert!(Compare::AtMost(0.0).holds(&Reading::Num(0.0)));
     assert!(!Compare::Below(98.0).holds(&Reading::Text("97".into())));
     assert_eq!(Compare::Below(98.0).describe("%"), "below 98 %");

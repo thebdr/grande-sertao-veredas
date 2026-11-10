@@ -125,14 +125,15 @@ pub struct Fold {
 }
 
 impl Fold {
-    /// A fold watching every series the binding reads, its objects' and its rules'.
+    /// A fold watching every series the binding reads, its objects' and its rules', each with its
+    /// type, so a text or a time is read as text whoever reads it.
     pub fn new(binding: &Binding) -> Fold {
         let mut f = Fold::default();
         for o in &binding.objects {
             f.watch(&o.value, o.ty);
             for r in &o.rules {
-                if let Some(s) = &r.series {
-                    f.watched.insert((s.source.clone(), s.series.clone()));
+                if let (Some(s), Some(ty)) = (&r.series, r.ty) {
+                    f.watch(s, ty);
                 }
             }
         }
@@ -145,10 +146,12 @@ impl Fold {
         self.watched.insert(k);
     }
 
-    /// One numeric sample from a frame.
+    /// One numeric sample from a frame. A series typed text or time is not taken from frames
+    /// (portal frames a time as its epoch milliseconds): it arrives through the cache alone, as
+    /// the ingest renders it, so it reads one way whichever way it came.
     pub fn sample(&mut self, source: &str, series: &str, key: Option<&str>, index_ms: i64, value: f64, now_ms: i64) {
         let k = (source.to_string(), series.to_string());
-        if !self.watched.contains(&k) {
+        if !self.watched.contains(&k) || self.types.get(&k).is_some_and(|t| !matches!(t, SeriesType::Int | SeriesType::Float)) {
             return;
         }
         let seen = Seen { reading: Reading::Num(value), index_ms, arrived_ms: now_ms };

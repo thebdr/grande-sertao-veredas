@@ -196,6 +196,8 @@ pub struct Rule {
     pub word: String,
     /// Another series compared instead of the object's value.
     pub series: Option<SeriesBind>,
+    /// That series' type, as the project types it: a text or a time is compared as text.
+    pub ty: Option<SeriesType>,
 }
 
 /// A write an object offers, posted to portal's surface by the page.
@@ -635,15 +637,16 @@ fn compile_rule(place: &str, r: RawRule, default_source: &str, u: &Universe) -> 
         return Err(format!("{place}: the state `{}` is none of `near`, `warn`, `alarm`, `disabled`", r.state));
     };
     let word = r.word.unwrap_or_else(|| class.name().to_string());
-    let series = match (r.source, r.series, r.key) {
-        (None, None, None) => None,
+    let (series, ty) = match (r.source, r.series, r.key) {
+        (None, None, None) => (None, None),
         (source, Some(series), key) => {
             let source = source.unwrap_or_else(|| default_source.to_string());
-            Some(check_series(place, &source, &series, key.as_deref(), u)?.0)
+            let (bind, ty) = check_series(place, &source, &series, key.as_deref(), u)?;
+            (Some(bind), Some(ty))
         }
         (_, None, _) => return Err(format!("{place}: a rule over another series names its `series`")),
     };
-    Ok(Rule { compare, class, word, series })
+    Ok(Rule { compare, class, word, series, ty })
 }
 
 /// The objects an `objects` list names: an entry ending in `*` every object whose ID starts with
