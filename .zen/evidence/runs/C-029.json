@@ -10,10 +10,10 @@
     "channels"
   ],
   "exitCode": 0,
-  "outputSha": "9dbc1936dc88814c2e42ce60d4fe4f568c66690cfd92b8f77e9e80c4aa72d412",
-  "outputTail": "\nrunning 4 tests\ntest what_the_catalog_cannot_read_is_counted_and_shown_not_decoded ... ok\ntest in_a_layout_without_segments_the_id_rides_in_the_envelope ... ok\ntest a_channel_in_either_role_speaks_the_catalog_and_the_monitor_shows_what_came_and_went ... ok\ntest a_channel_refuses_a_configuration_it_cannot_speak_and_reports_a_port_it_cannot_take ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.46s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s\n     Running tests\\channels.rs (target\\debug\\deps\\channels-cb81fc2dd52ee6ae.exe)",
-  "ranAt": "2026-11-10T16:46:21.438Z",
-  "headCommit": "9acd4ff736d07f4635f8aa3faa38f12454f96363",
+  "outputSha": "b1defc27c5af8d1600c80fd3a019737ad6d5c665a3a9ce31be7ccba43d52ffcb",
+  "outputTail": "\nrunning 4 tests\ntest what_the_catalog_cannot_read_is_counted_and_shown_not_decoded ... ok\ntest in_a_layout_without_segments_the_id_rides_in_the_envelope ... ok\ntest a_channel_in_either_role_speaks_the_catalog_and_the_monitor_shows_what_came_and_went ... ok\ntest a_channel_refuses_a_configuration_it_cannot_speak_and_reports_a_port_it_cannot_take ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.88s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.98s\n     Running tests\\channels.rs (target\\debug\\deps\\channels-cb81fc2dd52ee6ae.exe)",
+  "ranAt": "2026-11-10T20:23:17.642Z",
+  "headCommit": "c21daae65b50ab34136bad5f26cbe1a03078695a",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/channels.rs",
