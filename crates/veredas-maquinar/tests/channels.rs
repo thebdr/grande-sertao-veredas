@@ -199,7 +199,8 @@ fn what_the_catalog_cannot_read_is_counted_and_shown_not_decoded() {
     sender.send_now("status", values(&[("running", "1"), ("speed", "2")]), None);
     assert!(wait(Duration::from_secs(5), || {
         let r = receiver.status();
-        r.unknown_ids == 1 && r.undecodable == 1 && r.received.get("status") == Some(&1)
+        // Core's own counter moves apart from the bench's: both caught up before either is read.
+        r.unknown_ids == 1 && r.undecodable == 1 && r.received.get("status") == Some(&1) && r.wire.received >= 3
     }), "{:?}", receiver.status());
     let r = receiver.status();
     assert_eq!(r.wire.received, 3, "every frame arrived; two were not messages this catalog reads");
