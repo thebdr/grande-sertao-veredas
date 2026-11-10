@@ -357,28 +357,37 @@ async fn a_reaction_answers_a_write_with_a_timed_sequence() {
 async fn a_draw_or_another_reaction_s_step_is_not_a_change() {
     // Only what a client wrote or the plant side set is a change: a watched tag that is drawn
     // every tick fires nothing, and a step of one reaction into another's watched tag fires
-    // nothing either.
+    // nothing either, for a watcher of any change and for one waiting on a value the draw or the
+    // step brings (a drawn bool's true, the chain's 9).
     let mut drawn = tag("drawn", TagType::Int, Access::Read, "0");
     drawn.randomize = Some(Randomize { low: 0.0, high: 1000.0, decimals: 0, interval_ms: 20 });
+    let mut coin = tag("coin", TagType::Bool, Access::Read, "false");
+    coin.randomize = Some(Randomize { low: 0.0, high: 0.0, decimals: 0, interval_ms: 20 });
     let mut cfg = config(vec![
         drawn,
+        coin,
         tag("d_out", TagType::Int, Access::Read, "0"),
+        tag("heads", TagType::Int, Access::Read, "0"),
         tag("a", TagType::Int, Access::ReadWrite, "0"),
         tag("b", TagType::Int, Access::Read, "0"),
         tag("c", TagType::Int, Access::Read, "0"),
+        tag("nine", TagType::Int, Access::Read, "0"),
     ]);
     cfg.reactions = vec![
         Reaction { on_write: "drawn".into(), equals: None, tag: Some("d_out".into()), then: vec![Step { after_ms: 0, set: "1".into() }] },
+        Reaction { on_write: "coin".into(), equals: Some("true".into()), tag: Some("heads".into()), then: vec![Step { after_ms: 0, set: "1".into() }] },
         Reaction { on_write: "a".into(), equals: Some("1".into()), tag: Some("b".into()), then: vec![Step { after_ms: 0, set: "9".into() }] },
         Reaction { on_write: "b".into(), equals: None, tag: Some("c".into()), then: vec![Step { after_ms: 0, set: "1".into() }] },
+        Reaction { on_write: "b".into(), equals: Some("9".into()), tag: Some("nine".into()), then: vec![Step { after_ms: 0, set: "1".into() }] },
     ];
     let server = start(&cfg).expect("starts");
-    until("draws", Duration::from_secs(2), || server.status().draws >= 10);
-    assert_eq!(server.get("d_out"), Some(Variant::Int32(0)), "a draw is not a change");
+    // The coin flips on every draw, so it came up true several times over these.
+    until("draws", Duration::from_secs(2), || server.status().draws >= 20);
+    assert_eq!((server.get("d_out"), server.get("heads")), (Some(Variant::Int32(0)), Some(Variant::Int32(0))), "a draw is not a change, nor its value the one waited for");
     server.set("a", Variant::Int32(1));
     until("b", Duration::from_secs(2), || server.get("b") == Some(Variant::Int32(9)));
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(server.get("c"), Some(Variant::Int32(0)), "a step of another reaction is not a change");
+    assert_eq!((server.get("c"), server.get("nine")), (Some(Variant::Int32(0)), Some(Variant::Int32(0))), "a step of another reaction is not a change, nor its value the one waited for");
     assert_eq!(server.status().reactions_fired, 1);
     // A client's write into `b` is one.
     let (session, _loop) = anonymous(&server.endpoint_url).await;
@@ -386,6 +395,52 @@ async fn a_draw_or_another_reaction_s_step_is_not_a_change() {
     server.set("b", Variant::Int32(2));
     until("c", Duration::from_secs(2), || server.get("c") == Some(Variant::Int32(1)));
     assert_eq!(server.status().reactions_fired, 2);
+    // And a plant-side set into the value waited for fires its watcher (and the other).
+    server.set("b", Variant::Int32(9));
+    until("nine", Duration::from_secs(2), || server.get("nine") == Some(Variant::Int32(1)));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(server.status().reactions_fired, 4);
+    server.stop();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_nan_is_one_change_however_long_it_stays() {
+    // A float holding NaN still holds it: written once by a client or set once by the plant, it
+    // is one change, never one per tick while it stays; a ramped tag given a NaN is one change
+    // before its ramp starts it again at its low (a step, no change).
+    let mut r = tag("r", TagType::Float, Access::ReadWrite, "0");
+    r.ramp = Some(Ramp { low: 0.0, high: 10.0, step: 1.0, decimals: Some(0), interval_ms: 1000 });
+    let mut cfg = config(vec![tag("x", TagType::Float, Access::ReadWrite, "0"), r, tag("out", TagType::Int, Access::Read, "0")]);
+    cfg.reactions = vec![
+        Reaction { on_write: "x".into(), equals: None, tag: Some("out".into()), then: vec![Step { after_ms: 0, set: "1".into() }] },
+        Reaction { on_write: "r".into(), equals: None, tag: Some("out".into()), then: vec![Step { after_ms: 0, set: "2".into() }] },
+    ];
+    let server = start(&cfg).expect("starts");
+    let (session, _loop) = anonymous(&server.endpoint_url).await;
+    let x = NodeId::new(server.namespace, "x");
+    let fired = || server.status().reactions_fired;
+
+    assert_eq!(write(&session, &x, Variant::Double(2.0)).await, StatusCode::Good);
+    until("the write", Duration::from_secs(2), || fired() == 1);
+    assert_eq!(write(&session, &x, Variant::Double(f64::NAN)).await, StatusCode::Good);
+    until("the NaN", Duration::from_secs(2), || fired() == 2);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(matches!(server.get("x"), Some(Variant::Double(v)) if v.is_nan()));
+    assert_eq!(fired(), 2, "a client's NaN is one change while it stays");
+    server.set("x", 3.0);
+    until("the set", Duration::from_secs(2), || fired() == 3);
+    server.set("x", f64::NAN);
+    until("the plant's NaN", Duration::from_secs(2), || fired() == 4);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(fired(), 4, "a plant-side NaN is one change while it stays");
+
+    // The ramped tag: a NaN just after a step, one change; the ramp's restart at the low is none.
+    just_stepped(&server, "r");
+    assert_eq!(write(&session, &NodeId::new(server.namespace, "r"), Variant::Double(f64::NAN)).await, StatusCode::Good);
+    until("the NaN in the ramp", Duration::from_secs(2), || fired() == 5);
+    until("the restart", Duration::from_secs(3), || server.get("r") == Some(Variant::Double(0.0)));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(fired(), 5, "one change for the NaN, none for the ramp's restart");
     server.stop();
 }
 
@@ -924,12 +979,15 @@ async fn a_ramped_tag_steps_on_the_wire_and_moves_on_from_what_it_holds() {
         tag("still", TagType::Float, Access::Read, "1.5"),
         tag("go", TagType::Int, Access::ReadWrite, "0"),
         tag("fired", TagType::Int, Access::Read, "0"),
+        tag("full", TagType::Int, Access::Read, "0"),
     ]);
     // A client's press sets the ramped level (a reaction's step); a reaction watching the ramped
-    // level would fire on any change of it.
+    // level would fire on any change of it, another on its reaching its high (10, which its own
+    // cycle takes).
     cfg.reactions = vec![
         Reaction { on_write: "go".into(), equals: Some("1".into()), tag: Some("level".into()), then: vec![Step { after_ms: 0, set: "0".into() }] },
         Reaction { on_write: "level".into(), equals: None, tag: Some("fired".into()), then: vec![Step { after_ms: 0, set: "1".into() }] },
+        Reaction { on_write: "level".into(), equals: Some("10".into()), tag: Some("full".into()), then: vec![Step { after_ms: 0, set: "1".into() }] },
     ];
     let server = start(&cfg).expect("starts");
     let (session, _loop) = anonymous(&server.endpoint_url).await;
@@ -961,6 +1019,7 @@ async fn a_ramped_tag_steps_on_the_wire_and_moves_on_from_what_it_holds() {
     for w in levels.windows(2) {
         assert_eq!(w[1], ramp_next(w[0], &level_r), "{levels:?}");
     }
+    assert!(levels.contains(&10.0), "the level reached its high: {levels:?}");
     // And a float ramp at its places, wrapping within the values read: 0.3, 0.6, 0.9, 0.2, ...
     let seen = distinct(&server, "tenths", 12, Duration::from_secs(5));
     assert_eq!(seen.len(), 12, "{seen:?}");
@@ -985,12 +1044,24 @@ async fn a_ramped_tag_steps_on_the_wire_and_moves_on_from_what_it_holds() {
     just_stepped(&server, "pos");
     server.set("pos", 250.0);
     assert_eq!(next_after(&server, "pos", 250.0), 0.0, "outside the range, the ramp starts at its low");
-    // A ramp's step is no change: the reaction watching the level never fired.
-    assert_eq!((server.get("fired"), server.status().reactions_fired), (Some(Variant::Int32(0)), 1), "only the press fired");
-    // While a plant-side set of the ramped level is one: the watching reaction is alive.
+    // A ramp's step is no change: neither reaction watching the level fired, though it reached
+    // its high many times.
+    assert_eq!((server.get("fired"), server.get("full"), server.status().reactions_fired), (Some(Variant::Int32(0)), Some(Variant::Int32(0)), 1), "only the press fired");
+    // While a plant-side set of the ramped level is one: the watching reactions are alive.
     server.set("level", 5);
     until("the set fires the watcher", Duration::from_secs(2), || server.get("fired") == Some(Variant::Int32(1)));
     assert_eq!(server.status().reactions_fired, 2);
+    // A set to the high, just after a step that did not land there: both watchers fire.
+    loop {
+        just_stepped(&server, "level");
+        if server.get("level") != Some(Variant::Int32(10)) {
+            break;
+        }
+    }
+    server.set("level", 10);
+    until("the set to the high fires its watcher", Duration::from_secs(2), || server.get("full") == Some(Variant::Int32(1)));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(server.status().reactions_fired, 4);
     assert!(server.status().ramp_steps >= 16, "{:?}", server.status());
     assert_eq!(server.status().draws, 0, "a step is no draw");
     server.stop();

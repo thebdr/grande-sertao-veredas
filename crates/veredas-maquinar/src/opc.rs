@@ -262,6 +262,17 @@ fn at_places(x: f64, d: u8) -> bool {
     (x * f).round() / f == x
 }
 
+/// Whether a watched tag holds what it held: as its variant compares, except that a float holding
+/// NaN still holds it (NaN is no change from NaN; -0 and 0 stay one value), so a NaN written once
+/// is one change, never one per tick.
+fn same_reading(a: Option<&Variant>, b: Option<&Variant>) -> bool {
+    match (a, b) {
+        (Some(Variant::Double(x)), Some(Variant::Double(y))) => x == y || (x.is_nan() && y.is_nan()),
+        (Some(Variant::Float(x)), Some(Variant::Float(y))) => x == y || (x.is_nan() && y.is_nan()),
+        _ => a == b,
+    }
+}
+
 /// When a draw or a ramp's step is next due, from the one due `at` and served `now`: an
 /// interval after it was due, never after the tick that served it; a stall skips what it missed
 /// and keeps the phase.
@@ -1001,7 +1012,7 @@ async fn service_loop(
                     let current = read_node(&nodes, &node(&r.watched));
                     let fired = match &r.equals {
                         Some(v) => current.as_ref() == Some(v) && last_seen[i].as_ref() != Some(v),
-                        None => current != last_seen[i],
+                        None => !same_reading(current.as_ref(), last_seen[i].as_ref()),
                     };
                     if fired {
                         if let Ok(mut s) = status.lock() {

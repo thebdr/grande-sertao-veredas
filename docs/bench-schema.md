@@ -157,7 +157,8 @@ starts again at `low`, one inside it moves the ramp on from there.
 **A reaction** (an entry of `reactions`): what the plant does when a client writes a tag.
 - `on_write` (required): the tag watched.
 - `equals` (none): the value that fires it, as text parsed per the tag's type; absent, any
-  change fires it.
+  change fires it. Either way only what a client wrote or the plant side set is a change, never a
+  draw, a ramp's step or a reaction's step; a float holding NaN is no change from NaN.
 - `tag` (`on_write`): the tag the steps set.
 - `then` (required): the steps, as inline tables, each at its delay from the moment of firing.
 
