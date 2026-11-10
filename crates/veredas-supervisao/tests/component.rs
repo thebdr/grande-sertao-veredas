@@ -60,6 +60,35 @@ fn its_own_dependencies_are_core_portal_and_the_servers_crates() {
     assert_eq!(dev, ["tempfile", "veredas-maquinar"].into_iter().collect::<BTreeSet<_>>());
 }
 
+/// The crates in a package's normal and build graph on every platform, by name, as cargo would
+/// build that package alone.
+fn graph(package: &str) -> BTreeSet<String> {
+    let out = Command::new(env!("CARGO"))
+        .args(["tree", "-e", "normal,build", "--target", "all", "--prefix", "none", "-f", "{p}", "-p", package, "--manifest-path"])
+        .arg(crate_dir().join("Cargo.toml"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.split_whitespace().next().map(String::from)).collect()
+}
+
+/// A plant's stack: what talks to a plant or keeps its data. Portal's to hold, never supervisão's.
+const PLANT_STACK: &[&str] = &["async-opcua-client", "async-opcua-server", "async-opcua-types", "async-opcua-core", "async-opcua-crypto", "duckdb", "libduckdb-sys", "socket2", "reqwest", "veredas-maquinar", "veredas-aranha"];
+
+#[test]
+fn the_plant_s_stack_reaches_supervisao_through_portal_alone() {
+    let mine = graph("veredas-supervisao");
+    let portal = graph("veredas-portal");
+    assert!(mine.contains("veredas-portal") && mine.contains("veredas-core") && mine.contains("axum"), "{mine:?}");
+    // The engine and the OPC client are there, and portal brings them.
+    for c in ["duckdb", "libduckdb-sys", "async-opcua-client"] {
+        assert!(mine.contains(c) && portal.contains(c), "{c}");
+    }
+    let own: Vec<&String> = mine.difference(&portal).filter(|c| PLANT_STACK.contains(&c.as_str())).collect();
+    assert_eq!(own, Vec::<&String>::new(), "a plant's crate supervisão brings itself");
+    assert!(!mine.contains("veredas-maquinar") && !mine.contains("veredas-aranha"), "the bench is a dev-dependency alone");
+}
+
 /// Every file git holds or could hold under the crate (tracked, and untracked files git does not
 /// ignore): what would be committed is what is judged, `web/dist/` included, `web/node_modules/`
 /// never (the repository ignores it).
