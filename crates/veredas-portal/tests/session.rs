@@ -368,8 +368,11 @@ fn the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_s
     assert!(wait(Duration::from_secs(10), || live.series.read().unwrap().get("log|temp").is_some_and(|e| e.count == 70)), "{:?}", live.series.read().unwrap().get("log|temp"));
     let temp = live.series.read().unwrap()["log|temp"].clone();
     assert_eq!((temp.keys, temp.keys_capped), (64, true), "seventy keys: the cache holds 64 and says so");
+    // A connection attempt may take the worker's whole connect timeout (10 s) before it reads as
+    // retrying (a port freed by the bench can be taken by another test's server, which then never
+    // answers this client's handshake): the bound is that timeout and a margin, for a hang.
     assert!(
-        wait(Duration::from_secs(10), || {
+        wait(veredas_core::opc::worker::CONNECT_TIMEOUT + Duration::from_secs(20), || {
             let h = live.health.read().unwrap();
             matches!(h.get("plc").map(|s| &s.state), Some(HealthState::Retrying(_))) && matches!(h.get("sorter").map(|s| &s.state), Some(HealthState::Retrying(_)))
         }),

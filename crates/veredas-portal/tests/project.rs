@@ -865,7 +865,10 @@ fn the_sealed_password_reaches_the_source_through_the_session() {
             }
             lines.push(line.clone());
             let status = line.contains("| ") && line.contains(" values");
-            if (status && until_live && line.contains("plc: live (")) || (status && !until_live && lines.iter().filter(|l| l.contains(" values")).count() >= 4) || started.elapsed() > Duration::from_secs(30) {
+            // Sealed wrong, the run is read over four status lines at least and on until the
+            // source reads retrying: the refusal comes after a connection, which a loaded machine
+            // can take seconds to make.
+            if (status && until_live && line.contains("plc: live (")) || (status && !until_live && line.contains("plc: retrying") && lines.iter().filter(|l| l.contains(" values")).count() >= 4) || started.elapsed() > Duration::from_secs(30) {
                 break;
             }
         }
