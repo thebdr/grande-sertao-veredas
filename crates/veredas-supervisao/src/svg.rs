@@ -5,6 +5,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// The SVG namespace a layout's root is in.
+pub const SVG_NS: &str = "http://www.w3.org/2000/svg";
+
 /// The elements a marker can follow: those whose outline the page can measure along.
 pub const FOLLOWABLE: [&str; 7] = ["path", "line", "polyline", "polygon", "rect", "circle", "ellipse"];
 
@@ -41,14 +44,22 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
     if root.tag_name().name() != "svg" {
         return Err(format!("{} is not an SVG document: its root is <{}>", path.display(), root.tag_name().name()));
     }
+    // The page reads the drawing as SVG: an `svg` root outside the SVG namespace is no drawing
+    // a browser lays out.
+    if root.tag_name().namespace() != Some(SVG_NS) {
+        return Err(format!("{} is not an SVG document: its root is not in the SVG namespace ({SVG_NS})", path.display()));
+    }
     let mut ids: BTreeMap<String, (String, usize)> = BTreeMap::new();
     for node in root.descendants().filter(|n| n.is_element()) {
         let name = node.tag_name().name();
         if name == "script" || name == "foreignObject" {
             return Err(format!("{} holds a <{name}> element: a layout is a drawing, with no script and no foreign content", path.display()));
         }
-        if let Some(attr) = node.attributes().find(|a| a.name().len() > 2 && a.name()[..2].eq_ignore_ascii_case("on")) {
+        if let Some(attr) = node.attributes().find(|a| a.name().len() > 2 && a.name().as_bytes()[..2].eq_ignore_ascii_case(b"on")) {
             return Err(format!("{} holds an event handler (`{}` on <{name}>): a layout is a drawing, with no script", path.display(), attr.name()));
+        }
+        if let Some(attr) = node.attributes().find(|a| a.name() == "href" && a.value().trim_start().to_ascii_lowercase().starts_with("javascript:")) {
+            return Err(format!("{} holds a script link (`{}` on <{name}>): a layout is a drawing, with no script", path.display(), attr.value().trim()));
         }
         if let Some(id) = node.attribute("id") {
             let e = ids.entry(id.to_string()).or_insert_with(|| (name.to_string(), 0));

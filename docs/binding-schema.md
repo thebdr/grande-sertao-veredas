@@ -285,12 +285,13 @@ A path is relative to the binding file's folder.
   - `source` (required): a source of the session's project (a log, an OPC source, a channel).
   - `series` (required): a series that source carries: a capture rule's group (not its key group)
     for a log the rule reads, an OPC tag's or bit's series for an OPC source, a message's field for
-    a channel.
+    a channel; typed as portal types it (a type's word in any case), and, where several rules or
+    messages carry it, numeric only where every one of them types it so.
   - `key` (none): the one key read, for a series whose samples carry keys; absent, the latest
     sample whatever its key, or, for a marker, one marker per key.
 - `unit` (`""`): shown after the value.
-- `decimals` (none): the places a number is shown with; absent, as it reads, at most three places,
-  trailing zeros dropped.
+- `decimals` (none): the places a number is shown with, 0 to 6; absent, as it reads, at most three
+  places, trailing zeros dropped.
 - `show` (`"state"`): how the layout shows the object: `state` (its element takes the state's
   class, and its mark and word when not normal), `level` (as `state`, and its element fills from
   the bottom by the value's place in `range`), `value` (as `state`, and the value written over its
@@ -302,7 +303,7 @@ A path is relative to the binding file's folder.
 - `states` (none): the rules, in order; the first that holds names the state; none holding, the
   state is normal.
 - `normal` (`"ok"`): the word of the normal state.
-- `stale_after_ms` (none): a freshness bound: with it, the object is stale when no sample of its
+- `stale_after_ms` (none): a freshness bound above 0: with it, the object is stale when no sample of its
   series arrived within that many milliseconds, even while its source is live; for a marker per
   key, a key with no sample within it is no longer shown (absent, after 10000 ms).
 - `actions` (none): the writes the object offers, as inline tables.
@@ -343,7 +344,11 @@ label for a panel of one object, the table's name for a table's, else `"State ov
 `"States"` or `"Levels"`) and a `span` (`1`: the columns it takes, 1 to the
 dashboard's `columns`). An entry of `objects` ending in `*` names every object whose ID starts with
 what precedes it, in the binding's order, and must name at least one. A window is the last
-`minutes` up to now on the store's time axis.
+`minutes` up to now on the store's time axis; `minutes` and `bucket_minutes` are above 0. A
+trend, bars, a timeline and levels chart numbers: their objects read numeric series. A column a
+panel names is checked against its table's where the project states them (a capture rule's, an OPC
+rule's, a message's, each beside `source`, `key`, `index_ms`, `ts`, `arrival_ms` and `seq`); a
+view's are the engine's, judged when the panel is computed.
 - `value`: a tile with the object's value, unit, state and a sparkline. `object` (required),
   `minutes` (`30`: the sparkline's window), `target` (none: the tile says how far the value is from
   it, in percent).
@@ -363,7 +368,9 @@ what precedes it, in the binding's order, and must name at least one. A window i
   rule, a channel message or a view of the project), `columns` (none: every column), each
   `{ name, label, bar, decimals, states }` (`name` required; `bar` true draws the value as a bar
   against the column's largest in the page; `states` rules as an object's), `sort` (none:
-  `{ column, descending }`, applied to the rows shown), `limit` (`50`, 1 to 1000).
+  `{ column, descending }`, applied to the rows shown, a column of the panel's, or of the table's
+  when the panel names none), `limit` (`50`, 1 to 1000). A column's `decimals` are 0 to 6; its
+  rules compare its own value.
 - `cells`: charts in cells, one row per value of a key column of a table over a window: the
   median, a sparkline of the median per `bucket_minutes`, the distribution from median − `spread`
   to median + `spread` in 20 bins, σ and n. `table` (required), `key` (required), `value`
@@ -376,11 +383,19 @@ A misspelled key anywhere; a header of another format or version; a session name
 or twice; a project or binding file that cannot be read or does not load (with portal's reason
 for a project); an object ID of another shape or twice whatever the case; a source the project
 lacks; a series its source does not carry (with the series it does carry); a level or a marker on
-a series that is not numeric; a `path` on an object that does not move, a marker without one, or
-one naming no element of the layout or an element no marker can follow; a `range` empty or not
-finite; a rule with no comparison or two, a state outside the four, a comparison that is not a
-finite number; an action whose source is no OPC source of the project or whose tag no rule marks
-writable; a headline or panel naming no object, an `objects` pattern matching none; a panel of an
-unknown kind, or with a key its kind does not take; a span past the columns; a table the project
-lacks; a layout that cannot be read or is not an SVG document: each is refused when the file
-loads, with its place named, before any session starts.
+a series that is not numeric; places past 6; a freshness bound of 0; a `path` on an object that
+does not move, a marker without one, or one naming no element of the layout or an element no
+marker can follow; a `range` empty or not finite; a rule with no comparison or two, a state outside
+the four, a comparison that is not a finite number; an action whose source is no OPC source of the
+project or whose tag no rule marks writable, or whose label is empty; a headline or panel naming no
+object, an `objects` pattern matching none; an empty dashboard name, or one twice; columns outside 1
+to 12; a panel without a kind, of an unknown kind, or with a key its kind does not take; a span
+past the columns; `minutes` or `bucket_minutes` of 0; a target, a limit or a tick that is not a
+finite number, a limit naming both sides, an unknown aggregate; a trend, bars, a timeline or levels
+over a series that is not numeric; a table the project lacks; a table panel's limit outside 1 to
+1000, a column with an empty name, places past 6 or a rule over another series, a sort column the
+panel or its table lacks; a column, key or value the table lacks where the project states its
+columns, a value that is not numeric; a `spread` not above 0; a layout that cannot be read, is not
+an SVG document (its root an `svg` in the SVG namespace), or holds a script, foreign content, an
+event handler or a script link: each is refused when the file loads, with its place named, before
+any session starts.

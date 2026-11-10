@@ -43,6 +43,7 @@ pub fn blocks(name: &str, lang: &str) -> Vec<String> {
 }
 
 /// The worked example's four blocks: the supervisão file, the project, the binding, the layout.
+#[derive(Clone)]
 pub struct Example {
     pub host: String,
     pub project: String,

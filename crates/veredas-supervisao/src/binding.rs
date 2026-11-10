@@ -15,7 +15,6 @@ use serde::Deserialize;
 use serde_json::{Value as Json, json};
 use veredas_core::SeriesType;
 use veredas_portal::CaptureRule;
-use veredas_portal::channel::MessageTable;
 use veredas_portal::project::Project;
 
 use crate::state::{Comparand, Compare, StateClass};
@@ -48,83 +47,112 @@ pub struct SourceUniverse {
     pub writable: BTreeSet<String>,
 }
 
-/// Everything a project carries that a binding can name.
+/// Everything a project carries that a binding can name: its sources with their series and
+/// writable tags, and its tables with their columns (a view's are the engine's to know when the
+/// session runs, so a view's columns are `None`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Universe {
     pub sources: BTreeMap<String, SourceUniverse>,
-    pub tables: BTreeSet<String>,
+    pub tables: BTreeMap<String, Option<BTreeMap<String, SeriesType>>>,
 }
 
-fn type_of(text: &str, default: SeriesType) -> SeriesType {
-    match text.trim() {
-        "int" => SeriesType::Int,
-        "float" => SeriesType::Float,
-        "text" => SeriesType::Text,
-        "time" => SeriesType::Time,
-        _ => default,
+/// A group's type as the session reads a capture rule's: none is text, the words in any case.
+fn capture_type(text: &str) -> SeriesType {
+    if text.trim().is_empty() { SeriesType::Text } else { veredas_portal::opc::parse_type(text).unwrap_or(SeriesType::Text) }
+}
+
+/// A series several parts carry (two rules, two messages) is numeric only where every one of
+/// them types it so: an int and a float read as a float, anything with text or a time as text.
+fn merge(series: &mut BTreeMap<String, SeriesType>, name: &str, ty: SeriesType) {
+    let merged = match (series.get(name).copied(), ty) {
+        (None, t) => t,
+        (Some(a), b) if a == b => a,
+        (Some(SeriesType::Int | SeriesType::Float), SeriesType::Int | SeriesType::Float) => SeriesType::Float,
+        _ => SeriesType::Text,
+    };
+    series.insert(name.to_string(), merged);
+}
+
+/// The columns every base table carries beside its value columns.
+fn with_reserved(columns: &[(String, SeriesType)]) -> BTreeMap<String, SeriesType> {
+    let mut out: BTreeMap<String, SeriesType> = [
+        ("source", SeriesType::Text),
+        ("key", SeriesType::Text),
+        ("index_ms", SeriesType::Int),
+        ("ts", SeriesType::Time),
+        ("arrival_ms", SeriesType::Int),
+        ("seq", SeriesType::Int),
+    ]
+    .into_iter()
+    .map(|(n, t)| (n.to_string(), t))
+    .collect();
+    for (n, t) in columns {
+        out.insert(n.clone(), *t);
     }
+    out
 }
 
 impl Universe {
-    /// What a loaded project carries: a log's series are the value groups of every capture rule
-    /// that reads it (its key group is no series); an OPC source's are its tags' and bits'
-    /// series; a channel's are its catalog messages' fields. The tables are the capture rules,
-    /// the OPC rules, the catalog messages and the views.
+    /// What a loaded project carries, compiled by portal's own readers as its session compiles
+    /// it: a log's series are the value groups of every capture rule that reads it (its key group
+    /// is no series), typed as the session types them; an OPC source's are its rules' columns
+    /// (a tag's series, a bit's), and its writable tags by node id text; a channel's are its
+    /// catalog messages' columns. The tables are the capture rules, the OPC rules, the messages
+    /// and the views. The project compiled every part when it loaded; a part that does not
+    /// compile here carries nothing to bind. No secret is needed: names are compiled, not opened.
     pub fn of(project: &Project) -> Universe {
         let mut u = Universe::default();
         for log in &project.logs {
-            let mut s = SourceUniverse { kind: "log", ..Default::default() };
-            for rule in &project.rules {
-                let scope = rule.scope.as_deref().map(str::trim).filter(|x| !x.is_empty());
+            u.sources.insert(log.id.clone(), SourceUniverse { kind: "log", ..Default::default() });
+        }
+        for rule in &project.rules {
+            let types: HashMap<String, SeriesType> = rule.types.iter().map(|(k, v)| (k.clone(), capture_type(v))).collect();
+            let Ok(c) = CaptureRule::new(&rule.name, rule.pattern.trim(), None, &types, rule.key.as_deref().map(str::trim)) else { continue };
+            let columns: Vec<(String, SeriesType)> = c.series().map(|(n, t)| (n.to_string(), t)).collect();
+            let scope = rule.scope.as_deref().map(str::trim).filter(|x| !x.is_empty());
+            for log in &project.logs {
                 if scope.is_some_and(|x| x != log.id) {
                     continue;
                 }
-                let types: HashMap<String, SeriesType> = rule.types.iter().map(|(k, v)| (k.clone(), type_of(v, SeriesType::Text))).collect();
-                // The project compiled every rule when it loaded; one that does not compile here
-                // carries nothing to bind.
-                if let Ok(c) = CaptureRule::new(&rule.name, rule.pattern.trim(), None, &types, rule.key.as_deref().map(str::trim)) {
-                    for (name, ty) in c.series() {
-                        s.series.insert(name.to_string(), ty);
+                if let Some(src) = u.sources.get_mut(&log.id) {
+                    for (n, t) in &columns {
+                        merge(&mut src.series, n, *t);
                     }
                 }
             }
-            u.sources.insert(log.id.clone(), s);
+            u.tables.insert(rule.name.trim().to_string(), Some(with_reserved(&columns)));
         }
-        for rule in &project.rules {
-            u.tables.insert(rule.name.trim().to_string());
-        }
+        let anything = |_: &str| Some(String::new());
         for opc in &project.opc {
-            let mut s = SourceUniverse { kind: "opc", ..Default::default() };
-            for rule in &opc.rules {
-                u.tables.insert(rule.name.trim().to_string());
-                for tag in &rule.tags {
-                    if !tag.series.trim().is_empty() {
-                        s.series.insert(tag.series.trim().to_string(), type_of(&tag.ty, SeriesType::Float));
+            let mut src = SourceUniverse { kind: "opc", ..Default::default() };
+            if let Ok(spec) = veredas_portal::opc::compile(opc, &anything) {
+                for rule in &spec.rules {
+                    let (name, columns) = veredas_portal::opc::table_of(rule);
+                    for (n, t) in &columns {
+                        merge(&mut src.series, n, *t);
                     }
-                    for bit in &tag.bits {
-                        s.series.insert(bit.series.trim().to_string(), SeriesType::Int);
-                    }
-                    if tag.writable {
-                        s.writable.insert(tag.node_id.trim().to_string());
+                    u.tables.insert(name, Some(with_reserved(&columns)));
+                    for tag in rule.tags.iter().filter(|t| t.writable) {
+                        src.writable.insert(tag.raw.trim().to_string());
                     }
                 }
             }
-            u.sources.insert(opc.source_id.clone(), s);
+            u.sources.insert(opc.source_id.clone(), src);
         }
         for ch in &project.channels {
-            let mut s = SourceUniverse { kind: "channel", ..Default::default() };
-            for m in &ch.catalog.messages {
-                u.tables.insert(m.name.clone());
-                if let Ok(t) = MessageTable::of(&ch.source_id, m) {
-                    for (name, ty) in t.columns {
-                        s.series.insert(name, ty);
+            let mut src = SourceUniverse { kind: "channel", ..Default::default() };
+            if let Ok(tables) = veredas_portal::channel::check(ch) {
+                for t in tables {
+                    for (n, ty) in &t.columns {
+                        merge(&mut src.series, n, *ty);
                     }
+                    u.tables.insert(t.name.clone(), Some(with_reserved(&t.columns)));
                 }
             }
-            u.sources.insert(ch.source_id.clone(), s);
+            u.sources.insert(ch.source_id.clone(), src);
         }
         for (name, _) in &project.tables {
-            u.tables.insert(name.clone());
+            u.tables.insert(name.clone(), None);
         }
         u
     }
@@ -888,7 +916,7 @@ fn compile_panel(place: &str, kind: &str, t: toml::Value, objects: &[Object], u:
         }
         "table" => {
             let p: PTable = t.try_into().map_err(de)?;
-            if !u.tables.contains(&p.table) {
+            if !u.tables.contains_key(&p.table) {
                 return Err(format!("{place}: `{}` is no table of the project", p.table));
             }
             let limit = p.limit.unwrap_or(50);
@@ -921,13 +949,38 @@ fn compile_panel(place: &str, kind: &str, t: toml::Value, objects: &[Object], u:
             {
                 return Err(format!("{place}: the sort column `{}` is none of the panel's columns", s.column));
             }
+            if let Some(Some(known)) = u.tables.get(&p.table) {
+                let names: Vec<&str> = known.keys().map(String::as_str).collect();
+                for (k, c) in cols.iter().enumerate() {
+                    if !known.contains_key(&c.name) {
+                        return Err(format!("{place}, columns[{k}]: `{}` has no column `{}` (its columns: {})", p.table, c.name, list(&names)));
+                    }
+                }
+                if let Some(s) = &p.sort
+                    && cols.is_empty()
+                    && !known.contains_key(&s.column)
+                {
+                    return Err(format!("{place}: the sort column `{}` is no column of `{}` (its columns: {})", s.column, p.table, list(&names)));
+                }
+            }
             let sort = p.sort.map(|s| (s.column, s.descending));
             (p.title.or(Some(p.table.clone())), p.span, PanelKind::Table { table: p.table, columns: cols, sort, limit })
         }
         "cells" => {
             let p: PCells = t.try_into().map_err(de)?;
-            if !u.tables.contains(&p.table) {
+            if !u.tables.contains_key(&p.table) {
                 return Err(format!("{place}: `{}` is no table of the project", p.table));
+            }
+            if let Some(Some(known)) = u.tables.get(&p.table) {
+                let names: Vec<&str> = known.keys().map(String::as_str).collect();
+                for (what, col) in [("key", &p.key), ("value", &p.value)] {
+                    if !known.contains_key(col) {
+                        return Err(format!("{place}: the {what} `{col}` is no column of `{}` (its columns: {})", p.table, list(&names)));
+                    }
+                }
+                if !matches!(known.get(&p.value), Some(SeriesType::Int | SeriesType::Float)) {
+                    return Err(format!("{place}: the value `{}` of `{}` is not numeric", p.value, p.table));
+                }
             }
             if !(p.spread.is_finite() && p.spread > 0.0) {
                 return Err(format!("{place}: `spread` is not a number above 0"));

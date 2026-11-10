@@ -137,7 +137,11 @@ fn the_worked_example_loads_as_the_reference_states_it() {
     assert_eq!(plc.series.keys().cloned().collect::<Vec<_>>(), ["fill1", "fill2", "fill3", "infeed", "p1", "p2", "release3", "speed"]);
     assert_eq!((plc.series["infeed"], plc.series["speed"]), (SeriesType::Int, SeriesType::Float));
     assert_eq!(plc.writable.iter().cloned().collect::<Vec<_>>(), ["ns=2;s=release3"]);
-    assert_eq!(u.tables.iter().cloned().collect::<Vec<_>>(), ["outlets", "plc_main", "sorts"]);
+    assert_eq!(u.tables.keys().cloned().collect::<Vec<_>>(), ["outlets", "plc_main", "sorts"]);
+    let cols = |t: &str| u.tables[t].as_ref().map(|c| c.iter().map(|(n, ty)| (n.as_str(), *ty)).collect::<Vec<_>>());
+    assert_eq!(cols("sorts").unwrap(), [("arrival_ms", SeriesType::Int), ("index_ms", SeriesType::Int), ("key", SeriesType::Text), ("outlet", SeriesType::Int), ("rate", SeriesType::Float), ("seq", SeriesType::Int), ("source", SeriesType::Text), ("travel", SeriesType::Float), ("ts", SeriesType::Time)]);
+    assert!(cols("plc_main").unwrap().contains(&("fill3", SeriesType::Float)) && cols("plc_main").unwrap().contains(&("infeed", SeriesType::Int)));
+    assert_eq!(cols("outlets"), None, "a view's columns are the engine's, known when the session runs");
 }
 
 #[test]
@@ -507,6 +511,104 @@ fn the_rest_of_the_refusals_name_their_place() {
     }
 }
 
+#[test]
+fn the_edges_the_types_and_every_kind_of_source_and_column() {
+    // At the limits: a 32-letter session name and a 64-character id load; a range of one point
+    // and a spread past every number are refused.
+    let dir = tempfile::tempdir().unwrap();
+    let mut ex = example();
+    let long = "l".repeat(32);
+    ex.host = ex.host.replace("name = \"loop\"", &format!("name = \"{long}\""));
+    ex.binding = ex.binding.replace("id = \"speed\"", &format!("id = \"s{}\"", "x".repeat(63))).replace("headline = [\"speed\", \"read-rate\"]", "headline = [\"read-rate\"]").replace("object = \"speed\"", "object = \"read-rate\"");
+    let cfg = load(dir.path(), &ex).unwrap();
+    assert_eq!((cfg.sessions[0].name.len(), cfg.sessions[0].binding.objects[0].id.len()), (32, 64));
+    assert_eq!(binding_refusal(&with_binding(|b| b.replacen("path = \"loop\"", "path = \"loop\"\nrange = [5, 5]", 1))), "object `parcel-1`: the range is empty (5 is not below 5)");
+    assert_eq!(binding_refusal(&with_binding(|b| b.replace("spread = 10.0", "spread = inf"))), "dashboard `Overview`, panel[7] (cells): `spread` is not a number above 0");
+
+    // Types read as portal reads them, in any case: a tag typed TEXT is text, a group FLOAT a float.
+    let mut ex = example();
+    ex.project = ex.project.replace("series = \"fill1\", type = \"float\"", "series = \"fill1\", type = \"TEXT\"");
+    assert_eq!(binding_refusal(&ex), "object `outlet-1`: a level needs a numeric series, and `fill1` is text");
+    let dir = tempfile::tempdir().unwrap();
+    let mut ex = example();
+    ex.project = ex.project.replace("rate = \"float\" }", "rate = \" FLOAT \" }");
+    let u = Universe::of(&load(dir.path(), &ex).unwrap().sessions[0].project);
+    assert_eq!(u.sources["sorter"].series["rate"], SeriesType::Float);
+
+    // Two logs: a rule scoped to one carries nothing to the other; an unscoped rule reads both.
+    let mut ex = example();
+    ex.project = ex.project.replacen("[[rule]]", "[[log]]\nid = \"other\"\nfile = \"other.log\"\n\n[[rule]]\nname = \"anywhere\"\npattern = \"LEN (?P<len>\\\\d+)\"\ntypes = { len = \"int\" }\n\n[[rule]]", 1);
+    let dir = tempfile::tempdir().unwrap();
+    let u = Universe::of(&load(dir.path(), &ex).unwrap().sessions[0].project);
+    assert_eq!(u.sources["other"].series.keys().cloned().collect::<Vec<_>>(), ["len"]);
+    assert_eq!(u.sources["sorter"].series.keys().cloned().collect::<Vec<_>>(), ["len", "outlet", "rate", "travel"]);
+    let mut bad = ex.clone();
+    bad.binding = bad.binding.replace("value = { source = \"sorter\", series = \"rate\" }", "value = { source = \"other\", series = \"rate\" }");
+    assert_eq!(binding_refusal(&bad), "object `read-rate`, value: the log source `other` carries no series `rate` (it carries: `len`)");
+
+    // A tag's bits: each bit a series, an int, of its source.
+    let mut ex = example();
+    ex.project = ex.project.replace("{ node_id = \"ns=2;s=infeed\", series = \"infeed\", type = \"int\" },", "{ node_id = \"ns=2;s=infeed\", series = \"infeed\", type = \"int\", bits = [ { bit = 0, series = \"infeed_on\" }, { bit = 1, width = 2, series = \"infeed_mode\" } ] },");
+    ex.binding = ex.binding.replace("value = { source = \"plc\", series = \"infeed\" }", "value = { source = \"plc\", series = \"infeed_mode\" }");
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = load(dir.path(), &ex).unwrap();
+    let u = Universe::of(&cfg.sessions[0].project);
+    assert_eq!((u.sources["plc"].series["infeed_on"], u.sources["plc"].series["infeed_mode"]), (SeriesType::Int, SeriesType::Int));
+    assert_eq!(cfg.sessions[0].binding.object("infeed").unwrap().ty, SeriesType::Int);
+
+    // A channel: its messages' fields are its series, typed by the catalog; each message a table.
+    let dir = tempfile::tempdir().unwrap();
+    let mut ex = example();
+    ex.project.push_str("\n[[channel]]\nsource_id = \"line\"\nrole = \"connect\"\nhost = \"127.0.0.1\"\nport = 5020\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n");
+    ex.binding = ex.binding.replace("value = { source = \"plc\", series = \"speed\" }", "value = { source = \"line\", series = \"weight\" }").replace("table = \"outlets\"", "table = \"announce\"").replace("columns = [ { name = \"outlet\" }, { name = \"sorted\", bar = true }, { name = \"travel\", decimals = 1 } ]\nsort = { column = \"sorted\", descending = true }", "columns = [ { name = \"item\" }, { name = \"code\" } ]");
+    write_example(dir.path(), &ex);
+    std::fs::write(dir.path().join("loop/channel.toml"), common::blocks("channel-schema.md", "toml")[0].clone()).unwrap();
+    std::fs::write(dir.path().join("loop/catalog.toml"), common::blocks("controller-schema.md", "toml")[0].clone()).unwrap();
+    let cfg = config::load_file(&dir.path().join("supervisao.toml")).unwrap_or_else(|e| panic!("{e}"));
+    let u = Universe::of(&cfg.sessions[0].project);
+    let line = &u.sources["line"];
+    // A field several messages carry is numeric only where all of them type it so: `item` is a
+    // number in two messages and text in the outcome's payload, `code` text then a number.
+    assert_eq!((line.kind, line.series["weight"], line.series["lane"], line.series["code"], line.series["item"], line.series["result"]), ("channel", SeriesType::Int, SeriesType::Int, SeriesType::Text, SeriesType::Text, SeriesType::Text));
+    let mut item = example();
+    item.project = ex.project.clone();
+    item.binding = ex.binding.replacen("show = \"level\"", "show = \"value\"", 0).replace("value = { source = \"plc\", series = \"fill1\" }
+unit = \"%\"
+decimals = 0
+show = \"level\"", "value = { source = \"line\", series = \"item\" }
+unit = \"%\"
+decimals = 0
+show = \"level\"");
+    let d2 = tempfile::tempdir().unwrap();
+    write_example(d2.path(), &item);
+    std::fs::write(d2.path().join("loop/channel.toml"), common::blocks("channel-schema.md", "toml")[0].clone()).unwrap();
+    std::fs::write(d2.path().join("loop/catalog.toml"), common::blocks("controller-schema.md", "toml")[0].clone()).unwrap();
+    match config::load_file(&d2.path().join("supervisao.toml")) {
+        Err(ConfigError::Binding { reason, .. }) => assert_eq!(reason, "object `outlet-1`: a level needs a numeric series, and `item` is text"),
+        other => panic!("{:?}", other.err()),
+    }
+    assert!(u.tables.contains_key("announce") && u.tables["announce"].as_ref().unwrap().contains_key("lane"));
+    assert_eq!(cfg.sessions[0].binding.object("speed").unwrap().ty, SeriesType::Int);
+
+    // A panel's columns against its table's, where the project states them; a view's when the
+    // session runs.
+    let cases: Vec<(Box<dyn Fn(&str) -> String>, &str)> = vec![
+        (Box::new(|b| b.replace("{ name = \"outlet\" }", "{ name = \"outlett\" }").replace("table = \"outlets\"", "table = \"sorts\"").replace("{ name = \"sorted\", bar = true }", "{ name = \"travel\", bar = true }").replace("{ name = \"travel\", decimals = 1 }", "{ name = \"rate\", decimals = 1 }").replace("sort = { column = \"sorted\", descending = true }", "sort = { column = \"travel\", descending = true }")),
+         "dashboard `Overview`, panel[6] (table), columns[0]: `sorts` has no column `outlett` (its columns: `arrival_ms`, `index_ms`, `key`, `outlet`, `rate`, `seq`, `source`, `travel`, `ts`)"),
+        (Box::new(|b| b.replace("table = \"outlets\"\ncolumns = [ { name = \"outlet\" }, { name = \"sorted\", bar = true }, { name = \"travel\", decimals = 1 } ]\nsort = { column = \"sorted\", descending = true }", "table = \"sorts\"\nsort = { column = \"sorted\", descending = true }")),
+         "dashboard `Overview`, panel[6] (table): the sort column `sorted` is no column of `sorts` (its columns: `arrival_ms`, `index_ms`, `key`, `outlet`, `rate`, `seq`, `source`, `travel`, `ts`)"),
+        (Box::new(|b| b.replace("key = \"outlet\"\nvalue = \"travel\"", "key = \"nokey\"\nvalue = \"travel\"")), "dashboard `Overview`, panel[7] (cells): the key `nokey` is no column of `sorts` (its columns: `arrival_ms`, `index_ms`, `key`, `outlet`, `rate`, `seq`, `source`, `travel`, `ts`)"),
+        (Box::new(|b| b.replace("key = \"outlet\"\nvalue = \"travel\"", "key = \"outlet\"\nvalue = \"nope\"")), "dashboard `Overview`, panel[7] (cells): the value `nope` is no column of `sorts` (its columns: `arrival_ms`, `index_ms`, `key`, `outlet`, `rate`, `seq`, `source`, `travel`, `ts`)"),
+        (Box::new(|b| b.replace("key = \"outlet\"\nvalue = \"travel\"", "key = \"outlet\"\nvalue = \"source\"")), "dashboard `Overview`, panel[7] (cells): the value `source` of `sorts` is not numeric"),
+    ];
+    for (i, (change, expected)) in cases.iter().enumerate() {
+        assert_eq!(binding_refusal(&with_binding(|b| change(b))), *expected, "case {i}");
+    }
+    // A view's columns pass the check, to be judged by the engine when the panel is computed.
+    let dir = tempfile::tempdir().unwrap();
+    assert!(load(dir.path(), &with_binding(|b| b.replace("{ name = \"outlet\" }", "{ name = \"whatever\" }"))).is_ok());
+}
+
 /// The reference, `docs/binding-schema.md`, as this test holds it: an edit there is an edit here.
 const REFERENCE: &str = r###"# The supervisão file and the binding file: `veredas-supervisao` and `veredas-binding`, version 1
 
@@ -795,12 +897,13 @@ A path is relative to the binding file's folder.
   - `source` (required): a source of the session's project (a log, an OPC source, a channel).
   - `series` (required): a series that source carries: a capture rule's group (not its key group)
     for a log the rule reads, an OPC tag's or bit's series for an OPC source, a message's field for
-    a channel.
+    a channel; typed as portal types it (a type's word in any case), and, where several rules or
+    messages carry it, numeric only where every one of them types it so.
   - `key` (none): the one key read, for a series whose samples carry keys; absent, the latest
     sample whatever its key, or, for a marker, one marker per key.
 - `unit` (`""`): shown after the value.
-- `decimals` (none): the places a number is shown with; absent, as it reads, at most three places,
-  trailing zeros dropped.
+- `decimals` (none): the places a number is shown with, 0 to 6; absent, as it reads, at most three
+  places, trailing zeros dropped.
 - `show` (`"state"`): how the layout shows the object: `state` (its element takes the state's
   class, and its mark and word when not normal), `level` (as `state`, and its element fills from
   the bottom by the value's place in `range`), `value` (as `state`, and the value written over its
@@ -812,7 +915,7 @@ A path is relative to the binding file's folder.
 - `states` (none): the rules, in order; the first that holds names the state; none holding, the
   state is normal.
 - `normal` (`"ok"`): the word of the normal state.
-- `stale_after_ms` (none): a freshness bound: with it, the object is stale when no sample of its
+- `stale_after_ms` (none): a freshness bound above 0: with it, the object is stale when no sample of its
   series arrived within that many milliseconds, even while its source is live; for a marker per
   key, a key with no sample within it is no longer shown (absent, after 10000 ms).
 - `actions` (none): the writes the object offers, as inline tables.
@@ -853,7 +956,11 @@ label for a panel of one object, the table's name for a table's, else `"State ov
 `"States"` or `"Levels"`) and a `span` (`1`: the columns it takes, 1 to the
 dashboard's `columns`). An entry of `objects` ending in `*` names every object whose ID starts with
 what precedes it, in the binding's order, and must name at least one. A window is the last
-`minutes` up to now on the store's time axis.
+`minutes` up to now on the store's time axis; `minutes` and `bucket_minutes` are above 0. A
+trend, bars, a timeline and levels chart numbers: their objects read numeric series. A column a
+panel names is checked against its table's where the project states them (a capture rule's, an OPC
+rule's, a message's, each beside `source`, `key`, `index_ms`, `ts`, `arrival_ms` and `seq`); a
+view's are the engine's, judged when the panel is computed.
 - `value`: a tile with the object's value, unit, state and a sparkline. `object` (required),
   `minutes` (`30`: the sparkline's window), `target` (none: the tile says how far the value is from
   it, in percent).
@@ -873,7 +980,9 @@ what precedes it, in the binding's order, and must name at least one. A window i
   rule, a channel message or a view of the project), `columns` (none: every column), each
   `{ name, label, bar, decimals, states }` (`name` required; `bar` true draws the value as a bar
   against the column's largest in the page; `states` rules as an object's), `sort` (none:
-  `{ column, descending }`, applied to the rows shown), `limit` (`50`, 1 to 1000).
+  `{ column, descending }`, applied to the rows shown, a column of the panel's, or of the table's
+  when the panel names none), `limit` (`50`, 1 to 1000). A column's `decimals` are 0 to 6; its
+  rules compare its own value.
 - `cells`: charts in cells, one row per value of a key column of a table over a window: the
   median, a sparkline of the median per `bucket_minutes`, the distribution from median − `spread`
   to median + `spread` in 20 bins, σ and n. `table` (required), `key` (required), `value`
@@ -886,14 +995,22 @@ A misspelled key anywhere; a header of another format or version; a session name
 or twice; a project or binding file that cannot be read or does not load (with portal's reason
 for a project); an object ID of another shape or twice whatever the case; a source the project
 lacks; a series its source does not carry (with the series it does carry); a level or a marker on
-a series that is not numeric; a `path` on an object that does not move, a marker without one, or
-one naming no element of the layout or an element no marker can follow; a `range` empty or not
-finite; a rule with no comparison or two, a state outside the four, a comparison that is not a
-finite number; an action whose source is no OPC source of the project or whose tag no rule marks
-writable; a headline or panel naming no object, an `objects` pattern matching none; a panel of an
-unknown kind, or with a key its kind does not take; a span past the columns; a table the project
-lacks; a layout that cannot be read or is not an SVG document: each is refused when the file
-loads, with its place named, before any session starts.
+a series that is not numeric; places past 6; a freshness bound of 0; a `path` on an object that
+does not move, a marker without one, or one naming no element of the layout or an element no
+marker can follow; a `range` empty or not finite; a rule with no comparison or two, a state outside
+the four, a comparison that is not a finite number; an action whose source is no OPC source of the
+project or whose tag no rule marks writable, or whose label is empty; a headline or panel naming no
+object, an `objects` pattern matching none; an empty dashboard name, or one twice; columns outside 1
+to 12; a panel without a kind, of an unknown kind, or with a key its kind does not take; a span
+past the columns; `minutes` or `bucket_minutes` of 0; a target, a limit or a tick that is not a
+finite number, a limit naming both sides, an unknown aggregate; a trend, bars, a timeline or levels
+over a series that is not numeric; a table the project lacks; a table panel's limit outside 1 to
+1000, a column with an empty name, places past 6 or a rule over another series, a sort column the
+panel or its table lacks; a column, key or value the table lacks where the project states its
+columns, a value that is not numeric; a `spread` not above 0; a layout that cannot be read, is not
+an SVG document (its root an `svg` in the SVG namespace), or holds a script, foreign content, an
+event handler or a script link: each is refused when the file loads, with its place named, before
+any session starts.
 "###;
 
 // ---- the layout alone (src/svg.rs) ----
@@ -910,10 +1027,23 @@ fn a_layout_is_an_svg_document_with_no_script() {
     assert_eq!(ok.ids["a"].1, 2);
     assert_eq!(parse("<html/>", p).unwrap_err(), "l.svg is not an SVG document: its root is <html>");
     assert!(parse("<svg>", p).unwrap_err().starts_with("l.svg is not an XML document: "));
-    assert_eq!(parse("<svg><script>x()</script></svg>", p).unwrap_err(), "l.svg holds a <script> element: a layout is a drawing, with no script and no foreign content");
-    assert_eq!(parse("<svg><rect onclick=\"x()\"/></svg>", p).unwrap_err(), "l.svg holds an event handler (`onclick` on <rect>): a layout is a drawing, with no script");
-    assert_eq!(parse("<svg><rect ONLOAD=\"x()\"/></svg>", p).unwrap_err(), "l.svg holds an event handler (`ONLOAD` on <rect>): a layout is a drawing, with no script");
-    assert!(parse("<svg><rect one=\"1\"/></svg>", p).is_err(), "any on* attribute");
-    assert!(parse("<svg><rect o=\"1\" on=\"1\"/></svg>", p).is_ok(), "on alone names no event");
-    assert!(parse("<svg><foreignObject/></svg>", p).is_err());
+    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><script>x()</script></svg>", p).unwrap_err(), "l.svg holds a <script> element: a layout is a drawing, with no script and no foreign content");
+    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><rect onclick=\"x()\"/></svg>", p).unwrap_err(), "l.svg holds an event handler (`onclick` on <rect>): a layout is a drawing, with no script");
+    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><rect ONLOAD=\"x()\"/></svg>", p).unwrap_err(), "l.svg holds an event handler (`ONLOAD` on <rect>): a layout is a drawing, with no script");
+    assert!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><rect one=\"1\"/></svg>", p).is_err(), "any on* attribute");
+    assert!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><rect o=\"1\" on=\"1\"/></svg>", p).is_ok(), "on alone names no event");
+    assert!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><foreignObject/></svg>", p).is_err());
+    // A name with a letter past ASCII is read, never cut inside it.
+    assert!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><rect o\u{e9}=\"1\" \u{e9}t\u{e9}=\"2\"/></svg>", p).is_ok());
+    assert!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><rect on\u{e9}=\"1\"/></svg>", p).is_err(), "on followed by anything is an event's");
+    // The root in the SVG namespace, or no drawing a browser lays out.
+    assert_eq!(parse("<svg/>", p).unwrap_err(), "l.svg is not an SVG document: its root is not in the SVG namespace (http://www.w3.org/2000/svg)");
+    assert_eq!(parse("<svg xmlns=\"urn:not-svg\"/>", p).unwrap_err(), "l.svg is not an SVG document: its root is not in the SVG namespace (http://www.w3.org/2000/svg)");
+    assert!(parse("<s:svg xmlns:s=\"http://www.w3.org/2000/svg\"><s:rect id=\"r\"/></s:svg>", p).unwrap().element("r") == Some("rect"), "a prefix is a spelling");
+    // A link that runs script, in either attribute's spelling, whatever its case and spacing.
+    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><a href=\" JavaScript:alert(1)\"><rect/></a></svg>", p).unwrap_err(), "l.svg holds a script link (`JavaScript:alert(1)` on <a>): a layout is a drawing, with no script");
+    assert!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\"><a xlink:href=\"javascript:x()\"/></svg>", p).is_err());
+    assert!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><a href=\"#loop\"><rect/></a></svg>", p).is_ok(), "a link within the drawing is a drawing's");
+    // A document type, as drawing tools export it, is read.
+    assert!(parse("<?xml version=\"1.0\"?>\n<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\n<svg xmlns=\"http://www.w3.org/2000/svg\"><rect id=\"x\"/></svg>", p).unwrap().element("x") == Some("rect"));
 }
