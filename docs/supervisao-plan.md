@@ -218,3 +218,28 @@ Recorded as the port meets them. Carried from Veredas 1's supervision app, where
   binding's sources and writable tags are checked against the project when it loads.
 - **Scope creep in 3D**, and the pressure to make a screen look complete: a screen shows what its
   bindings carry, and an unbound object shows no value.
+
+Met during the port:
+
+- **Waiting is also a reconnect.** Portal reads an OPC source reconnecting and a channel whose peer
+  left as waiting, the state of a source before its first value; staleness reads waiting as away
+  only once the source has delivered (C-050, found in the browser with the plant stopped).
+- **An arrival is not a change.** Every poll refreshes an object's arrival; a change published on
+  it would send every polled object every tick. A change is anything but the arrival (C-050).
+- **The health lags the first value** by one refresh (500 ms): an object whose source still reads
+  waiting while its value arrived is not stale (C-050).
+- **An element replaced between a press and its release loses the click.** The top bar and the side
+  panel are built once and updated in place; the attention list is rebuilt only when it changes.
+- **A transition is for a step, not a first place.** Markers slid in from the drawing's origin and
+  levels grew from empty on load until the first paint was made instant.
+- **The workspace's resolve is not a package's.** Once supervisão used portal's default features,
+  `cargo metadata` unified them into portal's node and portal's light-build test found the engine;
+  a build of one package alone is asked of `cargo tree -p` (C-034).
+- **A running demo holds its executable.** Cargo cannot relink a binary a bench or supervisão demo
+  is running; stop the demo before recording a clause whose test builds it.
+- **Verify a page at the browser pane's own size.** Pointer clicks were mis-mapped under an
+  emulated viewport scaled down to fit; screenshots also lag the page by a frame or two, so read
+  the page back by script as well.
+- **The refute target's path must be short.** The bundled database engine's build overflows
+  Windows path lengths under the session's scratch folder; the critic's target lives at
+  `%TEMP%\vs-target`, and its first build takes over an hour.
