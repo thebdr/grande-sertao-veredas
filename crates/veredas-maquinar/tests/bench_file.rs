@@ -899,11 +899,13 @@ range's width while past `high`; a value outside the range (a client's write, a 
 starts again at `low`, one inside it moves the ramp on from there.
 - `low` (required), `high` (required): the range, finite, `low` below `high`, its width finite;
   the tag's initial value inside it.
-- `step` (`1`): above 0 and at most the range's width; an int's range and step are whole numbers.
+- `step` (`1`): above 0 and at most the range's width (with places, counted in their units); an
+  int's range and step are whole numbers.
 - `decimals` (none): a float's places; with them every step is counted in units of the last place,
   so the ramp reaches its high exactly, and `low`, `high` and `step` must be whole numbers of
   those units, small enough to count exactly (at most 2^51 of them: with fifteen places, a range
-  within ±2.25); absent, the sum as it falls. An int takes none.
+  within ±2.25); absent, the sum as it falls, a wrap landing a hair under `low` landing on it, and a
+  step the float cannot add at the range's magnitude refused. An int takes none.
 - `interval_ms` (`1000`): between steps; at least the server's tick of 20 ms.
 
 **A reaction** (an entry of `reactions`): what the plant does when a client writes a tag.

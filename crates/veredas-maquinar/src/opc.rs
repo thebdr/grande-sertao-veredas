@@ -242,7 +242,8 @@ pub fn ramp_next(v: f64, r: &Ramp) -> f64 {
             while n > r.high {
                 n -= width;
             }
-            n
+            // A float sum's last bit can carry a wrap a hair below the low: it lands on the low.
+            n.max(r.low)
         }
     }
 }
@@ -439,7 +440,7 @@ fn compile(cfg: &OpcConfig) -> Result<Vec<CompiledReaction>, OpcError> {
             if !(r.high - r.low).is_finite() {
                 return Err(bad(format!("{place}.ramp: the range's width ({:?}..={:?}) is past what a float holds", r.low, r.high)));
             }
-            if !(r.step > 0.0 && r.step <= r.high - r.low) {
+            if r.step <= 0.0 {
                 return Err(bad(format!("{place}.ramp: the step {} is not above 0 and at most the range's width {}", r.step, r.high - r.low)));
             }
             if tag.ty == TagType::Int {
@@ -465,6 +466,24 @@ fn compile(cfg: &OpcConfig) -> Result<Vec<CompiledReaction>, OpcError> {
                         return Err(bad(format!("{place}.ramp.{key} {x} is not a whole number of the ramp's places ({d})")));
                     }
                 }
+            }
+            // At most the range's width: with places, counted in their units (0.3 - 0.1 is a hair
+            // under 0.2 as floats, two tenths as units); without, as the floats fall.
+            let (within, width) = match r.decimals {
+                Some(d) => {
+                    let f = 10f64.powi(d as i32);
+                    let w = (r.high * f).round() - (r.low * f).round();
+                    ((r.step * f).round() <= w, w / f)
+                }
+                None => (r.step <= r.high - r.low, r.high - r.low),
+            };
+            if !within {
+                return Err(bad(format!("{place}.ramp: the step {} is not above 0 and at most the range's width {width}", r.step)));
+            }
+            // Without places, a step a float cannot add at the range's magnitude never moves it.
+            let magnitude = r.low.abs().max(r.high.abs());
+            if r.decimals.is_none() && magnitude + r.step == magnitude {
+                return Err(bad(format!("{place}.ramp: the step {} is lost at the range's magnitude ({magnitude})", r.step)));
             }
             let v = match &initial {
                 Variant::Int32(x) => *x as f64,
@@ -580,6 +599,7 @@ enum Request {
     Get(String, Sender<Option<Variant>>),
     Snapshot(Sender<Vec<TagValue>>),
     Status(Sender<OpcStatus>),
+    Stall(Duration, Sender<()>),
 }
 
 /// A running server. Dropping it stops the server, closes every connection and frees the port.
@@ -623,6 +643,16 @@ impl OpcHandle {
             return Vec::new();
         }
         rx.recv_timeout(Duration::from_secs(5)).unwrap_or_default()
+    }
+
+    /// Hold the plant's service loop for `d`, as a controller's scan stalls: nothing is set,
+    /// drawn, stepped or answered meanwhile, and the draws and steps it missed are skipped, each
+    /// keeping its phase. Returns once the loop runs again (or after `d` and 5 s more).
+    pub fn stall(&self, d: Duration) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        if self.requests.send(Request::Stall(d, tx)).is_ok() {
+            let _ = rx.recv_timeout(d + Duration::from_secs(5));
+        }
     }
 
     pub fn status(&self) -> OpcStatus {
@@ -956,6 +986,10 @@ async fn service_loop(
                         }
                         Request::Status(reply) => {
                             let _ = reply.send(status.lock().map(|s| s.clone()).unwrap_or_default());
+                        }
+                        Request::Stall(d, reply) => {
+                            tokio::time::sleep(d).await;
+                            let _ = reply.send(());
                         }
                     }
                 }

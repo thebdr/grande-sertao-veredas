@@ -776,6 +776,41 @@ fn a_ramp_steps_by_its_step_and_wraps_by_the_range_s_width() {
     assert_eq!(ramp_next(v, &edge), (2_249_999_999_999_991i64) as f64 / 1e15, "wrapped by the width");
     let ints = Ramp { low: -5.0, high: 5.0, step: 4.0, decimals: None, interval_ms: 100 };
     assert_eq!([ramp_next(-5.0, &ints), ramp_next(3.0, &ints), ramp_next(5.0, &ints)], [-1.0, -3.0, -1.0]);
+    // With places too, a value outside the range starts again at the low.
+    let one = Ramp { low: 0.0, high: 1.0, step: 0.3, decimals: Some(1), interval_ms: 100 };
+    assert_eq!([ramp_next(5.0, &one), ramp_next(-0.5, &one), ramp_next(f64::NAN, &one)], [0.0, 0.0, 0.0]);
+    // Without places, a float wrap never leaves the range: a sum's last bit landing a hair under
+    // the low lands on the low, and no step is a restart.
+    let fall = Ramp { low: -9.6, high: 6.5, step: 0.7, decimals: None, interval_ms: 100 };
+    assert_eq!(ramp_next(5.800000000000001, &fall), -9.6);
+    let mut v = fall.low;
+    for k in 0..60 {
+        let next = ramp_next(v, &fall);
+        let stepped = (next - (v + 0.7)).abs() < 1e-9;
+        let wrapped = (next - (v + 0.7 - 16.1)).abs() < 1e-9;
+        assert!((fall.low..=fall.high).contains(&next) && (stepped || wrapped), "step {k}: {v} then {next}");
+        v = next;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stall_skips_the_draws_and_steps_it_missed() {
+    // The service loop held for a second: a 100 ms ramp and a 100 ms draw miss ten each, and
+    // skip them, keeping their phase; catching them up would step and draw once a tick after.
+    let mut ramped = tag("ramped", TagType::Int, Access::Read, "0");
+    ramped.ramp = Some(Ramp { low: 0.0, high: 1000.0, step: 1.0, decimals: None, interval_ms: 100 });
+    let mut drawn = tag("drawn", TagType::Int, Access::Read, "0");
+    drawn.randomize = Some(Randomize { low: 0.0, high: 9.0, decimals: 0, interval_ms: 100 });
+    let server = start(&config(vec![ramped, drawn])).expect("starts");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let before = server.status();
+    server.stall(Duration::from_secs(1));
+    let resumed = server.status();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let after = server.status();
+    server.stop();
+    assert!(resumed.ramp_steps - before.ramp_steps <= 2 && resumed.draws - before.draws <= 2, "across the stall, nothing caught up: {before:?} / {resumed:?}");
+    assert!(after.ramp_steps - resumed.ramp_steps <= 2 && after.draws - resumed.draws <= 2, "after it, the interval again: {resumed:?} / {after:?}");
 }
 
 #[test]
@@ -980,6 +1015,8 @@ fn a_bad_configuration_is_refused_by_name_before_anything_starts() {
         (TagType::Float, ramp(4.0, 5.0, 1e-15, Some(15), 20), "opc.tags[0] (`r`).ramp.low 4 at 15 places is past what a float counts exactly"),
         (TagType::Float, ramp(99999999.9, 100000000.06, 0.1, Some(1), 20), "opc.tags[0] (`r`).ramp.high 100000000.06 is not a whole number of the ramp's places (1)"),
         (TagType::Float, ramp(0.0, 1.0, 0.07, Some(1), 20), "opc.tags[0] (`r`).ramp.step 0.07 is not a whole number of the ramp's places (1)"),
+        (TagType::Float, ramp(0.1, 0.3, 0.3, Some(1), 20), "opc.tags[0] (`r`).ramp: the step 0.3 is not above 0 and at most the range's width 0.2"),
+        (TagType::Float, ramp(1e16, 1e16 + 100.0, 1.0, None, 20), "opc.tags[0] (`r`).ramp: the step 1 is lost at the range's magnitude (10000000000000100)"),
         (TagType::Int, ramp(-3e9, 10.0, 1.0, None, 20), "opc.tags[0] (`r`).ramp: an int steps by whole numbers inside an int (-3000000000..=10 by 1)"),
         (TagType::Float, ramp(0.0, 10.0, f64::NAN, None, 20), "opc.tags[0] (`r`).ramp: the range and the step are not all finite"),
         (TagType::Float, ramp(10.0, 10.0, 1.0, None, 20), "opc.tags[0] (`r`).ramp: the range is empty (10 is not below 10)"),
@@ -1002,6 +1039,13 @@ fn a_bad_configuration_is_refused_by_name_before_anything_starts() {
     assert!(validate(&ok(vec![ramped(TagType::Int, "10", ramp(-5.0, 10.0, 15.0, None, 20))], vec![])).is_ok());
     assert!(validate(&ok(vec![ramped(TagType::Float, "0", ramp(0.0, 2.25, 0.01, Some(15), 20))], vec![])).is_ok(), "2.25 at fifteen places counts exactly");
     assert!(validate(&ok(vec![ramped(TagType::Float, "0", ramp(-2.2, 0.3, 0.1, Some(1), 20))], vec![])).is_ok(), "-2.2, 0.3 and 0.1 at one place");
+    // A step of the whole width at places, counted in units where the floats fall a hair short
+    // (0.3 - 0.1 is 0.19999999999999998): accepted, and it comes back to where it was.
+    for (low, high, step) in [(0.1, 0.3, 0.2), (0.4, 0.7, 0.3), (100000000.0, 100000000.1, 0.1)] {
+        let r = Ramp { low, high, step, decimals: Some(1), interval_ms: 20 };
+        assert!(validate(&ok(vec![ramped(TagType::Float, &low.to_string(), Some(r.clone()))], vec![])).is_ok(), "{low}..={high} by {step}");
+        assert_eq!((ramp_next(high, &r), ramp_next(ramp_next(high, &r), &r)), (high, high), "{low}..={high} by {step}");
+    }
     let mut at_tick = tag("k", TagType::Int, Access::Read, "0");
     at_tick.randomize = Some(Randomize { low: 0.0, high: 1.0, decimals: 0, interval_ms: 20 });
     assert!(validate(&ok(vec![at_tick], vec![])).is_ok(), "an interval of one tick is served on every tick");
