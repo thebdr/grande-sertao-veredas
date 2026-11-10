@@ -74,7 +74,7 @@ label = "Outlet 3"
 value = { source = "plc", series = "fill3" }
 unit = "%"
 show = "level"
-range = [0, 200]
+range = [50, 150]
 states = [ { at_least = 100, state = "warn", word = "full" }, { at_least = 80, state = "near", word = "near full" } ]
 
 [[dashboard]]
@@ -125,7 +125,7 @@ ticks = [80, 90]
 kind = "table"
 table = "outlets"
 columns = [ { name = "outlet" }, { name = "sorted", bar = true }, { name = "travel", decimals = 1, states = [ { above = 14, state = "warn", word = "slow" } ] } ]
-sort = { column = "sorted", descending = true }
+sort = { column = "travel", descending = true }
 
 [[dashboard.panel]]
 kind = "cells"
@@ -142,7 +142,12 @@ columns = [ { name = "nothing" } ]
 [[dashboard.panel]]
 kind = "trend"
 object = "travel"
-limit = { above = 15 }
+limit = { above = 16 }
+
+[[dashboard.panel]]
+kind = "value"
+object = "rate"
+target = 100
 "#;
 
 /// The lines, `(minutes past the base, text)`: sorts with their outlet, travel and rate, and the
@@ -155,6 +160,7 @@ const LINES: &[(f64, &str)] = &[
     (6.0, "SORT outlet=2 travel=14.0 rate=96.5"),
     (6.0, "STATE code=0"),
     (10.0, "SORT outlet=3 travel=20.0 rate=99.5"),
+    (10.0, "STATE code=0"),
     (14.0, "SORT outlet=1 travel=13.0 rate=99.0"),
     (14.0, "STATE code=2"),
     (20.0, "SORT outlet=2 travel=16.0 rate=98.0"),
@@ -187,10 +193,11 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     // The base: five minutes aligned, half an hour back; the window ends 31 minutes past it.
     let base = (store_now() / (5 * MIN)) * (5 * MIN) - 30 * MIN;
     let at = |m: f64| base + (m * MIN as f64) as i64;
+    let appended = std::time::Instant::now();
     append(&log, &LINES.iter().map(|(m, l)| format!("{} {l}", stamp(at(*m)))).collect::<Vec<_>>());
     let to = at(31.0);
     let rows = |t: &str| live.store.query_rows(t, &veredas_portal::store::RowsQuery { limit: 1, ..Default::default() }).map(|p| p.total).unwrap_or(0);
-    assert!(wait(Duration::from_secs(20), || rows("sorts") == 9 && rows("states") == 4), "the lines are stored");
+    assert!(wait(Duration::from_secs(20), || rows("sorts") == 9 && rows("states") == 5), "the lines are stored");
     let get_d = || get(addr, &format!("/s/loop/dashboard/0?to={to}")).1;
     // The feed's view of the latest values, and the fills, before the tiles are read.
     assert!(wait(Duration::from_secs(20), || {
@@ -198,10 +205,10 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
         panel(&d, 0)["text"] == json!("99.2") && panel(&d, 7)["cells"][2]["text"] == json!("100")
     }), "{}", get_d());
     let d = get_d();
-    assert_eq!((d["name"].clone(), d["columns"].clone(), d["to"].clone(), d["panels"].as_array().unwrap().len()), (json!("Numbers"), json!(4), json!(to), 13));
+    assert_eq!((d["name"].clone(), d["columns"].clone(), d["to"].clone(), d["panels"].as_array().unwrap().len()), (json!("Numbers"), json!(4), json!(to), 14));
     let heads: Vec<(String, String, i64)> = d["panels"].as_array().unwrap().iter().map(|p| (p["kind"].as_str().unwrap().to_string(), p["title"].as_str().unwrap().to_string(), p["span"].as_i64().unwrap())).collect();
     assert_eq!(heads[..4].iter().map(|h| h.1.as_str()).collect::<Vec<_>>(), ["Read rate", "Travel", "Low rate", "Fresh rate"]);
-    assert_eq!(heads[4..].iter().map(|h| h.0.as_str()).collect::<Vec<_>>(), ["trend", "bars", "timeline", "grid", "levels", "table", "cells", "table", "trend"]);
+    assert_eq!(heads[4..].iter().map(|h| h.0.as_str()).collect::<Vec<_>>(), ["trend", "bars", "timeline", "grid", "levels", "table", "cells", "table", "trend", "value"]);
 
     // Value tiles: normal with its target, warn, alarm; each with its sub-line and its sparkline
     // of the last 30 minutes (eight lines of the nine fall in it).
@@ -261,7 +268,7 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     assert_eq!(levels, [
         (json!("outlet-1"), json!(0.35), json!([0.8, 0.9])),
         (json!("outlet-2"), json!(0.85), json!([0.8, 0.9])),
-        (json!("outlet-3"), json!(0.5), json!([0.4, 0.45])),
+        (json!("outlet-3"), json!(0.5), json!([0.3, 0.4])),
     ]);
 
     // The table: the view's rows sorted by the count, the count drawn as a bar against the
@@ -269,12 +276,13 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let tb = panel(&d, 9);
     assert_eq!((tb["total"].clone(), tb["columns"].clone()), (json!(3), json!([{ "name": "outlet", "label": "outlet", "bar": false }, { "name": "sorted", "label": "sorted", "bar": true }, { "name": "travel", "label": "travel", "bar": false }])));
     let shown: Vec<(Value, Value, Value, Value, Value)> = tb["rows"].as_array().unwrap().iter().map(|r| (r[0]["text"].clone(), r[1]["text"].clone(), r[1]["bar"].clone(), r[2]["text"].clone(), r[2]["word"].clone())).collect();
+    // Sorted by travel, descending: an order the view's own (by outlet) does not give.
     assert_eq!(shown, [
-        (json!("1"), json!("4"), json!(1.0), json!("11.5"), json!("")),
-        (json!("2"), json!("3"), json!(0.75), json!("14.0"), json!("")),
         (json!("3"), json!("2"), json!(0.5), json!("20.5"), json!("slow")),
+        (json!("2"), json!("3"), json!(0.75), json!("14.0"), json!("")),
+        (json!("1"), json!("4"), json!(1.0), json!("11.5"), json!("")),
     ]);
-    assert_eq!((tb["rows"][2][2]["state"].clone(), tb["rows"][2][2]["mark"].clone(), tb["rows"][0][2]["state"].clone()), (json!("warn"), json!("\u{25A0}"), json!("normal")));
+    assert_eq!((tb["rows"][0][2]["state"].clone(), tb["rows"][0][2]["mark"].clone(), tb["rows"][2][2]["state"].clone()), (json!("warn"), json!("\u{25A0}"), json!("normal")));
 
     // Charts in cells: per outlet the median, σ and n over the hour, the median per bucket, and
     // the distribution in twenty bins from median − 5 to median + 5.
@@ -292,8 +300,11 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     assert!(d["panels"][11]["data"].is_null());
     // A limit above: a breach is a point past it.
     let up = panel(&d, 12);
-    assert_eq!((up["limit"].clone(), up["unit"].clone(), up["total"].clone()), (json!({ "above": 15.0 }), json!("s"), json!(9)));
-    assert_eq!(up["breaches"], json!([[at(10.0), 20.0], [at(20.0), 16.0], [at(30.5), 21.0]]));
+    assert_eq!((up["limit"].clone(), up["unit"].clone(), up["total"].clone()), (json!({ "above": 16.0 }), json!("s"), json!(9)));
+    assert_eq!(up["breaches"], json!([[at(10.0), 20.0], [at(30.5), 21.0]]), "16 is not past 16");
+    // A value below its target says how far, signed.
+    let t = panel(&d, 13);
+    assert_eq!((t["text"].clone(), t["state"].clone(), t["sub"].clone()), (json!("99.2"), json!("normal"), json!("-1% on the 100 target")));
 
     // The fourth state: no line for longer than its bound, the tile stale with its last value
     // and how long ago it came.
@@ -301,7 +312,37 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let t = panel(&get_d(), 3).clone();
     assert_eq!((t["text"].clone(), t["state"].clone(), t["word"].clone(), t["mark"].clone()), (json!("99.2"), json!("stale"), json!("stale"), json!("\u{25CC}")));
     let sub = t["sub"].as_str().unwrap();
-    assert!(sub.starts_with("last value ") && sub.ends_with(" s ago") && sub["last value ".len()..sub.len() - " s ago".len()].parse::<u64>().unwrap() >= 1, "{sub}");
+    let ago: u64 = sub.strip_prefix("last value ").and_then(|r| r.strip_suffix(" s ago")).unwrap_or_else(|| panic!("{sub}")).parse().unwrap();
+    assert!(ago >= 1 && ago <= appended.elapsed().as_secs(), "{sub}, appended {:?} ago", appended.elapsed());
+    // Other right edges, no new data: each window keeps what lies in it and nothing else.
+    let late = at(67.0);
+    let (_, d) = get(addr, &format!("/s/loop/dashboard/0?to={late}"));
+    assert_eq!(panel(&d, 4)["total"], json!(5), "the trend from at(7): 10, 14, 20, 29, 30.5");
+    assert_eq!(panel(&d, 6)["rows"][0]["segments"], json!([
+        { "from": at(10.0), "to": at(14.0), "state": "warn", "mark": "\u{25A0}", "word": "stopped" },
+        { "from": at(14.0), "to": at(29.0), "state": "alarm", "mark": "!", "word": "fault" },
+        { "from": at(29.0), "to": late, "state": "normal", "mark": "\u{25CF}", "word": "running" },
+    ]));
+    let ns: Vec<(Value, Value)> = panel(&d, 10)["rows"].as_array().unwrap().iter().map(|r| (r["key"].clone(), r["n"].clone())).collect();
+    assert_eq!(ns, [(json!("1"), json!(2)), (json!("2"), json!(1)), (json!("3"), json!(2))]);
+    let first = &panel(&d, 5)["buckets"][0];
+    assert_eq!((first["start"].clone(), first["value"].clone(), first["n"].clone()), (json!(at(5.0)), json!(14.0), json!(1)), "the first bucket whole, from its clock start before the window's");
+    let early = at(14.5);
+    let (_, d) = get(addr, &format!("/s/loop/dashboard/0?to={early}"));
+    assert_eq!(panel(&d, 4)["total"], json!(6), "the trend up to at(14.5)");
+    assert_eq!((panel(&d, 10)["rows"][0]["key"].clone(), panel(&d, 10)["rows"][0]["n"].clone()), (json!("1"), json!(3)));
+    let segs = panel(&d, 6)["rows"][0]["segments"].as_array().unwrap().clone();
+    assert_eq!((segs.len(), segs[2]["to"].clone(), segs[2]["word"].clone()), (3, json!(early), json!("fault")), "the last run ends at the edge");
+
+    // The cells' cap: the newest rows kept, read in pages, said when it bit.
+    let live = host.session("loop").unwrap().live();
+    let capped = veredas_supervisao::panel::cells(&live, "sorts", "outlet", "travel", 60, 5, 5.0, to, 2, 5).unwrap();
+    assert_eq!((capped["read"].clone(), capped["total"].clone(), capped["capped"].clone()), (json!(5), json!(9), json!(true)));
+    let kept: Vec<(Value, Value)> = capped["rows"].as_array().unwrap().iter().map(|r| (r["key"].clone(), r["n"].clone())).collect();
+    assert_eq!(kept, [(json!("1"), json!(2)), (json!("2"), json!(1)), (json!("3"), json!(2))], "the newest five: 30.5, 29, 20, 14, 10");
+    let whole = veredas_supervisao::panel::cells(&live, "sorts", "outlet", "travel", 60, 5, 5.0, to, 2, 50_000).unwrap();
+    assert_eq!((whole["read"].clone(), whole["capped"].clone()), (json!(9), json!(false)), "five pages of two, the last short");
+
     // Without `to`, the window ends at the store's now.
     let (status, now_d) = get(addr, "/s/loop/dashboard/0");
     assert_eq!(status, 200);

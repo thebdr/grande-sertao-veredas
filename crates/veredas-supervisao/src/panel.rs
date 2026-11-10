@@ -270,8 +270,10 @@ fn table_panel(live: &Live, table: &str, columns: &[Column], sort: &Option<(Stri
     }))
 }
 
+/// Charts in cells over a window: the rows read newest first in pages of `page_rows`, at most `cap` of
+/// them (the route reads pages of the store's largest and at most [`CELLS_ROWS_MAX`]).
 #[allow(clippy::too_many_arguments)]
-fn cells_panel(live: &Live, table: &str, key: &str, value: &str, minutes: u32, bucket_minutes: u32, spread: f64, to: i64) -> Result<Json, String> {
+pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, bucket_minutes: u32, spread: f64, to: i64, page_rows: usize, cap: usize) -> Result<Json, String> {
     let (from, to) = window(minutes, to);
     let mut rows: Vec<Vec<Json>> = Vec::new();
     let mut columns: Vec<String> = Vec::new();
@@ -279,7 +281,7 @@ fn cells_panel(live: &Live, table: &str, key: &str, value: &str, minutes: u32, b
     loop {
         let page = live
             .store
-            .query_rows(table, &RowsQuery { from_ms: Some(from), to_ms: Some(to), limit: MAX_PAGE, offset: rows.len() })
+            .query_rows(table, &RowsQuery { from_ms: Some(from), to_ms: Some(to), limit: page_rows, offset: rows.len() })
             .map_err(|e| e.to_string())?;
         if columns.is_empty() {
             columns = page.columns.iter().map(|c| c.name.clone()).collect();
@@ -287,11 +289,11 @@ fn cells_panel(live: &Live, table: &str, key: &str, value: &str, minutes: u32, b
         total = page.total;
         let n = page.rows.len();
         rows.extend(page.rows);
-        if n < MAX_PAGE || rows.len() >= CELLS_ROWS_MAX || rows.len() as u64 >= total {
+        if n < page_rows || rows.len() >= cap || rows.len() as u64 >= total {
             break;
         }
     }
-    rows.truncate(CELLS_ROWS_MAX);
+    rows.truncate(cap);
     let find = |name: &str| columns.iter().position(|c| c == name).ok_or_else(|| format!("`{table}` has no column `{name}` (its columns: {})", columns.join(", ")));
     let (ki, vi) = (find(key)?, find(value)?);
     let ti = columns.iter().position(|c| c == "index_ms");
@@ -403,7 +405,7 @@ fn panel_body(live: &Live, b: &Binding, snap: &Snapshot, p: &Panel, to: i64, now
             json!({ "rows": rows })
         }
         PanelKind::Table { table, columns, sort, limit } => table_panel(live, table, columns, sort, *limit)?,
-        PanelKind::Cells { table, key, value, minutes, bucket_minutes, spread } => cells_panel(live, table, key, value, *minutes, *bucket_minutes, *spread, to)?,
+        PanelKind::Cells { table, key, value, minutes, bucket_minutes, spread } => cells(live, table, key, value, *minutes, *bucket_minutes, *spread, to, MAX_PAGE, CELLS_ROWS_MAX)?,
     })
 }
 
