@@ -58,6 +58,21 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(release(&bench), "0");
 
+    // Supervisão's code reaches no write handle and no switch: the library and the executable
+    // name none of portal's write paths, and the page posts to portal's route alone.
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    for entry in std::fs::read_dir(&src).unwrap() {
+        let path = entry.unwrap().path();
+        let text = std::fs::read_to_string(&path).unwrap();
+        for word in ["write_tags", "opc_handle", "channel_handle", "set_writes_armed", "WriteGate", "/api/opc/write", "/api/channels/send"] {
+            assert!(!text.contains(word), "{} names `{word}`", path.display());
+        }
+    }
+    let bundle = veredas_supervisao::web::APP_JS;
+    assert_eq!(bundle.matches("/api/opc/write").count(), 1, "the page posts to one route");
+    assert!(bundle.contains("/portal/api/opc/write") && !bundle.contains("/api/channels/send"), "the route is portal's own");
+    assert_eq!(bundle.matches("method:\"POST\"").count() + bundle.matches("method: \"POST\"").count(), 1, "one POST in the page");
+
     // Supervisão's own routes take no write.
     for p in ["/", "/api/sessions", "/s/loop/", "/s/loop/binding", "/s/loop/objects", "/s/loop/objects.json", "/s/loop/dashboard/0", "/s/loop/layout.svg"] {
         let (status, _, _) = http(addr, "POST", p, Some(&body.to_string()));
