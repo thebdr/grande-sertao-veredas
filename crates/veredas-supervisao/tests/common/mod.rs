@@ -213,6 +213,22 @@ impl Sse {
         sse
     }
 
+    /// Whether the server ends the stream (an end of file or a reset) within `within`, whatever
+    /// it sends before.
+    pub fn ends_within(&mut self, within: Duration) -> bool {
+        let started = Instant::now();
+        let mut chunk = [0u8; 65536];
+        while started.elapsed() < within {
+            match self.stream.read(&mut chunk) {
+                Ok(0) => return true,
+                Ok(_) => {}
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
+                Err(_) => return true,
+            }
+        }
+        false
+    }
+
     fn fill(&mut self) {
         let mut chunk = [0u8; 65536];
         if let Ok(n) = self.stream.read(&mut chunk)

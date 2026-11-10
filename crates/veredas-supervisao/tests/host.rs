@@ -93,13 +93,12 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
         assert_eq!((event.as_str(), hello["session_name"].clone(), hello["running"].clone()), ("hello", json!(title), json!(true)));
     }
 
-    // The plants' values stay in their own sessions.
+    // The plants' values stay in their own sessions, on the snapshot routes and on each session's
+    // own stream: each stream opens with its session's snapshot and then carries its own plant's
+    // changes alone.
     assert!(wait(Duration::from_secs(20), || object(&objects(addr, "loop"), "outlet-1")["value"] == json!(35.0) && object(&objects(addr, "hall"), "outlet-1")["value"] == json!(65.0)));
-    a.server("plc").unwrap().set("fill1", 40.0);
-    assert!(wait(Duration::from_secs(20), || object(&objects(addr, "loop"), "outlet-1")["value"] == json!(40.0)));
-    assert_eq!(object(&objects(addr, "hall"), "outlet-1")["value"], json!(65.0));
-    assert!(objects(addr, "hall")["objects"].as_array().unwrap().iter().all(|o| !o["id"].as_str().unwrap().starts_with("parcel")));
-    for (name, fill) in [("loop", 40.0), ("hall", 65.0)] {
+    let mut streams = Vec::new();
+    for (name, fill) in [("loop", 35.0), ("hall", 65.0)] {
         let mut sse = Sse::open(addr, &format!("/s/{name}/objects"));
         assert_eq!(sse.status, 200);
         assert!(sse.headers.contains("content-type: text/event-stream"), "{}", sse.headers);
@@ -107,18 +106,37 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
         let first: Value = serde_json::from_str(&data).unwrap();
         assert_eq!((event.as_str(), object(&first, "outlet-1")["value"].clone()), ("snapshot", json!(fill)), "{name}");
         assert_eq!(first["objects"].as_array().unwrap().len(), if name == "loop" { 8 } else { 6 });
+        streams.push(sse);
     }
+    let fill_of = |v: &Value| v["objects"].as_array().and_then(|os| os.iter().find(|o| o["id"] == "outlet-1")).map(|o| o["value"].clone());
+    a.server("plc").unwrap().set("fill1", 40.0);
+    assert!(streams[0].until(Duration::from_secs(20), |n, v| n == "objects" && fill_of(v) == Some(json!(40.0))).is_some(), "loop's change on loop's stream");
+    b.server("plc").unwrap().set("fill1", 70.0);
+    let hall_events = streams[1].until(Duration::from_secs(20), |n, v| n == "objects" && fill_of(v) == Some(json!(70.0))).expect("hall's change on hall's stream");
+    assert!(hall_events.iter().all(|(_, v)| fill_of(v) != Some(json!(40.0))), "loop's change never on hall's stream: {hall_events:?}");
+    assert_eq!((object(&objects(addr, "loop"), "outlet-1")["value"].clone(), object(&objects(addr, "hall"), "outlet-1")["value"].clone()), (json!(40.0), json!(70.0)));
+    assert!(objects(addr, "hall")["objects"].as_array().unwrap().iter().all(|o| !o["id"].as_str().unwrap().starts_with("parcel")));
     let (_, s) = get(addr, &format!("/s/hall/portal/api/opc/read?source=plc&tag={}", enc(&format!("ns={};s=fill1", b.server("plc").unwrap().namespace))));
-    assert_eq!(s["value"], json!("65"));
+    assert_eq!(s["value"], json!("70"));
 
-    // The dashboards are computed per session; one that is not there is named.
+    // The dashboards are computed per session, each from its own plant (the levels panel's
+    // outlet 1: 0.4 and 0.7); one that is not there is named.
+    let level_of = |d: &Value| d["panels"][5]["data"]["rows"].as_array().and_then(|rs| rs.iter().find(|r| r["id"] == "outlet-1")).map(|r| r["fraction"].clone());
     let (status, d) = get(addr, "/s/loop/dashboard/0");
-    assert_eq!((status, d["name"].clone(), d["panels"].as_array().unwrap().len()), (200, json!("Overview"), 8));
+    assert_eq!((status, d["name"].clone(), d["panels"].as_array().unwrap().len(), level_of(&d)), (200, json!("Overview"), 8, Some(json!(0.4))));
+    let (status, d) = get(addr, "/s/hall/dashboard/0");
+    assert_eq!((status, d["name"].clone(), level_of(&d)), (200, json!("Overview"), Some(json!(0.7))));
     assert_eq!(get(addr, "/s/loop/dashboard/1"), (404, json!({ "error": "session `loop` has no dashboard 1" })));
     assert_eq!(get(addr, "/s/loop/dashboard/x"), (404, json!({ "error": "`x` is no dashboard of session `loop`" })));
 
-    // Stopped, every session ends and the address is let go.
+    // Stopped with streams open (an object stream, portal's own), every session ends, the stop
+    // returns at once, both streams end and the address is let go.
+    let mut events = Sse::open(addr, "/s/hall/portal/events");
+    assert!(events.next(Duration::from_secs(10)).is_some());
+    let stopping = std::time::Instant::now();
     let ends = host.stop();
+    assert!(stopping.elapsed() < Duration::from_secs(10), "the stop waited on open streams: {:?}", stopping.elapsed());
+    assert!(streams[0].ends_within(Duration::from_secs(5)) && events.ends_within(Duration::from_secs(5)), "the open streams end with the stop");
     assert_eq!(ends.iter().map(|(n, e)| (n.as_str(), e.len())).collect::<Vec<_>>(), [("loop", 2), ("hall", 2)]);
     assert!(ends.iter().all(|(_, e)| e.iter().all(|(_, r)| r.is_ok())), "{:?}", ends.iter().map(|(n, e)| (n, e.iter().map(|(i, r)| (i.to_string(), r.is_ok())).collect::<Vec<_>>())).collect::<Vec<_>>());
     assert!(wait(Duration::from_secs(5), || TcpStream::connect(addr).is_err()), "the address is free again");
@@ -170,6 +188,35 @@ fn a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first() {
 }
 
 #[test]
+fn nothing_starts_before_the_address_is_held_nor_under_check() {
+    // The first session keeps its store on disk: a session started leaves its file.
+    let dir = tempfile::tempdir().unwrap();
+    let a = plant(&dir.path().join("bench-a"));
+    let b = plant(&dir.path().join("bench-b"));
+    let path = two_plants(dir.path(), &a, &b);
+    let project = dir.path().join("loop/project.toml");
+    let text = std::fs::read_to_string(&project).unwrap().replace("store = \"ram\"", "store = { disk = \"loop.duckdb\" }");
+    std::fs::write(&project, text).unwrap();
+    let store = dir.path().join("loop/loop.duckdb");
+    // A check reads, checks and prints the plan, starting nothing.
+    let out = Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).arg(&path).arg("--check").stdin(Stdio::null()).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("session `loop`"), "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(!store.exists(), "a check started a session");
+    // An address taken is refused before the first session starts.
+    let held = TcpListener::bind("127.0.0.1:0").unwrap();
+    let taken = held.local_addr().unwrap();
+    let text = std::fs::read_to_string(&path).unwrap().replace("bind = \"127.0.0.1:0\"", &format!("bind = \"{taken}\""));
+    std::fs::write(&path, text).unwrap();
+    match Host::start(config::load_file(&path).unwrap()) {
+        Err(e @ HostError::Bind { .. }) => assert!(e.to_string().starts_with(&format!("cannot bind {taken}: ")), "{e}"),
+        other => panic!("{:?}", other.err()),
+    }
+    assert!(!store.exists(), "a session started before the address was held");
+    drop(held);
+}
+
+#[test]
 fn the_executable_serves_a_file_until_stdin_closes() {
     let dir = tempfile::tempdir().unwrap();
     let a = plant(&dir.path().join("bench-a"));
@@ -193,10 +240,26 @@ fn the_executable_serves_a_file_until_stdin_closes() {
     assert_eq!(get(addr, "/api/sessions").1["sessions"][1]["name"], json!("hall"));
     let (_, s) = get(addr, "/s/loop/portal/api/session");
     assert_eq!(s["session_name"], json!("the loop"));
+    // A line on stdin is not a close: it keeps serving.
     let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(b"hello\n").unwrap();
     stdin.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(child.try_wait().unwrap().is_none(), "a line stopped it");
+    assert_eq!(get(addr, "/api/sessions").0, 200);
+    // Closed with a stream open (a browser on the page), it stops at once, the stream ended.
+    let mut sse = Sse::open(addr, "/s/loop/objects");
+    assert!(sse.next(Duration::from_secs(10)).is_some());
     drop(stdin);
-    let status = child.wait().unwrap();
+    let closed = std::time::Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            break s;
+        }
+        assert!(closed.elapsed() < Duration::from_secs(10), "it waited on an open stream");
+        std::thread::sleep(Duration::from_millis(50));
+    };
     assert!(status.success(), "{status}");
+    assert!(sse.ends_within(Duration::from_secs(5)), "the open stream ended");
     assert!(TcpStream::connect(addr).is_err(), "nothing serves after the stop");
 }
