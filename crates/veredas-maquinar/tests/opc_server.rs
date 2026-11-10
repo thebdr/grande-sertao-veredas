@@ -764,8 +764,28 @@ fn a_ramp_steps_by_its_step_and_wraps_by_the_range_s_width() {
             }
         }
     }
+    // At the edge of what fifteen places count exactly (2^51 units, a range within ±2.25), every
+    // unit step up to the high is the next whole count of units.
+    let edge = Ramp { low: 2.24999999999999, high: 2.25, step: 1e-15, decimals: Some(15), interval_ms: 100 };
+    let mut v = edge.low;
+    for k in 1..=10i64 {
+        v = ramp_next(v, &edge);
+        assert_eq!(v, (2_249_999_999_999_990i64 + k) as f64 / 1e15, "step {k}");
+    }
+    assert_eq!(v, 2.25, "the high, exactly");
+    assert_eq!(ramp_next(v, &edge), (2_249_999_999_999_991i64) as f64 / 1e15, "wrapped by the width");
     let ints = Ramp { low: -5.0, high: 5.0, step: 4.0, decimals: None, interval_ms: 100 };
     assert_eq!([ramp_next(-5.0, &ints), ramp_next(3.0, &ints), ramp_next(5.0, &ints)], [-1.0, -3.0, -1.0]);
+}
+
+#[test]
+fn a_draw_or_a_step_is_next_due_an_interval_after_it_was_due() {
+    let t0 = tokio::time::Instant::now();
+    let ms = Duration::from_millis;
+    assert_eq!(next_due(t0, ms(100), t0 + ms(20)), t0 + ms(100), "an interval after it was due, not after the tick that served it");
+    assert_eq!(next_due(t0, ms(100), t0 + ms(399)), t0 + ms(400));
+    assert_eq!(next_due(t0, ms(100), t0 + ms(350)), t0 + ms(400), "a stall skips what it missed and keeps the phase");
+    assert_eq!(next_due(t0, ms(100), t0 + ms(400)), t0 + ms(500), "never due at or before the tick that served it");
 }
 
 /// The tag's distinct values read on the server side every millisecond, until `n` came.
@@ -808,9 +828,13 @@ async fn a_ramped_tag_steps_on_the_wire_and_moves_on_from_what_it_holds() {
     pos.ramp = Some(pos_r.clone());
     let mut level = tag("level", TagType::Int, Access::Read, "8");
     level.ramp = Some(level_r.clone());
+    let tenths_r = Ramp { low: 0.0, high: 1.0, step: 0.3, decimals: Some(1), interval_ms: 100 };
+    let mut tenths = tag("tenths", TagType::Float, Access::Read, "0");
+    tenths.ramp = Some(tenths_r.clone());
     let mut cfg = config(vec![
         pos,
         level,
+        tenths,
         tag("still", TagType::Float, Access::Read, "1.5"),
         tag("go", TagType::Int, Access::ReadWrite, "0"),
         tag("fired", TagType::Int, Access::Read, "0"),
@@ -818,7 +842,7 @@ async fn a_ramped_tag_steps_on_the_wire_and_moves_on_from_what_it_holds() {
     // A client's press sets the ramped level (a reaction's step); a reaction watching the ramped
     // level would fire on any change of it.
     cfg.reactions = vec![
-        Reaction { on_write: "go".into(), equals: Some("1".into()), tag: Some("level".into()), then: vec![Step { after_ms: 0, set: "7".into() }] },
+        Reaction { on_write: "go".into(), equals: Some("1".into()), tag: Some("level".into()), then: vec![Step { after_ms: 0, set: "0".into() }] },
         Reaction { on_write: "level".into(), equals: None, tag: Some("fired".into()), then: vec![Step { after_ms: 0, set: "1".into() }] },
     ];
     let server = start(&cfg).expect("starts");
@@ -851,6 +875,13 @@ async fn a_ramped_tag_steps_on_the_wire_and_moves_on_from_what_it_holds() {
     for w in levels.windows(2) {
         assert_eq!(w[1], ramp_next(w[0], &level_r), "{levels:?}");
     }
+    // And a float ramp at its places, wrapping within the values read: 0.3, 0.6, 0.9, 0.2, ...
+    let seen = distinct(&server, "tenths", 12, Duration::from_secs(5));
+    assert_eq!(seen.len(), 12, "{seen:?}");
+    for w in seen.windows(2) {
+        assert_eq!(w[1], ramp_next(w[0], &tenths_r), "{seen:?}");
+    }
+    assert!(seen.windows(2).any(|w| w[1] < w[0]), "it wrapped: {seen:?}");
     assert_eq!(read(&session, &NodeId::new(ns, "still")).await, (StatusCode::Good, Some(Variant::Double(1.5))));
 
     // What the tag holds moves the ramp on: a client's write, a plant-side set, a reaction's step.
@@ -862,13 +893,18 @@ async fn a_ramped_tag_steps_on_the_wire_and_moves_on_from_what_it_holds() {
     assert_eq!(next_after(&server, "pos", 25.0), 55.0, "from a plant-side set");
     just_stepped(&server, "level");
     assert_eq!(write(&session, &NodeId::new(ns, "go"), Variant::Int32(1)).await, StatusCode::Good);
-    assert_eq!(next_after(&server, "level", 7.0), 10.0, "from a reaction's step");
+    // The press sets 0, a value the level's own cycle never takes (8, 1, 4, 7, 10, 3, ...).
+    assert_eq!(next_after(&server, "level", 0.0), 3.0, "from a reaction's step");
     // Outside the range: the low, exactly.
     just_stepped(&server, "pos");
     server.set("pos", 250.0);
     assert_eq!(next_after(&server, "pos", 250.0), 0.0, "outside the range, the ramp starts at its low");
     // A ramp's step is no change: the reaction watching the level never fired.
     assert_eq!((server.get("fired"), server.status().reactions_fired), (Some(Variant::Int32(0)), 1), "only the press fired");
+    // While a plant-side set of the ramped level is one: the watching reaction is alive.
+    server.set("level", 5);
+    until("the set fires the watcher", Duration::from_secs(2), || server.get("fired") == Some(Variant::Int32(1)));
+    assert_eq!(server.status().reactions_fired, 2);
     assert!(server.status().ramp_steps >= 16, "{:?}", server.status());
     assert_eq!(server.status().draws, 0, "a step is no draw");
     server.stop();
@@ -882,13 +918,15 @@ async fn ramps_come_at_their_interval_counted_apart_from_draws() {
     // its own.
     let mut ramped = tag("ramped", TagType::Int, Access::Read, "0");
     ramped.ramp = Some(Ramp { low: 0.0, high: 1000.0, step: 1.0, decimals: None, interval_ms: 100 });
+    let mut floated = tag("floated", TagType::Float, Access::Read, "0");
+    floated.ramp = Some(Ramp { low: 0.0, high: 1.0, step: 0.3, decimals: Some(1), interval_ms: 100 });
     let mut drawn = tag("drawn", TagType::Int, Access::Read, "0");
     drawn.randomize = Some(Randomize { low: 0.0, high: 9.0, decimals: 0, interval_ms: 100 });
-    let server = start(&config(vec![ramped, drawn])).expect("starts");
+    let server = start(&config(vec![ramped, floated, drawn])).expect("starts");
     tokio::time::sleep(Duration::from_millis(2000)).await;
     let st = server.status();
     server.stop();
-    assert!((19..=21).contains(&st.ramp_steps) && (19..=21).contains(&st.draws), "a 100 ms ramp and a 100 ms draw in 2 s: {st:?}");
+    assert!((38..=42).contains(&st.ramp_steps) && (19..=21).contains(&st.draws), "an int and a float 100 ms ramp and a 100 ms draw in 2 s: {st:?}");
 
     let mut fast = tag("fast", TagType::Int, Access::Read, "0");
     fast.ramp = Some(Ramp { low: 0.0, high: 1000.0, step: 1.0, decimals: None, interval_ms: 20 });
@@ -938,6 +976,10 @@ fn a_bad_configuration_is_refused_by_name_before_anything_starts() {
         (TagType::Float, ramp(0.0, 1.25, 0.1, Some(1), 20), "opc.tags[0] (`r`).ramp.high 1.25 is not a whole number of the ramp's places (1)"),
         (TagType::Float, ramp(0.0, 2.5, 0.5, Some(0), 20), "opc.tags[0] (`r`).ramp.high 2.5 is not a whole number of the ramp's places (0)"),
         (TagType::Float, ramp(0.0, 1e6, 0.1, Some(15), 20), "opc.tags[0] (`r`).ramp.high 1000000 at 15 places is past what a float counts exactly"),
+        (TagType::Float, ramp(0.0, 2.26, 0.01, Some(15), 20), "opc.tags[0] (`r`).ramp.high 2.26 at 15 places is past what a float counts exactly"),
+        (TagType::Float, ramp(4.0, 5.0, 1e-15, Some(15), 20), "opc.tags[0] (`r`).ramp.low 4 at 15 places is past what a float counts exactly"),
+        (TagType::Float, ramp(99999999.9, 100000000.06, 0.1, Some(1), 20), "opc.tags[0] (`r`).ramp.high 100000000.06 is not a whole number of the ramp's places (1)"),
+        (TagType::Float, ramp(0.0, 1.0, 0.07, Some(1), 20), "opc.tags[0] (`r`).ramp.step 0.07 is not a whole number of the ramp's places (1)"),
         (TagType::Int, ramp(-3e9, 10.0, 1.0, None, 20), "opc.tags[0] (`r`).ramp: an int steps by whole numbers inside an int (-3000000000..=10 by 1)"),
         (TagType::Float, ramp(0.0, 10.0, f64::NAN, None, 20), "opc.tags[0] (`r`).ramp: the range and the step are not all finite"),
         (TagType::Float, ramp(10.0, 10.0, 1.0, None, 20), "opc.tags[0] (`r`).ramp: the range is empty (10 is not below 10)"),
@@ -958,6 +1000,8 @@ fn a_bad_configuration_is_refused_by_name_before_anything_starts() {
     assert_eq!(refused(&ok(vec![ramped(TagType::Int, "-1", ramp(0.0, 10.0, 1.0, None, 20))], vec![])), "opc.tags[0] (`r`).ramp: the initial value -1 lies outside 0..=10");
     assert!(validate(&ok(vec![ramped(TagType::Float, "", ramp(0.0, 1.0, 1.0, Some(15), 20))], vec![])).is_ok(), "an empty value is the zero, a step of the whole width, fifteen places (a range of 1 counts exactly at them)");
     assert!(validate(&ok(vec![ramped(TagType::Int, "10", ramp(-5.0, 10.0, 15.0, None, 20))], vec![])).is_ok());
+    assert!(validate(&ok(vec![ramped(TagType::Float, "0", ramp(0.0, 2.25, 0.01, Some(15), 20))], vec![])).is_ok(), "2.25 at fifteen places counts exactly");
+    assert!(validate(&ok(vec![ramped(TagType::Float, "0", ramp(-2.2, 0.3, 0.1, Some(1), 20))], vec![])).is_ok(), "-2.2, 0.3 and 0.1 at one place");
     let mut at_tick = tag("k", TagType::Int, Access::Read, "0");
     at_tick.randomize = Some(Randomize { low: 0.0, high: 1.0, decimals: 0, interval_ms: 20 });
     assert!(validate(&ok(vec![at_tick], vec![])).is_ok(), "an interval of one tick is served on every tick");

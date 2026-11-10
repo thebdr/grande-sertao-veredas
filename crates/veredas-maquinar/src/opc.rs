@@ -247,13 +247,27 @@ pub fn ramp_next(v: f64, r: &Ramp) -> f64 {
     }
 }
 
-/// The largest whole number a float counts exactly: a ramp at places counts its units below it.
-const EXACT: f64 = 9_007_199_254_740_992.0;
+/// The most units of its places a ramp counts: 2^51. A value below it times its power of ten is
+/// within a fraction of a unit of its count, so rounding gives the count back, and the width and
+/// every sum of a value and a step stay below 2^53, where a float holds every whole number.
+pub const EXACT_UNITS: f64 = 2_251_799_813_685_248.0;
 
-/// Whether `x` is a whole number of units of `d` places.
+/// Whether `x` is a whole number of units of `d` places: its count of units, divided back,
+/// is `x` itself (the float a decimal of `d` places parses to), at any magnitude.
 fn at_places(x: f64, d: u8) -> bool {
-    let u = x * 10f64.powi(d as i32);
-    (u - u.round()).abs() <= 1e-9 * u.abs().max(1.0)
+    let f = 10f64.powi(d as i32);
+    (x * f).round() / f == x
+}
+
+/// When a draw or a ramp's step is next due, from the one due `at` and served `now`: an
+/// interval after it was due, never after the tick that served it; a stall skips what it missed
+/// and keeps the phase.
+pub fn next_due(at: tokio::time::Instant, every: Duration, now: tokio::time::Instant) -> tokio::time::Instant {
+    let mut next = at + every;
+    while next <= now {
+        next += every;
+    }
+    next
 }
 
 /// What the plant does when a client writes into a tag: a timed sequence of values, on the same
@@ -444,7 +458,7 @@ fn compile(cfg: &OpcConfig) -> Result<Vec<CompiledReaction>, OpcError> {
             }
             if let Some(d) = r.decimals {
                 for (key, x) in [("low", r.low), ("high", r.high), ("step", r.step)] {
-                    if (x * 10f64.powi(d as i32)).abs() > EXACT {
+                    if (x * 10f64.powi(d as i32)).abs() > EXACT_UNITS {
                         return Err(bad(format!("{place}.ramp.{key} {x} at {d} places is past what a float counts exactly")));
                     }
                     if !at_places(x, d) {
@@ -986,12 +1000,7 @@ async fn service_loop(
                     // tick that served it: a due time set from the tick's clock falls just past
                     // a tick boundary and waits one more, stretching every interval by a tick.
                     // A stall skips the draws it missed and keeps the phase.
-                    let step = Duration::from_millis(r.interval_ms);
-                    let mut next = at + step;
-                    while next <= now {
-                        next += step;
-                    }
-                    due[i] = Some(next);
+                    due[i] = Some(next_due(at, Duration::from_millis(r.interval_ms), now));
                 }
                 for (i, tag) in cfg.tags.iter().enumerate() {
                     let (Some(r), Some(at)) = (&tag.ramp, ramp_due[i]) else { continue };
@@ -1011,12 +1020,7 @@ async fn service_loop(
                     }
                     // As a draw: due an interval after this one was due, a stall skipping the
                     // steps it missed and keeping the phase.
-                    let step = Duration::from_millis(r.interval_ms);
-                    let mut n = at + step;
-                    while n <= now {
-                        n += step;
-                    }
-                    ramp_due[i] = Some(n);
+                    ramp_due[i] = Some(next_due(at, Duration::from_millis(r.interval_ms), now));
                 }
                 for (i, r) in reactions.iter().enumerate() {
                     // A step or a draw this tick changed the watched value: seen, not a write.
