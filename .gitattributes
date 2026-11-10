@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# The supervision page's sources and build checked out with LF on every machine, so a rebuild on
+# Windows writes the committed page byte for byte (vite keeps a CR of a CRLF source in index.html).
+crates/veredas-supervisao/web/** eol=lf

@@ -128,30 +128,82 @@ fn mentions(text: &str) -> Vec<String> {
     .iter()
     .map(|b| rev(b))
     .collect();
-    let mut flat = Vec::new();
-    let mut line_of = Vec::new();
-    for (n, line) in text.lines().enumerate() {
-        for c in decode_entities(line).chars().flat_map(char::to_lowercase).flat_map(fold).filter(|c| c.is_alphanumeric() && !('\u{300}'..='\u{36f}').contains(c)) {
-            flat.push(c);
-            line_of.push(n + 1);
-        }
-    }
+    let section = char::from_u32(0xA7).unwrap();
     let mut hits = Vec::new();
-    for term in &banned {
-        let t: Vec<char> = term.chars().collect();
-        for start in 0..flat.len().saturating_sub(t.len() - 1) {
-            if flat[start..start + t.len()] == t[..] {
-                hits.push(format!("line {}: {term}", line_of[start]));
+    let mut hit = |h: String| {
+        if !hits.contains(&h) {
+            hits.push(h);
+        }
+    };
+    // Each line read twice: its HTML entities decoded, then its code escapes too. A name or a
+    // section sign in either reading is a hit; the first keeps the letters an escape-like run (a
+    // pattern's `\b` before hex letters) would swallow in the second.
+    let readings: [fn(&str) -> String; 2] = [decode_entities, |l: &str| decode_escapes(&decode_entities(l))];
+    for read in readings {
+        let lines: Vec<String> = text.lines().map(read).collect();
+        let mut flat = Vec::new();
+        let mut line_of = Vec::new();
+        for (n, line) in lines.iter().enumerate() {
+            for c in line.chars().flat_map(char::to_lowercase).flat_map(fold).filter(|c| c.is_alphanumeric() && !('\u{300}'..='\u{36f}').contains(c)) {
+                flat.push(c);
+                line_of.push(n + 1);
+            }
+        }
+        for term in &banned {
+            let t: Vec<char> = term.chars().collect();
+            for start in 0..flat.len().saturating_sub(t.len() - 1) {
+                if flat[start..start + t.len()] == t[..] {
+                    hit(format!("line {}: {term}", line_of[start]));
+                }
+            }
+        }
+        for (n, line) in lines.iter().enumerate() {
+            if line.contains(section) {
+                hit(format!("line {}: section sign", n + 1));
             }
         }
     }
-    let section = char::from_u32(0xA7).unwrap();
-    for (n, line) in text.lines().enumerate() {
-        if line.contains(section) {
-            hits.push(format!("line {}: section sign", n + 1));
+    hits
+}
+
+/// A line with its code escapes read as the crate's languages write a character: Rust's and a
+/// script's braced `\u{..}`, a script's four-digit `\u....` and two-digit `\x..`, a stylesheet's
+/// one to six hex digits and the one space that may end them. Anything else is kept as written.
+fn decode_escapes(line: &str) -> String {
+    let hex_run = |s: &str, max: usize| s.chars().take(max).take_while(char::is_ascii_hexdigit).count();
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(at) = rest.find('\\') {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at + 1..];
+        let (code, used) = if let Some(braced) = tail.strip_prefix("u{") {
+            match braced.find('}') {
+                Some(end) if (1..=6).contains(&end) && hex_run(braced, 6) == end => (u32::from_str_radix(&braced[..end], 16).ok(), end + 3),
+                _ => (None, 0),
+            }
+        } else if let Some(u) = tail.strip_prefix('u').filter(|u| hex_run(u, 4) == 4) {
+            (u32::from_str_radix(&u[..4], 16).ok(), 5)
+        } else if let Some(x) = tail.strip_prefix('x').filter(|x| hex_run(x, 2) == 2) {
+            (u32::from_str_radix(&x[..2], 16).ok(), 3)
+        } else {
+            match hex_run(tail, 6) {
+                0 => (None, 0),
+                n => (u32::from_str_radix(&tail[..n], 16).ok(), n + usize::from(tail[n..].starts_with(' '))),
+            }
+        };
+        match code.and_then(char::from_u32) {
+            Some(c) => {
+                out.push(c);
+                rest = &tail[used..];
+            }
+            None => {
+                out.push('\\');
+                rest = tail;
+            }
         }
     }
-    hits
+    out.push_str(rest);
+    out
 }
 
 /// A lowercase letter read as the plain letters it stands for: an accented Latin-1 or Latin
@@ -207,7 +259,7 @@ fn fold(c: char) -> Vec<char> {
 }
 
 /// A text with its HTML entities read: a number (`&#227;`, `&#xe3;`) as its character, an
-/// accented letter's name (`&atilde;`) as its base letter.
+/// accented letter's name (`&atilde;`) as its base letter, the section sign's name as the sign.
 fn decode_entities(text: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
@@ -220,6 +272,8 @@ fn decode_entities(text: &str) -> String {
                 u32::from_str_radix(hex, 16).ok().and_then(char::from_u32).map(String::from)
             } else if let Some(dec) = e.strip_prefix('#') {
                 dec.parse::<u32>().ok().and_then(char::from_u32).map(String::from)
+            } else if e == "sect" {
+                char::from_u32(0xA7).map(String::from)
             } else {
                 let mut cs = e.chars();
                 let letter = cs.next().filter(char::is_ascii_alphabetic)?;
@@ -282,6 +336,18 @@ fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
         format!("<!-- {} -->", rev("oivan od o;edlita&tipac")),
         format!("// {}", rev("oivan od o\u{101}tipac")),
         format!("// {}", rev("oivan od o;722#&tipac")),
+        // Code escapes: the braced form of Rust and a script, a script's four digits and two, a
+        // stylesheet's hex with the space that ends it; and a pattern's `\b` before hex letters,
+        // which the escape reading swallows and the plain reading keeps.
+        format!("// {}", rev("oivan od o}3e{u\\tipac")),
+        format!("const s = \"{}\";", rev("oivan od o3e00u\\tipac")),
+        format!("const s = \"{}\";", rev("oivan od o3ex\\tipac")),
+        format!("p::after {{ content: \"{}\" }}", rev("oivan od o 3e\\tipac")),
+        format!("const r = /\\b{}/;", rev("seulavbd")),
+        // The section sign by an entity's name and number, and by an escape.
+        format!("// spec {}3.2", rev(";tces&")),
+        format!("<!-- spec {}3.2 -->", rev(";761#&")),
+        format!("// spec {}3.2", rev("}7a{u\\")),
     ];
     for s in &samples {
         assert_eq!(mentions(s).len(), 1, "{s}: {:?}", mentions(s));
@@ -301,6 +367,11 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
         assert!(sources.iter().any(|x| x == s), "{s} in {sources:?}");
     }
     assert!(sources.iter().all(|s| !s.starts_with("dist/") && !s.contains("node_modules")));
+    // The page's own sources are TypeScript and stylesheets alone: a config beside them (a
+    // `tsconfig.json` or a `package.json` under `src/`, which the build reads for the files near
+    // it and would follow outside) is refused, never hashed in.
+    let other: Vec<&String> = sources.iter().filter(|s| s.starts_with("src/") && !(s.ends_with(".ts") || s.ends_with(".css"))).collect();
+    assert_eq!(other, Vec::<&String>::new(), "a source under web/src that is neither TypeScript nor a stylesheet");
     // The page compiled in is the page the build wrote: a hand edit is refused.
     let written = web::BUILT_AS.trim();
     assert_eq!(written.len(), 16, "{written}");
@@ -312,6 +383,10 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
     // the page itself; so a new input the build could read either joins the hashed set or is
     // refused here.
     let rel: Vec<String> = crate_files().iter().map(|f| f.strip_prefix(crate_dir()).unwrap().to_string_lossy().replace('\\', "/")).collect();
+    // And every hashed source is one git holds or could hold: a file git ignores (under a
+    // `target/` folder in `src/`) would be hashed here and missing from every other checkout.
+    let unlisted: Vec<&String> = sources.iter().filter(|s| !rel.iter().any(|r| r.strip_prefix("web/") == Some(s.as_str()))).collect();
+    assert_eq!(unlisted, Vec::<&String>::new(), "a hashed source git ignores");
     let dist: BTreeSet<&str> = rel.iter().filter_map(|r| r.strip_prefix("web/dist/")).collect();
     let page: BTreeSet<&str> = web::OUTPUT_FILES.into_iter().chain(["source.hash", "output.hash"]).collect();
     assert_eq!(dist, page, "the page is the three files the host serves and the build's two hashes");
@@ -329,10 +404,12 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
     // running Node), so a guard turned into a warning or a stamp moved is a change here.
     let config = std::fs::read_to_string(webdir.join("vite.config.ts")).unwrap().replace("\r\n", "\n");
     assert_eq!(config, VITE_CONFIG, "web/vite.config.ts is not the config this test holds");
-    // Nor does a source reach outside: the TypeScript config extends nothing, and a stylesheet
-    // imports nothing and points at nothing but a fragment of the page or a data URI.
+    // Nor does a source reach outside: the TypeScript config names its compiler options and `src`
+    // alone (no `extends`, no `references`, no `files`), and a stylesheet imports nothing and
+    // points at nothing but a fragment of the page or a data URI.
     let tsconfig: serde_json::Value = serde_json::from_slice(&std::fs::read(webdir.join("tsconfig.json")).unwrap()).unwrap();
-    assert!(tsconfig.get("extends").is_none(), "{tsconfig}");
+    let keys: BTreeSet<&str> = tsconfig.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!((keys, &tsconfig["include"]), (["compilerOptions", "include"].into_iter().collect(), &serde_json::json!(["src"])), "{tsconfig}");
     for s in sources.iter().filter(|s| s.ends_with(".css") || s.ends_with(".html")) {
         let text = std::fs::read_to_string(webdir.join(s)).unwrap();
         assert!(!text.contains("@import"), "{s} imports a stylesheet");
