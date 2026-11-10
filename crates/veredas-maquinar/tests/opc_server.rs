@@ -1066,6 +1066,8 @@ fn a_bad_configuration_is_refused_by_name_before_anything_starts() {
         (TagType::Float, ramp(-2.26, 0.0, 0.01, Some(15), 20), "opc.tags[0] (`r`).ramp.low -2.26 at 15 places is past what a float counts exactly"),
         (TagType::Float, ramp(-9.0, -8.0, 1e-15, Some(15), 20), "opc.tags[0] (`r`).ramp.low -9 at 15 places is past what a float counts exactly"),
         (TagType::Float, ramp(4.0, 5.0, 1e-15, Some(15), 20), "opc.tags[0] (`r`).ramp.low 4 at 15 places is past what a float counts exactly"),
+        // A low and a high inside the bound, the step past it: the width may reach 2^52 units.
+        (TagType::Float, ramp(-2.25, 2.25, 4.5, Some(15), 20), "opc.tags[0] (`r`).ramp.step 4.5 at 15 places is past what a float counts exactly"),
         (TagType::Float, ramp(99999999.9, 100000000.06, 0.1, Some(1), 20), "opc.tags[0] (`r`).ramp.high 100000000.06 is not a whole number of the ramp's places (1)"),
         (TagType::Float, ramp(0.0, 1.0, 0.07, Some(1), 20), "opc.tags[0] (`r`).ramp.step 0.07 is not a whole number of the ramp's places (1)"),
         (TagType::Float, ramp(0.1, 0.3, 0.3, Some(1), 20), "opc.tags[0] (`r`).ramp: the step 0.3 is not above 0 and at most the range's width 0.2"),
