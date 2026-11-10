@@ -2,9 +2,10 @@
 //! write route through supervisão's address, where portal's switch answers: refused 403 while
 //! the switch is off with nothing reaching the plant, landing at the bench once the project arms
 //! it (or a shell arms it in process). What the page sends is the binding's action, the one
-//! pressed: its value and its source, asked and posted as the binding says. Supervisão has no
-//! write path of its own: no route of its own takes a POST, no source of its names a write handle,
-//! the switch or its start position.
+//! pressed: its value and its source, asked and posted as the binding says, every offered button
+//! off while the switch is off. Supervisão has no write path of its own: no route of its own takes
+//! a POST, and its sources name of core and portal only what it reads with (an allow-list), no
+//! socket but its own listener, no file written.
 
 mod common;
 
@@ -42,6 +43,86 @@ fn with_aux(mut ex: Example, bench: &Bench) -> Example {
     let two = format!("actions = [ {{ label = \"Release\", source = \"plc\", tag = \"ns={plc};s=release3\", value = \"7\" }}, {{ label = \"Hold\", source = \"aux\", tag = \"ns={};s=hold3\", value = \"3\" }} ]", aux.namespace);
     ex.binding = ex.binding.replacen(&one, &two, 1);
     ex
+}
+
+/// What supervisão's sources may name of core and of portal: the reading and serving it does,
+/// nothing that writes, dials or parses a project from text. A path is written whole, as from the
+/// crate's root.
+const ALLOWED: &[&str] = &[
+    "veredas_core::SeriesType", "veredas_core::SeriesRef", "veredas_core::SourceError", "veredas_core::SourceId", "veredas_core::now_unix_ms",
+    "veredas_core::schema::check", "veredas_core::schema::HeaderError",
+    "veredas_portal::CaptureRule", "veredas_portal::project", "veredas_portal::project::Project", "veredas_portal::project::load_file",
+    "veredas_portal::opc::parse_type", "veredas_portal::opc::compile", "veredas_portal::opc::table_of", "veredas_portal::channel::check",
+    "veredas_portal::session::HealthState", "veredas_portal::session::Live", "veredas_portal::session::Session",
+    "veredas_portal::serve::store_now_ms", "veredas_portal::serve::router", "veredas_portal::serve::lttb",
+    "veredas_portal::store::MAX_PAGE", "veredas_portal::store::RowsQuery",
+];
+
+/// A `use` tree's paths written out whole: `a::{b, c::{d, self}}` gives `a::b`, `a::c::d`, `a::c`.
+fn use_paths(prefix: &str, tree: &str) -> Vec<String> {
+    let tree = tree.trim();
+    let join = |a: &str, b: &str| if a.is_empty() { b.to_string() } else { format!("{a}::{b}") };
+    match tree.find('{') {
+        Some(open) => {
+            let head = tree[..open].trim().trim_end_matches("::");
+            let base = if head.is_empty() { prefix.to_string() } else { join(prefix, head) };
+            let inner = &tree[open + 1..tree.rfind('}').unwrap()];
+            let mut parts = Vec::new();
+            let (mut depth, mut start) = (0, 0);
+            for (i, c) in inner.char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    ',' if depth == 0 => {
+                        parts.push(&inner[start..i]);
+                        start = i + 1;
+                    }
+                    _ => {}
+                }
+            }
+            parts.push(&inner[start..]);
+            parts.into_iter().filter(|p| !p.trim().is_empty()).flat_map(|p| use_paths(&base, p)).collect()
+        }
+        None if tree == "self" => vec![prefix.to_string()],
+        None => vec![join(prefix, tree)],
+    }
+}
+
+/// Every path of core's or portal's a source names: its `use` trees written out, the paths it
+/// writes inline, and the items it reaches through a module it imported (`project::load_file`).
+fn named_paths(text: &str) -> Vec<String> {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out = Vec::new();
+    let mut rest = flat.clone();
+    for krate in ["veredas_core", "veredas_portal"] {
+        let mut from = 0;
+        while let Some(at) = rest[from..].find(&format!("use {krate}")).map(|i| i + from) {
+            let end = rest[at..].find(';').map_or(rest.len(), |i| at + i);
+            out.extend(use_paths("", &rest[at + 4..end]));
+            rest.replace_range(at..end, &" ".repeat(end - at));
+            from = end;
+        }
+    }
+    for krate in ["veredas_core::", "veredas_portal::"] {
+        for (at, _) in rest.match_indices(krate) {
+            let path: String = rest[at..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == ':').collect();
+            out.push(path.trim_end_matches(':').to_string());
+        }
+    }
+    // The one module supervisão imports whole: what it reaches through it is read as well.
+    let modules: Vec<&str> = ["veredas_portal::project"].into_iter().filter(|m| out.iter().any(|p| p == m)).collect();
+    for m in modules {
+        let short = format!("{}::", m.rsplit("::").next().unwrap());
+        for (at, _) in rest.match_indices(&short) {
+            let before = rest[..at].chars().last();
+            if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':') {
+                continue;
+            }
+            let item: String = rest[at + short.len()..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+            out.push(format!("{m}::{item}"));
+        }
+    }
+    out
 }
 
 /// Every Rust file under `dir`, however deep.
@@ -116,15 +197,38 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     assert!(!root.join("build.rs").exists() && !std::fs::read_to_string(root.join("Cargo.toml")).unwrap().contains("build ="), "no build script writes code this reading cannot see");
     let files = rust_files(&root.join("src"));
     assert!(files.len() >= 8, "{files:?}");
+    let mut listeners = 0;
+    let mut named = Vec::new();
     for path in files {
         let text = std::fs::read_to_string(&path).unwrap();
         for word in [
             "write_tags", "opc_handle", "channel_handle", "set_writes_armed", "WriteGate", ".gate", "live.opc", "live.channels", "/api/opc/write", "/api/channels/send",
             "writes_armed =", "writes_armed |=", "writes_armed:", "channel::spawn", "worker::spawn", "include!", "#[path",
+            // No socket but its own listener, no file written, no program run.
+            "TcpStream", "TcpSocket", "UdpSocket", "UnixStream", "UnixListener", "UnixDatagram", "fs::write", "File::create", "OpenOptions", "fs::copy", "fs::rename", "Command::new",
+            // Nothing of core's or portal's renamed or taken whole.
+            "extern crate", "veredas_core as", "veredas_portal as",
         ] {
             assert!(!text.contains(word), "{} names `{word}`", path.display());
         }
+        listeners += text.matches("TcpListener").count();
+        for p in named_paths(&text) {
+            assert!(!p.contains('*') && !p.contains(" as "), "{} takes `{p}` whole or renamed", path.display());
+            named.push((path.file_name().unwrap().to_string_lossy().to_string(), p));
+        }
     }
+    assert_eq!(listeners, 1, "one listener, the host's own");
+    let outside: Vec<&(String, String)> = named.iter().filter(|(_, p)| !ALLOWED.contains(&p.as_str())).collect();
+    assert!(outside.is_empty(), "named outside what supervisão reads with: {outside:?}");
+    // The reading itself: what the sources name today, every allowed path seen at least once; a
+    // `use` tree, an inline path and a module's item each read whole.
+    for p in ALLOWED {
+        assert!(named.iter().any(|(_, n)| n == p), "{p} never seen: {named:?}");
+    }
+    let probe = "use veredas_portal::{project::{self, Project}, session::Live};\nlet x = veredas_core::schema::check(t);\nlet p = project::load(t, b);\nuse veredas_core::telegram;";
+    let mut got = named_paths(probe);
+    got.sort();
+    assert_eq!(got, ["veredas_core::schema::check", "veredas_core::telegram", "veredas_portal::project", "veredas_portal::project::Project", "veredas_portal::project::load", "veredas_portal::session::Live"]);
     let bundle = veredas_supervisao::web::APP_JS;
     assert_eq!(bundle.matches("/api/opc/write").count(), 1, "the page posts to one route");
     assert!(bundle.contains("/portal/api/opc/write") && !bundle.contains("/api/channels/send"), "the route is portal's own");
@@ -159,6 +263,8 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     const BUTTON: &str = r#"(() => { const b = document.querySelector('.side .actions button[data-action="Release"]'); return b ? { disabled: b.disabled, gate: document.querySelector(".side .gate-note").textContent, note: document.querySelector(".side .write-note").textContent } : null; })()"#;
     let b = page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && b.gate !== '' ? b : null; }})()"), Duration::from_secs(20));
     assert_eq!(b, json!({ "disabled": true, "gate": "Writes go through portal. Its write switch is off.", "note": "" }));
+    const BUTTONS: &str = r#"[...document.querySelectorAll(".side .actions button")].map((b) => [b.dataset.action, b.disabled])"#;
+    assert_eq!(page.eval(BUTTONS), json!([["Release", true], ["Hold", true]]), "both offered, both off while the switch is off");
     page.eval(r#"(() => { window.answer = true; const b = document.querySelector('.side .actions button[data-action="Release"]'); b.click(); return b.disabled; })()"#);
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(page.eval(BUTTON)["note"], json!(""), "a disabled button sends nothing");
@@ -170,6 +276,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     host.session("loop").unwrap().set_writes_armed(true);
     let b = page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && !b.disabled ? b : null; }})()"), Duration::from_secs(10));
     assert_eq!(b["gate"], json!("Writes go through portal. Its write switch is on."));
+    assert_eq!(page.eval(BUTTONS), json!([["Release", false], ["Hold", false]]), "both on while it is on");
     page.eval(r#"(() => { window.answer = false; document.querySelector('.side .actions button[data-action="Release"]').click(); return true; })()"#);
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!((page.eval(BUTTON)["note"].clone(), release(&bench)), (json!("Release: refused, 403: writes are turned off for this project"), "0".to_string()), "not confirmed, nothing sent");
@@ -192,6 +299,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     assert_eq!(sent, vec![(to.clone(), release_body.clone()), (to.clone(), release_body), (to, hold_body)], "the refused post, the release, the hold: each the binding's action");
     host.session("loop").unwrap().set_writes_armed(false);
     page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && b.disabled && b.gate.endsWith('is off.') ? b : null; }})()"), Duration::from_secs(10));
+    assert_eq!(page.eval(BUTTONS), json!([["Release", true], ["Hold", true]]), "both off again");
     // Every request the page made for a write went to portal's route under the session.
     let posts = page.eval(r#"performance.getEntriesByType("resource").filter((e) => e.name.includes("/write")).map((e) => new URL(e.name).pathname)"#);
     assert_eq!(posts, json!(["/s/loop/portal/api/opc/write", "/s/loop/portal/api/opc/write", "/s/loop/portal/api/opc/write"]), "the refused post, the release and the hold");
