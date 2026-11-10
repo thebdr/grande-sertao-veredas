@@ -119,6 +119,15 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     assert!(wait(Duration::from_secs(20), || object(&objects(addr, "loop"), "outlet-1")["value"] == json!(40.0)));
     assert_eq!(object(&objects(addr, "hall"), "outlet-1")["value"], json!(65.0));
     assert!(objects(addr, "hall")["objects"].as_array().unwrap().iter().all(|o| !o["id"].as_str().unwrap().starts_with("parcel")));
+    for (name, fill) in [("loop", 40.0), ("hall", 65.0)] {
+        let mut sse = Sse::open(addr, &format!("/s/{name}/objects"));
+        assert_eq!(sse.status, 200);
+        assert!(sse.headers.contains("content-type: text/event-stream"), "{}", sse.headers);
+        let (event, data) = sse.next(Duration::from_secs(10)).unwrap();
+        let first: Value = serde_json::from_str(&data).unwrap();
+        assert_eq!((event.as_str(), object(&first, "outlet-1")["value"].clone()), ("snapshot", json!(fill)), "{name}");
+        assert_eq!(first["objects"].as_array().unwrap().len(), if name == "loop" { 8 } else { 6 });
+    }
     let (_, s) = get(addr, &format!("/s/hall/portal/api/opc/read?source=plc&tag={}", enc(&format!("ns={};s=fill1", b.server("plc").unwrap().namespace))));
     assert_eq!(s["value"], json!("65"));
 
@@ -155,23 +164,37 @@ fn a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first() {
         }
         other => panic!("{:?}", other.err()),
     }
-    // An address taken is refused before any session starts.
+    // An address taken is refused before any session starts: the same file, whose second
+    // session would not start, answers with the address, never with the session.
     let held = TcpListener::bind("127.0.0.1:0").unwrap();
     let taken = held.local_addr().unwrap();
-    let mut ex = live_example(&a, false);
-    ex.host = ex.host.replace("bind = \"127.0.0.1:0\"", &format!("bind = \"{taken}\""));
-    let cfg = config::load_file(&write_example(&dir.path().join("taken"), &ex)).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap().replace("bind = \"127.0.0.1:0\"", &format!("bind = \"{taken}\""));
+    std::fs::write(&path, text).unwrap();
+    let cfg = config::load_file(&path).unwrap();
     match Host::start(cfg) {
         Err(e @ HostError::Bind { .. }) => assert!(e.to_string().starts_with(&format!("cannot bind {taken}: ")), "{e}"),
         other => panic!("{:?}", other.err()),
     }
+    // The executable says the same on stderr and exits 2.
+    let out = Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).arg(&path).stdin(Stdio::null()).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.starts_with(&format!("cannot bind {taken}: ")), "{err}");
+    assert!(out.stdout.is_empty(), "nothing served, nothing announced");
+    // Freed, the second session's own failure is the executable's answer.
+    drop(held);
+    let out = Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).arg(&path).stdin(Stdio::null()).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.starts_with("session `hall` did not start: ") && err.contains("taken.duckdb: a database already stands there"), "{err}");
 }
 
 #[test]
 fn the_executable_serves_a_file_until_stdin_closes() {
     let dir = tempfile::tempdir().unwrap();
-    let a = plant(&dir.path().join("bench"));
-    let path = write_example(dir.path(), &live_example(&a, false));
+    let a = plant(&dir.path().join("bench-a"));
+    let b = plant(&dir.path().join("bench-b"));
+    let path = two_plants(dir.path(), &a, &b);
     let mut child = Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
     let mut first = String::new();
@@ -183,8 +206,11 @@ fn the_executable_serves_a_file_until_stdin_closes() {
     assert_eq!(second.trim(), format!("session `loop` at http://{addr}/s/loop/"));
     let mut third = String::new();
     out.read_line(&mut third).unwrap();
-    assert_eq!(third.trim(), "running; close stdin to stop");
-    assert_eq!(get(addr, "/api/sessions").1["sessions"][0]["name"], json!("loop"));
+    assert_eq!(third.trim(), format!("session `hall` at http://{addr}/s/hall/"));
+    let mut fourth = String::new();
+    out.read_line(&mut fourth).unwrap();
+    assert_eq!(fourth.trim(), "running; close stdin to stop");
+    assert_eq!(get(addr, "/api/sessions").1["sessions"][1]["name"], json!("hall"));
     let (_, s) = get(addr, "/s/loop/portal/api/session");
     assert_eq!(s["session_name"], json!("the loop"));
     let mut stdin = child.stdin.take().unwrap();
