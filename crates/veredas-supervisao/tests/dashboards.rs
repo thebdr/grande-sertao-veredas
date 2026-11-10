@@ -1,12 +1,14 @@
 //! C-052: the dashboards. Every panel kind computed by the host from the session's store, exactly:
 //! a log the test writes with stamps it chooses (on the store's axis, aligned on five minutes)
 //! and the bench's fill levels, read back over the dashboard route with the window's right edge
-//! named, so every bucket, breach, segment, median and bin is known before the test runs.
+//! named, so every bucket, breach, segment, median and bin is known before the test runs; then
+//! the page itself, run in a headless browser, read back against the dashboard it fetched.
 
 mod common;
 
 use std::time::Duration;
 
+use common::browser::Browser;
 use common::*;
 use serde_json::{Value, json};
 use veredas_supervisao::{Host, config};
@@ -347,7 +349,197 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let (status, now_d) = get(addr, "/s/loop/dashboard/0");
     assert_eq!(status, 200);
     assert!((now_d["to"].as_i64().unwrap() - store_now()).abs() < 60_000);
+
+    // The page draws it: run in a headless browser, the dashboard the page fetched (kept as it
+    // arrives) and the panels it drew, read in one moment, agree panel by panel.
+    let mut page = Browser::open(&format!("http://{addr}/s/loop/#layout"));
+    page.wait_for("document.querySelector('.tabs') !== null && document.querySelector('.tabs').children.length > 0", Duration::from_secs(20));
+    page.eval(KEEP_DASHBOARD);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let (dash, drawn) = loop {
+        let v = page.eval(DRAWN_PANELS);
+        if !v.is_null() {
+            let want = expected_panels(&v["dash"]);
+            if v["drawn"] == json!(want) {
+                break (v["dash"].clone(), v["drawn"].clone());
+            }
+            assert!(std::time::Instant::now() < deadline, "the page never drew its dashboard:\n drawn {:#}\n want {:#}", v["drawn"], json!(want));
+        }
+        assert!(std::time::Instant::now() < deadline, "the page never fetched its dashboard");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    // What it drew, spelled out where the bench's values make it certain.
+    assert_eq!(dash["panels"].as_array().unwrap().len(), 14);
+    assert_eq!((drawn[0]["big"].clone(), drawn[0]["box"].clone(), drawn[0]["badge"].clone()), (json!("99.2%"), json!("st-box-normal"), Value::Null));
+    assert_eq!((drawn[2]["box"].clone(), drawn[2]["badge"].clone()), (json!("st-box-alarm"), json!("! UNDER 99.5 %")));
+    assert_eq!(drawn[7]["cells"], json!([["Outlet 1", "35", "cell st-box-normal"], ["Outlet 2", "85", "cell st-box-near"], ["Outlet 3", "full", "cell st-box-warn"]]));
+    assert_eq!(drawn[9]["rows"][0], json!([["3", "mono", null], ["2", "mono", "width:50.0%"], ["■ slow", "mono st-text-warn", null]]), "sorted by travel, descending");
+    assert_eq!(drawn[11]["error"], json!("`outlets` has no column `nothing` (its columns: outlet, sorted, travel)"));
+    drop(page);
     host.stop();
+}
+
+/// Kept in the page: the dashboard JSON as the page's own fetch receives it, then the view opened.
+const KEEP_DASHBOARD: &str = r#"(() => {
+  const orig = window.fetch;
+  window.fetch = async (...a) => {
+    const r = await orig(...a);
+    if (String(a[0]).includes("/dashboard/")) r.clone().json().then((j) => { window.__dash = j; });
+    return r;
+  };
+  location.hash = "dashboards/0";
+  return true;
+})()"#;
+
+/// The dashboard the page fetched last and what it drew of every panel, read in one moment.
+const DRAWN_PANELS: &str = r#"(() => {
+  const d = window.__dash;
+  if (!d) return null;
+  const verts = (path) => path ? (path.getAttribute("d").match(/[ML]/g) || []).length : 0;
+  const txt = (el) => el ? el.textContent : null;
+  const drawn = [...document.querySelectorAll(".dash-grid > .panel")].map((p) => {
+    const r = { kind: p.dataset.kind, title: txt(p.querySelector(".panel-title")), span: getComputedStyle(p).gridColumnStart };
+    const err = p.querySelector(":scope > p.error");
+    if (err) { r.error = err.textContent; return r; }
+    switch (r.kind) {
+      case "value":
+        r.box = [...p.classList].find((c) => c.startsWith("st-box-")) ?? null;
+        r.big = txt(p.querySelector(".big")); r.big_cls = p.querySelector(".big").className;
+        r.badge = txt(p.querySelector(".panel-head .badge")); r.sub = txt(p.querySelector(".sub"));
+        r.spark = verts(p.querySelector("svg path.line")); break;
+      case "trend":
+        r.line = verts(p.querySelector("svg.trend path.line")); r.breaches = p.querySelectorAll("svg.trend circle.breach").length;
+        r.limit = p.querySelector("svg.trend line.limit") !== null; r.right = txt(p.querySelector(".panel-bind")); break;
+      case "bars":
+        r.bars = [...p.querySelectorAll("svg.bars rect.bar")].map((b) => b.classList.contains("running"));
+        r.target = p.querySelector("svg.bars line.limit") !== null; r.right = txt(p.querySelector(".panel-bind")); break;
+      case "timeline":
+        r.rows = [...p.querySelectorAll(".tl-row")].map((x) => [txt(x.querySelector(".tl-label")), txt(x.querySelector(".tl-now")), x.querySelector(".tl-now").className, [...x.querySelectorAll("svg.statebar rect:not(.st-none)")].map((g) => g.getAttribute("class"))]); break;
+      case "grid":
+        r.cells = [...p.querySelectorAll(".grid-cells .cell")].map((c) => [txt(c.querySelector(".cell-id")), txt(c.querySelector(".cell-v")), c.className]); break;
+      case "levels":
+        r.rows = [...p.querySelectorAll(".lv-row")].map((x) => [txt(x.querySelector(".lv-label")), x.querySelector(".lv-fill").getAttribute("style"), x.querySelector(".lv-fill").className, [...x.querySelectorAll(".lv-tick")].map((t) => t.getAttribute("style")), txt(x.querySelector(".lv-v"))]); break;
+      case "table":
+        r.head = [...p.querySelectorAll("thead th")].map(txt);
+        r.rows = [...p.querySelectorAll("tbody tr")].map((tr) => [...tr.children].map((td) => [td.textContent, td.className, td.querySelector(".inbar-fill")?.getAttribute("style") ?? null]));
+        r.right = txt(p.querySelector(".panel-bind")); break;
+      case "cells":
+        r.rows = [...p.querySelectorAll("tbody tr")].map((tr) => { const td = [...tr.children]; return [txt(td[0]), txt(td[1]), verts(td[2].querySelector("path.line")), verts(td[3].querySelector("path.line")), txt(td[4]), txt(td[5])]; });
+        r.right = txt(p.querySelector(".panel-bind")); break;
+    }
+    return r;
+  });
+  return { dash: d, drawn };
+})()"#;
+
+/// A number as the page writes it: to `places`, trailing zeros and a bare point dropped.
+fn num(v: &Value, places: usize) -> String {
+    match v.as_f64() {
+        Some(x) if x.is_finite() => {
+            let t = format!("{x:.places$}");
+            let t = if t.contains('.') { t.trim_end_matches('0').trim_end_matches('.').to_string() } else { t };
+            if t == "-0" { "0".to_string() } else { t }
+        }
+        _ => "\u{2014}".to_string(),
+    }
+}
+
+/// What the page must draw of each panel of a dashboard, in the reader's terms.
+fn expected_panels(d: &Value) -> Vec<Value> {
+    let s = |v: &Value| v.as_str().unwrap_or("").to_string();
+    let lines = |n: usize| if n >= 2 { n } else { 0 };
+    let quiet = |st: &Value| st == "normal" || st == "near";
+    d["panels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            let mut r = json!({ "kind": p["kind"], "title": p["title"], "span": format!("span {}", p["span"]) });
+            if let Some(e) = p.get("error").filter(|e| !e.is_null()) {
+                r["error"] = e.clone();
+                return r;
+            }
+            let x = &p["data"];
+            match p["kind"].as_str().unwrap() {
+                "value" => {
+                    r["box"] = json!(format!("st-box-{}", s(&x["state"])));
+                    r["big"] = json!(format!("{}{}", x["text"].as_str().unwrap_or("\u{2014}"), s(&x["unit"])));
+                    r["big_cls"] = json!(format!("big mono st-text-{}", s(&x["state"])));
+                    r["badge"] = if x["state"] == "normal" { Value::Null } else { json!(format!("{} {}", s(&x["mark"]), s(&x["word"]).to_uppercase())) };
+                    r["sub"] = json!(s(&x["sub"]));
+                    r["spark"] = json!(lines(x["spark"].as_array().map_or(0, |a| a.len())));
+                }
+                "trend" => {
+                    let n = x["breaches"].as_array().unwrap().len();
+                    let unit = if s(&x["unit"]).is_empty() { String::new() } else { format!(" {}", s(&x["unit"])) };
+                    r["line"] = json!(lines(x["points"].as_array().unwrap().len()));
+                    r["breaches"] = json!(n);
+                    r["limit"] = json!(!x["limit"].is_null());
+                    r["right"] = if x["limit"].is_null() {
+                        json!(format!("{} points", x["total"]))
+                    } else {
+                        let (word, at) = if x["limit"].get("above").is_some() { ("max", &x["limit"]["above"]) } else { ("min", &x["limit"]["below"]) };
+                        json!(format!("{word} {}{unit} · {n} breach{}", num(at, 2), if n == 1 { "" } else { "es" }))
+                    };
+                }
+                "bars" => {
+                    let unit = if s(&x["unit"]).is_empty() { String::new() } else { format!(" {}", s(&x["unit"])) };
+                    r["bars"] = json!(x["buckets"].as_array().unwrap().iter().filter(|b| !b["value"].is_null()).map(|b| b["running"].clone()).collect::<Vec<_>>());
+                    r["target"] = json!(!x["target"].is_null());
+                    r["right"] = if x["target"].is_null() { Value::Null } else { json!(format!("target {}{unit}", num(&x["target"], 2))) };
+                }
+                "timeline" => {
+                    let (from, to) = (x["from"].as_f64().unwrap(), x["to"].as_f64().unwrap());
+                    let at = |v: f64| (v - from) / (to - from) * 400.0;
+                    r["rows"] = json!(x["rows"].as_array().unwrap().iter().map(|row| {
+                        let segs: Vec<String> = row["segments"].as_array().unwrap().iter()
+                            .filter(|g| at(g["to"].as_f64().unwrap()).min(400.0) > at(g["from"].as_f64().unwrap()).max(0.0))
+                            .map(|g| format!("st-{}", s(&g["state"]))).collect();
+                        json!([row["label"], format!("{} {}", s(&row["now"]["mark"]), s(&row["now"]["word"])), format!("tl-now st-text-{}", s(&row["now"]["state"])), segs])
+                    }).collect::<Vec<_>>());
+                }
+                "grid" => {
+                    r["cells"] = json!(x["cells"].as_array().unwrap().iter().map(|c| {
+                        let v = if quiet(&c["state"]) { c["text"].as_str().unwrap_or("\u{2014}").to_string() } else { s(&c["word"]) };
+                        json!([c["label"], v, format!("cell st-box-{}", s(&c["state"]))])
+                    }).collect::<Vec<_>>());
+                }
+                "levels" => {
+                    r["rows"] = json!(x["rows"].as_array().unwrap().iter().map(|row| {
+                        let unit = if s(&row["unit"]).is_empty() { String::new() } else { format!(" {}", s(&row["unit"])) };
+                        let v = if quiet(&row["state"]) { format!("{}{unit}", row["text"].as_str().unwrap_or("\u{2014}")) } else { s(&row["word"]) };
+                        let ticks: Vec<String> = row["ticks"].as_array().unwrap().iter().map(|t| format!("left:{:.1}%", t.as_f64().unwrap() * 100.0)).collect();
+                        json!([row["label"], format!("width:{:.1}%", row["fraction"].as_f64().unwrap_or(0.0) * 100.0), format!("lv-fill st-fill-{}", s(&row["state"])), ticks, v])
+                    }).collect::<Vec<_>>());
+                }
+                "table" => {
+                    r["head"] = json!(x["columns"].as_array().unwrap().iter().map(|c| c["label"].clone()).collect::<Vec<_>>());
+                    r["rows"] = json!(x["rows"].as_array().unwrap().iter().map(|row| row.as_array().unwrap().iter().map(|c| {
+                        if let Some(bar) = c.get("bar").and_then(Value::as_f64) {
+                            json!([c["text"], "mono", format!("width:{:.1}%", bar * 100.0)])
+                        } else if let Some(st) = c.get("state").filter(|v| !v.is_null()) {
+                            let t = if s(&c["word"]).is_empty() { s(&c["text"]) } else { format!("{} {}", s(&c["mark"]), s(&c["word"])) };
+                            json!([t, format!("mono st-text-{}", st.as_str().unwrap()), null])
+                        } else {
+                            json!([c["text"], "mono", null])
+                        }
+                    }).collect::<Vec<_>>()).collect::<Vec<_>>());
+                    r["right"] = json!(format!("{} rows", x["total"]));
+                }
+                "cells" => {
+                    r["rows"] = json!(x["rows"].as_array().unwrap().iter().map(|row| {
+                        let spark = row["spark"].as_array().unwrap().iter().filter(|p| !p[1].is_null()).count();
+                        json!([row["key"], num(&row["median"], 1), lines(spark), row["bins"].as_array().unwrap().len(), num(&row["sigma"], 1), row["n"].to_string()])
+                    }).collect::<Vec<_>>());
+                    let minutes = ((x["to"].as_f64().unwrap() - x["from"].as_f64().unwrap()) / 60_000.0).round();
+                    let cap = if x["capped"] == json!(true) { format!(" · newest {} of {} rows", x["read"], x["total"]) } else { String::new() };
+                    r["right"] = json!(format!("last {minutes} min · distribution ±{} around each median, same scale on every row{cap}", num(&x["spread"], 2)));
+                }
+                _ => {}
+            }
+            r
+        })
+        .collect()
 }
 
 // ---- the computations alone, at their edges (src/panel.rs) ----

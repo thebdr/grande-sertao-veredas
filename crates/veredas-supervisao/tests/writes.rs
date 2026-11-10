@@ -8,6 +8,7 @@ mod common;
 
 use std::time::Duration;
 
+use common::browser::Browser;
 use common::*;
 use serde_json::json;
 use veredas_maquinar::opc::render_value;
@@ -72,10 +73,6 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     assert_eq!(bundle.matches("/api/opc/write").count(), 1, "the page posts to one route");
     assert!(bundle.contains("/portal/api/opc/write") && !bundle.contains("/api/channels/send"), "the route is portal's own");
     assert_eq!(bundle.matches("method:\"POST\"").count() + bundle.matches("method: \"POST\"").count(), 1, "one POST in the page");
-    // The page's write button is disabled while the status says the switch is off (the button
-    // itself is verified in the browser, C-054's evidence).
-    let word = |r: &str| r.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '.')).next().unwrap_or("").to_string();
-    assert!(bundle.split("disabled=!").skip(1).any(|r| word(r).ends_with(".writes_armed")), "a button disabled by the switch");
 
     // Supervisão's own routes take no write.
     for p in ["/", "/assets/app.js", "/assets/app.css", "/api/sessions", "/s/loop", "/s/loop/", "/s/loop/binding", "/s/loop/objects", "/s/loop/objects.json", "/s/loop/dashboard/0", "/s/loop/layout.svg"] {
@@ -91,6 +88,41 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     std::thread::sleep(Duration::from_millis(600));
     assert_eq!(get(addr, "/s/loop/objects.json").1["session"]["writes_armed"], json!(false), "no route of supervisão's armed the switch");
     assert_eq!(post(addr, "/s/loop/portal/api/opc/write", &body).0, 403);
+
+    // The page itself, run in a headless browser: the offered write is a button, disabled while
+    // the switch is off; pressed anyway (the page's own handler, the button re-enabled by hand),
+    // its post is refused on the wire and the plant keeps its value; enabled once the switch is
+    // armed, pressed and confirmed, it lands at the plant; asked and not confirmed, nothing is
+    // sent; disarmed, disabled again.
+    let mut page = Browser::open(&format!("http://{addr}/s/loop/"));
+    page.wait_for(r#"document.getElementById("outlet-3") !== null && document.getElementById("outlet-3").classList.contains("sv-obj")"#, Duration::from_secs(20));
+    page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true }))"#);
+    const BUTTON: &str = r#"(() => { const b = document.querySelector('.side .actions button[data-action="Release"]'); return b ? { disabled: b.disabled, gate: document.querySelector(".side .gate-note").textContent, note: document.querySelector(".side .write-note").textContent } : null; })()"#;
+    let b = page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && b.gate !== '' ? b : null; }})()"), Duration::from_secs(20));
+    assert_eq!(b, json!({ "disabled": true, "gate": "Writes go through portal. Its write switch is off.", "note": "" }));
+    page.eval(r#"(() => { window.confirm = () => true; const b = document.querySelector('.side .actions button[data-action="Release"]'); b.click(); return b.disabled; })()"#);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(page.eval(BUTTON)["note"], json!(""), "a disabled button sends nothing");
+    page.eval(r#"(() => { const b = document.querySelector('.side .actions button[data-action="Release"]'); b.disabled = false; b.click(); return true; })()"#);
+    let b = page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && b.note !== '' ? b : null; }})()"), Duration::from_secs(10));
+    assert_eq!(b["note"], json!("Release: refused, 403: writes are turned off for this project"));
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(release(&bench), "0", "nothing reached the plant");
+    host.session("loop").unwrap().set_writes_armed(true);
+    let b = page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && !b.disabled ? b : null; }})()"), Duration::from_secs(10));
+    assert_eq!(b["gate"], json!("Writes go through portal. Its write switch is on."));
+    page.eval(r#"(() => { window.confirm = () => false; document.querySelector('.side .actions button[data-action="Release"]').click(); return true; })()"#);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!((page.eval(BUTTON)["note"].clone(), release(&bench)), (json!("Release: refused, 403: writes are turned off for this project"), "0".to_string()), "not confirmed, nothing sent");
+    page.eval(r#"(() => { window.confirm = () => true; document.querySelector('.side .actions button[data-action="Release"]').click(); return true; })()"#);
+    let b = page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && b.note.startsWith('Release: written') ? b : null; }})()"), Duration::from_secs(10));
+    assert!(wait(Duration::from_secs(10), || release(&bench) == "1"), "the page's write landed: {b}");
+    host.session("loop").unwrap().set_writes_armed(false);
+    page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && b.disabled && b.gate.endsWith('is off.') ? b : null; }})()"), Duration::from_secs(10));
+    // Every request the page made for a write went to portal's route under the session.
+    let posts = page.eval(r#"performance.getEntriesByType("resource").filter((e) => e.name.includes("/write")).map((e) => new URL(e.name).pathname)"#);
+    assert_eq!(posts, json!(["/s/loop/portal/api/opc/write", "/s/loop/portal/api/opc/write"]), "the refused post and the one that landed");
+    drop(page);
     host.stop();
 
     // Armed by the project: the post lands from the start.
