@@ -9,16 +9,16 @@
     "--test",
     "dashboards"
   ],
-  "exitCode": 0,
-  "outputSha": "2332d6abcbb78bf3772914894d93c76a13506e476c55fd968f4485e2a310482c",
-  "outputTail": "\nrunning 4 tests\ntest a_table_sorts_numbers_as_numbers_with_nulls_last ... ok\ntest medians_sigmas_and_distributions_are_exact ... ok\ntest buckets_align_on_the_clock_and_mark_the_running_one ... ok\ntest every_panel_kind_is_computed_exactly_from_the_store ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.57s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.00s\n     Running tests\\dashboards.rs (target\\debug\\deps\\dashboards-6fe58751fce6c8eb.exe)",
-  "ranAt": "2026-11-10T08:19:45.879Z",
-  "headCommit": "50fd5470d990608b5508978416c8333c9a6e59ba",
+  "exitCode": 101,
+  "outputSha": "0e01d878c7d8011620a0c3f69341536596aae85741600905ea72e49c7da0361d",
+  "outputTail": "\nthread 'every_panel_kind_is_computed_exactly_from_the_store' (41468) panicked at crates\\veredas-supervisao\\tests\\dashboards.rs:457:5:\n\"last 60 min · distribution ±5 around each median, same scale on every row · newest 5 of 8 rows\"\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    every_panel_kind_is_computed_exactly_from_the_store\n\ntest result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.23s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.57s\n     Running tests\\dashboards.rs (target\\debug\\deps\\dashboards-6fe58751fce6c8eb.exe)\nerror: test failed, to rerun pass `-p veredas-supervisao --test dashboards`",
+  "ranAt": "2026-11-10T19:45:29.858Z",
+  "headCommit": "c42fc115000c01b691ee58577e443049b791c0d2",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/dashboards.rs",
       "file": "crates/veredas-supervisao/tests/dashboards.rs",
-      "fileSha": "7b97e82546a29f6985c6d43c4e168ffb11462040d4b5a69f3ce394bca2f5e015"
+      "fileSha": "572af2f415c5a0e7f74ee06359fa9e4c1d76965b17125c6a7a033da3c10048a9"
     }
   ]
 }
