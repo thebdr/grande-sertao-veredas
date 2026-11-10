@@ -194,7 +194,9 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     shown_at(&mut page, "51-53/53");
     pick(&mut page, "plc_main");
     let other = page.wait_for(&format!("(() => {{ const s = {SHOWN}; return s && s.head.some((h) => h.startsWith('fill1 ')) ? s : null; }})()"), Duration::from_secs(20));
-    assert!(other["rows"].as_str().unwrap().starts_with("1-50/") && other["newer"] == json!(true), "{other}");
+    // Its first page from row 1, whatever its count: the bench writes the table live, so a fast
+    // host reaches here with fewer than fifty rows (CI showed "1-47/47").
+    assert!(other["rows"].as_str().unwrap().starts_with("1-") && other["newer"] == json!(true), "{other}");
     pick(&mut page, "sorts");
     let again = shown_at(&mut page, "1-50/53");
     assert_eq!((again["body"].clone(), again["newer"].clone()), (first["body"].clone(), json!(true)), "the first page again");
