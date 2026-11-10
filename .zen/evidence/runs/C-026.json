@@ -9,16 +9,16 @@
     "--test",
     "opc_server"
   ],
-  "exitCode": 0,
-  "outputSha": "89b9e0e0f1dc673c79064b087b8043982084619fcdd44b6f7184cf4d22e4fbf7",
-  "outputTail": "test the_consumer_s_poll_worker_polls_and_writes_through_the_bench ... ok\ntest the_read_cap_and_the_session_cap_are_the_bench_s_knobs ... ok\ntest the_relay_makes_the_link_go_silent_and_delivers_what_it_held_when_thawed ... ok\ntest a_reaction_answers_a_write_with_a_timed_sequence ... ok\ntest randomized_tags_move_and_stay_inside_their_range ... ok\ntest int_draws_take_only_the_whole_numbers_inside_the_range ... ok\ntest a_configured_user_is_accepted_and_a_wrong_password_refused ... ok\ntest ramps_come_at_their_interval_counted_apart_from_draws ... ok\ntest draws_come_at_their_interval ... ok\ntest a_ramped_tag_steps_on_the_wire_and_moves_on_from_what_it_holds ... ok\n\ntest result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.65s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s\n     Running tests\\opc_server.rs (target\\debug\\deps\\opc_server-0a424b948228c9c3.exe)",
-  "ranAt": "2026-11-10T08:00:58.223Z",
-  "headCommit": "85395a617d1494c5ab7d48dbd6b70a84efbaef8b",
+  "exitCode": 101,
+  "outputSha": "744aeed27181183ce0121cd4c5ed99e31a49ff8a9fa1bb1e2cfb95d4fc528e20",
+  "outputTail": "---- ramps_come_at_their_interval_counted_apart_from_draws stdout ----\n\nthread 'ramps_come_at_their_interval_counted_apart_from_draws' (37380) panicked at crates\\veredas-maquinar\\tests\\opc_server.rs:964:5:\nan int and a float 100 ms ramp and a 100 ms draw in 2 s: OpcStatus { draws: 18, ramp_steps: 36, reactions_fired: 0, type_mismatches: 0, last_mismatch: None }\n\n\nfailures:\n    draws_come_at_their_interval\n    ramps_come_at_their_interval_counted_apart_from_draws\n\ntest result: FAILED. 20 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.77s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.93s\n     Running tests\\opc_server.rs (target\\debug\\deps\\opc_server-0a424b948228c9c3.exe)\nerror: test failed, to rerun pass `-p veredas-maquinar --test opc_server`",
+  "ranAt": "2026-11-10T11:03:08.626Z",
+  "headCommit": "19b9c4150e480654af537cfe09c4515a42917c6e",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/opc_server.rs",
       "file": "crates/veredas-maquinar/tests/opc_server.rs",
-      "fileSha": "cb26f2b0e159c2b4f0569eb76b7f4007ec66283a79948214b0be9cbabf96a0e7"
+      "fileSha": "b355d3fcfdb9f36e482979f0d60d2bc467107dc31e070a7727ac314898da339d"
     }
   ]
 }

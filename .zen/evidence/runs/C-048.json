@@ -10,15 +10,15 @@
     "files"
   ],
   "exitCode": 0,
-  "outputSha": "e0fc5b0f20f283e5b4e38677b2e65534d460c4f6ec2680de4b5f4c3ce6c7451b",
-  "outputTail": "test the_reference_is_the_text_this_test_holds ... ok\ntest the_worked_example_loads_as_the_reference_states_it ... ok\ntest a_supervisao_file_refuses_what_it_cannot_serve_by_its_place ... ok\ntest a_binding_is_checked_against_its_project_and_its_layout ... ok\ntest every_key_the_reference_lists_is_the_reader_s ... ok\ntest the_edges_the_types_and_every_kind_of_source_and_column ... ok\ntest the_rest_of_the_refusals_name_their_place ... ok\ntest the_executable_checks_the_example_and_prints_its_plan ... ok\ntest a_binding_refuses_what_it_cannot_light_up_by_its_place ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.09s\n     Running tests\\files.rs (target\\debug\\deps\\files-a460a05fec6c1907.exe)",
-  "ranAt": "2026-11-10T08:19:54.939Z",
-  "headCommit": "50fd5470d990608b5508978416c8333c9a6e59ba",
+  "outputSha": "ae81ef24ee4b5e0f1516c6e84134454c9823b18e468393168536502dc770051f",
+  "outputTail": "test a_supervisao_file_refuses_what_it_cannot_serve_by_its_place ... ok\ntest a_binding_is_checked_against_its_project_and_its_layout ... ok\ntest every_key_reads_back_as_written_and_every_default_fills ... ok\ntest the_refusals_of_a_kind_of_series_a_panel_and_a_number_name_their_place ... ok\ntest every_key_the_reference_lists_is_the_reader_s ... ok\ntest the_rest_of_the_refusals_name_their_place ... ok\ntest the_edges_the_types_and_every_kind_of_source_and_column ... ok\ntest the_executable_checks_the_example_and_prints_its_plan ... ok\ntest a_binding_refuses_what_it_cannot_light_up_by_its_place ... ok\n\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.34s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 50.53s\n     Running tests\\files.rs (target\\debug\\deps\\files-a460a05fec6c1907.exe)",
+  "ranAt": "2026-11-10T11:04:22.710Z",
+  "headCommit": "19b9c4150e480654af537cfe09c4515a42917c6e",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/files.rs",
       "file": "crates/veredas-supervisao/tests/files.rs",
-      "fileSha": "604000547922f90075852f3ab463f181925638f7983f0905138782de71cd4d3d"
+      "fileSha": "7ce0f8d3a154d75f9803efa88b465ad452b5cd10c0171bedf7b220d8d1fcc013"
     }
   ]
 }
