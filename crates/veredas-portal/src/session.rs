@@ -734,7 +734,10 @@ impl Inner {
         out
     }
 
-    /// Note one sample: the series cache, and a frame when numeric.
+    /// Note one sample: the series cache, and a frame when numeric. The frame carries the series'
+    /// count with this sample (`n`), the count the cache shows once it holds it: a listener orders
+    /// two samples under one stamp by it, whether a frame came before the cache's refresh or was
+    /// lost to a lag.
     fn note_sample(&mut self, sample: &Sample) {
         let key = format!("{}|{}", sample.source.as_str(), sample.series.as_ref());
         let entry = self.series.entry(key).or_insert_with(|| SeriesLastLocal {
@@ -760,6 +763,7 @@ impl Inner {
                 entry.keys.insert(k.into());
             }
         }
+        let n = entry.count;
         if let Some(v) = sample.value.as_f64() {
             self.frame_buf.push(serde_json::json!({
                 "src": sample.source.as_str(),
@@ -767,6 +771,7 @@ impl Inner {
                 "k": sample.key.as_deref(),
                 "ms": sample.index_ms(),
                 "v": v,
+                "n": n,
             }));
         }
     }

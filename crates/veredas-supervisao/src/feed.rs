@@ -32,6 +32,8 @@ struct Seen {
     index_ms: i64,
     /// When the feed saw it, on the unix clock.
     arrived_ms: i64,
+    /// The ingest's count of the series with this sample: under one stamp, the higher is the later.
+    n: u64,
 }
 
 /// What the feed knows of one series: its latest sample whatever its key, per key, and whether
@@ -41,11 +43,12 @@ struct SeriesSeen {
     any: Option<Seen>,
     by_key: BTreeMap<String, Seen>,
     keyed: bool,
-    /// The ingest's sample count at the last cache poll.
-    cache_count: u64,
-    /// Samples the frames brought that the cache's count has not yet accounted for: a count that
-    /// moved by no more than these is the frames' own samples, already held.
-    framed: u64,
+}
+
+/// Whether a sample at `index_ms` with the ingest's count `n` comes after one held: a newer stamp,
+/// or the same stamp with a higher count (a later line under it, never the same sample again).
+fn after(held: &Seen, index_ms: i64, n: u64) -> bool {
+    index_ms > held.index_ms || (index_ms == held.index_ms && n > held.n)
 }
 
 /// A marker of a keyed series: its key and its place along the path, 0 to 1.
@@ -153,51 +156,50 @@ impl Fold {
         self.watched.insert(k);
     }
 
-    /// One numeric sample from a frame. A series typed text or time is not taken from frames
-    /// (portal frames a time as its epoch milliseconds): it arrives through the cache alone, as
-    /// the ingest renders it, so it reads one way whichever way it came.
-    pub fn sample(&mut self, source: &str, series: &str, key: Option<&str>, index_ms: i64, value: f64, now_ms: i64) {
+    /// One numeric sample from a frame, `n` the ingest's count of the series with it. A series
+    /// typed text or time is not taken from frames (portal frames a time as its epoch
+    /// milliseconds): it arrives through the cache alone, as the ingest renders it, so it reads one
+    /// way whichever way it came. A sample is taken when it comes after the one held (`after`), for
+    /// the series and for its key: under one stamp the ingest's count orders two lines, so the same
+    /// sample read again (a cache polled before its frame) is no new arrival.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sample(&mut self, source: &str, series: &str, key: Option<&str>, index_ms: i64, value: f64, n: u64, now_ms: i64) {
         let k = (source.to_string(), series.to_string());
         if !self.watched.contains(&k) || self.types.get(&k).is_some_and(|t| !matches!(t, SeriesType::Int | SeriesType::Float)) {
             return;
         }
-        let seen = Seen { reading: Reading::Num(value), index_ms, arrived_ms: now_ms };
+        let seen = Seen { reading: Reading::Num(value), index_ms, arrived_ms: now_ms, n };
         let s = self.series.entry(k).or_default();
-        s.framed += 1;
-        if s.any.as_ref().is_none_or(|a| index_ms >= a.index_ms) {
+        if s.any.as_ref().is_none_or(|a| after(a, index_ms, n)) {
             s.any = Some(seen.clone());
         }
         if let Some(key) = key {
             s.keyed = true;
-            match s.by_key.get(key) {
-                Some(prev) if prev.index_ms > index_ms => {}
-                _ => {
-                    s.by_key.insert(key.to_string(), seen);
-                }
+            if s.by_key.get(key).is_none_or(|prev| after(prev, index_ms, n)) {
+                s.by_key.insert(key.to_string(), seen);
             }
         }
     }
 
-    /// A data frame of the session's stream: `{"type":"data","samples":[{src,ser,k,ms,v}]}`.
+    /// A data frame of the session's stream: `{"type":"data","samples":[{src,ser,k,ms,v,n}]}`;
+    /// a sample missing any of them but its key is no sample.
     pub fn frame(&mut self, text: &str, now_ms: i64) {
         let Ok(v) = serde_json::from_str::<Json>(text) else { return };
         let Some(samples) = v.get("samples").and_then(Json::as_array) else { return };
         for s in samples {
-            let (Some(src), Some(ser), Some(ms), Some(val)) = (s["src"].as_str(), s["ser"].as_str(), s["ms"].as_i64(), s["v"].as_f64()) else { continue };
-            self.sample(src, ser, s["k"].as_str(), ms, val, now_ms);
+            let (Some(src), Some(ser), Some(ms), Some(val), Some(n)) = (s["src"].as_str(), s["ser"].as_str(), s["ms"].as_i64(), s["v"].as_f64(), s["n"].as_u64()) else { continue };
+            self.sample(src, ser, s["k"].as_str(), ms, val, n, now_ms);
         }
     }
 
-    /// The ingest's cached last value of a series (whatever its key), taken when it is newer than
-    /// what the frames brought, or when nothing came yet: text and time arrive only this way.
-    /// `keys` is how many keys the ingest has seen on the series: a series with keys is keyed even
-    /// before a frame carried one (a lag, or a backfill read before anyone listened). `count` is
-    /// how many samples it has stored: none yet is no value (an empty text is a value). At an
-    /// equal index (two lines under one stamp) the cache is taken only when its count moved past
-    /// what the frames brought since (a lag, a backfill, a text series the frames never carry):
-    /// the cache trails the frames, so a count the frames already delivered is their samples,
-    /// already held, never an older value brought back nor an arrival stamped again. An entry
-    /// polled again unchanged keeps its arrival.
+    /// The ingest's cached last value of a series (whatever its key), taken when it comes after
+    /// what the frames brought (`after`, its count its `n`), or when nothing came yet: text and
+    /// time arrive only this way. `keys` is how many keys the ingest has seen on the series: a
+    /// series with keys is keyed even before a frame carried one (a lag, or a backfill read before
+    /// anyone listened). `count` is how many samples it has stored: none yet is no value (an empty
+    /// text is a value). The cache trails the frames, so under one stamp a count no higher than the
+    /// frame held is an earlier line or the same one, never taken; a higher one (a frame lost to a
+    /// lag, a backfill, a text series) is. An entry polled again unchanged keeps its arrival.
     #[allow(clippy::too_many_arguments)]
     pub fn cached(&mut self, source: &str, series: &str, last_index_ms: i64, last_value: &str, keys: usize, count: u64, now_ms: i64) {
         let k = (source.to_string(), series.to_string());
@@ -212,16 +214,12 @@ impl Fold {
         if count == 0 {
             return;
         }
-        let delta = count.saturating_sub(s.cache_count);
-        let missed = delta > s.framed;
-        s.framed = s.framed.saturating_sub(delta);
-        s.cache_count = count;
         let reading = match (numeric, last_value.trim().parse::<f64>()) {
             (true, Ok(v)) => Reading::Num(v),
             _ => Reading::Text(last_value.to_string()),
         };
-        if s.any.as_ref().is_none_or(|a| last_index_ms > a.index_ms || (missed && last_index_ms >= a.index_ms)) {
-            s.any = Some(Seen { reading, index_ms: last_index_ms, arrived_ms: now_ms });
+        if s.any.as_ref().is_none_or(|a| after(a, last_index_ms, count)) {
+            s.any = Some(Seen { reading, index_ms: last_index_ms, arrived_ms: now_ms, n: count });
         }
     }
 

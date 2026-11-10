@@ -106,67 +106,76 @@ fn the_fold_reads_every_object_exactly() {
     assert_eq!((v.value, v.text, v.state, v.word.as_str(), v.stale, v.since_ms, v.level), (None, None, StateClass::Stale, "no value", true, None, None));
 
     // A level: its fill by the value's place in the range, clamped; its state by the first rule.
-    for (x, text, state, word, level) in [
+    for (i, (x, text, state, word, level)) in [
         (35.0, "35", StateClass::Normal, "ok", 0.35),
         (80.0, "80", StateClass::Near, "near full", 0.8),
         (85.25, "85", StateClass::Near, "near full", 0.8525),
         (100.0, "100", StateClass::Warn, "full", 1.0),
         (120.0, "120", StateClass::Warn, "full", 1.0),
         (-5.0, "-5", StateClass::Normal, "ok", 0.0),
-    ] {
-        f.sample("plc", "fill1", None, 1_000, x, 5_000);
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        f.sample("plc", "fill1", None, 1_000, x, 1 + i as u64, 5_000);
         let v = f.view(o("outlet-1"), true, 9_000);
         assert_eq!((v.value, v.text.as_deref(), v.state, v.word.as_str(), v.stale, v.since_ms, v.level), (Some(Reading::Num(x)), Some(text), state, word, false, Some(5_000), Some(level)), "{x}");
     }
-    // An older sample never replaces a newer one; an equal index does.
-    f.sample("plc", "fill1", None, 999, 50.0, 6_000);
+    // An older sample never replaces a newer one; a later one under an equal index does (the
+    // ingest's count orders them), and the same sample read again does not.
+    f.sample("plc", "fill1", None, 999, 50.0, 7, 6_000);
     assert_eq!(f.view(o("outlet-1"), true, 9_000).value, Some(Reading::Num(-5.0)));
-    f.sample("plc", "fill1", None, 1_000, 60.0, 6_000);
+    f.sample("plc", "fill1", None, 1_000, 60.0, 8, 6_000);
     assert_eq!(f.view(o("outlet-1"), true, 9_000).value, Some(Reading::Num(60.0)));
+    f.sample("plc", "fill1", None, 1_000, 60.0, 8, 7_000);
+    f.sample("plc", "fill1", None, 1_000, 61.0, 6, 7_000);
+    assert_eq!((f.view(o("outlet-1"), true, 9_000).value, f.view(o("outlet-1"), true, 9_000).since_ms), (Some(Reading::Num(60.0)), Some(6_000)), "the same sample again, or an earlier line under the stamp, is no arrival");
     // Its source not live: stale, the last value kept.
     let v = f.view(o("outlet-1"), false, 9_000);
     assert_eq!((v.value, v.text.as_deref(), v.state, v.word.as_str(), v.stale), (Some(Reading::Num(60.0)), Some("60"), StateClass::Stale, "stale", true));
 
     // A code read by equals; anything no rule names is normal, with the object's word.
-    for (x, state, word) in [(0.0, StateClass::Warn, "stopped"), (2.0, StateClass::Alarm, "fault"), (1.0, StateClass::Normal, "running"), (1.5, StateClass::Normal, "running")] {
-        f.sample("plc", "infeed", None, 2_000, x, 2_000);
+    for (i, (x, state, word)) in [(0.0, StateClass::Warn, "stopped"), (2.0, StateClass::Alarm, "fault"), (1.0, StateClass::Normal, "running"), (1.5, StateClass::Normal, "running")].into_iter().enumerate() {
+        f.sample("plc", "infeed", None, 2_000, x, 1 + i as u64, 2_000);
         let v = f.view(o("infeed"), true, 2_000);
         assert_eq!((v.state, v.word.as_str()), (state, word), "{x}");
     }
     // A rule over another series: the outlet reads alarm while the infeed reads 2, whatever its fill.
-    f.sample("plc", "infeed", None, 3_000, 2.0, 3_000);
-    f.sample("plc", "fill1", None, 3_000, 100.0, 3_000);
+    f.sample("plc", "infeed", None, 3_000, 2.0, 5, 3_000);
+    f.sample("plc", "fill1", None, 3_000, 100.0, 9, 3_000);
     assert_eq!((f.view(o("outlet-9"), true, 3_000).state, f.view(o("outlet-9"), true, 3_000).word), (StateClass::Alarm, "infeed fault".to_string()));
-    f.sample("plc", "infeed", None, 3_001, 1.0, 3_001);
+    f.sample("plc", "infeed", None, 3_001, 1.0, 6, 3_001);
     assert_eq!((f.view(o("outlet-9"), true, 3_001).state, f.view(o("outlet-9"), true, 3_001).word), (StateClass::Warn, "full".to_string()));
 
     // Decimals as the object says; the rule below.
-    f.sample("plc", "speed", None, 1, 0.44, 1);
+    f.sample("plc", "speed", None, 1, 0.44, 1, 1);
     let v = f.view(o("speed"), true, 1);
     assert_eq!((v.text.as_deref(), v.state, v.word.as_str()), (Some("0.4"), StateClass::Warn, "slow"));
-    f.sample("plc", "speed", None, 2, 1.5, 2);
+    f.sample("plc", "speed", None, 2, 1.5, 2, 2);
     assert_eq!((f.view(o("speed"), true, 2).text.as_deref(), f.view(o("speed"), true, 2).word.as_str()), (Some("1.5"), "running"));
 
     // A freshness bound: fresh at the bound, stale past it, though the source is live.
-    f.sample("sorter", "rate", None, 10, 97.5, 10_000);
+    f.sample("sorter", "rate", None, 10, 97.5, 1, 10_000);
     let v = f.view(o("read-rate"), true, 11_500);
     assert_eq!((v.state, v.word.as_str(), v.text.as_deref(), v.stale), (StateClass::Alarm, "under 98 %", Some("97.5"), false));
     let v = f.view(o("read-rate"), true, 11_501);
     assert_eq!((v.state, v.word.as_str(), v.text.as_deref(), v.stale), (StateClass::Stale, "stale", Some("97.5"), true));
 
     // A marker by its place along the path, from a data frame as the session broadcasts it; a
-    // series no object reads, and a frame that is no frame, change nothing.
-    f.frame(r#"{"type":"data","samples":[{"src":"plc","ser":"p1","k":null,"ms":5,"v":25.0},{"src":"plc","ser":"zz","k":null,"ms":5,"v":1.0}]}"#, 100);
+    // series no object reads, a frame that is no frame, and a sample without its value or without
+    // the ingest's count, change nothing.
+    f.frame(r#"{"type":"data","samples":[{"src":"plc","ser":"p1","k":null,"ms":5,"v":25.0,"n":1},{"src":"plc","ser":"zz","k":null,"ms":5,"v":1.0,"n":1}]}"#, 100);
     f.frame("not json", 100);
     f.frame(r#"{"type":"data","samples":[{"src":"plc","ser":"p1","ms":6}]}"#, 100);
+    f.frame(r#"{"type":"data","samples":[{"src":"plc","ser":"p1","k":null,"ms":6,"v":99.0}]}"#, 100);
     let v = f.view(o("parcel-1"), true, 100);
     assert_eq!((v.place, v.level, v.items.len(), v.state), (Some(0.25), None, 0, StateClass::Normal));
-    f.frame(r#"{"type":"data","samples":[{"src":"plc","ser":"p1","k":null,"ms":7,"v":130.0}]}"#, 100);
+    f.frame(r#"{"type":"data","samples":[{"src":"plc","ser":"p1","k":null,"ms":7,"v":130.0,"n":2}]}"#, 100);
     assert_eq!(f.view(o("parcel-1"), true, 100).place, Some(1.0));
     assert_eq!(f.view(o("parcel-2"), true, 100).place, None, "no value, no place");
 
     // Markers per key: every key with its place, forgotten past the bound.
-    f.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"at","k":"B2","ms":1,"v":50.0},{"src":"sorter","ser":"at","k":"A1","ms":1,"v":10.0}]}"#, 20_000);
+    f.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"at","k":"B2","ms":1,"v":50.0,"n":1},{"src":"sorter","ser":"at","k":"A1","ms":1,"v":10.0,"n":2}]}"#, 20_000);
     let v = f.view(o("tracked"), true, 20_000);
     // The value is the latest sample whatever its key (the frame's last, on an equal index).
     assert_eq!((v.value.clone(), v.text.as_deref(), v.state, v.stale), (Some(Reading::Num(10.0)), Some("10"), StateClass::Normal, false));
@@ -175,11 +184,11 @@ fn the_fold_reads_every_object_exactly() {
     assert_eq!(ids(&f.view(o("tracked-default"), true, 30_000)), ["A1", "B2"]);
     assert_eq!(ids(&f.view(o("tracked-default"), true, 30_001)), Vec::<String>::new());
     assert_eq!((v.place, v.items.clone()), (None, vec![Item { key: "A1".into(), place: 0.1, text: "10".into() }, Item { key: "B2".into(), place: 0.5, text: "50".into() }]));
-    f.sample("sorter", "at", Some("A1"), 2, 20.0, 21_000);
+    f.sample("sorter", "at", Some("A1"), 2, 20.0, 3, 21_000);
     assert_eq!(f.view(o("tracked"), true, 21_501).items, vec![Item { key: "A1".into(), place: 0.2, text: "20".into() }], "B2 last moved 1501 ms ago");
     assert_eq!(f.view(o("tracked"), true, 22_501).items, vec![], "both forgotten");
     // A key's older sample never replaces its newer one.
-    f.sample("sorter", "at", Some("A1"), 1, 90.0, 22_600);
+    f.sample("sorter", "at", Some("A1"), 1, 90.0, 4, 22_600);
     assert_eq!(f.view(o("tracked"), true, 22_600).items, vec![], "an older sample is not a new arrival");
     // Bound to one key, a marker is one place, that key's; a value is that key's, whatever the
     // other keys did since, and never forgotten while its source is live.
@@ -187,7 +196,7 @@ fn the_fold_reads_every_object_exactly() {
     assert_eq!((v.place, v.items.clone(), v.text.as_deref()), (Some(0.2), vec![], Some("20")));
     let v = f.view(o("at-b2"), true, 90_000);
     assert_eq!((v.text.as_deref(), v.state, v.word.as_str(), v.stale), (Some("50"), StateClass::Warn, "far", false));
-    f.sample("sorter", "at", Some("C3"), 9, 99.0, 90_000);
+    f.sample("sorter", "at", Some("C3"), 9, 99.0, 5, 90_000);
     assert_eq!((f.view(o("at-b2"), true, 90_000).text.as_deref(), f.view(o("tracked-a1"), true, 90_000).place), (Some("50"), Some(0.2)));
     assert_eq!(f.view(o("tracked"), true, 90_000).items, vec![Item { key: "C3".into(), place: 0.99, text: "99".into() }]);
 
@@ -218,13 +227,13 @@ fn the_fold_reads_every_object_exactly() {
     assert_eq!((v.text.as_deref(), v.state, v.since_ms), (Some("run"), StateClass::Normal, Some(4_000)));
     t.cached("sorter", "mode", 7, "run", 0, 4, 9_000);
     assert_eq!(t.view(o("mode"), true, 9_000).since_ms, Some(4_000), "polled again, not a new arrival");
-    // At an equal stamp the frames' samples stand: the cache trails them (its count polled while
-    // it still holds an earlier line), so a count no further than what the frames brought neither
-    // brings back the older value nor stamps the arrival again; a count past them (a frame lost to
-    // a lag) is taken.
+    // At an equal stamp the ingest's count orders two lines, whichever way each came. The cache
+    // trails the frames (polled while it still holds an earlier line): a count no higher than the
+    // frame held neither brings back the older value nor stamps the arrival again; a higher one (a
+    // frame lost to a lag) is taken.
     let mut q = Fold::new(&b);
-    q.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"rate","k":null,"ms":1000,"v":97.5}]}"#, 10_000);
-    q.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"rate","k":null,"ms":1000,"v":99.0}]}"#, 10_050);
+    q.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"rate","k":null,"ms":1000,"v":97.5,"n":1}]}"#, 10_000);
+    q.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"rate","k":null,"ms":1000,"v":99.0,"n":2}]}"#, 10_050);
     q.cached("sorter", "rate", 1000, "97.5", 0, 1, 10_400);
     let v = q.view(o("read-rate"), true, 10_400);
     assert_eq!((v.text.as_deref(), v.state, v.since_ms), (Some("99.0"), StateClass::Normal, Some(10_050)), "the newer of the two under one stamp");
@@ -235,14 +244,38 @@ fn the_fold_reads_every_object_exactly() {
     q.cached("sorter", "rate", 1000, "97", 0, 3, 12_000);
     let v = q.view(o("read-rate"), true, 12_000);
     assert_eq!((v.text.as_deref(), v.state, v.since_ms), (Some("97.0"), StateClass::Alarm, Some(12_000)), "a sample the frames missed, taken");
+    // A lag lost a pass's two frames (99.5 then 97.5, counts 2 and 3) and the next pass's 99
+    // (count 4) arrived; the cache, refreshed after the lost pass, still holds 97.5 at count 3.
+    let mut p = Fold::new(&b);
+    p.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"rate","k":null,"ms":1000,"v":99.0,"n":4}]}"#, 10_000);
+    p.cached("sorter", "rate", 1000, "97.5", 0, 3, 10_100);
+    let v = p.view(o("read-rate"), true, 10_100);
+    assert_eq!((v.text.as_deref(), v.state, v.since_ms), (Some("99.0"), StateClass::Normal, Some(10_000)), "a cache behind the frames after a lag");
+    // The cache polled before its own frame was read (the stream's select picks either): the frame
+    // is the same sample, no new arrival; a later line whose frame a lag lost is then taken.
+    let mut r = Fold::new(&b);
+    r.cached("sorter", "rate", 1000, "97.5", 0, 1, 10_000);
+    r.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"rate","k":null,"ms":1000,"v":97.5,"n":1}]}"#, 10_050);
+    assert_eq!(r.view(o("read-rate"), true, 10_050).since_ms, Some(10_000), "its own frame read after the cache");
+    r.cached("sorter", "rate", 1000, "99", 0, 2, 10_500);
+    let v = r.view(o("read-rate"), true, 10_500);
+    assert_eq!((v.text.as_deref(), v.state, v.since_ms), (Some("99.0"), StateClass::Normal, Some(10_500)), "a later line the frames lost");
+    // A keyed series counts every key: two keys framed under one stamp, the cache trailing at the
+    // first; the value stays the second's, with its frame's arrival.
+    let mut kq = Fold::new(&b);
+    kq.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"at","k":"A1","ms":1000,"v":40.0,"n":1}]}"#, 10_000);
+    kq.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"at","k":"B2","ms":1000,"v":60.0,"n":2}]}"#, 10_050);
+    kq.cached("sorter", "at", 1000, "40", 2, 1, 10_400);
+    let v = kq.view(o("tracked"), true, 10_400);
+    assert_eq!((v.text.as_deref(), v.since_ms, v.items.len()), (Some("60"), Some(10_050), 2), "the later key's sample under one stamp");
     // A keyed marker's items each at its decimals, its place clamped.
     let mut k = Fold::new(&b);
-    k.sample("sorter", "at", Some("A1"), 1, 10.25, 1_000);
-    k.sample("sorter", "at", Some("B2"), 1, 130.0, 1_000);
+    k.sample("sorter", "at", Some("A1"), 1, 10.25, 1, 1_000);
+    k.sample("sorter", "at", Some("B2"), 1, 130.0, 2, 1_000);
     assert_eq!(k.view(o("tracked-tenths"), true, 1_000).items, vec![Item { key: "A1".into(), place: 0.1025, text: "10.2".into() }, Item { key: "B2".into(), place: 1.0, text: "130.0".into() }]);
     // A rule over another series that has no value yet holds nothing: never the object's own.
     let mut n = Fold::new(&b);
-    n.sample("plc", "fill1", None, 1, 100.0, 1_000);
+    n.sample("plc", "fill1", None, 1, 100.0, 1, 1_000);
     let v = n.view(o("near-b2"), true, 1_000);
     assert_eq!((v.state, v.word.as_str()), (StateClass::Normal, "ok"));
 
@@ -275,22 +308,22 @@ fn the_fold_reads_every_object_exactly() {
     // A change is anything but the arrival: a value, a level, a place or the markers moving is
     // one; the same reading arriving again is not; a value stuck at NaN is the same as itself.
     let mut g = Fold::new(&b);
-    g.sample("plc", "fill2", None, 1, 85.0, 1_000);
+    g.sample("plc", "fill2", None, 1, 85.0, 1, 1_000);
     let before = g.view(o("outlet-2"), true, 1_000);
-    g.sample("plc", "fill2", None, 2, 85.0, 2_000);
+    g.sample("plc", "fill2", None, 2, 85.0, 2, 2_000);
     let again = g.view(o("outlet-2"), true, 2_000);
     assert!(before.same(&again) && before.since_ms != again.since_ms);
-    g.sample("plc", "fill2", None, 3, 90.0, 3_000);
+    g.sample("plc", "fill2", None, 3, 90.0, 3, 3_000);
     let moved = g.view(o("outlet-2"), true, 3_000);
     assert_eq!((moved.state, moved.word.as_str(), moved.level), (StateClass::Near, "near full", Some(0.9)));
     assert!(!before.same(&moved), "a level moving inside its state is a change");
-    g.sample("plc", "p1", None, 1, 25.0, 1_000);
+    g.sample("plc", "p1", None, 1, 25.0, 1, 1_000);
     let at25 = g.view(o("parcel-1"), true, 1_000);
-    g.sample("plc", "p1", None, 2, 26.0, 1_000);
+    g.sample("plc", "p1", None, 2, 26.0, 2, 1_000);
     assert!(!at25.same(&g.view(o("parcel-1"), true, 1_000)), "a marker moving is a change");
-    g.sample("sorter", "at", Some("A1"), 1, 10.0, 1_000);
+    g.sample("sorter", "at", Some("A1"), 1, 10.0, 1, 1_000);
     let one = g.view(o("tracked"), true, 1_000);
-    g.sample("sorter", "at", Some("B2"), 1, 10.0, 1_000);
+    g.sample("sorter", "at", Some("B2"), 1, 10.0, 2, 1_000);
     assert!(!one.same(&g.view(o("tracked"), true, 1_000)), "a marker more is a change");
     g.cached("plc", "fill1", 10, "NaN", 0, 7, 1_000);
     let nan = g.view(o("outlet-1"), true, 1_000);
@@ -300,15 +333,15 @@ fn the_fold_reads_every_object_exactly() {
     // A state alone is a change: the same reading with its source away, past its bound, or with
     // its state flipped by a rule over another series.
     let mut g = Fold::new(&b);
-    g.sample("plc", "fill1", None, 1, 35.0, 1_000);
+    g.sample("plc", "fill1", None, 1, 35.0, 1, 1_000);
     let here = g.view(o("outlet-1"), true, 1_000);
     assert!(!here.same(&g.view(o("outlet-1"), false, 1_000)), "stale with its source away");
-    g.sample("sorter", "rate", None, 1, 99.0, 1_000);
+    g.sample("sorter", "rate", None, 1, 99.0, 1, 1_000);
     assert!(!g.view(o("read-rate"), true, 2_500).same(&g.view(o("read-rate"), true, 2_501)), "stale past its bound");
-    g.sample("plc", "fill1", None, 2, 100.0, 1_000);
-    g.sample("plc", "infeed", None, 2, 2.0, 1_000);
+    g.sample("plc", "fill1", None, 2, 100.0, 2, 1_000);
+    g.sample("plc", "infeed", None, 2, 2.0, 1, 1_000);
     let alarm = g.view(o("outlet-9"), true, 1_000);
-    g.sample("plc", "infeed", None, 3, 1.0, 1_000);
+    g.sample("plc", "infeed", None, 3, 1.0, 2, 1_000);
     let warn = g.view(o("outlet-9"), true, 1_000);
     assert_eq!((alarm.state, warn.state, alarm.text.clone(), warn.text.clone()), (StateClass::Alarm, StateClass::Warn, Some("100".to_string()), Some("100".to_string())));
     assert!(!alarm.same(&warn), "a state flipped by another series, the value unchanged");
@@ -317,16 +350,16 @@ fn the_fold_reads_every_object_exactly() {
     let v = g.view(o("lighter-first"), true, 1_000);
     assert_eq!((v.state, v.word.as_str()), (StateClass::Near, "high"));
     // `below` is strict: at its bound the speed runs.
-    g.sample("plc", "speed", None, 1, 0.5, 1_000);
+    g.sample("plc", "speed", None, 1, 0.5, 1, 1_000);
     let v = g.view(o("speed"), true, 1_000);
     assert_eq!((v.state, v.word.as_str()), (StateClass::Normal, "running"));
     // A range not starting at 0: a level and a place by the value's place in it, clamped.
-    for (x, at) in [(50.0, 0.0), (100.0, 0.5), (125.0, 0.75), (150.0, 1.0), (40.0, 0.0), (160.0, 1.0)] {
-        g.sample("plc", "fill2", None, 5, x, 1_000);
+    for (i, (x, at)) in [(50.0, 0.0), (100.0, 0.5), (125.0, 0.75), (150.0, 1.0), (40.0, 0.0), (160.0, 1.0)].into_iter().enumerate() {
+        g.sample("plc", "fill2", None, 5, x, 1 + i as u64, 1_000);
         assert_eq!(g.view(o("tank"), true, 1_000).level, Some(at), "{x}");
     }
-    for (x, at) in [(-50.0, 0.0), (0.0, 0.5), (25.0, 0.75), (50.0, 1.0), (-60.0, 0.0)] {
-        g.sample("plc", "p1", None, 5, x, 1_000);
+    for (i, (x, at)) in [(-50.0, 0.0), (0.0, 0.5), (25.0, 0.75), (50.0, 1.0), (-60.0, 0.0)].into_iter().enumerate() {
+        g.sample("plc", "p1", None, 5, x, 1 + i as u64, 1_000);
         assert_eq!(g.view(o("swing"), true, 1_000).place, Some(at), "{x}");
     }
     // A rule over a text series no object reads compares as text: "0" is the text "0", never the
@@ -337,18 +370,20 @@ fn the_fold_reads_every_object_exactly() {
     // A time reads as the ingest renders it, whichever way it came: a frame's epoch milliseconds
     // are not taken.
     g.cached("sorter", "done", 5, "2026-11-10 12:00:00", 0, 9, 1_000);
-    g.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"done","k":null,"ms":6,"v":1762776060000.0}]}"#, 2_000);
+    g.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"done","k":null,"ms":6,"v":1762776060000.0,"n":10}]}"#, 2_000);
     let v = g.view(o("done"), true, 2_000);
     assert_eq!((v.value, v.text.as_deref()), (Some(Reading::Text("2026-11-10 12:00:00".into())), Some("2026-11-10 12:00:00")));
     // A rule bound to a key reads that key's sample, whatever the other keys did since.
-    g.sample("sorter", "at", Some("B2"), 1, 50.0, 1_000);
-    g.sample("sorter", "at", Some("A1"), 2, 10.0, 1_000);
+    g.sample("sorter", "at", Some("B2"), 1, 50.0, 1, 1_000);
+    g.sample("sorter", "at", Some("A1"), 2, 10.0, 2, 1_000);
     let v = g.view(o("near-b2"), true, 1_000);
     assert_eq!((v.state, v.word.as_str()), (StateClass::Warn, "B2 far"));
-    // A key's sample at an equal index replaces the one before, its arrival the new one.
+    // A key's later sample at an equal index replaces the one before, its arrival the new one;
+    // the same sample read again keeps the arrival.
     let mut h = Fold::new(&b);
-    h.sample("sorter", "at", Some("A1"), 2, 20.0, 1_000);
-    h.sample("sorter", "at", Some("A1"), 2, 30.0, 2_000);
+    h.sample("sorter", "at", Some("A1"), 2, 20.0, 1, 1_000);
+    h.sample("sorter", "at", Some("A1"), 2, 30.0, 2, 2_000);
+    h.sample("sorter", "at", Some("A1"), 2, 30.0, 2, 3_000);
     assert_eq!(h.view(o("tracked"), true, 3_500).items, vec![Item { key: "A1".into(), place: 0.3, text: "30".into() }]);
     assert_eq!(h.view(o("tracked"), true, 3_501).items, vec![]);
 
@@ -362,7 +397,7 @@ fn the_fold_reads_every_object_exactly() {
     assert_eq!(health_label(&HealthState::Failed("gone".into())), ("failed", Some("gone".to_string())));
 
     // The page's form of a view.
-    f.sample("plc", "fill2", None, 1, 85.0, 40_000);
+    f.sample("plc", "fill2", None, 1, 85.0, 1, 40_000);
     assert_eq!(f.view(o("outlet-2"), true, 40_000).to_json(), json!({
         "id": "outlet-2", "value": 85.0, "text": "85", "state": "near", "mark": "\u{25A0}", "word": "near full", "stale": false,
         "since_ms": 40_000, "level": 0.85, "place": null, "items": [],

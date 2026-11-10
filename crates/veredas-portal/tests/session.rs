@@ -94,10 +94,11 @@ fn the_three_protocols_run_into_one_store_alike() {
         live.counters.read().unwrap()
     );
 
-    // The frames: every numeric sample since the last frame, for whoever listens.
+    // The frames: every numeric sample since the last frame, for whoever listens, each with the
+    // series' count with it (the cache's count once it holds the sample: 20 before these).
     let mut rx = live.subscribe();
     write_lines(&log, 20..30);
-    let mut got: Vec<(i64, f64)> = Vec::new();
+    let mut got: Vec<(i64, f64, u64)> = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(10);
     while got.len() < 10 && Instant::now() < deadline {
         match rx.try_recv() {
@@ -106,7 +107,7 @@ fn the_three_protocols_run_into_one_store_alike() {
                 assert_eq!(v["type"], "data");
                 for s in v["samples"].as_array().unwrap() {
                     if s["src"] == "log" && s["ser"] == "temp" {
-                        got.push((s["ms"].as_i64().unwrap(), s["v"].as_f64().unwrap()));
+                        got.push((s["ms"].as_i64().unwrap(), s["v"].as_f64().unwrap(), s["n"].as_u64().unwrap()));
                     }
                 }
             }
@@ -114,7 +115,7 @@ fn the_three_protocols_run_into_one_store_alike() {
             Err(e) => panic!("{e}"),
         }
     }
-    assert_eq!(got, (20..30).map(|i| (stamp_ms(i), temp(i))).collect::<Vec<_>>());
+    assert_eq!(got, (20..30).map(|i| (stamp_ms(i), temp(i), i as u64 + 1)).collect::<Vec<_>>());
     assert!(wait(Duration::from_secs(5), || rows(&live, "readings") == 30));
 
     // A stop ends every worker cleanly; the machine sees its peer go.
