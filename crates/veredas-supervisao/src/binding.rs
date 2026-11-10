@@ -613,7 +613,9 @@ fn finite(place: &str, what: &str, v: f64) -> Result<f64, String> {
     if v.is_finite() { Ok(v) } else { Err(format!("{place}: {what} is not a finite number")) }
 }
 
-fn compile_rule(place: &str, r: RawRule, default_source: &str, u: &Universe) -> Result<Rule, String> {
+/// A state rule as written, `own` the object's series (none for a table column's rule, which
+/// compares the column's own value).
+fn compile_rule(place: &str, r: RawRule, own: Option<&SeriesBind>, u: &Universe) -> Result<Rule, String> {
     let mut found: Vec<Compare> = Vec::new();
     if let Some(v) = r.equals {
         found.push(Compare::Equals(match v {
@@ -642,14 +644,17 @@ fn compile_rule(place: &str, r: RawRule, default_source: &str, u: &Universe) -> 
         return Err(format!("{place}: the state `{}` is none of `near`, `warn`, `alarm`, `disabled`", r.state));
     };
     let word = r.word.unwrap_or_else(|| class.name().to_string());
-    let (series, ty) = match (r.source, r.series, r.key) {
-        (None, None, None) => (None, None),
-        (source, Some(series), key) => {
-            let source = source.unwrap_or_else(|| default_source.to_string());
+    let (series, ty) = match (r.source, r.series, r.key, own) {
+        (None, None, None, _) => (None, None),
+        // Each of the three the rule leaves out is the object's own (the reference's default).
+        (source, series, key, Some(own)) => {
+            let source = source.unwrap_or_else(|| own.source.clone());
+            let series = series.unwrap_or_else(|| own.series.clone());
+            let key = key.or_else(|| own.key.clone());
             let (bind, ty) = check_series(place, &source, &series, key.as_deref(), u)?;
             (Some(bind), Some(ty))
         }
-        (_, None, _) => return Err(format!("{place}: a rule over another series names its `series`")),
+        (_, _, _, None) => return Err(format!("{place}: a column's rule compares the column's own value")),
     };
     Ok(Rule { compare, class, word, series, ty })
 }
@@ -747,7 +752,7 @@ pub fn load(text: &str, base: &Path, universe: &Universe, project_name: &str) ->
         }
         let mut rules = Vec::new();
         for (j, r) in o.states.into_iter().enumerate() {
-            rules.push(compile_rule(&format!("{place}, states[{j}]"), r, &value.source, universe)?);
+            rules.push(compile_rule(&format!("{place}, states[{j}]"), r, Some(&value), universe)?);
         }
         let mut actions = Vec::new();
         for (j, a) in o.actions.into_iter().enumerate() {
@@ -947,7 +952,7 @@ fn compile_panel(place: &str, kind: &str, t: toml::Value, objects: &[Object], u:
                     if r.source.is_some() || r.series.is_some() || r.key.is_some() {
                         return Err(format!("{cp}, states[{j}]: a column's rule compares the column's own value"));
                     }
-                    rules.push(compile_rule(&format!("{cp}, states[{j}]"), r, "", u)?);
+                    rules.push(compile_rule(&format!("{cp}, states[{j}]"), r, None, u)?);
                 }
                 cols.push(Column { label: c.label.unwrap_or_else(|| c.name.clone()), name: c.name, bar: c.bar, decimals: c.decimals, rules });
             }

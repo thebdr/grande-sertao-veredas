@@ -400,6 +400,7 @@ over a series that is not numeric; a table the project lacks; a table panel's li
 panel or its table lacks; a column, key or value the table lacks where the project states its
 columns, a value that is not numeric; a `spread` not above 0; a layout that cannot be read, is not
 an SVG document (its root an `svg` in the SVG namespace), or holds a script, foreign content (an
-element outside the SVG namespace), an event handler or a script link (a `javascript:` URL in any
-attribute, read as a browser reads a URL): each is refused when the file loads, with its place
-named, before any session starts.
+element outside the SVG namespace), an event handler, a script link (a `javascript:` URL in any
+attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
+declaring attribute defaults or using a parameter entity (a browser would apply them unchecked):
+each is refused when the file loads, with its place named, before any session starts.

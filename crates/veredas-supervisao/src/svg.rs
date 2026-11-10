@@ -49,6 +49,13 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
     if root.tag_name().namespace() != Some(SVG_NS) {
         return Err(format!("{} is not an SVG document: its root is not in the SVG namespace ({SVG_NS})", path.display()));
     }
+    // The document type's attribute defaults (`<!ATTLIST`), which a browser applies and this
+    // reader does not: an element's namespace, a link or a handler added unseen. (A parameter
+    // entity's reference, the other way to declare unseen, is no XML this reader reads.)
+    let prolog = &text[..root.range().start];
+    if prolog.contains("<!ATTLIST") {
+        return Err(format!("{} declares attribute defaults (`<!ATTLIST`) in its document type: a browser would add attributes this check never sees", path.display()));
+    }
     let mut ids: BTreeMap<String, (String, usize)> = BTreeMap::new();
     for node in root.descendants().filter(|n| n.is_element()) {
         let name = node.tag_name().name();
@@ -78,10 +85,11 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
     Ok(Layout { file: path.to_path_buf(), text: text.to_string(), ids })
 }
 
-/// Whether an attribute's value is a `javascript:` URL as a browser parses one (the URL standard
-/// drops tabs and line breaks anywhere and trims leading C0 controls and spaces), in any case.
+/// Whether an attribute's value is, or holds as an item of a `;`-separated list (an animation's
+/// `values`), a `javascript:` URL as a browser parses one (the URL standard drops tabs and line
+/// breaks anywhere and trims leading C0 controls and spaces), in any case.
 pub fn script_link(value: &str) -> bool {
     let kept: String = value.chars().filter(|c| !matches!(c, '\t' | '\n' | '\r')).collect();
-    kept.trim_start_matches(|c: char| c <= ' ').to_ascii_lowercase().starts_with("javascript:")
+    kept.split(';').any(|item| item.trim_start_matches(|c: char| c <= ' ').to_ascii_lowercase().starts_with("javascript:"))
 }
 

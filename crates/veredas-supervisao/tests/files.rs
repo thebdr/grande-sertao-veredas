@@ -199,7 +199,6 @@ fn a_binding_refuses_what_it_cannot_light_up_by_its_place() {
         (Box::new(|b| b.replace("{ equals = 0, state = \"warn\", word = \"stopped\" }", "{ equals = true, state = \"warn\", word = \"stopped\" }")), "object `infeed`, states[0]: `equals` takes a number or a string, not boolean"),
         (Box::new(|b| b.replace("{ below = 0.5, state = \"warn\", word = \"slow\" }", "{ below = nan, state = \"warn\" }")), "object `speed`, states[0]: `below` is not a finite number"),
         (Box::new(|b| b.replace("{ below = 0.5, state = \"warn\", word = \"slow\" }", "{ equals = 0, series = \"infeed\", source = \"plcx\", state = \"warn\" }")), "object `speed`, states[0]: `plcx` is no source of the project (its sources: `plc`, `sorter`)"),
-        (Box::new(|b| b.replace("{ below = 0.5, state = \"warn\", word = \"slow\" }", "{ equals = 0, source = \"plc\", state = \"warn\" }")), "object `speed`, states[0]: a rule over another series names its `series`"),
         (Box::new(|b| b.replace("{ label = \"Release\", source = \"plc\"", "{ label = \"Release\", source = \"sorter\"")), "object `outlet-3`, actions[0]: `sorter` is no OPC source of the project"),
         (Box::new(|b| b.replace("tag = \"ns=2;s=release3\"", "tag = \"ns=2;s=speed\"")), "object `outlet-3`, actions[0]: `ns=2;s=speed` is no tag of `plc` a rule marks writable (its writable tags: `ns=2;s=release3`)"),
         (Box::new(|b| b.replace("tag = \"ns=2;s=release3\"", "tag = \"release3\"")), "object `outlet-3`, actions[0]: `release3` is no tag of `plc` a rule marks writable (its writable tags: `ns=2;s=release3`)"),
@@ -609,6 +608,57 @@ show = \"level\"");
     assert!(load(dir.path(), &with_binding(|b| b.replace("{ name = \"outlet\" }", "{ name = \"whatever\" }"))).is_ok());
 }
 
+#[test]
+fn the_ranges_load_at_their_edges_and_a_rule_takes_the_object_s_own() {
+    // The reference's ranges at their accepted edges: places 6 (an object's and a column's), 12
+    // columns with a panel spanning them all, a table panel's limit of 1000; a session named from
+    // a digit with a dash, an id with `_` and `.`.
+    let dir = tempfile::tempdir().unwrap();
+    let mut ex = example();
+    ex.host = ex.host.replace("name = \"loop\"", "name = \"2-line\"");
+    ex.binding = ex
+        .binding
+        .replacen("decimals = 1", "decimals = 6", 1)
+        .replace("{ name = \"travel\", decimals = 1 }", "{ name = \"travel\", decimals = 6 }")
+        .replace("columns = 4", "columns = 12")
+        .replace("span = 2", "span = 12")
+        .replace("sort = { column = \"sorted\", descending = true }", "sort = { column = \"sorted\", descending = true }\nlimit = 1000")
+        .replace("id = \"infeed\"", "id = \"in_feed.a\"")
+        .replace("objects = [\"infeed\"]", "objects = [\"in_feed.a\"]");
+    let cfg = load(dir.path(), &ex).unwrap_or_else(|e| panic!("{e}"));
+    let (s, b) = (&cfg.sessions[0], &cfg.sessions[0].binding);
+    assert_eq!((s.name.as_str(), b.object("speed").unwrap().decimals, b.dashboards[0].columns, b.dashboards[0].panels[1].span), ("2-line", Some(6), 12, 12));
+    match &b.dashboards[0].panels[6].kind {
+        PanelKind::Table { columns, limit, .. } => assert_eq!((columns[2].decimals, *limit), (Some(6), 1000)),
+        other => panic!("{other:?}"),
+    }
+    assert!(b.object("in_feed.a").is_some());
+    // A spread below 0 is not above it.
+    assert_eq!(binding_refusal(&with_binding(|b| b.replace("spread = 10.0", "spread = -10.0"))), "dashboard `Overview`, panel[7] (cells): `spread` is not a number above 0");
+
+    // A series typed int by one rule and float by another reads as a float: a trend over it loads.
+    let dir = tempfile::tempdir().unwrap();
+    let mut ex = example();
+    ex.project.push_str("\n[[rule]]\nname = \"rates\"\npattern = 'RATE (?P<rate>\\d+)'\nscope = \"sorter\"\ntypes = { rate = \"int\" }\n");
+    let cfg = load(dir.path(), &ex).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(Universe::of(&cfg.sessions[0].project).sources["sorter"].series["rate"], SeriesType::Float);
+    assert_eq!(cfg.sessions[0].binding.object("read-rate").unwrap().ty, SeriesType::Float);
+
+    // A rule's `source`, `series` and `key` each the object's own where it names none: a rule
+    // naming the source alone compares the object's own series there.
+    let dir = tempfile::tempdir().unwrap();
+    let ex = with_binding(|b| b.replace("{ below = 0.5, state = \"warn\", word = \"slow\" }", "{ below = 0.5, source = \"plc\", state = \"warn\", word = \"slow\" }"));
+    let cfg = load(dir.path(), &ex).unwrap_or_else(|e| panic!("{e}"));
+    let rule = &cfg.sessions[0].binding.object("speed").unwrap().rules[0];
+    assert_eq!(rule.series.as_ref().map(|s| (s.source.as_str(), s.series.as_str(), s.key.clone())), Some(("plc", "speed", None)));
+    // A rule naming another series alone reads it on the object's source.
+    let dir = tempfile::tempdir().unwrap();
+    let ex = with_binding(|b| b.replace("{ below = 0.5, state = \"warn\", word = \"slow\" }", "{ below = 0.5, series = \"fill1\", state = \"warn\", word = \"slow\" }"));
+    let cfg = load(dir.path(), &ex).unwrap_or_else(|e| panic!("{e}"));
+    let rule = &cfg.sessions[0].binding.object("speed").unwrap().rules[0];
+    assert_eq!(rule.series.as_ref().map(|s| (s.source.as_str(), s.series.as_str())), Some(("plc", "fill1")));
+}
+
 /// The reference, `docs/binding-schema.md`, as this test holds it: an edit there is an edit here.
 const REFERENCE: &str = r###"# The supervisão file and the binding file: `veredas-supervisao` and `veredas-binding`, version 1
 
@@ -1012,9 +1062,10 @@ over a series that is not numeric; a table the project lacks; a table panel's li
 panel or its table lacks; a column, key or value the table lacks where the project states its
 columns, a value that is not numeric; a `spread` not above 0; a layout that cannot be read, is not
 an SVG document (its root an `svg` in the SVG namespace), or holds a script, foreign content (an
-element outside the SVG namespace), an event handler or a script link (a `javascript:` URL in any
-attribute, read as a browser reads a URL): each is refused when the file loads, with its place
-named, before any session starts.
+element outside the SVG namespace), an event handler, a script link (a `javascript:` URL in any
+attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
+declaring attribute defaults or using a parameter entity (a browser would apply them unchecked):
+each is refused when the file loads, with its place named, before any session starts.
 "###;
 
 // ---- the layout alone (src/svg.rs) ----
@@ -1064,6 +1115,20 @@ fn a_layout_is_an_svg_document_with_no_script() {
     assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:h=\"http://www.w3.org/1999/xhtml\"><h:object data=\"x\"/></svg>", p).unwrap_err(), "l.svg holds a <object> element of the namespace `http://www.w3.org/1999/xhtml`: a layout is a drawing in the SVG namespace, with no foreign content");
     assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:x=\"urn:not-svg\"><x:path id=\"loop\"/></svg>", p).unwrap_err(), "l.svg holds a <path> element of the namespace `urn:not-svg`: a layout is a drawing in the SVG namespace, with no foreign content");
     assert_eq!(parse("<s:svg xmlns:s=\"http://www.w3.org/2000/svg\"><rect/></s:svg>", p).unwrap_err(), "l.svg holds a <rect> element of the namespace `none`: a layout is a drawing in the SVG namespace, with no foreign content");
+    // A list of values (an animation's `values`) is read item by item, as a browser reads each.
+    for values in ["#a;javascript:alert(1)", "#a; javascript:alert(1)", "#a;java&#9;script:x()"] {
+        let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\"><a><animate attributeName=\"href\" values=\"{values}\" dur=\"1s\"/><rect/></a></svg>");
+        assert!(parse(&svg, p).unwrap_err().starts_with("l.svg holds a script link (`#a;"), "{values}");
+    }
+    assert!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><a><animate attributeName=\"href\" values=\"#a;#b\" dur=\"1s\"/><rect/></a></svg>", p).is_ok(), "links within the drawing");
+    // A document type declaring attribute defaults: a browser adds them (an element's namespace,
+    // a link, a handler) and this check would not see them; a parameter entity alike.
+    for subset in ["<!ATTLIST iframe xmlns CDATA \"http://www.w3.org/1999/xhtml\">", "<!ATTLIST a href CDATA \"javascript:alert(1)\">", "<!ATTLIST rect onclick CDATA \"alert(1)\">"] {
+        let svg = format!("<!DOCTYPE svg [{subset}]><svg xmlns=\"http://www.w3.org/2000/svg\"><iframe srcdoc=\"x\"/><a><rect/></a></svg>");
+        assert_eq!(parse(&svg, p).unwrap_err(), "l.svg declares attribute defaults (`<!ATTLIST`) in its document type: a browser would add attributes this check never sees", "{subset}");
+    }
+    assert!(parse("<!DOCTYPE svg [<!ENTITY % d \"<!ATTLIST rect onclick CDATA 'x()'>\"> %d;]><svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>", p).unwrap_err().starts_with("l.svg is not an XML document: "), "a parameter entity's reference is no XML this reader reads");
+    assert!(parse("<!DOCTYPE svg [<!ENTITY w \"40\">]><svg xmlns=\"http://www.w3.org/2000/svg\"><rect id=\"r\" width=\"&w;\"/></svg>", p).unwrap().element("r") == Some("rect"), "a general entity, expanded and checked, is read");
     // A document type, as drawing tools export it, is read.
     assert!(parse("<?xml version=\"1.0\"?>\n<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\n<svg xmlns=\"http://www.w3.org/2000/svg\"><rect id=\"x\"/></svg>", p).unwrap().element("x") == Some("rect"));
 }
