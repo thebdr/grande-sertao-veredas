@@ -141,9 +141,11 @@ dashboard), and its `docs/supervisao-plan.md`.
   over the three files as written; the crate compiles the three files in with `include_str!`, so
   no embedding crate and no build script is needed. The hashes are written once the bundle is on
   disk, never by a failed build.
-- The build reads nothing beside its sources (no `.env`, no `public/`, no PostCSS file; a module
-  outside `src/`, `index.html` and `node_modules/` refused) and emits the three files alone
-  (a second chunk or an asset refused): `vite.config.ts` holds the guards.
+- The build reads nothing beside its sources (no `.env`, no `public/`, no PostCSS file; a module,
+  or a file a stylesheet pulls in, outside `src/`, the hashed files and `node_modules/` refused)
+  and emits the three files alone (a second chunk or an asset refused, none inlined):
+  `vite.config.ts` holds the guards, and the component test holds `vite.config.ts` word for word.
+  The hashes are over bytes (CR LF read as LF), so a source that is not text counts byte for byte.
 - The component test recomputes both hashes, the first from the sources in the tree, the second
   from the page compiled in, and holds every file under the crate to Rust, a hashed source or the
   page: an edit to `web/src` without a rebuild, a page edited by hand, or a new file the build

@@ -131,7 +131,7 @@ fn mentions(text: &str) -> Vec<String> {
     let mut flat = Vec::new();
     let mut line_of = Vec::new();
     for (n, line) in text.lines().enumerate() {
-        for c in line.chars().flat_map(char::to_lowercase).map(base_letter).filter(|c| c.is_alphanumeric() && !('\u{300}'..='\u{36f}').contains(c)) {
+        for c in decode_entities(line).chars().flat_map(char::to_lowercase).flat_map(fold).filter(|c| c.is_alphanumeric() && !('\u{300}'..='\u{36f}').contains(c)) {
             flat.push(c);
             line_of.push(n + 1);
         }
@@ -154,19 +154,91 @@ fn mentions(text: &str) -> Vec<String> {
     hits
 }
 
-/// A lowercase Latin-1 letter with an accent read as its base letter; any other character as is.
-fn base_letter(c: char) -> char {
+/// A lowercase letter read as the plain letters it stands for: an accented Latin-1 or Latin
+/// Extended-A letter as its base letter, a ligature (U+FB00 to U+FB06) as its letters, a full-width
+/// form (U+FF01 to U+FF5E) as its ASCII; any other character as is.
+fn fold(c: char) -> Vec<char> {
+    let one = |x: char| vec![x];
     match c {
-        'à'..='å' => 'a',
-        'ç' => 'c',
-        'è'..='ë' => 'e',
-        'ì'..='ï' => 'i',
-        'ñ' => 'n',
-        'ò'..='ö' | 'ø' => 'o',
-        'ù'..='ü' => 'u',
-        'ý' | 'ÿ' => 'y',
-        c => c,
+        'à'..='å' => one('a'),
+        'ç' => one('c'),
+        'è'..='ë' => one('e'),
+        'ì'..='ï' => one('i'),
+        'ñ' => one('n'),
+        'ò'..='ö' | 'ø' => one('o'),
+        'ù'..='ü' => one('u'),
+        'ý' | 'ÿ' => one('y'),
+        '\u{100}'..='\u{17f}' => {
+            let base = match c as u32 {
+                0x100..=0x105 => "a",
+                0x106..=0x10d => "c",
+                0x10e..=0x111 => "d",
+                0x112..=0x11b => "e",
+                0x11c..=0x123 => "g",
+                0x124..=0x127 => "h",
+                0x128..=0x131 => "i",
+                0x132..=0x133 => "ij",
+                0x134..=0x135 => "j",
+                0x136..=0x138 => "k",
+                0x139..=0x142 => "l",
+                0x143..=0x14b => "n",
+                0x14c..=0x151 => "o",
+                0x152..=0x153 => "oe",
+                0x154..=0x159 => "r",
+                0x15a..=0x161 => "s",
+                0x162..=0x167 => "t",
+                0x168..=0x173 => "u",
+                0x174..=0x175 => "w",
+                0x176..=0x178 => "y",
+                0x179..=0x17e => "z",
+                _ => "s",
+            };
+            base.chars().collect()
+        }
+        '\u{fb00}' => "ff".chars().collect(),
+        '\u{fb01}' => "fi".chars().collect(),
+        '\u{fb02}' => "fl".chars().collect(),
+        '\u{fb03}' => "ffi".chars().collect(),
+        '\u{fb04}' => "ffl".chars().collect(),
+        '\u{fb05}' | '\u{fb06}' => "st".chars().collect(),
+        '\u{ff01}'..='\u{ff5e}' => char::from_u32(c as u32 - 0xfee0).map(|x| x.to_ascii_lowercase()).into_iter().collect(),
+        c => one(c),
     }
+}
+
+/// A text with its HTML entities read: a number (`&#227;`, `&#xe3;`) as its character, an
+/// accented letter's name (`&atilde;`) as its base letter.
+fn decode_entities(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        let entity = tail.find(';').filter(|e| *e <= 12).map(|e| &tail[1..e]);
+        let read = entity.and_then(|e| {
+            if let Some(hex) = e.strip_prefix("#x").or_else(|| e.strip_prefix("#X")) {
+                u32::from_str_radix(hex, 16).ok().and_then(char::from_u32).map(String::from)
+            } else if let Some(dec) = e.strip_prefix('#') {
+                dec.parse::<u32>().ok().and_then(char::from_u32).map(String::from)
+            } else {
+                let mut cs = e.chars();
+                let letter = cs.next().filter(char::is_ascii_alphabetic)?;
+                ["acute", "grave", "circ", "tilde", "uml", "ring", "cedil", "slash", "macr", "caron", "breve", "ogon", "dot"].contains(&cs.as_str()).then(|| letter.to_string())
+            }
+        });
+        match (entity, read) {
+            (Some(e), Some(r)) => {
+                out.push_str(&r);
+                rest = &tail[e.len() + 2..];
+            }
+            _ => {
+                out.push('&');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 #[test]
@@ -177,6 +249,10 @@ fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
         assert!(rel.iter().any(|r| r == must), "{must} is judged: {rel:?}");
     }
     assert!(rel.iter().all(|r| !r.contains("node_modules")), "{rel:?}");
+    // Every file is read whole as UTF-8: a file that is not (a Windows-1252 note) is refused, its
+    // bytes never guessed at.
+    let not_text: Vec<&String> = files.iter().zip(&rel).filter(|(f, _)| std::str::from_utf8(&std::fs::read(f).unwrap()).is_err()).map(|(_, r)| r).collect();
+    assert_eq!(not_text, Vec::<&String>::new(), "a file that is not UTF-8");
     let found: Vec<String> = files
         .iter()
         .flat_map(|f| mentions(&String::from_utf8_lossy(&std::fs::read(f).unwrap())).into_iter().map(move |l| format!("{}: {l}", f.display())))
@@ -200,6 +276,12 @@ fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
         format!("// {}", rev("OIVAN OD OÃTIPAC")),
         format!("// {}", rev("oivaN od oatipaC")),
         format!("// {}", rev("oivan od o\u{303}atipac")),
+        // A ligature (from a PDF), full-width capitals, an HTML entity, a macron.
+        format!("// {}", rev("tnalpg\u{fb01}noc")),
+        format!("// {}", rev("TLEBINEG").chars().map(|c| char::from_u32(c as u32 + 0xfee0).unwrap()).collect::<String>()),
+        format!("<!-- {} -->", rev("oivan od o;edlita&tipac")),
+        format!("// {}", rev("oivan od o\u{101}tipac")),
+        format!("// {}", rev("oivan od o;722#&tipac")),
     ];
     for s in &samples {
         assert_eq!(mentions(s).len(), 1, "{s}: {:?}", mentions(s));
@@ -242,18 +324,35 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
         })
         .collect();
     assert_eq!(stray, Vec::<&String>::new(), "a file outside the crate's code, the page's hashed sources and the page");
-    // The build reads nothing beside them and emits nothing beside the page: the guards stand in
-    // its config (their refusals are C-047's evidence), and the hashes are written once the bundle
-    // is on disk.
-    let config = std::fs::read_to_string(webdir.join("vite.config.ts")).unwrap();
-    for guard in ["envDir: false", "publicDir: false", "css: { postcss: {} }", "enforce: \"post\"", "this.getModuleIds()", "writeBundle()"] {
-        assert!(config.contains(guard), "vite.config.ts lacks `{guard}`");
+    // The build reads nothing beside them and emits nothing beside the page: its config is the
+    // one this test holds, word for word (the guards' refusals are C-047's evidence, CI never
+    // running Node), so a guard turned into a warning or a stamp moved is a change here.
+    let config = std::fs::read_to_string(webdir.join("vite.config.ts")).unwrap().replace("\r\n", "\n");
+    assert_eq!(config, VITE_CONFIG, "web/vite.config.ts is not the config this test holds");
+    // Nor does a source reach outside: the TypeScript config extends nothing, and a stylesheet
+    // imports nothing and points at nothing but a fragment of the page or a data URI.
+    let tsconfig: serde_json::Value = serde_json::from_slice(&std::fs::read(webdir.join("tsconfig.json")).unwrap()).unwrap();
+    assert!(tsconfig.get("extends").is_none(), "{tsconfig}");
+    for s in sources.iter().filter(|s| s.ends_with(".css") || s.ends_with(".html")) {
+        let text = std::fs::read_to_string(webdir.join(s)).unwrap();
+        assert!(!text.contains("@import"), "{s} imports a stylesheet");
+        assert_eq!(urls(&text), Vec::<String>::new(), "{s} points outside the page");
     }
-    assert!(!config.contains("closeBundle"), "the hashes are written after a written bundle alone");
-    // The bundle's names are the ones the host serves, and it loads no other file.
-    assert!(web::INDEX_HTML.contains("src=\"/assets/app.js\"") && web::INDEX_HTML.contains("href=\"/assets/app.css\""), "{}", web::INDEX_HTML);
+    // The bundle's names are the ones the host serves, and it loads no other file: the page's
+    // every `src` and `href` one of the two, the stylesheet's every `url()` a fragment or a data
+    // URI and no `@import`, the script no dynamic import and no address but the SVG namespace.
+    let refs: Vec<String> = ["src=\"", "href=\""].iter().flat_map(|a| web::INDEX_HTML.match_indices(a).map(move |(i, _)| web::INDEX_HTML[i + a.len()..].split('"').next().unwrap().to_string())).collect();
+    assert_eq!(refs.iter().map(String::as_str).collect::<BTreeSet<_>>(), ["/assets/app.css", "/assets/app.js"].into_iter().collect::<BTreeSet<_>>(), "{}", web::INDEX_HTML);
     assert!(!web::APP_JS.is_empty() && !web::APP_CSS.is_empty());
+    assert!(!web::APP_CSS.contains("@import"), "the stylesheet imports nothing");
+    assert_eq!(urls(web::APP_CSS), Vec::<String>::new(), "the stylesheet points outside the page");
     assert!(!web::APP_JS.contains("import(") && !web::APP_JS.contains("import.meta.url"), "the bundle loads no other file");
+    let addresses: BTreeSet<&str> = ["http://", "https://", "//"]
+        .iter()
+        .flat_map(|scheme| web::APP_JS.match_indices(scheme).map(|(i, _)| &web::APP_JS[i..]).map(|t| &t[..t.find(|c: char| c == '"' || c == '\'' || c == '`' || c.is_whitespace() || c == ')').unwrap_or(t.len())]))
+        .filter(|a| !a.starts_with("//") || !a[2..].starts_with(' '))
+        .collect();
+    assert!(addresses.iter().all(|a| *a == "http://www.w3.org/2000/svg" || *a == "//www.w3.org/2000/svg"), "the script names an address: {addresses:?}");
     // The hash sees one byte of any source change, and not a line ending.
     let copy = tempfile::tempdir().unwrap();
     copy_tree(&webdir, copy.path(), &sources);
@@ -267,6 +366,19 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
     std::fs::write(&main, &text).unwrap();
     std::fs::write(copy.path().join("src/extra.ts"), "").unwrap();
     assert_ne!(web::source_hash(copy.path()).unwrap(), built, "a new source is a change");
+    // Bytes, not text: two sources differing in a byte that is not UTF-8 differ.
+    std::fs::write(copy.path().join("src/extra.ts"), [b'x', 0xff, b'x']).unwrap();
+    let a = web::source_hash(copy.path()).unwrap();
+    std::fs::write(copy.path().join("src/extra.ts"), [b'x', 0x80, b'x']).unwrap();
+    assert_ne!(web::source_hash(copy.path()).unwrap(), a, "a byte that is not text counts");
+}
+
+/// Every `url(...)` in a text whose target is neither a fragment of the page nor a data URI.
+fn urls(text: &str) -> Vec<String> {
+    text.match_indices("url(")
+        .map(|(i, _)| text[i + 4..].split(')').next().unwrap_or("").trim().trim_matches(['"', '\'']).to_string())
+        .filter(|u| !u.starts_with('#') && !u.starts_with("data:"))
+        .collect()
 }
 
 fn copy_tree(from: &Path, to: &Path, rel: &[String]) {
@@ -276,3 +388,118 @@ fn copy_tree(from: &Path, to: &Path, rel: &[String]) {
         std::fs::copy(from.join(r), dst).unwrap();
     }
 }
+
+/// The page's build configuration, word for word (`web/vite.config.ts`).
+const VITE_CONFIG: &str = r####"// Supervisão's page: built into dist/ with fixed names (the crate compiles them in with
+// include_str!), with two hashes beside them, both recomputed by the crate's component test
+// (src/web.rs states the algorithm: FNV-1a 64 over each file's relative path, a NUL, its bytes
+// with every CR LF pair read as LF, a NUL, in path order):
+//   dist/source.hash  the sources the page was built from (SOURCE_FILES and everything under src/)
+//   dist/output.hash  the page as written (OUTPUT_FILES)
+// The build reads nothing else: no .env, no public/ folder, no PostCSS file, no module and no
+// file a stylesheet pulls in outside src/, the hashed files and node_modules/ (refused), no asset
+// inlined (an asset is a file of its own, so the three-file rule refuses it), and it emits the
+// three files alone (refused otherwise). The hashes are written once the bundle is on disk: a
+// failed build never writes them.
+import { defineConfig, type Plugin } from "vite";
+import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+
+const SOURCE_FILES = ["index.html", "package.json", "package-lock.json", "tsconfig.json", "vite.config.ts"];
+const OUTPUT_FILES = ["assets/app.css", "assets/app.js", "index.html"];
+
+function walk(dir: string, rel: string, out: string[]) {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    const r = `${rel}/${name}`;
+    if (statSync(p).isDirectory()) walk(p, r, out);
+    else out.push(r);
+  }
+}
+
+function fnv(bytes: Uint8Array, h: bigint): bigint {
+  for (const b of bytes) {
+    h ^= BigInt(b);
+    h = (h * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return h;
+}
+
+// The hash of the files under root named by rel, sorted as Rust sorts strings: by bytes.
+function hashFiles(root: string, rel: string[]): string {
+  const files = [...rel].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+  const enc = new TextEncoder();
+  let h = 0xcbf29ce484222325n;
+  for (const r of files) {
+    const raw = readFileSync(join(root, r));
+    const lf = raw.filter((b, i) => !(b === 13 && raw[i + 1] === 10));
+    h = fnv(enc.encode(r), h);
+    h = fnv(new Uint8Array([0]), h);
+    h = fnv(lf, h);
+    h = fnv(new Uint8Array([0]), h);
+  }
+  return h.toString(16).padStart(16, "0");
+}
+
+export function sourceHash(root: string): string {
+  const files = [...SOURCE_FILES];
+  walk(join(root, "src"), "src", files);
+  return hashFiles(root, files);
+}
+
+const norm = (p: string) => resolve(p).replace(/\\/g, "/").toLowerCase();
+
+function stamp(): Plugin {
+  const src = norm(join(__dirname, "src")) + "/";
+  const modules = norm(join(__dirname, "node_modules")) + "/";
+  const hashed = SOURCE_FILES.map((f) => norm(join(__dirname, f)));
+  return {
+    name: "source-hash",
+    // After vite's own plugins, so the bundle it judges holds index.html.
+    enforce: "post",
+    generateBundle(_options, bundle) {
+      // Every module read, and every file one pulls in (a stylesheet's @import, what vite
+      // watches), is a hashed source or a locked dependency.
+      for (const id of [...this.getModuleIds(), ...this.getWatchFiles()]) {
+        if (id.startsWith("\0")) continue;
+        const p = norm(id.split("?")[0]);
+        if (!(p.startsWith(src) || p.startsWith(modules) || hashed.includes(p))) {
+          this.error(`the page reads ${id}, outside src/, the hashed files and node_modules/: move it under src/`);
+        }
+      }
+      // The page is the three files the host serves, and nothing else.
+      const names = Object.keys(bundle).sort();
+      if (JSON.stringify(names) !== JSON.stringify(OUTPUT_FILES)) {
+        this.error(`the page must build into ${OUTPUT_FILES.join(", ")} alone, not ${names.join(", ")}`);
+      }
+    },
+    writeBundle() {
+      const dist = join(__dirname, "dist");
+      writeFileSync(join(dist, "source.hash"), sourceHash(__dirname));
+      writeFileSync(join(dist, "output.hash"), hashFiles(dist, OUTPUT_FILES));
+    },
+  };
+}
+
+export default defineConfig({
+  base: "/",
+  plugins: [stamp()],
+  envDir: false,
+  publicDir: false,
+  css: { postcss: {} },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    target: "es2022",
+    modulePreload: false,
+    assetsInlineLimit: 0,
+    rollupOptions: {
+      output: {
+        entryFileNames: "assets/app.js",
+        chunkFileNames: "assets/app-[name].js",
+        assetFileNames: (info) => (info.names?.some((n) => n.endsWith(".css")) ? "assets/app.css" : "assets/[name][extname]"),
+      },
+    },
+  },
+});
+"####;

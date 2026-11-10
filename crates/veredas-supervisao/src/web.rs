@@ -2,9 +2,10 @@
 //! to its sources and to itself.
 //!
 //! The build writes two hashes beside the page, each FNV-1a 64 over a set of files: each file's
-//! path relative to its folder with `/` separators, a NUL, its text with CRLF read as LF, a NUL, in
-//! the order of the paths. `dist/source.hash` is over the page's sources under `web/` (below);
-//! `dist/output.hash` is over the page as written under `web/dist/`. The component test recomputes
+//! path relative to its folder with `/` separators, a NUL, its bytes with every CR LF pair read as
+//! LF, a NUL, in the order of the paths (bytes, so a file that is not text counts byte for byte).
+//! `dist/source.hash` is over the page's sources under `web/` (below); `dist/output.hash` is over
+//! the page as written under `web/dist/`. The component test recomputes
 //! the first from the tree and the second from the page compiled in, so a source edited without a
 //! rebuild, or a page edited by hand, is refused on every machine, Node or not.
 
@@ -36,19 +37,25 @@ pub fn fnv1a(bytes: impl IntoIterator<Item = u8>, mut h: u64) -> u64 {
 
 pub const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 
-/// The hash of named texts, as the build records it: 16 lowercase hex digits. The texts are taken
-/// in the order of their names.
-pub fn hash_texts<'a>(texts: impl IntoIterator<Item = (&'a str, &'a str)>) -> String {
-    let mut texts: Vec<(&str, &str)> = texts.into_iter().collect();
-    texts.sort();
+/// The hash of named byte strings, as the build records it: 16 lowercase hex digits, every CR LF
+/// pair read as LF. They are taken in the order of their names.
+pub fn hash_bytes<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> String {
+    let mut files: Vec<(&str, &[u8])> = files.into_iter().collect();
+    files.sort();
     let mut h = FNV_OFFSET;
-    for (name, text) in texts {
+    for (name, bytes) in files {
         h = fnv1a(name.bytes(), h);
         h = fnv1a([0u8], h);
-        h = fnv1a(text.replace("\r\n", "\n").bytes(), h);
+        let lf = bytes.iter().enumerate().filter(|(i, b)| !(**b == b'\r' && bytes.get(i + 1) == Some(&b'\n'))).map(|(_, b)| *b);
+        h = fnv1a(lf, h);
         h = fnv1a([0u8], h);
     }
     format!("{h:016x}")
+}
+
+/// The same over named texts.
+pub fn hash_texts<'a>(texts: impl IntoIterator<Item = (&'a str, &'a str)>) -> String {
+    hash_bytes(texts.into_iter().map(|(n, t)| (n, t.as_bytes())))
 }
 
 fn walk(dir: &Path, rel: &str, out: &mut Vec<String>) -> io::Result<()> {
@@ -75,12 +82,12 @@ pub fn sources(web: &Path) -> io::Result<Vec<String>> {
 
 /// The hash of the page's sources under `web`, as the build records it in `dist/source.hash`.
 pub fn source_hash(web: &Path) -> io::Result<String> {
-    let mut texts = Vec::new();
+    let mut files = Vec::new();
     for rel in sources(web)? {
         let bytes = std::fs::read(web.join(&rel))?;
-        texts.push((rel, String::from_utf8_lossy(&bytes).into_owned()));
+        files.push((rel, bytes));
     }
-    Ok(hash_texts(texts.iter().map(|(r, t)| (r.as_str(), t.as_str()))))
+    Ok(hash_bytes(files.iter().map(|(r, b)| (r.as_str(), b.as_slice()))))
 }
 
 /// The hash of the page compiled in, as the build records it in `dist/output.hash`.
