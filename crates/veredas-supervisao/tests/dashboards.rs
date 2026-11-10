@@ -1,11 +1,16 @@
 //! C-052: the dashboards. Every panel kind computed by the host from the session's store, exactly:
 //! a log the test writes with stamps it chooses (on the store's axis, aligned on five minutes)
 //! and the bench's fill levels, read back over the dashboard route with the window's right edge
-//! named, so every bucket, breach, segment, median and bin is known before the test runs; then
-//! the page itself, run in a headless browser, read back against the dashboard it fetched.
+//! named, so every bucket, breach, segment, median and bin is known before the test runs (a
+//! downsample's very points, a state held from a day before, two objects on one timeline); then
+//! the page itself, run in a headless browser, read back against the dashboard it fetched, every
+//! mark's extent with it (a capped panel's note among them); and the cells read once each while
+//! rows arrive.
 
 mod common;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use common::browser::Browser;
@@ -125,7 +130,7 @@ target = 12
 
 [[dashboard.panel]]
 kind = "timeline"
-objects = ["line"]
+objects = ["line", "travel"]
 
 [[dashboard.panel]]
 kind = "grid"
@@ -168,6 +173,10 @@ target = 100
 kind = "trend"
 object = "dense"
 limit = { above = 50 }
+
+[[dashboard.panel]]
+kind = "value"
+object = "dense"
 "#;
 
 /// The lines, `(minutes past the base, text)`: sorts with their outlet, travel and rate, and the
@@ -230,15 +239,30 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
         panel(&d, 0)["text"] == json!("99.2") && panel(&d, 7)["cells"][2]["text"] == json!("100")
     }), "{}", get_d());
     let d = get_d();
-    assert_eq!((d["name"].clone(), d["columns"].clone(), d["to"].clone(), d["panels"].as_array().unwrap().len()), (json!("Numbers"), json!(4), json!(to), 15));
+    assert_eq!((d["name"].clone(), d["columns"].clone(), d["to"].clone(), d["panels"].as_array().unwrap().len()), (json!("Numbers"), json!(4), json!(to), 16));
     let heads: Vec<(String, String, i64)> = d["panels"].as_array().unwrap().iter().map(|p| (p["kind"].as_str().unwrap().to_string(), p["title"].as_str().unwrap().to_string(), p["span"].as_i64().unwrap())).collect();
     assert_eq!(heads[..4].iter().map(|h| h.1.as_str()).collect::<Vec<_>>(), ["Read rate", "Travel", "Low rate", "Fresh rate"]);
-    assert_eq!(heads[4..].iter().map(|h| h.0.as_str()).collect::<Vec<_>>(), ["trend", "bars", "timeline", "grid", "levels", "table", "cells", "table", "trend", "value", "trend"]);
+    assert_eq!(heads[4..].iter().map(|h| h.0.as_str()).collect::<Vec<_>>(), ["trend", "bars", "timeline", "grid", "levels", "table", "cells", "table", "trend", "value", "trend", "value"]);
     // A dense trend: its total and breaches from every point of the window, its line downsampled
     // to the trend's points.
     let dn = panel(&d, 14);
     assert_eq!((dn["total"].clone(), dn["points"].as_array().unwrap().len()), (json!(400), veredas_supervisao::panel::TREND_POINTS));
     assert_eq!(dn["breaches"], json!((200..205).map(|i| json!([dense_at(i), 60.0])).collect::<Vec<_>>()), "every breach, the neighbours too");
+    // Which points: the window's own, downsampled as portal downsamples (its ends and its peak kept).
+    let raw: Vec<(i64, f64)> = (0..400).map(|i| (dense_at(i), dense_v(i))).collect();
+    let line = veredas_portal::serve::lttb::downsample(&raw, veredas_supervisao::panel::TREND_POINTS);
+    assert_eq!(dn["points"], json!(line.iter().map(|(t, v)| json!([t, v])).collect::<Vec<_>>()));
+    assert_eq!((dn["points"][0].clone(), dn["points"][299].clone()), (json!([dense_at(0), 10.0]), json!([dense_at(399), 10.0])));
+    assert!(dn["points"].as_array().unwrap().iter().any(|p| p[1] == json!(60.0)), "the peak kept");
+    // A value tile over it: its last half hour (the samples from a minute past the base on) in
+    // sixty points, its ends and its peak among them.
+    let dt = panel(&d, 15);
+    let half: Vec<(i64, f64)> = raw.iter().copied().filter(|(t, _)| *t >= to - 30 * MIN).collect();
+    assert_eq!(half.len(), 340);
+    let spark = veredas_portal::serve::lttb::downsample(&half, veredas_supervisao::panel::SPARK_POINTS);
+    assert_eq!(dt["spark"], json!(spark.iter().map(|(t, v)| json!([t, v])).collect::<Vec<_>>()));
+    assert_eq!((dt["spark"].as_array().unwrap().len(), dt["spark"][0].clone(), dt["spark"][59].clone()), (60, json!([dense_at(60), 10.0]), json!([dense_at(399), 10.0])));
+    assert!(dt["spark"].as_array().unwrap().iter().any(|p| p[1] == json!(60.0)), "the peak kept");
 
     // Value tiles: normal with its target, warn, alarm; each with its sub-line and its sparkline
     // of the last 30 minutes (eight lines of the nine fall in it).
@@ -289,6 +313,11 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
         { "from": at(29.0), "to": to, "state": "normal", "mark": "\u{25CF}", "word": "running" },
     ]));
     assert_eq!((tl["rows"][0]["id"].clone(), tl["rows"][0]["label"].clone(), tl["rows"][0]["now"]["word"].clone()), (json!("line"), json!("Line"), json!("running")));
+    // A second object on the same timeline, its own runs: the travel slow past 15 s.
+    let ok = |a: f64, b: Value| json!({ "from": at(a), "to": b, "state": "normal", "mark": "\u{25CF}", "word": "ok" });
+    let slow = |a: f64, b: Value| json!({ "from": at(a), "to": b, "state": "warn", "mark": "\u{25A0}", "word": "slow" });
+    assert_eq!(tl["rows"][1]["segments"], json!([ok(0.0, json!(at(10.0))), slow(10.0, json!(at(14.0))), ok(14.0, json!(at(20.0))), slow(20.0, json!(at(29.0))), ok(29.0, json!(at(30.5))), slow(30.5, json!(to))]));
+    assert_eq!((tl["rows"][1]["id"].clone(), tl["rows"][1]["now"]["word"].clone()), (json!("travel"), json!("slow")));
 
     // The grid and the levels: the objects as the feed reads them, each level its place in its
     // own range, the ticks placed on it.
@@ -369,6 +398,14 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     assert_eq!((panel(&d, 10)["rows"][0]["key"].clone(), panel(&d, 10)["rows"][0]["n"].clone()), (json!("1"), json!(3)));
     let segs = panel(&d, 6)["rows"][0]["segments"].as_array().unwrap().clone();
     assert_eq!((segs.len(), segs[2]["to"].clone(), segs[2]["word"].clone()), (3, json!(early), json!("fault")), "the last run ends at the edge");
+    // A state set hours before the window still holds at its start, within the day before: the
+    // line running since at(29), a window opening 22 hours later is one running run; one opening
+    // 25 hours later finds nothing within its day, and draws no run.
+    let hours = |h: i64| at(29.0) + h * 60 * MIN + 60 * MIN;
+    let (_, d22) = get(addr, &format!("/s/loop/dashboard/0?to={}", hours(22)));
+    assert_eq!(panel(&d22, 6)["rows"][0]["segments"], json!([{ "from": hours(22) - 60 * MIN, "to": hours(22), "state": "normal", "mark": "\u{25CF}", "word": "running" }]));
+    let (_, d25) = get(addr, &format!("/s/loop/dashboard/0?to={}", hours(25)));
+    assert_eq!((panel(&d25, 6)["rows"][0]["segments"].clone(), panel(&d25, 6)["rows"][1]["segments"].clone()), (json!([]), json!([])), "past the day before, nothing");
 
     // The cells' cap: the newest rows kept, read in pages, said when it bit.
     let live = host.session("loop").unwrap().live();
@@ -415,7 +452,10 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
         std::thread::sleep(Duration::from_millis(200));
     };
     // What it drew, spelled out where the bench's values make it certain.
-    assert_eq!(dash["panels"].as_array().unwrap().len(), 15);
+    assert_eq!(dash["panels"].as_array().unwrap().len(), 16);
+    // The cells panel as the page's own fetch was handed it past its cap: the note drawn.
+    assert!(drawn[10]["right"].as_str().unwrap().ends_with(" · newest 5 of 9 rows"), "{}", drawn[10]["right"]);
+    assert_eq!(drawn[6]["rows"].as_array().unwrap().len(), 2, "two rows on the timeline");
     assert_eq!((drawn[0]["big"].clone(), drawn[0]["box"].clone(), drawn[0]["badge"].clone()), (json!("99.2%"), json!("st-box-normal"), Value::Null));
     assert_eq!((drawn[2]["box"].clone(), drawn[2]["badge"].clone()), (json!("st-box-alarm"), json!("! UNDER 99.5 %")));
     assert_eq!(drawn[7]["cells"], json!([["Outlet 1", "35", "cell st-box-normal"], ["Outlet 2", "85", "cell st-box-near"], ["Outlet 3", "full", "cell st-box-warn"]]));
@@ -426,12 +466,17 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
 }
 
 /// Kept in the page: the dashboard JSON as the page's own fetch receives it, then the view opened.
+/// The cells panel is handed over as a read past its cap (five of its nine rows), so the page's
+/// note on it is drawn; the rest as it came.
 const KEEP_DASHBOARD: &str = r#"(() => {
   const orig = window.fetch;
   window.fetch = async (...a) => {
     const r = await orig(...a);
-    if (String(a[0]).includes("/dashboard/")) r.clone().json().then((j) => { window.__dash = j; });
-    return r;
+    if (!String(a[0]).includes("/dashboard/")) return r;
+    const j = await r.json();
+    for (const p of j.panels) if (p.kind === "cells" && p.data) { p.data.capped = true; p.data.read = 5; }
+    window.__dash = j;
+    return new Response(JSON.stringify(j), { status: r.status, headers: r.headers });
   };
   location.hash = "dashboards/0";
   return true;
@@ -458,18 +503,20 @@ const DRAWN_PANELS: &str = r#"(() => {
       case "trend": {
         const svg = p.querySelector("svg.trend");
         r.line = pts(svg.querySelector("path.line"));
-        r.breaches = [...svg.querySelectorAll("circle.breach")].map((c) => [num(c, "cx"), num(c, "cy")]);
-        r.limit = num(svg.querySelector("line.limit"), "y1");
+        r.breaches = [...svg.querySelectorAll("circle.breach")].map((c) => [num(c, "cx"), num(c, "cy"), num(c, "r")]);
+        const lim = svg.querySelector("line.limit");
+        r.limit = lim ? [num(lim, "x1"), num(lim, "x2"), num(lim, "y1"), num(lim, "y2")] : null;
         r.right = txt(p.querySelector(".panel-bind")); break;
       }
       case "bars": {
         const svg = p.querySelector("svg.bars");
         r.bars = [...svg.querySelectorAll("rect.bar")].map((b) => [num(b, "x"), num(b, "y"), num(b, "width"), num(b, "height"), b.classList.contains("running")]);
-        r.target = num(svg.querySelector("line.limit"), "y1"); r.right = txt(p.querySelector(".panel-bind")); break;
+        const tg = svg.querySelector("line.limit");
+        r.target = tg ? [num(tg, "x1"), num(tg, "x2"), num(tg, "y1"), num(tg, "y2")] : null; r.right = txt(p.querySelector(".panel-bind")); break;
       }
       case "timeline":
         r.rows = [...p.querySelectorAll(".tl-row")].map((x) => [txt(x.querySelector(".tl-label")), txt(x.querySelector(".tl-now")), x.querySelector(".tl-now").className,
-          [...x.querySelectorAll("svg.statebar rect:not(.st-none)")].map((g) => [g.getAttribute("class"), num(g, "x"), num(g, "width")])]); break;
+          [...x.querySelectorAll("svg.statebar rect:not(.st-none)")].map((g) => [g.getAttribute("class"), num(g, "x"), num(g, "width"), num(g, "y"), num(g, "height")])]); break;
       case "grid":
         r.cells = [...p.querySelectorAll(".grid-cells .cell")].map((c) => [txt(c.querySelector(".cell-id")), txt(c.querySelector(".cell-v")), c.className]); break;
       case "levels":
@@ -573,8 +620,9 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                     let px = scale(x["from"].as_f64().unwrap(), x["to"].as_f64().unwrap(), 44.0, 590.0);
                     let py = scale(lo, hi, 178.0, 10.0);
                     r["line"] = json!(if points.len() > 1 { points.iter().map(|(t, v)| json!([px(*t), py(*v)])).collect::<Vec<_>>() } else { Vec::new() });
-                    r["breaches"] = json!(pairs_of(&x["breaches"]).iter().map(|(t, v)| json!([px(*t), py(*v)])).collect::<Vec<_>>());
-                    r["limit"] = json!(limit.map(&py));
+                    // A breach a dot of radius 3; the limit a line across the plot at its value.
+                    r["breaches"] = json!(pairs_of(&x["breaches"]).iter().map(|(t, v)| json!([px(*t), py(*v), 3.0])).collect::<Vec<_>>());
+                    r["limit"] = json!(limit.map(|l| json!([44.0, 590.0, py(l), py(l)])));
                     r["right"] = match limit {
                         None => json!(format!("{} points", x["total"])),
                         Some(_) => {
@@ -600,7 +648,7 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                         let v = b["value"].as_f64().unwrap();
                         json!([44.0 + i as f64 * bw + 2.0, py(v), bw - 4.0, (py(0.0) - py(v)).max(0.0), b["running"]])
                     }).collect::<Vec<_>>());
-                    r["target"] = json!(target.map(&py));
+                    r["target"] = json!(target.map(|t| json!([44.0, 590.0, py(t), py(t)])));
                     r["right"] = if x["target"].is_null() { Value::Null } else { json!(format!("target {}{unit}", num(&x["target"], 2))) };
                 }
                 "timeline" => {
@@ -609,7 +657,7 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                     r["rows"] = json!(x["rows"].as_array().unwrap().iter().map(|row| {
                         let segs: Vec<Value> = row["segments"].as_array().unwrap().iter().filter_map(|g| {
                             let (x0, x1) = (px(g["from"].as_f64().unwrap()).max(0.0), px(g["to"].as_f64().unwrap()).min(400.0));
-                            (x1 > x0).then(|| json!([format!("st-{}", s(&g["state"])), x0, x1 - x0]))
+                            (x1 > x0).then(|| json!([format!("st-{}", s(&g["state"])), x0, x1 - x0, 0.0, 14.0]))
                         }).collect();
                         json!([row["label"], format!("{} {}", s(&row["now"]["mark"]), s(&row["now"]["word"])), format!("tl-now st-text-{}", s(&row["now"]["state"])), segs])
                     }).collect::<Vec<_>>());
@@ -672,6 +720,54 @@ fn close(a: &Value, b: &Value) -> bool {
         (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| close(v, w))),
         _ => a == b,
     }
+}
+
+#[test]
+fn the_cells_read_each_row_once_while_rows_arrive() {
+    // Rows stored between two page reads shift an offset by one: one row read twice, another
+    // missed. Paged by stamp, every row the window held when the read began is read once, however
+    // many arrive at its newest end meanwhile.
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(&dir.path().join("bench"));
+    let mut ex = live_example(&bench, false);
+    ex.project = ex.project.replace("writes_armed = false", "writes_armed = false\nidle_after_ms = 600000");
+    let path = write_example(dir.path(), &ex);
+    let log = dir.path().join("loop/sorts.log");
+    std::fs::write(&log, "").unwrap();
+    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let live = host.session("loop").unwrap().live();
+    assert!(wait(Duration::from_secs(20), || live.health.read().unwrap().get("sorter").is_some_and(|h| h.count == 0)), "the log is attached");
+    let rows = || live.store.query_rows("sorts", &veredas_portal::store::RowsQuery { limit: 1, ..Default::default() }).map(|p| p.total).unwrap_or(0);
+    // Three hundred sorts over the last half hour, a hundred per outlet.
+    let now = store_now();
+    append(&log, &(0..300).map(|i| format!("{} SORT outlet={} travel={} rate=99.0", stamp(now - 30 * MIN + i * 5_000), 1 + i % 3, 10.0 + (i % 7) as f64)).collect::<Vec<_>>());
+    assert!(wait(Duration::from_secs(20), || rows() == 300), "{}", rows());
+    // Then a hundred and fifty sorts arriving at the newest end, ten milliseconds apart, while the
+    // cells are read two rows a page, again and again until the last has arrived.
+    let stop = Arc::new(AtomicBool::new(false));
+    let writer = std::thread::spawn({
+        let (stop, log) = (Arc::clone(&stop), log.clone());
+        move || {
+            for _ in 0..150 {
+                append(&log, &[format!("{} SORT outlet=9 travel=10.0 rate=99.0", stamp(store_now()))]);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            stop.store(true, Ordering::Relaxed);
+        }
+    });
+    let to = store_now() + 10 * MIN;
+    let (mut grew, mut reads) = (0, 0);
+    while !stop.load(Ordering::Relaxed) || reads < 2 {
+        let before = rows();
+        let c = veredas_supervisao::panel::cells(&live, "sorts", "outlet", "travel", 60, 5, 5.0, to, 2, 50_000).unwrap();
+        grew += rows() - before;
+        reads += 1;
+        let ns: Vec<(Value, Value)> = c["rows"].as_array().unwrap().iter().filter(|r| r["key"] != "9").map(|r| (r["key"].clone(), r["n"].clone())).collect();
+        assert_eq!(ns, [(json!("1"), json!(100)), (json!("2"), json!(100)), (json!("3"), json!(100))], "each sort once, read {reads}: {c}");
+    }
+    writer.join().unwrap();
+    assert!(grew > 0, "rows arrived while the cells were read ({reads} reads)");
+    host.stop();
 }
 
 // ---- the computations alone, at their edges (src/panel.rs) ----

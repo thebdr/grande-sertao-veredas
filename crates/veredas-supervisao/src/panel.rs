@@ -286,22 +286,40 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
     let (from, to) = window(minutes, to);
     let mut rows: Vec<Vec<Json>> = Vec::new();
     let mut columns: Vec<String> = Vec::new();
-    let mut total: u64;
+    let mut total: Option<u64> = None;
+    // Paged newest first by stamp: each page reads the rows at or before the last stamp taken,
+    // past those already taken at that stamp. A row stored between two reads (stamped after the
+    // last one taken) never shifts a page, where an offset would read one row twice and miss
+    // another. A table without `index_ms` is paged by offset (the store orders it by `ts`).
+    let mut stamp_at: Option<usize> = None;
+    let (mut bound, mut tied) = (to, 0usize);
     loop {
-        let page = live
-            .store
-            .query_rows(table, &RowsQuery { from_ms: Some(from), to_ms: Some(to), limit: page_rows, offset: rows.len() })
-            .map_err(|e| e.to_string())?;
+        let q = match stamp_at {
+            Some(_) => RowsQuery { from_ms: Some(from), to_ms: Some(bound), limit: page_rows, offset: tied },
+            None => RowsQuery { from_ms: Some(from), to_ms: Some(to), limit: page_rows, offset: rows.len() },
+        };
+        let page = live.store.query_rows(table, &q).map_err(|e| e.to_string())?;
         if columns.is_empty() {
             columns = page.columns.iter().map(|c| c.name.clone()).collect();
+            stamp_at = columns.iter().position(|c| c == "index_ms");
         }
-        total = page.total;
+        // The window as it stood at the first read.
+        total.get_or_insert(page.total);
         let n = page.rows.len();
+        if let Some(ti) = stamp_at {
+            for r in &page.rows {
+                match r.get(ti).and_then(Json::as_i64) {
+                    Some(t) if t != bound => (bound, tied) = (t, 1),
+                    _ => tied += 1,
+                }
+            }
+        }
         rows.extend(page.rows);
-        if n < page_rows || rows.len() >= cap || rows.len() as u64 >= total {
+        if n < page_rows || rows.len() >= cap {
             break;
         }
     }
+    let total = total.unwrap_or(0);
     rows.truncate(cap);
     let find = |name: &str| columns.iter().position(|c| c == name).ok_or_else(|| format!("`{table}` has no column `{name}` (its columns: {})", columns.join(", ")));
     let (ki, vi) = (find(key)?, find(value)?);
