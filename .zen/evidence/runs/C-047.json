@@ -10,15 +10,15 @@
     "component"
   ],
   "exitCode": 0,
-  "outputSha": "b702c966c71e23e0b65f4d570664ae5aecd9b157a51bad25db6c237027233f52",
-  "outputTail": "\nrunning 4 tests\ntest the_page_compiled_in_is_built_from_the_sources_in_the_tree ... ok\ntest supervisao_is_one_library_and_one_executable_named_for_it ... ok\ntest its_own_dependencies_are_core_portal_and_the_servers_crates ... ok\ntest no_file_of_supervisao_names_a_vendor_a_product_or_a_customer ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.29s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.04s\n     Running tests\\component.rs (target\\debug\\deps\\component-8f28ba9a82947dca.exe)",
-  "ranAt": "2026-11-09T21:31:02.922Z",
-  "headCommit": "ded70a0d44b2dbb0b4b801d9058a2c6a784bf347",
+  "outputSha": "22f28d3b3c462b230b9bab54ba8a325d54f78a9fa4cf52edf48ed1dac6b50bbf",
+  "outputTail": "\nrunning 5 tests\ntest its_own_dependencies_are_core_portal_and_the_servers_crates ... ok\ntest supervisao_is_one_library_and_one_executable_named_for_it ... ok\ntest no_file_of_supervisao_names_a_vendor_a_product_or_a_customer ... ok\ntest the_page_compiled_in_is_built_from_the_sources_in_the_tree ... ok\ntest the_plant_s_stack_reaches_supervisao_through_portal_alone ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.53s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.23s\n     Running tests\\component.rs (target\\debug\\deps\\component-2cc394195866d05d.exe)",
+  "ranAt": "2026-11-10T00:49:01.339Z",
+  "headCommit": "9a2c2baa43984a772130edc80d682e69788307a3",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/component.rs",
       "file": "crates/veredas-supervisao/tests/component.rs",
-      "fileSha": "c9654919038bcb654f27042ff665950e7d5544e1e9970ca3026fe7a7c9af1dff"
+      "fileSha": "d99566e1168f1596c5f896f4edaa27b70588cdc651181c69e7bd3bc309d2b82e"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",

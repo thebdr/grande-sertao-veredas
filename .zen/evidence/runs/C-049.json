@@ -10,15 +10,15 @@
     "host"
   ],
   "exitCode": 0,
-  "outputSha": "3f88ab079f36969c08615f03db67e6ff857081473e79dc82023727ee8637ef3a",
-  "outputTail": "\nrunning 3 tests\ntest a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first ... ok\ntest the_executable_serves_a_file_until_stdin_closes ... ok\ntest two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.57s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.50s\n     Running tests\\host.rs (target\\debug\\deps\\host-b9ee239b6e5560dd.exe)",
-  "ranAt": "2026-11-09T21:31:30.057Z",
-  "headCommit": "ded70a0d44b2dbb0b4b801d9058a2c6a784bf347",
+  "outputSha": "36c252fe03a1e4799960df2bc969fe683af2d40dd57b038af35a44677e79cebd",
+  "outputTail": "\nrunning 3 tests\ntest a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first ... ok\ntest the_executable_serves_a_file_until_stdin_closes ... ok\ntest two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.65s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.18s\n     Running tests\\host.rs (target\\debug\\deps\\host-603cb1cc1a2df926.exe)",
+  "ranAt": "2026-11-10T00:49:18.539Z",
+  "headCommit": "9a2c2baa43984a772130edc80d682e69788307a3",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/host.rs",
       "file": "crates/veredas-supervisao/tests/host.rs",
-      "fileSha": "84be21b88cf2df02a3ffe98c2603c4a0466e7f08041772d70ab1650c6f1abafd"
+      "fileSha": "40343ad947e77bd35c01b43b84076e4a2d47def432b8fbed9f5788ff3dd7f0e5"
     }
   ]
 }

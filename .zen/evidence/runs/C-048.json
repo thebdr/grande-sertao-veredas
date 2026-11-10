@@ -10,15 +10,15 @@
     "files"
   ],
   "exitCode": 0,
-  "outputSha": "9bfbdaac4f78cc7134c1447f7ab923d1cd7bf4f6008dd3a702b7549f7398f4e4",
-  "outputTail": "\nrunning 5 tests\ntest the_worked_example_loads_as_the_reference_states_it ... ok\ntest a_supervisao_file_refuses_what_it_cannot_serve_by_its_place ... ok\ntest a_binding_is_checked_against_its_project_and_its_layout ... ok\ntest the_executable_checks_the_example_and_prints_its_plan ... ok\ntest a_binding_refuses_what_it_cannot_light_up_by_its_place ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.57s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.80s\n     Running tests\\files.rs (target\\debug\\deps\\files-b2132fa0896811d3.exe)",
-  "ranAt": "2026-11-09T21:31:17.664Z",
-  "headCommit": "ded70a0d44b2dbb0b4b801d9058a2c6a784bf347",
+  "outputSha": "9e1e742a940cfa7a72cb5e1a4b35a91f96e47dfaa7641c0e8b0f00a54eb1038e",
+  "outputTail": "running 9 tests\ntest a_layout_is_an_svg_document_with_no_script ... ok\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_worked_example_loads_as_the_reference_states_it ... ok\ntest the_executable_checks_the_example_and_prints_its_plan ... ok\ntest a_supervisao_file_refuses_what_it_cannot_serve_by_its_place ... ok\ntest a_binding_is_checked_against_its_project_and_its_layout ... ok\ntest every_key_the_reference_lists_is_the_reader_s ... ok\ntest the_rest_of_the_refusals_name_their_place ... ok\ntest a_binding_refuses_what_it_cannot_light_up_by_its_place ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.88s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.45s\n     Running tests\\files.rs (target\\debug\\deps\\files-a460a05fec6c1907.exe)",
+  "ranAt": "2026-11-10T00:49:12.047Z",
+  "headCommit": "9a2c2baa43984a772130edc80d682e69788307a3",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/files.rs",
       "file": "crates/veredas-supervisao/tests/files.rs",
-      "fileSha": "bc0e017062b990163da56686253b78e3f1267f910f9a37634b378bfb0272bf29"
+      "fileSha": "2bae67f5423547d7ce2636567bb270da6751a4ee30bd7455cf5641a277fd52dc"
     }
   ]
 }
