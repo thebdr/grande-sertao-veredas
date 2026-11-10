@@ -1024,16 +1024,21 @@ async fn service_loop(
                     }
                     last_seen[i] = current;
                 }
-                // Steps are applied in the order scheduled; a step due now lands this tick, so
-                // the watched value it sets is what the next tick compares against.
+                // Every step due now lands this tick, in the order of its due time (steps due at
+                // one instant in the order scheduled), so the step with the later delay is the one
+                // that stays; the watched value it sets is what the next tick compares against.
+                let mut landing: Vec<(tokio::time::Instant, NodeId, Variant)> = Vec::new();
                 let mut i = 0;
                 while i < pending.len() {
                     if pending[i].0 <= now {
-                        let (_, id, value) = pending.remove(i);
-                        set(&id, value);
+                        landing.push(pending.remove(i));
                     } else {
                         i += 1;
                     }
+                }
+                landing.sort_by_key(|(at, _, _)| *at);
+                for (_, id, value) in landing {
+                    set(&id, value);
                 }
                 for (i, tag) in cfg.tags.iter().enumerate() {
                     let (Some(r), Some(at)) = (&tag.randomize, due[i]) else { continue };

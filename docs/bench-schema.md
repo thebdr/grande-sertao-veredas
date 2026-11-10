@@ -160,7 +160,8 @@ starts again at `low`, one inside it moves the ramp on from there.
   change fires it. Either way only what a client wrote or the plant side set is a change, never a
   draw, a ramp's step or a reaction's step; a float holding NaN is no change from NaN.
 - `tag` (`on_write`): the tag the steps set.
-- `then` (required): the steps, as inline tables, each at its delay from the moment of firing.
+- `then` (required): the steps, as inline tables, each at its delay from the moment of firing
+  (steps falling due in one tick land in the order of their delays).
 
 **A step** (an entry of `then`).
 - `after_ms` (`0`): the delay.

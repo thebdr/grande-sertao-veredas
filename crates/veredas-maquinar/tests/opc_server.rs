@@ -296,6 +296,7 @@ async fn a_reaction_answers_a_write_with_a_timed_sequence() {
         tag("trigger", TagType::Int, Access::ReadWrite, "0"),
         tag("echo", TagType::Text, Access::ReadWrite, ""),
         tag("mirror", TagType::Text, Access::Read, ""),
+        tag("done", TagType::Int, Access::Read, "0"),
     ]);
     cfg.reactions = vec![
         Reaction {
@@ -306,6 +307,8 @@ async fn a_reaction_answers_a_write_with_a_timed_sequence() {
         },
         // Any change of `echo` is mirrored into another tag.
         Reaction { on_write: "echo".into(), equals: None, tag: Some("mirror".into()), then: vec![Step { after_ms: 0, set: "changed".into() }] },
+        // A watcher waiting on the handshake's own delayed 1: a step, never a change.
+        Reaction { on_write: "trigger".into(), equals: Some("1".into()), tag: Some("done".into()), then: vec![Step { after_ms: 0, set: "1".into() }] },
     ];
     let server = start(&cfg).expect("starts");
     let (session, _loop) = anonymous(&server.endpoint_url).await;
@@ -331,6 +334,7 @@ async fn a_reaction_answers_a_write_with_a_timed_sequence() {
     // The client sees the sequence too, and the reaction fires again on the next 100.
     let (status, got) = read(&session, &trigger).await;
     assert_eq!((status, got), (StatusCode::Good, Some(Variant::Int32(1))));
+    assert_eq!(server.get("done"), Some(Variant::Int32(0)), "the delayed 1 is a step, no change");
     assert_eq!(write(&session, &trigger, Variant::Int32(100)).await, StatusCode::Good);
     until("1 again", Duration::from_secs(2), || server.get("trigger") == Some(Variant::Int32(1)));
     assert_eq!(server.status().reactions_fired, 2);
@@ -376,7 +380,8 @@ async fn a_draw_or_another_reaction_s_step_is_not_a_change() {
     cfg.reactions = vec![
         Reaction { on_write: "drawn".into(), equals: None, tag: Some("d_out".into()), then: vec![Step { after_ms: 0, set: "1".into() }] },
         Reaction { on_write: "coin".into(), equals: Some("true".into()), tag: Some("heads".into()), then: vec![Step { after_ms: 0, set: "1".into() }] },
-        Reaction { on_write: "a".into(), equals: Some("1".into()), tag: Some("b".into()), then: vec![Step { after_ms: 0, set: "9".into() }] },
+        // The chain's link lands 100 ms after its firing: a delayed step is no change either.
+        Reaction { on_write: "a".into(), equals: Some("1".into()), tag: Some("b".into()), then: vec![Step { after_ms: 100, set: "9".into() }] },
         Reaction { on_write: "b".into(), equals: None, tag: Some("c".into()), then: vec![Step { after_ms: 0, set: "1".into() }] },
         Reaction { on_write: "b".into(), equals: Some("9".into()), tag: Some("nine".into()), then: vec![Step { after_ms: 0, set: "1".into() }] },
     ];
@@ -400,6 +405,33 @@ async fn a_draw_or_another_reaction_s_step_is_not_a_change() {
     until("nine", Duration::from_secs(2), || server.get("nine") == Some(Variant::Int32(1)));
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(server.status().reactions_fired, 4);
+    server.stop();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn steps_due_in_one_tick_land_in_the_order_of_their_delays() {
+    // A reaction's steps listed against their delays: 15 ms then 5 ms both fall due within one
+    // 20 ms tick, and 300 ms then 200 ms both fall due over a stall. Each lands at its delay, so
+    // the later delay's value is the one that stays.
+    let mut cfg = config(vec![
+        tag("go", TagType::Int, Access::ReadWrite, "0"),
+        tag("t", TagType::Int, Access::Read, "0"),
+        tag("u", TagType::Int, Access::Read, "0"),
+    ]);
+    cfg.reactions = vec![
+        Reaction { on_write: "go".into(), equals: Some("1".into()), tag: Some("t".into()), then: vec![Step { after_ms: 15, set: "1".into() }, Step { after_ms: 5, set: "2".into() }] },
+        Reaction { on_write: "go".into(), equals: Some("2".into()), tag: Some("u".into()), then: vec![Step { after_ms: 300, set: "1".into() }, Step { after_ms: 200, set: "2".into() }] },
+    ];
+    let server = start(&cfg).expect("starts");
+    server.set("go", 1);
+    until("the steps", Duration::from_secs(2), || server.status().reactions_fired == 1);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(server.get("t"), Some(Variant::Int32(1)), "the 15 ms step after the 5 ms one");
+    server.set("go", 2);
+    until("the second", Duration::from_secs(2), || server.status().reactions_fired == 2);
+    server.stall(Duration::from_millis(600));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(server.get("u"), Some(Variant::Int32(1)), "over a stall too, the 300 ms step after the 200 ms one");
     server.stop();
 }
 
