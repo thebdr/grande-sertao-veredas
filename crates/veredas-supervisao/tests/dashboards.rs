@@ -138,6 +138,11 @@ spread = 5
 kind = "table"
 table = "outlets"
 columns = [ { name = "nothing" } ]
+
+[[dashboard.panel]]
+kind = "trend"
+object = "travel"
+limit = { above = 15 }
 "#;
 
 /// The lines, `(minutes past the base, text)`: sorts with their outlet, travel and rate, and the
@@ -193,10 +198,10 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
         panel(&d, 0)["text"] == json!("99.2") && panel(&d, 7)["cells"][2]["text"] == json!("100")
     }), "{}", get_d());
     let d = get_d();
-    assert_eq!((d["name"].clone(), d["columns"].clone(), d["to"].clone(), d["panels"].as_array().unwrap().len()), (json!("Numbers"), json!(4), json!(to), 12));
+    assert_eq!((d["name"].clone(), d["columns"].clone(), d["to"].clone(), d["panels"].as_array().unwrap().len()), (json!("Numbers"), json!(4), json!(to), 13));
     let heads: Vec<(String, String, i64)> = d["panels"].as_array().unwrap().iter().map(|p| (p["kind"].as_str().unwrap().to_string(), p["title"].as_str().unwrap().to_string(), p["span"].as_i64().unwrap())).collect();
     assert_eq!(heads[..4].iter().map(|h| h.1.as_str()).collect::<Vec<_>>(), ["Read rate", "Travel", "Low rate", "Fresh rate"]);
-    assert_eq!(heads[4..].iter().map(|h| h.0.as_str()).collect::<Vec<_>>(), ["trend", "bars", "timeline", "grid", "levels", "table", "cells", "table"]);
+    assert_eq!(heads[4..].iter().map(|h| h.0.as_str()).collect::<Vec<_>>(), ["trend", "bars", "timeline", "grid", "levels", "table", "cells", "table", "trend"]);
 
     // Value tiles: normal with its target, warn, alarm; each with its sub-line and its sparkline
     // of the last 30 minutes (eight lines of the nine fall in it).
@@ -285,6 +290,10 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     // A panel that cannot be computed says why in its place; the others stand.
     assert_eq!(d["panels"][11]["error"], json!("`outlets` has no column `nothing` (its columns: outlet, sorted, travel)"));
     assert!(d["panels"][11]["data"].is_null());
+    // A limit above: a breach is a point past it, an equal one is not.
+    let up = panel(&d, 12);
+    assert_eq!((up["limit"].clone(), up["unit"].clone(), up["total"].clone()), (json!({ "above": 15.0 }), json!("s"), json!(9)));
+    assert_eq!(up["breaches"], json!([[at(10.0), 20.0], [at(20.0), 16.0], [at(30.5), 21.0]]));
 
     // The fourth state: no line for longer than its bound, the tile stale with its last value
     // and how long ago it came.
