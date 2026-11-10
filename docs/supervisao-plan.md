@@ -136,11 +136,18 @@ dashboard), and its `docs/supervisao-plan.md`.
 ## The web interface
 - `web/` holds the TypeScript sources, `index.html`, `package.json`, the vite and TypeScript
   configuration, and `dist/`, the built bundle, committed. The build writes fixed names
-  (`dist/index.html`, `dist/assets/app.js`, `dist/assets/app.css`) and `dist/source.hash`, a hash
-  of every source the bundle is built from (line endings normalised); the crate compiles the three
-  files in with `include_str!`, so no embedding crate and no build script is needed.
-- The component test recomputes the hash from the sources in the tree and refuses a `dist/` built
-  from other sources: an edit to `web/src` without a rebuild is red on every machine, Node or not.
+  (`dist/index.html`, `dist/assets/app.js`, `dist/assets/app.css`) and two hashes (line endings
+  normalised): `dist/source.hash` over every source the bundle is built from, `dist/output.hash`
+  over the three files as written; the crate compiles the three files in with `include_str!`, so
+  no embedding crate and no build script is needed. The hashes are written once the bundle is on
+  disk, never by a failed build.
+- The build reads nothing beside its sources (no `.env`, no `public/`, no PostCSS file; a module
+  outside `src/`, `index.html` and `node_modules/` refused) and emits the three files alone
+  (a second chunk or an asset refused): `vite.config.ts` holds the guards.
+- The component test recomputes both hashes, the first from the sources in the tree, the second
+  from the page compiled in, and holds every file under the crate to Rust, a hashed source or the
+  page: an edit to `web/src` without a rebuild, a page edited by hand, or a new file the build
+  could read is red on every machine, Node or not.
 - Node and npm are needed only to change the page (`npm ci`, `npm run build` in `web/`); the crate,
   its tests and CI never run them. `web/node_modules/` is never committed.
 - The charts are SVG drawn by the page's own code: the objects are small and specific (dashed

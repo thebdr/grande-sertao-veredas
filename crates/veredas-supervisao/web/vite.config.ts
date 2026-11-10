@@ -1,12 +1,18 @@
 // Supervisão's page: built into dist/ with fixed names (the crate compiles them in with
-// include_str!), and dist/source.hash recording the sources it was built from, the hash the
-// crate's component test recomputes (src/web.rs states the algorithm: FNV-1a 64 over each
-// source's relative path, a NUL, its text with CRLF read as LF, a NUL, in path order).
+// include_str!), with two hashes beside them, both recomputed by the crate's component test
+// (src/web.rs states the algorithm: FNV-1a 64 over each file's relative path, a NUL, its text with
+// CRLF read as LF, a NUL, in path order):
+//   dist/source.hash  the sources the page was built from (SOURCE_FILES and everything under src/)
+//   dist/output.hash  the page as written (OUTPUT_FILES)
+// The build reads nothing else: no .env, no public/ folder, no PostCSS file, no module outside
+// src/, index.html and node_modules/ (refused), and it emits the three files alone (refused
+// otherwise). The hashes are written once the bundle is on disk: a failed build never writes them.
 import { defineConfig, type Plugin } from "vite";
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const SOURCE_FILES = ["index.html", "package.json", "package-lock.json", "tsconfig.json", "vite.config.ts"];
+const OUTPUT_FILES = ["assets/app.css", "assets/app.js", "index.html"];
 
 function walk(dir: string, rel: string, out: string[]) {
   for (const name of readdirSync(dir)) {
@@ -25,16 +31,14 @@ function fnv(bytes: Uint8Array, h: bigint): bigint {
   return h;
 }
 
-export function sourceHash(root: string): string {
-  const files = [...SOURCE_FILES];
-  walk(join(root, "src"), "src", files);
-  // Sorted as Rust sorts strings: by bytes.
-  files.sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+// The hash of the files under root named by rel, sorted as Rust sorts strings: by bytes.
+function hashFiles(root: string, rel: string[]): string {
+  const files = [...rel].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
   const enc = new TextEncoder();
   let h = 0xcbf29ce484222325n;
-  for (const rel of files) {
-    const text = readFileSync(join(root, rel), "utf8").replace(/\r\n/g, "\n");
-    h = fnv(enc.encode(rel), h);
+  for (const r of files) {
+    const text = readFileSync(join(root, r), "utf8").replace(/\r\n/g, "\n");
+    h = fnv(enc.encode(r), h);
     h = fnv(new Uint8Array([0]), h);
     h = fnv(enc.encode(text), h);
     h = fnv(new Uint8Array([0]), h);
@@ -42,11 +46,41 @@ export function sourceHash(root: string): string {
   return h.toString(16).padStart(16, "0");
 }
 
+export function sourceHash(root: string): string {
+  const files = [...SOURCE_FILES];
+  walk(join(root, "src"), "src", files);
+  return hashFiles(root, files);
+}
+
+const norm = (p: string) => resolve(p).replace(/\\/g, "/").toLowerCase();
+
 function stamp(): Plugin {
+  const src = norm(join(__dirname, "src")) + "/";
+  const modules = norm(join(__dirname, "node_modules")) + "/";
+  const index = norm(join(__dirname, "index.html"));
   return {
     name: "source-hash",
-    closeBundle() {
-      writeFileSync(join(__dirname, "dist", "source.hash"), sourceHash(__dirname));
+    // After vite's own plugins, so the bundle it judges holds index.html.
+    enforce: "post",
+    generateBundle(_options, bundle) {
+      // Every module read is a hashed source or a locked dependency.
+      for (const id of this.getModuleIds()) {
+        if (id.startsWith("\0")) continue;
+        const p = norm(id.split("?")[0]);
+        if (!(p.startsWith(src) || p.startsWith(modules) || p === index)) {
+          this.error(`the page reads ${id}, outside src/, index.html and node_modules/: move it under src/`);
+        }
+      }
+      // The page is the three files the host serves, and nothing else.
+      const names = Object.keys(bundle).sort();
+      if (JSON.stringify(names) !== JSON.stringify(OUTPUT_FILES)) {
+        this.error(`the page must build into ${OUTPUT_FILES.join(", ")} alone, not ${names.join(", ")}`);
+      }
+    },
+    writeBundle() {
+      const dist = join(__dirname, "dist");
+      writeFileSync(join(dist, "source.hash"), sourceHash(__dirname));
+      writeFileSync(join(dist, "output.hash"), hashFiles(dist, OUTPUT_FILES));
     },
   };
 }
@@ -54,6 +88,9 @@ function stamp(): Plugin {
 export default defineConfig({
   base: "/",
   plugins: [stamp()],
+  envDir: false,
+  publicDir: false,
+  css: { postcss: {} },
   build: {
     outDir: "dist",
     emptyOutDir: true,

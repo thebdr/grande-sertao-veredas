@@ -1,7 +1,9 @@
 //! C-047: the component. A library and one executable named for it, no build script; its own
 //! dependencies core, portal and the server's crates, no plant stack of its own; no device, vendor,
-//! product or customer named in any file git holds or could hold under the crate, the built page
-//! included; the page compiled in from a `dist/` built from the sources in the tree.
+//! product or customer named in any file git holds or could hold under the crate, in its text or
+//! its name, the built page included; the page compiled in from a `dist/` built from the sources in
+//! the tree: every file under the crate is Rust, a hashed source of the page or the page itself, the
+//! page is the three files the host serves, and both of the build's hashes are recomputed.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -107,8 +109,9 @@ fn rev(s: &str) -> String {
 }
 
 /// Where a text names a device, vendor, product or customer the suite keeps out of its code, or
-/// cites a specification: the whole text lowercased and stripped to letters and digits, so no
-/// separator, case or line break hides a name; each hit names the line where it starts. The
+/// cites a specification: the whole text lowercased, its accented Latin letters read as their base
+/// letters (precomposed or decomposed alike) and stripped to letters and digits, so no separator,
+/// case, accent or line break hides a name; each hit names the line where it starts. The
 /// names are written backwards here, so no line of this file spells one: portal's (the protocol
 /// core's telegram layer came from, its terms, its document folder) and those of Veredas 1's
 /// supervision app (the exports it parsed, their tables, the plants it was fitted to).
@@ -120,7 +123,7 @@ fn mentions(text: &str) -> Vec<String> {
         "03103morfvsc", "rotarugifnoctrams", "hcramretni", "goldaj", "noitisopfin", "thgirenilllec", "elgnagnidaol",
         "txenhtiwelgna", "ditlebtxen", "ditlebdecafretni", "rotacolmeti", "lrtcedalb", "liocrotaludom",
         "sretemarapenil", "stnenopmocenil", "noitavitcasllec", "ecafretnimetsys", "lrtcgnigrem", "smarapbd", "gaidbd",
-        "puorgsys", "03103koobkrow", "sgatcpopmud", "latemodrodatnacne", "oivanodoãtipac",
+        "puorgsys", "03103koobkrow", "sgatcpopmud", "latemodrodatnacne", "oivanodoatipac",
     ]
     .iter()
     .map(|b| rev(b))
@@ -128,7 +131,7 @@ fn mentions(text: &str) -> Vec<String> {
     let mut flat = Vec::new();
     let mut line_of = Vec::new();
     for (n, line) in text.lines().enumerate() {
-        for c in line.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase) {
+        for c in line.chars().flat_map(char::to_lowercase).map(base_letter).filter(|c| c.is_alphanumeric() && !('\u{300}'..='\u{36f}').contains(c)) {
             flat.push(c);
             line_of.push(n + 1);
         }
@@ -151,6 +154,21 @@ fn mentions(text: &str) -> Vec<String> {
     hits
 }
 
+/// A lowercase Latin-1 letter with an accent read as its base letter; any other character as is.
+fn base_letter(c: char) -> char {
+    match c {
+        'à'..='å' => 'a',
+        'ç' => 'c',
+        'è'..='ë' => 'e',
+        'ì'..='ï' => 'i',
+        'ñ' => 'n',
+        'ò'..='ö' | 'ø' => 'o',
+        'ù'..='ü' => 'u',
+        'ý' | 'ÿ' => 'y',
+        c => c,
+    }
+}
+
 #[test]
 fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
     let files = crate_files();
@@ -164,6 +182,10 @@ fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
         .flat_map(|f| mentions(&String::from_utf8_lossy(&std::fs::read(f).unwrap())).into_iter().map(move |l| format!("{}: {l}", f.display())))
         .collect();
     assert_eq!(found, Vec::<String>::new());
+    // Nor does a file's name, read from the crate's folder down.
+    let named: Vec<String> = rel.iter().flat_map(|r| mentions(r).into_iter().map(move |l| format!("{r}: {l}"))).collect();
+    assert_eq!(named, Vec::<String>::new());
+    assert_eq!(mentions(&format!("tests/data/{}-export.txt", rev("tlebineg"))).len(), 1, "a name in a path is a name");
     // The reader sees every spelling, in any case, across line breaks; each sample holds one.
     let samples = [
         format!("// the {} catalog", rev("tleBineG")),
@@ -173,6 +195,11 @@ fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
         format!("// a plant of {}", rev("éhcramretnI")),
         format!("<!-- {} -->", rev("YTITNAUQ_ROTACOLMETI")),
         format!("// spec {}3.2", char::from_u32(0xA7).unwrap()),
+        // The accented term, precomposed, capitalised, unaccented and decomposed.
+        format!("// {}", rev("oivan od oãtipac")),
+        format!("// {}", rev("OIVAN OD OÃTIPAC")),
+        format!("// {}", rev("oivaN od oatipaC")),
+        format!("// {}", rev("oivan od o\u{303}atipac")),
     ];
     for s in &samples {
         assert_eq!(mentions(s).len(), 1, "{s}: {:?}", mentions(s));
@@ -192,9 +219,41 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
         assert!(sources.iter().any(|x| x == s), "{s} in {sources:?}");
     }
     assert!(sources.iter().all(|s| !s.starts_with("dist/") && !s.contains("node_modules")));
-    // The bundle's names are the ones the host serves.
+    // The page compiled in is the page the build wrote: a hand edit is refused.
+    let written = web::BUILT_AS.trim();
+    assert_eq!(written.len(), 16, "{written}");
+    assert_eq!(web::output_hash(), written, "web/dist was edited after its build: run `npm run build` in web/");
+    let edited = format!("{};", web::APP_JS);
+    assert_ne!(web::hash_texts([("assets/app.css", web::APP_CSS), ("assets/app.js", edited.as_str()), ("index.html", web::INDEX_HTML)]), written, "one byte of the page is a change");
+
+    // Every file git holds or could hold under the crate is Rust, a hashed source of the page or
+    // the page itself; so a new input the build could read either joins the hashed set or is
+    // refused here.
+    let rel: Vec<String> = crate_files().iter().map(|f| f.strip_prefix(crate_dir()).unwrap().to_string_lossy().replace('\\', "/")).collect();
+    let dist: BTreeSet<&str> = rel.iter().filter_map(|r| r.strip_prefix("web/dist/")).collect();
+    let page: BTreeSet<&str> = web::OUTPUT_FILES.into_iter().chain(["source.hash", "output.hash"]).collect();
+    assert_eq!(dist, page, "the page is the three files the host serves and the build's two hashes");
+    let stray: Vec<&String> = rel
+        .iter()
+        .filter(|r| {
+            let rust = r.as_str() == "Cargo.toml" || ((r.starts_with("src/") || r.starts_with("tests/")) && r.ends_with(".rs"));
+            let source = r.strip_prefix("web/").is_some_and(|w| sources.iter().any(|s| s == w));
+            !(rust || source || r.starts_with("web/dist/"))
+        })
+        .collect();
+    assert_eq!(stray, Vec::<&String>::new(), "a file outside the crate's code, the page's hashed sources and the page");
+    // The build reads nothing beside them and emits nothing beside the page: the guards stand in
+    // its config (their refusals are C-047's evidence), and the hashes are written once the bundle
+    // is on disk.
+    let config = std::fs::read_to_string(webdir.join("vite.config.ts")).unwrap();
+    for guard in ["envDir: false", "publicDir: false", "css: { postcss: {} }", "enforce: \"post\"", "this.getModuleIds()", "writeBundle()"] {
+        assert!(config.contains(guard), "vite.config.ts lacks `{guard}`");
+    }
+    assert!(!config.contains("closeBundle"), "the hashes are written after a written bundle alone");
+    // The bundle's names are the ones the host serves, and it loads no other file.
     assert!(web::INDEX_HTML.contains("src=\"/assets/app.js\"") && web::INDEX_HTML.contains("href=\"/assets/app.css\""), "{}", web::INDEX_HTML);
     assert!(!web::APP_JS.is_empty() && !web::APP_CSS.is_empty());
+    assert!(!web::APP_JS.contains("import(") && !web::APP_JS.contains("import.meta.url"), "the bundle loads no other file");
     // The hash sees one byte of any source change, and not a line ending.
     let copy = tempfile::tempdir().unwrap();
     copy_tree(&webdir, copy.path(), &sources);
