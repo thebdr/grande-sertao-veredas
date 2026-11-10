@@ -3,14 +3,18 @@
 //! page itself, run in a headless browser against the same session, draws it: every bound
 //! element's state as a class with its mark and word beside it (a marker's below it, moving with
 //! it, one per key of a keyed marker), every level's fill to its height inside its element, every
-//! marker at its place along its path (the point computed here from the drawing's own geometry),
-//! all of it visible and placed on screen where its element stands, moved and grouped elements
-//! too, a level bound to a group filling its box, every fill and marker hit where it is drawn, a
-//! key no longer moving dropped with its tag; the objects not normal in the attention list in order of weight, alarm to stale; the
-//! headline; a selected object's value (a key's own for a keyed marker), sparkline (its own series
-//! over its half hour) and offered write; all read back from the page's document against the feed.
-//! Veredas' green accent marks the selection and no state, after every change; no magenta
-//! anywhere in the bundle.
+//! marker at its place along its path (the point computed here from the drawing's own geometry and
+//! carried to the screen through the path's own transforms), all of it visible and placed on
+//! screen where its element stands, moved and grouped elements and a moved path too, each label
+//! shown just over its element, a level bound to a group filling its box, every fill and marker
+//! hit where it is drawn, a key no longer moving dropped with its tag; the objects not normal in
+//! the attention list in order of weight, alarm to stale, and an object leaving it once normal;
+//! the headline, live; a selected object, chosen by a pointer at a point, alone in carrying the
+//! selection, with its value (a key's own for a keyed marker), sparkline (its own series over its
+//! half hour) and offered write; all read back from the page's document against the feed.
+//! Veredas' green accent marks the selection and no state, in the drawing, the headline, the
+//! attention list or a badge, nor any green of its hue, after every change; no magenta anywhere in
+//! the bundle.
 
 mod common;
 
@@ -46,7 +50,8 @@ fn on_loop(f: f64) -> (f64, f64) {
 
 /// What the page drew for every bound element and every keyed marker's clone, read from its
 /// document: classes, texts and transforms, the screen box of each element, its fill, tag and
-/// label, and whether each is shown (displayed, visible, not transparent).
+/// label, whether each is shown (displayed, visible, not transparent) and selected; and, as
+/// `__loop`, the loop's own matrix to the screen.
 const DRAWN: &str = r#"(() => {
   const st = (el) => el ? ([...el.classList].find((c) => c.startsWith("sv-state-")) || "") : null;
   const rect = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; };
@@ -72,16 +77,19 @@ const DRAWN: &str = r#"(() => {
     const label = document.querySelector(`.sv-overlay .sv-label[data-for="${id}"]`);
     const fill = document.querySelector(`.sv-fill[data-for="${id}"]`);
     out[id] = {
-      state: st(el), hidden: el.classList.contains("sv-hidden"), transform: el.getAttribute("transform"), rect: rect(el), shown: shown(el), hit: marker ? hit(el) : null,
+      state: st(el), hidden: el.classList.contains("sv-hidden"), transform: el.getAttribute("transform"), rect: rect(el), shown: shown(el), hit: marker ? hit(el) : null, selected: el.classList.contains("sv-selected"),
       tag_keys: [...document.querySelectorAll(`.sv-overlay .sv-tag[data-for="${id}"][data-key]`)].map((t) => t.dataset.key).sort(),
-      tag: tag ? tag.textContent : null, tag_state: st(tag), tag_rect: rect(tag), tag_shown: shown(tag), label_rect: rect(label),
+      tag: tag ? tag.textContent : null, tag_state: st(tag), tag_rect: rect(tag), tag_shown: shown(tag), label_rect: rect(label), label_shown: shown(label),
       fill: fill ? { rect: rect(fill), state: st(fill), shown: shown(fill), hit: hit(fill) } : null,
       clones: [...document.querySelectorAll(`svg.plant [data-object="${id}"][data-key]`)].map((c) => {
         const t = tagOf(id, c.dataset.key);
-        return { key: c.dataset.key, state: st(c), transform: c.getAttribute("transform"), rect: rect(c), shown: shown(c), hit: hit(c), selected: c.classList.contains("sv-selected"), tag: t ? t.textContent : null, tag_state: st(t), tag_rect: rect(t) };
+        return { key: c.dataset.key, state: st(c), transform: c.getAttribute("transform"), rect: rect(c), shown: shown(c), hit: hit(c), selected: c.classList.contains("sv-selected"), tag: t ? t.textContent : null, tag_state: st(t), tag_rect: rect(t), tag_shown: shown(t) };
       }),
     };
   }
+  const loop = document.getElementById("loop");
+  const m = loop ? loop.getScreenCTM() : null;
+  out.__loop = m ? [m.a, m.b, m.c, m.d, m.e, m.f] : null;
   return out;
 })()"#;
 
@@ -98,18 +106,40 @@ const AROUND: &str = r#"(() => ({
   gate: document.querySelector(".side .gate-note")?.textContent ?? null,
 }))()"#;
 
-/// Every drawn thing whose fill or stroke is one of the accent's colours (the accent, its tint,
-/// its soft and its outline, compared by red, green and blue whatever the alpha), the selection
-/// apart: none may be a state's.
+/// Every state drawn in a green of the accent's: the drawing's fills and strokes (the selection
+/// apart, which the selection check pins to the one selected), the headline's figures, the
+/// attention list's marks and the side panel's badges by their colour and background. A green is
+/// one of the accent's four colours (the accent, its tint, its soft and its outline, by red, green
+/// and blue whatever the alpha) or any colour of the accent's band of hue (100° to 170°) with some
+/// saturation (above 0.2): a shade one unit off the accent is still the accent to the eye.
 const ACCENT_ON_STATES: &str = r##"(() => {
   const root = getComputedStyle(document.documentElement);
   const hex = (h) => { h = h.trim().replace("#", ""); if (h.length === 3) h = [...h].map((c) => c + c).join(""); return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)).join(","); };
   const family = ["--accent", "--accent-tint", "--accent-soft", "--accent-outline"].map((v) => hex(root.getPropertyValue(v)));
-  const rgb = (c) => { const m = c.match(/rgba?\(([^)]*)\)/); return m ? m[1].split(",").slice(0, 3).map((x) => Math.round(Number(x))).join(",") : null; };
-  return [...document.querySelectorAll("svg.plant .sv-obj, svg.plant [data-key], svg.plant .sv-fill, .sv-overlay .sv-tag")]
+  const parts = (c) => { const m = c.match(/rgba?\(([^)]*)\)/); return m ? m[1].split(/[\s,\/]+/).filter((x) => x !== "").map(Number) : null; };
+  const green = (c) => {
+    const p = parts(c);
+    if (!p || p.length < 3 || (p.length > 3 && p[3] === 0)) return false;
+    if (family.includes(p.slice(0, 3).map(Math.round).join(","))) return true;
+    const [r, g, b] = p.slice(0, 3).map((x) => x / 255);
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn, l = (mx + mn) / 2;
+    if (d === 0) return false;
+    const s = d / (1 - Math.abs(2 * l - 1));
+    const h = mx === r ? 60 * (((g - b) / d) % 6) : mx === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
+    const hue = (h + 360) % 360;
+    return hue >= 100 && hue <= 170 && s > 0.2;
+  };
+  const drawn = [...document.querySelectorAll("svg.plant .sv-obj, svg.plant [data-key], svg.plant .sv-fill, .sv-overlay .sv-tag")]
     .filter((el) => !el.classList.contains("sv-selected"))
-    .flatMap((el) => { const c = getComputedStyle(el); return [["fill", c.fill], ["stroke", c.stroke]].filter(([, v]) => family.includes(rgb(v))).map(([p, v]) => `${el.id || el.dataset.for || el.dataset.key} ${p} ${v}`); });
+    .flatMap((el) => { const c = getComputedStyle(el); return [["fill", c.fill], ["stroke", c.stroke]].filter(([, v]) => green(v)).map(([p, v]) => `${el.id || el.dataset.for || el.dataset.key} ${p} ${v}`); });
+  const around = [...document.querySelectorAll(".headline .fig .mono, .side ul.attention .mark, .side .badge")]
+    .flatMap((el) => { const c = getComputedStyle(el); return [["color", c.color], ["background", c.backgroundColor]].filter(([, v]) => green(v)).map(([p, v]) => `${el.className} ${JSON.stringify(el.textContent)} ${p} ${v}`); });
+  return drawn.concat(around);
 })()"##;
+
+/// What carries the selection in the drawing: an element by its id, a keyed marker's clone by its
+/// object's id and its key.
+const SELECTED: &str = r#"[...document.querySelectorAll("svg.plant .sv-selected")].map((e) => e.dataset.key !== undefined ? `${e.dataset.object} ${e.dataset.key}` : e.id).sort()"#;
 
 /// The accent check once every transition has run: a fill or stroke sliding from the selection's
 /// green is not a state drawn in it.
@@ -143,10 +173,39 @@ fn under(tag: &Value, el: &Value) -> bool {
     }
 }
 
+/// A screen box's centre.
+fn centre(r: &Value) -> Option<(f64, f64)> {
+    edges(r).map(|(l, t, rr, b, _)| ((l + rr) / 2.0, (t + b) / 2.0))
+}
+
+/// A point of the loop's own coordinates on the screen, through the loop's matrix (`__loop`).
+fn on_screen(m: &Value, (x, y): (f64, f64)) -> Option<(f64, f64)> {
+    let m: Vec<f64> = m.as_array()?.iter().filter_map(Value::as_f64).collect();
+    (m.len() == 6).then(|| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]))
+}
+
+/// Whether a marker stands on screen where the loop's point at `place` is.
+fn at_place(drawn: &Value, rect: &Value, place: f64) -> bool {
+    match (centre(rect), on_screen(&drawn["__loop"], on_loop(place))) {
+        (Some((cx, cy)), Some((px, py))) => near(cx, px, 1.0) && near(cy, py, 1.0),
+        _ => false,
+    }
+}
+
+/// A press and a release of the pointer's left button at a screen box's centre, as a person
+/// clicks: whatever is painted there takes it.
+fn click_at(page: &mut Browser, r: &Value) {
+    let (x, y) = centre(r).unwrap_or_else(|| panic!("no box to click: {r}"));
+    for kind in ["mouseMoved", "mousePressed", "mouseReleased"] {
+        page.call("Input.dispatchMouseEvent", json!({ "type": kind, "x": x, "y": y, "button": "left", "clickCount": 1 }));
+    }
+}
+
 /// Where the drawing differs from the feed (nothing once the page has caught up): each bound
 /// element's class and tag against its object's state, mark and word; each tag and label placed
 /// on screen at its element and shown; each level's fill inside its element to its level; each
-/// marker at the point on the path, its tag under it; a keyed marker's clones, one per key.
+/// marker on screen at the path's point, its tag under it; a keyed marker's clones, one per key,
+/// each with its tag.
 fn differences(drawn: &Value, feed: &Value, on_layout: &[(String, String)]) -> Vec<String> {
     let mut out = Vec::new();
     for (id, show) in on_layout {
@@ -170,9 +229,10 @@ fn differences(drawn: &Value, feed: &Value, on_layout: &[(String, String)]) -> V
             if !said.is_empty() && !(under(&d["tag_rect"], &d["rect"]) && d["tag_shown"] == json!(true)) {
                 out.push(format!("{id}: its tag at {} is not shown under it at {}", d["tag_rect"], d["rect"]));
             }
-            let label_over = matches!((edges(&d["label_rect"]), edges(&d["rect"])), (Some((_, _, _, lb, lc)), Some((_, et, _, _, ec))) if near(lc, ec, 3.0) && lb <= et + 2.0);
-            if !label_over {
-                out.push(format!("{id}: its label at {} is not over it at {}", d["label_rect"], d["rect"]));
+            // Its label shown, centred just over it: its foot at most 40 px above the element's top.
+            let label_over = matches!((edges(&d["label_rect"]), edges(&d["rect"])), (Some((_, _, _, lb, lc)), Some((_, et, _, _, ec))) if near(lc, ec, 3.0) && lb <= et + 2.0 && et - lb <= 40.0);
+            if !label_over || d["label_shown"] != json!(true) {
+                out.push(format!("{id}: its label at {} (shown {}) is not just over it at {}", d["label_rect"], d["label_shown"], d["rect"]));
             }
         }
         match show.as_str() {
@@ -194,11 +254,11 @@ fn differences(drawn: &Value, feed: &Value, on_layout: &[(String, String)]) -> V
                 }
             }
             "move" if !keyed => {
-                let (x, y) = on_loop(v["place"].as_f64().unwrap());
-                let ok = d["hidden"] == json!(false) && d["shown"] == json!(true) && d["hit"] == json!(true) && d["tag_keys"] == json!([""]) && d["transform"].as_str().map(translate).is_some_and(|(tx, ty)| near(tx, x, 0.05) && near(ty, y, 0.05));
+                let place = v["place"].as_f64().unwrap();
+                let ok = d["hidden"] == json!(false) && d["shown"] == json!(true) && d["hit"] == json!(true) && d["tag_keys"] == json!([""]) && at_place(drawn, &d["rect"], place);
                 let tag_ok = said.is_empty() || (under(&d["tag_rect"], &d["rect"]) && d["tag_shown"] == json!(true));
                 if !ok || !tag_ok {
-                    out.push(format!("{id}: at {} (its tag {} at {}), the path's point is ({x:.2}, {y:.2})", d["transform"], d["tag"], d["tag_rect"]));
+                    out.push(format!("{id}: at {:?} on screen (its tag {} at {}), the path's point is {:?}", centre(&d["rect"]), d["tag"], d["tag_rect"], on_screen(&drawn["__loop"], on_loop(place))));
                 }
             }
             "move" => {
@@ -212,12 +272,18 @@ fn differences(drawn: &Value, feed: &Value, on_layout: &[(String, String)]) -> V
                 }
                 for it in items {
                     let key = it["key"].as_str().unwrap();
-                    let (x, y) = on_loop(it["place"].as_f64().unwrap());
+                    let place = it["place"].as_f64().unwrap();
                     let ok = clones.iter().find(|c| c["key"] == json!(key)).is_some_and(|c| {
-                        c["state"] == json!(state) && c["shown"] == json!(true) && c["hit"] == json!(true) && c["transform"].as_str().map(translate).is_some_and(|(tx, ty)| near(tx, x, 0.05) && near(ty, y, 0.05)) && c["tag"] == json!(said) && (said.is_empty() || under(&c["tag_rect"], &c["rect"]))
+                        c["state"] == json!(state)
+                            && c["shown"] == json!(true)
+                            && c["hit"] == json!(true)
+                            && at_place(drawn, &c["rect"], place)
+                            && c["tag"] == json!(said)
+                            && c["tag_state"] == json!(state)
+                            && (said.is_empty() || (under(&c["tag_rect"], &c["rect"]) && c["tag_shown"] == json!(true)))
                     });
                     if !ok {
-                        out.push(format!("{id} {key}: drawn {:?}, the path's point is ({x:.2}, {y:.2})", clones.iter().find(|c| c["key"] == json!(key))));
+                        out.push(format!("{id} {key}: drawn {:?}, the path's point is {:?}", clones.iter().find(|c| c["key"] == json!(key)), on_screen(&drawn["__loop"], on_loop(place))));
                     }
                 }
             }
@@ -269,16 +335,22 @@ fn colours(text: &str) -> Vec<(String, f64, f64)> {
 }
 
 /// The reference's example grown for this test: a keyed marker over the log's positions (a key
-/// forgotten 6 s after its last), a disabled state for outlet 1 and its element a group, outlet 2
-/// moved by its own transform and outlet 3 inside a moved group.
+/// forgotten 6 s after its last, warned past 40), a disabled state for outlet 1 and its element a
+/// group, outlet 2 moved by its own transform, outlet 3 inside a moved group, and the loop itself
+/// drawn 30 down inside a moved group, its markers outside it.
 fn grown(mut ex: Example) -> Example {
     ex.project.push_str("\n[[rule]]\nname = \"positions\"\npattern = 'POS item=(?P<item>\\w+) at=(?P<at>[0-9.]+)'\nscope = \"sorter\"\ntypes = { at = \"float\" }\nkey = \"item\"\n");
     ex.binding = ex
         .binding
         .replacen("states = [ { at_least = 100, state = \"warn\", word = \"full\" }", "states = [ { at_most = 0, state = \"disabled\", word = \"off\" }, { at_least = 100, state = \"warn\", word = \"full\" }", 1)
-        .replacen("\n[[dashboard]]", "\n[[object]]\nid = \"tracked\"\nlabel = \"Tracked\"\nvalue = { source = \"sorter\", series = \"at\" }\nshow = \"move\"\npath = \"loop\"\nstale_after_ms = 6000\n\n[[dashboard]]", 1);
+        .replacen(
+            "\n[[dashboard]]",
+            "\n[[object]]\nid = \"tracked\"\nlabel = \"Tracked\"\nvalue = { source = \"sorter\", series = \"at\" }\nshow = \"move\"\npath = \"loop\"\nstale_after_ms = 6000\nstates = [ { at_least = 40, state = \"warn\", word = \"far\" } ]\n\n[[dashboard]]",
+            1,
+        );
     ex.svg = ex
         .svg
+        .replace("<path id=\"loop\" d=\"M 80 40 H 320 A 70 70 0 0 1 320 180 H 80 A 70 70 0 0 1 80 40 Z\" fill=\"none\" stroke=\"#26262A\" stroke-width=\"14\"/>", "<g transform=\"translate(0 30)\"><path id=\"loop\" d=\"M 80 40 H 320 A 70 70 0 0 1 320 180 H 80 A 70 70 0 0 1 80 40 Z\" fill=\"none\" stroke=\"#26262A\" stroke-width=\"14\"/></g>")
         .replace("<rect id=\"outlet-1\" x=\"130\" y=\"4\" width=\"24\" height=\"28\"/>", "<g id=\"outlet-1\"><rect x=\"130\" y=\"4\" width=\"24\" height=\"28\"/></g>")
         .replace("<rect id=\"outlet-2\" x=\"190\" y=\"4\" width=\"24\" height=\"28\"/>", "<rect id=\"outlet-2\" x=\"190\" y=\"4\" width=\"24\" height=\"28\" transform=\"translate(-20 110)\"/>")
         .replace("<rect id=\"outlet-3\" x=\"250\" y=\"4\" width=\"24\" height=\"28\"/>", "<g transform=\"translate(0 100)\"><rect id=\"outlet-3\" x=\"250\" y=\"4\" width=\"24\" height=\"28\"/></g>")
@@ -291,7 +363,9 @@ fn the_page_draws_the_layout_from_the_feed() {
     let dir = tempfile::tempdir().unwrap();
     let bench = plant(&dir.path().join("bench"));
     let ex = grown(live_example(&bench, false));
-    assert!(ex.svg.contains("translate(-20 110)") && ex.svg.contains("<g transform") && ex.svg.contains("<g id=\"outlet-1\">") && ex.svg.contains("id=\"tracked\""), "{}", ex.svg);
+    for grew in ["<g transform=\"translate(0 30)\"><path id=\"loop\"", "translate(-20 110)", "<g transform=\"translate(0 100)\"><rect id=\"outlet-3\"", "<g id=\"outlet-1\">", "id=\"tracked\""] {
+        assert!(ex.svg.contains(grew), "{grew}: {}", ex.svg);
+    }
     let path = write_example(dir.path(), &ex);
     let log = dir.path().join("loop/sorts.log");
     std::fs::write(&log, "").unwrap();
@@ -320,15 +394,20 @@ fn the_page_draws_the_layout_from_the_feed() {
         object(&s, "parcel-1")["place"] == json!(0.25) && object(&s, "outlet-2")["level"] == json!(0.85) && object(&s, "infeed")["word"] == json!("running")
     }));
 
-    // The page, run against the session, draws it: read back until it agrees with the feed, and
-    // after each change the accent marks no state.
+    // The page, run against the session, draws it: read back until it agrees with the feed and
+    // the selection is where it was put (on that element alone), and after each change the accent
+    // marks no state.
     let mut page = Browser::watched(&format!("http://{addr}/s/loop/"));
-    let settle = |page: &mut Browser, what: &str| -> (Value, Value) {
+    let settle = |page: &mut Browser, what: &str, selection: &[&str]| -> (Value, Value) {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             let feed = get(addr, "/s/loop/objects.json");
             let drawn = page.eval(DRAWN);
-            let diff = differences(&drawn, &feed.1, &on_layout);
+            let mut diff = differences(&drawn, &feed.1, &on_layout);
+            let selected = page.eval(SELECTED);
+            if selected != json!(selection) {
+                diff.push(format!("the selection carried by {selected}, not by {selection:?} alone"));
+            }
             if diff.is_empty() {
                 let accent = accent_on_states(page);
                 assert_eq!(accent, json!([]), "{what}: a state drawn in the accent");
@@ -338,34 +417,36 @@ fn the_page_draws_the_layout_from_the_feed() {
             std::thread::sleep(Duration::from_millis(150));
         }
     };
-    let (drawn, _) = settle(&mut page, "first paint");
+    let around_when = |page: &mut Browser, cond: &str| page.wait_for(&format!("(() => {{ const a = {AROUND}; return ({cond}) ? a : null; }})()"), Duration::from_secs(10));
+    let (drawn, _) = settle(&mut page, "first paint", &[]);
     // The anchors, spelled out: the states the rules give the bench's values, and the markers at
-    // a quarter and three quarters of the loop.
+    // a quarter and three quarters of the loop (drawn 30 down, so their own places are too).
     let d = |id: &str, k: &str| drawn[id][k].clone();
     assert_eq!((d("infeed", "state"), d("infeed", "tag")), (json!("sv-state-normal"), json!("")));
     assert_eq!((d("outlet-1", "state"), d("outlet-2", "state"), d("outlet-3", "state")), (json!("sv-state-normal"), json!("sv-state-near"), json!("sv-state-warn")));
     assert_eq!((d("outlet-2", "tag"), d("outlet-3", "tag")), (json!("■ near full"), json!("■ full")));
     let at = |id: &str| translate(d(id, "transform").as_str().unwrap());
-    assert!(near(at("parcel-1").0, 309.96, 0.05) && near(at("parcel-1").1, 40.0, 0.05), "{:?}", at("parcel-1"));
-    assert!(near(at("parcel-2").0, 90.04, 0.05) && near(at("parcel-2").1, 180.0, 0.05), "{:?}", at("parcel-2"));
+    assert!(near(at("parcel-1").0, 309.96, 0.05) && near(at("parcel-1").1, 70.0, 0.05), "{:?}", at("parcel-1"));
+    assert!(near(at("parcel-2").0, 90.04, 0.05) && near(at("parcel-2").1, 210.0, 0.05), "{:?}", at("parcel-2"));
     assert_eq!((d("tracked", "hidden"), d("tracked", "clones")), (json!(true), json!([])), "no position yet");
 
     // Around it: the headline in its states, the objects not normal in order of weight.
-    let around = page.wait_for(&format!("(() => {{ const a = {AROUND}; return a.attention.length === 4 && a.headline.length === 2 ? a : null; }})()"), Duration::from_secs(10));
+    let around = around_when(&mut page, "a.attention.length === 4 && a.headline.length === 2");
     assert_eq!(around["headline"], json!([["speed", "1.5", "mono st-text-normal"], ["read-rate", "—", "mono st-text-stale"]]));
     assert_eq!(around["attention_head"], json!("Needs attention · 4"));
-    assert_eq!(around["attention"], json!([
+    let quiet = json!([
         ["outlet-3", "■", "mark st-warn", "Outlet 3 full"],
         ["outlet-2", "■", "mark st-near", "Outlet 2 near full"],
         ["read-rate", "◌", "mark st-stale", "Read rate no value"],
         ["tracked", "◌", "mark st-stale", "Tracked no value"],
-    ]));
+    ]);
+    assert_eq!(around["attention"], quiet);
 
-    // A click selects: the side panel holds its value, state, sparkline (its own series over its
-    // last half hour) and offered write, gated by portal's switch; the selection is drawn in
-    // Veredas' green (Q22).
-    page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true }))"#);
-    let around = page.wait_for(&format!("(() => {{ const a = {AROUND}; return a.selected === 'Outlet 3' && a.spark > 0 ? a : null; }})()"), Duration::from_secs(20));
+    // A click of the pointer on outlet 3 (full, so its fill covers it) selects it: the side panel
+    // holds its value, state, sparkline (its own series over its last half hour) and offered
+    // write, gated by portal's switch; the selection is drawn in Veredas' green (Q22).
+    click_at(&mut page, &drawn["outlet-3"]["rect"]);
+    let around = around_when(&mut page, "a.selected === 'Outlet 3' && a.spark > 0");
     assert_eq!((around["badge"].clone(), around["value"].clone()), (json!("■ full"), json!("100 %")));
     assert_eq!(around["buttons"], json!([["Release", true]]), "offered, and off while the switch is off");
     assert_eq!(around["gate"], json!("Writes go through portal. Its write switch is off."));
@@ -386,69 +467,102 @@ fn the_page_draws_the_layout_from_the_feed() {
 })()"#,
     );
     assert_eq!(accent, json!({ "selected": true, "stroke": "rgb(48, 209, 88)", "accent": "#30d158" }), "the accent marks the selection");
-    assert_eq!(accent_on_states(&mut page), json!([]), "and never a state");
+    settle(&mut page, "outlet 3 selected", &["outlet-3"]);
 
-    // Every state the vocabulary has, the attention list in order of weight: the infeed in fault
-    // (alarm), outlet 1 empty (disabled).
-    bench.server("plc").unwrap().set("infeed", 2);
-    bench.server("plc").unwrap().set("fill1", 0.0);
+    // Every state the vocabulary has, the attention list in order of weight and the headline
+    // live: the infeed in fault (alarm), the loop slow (warn), outlet 1 empty (disabled).
+    let plc = bench.server("plc").unwrap();
+    plc.set("infeed", 2);
+    plc.set("fill1", 0.0);
+    plc.set("speed", 0.2);
     assert!(wait(Duration::from_secs(20), || {
         let s = get(addr, "/s/loop/objects.json").1;
-        object(&s, "infeed")["state"] == json!("alarm") && object(&s, "outlet-1")["state"] == json!("disabled")
+        object(&s, "infeed")["state"] == json!("alarm") && object(&s, "outlet-1")["state"] == json!("disabled") && object(&s, "speed")["state"] == json!("warn")
     }));
-    settle(&mut page, "an alarm and a disabled object");
-    let around = page.wait_for(&format!("(() => {{ const a = {AROUND}; return a.attention.length === 6 ? a : null; }})()"), Duration::from_secs(10));
+    settle(&mut page, "an alarm, a warning and a disabled object", &["outlet-3"]);
+    let around = around_when(&mut page, "a.attention.length === 7 && a.headline[0][1] === '0.2'");
+    assert_eq!(around["headline"], json!([["speed", "0.2", "mono st-text-warn"], ["read-rate", "—", "mono st-text-stale"]]));
     assert_eq!(around["attention"], json!([
         ["infeed", "!", "mark st-alarm", "Infeed fault"],
+        ["speed", "■", "mark st-warn", "Loop speed slow"],
         ["outlet-3", "■", "mark st-warn", "Outlet 3 full"],
         ["outlet-2", "■", "mark st-near", "Outlet 2 near full"],
         ["outlet-1", "▨", "mark st-disabled", "Outlet 1 off"],
         ["read-rate", "◌", "mark st-stale", "Read rate no value"],
         ["tracked", "◌", "mark st-stale", "Tracked no value"],
     ]));
+    // Back to normal, each leaves the list, and the headline follows.
+    plc.set("infeed", 1);
+    plc.set("fill1", 35.0);
+    plc.set("speed", 1.5);
+    assert!(wait(Duration::from_secs(20), || {
+        let s = get(addr, "/s/loop/objects.json").1;
+        ["infeed", "outlet-1", "speed"].iter().all(|id| object(&s, id)["state"] == json!("normal"))
+    }));
+    settle(&mut page, "back to normal", &["outlet-3"]);
+    let around = around_when(&mut page, "a.attention.length === 4 && a.headline[0][1] === '1.5'");
+    assert_eq!((around["attention"].clone(), around["headline"][0].clone()), (quiet.clone(), json!(["speed", "1.5", "mono st-text-normal"])));
 
-    // A keyed marker: one per key, each at its own place, its tag under it; one selected by a
-    // click, alone, its own value in the side panel.
+    // A keyed marker: one per key, each at its own place in the object's state (warned, B2's 50
+    // the latest), its mark and word under it; one selected by a click of the pointer, alone, its
+    // own value in the side panel.
     let now = store_now();
     append(&log, &[format!("{} POS item=A1 at=10", stamp(now)), format!("{} POS item=B2 at=50", stamp(now))]);
-    assert!(wait(Duration::from_secs(20), || object(&get(addr, "/s/loop/objects.json").1, "tracked")["items"].as_array().unwrap().len() == 2));
-    let (drawn, _) = settle(&mut page, "the keyed marker");
-    let keys: Vec<Value> = drawn["tracked"]["clones"].as_array().unwrap().iter().map(|c| c["key"].clone()).collect();
-    assert_eq!((drawn["tracked"]["hidden"].clone(), keys.len()), (json!(true), 2), "{keys:?}");
-    page.eval(r#"document.querySelector('svg.plant [data-object="tracked"][data-key="A1"]').dispatchEvent(new MouseEvent("click", { bubbles: true }))"#);
-    let around = page.wait_for(&format!("(() => {{ const a = {AROUND}; return a.selected === 'Tracked · A1' ? a : null; }})()"), Duration::from_secs(10));
+    assert!(wait(Duration::from_secs(20), || {
+        let t = object(&get(addr, "/s/loop/objects.json").1, "tracked").clone();
+        t["items"].as_array().unwrap().len() == 2 && t["state"] == json!("warn")
+    }));
+    let (drawn, _) = settle(&mut page, "the keyed marker", &["outlet-3"]);
+    let tags: Vec<(Value, Value)> = drawn["tracked"]["clones"].as_array().unwrap().iter().map(|c| (c["key"].clone(), c["tag"].clone())).collect();
+    assert_eq!((drawn["tracked"]["hidden"].clone(), tags.len()), (json!(true), 2), "{tags:?}");
+    assert!(tags.iter().all(|(_, t)| *t == json!("■ far")), "{tags:?}");
+    let around = around_when(&mut page, "a.attention.length === 4 && a.attention[1][0] === 'tracked'");
+    assert_eq!(around["attention"][1], json!(["tracked", "■", "mark st-warn", "Tracked far"]));
+    let a1 = drawn["tracked"]["clones"].as_array().unwrap().iter().find(|c| c["key"] == json!("A1")).unwrap()["rect"].clone();
+    click_at(&mut page, &a1);
+    let around = around_when(&mut page, "a.selected === 'Tracked · A1'");
     assert_eq!(around["value"], json!("10"), "A1's own value, not the latest of any key");
-    let picked: Vec<(Value, Value)> = page.eval(DRAWN)["tracked"]["clones"].as_array().unwrap().iter().map(|c| (c["key"].clone(), c["selected"].clone())).collect();
-    assert!(picked.contains(&(json!("A1"), json!(true))) && picked.contains(&(json!("B2"), json!(false))), "{picked:?}");
-    assert_eq!(accent_on_states(&mut page), json!([]));
-    // A1 moves on, B2 says nothing more: B2 is dropped with its tag once its 6 s pass, A1 drawn at
-    // its new place, still selected, its new value beside.
-    // Two and a half seconds after the first two, so A1 outlives B2 by as much.
+    settle(&mut page, "A1 selected", &["tracked A1"]);
+    // A1 moves on (to 30, so the marker is normal again), B2 says nothing more: B2 is dropped with
+    // its tag once its 6 s pass, A1 drawn at its new place, still selected, its new value beside,
+    // and the marker leaves the attention list. Two and a half seconds after the first two, so A1
+    // outlives B2 by as much.
     std::thread::sleep(Duration::from_millis(2500));
     append(&log, &[format!("{} POS item=A1 at=30", stamp(store_now()))]);
-    assert!(wait(Duration::from_secs(20), || object(&get(addr, "/s/loop/objects.json").1, "tracked")["items"] == json!([{ "key": "A1", "place": 0.3, "text": "30" }])));
-    let (drawn, _) = settle(&mut page, "a key forgotten");
+    assert!(wait(Duration::from_secs(20), || {
+        let t = object(&get(addr, "/s/loop/objects.json").1, "tracked").clone();
+        t["items"] == json!([{ "key": "A1", "place": 0.3, "text": "30" }]) && t["state"] == json!("normal")
+    }));
+    let (drawn, _) = settle(&mut page, "a key forgotten", &["tracked A1"]);
     let left: Vec<(Value, Value)> = drawn["tracked"]["clones"].as_array().unwrap().iter().map(|c| (c["key"].clone(), c["selected"].clone())).collect();
     assert_eq!((left, drawn["tracked"]["tag_keys"].clone()), (vec![(json!("A1"), json!(true))], json!(["A1"])));
-    page.wait_for(&format!("(() => {{ const a = {AROUND}; return a.selected === 'Tracked · A1' && a.value === '30'; }})()"), Duration::from_secs(10));
+    let around = around_when(&mut page, "a.selected === 'Tracked · A1' && a.value === '30' && a.attention.length === 3");
+    assert_eq!(around["attention"], json!([quiet[0], quiet[1], quiet[2]]), "the marker normal again, off the list");
 
     // Moved by the plant, the marker moves along its path, its tag with it.
-    bench.server("plc").unwrap().set("p1", 60.0);
+    plc.set("p1", 60.0);
     assert!(wait(Duration::from_secs(20), || object(&get(addr, "/s/loop/objects.json").1, "parcel-1")["place"] == json!(0.6)));
-    let (drawn, _) = settle(&mut page, "the marker moved");
+    let (drawn, _) = settle(&mut page, "the marker moved", &["tracked A1"]);
     let (x, y) = translate(drawn["parcel-1"]["transform"].as_str().unwrap());
-    assert!(near(x, 228.02, 0.05) && near(y, 180.0, 0.05), "{x} {y}");
+    assert!(near(x, 228.02, 0.05) && near(y, 210.0, 0.05), "{x} {y}");
+    // Another click moves the selection, which no element keeps.
+    click_at(&mut page, &drawn["outlet-3"]["rect"]);
+    around_when(&mut page, "a.selected === 'Outlet 3'");
+    settle(&mut page, "outlet 3 selected again", &["outlet-3"]);
 
-    // The plant away: every object of its source stale, drawn so, a marker's mark and word below it.
+    // The plant away: every object of its source stale, drawn so, a marker's mark and word below
+    // it, the headline's figure greyed with its last value.
     bench.stop();
     assert!(wait(Duration::from_secs(40), || {
         let s = get(addr, "/s/loop/objects.json").1;
         on_layout.iter().filter(|(id, _)| id != "tracked").all(|(id, _)| object(&s, id)["state"] == json!("stale"))
     }));
-    let (drawn, feed) = settle(&mut page, "the plant away");
+    let (drawn, feed) = settle(&mut page, "the plant away", &["outlet-3"]);
     assert_eq!(object(&feed, "parcel-1")["state"], json!("stale"));
     assert_eq!(drawn["parcel-1"]["tag"], json!(format!("{} {}", object(&feed, "parcel-1")["mark"].as_str().unwrap(), object(&feed, "parcel-1")["word"].as_str().unwrap())));
     assert!(drawn["parcel-1"]["tag"].as_str().unwrap().starts_with("◌ "), "{}", drawn["parcel-1"]);
+    let around = around_when(&mut page, "a.headline[0][2].includes('stale')");
+    assert_eq!(around["headline"], json!([["speed", "1.5", "mono st-text-stale"], ["read-rate", "—", "mono st-text-stale"]]));
     drop(page);
     host.stop();
 
