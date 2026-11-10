@@ -109,7 +109,10 @@ fn a_channel_in_either_role_speaks_the_catalog_and_the_monitor_shows_what_came_a
     let l = listener.status();
     assert!(l.sent.get("status").copied().unwrap_or(0) >= d.received["status"], "{:?} / {:?}", l.sent, d.received);
     assert!(l.recent.iter().any(|x| x.direction == Direction::Out && x.message == "status" && x.peer.is_none()), "sent to everyone");
-    assert!(l.wire.sent >= 5 && d.wire.received >= 5, "core's own counters: {:?} / {:?}", l.wire, d.wire);
+    // Core's own counters, each read when it has caught up: the dialer's monitor can count a frame
+    // a moment before core's counter does (a CI run read 5 sent beside 4 received).
+    assert!(wait(Duration::from_secs(5), || listener.status().wire.sent >= 5 && dialer.status().wire.received >= 5), "core's own counters: {:?} / {:?}", listener.status().wire, dialer.status().wire);
+    let (l, d) = (listener.status(), dialer.status());
     assert!(l.wire.received == 0 && d.wire.sent <= 1, "the dialer sent no message, at most core's keep-alive on connect: {:?} / {:?}", l.wire, d.wire);
     // On demand: a message with `every_ms` 0 never goes on its own; `send_now` builds it from
     // the values given, to one peer or to everyone.
