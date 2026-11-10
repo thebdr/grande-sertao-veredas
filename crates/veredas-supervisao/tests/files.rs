@@ -907,9 +907,10 @@ A path is relative to the binding file's folder.
   places, trailing zeros dropped.
 - `show` (`"state"`): how the layout shows the object: `state` (its element takes the state's
   class, and its mark and word when not normal), `level` (as `state`, and its element fills from
-  the bottom by the value's place in `range`), `value` (as `state`, and the value written over its
-  element) or `move` (its element is a marker placed along `path` by the value's place in
-  `range`). A level and a marker need a numeric series.
+  the bottom by the value's place in `range`, a shape or a text within its outline, a group its
+  box), `value` (as `state`, and the value written over its element) or `move` (its element is a
+  marker placed along `path` by the value's place in `range`). A level and a marker need a numeric
+  series.
 - `range` (`[0, 100]`): the low and the high of a level or a marker, low below high, both finite.
 - `path` (required for `move`, refused otherwise): the `id` of the layout element the marker
   follows, a `path`, `line`, `polyline`, `polygon`, `rect`, `circle` or `ellipse`.

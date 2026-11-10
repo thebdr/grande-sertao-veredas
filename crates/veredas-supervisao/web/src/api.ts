@@ -43,6 +43,8 @@ export interface BindingView {
 export interface Item {
   key: string;
   place: number;
+  /// The key's own value, as the object shows a number.
+  text: string;
 }
 
 export interface ObjectState {

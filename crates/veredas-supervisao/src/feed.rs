@@ -50,6 +50,8 @@ struct SeriesSeen {
 pub struct Item {
     pub key: String,
     pub place: f64,
+    /// The key's own value, as the object shows a number.
+    pub text: String,
 }
 
 /// One object as the page shows it.
@@ -244,7 +246,7 @@ impl Fold {
                 if let Some(s) = self.series.get(&(o.value.source.clone(), o.value.series.clone())) {
                     for (k, seen) in &s.by_key {
                         if let (Some(v), true) = (seen.reading.as_f64(), now_ms - seen.arrived_ms <= forget) {
-                            items.push(Item { key: k.clone(), place: frac(v) });
+                            items.push(Item { key: k.clone(), place: frac(v), text: format_number(v, o.decimals) });
                         }
                     }
                 }

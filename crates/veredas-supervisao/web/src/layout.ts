@@ -7,10 +7,20 @@
 import type { ObjectDef, ObjectState } from "./api";
 import { s } from "./dom";
 
+interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 interface Bound {
   def: ObjectDef;
   el: SVGGraphicsElement;
+  /// The element's own box, in its own coordinates (a marker is placed by its centre).
   box: DOMRect;
+  /// The same box in its parent's coordinates, where a level's fill is drawn.
+  fillBox: Box;
   tag: SVGTextElement;
   label: SVGTextElement;
   fill?: SVGRectElement;
@@ -27,6 +37,22 @@ export interface LayoutView {
   update(o: ObjectState): void;
   select(id: string | null, key?: string | null): void;
   layers(l: { markers: boolean; states: boolean; labels: boolean }): void;
+}
+
+/// An element's box in another element's coordinates: its corners mapped through every transform
+/// between them, as the box around them. Drawn there, a tag, a label or a fill follows a moved,
+/// scaled or grouped element.
+function boxIn(target: SVGGraphicsElement, el: SVGGraphicsElement, box: DOMRect): Box {
+  const t = target.getCTM();
+  const e = el.getCTM();
+  if (!t || !e) return box;
+  const m = t.inverse().multiply(e);
+  const pts = [[box.x, box.y], [box.x + box.width, box.y], [box.x, box.y + box.height], [box.x + box.width, box.y + box.height]].map(([x, y]) => new DOMPoint(x, y).matrixTransform(m));
+  const xs = pts.map((p) => p.x);
+  const ys = pts.map((p) => p.y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
 }
 
 /// What a layout may not carry into the page: scripts, foreign content, event handlers.
@@ -70,19 +96,28 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     el.classList.add("sv-obj", `sv-show-${def.show}`, "sv-state-stale");
     el.dataset.object = def.id;
     const box = el.getBBox();
-    const below = box.y + box.height + fontSize * 1.05;
-    const tag = s("text", { x: box.x + box.width / 2, y: below, class: "sv-tag", "font-size": fontSize * 0.8, "text-anchor": "middle", "data-for": def.id }) as SVGTextElement;
-    const label = s("text", { x: box.x + box.width / 2, y: box.y - fontSize * 0.35, class: "sv-label", "font-size": fontSize * 0.85, "text-anchor": "middle", "data-for": def.id }, def.label) as SVGTextElement;
-    const b: Bound = { def, el, box, tag, label, clones: new Map(), lastPlace: new Map(), tags: new Map() };
+    // Where the element stands in the overlay and in its parent, its transforms followed.
+    const ob = boxIn(overlay, el, box);
+    const fillBox = boxIn(el.parentNode as SVGGraphicsElement, el, box);
+    const below = ob.y + ob.height + fontSize * 1.05;
+    const tag = s("text", { x: ob.x + ob.width / 2, y: below, class: "sv-tag", "font-size": fontSize * 0.8, "text-anchor": "middle", "data-for": def.id }) as SVGTextElement;
+    const label = s("text", { x: ob.x + ob.width / 2, y: ob.y - fontSize * 0.35, class: "sv-label", "font-size": fontSize * 0.85, "text-anchor": "middle", "data-for": def.id }, def.label) as SVGTextElement;
+    const b: Bound = { def, el, box, fillBox, tag, label, clones: new Map(), lastPlace: new Map(), tags: new Map() };
     if (def.show === "level") {
-      const clipId = `sv-clip-${def.id}`;
-      const clip = s("clipPath", { id: clipId }, s("use", { href: `#${def.id}` }));
-      defsEl.append(clip);
-      b.fill = s("rect", { x: box.x, y: box.y + box.height, width: box.width, height: 0, "clip-path": `url(#${clipId})`, class: "sv-fill", "data-for": def.id }) as SVGRectElement;
+      // The fill in the element's parent, over the element's box as transformed there, clipped
+      // by the element itself when it is a shape or a text (the `use` draws it with its own
+      // transform, in the same space); a clip's `use` may draw nothing else, so a group fills
+      // its box.
+      b.fill = s("rect", { x: fillBox.x, y: fillBox.y + fillBox.height, width: fillBox.width, height: 0, class: "sv-fill", "data-for": def.id }) as SVGRectElement;
+      if (el instanceof SVGGeometryElement || el instanceof SVGTextElement) {
+        const clipId = `sv-clip-${def.id}`;
+        defsEl.append(s("clipPath", { id: clipId }, s("use", { href: `#${def.id}` })));
+        b.fill.setAttribute("clip-path", `url(#${clipId})`);
+      }
       el.after(b.fill);
     }
     if (def.show === "value") {
-      b.valueText = s("text", { x: box.x + box.width / 2, y: box.y + box.height / 2 + fontSize * 0.35, class: "sv-value", "font-size": fontSize, "text-anchor": "middle", "data-for": def.id }) as SVGTextElement;
+      b.valueText = s("text", { x: ob.x + ob.width / 2, y: ob.y + ob.height / 2 + fontSize * 0.35, class: "sv-value", "font-size": fontSize, "text-anchor": "middle", "data-for": def.id }) as SVGTextElement;
       overlay.append(b.valueText);
     }
     if (def.show === "move") {
@@ -165,8 +200,8 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
         requestAnimationFrame(() => requestAnimationFrame(() => fill.classList.remove("sv-instant")));
       }
       const f = o.level ?? 0;
-      b.fill.setAttribute("y", String(b.box.y + b.box.height * (1 - f)));
-      b.fill.setAttribute("height", String(b.box.height * f));
+      b.fill.setAttribute("y", String(b.fillBox.y + b.fillBox.height * (1 - f)));
+      b.fill.setAttribute("height", String(b.fillBox.height * f));
       for (const c of Array.from(b.fill.classList)) if (c.startsWith("sv-state-")) b.fill.classList.remove(c);
       b.fill.classList.add(cls);
     }

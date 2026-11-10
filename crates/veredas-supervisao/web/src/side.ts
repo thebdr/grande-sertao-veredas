@@ -124,7 +124,9 @@ export class Side {
       const o = objs.get(s.def.id);
       setBadge(s.badge, o);
       s.value.className = o?.stale ? "mono stale" : "mono";
-      s.value.textContent = o?.text !== null && o?.text !== undefined ? `${o.text}${s.def.unit ? " " + s.def.unit : ""}` : "—";
+      // A key's own value when one key of a keyed marker is selected, never the latest of any.
+      const text = s.key !== null ? (o?.items.find((i) => i.key === s.key)?.text ?? null) : (o?.text ?? null);
+      s.value.textContent = text !== null ? `${text}${s.def.unit ? " " + s.def.unit : ""}` : "—";
       s.since.textContent = ago(o?.since_ms ?? null);
       if (Date.now() - s.sparkAt > 10_000) {
         s.sparkAt = Date.now();

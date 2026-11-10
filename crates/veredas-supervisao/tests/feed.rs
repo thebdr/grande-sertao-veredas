@@ -166,9 +166,9 @@ fn the_fold_reads_every_object_exactly() {
     let ids = |v: &veredas_supervisao::feed::ObjectView| v.items.iter().map(|i| i.key.clone()).collect::<Vec<_>>();
     assert_eq!(ids(&f.view(o("tracked-default"), true, 30_000)), ["A1", "B2"]);
     assert_eq!(ids(&f.view(o("tracked-default"), true, 30_001)), Vec::<String>::new());
-    assert_eq!((v.place, v.items.clone()), (None, vec![Item { key: "A1".into(), place: 0.1 }, Item { key: "B2".into(), place: 0.5 }]));
+    assert_eq!((v.place, v.items.clone()), (None, vec![Item { key: "A1".into(), place: 0.1, text: "10".into() }, Item { key: "B2".into(), place: 0.5, text: "50".into() }]));
     f.sample("sorter", "at", Some("A1"), 2, 20.0, 21_000);
-    assert_eq!(f.view(o("tracked"), true, 21_501).items, vec![Item { key: "A1".into(), place: 0.2 }], "B2 last moved 1501 ms ago");
+    assert_eq!(f.view(o("tracked"), true, 21_501).items, vec![Item { key: "A1".into(), place: 0.2, text: "20".into() }], "B2 last moved 1501 ms ago");
     assert_eq!(f.view(o("tracked"), true, 22_501).items, vec![], "both forgotten");
     // A key's older sample never replaces its newer one.
     f.sample("sorter", "at", Some("A1"), 1, 90.0, 22_600);
@@ -181,7 +181,7 @@ fn the_fold_reads_every_object_exactly() {
     assert_eq!((v.text.as_deref(), v.state, v.word.as_str(), v.stale), (Some("50"), StateClass::Warn, "far", false));
     f.sample("sorter", "at", Some("C3"), 9, 99.0, 90_000);
     assert_eq!((f.view(o("at-b2"), true, 90_000).text.as_deref(), f.view(o("tracked-a1"), true, 90_000).place), (Some("50"), Some(0.2)));
-    assert_eq!(f.view(o("tracked"), true, 90_000).items, vec![Item { key: "C3".into(), place: 0.99 }]);
+    assert_eq!(f.view(o("tracked"), true, 90_000).items, vec![Item { key: "C3".into(), place: 0.99, text: "99".into() }]);
 
     // Text arrives through the ingest's cache: compared as text, exactly; a newer cached value of
     // a numeric series heals a missed frame; an older one is ignored.
@@ -314,7 +314,7 @@ fn the_fold_reads_every_object_exactly() {
     let mut h = Fold::new(&b);
     h.sample("sorter", "at", Some("A1"), 2, 20.0, 1_000);
     h.sample("sorter", "at", Some("A1"), 2, 30.0, 2_000);
-    assert_eq!(h.view(o("tracked"), true, 3_500).items, vec![Item { key: "A1".into(), place: 0.3 }]);
+    assert_eq!(h.view(o("tracked"), true, 3_500).items, vec![Item { key: "A1".into(), place: 0.3, text: "30".into() }]);
     assert_eq!(h.view(o("tracked"), true, 3_501).items, vec![]);
 
     // The health labels, as the page reads them.
@@ -423,7 +423,7 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
         object(&s, "mode")["word"] == json!("jammed") && object(&s, "tracked")["items"].as_array().unwrap().len() == 2 && object(&s, "read-rate")["state"] == json!("alarm")
     }), "{}", snapshot(addr));
     let s = snapshot(addr);
-    assert_eq!(object(&s, "tracked")["items"], json!([{ "key": "A1", "place": 0.1 }, { "key": "B2", "place": 0.5 }]));
+    assert_eq!(object(&s, "tracked")["items"], json!([{ "key": "A1", "place": 0.1, "text": "10" }, { "key": "B2", "place": 0.5, "text": "50" }]));
     assert_eq!((object(&s, "read-rate")["text"].clone(), object(&s, "read-rate")["word"].clone()), (json!("97.5"), json!("under 98 %")));
     assert_eq!((object(&s, "mode")["text"].clone(), object(&s, "mode")["state"].clone()), (json!("jam"), json!("warn")));
     // No line for longer than the bound: the rate goes stale with its value kept, while its
