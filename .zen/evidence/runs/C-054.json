@@ -10,15 +10,15 @@
     "writes"
   ],
   "exitCode": 0,
-  "outputSha": "e7ee0df4835b11c864406c6cda0b3321e408bae138c3e93820959280a54617f1",
-  "outputTail": "\nrunning 1 test\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.62s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.75s\n     Running tests\\writes.rs (target\\debug\\deps\\writes-90c443c7fa53e430.exe)",
-  "ranAt": "2026-11-10T04:00:08.861Z",
-  "headCommit": "df948a47e9227338fe5f21928692c8671b876c7c",
+  "outputSha": "262ef64b09dba98914766daa7f55130b623525f89e4c8fc75539aea5cfd96d32",
+  "outputTail": "\nrunning 1 test\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.85s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.27s\n     Running tests\\writes.rs (target\\debug\\deps\\writes-90c443c7fa53e430.exe)",
+  "ranAt": "2026-11-10T05:11:57.645Z",
+  "headCommit": "e495eef10c5abb4993e68289c9af8024b9e64298",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/writes.rs",
       "file": "crates/veredas-supervisao/tests/writes.rs",
-      "fileSha": "f1616c68a0085f7e86697a023e25d457ec39765cb3aeb3e67e917ba82a04adc8"
+      "fileSha": "5dd717a00fa9567fd7c204c1231a0c85ea86e478fe7f882e27d980ed2e378b67"
     }
   ]
 }

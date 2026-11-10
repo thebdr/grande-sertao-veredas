@@ -10,15 +10,15 @@
     "dashboards"
   ],
   "exitCode": 0,
-  "outputSha": "3092f3bcde77d003d7db9357408e8a1bbde19cdbddd3227346800dd1c43ad01f",
-  "outputTail": "\nrunning 3 tests\ntest medians_sigmas_and_distributions_are_exact ... ok\ntest buckets_align_on_the_clock_and_mark_the_running_one ... ok\ntest every_panel_kind_is_computed_exactly_from_the_store ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.82s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s\n     Running tests\\dashboards.rs (target\\debug\\deps\\dashboards-6fe58751fce6c8eb.exe)",
-  "ranAt": "2026-11-10T02:47:21.774Z",
-  "headCommit": "d560cee4f9a93a28fa79589ae2816de1b7b61b73",
+  "outputSha": "7b968c2baf1117aa47e8dc978160c632a87b4c23a083fdcd1b655e5d7d1bac0c",
+  "outputTail": "\nrunning 3 tests\ntest medians_sigmas_and_distributions_are_exact ... ok\ntest buckets_align_on_the_clock_and_mark_the_running_one ... ok\ntest every_panel_kind_is_computed_exactly_from_the_store ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.08s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.72s\n     Running tests\\dashboards.rs (target\\debug\\deps\\dashboards-6fe58751fce6c8eb.exe)",
+  "ranAt": "2026-11-10T05:11:45.984Z",
+  "headCommit": "e495eef10c5abb4993e68289c9af8024b9e64298",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/dashboards.rs",
       "file": "crates/veredas-supervisao/tests/dashboards.rs",
-      "fileSha": "08d099936aa57d8b0bed48cbdcd464d328e6f54629deaf583d301ce3cc5bca33"
+      "fileSha": "077bfe04f6f68475fa9a243cce5dfc2d4ba18d534059d6a9d34ff5bfd26f3dc4"
     }
   ]
 }
