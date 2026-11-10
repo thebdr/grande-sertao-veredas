@@ -34,11 +34,13 @@ struct Seen {
     arrived_ms: i64,
 }
 
-/// What the feed knows of one series: its latest sample whatever its key, and per key.
+/// What the feed knows of one series: its latest sample whatever its key, per key, and whether
+/// its samples carry keys (a frame said so, or the ingest's cache counted keys).
 #[derive(Clone, Debug, Default)]
 struct SeriesSeen {
     any: Option<Seen>,
     by_key: BTreeMap<String, Seen>,
+    keyed: bool,
 }
 
 /// A marker of a keyed series: its key and its place along the path, 0 to 1.
@@ -71,9 +73,17 @@ pub struct ObjectView {
 impl ObjectView {
     /// Whether two views show the same: everything but the arrival, which a source polled on
     /// an interval refreshes with every sample. A change is published; an arrival alone rides the
-    /// next change and the snapshot.
+    /// next change and the snapshot. Compared as the page receives them, so a value stuck at NaN
+    /// (no number, never equal to itself) is the same as itself.
     pub fn same(&self, other: &ObjectView) -> bool {
-        ObjectView { since_ms: None, ..self.clone() } == ObjectView { since_ms: None, ..other.clone() }
+        let shown = |v: &ObjectView| {
+            let mut j = v.to_json();
+            if let Some(m) = j.as_object_mut() {
+                m.remove("since_ms");
+            }
+            j
+        };
+        shown(self) == shown(other)
     }
 
     pub fn to_json(&self) -> Json {
@@ -93,8 +103,8 @@ impl ObjectView {
     }
 }
 
-/// The health a feed reads of a source: whether it is live, and its label.
-fn health_label(state: &HealthState) -> (&'static str, Option<String>) {
+/// A source's health as the page reads it: a label and, where it has one, its detail.
+pub fn health_label(state: &HealthState) -> (&'static str, Option<String>) {
     match state {
         HealthState::Waiting => ("waiting", None),
         HealthState::Live => ("live", None),
@@ -147,6 +157,7 @@ impl Fold {
             s.any = Some(seen.clone());
         }
         if let Some(key) = key {
+            s.keyed = true;
             match s.by_key.get(key) {
                 Some(prev) if prev.index_ms > index_ms => {}
                 _ => {
@@ -167,10 +178,18 @@ impl Fold {
     }
 
     /// The ingest's cached last value of a series (whatever its key), taken when it is newer than
-    /// what the frames brought, or when nothing came yet: text arrives only this way.
-    pub fn cached(&mut self, source: &str, series: &str, last_index_ms: i64, last_value: &str, now_ms: i64) {
+    /// what the frames brought, or when nothing came yet: text arrives only this way. `keys` is
+    /// how many keys the ingest has seen on the series: a series with keys is keyed even before a
+    /// frame carried one (a lag, or a backfill read before anyone listened).
+    pub fn cached(&mut self, source: &str, series: &str, last_index_ms: i64, last_value: &str, keys: usize, now_ms: i64) {
         let k = (source.to_string(), series.to_string());
-        if !self.watched.contains(&k) || last_value.is_empty() {
+        if !self.watched.contains(&k) {
+            return;
+        }
+        if keys > 0 {
+            self.series.entry(k.clone()).or_default().keyed = true;
+        }
+        if last_value.is_empty() {
             return;
         }
         let numeric = self.types.get(&k).is_none_or(|t| matches!(t, SeriesType::Int | SeriesType::Float));
@@ -206,8 +225,9 @@ impl Fold {
         let mut place = None;
         let mut items = Vec::new();
         if o.show == Show::Move {
-            let keyed = o.value.key.is_none()
-                && self.series.get(&(o.value.source.clone(), o.value.series.clone())).is_some_and(|s| !s.by_key.is_empty());
+            // A keyed series shows a marker per key it has a place for, never one place for the
+            // latest sample whatever its key.
+            let keyed = o.value.key.is_none() && self.series.get(&(o.value.source.clone(), o.value.series.clone())).is_some_and(|s| s.keyed);
             if keyed {
                 let forget = o.stale_after_ms.unwrap_or(KEY_FORGET_MS) as i64;
                 if let Some(s) = self.series.get(&(o.value.source.clone(), o.value.series.clone())) {
@@ -286,6 +306,19 @@ fn away_sources(live: &Live) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
+/// One evaluation: the cache folded in, every object read, the session's status.
+fn evaluate(fold: &mut Fold, live: &Live, binding: &Binding) -> (Vec<ObjectView>, Json) {
+    let now = now_unix_ms();
+    if let Ok(cache) = live.series.read() {
+        for s in cache.values() {
+            fold.cached(s.series.source.as_str(), s.series.series.as_ref(), s.last_index_ms, &s.last_value, s.keys, now);
+        }
+    }
+    let away = away_sources(live);
+    let objects = binding.objects.iter().map(|o| fold.view(o, !away.contains(&o.value.source), now)).collect();
+    (objects, status(live))
+}
+
 /// What a feed publishes: the objects as they stand and the session's status.
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
@@ -309,17 +342,19 @@ pub struct Feed {
 impl Feed {
     /// Start the feed of a session on the current tokio runtime; it runs until aborted.
     pub fn spawn(live: Arc<Live>, binding: Arc<Binding>) -> (Feed, tokio::task::JoinHandle<()>) {
-        let snapshot = Arc::new(RwLock::new(Snapshot::default()));
-        let (events, _) = broadcast::channel(256);
-        let feed = Feed { snapshot: Arc::clone(&snapshot), events: events.clone() };
-        // Subscribed before the first evaluation, so no frame falls between the seed and the stream.
+        // Subscribed before the first evaluation, so no frame falls between the seed and the stream;
+        // evaluated once before anything is served, so neither route ever serves an empty snapshot.
         let mut rx = live.subscribe();
         let mut fold = Fold::new(&binding);
+        let (objects, first_status) = evaluate(&mut fold, &live, &binding);
+        let snapshot = Arc::new(RwLock::new(Snapshot { objects, status: first_status.clone() }));
+        let (events, _) = broadcast::channel(256);
+        let feed = Feed { snapshot: Arc::clone(&snapshot), events: events.clone() };
         let task = tokio::spawn(async move {
             let mut tick = tokio::time::interval(TICK);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             let mut last_status_at = tokio::time::Instant::now() - STATUS_EVERY;
-            let mut last_status = Json::Null;
+            let mut last_status = first_status;
             loop {
                 tokio::select! {
                     msg = rx.recv() => match msg {
@@ -334,15 +369,7 @@ impl Feed {
                         }
                     },
                     _ = tick.tick() => {
-                        let now = now_unix_ms();
-                        if let Ok(cache) = live.series.read() {
-                            for s in cache.values() {
-                                fold.cached(s.series.source.as_str(), s.series.series.as_ref(), s.last_index_ms, &s.last_value, now);
-                            }
-                        }
-                        let away = away_sources(&live);
-                        let objects: Vec<ObjectView> = binding.objects.iter().map(|o| fold.view(o, !away.contains(&o.value.source), now)).collect();
-                        let status_now = status(&live);
+                        let (objects, status_now) = evaluate(&mut fold, &live, &binding);
                         let changed: Vec<Json> = {
                             let prev = snapshot.read().map(|s| s.objects.clone()).unwrap_or_default();
                             objects.iter().enumerate().filter(|(i, o)| prev.get(*i).is_none_or(|p| !p.same(o))).map(|(_, o)| o.to_json()).collect()

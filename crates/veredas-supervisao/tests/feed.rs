@@ -18,7 +18,7 @@ use veredas_supervisao::{Host, config};
 /// over another series, and shorter freshness bounds for a test's clock.
 fn grown(mut ex: Example) -> Example {
     ex.project.push_str("\n[[rule]]\nname = \"positions\"\npattern = \"POS item=(?P<item>\\\\w+) at=(?P<at>[0-9.]+)\"\nscope = \"sorter\"\ntypes = { at = \"float\" }\nkey = \"item\"\n\n[[rule]]\nname = \"modes\"\npattern = \"MODE (?P<mode>\\\\w+)\"\nscope = \"sorter\"\n");
-    let extra = "\n[[object]]\nid = \"tracked\"\nlabel = \"Tracked\"\nvalue = { source = \"sorter\", series = \"at\" }\nshow = \"move\"\npath = \"loop\"\nstale_after_ms = 1500\n\n[[object]]\nid = \"tracked-a1\"\nlabel = \"A1\"\nvalue = { source = \"sorter\", series = \"at\", key = \"A1\" }\nshow = \"move\"\npath = \"loop\"\n\n[[object]]\nid = \"at-b2\"\nlabel = \"B2 at\"\nvalue = { source = \"sorter\", series = \"at\", key = \"B2\" }\nstates = [ { above = 40, state = \"warn\", word = \"far\" } ]\n\n[[object]]\nid = \"mode\"\nlabel = \"Mode\"\nvalue = { source = \"sorter\", series = \"mode\" }\nstates = [ { equals = \"jam\", state = \"warn\", word = \"jammed\" } ]\nnormal = \"running\"\n\n[[object]]\nid = \"outlet-9\"\nlabel = \"Outlet 9\"\nvalue = { source = \"plc\", series = \"fill1\" }\nstates = [ { equals = 2, series = \"infeed\", state = \"alarm\", word = \"infeed fault\" }, { at_least = 100, state = \"warn\", word = \"full\" } ]\n\n[[dashboard]]";
+    let extra = "\n[[object]]\nid = \"tracked\"\nlabel = \"Tracked\"\nvalue = { source = \"sorter\", series = \"at\" }\nshow = \"move\"\npath = \"loop\"\nstale_after_ms = 1500\n\n[[object]]\nid = \"tracked-default\"\nlabel = \"Tracked, default bound\"\nvalue = { source = \"sorter\", series = \"at\" }\nshow = \"move\"\npath = \"loop\"\n\n[[object]]\nid = \"tracked-a1\"\nlabel = \"A1\"\nvalue = { source = \"sorter\", series = \"at\", key = \"A1\" }\nshow = \"move\"\npath = \"loop\"\n\n[[object]]\nid = \"at-b2\"\nlabel = \"B2 at\"\nvalue = { source = \"sorter\", series = \"at\", key = \"B2\" }\nstates = [ { above = 40, state = \"warn\", word = \"far\" } ]\n\n[[object]]\nid = \"mode\"\nlabel = \"Mode\"\nvalue = { source = \"sorter\", series = \"mode\" }\nstates = [ { equals = \"jam\", state = \"warn\", word = \"jammed\" } ]\nnormal = \"running\"\n\n[[object]]\nid = \"outlet-9\"\nlabel = \"Outlet 9\"\nvalue = { source = \"plc\", series = \"fill1\" }\nstates = [ { equals = 2, series = \"infeed\", state = \"alarm\", word = \"infeed fault\" }, { at_least = 100, state = \"warn\", word = \"full\" } ]\n\n[[dashboard]]";
     ex.binding = ex.binding.replacen("\n[[dashboard]]", extra, 1).replace("stale_after_ms = 30000", "stale_after_ms = 1500");
     ex
 }
@@ -101,6 +101,12 @@ fn the_fold_reads_every_object_exactly() {
     // Markers per key: every key with its place, forgotten past the bound.
     f.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"at","k":"B2","ms":1,"v":50.0},{"src":"sorter","ser":"at","k":"A1","ms":1,"v":10.0}]}"#, 20_000);
     let v = f.view(o("tracked"), true, 20_000);
+    // The value is the latest sample whatever its key (the frame's last, on an equal index).
+    assert_eq!((v.value.clone(), v.text.as_deref(), v.state, v.stale), (Some(Reading::Num(10.0)), Some("10"), StateClass::Normal, false));
+    // With no bound of its own, a key is forgotten 10 s after its last sample.
+    let ids = |v: &veredas_supervisao::feed::ObjectView| v.items.iter().map(|i| i.key.clone()).collect::<Vec<_>>();
+    assert_eq!(ids(&f.view(o("tracked-default"), true, 30_000)), ["A1", "B2"]);
+    assert_eq!(ids(&f.view(o("tracked-default"), true, 30_001)), Vec::<String>::new());
     assert_eq!((v.place, v.items.clone()), (None, vec![Item { key: "A1".into(), place: 0.1 }, Item { key: "B2".into(), place: 0.5 }]));
     f.sample("sorter", "at", Some("A1"), 2, 20.0, 21_000);
     assert_eq!(f.view(o("tracked"), true, 21_501).items, vec![Item { key: "A1".into(), place: 0.2 }], "B2 last moved 1501 ms ago");
@@ -120,14 +126,14 @@ fn the_fold_reads_every_object_exactly() {
 
     // Text arrives through the ingest's cache: compared as text, exactly; a newer cached value of
     // a numeric series heals a missed frame; an older one is ignored.
-    f.cached("sorter", "mode", 5, "jam", 30_000);
+    f.cached("sorter", "mode", 5, "jam", 0, 30_000);
     let v = f.view(o("mode"), true, 30_000);
     assert_eq!((v.value, v.text.as_deref(), v.state, v.word.as_str()), (Some(Reading::Text("jam".into())), Some("jam"), StateClass::Warn, "jammed"));
-    f.cached("sorter", "mode", 6, "Jam", 30_001);
+    f.cached("sorter", "mode", 6, "Jam", 0, 30_001);
     assert_eq!(f.view(o("mode"), true, 30_001).state, StateClass::Normal);
-    f.cached("plc", "speed", 3, "1.75", 30_002);
+    f.cached("plc", "speed", 3, "1.75", 0, 30_002);
     assert_eq!(f.view(o("speed"), true, 30_002).value, Some(Reading::Num(1.75)));
-    f.cached("plc", "speed", 2, "9", 30_003);
+    f.cached("plc", "speed", 2, "9", 0, 30_003);
     assert_eq!(f.view(o("speed"), true, 30_003).value, Some(Reading::Num(1.75)));
 
     // Away, by the source's health: waiting is away only once the source has delivered (portal
@@ -144,6 +150,51 @@ fn the_fold_reads_every_object_exactly() {
     ] {
         assert_eq!((away(&state, 0), away(&state, 1)), (before_first, after_first), "{state:?}");
     }
+
+    // A series the ingest counts keys on is keyed before any frame carried one: its markers come
+    // per key, never one place for the latest sample whatever its key; without keys, one place.
+    let mut g = Fold::new(&b);
+    g.cached("sorter", "at", 5, "42", 2, 1_000);
+    let v = g.view(o("tracked"), true, 1_000);
+    assert_eq!((v.place, v.items.clone(), v.text.as_deref()), (None, vec![], Some("42")));
+    assert_eq!(g.view(o("tracked"), true, 1_000_000).place, None, "never one place, however long");
+    let mut g = Fold::new(&b);
+    g.cached("sorter", "at", 5, "42", 0, 1_000);
+    assert_eq!(g.view(o("tracked"), true, 1_000).place, Some(0.42));
+
+    // A change is anything but the arrival: a value, a level, a place or the markers moving is
+    // one; the same reading arriving again is not; a value stuck at NaN is the same as itself.
+    let mut g = Fold::new(&b);
+    g.sample("plc", "fill2", None, 1, 85.0, 1_000);
+    let before = g.view(o("outlet-2"), true, 1_000);
+    g.sample("plc", "fill2", None, 2, 85.0, 2_000);
+    let again = g.view(o("outlet-2"), true, 2_000);
+    assert!(before.same(&again) && before.since_ms != again.since_ms);
+    g.sample("plc", "fill2", None, 3, 90.0, 3_000);
+    let moved = g.view(o("outlet-2"), true, 3_000);
+    assert_eq!((moved.state, moved.word.as_str(), moved.level), (StateClass::Near, "near full", Some(0.9)));
+    assert!(!before.same(&moved), "a level moving inside its state is a change");
+    g.sample("plc", "p1", None, 1, 25.0, 1_000);
+    let at25 = g.view(o("parcel-1"), true, 1_000);
+    g.sample("plc", "p1", None, 2, 26.0, 1_000);
+    assert!(!at25.same(&g.view(o("parcel-1"), true, 1_000)), "a marker moving is a change");
+    g.sample("sorter", "at", Some("A1"), 1, 10.0, 1_000);
+    let one = g.view(o("tracked"), true, 1_000);
+    g.sample("sorter", "at", Some("B2"), 1, 10.0, 1_000);
+    assert!(!one.same(&g.view(o("tracked"), true, 1_000)), "a marker more is a change");
+    g.cached("plc", "fill1", 10, "NaN", 0, 1_000);
+    let nan = g.view(o("outlet-1"), true, 1_000);
+    assert_eq!((nan.to_json()["value"].clone(), nan.text.as_deref()), (Value::Null, Some("NaN")));
+    assert!(nan.same(&g.view(o("outlet-1"), true, 5_000)), "NaN is the same as itself");
+
+    // The health labels, as the page reads them.
+    use veredas_supervisao::feed::health_label;
+    assert_eq!(health_label(&HealthState::Waiting), ("waiting", None));
+    assert_eq!(health_label(&HealthState::Live), ("live", None));
+    assert_eq!(health_label(&HealthState::Idle { silence_ms: 25_400 }), ("idle", Some("silent for 25 s".to_string())));
+    assert_eq!(health_label(&HealthState::Retrying("refused".into())), ("retrying", Some("refused".to_string())));
+    assert_eq!(health_label(&HealthState::Ended), ("ended", None));
+    assert_eq!(health_label(&HealthState::Failed("gone".into())), ("failed", Some("gone".to_string())));
 
     // The page's form of a view.
     f.sample("plc", "fill2", None, 1, 85.0, 40_000);
@@ -196,8 +247,15 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
     let (name, data) = sse.next(Duration::from_secs(10)).unwrap();
     assert_eq!(name, "snapshot");
     let first: Value = serde_json::from_str(&data).unwrap();
-    assert_eq!(first["objects"].as_array().unwrap().len(), 13);
+    assert_eq!(first["objects"].as_array().unwrap().len(), 14);
     assert_eq!(object(&first, "outlet-2")["word"], json!("near full"));
+    assert_eq!((first["session"]["running"].clone(), first["session"]["writes_armed"].clone(), first["session"]["health"]["plc"]["state"].clone()), (json!(true), json!(false), json!("live")));
+    // The status at least every second: two in a row arrive within a loaded host's margin of it.
+    let mut stamps = Vec::new();
+    assert!(sse.until(Duration::from_secs(10), |n, _| { if n == "session" { stamps.push(std::time::Instant::now()); } stamps.len() == 3 }).is_some());
+    for w in stamps.windows(2) {
+        assert!(w[1] - w[0] < Duration::from_millis(2_500), "{:?}", w[1] - w[0]);
+    }
     let got = sse.until(Duration::from_secs(5), |n, _| n == "session").expect("a status within the second");
     let (_, st) = got.last().unwrap();
     assert_eq!((st["running"].clone(), st["writes_armed"].clone(), st["health"]["plc"]["state"].clone(), st["health"]["plc"]["detail"].clone()), (json!(true), json!(false), json!("live"), Value::Null));
@@ -241,6 +299,13 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
     assert_eq!((object(&s, "read-rate")["text"].clone(), object(&s, "read-rate")["word"].clone(), s["session"]["health"]["sorter"]["state"].clone()), (json!("97.5"), json!("stale"), json!("live")));
 
     // The plant away: every object of its source stale, its last value kept.
+    // A value moving inside its state reaches the stream.
+    bench.server("plc").unwrap().set("fill2", 90.0);
+    let got = sse.until(Duration::from_secs(20), |n, v| n == "objects" && v["objects"].as_array().unwrap().iter().any(|o| o["id"] == "outlet-2" && o["level"] == json!(0.9))).expect("the level's move");
+    let (_, last) = got.last().unwrap();
+    let o2 = last["objects"].as_array().unwrap().iter().find(|o| o["id"] == "outlet-2").unwrap();
+    assert_eq!((o2["state"].clone(), o2["word"].clone(), o2["text"].clone()), (json!("near"), json!("near full"), json!("90")));
+
     bench.stop();
     assert!(wait(Duration::from_secs(30), || object(&snapshot(addr), "outlet-1")["stale"] == json!(true)), "{}", snapshot(addr));
     let s = snapshot(addr);
@@ -255,6 +320,8 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
         states.insert(s["session"]["health"]["plc"]["state"].as_str().unwrap().to_string());
     }
     assert!(states.iter().all(|x| x == "retrying" || x == "waiting"), "{states:?}");
+    // And the stream's status says so.
+    assert!(sse.until(Duration::from_secs(10), |n, v| n == "session" && (v["health"]["plc"]["state"] == json!("retrying") || v["health"]["plc"]["state"] == json!("waiting"))).is_some(), "the stream carries the source away");
     host.stop();
 }
 
