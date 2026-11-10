@@ -897,11 +897,13 @@ relative to the bench file's folder.
 **A ramp** (the value of `ramp`): each step adds `step` to what the tag holds, wrapped by the
 range's width while past `high`; a value outside the range (a client's write, a plant-side set)
 starts again at `low`, one inside it moves the ramp on from there.
-- `low` (required), `high` (required): the range, finite, `low` below `high`; the tag's initial
-  value inside it.
+- `low` (required), `high` (required): the range, finite, `low` below `high`, its width finite;
+  the tag's initial value inside it.
 - `step` (`1`): above 0 and at most the range's width; an int's range and step are whole numbers.
-- `decimals` (none): a float's places after each step; absent, the sum as it falls. An int takes
-  none.
+- `decimals` (none): a float's places; with them every step is counted in units of the last place,
+  so the ramp reaches its high exactly, and `low`, `high` and `step` must be whole numbers of
+  those units, small enough to count exactly (with fifteen places, a range within ±9); absent, the
+  sum as it falls. An int takes none.
 - `interval_ms` (`1000`): between steps; at least the server's tick of 20 ms.
 
 **A reaction** (an entry of `reactions`): what the plant does when a client writes a tag.

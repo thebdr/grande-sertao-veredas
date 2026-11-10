@@ -197,7 +197,9 @@ fn default_interval() -> u64 {
 /// current value, and a value past `high` wraps by the range's width, so a place along a loop
 /// comes round and a level fills, then empties and fills again. It steps from what the tag holds,
 /// so a client's write or a plant-side set inside the range moves the ramp on from there; a value
-/// outside it starts again at `low`.
+/// outside it starts again at `low`. With places, every step is counted in units of the last
+/// place (the range and the step whole numbers of them, refused otherwise), so the ramp reaches
+/// its high exactly and never steps back.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Ramp {
@@ -217,23 +219,41 @@ fn default_step() -> f64 {
 }
 
 /// The value after one step of a ramp from `v`: `v + step`, wrapped by the range's width while
-/// past `high`, rounded to the ramp's places; a `v` outside the range starts at `low`.
+/// past `high`; with places, counted in units of the last place (`v` rounded to them first), so
+/// no float sum's last bit carries a value past its high; a `v` outside the range starts at
+/// `low`.
 pub fn ramp_next(v: f64, r: &Ramp) -> f64 {
     if !(v >= r.low && v <= r.high) {
         return r.low;
     }
-    let width = r.high - r.low;
-    let mut n = v + r.step;
-    while n > r.high {
-        n -= width;
-    }
     match r.decimals {
         Some(d) => {
             let f = 10f64.powi(d as i32);
-            (n * f).round() / f
+            let (lo, hi, step) = ((r.low * f).round(), (r.high * f).round(), (r.step * f).round());
+            let mut n = (v * f).round() + step;
+            while n > hi {
+                n -= hi - lo;
+            }
+            n / f
         }
-        None => n,
+        None => {
+            let width = r.high - r.low;
+            let mut n = v + r.step;
+            while n > r.high {
+                n -= width;
+            }
+            n
+        }
     }
+}
+
+/// The largest whole number a float counts exactly: a ramp at places counts its units below it.
+const EXACT: f64 = 9_007_199_254_740_992.0;
+
+/// Whether `x` is a whole number of units of `d` places.
+fn at_places(x: f64, d: u8) -> bool {
+    let u = x * 10f64.powi(d as i32);
+    (u - u.round()).abs() <= 1e-9 * u.abs().max(1.0)
 }
 
 /// What the plant does when a client writes into a tag: a timed sequence of values, on the same
@@ -402,6 +422,9 @@ fn compile(cfg: &OpcConfig) -> Result<Vec<CompiledReaction>, OpcError> {
             if r.low >= r.high {
                 return Err(bad(format!("{place}.ramp: the range is empty ({} is not below {})", r.low, r.high)));
             }
+            if !(r.high - r.low).is_finite() {
+                return Err(bad(format!("{place}.ramp: the range's width ({:?}..={:?}) is past what a float holds", r.low, r.high)));
+            }
             if !(r.step > 0.0 && r.step <= r.high - r.low) {
                 return Err(bad(format!("{place}.ramp: the step {} is not above 0 and at most the range's width {}", r.step, r.high - r.low)));
             }
@@ -418,6 +441,16 @@ fn compile(cfg: &OpcConfig) -> Result<Vec<CompiledReaction>, OpcError> {
                 && d > 15
             {
                 return Err(bad(format!("{place}.ramp.decimals {d} is past 15")));
+            }
+            if let Some(d) = r.decimals {
+                for (key, x) in [("low", r.low), ("high", r.high), ("step", r.step)] {
+                    if (x * 10f64.powi(d as i32)).abs() > EXACT {
+                        return Err(bad(format!("{place}.ramp.{key} {x} at {d} places is past what a float counts exactly")));
+                    }
+                    if !at_places(x, d) {
+                        return Err(bad(format!("{place}.ramp.{key} {x} is not a whole number of the ramp's places ({d})")));
+                    }
+                }
             }
             let v = match &initial {
                 Variant::Int32(x) => *x as f64,
