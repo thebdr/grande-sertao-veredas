@@ -15,9 +15,11 @@ use veredas_supervisao::{Host, config, web};
 
 #[test]
 fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
+    // Two plants on one host, so the page's reading of its own session is told from another's.
     let dir = tempfile::tempdir().unwrap();
     let bench = plant(&dir.path().join("bench"));
-    let path = write_example(dir.path(), &live_example(&bench, false));
+    let other = plant(&dir.path().join("bench-hall"));
+    let path = two_plants(dir.path(), &bench, &other);
     let log = dir.path().join("loop/sorts.log");
     std::fs::write(&log, "").unwrap();
     let host = Host::start(config::load_file(&path).unwrap()).unwrap();
@@ -89,31 +91,46 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     named.dedup();
     assert_eq!(named, ["/api/sessions", "/portal/api/opc/write", "/portal/api/series", "/portal/api/series/data", "/portal/api/table/data", "/portal/api/tables"]);
 
-    // The page itself, run in a headless browser against the session. Fifty more sorts first, so
-    // the Tables view has a second page.
-    append(&log, &(0..50).map(|i| format!("{} SORT outlet={} travel={} rate=99.0", stamp(base + 180_000 + i * 1000), 1 + i % 3, 20.0 + i as f64 * 0.5)).collect::<Vec<_>>());
+    // Every route of portal's the bundle names sits under the session's nested router and is one
+    // of the four or the write: no other `/portal/` path (portal's event stream among them).
+    let portal: Vec<&str> = web::APP_JS
+        .match_indices("/portal")
+        .map(|(i, _)| {
+            let rest = &web::APP_JS[i..];
+            &rest[..rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '/' || c == '_')).unwrap_or(rest.len())]
+        })
+        .collect();
+    assert!(portal.iter().all(|p| ["/portal/api/tables", "/portal/api/table/data", "/portal/api/series", "/portal/api/series/data", "/portal/api/opc/write"].contains(p)), "{portal:?}");
+
+    // The page itself, run in a headless browser against the session, every request it makes
+    // watched from its first (streams and other origins included). Fifty more sorts first, so the
+    // Tables view has a second page; the oldest of them to three places.
+    append(&log, &(0..50).map(|i| format!("{} SORT outlet={} travel={} rate=99.0", stamp(base + 180_000 + i * 1000), 1 + i % 3, if i == 0 { 12.345 } else { 20.0 + i as f64 * 0.5 })).collect::<Vec<_>>());
     assert!(wait(Duration::from_secs(20), || {
         let (_, t) = get(addr, "/s/loop/portal/api/tables");
         t["tables"].as_array().unwrap().iter().any(|x| x["name"] == "sorts" && x["rows"] == json!(53))
     }));
-    let mut page = Browser::open(&format!("http://{addr}/s/loop/#tables"));
+    let mut page = Browser::watched(&format!("http://{addr}/s/loop/#tables"));
 
-    // The Tables view lists the catalog as portal lists it.
-    let listed = page.wait_for(r#"(() => { const b = [...document.querySelectorAll(".list button[data-table]")]; return b.length ? b.map((x) => [x.dataset.table, x.querySelector(".mono").textContent]) : null; })()"#, Duration::from_secs(20));
+    // The Tables view lists the catalog as portal lists it: each button's name, kind and count.
+    const LISTED: &str = r#"(() => { const b = [...document.querySelectorAll(".list button[data-table]")]; return b.length ? b.map((x) => [x.dataset.table, x.children[0].textContent, x.children[1].textContent]) : null; })()"#;
+    let listed = page.wait_for(LISTED, Duration::from_secs(20));
     let (_, t) = get(addr, "/s/loop/portal/api/tables");
-    let kinds: Vec<(String, String)> = listed.as_array().unwrap().iter().map(|r| (r[0].as_str().unwrap().to_string(), r[1].as_str().unwrap().split(" · ").next().unwrap().to_string())).collect();
-    assert_eq!(kinds, t["tables"].as_array().unwrap().iter().map(|x| (x["name"].as_str().unwrap().to_string(), x["kind"].as_str().unwrap().to_string())).collect::<Vec<_>>());
-    assert!(listed.as_array().unwrap().iter().any(|r| r[0] == "sorts" && r[1] == json!(format!("{} · 53", sorts["kind"].as_str().unwrap()))), "{listed}");
+    let want: Vec<(String, String, String)> = t["tables"].as_array().unwrap().iter().map(|x| (x["name"].as_str().unwrap().to_string(), x["name"].as_str().unwrap().to_string(), x["kind"].as_str().unwrap().to_string())).collect();
+    let got: Vec<(String, String, String)> = listed.as_array().unwrap().iter().map(|r| (r[0].as_str().unwrap().to_string(), r[1].as_str().unwrap().to_string(), r[2].as_str().unwrap().split(" · ").next().unwrap().to_string())).collect();
+    assert_eq!(got, want);
+    assert!(listed.as_array().unwrap().iter().any(|r| r[0] == "sorts" && r[2] == json!(format!("{} · 53", sorts["kind"].as_str().unwrap()))), "{listed}");
 
-    // A table picked: its first page of fifty, newest first, cell for cell as portal pages it,
-    // then the older page.
+    // A table picked: its first page of fifty, newest first, header (names and types) and every
+    // cell as portal pages it, no newer page; the older page; back to the newer one.
     const SHOWN: &str = r#"(() => {
   const pager = document.querySelector(".list-main .pager [data-rows]");
+  const button = (t) => [...document.querySelectorAll(".list-main .pager button")].find((b) => b.textContent === t)?.disabled ?? null;
   return pager ? {
-    rows: pager.dataset.rows,
-    head: [...document.querySelectorAll(".list-main thead th")].map((th) => th.firstChild.textContent),
+    rows: pager.dataset.rows, said: pager.textContent,
+    head: [...document.querySelectorAll(".list-main thead th")].map((th) => th.textContent),
     body: [...document.querySelectorAll(".list-main tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent)),
-    older: [...document.querySelectorAll(".list-main .pager button")].find((b) => b.textContent === "Older ›")?.disabled ?? null,
+    newer: button("‹ Newer"), older: button("Older ›"),
   } : null;
 })()"#;
     let cell = |v: &Value| match v {
@@ -128,34 +145,62 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     };
     let as_shown = |p: &Value| -> (Vec<String>, Vec<Vec<String>>) {
         (
-            p["schema"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap().to_string()).collect(),
+            p["schema"].as_array().unwrap().iter().map(|c| format!("{} {}", c["name"].as_str().unwrap(), c["type"].as_str().unwrap().to_lowercase())).collect(),
             p["rows"].as_array().unwrap().iter().map(|r| r.as_array().unwrap().iter().map(cell).collect()).collect(),
         )
     };
+    let shown_at = |page: &mut Browser, rows: &str| page.wait_for(&format!("(() => {{ const s = {SHOWN}; return s && s.rows === '{rows}' ? s : null; }})()"), Duration::from_secs(20));
+    let click = |page: &mut Browser, text: &str| {
+        page.eval(&format!(r#"[...document.querySelectorAll(".list-main .pager button")].find((b) => b.textContent === "{text}").click()"#));
+    };
     page.eval(r#"document.querySelector('.list button[data-table="sorts"]').click()"#);
-    let shown = page.wait_for(&format!("(() => {{ const s = {SHOWN}; return s && s.rows === '1-50/53' ? s : null; }})()"), Duration::from_secs(20));
+    let first = shown_at(&mut page, "1-50/53");
     let (head, body) = as_shown(&get(addr, "/s/loop/portal/api/table/data?name=sorts&limit=50&offset=0").1);
-    assert_eq!((shown["head"].clone(), shown["body"].clone(), shown["older"].clone()), (json!(head), json!(body), json!(false)));
-    let travel = head.iter().position(|c| c == "travel").unwrap();
-    assert_eq!(shown["body"][0][travel], json!("44.5"), "newest first");
-    page.eval(r#"[...document.querySelectorAll(".list-main .pager button")].find((b) => b.textContent === "Older ›").click()"#);
-    let shown = page.wait_for(&format!("(() => {{ const s = {SHOWN}; return s && s.rows === '51-53/53' ? s : null; }})()"), Duration::from_secs(20));
+    assert_eq!((first["head"].clone(), first["body"].clone(), first["newer"].clone(), first["older"].clone()), (json!(head), json!(body), json!(true), json!(false)));
+    assert_eq!(first["said"], json!("rows 1–50 of 53, newest first"));
+    let travel = head.iter().position(|c| c.starts_with("travel ")).unwrap();
+    assert_eq!((first["body"][0][travel].clone(), first["body"][49][travel].clone()), (json!("44.5"), json!("12.345")), "newest first, to three places");
+    click(&mut page, "Older ›");
+    let older = shown_at(&mut page, "51-53/53");
     let (_, body) = as_shown(&get(addr, "/s/loop/portal/api/table/data?name=sorts&limit=50&offset=50").1);
-    assert_eq!((shown["body"].clone(), shown["older"].clone()), (json!(body), json!(true)));
-    assert_eq!(shown["body"].as_array().unwrap().iter().map(|r| r[travel].clone()).collect::<Vec<_>>(), [json!("11.5"), json!("12.5"), json!("10.5")]);
+    assert_eq!((older["body"].clone(), older["newer"].clone(), older["older"].clone()), (json!(body), json!(false), json!(true)));
+    assert_eq!(older["body"].as_array().unwrap().iter().map(|r| r[travel].clone()).collect::<Vec<_>>(), [json!("11.5"), json!("12.5"), json!("10.5")]);
+    click(&mut page, "‹ Newer");
+    let back = shown_at(&mut page, "1-50/53");
+    assert_eq!((back["body"].clone(), back["newer"].clone()), (first["body"].clone(), json!(true)), "back to the newest page whole");
 
-    // The Series view lists the series as portal lists them and charts a picked one's last hour,
-    // every point of the window drawn in order.
+    // The Series view lists the series as portal lists them: each button's names, type and count.
     page.eval(r#"location.hash = "series""#);
-    let listed = page.wait_for(r#"(() => { const b = [...document.querySelectorAll(".list button[data-series]")]; return b.length ? b.map((x) => x.dataset.series) : null; })()"#, Duration::from_secs(20));
+    let listed = page.wait_for(r#"(() => { const b = [...document.querySelectorAll(".list button[data-series]")]; return b.length ? b.map((x) => [x.dataset.series, x.children[0].textContent, x.children[1].textContent]) : null; })()"#, Duration::from_secs(20));
     let (_, s) = get(addr, "/s/loop/portal/api/series");
-    assert_eq!(listed, json!(s["series"].as_array().unwrap().iter().map(|x| format!("{}/{}", x["source"].as_str().unwrap(), x["series"].as_str().unwrap())).collect::<Vec<_>>()));
+    let series = s["series"].as_array().unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), series.len());
+    for (b, x) in listed.as_array().unwrap().iter().zip(series) {
+        let (src, ser, ty) = (x["source"].as_str().unwrap(), x["series"].as_str().unwrap(), x["type"].as_str().unwrap());
+        assert_eq!((b[0].clone(), b[1].clone()), (json!(format!("{src}/{ser}")), json!(format!("{src} · {ser}"))));
+        let (shown_ty, count) = b[2].as_str().unwrap().split_once(" · ").unwrap();
+        // The OPC series keep counting between the page's listing and this one; the log's do not.
+        let count: u64 = count.parse().unwrap();
+        assert!(shown_ty == ty && count <= x["count"].as_u64().unwrap() && (src != "sorter" || count == x["count"].as_u64().unwrap()), "{b} against {x}");
+    }
+    assert!(listed.as_array().unwrap().iter().any(|b| b[0] == "sorter/travel" && b[2] == "float · 53"), "{listed}");
+
+    // A series picked: its last hour charted, every point of portal's window placed exactly where
+    // the chart's axes put its time and value, the axis labelled by the window's values.
     page.eval(r#"document.querySelector('.list button[data-series="sorter/travel"]').click()"#);
     let chart = page.wait_for(
-        r#"(() => { const p = document.querySelector(".list-main .pager [data-points]"); const line = document.querySelector(".list-main svg.trend path.line"); return p && line ? { points: p.dataset.points, d: line.getAttribute("d") } : null; })()"#,
+        r#"(() => { const p = document.querySelector(".list-main .pager [data-points]"); const line = document.querySelector(".list-main svg.trend path.line"); return p && line ? { points: p.dataset.points, said: p.textContent, d: line.getAttribute("d"), axis: [...document.querySelectorAll(".list-main svg.trend text.axis")].slice(0, 4).map((t) => t.textContent) } : null; })()"#,
         Duration::from_secs(20),
     );
-    assert_eq!(chart["points"], json!("53/53"));
+    let last = series.iter().find(|x| x["source"] == "sorter" && x["series"] == "travel").unwrap()["last_value"].as_str().unwrap().to_string();
+    assert_eq!((chart["points"].clone(), chart["said"].clone()), (json!("53/53"), json!(format!("last 60 min · 53 of 53 points · last {last}"))));
+    // The window the page asked portal for: the last hour to the session's now, 600 points.
+    let asked: Vec<String> = page.requests().into_iter().map(|(u, _)| u).filter(|u| u.contains("/portal/api/series/data?")).collect();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    let query = |k: &str| asked[0].split(['?', '&']).find_map(|kv| kv.strip_prefix(&format!("{k}="))).unwrap().to_string();
+    let (from, to): (i64, i64) = (query("from").parse().unwrap(), query("to").parse().unwrap());
+    assert_eq!((query("source"), query("series"), query("points"), to - from), ("sorter".to_string(), "travel".to_string(), "600".to_string(), 3_600_000));
+    assert!((store_now() - to).abs() < 15_000, "the window ends at the session's now: {to}");
     let drawn: Vec<(f64, f64)> = chart["d"]
         .as_str()
         .unwrap()
@@ -166,27 +211,73 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
             (it.next().unwrap(), it.next().unwrap())
         })
         .collect();
-    let (_, w) = get(addr, &format!("/s/loop/portal/api/series/data?source=sorter&series=travel&from={}&to={}&points=600", base - 1, store_now()));
-    let values: Vec<f64> = w["points"].as_array().unwrap().iter().map(|p| p[1].as_f64().unwrap()).collect();
-    assert_eq!(drawn.len(), values.len());
-    assert!(drawn.windows(2).all(|p| p[0].0 < p[1].0), "drawn in time order");
-    for i in 0..values.len() {
-        for j in 0..values.len() {
-            if values[i] > values[j] {
-                assert!(drawn[i].1 < drawn[j].1, "a higher value is drawn higher: {} > {} at {i}, {j}", values[i], values[j]);
-            }
-        }
+    let (_, w) = get(addr, &format!("/s/loop/portal/api/series/data?source=sorter&series=travel&from={from}&to={to}&points=600"));
+    let points: Vec<(f64, f64)> = w["points"].as_array().unwrap().iter().map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect();
+    assert_eq!(drawn.len(), points.len());
+    // The trend's frame (charts.ts): 600 by 200, the plot from x 44 to 590 and from y 178 up to
+    // 10, the values' extent padded by 8 % each way.
+    let (mut lo, mut hi) = points.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+    let pad = (hi - lo) * 0.08;
+    (lo, hi) = (lo - pad, hi + pad);
+    for (i, ((dx, dy), (t, v))) in drawn.iter().zip(&points).enumerate() {
+        let x = 44.0 + (t - from as f64) / (to - from) as f64 * 546.0;
+        let y = 178.0 + (v - lo) / (hi - lo) * (10.0 - 178.0);
+        assert!((dx - x).abs() <= 0.051 && (dy - y).abs() <= 0.051, "point {i} ({t}, {v}) drawn at ({dx}, {dy}), its place ({x:.2}, {y:.2})");
     }
+    let num1 = |v: f64| {
+        let t = format!("{v:.1}");
+        t.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    assert_eq!(chart["axis"], json!((0..4).map(|i| num1(lo + (hi - lo) * i as f64 / 3.0)).collect::<Vec<_>>()), "the axis labels the window's values");
 
-    // Every request the page made for these went to the session's nested portal router.
-    let paths = page.eval(r#"performance.getEntriesByType("resource").map((e) => new URL(e.name).pathname)"#);
-    let paths: Vec<&str> = paths.as_array().unwrap().iter().map(|p| p.as_str().unwrap()).collect();
+    // A table of exactly a hundred rows: the second page is the last, nothing older.
+    append(&log, &(0..47).map(|i| format!("{} SORT outlet=1 travel=30.0 rate=99.0", stamp(base + 240_000 + i * 1000))).collect::<Vec<_>>());
+    assert!(wait(Duration::from_secs(20), || {
+        let (_, t) = get(addr, "/s/loop/portal/api/tables");
+        t["tables"].as_array().unwrap().iter().any(|x| x["name"] == "sorts" && x["rows"] == json!(100))
+    }));
+    page.eval(r#"location.hash = "tables""#);
+    shown_at(&mut page, "1-50/100");
+    click(&mut page, "Older ›");
+    let last_page = shown_at(&mut page, "51-100/100");
+    assert_eq!((last_page["body"].as_array().unwrap().len(), last_page["older"].clone()), (50, json!(true)));
+
+    // Every request the page made went to this host and this session's own paths, its portal
+    // reads the four routes under `/s/loop/portal/api/`, its stream the session's objects.
+    let requests = page.requests();
+    let origin = format!("http://{addr}");
+    let paths: Vec<(String, String)> = requests
+        .iter()
+        .map(|(u, ty)| {
+            assert!(u.starts_with(&format!("{origin}/")), "a request off the host: {u}");
+            (u[origin.len()..].split('?').next().unwrap().to_string(), ty.clone())
+        })
+        .collect();
     for route in ["/s/loop/portal/api/tables", "/s/loop/portal/api/table/data", "/s/loop/portal/api/series", "/s/loop/portal/api/series/data"] {
-        assert!(paths.contains(&route), "{route} in {paths:?}");
+        assert!(paths.iter().any(|(p, _)| p == route), "{route} in {paths:?}");
     }
+    assert!(paths.iter().any(|(p, ty)| p == "/s/loop/objects" && ty == "EventSource"), "streams are seen: {paths:?}");
     // (The browser asks for `/favicon.ico` on its own.)
-    assert!(paths.iter().all(|p| p.starts_with("/assets/") || p.starts_with("/s/loop/") || *p == "/api/sessions" || *p == "/favicon.ico"), "{paths:?}");
-    assert!(paths.iter().filter(|p| p.contains("/api/") && **p != "/api/sessions").all(|p| p.starts_with("/s/loop/portal/api/")), "{paths:?}");
+    assert!(paths.iter().all(|(p, _)| p.starts_with("/assets/") || p.starts_with("/s/loop/") || p == "/api/sessions" || p == "/favicon.ico"), "{paths:?}");
+    assert!(
+        paths.iter().filter(|(p, _)| p.contains("/portal")).all(|(p, _)| ["/s/loop/portal/api/tables", "/s/loop/portal/api/table/data", "/s/loop/portal/api/series", "/s/loop/portal/api/series/data"].contains(&p.as_str())),
+        "{paths:?}"
+    );
+    drop(page);
+
+    // The other session's page reads the other session's router alone: its catalog (no sort
+    // logged there), never this one's.
+    let mut page = Browser::watched(&format!("http://{addr}/s/hall/#tables"));
+    let listed = page.wait_for(LISTED, Duration::from_secs(20));
+    let (_, t) = get(addr, "/s/hall/portal/api/tables");
+    let want: Vec<(Value, Value)> = t["tables"].as_array().unwrap().iter().map(|x| (x["name"].clone(), json!(format!("{} · {}", x["kind"].as_str().unwrap(), x["rows"])))).collect();
+    let sorts_there = want.iter().find(|(n, _)| n == "sorts").unwrap().1.clone();
+    assert_eq!(sorts_there, json!(format!("{} · 0", sorts["kind"].as_str().unwrap())), "hall logged no sort");
+    assert!(listed.as_array().unwrap().iter().any(|r| r[0] == "sorts" && r[2] == sorts_there), "{listed}");
+    let paths: Vec<String> = page.requests().into_iter().map(|(u, _)| u).collect();
+    assert!(paths.iter().any(|u| u.contains("/s/hall/portal/api/tables")), "{paths:?}");
+    assert!(paths.iter().all(|u| !u.contains("/s/loop/")), "{paths:?}");
+    assert!(paths.iter().filter(|u| u.contains("/portal")).all(|u| u.contains("/s/hall/portal/api/")), "{paths:?}");
     drop(page);
     host.stop();
 }

@@ -36,6 +36,8 @@ pub struct Browser {
     child: Child,
     ws: TcpStream,
     next: u64,
+    /// The protocol's events received while waiting for answers, in order.
+    events: Vec<Value>,
     _profile: tempfile::TempDir,
 }
 
@@ -81,6 +83,31 @@ fn frame(text: &str) -> Vec<u8> {
 impl Browser {
     /// The browser started headless on `url`, at a desktop's size, with a profile of its own.
     pub fn open(url: &str) -> Browser {
+        Browser::start(url)
+    }
+
+    /// The same, every request the page makes watched from its first (`requests`): the browser
+    /// opens a blank page, turns the protocol's network events on, then goes to `url`.
+    pub fn watched(url: &str) -> Browser {
+        let mut b = Browser::start("about:blank");
+        b.call("Network.enable", json!({}));
+        b.call("Page.navigate", json!({ "url": url }));
+        b
+    }
+
+    /// Every request the page made since it was watched, as (URL, the protocol's resource type:
+    /// Document, Script, Fetch, EventSource, Image, Ping, ...), streams and other origins included.
+    pub fn requests(&mut self) -> Vec<(String, String)> {
+        // An answer comes after every event sent before it: one round trip reads them all.
+        self.eval("0");
+        self.events
+            .iter()
+            .filter(|e| e["method"] == "Network.requestWillBeSent")
+            .map(|e| (e["params"]["request"]["url"].as_str().unwrap_or("").to_string(), e["params"]["type"].as_str().unwrap_or("").to_string()))
+            .collect()
+    }
+
+    fn start(url: &str) -> Browser {
         let profile = tempfile::tempdir().unwrap();
         let child = Command::new(executable())
             .args(["--headless=new", "--disable-gpu", "--no-sandbox", "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--remote-debugging-port=0", "--window-size=1440,900"])
@@ -120,7 +147,7 @@ impl Browser {
             head.push(b[0]);
         }
         assert!(head.starts_with(b"HTTP/1.1 101"), "{}", String::from_utf8_lossy(&head));
-        Browser { child, ws, next: 0, _profile: profile }
+        Browser { child, ws, next: 0, events: Vec::new(), _profile: profile }
     }
 
     fn send(&mut self, text: &str) {
@@ -176,6 +203,9 @@ impl Browser {
             if v["id"] == id {
                 assert!(v.get("error").is_none(), "{method}: {}", v["error"]);
                 return v["result"].clone();
+            }
+            if v.get("method").is_some() && v["method"] != "Network.eventSourceMessageReceived" && v["method"] != "Network.dataReceived" {
+                self.events.push(v);
             }
         }
     }

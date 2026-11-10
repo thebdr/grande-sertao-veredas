@@ -95,6 +95,24 @@ pub fn live_example(bench: &Bench, armed: bool) -> Example {
     ex
 }
 
+/// Two plants in one folder: `loop` as the reference has it, and `hall`, the same plant with
+/// another name, other values, no layout and no markers.
+pub fn two_plants(dir: &Path, a: &Bench, b: &Bench) -> std::path::PathBuf {
+    let ex = live_example(a, false);
+    write_example(dir, &ex);
+    let hall = live_example(b, false);
+    std::fs::create_dir_all(dir.join("hall")).unwrap();
+    std::fs::write(dir.join("hall/project.toml"), hall.project.replace("name = \"the loop\"", "name = \"the hall\"")).unwrap();
+    let mut binding = hall.binding.replace("title = \"The loop\"", "title = \"The hall\"").replace("layout = \"layout.svg\"\n", "");
+    let cut = binding.find("[[object]]\nid = \"parcel-1\"").unwrap();
+    let rest = binding[cut..].find("[[dashboard]]").unwrap() + cut;
+    binding.replace_range(cut..rest, "");
+    std::fs::write(dir.join("hall/binding.toml"), binding).unwrap();
+    let host = format!("{}\n[[session]]\nname = \"hall\"\nproject = \"hall/project.toml\"\nbinding = \"hall/binding.toml\"\n", ex.host);
+    std::fs::write(dir.join("supervisao.toml"), host).unwrap();
+    dir.join("supervisao.toml")
+}
+
 /// The store's axis now: the plant's local clock read as UTC.
 pub fn store_now() -> i64 {
     veredas_portal::serve::store_now_ms()
