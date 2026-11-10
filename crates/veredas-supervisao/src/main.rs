@@ -43,13 +43,17 @@ fn main() {
         println!("session `{n}` at http://{}/s/{n}/", host.addr());
     }
     println!("running; close stdin to stop");
+    // Read as bytes: a line in any encoding is no close, only the end of stdin is (or a read that
+    // fails other than by an interruption, which no later read would mend).
     let stdin = std::io::stdin();
-    let mut line = String::new();
-    while let Ok(n) = stdin.lock().read_line(&mut line) {
-        if n == 0 {
-            break;
+    let mut line = Vec::new();
+    loop {
+        match stdin.lock().read_until(b'\n', &mut line) {
+            Ok(0) => break,
+            Ok(_) => line.clear(),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
         }
-        line.clear();
     }
     for (name, ends) in host.stop() {
         for (id, r) in ends {

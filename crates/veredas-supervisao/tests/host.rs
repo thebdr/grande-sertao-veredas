@@ -36,8 +36,10 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     let (status, headers, body) = http(addr, "GET", "/", None);
     assert_eq!((status, body.as_str()), (200, web::INDEX_HTML));
     assert!(headers.contains("content-type: text/html; charset=utf-8"), "{headers}");
-    for page in ["/s/loop/", "/s/loop", "/s/hall/"] {
-        assert_eq!(http(addr, "GET", page, None).2, web::INDEX_HTML, "{page}");
+    for page in ["/s/loop/", "/s/loop", "/s/hall/", "/s/hall"] {
+        let (status, headers, body) = http(addr, "GET", page, None);
+        assert_eq!((status, body.as_str()), (200, web::INDEX_HTML), "{page}");
+        assert!(headers.contains("content-type: text/html; charset=utf-8"), "{page}: {headers}");
     }
     let (status, headers, body) = http(addr, "GET", "/assets/app.js", None);
     assert_eq!((status, body.as_str()), (200, web::APP_JS));
@@ -135,7 +137,8 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     assert!(events.next(Duration::from_secs(10)).is_some());
     let stopping = std::time::Instant::now();
     let ends = host.stop();
-    assert!(stopping.elapsed() < Duration::from_secs(10), "the stop waited on open streams: {:?}", stopping.elapsed());
+    // At once: under 3 s (a stop with nothing open takes a quarter of one; blocking tasks get 2 s).
+    assert!(stopping.elapsed() < Duration::from_secs(3), "the stop waited on open streams: {:?}", stopping.elapsed());
     assert!(streams[0].ends_within(Duration::from_secs(5)) && events.ends_within(Duration::from_secs(5)), "the open streams end with the stop");
     assert_eq!(ends.iter().map(|(n, e)| (n.as_str(), e.len())).collect::<Vec<_>>(), [("loop", 2), ("hall", 2)]);
     assert!(ends.iter().all(|(_, e)| e.iter().all(|(_, r)| r.is_ok())), "{:?}", ends.iter().map(|(n, e)| (n, e.iter().map(|(i, r)| (i.to_string(), r.is_ok())).collect::<Vec<_>>())).collect::<Vec<_>>());
@@ -240,9 +243,10 @@ fn the_executable_serves_a_file_until_stdin_closes() {
     assert_eq!(get(addr, "/api/sessions").1["sessions"][1]["name"], json!("hall"));
     let (_, s) = get(addr, "/s/loop/portal/api/session");
     assert_eq!(s["session_name"], json!("the loop"));
-    // A line on stdin is not a close: it keeps serving.
+    // A line on stdin is not a close, in any encoding (one in Latin-1 among them): it keeps serving.
     let mut stdin = child.stdin.take().unwrap();
     stdin.write_all(b"hello\n").unwrap();
+    stdin.write_all(b"n\xe3o\n").unwrap();
     stdin.flush().unwrap();
     std::thread::sleep(Duration::from_millis(1500));
     assert!(child.try_wait().unwrap().is_none(), "a line stopped it");
@@ -256,7 +260,7 @@ fn the_executable_serves_a_file_until_stdin_closes() {
         if let Some(s) = child.try_wait().unwrap() {
             break s;
         }
-        assert!(closed.elapsed() < Duration::from_secs(10), "it waited on an open stream");
+        assert!(closed.elapsed() < Duration::from_secs(3), "it waited on an open stream: {:?}", closed.elapsed());
         std::thread::sleep(Duration::from_millis(50));
     };
     assert!(status.success(), "{status}");
