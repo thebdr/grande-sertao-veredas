@@ -1,24 +1,25 @@
 {
   "clause": "C-048",
-  "command": "cargo test -p veredas-supervisao --test files",
+  "command": "cargo nextest run -p veredas-supervisao --test files",
   "commandArgv": [
     "cargo",
-    "test",
+    "nextest",
+    "run",
     "-p",
     "veredas-supervisao",
     "--test",
     "files"
   ],
   "exitCode": 0,
-  "outputSha": "ae81ef24ee4b5e0f1516c6e84134454c9823b18e468393168536502dc770051f",
-  "outputTail": "test a_supervisao_file_refuses_what_it_cannot_serve_by_its_place ... ok\ntest a_binding_is_checked_against_its_project_and_its_layout ... ok\ntest every_key_reads_back_as_written_and_every_default_fills ... ok\ntest the_refusals_of_a_kind_of_series_a_panel_and_a_number_name_their_place ... ok\ntest every_key_the_reference_lists_is_the_reader_s ... ok\ntest the_rest_of_the_refusals_name_their_place ... ok\ntest the_edges_the_types_and_every_kind_of_source_and_column ... ok\ntest the_executable_checks_the_example_and_prints_its_plan ... ok\ntest a_binding_refuses_what_it_cannot_light_up_by_its_place ... ok\n\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.34s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 50.53s\n     Running tests\\files.rs (target\\debug\\deps\\files-a460a05fec6c1907.exe)",
-  "ranAt": "2026-11-10T11:04:22.710Z",
-  "headCommit": "19b9c4150e480654af537cfe09c4515a42917c6e",
+  "outputSha": "e785e9fc9f171c006e75ab06244c5b8d81e09ad5ab17a5abd07f180b3ac9b3cf",
+  "outputTail": "    Starting 12 tests across 1 binary\n        PASS [   0.316s] ( 1/12) veredas-supervisao::files a_layout_is_an_svg_document_with_no_script\n        PASS [   0.352s] ( 2/12) veredas-supervisao::files the_reference_is_the_text_this_test_holds\n        PASS [   0.489s] ( 3/12) veredas-supervisao::files the_worked_example_loads_as_the_reference_states_it\n        PASS [   0.757s] ( 4/12) veredas-supervisao::files a_supervisao_file_refuses_what_it_cannot_serve_by_its_place\n        PASS [   1.109s] ( 5/12) veredas-supervisao::files a_binding_is_checked_against_its_project_and_its_layout\n        PASS [   1.161s] ( 6/12) veredas-supervisao::files every_key_reads_back_as_written_and_every_default_fills\n        PASS [   1.246s] ( 7/12) veredas-supervisao::files the_refusals_of_a_kind_of_series_a_panel_and_a_number_name_their_place\n        PASS [   1.272s] ( 8/12) veredas-supervisao::files every_key_the_reference_lists_is_the_reader_s\n        PASS [   1.355s] ( 9/12) veredas-supervisao::files the_rest_of_the_refusals_name_their_place\n        PASS [   1.426s] (10/12) veredas-supervisao::files the_edges_the_types_and_every_kind_of_source_and_column\n        PASS [   2.085s] (11/12) veredas-supervisao::files the_executable_checks_the_example_and_prints_its_plan\n        PASS [   2.184s] (12/12) veredas-supervisao::files a_binding_refuses_what_it_cannot_light_up_by_its_place\n────────────\n     Summary [   2.185s] 12 tests run: 12 passed, 0 skipped",
+  "ranAt": "2026-11-10T11:19:04.107Z",
+  "headCommit": "8f57789d66ebf2f3c2d180d493ac4e8ee596cf43",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/files.rs",
       "file": "crates/veredas-supervisao/tests/files.rs",
-      "fileSha": "7ce0f8d3a154d75f9803efa88b465ad452b5cd10c0171bedf7b220d8d1fcc013"
+      "fileSha": "fae9bb02b81b711fc31878f8faadb40780e10e2251a2a13e0edd535a76cd4cba"
     }
   ]
 }

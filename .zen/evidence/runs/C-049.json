@@ -1,19 +1,20 @@
 {
   "clause": "C-049",
-  "command": "cargo test -p veredas-supervisao --test host",
+  "command": "cargo nextest run -p veredas-supervisao --test host",
   "commandArgv": [
     "cargo",
-    "test",
+    "nextest",
+    "run",
     "-p",
     "veredas-supervisao",
     "--test",
     "host"
   ],
   "exitCode": 0,
-  "outputSha": "8c81ad0aeb7cf42bb5f471b476e33ef936e1c1575d1ce4114c6aac56b1ad8f51",
-  "outputTail": "\nrunning 3 tests\ntest a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first ... ok\ntest two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal ... ok\ntest the_executable_serves_a_file_until_stdin_closes ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.77s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.21s\n     Running tests\\host.rs (target\\debug\\deps\\host-603cb1cc1a2df926.exe)",
-  "ranAt": "2026-11-10T05:31:10.107Z",
-  "headCommit": "c183f6436753067aacbc0c45ae56463cff8866a8",
+  "outputSha": "d2970dde67293877611a796b788ff0a86b01119f16a626cdbf7d4d6c6ed5c78c",
+  "outputTail": "   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 32.19s\n────────────\n Nextest run ID 7ee76b2e-cec7-467c-8743-1e5b397f1728 with nextest profile: default\n    Starting 3 tests across 1 binary\n        PASS [   2.359s] (1/3) veredas-supervisao::host a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first\n        PASS [   3.991s] (2/3) veredas-supervisao::host the_executable_serves_a_file_until_stdin_closes\n        PASS [   4.029s] (3/3) veredas-supervisao::host two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal\n────────────\n     Summary [   4.030s] 3 tests run: 3 passed, 0 skipped",
+  "ranAt": "2026-11-10T11:19:44.741Z",
+  "headCommit": "8f57789d66ebf2f3c2d180d493ac4e8ee596cf43",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/host.rs",
