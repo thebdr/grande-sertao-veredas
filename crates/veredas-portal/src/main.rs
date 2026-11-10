@@ -177,7 +177,7 @@ fn plan(p: &Project) -> String {
         Store::Disk { path, memory_limit_mb } => format!("on disk at {} (memory limit {memory_limit_mb} MB)", path.display()),
         Store::PerSession { dir, memory_limit_mb } => format!("on disk, a file of this run's own in {} (memory limit {memory_limit_mb} MB)", dir.display()),
     };
-    out.push_str(&format!("  session: {start}; store {store}; writes {}; idle after {} ms\n", if p.writes_armed { "armed" } else { "off" }, p.idle_after_ms));
+    out.push_str(&format!("  session: {start}; store {store}; writes {}; idle after {} ms\n", if p.writes_armed() { "armed" } else { "off" }, p.idle_after_ms));
     match p.server {
         Some(addr) => out.push_str(&format!("  server: {addr}\n")),
         None => out.push_str("  server: none\n"),

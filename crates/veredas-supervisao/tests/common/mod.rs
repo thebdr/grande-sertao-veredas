@@ -73,7 +73,12 @@ pub fn write_example(dir: &Path, ex: &Example) -> PathBuf {
 /// The bench of the example: an OPC UA server `plc` holding the example's tags, on a port the
 /// system picks, every value set by the test (no draw), `release3` writable by a client.
 pub fn plant(dir: &Path) -> Bench {
-    let text = "format = \"veredas-bench\"\nversion = 1\nseed = 5\n\n[[opc]]\nname = \"plc\"\nport = 0\ntags = [\n  { id = \"speed\", type = \"float\", value = \"1.5\" },\n  { id = \"p1\", type = \"float\", value = \"25\" },\n  { id = \"p2\", type = \"float\", value = \"75\" },\n  { id = \"fill1\", type = \"float\", value = \"35\" },\n  { id = \"fill2\", type = \"float\", value = \"85\" },\n  { id = \"fill3\", type = \"float\", value = \"100\" },\n  { id = \"infeed\", type = \"int\", value = \"1\" },\n  { id = \"release3\", type = \"int\", value = \"0\", access = \"read-write\" },\n]\n";
+    plant_with(dir, "")
+}
+
+/// The same plant with `more` appended to its bench file (another controller, say).
+pub fn plant_with(dir: &Path, more: &str) -> Bench {
+    let text = &format!("{}{more}", "format = \"veredas-bench\"\nversion = 1\nseed = 5\n\n[[opc]]\nname = \"plc\"\nport = 0\ntags = [\n  { id = \"speed\", type = \"float\", value = \"1.5\" },\n  { id = \"p1\", type = \"float\", value = \"25\" },\n  { id = \"p2\", type = \"float\", value = \"75\" },\n  { id = \"fill1\", type = \"float\", value = \"35\" },\n  { id = \"fill2\", type = \"float\", value = \"85\" },\n  { id = \"fill3\", type = \"float\", value = \"100\" },\n  { id = \"infeed\", type = \"int\", value = \"1\" },\n  { id = \"release3\", type = \"int\", value = \"0\", access = \"read-write\" },\n]\n");
     std::fs::create_dir_all(dir).unwrap();
     std::fs::write(dir.join("bench.toml"), text).unwrap();
     Bench::start(bench::load(text, dir).unwrap()).unwrap()

@@ -107,6 +107,16 @@ impl Browser {
             .collect()
     }
 
+    /// Every POST the page made since it was watched, as (URL, the body as sent).
+    pub fn posts(&mut self) -> Vec<(String, String)> {
+        self.eval("0");
+        self.events
+            .iter()
+            .filter(|e| e["method"] == "Network.requestWillBeSent" && e["params"]["request"]["method"] == "POST")
+            .map(|e| (e["params"]["request"]["url"].as_str().unwrap_or("").to_string(), e["params"]["request"]["postData"].as_str().unwrap_or("").to_string()))
+            .collect()
+    }
+
     fn start(url: &str) -> Browser {
         let profile = tempfile::tempdir().unwrap();
         let child = Command::new(executable())

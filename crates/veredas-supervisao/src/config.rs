@@ -161,7 +161,7 @@ pub fn plan(cfg: &HostConfig) -> String {
         for d in &b.dashboards {
             out.push_str(&format!("  dashboard `{}`: {} panel(s): {}\n", d.name, d.panels.len(), d.panels.iter().map(|p| p.kind.name()).collect::<Vec<_>>().join(", ")));
         }
-        out.push_str(&format!("  writes {}; portal's surface at /s/{}/portal/\n", if s.project.writes_armed { "armed by the project" } else { "off" }, s.name));
+        out.push_str(&format!("  writes {}; portal's surface at /s/{}/portal/\n", if s.project.writes_armed() { "armed by the project" } else { "off" }, s.name));
         if let Some(addr) = s.project.server {
             out.push_str(&format!("  the project's own server address {addr} is not bound\n"));
         }

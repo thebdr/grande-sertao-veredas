@@ -54,7 +54,7 @@ fn the_worked_example_loads_as_the_reference_states_it() {
     let s = &cfg.sessions[0];
     assert_eq!(s.name, "loop");
     assert!(s.project_path.ends_with("loop/project.toml") && s.binding_path.ends_with("loop/binding.toml"));
-    assert_eq!((s.project.name.as_str(), s.project.writes_armed), ("the loop", false));
+    assert_eq!((s.project.name.as_str(), s.project.writes_armed()), ("the loop", false));
     let b = &s.binding;
     assert_eq!(b.title, "The loop");
     let layout = b.layout.as_ref().unwrap();

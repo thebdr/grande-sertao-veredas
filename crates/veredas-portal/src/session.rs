@@ -58,8 +58,9 @@ pub struct SessionConfig {
     /// read whole); absent, every log is followed live from its end.
     pub start: Option<NaiveDateTime>,
     pub residency: Residency,
-    /// The master write switch's initial position. Off unless the project says so.
-    pub writes_armed: bool,
+    /// The master write switch's initial position. Off unless the project says so; set inside
+    /// portal alone, so a shell reads it (`writes_armed()`) and never decides it.
+    pub(crate) writes_armed: bool,
     /// Silence after which a live source reads as idle.
     pub idle_after_ms: i64,
     pub logs: Vec<LogSourceConfig>,
@@ -88,6 +89,11 @@ impl SessionConfig {
             tables: Vec::new(),
             secrets: None,
         }
+    }
+
+    /// The write switch's position at start, as the project decided it.
+    pub fn writes_armed(&self) -> bool {
+        self.writes_armed
     }
 }
 

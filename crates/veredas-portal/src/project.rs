@@ -153,7 +153,8 @@ pub struct Project {
     pub store: Store,
     /// Where the sealed values live and which variable holds the key, when a source names one.
     pub secrets: Option<crate::secrets::SecretsSource>,
-    pub writes_armed: bool,
+    /// The write switch's position at start, from the file alone (`writes_armed()` reads it).
+    pub(crate) writes_armed: bool,
     pub idle_after_ms: i64,
     /// The server's address, when the project serves.
     pub server: Option<SocketAddr>,
@@ -807,6 +808,14 @@ pub fn load_file(path: &Path) -> Result<Project, ProjectError> {
     let text = std::fs::read_to_string(path).map_err(|source| ProjectError::Read { place: "the project file".into(), path: path.to_path_buf(), source })?;
     let base = path.parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
     load(&text, &base)
+}
+
+impl Project {
+    /// The write switch's position at start, as the file's `[session]` says: read by a shell,
+    /// set by nothing but the file.
+    pub fn writes_armed(&self) -> bool {
+        self.writes_armed
+    }
 }
 
 #[cfg(feature = "store")]

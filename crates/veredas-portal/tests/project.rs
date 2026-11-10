@@ -124,7 +124,7 @@ fn the_worked_example_loads_as_its_prose_says() {
     assert_eq!((p.opc.len(), p.opc[0].rules.len(), p.opc[0].rules[0].tags.iter().map(|t| 1 + t.bits.len()).sum::<usize>()), (1, 1, count_after(&prose, "one rule of")));
     assert_eq!((p.channels.len(), p.channels[0].catalog.messages.len()), (1, count_after(&prose, "whose catalog has")));
     assert_eq!((p.rules.len(), p.tables.len()), (1, 1));
-    assert_eq!((&p.start, &p.store, p.writes_armed), (&Start::Midnight, &Store::Ram, false));
+    assert_eq!((&p.start, &p.store, p.writes_armed()), (&Start::Midnight, &Store::Ram, false));
     assert_eq!(p.idle_after_ms, count_after(&prose, "idle after") as i64);
     assert_eq!(p.server.map(|a| a.to_string()), Some(quoted_after(&prose, "its server binds")));
     // The logs: a dated family, newest active, with its stamp; a file with two formats.
@@ -159,7 +159,7 @@ fn the_worked_example_loads_as_its_prose_says() {
     // The session it yields: the start resolved on the plant's clock, the view a table.
     let now = NaiveDate::from_ymd_opt(2026, 11, 8).unwrap().and_hms_opt(14, 30, 0).unwrap();
     let cfg = p.session_config(now);
-    assert_eq!((cfg.name.as_str(), cfg.start, cfg.writes_armed, cfg.idle_after_ms), ("the press hall", NaiveDate::from_ymd_opt(2026, 11, 8).unwrap().and_hms_opt(0, 0, 0), false, 20_000));
+    assert_eq!((cfg.name.as_str(), cfg.start, cfg.writes_armed(), cfg.idle_after_ms), ("the press hall", NaiveDate::from_ymd_opt(2026, 11, 8).unwrap().and_hms_opt(0, 0, 0), false, 20_000));
     assert_eq!((cfg.logs.len(), cfg.rules.len(), cfg.opc.len(), cfg.channels.len(), cfg.tables.len()), (2, 1, 1, 1, 1));
     assert_eq!(cfg.secrets, p.secrets, "the session opens the same secrets");
     assert_eq!(cfg.tables[0].name, "heavy");
@@ -273,7 +273,7 @@ fn every_key_statement_is_the_readers() {
     let no_session = text.replacen("[session]\nstart = \"midnight\"\nstore = \"ram\"\nwrites_armed = false\nidle_after_ms = 20000\n", "", 1);
     assert!(no_session.len() < text.len());
     let p = project::load(&no_session, dir.path()).unwrap();
-    assert_eq!((&p.start, &p.store, p.writes_armed, p.idle_after_ms), (&Start::Live, &Store::Ram, false, 20_000));
+    assert_eq!((&p.start, &p.store, p.writes_armed(), p.idle_after_ms), (&Start::Live, &Store::Ram, false, 20_000));
     let no_server = text.replacen("[server]\nbind = \"127.0.0.1:8901\"\n", "", 1);
     assert_eq!(project::load(&no_server, dir.path()).unwrap().server, None);
     assert!(statement("`[secrets]`", "file").starts_with("default `\"secrets.toml\"`"));
@@ -425,7 +425,7 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
 
     let migrated = project::from_v1(&v1).unwrap();
     let p = project::load(&migrated.toml, &v1).unwrap_or_else(|e| panic!("{e}\n{}", migrated.toml));
-    assert_eq!((p.name.as_str(), &p.start, p.writes_armed), ("Press Hall", &Start::At(NaiveDate::from_ymd_opt(2026, 11, 8).unwrap().and_hms_opt(6, 0, 0).unwrap()), true));
+    assert_eq!((p.name.as_str(), &p.start, p.writes_armed()), ("Press Hall", &Start::At(NaiveDate::from_ymd_opt(2026, 11, 8).unwrap().and_hms_opt(6, 0, 0).unwrap()), true));
     assert_eq!(p.store, Store::PerSession { dir: v1.join("cache"), memory_limit_mb: 2048 }, "a folder, a file per run, as Veredas 1 had it");
     assert_eq!(p.logs.iter().map(|l| l.id.as_str()).collect::<Vec<_>>(), ["press-a", "events"]);
     assert!(matches!(&p.logs[0].kind, LogKind::Family { date_format: Some(f), active: ActiveConfig::Newest, .. } if f == "%Y%m%d"));
