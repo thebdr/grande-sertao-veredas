@@ -370,3 +370,11 @@ Recorded as the port meets them.
   in-memory store, and what the engine refuses is left out with the engine's reason (C-046,
   round 5). What the engine cannot read where the import runs (a CSV on the plant's machine) is
   no fault of the file: carried as written, named.
+- **A share mounted on Linux reads as a local path.** `tail::pathkind` knows a share by its
+  Windows shapes alone, a UNC path or a drive letter `GetDriveTypeW` calls remote; on Linux an
+  absolute path has no prefix and is local, so a tail of a CIFS or NFS mount (`/mnt/...`) arms a
+  watcher that no write from another machine wakes. Nothing is lost: the poll reads every line
+  at its interval, as on a Windows share, and `use_notify = Some(false)` turns the watcher off by
+  hand. No poll interval follows the kind on either system; `poll_interval` is the operator's.
+  The fix reads the mount's filesystem type (P-013; found by the station-hardware research,
+  2026-11-10).
