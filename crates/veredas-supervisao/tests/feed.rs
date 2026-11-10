@@ -72,6 +72,14 @@ label = "Done"
 value = { source = "sorter", series = "done" }
 
 [[object]]
+id = "tracked-tenths"
+label = "Tracked, to a tenth"
+value = { source = "sorter", series = "at" }
+show = "move"
+path = "loop"
+decimals = 1
+
+[[object]]
 id = "near-b2"
 label = "Near B2"
 value = { source = "plc", series = "fill1" }
@@ -210,6 +218,33 @@ fn the_fold_reads_every_object_exactly() {
     assert_eq!((v.text.as_deref(), v.state, v.since_ms), (Some("run"), StateClass::Normal, Some(4_000)));
     t.cached("sorter", "mode", 7, "run", 0, 4, 9_000);
     assert_eq!(t.view(o("mode"), true, 9_000).since_ms, Some(4_000), "polled again, not a new arrival");
+    // At an equal stamp the frames' samples stand: the cache trails them (its count polled while
+    // it still holds an earlier line), so a count no further than what the frames brought neither
+    // brings back the older value nor stamps the arrival again; a count past them (a frame lost to
+    // a lag) is taken.
+    let mut q = Fold::new(&b);
+    q.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"rate","k":null,"ms":1000,"v":97.5}]}"#, 10_000);
+    q.frame(r#"{"type":"data","samples":[{"src":"sorter","ser":"rate","k":null,"ms":1000,"v":99.0}]}"#, 10_050);
+    q.cached("sorter", "rate", 1000, "97.5", 0, 1, 10_400);
+    let v = q.view(o("read-rate"), true, 10_400);
+    assert_eq!((v.text.as_deref(), v.state, v.since_ms), (Some("99.0"), StateClass::Normal, Some(10_050)), "the newer of the two under one stamp");
+    q.cached("sorter", "rate", 1000, "99", 0, 2, 10_900);
+    assert_eq!(q.view(o("read-rate"), true, 10_900).since_ms, Some(10_050), "its own sample, not a new arrival");
+    let v = q.view(o("read-rate"), true, 11_551);
+    assert_eq!((v.state, v.stale), (StateClass::Stale, true), "stale past its bound from the frame's arrival");
+    q.cached("sorter", "rate", 1000, "97", 0, 3, 12_000);
+    let v = q.view(o("read-rate"), true, 12_000);
+    assert_eq!((v.text.as_deref(), v.state, v.since_ms), (Some("97.0"), StateClass::Alarm, Some(12_000)), "a sample the frames missed, taken");
+    // A keyed marker's items each at its decimals, its place clamped.
+    let mut k = Fold::new(&b);
+    k.sample("sorter", "at", Some("A1"), 1, 10.25, 1_000);
+    k.sample("sorter", "at", Some("B2"), 1, 130.0, 1_000);
+    assert_eq!(k.view(o("tracked-tenths"), true, 1_000).items, vec![Item { key: "A1".into(), place: 0.1025, text: "10.2".into() }, Item { key: "B2".into(), place: 1.0, text: "130.0".into() }]);
+    // A rule over another series that has no value yet holds nothing: never the object's own.
+    let mut n = Fold::new(&b);
+    n.sample("plc", "fill1", None, 1, 100.0, 1_000);
+    let v = n.view(o("near-b2"), true, 1_000);
+    assert_eq!((v.state, v.word.as_str()), (StateClass::Normal, "ok"));
 
     // Away, by the source's health: waiting is away only once the source has delivered (portal
     // reads an OPC source reconnecting, and a channel whose peer left, as waiting).
@@ -377,7 +412,7 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
     let (name, data) = sse.next(Duration::from_secs(10)).unwrap();
     assert_eq!(name, "snapshot");
     let first: Value = serde_json::from_str(&data).unwrap();
-    assert_eq!(first["objects"].as_array().unwrap().len(), 21);
+    assert_eq!(first["objects"].as_array().unwrap().len(), 22);
     assert_eq!(object(&first, "outlet-2")["word"], json!("near full"));
     assert_eq!((first["session"]["running"].clone(), first["session"]["writes_armed"].clone(), first["session"]["health"]["plc"]["state"].clone()), (json!(true), json!(false), json!("live")));
     // The status every second: over six seconds at least five (a loaded host's late tick

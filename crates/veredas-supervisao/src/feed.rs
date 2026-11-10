@@ -41,8 +41,11 @@ struct SeriesSeen {
     any: Option<Seen>,
     by_key: BTreeMap<String, Seen>,
     keyed: bool,
-    /// The ingest's sample count at the last cache poll: a count that moved is a new sample.
+    /// The ingest's sample count at the last cache poll.
     cache_count: u64,
+    /// Samples the frames brought that the cache's count has not yet accounted for: a count that
+    /// moved by no more than these is the frames' own samples, already held.
+    framed: u64,
 }
 
 /// A marker of a keyed series: its key and its place along the path, 0 to 1.
@@ -160,6 +163,7 @@ impl Fold {
         }
         let seen = Seen { reading: Reading::Num(value), index_ms, arrived_ms: now_ms };
         let s = self.series.entry(k).or_default();
+        s.framed += 1;
         if s.any.as_ref().is_none_or(|a| index_ms >= a.index_ms) {
             s.any = Some(seen.clone());
         }
@@ -188,9 +192,12 @@ impl Fold {
     /// what the frames brought, or when nothing came yet: text and time arrive only this way.
     /// `keys` is how many keys the ingest has seen on the series: a series with keys is keyed even
     /// before a frame carried one (a lag, or a backfill read before anyone listened). `count` is
-    /// how many samples it has stored: none yet is no value (an empty text is a value), and a count
-    /// that moved since the last poll is a new sample, taken at an equal index too (two lines under
-    /// one stamp), while an entry polled again unchanged keeps its arrival.
+    /// how many samples it has stored: none yet is no value (an empty text is a value). At an
+    /// equal index (two lines under one stamp) the cache is taken only when its count moved past
+    /// what the frames brought since (a lag, a backfill, a text series the frames never carry):
+    /// the cache trails the frames, so a count the frames already delivered is their samples,
+    /// already held, never an older value brought back nor an arrival stamped again. An entry
+    /// polled again unchanged keeps its arrival.
     #[allow(clippy::too_many_arguments)]
     pub fn cached(&mut self, source: &str, series: &str, last_index_ms: i64, last_value: &str, keys: usize, count: u64, now_ms: i64) {
         let k = (source.to_string(), series.to_string());
@@ -205,13 +212,15 @@ impl Fold {
         if count == 0 {
             return;
         }
-        let moved = count != s.cache_count;
+        let delta = count.saturating_sub(s.cache_count);
+        let missed = delta > s.framed;
+        s.framed = s.framed.saturating_sub(delta);
         s.cache_count = count;
         let reading = match (numeric, last_value.trim().parse::<f64>()) {
             (true, Ok(v)) => Reading::Num(v),
             _ => Reading::Text(last_value.to_string()),
         };
-        if s.any.as_ref().is_none_or(|a| last_index_ms > a.index_ms || (moved && last_index_ms >= a.index_ms)) {
+        if s.any.as_ref().is_none_or(|a| last_index_ms > a.index_ms || (missed && last_index_ms >= a.index_ms)) {
             s.any = Some(Seen { reading, index_ms: last_index_ms, arrived_ms: now_ms });
         }
     }
