@@ -11,15 +11,15 @@
     "feed"
   ],
   "exitCode": 0,
-  "outputSha": "f5f2097470b4b8c933cab9d889d1668847545ebd6a4c96dd425435e703009d92",
-  "outputTail": "   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.30s\n────────────\n Nextest run ID 2b20b3e7-f071-4e7a-80a5-1ca3ad32203f with nextest profile: default\n    Starting 5 tests across 1 binary\n        PASS [   0.312s] (1/5) veredas-supervisao::feed numbers_read_as_they_are_shown\n        PASS [   0.417s] (2/5) veredas-supervisao::feed a_rule_holds_only_over_its_kind_of_value\n        PASS [   0.446s] (3/5) veredas-supervisao::feed a_stream_client_that_lags_gets_a_fresh_snapshot\n        PASS [   0.516s] (4/5) veredas-supervisao::feed the_fold_reads_every_object_exactly\n        PASS [  15.654s] (5/5) veredas-supervisao::feed the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream\n────────────\n     Summary [  15.656s] 5 tests run: 5 passed, 0 skipped",
-  "ranAt": "2026-11-10T11:18:57.578Z",
-  "headCommit": "8f57789d66ebf2f3c2d180d493ac4e8ee596cf43",
+  "outputSha": "70d4a5ff4acee9e3047666ff4d83d85e3821fff986e8993ca9ad301ff6eb51bb",
+  "outputTail": "   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.99s\n────────────\n Nextest run ID 6930126b-173c-4072-9773-8e0a615a0785 with nextest profile: default\n    Starting 5 tests across 1 binary\n        PASS [   0.129s] (1/5) veredas-supervisao::feed a_rule_holds_only_over_its_kind_of_value\n        PASS [   0.168s] (2/5) veredas-supervisao::feed numbers_read_as_they_are_shown\n        PASS [   0.182s] (3/5) veredas-supervisao::feed a_stream_client_that_lags_gets_a_fresh_snapshot\n        PASS [   0.227s] (4/5) veredas-supervisao::feed the_fold_reads_every_object_exactly\n        PASS [  15.209s] (5/5) veredas-supervisao::feed the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream\n────────────\n     Summary [  15.209s] 5 tests run: 5 passed, 0 skipped",
+  "ranAt": "2026-11-10T16:47:31.096Z",
+  "headCommit": "9acd4ff736d07f4635f8aa3faa38f12454f96363",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/feed.rs",
       "file": "crates/veredas-supervisao/tests/feed.rs",
-      "fileSha": "71ae0930df1b3378f1e7d62869d49d1562900b6e03546ba65a4fe5c305e87fe3"
+      "fileSha": "c2b40121c6e3e5fac885269a9b592cc6126ca49c42cdc7d2f44a8fdfb1dbcc9c"
     }
   ]
 }
