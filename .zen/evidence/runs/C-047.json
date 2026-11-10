@@ -10,10 +10,10 @@
     "component"
   ],
   "exitCode": 0,
-  "outputSha": "650d3608db5dda40bdbfdc7d78ec73cdff4766fa03be4943e9aa60cd71375da0",
-  "outputTail": "\nrunning 5 tests\ntest its_own_dependencies_are_core_portal_and_the_servers_crates ... ok\ntest supervisao_is_one_library_and_one_executable_named_for_it ... ok\ntest the_page_compiled_in_is_built_from_the_sources_in_the_tree ... ok\ntest no_file_of_supervisao_names_a_vendor_a_product_or_a_customer ... ok\ntest the_plant_s_stack_reaches_supervisao_through_portal_alone ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.88s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.15s\n     Running tests\\component.rs (target\\debug\\deps\\component-2cc394195866d05d.exe)",
-  "ranAt": "2026-11-10T14:16:33.669Z",
-  "headCommit": "97ff9b4f9dcf1afc083190374eb6b0c08eb8b7de",
+  "outputSha": "7befca7bfec4360a7c11806b738f6bf83f2cc00ae8d488145f476feee86b5a33",
+  "outputTail": "\nrunning 5 tests\ntest its_own_dependencies_are_core_portal_and_the_servers_crates ... ok\ntest supervisao_is_one_library_and_one_executable_named_for_it ... ok\ntest the_page_compiled_in_is_built_from_the_sources_in_the_tree ... ok\ntest no_file_of_supervisao_names_a_vendor_a_product_or_a_customer ... ok\ntest the_plant_s_stack_reaches_supervisao_through_portal_alone ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.38s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.20s\n     Running tests\\component.rs (target\\debug\\deps\\component-2cc394195866d05d.exe)",
+  "ranAt": "2026-11-10T19:08:43.115Z",
+  "headCommit": "e5f91dd2bf02855d0581cd7be226ada572623d8e",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/component.rs",
