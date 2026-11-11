@@ -19,6 +19,9 @@
 //! web      the page compiled in, and its source hash
 //! ```
 
+// The compiler refuses any foreign function, so none reaches a file, a program or a socket (C-054).
+#![forbid(unsafe_code)]
+
 pub mod binding;
 pub mod config;
 pub mod feed;

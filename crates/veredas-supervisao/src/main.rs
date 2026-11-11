@@ -1,6 +1,9 @@
 //! `veredas-supervisao <supervisao.toml> [--check]`: run a supervisão file's sessions and serve
 //! them until stdin closes, or read and check it and print the plan without starting anything.
 
+// The compiler refuses any foreign function, so none reaches a file, a program or a socket (C-054).
+#![forbid(unsafe_code)]
+
 use std::io::BufRead;
 use std::path::PathBuf;
 

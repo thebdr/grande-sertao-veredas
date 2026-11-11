@@ -245,6 +245,12 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     // script).
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     assert!(!root.join("build.rs").exists() && !std::fs::read_to_string(root.join("Cargo.toml")).unwrap().contains("build ="), "no build script writes code this reading cannot see");
+    // No foreign function either (the C runtime's `system` and `fopen` name no path this reading
+    // judges): both crate roots forbid unsafe code, so the compiler refuses one.
+    for crate_root in ["src/lib.rs", "src/main.rs"] {
+        let text = std::fs::read_to_string(root.join(crate_root)).unwrap();
+        assert!(text.lines().any(|l| l.trim() == "#![forbid(unsafe_code)]"), "{crate_root} forbids unsafe code");
+    }
     let files = rust_files(&root.join("src"));
     assert!(files.len() >= 8, "{files:?}");
     let mut listeners = 0;
@@ -260,9 +266,13 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
             // Nothing of core's or portal's renamed or taken whole; no macro of its own and no block
             // comment, either of which can hide a path from this reading.
             "extern crate", "veredas_core as", "veredas_portal as", "macro_rules!", "/*",
+            // No foreign function; and none of the methods of portal's store that write a file
+            // (reached as methods of the session's `store`, they name no path this reading judges).
+            "extern \"", "save_to", "export_table_csv", "export_all_csv", "append_wide", "append_samples",
         ] {
             assert!(!flat.contains(word), "{} names `{word}`", path.display());
         }
+        assert!(!flat.replace("#![forbid(unsafe_code)]", "").contains("unsafe"), "{} names `unsafe`", path.display());
         let unread = unfollowed_roots(&text);
         assert!(unread.is_empty(), "{} names a crate root this reading cannot follow: {unread:?}", path.display());
         listeners += text.matches("TcpListener").count();
