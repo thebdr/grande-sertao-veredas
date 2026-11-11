@@ -176,6 +176,59 @@ fn named_paths(text: &str) -> Vec<String> {
 }
 
 /// Every Rust file under `dir`, however deep.
+/// The names of portal's members supervisão's sources reach, reviewed: each a read (a query, a
+/// field, a listing), the session's own start, stop, live state and subscription, or a name portal
+/// shares with a std or tokio member supervisão calls (`send`, `spawn`, `remove`, `get`, `load`,
+/// `len`, ...), which this reading cannot tell apart.
+const PORTAL_MEMBERS: &[&str] = &[
+    "as_str", "bytes", "channels", "columns", "count", "feed", "file", "file_name", "get", "health", "id", "index_ms", "key", "keyed", "keys", "kind", "last_index_ms",
+    "last_value", "len", "limit", "live", "load", "logs", "message", "name", "opc", "path", "pattern", "query_numeric", "query_rows", "remove", "rows", "rules", "scope",
+    "send", "series", "server", "session_config", "snapshot", "source", "source_id", "sources", "spawn", "start", "state", "status", "stop", "stopped", "store",
+    "subscribe", "table", "tables", "tag", "tags", "text", "to", "toml", "total", "ts", "ty", "types", "value", "values", "writable", "writes_armed",
+];
+
+/// Every public function and public field portal declares, by name, read from its own sources.
+fn portal_members() -> std::collections::BTreeSet<String> {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../veredas-portal/src");
+    let ident = |s: &str| s.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect::<String>();
+    let mut out = std::collections::BTreeSet::new();
+    for path in rust_files(&src) {
+        for line in std::fs::read_to_string(&path).unwrap().lines() {
+            let t = line.trim_start();
+            for head in ["pub fn ", "pub async fn ", "pub const fn ", "pub unsafe fn "] {
+                if let Some(at) = t.find(head) {
+                    out.insert(ident(&t[at + head.len()..]));
+                }
+            }
+            if let Some(rest) = t.strip_prefix("pub ") {
+                let name = ident(rest);
+                if name.starts_with(|c: char| c.is_ascii_lowercase() || c == '_') && rest[name.len()..].trim_start().starts_with(':') {
+                    out.insert(name);
+                }
+            }
+        }
+    }
+    out.remove("");
+    out
+}
+
+/// The names a text reaches after a `.` (a method called or a field read; a number's decimals and
+/// a range's dots name none).
+fn dotted(text: &str) -> std::collections::BTreeSet<String> {
+    let b = text.as_bytes();
+    let mut out = std::collections::BTreeSet::new();
+    for (i, c) in b.iter().enumerate() {
+        if *c != b'.' || b.get(i + 1) == Some(&b'.') || (i > 0 && b[i - 1] == b'.') {
+            continue;
+        }
+        let rest = text[i + 1..].trim_start();
+        if rest.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+            out.insert(rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect());
+        }
+    }
+    out
+}
+
 fn rust_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).unwrap() {
@@ -282,6 +335,24 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
         }
     }
     assert_eq!(listeners, 1, "one listener, the host's own");
+    // What supervisão reaches of portal through the values it holds (a session, its live state, its
+    // store, a project) names no path; it is read by name instead, against portal's own list of
+    // public functions and fields: every name of that list supervisão's sources reach after a `.`
+    // is one reviewed here (any other, a writer such as `validate_definition`, `save_to` or
+    // `set_writes_armed` among them, is refused). A name portal shares with a std or tokio member
+    // supervisão calls (`send`, `spawn`, `remove`, `get`, ...) is judged by its name alone (the
+    // clause states the limit).
+    let members = portal_members();
+    assert!(["validate_definition", "save_to", "set_writes_armed", "query_rows", "store"].iter().all(|m| members.contains(*m)), "portal's list read: {} names", members.len());
+    let mut reached = std::collections::BTreeSet::new();
+    for path in rust_files(&root.join("src")) {
+        reached.extend(dotted(&std::fs::read_to_string(&path).unwrap()).into_iter().filter(|n| members.contains(n)));
+    }
+    let unreviewed: Vec<&String> = reached.iter().filter(|n| !PORTAL_MEMBERS.contains(&n.as_str())).collect();
+    assert!(unreviewed.is_empty(), "portal members reached beyond the reviewed ones: {unreviewed:?}");
+    let stale: Vec<&&str> = PORTAL_MEMBERS.iter().filter(|n| !reached.contains(**n)).collect();
+    assert!(stale.is_empty(), "reviewed names no longer reached: {stale:?}");
+    assert_eq!(dotted("live.store.query_rows(t, &q); let n = 1.5; x..y; s . len()"), ["len", "query_rows", "store"].into_iter().map(String::from).collect());
     let outside: Vec<&(String, String)> = named.iter().filter(|(_, p)| judged(p) && !ALLOWED.contains(&p.as_str())).collect();
     assert!(outside.is_empty(), "named outside what supervisão reads with: {outside:?}");
     // The reading itself: what the sources name today, every allowed path seen at least once; a
