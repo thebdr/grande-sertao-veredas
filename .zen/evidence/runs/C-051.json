@@ -10,15 +10,15 @@
     "layout"
   ],
   "exitCode": 0,
-  "outputSha": "2d5b2b137c80d3ecebd056e48f71860345058aa9632ef7994f0a11cbfb1c5aa2",
-  "outputTail": "\nrunning 1 test\ntest the_page_draws_the_layout_from_the_feed ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.06s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 28.84s\n     Running tests\\layout.rs (target\\debug\\deps\\layout-e1b8bad698d2bbd1.exe)",
-  "ranAt": "2026-11-11T08:33:16.836Z",
-  "headCommit": "d062b68e777daae1983aa37ccc85b7750120bcc6",
+  "outputSha": "3fee47f74e2df09eb276c0522ab5d6ec5f5b9d2d6acdef008d906ca6dd973a5a",
+  "outputTail": "\nrunning 1 test\ntest the_page_draws_the_layout_from_the_feed ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.75s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.22s\n     Running tests\\layout.rs (target\\debug\\deps\\layout-e1b8bad698d2bbd1.exe)",
+  "ranAt": "2026-11-11T18:02:44.621Z",
+  "headCommit": "1807b6c4fd2e0e3dbc435ddb5ab2a21ce5b96ec3",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/layout.rs",
       "file": "crates/veredas-supervisao/tests/layout.rs",
-      "fileSha": "c0ba853171a44242662ebb36c7d7d0f96226525801a169f7918c15a6c8b8988d"
+      "fileSha": "0b14b5e272d275b1ca1a5617a7b76773e0bf18edfd778bfc17d632b4d575ee95"
     }
   ]
 }
