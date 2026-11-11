@@ -111,14 +111,15 @@ fn the_three_protocols_run_into_one_store_alike() {
     }
     write_lines(&log, 25..30);
     let log_temp = ("log".to_string(), "temp".to_string());
-    let mut framed: BTreeMap<(String, String), Vec<(i64, f64, u64)>> = BTreeMap::new();
+    let mut framed: Framed = BTreeMap::new();
     let deadline = Instant::now() + Duration::from_secs(10);
     while (framed.get(&log_temp).map_or(0, Vec::len) < 10 || rows(&live, "readings") < 30) && Instant::now() < deadline {
         if !drain(&mut rx, &mut framed) {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
-    assert_eq!(framed.get(&log_temp), Some(&(20..30).map(|i| (stamp_ms(i), temp(i), i as u64 + 1)).collect::<Vec<_>>()));
+    // Each with its key: the line's item.
+    assert_eq!(framed.get(&log_temp), Some(&(20..30).map(|i| (stamp_ms(i), temp(i), i as u64 + 1, Some(format!("A{}", i % 3)))).collect::<Vec<_>>()));
     assert_eq!(rows(&live, "readings"), 30);
 
     // A stop ends every worker cleanly; the machine sees its peer go.
@@ -129,16 +130,24 @@ fn the_three_protocols_run_into_one_store_alike() {
     }
     assert!(wait(Duration::from_secs(5), || bench.channel("machine").unwrap().status().peers.is_empty()));
 
-    // After the stop's last refresh: every series framed, from every source, counts one up from
-    // frame to frame, and its last count is the cache's; the cache holds each series' exact type,
-    // count, keys, last index and last value as the store holds them; the text series counted 30.
+    // After the stop's last refresh: every numeric series of the log and the server is framed
+    // (the server's float and its integers alike; the machine announces before anyone listens, so
+    // its item is checked by the cache against the store below), each series framed counts one up
+    // from frame to frame, its last count the cache's, and a sample without a key frames none; the
+    // cache holds each series' exact type, count, keys, last index and last value as the store
+    // holds them; the text series counted 30.
     while drain(&mut rx, &mut framed) {}
     let cache = live.series.read().unwrap();
-    assert!(framed.keys().any(|(src, _)| src == "plc"), "{:?}", framed.keys());
+    for (src, ser) in [("log", "temp"), ("plc", "speed"), ("plc", "run"), ("plc", "word")] {
+        assert!(framed.contains_key(&(src.to_string(), ser.to_string())), "{src}|{ser} framed: {:?}", framed.keys());
+    }
     for ((src, ser), got) in &framed {
         let n: Vec<u64> = got.iter().map(|g| g.2).collect();
         assert!(n.windows(2).all(|w| w[1] == w[0] + 1), "{src}|{ser}: {n:?}");
         assert_eq!(n.last().copied(), Some(cache[&format!("{src}|{ser}")].count), "{src}|{ser}");
+        if src != "log" {
+            assert!(got.iter().all(|g| g.3.is_none()), "{src}|{ser} keyless: {got:?}");
+        }
     }
     for (series, ty, keys) in [("log|temp", SeriesType::Float, 3), ("plc|speed", SeriesType::Float, 0), ("plc|word", SeriesType::Int, 0), ("sorter|item", SeriesType::Int, 0)] {
         let (src, ser) = series.split_once('|').unwrap();
@@ -150,15 +159,18 @@ fn the_three_protocols_run_into_one_store_alike() {
     assert_eq!((st.ty, st.count, st.last_index_ms, st.last_value.as_str()), (SeriesType::Text, 30, stamp_ms(29), "run"));
 }
 
-/// Read one frame, if one waits, into each series' samples as framed: stamp, value and count.
-fn drain(rx: &mut tokio::sync::broadcast::Receiver<std::sync::Arc<str>>, framed: &mut BTreeMap<(String, String), Vec<(i64, f64, u64)>>) -> bool {
+/// Each series' samples as framed: stamp, value, count and key.
+type Framed = BTreeMap<(String, String), Vec<(i64, f64, u64, Option<String>)>>;
+
+/// Read one frame, if one waits, into each series' samples as framed.
+fn drain(rx: &mut tokio::sync::broadcast::Receiver<std::sync::Arc<str>>, framed: &mut Framed) -> bool {
     match rx.try_recv() {
         Ok(frame) => {
             let v: serde_json::Value = serde_json::from_str(&frame).unwrap();
             assert_eq!(v["type"], "data");
             for s in v["samples"].as_array().unwrap() {
                 let key = (s["src"].as_str().unwrap().to_string(), s["ser"].as_str().unwrap().to_string());
-                framed.entry(key).or_default().push((s["ms"].as_i64().unwrap(), s["v"].as_f64().unwrap(), s["n"].as_u64().unwrap()));
+                framed.entry(key).or_default().push((s["ms"].as_i64().unwrap(), s["v"].as_f64().unwrap(), s["n"].as_u64().unwrap(), s["k"].as_str().map(String::from)));
             }
             true
         }
