@@ -371,7 +371,7 @@ view's are the engine's, judged when the panel is computed.
   rule, a channel message or a view of the project), `columns` (none: every column), each
   `{ name, label, bar, decimals, states }` (`name` required; `bar` true draws the value as a bar
   against the column's largest in the page; `states` rules as an object's), `sort` (none:
-  `{ column, descending }`, applied to the rows shown, a column of the panel's, or of the table's
+  `{ column, descending }`, `descending` false unless written, applied to the rows shown, a column of the panel's, or of the table's
   when the panel names none), `limit` (`50`, 1 to 1000). A column's `decimals` are 0 to 6; its
   rules compare its own value.
 - `cells`: charts in cells, one row per value of a key column of a table over a window: the

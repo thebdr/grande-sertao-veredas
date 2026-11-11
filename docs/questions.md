@@ -432,3 +432,18 @@ magenta accent, after Veredas 1's dashboard, and the desktop side green.
 hover and data series `#5FE07F`, on-accent text `#08130B`); the mockups' magenta reads as the
 accent wherever it appears. The accent stays what it was: selection, focus, primary actions and
 neutral data series, never a plant state.
+
+## Q23 - May a layout's stylesheet load from another host?
+
+**Raised** 2026-11-11, by C-048's fourth refute round.
+
+The layout reader refuses script in every form it found (elements, handlers, `javascript:` links,
+entities expanding to markup, `xml:base`), but a `<style>` inside the SVG may `@import url(...)` a
+stylesheet from another host, and a layout's style applies to the whole page once mounted. The
+page itself loads nothing but its own files (C-047); a layout is the plant engineer's own file,
+served by the host. Neither the clause nor `docs/binding-schema.md` promises to refuse outside
+content in a layout.
+
+**Taken meanwhile** (the most reversible): nothing refused; the reader stays as it is. If the
+answer is "refuse", it is a new refusal in the reference (an `@import` or a `url()` outside the
+document in a layout's style) with its exact text, and C-048 states it.

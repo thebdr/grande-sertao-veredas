@@ -125,6 +125,10 @@ fn the_worked_example_loads_as_the_reference_states_it() {
     }
     assert_eq!(d.panels[6].title, "outlets");
     assert_eq!(d.panels[7].kind, PanelKind::Cells { table: "sorts".into(), key: "outlet".into(), value: "travel".into(), minutes: 60, bucket_minutes: 5, spread: 10.0 });
+    // Every panel's title, written or its default: the object's label, "States", "Levels", the
+    // table's name.
+    let titles: Vec<&str> = d.panels.iter().map(|p| p.title.as_str()).collect();
+    assert_eq!(titles, ["Read rate", "Read rate", "Loop speed", "State over time", "States", "Levels", "outlets", "sorts"]);
 
     // What the project carries, as the binding sees it.
     let u = Universe::of(&s.project);
@@ -1033,7 +1037,7 @@ view's are the engine's, judged when the panel is computed.
   rule, a channel message or a view of the project), `columns` (none: every column), each
   `{ name, label, bar, decimals, states }` (`name` required; `bar` true draws the value as a bar
   against the column's largest in the page; `states` rules as an object's), `sort` (none:
-  `{ column, descending }`, applied to the rows shown, a column of the panel's, or of the table's
+  `{ column, descending }`, `descending` false unless written, applied to the rows shown, a column of the panel's, or of the table's
   when the panel names none), `limit` (`50`, 1 to 1000). A column's `decimals` are 0 to 6; its
   rules compare its own value.
 - `cells`: charts in cells, one row per value of a key column of a table over a window: the
@@ -1204,6 +1208,13 @@ fn every_key_reads_back_as_written_and_every_default_fills() {
         sort: None,
         limit: 10,
     });
+    // A levels panel without ticks, a cells panel leaving its windows to their defaults, a sort
+    // leaving `descending` to its: none, 60 and 5 minutes, false; the titles as written, or "Levels".
+    assert_eq!(kinds[5], &PanelKind::Levels { objects: vec![0], ticks: vec![] });
+    assert_eq!(kinds[6], &PanelKind::Cells { table: "sorts".into(), key: "outlet".into(), value: "travel".into(), minutes: 60, bucket_minutes: 5, spread: 5.0 });
+    assert!(matches!(kinds[7], PanelKind::Table { sort, limit: 50, .. } if sort == &Some(("outlet".to_string(), false))), "{:?}", kinds[7]);
+    let titles: Vec<&str> = d.panels.iter().map(|p| p.title.as_str()).collect();
+    assert_eq!(titles, ["Ay", "Tee", "Sums", "State over time", "outlets", "Levels", "Cee", "outlets"]);
     // Every aggregate word, its kind.
     for (word, agg) in [("mean", Aggregate::Mean), ("sum", Aggregate::Sum), ("count", Aggregate::Count), ("min", Aggregate::Min), ("max", Aggregate::Max), ("last", Aggregate::Last)] {
         let mut e = with_modes();
@@ -1245,11 +1256,13 @@ title = "Ay"
 kind = "trend"
 object = "a"
 limit = { above = 3 }
+title = "Tee"
 
 [[dashboard.panel]]
 kind = "bars"
 object = "a"
 aggregate = "sum"
+title = "Sums"
 
 [[dashboard.panel]]
 kind = "timeline"
@@ -1260,6 +1273,23 @@ kind = "table"
 table = "outlets"
 limit = 10
 columns = [ { name = "outlet", label = "Outlet", states = [ { above = 2, state = "warn", word = "far" } ] } ]
+
+[[dashboard.panel]]
+kind = "levels"
+objects = ["a"]
+
+[[dashboard.panel]]
+kind = "cells"
+table = "sorts"
+key = "outlet"
+value = "travel"
+spread = 5
+title = "Cee"
+
+[[dashboard.panel]]
+kind = "table"
+table = "outlets"
+sort = { column = "outlet" }
 "#;
 
 /// A keyed text series for the example's log: a mode per item.
