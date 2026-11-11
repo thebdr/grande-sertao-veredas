@@ -109,17 +109,28 @@ fn the_rate_the_faults_the_full_chutes_and_the_no_reads_are_turned_live_and_meas
     let s0 = machine.status().controller.unwrap().stats;
     machine.set_fault("noread", 50).unwrap();
     assert_eq!(machine.status().controller.unwrap().faults["noread"], 50);
-    assert!(wait(Duration::from_secs(40), || announced(&machine) >= s0.announced + 1000));
+    // The unit's side: every announce it shows while the fault is on, gathered by item as its last
+    // hundred lines slide (a loaded host left only 14 announces among them at the end).
+    let mut on_wire: HashMap<String, bool> = HashMap::new();
+    let mut gather = |unit: &BenchChannel| {
+        for l in unit.status().recent.iter().filter(|l| l.direction == Direction::In && l.message == "announce") {
+            on_wire.entry(l.fields["item"].clone()).or_insert(l.fields["read"] == "N" && l.fields["code"].is_empty());
+        }
+    };
+    assert!(wait(Duration::from_secs(40), || {
+        gather(&unit);
+        announced(&machine) >= s0.announced + 1000
+    }));
     machine.set_fault("noread", 0).unwrap();
     let s1 = machine.status().controller.unwrap().stats;
     let total = s1.announced - s0.announced;
     let noreads = s1.faults["noread"] - s0.faults.get("noread").copied().unwrap_or(0);
     assert!((44..=56).contains(&(noreads * 100 / total)), "{noreads} no-reads in {total} at 50 %");
+    // Items announced just before the fault was set are among them; at 10 ms they are a handful.
+    assert!(on_wire.len() >= 200, "{} announces gathered on the unit's side", on_wire.len());
+    let seen = on_wire.values().filter(|n| **n).count();
+    assert!((35..=65).contains(&(seen * 100 / on_wire.len())), "{seen} no-reads in the {} the unit showed", on_wire.len());
     let u = unit.status();
-    let items: Vec<_> = u.recent.iter().filter(|l| l.direction == Direction::In && l.message == "announce").collect();
-    assert!(items.len() >= 20, "{}", items.len());
-    let seen = items.iter().filter(|l| l.fields["read"] == "N" && l.fields["code"].is_empty()).count();
-    assert!((15..=85).contains(&(seen * 100 / items.len())), "{seen} no-reads in the {} the unit still shows", items.len());
     assert!(u.recent.iter().any(|l| l.direction == Direction::Out && l.message == "answer" && l.fields["dest"] == "0"), "{:?}", u.recent);
     // Once every item is answered (nothing new announced meanwhile): as many invalid
     // destinations as no-reads, no more, no fewer.

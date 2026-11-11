@@ -302,9 +302,18 @@ fn a_channel_refuses_a_configuration_it_cannot_speak_and_reports_a_port_it_canno
     let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = squatter.local_addr().unwrap().port();
     let taken = start(config("taken", listen(port), catalog(), Vec::new())).unwrap();
-    assert!(wait(Duration::from_secs(5), || taken.status().wire.state == "failed"), "{:?}", taken.status().wire);
+    // The wire's state is the core channel's own, at once; the error is the bench's, recorded when
+    // its loop next looks: both waited for (a loaded host read "failed" with no error yet).
+    assert!(
+        wait(Duration::from_secs(10), || {
+            let s = taken.status();
+            s.wire.state == "failed" && s.last_error.as_deref().unwrap_or("").contains(&port.to_string())
+        }),
+        "{:?} {:?}",
+        taken.status().wire,
+        taken.status().last_error
+    );
     let t = taken.status();
-    assert!(t.last_error.as_deref().unwrap_or("").contains(&port.to_string()), "{:?}", t.last_error);
     assert!(t.recent.iter().any(|l| l.direction == Direction::Note && l.preview.contains(&port.to_string())));
     assert!(!taken.is_finished(), "the channel stays, its status saying why it serves nobody, until stopped");
     taken.stop();
