@@ -166,7 +166,13 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
             p["rows"].as_array().unwrap().iter().map(|r| r.as_array().unwrap().iter().map(cell).collect()).collect(),
         )
     };
-    let shown_at = |page: &mut Browser, rows: &str| page.wait_for(&format!("(() => {{ const s = {SHOWN}; return s && s.rows === '{rows}' ? s : null; }})()"), Duration::from_secs(20));
+    // A page is matched by its rows and by what it says of them, on every page: "rows A–B of N".
+    let shown_at = |page: &mut Browser, rows: &str| {
+        page.wait_for(
+            &format!("(() => {{ const s = {SHOWN}; if (!s || s.rows !== '{rows}') return null; const [ab, n] = s.rows.split('/'); const [a, b] = ab.split('-'); return s.said === `rows ${{a}}–${{b}} of ${{n}}, newest first` ? s : null; }})()"),
+            Duration::from_secs(20),
+        )
+    };
     let click = |page: &mut Browser, text: &str| {
         page.eval(&format!(r#"[...document.querySelectorAll(".list-main .pager button")].find((b) => b.textContent === "{text}").click()"#));
     };
@@ -339,7 +345,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     assert_eq!(listed, json!(names), "hall's series, as hall's portal lists them");
     page.eval(r#"document.querySelector('.list button[data-series="sorter/travel"]').click()"#);
     let one = page.wait_for(
-        r#"(() => { const p = document.querySelector(".list-main .pager [data-points]"); const dot = document.querySelector(".list-main svg.trend circle.point"); return p && dot ? { points: p.dataset.points, said: p.textContent, line: document.querySelectorAll(".list-main svg.trend path.line").length, cx: Number(dot.getAttribute("cx")), cy: Number(dot.getAttribute("cy")), shown: getComputedStyle(dot).visibility === "visible" && getComputedStyle(dot).fill !== "none" } : null; })()"#,
+        r#"(() => { const p = document.querySelector(".list-main .pager [data-points]"); const dot = document.querySelector(".list-main svg.trend circle.point"); return p && dot ? { points: p.dataset.points, said: p.textContent, line: document.querySelectorAll(".list-main svg.trend path.line").length, cx: Number(dot.getAttribute("cx")), cy: Number(dot.getAttribute("cy")), shown: (() => { const c = getComputedStyle(dot), b = dot.getBoundingClientRect(); return b.width > 0 && b.height > 0 && c.visibility === "visible" && c.display !== "none" && c.opacity !== "0" && c.fill !== "none"; })() } : null; })()"#,
         Duration::from_secs(20),
     );
     let asked: Vec<String> = page.requests().into_iter().map(|(u, _)| u).filter(|u| u.contains("/portal/api/series/data?")).collect();
