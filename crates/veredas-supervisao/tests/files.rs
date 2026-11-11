@@ -317,9 +317,10 @@ fn a_supervisao_file_refuses_what_it_cannot_serve_by_its_place() {
     // (a name sorting first written second).
     let dir = tempfile::tempdir().unwrap();
     let mut ex = example();
-    ex.host = ex.host.replace("bind = \"127.0.0.1:8902\"", "bind = \"127.0.0.1:9123\"") + "\n[[session]]\nname = \"alpha\"\nproject = \"loop/project.toml\"\nbinding = \"loop/binding.toml\"\n";
+    // (An address beyond the loopback, and another port: both read as written.)
+    ex.host = ex.host.replace("bind = \"127.0.0.1:8902\"", "bind = \"0.0.0.0:9123\"") + "\n[[session]]\nname = \"alpha\"\nproject = \"loop/project.toml\"\nbinding = \"loop/binding.toml\"\n";
     let cfg = load(dir.path(), &ex).unwrap();
-    assert_eq!((cfg.bind.to_string(), cfg.sessions.iter().map(|s| s.name.as_str()).collect::<Vec<_>>()), ("127.0.0.1:9123".to_string(), vec!["loop", "alpha"]));
+    assert_eq!((cfg.bind.to_string(), cfg.sessions.iter().map(|s| s.name.as_str()).collect::<Vec<_>>()), ("0.0.0.0:9123".to_string(), vec!["loop", "alpha"]));
     // A project that is not there, or does not load, is refused with portal's reason.
     let dir = tempfile::tempdir().unwrap();
     let mut ex = example();
@@ -484,6 +485,15 @@ fn the_rest_of_the_refusals_name_their_place() {
         (Box::new(|b| b.replacen("path = \"loop\"", "path = \"loop\"\nrange = [nan, 1]", 1)), "object `parcel-1`: the range's low is not a finite number"),
         (Box::new(|b| b.replace("[[dashboard.panel]]\nkind = \"value\"", "[[dashboard.panel]]\nkinds = \"value\"")), "dashboard `Overview`, panel[0]: a panel names its `kind`"),
         (Box::new(|b| b.replace("kind = \"trend\"\nobject = \"read-rate\"\nminutes = 60", "kind = \"trend\"\nobject = \"read-rate\"\nminutes = 0")), "dashboard `Overview`, panel[1] (trend): `minutes` is 0"),
+        // Every window refused at 0, on every kind that has one.
+        (Box::new(|b| b.replace("kind = \"value\"\nobject = \"read-rate\"", "kind = \"value\"\nobject = \"read-rate\"\nminutes = 0")), "dashboard `Overview`, panel[0] (value): `minutes` is 0"),
+        (Box::new(|b| b.replace("object = \"speed\"\nminutes = 60", "object = \"speed\"\nminutes = 0")), "dashboard `Overview`, panel[2] (bars): `minutes` is 0"),
+        (Box::new(|b| b.replace("objects = [\"infeed\"]\nminutes = 60", "objects = [\"infeed\"]\nminutes = 0")), "dashboard `Overview`, panel[3] (timeline): `minutes` is 0"),
+        (Box::new(|b| b.replace("minutes = 60\nspread = 10.0", "minutes = 0\nspread = 10.0")), "dashboard `Overview`, panel[7] (cells): `minutes` is 0"),
+        // A panel of one object naming none.
+        (Box::new(|b| b.replace("kind = \"value\"\nobject = \"read-rate\"", "kind = \"value\"\nobject = \"sped\"")), "dashboard `Overview`, panel[0] (value): `sped` names no object"),
+        (Box::new(|b| b.replace("kind = \"trend\"\nobject = \"read-rate\"", "kind = \"trend\"\nobject = \"sped\"")), "dashboard `Overview`, panel[1] (trend): `sped` names no object"),
+        (Box::new(|b| b.replace("kind = \"bars\"\nobject = \"speed\"", "kind = \"bars\"\nobject = \"sped\"")), "dashboard `Overview`, panel[2] (bars): `sped` names no object"),
         (Box::new(|b| b.replace("bucket_minutes = 5\naggregate", "bucket_minutes = 0\naggregate")), "dashboard `Overview`, panel[2] (bars): `bucket_minutes` is 0"),
         (Box::new(|b| b.replace("spread = 10.0", "spread = 10.0\nbucket_minutes = 0")), "dashboard `Overview`, panel[7] (cells): `bucket_minutes` is 0"),
         (Box::new(|b| b.replace("target = 99.0", "target = nan")), "dashboard `Overview`, panel[0] (value): `target` is not a finite number"),
@@ -1197,6 +1207,8 @@ fn every_key_reads_back_as_written_and_every_default_fills() {
         Rule { compare: Compare::Above(5.0), class: StateClass::Warn, word: "warn".into(), series: None, ty: None },
         Rule { compare: Compare::AtMost(1.0), class: StateClass::Alarm, word: "low".into(), series: None, ty: None },
         Rule { compare: Compare::AtLeast(1.0), class: StateClass::Alarm, word: "alarm".into(), series: Some(bind("plc", "fill2", Some("A1"))), ty: Some(SeriesType::Float) },
+        // One writing its own key keeps it.
+        Rule { compare: Compare::AtLeast(2.0), class: StateClass::Warn, word: "warn".into(), series: Some(bind("plc", "fill2", Some("B2"))), ty: Some(SeriesType::Float) },
     ]);
     // A number compared by `equals` as written, a fraction too; the fourth state read.
     let c = b.object("c").unwrap();
@@ -1236,8 +1248,18 @@ fn every_key_reads_back_as_written_and_every_default_fills() {
     assert!(matches!(kinds[9], PanelKind::Bars { minutes: 120, bucket_minutes: 10, .. }), "{:?}", kinds[9]);
     assert_eq!(kinds[10], &PanelKind::Timeline { objects: vec![0], minutes: 120 });
     assert_eq!(kinds[11], &PanelKind::Cells { table: "sorts".into(), key: "outlet".into(), value: "travel".into(), minutes: 90, bucket_minutes: 15, spread: 5.0 });
+    // A trend's window as written; a grid over a text series as over a number (only trend, bars,
+    // timeline and levels chart numbers); a table's limit at its lowest.
+    assert_eq!(kinds[12], &PanelKind::Trend { object: 0, minutes: 45, limit: None });
+    assert_eq!(kinds[13], &PanelKind::Timeline { objects: vec![0], minutes: 60 });
+    assert_eq!((kinds[14], kinds[15]), (&PanelKind::Grid { objects: vec![0, 3] }, &PanelKind::Grid { objects: vec![3] }));
+    assert_eq!(kinds[16], &PanelKind::Levels { objects: vec![0], ticks: vec![] });
+    assert!(matches!(kinds[17], PanelKind::Table { table, columns, sort: None, limit: 1 } if table == "outlets" && columns.is_empty()), "{:?}", kinds[17]);
     let titles: Vec<&str> = d.panels.iter().map(|p| p.title.as_str()).collect();
-    assert_eq!(titles, ["Ay", "Tee", "Sums", "State over time", "outlets", "Levels", "Cee", "outlets", "a", "a", "State over time", "sorts"]);
+    assert_eq!(titles, ["Ay", "Tee", "Sums", "State over time", "outlets", "Levels", "Cee", "outlets", "a", "a", "State over time", "sorts", "a", "Tl", "States", "Gee", "Lv", "Tab"]);
+    // A dashboard of one column, its panel spanning it.
+    let one = &b.dashboards[1];
+    assert_eq!((one.name.as_str(), one.columns, one.panels.len(), one.panels[0].span), ("One", 1, 1, 1));
     // Every aggregate word, its kind.
     for (word, agg) in [("mean", Aggregate::Mean), ("sum", Aggregate::Sum), ("count", Aggregate::Count), ("min", Aggregate::Min), ("max", Aggregate::Max), ("last", Aggregate::Last)] {
         let mut e = with_modes();
@@ -1259,7 +1281,7 @@ id = "a"
 value = { source = "plc", series = "fill1", key = "A1" }
 range = [10, 20]
 show = "value"
-states = [ { above = 5, state = "warn" }, { at_most = 1, state = "alarm", word = "low" }, { at_least = 1, series = "fill2", state = "alarm" } ]
+states = [ { above = 5, state = "warn" }, { at_most = 1, state = "alarm", word = "low" }, { at_least = 1, series = "fill2", state = "alarm" }, { at_least = 2, series = "fill2", key = "B2", state = "warn" } ]
 
 [[object]]
 id = "b"
@@ -1271,6 +1293,10 @@ states = [ { equals = 2, series = "infeed", state = "alarm", word = "fault" }, {
 id = "c"
 value = { source = "plc", series = "fill3" }
 states = [ { equals = 0.5, state = "warn" }, { at_most = 0, state = "disabled" } ]
+
+[[object]]
+id = "m"
+value = { source = "sorter", series = "mode" }
 
 [[dashboard]]
 name = "Keys"
@@ -1343,6 +1369,45 @@ value = "travel"
 spread = 5
 minutes = 90
 bucket_minutes = 15
+
+[[dashboard.panel]]
+kind = "trend"
+object = "a"
+minutes = 45
+
+[[dashboard.panel]]
+kind = "timeline"
+objects = ["a"]
+title = "Tl"
+
+[[dashboard.panel]]
+kind = "grid"
+objects = ["a", "m"]
+
+[[dashboard.panel]]
+kind = "grid"
+objects = ["m"]
+title = "Gee"
+
+[[dashboard.panel]]
+kind = "levels"
+objects = ["a"]
+title = "Lv"
+
+[[dashboard.panel]]
+kind = "table"
+table = "outlets"
+title = "Tab"
+limit = 1
+
+[[dashboard]]
+name = "One"
+columns = 1
+
+[[dashboard.panel]]
+kind = "value"
+object = "a"
+span = 1
 "#;
 
 /// A keyed text series for the example's log: a mode per item.
