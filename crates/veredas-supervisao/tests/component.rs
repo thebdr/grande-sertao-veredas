@@ -96,12 +96,77 @@ fn the_plant_s_stack_reaches_supervisao_through_portal_alone() {
 /// never (the repository ignores it).
 fn crate_files() -> Vec<PathBuf> {
     let root = crate_dir();
-    let out = Command::new("git").arg("-C").arg(&root).args(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."]).output().unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let mut files: Vec<PathBuf> = out.stdout.split(|b| *b == 0).filter(|s| !s.is_empty()).map(|s| root.join(String::from_utf8_lossy(s).as_ref())).filter(|p| p.is_file()).collect();
+    let git = |args: &[&str]| {
+        let out = Command::new("git").arg("-C").arg(&root).args(args).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        out.stdout
+    };
+    let staged = git(&["ls-files", "-z", "--stage", "--", "."]);
+    let others = git(&["ls-files", "-z", "--others", "--exclude-standard", "--", "."]);
+    let (tracked, untracked) = regular_entries(&staged, &others).unwrap_or_else(|e| panic!("{e}"));
+    let mut files = Vec::new();
+    for (rel, held) in tracked.iter().map(|r| (r, true)).chain(untracked.iter().map(|r| (r, false))) {
+        let p = root.join(rel);
+        match std::fs::symlink_metadata(&p) {
+            Ok(m) if m.is_file() => files.push(p),
+            Ok(_) => panic!("`{rel}` is no regular file on disk (a link or a folder): every file git holds or would hold is one"),
+            // A tracked file deleted from the tree is on its way out; nothing of it is read.
+            Err(_) if held => {}
+            Err(e) => panic!("`{rel}`: {e}"),
+        }
+    }
     files.sort();
     files.dedup();
     files
+}
+
+/// Git's own list of entries under the crate, refused unless each is a regular file: a tracked
+/// entry by its mode (`100644` or `100755`; a link `120000` or a submodule `160000` is none), an
+/// untracked one unless it names a file (git lists a nested repository as its folder, `dir/`).
+/// Returns the tracked paths and the untracked ones, as git wrote them.
+fn regular_entries(staged: &[u8], others: &[u8]) -> Result<(Vec<String>, Vec<String>), String> {
+    let mut tracked = Vec::new();
+    for e in staged.split(|b| *b == 0).filter(|s| !s.is_empty()) {
+        let e = String::from_utf8_lossy(e);
+        let (meta, path) = e.split_once('\t').ok_or_else(|| format!("an entry git wrote without its path: {e}"))?;
+        let mode = meta.split(' ').next().unwrap_or("");
+        if mode != "100644" && mode != "100755" {
+            return Err(format!("`{path}` is held by git as mode {mode}, no regular file: every file git holds is one"));
+        }
+        tracked.push(path.to_string());
+    }
+    let mut untracked = Vec::new();
+    for e in others.split(|b| *b == 0).filter(|s| !s.is_empty()) {
+        let path = String::from_utf8_lossy(e).into_owned();
+        if path.ends_with('/') {
+            return Err(format!("`{path}` is a repository of its own inside the crate, no file"));
+        }
+        untracked.push(path);
+    }
+    Ok((tracked, untracked))
+}
+
+#[test]
+fn an_address_is_read_by_its_scheme_or_its_slashes() {
+    let read = |t: &str| addresses(t).into_iter().map(String::from).collect::<Vec<_>>();
+    assert_eq!(read(r#"fetch("https:cdn.example/x.json")"#), ["https:cdn.example/x.json"]);
+    assert_eq!(read("new WebSocket('WSS://feed.example/s')"), ["//feed.example/s", "WSS://feed.example/s"]);
+    assert_eq!(read("url(//cdn.example/f.woff)"), ["//cdn.example/f.woff"]);
+    assert_eq!(read("rows:1,news:2 // a comment"), Vec::<String>::new());
+}
+
+#[test]
+fn an_entry_git_holds_that_is_no_regular_file_is_refused() {
+    let entries = |lines: &[&str]| lines.iter().flat_map(|l| l.bytes().chain([0])).collect::<Vec<u8>>();
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    let file = format!("100644 {sha} 0\tsrc/lib.rs");
+    let exe = format!("100755 {sha} 0\tweb/run.sh");
+    assert_eq!(regular_entries(&entries(&[&file, &exe]), &entries(&["notes.txt"])), Ok((vec!["src/lib.rs".to_string(), "web/run.sh".to_string()], vec!["notes.txt".to_string()])));
+    let link = format!("120000 {sha} 0\tweb/linked");
+    let module = format!("160000 {sha} 0\tweb/vendor-docs");
+    assert_eq!(regular_entries(&entries(&[&file, &link]), &[]), Err("`web/linked` is held by git as mode 120000, no regular file: every file git holds is one".to_string()));
+    assert_eq!(regular_entries(&entries(&[&module]), &[]), Err("`web/vendor-docs` is held by git as mode 160000, no regular file: every file git holds is one".to_string()));
+    assert_eq!(regular_entries(&[], &entries(&["web/nested/"])), Err("`web/nested/` is a repository of its own inside the crate, no file".to_string()));
 }
 
 fn rev(s: &str) -> String {
@@ -611,12 +676,32 @@ fn urls(text: &str) -> Vec<String> {
 
 /// Every address a text names (`http://`, `https://`, or `//` but a comment's), up to the
 /// quote, space or parenthesis that ends it.
+/// Every address a text names: a scheme a browser fetches from another host, in any case and with
+/// `//` or without (`https:cdn.example/x` resolves against the page's own scheme to another host),
+/// and a host written without a scheme (`//cdn.example/x`); each up to its quote, space or `)`.
+/// An address assembled at run time from pieces, or spelled through an escape, is not read (the
+/// clause states it).
 fn addresses(text: &str) -> BTreeSet<&str> {
-    ["http://", "https://", "//"]
-        .iter()
-        .flat_map(|scheme| text.match_indices(scheme).map(|(i, _)| &text[i..]).map(|t| &t[..t.find(|c: char| c == '"' || c == '\'' || c == '`' || c.is_whitespace() || c == ')').unwrap_or(t.len())]))
-        .filter(|a| !a.starts_with("//") || !a[2..].starts_with(' '))
-        .collect()
+    fn upto(t: &str) -> &str {
+        &t[..t.find(|c: char| c == '"' || c == '\'' || c == '`' || c.is_whitespace() || c == ')').unwrap_or(t.len())]
+    }
+    let lower = text.to_ascii_lowercase();
+    let mut out = BTreeSet::new();
+    for scheme in ["http:", "https:", "ws:", "wss:", "ftp:"] {
+        for (i, _) in lower.match_indices(scheme) {
+            if i == 0 || !lower.as_bytes()[i - 1].is_ascii_alphanumeric() {
+                out.insert(upto(&text[i..]));
+            }
+        }
+    }
+    // A host follows the slashes (a comment's `// ` names none).
+    for (i, _) in text.match_indices("//") {
+        let a = upto(&text[i..]);
+        if a.len() > 2 {
+            out.insert(a);
+        }
+    }
+    out
 }
 
 fn copy_tree(from: &Path, to: &Path, rel: &[String]) {
@@ -717,23 +802,26 @@ export function sourceHash(root: string): string {
   return hashFiles(root, files);
 }
 
-const norm = (p: string) => resolve(p).replace(/\\/g, "/").toLowerCase();
+// A path as written, its separators forward and its drive letter upper case; its case kept, so a
+// file the walk did not list (another case, a stream after a colon) is no hashed file.
+const norm = (p: string) => resolve(p).replace(/\\/g, "/").replace(/^([a-z]):/, (_m, d: string) => `${d.toUpperCase()}:`);
 
 function stamp(): Plugin {
-  const src = norm(join(__dirname, "src")) + "/";
-  const hashed = SOURCE_FILES.map((f) => norm(join(__dirname, f)));
   return {
     name: "source-hash",
     // After vite's own plugins, so the bundle it judges holds index.html.
     enforce: "post",
     generateBundle(_options, bundle) {
       // Every module read, and every file one pulls in (a stylesheet's @import, what vite
-      // watches), is a hashed source.
+      // watches), is exactly one of the files the source hash reads.
+      const files = [...SOURCE_FILES];
+      walk(join(__dirname, "src"), "src", files);
+      const hashed = new Set(files.map((f) => norm(join(__dirname, f))));
       for (const id of [...this.getModuleIds(), ...this.getWatchFiles()]) {
         if (id.startsWith("\0")) continue;
         const p = norm(id.split("?")[0]);
-        if (!(p.startsWith(src) || hashed.includes(p))) {
-          this.error(`the page reads ${id}, outside src/ and the hashed files: move it under src/`);
+        if (!hashed.has(p)) {
+          this.error(`the page reads ${id}, which is none of the files the source hash reads (the files under src/ and the hashed ones, as the walk lists them)`);
         }
       }
       // The page is the three files the host serves, and nothing else.

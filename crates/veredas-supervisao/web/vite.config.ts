@@ -56,23 +56,26 @@ export function sourceHash(root: string): string {
   return hashFiles(root, files);
 }
 
-const norm = (p: string) => resolve(p).replace(/\\/g, "/").toLowerCase();
+// A path as written, its separators forward and its drive letter upper case; its case kept, so a
+// file the walk did not list (another case, a stream after a colon) is no hashed file.
+const norm = (p: string) => resolve(p).replace(/\\/g, "/").replace(/^([a-z]):/, (_m, d: string) => `${d.toUpperCase()}:`);
 
 function stamp(): Plugin {
-  const src = norm(join(__dirname, "src")) + "/";
-  const hashed = SOURCE_FILES.map((f) => norm(join(__dirname, f)));
   return {
     name: "source-hash",
     // After vite's own plugins, so the bundle it judges holds index.html.
     enforce: "post",
     generateBundle(_options, bundle) {
       // Every module read, and every file one pulls in (a stylesheet's @import, what vite
-      // watches), is a hashed source.
+      // watches), is exactly one of the files the source hash reads.
+      const files = [...SOURCE_FILES];
+      walk(join(__dirname, "src"), "src", files);
+      const hashed = new Set(files.map((f) => norm(join(__dirname, f))));
       for (const id of [...this.getModuleIds(), ...this.getWatchFiles()]) {
         if (id.startsWith("\0")) continue;
         const p = norm(id.split("?")[0]);
-        if (!(p.startsWith(src) || hashed.includes(p))) {
-          this.error(`the page reads ${id}, outside src/ and the hashed files: move it under src/`);
+        if (!hashed.has(p)) {
+          this.error(`the page reads ${id}, which is none of the files the source hash reads (the files under src/ and the hashed ones, as the walk lists them)`);
         }
       }
       // The page is the three files the host serves, and nothing else.
