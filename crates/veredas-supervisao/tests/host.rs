@@ -251,10 +251,13 @@ fn the_executable_serves_a_file_until_stdin_closes() {
     assert_eq!(get(addr, "/api/sessions").1["sessions"][1]["name"], json!("hall"));
     let (_, s) = get(addr, "/s/loop/portal/api/session");
     assert_eq!(s["session_name"], json!("the loop"));
-    // A line on stdin is not a close, in any encoding (one in Latin-1 among them): it keeps serving.
+    // A line on stdin is not a close, in any encoding (one in Latin-1 among them), nor an empty
+    // one (a bare Enter, with or without its carriage return): it keeps serving.
     let mut stdin = child.stdin.take().unwrap();
     stdin.write_all(b"hello\n").unwrap();
     stdin.write_all(b"n\xe3o\n").unwrap();
+    stdin.write_all(b"\n").unwrap();
+    stdin.write_all(b"\r\n").unwrap();
     stdin.flush().unwrap();
     std::thread::sleep(Duration::from_millis(1500));
     assert!(child.try_wait().unwrap().is_none(), "a line stopped it");
