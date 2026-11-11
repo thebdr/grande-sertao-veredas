@@ -313,6 +313,13 @@ fn a_supervisao_file_refuses_what_it_cannot_serve_by_its_place() {
     let mut ex = example();
     ex.host = ex.host.replace("bind = \"127.0.0.1:8902\"\n", "");
     assert_eq!(load(dir.path(), &ex).unwrap().bind.to_string(), "127.0.0.1:8902");
+    // A bind written other than the default is the one read; two sessions keep the file's order
+    // (a name sorting first written second).
+    let dir = tempfile::tempdir().unwrap();
+    let mut ex = example();
+    ex.host = ex.host.replace("bind = \"127.0.0.1:8902\"", "bind = \"127.0.0.1:9123\"") + "\n[[session]]\nname = \"alpha\"\nproject = \"loop/project.toml\"\nbinding = \"loop/binding.toml\"\n";
+    let cfg = load(dir.path(), &ex).unwrap();
+    assert_eq!((cfg.bind.to_string(), cfg.sessions.iter().map(|s| s.name.as_str()).collect::<Vec<_>>()), ("127.0.0.1:9123".to_string(), vec!["loop", "alpha"]));
     // A project that is not there, or does not load, is refused with portal's reason.
     let dir = tempfile::tempdir().unwrap();
     let mut ex = example();
@@ -984,7 +991,8 @@ A path is relative to the binding file's folder.
   stale is no rule's: it is judged on the arrival clock.
 - `word` (the state's name): the word shown with the mark.
 - `source`, `series`, `key` (the object's): another series the rule compares instead of the
-  object's value, by the same rules as `value`'s keys.
+  object's value, by the same rules as `value`'s keys. A rule takes the object's `key` with the
+  rest, so on a keyed object a rule over a text series (which carries no key) is refused.
 
 The states read with a mark and a word everywhere: normal ●, near ■, warn ■, alarm !, disabled ▨,
 stale ◌, and the page's own selected ◆. Stale overrides the rules: an object with no value yet, whose source is away (idle past the
@@ -1182,9 +1190,17 @@ fn every_key_reads_back_as_written_and_every_default_fills() {
     // compared as written, a word defaulting to its state's name.
     let a = b.object("a").unwrap();
     assert_eq!((a.label.as_str(), &a.value, a.range, a.show), ("a", &bind("plc", "fill1", Some("A1")), (10.0, 20.0), Show::Value));
+    // A rule naming another series alone takes the object's source and key for the rest.
     assert_eq!(a.rules, vec![
         Rule { compare: Compare::Above(5.0), class: StateClass::Warn, word: "warn".into(), series: None, ty: None },
         Rule { compare: Compare::AtMost(1.0), class: StateClass::Alarm, word: "low".into(), series: None, ty: None },
+        Rule { compare: Compare::AtLeast(1.0), class: StateClass::Alarm, word: "alarm".into(), series: Some(bind("plc", "fill2", Some("A1"))), ty: Some(SeriesType::Float) },
+    ]);
+    // A number compared by `equals` as written, a fraction too; the fourth state read.
+    let c = b.object("c").unwrap();
+    assert_eq!(c.rules, vec![
+        Rule { compare: Compare::Equals(Comparand::Num(0.5)), class: StateClass::Warn, word: "warn".into(), series: None, ty: None },
+        Rule { compare: Compare::AtMost(0.0), class: StateClass::Disabled, word: "disabled".into(), series: None, ty: None },
     ]);
     // Rules over another series: an int one, and a text one compared exactly as written.
     let o = b.object("b").unwrap();
@@ -1213,8 +1229,13 @@ fn every_key_reads_back_as_written_and_every_default_fills() {
     assert_eq!(kinds[5], &PanelKind::Levels { objects: vec![0], ticks: vec![] });
     assert_eq!(kinds[6], &PanelKind::Cells { table: "sorts".into(), key: "outlet".into(), value: "travel".into(), minutes: 60, bucket_minutes: 5, spread: 5.0 });
     assert!(matches!(kinds[7], PanelKind::Table { sort, limit: 50, .. } if sort == &Some(("outlet".to_string(), false))), "{:?}", kinds[7]);
+    // Windows written other than their defaults, read as written.
+    assert_eq!(kinds[8], &PanelKind::Value { object: 0, minutes: 15, target: None });
+    assert!(matches!(kinds[9], PanelKind::Bars { minutes: 120, bucket_minutes: 10, .. }), "{:?}", kinds[9]);
+    assert_eq!(kinds[10], &PanelKind::Timeline { objects: vec![0], minutes: 120 });
+    assert_eq!(kinds[11], &PanelKind::Cells { table: "sorts".into(), key: "outlet".into(), value: "travel".into(), minutes: 90, bucket_minutes: 15, spread: 5.0 });
     let titles: Vec<&str> = d.panels.iter().map(|p| p.title.as_str()).collect();
-    assert_eq!(titles, ["Ay", "Tee", "Sums", "State over time", "outlets", "Levels", "Cee", "outlets"]);
+    assert_eq!(titles, ["Ay", "Tee", "Sums", "State over time", "outlets", "Levels", "Cee", "outlets", "a", "a", "State over time", "sorts"]);
     // Every aggregate word, its kind.
     for (word, agg) in [("mean", Aggregate::Mean), ("sum", Aggregate::Sum), ("count", Aggregate::Count), ("min", Aggregate::Min), ("max", Aggregate::Max), ("last", Aggregate::Last)] {
         let mut e = with_modes();
@@ -1236,13 +1257,18 @@ id = "a"
 value = { source = "plc", series = "fill1", key = "A1" }
 range = [10, 20]
 show = "value"
-states = [ { above = 5, state = "warn" }, { at_most = 1, state = "alarm", word = "low" } ]
+states = [ { above = 5, state = "warn" }, { at_most = 1, state = "alarm", word = "low" }, { at_least = 1, series = "fill2", state = "alarm" } ]
 
 [[object]]
 id = "b"
 label = "Bee"
 value = { source = "plc", series = "speed" }
 states = [ { equals = 2, series = "infeed", state = "alarm", word = "fault" }, { equals = "Jam", source = "sorter", series = "mode", state = "near", word = "jam" } ]
+
+[[object]]
+id = "c"
+value = { source = "plc", series = "fill3" }
+states = [ { equals = 0.5, state = "warn" }, { at_most = 0, state = "disabled" } ]
 
 [[dashboard]]
 name = "Keys"
@@ -1290,6 +1316,31 @@ title = "Cee"
 kind = "table"
 table = "outlets"
 sort = { column = "outlet" }
+
+[[dashboard.panel]]
+kind = "value"
+object = "a"
+minutes = 15
+
+[[dashboard.panel]]
+kind = "bars"
+object = "a"
+minutes = 120
+bucket_minutes = 10
+
+[[dashboard.panel]]
+kind = "timeline"
+objects = ["a"]
+minutes = 120
+
+[[dashboard.panel]]
+kind = "cells"
+table = "sorts"
+key = "outlet"
+value = "travel"
+spread = 5
+minutes = 90
+bucket_minutes = 15
 "#;
 
 /// A keyed text series for the example's log: a mode per item.

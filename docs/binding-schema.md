@@ -318,7 +318,8 @@ A path is relative to the binding file's folder.
   stale is no rule's: it is judged on the arrival clock.
 - `word` (the state's name): the word shown with the mark.
 - `source`, `series`, `key` (the object's): another series the rule compares instead of the
-  object's value, by the same rules as `value`'s keys.
+  object's value, by the same rules as `value`'s keys. A rule takes the object's `key` with the
+  rest, so on a keyed object a rule over a text series (which carries no key) is refused.
 
 The states read with a mark and a word everywhere: normal ●, near ■, warn ■, alarm !, disabled ▨,
 stale ◌, and the page's own selected ◆. Stale overrides the rules: an object with no value yet, whose source is away (idle past the
