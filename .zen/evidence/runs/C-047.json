@@ -14,15 +14,15 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "138a2db102cf45dbdcabbe3b824a9c5ac736cfe771d47ed5fe2ad0239b0c91ff",
-  "outputTail": "\n\nrunning 5 tests\ntest its_own_dependencies_are_core_portal_and_the_servers_crates ... ok\ntest supervisao_is_one_library_and_one_executable_named_for_it ... ok\ntest the_page_compiled_in_is_built_from_the_sources_in_the_tree ... ok\ntest the_plant_s_stack_reaches_supervisao_through_portal_alone ... ok\ntest no_file_of_supervisao_names_a_vendor_a_product_or_a_customer ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.39s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.24s\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-d1a4d457ef4f6d46.exe)\n     Running tests\\component.rs (target\\debug\\deps\\component-42405f4c3ba354dc.exe)",
-  "ranAt": "2026-11-11T01:48:44.456Z",
-  "headCommit": "ed89c2cdf400c0e5e9e7db7f8572184fe91c9e92",
+  "outputSha": "b96a241381ef7e32699346f73b2880eadd409f35e9428d40a2350605bde16e29",
+  "outputTail": "\n\nrunning 5 tests\ntest its_own_dependencies_are_core_portal_and_the_servers_crates ... ok\ntest supervisao_is_one_library_and_one_executable_named_for_it ... ok\ntest the_page_compiled_in_is_built_from_the_sources_in_the_tree ... ok\ntest the_plant_s_stack_reaches_supervisao_through_portal_alone ... ok\ntest no_file_of_supervisao_names_a_vendor_a_product_or_a_customer ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.09s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.11s\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-d1a4d457ef4f6d46.exe)\n     Running tests\\component.rs (target\\debug\\deps\\component-42405f4c3ba354dc.exe)",
+  "ranAt": "2026-11-11T04:23:51.912Z",
+  "headCommit": "c785cd80c45ddb248fa7a6b163ef9a387978cb3c",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/component.rs",
       "file": "crates/veredas-supervisao/tests/component.rs",
-      "fileSha": "8241fd9c856d1503109cc0928406c220c308144aa3d06ae38b3022b1541dfb53"
+      "fileSha": "a8e55948735aaee5f6af0e52440431135a975691e11e011f8fd79b58283255ab"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",
