@@ -873,7 +873,9 @@ fn a_tail_without_a_watcher_polls_at_its_interval_and_reads_the_file_when_it_com
     // The figure shares its line with the harness's own text.
     let at = stdout.find("cpu_ms=").unwrap_or_else(|| panic!("no figure in:\n{stdout}")) + "cpu_ms=".len();
     let spent: u64 = stdout[at..].chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap();
-    assert!(spent < 1_000, "{spent} ms of CPU over 3 s in a process running the three tails alone: a poll loop is spinning");
+    // Under 1.5 s, as the clause states: one loop spinning alone costs about a core for the 3 s; a
+    // loaded host has measured the three polling loops at 1078 ms.
+    assert!(spent < 1_500, "{spent} ms of CPU over 3 s in a process running the three tails alone: a poll loop is spinning");
 }
 
 /// Three tails no watcher serves: a parent folder not there yet (the watcher cannot be set up),
