@@ -514,10 +514,12 @@ fn a_listener_waits_for_the_plant_to_dial_and_a_peer_gone_reads_as_waiting() {
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = spawn(config(Role::Listen { bind: "127.0.0.1".into(), port }, vec![answer_rule()]), tx, WriteGate::new(true)).unwrap();
     let mut seen = Seen::new();
-    std::thread::sleep(Duration::from_millis(300));
+    // Listening once its socket is bound: waited for, a loaded host binding later than a fixed
+    // pause allowed ("starting" read once at 300 ms).
+    let listening = format!("listening on 127.0.0.1:{port}");
+    assert!(wait(Duration::from_secs(10), || worker.writer.status().wire.state == listening), "{}", worker.writer.status().wire.state);
     seen.drain(&rx);
     assert_eq!(seen.states, [LinkState::Waiting]);
-    assert_eq!(worker.writer.status().wire.state, format!("listening on 127.0.0.1:{port}"));
     let bench = machine_bench(dir.path(), "connect", port, &catalog_text());
     assert!(wait(Duration::from_secs(10), || {
         seen.drain(&rx);
