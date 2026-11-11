@@ -56,7 +56,29 @@ const ALLOWED: &[&str] = &[
     "veredas_portal::session::HealthState", "veredas_portal::session::Live", "veredas_portal::session::Session",
     "veredas_portal::serve::store_now_ms", "veredas_portal::serve::router", "veredas_portal::serve::lttb",
     "veredas_portal::store::MAX_PAGE", "veredas_portal::store::RowsQuery",
+    // Of std's and tokio's files, programs, sockets and process: reading files, stdin, its one
+    // listener, an address, an error, its own exit. Nothing that writes, runs or dials.
+    "std::fs::read_to_string", "std::fs::read_dir", "std::fs::read", "std::io", "std::io::Error", "std::io::ErrorKind::Interrupted", "std::io::Result", "std::io::stdin",
+    "std::io::BufRead", "std::net::SocketAddr", "std::process::exit", "tokio::net::TcpListener::bind",
 ];
+
+/// What every named path is judged against `ALLOWED` under: core and portal whole, and the modules
+/// of std and tokio that reach files, programs, sockets and the process.
+const JUDGED: &[&str] = &["veredas_core", "veredas_portal", "std::fs", "std::io", "std::process", "std::net", "std::os", "tokio::fs", "tokio::io", "tokio::process", "tokio::net"];
+
+fn judged(p: &str) -> bool {
+    JUDGED.iter().any(|j| p == *j || p.strip_prefix(j).is_some_and(|r| r.starts_with("::")))
+}
+
+/// A source's text on one line, its whitespace runs one space and none around `::`, so neither a
+/// line break nor a space hides a path or a word.
+fn squeezed(text: &str) -> String {
+    let mut flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    while flat.contains(" ::") || flat.contains(":: ") {
+        flat = flat.replace(" ::", "::").replace(":: ", "::");
+    }
+    flat
+}
 
 /// A `use` tree's paths written out whole: `a::{b, c::{d, self}}` gives `a::b`, `a::c::d`, `a::c`.
 fn use_paths(prefix: &str, tree: &str) -> Vec<String> {
@@ -88,29 +110,34 @@ fn use_paths(prefix: &str, tree: &str) -> Vec<String> {
     }
 }
 
-/// Every path of core's or portal's a source names: its `use` trees written out, the paths it
-/// writes inline, and the items it reaches through a module it imported (`project::load_file`).
+/// Every path of core's, portal's, std's or tokio's a source names: its `use` trees written out, the
+/// paths it writes inline, and the items it reaches through a module it imported whole
+/// (`project::load_file`, `io::Result`, `fs::write`).
 fn named_paths(text: &str) -> Vec<String> {
-    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let flat = squeezed(text);
     let mut out = Vec::new();
     let mut rest = flat.clone();
-    for krate in ["veredas_core", "veredas_portal"] {
+    for head in ["use veredas_core", "use veredas_portal", "use std::", "use tokio::"] {
         let mut from = 0;
-        while let Some(at) = rest[from..].find(&format!("use {krate}")).map(|i| i + from) {
+        while let Some(at) = rest[from..].find(head).map(|i| i + from) {
             let end = rest[at..].find(';').map_or(rest.len(), |i| at + i);
             out.extend(use_paths("", &rest[at + 4..end]));
             rest.replace_range(at..end, &" ".repeat(end - at));
             from = end;
         }
     }
-    for krate in ["veredas_core::", "veredas_portal::"] {
+    for krate in ["veredas_core::", "veredas_portal::", "std::", "tokio::"] {
         for (at, _) in rest.match_indices(krate) {
+            if rest[..at].chars().last().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
+                continue;
+            }
             let path: String = rest[at..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == ':').collect();
             out.push(path.trim_end_matches(':').to_string());
         }
     }
-    // The one module supervisão imports whole: what it reaches through it is read as well.
-    let modules: Vec<&str> = ["veredas_portal::project"].into_iter().filter(|m| out.iter().any(|p| p == m)).collect();
+    // A module imported whole: what a source reaches through it is read as well.
+    let whole = ["veredas_portal::project", "std::fs", "std::io", "std::process", "std::net", "std::os", "tokio::fs", "tokio::io", "tokio::process", "tokio::net"];
+    let modules: Vec<&str> = whole.into_iter().filter(|m| out.iter().any(|p| p == m)).collect();
     for m in modules {
         let short = format!("{}::", m.rsplit("::").next().unwrap());
         for (at, _) in rest.match_indices(&short) {
@@ -201,6 +228,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     let mut named = Vec::new();
     for path in files {
         let text = std::fs::read_to_string(&path).unwrap();
+        let flat = squeezed(&text);
         for word in [
             "write_tags", "opc_handle", "channel_handle", "set_writes_armed", "WriteGate", ".gate", "live.opc", "live.channels", "/api/opc/write", "/api/channels/send",
             "writes_armed =", "writes_armed |=", "writes_armed:", "channel::spawn", "worker::spawn", "include!", "#[path",
@@ -209,7 +237,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
             // Nothing of core's or portal's renamed or taken whole.
             "extern crate", "veredas_core as", "veredas_portal as",
         ] {
-            assert!(!text.contains(word), "{} names `{word}`", path.display());
+            assert!(!flat.contains(word), "{} names `{word}`", path.display());
         }
         listeners += text.matches("TcpListener").count();
         for p in named_paths(&text) {
@@ -218,7 +246,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
         }
     }
     assert_eq!(listeners, 1, "one listener, the host's own");
-    let outside: Vec<&(String, String)> = named.iter().filter(|(_, p)| !ALLOWED.contains(&p.as_str())).collect();
+    let outside: Vec<&(String, String)> = named.iter().filter(|(_, p)| judged(p) && !ALLOWED.contains(&p.as_str())).collect();
     assert!(outside.is_empty(), "named outside what supervisão reads with: {outside:?}");
     // The reading itself: what the sources name today, every allowed path seen at least once; a
     // `use` tree, an inline path and a module's item each read whole.
@@ -229,6 +257,13 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     let mut got = named_paths(probe);
     got.sort();
     assert_eq!(got, ["veredas_core::schema::check", "veredas_core::telegram", "veredas_portal::project", "veredas_portal::project::Project", "veredas_portal::project::load", "veredas_portal::session::Live"]);
+    // A file written or a program run however it is spelled is a path outside: an `OpenOptions`
+    // reached through `File::options`, a write through the trait's own path, a module imported
+    // whole, a path broken across a line with spaces, a std item renamed.
+    let escapes = "let mut f = std::fs::File::options().write(true).open(p)?;\nstd::io::Write::write_all(&mut f, b)?;\nuse std::fs;\nfs::write(p, b);\nlet c = std :: process\n  :: Command::new(\"cmd\");\nuse std::process::Command as Run;";
+    let mut got: Vec<String> = named_paths(escapes).into_iter().filter(|p| judged(p) && !ALLOWED.contains(&p.as_str())).collect();
+    got.sort();
+    assert_eq!(got, ["std::fs", "std::fs::File::options", "std::fs::write", "std::io::Write::write_all", "std::process::Command as Run", "std::process::Command::new"]);
     let bundle = veredas_supervisao::web::APP_JS;
     assert_eq!(bundle.matches("/api/opc/write").count(), 1, "the page posts to one route");
     assert!(bundle.contains("/portal/api/opc/write") && !bundle.contains("/api/channels/send"), "the route is portal's own");
