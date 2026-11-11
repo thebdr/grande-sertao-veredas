@@ -10,15 +10,15 @@
     "session"
   ],
   "exitCode": 0,
-  "outputSha": "df313c4c2a7dfe14fa1943b6473ee9a36bb39b1fc506538d78219c20241d0230",
-  "outputTail": "\nrunning 7 tests\ntest a_start_is_refused_by_name_before_anything_spawns ... ok\ntest a_failed_worker_still_reads_as_failed_after_the_stop ... ok\ntest the_master_switch_is_off_by_default_and_arms_every_write_path_at_once ... ok\ntest the_three_protocols_run_into_one_store_alike ... ok\ntest health_reads_waiting_then_live_then_idle_on_the_arrival_clock ... ok\ntest a_stop_stores_every_row_the_workers_sent_and_publishes_the_end ... ok\ntest the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_says ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.67s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.27s\n     Running tests\\session.rs (target\\debug\\deps\\session-e73b537dbc71bc83.exe)",
-  "ranAt": "2026-11-10T23:08:47.823Z",
-  "headCommit": "4b43ac089c6fad0b8298c9001a6b99755a94f9c4",
+  "outputSha": "b57cc9c68a20ced078b129f2bccd10a3dc0b7d4225d4d6467dbd38a2a6292133",
+  "outputTail": "\nrunning 7 tests\ntest a_start_is_refused_by_name_before_anything_spawns ... ok\ntest a_failed_worker_still_reads_as_failed_after_the_stop ... ok\ntest the_master_switch_is_off_by_default_and_arms_every_write_path_at_once ... ok\ntest the_three_protocols_run_into_one_store_alike ... ok\ntest health_reads_waiting_then_live_then_idle_on_the_arrival_clock ... ok\ntest a_stop_stores_every_row_the_workers_sent_and_publishes_the_end ... ok\ntest the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_says ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.21s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.26s\n     Running tests\\session.rs (target\\debug\\deps\\session-e73b537dbc71bc83.exe)",
+  "ranAt": "2026-11-11T01:29:21.968Z",
+  "headCommit": "8982e3e7d369cab254cd56e849917bc55fefc689",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/session.rs",
       "file": "crates/veredas-portal/tests/session.rs",
-      "fileSha": "173ba53dbdcee07e07305aea6394a7aa3ffd144d1f3d5093cdcab1a9881f7f83"
+      "fileSha": "a7d848999ee234dd0a7d8406859a962803bb889fd3341bb33eba937677b5cb16"
     }
   ]
 }
