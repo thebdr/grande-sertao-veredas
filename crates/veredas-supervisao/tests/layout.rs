@@ -114,14 +114,30 @@ const AROUND: &str = r#"(() => ({
 /// saturation (above 0.2): a shade one unit off the accent is still the accent to the eye. A fill or
 /// stroke painted by a pattern or a gradient (`url(#id)`) is read through the colours it paints
 /// with: the fills, strokes and stop colours of the element it names and everything inside it.
+/// Every colour is read as the browser paints it (a 1×1 canvas filled with it, its bytes read
+/// back), whatever syntax the browser reports it in (`rgb()`, `color(srgb ...)` from a
+/// `color-mix()`, `oklch()`, `lab()`). The drawing's shapes are read inside the bound elements too
+/// (a group's own fill is not what paints), anything inside the selection apart; and every selected
+/// element, a keyed marker's clone among them, must stroke in the accent itself.
 const ACCENT_ON_STATES: &str = r##"(() => {
   const root = getComputedStyle(document.documentElement);
   const hex = (h) => { h = h.trim().replace("#", ""); if (h.length === 3) h = [...h].map((c) => c + c).join(""); return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)).join(","); };
   const family = ["--accent", "--accent-tint", "--accent-soft", "--accent-outline"].map((v) => hex(root.getPropertyValue(v)));
-  const parts = (c) => { const m = c.match(/rgba?\(([^)]*)\)/); return m ? m[1].split(/[\s,\/]+/).filter((x) => x !== "").map(Number) : null; };
+  const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true });
+  const parts = (c) => {
+    const sentinel = "rgba(1, 2, 3, 0.5)";
+    ctx.fillStyle = sentinel;
+    const before = ctx.fillStyle;
+    ctx.fillStyle = c;
+    if (ctx.fillStyle === before && c.replace(/\s/g, "") !== sentinel.replace(/\s/g, "")) return null;
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.fillRect(0, 0, 1, 1);
+    const d = ctx.getImageData(0, 0, 1, 1).data;
+    return [d[0], d[1], d[2], d[3] / 255];
+  };
   const green = (c) => {
     const p = parts(c);
-    if (!p || p.length < 3 || (p.length > 3 && p[3] === 0)) return false;
+    if (!p || p[3] === 0) return false;
     if (family.includes(p.slice(0, 3).map(Math.round).join(","))) return true;
     const [r, g, b] = p.slice(0, 3).map((x) => x / 255);
     const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn, l = (mx + mn) / 2;
@@ -138,12 +154,17 @@ const ACCENT_ON_STATES: &str = r##"(() => {
     if (!ref) return [];
     return [ref, ...ref.querySelectorAll("*")].flatMap((d) => { const c = getComputedStyle(d); return [c.fill, c.stroke, c.stopColor].filter(green); }).map((g) => `${v} paints ${g}`);
   };
-  const drawn = [...document.querySelectorAll("svg.plant .sv-obj, svg.plant [data-key], svg.plant .sv-fill, .sv-overlay .sv-tag")]
-    .filter((el) => !el.classList.contains("sv-selected"))
-    .flatMap((el) => { const c = getComputedStyle(el); return [["fill", c.fill], ["stroke", c.stroke]].flatMap(([p, v]) => painted(v).map((g) => `${el.id || el.dataset.for || el.dataset.key} ${p} ${g}`)); });
+  const name = (el) => el.id || el.dataset.for || el.dataset.key || `${el.tagName} in ${el.closest("[id]")?.id}`;
+  const drawn = [...document.querySelectorAll("svg.plant .sv-obj, svg.plant .sv-obj *, svg.plant [data-key], svg.plant [data-key] *, svg.plant .sv-fill, .sv-overlay .sv-tag")]
+    .filter((el) => !el.closest(".sv-selected"))
+    .flatMap((el) => { const c = getComputedStyle(el); return [["fill", c.fill], ["stroke", c.stroke]].flatMap(([p, v]) => painted(v).map((g) => `${name(el)} ${p} ${g}`)); });
   const around = [...document.querySelectorAll(".headline .fig .mono, .side ul.attention .mark, .side .badge")]
     .flatMap((el) => { const c = getComputedStyle(el); return [["color", c.color], ["background", c.backgroundColor]].filter(([, v]) => green(v)).map(([p, v]) => `${el.className} ${JSON.stringify(el.textContent)} ${p} ${v}`); });
-  return drawn.concat(around);
+  const accent = hex(root.getPropertyValue("--accent"));
+  const unmarked = [...document.querySelectorAll("svg.plant .sv-selected")]
+    .filter((el) => { const p = parts(getComputedStyle(el).stroke); return !p || p[3] === 0 || p.slice(0, 3).join(",") !== accent; })
+    .map((el) => `${el.dataset.key !== undefined ? `${el.dataset.object} ${el.dataset.key}` : el.id} selected, stroked ${getComputedStyle(el).stroke}`);
+  return drawn.concat(around, unmarked);
 })()"##;
 
 /// What carries the selection in the drawing: an element by its id, a keyed marker's clone by its
