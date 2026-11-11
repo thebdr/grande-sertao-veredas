@@ -196,6 +196,16 @@ pub fn sql_str(s: &str) -> String {
     s.replace('\'', "''")
 }
 
+/// A user-defined table's definition as the engine is handed it: one SELECT, passed as a string to
+/// the engine's `query()` table function, which parses it and refuses anything but a single SELECT
+/// statement. Handed as text, a definition of several statements would have every one but the last
+/// run when it is prepared (the crate's `prepare` runs them), so a `COPY ... TO` in a definition
+/// would write a file; as a string it is one statement's argument, and nothing in it runs but the
+/// SELECT it must be.
+fn one_select(sql: &str) -> String {
+    format!("SELECT * FROM query('{}')", sql_str(sql))
+}
+
 /// A created base table: its name and its value columns.
 struct BaseTable {
     name: String,
@@ -344,7 +354,7 @@ impl DuckStore {
             let mut still = Vec::new();
             let mut reasons = Vec::new();
             for def in pending {
-                let sql = format!("CREATE VIEW {} AS ({})", quote_ident(def.name.trim()), def.sql);
+                let sql = format!("CREATE VIEW {} AS {}", quote_ident(def.name.trim()), one_select(&def.sql));
                 match conn.execute_batch(&sql) {
                     Ok(()) => {}
                     Err(e) => {
@@ -819,11 +829,12 @@ impl DuckStore {
         Ok(rows.flatten().collect())
     }
 
-    /// The column names and types a SELECT would yield, without running it: a definition's
-    /// validation. `Err` carries the engine's binder message.
+    /// The column names and types a SELECT would yield, without running it or anything else in its
+    /// text (one SELECT, as [`one_select`] hands it): a definition's validation. `Err` carries the
+    /// engine's message (a second statement: "Expected a single SELECT statement").
     pub fn validate_definition(&self, sql: &str) -> Result<Vec<ColumnInfo>, String> {
         let conn = recover(self.api.lock());
-        let mut stmt = conn.prepare(&format!("DESCRIBE ({sql})")).map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare(&format!("DESCRIBE {}", one_select(sql))).map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |r| Ok(ColumnInfo { name: r.get::<_, String>(0)?, data_type: r.get::<_, String>(1)? }))
             .map_err(|e| e.to_string())?;

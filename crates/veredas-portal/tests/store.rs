@@ -294,6 +294,22 @@ fn views_join_across_sources_apply_in_any_order_and_a_broken_one_names_itself() 
     let cols = store.validate_definition("SELECT key, temp - 1.0 AS adj FROM readings").unwrap();
     assert_eq!(cols.iter().map(|c| (c.name.as_str(), c.data_type.as_str())).collect::<Vec<_>>(), [("key", "VARCHAR"), ("adj", "DOUBLE")]);
     assert!(store.validate_definition("SELECT nope FROM readings").unwrap_err().contains("nope"));
+    // A definition is one SELECT: a second statement in its text is refused, at validation and
+    // when applied, and none of it runs (a COPY that would write a file writes none), however it
+    // is spelled (closing the SELECT's parenthesis, after a `;`, inside dollar quotes, alone); a
+    // `;` inside a string of one SELECT is no second statement.
+    let out = tempfile::tempdir().unwrap();
+    let forms = ["SELECT 1); COPY (SELECT 1) TO '{f}'; SELECT (1", "SELECT 1; COPY (SELECT 1) TO '{f}'", "SELECT $$x$$); COPY (SELECT 1) TO '{f}'; SELECT ($$y$$", "COPY (SELECT 1) TO '{f}'"];
+    for (i, form) in forms.iter().enumerate() {
+        let f = out.path().join(format!("{i}.csv")).display().to_string().replace('\\', "/");
+        let sql = form.replace("{f}", &f);
+        assert!(store.validate_definition(&sql).is_err(), "{sql}");
+        let opened = DuckStore::open(&Residency::Ram, &[capture_spec()], &[TableDef { name: "evil".into(), sql: sql.clone() }]);
+        assert!(matches!(opened, Err(StoreError::Definition { .. })), "{sql}");
+        assert!(!std::path::Path::new(&f).exists(), "a statement of the definition ran: {sql}");
+    }
+    let cols = store.validate_definition("SELECT key, ';' AS sep FROM readings").unwrap();
+    assert_eq!(cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["key", "sep"]);
 }
 
 #[test]

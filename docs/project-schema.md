@@ -194,7 +194,8 @@ against the project file's folder.
 
 ### `[[table]]`: a view of the project
 - `name` (required): the view's name, taken once across every table.
-- `sql` (required): its SELECT over the base tables and the other views.
+- `sql` (required): its one SELECT over the base tables and the other views (a second
+  statement in it is refused, and nothing in it runs).
 
 ## The secrets file: `veredas-secrets`, version 1
 
