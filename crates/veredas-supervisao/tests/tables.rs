@@ -207,19 +207,23 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let again = shown_at(&mut page, "1-50/53");
     assert_eq!((again["body"].clone(), again["newer"].clone()), (first["body"].clone(), json!(true)), "the first page again");
 
-    // The Series view lists the series as portal lists them: each button's names, type and count.
+    // The Series view lists the series as portal lists them: each button's names, type and count,
+    // the count between portal's before the page listed and after (the OPC series keep counting;
+    // the log's do not).
+    let (_, before) = get(addr, "/s/loop/portal/api/series");
     page.eval(r#"location.hash = "series""#);
     let listed = page.wait_for(r#"(() => { const b = [...document.querySelectorAll(".list button[data-series]")]; return b.length ? b.map((x) => [x.dataset.series, x.children[0].textContent, x.children[1].textContent]) : null; })()"#, Duration::from_secs(20));
     let (_, s) = get(addr, "/s/loop/portal/api/series");
     let series = s["series"].as_array().unwrap();
     assert_eq!(listed.as_array().unwrap().len(), series.len());
+    let count_before = |src: &str, ser: &str| before["series"].as_array().unwrap().iter().find(|y| y["source"] == json!(src) && y["series"] == json!(ser)).and_then(|y| y["count"].as_u64()).unwrap_or(0);
     for (b, x) in listed.as_array().unwrap().iter().zip(series) {
         let (src, ser, ty) = (x["source"].as_str().unwrap(), x["series"].as_str().unwrap(), x["type"].as_str().unwrap());
         assert_eq!((b[0].clone(), b[1].clone()), (json!(format!("{src}/{ser}")), json!(format!("{src} · {ser}"))));
         let (shown_ty, count) = b[2].as_str().unwrap().split_once(" · ").unwrap();
-        // The OPC series keep counting between the page's listing and this one; the log's do not.
         let count: u64 = count.parse().unwrap();
-        assert!(shown_ty == ty && count <= x["count"].as_u64().unwrap() && (src != "sorter" || count == x["count"].as_u64().unwrap()), "{b} against {x}");
+        let (low, high) = (count_before(src, ser), x["count"].as_u64().unwrap());
+        assert!(shown_ty == ty && low <= count && count <= high && (src != "sorter" || count == high), "{b} against {low}..={high}: {x}");
     }
     assert!(listed.as_array().unwrap().iter().any(|b| b[0] == "sorter/travel" && b[2] == "float · 53"), "{listed}");
 
@@ -345,7 +349,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     assert_eq!(listed, json!(names), "hall's series, as hall's portal lists them");
     page.eval(r#"document.querySelector('.list button[data-series="sorter/travel"]').click()"#);
     let one = page.wait_for(
-        r#"(() => { const p = document.querySelector(".list-main .pager [data-points]"); const dot = document.querySelector(".list-main svg.trend circle.point"); return p && dot ? { points: p.dataset.points, said: p.textContent, line: document.querySelectorAll(".list-main svg.trend path.line").length, cx: Number(dot.getAttribute("cx")), cy: Number(dot.getAttribute("cy")), shown: (() => { const c = getComputedStyle(dot), b = dot.getBoundingClientRect(); const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true }); ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillStyle = c.fill; ctx.clearRect(0, 0, 1, 1); ctx.fillRect(0, 0, 1, 1); const alpha = c.fill === "none" ? 0 : ctx.getImageData(0, 0, 1, 1).data[3] / 255; let o = 1; for (let e = dot; e; e = e.parentElement) { const s = getComputedStyle(e); o *= Number(s.opacity); if (s.display === "none") o = 0; } return b.width > 0 && b.height > 0 && c.visibility === "visible" && o > 0 && alpha * Number(c.fillOpacity) > 0; })() } : null; })()"#,
+        r#"(() => { const p = document.querySelector(".list-main .pager [data-points]"); const dot = document.querySelector(".list-main svg.trend circle.point"); return p && dot ? { points: p.dataset.points, said: p.textContent, line: document.querySelectorAll(".list-main svg.trend path.line").length, cx: Number(dot.getAttribute("cx")), cy: Number(dot.getAttribute("cy")), shown: (() => { const c = getComputedStyle(dot), b = dot.getBoundingClientRect(); const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true }); ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillStyle = c.fill; ctx.clearRect(0, 0, 1, 1); ctx.fillRect(0, 0, 1, 1); const alpha = c.fill === "none" ? 0 : ctx.getImageData(0, 0, 1, 1).data[3] / 255; let o = 1; for (let e = dot; e; e = e.parentElement) { const s = getComputedStyle(e); o *= Number(s.opacity); if (s.display === "none") o = 0; } return b.width > 0 && b.height > 0 && c.visibility === "visible" && o > 0 && alpha * Number(c.fillOpacity) > 0 && document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2) === dot; })() } : null; })()"#,
         Duration::from_secs(20),
     );
     let asked: Vec<String> = page.requests().into_iter().map(|(u, _)| u).filter(|u| u.contains("/portal/api/series/data?")).collect();
