@@ -10,15 +10,15 @@
     "store"
   ],
   "exitCode": 0,
-  "outputSha": "711f6c4e1b2001794732ab7f92c8253632eb325225d6e1271a40f7b1eb802250",
-  "outputTail": "test a_snapshot_refuses_an_existing_file_and_a_refusal_leaves_the_next_one_free ... ok\ntest views_join_across_sources_apply_in_any_order_and_a_broken_one_names_itself ... ok\ntest a_disk_store_persists_and_reopens_with_its_rows ... ok\ntest rows_of_a_capture_rule_an_opc_rule_and_a_telegram_message_are_stored_alike_and_feed_the_narrow_surface ... ok\ntest reserved_duplicate_and_empty_names_are_refused_and_type_conflicts_counted ... ok\ntest a_linked_csv_is_read_live_through_a_view_never_held_open_and_previewed_without_a_session ... ok\ntest the_csv_sniffer_adopts_a_decimal_comma_only_when_it_strictly_improves_the_typing ... ok\ntest newest_first_pages_neither_repeat_nor_skip_rows_that_share_a_time ... ok\ntest the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves_a_single_column_alone ... ok\ntest pages_see_each_row_once_across_sources_and_on_a_view_without_a_sequence ... ok\n\ntest result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.74s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s\n     Running tests\\store.rs (target\\debug\\deps\\store-de92ee730237ffac.exe)",
-  "ranAt": "2026-11-09T09:53:05.878Z",
-  "headCommit": "c466e0179c0b7a8e4c36ef11fd0f3795453cb834",
+  "outputSha": "6ce6735e6ab88843aae296dbb5e09c84723a767b4972e206bb11e467a1228c17",
+  "outputTail": "test a_disk_store_persists_and_reopens_with_its_rows ... ok\ntest rows_of_a_capture_rule_an_opc_rule_and_a_telegram_message_are_stored_alike_and_feed_the_narrow_surface ... ok\ntest reserved_duplicate_and_empty_names_are_refused_and_type_conflicts_counted ... ok\ntest views_join_across_sources_apply_in_any_order_and_a_broken_one_names_itself ... ok\ntest a_linked_csv_is_read_live_through_a_view_never_held_open_and_previewed_without_a_session ... ok\ntest the_csv_sniffer_adopts_a_decimal_comma_only_when_it_strictly_improves_the_typing ... ok\ntest newest_first_pages_neither_repeat_nor_skip_rows_that_share_a_time ... ok\ntest the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves_a_single_column_alone ... ok\ntest pages_see_each_row_once_across_sources_and_on_a_view_without_a_sequence ... ok\n\ntest result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.46s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.44s\n     Running tests\\store.rs (target\\debug\\deps\\store-0ba61d12811ee541.exe)",
+  "ranAt": "2026-11-11T19:20:33.823Z",
+  "headCommit": "21ebfa4bfc8af156b0b2d3108638b359abd58ca5",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store.rs",
       "file": "crates/veredas-portal/tests/store.rs",
-      "fileSha": "ad442eaeb1cee4a10e99c80b6c948f4530757165c700fea6a345beb31573fc0d"
+      "fileSha": "c2ce6b8dfbb9950a45c129ae179fedb2497e24e3f6489aa7af7852b9b472c6fa"
     }
   ]
 }
