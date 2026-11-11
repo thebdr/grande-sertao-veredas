@@ -408,6 +408,52 @@ fn keys(names: &[&str]) -> std::collections::BTreeSet<String> {
     names.iter().map(|s| s.to_string()).collect()
 }
 
+/// The keys written, per table, across the worked example's binding and the keys binding (both
+/// read back in full by the tests here): `top`, `object`, `value`, `rule`, `action`, `dashboard`,
+/// `panel <kind>`, `column`, `sort`, `limit`.
+fn written_keys() -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+    let mut out: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> = std::collections::BTreeMap::new();
+    let mut put = |table: &str, v: &toml::Value| {
+        if let Some(t) = v.as_table() {
+            out.entry(table.to_string()).or_default().extend(t.keys().cloned());
+        }
+    };
+    let items = |v: Option<&toml::Value>| v.and_then(toml::Value::as_array).cloned().unwrap_or_default();
+    for text in [example().binding, KEYS.to_string()] {
+        let doc: toml::Value = toml::from_str(&text).unwrap();
+        put("top", &doc);
+        for o in items(doc.get("object")) {
+            put("object", &o);
+            if let Some(v) = o.get("value") {
+                put("value", v);
+            }
+            for r in items(o.get("states")) {
+                put("rule", &r);
+            }
+            for a in items(o.get("actions")) {
+                put("action", &a);
+            }
+        }
+        for d in items(doc.get("dashboard")) {
+            put("dashboard", &d);
+            for p in items(d.get("panel")) {
+                let kind = p.get("kind").and_then(toml::Value::as_str).unwrap_or("").to_string();
+                put(&format!("panel {kind}"), &p);
+                for c in items(p.get("columns")) {
+                    put("column", &c);
+                }
+                if let Some(s) = p.get("sort") {
+                    put("sort", s);
+                }
+                if let Some(l) = p.get("limit").filter(|l| l.is_table()) {
+                    put("limit", l);
+                }
+            }
+        }
+    }
+    out
+}
+
 #[test]
 fn every_key_the_reference_lists_is_the_reader_s() {
     let doc = common::doc("binding-schema.md");
@@ -418,6 +464,10 @@ fn every_key_the_reference_lists_is_the_reader_s() {
         load(dir.path(), &ex).err().map(|e| e.to_string()).unwrap_or_else(|| panic!("loaded: {text}"))
     };
     let ex = example();
+    // Every key a reader takes is written, in the worked example or the keys binding, so each is
+    // read back by the tests that load them: the class driven from the reader's own list.
+    let written = written_keys();
+    let written_in = |table: &str| written.get(table).cloned().unwrap_or_default();
     // The supervisão file's two tables.
     let host_top = section(&doc, "## The supervisão file: keys", "**A session**");
     assert_eq!(listed_keys(host_top), keys(&["format", "version", "bind", "session"]));
@@ -425,6 +475,9 @@ fn every_key_the_reference_lists_is_the_reader_s() {
     let session = section(&doc, "**A session**", "## The binding file: keys");
     assert_eq!(listed_keys(session), keys(&["name", "project", "binding"]));
     assert_eq!(reader_keys(&host_refusal(&ex.host.replace("name = \"loop\"", "name = \"loop\"\nzz = 1"))), listed_keys(session));
+    let host: toml::Value = toml::from_str(&ex.host).unwrap();
+    let table_keys = |v: &toml::Value| v.as_table().map(|t| t.keys().cloned().collect::<std::collections::BTreeSet<String>>()).unwrap_or_default();
+    assert_eq!((table_keys(&host), table_keys(&host["session"][0])), (listed_keys(host_top), listed_keys(session)), "every key of the supervisão file written");
     // The binding file's tables, each with a misspelled key placed in it.
     let walk: Vec<(&str, &str, Box<dyn Fn(&str) -> String>, Vec<&str>)> = vec![
         ("**The top level.**", "**An object**", Box::new(|b: &str| b.replace("title = ", "zz = 1\ntitle = ")), vec!["format", "version", "title", "layout", "headline", "object", "dashboard"]),
@@ -440,10 +493,13 @@ fn every_key_the_reference_lists_is_the_reader_s() {
         assert_eq!(listed, keys(expected), "{from}");
         let err = binding_refusal(&with_binding(|b| place(b)));
         assert_eq!(reader_keys(&err), listed, "{from}: {err}");
+        let table = match *from { "**The top level.**" => "top", "**An object**" => "object", "**A state rule**" => "rule", "**An action**" => "action", _ => "dashboard" };
+        assert_eq!(written_in(table), listed, "every key of {from} written");
     }
     // The bound series, beneath an object's `value`.
     let err = binding_refusal(&with_binding(|b| b.replace("value = { source = \"plc\", series = \"speed\" }", "value = { source = \"plc\", series = \"speed\", zz = 1 }")));
     assert_eq!(reader_keys(&err), keys(&["source", "series", "key"]));
+    assert_eq!(written_in("value"), reader_keys(&err), "every key of a bound series written");
     // Every panel kind: the three every panel has, and the ones its bullet lists.
     let panels = section(&doc, "**A panel**", "## Refusals");
     let common_keys = ["kind", "title", "span"];
@@ -464,17 +520,21 @@ fn every_key_the_reference_lists_is_the_reader_s() {
         let err = binding_refusal(&with_binding(|b| b.replacen(place, &format!("{place}\nzz = 1"), 1)));
         assert!(err.contains(&format!("({kind}): unknown field `zz`")), "{kind}: {err}");
         assert_eq!(reader_keys(&err), listed, "{kind}: {err}");
+        assert_eq!(written_in(&format!("panel {kind}")), listed, "every key a {kind} panel takes written");
     }
     // A table panel's column, its sort and a trend's limit.
     let folded = panels.split_whitespace().collect::<Vec<_>>().join(" ");
     let err = binding_refusal(&with_binding(|b| b.replace("{ name = \"outlet\" }", "{ name = \"outlet\", zz = 1 }")));
     assert_eq!(reader_keys(&err), keys(&["name", "label", "bar", "decimals", "states"]));
+    assert_eq!(written_in("column"), reader_keys(&err), "every key of a column written");
     assert!(folded.contains("each `{ name, label, bar, decimals, states }`"));
     let err = binding_refusal(&with_binding(|b| b.replace("sort = { column = \"sorted\", descending = true }", "sort = { column = \"sorted\", descending = true, zz = 1 }")));
     assert_eq!(reader_keys(&err), keys(&["column", "descending"]));
+    assert_eq!(written_in("sort"), reader_keys(&err), "every key of a sort written");
     assert!(folded.contains("`{ column, descending }`"));
     let err = binding_refusal(&with_binding(|b| b.replace("limit = { below = 98.0 }", "limit = { below = 98.0, zz = 1 }")));
     assert_eq!(reader_keys(&err), keys(&["above", "below"]));
+    assert_eq!(written_in("limit"), reader_keys(&err), "every key of a limit written");
     assert!(folded.contains("`{ above = x }` or `{ below = x }`"));
 }
 
@@ -1257,6 +1317,9 @@ fn every_key_reads_back_as_written_and_every_default_fills() {
     assert!(matches!(kinds[17], PanelKind::Table { table, columns, sort: None, limit: 1 } if table == "outlets" && columns.is_empty()), "{:?}", kinds[17]);
     let titles: Vec<&str> = d.panels.iter().map(|p| p.title.as_str()).collect();
     assert_eq!(titles, ["Ay", "Tee", "Sums", "State over time", "outlets", "Levels", "Cee", "outlets", "a", "a", "State over time", "sorts", "a", "Tl", "States", "Gee", "Lv", "Tab"]);
+    // A span written on a panel of every kind, the rest at 1.
+    let spans: Vec<u32> = d.panels.iter().map(|p| p.span).collect();
+    assert_eq!(spans, [2, 2, 2, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 2, 2, 2]);
     // A dashboard of one column, its panel spanning it.
     let one = &b.dashboards[1];
     assert_eq!((one.name.as_str(), one.columns, one.panels.len(), one.panels[0].span), ("One", 1, 1, 1));
@@ -1305,18 +1368,21 @@ name = "Keys"
 kind = "value"
 object = "a"
 title = "Ay"
+span = 2
 
 [[dashboard.panel]]
 kind = "trend"
 object = "a"
 limit = { above = 3 }
 title = "Tee"
+span = 2
 
 [[dashboard.panel]]
 kind = "bars"
 object = "a"
 aggregate = "sum"
 title = "Sums"
+span = 2
 
 [[dashboard.panel]]
 kind = "timeline"
@@ -1339,6 +1405,7 @@ key = "outlet"
 value = "travel"
 spread = 5
 title = "Cee"
+span = 2
 
 [[dashboard.panel]]
 kind = "table"
@@ -1379,6 +1446,7 @@ minutes = 45
 kind = "timeline"
 objects = ["a"]
 title = "Tl"
+span = 2
 
 [[dashboard.panel]]
 kind = "grid"
@@ -1388,16 +1456,19 @@ objects = ["a", "m"]
 kind = "grid"
 objects = ["m"]
 title = "Gee"
+span = 2
 
 [[dashboard.panel]]
 kind = "levels"
 objects = ["a"]
 title = "Lv"
+span = 2
 
 [[dashboard.panel]]
 kind = "table"
 table = "outlets"
 title = "Tab"
+span = 2
 limit = 1
 
 [[dashboard]]
