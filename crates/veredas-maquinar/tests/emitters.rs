@@ -486,8 +486,11 @@ fn a_restart_never_appends_past_a_gap_in_the_family() {
     handle.join();
     assert_eq!(std::fs::read(dir.path().join("run2.log")).unwrap(), b"OLD2\r\n", "run2 untouched");
     assert_eq!(std::fs::read(dir.path().join("run3.log")).unwrap(), b"OLD3\r\n", "run3 untouched");
-    let names = files_in(dir.path());
-    assert_eq!(&names[..5], ["run1.log", "run2.log", "run3.log", "run4.log", "run5.log"]);
+    // The family runs from run1 without a gap, by number (a loaded host lets the emitter rotate
+    // past run9 before the join, and run10 sorts before run2 as text).
+    let mut idx: Vec<u32> = files_in(dir.path()).iter().map(|n| n.trim_start_matches("run").trim_end_matches(".log").parse().unwrap()).collect();
+    idx.sort();
+    assert!(idx.len() >= 5 && idx.iter().enumerate().all(|(i, n)| *n == i as u32 + 1), "{idx:?}");
     for name in ["run1.log", "run4.log", "run5.log"] {
         assert_eq!(std::fs::read_to_string(dir.path().join(name)).unwrap().lines().count(), 1, "{name}: one line per file");
     }
