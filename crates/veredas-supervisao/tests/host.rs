@@ -20,6 +20,48 @@ fn objects(addr: SocketAddr, name: &str) -> Value {
     v
 }
 
+/// The routes a router's source declares, `(method, path)` in order, a path parameter read as `0`.
+fn declared_routes(file: &str) -> Vec<(String, String)> {
+    let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
+    let mut out = Vec::new();
+    let mut rest = text.as_str();
+    while let Some(i) = rest.find(".route(\"") {
+        let after = &rest[i + ".route(\"".len()..];
+        let end = after.find('"').unwrap();
+        let tail = after[end + 1..].trim_start_matches(|c: char| c == ',' || c.is_whitespace());
+        let method = ["get", "post", "put", "delete", "patch"].into_iter().find(|m| tail.starts_with(&format!("{m}("))).unwrap_or_else(|| panic!("{file}: a route's method: {}", &tail[..tail.len().min(40)]));
+        let mut path = String::new();
+        let mut inside = false;
+        for c in after[..end].chars() {
+            match c {
+                '{' => inside = true,
+                '}' => {
+                    inside = false;
+                    path.push('0');
+                }
+                c if !inside => path.push(c),
+                _ => {}
+            }
+        }
+        out.push((method.to_ascii_uppercase(), path));
+        rest = &after[end..];
+    }
+    out
+}
+
+/// A route's status and, unless it is a stream, its body read as JSON: a stream (an object feed,
+/// portal's events) answered by its head alone, a post sent an empty object.
+fn answered(addr: SocketAddr, method: &str, path: &str) -> (u16, Option<Value>) {
+    if method == "GET" && (path.ends_with("/events") || path.ends_with("/objects")) {
+        let sse = Sse::open(addr, path);
+        if sse.status != 404 {
+            return (sse.status, None);
+        }
+    }
+    let (status, _, body) = http(addr, method, path, (method == "POST").then_some("{}"));
+    (status, serde_json::from_str(&body).ok())
+}
+
 #[test]
 fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     let dir = tempfile::tempdir().unwrap();
@@ -56,6 +98,30 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     // Nothing else is served, and an unknown session is no session.
     for p in ["/s/nope/", "/s/nope/binding", "/api/nope", "/s/loop/nope", "/s/loop/portal/api/nope"] {
         assert_eq!(get(addr, p), (404, json!({ "error": format!("nothing is served at {p}") })), "{p}");
+    }
+    // Every route the routers declare, read from their own source so none is left out: each of
+    // portal's answers under each session's `/portal` and nowhere else (not at the root, not under
+    // a `/portal` of no session, not under a session without its `/portal`); each of a session's
+    // own answers under the session and nowhere else.
+    let portal = declared_routes("../veredas-portal/src/serve.rs");
+    assert!(["/events", "/api/session", "/api/opc/write"].iter().all(|p| portal.iter().any(|(_, q)| q == p)) && portal.iter().any(|(m, _)| m == "POST"), "{portal:?}");
+    let own: Vec<(String, String)> = declared_routes("src/host.rs").into_iter().filter(|(_, p)| !["/", "/assets/app.js", "/assets/app.css", "/api/sessions"].contains(&p.as_str())).collect();
+    assert!(["/binding", "/objects", "/dashboard/0"].iter().all(|p| own.iter().any(|(_, q)| q == p)), "{own:?}");
+    for (m, p) in &portal {
+        for name in ["loop", "hall"] {
+            let at = format!("/s/{name}/portal{p}");
+            assert_ne!(answered(addr, m, &at).0, 404, "{m} {at}");
+        }
+        for at in [p.clone(), format!("/portal{p}"), format!("/s/loop{p}"), format!("/s/hall{p}"), format!("/s/nope/portal{p}")] {
+            assert_eq!(answered(addr, m, &at), (404, Some(json!({ "error": format!("nothing is served at {at}") }))), "{m} {at}");
+        }
+    }
+    for (m, p) in &own {
+        let at = format!("/s/loop{p}");
+        assert_ne!(answered(addr, m, &at).0, 404, "{m} {at}");
+        for at in [p.clone(), format!("/portal{p}"), format!("/s/loop/portal{p}"), format!("/s/nope{p}")] {
+            assert_eq!(answered(addr, m, &at), (404, Some(json!({ "error": format!("nothing is served at {at}") }))), "{m} {at}");
+        }
     }
 
     // Each session's binding, layout and portal are its own.
@@ -116,6 +182,18 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     b.server("plc").unwrap().set("fill1", 70.0);
     let hall_events = streams[1].until(Duration::from_secs(20), |n, v| n == "objects" && fill_of(v) == Some(json!(70.0))).expect("hall's change on hall's stream");
     assert!(hall_events.iter().all(|(_, v)| fill_of(v) != Some(json!(40.0))), "loop's change never on hall's stream: {hall_events:?}");
+    // And the other way: loop's stream, read on for two seconds and a half past hall's change
+    // (a leak would have been sent to it before hall's own stream delivered the change), never
+    // carries it.
+    let reading = std::time::Instant::now();
+    let mut loop_after: Vec<(String, Value)> = Vec::new();
+    while reading.elapsed() < Duration::from_millis(2500) {
+        if let Some((n, d)) = streams[0].next(Duration::from_millis(2500).saturating_sub(reading.elapsed())) {
+            loop_after.push((n, serde_json::from_str(&d).unwrap_or(Value::Null)));
+        }
+    }
+    assert!(loop_after.iter().any(|(n, _)| n == "session"), "loop's stream read on: {loop_after:?}");
+    assert!(loop_after.iter().all(|(_, v)| fill_of(v) != Some(json!(70.0))), "hall's change never on loop's stream: {loop_after:?}");
     assert_eq!((object(&objects(addr, "loop"), "outlet-1")["value"].clone(), object(&objects(addr, "hall"), "outlet-1")["value"].clone()), (json!(40.0), json!(70.0)));
     assert!(objects(addr, "hall")["objects"].as_array().unwrap().iter().all(|o| !o["id"].as_str().unwrap().starts_with("parcel")));
     let (_, s) = get(addr, &format!("/s/hall/portal/api/opc/read?source=plc&tag={}", enc(&format!("ns={};s=fill1", b.server("plc").unwrap().namespace))));
