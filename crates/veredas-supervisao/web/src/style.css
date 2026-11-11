@@ -80,7 +80,7 @@ svg.plant { width: 100%; height: 100%; display: block; user-select: none; }
 .sv-show-move.sv-state-warn { fill: var(--warn); }
 .sv-show-move.sv-state-disabled { fill: url(#sv-hatch); stroke: var(--weak); stroke-width: 1; }
 .sv-show-move.sv-state-alarm { fill: var(--danger); }
-.sv-selected { stroke: var(--accent) !important; stroke-width: 2.5 !important; stroke-dasharray: none !important; }
+.sv-selected, .sv-selected :is(rect, circle, ellipse, path, polygon, polyline, line) { stroke: var(--accent) !important; stroke-width: 2.5 !important; stroke-dasharray: none !important; stroke-opacity: 1 !important; }
 .sv-show-move.sv-selected { fill: var(--accent) !important; }
 .sv-overlay text { pointer-events: none; font-family: var(--mono); }
 .sv-label { fill: var(--weak2); }

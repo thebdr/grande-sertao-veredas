@@ -30,6 +30,8 @@ interface Bound {
   lastPlace: Map<string, number>;
   /// A marker's mark and word, one per key ("" for a marker of its own), in the overlay.
   tags: Map<string, SVGTextElement>;
+  /// The object as last painted, painted again when the layout is shown.
+  last?: ObjectState;
 }
 
 export interface LayoutView {
@@ -37,6 +39,8 @@ export interface LayoutView {
   update(o: ObjectState): void;
   select(id: string | null, key?: string | null): void;
   layers(l: { markers: boolean; states: boolean; labels: boolean }): void;
+  /// The layout put on screen again: every object painted anew, its markers placed now.
+  shown(): void;
 }
 
 /// An element's box in another element's coordinates: its corners mapped through every transform
@@ -154,13 +158,16 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
   }
 
   function placeAt(b: Bound, el: SVGGraphicsElement, key: string, place: number) {
+    // Off screen (another view in front), the drawing's transforms are not followed: a place
+    // measured now would be wrong, so none is; the layout places every marker when it is shown.
+    if (!svg.isConnected) return;
     const p = b.def.path ? pathOf(b.def.path) : null;
     if (!p || typeof p.getTotalLength !== "function") return;
     const pt = p.getPointAtLength(place * p.getTotalLength());
     const parent = el.parentNode as SVGGraphicsElement;
     const pc = parent.getCTM();
     const ec = p.getCTM();
-    // Hidden (another view in front), nothing can be measured: the next update places it.
+    // No matrix yet (not laid out), nothing can be measured: the layout places it when shown.
     if (!pc || !ec) return;
     const m = pc.inverse().multiply(ec);
     const q = new DOMPoint(pt.x, pt.y).matrixTransform(m);
@@ -282,7 +289,13 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     root,
     update(o) {
       const b = bound.get(o.id);
-      if (b) paint(b, o);
+      if (b) {
+        b.last = o;
+        paint(b, o);
+      }
+    },
+    shown() {
+      for (const b of bound.values()) if (b.last) paint(b, b.last);
     },
     select(id, key = null) {
       selected = { id, key };

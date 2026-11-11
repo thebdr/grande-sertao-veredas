@@ -55,7 +55,31 @@ fn on_loop(f: f64) -> (f64, f64) {
 const DRAWN: &str = r#"(() => {
   const st = (el) => el ? ([...el.classList].find((c) => c.startsWith("sv-state-")) || "") : null;
   const rect = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; };
-  const shown = (el) => { if (!el) return null; const c = getComputedStyle(el); return c.display !== "none" && c.visibility === "visible" && Number(c.opacity) > 0; };
+  // A paint's alpha as the browser paints it (a 1×1 canvas), a pattern or a gradient read as opaque.
+  const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true });
+  const alpha = (paint) => {
+    if (!paint || paint === "none") return 0;
+    if (paint.startsWith("url(")) return 1;
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.fillStyle = "rgba(0, 0, 0, 0)";
+    ctx.fillStyle = paint;
+    ctx.fillRect(0, 0, 1, 1);
+    return ctx.getImageData(0, 0, 1, 1).data[3] / 255;
+  };
+  // Shown: displayed through every ancestor, visible, and painted with some alpha once its opacity
+  // and every ancestor's, its paint's own alpha and its fill or stroke opacity are multiplied (a
+  // group by the shapes inside it). A mask, a clip, a filter or a font that hides it is not read
+  // (the clause states the limit).
+  const SHAPES = "rect, circle, ellipse, path, polygon, polyline, line, text";
+  const shown = (el) => {
+    if (!el) return null;
+    if (getComputedStyle(el).visibility !== "visible") return false;
+    let op = 1;
+    for (let a = el; a; a = a.parentElement) { const s = getComputedStyle(a); if (s.display === "none") return false; op *= Number(s.opacity); }
+    const own = (x) => { const s = getComputedStyle(x); return Math.max(alpha(s.fill) * Number(s.fillOpacity), parseFloat(s.strokeWidth) > 0 ? alpha(s.stroke) * Number(s.strokeOpacity) : 0); };
+    const shapes = el.matches(SHAPES) ? [el] : [...el.querySelectorAll(SHAPES)];
+    return op * Math.max(0, ...shapes.map(own)) > 0.05;
+  };
   // Whether the thing is what is painted at its box's centre (clips, visibility and anything over
   // it count; a fill takes no pointer, so it is asked to for the probe).
   const hit = (el) => {
@@ -76,7 +100,9 @@ const DRAWN: &str = r#"(() => {
     const tag = tagOf(id, marker ? "" : null);
     const label = document.querySelector(`.sv-overlay .sv-label[data-for="${id}"]`);
     const fill = document.querySelector(`.sv-fill[data-for="${id}"]`);
+    const value = document.querySelector(`.sv-overlay .sv-value[data-for="${id}"]`);
     out[id] = {
+      value: value ? [value.textContent, shown(value)] : null,
       state: st(el), hidden: el.classList.contains("sv-hidden"), transform: el.getAttribute("transform"), rect: rect(el), shown: shown(el), hit: marker ? hit(el) : null, selected: el.classList.contains("sv-selected"),
       tag_keys: [...document.querySelectorAll(`.sv-overlay .sv-tag[data-for="${id}"][data-key]`)].map((t) => t.dataset.key).sort(),
       tag: tag ? tag.textContent : null, tag_state: st(tag), tag_rect: rect(tag), tag_shown: shown(tag), label_rect: rect(label), label_shown: shown(label),
@@ -106,23 +132,24 @@ const AROUND: &str = r#"(() => ({
   gate: document.querySelector(".side .gate-note")?.textContent ?? null,
 }))()"#;
 
-/// Every state drawn in a green of the accent's: the drawing's fills and strokes (the selection
-/// apart, which the selection check pins to the one selected), the headline's figures, the
-/// attention list's marks and the side panel's badges by their colour and background. A green is
-/// one of the accent's four colours (the accent, its tint, its soft and its outline, by red, green
-/// and blue whatever the alpha) or any colour of the accent's band of hue (100° to 170°) with some
-/// saturation (above 0.2): a shade one unit off the accent is still the accent to the eye. A fill or
-/// stroke painted by a pattern or a gradient (`url(#id)`) is read through the colours it paints
-/// with: the fills, strokes and stop colours of the element it names and everything inside it.
-/// Every colour is read as the browser paints it (a 1×1 canvas filled with it, its bytes read
-/// back), whatever syntax the browser reports it in (`rgb()`, `color(srgb ...)` from a
-/// `color-mix()`, `oklch()`, `lab()`). The drawing's shapes are read inside the bound elements too
-/// (a group's own fill is not what paints), anything inside the selection apart; and every selected
-/// element, a keyed marker's clone among them, must stroke in the accent itself.
-const ACCENT_ON_STATES: &str = r##"(() => {
+/// The colour readers the accent checks share. A green is one of the accent's four colours (the
+/// accent, its tint, its soft and its outline, by red, green and blue whatever the alpha) or any
+/// colour of the accent's band of hue (100° to 170°) with some saturation (above 0.2): a shade one
+/// unit off the accent is still the accent to the eye. Every colour is read as the browser paints it
+/// (a 1×1 canvas filled with it, its bytes read back), whatever syntax the browser reports it in
+/// (`rgb()`, `color(srgb ...)` from a `color-mix()`, `oklch()`, `lab()`). A paint (`fill`, `stroke`)
+/// follows the paint grammar: a colour, or a `url(...)` with what follows it, the colour the
+/// browser paints when the reference is no paint server; a reference within the page is read
+/// through the colours it paints with (the fills, strokes and stop colours of the element it names
+/// and everything inside it). `greens` reads every property the browser computes for an element,
+/// from the browser's own list so none is left out (its custom properties apart): a paint as above,
+/// any other value through every colour in it (a border, an outline, a shadow, a decoration, a
+/// background image).
+const COLOUR_READERS: &str = r##"
   const root = getComputedStyle(document.documentElement);
   const hex = (h) => { h = h.trim().replace("#", ""); if (h.length === 3) h = [...h].map((c) => c + c).join(""); return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)).join(","); };
   const family = ["--accent", "--accent-tint", "--accent-soft", "--accent-outline"].map((v) => hex(root.getPropertyValue(v)));
+  const accent = hex(root.getPropertyValue("--accent"));
   const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true });
   const parts = (c) => {
     const sentinel = "rgba(1, 2, 3, 0.5)";
@@ -148,38 +175,107 @@ const ACCENT_ON_STATES: &str = r##"(() => {
     return hue >= 100 && hue <= 170 && s > 0.2;
   };
   const painted = (v) => {
-    const m = v.match(/url\(["']?#([^"')]+)["']?\)\s*(.*)$/);
+    const m = v.match(/^url\((["']?)(.*?)\1\)\s*(.*)$/);
     if (!m) return green(v) ? [v] : [];
-    // The colour after the reference is what the browser paints when the reference is no paint
-    // server (missing, or not a pattern or gradient): read it whatever the reference names.
-    const fallback = m[2] && green(m[2]) ? [`${v} falls back to ${m[2]}`] : [];
-    const ref = document.getElementById(m[1]);
+    const fallback = m[3] && green(m[3]) ? [`${v} falls back to ${m[3]}`] : [];
+    // A reference within the page names an element by its id; one to another document paints the
+    // fallback alone.
+    const at = m[2].indexOf("#");
+    const local = at === 0 || (at > 0 && m[2].slice(0, at) === location.href.split("#")[0]);
+    const ref = local ? document.getElementById(decodeURIComponent(m[2].slice(at + 1))) : null;
     if (!ref) return fallback;
     return fallback.concat([ref, ...ref.querySelectorAll("*")].flatMap((d) => { const c = getComputedStyle(d); return [c.fill, c.stroke, c.stopColor].filter(green); }).map((g) => `${v} paints ${g}`));
   };
+  const TOKENS = /(rgba?\([^)]*\)|hsla?\([^)]*\)|hwb\([^)]*\)|(?:ok)?l(?:ab|ch)\([^)]*\)|color\([^)]*\)|#[0-9a-f]{3,8}\b)/gi;
+  const greens = (el) => {
+    const c = getComputedStyle(el);
+    const out = [];
+    for (let i = 0; i < c.length; i++) {
+      const p = c[i];
+      if (p.startsWith("--")) continue;
+      const v = c.getPropertyValue(p);
+      if (p === "fill" || p === "stroke") out.push(...painted(v).map((g) => `${p} ${g}`));
+      else for (const t of v.match(TOKENS) || []) if (green(t)) out.push(`${p} ${t}`);
+    }
+    return out;
+  };
+"##;
+
+/// Every state drawn in a green: the drawing's elements and everything inside them (the selection
+/// apart, which the selection check pins to the one selected), its fills, tags, values and labels,
+/// the headline's figures, the attention list's marks and the side panel's badges, each by every
+/// property it has. The attention list's rows: the accent's own mark (`on`) on the selected
+/// object's row alone, and no other row painted in a green by any property. Every selected element
+/// marked on every shape it draws (a group's shapes inside it, their own stroke written or not):
+/// stroked in the accent itself, a pixel wide or more, at half its alpha or more once every opacity
+/// is multiplied, shown.
+const ACCENT_ON_STATES: &str = r##"
   const name = (el) => el.id || el.dataset.for || el.dataset.key || `${el.tagName} in ${el.closest("[id]")?.id}`;
-  const drawn = [...document.querySelectorAll("svg.plant .sv-obj, svg.plant .sv-obj *, svg.plant [data-key], svg.plant [data-key] *, svg.plant .sv-fill, .sv-overlay .sv-tag")]
+  const drawn = [...document.querySelectorAll("svg.plant .sv-obj, svg.plant .sv-obj *, svg.plant [data-key], svg.plant [data-key] *, svg.plant .sv-fill, .sv-overlay .sv-tag, .sv-overlay .sv-value, .sv-overlay .sv-label")]
     .filter((el) => !el.closest(".sv-selected"))
-    .flatMap((el) => { const c = getComputedStyle(el); return [["fill", c.fill], ["stroke", c.stroke]].flatMap(([p, v]) => painted(v).map((g) => `${name(el)} ${p} ${g}`)); });
+    .flatMap((el) => greens(el).map((g) => `${name(el)} ${g}`));
   const around = [...document.querySelectorAll(".headline .fig .mono, .side ul.attention .mark, .side .badge")]
-    .flatMap((el) => { const c = getComputedStyle(el); return [["color", c.color], ["background", c.backgroundColor]].filter(([, v]) => green(v)).map(([p, v]) => `${el.className} ${JSON.stringify(el.textContent)} ${p} ${v}`); });
-  // The attention list's rows: the accent's own mark (`on`) on the selected object's row alone,
-  // and no other row painted in a green by its background or its inset bar.
+    .flatMap((el) => greens(el).map((g) => `${el.className} ${JSON.stringify(el.textContent)} ${g}`));
   const selected = new Set([...document.querySelectorAll("svg.plant .sv-selected")].map((e) => e.dataset.object ?? e.id));
   const rows = [...document.querySelectorAll(".side ul.attention li")].flatMap((li) => {
-    const on = li.classList.contains("on"), c = getComputedStyle(li);
+    const on = li.classList.contains("on");
     const out = on !== selected.has(li.dataset.id) ? [`attention row ${li.dataset.id} on: ${on}, selected: ${selected.has(li.dataset.id)}`] : [];
-    const shadow = (c.boxShadow.match(/(rgba?\([^)]*\)|color\([^)]*\)|#[0-9a-f]{3,8})/gi) || []).filter(green);
-    return on ? out : out.concat(green(c.backgroundColor) ? [`attention row ${li.dataset.id} background ${c.backgroundColor}`] : [], shadow.map((s) => `attention row ${li.dataset.id} shadow ${s}`));
+    return on ? out : out.concat(greens(li).map((g) => `attention row ${li.dataset.id} ${g}`));
   });
-  // Every selected element marked: stroked in the accent itself, a width of a pixel or more,
-  // opaque enough to see, shown.
-  const accent = hex(root.getPropertyValue("--accent"));
-  const unmarked = [...document.querySelectorAll("svg.plant .sv-selected")]
-    .filter((el) => { const c = getComputedStyle(el), p = parts(c.stroke); return !p || p[3] === 0 || p.slice(0, 3).join(",") !== accent || !(parseFloat(c.strokeWidth) >= 1) || !(Number(c.strokeOpacity) > 0) || c.display === "none" || c.visibility !== "visible" || !(Number(c.opacity) > 0); })
-    .map((el) => { const c = getComputedStyle(el); return `${el.dataset.key !== undefined ? `${el.dataset.object} ${el.dataset.key}` : el.id} selected, stroked ${c.stroke} ${c.strokeWidth} at ${c.strokeOpacity}`; });
+  const GEOMETRY = "rect, circle, ellipse, path, polygon, polyline, line";
+  const strokeAlpha = (s) => { let op = 1; for (let a = s; a; a = a.parentElement) op *= Number(getComputedStyle(a).opacity); const c = getComputedStyle(s), p = parts(c.stroke); return p ? op * p[3] * Number(c.strokeOpacity) : 0; };
+  const unmarked = [...document.querySelectorAll("svg.plant .sv-selected")].flatMap((el) => {
+    const who = el.dataset.key !== undefined ? `${el.dataset.object} ${el.dataset.key}` : el.id;
+    const shapes = el.matches(GEOMETRY) ? [el] : [...el.querySelectorAll(GEOMETRY)];
+    if (shapes.length === 0) return [`${who} selected, with no shape to stroke`];
+    return shapes
+      .filter((s) => { const c = getComputedStyle(s), p = parts(c.stroke); return !p || p.slice(0, 3).join(",") !== accent || !(parseFloat(c.strokeWidth) >= 1) || !(strokeAlpha(s) >= 0.5) || c.visibility !== "visible" || s.closest(".sv-hidden") !== null; })
+      .map((s) => { const c = getComputedStyle(s); return `${who}${s === el ? "" : ` (its ${s.tagName})`} selected, stroked ${c.stroke} ${c.strokeWidth} at ${c.strokeOpacity}, alpha ${strokeAlpha(s)}`; });
+  });
   return drawn.concat(around, rows, unmarked);
-})()"##;
+"##;
+
+/// Every state the vocabulary has on every surface it is drawn on, by a probe element of each put
+/// where the page puts its own (so every rule of the stylesheet that could reach one does): an
+/// element and a group of every way of showing, a level's fill and a tag in the drawing, a figure
+/// of the headline, a mark of the attention list and a badge; each read by `greens`, then removed.
+/// The states and the ways of showing come from the crate's own enums (`STATES`, `KINDS`).
+const PROBES: &str = r##"
+  const svgNS = "http://www.w3.org/2000/svg";
+  const plant = document.querySelector("svg.plant"), overlay = plant.querySelector(".sv-overlay");
+  const made = [];
+  const put = (parent, el, what) => { parent.append(el); made.push([el, what]); };
+  const shape = (cls) => { const r = document.createElementNS(svgNS, "rect"); r.setAttribute("class", cls); r.setAttribute("width", "4"); r.setAttribute("height", "4"); return r; };
+  for (const s of STATES) {
+    for (const k of KINDS) {
+      put(plant, shape(`sv-obj sv-show-${k} sv-state-${s}`), `a ${k} element in ${s}`);
+      const g = document.createElementNS(svgNS, "g");
+      g.setAttribute("class", `sv-obj sv-show-${k} sv-state-${s}`);
+      g.append(shape(""));
+      put(plant, g, `a ${k} group in ${s}`);
+    }
+    put(plant, shape(`sv-fill sv-state-${s}`), `a fill in ${s}`);
+    const tag = document.createElementNS(svgNS, "text");
+    tag.setAttribute("class", `sv-tag sv-state-${s}`);
+    tag.textContent = "x";
+    put(overlay, tag, `a tag in ${s}`);
+    const fig = document.createElement("span");
+    fig.className = "fig";
+    fig.innerHTML = `<span class="mono st-text-${s}">1</span>`;
+    put(document.querySelector(".headline"), fig, `the headline in ${s}`);
+    const ul = document.createElement("ul");
+    ul.className = "attention";
+    ul.innerHTML = `<li><span class="mark st-${s}">!</span></li>`;
+    put(document.querySelector(".side"), ul, `an attention row in ${s}`);
+    const badge = document.createElement("span");
+    badge.className = `badge st-${s}`;
+    badge.textContent = "x";
+    put(document.querySelector(".side"), badge, `a badge in ${s}`);
+  }
+  const out = made.flatMap(([el, what]) => [el, ...el.querySelectorAll("*")].flatMap((x) => greens(x).map((g) => `${what}: ${x === el ? "" : `its ${x.tagName} `}${g}`)));
+  for (const [el] of made) el.remove();
+  return out;
+"##;
 
 /// What carries the selection in the drawing: an element by its id, a keyed marker's clone by its
 /// object's id and its key.
@@ -189,7 +285,39 @@ const SELECTED: &str = r#"[...document.querySelectorAll("svg.plant .sv-selected"
 /// green is not a state drawn in it.
 fn accent_on_states(page: &mut Browser) -> Value {
     page.wait_for(r#"document.getAnimations().every((a) => a.playState !== "running")"#, Duration::from_secs(5));
-    page.eval(ACCENT_ON_STATES)
+    page.eval(&format!("(() => {{\n{COLOUR_READERS}\n{ACCENT_ON_STATES}\n}})()"))
+}
+
+/// The probes of every state on every surface (`PROBES`), the states and the ways of showing taken
+/// from the crate's own enums.
+fn probe_states(page: &mut Browser) -> Value {
+    let list = |names: Vec<&str>| serde_json::to_string(&names).unwrap();
+    page.eval(&format!("(() => {{\n{COLOUR_READERS}\nconst STATES = {};\nconst KINDS = {};\n{PROBES}\n}})()", list(every_state()), list(every_show())))
+}
+
+/// The vocabulary's states, from the crate's own enum: a state added there stops this match
+/// compiling until it is listed.
+fn every_state() -> Vec<&'static str> {
+    use veredas_supervisao::state::StateClass as S;
+    let all = [S::Normal, S::Near, S::Warn, S::Alarm, S::Disabled, S::Stale];
+    for s in all {
+        match s {
+            S::Normal | S::Near | S::Warn | S::Alarm | S::Disabled | S::Stale => {}
+        }
+    }
+    all.iter().map(|s| s.name()).collect()
+}
+
+/// The binding's ways of showing, from the crate's own enum, likewise.
+fn every_show() -> Vec<&'static str> {
+    use veredas_supervisao::binding::Show;
+    let all = [Show::State, Show::Level, Show::Value, Show::Move];
+    for s in all {
+        match s {
+            Show::State | Show::Level | Show::Value | Show::Move => {}
+        }
+    }
+    all.iter().map(|s| s.name()).collect()
 }
 
 fn translate(t: &str) -> (f64, f64) {
@@ -250,7 +378,7 @@ fn click_at(page: &mut Browser, r: &Value) {
 /// on screen at its element and shown; each level's fill inside its element to its level; each
 /// marker on screen at the path's point, its tag under it; a keyed marker's clones, one per key,
 /// each with its tag.
-fn differences(drawn: &Value, feed: &Value, on_layout: &[(String, String)]) -> Vec<String> {
+fn differences(drawn: &Value, feed: &Value, on_layout: &[(String, String)], units: &std::collections::BTreeMap<String, String>) -> Vec<String> {
     let mut out = Vec::new();
     for (id, show) in on_layout {
         let d = &drawn[id];
@@ -280,6 +408,14 @@ fn differences(drawn: &Value, feed: &Value, on_layout: &[(String, String)]) -> V
             }
         }
         match show.as_str() {
+            "value" => {
+                // Its value over it, with its unit, shown.
+                let unit = units.get(id).map(String::as_str).unwrap_or("");
+                let text = v["text"].as_str().map(|t| if unit.is_empty() { t.to_string() } else { format!("{t} {unit}") }).unwrap_or_default();
+                if d["value"] != json!([text, true]) {
+                    out.push(format!("{id}: its value drawn {}, the feed says {text:?}", d["value"]));
+                }
+            }
             "level" => {
                 let f = v["level"].as_f64().unwrap();
                 let fill = &d["fill"];
@@ -384,13 +520,14 @@ fn colours(text: &str) -> Vec<(String, f64, f64)> {
 
 /// The reference's example grown for this test: a keyed marker over the log's positions (a key
 /// forgotten 6 s after its last, warned past 40), a disabled state for outlet 1 and its element a
-/// group, outlet 2 moved by its own transform, outlet 3 inside a moved group, and the loop itself
+/// group whose shape writes its own stroke, the speed shown by its value, outlet 2 moved by its own transform, outlet 3 inside a moved group, and the loop itself
 /// drawn 30 down inside a moved group, its markers outside it.
 fn grown(mut ex: Example) -> Example {
     ex.project.push_str("\n[[rule]]\nname = \"positions\"\npattern = 'POS item=(?P<item>\\w+) at=(?P<at>[0-9.]+)'\nscope = \"sorter\"\ntypes = { at = \"float\" }\nkey = \"item\"\n");
     ex.binding = ex
         .binding
         .replacen("states = [ { at_least = 100, state = \"warn\", word = \"full\" }", "states = [ { at_most = 0, state = \"disabled\", word = \"off\" }, { at_least = 100, state = \"warn\", word = \"full\" }", 1)
+        .replacen("label = \"Loop speed\"\n", "label = \"Loop speed\"\nshow = \"value\"\n", 1)
         .replacen(
             "\n[[dashboard]]",
             "\n[[object]]\nid = \"tracked\"\nlabel = \"Tracked\"\nvalue = { source = \"sorter\", series = \"at\" }\nshow = \"move\"\npath = \"loop\"\nstale_after_ms = 6000\nstates = [ { at_least = 40, state = \"warn\", word = \"far\" } ]\n\n[[dashboard]]",
@@ -399,7 +536,9 @@ fn grown(mut ex: Example) -> Example {
     ex.svg = ex
         .svg
         .replace("<path id=\"loop\" d=\"M 80 40 H 320 A 70 70 0 0 1 320 180 H 80 A 70 70 0 0 1 80 40 Z\" fill=\"none\" stroke=\"#26262A\" stroke-width=\"14\"/>", "<g transform=\"translate(0 30)\"><path id=\"loop\" d=\"M 80 40 H 320 A 70 70 0 0 1 320 180 H 80 A 70 70 0 0 1 80 40 Z\" fill=\"none\" stroke=\"#26262A\" stroke-width=\"14\"/></g>")
-        .replace("<rect id=\"outlet-1\" x=\"130\" y=\"4\" width=\"24\" height=\"28\"/>", "<g id=\"outlet-1\"><rect x=\"130\" y=\"4\" width=\"24\" height=\"28\"/></g>")
+        .replace("<rect id=\"outlet-1\" x=\"130\" y=\"4\" width=\"24\" height=\"28\"/>", "<g id=\"outlet-1\"><rect x=\"130\" y=\"4\" width=\"24\" height=\"28\" stroke=\"#3a3a40\"/></g>")
+        // The loop's speed shown by its value, inside the loop.
+        .replace("<rect id=\"infeed\" x=\"20\" y=\"96\" width=\"40\" height=\"28\"/>", "<rect id=\"infeed\" x=\"20\" y=\"96\" width=\"40\" height=\"28\"/>\n  <rect id=\"speed\" x=\"110\" y=\"120\" width=\"50\" height=\"20\"/>")
         .replace("<rect id=\"outlet-2\" x=\"190\" y=\"4\" width=\"24\" height=\"28\"/>", "<rect id=\"outlet-2\" x=\"190\" y=\"4\" width=\"24\" height=\"28\" transform=\"translate(-20 110)\"/>")
         .replace("<rect id=\"outlet-3\" x=\"250\" y=\"4\" width=\"24\" height=\"28\"/>", "<g transform=\"translate(0 100)\"><rect id=\"outlet-3\" x=\"250\" y=\"4\" width=\"24\" height=\"28\"/></g>")
         // A keyed marker inside a moved group, as a drawing's layers put one: its clones stand at
@@ -413,7 +552,7 @@ fn the_page_draws_the_layout_from_the_feed() {
     let dir = tempfile::tempdir().unwrap();
     let bench = plant(&dir.path().join("bench"));
     let ex = grown(live_example(&bench, false));
-    for grew in ["<g transform=\"translate(0 30)\"><path id=\"loop\"", "translate(-20 110)", "<g transform=\"translate(0 100)\"><rect id=\"outlet-3\"", "<g id=\"outlet-1\">", "<g transform=\"translate(15 -10)\"><circle id=\"tracked\""] {
+    for grew in ["<g transform=\"translate(0 30)\"><path id=\"loop\"", "translate(-20 110)", "<g transform=\"translate(0 100)\"><rect id=\"outlet-3\"", "<g id=\"outlet-1\"><rect x=\"130\" y=\"4\" width=\"24\" height=\"28\" stroke=", "<rect id=\"speed\"", "<g transform=\"translate(15 -10)\"><circle id=\"tracked\""] {
         assert!(ex.svg.contains(grew), "{grew}: {}", ex.svg);
     }
     let path = write_example(dir.path(), &ex);
@@ -435,8 +574,11 @@ fn the_page_draws_the_layout_from_the_feed() {
         .map(|o| (o["id"].as_str().unwrap().to_string(), o["show"].as_str().unwrap().to_string()))
         .collect();
     assert_eq!(on_layout.iter().map(|(i, s)| (i.as_str(), s.as_str())).collect::<Vec<_>>(), [
-        ("infeed", "state"), ("outlet-1", "level"), ("outlet-2", "level"), ("outlet-3", "level"), ("parcel-1", "move"), ("parcel-2", "move"), ("tracked", "move"),
+        ("speed", "value"), ("infeed", "state"), ("outlet-1", "level"), ("outlet-2", "level"), ("outlet-3", "level"), ("parcel-1", "move"), ("parcel-2", "move"), ("tracked", "move"),
     ]);
+    let shows: std::collections::BTreeSet<&str> = on_layout.iter().map(|(_, s)| s.as_str()).collect();
+    assert_eq!(shows, every_show().into_iter().collect(), "every way of showing the binding knows is on the layout");
+    let units: std::collections::BTreeMap<String, String> = b["objects"].as_array().unwrap().iter().map(|o| (o["id"].as_str().unwrap().to_string(), o["unit"].as_str().unwrap_or("").to_string())).collect();
 
     // The feed carries, for each, what its way of showing needs.
     assert!(wait(Duration::from_secs(20), || {
@@ -453,7 +595,7 @@ fn the_page_draws_the_layout_from_the_feed() {
         loop {
             let feed = get(addr, "/s/loop/objects.json");
             let drawn = page.eval(DRAWN);
-            let mut diff = differences(&drawn, &feed.1, &on_layout);
+            let mut diff = differences(&drawn, &feed.1, &on_layout, &units);
             let selected = page.eval(SELECTED);
             if selected != json!(selection) {
                 diff.push(format!("the selection carried by {selected}, not by {selection:?} alone"));
@@ -469,6 +611,15 @@ fn the_page_draws_the_layout_from_the_feed() {
     };
     let around_when = |page: &mut Browser, cond: &str| page.wait_for(&format!("(() => {{ const a = {AROUND}; return ({cond}) ? a : null; }})()"), Duration::from_secs(10));
     let (drawn, _) = settle(&mut page, "first paint", &[]);
+    assert_eq!(probe_states(&mut page), json!([]), "a state drawn in the accent on some surface");
+    // Opened on another view, the layout behind it while the feed's snapshot is painted: once
+    // shown, every marker stands at its place (nothing is placed off screen, everything is when
+    // the layout is shown).
+    let mut behind = Browser::open(&format!("http://{addr}/s/loop/#dashboards"));
+    behind.wait_for("(() => { const f = document.querySelector('.headline .fig .mono'); return f !== null && f.textContent === '1.5' && document.querySelector('.dash-grid .panel') !== null; })()", Duration::from_secs(20));
+    behind.eval("location.hash = 'layout'; true");
+    settle(&mut behind, "shown after another view", &[]);
+    drop(behind);
     // The anchors, spelled out: the states the rules give the bench's values, and the markers at
     // a quarter and three quarters of the loop (drawn 30 down, so their own places are too).
     let d = |id: &str, k: &str| drawn[id][k].clone();
@@ -491,6 +642,17 @@ fn the_page_draws_the_layout_from_the_feed() {
         ["tracked", "◌", "mark st-stale", "Tracked no value"],
     ]);
     assert_eq!(around["attention"], quiet);
+
+    // Every element the layout binds and draws takes the selection by a click and carries it
+    // alone, marked on every shape it draws (outlet 1's group, its shape writing its own stroke,
+    // among them).
+    for (id, _) in &on_layout {
+        if drawn[id]["hidden"] == json!(true) {
+            continue;
+        }
+        click_at(&mut page, &drawn[id]["rect"]);
+        settle(&mut page, &format!("{id} selected by a click"), &[id.as_str()]);
+    }
 
     // A click of the pointer on outlet 3 (full, so its fill covers it) selects it: the side panel
     // holds its value, state, sparkline (its own series over its last half hour) and offered

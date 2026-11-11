@@ -158,7 +158,7 @@ async function run(name: string, sessions: SessionEntry[]) {
       case "tables": main.replaceChildren(tables.root); void tables.show(); break;
       case "series": main.replaceChildren(series.root); void series.show(); break;
       case "alarms": main.replaceChildren(alarms); renderAlarms(); break;
-      default: main.replaceChildren(layoutView);
+      default: main.replaceChildren(layoutView); layout?.shown();
     }
     renderTop();
   }
