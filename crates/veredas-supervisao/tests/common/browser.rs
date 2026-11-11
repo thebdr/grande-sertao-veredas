@@ -38,7 +38,8 @@ pub struct Browser {
     next: u64,
     /// The protocol's events received while waiting for answers, in order.
     events: Vec<Value>,
-    _profile: tempfile::TempDir,
+    /// The browser's own profile folder, removed once the browser and its helpers have let it go.
+    profile: Option<tempfile::TempDir>,
 }
 
 /// One HTTP GET to the browser's own endpoint, its body as JSON.
@@ -161,7 +162,7 @@ impl Browser {
             head.push(b[0]);
         }
         assert!(head.starts_with(b"HTTP/1.1 101"), "{}", String::from_utf8_lossy(&head));
-        Browser { child, ws, next: 0, events: Vec::new(), _profile: profile }
+        Browser { child, ws, next: 0, events: Vec::new(), profile: Some(profile) }
     }
 
     fn send(&mut self, text: &str) {
@@ -245,9 +246,9 @@ impl Browser {
     }
 }
 
-impl Drop for Browser {
-    fn drop(&mut self) {
-        // Closed through the protocol, so its helper processes end with it; killed if it lingers.
+impl Browser {
+    /// Closed through the protocol, so its helper processes end with it; killed if it lingers.
+    fn end(&mut self) {
         self.next += 1;
         let close = frame(&json!({ "id": self.next, "method": "Browser.close" }).to_string());
         let _ = self.ws.write_all(&close);
@@ -260,5 +261,26 @@ impl Drop for Browser {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+impl Drop for Browser {
+    fn drop(&mut self) {
+        self.end();
+        // The profile removed once the browser has ended: its helper processes hold its files a
+        // moment longer (on Windows a held file cannot be removed), so the removal is tried again
+        // until the folder is gone, for up to ten seconds. A folder left behind would be some
+        // megabytes in the system's temporary folder for every page a test opened.
+        if let Some(profile) = self.profile.take() {
+            let path = profile.path().to_path_buf();
+            drop(profile);
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while path.exists() && Instant::now() < deadline {
+                let _ = std::fs::remove_dir_all(&path);
+                if path.exists() {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
     }
 }
