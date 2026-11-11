@@ -69,7 +69,7 @@ async function run(name: string, sessions: SessionEntry[]) {
     plantPane.append(h("p", { class: "muted pad" }, "This binding has no layout."));
   }
   const dash = new Dashboards(name, binding.dashboards);
-  const tables = new Tables(name);
+  const tables = new Tables(name, () => status);
   const series = new Series(name, () => status);
   const alarms = h("section", { class: "alarms" });
 

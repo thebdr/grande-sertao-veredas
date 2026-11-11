@@ -43,14 +43,22 @@ export class Tables {
   private main = h("div", { class: "list-main" });
   private table: string | null = null;
   private offset = 0;
+  /// The window paged through, frozen at the session's now when the view or a table is shown: a
+  /// row stamped later joins no page until the view is shown again, so paging never shifts.
+  private to: number | null = null;
+  /// The latest request: an answer to an earlier one is not drawn.
+  private asked = 0;
 
-  constructor(private name: string) {
+  constructor(private name: string, private status: () => SessionStatus | null) {
     this.root.append(this.list, this.main);
   }
 
   async show() {
+    const token = ++this.asked;
+    this.to = this.status()?.now_ms ?? null;
     try {
       const t = await getJson<{ tables: TableInfo[] }>(`${base(this.name)}/portal/api/tables`);
+      if (token !== this.asked) return;
       this.list.replaceChildren(h("div", { class: "caps small" }, `Tables · ${t.tables.length}`), ...t.tables.map((x) => {
         const b = h("button", { class: x.name === this.table ? "on" : "", "data-table": x.name }, h("span", {}, x.name), h("span", { class: "mono muted" }, `${x.kind} · ${x.rows ?? "?"}`));
         b.onclick = () => { this.table = x.name; this.offset = 0; void this.show(); };
@@ -64,19 +72,31 @@ export class Tables {
   }
 
   private async page() {
-    const q = new URLSearchParams({ name: this.table!, limit: String(PAGE), offset: String(this.offset) });
-    const p = await getJson<Page>(`${base(this.name)}/portal/api/table/data?${q}`);
-    const prev = h("button", { disabled: this.offset === 0 }, "‹ Newer") as HTMLButtonElement;
-    const next = h("button", { disabled: this.offset + PAGE >= p.total }, "Older ›") as HTMLButtonElement;
-    prev.onclick = () => { this.offset = Math.max(0, this.offset - PAGE); void this.page(); };
-    next.onclick = () => { this.offset += PAGE; void this.page(); };
-    const from = p.total === 0 ? 0 : this.offset + 1;
-    this.main.replaceChildren(
-      h("div", { class: "pager" }, h("strong", {}, this.table!), h("span", { class: "mono muted", "data-rows": `${from}-${this.offset + p.rows.length}/${p.total}` }, `rows ${from}–${this.offset + p.rows.length} of ${p.total}, newest first`), prev, next),
-      h("div", { class: "scroll" }, h("table", { class: "dt" },
-        h("thead", {}, h("tr", {}, ...p.schema.map((c) => h("th", {}, c.name, h("span", { class: "muted" }, ` ${c.type.toLowerCase()}`))))),
-        h("tbody", {}, ...p.rows.map((r) => h("tr", {}, ...r.map((v) => h("td", { class: "mono" }, cell(v)))))))),
-    );
+    // What this request asks, fixed now: a click while it is out changes nothing it reads.
+    const table = this.table!, offset = this.offset, to = this.to, token = ++this.asked;
+    for (const b of Array.from(this.main.querySelectorAll(".pager button"))) (b as HTMLButtonElement).disabled = true;
+    try {
+      const q = new URLSearchParams({ name: table, limit: String(PAGE), offset: String(offset) });
+      if (to !== null) q.set("to", String(to));
+      const p = await getJson<Page>(`${base(this.name)}/portal/api/table/data?${q}`);
+      if (token !== this.asked) return;
+      // Portal orders a table newest first by its time (`index_ms`, else `ts`); one with neither
+      // comes in the store's own order, and is not said to be newest first.
+      const ordered = p.schema.some((c) => c.name === "index_ms" || c.name === "ts");
+      const prev = h("button", { disabled: offset === 0 }, "‹ Newer") as HTMLButtonElement;
+      const next = h("button", { disabled: offset + PAGE >= p.total }, "Older ›") as HTMLButtonElement;
+      prev.onclick = () => { this.offset = Math.max(0, offset - PAGE); void this.page(); };
+      next.onclick = () => { if (offset + PAGE < p.total) { this.offset = offset + PAGE; void this.page(); } };
+      const from = p.total === 0 ? 0 : offset + 1;
+      this.main.replaceChildren(
+        h("div", { class: "pager" }, h("strong", {}, table), h("span", { class: "mono muted", "data-rows": `${from}-${offset + p.rows.length}/${p.total}` }, `rows ${from}–${offset + p.rows.length} of ${p.total}${ordered ? ", newest first" : ""}`), prev, next),
+        h("div", { class: "scroll" }, h("table", { class: "dt" },
+          h("thead", {}, h("tr", {}, ...p.schema.map((c) => h("th", {}, c.name, h("span", { class: "muted" }, ` ${c.type.toLowerCase()}`))))),
+          h("tbody", {}, ...p.rows.map((r) => h("tr", {}, ...r.map((v) => h("td", { class: "mono" }, cell(v)))))))),
+      );
+    } catch (e) {
+      if (token === this.asked) this.main.replaceChildren(h("p", { class: "error" }, String(e)));
+    }
   }
 }
 
@@ -85,32 +105,37 @@ export class Series {
   private list = h("nav", { class: "list" });
   private main = h("div", { class: "list-main" });
   private pick: SeriesInfo | null = null;
+  /// The latest request: an answer to an earlier one is not drawn.
+  private asked = 0;
 
   constructor(private name: string, private status: () => SessionStatus | null) {
     this.root.append(this.list, this.main);
   }
 
   async show() {
+    const token = ++this.asked;
     try {
       const s = await getJson<{ series: SeriesInfo[] }>(`${base(this.name)}/portal/api/series`);
+      if (token !== this.asked) return;
       this.list.replaceChildren(h("div", { class: "caps small" }, `Series · ${s.series.length}`), ...s.series.map((x) => {
         const on = this.pick && this.pick.source === x.source && this.pick.series === x.series;
         const b = h("button", { class: on ? "on" : "", "data-series": `${x.source}/${x.series}` }, h("span", {}, `${x.source} · ${x.series}`), h("span", { class: "mono muted" }, `${x.type} · ${x.count}`));
         b.onclick = () => { this.pick = x; void this.show(); };
         return b;
       }));
-      if (this.pick) await this.chart(this.pick);
+      if (this.pick) await this.chart(this.pick, token);
       else this.main.replaceChildren(h("p", { class: "muted" }, "Pick a series."));
     } catch (e) {
-      this.main.replaceChildren(h("p", { class: "error" }, String(e)));
+      if (token === this.asked) this.main.replaceChildren(h("p", { class: "error" }, String(e)));
     }
   }
 
-  private async chart(x: SeriesInfo) {
+  private async chart(x: SeriesInfo, token: number) {
     const now = this.status()?.now_ms ?? x.last_ms;
     const from = now - 60 * 60_000;
     const q = new URLSearchParams({ source: x.source, series: x.series, from: String(from), to: String(now), points: "600" });
     const w = await getJson<{ points: Pt[]; total: number; downsampled: boolean }>(`${base(this.name)}/portal/api/series/data?${q}`);
+    if (token !== this.asked) return;
     this.main.replaceChildren(
       h("div", { class: "pager" }, h("strong", {}, `${x.source} · ${x.series}`), h("span", { class: "mono muted", "data-points": `${w.points.length}/${w.total}` }, `last 60 min · ${w.points.length} of ${w.total} points${w.downsampled ? ", downsampled" : ""} · last ${x.last_value}`)),
       h("div", { class: "panel" }, trend(w.points, [], from, now, null, "")),
