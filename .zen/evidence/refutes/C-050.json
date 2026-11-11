@@ -1,0 +1,13 @@
+{
+  "clause": "C-050",
+  "verdict": "holds",
+  "ranAt": "2026-11-11T07:50:34.542Z",
+  "headCommit": "4a41059b8d6050471b7013f4cc181fcc772c8bf9",
+  "tests": [
+    {
+      "name": "crates/veredas-supervisao/tests/feed.rs",
+      "file": "crates/veredas-supervisao/tests/feed.rs",
+      "symbolSha": "3cd47baf5d8354c3dce3cbf5e6611584e803e996b4b9f07eda1f844995fdeaf5"
+    }
+  ]
+}
