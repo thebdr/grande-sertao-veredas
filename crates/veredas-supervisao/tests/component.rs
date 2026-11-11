@@ -135,10 +135,11 @@ fn mentions(text: &str) -> Vec<String> {
             hits.push(h);
         }
     };
-    // Each line read twice: its HTML entities decoded, then its code escapes too. A name or a
-    // section sign in either reading is a hit; the first keeps the letters an escape-like run (a
-    // pattern's `\b` before hex letters) would swallow in the second.
-    let readings: [fn(&str) -> String; 2] = [decode_entities, |l: &str| decode_escapes(&decode_entities(l))];
+    // Each line read twice: its HTML entities decoded; then also its code escapes, an entity naming
+    // no letter (`&nbsp;`) as a space and its percent-encoded bytes (`%20`, `%C3%A3`, as UTF-8). A
+    // name or a section sign in either reading is a hit; the first keeps the letters the second
+    // reads otherwise (a pattern's `\b` before hex letters, an `&` that only looks like an entity).
+    let readings: [fn(&str) -> String; 2] = [|l: &str| decode_entities(l, false), |l: &str| decode_percent(&decode_escapes(&decode_entities(l, true)))];
     for read in readings {
         let lines: Vec<String> = text.lines().map(read).collect();
         let mut flat = Vec::new();
@@ -169,7 +170,8 @@ fn mentions(text: &str) -> Vec<String> {
 /// A line with its code escapes read as the crate's languages write a character: Rust's and a
 /// script's braced `\u{..}` (Rust's `_` between its digits read through), a script's four-digit
 /// `\u....` and two-digit `\x..`, TOML's eight-digit `\U........`, a stylesheet's one to six hex
-/// digits and the one space that may end them. Anything else is kept as written.
+/// digits and the one space that may end them; a line break or a tab written as an escape (`\n`,
+/// `\r`, `\t`) as a space. Anything else is kept as written.
 fn decode_escapes(line: &str) -> String {
     let hex_run = |s: &str, max: usize| s.chars().take(max).take_while(char::is_ascii_hexdigit).count();
     let mut out = String::new();
@@ -191,6 +193,8 @@ fn decode_escapes(line: &str) -> String {
             (u32::from_str_radix(&u[..4], 16).ok(), 5)
         } else if let Some(x) = tail.strip_prefix('x').filter(|x| hex_run(x, 2) == 2) {
             (u32::from_str_radix(&x[..2], 16).ok(), 3)
+        } else if tail.starts_with(['n', 'r', 't']) {
+            (Some(u32::from(b' ')), 1)
         } else {
             match hex_run(tail, 6) {
                 0 => (None, 0),
@@ -210,6 +214,27 @@ fn decode_escapes(line: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// A line with its percent-encoded bytes (`%20`, `%C3%A3`) read, the bytes as UTF-8.
+fn decode_percent(line: &str) -> String {
+    let b = line.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = b.get(i + 1..i + 3).filter(|h| h.iter().all(u8::is_ascii_hexdigit)).and_then(|h| std::str::from_utf8(h).ok());
+        match (b[i], hex.and_then(|h| u8::from_str_radix(h, 16).ok())) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                i += 3;
+            }
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// A lowercase letter read as the plain letters it stands for: an accented Latin-1 or Latin
@@ -269,8 +294,9 @@ fn fold(c: char) -> Vec<char> {
 /// letter, of a ligature (`&filig;`, `&aelig;`, `&szlig;`, `&ijlig;`) as its letters, of a Latin
 /// letter of its own (`&eth;`, `&thorn;`, `&eng;`, `&kgreen;`, `&inodot;`) as the letters it reads
 /// as, of the section sign as the sign; and a number or a legacy name (Latin-1's, which a browser
-/// reads without its `;`) without the `;` too. Any other entity is kept as written.
-fn decode_entities(text: &str) -> String {
+/// reads without its `;`) without the `;` too. Any other named entity (`&nbsp;`, `&shy;`,
+/// `&ndash;`) is a space where `others_as_space`, kept as written otherwise.
+fn decode_entities(text: &str, others_as_space: bool) -> String {
     const MARKS: [&str; 16] = ["acute", "grave", "circ", "tilde", "uml", "ring", "cedil", "slash", "macr", "caron", "breve", "ogon", "dot", "strok", "midot", "dblac"];
     const LEGACY_MARKS: [&str; 8] = ["acute", "grave", "circ", "tilde", "uml", "ring", "cedil", "slash"];
     const LETTERS: [(&str, &str); 18] = [
@@ -320,7 +346,8 @@ fn decode_entities(text: &str) -> String {
         let tail = &rest[at + 1..];
         let terminated = tail.find(';').filter(|e| *e <= 12).and_then(|e| {
             let name = &tail[..e];
-            name.strip_prefix('#').map_or_else(|| named(name), number).map(|r| (r, e + 1))
+            let other = || (others_as_space && name.starts_with(|c: char| c.is_ascii_alphabetic()) && name.chars().all(|c| c.is_ascii_alphanumeric())).then(|| " ".to_string());
+            name.strip_prefix('#').map_or_else(|| named(name).or_else(other), number).map(|r| (r, e + 1))
         });
         match terminated.or_else(|| unterminated(tail)) {
             Some((r, used)) => {
@@ -398,6 +425,13 @@ fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
         format!("/// a {} part", rev("t;kortsl&ebineg")),
         format!("<p>{}</p>", rev("oivan od oedlita&tipac")),
         format!("<p>{}</p>", rev("oivan od o722#&tipac")),
+        // A separator written otherwise: a percent-encoded space and accent, a non-breaking
+        // space's entity, a line break and a tab written as escapes.
+        format!("// see {}", rev("erawtfoS02%arutappaM")),
+        format!("// see {}", rev("oivan od o3A%3C%tipac")),
+        format!("<td>{}</td>", rev("oivan;psbn&od;psbn&o;edlita&tipac")),
+        format!("const L: &str = \"{}\";", rev("elareneGn\\moB")),
+        format!("const L: &str = \"{}\";", rev("erawtfoSt\\arutappaM")),
     ];
     for s in &samples {
         assert_eq!(mentions(s).len(), 1, "{s}: {:?}", mentions(s));
@@ -472,6 +506,11 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
         let bare: String = std::fs::read_to_string(webdir.join(s)).unwrap().chars().filter(|c| !c.is_whitespace()).collect();
         assert!(!bare.contains("import.meta") && !bare.contains("process.env"), "{s} reads the build's environment");
     }
+    // The source page word for word as well: vite moves an inline script into the bundle and fills
+    // a `%NAME%` placeholder from the environment before it writes the built page, which would show
+    // neither.
+    let source_page = std::fs::read_to_string(webdir.join("index.html")).unwrap().replace("\r\n", "\n");
+    assert_eq!(source_page, SOURCE_PAGE, "web/index.html is not the page this test holds");
     // The bundle's names are the ones the host serves, and it loads no other file: the page as
     // built word for word (its two references however quoted, no `srcset`, nothing else), the
     // stylesheet's every `url()` and `image-set()` a fragment or a data URI, no `@import` and no
@@ -532,6 +571,21 @@ fn copy_tree(from: &Path, to: &Path, rel: &[String]) {
         std::fs::copy(from.join(r), dst).unwrap();
     }
 }
+
+/// The page's source, word for word (`web/index.html`): its one module and nothing else.
+const SOURCE_PAGE: &str = r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Supervisão</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
+"#;
 
 /// The page as built, word for word (`web/dist/index.html`): its two references and nothing else.
 const INDEX_PAGE: &str = r#"<!doctype html>
