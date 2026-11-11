@@ -6,6 +6,7 @@
 
 mod common;
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use chrono::NaiveDate;
@@ -76,6 +77,9 @@ fn the_three_protocols_run_into_one_store_alike() {
     let t = live.series.read().unwrap()["log|temp"].clone();
     assert_eq!((t.ty, t.count, t.keys, t.keys_capped, t.last_index_ms), (SeriesType::Float, 20, 3, false, stamp_ms(19)));
     assert_eq!(t.last_value.parse::<f64>().ok(), Some(temp(19)));
+    // A text series counts its samples as a numeric one does, though no frame carries them.
+    let st = live.series.read().unwrap()["log|state"].clone();
+    assert_eq!((st.ty, st.count, st.last_index_ms, st.last_value.as_str()), (SeriesType::Text, 20, stamp_ms(19), "run"));
     assert!(wait(Duration::from_secs(5), || {
         let h = live.health.read().unwrap();
         ["log", "plc", "sorter"].iter().all(|id| h.get(*id).is_some_and(|s| s.state == HealthState::Live))
@@ -95,28 +99,27 @@ fn the_three_protocols_run_into_one_store_alike() {
     );
 
     // The frames: every numeric sample since the last frame, for whoever listens, each with the
-    // series' count with it (the cache's count once it holds the sample: 20 before these).
+    // series' count with it (the cache's count once it holds the sample: 20 before these). A line
+    // no rule reads among the ten appended moves no series, so the temperature's counts are the
+    // series', not the lines read.
     let mut rx = live.subscribe();
-    write_lines(&log, 20..30);
-    let mut got: Vec<(i64, f64, u64)> = Vec::new();
+    write_lines(&log, 20..25);
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+        f.write_all(b"2026-07-19 10:00:24 a line no rule reads\n").unwrap();
+    }
+    write_lines(&log, 25..30);
+    let log_temp = ("log".to_string(), "temp".to_string());
+    let mut framed: BTreeMap<(String, String), Vec<(i64, f64, u64)>> = BTreeMap::new();
     let deadline = Instant::now() + Duration::from_secs(10);
-    while got.len() < 10 && Instant::now() < deadline {
-        match rx.try_recv() {
-            Ok(frame) => {
-                let v: serde_json::Value = serde_json::from_str(&frame).unwrap();
-                assert_eq!(v["type"], "data");
-                for s in v["samples"].as_array().unwrap() {
-                    if s["src"] == "log" && s["ser"] == "temp" {
-                        got.push((s["ms"].as_i64().unwrap(), s["v"].as_f64().unwrap(), s["n"].as_u64().unwrap()));
-                    }
-                }
-            }
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(20)),
-            Err(e) => panic!("{e}"),
+    while (framed.get(&log_temp).map_or(0, Vec::len) < 10 || rows(&live, "readings") < 30) && Instant::now() < deadline {
+        if !drain(&mut rx, &mut framed) {
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
-    assert_eq!(got, (20..30).map(|i| (stamp_ms(i), temp(i), i as u64 + 1)).collect::<Vec<_>>());
-    assert!(wait(Duration::from_secs(5), || rows(&live, "readings") == 30));
+    assert_eq!(framed.get(&log_temp), Some(&(20..30).map(|i| (stamp_ms(i), temp(i), i as u64 + 1)).collect::<Vec<_>>()));
+    assert_eq!(rows(&live, "readings"), 30);
 
     // A stop ends every worker cleanly; the machine sees its peer go.
     let ended = session.stop();
@@ -125,6 +128,43 @@ fn the_three_protocols_run_into_one_store_alike() {
         r.unwrap_or_else(|e| panic!("{id}: {e}"));
     }
     assert!(wait(Duration::from_secs(5), || bench.channel("machine").unwrap().status().peers.is_empty()));
+
+    // After the stop's last refresh: every series framed, from every source, counts one up from
+    // frame to frame, and its last count is the cache's; the cache holds each series' exact type,
+    // count, keys, last index and last value as the store holds them; the text series counted 30.
+    while drain(&mut rx, &mut framed) {}
+    let cache = live.series.read().unwrap();
+    assert!(framed.keys().any(|(src, _)| src == "plc"), "{:?}", framed.keys());
+    for ((src, ser), got) in &framed {
+        let n: Vec<u64> = got.iter().map(|g| g.2).collect();
+        assert!(n.windows(2).all(|w| w[1] == w[0] + 1), "{src}|{ser}: {n:?}");
+        assert_eq!(n.last().copied(), Some(cache[&format!("{src}|{ser}")].count), "{src}|{ser}");
+    }
+    for (series, ty, keys) in [("log|temp", SeriesType::Float, 3), ("plc|speed", SeriesType::Float, 0), ("plc|word", SeriesType::Int, 0), ("sorter|item", SeriesType::Int, 0)] {
+        let (src, ser) = series.split_once('|').unwrap();
+        let stored = live.store.query_numeric(&SeriesRef::new(src, ser), None, i64::MIN, i64::MAX);
+        let (e, last) = (&cache[series], stored.last().unwrap());
+        assert_eq!((e.ty, e.count, e.keys, e.last_index_ms, e.last_value.parse::<f64>().ok()), (ty, stored.len() as u64, keys, last.index_ms, Some(last.value)), "{series}");
+    }
+    let st = &cache["log|state"];
+    assert_eq!((st.ty, st.count, st.last_index_ms, st.last_value.as_str()), (SeriesType::Text, 30, stamp_ms(29), "run"));
+}
+
+/// Read one frame, if one waits, into each series' samples as framed: stamp, value and count.
+fn drain(rx: &mut tokio::sync::broadcast::Receiver<std::sync::Arc<str>>, framed: &mut BTreeMap<(String, String), Vec<(i64, f64, u64)>>) -> bool {
+    match rx.try_recv() {
+        Ok(frame) => {
+            let v: serde_json::Value = serde_json::from_str(&frame).unwrap();
+            assert_eq!(v["type"], "data");
+            for s in v["samples"].as_array().unwrap() {
+                let key = (s["src"].as_str().unwrap().to_string(), s["ser"].as_str().unwrap().to_string());
+                framed.entry(key).or_default().push((s["ms"].as_i64().unwrap(), s["v"].as_f64().unwrap(), s["n"].as_u64().unwrap()));
+            }
+            true
+        }
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty) => false,
+        Err(e) => panic!("{e}"),
+    }
 }
 
 #[test]
