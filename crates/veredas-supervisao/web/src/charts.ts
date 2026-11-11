@@ -25,6 +25,9 @@ function extent(vals: number[], pad = 0.08): [number, number] {
 /// A small line, no axes.
 export function sparkline(pts: Pt[], w = 220, hgt = 32, cls = "spark"): SVGElement {
   const svg = s("svg", { viewBox: `0 0 ${w} ${hgt}`, width: "100%", height: hgt, preserveAspectRatio: "none", class: cls });
+  // A window of one point has no line to draw: the point itself, in the middle (its time the
+  // window's only one, its value the middle of its padded extent), as the trend draws one.
+  if (pts.length === 1) svg.append(s("circle", { cx: (w / 2).toFixed(1), cy: (hgt / 2).toFixed(1), r: 2, class: "point" }));
   if (pts.length < 2) return svg;
   const x = scale(pts[0][0], pts[pts.length - 1][0], 1, w - 1);
   const [lo, hi] = extent(pts.map((p) => p[1]));

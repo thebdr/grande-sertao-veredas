@@ -105,6 +105,12 @@ id = "dense"
 label = "Dense"
 value = { source = "sorter", series = "dv" }
 
+[[object]]
+id = "off"
+label = "Off"
+value = { source = "sorter", series = "travel" }
+states = [ { above = 0, state = "disabled", word = "off" } ]
+
 [[dashboard]]
 name = "Numbers"
 columns = 4
@@ -215,6 +221,50 @@ fn panel(d: &Value, i: usize) -> &Value {
     &d["panels"][i]["data"]
 }
 
+/// The binding's aggregate words with their kinds, from the crate's own enum: an aggregate added
+/// there stops this match compiling until it is listed.
+fn every_aggregate() -> Vec<(&'static str, Aggregate)> {
+    let all = [("mean", Aggregate::Mean), ("sum", Aggregate::Sum), ("count", Aggregate::Count), ("min", Aggregate::Min), ("max", Aggregate::Max), ("last", Aggregate::Last)];
+    for (_, a) in all {
+        match a {
+            Aggregate::Mean | Aggregate::Sum | Aggregate::Count | Aggregate::Min | Aggregate::Max | Aggregate::Last => {}
+        }
+    }
+    all.to_vec()
+}
+
+/// The vocabulary's states, from the crate's own enum, likewise.
+fn every_state() -> Vec<&'static str> {
+    use veredas_supervisao::state::StateClass as S;
+    let all = [S::Normal, S::Near, S::Warn, S::Alarm, S::Disabled, S::Stale];
+    for s in all {
+        match s {
+            S::Normal | S::Near | S::Warn | S::Alarm | S::Disabled | S::Stale => {}
+        }
+    }
+    all.iter().map(|s| s.name()).collect()
+}
+
+/// A second dashboard writing what the first leaves to its defaults: a bars panel per aggregate
+/// word, and on every kind that takes one a window, a bucket or a limit other than its default; a
+/// grid with an object in every state.
+fn keys_dashboard() -> String {
+    let mut out = String::from("\n[[dashboard]]\nname = \"Keys\"\ncolumns = 4\n");
+    for (word, _) in every_aggregate() {
+        out.push_str(&format!("\n[[dashboard.panel]]\nkind = \"bars\"\nobject = \"travel\"\naggregate = \"{word}\"\ntitle = \"{word}\"\n"));
+    }
+    out.push_str(
+        "\n[[dashboard.panel]]\nkind = \"trend\"\nobject = \"rate\"\nminutes = 20\n\
+         \n[[dashboard.panel]]\nkind = \"table\"\ntable = \"outlets\"\nlimit = 2\ncolumns = [ { name = \"outlet\" }, { name = \"travel\", decimals = 1 } ]\nsort = { column = \"travel\", descending = true }\n\
+         \n[[dashboard.panel]]\nkind = \"timeline\"\nobjects = [\"line\"]\nminutes = 20\n\
+         \n[[dashboard.panel]]\nkind = \"value\"\nobject = \"rate\"\nminutes = 10\n\
+         \n[[dashboard.panel]]\nkind = \"cells\"\ntable = \"sorts\"\nkey = \"outlet\"\nvalue = \"travel\"\nspread = 5\nminutes = 20\nbucket_minutes = 10\n\
+         \n[[dashboard.panel]]\nkind = \"grid\"\nobjects = [\"outlet-*\", \"low-rate\", \"rate-fresh\", \"off\"]\n\
+         \n[[dashboard.panel]]\nkind = \"bars\"\nobject = \"travel\"\nminutes = 20\nbucket_minutes = 10\n",
+    );
+    out
+}
+
 #[test]
 fn every_panel_kind_is_computed_exactly_from_the_store() {
     let dir = tempfile::tempdir().unwrap();
@@ -223,7 +273,7 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     ex.project = ex.project.replace("writes_armed = false", "writes_armed = false\nidle_after_ms = 600000");
     ex.project.push_str("\n[[rule]]\nname = \"states\"\npattern = \"STATE code=(?P<code>\\\\d+)\"\nscope = \"sorter\"\ntypes = { code = \"int\" }\n");
     ex.project.push_str("\n[[rule]]\nname = \"dense\"\npattern = \"DENSE v=(?P<dv>[0-9.]+)\"\nscope = \"sorter\"\ntypes = { dv = \"float\" }\n");
-    ex.binding = BINDING.to_string();
+    ex.binding = format!("{BINDING}{}", keys_dashboard());
     let path = write_example(dir.path(), &ex);
     let log = dir.path().join("loop/sorts.log");
     std::fs::write(&log, "").unwrap();
@@ -394,6 +444,91 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let sub = t["sub"].as_str().unwrap();
     let ago: u64 = sub.strip_prefix("last value ").and_then(|r| r.strip_suffix(" s ago")).unwrap_or_else(|| panic!("{sub}")).parse().unwrap();
     assert!(ago >= 1 && ago <= appended.elapsed().as_secs(), "{sub}, appended {:?} ago", appended.elapsed());
+    // The second dashboard, every key written other than its default and read through the route:
+    // a bars panel per aggregate word, each bucket of five minutes holding the travel's samples
+    // aggregated as its word says (an empty one counted 0, else empty).
+    let (_, k) = get(addr, &format!("/s/loop/dashboard/1?to={to}"));
+    assert_eq!((k["name"].clone(), k["panels"].as_array().unwrap().len()), (json!("Keys"), 13));
+    let in_bucket: [&[f64]; 7] = [&[10.0, 12.0, 11.0], &[14.0], &[20.0, 13.0], &[], &[16.0], &[12.0], &[21.0]];
+    for (i, (word, agg)) in every_aggregate().into_iter().enumerate() {
+        let b = &panel(&k, i)["buckets"];
+        let got: Vec<(Value, Value)> = b.as_array().unwrap().iter().skip(6).map(|bk| (bk["value"].clone(), bk["n"].clone())).collect();
+        let want: Vec<(Value, Value)> = in_bucket
+            .iter()
+            .map(|vs| {
+                let v = match (agg, vs.is_empty()) {
+                    (Aggregate::Count, _) => Some(vs.len() as f64),
+                    (_, true) => None,
+                    (Aggregate::Mean, _) => Some(vs.iter().sum::<f64>() / vs.len() as f64),
+                    (Aggregate::Sum, _) => Some(vs.iter().sum()),
+                    (Aggregate::Min, _) => Some(vs.iter().cloned().fold(f64::MAX, f64::min)),
+                    (Aggregate::Max, _) => Some(vs.iter().cloned().fold(f64::MIN, f64::max)),
+                    (Aggregate::Last, _) => vs.last().copied(),
+                };
+                (json!(v), json!(vs.len()))
+            })
+            .collect();
+        assert_eq!(got, want, "{word}");
+        assert_eq!(k["panels"][i]["title"], json!(word));
+    }
+    // A trend of twenty minutes: the rate's points from at(11) on.
+    let tr = panel(&k, 6);
+    assert_eq!((tr["from"].clone(), tr["total"].clone()), (json!(to - 20 * MIN), json!(4)));
+    assert_eq!(tr["points"].as_array().unwrap().iter().map(|p| p[1].clone()).collect::<Vec<_>>(), [json!(99.0), json!(98.0), json!(97.5), json!(99.2)]);
+    // A table of two rows (the view keeps no order, so which two the limit reads is the store's),
+    // sorted between them by travel, descending.
+    let tv: Vec<f64> = panel(&k, 7)["rows"].as_array().unwrap().iter().map(|r| r[1]["value"].as_f64().unwrap()).collect();
+    assert!(tv.len() == 2 && tv[0] >= tv[1], "{tv:?}");
+    // A timeline of twenty minutes: the line stopped at its start (since at(6)), then in fault, then running.
+    assert_eq!(panel(&k, 8)["rows"][0]["segments"].as_array().unwrap().iter().map(|g| (g["from"].clone(), g["state"].clone())).collect::<Vec<_>>(), [
+        (json!(to - 20 * MIN), json!("warn")),
+        (json!(at(14.0)), json!("alarm")),
+        (json!(at(29.0)), json!("normal")),
+    ]);
+    // A tile's sparkline of ten minutes: the rate's last two.
+    let tile = panel(&k, 9);
+    assert_eq!((tile["from"].clone(), tile["spark"].as_array().unwrap().iter().map(|p| p[1].clone()).collect::<Vec<_>>()), (json!(to - 10 * MIN), vec![json!(97.5), json!(99.2)]));
+    // Charts in cells over twenty minutes, the sparkline by ten: per outlet its sorts from at(11).
+    let cl = panel(&k, 10);
+    let ten = 10 * MIN;
+    let rows: Vec<(Value, Value, Value)> = cl["rows"].as_array().unwrap().iter().map(|r| (r["key"].clone(), r["n"].clone(), r["spark"].clone())).collect();
+    let spark = |pts: &[(f64, f64)]| {
+        let mut per: std::collections::BTreeMap<i64, Vec<f64>> = std::collections::BTreeMap::new();
+        for (m, v) in pts {
+            per.entry(at(*m).div_euclid(ten) * ten).or_default().push(*v);
+        }
+        json!(per.into_iter().map(|(s, mut vs)| { vs.sort_by(|a, b| a.partial_cmp(b).unwrap()); json!([s, veredas_supervisao::panel::median(&vs)]) }).collect::<Vec<_>>())
+    };
+    assert_eq!(cl["from"], json!(to - 20 * MIN));
+    assert_eq!(rows, [
+        (json!("1"), json!(2), spark(&[(14.0, 13.0), (29.0, 12.0)])),
+        (json!("2"), json!(1), spark(&[(20.0, 16.0)])),
+        (json!("3"), json!(1), spark(&[(30.5, 21.0)])),
+    ]);
+    // A grid with an object in every state: every one but the normal counted not normal.
+    let gr = panel(&k, 11);
+    let states: Vec<Value> = gr["cells"].as_array().unwrap().iter().map(|c| c["state"].clone()).collect();
+    assert_eq!(states, ["normal", "near", "warn", "alarm", "stale", "disabled"].map(|s| json!(s)));
+    let mut seen: Vec<&str> = states.iter().map(|s| s.as_str().unwrap()).collect();
+    seen.sort();
+    let mut all = every_state();
+    all.sort();
+    assert_eq!(seen, all, "every state of the vocabulary in the grid");
+    assert_eq!(gr["not_normal"], json!(5));
+    // Bars of twenty minutes in buckets of ten on the clock: each bucket ten minutes wide, the
+    // window's start inside the first, its end inside the last, each the mean of its samples.
+    let bars = panel(&k, 12)["buckets"].as_array().unwrap().clone();
+    assert!(bars.iter().all(|b| b["end"].as_i64().unwrap() - b["start"].as_i64().unwrap() == ten), "{bars:?}");
+    assert!(bars[0]["start"].as_i64().unwrap() <= to - 20 * MIN && to - 20 * MIN < bars[0]["end"].as_i64().unwrap());
+    assert!(bars.last().unwrap()["start"].as_i64().unwrap() < to && to <= bars.last().unwrap()["end"].as_i64().unwrap());
+    let samples = [(0.0, 10.0), (2.0, 12.0), (4.0, 11.0), (6.0, 14.0), (10.0, 20.0), (14.0, 13.0), (20.0, 16.0), (29.0, 12.0), (30.5, 21.0)];
+    for b in &bars {
+        let (s0, s1) = (b["start"].as_i64().unwrap(), b["end"].as_i64().unwrap());
+        let vs: Vec<f64> = samples.iter().filter(|(m, _)| (s0..s1).contains(&at(*m))).map(|(_, v)| *v).collect();
+        let want = if vs.is_empty() { Value::Null } else { json!(vs.iter().sum::<f64>() / vs.len() as f64) };
+        assert_eq!((b["value"].clone(), b["n"].clone()), (want, json!(vs.len())), "{b}");
+    }
+
     // Other right edges, no new data: each window keeps what lies in it and nothing else.
     let late = at(67.0);
     let (_, d) = get(addr, &format!("/s/loop/dashboard/0?to={late}"));
@@ -496,9 +631,41 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     assert_eq!(drawn[6]["rows"].as_array().unwrap().len(), 2, "two rows on the timeline");
     assert_eq!((drawn[0]["big"].clone(), drawn[0]["box"].clone(), drawn[0]["badge"].clone()), (json!("99.2%"), json!("st-box-normal"), Value::Null));
     assert_eq!((drawn[2]["box"].clone(), drawn[2]["badge"].clone()), (json!("st-box-alarm"), json!("! UNDER 99.5 %")));
-    assert_eq!(drawn[7]["cells"], json!([["Outlet 1", "35", "cell st-box-normal"], ["Outlet 2", "85", "cell st-box-near"], ["Outlet 3", "full", "cell st-box-warn"]]));
+    assert_eq!(drawn[7]["cells"], json!([["Outlet 1", "35", "cell st-box-normal", "cell-v mono st-text-normal"], ["Outlet 2", "85", "cell st-box-near", "cell-v mono st-text-near"], ["Outlet 3", "full", "cell st-box-warn", "cell-v mono st-text-warn"]]));
     assert_eq!(drawn[9]["rows"][0], json!([["3", "mono", null], ["2", "mono", "width:50.0%"], ["■ slow", "mono st-text-warn", null]]), "sorted by travel, descending");
     assert_eq!(drawn[11]["error"], json!("`outlets` has no column `nothing` (its columns: outlet, sorted, travel)"));
+    // The second dashboard (every key written, every aggregate, a grid in every state) and then a
+    // probe built from the first's panels: every state of the vocabulary on every surface (a tile,
+    // its badge, sub-line and sparkline; a grid cell and its value; a level's fill and figure; a
+    // timeline's run and its word; a table's word) and windows of one point and of none (a tile's
+    // sparkline, a trend, a cell's sparkline), handed to the page's own fetch. Each drawn as the
+    // page received it.
+    let drawn_as = |page: &mut Browser, name: &str, hash: &str, probe: Option<&Value>| {
+        if let Some(p) = probe {
+            page.eval(&format!("window.__probe = {p}; true"));
+        }
+        page.eval(&format!("location.hash = '{hash}'; true"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let v = page.eval(DRAWN_PANELS);
+            if v["dash"]["name"] == json!(name) {
+                let want = expected_panels(&v["dash"]);
+                if close(&v["drawn"], &json!(want)) {
+                    return v;
+                }
+                assert!(std::time::Instant::now() < deadline, "{name}: never drawn as received:\n drawn {:#}\n want {:#}", v["drawn"], json!(want));
+            }
+            assert!(std::time::Instant::now() < deadline, "{name} never fetched");
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    };
+    page.eval("location.hash = 'layout'; true");
+    drawn_as(&mut page, "Keys", "dashboards/1", None);
+    page.eval("location.hash = 'layout'; true");
+    let probe = probe_dashboard(&dash);
+    let v = drawn_as(&mut page, "Probe", "dashboards/0", Some(&probe));
+    let kinds: Vec<&str> = v["drawn"].as_array().unwrap().iter().map(|p| p["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds.len(), every_state().len() + 9, "{kinds:?}");
     drop(page);
     host.stop();
 }
@@ -511,7 +678,9 @@ const KEEP_DASHBOARD: &str = r#"(() => {
   window.fetch = async (...a) => {
     const r = await orig(...a);
     if (!String(a[0]).includes("/dashboard/")) return r;
-    const j = await r.json();
+    let j = await r.json();
+    // A dashboard the test hands over in place of the next one fetched (the probes).
+    if (window.__probe) { j = window.__probe; window.__probe = null; }
     for (const p of j.panels) if (p.kind === "cells" && p.data) { p.data.capped = true; p.data.read = 5; }
     window.__dash = j;
     return new Response(JSON.stringify(j), { status: r.status, headers: r.headers });
@@ -521,51 +690,80 @@ const KEEP_DASHBOARD: &str = r#"(() => {
 })()"#;
 
 /// The dashboard the page fetched last and what it drew of every panel, read in one moment: the
-/// texts and classes, and the charts' geometry (every vertex, dot, bar, run and line).
+/// texts and classes, the charts' geometry (every vertex, dot, bar, run and line) and their axes'
+/// labels, and whether every mark is shown (a box, visible, displayed through every ancestor, and
+/// painted with some alpha once every opacity is multiplied with its paint's; a mask, a filter, a
+/// font or a cover that takes no pointer is not read, the limit the clause states).
 const DRAWN_PANELS: &str = r#"(() => {
   const d = window.__dash;
   if (!d) return null;
+  const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true });
+  const alpha = (p) => { if (!p || p === "none") return 0; if (p.startsWith("url(")) return 1; ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillStyle = p; ctx.fillRect(0, 0, 1, 1); return ctx.getImageData(0, 0, 1, 1).data[3] / 255; };
+  const shown = (el) => {
+    const b = el.getBoundingClientRect();
+    if (!(b.width > 0 || b.height > 0)) return false;
+    const c = getComputedStyle(el);
+    if (c.visibility !== "visible") return false;
+    let o = 1;
+    for (let e = el; e; e = e.parentElement) { const s = getComputedStyle(e); if (s.display === "none") return false; o *= Number(s.opacity); }
+    const paint = el instanceof SVGElement
+      ? Math.max(alpha(c.fill) * Number(c.fillOpacity), parseFloat(c.strokeWidth) > 0 ? alpha(c.stroke) * Number(c.strokeOpacity) : 0)
+      : el.textContent.trim() ? alpha(c.color) : Math.max(alpha(c.backgroundColor), c.backgroundImage !== "none" ? 1 : 0, el.children.length ? 1 : 0);
+    return o * paint > 0.05;
+  };
+  const MARKS = ".big, svg path.line, svg circle.breach, svg circle.point, svg line.limit, svg rect.bar, svg text.axis, svg.statebar rect, .tl-now, .grid-cells .cell, .lv-fill, .lv-v, tbody td:not(:empty), .panel-title";
   const pts = (path) => path ? (path.getAttribute("d").match(/[ML][^ML]*/g) || []).map((s) => s.slice(1).trim().split(/\s+/).map(Number)) : [];
   const num = (el, a) => el ? Number(el.getAttribute(a)) : null;
   const txt = (el) => el ? el.textContent : null;
+  const dot = (svg) => { const c = svg ? svg.querySelector("circle.point") : null; return c ? [num(c, "cx"), num(c, "cy")] : null; };
+  const axis = (svg) => [...svg.querySelectorAll("text.axis")].map((t) => [t.textContent, num(t, "x"), num(t, "y")]);
   const drawn = [...document.querySelectorAll(".dash-grid > .panel")].map((p) => {
     const r = { kind: p.dataset.kind, title: txt(p.querySelector(".panel-title")), span: getComputedStyle(p).gridColumnStart };
     const err = p.querySelector(":scope > p.error");
     if (err) { r.error = err.textContent; return r; }
+    r.shown = [...p.querySelectorAll(MARKS)].every(shown);
     switch (r.kind) {
-      case "value":
+      case "value": {
         r.box = [...p.classList].find((c) => c.startsWith("st-box-")) ?? null;
         r.big = txt(p.querySelector(".big")); r.big_cls = p.querySelector(".big").className;
         r.badge = txt(p.querySelector(".panel-head .badge")); r.sub = txt(p.querySelector(".sub"));
-        r.spark = pts(p.querySelector("svg path.line")); break;
+        r.badge_cls = p.querySelector(".panel-head .badge")?.className ?? null; r.sub_cls = p.querySelector(".sub").className;
+        const sp = p.querySelector("svg.spark");
+        r.spark = pts(sp.querySelector("path.line")); r.spark_cls = sp.getAttribute("class"); r.spark_dot = dot(sp); break;
+      }
       case "trend": {
         const svg = p.querySelector("svg.trend");
         r.line = pts(svg.querySelector("path.line"));
+        const pt = svg.querySelector("circle.point");
+        r.point = pt ? [num(pt, "cx"), num(pt, "cy"), num(pt, "r")] : null;
         r.breaches = [...svg.querySelectorAll("circle.breach")].map((c) => [num(c, "cx"), num(c, "cy"), num(c, "r")]);
         const lim = svg.querySelector("line.limit");
         r.limit = lim ? [num(lim, "x1"), num(lim, "x2"), num(lim, "y1"), num(lim, "y2")] : null;
+        r.axis = axis(svg);
         r.right = txt(p.querySelector(".panel-bind")); break;
       }
       case "bars": {
         const svg = p.querySelector("svg.bars");
         r.bars = [...svg.querySelectorAll("rect.bar")].map((b) => [num(b, "x"), num(b, "y"), num(b, "width"), num(b, "height"), b.classList.contains("running")]);
         const tg = svg.querySelector("line.limit");
-        r.target = tg ? [num(tg, "x1"), num(tg, "x2"), num(tg, "y1"), num(tg, "y2")] : null; r.right = txt(p.querySelector(".panel-bind")); break;
+        r.target = tg ? [num(tg, "x1"), num(tg, "x2"), num(tg, "y1"), num(tg, "y2")] : null; r.right = txt(p.querySelector(".panel-bind"));
+        r.axis = axis(svg); break;
       }
       case "timeline":
         r.rows = [...p.querySelectorAll(".tl-row")].map((x) => [txt(x.querySelector(".tl-label")), txt(x.querySelector(".tl-now")), x.querySelector(".tl-now").className,
-          [...x.querySelectorAll("svg.statebar rect:not(.st-none)")].map((g) => [g.getAttribute("class"), num(g, "x"), num(g, "width"), num(g, "y"), num(g, "height")])]); break;
+          [...x.querySelectorAll("svg.statebar rect:not(.st-none)")].map((g) => [g.getAttribute("class"), num(g, "x"), num(g, "width"), num(g, "y"), num(g, "height")])]);
+        r.axis = [...p.querySelectorAll(".tl-axis span")].map(txt); break;
       case "grid":
-        r.cells = [...p.querySelectorAll(".grid-cells .cell")].map((c) => [txt(c.querySelector(".cell-id")), txt(c.querySelector(".cell-v")), c.className]);
+        r.cells = [...p.querySelectorAll(".grid-cells .cell")].map((c) => [txt(c.querySelector(".cell-id")), txt(c.querySelector(".cell-v")), c.className, c.querySelector(".cell-v").className]);
         r.right = txt(p.querySelector(".panel-bind")); break;
       case "levels":
-        r.rows = [...p.querySelectorAll(".lv-row")].map((x) => [txt(x.querySelector(".lv-label")), x.querySelector(".lv-fill").getAttribute("style"), x.querySelector(".lv-fill").className, [...x.querySelectorAll(".lv-tick")].map((t) => t.getAttribute("style")), txt(x.querySelector(".lv-v"))]); break;
+        r.rows = [...p.querySelectorAll(".lv-row")].map((x) => [txt(x.querySelector(".lv-label")), x.querySelector(".lv-fill").getAttribute("style"), x.querySelector(".lv-fill").className, [...x.querySelectorAll(".lv-tick")].map((t) => t.getAttribute("style")), txt(x.querySelector(".lv-v")), x.querySelector(".lv-v").className]); break;
       case "table":
         r.head = [...p.querySelectorAll("thead th")].map(txt);
         r.rows = [...p.querySelectorAll("tbody tr")].map((tr) => [...tr.children].map((td) => [td.textContent, td.className, td.querySelector(".inbar-fill")?.getAttribute("style") ?? null]));
         r.right = txt(p.querySelector(".panel-bind")); break;
       case "cells":
-        r.rows = [...p.querySelectorAll("tbody tr")].map((tr) => { const td = [...tr.children]; return [txt(td[0]), txt(td[1]), pts(td[2].querySelector("path.line")), pts(td[3].querySelector("path.line")), txt(td[4]), txt(td[5])]; });
+        r.rows = [...p.querySelectorAll("tbody tr")].map((tr) => { const td = [...tr.children]; return [txt(td[0]), txt(td[1]), pts(td[2].querySelector("path.line")), pts(td[3].querySelector("path.line")), txt(td[4]), txt(td[5]), dot(td[2].querySelector("svg"))]; });
         r.right = txt(p.querySelector(".panel-bind")); break;
     }
     return r;
@@ -617,6 +815,70 @@ fn spark_at(pts: &[(f64, f64)], w: f64, h: f64) -> Vec<Value> {
     pts.iter().map(|(t, v)| json!([x(*t), y(*v)])).collect()
 }
 
+/// A dashboard built from the first one's panels as the page received it: a value tile in every
+/// state of the vocabulary, tiles with a sparkline of one point and of none, trends of one point
+/// and of none, a grid, levels, a timeline (one run in every state, each row's word in one) and a
+/// table (a word in every state) each across every state, and a cells panel whose first row's
+/// sparkline has one point.
+fn probe_dashboard(d: &Value) -> Value {
+    let states = every_state();
+    let p = |i: usize| d["panels"][i].clone();
+    let word = |s: &str| json!(format!("{s} word"));
+    let mut panels = Vec::new();
+    for s in &states {
+        let mut t = p(0);
+        t["data"]["state"] = json!(s);
+        t["data"]["word"] = word(s);
+        t["data"]["mark"] = json!("!");
+        t["data"]["sub"] = json!(format!("{s} sub"));
+        panels.push(t);
+    }
+    let mut one = p(0);
+    one["data"]["spark"] = json!([one["data"]["spark"][0].clone()]);
+    panels.push(one);
+    let mut none = p(0);
+    none["data"]["spark"] = json!([]);
+    panels.push(none);
+    let mut one = p(4);
+    one["data"]["points"] = json!([one["data"]["points"][0].clone()]);
+    one["data"]["breaches"] = json!([]);
+    panels.push(one);
+    let mut none = p(4);
+    none["data"]["points"] = json!([]);
+    none["data"]["breaches"] = json!([]);
+    none["data"]["total"] = json!(0);
+    panels.push(none);
+    let mut g = p(7);
+    let c0 = g["data"]["cells"][0].clone();
+    g["data"]["cells"] = json!(states.iter().map(|s| { let mut c = c0.clone(); c["state"] = json!(s); c["word"] = word(s); c["label"] = json!(format!("Cell {s}")); c }).collect::<Vec<_>>());
+    g["data"]["not_normal"] = json!(states.len() - 1);
+    panels.push(g);
+    let mut l = p(8);
+    let r0 = l["data"]["rows"][0].clone();
+    l["data"]["rows"] = json!(states.iter().map(|s| { let mut r = r0.clone(); r["state"] = json!(s); r["word"] = word(s); r }).collect::<Vec<_>>());
+    panels.push(l);
+    let mut tl = p(6);
+    let (from, to) = (tl["data"]["from"].as_i64().unwrap(), tl["data"]["to"].as_i64().unwrap());
+    let step = (to - from) / states.len() as i64;
+    let mut row = tl["data"]["rows"][0].clone();
+    row["segments"] = json!(states.iter().enumerate().map(|(i, s)| json!({ "from": from + i as i64 * step, "to": from + (i as i64 + 1) * step, "state": s, "mark": "!", "word": word(s) })).collect::<Vec<_>>());
+    tl["data"]["rows"] = json!(states.iter().map(|s| { let mut r = row.clone(); r["now"]["state"] = json!(s); r["now"]["word"] = word(s); r["now"]["mark"] = json!("!"); r }).collect::<Vec<_>>());
+    panels.push(tl);
+    let mut tb = p(9);
+    let row0 = tb["data"]["rows"][0].clone();
+    tb["data"]["rows"] = json!(states.iter().map(|s| { let mut r = row0.clone(); r[2]["state"] = json!(s); r[2]["word"] = word(s); r[2]["mark"] = json!("!"); r }).collect::<Vec<_>>());
+    panels.push(tb);
+    let mut cl = p(10);
+    cl["data"]["rows"][0]["spark"] = json!([cl["data"]["rows"][0]["spark"][0].clone()]);
+    panels.push(cl);
+    json!({ "name": "Probe", "columns": d["columns"], "to": d["to"], "panels": panels })
+}
+
+/// A time on the store's clock as the page writes it (`clock(t, false)`): hours and minutes.
+fn clock(t: f64) -> String {
+    chrono::DateTime::from_timestamp_millis(t as i64).unwrap().format("%H:%M").to_string()
+}
+
 fn pairs_of(v: &Value) -> Vec<(f64, f64)> {
     v.as_array().map(|a| a.iter().filter(|p| !p[1].is_null()).map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect()).unwrap_or_default()
 }
@@ -637,6 +899,7 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                 return r;
             }
             let x = &p["data"];
+            r["shown"] = json!(true);
             match p["kind"].as_str().unwrap() {
                 "value" => {
                     r["box"] = json!(format!("st-box-{}", s(&x["state"])));
@@ -645,6 +908,13 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                     r["badge"] = if x["state"] == "normal" { Value::Null } else { json!(format!("{} {}", s(&x["mark"]), s(&x["word"]).to_uppercase())) };
                     r["sub"] = json!(s(&x["sub"]));
                     r["spark"] = json!(spark_at(&pairs_of(&x["spark"]), 260.0, 30.0));
+                    // The state on every part of the tile: its badge, its sub-line and its sparkline.
+                    let st = s(&x["state"]);
+                    r["badge_cls"] = if st == "normal" { Value::Null } else { json!(format!("badge st-{st}")) };
+                    r["sub_cls"] = json!(format!("sub st-text-{st}"));
+                    r["spark_cls"] = json!(format!("spark st-line-{st}"));
+                    // A window of one point a dot in the middle, as the trend draws one.
+                    r["spark_dot"] = if pairs_of(&x["spark"]).len() == 1 { json!([130.0, 15.0]) } else { Value::Null };
                 }
                 "trend" => {
                     // 600 by 200, the plot from x 44 to 590 and from y 178 up to 10; the values'
@@ -659,6 +929,13 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                     let px = scale(x["from"].as_f64().unwrap(), x["to"].as_f64().unwrap(), 44.0, 590.0);
                     let py = scale(lo, hi, 178.0, 10.0);
                     r["line"] = json!(if points.len() > 1 { points.iter().map(|(t, v)| json!([px(*t), py(*v)])).collect::<Vec<_>>() } else { Vec::new() });
+                    r["point"] = if points.len() == 1 { json!([px(points[0].0), py(points[0].1), 3.0]) } else { Value::Null };
+                    // Its axes: four values a third apart, each beside its height, and five times a
+                    // quarter apart on the store's clock, the last "now".
+                    let (from, to) = (x["from"].as_f64().unwrap(), x["to"].as_f64().unwrap());
+                    let mut axis: Vec<Value> = (0..=3).map(|i| { let v = lo + (hi - lo) * i as f64 / 3.0; json!([num(&json!(v), 1), 38.0, py(v) + 4.0]) }).collect();
+                    axis.extend((0..=4).map(|i| { let t = from + (to - from) * i as f64 / 4.0; json!([if i == 4 { "now".to_string() } else { clock(t) }, px(t), 194.0]) }));
+                    r["axis"] = json!(axis);
                     // A breach a dot of radius 3; the limit a line across the plot at its value.
                     r["breaches"] = json!(pairs_of(&x["breaches"]).iter().map(|(t, v)| json!([px(*t), py(*v), 3.0])).collect::<Vec<_>>());
                     r["limit"] = json!(limit.map(|l| json!([44.0, 590.0, py(l), py(l)])));
@@ -688,6 +965,19 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                         json!([44.0 + i as f64 * bw + 2.0, py(v), bw - 4.0, (py(0.0) - py(v)).max(0.0), b["running"]])
                     }).collect::<Vec<_>>());
                     r["target"] = json!(target.map(|t| json!([44.0, 590.0, py(t), py(t)])));
+                    // Its axis: the top value and 0, a bucket's start on the store's clock every
+                    // sixth of them, and the target's own words.
+                    let mut axis = vec![json!([num(&json!(hi), 1), 38.0, py(hi) + 10.0]), json!(["0", 38.0, 158.0])];
+                    let every = (buckets.len() as f64 / 6.0).ceil() as usize;
+                    for (i, b) in buckets.iter().enumerate() {
+                        if every > 0 && i % every == 0 {
+                            axis.push(json!([clock(b["start"].as_f64().unwrap()), 44.0 + i as f64 * bw + 2.0, 174.0]));
+                        }
+                    }
+                    if let Some(t) = target {
+                        axis.push(json!([format!("target {}", num(&json!(t), 2)), 590.0, py(t) - 4.0]));
+                    }
+                    r["axis"] = json!(axis);
                     r["right"] = if x["target"].is_null() { Value::Null } else { json!(format!("target {}{unit}", num(&x["target"], 2))) };
                 }
                 "timeline" => {
@@ -700,11 +990,12 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                         }).collect();
                         json!([row["label"], format!("{} {}", s(&row["now"]["mark"]), s(&row["now"]["word"])), format!("tl-now st-text-{}", s(&row["now"]["state"])), segs])
                     }).collect::<Vec<_>>());
+                    r["axis"] = json!([clock(x["from"].as_f64().unwrap()), "now"]);
                 }
                 "grid" => {
                     r["cells"] = json!(x["cells"].as_array().unwrap().iter().map(|c| {
                         let v = if quiet(&c["state"]) { c["text"].as_str().unwrap_or("\u{2014}").to_string() } else { s(&c["word"]) };
-                        json!([c["label"], v, format!("cell st-box-{}", s(&c["state"]))])
+                        json!([c["label"], v, format!("cell st-box-{}", s(&c["state"])), format!("cell-v mono st-text-{}", s(&c["state"]))])
                     }).collect::<Vec<_>>());
                     r["right"] = json!(format!("{} · {} not normal", x["cells"].as_array().unwrap().len(), x["not_normal"]));
                 }
@@ -713,7 +1004,7 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                         let unit = if s(&row["unit"]).is_empty() { String::new() } else { format!(" {}", s(&row["unit"])) };
                         let v = if quiet(&row["state"]) { format!("{}{unit}", row["text"].as_str().unwrap_or("\u{2014}")) } else { s(&row["word"]) };
                         let ticks: Vec<String> = row["ticks"].as_array().unwrap().iter().map(|t| format!("left:{:.1}%", t.as_f64().unwrap() * 100.0)).collect();
-                        json!([row["label"], format!("width:{:.1}%", row["fraction"].as_f64().unwrap_or(0.0) * 100.0), format!("lv-fill st-fill-{}", s(&row["state"])), ticks, v])
+                        json!([row["label"], format!("width:{:.1}%", row["fraction"].as_f64().unwrap_or(0.0) * 100.0), format!("lv-fill st-fill-{}", s(&row["state"])), ticks, v, format!("lv-v mono st-text-{}", s(&row["state"]))])
                     }).collect::<Vec<_>>());
                 }
                 "table" => {
@@ -738,7 +1029,8 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                         let bw = 160.0 / bins.len() as f64;
                         let py = scale(0.0, bins.iter().cloned().fold(1.0, f64::max), 25.0, 2.0);
                         let dist: Vec<Value> = bins.iter().enumerate().map(|(i, c)| json!([i as f64 * bw + bw / 2.0, py(*c)])).collect();
-                        json!([row["key"], num(&row["median"], 1), spark_at(&pairs_of(&row["spark"]), 120.0, 24.0), dist, num(&row["sigma"], 1), row["n"].to_string()])
+                        let dot = if pairs_of(&row["spark"]).len() == 1 { json!([60.0, 12.0]) } else { Value::Null };
+                        json!([row["key"], num(&row["median"], 1), spark_at(&pairs_of(&row["spark"]), 120.0, 24.0), dist, num(&row["sigma"], 1), row["n"].to_string(), dot])
                     }).collect::<Vec<_>>());
                     let minutes = ((x["to"].as_f64().unwrap() - x["from"].as_f64().unwrap()) / 60_000.0).round();
                     let cap = if x["capped"] == json!(true) { format!(" · newest {} of {} rows", x["read"], x["total"]) } else { String::new() };

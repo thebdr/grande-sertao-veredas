@@ -152,6 +152,10 @@ svg.spark .line, .chart .line, .dist .line { fill: none; stroke: var(--accent-ti
 svg.spark.st-line-warn .line { stroke: var(--warn); }
 svg.spark.st-line-alarm .line { stroke: var(--danger); }
 svg.spark.st-line-stale .line { stroke: var(--muted); }
+svg.spark .point { fill: var(--accent-tint); }
+svg.spark.st-line-warn .point { fill: var(--warn); }
+svg.spark.st-line-alarm .point { fill: var(--danger); }
+svg.spark.st-line-stale .point { fill: var(--muted); }
 .chart { display: block; }
 .chart .grid { stroke: var(--hair); }
 .chart .axis { fill: var(--label); font: 10px var(--mono); }
