@@ -135,15 +135,18 @@ fn mentions(text: &str) -> Vec<String> {
             hits.push(h);
         }
     };
-    // Each line read twice: its HTML entities decoded; then also its markup tags as spaces (a
-    // converter's runs, a label's lines, a break), its code escapes, an entity naming no letter
-    // (`&nbsp;`) as a space and its percent-encoded bytes (`%20`, `%C3%A3`, as UTF-8). A name or a
-    // section sign in either reading is a hit; the first keeps the letters the second reads
-    // otherwise (a pattern's `\b` before hex letters, an `&` that only looks like an entity, a
-    // generic's angle brackets).
-    let readings: [fn(&str) -> String; 2] = [|l: &str| decode_entities(l, false), |l: &str| decode_percent(&decode_escapes(&untagged(&decode_entities(l, true))))];
-    for read in readings {
-        let lines: Vec<String> = text.lines().map(read).collect();
+    // The text read twice: each line with its HTML entities decoded; then each line with its
+    // entities (`&lt;`, `&gt;` and `&amp;` as their characters, any other naming no letter, as
+    // `&nbsp;`, a space), its code escapes and its percent-encoded bytes (`%20`, `%C3%A3`, as
+    // UTF-8) decoded, and only then the whole text's markup tags read as spaces, a tag across lines
+    // keeping its lines (an editor's attribute per line, a converter's runs, a label's lines, a
+    // break written as `&lt;br&gt;` or `<br>`). A name or a section sign in either
+    // reading is a hit; the first keeps the letters the second reads otherwise (a pattern's `\b`
+    // before hex letters, an `&` that only looks like an entity, a generic's angle brackets).
+    let first: Vec<String> = text.lines().map(|l| decode_entities(l, false)).collect();
+    let decoded = text.lines().map(|l| decode_percent(&decode_escapes(&decode_entities(l, true)))).collect::<Vec<_>>().join("\n");
+    let second: Vec<String> = untagged(&decoded).split('\n').map(String::from).collect();
+    for lines in [first, second] {
         let mut flat = Vec::new();
         let mut line_of = Vec::new();
         for (n, line) in lines.iter().enumerate() {
@@ -218,18 +221,21 @@ fn decode_escapes(line: &str) -> String {
     out
 }
 
-/// A line with every markup tag (`<` then a letter, `/` or `!`, up to the next `>` with no `<`
-/// between) read as a space: `<span class="c2">`, `<tspan x="0" dy="1.2em">`, `<br>`, `</b>`.
-fn untagged(line: &str) -> String {
+/// A text with every markup tag (`<` then a letter, `/` or `!`, up to the next `>` with no `<`
+/// between, within 2 000 bytes) read as a space, a tag across lines keeping its line breaks:
+/// `<span class="c2">`, `<tspan x="0" dy="1.2em">`, `<br>`, `</b>`, Inkscape's `<tspan` with an
+/// attribute per line.
+fn untagged(text: &str) -> String {
     let mut out = String::new();
-    let mut rest = line;
+    let mut rest = text;
     while let Some(at) = rest.find('<') {
         out.push_str(&rest[..at]);
         let tail = &rest[at + 1..];
         let opens = tail.starts_with(|c: char| c.is_ascii_alphabetic() || c == '/' || c == '!');
-        match tail.find(['<', '>']).filter(|i| opens && tail[*i..].starts_with('>')) {
+        match tail.find(['<', '>']).filter(|i| opens && *i <= 2_000 && tail[*i..].starts_with('>')) {
             Some(end) => {
                 out.push(' ');
+                out.push_str(&"\n".repeat(tail[..end].matches('\n').count()));
                 rest = &tail[end + 1..];
             }
             None => {
@@ -372,7 +378,16 @@ fn decode_entities(text: &str, others_as_space: bool) -> String {
         let tail = &rest[at + 1..];
         let terminated = tail.find(';').filter(|e| *e <= 12).and_then(|e| {
             let name = &tail[..e];
-            let other = || (others_as_space && name.starts_with(|c: char| c.is_ascii_alphabetic()) && name.chars().all(|c| c.is_ascii_alphanumeric())).then(|| " ".to_string());
+            // In the second reading, markup's own entities as their characters (so a tag written
+            // `&lt;br&gt;` is read as a tag), any other naming no letter as a space.
+            let other = || {
+                (others_as_space && name.starts_with(|c: char| c.is_ascii_alphabetic()) && name.chars().all(|c| c.is_ascii_alphanumeric())).then(|| match name.to_ascii_lowercase().as_str() {
+                    "lt" => "<".to_string(),
+                    "gt" => ">".to_string(),
+                    "amp" => "&".to_string(),
+                    _ => " ".to_string(),
+                })
+            };
             name.strip_prefix('#').map_or_else(|| named(name).or_else(other), number).map(|r| (r, e + 1))
         });
         match terminated.or_else(|| unterminated(tail)) {
@@ -464,6 +479,11 @@ fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
         format!("<text><tspan x=\"0\" dy=\"0\">{}</tspan><tspan x=\"0\" dy=\"1.2em\">{}</tspan></text>", rev("moB"), rev("elareneG")),
         format!("<th>{}<br>{}</th>", rev("tupnI"), rev("sreirraC")),
         format!("<b>{}</b> {}", rev("tramS"), rev("rotarugifnoC")),
+        // A tag as the tools write it: Inkscape's attribute per line, draw.io's break as entities,
+        // Go's JSON encoder's break as escapes.
+        format!("<text\n   x=\"20\"><tspan\n     sodipodi:role=\"line\"\n     y=\"40\">{}</tspan><tspan\n     sodipodi:role=\"line\"\n     y=\"52\">{}</tspan></text>", rev("moB"), rev("elareneG")),
+        format!("value=\"{}&lt;br&gt;{}\"", rev("arutappaM"), rev("erawtfoS")),
+        format!("{{\"label\":\"{}\\u003cbr\\u003e{}\"}}", rev("tupnI"), rev("sreirraC")),
     ];
     for s in &samples {
         assert_eq!(mentions(s).len(), 1, "{s}: {:?}", mentions(s));
