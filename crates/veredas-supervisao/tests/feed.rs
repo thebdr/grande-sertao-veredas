@@ -294,13 +294,16 @@ fn the_fold_reads_every_object_exactly() {
         assert_eq!((away(&state, 0), away(&state, 1)), (before_first, after_first), "{state:?}");
     }
 
-    // A series the ingest counts keys on is keyed before any frame carried one: its markers come
-    // per key, never one place for the latest sample whatever its key; without keys, one place.
-    let mut g = Fold::new(&b);
-    g.cached("sorter", "at", 5, "42", 2, 5, 1_000);
-    let v = g.view(o("tracked"), true, 1_000);
-    assert_eq!((v.place, v.items.clone(), v.text.as_deref()), (None, vec![], Some("42")));
-    assert_eq!(g.view(o("tracked"), true, 1_000_000).place, None, "never one place, however long");
+    // A series the ingest counts keys on is keyed before any frame carried one, from its first key:
+    // its markers come per key, never one place for the latest sample whatever its key; without
+    // keys, one place.
+    for keys in [1, 2] {
+        let mut g = Fold::new(&b);
+        g.cached("sorter", "at", 5, "42", keys, 5, 1_000);
+        let v = g.view(o("tracked"), true, 1_000);
+        assert_eq!((v.place, v.items.clone(), v.text.as_deref()), (None, vec![], Some("42")), "{keys} key(s)");
+        assert_eq!(g.view(o("tracked"), true, 1_000_000).place, None, "never one place, however long ({keys} key(s))");
+    }
     let mut g = Fold::new(&b);
     g.cached("sorter", "at", 5, "42", 0, 6, 1_000);
     assert_eq!(g.view(o("tracked"), true, 1_000).place, Some(0.42));
