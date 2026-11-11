@@ -288,10 +288,16 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
     let mut columns: Vec<String> = Vec::new();
     let mut total: Option<u64> = None;
     // Paged newest first by stamp: each page reads the rows at or before the last stamp taken,
-    // past those already taken at that stamp. A row stored between two reads (stamped after the
-    // last one taken) never shifts a page, where an offset would read one row twice and miss
-    // another. A table without `index_ms` is paged by offset (the store orders it by `ts`).
+    // past those already read at that stamp. A row stored between two reads stamped after the
+    // last one taken never shifts a page, where an offset would read one row twice and miss
+    // another. One stored at the very stamp a page ended on sorts ahead of the rows read there
+    // (the store breaks a tie by arrival, newest first), so the next page starts that many rows
+    // early: never past a row not yet read, and the rows read again are known by their source and
+    // sequence (every base table carries both) and taken once. A table without `index_ms` is paged
+    // by offset (the store orders it by `ts`).
     let mut stamp_at: Option<usize> = None;
+    let mut ident: Option<(usize, usize)> = None;
+    let mut taken: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     let (mut bound, mut tied) = (to, 0usize);
     loop {
         let q = match stamp_at {
@@ -302,19 +308,26 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
         if columns.is_empty() {
             columns = page.columns.iter().map(|c| c.name.clone()).collect();
             stamp_at = columns.iter().position(|c| c == "index_ms");
+            ident = columns.iter().position(|c| c == "source").zip(columns.iter().position(|c| c == "seq"));
         }
         // The window as it stood at the first read.
         total.get_or_insert(page.total);
         let n = page.rows.len();
-        if let Some(ti) = stamp_at {
-            for r in &page.rows {
-                match r.get(ti).and_then(Json::as_i64) {
-                    Some(t) if t != bound => (bound, tied) = (t, 1),
-                    _ => tied += 1,
+        match stamp_at {
+            Some(ti) => {
+                for r in page.rows {
+                    match r.get(ti).and_then(Json::as_i64) {
+                        Some(t) if t != bound => (bound, tied) = (t, 1),
+                        _ => tied += 1,
+                    }
+                    let fresh = ident.is_none_or(|(si, qi)| taken.insert((r.get(si).map(Json::to_string).unwrap_or_default(), r.get(qi).map(Json::to_string).unwrap_or_default())));
+                    if fresh {
+                        rows.push(r);
+                    }
                 }
             }
+            None => rows.extend(page.rows),
         }
-        rows.extend(page.rows);
         if n < page_rows || rows.len() >= cap {
             break;
         }

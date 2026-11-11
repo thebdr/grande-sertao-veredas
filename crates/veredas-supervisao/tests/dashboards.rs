@@ -93,6 +93,14 @@ show = "level"
 range = [50, 85]
 
 [[object]]
+id = "under"
+label = "Under"
+value = { source = "plc", series = "fill1" }
+unit = "%"
+show = "level"
+range = [85, 120]
+
+[[object]]
 id = "dense"
 label = "Dense"
 value = { source = "sorter", series = "dv" }
@@ -138,7 +146,7 @@ objects = ["outlet-*"]
 
 [[dashboard.panel]]
 kind = "levels"
-objects = ["outlet-*", "over"]
+objects = ["outlet-*", "over", "under"]
 ticks = [80, 90]
 
 [[dashboard.panel]]
@@ -328,8 +336,10 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
         (json!("outlet-1"), json!(0.35), json!([0.8, 0.9])),
         (json!("outlet-2"), json!(0.85), json!([0.8, 0.9])),
         (json!("outlet-3"), json!(0.5), json!([0.3, 0.4])),
-        // A value and a tick past the range's end, held at its end.
+        // A value and a tick past the range's end, held at its end; and before its start, held at
+        // its start.
         (json!("over"), json!(1.0), json!([30.0 / 35.0, 1.0])),
+        (json!("under"), json!(0.0), json!([0.0, 5.0 / 35.0])),
     ]);
 
     // The table: the view's rows sorted by the count, the count drawn as a bar against the
@@ -796,6 +806,41 @@ fn the_cells_read_each_row_once_while_rows_arrive() {
     let want: Vec<(Value, Value)> = [("1", 100), ("2", 100), ("3", 100), ("4", 3), ("5", 1), ("6", 2), ("9", 150)].into_iter().map(|(k, n)| (json!(k), json!(n))).collect();
     assert_eq!(ns, want, "each row once across tied stamps: {c}");
     assert_eq!((c["read"].clone(), c["total"].clone(), c["capped"].clone()), (json!(456), json!(456), json!(false)));
+    // Rows arriving at the very stamp a page ended on: two hundred of outlet 7 at the window's
+    // newest stamp, so every read pages through them first (a hundred pages of two), then a hundred
+    // and fifty of outlet 8 at that stamp, ten milliseconds apart, while the cells are read again
+    // and again. The store sorts the newcomers ahead of the rows read there, and still every row
+    // read is read once: outlet 7 exactly two hundred, no key past the rows stored for it.
+    let at = now + 5 * MIN;
+    append(&log, &(0..200).map(|_| sort(at, 7)).collect::<Vec<_>>());
+    assert!(wait(Duration::from_secs(20), || rows() == 656), "{}", rows());
+    let (stop, appended) = (Arc::new(AtomicBool::new(false)), Arc::new(std::sync::atomic::AtomicU64::new(0)));
+    let writer = std::thread::spawn({
+        let (stop, appended, log, line) = (Arc::clone(&stop), Arc::clone(&appended), log.clone(), sort(at, 8));
+        move || {
+            for _ in 0..150 {
+                append(&log, std::slice::from_ref(&line));
+                appended.fetch_add(1, Ordering::Relaxed);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            stop.store(true, Ordering::Relaxed);
+        }
+    });
+    let stored = [("1", 100), ("2", 100), ("3", 100), ("4", 3), ("5", 1), ("6", 2), ("7", 200), ("9", 150)];
+    let mut reads = 0;
+    while !stop.load(Ordering::Relaxed) || reads < 2 {
+        let c = veredas_supervisao::panel::cells(&live, "sorts", "outlet", "travel", 60, 5, 5.0, to, 2, 50_000).unwrap();
+        reads += 1;
+        for r in c["rows"].as_array().unwrap() {
+            let (k, n) = (r["key"].as_str().unwrap(), r["n"].as_u64().unwrap());
+            let most = if k == "8" { appended.load(Ordering::Relaxed) } else { stored.iter().find(|(s, _)| *s == k).map(|(_, m)| *m).unwrap_or_else(|| panic!("key {k}: {c}")) };
+            assert!(n <= most, "key {k} counted {n}, {most} stored, read {reads}: {c}");
+            if k == "7" {
+                assert_eq!(n, 200, "outlet 7 once each, read {reads}: {c}");
+            }
+        }
+    }
+    writer.join().unwrap();
     host.stop();
 }
 
