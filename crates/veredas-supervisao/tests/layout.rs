@@ -148,11 +148,14 @@ const ACCENT_ON_STATES: &str = r##"(() => {
     return hue >= 100 && hue <= 170 && s > 0.2;
   };
   const painted = (v) => {
-    const m = v.match(/url\(["']?#([^"')]+)["']?\)/);
+    const m = v.match(/url\(["']?#([^"')]+)["']?\)\s*(.*)$/);
     if (!m) return green(v) ? [v] : [];
+    // The colour after the reference is what the browser paints when the reference is no paint
+    // server (missing, or not a pattern or gradient): read it whatever the reference names.
+    const fallback = m[2] && green(m[2]) ? [`${v} falls back to ${m[2]}`] : [];
     const ref = document.getElementById(m[1]);
-    if (!ref) return [];
-    return [ref, ...ref.querySelectorAll("*")].flatMap((d) => { const c = getComputedStyle(d); return [c.fill, c.stroke, c.stopColor].filter(green); }).map((g) => `${v} paints ${g}`);
+    if (!ref) return fallback;
+    return fallback.concat([ref, ...ref.querySelectorAll("*")].flatMap((d) => { const c = getComputedStyle(d); return [c.fill, c.stroke, c.stopColor].filter(green); }).map((g) => `${v} paints ${g}`));
   };
   const name = (el) => el.id || el.dataset.for || el.dataset.key || `${el.tagName} in ${el.closest("[id]")?.id}`;
   const drawn = [...document.querySelectorAll("svg.plant .sv-obj, svg.plant .sv-obj *, svg.plant [data-key], svg.plant [data-key] *, svg.plant .sv-fill, .sv-overlay .sv-tag")]
@@ -160,11 +163,22 @@ const ACCENT_ON_STATES: &str = r##"(() => {
     .flatMap((el) => { const c = getComputedStyle(el); return [["fill", c.fill], ["stroke", c.stroke]].flatMap(([p, v]) => painted(v).map((g) => `${name(el)} ${p} ${g}`)); });
   const around = [...document.querySelectorAll(".headline .fig .mono, .side ul.attention .mark, .side .badge")]
     .flatMap((el) => { const c = getComputedStyle(el); return [["color", c.color], ["background", c.backgroundColor]].filter(([, v]) => green(v)).map(([p, v]) => `${el.className} ${JSON.stringify(el.textContent)} ${p} ${v}`); });
+  // The attention list's rows: the accent's own mark (`on`) on the selected object's row alone,
+  // and no other row painted in a green by its background or its inset bar.
+  const selected = new Set([...document.querySelectorAll("svg.plant .sv-selected")].map((e) => e.dataset.object ?? e.id));
+  const rows = [...document.querySelectorAll(".side ul.attention li")].flatMap((li) => {
+    const on = li.classList.contains("on"), c = getComputedStyle(li);
+    const out = on !== selected.has(li.dataset.id) ? [`attention row ${li.dataset.id} on: ${on}, selected: ${selected.has(li.dataset.id)}`] : [];
+    const shadow = (c.boxShadow.match(/(rgba?\([^)]*\)|color\([^)]*\)|#[0-9a-f]{3,8})/gi) || []).filter(green);
+    return on ? out : out.concat(green(c.backgroundColor) ? [`attention row ${li.dataset.id} background ${c.backgroundColor}`] : [], shadow.map((s) => `attention row ${li.dataset.id} shadow ${s}`));
+  });
+  // Every selected element marked: stroked in the accent itself, a width of a pixel or more,
+  // opaque enough to see, shown.
   const accent = hex(root.getPropertyValue("--accent"));
   const unmarked = [...document.querySelectorAll("svg.plant .sv-selected")]
-    .filter((el) => { const p = parts(getComputedStyle(el).stroke); return !p || p[3] === 0 || p.slice(0, 3).join(",") !== accent; })
-    .map((el) => `${el.dataset.key !== undefined ? `${el.dataset.object} ${el.dataset.key}` : el.id} selected, stroked ${getComputedStyle(el).stroke}`);
-  return drawn.concat(around, unmarked);
+    .filter((el) => { const c = getComputedStyle(el), p = parts(c.stroke); return !p || p[3] === 0 || p.slice(0, 3).join(",") !== accent || !(parseFloat(c.strokeWidth) >= 1) || !(Number(c.strokeOpacity) > 0) || c.display === "none" || c.visibility !== "visible" || !(Number(c.opacity) > 0); })
+    .map((el) => { const c = getComputedStyle(el); return `${el.dataset.key !== undefined ? `${el.dataset.object} ${el.dataset.key}` : el.id} selected, stroked ${c.stroke} ${c.strokeWidth} at ${c.strokeOpacity}`; });
+  return drawn.concat(around, rows, unmarked);
 })()"##;
 
 /// What carries the selection in the drawing: an element by its id, a keyed marker's clone by its
@@ -279,7 +293,7 @@ fn differences(drawn: &Value, feed: &Value, on_layout: &[(String, String)]) -> V
                 }
             }
             "move" if !keyed && v["place"].is_null() => {
-                if d["hidden"] != json!(true) {
+                if d["hidden"] != json!(true) || d["shown"] != json!(false) {
                     out.push(format!("{id}: drawn though it has no place"));
                 }
             }
@@ -299,6 +313,10 @@ fn differences(drawn: &Value, feed: &Value, on_layout: &[(String, String)]) -> V
                 keys.sort();
                 if clones.len() != items.len() || d["tag_keys"] != json!(keys) {
                     out.push(format!("{id}: {} clones and tags for {} for the keys {keys:?}", clones.len(), d["tag_keys"]));
+                }
+                // Its own element hidden and not shown: the clones are what is drawn.
+                if d["hidden"] != json!(true) || d["shown"] != json!(false) {
+                    out.push(format!("{id}: its own element drawn beside its clones"));
                 }
                 for it in items {
                     let key = it["key"].as_str().unwrap();
@@ -460,7 +478,7 @@ fn the_page_draws_the_layout_from_the_feed() {
     let at = |id: &str| translate(d(id, "transform").as_str().unwrap());
     assert!(near(at("parcel-1").0, 309.96, 0.05) && near(at("parcel-1").1, 70.0, 0.05), "{:?}", at("parcel-1"));
     assert!(near(at("parcel-2").0, 90.04, 0.05) && near(at("parcel-2").1, 210.0, 0.05), "{:?}", at("parcel-2"));
-    assert_eq!((d("tracked", "hidden"), d("tracked", "clones")), (json!(true), json!([])), "no position yet");
+    assert_eq!((d("tracked", "hidden"), d("tracked", "shown"), d("tracked", "clones")), (json!(true), json!(false), json!([])), "no position yet");
 
     // Around it: the headline in its states, the objects not normal in order of weight.
     let around = around_when(&mut page, "a.attention.length === 4 && a.headline.length === 2");
@@ -546,7 +564,7 @@ fn the_page_draws_the_layout_from_the_feed() {
     }));
     let (drawn, _) = settle(&mut page, "the keyed marker", &["outlet-3"]);
     let tags: Vec<(Value, Value)> = drawn["tracked"]["clones"].as_array().unwrap().iter().map(|c| (c["key"].clone(), c["tag"].clone())).collect();
-    assert_eq!((drawn["tracked"]["hidden"].clone(), tags.len()), (json!(true), 2), "{tags:?}");
+    assert_eq!((drawn["tracked"]["hidden"].clone(), drawn["tracked"]["shown"].clone(), tags.len()), (json!(true), json!(false), 2), "{tags:?}");
     assert!(tags.iter().all(|(_, t)| *t == json!("■ far")), "{tags:?}");
     let around = around_when(&mut page, "a.attention.length === 4 && a.attention[1][0] === 'tracked'");
     assert_eq!(around["attention"][1], json!(["tracked", "■", "mark st-warn", "Tracked far"]));
