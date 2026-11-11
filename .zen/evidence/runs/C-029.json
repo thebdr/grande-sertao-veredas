@@ -10,15 +10,15 @@
     "channels"
   ],
   "exitCode": 0,
-  "outputSha": "b1defc27c5af8d1600c80fd3a019737ad6d5c665a3a9ce31be7ccba43d52ffcb",
-  "outputTail": "\nrunning 4 tests\ntest what_the_catalog_cannot_read_is_counted_and_shown_not_decoded ... ok\ntest in_a_layout_without_segments_the_id_rides_in_the_envelope ... ok\ntest a_channel_in_either_role_speaks_the_catalog_and_the_monitor_shows_what_came_and_went ... ok\ntest a_channel_refuses_a_configuration_it_cannot_speak_and_reports_a_port_it_cannot_take ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.88s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.98s\n     Running tests\\channels.rs (target\\debug\\deps\\channels-cb81fc2dd52ee6ae.exe)",
-  "ranAt": "2026-11-10T20:23:17.642Z",
-  "headCommit": "c21daae65b50ab34136bad5f26cbe1a03078695a",
+  "outputSha": "d05d63f92688e72a34231b51de96ac442c5e7fdfbeb786a65e1d492fc7ad21fa",
+  "outputTail": "\nrunning 4 tests\ntest what_the_catalog_cannot_read_is_counted_and_shown_not_decoded ... ok\ntest in_a_layout_without_segments_the_id_rides_in_the_envelope ... ok\ntest a_channel_in_either_role_speaks_the_catalog_and_the_monitor_shows_what_came_and_went ... ok\ntest a_channel_refuses_a_configuration_it_cannot_speak_and_reports_a_port_it_cannot_take ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.62s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.09s\n     Running tests\\channels.rs (target\\debug\\deps\\channels-cb81fc2dd52ee6ae.exe)",
+  "ranAt": "2026-11-11T09:49:26.462Z",
+  "headCommit": "bb4cfc234708c1c77125750af83fa4deacb1e8db",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/channels.rs",
       "file": "crates/veredas-maquinar/tests/channels.rs",
-      "fileSha": "b3a562dfab4e6661c50a91fbc5134fd4f0db6e041a6d11d9eb8a236b67635bbc"
+      "fileSha": "d166ee3268e408c53446fbe9a61db0e22a9ede59d5d4cfea6df4f229bf6ec9f3"
     }
   ]
 }
