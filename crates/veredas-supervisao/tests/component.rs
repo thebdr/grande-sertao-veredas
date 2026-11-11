@@ -135,11 +135,13 @@ fn mentions(text: &str) -> Vec<String> {
             hits.push(h);
         }
     };
-    // Each line read twice: its HTML entities decoded; then also its code escapes, an entity naming
-    // no letter (`&nbsp;`) as a space and its percent-encoded bytes (`%20`, `%C3%A3`, as UTF-8). A
-    // name or a section sign in either reading is a hit; the first keeps the letters the second
-    // reads otherwise (a pattern's `\b` before hex letters, an `&` that only looks like an entity).
-    let readings: [fn(&str) -> String; 2] = [|l: &str| decode_entities(l, false), |l: &str| decode_percent(&decode_escapes(&decode_entities(l, true)))];
+    // Each line read twice: its HTML entities decoded; then also its markup tags as spaces (a
+    // converter's runs, a label's lines, a break), its code escapes, an entity naming no letter
+    // (`&nbsp;`) as a space and its percent-encoded bytes (`%20`, `%C3%A3`, as UTF-8). A name or a
+    // section sign in either reading is a hit; the first keeps the letters the second reads
+    // otherwise (a pattern's `\b` before hex letters, an `&` that only looks like an entity, a
+    // generic's angle brackets).
+    let readings: [fn(&str) -> String; 2] = [|l: &str| decode_entities(l, false), |l: &str| decode_percent(&decode_escapes(&untagged(&decode_entities(l, true))))];
     for read in readings {
         let lines: Vec<String> = text.lines().map(read).collect();
         let mut flat = Vec::new();
@@ -208,6 +210,30 @@ fn decode_escapes(line: &str) -> String {
             }
             None => {
                 out.push('\\');
+                rest = tail;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A line with every markup tag (`<` then a letter, `/` or `!`, up to the next `>` with no `<`
+/// between) read as a space: `<span class="c2">`, `<tspan x="0" dy="1.2em">`, `<br>`, `</b>`.
+fn untagged(line: &str) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at + 1..];
+        let opens = tail.starts_with(|c: char| c.is_ascii_alphabetic() || c == '/' || c == '!');
+        match tail.find(['<', '>']).filter(|i| opens && tail[*i..].starts_with('>')) {
+            Some(end) => {
+                out.push(' ');
+                rest = &tail[end + 1..];
+            }
+            None => {
+                out.push('<');
                 rest = tail;
             }
         }
@@ -432,6 +458,12 @@ fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
         format!("<td>{}</td>", rev("oivan;psbn&od;psbn&o;edlita&tipac")),
         format!("const L: &str = \"{}\";", rev("elareneGn\\moB")),
         format!("const L: &str = \"{}\";", rev("erawtfoSt\\arutappaM")),
+        // A markup tag between a name's words: a converter's runs, a label's lines, a break, a
+        // word in bold.
+        format!("<span class=\"c1\">{} </span><span class=\"c2\">{}</span>", rev("arutappaM"), rev("erawtfoS")),
+        format!("<text><tspan x=\"0\" dy=\"0\">{}</tspan><tspan x=\"0\" dy=\"1.2em\">{}</tspan></text>", rev("moB"), rev("elareneG")),
+        format!("<th>{}<br>{}</th>", rev("tupnI"), rev("sreirraC")),
+        format!("<b>{}</b> {}", rev("tramS"), rev("rotarugifnoC")),
     ];
     for s in &samples {
         assert_eq!(mentions(s).len(), 1, "{s}: {:?}", mentions(s));
@@ -499,6 +531,9 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
     for s in sources.iter().filter(|s| s.ends_with(".css") || s.ends_with(".html")) {
         let text = std::fs::read_to_string(webdir.join(s)).unwrap();
         assert!(!text.contains("@import"), "{s} imports a stylesheet");
+        // No CSS module: its `composes ... from` and `@value ... from` read files the build's guard
+        // never sees (the build reads none: `modules: false`).
+        assert!(!s.contains(".module.") && !text.contains("composes") && !text.contains("@value"), "{s} is a CSS module");
         assert_eq!(urls(&text), Vec::<String>::new(), "{s} points outside the page");
         assert_eq!(addresses(&text), BTreeSet::<&str>::new(), "{s} names an address");
     }
@@ -610,7 +645,8 @@ const VITE_CONFIG: &str = r####"// Supervisão's page: built into dist/ with fix
 // with every CR LF pair read as LF, a NUL, in path order):
 //   dist/source.hash  the sources the page was built from (SOURCE_FILES and everything under src/)
 //   dist/output.hash  the page as written (OUTPUT_FILES)
-// The build reads nothing else: no .env, no public/ folder, no PostCSS file, no module and no
+// The build reads nothing else: no .env, no public/ folder, no PostCSS file, no CSS module (its
+// `composes ... from` reads a file the guard never sees), no module and no
 // file a stylesheet pulls in outside src/ and the hashed files (refused; node_modules/ too, whose
 // packages the hash never sees), no asset inlined (an asset is a file of its own, so the
 // three-file rule refuses it), and it emits the three files alone (refused otherwise). The hashes
@@ -699,7 +735,7 @@ export default defineConfig({
   plugins: [stamp()],
   envDir: false,
   publicDir: false,
-  css: { postcss: {} },
+  css: { postcss: {}, modules: false },
   build: {
     outDir: "dist",
     emptyOutDir: true,

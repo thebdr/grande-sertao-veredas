@@ -4,7 +4,8 @@
 // with every CR LF pair read as LF, a NUL, in path order):
 //   dist/source.hash  the sources the page was built from (SOURCE_FILES and everything under src/)
 //   dist/output.hash  the page as written (OUTPUT_FILES)
-// The build reads nothing else: no .env, no public/ folder, no PostCSS file, no module and no
+// The build reads nothing else: no .env, no public/ folder, no PostCSS file, no CSS module (its
+// `composes ... from` reads a file the guard never sees), no module and no
 // file a stylesheet pulls in outside src/ and the hashed files (refused; node_modules/ too, whose
 // packages the hash never sees), no asset inlined (an asset is a file of its own, so the
 // three-file rule refuses it), and it emits the three files alone (refused otherwise). The hashes
@@ -93,7 +94,7 @@ export default defineConfig({
   plugins: [stamp()],
   envDir: false,
   publicDir: false,
-  css: { postcss: {} },
+  css: { postcss: {}, modules: false },
   build: {
     outDir: "dist",
     emptyOutDir: true,
