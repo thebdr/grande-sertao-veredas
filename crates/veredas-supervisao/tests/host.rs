@@ -204,7 +204,10 @@ fn nothing_starts_before_the_address_is_held_nor_under_check() {
     // A check reads, checks and prints the plan, starting nothing.
     let out = Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).arg(&path).arg("--check").stdin(Stdio::null()).output().unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(String::from_utf8_lossy(&out.stdout).contains("session `loop`"), "{}", String::from_utf8_lossy(&out.stdout));
+    // Both sessions planned, in the file's order.
+    let plan = String::from_utf8_lossy(&out.stdout).to_string();
+    let (at_loop, at_hall) = (plan.find("session `loop` at /s/loop/: \"The loop\""), plan.find("session `hall` at /s/hall/: \"The hall\""));
+    assert!(at_loop.is_some() && at_hall.is_some() && at_loop < at_hall, "{plan}");
     assert!(!store.exists(), "a check started a session");
     // An address taken is refused before the first session starts.
     let held = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -225,6 +228,11 @@ fn the_executable_serves_a_file_until_stdin_closes() {
     let a = plant(&dir.path().join("bench-a"));
     let b = plant(&dir.path().join("bench-b"));
     let path = two_plants(dir.path(), &a, &b);
+    // The first session keeps its store on disk: a stop closes it (its write-ahead log folded in
+    // and gone), a process that ended without stopping its sessions leaves the log behind.
+    let project = dir.path().join("loop/project.toml");
+    let text = std::fs::read_to_string(&project).unwrap().replace("store = \"ram\"", "store = { disk = \"loop.duckdb\" }");
+    std::fs::write(&project, text).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
     let mut first = String::new();
@@ -266,4 +274,7 @@ fn the_executable_serves_a_file_until_stdin_closes() {
     assert!(status.success(), "{status}");
     assert!(sse.ends_within(Duration::from_secs(5)), "the open stream ended");
     assert!(TcpStream::connect(addr).is_err(), "nothing serves after the stop");
+    // Its sessions stopped, not dropped with the process: the store closed.
+    let store = dir.path().join("loop/loop.duckdb");
+    assert!(store.exists() && !dir.path().join("loop/loop.duckdb.wal").exists(), "the store was never closed: {:?}", std::fs::read_dir(dir.path().join("loop")).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>());
 }
