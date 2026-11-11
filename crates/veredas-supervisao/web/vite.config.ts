@@ -5,10 +5,10 @@
 //   dist/source.hash  the sources the page was built from (SOURCE_FILES and everything under src/)
 //   dist/output.hash  the page as written (OUTPUT_FILES)
 // The build reads nothing else: no .env, no public/ folder, no PostCSS file, no module and no
-// file a stylesheet pulls in outside src/, the hashed files and node_modules/ (refused), no asset
-// inlined (an asset is a file of its own, so the three-file rule refuses it), and it emits the
-// three files alone (refused otherwise). The hashes are written once the bundle is on disk: a
-// failed build never writes them.
+// file a stylesheet pulls in outside src/ and the hashed files (refused; node_modules/ too, whose
+// packages the hash never sees), no asset inlined (an asset is a file of its own, so the
+// three-file rule refuses it), and it emits the three files alone (refused otherwise). The hashes
+// are written once the bundle is on disk: a failed build never writes them.
 import { defineConfig, type Plugin } from "vite";
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -59,7 +59,6 @@ const norm = (p: string) => resolve(p).replace(/\\/g, "/").toLowerCase();
 
 function stamp(): Plugin {
   const src = norm(join(__dirname, "src")) + "/";
-  const modules = norm(join(__dirname, "node_modules")) + "/";
   const hashed = SOURCE_FILES.map((f) => norm(join(__dirname, f)));
   return {
     name: "source-hash",
@@ -67,12 +66,12 @@ function stamp(): Plugin {
     enforce: "post",
     generateBundle(_options, bundle) {
       // Every module read, and every file one pulls in (a stylesheet's @import, what vite
-      // watches), is a hashed source or a locked dependency.
+      // watches), is a hashed source.
       for (const id of [...this.getModuleIds(), ...this.getWatchFiles()]) {
         if (id.startsWith("\0")) continue;
         const p = norm(id.split("?")[0]);
-        if (!(p.startsWith(src) || p.startsWith(modules) || hashed.includes(p))) {
-          this.error(`the page reads ${id}, outside src/, the hashed files and node_modules/: move it under src/`);
+        if (!(p.startsWith(src) || hashed.includes(p))) {
+          this.error(`the page reads ${id}, outside src/ and the hashed files: move it under src/`);
         }
       }
       // The page is the three files the host serves, and nothing else.

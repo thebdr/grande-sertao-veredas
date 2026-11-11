@@ -167,8 +167,9 @@ fn mentions(text: &str) -> Vec<String> {
 }
 
 /// A line with its code escapes read as the crate's languages write a character: Rust's and a
-/// script's braced `\u{..}`, a script's four-digit `\u....` and two-digit `\x..`, a stylesheet's
-/// one to six hex digits and the one space that may end them. Anything else is kept as written.
+/// script's braced `\u{..}` (Rust's `_` between its digits read through), a script's four-digit
+/// `\u....` and two-digit `\x..`, TOML's eight-digit `\U........`, a stylesheet's one to six hex
+/// digits and the one space that may end them. Anything else is kept as written.
 fn decode_escapes(line: &str) -> String {
     let hex_run = |s: &str, max: usize| s.chars().take(max).take_while(char::is_ascii_hexdigit).count();
     let mut out = String::new();
@@ -177,10 +178,15 @@ fn decode_escapes(line: &str) -> String {
         out.push_str(&rest[..at]);
         let tail = &rest[at + 1..];
         let (code, used) = if let Some(braced) = tail.strip_prefix("u{") {
-            match braced.find('}') {
-                Some(end) if (1..=6).contains(&end) && hex_run(braced, 6) == end => (u32::from_str_radix(&braced[..end], 16).ok(), end + 3),
+            let inner = braced.find('}').map(|end| &braced[..end]);
+            match inner {
+                Some(i) if i.starts_with(|c: char| c.is_ascii_hexdigit()) && i.chars().all(|c| c.is_ascii_hexdigit() || c == '_') && (1..=6).contains(&i.chars().filter(|c| *c != '_').count()) => {
+                    (u32::from_str_radix(&i.replace('_', ""), 16).ok(), i.len() + 3)
+                }
                 _ => (None, 0),
             }
+        } else if let Some(u) = tail.strip_prefix('U').filter(|u| hex_run(u, 8) == 8) {
+            (u32::from_str_radix(&u[..8], 16).ok(), 9)
         } else if let Some(u) = tail.strip_prefix('u').filter(|u| hex_run(u, 4) == 4) {
             (u32::from_str_radix(&u[..4], 16).ok(), 5)
         } else if let Some(x) = tail.strip_prefix('x').filter(|x| hex_run(x, 2) == 2) {
@@ -258,36 +264,72 @@ fn fold(c: char) -> Vec<char> {
     }
 }
 
-/// A text with its HTML entities read: a number (`&#227;`, `&#xe3;`) as its character, an
-/// accented letter's name (`&atilde;`) as its base letter, the section sign's name as the sign.
+/// A text with its HTML entities read: a number (`&#227;`, `&#xe3;`) as its character; the name of
+/// a Latin letter with its mark (`&atilde;`, `&lstrok;`, `&lmidot;`, `&odblac;`) as its base
+/// letter, of a ligature (`&filig;`, `&aelig;`, `&szlig;`, `&ijlig;`) as its letters, of a Latin
+/// letter of its own (`&eth;`, `&thorn;`, `&eng;`, `&kgreen;`, `&inodot;`) as the letters it reads
+/// as, of the section sign as the sign; and a number or a legacy name (Latin-1's, which a browser
+/// reads without its `;`) without the `;` too. Any other entity is kept as written.
 fn decode_entities(text: &str) -> String {
+    const MARKS: [&str; 16] = ["acute", "grave", "circ", "tilde", "uml", "ring", "cedil", "slash", "macr", "caron", "breve", "ogon", "dot", "strok", "midot", "dblac"];
+    const LEGACY_MARKS: [&str; 8] = ["acute", "grave", "circ", "tilde", "uml", "ring", "cedil", "slash"];
+    const LETTERS: [(&str, &str); 18] = [
+        ("aelig", "ae"), ("oelig", "oe"), ("ijlig", "ij"), ("szlig", "ss"), ("filig", "fi"), ("fflig", "ff"), ("fllig", "fl"), ("ffilig", "ffi"), ("ffllig", "ffl"),
+        ("fjlig", "fj"), ("eth", "d"), ("thorn", "th"), ("eng", "n"), ("kgreen", "k"), ("inodot", "i"), ("imath", "i"), ("jmath", "j"), ("napos", "n"),
+    ];
+    let named = |name: &str| -> Option<String> {
+        let lower = name.to_ascii_lowercase();
+        if lower == "sect" {
+            return char::from_u32(0xA7).map(String::from);
+        }
+        if let Some((_, letters)) = LETTERS.iter().find(|(n, _)| *n == lower) {
+            return Some(letters.to_string());
+        }
+        let mut cs = name.chars();
+        let letter = cs.next().filter(char::is_ascii_alphabetic)?;
+        MARKS.contains(&cs.as_str()).then(|| letter.to_string())
+    };
+    let number = |digits: &str| -> Option<String> {
+        let code = match digits.strip_prefix(['x', 'X']) {
+            Some(hex) => u32::from_str_radix(hex, 16).ok(),
+            None => digits.parse::<u32>().ok(),
+        };
+        code.and_then(char::from_u32).map(String::from)
+    };
+    // Without its `;`: a number's digits, or the longest legacy name the text starts with.
+    let unterminated = |tail: &str| -> Option<(String, usize)> {
+        if let Some(n) = tail.strip_prefix('#') {
+            let hex = n.starts_with(['x', 'X']);
+            let skip = usize::from(hex);
+            let len = n[skip..].chars().take_while(|c| if hex { c.is_ascii_hexdigit() } else { c.is_ascii_digit() }).count();
+            return (len > 0).then(|| number(&n[..skip + len]).map(|r| (r, 1 + skip + len))).flatten();
+        }
+        for w in ["aelig", "szlig", "thorn", "sect", "eth"] {
+            if tail.get(..w.len()).is_some_and(|t| t.eq_ignore_ascii_case(w)) {
+                return named(w).map(|r| (r, w.len()));
+            }
+        }
+        let mut cs = tail.chars();
+        let letter = cs.next().filter(char::is_ascii_alphabetic)?;
+        LEGACY_MARKS.iter().find(|m| cs.as_str().starts_with(*m)).map(|m| (letter.to_string(), 1 + m.len()))
+    };
     let mut out = String::new();
     let mut rest = text;
     while let Some(at) = rest.find('&') {
         out.push_str(&rest[..at]);
-        let tail = &rest[at..];
-        let entity = tail.find(';').filter(|e| *e <= 12).map(|e| &tail[1..e]);
-        let read = entity.and_then(|e| {
-            if let Some(hex) = e.strip_prefix("#x").or_else(|| e.strip_prefix("#X")) {
-                u32::from_str_radix(hex, 16).ok().and_then(char::from_u32).map(String::from)
-            } else if let Some(dec) = e.strip_prefix('#') {
-                dec.parse::<u32>().ok().and_then(char::from_u32).map(String::from)
-            } else if e == "sect" {
-                char::from_u32(0xA7).map(String::from)
-            } else {
-                let mut cs = e.chars();
-                let letter = cs.next().filter(char::is_ascii_alphabetic)?;
-                ["acute", "grave", "circ", "tilde", "uml", "ring", "cedil", "slash", "macr", "caron", "breve", "ogon", "dot"].contains(&cs.as_str()).then(|| letter.to_string())
-            }
+        let tail = &rest[at + 1..];
+        let terminated = tail.find(';').filter(|e| *e <= 12).and_then(|e| {
+            let name = &tail[..e];
+            name.strip_prefix('#').map_or_else(|| named(name), number).map(|r| (r, e + 1))
         });
-        match (entity, read) {
-            (Some(e), Some(r)) => {
+        match terminated.or_else(|| unterminated(tail)) {
+            Some((r, used)) => {
                 out.push_str(&r);
-                rest = &tail[e.len() + 2..];
+                rest = &tail[used..];
             }
-            _ => {
+            None => {
                 out.push('&');
-                rest = &tail[1..];
+                rest = tail;
             }
         }
     }
@@ -348,6 +390,14 @@ fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
         format!("// spec {}3.2", rev(";tces&")),
         format!("<!-- spec {}3.2 -->", rev(";761#&")),
         format!("// spec {}3.2", rev("}7a{u\\")),
+        // Rust's `_` inside a braced escape, TOML's eight-digit escape, a ligature's and a
+        // stroke's entity names, and a legacy name and a number without their `;`.
+        format!("const S: &str = \"{}\";", rev("oivan od o}3_e{u\\tipac")),
+        format!("note = \"{}\"", rev("oivan od o3e000000U\\tipac")),
+        format!("/// the {} file", rev("tnalpg;gilif&noc")),
+        format!("/// a {} part", rev("t;kortsl&ebineg")),
+        format!("<p>{}</p>", rev("oivan od oedlita&tipac")),
+        format!("<p>{}</p>", rev("oivan od o722#&tipac")),
     ];
     for s in &samples {
         assert_eq!(mentions(s).len(), 1, "{s}: {:?}", mentions(s));
@@ -405,8 +455,10 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
     let config = std::fs::read_to_string(webdir.join("vite.config.ts")).unwrap().replace("\r\n", "\n");
     assert_eq!(config, VITE_CONFIG, "web/vite.config.ts is not the config this test holds");
     // Nor does a source reach outside: the TypeScript config names its compiler options and `src`
-    // alone (no `extends`, no `references`, no `files`), and a stylesheet imports nothing and
-    // points at nothing but a fragment of the page or a data URI.
+    // alone (no `extends`, no `references`, no `files`); a stylesheet or the page imports nothing
+    // and points at nothing but a fragment of the page or a data URI (`url()` and `image-set()`
+    // alike), and names no address; and no source reads the build's environment
+    // (`import.meta.env`, `process.env`), which vite fills from the process, never from a file.
     let tsconfig: serde_json::Value = serde_json::from_slice(&std::fs::read(webdir.join("tsconfig.json")).unwrap()).unwrap();
     let keys: BTreeSet<&str> = tsconfig.as_object().unwrap().keys().map(String::as_str).collect();
     assert_eq!((keys, &tsconfig["include"]), (["compilerOptions", "include"].into_iter().collect(), &serde_json::json!(["src"])), "{tsconfig}");
@@ -414,22 +466,24 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
         let text = std::fs::read_to_string(webdir.join(s)).unwrap();
         assert!(!text.contains("@import"), "{s} imports a stylesheet");
         assert_eq!(urls(&text), Vec::<String>::new(), "{s} points outside the page");
+        assert_eq!(addresses(&text), BTreeSet::<&str>::new(), "{s} names an address");
     }
-    // The bundle's names are the ones the host serves, and it loads no other file: the page's
-    // every `src` and `href` one of the two, the stylesheet's every `url()` a fragment or a data
-    // URI and no `@import`, the script no dynamic import and no address but the SVG namespace.
-    let refs: Vec<String> = ["src=\"", "href=\""].iter().flat_map(|a| web::INDEX_HTML.match_indices(a).map(move |(i, _)| web::INDEX_HTML[i + a.len()..].split('"').next().unwrap().to_string())).collect();
-    assert_eq!(refs.iter().map(String::as_str).collect::<BTreeSet<_>>(), ["/assets/app.css", "/assets/app.js"].into_iter().collect::<BTreeSet<_>>(), "{}", web::INDEX_HTML);
+    for s in sources.iter().filter(|s| s.starts_with("src/")) {
+        let bare: String = std::fs::read_to_string(webdir.join(s)).unwrap().chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(!bare.contains("import.meta") && !bare.contains("process.env"), "{s} reads the build's environment");
+    }
+    // The bundle's names are the ones the host serves, and it loads no other file: the page as
+    // built word for word (its two references however quoted, no `srcset`, nothing else), the
+    // stylesheet's every `url()` and `image-set()` a fragment or a data URI, no `@import` and no
+    // address, the script no dynamic import and no address but the SVG namespace.
+    assert_eq!(web::INDEX_HTML.replace("\r\n", "\n"), INDEX_PAGE, "web/dist/index.html is not the page this test holds");
     assert!(!web::APP_JS.is_empty() && !web::APP_CSS.is_empty());
     assert!(!web::APP_CSS.contains("@import"), "the stylesheet imports nothing");
     assert_eq!(urls(web::APP_CSS), Vec::<String>::new(), "the stylesheet points outside the page");
+    assert_eq!(addresses(web::APP_CSS), BTreeSet::<&str>::new(), "the stylesheet names an address");
     assert!(!web::APP_JS.contains("import(") && !web::APP_JS.contains("import.meta.url"), "the bundle loads no other file");
-    let addresses: BTreeSet<&str> = ["http://", "https://", "//"]
-        .iter()
-        .flat_map(|scheme| web::APP_JS.match_indices(scheme).map(|(i, _)| &web::APP_JS[i..]).map(|t| &t[..t.find(|c: char| c == '"' || c == '\'' || c == '`' || c.is_whitespace() || c == ')').unwrap_or(t.len())]))
-        .filter(|a| !a.starts_with("//") || !a[2..].starts_with(' '))
-        .collect();
-    assert!(addresses.iter().all(|a| *a == "http://www.w3.org/2000/svg" || *a == "//www.w3.org/2000/svg"), "the script names an address: {addresses:?}");
+    let named = addresses(web::APP_JS);
+    assert!(named.iter().all(|a| *a == "http://www.w3.org/2000/svg" || *a == "//www.w3.org/2000/svg"), "the script names an address: {named:?}");
     // The hash sees one byte of any source change, and not a line ending.
     let copy = tempfile::tempdir().unwrap();
     copy_tree(&webdir, copy.path(), &sources);
@@ -450,11 +504,24 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
     assert_ne!(web::source_hash(copy.path()).unwrap(), a, "a byte that is not text counts");
 }
 
-/// Every `url(...)` in a text whose target is neither a fragment of the page nor a data URI.
+/// Every `url(...)` target, and every quoted string inside an `image-set(...)` (prefixed or
+/// not), in a text, that is neither a fragment of the page nor a data URI.
 fn urls(text: &str) -> Vec<String> {
-    text.match_indices("url(")
-        .map(|(i, _)| text[i + 4..].split(')').next().unwrap_or("").trim().trim_matches(['"', '\'']).to_string())
-        .filter(|u| !u.starts_with('#') && !u.starts_with("data:"))
+    let targets = text.match_indices("url(").map(|(i, _)| text[i + 4..].split(')').next().unwrap_or("").trim().trim_matches(['"', '\'']).to_string());
+    let sets = text.match_indices("image-set(").flat_map(|(i, _)| {
+        let inside = text[i + 10..].split(')').next().unwrap_or("");
+        ['"', '\''].into_iter().flat_map(move |q| inside.split(q).skip(1).step_by(2).map(String::from))
+    });
+    targets.chain(sets).filter(|u| !u.starts_with('#') && !u.starts_with("data:")).collect()
+}
+
+/// Every address a text names (`http://`, `https://`, or `//` but a comment's), up to the
+/// quote, space or parenthesis that ends it.
+fn addresses(text: &str) -> BTreeSet<&str> {
+    ["http://", "https://", "//"]
+        .iter()
+        .flat_map(|scheme| text.match_indices(scheme).map(|(i, _)| &text[i..]).map(|t| &t[..t.find(|c: char| c == '"' || c == '\'' || c == '`' || c.is_whitespace() || c == ')').unwrap_or(t.len())]))
+        .filter(|a| !a.starts_with("//") || !a[2..].starts_with(' '))
         .collect()
 }
 
@@ -466,6 +533,22 @@ fn copy_tree(from: &Path, to: &Path, rel: &[String]) {
     }
 }
 
+/// The page as built, word for word (`web/dist/index.html`): its two references and nothing else.
+const INDEX_PAGE: &str = r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Supervisão</title>
+    <script type="module" crossorigin src="/assets/app.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/app.css">
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>
+"#;
+
 /// The page's build configuration, word for word (`web/vite.config.ts`).
 const VITE_CONFIG: &str = r####"// Supervisão's page: built into dist/ with fixed names (the crate compiles them in with
 // include_str!), with two hashes beside them, both recomputed by the crate's component test
@@ -474,10 +557,10 @@ const VITE_CONFIG: &str = r####"// Supervisão's page: built into dist/ with fix
 //   dist/source.hash  the sources the page was built from (SOURCE_FILES and everything under src/)
 //   dist/output.hash  the page as written (OUTPUT_FILES)
 // The build reads nothing else: no .env, no public/ folder, no PostCSS file, no module and no
-// file a stylesheet pulls in outside src/, the hashed files and node_modules/ (refused), no asset
-// inlined (an asset is a file of its own, so the three-file rule refuses it), and it emits the
-// three files alone (refused otherwise). The hashes are written once the bundle is on disk: a
-// failed build never writes them.
+// file a stylesheet pulls in outside src/ and the hashed files (refused; node_modules/ too, whose
+// packages the hash never sees), no asset inlined (an asset is a file of its own, so the
+// three-file rule refuses it), and it emits the three files alone (refused otherwise). The hashes
+// are written once the bundle is on disk: a failed build never writes them.
 import { defineConfig, type Plugin } from "vite";
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -528,7 +611,6 @@ const norm = (p: string) => resolve(p).replace(/\\/g, "/").toLowerCase();
 
 function stamp(): Plugin {
   const src = norm(join(__dirname, "src")) + "/";
-  const modules = norm(join(__dirname, "node_modules")) + "/";
   const hashed = SOURCE_FILES.map((f) => norm(join(__dirname, f)));
   return {
     name: "source-hash",
@@ -536,12 +618,12 @@ function stamp(): Plugin {
     enforce: "post",
     generateBundle(_options, bundle) {
       // Every module read, and every file one pulls in (a stylesheet's @import, what vite
-      // watches), is a hashed source or a locked dependency.
+      // watches), is a hashed source.
       for (const id of [...this.getModuleIds(), ...this.getWatchFiles()]) {
         if (id.startsWith("\0")) continue;
         const p = norm(id.split("?")[0]);
-        if (!(p.startsWith(src) || p.startsWith(modules) || hashed.includes(p))) {
-          this.error(`the page reads ${id}, outside src/, the hashed files and node_modules/: move it under src/`);
+        if (!(p.startsWith(src) || hashed.includes(p))) {
+          this.error(`the page reads ${id}, outside src/ and the hashed files: move it under src/`);
         }
       }
       // The page is the three files the host serves, and nothing else.
