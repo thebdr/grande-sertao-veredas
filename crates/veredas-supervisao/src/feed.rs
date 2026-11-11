@@ -326,14 +326,22 @@ fn away_sources(live: &Live) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
+impl Fold {
+    /// The session's series cache folded in, every series through `cached` with the cache's
+    /// count: what the feed does each tick.
+    pub fn poll(&mut self, live: &Live, now_ms: i64) {
+        if let Ok(cache) = live.series.read() {
+            for s in cache.values() {
+                self.cached(s.series.source.as_str(), s.series.series.as_ref(), s.last_index_ms, &s.last_value, s.keys, s.count, now_ms);
+            }
+        }
+    }
+}
+
 /// One evaluation: the cache folded in, every object read, the session's status.
 fn evaluate(fold: &mut Fold, live: &Live, binding: &Binding) -> (Vec<ObjectView>, Json) {
     let now = now_unix_ms();
-    if let Ok(cache) = live.series.read() {
-        for s in cache.values() {
-            fold.cached(s.series.source.as_str(), s.series.series.as_ref(), s.last_index_ms, &s.last_value, s.keys, s.count, now);
-        }
-    }
+    fold.poll(live, now);
     let away = away_sources(live);
     let objects = binding.objects.iter().map(|o| fold.view(o, !away.contains(&o.value.source), now)).collect();
     (objects, status(live))
@@ -378,9 +386,18 @@ pub struct Feed {
 impl Feed {
     /// Start the feed of a session on the current tokio runtime; it runs until aborted.
     pub fn spawn(live: Arc<Live>, binding: Arc<Binding>) -> (Feed, tokio::task::JoinHandle<()>) {
-        // Subscribed before the first evaluation, so no frame falls between the seed and the stream;
-        // evaluated once before anything is served, so neither route ever serves an empty snapshot.
-        let mut rx = live.subscribe();
+        // Subscribed before the first evaluation, so no frame falls between the seed and the stream.
+        let rx = live.subscribe();
+        Feed::spawn_with(live, binding, rx)
+    }
+
+    /// The feed over a receiver of the session's frames the caller subscribed (`spawn` takes
+    /// the session's own; a test hands it one it lagged). A receiver that lags loses frames and
+    /// the loop reads on: the next frame lands, and each tick's cache poll heals the series'
+    /// values the lost frames carried. Evaluated once before anything is served, so neither route
+    /// ever serves an empty snapshot. A status goes out when it changes and at least every
+    /// second, counted from the tick that sent the last one, so five ticks make the second.
+    pub fn spawn_with(live: Arc<Live>, binding: Arc<Binding>, mut rx: broadcast::Receiver<Arc<str>>) -> (Feed, tokio::task::JoinHandle<()>) {
         let mut fold = Fold::new(&binding);
         let (objects, first_status) = evaluate(&mut fold, &live, &binding);
         let snapshot = Arc::new(RwLock::new(Snapshot { objects, status: first_status.clone() }));
@@ -404,7 +421,7 @@ impl Feed {
                             tick.tick().await;
                         }
                     },
-                    _ = tick.tick() => {
+                    at = tick.tick() => {
                         let (objects, status_now) = evaluate(&mut fold, &live, &binding);
                         let changed: Vec<Json> = {
                             let prev = snapshot.read().map(|s| s.objects.clone()).unwrap_or_default();
@@ -424,8 +441,10 @@ impl Feed {
                         if !changed.is_empty() {
                             let _ = events.send(("objects", Arc::from(json!({ "objects": changed }).to_string())));
                         }
-                        if status_changed || last_status_at.elapsed() >= STATUS_EVERY {
-                            last_status_at = tokio::time::Instant::now();
+                        // Counted on the ticks' own schedule: an instant read after the evaluation
+                        // fell a hair short on the fifth tick about half the time (1.2 s).
+                        if status_changed || at.duration_since(last_status_at) >= STATUS_EVERY {
+                            last_status_at = at;
                             last_status = status_now.clone();
                             let _ = events.send(("session", Arc::from(status_now.to_string())));
                         }

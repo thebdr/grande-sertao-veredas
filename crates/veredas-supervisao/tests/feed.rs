@@ -420,7 +420,9 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
     let path = write_example(dir.path(), &grown(live_example(&bench, false)));
     let log = dir.path().join("loop/sorts.log");
     std::fs::write(&log, "").unwrap();
-    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let cfg = config::load_file(&path).unwrap();
+    let binding = cfg.sessions[0].binding.clone();
+    let host = Host::start(cfg).unwrap();
     let addr = host.addr();
 
     // The plant as the bench holds it, every object as the rules read it.
@@ -451,19 +453,25 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
     assert_eq!(object(&first, "outlet-2")["word"], json!("near full"));
     assert_eq!((first["session"]["running"].clone(), first["session"]["writes_armed"].clone(), first["session"]["health"]["plc"]["state"].clone()), (json!(true), json!(false), json!("live")));
     // The status every second: over six seconds at least five (a loaded host's late tick
-    // forgiven, a two-second cadence's three refused), never more than 2.5 s apart.
-    let mut stamps = Vec::new();
-    let _ = sse.until(Duration::from_secs(6), |n, _| {
+    // forgiven, a two-second cadence's three refused), never more than 2.5 s apart as read, and
+    // one second apart as the feed sent them: by their own clocks (`now_ms`, read when each was
+    // evaluated, free of the reader's delays) every interval but one under 1.1 s, one late tick
+    // forgiven (a cadence counted from the instant after an evaluation slipped to 1.2 s about half
+    // the time).
+    let (mut stamps, mut sent) = (Vec::new(), Vec::new());
+    let _ = sse.until(Duration::from_secs(6), |n, v| {
         if n == "session" {
             stamps.push(std::time::Instant::now());
+            sent.push(v["now_ms"].as_i64().unwrap());
         }
         false
     });
     assert!(stamps.len() >= 5, "{} statuses in 6 s", stamps.len());
-    for w in stamps.windows(2) {
-        assert!(w[1] - w[0] < Duration::from_millis(2_500), "{:?}", w[1] - w[0]);
-    }
-    let got = sse.until(Duration::from_secs(5), |n, _| n == "session").expect("a status within the second");
+    let read: Vec<Duration> = stamps.windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(read.iter().all(|g| *g < Duration::from_millis(2_500)), "{read:?}");
+    let gaps: Vec<i64> = sent.windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(gaps.iter().filter(|g| **g >= 1_100).count() <= 1, "one second apart as sent: {gaps:?} ms");
+    let got = sse.until(Duration::from_secs(5), |n, _| n == "session").expect("the next status");
     let (_, st) = got.last().unwrap();
     assert_eq!((st["running"].clone(), st["writes_armed"].clone(), st["health"]["plc"]["state"].clone(), st["health"]["plc"]["detail"].clone()), (json!(true), json!(false), json!("live"), Value::Null));
     assert!((st["now_ms"].as_i64().unwrap() - store_now()).abs() < 5_000, "the store's now: {st}");
@@ -509,6 +517,90 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
     let (_, last) = got.last().unwrap();
     let rr = last["objects"].as_array().unwrap().iter().find(|o| o["id"] == "read-rate").unwrap();
     assert_eq!((rr["mark"].clone(), rr["word"].clone(), rr["text"].clone()), (json!("\u{25CC}"), json!("stale"), json!("97.5")));
+
+    // Two lines under one stamp (97.5, then 99): portal frames each with the series' count with
+    // it, the later's one past the earlier's, and the cache, once it holds the later, shows that
+    // count. A fold fed those frames and a poll of the session's cache reads the later with its
+    // frame's arrival; a second poll leaves the arrival alone.
+    let live = host.session("loop").unwrap().live();
+    let mut frames = live.subscribe();
+    let at = store_now();
+    append(&log, &[format!("{} SORT outlet=1 travel=12.5 rate=97.5", stamp(at)), format!("{} SORT outlet=2 travel=13.5 rate=99", stamp(at))]);
+    let (mut rate, mut texts): (Vec<(f64, u64)>, Vec<String>) = (Vec::new(), Vec::new());
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while rate.len() < 2 && std::time::Instant::now() < deadline {
+        match frames.try_recv() {
+            Ok(f) => {
+                let v: Value = serde_json::from_str(&f).unwrap();
+                let mine: Vec<(f64, u64)> = v["samples"].as_array().unwrap().iter().filter(|s| s["src"] == "sorter" && s["ser"] == "rate").map(|s| (s["v"].as_f64().unwrap(), s["n"].as_u64().unwrap())).collect();
+                if !mine.is_empty() {
+                    texts.push(f.to_string());
+                    rate.extend(mine);
+                }
+            }
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(20)),
+            Err(e) => panic!("{e}"),
+        }
+    }
+    assert_eq!((rate.len(), rate.first().map(|r| r.0), rate.get(1).map(|r| r.0)), (2, Some(97.5), Some(99.0)), "{rate:?}");
+    assert_eq!(rate[1].1, rate[0].1 + 1, "{rate:?}");
+    let cached = || live.series.read().unwrap().get("sorter|rate").map(|e| (e.last_value.parse::<f64>().ok(), e.count));
+    assert!(wait(Duration::from_secs(5), || cached().is_some_and(|(v, _)| v == Some(99.0))), "{:?}", cached());
+    assert_eq!(cached().unwrap().1, rate[1].1, "the cache's count is the later frame's");
+    let mut fold = Fold::new(&binding);
+    for t in &texts {
+        fold.frame(t, 1_000);
+    }
+    fold.poll(&live, 2_000);
+    let rr = binding.objects.iter().find(|o| o.id == "read-rate").unwrap();
+    let v = fold.view(rr, true, 2_000);
+    assert_eq!((v.text.as_deref(), v.state, v.since_ms), (Some("99.0"), StateClass::Normal, Some(1_000)), "the later line with its frame's arrival");
+    fold.poll(&live, 2_500);
+    assert_eq!(fold.view(rr, true, 2_500).since_ms, Some(1_000), "polled again, no new arrival");
+
+    // A feed whose receiver lagged (two frames lost before it read) reads on: the next frame lands,
+    // a frame sent after it lands too, and the statuses keep coming.
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    rt.block_on(async {
+        use std::sync::Arc;
+        use veredas_supervisao::feed::Feed;
+        let (tx, rx) = tokio::sync::broadcast::channel::<Arc<str>>(1);
+        let far = store_now() + 86_400_000;
+        let frame = |v: f64, n: u64| -> Arc<str> { Arc::from(format!(r#"{{"type":"data","samples":[{{"src":"sorter","ser":"rate","k":null,"ms":{far},"v":{v},"n":{n}}}]}}"#)) };
+        for (v, n) in [(1.0, 1), (2.0, 2), (96.5, 3)] {
+            tx.send(frame(v, n)).unwrap();
+        }
+        let (feed, task) = Feed::spawn_with(Arc::clone(&live), Arc::new(binding.clone()), rx);
+        let mut events = feed.events.subscribe();
+        let shown = |feed: &Feed| feed.snapshot.read().unwrap().objects.iter().find(|o| o.id == "read-rate").and_then(|o| o.text.clone());
+        let until = |want: &'static str| {
+            let feed = &feed;
+            async move {
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while shown(feed).as_deref() != Some(want) {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                })
+                .await
+                .is_ok()
+            }
+        };
+        assert!(until("96.5").await, "the frame after the lost ones: {:?}", shown(&feed));
+        tx.send(frame(95.5, 4)).unwrap();
+        assert!(until("95.5").await, "a frame after the lag: {:?}", shown(&feed));
+        let status = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Ok((name, _)) = events.recv().await
+                    && name == "session"
+                {
+                    break;
+                }
+            }
+        })
+        .await;
+        assert!(status.is_ok(), "the statuses keep coming");
+        task.abort();
+    });
 
     // The plant away: every object of its source stale, its last value kept.
     // A value moving inside its state reaches the stream.
