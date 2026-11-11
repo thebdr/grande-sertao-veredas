@@ -11,15 +11,15 @@
     "files"
   ],
   "exitCode": 0,
-  "outputSha": "b1a8925214abf30b2bee22c4a326995a97979f3a26448743123ca6319522aa44",
-  "outputTail": "        PASS [   0.238s] ( 1/13) veredas-supervisao::files the_worked_example_loads_as_the_reference_states_it\n        PASS [   0.303s] ( 2/13) veredas-supervisao::files a_layout_is_an_svg_document_with_no_script\n        PASS [   0.347s] ( 3/13) veredas-supervisao::files the_reference_is_the_text_this_test_holds\n        PASS [   0.626s] ( 4/13) veredas-supervisao::files the_ranges_load_at_their_edges_and_a_rule_takes_the_object_s_own\n        PASS [   1.499s] ( 5/13) veredas-supervisao::files every_key_reads_back_as_written_and_every_default_fills\n        PASS [   1.522s] ( 6/13) veredas-supervisao::files a_binding_is_checked_against_its_project_and_its_layout\n        PASS [   1.562s] ( 7/13) veredas-supervisao::files a_supervisao_file_refuses_what_it_cannot_serve_by_its_place\n        PASS [   1.752s] ( 8/13) veredas-supervisao::files the_refusals_of_a_kind_of_series_a_panel_and_a_number_name_their_place\n        PASS [   1.760s] ( 9/13) veredas-supervisao::files every_key_the_reference_lists_is_the_reader_s\n        PASS [   1.858s] (10/13) veredas-supervisao::files the_edges_the_types_and_every_kind_of_source_and_column\n        PASS [   2.028s] (11/13) veredas-supervisao::files the_rest_of_the_refusals_name_their_place\n        PASS [   2.457s] (12/13) veredas-supervisao::files the_executable_checks_the_example_and_prints_its_plan\n        PASS [   2.622s] (13/13) veredas-supervisao::files a_binding_refuses_what_it_cannot_light_up_by_its_place\n────────────\n     Summary [   2.622s] 13 tests run: 13 passed, 0 skipped",
-  "ranAt": "2026-11-11T07:04:03.317Z",
-  "headCommit": "a83e37ad9a26ed3757388c444aac4ab0be67aa6a",
+  "outputSha": "b357d20b573266315ae29276ebfb40f0e153c5a296a1e204f0a4c2b6847ef301",
+  "outputTail": "        PASS [   0.103s] ( 1/13) veredas-supervisao::files a_layout_is_an_svg_document_with_no_script\n        PASS [   0.199s] ( 2/13) veredas-supervisao::files the_reference_is_the_text_this_test_holds\n        PASS [   0.362s] ( 3/13) veredas-supervisao::files the_worked_example_loads_as_the_reference_states_it\n        PASS [   0.603s] ( 4/13) veredas-supervisao::files the_ranges_load_at_their_edges_and_a_rule_takes_the_object_s_own\n        PASS [   0.847s] ( 5/13) veredas-supervisao::files a_supervisao_file_refuses_what_it_cannot_serve_by_its_place\n        PASS [   0.914s] ( 6/13) veredas-supervisao::files every_key_reads_back_as_written_and_every_default_fills\n        PASS [   0.938s] ( 7/13) veredas-supervisao::files a_binding_is_checked_against_its_project_and_its_layout\n        PASS [   1.023s] ( 8/13) veredas-supervisao::files the_refusals_of_a_kind_of_series_a_panel_and_a_number_name_their_place\n        PASS [   1.040s] ( 9/13) veredas-supervisao::files every_key_the_reference_lists_is_the_reader_s\n        PASS [   1.059s] (10/13) veredas-supervisao::files the_rest_of_the_refusals_name_their_place\n        PASS [   1.122s] (11/13) veredas-supervisao::files the_edges_the_types_and_every_kind_of_source_and_column\n        PASS [   1.359s] (12/13) veredas-supervisao::files the_executable_checks_the_example_and_prints_its_plan\n        PASS [   1.496s] (13/13) veredas-supervisao::files a_binding_refuses_what_it_cannot_light_up_by_its_place\n────────────\n     Summary [   1.497s] 13 tests run: 13 passed, 0 skipped",
+  "ranAt": "2026-11-11T15:03:33.206Z",
+  "headCommit": "02415c9d3011bb18810dcd63a2440aa4f9e1150b",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/files.rs",
       "file": "crates/veredas-supervisao/tests/files.rs",
-      "fileSha": "5de33ae39c5549d0f6c7450cf12234d069e7a8300c26fb6e4628962a53a41494"
+      "fileSha": "5834ea0803f9f9fe2486ca10afe30594b9eff6b4a9451571be6aaeeebc56a687"
     }
   ]
 }
