@@ -80,6 +80,29 @@ fn squeezed(text: &str) -> String {
     flat
 }
 
+/// Every crate root a source names that the reading cannot follow: `std`, `tokio`, core or portal
+/// as a word not followed at once by `::` and a name or a `{` (renamed with `as`, a comment inside
+/// its path, a macro splicing the rest, passed to a macro whole). Whole-line comments are not code.
+fn unfollowed_roots(text: &str) -> Vec<String> {
+    let code: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with("//")).collect();
+    let flat = squeezed(&code.join("\n"));
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out = Vec::new();
+    for root in ["std", "tokio", "veredas_core", "veredas_portal"] {
+        for (at, _) in flat.match_indices(root) {
+            let after = &flat[at + root.len()..];
+            if flat[..at].chars().last().is_some_and(word) || after.chars().next().is_some_and(word) {
+                continue;
+            }
+            let follows = after.strip_prefix("::").and_then(|r| r.chars().next()).is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '{');
+            if !follows {
+                out.push(format!("{root}{}", after.chars().take(12).collect::<String>()));
+            }
+        }
+    }
+    out
+}
+
 /// A `use` tree's paths written out whole: `a::{b, c::{d, self}}` gives `a::b`, `a::c::d`, `a::c`.
 fn use_paths(prefix: &str, tree: &str) -> Vec<String> {
     let tree = tree.trim();
@@ -234,11 +257,14 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
             "writes_armed =", "writes_armed |=", "writes_armed:", "channel::spawn", "worker::spawn", "include!", "#[path",
             // No socket but its own listener, no file written, no program run.
             "TcpStream", "TcpSocket", "UdpSocket", "UnixStream", "UnixListener", "UnixDatagram", "fs::write", "File::create", "OpenOptions", "fs::copy", "fs::rename", "Command::new",
-            // Nothing of core's or portal's renamed or taken whole.
-            "extern crate", "veredas_core as", "veredas_portal as",
+            // Nothing of core's or portal's renamed or taken whole; no macro of its own and no block
+            // comment, either of which can hide a path from this reading.
+            "extern crate", "veredas_core as", "veredas_portal as", "macro_rules!", "/*",
         ] {
             assert!(!flat.contains(word), "{} names `{word}`", path.display());
         }
+        let unread = unfollowed_roots(&text);
+        assert!(unread.is_empty(), "{} names a crate root this reading cannot follow: {unread:?}", path.display());
         listeners += text.matches("TcpListener").count();
         for p in named_paths(&text) {
             assert!(!p.contains('*') && !p.contains(" as "), "{} takes `{p}` whole or renamed", path.display());
@@ -264,6 +290,11 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     let mut got: Vec<String> = named_paths(escapes).into_iter().filter(|p| judged(p) && !ALLOWED.contains(&p.as_str())).collect();
     got.sort();
     assert_eq!(got, ["std::fs", "std::fs::File::options", "std::fs::write", "std::io::Write::write_all", "std::process::Command as Run", "std::process::Command::new"]);
+    // And a root the reading cannot follow is refused, not passed over: a crate renamed, a comment
+    // inside a path, a macro splicing the rest; a doc comment naming the runtime is no code.
+    let hidden = "use std as sd;\nsd::fs::File::options();\nlet f = std::/**/fs::write(p, b);\nmacro_rules! sx { ($($r:tt)*) => { std::$($r)* } }\n/// on the current tokio runtime\nfn f() {}";
+    let unread: Vec<String> = unfollowed_roots(hidden).into_iter().map(|r| r.chars().take(5).collect()).collect();
+    assert_eq!(unread, ["std a", "std::", "std::"], "{:?}", unfollowed_roots(hidden));
     let bundle = veredas_supervisao::web::APP_JS;
     assert_eq!(bundle.matches("/api/opc/write").count(), 1, "the page posts to one route");
     assert!(bundle.contains("/portal/api/opc/write") && !bundle.contains("/api/channels/send"), "the route is portal's own");
