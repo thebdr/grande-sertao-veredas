@@ -10,15 +10,15 @@
     "emitters"
   ],
   "exitCode": 0,
-  "outputSha": "8257f6367a723ab4c12a9471fe2088ed1159a7d986e36bf5816db1c79b8c44f2",
-  "outputTail": "test a_stop_is_prompt_whatever_the_interval ... ok\ntest after_a_failed_write_the_file_is_left_and_a_fresh_name_taken ... ok\ntest a_restart_never_appends_past_a_gap_in_the_family ... ok\ntest when_every_name_exists_nothing_is_written_and_the_status_says_so ... ok\ntest an_emitter_writes_rotating_files_a_plant_would_recognise ... ok\ntest restarting_never_appends_to_a_file_it_already_wrote ... ok\ntest a_missing_output_folder_is_reported_and_then_recovered_from ... ok\ntest the_family_shape_describes_what_the_pattern_writes ... ok\ntest writers_started_together_never_share_a_file ... ok\n\ntest result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.51s\n     Running tests\\emitters.rs (target\\debug\\deps\\emitters-758e668d46cbfdaa.exe)",
-  "ranAt": "2026-11-07T23:58:53.941Z",
-  "headCommit": "31c2392e7d7a58da4ef7f09c4cd3a07fd2d47cef",
+  "outputSha": "35dffb6d17cdd8a4949974b0ccfc4b458baeaa09eec2f89fffff239099963b64",
+  "outputTail": "test after_a_failed_write_the_file_is_left_and_a_fresh_name_taken ... ok\ntest when_every_name_exists_nothing_is_written_and_the_status_says_so ... ok\ntest a_restart_never_appends_past_a_gap_in_the_family ... ok\ntest a_missing_output_folder_is_reported_and_then_recovered_from ... ok\ntest a_stop_is_prompt_whatever_the_interval ... ok\ntest an_emitter_writes_rotating_files_a_plant_would_recognise ... ok\ntest restarting_never_appends_to_a_file_it_already_wrote ... ok\ntest the_family_shape_describes_what_the_pattern_writes ... ok\ntest writers_started_together_never_share_a_file ... ok\n\ntest result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.39s\n     Running tests\\emitters.rs (target\\debug\\deps\\emitters-c352eb71fb2f9f8c.exe)",
+  "ranAt": "2026-11-11T03:52:00.361Z",
+  "headCommit": "34a9ef62d232908b4427bb4c3efc7052c34df8ff",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/emitters.rs",
       "file": "crates/veredas-maquinar/tests/emitters.rs",
-      "fileSha": "c7449cbc74dddb64e76e1d3fd4bc28dbf0bd8d7cbc26d92d0c5a0b02f26130b4"
+      "fileSha": "5c14175e6681ae5e33869be04dff85b91050e04704d2b0201171eeb7f6e4e218"
     }
   ]
 }
