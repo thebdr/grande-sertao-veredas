@@ -10,15 +10,15 @@
     "dashboards"
   ],
   "exitCode": 0,
-  "outputSha": "f20e2eda345228ab2d14198fb20c5ce654322e252722be2259ff77e2d5a74b78",
-  "outputTail": "\nrunning 5 tests\ntest a_table_sorts_numbers_as_numbers_with_nulls_last ... ok\ntest buckets_align_on_the_clock_and_mark_the_running_one ... ok\ntest medians_sigmas_and_distributions_are_exact ... ok\ntest every_panel_kind_is_computed_exactly_from_the_store ... ok\ntest the_cells_read_each_row_once_while_rows_arrive ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.16s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.82s\n     Running tests\\dashboards.rs (target\\debug\\deps\\dashboards-6fe58751fce6c8eb.exe)",
-  "ranAt": "2026-11-11T15:03:13.623Z",
-  "headCommit": "02415c9d3011bb18810dcd63a2440aa4f9e1150b",
+  "outputSha": "22d29baa6f40c8d2462187ff0475a4edfba1aa0c32c10d02d7d9c8da0c90927b",
+  "outputTail": "\nrunning 5 tests\ntest a_table_sorts_numbers_as_numbers_with_nulls_last ... ok\ntest medians_sigmas_and_distributions_are_exact ... ok\ntest buckets_align_on_the_clock_and_mark_the_running_one ... ok\ntest every_panel_kind_is_computed_exactly_from_the_store ... ok\ntest the_cells_read_each_row_once_while_rows_arrive ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 49.12s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 25.42s\n     Running tests\\dashboards.rs (target\\debug\\deps\\dashboards-6fe58751fce6c8eb.exe)",
+  "ranAt": "2026-11-11T20:08:11.278Z",
+  "headCommit": "cede1a7b7fabf3b9202ed4d0b572bda9011bcead",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/dashboards.rs",
       "file": "crates/veredas-supervisao/tests/dashboards.rs",
-      "fileSha": "c81cfe32360bddaf1c73ee413c7c7b22a1a1c7225c2ca5befd159e13ce2fd0bb"
+      "fileSha": "4bad3cf11effd2a96d007507e5f9ea119a61cd2b66f7081ccf2e2ae77f53b3e3"
     }
   ]
 }
