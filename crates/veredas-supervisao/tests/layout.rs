@@ -111,7 +111,9 @@ const AROUND: &str = r#"(() => ({
 /// attention list's marks and the side panel's badges by their colour and background. A green is
 /// one of the accent's four colours (the accent, its tint, its soft and its outline, by red, green
 /// and blue whatever the alpha) or any colour of the accent's band of hue (100° to 170°) with some
-/// saturation (above 0.2): a shade one unit off the accent is still the accent to the eye.
+/// saturation (above 0.2): a shade one unit off the accent is still the accent to the eye. A fill or
+/// stroke painted by a pattern or a gradient (`url(#id)`) is read through the colours it paints
+/// with: the fills, strokes and stop colours of the element it names and everything inside it.
 const ACCENT_ON_STATES: &str = r##"(() => {
   const root = getComputedStyle(document.documentElement);
   const hex = (h) => { h = h.trim().replace("#", ""); if (h.length === 3) h = [...h].map((c) => c + c).join(""); return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)).join(","); };
@@ -129,9 +131,16 @@ const ACCENT_ON_STATES: &str = r##"(() => {
     const hue = (h + 360) % 360;
     return hue >= 100 && hue <= 170 && s > 0.2;
   };
+  const painted = (v) => {
+    const m = v.match(/url\(["']?#([^"')]+)["']?\)/);
+    if (!m) return green(v) ? [v] : [];
+    const ref = document.getElementById(m[1]);
+    if (!ref) return [];
+    return [ref, ...ref.querySelectorAll("*")].flatMap((d) => { const c = getComputedStyle(d); return [c.fill, c.stroke, c.stopColor].filter(green); }).map((g) => `${v} paints ${g}`);
+  };
   const drawn = [...document.querySelectorAll("svg.plant .sv-obj, svg.plant [data-key], svg.plant .sv-fill, .sv-overlay .sv-tag")]
     .filter((el) => !el.classList.contains("sv-selected"))
-    .flatMap((el) => { const c = getComputedStyle(el); return [["fill", c.fill], ["stroke", c.stroke]].filter(([, v]) => green(v)).map(([p, v]) => `${el.id || el.dataset.for || el.dataset.key} ${p} ${v}`); });
+    .flatMap((el) => { const c = getComputedStyle(el); return [["fill", c.fill], ["stroke", c.stroke]].flatMap(([p, v]) => painted(v).map((g) => `${el.id || el.dataset.for || el.dataset.key} ${p} ${g}`)); });
   const around = [...document.querySelectorAll(".headline .fig .mono, .side ul.attention .mark, .side .badge")]
     .flatMap((el) => { const c = getComputedStyle(el); return [["color", c.color], ["background", c.backgroundColor]].filter(([, v]) => green(v)).map(([p, v]) => `${el.className} ${JSON.stringify(el.textContent)} ${p} ${v}`); });
   return drawn.concat(around);
@@ -354,7 +363,9 @@ fn grown(mut ex: Example) -> Example {
         .replace("<rect id=\"outlet-1\" x=\"130\" y=\"4\" width=\"24\" height=\"28\"/>", "<g id=\"outlet-1\"><rect x=\"130\" y=\"4\" width=\"24\" height=\"28\"/></g>")
         .replace("<rect id=\"outlet-2\" x=\"190\" y=\"4\" width=\"24\" height=\"28\"/>", "<rect id=\"outlet-2\" x=\"190\" y=\"4\" width=\"24\" height=\"28\" transform=\"translate(-20 110)\"/>")
         .replace("<rect id=\"outlet-3\" x=\"250\" y=\"4\" width=\"24\" height=\"28\"/>", "<g transform=\"translate(0 100)\"><rect id=\"outlet-3\" x=\"250\" y=\"4\" width=\"24\" height=\"28\"/></g>")
-        .replace("<circle id=\"parcel-2\" r=\"5\"/>", "<circle id=\"parcel-2\" r=\"5\"/>\n  <circle id=\"tracked\" r=\"4\"/>");
+        // A keyed marker inside a moved group, as a drawing's layers put one: its clones stand at
+        // their places whatever the group's transform.
+        .replace("<circle id=\"parcel-2\" r=\"5\"/>", "<circle id=\"parcel-2\" r=\"5\"/>\n  <g transform=\"translate(15 -10)\"><circle id=\"tracked\" r=\"4\"/></g>");
     ex
 }
 
@@ -363,7 +374,7 @@ fn the_page_draws_the_layout_from_the_feed() {
     let dir = tempfile::tempdir().unwrap();
     let bench = plant(&dir.path().join("bench"));
     let ex = grown(live_example(&bench, false));
-    for grew in ["<g transform=\"translate(0 30)\"><path id=\"loop\"", "translate(-20 110)", "<g transform=\"translate(0 100)\"><rect id=\"outlet-3\"", "<g id=\"outlet-1\">", "id=\"tracked\""] {
+    for grew in ["<g transform=\"translate(0 30)\"><path id=\"loop\"", "translate(-20 110)", "<g transform=\"translate(0 100)\"><rect id=\"outlet-3\"", "<g id=\"outlet-1\">", "<g transform=\"translate(15 -10)\"><circle id=\"tracked\""] {
         assert!(ex.svg.contains(grew), "{grew}: {}", ex.svg);
     }
     let path = write_example(dir.path(), &ex);
