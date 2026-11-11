@@ -74,7 +74,9 @@ the gateway, the desktop, the supervision app) each did.
   tracking-accuracy object of the design (its definitions are open, `docs/design/supervisao/`);
   starting, stopping or adding a session from the browser; the grep tool over logs at rest and the
   skew monitor that Q14 left waiting; a session's own `[server]` address (supervisão serves the
-  session's surface under its own address and binds no other).
+  session's surface under its own address and binds no other); the dashboards' charts
+  interactive, zoomed in and out on the page, and each chart's data exported as CSV (the
+  operator, 2026-11-11, from a demo run).
 
 ## Rules
 - **Every value arrives through portal; every write rides portal's gated surface.** Supervisão
