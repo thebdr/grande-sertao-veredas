@@ -11,15 +11,15 @@
     "feed"
   ],
   "exitCode": 0,
-  "outputSha": "011a84eefb8c1a528451e0af6a7ce3c1d4ab98313fc371a4b7d2a779b7f0d6b0",
-  "outputTail": "   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.93s\n────────────\n Nextest run ID 0e144380-f720-41f8-ac07-6fb7f6a46d2f with nextest profile: default\n    Starting 5 tests across 1 binary\n        PASS [   0.122s] (1/5) veredas-supervisao::feed numbers_read_as_they_are_shown\n        PASS [   0.166s] (2/5) veredas-supervisao::feed a_rule_holds_only_over_its_kind_of_value\n        PASS [   0.185s] (3/5) veredas-supervisao::feed a_stream_client_that_lags_gets_a_fresh_snapshot\n        PASS [   0.257s] (4/5) veredas-supervisao::feed the_fold_reads_every_object_exactly\n        PASS [  14.101s] (5/5) veredas-supervisao::feed the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream\n────────────\n     Summary [  14.102s] 5 tests run: 5 passed, 0 skipped",
-  "ranAt": "2026-11-10T23:08:11.465Z",
-  "headCommit": "4b43ac089c6fad0b8298c9001a6b99755a94f9c4",
+  "outputSha": "f0f32244bc1b215e30188f2944628a915aed2ee616b9e8bab55afaf36d3f4407",
+  "outputTail": "   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.89s\n────────────\n Nextest run ID d4d66972-47cc-4810-a4ee-191eac0db5ac with nextest profile: default\n    Starting 5 tests across 1 binary\n        PASS [   0.120s] (1/5) veredas-supervisao::feed a_rule_holds_only_over_its_kind_of_value\n        PASS [   0.123s] (2/5) veredas-supervisao::feed a_stream_client_that_lags_gets_a_fresh_snapshot\n        PASS [   0.137s] (3/5) veredas-supervisao::feed numbers_read_as_they_are_shown\n        PASS [   0.202s] (4/5) veredas-supervisao::feed the_fold_reads_every_object_exactly\n        PASS [  15.811s] (5/5) veredas-supervisao::feed the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream\n────────────\n     Summary [  15.812s] 5 tests run: 5 passed, 0 skipped",
+  "ranAt": "2026-11-11T01:09:14.803Z",
+  "headCommit": "8c49ba96bf2bb6420513477a00d76f7b63247ae4",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/feed.rs",
       "file": "crates/veredas-supervisao/tests/feed.rs",
-      "fileSha": "ae31b214232035aae4c98cbf699dba8829cdd46ed9977a53d17ba4a0efbab59f"
+      "fileSha": "43f9cadedfffebada2c6c898f7cda5198c25003559a56598fe0dfb04af7155d8"
     }
   ]
 }
