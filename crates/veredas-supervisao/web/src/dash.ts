@@ -83,8 +83,7 @@ function gridPanel(p: PanelOut): HTMLElement {
       h("span", { class: "cell-id" }, c.label),
       h("span", { class: `cell-v mono st-text-${c.state}` }, c.state === "normal" || c.state === "near" ? (c.text ?? "—") : c.word)),
   );
-  const notNormal = (p.data.cells as Tile[]).filter((c) => c.state !== "normal").length;
-  return h("div", { class: "panel" }, head(p.title, `${cells.length} · ${notNormal} not normal`), h("div", { class: "grid-cells" }, ...cells));
+  return h("div", { class: "panel" }, head(p.title, `${cells.length} · ${p.data.not_normal} not normal`), h("div", { class: "grid-cells" }, ...cells));
 }
 
 function levelsPanel(p: PanelOut): HTMLElement {

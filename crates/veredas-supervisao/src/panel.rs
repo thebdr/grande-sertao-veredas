@@ -293,40 +293,44 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
     // another. One stored at the very stamp a page ended on sorts ahead of the rows read there
     // (the store breaks a tie by arrival, newest first), so the next page starts that many rows
     // early: never past a row not yet read, and the rows read again are known by their source and
-    // sequence (every base table carries both) and taken once. A table without `index_ms` is paged
-    // by offset (the store orders it by `ts`).
-    let mut stamp_at: Option<usize> = None;
-    let mut ident: Option<(usize, usize)> = None;
+    // sequence and taken once. Every base table carries the three columns this needs; a view
+    // without one of them is refused, its rows having nothing to be read once by.
+    let mut at: Option<(usize, usize, usize)> = None;
     let mut taken: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     let (mut bound, mut tied) = (to, 0usize);
     loop {
-        let q = match stamp_at {
-            Some(_) => RowsQuery { from_ms: Some(from), to_ms: Some(bound), limit: page_rows, offset: tied },
-            None => RowsQuery { from_ms: Some(from), to_ms: Some(to), limit: page_rows, offset: rows.len() },
-        };
+        let q = RowsQuery { from_ms: Some(from), to_ms: Some(bound), limit: page_rows, offset: tied };
         let page = live.store.query_rows(table, &q).map_err(|e| e.to_string())?;
-        if columns.is_empty() {
-            columns = page.columns.iter().map(|c| c.name.clone()).collect();
-            stamp_at = columns.iter().position(|c| c == "index_ms");
-            ident = columns.iter().position(|c| c == "source").zip(columns.iter().position(|c| c == "seq"));
-        }
-        // The window as it stood at the first read.
-        total.get_or_insert(page.total);
-        let n = page.rows.len();
-        match stamp_at {
-            Some(ti) => {
-                for r in page.rows {
-                    match r.get(ti).and_then(Json::as_i64) {
-                        Some(t) if t != bound => (bound, tied) = (t, 1),
-                        _ => tied += 1,
-                    }
-                    let fresh = ident.is_none_or(|(si, qi)| taken.insert((r.get(si).map(Json::to_string).unwrap_or_default(), r.get(qi).map(Json::to_string).unwrap_or_default())));
-                    if fresh {
-                        rows.push(r);
+        let (ti, si, qi) = match at {
+            Some(at) => at,
+            None => {
+                columns = page.columns.iter().map(|c| c.name.clone()).collect();
+                let has = |name: &str| columns.iter().position(|c| c == name);
+                match (has("index_ms"), has("source"), has("seq")) {
+                    (Some(ti), Some(si), Some(qi)) => *at.insert((ti, si, qi)),
+                    _ => {
+                        let missing: Vec<String> = ["index_ms", "source", "seq"].into_iter().filter(|n| has(n).is_none()).map(|n| format!("`{n}`")).collect();
+                        return Err(format!(
+                            "`{table}` has no {} (cells read each row once by `index_ms`, `source` and `seq`; its columns: {})",
+                            missing.join(", "),
+                            columns.join(", ")
+                        ));
                     }
                 }
             }
-            None => rows.extend(page.rows),
+        };
+        // The window as it stood at the first read.
+        total.get_or_insert(page.total);
+        let n = page.rows.len();
+        for r in page.rows {
+            match r.get(ti).and_then(Json::as_i64) {
+                Some(t) if t != bound => (bound, tied) = (t, 1),
+                _ => tied += 1,
+            }
+            let id = (r.get(si).map(Json::to_string).unwrap_or_default(), r.get(qi).map(Json::to_string).unwrap_or_default());
+            if taken.insert(id) {
+                rows.push(r);
+            }
         }
         if n < page_rows || rows.len() >= cap {
             break;
@@ -436,7 +440,11 @@ fn panel_body(live: &Live, b: &Binding, snap: &Snapshot, p: &Panel, to: i64, now
             json!({ "from": from, "to": to, "rows": rows })
         }
         PanelKind::Grid { objects } => {
-            json!({ "cells": objects.iter().map(|i| view_json(&b.objects[*i], view(*i))).collect::<Vec<_>>() })
+            let cells: Vec<Json> = objects.iter().map(|i| view_json(&b.objects[*i], view(*i))).collect();
+            // The heading's count, computed here as every figure the page draws: the cells in any
+            // state but normal.
+            let not_normal = cells.iter().filter(|c| c["state"] != "normal").count();
+            json!({ "cells": cells, "not_normal": not_normal })
         }
         PanelKind::Levels { objects, ticks } => {
             let rows: Vec<Json> = objects

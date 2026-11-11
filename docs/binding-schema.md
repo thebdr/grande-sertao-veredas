@@ -365,7 +365,8 @@ view's are the engine's, judged when the panel is computed.
 - `timeline`: per object one bar of its state over the window, each state lasting until the next
   sample, the one holding at the window's start (its last sample within the day before) drawn from
   the start. `objects` (required), `minutes` (`60`). The objects' series must be numeric.
-- `grid`: one small cell per object with its value and state. `objects` (required).
+- `grid`: one small cell per object with its value and state, the heading counting the cells not
+  normal. `objects` (required).
 - `levels`: one horizontal bar per object, its value's place in the object's `range`, with ticks.
   `objects` (required), `ticks` (none: values in the objects' units).
 - `table`: rows of a table of the session, newest first. `table` (required: a capture rule, an OPC
@@ -377,7 +378,8 @@ view's are the engine's, judged when the panel is computed.
   rules compare its own value.
 - `cells`: charts in cells, one row per value of a key column of a table over a window: the
   median, a sparkline of the median per `bucket_minutes`, the distribution from median − `spread`
-  to median + `spread` in 20 bins, σ and n. `table` (required), `key` (required), `value`
+  to median + `spread` in 20 bins, σ and n. `table` (required; a view must carry `index_ms`,
+  `source` and `seq`, by which each row is read once while rows arrive), `key` (required), `value`
   (required: a numeric column), `minutes` (`60`), `bucket_minutes` (`5`), `spread` (required,
   above 0). It reads at most the newest 50 000 rows of the window, and says so when it did.
 

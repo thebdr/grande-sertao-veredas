@@ -185,6 +185,10 @@ limit = { above = 50 }
 [[dashboard.panel]]
 kind = "value"
 object = "dense"
+
+[[dashboard.panel]]
+kind = "trend"
+object = "dense"
 "#;
 
 /// The lines, `(minutes past the base, text)`: sorts with their outlet, travel and rate, and the
@@ -247,10 +251,14 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
         panel(&d, 0)["text"] == json!("99.2") && panel(&d, 7)["cells"][2]["text"] == json!("100")
     }), "{}", get_d());
     let d = get_d();
-    assert_eq!((d["name"].clone(), d["columns"].clone(), d["to"].clone(), d["panels"].as_array().unwrap().len()), (json!("Numbers"), json!(4), json!(to), 16));
+    assert_eq!((d["name"].clone(), d["columns"].clone(), d["to"].clone(), d["panels"].as_array().unwrap().len()), (json!("Numbers"), json!(4), json!(to), 17));
     let heads: Vec<(String, String, i64)> = d["panels"].as_array().unwrap().iter().map(|p| (p["kind"].as_str().unwrap().to_string(), p["title"].as_str().unwrap().to_string(), p["span"].as_i64().unwrap())).collect();
     assert_eq!(heads[..4].iter().map(|h| h.1.as_str()).collect::<Vec<_>>(), ["Read rate", "Travel", "Low rate", "Fresh rate"]);
-    assert_eq!(heads[4..].iter().map(|h| h.0.as_str()).collect::<Vec<_>>(), ["trend", "bars", "timeline", "grid", "levels", "table", "cells", "table", "trend", "value", "trend", "value"]);
+    assert_eq!(heads[4..].iter().map(|h| h.0.as_str()).collect::<Vec<_>>(), ["trend", "bars", "timeline", "grid", "levels", "table", "cells", "table", "trend", "value", "trend", "value", "trend"]);
+    // A trend with no limit: no breaches, no limit, its every point counted (the 400, not the line's
+    // 300).
+    let free = panel(&d, 16);
+    assert_eq!((free["total"].clone(), free["limit"].clone(), free["breaches"].clone(), free["points"].as_array().unwrap().len()), (json!(400), Value::Null, json!([]), veredas_supervisao::panel::TREND_POINTS));
     // A dense trend: its total and breaches from every point of the window, its line downsampled
     // to the trend's points.
     let dn = panel(&d, 14);
@@ -331,6 +339,7 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     // own range, the ticks placed on it.
     let cells: Vec<(Value, Value, Value)> = panel(&d, 7)["cells"].as_array().unwrap().iter().map(|c| (c["text"].clone(), c["state"].clone(), c["word"].clone())).collect();
     assert_eq!(cells, [(json!("35"), json!("normal"), json!("ok")), (json!("85"), json!("near"), json!("near full")), (json!("100"), json!("warn"), json!("full"))]);
+    assert_eq!(panel(&d, 7)["not_normal"], json!(2), "near and warn: two not normal");
     let levels: Vec<(Value, Value, Value)> = panel(&d, 8)["rows"].as_array().unwrap().iter().map(|r| (r["id"].clone(), r["fraction"].clone(), r["ticks"].clone())).collect();
     assert_eq!(levels, [
         (json!("outlet-1"), json!(0.35), json!([0.8, 0.9])),
@@ -474,7 +483,8 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
         std::thread::sleep(Duration::from_millis(200));
     };
     // What it drew, spelled out where the bench's values make it certain.
-    assert_eq!(dash["panels"].as_array().unwrap().len(), 16);
+    assert_eq!(dash["panels"].as_array().unwrap().len(), 17);
+    assert_eq!((drawn[7]["right"].clone(), drawn[16]["right"].clone()), (json!("3 · 2 not normal"), json!("400 points")));
     // The cells panel as the page's own fetch was handed it past its cap: the note drawn.
     // (The page reads the live window: its total is what that window held, the last sort in it
     // or not yet.)
@@ -546,7 +556,8 @@ const DRAWN_PANELS: &str = r#"(() => {
         r.rows = [...p.querySelectorAll(".tl-row")].map((x) => [txt(x.querySelector(".tl-label")), txt(x.querySelector(".tl-now")), x.querySelector(".tl-now").className,
           [...x.querySelectorAll("svg.statebar rect:not(.st-none)")].map((g) => [g.getAttribute("class"), num(g, "x"), num(g, "width"), num(g, "y"), num(g, "height")])]); break;
       case "grid":
-        r.cells = [...p.querySelectorAll(".grid-cells .cell")].map((c) => [txt(c.querySelector(".cell-id")), txt(c.querySelector(".cell-v")), c.className]); break;
+        r.cells = [...p.querySelectorAll(".grid-cells .cell")].map((c) => [txt(c.querySelector(".cell-id")), txt(c.querySelector(".cell-v")), c.className]);
+        r.right = txt(p.querySelector(".panel-bind")); break;
       case "levels":
         r.rows = [...p.querySelectorAll(".lv-row")].map((x) => [txt(x.querySelector(".lv-label")), x.querySelector(".lv-fill").getAttribute("style"), x.querySelector(".lv-fill").className, [...x.querySelectorAll(".lv-tick")].map((t) => t.getAttribute("style")), txt(x.querySelector(".lv-v"))]); break;
       case "table":
@@ -695,6 +706,7 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                         let v = if quiet(&c["state"]) { c["text"].as_str().unwrap_or("\u{2014}").to_string() } else { s(&c["word"]) };
                         json!([c["label"], v, format!("cell st-box-{}", s(&c["state"]))])
                     }).collect::<Vec<_>>());
+                    r["right"] = json!(format!("{} · {} not normal", x["cells"].as_array().unwrap().len(), x["not_normal"]));
                 }
                 "levels" => {
                     r["rows"] = json!(x["rows"].as_array().unwrap().iter().map(|row| {
@@ -759,17 +771,48 @@ fn the_cells_read_each_row_once_while_rows_arrive() {
     let bench = plant(&dir.path().join("bench"));
     let mut ex = live_example(&bench, false);
     ex.project = ex.project.replace("writes_armed = false", "writes_armed = false\nidle_after_ms = 600000");
+    // Two logs feeding the sorts (the rule's scope dropped): their sequences overlap from 0, so a row
+    // is known by its source and its sequence together.
+    let scoped = "scope = \"sorter\"\ntypes = { outlet";
+    assert!(ex.project.contains(scoped));
+    ex.project = ex.project.replace(scoped, "types = { outlet");
+    ex.project.push_str("\n[[log]]\nid = \"second\"\nfile = \"second.log\"\ntimestamp = { pattern = \"^(?P<ts>\\\\S+ \\\\S+)\", formats = [\"%Y-%m-%d %H:%M:%S%.3f\"] }\n");
+    // Views as the cells table: one with the three columns rows are read once by, two without.
+    ex.project.push_str("\n[[table]]\nname = \"whole\"\nsql = \"SELECT index_ms, source, seq, outlet, travel FROM sorts\"\n");
+    ex.project.push_str("\n[[table]]\nname = \"unsourced\"\nsql = \"SELECT index_ms, outlet, travel FROM sorts\"\n");
+    ex.project.push_str("\n[[table]]\nname = \"unstamped\"\nsql = \"SELECT ts, source, seq, outlet, travel FROM sorts\"\n");
     let path = write_example(dir.path(), &ex);
     let log = dir.path().join("loop/sorts.log");
+    let second = dir.path().join("loop/second.log");
     std::fs::write(&log, "").unwrap();
+    std::fs::write(&second, "").unwrap();
     let host = Host::start(config::load_file(&path).unwrap()).unwrap();
     let live = host.session("loop").unwrap().live();
-    assert!(wait(Duration::from_secs(20), || live.health.read().unwrap().get("sorter").is_some_and(|h| h.count == 0)), "the log is attached");
+    assert!(
+        wait(Duration::from_secs(20), || {
+            let h = live.health.read().unwrap();
+            h.get("sorter").is_some_and(|h| h.count == 0) && h.get("second").is_some_and(|h| h.count == 0)
+        }),
+        "the logs are attached"
+    );
     let rows = || live.store.query_rows("sorts", &veredas_portal::store::RowsQuery { limit: 1, ..Default::default() }).map(|p| p.total).unwrap_or(0);
-    // Three hundred sorts over the last half hour, a hundred per outlet.
+    // Three hundred sorts over the last half hour, a hundred per outlet; and ninety from the second
+    // log, outlet 10, between them.
     let now = store_now();
     append(&log, &(0..300).map(|i| format!("{} SORT outlet={} travel={} rate=99.0", stamp(now - 30 * MIN + i * 5_000), 1 + i % 3, 10.0 + (i % 7) as f64)).collect::<Vec<_>>());
-    assert!(wait(Duration::from_secs(20), || rows() == 300), "{}", rows());
+    append(&second, &(0..90).map(|i| format!("{} SORT outlet=10 travel=12.0 rate=99.0", stamp(now - 30 * MIN + i * 20_000 + 1_250))).collect::<Vec<_>>());
+    assert!(wait(Duration::from_secs(20), || rows() == 390), "{}", rows());
+    let sources = live.store.query_rows("whole", &veredas_portal::store::RowsQuery { limit: 1000, ..Default::default() }).unwrap();
+    let si = sources.columns.iter().position(|c| c.name == "source").unwrap();
+    let mut by: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for r in &sources.rows {
+        *by.entry(r[si].as_str().unwrap().to_string()).or_default() += 1;
+    }
+    assert_eq!(by, [("second".to_string(), 90), ("sorter".to_string(), 300)].into_iter().collect(), "both logs in the one table");
+    // A view without them is refused, naming what it lacks.
+    let refused = |t: &str| veredas_supervisao::panel::cells(&live, t, "outlet", "travel", 60, 5, 5.0, now, 2, 50_000).unwrap_err();
+    assert_eq!(refused("unsourced"), "`unsourced` has no `source`, `seq` (cells read each row once by `index_ms`, `source` and `seq`; its columns: index_ms, outlet, travel)");
+    assert_eq!(refused("unstamped"), "`unstamped` has no `index_ms` (cells read each row once by `index_ms`, `source` and `seq`; its columns: ts, source, seq, outlet, travel)");
     // Then a hundred and fifty sorts arriving at the newest end, ten milliseconds apart, while the
     // cells are read two rows a page, again and again until the last has arrived.
     let stop = Arc::new(AtomicBool::new(false));
@@ -786,12 +829,15 @@ fn the_cells_read_each_row_once_while_rows_arrive() {
     let to = store_now() + 10 * MIN;
     let (mut grew, mut reads) = (0, 0);
     while !stop.load(Ordering::Relaxed) || reads < 2 {
-        let before = rows();
-        let c = veredas_supervisao::panel::cells(&live, "sorts", "outlet", "travel", 60, 5, 5.0, to, 2, 50_000).unwrap();
-        grew += rows() - before;
-        reads += 1;
-        let ns: Vec<(Value, Value)> = c["rows"].as_array().unwrap().iter().filter(|r| r["key"] != "9").map(|r| (r["key"].clone(), r["n"].clone())).collect();
-        assert_eq!(ns, [(json!("1"), json!(100)), (json!("2"), json!(100)), (json!("3"), json!(100))], "each sort once, read {reads}: {c}");
+        // The base table and the view that carries its three columns, read alike.
+        for table in ["sorts", "whole"] {
+            let before = rows();
+            let c = veredas_supervisao::panel::cells(&live, table, "outlet", "travel", 60, 5, 5.0, to, 2, 50_000).unwrap();
+            grew += rows() - before;
+            reads += 1;
+            let ns: Vec<(Value, Value)> = c["rows"].as_array().unwrap().iter().filter(|r| r["key"] != "9").map(|r| (r["key"].clone(), r["n"].clone())).collect();
+            assert_eq!(ns, [(json!("1"), json!(100)), (json!("2"), json!(100)), (json!("3"), json!(100)), (json!("10"), json!(90))], "each sort once, {table}, read {reads}: {c}");
+        }
     }
     writer.join().unwrap();
     assert!(grew > 0, "rows arrived while the cells were read ({reads} reads)");
@@ -800,12 +846,12 @@ fn the_cells_read_each_row_once_while_rows_arrive() {
     let tie = now - 25 * MIN + 2_500;
     let sort = |ms: i64, outlet: u32| format!("{} SORT outlet={outlet} travel=10.0 rate=99.0", stamp(ms));
     append(&log, &[sort(tie - 500, 4), sort(tie, 4), sort(tie, 4), sort(tie, 5), sort(tie, 6), sort(tie + 500, 6)]);
-    assert!(wait(Duration::from_secs(20), || rows() == 456), "{}", rows());
+    assert!(wait(Duration::from_secs(20), || rows() == 546), "{}", rows());
     let c = veredas_supervisao::panel::cells(&live, "sorts", "outlet", "travel", 60, 5, 5.0, to, 2, 50_000).unwrap();
     let ns: Vec<(Value, Value)> = c["rows"].as_array().unwrap().iter().map(|r| (r["key"].clone(), r["n"].clone())).collect();
-    let want: Vec<(Value, Value)> = [("1", 100), ("2", 100), ("3", 100), ("4", 3), ("5", 1), ("6", 2), ("9", 150)].into_iter().map(|(k, n)| (json!(k), json!(n))).collect();
+    let want: Vec<(Value, Value)> = [("1", 100), ("2", 100), ("3", 100), ("4", 3), ("5", 1), ("6", 2), ("9", 150), ("10", 90)].into_iter().map(|(k, n)| (json!(k), json!(n))).collect();
     assert_eq!(ns, want, "each row once across tied stamps: {c}");
-    assert_eq!((c["read"].clone(), c["total"].clone(), c["capped"].clone()), (json!(456), json!(456), json!(false)));
+    assert_eq!((c["read"].clone(), c["total"].clone(), c["capped"].clone()), (json!(546), json!(546), json!(false)));
     // Rows arriving at the very stamp a page ended on: two hundred of outlet 7 at the window's
     // newest stamp, so every read pages through them first (a hundred pages of two), then a hundred
     // and fifty of outlet 8 at that stamp, ten milliseconds apart, while the cells are read again
@@ -813,7 +859,7 @@ fn the_cells_read_each_row_once_while_rows_arrive() {
     // read is read once: outlet 7 exactly two hundred, no key past the rows stored for it.
     let at = now + 5 * MIN;
     append(&log, &(0..200).map(|_| sort(at, 7)).collect::<Vec<_>>());
-    assert!(wait(Duration::from_secs(20), || rows() == 656), "{}", rows());
+    assert!(wait(Duration::from_secs(20), || rows() == 746), "{}", rows());
     let (stop, appended) = (Arc::new(AtomicBool::new(false)), Arc::new(std::sync::atomic::AtomicU64::new(0)));
     let writer = std::thread::spawn({
         let (stop, appended, log, line) = (Arc::clone(&stop), Arc::clone(&appended), log.clone(), sort(at, 8));
@@ -826,7 +872,7 @@ fn the_cells_read_each_row_once_while_rows_arrive() {
             stop.store(true, Ordering::Relaxed);
         }
     });
-    let stored = [("1", 100), ("2", 100), ("3", 100), ("4", 3), ("5", 1), ("6", 2), ("7", 200), ("9", 150)];
+    let stored = [("1", 100), ("2", 100), ("3", 100), ("4", 3), ("5", 1), ("6", 2), ("7", 200), ("9", 150), ("10", 90)];
     let mut reads = 0;
     while !stop.load(Ordering::Relaxed) || reads < 2 {
         let c = veredas_supervisao::panel::cells(&live, "sorts", "outlet", "travel", 60, 5, 5.0, to, 2, 50_000).unwrap();
