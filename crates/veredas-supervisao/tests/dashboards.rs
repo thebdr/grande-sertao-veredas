@@ -433,6 +433,18 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let edge = now_d["to"].as_i64().unwrap();
     assert!(before <= edge && edge <= after, "{before} <= {edge} <= {after}");
 
+    // A sort stamped now (outlet 2, as the others leave every drawn figure as it stands), so the
+    // running bucket of the page's window holds a value and is drawn marked whenever in its five
+    // minutes the page reads; within 20 s of a bucket's end, the next bucket is waited for.
+    let into = store_now() % (5 * MIN);
+    if into > 5 * MIN - 20_000 {
+        std::thread::sleep(Duration::from_millis((5 * MIN - into + 500) as u64));
+    }
+    let sorts = || live.store.query_rows("sorts", &veredas_portal::store::RowsQuery { limit: 1, ..Default::default() }).map(|p| p.total).unwrap_or(0);
+    let had = sorts();
+    append(&log, &[format!("{} SORT outlet=2 travel=12.0 rate=99.2", stamp(store_now()))]);
+    assert!(wait(Duration::from_secs(20), || sorts() == had + 1), "{}", sorts());
+
     // The page draws it: run in a headless browser, the dashboard the page fetched (kept as it
     // arrives) and the panels it drew, read in one moment, agree panel by panel.
     let mut page = Browser::open(&format!("http://{addr}/s/loop/#layout"));
@@ -457,7 +469,10 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     // (The page reads the live window: its total is what that window held, the last sort in it
     // or not yet.)
     let total = dash["panels"][10]["data"]["total"].clone();
-    assert!(drawn[10]["right"].as_str().unwrap().ends_with(&format!(" · newest 5 of {total} rows")) && (total == 8 || total == 9), "{} of {total}", drawn[10]["right"]);
+    assert!(drawn[10]["right"].as_str().unwrap().ends_with(&format!(" · newest 5 of {total} rows")) && (total == 9 || total == 10), "{} of {total}", drawn[10]["right"]);
+    // The running bucket drawn, and marked: one bar of the page's bars carries it.
+    let running = drawn[5]["bars"].as_array().unwrap().iter().filter(|b| b[4] == json!(true)).count();
+    assert_eq!(running, 1, "the running bucket drawn marked: {}", drawn[5]["bars"]);
     assert_eq!(drawn[6]["rows"].as_array().unwrap().len(), 2, "two rows on the timeline");
     assert_eq!((drawn[0]["big"].clone(), drawn[0]["box"].clone(), drawn[0]["badge"].clone()), (json!("99.2%"), json!("st-box-normal"), Value::Null));
     assert_eq!((drawn[2]["box"].clone(), drawn[2]["badge"].clone()), (json!("st-box-alarm"), json!("! UNDER 99.5 %")));
@@ -770,6 +785,17 @@ fn the_cells_read_each_row_once_while_rows_arrive() {
     }
     writer.join().unwrap();
     assert!(grew > 0, "rows arrived while the cells were read ({reads} reads)");
+    // Rows sharing a stamp, a page's end falling among them (four at one stamp between two others,
+    // read two rows a page): each row read once, those already taken at the bound's stamp skipped.
+    let tie = now - 25 * MIN + 2_500;
+    let sort = |ms: i64, outlet: u32| format!("{} SORT outlet={outlet} travel=10.0 rate=99.0", stamp(ms));
+    append(&log, &[sort(tie - 500, 4), sort(tie, 4), sort(tie, 4), sort(tie, 5), sort(tie, 6), sort(tie + 500, 6)]);
+    assert!(wait(Duration::from_secs(20), || rows() == 456), "{}", rows());
+    let c = veredas_supervisao::panel::cells(&live, "sorts", "outlet", "travel", 60, 5, 5.0, to, 2, 50_000).unwrap();
+    let ns: Vec<(Value, Value)> = c["rows"].as_array().unwrap().iter().map(|r| (r["key"].clone(), r["n"].clone())).collect();
+    let want: Vec<(Value, Value)> = [("1", 100), ("2", 100), ("3", 100), ("4", 3), ("5", 1), ("6", 2), ("9", 150)].into_iter().map(|(k, n)| (json!(k), json!(n))).collect();
+    assert_eq!(ns, want, "each row once across tied stamps: {c}");
+    assert_eq!((c["read"].clone(), c["total"].clone(), c["capped"].clone()), (json!(456), json!(456), json!(false)));
     host.stop();
 }
 
