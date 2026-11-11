@@ -396,7 +396,10 @@ impl Feed {
     /// the loop reads on: the next frame lands, and each tick's cache poll heals the series'
     /// values the lost frames carried. Evaluated once before anything is served, so neither route
     /// ever serves an empty snapshot. A status goes out when it changes and at least every
-    /// second, counted from the tick that sent the last one, so five ticks make the second.
+    /// second, counted from the tick that sent the last one, so five ticks make the second. The
+    /// ticks keep their 200 ms grid on a busy runtime: a late tick costs its own lateness, and one
+    /// later than a period is skipped (delaying instead moved the grid and added up each tick's
+    /// lateness inside the second).
     pub fn spawn_with(live: Arc<Live>, binding: Arc<Binding>, mut rx: broadcast::Receiver<Arc<str>>) -> (Feed, tokio::task::JoinHandle<()>) {
         let mut fold = Fold::new(&binding);
         let (objects, first_status) = evaluate(&mut fold, &live, &binding);
@@ -405,7 +408,7 @@ impl Feed {
         let feed = Feed { snapshot: Arc::clone(&snapshot), events: events.clone() };
         let task = tokio::spawn(async move {
             let mut tick = tokio::time::interval(TICK);
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut last_status_at = tokio::time::Instant::now() - STATUS_EVERY;
             let mut last_status = first_status;
             loop {

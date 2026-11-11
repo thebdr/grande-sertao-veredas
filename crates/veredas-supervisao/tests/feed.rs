@@ -557,6 +557,13 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
     assert_eq!((v.text.as_deref(), v.state, v.since_ms), (Some("99.0"), StateClass::Normal, Some(1_000)), "the later line with its frame's arrival");
     fold.poll(&live, 2_500);
     assert_eq!(fold.view(rr, true, 2_500).since_ms, Some(1_000), "polled again, no new arrival");
+    // The cache's key count crosses the poll too: a fold that saw no frame reads the keyed markers'
+    // series as keyed from the cache alone, never one place for the latest sample.
+    let mut kc = Fold::new(&binding);
+    kc.poll(&live, 3_000);
+    let tr = binding.objects.iter().find(|o| o.id == "tracked").unwrap();
+    let kv = kc.view(tr, true, 3_000);
+    assert_eq!((kv.place, kv.items.len(), live.series.read().unwrap().get("sorter|at").map(|e| e.keys)), (None, 0, Some(2)));
 
     // A feed whose receiver lagged (two frames lost before it read) reads on: the next frame lands,
     // a frame sent after it lands too, and the statuses keep coming.
@@ -599,6 +606,32 @@ fn the_feed_follows_the_plant_live_over_the_snapshot_and_the_stream() {
         })
         .await;
         assert!(status.is_ok(), "the statuses keep coming");
+        // On a busy runtime the statuses keep their second: a task blocking the feed's thread for
+        // 0 to 80 ms every 30 ms leaves the ticks on their grid, the mean interval by the statuses'
+        // own clocks under 1.02 s. Statistical: a grid moved by each late tick measured 1.055 s.
+        let noise = tokio::spawn(async {
+            let mut seed: u64 = 7;
+            loop {
+                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                std::thread::sleep(Duration::from_millis((seed >> 33) % 81));
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+        });
+        let mut clocks: Vec<i64> = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(8), async {
+            loop {
+                if let Ok((name, data)) = events.recv().await
+                    && name == "session"
+                {
+                    clocks.push(serde_json::from_str::<Value>(&data).unwrap()["now_ms"].as_i64().unwrap());
+                }
+            }
+        })
+        .await;
+        noise.abort();
+        let gaps: Vec<i64> = clocks.windows(2).map(|w| w[1] - w[0]).collect();
+        let mean = gaps.iter().sum::<i64>() as f64 / gaps.len().max(1) as f64;
+        assert!(gaps.len() >= 5 && mean < 1_020.0, "the second kept under load: {gaps:?}");
         task.abort();
     });
 
