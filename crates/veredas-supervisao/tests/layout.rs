@@ -102,6 +102,7 @@ const DRAWN: &str = r#"(() => {
     const fill = document.querySelector(`.sv-fill[data-for="${id}"]`);
     const value = document.querySelector(`.sv-overlay .sv-value[data-for="${id}"]`);
     out[id] = {
+      kind: el instanceof SVGGeometryElement ? "shape" : el instanceof SVGTextElement ? "text" : "group",
       value: value ? [value.textContent, shown(value)] : null,
       state: st(el), hidden: el.classList.contains("sv-hidden"), transform: el.getAttribute("transform"), rect: rect(el), shown: shown(el), hit: marker ? hit(el) : null, selected: el.classList.contains("sv-selected"),
       tag_keys: [...document.querySelectorAll(`.sv-overlay .sv-tag[data-for="${id}"][data-key]`)].map((t) => t.dataset.key).sort(),
@@ -116,6 +117,8 @@ const DRAWN: &str = r#"(() => {
   const loop = document.getElementById("loop");
   const m = loop ? loop.getScreenCTM() : null;
   out.__loop = m ? [m.a, m.b, m.c, m.d, m.e, m.f] : null;
+  // Every path a marker can follow, its own matrix to the screen.
+  out.__ctm = Object.fromEntries([...document.querySelectorAll("svg.plant [id]")].filter((e) => e.id === "loop" || e.id.startsWith("track-")).map((e) => { const c = e.getScreenCTM(); return [e.id, c ? [c.a, c.b, c.c, c.d, c.e, c.f] : null]; }));
   return out;
 })()"#;
 
@@ -214,15 +217,21 @@ const ACCENT_ON_STATES: &str = r##"
   const drawn = [...document.querySelectorAll("svg.plant .sv-obj, svg.plant .sv-obj *, svg.plant [data-key], svg.plant [data-key] *, svg.plant .sv-fill, .sv-overlay .sv-tag, .sv-overlay .sv-value, .sv-overlay .sv-label")]
     .filter((el) => !el.closest(".sv-selected"))
     .flatMap((el) => greens(el).map((g) => `${name(el)} ${g}`));
-  const around = [...document.querySelectorAll(".headline .fig .mono, .side ul.attention .mark, .side .badge")]
-    .flatMap((el) => greens(el).map((g) => `${el.className} ${JSON.stringify(el.textContent)} ${g}`));
-  const selected = new Set([...document.querySelectorAll("svg.plant .sv-selected")].map((e) => e.dataset.object ?? e.id));
-  const rows = [...document.querySelectorAll(".side ul.attention li")].flatMap((li) => {
+  // Every element outside the drawing whose class names a state (`st-`, `sv-state-`), wherever the
+  // page writes one: the headline, the attention list, the badges, the alarm strip, the legend, the
+  // Alarms view.
+  const stateful = (el) => /(^|\s)(st-|sv-state-)/.test(el.getAttribute("class") || "");
+  const around = [...document.querySelectorAll("[class]")].filter((el) => stateful(el) && !el.closest("svg.plant"))
+    .flatMap((el) => greens(el).map((g) => `${el.getAttribute("class")} ${JSON.stringify(el.textContent)} ${g}`));
+  // The side panel's own selection: every row's `on` mark by it, and nothing drawn selected but it.
+  const chosen = document.querySelector(".side .sel-title")?.dataset.id ?? null;
+  const strays = [...document.querySelectorAll("svg.plant .sv-selected")].map((e) => e.dataset.object ?? e.id).filter((id) => id !== chosen).map((id) => `${id} drawn selected while the side panel shows ${chosen}`);
+  const rows = strays.concat([...document.querySelectorAll(".side ul.attention li")].flatMap((li) => {
     const on = li.classList.contains("on");
-    const out = on !== selected.has(li.dataset.id) ? [`attention row ${li.dataset.id} on: ${on}, selected: ${selected.has(li.dataset.id)}`] : [];
+    const out = on !== (li.dataset.id === chosen) ? [`attention row ${li.dataset.id} on: ${on}, the side panel showing ${chosen}`] : [];
     return on ? out : out.concat(greens(li).map((g) => `attention row ${li.dataset.id} ${g}`));
-  });
-  const GEOMETRY = "rect, circle, ellipse, path, polygon, polyline, line";
+  }));
+  const GEOMETRY = "rect, circle, ellipse, path, polygon, polyline, line, text";
   const strokeAlpha = (s) => { let op = 1; for (let a = s; a; a = a.parentElement) op *= Number(getComputedStyle(a).opacity); const c = getComputedStyle(s), p = parts(c.stroke); return p ? op * p[3] * Number(c.strokeOpacity) : 0; };
   const unmarked = [...document.querySelectorAll("svg.plant .sv-selected")].flatMap((el) => {
     const who = el.dataset.key !== undefined ? `${el.dataset.object} ${el.dataset.key}` : el.id;
@@ -244,6 +253,7 @@ const PROBES: &str = r##"
   const svgNS = "http://www.w3.org/2000/svg";
   const plant = document.querySelector("svg.plant"), overlay = plant.querySelector(".sv-overlay");
   const made = [];
+  const paints = [];
   const put = (parent, el, what) => { parent.append(el); made.push([el, what]); };
   const shape = (cls) => { const r = document.createElementNS(svgNS, "rect"); r.setAttribute("class", cls); r.setAttribute("width", "4"); r.setAttribute("height", "4"); return r; };
   for (const s of STATES) {
@@ -251,8 +261,14 @@ const PROBES: &str = r##"
       put(plant, shape(`sv-obj sv-show-${k} sv-state-${s}`), `a ${k} element in ${s}`);
       const g = document.createElementNS(svgNS, "g");
       g.setAttribute("class", `sv-obj sv-show-${k} sv-state-${s}`);
-      g.append(shape(""));
+      const own = shape("");
+      own.setAttribute("fill", "#123456");
+      own.setAttribute("stroke", "#654321");
+      own.setAttribute("stroke-width", "7");
+      own.setAttribute("stroke-dasharray", "9 1");
+      g.append(own);
       put(plant, g, `a ${k} group in ${s}`);
+      paints.push([`${k} element`, s, () => made.find(([, w]) => w === `a ${k} element in ${s}`)[0], () => own]);
     }
     put(plant, shape(`sv-fill sv-state-${s}`), `a fill in ${s}`);
     const tag = document.createElementNS(svgNS, "text");
@@ -273,6 +289,33 @@ const PROBES: &str = r##"
     put(document.querySelector(".side"), badge, `a badge in ${s}`);
   }
   const out = made.flatMap(([el, what]) => [el, ...el.querySelectorAll("*")].flatMap((x) => greens(x).map((g) => `${what}: ${x === el ? "" : `its ${x.tagName} `}${g}`)));
+  // Painted in its state: a group's shape (its own fill and stroke written) as a plain one is, and
+  // on every surface each state painted otherwise than every other (a tag's normal apart: it is
+  // empty).
+  const sig = (el, props) => { const c = getComputedStyle(el); return props.map((q) => c.getPropertyValue(q)).join(" | "); };
+  const SHAPE = ["fill", "stroke", "stroke-width", "stroke-dasharray"];
+  for (const [what, s, plain, own] of paints) {
+    if (sig(plain(), SHAPE) !== sig(own(), SHAPE)) out.push(`a ${what}'s group in ${s}: its shape painted ${sig(own(), SHAPE)}, a plain one ${sig(plain(), SHAPE)}`);
+  }
+  const surfaces = [
+    ...KINDS.map((k) => [`a ${k} element`, (s) => `a ${k} element in ${s}`, SHAPE, STATES]),
+    ["a fill", (s) => `a fill in ${s}`, SHAPE, STATES],
+    ["a tag", (s) => `a tag in ${s}`, ["fill"], STATES.filter((s) => s !== "normal")],
+    ["the headline", (s) => `the headline in ${s}`, ["color"], STATES],
+    ["an attention mark", (s) => `an attention row in ${s}`, ["color"], STATES],
+    ["a badge", (s) => `a badge in ${s}`, ["color", "background-color"], STATES],
+  ];
+  for (const [surface, named, props, states] of surfaces) {
+    const seen = new Map();
+    for (const s of states) {
+      const entry = made.find(([, w]) => w === named(s));
+      if (!entry) { out.push(`no probe for ${surface} in ${s}`); continue; }
+      const el = entry[0].querySelector(".mono, .mark") ?? entry[0];
+      const v = sig(el, props);
+      if (seen.has(v)) out.push(`${surface} in ${s} painted as in ${seen.get(v)}: ${v}`);
+      else seen.set(v, s);
+    }
+  }
   for (const [el] of made) el.remove();
   return out;
 "##;
@@ -356,11 +399,86 @@ fn on_screen(m: &Value, (x, y): (f64, f64)) -> Option<(f64, f64)> {
     (m.len() == 6).then(|| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]))
 }
 
-/// Whether a marker stands on screen where the loop's point at `place` is.
-fn at_place(drawn: &Value, rect: &Value, place: f64) -> bool {
-    match (centre(rect), on_screen(&drawn["__loop"], on_loop(place))) {
+/// The point at `f` (0 to 1) along a run of segments, closed back to its start or not.
+fn along(points: &[(f64, f64)], closed: bool, f: f64) -> (f64, f64) {
+    let mut pts = points.to_vec();
+    if closed {
+        pts.push(points[0]);
+    }
+    let lens: Vec<f64> = pts.windows(2).map(|w| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt()).collect();
+    let mut s = f * lens.iter().sum::<f64>();
+    for (w, l) in pts.windows(2).zip(&lens) {
+        if s <= *l {
+            let k = if *l > 0.0 { s / l } else { 0.0 };
+            return (w[0].0 + k * (w[1].0 - w[0].0), w[0].1 + k * (w[1].1 - w[0].1));
+        }
+        s -= l;
+    }
+    *pts.last().unwrap()
+}
+
+/// The point at `f` along an ellipse's outline from its right end, clockwise on the screen, by
+/// its arc length (as `getPointAtLength` measures it).
+fn on_ellipse(cx: f64, cy: f64, rx: f64, ry: f64, f: f64) -> (f64, f64) {
+    let n = 20_000;
+    let at = |i: usize| { let a = std::f64::consts::TAU * i as f64 / n as f64; (cx + rx * a.cos(), cy + ry * a.sin()) };
+    let pts: Vec<(f64, f64)> = (0..n).map(at).collect();
+    along(&pts, true, f)
+}
+
+/// The point at `f` along each path the fixture's markers follow, from the drawing's own geometry
+/// (`GROWN_SVG`): the loop, and one of every other element a marker can follow.
+fn on_path(path: &str, f: f64) -> (f64, f64) {
+    match path {
+        "loop" => on_loop(f),
+        "track-line" => along(&[(90.0, 195.0), (130.0, 195.0)], false, f),
+        "track-polyline" => along(&[(140.0, 160.0), (160.0, 160.0), (160.0, 180.0)], false, f),
+        "track-polygon" => along(&[(170.0, 160.0), (190.0, 160.0), (190.0, 180.0), (170.0, 180.0)], true, f),
+        "track-rect" => along(&[(200.0, 160.0), (220.0, 160.0), (220.0, 180.0), (200.0, 180.0)], true, f),
+        "track-circle" => on_ellipse(245.0, 175.0, 10.0, 10.0, f),
+        "track-ellipse" => on_ellipse(280.0, 175.0, 15.0, 8.0, f),
+        other => panic!("a path this test cannot follow: {other}"),
+    }
+}
+
+/// Whether a marker stands on screen where its path's point at `place` is, carried to the screen
+/// through the path's own matrix.
+fn at_place(drawn: &Value, rect: &Value, path: &str, place: f64) -> bool {
+    match (centre(rect), on_screen(&drawn["__ctm"][path], on_path(path, place))) {
         (Some((cx, cy)), Some((px, py))) => near(cx, px, 1.0) && near(cy, py, 1.0),
         _ => false,
+    }
+}
+
+/// A click on the drawing's background, where no element is drawn.
+fn deselect(page: &mut Browser) {
+    let at = page.eval(r#"(() => { const svg = document.querySelector("svg.plant"), r = svg.getBoundingClientRect(); for (const [x, y] of [[r.left + 3, r.top + 3], [r.right - 3, r.top + 3], [r.left + 3, r.bottom - 3]]) if (document.elementFromPoint(x, y) === svg) return [x - 1, y - 1, 2, 2]; return null; })()"#);
+    assert!(!at.is_null(), "no background to click");
+    click_at(page, &at);
+}
+
+/// A click on each attention row in turn, each settled: the object picked, drawn selected on what
+/// it draws (from `drawn`: its element when shown, every clone of a keyed marker, else nothing).
+fn pick_every_row(page: &mut Browser, drawn: &Value, settle: &dyn Fn(&mut Browser, &str, &[&str]) -> (Value, Value)) {
+    let ids: Vec<String> = page.eval(r#"[...document.querySelectorAll(".side ul.attention li")].map((li) => li.dataset.id)"#).as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    assert!(!ids.is_empty());
+    for id in ids {
+        let row = page.eval(&format!(r#"(() => {{ const r = document.querySelector('.side ul.attention li[data-id="{id}"]').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; }})()"#));
+        click_at(page, &row);
+        page.wait_for(&format!(r#"document.querySelector(".side .sel-title")?.dataset.id === "{id}" || null"#), Duration::from_secs(10));
+        let d = &drawn[id.as_str()];
+        let mut want: Vec<String> = if d.is_null() {
+            Vec::new()
+        } else if !d["clones"].as_array().unwrap().is_empty() {
+            d["clones"].as_array().unwrap().iter().map(|c| format!("{id} {}", c["key"].as_str().unwrap())).collect()
+        } else if d["hidden"] == json!(true) {
+            Vec::new()
+        } else {
+            vec![id.clone()]
+        };
+        want.sort();
+        let want: Vec<&str> = want.iter().map(String::as_str).collect();
+        settle(page, &format!("{id} picked from its row"), &want);
     }
 }
 
@@ -378,9 +496,10 @@ fn click_at(page: &mut Browser, r: &Value) {
 /// on screen at its element and shown; each level's fill inside its element to its level; each
 /// marker on screen at the path's point, its tag under it; a keyed marker's clones, one per key,
 /// each with its tag.
-fn differences(drawn: &Value, feed: &Value, on_layout: &[(String, String)], units: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+fn differences(drawn: &Value, feed: &Value, on_layout: &[(String, String)], units: &std::collections::BTreeMap<String, String>, paths: &std::collections::BTreeMap<String, String>) -> Vec<String> {
     let mut out = Vec::new();
     for (id, show) in on_layout {
+        let path = paths.get(id).map(String::as_str).unwrap_or("loop");
         let d = &drawn[id];
         let v = object(feed, id);
         let state = format!("sv-state-{}", v["state"].as_str().unwrap());
@@ -423,7 +542,7 @@ fn differences(drawn: &Value, feed: &Value, on_layout: &[(String, String)], unit
                     (Some((fl, ft, fr, fb, _)), Some((el, et, er, eb, _))) => near(fl, el, 1.0) && near(fr, er, 1.0) && near(fb, eb, 1.0) && near(fb - ft, f * (eb - et), 1.0),
                     _ => false,
                 };
-                let painted = fill["hit"] == json!(true) || edges(&fill["rect"]).is_some_and(|(_, ft, _, fb, _)| fb - ft < 2.0);
+                let painted = fill["hit"] == json!(true) || d["kind"] == json!("text") || edges(&fill["rect"]).is_some_and(|(_, ft, _, fb, _)| fb - ft < 2.0);
                 if !ok || fill["state"] != json!(state) || (f > 0.0 && (fill["shown"] != json!(true) || !painted)) {
                     out.push(format!("{id}: fill {fill} for level {f} in {}", d["rect"]));
                 }
@@ -435,10 +554,10 @@ fn differences(drawn: &Value, feed: &Value, on_layout: &[(String, String)], unit
             }
             "move" if !keyed => {
                 let place = v["place"].as_f64().unwrap();
-                let ok = d["hidden"] == json!(false) && d["shown"] == json!(true) && d["hit"] == json!(true) && d["tag_keys"] == json!([""]) && at_place(drawn, &d["rect"], place);
+                let ok = d["hidden"] == json!(false) && d["shown"] == json!(true) && d["hit"] == json!(true) && d["tag_keys"] == json!([""]) && at_place(drawn, &d["rect"], path, place);
                 let tag_ok = said.is_empty() || (under(&d["tag_rect"], &d["rect"]) && d["tag_shown"] == json!(true));
                 if !ok || !tag_ok {
-                    out.push(format!("{id}: at {:?} on screen (its tag {} at {}), the path's point is {:?}", centre(&d["rect"]), d["tag"], d["tag_rect"], on_screen(&drawn["__loop"], on_loop(place))));
+                    out.push(format!("{id}: at {:?} on screen (its tag {} at {}), the path's point is {:?}", centre(&d["rect"]), d["tag"], d["tag_rect"], on_screen(&drawn["__ctm"][path], on_path(path, place))));
                 }
             }
             "move" => {
@@ -461,13 +580,13 @@ fn differences(drawn: &Value, feed: &Value, on_layout: &[(String, String)], unit
                         c["state"] == json!(state)
                             && c["shown"] == json!(true)
                             && c["hit"] == json!(true)
-                            && at_place(drawn, &c["rect"], place)
+                            && at_place(drawn, &c["rect"], path, place)
                             && c["tag"] == json!(said)
                             && c["tag_state"] == json!(state)
                             && (said.is_empty() || (under(&c["tag_rect"], &c["rect"]) && c["tag_shown"] == json!(true)))
                     });
                     if !ok {
-                        out.push(format!("{id} {key}: drawn {:?}, the path's point is {:?}", clones.iter().find(|c| c["key"] == json!(key)), on_screen(&drawn["__loop"], on_loop(place))));
+                        out.push(format!("{id} {key}: drawn {:?}, the path's point is {:?}", clones.iter().find(|c| c["key"] == json!(key)), on_screen(&drawn["__ctm"][path], on_path(path, place))));
                     }
                 }
             }
@@ -543,9 +662,63 @@ fn grown(mut ex: Example) -> Example {
         .replace("<rect id=\"outlet-3\" x=\"250\" y=\"4\" width=\"24\" height=\"28\"/>", "<g transform=\"translate(0 100)\"><rect id=\"outlet-3\" x=\"250\" y=\"4\" width=\"24\" height=\"28\"/></g>")
         // A keyed marker inside a moved group, as a drawing's layers put one: its clones stand at
         // their places whatever the group's transform.
-        .replace("<circle id=\"parcel-2\" r=\"5\"/>", "<circle id=\"parcel-2\" r=\"5\"/>\n  <g transform=\"translate(15 -10)\"><circle id=\"tracked\" r=\"4\"/></g>");
+        .replace("<circle id=\"parcel-2\" r=\"5\"/>", "<circle id=\"parcel-2\" r=\"5\"/>\n  <g transform=\"translate(15 -10)\"><circle id=\"tracked\" r=\"4\"/></g>")
+        .replace("</svg>", GROWN_SVG);
+    ex.binding = ex.binding.replacen("\n[[dashboard]]", GROWN_OBJECTS, 1);
     ex
 }
+
+/// The drawing grown further: a level bound to a circle (filled within its outline) and one bound
+/// to a text (within its glyphs), and a track of every element a marker can follow besides the
+/// loop's path, each with a marker on it.
+const GROWN_SVG: &str = r##"  <circle id="ring" cx="300" cy="110" r="12"/>
+  <text id="word" x="200" y="100" font-size="14">■■■</text>
+  <line id="track-line" x1="90" y1="195" x2="130" y2="195" stroke="#26262A"/>
+  <polyline id="track-polyline" points="140,160 160,160 160,180" fill="none" stroke="#26262A"/>
+  <polygon id="track-polygon" points="170,160 190,160 190,180 170,180" fill="none" stroke="#26262A"/>
+  <rect id="track-rect" x="200" y="160" width="20" height="20" fill="none" stroke="#26262A"/>
+  <circle id="track-circle" cx="245" cy="175" r="10" fill="none" stroke="#26262A"/>
+  <ellipse id="track-ellipse" cx="280" cy="175" rx="15" ry="8" fill="none" stroke="#26262A"/>
+  <circle id="m-line" r="3"/>
+  <circle id="m-polyline" r="3"/>
+  <circle id="m-polygon" r="3"/>
+  <circle id="m-rect" r="3"/>
+  <circle id="m-circle" r="3"/>
+  <circle id="m-ellipse" r="3"/>
+</svg>"##;
+
+const GROWN_OBJECTS: &str = "\n[[object]]\nid = \"ring\"\nlabel = \"Ring\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"word\"\nlabel = \"Word\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"m-line\"\nlabel = \"On a line\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-line\"\n\n[[object]]\nid = \"m-polyline\"\nlabel = \"On a polyline\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-polyline\"\n\n[[object]]\nid = \"m-polygon\"\nlabel = \"On a polygon\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-polygon\"\n\n[[object]]\nid = \"m-rect\"\nlabel = \"On a rect\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-rect\"\n\n[[object]]\nid = \"m-circle\"\nlabel = \"On a circle\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-circle\"\n\n[[object]]\nid = \"m-ellipse\"\nlabel = \"On an ellipse\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-ellipse\"\n\n[[dashboard]]";
+
+/// Every level's fill against its element's outline: a shape's or a text's fill clipped by the
+/// element itself (its clip's `use` naming the element), and for a shape, a point inside the fill's
+/// box but outside the outline not taking the fill; a group's fill its box, unclipped.
+const LEVEL_OUTLINES: &str = r#"(() => [...document.querySelectorAll("svg.plant .sv-show-level[data-object]")].flatMap((el) => {
+  const id = el.dataset.object;
+  const kind = el instanceof SVGGeometryElement ? "shape" : el instanceof SVGTextElement ? "text" : "group";
+  const fill = document.querySelector(`.sv-fill[data-for="${id}"]`);
+  const clip = fill.getAttribute("clip-path");
+  const out = [];
+  if (kind === "group") {
+    if (clip) out.push(`${id}: a group's fill clipped (${clip})`);
+    return out.concat([`kind group`]);
+  }
+  const ref = clip && clip.match(/url\(["']?#([^"')]+)/);
+  const use = ref ? document.getElementById(ref[1])?.querySelector("use") : null;
+  if (!use || use.getAttribute("href") !== `#${id}`) out.push(`${id}: its fill not clipped by its ${kind} (${clip})`);
+  if (kind === "shape") {
+    const r = fill.getBoundingClientRect(), m = el.getScreenCTM().inverse();
+    for (const [x, y] of [[r.left + 1, r.bottom - 1], [r.right - 1, r.bottom - 1]]) {
+      const q = new DOMPoint(x, y).matrixTransform(m);
+      if (el.isPointInFill(q)) continue;
+      const prev = fill.style.pointerEvents;
+      fill.style.pointerEvents = "visiblePainted";
+      const at = document.elementFromPoint(x, y);
+      fill.style.pointerEvents = prev;
+      if (at === fill) out.push(`${id}: its fill painted outside its outline at (${x}, ${y})`);
+    }
+  }
+  return out.concat([`kind ${kind}`]);
+}))()"#;
 
 #[test]
 fn the_page_draws_the_layout_from_the_feed() {
@@ -575,9 +748,14 @@ fn the_page_draws_the_layout_from_the_feed() {
         .collect();
     assert_eq!(on_layout.iter().map(|(i, s)| (i.as_str(), s.as_str())).collect::<Vec<_>>(), [
         ("speed", "value"), ("infeed", "state"), ("outlet-1", "level"), ("outlet-2", "level"), ("outlet-3", "level"), ("parcel-1", "move"), ("parcel-2", "move"), ("tracked", "move"),
+        ("ring", "level"), ("word", "level"), ("m-line", "move"), ("m-polyline", "move"), ("m-polygon", "move"), ("m-rect", "move"), ("m-circle", "move"), ("m-ellipse", "move"),
     ]);
     let shows: std::collections::BTreeSet<&str> = on_layout.iter().map(|(_, s)| s.as_str()).collect();
     assert_eq!(shows, every_show().into_iter().collect(), "every way of showing the binding knows is on the layout");
+    // Every element a marker can follow (the reader's own list) followed by a marker here.
+    let paths: std::collections::BTreeMap<String, String> = b["objects"].as_array().unwrap().iter().filter_map(|o| Some((o["id"].as_str()?.to_string(), o["path"].as_str()?.to_string()))).collect();
+    let followed: std::collections::BTreeSet<&str> = paths.values().map(|p| { let at = svg.find(&format!(" id=\"{p}\"")).unwrap(); let open = svg[..at].rfind('<').unwrap(); &svg[open + 1..at] }).collect();
+    assert_eq!(followed, veredas_supervisao::svg::FOLLOWABLE.into_iter().collect(), "a marker on every element the reader follows");
     let units: std::collections::BTreeMap<String, String> = b["objects"].as_array().unwrap().iter().map(|o| (o["id"].as_str().unwrap().to_string(), o["unit"].as_str().unwrap_or("").to_string())).collect();
 
     // The feed carries, for each, what its way of showing needs.
@@ -595,7 +773,7 @@ fn the_page_draws_the_layout_from_the_feed() {
         loop {
             let feed = get(addr, "/s/loop/objects.json");
             let drawn = page.eval(DRAWN);
-            let mut diff = differences(&drawn, &feed.1, &on_layout, &units);
+            let mut diff = differences(&drawn, &feed.1, &on_layout, &units, &paths);
             let selected = page.eval(SELECTED);
             if selected != json!(selection) {
                 diff.push(format!("the selection carried by {selected}, not by {selection:?} alone"));
@@ -643,6 +821,14 @@ fn the_page_draws_the_layout_from_the_feed() {
     ]);
     assert_eq!(around["attention"], quiet);
 
+    // Every level within its element's outline, every kind of element a level binds to among them
+    // (a shape, a text, a group).
+    let outlines = page.eval(LEVEL_OUTLINES);
+    let kinds: std::collections::BTreeSet<&str> = outlines.as_array().unwrap().iter().filter_map(|v| v.as_str()?.strip_prefix("kind ")).collect();
+    assert_eq!(kinds, ["group", "shape", "text"].into_iter().collect(), "{outlines}");
+    let issues: Vec<&Value> = outlines.as_array().unwrap().iter().filter(|v| !v.as_str().unwrap().starts_with("kind ")).collect();
+    assert!(issues.is_empty(), "{issues:?}");
+
     // Every element the layout binds and draws takes the selection by a click and carries it
     // alone, marked on every shape it draws (outlet 1's group, its shape writing its own stroke,
     // among them).
@@ -653,6 +839,12 @@ fn the_page_draws_the_layout_from_the_feed() {
         click_at(&mut page, &drawn[id]["rect"]);
         settle(&mut page, &format!("{id} selected by a click"), &[id.as_str()]);
     }
+    // Every way the selection changes: a click on the drawing's background clears it; a click on
+    // each attention row selects its object, drawn on what the object draws (its element, every
+    // clone of a keyed marker, nothing for a marker with no place or an object with no element).
+    deselect(&mut page);
+    settle(&mut page, "the selection cleared by a click on the background", &[]);
+    pick_every_row(&mut page, &drawn, &settle);
 
     // A click of the pointer on outlet 3 (full, so its fill covers it) selects it: the side panel
     // holds its value, state, sparkline (its own series over its last half hour) and offered
@@ -693,6 +885,12 @@ fn the_page_draws_the_layout_from_the_feed() {
     }));
     settle(&mut page, "an alarm, a warning and a disabled object", &["outlet-3"]);
     let around = around_when(&mut page, "a.attention.length === 7 && a.headline[0][1] === '0.2'");
+    // The Alarms view: every state it writes, none in the accent.
+    page.eval("location.hash = 'alarms'; true");
+    page.wait_for("document.querySelectorAll('.dt tbody tr').length >= 7 || null", Duration::from_secs(10));
+    assert_eq!(accent_on_states(&mut page), json!([]), "the Alarms view: a state drawn in the accent");
+    page.eval("location.hash = 'layout'; true");
+    settle(&mut page, "the layout shown again", &["outlet-3"]);
     assert_eq!(around["headline"], json!([["speed", "0.2", "mono st-text-warn"], ["read-rate", "—", "mono st-text-stale"]]));
     assert_eq!(around["attention"], json!([
         ["infeed", "!", "mark st-alarm", "Infeed fault"],
@@ -730,6 +928,8 @@ fn the_page_draws_the_layout_from_the_feed() {
     assert!(tags.iter().all(|(_, t)| *t == json!("■ far")), "{tags:?}");
     let around = around_when(&mut page, "a.attention.length === 4 && a.attention[1][0] === 'tracked'");
     assert_eq!(around["attention"][1], json!(["tracked", "■", "mark st-warn", "Tracked far"]));
+    // Every row again, the keyed marker's picked whole: every one of its clones carries it.
+    pick_every_row(&mut page, &drawn, &settle);
     let a1 = drawn["tracked"]["clones"].as_array().unwrap().iter().find(|c| c["key"] == json!("A1")).unwrap()["rect"].clone();
     click_at(&mut page, &a1);
     let around = around_when(&mut page, "a.selected === 'Tracked · A1'");

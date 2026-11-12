@@ -77,7 +77,7 @@ export class Side {
     this.sel = s;
     const parts: Node[] = [
       h("div", { class: "side-head" }, h("span", { class: "caps" }, "Selected")),
-      h("div", { class: "sel-title" }, h("strong", {}, key ? `${def.label} · ${key}` : def.label), s.badge),
+      h("div", { class: "sel-title", "data-id": def.id }, h("strong", {}, key ? `${def.label} · ${key}` : def.label), s.badge),
       h("dl", { class: "facts" },
         h("dt", {}, "Value"), s.value,
         h("dt", {}, "Since"), s.since,

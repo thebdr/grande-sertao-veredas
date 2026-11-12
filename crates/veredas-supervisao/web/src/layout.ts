@@ -191,6 +191,15 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
 
   let selected: { id: string | null; key: string | null } = { id: null, key: null };
 
+  /// The selection drawn on what the object draws: its element while that is drawn (never a marker
+  /// with no place, nor a keyed marker's own element while its clones stand), every clone when the
+  /// object is picked whole (from its row), a key's own clone when a key is.
+  function mark(b: Bound) {
+    const mine = selected.id === b.def.id;
+    b.el.classList.toggle("sv-selected", mine && b.clones.size === 0 && !b.el.classList.contains("sv-hidden"));
+    for (const [k, c] of b.clones) c.classList.toggle("sv-selected", mine && (selected.key === null || selected.key === k));
+  }
+
   function paint(b: Bound, o: ObjectState) {
     const cls = `sv-state-${o.state}`;
     const targets = [b.el, ...b.clones.values()];
@@ -233,7 +242,6 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
             b.el.after(c);
             b.clones.set(it.key, c);
           }
-          c.classList.toggle("sv-selected", selected.id === b.def.id && selected.key === it.key);
           for (const x of Array.from(c.classList)) if (x.startsWith("sv-state-")) c.classList.remove(x);
           c.classList.add(cls);
           placeAt(b, c, it.key, it.place);
@@ -251,6 +259,7 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
         t.setAttribute("class", `sv-tag ${cls}`);
       }
     }
+    mark(b);
   }
 
   // Zoom and pan by the viewBox.
@@ -299,10 +308,7 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     },
     select(id, key = null) {
       selected = { id, key };
-      for (const b of bound.values()) {
-        b.el.classList.toggle("sv-selected", b.def.id === id && (key === null || b.clones.size === 0));
-        for (const [k, c] of b.clones) c.classList.toggle("sv-selected", b.def.id === id && k === key);
-      }
+      for (const b of bound.values()) mark(b);
     },
     layers(l) {
       svg.classList.toggle("no-markers", !l.markers);
