@@ -14,15 +14,15 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "6879f02876f8390a2fd6ba2a3d413421f3978c940c235bc53b9f426e57075f62",
-  "outputTail": "running 7 tests\ntest an_entry_git_holds_that_is_no_regular_file_is_refused ... ok\ntest an_address_is_read_by_its_scheme_or_its_slashes ... ok\ntest its_own_dependencies_are_core_portal_and_the_servers_crates ... ok\ntest supervisao_is_one_library_and_one_executable_named_for_it ... ok\ntest the_page_compiled_in_is_built_from_the_sources_in_the_tree ... ok\ntest the_plant_s_stack_reaches_supervisao_through_portal_alone ... ok\ntest no_file_of_supervisao_names_a_vendor_a_product_or_a_customer ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.54s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.57s\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-d1a4d457ef4f6d46.exe)\n     Running tests\\component.rs (target\\debug\\deps\\component-42405f4c3ba354dc.exe)",
-  "ranAt": "2026-11-11T17:27:51.353Z",
-  "headCommit": "e6ae0c8f4afb35c025d66a6d5d5ded4754887309",
+  "outputSha": "72ad203c6bc5ac348dc52f09ef3e448b923d7a969d81a318edbe4016d401adf1",
+  "outputTail": "running 7 tests\ntest an_address_is_read_by_its_scheme_or_its_slashes ... ok\ntest an_entry_git_holds_that_is_no_regular_file_is_refused ... ok\ntest supervisao_is_one_library_and_one_executable_named_for_it ... ok\ntest its_own_dependencies_are_core_portal_and_the_servers_crates ... ok\ntest the_page_compiled_in_is_built_from_the_sources_in_the_tree ... ok\ntest the_plant_s_stack_reaches_supervisao_through_portal_alone ... ok\ntest no_file_of_supervisao_names_a_vendor_a_product_or_a_customer ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.94s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.40s\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-d1a4d457ef4f6d46.exe)\n     Running tests\\component.rs (target\\debug\\deps\\component-42405f4c3ba354dc.exe)",
+  "ranAt": "2026-11-12T00:40:17.318Z",
+  "headCommit": "070ebbf5bfb206f529050d752632e8318f178092",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/component.rs",
       "file": "crates/veredas-supervisao/tests/component.rs",
-      "fileSha": "7e77d713be7a163937081ae32d012959753203cfaaa1e2b0177303f138c2572f"
+      "fileSha": "24191b9f6dbe201528373f9096879cce73ce33f5b5de2788cb494b9dd233ecad"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",
