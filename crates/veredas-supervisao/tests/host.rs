@@ -69,10 +69,17 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     let b = plant(&dir.path().join("bench-b"));
     b.server("plc").unwrap().set("fill1", 65.0);
     let path = two_plants(dir.path(), &a, &b);
+    // An object reading one key, so the view's `key` carries a value.
+    let binding = dir.path().join("loop/binding.toml");
+    let text = std::fs::read_to_string(&binding).unwrap();
+    std::fs::write(&binding, text.replacen("\n[[dashboard]]", "\n[[object]]\nid = \"keyed\"\nlabel = \"Keyed\"\nvalue = { source = \"plc\", series = \"fill1\", key = \"A1\" }\n\n[[dashboard]]", 1)).unwrap();
+    let want = config::load_file(&path).unwrap();
     let cfg = config::load_file(&path).unwrap();
     let host = Host::start(cfg).unwrap();
     let addr = host.addr();
     assert_ne!(addr.port(), 0);
+    // Hall's switch armed, loop's not: every status either session serves tells them apart.
+    host.session("hall").unwrap().set_writes_armed(true);
 
     // The page and its bundle, compiled in.
     let (status, headers, body) = http(addr, "GET", "/", None);
@@ -128,7 +135,31 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     let (status, v) = get(addr, "/s/loop/binding");
     assert_eq!(status, 200);
     assert_eq!((v["name"].clone(), v["title"].clone(), v["layout"].clone(), v["headline"].clone()), (json!("loop"), json!("The loop"), json!("layout.svg"), json!(["speed", "read-rate"])));
-    assert_eq!(v["objects"].as_array().unwrap().len(), 8);
+    // Every object of each session's view, every field the page reads, as its binding holds it (the
+    // rules by their state and word; outlet 3's spelled out in full below, its words included).
+    for (session, at) in [("loop", 0), ("hall", 1)] {
+        let (_, view) = get(addr, &format!("/s/{session}/binding"));
+        let objects = &want.sessions[at].binding.objects;
+        let got = view["objects"].as_array().unwrap();
+        assert_eq!(got.len(), objects.len(), "{session}");
+        for (o, g) in objects.iter().zip(got) {
+            let expected = json!({
+                "id": o.id, "label": o.label, "unit": o.unit, "show": o.show.name(), "range": [o.range.0, o.range.1], "path": o.path,
+                "source": o.value.source, "series": o.value.series, "key": o.value.key, "normal": o.normal,
+                "rules": o.rules.iter().map(|r| json!({ "state": r.class.name(), "word": r.word })).collect::<Vec<_>>(),
+                "actions": o.actions.iter().map(|a| json!({ "label": a.label, "source": a.source, "tag": a.tag, "value": a.value })).collect::<Vec<_>>(),
+            });
+            let mut g = g.clone();
+            for r in g["rules"].as_array_mut().unwrap() {
+                assert!(r["when"].as_str().is_some_and(|w| !w.is_empty()), "{session} {}: {r}", o.id);
+                r.as_object_mut().unwrap().remove("when");
+            }
+            assert_eq!(g, expected, "{session} {}", o.id);
+        }
+    }
+    assert_eq!(v["objects"].as_array().unwrap().len(), 9);
+    // The class has values to see: a marker's path and an object's key among them.
+    assert!(v["objects"].as_array().unwrap().iter().any(|o| o["path"] == json!("loop")) && v["objects"].as_array().unwrap().iter().any(|o| o["key"] == json!("A1")), "{v}");
     assert_eq!(v["objects"][5], json!({
         "id": "outlet-3", "label": "Outlet 3", "unit": "%", "show": "level", "range": [0.0, 100.0], "path": null,
         "source": "plc", "series": "fill3", "key": null, "normal": "ok",
@@ -150,7 +181,7 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     let (status, s) = get(addr, "/s/loop/portal/api/session");
     assert_eq!((status, s["session_name"].clone(), s["running"].clone(), s["writes_armed"].clone()), (200, json!("the loop"), json!(true), json!(false)));
     let (_, s) = get(addr, "/s/hall/portal/api/session");
-    assert_eq!(s["session_name"], json!("the hall"));
+    assert_eq!((s["session_name"].clone(), s["writes_armed"].clone()), (json!("the hall"), json!(true)));
     // Portal's own live stream, nested as it is: its hello names the session it belongs to.
     for (name, title) in [("loop", "the loop"), ("hall", "the hall")] {
         let mut sse = Sse::open(addr, &format!("/s/{name}/portal/events"));
@@ -173,7 +204,9 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
         let (event, data) = sse.next(Duration::from_secs(10)).unwrap();
         let first: Value = serde_json::from_str(&data).unwrap();
         assert_eq!((event.as_str(), object(&first, "outlet-1")["value"].clone()), ("snapshot", json!(fill)), "{name}");
-        assert_eq!(first["objects"].as_array().unwrap().len(), if name == "loop" { 8 } else { 6 });
+        assert_eq!(first["objects"].as_array().unwrap().len(), if name == "loop" { 9 } else { 6 });
+        assert_eq!(first["session"]["writes_armed"], json!(name == "hall"), "{name}'s snapshot carries its own switch");
+        assert_eq!(objects(addr, name)["session"]["writes_armed"], json!(name == "hall"), "{name}'s objects.json carries its own switch");
         streams.push(sse);
     }
     let fill_of = |v: &Value| v["objects"].as_array().and_then(|os| os.iter().find(|o| o["id"] == "outlet-1")).map(|o| o["value"].clone());
@@ -194,6 +227,26 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     }
     assert!(loop_after.iter().any(|(n, _)| n == "session"), "loop's stream read on: {loop_after:?}");
     assert!(loop_after.iter().all(|(_, v)| fill_of(v) != Some(json!(70.0))), "hall's change never on loop's stream: {loop_after:?}");
+    // Hall's stream read on likewise. Every event the feed sends (its names read from its own
+    // source, so none is left out) told apart between the sessions: a snapshot and an objects
+    // event by a plant's value, a status by the switch (hall's armed, loop's not).
+    let reading = std::time::Instant::now();
+    let mut hall_after: Vec<(String, Value)> = Vec::new();
+    while reading.elapsed() < Duration::from_millis(2500) {
+        if let Some((n, d)) = streams[1].next(Duration::from_millis(2500).saturating_sub(reading.elapsed())) {
+            hall_after.push((n, serde_json::from_str(&d).unwrap_or(Value::Null)));
+        }
+    }
+    let feed = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/feed.rs")).unwrap();
+    let mut sent: Vec<String> = feed.match_indices("((\"").map(|(i, _)| feed[i + 3..].split('"').next().unwrap().to_string()).collect();
+    sent.sort();
+    sent.dedup();
+    assert_eq!(sent, ["objects", "session", "snapshot"], "the events the feed sends, each checked here");
+    for (session, after, armed) in [("loop", &loop_after, false), ("hall", &hall_after, true)] {
+        let statuses: Vec<&Value> = after.iter().filter(|(n, _)| n == "session").map(|(_, v)| v).collect();
+        assert!(!statuses.is_empty() && statuses.iter().all(|s| s["writes_armed"] == json!(armed)), "{session}'s statuses carry its own switch: {statuses:?}");
+        assert!(after.iter().filter(|(n, _)| n == "snapshot").all(|(_, v)| v["session"]["writes_armed"] == json!(armed)), "{session}");
+    }
     assert_eq!((object(&objects(addr, "loop"), "outlet-1")["value"].clone(), object(&objects(addr, "hall"), "outlet-1")["value"].clone()), (json!(40.0), json!(70.0)));
     assert!(objects(addr, "hall")["objects"].as_array().unwrap().iter().all(|o| !o["id"].as_str().unwrap().starts_with("parcel")));
     let (_, s) = get(addr, &format!("/s/hall/portal/api/opc/read?source=plc&tag={}", enc(&format!("ns={};s=fill1", b.server("plc").unwrap().namespace))));
