@@ -9,6 +9,7 @@
 
 mod common;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use common::browser::Browser;
@@ -56,6 +57,13 @@ const ALLOWED: &[&str] = &[
     "veredas_portal::session::HealthState", "veredas_portal::session::Live", "veredas_portal::session::Session",
     "veredas_portal::serve::store_now_ms", "veredas_portal::serve::router", "veredas_portal::serve::lttb",
     "veredas_portal::store::MAX_PAGE", "veredas_portal::store::RowsQuery",
+    // An enum's variants and a type's functions, each by name: data read, a value built, a
+    // session started, a series thinned.
+    "veredas_core::SeriesType::Int", "veredas_core::SeriesType::Float", "veredas_core::SeriesType::Text", "veredas_core::SeriesType::Time",
+    "veredas_core::SeriesRef::new", "veredas_core::schema::HeaderError::NotToml", "veredas_portal::CaptureRule::new",
+    "veredas_portal::session::HealthState::Waiting", "veredas_portal::session::HealthState::Live", "veredas_portal::session::HealthState::Idle",
+    "veredas_portal::session::HealthState::Retrying", "veredas_portal::session::HealthState::Ended", "veredas_portal::session::HealthState::Failed",
+    "veredas_portal::session::Session::start", "veredas_portal::serve::lttb::downsample",
     // Of std's and tokio's files, programs, sockets and process: reading files, stdin, its one
     // listener, an address, an error, its own exit. Nothing that writes, runs or dials.
     "std::fs::read_to_string", "std::fs::read_dir", "std::fs::read", "std::io", "std::io::Error", "std::io::ErrorKind::Interrupted", "std::io::Result", "std::io::stdin",
@@ -66,113 +74,318 @@ const ALLOWED: &[&str] = &[
 /// of std and tokio that reach files, programs, sockets and the process.
 const JUDGED: &[&str] = &["veredas_core", "veredas_portal", "std::fs", "std::io", "std::process", "std::net", "std::os", "tokio::fs", "tokio::io", "tokio::process", "tokio::net"];
 
+/// The crate roots whose paths are judged; every other root the sources can name is reviewed whole
+/// in `REVIEWED_ROOTS`.
+const JUDGED_ROOTS: &[&str] = &["std", "tokio", "veredas_core", "veredas_portal"];
+
+/// The crate roots supervisão's sources may name without a path being judged, each reviewed: the
+/// server (`axum`, `tokio_stream`: it serves, it dials nothing), data (`serde`, `serde_json`,
+/// `toml`, `chrono`, `roxmltree`, `thiserror`: no file, no socket, no program), and Rust's `core`.
+const REVIEWED_ROOTS: &[&str] = &["axum", "chrono", "core", "roxmltree", "serde", "serde_json", "thiserror", "tokio_stream", "toml"];
+
+/// Rust's keywords, strict and reserved, every edition's (the Reference's list): none is a path's
+/// segment but `crate`, `self`, `Self` and `super`, so `if ::std::fs::write(..)` names `std::fs::write`.
+const KEYWORDS: &[&str] = &[
+    "as", "async", "await", "break", "const", "continue", "dyn", "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut",
+    "pub", "ref", "return", "static", "struct", "trait", "true", "type", "unsafe", "use", "where", "while", "abstract", "become", "box", "do", "final", "gen", "macro", "override",
+    "priv", "try", "typeof", "unsized", "virtual", "yield",
+];
+
 fn judged(p: &str) -> bool {
     JUDGED.iter().any(|j| p == *j || p.strip_prefix(j).is_some_and(|r| r.starts_with("::")))
 }
 
-/// A source's text on one line, its whitespace runs one space and none around `::`, so neither a
-/// line break nor a space hides a path or a word.
-fn squeezed(text: &str) -> String {
-    let mut flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    while flat.contains(" ::") || flat.contains(":: ") {
-        flat = flat.replace(" ::", "::").replace(":: ", "::");
-    }
-    flat
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Kind {
+    Word,
+    Raw,
+    Punct,
+    Lit,
 }
 
-/// Every crate root a source names that the reading cannot follow: `std`, `tokio`, core or portal
-/// as a word not followed at once by `::` and a name or a `{` (renamed with `as`, a comment inside
-/// its path, a macro splicing the rest, passed to a macro whole). Whole-line comments are not code.
-fn unfollowed_roots(text: &str) -> Vec<String> {
-    let code: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with("//")).collect();
-    let flat = squeezed(&code.join("\n"));
-    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
-    let mut out = Vec::new();
-    for root in ["std", "tokio", "veredas_core", "veredas_portal"] {
-        for (at, _) in flat.match_indices(root) {
-            let after = &flat[at + root.len()..];
-            if flat[..at].chars().last().is_some_and(word) || after.chars().next().is_some_and(word) {
-                continue;
-            }
-            let follows = after.strip_prefix("::").and_then(|r| r.chars().next()).is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '{');
-            if !follows {
-                out.push(format!("{root}{}", after.chars().take(12).collect::<String>()));
-            }
-        }
-    }
-    out
+/// A token of a source as the Rust lexer reads it: comments are none (a doc comment is an
+/// attribute's string), a raw identifier is its name (`r#fs` is `fs`, its kind saying it was raw),
+/// `::` is one token and a group's delimiters are tokens of their own.
+#[derive(Clone, Debug, PartialEq)]
+struct Tok {
+    kind: Kind,
+    text: String,
 }
 
-/// A `use` tree's paths written out whole: `a::{b, c::{d, self}}` gives `a::b`, `a::c::d`, `a::c`.
-fn use_paths(prefix: &str, tree: &str) -> Vec<String> {
-    let tree = tree.trim();
-    let join = |a: &str, b: &str| if a.is_empty() { b.to_string() } else { format!("{a}::{b}") };
-    match tree.find('{') {
-        Some(open) => {
-            let head = tree[..open].trim().trim_end_matches("::");
-            let base = if head.is_empty() { prefix.to_string() } else { join(prefix, head) };
-            let inner = &tree[open + 1..tree.rfind('}').unwrap()];
-            let mut parts = Vec::new();
-            let (mut depth, mut start) = (0, 0);
-            for (i, c) in inner.char_indices() {
-                match c {
-                    '{' => depth += 1,
-                    '}' => depth -= 1,
-                    ',' if depth == 0 => {
-                        parts.push(&inner[start..i]);
-                        start = i + 1;
+impl Tok {
+    /// A path's segment: an identifier, raw or not, that is no keyword (`crate`, `self`, `Self`
+    /// and `super` are segments).
+    fn segment(&self) -> bool {
+        self.kind == Kind::Raw || (self.kind == Kind::Word && !KEYWORDS.contains(&self.text.as_str()))
+    }
+    fn is(&self, punct: &str) -> bool {
+        self.kind == Kind::Punct && self.text == punct
+    }
+    fn keyword(&self, word: &str) -> bool {
+        self.kind == Kind::Word && self.text == word
+    }
+}
+
+fn lex(text: &str) -> Vec<Tok> {
+    fn walk(stream: proc_macro2::TokenStream, out: &mut Vec<Tok>) {
+        let trees: Vec<proc_macro2::TokenTree> = stream.into_iter().collect();
+        let mut i = 0;
+        while i < trees.len() {
+            match &trees[i] {
+                proc_macro2::TokenTree::Ident(id) => {
+                    let s = id.to_string();
+                    out.push(match s.strip_prefix("r#") {
+                        Some(name) => Tok { kind: Kind::Raw, text: name.to_string() },
+                        None => Tok { kind: Kind::Word, text: s },
+                    });
+                }
+                proc_macro2::TokenTree::Punct(p) => {
+                    let pair = p.as_char() == ':' && p.spacing() == proc_macro2::Spacing::Joint && matches!(trees.get(i + 1), Some(proc_macro2::TokenTree::Punct(q)) if q.as_char() == ':');
+                    out.push(Tok { kind: Kind::Punct, text: if pair { "::".to_string() } else { p.as_char().to_string() } });
+                    if pair {
+                        i += 1;
                     }
-                    _ => {}
+                }
+                proc_macro2::TokenTree::Literal(l) => out.push(Tok { kind: Kind::Lit, text: l.to_string() }),
+                proc_macro2::TokenTree::Group(g) => {
+                    let (open, close) = match g.delimiter() {
+                        proc_macro2::Delimiter::Parenthesis => ("(", ")"),
+                        proc_macro2::Delimiter::Brace => ("{", "}"),
+                        proc_macro2::Delimiter::Bracket => ("[", "]"),
+                        proc_macro2::Delimiter::None => ("", ""),
+                    };
+                    if !open.is_empty() {
+                        out.push(Tok { kind: Kind::Punct, text: open.to_string() });
+                    }
+                    walk(g.stream(), out);
+                    if !close.is_empty() {
+                        out.push(Tok { kind: Kind::Punct, text: close.to_string() });
+                    }
                 }
             }
-            parts.push(&inner[start..]);
-            parts.into_iter().filter(|p| !p.trim().is_empty()).flat_map(|p| use_paths(&base, p)).collect()
+            i += 1;
         }
-        None if tree == "self" => vec![prefix.to_string()],
-        None => vec![join(prefix, tree)],
+    }
+    let stream: proc_macro2::TokenStream = text.parse().unwrap_or_else(|e| panic!("the Rust lexer refused a source: {e:?}: {}", text.chars().take(80).collect::<String>()));
+    let mut out = Vec::new();
+    walk(stream, &mut out);
+    out
+}
+
+/// One name a `use` declaration brings in: the path written whole (`std::io` for
+/// `use std::{io::{self}}`), the name it takes here, and whether it was renamed or a glob.
+#[derive(Clone, Debug, PartialEq)]
+struct Import {
+    path: String,
+    name: String,
+    renamed: bool,
+    glob: bool,
+}
+
+/// One `use` tree read from `toks[*i]` under `prefix`: a leading `::`, segments joined by `::`, then
+/// a group `{..}`, a glob, `self`, or a name with or without `as`; a tree opening with `{` is a group.
+fn use_tree(toks: &[Tok], i: &mut usize, prefix: &[String], out: &mut Vec<Import>) -> Result<(), String> {
+    let mut path = prefix.to_vec();
+    if toks.get(*i).is_some_and(|t| t.is("::")) {
+        *i += 1;
+    }
+    loop {
+        let t = toks.get(*i).ok_or("a `use` cut short")?;
+        if t.is("{") {
+            *i += 1;
+            loop {
+                if toks.get(*i).is_some_and(|t| t.is("}")) {
+                    *i += 1;
+                    return Ok(());
+                }
+                use_tree(toks, i, &path, out)?;
+                match toks.get(*i) {
+                    Some(t) if t.is(",") => *i += 1,
+                    Some(t) if t.is("}") => {}
+                    other => return Err(format!("a `use` group read to {other:?}")),
+                }
+            }
+        }
+        if t.is("*") {
+            *i += 1;
+            out.push(Import { path: [path.clone(), vec!["*".to_string()]].concat().join("::"), name: "*".to_string(), renamed: false, glob: true });
+            return Ok(());
+        }
+        if !t.segment() {
+            return Err(format!("a `use` tree read to `{}`", t.text));
+        }
+        *i += 1;
+        // `self` inside a group names the group's own path; first, it is the current module.
+        if !(t.keyword("self") && !path.is_empty()) {
+            path.push(t.text.clone());
+        }
+        if toks.get(*i).is_some_and(|t| t.is("::")) {
+            *i += 1;
+            continue;
+        }
+        let (name, renamed) = if toks.get(*i).is_some_and(|t| t.keyword("as")) {
+            let alias = toks.get(*i + 1).filter(|t| t.segment() || t.keyword("_") || t.text == "_").ok_or("a `use` renamed to nothing")?.text.clone();
+            *i += 2;
+            (alias, true)
+        } else {
+            (path.last().cloned().unwrap_or_default(), false)
+        };
+        out.push(Import { path: path.join("::"), name, renamed, glob: false });
+        return Ok(());
     }
 }
 
-/// Every path of core's, portal's, std's or tokio's a source names: its `use` trees written out, the
-/// paths it writes inline, and the items it reaches through a module it imported whole
-/// (`project::load_file`, `io::Result`, `fs::write`).
-fn named_paths(text: &str) -> Vec<String> {
-    let flat = squeezed(text);
+/// Every `use` declaration of a source read by its tree, wherever it stands and however it opens
+/// (`use ::std::..`, `use {std::..}`), with the span of its tokens so the inline reading passes over
+/// them. A `use` this reading cannot follow is an error, not passed over.
+fn imports(toks: &[Tok]) -> Result<(Vec<Import>, Vec<(usize, usize)>), String> {
+    let (mut out, mut spans) = (Vec::new(), Vec::new());
+    for (at, t) in toks.iter().enumerate() {
+        if !t.keyword("use") {
+            continue;
+        }
+        let mut i = at + 1;
+        use_tree(toks, &mut i, &[], &mut out)?;
+        if !toks.get(i).is_some_and(|t| t.is(";")) {
+            return Err(format!("a `use` not ended by `;`: {:?}", toks.get(i)));
+        }
+        spans.push((at, i));
+    }
+    Ok((out, spans))
+}
+
+/// Every path a source writes outside its `use` declarations, by its segments: a segment, then `::`
+/// and a segment, as long as they go (a leading `::` dropped, a keyword before it none of the path;
+/// a turbofish, a group or a glob ends it).
+fn runs(toks: &[Tok], skip: &[(usize, usize)]) -> Vec<Vec<String>> {
     let mut out = Vec::new();
-    let mut rest = flat.clone();
-    for head in ["use veredas_core", "use veredas_portal", "use std::", "use tokio::"] {
-        let mut from = 0;
-        while let Some(at) = rest[from..].find(head).map(|i| i + from) {
-            let end = rest[at..].find(';').map_or(rest.len(), |i| at + i);
-            out.extend(use_paths("", &rest[at + 4..end]));
-            rest.replace_range(at..end, &" ".repeat(end - at));
-            from = end;
+    let mut i = 0;
+    while i < toks.len() {
+        if let Some(&(_, end)) = skip.iter().find(|(a, _)| *a == i) {
+            i = end + 1;
+            continue;
         }
-    }
-    for krate in ["veredas_core::", "veredas_portal::", "std::", "tokio::"] {
-        for (at, _) in rest.match_indices(krate) {
-            if rest[..at].chars().last().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
-                continue;
+        if toks[i].segment() {
+            let mut path = vec![toks[i].text.clone()];
+            let mut j = i + 1;
+            while j + 1 < toks.len() && toks[j].is("::") && toks[j + 1].segment() {
+                path.push(toks[j + 1].text.clone());
+                j += 2;
             }
-            let path: String = rest[at..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == ':').collect();
-            out.push(path.trim_end_matches(':').to_string());
+            out.push(path);
+            i = j;
+            continue;
         }
+        i += 1;
     }
-    // A module imported whole: what a source reaches through it is read as well.
-    let whole = ["veredas_portal::project", "std::fs", "std::io", "std::process", "std::net", "std::os", "tokio::fs", "tokio::io", "tokio::process", "tokio::net"];
-    let modules: Vec<&str> = whole.into_iter().filter(|m| out.iter().any(|p| p == m)).collect();
-    for m in modules {
-        let short = format!("{}::", m.rsplit("::").next().unwrap());
-        for (at, _) in rest.match_indices(&short) {
-            let before = rest[..at].chars().last();
-            if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':') {
-                continue;
-            }
-            let item: String = rest[at + short.len()..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
-            out.push(format!("{m}::{item}"));
+    out
+}
+
+/// Every judged crate root a source names that the reading cannot follow: as a path's first segment
+/// not followed at once by `::` and a segment or a group (renamed with `as`, passed to a macro
+/// whole, spliced by one).
+fn unfollowed_roots(toks: &[Tok]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (i, t) in toks.iter().enumerate() {
+        let first = !(i >= 2 && toks[i - 1].is("::") && toks[i - 2].segment());
+        if !(t.segment() && first && JUDGED_ROOTS.contains(&t.text.as_str())) {
+            continue;
+        }
+        let follows = toks.get(i + 1).is_some_and(|n| n.is("::")) && toks.get(i + 2).is_some_and(|n| n.segment() || n.is("{"));
+        if !follows {
+            out.push(toks[i..(i + 3).min(toks.len())].iter().map(|t| t.text.as_str()).collect::<Vec<_>>().join(" "));
         }
     }
     out
+}
+
+/// A path read through the names a source imports: its first segment, a name the file imports,
+/// read as the imported path; a path through `crate`, `self` or `super` read as well from each of
+/// its segments that names, anywhere in the crate, an import of core's, portal's, std's or tokio's
+/// (a re-export followed by its name, not by the compiler's resolution). The path itself is kept.
+fn expand(path: &str, local: &BTreeMap<String, String>, wide: &BTreeMap<String, BTreeSet<String>>, depth: usize) -> BTreeSet<String> {
+    let mut out = BTreeSet::from([path.to_string()]);
+    if depth > 8 {
+        return out;
+    }
+    let segs: Vec<&str> = path.split("::").collect();
+    if let Some(full) = local.get(segs[0]).filter(|f| f.split("::").next() != Some(segs[0])) {
+        let whole = [vec![full.as_str()], segs[1..].to_vec()].concat().join("::");
+        out.extend(expand(&whole, local, wide, depth + 1));
+    }
+    if ["crate", "self", "super"].contains(&segs[0]) {
+        for k in 1..segs.len() {
+            for t in wide.get(segs[k]).into_iter().flatten() {
+                let whole = [vec![t.as_str()], segs[k + 1..].to_vec()].concat().join("::");
+                out.extend(expand(&whole, local, wide, depth + 1));
+            }
+        }
+    }
+    out
+}
+
+/// The reading of a crate's sources, each `(file, text)`: every path of core's, portal's, std's or
+/// tokio's they name, imported or written inline, read through the names they import; and what the
+/// reading refuses to follow (a glob, a judged path renamed, a root not followed, a `use` it cannot read).
+struct Reading {
+    named: Vec<(String, String)>,
+    refused: Vec<String>,
+}
+
+fn read_sources(files: &[(String, String)]) -> Reading {
+    let mut refused = Vec::new();
+    let mut parsed = Vec::new();
+    for (file, text) in files {
+        let toks = lex(text);
+        let (found, spans) = imports(&toks).unwrap_or_else(|e| {
+            refused.push(format!("{file}: {e}"));
+            (Vec::new(), Vec::new())
+        });
+        refused.extend(unfollowed_roots(&toks).into_iter().map(|r| format!("{file}: a root not followed: `{r}`")));
+        let local: BTreeMap<String, String> = found.iter().filter(|i| !i.glob).map(|i| (i.name.clone(), i.path.clone())).collect();
+        let inline = runs(&toks, &spans);
+        parsed.push((file.clone(), found, local, inline));
+    }
+    // Every name imported anywhere from core, portal, std or tokio, followed until it holds still.
+    let mut wide: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    loop {
+        let before = wide.clone();
+        for (_, found, local, _) in &parsed {
+            for i in found.iter().filter(|i| !i.glob) {
+                for e in expand(&i.path, local, &wide, 0).into_iter().filter(|e| judged(e)) {
+                    wide.entry(i.name.clone()).or_default().insert(e);
+                }
+            }
+        }
+        if wide == before {
+            break;
+        }
+    }
+    let mut named = Vec::new();
+    for (file, found, local, inline) in &parsed {
+        for i in found {
+            if i.glob {
+                refused.push(format!("{file}: `{}` taken whole", i.path));
+                continue;
+            }
+            let all = expand(&i.path, local, &wide, 0);
+            if i.renamed && all.iter().any(|e| judged(e)) {
+                refused.push(format!("{file}: `{}` renamed `{}`", i.path, i.name));
+            }
+            named.extend(all.into_iter().map(|e| (file.clone(), e)));
+        }
+        for r in inline.iter().filter(|r| r.len() >= 2) {
+            named.extend(expand(&r.join("::"), local, &wide, 0).into_iter().map(|e| (file.clone(), e)));
+        }
+    }
+    Reading { named, refused }
+}
+
+/// Whether a source's tokens hold `word`'s tokens in a row, `word` written with a space between
+/// each (a name matched whole, never inside a longer one).
+fn holds(toks: &[Tok], word: &str) -> bool {
+    let w: Vec<&str> = word.split_whitespace().collect();
+    toks.windows(w.len()).any(|win| win.iter().zip(&w).all(|(t, s)| t.kind != Kind::Lit && t.text == *s))
 }
 
 /// Every Rust file under `dir`, however deep.
@@ -184,7 +397,7 @@ const PORTAL_MEMBERS: &[&str] = &[
     "as_str", "bytes", "channels", "columns", "count", "feed", "file", "file_name", "get", "health", "id", "index_ms", "key", "keyed", "keys", "kind", "last_index_ms",
     "last_value", "len", "limit", "live", "load", "logs", "message", "name", "opc", "path", "pattern", "query_numeric", "query_rows", "remove", "rows", "rules", "scope",
     "send", "series", "server", "session_config", "snapshot", "source", "source_id", "sources", "spawn", "start", "state", "status", "stop", "stopped", "store",
-    "subscribe", "table", "tables", "tag", "tags", "text", "to", "toml", "total", "ts", "ty", "types", "value", "values", "writable", "writes_armed",
+    "subscribe", "table", "tables", "tag", "tags", "text", "to", "total", "ty", "types", "value", "values", "writable", "writes_armed",
 ];
 
 /// Every public function and public field portal declares, by name, read from its own sources.
@@ -212,18 +425,16 @@ fn portal_members() -> std::collections::BTreeSet<String> {
     out
 }
 
-/// The names a text reaches after a `.` (a method called or a field read; a number's decimals and
-/// a range's dots name none).
-fn dotted(text: &str) -> std::collections::BTreeSet<String> {
-    let b = text.as_bytes();
-    let mut out = std::collections::BTreeSet::new();
-    for (i, c) in b.iter().enumerate() {
-        if *c != b'.' || b.get(i + 1) == Some(&b'.') || (i > 0 && b[i - 1] == b'.') {
+/// The names a source's tokens reach after a `.` (a method called or a field read, a raw
+/// identifier by its name; a range's dots and a tuple's index name none).
+fn dotted(toks: &[Tok]) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for (i, t) in toks.iter().enumerate() {
+        if !t.is(".") || (i > 0 && toks[i - 1].is(".")) || toks.get(i + 1).is_some_and(|n| n.is(".")) {
             continue;
         }
-        let rest = text[i + 1..].trim_start();
-        if rest.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
-            out.insert(rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect());
+        if let Some(n) = toks.get(i + 1).filter(|n| n.kind == Kind::Word || n.kind == Kind::Raw) {
+            out.insert(n.text.clone());
         }
     }
     out
@@ -306,35 +517,47 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     }
     let files = rust_files(&root.join("src"));
     assert!(files.len() >= 8, "{files:?}");
+    // Every source read as the Rust lexer reads it: a raw identifier is its name, a comment is
+    // nothing, so no spelling of a word hides it.
+    let sources: Vec<(String, String)> = files.iter().map(|p| (p.file_name().unwrap().to_string_lossy().to_string(), std::fs::read_to_string(p).unwrap())).collect();
     let mut listeners = 0;
-    let mut named = Vec::new();
-    for path in files {
-        let text = std::fs::read_to_string(&path).unwrap();
-        let flat = squeezed(&text);
+    for (file, text) in &sources {
+        let toks = lex(text);
         for word in [
-            "write_tags", "opc_handle", "channel_handle", "set_writes_armed", "WriteGate", ".gate", "live.opc", "live.channels", "/api/opc/write", "/api/channels/send",
-            "writes_armed =", "writes_armed |=", "writes_armed:", "channel::spawn", "worker::spawn", "include!", "#[path",
+            "write_tags", "opc_handle", "channel_handle", "set_writes_armed", "WriteGate", ". gate", "live . opc", "live . channels",
+            "writes_armed =", "writes_armed | =", "writes_armed :", "channel :: spawn", "worker :: spawn", "include !", "# [ path",
             // No socket but its own listener, no file written, no program run.
-            "TcpStream", "TcpSocket", "UdpSocket", "UnixStream", "UnixListener", "UnixDatagram", "fs::write", "File::create", "OpenOptions", "fs::copy", "fs::rename", "Command::new",
-            // Nothing of core's or portal's renamed or taken whole; no macro of its own and no block
-            // comment, either of which can hide a path from this reading.
-            "extern crate", "veredas_core as", "veredas_portal as", "macro_rules!", "/*",
-            // No foreign function; and none of the methods of portal's store that write a file
-            // (reached as methods of the session's `store`, they name no path this reading judges).
-            "extern \"", "save_to", "export_table_csv", "export_all_csv", "append_wide", "append_samples",
+            "TcpStream", "TcpSocket", "UdpSocket", "UnixStream", "UnixListener", "UnixDatagram", "fs :: write", "File :: create", "OpenOptions", "fs :: copy", "fs :: rename", "Command :: new",
+            // No crate brought in by `extern`, no macro of its own (it could splice a path), no
+            // foreign function and no unsafe code.
+            "extern", "macro_rules !", "unsafe",
+            // None of the methods of portal's store that write a file (reached as methods of the
+            // session's `store`, they name no path this reading judges).
+            "save_to", "export_table_csv", "export_all_csv", "append_wide", "append_samples",
         ] {
-            assert!(!flat.contains(word), "{} names `{word}`", path.display());
+            assert!(!holds(&toks, word), "{file} names `{word}`");
         }
-        assert!(!flat.replace("#![forbid(unsafe_code)]", "").contains("unsafe"), "{} names `unsafe`", path.display());
-        let unread = unfollowed_roots(&text);
-        assert!(unread.is_empty(), "{} names a crate root this reading cannot follow: {unread:?}", path.display());
-        listeners += text.matches("TcpListener").count();
-        for p in named_paths(&text) {
-            assert!(!p.contains('*') && !p.contains(" as "), "{} takes `{p}` whole or renamed", path.display());
-            named.push((path.file_name().unwrap().to_string_lossy().to_string(), p));
+        for route in ["/api/opc/write", "/api/channels/send"] {
+            assert!(!toks.iter().any(|t| t.kind == Kind::Lit && t.text.contains(route)), "{file} names `{route}`");
         }
+        listeners += toks.iter().filter(|t| t.segment() && t.text == "TcpListener").count();
     }
     assert_eq!(listeners, 1, "one listener, the host's own");
+    let reading = read_sources(&sources);
+    assert!(reading.refused.is_empty(), "the reading cannot follow: {:?}", reading.refused);
+    let named = reading.named;
+    // Every crate root the sources can name: the keys of the manifest's dependency tables (a
+    // target's included; a dependency renamed is named by its key) and Rust's `std` and `core`
+    // (`alloc` and every other would take an `extern crate`, refused above). Each is judged path by
+    // path or reviewed whole; a root neither is refused.
+    let manifest: toml::Value = toml::from_str(&std::fs::read_to_string(root.join("Cargo.toml")).unwrap()).unwrap();
+    let mut roots: BTreeSet<String> = ["std", "core"].map(String::from).into();
+    let targets = manifest.get("target").and_then(|t| t.as_table()).into_iter().flat_map(|t| t.values().map(|v| v.get("dependencies")));
+    for table in std::iter::once(manifest.get("dependencies")).chain(targets).flatten() {
+        roots.extend(table.as_table().unwrap().keys().map(|k| k.replace('-', "_")));
+    }
+    let known: BTreeSet<String> = JUDGED_ROOTS.iter().chain(REVIEWED_ROOTS).map(|s| s.to_string()).collect();
+    assert_eq!(roots, known, "every crate root the sources can name, judged or reviewed");
     // What supervisão reaches of portal through the values it holds (a session, its live state, its
     // store, a project) names no path; it is read by name instead, against portal's own list of
     // public functions and fields: every name of that list supervisão's sources reach after a `.`
@@ -344,15 +567,18 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     // clause states the limit).
     let members = portal_members();
     assert!(["validate_definition", "save_to", "set_writes_armed", "query_rows", "store"].iter().all(|m| members.contains(*m)), "portal's list read: {} names", members.len());
-    let mut reached = std::collections::BTreeSet::new();
-    for path in rust_files(&root.join("src")) {
-        reached.extend(dotted(&std::fs::read_to_string(&path).unwrap()).into_iter().filter(|n| members.contains(n)));
+    let mut reached = BTreeSet::new();
+    for (_, text) in &sources {
+        reached.extend(dotted(&lex(text)).into_iter().filter(|n| members.contains(n)));
     }
     let unreviewed: Vec<&String> = reached.iter().filter(|n| !PORTAL_MEMBERS.contains(&n.as_str())).collect();
     assert!(unreviewed.is_empty(), "portal members reached beyond the reviewed ones: {unreviewed:?}");
     let stale: Vec<&&str> = PORTAL_MEMBERS.iter().filter(|n| !reached.contains(**n)).collect();
     assert!(stale.is_empty(), "reviewed names no longer reached: {stale:?}");
-    assert_eq!(dotted("live.store.query_rows(t, &q); let n = 1.5; x..y; s . len()"), ["len", "query_rows", "store"].into_iter().map(String::from).collect());
+    assert_eq!(
+        dotted(&lex("live.store.query_rows(t, &q); let n = 1.5; x..y; s . len(); v.r#list_tables(); w.0")),
+        ["len", "list_tables", "query_rows", "store"].into_iter().map(String::from).collect()
+    );
     let outside: Vec<&(String, String)> = named.iter().filter(|(_, p)| judged(p) && !ALLOWED.contains(&p.as_str())).collect();
     assert!(outside.is_empty(), "named outside what supervisão reads with: {outside:?}");
     // The reading itself: what the sources name today, every allowed path seen at least once; a
@@ -360,22 +586,38 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     for p in ALLOWED {
         assert!(named.iter().any(|(_, n)| n == p), "{p} never seen: {named:?}");
     }
+    let one = |text: &str| read_sources(&[("probe".to_string(), text.to_string())]);
+    let judged_of = |r: Reading| {
+        let mut got: Vec<String> = r.named.into_iter().map(|(_, p)| p).filter(|p| judged(p) && !ALLOWED.contains(&p.as_str())).collect();
+        got.sort();
+        got.dedup();
+        got
+    };
     let probe = "use veredas_portal::{project::{self, Project}, session::Live};\nlet x = veredas_core::schema::check(t);\nlet p = project::load(t, b);\nuse veredas_core::telegram;";
-    let mut got = named_paths(probe);
+    let mut got: Vec<String> = one(probe).named.into_iter().map(|(_, p)| p).filter(|p| judged(p)).collect();
     got.sort();
+    got.dedup();
     assert_eq!(got, ["veredas_core::schema::check", "veredas_core::telegram", "veredas_portal::project", "veredas_portal::project::Project", "veredas_portal::project::load", "veredas_portal::session::Live"]);
     // A file written or a program run however it is spelled is a path outside: an `OpenOptions`
-    // reached through `File::options`, a write through the trait's own path, a module imported
-    // whole, a path broken across a line with spaces, a std item renamed.
-    let escapes = "let mut f = std::fs::File::options().write(true).open(p)?;\nstd::io::Write::write_all(&mut f, b)?;\nuse std::fs;\nfs::write(p, b);\nlet c = std :: process\n  :: Command::new(\"cmd\");\nuse std::process::Command as Run;";
-    let mut got: Vec<String> = named_paths(escapes).into_iter().filter(|p| judged(p) && !ALLOWED.contains(&p.as_str())).collect();
-    got.sort();
-    assert_eq!(got, ["std::fs", "std::fs::File::options", "std::fs::write", "std::io::Write::write_all", "std::process::Command as Run", "std::process::Command::new"]);
-    // And a root the reading cannot follow is refused, not passed over: a crate renamed, a comment
-    // inside a path, a macro splicing the rest; a doc comment naming the runtime is no code.
-    let hidden = "use std as sd;\nsd::fs::File::options();\nlet f = std::/**/fs::write(p, b);\nmacro_rules! sx { ($($r:tt)*) => { std::$($r)* } }\n/// on the current tokio runtime\nfn f() {}";
-    let unread: Vec<String> = unfollowed_roots(hidden).into_iter().map(|r| r.chars().take(5).collect()).collect();
-    assert_eq!(unread, ["std a", "std::", "std::"], "{:?}", unfollowed_roots(hidden));
+    // reached through `File::options`, a write through the trait's own path or a qualified one, a
+    // module imported whole, a path broken across lines with spaces or a comment inside it, raw
+    // identifiers, a path after a keyword, and a module another file imports followed through it.
+    let escapes = "let mut f = std::fs::File::options().write(true).open(p)?;\nstd::io::Write::write_all(&mut f, b)?;\nuse std::fs;\nfs::write(p, b);\nlet c = std :: process\n  :: Command::new(\"cmd\");\nstd::r#fs::r#write(p, b);\nlet g = std::/**/fs::rename(a, b);\nif ::std::fs::copy(a, b).is_ok() {}\n<f as std::io::Write>::flush(&mut f);\nuse crate::shared::io;\nio::Write::write_all(&mut f, b);";
+    let r = read_sources(&[("probe".to_string(), escapes.to_string()), ("shared".to_string(), "pub(crate) use std::io;".to_string())]);
+    assert!(r.refused.is_empty(), "{:?}", r.refused);
+    assert_eq!(judged_of(r), ["std::fs", "std::fs::File::options", "std::fs::copy", "std::fs::rename", "std::fs::write", "std::io::Write", "std::io::Write::write_all", "std::process::Command::new"]);
+    // And what the reading cannot follow is refused, not passed over: a root renamed or passed to a
+    // macro whole or spliced by one, a judged path renamed in a tree however it opens, a glob; a
+    // doc comment naming the runtime is no code.
+    let hidden = "use std as sd;\nsd::fs::File::options();\nuse {std::{fs as disk}};\nuse ::std::process::{Command as Run};\nuse super::*;\nmacro_rules! sx { ($($r:tt)*) => { std::$($r)* } }\nm!(tokio);\n/// on the current tokio runtime\nfn f() {}";
+    assert_eq!(one(hidden).refused, [
+        "probe: a root not followed: `std as sd`", "probe: a root not followed: `std :: $`", "probe: a root not followed: `tokio ) ;`",
+        "probe: `std::fs` renamed `disk`", "probe: `std::process::Command` renamed `Run`", "probe: `super::*` taken whole",
+    ]);
+    assert_eq!(one("fn f() -> impl Sized + use<'a> {}").refused, ["probe: a `use` tree read to `<`"]);
+    // The banned words are read as tokens too: a raw identifier is its name, a longer name is not.
+    let raw = lex("std::r#fs::r#write(p, b); r#Command::r#new(x); let included = 1;");
+    assert!(holds(&raw, "fs :: write") && holds(&raw, "Command :: new") && !holds(&raw, "include !"));
     let bundle = veredas_supervisao::web::APP_JS;
     assert_eq!(bundle.matches("/api/opc/write").count(), 1, "the page posts to one route");
     assert!(bundle.contains("/portal/api/opc/write") && !bundle.contains("/api/channels/send"), "the route is portal's own");

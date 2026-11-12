@@ -57,9 +57,10 @@ fn its_own_dependencies_are_core_portal_and_the_servers_crates() {
     assert!(normal.iter().all(|n| !BANNED_DIRECT.contains(n)));
     let build: Vec<&Value> = p["dependencies"].as_array().unwrap().iter().filter(|d| d["kind"] == "build").collect();
     assert!(build.is_empty());
-    // The bench is a fixture: a dev-dependency, outside the map.
+    // The bench is a fixture: a dev-dependency, outside the map; the Rust lexer reads the sources
+    // for the writes test (C-054).
     let dev: BTreeSet<&str> = p["dependencies"].as_array().unwrap().iter().filter(|d| d["kind"] == "dev").map(|d| d["name"].as_str().unwrap()).collect();
-    assert_eq!(dev, ["tempfile", "veredas-maquinar"].into_iter().collect::<BTreeSet<_>>());
+    assert_eq!(dev, ["proc-macro2", "tempfile", "veredas-maquinar"].into_iter().collect::<BTreeSet<_>>());
 }
 
 /// The crates in a package's normal and build graph on every platform, by name, as cargo would

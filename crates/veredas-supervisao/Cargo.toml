@@ -34,3 +34,5 @@ roxmltree = { workspace = true }
 veredas-maquinar = { path = "../veredas-maquinar" }
 # Scratch directories, removed when a test ends.
 tempfile = { workspace = true }
+# The Rust lexer: the writes test reads the crate's sources as the compiler's tokens.
+proc-macro2 = { workspace = true }
