@@ -74,9 +74,6 @@ fn graph(package: &str) -> BTreeSet<String> {
     String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.split_whitespace().next().map(String::from)).collect()
 }
 
-/// A plant's stack: what talks to a plant or keeps its data. Portal's to hold, never supervisão's.
-const PLANT_STACK: &[&str] = &["async-opcua-client", "async-opcua-server", "async-opcua-types", "async-opcua-core", "async-opcua-crypto", "duckdb", "libduckdb-sys", "socket2", "reqwest", "veredas-maquinar", "veredas-aranha"];
-
 #[test]
 fn the_plant_s_stack_reaches_supervisao_through_portal_alone() {
     let mine = graph("veredas-supervisao");
@@ -86,8 +83,11 @@ fn the_plant_s_stack_reaches_supervisao_through_portal_alone() {
     for c in ["duckdb", "libduckdb-sys", "async-opcua-client"] {
         assert!(mine.contains(c) && portal.contains(c), "{c}");
     }
-    let own: Vec<&String> = mine.difference(&portal).filter(|c| PLANT_STACK.contains(&c.as_str())).collect();
-    assert_eq!(own, Vec::<&String>::new(), "a plant's crate supervisão brings itself");
+    // Nothing beyond portal's graph but the layout's XML reader and supervisão itself: the whole
+    // difference cargo reports, so no crate of any stack (a socket, a database, an HTTP client),
+    // however it is brought in (a dependency renamed, vendored or patched), joins unseen.
+    let own: Vec<&str> = mine.difference(&portal).map(String::as_str).collect();
+    assert_eq!(own, ["roxmltree", "veredas-supervisao"], "a crate supervisão brings beyond portal's graph");
     assert!(!mine.contains("veredas-maquinar") && !mine.contains("veredas-aranha"), "the bench is a dev-dependency alone");
 }
 
@@ -110,8 +110,9 @@ fn crate_files() -> Vec<PathBuf> {
         match std::fs::symlink_metadata(&p) {
             Ok(m) if m.is_file() => files.push(p),
             Ok(_) => panic!("`{rel}` is no regular file on disk (a link or a folder): every file git holds or would hold is one"),
-            // A tracked file deleted from the tree is on its way out; nothing of it is read.
-            Err(_) if held => {}
+            // A tracked file not on disk would be read by no one here: its deletion is committed, or
+            // it is restored.
+            Err(_) if held => panic!("`{rel}` is held by git and not on disk: commit its deletion or restore it"),
             Err(e) => panic!("`{rel}`: {e}"),
         }
     }
@@ -127,7 +128,7 @@ fn crate_files() -> Vec<PathBuf> {
 fn regular_entries(staged: &[u8], others: &[u8]) -> Result<(Vec<String>, Vec<String>), String> {
     let mut tracked = Vec::new();
     for e in staged.split(|b| *b == 0).filter(|s| !s.is_empty()) {
-        let e = String::from_utf8_lossy(e);
+        let e = String::from_utf8(e.to_vec()).map_err(|_| format!("an entry git holds whose name is not UTF-8 ({}): every name under the crate is text", String::from_utf8_lossy(e)))?;
         let (meta, path) = e.split_once('\t').ok_or_else(|| format!("an entry git wrote without its path: {e}"))?;
         let mode = meta.split(' ').next().unwrap_or("");
         if mode != "100644" && mode != "100755" {
@@ -137,7 +138,7 @@ fn regular_entries(staged: &[u8], others: &[u8]) -> Result<(Vec<String>, Vec<Str
     }
     let mut untracked = Vec::new();
     for e in others.split(|b| *b == 0).filter(|s| !s.is_empty()) {
-        let path = String::from_utf8_lossy(e).into_owned();
+        let path = String::from_utf8(e.to_vec()).map_err(|_| format!("an entry git would hold whose name is not UTF-8 ({}): every name under the crate is text", String::from_utf8_lossy(e)))?;
         if path.ends_with('/') {
             return Err(format!("`{path}` is a repository of its own inside the crate, no file"));
         }
@@ -148,11 +149,15 @@ fn regular_entries(staged: &[u8], others: &[u8]) -> Result<(Vec<String>, Vec<Str
 
 #[test]
 fn an_address_is_read_by_its_scheme_or_its_slashes() {
-    let read = |t: &str| addresses(t).into_iter().map(String::from).collect::<Vec<_>>();
+    let read = |t: &str| addresses(t).into_iter().collect::<Vec<_>>();
     assert_eq!(read(r#"fetch("https:cdn.example/x.json")"#), ["https:cdn.example/x.json"]);
     assert_eq!(read("new WebSocket('WSS://feed.example/s')"), ["//feed.example/s", "WSS://feed.example/s"]);
     assert_eq!(read("url(//cdn.example/f.woff)"), ["//cdn.example/f.woff"]);
     assert_eq!(read("rows:1,news:2 // a comment"), Vec::<String>::new());
+    // Broken by a tab or a line break, as a parser removes them before it reads: still one address.
+    assert_eq!(read("fetch(`//
+	cdn.example/b.json`)"), ["//cdn.example/b.json"]);
+    assert_eq!(read("fetch(\"ht	tps:cdn.example/two.json\")"), ["https:cdn.example/two.json"]);
 }
 
 #[test]
@@ -167,6 +172,11 @@ fn an_entry_git_holds_that_is_no_regular_file_is_refused() {
     assert_eq!(regular_entries(&entries(&[&file, &link]), &[]), Err("`web/linked` is held by git as mode 120000, no regular file: every file git holds is one".to_string()));
     assert_eq!(regular_entries(&entries(&[&module]), &[]), Err("`web/vendor-docs` is held by git as mode 160000, no regular file: every file git holds is one".to_string()));
     assert_eq!(regular_entries(&[], &entries(&["web/nested/"])), Err("`web/nested/` is a repository of its own inside the crate, no file".to_string()));
+    // A name that is not UTF-8 (Latin-1 bytes, as a Linux checkout keeps them) is refused, never
+    // read through a replacement character.
+    let latin1: Vec<u8> = format!("100644 {sha} 0\ttests/data/Capit").into_bytes().into_iter().chain([0xe3, b'o', 0]).collect();
+    assert!(regular_entries(&latin1, &[]).is_err_and(|e| e.contains("not UTF-8")));
+    assert!(regular_entries(&[], &[b'C', 0xe3, b'o', 0]).is_err_and(|e| e.contains("not UTF-8")));
 }
 
 fn rev(s: &str) -> String {
@@ -577,6 +587,20 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
     let written = web::BUILT_AS.trim();
     assert_eq!(written.len(), 16, "{written}");
     assert_eq!(web::output_hash(), written, "web/dist was edited after its build: run `npm run build` in web/");
+    // What the crate compiles in is the committed build, file for file (CR LF read as LF): the
+    // files the host serves (the crate's own list) and the two hashes.
+    let dist = webdir.join("dist");
+    for f in web::OUTPUT_FILES.iter().copied().chain(["source.hash", "output.hash"]) {
+        let compiled = match f {
+            "index.html" => web::INDEX_HTML,
+            "assets/app.js" => web::APP_JS,
+            "assets/app.css" => web::APP_CSS,
+            "source.hash" => web::BUILT_FROM,
+            "output.hash" => web::BUILT_AS,
+            other => panic!("a file of the page this test does not know: {other}"),
+        };
+        assert_eq!(compiled.replace("\r\n", "\n"), std::fs::read_to_string(dist.join(f)).unwrap().replace("\r\n", "\n"), "web/dist/{f} is not what the crate compiles in");
+    }
     let edited = format!("{};", web::APP_JS);
     assert_ne!(web::hash_texts([("assets/app.css", web::APP_CSS), ("assets/app.js", edited.as_str()), ("index.html", web::INDEX_HTML)]), written, "one byte of the page is a change");
 
@@ -620,7 +644,7 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
         // never sees (the build reads none: `modules: false`).
         assert!(!s.contains(".module.") && !text.contains("composes") && !text.contains("@value"), "{s} is a CSS module");
         assert_eq!(urls(&text), Vec::<String>::new(), "{s} points outside the page");
-        assert_eq!(addresses(&text), BTreeSet::<&str>::new(), "{s} names an address");
+        assert_eq!(addresses(&text), BTreeSet::<String>::new(), "{s} names an address");
     }
     for s in sources.iter().filter(|s| s.starts_with("src/")) {
         let bare: String = std::fs::read_to_string(webdir.join(s)).unwrap().chars().filter(|c| !c.is_whitespace()).collect();
@@ -639,10 +663,10 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
     assert!(!web::APP_JS.is_empty() && !web::APP_CSS.is_empty());
     assert!(!web::APP_CSS.contains("@import"), "the stylesheet imports nothing");
     assert_eq!(urls(web::APP_CSS), Vec::<String>::new(), "the stylesheet points outside the page");
-    assert_eq!(addresses(web::APP_CSS), BTreeSet::<&str>::new(), "the stylesheet names an address");
+    assert_eq!(addresses(web::APP_CSS), BTreeSet::<String>::new(), "the stylesheet names an address");
     assert!(!web::APP_JS.contains("import(") && !web::APP_JS.contains("import.meta.url"), "the bundle loads no other file");
     let named = addresses(web::APP_JS);
-    assert!(named.iter().all(|a| *a == "http://www.w3.org/2000/svg" || *a == "//www.w3.org/2000/svg"), "the script names an address: {named:?}");
+    assert!(named.iter().all(|a| a == "http://www.w3.org/2000/svg" || a == "//www.w3.org/2000/svg"), "the script names an address: {named:?}");
     // The hash sees one byte of any source change, and not a line ending.
     let copy = tempfile::tempdir().unwrap();
     copy_tree(&webdir, copy.path(), &sources);
@@ -679,12 +703,15 @@ fn urls(text: &str) -> Vec<String> {
 /// Every address a text names: a scheme a browser fetches from another host, in any case and with
 /// `//` or without (`https:cdn.example/x` resolves against the page's own scheme to another host),
 /// and a host written without a scheme (`//cdn.example/x`); each up to its quote, space or `)`.
-/// An address assembled at run time from pieces, or spelled through an escape, is not read (the
-/// clause states it).
-fn addresses(text: &str) -> BTreeSet<&str> {
-    fn upto(t: &str) -> &str {
-        &t[..t.find(|c: char| c == '"' || c == '\'' || c == '`' || c.is_whitespace() || c == ')').unwrap_or(t.len())]
+/// The text is read as the URL parser reads one, its tabs, line feeds and carriage returns removed
+/// first, so an address broken by one is still one. An address assembled at run time from pieces,
+/// or spelled through an escape, is not read (the clause states it).
+fn addresses(text: &str) -> BTreeSet<String> {
+    fn upto(t: &str) -> String {
+        t[..t.find(|c: char| c == '"' || c == '\'' || c == '`' || c.is_whitespace() || c == ')').unwrap_or(t.len())].to_string()
     }
+    let text: String = text.chars().filter(|c| !matches!(c, '\t' | '\n' | '\r')).collect();
+    let text = text.as_str();
     let lower = text.to_ascii_lowercase();
     let mut out = BTreeSet::new();
     for scheme in ["http:", "https:", "ws:", "wss:", "ftp:"] {
