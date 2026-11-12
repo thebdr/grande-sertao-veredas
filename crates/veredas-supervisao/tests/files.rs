@@ -1489,3 +1489,413 @@ pattern = 'MODE (?P<mode>\w+) at (?P<item>\w+)'
 scope = "sorter"
 key = "item"
 "#;
+
+// ---- the classes the reference and the reader own (C-048, the seventh refute round) ----
+
+/// The outcome of loading a binding: `Ok` or the reason it was refused for.
+fn outcome(ex: &Example) -> Result<veredas_supervisao::binding::Binding, String> {
+    let dir = tempfile::tempdir().unwrap();
+    match load(dir.path(), ex) {
+        Ok(cfg) => Ok(cfg.sessions[0].binding.clone()),
+        Err(ConfigError::Binding { reason, .. }) => Err(reason),
+        Err(other) => Err(other.to_string()),
+    }
+}
+
+/// A default as the reference writes it in its parenthesis: a backticked literal whole, else the
+/// words up to the first `:` or `,`.
+fn default_of(d: &str) -> String {
+    let d = d.trim();
+    if let Some(rest) = d.strip_prefix('`') {
+        return format!("`{}`", &rest[..rest.find('`').unwrap_or(rest.len())]);
+    }
+    d.split([':', ',', ';']).next().unwrap().trim().to_string()
+}
+
+/// Every `` `key` (default) `` a text names, the parenthesis read to its matching close; a key
+/// "required" (or "one, required", "required for ...") has none.
+fn defaults_in(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let b = text.as_bytes();
+    let mut i = 0;
+    while let Some(at) = text[i..].find("` (") {
+        let close_tick = i + at;
+        let open_tick = text[..close_tick].rfind('`').unwrap();
+        let key = &text[open_tick + 1..close_tick];
+        let start = close_tick + 3;
+        let (mut depth, mut j) = (1, start);
+        while j < b.len() && depth > 0 {
+            match b[j] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            j += 1;
+        }
+        let inner = &text[start..j.saturating_sub(1)];
+        if key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !key.is_empty() {
+            let d = default_of(inner);
+            if !d.starts_with("required") && !d.starts_with("one") {
+                out.push((key.to_string(), d));
+            }
+        }
+        i = close_tick + 1;
+    }
+    out
+}
+
+/// Every default the reference states, as `(scope, key, default)`: each table's list (an object's
+/// bound series as `value`), the keys every panel has, and each panel kind's.
+fn reference_defaults() -> std::collections::BTreeSet<(String, String, String)> {
+    let doc = common::doc("binding-schema.md");
+    let mut out = std::collections::BTreeSet::new();
+    for (from, to, scope) in [("**The top level.**", "**An object**", "top"), ("**An object**", "**A state rule**", "object"), ("**A state rule**", "**An action**", "rule"), ("**An action**", "**A dashboard**", "action"), ("**A dashboard**", "**A panel**", "dashboard")] {
+        for line in section(&doc, from, to).lines() {
+            let nested = line.starts_with("  - ");
+            let Some(rest) = line.trim_start().strip_prefix("- ") else { continue };
+            let Some(open) = rest.find(" (") else { continue };
+            let close = open + rest[open..].find(')').unwrap_or(rest.len() - open);
+            let d = default_of(&rest[open + 2..close]);
+            if d.starts_with("required") || d.starts_with("one") {
+                continue;
+            }
+            for k in rest[..open].split(',') {
+                if let Some(k) = k.trim().strip_prefix('`').and_then(|k| k.strip_suffix('`')) {
+                    out.insert((if nested { "value" } else { scope }.to_string(), k.to_string(), d.clone()));
+                }
+            }
+        }
+    }
+    let panels = section(&doc, "**A panel**", "## Refusals");
+    let first = panels.find("\n- `").unwrap();
+    for (k, d) in defaults_in(&panels[..first].split_whitespace().collect::<Vec<_>>().join(" ")) {
+        out.insert(("panel".to_string(), k, d));
+    }
+    let lines: Vec<&str> = panels[first + 1..].lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let Some(kind) = lines[i].strip_prefix("- `").and_then(|r| r.split('`').next()) else {
+            i += 1;
+            continue;
+        };
+        let mut text = lines[i].to_string();
+        i += 1;
+        while i < lines.len() && lines[i].starts_with("  ") {
+            text.push(' ');
+            text.push_str(lines[i].trim());
+            i += 1;
+        }
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        for (k, d) in defaults_in(&text) {
+            out.insert((format!("panel {kind}"), k, d));
+        }
+    }
+    out
+}
+
+/// The kinds a panel can be, from the reader's own refusal of a kind it does not know.
+fn reader_kinds() -> Vec<String> {
+    let err = binding_refusal(&with_binding(|b| b.replacen("kind = \"value\"", "kind = \"nope\"", 1)));
+    let at = err.find("is none of ").unwrap_or_else(|| panic!("{err}"));
+    err[at..].split('`').skip(1).step_by(2).map(String::from).collect()
+}
+
+/// A binding with every table and panel kind written with its required keys alone.
+const DEFAULTS: &str = r#"format = "veredas-binding"
+version = 1
+
+[[object]]
+id = "o"
+value = { source = "plc", series = "fill1" }
+
+[[object]]
+id = "r"
+value = { source = "plc", series = "fill2" }
+states = [ { above = 1, state = "warn" } ]
+
+[[dashboard]]
+name = "D"
+
+[[dashboard.panel]]
+kind = "value"
+object = "o"
+
+[[dashboard.panel]]
+kind = "trend"
+object = "o"
+
+[[dashboard.panel]]
+kind = "bars"
+object = "o"
+
+[[dashboard.panel]]
+kind = "timeline"
+objects = ["o"]
+
+[[dashboard.panel]]
+kind = "grid"
+objects = ["o"]
+
+[[dashboard.panel]]
+kind = "levels"
+objects = ["o"]
+
+[[dashboard.panel]]
+kind = "table"
+table = "outlets"
+
+[[dashboard.panel]]
+kind = "cells"
+table = "sorts"
+key = "outlet"
+value = "travel"
+spread = 5
+
+[[dashboard]]
+name = "Empty"
+"#;
+
+#[test]
+fn every_default_the_reference_states_is_the_reader_s() {
+    // The reference's own list of defaults, every one of them checked here: a default added to the
+    // reference fails until it is.
+    let stated = reference_defaults();
+    let mut ex = with_modes();
+    ex.binding = DEFAULTS.to_string();
+    let b = outcome(&ex).unwrap();
+    let mut bare = example();
+    bare.binding = "format = \"veredas-binding\"\nversion = 1\n".to_string();
+    let none = outcome(&bare).unwrap();
+    let o = b.object("o").unwrap();
+    let r = b.object("r").unwrap();
+    let d = &b.dashboards[0];
+    let kind = |i: usize| &d.panels[i].kind;
+    let s = |v: &dyn std::fmt::Debug| format!("{v:?}");
+    let checks: Vec<((&str, &str, &str), String, String)> = vec![
+        // Read from the binding of two objects, so a default naming every object or none differs.
+        (("top", "title", "the project's name"), b.title.clone(), "the loop".into()),
+        (("top", "layout", "none"), s(&b.layout.is_none()), "true".into()),
+        (("top", "headline", "none"), s(&b.headline), "[]".into()),
+        (("top", "object", "none"), s(&none.objects.len()), "0".into()),
+        (("top", "dashboard", "none"), s(&none.dashboards.len()), "0".into()),
+        (("object", "label", "`id`"), o.label.clone(), o.id.clone()),
+        (("object", "unit", "`\"\"`"), o.unit.clone(), String::new()),
+        (("object", "decimals", "none"), s(&o.decimals), "None".into()),
+        (("object", "show", "`\"state\"`"), o.show.name().into(), "state".into()),
+        (("object", "range", "`[0, 100]`"), s(&o.range), "(0.0, 100.0)".into()),
+        (("object", "states", "none"), s(&o.rules.len()), "0".into()),
+        (("object", "normal", "`\"ok\"`"), o.normal.clone(), "ok".into()),
+        (("object", "stale_after_ms", "none"), s(&o.stale_after_ms), "None".into()),
+        (("object", "actions", "none"), s(&o.actions.len()), "0".into()),
+        (("value", "key", "none"), s(&o.value.key), "None".into()),
+        (("rule", "word", "the state's name"), r.rules[0].word.clone(), "warn".into()),
+        (("rule", "source", "the object's"), s(&r.rules[0].series), "None".into()),
+        (("rule", "series", "the object's"), s(&r.rules[0].series), "None".into()),
+        (("rule", "key", "the object's"), s(&r.rules[0].series), "None".into()),
+        (("dashboard", "columns", "`4`"), s(&d.columns), "4".into()),
+        (("dashboard", "panel", "none"), s(&b.dashboards[1].panels.len()), "0".into()),
+        (("panel", "title", "the object's label for a panel of one object"), d.panels[0].title.clone(), o.label.clone()),
+        (("panel", "span", "`1`"), s(&d.panels.iter().map(|p| p.span).collect::<Vec<_>>()), s(&vec![1u32; 8])),
+        (("panel value", "minutes", "`30`"), s(kind(0)), s(&PanelKind::Value { object: 0, minutes: 30, target: None })),
+        (("panel value", "target", "none"), s(kind(0)), s(&PanelKind::Value { object: 0, minutes: 30, target: None })),
+        (("panel trend", "minutes", "`60`"), s(kind(1)), s(&PanelKind::Trend { object: 0, minutes: 60, limit: None })),
+        (("panel trend", "limit", "none"), s(kind(1)), s(&PanelKind::Trend { object: 0, minutes: 60, limit: None })),
+        (("panel bars", "minutes", "`60`"), s(kind(2)), s(&PanelKind::Bars { object: 0, minutes: 60, bucket_minutes: 5, aggregate: Aggregate::Mean, target: None })),
+        (("panel bars", "bucket_minutes", "`5`"), s(kind(2)), s(&PanelKind::Bars { object: 0, minutes: 60, bucket_minutes: 5, aggregate: Aggregate::Mean, target: None })),
+        (("panel bars", "aggregate", "`\"mean\"`"), s(kind(2)), s(&PanelKind::Bars { object: 0, minutes: 60, bucket_minutes: 5, aggregate: Aggregate::Mean, target: None })),
+        (("panel bars", "target", "none"), s(kind(2)), s(&PanelKind::Bars { object: 0, minutes: 60, bucket_minutes: 5, aggregate: Aggregate::Mean, target: None })),
+        (("panel timeline", "minutes", "`60`"), s(kind(3)), s(&PanelKind::Timeline { objects: vec![0], minutes: 60 })),
+        (("panel levels", "ticks", "none"), s(kind(5)), s(&PanelKind::Levels { objects: vec![0], ticks: vec![] })),
+        (("panel table", "columns", "none"), s(kind(6)), s(&PanelKind::Table { table: "outlets".into(), columns: vec![], sort: None, limit: 50 })),
+        (("panel table", "sort", "none"), s(kind(6)), s(&PanelKind::Table { table: "outlets".into(), columns: vec![], sort: None, limit: 50 })),
+        (("panel table", "limit", "`50`"), s(kind(6)), s(&PanelKind::Table { table: "outlets".into(), columns: vec![], sort: None, limit: 50 })),
+        (("panel cells", "minutes", "`60`"), s(kind(7)), s(&PanelKind::Cells { table: "sorts".into(), key: "outlet".into(), value: "travel".into(), minutes: 60, bucket_minutes: 5, spread: 5.0 })),
+        (("panel cells", "bucket_minutes", "`5`"), s(kind(7)), s(&PanelKind::Cells { table: "sorts".into(), key: "outlet".into(), value: "travel".into(), minutes: 60, bucket_minutes: 5, spread: 5.0 })),
+    ];
+    let checked: std::collections::BTreeSet<(String, String, String)> = checks.iter().map(|((a, b, c), _, _)| (a.to_string(), b.to_string(), c.to_string())).collect();
+    assert_eq!(checked, stated, "every default the reference states, checked here and nothing else");
+    for ((scope, key, default), got, want) in &checks {
+        assert_eq!(got, want, "{scope} `{key}` ({default})");
+    }
+    // A sort written without `descending` reads it false (its default stated in prose).
+    assert!(binding_kinds_sort_default());
+}
+
+fn binding_kinds_sort_default() -> bool {
+    let mut ex = with_modes();
+    ex.binding = KEYS.to_string();
+    let b = outcome(&ex).unwrap();
+    matches!(&b.dashboards[0].panels[7].kind, PanelKind::Table { sort: Some((c, false)), .. } if c == "outlet")
+}
+
+/// The binding's ways of showing, from the crate's own enum: a way added there stops this match
+/// compiling until it is listed.
+fn every_show() -> Vec<Show> {
+    let all = [Show::State, Show::Level, Show::Value, Show::Move];
+    for s in all {
+        match s {
+            Show::State | Show::Level | Show::Value | Show::Move => {}
+        }
+    }
+    all.to_vec()
+}
+
+/// The series types portal knows, from core's own enum, each with a series of that type the
+/// example's project carries (the time series a rule added here).
+fn every_series_type() -> Vec<(SeriesType, &'static str, &'static str)> {
+    let all = [SeriesType::Int, SeriesType::Float, SeriesType::Text, SeriesType::Time];
+    all.iter()
+        .map(|t| match t {
+            SeriesType::Int => (*t, "plc", "infeed"),
+            SeriesType::Float => (*t, "plc", "fill1"),
+            SeriesType::Text => (*t, "sorter", "mode"),
+            SeriesType::Time => (*t, "sorter", "when"),
+        })
+        .collect()
+}
+
+/// A keyed time series for the example's log: a time per item.
+const WHENS_RULE: &str = "\n[[rule]]\nname = \"whens\"\npattern = 'WHEN (?P<when>\\S+) at (?P<item>\\w+)'\nscope = \"sorter\"\nkey = \"item\"\ntypes = { when = \"time\" }\n";
+
+#[test]
+fn every_way_of_showing_every_kind_of_series_and_every_marker_element_as_the_reader_owns_them() {
+    // Every way of showing, written: each read as written on an object of the worked example.
+    for show in every_show() {
+        let id = match show {
+            Show::State => "infeed",
+            Show::Level => "outlet-1",
+            Show::Value => "speed",
+            Show::Move => "parcel-1",
+        };
+        let ex = with_binding(|b| {
+            let at = b.find(&format!("id = \"{id}\"\n")).unwrap();
+            let end = b[at..].find("\n[[").map(|e| at + e).unwrap_or(b.len());
+            let block: String = b[at..end].lines().filter(|l| !l.starts_with("show = ")).map(|l| format!("{l}\n")).collect();
+            format!("{}{}show = \"{}\"\n{}", &b[..at], block, show.name(), &b[end + 1..])
+        });
+        let b = outcome(&ex).unwrap_or_else(|e| panic!("show = \"{}\": {e}", show.name()));
+        assert_eq!(b.object(id).unwrap().show, show, "{id}");
+    }
+    // Every series type at every place that charts or places a number: each numeric type loads,
+    // each other refused, naming the series and its type.
+    let probe = |src: &str, ser: &str, extra: &str| format!("\n[[object]]\nid = \"probe\"\nvalue = {{ source = \"{src}\", series = \"{ser}\"{extra} }}\n");
+    type Place = (&'static str, fn(&str, &str, &dyn Fn(&str, &str, &str) -> String) -> (String, String));
+    let places: Vec<Place> = vec![
+        ("a level", |s, x, p| (format!("{}show = \"level\"\n", p(s, x, "")), String::new())),
+        ("a marker", |s, x, p| (format!("{}show = \"move\"\npath = \"loop\"\n", p(s, x, "")), String::new())),
+        ("a key", |s, x, p| (p(s, x, ", key = \"A1\""), String::new())),
+        ("a trend", |s, x, p| (p(s, x, ""), "\n[[dashboard.panel]]\nkind = \"trend\"\nobject = \"probe\"\n".into())),
+        ("bars", |s, x, p| (p(s, x, ""), "\n[[dashboard.panel]]\nkind = \"bars\"\nobject = \"probe\"\n".into())),
+        ("a timeline", |s, x, p| (p(s, x, ""), "\n[[dashboard.panel]]\nkind = \"timeline\"\nobjects = [\"probe\"]\n".into())),
+        ("levels", |s, x, p| (p(s, x, ""), "\n[[dashboard.panel]]\nkind = \"levels\"\nobjects = [\"probe\"]\n".into())),
+    ];
+    for (ty, src, ser) in every_series_type() {
+        for (place, make) in &places {
+            let mut ex = with_modes();
+            ex.project.push_str(WHENS_RULE);
+            let (object, panel) = make(src, ser, &probe);
+            ex.binding = format!("{}{panel}", ex.binding.replacen("\n[[dashboard]]", &format!("{object}\n[[dashboard]]"), 1));
+            let got = outcome(&ex);
+            match ty {
+                SeriesType::Int | SeriesType::Float => assert!(got.is_ok(), "{ty} at {place}: {got:?}"),
+                SeriesType::Text | SeriesType::Time => {
+                    let err = got.err().unwrap_or_else(|| panic!("{ty} at {place} loaded"));
+                    assert!(err.contains(&format!("`{ser}`")) && err.contains(&ty.to_string()), "{ty} at {place}: {err}");
+                }
+            }
+        }
+    }
+    // A cells panel's value: a column of a number type loads, a text or a time column is refused.
+    for (column, numeric) in [("outlet", true), ("travel", true), ("source", false), ("ts", false)] {
+        let ex = if column == "travel" { example() } else { with_binding(|b| b.replacen("value = \"travel\"", &format!("value = \"{column}\""), 1)) };
+        assert_eq!(outcome(&ex).is_ok(), numeric, "cells over `{column}`: {:?}", outcome(&ex).err());
+    }
+    // Every element a marker can follow, from the reader's own list: a marker on each loads.
+    for el in veredas_supervisao::svg::FOLLOWABLE {
+        let shape = match el {
+            "path" => "<path id=\"loop\" d=\"M 80 40 H 320\"/>",
+            "line" => "<line id=\"loop\" x1=\"80\" y1=\"40\" x2=\"320\" y2=\"40\"/>",
+            "polyline" => "<polyline id=\"loop\" points=\"80,40 320,40 320,180\"/>",
+            "polygon" => "<polygon id=\"loop\" points=\"80,40 320,40 320,180\"/>",
+            "rect" => "<rect id=\"loop\" x=\"80\" y=\"40\" width=\"240\" height=\"140\"/>",
+            "circle" => "<circle id=\"loop\" cx=\"200\" cy=\"110\" r=\"70\"/>",
+            "ellipse" => "<ellipse id=\"loop\" cx=\"200\" cy=\"110\" rx=\"120\" ry=\"70\"/>",
+            other => panic!("an element the reader follows that this test cannot draw: {other}"),
+        };
+        let mut ex = example();
+        let at = ex.svg.find("<path id=\"loop\"").unwrap();
+        let end = at + ex.svg[at..].find("/>").unwrap() + 2;
+        ex.svg = format!("{}{shape}{}", &ex.svg[..at], &ex.svg[end..]);
+        assert!(outcome(&ex).is_ok(), "a marker following a `{el}`: {:?}", outcome(&ex).err());
+    }
+}
+
+#[test]
+fn every_range_is_held_at_both_ends_and_every_refusal_on_every_key_it_covers() {
+    // The ranges: every integer default the reference states (and the places and the freshness
+    // bound, stated in prose) loaded at its lowest and highest accepted value, refused just outside.
+    type Edit = Box<dyn Fn(&str, &str) -> String>;
+    let set = |from: &'static str, to: &'static str| -> Edit { Box::new(move |b: &str, v: &str| b.replacen(from, &to.replace("{v}", v), 1)) };
+    let rows: Vec<((&str, &str), Edit, Vec<&str>, Vec<&str>)> = vec![
+        (("dashboard", "columns"), Box::new(|b: &str, v: &str| b.replacen("columns = 4", &format!("columns = {v}"), 1).replacen("span = 2", "span = 1", 1)), vec!["1", "12"], vec!["0", "13"]),
+        (("panel", "span"), set("limit = { below = 98.0 }\nspan = 2", "limit = { below = 98.0 }\nspan = {v}"), vec!["1", "4"], vec!["0", "5"]),
+        (("panel value", "minutes"), set("kind = \"value\"\nobject = \"read-rate\"", "kind = \"value\"\nobject = \"read-rate\"\nminutes = {v}"), vec!["1"], vec!["0"]),
+        (("panel trend", "minutes"), set("object = \"read-rate\"\nminutes = 60", "object = \"read-rate\"\nminutes = {v}"), vec!["1"], vec!["0"]),
+        (("panel bars", "minutes"), set("object = \"speed\"\nminutes = 60", "object = \"speed\"\nminutes = {v}"), vec!["1"], vec!["0"]),
+        (("panel bars", "bucket_minutes"), set("bucket_minutes = 5\naggregate", "bucket_minutes = {v}\naggregate"), vec!["1"], vec!["0"]),
+        (("panel timeline", "minutes"), set("objects = [\"infeed\"]\nminutes = 60", "objects = [\"infeed\"]\nminutes = {v}"), vec!["1"], vec!["0"]),
+        (("panel table", "limit"), set("sort = { column = \"sorted\", descending = true }", "sort = { column = \"sorted\", descending = true }\nlimit = {v}"), vec!["1", "1000"], vec!["0", "1001"]),
+        (("panel cells", "minutes"), set("minutes = 60\nspread = 10.0", "minutes = {v}\nspread = 10.0"), vec!["1"], vec!["0"]),
+        (("panel cells", "bucket_minutes"), set("spread = 10.0", "spread = 10.0\nbucket_minutes = {v}"), vec!["1"], vec!["0"]),
+        (("object", "decimals"), set("decimals = 1", "decimals = {v}"), vec!["0", "6"], vec!["7"]),
+        (("column", "decimals"), set("{ name = \"travel\", decimals = 1 }", "{ name = \"travel\", decimals = {v} }"), vec!["0", "6"], vec!["7"]),
+        (("object", "stale_after_ms"), set("stale_after_ms = 30000", "stale_after_ms = {v}"), vec!["1"], vec!["0"]),
+    ];
+    // Every integer default the reference states has its row.
+    let ranged: std::collections::BTreeSet<(String, String)> = rows.iter().map(|((s, k), ..)| (s.to_string(), k.to_string())).collect();
+    for (scope, key, d) in reference_defaults() {
+        if d.trim_matches('`').parse::<u64>().is_ok() {
+            assert!(ranged.contains(&(scope.clone(), key.clone())), "the range of {scope} `{key}` (default {d}) is held nowhere");
+        }
+    }
+    for ((scope, key), edit, accepted, refused) in &rows {
+        for v in accepted {
+            let ex = with_binding(|b| edit(b, v));
+            assert!(outcome(&ex).is_ok(), "{scope} `{key}` = {v}: {:?}", outcome(&ex).err());
+        }
+        for v in refused {
+            let ex = with_binding(|b| edit(b, v));
+            assert!(outcome(&ex).is_err(), "{scope} `{key}` = {v} loaded");
+        }
+    }
+    // A limit not finite on either of its sides, from the reader's own list of them.
+    let sides = reader_keys(&binding_refusal(&with_binding(|b| b.replace("limit = { below = 98.0 }", "limit = { below = 98.0, zz = 1 }"))));
+    assert_eq!(sides, keys(&["above", "below"]));
+    for side in &sides {
+        let ex = with_binding(|b| b.replace("limit = { below = 98.0 }", &format!("limit = {{ {side} = inf }}")));
+        assert_eq!(binding_refusal(&ex), "dashboard `Overview`, panel[1] (trend): the limit is not a finite number", "{side}");
+    }
+    // Every comparison a rule takes, from the reader's own list, refused when not finite.
+    let rule_keys = reader_keys(&binding_refusal(&with_binding(|b| b.replace("{ below = 0.5, state", "{ below = 0.5, zz = 1, state"))));
+    let comparisons: Vec<&String> = rule_keys.iter().filter(|k| !["state", "word", "source", "series", "key"].contains(&k.as_str())).collect();
+    assert_eq!(comparisons.len(), 5, "{rule_keys:?}");
+    for k in comparisons {
+        let ex = with_binding(|b| b.replace("{ below = 0.5, state", &format!("{{ {k} = inf, state")));
+        let err = binding_refusal(&ex);
+        assert!(err.ends_with(&format!("`{k}` is not a finite number")), "{k}: {err}");
+    }
+    // Every panel kind naming its objects (from the reader's own list of kinds and of each kind's
+    // keys): an exact id and a pattern naming none each refused by name.
+    for kind in reader_kinds() {
+        let keys_of = reader_keys(&binding_refusal(&with_binding(|b| format!("{b}\n[[dashboard.panel]]\nkind = \"{kind}\"\nzz = 1\n"))));
+        for (key, value) in [("objects", "[\"sped\"]"), ("objects", "[\"chute-*\"]"), ("object", "\"sped\"")] {
+            if !keys_of.contains(key) {
+                continue;
+            }
+            let ex = with_binding(|b| format!("{b}\n[[dashboard.panel]]\nkind = \"{kind}\"\n{key} = {value}\n"));
+            let named = value.trim_matches(['[', ']', '"']);
+            let err = binding_refusal(&ex);
+            assert!(err.ends_with(&format!("`{named}` names no object")), "{kind} {key} = {value}: {err}");
+        }
+    }
+}
