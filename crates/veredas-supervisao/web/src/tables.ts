@@ -56,6 +56,8 @@ export class Tables {
   async show() {
     const token = ++this.asked;
     this.to = this.status()?.now_ms ?? null;
+    // The pager of the page shown is for the table it was drawn for: off from a pick on.
+    for (const b of Array.from(this.main.querySelectorAll(".pager button"))) (b as HTMLButtonElement).disabled = true;
     try {
       const t = await getJson<{ tables: TableInfo[] }>(`${base(this.name)}/portal/api/tables`);
       if (token !== this.asked) return;
@@ -80,16 +82,16 @@ export class Tables {
       if (to !== null) q.set("to", String(to));
       const p = await getJson<Page>(`${base(this.name)}/portal/api/table/data?${q}`);
       if (token !== this.asked) return;
-      // Portal orders a table newest first by its time (`index_ms`, else `ts`); one with neither
-      // comes in the store's own order, and is not said to be newest first.
+      // Portal orders a table newest first by its time (`index_ms`, else `ts`) and holds its window
+      // by it; one with neither comes in the store's own order, unheld, and is said to be unordered.
       const ordered = p.schema.some((c) => c.name === "index_ms" || c.name === "ts");
       const prev = h("button", { disabled: offset === 0 }, "‹ Newer") as HTMLButtonElement;
       const next = h("button", { disabled: offset + PAGE >= p.total }, "Older ›") as HTMLButtonElement;
-      prev.onclick = () => { this.offset = Math.max(0, offset - PAGE); void this.page(); };
-      next.onclick = () => { if (offset + PAGE < p.total) { this.offset = offset + PAGE; void this.page(); } };
+      prev.onclick = () => { if (this.table === table) { this.offset = Math.max(0, offset - PAGE); void this.page(); } };
+      next.onclick = () => { if (this.table === table && offset + PAGE < p.total) { this.offset = offset + PAGE; void this.page(); } };
       const from = p.total === 0 ? 0 : offset + 1;
       this.main.replaceChildren(
-        h("div", { class: "pager" }, h("strong", {}, table), h("span", { class: "mono muted", "data-rows": `${from}-${offset + p.rows.length}/${p.total}` }, `rows ${from}–${offset + p.rows.length} of ${p.total}${ordered ? ", newest first" : ""}`), prev, next),
+        h("div", { class: "pager" }, h("strong", {}, table), h("span", { class: "mono muted", "data-rows": `${from}-${offset + p.rows.length}/${p.total}` }, `rows ${from}–${offset + p.rows.length} of ${p.total}${ordered ? ", newest first" : ", unordered"}`), prev, next),
         h("div", { class: "scroll" }, h("table", { class: "dt" },
           h("thead", {}, h("tr", {}, ...p.schema.map((c) => h("th", {}, c.name, h("span", { class: "muted" }, ` ${c.type.toLowerCase()}`))))),
           h("tbody", {}, ...p.rows.map((r) => h("tr", {}, ...r.map((v) => h("td", { class: "mono" }, cell(v)))))))),

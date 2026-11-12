@@ -36,6 +36,18 @@ const SHOWN_FN: &str = r#"const shown = (el) => {
   return o * paint > 0.05;
 };"#;
 
+/// Every mark of the view shown (`SHOWN_FN`'s reading): every element under the view with text of
+/// its own and every SVG shape, the trend's hidden hover tip apart; the ones not shown, named.
+const EVERY_MARK: &str = r#"[...document.querySelector("main.view").querySelectorAll("*")]
+  .filter((el) => !el.closest(".tip, defs, title") && ([...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) || el.matches("svg path, svg circle, svg rect, svg line, svg polyline, svg polygon, svg ellipse")))
+  .filter((el) => !shown(el))
+  .map((el) => `${el.tagName}.${el.getAttribute("class")} ${JSON.stringify((el.textContent || "").slice(0, 40))}`)"#;
+
+fn every_mark_shown(page: &mut Browser, when: &str) {
+    let hidden = page.eval(&format!("(() => {{ {SHOWN_FN} return {EVERY_MARK}; }})()"));
+    assert_eq!(hidden, json!([]), "{when}: a mark of the view not shown");
+}
+
 /// Kept in the page: every answer portal gave the page's own fetches of rows and windows, by its
 /// address; while `__fail` is set, the next page of rows refused as portal refuses one; and the
 /// next request whose address holds `__slow` answered a second and a half late, so an answer comes
@@ -281,10 +293,18 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // A page of the sorts is matched by its table, its rows and what it says of them ("rows A–B of
     // N"), and everything on it shown.
     let shown_at = |page: &mut Browser, rows: &str| {
-        page.wait_for(
-            &format!("(() => {{ const s = {shown_js}; if (!s || s.table !== 'sorts' || !s.all_shown || s.rows !== '{rows}') return null; const [ab, n] = s.rows.split('/'); const [a, b] = ab.split('-'); return s.said === `rows ${{a}}–${{b}} of ${{n}}, newest first` ? s : null; }})()"),
-            Duration::from_secs(20),
-        )
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let (ab, n) = rows.split_once('/').unwrap();
+        let (a, b) = ab.split_once('-').unwrap();
+        let said = format!("rows {a}–{b} of {n}, newest first");
+        loop {
+            let s = page.eval(shown_js);
+            if s["table"] == json!("sorts") && s["all_shown"] == json!(true) && s["rows"] == json!(rows) && s["said"] == json!(said) {
+                return s;
+            }
+            assert!(std::time::Instant::now() < deadline, "the sorts never shown at {rows}; the page shows {}", json!({ "table": s["table"], "rows": s["rows"], "said": s["said"], "newer": s["newer"], "older": s["older"], "all_shown": s["all_shown"] }));
+            std::thread::sleep(Duration::from_millis(150));
+        }
     };
     let click = |page: &mut Browser, text: &str| {
         page.eval(&format!(r#"[...document.querySelectorAll(".list-main .pager button")].find((b) => b.textContent === "{text}").click()"#));
@@ -294,6 +314,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let (head, body) = as_shown(&get(addr, "/s/loop/portal/api/table/data?name=sorts&limit=50&offset=0").1);
     assert_eq!((first["head"].clone(), first["body"].clone(), first["newer"].clone(), first["older"].clone()), (json!(head), json!(body), json!(true), json!(false)));
     assert_eq!(first["said"], json!("rows 1–50 of 53, newest first"));
+    every_mark_shown(&mut page, "a table's first page");
     let travel = head.iter().position(|c| c.starts_with("travel ")).unwrap();
     assert_eq!((first["body"][0][travel].clone(), first["body"][49][travel].clone()), (json!("44.5"), json!("12.345")), "newest first, to three places");
     click(&mut page, "Older ›");
@@ -342,7 +363,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         let n = p["rows"].as_array().unwrap().len();
         let total = p["total"].as_u64().unwrap();
         let ordered = p["schema"].as_array().unwrap().iter().any(|c| c["name"] == "index_ms" || c["name"] == "ts");
-        let said = format!("rows {}–{n} of {total}{}", if total == 0 { 0 } else { 1 }, if ordered { ", newest first" } else { "" });
+        let said = format!("rows {}–{n} of {total}{}", if total == 0 { 0 } else { 1 }, if ordered { ", newest first" } else { ", unordered" });
         assert_eq!((s["head"].clone(), s["body"].clone(), s["said"].clone(), s["all_shown"].clone()), (json!(head), json!(body), json!(said), json!(true)), "{name}");
         for r in p["rows"].as_array().unwrap() {
             for v in r.as_array().unwrap() {
@@ -478,6 +499,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     page.wait_for(r#"[...document.querySelectorAll(".list button[data-series]")].some((b) => b.dataset.series === "plc/speed") || null"#, Duration::from_secs(20));
     let chart = chart_of(&mut page, "plc/speed");
     let (total, down) = drawn_as_answered(&chart, "plc", "speed");
+    every_mark_shown(&mut page, "a chart past 600 points");
     // Its total no more than portal's for the same window asked again (the listing's count lags
     // the window's).
     let url = chart["answer"]["url"].as_str().unwrap();
@@ -518,6 +540,57 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     assert!(last_page["body"].as_array().unwrap().iter().all(|r| !newest["body"].as_array().unwrap().contains(r)), "a row of the first page shown again");
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(page.eval(shown_js)["rows"], json!("51-100/100"), "still the last page, nothing past it");
+    // The view shown anew without a pick (the series view, then this one: the page's one route for
+    // a hash change, a tab or back): the window taken again, the rows stored since in it, the page
+    // the same, now a middle one, both its neighbours live.
+    page.eval(r#"location.hash = "series""#);
+    page.wait_for(r#"document.querySelector(".list button[data-series]") ? true : null"#, Duration::from_secs(20));
+    page.eval(r#"location.hash = "tables""#);
+    let middle = shown_at(&mut page, "51-100/110");
+    assert_eq!((middle["newer"].clone(), middle["older"].clone()), (json!(false), json!(false)), "a middle page, both neighbours live");
+    // While a page is asked the pager is off: its answer held back, both buttons read off.
+    page.eval(r#"(() => { window.__slowSent = false; window.__slow = "/api/table/data"; return true; })()"#);
+    click(&mut page, "Older ›");
+    page.wait_for("window.__slowSent || null", Duration::from_secs(10));
+    assert_eq!(page.eval(r#"[...document.querySelectorAll(".list-main .pager button")].map((b) => b.disabled)"#), json!([true, true]), "the pager off while a page is asked");
+    shown_at(&mut page, "101-110/110");
+    click(&mut page, "‹ Newer");
+    shown_at(&mut page, "51-100/110");
+    // Every ordered pair of the view's own controls (a pick, Newer, Older) from that middle page,
+    // the first one's answer held back so the second comes while it is out: the page shown is the
+    // later pick's, else the first action's, never a page past the end nor another table's offset.
+    let acts = ["pick", "newer", "older"];
+    for first in acts {
+        for second in acts {
+            // A pick turns the pager off at once: its own page is the one drawn once Older is live.
+            pick(&mut page, "sorts");
+            page.wait_for(r#"(() => { const b = [...document.querySelectorAll(".list-main .pager button")].find((b) => b.textContent === "Older ›"); return b && !b.disabled && document.querySelector(".list-main .pager [data-rows]").dataset.rows === "1-50/110" ? true : null; })()"#, Duration::from_secs(20));
+            click(&mut page, "Older ›");
+            shown_at(&mut page, "51-100/110");
+            let slow = if first == "pick" { "/api/tables" } else { "/api/table/data" };
+            page.eval(&format!(r#"(() => {{ window.__slowSent = false; window.__slow = "{slow}"; return true; }})()"#));
+            for (i, act) in [first, second].into_iter().enumerate() {
+                match act {
+                    "pick" => { page.eval(r#"document.querySelector('.list button[data-table="outlets"]').click()"#); }
+                    "newer" => { page.eval(r#"[...document.querySelectorAll(".list-main .pager button")].find((b) => b.textContent === "‹ Newer").click()"#); }
+                    _ => { page.eval(r#"[...document.querySelectorAll(".list-main .pager button")].find((b) => b.textContent === "Older ›").click()"#); }
+                }
+                if i == 0 {
+                    page.wait_for("window.__slowSent || null", Duration::from_secs(10));
+                }
+            }
+            let (table, rows) = match (first, second) {
+                (_, "pick") | ("pick", _) => ("outlets", "1-4/4"),
+                ("older", _) => ("sorts", "101-110/110"),
+                _ => ("sorts", "1-50/110"),
+            };
+            let at = format!("(() => {{ const s = {shown_js}; return s && s.table === '{table}' && s.rows === '{rows}' ? s : null; }})()");
+            page.wait_for(&at, Duration::from_secs(20));
+            std::thread::sleep(Duration::from_millis(2000));
+            let s = page.eval(shown_js);
+            assert_eq!((s["table"].clone(), s["rows"].clone()), (json!(table), json!(rows)), "{first} then {second}, the first's answer held back");
+        }
+    }
     // Two tables picked one after the other, the first one's page asked and answered last: the
     // later is the one shown.
     page.eval(r#"(() => { window.__slowSent = false; window.__slow = "name=sorts&"; document.querySelector('.list button[data-table="sorts"]').click(); return true; })()"#);
@@ -534,6 +607,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     click(&mut page, "Older ›");
     let refused = page.wait_for(r#"document.querySelector(".list-main p.error")?.textContent ?? null"#, Duration::from_secs(10));
     assert_eq!(refused, json!("Error: probe failure"));
+    every_mark_shown(&mut page, "a refused page");
 
     // Every request the page made went to this host and this session's own paths, its portal
     // reads the four routes under `/s/loop/portal/api/`, its stream the session's objects.
@@ -570,12 +644,29 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     assert!(listed.as_array().unwrap().iter().any(|r| r[0] == "sorts" && r[2] == sorts_there), "{listed}");
     // Its Series view lists hall's series alone; one sort logged there makes a window of one point,
     // drawn as a dot where the axes put it (the value in the middle of its padded extent).
+    // First a sort two hours back: the travel's last hour holds no point, charted as none under
+    // its own heading (after another series' chart, which it replaces).
+    append(&hall_log, &[format!("{} SORT outlet=1 travel=10.5 rate=99.0", stamp(store_now() - 2 * 3_600_000))]);
+    let travel_count = |n: u64| {
+        wait(Duration::from_secs(20), || {
+            let (_, s) = get(addr, "/s/hall/portal/api/series");
+            s["series"].as_array().unwrap().iter().any(|x| x["source"] == "sorter" && x["series"] == "travel" && x["count"] == json!(n))
+        })
+    };
+    assert!(travel_count(1));
+    page.eval(r#"location.hash = "series""#);
+    page.wait_for(r#"[...document.querySelectorAll(".list button[data-series]")].some((x) => x.dataset.series === "sorter/travel") || null"#, Duration::from_secs(20));
+    page.eval(r#"[...document.querySelectorAll(".list button[data-series]")].find((x) => x.dataset.series === "plc/speed").click()"#);
+    page.wait_for(r#"document.querySelector(".list-main .pager strong")?.textContent === "plc · speed" || null"#, Duration::from_secs(20));
+    page.eval(r#"[...document.querySelectorAll(".list button[data-series]")].find((x) => x.dataset.series === "sorter/travel").click()"#);
+    let none = page.wait_for(r#"(() => { const p = document.querySelector(".list-main .pager [data-points]"); const head = document.querySelector(".list-main .pager strong"); return p && head && head.textContent === "sorter · travel" ? { points: p.dataset.points, said: p.textContent, line: document.querySelectorAll(".list-main svg.trend path.line").length, dots: document.querySelectorAll(".list-main svg.trend circle.point").length } : null; })()"#, Duration::from_secs(20));
+    assert_eq!(none, json!({ "points": "0/0", "said": "last 60 min · 0 of 0 points · last 10.5", "line": 0, "dots": 0 }), "a window of no point");
+    every_mark_shown(&mut page, "a window of no point");
+    // Then one sort five minutes back: a window of one point.
     let at = store_now() - 5 * 60_000;
     append(&hall_log, &[format!("{} SORT outlet=1 travel=10.5 rate=99.0", stamp(at))]);
-    assert!(wait(Duration::from_secs(20), || {
-        let (_, s) = get(addr, "/s/hall/portal/api/series");
-        s["series"].as_array().unwrap().iter().any(|x| x["source"] == "sorter" && x["series"] == "travel" && x["count"] == json!(1))
-    }));
+    assert!(travel_count(2));
+    page.eval(r#"location.hash = "tables""#);
     page.eval(r#"location.hash = "series""#);
     let listed = page.wait_for(r#"(() => { const b = [...document.querySelectorAll(".list button[data-series]")]; return b.some((x) => x.dataset.series === "sorter/travel") ? b.map((x) => x.dataset.series) : null; })()"#, Duration::from_secs(20));
     let (_, s) = get(addr, "/s/hall/portal/api/series");
@@ -586,10 +677,12 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         &format!("(() => {{ {SHOWN_FN} const r = {}; if (r) r.shown = r.shown && shown(document.querySelector('.list-main svg.trend circle.point')); return r; }})()", r#"(() => { const p = document.querySelector(".list-main .pager [data-points]"); const dot = document.querySelector(".list-main svg.trend circle.point"); return p && dot ? { points: p.dataset.points, said: p.textContent, line: document.querySelectorAll(".list-main svg.trend path.line").length, cx: Number(dot.getAttribute("cx")), cy: Number(dot.getAttribute("cy")), shown: (() => { const c = getComputedStyle(dot), b = dot.getBoundingClientRect(); const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true }); ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillStyle = c.fill; ctx.clearRect(0, 0, 1, 1); ctx.fillRect(0, 0, 1, 1); const alpha = c.fill === "none" ? 0 : ctx.getImageData(0, 0, 1, 1).data[3] / 255; let o = 1; for (let e = dot; e; e = e.parentElement) { const s = getComputedStyle(e); o *= Number(s.opacity); if (s.display === "none") o = 0; } return b.width > 0 && b.height > 0 && c.visibility === "visible" && o > 0 && alpha * Number(c.fillOpacity) > 0 && document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2) === dot; })() } : null; })()"#),
         Duration::from_secs(20),
     );
+    every_mark_shown(&mut page, "a window of one point");
     let asked: Vec<String> = page.requests().into_iter().map(|(u, _)| u).filter(|u| u.contains("/portal/api/series/data?")).collect();
-    assert_eq!(asked.len(), 1, "{asked:?}");
-    assert!(asked[0].contains("/s/hall/portal/api/series/data?"), "{asked:?}");
-    let query = |k: &str| asked[0].split(['?', '&']).find_map(|kv| kv.strip_prefix(&format!("{k}="))).unwrap().to_string();
+    assert!(asked.iter().all(|u| u.contains("/s/hall/portal/api/series/data?")), "{asked:?}");
+    let last = asked.last().unwrap().clone();
+    assert!(last.contains("series=travel"), "{asked:?}");
+    let query = |k: &str| last.split(['?', '&']).find_map(|kv| kv.strip_prefix(&format!("{k}="))).unwrap().to_string();
     let (from, to): (i64, i64) = (query("from").parse().unwrap(), query("to").parse().unwrap());
     let x = 44.0 + (at - from) as f64 / (to - from) as f64 * 546.0;
     assert_eq!((one["points"].clone(), one["line"].clone(), one["shown"].clone()), (json!("1/1"), json!(0), json!(true)), "{one}");
