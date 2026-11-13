@@ -11,15 +11,15 @@
     "files"
   ],
   "exitCode": 0,
-  "outputSha": "0d833b37152b6b3325743e8e3b07c111e31d3fc0b88d812042099885f83c88ec",
-  "outputTail": "        PASS [   0.416s] ( 4/16) veredas-supervisao::files every_default_the_reference_states_is_the_reader_s\n        PASS [   0.496s] ( 5/16) veredas-supervisao::files the_ranges_load_at_their_edges_and_a_rule_takes_the_object_s_own\n        PASS [   0.624s] ( 6/16) veredas-supervisao::files a_supervisao_file_refuses_what_it_cannot_serve_by_its_place\n        PASS [   0.686s] ( 7/16) veredas-supervisao::files every_key_reads_back_as_written_and_every_default_fills\n        PASS [   0.751s] ( 8/16) veredas-supervisao::files a_binding_is_checked_against_its_project_and_its_layout\n        PASS [   0.843s] ( 9/16) veredas-supervisao::files the_refusals_of_a_kind_of_series_a_panel_and_a_number_name_their_place\n        PASS [   0.894s] (10/16) veredas-supervisao::files every_key_the_reference_lists_is_the_reader_s\n        PASS [   0.961s] (11/16) veredas-supervisao::files the_edges_the_types_and_every_kind_of_source_and_column\n        PASS [   1.123s] (12/16) veredas-supervisao::files the_rest_of_the_refusals_name_their_place\n        PASS [   1.153s] (13/16) veredas-supervisao::files the_executable_checks_the_example_and_prints_its_plan\n        PASS [   1.393s] (14/16) veredas-supervisao::files a_binding_refuses_what_it_cannot_light_up_by_its_place\n        PASS [   1.597s] (15/16) veredas-supervisao::files every_range_is_held_at_both_ends_and_every_refusal_on_every_key_it_covers\n        PASS [   2.083s] (16/16) veredas-supervisao::files every_way_of_showing_every_kind_of_series_and_every_marker_element_as_the_reader_owns_them\n────────────\n     Summary [   2.084s] 16 tests run: 16 passed, 0 skipped",
-  "ranAt": "2026-11-13T20:22:55.646Z",
-  "headCommit": "e265bc8a5c9f40b28cba53e8c9eb44e62e86b237",
+  "outputSha": "d7f96b4b847bb5490c12862add2bb4ab196337a60d1ab225f2cbebf693200134",
+  "outputTail": "        PASS [   0.891s] ( 8/20) veredas-supervisao::files every_key_reads_back_as_written_and_every_default_fills\n        PASS [   1.048s] ( 9/20) veredas-supervisao::files every_state_and_every_kind_of_value_a_rule_meets_by_the_reader_s_own_lists\n        PASS [   1.000s] (10/20) veredas-supervisao::files the_refusals_of_a_kind_of_series_a_panel_and_a_number_name_their_place\n        PASS [   1.288s] (11/20) veredas-supervisao::files the_executable_checks_the_example_and_prints_its_plan\n        PASS [   1.329s] (12/20) veredas-supervisao::files the_edges_the_types_and_every_kind_of_source_and_column\n        PASS [   1.360s] (13/20) veredas-supervisao::files every_key_the_reference_lists_is_the_reader_s\n        PASS [   1.451s] (14/20) veredas-supervisao::files the_rest_of_the_refusals_name_their_place\n        PASS [   1.978s] (15/20) veredas-supervisao::files every_pair_of_types_merges_and_every_base_table_carries_portal_s_reserved_columns\n        PASS [   2.012s] (16/20) veredas-supervisao::files every_refusal_over_a_set_runs_on_every_member_of_it\n        PASS [   2.073s] (17/20) veredas-supervisao::files a_binding_refuses_what_it_cannot_light_up_by_its_place\n        PASS [   2.336s] (18/20) veredas-supervisao::files every_range_is_held_at_both_ends_and_every_refusal_on_every_key_it_covers\n        PASS [   2.748s] (19/20) veredas-supervisao::files every_way_of_showing_every_kind_of_series_and_every_marker_element_as_the_reader_owns_them\n        PASS [   3.177s] (20/20) veredas-supervisao::files every_series_type_under_every_way_of_showing_and_in_every_kind_naming_objects\n────────────\n     Summary [   3.178s] 20 tests run: 20 passed, 0 skipped",
+  "ranAt": "2026-11-13T20:45:03.484Z",
+  "headCommit": "28f8241ae24d8bf06a8a2ae66da8fb5e5b615bec",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/files.rs",
       "file": "crates/veredas-supervisao/tests/files.rs",
-      "fileSha": "07a25369f43063f42a9ba5dd56f1e58cb664899fcbabba75a90f4bcbe6f3351d"
+      "fileSha": "78e4f338680384196dfc7b70294392a1cd4ad3f19cd9a2226a246715bcd5428c"
     }
   ]
 }
