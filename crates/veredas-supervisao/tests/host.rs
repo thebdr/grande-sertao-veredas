@@ -22,9 +22,51 @@ fn objects(addr: SocketAddr, name: &str) -> Value {
 
 /// The routes a router's source declares, `(method, path)` in order, a path parameter read as `0`.
 fn declared_routes(file: &str) -> Vec<(String, String)> {
-    let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
+    routes_in(&std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap(), file)
+}
+
+/// The host's routes as its source declares them, split where it does: those at the root
+/// (declared before its loop over the sessions) and each session's own (declared in it).
+fn host_routes() -> (Vec<(String, String)>, Vec<(String, String)>) {
+    let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/host.rs")).unwrap();
+    let at = text.find("for app in apps").expect("the host's loop over its sessions");
+    (routes_in(&text[..at], "src/host.rs"), routes_in(&text[at..], "src/host.rs"))
+}
+
+/// Every key `now_ms` or `arrival_now_ms` (the two clocks' now, which move between two answers)
+/// taken out, however deep.
+fn without_clocks(v: &mut Value) {
+    match v {
+        Value::Object(m) => {
+            m.remove("now_ms");
+            m.remove("arrival_now_ms");
+            m.values_mut().for_each(without_clocks);
+        }
+        Value::Array(a) => a.iter_mut().for_each(without_clocks),
+        _ => {}
+    }
+}
+
+/// A route's whole answer, to be compared with another's: its status and its body read as JSON
+/// (as text when it is none), a stream by its head and its first event (its name and data read
+/// as JSON), the clocks taken out.
+fn whole_answer(addr: SocketAddr, method: &str, path: &str) -> (u16, Value) {
+    if method == "GET" && path.ends_with("/events") {
+        let mut sse = Sse::open(addr, path);
+        let first = sse.next(Duration::from_secs(10)).map(|(n, d)| json!([n, serde_json::from_str::<Value>(&d).unwrap_or(Value::String(d))]));
+        let mut v = json!({ "type": sse.headers.contains("content-type: text/event-stream"), "first": first });
+        without_clocks(&mut v);
+        return (sse.status, v);
+    }
+    let (status, _, body) = http(addr, method, path, (method == "POST").then_some("{}"));
+    let mut v = serde_json::from_str(&body).unwrap_or(Value::String(body));
+    without_clocks(&mut v);
+    (status, v)
+}
+
+fn routes_in(text: &str, file: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let mut rest = text.as_str();
+    let mut rest = text;
     while let Some(i) = rest.find(".route(\"") {
         let after = &rest[i + ".route(\"".len()..];
         let end = after.find('"').unwrap();
@@ -75,6 +117,8 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     std::fs::write(&binding, text.replacen("\n[[dashboard]]", "\n[[object]]\nid = \"keyed\"\nlabel = \"Keyed\"\nvalue = { source = \"plc\", series = \"fill1\", key = \"A1\" }\n\n[[dashboard]]", 1)).unwrap();
     let want = config::load_file(&path).unwrap();
     let cfg = config::load_file(&path).unwrap();
+    // Loop's log there from the start (hall's stays absent), so its sorts are read as they come.
+    std::fs::write(dir.path().join("loop/sorts.log"), "").unwrap();
     let host = Host::start(cfg).unwrap();
     let addr = host.addr();
     assert_ne!(addr.port(), 0);
@@ -112,8 +156,17 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     // own answers under the session and nowhere else.
     let portal = declared_routes("../veredas-portal/src/serve.rs");
     assert!(["/events", "/api/session", "/api/opc/write"].iter().all(|p| portal.iter().any(|(_, q)| q == p)) && portal.iter().any(|(m, _)| m == "POST"), "{portal:?}");
-    let own: Vec<(String, String)> = declared_routes("src/host.rs").into_iter().filter(|(_, p)| !["/", "/assets/app.js", "/assets/app.css", "/api/sessions"].contains(&p.as_str())).collect();
+    let (root, own) = host_routes();
+    assert_eq!(root.iter().map(|(_, p)| p.as_str()).collect::<Vec<_>>(), ["/", "/assets/app.js", "/assets/app.css", "/api/sessions"]);
     assert!(["/binding", "/objects", "/dashboard/0"].iter().all(|p| own.iter().any(|(_, q)| q == p)), "{own:?}");
+    // The root's own routes (its page at `/` aside, which every session serves as its page too)
+    // nowhere but at the root.
+    for (m, p) in root.iter().filter(|(_, p)| p != "/") {
+        assert_ne!(answered(addr, m, p).0, 404, "{m} {p}");
+        for at in [format!("/s/loop{p}"), format!("/portal{p}"), format!("/s/loop/portal{p}"), format!("/s/nope{p}")] {
+            assert_eq!(answered(addr, m, &at), (404, Some(json!({ "error": format!("nothing is served at {at}") }))), "{m} {at}");
+        }
+    }
     for (m, p) in &portal {
         for name in ["loop", "hall"] {
             let at = format!("/s/{name}/portal{p}");
@@ -191,6 +244,36 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
         let hello: Value = serde_json::from_str(&data).unwrap();
         assert_eq!((event.as_str(), hello["session_name"].clone(), hello["running"].clone()), ("hello", json!(title), json!(true)));
     }
+    // Portal's router nested unchanged: portal's own router over each session's live state, served
+    // on a listener of this test, answers every route portal declares as the session's nested one
+    // does (status and body, a stream's head and first event, the clocks' now aside; asked again
+    // while a value moves between the two answers), its posts among them.
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    for name in ["loop", "hall"] {
+        let live = host.session(name).unwrap().live();
+        let own_portal = rt.block_on(async {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let at = l.local_addr().unwrap();
+            tokio::spawn(async move { axum::serve(l, veredas_portal::serve::router(live)).await.unwrap() });
+            at
+        });
+        for (m, p) in &portal {
+            let nested = format!("/s/{name}/portal{p}");
+            let mut last = None;
+            let same = (0..20).any(|_| {
+                let pair = (whole_answer(addr, m, &nested), whole_answer(own_portal, m, p));
+                if pair.0 == pair.1 {
+                    return true;
+                }
+                last = Some(pair);
+                std::thread::sleep(Duration::from_millis(150));
+                false
+            });
+            assert!(same, "{m} {nested} answers otherwise than portal's own: {last:?}");
+        }
+    }
+    // Portal's own routers let go of the sessions' state before the sessions stop.
+    drop(rt);
 
     // The plants' values stay in their own sessions, on the snapshot routes and on each session's
     // own stream: each stream opens with its session's snapshot and then carries its own plant's
@@ -252,13 +335,41 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     let (_, s) = get(addr, &format!("/s/hall/portal/api/opc/read?source=plc&tag={}", enc(&format!("ns={};s=fill1", b.server("plc").unwrap().namespace))));
     assert_eq!(s["value"], json!("70"));
 
-    // The dashboards are computed per session, each from its own plant (the levels panel's
-    // outlet 1: 0.4 and 0.7); one that is not there is named.
+    // The dashboards are computed per session, each from its own plant and its own store: the
+    // plants set apart on every series a panel reads (the speed and the infeed on hall's plant, the
+    // sorts in loop's log alone, the fills already), every panel of the dashboard (one of every kind
+    // the reader knows, from its own refusal) differs between the two over the same window; the
+    // levels' outlet 1 spelled out (0.4 and 0.7). One that is not there is named.
+    b.server("plc").unwrap().set("speed", 2.5);
+    b.server("plc").unwrap().set("infeed", 2);
+    let sorts_log = dir.path().join("loop/sorts.log");
+    append(&sorts_log, &[1, 2, 3].map(|o| format!("{} SORT outlet={o} travel={}.0 rate=9{o}.5", stamp(store_now()), 10 + o)));
+    let loop_live = host.session("loop").unwrap().live();
+    let stored = || loop_live.store.query_rows("sorts", &veredas_portal::store::RowsQuery { limit: 1, ..Default::default() }).map(|p| p.total).unwrap_or(0);
+    assert!(wait(Duration::from_secs(20), || stored() == 3), "loop's sorts stored: {}", stored());
+    assert!(wait(Duration::from_secs(20), || { let h = objects(addr, "hall"); object(&h, "speed")["value"].as_f64() == Some(2.5) && object(&h, "infeed")["value"].as_f64() == Some(2.0) }), "hall's plant moved: speed {} infeed {}", object(&objects(addr, "hall"), "speed"), object(&objects(addr, "hall"), "infeed"));
+    let known: std::collections::BTreeSet<String> = {
+        let d = tempfile::tempdir().unwrap();
+        let mut ex = example();
+        ex.binding = ex.binding.replacen("kind = \"value\"", "kind = \"nope\"", 1);
+        let err = config::load_file(&write_example(d.path(), &ex)).err().expect("an unknown kind refused").to_string();
+        let at = err.find("is none of ").unwrap_or_else(|| panic!("{err}"));
+        err[at..].split('`').skip(1).step_by(2).map(String::from).collect()
+    };
+    let to = store_now() + 1_000;
+    let (status, ld) = get(addr, &format!("/s/loop/dashboard/0?to={to}"));
+    let (status_h, hd) = get(addr, &format!("/s/hall/dashboard/0?to={to}"));
+    assert_eq!((status, status_h, ld["name"].clone(), hd["name"].clone()), (200, 200, json!("Overview"), json!("Overview")));
+    let kinds: Vec<&str> = ld["panels"].as_array().unwrap().iter().map(|p| p["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds.iter().map(|k| k.to_string()).collect::<std::collections::BTreeSet<_>>(), known, "every kind on the dashboard");
+    assert_eq!(kinds.len(), known.len());
+    for (i, kind) in kinds.iter().enumerate() {
+        let (l, h) = (&ld["panels"][i], &hd["panels"][i]);
+        assert_eq!((h["kind"].as_str(), l["error"].clone(), h["error"].clone()), (Some(*kind), Value::Null, Value::Null), "panel {i}");
+        assert_ne!(l["data"], h["data"], "panel {i} ({kind}) read the same in both sessions: {}", l["data"]);
+    }
     let level_of = |d: &Value| d["panels"][5]["data"]["rows"].as_array().and_then(|rs| rs.iter().find(|r| r["id"] == "outlet-1")).map(|r| r["fraction"].clone());
-    let (status, d) = get(addr, "/s/loop/dashboard/0");
-    assert_eq!((status, d["name"].clone(), d["panels"].as_array().unwrap().len(), level_of(&d)), (200, json!("Overview"), 8, Some(json!(0.4))));
-    let (status, d) = get(addr, "/s/hall/dashboard/0");
-    assert_eq!((status, d["name"].clone(), level_of(&d)), (200, json!("Overview"), Some(json!(0.7))));
+    assert_eq!((level_of(&ld), level_of(&hd)), (Some(json!(0.4)), Some(json!(0.7))));
     assert_eq!(get(addr, "/s/loop/dashboard/1"), (404, json!({ "error": "session `loop` has no dashboard 1" })));
     assert_eq!(get(addr, "/s/loop/dashboard/x"), (404, json!({ "error": "`x` is no dashboard of session `loop`" })));
 
