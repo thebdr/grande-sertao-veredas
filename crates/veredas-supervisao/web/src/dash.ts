@@ -141,6 +141,9 @@ export class Dashboards {
   private timer: number | undefined;
   private body = h("div", { class: "dash-grid" });
   private tabs = h("div", { class: "subtabs" });
+  // The refresh last asked: an answer to an earlier one (another dashboard, or one hidden since) is
+  // dropped, so a late answer never draws over the dashboard shown.
+  private asked = 0;
 
   constructor(private name: string, private dashboards: { name: string }[]) {
     this.root.append(this.tabs, this.body);
@@ -164,11 +167,14 @@ export class Dashboards {
 
   hide() {
     window.clearInterval(this.timer);
+    this.asked++;
   }
 
   async refresh() {
+    const token = ++this.asked;
     try {
       const d = await getJson<DashOut>(`${base(this.name)}/dashboard/${this.current}`);
+      if (token !== this.asked) return;
       this.body.style.gridTemplateColumns = `repeat(${d.columns}, minmax(0, 1fr))`;
       this.body.replaceChildren(...d.panels.map((p) => {
         const el = p.error !== undefined ? h("div", { class: "panel" }, head(p.title, p.kind), h("p", { class: "error" }, p.error)) : (DRAW[p.kind] ?? (() => h("div", { class: "panel" }, head(p.title, p.kind))))(p);
@@ -177,7 +183,7 @@ export class Dashboards {
         return el;
       }));
     } catch (e) {
-      this.body.replaceChildren(h("p", { class: "error" }, String(e)));
+      if (token === this.asked) this.body.replaceChildren(h("p", { class: "error" }, String(e)));
     }
   }
 }

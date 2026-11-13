@@ -359,7 +359,7 @@ view's are the engine's, judged when the panel is computed.
   `object` (required), `minutes` (`60`), `limit` (none): `{ above = x }` or `{ below = x }`; a
   breach is a point past it.
 - `bars`: the object's series in buckets of `bucket_minutes` aligned on the clock, the bucket now
-  running marked, against a dashed `target`. `object` (required), `minutes` (`60`),
+  running marked, against a dashed `target`; a bar runs from 0 up to its value, or down to it below 0. `object` (required), `minutes` (`60`),
   `bucket_minutes` (`5`), `aggregate` (`"mean"`: `mean`, `sum`, `count`, `min`, `max` or `last`),
   `target` (none).
 - `timeline`: per object one bar of its state over the window, each state lasting until the next
@@ -371,8 +371,8 @@ view's are the engine's, judged when the panel is computed.
   `objects` (required), `ticks` (none: values in the objects' units).
 - `table`: rows of a table of the session, newest first. `table` (required: a capture rule, an OPC
   rule, a channel message or a view of the project), `columns` (none: every column), each
-  `{ name, label, bar, decimals, states }` (`name` required; `bar` true draws the value as a bar
-  against the column's largest in the page; `states` rules as an object's), `sort` (none:
+  `{ name, label, bar, decimals, states }` (`name` required; `bar` true draws the value's magnitude as
+  a bar against the column's largest in the page; `states` rules as an object's), `sort` (none:
   `{ column, descending }`, `descending` false unless written, applied to the rows shown, a column of the panel's, or of the table's
   when the panel names none), `limit` (`50`, 1 to 1000). A column's `decimals` are 0 to 6; its
   rules compare its own value.

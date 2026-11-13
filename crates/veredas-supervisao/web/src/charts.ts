@@ -88,20 +88,26 @@ export interface Bucket {
   running: boolean;
 }
 
-/// Bars per bucket against a dashed target; the running bucket outlined.
+/// Bars per bucket against a dashed target; the running bucket outlined. A bar runs from 0 up to
+/// its value or down to it: the axis spans the lowest to the highest of 0, the values and the
+/// target, a tenth past an end that is not 0, labelled at both ends and at 0 between them.
 export function bars(buckets: Bucket[], target: number | null): SVGElement {
   const W = 600, H = 180, L = 44, R = 10, T = 10, B = 22;
   const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", class: "chart bars" });
   const vals = buckets.map((b) => b.value ?? 0).concat(target === null ? [] : [target], [0]);
-  const hi = Math.max(...vals) * 1.1 || 1;
-  const y = scale(0, hi, H - B, T);
+  const top = Math.max(...vals), bottom = Math.min(...vals);
+  const hi = top > 0 ? top * 1.1 : bottom < 0 ? 0 : 1;
+  const lo = bottom < 0 ? bottom * 1.1 : 0;
+  const y = scale(lo, hi, H - B, T);
+  const label = (v: number) => (v === 0 ? "0" : num(v, 1));
   const bw = (W - L - R) / Math.max(buckets.length, 1);
-  svg.append(s("text", { x: L - 6, y: y(hi) + 10, class: "axis", "text-anchor": "end" }, num(hi, 1)));
-  svg.append(s("text", { x: L - 6, y: H - B, class: "axis", "text-anchor": "end" }, "0"));
+  svg.append(s("text", { x: L - 6, y: y(hi) + 10, class: "axis", "text-anchor": "end" }, label(hi)));
+  svg.append(s("text", { x: L - 6, y: H - B, class: "axis", "text-anchor": "end" }, label(lo)));
+  if (lo < 0 && hi > 0) svg.append(s("text", { x: L - 6, y: y(0) + 4, class: "axis", "text-anchor": "end" }, "0"));
   buckets.forEach((b, i) => {
     const x0 = L + i * bw + 2;
     if (b.value !== null) {
-      svg.append(s("rect", { x: x0, y: y(b.value), width: bw - 4, height: Math.max(0, y(0) - y(b.value)), class: b.running ? "bar running" : "bar" }, s("title", {}, `${clock(b.start, false)} · ${num(b.value, 2)} (n ${b.n})`)));
+      svg.append(s("rect", { x: x0, y: Math.min(y(b.value), y(0)), width: bw - 4, height: Math.abs(y(0) - y(b.value)), class: b.running ? "bar running" : "bar" }, s("title", {}, `${clock(b.start, false)} · ${num(b.value, 2)} (n ${b.n})`)));
     }
     if (i % Math.ceil(buckets.length / 6) === 0) svg.append(s("text", { x: x0, y: H - 6, class: "axis" }, clock(b.start, false)));
   });
