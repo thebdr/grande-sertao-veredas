@@ -105,6 +105,8 @@ svg.no-markers .sv-show-move, svg.no-markers .sv-tag[data-key] { display: none; 
 .facts dt { color: var(--label); }
 .facts dd { margin: 0; text-align: right; }
 .facts dd.stale { color: var(--muted); }
+/* The selection's sparkline holds its own height while it loads, so the list beneath never moves. */
+.spark-wrap { height: 44px; }
 .rule { text-align: left; color: var(--weak); }
 .actions { display: flex; gap: 8px; margin-top: 12px; }
 button.gated { border-color: rgba(255,200,100,.45); color: var(--warn); background: rgba(255,200,100,.06); }

@@ -463,9 +463,13 @@ fn pick_every_row(page: &mut Browser, drawn: &Value, settle: &dyn Fn(&mut Browse
     let ids: Vec<String> = page.eval(r#"[...document.querySelectorAll(".side ul.attention li")].map((li) => li.dataset.id)"#).as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
     assert!(!ids.is_empty());
     for id in ids {
-        let row = page.eval(&format!(r#"(() => {{ const r = document.querySelector('.side ul.attention li[data-id="{id}"]').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; }})()"#));
+        let row = settled_row(page, &id);
         click_at(page, &row);
         page.wait_for(&format!(r#"document.querySelector(".side .sel-title")?.dataset.id === "{id}" || null"#), Duration::from_secs(10));
+        // The selection's sparkline holds its height whether it has loaded or not (read emptied),
+        // so its loading moves nothing beneath it, the attention rows among them.
+        let held = page.eval(r#"(() => { const w = document.querySelector(".side .spark-wrap"); const kids = [...w.childNodes]; w.replaceChildren(); const h = w.getBoundingClientRect().height; w.replaceChildren(...kids); return [h, Math.max(0, ...kids.map((k) => k.getBoundingClientRect?.().height ?? 0))]; })()"#);
+        assert!(held[0].as_f64() == Some(44.0) && held[1].as_f64().unwrap() <= 44.0, "{id}: the sparkline's place {held}");
         let d = &drawn[id.as_str()];
         let mut want: Vec<String> = if d.is_null() {
             Vec::new()
@@ -479,6 +483,25 @@ fn pick_every_row(page: &mut Browser, drawn: &Value, settle: &dyn Fn(&mut Browse
         want.sort();
         let want: Vec<&str> = want.iter().map(String::as_str).collect();
         settle(page, &format!("{id} picked from its row"), &want);
+    }
+}
+
+/// An attention row's box once the side stands still, as a person sees it before clicking: the
+/// row itself under its centre, at the same place over three reads a fifth of a second apart (the
+/// list reorders when a state changes; the selection's sparkline holds its height while it loads,
+/// so it moves nothing).
+fn settled_row(page: &mut Browser, id: &str) -> Value {
+    let read = format!(r#"(() => {{ const li = document.querySelector('.side ul.attention li[data-id="{id}"]'); if (!li) return null; const r = li.getBoundingClientRect(); const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return e && e.closest("li") === li ? [r.x, r.y, r.width, r.height] : null; }})()"#);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut seen: Vec<Value> = Vec::new();
+    loop {
+        let now = page.eval(&read);
+        seen.push(now.clone());
+        if seen.len() >= 3 && !now.is_null() && seen[seen.len() - 3..].iter().all(|r| *r == now) {
+            return now;
+        }
+        assert!(std::time::Instant::now() < deadline, "the row of {id} never stood still under the pointer: {seen:?}");
+        std::thread::sleep(Duration::from_millis(200));
     }
 }
 
