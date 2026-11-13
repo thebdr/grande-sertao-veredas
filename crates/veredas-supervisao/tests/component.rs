@@ -58,16 +58,23 @@ fn its_own_dependencies_are_core_portal_and_the_servers_crates() {
     let build: Vec<&Value> = p["dependencies"].as_array().unwrap().iter().filter(|d| d["kind"] == "build").collect();
     assert!(build.is_empty());
     // The bench is a fixture: a dev-dependency, outside the map; the Rust lexer reads the sources
-    // for the writes test (C-054).
+    // for the writes test (C-054); Unicode's decomposition reads every file's letters here.
     let dev: BTreeSet<&str> = p["dependencies"].as_array().unwrap().iter().filter(|d| d["kind"] == "dev").map(|d| d["name"].as_str().unwrap()).collect();
-    assert_eq!(dev, ["proc-macro2", "tempfile", "veredas-maquinar"].into_iter().collect::<BTreeSet<_>>());
+    assert_eq!(dev, ["icu_normalizer", "proc-macro2", "tempfile", "veredas-maquinar"].into_iter().collect::<BTreeSet<_>>());
 }
 
 /// The crates in a package's normal and build graph on every platform, by name, as cargo would
 /// build that package alone.
 fn graph(package: &str) -> BTreeSet<String> {
+    graph_with(package, &[])
+}
+
+/// The same, with cargo tree's own further arguments (a crate's subtree pruned).
+fn graph_with(package: &str, more: &[&str]) -> BTreeSet<String> {
     let out = Command::new(env!("CARGO"))
-        .args(["tree", "-e", "normal,build", "--target", "all", "--prefix", "none", "-f", "{p}", "-p", package, "--manifest-path"])
+        .args(["tree", "-e", "normal,build", "--target", "all", "--prefix", "none", "-f", "{p}", "-p", package])
+        .args(more)
+        .arg("--manifest-path")
         .arg(crate_dir().join("Cargo.toml"))
         .output()
         .unwrap();
@@ -90,6 +97,66 @@ fn the_plant_s_stack_reaches_supervisao_through_portal_alone() {
     let own: Vec<&str> = mine.difference(&portal).map(String::as_str).collect();
     assert_eq!(own, ["roxmltree", "veredas-supervisao"], "a crate supervisão brings beyond portal's graph");
     assert!(!mine.contains("veredas-maquinar") && !mine.contains("veredas-aranha"), "the bench is a dev-dependency alone");
+    // By its identity: every package of supervisão's normal and build graph, as cargo resolves
+    // it, is a member of the workspace or a crate of crates.io; none taken from a path outside the
+    // workspace (vendored, patched in), from git or from another registry.
+    let resolved = {
+        let out = Command::new(env!("CARGO")).args(["metadata", "--format-version", "1", "--manifest-path"]).arg(crate_dir().join("Cargo.toml")).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        serde_json::from_slice::<Value>(&out.stdout).unwrap()
+    };
+    let members: BTreeSet<&str> = resolved["workspace_members"].as_array().unwrap().iter().map(|m| m.as_str().unwrap()).collect();
+    let source: std::collections::BTreeMap<&str, Option<&str>> = resolved["packages"].as_array().unwrap().iter().map(|p| (p["id"].as_str().unwrap(), p["source"].as_str())).collect();
+    let nodes: std::collections::BTreeMap<&str, &Value> = resolved["resolve"]["nodes"].as_array().unwrap().iter().map(|n| (n["id"].as_str().unwrap(), n)).collect();
+    let start = resolved["packages"].as_array().unwrap().iter().find(|p| p["name"] == "veredas-supervisao").and_then(|p| p["id"].as_str()).unwrap();
+    assert!(members.contains(start));
+    let (mut seen, mut todo) = (BTreeSet::new(), vec![start]);
+    while let Some(id) = todo.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        for d in nodes[id]["deps"].as_array().unwrap() {
+            if d["dep_kinds"].as_array().unwrap().iter().any(|k| k["kind"].is_null() || k["kind"] == "build") {
+                todo.push(d["pkg"].as_str().unwrap());
+            }
+        }
+    }
+    assert!(seen.len() >= mine.len(), "the walk reached {} packages, cargo tree {}", seen.len(), mine.len());
+    let foreign: Vec<&&str> = seen.iter().filter(|id| !members.contains(**id) && source[**id] != Some("registry+https://github.com/rust-lang/crates.io-index")).collect();
+    assert!(foreign.is_empty(), "a package neither of the workspace nor of crates.io: {foreign:?}");
+    // And by its route: each of supervisão's own dependencies but portal, its graph as cargo
+    // builds it alone (by its exact version), brings exactly the crates of a plant's stack the
+    // table here reviews (core its opc layer's client and socket crate, the server and its runtime
+    // their HTTP stack and sockets), none other; and with portal's subtree cut away (`--prune`) supervisão's graph holds
+    // no crate of that stack those do not bring. A crate portal's graph also holds joins by no
+    // other way unseen.
+    let reviewed: std::collections::BTreeMap<&str, Vec<&str>> = [
+        ("veredas-core", vec!["async-opcua-client", "async-opcua-types", "socket2"]),
+        ("axum", vec!["hyper", "hyper-util", "socket2"]),
+        ("tokio", vec!["socket2"]),
+        ("tokio-stream", vec!["socket2"]),
+    ]
+    .into_iter()
+    .collect();
+    let version: std::collections::BTreeMap<&str, (&str, &str)> = resolved["packages"].as_array().unwrap().iter().map(|p| (p["id"].as_str().unwrap(), (p["name"].as_str().unwrap(), p["version"].as_str().unwrap()))).collect();
+    let mut brought: BTreeSet<&str> = BTreeSet::new();
+    for d in nodes[start]["deps"].as_array().unwrap() {
+        if !d["dep_kinds"].as_array().unwrap().iter().any(|k| k["kind"].is_null() || k["kind"] == "build") {
+            continue;
+        }
+        let (name, v) = version[d["pkg"].as_str().unwrap()];
+        if name == "veredas-portal" {
+            continue;
+        }
+        let g = graph(&format!("{name}@{v}"));
+        let stack: BTreeSet<&str> = BANNED_DIRECT.iter().copied().filter(|c| g.contains(*c)).collect();
+        assert_eq!(stack, reviewed.get(name).cloned().unwrap_or_default().into_iter().collect::<BTreeSet<_>>(), "the plant's stack {name} brings");
+        brought.extend(stack);
+    }
+    let pruned = graph_with("veredas-supervisao", &["--prune", "veredas-portal"]);
+    assert!(!pruned.contains("veredas-portal") && pruned.contains("axum"), "{pruned:?}");
+    let other: Vec<&&str> = BANNED_DIRECT.iter().filter(|c| pruned.contains(**c) && !brought.contains(**c)).collect();
+    assert!(other.is_empty(), "a plant's stack reaching supervisão other than through portal or a reviewed dependency: {other:?}");
 }
 
 /// Every file git holds or could hold under the crate (tracked, and untracked files git does not
@@ -226,7 +293,11 @@ fn mentions(text: &str) -> Vec<String> {
         let mut flat = Vec::new();
         let mut line_of = Vec::new();
         for (n, line) in lines.iter().enumerate() {
-            for c in line.chars().flat_map(char::to_lowercase).flat_map(fold).filter(|c| c.is_alphanumeric() && !('\u{300}'..='\u{36f}').contains(c)) {
+            // Unicode's own decomposition first (an accented letter of any block its base letter
+            // and its marks, a compatibility form its plain letters), then the letters Unicode
+            // does not decompose by the table here.
+            let decomposed = icu_normalizer::DecomposingNormalizerBorrowed::new_nfkd().normalize(line);
+            for c in decomposed.chars().flat_map(char::to_lowercase).flat_map(fold).filter(|c| c.is_alphanumeric() && !('\u{300}'..='\u{36f}').contains(c)) {
                 flat.push(c);
                 line_of.push(n + 1);
             }
@@ -560,6 +631,12 @@ fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
         format!("<text\n   x=\"20\"><tspan\n     sodipodi:role=\"line\"\n     y=\"40\">{}</tspan><tspan\n     sodipodi:role=\"line\"\n     y=\"52\">{}</tspan></text>", rev("moB"), rev("elareneG")),
         format!("value=\"{}&lt;br&gt;{}\"", rev("arutappaM"), rev("erawtfoS")),
         format!("{{\"label\":\"{}\\u003cbr\\u003e{}\"}}", rev("tupnI"), rev("sreirraC")),
+        // An accented letter beyond Latin-1 and Latin Extended-A, read by Unicode's own table:
+        // Latin Extended-B's t with a comma below (a Romanian keyboard's), as a letter and as a
+        // number; Latin Extended Additional's a with a dot below (a Vietnamese one).
+        format!("// a {} part", rev("\u{21b}lebineg")),
+        format!("<p>a {} part</p>", rev(";b12x#&lebineg")),
+        format!("// {}", rev("erawtfoS arut\u{1ea1}ppaM")),
     ];
     for s in &samples {
         assert_eq!(mentions(s).len(), 1, "{s}: {:?}", mentions(s));

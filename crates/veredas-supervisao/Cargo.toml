@@ -36,3 +36,5 @@ veredas-maquinar = { path = "../veredas-maquinar" }
 tempfile = { workspace = true }
 # The Rust lexer: the writes test reads the crate's sources as the compiler's tokens.
 proc-macro2 = { workspace = true }
+# Unicode's decomposition: the component test reads an accented letter as its base letter.
+icu_normalizer = { workspace = true }

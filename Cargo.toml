@@ -70,6 +70,9 @@ roxmltree = "0.20"
 # The Rust lexer, for supervisão's test that reads its own sources as tokens (tests/writes.rs):
 # a raw identifier read as its name, comments gone, so no spelling hides a path from the reading.
 proc-macro2 = "1"
+# Unicode's own decomposition (NFKD), for supervisão's test that reads every file for names
+# (tests/component.rs): an accented letter read as its base letter, whatever its block.
+icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
 
 # The bundled engine's debug static library is about 2.2 GB and is mapped into every test binary
 # that links it, which exhausts the page file when the test fleet links in parallel; the engine
