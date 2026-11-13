@@ -179,6 +179,15 @@ fn cell_text(v: &Json, decimals: Option<u8>) -> String {
     }
 }
 
+/// A time as the store holds it (milliseconds on its axis, the plant's clock read as UTC), written as
+/// that clock reads it, to the second.
+fn time_text(v: &Json) -> String {
+    match v.as_i64().and_then(chrono::DateTime::from_timestamp_millis) {
+        Some(t) => t.format("%Y-%m-%d %H:%M:%S").to_string(),
+        None => cell_text(v, None),
+    }
+}
+
 fn reading_of(v: &Json) -> Option<Reading> {
     match v {
         Json::Number(n) => n.as_f64().map(Reading::Num),
@@ -239,6 +248,8 @@ fn table_panel(live: &Live, table: &str, columns: &[Column], sort: &Option<(Stri
         sort_rows(&mut rows, k, *desc);
     }
     let maxes: Vec<f64> = (0..chosen.len()).map(|k| rows.iter().filter_map(|r| r[k].as_f64()).fold(0.0_f64, |m, v| m.max(v.abs()))).collect();
+    // A time column (the store keeps a time as milliseconds on its axis) written as its clock reads it.
+    let times: Vec<bool> = idx.iter().map(|i| page.columns[*i].data_type.to_ascii_uppercase().starts_with("TIMESTAMP")).collect();
     let out_rows: Vec<Json> = rows
         .iter()
         .map(|r| {
@@ -248,7 +259,8 @@ fn table_panel(live: &Live, table: &str, columns: &[Column], sort: &Option<(Stri
                     .enumerate()
                     .map(|(k, c)| {
                         let v = &r[k];
-                        let mut cell = json!({ "text": cell_text(v, c.decimals), "value": v });
+                        let text = if times[k] { time_text(v) } else { cell_text(v, c.decimals) };
+                        let mut cell = json!({ "text": text, "value": v });
                         if c.bar {
                             cell["bar"] = match v.as_f64() {
                                 Some(x) if maxes[k] > 0.0 => json!((x.abs() / maxes[k]).clamp(0.0, 1.0)),

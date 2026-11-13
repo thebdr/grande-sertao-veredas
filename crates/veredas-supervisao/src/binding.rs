@@ -911,6 +911,12 @@ fn compile_panel(place: &str, kind: &str, t: toml::Value, objects: &[Object], u:
             let objs = resolve_objects(place, &p.objects, objects)?;
             for i in &objs {
                 numeric_object(place, *i, objects)?;
+                // DECISION PENDING (docs/questions.md Q24): a timeline replays an object's own
+                // series alone; a rule over another series has no history read here, so such an
+                // object is refused on a timeline rather than drawn without that rule's states.
+                if let Some(s) = objects[*i].rules.iter().find_map(|r| r.series.as_ref()) {
+                    return Err(format!("{place}: `{}` has a rule over another series (`{}` of `{}`), which a timeline does not replay", objects[*i].id, s.series, s.source));
+                }
             }
             (p.title, p.span, PanelKind::Timeline { objects: objs, minutes: minutes_of(place, p.minutes, 60)? })
         }

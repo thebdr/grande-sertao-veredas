@@ -1098,17 +1098,19 @@ rule's, a message's, each beside `source`, `key`, `index_ms`, `ts`, `arrival_ms`
 view's are the engine's, judged when the panel is computed.
 - `value`: a tile with the object's value, unit, state and a sparkline. `object` (required),
   `minutes` (`30`: the sparkline's window), `target` (none: the tile says how far the value is from
-  it, in percent).
+  it, in percent of the target's size, signed; a target of 0 says nothing).
 - `trend`: the object's series over a window with a dashed limit and its breaches marked.
   `object` (required), `minutes` (`60`), `limit` (none): `{ above = x }` or `{ below = x }`; a
   breach is a point past it.
-- `bars`: the object's series in buckets of `bucket_minutes` aligned on the clock, the bucket now
+- `bars`: the object's series in buckets of `bucket_minutes` aligned on the clock (a width that
+  divides a day from midnight, another from the epoch: a week from a Thursday), the bucket now
   running marked, against a dashed `target`; a bar runs from 0 up to its value, or down to it below 0. `object` (required), `minutes` (`60`),
   `bucket_minutes` (`5`), `aggregate` (`"mean"`: `mean`, `sum`, `count`, `min`, `max` or `last`),
   `target` (none).
 - `timeline`: per object one bar of its state over the window, each state lasting until the next
   sample, the one holding at the window's start (its last sample within the day before) drawn from
-  the start. `objects` (required), `minutes` (`60`). The objects' series must be numeric.
+  the start. `objects` (required), `minutes` (`60`). The objects' series must be numeric, and their
+  rules read their own series alone (Q24).
 - `grid`: one small cell per object with its value and state, the heading counting the cells not
   normal. `objects` (required).
 - `levels`: one horizontal bar per object, its value's place in the object's `range`, with ticks.
@@ -1119,7 +1121,7 @@ view's are the engine's, judged when the panel is computed.
   a bar against the column's largest in the page; `states` rules as an object's), `sort` (none:
   `{ column, descending }`, `descending` false unless written, applied to the rows shown, a column of the panel's, or of the table's
   when the panel names none), `limit` (`50`, 1 to 1000). A column's `decimals` are 0 to 6; its
-  rules compare its own value.
+  rules compare its own value; a time is written as the store's clock reads it, to the second.
 - `cells`: charts in cells, one row per value of a key column of a table over a window: the
   median, a sparkline of the median per `bucket_minutes`, the distribution from median − `spread`
   to median + `spread` in 20 bins, σ and n. `table` (required; a view must carry `index_ms`,
@@ -1142,7 +1144,8 @@ object, an `objects` pattern matching none; an empty dashboard name, or one twic
 to 12; a panel without a kind, of an unknown kind, or with a key its kind does not take; a span
 past the columns; `minutes` or `bucket_minutes` of 0; a target, a limit or a tick that is not a
 finite number, a limit naming both sides, an unknown aggregate; a trend, bars, a timeline or levels
-over a series that is not numeric; a table the project lacks; a table panel's limit outside 1 to
+over a series that is not numeric; a timeline over an object with a rule over another series; a
+table the project lacks; a table panel's limit outside 1 to
 1000, a column with an empty name, places past 6 or a rule over another series, a sort column the
 panel or its table lacks; a column, key or value the table lacks where the project states its
 columns, a value that is not numeric; a `spread` not above 0; a layout that cannot be read, is not
@@ -1245,6 +1248,9 @@ fn the_refusals_of_a_kind_of_series_a_panel_and_a_number_name_their_place() {
         // would never light up; for an object's value and for a rule alike.
         (Box::new(|b| b.replace("value = { source = \"sorter\", series = \"mode\" }", "value = { source = \"sorter\", series = \"mode\", key = \"A1\" }")), "object `mode`, value: a `key` reads one key of a numeric series, and `mode` is text"),
         (Box::new(|b| b.replacen("{ equals = 0, state = \"warn\", word = \"stopped\" }", "{ equals = \"jam\", source = \"sorter\", series = \"mode\", key = \"A1\", state = \"warn\", word = \"stopped\" }", 1)), "object `infeed`, states[0]: a `key` reads one key of a numeric series, and `mode` is text"),
+        // A timeline replays an object's own series alone: an object whose rule reads another
+        // series is refused on one (Q24).
+        (Box::new(|b| format!("{}\n[[dashboard.panel]]\nkind = \"timeline\"\nobjects = [\"speed\"]\n", b.replace("{ below = 0.5, state = \"warn\", word = \"slow\" }", "{ below = 0.5, series = \"fill1\", state = \"warn\", word = \"slow\" }"))), "dashboard `Overview`, panel[8] (timeline): `speed` has a rule over another series (`fill1` of `plc`), which a timeline does not replay"),
     ];
     for (f, expected) in cases {
         let mut ex = with_modes();
@@ -1297,7 +1303,7 @@ fn every_key_reads_back_as_written_and_every_default_fills() {
     assert_eq!(kinds[0], &PanelKind::Value { object: 0, minutes: 30, target: None });
     assert_eq!(kinds[1], &PanelKind::Trend { object: 0, minutes: 60, limit: Some(Limit::Above(3.0)) });
     assert_eq!(kinds[2], &PanelKind::Bars { object: 0, minutes: 60, bucket_minutes: 5, aggregate: Aggregate::Sum, target: None });
-    assert_eq!(kinds[3], &PanelKind::Timeline { objects: vec![0], minutes: 60 });
+    assert_eq!(kinds[3], &PanelKind::Timeline { objects: vec![2], minutes: 60 });
     assert_eq!(kinds[4], &PanelKind::Table {
         table: "outlets".into(),
         columns: vec![Column { name: "outlet".into(), label: "Outlet".into(), bar: false, decimals: None, rules: vec![Rule { compare: Compare::Above(2.0), class: StateClass::Warn, word: "far".into(), series: None, ty: None }] }],
@@ -1312,12 +1318,12 @@ fn every_key_reads_back_as_written_and_every_default_fills() {
     // Windows written other than their defaults, read as written.
     assert_eq!(kinds[8], &PanelKind::Value { object: 0, minutes: 15, target: None });
     assert!(matches!(kinds[9], PanelKind::Bars { minutes: 120, bucket_minutes: 10, .. }), "{:?}", kinds[9]);
-    assert_eq!(kinds[10], &PanelKind::Timeline { objects: vec![0], minutes: 120 });
+    assert_eq!(kinds[10], &PanelKind::Timeline { objects: vec![2], minutes: 120 });
     assert_eq!(kinds[11], &PanelKind::Cells { table: "sorts".into(), key: "outlet".into(), value: "travel".into(), minutes: 90, bucket_minutes: 15, spread: 5.0 });
     // A trend's window as written; a grid over a text series as over a number (only trend, bars,
     // timeline and levels chart numbers); a table's limit at its lowest.
     assert_eq!(kinds[12], &PanelKind::Trend { object: 0, minutes: 45, limit: None });
-    assert_eq!(kinds[13], &PanelKind::Timeline { objects: vec![0], minutes: 60 });
+    assert_eq!(kinds[13], &PanelKind::Timeline { objects: vec![2], minutes: 60 });
     assert_eq!((kinds[14], kinds[15]), (&PanelKind::Grid { objects: vec![0, 3] }, &PanelKind::Grid { objects: vec![3] }));
     assert_eq!(kinds[16], &PanelKind::Levels { objects: vec![0], ticks: vec![] });
     assert!(matches!(kinds[17], PanelKind::Table { table, columns, sort: None, limit: 1 } if table == "outlets" && columns.is_empty()), "{:?}", kinds[17]);
@@ -1392,7 +1398,7 @@ span = 2
 
 [[dashboard.panel]]
 kind = "timeline"
-objects = ["a"]
+objects = ["c"]
 
 [[dashboard.panel]]
 kind = "table"
@@ -1431,7 +1437,7 @@ bucket_minutes = 10
 
 [[dashboard.panel]]
 kind = "timeline"
-objects = ["a"]
+objects = ["c"]
 minutes = 120
 
 [[dashboard.panel]]
@@ -1450,7 +1456,7 @@ minutes = 45
 
 [[dashboard.panel]]
 kind = "timeline"
-objects = ["a"]
+objects = ["c"]
 title = "Tl"
 span = 2
 

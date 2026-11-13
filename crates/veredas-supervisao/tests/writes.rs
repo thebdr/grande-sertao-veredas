@@ -395,7 +395,7 @@ fn holds(toks: &[Tok], word: &str) -> bool {
 /// `downsample`, ...), or a name portal shares with std, tokio, a crate or supervisão's own code
 /// (`send`, `spawn`, `new`, `format`, `list`, `of`, `width`, ...), which this reading cannot tell apart.
 const PORTAL_MEMBERS: &[&str] = &[
-    "as_str", "bytes", "channels", "check", "columns", "compile", "count", "dir", "downsample", "error", "extract", "feed", "file", "file_name", "files", "format", "fresh", "from",
+    "as_str", "bytes", "channels", "check", "columns", "compile", "count", "data_type", "dir", "downsample", "error", "extract", "feed", "file", "file_name", "files", "format", "fresh", "from",
     "from_ms", "get", "health", "id", "idx", "index_ms", "key", "keyed", "keys", "kind", "last_index_ms", "last_value", "len", "limit", "line", "list", "live", "load", "load_file",
     "logs", "message", "name", "names", "new", "of", "offset", "opc", "parse_type", "path", "pattern", "points", "query_numeric", "query_rows", "remove", "router", "rows", "rules",
     "samples", "scope", "send", "series", "serve", "server", "session_config", "snapshot", "source", "source_id", "sources", "spawn", "spec", "start", "state", "status", "stop",

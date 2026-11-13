@@ -447,3 +447,18 @@ content in a layout.
 **Taken meanwhile** (the most reversible): nothing refused; the reader stays as it is. If the
 answer is "refuse", it is a new refusal in the reference (an `@import` or a `url()` outside the
 document in a layout's style) with its exact text, and C-048 states it.
+
+## Q24 - Does a timeline replay a rule over another series?
+
+**Raised** 2026-11-14, by C-052's ninth refute round.
+
+An object's state may come from a rule over another series (`source`, `series`, `key` on the
+rule); the feed reads that series' latest value, so a tile or a grid cell shows it. A timeline
+replays the object's history from the store, its own series alone: such a rule's states were left
+out, the row drawn "normal" where the cell beside it said "alarm". Replaying it means merging the
+histories of every series the rules read, and a text or a time series has no numeric window the
+store serves today.
+
+**Taken meanwhile** (the most reversible): an object with a rule over another series is refused on
+a timeline, by name, and the reference says so. If the answer is "replay it", the refusal goes and
+the timeline merges the series' histories (numeric ones first), the test driving both kinds of rule.

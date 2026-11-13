@@ -100,7 +100,9 @@ function tablePanel(p: PanelOut): HTMLElement {
   const thead = h("tr", {}, ...(d.columns as { label: string }[]).map((c) => h("th", {}, c.label)));
   const body = (d.rows as { text: string; bar?: number; state?: string; mark?: string; word?: string }[][]).map((r) =>
     h("tr", {}, ...r.map((c) => {
-      if (c.bar !== undefined) return h("td", { class: "mono" }, h("div", { class: "inbar" }, h("div", { class: "inbar-fill", style: `width:${(c.bar * 100).toFixed(1)}%` }), h("span", {}, c.text)));
+      // A bar with its value; a column with rules too keeps its state: the class, and the mark and
+      // word beside the value when one holds.
+      if (c.bar !== undefined) return h("td", { class: c.state !== undefined ? `mono st-text-${c.state}` : "mono" }, h("div", { class: "inbar" }, h("div", { class: "inbar-fill", style: `width:${(c.bar * 100).toFixed(1)}%` }), h("span", {}, c.word ? `${c.text} ${c.mark} ${c.word}` : c.text)));
       if (c.state !== undefined) return h("td", { class: `mono st-text-${c.state}` }, c.word ? `${c.mark} ${c.word}` : c.text);
       return h("td", { class: "mono" }, c.text);
     })),

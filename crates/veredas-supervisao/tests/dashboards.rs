@@ -17,6 +17,7 @@ use std::time::Duration;
 use common::browser::Browser;
 use common::*;
 use serde_json::{Value, json};
+use veredas_core::SeriesType;
 use veredas_supervisao::{Host, config};
 
 const MIN: i64 = 60_000;
@@ -158,7 +159,7 @@ ticks = [80, 90]
 [[dashboard.panel]]
 kind = "table"
 table = "outlets"
-columns = [ { name = "outlet" }, { name = "sorted", bar = true }, { name = "travel", decimals = 1, states = [ { above = 14, state = "warn", word = "slow" } ] } ]
+columns = [ { name = "outlet" }, { name = "sorted", bar = true, states = [ { above = 2, state = "warn", word = "busy" } ] }, { name = "travel", decimals = 1, states = [ { above = 14, state = "warn", word = "slow" } ] } ]
 sort = { column = "travel", descending = true }
 
 [[dashboard.panel]]
@@ -267,7 +268,11 @@ fn keys_dashboard() -> String {
          \n[[dashboard.panel]]\nkind = \"levels\"\nobjects = [\"outlet-*\"]\ntitle = \"No ticks\"\nspan = 2\n\
          \n[[dashboard.panel]]\nkind = \"table\"\ntable = \"dense\"\ntitle = \"Every column\"\nspan = 3\n\
          \n[[dashboard.panel]]\nkind = \"table\"\ntable = \"sorts\"\ncolumns = [ { name = \"outlet\", label = \"Outlet no.\" }, { name = \"travel\" } ]\nsort = { column = \"outlet\" }\ntitle = \"By outlet\"\nspan = 2\n\
-         \n[[dashboard.panel]]\nkind = \"table\"\ntable = \"sorts\"\ncolumns = [ { name = \"travel\" }, { name = \"outlet\" } ]\ntitle = \"Unsorted\"\nspan = 3\n",
+         \n[[dashboard.panel]]\nkind = \"table\"\ntable = \"sorts\"\ncolumns = [ { name = \"travel\" }, { name = \"outlet\" } ]\ntitle = \"Unsorted\"\nspan = 3\n\
+         \n[[dashboard.panel]]\nkind = \"value\"\nobject = \"rate\"\ntarget = -10\ntitle = \"Against -10\"\nspan = 2\n\
+         \n[[dashboard.panel]]\nkind = \"value\"\nobject = \"rate\"\ntarget = 0\ntitle = \"Against 0\"\nspan = 2\n\
+         \n[[dashboard.panel]]\nkind = \"table\"\ntable = \"notes\"\ncolumns = [ { name = \"word\", states = [ { equals = \"b\", state = \"warn\", word = \"bee\" } ] }, { name = \"n\" }, { name = \"ts\" }, { name = \"index_ms\" } ]\nsort = { column = \"word\" }\ntitle = \"Every type\"\nspan = 3\n\
+         \n[[dashboard.panel]]\nkind = \"cells\"\ntable = \"notes\"\nkey = \"word\"\nvalue = \"n\"\nspread = 5\ntitle = \"Keyed by text\"\nspan = 3\n",
     );
     out
 }
@@ -365,6 +370,8 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     ex.project = ex.project.replace("writes_armed = false", "writes_armed = false\nidle_after_ms = 600000");
     ex.project.push_str("\n[[rule]]\nname = \"states\"\npattern = \"STATE code=(?P<code>\\\\d+)\"\nscope = \"sorter\"\ntypes = { code = \"int\" }\n");
     ex.project.push_str("\n[[rule]]\nname = \"dense\"\npattern = \"DENSE v=(?P<dv>[0-9.]+)\"\nscope = \"sorter\"\ntypes = { dv = \"float\" }\n");
+    // Notes: a word (text) and a number (float), each stored with its stamp (a time and an int).
+    ex.project.push_str("\n[[rule]]\nname = \"notes\"\npattern = 'NOTE (?P<word>\\w+) n=(?P<n>[0-9.]+)'\nscope = \"sorter\"\ntypes = { word = \"text\", n = \"float\" }\n");
     ex.binding = format!("{BINDING}{}", keys_dashboard());
     every_key_written_both_ways(&ex, dir.path());
     let path = write_example(dir.path(), &ex);
@@ -384,9 +391,11 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let dense_at = |i: i64| base + i * 1000;
     let dense_v = |i: i64| if (200..205).contains(&i) { 60.0 } else { 10.0 };
     append(&log, &(0..400).map(|i| format!("{} DENSE v={}", stamp(dense_at(i)), dense_v(i))).collect::<Vec<_>>());
+    // The notes, their words out of order.
+    append(&log, &[format!("{} NOTE c n=3", stamp(at(1.0))), format!("{} NOTE a n=1", stamp(at(3.0))), format!("{} NOTE b n=2", stamp(at(5.0))), format!("{} NOTE a n=1.5", stamp(at(7.0)))]);
     let to = at(31.0);
     let rows = |t: &str| live.store.query_rows(t, &veredas_portal::store::RowsQuery { limit: 1, ..Default::default() }).map(|p| p.total).unwrap_or(0);
-    assert!(wait(Duration::from_secs(20), || rows("sorts") == 9 && rows("states") == 5 && rows("dense") == 400), "the lines are stored");
+    assert!(wait(Duration::from_secs(20), || rows("sorts") == 9 && rows("states") == 5 && rows("dense") == 400 && rows("notes") == 4), "the lines are stored");
     let get_d = || get(addr, &format!("/s/loop/dashboard/0?to={to}")).1;
     // The feed's view of the latest values, and the fills, before the tiles are read.
     assert!(wait(Duration::from_secs(20), || {
@@ -504,13 +513,15 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     // largest shown, the travel to one place with its state word.
     let tb = panel(&d, 9);
     assert_eq!((tb["total"].clone(), tb["columns"].clone()), (json!(3), json!([{ "name": "outlet", "label": "outlet", "bar": false }, { "name": "sorted", "label": "sorted", "bar": true }, { "name": "travel", "label": "travel", "bar": false }])));
-    let shown: Vec<(Value, Value, Value, Value, Value)> = tb["rows"].as_array().unwrap().iter().map(|r| (r[0]["text"].clone(), r[1]["text"].clone(), r[1]["bar"].clone(), r[2]["text"].clone(), r[2]["word"].clone())).collect();
+    // A column with a bar and rules both: each cell its bar and its state and word.
+    let shown: Vec<(Value, Value, Value, Value, Value, Value)> = tb["rows"].as_array().unwrap().iter().map(|r| (r[0]["text"].clone(), r[1]["text"].clone(), r[1]["bar"].clone(), r[1]["word"].clone(), r[2]["text"].clone(), r[2]["word"].clone())).collect();
     // Sorted by travel, descending: an order the view's own (by outlet) does not give.
     assert_eq!(shown, [
-        (json!("3"), json!("2"), json!(0.5), json!("20.5"), json!("slow")),
-        (json!("2"), json!("3"), json!(0.75), json!("14.0"), json!("")),
-        (json!("1"), json!("4"), json!(1.0), json!("11.5"), json!("")),
+        (json!("3"), json!("2"), json!(0.5), json!(""), json!("20.5"), json!("slow")),
+        (json!("2"), json!("3"), json!(0.75), json!("busy"), json!("14.0"), json!("")),
+        (json!("1"), json!("4"), json!(1.0), json!("busy"), json!("11.5"), json!("")),
     ]);
+    assert_eq!((tb["rows"][1][1]["state"].clone(), tb["rows"][0][1]["state"].clone()), (json!("warn"), json!("normal")));
     assert_eq!((tb["rows"][0][2]["state"].clone(), tb["rows"][0][2]["mark"].clone(), tb["rows"][2][2]["state"].clone()), (json!("warn"), json!("\u{25A0}"), json!("normal")));
 
     // Charts in cells: per outlet the median, σ and n over the hour, the median per bucket, and
@@ -547,11 +558,11 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     // a bars panel per aggregate word, each bucket of five minutes holding the travel's samples
     // aggregated as its word says (an empty one counted 0, else empty).
     let (_, k) = get(addr, &format!("/s/loop/dashboard/1?to={to}"));
-    assert_eq!((k["name"].clone(), k["columns"].clone(), k["panels"].as_array().unwrap().len()), (json!("Keys"), json!(3), 17));
+    assert_eq!((k["name"].clone(), k["columns"].clone(), k["panels"].as_array().unwrap().len()), (json!("Keys"), json!(3), 21));
     // Every title and span as written.
     let written: Vec<(Value, Value)> = k["panels"].as_array().unwrap().iter().map(|p| (p["title"].clone(), p["span"].clone())).collect();
     let mut want: Vec<(Value, Value)> = every_aggregate().iter().map(|(w, _)| (json!(w), json!(2))).collect();
-    for (t, s) in [("Rate, 20 min", 3), ("Two outlets", 2), ("Line, 20 min", 3), ("Rate tile", 2), ("Cells, 20 min", 3), ("Every state", 2), ("Bars, 20 min", 3), ("No ticks", 2), ("Every column", 3), ("By outlet", 2), ("Unsorted", 3)] {
+    for (t, s) in [("Rate, 20 min", 3), ("Two outlets", 2), ("Line, 20 min", 3), ("Rate tile", 2), ("Cells, 20 min", 3), ("Every state", 2), ("Bars, 20 min", 3), ("No ticks", 2), ("Every column", 3), ("By outlet", 2), ("Unsorted", 3), ("Against -10", 2), ("Against 0", 2), ("Every type", 3), ("Keyed by text", 3)] {
         want.push((json!(t), json!(s)));
     }
     assert_eq!(written, want);
@@ -578,6 +589,38 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     // Named columns, no sort: the store's order, newest first.
     let un: Vec<(Value, Value)> = panel(&k, 16)["rows"].as_array().unwrap().iter().map(|r| (r[1]["value"].clone(), r[0]["value"].clone())).collect();
     assert_eq!(un, [pair(3, 21.0), pair(1, 12.0), pair(2, 16.0), pair(1, 13.0), pair(3, 20.0), pair(2, 14.0), pair(1, 11.0), pair(2, 12.0), pair(1, 10.0)]);
+    // A tile's target of either sign: how far the value is, in percent of the target's size,
+    // signed by the side it is on (99.2 is above -10); a target of 0 says nothing.
+    assert_eq!((panel(&k, 17)["sub"].clone(), panel(&k, 17)["target"].clone()), (json!("+1092% on the -10 target"), json!(-10.0)));
+    assert_eq!((panel(&k, 18)["sub"].clone(), panel(&k, 18)["target"].clone()), (json!(""), json!(0.0)));
+    // Every type a column holds (core's `SeriesType`, matched in full, each a column of the notes):
+    // each cell's text as the store holds the value (a number as shown, a text and a time as they
+    // are), sorted by the words (out of order in the store), a rule comparing a word.
+    let column_of = |ty: SeriesType| match ty {
+        SeriesType::Int => "index_ms",
+        SeriesType::Float => "n",
+        SeriesType::Text => "word",
+        SeriesType::Time => "ts",
+    };
+    let every_type = [SeriesType::Int, SeriesType::Float, SeriesType::Text, SeriesType::Time];
+    let notes = panel(&k, 19);
+    let heads: Vec<&str> = notes["columns"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
+    assert!(every_type.iter().all(|ty| heads.contains(&column_of(*ty))), "{heads:?}");
+    let store_notes = live.store.query_rows("notes", &veredas_portal::store::RowsQuery { limit: 10, ..Default::default() }).unwrap();
+    let col = |name: &str| store_notes.columns.iter().position(|c| c.name == name).unwrap();
+    let ts_of = |ms: i64| store_notes.rows.iter().find(|r| r[col("index_ms")] == json!(ms)).map(|r| r[col("ts")].clone()).unwrap();
+    let texts: Vec<Vec<Value>> = notes["rows"].as_array().unwrap().iter().map(|r| r.as_array().unwrap().iter().map(|c| c["text"].clone()).collect()).collect();
+    let want_texts: Vec<Vec<Value>> = [("a", "1.5", 7.0), ("a", "1", 3.0), ("b", "2", 5.0), ("c", "3", 1.0)]
+        .iter()
+        .map(|(w, n, m)| vec![json!(w), json!(n), json!(chrono::DateTime::from_timestamp_millis(ts_of(at(*m)).as_i64().unwrap()).unwrap().format("%Y-%m-%d %H:%M:%S").to_string()), json!(at(*m).to_string())])
+        .collect();
+    assert_eq!(texts, want_texts, "every type's text, sorted by the words");
+    assert!(texts.iter().all(|r| r[2].as_str().is_some_and(|s| !s.is_empty() && s.parse::<f64>().is_err())), "a time as its text: {texts:?}");
+    let words: Vec<(Value, Value)> = notes["rows"].as_array().unwrap().iter().map(|r| (r[0]["state"].clone(), r[0]["word"].clone())).collect();
+    assert_eq!(words, [(json!("normal"), json!("")), (json!("normal"), json!("")), (json!("warn"), json!("bee")), (json!("normal"), json!(""))], "a word's rule");
+    // Charts in cells keyed by a text column.
+    let keyed: Vec<(Value, Value, Value)> = panel(&k, 20)["rows"].as_array().unwrap().iter().map(|r| (r["key"].clone(), r["n"].clone(), r["median"].clone())).collect();
+    assert_eq!(keyed, [(json!("a"), json!(2), json!(1.25)), (json!("b"), json!(1), json!(2.0)), (json!("c"), json!(1), json!(3.0))]);
     let in_bucket: [&[f64]; 7] = [&[10.0, 12.0, 11.0], &[14.0], &[20.0, 13.0], &[], &[16.0], &[12.0], &[21.0]];
     for (i, (word, agg)) in every_aggregate().into_iter().enumerate() {
         let b = &panel(&k, i)["buckets"];
@@ -762,17 +805,28 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     assert_eq!((drawn[0]["big"].clone(), drawn[0]["box"].clone(), drawn[0]["badge"].clone()), (json!("99.2%"), json!("st-box-normal"), Value::Null));
     assert_eq!((drawn[2]["box"].clone(), drawn[2]["badge"].clone()), (json!("st-box-alarm"), json!("! UNDER 99.5 %")));
     assert_eq!(drawn[7]["cells"], json!([["Outlet 1", "35", "cell st-box-normal", "cell-v mono st-text-normal"], ["Outlet 2", "85", "cell st-box-near", "cell-v mono st-text-near"], ["Outlet 3", "full", "cell st-box-warn", "cell-v mono st-text-warn"]]));
-    assert_eq!(drawn[9]["rows"][0], json!([["3", "mono", null], ["2", "mono", "width:50.0%"], ["■ slow", "mono st-text-warn", null]]), "sorted by travel, descending");
+    assert_eq!(drawn[9]["rows"][0], json!([["3", "mono", null], ["2", "mono st-text-normal", "width:50.0%"], ["■ slow", "mono st-text-warn", null]]), "sorted by travel, descending");
+    assert!(drawn[9]["rows"].as_array().unwrap().iter().any(|r| r[1][0].as_str().is_some_and(|t| t.ends_with(" ■ busy")) && r[1][1] == json!("mono st-text-warn") && r[1][2].as_str().is_some_and(|w| w.starts_with("width:"))), "a bar with its state and word: {}", drawn[9]["rows"]);
     assert_eq!(drawn[11]["error"], json!("`outlets` has no column `nothing` (its columns: outlet, sorted, travel)"));
-    // An answer for a dashboard no longer shown is dropped: the second dashboard asked and its
-    // answer held back while the first is asked again, the first stays drawn, its tab on.
-    page.eval("window.__hold = '/dashboard/1'; location.hash = 'dashboards/1'; true");
-    std::thread::sleep(Duration::from_millis(300));
-    page.eval("location.hash = 'dashboards/0'; true");
-    page.wait_for("window.__held === true", Duration::from_secs(10));
-    std::thread::sleep(Duration::from_millis(300));
-    let after = page.eval(r#"[[...document.querySelectorAll(".dash-grid > .panel .panel-title")].map((t) => t.textContent), document.querySelector(".subtabs button.on").textContent]"#);
-    assert_eq!((after[0].as_array().unwrap().len(), after[0][0].clone(), after[1].clone()), (17, json!("Read rate"), json!("Numbers")), "the held answer drew over the first: {after}");
+    // An answer for a dashboard no longer shown is dropped, a dashboard or a refusal: the second
+    // dashboard asked and its answer held back while the first is asked again, the first stays
+    // drawn, its tab on, read once the page has done with the held answer.
+    const FIRST_DRAWN: &str = r#"[[...document.querySelectorAll(".dash-grid > .panel .panel-title")].map((t) => t.textContent), document.querySelector(".subtabs button.on").textContent, document.querySelector(".dash-grid > p.error")?.textContent ?? null]"#;
+    for refused in [false, true] {
+        page.eval(&format!("window.__hold = '/dashboard/1'; window.__holdError = {refused}; location.hash = 'dashboards/1'; true"));
+        page.wait_for("window.__held === false || null", Duration::from_secs(10));
+        page.eval("location.hash = 'dashboards/0'; true");
+        page.wait_for("window.__held === true", Duration::from_secs(10));
+        let after = page.eval(FIRST_DRAWN);
+        assert_eq!((after[0].as_array().unwrap().len(), after[0][0].clone(), after[1].clone(), after[2].clone()), (17, json!("Read rate"), json!("Numbers"), Value::Null), "the held {} drew over the first: {after}", if refused { "refusal" } else { "answer" });
+    }
+    // A refusal on time is said in the dashboard's place, and the next refresh draws it again.
+    page.eval("location.hash = 'layout'; true");
+    page.wait_for("document.querySelector('.dash-grid') ? null : true", Duration::from_secs(10));
+    page.eval("window.__failNext = true; location.hash = 'dashboards/0'; true");
+    let said = page.wait_for(r#"document.querySelector(".dash-grid > p.error")?.textContent ?? null"#, Duration::from_secs(10));
+    assert_eq!(said, json!("Error: probe failure"));
+    page.wait_for(r#"document.querySelectorAll(".dash-grid > .panel").length === 17 || null"#, Duration::from_secs(15));
     // The second dashboard (every key written, every aggregate, a grid in every state) and then a
     // probe built from the first's panels: every state of the vocabulary on every surface (a tile,
     // its badge, sub-line and sparkline; a grid cell and its value; a level's fill and figure; a
@@ -830,14 +884,27 @@ const KEEP_DASHBOARD: &str = r#"(() => {
     // asked, so an answer already on its way never carries it.
     const probe = dash ? window.__probe : null;
     if (probe) window.__probe = null;
-    // An answer the test holds back (the address it names), to come after the next one.
+    // An answer the test holds back (the address it names), to come after the next one, refused
+    // then while `__holdError` is set; `__held` set once the page has read it and done with it
+    // (the page's handling runs on the read's own resolution, before the next task).
     const hold = dash && window.__hold && String(a[0]).includes(window.__hold);
-    if (hold) window.__hold = null;
+    const holdError = hold && window.__holdError;
+    if (hold) { window.__hold = null; window.__holdError = false; window.__held = false; }
+    // The next dashboard asked answered at once with portal's kind of refusal, while `__failNext`.
+    const failNow = dash && window.__failNext;
+    if (failNow) window.__failNext = false;
     const r = await orig(...a);
     if (!dash) return r;
+    if (failNow) return new Response(JSON.stringify({ error: "probe failure" }), { status: 500, headers: { "content-type": "application/json" } });
     let j = await r.json();
     if (probe) j = probe;
-    if (hold) { await new Promise((ok) => setTimeout(ok, 1500)); window.__held = true; return new Response(JSON.stringify(j), { status: r.status, headers: r.headers }); }
+    if (hold) {
+      await new Promise((ok) => setTimeout(ok, 1500));
+      const late = holdError ? new Response(JSON.stringify({ error: "probe failure, late" }), { status: 500, headers: { "content-type": "application/json" } }) : new Response(JSON.stringify(j), { status: r.status, headers: r.headers });
+      const read = late.json.bind(late);
+      late.json = async () => { const v = await read(); setTimeout(() => { window.__held = true; }, 0); return v; };
+      return late;
+    }
     for (const p of j.panels) if (p.kind === "cells" && p.data) { p.data.capped = true; p.data.read = 5; }
     window.__dash = j;
     return new Response(JSON.stringify(j), { status: r.status, headers: r.headers });
@@ -961,11 +1028,40 @@ const DRAWN_PANELS: &str = r#"(() => {
   return { dash: d, drawn, columns };
 })()"#;
 
+/// A number to `places` as the page's `toFixed` writes it: the exact value of the double rounded,
+/// a tie away from zero (Rust's own formatting rounds a tie to even: 1.25 is "1.2" there and "1.3"
+/// in the page).
+fn to_fixed(x: f64, places: usize) -> String {
+    let exact = format!("{:.40}", x.abs());
+    let (int, frac) = exact.split_once('.').unwrap();
+    let mut digits: Vec<u8> = int.bytes().chain(frac.bytes().take(places)).map(|b| b - b'0').collect();
+    if frac.as_bytes()[places] >= b'5' {
+        let mut i = digits.len();
+        loop {
+            if i == 0 {
+                digits.insert(0, 1);
+                break;
+            }
+            i -= 1;
+            if digits[i] == 9 {
+                digits[i] = 0;
+            } else {
+                digits[i] += 1;
+                break;
+            }
+        }
+    }
+    let s: String = digits.iter().map(|d| (b'0' + d) as char).collect();
+    let (whole, part) = s.split_at(s.len() - places);
+    let body = if places == 0 { whole.to_string() } else { format!("{whole}.{part}") };
+    if x < 0.0 && body.bytes().any(|b| b != b'0' && b != b'.') { format!("-{body}") } else { body }
+}
+
 /// A number as the page writes it: to `places`, trailing zeros and a bare point dropped.
 fn num(v: &Value, places: usize) -> String {
     match v.as_f64() {
         Some(x) if x.is_finite() => {
-            let t = format!("{x:.places$}");
+            let t = to_fixed(x, places);
             let t = if t.contains('.') { t.trim_end_matches('0').trim_end_matches('.').to_string() } else { t };
             if t == "-0" { "0".to_string() } else { t }
         }
@@ -1223,7 +1319,13 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                     r["head"] = json!(x["columns"].as_array().unwrap().iter().map(|c| c["label"].clone()).collect::<Vec<_>>());
                     r["rows"] = json!(x["rows"].as_array().unwrap().iter().map(|row| row.as_array().unwrap().iter().map(|c| {
                         if let Some(bar) = c.get("bar").and_then(Value::as_f64) {
-                            json!([c["text"], "mono", format!("width:{:.1}%", bar * 100.0)])
+                            // A bar with rules keeps its state: the class, and the mark and word
+                            // after the value when one holds.
+                            let (t, cls) = match c.get("state").filter(|v| !v.is_null()) {
+                                Some(st) => (if s(&c["word"]).is_empty() { s(&c["text"]) } else { format!("{} {} {}", s(&c["text"]), s(&c["mark"]), s(&c["word"])) }, format!("mono st-text-{}", st.as_str().unwrap())),
+                                None => (s(&c["text"]), "mono".to_string()),
+                            };
+                            json!([t, cls, format!("width:{:.1}%", bar * 100.0)])
                         } else if let Some(st) = c.get("state").filter(|v| !v.is_null()) {
                             let t = if s(&c["word"]).is_empty() { s(&c["text"]) } else { format!("{} {}", s(&c["mark"]), s(&c["word"])) };
                             json!([t, format!("mono st-text-{}", st.as_str().unwrap()), null])
@@ -1435,6 +1537,14 @@ fn buckets_align_on_the_clock_and_mark_the_running_one() {
     assert_eq!((hourly[0]["value"].clone(), hourly[1]["value"].clone(), hourly[2]["running"].clone()), (json!(2.0), json!(5.0), json!(true)));
     let daily = buckets(&pts, at(7, 17), at(9, 30), day, Aggregate::Count);
     assert_eq!((daily.len(), daily[0]["start"].clone(), daily[0]["value"].clone()), (1, json!(20 * day), json!(4.0)));
+    // The limit the clause states: a width that divides no day counts from the epoch, so a week
+    // starts on a Thursday (the epoch's day) and fifty minutes start off the hour.
+    let week = 7 * day;
+    let weekly = buckets(&pts, at(7, 17), at(9, 30), week, Aggregate::Count);
+    let monday_or_thursday = chrono::DateTime::from_timestamp_millis(weekly[0]["start"].as_i64().unwrap()).unwrap().format("%A").to_string();
+    assert_eq!(monday_or_thursday, "Thursday");
+    let fifty = buckets(&pts, at(7, 17), at(9, 30), 50 * 60_000, Aggregate::Count);
+    assert_eq!(fifty[0]["start"].as_i64().unwrap() % hour != 0, true, "fifty minutes from the epoch, off the hour: {}", fifty[0]["start"]);
 }
 
 #[test]
