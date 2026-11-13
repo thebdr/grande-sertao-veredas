@@ -1191,6 +1191,11 @@ fn a_layout_is_an_svg_document_with_no_script() {
     }
     assert!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\"><a xlink:href=\"java&#9;script:x()\"/></svg>", p).is_err());
     assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><a><set attributeName=\"href\" to=\"javascript:alert(1)\"/></a></svg>", p).unwrap_err(), "l.svg holds a script link (`javascript:alert(1)` on <set>): a layout is a drawing, with no script");
+    // Any attribute: names cannot be listed, so names no list of them would hold stand for the
+    // rest (an animation's `from`, a data attribute of any element).
+    for (el, name) in [("<set attributeName=\"href\" from=\"javascript:alert(1)\" to=\"#a\"/>", "set"), ("<rect data-x=\"javascript:alert(1)\"/>", "rect")] {
+        assert_eq!(parse(&format!("<svg xmlns=\"http://www.w3.org/2000/svg\"><a>{el}</a></svg>"), p).unwrap_err(), format!("l.svg holds a script link (`javascript:alert(1)` on <{name}>): a layout is a drawing, with no script"), "{el}");
+    }
     // The root's own handler, the classic one.
     assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\" onload=\"x()\"/>", p).unwrap_err(), "l.svg holds an event handler (`onload` on <svg>): a layout is a drawing, with no script");
     // Foreign content of any other form: an element outside the SVG namespace, an XHTML frame, a
@@ -1898,4 +1903,265 @@ fn every_range_is_held_at_both_ends_and_every_refusal_on_every_key_it_covers() {
             assert!(err.ends_with(&format!("`{named}` names no object")), "{kind} {key} = {value}: {err}");
         }
     }
+}
+
+// ---- the classes the reference, the reader and portal own (C-048, the eighth refute round) ----
+
+/// The reference read as one line of words.
+fn folded_reference() -> String {
+    common::doc("binding-schema.md").split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The example with its keyed text and time series, a probe object placed before its dashboards
+/// and a panel added to its last one.
+fn with_probe(object: &str, panel: &str) -> Example {
+    let mut ex = with_modes();
+    ex.project.push_str(WHENS_RULE);
+    ex.binding = format!("{}{panel}", ex.binding.replacen("\n[[dashboard]]", &format!("{object}\n[[dashboard]]"), 1));
+    ex
+}
+
+/// A channel `line` for the example's project, its channel and catalog the references' own.
+const CHANNEL: &str = "\n[[channel]]\nsource_id = \"line\"\nrole = \"connect\"\nhost = \"127.0.0.1\"\nport = 5020\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n";
+
+/// An example loaded with the channel `line` in its project, its files written beside it.
+fn load_with_channel(ex: &Example) -> Result<config::HostConfig, ConfigError> {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ex = ex.clone();
+    ex.project.push_str(CHANNEL);
+    write_example(dir.path(), &ex);
+    std::fs::write(dir.path().join("loop/channel.toml"), common::blocks("channel-schema.md", "toml")[0].clone()).unwrap();
+    std::fs::write(dir.path().join("loop/catalog.toml"), common::blocks("controller-schema.md", "toml")[0].clone()).unwrap();
+    config::load_file(&dir.path().join("supervisao.toml"))
+}
+
+#[test]
+fn every_series_type_under_every_way_of_showing_and_in_every_kind_naming_objects() {
+    // What needs a number, in the reference's own words: the ways of showing its refusals name
+    // ("a level or a marker on a series that is not numeric"), the kinds its panels' paragraph says
+    // chart numbers. Every other way and kind takes every type.
+    let doc = folded_reference();
+    let showing = "a level or a marker on a series that is not numeric";
+    assert!(doc.contains(showing));
+    let word = |s: Show| match s {
+        Show::State => "a state",
+        Show::Level => "a level",
+        Show::Value => "a value",
+        Show::Move => "a marker",
+    };
+    let before = doc.split(" chart numbers: their objects read numeric series").next().unwrap();
+    let charted: std::collections::BTreeSet<&str> = before[before.rfind(". ").unwrap() + 2..].split(|c: char| !c.is_ascii_alphabetic()).filter(|w| !w.is_empty()).collect();
+    assert!(charted.contains("trend") && charted.contains("levels"), "{charted:?}");
+    // The kinds that name objects, from the reader's own lists of kinds and of each kind's keys.
+    let naming: Vec<(String, &str)> = reader_kinds()
+        .into_iter()
+        .filter_map(|kind| {
+            let keys_of = reader_keys(&binding_refusal(&with_binding(|b| format!("{b}\n[[dashboard.panel]]\nkind = \"{kind}\"\nzz = 1\n"))));
+            let names = if keys_of.contains("object") {
+                "object = \"probe\""
+            } else if keys_of.contains("objects") {
+                "objects = [\"probe\"]"
+            } else {
+                return None;
+            };
+            Some((kind, names))
+        })
+        .collect();
+    assert_eq!(naming.len(), 6, "{naming:?}");
+    for (ty, src, ser) in every_series_type() {
+        let numeric = matches!(ty, SeriesType::Int | SeriesType::Float);
+        for show in every_show() {
+            let path = if show == Show::Move { "path = \"loop\"\n" } else { "" };
+            let object = format!("\n[[object]]\nid = \"probe\"\nvalue = {{ source = \"{src}\", series = \"{ser}\" }}\nshow = \"{}\"\n{path}", show.name());
+            let got = outcome(&with_probe(&object, ""));
+            if numeric || !showing.contains(word(show)) {
+                let b = got.unwrap_or_else(|e| panic!("{ty} shown {}: {e}", show.name()));
+                let o = b.object("probe").unwrap();
+                assert_eq!((o.ty, o.show), (ty, show));
+            } else {
+                let err = got.err().unwrap_or_else(|| panic!("{ty} shown {} loaded", show.name()));
+                assert!(err.starts_with("object `probe`: ") && err.contains(&format!("`{ser}`")) && err.contains(&ty.to_string()), "{ty} shown {}: {err}", show.name());
+            }
+        }
+        let object = format!("\n[[object]]\nid = \"probe\"\nvalue = {{ source = \"{src}\", series = \"{ser}\" }}\n");
+        for (kind, names) in &naming {
+            let got = outcome(&with_probe(&object, &format!("\n[[dashboard.panel]]\nkind = \"{kind}\"\n{names}\n")));
+            if numeric || !charted.contains(kind.as_str()) {
+                assert!(got.is_ok(), "{ty} in a {kind}: {got:?}");
+            } else {
+                let err = got.err().unwrap_or_else(|| panic!("{ty} in a {kind} loaded"));
+                assert!(err.contains(&format!("({kind}): `probe` reads `{ser}`")) && err.contains(&ty.to_string()), "{ty} in a {kind}: {err}");
+            }
+        }
+    }
+}
+
+#[test]
+fn every_pair_of_types_merges_and_every_base_table_carries_portal_s_reserved_columns() {
+    // Every pair of types two rules give one series (a group `mix` of the log): numeric only where
+    // both type it so, as the reference says; the same type stays itself, an int with a float
+    // reads as a float, anything else as text; a level over it loads only where it is numeric.
+    let doc = folded_reference();
+    assert!(doc.contains("where several rules or messages carry it, numeric only where every one of them types it so"));
+    let types: Vec<SeriesType> = every_series_type().into_iter().map(|(t, ..)| t).collect();
+    let is_number = |t: &SeriesType| matches!(t, SeriesType::Int | SeriesType::Float);
+    for a in &types {
+        for b in &types {
+            let mut ex = example();
+            ex.project.push_str(&format!(
+                "\n[[rule]]\nname = \"mix_a\"\npattern = 'MIXA (?P<mix>\\S+)'\nscope = \"sorter\"\ntypes = {{ mix = \"{a}\" }}\n\n[[rule]]\nname = \"mix_b\"\npattern = 'MIXB (?P<mix>\\S+)'\nscope = \"sorter\"\ntypes = {{ mix = \"{b}\" }}\n"
+            ));
+            let want = if a == b {
+                *a
+            } else if is_number(a) && is_number(b) {
+                SeriesType::Float
+            } else {
+                SeriesType::Text
+            };
+            let dir = tempfile::tempdir().unwrap();
+            let cfg = load(dir.path(), &ex).unwrap_or_else(|e| panic!("{a} with {b}: {e}"));
+            assert_eq!(Universe::of(&cfg.sessions[0].project).sources["sorter"].series["mix"], want, "{a} with {b}");
+            ex.binding = ex.binding.replacen("\n[[dashboard]]", "\n[[object]]\nid = \"mixed\"\nvalue = { source = \"sorter\", series = \"mix\" }\nshow = \"level\"\n\n[[dashboard]]", 1);
+            assert_eq!(outcome(&ex).is_ok(), is_number(&want), "a level over {a} with {b}: {:?}", outcome(&ex).err());
+        }
+    }
+    // Every kind of base table the universe compiles (a capture rule's, an OPC rule's, a channel
+    // message's) carries portal's reserved columns, by portal's own list (the reference's too),
+    // typed as the store keeps them, beside the value columns its source carries.
+    let reserved: std::collections::BTreeMap<&str, SeriesType> = veredas_portal::store::RESERVED_COLUMNS
+        .iter()
+        .map(|c| {
+            let t = match *c {
+                "source" | "key" => SeriesType::Text,
+                "index_ms" | "arrival_ms" | "seq" => SeriesType::Int,
+                "ts" => SeriesType::Time,
+                other => panic!("a reserved column this test does not know: {other}"),
+            };
+            (*c, t)
+        })
+        .collect();
+    let beside = doc.split("each beside ").nth(1).unwrap();
+    let listed: std::collections::BTreeSet<&str> = beside[..beside.find(')').unwrap()].split('`').skip(1).step_by(2).collect();
+    assert_eq!(listed, reserved.keys().copied().collect(), "the reference's reserved columns are portal's");
+    let cfg = load_with_channel(&example()).unwrap_or_else(|e| panic!("{e}"));
+    let u = Universe::of(&cfg.sessions[0].project);
+    for (table, source) in [("sorts", "sorter"), ("plc_main", "plc"), ("announce", "line")] {
+        let cols = u.tables[table].as_ref().unwrap();
+        for (c, t) in &reserved {
+            assert_eq!(cols.get(*c), Some(t), "{table} `{c}`");
+        }
+        let values: Vec<&String> = cols.keys().filter(|c| !reserved.contains_key(c.as_str())).collect();
+        assert!(!values.is_empty() && values.iter().all(|c| u.sources[source].series.contains_key(*c)), "{table}: {values:?}");
+    }
+}
+
+#[test]
+fn every_refusal_over_a_set_runs_on_every_member_of_it() {
+    // A `path` on every way of showing but a marker's.
+    for show in every_show().into_iter().filter(|s| *s != Show::Move) {
+        let object = format!("\n[[object]]\nid = \"probe\"\nvalue = {{ source = \"plc\", series = \"fill1\" }}\nshow = \"{}\"\npath = \"loop\"\n", show.name());
+        assert_eq!(outcome(&with_probe(&object, "")).err(), Some("object `probe`: `path` is for a marker (`show = \"move\"`)".to_string()), "{}", show.name());
+    }
+    // An action on every kind of source the reference names but an OPC one, and on none.
+    let doc = folded_reference();
+    assert!(doc.contains("a source of the session's project (a log, an OPC source, a channel)"));
+    let cfg = load_with_channel(&example()).unwrap_or_else(|e| panic!("{e}"));
+    let u = Universe::of(&cfg.sessions[0].project);
+    let mut of_kind: std::collections::BTreeMap<&str, String> = std::collections::BTreeMap::new();
+    for (id, s) in &u.sources {
+        of_kind.entry(s.kind).or_insert_with(|| id.clone());
+    }
+    assert_eq!(of_kind.keys().copied().collect::<Vec<_>>(), ["channel", "log", "opc"]);
+    for source in of_kind.iter().filter(|(k, _)| **k != "opc").map(|(_, s)| s.clone()).chain(["nowhere".to_string()]) {
+        let ex = with_binding(|b| b.replacen("{ label = \"Release\", source = \"plc\"", &format!("{{ label = \"Release\", source = \"{source}\""), 1));
+        match load_with_channel(&ex) {
+            Err(ConfigError::Binding { reason, .. }) => assert_eq!(reason, format!("object `outlet-3`, actions[0]: `{source}` is no OPC source of the project")),
+            other => panic!("an action on `{source}`: {:?}", other.err()),
+        }
+    }
+    // A rule's `source`, `series` and `key` (the reader's own rule keys), every subset of them
+    // written: each it names read as written, each it leaves out the object's own. Two logs carry
+    // `len` and `wid`, so every mix of the object's and the rule's names a series.
+    let rule_keys = reader_keys(&binding_refusal(&with_binding(|b| b.replace("{ below = 0.5, state", "{ below = 0.5, zz = 1, state"))));
+    let written: Vec<(&str, &str)> = [("source", "other"), ("series", "wid"), ("key", "K")].into_iter().filter(|(k, _)| rule_keys.contains(*k)).collect();
+    assert_eq!(written.len(), 3, "{rule_keys:?}");
+    let both = "\n[[log]]\nid = \"other\"\nfile = \"other.log\"\n\n[[rule]]\nname = \"lens\"\npattern = 'LEN (?P<len>\\d+) WID (?P<wid>\\d+)'\ntypes = { len = \"int\", wid = \"int\" }\n";
+    for mask in 1..(1u32 << written.len()) {
+        let chosen: Vec<(&str, &str)> = written.iter().enumerate().filter(|(i, _)| mask & (1 << i) != 0).map(|(_, kv)| *kv).collect();
+        let fields: String = chosen.iter().map(|(k, v)| format!("{k} = \"{v}\", ")).collect();
+        let object = format!("\n[[object]]\nid = \"probe\"\nvalue = {{ source = \"sorter\", series = \"len\" }}\nstates = [ {{ above = 1, {fields}state = \"warn\" }} ]\n");
+        let mut ex = with_probe(&object, "");
+        ex.project.push_str(both);
+        let b = outcome(&ex).unwrap_or_else(|e| panic!("{chosen:?}: {e}"));
+        let named = |k: &str| chosen.iter().find(|(c, _)| *c == k).map(|(_, v)| v.to_string());
+        let want = (named("source").unwrap_or("sorter".into()), named("series").unwrap_or("len".into()), named("key"));
+        let rule = &b.object("probe").unwrap().rules[0];
+        assert_eq!(rule.series.as_ref().map(|s| (s.source.clone(), s.series.clone(), s.key.clone())), Some(want), "{chosen:?}");
+    }
+    // The four shapes a session's name and an object's id are refused for, run on both: empty, a
+    // first character outside its set, a character outside it, past its length.
+    let name_case = |name: &str| {
+        let mut ex = example();
+        ex.host = ex.host.replace("name = \"loop\"", &format!("name = \"{name}\""));
+        host_refusal(&ex)
+    };
+    let id_case = |id: &str| outcome(&with_probe(&format!("\n[[object]]\nid = \"{id}\"\nvalue = {{ source = \"plc\", series = \"fill1\" }}\n"), "")).err().unwrap_or_else(|| panic!("`{id}` loaded"));
+    let long_name = "a".repeat(config::NAME_MAX + 1);
+    let long_id = "a".repeat(veredas_supervisao::binding::ID_MAX + 1);
+    for (name, id, name_says, id_says) in [
+        ("", "", "the name is empty".to_string(), "the id is empty".to_string()),
+        ("-a", "1a", "the name `-a` does not start with a lowercase ASCII letter or a digit".to_string(), "the id `1a` does not start with an ASCII letter".to_string()),
+        ("a b", "a b", "the name `a b` holds ` `".to_string(), "the id `a b` holds ` `".to_string()),
+        (long_name.as_str(), long_id.as_str(), format!("the name `{long_name}` is longer than {}", config::NAME_MAX), format!("the id `{long_id}` is longer than {}", veredas_supervisao::binding::ID_MAX)),
+    ] {
+        let (n, i) = (name_case(name), id_case(id));
+        assert!(n.contains(&name_says), "name `{name}`: {n}");
+        assert!(i.contains(&id_says), "id `{id}`: {i}");
+    }
+}
+
+#[test]
+fn every_state_and_every_kind_of_value_a_rule_meets_by_the_reader_s_own_lists() {
+    // Every state of the vocabulary (`StateClass`, matched in full) written as a rule's: the ones
+    // the reader's own refusal lists load as that state, every other refused by that text.
+    let all = [StateClass::Normal, StateClass::Near, StateClass::Warn, StateClass::Alarm, StateClass::Disabled, StateClass::Stale];
+    for s in all {
+        match s {
+            StateClass::Normal | StateClass::Near | StateClass::Warn | StateClass::Alarm | StateClass::Disabled | StateClass::Stale => {}
+        }
+    }
+    let rule = |state: &str| with_binding(|b| b.replace("{ below = 0.5, state = \"warn\", word = \"slow\" }", &format!("{{ below = 0.5, state = \"{state}\", word = \"w\" }}")));
+    let refusal = binding_refusal(&rule("nope"));
+    let at = refusal.find("is none of ").unwrap_or_else(|| panic!("{refusal}"));
+    let listed: std::collections::BTreeSet<String> = refusal[at..].split('`').skip(1).step_by(2).map(String::from).collect();
+    assert_eq!(listed.len(), 4, "the reference's four: {listed:?}");
+    let named: Vec<String> = listed.iter().map(|s| format!("`{s}`")).collect();
+    for s in all {
+        let got = outcome(&rule(s.name()));
+        if listed.contains(s.name()) {
+            assert_eq!(got.unwrap_or_else(|e| panic!("{e}")).object("speed").unwrap().rules[0].class, s);
+        } else {
+            let err = got.err().unwrap_or_else(|| panic!("a rule's state `{}` loaded", s.name()));
+            assert!(err.starts_with(&format!("object `speed`, states[0]: the state `{}` is none of ", s.name())) && named.iter().all(|n| err.contains(n.as_str())), "{err}");
+        }
+    }
+    // `equals` over every kind of TOML value (`toml::Value`, matched in full): a number or a
+    // string loads, every other kind refused by its own name.
+    let mut kinds = std::collections::BTreeSet::new();
+    for lit in ["\"jam\"", "1", "1.5", "true", "1979-05-27T07:32:00Z", "[1]", "{ a = 1 }"] {
+        let v = toml::from_str::<toml::Table>(&format!("v = {lit}")).unwrap()["v"].clone();
+        let takes = match &v {
+            toml::Value::String(_) | toml::Value::Integer(_) | toml::Value::Float(_) => true,
+            toml::Value::Boolean(_) | toml::Value::Datetime(_) | toml::Value::Array(_) | toml::Value::Table(_) => false,
+        };
+        kinds.insert(v.type_str());
+        let ex = with_binding(|b| b.replacen("{ equals = 0, state = \"warn\", word = \"stopped\" }", &format!("{{ equals = {lit}, state = \"warn\", word = \"stopped\" }}"), 1));
+        let got = outcome(&ex);
+        if takes {
+            assert!(got.is_ok(), "equals = {lit}: {:?}", got.err());
+        } else {
+            assert_eq!(got.err(), Some(format!("object `infeed`, states[0]: `equals` takes a number or a string, not {}", v.type_str())), "equals = {lit}");
+        }
+    }
+    assert_eq!(kinds.len(), 7, "every kind of TOML value: {kinds:?}");
 }
