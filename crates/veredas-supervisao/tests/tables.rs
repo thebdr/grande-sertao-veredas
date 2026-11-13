@@ -43,15 +43,27 @@ const EVERY_MARK: &str = r#"[...document.querySelector("main.view").querySelecto
   .filter((el) => !shown(el))
   .map((el) => `${el.tagName}.${el.getAttribute("class")} ${JSON.stringify((el.textContent || "").slice(0, 40))}`)"#;
 
+/// Every place of a view whose words this test compares with portal's answer or with what it
+/// asked (the lists' captions and buttons, a page's heading, its count and its buttons, a table's
+/// header and cells, a window's count and its axis, a refusal and the words before a pick).
+const READ_MARKS: &str = r#"[".list > .caps", ".list button > span", ".list-main > .pager > strong", ".list-main > .pager > [data-rows]", ".list-main > .pager > [data-points]", ".list-main > .pager > button", ".list-main thead th", ".list-main thead th > span", ".list-main tbody td", ".list-main svg.trend text.axis", ".list-main > p.error", ".list-main > p.muted"]"#;
+
 fn every_mark_shown(page: &mut Browser, when: &str) {
     let hidden = page.eval(&format!("(() => {{ {SHOWN_FN} return {EVERY_MARK}; }})()"));
     assert_eq!(hidden, json!([]), "{when}: a mark of the view not shown");
+    // And every mark with words of its own is one whose words this test reads: a mark added to a
+    // view fails here until it is.
+    let unread = page.eval(&format!(
+        r#"(() => {{ const READ = {READ_MARKS}; return [...document.querySelector("main.view").querySelectorAll("*")].filter((el) => !el.closest(".tip, defs, title") && [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && !READ.some((s) => el.matches(s))).map((el) => `${{el.tagName}}.${{el.getAttribute("class")}} ${{JSON.stringify(el.textContent.slice(0, 40))}}`); }})()"#
+    ));
+    assert_eq!(unread, json!([]), "{when}: a mark whose words this test does not read");
 }
 
 /// Kept in the page: every answer portal gave the page's own fetches of rows and windows, by its
 /// address; while `__fail` is set, the next page of rows refused as portal refuses one; and the
-/// next request whose address holds `__slow` answered a second and a half late, so an answer comes
-/// after a later request's.
+/// next request whose address holds `__slow` answered a second and a half late (refused then, as
+/// portal refuses, while `__slowRefuse` is set), so an answer comes after a later request's;
+/// `__slowDone` set once the page has had it.
 const KEEP_ANSWERS: &str = r#"(() => {
   window.__answers = [];
   const orig = window.fetch;
@@ -62,9 +74,11 @@ const KEEP_ANSWERS: &str = r#"(() => {
       return new Response(JSON.stringify({ error: "probe failure" }), { status: 500, headers: { "content-type": "application/json" } });
     }
     const slow = window.__slow && url.includes(window.__slow);
-    if (slow) { window.__slow = null; window.__slowSent = true; }
+    const refuse = slow && window.__slowRefuse;
+    if (slow) { window.__slow = null; window.__slowRefuse = false; window.__slowDone = false; window.__slowSent = true; }
     const r = await orig(...a);
-    if (slow) await new Promise((done) => setTimeout(done, 1500));
+    if (slow) { await new Promise((done) => setTimeout(done, 1500)); setTimeout(() => { window.__slowDone = true; }, 300); }
+    if (refuse) return new Response(JSON.stringify({ error: "probe refusal, late" }), { status: 500, headers: { "content-type": "application/json" } });
     if (!url.includes("/api/table/data") && !url.includes("/api/series/data")) return r;
     const j = await r.clone().json();
     window.__answers.push({ url, body: j });
@@ -138,7 +152,9 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // the page sends in a query needs escaping.)
     let project = dir.path().join("loop/project.toml");
     let text = std::fs::read_to_string(&project).unwrap();
-    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"{VIEW}\"\nsql = \"SELECT outlet, travel > 12 AS slow FROM sorts\"\n")).unwrap();
+    // And a view with `ts` alone for its time, so every way portal finds a table's time (its own
+    // rule: `index_ms`, else `ts`, else none) is a table here.
+    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"{VIEW}\"\nsql = \"SELECT outlet, travel > 12 AS slow FROM sorts\"\n\n[[table]]\nname = \"stamped\"\nsql = \"SELECT ts, outlet FROM sorts\"\n")).unwrap();
     let log = dir.path().join("loop/sorts.log");
     std::fs::write(&log, "").unwrap();
     let hall_log = dir.path().join("hall/sorts.log");
@@ -163,7 +179,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     assert_eq!(status, 200);
     let mut names: Vec<(String, String)> = t["tables"].as_array().unwrap().iter().map(|x| (x["name"].as_str().unwrap().to_string(), x["kind"].as_str().unwrap().to_string())).collect();
     names.sort();
-    assert_eq!(names.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["outlets", "plc_main", "samples", VIEW, "sorts"]);
+    assert_eq!(names.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["outlets", "plc_main", "samples", VIEW, "sorts", "stamped"]);
     assert_eq!(names.iter().find(|(n, _)| n == "outlets").unwrap().1, "view");
     let sorts = t["tables"].as_array().unwrap().iter().find(|x| x["name"] == "sorts").unwrap();
     let cols: Vec<&str> = sorts["columns"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
@@ -243,6 +259,9 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let got: Vec<(String, String, String)> = listed.as_array().unwrap().iter().map(|r| (r[0].as_str().unwrap().to_string(), r[1].as_str().unwrap().to_string(), r[2].as_str().unwrap().split(" · ").next().unwrap().to_string())).collect();
     assert_eq!(got, want);
     assert!(listed.as_array().unwrap().iter().any(|r| r[0] == "sorts" && r[2] == json!(format!("{} · 53", sorts["kind"].as_str().unwrap()))), "{listed}");
+    // Its caption the catalog's length; before a pick, the words asking for one.
+    assert_eq!(page.eval(r#"[document.querySelector(".list > .caps")?.textContent ?? null, document.querySelector(".list-main > p.muted")?.textContent ?? null]"#), json!([format!("Tables · {}", t["tables"].as_array().unwrap().len()), "Pick a table."]));
+    every_mark_shown(&mut page, "the catalog before a pick");
     // Every count: a count portal does not know shown as "?" (the view's), the others between
     // what portal counted before the page listed them and after (the OPC rule's keeps growing).
     let rows_in = |t: &Value, name: &str| t["tables"].as_array().unwrap().iter().find(|x| x["name"] == name).unwrap()["rows"].clone();
@@ -347,6 +366,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // them, every kind of value portal's rows carry: a null, a boolean, a number and a text.
     let (_, catalog) = get(addr, "/s/loop/portal/api/tables");
     let mut kinds = std::collections::BTreeSet::new();
+    let mut times = std::collections::BTreeSet::new();
     for x in catalog["tables"].as_array().unwrap() {
         let name = x["name"].as_str().unwrap();
         let quoted = serde_json::to_string(name).unwrap();
@@ -362,7 +382,9 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         let (head, body) = as_shown(p);
         let n = p["rows"].as_array().unwrap().len();
         let total = p["total"].as_u64().unwrap();
-        let ordered = p["schema"].as_array().unwrap().iter().any(|c| c["name"] == "index_ms" || c["name"] == "ts");
+        let has = |c: &str| p["schema"].as_array().unwrap().iter().any(|x| x["name"] == c);
+        times.insert(if has("index_ms") { "index_ms" } else if has("ts") { "ts" } else { "none" });
+        let ordered = has("index_ms") || has("ts");
         let said = format!("rows {}–{n} of {total}{}", if total == 0 { 0 } else { 1 }, if ordered { ", newest first" } else { ", unordered" });
         assert_eq!((s["head"].clone(), s["body"].clone(), s["said"].clone(), s["all_shown"].clone()), (json!(head), json!(body), json!(said), json!(true)), "{name}");
         for r in p["rows"].as_array().unwrap() {
@@ -378,6 +400,9 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         }
     }
     assert_eq!(kinds.into_iter().collect::<Vec<_>>(), ["boolean", "null", "number", "text"], "every kind of value portal's rows carry");
+    // And every way portal finds a table's time, by its own rule (`index_ms`, else `ts`, else
+    // none): each a table here, said newest first or unordered as portal orders it.
+    assert_eq!(times.into_iter().collect::<Vec<_>>(), ["index_ms", "none", "ts"], "every way portal finds a table's time");
 
     // The Series view lists the series as portal lists them: each button's names, type and count,
     // the count between portal's before the page listed and after (the OPC series keep counting;
@@ -398,6 +423,9 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         assert!(shown_ty == ty && low <= count && count <= high && (src != "sorter" || count == high), "{b} against {low}..={high}: {x}");
     }
     assert!(listed.as_array().unwrap().iter().any(|b| b[0] == "sorter/travel" && b[2] == "float · 53"), "{listed}");
+    // Its caption the listing's length; before a pick, the words asking for one.
+    assert_eq!(page.eval(r#"[document.querySelector(".list > .caps")?.textContent ?? null, document.querySelector(".list-main > p.muted")?.textContent ?? null]"#), json!([format!("Series · {}", listed.as_array().unwrap().len()), "Pick a series."]));
+    every_mark_shown(&mut page, "the series before a pick");
 
     // A series picked: its last hour charted, every point of portal's window placed exactly where
     // the chart's axes put its time and value, the axis labelled by the window's values.
@@ -513,7 +541,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     page.eval(&series_button("plc/speed"));
     const HEAD: &str = r#"document.querySelector(".list-main .pager strong")?.textContent ?? null"#;
     page.wait_for(&format!("({HEAD}) === 'plc · speed' || null"), Duration::from_secs(20));
-    std::thread::sleep(Duration::from_millis(2500));
+    page.wait_for("window.__slowDone || null", Duration::from_secs(10));
     assert_eq!(page.eval(HEAD), json!("plc · speed"), "the later pick stays, the earlier window come late");
 
     // A table of exactly a hundred rows: the second page is the last, nothing older.
@@ -590,7 +618,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
             };
             let at = format!("(() => {{ const s = {shown_js}; return s && s.table === '{table}' && s.rows === '{rows}' ? s : null; }})()");
             page.wait_for(&at, Duration::from_secs(20));
-            std::thread::sleep(Duration::from_millis(2000));
+            page.wait_for("window.__slowDone || null", Duration::from_secs(10));
             let s = page.eval(shown_js);
             assert_eq!((s["table"].clone(), s["rows"].clone()), (json!(table), json!(rows)), "{first} then {second}, the first's answer held back");
         }
@@ -601,8 +629,20 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     page.wait_for("window.__slowSent || null", Duration::from_secs(10));
     page.eval(r#"document.querySelector('.list button[data-table="outlets"]').click()"#);
     page.wait_for(&format!("(() => {{ const s = {shown_js}; return s && s.table === 'outlets' ? s : null; }})()"), Duration::from_secs(20));
-    std::thread::sleep(Duration::from_millis(2500));
+    page.wait_for("window.__slowDone || null", Duration::from_secs(10));
     assert_eq!(page.eval(shown_js)["table"], json!("outlets"), "the later pick stays, the earlier answer come late");
+    // A refusal come late is no more drawn than an answer: for each request a pick makes (the
+    // listing, then the page), a table picked with that request held back and refused, another
+    // picked while it is out: the later pick's page stays, no refusal over it.
+    for slow in ["/api/tables", "name=plc_main&"] {
+        page.eval(&format!(r#"(() => {{ window.__slowSent = false; window.__slowRefuse = true; window.__slow = "{slow}"; document.querySelector('.list button[data-table="plc_main"]').click(); return true; }})()"#));
+        page.wait_for("window.__slowSent || null", Duration::from_secs(10));
+        page.eval(r#"document.querySelector('.list button[data-table="outlets"]').click()"#);
+        page.wait_for(&format!("(() => {{ const s = {shown_js}; return s && s.table === 'outlets' ? s : null; }})()"), Duration::from_secs(20));
+        page.wait_for("window.__slowDone || null", Duration::from_secs(10));
+        let after = page.eval(&format!(r#"(() => {{ const s = {shown_js}; return [s ? s.table : null, document.querySelector(".list-main p.error")?.textContent ?? null, document.querySelector(".list button.on")?.dataset.table ?? null]; }})()"#));
+        assert_eq!(after, json!(["outlets", null, "outlets"]), "{slow} refused late drew over the later pick");
+    }
     // Shown anew, the table's window takes the rows stored since; a page portal refuses is said in
     // its place.
     pick(&mut page, "sorts");
@@ -612,6 +652,16 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let refused = page.wait_for(r#"document.querySelector(".list-main p.error")?.textContent ?? null"#, Duration::from_secs(10));
     assert_eq!(refused, json!("Error: probe failure"));
     every_mark_shown(&mut page, "a refused page");
+    // The limit the clause states: a row stamped inside the frozen window but stored after it was
+    // frozen (a late line, the tail's lag) joins it and shifts its pages. The first page shown, a
+    // sort stamped just before the newest ten stored, the next page opens on the first page's last.
+    pick(&mut page, "sorts");
+    let before_late = shown_at(&mut page, "1-50/110");
+    append(&log, &[format!("{} SORT outlet=8 travel=2.0 rate=99.0", stamp(now - 1))]);
+    assert!(sorts_rows(111));
+    click(&mut page, "Older ›");
+    let shifted = shown_at(&mut page, "51-100/111");
+    assert_eq!(shifted["body"][0], before_late["body"][49], "the late row joined the frozen window and shifted its pages");
 
     // Every request the page made went to this host and this session's own paths, its portal
     // reads the four routes under `/s/loop/portal/api/`, its stream the session's objects.

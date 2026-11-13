@@ -44,7 +44,8 @@ export class Tables {
   private table: string | null = null;
   private offset = 0;
   /// The window paged through, frozen at the session's now when the view or a table is shown: a
-  /// row stamped later joins no page until the view is shown again, so paging never shifts.
+  /// row stamped later joins no page until the view is shown again. Portal holds the window by
+  /// time, so a row stamped inside it but stored late (a late line, the tail's lag) still joins it.
   private to: number | null = null;
   /// The latest request: an answer to an earlier one is not drawn.
   private asked = 0;
@@ -69,7 +70,8 @@ export class Tables {
       if (this.table) await this.page();
       else this.main.replaceChildren(h("p", { class: "muted" }, "Pick a table."));
     } catch (e) {
-      this.main.replaceChildren(h("p", { class: "error" }, String(e)));
+      // A listing refused for a pick no longer the latest says nothing over the latest's page.
+      if (token === this.asked) this.main.replaceChildren(h("p", { class: "error" }, String(e)));
     }
   }
 
