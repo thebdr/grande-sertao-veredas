@@ -389,55 +389,77 @@ fn holds(toks: &[Tok], word: &str) -> bool {
 }
 
 /// Every Rust file under `dir`, however deep.
-/// The names of portal's members supervisão's sources reach, reviewed: each a read (a query, a
-/// field, a listing), the session's own start, stop, live state and subscription, or a name portal
-/// shares with a std or tokio member supervisão calls (`send`, `spawn`, `remove`, `get`, `load`,
-/// `len`, ...), which this reading cannot tell apart.
+/// The names of portal's members any of supervisão's tokens holds, reviewed: each a read (a query,
+/// a field, a listing, a window's bounds), the session's own start, stop, live state and
+/// subscription, a path already judged by the reading above (`load_file`, `compile`, `router`,
+/// `downsample`, ...), or a name portal shares with std, tokio, a crate or supervisão's own code
+/// (`send`, `spawn`, `new`, `format`, `list`, `of`, `width`, ...), which this reading cannot tell apart.
 const PORTAL_MEMBERS: &[&str] = &[
-    "as_str", "bytes", "channels", "columns", "count", "feed", "file", "file_name", "get", "health", "id", "index_ms", "key", "keyed", "keys", "kind", "last_index_ms",
-    "last_value", "len", "limit", "live", "load", "logs", "message", "name", "opc", "path", "pattern", "query_numeric", "query_rows", "remove", "rows", "rules", "scope",
-    "send", "series", "server", "session_config", "snapshot", "source", "source_id", "sources", "spawn", "start", "state", "status", "stop", "stopped", "store",
-    "subscribe", "table", "tables", "tag", "tags", "text", "to", "total", "ty", "types", "value", "values", "writable", "writes_armed",
+    "as_str", "bytes", "channels", "check", "columns", "compile", "count", "dir", "downsample", "error", "extract", "feed", "file", "file_name", "files", "format", "fresh", "from",
+    "from_ms", "get", "health", "id", "idx", "index_ms", "key", "keyed", "keys", "kind", "last_index_ms", "last_value", "len", "limit", "line", "list", "live", "load", "load_file",
+    "logs", "message", "name", "names", "new", "of", "offset", "opc", "parse_type", "path", "pattern", "points", "query_numeric", "query_rows", "remove", "router", "rows", "rules",
+    "samples", "scope", "send", "series", "serve", "server", "session_config", "snapshot", "source", "source_id", "sources", "spawn", "spec", "start", "state", "status", "stop",
+    "stopped", "store", "store_now_ms", "subscribe", "table", "table_of", "tables", "tag", "tags", "text", "to", "to_ms", "toml", "total", "ty", "types", "value", "values",
+    "width", "writable", "writes_armed", "y",
 ];
 
-/// Every public function and public field portal declares, by name, read from its own sources.
-fn portal_members() -> std::collections::BTreeSet<String> {
+/// Every public function and public field portal declares, by name, read from its own sources as
+/// the Rust lexer reads them, however they are spelled across lines: a `pub` (not `pub(..)`), then
+/// any of `const`, `async`, `unsafe` and `extern "abi"`, then `fn` NAME; a `pub` NAME `:` (a field);
+/// and every `fn` NAME in a `pub trait`'s body (a method its values answer to).
+fn portal_members() -> BTreeSet<String> {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../veredas-portal/src");
-    let ident = |s: &str| s.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect::<String>();
-    let mut out = std::collections::BTreeSet::new();
+    let mut out = BTreeSet::new();
     for path in rust_files(&src) {
-        for line in std::fs::read_to_string(&path).unwrap().lines() {
-            let t = line.trim_start();
-            for head in ["pub fn ", "pub async fn ", "pub const fn ", "pub unsafe fn "] {
-                if let Some(at) = t.find(head) {
-                    out.insert(ident(&t[at + head.len()..]));
-                }
-            }
-            if let Some(rest) = t.strip_prefix("pub ") {
-                let name = ident(rest);
-                if name.starts_with(|c: char| c.is_ascii_lowercase() || c == '_') && rest[name.len()..].trim_start().starts_with(':') {
-                    out.insert(name);
-                }
-            }
-        }
+        out.extend(public_members(&lex(&std::fs::read_to_string(&path).unwrap())));
     }
-    out.remove("");
     out
 }
 
-/// The names a source's tokens reach after a `.` (a method called or a field read, a raw
-/// identifier by its name; a range's dots and a tuple's index name none).
-fn dotted(toks: &[Tok]) -> BTreeSet<String> {
+fn public_members(toks: &[Tok]) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    for (i, t) in toks.iter().enumerate() {
-        if !t.is(".") || (i > 0 && toks[i - 1].is(".")) || toks.get(i + 1).is_some_and(|n| n.is(".")) {
+    for i in 0..toks.len() {
+        if !toks[i].keyword("pub") || toks.get(i + 1).is_some_and(|t| t.is("(")) {
             continue;
         }
-        if let Some(n) = toks.get(i + 1).filter(|n| n.kind == Kind::Word || n.kind == Kind::Raw) {
-            out.insert(n.text.clone());
+        let mut j = i + 1;
+        while toks.get(j).is_some_and(|t| t.keyword("const") || t.keyword("async") || t.keyword("unsafe") || t.keyword("extern") || t.kind == Kind::Lit) {
+            j += 1;
+        }
+        let qualified = j > i + 1;
+        match toks.get(j) {
+            Some(t) if t.keyword("fn") => out.extend(toks.get(j + 1).filter(|n| n.segment()).map(|n| n.text.clone())),
+            Some(t) if !qualified && t.segment() && toks.get(j + 1).is_some_and(|n| n.is(":")) => {
+                out.insert(t.text.clone());
+            }
+            Some(t) if t.keyword("trait") => {
+                let Some(open) = (j..toks.len()).find(|k| toks[*k].is("{")) else { continue };
+                let mut depth = 0;
+                for k in open..toks.len() {
+                    if toks[k].is("{") {
+                        depth += 1;
+                    } else if toks[k].is("}") {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else if depth == 1 && toks[k].keyword("fn") {
+                        out.extend(toks.get(k + 1).filter(|n| n.segment()).map(|n| n.text.clone()));
+                    }
+                }
+            }
+            _ => {}
         }
     }
     out
+}
+
+/// Every name a source's tokens hold as a path's segment (a method called or a field read after a
+/// `.`, a function through a qualified path, a field in a struct's pattern, a variable): every way
+/// a name of portal's could be reached, and supervisão's own names alike, which this reading cannot
+/// tell from them.
+fn names_held(toks: &[Tok]) -> BTreeSet<String> {
+    toks.iter().filter(|t| t.segment()).map(|t| t.text.clone()).collect()
 }
 
 fn rust_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -460,7 +482,15 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     let ns = bench.server("plc").unwrap().namespace;
     let aux_ns = bench.server("aux").unwrap().namespace;
     let path = write_example(dir.path(), &with_aux(live_example(&bench, false), &bench));
-    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    // The project supervisão loads is portal's reading of the file, every OPC tag and whether a
+    // rule marks it writable as the file says: supervisão widens no whitelist on its way in.
+    let tags_of = |opc: &[veredas_portal::opc::OpcSourceConfig]| opc.iter().flat_map(|s| s.rules.iter().flat_map(move |r| r.tags.iter().map(move |t| (s.source_id.clone(), t.node_id.clone(), t.writable)))).collect::<Vec<_>>();
+    let file_project = veredas_portal::project::load_file(&dir.path().join("loop/project.toml")).unwrap();
+    let loaded = config::load_file(&path).unwrap();
+    assert_eq!(tags_of(&loaded.sessions[0].project.opc), tags_of(&file_project.opc), "the project as supervisão loads it");
+    let unwritable: Vec<(String, String)> = tags_of(&file_project.opc).into_iter().filter(|(_, _, w)| !w).map(|(s, n, _)| (s, n)).collect();
+    assert!(unwritable.len() >= 4 && unwritable.iter().all(|(s, _)| s == "plc"), "{unwritable:?}");
+    let host = Host::start(loaded).unwrap();
     let addr = host.addr();
 
     // The writes the binding offers, as the page reads them, and the switch the feed shows.
@@ -491,9 +521,12 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     let (status, v) = post(addr, "/s/loop/portal/api/opc/write", &body);
     assert_eq!((status, v["ok"].clone()), (200, json!(true)), "{v}");
     assert!(wait(Duration::from_secs(10), || release(&bench) == "7"), "{}", release(&bench));
-    // Armed, the whitelist still holds: a tag no rule marks writable is refused by name.
-    let speed = format!("ns={ns};s=speed");
-    assert_eq!(post(addr, "/s/loop/portal/api/opc/write", &json!({ "source": "plc", "tag": speed, "value": "9" })), (403, json!({ "error": format!("`plc` / `{speed}` is not a writable tag in this session") })));
+    // Armed, the whitelist still holds: every tag of every rule the file leaves unwritable (portal's
+    // own reading of it, on both sources), and a node no rule names, refused by name.
+    let nowhere = ("plc".to_string(), format!("ns={ns};s=nowhere"));
+    for (source, tag) in unwritable.iter().chain([&nowhere]) {
+        assert_eq!(post(addr, "/s/loop/portal/api/opc/write", &json!({ "source": source, "tag": tag, "value": "9" })), (403, json!({ "error": format!("`{source}` / `{tag}` is not a writable tag in this session") })), "{source} {tag}");
+    }
     // Disarmed again: refused again, the plant keeps what it had.
     host.session("loop").unwrap().set_writes_armed(false);
     bench.server("plc").unwrap().set("release3", 0);
@@ -560,25 +593,29 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     assert_eq!(roots, known, "every crate root the sources can name, judged or reviewed");
     // What supervisão reaches of portal through the values it holds (a session, its live state, its
     // store, a project) names no path; it is read by name instead, against portal's own list of
-    // public functions and fields: every name of that list supervisão's sources reach after a `.`
-    // is one reviewed here (any other, a writer such as `validate_definition`, `save_to` or
-    // `set_writes_armed` among them, is refused). A name portal shares with a std or tokio member
-    // supervisão calls (`send`, `spawn`, `remove`, `get`, ...) is judged by its name alone (the
-    // clause states the limit).
+    // public functions and fields (read by the lexer from portal's sources): every name of that
+    // list any of supervisão's tokens holds (after a `.`, through a qualified path, in a struct's
+    // pattern, or as a name of supervisão's own that this reading cannot tell from it) is one
+    // reviewed here, and any other (a writer such as `validate_definition`, `save_to`,
+    // `set_writes_armed` or `list_tables` among them) is refused. A name portal shares with a std
+    // or tokio member supervisão calls, or with a name of supervisão's own, is judged by its name
+    // alone (the clause states the limit).
     let members = portal_members();
-    assert!(["validate_definition", "save_to", "set_writes_armed", "query_rows", "store"].iter().all(|m| members.contains(*m)), "portal's list read: {} names", members.len());
+    assert!(["validate_definition", "save_to", "set_writes_armed", "query_rows", "store", "list_tables"].iter().all(|m| members.contains(*m)), "portal's list read: {} names", members.len());
     let mut reached = BTreeSet::new();
     for (_, text) in &sources {
-        reached.extend(dotted(&lex(text)).into_iter().filter(|n| members.contains(n)));
+        reached.extend(names_held(&lex(text)).into_iter().filter(|n| members.contains(n)));
     }
     let unreviewed: Vec<&String> = reached.iter().filter(|n| !PORTAL_MEMBERS.contains(&n.as_str())).collect();
     assert!(unreviewed.is_empty(), "portal members reached beyond the reviewed ones: {unreviewed:?}");
     let stale: Vec<&&str> = PORTAL_MEMBERS.iter().filter(|n| !reached.contains(**n)).collect();
     assert!(stale.is_empty(), "reviewed names no longer reached: {stale:?}");
-    assert_eq!(
-        dotted(&lex("live.store.query_rows(t, &q); let n = 1.5; x..y; s . len(); v.r#list_tables(); w.0")),
-        ["len", "list_tables", "query_rows", "store"].into_iter().map(String::from).collect()
-    );
+    // The reading itself: every way a name is reached, a raw one by its name; portal's list read
+    // whatever the spelling (a `pub` alone on its line, a one-line struct, a trait's methods).
+    let held = names_held(&lex("live.store.query_rows(t, &q); let n = 1.5; <Live>::opc_spec(&l, \"plc\"); let Live { frames, vitals, .. } = &*l; v.r#list_tables(); w.0"));
+    assert!(["store", "query_rows", "opc_spec", "frames", "vitals", "list_tables"].iter().all(|n| held.contains(*n)), "{held:?}");
+    let spelled = public_members(&lex("pub\nfn list_tables(&self) {}\npub struct S { pub a: u8, #[serde(default)] pub b: u8 }\npub(crate) fn hidden() {}\npub const K: u8 = 1;\npub trait T { fn start(&self); }\npub async unsafe extern \"C\" fn odd() {}"));
+    assert_eq!(spelled, ["a", "b", "list_tables", "odd", "start"].into_iter().map(String::from).collect());
     let outside: Vec<&(String, String)> = named.iter().filter(|(_, p)| judged(p) && !ALLOWED.contains(&p.as_str())).collect();
     assert!(outside.is_empty(), "named outside what supervisão reads with: {outside:?}");
     // The reading itself: what the sources name today, every allowed path seen at least once; a
@@ -623,8 +660,34 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     assert!(bundle.contains("/portal/api/opc/write") && !bundle.contains("/api/channels/send"), "the route is portal's own");
     assert_eq!(bundle.matches("method:\"POST\"").count() + bundle.matches("method: \"POST\"").count(), 1, "one POST in the page");
 
-    // Supervisão's own routes take no write.
-    for p in ["/", "/assets/app.js", "/assets/app.css", "/api/sessions", "/s/loop", "/s/loop/", "/s/loop/binding", "/s/loop/objects", "/s/loop/objects.json", "/s/loop/dashboard/0", "/s/loop/layout.svg"] {
+    // Supervisão's own routes take no write: every one its host declares, read from host.rs's
+    // tokens (a literal path, at the root before its loop over the sessions or under a session in
+    // it, `{index}` read as 0; the session's page by its name, with and without its slash, the two
+    // routes it writes from the session's name).
+    let host_toks = lex(&std::fs::read_to_string(root.join("src/host.rs")).unwrap());
+    let split = (0..host_toks.len()).find(|i| host_toks[*i].keyword("for") && host_toks.get(i + 1).is_some_and(|t| t.text == "app") && host_toks.get(i + 3).is_some_and(|t| t.text == "apps")).expect("the host's loop over its sessions");
+    let mut own_routes: Vec<String> = Vec::new();
+    let mut written = 0;
+    for i in 0..host_toks.len().saturating_sub(3) {
+        if !(host_toks[i].is(".") && host_toks[i + 1].text == "route" && host_toks[i + 2].is("(")) {
+            continue;
+        }
+        let arg = &host_toks[i + 3];
+        if arg.kind == Kind::Lit {
+            let literal = arg.text.trim_matches('"').replace("{index}", "0");
+            own_routes.push(if i < split { literal } else { format!("/s/loop{literal}") });
+        } else {
+            written += 1;
+        }
+    }
+    assert_eq!(written, 2, "the session's page, by its name with and without its slash");
+    own_routes.extend(["/s/loop".to_string(), "/s/loop/".to_string()]);
+    own_routes.sort();
+    let swept = ["/", "/assets/app.js", "/assets/app.css", "/api/sessions", "/s/loop", "/s/loop/", "/s/loop/binding", "/s/loop/objects", "/s/loop/objects.json", "/s/loop/dashboard/0", "/s/loop/layout.svg"];
+    let mut sorted = swept.to_vec();
+    sorted.sort();
+    assert_eq!(own_routes, sorted, "every route of supervisão's own swept");
+    for p in swept {
         for method in ["POST", "PUT", "DELETE", "PATCH"] {
             let (status, _, _) = http(addr, method, p, Some(&body.to_string()));
             assert_eq!(status, 405, "{method} {p}");
