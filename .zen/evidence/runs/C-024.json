@@ -14,15 +14,15 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "009fff336d5bbce0c8f5e01867fee500a5b840c2e995c605965a78fcf48dc2b3",
-  "outputTail": "\nrunning 6 tests\ntest the_bench_is_one_library_and_at_most_one_executable ... ok\ntest the_bench_carries_no_database_no_desktop_and_no_member_but_core ... ok\ntest the_check_allows_one_named_binary_and_refuses_every_other_executable ... ok\ntest every_file_rustc_pulls_in_from_outside_the_crate_folder_is_read_too ... ok\ntest the_graph_walk_sees_every_version_every_feature_and_every_table ... ok\ntest the_bench_names_no_vendor_and_cites_no_vendor_document ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.62s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.84s\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-e24e28763702786a.exe)\n     Running tests\\component.rs (target\\debug\\deps\\component-35b459021c17c6e0.exe)",
-  "ranAt": "2026-11-07T18:22:11.607Z",
-  "headCommit": "8cbc70490f4e6f1edc359dd7876a5f3e9c05b203",
+  "outputSha": "f708c804f728569b372ed1366ff6012d251ea3635e79c8344a7580a76d05c47d",
+  "outputTail": "test every_file_rustc_pulls_in_from_outside_the_crate_folder_is_read_too ... ok\ntest the_graph_walk_sees_every_version_every_feature_and_every_table ... ok\ntest the_bench_names_no_vendor_and_cites_no_vendor_document ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.71s\n\n   Compiling heapless v0.7.17\n   Compiling leis v0.1.0 (C:\\Source\\Repos\\grande-sertao-veredas\\tools\\leis)\n   Compiling postcard v1.1.3\n   Compiling async-opcua-server v0.19.0\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n   Compiling veredas-maquinar v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.13s\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-e24e28763702786a.exe)\n     Running tests\\component.rs (target\\debug\\deps\\component-bc44efba75639e5b.exe)",
+  "ranAt": "2026-11-13T20:49:47.703Z",
+  "headCommit": "6c195605e7776e353c4ac8b6b21a1e5f0c177814",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/component.rs",
       "file": "crates/veredas-maquinar/tests/component.rs",
-      "fileSha": "152a7d91f6ed877b300b739233a960c35b0251e936ca8136e8aac02108ec2473"
+      "fileSha": "b64df1ac6072b4c4c129fd2374133c1cc2968a1d7aefd1f492a6722c2a449024"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",
