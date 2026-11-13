@@ -219,8 +219,10 @@ fn target_roots(manifest_dir: &Path) -> Vec<PathBuf> {
 /// `include_str!`, `include_bytes!`, `include!` or `#[path]` pulled in, from anywhere, in
 /// whatever form rustc accepted (a raw string, a `concat!`, an `env!`, a macro, an alias, a
 /// comment between the macro and its argument). The compiler's own list, never a reading of
-/// the text; a build that fails fails the check. In each profile, every dep-info whose crate
-/// root is one of the package's targets (a stale one from an earlier build included: it can
+/// the text; a build that fails fails the check. In each profile, every dep-info under the
+/// profile's folder of the directories cargo reports for the target dir (wherever its layout puts
+/// a build unit: `<profile>/deps/` once, a unit's own folder under `<profile>/build/` in cargo's
+/// newer layout) whose crate root is one of the package's targets (a stale one from an earlier build included: it can
 /// only add files) contributes the files of it that still exist, and every target must have
 /// one. What the two saw is what this platform's `cfg` compiles in, in either profile: a file
 /// behind a `cfg` no run of this check compiles (another platform's, `doc`, `doctest`) is not
@@ -236,13 +238,12 @@ fn files_rustc_read(manifest_dir: &Path, target_dir: &Path, package: &str) -> Ve
     for (profile, args) in profiles {
         let out = Command::new(env!("CARGO")).args(args).arg(target_dir).current_dir(manifest_dir).output().unwrap();
         assert!(out.status.success(), "cargo {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr));
-        let deps = target_dir.join(profile).join("deps");
+        let mut infos: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
+        for dir in build_dirs(manifest_dir, target_dir) {
+            dep_infos(&dir, profile, &mut infos);
+        }
         let mut seen_roots: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
-        for entry in std::fs::read_dir(&deps).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().and_then(|e| e.to_str()) != Some("d") {
-                continue;
-            }
+        for path in infos {
             let text = std::fs::read_to_string(&path).unwrap();
             let Some(first) = text.lines().find(|l| l.contains(": ")) else { continue };
             let listed = dep_info_paths(first);
@@ -283,12 +284,59 @@ fn no_doctests(manifest_dir: &Path, target_dir: &Path, package: &str) {
     assert!(text.contains("running 0 tests"), "the crate has doctests, which this check cannot read: {text}");
 }
 
+/// The directories cargo writes the build units of `target_dir` to, as cargo itself reports them
+/// (`cargo metadata` with that target dir: its target and build directories, one folder unless
+/// the toolchain or its configuration keeps them apart), each walked whole.
+fn build_dirs(manifest_dir: &Path, target_dir: &Path) -> Vec<PathBuf> {
+    let out = Command::new(env!("CARGO"))
+        .args(["metadata", "--no-deps", "--format-version", "1", "--offline", "--manifest-path"])
+        .arg(manifest_dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", target_dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let meta: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let mut dirs = vec![target_dir.to_path_buf()];
+    for key in ["target_directory", "build_directory"] {
+        if let Some(d) = meta[key].as_str().map(PathBuf::from)
+            && !dirs.contains(&d)
+        {
+            dirs.push(d);
+        }
+    }
+    dirs
+}
+
+/// Every dep-info file (`.d`) under `dir`, however deep, whose path below it passes through a
+/// folder named `profile`: `<profile>/deps/` in one of cargo's layouts, a build unit's own folder
+/// under `<profile>/build/` in its newer one. Where cargo puts a unit is cargo's to change; that
+/// a profile's units sit under the profile's folder is the one thing read here. rustc's
+/// incremental caches hold no dep-info and are passed over.
+fn dep_infos(dir: &Path, profile: &str, out: &mut std::collections::BTreeSet<PathBuf>) {
+    fn walk(base: &Path, dir: &Path, profile: &str, out: &mut std::collections::BTreeSet<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if entry.file_type().unwrap().is_dir() {
+                if path.file_name().is_some_and(|n| n != "incremental") {
+                    walk(base, &path, profile, out);
+                }
+            } else if path.extension().is_some_and(|e| e == "d") && path.strip_prefix(base).is_ok_and(|r| r.components().any(|c| c.as_os_str() == profile)) {
+                out.insert(path);
+            }
+        }
+    }
+    if dir.is_dir() {
+        walk(dir, dir, profile, out);
+    }
+}
+
 /// Where this test's own build put its artifacts: the target dir the nested build reuses, so
-/// nothing is rebuilt twice.
+/// nothing is rebuilt twice. The folder above the test's executable that cargo marks as its own
+/// (`CACHEDIR.TAG`), whatever layout put the executable under it.
 fn own_target_dir() -> PathBuf {
     let exe = std::env::current_exe().unwrap();
-    // <target>/debug/deps/<test>.exe
-    exe.parent().unwrap().parent().unwrap().parent().unwrap().to_path_buf()
+    exe.ancestors().skip(1).find(|d| d.join("CACHEDIR.TAG").is_file()).unwrap_or_else(|| panic!("no folder cargo marks as its own above {}", exe.display())).to_path_buf()
 }
 
 /// Every file of the crate: those under its folder (fixtures, the manifest and documents a
