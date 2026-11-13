@@ -542,7 +542,11 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     assert_eq!(page.eval(shown_js)["rows"], json!("51-100/100"), "still the last page, nothing past it");
     // The view shown anew without a pick (the series view, then this one: the page's one route for
     // a hash change, a tab or back): the window taken again, the rows stored since in it, the page
-    // the same, now a middle one, both its neighbours live.
+    // the same, now a middle one, both its neighbours live. The session's now is the one of the
+    // status the page last received (a status a second): shown once the page holds one from past
+    // the ten sorts (its live clock a second past their stamps), so its window takes them all.
+    let past = chrono::DateTime::from_timestamp_millis(now + 1_009).unwrap().format("%H:%M:%S").to_string();
+    page.wait_for(&format!(r#"(() => {{ const m = (document.querySelector(".live")?.textContent ?? "").match(/(\d\d:\d\d:\d\d)/); return m && (m[1] >= "{past}" || ("{past}" > "23:59" && m[1] < "00:01")) ? true : null; }})()"#), Duration::from_secs(20));
     page.eval(r#"location.hash = "series""#);
     page.wait_for(r#"document.querySelector(".list button[data-series]") ? true : null"#, Duration::from_secs(20));
     page.eval(r#"location.hash = "tables""#);
