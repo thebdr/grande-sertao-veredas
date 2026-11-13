@@ -93,6 +93,17 @@ const DRAWN: &str = r#"(() => {
     return at === el || el.contains(at);
   };
   const tagOf = (id, key) => document.querySelector(`.sv-overlay .sv-tag[data-for="${id}"]` + (key === null ? `:not([data-key])` : `[data-key="${key}"]`));
+  // A shape's stroke on the screen as the page draws it unselected (the selection's own stroke
+  // apart): its width carried through its matrix to the screen.
+  const strokePx = (el) => {
+    const c = el.getScreenCTM();
+    if (!c || !(el instanceof SVGGeometryElement)) return 0;
+    const was = el.classList.contains("sv-selected");
+    el.classList.remove("sv-selected");
+    const w = parseFloat(getComputedStyle(el).strokeWidth) || 0;
+    if (was) el.classList.add("sv-selected");
+    return w * Math.sqrt(Math.abs(c.a * c.d - c.b * c.c));
+  };
   const out = {};
   for (const el of document.querySelectorAll("svg.plant [data-object][id]")) {
     const id = el.id;
@@ -103,7 +114,8 @@ const DRAWN: &str = r#"(() => {
     const value = document.querySelector(`.sv-overlay .sv-value[data-for="${id}"]`);
     out[id] = {
       kind: el instanceof SVGGeometryElement ? "shape" : el instanceof SVGTextElement ? "text" : "group",
-      value: value ? [value.textContent, shown(value)] : null,
+      value: value ? [value.textContent, shown(value), rect(value)] : null,
+      stroke_px: strokePx(el),
       state: st(el), hidden: el.classList.contains("sv-hidden"), transform: el.getAttribute("transform"), rect: rect(el), shown: shown(el), hit: marker ? hit(el) : null, selected: el.classList.contains("sv-selected"),
       tag_keys: [...document.querySelectorAll(`.sv-overlay .sv-tag[data-for="${id}"][data-key]`)].map((t) => t.dataset.key).sort(),
       tag: tag ? tag.textContent : null, tag_state: st(tag), tag_rect: rect(tag), tag_shown: shown(tag), label_rect: rect(label), label_shown: shown(label),
@@ -319,6 +331,45 @@ const PROBES: &str = r##"
   for (const [el] of made) el.remove();
   return out;
 "##;
+
+/// Every place outside the drawing where the page writes a state's class (`st-`, `sv-state-`), read
+/// from the document as it stands (the headline, the attention list, the legend, the alarm strip,
+/// the rules' badges, the Alarms view: whatever is there now), by its parent and its class's
+/// family: a probe per state put beside the first element found there, its state word swapped for
+/// each, and every state painted otherwise than every other.
+const PLACES: &str = r##"(() => {
+  const STATE = new RegExp(`^(st-(?:[a-z]+-)?|sv-state-)(${STATES.join("|")})$`);
+  const family = (cls) => cls.split(/\s+/).map((c) => c.replace(STATE, "$1*")).join(" ");
+  const sig = (el) => { const c = getComputedStyle(el); return ["color", "background-color", "fill", "stroke", "border-top-color"].map((q) => c.getPropertyValue(q)).join(" | "); };
+  const places = new Map();
+  for (const el of document.querySelectorAll("[class]")) {
+    if (el.closest("svg.plant")) continue;
+    const cls = el.getAttribute("class") || "";
+    const fam = family(cls);
+    if (fam === cls) continue;
+    const where = `${el.parentElement?.getAttribute("class") ?? el.parentElement?.tagName} > ${fam}`;
+    if (!places.has(where)) places.set(where, el);
+  }
+  const out = [];
+  for (const [where, el] of places) {
+    const seen = new Map();
+    for (const s of STATES) {
+      const p = el.cloneNode(true);
+      p.setAttribute("class", family(el.getAttribute("class")).replaceAll("*", s));
+      el.after(p);
+      const v = sig(p);
+      p.remove();
+      if (seen.has(v)) out.push(`${where} in ${s} painted as in ${seen.get(v)}: ${v}`);
+      else seen.set(v, s);
+    }
+  }
+  return [[...places.keys()].sort(), out];
+})()"##;
+
+/// The places a state's class is written outside the drawing, and each told apart in every state.
+fn places_told_apart(page: &mut Browser) -> Value {
+    page.eval(&format!("(() => {{ const STATES = {};\nreturn {PLACES};\n}})()", serde_json::to_string(&every_state()).unwrap()))
+}
 
 /// What carries the selection in the drawing: an element by its id, a keyed marker's clone by its
 /// object's id and its key.
@@ -551,18 +602,35 @@ fn differences(drawn: &Value, feed: &Value, on_layout: &[(String, String)], unit
         }
         match show.as_str() {
             "value" => {
-                // Its value over it, with its unit, shown.
+                // Its value over it, with its unit, shown, centred across it and standing within
+                // its height.
                 let unit = units.get(id).map(String::as_str).unwrap_or("");
                 let text = v["text"].as_str().map(|t| if unit.is_empty() { t.to_string() } else { format!("{t} {unit}") }).unwrap_or_default();
-                if d["value"] != json!([text, true]) {
-                    out.push(format!("{id}: its value drawn {}, the feed says {text:?}", d["value"]));
+                let over = matches!((centre(&d["value"][2]), edges(&d["rect"])), (Some((vx, vy)), Some((_, et, _, eb, ec))) if near(vx, ec, 3.0) && et <= vy && vy <= eb);
+                if d["value"][0] != json!(text) || d["value"][1] != json!(true) || !over {
+                    out.push(format!("{id}: its value drawn {}, the feed says {text:?}, over it at {}", d["value"], d["rect"]));
                 }
             }
             "level" => {
                 let f = v["level"].as_f64().unwrap();
                 let fill = &d["fill"];
-                let ok = match (edges(&fill["rect"]), edges(&d["rect"])) {
-                    (Some((fl, ft, fr, fb, _)), Some((el, et, er, eb, _))) => near(fl, el, 1.0) && near(fr, er, 1.0) && near(fb, eb, 1.0) && near(fb - ft, f * (eb - et), 1.0),
+                // An element with no width or no height (a line) filled over its stroke: its box
+                // widened to the stroke's width on the screen.
+                let sw = d["stroke_px"].as_f64().unwrap_or(0.0);
+                let widened = edges(&d["rect"]).map(|(el, et, er, eb, _)| {
+                    let (mut l, mut t, mut r, mut b) = (el, et, er, eb);
+                    if r - l < 0.5 && sw > r - l {
+                        let c = (l + r) / 2.0;
+                        (l, r) = (c - sw / 2.0, c + sw / 2.0);
+                    }
+                    if b - t < 0.5 && sw > b - t {
+                        let c = (t + b) / 2.0;
+                        (t, b) = (c - sw / 2.0, c + sw / 2.0);
+                    }
+                    (l, t, r, b)
+                });
+                let ok = match (edges(&fill["rect"]), widened) {
+                    (Some((fl, ft, fr, fb, _)), Some((el, et, er, eb))) => near(fl, el, 1.0) && near(fr, er, 1.0) && near(fb, eb, 1.0) && near(fb - ft, f * (eb - et), 1.0),
                     _ => false,
                 };
                 let painted = fill["hit"] == json!(true) || d["kind"] == json!("text") || edges(&fill["rect"]).is_some_and(|(_, ft, _, fb, _)| fb - ft < 2.0);
@@ -685,19 +753,27 @@ fn grown(mut ex: Example) -> Example {
         .replace("<rect id=\"outlet-3\" x=\"250\" y=\"4\" width=\"24\" height=\"28\"/>", "<g transform=\"translate(0 100)\"><rect id=\"outlet-3\" x=\"250\" y=\"4\" width=\"24\" height=\"28\"/></g>")
         // A keyed marker inside a moved group, as a drawing's layers put one: its clones stand at
         // their places whatever the group's transform.
-        .replace("<circle id=\"parcel-2\" r=\"5\"/>", "<circle id=\"parcel-2\" r=\"5\"/>\n  <g transform=\"translate(15 -10)\"><circle id=\"tracked\" r=\"4\"/></g>")
+        .replace("<circle id=\"parcel-2\" r=\"5\"/>", "<circle id=\"parcel-2\" r=\"5\"/>\n  <g transform=\"translate(15 -10) scale(2)\"><circle id=\"tracked\" r=\"4\"/></g>")
         .replace("</svg>", GROWN_SVG);
-    ex.binding = ex.binding.replacen("\n[[dashboard]]", GROWN_OBJECTS, 1);
+    ex.binding = ex.binding.replacen("\n[[dashboard]]", GROWN_OBJECTS, 1).replacen("\n[[dashboard]]", MORE_OBJECTS, 1);
     ex
 }
 
-/// The drawing grown further: a level bound to a circle (filled within its outline) and one bound
-/// to a text (within its glyphs), and a track of every element a marker can follow besides the
-/// loop's path, each with a marker on it.
-const GROWN_SVG: &str = r##"  <circle id="ring" cx="300" cy="110" r="12"/>
-  <text id="word" x="200" y="100" font-size="14">■■■</text>
+/// The drawing grown further: a level bound to a circle inside a turned group (filled within its
+/// outline, up the screen) and one bound to a skewed text (within its glyphs); a level on every
+/// other element a level can be bound to (a path, a line with no area, a polyline, a polygon, an
+/// ellipse); a track of every element a marker can follow besides the loop's path (the polyline's
+/// inside a skewed group), each with a marker on it (the rect's marker scaled by its own transform,
+/// the circle's by its own matrix).
+const GROWN_SVG: &str = r##"  <g transform="rotate(90 300 110)"><circle id="ring" cx="300" cy="110" r="12"/></g>
+  <text id="word" x="200" y="100" font-size="14" transform="skewX(10)">■■■</text>
+  <path id="lv-path" d="M 200 4 h 16 v 28 h -16 Z"/>
+  <line id="lv-line" x1="240" y1="4" x2="240" y2="32" stroke="#3a3a40" stroke-width="10"/>
+  <polyline id="lv-polyline" points="260,4 276,4 276,32 260,32"/>
+  <polygon id="lv-polygon" points="290,4 306,4 306,32 290,32"/>
+  <ellipse id="lv-ellipse" cx="330" cy="18" rx="9" ry="14"/>
   <line id="track-line" x1="90" y1="195" x2="130" y2="195" stroke="#26262A"/>
-  <polyline id="track-polyline" points="140,160 160,160 160,180" fill="none" stroke="#26262A"/>
+  <g transform="skewY(5)"><polyline id="track-polyline" points="140,160 160,160 160,180" fill="none" stroke="#26262A"/></g>
   <polygon id="track-polygon" points="170,160 190,160 190,180 170,180" fill="none" stroke="#26262A"/>
   <rect id="track-rect" x="200" y="160" width="20" height="20" fill="none" stroke="#26262A"/>
   <circle id="track-circle" cx="245" cy="175" r="10" fill="none" stroke="#26262A"/>
@@ -705,25 +781,32 @@ const GROWN_SVG: &str = r##"  <circle id="ring" cx="300" cy="110" r="12"/>
   <circle id="m-line" r="3"/>
   <circle id="m-polyline" r="3"/>
   <circle id="m-polygon" r="3"/>
-  <circle id="m-rect" r="3"/>
-  <circle id="m-circle" r="3"/>
+  <circle id="m-rect" r="3" transform="scale(2)"/>
+  <circle id="m-circle" r="3" transform="matrix(1.5 0 0 1.5 0 0)"/>
   <circle id="m-ellipse" r="3"/>
 </svg>"##;
+
+/// The levels on every other element a level can be bound to, and an object bound to one key of
+/// the keyed marker's series (on no element: its row and its side panel alone).
+const MORE_OBJECTS: &str = "\n[[object]]\nid = \"lv-path\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-line\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-polyline\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-polygon\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-ellipse\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"keyed\"\nlabel = \"Keyed\"\nvalue = { source = \"sorter\", series = \"at\", key = \"A1\" }\n\n[[dashboard]]";
 
 const GROWN_OBJECTS: &str = "\n[[object]]\nid = \"ring\"\nlabel = \"Ring\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"word\"\nlabel = \"Word\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"m-line\"\nlabel = \"On a line\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-line\"\n\n[[object]]\nid = \"m-polyline\"\nlabel = \"On a polyline\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-polyline\"\n\n[[object]]\nid = \"m-polygon\"\nlabel = \"On a polygon\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-polygon\"\n\n[[object]]\nid = \"m-rect\"\nlabel = \"On a rect\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-rect\"\n\n[[object]]\nid = \"m-circle\"\nlabel = \"On a circle\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-circle\"\n\n[[object]]\nid = \"m-ellipse\"\nlabel = \"On an ellipse\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-ellipse\"\n\n[[dashboard]]";
 
 /// Every level's fill against its element's outline: a shape's or a text's fill clipped by the
-/// element itself (its clip's `use` naming the element), and for a shape, a point inside the fill's
-/// box but outside the outline not taking the fill; a group's fill its box, unclipped.
+/// element itself (its clip's `use` naming the element, on the fill or a group holding it), and for
+/// a shape, a point inside the fill's box but outside the outline not taking the fill; a group's
+/// fill, and a shape's with no area (a line), its box, unclipped. Each level's element named by its
+/// tag.
 const LEVEL_OUTLINES: &str = r#"(() => [...document.querySelectorAll("svg.plant .sv-show-level[data-object]")].flatMap((el) => {
   const id = el.dataset.object;
   const kind = el instanceof SVGGeometryElement ? "shape" : el instanceof SVGTextElement ? "text" : "group";
   const fill = document.querySelector(`.sv-fill[data-for="${id}"]`);
-  const clip = fill.getAttribute("clip-path");
+  const clip = fill.closest("[clip-path]")?.getAttribute("clip-path") ?? null;
   const out = [];
-  if (kind === "group") {
-    if (clip) out.push(`${id}: a group's fill clipped (${clip})`);
-    return out.concat([`kind group`]);
+  const box = el.getBBox();
+  if (kind === "group" || el instanceof SVGLineElement || box.width === 0 || box.height === 0) {
+    if (clip) out.push(`${id}: a ${kind === "group" ? "group's" : "line's"} fill clipped (${clip})`);
+    return out.concat([`tag ${el.tagName}`]);
   }
   const ref = clip && clip.match(/url\(["']?#([^"')]+)/);
   const use = ref ? document.getElementById(ref[1])?.querySelector("use") : null;
@@ -740,7 +823,7 @@ const LEVEL_OUTLINES: &str = r#"(() => [...document.querySelectorAll("svg.plant 
       if (at === fill) out.push(`${id}: its fill painted outside its outline at (${x}, ${y})`);
     }
   }
-  return out.concat([`kind ${kind}`]);
+  return out.concat([`tag ${el.tagName}`]);
 }))()"#;
 
 #[test]
@@ -748,7 +831,7 @@ fn the_page_draws_the_layout_from_the_feed() {
     let dir = tempfile::tempdir().unwrap();
     let bench = plant(&dir.path().join("bench"));
     let ex = grown(live_example(&bench, false));
-    for grew in ["<g transform=\"translate(0 30)\"><path id=\"loop\"", "translate(-20 110)", "<g transform=\"translate(0 100)\"><rect id=\"outlet-3\"", "<g id=\"outlet-1\"><rect x=\"130\" y=\"4\" width=\"24\" height=\"28\" stroke=", "<rect id=\"speed\"", "<g transform=\"translate(15 -10)\"><circle id=\"tracked\""] {
+    for grew in ["<g transform=\"translate(0 30)\"><path id=\"loop\"", "translate(-20 110)", "<g transform=\"translate(0 100)\"><rect id=\"outlet-3\"", "<g id=\"outlet-1\"><rect x=\"130\" y=\"4\" width=\"24\" height=\"28\" stroke=", "<rect id=\"speed\"", "<g transform=\"translate(15 -10) scale(2)\"><circle id=\"tracked\""] {
         assert!(ex.svg.contains(grew), "{grew}: {}", ex.svg);
     }
     let path = write_example(dir.path(), &ex);
@@ -772,6 +855,7 @@ fn the_page_draws_the_layout_from_the_feed() {
     assert_eq!(on_layout.iter().map(|(i, s)| (i.as_str(), s.as_str())).collect::<Vec<_>>(), [
         ("speed", "value"), ("infeed", "state"), ("outlet-1", "level"), ("outlet-2", "level"), ("outlet-3", "level"), ("parcel-1", "move"), ("parcel-2", "move"), ("tracked", "move"),
         ("ring", "level"), ("word", "level"), ("m-line", "move"), ("m-polyline", "move"), ("m-polygon", "move"), ("m-rect", "move"), ("m-circle", "move"), ("m-ellipse", "move"),
+        ("lv-path", "level"), ("lv-line", "level"), ("lv-polyline", "level"), ("lv-polygon", "level"), ("lv-ellipse", "level"),
     ]);
     let shows: std::collections::BTreeSet<&str> = on_layout.iter().map(|(_, s)| s.as_str()).collect();
     assert_eq!(shows, every_show().into_iter().collect(), "every way of showing the binding knows is on the layout");
@@ -813,6 +897,9 @@ fn the_page_draws_the_layout_from_the_feed() {
     let around_when = |page: &mut Browser, cond: &str| page.wait_for(&format!("(() => {{ const a = {AROUND}; return ({cond}) ? a : null; }})()"), Duration::from_secs(10));
     let (drawn, _) = settle(&mut page, "first paint", &[]);
     assert_eq!(probe_states(&mut page), json!([]), "a state drawn in the accent on some surface");
+    let first_places = places_told_apart(&mut page);
+    assert_eq!(first_places[1], json!([]), "a place painting two states alike: {}", first_places[0]);
+    assert!(first_places[0].as_array().unwrap().iter().any(|p| p.as_str().unwrap().starts_with("legend")), "the legend among the places: {}", first_places[0]);
     // Opened on another view, the layout behind it while the feed's snapshot is painted: once
     // shown, every marker stands at its place (nothing is placed off screen, everything is when
     // the layout is shown).
@@ -831,25 +918,39 @@ fn the_page_draws_the_layout_from_the_feed() {
     assert!(near(at("parcel-1").0, 309.96, 0.05) && near(at("parcel-1").1, 70.0, 0.05), "{:?}", at("parcel-1"));
     assert!(near(at("parcel-2").0, 90.04, 0.05) && near(at("parcel-2").1, 210.0, 0.05), "{:?}", at("parcel-2"));
     assert_eq!((d("tracked", "hidden"), d("tracked", "shown"), d("tracked", "clones")), (json!(true), json!(false), json!([])), "no position yet");
+    // Every function a transform can be written with (the browser's own list of them) somewhere in
+    // the drawing: on an element of its own, a marker's, a level's, a group around a marker, a level
+    // or a path.
+    let grammar = page.eval(&format!(
+        r#"(() => {{ const doc = new DOMParser().parseFromString({}, "image/svg+xml"); const used = new Set(); for (const el of doc.querySelectorAll("*")) {{ const l = el.transform?.baseVal; if (l) for (let i = 0; i < l.numberOfItems; i++) used.add(l.getItem(i).type); }} const all = Object.keys(SVGTransform).filter((k) => k.startsWith("SVG_TRANSFORM_") && k !== "SVG_TRANSFORM_UNKNOWN"); return [all.length, all.filter((k) => !used.has(SVGTransform[k]))]; }})()"#,
+        serde_json::to_string(&ex.svg).unwrap()
+    ));
+    assert_eq!(grammar, json!([6, []]), "every transform function in the drawing");
+    // A marker drawn at its own size through its own transform (the rect's twice, the circle's half
+    // again, beside an unscaled one of the same radius), not set aside by its place.
+    let width = |id: &str| d(id, "rect")[2].as_f64().unwrap();
+    assert!(near(width("m-rect") / width("m-polygon"), 2.0, 0.03) && near(width("m-circle") / width("m-polygon"), 1.5, 0.03), "m-rect {} m-circle {} m-polygon {}", width("m-rect"), width("m-circle"), width("m-polygon"));
 
     // Around it: the headline in its states, the objects not normal in order of weight.
-    let around = around_when(&mut page, "a.attention.length === 4 && a.headline.length === 2");
+    let around = around_when(&mut page, "a.attention.length === 5 && a.headline.length === 2");
     assert_eq!(around["headline"], json!([["speed", "1.5", "mono st-text-normal"], ["read-rate", "—", "mono st-text-stale"]]));
-    assert_eq!(around["attention_head"], json!("Needs attention · 4"));
+    assert_eq!(around["attention_head"], json!("Needs attention · 5"));
     let quiet = json!([
         ["outlet-3", "■", "mark st-warn", "Outlet 3 full"],
         ["outlet-2", "■", "mark st-near", "Outlet 2 near full"],
         ["read-rate", "◌", "mark st-stale", "Read rate no value"],
         ["tracked", "◌", "mark st-stale", "Tracked no value"],
+        ["keyed", "◌", "mark st-stale", "Keyed no value"],
     ]);
     assert_eq!(around["attention"], quiet);
 
-    // Every level within its element's outline, every kind of element a level binds to among them
-    // (a shape, a text, a group).
+    // Every level within its element's outline, every element a level can be bound to among them:
+    // each the reader lets a marker follow (its own list), a text and a group.
     let outlines = page.eval(LEVEL_OUTLINES);
-    let kinds: std::collections::BTreeSet<&str> = outlines.as_array().unwrap().iter().filter_map(|v| v.as_str()?.strip_prefix("kind ")).collect();
-    assert_eq!(kinds, ["group", "shape", "text"].into_iter().collect(), "{outlines}");
-    let issues: Vec<&Value> = outlines.as_array().unwrap().iter().filter(|v| !v.as_str().unwrap().starts_with("kind ")).collect();
+    let tags: std::collections::BTreeSet<&str> = outlines.as_array().unwrap().iter().filter_map(|v| v.as_str()?.strip_prefix("tag ")).collect();
+    let every_element: std::collections::BTreeSet<&str> = veredas_supervisao::svg::FOLLOWABLE.into_iter().chain(["text", "g"]).collect();
+    assert_eq!(tags, every_element, "{outlines}");
+    let issues: Vec<&Value> = outlines.as_array().unwrap().iter().filter(|v| !v.as_str().unwrap().starts_with("tag ")).collect();
     assert!(issues.is_empty(), "{issues:?}");
 
     // Every element the layout binds and draws takes the selection by a click and carries it
@@ -868,6 +969,13 @@ fn the_page_draws_the_layout_from_the_feed() {
     deselect(&mut page);
     settle(&mut page, "the selection cleared by a click on the background", &[]);
     pick_every_row(&mut page, &drawn, &settle);
+    // Each way the side panel's sparkline names its series: a keyed marker picked whole reads every
+    // key's, an object bound to one key that key's (their rows picked just now, before any key was
+    // clicked).
+    let query = |u: &str, k: &str| u.split(['?', '&']).find_map(|kv| kv.strip_prefix(&format!("{k}="))).map(String::from);
+    let keyed_sparks = |page: &mut Browser| page.requests().into_iter().map(|(u, _)| u).filter(|u| u.contains("/portal/api/series/data?") && query(u, "source").as_deref() == Some("sorter") && query(u, "series").as_deref() == Some("at")).map(|u| query(&u, "key")).collect::<Vec<_>>();
+    let before_click = keyed_sparks(&mut page);
+    assert!(before_click.contains(&None) && before_click.contains(&Some("A1".to_string())) && before_click.iter().all(|k| k.is_none() || k.as_deref() == Some("A1")), "the marker whole, the object bound to A1 by its key: {before_click:?}");
 
     // A click of the pointer on outlet 3 (full, so its fill covers it) selects it: the side panel
     // holds its value, state, sparkline (its own series over its last half hour) and offered
@@ -878,10 +986,9 @@ fn the_page_draws_the_layout_from_the_feed() {
     assert_eq!(around["buttons"], json!([["Release", true]]), "offered, and off while the switch is off");
     assert_eq!(around["gate"], json!("Writes go through portal. Its write switch is off."));
     let sparks: Vec<String> = page.requests().into_iter().map(|(u, _)| u).filter(|u| u.contains("/portal/api/series/data?")).collect();
-    let query = |u: &str, k: &str| u.split(['?', '&']).find_map(|kv| kv.strip_prefix(&format!("{k}="))).map(String::from);
     assert!(
-        sparks.iter().any(|u| query(u, "source").as_deref() == Some("plc") && query(u, "series").as_deref() == Some("fill3") && query(u, "to").zip(query(u, "from")).is_some_and(|(t, f)| t.parse::<i64>().unwrap() - f.parse::<i64>().unwrap() == 1_800_000)),
-        "the sparkline reads outlet 3's own series over half an hour: {sparks:?}"
+        sparks.iter().any(|u| query(u, "source").as_deref() == Some("plc") && query(u, "series").as_deref() == Some("fill3") && query(u, "key").is_none() && query(u, "to").zip(query(u, "from")).is_some_and(|(t, f)| t.parse::<i64>().unwrap() - f.parse::<i64>().unwrap() == 1_800_000)),
+        "the sparkline reads outlet 3's own series, whole, over half an hour: {sparks:?}"
     );
     host.session("loop").unwrap().set_writes_armed(true);
     page.wait_for(r#"(() => { const b = document.querySelector(".side .actions button"); return b && !b.disabled; })()"#, Duration::from_secs(10));
@@ -907,11 +1014,14 @@ fn the_page_draws_the_layout_from_the_feed() {
         object(&s, "infeed")["state"] == json!("alarm") && object(&s, "outlet-1")["state"] == json!("disabled") && object(&s, "speed")["state"] == json!("warn")
     }));
     settle(&mut page, "an alarm, a warning and a disabled object", &["outlet-3"]);
-    let around = around_when(&mut page, "a.attention.length === 7 && a.headline[0][1] === '0.2'");
+    let around = around_when(&mut page, "a.attention.length === 8 && a.headline[0][1] === '0.2'");
     // The Alarms view: every state it writes, none in the accent.
     page.eval("location.hash = 'alarms'; true");
     page.wait_for("document.querySelectorAll('.dt tbody tr').length >= 7 || null", Duration::from_secs(10));
     assert_eq!(accent_on_states(&mut page), json!([]), "the Alarms view: a state drawn in the accent");
+    let alarm_places = places_told_apart(&mut page);
+    assert_eq!(alarm_places[1], json!([]), "the Alarms view: a place painting two states alike: {}", alarm_places[0]);
+    assert!(alarm_places[0].as_array().unwrap().iter().any(|p| p.as_str().unwrap().starts_with("strip-items")), "the alarm strip among the places: {}", alarm_places[0]);
     page.eval("location.hash = 'layout'; true");
     settle(&mut page, "the layout shown again", &["outlet-3"]);
     assert_eq!(around["headline"], json!([["speed", "0.2", "mono st-text-warn"], ["read-rate", "—", "mono st-text-stale"]]));
@@ -923,6 +1033,7 @@ fn the_page_draws_the_layout_from_the_feed() {
         ["outlet-1", "▨", "mark st-disabled", "Outlet 1 off"],
         ["read-rate", "◌", "mark st-stale", "Read rate no value"],
         ["tracked", "◌", "mark st-stale", "Tracked no value"],
+        ["keyed", "◌", "mark st-stale", "Keyed no value"],
     ]));
     // Back to normal, each leaves the list, and the headline follows.
     plc.set("infeed", 1);
@@ -933,7 +1044,7 @@ fn the_page_draws_the_layout_from_the_feed() {
         ["infeed", "outlet-1", "speed"].iter().all(|id| object(&s, id)["state"] == json!("normal"))
     }));
     settle(&mut page, "back to normal", &["outlet-3"]);
-    let around = around_when(&mut page, "a.attention.length === 4 && a.headline[0][1] === '1.5'");
+    let around = around_when(&mut page, "a.attention.length === 5 && a.headline[0][1] === '1.5'");
     assert_eq!((around["attention"].clone(), around["headline"][0].clone()), (quiet.clone(), json!(["speed", "1.5", "mono st-text-normal"])));
 
     // A keyed marker: one per key, each at its own place in the object's state (warned, B2's 50
@@ -951,13 +1062,28 @@ fn the_page_draws_the_layout_from_the_feed() {
     assert!(tags.iter().all(|(_, t)| *t == json!("■ far")), "{tags:?}");
     let around = around_when(&mut page, "a.attention.length === 4 && a.attention[1][0] === 'tracked'");
     assert_eq!(around["attention"][1], json!(["tracked", "■", "mark st-warn", "Tracked far"]));
+    // Drawn through its group's scale: a clone twice the radius it is written with (4, beside a
+    // marker of 3).
+    let clone_w = drawn["tracked"]["clones"][0]["rect"][2].as_f64().unwrap();
+    assert!(near(clone_w / width("m-polygon"), 8.0 / 3.0, 0.04), "a clone {clone_w} wide, m-polygon {}", width("m-polygon"));
     // Every row again, the keyed marker's picked whole: every one of its clones carries it.
     pick_every_row(&mut page, &drawn, &settle);
+    // Both keys said again, as they were, so neither is forgotten (6 s after its last) before A1 is
+    // clicked, however slow the rows were to pick.
+    let now = store_now();
+    append(&log, &[format!("{} POS item=A1 at=10", stamp(now)), format!("{} POS item=B2 at=50", stamp(now))]);
+    let positions = || host.session("loop").unwrap().live().store.query_rows("positions", &veredas_portal::store::RowsQuery { limit: 1, ..Default::default() }).map(|p| p.total).unwrap_or(0);
+    assert!(wait(Duration::from_secs(20), || positions() >= 4), "both keys said again: {} rows", positions());
     let a1 = drawn["tracked"]["clones"].as_array().unwrap().iter().find(|c| c["key"] == json!("A1")).unwrap()["rect"].clone();
+    let sparks_before = keyed_sparks(&mut page).len();
     click_at(&mut page, &a1);
     let around = around_when(&mut page, "a.selected === 'Tracked · A1'");
     assert_eq!(around["value"], json!("10"), "A1's own value, not the latest of any key");
     settle(&mut page, "A1 selected", &["tracked A1"]);
+    // A key picked reads that key's sparkline.
+    page.wait_for(r#"document.querySelector(".side .spark-wrap")?.children.length > 0 || null"#, Duration::from_secs(10));
+    let after_click = keyed_sparks(&mut page);
+    assert!(after_click.len() > sparks_before && after_click[sparks_before..].iter().all(|k| k.as_deref() == Some("A1")), "A1 picked reads A1's sparkline: {after_click:?}");
     // A1 moves on (to 30, so the marker is normal again), B2 says nothing more: B2 is dropped with
     // its tag once its 6 s pass, A1 drawn at its new place, still selected, its new value beside,
     // and the marker leaves the attention list. Two and a half seconds after the first two, so A1

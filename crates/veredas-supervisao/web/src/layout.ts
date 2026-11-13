@@ -19,7 +19,11 @@ interface Bound {
   el: SVGGraphicsElement;
   /// The element's own box, in its own coordinates (a marker is placed by its centre).
   box: DOMRect;
-  /// The same box in its parent's coordinates, where a level's fill is drawn.
+  /// A marker's own transform as the drawing writes it, kept under the place the page gives it.
+  own: string;
+  ownM: DOMMatrix;
+  /// The box a level fills, in the overlay's frame (the screen's, up to the view's zoom): the
+  /// element's box there, widened to its stroke where it has no width or no height (a line).
   fillBox: Box;
   tag: SVGTextElement;
   label: SVGTextElement;
@@ -100,25 +104,45 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     el.classList.add("sv-obj", `sv-show-${def.show}`, "sv-state-stale");
     el.dataset.object = def.id;
     const box = el.getBBox();
-    // Where the element stands in the overlay and in its parent, its transforms followed.
+    // Where the element stands in the overlay, its transforms (and its ancestors') followed.
     const ob = boxIn(overlay, el, box);
-    const fillBox = boxIn(el.parentNode as SVGGraphicsElement, el, box);
     const below = ob.y + ob.height + fontSize * 1.05;
     const tag = s("text", { x: ob.x + ob.width / 2, y: below, class: "sv-tag", "font-size": fontSize * 0.8, "text-anchor": "middle", "data-for": def.id }) as SVGTextElement;
     const label = s("text", { x: ob.x + ob.width / 2, y: ob.y - fontSize * 0.35, class: "sv-label", "font-size": fontSize * 0.85, "text-anchor": "middle", "data-for": def.id }, def.label) as SVGTextElement;
-    const b: Bound = { def, el, box, fillBox, tag, label, clones: new Map(), lastPlace: new Map(), tags: new Map() };
+    const own = el.getAttribute("transform") ?? "";
+    // Its own transform as one matrix (read, never consolidated in place).
+    let ownM = new DOMMatrix();
+    const list = el.transform?.baseVal;
+    if (list) for (let i = 0; i < list.numberOfItems; i++) { const t = list.getItem(i).matrix; ownM = ownM.multiply(new DOMMatrix([t.a, t.b, t.c, t.d, t.e, t.f])); }
+    // An element with no area (a line, a straight path) is filled over its stroke.
+    const noArea = el instanceof SVGLineElement || box.width === 0 || box.height === 0;
+    const fillBox = { ...ob };
+    const oc0 = overlay.getCTM(), ec0 = el.getCTM();
+    if (noArea && oc0 && ec0) {
+      const m = oc0.inverse().multiply(ec0);
+      const w = (parseFloat(getComputedStyle(el).strokeWidth) || 0) * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
+      if (fillBox.width < w) { fillBox.x -= (w - fillBox.width) / 2; fillBox.width = w; }
+      if (fillBox.height < w) { fillBox.y -= (w - fillBox.height) / 2; fillBox.height = w; }
+    }
+    const b: Bound = { def, el, box, own, ownM, fillBox, tag, label, clones: new Map(), lastPlace: new Map(), tags: new Map() };
     if (def.show === "level") {
-      // The fill in the element's parent, over the element's box as transformed there, clipped
-      // by the element itself when it is a shape or a text (the `use` draws it with its own
-      // transform, in the same space); a clip's `use` may draw nothing else, so a group fills
-      // its box.
+      // The fill rises up the screen over the element's box, whatever turns, skews or scales the
+      // element and its groups: a rect in the overlay's frame, carried into the element's parent
+      // by a frame of the matrix between them. Its holder, in the parent's own space, is clipped
+      // by the element itself when it is a shape or a text with an area (the clip's `use` draws
+      // it with its own transform, in that same space); a clip's `use` may draw nothing else, so
+      // a group, and an element with no area, fills its box.
       b.fill = s("rect", { x: fillBox.x, y: fillBox.y + fillBox.height, width: fillBox.width, height: 0, class: "sv-fill", "data-for": def.id }) as SVGRectElement;
-      if (el instanceof SVGGeometryElement || el instanceof SVGTextElement) {
+      const pc = (el.parentNode as SVGGraphicsElement).getCTM();
+      const m = pc && oc0 ? pc.inverse().multiply(oc0) : new DOMMatrix();
+      const frame = s("g", { transform: `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})` }, b.fill);
+      const holder = s("g", { class: "sv-fill-holder", "data-for": def.id }, frame);
+      if ((el instanceof SVGGeometryElement || el instanceof SVGTextElement) && !noArea) {
         const clipId = `sv-clip-${def.id}`;
         defsEl.append(s("clipPath", { id: clipId }, s("use", { href: `#${def.id}` })));
-        b.fill.setAttribute("clip-path", `url(#${clipId})`);
+        holder.setAttribute("clip-path", `url(#${clipId})`);
       }
-      el.after(b.fill);
+      el.after(holder);
     }
     if (def.show === "value") {
       b.valueText = s("text", { x: ob.x + ob.width / 2, y: ob.y + ob.height / 2 + fontSize * 0.35, class: "sv-value", "font-size": fontSize, "text-anchor": "middle", "data-for": def.id }) as SVGTextElement;
@@ -171,21 +195,28 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     if (!pc || !ec) return;
     const m = pc.inverse().multiply(ec);
     const q = new DOMPoint(pt.x, pt.y).matrixTransform(m);
-    const cx = b.box.x + b.box.width / 2;
-    const cy = b.box.y + b.box.height / 2;
+    // Its centre where its own transform (a scale, a turn) puts it, set on the path's point, its
+    // own transform kept under the place.
+    const c = new DOMPoint(b.box.x + b.box.width / 2, b.box.y + b.box.height / 2).matrixTransform(b.ownM);
+    const dx = q.x - c.x, dy = q.y - c.y;
     const prev = b.lastPlace.get(key);
     // A wrap around the path jumps, never slides back across the drawing.
     // The first place and a wrap around the path are set at once; a step slides.
     el.classList.toggle("sv-jump", prev === undefined || Math.abs(prev - place) > 0.5);
     b.lastPlace.set(key, place);
-    el.setAttribute("transform", `translate(${(q.x - cx).toFixed(2)} ${(q.y - cy).toFixed(2)})`);
-    // Its mark and word below it, in the overlay's coordinates.
+    el.setAttribute("transform", `translate(${dx.toFixed(2)} ${dy.toFixed(2)})${b.own ? ` ${b.own}` : ""}`);
+    // Its mark and word below it, in the overlay's coordinates: its box carried there through the
+    // place just set (not through a slide still running), its own transform and its groups'.
     const oc = overlay.getCTM();
     if (oc) {
-      const r = new DOMPoint(pt.x, pt.y).matrixTransform(oc.inverse().multiply(ec));
+      // As DOM matrices: an SVG matrix multiplies none but its own kind.
+      const dom = (k: DOMMatrixReadOnly | SVGMatrix) => new DOMMatrix([k.a, k.b, k.c, k.d, k.e, k.f]);
+      const to = dom(oc).inverse().multiply(dom(pc)).multiply(new DOMMatrix().translate(dx, dy)).multiply(b.ownM);
+      const { x, y, width, height } = b.box;
+      const pts = [[x, y], [x + width, y], [x, y + height], [x + width, y + height]].map(([px, py]) => new DOMPoint(px, py).matrixTransform(to));
       const t = markerTag(b, key);
-      t.setAttribute("x", r.x.toFixed(2));
-      t.setAttribute("y", (r.y + b.box.height / 2 + fontSize * 0.9).toFixed(2));
+      t.setAttribute("x", ((Math.min(...pts.map((p) => p.x)) + Math.max(...pts.map((p) => p.x))) / 2).toFixed(2));
+      t.setAttribute("y", (Math.max(...pts.map((p) => p.y)) + fontSize * 0.9).toFixed(2));
     }
   }
 
