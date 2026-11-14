@@ -10,15 +10,15 @@
     "writes"
   ],
   "exitCode": 0,
-  "outputSha": "0c2d7718ada19a76371cb16474cc82d3ed6f8e1195910c1a7bdb4c9e7f1c0256",
-  "outputTail": "\nrunning 1 test\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.08s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.59s\n     Running tests\\writes.rs (target\\debug\\deps\\writes-d7df7d056c3b718d.exe)",
-  "ranAt": "2026-11-13T23:50:53.321Z",
-  "headCommit": "1008409bbc8a259bb03b0d7138d1df8c6240fd6e",
+  "outputSha": "2b75e21cfdd07ca4fe665cce7a1ed279411ec0987d320dde68962652556e177d",
+  "outputTail": "\nrunning 1 test\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.52s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.13s\n     Running tests\\writes.rs (target\\debug\\deps\\writes-6ce7c1b2f8355b43.exe)",
+  "ranAt": "2026-11-14T03:40:43.255Z",
+  "headCommit": "ef19c54e5fa6be00f297318833490967c9558040",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/writes.rs",
       "file": "crates/veredas-supervisao/tests/writes.rs",
-      "fileSha": "4566ce1ffafaba7cbaa81ddf63558bbabb231a65163f8f911481a91ccdff3caf"
+      "fileSha": "0ba45f6e03c6d5612248127eca34f07270b1838a2ce3bb4cf24d16eafdf86771"
     }
   ]
 }
