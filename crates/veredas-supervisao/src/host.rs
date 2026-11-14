@@ -124,10 +124,11 @@ impl Host {
         if let Some(s) = self.server.take() {
             s.abort();
         }
-        // Open streams never end on their own: the runtime is shut down under them.
-        if let Some(rt) = self.runtime.take() {
-            rt.shutdown_timeout(Duration::from_secs(2));
-        }
+        // Open streams never end on their own: the runtime is shut down under them, its tasks
+        // dropped where they wait. What is still computed on its blocking threads (a dashboard, a
+        // page of a table, a channel's send, each finite) is waited for: it holds the session's
+        // store, which closes only once it ends.
+        drop(self.runtime.take());
     }
 }
 

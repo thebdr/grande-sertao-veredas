@@ -153,7 +153,7 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     // the disabled state and a value shown, its project a text series for it.
     let binding = dir.path().join("loop/binding.toml");
     let text = std::fs::read_to_string(&binding).unwrap();
-    std::fs::write(&binding, text.replacen("\n[[dashboard]]", "\n[[object]]\nid = \"keyed\"\nlabel = \"Keyed\"\nvalue = { source = \"plc\", series = \"fill1\", key = \"A1\" }\nstates = [ { above = 90.5, state = \"near\" }, { at_most = 10, state = \"warn\", word = \"low\" }, { above = 1, source = \"plc\", series = \"fill2\", state = \"warn\", word = \"f2\" }, { below = -5, state = \"disabled\" } ]\n\n[[object]]\nid = \"note\"\nlabel = \"Note\"\nvalue = { source = \"sorter\", series = \"word\" }\nshow = \"value\"\nstates = [ { equals = \"jam\", state = \"alarm\" }, { below = 0.5, source = \"plc\", series = \"speed\", state = \"warn\", word = \"slow\" } ]\n\n[[dashboard]]", 1)).unwrap();
+    std::fs::write(&binding, text.replacen("\n[[dashboard]]", "\n[[object]]\nid = \"keyed\"\nlabel = \"Keyed\"\nvalue = { source = \"plc\", series = \"fill1\", key = \"A1\" }\nunit = \"%\"\nstates = [ { equals = 42, state = \"near\", word = \"forty-two\" }, { below = 3, source = \"plc\", state = \"warn\", word = \"own\" }, { above = 90.5, state = \"near\" }, { at_most = 10, state = \"warn\", word = \"low\" }, { above = 1, source = \"plc\", series = \"fill2\", state = \"warn\", word = \"f2\" }, { below = -5, state = \"disabled\" } ]\n\n[[object]]\nid = \"note\"\nlabel = \"Note\"\nvalue = { source = \"sorter\", series = \"word\" }\nshow = \"value\"\nstates = [ { equals = \"jam\", state = \"alarm\" }, { below = 0.5, source = \"plc\", series = \"speed\", state = \"warn\", word = \"slow\" } ]\n\n[[dashboard]]", 1)).unwrap();
     let project = dir.path().join("loop/project.toml");
     let text = std::fs::read_to_string(&project).unwrap();
     std::fs::write(&project, format!("{text}\n[[rule]]\nname = \"notes\"\npattern = 'NOTE (?P<word>\\w+)'\nscope = \"sorter\"\ntypes = {{ word = \"text\" }}\n")).unwrap();
@@ -279,7 +279,9 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
             assert_eq!(g["rules"].as_array().map(Vec::len), Some(o.rules.len()), "{session} {}", o.id);
             for (rule, r) in o.rules.iter().zip(g["rules"].as_array_mut().unwrap()) {
                 let n = |x: f64| {
-                    let t = veredas_supervisao::state::format_number(x, None);
+                    // Spelled here, not by the code's own `format_number`: every number of the
+                    // fixture reads the same as Rust writes it.
+                    let t = x.to_string();
                     if o.unit.is_empty() { t } else { format!("{t} {}", o.unit) }
                 };
                 let (kind, when) = match &rule.compare {
@@ -295,7 +297,8 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
                 series_seen.insert(match &rule.series {
                     Some(s) if *s != o.value && s.key.is_some() => "another series, with its key",
                     Some(s) if *s != o.value => "another series",
-                    _ => "its own series",
+                    Some(_) => "its own series, written out",
+                    None => "its own series, left to it",
                 });
                 let when = match &rule.series {
                     Some(s) if *s != o.value => {
@@ -311,7 +314,11 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
         }
     }
     assert_eq!(compares_seen.into_iter().collect::<Vec<_>>(), { let mut e = every_compare.to_vec(); e.sort(); e }, "every comparison a rule takes, in a view");
-    assert_eq!(series_seen.into_iter().collect::<Vec<_>>(), ["another series", "another series, with its key", "its own series"], "every series a rule reads, in a view");
+    assert_eq!(series_seen.into_iter().collect::<Vec<_>>(), ["another series", "another series, with its key", "its own series, left to it", "its own series, written out"], "every series a rule reads, in a view");
+    // Every comparison and both other-series forms met on an object with a unit (the keyed one), so
+    // a unit kept or dropped where the reference says otherwise shows.
+    let keyed = &want.sessions[0].binding.objects.iter().find(|o| o.id == "keyed").unwrap();
+    assert!(!keyed.unit.is_empty() && keyed.rules.iter().any(|r| matches!(r.compare, Compare::Equals(Comparand::Num(_)))) && keyed.rules.iter().any(|r| r.series.as_ref().is_some_and(|s| *s != keyed.value)));
     // Every way of showing and every state a rule names, as the reader lists them refusing another,
     // met in a view.
     let reader_list = |from: &str, to: &str| -> std::collections::BTreeSet<String> {
@@ -681,4 +688,66 @@ fn the_executable_serves_a_file_until_stdin_closes() {
     // Its sessions stopped, not dropped with the process: the store closed.
     let store = dir.path().join("loop/loop.duckdb");
     assert!(store.exists() && !dir.path().join("loop/loop.duckdb.wal").exists(), "the store was never closed: {:?}", std::fs::read_dir(dir.path().join("loop")).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>());
+}
+
+/// A stop waits for what is still computed: a dashboard over a view that takes seconds to read,
+/// asked a second before the stop, holds the session's live state (its store among it) until it
+/// ends, and the stop returns only after it, nothing left holding that state and the store closed
+/// (no write-ahead log left). The view is read once first, so the test knows the computation
+/// outlasts the stop's start by more than the two seconds a bounded wait once gave it.
+#[test]
+fn a_stop_waits_for_a_dashboard_still_computed() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = plant(&dir.path().join("bench-a"));
+    let b = plant(&dir.path().join("bench-b"));
+    let path = two_plants(dir.path(), &a, &b);
+    // Read twice in each of two panels (its count, then its page), the store free between them:
+    // about six seconds on the desk alone, several times that beside the whole suite.
+    let n: u64 = 14_000;
+    let project = dir.path().join("loop/project.toml");
+    let text = std::fs::read_to_string(&project).unwrap().replace("store = \"ram\"", "store = { disk = \"loop.duckdb\" }");
+    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"slow\"\nsql = \"SELECT count(*) AS n FROM range({n}) a, range({n}) b WHERE (a.range * 31 + b.range) % 1000003 = 1\"\n")).unwrap();
+    let binding = dir.path().join("loop/binding.toml");
+    let text = std::fs::read_to_string(&binding).unwrap();
+    let slow = text.matches("\n[[dashboard]]").count();
+    std::fs::write(&binding, format!("{text}\n[[dashboard]]\nname = \"Slow\"\n\n[[dashboard.panel]]\nkind = \"table\"\ntable = \"slow\"\n\n[[dashboard.panel]]\nkind = \"table\"\ntable = \"slow\"\n")).unwrap();
+    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let addr = host.addr();
+    // Read once whole: how long the dashboard takes to compute here (waited for as long as a
+    // loaded machine needs, beyond the twenty seconds the shared reader allows).
+    let started = std::time::Instant::now();
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(300))).unwrap();
+    // (HTTP/1.0: the body comes whole, never in chunks.)
+    s.write_all(format!("GET /s/loop/dashboard/{slow} HTTP/1.0\r\nHost: {addr}\r\n\r\n").as_bytes()).unwrap();
+    let mut raw = Vec::new();
+    std::io::Read::read_to_end(&mut s, &mut raw).unwrap();
+    let takes = started.elapsed();
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    let (head, body) = text.split_once("\r\n\r\n").expect("a header block");
+    let status: u16 = head.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let whole: Value = serde_json::from_str(body).unwrap_or_else(|e| panic!("{e}: {head} {body}"));
+    assert_eq!((status, whole["panels"][0]["error"].clone()), (200, Value::Null), "{whole}");
+    assert!(takes > Duration::from_secs(4), "the view is read in {takes:?} here: too quick to outlast a stop's first two seconds");
+    // Asked again, and the host stopped a second later while it is computed.
+    let asking = std::thread::spawn(move || {
+        let mut s = TcpStream::connect(addr).unwrap();
+        s.write_all(format!("GET /s/loop/dashboard/{slow} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").as_bytes()).unwrap();
+        let mut raw = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut s, &mut raw);
+    });
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(!asking.is_finished(), "the dashboard was answered within a second");
+    let wal = dir.path().join("loop/loop.duckdb.wal");
+    assert!(wal.exists(), "a write-ahead log while the session runs");
+    // The test keeps no hold of its own on the session's live state, only a way to see whether
+    // anything still does.
+    let live = std::sync::Arc::downgrade(&host.session("loop").unwrap().live());
+    let stopping = std::time::Instant::now();
+    host.stop();
+    let stopped = stopping.elapsed();
+    assert!(live.upgrade().is_none(), "the session's live state still held {stopped:?} into the stop: a computation left running (the dashboard takes {takes:?})");
+    let store = dir.path().join("loop/loop.duckdb");
+    assert!(store.exists() && !wal.exists(), "the store was never closed: {:?}", std::fs::read_dir(dir.path().join("loop")).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>());
+    let _ = asking.join();
 }
