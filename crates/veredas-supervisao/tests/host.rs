@@ -147,6 +147,15 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     let b = plant(&dir.path().join("bench-b"));
     b.server("plc").unwrap().set("fill1", 65.0);
     let path = two_plants(dir.path(), &a, &b);
+    // The plants polled once a second, not every 50 ms: a dashboard asked between two equal
+    // computations (below) needs the store and the feed (each poll refreshes an object's arrival)
+    // to hold still across the request, which a loaded machine's request outlasts at 50 ms.
+    for s in ["loop", "hall"] {
+        let p = dir.path().join(format!("{s}/project.toml"));
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(text.contains("poll_ms = 50"), "{s}");
+        std::fs::write(&p, text.replace("poll_ms = 50", "poll_ms = 1000")).unwrap();
+    }
     // An object reading one key, so the view's `key` carries a value; its rules and a text
     // object's give the view every comparison a rule takes that the example leaves out (above,
     // at most, a text's equals), a rule over another series with the key it takes and one without,

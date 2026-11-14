@@ -5,3 +5,10 @@
 [[profile.default.overrides]]
 filter = 'test(draws_come_at_their_interval) | test(ramps_come_at_their_interval_counted_apart_from_draws) | test(a_stall_skips_the_draws_and_steps_it_missed)'
 threads-required = 'num-cpus'
+
+# A test that keeps the machine's cores busy for seconds (a slow view read through a dashboard, so
+# a stop meets a computation still running: C-049) runs alone too, so its load lands on no other
+# test's timing (a dashboard asked between two equal computations, a page waited for).
+[[profile.default.overrides]]
+filter = 'test(a_stop_waits_for_a_dashboard_still_computed)'
+threads-required = 'num-cpus'
