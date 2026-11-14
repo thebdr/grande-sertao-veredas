@@ -281,10 +281,10 @@ A path is relative to the binding file's folder.
 - `id` (required): an ASCII letter, then ASCII letters, digits, `-`, `_` and `.`, at most 64; no two
   objects share one, whatever the case. The layout's element with this `id` shows the object: a
   group, a shape or a text (`g`, `rect`, `circle`, `ellipse`, `path`, `polygon`, `polyline`, `line`,
-  `text`), inside no other object's element and no `svg`, `defs`, `symbol`, `marker`, `pattern`,
-  `mask`, `clipPath` or `text` of the drawing, holding no `use` (Q25). The state's paint outranks
-  whatever paint the drawing writes on it and on a group's shapes and inner groups, as attributes or
-  in `style` (never `!important` there); a group's text keeps the paint it writes.
+  `text`), inside no other object's element, with nothing but groups (`g`) between it and the
+  drawing's root, holding no `use` (Q25). The state's paint outranks whatever paint the drawing
+  writes on it and on a group's shapes and inner groups, as attributes or in `style` (never
+  `!important` there, however CSS spells it); a group's text keeps the paint it writes.
 - `label` (`id`): the object's name on the screen.
 - `value` (required): the series it reads, an inline table:
   - `source` (required): a source of the session's project (a log, an OPC source, a channel).
@@ -414,11 +414,11 @@ table the project lacks; a table panel's limit outside 1 to
 1000, a column with an empty name, places past 6 or a rule over another series, a sort column the
 panel or its table lacks; a column, key or value the table lacks where the project states its
 columns, a value that is not numeric; a `spread` not above 0; a layout that cannot be read, is not
-an SVG document (its root an `svg` in the SVG namespace), or holds a script, a `<style>` sheet, foreign content (an
+an SVG document (its root an `svg` in the SVG namespace), or holds a script, a `<style>` sheet, an animation, foreign content (an
 element outside the SVG namespace), an event handler, a script link (a `javascript:` URL in any
 attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
 declaring attribute defaults or using a parameter entity (a browser would apply them unchecked); an
-object's element of another kind than the page draws on, inside another object's element or one of
-the elements named above, holding a `use` or saying `!important` in a `style` on it or inside it,
-and a marker's path inside one of those elements:
+object's element of another kind than the page draws on, inside another object's element or
+anything but groups, holding a `use` or saying `!important` in a `style` on it or inside it, and a
+marker's path inside anything but groups:
 each is refused when the file loads, with its place named, before any session starts.

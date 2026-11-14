@@ -477,10 +477,12 @@ drawing's sheet also styled the page's every screen.
 
 **Taken meanwhile** (the most reversible): the page draws on a named subset and the reader refuses
 the rest by name. An object's element is a `g`, one of the seven shapes or a `text`, inside no
-other object's element and no `svg`, `defs`, `symbol`, `marker`, `pattern`, `mask`, `clipPath`
-or `text`, holding no `use`; a marker's path stands inside none of those either. Paint is written on
-the elements (attributes or `style`, never `!important` on or inside an object's element), and the
-state's paint outranks it at any depth of a group. A `<style>` sheet is refused. If the answer is
+other object's element, with nothing but groups between it and the drawing's root (a link would
+take its click), holding no `use`; a marker's path stands inside nothing but groups either. Paint is
+written on the elements (attributes or `style`, never `!important` on or inside an object's
+element, however CSS spells it), and the state's paint outranks it at any depth of a group. A
+`<style>` sheet is refused, and so is any animation (C-048's tenth round: an animated class or
+transform undoes what the page writes): the drawing is still, the page animates it. If the answer is
 "draw more", each refusal goes with the page learning that construct (a sheet scoped to the drawing,
 a `use` painted through its shadow tree, a nested viewport measured through its own frame), the test
 driving it.

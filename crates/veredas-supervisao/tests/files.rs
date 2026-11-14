@@ -1024,10 +1024,10 @@ A path is relative to the binding file's folder.
 - `id` (required): an ASCII letter, then ASCII letters, digits, `-`, `_` and `.`, at most 64; no two
   objects share one, whatever the case. The layout's element with this `id` shows the object: a
   group, a shape or a text (`g`, `rect`, `circle`, `ellipse`, `path`, `polygon`, `polyline`, `line`,
-  `text`), inside no other object's element and no `svg`, `defs`, `symbol`, `marker`, `pattern`,
-  `mask`, `clipPath` or `text` of the drawing, holding no `use` (Q25). The state's paint outranks
-  whatever paint the drawing writes on it and on a group's shapes and inner groups, as attributes or
-  in `style` (never `!important` there); a group's text keeps the paint it writes.
+  `text`), inside no other object's element, with nothing but groups (`g`) between it and the
+  drawing's root, holding no `use` (Q25). The state's paint outranks whatever paint the drawing
+  writes on it and on a group's shapes and inner groups, as attributes or in `style` (never
+  `!important` there, however CSS spells it); a group's text keeps the paint it writes.
 - `label` (`id`): the object's name on the screen.
 - `value` (required): the series it reads, an inline table:
   - `source` (required): a source of the session's project (a log, an OPC source, a channel).
@@ -1157,13 +1157,13 @@ table the project lacks; a table panel's limit outside 1 to
 1000, a column with an empty name, places past 6 or a rule over another series, a sort column the
 panel or its table lacks; a column, key or value the table lacks where the project states its
 columns, a value that is not numeric; a `spread` not above 0; a layout that cannot be read, is not
-an SVG document (its root an `svg` in the SVG namespace), or holds a script, a `<style>` sheet, foreign content (an
+an SVG document (its root an `svg` in the SVG namespace), or holds a script, a `<style>` sheet, an animation, foreign content (an
 element outside the SVG namespace), an event handler, a script link (a `javascript:` URL in any
 attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
 declaring attribute defaults or using a parameter entity (a browser would apply them unchecked); an
-object's element of another kind than the page draws on, inside another object's element or one of
-the elements named above, holding a `use` or saying `!important` in a `style` on it or inside it,
-and a marker's path inside one of those elements:
+object's element of another kind than the page draws on, inside another object's element or
+anything but groups, holding a `use` or saying `!important` in a `style` on it or inside it, and a
+marker's path inside anything but groups:
 each is refused when the file loads, with its place named, before any session starts.
 "###;
 
@@ -1224,7 +1224,8 @@ fn a_layout_is_an_svg_document_with_no_script() {
         let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\"><a><animate attributeName=\"href\" values=\"{values}\" dur=\"1s\"/><rect/></a></svg>");
         assert!(parse(&svg, p).unwrap_err().starts_with("l.svg holds a script link (`#a;"), "{values}");
     }
-    assert!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><a><animate attributeName=\"href\" values=\"#a;#b\" dur=\"1s\"/><rect/></a></svg>", p).is_ok(), "links within the drawing");
+    // (A list of links within the drawing is no script; the animation carrying it is refused as one.)
+    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><a><animate attributeName=\"href\" values=\"#a;#b\" dur=\"1s\"/><rect/></a></svg>", p).unwrap_err(), "l.svg holds a <animate> element: a layout is a still drawing, the page drawing its states and moving its markers itself");
     // A document type declaring attribute defaults: a browser adds them (an element's namespace,
     // a link, a handler) and this check would not see them; a parameter entity alike.
     for subset in ["<!ATTLIST iframe xmlns CDATA \"http://www.w3.org/1999/xhtml\">", "<!ATTLIST a href CDATA \"javascript:alert(1)\">", "<!ATTLIST rect onclick CDATA \"alert(1)\">"] {
@@ -1239,21 +1240,24 @@ fn a_layout_is_an_svg_document_with_no_script() {
 
 /// The drawing the page draws on (Q25), by the reader's own lists: an object on every element of
 /// `DRAWN` loads, on any other kind is refused by its kind's name; an object's element and a marker's
-/// path inside every element of `APART` refused by it; an object's element inside another object's,
-/// holding a `use`, or saying `!important` in a `style` on it or inside it, refused, each beside
-/// its near miss that loads; the drawing's own sheet refused.
+/// path with nothing but `AROUND` (groups) between it and the root load, and inside anything else
+/// (every element the reference listed before, a shape, a title, a switch, a link, an unknown one)
+/// are refused by it; an object's element inside another object's, holding a `use`, or saying
+/// `!important` as CSS reads it in a `style` on it or inside it, refused; a sheet and every animation
+/// (`ANIMATIONS`) anywhere, refused. Each at every depth (directly, through a group of no id, through
+/// one no object names), beside its near miss that loads.
 #[test]
 fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
-    use veredas_supervisao::svg::{APART, DRAWN};
-    // The lists are the reference's: the kinds it names and the elements it names an object's
-    // element (or a marker's path) may not stand inside, read from its own sentence.
+    use veredas_supervisao::svg::{ANIMATIONS, AROUND, DRAWN, says_important};
+    // The lists are the reference's: the kinds it names and what may stand around them, read from
+    // its own sentence.
     let flat = REFERENCE.replace("\n  ", " ");
     let named = |from: &str, to: &str| -> Vec<String> {
         let at = flat.find(from).unwrap_or_else(|| panic!("{from}")) + from.len();
         flat[at..at + flat[at..].find(to).unwrap()].split('`').skip(1).step_by(2).map(String::from).collect()
     };
     assert_eq!(named("shows the object: a group, a shape or a text (", ")"), DRAWN);
-    assert_eq!(named("inside no other object's element and no ", " of the drawing"), APART);
+    assert_eq!(named("with nothing but groups (", ")"), AROUND);
     const INFEED: &str = "<rect id=\"infeed\" x=\"20\" y=\"96\" width=\"40\" height=\"28\"/>";
     const LOOP: &str = "<path id=\"loop\" d=\"M 80 40 H 320 A 70 70 0 0 1 320 180 H 80 A 70 70 0 0 1 80 40 Z\" fill=\"none\" stroke=\"#26262A\" stroke-width=\"14\"/>";
     let with_svg = |from: &str, to: &str| {
@@ -1262,6 +1266,7 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
         ex.svg = ex.svg.replace(from, to);
         ex
     };
+    let depths: [(&str, &str); 3] = [("", ""), ("<g>", "</g>"), ("<g id=\"layer-2\">", "</g>")];
     for kind in DRAWN {
         let ex = with_svg(INFEED, &format!("<{kind} id=\"infeed\"/>"));
         assert!(outcome(&ex).is_ok(), "{kind}: {:?}", outcome(&ex).err());
@@ -1270,37 +1275,64 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
         let ex = with_svg(INFEED, &format!("<{kind} id=\"infeed\"/>"));
         assert_eq!(binding_refusal(&ex), format!("object `infeed`: its element is a <{kind}>, which the page draws no object on (one of {})", DRAWN.join(", ")), "{kind}");
     }
-    for apart in APART {
-        let ex = with_svg(INFEED, &format!("<{apart}>{INFEED}</{apart}>"));
-        assert_eq!(binding_refusal(&ex), format!("object `infeed`: its element stands inside a <{apart}> of the layout, where the page cannot measure or paint it as drawn"), "{apart}");
-        let ex = with_svg(LOOP, &format!("<{apart}>{LOOP}</{apart}>"));
-        assert_eq!(binding_refusal(&ex), format!("object `parcel-1`: the path `loop` stands inside a <{apart}> of the layout, where the page cannot measure it as drawn"), "{apart}");
+    // What stands around: groups load at every depth; anything else is refused by its name.
+    for (open, close) in depths {
+        for g in AROUND {
+            assert!(outcome(&with_svg(INFEED, &format!("<{g}>{open}{INFEED}{close}</{g}>"))).is_ok(), "{g} {open}");
+            assert!(outcome(&with_svg(LOOP, &format!("<{g}>{open}{LOOP}{close}</{g}>"))).is_ok(), "{g} {open}");
+        }
+        for outside in ["svg", "defs", "symbol", "marker", "pattern", "mask", "clipPath", "text", "rect", "circle", "title", "desc", "metadata", "linearGradient", "filter", "image", "switch", "a", "foo"] {
+            let ex = with_svg(INFEED, &format!("<{outside}>{open}{INFEED}{close}</{outside}>"));
+            assert_eq!(binding_refusal(&ex), format!("object `infeed`: its element stands inside a <{outside}> of the layout, where the page cannot measure or paint it as drawn"), "{outside} {open}");
+            let ex = with_svg(LOOP, &format!("<{outside}>{open}{LOOP}{close}</{outside}>"));
+            assert_eq!(binding_refusal(&ex), format!("object `parcel-1`: the path `loop` stands inside a <{outside}> of the layout, where the page cannot measure it as drawn"), "{outside} {open}");
+        }
     }
-    // Inside another object's element refused; inside a group no object names, loading.
+    // Inside another object's element refused, at every depth; inside a group no object names,
+    // loading.
     let outlet = "<rect id=\"outlet-1\" x=\"130\" y=\"4\" width=\"24\" height=\"28\"/>";
-    let ex = with_svg(outlet, &format!("<g id=\"outlet-2\">{outlet}</g>")).svg.replacen("<rect id=\"outlet-2\"", "<rect id=\"was-outlet-2\"", 1);
-    let mut nested = example();
-    nested.svg = ex;
-    assert_eq!(binding_refusal(&nested), "object `outlet-1`: its element stands inside `outlet-2`'s, whose state and selection would reach into it");
-    assert!(outcome(&with_svg(outlet, &format!("<g id=\"layer-1\">{outlet}</g>"))).is_ok());
-    // At any depth: through a group of no id and one no object names.
-    for between in ["<g>", "<g id=\"layer-2\">"] {
-        let mut deep = example();
-        deep.svg = with_svg(outlet, &format!("<g id=\"outlet-2\">{between}{outlet}</g></g>")).svg.replacen("<rect id=\"outlet-2\"", "<rect id=\"was-outlet-2\"", 1);
-        assert_eq!(binding_refusal(&deep), "object `outlet-1`: its element stands inside `outlet-2`'s, whose state and selection would reach into it", "{between}");
+    for (open, close) in depths {
+        let mut nested = example();
+        nested.svg = with_svg(outlet, &format!("<g id=\"outlet-2\">{open}{outlet}{close}</g>")).svg.replacen("<rect id=\"outlet-2\"", "<rect id=\"was-outlet-2\"", 1);
+        assert_eq!(binding_refusal(&nested), "object `outlet-1`: its element stands inside `outlet-2`'s, whose state and selection would reach into it", "{open}");
     }
-    // A `use` inside an object's element refused; one outside any, loading.
-    assert_eq!(binding_refusal(&with_svg(INFEED, "<g id=\"infeed\"><use href=\"#loop\"/></g>")), "object `infeed`: its element holds a <use>, whose shapes no state's paint reaches");
+    assert!(outcome(&with_svg(outlet, &format!("<g id=\"layer-1\">{outlet}</g>"))).is_ok());
+    // A `use` inside an object's element refused at every depth; one outside any, loading.
+    for (open, close) in depths {
+        assert_eq!(binding_refusal(&with_svg(INFEED, &format!("<g id=\"infeed\">{open}<use href=\"#loop\"/>{close}</g>"))), "object `infeed`: its element holds a <use>, whose shapes no state's paint reaches", "{open}");
+    }
     assert!(outcome(&with_svg(INFEED, &format!("{INFEED}<use href=\"#loop\"/>"))).is_ok());
-    // `!important` in a `style` on an object's element or inside it, in any case and spacing,
-    // refused; a `style` without it, or one outside every object's element, loading.
+    // `!important` as CSS reads a declaration (its `!` itself, white space and comments after it, the
+    // word in any case, written or escaped, ending there), in a `style` on an object's element or
+    // inside it at every depth, refused; a `style` without it, one inside a comment or a longer
+    // word, and one outside every object's element, loading. (XML keeps a tab, a line feed or a
+    // carriage return written as a reference; form feed is no XML character.)
     let important = "object `infeed`: a `style` attribute on its element or inside it says `!important`, which would outrank the state's paint";
-    assert_eq!(binding_refusal(&with_svg(INFEED, "<rect id=\"infeed\" style=\"fill: red ! IMPORTANT\"/>")), important);
-    assert_eq!(binding_refusal(&with_svg(INFEED, "<g id=\"infeed\"><rect style=\"stroke:#000!important\"/></g>")), important);
-    assert!(outcome(&with_svg(INFEED, "<rect id=\"infeed\" style=\"fill: red; stroke: #000\"/>")).is_ok());
+    let spellings = ["fill: red ! IMPORTANT", "fill:red !&#9;important", "fill:red !&#10;important", "fill:red !&#13;important", "fill:red !/**/important", "fill:red !/* x */ important", "fill:red !\\important", "fill:red !\\69 mportant", "fill:red !impor\\tant", "fill:red!important;stroke:#000"];
+    for s in spellings {
+        assert_eq!(binding_refusal(&with_svg(INFEED, &format!("<rect id=\"infeed\" style=\"{s}\"/>"))), important, "{s}");
+        for (open, close) in depths {
+            assert_eq!(binding_refusal(&with_svg(INFEED, &format!("<g id=\"infeed\">{open}<rect style=\"{s}\"/>{close}</g>"))), important, "{s} {open}");
+        }
+    }
+    for s in ["fill: red; stroke: #000", "fill: red /* !important */", "fill: red !importantly", "fill: red ! impor tant", "fill: red !impor/**/tant"] {
+        assert!(outcome(&with_svg(INFEED, &format!("<rect id=\"infeed\" style=\"{s}\"/>"))).is_ok(), "{s}");
+    }
     assert!(outcome(&with_svg(INFEED, &format!("{INFEED}<rect style=\"fill:#000 !important\"/>"))).is_ok());
-    // The drawing's own sheet.
-    assert!(binding_refusal(&with_svg(INFEED, &format!("<style>.a {{ fill: red }}</style>{INFEED}"))).ends_with("layout.svg holds a <style> sheet, which the page would apply to its own screens too: write the drawing's paint on its elements"));
+    // The CSS reading itself, a form feed and a carriage return among its white space.
+    assert!(says_important("fill:red !\x0c important") && says_important("fill:red !\r\nIMPORTANT") && !says_important("fill:red \\21 important"));
+    // The drawing's own sheet, at every depth.
+    for (open, close) in depths {
+        assert!(binding_refusal(&with_svg(INFEED, &format!("{open}<style>.a {{ fill: red }}</style>{close}{INFEED}"))).ends_with("layout.svg holds a <style> sheet, which the page would apply to its own screens too: write the drawing's paint on its elements"), "{open}");
+    }
+    // Every animation, anywhere: on an object's element and beside it, at every depth.
+    for anim in ANIMATIONS {
+        for (open, close) in depths {
+            for svg in [format!("<rect id=\"infeed\">{open}<{anim} attributeName=\"class\" to=\"x\"/>{close}</rect>"), format!("{INFEED}{open}<{anim} href=\"#infeed\" attributeName=\"class\" to=\"x\"/>{close}")] {
+                assert!(binding_refusal(&with_svg(INFEED, &svg)).ends_with(&format!("layout.svg holds a <{anim}> element: a layout is a still drawing, the page drawing its states and moving its markers itself")), "{svg}");
+            }
+        }
+    }
 }
 
 /// The example with a keyed text series in its log and an object reading it.

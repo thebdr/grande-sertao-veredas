@@ -812,7 +812,7 @@ pub fn load(text: &str, base: &Path, universe: &Universe, project_name: &str) ->
     }
 
     // DECISION PENDING (docs/questions.md Q25): the elements the page draws an object on, where it
-    // can measure and paint them as drawn (svg::DRAWN, svg::APART).
+    // can measure and paint them as drawn (svg::DRAWN, svg::AROUND).
     if let Some(layout) = &layout {
         let bound: std::collections::BTreeSet<&str> = objects.iter().filter(|o| layout.ids.contains_key(&o.id)).map(|o| o.id.as_str()).collect();
         for o in &objects {
