@@ -12,7 +12,9 @@ use std::time::Duration;
 
 use common::*;
 use serde_json::{Value, json};
-use veredas_supervisao::{Host, HostError, config, web};
+use veredas_maquinar::bench::Bench;
+use veredas_supervisao::state::{Comparand, Compare};
+use veredas_supervisao::{Host, HostError, config, panel, web};
 
 fn objects(addr: SocketAddr, name: &str) -> Value {
     let (status, v) = get(addr, &format!("/s/{name}/objects.json"));
@@ -111,10 +113,15 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     let b = plant(&dir.path().join("bench-b"));
     b.server("plc").unwrap().set("fill1", 65.0);
     let path = two_plants(dir.path(), &a, &b);
-    // An object reading one key, so the view's `key` carries a value.
+    // An object reading one key, so the view's `key` carries a value; its rules and a text
+    // object's give the view every comparison a rule takes that the example leaves out (above,
+    // at most, a text's equals), its project a text series for it.
     let binding = dir.path().join("loop/binding.toml");
     let text = std::fs::read_to_string(&binding).unwrap();
-    std::fs::write(&binding, text.replacen("\n[[dashboard]]", "\n[[object]]\nid = \"keyed\"\nlabel = \"Keyed\"\nvalue = { source = \"plc\", series = \"fill1\", key = \"A1\" }\n\n[[dashboard]]", 1)).unwrap();
+    std::fs::write(&binding, text.replacen("\n[[dashboard]]", "\n[[object]]\nid = \"keyed\"\nlabel = \"Keyed\"\nvalue = { source = \"plc\", series = \"fill1\", key = \"A1\" }\nstates = [ { above = 90.5, state = \"near\" }, { at_most = 10, state = \"warn\", word = \"low\" } ]\n\n[[object]]\nid = \"note\"\nlabel = \"Note\"\nvalue = { source = \"sorter\", series = \"word\" }\nstates = [ { equals = \"jam\", state = \"alarm\" } ]\n\n[[dashboard]]", 1)).unwrap();
+    let project = dir.path().join("loop/project.toml");
+    let text = std::fs::read_to_string(&project).unwrap();
+    std::fs::write(&project, format!("{text}\n[[rule]]\nname = \"notes\"\npattern = 'NOTE (?P<word>\\w+)'\nscope = \"sorter\"\ntypes = {{ word = \"text\" }}\n")).unwrap();
     let want = config::load_file(&path).unwrap();
     let cfg = config::load_file(&path).unwrap();
     // Loop's log there from the start (hall's stays absent), so its sorts are read as they come.
@@ -154,6 +161,20 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     // portal's answers under each session's `/portal` and nowhere else (not at the root, not under
     // a `/portal` of no session, not under a session without its `/portal`); each of a session's
     // own answers under the session and nowhere else.
+    // Read as literal `.route("…")` declarations: every other way a router takes a route is absent
+    // from both sources, and every `.route(` but the host's two per-session page routes (checked by
+    // their paths above) names its path as a literal.
+    for (file, computed, nests) in [("src/host.rs", vec![".route(&base, get(index))", ".route(&format!(\"{base}/\"), get(index))"], vec![".nest(\"/portal\", ", ".nest(&base, session)"]), ("../veredas-portal/src/serve.rs", vec![], vec![])] {
+        let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
+        for other in ["route_service(", "nest_service(", ".merge(", "fallback_service("] {
+            assert!(!text.contains(other), "{file} takes a route by `{other}`, which the lists here do not read");
+        }
+        let at = |pat: &str| text.match_indices(pat).map(|(i, _)| text[i..].split_once(')').map(|(h, _)| format!("{h})")).unwrap()).collect::<Vec<_>>();
+        let not_literal: Vec<String> = at(".route(").into_iter().filter(|r| !r.starts_with(".route(\"")).collect();
+        assert_eq!(not_literal, computed.iter().map(|c| c.split_once(')').map(|(h, _)| format!("{h})")).unwrap()).collect::<Vec<_>>(), "{file}");
+        assert_eq!(text.matches(".nest(").count(), nests.len(), "{file}");
+        assert!(nests.iter().all(|n| text.contains(n)), "{file}");
+    }
     let portal = declared_routes("../veredas-portal/src/serve.rs");
     assert!(["/events", "/api/session", "/api/opc/write"].iter().all(|p| portal.iter().any(|(_, q)| q == p)) && portal.iter().any(|(m, _)| m == "POST"), "{portal:?}");
     let (root, own) = host_routes();
@@ -189,7 +210,11 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     assert_eq!(status, 200);
     assert_eq!((v["name"].clone(), v["title"].clone(), v["layout"].clone(), v["headline"].clone()), (json!("loop"), json!("The loop"), json!("layout.svg"), json!(["speed", "read-rate"])));
     // Every object of each session's view, every field the page reads, as its binding holds it (the
-    // rules by their state and word; outlet 3's spelled out in full below, its words included).
+    // rules by their state, word and comparison as the test writes it; outlet 3's spelled out in
+    // full below). The comparisons matched in full (one the reader adds fails to compile here), and
+    // every one of them met in a view.
+    let every_compare = ["equals a number", "equals a text", "above", "below", "at least", "at most"];
+    let mut compares_seen = std::collections::BTreeSet::new();
     for (session, at) in [("loop", 0), ("hall", 1)] {
         let (_, view) = get(addr, &format!("/s/{session}/binding"));
         let objects = &want.sessions[at].binding.objects;
@@ -203,14 +228,29 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
                 "actions": o.actions.iter().map(|a| json!({ "label": a.label, "source": a.source, "tag": a.tag, "value": a.value })).collect::<Vec<_>>(),
             });
             let mut g = g.clone();
-            for r in g["rules"].as_array_mut().unwrap() {
-                assert!(r["when"].as_str().is_some_and(|w| !w.is_empty()), "{session} {}: {r}", o.id);
+            assert_eq!(g["rules"].as_array().map(Vec::len), Some(o.rules.len()), "{session} {}", o.id);
+            for (rule, r) in o.rules.iter().zip(g["rules"].as_array_mut().unwrap()) {
+                let n = |x: f64| {
+                    let t = veredas_supervisao::state::format_number(x, None);
+                    if o.unit.is_empty() { t } else { format!("{t} {}", o.unit) }
+                };
+                let (kind, when) = match &rule.compare {
+                    Compare::Equals(Comparand::Num(x)) => ("equals a number", format!("equals {}", n(*x))),
+                    Compare::Equals(Comparand::Text(x)) => ("equals a text", format!("is {x}")),
+                    Compare::Above(x) => ("above", format!("above {}", n(*x))),
+                    Compare::Below(x) => ("below", format!("below {}", n(*x))),
+                    Compare::AtLeast(x) => ("at least", format!("at least {}", n(*x))),
+                    Compare::AtMost(x) => ("at most", format!("at most {}", n(*x))),
+                };
+                compares_seen.insert(kind);
+                assert_eq!(r["when"], json!(when), "{session} {}: {r}", o.id);
                 r.as_object_mut().unwrap().remove("when");
             }
             assert_eq!(g, expected, "{session} {}", o.id);
         }
     }
-    assert_eq!(v["objects"].as_array().unwrap().len(), 9);
+    assert_eq!(compares_seen.into_iter().collect::<Vec<_>>(), { let mut e = every_compare.to_vec(); e.sort(); e }, "every comparison a rule takes, in a view");
+    assert_eq!(v["objects"].as_array().unwrap().len(), 10);
     // The class has values to see: a marker's path and an object's key among them.
     assert!(v["objects"].as_array().unwrap().iter().any(|o| o["path"] == json!("loop")) && v["objects"].as_array().unwrap().iter().any(|o| o["key"] == json!("A1")), "{v}");
     assert_eq!(v["objects"][5], json!({
@@ -287,7 +327,7 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
         let (event, data) = sse.next(Duration::from_secs(10)).unwrap();
         let first: Value = serde_json::from_str(&data).unwrap();
         assert_eq!((event.as_str(), object(&first, "outlet-1")["value"].clone()), ("snapshot", json!(fill)), "{name}");
-        assert_eq!(first["objects"].as_array().unwrap().len(), if name == "loop" { 9 } else { 6 });
+        assert_eq!(first["objects"].as_array().unwrap().len(), if name == "loop" { 10 } else { 6 });
         assert_eq!(first["session"]["writes_armed"], json!(name == "hall"), "{name}'s snapshot carries its own switch");
         assert_eq!(objects(addr, name)["session"]["writes_armed"], json!(name == "hall"), "{name}'s objects.json carries its own switch");
         streams.push(sse);
@@ -321,6 +361,9 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
         }
     }
     let feed = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/feed.rs")).unwrap();
+    // Read as literal names: every event sent or opened with names it as one.
+    assert_eq!(feed.matches(".send(").count(), feed.matches(".send((\"").count(), "an event sent under a name no literal gives");
+    assert_eq!(feed.matches("once(").count(), feed.matches("once((\"").count(), "an event opened under a name no literal gives");
     let mut sent: Vec<String> = feed.match_indices("((\"").map(|(i, _)| feed[i + 3..].split('"').next().unwrap().to_string()).collect();
     sent.sort();
     sent.dedup();
@@ -370,8 +413,47 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     }
     let level_of = |d: &Value| d["panels"][5]["data"]["rows"].as_array().and_then(|rs| rs.iter().find(|r| r["id"] == "outlet-1")).map(|r| r["fraction"].clone());
     assert_eq!((level_of(&ld), level_of(&hd)), (Some(json!(0.4)), Some(json!(0.7))));
+    // Each session's dashboard is the one computed in process over its own store, its own binding
+    // and its own feed's snapshot, whole: a panel read from the other session's store (whose every
+    // panel differs, above) is told apart. Asked between two equal computations, so the store, the
+    // snapshot and the clock's now held still across the request.
+    let unix_ms = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    for (session, at) in [("loop", 0), ("hall", 1)] {
+        let live = host.session(session).unwrap().live();
+        let compute = || panel::dashboard(&live, &want.sessions[at].binding, &host.snapshot(session).unwrap(), 0, to, unix_ms()).unwrap();
+        let mut quiet = None;
+        for _ in 0..100 {
+            let before = compute();
+            let (status, served) = get(addr, &format!("/s/{session}/dashboard/0?to={to}"));
+            assert_eq!(status, 200);
+            if compute() == before {
+                quiet = Some((served, before));
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let (served, own) = quiet.unwrap_or_else(|| panic!("{session}'s dashboard never held still"));
+        assert_eq!(served, own, "{session}'s dashboard, as computed over its own store");
+    }
     assert_eq!(get(addr, "/s/loop/dashboard/1"), (404, json!({ "error": "session `loop` has no dashboard 1" })));
     assert_eq!(get(addr, "/s/loop/dashboard/x"), (404, json!({ "error": "`x` is no dashboard of session `loop`" })));
+
+    // A write carrying its content through the nested router lands in its own session alone:
+    // posted to armed hall, its plant reads it back; loop's switch, off, refuses the same post and
+    // loop's plant keeps its value. (Portal's routes are compared above on one request each; the
+    // writes' whole class is C-054's.)
+    let release = |session: &str, bench: &Bench| {
+        let tag = format!("ns={};s=release3", bench.server("plc").unwrap().namespace);
+        get(addr, &format!("/s/{session}/portal/api/opc/read?source=plc&tag={}", enc(&tag))).1["value"].clone()
+    };
+    let write = |bench: &Bench| json!({ "source": "plc", "tag": format!("ns={};s=release3", bench.server("plc").unwrap().namespace), "value": "1" });
+    assert_eq!((release("hall", &b), release("loop", &a)), (json!("0"), json!("0")));
+    let (status, v) = post(addr, "/s/hall/portal/api/opc/write", &write(&b));
+    assert_eq!((status, v["ok"].clone()), (200, json!(true)), "{v}");
+    assert!(wait(Duration::from_secs(10), || release("hall", &b) == json!("1")), "hall's plant: {}", release("hall", &b));
+    assert_eq!(post(addr, "/s/loop/portal/api/opc/write", &write(&a)), (403, json!({ "error": "writes are turned off for this project" })));
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(release("loop", &a), json!("0"), "loop's plant kept its value");
 
     // Stopped with streams open (an object stream, portal's own), every session ends, the stop
     // returns at once, both streams end and the address is let go.

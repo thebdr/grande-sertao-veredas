@@ -50,6 +50,8 @@ pub struct Host {
     tasks: Vec<tokio::task::JoinHandle<()>>,
     server: Option<tokio::task::JoinHandle<()>>,
     sessions: Vec<(String, Session)>,
+    /// Each session's feed snapshot, by name, as the routes read it.
+    snapshots: Vec<(String, Arc<std::sync::RwLock<crate::feed::Snapshot>>)>,
 }
 
 impl Host {
@@ -74,6 +76,7 @@ impl Host {
         }
         let mut apps = Vec::new();
         let mut tasks = Vec::new();
+        let mut snapshots = Vec::new();
         {
             let _enter = runtime.enter();
             for ((name, session), spec) in sessions.iter().zip(&cfg.sessions) {
@@ -81,6 +84,7 @@ impl Host {
                 let binding = Arc::new(spec.binding.clone());
                 let (feed, task) = Feed::spawn(Arc::clone(&live), Arc::clone(&binding));
                 tasks.push(task);
+                snapshots.push((name.clone(), Arc::clone(&feed.snapshot)));
                 apps.push(Arc::new(SessionApp { name: name.clone(), live, binding, feed }));
             }
         }
@@ -88,7 +92,7 @@ impl Host {
         let server = runtime.spawn(async move {
             let _ = axum::serve(listener, app).await;
         });
-        Ok(Host { addr, runtime: Some(runtime), tasks, server: Some(server), sessions })
+        Ok(Host { addr, runtime: Some(runtime), tasks, server: Some(server), sessions, snapshots })
     }
 
     /// The address bound (a port of 0 resolved).
@@ -99,6 +103,12 @@ impl Host {
     /// A running session by name, for a shell (and a test) acting in process.
     pub fn session(&self, name: &str) -> Option<&Session> {
         self.sessions.iter().find(|(n, _)| n == name).map(|(_, s)| s)
+    }
+
+    /// What a session's feed holds now (its objects and status, as its routes read them), for a
+    /// shell (and a test) acting in process.
+    pub fn snapshot(&self, name: &str) -> Option<crate::feed::Snapshot> {
+        self.snapshots.iter().find(|(n, _)| n == name).and_then(|(_, s)| s.read().ok().map(|s| s.clone()))
     }
 
     /// Stop serving, then stop every session; what each source ended with, by session.
