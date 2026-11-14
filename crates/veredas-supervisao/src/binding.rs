@@ -914,8 +914,12 @@ fn compile_panel(place: &str, kind: &str, t: toml::Value, objects: &[Object], u:
                 // DECISION PENDING (docs/questions.md Q24): a timeline replays an object's own
                 // series alone; a rule over another series has no history read here, so such an
                 // object is refused on a timeline rather than drawn without that rule's states.
-                if let Some(s) = objects[*i].rules.iter().find_map(|r| r.series.as_ref()) {
-                    return Err(format!("{place}: `{}` has a rule over another series (`{}` of `{}`), which a timeline does not replay", objects[*i].id, s.series, s.source));
+                // A rule naming the object's own series (its source, series and key as the
+                // object's) reads what the timeline replays, and stands.
+                let own = &objects[*i].value;
+                if let Some(s) = objects[*i].rules.iter().filter_map(|r| r.series.as_ref()).find(|s| *s != own) {
+                    let key = s.key.as_deref().map(|k| format!(", key `{k}`")).unwrap_or_default();
+                    return Err(format!("{place}: `{}` has a rule over another series (`{}` of `{}`{key}), which a timeline does not replay", objects[*i].id, s.series, s.source));
                 }
             }
             (p.title, p.span, PanelKind::Timeline { objects: objs, minutes: minutes_of(place, p.minutes, 60)? })

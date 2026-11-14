@@ -460,5 +460,6 @@ histories of every series the rules read, and a text or a time series has no num
 store serves today.
 
 **Taken meanwhile** (the most reversible): an object with a rule over another series is refused on
-a timeline, by name, and the reference says so. If the answer is "replay it", the refusal goes and
+a timeline, by name, and the reference says so; a rule that writes the object's own series out in
+full reads what the timeline replays, and stands. If the answer is "replay it", the refusal goes and
 the timeline merges the series' histories (numeric ones first), the test driving both kinds of rule.

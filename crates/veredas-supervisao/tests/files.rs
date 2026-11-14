@@ -1870,10 +1870,44 @@ fn every_range_is_held_at_both_ends_and_every_refusal_on_every_key_it_covers() {
             assert!(ranged.contains(&(scope.clone(), key.clone())), "the range of {scope} `{key}` (default {d}) is held nowhere");
         }
     }
+    // Each accepted value read back from what was read: the panel, column or object the edit
+    // writes in, its field by the key's own name (as read: `span: 4`, `decimals: Some(6)`).
+    let example_binding = example().binding;
+    let owner_of = |written: &str| {
+        let at = example_binding.find(written).unwrap_or_else(|| panic!("{written}"));
+        let id_at = example_binding[..at].rfind("\nid = \"").unwrap() + 7;
+        example_binding[id_at..].split('"').next().unwrap().to_string()
+    };
+    let (decimals_of, stale_of) = (owner_of("decimals = 1"), owner_of("stale_after_ms = 30000"));
+    let read_back = |scope: &str, key: &str, b: &veredas_supervisao::binding::Binding| -> String {
+        let d = &b.dashboards[0];
+        match scope {
+            "dashboard" => format!("{:?}", d.columns),
+            "panel" => format!("{:?}", d.panels[1]),
+            "panel value" => format!("{:?}", d.panels[0].kind),
+            "panel trend" => format!("{:?}", d.panels[1].kind),
+            "panel bars" => format!("{:?}", d.panels[2].kind),
+            "panel timeline" => format!("{:?}", d.panels[3].kind),
+            "panel table" => format!("{:?}", d.panels[6].kind),
+            "panel cells" => format!("{:?}", d.panels[7].kind),
+            "column" => match &d.panels[6].kind {
+                PanelKind::Table { columns, .. } => format!("{:?}", columns.iter().find(|c| c.name == "travel").unwrap()),
+                other => panic!("{other:?}"),
+            },
+            "object" if key == "decimals" => format!("{:?}", b.object(&decimals_of).unwrap()),
+            "object" => format!("{:?}", b.object(&stale_of).unwrap()),
+            other => panic!("a scope this reading does not know: {other} `{key}`"),
+        }
+    };
+    let holds = |text: &str, key: &str, v: &str| {
+        [format!("{key}: {v}"), format!("{key}: Some({v})")].iter().any(|w| text.match_indices(w.as_str()).any(|(i, _)| !text[i + w.len()..].starts_with(|c: char| c.is_ascii_digit())))
+    };
     for ((scope, key), edit, accepted, refused) in &rows {
         for v in accepted {
             let ex = with_binding(|b| edit(b, v));
-            assert!(outcome(&ex).is_ok(), "{scope} `{key}` = {v}: {:?}", outcome(&ex).err());
+            let b = outcome(&ex).unwrap_or_else(|e| panic!("{scope} `{key}` = {v}: {e}"));
+            let text = read_back(scope, key, &b);
+            assert!(*scope == "dashboard" && text == *v || holds(&text, key, v), "{scope} `{key}` = {v} read back as {text}");
         }
         for v in refused {
             let ex = with_binding(|b| edit(b, v));
@@ -1900,12 +1934,12 @@ fn every_range_is_held_at_both_ends_and_every_refusal_on_every_key_it_covers() {
     // keys): an exact id and a pattern naming none each refused by name.
     for kind in reader_kinds() {
         let keys_of = reader_keys(&binding_refusal(&with_binding(|b| format!("{b}\n[[dashboard.panel]]\nkind = \"{kind}\"\nzz = 1\n"))));
-        for (key, value) in [("objects", "[\"sped\"]"), ("objects", "[\"chute-*\"]"), ("object", "\"sped\"")] {
+        // Alone and after a valid member of the list (each member judged, not the first alone).
+        for (key, value, named) in [("objects", "[\"sped\"]", "sped"), ("objects", "[\"chute-*\"]", "chute-*"), ("objects", "[\"outlet-1\", \"sped\"]", "sped"), ("objects", "[\"outlet-*\", \"chute-*\"]", "chute-*"), ("object", "\"sped\"", "sped")] {
             if !keys_of.contains(key) {
                 continue;
             }
             let ex = with_binding(|b| format!("{b}\n[[dashboard.panel]]\nkind = \"{kind}\"\n{key} = {value}\n"));
-            let named = value.trim_matches(['[', ']', '"']);
             let err = binding_refusal(&ex);
             assert!(err.ends_with(&format!("`{named}` names no object")), "{kind} {key} = {value}: {err}");
         }
@@ -1992,12 +2026,33 @@ fn every_series_type_under_every_way_of_showing_and_in_every_kind_naming_objects
         }
         let object = format!("\n[[object]]\nid = \"probe\"\nvalue = {{ source = \"{src}\", series = \"{ser}\" }}\n");
         for (kind, names) in &naming {
-            let got = outcome(&with_probe(&object, &format!("\n[[dashboard.panel]]\nkind = \"{kind}\"\n{names}\n")));
-            if numeric || !charted.contains(kind.as_str()) {
-                assert!(got.is_ok(), "{ty} in a {kind}: {got:?}");
+            // The probe alone, and after a valid member of a list (each member judged).
+            let lists = if names.starts_with("objects") { vec![names.to_string(), "objects = [\"outlet-1\", \"probe\"]".to_string()] } else { vec![names.to_string()] };
+            for names in lists {
+                let got = outcome(&with_probe(&object, &format!("\n[[dashboard.panel]]\nkind = \"{kind}\"\n{names}\n")));
+                if numeric || !charted.contains(kind.as_str()) {
+                    assert!(got.is_ok(), "{ty} in a {kind} ({names}): {got:?}");
+                } else {
+                    let err = got.err().unwrap_or_else(|| panic!("{ty} in a {kind} ({names}) loaded"));
+                    assert!(err.contains(&format!("({kind}): `probe` reads `{ser}`")) && err.contains(&ty.to_string()), "{ty} in a {kind} ({names}): {err}");
+                }
+            }
+        }
+    }
+    // 2. Every type at every place a key is read: a rule's written key, and the key a rule over
+    // another series takes from a keyed object; numbers load, a text or a time refused by name.
+    for (ty, src, ser) in every_series_type() {
+        let numeric = matches!(ty, SeriesType::Int | SeriesType::Float);
+        for (place, object) in [
+            ("a rule's own key", format!("\n[[object]]\nid = \"probe\"\nvalue = {{ source = \"plc\", series = \"fill1\" }}\nstates = [ {{ above = 1, source = \"{src}\", series = \"{ser}\", key = \"A1\", state = \"warn\" }} ]\n")),
+            ("a keyed object's key", format!("\n[[object]]\nid = \"probe\"\nvalue = {{ source = \"plc\", series = \"fill1\", key = \"A1\" }}\nstates = [ {{ above = 1, source = \"{src}\", series = \"{ser}\", state = \"warn\" }} ]\n")),
+        ] {
+            let got = outcome(&with_probe(&object, ""));
+            if numeric {
+                assert!(got.is_ok(), "{ty} at {place}: {got:?}");
             } else {
-                let err = got.err().unwrap_or_else(|| panic!("{ty} in a {kind} loaded"));
-                assert!(err.contains(&format!("({kind}): `probe` reads `{ser}`")) && err.contains(&ty.to_string()), "{ty} in a {kind}: {err}");
+                let err = got.err().unwrap_or_else(|| panic!("{ty} at {place} loaded"));
+                assert!(err.contains("a `key` reads one key of a numeric series") && err.contains(&format!("`{ser}`")), "{ty} at {place}: {err}");
             }
         }
     }
@@ -2103,7 +2158,26 @@ fn every_refusal_over_a_set_runs_on_every_member_of_it() {
         let named = |k: &str| chosen.iter().find(|(c, _)| *c == k).map(|(_, v)| v.to_string());
         let want = (named("source").unwrap_or("sorter".into()), named("series").unwrap_or("len".into()), named("key"));
         let rule = &b.object("probe").unwrap().rules[0];
-        assert_eq!(rule.series.as_ref().map(|s| (s.source.clone(), s.series.clone(), s.key.clone())), Some(want), "{chosen:?}");
+        assert_eq!(rule.series.as_ref().map(|s| (s.source.clone(), s.series.clone(), s.key.clone())), Some(want.clone()), "{chosen:?}");
+        // On a timeline (after another object), a rule over another series is refused by it (Q24).
+        let mut tl = with_probe(&object, "\n[[dashboard.panel]]\nkind = \"timeline\"\nobjects = [\"outlet-1\", \"probe\"]\n");
+        tl.project.push_str(both);
+        let key = want.2.as_deref().map(|k| format!(", key `{k}`")).unwrap_or_default();
+        assert_eq!(outcome(&tl).err(), Some(format!("dashboard `Overview`, panel[8] (timeline): `probe` has a rule over another series (`{}` of `{}`{key}), which a timeline does not replay", want.1, want.0)), "{chosen:?}");
+    }
+    // A rule naming the object's own series (its source, or its source and series) reads what a
+    // timeline replays: it loads there.
+    for fields in ["source = \"sorter\", ", "source = \"sorter\", series = \"len\", "] {
+        let object = format!("\n[[object]]\nid = \"probe\"\nvalue = {{ source = \"sorter\", series = \"len\" }}\nstates = [ {{ above = 1, {fields}state = \"warn\" }} ]\n");
+        let mut tl = with_probe(&object, "\n[[dashboard.panel]]\nkind = \"timeline\"\nobjects = [\"probe\"]\n");
+        tl.project.push_str(both);
+        assert!(outcome(&tl).is_ok(), "{fields}: {:?}", outcome(&tl).err());
+    }
+    // 5. Both of a session's file keys refused when empty, by the reader's own text.
+    for file in ["project", "binding"] {
+        let mut ex = example();
+        ex.host = ex.host.replace(&format!("{file} = \"loop/{file}.toml\""), &format!("{file} = \" \""));
+        assert!(host_refusal(&ex).ends_with("session `loop`: `project` and `binding` name files"), "{file}: {}", host_refusal(&ex));
     }
     // The four shapes a session's name and an object's id are refused for, run on both: empty, a
     // first character outside its set, a character outside it, past its length.
