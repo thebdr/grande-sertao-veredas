@@ -11,15 +11,15 @@
     "files"
   ],
   "exitCode": 0,
-  "outputSha": "3d8f52010ccc5fbc23b43d0508af369be305d06f4fbc27b34d1bfbd8dfc0df86",
-  "outputTail": "        PASS [   0.921s] ( 9/21) veredas-supervisao::files every_state_and_every_kind_of_value_a_rule_meets_by_the_reader_s_own_lists\n        PASS [   1.024s] (10/21) veredas-supervisao::files the_edges_the_types_and_every_kind_of_source_and_column\n        PASS [   1.038s] (11/21) veredas-supervisao::files every_key_the_reference_lists_is_the_reader_s\n        PASS [   1.061s] (12/21) veredas-supervisao::files the_executable_checks_the_example_and_prints_its_plan\n        PASS [   0.788s] (13/21) veredas-supervisao::files the_refusals_of_a_kind_of_series_a_panel_and_a_number_name_their_place\n        PASS [   1.040s] (14/21) veredas-supervisao::files the_rest_of_the_refusals_name_their_place\n        PASS [   1.520s] (15/21) veredas-supervisao::files every_pair_of_types_merges_and_every_base_table_carries_portal_s_reserved_columns\n        PASS [   1.645s] (16/21) veredas-supervisao::files a_binding_refuses_what_it_cannot_light_up_by_its_place\n        PASS [   1.979s] (17/21) veredas-supervisao::files every_range_is_held_at_both_ends_and_every_refusal_on_every_key_it_covers\n        PASS [   2.027s] (18/21) veredas-supervisao::files every_refusal_over_a_set_runs_on_every_member_of_it\n        PASS [   2.176s] (19/21) veredas-supervisao::files every_way_of_showing_every_kind_of_series_and_every_marker_element_as_the_reader_owns_them\n        PASS [   3.256s] (20/21) veredas-supervisao::files every_series_type_under_every_way_of_showing_and_in_every_kind_naming_objects\n        PASS [   6.434s] (21/21) veredas-supervisao::files the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists\n────────────\n     Summary [   6.555s] 21 tests run: 21 passed, 0 skipped",
-  "ranAt": "2026-11-14T08:11:02.301Z",
-  "headCommit": "aa00437c580868becf137266a9ff6fa9bcc5af00",
+  "outputSha": "abdf1d9361f30e9b9fbd2d36702d04ecd4ac09ae8deddd12ae828b4b525af8f3",
+  "outputTail": "        PASS [   1.081s] ( 9/21) veredas-supervisao::files a_binding_is_checked_against_its_project_and_its_layout\n        PASS [   1.357s] (10/21) veredas-supervisao::files the_executable_checks_the_example_and_prints_its_plan\n        PASS [   1.461s] (11/21) veredas-supervisao::files the_edges_the_types_and_every_kind_of_source_and_column\n        PASS [   1.508s] (12/21) veredas-supervisao::files every_key_the_reference_lists_is_the_reader_s\n        PASS [   1.091s] (13/21) veredas-supervisao::files the_refusals_of_a_kind_of_series_a_panel_and_a_number_name_their_place\n        PASS [   1.468s] (14/21) veredas-supervisao::files the_rest_of_the_refusals_name_their_place\n        PASS [   2.104s] (15/21) veredas-supervisao::files every_pair_of_types_merges_and_every_base_table_carries_portal_s_reserved_columns\n        PASS [   2.199s] (16/21) veredas-supervisao::files a_binding_refuses_what_it_cannot_light_up_by_its_place\n        PASS [   2.737s] (17/21) veredas-supervisao::files every_range_is_held_at_both_ends_and_every_refusal_on_every_key_it_covers\n        PASS [   2.974s] (18/21) veredas-supervisao::files every_refusal_over_a_set_runs_on_every_member_of_it\n        PASS [   3.181s] (19/21) veredas-supervisao::files every_way_of_showing_every_kind_of_series_and_every_marker_element_as_the_reader_owns_them\n        PASS [   4.653s] (20/21) veredas-supervisao::files every_series_type_under_every_way_of_showing_and_in_every_kind_naming_objects\n        PASS [   9.255s] (21/21) veredas-supervisao::files the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists\n────────────\n     Summary [   9.398s] 21 tests run: 21 passed, 0 skipped",
+  "ranAt": "2026-11-14T08:37:17.877Z",
+  "headCommit": "019c2850b1bb283205d1871106f99114a4bedbef",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/files.rs",
       "file": "crates/veredas-supervisao/tests/files.rs",
-      "fileSha": "c2b6e0996c634c1eafa3f9ef8838affb8233bf1c19990678dbfb06ce94021549"
+      "fileSha": "38d864db2cdfd16616939a5034ca5b496f5076fe4611b6b821a93d76d10dd5bf"
     }
   ]
 }
