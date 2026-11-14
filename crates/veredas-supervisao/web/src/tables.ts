@@ -56,9 +56,13 @@ export class Tables {
     this.root.append(this.list, this.main);
   }
 
-  async show() {
+  async show(picked = false) {
     const token = ++this.asked;
-    this.to = this.status()?.now_ms ?? null;
+    // The window frozen at the session's now. With no now yet, a pick asks its first page whole (its
+    // newest row then holds the window), and the view shown again keeps the window it held.
+    const now = this.status()?.now_ms ?? null;
+    if (now !== null) this.to = now;
+    else if (picked) this.to = null;
     // The pager of the page shown is for the table it was drawn for: off from a pick on.
     for (const b of Array.from(this.main.querySelectorAll(".pager button"))) (b as HTMLButtonElement).disabled = true;
     try {
@@ -66,7 +70,7 @@ export class Tables {
       if (token !== this.asked) return;
       this.list.replaceChildren(h("div", { class: "caps small" }, `Tables · ${t.tables.length}`), ...t.tables.map((x) => {
         const b = h("button", { class: x.name === this.table ? "on" : "", "data-table": x.name }, h("span", {}, x.name), h("span", { class: "mono muted" }, `${x.kind} · ${x.rows ?? "?"}`));
-        b.onclick = () => { this.table = x.name; this.offset = 0; void this.show(); };
+        b.onclick = () => { this.table = x.name; this.offset = 0; void this.show(true); };
         return b;
       }));
       if (this.table) await this.page();
@@ -145,7 +149,16 @@ export class Series {
   }
 
   private async chart(x: SeriesInfo, token: number) {
-    const now = this.status()?.now_ms ?? x.last_ms;
+    // The hour to the session's now: with no now yet, the chart waits for one and says so.
+    let now = this.status()?.now_ms ?? null;
+    if (now === null) {
+      this.main.replaceChildren(h("div", { class: "pager" }, h("strong", {}, `${x.source} · ${x.series}`), h("span", { class: "mono muted", "data-points": "waiting" }, "waiting for the session's clock")));
+      while (now === null) {
+        await new Promise((done) => setTimeout(done, 250));
+        if (token !== this.asked) return;
+        now = this.status()?.now_ms ?? null;
+      }
+    }
     const from = now - 60 * 60_000;
     const q = new URLSearchParams({ source: x.source, series: x.series, from: String(from), to: String(now), points: "600" });
     const w = await getJson<{ points: Pt[]; total: number; downsampled: boolean }>(`${base(this.name)}/portal/api/series/data?${q}`);

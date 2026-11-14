@@ -154,8 +154,9 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let text = std::fs::read_to_string(&project).unwrap();
     // And a view with `ts` alone for its time, so every way portal finds a table's time (its own
     // rule: `index_ms`, else `ts`, else none) is a table here; and one of numbers from 1e21 up,
-    // where a script writes a number with an exponent (and one just below), each exact in binary.
-    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"{VIEW}\"\nsql = \"SELECT outlet, travel > 12 AS slow FROM sorts\"\n\n[[table]]\nname = \"stamped\"\nsql = \"SELECT ts, outlet FROM sorts\"\n\n[[table]]\nname = \"magnitudes\"\nsql = \"SELECT 9.5e20::DOUBLE AS below, 1e21::DOUBLE AS edge, -3.5e21::DOUBLE AS negative, 1e22::DOUBLE AS big\"\n")).unwrap();
+    // where a script writes a number with an exponent (and one just below), each exact in binary,
+    // and numbers below 0 a script writes as it is (a fraction, a whole one, one that rounds to 0).
+    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"{VIEW}\"\nsql = \"SELECT outlet, travel > 12 AS slow FROM sorts\"\n\n[[table]]\nname = \"stamped\"\nsql = \"SELECT ts, outlet FROM sorts\"\n\n[[table]]\nname = \"magnitudes\"\nsql = \"SELECT 9.5e20::DOUBLE AS below, 1e21::DOUBLE AS edge, -3.5e21::DOUBLE AS negative, 1e22::DOUBLE AS big, -0.25::DOUBLE AS quarter, -7.0::DOUBLE AS seven, -0.0001::DOUBLE AS tiny\"\n")).unwrap();
     let log = dir.path().join("loop/sorts.log");
     std::fs::write(&log, "").unwrap();
     let hall_log = dir.path().join("hall/sorts.log");
@@ -370,6 +371,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let (_, catalog) = get(addr, "/s/loop/portal/api/tables");
     let mut kinds = std::collections::BTreeSet::new();
     let mut times = std::collections::BTreeSet::new();
+    let mut paged = std::collections::BTreeSet::new();
     for x in catalog["tables"].as_array().unwrap() {
         let name = x["name"].as_str().unwrap();
         let quoted = serde_json::to_string(name).unwrap();
@@ -386,12 +388,29 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         let n = p["rows"].as_array().unwrap().len();
         let total = p["total"].as_u64().unwrap();
         let has = |c: &str| p["schema"].as_array().unwrap().iter().any(|x| x["name"] == c);
-        times.insert(if has("index_ms") { "index_ms" } else if has("ts") { "ts" } else { "none" });
+        let time_kind = if has("index_ms") { "index_ms" } else if has("ts") { "ts" } else { "none" };
+        times.insert(time_kind);
         let ordered = has("index_ms") || has("ts");
         let said = format!("rows {}–{n} of {total}{}", if total == 0 { 0 } else { 1 }, if ordered { ", newest first" } else { ", unordered" });
         assert_eq!((s["head"].clone(), s["body"].clone(), s["said"].clone(), s["all_shown"].clone()), (json!(head), json!(body), json!(said), json!(true)), "{name}");
         // Its first page's buttons by its place: Newer off, Older off when it is the last too.
         assert_eq!((s["newer"].clone(), s["older"].clone()), (json!(true), json!(total <= 50)), "{name}: its pager on a first page of {total}");
+        // A table of more than one page, paged to its second page as portal answered the page's own
+        // request and back to its first whole: every way portal finds a table's time among them.
+        if total > 50 {
+            page.eval("window.__answers = []; true");
+            click(&mut page, "Older ›");
+            let second = page.wait_for(&format!("(() => {{ const s = {shown_js}; return s && s.table === {quoted} && s.rows.startsWith('51-') && window.__answers.length > 0 ? s : null; }})()"), Duration::from_secs(20));
+            let answers = page.eval("window.__answers");
+            let answer = answers.as_array().unwrap().last().unwrap();
+            assert_eq!((param(answer["url"].as_str().unwrap(), "offset").as_deref(), param(answer["url"].as_str().unwrap(), "to")), (Some("50"), param(url, "to")), "{name}: the second page of the same window");
+            let (h2, b2) = as_shown(&answer["body"]);
+            assert_eq!((second["head"].clone(), second["body"].clone(), second["newer"].clone()), (json!(h2), json!(b2), json!(false)), "{name}: its second page");
+            click(&mut page, "‹ Newer");
+            let back = page.wait_for(&format!("(() => {{ const s = {shown_js}; return s && s.table === {quoted} && s.rows.startsWith('1-') ? s : null; }})()"), Duration::from_secs(20));
+            assert_eq!(back["body"], s["body"], "{name}: back to its first page whole");
+            paged.insert(time_kind);
+        }
         for r in p["rows"].as_array().unwrap() {
             for v in r.as_array().unwrap() {
                 kinds.insert(match v {
@@ -408,6 +427,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // And every way portal finds a table's time, by its own rule (`index_ms`, else `ts`, else
     // none): each a table here, said newest first or unordered as portal orders it.
     assert_eq!(times.into_iter().collect::<Vec<_>>(), ["index_ms", "none", "ts"], "every way portal finds a table's time");
+    assert_eq!(paged.into_iter().collect::<Vec<_>>(), ["index_ms", "none", "ts"], "a table of every way paged and back");
 
     // The Series view lists the series as portal lists them: each button's names, type and count,
     // the count between portal's before the page listed and after (the OPC series keep counting;
@@ -806,6 +826,35 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let ts = answers[0]["body"]["schema"].as_array().unwrap().iter().position(|c| c["name"] == "ts").unwrap();
     let newest = answers[0]["body"]["rows"][0][ts].as_i64().unwrap_or_else(|| panic!("ts as a number: {}", answers[0]["body"]["rows"][0]));
     assert_eq!((param(answers[0]["url"].as_str().unwrap(), "to"), param(answers.last().unwrap()["url"].as_str().unwrap(), "to")), (None, Some(newest.to_string())), "{answers:?}");
+    // Shown again with no status, on its second page: the window it held kept, so Newer brings the
+    // first page back whole at the same window's end.
+    blind.eval("window.__answers = []; true");
+    blind.eval(r#"document.querySelector('.list button[data-table="sorts"]').click()"#);
+    let first_again = shown_at(&mut blind, "1-50/132");
+    click(&mut blind, "Older ›");
+    shown_at(&mut blind, "51-100/132");
+    blind.eval(r#"location.hash = "series""#);
+    blind.wait_for(r#"document.querySelector(".list button[data-series]") ? true : null"#, Duration::from_secs(20));
+    blind.eval(r#"location.hash = "tables""#);
+    shown_at(&mut blind, "51-100/132");
+    click(&mut blind, "‹ Newer");
+    let newer = shown_at(&mut blind, "1-50/132");
+    assert_eq!(newer["body"], first_again["body"], "the newest rows back, the window held");
+    let answers = blind.eval("window.__answers");
+    let urls: Vec<&str> = answers.as_array().unwrap().iter().map(|a| a["url"].as_str().unwrap()).collect();
+    let index = answers[0]["body"]["schema"].as_array().unwrap().iter().position(|c| c["name"] == "index_ms").unwrap();
+    let held_at = answers[0]["body"]["rows"][0][index].as_i64().unwrap().to_string();
+    assert!(param(urls[0], "to").is_none() && urls[1..].iter().all(|u| param(u, "to").as_deref() == Some(held_at.as_str())), "{urls:?}");
+    // A series picked with no status: no window asked, the chart waiting for the session's clock and
+    // saying so.
+    blind.eval("window.__answers = []; true");
+    blind.eval(r#"location.hash = "series""#);
+    blind.wait_for(r#"document.querySelector('.list button[data-series="sorter/travel"]') ? true : null"#, Duration::from_secs(20));
+    blind.eval(r#"document.querySelector('.list button[data-series="sorter/travel"]').click()"#);
+    let waiting = blind.wait_for(r#"(() => { const p = document.querySelector(".list-main .pager [data-points]"); const s = document.querySelector(".list-main .pager strong"); return p && s && s.textContent === "sorter · travel" ? [p.dataset.points, p.textContent] : null; })()"#, Duration::from_secs(20));
+    assert_eq!(waiting, json!(["waiting", "waiting for the session's clock"]));
+    std::thread::sleep(Duration::from_millis(1000));
+    assert_eq!(blind.eval("window.__answers.filter((a) => a.url.includes('/api/series/data')).length"), json!(0), "no window asked before the session's now");
     drop(blind);
 
     // The other session's page reads the other session's router alone: its catalog (no sort
