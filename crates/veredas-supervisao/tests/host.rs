@@ -243,6 +243,14 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
                     Compare::AtMost(x) => ("at most", format!("at most {}", n(*x))),
                 };
                 compares_seen.insert(kind);
+                // Over another series than the object's own: that series named, its comparison bare.
+                let when = match &rule.series {
+                    Some(s) if *s != o.value => {
+                        let bare = when.strip_suffix(&format!(" {}", o.unit)).filter(|_| !o.unit.is_empty()).unwrap_or(&when).to_string();
+                        format!("{} · {}{} {bare}", s.source, s.series, s.key.as_deref().map(|k| format!(" · {k}")).unwrap_or_default())
+                    }
+                    _ => when,
+                };
                 assert_eq!(r["when"], json!(when), "{session} {}: {r}", o.id);
                 r.as_object_mut().unwrap().remove("when");
             }

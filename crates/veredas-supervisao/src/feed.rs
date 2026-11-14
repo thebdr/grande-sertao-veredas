@@ -78,6 +78,8 @@ pub struct ObjectView {
     pub place: Option<f64>,
     /// The markers of a keyed series, by key.
     pub items: Vec<Item>,
+    /// The rule that named the state, by its place among the object's rules (none: normal, stale).
+    pub rule: Option<usize>,
 }
 
 impl ObjectView {
@@ -93,7 +95,9 @@ impl ObjectView {
             }
             j
         };
-        shown(self) == shown(other)
+        // A state named by another rule (two of one class and word) is a change too: a tile says
+        // the rule.
+        shown(self) == shown(other) && self.rule == other.rule
     }
 
     pub fn to_json(&self) -> Json {
@@ -266,12 +270,12 @@ impl Fold {
             (Some(_), None) => true,
             (None, _) => false,
         };
-        let (state, word, stale) = if seen.is_none() {
-            (StateClass::Stale, "no value".to_string(), true)
+        let (state, word, stale, rule) = if seen.is_none() {
+            (StateClass::Stale, "no value".to_string(), true, None)
         } else if !live || !fresh {
-            (StateClass::Stale, "stale".to_string(), true)
+            (StateClass::Stale, "stale".to_string(), true, None)
         } else {
-            let hit = o.rules.iter().find(|r| {
+            let hit = o.rules.iter().position(|r| {
                 let reading = match &r.series {
                     Some(b) => self.seen(b).map(|s| &s.reading),
                     None => seen.map(|s| &s.reading),
@@ -279,11 +283,11 @@ impl Fold {
                 reading.is_some_and(|x| r.compare.holds(x))
             });
             match hit {
-                Some(r) => (r.class, r.word.clone(), false),
-                None => (StateClass::Normal, o.normal.clone(), false),
+                Some(i) => (o.rules[i].class, o.rules[i].word.clone(), false, Some(i)),
+                None => (StateClass::Normal, o.normal.clone(), false, None),
             }
         };
-        ObjectView { id: o.id.clone(), value, text, state, word, stale, since_ms: seen.map(|s| s.arrived_ms), level, place, items }
+        ObjectView { id: o.id.clone(), value, text, state, word, stale, since_ms: seen.map(|s| s.arrived_ms), level, place, items, rule }
     }
 }
 

@@ -200,6 +200,23 @@ pub struct Rule {
     pub ty: Option<SeriesType>,
 }
 
+impl Rule {
+    /// The rule as a person reads it: its comparison in the object's unit (`below 98 %`), or, over
+    /// another series than the object's own, that series named and its comparison bare, its unit
+    /// not the object's (`plc · speed below 0.5`).
+    pub fn describe(&self, own: &SeriesBind, unit: &str) -> String {
+        match &self.series {
+            Some(s) if s != own => format!("{} · {}{} {}", s.source, s.series, s.key.as_deref().map(|k| format!(" · {k}")).unwrap_or_default(), self.compare.describe("")),
+            _ => self.compare.describe(unit),
+        }
+    }
+
+    /// Whether the rule reads the object's own series (written out or left to it).
+    pub fn reads_own(&self, own: &SeriesBind) -> bool {
+        self.series.as_ref().is_none_or(|s| s == own)
+    }
+}
+
 /// A write an object offers, posted to portal's surface by the page.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Action {
@@ -342,7 +359,7 @@ impl Binding {
                 "series": o.value.series,
                 "key": o.value.key,
                 "normal": o.normal,
-                "rules": o.rules.iter().map(|r| json!({ "state": r.class.name(), "word": r.word, "when": r.compare.describe(&o.unit) })).collect::<Vec<_>>(),
+                "rules": o.rules.iter().map(|r| json!({ "state": r.class.name(), "word": r.word, "when": r.describe(&o.value, &o.unit) })).collect::<Vec<_>>(),
                 "actions": o.actions.iter().map(|a| json!({ "label": a.label, "source": a.source, "tag": a.tag, "value": a.value })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
             "dashboards": self.dashboards.iter().map(|d| json!({

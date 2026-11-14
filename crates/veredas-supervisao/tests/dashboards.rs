@@ -1152,7 +1152,8 @@ fn probe_dashboard(d: &Value) -> Value {
     panels.push(tl);
     let mut tb = p(9);
     let row0 = tb["data"]["rows"][0].clone();
-    tb["data"]["rows"] = json!(states.iter().map(|s| { let mut r = row0.clone(); r[2]["state"] = json!(s); r[2]["word"] = word(s); r[2]["mark"] = json!("!"); r }).collect::<Vec<_>>());
+    // Every state on every cell that draws one: the rules' column and the bar's with rules.
+    tb["data"]["rows"] = json!(states.iter().map(|s| { let mut r = row0.clone(); for k in [1, 2] { r[k]["state"] = json!(s); r[k]["word"] = word(s); r[k]["mark"] = json!("!"); } r }).collect::<Vec<_>>());
     panels.push(tb);
     let mut cl = p(10);
     cl["data"]["rows"][0]["spark"] = json!([cl["data"]["rows"][0]["spark"][0].clone()]);
@@ -1366,6 +1367,289 @@ fn close(a: &Value, b: &Value) -> bool {
         (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| close(v, w))),
         _ => a == b,
     }
+}
+
+/// A dashboard of what a panel meets: rules written over the object's own series, a band of two
+/// rules of one class, a rule over another series, a tile normal with no target and one with no
+/// value, an object bound to one key on every chart, a table's columns in every pairing of `bar`
+/// and `states` over values of every sign, a view's time of every kind portal's store writes as
+/// milliseconds, a view fanning one stored row into several, float keys apart past three places,
+/// and cells a view cannot give (no order, no such column).
+const RULES: &str = r#"format = "veredas-binding"
+version = 1
+title = "Rules"
+
+[[object]]
+id = "own-source"
+value = { source = "sorter", series = "travel" }
+unit = "s"
+states = [ { above = 15, source = "sorter", state = "warn", word = "slow" } ]
+
+[[object]]
+id = "own-written"
+value = { source = "sorter", series = "travel" }
+unit = "s"
+states = [ { above = 15, source = "sorter", series = "travel", state = "warn", word = "slow" } ]
+
+[[object]]
+id = "band"
+value = { source = "sorter", series = "rate" }
+unit = "%"
+states = [ { above = 100, state = "alarm" }, { below = 99.5, state = "alarm" } ]
+
+[[object]]
+id = "other"
+value = { source = "sorter", series = "rate" }
+unit = "%"
+states = [ { above = 15, source = "sorter", series = "travel", state = "warn", word = "long" } ]
+
+[[object]]
+id = "plain"
+value = { source = "sorter", series = "rate" }
+unit = "%"
+
+[[object]]
+id = "empty"
+value = { source = "sorter", series = "never" }
+
+[[object]]
+id = "keyed"
+value = { source = "sorter", series = "at", key = "A1" }
+states = [ { above = 30, state = "warn", word = "far" } ]
+
+[[dashboard]]
+name = "Rules"
+
+[[dashboard.panel]]
+kind = "timeline"
+objects = ["own-source", "own-written", "keyed"]
+
+[[dashboard.panel]]
+kind = "value"
+object = "band"
+
+[[dashboard.panel]]
+kind = "value"
+object = "other"
+
+[[dashboard.panel]]
+kind = "value"
+object = "plain"
+
+[[dashboard.panel]]
+kind = "value"
+object = "empty"
+
+[[dashboard.panel]]
+kind = "value"
+object = "keyed"
+
+[[dashboard.panel]]
+kind = "trend"
+object = "keyed"
+
+[[dashboard.panel]]
+kind = "bars"
+object = "keyed"
+aggregate = "max"
+
+[[dashboard.panel]]
+kind = "table"
+table = "signed"
+columns = [ { name = "plain" }, { name = "bar", bar = true }, { name = "ruled", states = [ { below = 0, state = "alarm", word = "under" } ] }, { name = "both", bar = true, states = [ { below = 0, state = "alarm", word = "under" } ] } ]
+
+[[dashboard.panel]]
+kind = "table"
+table = "days"
+columns = [ { name = "ts" }, { name = "day" }, { name = "at" } ]
+
+[[dashboard.panel]]
+kind = "cells"
+table = "fanned"
+key = "zone"
+value = "travel"
+spread = 5
+
+[[dashboard.panel]]
+kind = "cells"
+table = "keyed"
+key = "k"
+value = "n"
+spread = 5
+
+[[dashboard.panel]]
+kind = "cells"
+table = "unordered"
+key = "outlet"
+value = "travel"
+spread = 5
+
+[[dashboard.panel]]
+kind = "cells"
+table = "fanned"
+key = "nokey"
+value = "travel"
+spread = 5
+
+[[dashboard.panel]]
+kind = "cells"
+table = "doubled"
+key = "outlet"
+value = "travel"
+spread = 5
+"#;
+
+/// The project's rules and views for `RULES`: a keyed numeric series, float keys, a series never
+/// written, a view fanning sorts out by zone, one of every time portal writes as milliseconds, one
+/// of values of every sign, one with no order.
+const RULES_PROJECT: &str = r#"
+[[rule]]
+name = "positions"
+pattern = 'POS item=(?P<item>\w+) at=(?P<at>[0-9.]+)'
+scope = "sorter"
+types = { at = "float" }
+key = "item"
+
+[[rule]]
+name = "keyed"
+pattern = 'KEYED k=(?P<k>[0-9.]+) n=(?P<n>[0-9.]+)'
+scope = "sorter"
+types = { k = "float", n = "float" }
+
+[[rule]]
+name = "nevers"
+pattern = 'NEVER v=(?P<never>[0-9.]+)'
+scope = "sorter"
+types = { never = "float" }
+
+[[table]]
+name = "zones"
+sql = "SELECT * FROM (VALUES (1, 'a'), (1, 'b'), (2, 'c')) AS z(outlet, zone)"
+
+[[table]]
+name = "fanned"
+sql = "SELECT s.index_ms, s.source, s.seq, s.outlet, s.travel, z.zone FROM sorts s JOIN zones z ON z.outlet = s.outlet"
+
+[[table]]
+name = "days"
+sql = "SELECT index_ms, ts, CAST(ts AS DATE) AS day, CAST(ts AS TIME) AS at FROM sorts"
+
+[[table]]
+name = "signed"
+sql = "SELECT index_ms, travel - 15 AS plain, travel - 15 AS bar, travel - 15 AS ruled, travel - 15 AS both FROM sorts"
+
+[[table]]
+name = "unordered"
+sql = "SELECT outlet, travel FROM sorts"
+
+[[table]]
+name = "doubled"
+sql = "SELECT index_ms, source, seq, outlet, travel FROM sorts UNION ALL SELECT index_ms, source, seq, outlet, travel FROM sorts"
+"#;
+
+#[test]
+fn every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(&dir.path().join("bench"));
+    let mut ex = live_example(&bench, false);
+    ex.project.push_str(RULES_PROJECT);
+    ex.binding = RULES.to_string();
+    let path = write_example(dir.path(), &ex);
+    let log = dir.path().join("loop/sorts.log");
+    std::fs::write(&log, "").unwrap();
+    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let addr = host.addr();
+    let live = host.session("loop").unwrap().live();
+    assert!(wait(Duration::from_secs(20), || live.health.read().unwrap().get("sorter").is_some_and(|h| h.count == 0)), "the log is attached");
+    // Ten minutes apart, within the tiles' half hour: travel 0, 20, 25 (a run normal, then slow);
+    // A1 at 10 and 20 with B2 at 50 between; two float keys apart in their fourth place.
+    let base = (store_now() / MIN) * MIN - 25 * MIN;
+    let at = |m: f64| base + (m * MIN as f64) as i64;
+    append(&log, &[
+        format!("{} SORT outlet=1 travel=0.0 rate=99.0", stamp(at(0.0))),
+        format!("{} POS item=A1 at=10", stamp(at(1.0))),
+        format!("{} POS item=B2 at=50", stamp(at(2.0))),
+        format!("{} POS item=A1 at=20", stamp(at(3.0))),
+        format!("{} KEYED k=1.0001 n=1", stamp(at(4.0))),
+        format!("{} KEYED k=1.0004 n=2", stamp(at(5.0))),
+        format!("{} SORT outlet=2 travel=20.0 rate=99.0", stamp(at(10.0))),
+        format!("{} SORT outlet=1 travel=25.0 rate=99.0", stamp(at(20.0))),
+    ]);
+    let rows = |t: &str| live.store.query_rows(t, &veredas_portal::store::RowsQuery { limit: 1, ..Default::default() }).map(|p| p.total).unwrap_or(0);
+    assert!(wait(Duration::from_secs(20), || rows("sorts") == 3 && rows("positions") == 3 && rows("keyed") == 2), "the lines are stored");
+    let to = at(26.0);
+    let get_d = || get(addr, &format!("/s/loop/dashboard/0?to={to}")).1;
+    assert!(wait(Duration::from_secs(20), || { let d = get_d(); panel(&d, 2)["state"] == json!("warn") && panel(&d, 5)["text"] == json!("20") }), "{}", get_d());
+    let d = get_d();
+
+    // A rule written over the object's own series (its source alone, or its source and series) is
+    // the object's own on a timeline: normal to the slow sort, slow from it to the window's end.
+    let tl = panel(&d, 0);
+    for (i, id) in ["own-source", "own-written"].into_iter().enumerate() {
+        let runs: Vec<(Value, Value, Value)> = tl["rows"][i]["segments"].as_array().unwrap().iter().map(|s| (s["from"].clone(), s["state"].clone(), s["word"].clone())).collect();
+        assert_eq!(runs, [(json!(at(0.0)), json!("normal"), json!("ok")), (json!(at(10.0)), json!("warn"), json!("slow"))], "{id}");
+        assert_eq!(tl["rows"][i]["now"]["state"], json!("warn"), "{id}");
+    }
+    // The tiles' sub-lines, by every branch: the rule that holds, of two of one class and word (the
+    // feed's own pick); a rule over another series, that series named, its comparison bare; a
+    // normal tile with no target, nothing; a tile with no value.
+    let sub = |i: usize| (panel(&d, i)["state"].clone(), panel(&d, i)["sub"].clone());
+    assert_eq!(sub(1), (json!("alarm"), json!("below 99.5 %")));
+    assert_eq!(sub(2), (json!("warn"), json!("sorter · travel above 15")));
+    assert_eq!(sub(3), (json!("normal"), json!("")));
+    assert_eq!((panel(&d, 4)["text"].clone(), panel(&d, 4)["sub"].clone()), (Value::Null, json!("no value")));
+    // An object bound to one key: its tile, its trend, its bars and its timeline read that key's
+    // samples alone (B2's 50 in none of them).
+    let a1 = json!([[at(1.0), 10.0], [at(3.0), 20.0]]);
+    assert_eq!((panel(&d, 5)["spark"].clone(), panel(&d, 6)["points"].clone()), (a1.clone(), a1));
+    // Each bucket's max over A1's samples alone, wherever the clock puts their buckets.
+    let bucket = 5 * MIN;
+    let mut want: BTreeMap<i64, f64> = BTreeMap::new();
+    for (t, v) in [(at(1.0), 10.0), (at(3.0), 20.0)] {
+        let e = want.entry(t.div_euclid(bucket) * bucket).or_insert(v);
+        *e = e.max(v);
+    }
+    let maxes: Vec<(i64, f64)> = panel(&d, 7)["buckets"].as_array().unwrap().iter().filter_map(|b| Some((b["start"].as_i64()?, b["value"].as_f64()?))).collect();
+    assert_eq!(maxes, want.into_iter().collect::<Vec<_>>(), "the bars' max over A1 alone");
+    let keyed_runs: Vec<Value> = tl["rows"][2]["segments"].as_array().unwrap().iter().map(|s| s["state"].clone()).collect();
+    assert_eq!(keyed_runs, [json!("normal")], "the timeline over A1 alone, never far");
+    // A table's columns in every pairing of a bar and rules, over values of every sign (-15, 5, 10,
+    // newest first): a bar is the value's magnitude against the column's largest; a state on a
+    // column with rules alone, with or without its bar.
+    let tb = panel(&d, 8);
+    let cell = |r: usize, c: usize| tb["rows"][r][c].clone();
+    let fractions: Vec<Value> = (0..3).map(|r| cell(r, 1)["bar"].clone()).collect();
+    assert_eq!(json!(fractions), as_served(&json!([10.0 / 15.0, 5.0 / 15.0, 1.0])));
+    assert_eq!((0..3).map(|r| cell(r, 3)["bar"].clone()).collect::<Vec<_>>(), fractions);
+    for r in 0..3 {
+        assert!(cell(r, 0).get("bar").is_none() && cell(r, 0).get("state").is_none() && cell(r, 1).get("state").is_none() && cell(r, 2).get("bar").is_none(), "row {r}: {}", tb["rows"][r]);
+    }
+    assert_eq!((0..3).map(|r| (cell(r, 2)["state"].clone(), cell(r, 3)["state"].clone())).collect::<Vec<_>>(), [(json!("normal"), json!("normal")), (json!("normal"), json!("normal")), (json!("alarm"), json!("alarm"))]);
+    // Every kind of time portal's store writes as milliseconds (a timestamp, a date, a time of day),
+    // each written as the store's clock reads it.
+    let days = panel(&d, 9);
+    let clock = |ms: i64, f: &str| chrono::DateTime::from_timestamp_millis(ms).unwrap().format(f).to_string();
+    let texts: Vec<Vec<Value>> = days["rows"].as_array().unwrap().iter().map(|r| r.as_array().unwrap().iter().map(|c| c["text"].clone()).collect()).collect();
+    let want: Vec<Vec<Value>> = [20.0, 10.0, 0.0].iter().map(|m| vec![json!(clock(at(*m), "%Y-%m-%d %H:%M:%S")), json!(clock(at(*m), "%Y-%m-%d")), json!(clock(at(*m), "%H:%M:%S"))]).collect();
+    assert_eq!(texts, want);
+    // A view fanning a stored row into several: every row read (outlet 1's two zones each), nothing
+    // capped.
+    let fan = panel(&d, 10);
+    let per: Vec<(Value, Value)> = fan["rows"].as_array().unwrap().iter().map(|r| (r["key"].clone(), r["n"].clone())).collect();
+    assert_eq!((per, fan["read"].clone(), fan["total"].clone(), fan["capped"].clone()), (vec![(json!("a"), json!(2)), (json!("b"), json!(2)), (json!("c"), json!(1))], json!(5), json!(5), json!(false)));
+    // Float keys apart past three places, each its own row.
+    let keys: Vec<(Value, Value)> = panel(&d, 11)["rows"].as_array().unwrap().iter().map(|r| (r["key"].clone(), r["n"].clone())).collect();
+    assert_eq!(keys, [(json!("1.0001"), json!(1)), (json!("1.0004"), json!(1))]);
+    // What cells cannot read, said in the panel's place through the route: a view with no order,
+    // a key the view lacks.
+    assert_eq!(d["panels"][12]["error"], json!("`unordered` has no `index_ms`, `source`, `seq` (cells read each row once by `index_ms`, `source` and `seq`; its columns: outlet, travel)"));
+    // (The limit stated: a view's rows alike in every column are one row, and the window not
+    // capped for it.)
+    let doubled = panel(&d, 14);
+    let per: Vec<(Value, Value)> = doubled["rows"].as_array().unwrap().iter().map(|r| (r["key"].clone(), r["n"].clone())).collect();
+    assert_eq!((per, doubled["read"].clone(), doubled["total"].clone(), doubled["capped"].clone()), (vec![(json!("1"), json!(2)), (json!("2"), json!(1))], json!(3), json!(6), json!(false)));
+    assert_eq!(d["panels"][13]["error"], json!("`fanned` has no column `nokey` (its columns: index_ms, source, seq, outlet, travel, zone)"));
+    host.stop();
 }
 
 #[test]

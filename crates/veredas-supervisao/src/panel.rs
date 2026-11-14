@@ -65,9 +65,9 @@ pub fn tile_sub(o: &Object, v: Option<&ObjectView>, target: Option<f64>, now_ms:
         };
     }
     if v.state != StateClass::Normal {
-        // The rule that named the state, described: `below 98 %`.
-        if let Some(r) = o.rules.iter().find(|r| r.class == v.state && r.word == v.word) {
-            return r.compare.describe(&o.unit);
+        // The rule that named the state (the feed's own pick, by its place), described: `below 98 %`.
+        if let Some(r) = v.rule.and_then(|i| o.rules.get(i)) {
+            return r.describe(&o.value, &o.unit);
         }
         return v.word.clone();
     }
@@ -81,10 +81,11 @@ pub fn tile_sub(o: &Object, v: Option<&ObjectView>, target: Option<f64>, now_ms:
     }
 }
 
-/// The state a sample of the object's own series reads as, by the rules over its own value.
+/// The state a sample of the object's own series reads as, by the rules over its own value (left
+/// to it or written out).
 fn state_of(o: &Object, x: f64) -> (StateClass, String) {
     let r = Reading::Num(x);
-    match o.rules.iter().filter(|r| r.series.is_none()).find(|rule| rule.compare.holds(&r)) {
+    match o.rules.iter().filter(|r| r.reads_own(&o.value)).find(|rule| rule.compare.holds(&r)) {
         Some(rule) => (rule.class, rule.word.clone()),
         None => (StateClass::Normal, o.normal.clone()),
     }
@@ -179,12 +180,42 @@ fn cell_text(v: &Json, decimals: Option<u8>) -> String {
     }
 }
 
-/// A time as the store holds it (milliseconds on its axis, the plant's clock read as UTC), written as
-/// that clock reads it, to the second.
-fn time_text(v: &Json) -> String {
-    match v.as_i64().and_then(chrono::DateTime::from_timestamp_millis) {
-        Some(t) => t.format("%Y-%m-%d %H:%M:%S").to_string(),
-        None => cell_text(v, None),
+/// The kinds of time portal's store writes as milliseconds (its own conversion: a timestamp of any
+/// unit, a date, a time of day), by a column's engine type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Clock {
+    /// Milliseconds on the store's axis (the plant's clock read as UTC).
+    Stamp,
+    /// A day: milliseconds of its midnight on that axis.
+    Day,
+    /// A time of day: milliseconds since midnight.
+    Hour,
+}
+
+/// The kind of time a column holds, by its engine type (`TIMESTAMP` of any unit or zone, `DATE`,
+/// `TIME`), or none.
+pub fn clock_of(data_type: &str) -> Option<Clock> {
+    let t = data_type.trim().to_ascii_uppercase();
+    if t.starts_with("TIMESTAMP") {
+        Some(Clock::Stamp)
+    } else if t == "DATE" {
+        Some(Clock::Day)
+    } else if t == "TIME" {
+        Some(Clock::Hour)
+    } else {
+        None
+    }
+}
+
+/// A time as the store holds it, written as the store's clock reads it: a timestamp to the second,
+/// a date as its day, a time of day to the second.
+pub fn time_text(v: &Json, clock: Clock) -> String {
+    let at = v.as_i64().and_then(chrono::DateTime::from_timestamp_millis);
+    match (clock, at) {
+        (Clock::Stamp, Some(t)) => t.format("%Y-%m-%d %H:%M:%S").to_string(),
+        (Clock::Day, Some(t)) => t.format("%Y-%m-%d").to_string(),
+        (Clock::Hour, Some(t)) => t.format("%H:%M:%S").to_string(),
+        (_, None) => cell_text(v, None),
     }
 }
 
@@ -197,11 +228,12 @@ fn reading_of(v: &Json) -> Option<Reading> {
     }
 }
 
-/// The key of a row as text: a number as shown, text as it is.
+/// The key of a row as text: a number in full (its shortest text, so no two values share a key),
+/// text as it is.
 fn key_text(v: &Json) -> Option<String> {
     match v {
         Json::Null => None,
-        Json::Number(n) => n.as_f64().map(|x| format_number(x, None)),
+        Json::Number(n) => n.as_f64().map(|x| format!("{x}")),
         Json::String(s) => Some(s.clone()),
         other => Some(other.to_string()),
     }
@@ -249,7 +281,7 @@ fn table_panel(live: &Live, table: &str, columns: &[Column], sort: &Option<(Stri
     }
     let maxes: Vec<f64> = (0..chosen.len()).map(|k| rows.iter().filter_map(|r| r[k].as_f64()).fold(0.0_f64, |m, v| m.max(v.abs()))).collect();
     // A time column (the store keeps a time as milliseconds on its axis) written as its clock reads it.
-    let times: Vec<bool> = idx.iter().map(|i| page.columns[*i].data_type.to_ascii_uppercase().starts_with("TIMESTAMP")).collect();
+    let times: Vec<Option<Clock>> = idx.iter().map(|i| clock_of(&page.columns[*i].data_type)).collect();
     let out_rows: Vec<Json> = rows
         .iter()
         .map(|r| {
@@ -259,7 +291,7 @@ fn table_panel(live: &Live, table: &str, columns: &[Column], sort: &Option<(Stri
                     .enumerate()
                     .map(|(k, c)| {
                         let v = &r[k];
-                        let text = if times[k] { time_text(v) } else { cell_text(v, c.decimals) };
+                        let text = match times[k] { Some(clock) => time_text(v, clock), None => cell_text(v, c.decimals) };
                         let mut cell = json!({ "text": text, "value": v });
                         if c.bar {
                             cell["bar"] = match v.as_f64() {
@@ -304,16 +336,18 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
     // last one taken never shifts a page, where an offset would read one row twice and miss
     // another. One stored at the very stamp a page ended on sorts ahead of the rows read there
     // (the store breaks a tie by arrival, newest first), so the next page starts that many rows
-    // early: never past a row not yet read, and the rows read again are known by their source and
-    // sequence and taken once. Every base table carries the three columns this needs; a view
-    // without one of them is refused, its rows having nothing to be read once by.
+    // early: never past a row not yet read, and the rows read again are known by every column
+    // (their source and sequence among them) and taken once, so a view that fans one stored row
+    // out into several keeps each. Every base table carries the three columns this needs; a view
+    // without one of them is refused, its rows having no order to be read in. (A view's rows alike
+    // in every column are one row here.)
     let mut at: Option<(usize, usize, usize)> = None;
-    let mut taken: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
     let (mut bound, mut tied) = (to, 0usize);
     loop {
         let q = RowsQuery { from_ms: Some(from), to_ms: Some(bound), limit: page_rows, offset: tied };
         let page = live.store.query_rows(table, &q).map_err(|e| e.to_string())?;
-        let (ti, si, qi) = match at {
+        let (ti, _, _) = match at {
             Some(at) => at,
             None => {
                 columns = page.columns.iter().map(|c| c.name.clone()).collect();
@@ -339,8 +373,7 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
                 Some(t) if t != bound => (bound, tied) = (t, 1),
                 _ => tied += 1,
             }
-            let id = (r.get(si).map(Json::to_string).unwrap_or_default(), r.get(qi).map(Json::to_string).unwrap_or_default());
-            if taken.insert(id) {
+            if taken.insert(Json::Array(r.clone()).to_string()) {
                 rows.push(r);
             }
         }
@@ -390,7 +423,8 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
             json!({ "key": k, "n": vals.len(), "median": med, "sigma": sigma(&vals), "spark": spark, "bins": bins, "below": below, "above": above })
         })
         .collect();
-    Ok(json!({ "from": from, "to": to, "spread": spread, "rows": out, "read": rows.len(), "total": total, "capped": total as usize > rows.len() }))
+    // Capped: the window holds more rows than the cap let it read.
+    Ok(json!({ "from": from, "to": to, "spread": spread, "rows": out, "read": rows.len(), "total": total, "capped": total as usize > cap }))
 }
 
 fn panel_body(live: &Live, b: &Binding, snap: &Snapshot, p: &Panel, to: i64, now_unix: i64) -> Result<Json, String> {

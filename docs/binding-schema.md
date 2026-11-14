@@ -360,7 +360,8 @@ rule's, a message's, each beside `source`, `key`, `index_ms`, `ts`, `arrival_ms`
 view's are the engine's, judged when the panel is computed.
 - `value`: a tile with the object's value, unit, state and a sparkline. `object` (required),
   `minutes` (`30`: the sparkline's window), `target` (none: the tile says how far the value is from
-  it, in percent of the target's size, signed; a target of 0 says nothing).
+  it, in percent of the target's size, signed; a target of 0 says nothing). A tile not normal says
+  the rule that named its state (one over another series names that series, its comparison bare).
 - `trend`: the object's series over a window with a dashed limit and its breaches marked.
   `object` (required), `minutes` (`60`), `limit` (none): `{ above = x }` or `{ below = x }`; a
   breach is a point past it.
@@ -383,11 +384,13 @@ view's are the engine's, judged when the panel is computed.
   a bar against the column's largest in the page; `states` rules as an object's), `sort` (none:
   `{ column, descending }`, `descending` false unless written, applied to the rows shown, a column of the panel's, or of the table's
   when the panel names none), `limit` (`50`, 1 to 1000). A column's `decimals` are 0 to 6; its
-  rules compare its own value; a time is written as the store's clock reads it, to the second.
-- `cells`: charts in cells, one row per value of a key column of a table over a window: the
+  rules compare its own value; a time is written as the store's clock reads it: a timestamp to the
+  second, a date as its day, a time of day to the second.
+- `cells`: charts in cells, one row per value of a key column (a number by its full value) of a table over a window: the
   median, a sparkline of the median per `bucket_minutes`, the distribution from median − `spread`
   to median + `spread` in 20 bins, σ and n. `table` (required; a view must carry `index_ms`,
-  `source` and `seq`, by which each row is read once while rows arrive), `key` (required), `value`
+  `source` and `seq`, by which its rows are read in order while rows arrive, each once, a row told
+  from another by every column), `key` (required), `value`
   (required: a numeric column), `minutes` (`60`), `bucket_minutes` (`5`), `spread` (required,
   above 0). It reads at most the newest 50 000 rows of the window, and says so when it did.
 
