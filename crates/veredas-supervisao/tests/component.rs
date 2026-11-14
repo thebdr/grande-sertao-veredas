@@ -5,7 +5,7 @@
 //! the tree: every file under the crate is Rust, a hashed source of the page or the page itself, the
 //! page is the three files the host serves, and both of the build's hashes are recomputed.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -171,7 +171,9 @@ fn crate_files() -> Vec<PathBuf> {
         out.stdout
     };
     let staged = git(&["ls-files", "-z", "--stage", "--", "."]);
-    let others = git(&["ls-files", "-z", "--others", "--exclude-standard", "--", "."]);
+    // Ignored by the repository's own `.gitignore` alone: a rule of this machine's (`.git/info/exclude`,
+    // `core.excludesFile`) hides nothing from this reading.
+    let others = git(&["ls-files", "-z", "--others", "--exclude-per-directory=.gitignore", "--", "."]);
     let (tracked, untracked) = regular_entries(&staged, &others).unwrap_or_else(|e| panic!("{e}"));
     let mut files = Vec::new();
     for (rel, held) in tracked.iter().map(|r| (r, true)).chain(untracked.iter().map(|r| (r, false))) {
@@ -301,7 +303,10 @@ fn mentions(text: &str) -> Vec<String> {
     // And a third: the quoted values of the tags the second reads as spaces, each read as text of
     // its own (a label an editor keeps in an attribute: draw.io's `value`, a `title`).
     let third = tag_values(&decoded);
-    for lines in [first, second, third] {
+    // And a fourth: the decoded lines themselves, no span taken for a tag, so one the second reading
+    // takes wrongly (a comparison in code, a comment, a CDATA section) still has its text read.
+    let fourth: Vec<String> = decoded.split('\n').map(String::from).collect();
+    for lines in [first, second, third, fourth] {
         let mut flat = Vec::new();
         let mut line_of = Vec::new();
         for (n, line) in lines.iter().enumerate() {
@@ -333,7 +338,9 @@ fn mentions(text: &str) -> Vec<String> {
 /// the table here; marks and anything else that is no letter or digit dropped.
 fn letters(line: &str) -> Vec<char> {
     let decomposed = icu_normalizer::DecomposingNormalizerBorrowed::new_nfkd().normalize(line);
-    decomposed.chars().flat_map(char::to_lowercase).flat_map(fold).filter(|c| c.is_alphanumeric() && !('\u{300}'..='\u{36f}').contains(c)).collect()
+    // A mark is what Unicode gives a combining class other than 0 (its own list, in every block).
+    let class = icu_normalizer::properties::CanonicalCombiningClassMapBorrowed::new();
+    decomposed.chars().flat_map(char::to_lowercase).flat_map(fold).filter(|c| c.is_alphanumeric() && class.get32_u8(*c as u32) == 0).collect()
 }
 
 /// A line's second reading: its entities, code escapes and percent-encoded bytes decoded, again
@@ -409,8 +416,7 @@ fn untagged(text: &str) -> String {
     while let Some(at) = rest.find('<') {
         out.push_str(&rest[..at]);
         let tail = &rest[at + 1..];
-        let opens = tail.starts_with(|c: char| c.is_ascii_alphabetic() || c == '/' || c == '!');
-        match tail.find(['<', '>']).filter(|i| opens && *i <= 2_000 && tail[*i..].starts_with('>')) {
+        match tag_end(tail) {
             Some(end) => {
                 out.push(' ');
                 out.push_str(&"\n".repeat(tail[..end].matches('\n').count()));
@@ -435,8 +441,7 @@ fn tag_values(text: &str) -> Vec<String> {
     let mut offset = 0;
     while let Some(at) = rest.find('<') {
         let tail = &rest[at + 1..];
-        let opens = tail.starts_with(|c: char| c.is_ascii_alphabetic() || c == '/' || c == '!');
-        match tail.find(['<', '>']).filter(|i| opens && *i <= 2_000 && tail[*i..].starts_with('>')) {
+        match tag_end(tail) {
             Some(end) => {
                 let line = text[..offset + at].matches('\n').count();
                 let mut body = &tail[..end];
@@ -451,7 +456,13 @@ fn tag_values(text: &str) -> Vec<String> {
                             }
                             None => break,
                         },
-                        None => body = &body[eq + 1..],
+                        // A value in no quotes: up to the white space or the end of the tag.
+                        None => {
+                            let end = after.find(|c: char| c.is_ascii_whitespace()).unwrap_or(after.len());
+                            lines[line].push(' ');
+                            lines[line].push_str(&after[..end]);
+                            body = &after[end..];
+                        }
                     }
                 }
                 offset += at + 1 + end + 1;
@@ -506,7 +517,8 @@ fn fold(c: char) -> Vec<char> {
         'ŋ' => "n",
         'œ' => "oe",
         'ŧ' => "t",
-        '\u{2bc}' => "",
+        // The spacing modifier letters NFKD leaves (the apostrophe of `ŉ`, the half ring of `ẚ`).
+        '\u{2b0}'..='\u{2ff}' => "",
         'ƒ' => "f",
         'ƶ' => "z",
         'ȷ' => "j",
@@ -553,7 +565,7 @@ fn decode_entities(text: &str, others_as_space: bool) -> String {
             Some(hex) => u32::from_str_radix(hex, 16).ok(),
             None => digits.parse::<u32>().ok(),
         };
-        code.and_then(char::from_u32).map(String::from)
+        code.map(windows_1252).and_then(char::from_u32).map(String::from)
     };
     // Without its `;`: a number's digits, or the longest legacy name the text starts with.
     let unterminated = |tail: &str| -> Option<(String, usize)> {
@@ -703,6 +715,23 @@ fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
         format!("{{\"label\":\"{}\\u0026nbsp;{}\"}}", rev("arutappaM"), rev("erawtfoS")),
         // A label kept in an attribute, the tag's other values beside it.
         format!("<rect id=\"r1\" title='{}&amp;nbsp;{}' width=\"40\" />", rev("moB"), rev("elareneG")),
+        // A decoded spelling inside what the second reading takes for a tag: a comparison and a
+        // generic arrow in Rust, a script's comparison, an XML comment, a CDATA section.
+        format!("pub fn label(n: usize, cap: usize) -> &'static str {{ if n<cap {{ \"{}\" }} else {{ \"\" }} }} pub fn mark(n: usize) -> usize {{ n }}", rev("oivan od o}3e{u\\tipac")),
+        format!("xs.filter((x) => x<limit && say(\"{}\")).map((x) => x);", rev("erawtfoS02%arutappaM")),
+        format!("const NOTE: &str = \"<!-- drawn after the {} sheet -->\";", rev("erawtfoS;psbn&arutappaM")),
+        format!("<text><![CDATA[{}]]></text>", rev("elareneGn\\moB")),
+        // A numbered reference from 0x80 to 0x9F, as a browser reads it (Windows-1252's š).
+        format!("// <p>the {} table</p>", rev("seulavbd").replacen('s', "&#154;", 1)),
+        // A tag between the words, however long, a `>` inside a quoted value of it, a value in no
+        // quotes.
+        format!("<p>{}<img src=\"data:image/png;base64,{}\">{}</p>", rev("arutappaM"), "A".repeat(2100), rev("erawtfoS")),
+        format!("<p>{}<span title=\"a>b\">{}</span></p>", rev("arutappaM"), rev("erawtfoS")),
+        format!("<rect title={}&nbsp;{} width=4>", rev("moB"), rev("elareneG")),
+        // A letter NFKD leaves with a modifier half ring; a mark of the Latin diacritic blocks
+        // outside U+0300 to U+036F.
+        format!("// the {} sheet", rev("wardatad").replacen('a', "\u{1e9a}", 1)),
+        format!("// the {} rule", rev("oivan od oatipac").replacen('a', "a\u{1de7}", 1)),
     ];
     for s in &samples {
         assert_eq!(mentions(s).len(), 1, "{s}: {:?}", mentions(s));
@@ -781,6 +810,117 @@ fn the_crate_compiles_in_no_file_from_outside_itself() {
     assert_eq!(read("fn f() { let path = 1; include!(\"c.rs\"); }"), ["include! \"c.rs\""]);
 }
 
+/// Where a markup tag opened at `tail` (just past its `<`) ends: the byte of its `>`, a value in
+/// quotes after `=` read through (a `>` inside it is text, as HTML's tokenizer reads one), with no
+/// length cap; none when it does not open as a tag (a letter, `/` or `!` first) or a `<` comes first.
+fn tag_end(tail: &str) -> Option<usize> {
+    if !tail.starts_with(|c: char| c.is_ascii_alphabetic() || c == '/' || c == '!') {
+        return None;
+    }
+    let mut quote: Option<char> = None;
+    let mut last = ' ';
+    for (i, c) in tail.char_indices() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if (c == '"' || c == '\'') && last == '=' => quote = Some(c),
+            None if c == '>' => return Some(i),
+            None if c == '<' => return None,
+            None => {}
+        }
+        if quote.is_none() && !c.is_whitespace() {
+            last = c;
+        }
+    }
+    None
+}
+
+/// WHATWG's remapping of a numbered reference from 0x80 to 0x9F: Windows-1252's characters there,
+/// as a browser reads `&#154;` (š); any other number as itself.
+fn windows_1252(code: u32) -> u32 {
+    const HIGH: [u32; 32] = [
+        0x20AC, 0x81, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x8D, 0x017D, 0x8F,
+        0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178,
+    ];
+    if (0x80..=0x9F).contains(&code) { HIGH[(code - 0x80) as usize] } else { code }
+}
+
+/// The files the compiler read for the crate's library and executable, by its own dep-info written
+/// beside this test's binary (the newest of each): every dependency it lists, as written.
+fn compiled_files() -> BTreeMap<&'static str, Vec<PathBuf>> {
+    let deps = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+    let mut newest: BTreeMap<&'static str, (std::time::SystemTime, PathBuf)> = BTreeMap::new();
+    for e in std::fs::read_dir(&deps).unwrap().flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !(name.starts_with("veredas_supervisao-") && name.ends_with(".d")) {
+            continue;
+        }
+        let text = std::fs::read_to_string(e.path()).unwrap_or_default();
+        let kind = if text.contains(".rlib:") || text.contains(".rmeta:") { "lib" } else { "bin" };
+        let at = e.metadata().and_then(|m| m.modified()).unwrap();
+        if newest.get(kind).is_none_or(|(t, _)| at > *t) {
+            newest.insert(kind, (at, e.path()));
+        }
+    }
+    newest
+        .into_iter()
+        .map(|(kind, (_, path))| {
+            let text = std::fs::read_to_string(&path).unwrap();
+            // Each dependency stands alone on a line of its own, ending in `:`.
+            let files = text.lines().filter(|l| !l.starts_with('#') && l.ends_with(':') && !l.contains(": ")).map(|l| PathBuf::from(l.trim_end_matches(':').replace("\\ ", " "))).collect();
+            (kind, files)
+        })
+        .collect()
+}
+
+/// What the crate builds and what the compiler reads for it: each target's source where the crate's
+/// layout puts it (the library `src/lib.rs`, the executable `src/main.rs`, a test `tests/<name>.rs`,
+/// cargo metadata's own `src_path`); and every file the compiler read for the library and the
+/// executable (its dep-info, so a module, an include however spelled or a file an attribute reads),
+/// under the crate, one git holds or could hold, Rust under `src/` or one of the five files of the
+/// page compiled in; so the files read here are the files compiled. No cargo configuration in the
+/// repository replaces a source (one in a folder above it or the user's own is a limit).
+#[test]
+fn every_file_the_crate_compiles_is_one_read_here() {
+    let root = crate_dir().canonicalize().unwrap();
+    let meta = metadata();
+    let p = package(&meta);
+    for t in p["targets"].as_array().unwrap() {
+        let name = t["name"].as_str().unwrap();
+        let kind = t["kind"][0].as_str().unwrap();
+        let src = PathBuf::from(t["src_path"].as_str().unwrap()).canonicalize().unwrap();
+        let rel = src.strip_prefix(&root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_else(|_| panic!("{kind} {name} from {} outside the crate", src.display()));
+        let want = match kind {
+            "lib" => "src/lib.rs".to_string(),
+            "bin" => "src/main.rs".to_string(),
+            "test" => format!("tests/{name}.rs"),
+            other => panic!("a target of a kind this test does not know: {other} {name}"),
+        };
+        assert_eq!(rel, want, "{kind} {name}");
+    }
+    let held: BTreeSet<PathBuf> = crate_files().into_iter().map(|f| f.canonicalize().unwrap()).collect();
+    let page: Vec<String> = web::OUTPUT_FILES.iter().map(|f| format!("web/dist/{f}")).chain(["web/dist/source.hash".to_string(), "web/dist/output.hash".to_string()]).collect();
+    let compiled = compiled_files();
+    assert_eq!(compiled.keys().copied().collect::<Vec<_>>(), ["bin", "lib"], "the library's and the executable's dep-info beside this test");
+    for (kind, files) in &compiled {
+        assert!(files.iter().any(|f| f.ends_with("lib.rs") || f.ends_with("main.rs")), "{kind}: {files:?}");
+        for f in files {
+            // Written relative to the workspace's root, where cargo runs the compiler.
+            let at = if f.is_absolute() { f.clone() } else { root.parent().unwrap().parent().unwrap().join(f) };
+            let real = at.canonicalize().unwrap_or_else(|e| panic!("{kind} read {}: {e}", f.display()));
+            let rel = real.strip_prefix(&root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_else(|_| panic!("{kind} compiles in {} from outside the crate", real.display()));
+            assert!(held.contains(&real), "{kind} compiles in {rel}, which git neither holds nor could hold");
+            assert!((rel.starts_with("src/") && rel.ends_with(".rs")) || page.contains(&rel), "{kind} compiles in {rel}, neither Rust under src/ nor the page");
+        }
+    }
+    let repo = root.parent().unwrap().parent().unwrap();
+    for dir in [repo, root.as_path()] {
+        for f in [".cargo/config.toml", ".cargo/config"] {
+            assert!(!dir.join(f).exists(), "{}: a cargo configuration could replace a source", dir.join(f).display());
+        }
+    }
+}
+
 /// The letters the reader claims, read whole from the lists that own them: every letter of Latin-1
 /// and Latin Extended-A (Unicode's two blocks) and every name WHATWG lists whose character is a
 /// Latin letter (its blocks, or a letter Unicode decomposes to plain ones), with its `;` and, for a
@@ -791,12 +931,31 @@ fn every_latin_letter_and_every_html_name_of_one_reads_as_plain_letters() {
     let plain = |r: &[char]| !r.is_empty() && r.iter().all(|c| c.is_ascii_lowercase());
     let latin = |c: char| matches!(c as u32, 0xc0..=0x24f | 0x1e00..=0x1eff);
     let mut letters_read = 0;
-    for c in ('\u{c0}'..='\u{17f}').filter(|c| c.is_alphabetic()) {
+    // (µ, U+00B5, is Greek by Unicode's own decomposition, its mu: it stands for an m as often as it
+    // looks like a u, and is read as itself, a limit.)
+    for c in ('\u{80}'..='\u{17f}').filter(|c| c.is_alphabetic() && *c != '\u{b5}') {
         let read = letters(&c.to_string());
         assert!(plain(&read), "{c} (U+{:04X}) reads as {read:?}", c as u32);
         letters_read += 1;
     }
-    assert_eq!(letters_read, 62 + 128, "Latin-1's letters and Latin Extended-A's, every one");
+    assert_eq!(letters_read, 64 + 128, "Latin-1's letters (ª and º among them, µ apart) and Latin Extended-A's, every one");
+    // Every letter of every block that Unicode's NFKD reads with a plain letter in it reads as
+    // plain letters; every character Unicode gives a combining class is dropped between two letters.
+    let nfkd = icu_normalizer::DecomposingNormalizerBorrowed::new_nfkd();
+    let class = icu_normalizer::properties::CanonicalCombiningClassMapBorrowed::new();
+    let (mut lettered, mut marks) = (0, 0);
+    for c in (0..=0x10FFFFu32).filter_map(char::from_u32) {
+        if c.is_alphabetic() && nfkd.normalize(&c.to_string()).chars().any(|x| x.is_ascii_alphabetic()) {
+            let read = letters(&c.to_string());
+            assert!(plain(&read), "{c} (U+{:04X}) reads as {read:?}", c as u32);
+            lettered += 1;
+        }
+        if class.get32_u8(c as u32) != 0 {
+            assert_eq!(letters(&format!("a{c}b")), ['a', 'b'], "U+{:04X}, a mark", c as u32);
+            marks += 1;
+        }
+    }
+    assert!(lettered > 1000 && marks > 800, "{lettered} letters, {marks} marks");
     let (names, legacy) = html_names();
     assert_eq!(names.len() + legacy.len(), entities::ENTITIES.len());
     let mut names_read = 0;
