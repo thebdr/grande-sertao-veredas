@@ -46,6 +46,38 @@ fn supervisao_is_one_library_and_one_executable_named_for_it() {
 }
 
 /// Crates a supervision app has no business holding itself: a plant's stack is portal's.
+/// supervisão's normal and build graph on every platform with portal's subtree cut away, as
+/// reviewed (2026-11-14, from C-047's thirteenth round), by name.
+const PRUNED_REVIEWED: &str = "
+aes aho-corasick allocator-api2 android_system_properties arc-swap async-opcua-client
+async-opcua-core async-opcua-crypto async-opcua-macros async-opcua-nodes async-opcua-types
+async-trait atomic-waker autocfg axum axum-core base64 base64ct bitflags block-buffer
+block-padding bumpalo byteorder bytes cbc cc cfg-if chrono cipher const-oid convert_case
+core-foundation-sys cpufeatures crypto-common der der_derive digest displaydoc equivalent errno
+find-msvc-tools flagset foldhash form_urlencoded futures futures-channel futures-core
+futures-executor futures-io futures-macro futures-sink futures-task futures-util generic-array
+gethostname getrandom hashbrown hmac http http-body http-body-util httparse httpdate hyper
+hyper-util iana-time-zone iana-time-zone-haiku icu_collections icu_locale_core icu_normalizer
+icu_normalizer_data icu_properties icu_properties_data icu_provider idna idna_adapter indexmap
+inout itoa jobserver js-sys lazy_static libc libm linux-raw-sys litemap lock_api log matchit
+memchr mime mio num-bigint-dig num-integer num-iter num-traits once_cell parking_lot
+parking_lot_core pem-rfc7468 percent-encoding percent-encoding-rfc3986 pin-project-lite pkcs1
+pkcs8 potential_utf ppv-lite86 proc-macro2 quote r-efi rand rand_chacha rand_core redox_syscall
+regex regex-automata regex-syntax roxmltree rsa rustix rustversion ryu scopeguard serde
+serde_core serde_derive serde_json serde_path_to_error serde_spanned serde_urlencoded
+serde_yaml sha1 sha2 shlex signal-hook-registry signature slab smallvec socket2 spin spki
+stable_deref_trait subtle syn sync_wrapper synstructure thiserror thiserror-impl tinystr tokio
+tokio-macros tokio-stream tokio-util toml toml_datetime toml_parser toml_writer tower
+tower-layer tower-service tracing tracing-attributes tracing-core typenum unicode-ident
+unicode-segmentation unsafe-libyaml url utf8_iter utf_types uuid veredas-core
+veredas-supervisao version_check wasi wasm-bindgen wasm-bindgen-macro
+wasm-bindgen-macro-support wasm-bindgen-shared windows-core windows-implement windows-interface
+windows-link windows-result windows-strings windows-sys windows-targets windows_aarch64_gnullvm
+windows_aarch64_msvc windows_i686_gnu windows_i686_gnullvm windows_i686_msvc windows_x86_64_gnu
+windows_x86_64_gnullvm windows_x86_64_msvc winnow writeable x509-cert yoke yoke-derive zerocopy
+zerocopy-derive zerofrom zerofrom-derive zeroize zerotrie zerovec zerovec-derive zmij
+";
+
 const BANNED_DIRECT: &[&str] = &["async-opcua-client", "async-opcua-server", "async-opcua-types", "duckdb", "libduckdb-sys", "socket2", "reqwest", "hyper", "hyper-util", "veredas-maquinar", "veredas-aranha"];
 
 #[test]
@@ -156,6 +188,13 @@ fn the_plant_s_stack_reaches_supervisao_through_portal_alone() {
     }
     let pruned = graph_with("veredas-supervisao", &["--prune", "veredas-portal"]);
     assert!(!pruned.contains("veredas-portal") && pruned.contains("axum"), "{pruned:?}");
+    // And held whole: every crate of that pruned graph (core's, the server's and its runtime's, the
+    // layout's reader and the rest, on every platform) is one reviewed here, so a crate of any stack
+    // joining by any route but portal (core growing a socket crate) fails until it is read.
+    let reviewed_pruned: BTreeSet<String> = PRUNED_REVIEWED.split_whitespace().map(String::from).collect();
+    let joined: Vec<&String> = pruned.difference(&reviewed_pruned).collect();
+    let left: Vec<&String> = reviewed_pruned.difference(&pruned).collect();
+    assert!(joined.is_empty() && left.is_empty(), "supervisão's graph without portal moved: joined {joined:?}, left {left:?} (review each, then move PRUNED_REVIEWED)");
     let other: Vec<&&str> = BANNED_DIRECT.iter().filter(|c| pruned.contains(**c) && !brought.contains(**c)).collect();
     assert!(other.is_empty(), "a plant's stack reaching supervisão other than through portal or a reviewed dependency: {other:?}");
 }
@@ -174,7 +213,42 @@ fn crate_files() -> Vec<PathBuf> {
     // Ignored by the repository's own `.gitignore` alone: a rule of this machine's (`.git/info/exclude`,
     // `core.excludesFile`) hides nothing from this reading.
     let others = git(&["ls-files", "-z", "--others", "--exclude-per-directory=.gitignore", "--", "."]);
+    // And those `.gitignore` files are the repository's: every entry they hide is hidden by a rule of
+    // one git tracks (git names each rule's file), so one written on this machine alone, untracked
+    // or ignored itself, hides nothing.
+    let top = String::from_utf8(git(&["rev-parse", "--show-toplevel"])).unwrap().trim().to_string();
+    let ignored = git(&["ls-files", "-z", "--others", "--ignored", "--exclude-per-directory=.gitignore", "--directory", "--", "."]);
+    let mut ask = Command::new("git").arg("-C").arg(&root).args(["check-ignore", "--stdin", "-z", "-v", "--no-index"]).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
+    std::io::Write::write_all(&mut ask.stdin.take().unwrap(), &ignored).unwrap();
+    let said = ask.wait_with_output().unwrap();
+    // Each entry as `source`, `line`, `pattern`, `path`: the rule that hides it and the file it is in.
+    let fields: Vec<String> = said.stdout.split(|b| *b == 0).map(|f| String::from_utf8_lossy(f).to_string()).collect();
+    let entries = ignored.split(|b| *b == 0).filter(|e| !e.is_empty()).count();
+    assert_eq!(fields.len() / 4, entries, "git names the rule hiding each ignored entry: {fields:?}");
+    for f in fields.chunks(4).filter(|f| f.len() == 4) {
+        let (source, entry) = (&f[0], &f[3]);
+        let held = Command::new("git").arg("-C").arg(&top).args(["ls-files", "--error-unmatch", "--", source]).output().unwrap().status.success();
+        assert!(held, "`{entry}` is hidden by {source}, which git does not hold: a rule of this machine's own hides nothing here");
+    }
     let (tracked, untracked) = regular_entries(&staged, &others).unwrap_or_else(|e| panic!("{e}"));
+    // What is read here is what is committed: no file of the crate passes through a filter git runs
+    // between the commit and the working tree (a clean or smudge filter, an encoding of the working
+    // tree), by git's own reading of every attribute file (the repository's, this machine's).
+    let mut ask = Command::new("git").arg("-C").arg(&root).args(["check-attr", "--stdin", "-z", "filter", "working-tree-encoding"]).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
+    {
+        let mut input = ask.stdin.take().unwrap();
+        for rel in tracked.iter().chain(&untracked) {
+            std::io::Write::write_all(&mut input, rel.as_bytes()).unwrap();
+            std::io::Write::write_all(&mut input, b"\0").unwrap();
+        }
+    }
+    let said = ask.wait_with_output().unwrap();
+    assert!(said.status.success());
+    let fields: Vec<String> = said.stdout.split(|b| *b == 0).map(|f| String::from_utf8_lossy(f).to_string()).collect();
+    assert_eq!(fields.len() / 3, (tracked.len() + untracked.len()) * 2, "git's attributes for every file");
+    for f in fields.chunks(3).filter(|f| f.len() == 3) {
+        assert_eq!(f[2], "unspecified", "`{}` passes through git's `{}` between the commit and the working tree", f[0], f[1]);
+    }
     let mut files = Vec::new();
     for (rel, held) in tracked.iter().map(|r| (r, true)).chain(untracked.iter().map(|r| (r, false))) {
         let p = root.join(rel);
@@ -358,7 +432,7 @@ fn second_reading(line: &str) -> String {
 }
 
 /// A line with its code escapes read as the crate's languages write a character: Rust's and a
-/// script's braced `\u{..}` (Rust's `_` between its digits read through), a script's four-digit
+/// script's braced `\u{..}` of any length (Rust's `_` between its digits read through), a script's four-digit
 /// `\u....` and two-digit `\x..`, TOML's eight-digit `\U........`, a stylesheet's one to six hex
 /// digits and the one space that may end them; a line break or a tab written as an escape (`\n`,
 /// `\r`, `\t`) as a space. Anything else is kept as written.
@@ -372,7 +446,9 @@ fn decode_escapes(line: &str) -> String {
         let (code, used) = if let Some(braced) = tail.strip_prefix("u{") {
             let inner = braced.find('}').map(|end| &braced[..end]);
             match inner {
-                Some(i) if i.starts_with(|c: char| c.is_ascii_hexdigit()) && i.chars().all(|c| c.is_ascii_hexdigit() || c == '_') && (1..=6).contains(&i.chars().filter(|c| *c != '_').count()) => {
+                // Any count of digits (a script's `\u{CodePoint}` takes leading zeros without end), the
+                // value a character.
+                Some(i) if i.starts_with(|c: char| c.is_ascii_hexdigit()) && i.chars().all(|c| c.is_ascii_hexdigit() || c == '_') => {
                     (u32::from_str_radix(&i.replace('_', ""), 16).ok(), i.len() + 3)
                 }
                 _ => (None, 0),
@@ -656,6 +732,7 @@ fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
         // which the escape reading swallows and the plain reading keeps.
         format!("// {}", rev("oivan od o}3e{u\\tipac")),
         format!("const s = \"{}\";", rev("oivan od o3e00u\\tipac")),
+        format!("const s = \"{}\";", rev("oivan od o}3e0000000{u\\tipac")),
         format!("const s = \"{}\";", rev("oivan od o3ex\\tipac")),
         format!("p::after {{ content: \"{}\" }}", rev("oivan od o 3e\\tipac")),
         format!("const r = /\\b{}/;", rev("seulavbd")),
@@ -887,7 +964,7 @@ fn dep_infos(base: &Path, dir: &Path, profile: &str, out: &mut BTreeSet<PathBuf>
 /// The files the compiler read for the crate's library and executable, by its own dep-info in this
 /// build's profile, wherever cargo's layout puts it (the newest of each: a library's lists its
 /// `.rlib` or `.rmeta`; an executable's, `src/main.rs`): every dependency it lists, as written.
-fn compiled_files() -> BTreeMap<&'static str, Vec<PathBuf>> {
+fn compiled_files() -> BTreeMap<&'static str, (Vec<PathBuf>, Vec<String>)> {
     let (dirs, profile) = build_dirs();
     let mut infos = BTreeSet::new();
     for d in &dirs {
@@ -913,9 +990,11 @@ fn compiled_files() -> BTreeMap<&'static str, Vec<PathBuf>> {
         .into_iter()
         .map(|(kind, (_, path))| {
             let text = std::fs::read_to_string(&path).unwrap();
-            // Each dependency stands alone on a line of its own, ending in `:`.
+            // Each dependency stands alone on a line of its own, ending in `:`; each variable of the
+            // environment the compiler read (`env!`, `option_env!`) on a line `# env-dep:NAME=value`.
             let files = text.lines().filter(|l| !l.starts_with('#') && l.ends_with(':') && !l.contains(": ")).map(|l| PathBuf::from(l.trim_end_matches(':').replace("\\ ", " "))).collect();
-            (kind, files)
+            let envs = text.lines().filter_map(|l| l.strip_prefix("# env-dep:")).map(|l| l.split('=').next().unwrap_or(l).to_string()).collect();
+            (kind, (files, envs))
         })
         .collect()
 }
@@ -949,8 +1028,12 @@ fn every_file_the_crate_compiles_is_one_read_here() {
     let page: Vec<String> = web::OUTPUT_FILES.iter().map(|f| format!("web/dist/{f}")).chain(["web/dist/source.hash".to_string(), "web/dist/output.hash".to_string()]).collect();
     let compiled = compiled_files();
     assert_eq!(compiled.keys().copied().collect::<Vec<_>>(), ["bin", "lib"], "the library's and the executable's dep-info in this build's profile, wherever cargo's layout puts it");
-    for (kind, files) in &compiled {
+    for (kind, (files, envs)) in &compiled {
         assert!(files.iter().any(|f| f.ends_with("lib.rs") || f.ends_with("main.rs")), "{kind}: {files:?}");
+        // Nor any text from the machine's environment: a variable the compiler read is cargo's own
+        // (`CARGO_…`, from the manifest and the build), never another.
+        let machine: Vec<&String> = envs.iter().filter(|e| !e.starts_with("CARGO_")).collect();
+        assert!(machine.is_empty(), "{kind} compiles in the machine's environment: {machine:?}");
         for f in files {
             // Written relative to the workspace's root, where cargo runs the compiler.
             let at = if f.is_absolute() { f.clone() } else { root.parent().unwrap().parent().unwrap().join(f) };
@@ -1094,10 +1177,12 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
     assert_eq!((keys, &tsconfig["include"]), (["compilerOptions", "include"].into_iter().collect(), &serde_json::json!(["src"])), "{tsconfig}");
     for s in sources.iter().filter(|s| s.ends_with(".css") || s.ends_with(".html")) {
         let text = std::fs::read_to_string(webdir.join(s)).unwrap();
-        assert!(!text.contains("@import"), "{s} imports a stylesheet");
+        // Read as CSS reads it: an at-rule's name in any case or escaped is that at-rule.
+        let sheet = css_read(&text);
+        assert!(!sheet.contains("@import"), "{s} imports a stylesheet");
         // No CSS module: its `composes ... from` and `@value ... from` read files the build's guard
         // never sees (the build reads none: `modules: false`).
-        assert!(!s.contains(".module.") && !text.contains("composes") && !text.contains("@value"), "{s} is a CSS module");
+        assert!(!s.contains(".module.") && !sheet.contains("composes") && !sheet.contains("@value"), "{s} is a CSS module");
         assert_eq!(urls(&text), Vec::<String>::new(), "{s} points outside the page");
         assert_eq!(addresses(&text), BTreeSet::<String>::new(), "{s} names an address");
     }
@@ -1129,7 +1214,10 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
     // address, the script no dynamic import and no address but the SVG namespace.
     assert_eq!(web::INDEX_HTML.replace("\r\n", "\n"), INDEX_PAGE, "web/dist/index.html is not the page this test holds");
     assert!(!web::APP_JS.is_empty() && !web::APP_CSS.is_empty());
-    assert!(!web::APP_CSS.contains("@import"), "the stylesheet imports nothing");
+    assert!(!css_read(web::APP_CSS).contains("@import"), "the stylesheet imports nothing");
+    // The reading itself: a function's name in any case or escaped, a comment between tokens, a
+    // substitution inside an image set, a name that only ends in `url`.
+    assert_eq!(urls(r#"a { b: URL(x.png); c: \75 rl(y.png); d: IMAGE-SET("z.png" 1x); e: -webkit-image-set(url(data:,) 1x, 'w.png' 2x); f: image-set(var(--v) 1x); g: ur/**/l(n.png); h: my-url(m.png); i: src(s.png) }"#), ["x.png", "y.png", "s.png", "z.png", "w.png", "image-set(var(--v) 1x)"]);
     assert_eq!(urls(web::APP_CSS), Vec::<String>::new(), "the stylesheet points outside the page");
     assert_eq!(addresses(web::APP_CSS), BTreeSet::<String>::new(), "the stylesheet names an address");
     assert!(!web::APP_JS.contains("import(") && !web::APP_JS.contains("import.meta.url"), "the bundle loads no other file");
@@ -1155,15 +1243,78 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
     assert_ne!(web::source_hash(copy.path()).unwrap(), a, "a byte that is not text counts");
 }
 
-/// Every `url(...)` target, and every quoted string inside an `image-set(...)` (prefixed or
-/// not), in a text, that is neither a fragment of the page nor a data URI.
+/// A stylesheet as CSS's tokenizer reads it: each comment nothing between tokens (a space), each
+/// escape its character (one to six hex digits and the one white space that may end them, or any
+/// other character as itself), and every letter in lower case (a function's or an at-rule's name
+/// reads in any case).
+fn css_read(text: &str) -> String {
+    let cs: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '/' && cs.get(i + 1) == Some(&'*') {
+            let mut j = i + 2;
+            while j < cs.len() && !(cs[j] == '*' && cs.get(j + 1) == Some(&'/')) {
+                j += 1;
+            }
+            out.push(' ');
+            i = j + 2;
+            continue;
+        }
+        if cs[i] == '\\' {
+            let hex: String = cs[i + 1..].iter().take(6).take_while(|c| c.is_ascii_hexdigit()).collect();
+            if !hex.is_empty() {
+                out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
+                i += 1 + hex.len();
+                if cs.get(i).is_some_and(|c| c.is_whitespace()) {
+                    i += 1;
+                }
+            } else {
+                out.extend(cs.get(i + 1).filter(|c| **c != '\n'));
+                i += 2;
+            }
+            continue;
+        }
+        out.push(cs[i]);
+        i += 1;
+    }
+    out.to_lowercase()
+}
+
+/// Every `url(...)` or `src(...)` target, and every string inside an `image-set(...)` (prefixed or
+/// not, read to its own closing parenthesis), in a stylesheet read as CSS reads one, that is neither
+/// a fragment of the page nor a data URI; an `image-set` that substitutes a value (`var()`, `env()`,
+/// `attr()`) counts whole, its target unknown here.
 fn urls(text: &str) -> Vec<String> {
-    let targets = text.match_indices("url(").map(|(i, _)| text[i + 4..].split(')').next().unwrap_or("").trim().trim_matches(['"', '\'']).to_string());
-    let sets = text.match_indices("image-set(").flat_map(|(i, _)| {
-        let inside = text[i + 10..].split(')').next().unwrap_or("");
-        ['"', '\''].into_iter().flat_map(move |q| inside.split(q).skip(1).step_by(2).map(String::from))
-    });
-    targets.chain(sets).filter(|u| !u.starts_with('#') && !u.starts_with("data:")).collect()
+    let read = css_read(text);
+    let mut out: Vec<String> = Vec::new();
+    for f in ["url(", "src("] {
+        for (i, _) in read.match_indices(f) {
+            // A name that only ends in it (`my-url(`) is another function.
+            if read[..i].ends_with(|c: char| c.is_alphanumeric() || c == '-' || c == '_') {
+                continue;
+            }
+            out.push(read[i + 4..].split(')').next().unwrap_or("").trim().trim_matches(['"', '\'']).to_string());
+        }
+    }
+    for (i, _) in read.match_indices("image-set(") {
+        let tail = &read[i + 10..];
+        let mut depth = 1;
+        let end = tail.char_indices().find(|(_, c)| {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            depth == 0
+        });
+        let inside = &tail[..end.map(|(e, _)| e).unwrap_or(tail.len())];
+        if ["var(", "env(", "attr("].iter().any(|s| inside.contains(s)) {
+            out.push(format!("image-set({inside})"));
+        }
+        out.extend(['"', '\''].into_iter().flat_map(|q| inside.split(q).skip(1).step_by(2).map(String::from)));
+    }
+    out.into_iter().filter(|u| !u.starts_with('#') && !u.starts_with("data:")).collect()
 }
 
 /// Every address a text names (`http://`, `https://`, or `//` but a comment's), up to the
