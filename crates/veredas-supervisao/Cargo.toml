@@ -38,3 +38,5 @@ tempfile = { workspace = true }
 proc-macro2 = { workspace = true }
 # Unicode's decomposition: the component test reads an accented letter as its base letter.
 icu_normalizer = { workspace = true }
+# HTML's named character references (WHATWG's table): the component test reads each as its letters.
+entities = { workspace = true }

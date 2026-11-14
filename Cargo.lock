@@ -924,6 +924,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "entities"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5320ae4c3782150d900b79807611a59a99fc9a1d61d686faafc24b93fc8d7ca"
+
+[[package]]
 name = "equivalent"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3156,6 +3162,7 @@ version = "2.0.0-alpha.1"
 dependencies = [
  "axum",
  "chrono",
+ "entities",
  "icu_normalizer",
  "proc-macro2",
  "roxmltree",

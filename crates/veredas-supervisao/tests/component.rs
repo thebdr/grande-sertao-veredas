@@ -58,9 +58,10 @@ fn its_own_dependencies_are_core_portal_and_the_servers_crates() {
     let build: Vec<&Value> = p["dependencies"].as_array().unwrap().iter().filter(|d| d["kind"] == "build").collect();
     assert!(build.is_empty());
     // The bench is a fixture: a dev-dependency, outside the map; the Rust lexer reads the sources
-    // for the writes test (C-054); Unicode's decomposition reads every file's letters here.
+    // for the writes test (C-054); Unicode's decomposition and HTML's named references (WHATWG's
+    // table) read every file's letters here.
     let dev: BTreeSet<&str> = p["dependencies"].as_array().unwrap().iter().filter(|d| d["kind"] == "dev").map(|d| d["name"].as_str().unwrap()).collect();
-    assert_eq!(dev, ["icu_normalizer", "proc-macro2", "tempfile", "veredas-maquinar"].into_iter().collect::<BTreeSet<_>>());
+    assert_eq!(dev, ["entities", "icu_normalizer", "proc-macro2", "tempfile", "veredas-maquinar"].into_iter().collect::<BTreeSet<_>>());
 }
 
 /// The crates in a package's normal and build graph on every platform, by name, as cargo would
@@ -226,6 +227,12 @@ fn an_address_is_read_by_its_scheme_or_its_slashes() {
     assert_eq!(read("fetch(`//
 	cdn.example/b.json`)"), ["//cdn.example/b.json"]);
     assert_eq!(read("fetch(\"ht	tps:cdn.example/two.json\")"), ["https:cdn.example/two.json"]);
+    // A backslash for a slash, as the parser reads it: before a host, after a scheme, doubled.
+    assert_eq!(read(r"void fetch(String.raw`/\cdn.example/x.json`)"), ["//cdn.example/x.json"]);
+    assert_eq!(read(r#"fetch("\\cdn.example/y.json")"#), ["//cdn.example/y.json"]);
+    assert_eq!(read(r#"fetch("https:\\cdn.example/z.json")"#), ["//cdn.example/z.json", "https://cdn.example/z.json"]);
+    // A pattern's escaped slashes name no host.
+    assert_eq!(read(r#"t.replace(/\.?0+$/,"");e.match(/^\/s\/([a-z0-9][a-z0-9-]*)\/?$/)"#), Vec::<String>::new());
 }
 
 #[test]
@@ -278,26 +285,27 @@ fn mentions(text: &str) -> Vec<String> {
             hits.push(h);
         }
     };
-    // The text read twice: each line with its HTML entities decoded; then each line with its
-    // entities (`&lt;`, `&gt;` and `&amp;` as their characters, any other naming no letter, as
-    // `&nbsp;`, a space), its code escapes and its percent-encoded bytes (`%20`, `%C3%A3`, as
-    // UTF-8) decoded, and only then the whole text's markup tags read as spaces, a tag across lines
+    // The text read twice: each line with the HTML entities that spell a letter decoded; then each
+    // line with its entities (every one as its characters, `&lt;`, `&gt;` and `&amp;` among them,
+    // and a name WHATWG does not list a space), its code escapes and its percent-encoded bytes
+    // (`%20`, `%C3%A3`, as UTF-8) decoded, over and over until the line stops changing (a listed
+    // form under one more level of escaping: draw.io's `&amp;nbsp;`, a JSON encoder's
+    // `&nbsp;`), and only then the whole text's markup tags read as spaces, a tag across lines
     // keeping its lines (an editor's attribute per line, a converter's runs, a label's lines, a
     // break written as `&lt;br&gt;` or `<br>`). A name or a section sign in either
     // reading is a hit; the first keeps the letters the second reads otherwise (a pattern's `\b`
     // before hex letters, an `&` that only looks like an entity, a generic's angle brackets).
     let first: Vec<String> = text.lines().map(|l| decode_entities(l, false)).collect();
-    let decoded = text.lines().map(|l| decode_percent(&decode_escapes(&decode_entities(l, true)))).collect::<Vec<_>>().join("\n");
+    let decoded = text.lines().map(second_reading).collect::<Vec<_>>().join("\n");
     let second: Vec<String> = untagged(&decoded).split('\n').map(String::from).collect();
-    for lines in [first, second] {
+    // And a third: the quoted values of the tags the second reads as spaces, each read as text of
+    // its own (a label an editor keeps in an attribute: draw.io's `value`, a `title`).
+    let third = tag_values(&decoded);
+    for lines in [first, second, third] {
         let mut flat = Vec::new();
         let mut line_of = Vec::new();
         for (n, line) in lines.iter().enumerate() {
-            // Unicode's own decomposition first (an accented letter of any block its base letter
-            // and its marks, a compatibility form its plain letters), then the letters Unicode
-            // does not decompose by the table here.
-            let decomposed = icu_normalizer::DecomposingNormalizerBorrowed::new_nfkd().normalize(line);
-            for c in decomposed.chars().flat_map(char::to_lowercase).flat_map(fold).filter(|c| c.is_alphanumeric() && !('\u{300}'..='\u{36f}').contains(c)) {
+            for c in letters(line) {
                 flat.push(c);
                 line_of.push(n + 1);
             }
@@ -317,6 +325,29 @@ fn mentions(text: &str) -> Vec<String> {
         }
     }
     hits
+}
+
+/// A line's letters and digits as the name check reads them: Unicode's own decomposition first
+/// (NFKD: an accented letter of any block its base letter and its marks, a compatibility form, a
+/// ligature or a full-width letter its plain letters), lowercased, then the letters it leaves by
+/// the table here; marks and anything else that is no letter or digit dropped.
+fn letters(line: &str) -> Vec<char> {
+    let decomposed = icu_normalizer::DecomposingNormalizerBorrowed::new_nfkd().normalize(line);
+    decomposed.chars().flat_map(char::to_lowercase).flat_map(fold).filter(|c| c.is_alphanumeric() && !('\u{300}'..='\u{36f}').contains(c)).collect()
+}
+
+/// A line's second reading: its entities, code escapes and percent-encoded bytes decoded, again
+/// and again until it stops changing (at most eight levels).
+fn second_reading(line: &str) -> String {
+    let mut l = line.to_string();
+    for _ in 0..8 {
+        let next = decode_percent(&decode_escapes(&decode_entities(&l, true)));
+        if next == l {
+            break;
+        }
+        l = next;
+    }
+    l
 }
 
 /// A line with its code escapes read as the crate's languages write a character: Rust's and a
@@ -395,6 +426,46 @@ fn untagged(text: &str) -> String {
     out
 }
 
+/// The quoted attribute values (after `=`, in double or single quotes) of every markup tag
+/// `untagged` reads as a space, each with its own markup read as spaces, gathered by the line its
+/// tag starts on.
+fn tag_values(text: &str) -> Vec<String> {
+    let mut lines = vec![String::new(); text.split('\n').count()];
+    let mut rest = text;
+    let mut offset = 0;
+    while let Some(at) = rest.find('<') {
+        let tail = &rest[at + 1..];
+        let opens = tail.starts_with(|c: char| c.is_ascii_alphabetic() || c == '/' || c == '!');
+        match tail.find(['<', '>']).filter(|i| opens && *i <= 2_000 && tail[*i..].starts_with('>')) {
+            Some(end) => {
+                let line = text[..offset + at].matches('\n').count();
+                let mut body = &tail[..end];
+                while let Some(eq) = body.find('=') {
+                    let after = body[eq + 1..].trim_start();
+                    match after.chars().next().filter(|c| *c == '"' || *c == '\'') {
+                        Some(q) => match after[1..].find(q) {
+                            Some(close) => {
+                                lines[line].push(' ');
+                                lines[line].push_str(&untagged(&after[1..1 + close]).replace('\n', " "));
+                                body = &after[1 + close + 1..];
+                            }
+                            None => break,
+                        },
+                        None => body = &body[eq + 1..],
+                    }
+                }
+                offset += at + 1 + end + 1;
+                rest = &tail[end + 1..];
+            }
+            None => {
+                offset += at + 1;
+                rest = tail;
+            }
+        }
+    }
+    lines
+}
+
 /// A line with its percent-encoded bytes (`%20`, `%C3%A3`) read, the bytes as UTF-8.
 fn decode_percent(line: &str) -> String {
     let b = line.as_bytes();
@@ -416,84 +487,67 @@ fn decode_percent(line: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// A lowercase letter read as the plain letters it stands for: an accented Latin-1 or Latin
-/// Extended-A letter as its base letter, a ligature (U+FB00 to U+FB06) as its letters, a full-width
-/// form (U+FF01 to U+FF5E) as its ASCII; any other character as is.
+/// A lowercase letter Unicode's decomposition leaves as it is, read as the plain letters it stands
+/// for: every such letter of Latin-1 and Latin Extended-A (a stroke, a letter of its own, a
+/// ligature: the test below reads the two blocks whole), the apostrophe NFKD leaves of `ŉ`
+/// (dropped), and the three Latin Extended-B letters HTML names (`&fnof;`, `&imped;`, `&jmath;`);
+/// any other character as is.
 fn fold(c: char) -> Vec<char> {
-    let one = |x: char| vec![x];
-    match c {
-        'à'..='å' => one('a'),
-        'ç' => one('c'),
-        'è'..='ë' => one('e'),
-        'ì'..='ï' => one('i'),
-        'ñ' => one('n'),
-        'ò'..='ö' | 'ø' => one('o'),
-        'ù'..='ü' => one('u'),
-        'ý' | 'ÿ' => one('y'),
-        '\u{100}'..='\u{17f}' => {
-            let base = match c as u32 {
-                0x100..=0x105 => "a",
-                0x106..=0x10d => "c",
-                0x10e..=0x111 => "d",
-                0x112..=0x11b => "e",
-                0x11c..=0x123 => "g",
-                0x124..=0x127 => "h",
-                0x128..=0x131 => "i",
-                0x132..=0x133 => "ij",
-                0x134..=0x135 => "j",
-                0x136..=0x138 => "k",
-                0x139..=0x142 => "l",
-                0x143..=0x14b => "n",
-                0x14c..=0x151 => "o",
-                0x152..=0x153 => "oe",
-                0x154..=0x159 => "r",
-                0x15a..=0x161 => "s",
-                0x162..=0x167 => "t",
-                0x168..=0x173 => "u",
-                0x174..=0x175 => "w",
-                0x176..=0x178 => "y",
-                0x179..=0x17e => "z",
-                _ => "s",
-            };
-            base.chars().collect()
-        }
-        '\u{fb00}' => "ff".chars().collect(),
-        '\u{fb01}' => "fi".chars().collect(),
-        '\u{fb02}' => "fl".chars().collect(),
-        '\u{fb03}' => "ffi".chars().collect(),
-        '\u{fb04}' => "ffl".chars().collect(),
-        '\u{fb05}' | '\u{fb06}' => "st".chars().collect(),
-        '\u{ff01}'..='\u{ff5e}' => char::from_u32(c as u32 - 0xfee0).map(|x| x.to_ascii_lowercase()).into_iter().collect(),
-        c => one(c),
-    }
+    let plain = match c {
+        'æ' => "ae",
+        'ð' | 'đ' => "d",
+        'ø' => "o",
+        'þ' => "th",
+        'ß' => "ss",
+        'ħ' => "h",
+        'ı' => "i",
+        'ĸ' => "k",
+        'ł' => "l",
+        'ŋ' => "n",
+        'œ' => "oe",
+        'ŧ' => "t",
+        '\u{2bc}' => "",
+        'ƒ' => "f",
+        'ƶ' => "z",
+        'ȷ' => "j",
+        c => return vec![c],
+    };
+    plain.chars().collect()
 }
 
-/// A text with its HTML entities read: a number (`&#227;`, `&#xe3;`) as its character; the name of
-/// a Latin letter with its mark (`&atilde;`, `&lstrok;`, `&lmidot;`, `&odblac;`) as its base
-/// letter, of a ligature (`&filig;`, `&aelig;`, `&szlig;`, `&ijlig;`) as its letters, of a Latin
-/// letter of its own (`&eth;`, `&thorn;`, `&eng;`, `&kgreen;`, `&inodot;`) as the letters it reads
-/// as, of the section sign as the sign; and a number or a legacy name (Latin-1's, which a browser
-/// reads without its `;`) without the `;` too. Any other named entity (`&nbsp;`, `&shy;`,
-/// `&ndash;`) is a space where `others_as_space`, kept as written otherwise.
+/// HTML's named character references as WHATWG lists them (the `entities` crate): each name with
+/// its `;` and its characters, and the legacy names a browser reads without their `;`, longest
+/// first.
+type HtmlNames = (std::collections::HashMap<&'static str, &'static str>, Vec<(&'static str, &'static str)>);
+fn html_names() -> &'static HtmlNames {
+    static TABLE: std::sync::OnceLock<HtmlNames> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut terminated = std::collections::HashMap::new();
+        let mut legacy = Vec::new();
+        for e in entities::ENTITIES.iter() {
+            let name = e.entity.strip_prefix('&').unwrap_or(e.entity);
+            match name.strip_suffix(';') {
+                Some(n) => {
+                    terminated.insert(n, e.characters);
+                }
+                None => legacy.push((name, e.characters)),
+            }
+        }
+        legacy.sort_by_key(|(n, _)| std::cmp::Reverse(n.len()));
+        (terminated, legacy)
+    })
+}
+
+/// A text with its HTML entities read: a number (`&#227;`, `&#xe3;`) as its character; a name
+/// WHATWG lists as its characters (`&atilde;`, `&lstrok;`, `&aelig;`, `&eth;`, `&fnof;`, the section sign's),
+/// a legacy name (which a browser reads without its `;`) and a number without the `;` too. Where
+/// `others_as_space` is false, only the names whose characters hold a letter, a digit or the
+/// section sign are read (any other kept as written); where it is true, every one is, and a name
+/// WHATWG does not list is a space.
 fn decode_entities(text: &str, others_as_space: bool) -> String {
-    const MARKS: [&str; 16] = ["acute", "grave", "circ", "tilde", "uml", "ring", "cedil", "slash", "macr", "caron", "breve", "ogon", "dot", "strok", "midot", "dblac"];
-    const LEGACY_MARKS: [&str; 8] = ["acute", "grave", "circ", "tilde", "uml", "ring", "cedil", "slash"];
-    const LETTERS: [(&str, &str); 18] = [
-        ("aelig", "ae"), ("oelig", "oe"), ("ijlig", "ij"), ("szlig", "ss"), ("filig", "fi"), ("fflig", "ff"), ("fllig", "fl"), ("ffilig", "ffi"), ("ffllig", "ffl"),
-        ("fjlig", "fj"), ("eth", "d"), ("thorn", "th"), ("eng", "n"), ("kgreen", "k"), ("inodot", "i"), ("imath", "i"), ("jmath", "j"), ("napos", "n"),
-    ];
-    let named = |name: &str| -> Option<String> {
-        let lower = name.to_ascii_lowercase();
-        if lower == "sect" {
-            return char::from_u32(0xA7).map(String::from);
-        }
-        if let Some((_, letters)) = LETTERS.iter().find(|(n, _)| *n == lower) {
-            return Some(letters.to_string());
-        }
-        let mut cs = name.chars();
-        let letter = cs.next().filter(char::is_ascii_alphabetic)?;
-        MARKS.contains(&cs.as_str()).then(|| letter.to_string())
-    };
+    let (names, legacy) = html_names();
+    let section = char::from_u32(0xA7).unwrap();
+    let wanted = |chars: &str| others_as_space || chars.chars().any(|c| c.is_alphanumeric() || c == section);
     let number = |digits: &str| -> Option<String> {
         let code = match digits.strip_prefix(['x', 'X']) {
             Some(hex) => u32::from_str_radix(hex, 16).ok(),
@@ -509,33 +563,25 @@ fn decode_entities(text: &str, others_as_space: bool) -> String {
             let len = n[skip..].chars().take_while(|c| if hex { c.is_ascii_hexdigit() } else { c.is_ascii_digit() }).count();
             return (len > 0).then(|| number(&n[..skip + len]).map(|r| (r, 1 + skip + len))).flatten();
         }
-        for w in ["aelig", "szlig", "thorn", "sect", "eth"] {
-            if tail.get(..w.len()).is_some_and(|t| t.eq_ignore_ascii_case(w)) {
-                return named(w).map(|r| (r, w.len()));
-            }
-        }
-        let mut cs = tail.chars();
-        let letter = cs.next().filter(char::is_ascii_alphabetic)?;
-        LEGACY_MARKS.iter().find(|m| cs.as_str().starts_with(*m)).map(|m| (letter.to_string(), 1 + m.len()))
+        legacy.iter().find(|(n, _)| tail.starts_with(n)).filter(|(_, c)| wanted(c)).map(|(n, c)| (c.to_string(), n.len()))
     };
     let mut out = String::new();
     let mut rest = text;
     while let Some(at) = rest.find('&') {
         out.push_str(&rest[..at]);
         let tail = &rest[at + 1..];
-        let terminated = tail.find(';').filter(|e| *e <= 12).and_then(|e| {
+        let terminated = tail.find(';').filter(|e| *e <= 40).and_then(|e| {
             let name = &tail[..e];
-            // In the second reading, markup's own entities as their characters (so a tag written
-            // `&lt;br&gt;` is read as a tag), any other naming no letter as a space.
-            let other = || {
-                (others_as_space && name.starts_with(|c: char| c.is_ascii_alphabetic()) && name.chars().all(|c| c.is_ascii_alphanumeric())).then(|| match name.to_ascii_lowercase().as_str() {
-                    "lt" => "<".to_string(),
-                    "gt" => ">".to_string(),
-                    "amp" => "&".to_string(),
-                    _ => " ".to_string(),
-                })
+            // In the second reading every listed name as its characters (so a tag written
+            // `&lt;br&gt;` is read as a tag), a name WHATWG does not list as a space.
+            let unlisted = || {
+                (others_as_space && !names.contains_key(name) && name.starts_with(|c: char| c.is_ascii_alphabetic()) && name.chars().all(|c| c.is_ascii_alphanumeric())).then(|| " ".to_string())
             };
-            name.strip_prefix('#').map_or_else(|| named(name).or_else(other), number).map(|r| (r, e + 1))
+            let read = match name.strip_prefix('#') {
+                Some(digits) => number(digits),
+                None => names.get(name).filter(|c| wanted(c)).map(|c| c.to_string()).or_else(unlisted),
+            };
+            read.map(|r| (r, e + 1))
         });
         match terminated.or_else(|| unterminated(tail)) {
             Some((r, used)) => {
@@ -637,12 +683,137 @@ fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
         format!("// a {} part", rev("\u{21b}lebineg")),
         format!("<p>a {} part</p>", rev(";b12x#&lebineg")),
         format!("// {}", rev("erawtfoS arut\u{1ea1}ppaM")),
+        // Letters of Latin-1 and Latin Extended-A that Unicode leaves undecomposed, written as
+        // themselves (an eth, a thorn, an n with an apostrophe, a ligature, a sharp s).
+        format!("// see the {} folder", rev("rodnevsco\u{f0}")),
+        format!("// the {} rule", rev("txenhtiwelgna").replacen("th", "\u{fe}", 1)),
+        format!("// the {} file", rev("tnalpgifnoc").replacen('n', "\u{149}", 1)),
+        format!("// a {} line", rev("srei\u{e6}\u{e6}ractupni").replace("\u{e6}\u{e6}", "r")),
+        format!("// {}", rev("sretemarapenil").replacen("ss", "\u{df}", 1).replacen("eni", "eni", 1)),
+        // HTML's names WHATWG lists for Latin letters beyond the marks: an angstrom sign, an f with
+        // a hook, a z with a stroke.
+        format!("<p>the {} file</p>", rev("tnalpgi;fonf&noc")),
+        format!("<p>the {} file</p>", rev("inoi;depmi&urtsi")),
+        format!("<p>the {} file</p>", rev("tnalpgifnoc").replacen('a', "&angst;", 1)),
+        // A listed form under one more level of escaping: draw.io's label HTML escaped once more
+        // inside its attribute, and a JSON encoder's escaped ampersand.
+        format!("<mxCell id=\"7\" value=\"{}&amp;nbsp;{}\" vertex=\"1\" />", rev("arutappaM"), rev("erawtfoS")),
+        format!("<mxCell id=\"7\" value=\"{}\" vertex=\"1\" />", rev("oivan od o;edlita&tipac").replace('&', "&amp;")),
+        format!("{{\"label\":\"{}\"}}", rev("oivan od o;edlita&tipac").replace('&', "\\u0026")),
+        format!("{{\"label\":\"{}\\u0026nbsp;{}\"}}", rev("arutappaM"), rev("erawtfoS")),
+        // A label kept in an attribute, the tag's other values beside it.
+        format!("<rect id=\"r1\" title='{}&amp;nbsp;{}' width=\"40\" />", rev("moB"), rev("elareneG")),
     ];
     for s in &samples {
         assert_eq!(mentions(s).len(), 1, "{s}: {:?}", mentions(s));
     }
     assert_eq!(mentions(&format!("x\n// {}\n// {}", rev("erawtfoS arutappaM"), rev("elareneG moB"))), vec![format!("line 2: {}", rev("erawtfosarutappam")), format!("line 3: {}", rev("elarenegmob"))]);
     assert_eq!(mentions("// a loop with three outlets, two parcels and an infeed\nlet sorts = 1;"), Vec::<String>::new());
+}
+
+/// What the crate's Rust compiles in from a file, read as the compiler's tokens (the Rust lexer):
+/// each `include_str!`, `include_bytes!` and `include!` with its argument when that is one literal,
+/// and each `path = ...` an attribute holds (a module read from another file), however deep.
+fn compiled_from(ts: proc_macro2::TokenStream, in_attribute: bool, out: &mut Vec<String>) {
+    use proc_macro2::{Delimiter, TokenTree};
+    let toks: Vec<TokenTree> = ts.into_iter().collect();
+    for (i, tok) in toks.iter().enumerate() {
+        match tok {
+            TokenTree::Group(g) => {
+                let attribute = in_attribute || (g.delimiter() == Delimiter::Bracket && matches!(i.checked_sub(1).and_then(|j| toks.get(j)), Some(TokenTree::Punct(p)) if p.as_char() == '#' || p.as_char() == '!'));
+                compiled_from(g.stream(), attribute, out);
+            }
+            TokenTree::Ident(id) => {
+                let name = id.to_string();
+                let name = name.trim_start_matches("r#");
+                let bang = matches!(toks.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '!');
+                if bang && ["include_str", "include_bytes", "include"].contains(&name) {
+                    let arg = match toks.get(i + 2) {
+                        Some(TokenTree::Group(g)) => match g.stream().into_iter().collect::<Vec<_>>().as_slice() {
+                            [TokenTree::Literal(l)] => l.to_string(),
+                            other => format!("not one literal: {}", other.iter().map(ToString::to_string).collect::<Vec<_>>().join(" ")),
+                        },
+                        _ => "no argument".to_string(),
+                    };
+                    out.push(format!("{name}! {arg}"));
+                }
+                if in_attribute && name == "path" && matches!(toks.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '=') {
+                    out.push(format!("path = {}", toks.get(i + 2).map(ToString::to_string).unwrap_or_default()));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The name check reads the files under the crate: so the crate compiles in no file from outside
+/// it. No module is read from another file by `path`, and every file an `include` macro names is
+/// one literal, resolved under the crate (the page's five, today).
+#[test]
+fn the_crate_compiles_in_no_file_from_outside_itself() {
+    let root = crate_dir().canonicalize().unwrap();
+    let mut included = Vec::new();
+    for f in crate_files().iter().filter(|f| f.extension().is_some_and(|e| e == "rs")) {
+        let text = std::fs::read_to_string(f).unwrap();
+        let mut found = Vec::new();
+        compiled_from(text.parse().unwrap_or_else(|e| panic!("{}: {e:?}", f.display())), false, &mut found);
+        for c in found {
+            let lit = c.strip_prefix("include_str! ").or_else(|| c.strip_prefix("include_bytes! ")).or_else(|| c.strip_prefix("include! "));
+            let path = lit.and_then(|l| l.strip_prefix('"')).and_then(|l| l.strip_suffix('"')).unwrap_or_else(|| panic!("{}: {c}: a file compiled in by other than one plain literal", f.display()));
+            let target = f.parent().unwrap().join(path).canonicalize().unwrap_or_else(|e| panic!("{}: {c}: {e}", f.display()));
+            assert!(target.starts_with(&root), "{}: {c} reads {} from outside the crate", f.display(), target.display());
+            included.push(target.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"));
+        }
+    }
+    included.sort();
+    assert_eq!(included, ["web/dist/assets/app.css", "web/dist/assets/app.js", "web/dist/index.html", "web/dist/output.hash", "web/dist/source.hash"]);
+    // The reading sees each form: a path attribute (in `cfg_attr` too), a raw name, an argument
+    // assembled, an include of a file outside.
+    let read = |s: &str| {
+        let mut out = Vec::new();
+        compiled_from(s.parse().unwrap(), false, &mut out);
+        out
+    };
+    assert_eq!(read("#[path = \"../../x.rs\"] mod x;"), ["path = \"../../x.rs\""]);
+    assert_eq!(read("#[cfg_attr(unix, path = \"y.rs\")] mod y;"), ["path = \"y.rs\""]);
+    assert_eq!(read("const A: &str = r#include_str ! (\"../a.txt\");"), ["include_str! \"../a.txt\""]);
+    assert_eq!(read("const B: &[u8] = include_bytes!(concat!(env!(\"HOME\"), \"/b\"));"), ["include_bytes! not one literal: concat ! (env ! (\"HOME\") , \"/b\")"]);
+    assert_eq!(read("fn f() { let path = 1; include!(\"c.rs\"); }"), ["include! \"c.rs\""]);
+}
+
+/// The letters the reader claims, read whole from the lists that own them: every letter of Latin-1
+/// and Latin Extended-A (Unicode's two blocks) and every name WHATWG lists whose character is a
+/// Latin letter (its blocks, or a letter Unicode decomposes to plain ones), with its `;` and, for a
+/// legacy name, without, in both readings: each read as plain letters, none left as a letter of
+/// its own a name could hide behind.
+#[test]
+fn every_latin_letter_and_every_html_name_of_one_reads_as_plain_letters() {
+    let plain = |r: &[char]| !r.is_empty() && r.iter().all(|c| c.is_ascii_lowercase());
+    let latin = |c: char| matches!(c as u32, 0xc0..=0x24f | 0x1e00..=0x1eff);
+    let mut letters_read = 0;
+    for c in ('\u{c0}'..='\u{17f}').filter(|c| c.is_alphabetic()) {
+        let read = letters(&c.to_string());
+        assert!(plain(&read), "{c} (U+{:04X}) reads as {read:?}", c as u32);
+        letters_read += 1;
+    }
+    assert_eq!(letters_read, 62 + 128, "Latin-1's letters and Latin Extended-A's, every one");
+    let (names, legacy) = html_names();
+    assert_eq!(names.len() + legacy.len(), entities::ENTITIES.len());
+    let mut names_read = 0;
+    for (name, chars, written) in names.iter().map(|(n, c)| (*n, *c, format!("&{n};"))).chain(legacy.iter().map(|(n, c)| (*n, *c, format!("&{n} ")))) {
+        let mut cs = chars.chars();
+        let (Some(c), None) = (cs.next(), cs.next()) else { continue };
+        let nfkd: Vec<char> = icu_normalizer::DecomposingNormalizerBorrowed::new_nfkd().normalize(chars).chars().collect();
+        if !c.is_alphabetic() || !(latin(c) || nfkd.iter().any(char::is_ascii_alphabetic)) {
+            continue;
+        }
+        for second in [false, true] {
+            let read = letters(&if second { second_reading(&written) } else { decode_entities(&written, false) });
+            assert!(plain(&read), "{written} ({name}, U+{:04X}) reads as {read:?}", c as u32);
+        }
+        names_read += 1;
+    }
+    assert!(names_read >= 450, "the names of letters WHATWG lists: {names_read}");
 }
 
 #[test]
@@ -724,10 +895,23 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
         assert_eq!(urls(&text), Vec::<String>::new(), "{s} points outside the page");
         assert_eq!(addresses(&text), BTreeSet::<String>::new(), "{s} names an address");
     }
+    // The words themselves refused, whatever stands between them (a comment, an escape in an
+    // identifier, a line break): no source under `src/` says `meta`, `env` or `process` at all.
     for s in sources.iter().filter(|s| s.starts_with("src/")) {
-        let bare: String = std::fs::read_to_string(webdir.join(s)).unwrap().chars().filter(|c| !c.is_whitespace()).collect();
-        assert!(!bare.contains("import.meta") && !bare.contains("process.env"), "{s} reads the build's environment");
+        let text = decode_escapes(&std::fs::read_to_string(webdir.join(s)).unwrap());
+        let words: BTreeSet<&str> = text.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).collect();
+        for w in ["meta", "env", "process"] {
+            assert!(!words.contains(w), "{s} says `{w}`: a source may not read the build's environment");
+        }
     }
+    // The build runs what `package.json` names, and npm runs a script's `pre` and `post` too: its
+    // keys and its scripts are the ones this test holds, its tools' versions the lock's.
+    let package: serde_json::Value = serde_json::from_slice(&std::fs::read(webdir.join("package.json")).unwrap()).unwrap();
+    let keys: BTreeSet<&str> = package.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, ["description", "devDependencies", "name", "private", "scripts", "type", "version"].into_iter().collect(), "{package}");
+    assert_eq!(package["scripts"], serde_json::json!({ "build": "tsc --noEmit && vite build", "check": "tsc --noEmit" }), "web/package.json's scripts are not the ones this test holds");
+    let tools: BTreeSet<&str> = package["devDependencies"].as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(tools, ["typescript", "vite"].into_iter().collect());
     // The source page word for word as well: vite moves an inline script into the bundle and fills
     // a `%NAME%` placeholder from the environment before it writes the built page, which would show
     // neither.
@@ -789,6 +973,11 @@ fn addresses(text: &str) -> BTreeSet<String> {
         t[..t.find(|c: char| c == '"' || c == '\'' || c == '`' || c.is_whitespace() || c == ')').unwrap_or(t.len())].to_string()
     }
     let text: String = text.chars().filter(|c| !matches!(c, '\t' | '\n' | '\r')).collect();
+    // A backslash read as a slash, as the URL parser reads one for the schemes it fetches from
+    // (`/\host`, `\\host`, `https:\\host`); kept apart from the text as written, so a pattern's
+    // escaped slashes (`/^\/s\//`, `/\.?0+$/`) are told from a host by the dotted name that follows.
+    let written = text;
+    let text: String = written.replace('\\', "/");
     let text = text.as_str();
     let lower = text.to_ascii_lowercase();
     let mut out = BTreeSet::new();
@@ -799,10 +988,16 @@ fn addresses(text: &str) -> BTreeSet<String> {
             }
         }
     }
-    // A host follows the slashes (a comment's `// ` names none).
+    // A host follows the slashes (a comment's `// ` names none); where a backslash stands for one,
+    // a dotted host (two labels or more).
+    let dotted = |a: &str| {
+        let host = a[2..].split(['/', ':', '?', '#']).next().unwrap_or("");
+        let labels: Vec<&str> = host.split('.').collect();
+        labels.len() > 1 && labels.iter().all(|l| !l.is_empty() && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+    };
     for (i, _) in text.match_indices("//") {
         let a = upto(&text[i..]);
-        if a.len() > 2 {
+        if a.len() > 2 && (&written[i..i + 2] == "//" || dotted(&a)) {
             out.insert(a);
         }
     }
