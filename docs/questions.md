@@ -463,3 +463,24 @@ store serves today.
 a timeline, by name, and the reference says so; a rule that writes the object's own series out in
 full reads what the timeline replays, and stands. If the answer is "replay it", the refusal goes and
 the timeline merges the series' histories (numeric ones first), the test driving both kinds of rule.
+
+## Q25 - What drawing does the layout draw objects on?
+
+**Raised** 2026-11-14, by C-051's tenth refute round.
+
+The reader took any element of the SVG namespace (bar a script and foreign content) as an object's
+element, with any paint syntax and any coordinate construct. The page could not draw all of them as
+the reference says: paint written in a `style` attribute, a `<style>` sheet or a `use`d symbol
+outranked the state's; a `tspan` was never filled; an element inside a nested `svg` was measured in
+the wrong frame; an object's element inside another took the outer one's stroke and selection. A
+drawing's sheet also styled the page's every screen.
+
+**Taken meanwhile** (the most reversible): the page draws on a named subset and the reader refuses
+the rest by name. An object's element is a `g`, one of the seven shapes or a `text`, inside no
+other object's element and no `svg`, `defs`, `symbol`, `marker`, `pattern`, `mask`, `clipPath`
+or `text`, holding no `use`; a marker's path stands inside none of those either. Paint is written on
+the elements (attributes or `style`, never `!important` on or inside an object's element), and the
+state's paint outranks it at any depth of a group. A `<style>` sheet is refused. If the answer is
+"draw more", each refusal goes with the page learning that construct (a sheet scoped to the drawing,
+a `use` painted through its shadow tree, a nested viewport measured through its own frame), the test
+driving it.

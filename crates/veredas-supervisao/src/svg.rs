@@ -11,14 +11,40 @@ pub const SVG_NS: &str = "http://www.w3.org/2000/svg";
 /// The elements a marker can follow: those whose outline the page can measure along.
 pub const FOLLOWABLE: [&str; 7] = ["path", "line", "polyline", "polygon", "rect", "circle", "ellipse"];
 
+// DECISION PENDING (docs/questions.md Q25): the drawing the page draws on is the subset below; the
+// reader refuses the rest rather than drawing it otherwise than the reference says.
+
+/// The elements the page draws an object on: a group, the shapes it paints, a text.
+pub const DRAWN: [&str; 9] = ["g", "rect", "circle", "ellipse", "path", "polygon", "polyline", "line", "text"];
+
+/// The elements inside which the page cannot measure or paint an element as it is drawn: a viewport
+/// of its own (an `svg` inside the drawing), what is drawn only where something refers to it
+/// (`defs`, `symbol`, `marker`, `pattern`, `mask`, `clipPath`), and a text's content.
+pub const APART: [&str; 8] = ["svg", "defs", "symbol", "marker", "pattern", "mask", "clipPath", "text"];
+
+/// Where an element carrying an id stands, for the binding's checks on the elements it draws on.
+#[derive(Clone, Debug, Default)]
+pub struct Placed {
+    /// The ids the elements around it carry, nearest first.
+    pub around: Vec<String>,
+    /// The nearest element of `APART` around it (the drawing's own root aside).
+    pub apart: Option<String>,
+    /// Whether a `use` is inside it (its shapes stand in another tree, which no rule reaches).
+    pub holds_use: bool,
+    /// Whether a `style` attribute on it or inside it marks a declaration `!important`.
+    pub important: bool,
+}
+
 /// A layout as read: the file, its text, and every element id with the element's name and how
 /// many elements carry it.
 #[derive(Clone, Debug)]
 pub struct Layout {
     pub file: PathBuf,
     pub text: String,
-    /// id → (the element's local name, how many elements carry the id).
+    /// id → (the element's local name, how many elements carry it).
     pub ids: BTreeMap<String, (String, usize)>,
+    /// id → where its (first) element stands.
+    pub placed: BTreeMap<String, Placed>,
 }
 
 impl Layout {
@@ -57,10 +83,16 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
         return Err(format!("{} declares attribute defaults (`<!ATTLIST`) in its document type: a browser would add attributes this check never sees", path.display()));
     }
     let mut ids: BTreeMap<String, (String, usize)> = BTreeMap::new();
+    let mut placed: BTreeMap<String, Placed> = BTreeMap::new();
     for node in root.descendants().filter(|n| n.is_element()) {
         let name = node.tag_name().name();
         if name == "script" || name == "foreignObject" {
             return Err(format!("{} holds a <{name}> element: a layout is a drawing, with no script and no foreign content", path.display()));
+        }
+        // A sheet of the drawing's own would style the page's every screen, and outrank the state's
+        // paint where it says so (Q25).
+        if name == "style" {
+            return Err(format!("{} holds a <style> sheet, which the page would apply to its own screens too: write the drawing's paint on its elements", path.display()));
         }
         // Foreign content in any other form: an element of another namespace (an XHTML frame,
         // a `path` of no namespace a marker would follow) is no drawing either.
@@ -80,9 +112,19 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
         if let Some(id) = node.attribute("id") {
             let e = ids.entry(id.to_string()).or_insert_with(|| (name.to_string(), 0));
             e.1 += 1;
+            placed.entry(id.to_string()).or_insert_with(|| {
+                let up: Vec<roxmltree::Node> = node.ancestors().skip(1).filter(|a| a.is_element() && *a != root).collect();
+                let important = |n: &roxmltree::Node| n.attribute("style").is_some_and(|s| s.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_lowercase().contains("!important"));
+                Placed {
+                    around: up.iter().filter_map(|a| a.attribute("id").map(String::from)).collect(),
+                    apart: up.iter().map(|a| a.tag_name().name()).find(|n| APART.contains(n)).map(String::from),
+                    holds_use: node.descendants().skip(1).any(|d| d.is_element() && d.tag_name().name() == "use"),
+                    important: node.descendants().filter(|d| d.is_element()).any(|d| important(&d)),
+                }
+            });
         }
     }
-    Ok(Layout { file: path.to_path_buf(), text: text.to_string(), ids })
+    Ok(Layout { file: path.to_path_buf(), text: text.to_string(), ids, placed })
 }
 
 /// Whether an attribute's value is, or holds as an item of a `;`-separated list (an animation's

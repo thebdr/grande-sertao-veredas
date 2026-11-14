@@ -739,6 +739,9 @@ pub fn load(text: &str, base: &Path, universe: &Universe, project_name: &str) ->
                     Some((name, _)) if !FOLLOWABLE.contains(&name.as_str()) => {
                         return Err(format!("{place}: the path `{p}` is a <{name}>, which no marker can follow (one of {})", FOLLOWABLE.join(", ")));
                     }
+                    Some(_) if let Some(a) = layout.placed.get(&p).and_then(|x| x.apart.as_ref()) => {
+                        return Err(format!("{place}: the path `{p}` stands inside a <{a}> of the layout, where the page cannot measure it as drawn"));
+                    }
                     Some(_) => Some(p),
                 }
             }
@@ -791,12 +794,30 @@ pub fn load(text: &str, base: &Path, universe: &Universe, project_name: &str) ->
         });
     }
 
+    // DECISION PENDING (docs/questions.md Q25): the elements the page draws an object on, where it
+    // can measure and paint them as drawn (svg::DRAWN, svg::APART).
     if let Some(layout) = &layout {
+        let bound: std::collections::BTreeSet<&str> = objects.iter().filter(|o| layout.ids.contains_key(&o.id)).map(|o| o.id.as_str()).collect();
         for o in &objects {
-            if let Some((_, n)) = layout.ids.get(&o.id)
-                && *n > 1
-            {
+            let Some((name, n)) = layout.ids.get(&o.id) else { continue };
+            if *n > 1 {
                 return Err(format!("object `{}`: the layout carries the id on {n} elements", o.id));
+            }
+            if !svg::DRAWN.contains(&name.as_str()) {
+                return Err(format!("object `{}`: its element is a <{name}>, which the page draws no object on (one of {})", o.id, svg::DRAWN.join(", ")));
+            }
+            let Some(p) = layout.placed.get(&o.id) else { continue };
+            if let Some(outer) = p.around.iter().find(|a| bound.contains(a.as_str())) {
+                return Err(format!("object `{}`: its element stands inside `{outer}`'s, whose state and selection would reach into it", o.id));
+            }
+            if let Some(a) = &p.apart {
+                return Err(format!("object `{}`: its element stands inside a <{a}> of the layout, where the page cannot measure or paint it as drawn", o.id));
+            }
+            if p.holds_use {
+                return Err(format!("object `{}`: its element holds a <use>, whose shapes no state's paint reaches", o.id));
+            }
+            if p.important {
+                return Err(format!("object `{}`: a `style` attribute on its element or inside it says `!important`, which would outrank the state's paint", o.id));
             }
         }
     }

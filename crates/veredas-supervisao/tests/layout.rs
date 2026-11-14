@@ -328,6 +328,60 @@ const PROBES: &str = r##"
       else seen.set(v, s);
     }
   }
+  // Every way the drawing writes paint (presentation attributes, a `style` attribute) on a bound
+  // element, and on every element a bound group may hold (the reader's own list of what it draws on,
+  // its text apart: `DRAWN`) inside a group that writes its own, a group's rect within a held group
+  // too: each painted as a plain element of its state; and, selected, each stroked as a plain
+  // selected one.
+  const OWN = { fill: "#123456", stroke: "#654321", "stroke-width": "7", "stroke-dasharray": "9 1", "fill-opacity": "0.3", "stroke-opacity": "0.4" };
+  const write = (el, how) => {
+    if (how === "attributes") for (const [k, v] of Object.entries(OWN)) el.setAttribute(k, v);
+    else el.setAttribute("style", Object.entries(OWN).map(([k, v]) => `${k}: ${v}`).join("; "));
+    return el;
+  };
+  const PAINT = ["fill", "stroke", "stroke-width", "stroke-dasharray", "fill-opacity", "stroke-opacity"];
+  const SEL = ["stroke", "stroke-width", "stroke-dasharray", "stroke-opacity"];
+  const extra = [];
+  const nest = (cls, how) => {
+    const g = document.createElementNS(svgNS, "g");
+    g.setAttribute("class", cls);
+    const mid = write(document.createElementNS(svgNS, "g"), how);
+    g.append(mid);
+    const inner = [["the group between", mid]];
+    for (const name of HELD) {
+      const e = write(document.createElementNS(svgNS, name), how);
+      mid.append(e);
+      inner.push([name, e]);
+      if (name === "g") {
+        const r = document.createElementNS(svgNS, "rect");
+        e.append(r);
+        inner.push(["a rect in a held g", r]);
+      }
+    }
+    plant.append(g);
+    extra.push(g);
+    return inner;
+  };
+  for (const how of ["attributes", "style"]) {
+    for (const k of KINDS) {
+      for (const s of [...STATES.map((st) => [st, false]), ["normal", true]]) {
+        const [state, selected] = s;
+        const cls = `sv-obj sv-show-${k} sv-state-${state}${selected ? " sv-selected" : ""}`;
+        const props = selected ? SEL : PAINT;
+        const plain = shape(cls);
+        plant.append(plain);
+        extra.push(plain);
+        const want = sig(plain, props);
+        const own = write(shape(cls), how);
+        plant.append(own);
+        extra.push(own);
+        const what = `a ${k} element in ${state}${selected ? ", selected," : ""} its paint written as ${how}`;
+        if (sig(own, props) !== want) out.push(`${what}: ${sig(own, props)}, a plain one ${want}`);
+        for (const [name, e] of nest(cls, how)) if (sig(e, props) !== want) out.push(`${what}, its group's ${name}: ${sig(e, props)}, a plain one ${want}`);
+      }
+    }
+  }
+  for (const e of extra) e.remove();
   for (const [el] of made) el.remove();
   return out;
 "##;
@@ -386,7 +440,10 @@ fn accent_on_states(page: &mut Browser) -> Value {
 /// from the crate's own enums.
 fn probe_states(page: &mut Browser) -> Value {
     let list = |names: Vec<&str>| serde_json::to_string(&names).unwrap();
-    page.eval(&format!("(() => {{\n{COLOUR_READERS}\nconst STATES = {};\nconst KINDS = {};\n{PROBES}\n}})()", list(every_state()), list(every_show())))
+    // What a bound group may hold: the reader's own list of what the page draws on, its text apart
+    // (a text keeps the paint it writes).
+    let held: Vec<&str> = veredas_supervisao::svg::DRAWN.into_iter().filter(|n| *n != "text").collect();
+    page.eval(&format!("(() => {{\n{COLOUR_READERS}\nconst STATES = {};\nconst KINDS = {};\nconst HELD = {};\n{PROBES}\n}})()", list(every_state()), list(every_show()), list(held)))
 }
 
 /// The vocabulary's states, from the crate's own enum: a state added there stops this match
@@ -488,6 +545,7 @@ fn on_path(path: &str, f: f64) -> (f64, f64) {
         "track-rect" => along(&[(200.0, 160.0), (220.0, 160.0), (220.0, 180.0), (200.0, 180.0)], true, f),
         "track-circle" => on_ellipse(245.0, 175.0, 10.0, 10.0, f),
         "track-ellipse" => on_ellipse(280.0, 175.0, 15.0, 8.0, f),
+        "track-own" => along(&[(300.0, 200.0), (340.0, 200.0)], false, f),
         other => panic!("a path this test cannot follow: {other}"),
     }
 }
@@ -784,11 +842,25 @@ const GROWN_SVG: &str = r##"  <g transform="rotate(90 300 110)"><circle id="ring
   <circle id="m-rect" r="3" transform="scale(2)"/>
   <circle id="m-circle" r="3" transform="matrix(1.5 0 0 1.5 0 0)"/>
   <circle id="m-ellipse" r="3"/>
+  <line id="track-own" x1="300" y1="200" x2="340" y2="200" stroke="#26262A" transform="translate(0 -10)"/>
+  <circle id="o-translate" cx="50" cy="40" r="3" transform="translate(5 -3)"/>
+  <circle id="o-scale" cx="50" cy="40" r="3" transform="scale(1.5)"/>
+  <circle id="o-rotate" cx="50" cy="40" r="3" transform="rotate(30)"/>
+  <circle id="o-skewx" cx="50" cy="40" r="3" transform="skewX(20)"/>
+  <circle id="o-skewy" cx="50" cy="40" r="3" transform="skewY(20)"/>
+  <circle id="o-matrix" cx="50" cy="40" r="3" transform="matrix(1 0.2 0 1 3 1)"/>
+  <circle id="o-list" cx="50" cy="40" r="3" transform="translate(4 0) scale(2)"/>
+  <line id="lv-hline" x1="350" y1="10" x2="380" y2="10" stroke="#3a3a40" stroke-width="10"/>
+  <path id="lv-hpath" d="M 350 30 H 380" stroke="#3a3a40" stroke-width="8"/>
+  <path id="lv-vpath" d="M 392 4 V 32" stroke="#3a3a40" stroke-width="8"/>
 </svg>"##;
 
-/// The levels on every other element a level can be bound to, and an object bound to one key of
-/// the keyed marker's series (on no element: its row and its side panel alone).
-const MORE_OBJECTS: &str = "\n[[object]]\nid = \"lv-path\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-line\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-polyline\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-polygon\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-ellipse\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"keyed\"\nlabel = \"Keyed\"\nvalue = { source = \"sorter\", series = \"at\", key = \"A1\" }\n\n[[dashboard]]";
+/// The levels on every other element a level can be bound to (and on a line and a straight path with
+/// no width and with no height); the markers whose own transform is each function a transform takes,
+/// and a list of two, each drawn off its own origin (one on a path that writes its own transform);
+/// and an object bound to one key of the keyed marker's series (on no element: its row and its side
+/// panel alone).
+const MORE_OBJECTS: &str = "\n[[object]]\nid = \"lv-path\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-line\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-polyline\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-polygon\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-ellipse\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-hline\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-hpath\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-vpath\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"o-translate\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-line\"\n\n[[object]]\nid = \"o-scale\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-polyline\"\n\n[[object]]\nid = \"o-rotate\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-polygon\"\n\n[[object]]\nid = \"o-skewx\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-rect\"\n\n[[object]]\nid = \"o-skewy\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-circle\"\n\n[[object]]\nid = \"o-matrix\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-ellipse\"\n\n[[object]]\nid = \"o-list\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-own\"\n\n[[object]]\nid = \"keyed\"\nlabel = \"Keyed\"\nvalue = { source = \"sorter\", series = \"at\", key = \"A1\" }\n\n[[dashboard]]";
 
 const GROWN_OBJECTS: &str = "\n[[object]]\nid = \"ring\"\nlabel = \"Ring\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"word\"\nlabel = \"Word\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"m-line\"\nlabel = \"On a line\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-line\"\n\n[[object]]\nid = \"m-polyline\"\nlabel = \"On a polyline\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-polyline\"\n\n[[object]]\nid = \"m-polygon\"\nlabel = \"On a polygon\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-polygon\"\n\n[[object]]\nid = \"m-rect\"\nlabel = \"On a rect\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-rect\"\n\n[[object]]\nid = \"m-circle\"\nlabel = \"On a circle\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-circle\"\n\n[[object]]\nid = \"m-ellipse\"\nlabel = \"On an ellipse\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-ellipse\"\n\n[[dashboard]]";
 
@@ -856,6 +928,8 @@ fn the_page_draws_the_layout_from_the_feed() {
         ("speed", "value"), ("infeed", "state"), ("outlet-1", "level"), ("outlet-2", "level"), ("outlet-3", "level"), ("parcel-1", "move"), ("parcel-2", "move"), ("tracked", "move"),
         ("ring", "level"), ("word", "level"), ("m-line", "move"), ("m-polyline", "move"), ("m-polygon", "move"), ("m-rect", "move"), ("m-circle", "move"), ("m-ellipse", "move"),
         ("lv-path", "level"), ("lv-line", "level"), ("lv-polyline", "level"), ("lv-polygon", "level"), ("lv-ellipse", "level"),
+        ("lv-hline", "level"), ("lv-hpath", "level"), ("lv-vpath", "level"),
+        ("o-translate", "move"), ("o-scale", "move"), ("o-rotate", "move"), ("o-skewx", "move"), ("o-skewy", "move"), ("o-matrix", "move"), ("o-list", "move"),
     ]);
     let shows: std::collections::BTreeSet<&str> = on_layout.iter().map(|(_, s)| s.as_str()).collect();
     assert_eq!(shows, every_show().into_iter().collect(), "every way of showing the binding knows is on the layout");
@@ -926,6 +1000,30 @@ fn the_page_draws_the_layout_from_the_feed() {
         serde_json::to_string(&ex.svg).unwrap()
     ));
     assert_eq!(grammar, json!([6, []]), "every transform function in the drawing");
+    // Each function a transform takes (the browser's list) as a marker's own, on a marker drawn off
+    // its own origin, and one such marker's own transform a list of two; and every place a transform
+    // stands, an element's own and a group's around it, for a bound element, a marker and the path a
+    // marker follows.
+    let ids = |show: bool| serde_json::to_string(&on_layout.iter().filter(|(_, s)| (s == "move") == show).map(|(i, _)| i.as_str()).collect::<Vec<_>>()).unwrap();
+    let followed_paths = serde_json::to_string(&paths.values().collect::<std::collections::BTreeSet<_>>()).unwrap();
+    let stands = page.eval(&format!(
+        r#"(() => {{ const doc = new DOMParser().parseFromString({}, "image/svg+xml"); const MARKERS = {}, BOUND = {}, PATHS = {};
+  const types = new Set(); let list = false;
+  for (const id of MARKERS) {{ const live = document.getElementById(id); const was = live.classList.contains("sv-hidden"); live.classList.remove("sv-hidden"); const b = live.getBBox(); if (was) live.classList.add("sv-hidden"); const off = Math.abs(b.x + b.width / 2) > 1 || Math.abs(b.y + b.height / 2) > 1; const l = doc.getElementById(id).transform.baseVal; if (off) {{ for (let i = 0; i < l.numberOfItems; i++) types.add(l.getItem(i).type); if (l.numberOfItems > 1) list = true; }} }}
+  const all = Object.keys(SVGTransform).filter((k) => k.startsWith("SVG_TRANSFORM_") && k !== "SVG_TRANSFORM_UNKNOWN");
+  const cells = new Set();
+  for (const [role, list] of [["bound", BOUND], ["marker", MARKERS], ["path", PATHS]]) for (const id of list) {{ const el = doc.getElementById(id); if (el.transform?.baseVal.numberOfItems > 0) cells.add(role + " own"); for (let a = el.parentElement; a && a !== doc.documentElement; a = a.parentElement) if (a.transform?.baseVal.numberOfItems > 0) cells.add(role + " group"); }}
+  return [all.filter((k) => !types.has(SVGTransform[k])), list, [...cells].sort()]; }})()"#,
+        serde_json::to_string(&ex.svg).unwrap(),
+        ids(true),
+        ids(false),
+        followed_paths
+    ));
+    assert_eq!(stands, json!([[], true, ["bound group", "bound own", "marker group", "marker own", "path group", "path own"]]), "every transform function as a marker's own, and every place a transform stands");
+    // Every element with no area a level can be on, by the page's own branches: a line and a path,
+    // each with no width and with no height.
+    let flat = page.eval(r#"[...new Set([...document.querySelectorAll("svg.plant .sv-show-level[data-object]")].flatMap((el) => { const b = el.getBBox(), k = el instanceof SVGLineElement ? "line" : el.tagName; return [b.width === 0 ? k + " no width" : null, b.height === 0 ? k + " no height" : null].filter(Boolean); }))].sort()"#);
+    assert_eq!(flat, json!(["line no height", "line no width", "path no height", "path no width"]), "every level with no area");
     // A marker drawn at its own size through its own transform (the rect's twice, the circle's half
     // again, beside an unscaled one of the same radius), not set aside by its place.
     let width = |id: &str| d(id, "rect")[2].as_f64().unwrap();
