@@ -80,6 +80,14 @@ const DRAWN: &str = r#"(() => {
     const shapes = el.matches(SHAPES) ? [el] : [...el.querySelectorAll(SHAPES)];
     return op * Math.max(0, ...shapes.map(own)) > 0.05;
   };
+  // A level's fill shown by its fill alone: an outline is no level.
+  const filled = (el) => {
+    if (!el || getComputedStyle(el).visibility !== "visible") return el ? false : null;
+    let op = 1;
+    for (let a = el; a; a = a.parentElement) { const s = getComputedStyle(a); if (s.display === "none") return false; op *= Number(s.opacity); }
+    const s = getComputedStyle(el);
+    return op * alpha(s.fill) * Number(s.fillOpacity) > 0.05;
+  };
   // Whether the thing is what is painted at its box's centre (clips, visibility and anything over
   // it count; a fill takes no pointer, so it is asked to for the probe).
   const hit = (el) => {
@@ -119,7 +127,7 @@ const DRAWN: &str = r#"(() => {
       state: st(el), hidden: el.classList.contains("sv-hidden"), transform: el.getAttribute("transform"), rect: rect(el), shown: shown(el), hit: marker ? hit(el) : null, selected: el.classList.contains("sv-selected"),
       tag_keys: [...document.querySelectorAll(`.sv-overlay .sv-tag[data-for="${id}"][data-key]`)].map((t) => t.dataset.key).sort(),
       tag: tag ? tag.textContent : null, tag_state: st(tag), tag_rect: rect(tag), tag_shown: shown(tag), label_rect: rect(label), label_shown: shown(label),
-      fill: fill ? { rect: rect(fill), state: st(fill), shown: shown(fill), hit: hit(fill) } : null,
+      fill: fill ? { rect: rect(fill), state: st(fill), shown: filled(fill), hit: hit(fill) } : null,
       clones: [...document.querySelectorAll(`svg.plant [data-object="${id}"][data-key]`)].map((c) => {
         const t = tagOf(id, c.dataset.key);
         return { key: c.dataset.key, state: st(c), transform: c.getAttribute("transform"), rect: rect(c), shown: shown(c), hit: hit(c), selected: c.classList.contains("sv-selected"), tag: t ? t.textContent : null, tag_state: st(t), tag_rect: rect(t), tag_shown: shown(t) };
@@ -352,6 +360,10 @@ const PROBES: &str = r##"
     const inner = [["the group between", mid]];
     // A text of the group's, writing its own paint: kept (read apart, against a free one).
     const text = write(document.createElementNS(svgNS, "text"), how);
+    const span = document.createElementNS(svgNS, "tspan");
+    span.setAttribute("fill", "#abcdef");
+    span.setAttribute("stroke", "#fedcba");
+    text.append(span);
     mid.append(text);
     texts.push([cls, how, text]);
     for (const name of HELD) {
@@ -401,9 +413,36 @@ const PROBES: &str = r##"
   // Every group's text keeps the paint it writes, in every state and selected: as a free text.
   for (const [cls, how, text] of texts) {
     const free = write(document.createElementNS(svgNS, "text"), how);
+    const span = document.createElementNS(svgNS, "tspan");
+    span.setAttribute("fill", "#abcdef");
+    span.setAttribute("stroke", "#fedcba");
+    free.append(span);
     plant.append(free);
     extra.push(free);
     if (sig(text, PAINT) !== sig(free, PAINT)) out.push(`a text in a group ${cls}, its paint written as ${how}: ${sig(text, PAINT)}, a free one ${sig(free, PAINT)}`);
+    // Its span writing its own paint keeps it, as a free text's does.
+    if (sig(text.firstElementChild, PAINT) !== sig(span, PAINT)) out.push(`a span of a text in a group ${cls}: ${sig(text.firstElementChild, PAINT)}, a free one's ${sig(span, PAINT)}`);
+  }
+  // Every way of showing in every state shown: displayed, visible and painted with some alpha once
+  // every opacity is multiplied (an element by its fill or its stroke, a group by its shape); a fill
+  // and a tag by their fill alone, neither stroked (a state's outline is a bound element's alone).
+  const cv = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true });
+  const alphaOf = (paint) => { if (!paint || paint === "none") return 0; if (paint.startsWith("url(")) return 1; cv.clearRect(0, 0, 1, 1); cv.fillStyle = "rgba(0, 0, 0, 0)"; cv.fillStyle = paint; cv.fillRect(0, 0, 1, 1); return cv.getImageData(0, 0, 1, 1).data[3] / 255; };
+  const opac = (el) => { let op = 1; for (let a = el; a; a = a.parentElement) { const c = getComputedStyle(a); if (c.display === "none") return 0; op *= Number(c.opacity); } return getComputedStyle(el).visibility === "visible" ? op : 0; };
+  const byFill = (el) => { const c = getComputedStyle(el); return opac(el) * alphaOf(c.fill) * Number(c.fillOpacity); };
+  const byStroke = (el) => { const c = getComputedStyle(el); return parseFloat(c.strokeWidth) > 0 ? opac(el) * alphaOf(c.stroke) * Number(c.strokeOpacity) : 0; };
+  for (const s of STATES) {
+    for (const k of KINDS) {
+      const el = made.find(([, w]) => w === `a ${k} element in ${s}`)[0];
+      if (Math.max(byFill(el), byStroke(el)) <= 0.05) out.push(`a ${k} element in ${s} not shown`);
+      const shape = made.find(([, w]) => w === `a ${k} group in ${s}`)[0].firstElementChild;
+      if (Math.max(byFill(shape), byStroke(shape)) <= 0.05) out.push(`a ${k} group's shape in ${s} not shown`);
+    }
+    for (const what of ["a fill", "a tag"]) {
+      const el = made.find(([, w]) => w === `${what} in ${s}`)[0];
+      if (byFill(el) <= 0.05) out.push(`${what} in ${s} not shown by its fill`);
+      if (getComputedStyle(el).stroke !== "none") out.push(`${what} in ${s} stroked ${getComputedStyle(el).stroke}`);
+    }
   }
   for (const e of extra) e.remove();
   for (const [el] of made) el.remove();
@@ -1292,4 +1331,183 @@ fn the_page_draws_the_layout_from_the_feed() {
         assert!(colours(c).iter().any(|(_, h, s)| (280.0..=345.0).contains(h) && *s > 0.15), "{c}: {:?}", colours(c));
     }
     assert!(colours("#30d158 #sv-hatch url(#loop) #26262A").iter().all(|(_, h, _)| !(280.0..=345.0).contains(h)));
+}
+
+/// The drawing for the levels with no area and what the page adds around the drawing: a line with no
+/// width and one with no height under every transform function the browser lists (each a stroke
+/// whose width across the screen the function changes or keeps), at both places a transform stands
+/// (its own and a group's around it); three lines in near, warn and alarm; a slanted straight path
+/// and a polyline of collinear points; a level with an area inside a plain group; and a bound group
+/// holding a text that writes its fill alone and a span writing its own, beside the same group
+/// unbound.
+const NO_AREA_SVG: &str = r##"  <line id="nv-vt-o" x1="0" y1="0" x2="0" y2="20" stroke="#3a3a40" stroke-width="6" transform="translate(20 240)"/>
+  <line id="nv-vs-o" x1="0" y1="0" x2="0" y2="20" stroke="#3a3a40" stroke-width="6" transform="translate(50 240) scale(2 0.5)"/>
+  <line id="nv-vr-o" x1="0" y1="0" x2="0" y2="20" stroke="#3a3a40" stroke-width="6" transform="translate(80 250) rotate(90)"/>
+  <line id="nv-vk-o" x1="0" y1="0" x2="0" y2="20" stroke="#3a3a40" stroke-width="6" transform="translate(110 240) skewY(30)"/>
+  <line id="nv-vm-o" x1="0" y1="0" x2="0" y2="20" stroke="#3a3a40" stroke-width="6" transform="matrix(0 2 -0.5 0 150 250)"/>
+  <g transform="translate(180 240)"><line id="nv-vt-g" x1="0" y1="0" x2="0" y2="20" stroke="#3a3a40" stroke-width="6"/></g>
+  <g transform="translate(210 240) scale(2 0.5)"><line id="nv-vs-g" x1="0" y1="0" x2="0" y2="20" stroke="#3a3a40" stroke-width="6"/></g>
+  <g transform="translate(240 250) rotate(90)"><line id="nv-vr-g" x1="0" y1="0" x2="0" y2="20" stroke="#3a3a40" stroke-width="6"/></g>
+  <g transform="translate(270 240) skewY(30)"><line id="nv-vk-g" x1="0" y1="0" x2="0" y2="20" stroke="#3a3a40" stroke-width="6"/></g>
+  <g transform="matrix(0 2 -0.5 0 310 250)"><line id="nv-vm-g" x1="0" y1="0" x2="0" y2="20" stroke="#3a3a40" stroke-width="6"/></g>
+  <line id="nv-ht-o" x1="0" y1="0" x2="20" y2="0" stroke="#3a3a40" stroke-width="6" transform="translate(20 300)"/>
+  <line id="nv-hs-o" x1="0" y1="0" x2="20" y2="0" stroke="#3a3a40" stroke-width="6" transform="translate(50 300) scale(0.5 2)"/>
+  <line id="nv-hr-o" x1="0" y1="0" x2="20" y2="0" stroke="#3a3a40" stroke-width="6" transform="translate(90 290) rotate(90)"/>
+  <line id="nv-hk-o" x1="0" y1="0" x2="20" y2="0" stroke="#3a3a40" stroke-width="6" transform="translate(110 300) skewX(30)"/>
+  <line id="nv-hm-o" x1="0" y1="0" x2="20" y2="0" stroke="#3a3a40" stroke-width="6" transform="matrix(0 2 -0.5 0 150 290)"/>
+  <g transform="translate(180 300)"><line id="nv-ht-g" x1="0" y1="0" x2="20" y2="0" stroke="#3a3a40" stroke-width="6"/></g>
+  <g transform="translate(210 300) scale(0.5 2)"><line id="nv-hs-g" x1="0" y1="0" x2="20" y2="0" stroke="#3a3a40" stroke-width="6"/></g>
+  <g transform="translate(250 290) rotate(90)"><line id="nv-hr-g" x1="0" y1="0" x2="20" y2="0" stroke="#3a3a40" stroke-width="6"/></g>
+  <g transform="translate(270 300) skewX(30)"><line id="nv-hk-g" x1="0" y1="0" x2="20" y2="0" stroke="#3a3a40" stroke-width="6"/></g>
+  <g transform="matrix(0 2 -0.5 0 310 290)"><line id="nv-hm-g" x1="0" y1="0" x2="20" y2="0" stroke="#3a3a40" stroke-width="6"/></g>
+  <line id="nv-near" x1="20" y1="350" x2="20" y2="380" stroke="#3a3a40" stroke-width="6"/>
+  <line id="nv-warn" x1="50" y1="350" x2="50" y2="380" stroke="#3a3a40" stroke-width="6"/>
+  <line id="nv-alarm" x1="80" y1="350" x2="80" y2="380" stroke="#3a3a40" stroke-width="6"/>
+  <path id="nv-diag" d="M 110 345 L 150 385" stroke="#3a3a40" stroke-width="6"/>
+  <polyline id="nv-diag2" points="165,345 185,365 205,385" stroke="#3a3a40" stroke-width="6" fill="#3a3a40"/>
+  <g id="nv-wrap"><rect id="nv-box" x="225" y="350" width="20" height="30"/></g>
+  <g id="nv-grp"><rect x="260" y="350" width="40" height="24"/><text x="264" y="366" font-size="12" fill="#ffffff">A<tspan fill="#ffff00">B</tspan></text></g>
+  <g id="nv-free"><rect x="320" y="350" width="40" height="24"/><text x="324" y="366" font-size="12" fill="#ffffff">A<tspan fill="#ffff00">B</tspan></text></g>
+</svg>"##;
+
+/// The levels with no area whose stroke the page fills over, each with its level: the twenty under a
+/// transform and the three in a state at 85 %, the slanted path and polyline at 100 %.
+fn no_area_levels() -> Vec<(String, f64)> {
+    let mut out: Vec<(String, f64)> = Vec::new();
+    for o in ["v", "h"] {
+        for f in ["t", "s", "r", "k", "m"] {
+            for at in ["o", "g"] {
+                out.push((format!("nv-{o}{f}-{at}"), 0.85));
+            }
+        }
+    }
+    for s in ["near", "warn", "alarm"] {
+        out.push((format!("nv-{s}"), 0.85));
+    }
+    out.push(("nv-diag".into(), 1.0));
+    out.push(("nv-diag2".into(), 1.0));
+    out
+}
+
+/// Each level with no area against its stroke as the browser paints it: on a line the screen keeps
+/// level or upright, the stroke's painted width across it (scanned from its middle outward by what
+/// the browser hits) is the fill's across it, and the fill covers it; on a slanted one, the fill is
+/// painted all along the stroke (a full level); and on every one the fill's colour is not its
+/// track's. With, for each place a transform stands (an element's own, a group's around it), the
+/// transform functions the no-area levels stand under, from the browser's own list of them.
+const NO_AREA_FILLS: &str = r##"(() => {
+  const out = [];
+  const pt = (el, at) => { const p = el.getPointAtLength(at); return new DOMPoint(p.x, p.y).matrixTransform(el.getScreenCTM()); };
+  for (const [id, level] of LEVELS) {
+    const el = document.getElementById(id);
+    const fill = document.querySelector(`.sv-fill[data-for="${id}"]`);
+    if (!el || !fill) { out.push(`${id}: no element or no fill`); continue; }
+    const len = el.getTotalLength();
+    const a = pt(el, 0), b = pt(el, len);
+    const r = fill.getBoundingClientRect();
+    const ce = getComputedStyle(el), cf = getComputedStyle(fill);
+    if (cf.fill === ce.stroke) out.push(`${id}: its fill painted as its track (${cf.fill})`);
+    const upright = Math.abs(a.x - b.x) < 0.5, flat = Math.abs(a.y - b.y) < 0.5;
+    if (upright || flat) {
+      const mid = pt(el, len / 2);
+      const hits = (d) => { const x = upright ? mid.x + d : mid.x, y = flat ? mid.y + d : mid.y; const at = document.elementFromPoint(x, y); return at === el; };
+      let lo = 0, hi = 0;
+      while (hits(lo - 0.25) && lo > -100) lo -= 0.25;
+      while (hits(hi + 0.25) && hi < 100) hi += 0.25;
+      const painted = hi - lo + 0.25;
+      if (upright) {
+        if (Math.abs(r.width - painted) > 1) out.push(`${id}: its fill ${r.width.toFixed(2)} wide over a stroke painted ${painted.toFixed(2)} wide`);
+        if (r.left > mid.x + lo + 0.75 || r.right < mid.x + hi - 0.75) out.push(`${id}: its fill [${r.left.toFixed(2)}, ${r.right.toFixed(2)}] short of its stroke [${(mid.x + lo).toFixed(2)}, ${(mid.x + hi).toFixed(2)}]`);
+      } else {
+        if (Math.abs(r.height - painted * level) > 1) out.push(`${id}: its fill ${r.height.toFixed(2)} high over a stroke painted ${painted.toFixed(2)} across, at ${level}`);
+        if (Math.abs(r.bottom - (mid.y + hi + 0.25)) > 1) out.push(`${id}: its fill's foot ${r.bottom.toFixed(2)} off its stroke's ${(mid.y + hi).toFixed(2)}`);
+      }
+    } else {
+      const prev = fill.style.pointerEvents;
+      fill.style.pointerEvents = "visiblePainted";
+      let missed = 0;
+      for (let k = 0; k <= 12; k++) { const p = pt(el, (len * k) / 12); const at = document.elementFromPoint(p.x, p.y); if (at !== fill) missed++; }
+      fill.style.pointerEvents = prev;
+      if (missed) out.push(`${id}: its fill missing at ${missed} of 13 points along its stroke`);
+    }
+  }
+  const all = Object.keys(SVGTransform).filter((k) => k.startsWith("SVG_TRANSFORM_") && k !== "SVG_TRANSFORM_UNKNOWN");
+  const seen = { own: new Set(), group: new Set() };
+  for (const [id] of LEVELS) {
+    const el = document.getElementById(id);
+    const add = (cell, l) => { for (let i = 0; i < (l?.numberOfItems ?? 0); i++) seen[cell].add(l.getItem(i).type); };
+    add("own", el.transform?.baseVal);
+    for (let p = el.parentElement; p && !p.matches("svg"); p = p.parentElement) add("group", p.transform?.baseVal);
+  }
+  return [out, Object.fromEntries(Object.entries(seen).map(([c, s]) => [c, all.filter((k) => !s.has(SVGTransform[k]))]))];
+})()"##;
+
+/// What the page adds (the overlay's tags, labels and values, every level's fill, the hatch) read
+/// by every property the browser computes (its own list), before and after the drawing's root and
+/// every group a fill stands in write paint and text of their own: nothing changes.
+const ROOT_PAINT: &str = r##"(() => {
+  const plant = document.querySelector("svg.plant");
+  const added = [...plant.querySelectorAll(".sv-overlay *, .sv-fill-holder *, #sv-hatch *")];
+  const props = [...getComputedStyle(plant)].filter((p) => !p.startsWith("--"));
+  const snap = () => added.map((e) => { const c = getComputedStyle(e); return props.map((p) => c.getPropertyValue(p)); });
+  const before = snap();
+  const WRITE = { fill: "#30d158", stroke: "#30d158", "stroke-width": "3", "stroke-dasharray": "1 1", "stroke-dashoffset": "1", "fill-opacity": "0", "stroke-opacity": "0.5", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "1", "paint-order": "stroke", "fill-rule": "evenodd", "font-size": "40", "font-family": "serif", "font-weight": "100", "font-style": "italic", "letter-spacing": "3", "word-spacing": "3", "text-anchor": "end", "dominant-baseline": "hanging", "marker-start": "url(#nv-none)", "marker-mid": "url(#nv-none)", "marker-end": "url(#nv-none)", color: "#30d158", "shape-rendering": "crispEdges", "text-rendering": "optimizeSpeed" };
+  const targets = [plant, ...new Set([...plant.querySelectorAll(".sv-fill-holder")].map((h) => h.parentElement))];
+  const was = targets.map((t) => Object.keys(WRITE).map((k) => t.getAttribute(k)));
+  for (const t of targets) for (const [k, v] of Object.entries(WRITE)) t.setAttribute(k, v);
+  const after = snap();
+  targets.forEach((t, i) => Object.keys(WRITE).forEach((k, j) => (was[i][j] === null ? t.removeAttribute(k) : t.setAttribute(k, was[i][j]))));
+  const out = [];
+  added.forEach((e, i) => props.forEach((p, j) => { if (before[i][j] !== after[i][j]) out.push(`${e.tagName} ${e.getAttribute("class") ?? ""} ${e.dataset.for ?? ""} ${p}: ${before[i][j]} -> ${after[i][j]}`); }));
+  return [added.length, targets.length, out.slice(0, 30)];
+})()"##;
+
+/// A bound group's text, and its span, painted as the same group's unbound; and every tag and every
+/// fill of the page stroked with nothing.
+const PINNED: &str = r##"(() => {
+  const PAINT = ["fill", "stroke", "stroke-width", "stroke-dasharray", "fill-opacity", "stroke-opacity"];
+  const sig = (el) => { const c = getComputedStyle(el); return PAINT.map((p) => c.getPropertyValue(p)).join(" | "); };
+  const b = document.querySelector("#nv-grp text"), f = document.querySelector("#nv-free text");
+  const stroked = [...document.querySelectorAll("svg.plant .sv-tag, svg.plant .sv-fill")].filter((e) => getComputedStyle(e).stroke !== "none").map((e) => `${e.getAttribute("class")} ${e.dataset.for}: ${getComputedStyle(e).stroke}`);
+  return [document.getElementById("nv-grp").classList.contains("sv-obj"), sig(b) === sig(f) ? null : [sig(b), sig(f)], sig(b.querySelector("tspan")) === sig(f.querySelector("tspan")) ? null : [sig(b.querySelector("tspan")), sig(f.querySelector("tspan"))], stroked];
+})()"##;
+
+#[test]
+fn a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_the_page_adds() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(&dir.path().join("bench"));
+    let mut ex = live_example(&bench, false);
+    assert!(ex.svg.contains("viewBox=\"0 0 400 220\"") && ex.svg.ends_with("</svg>\n"));
+    ex.svg = ex.svg.replace("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 400 400\"").replace("</svg>\n", NO_AREA_SVG).to_string() + "\n";
+    let mut objects = String::new();
+    for (id, level) in no_area_levels() {
+        let series = if level == 1.0 { "fill3" } else { "fill2" };
+        let rule = ["near", "warn", "alarm"].iter().find(|s| id == format!("nv-{s}")).map(|s| format!("states = [ {{ above = 50, state = \"{s}\" }} ]\n")).unwrap_or_default();
+        objects.push_str(&format!("\n[[object]]\nid = \"{id}\"\nvalue = {{ source = \"plc\", series = \"{series}\" }}\nshow = \"level\"\n{rule}"));
+    }
+    objects.push_str("\n[[object]]\nid = \"nv-box\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"nv-grp\"\nvalue = { source = \"plc\", series = \"fill1\" }\n");
+    ex.binding = ex.binding.replacen("\n[[dashboard]]", &format!("{objects}\n[[dashboard]]"), 1);
+    let path = write_example(dir.path(), &ex);
+    std::fs::write(dir.path().join("loop/sorts.log"), "").unwrap();
+    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let addr = host.addr();
+    let mut page = Browser::open(&format!("http://{addr}/s/loop/"));
+    let levels = no_area_levels();
+    let ids = serde_json::to_string(&levels.iter().map(|(i, _)| i.as_str()).collect::<Vec<_>>()).unwrap();
+    // Every one painted at its level and in its state, then every slide run.
+    page.wait_for(
+        &format!(r#"(() => {{ const ids = {ids}; return ids.every((id) => {{ const f = document.querySelector(`.sv-fill[data-for="${{id}}"]`); return f && parseFloat(f.getAttribute("height")) > 0; }}) && document.getElementById("nv-alarm").classList.contains("sv-state-alarm") && document.getElementById("nv-near").classList.contains("sv-state-near") && document.getElementById("nv-warn").classList.contains("sv-state-warn") && document.getElementById("nv-box").classList.contains("sv-state-normal") || null; }})()"#),
+        Duration::from_secs(20),
+    );
+    page.wait_for(r#"document.getAnimations().every((a) => a.playState !== "running") || null"#, Duration::from_secs(5));
+    let got = page.eval(&format!("(() => {{ const LEVELS = {};\nreturn {NO_AREA_FILLS};\n}})()", serde_json::to_string(&levels).unwrap()));
+    assert_eq!(got[0], json!([]), "a level with no area not filled over its stroke as painted");
+    assert_eq!(got[1], json!({ "own": [], "group": [] }), "every transform function a level with no area stands under, at both places");
+    let root = page.eval(ROOT_PAINT);
+    assert!(root[0].as_u64().unwrap() > 60 && root[1].as_u64().unwrap() >= 3, "what the page adds, and where: {root}");
+    assert_eq!(root[2], json!([]), "paint the drawing writes reaching what the page adds");
+    let pinned = page.eval(PINNED);
+    assert_eq!(pinned, json!([true, null, null, []]), "a bound group's text and its span as drawn, no tag or fill stroked");
+    drop(page);
+    host.stop();
 }

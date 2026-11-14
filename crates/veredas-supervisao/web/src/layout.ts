@@ -23,8 +23,14 @@ interface Bound {
   own: string;
   ownM: DOMMatrix;
   /// The box a level fills, in the overlay's frame (the screen's, up to the view's zoom): the
-  /// element's box there, widened to its stroke where it has no width or no height (a line).
+  /// element's box there, widened to its stroke where it has no area (a line), its stroke's width
+  /// read again whenever it is painted.
   fillBox: Box;
+  /// The element's box in the overlay's frame, as it stands.
+  ob: Box;
+  /// For an element with no area: the matrix from it to the overlay and the way it runs, in its own
+  /// coordinates.
+  noArea?: { m: DOMMatrix; dir: { x: number; y: number } | null };
   tag: SVGTextElement;
   label: SVGTextElement;
   fill?: SVGRectElement;
@@ -63,6 +69,51 @@ function boxIn(target: SVGGraphicsElement, el: SVGGraphicsElement, box: DOMRect)
   return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
 }
 
+/// The paint the page outranks on a bound element (and pins on a group's text, as drawn).
+const PAINT = ["fill", "stroke", "stroke-width", "stroke-dasharray", "fill-opacity", "stroke-opacity"];
+
+/// Whether an element draws no area, and the way it runs in its own coordinates: a line; a shape
+/// with no width or no height; or a shape every point of which lies on one straight line (a
+/// straight path, polyline or polygon, slanted or not: a polyline's and a polygon's own points, and
+/// 65 points along any shape), its way from its start to its farthest point. Null for an element
+/// with an area.
+function noAreaOf(el: SVGGraphicsElement, box: DOMRect): { dir: { x: number; y: number } | null } | null {
+  if (el instanceof SVGLineElement) return { dir: { x: el.x2.baseVal.value - el.x1.baseVal.value, y: el.y2.baseVal.value - el.y1.baseVal.value } };
+  if (!(el instanceof SVGGeometryElement)) return null;
+  if (box.width === 0) return { dir: { x: 0, y: 1 } };
+  if (box.height === 0) return { dir: { x: 1, y: 0 } };
+  const pts: { x: number; y: number }[] = [];
+  if (el instanceof SVGPolylineElement || el instanceof SVGPolygonElement) for (let i = 0; i < el.points.numberOfItems; i++) pts.push(el.points.getItem(i));
+  const len = el.getTotalLength();
+  for (let k = 0; k <= 64; k++) pts.push(el.getPointAtLength((len * k) / 64));
+  const a = pts[0];
+  const far = pts.reduce((f, p) => (Math.hypot(p.x - a.x, p.y - a.y) > Math.hypot(f.x - a.x, f.y - a.y) ? p : f), a);
+  const dx = far.x - a.x, dy = far.y - a.y, n = Math.hypot(dx, dy);
+  if (!n) return { dir: null };
+  const off = Math.max(...pts.map((p) => Math.abs((p.x - a.x) * dy - (p.y - a.y) * dx) / n));
+  return off <= n * 1e-6 + 1e-6 ? { dir: { x: dx, y: dy } } : null;
+}
+
+/// A stroke's width across the way it runs, carried through a matrix: its band of width `sw` is
+/// stretched by the matrix's area and along its length, so across it by the one over the other
+/// (`sw` times the scale where the matrix scales alike every way).
+function across(m: DOMMatrix, sw: number, dir: { x: number; y: number } | null): number {
+  const det = Math.abs(m.a * m.d - m.b * m.c);
+  const n = dir ? Math.hypot(dir.x, dir.y) : 0;
+  if (!dir || !n) return sw * Math.sqrt(det);
+  const ux = dir.x / n, uy = dir.y / n;
+  const along = Math.hypot(m.a * ux + m.c * uy, m.b * ux + m.d * uy);
+  return along ? (sw * det) / along : sw * Math.sqrt(det);
+}
+
+/// A box widened, about its centre, to `w` where it is narrower or lower.
+function widened(b: Box, w: number): Box {
+  const out = { ...b };
+  if (out.width < w) { out.x -= (w - out.width) / 2; out.width = w; }
+  if (out.height < w) { out.y -= (w - out.height) / 2; out.height = w; }
+  return out;
+}
+
 /// What a layout may not carry into the page: scripts, foreign content, event handlers.
 function clean(doc: Document) {
   doc.querySelectorAll("script, foreignObject").forEach((n) => n.remove());
@@ -92,7 +143,10 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
   const fontSize = Math.max(vb0.h, vb0.w * 0.5) / 34;
 
   const defsEl = s("defs");
-  defsEl.innerHTML = `<pattern id="sv-hatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="4" height="4" fill="#26262A"/><line x1="0" y1="0" x2="0" y2="4" stroke="#6F6F77" stroke-width="1.4"/></pattern>`;
+  // What the page adds stands in a group of its own that inherits nothing from the drawing
+  // (`sv-reset`, the overlay alike: every property at its initial value), so paint the drawing
+  // writes on its root or on a group around an element reaches none of it.
+  defsEl.innerHTML = `<pattern id="sv-hatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><g class="sv-reset"><rect width="4" height="4" fill="#26262A"/><line x1="0" y1="0" x2="0" y2="4" stroke="#6F6F77" stroke-width="1.4"/></g></pattern>`;
   svg.prepend(defsEl);
   const overlay = s("g", { class: "sv-overlay" }) as SVGGElement;
   svg.append(overlay);
@@ -101,7 +155,14 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
   for (const def of defs) {
     const el = svg.querySelector(`[id="${CSS.escape(def.id)}"]`) as SVGGraphicsElement | null;
     if (!el) continue;
+    // A group's text keeps its paint as drawn: what it writes and what it inherited from the group
+    // before the group took a state, pinned on it.
+    const pinned = el instanceof SVGTextElement ? [] : Array.from(el.querySelectorAll("text")).map((t) => {
+      const c = getComputedStyle(t);
+      return { t, vals: PAINT.map((p) => [p, c.getPropertyValue(p)] as const) };
+    });
     el.classList.add("sv-obj", `sv-show-${def.show}`, "sv-state-stale");
+    for (const { t, vals } of pinned) for (const [p, v] of vals) t.style.setProperty(p, v, "important");
     el.dataset.object = def.id;
     const box = el.getBBox();
     // Where the element stands in the overlay, its transforms (and its ancestors') followed.
@@ -114,17 +175,20 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     let ownM = new DOMMatrix();
     const list = el.transform?.baseVal;
     if (list) for (let i = 0; i < list.numberOfItems; i++) { const t = list.getItem(i).matrix; ownM = ownM.multiply(new DOMMatrix([t.a, t.b, t.c, t.d, t.e, t.f])); }
-    // An element with no area (a line, a straight path) is filled over its stroke.
-    const noArea = el instanceof SVGLineElement || box.width === 0 || box.height === 0;
-    const fillBox = { ...ob };
+    // An element with no area (a line, a straight path or polyline) is filled over its stroke: its
+    // box widened to the stroke's width across it, carried to the overlay; its stroke then drawn as
+    // the level's track (`sv-noarea`), the fill over it in the state's colour.
+    const flat = def.show === "level" ? noAreaOf(el, box) : null;
+    const noArea = flat !== null;
+    let fillBox = { ...ob };
     const oc0 = overlay.getCTM(), ec0 = el.getCTM();
-    if (noArea && oc0 && ec0) {
-      const m = oc0.inverse().multiply(ec0);
-      const w = (parseFloat(getComputedStyle(el).strokeWidth) || 0) * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
-      if (fillBox.width < w) { fillBox.x -= (w - fillBox.width) / 2; fillBox.width = w; }
-      if (fillBox.height < w) { fillBox.y -= (w - fillBox.height) / 2; fillBox.height = w; }
+    let na: Bound["noArea"];
+    if (flat && oc0 && ec0) {
+      na = { m: oc0.inverse().multiply(ec0), dir: flat.dir };
+      el.classList.add("sv-noarea");
+      fillBox = widened(ob, across(na.m, parseFloat(getComputedStyle(el).strokeWidth) || 0, na.dir));
     }
-    const b: Bound = { def, el, box, own, ownM, fillBox, tag, label, clones: new Map(), lastPlace: new Map(), tags: new Map() };
+    const b: Bound = { def, el, box, own, ownM, fillBox, ob, noArea: na, tag, label, clones: new Map(), lastPlace: new Map(), tags: new Map() };
     if (def.show === "level") {
       // The fill rises up the screen over the element's box, whatever turns, skews or scales the
       // element and its groups: a rect in the overlay's frame, carried into the element's parent
@@ -136,7 +200,7 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       const pc = (el.parentNode as SVGGraphicsElement).getCTM();
       const m = pc && oc0 ? pc.inverse().multiply(oc0) : new DOMMatrix();
       const frame = s("g", { transform: `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})` }, b.fill);
-      const holder = s("g", { class: "sv-fill-holder", "data-for": def.id }, frame);
+      const holder = s("g", { class: "sv-fill-holder", "data-for": def.id }, s("g", { class: "sv-reset" }, frame));
       if ((el instanceof SVGGeometryElement || el instanceof SVGTextElement) && !noArea) {
         const clipId = `sv-clip-${def.id}`;
         defsEl.append(s("clipPath", { id: clipId }, s("use", { href: `#${def.id}` })));
@@ -245,6 +309,17 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
         b.fill.classList.add("sv-instant");
         const fill = b.fill;
         requestAnimationFrame(() => requestAnimationFrame(() => fill.classList.remove("sv-instant")));
+      }
+      // With no area, the stroke's width read again in the state just set (unselected: the
+      // selection's own stroke is no part of the track).
+      if (b.noArea) {
+        const sel = b.el.classList.contains("sv-selected");
+        b.el.classList.remove("sv-selected");
+        const sw = parseFloat(getComputedStyle(b.el).strokeWidth) || 0;
+        if (sel) b.el.classList.add("sv-selected");
+        b.fillBox = widened(b.ob, across(b.noArea.m, sw, b.noArea.dir));
+        b.fill.setAttribute("x", String(b.fillBox.x));
+        b.fill.setAttribute("width", String(b.fillBox.width));
       }
       const f = o.level ?? 0;
       b.fill.setAttribute("y", String(b.fillBox.y + b.fillBox.height * (1 - f)));

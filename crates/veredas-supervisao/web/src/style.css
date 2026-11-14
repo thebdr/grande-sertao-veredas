@@ -67,34 +67,41 @@ svg.plant { width: 100%; height: 100%; display: block; user-select: none; }
 :where(.sv-show-move) { fill: #d4d4da !important; stroke: none !important; transition: transform .2s linear; }
 .sv-show-move.sv-jump { transition: none; }
 .sv-hidden { display: none; }
-.sv-fill { pointer-events: none; fill: var(--neutral); transition: y .3s, height .3s; }
+/* What the page adds (the overlay's tags, labels and values, a level's fill, the hatch) inherits
+   nothing from the drawing: its holder starts every property at its initial value. A fill and a tag
+   are painted by their fill alone, never stroked. */
+.sv-overlay, .sv-reset { all: initial; }
+.sv-fill { pointer-events: none; fill: var(--neutral); stroke: none; transition: y .3s, height .3s; }
 .sv-fill.sv-instant { transition: none; }
 :where(.sv-show-state.sv-state-normal, .sv-show-value.sv-state-normal) { fill: var(--neutral) !important; }
-:where(.sv-state-near) { stroke: var(--near) !important; }
+:where(.sv-obj.sv-state-near) { stroke: var(--near) !important; }
 :where(.sv-show-state.sv-state-near, .sv-fill.sv-state-near) { fill: var(--near) !important; }
-:where(.sv-state-warn) { stroke: var(--warn) !important; }
+:where(.sv-obj.sv-state-warn) { stroke: var(--warn) !important; }
 :where(.sv-show-state.sv-state-warn, .sv-fill.sv-state-warn) { fill: var(--warn) !important; }
-:where(.sv-state-alarm) { stroke: var(--danger) !important; stroke-width: 2 !important; }
+:where(.sv-obj.sv-state-alarm) { stroke: var(--danger) !important; stroke-width: 2 !important; }
 :where(.sv-show-state.sv-state-alarm, .sv-fill.sv-state-alarm) { fill: var(--danger) !important; }
 :where(.sv-show-state.sv-state-disabled, .sv-show-level.sv-state-disabled) { fill: url(#sv-hatch) !important; }
-:where(.sv-state-stale) { stroke: var(--muted) !important; stroke-dasharray: 2 2 !important; }
+:where(.sv-obj.sv-state-stale) { stroke: var(--muted) !important; stroke-dasharray: 2 2 !important; }
 :where(.sv-show-state.sv-state-stale, .sv-fill.sv-state-stale) { fill: #2a2a30 !important; }
 :where(.sv-show-move.sv-state-stale) { fill: var(--muted) !important; }
 :where(.sv-show-move.sv-state-near) { fill: var(--near) !important; }
 :where(.sv-show-move.sv-state-warn) { fill: var(--warn) !important; }
 :where(.sv-show-move.sv-state-disabled) { fill: url(#sv-hatch) !important; stroke: var(--weak) !important; stroke-width: 1 !important; }
 :where(.sv-show-move.sv-state-alarm) { fill: var(--danger) !important; }
+/* A level with no area (a line): its stroke is the level's track, drawn as an area's inside is, the
+   fill over it in the state's colour (its width and dashes still the state's). */
+:where(.sv-show-level.sv-noarea) { stroke: var(--raised) !important; }
 /* A bound group's shapes, and the groups between it and them, take its state's paint, whatever the
-   drawing wrote on them, and so do a bound text's spans. A group's text keeps the paint it writes (a
-   label), inheriting what it writes none of; its spans follow it. */
-:where(.sv-obj :is(g, rect, circle, ellipse, path, polygon, polyline, line, tspan)) { fill: inherit !important; stroke: inherit !important; stroke-width: inherit !important; stroke-dasharray: inherit !important; fill-opacity: inherit !important; stroke-opacity: inherit !important; }
+   drawing wrote on them, and so do a bound text's spans. A group's text keeps its paint as drawn (a
+   label: the page pins it as it stood before the group took a state), its spans their own. */
+:where(.sv-obj :is(g, rect, circle, ellipse, path, polygon, polyline, line), text.sv-obj tspan) { fill: inherit !important; stroke: inherit !important; stroke-width: inherit !important; stroke-dasharray: inherit !important; fill-opacity: inherit !important; stroke-opacity: inherit !important; }
 :where(.sv-fill.sv-state-disabled) { fill: url(#sv-hatch) !important; }
-.sv-selected, .sv-selected :is(g, rect, circle, ellipse, path, polygon, polyline, line, tspan) { stroke: var(--accent) !important; stroke-width: 2.5 !important; stroke-dasharray: none !important; stroke-opacity: 1 !important; }
+.sv-selected, .sv-selected :is(g, rect, circle, ellipse, path, polygon, polyline, line), text.sv-selected tspan { stroke: var(--accent) !important; stroke-width: 2.5 !important; stroke-dasharray: none !important; stroke-opacity: 1 !important; }
 .sv-show-move.sv-selected { fill: var(--accent) !important; }
 .sv-overlay text { pointer-events: none; font-family: var(--mono); }
 .sv-label { fill: var(--weak2); }
 .sv-value { fill: var(--strong); }
-.sv-tag { font-weight: 600; fill: var(--weak); }
+.sv-tag { font-weight: 600; fill: var(--weak); stroke: none; }
 .sv-tag.sv-state-near { fill: var(--near); }
 .sv-tag.sv-state-warn { fill: var(--warn); }
 .sv-tag.sv-state-alarm { fill: var(--danger-text); }

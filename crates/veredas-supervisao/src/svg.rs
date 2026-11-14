@@ -80,6 +80,12 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
     if root.tag_name().namespace() != Some(SVG_NS) {
         return Err(format!("{} is not an SVG document: its root is not in the SVG namespace ({SVG_NS})", path.display()));
     }
+    // The page lays its own frame over the drawing's root (its tags, labels and values, its levels
+    // rising up the screen): a root that moves, turns or scales itself would turn the drawing out
+    // from under that frame (Q25).
+    if root.attribute("transform").is_some() {
+        return Err(format!("{} writes a `transform` on its root <svg>: the page lays its own frame over the drawing's root, which may not move", path.display()));
+    }
     // The document type's attribute defaults (`<!ATTLIST`), which a browser applies and this
     // reader does not: an element's namespace, a link or a handler added unseen. (A parameter
     // entity's reference, the other way to declare unseen, is no XML this reader reads.)

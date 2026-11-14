@@ -303,7 +303,9 @@ A path is relative to the binding file's folder.
 - `show` (`"state"`): how the layout shows the object: `state` (its element takes the state's
   class, and its mark and word when not normal), `level` (as `state`, and its element fills from
   the bottom of the screen by the value's place in `range`, a shape or a text within its outline,
-  a group its box, a line its box widened to its stroke), `value` (as `state`, and the value
+  a group its box, an element with no area (a line, or a shape whose outline holds none: a straight
+  path or polyline) its box widened to its stroke across it, that stroke drawn as the level's
+  track), `value` (as `state`, and the value
   written over its element) or `move` (its element is a marker placed along `path` by the value's
   place in `range`, its own transform kept). A level and a marker need a numeric
   series.
@@ -428,7 +430,7 @@ an SVG document (its root an `svg` in the SVG namespace), or holds a script, a `
 `transform`, `translate`, `rotate`, `scale`, `transform-origin`, `transform-box`, `transform-style`,
 `perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, in a
 `style`, a name with white space or a comment inside it declaring nothing; the attributes
-`transform-origin` and `pointer-events`, an element's own `transform` attribute kept), foreign content (an
+`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), foreign content (an
 element outside the SVG namespace), an event handler, a script link (a `javascript:` URL in any
 attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
 declaring attribute defaults or using a parameter entity (a browser would apply them unchecked); an
