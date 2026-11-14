@@ -433,7 +433,8 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
             std::thread::sleep(Duration::from_millis(50));
         }
         let (served, own) = quiet.unwrap_or_else(|| panic!("{session}'s dashboard never held still"));
-        assert_eq!(served, own, "{session}'s dashboard, as computed over its own store");
+        // Through the text a client reads (a float parsed from text may sit a ULP off its value).
+        assert_eq!(served, as_served(&own), "{session}'s dashboard, as computed over its own store");
     }
     assert_eq!(get(addr, "/s/loop/dashboard/1"), (404, json!({ "error": "session `loop` has no dashboard 1" })));
     assert_eq!(get(addr, "/s/loop/dashboard/x"), (404, json!({ "error": "`x` is no dashboard of session `loop`" })));

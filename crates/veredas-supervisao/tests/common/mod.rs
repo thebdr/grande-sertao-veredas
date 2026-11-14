@@ -175,6 +175,14 @@ pub fn http(addr: SocketAddr, method: &str, path: &str, body: Option<&str>) -> (
     (status, lower, body)
 }
 
+/// A value computed in process as a client reads it once served: written as the server writes it
+/// (the shortest text that round-trips) and parsed back as `get` parses an answer. serde_json's
+/// default parser may land a 17-digit number one ULP off, the same way on both sides only when both
+/// went through text, so a computed value is compared with a served one through this.
+pub fn as_served(v: &Value) -> Value {
+    serde_json::from_str(&v.to_string()).unwrap()
+}
+
 pub fn get(addr: SocketAddr, path: &str) -> (u16, Value) {
     let (status, _, body) = http(addr, "GET", path, None);
     (status, serde_json::from_str(&body).unwrap_or_else(|e| panic!("{path}: {e}: {body}")))
