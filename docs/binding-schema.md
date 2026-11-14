@@ -282,8 +282,9 @@ A path is relative to the binding file's folder.
   objects share one, whatever the case. The layout's element with this `id` shows the object: a
   group, a shape or a text (`g`, `rect`, `circle`, `ellipse`, `path`, `polygon`, `polyline`, `line`,
   `text`), inside no other object's element, with nothing but groups (`g`) between it and the
-  drawing's root, holding nothing but groups, shapes, texts and their spans (a title or a
-  description too) (Q25). The state's paint outranks whatever paint the drawing
+  drawing's root, holding nothing but groups, shapes, texts and their spans, a title or a
+  description (`g`, `rect`, `circle`, `ellipse`, `path`, `polygon`, `polyline`, `line`, `text`, `tspan`,
+  `title`, `desc`) (Q25). The state's paint outranks whatever paint the drawing
   writes on it and on a group's shapes and inner groups, as attributes or in `style` (never
   `!important` there, however CSS spells it); a group's text keeps the paint it writes.
 - `label` (`id`): the object's name on the screen.
@@ -421,9 +422,13 @@ table the project lacks; a table panel's limit outside 1 to
 1000, a column with an empty name, places past 6 or a rule over another series, a sort column the
 panel or its table lacks; a column, key or value the table lacks where the project states its
 columns, a value that is not numeric; a `spread` not above 0; a layout that cannot be read, is not
-an SVG document (its root an `svg` in the SVG namespace), or holds a script, a `<style>` sheet, an animation, a `class`, an id the page names its own (`app`,
-`sv-…`), CSS that moves, times or unpins what the page writes (a transform property, a transition,
-an animation, a motion offset, `pointer-events`, in a `style` or as an attribute), foreign content (an
+an SVG document (its root an `svg` in the SVG namespace), or holds a script, a `<style>` sheet, an animation (`animate`, `animateColor`, `animateMotion`,
+`animateTransform`, `discard`, `set`), a `class`, an id the page names its own (`app` and any beginning
+`sv-`, its case as written), CSS that moves, times or unpins what the page writes (the properties
+`transform`, `translate`, `rotate`, `scale`, `transform-origin`, `transform-box`, `transform-style`,
+`perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, in a
+`style`, a name with white space or a comment inside it declaring nothing; the attributes
+`transform-origin` and `pointer-events`, an element's own `transform` attribute kept), foreign content (an
 element outside the SVG namespace), an event handler, a script link (a `javascript:` URL in any
 attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
 declaring attribute defaults or using a parameter entity (a browser would apply them unchecked); an

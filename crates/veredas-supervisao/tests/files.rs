@@ -1025,8 +1025,9 @@ A path is relative to the binding file's folder.
   objects share one, whatever the case. The layout's element with this `id` shows the object: a
   group, a shape or a text (`g`, `rect`, `circle`, `ellipse`, `path`, `polygon`, `polyline`, `line`,
   `text`), inside no other object's element, with nothing but groups (`g`) between it and the
-  drawing's root, holding nothing but groups, shapes, texts and their spans (a title or a
-  description too) (Q25). The state's paint outranks whatever paint the drawing
+  drawing's root, holding nothing but groups, shapes, texts and their spans, a title or a
+  description (`g`, `rect`, `circle`, `ellipse`, `path`, `polygon`, `polyline`, `line`, `text`, `tspan`,
+  `title`, `desc`) (Q25). The state's paint outranks whatever paint the drawing
   writes on it and on a group's shapes and inner groups, as attributes or in `style` (never
   `!important` there, however CSS spells it); a group's text keeps the paint it writes.
 - `label` (`id`): the object's name on the screen.
@@ -1164,9 +1165,13 @@ table the project lacks; a table panel's limit outside 1 to
 1000, a column with an empty name, places past 6 or a rule over another series, a sort column the
 panel or its table lacks; a column, key or value the table lacks where the project states its
 columns, a value that is not numeric; a `spread` not above 0; a layout that cannot be read, is not
-an SVG document (its root an `svg` in the SVG namespace), or holds a script, a `<style>` sheet, an animation, a `class`, an id the page names its own (`app`,
-`sv-…`), CSS that moves, times or unpins what the page writes (a transform property, a transition,
-an animation, a motion offset, `pointer-events`, in a `style` or as an attribute), foreign content (an
+an SVG document (its root an `svg` in the SVG namespace), or holds a script, a `<style>` sheet, an animation (`animate`, `animateColor`, `animateMotion`,
+`animateTransform`, `discard`, `set`), a `class`, an id the page names its own (`app` and any beginning
+`sv-`, its case as written), CSS that moves, times or unpins what the page writes (the properties
+`transform`, `translate`, `rotate`, `scale`, `transform-origin`, `transform-box`, `transform-style`,
+`perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, in a
+`style`, a name with white space or a comment inside it declaring nothing; the attributes
+`transform-origin` and `pointer-events`, an element's own `transform` attribute kept), foreign content (an
 element outside the SVG namespace), an event handler, a script link (a `javascript:` URL in any
 attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
 declaring attribute defaults or using a parameter entity (a browser would apply them unchecked); an
@@ -1254,19 +1259,27 @@ fn a_layout_is_an_svg_document_with_no_script() {
 /// are refused by it; an object's element inside another object's, holding a `use`, or saying
 /// `!important` as CSS reads it in a `style` on it or inside it, refused; a sheet and every animation
 /// (`ANIMATIONS`) anywhere, refused. Each at every depth (directly, through a group of no id, through
-/// one no object names), beside its near miss that loads.
+/// one no object names), beside its near miss that loads; a `class`, the page's ids and the moving
+/// attributes, and their near misses, at every place (the root, a group around the object, the
+/// object's element, inside it and beside it). Every list is held to the reference's own sentence.
 #[test]
 fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
-    use veredas_supervisao::svg::{ANIMATIONS, AROUND, DRAWN, HOLDS, MOVING, MOVING_ATTRIBUTES, declared, moves_the_page, says_important};
-    // The lists are the reference's: the kinds it names and what may stand around them, read from
-    // its own sentence.
-    let flat = REFERENCE.replace("\n  ", " ");
+    use veredas_supervisao::svg::{ANIMATIONS, AROUND, DRAWN, HOLDS, MOVING, MOVING_ATTRIBUTES, MOVING_FAMILIES, declared, moves_the_page, says_important};
+    // The lists are the reference's, each member named in its own sentence: the kinds an object is
+    // shown on, what may stand around them and inside them, the animations, the properties and
+    // attributes that move, time or unpin what the page writes.
+    let flat = REFERENCE.replace("\n  ", " ").replace('\n', " ");
     let named = |from: &str, to: &str| -> Vec<String> {
         let at = flat.find(from).unwrap_or_else(|| panic!("{from}")) + from.len();
         flat[at..at + flat[at..].find(to).unwrap()].split('`').skip(1).step_by(2).map(String::from).collect()
     };
     assert_eq!(named("shows the object: a group, a shape or a text (", ")"), DRAWN);
     assert_eq!(named("with nothing but groups (", ")"), AROUND);
+    assert_eq!(named("holding nothing but groups, shapes, texts and their spans, a title or a description (", ")"), HOLDS);
+    assert_eq!(named("an animation (", ")"), ANIMATIONS);
+    assert_eq!(named("CSS that moves, times or unpins what the page writes (the properties ", " and every"), MOVING);
+    assert_eq!(named("`pointer-events` and every ", " property, in a"), MOVING_FAMILIES);
+    assert_eq!(named("declaring nothing; the attributes ", ", an element's own"), MOVING_ATTRIBUTES);
     const INFEED: &str = "<rect id=\"infeed\" x=\"20\" y=\"96\" width=\"40\" height=\"28\"/>";
     const LOOP: &str = "<path id=\"loop\" d=\"M 80 40 H 320 A 70 70 0 0 1 320 180 H 80 A 70 70 0 0 1 80 40 Z\" fill=\"none\" stroke=\"#26262A\" stroke-width=\"14\"/>";
     let with_svg = |from: &str, to: &str| {
@@ -1276,6 +1289,24 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
         ex
     };
     let depths: [(&str, &str); 3] = [("", ""), ("<g>", "</g>"), ("<g id=\"layer-2\">", "</g>")];
+    // Every place an attribute can stand in the drawing, with the element it stands on: the root, a
+    // group around the object, the object's element itself (unless the attribute is an id), and an
+    // element inside it and beside it at every depth.
+    const ROOT: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 400 220\">";
+    let places = |attr: &str| -> Vec<(String, &'static str, Example)> {
+        let mut out = vec![
+            ("the root".to_string(), "svg", with_svg(ROOT, &ROOT.replacen("<svg ", &format!("<svg {attr} "), 1))),
+            ("a group around the object".to_string(), "g", with_svg(INFEED, &format!("<g {attr}>{INFEED}</g>"))),
+        ];
+        if !attr.starts_with("id=") {
+            out.push(("the object's element".to_string(), "rect", with_svg(INFEED, &INFEED.replacen("<rect ", &format!("<rect {attr} "), 1))));
+        }
+        for (open, close) in depths {
+            out.push((format!("inside it {open}"), "rect", with_svg(INFEED, &format!("<g id=\"infeed\">{open}<rect {attr}/>{close}</g>"))));
+            out.push((format!("beside it {open}"), "rect", with_svg(INFEED, &format!("{INFEED}{open}<rect {attr}/>{close}"))));
+        }
+        out
+    };
     for kind in DRAWN {
         let ex = with_svg(INFEED, &format!("<{kind} id=\"infeed\"/>"));
         assert!(outcome(&ex).is_ok(), "{kind}: {:?}", outcome(&ex).err());
@@ -1345,27 +1376,39 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
             assert_eq!(binding_refusal(&with_svg(INFEED, &format!("<g id=\"infeed\">{open}<{other}/>{close}</g>"))), format!("object `infeed`: its element holds a <{other}>, which the page does not paint as the object (it holds groups, shapes, texts and their spans alone)"), "{other} {open}");
         }
     }
-    // A `class` anywhere, at every depth: with no sheet of its own a drawing's class meets only the
+    // A `class` anywhere, at every place: with no sheet of its own a drawing's class meets only the
     // page's rules.
-    for (open, close) in depths {
-        assert!(binding_refusal(&with_svg(INFEED, &format!("{INFEED}{open}<rect class=\"mark\"/>{close}"))).ends_with("layout.svg holds a `class` (on <rect>): with no sheet of its own a drawing's class meets only the page's own rules"), "{open}");
+    for (place, el, ex) in places("class=\"mark\"") {
+        assert!(binding_refusal(&ex).ends_with(&format!("layout.svg holds a `class` (on <{el}>): with no sheet of its own a drawing's class meets only the page's own rules")), "{place}");
     }
     // The ids the page names its own, read from the page compiled in (its root, the hatch, a level's
     // clip), refused; any other id loading.
     let bundle = veredas_supervisao::web::APP_JS;
     assert!(bundle.contains("getElementById(\"app\")") && bundle.contains("id=\"sv-hatch\"") && bundle.contains("sv-clip-"), "the page's own ids");
     for id in ["app", "sv-hatch", "sv-clip-infeed", "sv-other"] {
-        assert!(binding_refusal(&with_svg(INFEED, &format!("{INFEED}<rect id=\"{id}\"/>"))).ends_with(&format!("layout.svg holds the id `{id}` (on <rect>), which the page names its own")), "{id}");
+        for (place, el, ex) in places(&format!("id=\"{id}\"")) {
+            assert!(binding_refusal(&ex).ends_with(&format!("layout.svg holds the id `{id}` (on <{el}>), which the page names its own")), "{id}, {place}");
+        }
     }
-    for id in ["apple", "svx", "my-sv-rect"] {
-        assert!(outcome(&with_svg(INFEED, &format!("{INFEED}<rect id=\"{id}\"/>"))).is_ok(), "{id}");
+    // Others load: each of the page's ids changed in case (the page is in standards mode, an id's
+    // case its own), prefixed, suffixed past a whole word, or its `sv-` written otherwise.
+    for id in ["app", "sv-hatch", "sv-clip-infeed"] {
+        let mut near = vec![id.to_uppercase(), format!("{}{}", id[..1].to_uppercase(), &id[1..]), format!("x{id}"), format!("my-{id}")];
+        match id.strip_prefix("sv-") {
+            Some(rest) => near.extend([format!("sv_{rest}"), format!("sv{rest}"), format!("SV-{rest}")]),
+            None => near.extend([format!("{id}x"), format!("{id}-1")]),
+        }
+        for n in near {
+            assert!(outcome(&with_svg(INFEED, &format!("{INFEED}<rect id=\"{n}\"/>"))).is_ok(), "{n}");
+        }
     }
     // What moves, times or unpins what the page writes: every property of `MOVING`, and a transition,
     // an animation and a motion offset by their names and their longhands, each in a `style` however
     // CSS writes it (plainly, after another, with a vendor's prefix, escaped, after a comment), and
     // the presentation attributes of `MOVING_ATTRIBUTES`, anywhere, refused; a `style` of other
     // properties, a value that only names one, and the element's own `transform` attribute loading.
-    let moving: Vec<&str> = MOVING.iter().copied().chain(["transition", "transition-duration", "animation", "animation-name", "offset", "offset-path"]).collect();
+    let longhand = |f: &str| [("transition", "duration"), ("animation", "name"), ("offset", "path")].iter().find(|(g, _)| *g == f).map(|(_, l)| format!("{f}-{l}")).unwrap_or_else(|| panic!("{f}: a longhand of it"));
+    let moving: Vec<String> = MOVING.iter().map(|p| p.to_string()).chain(MOVING_FAMILIES.iter().flat_map(|f| [f.to_string(), longhand(f)])).collect();
     for prop in &moving {
         let escaped = format!("\\{:x} {}", prop.chars().next().unwrap() as u32, &prop[1..]);
         for style in [format!("{prop}: x"), format!("fill: red; {prop}: x"), format!("-webkit-{prop}: x"), format!("{escaped}: x"), format!("/* note */ {}: x", prop.to_uppercase())] {
@@ -1376,21 +1419,21 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
         }
     }
     for attr in MOVING_ATTRIBUTES {
-        assert!(binding_refusal(&with_svg(INFEED, &format!("<rect id=\"infeed\" {attr}=\"none\"/>"))).ends_with(&format!("layout.svg holds `{attr}` (on <rect>), which would move, time or unpin what the page writes: the page places, animates and takes the clicks itself")), "{attr}");
+        for (place, el, ex) in places(&format!("{attr}=\"none\"")) {
+            assert!(binding_refusal(&ex).ends_with(&format!("layout.svg holds `{attr}` (on <{el}>), which would move, time or unpin what the page writes: the page places, animates and takes the clicks itself")), "{attr}, {place}");
+        }
     }
-    for ok in ["<rect id=\"infeed\" style=\"display:inline; fill: red; stroke-width: 2\"/>", "<rect id=\"infeed\" style=\"font-family: transform\"/>", "<rect id=\"infeed\" transform=\"translate(1 2)\"/>"] {
-        assert!(outcome(&with_svg(INFEED, ok)).is_ok(), "{ok}");
+    // Near misses, at every place: a `style` of other properties, one whose value only names a
+    // moving one, a name split by a comment or white space (no declaration, as CSS reads it), and the
+    // element's own `transform` attribute (which drawing tools write everywhere).
+    for ok in ["style=\"display:inline; fill: red; stroke-width: 2\"", "style=\"font-family: transform\"", "style=\"trans/**/form: rotate(9deg)\"", "style=\"trans form: rotate(9deg)\"", "style=\"trans&#10;form: rotate(9deg)\"", "style=\"pointer/**/-events: none\"", "transform=\"translate(10 0)\""] {
+        for (place, _, ex) in places(ok) {
+            assert!(outcome(&ex).is_ok(), "{ok}, {place}: {:?}", outcome(&ex).err());
+        }
     }
     assert_eq!(declared("fill: red; -WEBKIT-Transform : x; /* c */ \\74 ransition: y"), ["fill", "transform", "transition"]);
+    assert_eq!(declared("trans/**/form: x; pointer /* c */-events: y; trans form: z; \\74 rans\\ form: w; opacity : 1"), ["trans form", "opacity"]);
     assert!(moves_the_page("transition-delay") && moves_the_page("offset-rotate") && !moves_the_page("transitions") && !moves_the_page("fill"));
-    // The properties the reference names whole (`pointer-events` among them), each refused in a `style`.
-    let at = flat.find("CSS that moves, times or unpins what the page writes (").unwrap();
-    let named_moving: Vec<String> = flat[at..].split(')').next().unwrap().split('`').skip(1).step_by(2).filter(|w| *w != "style").map(String::from).collect();
-    assert!(named_moving.contains(&"pointer-events".to_string()), "{named_moving:?}");
-    for prop in &named_moving {
-        let got = binding_refusal(&with_svg(INFEED, &format!("{INFEED}<rect style=\"{prop}: none\"/>")));
-        assert!(got.ends_with(&format!("layout.svg holds `{prop}` (on <rect>), which would move, time or unpin what the page writes: the page places, animates and takes the clicks itself")), "{prop}: {got}");
-    }
     // Every animation, anywhere: on an object's element and beside it, at every depth.
     for anim in ANIMATIONS {
         for (open, close) in depths {

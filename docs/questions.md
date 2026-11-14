@@ -482,7 +482,8 @@ take its click), holding nothing but groups, shapes, texts and their spans (C-05
 a link inside takes the click, a nested viewport keeps its own paint); a marker's path stands inside
 nothing but groups either. The drawing holds no `class` (with no sheet of its own it meets only the
 page's rules), no id the page names its own, and no CSS that moves, times or unpins what the page
-writes (a transform property, a transition, an animation, a motion offset, `pointer-events`). Paint is
+writes (a transform property, a transition, an animation, a motion offset, `pointer-events`; an
+element's own `transform` attribute is kept, the page reading it). Paint is
 written on the elements (attributes or `style`, never `!important` on or inside an object's
 element, however CSS spells it), and the state's paint outranks it at any depth of a group. A
 `<style>` sheet is refused, and so is any animation (C-048's tenth round: an animated class or

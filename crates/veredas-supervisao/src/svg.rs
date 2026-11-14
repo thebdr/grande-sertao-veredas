@@ -214,14 +214,21 @@ pub fn says_important(style: &str) -> bool {
 }
 
 /// The properties a `style` attribute declares, as CSS reads them: each declaration's name (before
-/// its `:`, between its `;`s), lowercase, a vendor's prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`)
-/// taken off.
+/// its `:`, between its `;`s, white space and comments around it dropped), lowercase, a vendor's
+/// prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`) taken off. A name with white space or a comment
+/// inside it is no declaration (CSS drops it): `trans/**/form` declares nothing.
 pub fn declared(style: &str) -> Vec<String> {
     let out = css_read(style);
     let mut names = Vec::new();
     for decl in out.split(|c| *c == (';', false)) {
         let Some(colon) = decl.iter().position(|c| *c == (':', false)) else { continue };
-        let name: String = decl[..colon].iter().filter(|(c, esc)| *esc || !css_space(*c)).map(|(c, _)| c.to_ascii_lowercase()).collect();
+        let written = |c: &(char, bool)| c.1 || !css_space(c.0);
+        let raw = &decl[..colon];
+        let (Some(start), Some(end)) = (raw.iter().position(written), raw.iter().rposition(written)) else { continue };
+        if raw[start..=end].iter().any(|c| !written(c)) {
+            continue;
+        }
+        let name: String = raw[start..=end].iter().map(|(c, _)| c.to_ascii_lowercase()).collect();
         let bare = ["-webkit-", "-moz-", "-ms-", "-o-"].iter().find_map(|p| name.strip_prefix(p)).unwrap_or(&name).to_string();
         if !bare.is_empty() {
             names.push(bare);
@@ -235,11 +242,14 @@ pub fn declared(style: &str) -> Vec<String> {
 /// motion offset (the page sets what an element shows and when), `pointer-events` (the page takes
 /// a click on an object's element).
 pub fn moves_the_page(property: &str) -> bool {
-    MOVING.contains(&property) || ["transition", "animation", "offset"].iter().any(|p| property == *p || property.starts_with(&format!("{p}-")))
+    MOVING.contains(&property) || MOVING_FAMILIES.iter().any(|p| property == *p || property.starts_with(&format!("{p}-")))
 }
 
-/// The properties `moves_the_page` names whole (and transitions, animations and motion offsets by
-/// their prefix).
+/// The properties `moves_the_page` names by their family: a transition's, an animation's and a motion
+/// offset's, each by its name and every longhand of it.
+pub const MOVING_FAMILIES: [&str; 3] = ["transition", "animation", "offset"];
+
+/// The properties `moves_the_page` names whole (and `MOVING_FAMILIES` by their prefix).
 pub const MOVING: [&str; 9] = ["transform", "translate", "rotate", "scale", "transform-origin", "transform-box", "transform-style", "perspective", "pointer-events"];
 
 /// The presentation attributes of those properties SVG lets an element write (its own `transform`
@@ -247,7 +257,8 @@ pub const MOVING: [&str; 9] = ["transform", "translate", "rotate", "scale", "tra
 pub const MOVING_ATTRIBUTES: [&str; 2] = ["transform-origin", "pointer-events"];
 
 /// The ids the page names its own beside the drawing's: its root (`app`) and every one it writes
-/// into the drawing (the hatch pattern, a level's clip), all `sv-`.
+/// into the drawing (the hatch pattern, a level's clip), all `sv-`; as written (the page is in standards
+/// mode, where an id's case is its own: `APP` is not the page's).
 pub fn the_pages_id(id: &str) -> bool {
     id == "app" || id.starts_with("sv-")
 }
