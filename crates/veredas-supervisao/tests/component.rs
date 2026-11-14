@@ -845,21 +845,68 @@ fn windows_1252(code: u32) -> u32 {
     if (0x80..=0x9F).contains(&code) { HIGH[(code - 0x80) as usize] } else { code }
 }
 
-/// The files the compiler read for the crate's library and executable, by its own dep-info written
-/// beside this test's binary (the newest of each): every dependency it lists, as written.
-fn compiled_files() -> BTreeMap<&'static str, Vec<PathBuf>> {
-    let deps = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
-    let mut newest: BTreeMap<&'static str, (std::time::SystemTime, PathBuf)> = BTreeMap::new();
-    for e in std::fs::read_dir(&deps).unwrap().flatten() {
-        let name = e.file_name().to_string_lossy().to_string();
-        if !(name.starts_with("veredas_supervisao-") && name.ends_with(".d")) {
-            continue;
+/// The directories cargo builds this test's profile in: the target and build directories cargo
+/// metadata reports, and the folder above this test's executable that cargo marks as its own
+/// (`CACHEDIR.TAG`); with the profile, the folder below whichever of them holds the executable.
+fn build_dirs() -> (Vec<PathBuf>, String) {
+    let meta = metadata();
+    let exe = std::env::current_exe().unwrap();
+    let mut dirs: Vec<PathBuf> = ["target_directory", "build_directory"].iter().filter_map(|k| meta[*k].as_str().map(PathBuf::from)).collect();
+    dirs.extend(exe.ancestors().skip(1).find(|d| d.join("CACHEDIR.TAG").is_file()).map(Path::to_path_buf));
+    dirs.dedup();
+    let profile = dirs
+        .iter()
+        .find_map(|d| exe.strip_prefix(d).ok().and_then(|r| r.components().next()).map(|c| c.as_os_str().to_string_lossy().to_string()))
+        .unwrap_or_else(|| panic!("{} lies under none of {dirs:?}", exe.display()));
+    (dirs, profile)
+}
+
+/// Every dep-info file (`.d`) under `dir`, however deep, whose path below it passes through the
+/// profile's folder: `<profile>/deps/` in one of cargo's layouts, a build unit's own folder under
+/// `<profile>/build/` in its newer one (CI's cargo 1.100). Where cargo puts a unit, and what it
+/// names it, is cargo's to change; that a profile's units sit under the profile's folder is the one
+/// thing read here (which unit is this crate's is read from what its dep-info lists). rustc's
+/// incremental caches hold no dep-info and are passed over.
+fn dep_infos(base: &Path, dir: &Path, profile: &str, out: &mut BTreeSet<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let path = e.path();
+        if e.file_type().is_ok_and(|t| t.is_dir()) {
+            if path.file_name().is_some_and(|n| n != "incremental") {
+                dep_infos(base, &path, profile, out);
+            }
+        } else if path.extension().is_some_and(|x| x == "d") {
+            let below = path.strip_prefix(base).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+            if below.split('/').any(|c| c == profile) {
+                out.insert(path);
+            }
         }
-        let text = std::fs::read_to_string(e.path()).unwrap_or_default();
-        let kind = if text.contains(".rlib:") || text.contains(".rmeta:") { "lib" } else { "bin" };
-        let at = e.metadata().and_then(|m| m.modified()).unwrap();
+    }
+}
+
+/// The files the compiler read for the crate's library and executable, by its own dep-info in this
+/// build's profile, wherever cargo's layout puts it (the newest of each: a library's lists its
+/// `.rlib` or `.rmeta`; an executable's, `src/main.rs`): every dependency it lists, as written.
+fn compiled_files() -> BTreeMap<&'static str, Vec<PathBuf>> {
+    let (dirs, profile) = build_dirs();
+    let mut infos = BTreeSet::new();
+    for d in &dirs {
+        dep_infos(d, d, &profile, &mut infos);
+    }
+    let lists = |text: &str, file: &str| text.lines().any(|l| !l.starts_with('#') && l.ends_with(':') && l.trim_end_matches(':').replace('\\', "/").ends_with(file));
+    let mut newest: BTreeMap<&'static str, (std::time::SystemTime, PathBuf)> = BTreeMap::new();
+    for path in infos {
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let kind = if (text.contains(".rlib:") || text.contains(".rmeta:")) && lists(&text, "veredas-supervisao/src/lib.rs") {
+            "lib"
+        } else if lists(&text, "veredas-supervisao/src/main.rs") {
+            "bin"
+        } else {
+            continue;
+        };
+        let at = std::fs::metadata(&path).and_then(|m| m.modified()).unwrap();
         if newest.get(kind).is_none_or(|(t, _)| at > *t) {
-            newest.insert(kind, (at, e.path()));
+            newest.insert(kind, (at, path));
         }
     }
     newest
@@ -901,7 +948,7 @@ fn every_file_the_crate_compiles_is_one_read_here() {
     let held: BTreeSet<PathBuf> = crate_files().into_iter().map(|f| f.canonicalize().unwrap()).collect();
     let page: Vec<String> = web::OUTPUT_FILES.iter().map(|f| format!("web/dist/{f}")).chain(["web/dist/source.hash".to_string(), "web/dist/output.hash".to_string()]).collect();
     let compiled = compiled_files();
-    assert_eq!(compiled.keys().copied().collect::<Vec<_>>(), ["bin", "lib"], "the library's and the executable's dep-info beside this test");
+    assert_eq!(compiled.keys().copied().collect::<Vec<_>>(), ["bin", "lib"], "the library's and the executable's dep-info in this build's profile, wherever cargo's layout puts it");
     for (kind, files) in &compiled {
         assert!(files.iter().any(|f| f.ends_with("lib.rs") || f.ends_with("main.rs")), "{kind}: {files:?}");
         for f in files {
