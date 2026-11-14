@@ -34,8 +34,8 @@ pub struct Placed {
     pub around: Vec<String>,
     /// The nearest element around it that is not one of `AROUND` (the drawing's own root aside).
     pub apart: Option<String>,
-    /// Whether a `use` is inside it (its shapes stand in another tree, which no rule reaches).
-    pub holds_use: bool,
+    /// The first element inside it that is not one of `HOLDS` (a `use`, a link, a nested viewport).
+    pub holds: Option<String>,
     /// Whether a `style` attribute on it or inside it marks a declaration `!important`.
     pub important: bool,
 }
@@ -117,6 +117,18 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
         if ANIMATIONS.contains(&name) {
             return Err(format!("{} holds a <{name}> element: a layout is a still drawing, the page drawing its states and moving its markers itself", path.display()));
         }
+        // With no sheet of its own, a drawing's class meets only the page's own rules (Q25).
+        if node.attribute("class").is_some() {
+            return Err(format!("{} holds a `class` (on <{name}>): with no sheet of its own a drawing's class meets only the page's own rules", path.display()));
+        }
+        if let Some(id) = node.attribute("id").filter(|id| the_pages_id(id)) {
+            return Err(format!("{} holds the id `{id}` (on <{name}>), which the page names its own", path.display()));
+        }
+        // What moves, times or unpins what the page writes, however the drawing writes it (Q25).
+        let moving = node.attributes().map(|a| a.name().to_string()).find(|a| MOVING_ATTRIBUTES.contains(&a.as_str())).or_else(|| node.attribute("style").and_then(|st| declared(st).into_iter().find(|p| moves_the_page(p))));
+        if let Some(property) = moving {
+            return Err(format!("{} holds `{property}` (on <{name}>), which would move, time or unpin what the page writes: the page places, animates and takes the clicks itself", path.display()));
+        }
         if let Some(id) = node.attribute("id") {
             let e = ids.entry(id.to_string()).or_insert_with(|| (name.to_string(), 0));
             e.1 += 1;
@@ -126,7 +138,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
                 Placed {
                     around: up.iter().filter_map(|a| a.attribute("id").map(String::from)).collect(),
                     apart: up.iter().map(|a| a.tag_name().name()).find(|n| !AROUND.contains(n)).map(String::from),
-                    holds_use: node.descendants().skip(1).any(|d| d.is_element() && d.tag_name().name() == "use"),
+                    holds: node.descendants().skip(1).filter(|d| d.is_element()).map(|d| d.tag_name().name()).find(|n| !HOLDS.contains(n)).map(String::from),
                     important: node.descendants().filter(|d| d.is_element()).any(|d| important(&d)),
                 }
             });
@@ -135,20 +147,15 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
     Ok(Layout { file: path.to_path_buf(), text: text.to_string(), ids, placed })
 }
 
-/// Whether a `style` attribute's declarations say `!important` as CSS reads them: a `!` written as
-/// itself, then any white space or comments (space, tab, line feed, carriage return, form feed), then
-/// the word `important` in any case, its letters written or escaped (one to six hex digits and the
-/// white space that may end them, or any other character as itself), the word ending there. (Inside a
-/// string it is no priority, and is refused all the same.)
-pub fn says_important(style: &str) -> bool {
+/// A `style` attribute read as CSS reads it: its comments as white space, its escapes decoded (one
+/// to six hex digits and the white space that may end them, or any other character as itself),
+/// each character with whether an escape wrote it (an escaped `!`, `:`, `;` or space is a letter).
+fn css_read(style: &str) -> Vec<(char, bool)> {
     let cs: Vec<char> = style.chars().collect();
-    let space = |c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c');
-    // Each character as read, with whether an escape wrote it (an escaped `!` or space is a letter).
     let mut out: Vec<(char, bool)> = Vec::new();
     let mut i = 0;
     while i < cs.len() {
         if cs[i] == '/' && cs.get(i + 1) == Some(&'*') {
-            // A comment, to its end or the text's: read as white space.
             let mut j = i + 2;
             while j < cs.len() && !(cs[j] == '*' && cs.get(j + 1) == Some(&'/')) {
                 j += 1;
@@ -164,7 +171,7 @@ pub fn says_important(style: &str) -> bool {
                     out.push((c, true));
                 }
                 i += 1 + hex.len();
-                if cs.get(i).is_some_and(|c| space(*c)) {
+                if cs.get(i).is_some_and(|c| css_space(*c)) {
                     i += 1;
                 }
             } else {
@@ -178,19 +185,76 @@ pub fn says_important(style: &str) -> bool {
         out.push((cs[i], false));
         i += 1;
     }
+    out
+}
+
+/// CSS's white space: space, tab, line feed, carriage return, form feed.
+fn css_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c')
+}
+
+/// Whether a `style` attribute's declarations say `!important` as CSS reads them: a `!` written as
+/// itself, then any white space or comments, then the word `important` in any case, its letters
+/// written or escaped, the word ending there. (Inside a string it is no priority, and is refused
+/// all the same.)
+pub fn says_important(style: &str) -> bool {
+    let out = css_read(style);
     let letter = |(c, escaped): (char, bool)| escaped || c.is_alphanumeric() || c == '-' || c == '_' || !c.is_ascii();
     (0..out.len()).any(|k| {
         if out[k] != ('!', false) {
             return false;
         }
         let mut j = k + 1;
-        while j < out.len() && !out[j].1 && space(out[j].0) {
+        while j < out.len() && !out[j].1 && css_space(out[j].0) {
             j += 1;
         }
         let word: String = out[j..].iter().take(9).map(|(c, _)| c.to_ascii_lowercase()).collect();
         word == "important" && out.get(j + 9).is_none_or(|c| !letter(*c))
     })
 }
+
+/// The properties a `style` attribute declares, as CSS reads them: each declaration's name (before
+/// its `:`, between its `;`s), lowercase, a vendor's prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`)
+/// taken off.
+pub fn declared(style: &str) -> Vec<String> {
+    let out = css_read(style);
+    let mut names = Vec::new();
+    for decl in out.split(|c| *c == (';', false)) {
+        let Some(colon) = decl.iter().position(|c| *c == (':', false)) else { continue };
+        let name: String = decl[..colon].iter().filter(|(c, esc)| *esc || !css_space(*c)).map(|(c, _)| c.to_ascii_lowercase()).collect();
+        let bare = ["-webkit-", "-moz-", "-ms-", "-o-"].iter().find_map(|p| name.strip_prefix(p)).unwrap_or(&name).to_string();
+        if !bare.is_empty() {
+            names.push(bare);
+        }
+    }
+    names
+}
+
+/// Whether a CSS property moves, times or unpins what the page writes on the drawing: a transform
+/// of any kind (the page places a marker by its `transform`), a transition, an animation or a
+/// motion offset (the page sets what an element shows and when), `pointer-events` (the page takes
+/// a click on an object's element).
+pub fn moves_the_page(property: &str) -> bool {
+    MOVING.contains(&property) || ["transition", "animation", "offset"].iter().any(|p| property == *p || property.starts_with(&format!("{p}-")))
+}
+
+/// The properties `moves_the_page` names whole (and transitions, animations and motion offsets by
+/// their prefix).
+pub const MOVING: [&str; 9] = ["transform", "translate", "rotate", "scale", "transform-origin", "transform-box", "transform-style", "perspective", "pointer-events"];
+
+/// The presentation attributes of those properties SVG lets an element write (its own `transform`
+/// attribute aside: the page reads and keeps it).
+pub const MOVING_ATTRIBUTES: [&str; 2] = ["transform-origin", "pointer-events"];
+
+/// The ids the page names its own beside the drawing's: its root (`app`) and every one it writes
+/// into the drawing (the hatch pattern, a level's clip), all `sv-`.
+pub fn the_pages_id(id: &str) -> bool {
+    id == "app" || id.starts_with("sv-")
+}
+
+/// What may stand inside an object's element: the elements the page draws on, a text's spans, and a
+/// title or a description (which draw nothing).
+pub const HOLDS: [&str; 12] = ["g", "rect", "circle", "ellipse", "path", "polygon", "polyline", "line", "text", "tspan", "title", "desc"];
 
 /// Whether an attribute's value is, or holds as an item of a `;`-separated list (an animation's
 /// `values`), a `javascript:` URL as a browser parses one (the URL standard drops tabs and line

@@ -85,10 +85,11 @@ svg.plant { width: 100%; height: 100%; display: block; user-select: none; }
 :where(.sv-show-move.sv-state-disabled) { fill: url(#sv-hatch) !important; stroke: var(--weak) !important; stroke-width: 1 !important; }
 :where(.sv-show-move.sv-state-alarm) { fill: var(--danger) !important; }
 /* A bound group's shapes, and the groups between it and them, take its state's paint, whatever the
-   drawing wrote on them. Its text keeps the paint it writes (a label), inheriting what it writes none of. */
-:where(.sv-obj :is(g, rect, circle, ellipse, path, polygon, polyline, line)) { fill: inherit !important; stroke: inherit !important; stroke-width: inherit !important; stroke-dasharray: inherit !important; fill-opacity: inherit !important; stroke-opacity: inherit !important; }
+   drawing wrote on them, and so do a bound text's spans. A group's text keeps the paint it writes (a
+   label), inheriting what it writes none of; its spans follow it. */
+:where(.sv-obj :is(g, rect, circle, ellipse, path, polygon, polyline, line, tspan)) { fill: inherit !important; stroke: inherit !important; stroke-width: inherit !important; stroke-dasharray: inherit !important; fill-opacity: inherit !important; stroke-opacity: inherit !important; }
 :where(.sv-fill.sv-state-disabled) { fill: url(#sv-hatch) !important; }
-.sv-selected, .sv-selected :is(g, rect, circle, ellipse, path, polygon, polyline, line) { stroke: var(--accent) !important; stroke-width: 2.5 !important; stroke-dasharray: none !important; stroke-opacity: 1 !important; }
+.sv-selected, .sv-selected :is(g, rect, circle, ellipse, path, polygon, polyline, line, tspan) { stroke: var(--accent) !important; stroke-width: 2.5 !important; stroke-dasharray: none !important; stroke-opacity: 1 !important; }
 .sv-show-move.sv-selected { fill: var(--accent) !important; }
 .sv-overlay text { pointer-events: none; font-family: var(--mono); }
 .sv-label { fill: var(--weak2); }

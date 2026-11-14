@@ -340,14 +340,20 @@ const PROBES: &str = r##"
     return el;
   };
   const PAINT = ["fill", "stroke", "stroke-width", "stroke-dasharray", "fill-opacity", "stroke-opacity"];
+  const selBase = {};
   const SEL = ["stroke", "stroke-width", "stroke-dasharray", "stroke-opacity"];
   const extra = [];
+  const texts = [];
   const nest = (cls, how) => {
     const g = document.createElementNS(svgNS, "g");
     g.setAttribute("class", cls);
     const mid = write(document.createElementNS(svgNS, "g"), how);
     g.append(mid);
     const inner = [["the group between", mid]];
+    // A text of the group's, writing its own paint: kept (read apart, against a free one).
+    const text = write(document.createElementNS(svgNS, "text"), how);
+    mid.append(text);
+    texts.push([cls, how, text]);
     for (const name of HELD) {
       const e = write(document.createElementNS(svgNS, name), how);
       mid.append(e);
@@ -364,7 +370,7 @@ const PROBES: &str = r##"
   };
   for (const how of ["attributes", "style"]) {
     for (const k of KINDS) {
-      for (const s of [...STATES.map((st) => [st, false]), ["normal", true]]) {
+      for (const s of [...STATES.map((st) => [st, false]), ...STATES.map((st) => [st, true])]) {
         const [state, selected] = s;
         const cls = `sv-obj sv-show-${k} sv-state-${state}${selected ? " sv-selected" : ""}`;
         const props = selected ? SEL : PAINT;
@@ -377,9 +383,27 @@ const PROBES: &str = r##"
         extra.push(own);
         const what = `a ${k} element in ${state}${selected ? ", selected," : ""} its paint written as ${how}`;
         if (sig(own, props) !== want) out.push(`${what}: ${sig(own, props)}, a plain one ${want}`);
+        // The selection the same in every state: as on a normal element selected.
+        if (selected && state === STATES[0]) selBase[k] = want;
+        else if (selected && want !== selBase[k]) out.push(`a ${k} element selected in ${state}: ${want}, selected in ${STATES[0]} ${selBase[k]}`);
+        // A bound text's span writing its own paint takes the text's state, and its selection.
+        const tx = document.createElementNS(svgNS, "text");
+        tx.setAttribute("class", cls);
+        const span = write(document.createElementNS(svgNS, "tspan"), how);
+        tx.append(span);
+        plant.append(tx);
+        extra.push(tx);
+        if (sig(span, props) !== want) out.push(`${what}, a bound text's span: ${sig(span, props)}, a plain one ${want}`);
         for (const [name, e] of nest(cls, how)) if (sig(e, props) !== want) out.push(`${what}, its group's ${name}: ${sig(e, props)}, a plain one ${want}`);
       }
     }
+  }
+  // Every group's text keeps the paint it writes, in every state and selected: as a free text.
+  for (const [cls, how, text] of texts) {
+    const free = write(document.createElementNS(svgNS, "text"), how);
+    plant.append(free);
+    extra.push(free);
+    if (sig(text, PAINT) !== sig(free, PAINT)) out.push(`a text in a group ${cls}, its paint written as ${how}: ${sig(text, PAINT)}, a free one ${sig(free, PAINT)}`);
   }
   for (const e of extra) e.remove();
   for (const [el] of made) el.remove();
@@ -546,6 +570,7 @@ fn on_path(path: &str, f: f64) -> (f64, f64) {
         "track-circle" => on_ellipse(245.0, 175.0, 10.0, 10.0, f),
         "track-ellipse" => on_ellipse(280.0, 175.0, 15.0, 8.0, f),
         "track-own" => along(&[(300.0, 200.0), (340.0, 200.0)], false, f),
+        "track-g6" | "track-own6" => along(&[(0.0, 0.0), (30.0, 0.0)], false, f),
         other => panic!("a path this test cannot follow: {other}"),
     }
 }
@@ -812,6 +837,7 @@ fn grown(mut ex: Example) -> Example {
         // A keyed marker inside a moved group, as a drawing's layers put one: its clones stand at
         // their places whatever the group's transform.
         .replace("<circle id=\"parcel-2\" r=\"5\"/>", "<circle id=\"parcel-2\" r=\"5\"/>\n  <g transform=\"translate(15 -10) scale(2)\"><circle id=\"tracked\" r=\"4\"/></g>")
+        .replace("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 400 300\"")
         .replace("</svg>", GROWN_SVG);
     ex.binding = ex.binding.replacen("\n[[dashboard]]", GROWN_OBJECTS, 1).replacen("\n[[dashboard]]", MORE_OBJECTS, 1);
     ex
@@ -853,6 +879,17 @@ const GROWN_SVG: &str = r##"  <g transform="rotate(90 300 110)"><circle id="ring
   <line id="lv-hline" x1="350" y1="10" x2="380" y2="10" stroke="#3a3a40" stroke-width="10"/>
   <path id="lv-hpath" d="M 350 30 H 380" stroke="#3a3a40" stroke-width="8"/>
   <path id="lv-vpath" d="M 392 4 V 32" stroke="#3a3a40" stroke-width="8"/>
+  <g transform="translate(40 250) rotate(8) scale(1.2) skewX(6) skewY(4) matrix(1 0 0 1 0 0)">
+    <line id="track-g6" x1="0" y1="0" x2="30" y2="0" stroke="#26262A"/>
+    <circle id="m-g6" r="2"/>
+    <rect id="lv-g6" x="0" y="8" width="10" height="12"/>
+    <rect id="v-g6" x="36" y="6" width="26" height="14"/>
+  </g>
+  <g transform="translate(120 248) scale(2)"><line id="lv-scaled" x1="0" y1="0" x2="0" y2="14" stroke="#3a3a40" stroke-width="6"/></g>
+  <rect id="lv-own6" x="0" y="0" width="10" height="12" transform="translate(160 250) rotate(8) scale(1.2) skewX(6) skewY(4) matrix(1 0 0 1 0 0)"/>
+  <rect id="v-own6" x="0" y="0" width="26" height="14" transform="translate(200 250) rotate(8) scale(1.2) skewX(6) skewY(4) matrix(1 0 0 1 0 0)"/>
+  <line id="track-own6" x1="0" y1="0" x2="30" y2="0" stroke="#26262A" transform="translate(260 262) rotate(8) scale(1.2) skewX(6) skewY(4) matrix(1 0 0 1 0 0)"/>
+  <circle id="m-own6" r="2"/>
 </svg>"##;
 
 /// The levels on every other element a level can be bound to (and on a line and a straight path with
@@ -860,7 +897,7 @@ const GROWN_SVG: &str = r##"  <g transform="rotate(90 300 110)"><circle id="ring
 /// and a list of two, each drawn off its own origin (one on a path that writes its own transform);
 /// and an object bound to one key of the keyed marker's series (on no element: its row and its side
 /// panel alone).
-const MORE_OBJECTS: &str = "\n[[object]]\nid = \"lv-path\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-line\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-polyline\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-polygon\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-ellipse\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-hline\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-hpath\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-vpath\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"o-translate\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-line\"\n\n[[object]]\nid = \"o-scale\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-polyline\"\n\n[[object]]\nid = \"o-rotate\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-polygon\"\n\n[[object]]\nid = \"o-skewx\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-rect\"\n\n[[object]]\nid = \"o-skewy\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-circle\"\n\n[[object]]\nid = \"o-matrix\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-ellipse\"\n\n[[object]]\nid = \"o-list\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-own\"\n\n[[object]]\nid = \"keyed\"\nlabel = \"Keyed\"\nvalue = { source = \"sorter\", series = \"at\", key = \"A1\" }\n\n[[dashboard]]";
+const MORE_OBJECTS: &str = "\n[[object]]\nid = \"lv-path\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-line\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-polyline\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-polygon\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-ellipse\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-hline\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-hpath\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-vpath\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"o-translate\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-line\"\n\n[[object]]\nid = \"o-scale\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-polyline\"\n\n[[object]]\nid = \"o-rotate\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-polygon\"\n\n[[object]]\nid = \"o-skewx\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-rect\"\n\n[[object]]\nid = \"o-skewy\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-circle\"\n\n[[object]]\nid = \"o-matrix\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"move\"\npath = \"track-ellipse\"\n\n[[object]]\nid = \"o-list\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-own\"\n\n[[object]]\nid = \"lv-g6\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"lv-scaled\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"v-g6\"\nvalue = { source = \"plc\", series = \"speed\" }\nshow = \"value\"\n\n[[object]]\nid = \"m-g6\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-g6\"\n\n[[object]]\nid = \"lv-own6\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"v-own6\"\nvalue = { source = \"plc\", series = \"speed\" }\nshow = \"value\"\n\n[[object]]\nid = \"m-own6\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-own6\"\n\n[[object]]\nid = \"keyed\"\nlabel = \"Keyed\"\nvalue = { source = \"sorter\", series = \"at\", key = \"A1\" }\n\n[[dashboard]]";
 
 const GROWN_OBJECTS: &str = "\n[[object]]\nid = \"ring\"\nlabel = \"Ring\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"word\"\nlabel = \"Word\"\nvalue = { source = \"plc\", series = \"fill2\" }\nshow = \"level\"\n\n[[object]]\nid = \"m-line\"\nlabel = \"On a line\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-line\"\n\n[[object]]\nid = \"m-polyline\"\nlabel = \"On a polyline\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-polyline\"\n\n[[object]]\nid = \"m-polygon\"\nlabel = \"On a polygon\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-polygon\"\n\n[[object]]\nid = \"m-rect\"\nlabel = \"On a rect\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-rect\"\n\n[[object]]\nid = \"m-circle\"\nlabel = \"On a circle\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-circle\"\n\n[[object]]\nid = \"m-ellipse\"\nlabel = \"On an ellipse\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"track-ellipse\"\n\n[[dashboard]]";
 
@@ -930,6 +967,7 @@ fn the_page_draws_the_layout_from_the_feed() {
         ("lv-path", "level"), ("lv-line", "level"), ("lv-polyline", "level"), ("lv-polygon", "level"), ("lv-ellipse", "level"),
         ("lv-hline", "level"), ("lv-hpath", "level"), ("lv-vpath", "level"),
         ("o-translate", "move"), ("o-scale", "move"), ("o-rotate", "move"), ("o-skewx", "move"), ("o-skewy", "move"), ("o-matrix", "move"), ("o-list", "move"),
+        ("lv-g6", "level"), ("lv-scaled", "level"), ("v-g6", "value"), ("m-g6", "move"), ("lv-own6", "level"), ("v-own6", "value"), ("m-own6", "move"),
     ]);
     let shows: std::collections::BTreeSet<&str> = on_layout.iter().map(|(_, s)| s.as_str()).collect();
     assert_eq!(shows, every_show().into_iter().collect(), "every way of showing the binding knows is on the layout");
@@ -1011,15 +1049,17 @@ fn the_page_draws_the_layout_from_the_feed() {
   const types = new Set(); let list = false;
   for (const id of MARKERS) {{ const live = document.getElementById(id); const was = live.classList.contains("sv-hidden"); live.classList.remove("sv-hidden"); const b = live.getBBox(); if (was) live.classList.add("sv-hidden"); const off = Math.abs(b.x + b.width / 2) > 1 || Math.abs(b.y + b.height / 2) > 1; const l = doc.getElementById(id).transform.baseVal; if (off) {{ for (let i = 0; i < l.numberOfItems; i++) types.add(l.getItem(i).type); if (l.numberOfItems > 1) list = true; }} }}
   const all = Object.keys(SVGTransform).filter((k) => k.startsWith("SVG_TRANSFORM_") && k !== "SVG_TRANSFORM_UNKNOWN");
-  const cells = new Set();
-  for (const [role, list] of [["bound", BOUND], ["marker", MARKERS], ["path", PATHS]]) for (const id of list) {{ const el = doc.getElementById(id); if (el.transform?.baseVal.numberOfItems > 0) cells.add(role + " own"); for (let a = el.parentElement; a && a !== doc.documentElement; a = a.parentElement) if (a.transform?.baseVal.numberOfItems > 0) cells.add(role + " group"); }}
-  return [all.filter((k) => !types.has(SVGTransform[k])), list, [...cells].sort()]; }})()"#,
+  const seen = {{}};
+  const add = (cell, l) => {{ for (let i = 0; i < (l?.numberOfItems ?? 0); i++) (seen[cell] ??= new Set()).add(l.getItem(i).type); }};
+  for (const [role, list] of [["bound", BOUND], ["marker", MARKERS], ["path", PATHS]]) for (const id of list) {{ const el = doc.getElementById(id); add(role + " own", el.transform?.baseVal); for (let a = el.parentElement; a && a !== doc.documentElement; a = a.parentElement) add(role + " group", a.transform?.baseVal); }}
+  const cells = Object.entries(seen).map(([c, s]) => c + " lacks " + all.filter((k) => !s.has(SVGTransform[k])).length);
+  return [all.filter((k) => !types.has(SVGTransform[k])), list, cells.sort()]; }})()"#,
         serde_json::to_string(&ex.svg).unwrap(),
         ids(true),
         ids(false),
         followed_paths
     ));
-    assert_eq!(stands, json!([[], true, ["bound group", "bound own", "marker group", "marker own", "path group", "path own"]]), "every transform function as a marker's own, and every place a transform stands");
+    assert_eq!(stands, json!([[], true, ["bound group lacks 0", "bound own lacks 0", "marker group lacks 0", "marker own lacks 0", "path group lacks 0", "path own lacks 0"]]), "every transform function as a marker's own, and every function at every place a transform stands, for a bound element, a marker and a path");
     // Every element with no area a level can be on, by the page's own branches: a line and a path,
     // each with no width and with no height.
     let flat = page.eval(r#"[...new Set([...document.querySelectorAll("svg.plant .sv-show-level[data-object]")].flatMap((el) => { const b = el.getBBox(), k = el instanceof SVGLineElement ? "line" : el.tagName; return [b.width === 0 ? k + " no width" : null, b.height === 0 ? k + " no height" : null].filter(Boolean); }))].sort()"#);
@@ -1120,8 +1160,12 @@ fn the_page_draws_the_layout_from_the_feed() {
     let alarm_places = places_told_apart(&mut page);
     assert_eq!(alarm_places[1], json!([]), "the Alarms view: a place painting two states alike: {}", alarm_places[0]);
     assert!(alarm_places[0].as_array().unwrap().iter().any(|p| p.as_str().unwrap().starts_with("strip-items")), "the alarm strip among the places: {}", alarm_places[0]);
+    // The markers moved while the Alarms view is in front: each placed anew once the layout is.
+    plc.set("p1", 40.0);
+    assert!(wait(Duration::from_secs(20), || object(&get(addr, "/s/loop/objects.json").1, "parcel-1")["place"] == json!(0.4)));
+    std::thread::sleep(Duration::from_millis(300));
     page.eval("location.hash = 'layout'; true");
-    settle(&mut page, "the layout shown again", &["outlet-3"]);
+    settle(&mut page, "the layout shown again, its markers moved meanwhile", &["outlet-3"]);
     assert_eq!(around["headline"], json!([["speed", "0.2", "mono st-text-warn"], ["read-rate", "—", "mono st-text-stale"]]));
     assert_eq!(around["attention"], json!([
         ["infeed", "!", "mark st-alarm", "Infeed fault"],

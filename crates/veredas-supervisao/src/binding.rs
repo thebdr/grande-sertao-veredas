@@ -830,8 +830,8 @@ pub fn load(text: &str, base: &Path, universe: &Universe, project_name: &str) ->
             if let Some(a) = &p.apart {
                 return Err(format!("object `{}`: its element stands inside a <{a}> of the layout, where the page cannot measure or paint it as drawn", o.id));
             }
-            if p.holds_use {
-                return Err(format!("object `{}`: its element holds a <use>, whose shapes no state's paint reaches", o.id));
+            if let Some(inner) = &p.holds {
+                return Err(format!("object `{}`: its element holds a <{inner}>, which the page does not paint as the object (it holds groups, shapes, texts and their spans alone)", o.id));
             }
             if p.important {
                 return Err(format!("object `{}`: a `style` attribute on its element or inside it says `!important`, which would outrank the state's paint", o.id));
