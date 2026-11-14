@@ -153,8 +153,9 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let project = dir.path().join("loop/project.toml");
     let text = std::fs::read_to_string(&project).unwrap();
     // And a view with `ts` alone for its time, so every way portal finds a table's time (its own
-    // rule: `index_ms`, else `ts`, else none) is a table here.
-    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"{VIEW}\"\nsql = \"SELECT outlet, travel > 12 AS slow FROM sorts\"\n\n[[table]]\nname = \"stamped\"\nsql = \"SELECT ts, outlet FROM sorts\"\n")).unwrap();
+    // rule: `index_ms`, else `ts`, else none) is a table here; and one of numbers from 1e21 up,
+    // where a script writes a number with an exponent (and one just below), each exact in binary.
+    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"{VIEW}\"\nsql = \"SELECT outlet, travel > 12 AS slow FROM sorts\"\n\n[[table]]\nname = \"stamped\"\nsql = \"SELECT ts, outlet FROM sorts\"\n\n[[table]]\nname = \"magnitudes\"\nsql = \"SELECT 9.5e20::DOUBLE AS below, 1e21::DOUBLE AS edge, -3.5e21::DOUBLE AS negative, 1e22::DOUBLE AS big\"\n")).unwrap();
     let log = dir.path().join("loop/sorts.log");
     std::fs::write(&log, "").unwrap();
     let hall_log = dir.path().join("hall/sorts.log");
@@ -179,7 +180,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     assert_eq!(status, 200);
     let mut names: Vec<(String, String)> = t["tables"].as_array().unwrap().iter().map(|x| (x["name"].as_str().unwrap().to_string(), x["kind"].as_str().unwrap().to_string())).collect();
     names.sort();
-    assert_eq!(names.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["outlets", "plc_main", "samples", VIEW, "sorts", "stamped"]);
+    assert_eq!(names.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["magnitudes", "outlets", "plc_main", "samples", VIEW, "sorts", "stamped"]);
     assert_eq!(names.iter().find(|(n, _)| n == "outlets").unwrap().1, "view");
     let sorts = t["tables"].as_array().unwrap().iter().find(|x| x["name"] == "sorts").unwrap();
     let cols: Vec<&str> = sorts["columns"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
@@ -310,7 +311,8 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         )
     };
     // A page of the sorts is matched by its table, its rows and what it says of them ("rows A–B of
-    // N"), and everything on it shown.
+    // N"), everything on it shown, and its buttons by its place (Newer off on the first page alone,
+    // Older off on the last alone).
     let shown_at = |page: &mut Browser, rows: &str| {
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
         let (ab, n) = rows.split_once('/').unwrap();
@@ -318,7 +320,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         let said = format!("rows {a}–{b} of {n}, newest first");
         loop {
             let s = page.eval(shown_js);
-            if s["table"] == json!("sorts") && s["all_shown"] == json!(true) && s["rows"] == json!(rows) && s["said"] == json!(said) {
+            if s["table"] == json!("sorts") && s["all_shown"] == json!(true) && s["rows"] == json!(rows) && s["said"] == json!(said) && s["newer"] == json!(a == "1") && s["older"] == json!(b == n) {
                 return s;
             }
             assert!(std::time::Instant::now() < deadline, "the sorts never shown at {rows}; the page shows {}", json!({ "table": s["table"], "rows": s["rows"], "said": s["said"], "newer": s["newer"], "older": s["older"], "all_shown": s["all_shown"] }));
@@ -328,6 +330,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let click = |page: &mut Browser, text: &str| {
         page.eval(&format!(r#"[...document.querySelectorAll(".list-main .pager button")].find((b) => b.textContent === "{text}").click()"#));
     };
+    page.wait_for(r#"/\d\d:\d\d:\d\d/.test(document.querySelector(".live")?.textContent ?? "") || null"#, Duration::from_secs(20));
     page.eval(r#"document.querySelector('.list button[data-table="sorts"]').click()"#);
     let first = shown_at(&mut page, "1-50/53");
     let (head, body) = as_shown(&get(addr, "/s/loop/portal/api/table/data?name=sorts&limit=50&offset=0").1);
@@ -387,6 +390,8 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         let ordered = has("index_ms") || has("ts");
         let said = format!("rows {}–{n} of {total}{}", if total == 0 { 0 } else { 1 }, if ordered { ", newest first" } else { ", unordered" });
         assert_eq!((s["head"].clone(), s["body"].clone(), s["said"].clone(), s["all_shown"].clone()), (json!(head), json!(body), json!(said), json!(true)), "{name}");
+        // Its first page's buttons by its place: Newer off, Older off when it is the last too.
+        assert_eq!((s["newer"].clone(), s["older"].clone()), (json!(true), json!(total <= 50)), "{name}: its pager on a first page of {total}");
         for r in p["rows"].as_array().unwrap() {
             for v in r.as_array().unwrap() {
                 kinds.insert(match v {
@@ -543,6 +548,15 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     page.wait_for(&format!("({HEAD}) === 'plc · speed' || null"), Duration::from_secs(20));
     page.wait_for("window.__slowDone || null", Duration::from_secs(10));
     assert_eq!(page.eval(HEAD), json!("plc · speed"), "the later pick stays, the earlier window come late");
+    // A series picked after its value moved since the listing shown was drawn: its heading says
+    // the last value of the listing its own click fetched.
+    bench.server("plc").unwrap().set("fill1", 65.0);
+    let fill1_last = || get(addr, "/s/loop/portal/api/series").1["series"].as_array().unwrap().iter().find(|x| x["source"] == "plc" && x["series"] == "fill1").map(|x| x["last_value"].clone());
+    assert!(wait(Duration::from_secs(20), || fill1_last() == Some(json!("65"))), "fill1 listed at 65: {:?}", fill1_last());
+    assert!(page.eval(r#"[...document.querySelectorAll(".list button[data-series]")].some((b) => b.dataset.series === "plc/fill1")"#) == json!(true));
+    page.eval(&series_button("plc/fill1"));
+    let heading = page.wait_for(r#"(() => { const s = document.querySelector(".list-main .pager strong"), p = document.querySelector(".list-main .pager [data-points]"); return s && p && s.textContent === "plc · fill1" ? p.textContent : null; })()"#, Duration::from_secs(20));
+    assert!(heading.as_str().unwrap().ends_with(" · last 65"), "{heading}");
 
     // A table of exactly a hundred rows: the second page is the last, nothing older.
     append(&log, &(0..47).map(|i| format!("{} SORT outlet=1 travel=30.0 rate=99.0", stamp(base + 240_000 + i * 1000))).collect::<Vec<_>>());
@@ -643,6 +657,29 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         let after = page.eval(&format!(r#"(() => {{ const s = {shown_js}; return [s ? s.table : null, document.querySelector(".list-main p.error")?.textContent ?? null, document.querySelector(".list button.on")?.dataset.table ?? null]; }})()"#));
         assert_eq!(after, json!(["outlets", null, "outlets"]), "{slow} refused late drew over the later pick");
     }
+    // The pager off from a pick on and from the view shown again on, while the listing is out: the
+    // listing held back, both buttons read off.
+    let held_pager = |page: &mut Browser, act: &str| -> Value {
+        page.eval(&format!(r#"(() => {{ window.__slowSent = false; window.__slow = "/api/tables"; {act}; return true; }})()"#));
+        page.wait_for("window.__slowSent || null", Duration::from_secs(10));
+        let off = page.eval(r#"[...document.querySelectorAll(".list-main .pager button")].map((b) => b.disabled)"#);
+        page.wait_for("window.__slowDone || null", Duration::from_secs(10));
+        off
+    };
+    pick(&mut page, "sorts");
+    shown_at(&mut page, "1-50/110");
+    assert_eq!(held_pager(&mut page, r#"document.querySelector('.list button[data-table="outlets"]').click()"#), json!([true, true]), "the pager off from a pick on");
+    pick(&mut page, "sorts");
+    shown_at(&mut page, "1-50/110");
+    page.eval(r#"location.hash = "series""#);
+    page.wait_for(r#"document.querySelector(".list button[data-series]") ? true : null"#, Duration::from_secs(20));
+    assert_eq!(held_pager(&mut page, r#"location.hash = "tables""#), json!([true, true]), "the pager off from the view shown again on");
+    shown_at(&mut page, "1-50/110");
+    // The listing refused for the latest pick is said where the page was.
+    page.eval(r#"(() => { window.__slowSent = false; window.__slowRefuse = true; window.__slow = "/api/tables"; document.querySelector('.list button[data-table="outlets"]').click(); return true; })()"#);
+    page.wait_for("window.__slowSent || null", Duration::from_secs(10));
+    let refused = page.wait_for(r#"document.querySelector(".list-main p.error")?.textContent ?? null"#, Duration::from_secs(10));
+    assert_eq!(refused, json!("Error: probe refusal, late"), "the latest pick's listing refused");
     // Shown anew, the table's window takes the rows stored since; a page portal refuses is said in
     // its place.
     pick(&mut page, "sorts");
@@ -662,10 +699,47 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     click(&mut page, "Older ›");
     let shifted = shown_at(&mut page, "51-100/111");
     assert_eq!(shifted["body"][0], before_late["body"][49], "the late row joined the frozen window and shifted its pages");
+    // A pick takes the window anew, as showing the view does: a sort stored while the sorts are
+    // shown, stamped at the session's now, is the newest row of the sorts picked again once the page
+    // holds a status from past it.
+    let late_now = store_now();
+    append(&log, &[format!("{} SORT outlet=7 travel=3.0 rate=99.0", stamp(late_now))]);
+    assert!(sorts_rows(112));
+    let past = chrono::DateTime::from_timestamp_millis(late_now + 1_000).unwrap().format("%H:%M:%S").to_string();
+    page.wait_for(&format!(r#"(() => {{ const m = (document.querySelector(".live")?.textContent ?? "").match(/(\d\d:\d\d:\d\d)/); return m && (m[1] >= "{past}" || ("{past}" > "23:59" && m[1] < "00:01")) ? true : null; }})()"#), Duration::from_secs(20));
+    pick(&mut page, "sorts");
+    let repicked = shown_at(&mut page, "1-50/112");
+    assert_eq!(repicked["body"][0][travel], json!("3"), "the sort stored since, newest, on the sorts picked again");
 
     // Every request the page made went to this host and this session's own paths, its portal
     // reads the four routes under `/s/loop/portal/api/`, its stream the session's objects.
     let requests = page.requests();
+    // Every request of rows and of a window names exactly what the clause says it asks (rows: the
+    // table, fifty, an offset and the window's end; a window: the series whole, the hour to the
+    // session's now, 600 points), each among the parameters portal's own route reads (its query's
+    // struct, read from its source).
+    let serve = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../veredas-portal/src/serve.rs")).unwrap();
+    let fields = |name: &str| -> std::collections::BTreeSet<String> {
+        let at = serve.find(&format!("pub struct {name} {{")).unwrap_or_else(|| panic!("{name}"));
+        let body = &serve[at..at + serve[at..].find('}').unwrap()];
+        body.lines().filter_map(|l| l.trim().strip_prefix("pub ")?.split_once(':').map(|(f, _)| f.trim().to_string())).filter(|f| !f.starts_with("struct")).collect()
+    };
+    let keys = |u: &str| -> std::collections::BTreeSet<String> { u.split_once('?').map(|(_, q)| q.split('&').map(|kv| kv.split('=').next().unwrap().to_string()).collect()).unwrap_or_default() };
+    let set = |ks: &[&str]| ks.iter().map(|k| k.to_string()).collect::<std::collections::BTreeSet<String>>();
+    let (rows_asked, windows_asked) = (fields("TableDataParams"), fields("SeriesDataParams"));
+    assert!(rows_asked.contains("to") && windows_asked.contains("points"), "{rows_asked:?} {windows_asked:?}");
+    let mut seen = (0, 0);
+    for (u, _) in &requests {
+        if u.contains("/portal/api/table/data?") {
+            assert!(keys(u) == set(&["limit", "name", "offset", "to"]) && keys(u).is_subset(&rows_asked), "{u}");
+            seen.0 += 1;
+        }
+        if u.contains("/portal/api/series/data?") {
+            assert!(keys(u) == set(&["from", "points", "series", "source", "to"]) && keys(u).is_subset(&windows_asked), "{u}");
+            seen.1 += 1;
+        }
+    }
+    assert!(seen.0 > 10 && seen.1 > 3, "{seen:?}");
     let origin = format!("http://{addr}");
     let paths: Vec<(String, String)> = requests
         .iter()
@@ -686,6 +760,53 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         "{paths:?}"
     );
     drop(page);
+
+    // A table picked before the page holds any status (the object stream held back, so no now): its
+    // first page asked with no window's end, its newest row's time held as the window from then on,
+    // so the rows stored since join no page and its pages do not shift.
+    let mut blind = Browser::open("about:blank");
+    blind.call("Page.enable", json!({}));
+    blind.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": "window.EventSource = class { constructor() {} addEventListener() {} close() {} };" }));
+    blind.call("Page.navigate", json!({ "url": format!("http://{addr}/s/loop/#tables") }));
+    blind.wait_for(r#"document.querySelector('.list button[data-table="sorts"]') ? true : null"#, Duration::from_secs(20));
+    blind.eval(KEEP_ANSWERS);
+    assert_eq!(blind.eval(r#"/\d\d:\d\d:\d\d/.test(document.querySelector(".live")?.textContent ?? "")"#), json!(false), "no status held");
+    blind.eval(r#"document.querySelector('.list button[data-table="sorts"]').click()"#);
+    let unheld = shown_at(&mut blind, "1-50/112");
+    let stored = store_now();
+    append(&log, &(0..10).map(|i| format!("{} SORT outlet=6 travel=2.0 rate=99.0", stamp(stored + i))).collect::<Vec<_>>());
+    assert!(sorts_rows(122));
+    click(&mut blind, "Older ›");
+    let held = shown_at(&mut blind, "51-100/112");
+    assert!(held["body"].as_array().unwrap().iter().all(|r| !unheld["body"].as_array().unwrap().contains(r)), "a row of the first page shown again");
+    let answers = blind.eval("window.__answers");
+    let answers = answers.as_array().unwrap();
+    let first_url = answers[0]["url"].as_str().unwrap();
+    let index = answers[0]["body"]["schema"].as_array().unwrap().iter().position(|c| c["name"] == "index_ms").unwrap();
+    let newest = answers[0]["body"]["rows"][0][index].as_i64().unwrap();
+    // (A capture rule's table carries `ts` as well, the same time as `index_ms` on every row, so
+    // holding at either is one window: portal's own order prefers `index_ms`.)
+    let ts_at = answers[0]["body"]["schema"].as_array().unwrap().iter().position(|c| c["name"] == "ts").unwrap();
+    assert!(answers[0]["body"]["rows"].as_array().unwrap().iter().all(|r| r[index] == r[ts_at]), "{}", answers[0]["body"]["rows"][0]);
+    assert_eq!((param(first_url, "to"), param(answers.last().unwrap()["url"].as_str().unwrap(), "to")), (None, Some(newest.to_string())), "{answers:?}");
+    // And a table with `ts` alone for its time (the view), still with no status: held at its first
+    // page's newest `ts`, as portal orders it.
+    blind.eval("window.__answers = []; true");
+    blind.eval(r#"document.querySelector('.list button[data-table="stamped"]').click()"#);
+    let stamped_at = |rows: &str| format!("(() => {{ const s = {shown_js}; return s && s.table === 'stamped' && s.rows === '{rows}' && s.all_shown ? s : null; }})()");
+    let unheld = blind.wait_for(&stamped_at("1-50/122"), Duration::from_secs(20));
+    let stored = store_now();
+    append(&log, &(0..10).map(|i| format!("{} SORT outlet=5 travel=2.5 rate=99.0", stamp(stored + i))).collect::<Vec<_>>());
+    assert!(sorts_rows(132));
+    click(&mut blind, "Older ›");
+    let held = blind.wait_for(&stamped_at("51-100/122"), Duration::from_secs(20));
+    assert!(held["body"].as_array().unwrap().iter().all(|r| !unheld["body"].as_array().unwrap().contains(r)), "a row of the first page shown again");
+    let answers = blind.eval("window.__answers");
+    let answers = answers.as_array().unwrap();
+    let ts = answers[0]["body"]["schema"].as_array().unwrap().iter().position(|c| c["name"] == "ts").unwrap();
+    let newest = answers[0]["body"]["rows"][0][ts].as_i64().unwrap_or_else(|| panic!("ts as a number: {}", answers[0]["body"]["rows"][0]));
+    assert_eq!((param(answers[0]["url"].as_str().unwrap(), "to"), param(answers.last().unwrap()["url"].as_str().unwrap(), "to")), (None, Some(newest.to_string())), "{answers:?}");
+    drop(blind);
 
     // The other session's page reads the other session's router alone: its catalog (no sort
     // logged there), never this one's.

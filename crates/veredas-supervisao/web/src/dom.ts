@@ -35,6 +35,8 @@ export function clock(ms: number, seconds = true): string {
 /// A number for an axis or a cell: up to `places` places, trailing zeros dropped.
 export function num(v: number | null | undefined, places = 2): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "—";
+  // From 1e21 up a number is an integer `toFixed` writes with an exponent: its digits in full.
+  if (Math.abs(v) >= 1e21) return BigInt(v).toString();
   const t = v.toFixed(places).replace(/\.?0+$/, "");
   return t === "-0" ? "0" : t;
 }

@@ -46,6 +46,8 @@ export class Tables {
   /// The window paged through, frozen at the session's now when the view or a table is shown: a
   /// row stamped later joins no page until the view is shown again. Portal holds the window by
   /// time, so a row stamped inside it but stored late (a late line, the tail's lag) still joins it.
+  /// Shown before the page holds any status (no now yet), the window is held at the first page's
+  /// newest row, the latest time it has.
   private to: number | null = null;
   /// The latest request: an answer to an earlier one is not drawn.
   private asked = 0;
@@ -87,6 +89,11 @@ export class Tables {
       // Portal orders a table newest first by its time (`index_ms`, else `ts`) and holds its window
       // by it; one with neither comes in the store's own order, unheld, and is said to be unordered.
       const ordered = p.schema.some((c) => c.name === "index_ms" || c.name === "ts");
+      // No now when it was asked: the window held from here at the newest row's time (portal's own
+      // order: `index_ms`, else `ts`), so a row stored since joins no page.
+      const at = p.schema.findIndex((c) => c.name === "index_ms");
+      const time = at >= 0 ? at : p.schema.findIndex((c) => c.name === "ts");
+      if (to === null && this.to === null && this.table === table && time >= 0 && typeof p.rows[0]?.[time] === "number") this.to = p.rows[0][time] as number;
       const prev = h("button", { disabled: offset === 0 }, "‹ Newer") as HTMLButtonElement;
       const next = h("button", { disabled: offset + PAGE >= p.total }, "Older ›") as HTMLButtonElement;
       prev.onclick = () => { if (this.table === table) { this.offset = Math.max(0, offset - PAGE); void this.page(); } };
@@ -121,6 +128,9 @@ export class Series {
     try {
       const s = await getJson<{ series: SeriesInfo[] }>(`${base(this.name)}/portal/api/series`);
       if (token !== this.asked) return;
+      // The pick read again from the listing just fetched, so its heading's last value is this one's.
+      const was = this.pick;
+      if (was) this.pick = s.series.find((y) => y.source === was.source && y.series === was.series) ?? was;
       this.list.replaceChildren(h("div", { class: "caps small" }, `Series · ${s.series.length}`), ...s.series.map((x) => {
         const on = this.pick && this.pick.source === x.source && this.pick.series === x.series;
         const b = h("button", { class: on ? "on" : "", "data-series": `${x.source}/${x.series}` }, h("span", {}, `${x.source} · ${x.series}`), h("span", { class: "mono muted" }, `${x.type} · ${x.count}`));
