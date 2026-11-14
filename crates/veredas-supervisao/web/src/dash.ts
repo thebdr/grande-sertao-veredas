@@ -146,6 +146,8 @@ export class Dashboards {
   // The refresh last asked: an answer to an earlier one (another dashboard, or one hidden since) is
   // dropped, so a late answer never draws over the dashboard shown.
   private asked = 0;
+  // The refresh still out, if any: the five-second tick waits for its answer rather than overtake it.
+  private out = 0;
 
   constructor(private name: string, private dashboards: { name: string }[]) {
     this.root.append(this.tabs, this.body);
@@ -162,9 +164,9 @@ export class Dashboards {
       this.body.replaceChildren(h("p", { class: "muted" }, "This binding has no dashboard."));
       return;
     }
-    void this.refresh();
+    void this.refresh(true);
     window.clearInterval(this.timer);
-    this.timer = window.setInterval(() => void this.refresh(), 5000);
+    this.timer = window.setInterval(() => void this.refresh(false), 5000);
   }
 
   hide() {
@@ -172,8 +174,10 @@ export class Dashboards {
     this.asked++;
   }
 
-  async refresh() {
+  async refresh(shown = true) {
+    if (!shown && this.out !== 0 && this.out === this.asked) return;
     const token = ++this.asked;
+    this.out = token;
     try {
       const d = await getJson<DashOut>(`${base(this.name)}/dashboard/${this.current}`);
       if (token !== this.asked) return;
@@ -186,6 +190,8 @@ export class Dashboards {
       }));
     } catch (e) {
       if (token === this.asked) this.body.replaceChildren(h("p", { class: "error" }, String(e)));
+    } finally {
+      if (this.out === token) this.out = 0;
     }
   }
 }

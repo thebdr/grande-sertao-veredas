@@ -174,6 +174,12 @@ pub fn distribution(vals: &[f64], center: f64, spread: f64, bins: usize) -> (Vec
 fn cell_text(v: &Json, decimals: Option<u8>) -> String {
     match v {
         Json::Null => String::new(),
+        // An integer a double cannot hold (past 2^53) in its own digits, never rounded; its places
+        // written as zeros when the column asks for some.
+        Json::Number(n) if n.as_i64().map(|i| i.unsigned_abs()).or(n.as_u64()).is_some_and(|i| i > 1 << 53) => match decimals {
+            Some(d) if d > 0 => format!("{n}.{}", "0".repeat(d as usize)),
+            _ => n.to_string(),
+        },
         Json::Number(n) => n.as_f64().map(|x| format_number(x, decimals)).unwrap_or_else(|| n.to_string()),
         Json::String(s) => s.clone(),
         other => other.to_string(),
@@ -181,7 +187,7 @@ fn cell_text(v: &Json, decimals: Option<u8>) -> String {
 }
 
 /// The kinds of time portal's store writes as milliseconds (its own conversion: a timestamp of any
-/// unit, a date, a time of day), by a column's engine type.
+/// unit or zone, a date, a time of day with its zone or without), by a column's engine type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Clock {
     /// Milliseconds on the store's axis (the plant's clock read as UTC).
@@ -193,14 +199,14 @@ pub enum Clock {
 }
 
 /// The kind of time a column holds, by its engine type (`TIMESTAMP` of any unit or zone, `DATE`,
-/// `TIME`), or none.
+/// `TIME` with or without its zone), or none.
 pub fn clock_of(data_type: &str) -> Option<Clock> {
     let t = data_type.trim().to_ascii_uppercase();
     if t.starts_with("TIMESTAMP") {
         Some(Clock::Stamp)
     } else if t == "DATE" {
         Some(Clock::Day)
-    } else if t == "TIME" {
+    } else if t == "TIME" || t == "TIMETZ" || t.starts_with("TIME WITH") {
         Some(Clock::Hour)
     } else {
         None
@@ -208,7 +214,7 @@ pub fn clock_of(data_type: &str) -> Option<Clock> {
 }
 
 /// A time as the store holds it, written as the store's clock reads it: a timestamp to the second,
-/// a date as its day, a time of day to the second.
+/// a date as its day, a time of day (with its zone or without) to the second.
 pub fn time_text(v: &Json, clock: Clock) -> String {
     let at = v.as_i64().and_then(chrono::DateTime::from_timestamp_millis);
     match (clock, at) {
@@ -233,6 +239,7 @@ fn reading_of(v: &Json) -> Option<Reading> {
 fn key_text(v: &Json) -> Option<String> {
     match v {
         Json::Null => None,
+        Json::Number(n) if n.is_i64() || n.is_u64() => Some(n.to_string()),
         Json::Number(n) => n.as_f64().map(|x| format!("{x}")),
         Json::String(s) => Some(s.clone()),
         other => Some(other.to_string()),
@@ -377,11 +384,13 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
                 rows.push(r);
             }
         }
-        if n < page_rows || rows.len() >= cap {
+        // One row past the cap read, so a window holding more than the cap lets in says so.
+        if n < page_rows || rows.len() > cap {
             break;
         }
     }
     let total = total.unwrap_or(0);
+    let capped = rows.len() > cap;
     rows.truncate(cap);
     let find = |name: &str| columns.iter().position(|c| c == name).ok_or_else(|| format!("`{table}` has no column `{name}` (its columns: {})", columns.join(", ")));
     let (ki, vi) = (find(key)?, find(value)?);
@@ -423,8 +432,8 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
             json!({ "key": k, "n": vals.len(), "median": med, "sigma": sigma(&vals), "spark": spark, "bins": bins, "below": below, "above": above })
         })
         .collect();
-    // Capped: the window holds more rows than the cap let it read.
-    Ok(json!({ "from": from, "to": to, "spread": spread, "rows": out, "read": rows.len(), "total": total, "capped": total as usize > cap }))
+    // Capped: the window held a row past the cap, which the read stopped before.
+    Ok(json!({ "from": from, "to": to, "spread": spread, "rows": out, "read": rows.len(), "total": total, "capped": capped }))
 }
 
 fn panel_body(live: &Live, b: &Binding, snap: &Snapshot, p: &Panel, to: i64, now_unix: i64) -> Result<Json, String> {
@@ -520,9 +529,15 @@ pub fn dashboard(live: &Live, b: &Binding, snap: &Snapshot, index: usize, to: i6
         .iter()
         .map(|p| {
             let mut head = json!({ "kind": p.kind.name(), "title": p.title, "span": p.span });
-            match panel_body(live, b, snap, p, to, now_unix) {
-                Ok(body) => head["data"] = body,
-                Err(e) => head["error"] = json!(e),
+            // A panel whose reading panics (a column type the engine's driver cannot read) says so in
+            // its own place; the others are drawn.
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| panel_body(live, b, snap, p, to, now_unix))) {
+                Ok(Ok(body)) => head["data"] = body,
+                Ok(Err(e)) => head["error"] = json!(e),
+                Err(cause) => {
+                    let why = cause.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| cause.downcast_ref::<String>().cloned()).unwrap_or_default();
+                    head["error"] = json!(format!("the panel could not be computed: {}", why.split('\n').next().unwrap_or("")));
+                }
             }
             head
         })

@@ -827,6 +827,16 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let said = page.wait_for(r#"document.querySelector(".dash-grid > p.error")?.textContent ?? null"#, Duration::from_secs(10));
     assert_eq!(said, json!("Error: probe failure"));
     page.wait_for(r#"document.querySelectorAll(".dash-grid > .panel").length === 17 || null"#, Duration::from_secs(15));
+    // The five-second refresh waits for an answer still out rather than overtake it: the first
+    // dashboard asked and its answer held back six and a half seconds, the tick at five asks
+    // nothing; once the page has read the answer, the next tick asks again.
+    page.eval("location.hash = 'layout'; true");
+    page.wait_for("document.querySelector('.dash-grid') ? null : true", Duration::from_secs(10));
+    page.eval("window.__asks = 0; window.__hold = '/dashboard/0'; window.__holdMs = 6500; location.hash = 'dashboards/0'; true");
+    page.wait_for("window.__held === false || null", Duration::from_secs(10));
+    page.wait_for("window.__held === true || null", Duration::from_secs(15));
+    assert_eq!(page.eval("window.__asks"), json!(1), "a refresh overtook the answer still out");
+    page.wait_for("window.__asks >= 2 || null", Duration::from_secs(10));
     // The second dashboard (every key written, every aggregate, a grid in every state) and then a
     // probe built from the first's panels: every state of the vocabulary on every surface (a tile,
     // its badge, sub-line and sparkline; a grid cell and its value; a level's fill and figure; a
@@ -858,7 +868,7 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let probe = probe_dashboard(&dash);
     let v = drawn_as(&mut page, "Probe", "dashboards/0", Some(&probe));
     let kinds: Vec<&str> = v["drawn"].as_array().unwrap().iter().map(|p| p["kind"].as_str().unwrap()).collect();
-    assert_eq!(kinds.len(), every_state().len() + 11, "{kinds:?}");
+    assert_eq!(kinds.len(), every_state().len() + 12, "{kinds:?}");
     // Bars of every sign drawn from 0: a bucket below it among the others, and every bucket and
     // the target below it, each bar inside the chart, the axis labelled at both ends and at 0.
     let n = kinds.len();
@@ -880,16 +890,19 @@ const KEEP_DASHBOARD: &str = r#"(() => {
   const orig = window.fetch;
   window.fetch = async (...a) => {
     const dash = String(a[0]).includes("/dashboard/");
+    // Every dashboard asked, counted.
+    if (dash) window.__asks = (window.__asks ?? 0) + 1;
     // A dashboard the test hands over in place of the next one asked (the probes), taken as it is
     // asked, so an answer already on its way never carries it.
     const probe = dash ? window.__probe : null;
     if (probe) window.__probe = null;
-    // An answer the test holds back (the address it names), to come after the next one, refused
+    // An answer the test holds back (the address it names) for `__holdMs` (1.5 s unless set), to come after the next one, refused
     // then while `__holdError` is set; `__held` set once the page has read it and done with it
     // (the page's handling runs on the read's own resolution, before the next task).
     const hold = dash && window.__hold && String(a[0]).includes(window.__hold);
     const holdError = hold && window.__holdError;
-    if (hold) { window.__hold = null; window.__holdError = false; window.__held = false; }
+    const holdMs = window.__holdMs ?? 1500;
+    if (hold) { window.__hold = null; window.__holdError = false; window.__held = false; window.__holdMs = null; }
     // The next dashboard asked answered at once with portal's kind of refusal, while `__failNext`.
     const failNow = dash && window.__failNext;
     if (failNow) window.__failNext = false;
@@ -899,7 +912,7 @@ const KEEP_DASHBOARD: &str = r#"(() => {
     let j = await r.json();
     if (probe) j = probe;
     if (hold) {
-      await new Promise((ok) => setTimeout(ok, 1500));
+      await new Promise((ok) => setTimeout(ok, holdMs));
       const late = holdError ? new Response(JSON.stringify({ error: "probe failure, late" }), { status: 500, headers: { "content-type": "application/json" } }) : new Response(JSON.stringify(j), { status: r.status, headers: r.headers });
       const read = late.json.bind(late);
       late.json = async () => { const v = await read(); setTimeout(() => { window.__held = true; }, 0); return v; };
@@ -1102,7 +1115,8 @@ fn spark_at(pts: &[(f64, f64)], w: f64, h: f64) -> Vec<Value> {
 }
 
 /// A dashboard built from the first one's panels as the page received it: a value tile in every
-/// state of the vocabulary, tiles with a sparkline of one point and of none, trends of one point
+/// state of the vocabulary, tiles with a sparkline of one point and of none, a tile with no value
+/// (its figure a dash), trends of one point
 /// and of none, a grid, levels, a timeline (one run in every state, each row's word in one) and a
 /// table (a word in every state) each across every state, and a cells panel whose first row's
 /// sparkline has one point.
@@ -1125,6 +1139,9 @@ fn probe_dashboard(d: &Value) -> Value {
     let mut none = p(0);
     none["data"]["spark"] = json!([]);
     panels.push(none);
+    let mut blank = p(0);
+    blank["data"]["text"] = Value::Null;
+    panels.push(blank);
     let mut one = p(4);
     one["data"]["points"] = json!([one["data"]["points"][0].clone()]);
     one["data"]["breaches"] = json!([]);
@@ -1374,7 +1391,10 @@ fn close(a: &Value, b: &Value) -> bool {
 /// value, an object bound to one key on every chart, a table's columns in every pairing of `bar`
 /// and `states` over values of every sign, a view's time of every kind portal's store writes as
 /// milliseconds, a view fanning one stored row into several, float keys apart past three places,
-/// and cells a view cannot give (no order, no such column).
+/// cells a view cannot give (no order, no such column), a tile in every state a rule names and
+/// every comparison (one over another series' key), a quarter hour's timeline of one key opening
+/// on that key's state, a view of every date and time type the engine lists, one of a type its
+/// driver cannot read, and integers past 2^53 as keys and cells.
 const RULES: &str = r#"format = "veredas-binding"
 version = 1
 title = "Rules"
@@ -1416,6 +1436,35 @@ value = { source = "sorter", series = "never" }
 id = "keyed"
 value = { source = "sorter", series = "at", key = "A1" }
 states = [ { above = 30, state = "warn", word = "far" } ]
+
+[[object]]
+id = "t-near"
+value = { source = "sorter", series = "travel" }
+unit = "s"
+states = [ { at_least = 25, state = "near", word = "close" } ]
+
+[[object]]
+id = "t-off"
+value = { source = "sorter", series = "travel" }
+unit = "s"
+states = [ { at_most = 25, state = "disabled", word = "off" } ]
+
+[[object]]
+id = "t-equal"
+value = { source = "sorter", series = "rate" }
+unit = "%"
+states = [ { equals = 99, state = "alarm", word = "stuck" } ]
+
+[[object]]
+id = "t-word"
+value = { source = "sorter", series = "mode" }
+states = [ { equals = "hold", state = "warn", word = "held" } ]
+
+[[object]]
+id = "t-keyed"
+value = { source = "sorter", series = "rate" }
+unit = "%"
+states = [ { above = 15, source = "sorter", series = "at", key = "A1", state = "warn", word = "far" } ]
 
 [[dashboard]]
 name = "Rules"
@@ -1497,11 +1546,57 @@ table = "doubled"
 key = "outlet"
 value = "travel"
 spread = 5
+
+[[dashboard.panel]]
+kind = "value"
+object = "t-near"
+
+[[dashboard.panel]]
+kind = "value"
+object = "t-off"
+
+[[dashboard.panel]]
+kind = "value"
+object = "t-equal"
+
+[[dashboard.panel]]
+kind = "value"
+object = "t-word"
+
+[[dashboard.panel]]
+kind = "value"
+object = "t-keyed"
+
+[[dashboard.panel]]
+kind = "timeline"
+objects = ["keyed"]
+minutes = 15
+
+[[dashboard.panel]]
+kind = "table"
+table = "clocks"
+
+[[dashboard.panel]]
+kind = "table"
+table = "nanos"
+
+[[dashboard.panel]]
+kind = "cells"
+table = "big"
+key = "k"
+value = "travel"
+spread = 5
+
+[[dashboard.panel]]
+kind = "table"
+table = "big"
+columns = [ { name = "k" }, { name = "u", decimals = 2 } ]
 "#;
 
 /// The project's rules and views for `RULES`: a keyed numeric series, float keys, a series never
-/// written, a view fanning sorts out by zone, one of every time portal writes as milliseconds, one
-/// of values of every sign, one with no order.
+/// written, a text series, a view fanning sorts out by zone, one of every time portal writes as
+/// milliseconds, one of values of every sign, one with no order; the engine's own list of its date
+/// and time types, a view of each, one of the type its driver cannot read, one of integers past 2^53.
 const RULES_PROJECT: &str = r#"
 [[rule]]
 name = "positions"
@@ -1521,6 +1616,28 @@ name = "nevers"
 pattern = 'NEVER v=(?P<never>[0-9.]+)'
 scope = "sorter"
 types = { never = "float" }
+
+[[rule]]
+name = "modes"
+pattern = 'MODE m=(?P<mode>\w+)'
+scope = "sorter"
+types = { mode = "text" }
+
+[[table]]
+name = "datetimes"
+sql = "SELECT DISTINCT logical_type AS t FROM duckdb_types() WHERE type_category = 'DATETIME'"
+
+[[table]]
+name = "clocks"
+sql = "SELECT index_ms, CAST(ts AS TIMESTAMP_S) AS s, CAST(ts AS TIMESTAMP_MS) AS ms, ts AS us, CAST(ts AS TIMESTAMP_NS) AS ns, CAST(ts AS TIMESTAMPTZ) AS tz, CAST(ts AS DATE) AS day, CAST(ts AS TIME) AS hour, CAST(CAST(ts AS TIME) AS TIMETZ) AS hourtz FROM sorts"
+
+[[table]]
+name = "nanos"
+sql = "SELECT index_ms, CAST(CAST(ts AS VARCHAR)[12:] AS TIME_NS) AS at FROM sorts"
+
+[[table]]
+name = "big"
+sql = "SELECT index_ms, source, seq, CASE WHEN outlet = 1 THEN 9007199254740993 ELSE -9007199254740995 END AS k, CAST(18446744073709551615 AS UBIGINT) - CAST(outlet AS UBIGINT) AS u, travel FROM sorts"
 
 [[table]]
 name = "zones"
@@ -1557,7 +1674,9 @@ fn every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says() {
     let path = write_example(dir.path(), &ex);
     let log = dir.path().join("loop/sorts.log");
     std::fs::write(&log, "").unwrap();
-    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let cfg = config::load_file(&path).unwrap();
+    let binding = cfg.sessions[0].binding.clone();
+    let host = Host::start(cfg).unwrap();
     let addr = host.addr();
     let live = host.session("loop").unwrap().live();
     assert!(wait(Duration::from_secs(20), || live.health.read().unwrap().get("sorter").is_some_and(|h| h.count == 0)), "the log is attached");
@@ -1572,16 +1691,22 @@ fn every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says() {
         format!("{} POS item=A1 at=20", stamp(at(3.0))),
         format!("{} KEYED k=1.0001 n=1", stamp(at(4.0))),
         format!("{} KEYED k=1.0004 n=2", stamp(at(5.0))),
+        format!("{} POS item=B2 at=60", stamp(at(6.0))),
+        format!("{} MODE m=hold", stamp(at(7.0))),
         format!("{} SORT outlet=2 travel=20.0 rate=99.0", stamp(at(10.0))),
         format!("{} SORT outlet=1 travel=25.0 rate=99.0", stamp(at(20.0))),
     ]);
     let rows = |t: &str| live.store.query_rows(t, &veredas_portal::store::RowsQuery { limit: 1, ..Default::default() }).map(|p| p.total).unwrap_or(0);
-    assert!(wait(Duration::from_secs(20), || rows("sorts") == 3 && rows("positions") == 3 && rows("keyed") == 2), "the lines are stored");
+    assert!(wait(Duration::from_secs(20), || rows("sorts") == 3 && rows("positions") == 4 && rows("keyed") == 2 && rows("modes") == 1), "the lines are stored");
     let to = at(26.0);
     let get_d = || get(addr, &format!("/s/loop/dashboard/0?to={to}")).1;
-    assert!(wait(Duration::from_secs(20), || { let d = get_d(); panel(&d, 2)["state"] == json!("warn") && panel(&d, 5)["text"] == json!("20") }), "{}", get_d());
+    assert!(wait(Duration::from_secs(20), || { let d = get_d(); panel(&d, 2)["state"] == json!("warn") && panel(&d, 5)["text"] == json!("20") && panel(&d, 18)["state"] == json!("warn") && panel(&d, 19)["state"] == json!("warn") }), "{}", get_d());
     let d = get_d();
 
+    // Every panel computed but the three said in their places (two refusals, one panic).
+    for (i, p) in d["panels"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(p["error"].is_null(), ![12, 13, 22].contains(&i), "panel {i}: {p}");
+    }
     // A rule written over the object's own series (its source alone, or its source and series) is
     // the object's own on a timeline: normal to the slow sort, slow from it to the window's end.
     let tl = panel(&d, 0);
@@ -1649,6 +1774,92 @@ fn every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says() {
     let per: Vec<(Value, Value)> = doubled["rows"].as_array().unwrap().iter().map(|r| (r["key"].clone(), r["n"].clone())).collect();
     assert_eq!((per, doubled["read"].clone(), doubled["total"].clone(), doubled["capped"].clone()), (vec![(json!("1"), json!(2)), (json!("2"), json!(1))], json!(3), json!(6), json!(false)));
     assert_eq!(d["panels"][13]["error"], json!("`fanned` has no column `nokey` (its columns: index_ms, source, seq, outlet, travel, zone)"));
+
+    // Every state a rule names and every comparison a rule writes, each said on a tile: its
+    // sub-line the rule that named the state (the feed's pick: the band's second), written here
+    // from the binding's own rule, in the object's unit, or over another series (keyed or not)
+    // that series named and its comparison bare. The crate's enums are matched in full, so a
+    // state or a comparison added there fails here until a tile says it.
+    use veredas_supervisao::binding::{PanelKind, Rule};
+    use veredas_supervisao::state::{Comparand, Compare, StateClass};
+    let picked: BTreeMap<usize, usize> = [(1, 1), (2, 0), (15, 0), (16, 0), (17, 0), (18, 0), (19, 0)].into_iter().collect();
+    let (mut states, mut comparisons) = (BTreeSet::new(), BTreeSet::new());
+    for (i, p) in binding.dashboards[0].panels.iter().enumerate() {
+        let PanelKind::Value { object, .. } = &p.kind else { continue };
+        let o = &binding.objects[*object];
+        let tile = panel(&d, i);
+        if tile["state"] == json!("normal") || tile["state"] == json!("stale") {
+            assert!(!picked.contains_key(&i), "panel {i}: {tile}");
+            continue;
+        }
+        let r: &Rule = &o.rules[picked[&i]];
+        let other = r.series.as_ref().filter(|s| **s != o.value);
+        let n = |x: f64| if other.is_none() && !o.unit.is_empty() { format!("{x} {}", o.unit) } else { format!("{x}") };
+        let (kind, cmp) = match &r.compare {
+            Compare::Equals(Comparand::Num(x)) => ("equals a number", format!("equals {}", n(*x))),
+            Compare::Equals(Comparand::Text(t)) => ("equals a word", format!("is {t}")),
+            Compare::Above(x) => ("above", format!("above {}", n(*x))),
+            Compare::Below(x) => ("below", format!("below {}", n(*x))),
+            Compare::AtLeast(x) => ("at least", format!("at least {}", n(*x))),
+            Compare::AtMost(x) => ("at most", format!("at most {}", n(*x))),
+        };
+        let said = match other {
+            Some(s) => format!("{} · {}{} {cmp}", s.source, s.series, s.key.as_ref().map(|k| format!(" · {k}")).unwrap_or_default()),
+            None => cmp,
+        };
+        assert_eq!((tile["state"].clone(), tile["sub"].clone()), (json!(r.class.name()), json!(said)), "panel {i}");
+        states.insert(r.class.name());
+        comparisons.insert(kind);
+    }
+    let ruled: BTreeSet<&str> = every_state().into_iter().filter(|s| StateClass::of_rule(s).is_some()).collect();
+    assert_eq!(states, ruled, "every state a rule names, said on a tile");
+    assert_eq!(comparisons, ["above", "at least", "at most", "below", "equals a number", "equals a word"].into_iter().collect(), "every comparison, said on a tile");
+    // The state holding at a window's start read from the object's own key: A1's timeline over the
+    // last quarter hour opens on A1's 20 (normal), not on B2's 60 stored after it (far).
+    let runs: Vec<(Value, Value, Value)> = panel(&d, 20)["rows"][0]["segments"].as_array().unwrap().iter().map(|s| (s["from"].clone(), s["state"].clone(), s["word"].clone())).collect();
+    assert_eq!(runs, [(json!(at(11.0)), json!("normal"), json!("ok"))], "the quarter hour of A1 alone");
+    // Every date and time type the engine lists (its own catalog, less the interval: a span, which
+    // portal writes as text), each written as the store's clock reads its value: a type the engine
+    // adds fails here until the view holds it. The engine's time of day in nanoseconds is the
+    // limit: its driver cannot read it, and its panel says so in its own place.
+    let listed = live.store.query_rows("datetimes", &veredas_portal::store::RowsQuery { limit: 100, ..Default::default() }).unwrap();
+    let engine: BTreeSet<String> = listed.rows.iter().map(|r| r[0].as_str().unwrap().to_string()).filter(|t| t != "INTERVAL").collect();
+    let held = live.store.query_rows("clocks", &veredas_portal::store::RowsQuery { limit: 1, ..Default::default() }).unwrap();
+    let types: Vec<String> = held.columns.iter().skip(1).map(|c| c.data_type.clone()).collect();
+    assert!(engine.contains("TIME_NS"), "the limit is the engine's own type: {engine:?}");
+    assert_eq!(types.iter().cloned().chain(["TIME_NS".to_string()]).collect::<BTreeSet<_>>(), engine, "the views hold every date and time type the engine lists");
+    let read_as = |t: &str| match t {
+        "TIMESTAMP_S" | "TIMESTAMP_MS" | "TIMESTAMP" | "TIMESTAMP_NS" | "TIMESTAMP WITH TIME ZONE" => "%Y-%m-%d %H:%M:%S",
+        "DATE" => "%Y-%m-%d",
+        "TIME" | "TIME WITH TIME ZONE" => "%H:%M:%S",
+        other => panic!("{other}: a type this test has no clock for"),
+    };
+    let clocks = panel(&d, 21);
+    assert_eq!(clocks["rows"].as_array().unwrap().len(), 3);
+    for row in clocks["rows"].as_array().unwrap() {
+        for (c, t) in row.as_array().unwrap().iter().skip(1).zip(&types) {
+            assert_eq!(c["text"], json!(clock(c["value"].as_i64().unwrap(), read_as(t))), "{t}: {row}");
+        }
+    }
+    let panicked = d["panels"][22]["error"].as_str().unwrap();
+    assert!(panicked.starts_with("the panel could not be computed: "), "{panicked}");
+    // The store answers again after it: the dashboard read once more, the same.
+    let again = get_d();
+    assert_eq!((again["panels"][21].clone(), again["panels"][22]["error"].clone()), (d["panels"][21].clone(), d["panels"][22]["error"].clone()));
+    // Integers a double cannot hold (past 2^53), as keys and as cells, in their own digits: 2^53 + 1
+    // and -(2^53 + 3) as keys; the largest unsigned less the outlet, to two places.
+    let keys: BTreeMap<String, Value> = panel(&d, 23)["rows"].as_array().unwrap().iter().map(|r| (r["key"].as_str().unwrap().to_string(), r["n"].clone())).collect();
+    assert_eq!(keys, [("-9007199254740995".to_string(), json!(1)), ("9007199254740993".to_string(), json!(2))].into_iter().collect());
+    let big: Vec<Vec<Value>> = panel(&d, 24)["rows"].as_array().unwrap().iter().map(|r| r.as_array().unwrap().iter().map(|c| c["text"].clone()).collect()).collect();
+    let want: Vec<Vec<Value>> = [["9007199254740993", "18446744073709551614.00"], ["-9007199254740995", "18446744073709551613.00"], ["9007199254740993", "18446744073709551614.00"]].iter().map(|r| r.iter().map(|t| json!(t)).collect()).collect();
+    assert_eq!(big, want);
+    // Capped is said only when the cap stopped the read with a row of the window left: the doubled
+    // view's six rows are three, read whole under a cap of three or four and not capped, capped
+    // under two; the sorts' three alike.
+    for (table, cap, read, capped) in [("doubled", 2, 2, true), ("doubled", 3, 3, false), ("doubled", 4, 3, false), ("sorts", 2, 2, true), ("sorts", 3, 3, false)] {
+        let c = veredas_supervisao::panel::cells(&live, table, "outlet", "travel", 60, 5, 5.0, to, 2, cap).unwrap();
+        assert_eq!((c["read"].clone(), c["capped"].clone()), (json!(read), json!(capped)), "{table} under {cap}");
+    }
     host.stop();
 }
 
