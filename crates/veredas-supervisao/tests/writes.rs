@@ -43,6 +43,11 @@ fn with_aux(mut ex: Example, bench: &Bench) -> Example {
     assert!(ex.binding.contains(&one), "{}", ex.binding);
     let two = format!("actions = [ {{ label = \"Release\", source = \"plc\", tag = \"ns={plc};s=release3\", value = \"7\" }}, {{ label = \"Hold\", source = \"aux\", tag = \"ns={};s=hold3\", value = \"3\" }} ]", aux.namespace);
     ex.binding = ex.binding.replacen(&one, &two, 1);
+    // Outlet 2, earlier in the file, offers a write of the same label as outlet 3's first, on
+    // another controller with another value: a page that looks an action up by its label anywhere
+    // in the binding posts this one for outlet 3's.
+    assert!(ex.binding.contains("id = \"outlet-2\"\n"), "{}", ex.binding);
+    ex.binding = ex.binding.replacen("id = \"outlet-2\"\n", &format!("id = \"outlet-2\"\nactions = [ {{ label = \"Release\", source = \"aux\", tag = \"ns={};s=hold3\", value = \"5\" }} ]\n", aux.namespace), 1);
     ex
 }
 
@@ -687,6 +692,33 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     let mut sorted = swept.to_vec();
     sorted.sort();
     assert_eq!(own_routes, sorted, "every route of supervisão's own swept");
+    // Nor is a route declared any other way: every method axum's `Router` has (its own source, the
+    // version cargo resolves) called anywhere in supervisão's sources, counted, against the calls
+    // reviewed here (the routes swept above, the two nests: portal's router under `/portal` and a
+    // session's own under its name, the one 404, the state); a `route_service`, a `merge`, a
+    // `nest_service` or a fallback service added is refused until it is reviewed and swept.
+    let meta: serde_json::Value = serde_json::from_slice(&std::process::Command::new(env!("CARGO")).args(["metadata", "--format-version", "1", "--manifest-path"]).arg(root.join("Cargo.toml")).output().unwrap().stdout).unwrap();
+    let axum_dir = meta["packages"].as_array().unwrap().iter().filter(|p| p["name"] == "axum").map(|p| std::path::PathBuf::from(p["manifest_path"].as_str().unwrap()).parent().unwrap().to_path_buf()).collect::<Vec<_>>();
+    assert_eq!(axum_dir.len(), 1, "one axum");
+    let router_src = std::fs::read_to_string(axum_dir[0].join("src/routing/mod.rs")).unwrap();
+    let router_methods: BTreeSet<String> = public_members(&lex(&router_src));
+    assert!(["route", "route_service", "nest", "nest_service", "merge", "fallback", "fallback_service", "method_not_allowed_fallback"].iter().all(|m| router_methods.contains(*m)), "axum's Router read: {router_methods:?}");
+    let mut calls: BTreeMap<String, usize> = BTreeMap::new();
+    let mut nests: Vec<String> = Vec::new();
+    for (_, text) in &sources {
+        let toks = lex(text);
+        for i in 0..toks.len().saturating_sub(2) {
+            if toks[i].is(".") && router_methods.contains(&toks[i + 1].text) && (toks[i + 2].is("(") || toks[i + 2].is("::")) {
+                *calls.entry(toks[i + 1].text.clone()).or_default() += 1;
+                if toks[i + 1].text == "nest" {
+                    nests.push(toks[i + 3..(i + 8).min(toks.len())].iter().map(|t| t.text.as_str()).collect::<Vec<_>>().join(" "));
+                }
+            }
+        }
+    }
+    let reviewed: BTreeMap<String, usize> = [("fallback", 1), ("nest", 2), ("route", own_routes.len() - 2 + written), ("with_state", 1)].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+    assert_eq!(calls, reviewed, "every call of axum's Router methods in supervisão's sources, reviewed");
+    assert_eq!(nests, ["\"/portal\" , veredas_portal :: serve", "& base , session )"], "portal's router under `/portal`, a session's own under its name");
     for p in swept {
         for method in ["POST", "PUT", "DELETE", "PATCH"] {
             let (status, _, _) = http(addr, method, p, Some(&body.to_string()));
@@ -755,6 +787,57 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     // Every request the page made for a write went to portal's route under the session.
     let posts = page.eval(r#"performance.getEntriesByType("resource").filter((e) => e.name.includes("/write")).map((e) => new URL(e.name).pathname)"#);
     assert_eq!(posts, json!(["/s/loop/portal/api/opc/write", "/s/loop/portal/api/opc/write", "/s/loop/portal/api/opc/write"]), "the refused post, the release and the hold");
+    // Every object the layout draws, selected in turn, armed: its buttons its own actions in their
+    // order (none for an object with none); each pressed and confirmed, the question its own, the
+    // body posted its own, its value landing at its own tag (outlet 2's "Release" at the aux
+    // controller's hold, outlet 3's at the release).
+    host.session("loop").unwrap().set_writes_armed(true);
+    page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(10));
+    let (_, b) = get(addr, "/s/loop/binding");
+    let drawn: Vec<serde_json::Value> = b["objects"].as_array().unwrap().iter().filter(|o| page.eval(&format!("document.getElementById({})?.classList.contains('sv-obj') ?? false", serde_json::to_string(o["id"].as_str().unwrap()).unwrap())) == json!(true)).cloned().collect();
+    let (mut offering, mut silent) = (0, 0);
+    for o in &drawn {
+        let id = serde_json::to_string(o["id"].as_str().unwrap()).unwrap();
+        let own = o["actions"].as_array().unwrap();
+        page.eval(&format!("document.getElementById({id}).dispatchEvent(new MouseEvent('click', {{ bubbles: true }}))"));
+        page.wait_for(&format!("document.querySelector('.side .sel-title')?.dataset.id === {id} || null"), Duration::from_secs(10));
+        let labels: Vec<serde_json::Value> = own.iter().map(|a| a["label"].clone()).collect();
+        assert_eq!(page.eval(r#"[...document.querySelectorAll(".side .actions button")].map((b) => b.dataset.action)"#), json!(labels), "{id}: its own actions");
+        if own.is_empty() {
+            silent += 1;
+        } else {
+            offering += 1;
+        }
+        for (i, a) in own.iter().enumerate() {
+            bench.server("plc").unwrap().set("release3", 0);
+            bench.server("aux").unwrap().set("hold3", 0);
+            assert!(wait(Duration::from_secs(10), || release(&bench) == "0" && hold(&bench) == "0"));
+            let before = page.posts().len();
+            page.eval("window.asked = []; window.answer = true; true");
+            page.wait_for(&format!("(() => {{ const b = document.querySelectorAll('.side .actions button')[{i}]; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(10));
+            page.eval(&format!("document.querySelector('.side .write-note').textContent = ''; document.querySelectorAll('.side .actions button')[{i}].click(); true"));
+            let label = a["label"].as_str().unwrap();
+            page.wait_for(&format!("document.querySelector('.side .write-note').textContent.startsWith({}) || null", serde_json::to_string(&format!("{label}: written")).unwrap()), Duration::from_secs(10));
+            let (source, tag, value) = (a["source"].as_str().unwrap(), a["tag"].as_str().unwrap(), a["value"].as_str().unwrap());
+            assert_eq!(page.eval("window.asked"), json!([format!("Write {value} to {tag} of {source}?")]), "{id} {label}: the question its own");
+            let sent = page.posts();
+            assert_eq!(sent.len(), before + 1, "{id} {label}: one post");
+            let (url, body) = sent.last().unwrap();
+            assert_eq!((url.clone(), serde_json::from_str::<serde_json::Value>(body).unwrap()), (format!("http://{addr}/s/loop/portal/api/opc/write"), json!({ "source": source, "tag": tag, "value": value })), "{id} {label}: the body its own");
+            let landed = || if source == "plc" { release(&bench) == value && hold(&bench) == "0" } else { hold(&bench) == value && release(&bench) == "0" };
+            assert!(wait(Duration::from_secs(10), landed), "{id} {label}: its value at its own tag alone: release {} hold {}", release(&bench), hold(&bench));
+        }
+    }
+    assert!(offering >= 2 && silent >= 1, "objects offering writes ({offering}) and offering none ({silent})");
+    // A post that never left (the network refused it) is said, and the button is the switch's again.
+    page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+    page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(10));
+    page.eval(r#"(() => { const f = window.fetch; window.fetch = (...a) => { if (String(a[0]).includes("/api/opc/write") && !window.__failedOnce) { window.__failedOnce = true; return Promise.reject(new TypeError("Failed to fetch")); } return f(...a); }; document.querySelector(".side .write-note").textContent = ""; document.querySelector('.side .actions button[data-action="Release"]').click(); return true; })()"#);
+    let note = page.wait_for(r#"document.querySelector(".side .write-note").textContent || null"#, Duration::from_secs(10));
+    assert_eq!(note, json!("Release: not sent, TypeError: Failed to fetch"));
+    let freed = page.wait_for(&format!("(() => {{ const b = document.querySelector('.side .actions button[data-action=\"Release\"]'); return b && !b.disabled && b.dataset.busy === undefined ? true : null; }})()"), Duration::from_secs(10));
+    assert_eq!(freed, json!(true), "the button the switch's again");
+    host.session("loop").unwrap().set_writes_armed(false);
     drop(page);
     host.stop();
 
@@ -770,5 +853,42 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     let (status, v) = post(addr, "/s/loop/portal/api/opc/write", &json!({ "source": "plc", "tag": format!("ns={ns};s=release3"), "value": "1" }));
     assert_eq!((status, v["ok"].clone()), (200, json!(true)), "{v}");
     assert!(wait(Duration::from_secs(10), || release(&bench) == "1"));
+    host.stop();
+
+    // Two sessions on one host, hall armed and loop not (hall drawn with the loop's own drawing, so
+    // its page offers outlet 3's write too): each page posts its own session's route alone, hall's
+    // write landing at hall's plant alone, loop's refused with its plant untouched.
+    let dir = tempfile::tempdir().unwrap();
+    let (loop_bench, hall_bench) = (plant(&dir.path().join("bench-a")), plant(&dir.path().join("bench-b")));
+    let path = two_plants(dir.path(), &loop_bench, &hall_bench);
+    let hall_binding = dir.path().join("hall/binding.toml");
+    let text = std::fs::read_to_string(&hall_binding).unwrap();
+    assert!(text.contains("title = \"The hall\"\n"));
+    std::fs::write(&hall_binding, text.replacen("title = \"The hall\"\n", "title = \"The hall\"\nlayout = \"layout.svg\"\n", 1)).unwrap();
+    std::fs::copy(dir.path().join("loop/layout.svg"), dir.path().join("hall/layout.svg")).unwrap();
+    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let addr = host.addr();
+    host.session("hall").unwrap().set_writes_armed(true);
+    assert!(wait(Duration::from_secs(20), || ["loop", "hall"].iter().all(|s| get(addr, &format!("/s/{s}/objects.json")).1["session"]["health"]["plc"]["state"] == json!("live")) && get(addr, "/s/hall/objects.json").1["session"]["writes_armed"] == json!(true)));
+    for (name, plant_of, armed) in [("loop", &loop_bench, false), ("hall", &hall_bench, true)] {
+        let mut page = Browser::watched(&format!("http://{addr}/s/{name}/"));
+        page.wait_for(r#"document.getElementById("outlet-3") !== null && document.getElementById("outlet-3").classList.contains("sv-obj")"#, Duration::from_secs(20));
+        page.eval(r#"(() => { window.confirm = () => true; document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); return true; })()"#);
+        page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && b.gate.endsWith({}) ? true : null; }})()", if armed { "'is on.'" } else { "'is off.'" }), Duration::from_secs(20));
+        page.eval(r#"(() => { const b = document.querySelector('.side .actions button[data-action="Release"]'); b.disabled = false; b.click(); return true; })()"#);
+        let note = page.wait_for(r#"document.querySelector(".side .write-note").textContent || null"#, Duration::from_secs(10));
+        if armed {
+            assert!(note.as_str().unwrap().starts_with("Release: written"), "{name}: {note}");
+            assert!(wait(Duration::from_secs(10), || release(plant_of) == "1"), "{name}'s plant");
+        } else {
+            assert_eq!(note, json!("Release: refused, 403: writes are turned off for this project"), "{name}");
+            std::thread::sleep(Duration::from_millis(500));
+            assert_eq!(release(plant_of), "0", "{name}'s plant untouched");
+        }
+        let urls: Vec<String> = page.posts().into_iter().map(|(u, _)| u).collect();
+        assert_eq!(urls, [format!("http://{addr}/s/{name}/portal/api/opc/write")], "{name}'s page posts its own session's route");
+        drop(page);
+    }
+    assert_eq!(release(&loop_bench), "0", "hall's write reached hall's plant alone");
     host.stop();
 }

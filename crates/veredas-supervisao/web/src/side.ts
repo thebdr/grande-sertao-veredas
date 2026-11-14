@@ -97,9 +97,16 @@ export class Side {
       if (!confirm(`Write ${a.value} to ${a.tag} of ${a.source}?`)) return;
       b.dataset.busy = "1";
       b.disabled = true;
-      const r = await postWrite(this.name, a);
-      if (this.sel) this.sel.note.textContent = r.ok ? `${a.label}: written (${r.text})` : `${a.label}: refused, ${r.text}`;
-      delete b.dataset.busy;
+      // Its answer said, or why it was not sent; the button freed either way, for the switch to
+      // gate again at the next status.
+      try {
+        const r = await postWrite(this.name, a);
+        if (this.sel) this.sel.note.textContent = r.ok ? `${a.label}: written (${r.text})` : `${a.label}: refused, ${r.text}`;
+      } catch (e) {
+        if (this.sel) this.sel.note.textContent = `${a.label}: not sent, ${String(e)}`;
+      } finally {
+        delete b.dataset.busy;
+      }
     };
     return b;
   }
