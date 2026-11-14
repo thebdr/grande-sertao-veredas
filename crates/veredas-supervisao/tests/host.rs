@@ -5,6 +5,7 @@
 
 mod common;
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::{Command, Stdio};
@@ -106,6 +107,39 @@ fn answered(addr: SocketAddr, method: &str, path: &str) -> (u16, Option<Value>) 
     (status, serde_json::from_str(&body).ok())
 }
 
+/// The names a session's object stream sends, driven through the stream itself rather than read
+/// from its source: its snapshot on connect, a fresh snapshot to a client that fell behind (two
+/// events sent where it holds one), and every event the feed publishes passed on by its own name;
+/// together the names the source reading finds.
+#[test]
+fn a_stream_sends_a_snapshot_on_connect_and_again_once_it_falls_behind() {
+    use tokio_stream::StreamExt;
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let got = rt.block_on(async {
+        let (tx, rx) = tokio::sync::broadcast::channel::<(&'static str, std::sync::Arc<str>)>(1);
+        tx.send(("objects", "first".into())).unwrap();
+        tx.send(("session", "second".into())).unwrap();
+        let mut s = Box::pin(veredas_supervisao::feed::stream(rx, || "the snapshot".to_string()));
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            got.push(tokio::time::timeout(Duration::from_secs(5), s.next()).await.unwrap().unwrap());
+        }
+        tx.send(("objects", "third".into())).unwrap();
+        got.push(tokio::time::timeout(Duration::from_secs(5), s.next()).await.unwrap().unwrap());
+        got
+    });
+    let got: Vec<(&str, &str)> = got.iter().map(|(n, d)| (n.as_str(), d.as_str())).collect();
+    assert_eq!(got, [("snapshot", "the snapshot"), ("snapshot", "the snapshot"), ("session", "second"), ("objects", "third")]);
+    let feed = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/feed.rs")).unwrap();
+    let mut read: Vec<String> = feed.match_indices("((\"").map(|(i, _)| feed[i + 3..].split('"').next().unwrap().to_string()).collect();
+    read.sort();
+    read.dedup();
+    let mut sent: Vec<&str> = got.iter().map(|(n, _)| *n).collect();
+    sent.sort();
+    sent.dedup();
+    assert_eq!(sent, read, "the names the stream sends, the names the source reading finds");
+}
+
 #[test]
 fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     let dir = tempfile::tempdir().unwrap();
@@ -115,10 +149,11 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     let path = two_plants(dir.path(), &a, &b);
     // An object reading one key, so the view's `key` carries a value; its rules and a text
     // object's give the view every comparison a rule takes that the example leaves out (above,
-    // at most, a text's equals), its project a text series for it.
+    // at most, a text's equals), a rule over another series with the key it takes and one without,
+    // the disabled state and a value shown, its project a text series for it.
     let binding = dir.path().join("loop/binding.toml");
     let text = std::fs::read_to_string(&binding).unwrap();
-    std::fs::write(&binding, text.replacen("\n[[dashboard]]", "\n[[object]]\nid = \"keyed\"\nlabel = \"Keyed\"\nvalue = { source = \"plc\", series = \"fill1\", key = \"A1\" }\nstates = [ { above = 90.5, state = \"near\" }, { at_most = 10, state = \"warn\", word = \"low\" } ]\n\n[[object]]\nid = \"note\"\nlabel = \"Note\"\nvalue = { source = \"sorter\", series = \"word\" }\nstates = [ { equals = \"jam\", state = \"alarm\" } ]\n\n[[dashboard]]", 1)).unwrap();
+    std::fs::write(&binding, text.replacen("\n[[dashboard]]", "\n[[object]]\nid = \"keyed\"\nlabel = \"Keyed\"\nvalue = { source = \"plc\", series = \"fill1\", key = \"A1\" }\nstates = [ { above = 90.5, state = \"near\" }, { at_most = 10, state = \"warn\", word = \"low\" }, { above = 1, source = \"plc\", series = \"fill2\", state = \"warn\", word = \"f2\" }, { below = -5, state = \"disabled\" } ]\n\n[[object]]\nid = \"note\"\nlabel = \"Note\"\nvalue = { source = \"sorter\", series = \"word\" }\nshow = \"value\"\nstates = [ { equals = \"jam\", state = \"alarm\" }, { below = 0.5, source = \"plc\", series = \"speed\", state = \"warn\", word = \"slow\" } ]\n\n[[dashboard]]", 1)).unwrap();
     let project = dir.path().join("loop/project.toml");
     let text = std::fs::read_to_string(&project).unwrap();
     std::fs::write(&project, format!("{text}\n[[rule]]\nname = \"notes\"\npattern = 'NOTE (?P<word>\\w+)'\nscope = \"sorter\"\ntypes = {{ word = \"text\" }}\n")).unwrap();
@@ -215,16 +250,29 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     // every one of them met in a view.
     let every_compare = ["equals a number", "equals a text", "above", "below", "at least", "at most"];
     let mut compares_seen = std::collections::BTreeSet::new();
+    let (mut series_seen, mut shows_seen, mut states_seen) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
     for (session, at) in [("loop", 0), ("hall", 1)] {
         let (_, view) = get(addr, &format!("/s/{session}/binding"));
         let objects = &want.sessions[at].binding.objects;
+        // The words the view spells (a way of showing, a rule's state) are the ones the binding file
+        // writes, read from the file itself (`state` where it writes no `show`), never from the
+        // names the code gives them.
+        let written: toml::Table = toml::from_str(&std::fs::read_to_string(dir.path().join(format!("{session}/binding.toml"))).unwrap()).unwrap();
+        let written: BTreeMap<String, (String, Vec<String>)> = written["object"].as_array().unwrap().iter().map(|o| {
+            let show = o.get("show").and_then(|s| s.as_str()).unwrap_or("state").to_string();
+            let states = o.get("states").and_then(|s| s.as_array()).map(|a| a.iter().map(|r| r["state"].as_str().unwrap().to_string()).collect()).unwrap_or_default();
+            (o["id"].as_str().unwrap().to_string(), (show, states))
+        }).collect();
         let got = view["objects"].as_array().unwrap();
         assert_eq!(got.len(), objects.len(), "{session}");
         for (o, g) in objects.iter().zip(got) {
+            let (show, states) = &written[&o.id];
+            shows_seen.insert(show.clone());
+            states_seen.extend(states.iter().cloned());
             let expected = json!({
-                "id": o.id, "label": o.label, "unit": o.unit, "show": o.show.name(), "range": [o.range.0, o.range.1], "path": o.path,
+                "id": o.id, "label": o.label, "unit": o.unit, "show": show, "range": [o.range.0, o.range.1], "path": o.path,
                 "source": o.value.source, "series": o.value.series, "key": o.value.key, "normal": o.normal,
-                "rules": o.rules.iter().map(|r| json!({ "state": r.class.name(), "word": r.word })).collect::<Vec<_>>(),
+                "rules": o.rules.iter().zip(states).map(|(r, s)| json!({ "state": s, "word": r.word })).collect::<Vec<_>>(),
                 "actions": o.actions.iter().map(|a| json!({ "label": a.label, "source": a.source, "tag": a.tag, "value": a.value })).collect::<Vec<_>>(),
             });
             let mut g = g.clone();
@@ -244,6 +292,11 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
                 };
                 compares_seen.insert(kind);
                 // Over another series than the object's own: that series named, its comparison bare.
+                series_seen.insert(match &rule.series {
+                    Some(s) if *s != o.value && s.key.is_some() => "another series, with its key",
+                    Some(s) if *s != o.value => "another series",
+                    _ => "its own series",
+                });
                 let when = match &rule.series {
                     Some(s) if *s != o.value => {
                         let bare = when.strip_suffix(&format!(" {}", o.unit)).filter(|_| !o.unit.is_empty()).unwrap_or(&when).to_string();
@@ -258,6 +311,21 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
         }
     }
     assert_eq!(compares_seen.into_iter().collect::<Vec<_>>(), { let mut e = every_compare.to_vec(); e.sort(); e }, "every comparison a rule takes, in a view");
+    assert_eq!(series_seen.into_iter().collect::<Vec<_>>(), ["another series", "another series, with its key", "its own series"], "every series a rule reads, in a view");
+    // Every way of showing and every state a rule names, as the reader lists them refusing another,
+    // met in a view.
+    let reader_list = |from: &str, to: &str| -> std::collections::BTreeSet<String> {
+        let d = tempfile::tempdir().unwrap();
+        let mut ex = example();
+        assert!(ex.binding.contains(from), "{from}");
+        ex.binding = ex.binding.replacen(from, to, 1);
+        let err = config::load_file(&write_example(d.path(), &ex)).err().expect("refused").to_string();
+        let at = err.find("none of ").unwrap_or_else(|| panic!("{err}"));
+        err[at..].split('`').skip(1).step_by(2).map(String::from).collect()
+    };
+    assert_eq!(shows_seen, reader_list("show = \"level\"", "show = \"nope\""), "every way of showing, in a view");
+    assert_eq!(states_seen, reader_list("state = \"warn\"", "state = \"nope\""), "every state a rule names, in a view");
+    assert_eq!(v["objects"][9]["show"], json!("value"));
     assert_eq!(v["objects"].as_array().unwrap().len(), 10);
     // The class has values to see: a marker's path and an object's key among them.
     assert!(v["objects"].as_array().unwrap().iter().any(|o| o["path"] == json!("loop")) && v["objects"].as_array().unwrap().iter().any(|o| o["key"] == json!("A1")), "{v}");
