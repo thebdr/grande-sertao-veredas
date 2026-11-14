@@ -40,6 +40,9 @@ export class Side {
   private listKey = "";
   private sel: Selected | null = null;
   private inState = new Map<string, { state: string; at: number }>();
+  /// The last answer to a press, by the object pressed: said under it whenever it is selected, never
+  /// under another one selected while the post was out.
+  private notes = new Map<string, string>();
 
   constructor(
     private name: string,
@@ -69,9 +72,9 @@ export class Side {
       value: h("dd", { class: "mono" }),
       since: h("dd", { class: "mono" }),
       spark: h("div", { class: "spark-wrap" }),
-      buttons: def.actions.map((a) => this.actionButton(a)),
+      buttons: def.actions.map((a) => this.actionButton(def.id, a)),
       gate: h("p", { class: "gate-note" }),
-      note: h("p", { class: "write-note mono" }),
+      note: h("p", { class: "write-note mono" }, this.notes.get(def.id) ?? ""),
       sparkAt: 0,
     };
     this.sel = s;
@@ -91,7 +94,7 @@ export class Side {
     this.top.replaceChildren(...parts);
   }
 
-  private actionButton(a: Action): HTMLButtonElement {
+  private actionButton(id: string, a: Action): HTMLButtonElement {
     const b = h("button", { class: "gated", disabled: true, "data-action": a.label }, a.label) as HTMLButtonElement;
     b.onclick = async () => {
       if (!confirm(`Write ${a.value} to ${a.tag} of ${a.source}?`)) return;
@@ -99,11 +102,15 @@ export class Side {
       b.disabled = true;
       // Its answer said, or why it was not sent; the button freed either way, for the switch to
       // gate again at the next status.
+      const say = (text: string) => {
+        this.notes.set(id, text);
+        if (this.sel && this.sel.def.id === id) this.sel.note.textContent = text;
+      };
       try {
         const r = await postWrite(this.name, a);
-        if (this.sel) this.sel.note.textContent = r.ok ? `${a.label}: written (${r.text})` : `${a.label}: refused, ${r.text}`;
+        say(r.ok ? `${a.label}: written (${r.text})` : `${a.label}: refused, ${r.text}`);
       } catch (e) {
-        if (this.sel) this.sel.note.textContent = `${a.label}: not sent, ${String(e)}`;
+        say(`${a.label}: not sent, ${String(e)}`);
       } finally {
         delete b.dataset.busy;
       }
