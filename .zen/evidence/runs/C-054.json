@@ -12,20 +12,20 @@
     "component"
   ],
   "exitCode": 0,
-  "outputSha": "ab0946784b81163e7004342021a7965482d567b5706e9aa5e7b1798b9bf73b02",
-  "outputTail": "test the_plant_s_stack_reaches_supervisao_through_portal_alone ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.73s\n\n\nrunning 2 tests\ntest every_answer_portal_gives_a_write_is_said_as_it_means ... ok\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.58s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.22s\n     Running tests\\component.rs (target\\debug\\deps\\component-3e5a68c69a6a67d6.exe)\n     Running tests\\writes.rs (target\\debug\\deps\\writes-6ce7c1b2f8355b43.exe)",
-  "ranAt": "2026-11-15T01:20:32.402Z",
-  "headCommit": "f0cf9ca95bb9eda3e18d0b3444ef2699bab736f8",
+  "outputSha": "3509a5f7e50fa16f4dd40b9cbf0de620a33780b8289b0269b7b7f1ee9d8d3a0e",
+  "outputTail": "\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.47s\n\n\nrunning 3 tests\ntest a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are ... ok\ntest every_answer_portal_gives_a_write_is_said_as_it_means ... ok\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.46s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.54s\n     Running tests\\component.rs (target\\debug\\deps\\component-3e5a68c69a6a67d6.exe)\n     Running tests\\writes.rs (target\\debug\\deps\\writes-6ce7c1b2f8355b43.exe)",
+  "ranAt": "2026-11-15T12:50:37.531Z",
+  "headCommit": "8e4f28599c6d4f034cc73697b2714e715047f694",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/writes.rs",
       "file": "crates/veredas-supervisao/tests/writes.rs",
-      "fileSha": "33651a565708bf30c28947d21cde1ff83268de1e3fb7fb57d4a4ed027f4b093e"
+      "fileSha": "736c542a3a4961b1c8864b9d65bbcf5906d035363ca86453dd1023c045562542"
     },
     {
       "name": "crates/veredas-supervisao/tests/component.rs",
       "file": "crates/veredas-supervisao/tests/component.rs",
-      "fileSha": "7a3520fb103bc6652f4498f6c3b896444bf99f44a5f3573668e8b7449f35729b"
+      "fileSha": "128e0f2d7b6c88810ee03f3aca89fca0de84ab12eb41ee27e8a916d0533e6e96"
     }
   ]
 }
