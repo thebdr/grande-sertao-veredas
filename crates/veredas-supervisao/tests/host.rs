@@ -97,15 +97,26 @@ fn routes_in(text: &str, file: &str) -> Vec<(String, String)> {
 
 /// A route's status and, unless it is a stream, its body read as JSON: a stream (an object feed,
 /// portal's events) answered by its head alone, a post sent an empty object.
+/// (Every answer the host gives, a stream's head among them, a 404 and a 405 too, marked `nosniff`.)
 fn answered(addr: SocketAddr, method: &str, path: &str) -> (u16, Option<Value>) {
     if method == "GET" && (path.ends_with("/events") || path.ends_with("/objects")) {
         let sse = Sse::open(addr, path);
         if sse.status != 404 {
+            assert!(sse.headers.contains("x-content-type-options: nosniff"), "{method} {path}: {}", sse.headers);
             return (sse.status, None);
         }
     }
-    let (status, _, body) = http(addr, method, path, (method == "POST").then_some("{}"));
+    let (status, head, body) = http(addr, method, path, (method == "POST").then_some("{}"));
+    assert!(head.contains("x-content-type-options: nosniff"), "{method} {path}: {head}");
     (status, serde_json::from_str(&body).ok())
+}
+
+/// An answer's head as the host gives it (a stream's by its head alone), in lower case.
+fn head_of(addr: SocketAddr, method: &str, path: &str) -> String {
+    if method == "GET" && path.ends_with("/events") {
+        return Sse::open(addr, path).headers;
+    }
+    http(addr, method, path, (method == "POST").then_some("{}")).1
 }
 
 /// The names a session's object stream sends, driven through the stream itself rather than read
@@ -163,7 +174,7 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     // the disabled state and a value shown, its project a text series for it.
     let binding = dir.path().join("loop/binding.toml");
     let text = std::fs::read_to_string(&binding).unwrap();
-    std::fs::write(&binding, text.replacen("\n[[dashboard]]", "\n[[object]]\nid = \"keyed\"\nlabel = \"Keyed\"\nvalue = { source = \"plc\", series = \"fill1\", key = \"A1\" }\nunit = \"%\"\nstates = [ { equals = 42, state = \"near\", word = \"forty-two\" }, { below = 3, source = \"plc\", state = \"warn\", word = \"own\" }, { above = 90.5, state = \"near\" }, { at_most = 10, state = \"warn\", word = \"low\" }, { above = 1, source = \"plc\", series = \"fill2\", state = \"warn\", word = \"f2\" }, { above = 0.125, source = \"plc\", series = \"fill2\", key = \"B7\", state = \"near\", word = \"b7\" }, { below = -5, state = \"disabled\" } ]\n\n[[object]]\nid = \"note\"\nlabel = \"Note\"\nvalue = { source = \"sorter\", series = \"word\" }\nshow = \"value\"\nunit = \"pcs\"\nstates = [ { equals = \"jam\", state = \"alarm\" }, { below = 0.5, source = \"plc\", series = \"speed\", state = \"warn\", word = \"slow\" } ]\n\n[[dashboard]]", 1)).unwrap();
+    std::fs::write(&binding, text.replacen("\n[[dashboard]]", "\n[[object]]\nid = \"keyed\"\nlabel = \"Keyed\"\nvalue = { source = \"plc\", series = \"fill1\", key = \"A1\" }\nunit = \"%\"\nstates = [ { equals = 42, state = \"near\", word = \"forty-two\" }, { below = 3, source = \"plc\", state = \"warn\", word = \"own\" }, { above = 90.5, state = \"near\" }, { at_most = 10, state = \"warn\", word = \"low\" }, { above = 1, source = \"plc\", series = \"fill2\", state = \"warn\", word = \"f2\" }, { above = 0.0625, source = \"plc\", series = \"fill2\", key = \"B7\", state = \"near\", word = \"b7\" }, { below = -5, state = \"disabled\" } ]\n\n[[object]]\nid = \"note\"\nlabel = \"Note\"\nvalue = { source = \"sorter\", series = \"word\" }\nshow = \"value\"\nunit = \"pcs\"\nstates = [ { equals = \"jam\", state = \"alarm\" }, { below = 0.5, source = \"plc\", series = \"speed\", state = \"warn\", word = \"slow\" } ]\n\n[[dashboard]]", 1)).unwrap();
     let project = dir.path().join("loop/project.toml");
     let text = std::fs::read_to_string(&project).unwrap();
     std::fs::write(&project, format!("{text}\n[[rule]]\nname = \"notes\"\npattern = 'NOTE (?P<word>\\w+)'\nscope = \"sorter\"\ntypes = {{ word = \"text\" }}\n")).unwrap();
@@ -328,7 +339,7 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
     // Every comparison a rule takes (`Compare`, matched in full) and every form of another series
     // (a key of its own, not the object's; the object's key, inherited; no key) met on an object with
     // a unit, so a unit kept or dropped, or a key taken from the object, where the reference says
-    // otherwise shows; and a number of three places among them.
+    // otherwise shows; and a number of four places among them (written in full, never to three).
     let kind = |c: &Compare| match c {
         Compare::Equals(Comparand::Num(_)) => "equals a number",
         Compare::Equals(Comparand::Text(_)) => "equals a text",
@@ -354,7 +365,7 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
         })
         .collect();
     assert_eq!(forms.into_iter().collect::<Vec<_>>(), ["a key of its own", "no key", "the object's key"], "every form of another series on an object with a unit");
-    assert!(bound.iter().flat_map(|o| &o.rules).any(|r| matches!(r.compare, Compare::Above(x) if x == 0.125)), "a number of three places");
+    assert!(bound.iter().flat_map(|o| &o.rules).any(|r| matches!(r.compare, Compare::Above(x) if x == 0.0625)), "a number of four places, which the screen's three would write otherwise");
     // Every way of showing and every state a rule names, as the reader lists them refusing another,
     // met in a view.
     let reader_list = |from: &str, to: &str| -> std::collections::BTreeSet<String> {
@@ -429,6 +440,8 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
                 false
             });
             assert!(same, "{m} {nested} answers otherwise than portal's own: {last:?}");
+            // And marked `nosniff` by the host, a stream's head too (portal's own answer is not).
+            assert!(head_of(addr, m, &nested).contains("x-content-type-options: nosniff"), "{m} {nested}");
         }
     }
     // Portal's own routers let go of the sessions' state before the sessions stop.
@@ -859,6 +872,13 @@ const PAGE_KINDS: &str = r#"(() => {
     ["a WebSocket", "connect-src", "/socket", (o) => { try { new WebSocket(o.replace("http:", "ws:") + "/socket"); } catch {} }],
     ["a beacon", "connect-src", "/beacon", (o) => { try { navigator.sendBeacon(o + "/beacon", "x"); } catch {} }],
     ["a module imported", "script-src-elem", "/module.js", async (o) => { try { await import(o + "/module.js"); } catch {} }],
+    ["a picture in a filter", "img-src", "/feimage.png", (o) => { const f = document.createElementNS(svgNS, "filter"); f.id = "probe-filter"; const i = document.createElementNS(svgNS, "feImage"); i.setAttribute("href", o + "/feimage.png"); f.append(i); plant.append(f); shape("rect", "filter: url(#probe-filter)"); }],
+    ["a use of another document", "img-src", "/use.svg", (o) => { const e = document.createElementNS(svgNS, "use"); e.setAttribute("href", o + "/use.svg#u"); plant.append(e); }],
+    ["a paint in a presentation attribute", "img-src", "/attr-paint.svg", (o) => { const e = document.createElementNS(svgNS, "rect"); e.setAttribute("width", "4"); e.setAttribute("height", "4"); e.setAttribute("fill", `url(${o}/attr-paint.svg#p)`); plant.append(e); }],
+    ["a video", "media-src", "/video.mp4", (o) => { const e = document.createElement("video"); e.preload = "auto"; e.src = o + "/video.mp4"; document.body.append(e); }],
+    ["an audio", "media-src", "/audio.mp3", (o) => { const e = document.createElement("audio"); e.preload = "auto"; e.src = o + "/audio.mp3"; document.body.append(e); }],
+    ["a manifest", "manifest-src", "/manifest.json", (o) => { const e = document.createElement("link"); e.rel = "manifest"; e.href = o + "/manifest.json"; document.head.append(e); }],
+    ["a prefetch hint", "default-src", "/prefetch", (o) => { const e = document.createElement("link"); e.rel = "prefetch"; e.href = o + "/prefetch"; document.head.append(e); }],
   ];
   window.__probes = Object.fromEntries(kinds.map(([n, , , f]) => [n, f]));
   return kinds.map(([n, d, a]) => [n, d, a]);
@@ -886,6 +906,9 @@ const DRAWING_KINDS: &str = r#"(() => {
     ["a script linked", "/drawing.js", (o) => { const e = document.createElementNS(svgNS, "script"); e.setAttribute("href", o + "/drawing.js"); root.append(e); }],
     ["a handler", "inline", () => { const e = document.createElementNS(svgNS, "rect"); e.setAttribute("onclick", "window.__ran.push('handler')"); root.append(e); e.dispatchEvent(new MouseEvent("click")); }],
     ["a fetch", "/drawing-fetch", async (o) => { try { await fetch(o + "/drawing-fetch"); } catch {} }],
+    ["a picture in a filter", "/drawing-feimage.png", (o) => { const f = document.createElementNS(svgNS, "filter"); f.id = "probe-filter"; const i = document.createElementNS(svgNS, "feImage"); i.setAttribute("href", o + "/drawing-feimage.png"); f.append(i); root.append(f); shape("rect", "filter: url(#probe-filter)"); }],
+    ["a use of another document", "/drawing-use.svg", (o) => { const e = document.createElementNS(svgNS, "use"); e.setAttribute("href", o + "/drawing-use.svg#u"); root.append(e); }],
+    ["a paint in a presentation attribute", "/drawing-attr-paint.svg", (o) => { const e = document.createElementNS(svgNS, "rect"); e.setAttribute("width", "4"); e.setAttribute("height", "4"); e.setAttribute("fill", `url(${o}/drawing-attr-paint.svg#p)`); root.append(e); }],
   ];
   window.__probes = Object.fromEntries(kinds.map(([n, , f]) => [n, f]));
   return kinds.map(([n, a]) => [n, a]);
@@ -1001,6 +1024,24 @@ impl Drop for Plain {
     }
 }
 
+/// Every view a session's page lists in its tabs, shown in turn and drawn (a table and a series
+/// picked, the first of each list), its page refusing nothing under its policy.
+fn every_view_refuses_nothing(page: &mut Browser, session: &str) {
+    let views: Vec<String> = page.eval(r#"[...document.querySelectorAll(".tabs [data-view]")].map((a) => a.dataset.view)"#).as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    assert!(views.len() >= 5 && views.contains(&"layout".to_string()), "{session}: {views:?}");
+    for view in &views {
+        page.eval(&format!("location.hash = {}; true", serde_json::to_string(view).unwrap()));
+        page.wait_for("document.querySelector('main') && document.querySelector('main').children.length > 0 ? true : null", Duration::from_secs(20));
+        if view == "tables" || view == "series" {
+            page.wait_for("document.querySelector('.list button[data-table], .list button[data-series]') ? true : null", Duration::from_secs(20));
+            page.eval("document.querySelector('.list button[data-table], .list button[data-series]').click(); true");
+            page.wait_for("['page', 'chart', 'waiting', 'error'].includes(document.querySelector('.list-main')?.dataset.screen) ? true : null", Duration::from_secs(20));
+        }
+        std::thread::sleep(Duration::from_millis(1200));
+        assert_eq!(page.eval("window.__refused"), json!([]), "{session}: the {view} view refused nothing");
+    }
+}
+
 /// A browser watched from its first load at `url` (`WATCH` registered before it), returned once that
 /// document has loaded, waited for through the protocol's page events (`navigate_loaded`).
 fn watched_from_first_load(url: &str) -> Browser {
@@ -1066,19 +1107,15 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     drop(list);
     let mut page = watched_from_first_load(&format!("http://{addr}/s/loop/"));
     page.wait_for(r#"document.getElementById("pic") && document.getElementById("outlet-1")?.classList.contains("sv-obj") ? true : null"#, Duration::from_secs(20));
-    let views: Vec<String> = page.eval(r#"[...document.querySelectorAll(".tabs [data-view]")].map((a) => a.dataset.view)"#).as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
-    assert!(views.len() >= 5 && views.contains(&"layout".to_string()), "{views:?}");
-    for view in &views {
-        page.eval(&format!("location.hash = {}; true", serde_json::to_string(view).unwrap()));
-        page.wait_for("document.querySelector('main') && document.querySelector('main').children.length > 0 ? true : null", Duration::from_secs(20));
-        // A table and a series picked: the first of each list.
-        if view == "tables" || view == "series" {
-            page.wait_for("document.querySelector('.list button[data-table], .list button[data-series]') ? true : null", Duration::from_secs(20));
-            page.eval("document.querySelector('.list button[data-table], .list button[data-series]').click(); true");
-            page.wait_for("['page', 'chart', 'waiting', 'error'].includes(document.querySelector('.list-main')?.dataset.screen) ? true : null", Duration::from_secs(20));
-        }
-        std::thread::sleep(Duration::from_millis(1200));
-        assert_eq!(page.eval("window.__refused"), json!([]), "the {view} view refused nothing");
+    every_view_refuses_nothing(&mut page, "loop");
+    // And every other session the host lists, its own page and every view (hall has no layout, its
+    // layout view the page's words for that).
+    let (_, sessions) = get(addr, "/api/sessions");
+    for s in sessions["sessions"].as_array().unwrap().iter().filter(|s| s["name"] != "loop") {
+        let name = s["name"].as_str().unwrap();
+        let mut other_page = watched_from_first_load(&format!("http://{addr}/s/{name}/"));
+        other_page.wait_for("document.querySelectorAll('.tabs [data-view]').length > 0 || null", Duration::from_secs(20));
+        every_view_refuses_nothing(&mut other_page, name);
     }
     page.eval("location.hash = 'layout'; true");
     page.wait_for(r#"document.getElementById("outlet-1")?.classList.contains("sv-obj") ? true : null"#, Duration::from_secs(20));
@@ -1107,7 +1144,7 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     drop(blank);
     // Every kind live but the references to another document a browser may never fetch; those the
     // browser asks nothing for even with no policy are named (and held below to asking nothing).
-    let may_be_silent = ["a style's cursor", "a paint from another document", "a filter from another document", "a mask from another document", "a clip path from another document", "a marker from another document"];
+    let may_be_silent = ["a style's cursor", "a paint from another document", "a filter from another document", "a mask from another document", "a clip path from another document", "a marker from another document", "a use of another document", "a manifest"];
     assert!(silent.iter().all(|k| may_be_silent.contains(&k.as_str())), "a probe that tried nothing with no policy: {silent:?}");
     eprintln!("kinds the browser asks nothing for even with no policy: {silent:?}");
 
@@ -1154,7 +1191,7 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     }
     drop(bare);
     drop(plain);
-    assert!(drawing_silent.iter().all(|k| k.contains("from another document")), "a probe that tried nothing in a drawing with no policy: {drawing_silent:?}");
+    assert!(drawing_silent.iter().all(|k| k.contains("another document")), "a probe that tried nothing in a drawing with no policy: {drawing_silent:?}");
     eprintln!("kinds a drawing with no policy asks nothing for: {drawing_silent:?}");
     // (Waited for through the protocol's page events, never by evaluating into it while it commits:
     // a sandboxed document can then offer no context, CI's red on 114bcc8.)
