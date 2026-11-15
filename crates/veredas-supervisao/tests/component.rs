@@ -893,9 +893,10 @@ fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
     assert_eq!(mentions("// a loop with three outlets, two parcels and an infeed\nlet sorts = 1;"), Vec::<String>::new());
 }
 
-/// What the crate's Rust compiles in from a file, read as the compiler's tokens (the Rust lexer):
-/// each `include_str!`, `include_bytes!` and `include!` with its argument when that is one literal,
-/// and each `path = ...` an attribute holds (a module read from another file), however deep.
+/// What the crate's Rust compiles in from a file or the environment, read as the compiler's tokens
+/// (the Rust lexer), whatever `cfg` stands over it: each `include_str!`, `include_bytes!`,
+/// `include!`, `env!` and `option_env!` with its argument when that is one literal, and each
+/// `path = ...` an attribute holds (a module read from another file), however deep.
 fn compiled_from(ts: proc_macro2::TokenStream, in_attribute: bool, out: &mut Vec<String>) {
     use proc_macro2::{Delimiter, TokenTree};
     let toks: Vec<TokenTree> = ts.into_iter().collect();
@@ -910,11 +911,12 @@ fn compiled_from(ts: proc_macro2::TokenStream, in_attribute: bool, out: &mut Vec
                 let name = name.trim_start_matches("r#");
                 let bang = matches!(toks.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '!');
                 // Named other than invoked (a `use`, an alias, a path to it re-exported): a macro
-                // under another name this reading would not see, refused.
-                if !bang && ["include_str", "include_bytes", "include"].contains(&name) {
+                // under another name this reading would not see, refused. (`env` names a module of
+                // the standard library as well, so it is read where it is invoked alone.)
+                if !bang && ["include_str", "include_bytes", "include", "option_env"].contains(&name) {
                     out.push(format!("{name} named, not invoked"));
                 }
-                if bang && ["include_str", "include_bytes", "include"].contains(&name) {
+                if bang && ["include_str", "include_bytes", "include", "env", "option_env"].contains(&name) {
                     let arg = match toks.get(i + 2) {
                         Some(TokenTree::Group(g)) => match g.stream().into_iter().collect::<Vec<_>>().as_slice() {
                             [TokenTree::Literal(l)] => l.to_string(),
@@ -939,16 +941,27 @@ fn compiled_from(ts: proc_macro2::TokenStream, in_attribute: bool, out: &mut Vec
 /// other than invoked (a `use`, an alias). The tests are read so, by the compiler's tokens alone
 /// (the recorded command builds no other test, so their dep-info is not there to read): a macro of
 /// a dependency that reads a file is a limit for them; the library and the executable are read by
-/// their dep-info as well (below).
+/// their dep-info as well (below). Nor does the library or the executable compile in a variable of
+/// the environment by `env!` or `option_env!` under any `cfg` (their dep-info shows the build this
+/// test makes alone; a release, or another platform's code, is read here); the tests read cargo's
+/// own (`CARGO_MANIFEST_DIR`, the executable's path), which the product never holds.
 #[test]
 fn the_crate_compiles_in_no_file_from_outside_itself() {
     let root = crate_dir().canonicalize().unwrap();
     let mut included = Vec::new();
+    let mut variables = Vec::new();
     for f in crate_files().iter().filter(|f| f.extension().is_some_and(|e| e == "rs")) {
         let text = std::fs::read_to_string(f).unwrap();
         let mut found = Vec::new();
         compiled_from(text.parse().unwrap_or_else(|e| panic!("{}: {e:?}", f.display())), false, &mut found);
+        let product = f.strip_prefix(crate_dir()).is_ok_and(|r| r.starts_with("src"));
         for c in found {
+            if c.starts_with("env! ") || c.starts_with("option_env! ") {
+                if product {
+                    variables.push(format!("{}: {c}", f.display()));
+                }
+                continue;
+            }
             let lit = c.strip_prefix("include_str! ").or_else(|| c.strip_prefix("include_bytes! ")).or_else(|| c.strip_prefix("include! "));
             let path = lit.and_then(|l| l.strip_prefix('"')).and_then(|l| l.strip_suffix('"')).unwrap_or_else(|| panic!("{}: {c}: a file compiled in by other than one plain literal", f.display()));
             let target = f.parent().unwrap().join(path).canonicalize().unwrap_or_else(|e| panic!("{}: {c}: {e}", f.display()));
@@ -958,6 +971,7 @@ fn the_crate_compiles_in_no_file_from_outside_itself() {
     }
     included.sort();
     assert_eq!(included, ["web/dist/assets/app.css", "web/dist/assets/app.js", "web/dist/index.html", "web/dist/output.hash", "web/dist/source.hash"]);
+    assert_eq!(variables, Vec::<String>::new(), "the library or the executable compiles in a variable of the environment");
     // The reading sees each form: a path attribute (in `cfg_attr` too), a raw name, an argument
     // assembled, an include of a file outside.
     let read = |s: &str| {
@@ -968,7 +982,13 @@ fn the_crate_compiles_in_no_file_from_outside_itself() {
     assert_eq!(read("#[path = \"../../x.rs\"] mod x;"), ["path = \"../../x.rs\""]);
     assert_eq!(read("#[cfg_attr(unix, path = \"y.rs\")] mod y;"), ["path = \"y.rs\""]);
     assert_eq!(read("const A: &str = r#include_str ! (\"../a.txt\");"), ["include_str! \"../a.txt\""]);
-    assert_eq!(read("const B: &[u8] = include_bytes!(concat!(env!(\"HOME\"), \"/b\"));"), ["include_bytes! not one literal: concat ! (env ! (\"HOME\") , \"/b\")"]);
+    assert_eq!(read("const B: &[u8] = include_bytes!(concat!(env!(\"HOME\"), \"/b\"));"), ["include_bytes! not one literal: concat ! (env ! (\"HOME\") , \"/b\")", "env! \"HOME\""]);
+    // A variable under a `cfg` the test's build leaves out, by a path, or named for later; the
+    // standard library's module of the same name is no variable.
+    assert_eq!(read("#[cfg(not(debug_assertions))] pub const BUILD: &str = env!(\"CARGO_PKG_VERSION\");"), ["env! \"CARGO_PKG_VERSION\""]);
+    assert_eq!(read("#[cfg(unix)] fn home() -> Option<&'static str> { core::option_env!(\"HOME\") }"), ["option_env! \"HOME\""]);
+    assert_eq!(read("use std::option_env as maybe;"), ["option_env named, not invoked"]);
+    assert_eq!(read("fn home() -> Option<String> { std::env::var(\"HOME\").ok() }"), Vec::<String>::new());
     assert_eq!(read("fn f() { let path = 1; include!(\"c.rs\"); }"), ["include! \"c.rs\""]);
     // A macro under another name: an alias, a `use` of it, a path to it.
     assert_eq!(read("use std::include_str as text_of; const O: &str = text_of!(\"../../../Cargo.toml\");"), ["include_str named, not invoked"]);
@@ -1050,17 +1070,40 @@ fn dep_infos(base: &Path, dir: &Path, profile: &str, out: &mut BTreeSet<PathBuf>
     }
 }
 
+/// What a dep-info file says the compiler read: each dependency, as written (alone on a line of its
+/// own, ending in `:`), and each variable of the environment (`env!`, `option_env!`), on a line
+/// `# env-dep:NAME=value`.
+fn dep_info_of(text: &str) -> (Vec<PathBuf>, Vec<String>) {
+    let files = text.lines().filter(|l| !l.starts_with('#') && l.ends_with(':') && !l.contains(": ")).map(|l| PathBuf::from(l.trim_end_matches(':').replace("\\ ", " "))).collect();
+    let envs = text.lines().filter_map(|l| l.strip_prefix("# env-dep:")).map(|l| l.split('=').next().unwrap_or(l).to_string()).collect();
+    (files, envs)
+}
+
+/// Whether the build a dep-info records is current for the files here, by cargo's own rule for
+/// reusing a build: every file it lists (relative to `workspace`, where cargo runs the compiler) is
+/// there and none is newer than the dep-info itself. A stale one cargo rebuilds before it is used.
+fn current(dep_info: &Path, files: &[PathBuf], workspace: &Path) -> bool {
+    let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified());
+    let Ok(made) = modified(dep_info) else { return false };
+    files.iter().all(|f| modified(&workspace.join(f)).is_ok_and(|t| t <= made))
+}
+
 /// The files the compiler read for the crate's library and executable, by its own dep-info in this
-/// build's profile, wherever cargo's layout puts it (the newest of each: a library's lists its
-/// `.rlib` or `.rmeta`; an executable's, `src/main.rs`): every dependency it lists, as written.
-fn compiled_files() -> BTreeMap<&'static str, (Vec<PathBuf>, Vec<String>)> {
+/// build's profile, wherever cargo's layout puts it (a library's lists its `.rlib` or `.rmeta`; an
+/// executable's, `src/main.rs`), of every build of each that is current for this checkout: each
+/// dependency it lists, as written. So this checkout's own build, the one cargo has just made or
+/// reused for this test, is always read, whatever else the target directory holds: a build of
+/// another checkout sharing it, newer, is read beside it (current here too, or passed over), never
+/// in its place, and a build kept from an earlier state of the tree, which cargo would rebuild, is
+/// passed over.
+fn compiled_files(workspace: &Path) -> BTreeMap<&'static str, Vec<(PathBuf, Vec<PathBuf>, Vec<String>)>> {
     let (dirs, profile) = build_dirs();
     let mut infos = BTreeSet::new();
     for d in &dirs {
         dep_infos(d, d, &profile, &mut infos);
     }
     let lists = |text: &str, file: &str| text.lines().any(|l| !l.starts_with('#') && l.ends_with(':') && l.trim_end_matches(':').replace('\\', "/").ends_with(file));
-    let mut newest: BTreeMap<&'static str, (std::time::SystemTime, PathBuf)> = BTreeMap::new();
+    let mut read: BTreeMap<&'static str, Vec<(PathBuf, Vec<PathBuf>, Vec<String>)>> = BTreeMap::new();
     for path in infos {
         let text = std::fs::read_to_string(&path).unwrap_or_default();
         let kind = if (text.contains(".rlib:") || text.contains(".rmeta:")) && lists(&text, "veredas-supervisao/src/lib.rs") {
@@ -1070,28 +1113,40 @@ fn compiled_files() -> BTreeMap<&'static str, (Vec<PathBuf>, Vec<String>)> {
         } else {
             continue;
         };
-        let at = std::fs::metadata(&path).and_then(|m| m.modified()).unwrap();
-        if newest.get(kind).is_none_or(|(t, _)| at > *t) {
-            newest.insert(kind, (at, path));
+        let (files, envs) = dep_info_of(&text);
+        if current(&path, &files, workspace) {
+            read.entry(kind).or_default().push((path, files, envs));
         }
     }
-    newest
-        .into_iter()
-        .map(|(kind, (_, path))| {
-            let text = std::fs::read_to_string(&path).unwrap();
-            // Each dependency stands alone on a line of its own, ending in `:`; each variable of the
-            // environment the compiler read (`env!`, `option_env!`) on a line `# env-dep:NAME=value`.
-            let files = text.lines().filter(|l| !l.starts_with('#') && l.ends_with(':') && !l.contains(": ")).map(|l| PathBuf::from(l.trim_end_matches(':').replace("\\ ", " "))).collect();
-            let envs = text.lines().filter_map(|l| l.strip_prefix("# env-dep:")).map(|l| l.split('=').next().unwrap_or(l).to_string()).collect();
-            (kind, (files, envs))
-        })
-        .collect()
+    read
+}
+
+/// The rule for a current build, on a dep-info written here: current while its files are older,
+/// stale once one is newer or gone.
+#[test]
+fn a_build_is_read_while_it_is_current() {
+    let dir = std::env::temp_dir().join(format!("vs-depinfo-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    let set = |p: &Path, secs: u64| std::fs::File::options().write(true).open(p).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs)).unwrap();
+    std::fs::write(dir.join("src/lib.rs"), "").unwrap();
+    std::fs::write(dir.join("lib.d"), "out/lib.rlib: src/lib.rs\n\nsrc/lib.rs:\n\n# env-dep:HOME=/home/x\n").unwrap();
+    let (files, envs) = dep_info_of(&std::fs::read_to_string(dir.join("lib.d")).unwrap());
+    assert_eq!((files.clone(), envs), (vec![PathBuf::from("src/lib.rs")], vec!["HOME".to_string()]));
+    set(&dir.join("src/lib.rs"), 1_700_000_000);
+    set(&dir.join("lib.d"), 1_700_000_000);
+    assert!(current(&dir.join("lib.d"), &files, &dir), "a file as old as the build");
+    set(&dir.join("src/lib.rs"), 1_700_000_001);
+    assert!(!current(&dir.join("lib.d"), &files, &dir), "a file newer than the build");
+    std::fs::remove_file(dir.join("src/lib.rs")).unwrap();
+    assert!(!current(&dir.join("lib.d"), &files, &dir), "a file gone");
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// What the crate builds and what the compiler reads for it: each target's source where the crate's
 /// layout puts it (the library `src/lib.rs`, the executable `src/main.rs`, a test `tests/<name>.rs`,
 /// cargo metadata's own `src_path`); and every file the compiler read for the library and the
-/// executable (its dep-info, so a module, an include however spelled or a file an attribute reads),
+/// executable in every build of them current for this checkout, this test's own among them (its
+/// dep-info, so a module, an include however spelled or a file an attribute reads),
 /// under the crate, one git holds or could hold, Rust under `src/` or one of the five files of the
 /// page compiled in; so the files read here are the files compiled. No cargo configuration in the
 /// repository replaces a source (one in a folder above it or the user's own is a limit).
@@ -1115,9 +1170,11 @@ fn every_file_the_crate_compiles_is_one_read_here() {
     }
     let held: BTreeSet<PathBuf> = crate_files().into_iter().map(|f| f.canonicalize().unwrap()).collect();
     let page: Vec<String> = web::OUTPUT_FILES.iter().map(|f| format!("web/dist/{f}")).chain(["web/dist/source.hash".to_string(), "web/dist/output.hash".to_string()]).collect();
-    let compiled = compiled_files();
-    assert_eq!(compiled.keys().copied().collect::<Vec<_>>(), ["bin", "lib"], "the library's and the executable's dep-info in this build's profile, wherever cargo's layout puts it");
-    for (kind, (files, envs)) in &compiled {
+    let workspace = root.parent().unwrap().parent().unwrap();
+    let compiled = compiled_files(workspace);
+    assert_eq!(compiled.keys().copied().collect::<Vec<_>>(), ["bin", "lib"], "the library's and the executable's dep-info in this build's profile, wherever cargo's layout puts it, current for this checkout");
+    for (kind, (info, files, envs)) in compiled.iter().flat_map(|(k, builds)| builds.iter().map(move |b| (k, b))) {
+        let kind = format!("{kind} ({})", info.display());
         assert!(files.iter().any(|f| f.ends_with("lib.rs") || f.ends_with("main.rs")), "{kind}: {files:?}");
         // Nor any text from the environment: the compiler read no variable at all (`env!`,
         // `option_env!`), the exact set, empty. A name of cargo's prefix proves nothing (a machine
@@ -1126,8 +1183,7 @@ fn every_file_the_crate_compiles_is_one_read_here() {
         assert_eq!(envs, &Vec::<String>::new(), "{kind} compiles in a variable of the environment");
         for f in files {
             // Written relative to the workspace's root, where cargo runs the compiler.
-            let at = if f.is_absolute() { f.clone() } else { root.parent().unwrap().parent().unwrap().join(f) };
-            let real = at.canonicalize().unwrap_or_else(|e| panic!("{kind} read {}: {e}", f.display()));
+            let real = workspace.join(f).canonicalize().unwrap_or_else(|e| panic!("{kind} read {}: {e}", f.display()));
             let rel = real.strip_prefix(&root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_else(|_| panic!("{kind} compiles in {} from outside the crate", real.display()));
             assert!(held.contains(&real), "{kind} compiles in {rel}, which git neither holds nor could hold");
             assert!((rel.starts_with("src/") && rel.ends_with(".rs")) || page.contains(&rel), "{kind} compiles in {rel}, neither Rust under src/ nor the page");
