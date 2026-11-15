@@ -94,6 +94,11 @@ fn its_own_dependencies_are_core_portal_and_the_servers_crates() {
     // table) read every file's letters here.
     let dev: BTreeSet<&str> = p["dependencies"].as_array().unwrap().iter().filter(|d| d["kind"] == "dev").map(|d| d["name"].as_str().unwrap()).collect();
     assert_eq!(dev, ["entities", "icu_normalizer", "proc-macro2", "tempfile", "veredas-maquinar"].into_iter().collect::<BTreeSet<_>>());
+    // And no feature of its own, so the graph every check below reads at the default features is the
+    // graph under any features: a feature would turn on a dependency's features or an optional
+    // dependency (cargo lists each as a feature too) that no check here builds.
+    assert_eq!(p["features"], serde_json::json!({}), "supervisão declares features");
+    assert!(p["dependencies"].as_array().unwrap().iter().all(|d| d["optional"] == false), "an optional dependency");
 }
 
 /// The crates in a package's normal and build graph on every platform, by name, as cargo would
@@ -157,6 +162,20 @@ fn the_plant_s_stack_reaches_supervisao_through_portal_alone() {
     assert!(seen.len() >= mine.len(), "the walk reached {} packages, cargo tree {}", seen.len(), mine.len());
     let foreign: Vec<&&str> = seen.iter().filter(|id| !members.contains(**id) && source[**id] != Some("registry+https://github.com/rust-lang/crates.io-index")).collect();
     assert!(foreign.is_empty(), "a package neither of the workspace nor of crates.io: {foreign:?}");
+    // And read from where cargo unpacks crates.io itself: cargo metadata names a replaced source
+    // (vendored, a mirror, by a cargo configuration anywhere, the user's own among them) by the
+    // registry it replaces, but each package's manifest lies where the replacement put it. So every
+    // crates.io package's is `registry/src/index.crates.io-<hash>/<name>-<version>/Cargo.toml` in
+    // cargo's home, wherever that is.
+    let manifest: BTreeMap<&str, (&str, &str, &str)> = resolved["packages"].as_array().unwrap().iter().map(|p| (p["id"].as_str().unwrap(), (p["name"].as_str().unwrap(), p["version"].as_str().unwrap(), p["manifest_path"].as_str().unwrap()))).collect();
+    let unpacked = |id: &str| {
+        let (name, version, path) = manifest[id];
+        let dirs: Vec<String> = Path::new(path).ancestors().skip(1).take(4).map(|d| d.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()).collect();
+        Path::new(path).file_name().is_some_and(|f| f == "Cargo.toml") && dirs.len() == 4 && dirs[0] == format!("{name}-{version}") && dirs[1].starts_with("index.crates.io-") && dirs[2] == "src" && dirs[3] == "registry"
+    };
+    let elsewhere: Vec<&str> = seen.iter().filter(|id| !members.contains(**id)).filter(|id| !unpacked(id)).map(|id| manifest[*id].2).collect();
+    assert!(elsewhere.is_empty(), "a crates.io package read from elsewhere than cargo's own copy of crates.io (a source replaced): {elsewhere:?}");
+    assert!(seen.iter().filter(|id| !members.contains(**id)).count() > 100, "the crates.io packages judged");
     // And by its route: each of supervisão's own dependencies but portal, its graph as cargo
     // builds it alone (by its exact version), brings exactly the crates of a plant's stack the
     // table here reviews (core its opc layer's client and socket crate, the server and its runtime
@@ -249,6 +268,8 @@ fn crate_files() -> Vec<PathBuf> {
     for f in fields.chunks(3).filter(|f| f.len() == 3) {
         assert_eq!(f[2], "unspecified", "`{}` passes through git's `{}` between the commit and the working tree", f[0], f[1]);
     }
+    // Nor is any read by git other than from the working tree (its index's own flags).
+    assert_eq!(index_flags(&root), Ok(tracked.len()), "git's index flags under the crate");
     let mut files = Vec::new();
     for (rel, held) in tracked.iter().map(|r| (r, true)).chain(untracked.iter().map(|r| (r, false))) {
         let p = root.join(rel);
@@ -264,6 +285,46 @@ fn crate_files() -> Vec<PathBuf> {
     files.sort();
     files.dedup();
     files
+}
+
+/// Git's index under `dir`, each entry by the tag `git ls-files -v` gives it: an entry git reads
+/// other than from the working tree (`skip-worktree`, its `S`; `assume-unchanged`, a tag in lower
+/// case) lets the file on disk differ from what a commit holds while git reports a clean tree, so
+/// every entry is `H` (held, read from the working tree). Returns the count of entries.
+fn index_flags(dir: &Path) -> Result<usize, String> {
+    let out = Command::new("git").arg("-C").arg(dir).args(["ls-files", "-v", "-z", "--", "."]).output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).to_string());
+    }
+    let mut n = 0;
+    for e in out.stdout.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+        let e = String::from_utf8_lossy(e);
+        let (tag, path) = e.split_once(' ').ok_or_else(|| format!("an entry git wrote without its tag: {e}"))?;
+        if tag != "H" {
+            return Err(format!("`{path}` is marked `{tag}` in git's index: git reads it other than from the working tree (skip-worktree, assume-unchanged), so what is read here may not be what is committed"));
+        }
+        n += 1;
+    }
+    Ok(n)
+}
+
+#[test]
+fn an_entry_git_reads_other_than_from_the_working_tree_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| assert!(Command::new("git").arg("-C").arg(dir.path()).args(args).output().unwrap().status.success(), "git {args:?}");
+    git(&["init", "-q"]);
+    std::fs::write(dir.path().join("a.txt"), "a").unwrap();
+    git(&["add", "a.txt"]);
+    assert_eq!(index_flags(dir.path()), Ok(1));
+    let refused = |tag: &str| Err(format!("`a.txt` is marked `{tag}` in git's index: git reads it other than from the working tree (skip-worktree, assume-unchanged), so what is read here may not be what is committed"));
+    git(&["update-index", "--skip-worktree", "a.txt"]);
+    assert_eq!(index_flags(dir.path()), refused("S"));
+    git(&["update-index", "--assume-unchanged", "a.txt"]);
+    assert_eq!(index_flags(dir.path()), refused("s"), "both, skip-worktree in lower case");
+    git(&["update-index", "--no-skip-worktree", "a.txt"]);
+    assert_eq!(index_flags(dir.path()), refused("h"));
+    git(&["update-index", "--no-assume-unchanged", "a.txt"]);
+    assert_eq!(index_flags(dir.path()), Ok(1));
 }
 
 /// Git's own list of entries under the crate, refused unless each is a regular file: a tracked
@@ -418,10 +479,12 @@ fn letters(line: &str) -> Vec<char> {
 }
 
 /// A line's second reading: its entities, code escapes and percent-encoded bytes decoded, again
-/// and again until it stops changing (at most eight levels).
+/// and again until it stops changing. Every decoding writes fewer characters than it reads (a
+/// reference, an escape or a percent byte is longer than its character), so a pass that changes the
+/// line shortens it, and the passes end within the line's length, however deep the escaping.
 fn second_reading(line: &str) -> String {
     let mut l = line.to_string();
-    for _ in 0..8 {
+    for _ in 0..=line.chars().count() {
         let next = decode_percent(&decode_escapes(&decode_entities(&l, true)));
         if next == l {
             break;
@@ -433,9 +496,10 @@ fn second_reading(line: &str) -> String {
 
 /// A line with its code escapes read as the crate's languages write a character: Rust's and a
 /// script's braced `\u{..}` of any length (Rust's `_` between its digits read through), a script's four-digit
-/// `\u....` and two-digit `\x..`, TOML's eight-digit `\U........`, a stylesheet's one to six hex
+/// `\u....` (a character beyond the BMP as a script writes it, a high surrogate's escape and a low
+/// one's, read as that one character) and two-digit `\x..`, TOML's eight-digit `\U........`, a stylesheet's one to six hex
 /// digits and the one space that may end them; a line break or a tab written as an escape (`\n`,
-/// `\r`, `\t`) as a space. Anything else is kept as written.
+/// `\r`, `\t`) as a space. Anything else is kept as written (a lone surrogate's escape among it).
 fn decode_escapes(line: &str) -> String {
     let hex_run = |s: &str, max: usize| s.chars().take(max).take_while(char::is_ascii_hexdigit).count();
     let mut out = String::new();
@@ -456,7 +520,13 @@ fn decode_escapes(line: &str) -> String {
         } else if let Some(u) = tail.strip_prefix('U').filter(|u| hex_run(u, 8) == 8) {
             (u32::from_str_radix(&u[..8], 16).ok(), 9)
         } else if let Some(u) = tail.strip_prefix('u').filter(|u| hex_run(u, 4) == 4) {
-            (u32::from_str_radix(&u[..4], 16).ok(), 5)
+            let high = u32::from_str_radix(&u[..4], 16).ok();
+            // A surrogate pair: `\uD8xx` to `\uDBxx` then `\uDCxx` to `\uDFxx`, one character.
+            let low = u[4..].strip_prefix("\\u").filter(|l| hex_run(l, 4) == 4).and_then(|l| u32::from_str_radix(&l[..4], 16).ok());
+            match (high, low) {
+                (Some(h @ 0xD800..=0xDBFF), Some(l @ 0xDC00..=0xDFFF)) => (Some(0x10000 + ((h - 0xD800) << 10) + (l - 0xDC00)), 11),
+                _ => (high, 5),
+            }
         } else if let Some(x) = tail.strip_prefix('x').filter(|x| hex_run(x, 2) == 2) {
             (u32::from_str_radix(&x[..2], 16).ok(), 3)
         } else if tail.starts_with(['n', 'r', 't']) {
@@ -790,6 +860,12 @@ fn no_file_of_supervisao_names_a_vendor_a_product_or_a_customer() {
         format!("<mxCell id=\"7\" value=\"{}\" vertex=\"1\" />", rev("oivan od o;edlita&tipac").replace('&', "&amp;")),
         format!("{{\"label\":\"{}\"}}", rev("oivan od o;edlita&tipac").replace('&', "\\u0026")),
         format!("{{\"label\":\"{}\\u0026nbsp;{}\"}}", rev("arutappaM"), rev("erawtfoS")),
+        // Escaped however deep: the space's entity under twenty more levels of `&amp;`, past any
+        // count of passes a reader might stop at.
+        format!("<td>{}&{}nbsp;{}</td>", rev("arutappaM"), "amp;".repeat(20), rev("erawtfoS")),
+        // A letter beyond the BMP as a script's escape writes it, a surrogate pair (a JSON encoder
+        // with ASCII output): the bold small g.
+        format!("{{\"label\":\"\\uD835\\uDC20{}\"}}", &rev("tlebineg")[1..]),
         // A label kept in an attribute, the tag's other values beside it.
         format!("<rect id=\"r1\" title='{}&amp;nbsp;{}' width=\"40\" />", rev("moB"), rev("elareneG")),
         // A decoded spelling inside what the second reading takes for a tag: a comparison and a
@@ -833,6 +909,11 @@ fn compiled_from(ts: proc_macro2::TokenStream, in_attribute: bool, out: &mut Vec
                 let name = id.to_string();
                 let name = name.trim_start_matches("r#");
                 let bang = matches!(toks.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '!');
+                // Named other than invoked (a `use`, an alias, a path to it re-exported): a macro
+                // under another name this reading would not see, refused.
+                if !bang && ["include_str", "include_bytes", "include"].contains(&name) {
+                    out.push(format!("{name} named, not invoked"));
+                }
                 if bang && ["include_str", "include_bytes", "include"].contains(&name) {
                     let arg = match toks.get(i + 2) {
                         Some(TokenTree::Group(g)) => match g.stream().into_iter().collect::<Vec<_>>().as_slice() {
@@ -853,8 +934,12 @@ fn compiled_from(ts: proc_macro2::TokenStream, in_attribute: bool, out: &mut Vec
 }
 
 /// The name check reads the files under the crate: so the crate compiles in no file from outside
-/// it. No module is read from another file by `path`, and every file an `include` macro names is
-/// one literal, resolved under the crate (the page's five, today).
+/// it. No module is read from another file by `path`, every file an `include` macro names is
+/// one literal, resolved under the crate (the page's five, today), and no include macro is named
+/// other than invoked (a `use`, an alias). The tests are read so, by the compiler's tokens alone
+/// (the recorded command builds no other test, so their dep-info is not there to read): a macro of
+/// a dependency that reads a file is a limit for them; the library and the executable are read by
+/// their dep-info as well (below).
 #[test]
 fn the_crate_compiles_in_no_file_from_outside_itself() {
     let root = crate_dir().canonicalize().unwrap();
@@ -885,6 +970,10 @@ fn the_crate_compiles_in_no_file_from_outside_itself() {
     assert_eq!(read("const A: &str = r#include_str ! (\"../a.txt\");"), ["include_str! \"../a.txt\""]);
     assert_eq!(read("const B: &[u8] = include_bytes!(concat!(env!(\"HOME\"), \"/b\"));"), ["include_bytes! not one literal: concat ! (env ! (\"HOME\") , \"/b\")"]);
     assert_eq!(read("fn f() { let path = 1; include!(\"c.rs\"); }"), ["include! \"c.rs\""]);
+    // A macro under another name: an alias, a `use` of it, a path to it.
+    assert_eq!(read("use std::include_str as text_of; const O: &str = text_of!(\"../../../Cargo.toml\");"), ["include_str named, not invoked"]);
+    assert_eq!(read("use core::{include_bytes, include};"), ["include_bytes named, not invoked", "include named, not invoked"]);
+    assert_eq!(read("const P: &str = std::include_str!(\"d.txt\");"), ["include_str! \"d.txt\""]);
 }
 
 /// Where a markup tag opened at `tail` (just past its `<`) ends: the byte of its `>`, a value in
@@ -1030,10 +1119,11 @@ fn every_file_the_crate_compiles_is_one_read_here() {
     assert_eq!(compiled.keys().copied().collect::<Vec<_>>(), ["bin", "lib"], "the library's and the executable's dep-info in this build's profile, wherever cargo's layout puts it");
     for (kind, (files, envs)) in &compiled {
         assert!(files.iter().any(|f| f.ends_with("lib.rs") || f.ends_with("main.rs")), "{kind}: {files:?}");
-        // Nor any text from the machine's environment: a variable the compiler read is cargo's own
-        // (`CARGO_…`, from the manifest and the build), never another.
-        let machine: Vec<&String> = envs.iter().filter(|e| !e.starts_with("CARGO_")).collect();
-        assert!(machine.is_empty(), "{kind} compiles in the machine's environment: {machine:?}");
+        // Nor any text from the environment: the compiler read no variable at all (`env!`,
+        // `option_env!`), the exact set, empty. A name of cargo's prefix proves nothing (a machine
+        // sets `CARGO_TARGET_DIR` and `CARGO_HOME`, and cargo's own `CARGO_MANIFEST_DIR` is a path of
+        // this machine's); one the crate comes to need is read and listed here first.
+        assert_eq!(envs, &Vec::<String>::new(), "{kind} compiles in a variable of the environment");
         for f in files {
             // Written relative to the workspace's root, where cargo runs the compiler.
             let at = if f.is_absolute() { f.clone() } else { root.parent().unwrap().parent().unwrap().join(f) };
@@ -1043,12 +1133,18 @@ fn every_file_the_crate_compiles_is_one_read_here() {
             assert!((rel.starts_with("src/") && rel.ends_with(".rs")) || page.contains(&rel), "{kind} compiles in {rel}, neither Rust under src/ nor the page");
         }
     }
+    // No cargo configuration in the repository: cargo reads one in every folder from where it runs
+    // up, and it runs here from the crate's folder (the test's own calls) and from the repository's
+    // root (the recorded command), so every folder from the crate's up to the root, both included.
     let repo = root.parent().unwrap().parent().unwrap();
-    for dir in [repo, root.as_path()] {
+    let mut walked = Vec::new();
+    for dir in root.ancestors().take_while(|d| d.starts_with(repo)) {
+        walked.push(dir.to_path_buf());
         for f in [".cargo/config.toml", ".cargo/config"] {
             assert!(!dir.join(f).exists(), "{}: a cargo configuration could replace a source", dir.join(f).display());
         }
     }
+    assert_eq!(walked, [root.clone(), root.parent().unwrap().to_path_buf(), repo.to_path_buf()], "every folder from the crate's to the repository's root");
 }
 
 /// The letters the reader claims, read whole from the lists that own them: every letter of Latin-1
@@ -1074,10 +1170,18 @@ fn every_latin_letter_and_every_html_name_of_one_reads_as_plain_letters() {
     let nfkd = icu_normalizer::DecomposingNormalizerBorrowed::new_nfkd();
     let class = icu_normalizer::properties::CanonicalCombiningClassMapBorrowed::new();
     let (mut lettered, mut marks) = (0, 0);
+    let mut beyond = 0;
     for c in (0..=0x10FFFFu32).filter_map(char::from_u32) {
         if c.is_alphabetic() && nfkd.normalize(&c.to_string()).chars().any(|x| x.is_ascii_alphabetic()) {
             let read = letters(&c.to_string());
             assert!(plain(&read), "{c} (U+{:04X}) reads as {read:?}", c as u32);
+            // And each as a script's escape writes it, in the second reading: four digits, or
+            // beyond the BMP a surrogate pair (UTF-16's own split of it).
+            let mut units = [0u16; 2];
+            let escaped: String = c.encode_utf16(&mut units).iter().map(|u| format!("\\u{u:04X}")).collect();
+            beyond += usize::from(escaped.len() == 12);
+            let read = letters(&second_reading(&escaped));
+            assert!(plain(&read), "{escaped} (U+{:04X}) reads as {read:?}", c as u32);
             lettered += 1;
         }
         if class.get32_u8(c as u32) != 0 {
@@ -1085,7 +1189,7 @@ fn every_latin_letter_and_every_html_name_of_one_reads_as_plain_letters() {
             marks += 1;
         }
     }
-    assert!(lettered > 1000 && marks > 800, "{lettered} letters, {marks} marks");
+    assert!(lettered > 1000 && marks > 800 && beyond > 500, "{lettered} letters ({beyond} beyond the BMP), {marks} marks");
     let (names, legacy) = html_names();
     assert_eq!(names.len() + legacy.len(), entities::ENTITIES.len());
     let mut names_read = 0;
@@ -1218,6 +1322,13 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
     // The reading itself: a function's name in any case or escaped, a comment between tokens, a
     // substitution inside an image set, a name that only ends in `url`.
     assert_eq!(urls(r#"a { b: URL(x.png); c: \75 rl(y.png); d: IMAGE-SET("z.png" 1x); e: -webkit-image-set(url(data:,) 1x, 'w.png' 2x); f: image-set(var(--v) 1x); g: ur/**/l(n.png); h: my-url(m.png); i: src(s.png) }"#), ["x.png", "y.png", "s.png", "z.png", "w.png", "image-set(var(--v) 1x)"]);
+    // A `/*` that opens no comment, as the tokenizer reads it: inside a string (double, single, after
+    // an escaped quote, a bad string ended by its line) and inside an unquoted `url(`; and a quote
+    // inside a comment, which opens no string.
+    assert_eq!(
+        urls("a { b: 1 } /* it's */ c { d: url(q.png) } e { content: \"/*\"; } f { g: url(x.png) } h { content: 'it''s /*'; i: url( /*y.png ) } j { content: \"\\\"/*\"; k: URL(z.png) } l { content: \"/* broken\n} m { n: url(w.png) }"),
+        ["q.png", "x.png", "/*y.png", "z.png", "w.png"]
+    );
     assert_eq!(urls(web::APP_CSS), Vec::<String>::new(), "the stylesheet points outside the page");
     assert_eq!(addresses(web::APP_CSS), BTreeSet::<String>::new(), "the stylesheet names an address");
     assert!(!web::APP_JS.contains("import(") && !web::APP_JS.contains("import.meta.url"), "the bundle loads no other file");
@@ -1241,18 +1352,58 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
     let a = web::source_hash(copy.path()).unwrap();
     std::fs::write(copy.path().join("src/extra.ts"), [b'x', 0x80, b'x']).unwrap();
     assert_ne!(web::source_hash(copy.path()).unwrap(), a, "a byte that is not text counts");
+    // Every byte value counts: each of the 256 put at the end of a source (no LF after it, so a CR
+    // there is a lone one) hashes apart from the tree and from every other.
+    std::fs::remove_file(copy.path().join("src/extra.ts")).unwrap();
+    assert_eq!(web::source_hash(copy.path()).unwrap(), built);
+    let mut hashes = BTreeSet::new();
+    for b in 0..=255u8 {
+        let mut bytes = text.clone().into_bytes();
+        bytes.push(b);
+        std::fs::write(&main, bytes).unwrap();
+        let h = web::source_hash(copy.path()).unwrap();
+        assert_ne!(h, built, "the byte {b:#04x} at a source's end counts");
+        hashes.insert(h);
+    }
+    assert_eq!(hashes.len(), 256, "every byte value hashes apart");
+    std::fs::write(&main, &text).unwrap();
+    // The one pair read otherwise is CR then LF, in any count of them: a CR elsewhere (alone, before
+    // another CR, after an LF) is a byte of its own.
+    let h = |bytes: &[u8]| web::hash_bytes([("f", bytes)]);
+    assert_eq!(h(b"a\r\nb"), h(b"a\nb"), "CR LF reads as LF");
+    assert_eq!(h(b"a\r\n\r\nb"), h(b"a\n\nb"), "each CR LF reads as LF");
+    assert_ne!(h(b"a\rb"), h(b"ab"), "a lone CR counts");
+    assert_ne!(h(b"a\rb"), h(b"a\nb"), "a lone CR is no LF");
+    assert_ne!(h(b"a\r\r\nb"), h(b"a\nb"), "a CR before a CR LF counts");
+    assert_ne!(h(b"a\n\rb"), h(b"a\nb"), "a CR after an LF counts");
 }
 
 /// A stylesheet as CSS's tokenizer reads it: each comment nothing between tokens (a space), each
 /// escape its character (one to six hex digits and the one white space that may end them, or any
 /// other character as itself), and every letter in lower case (a function's or an at-rule's name
-/// reads in any case).
+/// reads in any case). A string (in `"` or `'`, to its unescaped closing quote or the end of its
+/// line, a bad string) and an unquoted `url(` (to its `)`) are read as their content: a `/*` in
+/// either opens no comment, as the tokenizer reads none there.
 fn css_read(text: &str) -> String {
     let cs: Vec<char> = text.chars().collect();
     let mut out = String::new();
+    let mut quote: Option<char> = None;
+    let mut in_url = false;
     let mut i = 0;
     while i < cs.len() {
-        if cs[i] == '/' && cs.get(i + 1) == Some(&'*') {
+        let c = cs[i];
+        if let Some(q) = quote {
+            if c == q || c == '\n' {
+                quote = None;
+            }
+            if c == '\\' && cs.get(i + 1) == Some(&'\n') {
+                // A string's line continued: nothing.
+                i += 2;
+                continue;
+            }
+        } else if in_url {
+            in_url = c != ')';
+        } else if c == '/' && cs.get(i + 1) == Some(&'*') {
             let mut j = i + 2;
             while j < cs.len() && !(cs[j] == '*' && cs.get(j + 1) == Some(&'/')) {
                 j += 1;
@@ -1260,8 +1411,18 @@ fn css_read(text: &str) -> String {
             out.push(' ');
             i = j + 2;
             continue;
+        } else if c == '"' || c == '\'' {
+            quote = Some(c);
+        } else if c == '(' {
+            // `url(` as the name reads (any case, escaped or not), the name no longer one, its
+            // target unquoted (white space before it apart).
+            let name: Vec<char> = out.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+            let named = name.len() >= 3 && name[name.len() - 3..].iter().collect::<String>().to_lowercase() == "url";
+            let alone = name.len() < 4 || !(name[0].is_alphanumeric() || name[0] == '-' || name[0] == '_' || !name[0].is_ascii());
+            let next = cs[i + 1..].iter().find(|c| !c.is_whitespace());
+            in_url = named && alone && !matches!(next, Some('"' | '\''));
         }
-        if cs[i] == '\\' {
+        if c == '\\' {
             let hex: String = cs[i + 1..].iter().take(6).take_while(|c| c.is_ascii_hexdigit()).collect();
             if !hex.is_empty() {
                 out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
@@ -1275,7 +1436,7 @@ fn css_read(text: &str) -> String {
             }
             continue;
         }
-        out.push(cs[i]);
+        out.push(c);
         i += 1;
     }
     out.to_lowercase()
