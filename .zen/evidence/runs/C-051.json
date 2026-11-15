@@ -10,15 +10,15 @@
     "layout"
   ],
   "exitCode": 0,
-  "outputSha": "7aafe38d84474e7f956b5d7e45cff1e76df73caf687e5d31e038bccdf3898260",
-  "outputTail": "\nrunning 3 tests\ntest a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_the_page_adds ... ok\ntest the_page_draws_a_drawing_saved_as_inkscape_saves_it ... ok\ntest the_page_draws_the_layout_from_the_feed ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.61s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.36s\n     Running tests\\layout.rs (target\\debug\\deps\\layout-296c38e11b0c9007.exe)",
-  "ranAt": "2026-11-15T02:28:40.196Z",
-  "headCommit": "bcf013f3fb108d338782a6f6d4b0b714a8698043",
+  "outputSha": "3e63a365be5968ff600dd8f919a3e15f78d5efd0f5bd46c66c1a39b00cc8d013",
+  "outputTail": "\nrunning 3 tests\ntest a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_the_page_adds ... ok\ntest the_page_draws_a_drawing_saved_as_inkscape_saves_it ... ok\ntest the_page_draws_the_layout_from_the_feed ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 37.06s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.01s\n     Running tests\\layout.rs (target\\debug\\deps\\layout-296c38e11b0c9007.exe)",
+  "ranAt": "2026-11-15T05:01:09.379Z",
+  "headCommit": "e3d002e98ae7563031ea102e802a0a233663cd60",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/layout.rs",
       "file": "crates/veredas-supervisao/tests/layout.rs",
-      "fileSha": "df53f761abaaa315ae39426d0e8b3138910971ddb54f51bd973e17b7fbbcc28f"
+      "fileSha": "cd42138d6c5e33f697ce1bcd6f550f107eeeffa294da6e55fcce1e8fe4c3bcad"
     }
   ]
 }
