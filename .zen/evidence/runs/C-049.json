@@ -11,15 +11,15 @@
     "host"
   ],
   "exitCode": 0,
-  "outputSha": "121011ba29ace653212b4a75c247b7f7bcc779bc88254f81f1edf8456222441b",
-  "outputTail": "   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.57s\n────────────\n Nextest run ID 2c9918dd-5734-49c3-8576-eb6538a9afd7 with nextest profile: default\n    Starting 7 tests across 1 binary\n        PASS [   1.143s] (1/7) veredas-supervisao::host a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first\n        PASS [  32.923s] (2/7) veredas-supervisao::host a_stop_waits_for_a_dashboard_still_computed\n        PASS [   0.171s] (3/7) veredas-supervisao::host a_stream_sends_a_snapshot_on_connect_and_again_once_it_falls_behind\n        PASS [   0.677s] (4/7) veredas-supervisao::host nothing_starts_before_the_address_is_held_nor_under_check\n        PASS [   5.061s] (5/7) veredas-supervisao::host the_executable_serves_a_file_until_stdin_closes\n        PASS [  11.462s] (6/7) veredas-supervisao::host two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal\n        SLOW [> 60.000s] (───) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        PASS [ 109.892s] (7/7) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n────────────\n     Summary [ 143.960s] 7 tests run: 7 passed (1 slow), 0 skipped",
-  "ranAt": "2026-11-15T20:50:38.301Z",
-  "headCommit": "ddc2baa1b1a75a5211e63747babe99400ee5b600",
+  "outputSha": "2e9895591064c1fff05ffc06741e9d486f22354630623d3c31783fad04ed71ab",
+  "outputTail": "   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.96s\n────────────\n Nextest run ID da662595-d3a2-4ee4-a7d6-2bacc091da69 with nextest profile: default\n    Starting 7 tests across 1 binary\n        PASS [   0.898s] (1/7) veredas-supervisao::host a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first\n        PASS [  12.833s] (2/7) veredas-supervisao::host a_stop_waits_for_a_dashboard_still_computed\n        PASS [   0.066s] (3/7) veredas-supervisao::host a_stream_sends_a_snapshot_on_connect_and_again_once_it_falls_behind\n        PASS [   0.339s] (4/7) veredas-supervisao::host nothing_starts_before_the_address_is_held_nor_under_check\n        PASS [   4.053s] (5/7) veredas-supervisao::host the_executable_serves_a_file_until_stdin_closes\n        PASS [  11.533s] (6/7) veredas-supervisao::host two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal\n        SLOW [> 60.000s] (───) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        PASS [ 100.051s] (7/7) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n────────────\n     Summary [ 113.782s] 7 tests run: 7 passed (1 slow), 0 skipped",
+  "ranAt": "2026-11-15T23:30:24.532Z",
+  "headCommit": "521022987efe85fb7e1084000964f4f7cf41a162",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/host.rs",
       "file": "crates/veredas-supervisao/tests/host.rs",
-      "fileSha": "85e3a835167b82af9aff7c9fc075edd6fc37bc7b94f8b17665e59d1d4c6202f7"
+      "fileSha": "8473bfd1a4a01b360f04413296c3303f424c52bf8e9db31ab146037855a2541d"
     }
   ]
 }
