@@ -1053,10 +1053,11 @@ A path is relative to the binding file's folder.
   places, trailing zeros dropped.
 - `show` (`"state"`): how the layout shows the object: `state` (its element takes the state's
   class, and its mark and word when not normal), `level` (as `state`, and its element fills from
-  the bottom of the screen by the value's place in `range`, a shape or a text within its outline,
-  a group its box, an element with no area (a line, or a shape whose outline holds none: a straight
-  path or polyline) its box widened to its stroke across it, that stroke drawn as the level's
-  track), `value` (as `state`, and the value
+  the bottom of the screen by the value's place in `range`, a shape or a text within its outline
+  by its own fill rule (a hole `evenodd` leaves stays empty), a group its box, an element with no
+  area (a line, a shape whose outline holds none: a straight path or polyline, or a group of them)
+  its box widened to its stroke across it, that stroke drawn as the level's track), `value` (as
+  `state`, and the value
   written over its element) or `move` (its element is a marker placed along `path` by the value's
   place in `range`, its own transform kept). A level and a marker need a numeric
   series.

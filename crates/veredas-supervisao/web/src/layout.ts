@@ -28,9 +28,10 @@ interface Bound {
   fillBox: Box;
   /// The element's box in the overlay's frame, as it stands.
   ob: Box;
-  /// For an element with no area: the matrix from it to the overlay and the way it runs, in its own
+  /// For an element with no area: each shape that draws it (the element, or a group's shapes), its
+  /// box in the overlay's frame, the matrix from it to the overlay and the way it runs, in its own
   /// coordinates.
-  noArea?: { m: DOMMatrix; dir: { x: number; y: number } | null };
+  noArea?: { el: SVGGraphicsElement; ob: Box; m: DOMMatrix; dir: { x: number; y: number } | null }[];
   tag: SVGTextElement;
   label: SVGTextElement;
   fill?: SVGRectElement;
@@ -72,16 +73,16 @@ function boxIn(target: SVGGraphicsElement, el: SVGGraphicsElement, box: DOMRect)
 /// The paint the page outranks on a bound element (and pins on a group's text, as drawn).
 const PAINT = ["fill", "stroke", "stroke-width", "stroke-dasharray", "fill-opacity", "stroke-opacity"];
 
-/// Whether an element draws no area, and the way it runs in its own coordinates: a line; a shape
-/// with no width or no height; or a shape every point of which lies on one straight line (a
-/// straight path, polyline or polygon, slanted or not: a polyline's and a polygon's own points, and
-/// 65 points along any shape), its way from its start to its farthest point. Null for an element
-/// with an area.
+/// Whether an element draws no area, and the way it runs in its own coordinates: a line; any element
+/// with no width or no height (a shape, or a group of such shapes); or a shape every point of which
+/// lies on one straight line (a straight path, polyline or polygon, slanted or not: a polyline's and
+/// a polygon's own points, and 65 points along any shape), its way from its start to its farthest
+/// point. Null for an element with an area.
 function noAreaOf(el: SVGGraphicsElement, box: DOMRect): { dir: { x: number; y: number } | null } | null {
   if (el instanceof SVGLineElement) return { dir: { x: el.x2.baseVal.value - el.x1.baseVal.value, y: el.y2.baseVal.value - el.y1.baseVal.value } };
-  if (!(el instanceof SVGGeometryElement)) return null;
   if (box.width === 0) return { dir: { x: 0, y: 1 } };
   if (box.height === 0) return { dir: { x: 1, y: 0 } };
+  if (!(el instanceof SVGGeometryElement)) return null;
   const pts: { x: number; y: number }[] = [];
   if (el instanceof SVGPolylineElement || el instanceof SVGPolygonElement) for (let i = 0; i < el.points.numberOfItems; i++) pts.push(el.points.getItem(i));
   const len = el.getTotalLength();
@@ -104,6 +105,19 @@ function across(m: DOMMatrix, sw: number, dir: { x: number; y: number } | null):
   const ux = dir.x / n, uy = dir.y / n;
   const along = Math.hypot(m.a * ux + m.c * uy, m.b * ux + m.d * uy);
   return along ? (sw * det) / along : sw * Math.sqrt(det);
+}
+
+/// The box around boxes; none for none.
+function union(boxes: Box[]): Box | null {
+  if (!boxes.length) return null;
+  const x = Math.min(...boxes.map((b) => b.x)), y = Math.min(...boxes.map((b) => b.y));
+  return { x, y, width: Math.max(...boxes.map((b) => b.x + b.width)) - x, height: Math.max(...boxes.map((b) => b.y + b.height)) - y };
+}
+
+/// The box a level with no area fills: each shape's box widened to its stroke's width across it, the
+/// box around them; the element's own box where it has no shape to measure.
+function overStroke(parts: NonNullable<Bound["noArea"]>, ob: Box): Box {
+  return union(parts.map((p) => widened(p.ob, across(p.m, parseFloat(getComputedStyle(p.el).strokeWidth) || 0, p.dir)))) ?? ob;
 }
 
 /// A box widened, about its centre, to `w` where it is narrower or lower.
@@ -177,18 +191,26 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     let ownM = new DOMMatrix();
     const list = el.transform?.baseVal;
     if (list) for (let i = 0; i < list.numberOfItems; i++) { const t = list.getItem(i).matrix; ownM = ownM.multiply(new DOMMatrix([t.a, t.b, t.c, t.d, t.e, t.f])); }
-    // An element with no area (a line, a straight path or polyline) is filled over its stroke: its
-    // box widened to the stroke's width across it, carried to the overlay; its stroke then drawn as
-    // the level's track (`sv-noarea`), the fill over it in the state's colour.
+    // An element with no area (a line, a straight path or polyline, a group of them) is filled over
+    // its stroke: each shape's box widened to its stroke's width across it, carried to the overlay
+    // (each of a group's shapes through its own matrix), the box around them; its stroke then drawn
+    // as the level's track (`sv-noarea`, a group's shapes taking it from the group), the fill over
+    // it in the state's colour.
     const flat = def.show === "level" ? noAreaOf(el, box) : null;
     const noArea = flat !== null;
     let fillBox = { ...ob };
-    const oc0 = overlay.getCTM(), ec0 = el.getCTM();
+    const oc0 = overlay.getCTM();
     let na: Bound["noArea"];
-    if (flat && oc0 && ec0) {
-      na = { m: oc0.inverse().multiply(ec0), dir: flat.dir };
+    if (flat && oc0) {
+      const shapes: SVGGraphicsElement[] = el instanceof SVGGeometryElement ? [el] : Array.from(el.querySelectorAll<SVGGeometryElement>("path, rect, circle, ellipse, line, polyline, polygon")).filter((g) => g.checkVisibility());
+      na = shapes.flatMap((g) => {
+        const gc = g.getCTM();
+        if (!gc) return [];
+        const gb = g.getBBox();
+        return [{ el: g, ob: boxIn(overlay, g, gb), m: oc0.inverse().multiply(gc), dir: g === el ? flat.dir : noAreaOf(g, gb)?.dir ?? null }];
+      });
       el.classList.add("sv-noarea");
-      fillBox = widened(ob, across(na.m, parseFloat(getComputedStyle(el).strokeWidth) || 0, na.dir));
+      fillBox = overStroke(na, ob);
     }
     const b: Bound = { def, el, box, own, ownM, fillBox, ob, noArea: na, tag, label, clones: new Map(), lastPlace: new Map(), tags: new Map() };
     if (def.show === "level") {
@@ -205,6 +227,10 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       const holder = s("g", { class: "sv-fill-holder", "data-for": def.id }, s("g", { class: "sv-reset" }, frame));
       if ((el instanceof SVGGeometryElement || el instanceof SVGTextElement) && !noArea) {
         const clipId = `sv-clip-${def.id}`;
+        // A clip reads its shape's inside by `clip-rule`, never by the `fill-rule` it is painted by
+        // (the hole Inkscape's Combine leaves, `fill-rule:evenodd`): the element's own rule is
+        // written as its clip rule, on it, where it draws nothing else.
+        el.style.setProperty("clip-rule", getComputedStyle(el).fillRule, "important");
         defsEl.append(s("clipPath", { id: clipId }, s("use", { href: `#${def.id}` })));
         holder.setAttribute("clip-path", `url(#${clipId})`);
       }
@@ -228,6 +254,31 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     el.addEventListener("click", pick);
     bound.set(def.id, b);
   }
+
+  // The frame the view fits: the drawing's own, grown to take in everything the page writes beside
+  // its elements (a label over one at the drawing's top edge, a mark and word under one at its
+  // bottom, a value), so the drawing's frame cuts nothing the page adds. From the last fit on it
+  // grows and never shrinks while the view stays fitted (a word coming and going at an edge moves
+  // nothing back and forth); a zoom or a pan leaves the view to the person until Fit.
+  const frame = { ...vb0 };
+  let fitted = true;
+  const refit = () => {
+    if (!fitted || !svg.isConnected) return;
+    const said = Array.from(overlay.children).filter((t): t is SVGGraphicsElement => t instanceof SVGGraphicsElement && !!t.textContent && getComputedStyle(t).display !== "none").map((t) => t.getBBox()).filter((b) => b.width || b.height);
+    const all = union([{ x: frame.x, y: frame.y, width: frame.w, height: frame.h }, ...said]);
+    if (all) Object.assign(frame, { x: all.x, y: all.y, w: all.width, h: all.height });
+    if (vb.x !== frame.x || vb.y !== frame.y || vb.w !== frame.w || vb.h !== frame.h) {
+      Object.assign(vb, frame);
+      setVb();
+    }
+  };
+  let refitting = false;
+  const refitSoon = () => {
+    if (refitting) return;
+    refitting = true;
+    requestAnimationFrame(() => { refitting = false; refit(); });
+  };
+  refit();
 
   const pathOf = (id: string) => svg.querySelector(`[id="${CSS.escape(id)}"]`) as SVGGeometryElement | null;
 
@@ -317,9 +368,8 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       if (b.noArea) {
         const sel = b.el.classList.contains("sv-selected");
         b.el.classList.remove("sv-selected");
-        const sw = parseFloat(getComputedStyle(b.el).strokeWidth) || 0;
+        b.fillBox = overStroke(b.noArea, b.ob);
         if (sel) b.el.classList.add("sv-selected");
-        b.fillBox = widened(b.ob, across(b.noArea.m, sw, b.noArea.dir));
         b.fill.setAttribute("x", String(b.fillBox.x));
         b.fill.setAttribute("width", String(b.fillBox.width));
       }
@@ -368,10 +418,12 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       }
     }
     mark(b);
+    refitSoon();
   }
 
   // Zoom and pan by the viewBox.
   const zoom = (f: number) => {
+    fitted = false;
     const cx = vb.x + vb.w / 2, cy = vb.y + vb.h / 2;
     vb.w *= f; vb.h *= f; vb.x = cx - vb.w / 2; vb.y = cy - vb.h / 2;
     setVb();
@@ -380,7 +432,8 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
   svg.addEventListener("mousedown", (e) => { drag = { x: e.clientX, y: e.clientY }; });
   window.addEventListener("mouseup", () => { drag = null; });
   svg.addEventListener("mousemove", (e) => {
-    if (!drag) return;
+    if (!drag || (e.clientX === drag.x && e.clientY === drag.y)) return;
+    fitted = false;
     const r = svg.getBoundingClientRect();
     vb.x -= ((e.clientX - drag.x) / r.width) * vb.w;
     vb.y -= ((e.clientY - drag.y) / r.height) * vb.h;
@@ -396,7 +449,13 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     const b = document.createElement("button");
     b.textContent = label;
     b.title = f === 0 ? "Fit" : label === "+" ? "Zoom in" : "Zoom out";
-    b.onclick = () => { if (f === 0) { Object.assign(vb, vb0); setVb(); } else zoom(f); };
+    b.onclick = () => {
+      if (f === 0) {
+        fitted = true;
+        Object.assign(frame, vb0);
+        refit();
+      } else zoom(f);
+    };
     controls.append(b);
   }
   root.append(controls);
@@ -422,6 +481,7 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       svg.classList.toggle("no-markers", !l.markers);
       svg.classList.toggle("no-states", !l.states);
       svg.classList.toggle("no-labels", !l.labels);
+      refitSoon();
     },
   };
 }
