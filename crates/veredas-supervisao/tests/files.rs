@@ -1182,7 +1182,11 @@ an SVG document (its root an `svg` in the SVG namespace), or holds (outside Inks
 `transform`, `translate`, `rotate`, `scale`, `transform-origin`, `transform-box`, `transform-style`,
 `perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, in a
 `style`, a name with white space or a comment inside it declaring nothing; the attributes
-`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), foreign content (an
+`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), a custom
+property (a `style` declaration whose name begins `--`, however CSS spells it) anywhere, a
+`direction` (an attribute or in a `style`) outside a text and its spans (`text`, `tspan`, `textPath`),
+both of which the page's reset leaves to inheritance (the state colours read custom properties),
+foreign content (an
 element outside the SVG namespace, Inkscape's own apart where Inkscape writes them), an event handler, a script link (a `javascript:` URL in any
 attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
 declaring attribute defaults or using a parameter entity (a browser would apply them unchecked); an
@@ -1286,7 +1290,7 @@ fn hint(kind: &str) -> &'static str {
 /// object's element, inside it and beside it). Every list is held to the reference's own sentence.
 #[test]
 fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
-    use veredas_supervisao::svg::{ANIMATIONS, AROUND, DRAWN, HOLDS, MOVING, MOVING_ATTRIBUTES, MOVING_FAMILIES, declared, moves_the_page, says_important};
+    use veredas_supervisao::svg::{ANIMATIONS, AROUND, DIRECTED, DRAWN, HOLDS, MOVING, MOVING_ATTRIBUTES, MOVING_FAMILIES, declared, moves_the_page, says_important};
     // The lists are the reference's, each member named in its own sentence: the kinds an object is
     // shown on, what may stand around them and inside them, the animations, the properties and
     // attributes that move, time or unpin what the page writes.
@@ -1453,6 +1457,27 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
         for (place, _, ex) in places(ok).into_iter().filter(|(p, _, _)| !(ok.starts_with("transform=") && p == "the root")) {
             assert!(outcome(&ex).is_ok(), "{ok}, {place}: {:?}", outcome(&ex).err());
         }
+    }
+    // What the page's reset (`all: initial`) leaves to inheritance: a custom property, however CSS
+    // spells it (plainly, after another, after a comment, escaped, in capitals), at every place; and
+    // `direction`, as an attribute or in a `style` however spelled, at every place but a text and its
+    // spans (`DIRECTED`, the reference's list), where it loads (on a text bound as an object too).
+    assert_eq!(named("outside a text and its spans (", ")"), DIRECTED);
+    for style in ["--near: #30d158", "fill: red; --near: #30d158", "/* c */ --near : x", "\\2d\\2d near: x", "--NEAR: x"] {
+        for (place, el, ex) in places(&format!("style=\"{style}\"")) {
+            let got = binding_refusal(&ex);
+            assert!(got.ends_with(&format!("layout.svg holds the custom property `--near` (on <{el}>), which the page's own colours would read: write the drawing's paint by its properties")), "{style}, {place}: {got}");
+        }
+    }
+    for attr in ["direction=\"rtl\"", "style=\"direction: rtl\"", "style=\"fill: red; DIRECTION : rtl\"", "style=\"\\64 irection: rtl\"", "style=\"-webkit-direction: rtl\""] {
+        for (place, el, ex) in places(attr) {
+            let got = binding_refusal(&ex);
+            assert!(got.ends_with(&format!("layout.svg holds `direction` (on <{el}>), which would reach what the page writes beside the drawing: Inkscape writes it on a text and its spans alone")), "{attr}, {place}: {got}");
+        }
+        let texts = with_svg(INFEED, &format!("{INFEED}<text {attr}>a<tspan {attr}>b</tspan><textPath href=\"#loop\" {attr}>c</textPath></text>"));
+        assert!(outcome(&texts).is_ok(), "{attr} on a text and its spans: {:?}", outcome(&texts).err());
+        let bound = with_svg(INFEED, &format!("<text id=\"infeed\" x=\"20\" y=\"96\" {attr}>a<tspan {attr}>b</tspan></text>"));
+        assert!(outcome(&bound).is_ok(), "{attr} on a bound text: {:?}", outcome(&bound).err());
     }
     // The root's own transform refused, however it is written: the page lays its own frame over the
     // root.

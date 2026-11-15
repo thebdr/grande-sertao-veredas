@@ -322,8 +322,10 @@ pub fn object<'a>(snapshot: &'a Value, id: &str) -> &'a Value {
 /// (`sodipodi:namedview` with a grid, a page and a guide; a path effect and a perspective in `defs`),
 /// the metadata block in `metadata`, layers (one locked, one moved, one hidden), every paint in a
 /// `style`, lines as paths with their node types, an arc as a path, a group turned by a matrix, a
-/// text with its line span. Written by hand to Inkscape's format: no file saved by Inkscape has gone
-/// through the reader or the page (the limit C-048 and C-051 state).
+/// text with its line span; the markers writing `display:inline` (as Inkscape writes on an object
+/// hidden and shown again), and the loop speed's object on a text whose line span holds a styled run
+/// (as Inkscape writes a run styled apart inside a line). Written by hand to Inkscape's format: no
+/// file saved by Inkscape has gone through the reader or the page (the limit C-048 and C-051 state).
 pub const INKSCAPE_LOOP: &str = r##"<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!-- Created with Inkscape (http://www.inkscape.org/) -->
 
@@ -497,11 +499,11 @@ pub const INKSCAPE_LOOP: &str = r##"<?xml version="1.0" encoding="UTF-8" standal
          y="4" />
     </g>
     <circle
-       style="fill:#ffffff;stroke:#000000;stroke-width:0.264583"
+       style="display:inline;fill:#ffffff;stroke:#000000;stroke-width:0.264583"
        id="parcel-1"
        r="5" />
     <circle
-       style="fill:#ffffff;stroke:#000000;stroke-width:0.264583"
+       style="display:inline;fill:#ffffff;stroke:#000000;stroke-width:0.264583"
        id="parcel-2"
        r="5" />
     <g
@@ -544,6 +546,19 @@ pub const INKSCAPE_LOOP: &str = r##"<?xml version="1.0" encoding="UTF-8" standal
          style="stroke-width:0.264583"
          x="20"
          y="140">Infeed</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:8px;font-family:sans-serif;-inkscape-font-specification:sans-serif;fill:#e8e8ec;stroke-width:0.264583"
+       x="110"
+       y="118"
+       id="speed"><tspan
+         sodipodi:role="line"
+         id="tspan3"
+         style="stroke-width:0.264583"
+         x="110"
+         y="118">Spe<tspan
+           style="fill:#ff0000;stroke:#00ff00;stroke-width:3"
+           id="tspan4">ed</tspan></tspan></text>
   </g>
   <g
      inkscape:label="Notes"

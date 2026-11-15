@@ -173,6 +173,17 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
         if let Some(property) = moving {
             return Err(format!("{} holds `{property}` (on <{name}>), which would move, time or unpin what the page writes: the page places, animates and takes the clicks itself", path.display()));
         }
+        // What the page's reset (`all: initial`) leaves to inheritance, CSS keeping both out of `all`:
+        // a custom property, which the page's state colours read (each a `var(--…)`), and a
+        // `direction`, which would turn what the page writes beside an element. Inkscape writes no
+        // custom property, and `direction` on a text and its spans alone (`DIRECTED`).
+        let styled = node.attribute("style").map(declared).unwrap_or_default();
+        if let Some(property) = styled.iter().find(|p| p.starts_with("--")) {
+            return Err(format!("{} holds the custom property `{property}` (on <{name}>), which the page's own colours would read: write the drawing's paint by its properties", path.display()));
+        }
+        if !DIRECTED.contains(&name) && (node.attribute("direction").is_some() || styled.iter().any(|p| p == "direction")) {
+            return Err(format!("{} holds `direction` (on <{name}>), which would reach what the page writes beside the drawing: Inkscape writes it on a text and its spans alone", path.display()));
+        }
         if let Some(id) = node.attribute("id") {
             let e = ids.entry(id.to_string()).or_insert_with(|| (name.to_string(), 0));
             e.1 += 1;
@@ -336,6 +347,11 @@ pub const MOVING: [&str; 9] = ["transform", "translate", "rotate", "scale", "tra
 /// The presentation attributes of those properties SVG lets an element write (its own `transform`
 /// attribute aside: the page reads and keeps it).
 pub const MOVING_ATTRIBUTES: [&str; 2] = ["transform-origin", "pointer-events"];
+
+/// Where a drawing may write `direction` (as an attribute or in a `style`): a text and what it holds,
+/// as Inkscape writes it. Anywhere else it would reach the page's reset holders, which CSS's `all`
+/// leaves it to.
+pub const DIRECTED: [&str; 3] = ["text", "tspan", "textPath"];
 
 /// The ids the page names its own beside the drawing's: its root (`app`) and every one it writes
 /// into the drawing (the hatch pattern, a level's clip), all `sv-`; as written (the page is in standards

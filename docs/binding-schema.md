@@ -439,7 +439,11 @@ an SVG document (its root an `svg` in the SVG namespace), or holds (outside Inks
 `transform`, `translate`, `rotate`, `scale`, `transform-origin`, `transform-box`, `transform-style`,
 `perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, in a
 `style`, a name with white space or a comment inside it declaring nothing; the attributes
-`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), foreign content (an
+`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), a custom
+property (a `style` declaration whose name begins `--`, however CSS spells it) anywhere, a
+`direction` (an attribute or in a `style`) outside a text and its spans (`text`, `tspan`, `textPath`),
+both of which the page's reset leaves to inheritance (the state colours read custom properties),
+foreign content (an
 element outside the SVG namespace, Inkscape's own apart where Inkscape writes them), an event handler, a script link (a `javascript:` URL in any
 attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
 declaring attribute defaults or using a parameter entity (a browser would apply them unchecked); an

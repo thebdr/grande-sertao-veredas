@@ -66,7 +66,9 @@ svg.plant { width: 100%; height: 100%; display: block; user-select: none; }
 :where(.sv-show-state, .sv-show-value, .sv-show-level) { fill: var(--raised) !important; stroke: var(--outline) !important; }
 :where(.sv-show-move) { fill: #d4d4da !important; stroke: none !important; transition: transform .2s linear; }
 .sv-show-move.sv-jump { transition: none; }
-.sv-hidden { display: none; }
+/* What the page hides (a marker with no place, a keyed marker's own element) it hides whatever
+   `display` the drawing writes on it: Inkscape writes `display:inline` on an object shown again. */
+.sv-hidden { display: none !important; }
 /* What the page adds (the overlay's tags, labels and values, a level's fill, the hatch) inherits
    nothing from the drawing: its holder starts every property at its initial value. A fill and a tag
    are painted by their fill alone, never stroked. */
@@ -107,7 +109,7 @@ svg.plant { width: 100%; height: 100%; display: block; user-select: none; }
 .sv-tag.sv-state-alarm { fill: var(--danger-text); }
 .sv-tag.sv-state-stale { fill: var(--muted); }
 svg.no-labels .sv-label, svg.no-states .sv-tag { display: none; }
-svg.no-markers .sv-show-move, svg.no-markers .sv-tag[data-key] { display: none; }
+svg.no-markers .sv-show-move, svg.no-markers .sv-tag[data-key] { display: none !important; }
 
 /* ---- the side panel ---- */
 .side { width: 300px; flex: none; overflow: auto; background: var(--chrome); border-left: 1px solid var(--hair); padding: 12px 14px; }

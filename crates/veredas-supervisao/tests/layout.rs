@@ -363,6 +363,10 @@ const PROBES: &str = r##"
     const span = document.createElementNS(svgNS, "tspan");
     span.setAttribute("fill", "#abcdef");
     span.setAttribute("stroke", "#fedcba");
+    const run = document.createElementNS(svgNS, "tspan");
+    run.setAttribute("fill", "#13579b");
+    run.setAttribute("stroke", "#b97531");
+    span.append(run);
     text.append(span);
     mid.append(text);
     texts.push([cls, how, text]);
@@ -402,10 +406,14 @@ const PROBES: &str = r##"
         const tx = document.createElementNS(svgNS, "text");
         tx.setAttribute("class", cls);
         const span = write(document.createElementNS(svgNS, "tspan"), how);
+        // And a run inside it writing its own, as Inkscape writes a styled run inside a line's span.
+        const run = write(document.createElementNS(svgNS, "tspan"), how);
+        span.append(run);
         tx.append(span);
         plant.append(tx);
         extra.push(tx);
         if (sig(span, props) !== want) out.push(`${what}, a bound text's span: ${sig(span, props)}, a plain one ${want}`);
+        if (sig(run, props) !== want) out.push(`${what}, a bound text's run inside its span: ${sig(run, props)}, a plain one ${want}`);
         for (const [name, e] of nest(cls, how)) if (sig(e, props) !== want) out.push(`${what}, its group's ${name}: ${sig(e, props)}, a plain one ${want}`);
       }
     }
@@ -416,12 +424,17 @@ const PROBES: &str = r##"
     const span = document.createElementNS(svgNS, "tspan");
     span.setAttribute("fill", "#abcdef");
     span.setAttribute("stroke", "#fedcba");
+    const run = document.createElementNS(svgNS, "tspan");
+    run.setAttribute("fill", "#13579b");
+    run.setAttribute("stroke", "#b97531");
+    span.append(run);
     free.append(span);
     plant.append(free);
     extra.push(free);
     if (sig(text, PAINT) !== sig(free, PAINT)) out.push(`a text in a group ${cls}, its paint written as ${how}: ${sig(text, PAINT)}, a free one ${sig(free, PAINT)}`);
-    // Its span writing its own paint keeps it, as a free text's does.
+    // Its span writing its own paint keeps it, as a free text's does, and the run inside the span.
     if (sig(text.firstElementChild, PAINT) !== sig(span, PAINT)) out.push(`a span of a text in a group ${cls}: ${sig(text.firstElementChild, PAINT)}, a free one's ${sig(span, PAINT)}`);
+    if (sig(text.firstElementChild.firstElementChild, PAINT) !== sig(run, PAINT)) out.push(`a run in a span of a text in a group ${cls}: ${sig(text.firstElementChild.firstElementChild, PAINT)}, a free one's ${sig(run, PAINT)}`);
   }
   // Every way of showing in every state shown: displayed, visible and painted with some alpha once
   // every opacity is multiplied (an element by its fill or its stroke, a group by its shape); a fill
@@ -874,8 +887,9 @@ fn grown(mut ex: Example) -> Example {
         .replace("<rect id=\"outlet-2\" x=\"190\" y=\"4\" width=\"24\" height=\"28\"/>", "<rect id=\"outlet-2\" x=\"190\" y=\"4\" width=\"24\" height=\"28\" transform=\"translate(-20 110)\"/>")
         .replace("<rect id=\"outlet-3\" x=\"250\" y=\"4\" width=\"24\" height=\"28\"/>", "<g transform=\"translate(0 100)\"><rect id=\"outlet-3\" x=\"250\" y=\"4\" width=\"24\" height=\"28\"/></g>")
         // A keyed marker inside a moved group, as a drawing's layers put one: its clones stand at
-        // their places whatever the group's transform.
-        .replace("<circle id=\"parcel-2\" r=\"5\"/>", "<circle id=\"parcel-2\" r=\"5\"/>\n  <g transform=\"translate(15 -10) scale(2)\"><circle id=\"tracked\" r=\"4\"/></g>")
+        // their places whatever the group's transform. Its element writes `display:inline`, as
+        // Inkscape writes on an object hidden and shown again: the page hides it all the same.
+        .replace("<circle id=\"parcel-2\" r=\"5\"/>", "<circle id=\"parcel-2\" r=\"5\"/>\n  <g transform=\"translate(15 -10) scale(2)\"><circle id=\"tracked\" r=\"4\" style=\"display:inline\"/></g>")
         .replace("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 400 300\"")
         .replace("</svg>", GROWN_SVG);
     ex.binding = ex.binding.replacen("\n[[dashboard]]", GROWN_OBJECTS, 1).replacen("\n[[dashboard]]", MORE_OBJECTS, 1);
@@ -1368,14 +1382,22 @@ const NO_AREA_SVG: &str = r##"  <line id="nv-vt-o" x1="0" y1="0" x2="0" y2="20" 
   <g id="nv-wrap"><rect id="nv-box" x="225" y="350" width="20" height="30"/></g>
   <g id="nv-grp"><rect x="260" y="350" width="40" height="24"/><text x="264" y="366" font-size="12" fill="#ffffff">A<tspan fill="#ffff00">B</tspan></text></g>
   <g id="nv-free"><rect x="320" y="350" width="40" height="24"/><text x="324" y="366" font-size="12" fill="#ffffff">A<tspan fill="#ffff00">B</tspan></text></g>
+  <line id="nv-vf-o" x1="0" y1="0" x2="0" y2="20" stroke="#3a3a40" stroke-width="6" transform="matrix(-1 0 0 1 345 240)"/>
+  <g transform="matrix(-1 0 0 1 375 240)"><line id="nv-vf-g" x1="0" y1="0" x2="0" y2="20" stroke="#3a3a40" stroke-width="6"/></g>
+  <line id="nv-hf-o" x1="0" y1="0" x2="20" y2="0" stroke="#3a3a40" stroke-width="6" transform="matrix(-1 0 0 1 365 300)"/>
+  <g transform="matrix(-1 0 0 1 395 300)"><line id="nv-hf-g" x1="0" y1="0" x2="20" y2="0" stroke="#3a3a40" stroke-width="6"/></g>
+  <g id="nv-grp6" style="fill:#cccccc;stroke:#000000;stroke-width:2;stroke-dasharray:4,1;fill-opacity:0.9;stroke-opacity:0.8"><rect x="260" y="380" width="40" height="16"/><text x="264" y="392" style="font-size:8px">O1</text></g>
+  <g id="nv-free6" style="fill:#cccccc;stroke:#000000;stroke-width:2;stroke-dasharray:4,1;fill-opacity:0.9;stroke-opacity:0.8"><rect x="320" y="380" width="40" height="16"/><text x="324" y="392" style="font-size:8px">O1</text></g>
 </svg>"##;
 
-/// The levels with no area whose stroke the page fills over, each with its level: the twenty under a
-/// transform and the three in a state at 85 %, the slanted path and polyline at 100 %.
+/// The levels with no area whose stroke the page fills over, each with its level: the twenty-four
+/// under a transform (each function and a mirroring matrix, upright and level, at an element's own
+/// place and a group's) and the three in a state at 85 %, the slanted path and polyline at 100 %.
 fn no_area_levels() -> Vec<(String, f64)> {
     let mut out: Vec<(String, f64)> = Vec::new();
     for o in ["v", "h"] {
-        for f in ["t", "s", "r", "k", "m"] {
+        // Each transform function, and a mirroring matrix (Inkscape's Flip writes one).
+        for f in ["t", "s", "r", "k", "m", "f"] {
             for at in ["o", "g"] {
                 out.push((format!("nv-{o}{f}-{at}"), 0.85));
             }
@@ -1433,13 +1455,16 @@ const NO_AREA_FILLS: &str = r##"(() => {
   }
   const all = Object.keys(SVGTransform).filter((k) => k.startsWith("SVG_TRANSFORM_") && k !== "SVG_TRANSFORM_UNKNOWN");
   const seen = { own: new Set(), group: new Set() };
+  // And each orientation: a transform keeping the drawing's handedness and one mirroring it (the
+  // sign of its matrix's determinant, the list multiplied out).
+  const det = (l) => { let m = new DOMMatrix(); for (let i = 0; i < l.numberOfItems; i++) { const t = l.getItem(i).matrix; m = m.multiply(new DOMMatrix([t.a, t.b, t.c, t.d, t.e, t.f])); } return m.a * m.d - m.b * m.c; };
   for (const [id] of LEVELS) {
     const el = document.getElementById(id);
-    const add = (cell, l) => { for (let i = 0; i < (l?.numberOfItems ?? 0); i++) seen[cell].add(l.getItem(i).type); };
+    const add = (cell, l) => { if (!l?.numberOfItems) return; for (let i = 0; i < l.numberOfItems; i++) seen[cell].add(l.getItem(i).type); seen[cell].add(det(l) < 0 ? "mirrored" : "kept"); };
     add("own", el.transform?.baseVal);
     for (let p = el.parentElement; p && !p.matches("svg"); p = p.parentElement) add("group", p.transform?.baseVal);
   }
-  return [out, Object.fromEntries(Object.entries(seen).map(([c, s]) => [c, all.filter((k) => !s.has(SVGTransform[k]))]))];
+  return [out, Object.fromEntries(Object.entries(seen).map(([c, s]) => [c, [...all, "mirrored", "kept"].filter((k) => !s.has(SVGTransform[k] ?? k))]))];
 })()"##;
 
 /// What the page adds (the overlay's tags, labels and values, every level's fill, the hatch) read
@@ -1463,13 +1488,24 @@ const ROOT_PAINT: &str = r##"(() => {
 })()"##;
 
 /// A bound group's text, and its span, painted as the same group's unbound; and every tag and every
-/// fill of the page stroked with nothing.
+/// fill of the page stroked with nothing. And the paint the page outranks, read from the page's own
+/// sheet (the rule that outranks it on a bound group's shapes and a bound text's spans), each kept on
+/// a group's text that writes none of it, its group writing every one: the text painted as the
+/// same group's unbound in each, each told from the group's state (so the pin is what keeps it).
 const PINNED: &str = r##"(() => {
-  const PAINT = ["fill", "stroke", "stroke-width", "stroke-dasharray", "fill-opacity", "stroke-opacity"];
+  const rule = [...document.styleSheets].flatMap((s) => { try { return [...s.cssRules]; } catch { return []; } }).find((r) => r.selectorText?.includes("text.sv-obj tspan"));
+  const PAINT = rule ? [...rule.style] : [];
   const sig = (el) => { const c = getComputedStyle(el); return PAINT.map((p) => c.getPropertyValue(p)).join(" | "); };
   const b = document.querySelector("#nv-grp text"), f = document.querySelector("#nv-free text");
   const stroked = [...document.querySelectorAll("svg.plant .sv-tag, svg.plant .sv-fill")].filter((e) => getComputedStyle(e).stroke !== "none").map((e) => `${e.getAttribute("class")} ${e.dataset.for}: ${getComputedStyle(e).stroke}`);
-  return [document.getElementById("nv-grp").classList.contains("sv-obj"), sig(b) === sig(f) ? null : [sig(b), sig(f)], sig(b.querySelector("tspan")) === sig(f.querySelector("tspan")) ? null : [sig(b.querySelector("tspan")), sig(f.querySelector("tspan"))], stroked];
+  const g6 = document.getElementById("nv-grp6"), b6 = g6.querySelector("text"), f6 = document.querySelector("#nv-free6 text");
+  const each = [];
+  for (const p of PAINT) {
+    const [bv, fv, gv] = [b6, f6, g6].map((e) => getComputedStyle(e).getPropertyValue(p));
+    if (bv !== fv) each.push(`${p}: the bound group's text ${bv}, the unbound one's ${fv}`);
+    if (gv === fv) each.push(`${p}: the group's state paints it as drawn (${gv}), so nothing is pinned`);
+  }
+  return [document.getElementById("nv-grp").classList.contains("sv-obj"), sig(b) === sig(f) ? null : [sig(b), sig(f)], sig(b.querySelector("tspan")) === sig(f.querySelector("tspan")) ? null : [sig(b.querySelector("tspan")), sig(f.querySelector("tspan"))], stroked, g6.classList.contains("sv-obj") && !document.getElementById("nv-free6").classList.contains("sv-obj"), PAINT, each];
 })()"##;
 
 #[test]
@@ -1485,7 +1521,7 @@ fn a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_th
         let rule = ["near", "warn", "alarm"].iter().find(|s| id == format!("nv-{s}")).map(|s| format!("states = [ {{ above = 50, state = \"{s}\" }} ]\n")).unwrap_or_default();
         objects.push_str(&format!("\n[[object]]\nid = \"{id}\"\nvalue = {{ source = \"plc\", series = \"{series}\" }}\nshow = \"level\"\n{rule}"));
     }
-    objects.push_str("\n[[object]]\nid = \"nv-box\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"nv-grp\"\nvalue = { source = \"plc\", series = \"fill1\" }\n");
+    objects.push_str("\n[[object]]\nid = \"nv-box\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"nv-grp\"\nvalue = { source = \"plc\", series = \"fill1\" }\n\n[[object]]\nid = \"nv-grp6\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n");
     ex.binding = ex.binding.replacen("\n[[dashboard]]", &format!("{objects}\n[[dashboard]]"), 1);
     let path = write_example(dir.path(), &ex);
     std::fs::write(dir.path().join("loop/sorts.log"), "").unwrap();
@@ -1502,12 +1538,16 @@ fn a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_th
     page.wait_for(r#"document.getAnimations().every((a) => a.playState !== "running") || null"#, Duration::from_secs(5));
     let got = page.eval(&format!("(() => {{ const LEVELS = {};\nreturn {NO_AREA_FILLS};\n}})()", serde_json::to_string(&levels).unwrap()));
     assert_eq!(got[0], json!([]), "a level with no area not filled over its stroke as painted");
-    assert_eq!(got[1], json!({ "own": [], "group": [] }), "every transform function a level with no area stands under, at both places");
+    assert_eq!(got[1], json!({ "own": [], "group": [] }), "every transform function and both orientations a level with no area stands under, at both places");
     let root = page.eval(ROOT_PAINT);
     assert!(root[0].as_u64().unwrap() > 60 && root[1].as_u64().unwrap() >= 3, "what the page adds, and where: {root}");
     assert_eq!(root[2], json!([]), "paint the drawing writes reaching what the page adds");
     let pinned = page.eval(PINNED);
-    assert_eq!(pinned, json!([true, null, null, []]), "a bound group's text and its span as drawn, no tag or fill stroked");
+    assert_eq!(
+        pinned,
+        json!([true, null, null, [], true, ["fill", "stroke", "stroke-width", "stroke-dasharray", "fill-opacity", "stroke-opacity"], []]),
+        "a bound group's text and its span as drawn, no tag or fill stroked; the paint the page outranks (its own rule's list) each kept on a group's text"
+    );
     drop(page);
     host.stop();
 }
@@ -1564,6 +1604,15 @@ fn the_page_draws_a_drawing_saved_as_inkscape_saves_it() {
         let (lx, ly) = on_loop(place);
         assert!(near(x, lx, 0.05) && near(y, ly, 0.05), "{id} at {place} along the loop: ({x}, {y}), the loop's point ({lx}, {ly})");
     }
+    // The markers write `display:inline` (Inkscape's, on an object shown again): with their layer
+    // turned off the page hides them all the same.
+    let off = page.eval(r#"(() => { const svg = document.querySelector("svg.plant"); svg.classList.add("no-markers"); const d = ["parcel-1", "parcel-2"].map((id) => getComputedStyle(document.getElementById(id)).display); svg.classList.remove("no-markers"); return d; })()"#);
+    assert_eq!(off, json!(["none", "none"]), "the markers hidden with their layer turned off, whatever display they write");
+    // The bound text's every span, the run inside its line's span among them, painted as the text.
+    let spans = page.eval(
+        r#"(() => { const PAINT = ["fill", "stroke", "stroke-width", "stroke-dasharray", "fill-opacity", "stroke-opacity"]; const t = document.getElementById("speed"); const sig = (e) => { const c = getComputedStyle(e); return PAINT.map((p) => c.getPropertyValue(p)).join(" | "); }; const all = [...t.querySelectorAll("tspan")]; return [t.classList.contains("sv-obj"), all.length, all.filter((s) => sig(s) !== sig(t)).map((s) => `${s.id}: ${sig(s)}, the text ${sig(t)}`)]; })()"#,
+    );
+    assert_eq!(spans, json!([true, 2, []]), "the bound text's spans at every depth painted as the text");
     drop(page);
     host.stop();
 }
