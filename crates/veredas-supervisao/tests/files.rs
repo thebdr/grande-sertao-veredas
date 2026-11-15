@@ -1209,7 +1209,8 @@ foreign content (an
 element outside the SVG namespace, Inkscape's own apart where Inkscape writes them), an event handler, an image linking its picture rather than embedding it (an `href`, plain or
 `xlink:`, other than a `data:image/…` URI), a script link (a `javascript:` URL in any
 attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
-declaring attribute defaults or using a parameter entity (a browser would apply them unchecked); an
+declaring attribute defaults or using a parameter entity (a browser would apply them unchecked), or an
+entity of it expanding to an element (Inkscape writes none; an entity of text alone is read); an
 object's element of another kind than the page draws on (a clone or an image told what to do in
 Inkscape), inside another object's element or anything but groups, hidden (`display: none` on it
 or on a group around it, as a hidden layer is), holding anything but groups, shapes, texts and their spans, or saying `!important` in a `style` on it or inside it, and a
@@ -2583,6 +2584,80 @@ fn every_state_and_every_kind_of_value_a_rule_meets_by_the_reader_s_own_lists() 
 /// other foreign namespace stays refused. An object's element or a marker's path in a hidden layer
 /// (`display: none`, in a `style` as Inkscape writes it or as an attribute) is refused, the hiding
 /// element named.
+/// Every element the reader refuses (a script, foreign content, a sheet, each animation of its own
+/// list, an image linking its picture, with an id as Inkscape gives one and without, plain and
+/// `xlink:`), at every place a drawing holds one: a child of the root, in the root's `defs` and
+/// `metadata`, in a `defs`, a `metadata` and a nested drawing inside a group, and inside each element
+/// an object may hold and each container Inkscape writes, alone and inside a group; each refused by its
+/// own refusal. And an element an entity of the document type expands to, refused by name wherever the
+/// entity is referenced (once, twice, its first reference dropped as Inkscape's own), the refusals
+/// above among what it holds; an entity of text alone read.
+#[test]
+fn every_element_refusal_holds_at_every_place_and_through_no_entity() {
+    use veredas_supervisao::svg::{ANIMATIONS, HOLDS, SVG_NS, parse};
+    let p = std::path::Path::new("l.svg");
+    const XLINK: &str = "http://www.w3.org/1999/xlink";
+    let script = "l.svg holds a <script> element: a layout is a drawing, with no script and no foreign content".to_string();
+    let linked = |href: &str| format!("l.svg holds an <image> linking its picture (`{href}`), which the page would load from where it points: embed it in Inkscape (on import, choose \"Embed\"; for a picture already linked, Extensions › Images › Embed Images)");
+    let mut refusals: Vec<(String, String)> = vec![
+        ("<script>x()</script>".into(), script.clone()),
+        ("<foreignObject width=\"4\" height=\"4\"/>".into(), "l.svg holds a <foreignObject> element: a layout is a drawing, with no script and no foreign content".into()),
+        ("<style>rect { fill: red }</style>".into(), "l.svg holds a <style> sheet, which the page would apply to its own screens too: write the drawing's paint on its elements".into()),
+    ];
+    for anim in ANIMATIONS {
+        refusals.push((format!("<{anim} href=\"#r\" attributeName=\"class\" to=\"x\"/>"), format!("l.svg holds a <{anim}> element: a layout is a still drawing, the page drawing its states and moving its markers itself")));
+    }
+    for href in ["http://other.example/plan.png", "https://other.example/plan.png", "//other.example/plan.png", "plan.png", "file:///C:/plan.png", "data:text/plain,plan"] {
+        for id in ["", " id=\"image1\""] {
+            refusals.push((format!("<image{id} href=\"{href}\" width=\"4\" height=\"4\"/>"), linked(href)));
+            refusals.push((format!("<image{id} xlink:href=\"{href}\" width=\"4\" height=\"4\"/>"), linked(href)));
+        }
+    }
+    let mut places: Vec<(String, String)> = vec![
+        (String::new(), String::new()),
+        ("<defs>".into(), "</defs>".into()),
+        ("<metadata>".into(), "</metadata>".into()),
+        ("<g><defs>".into(), "</defs></g>".into()),
+        ("<g><metadata>".into(), "</metadata></g>".into()),
+        ("<g><svg>".into(), "</svg></g>".into()),
+    ];
+    let mut containers: Vec<&str> = HOLDS.into_iter().chain(["symbol", "pattern", "marker", "clipPath", "mask", "switch", "a", "linearGradient"]).collect();
+    containers.dedup();
+    for c in containers {
+        places.push((format!("<{c}>"), format!("</{c}>")));
+        places.push((format!("<g><{c}>"), format!("</{c}></g>")));
+    }
+    for (open, close) in &places {
+        for (el, said) in &refusals {
+            let svg = format!("<svg xmlns=\"{SVG_NS}\" xmlns:xlink=\"{XLINK}\" viewBox=\"0 0 10 10\">{open}{el}{close}<rect id=\"r\"/></svg>");
+            assert_eq!(parse(&svg, p).as_ref().err(), Some(said), "{el} in {open}");
+        }
+    }
+    // Through an entity: the critic's drawing (its first reference at the root, in a prefix bound to
+    // Inkscape's sodipodi namespace there, dropped; its second in a group, the prefix the SVG
+    // namespace there), the same entity referenced once in a group, an Inkscape element through an
+    // entity, and each refusal above through an entity in a group.
+    let entity = |text: &str, body: &str| format!("<!DOCTYPE svg [<!ENTITY e \"{text}\">]><svg xmlns=\"{SVG_NS}\" xmlns:xlink=\"{XLINK}\" xmlns:x=\"http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd\" viewBox=\"0 0 400 220\">{body}<rect id=\"r\"/></svg>");
+    let from = |name: &str| format!("l.svg draws a <{name}> from an entity of its document type (`<!ENTITY`): Inkscape writes none; write the drawing's elements in the drawing itself");
+    let hidden = "<x:g><style>#app{display:none}</style><set attributeName='fill' to='red'/><rect class='c' id='app'/><image href='http://other.example/p.png' width='4' height='4'/><script>alert(1)</script><rect onclick='alert(1)'/></x:g>";
+    for body in ["&e;<g id=\"wrap\" xmlns:x=\"http://www.w3.org/2000/svg\">&e;</g>", "<g id=\"wrap\" xmlns:x=\"http://www.w3.org/2000/svg\">&e;</g>", "&e;"] {
+        let got = parse(&entity(hidden, body), p).unwrap_err();
+        assert_eq!(got, from("g"), "{body}");
+    }
+    let namedview = "<x:namedview id='nv'/>";
+    for body in ["&e;<g id=\"wrap\">&e;</g>", "&e;"] {
+        assert_eq!(parse(&entity(namedview, body), p).unwrap_err(), from("namedview"), "{body}");
+    }
+    for (el, _) in &refusals {
+        let text = el.replace('"', "'");
+        let name = el[1..].split(|c: char| c == ' ' || c == '>' || c == '/').next().unwrap();
+        assert_eq!(parse(&entity(&text, "<g>&e;</g>"), p).unwrap_err(), from(name), "{el} through an entity");
+    }
+    // An entity of text alone, in an attribute and in a text, read.
+    let t = parse(&format!("<!DOCTYPE svg [<!ENTITY w \"40\"><!ENTITY t \"Outlet\">]><svg xmlns=\"{SVG_NS}\"><rect id=\"r\" width=\"&w;\"/><text id=\"l\">&t; 1</text></svg>"), p).unwrap();
+    assert!(t.element("r") == Some("rect") && t.element("l") == Some("text"), "an entity of text alone read");
+}
+
 /// Q27 (decided 2026-11-15: "Drop the script, load it"): Inkscape's script beside a mesh gradient and
 /// beside an SVG2 hatch, as Inkscape writes it (the root's last child, its id, a type, its code in a
 /// CDATA section), dropped on read with all it holds, for each id of the reader's own list
@@ -2618,6 +2693,11 @@ fn inkscapes_script_beside_a_mesh_or_a_hatch_is_dropped_and_no_other() {
         // Any other script, refused as before.
         let others = [
             format!("<script id=\"{id}x\" type=\"text/javascript\">{code}</script>"),
+            format!("<script id=\"x{id}\" type=\"text/javascript\">{code}</script>"),
+            format!("<script id=\"{}\" type=\"text/javascript\">{code}</script>", id.to_uppercase()),
+            format!("<script id=\"{}\" type=\"text/javascript\">{code}</script>", id.replacen('_', "-", 1)),
+            format!("<script id=\"{id}\" xlink:type=\"simple\">{code}</script>"),
+            format!("<script xml:id=\"{id}\" type=\"text/javascript\">{code}</script>"),
             format!("<script type=\"text/javascript\">{code}</script>"),
             format!("<script id=\"{id}\" type=\"text/javascript\" href=\"poly.js\"></script>"),
             format!("<script id=\"{id}\" xlink:href=\"poly.js\"></script>"),

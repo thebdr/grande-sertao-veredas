@@ -466,7 +466,8 @@ foreign content (an
 element outside the SVG namespace, Inkscape's own apart where Inkscape writes them), an event handler, an image linking its picture rather than embedding it (an `href`, plain or
 `xlink:`, other than a `data:image/…` URI), a script link (a `javascript:` URL in any
 attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
-declaring attribute defaults or using a parameter entity (a browser would apply them unchecked); an
+declaring attribute defaults or using a parameter entity (a browser would apply them unchecked), or an
+entity of it expanding to an element (Inkscape writes none; an entity of text alone is read); an
 object's element of another kind than the page draws on (a clone or an image told what to do in
 Inkscape), inside another object's element or anything but groups, hidden (`display: none` on it
 or on a group around it, as a hidden layer is), holding anything but groups, shapes, texts and their spans, or saying `!important` in a `style` on it or inside it, and a

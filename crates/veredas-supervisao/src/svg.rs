@@ -124,12 +124,20 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
     }
     let mut ids: BTreeMap<String, (String, usize)> = BTreeMap::new();
     let mut placed: BTreeMap<String, Placed> = BTreeMap::new();
-    // Inkscape's own elements, each dropped with all it holds where Inkscape writes it.
-    let mut dropped: Vec<std::ops::Range<usize>> = Vec::new();
+    // Inkscape's own elements, each dropped with all it holds where Inkscape writes it: what a
+    // dropped element holds is known by the tree (its ancestors), never by where its text stands,
+    // which an entity's nodes share with every other reference to it.
+    let mut dropped: Vec<roxmltree::NodeId> = Vec::new();
     for node in root.descendants().filter(|n| n.is_element()) {
         let name = node.tag_name().name();
-        if dropped.iter().any(|r| r.contains(&node.range().start)) {
+        if node.ancestors().any(|a| dropped.contains(&a.id())) {
             continue;
+        }
+        // An element an entity of the document type expands to (its text standing in the document
+        // type, before the root): Inkscape writes none, and two parsers need not expand one alike,
+        // so the drawing's elements are written in it (an entity of text alone is read).
+        if node.range().start < root.range().start {
+            return Err(format!("{} draws a <{name}> from an entity of its document type (`<!ENTITY`): Inkscape writes none; write the drawing's elements in the drawing itself", path.display()));
         }
         if let Some((ns, places)) = EDITOR.iter().find(|(ns, _)| node.tag_name().namespace() == Some(*ns)) {
             // Judged by position: the root itself, or the root's own `defs` or `metadata`.
@@ -139,7 +147,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
                 let within = parent.map(|p| p.tag_name().name().to_string()).unwrap_or_default();
                 return Err(format!("{} holds an Inkscape element (<{name}> of `{ns}`) inside a <{within}>, where Inkscape writes none: its editor's state stands beside the drawing (a child of its root) or in the root's `defs`, its metadata in the root's `metadata`", path.display()));
             }
-            dropped.push(node.range());
+            dropped.push(node.id());
             continue;
         }
         // Inkscape's script for a mesh or a hatch, where and as Inkscape writes it (`POLYFILLS`):
@@ -151,7 +159,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
             && node.attribute("id").is_some_and(|id| POLYFILLS.contains(&id))
             && node.attributes().all(|a| a.namespace().is_none() && matches!(a.name(), "id" | "type"));
         if polyfill {
-            dropped.push(node.range());
+            dropped.push(node.id());
             continue;
         }
         if name == "script" || name == "foreignObject" {
