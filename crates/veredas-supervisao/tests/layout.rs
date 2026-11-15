@@ -1016,6 +1016,35 @@ const INSIDE_FRAME: &str = r#"((drawn) => {
   return [cut, kept, said.length, [v.x, v.y, v.width, v.height]];
 })"#;
 
+/// What the page placed for every bound element but a marker against the element's box as the
+/// browser gives it now, carried to the overlay (its corners through the matrices between them): the
+/// label and the mark and word centred across it, the value too, and a level's fill (one with an
+/// area) across it and resting on its foot, each within a thousandth of a unit. With the count read.
+const PLACED_NOW: &str = r#"(() => {
+  const svg = document.querySelector("svg.plant"), overlay = svg.querySelector(".sv-overlay");
+  const out = [];
+  let read = 0;
+  for (const el of svg.querySelectorAll("[data-object][id]")) {
+    if (el.classList.contains("sv-show-move")) continue;
+    const id = el.id, b = el.getBBox(), m = overlay.getCTM().inverse().multiply(el.getCTM());
+    const pts = [[b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]].map(([x, y]) => new DOMPoint(x, y).matrixTransform(m));
+    const x0 = Math.min(...pts.map((p) => p.x)), x1 = Math.max(...pts.map((p) => p.x)), y1 = Math.max(...pts.map((p) => p.y));
+    const mid = (x0 + x1) / 2;
+    const off = (what, got, want) => { read++; if (Math.abs(got - want) > 1e-3) out.push(`${id}: its ${what} at ${got}, the box says ${want}`); };
+    for (const k of ["label", "tag", "value"]) {
+      const t = overlay.querySelector(`.sv-${k}[data-for="${id}"]:not([data-key])`);
+      if (t) off(k, Number(t.getAttribute("x")), mid);
+    }
+    const fill = svg.querySelector(`.sv-fill[data-for="${id}"]`);
+    if (fill && !el.classList.contains("sv-noarea")) {
+      off("fill's left", Number(fill.getAttribute("x")), x0);
+      off("fill's width", Number(fill.getAttribute("width")), x1 - x0);
+      off("fill's foot", Number(fill.getAttribute("y")) + Number(fill.getAttribute("height")), y1);
+    }
+  }
+  return [read, out.slice(0, 20)];
+})()"#;
+
 /// What the page writes beside the drawing, read at the view's fit: none of it cut by the drawing's
 /// frame, the frame itself kept whole, and at least `least` things read.
 fn assert_inside_frame(page: &mut Browser, drawn: [f64; 4], least: u64, what: &str) {
@@ -1358,6 +1387,18 @@ fn the_page_draws_the_layout_from_the_feed() {
     assert!(drawn["parcel-1"]["tag"].as_str().unwrap().starts_with("◌ "), "{}", drawn["parcel-1"]);
     let around = around_when(&mut page, "a.headline[0][2].includes('stale')");
     assert_eq!(around["headline"], json!([["speed", "1.5", "mono st-text-stale"], ["read-rate", "—", "mono st-text-stale"]]));
+    // Placed by the element's box as it stands at the view's scale, whatever changed the scale (the
+    // fit, a zoom in, a zoom out, Fit): Chromium lays a text out at the size it is drawn, so a
+    // text's box moves with the scale, and what was placed by the box measured once would not.
+    for (step, act) in [("the fit", ""), ("a zoom in", "Zoom in"), ("another zoom in", "Zoom in"), ("a zoom out", "Zoom out"), ("Fit", "Fit")] {
+        if !act.is_empty() {
+            page.eval(&format!(r#"(() => {{ document.querySelector('.zoom button[title="{act}"]').click(); return true; }})()"#));
+        }
+        page.eval(r#"new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))"#);
+        let off = page.eval(PLACED_NOW);
+        assert!(off[0].as_u64().unwrap() >= 20 && off[1] == json!([]), "after {step}: placed otherwise than by the box as it stands: {off}");
+    }
+    assert_inside_frame(&mut page, [0.0, 0.0, 400.0, 300.0], 20, "Fit after zooms");
     drop(page);
     host.stop();
 
@@ -1499,7 +1540,9 @@ const NO_AREA_FILLS: &str = r##"(() => {
       const prev = fill.style.pointerEvents;
       fill.style.pointerEvents = "visiblePainted";
       let missed = 0;
-      for (let k = 0; k <= 12; k++) { const p = pt(shape, (len * k) / 12); const at = document.elementFromPoint(p.x, p.y); if (at !== fill) missed++; }
+      // Thirteen points inside its ends: an end of a slanted stroke is its box's corner, the fill's
+      // edge, where a hit is no verdict.
+      for (let k = 0; k <= 12; k++) { const p = pt(shape, (len * (k + 0.5)) / 13); const at = document.elementFromPoint(p.x, p.y); if (at !== fill) missed++; }
       fill.style.pointerEvents = prev;
       if (missed) out.push(`${id}: its fill missing at ${missed} of 13 points along its stroke`);
     }

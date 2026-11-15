@@ -154,7 +154,16 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
 
   const vb0 = svg.viewBox.baseVal && svg.viewBox.baseVal.width ? { x: svg.viewBox.baseVal.x, y: svg.viewBox.baseVal.y, w: svg.viewBox.baseVal.width, h: svg.viewBox.baseVal.height } : (() => { const b = svg.getBBox(); return { x: b.x, y: b.y, w: b.width, h: b.height }; })();
   const vb = { ...vb0 };
-  const setVb = () => svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+  // A change of the view's scale (a fit, a zoom) has everything measured anew (`rescale`, below).
+  let scaledAt = { w: vb.w, h: vb.h };
+  let onScale = () => {};
+  const setVb = () => {
+    svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+    if (vb.w !== scaledAt.w || vb.h !== scaledAt.h) {
+      scaledAt = { w: vb.w, h: vb.h };
+      onScale();
+    }
+  };
   setVb();
   const fontSize = Math.max(vb0.h, vb0.w * 0.5) / 34;
 
@@ -166,6 +175,46 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
   svg.prepend(defsEl);
   const overlay = s("g", { class: "sv-overlay" }) as SVGGElement;
   svg.append(overlay);
+
+  /// Where the page draws what it adds for an object, from the element's box as it stands now: the
+  /// box (a text's moves with the view's scale: Chromium lays a text out at the size it is drawn,
+  /// so a fit or a zoom moves its box a little), carried to the overlay; its label over it, its
+  /// mark and word under it and its value over it; a level's fill box (each shape of one with no
+  /// area measured too, its stroke read unselected). Done when the object is bound and whenever the
+  /// view's scale changes, the object then painted again.
+  function measure(b: Bound) {
+    const el = b.el;
+    const hidden = el.classList.contains("sv-hidden");
+    if (hidden) el.classList.remove("sv-hidden");
+    b.box = el.getBBox();
+    if (hidden) el.classList.add("sv-hidden");
+    if (b.def.show === "move") return;
+    b.ob = boxIn(overlay, el, b.box);
+    const { x, y, width, height } = b.ob;
+    const mid = String(x + width / 2);
+    b.tag.setAttribute("x", mid);
+    b.tag.setAttribute("y", String(y + height + fontSize * 1.05));
+    b.label.setAttribute("x", mid);
+    b.label.setAttribute("y", String(y - fontSize * 0.35));
+    if (b.valueText) {
+      b.valueText.setAttribute("x", mid);
+      b.valueText.setAttribute("y", String(y + height / 2 + fontSize * 0.35));
+    }
+    if (b.noArea) {
+      for (const p of b.noArea) p.ob = boxIn(overlay, p.el, p.el.getBBox());
+      const sel = el.classList.contains("sv-selected");
+      el.classList.remove("sv-selected");
+      b.fillBox = overStroke(b.noArea, b.ob);
+      if (sel) el.classList.add("sv-selected");
+    } else b.fillBox = { ...b.ob };
+    if (b.fill) {
+      const f = b.filled ? b.last?.level ?? 0 : 0;
+      b.fill.setAttribute("x", String(b.fillBox.x));
+      b.fill.setAttribute("width", String(b.fillBox.width));
+      b.fill.setAttribute("y", String(b.fillBox.y + b.fillBox.height * (1 - f)));
+      b.fill.setAttribute("height", String(b.fillBox.height * f));
+    }
+  }
 
   const bound = new Map<string, Bound>();
   for (const def of defs) {
@@ -181,11 +230,9 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     for (const { t, vals } of pinned) for (const [p, v] of vals) t.style.setProperty(p, v, "important");
     el.dataset.object = def.id;
     const box = el.getBBox();
-    // Where the element stands in the overlay, its transforms (and its ancestors') followed.
-    const ob = boxIn(overlay, el, box);
-    const below = ob.y + ob.height + fontSize * 1.05;
-    const tag = s("text", { x: ob.x + ob.width / 2, y: below, class: "sv-tag", "font-size": fontSize * 0.8, "text-anchor": "middle", "data-for": def.id }) as SVGTextElement;
-    const label = s("text", { x: ob.x + ob.width / 2, y: ob.y - fontSize * 0.35, class: "sv-label", "font-size": fontSize * 0.85, "text-anchor": "middle", "data-for": def.id }, def.label) as SVGTextElement;
+    // Placed by `measure`, from the element's box as it stands.
+    const tag = s("text", { class: "sv-tag", "font-size": fontSize * 0.8, "text-anchor": "middle", "data-for": def.id }) as SVGTextElement;
+    const label = s("text", { class: "sv-label", "font-size": fontSize * 0.85, "text-anchor": "middle", "data-for": def.id }, def.label) as SVGTextElement;
     const own = el.getAttribute("transform") ?? "";
     // Its own transform as one matrix (read, never consolidated in place).
     let ownM = new DOMMatrix();
@@ -198,7 +245,6 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     // it in the state's colour.
     const flat = def.show === "level" ? noAreaOf(el, box) : null;
     const noArea = flat !== null;
-    let fillBox = { ...ob };
     const oc0 = overlay.getCTM();
     let na: Bound["noArea"];
     if (flat && oc0) {
@@ -210,9 +256,9 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
         return [{ el: g, ob: boxIn(overlay, g, gb), m: oc0.inverse().multiply(gc), dir: g === el ? flat.dir : noAreaOf(g, gb)?.dir ?? null }];
       });
       el.classList.add("sv-noarea");
-      fillBox = overStroke(na, ob);
     }
-    const b: Bound = { def, el, box, own, ownM, fillBox, ob, noArea: na, tag, label, clones: new Map(), lastPlace: new Map(), tags: new Map() };
+    const none = { x: 0, y: 0, width: 0, height: 0 };
+    const b: Bound = { def, el, box, own, ownM, fillBox: none, ob: none, noArea: na, tag, label, clones: new Map(), lastPlace: new Map(), tags: new Map() };
     if (def.show === "level") {
       // The fill rises up the screen over the element's box, whatever turns, skews or scales the
       // element and its groups: a rect in the overlay's frame, carried into the element's parent
@@ -220,7 +266,7 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       // by the element itself when it is a shape or a text with an area (the clip's `use` draws
       // it with its own transform, in that same space); a clip's `use` may draw nothing else, so
       // a group, and an element with no area, fills its box.
-      b.fill = s("rect", { x: fillBox.x, y: fillBox.y + fillBox.height, width: fillBox.width, height: 0, class: "sv-fill", "data-for": def.id }) as SVGRectElement;
+      b.fill = s("rect", { height: 0, class: "sv-fill", "data-for": def.id }) as SVGRectElement;
       const pc = (el.parentNode as SVGGraphicsElement).getCTM();
       const m = pc && oc0 ? pc.inverse().multiply(oc0) : new DOMMatrix();
       const frame = s("g", { transform: `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})` }, b.fill);
@@ -237,9 +283,10 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       el.after(holder);
     }
     if (def.show === "value") {
-      b.valueText = s("text", { x: ob.x + ob.width / 2, y: ob.y + ob.height / 2 + fontSize * 0.35, class: "sv-value", "font-size": fontSize, "text-anchor": "middle", "data-for": def.id }) as SVGTextElement;
+      b.valueText = s("text", { class: "sv-value", "font-size": fontSize, "text-anchor": "middle", "data-for": def.id }) as SVGTextElement;
       overlay.append(b.valueText);
     }
+    measure(b);
     if (def.show === "move") {
       el.classList.add("sv-hidden");
       tag.remove();
@@ -266,12 +313,27 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     if (!fitted || !svg.isConnected) return;
     const said = Array.from(overlay.children).filter((t): t is SVGGraphicsElement => t instanceof SVGGraphicsElement && !!t.textContent && getComputedStyle(t).display !== "none").map((t) => t.getBBox()).filter((b) => b.width || b.height);
     const all = union([{ x: frame.x, y: frame.y, width: frame.w, height: frame.h }, ...said]);
-    if (all) Object.assign(frame, { x: all.x, y: all.y, w: all.width, h: all.height });
+    // A text's box moves a little with the scale it is measured at: the frame, when it grows, grows
+    // a hundredth of itself past what it must take in, so the fit settles, never chasing its words.
+    if (all && (all.x < frame.x || all.y < frame.y || all.x + all.width > frame.x + frame.w || all.y + all.height > frame.y + frame.h)) {
+      const slack = Math.max(all.width, all.height) / 100;
+      Object.assign(frame, { x: all.x - slack, y: all.y - slack, w: all.width + 2 * slack, h: all.height + 2 * slack });
+    }
     if (vb.x !== frame.x || vb.y !== frame.y || vb.w !== frame.w || vb.h !== frame.h) {
       Object.assign(vb, frame);
       setVb();
     }
   };
+  // The view's scale changed: everything the page placed by a box measured anew and painted.
+  const rescale = () => {
+    if (!svg.isConnected) return;
+    for (const b of bound.values()) {
+      measure(b);
+      if (b.last) paint(b, b.last);
+    }
+  };
+  onScale = rescale;
+  new ResizeObserver(rescale).observe(svg);
   let refitting = false;
   const refitSoon = () => {
     if (refitting) return;
