@@ -948,7 +948,7 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     let mut page = Browser::open("about:blank");
     page.call("Page.enable", json!({}));
     page.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": "window.__refused = []; document.addEventListener('securitypolicyviolation', (e) => window.__refused.push([e.effectiveDirective, e.blockedURI]));" }));
-    page.call("Page.navigate", json!({ "url": format!("http://{addr}/s/loop/") }));
+    page.navigate_loaded(&format!("http://{addr}/s/loop/"), Duration::from_secs(20));
     page.wait_for(r#"document.getElementById("pic") && document.getElementById("outlet-1")?.classList.contains("sv-obj") ? true : null"#, Duration::from_secs(20));
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(page.eval("window.__refused"), json!([]), "the page as built, its embedded picture among what it loads, refused nothing");
@@ -977,7 +977,12 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     // kinds put into it (a picture by an SVG image and by an HTML one in a foreign object, a sheet
     // importing another and painting from another, a script written inline and one linked, a
     // handler, a fetch), asking nothing of the other host and running nothing.
-    let mut alone = Browser::open(&format!("http://{addr}/s/loop/layout.svg"));
+    // (Waited for through the protocol's page events, never by evaluating into it while it commits:
+    // a sandboxed document can then offer no context, CI's red on 114bcc8.)
+    let drawing = format!("http://{addr}/s/loop/layout.svg");
+    let mut alone = Browser::open("about:blank");
+    alone.call("Page.enable", json!({}));
+    alone.navigate_loaded(&drawing, Duration::from_secs(20));
     alone.wait_for("document.documentElement && document.documentElement.tagName === 'svg' && document.getElementById('outlet-1') ? true : null", Duration::from_secs(20));
     assert_eq!(alone.eval("window.origin"), json!("null"), "the drawing alone, in a sandbox of no origin");
     let before = asked.lock().unwrap().len();
@@ -986,6 +991,13 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     assert_eq!(alone.eval("window.__ran"), json!([]), "nothing run in the drawing alone");
     let in_drawing: Vec<String> = asked.lock().unwrap()[before..].to_vec();
     assert!(in_drawing.iter().all(|l| l.is_empty()), "nothing asked of the other host from the drawing alone: {in_drawing:?}");
+    // Opened alone ten times more, from a blank page each time: the first evaluate after its load
+    // runs in the sandboxed drawing every time.
+    for i in 0..10 {
+        alone.navigate_loaded("about:blank", Duration::from_secs(20));
+        alone.navigate_loaded(&drawing, Duration::from_secs(20));
+        assert_eq!(alone.eval("window.origin"), json!("null"), "open {i}");
+    }
     drop(alone);
     stop.store(true, Relaxed);
     watcher.join().unwrap();

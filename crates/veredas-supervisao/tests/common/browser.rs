@@ -245,6 +245,27 @@ impl Browser {
         }
     }
 
+    /// The page sent to `url` (the protocol's page events on: `Page.enable` sent first) and waited
+    /// for until that document has committed and loaded, read from the frame tree and the page's
+    /// load event alone: nothing is evaluated while it commits. An evaluate sent at that instant can
+    /// find no context to run in (met for a document served `sandbox`, in Chrome and Edge alike,
+    /// one evaluate in four opens or so at a 10 ms pace), so the first one after this runs in it.
+    #[allow(dead_code)]
+    pub fn navigate_loaded(&mut self, url: &str, within: Duration) {
+        let seen = self.events.len();
+        self.call("Page.navigate", json!({ "url": url }));
+        let deadline = Instant::now() + within;
+        loop {
+            let tree = self.call("Page.getFrameTree", json!({}));
+            let here = tree["frameTree"]["frame"]["url"].as_str() == Some(url);
+            if here && self.events[seen..].iter().any(|e| e["method"] == "Page.loadEventFired") {
+                return;
+            }
+            assert!(Instant::now() < deadline, "{url} never loaded: {tree}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     /// An expression evaluated in the page (a promise awaited), its value as JSON.
     pub fn eval(&mut self, js: &str) -> Value {
         let r = self.call("Runtime.evaluate", json!({ "expression": js, "returnByValue": true, "awaitPromise": true }));
