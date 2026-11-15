@@ -260,6 +260,23 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
             assert_eq!(answered(addr, m, &at), (404, Some(json!({ "error": format!("nothing is served at {at}") }))), "{m} {at}");
         }
     }
+    // Every route the routers declare asked with each method it does not declare for its path: a
+    // 405, marked `nosniff` (`answered` holds every answer to it).
+    let mut asked_405 = 0;
+    for (routes, prefix) in [(&root, String::new()), (&own, "/s/loop".to_string()), (&portal, "/s/loop/portal".to_string())] {
+        let mut by_path: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (m, p) in routes.iter() {
+            by_path.entry(p.as_str()).or_default().push(m.as_str());
+        }
+        for (p, declared) in by_path {
+            for m in ["GET", "POST", "PUT", "DELETE", "PATCH"].into_iter().filter(|m| !declared.contains(m)) {
+                let at = if p == "/" && !prefix.is_empty() { format!("{prefix}/") } else { format!("{prefix}{p}") };
+                assert_eq!(answered(addr, m, &at).0, 405, "{m} {at}");
+                asked_405 += 1;
+            }
+        }
+    }
+    assert!(asked_405 >= 20, "the 405s asked: {asked_405}");
 
     // Each session's binding, layout and portal are its own.
     let (status, v) = get(addr, "/s/loop/binding");
@@ -658,14 +675,19 @@ fn nothing_starts_before_the_address_is_held_nor_under_check() {
     let text = std::fs::read_to_string(&project).unwrap().replace("store = \"ram\"", "store = { disk = \"loop.duckdb\" }");
     std::fs::write(&project, text).unwrap();
     let store = dir.path().join("loop/loop.duckdb");
-    // A check reads, checks and prints the plan, starting nothing.
-    let out = Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).arg(&path).arg("--check").stdin(Stdio::null()).output().unwrap();
-    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
-    // Both sessions planned, in the file's order.
-    let plan = String::from_utf8_lossy(&out.stdout).to_string();
-    let (at_loop, at_hall) = (plan.find("session `loop` at /s/loop/: \"The loop\""), plan.find("session `hall` at /s/hall/: \"The hall\""));
-    assert!(at_loop.is_some() && at_hall.is_some() && at_loop < at_hall, "{plan}");
-    assert!(!store.exists(), "a check started a session");
+    // A check reads, checks and prints the plan, starting nothing: each way the executable takes one
+    // (`main.rs`'s arms, the flag after the file and before it).
+    let main_rs = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs")).unwrap();
+    assert_eq!(main_rs.matches("c == \"--check\"").count(), 2, "the executable's ways of asking for a check, each driven here");
+    for args in [vec![path.as_os_str().to_owned(), "--check".into()], vec!["--check".into(), path.as_os_str().to_owned()]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).args(&args).stdin(Stdio::null()).output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        // Both sessions planned, in the file's order, and nothing served.
+        let plan = String::from_utf8_lossy(&out.stdout).to_string();
+        let (at_loop, at_hall) = (plan.find("session `loop` at /s/loop/: \"The loop\""), plan.find("session `hall` at /s/hall/: \"The hall\""));
+        assert!(at_loop.is_some() && at_hall.is_some() && at_loop < at_hall && !plan.contains("serving on"), "{args:?}: {plan}");
+        assert!(!store.exists(), "{args:?}: a check started a session");
+    }
     // An address taken is refused before the first session starts.
     let held = TcpListener::bind("127.0.0.1:0").unwrap();
     let taken = held.local_addr().unwrap();
@@ -1131,6 +1153,34 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     page.wait_for("document.querySelector('.side .spark-wrap')?.children.length ? true : null", Duration::from_secs(20));
     std::thread::sleep(Duration::from_millis(800));
     assert_eq!(page.eval("window.__refused"), json!([]), "an object selected, its sparkline drawn, refused nothing");
+    // Every object of every session selected in turn (by its element where the layout draws it, else
+    // by its row in the attention list), its side panel built (the writes it offers, their gate and
+    // their answers' place among them), refusing nothing.
+    let (mut selected, mut offering) = (BTreeMap::new(), 0);
+    for name in ["loop", "hall"] {
+        let (_, view) = get(addr, &format!("/s/{name}/binding"));
+        let mut side = watched_from_first_load(&format!("http://{addr}/s/{name}/"));
+        side.wait_for("document.querySelector('.side .attention') && document.querySelectorAll('.tabs [data-view]').length > 0 ? true : null", Duration::from_secs(20));
+        if name == "loop" {
+            side.wait_for(r#"document.getElementById("outlet-1")?.classList.contains("sv-obj") ? true : null"#, Duration::from_secs(20));
+        }
+        std::thread::sleep(Duration::from_millis(1500));
+        for o in view["objects"].as_array().unwrap() {
+            let id = serde_json::to_string(o["id"].as_str().unwrap()).unwrap();
+            let how = side.eval(&format!("(() => {{ const el = document.getElementById({id}); if (el && el.classList.contains('sv-obj')) {{ el.dispatchEvent(new MouseEvent('click', {{ bubbles: true }})); return 'its element'; }} const li = [...document.querySelectorAll('.side ul.attention li')].find((l) => l.dataset.id === {id}); if (li) {{ li.click(); return 'its row'; }} return null; }})()"));
+            let Some(how) = how.as_str().map(String::from) else { continue };
+            side.wait_for(&format!("document.querySelector('.side .sel-title')?.dataset.id === {id} || null"), Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(700));
+            assert_eq!(side.eval("window.__refused"), json!([]), "{name}: {id} selected by {how}, refused nothing");
+            if !o["actions"].as_array().unwrap().is_empty() {
+                assert!(side.eval("document.querySelectorAll('.side .actions button').length").as_u64().unwrap() > 0, "{name}: {id}'s writes offered");
+                offering += 1;
+            }
+            *selected.entry(name).or_insert(0) += 1;
+        }
+        drop(side);
+    }
+    assert!(selected.get("loop").is_some_and(|n| *n >= 5) && selected.contains_key("hall") && offering >= 2, "objects selected: {selected:?}, offering writes: {offering}");
 
     // Each kind alone in a blank document with no policy: live (it asks the other host, or runs).
     let mut blank = Browser::open("about:blank");
