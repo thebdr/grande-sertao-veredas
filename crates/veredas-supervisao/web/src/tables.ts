@@ -52,8 +52,8 @@ export class Tables {
   /// row stamped later joins no page until the view is shown again. Portal holds the window by
   /// time, so a row stamped inside it but stored late (a late line, the tail's lag) still joins it.
   /// Shown before the page holds any status (no now yet), the first page is asked to `UNHELD` and
-  /// the window then held at its newest row's time (a whole millisecond, rounded up, as portal's
-  /// window takes one), the latest time it has.
+  /// the window then held at its newest row's time (the whole millisecond after its floor, as
+  /// portal's window takes one), the latest time it has.
   private to: number | null = null;
   /// The latest request: an answer to an earlier one is not drawn.
   private asked = 0;
@@ -105,12 +105,14 @@ export class Tables {
       // by it; one with neither comes in the store's own order, unheld, and is said to be unordered.
       const ordered = p.schema.some((c) => c.name === "index_ms" || c.name === "ts");
       // No now when it was asked: the window held from here at the newest row's time (portal's own
-      // order: `index_ms`, else `ts`), so a row stored since joins no page; a time that is no whole
-      // number (a view's average, say) rounded up, so the window still holds that row and portal
-      // reads its end as the whole millisecond it takes.
+      // order: `index_ms`, else `ts`), so a row stored since joins no page: at the whole millisecond
+      // after that time's floor, the least end portal's window of whole milliseconds takes that
+      // still holds the row whatever the double it comes as lost of it (a DECIMAL's time comes as the
+      // double nearest it, which may lie below it; a time that is no whole number, a view's average,
+      // say, held by the millisecond it falls in).
       const at = p.schema.findIndex((c) => c.name === "index_ms");
       const time = at >= 0 ? at : p.schema.findIndex((c) => c.name === "ts");
-      if (to === null && this.to === null && this.table === table && time >= 0 && typeof p.rows[0]?.[time] === "number") this.to = Math.ceil(p.rows[0][time] as number);
+      if (to === null && this.to === null && this.table === table && time >= 0 && typeof p.rows[0]?.[time] === "number") this.to = Math.floor(p.rows[0][time] as number) + 1;
       const prev = h("button", { disabled: offset === 0 }, "‹ Newer") as HTMLButtonElement;
       const next = h("button", { disabled: offset + PAGE >= p.total }, "Older ›") as HTMLButtonElement;
       prev.onclick = () => { if (this.table === table) { this.offset = Math.max(0, offset - PAGE); void this.page(); } };

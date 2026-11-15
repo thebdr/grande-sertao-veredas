@@ -90,9 +90,13 @@ fn every_mark_shown(page: &mut Browser, when: &str) {
 /// address; while `__fail` is set, the next page of rows refused as portal refuses one; and the
 /// next request whose address holds `__slow` answered a second and a half late (refused then, as
 /// portal refuses, while `__slowRefuse` is set), so an answer comes after a later request's;
-/// `__slowDone` set once the page has had it.
+/// `__slowDone` set once the page has had it. And each `[part, ms]` of `__holds`: the next request
+/// whose address holds `part` answered `ms` late, its state in `__held[part]` ("sent", then "done"
+/// once the page has had it), so any order of arrival can be driven.
 const KEEP_ANSWERS: &str = r#"(() => {
   window.__answers = [];
+  window.__holds = [];
+  window.__held = {};
   const orig = window.fetch;
   window.fetch = async (...a) => {
     const url = String(a[0]);
@@ -103,7 +107,11 @@ const KEEP_ANSWERS: &str = r#"(() => {
     const slow = window.__slow && url.includes(window.__slow);
     const refuse = slow && window.__slowRefuse;
     if (slow) { window.__slow = null; window.__slowRefuse = false; window.__slowDone = false; window.__slowSent = true; }
+    const at = window.__holds.findIndex(([part]) => url.includes(part));
+    const hold = at >= 0 ? window.__holds.splice(at, 1)[0] : null;
+    if (hold) window.__held[hold[0]] = "sent";
     const r = await orig(...a);
+    if (hold) { await new Promise((done) => setTimeout(done, hold[1])); setTimeout(() => { window.__held[hold[0]] = "done"; }, 300); }
     if (slow) { await new Promise((done) => setTimeout(done, 1500)); setTimeout(() => { window.__slowDone = true; }, 300); }
     if (refuse) return new Response(JSON.stringify({ error: "probe refusal, late" }), { status: 500, headers: { "content-type": "application/json" } });
     if (!url.includes("/api/table/data") && !url.includes("/api/series/data")) return r;
@@ -213,8 +221,9 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // where a script writes a number with an exponent (and one just below), each exact in binary,
     // and numbers below 0 a script writes as it is (a fraction, a whole one, one that rounds to 0).
     // And two times portal pages by that the page must hold a window over: `gaps`, whose time is null
-    // on some rows (outlet 2's), and `halves`, whose time is no whole number.
-    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"gaps\"\nsql = \"SELECT CASE WHEN outlet = 2 THEN NULL ELSE index_ms END AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"halves\"\nsql = \"SELECT (index_ms + 0.5)::DOUBLE AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"{VIEW}\"\nsql = \"SELECT outlet, travel > 12 AS slow FROM sorts\"\n\n[[table]]\nname = \"stamped\"\nsql = \"SELECT ts, outlet FROM sorts\"\n\n[[table]]\nname = \"indexed\"\nsql = \"SELECT index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"shifted\"\nsql = \"SELECT index_ms, ts + INTERVAL 1 MINUTE AS ts, outlet FROM sorts\"\n\n[[table]]\nname = \"magnitudes\"\nsql = \"SELECT 9.5e20::DOUBLE AS below, 1e21::DOUBLE AS edge, -3.5e21::DOUBLE AS negative, 1e22::DOUBLE AS big, -0.25::DOUBLE AS quarter, -7.0::DOUBLE AS seven, -0.0001::DOUBLE AS tiny\"\n")).unwrap();
+    // on some rows (outlet 2's), `halves`, whose time is no whole number, and `decis`, whose time is
+    // a DECIMAL finer than the double portal writes it as (the newest row's time above that double).
+    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"gaps\"\nsql = \"SELECT CASE WHEN outlet = 2 THEN NULL ELSE index_ms END AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"halves\"\nsql = \"SELECT (index_ms + 0.5)::DOUBLE AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"decis\"\nsql = \"SELECT (index_ms + 0.0001)::DECIMAL(18,4) AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"{VIEW}\"\nsql = \"SELECT outlet, travel > 12 AS slow FROM sorts\"\n\n[[table]]\nname = \"stamped\"\nsql = \"SELECT ts, outlet FROM sorts\"\n\n[[table]]\nname = \"indexed\"\nsql = \"SELECT index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"shifted\"\nsql = \"SELECT index_ms, ts + INTERVAL 1 MINUTE AS ts, outlet FROM sorts\"\n\n[[table]]\nname = \"magnitudes\"\nsql = \"SELECT 9.5e20::DOUBLE AS below, 1e21::DOUBLE AS edge, -3.5e21::DOUBLE AS negative, 1e22::DOUBLE AS big, -0.25::DOUBLE AS quarter, -7.0::DOUBLE AS seven, -0.0001::DOUBLE AS tiny\"\n")).unwrap();
     let log = dir.path().join("loop/sorts.log");
     std::fs::write(&log, "").unwrap();
     let hall_log = dir.path().join("hall/sorts.log");
@@ -239,7 +248,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     assert_eq!(status, 200);
     let mut names: Vec<(String, String)> = t["tables"].as_array().unwrap().iter().map(|x| (x["name"].as_str().unwrap().to_string(), x["kind"].as_str().unwrap().to_string())).collect();
     names.sort();
-    assert_eq!(names.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["gaps", "halves", "indexed", "magnitudes", "outlets", "plc_main", "samples", "shifted", VIEW, "sorts", "stamped"]);
+    assert_eq!(names.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["decis", "gaps", "halves", "indexed", "magnitudes", "outlets", "plc_main", "samples", "shifted", VIEW, "sorts", "stamped"]);
     assert_eq!(names.iter().find(|(n, _)| n == "outlets").unwrap().1, "view");
     let sorts = t["tables"].as_array().unwrap().iter().find(|x| x["name"] == "sorts").unwrap();
     let cols: Vec<&str> = sorts["columns"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
@@ -344,7 +353,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
   const button = (t) => [...document.querySelectorAll(".list-main .pager button")].find((b) => b.textContent === t)?.disabled ?? null;
   return pager ? {{
     table: document.querySelector(".list-main .pager strong").textContent,
-    all_shown: [pager, ...document.querySelectorAll(".list-main .pager strong, .list-main .pager button, .list-main thead th, .list-main tbody td")].every(shown) && document.querySelectorAll(".list-main .pager button").length === 2,
+    all_shown: [pager, ...document.querySelectorAll(".list-main .pager strong, .list-main .pager button, .list-main thead th, .list-main tbody td"), ...[...document.querySelectorAll(".list-main *")].filter((el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()))].every(shown) && document.querySelectorAll(".list-main .pager button").length === 2,
     rows: pager.dataset.rows, said: pager.textContent,
     head: [...document.querySelectorAll(".list-main thead th")].map((th) => th.textContent),
     body: [...document.querySelectorAll(".list-main tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent)),
@@ -744,6 +753,36 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         let after = page.eval(&format!(r#"(() => {{ const s = {shown_js}; return [s ? s.table : null, document.querySelector(".list-main p.error")?.textContent ?? null, document.querySelector(".list button.on")?.dataset.table ?? null]; }})()"#));
         assert_eq!(after, json!(["outlets", null, "outlets"]), "{slow} refused late drew over the later pick");
     }
+    // The other order of arrival: the later request held back, the earlier one's answer coming while
+    // it is out, never drawn. At each place the view asks anew (the page's own source: its two
+    // tokens, a listing's and a page's), from the sorts' middle page: Older clicked, its page held
+    // a little, then the later act with its own request held long (a pick's listing, a pick's page,
+    // the listing of the view shown again). Read once the earlier answer has come and while the
+    // later is out: the middle page as it stood, its pager off; then the later's page.
+    let tables_src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/src/tables.ts")).unwrap();
+    assert_eq!(tables_src.split_once("export class Series").unwrap().0.matches("++this.asked").count(), 2, "the Tables view asks anew at two places, each driven here");
+    let laters: [(&str, &str, &str, (&str, &str)); 3] = [
+        ("a pick's listing", "/api/tables", r#"document.querySelector('.list button[data-table="outlets"]').click()"#, ("outlets", "1-4/4")),
+        ("a pick's page", "name=outlets&", r#"document.querySelector('.list button[data-table="outlets"]').click()"#, ("outlets", "1-4/4")),
+        ("the view shown again", "/api/tables", r#"location.hash = "series"; setTimeout(() => { location.hash = "tables"; }, 200)"#, ("sorts", "101-110/110")),
+    ];
+    for (later, part, act, (table, rows)) in laters {
+        pick(&mut page, "sorts");
+        page.wait_for(r#"(() => { const b = [...document.querySelectorAll(".list-main .pager button")].find((b) => b.textContent === "Older ›"); return b && !b.disabled && document.querySelector(".list-main .pager [data-rows]").dataset.rows === "1-50/110" ? true : null; })()"#, Duration::from_secs(20));
+        click(&mut page, "Older ›");
+        shown_at(&mut page, "51-100/110");
+        page.eval(&format!(r#"(() => {{ window.__held = {{}}; window.__holds = [["offset=100", 1500], [{}, 5000]]; return true; }})()"#, serde_json::to_string(part).unwrap()));
+        click(&mut page, "Older ›");
+        page.wait_for(r#"window.__held["offset=100"] === "sent" || null"#, Duration::from_secs(10));
+        page.eval(&format!("(() => {{ {act}; return true; }})()"));
+        page.wait_for(&format!("window.__held[{}] === 'sent' || null", serde_json::to_string(part).unwrap()), Duration::from_secs(10));
+        page.wait_for(r#"window.__held["offset=100"] === "done" || null"#, Duration::from_secs(10));
+        let mid = page.eval(&format!(r#"(() => {{ const s = {shown_js}; return [s ? s.table : null, s ? s.rows : null, [...document.querySelectorAll(".list-main .pager button")].map((b) => b.disabled), window.__held[{}]]; }})()"#, serde_json::to_string(part).unwrap()));
+        assert_eq!(mid, json!(["sorts", "51-100/110", [true, true], "sent"]), "{later} held back: the earlier Older's answer, come first, drawn over it");
+        page.wait_for(&format!("window.__held[{}] === 'done' || null", serde_json::to_string(part).unwrap()), Duration::from_secs(15));
+        let at = page.wait_for(&format!("(() => {{ const s = {shown_js}; return s && s.table === '{table}' && s.rows === '{rows}' ? s : null; }})()"), Duration::from_secs(20));
+        assert_eq!((at["table"].clone(), at["rows"].clone()), (json!(table), json!(rows)), "{later}: its own page once it came");
+    }
     // The pager off from a pick on and from the view shown again on, while the listing is out: the
     // listing held back, both buttons read off.
     let held_pager = |page: &mut Browser, act: &str| -> Value {
@@ -896,7 +935,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         })
         .collect();
     let timed_names: Vec<&str> = timed.iter().map(|(n, _)| n.as_str()).collect();
-    for t in ["gaps", "halves", "indexed", "plc_main", "samples", "shifted", "sorts", "stamped"] {
+    for t in ["decis", "gaps", "halves", "indexed", "plc_main", "samples", "shifted", "sorts", "stamped"] {
         assert!(timed_names.contains(&t), "{t} among the timed tables: {timed:?}");
     }
     let mut sorts_now: u64 = 112;
@@ -928,10 +967,10 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         let answers = answers.as_array().unwrap();
         let at = answers[0]["body"]["schema"].as_array().unwrap().iter().position(|c| c["name"] == *time).unwrap();
         let newest = answers[0]["body"]["rows"][0][at].as_f64().unwrap_or_else(|| panic!("{table}: its {time} as a number: {}", answers[0]["body"]["rows"][0]));
-        assert_eq!((param(answers[0]["url"].as_str().unwrap(), "to"), param(answers.last().unwrap()["url"].as_str().unwrap(), "to")), (unheld.clone(), Some((newest.ceil() as i64).to_string())), "{table} held at its newest {time}: {answers:?}");
+        assert_eq!((param(answers[0]["url"].as_str().unwrap(), "to"), param(answers.last().unwrap()["url"].as_str().unwrap(), "to")), (unheld.clone(), Some((newest.floor() as i64 + 1).to_string())), "{table} held at the millisecond after its newest {time}'s floor: {answers:?}");
         held.push(table);
     }
-    for t in ["gaps", "halves", "indexed", "shifted", "sorts", "stamped"] {
+    for t in ["decis", "gaps", "halves", "indexed", "shifted", "sorts", "stamped"] {
         assert!(held.contains(&t), "{t} held: {held:?}");
     }
     // Shown again with no status, on its second page: the window it held kept, so Newer brings the
@@ -952,7 +991,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     rows_keys(&answers);
     let urls: Vec<&str> = answers.as_array().unwrap().iter().map(|a| a["url"].as_str().unwrap()).collect();
     let index = answers[0]["body"]["schema"].as_array().unwrap().iter().position(|c| c["name"] == "index_ms").unwrap();
-    let held_at = answers[0]["body"]["rows"][0][index].as_i64().unwrap().to_string();
+    let held_at = (answers[0]["body"]["rows"][0][index].as_i64().unwrap() + 1).to_string();
     assert!(param(urls[0], "to") == unheld && urls[1..].iter().all(|u| param(u, "to").as_deref() == Some(held_at.as_str())), "{urls:?}");
     // A series picked with no status: no window asked, the chart waiting for the session's clock and
     // saying so.
