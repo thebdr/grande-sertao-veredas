@@ -11,6 +11,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use common::browser::Browser;
 use common::*;
 use serde_json::{Value, json};
 use veredas_maquinar::bench::Bench;
@@ -785,4 +786,210 @@ fn a_stop_waits_for_a_dashboard_still_computed() {
     let store = dir.path().join("loop/loop.duckdb");
     assert!(store.exists() && !wal.exists(), "the store was never closed: {:?}", std::fs::read_dir(dir.path().join("loop")).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>());
     let _ = asking.join();
+}
+
+/// An answer's status and headers, by their names in lower case, read off the wire.
+fn headers_of(addr: SocketAddr, path: &str) -> (u16, BTreeMap<String, String>) {
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    write!(s, "GET {path} HTTP/1.0\r\nHost: {addr}\r\n\r\n").unwrap();
+    let mut r = BufReader::new(s);
+    let mut line = String::new();
+    r.read_line(&mut line).unwrap();
+    let status: u16 = line.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let mut out = BTreeMap::new();
+    loop {
+        line.clear();
+        r.read_line(&mut line).unwrap();
+        let l = line.trim_end();
+        if l.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = l.split_once(':') {
+            out.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
+        }
+    }
+    (status, out)
+}
+
+/// Every kind of load and of script a page can be made to do, put straight into the document (past
+/// the reader, as nothing the drawing may write could), aimed at `OTHER`: a picture by an SVG image,
+/// an HTML image and a style's background; a script by its element, written inline and as a
+/// handler; a sheet linked and one written inline importing another; a frame, an object, a font;
+/// a fetch, a feed, a WebSocket, a beacon and a module imported. What runs says so in `__ran`.
+/// The same kinds put into the drawing opened alone (an SVG document, no body), aimed at `OTHER`.
+const DRAWING_ALONE: &str = r#"(async () => {
+  const other = OTHER;
+  window.__ran = [];
+  const svgNS = "http://www.w3.org/2000/svg";
+  const root = document.documentElement;
+  const image = document.createElementNS(svgNS, "image");
+  image.setAttribute("href", other + "/drawing-image.png");
+  image.setAttribute("width", "4");
+  image.setAttribute("height", "4");
+  root.append(image);
+  const fo = document.createElementNS(svgNS, "foreignObject");
+  fo.setAttribute("width", "4");
+  fo.setAttribute("height", "4");
+  const img = document.createElementNS("http://www.w3.org/1999/xhtml", "img");
+  img.setAttribute("src", other + "/drawing-img.png");
+  fo.append(img);
+  root.append(fo);
+  const style = document.createElementNS(svgNS, "style");
+  style.textContent = `@import url(${other}/drawing.css); rect { fill: url(${other}/paint.svg#p) }`;
+  root.append(style);
+  const inline = document.createElementNS(svgNS, "script");
+  inline.textContent = "window.__ran.push('script')";
+  root.append(inline);
+  const linked = document.createElementNS(svgNS, "script");
+  linked.setAttribute("href", other + "/drawing.js");
+  root.append(linked);
+  const r = document.createElementNS(svgNS, "rect");
+  r.setAttribute("onclick", "window.__ran.push('handler')");
+  root.append(r);
+  r.dispatchEvent(new MouseEvent("click"));
+  try { await fetch(other + "/drawing-fetch"); } catch {}
+  return true;
+})()"#;
+
+const ELSEWHERE: &str = r#"(() => {
+  const svgNS = "http://www.w3.org/2000/svg";
+  window.__ran = [];
+  window.__probes = {
+    "an SVG image": async (other) => { const e = document.createElementNS(svgNS, "image"); e.setAttribute("href", other + "/svg-image.png"); e.setAttribute("width", "4"); e.setAttribute("height", "4"); document.querySelector("svg.plant").append(e); },
+    "an HTML image": async (other) => { const e = new Image(); e.src = other + "/img.png"; document.body.append(e); },
+    "a style's background": async (other) => { const e = document.createElement("div"); e.setAttribute("style", `background-image: url(${other}/bg.png); width: 4px; height: 4px`); document.body.append(e); },
+    "a script element": async (other) => { const e = document.createElement("script"); e.src = other + "/s.js"; document.head.append(e); },
+    "a script written inline": async () => { const e = document.createElement("script"); e.textContent = "window.__ran.push('inline')"; document.head.append(e); },
+    "a handler written in markup": async () => { const e = document.createElement("button"); e.setAttribute("onclick", "window.__ran.push('handler')"); document.body.append(e); e.click(); },
+    "a sheet linked": async (other) => { const e = document.createElement("link"); e.rel = "stylesheet"; e.href = other + "/x.css"; document.head.append(e); },
+    "a sheet written inline": async (other) => { const e = document.createElement("style"); e.textContent = `@import url(${other}/imported.css); body { --probe: 1 }`; document.head.append(e); },
+    "a frame": async (other) => { const e = document.createElement("iframe"); e.src = other + "/frame"; document.body.append(e); },
+    "an object": async (other) => { const e = document.createElement("object"); e.data = other + "/object"; document.body.append(e); },
+    "a font": async (other) => { try { await new FontFace("probe", `url(${other}/f.woff)`).load(); } catch {} },
+    "a fetch": async (other) => { try { await fetch(other + "/fetch"); } catch {} },
+    "a feed": async (other) => { try { new EventSource(other + "/feed"); } catch {} },
+    "a WebSocket": async (other) => { try { new WebSocket(other.replace("http:", "ws:") + "/socket"); } catch {} },
+    "a beacon": async (other) => { try { navigator.sendBeacon(other + "/beacon", "x"); } catch {} },
+    "a module imported": async (other) => { try { await import(other + "/module.js"); } catch {} },
+  };
+  return Object.keys(window.__probes);
+})()"#;
+
+/// The host's content policy (Q23), word for word on the page and on the drawing's own route, and
+/// every answer the host gives `nosniff`; and in the browser, proven as a layer of its own: the page
+/// as built loads and runs under it with nothing refused, the drawing's embedded picture among what
+/// it loads; then every kind of load and of script (`ELSEWHERE`), each put alone straight into the
+/// mounted page and aimed at a listener standing for another host, asks nothing of it and runs
+/// nothing, the browser refusing each by its directive; and the drawing opened alone at its own
+/// route is sandboxed (an origin of no one's), the same kinds put into it asking and running
+/// nothing. A connection opened bare, asking nothing (the browser's own preconnect for a frame,
+/// before its policy refuses the frame), is the stated limit.
+#[test]
+fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(&dir.path().join("bench"));
+    let mut ex = live_example(&bench, false);
+    // A picture embedded in the drawing, beside the objects.
+    assert!(ex.svg.ends_with("</svg>\n"));
+    ex.svg = ex.svg.replacen("</svg>", "  <image id=\"pic\" x=\"2\" y=\"2\" width=\"8\" height=\"8\" href=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==\"/>\n</svg>", 1);
+    let path = write_example(dir.path(), &ex);
+    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let addr = host.addr();
+    const PAGE: &str = "default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'";
+    const DRAWING: &str = "default-src 'none'; style-src-attr 'unsafe-inline'; img-src data:; sandbox";
+    for p in ["/", "/s/loop", "/s/loop/"] {
+        let (status, h) = headers_of(addr, p);
+        assert_eq!((status, h.get("content-security-policy").map(String::as_str), h.get("x-content-type-options").map(String::as_str)), (200, Some(PAGE), Some("nosniff")), "{p}");
+    }
+    let (status, h) = headers_of(addr, "/s/loop/layout.svg");
+    assert_eq!((status, h.get("content-security-policy").map(String::as_str), h.get("x-content-type-options").map(String::as_str), h.get("content-type").map(String::as_str)), (200, Some(DRAWING), Some("nosniff"), Some("image/svg+xml")), "the drawing's own route");
+    for p in ["/assets/app.js", "/assets/app.css", "/api/sessions", "/s/loop/binding", "/s/loop/objects.json", "/s/loop/dashboard/0", "/s/loop/portal/api/tables", "/nothing/here"] {
+        let (_, h) = headers_of(addr, p);
+        assert_eq!(h.get("x-content-type-options").map(String::as_str), Some("nosniff"), "{p}");
+        assert!(!h.contains_key("content-security-policy"), "{p}: a policy on an answer no browser renders as the page");
+    }
+
+    // The other host: a listener counting every connection made to it, which counts (a connection
+    // made from here is seen).
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+    let other = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = other.local_addr().unwrap().port();
+    other.set_nonblocking(true).unwrap();
+    let reached = std::sync::Arc::new(AtomicUsize::new(0));
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let watcher = std::thread::spawn({
+        let (reached, stop, asked) = (std::sync::Arc::clone(&reached), std::sync::Arc::clone(&stop), std::sync::Arc::clone(&asked));
+        move || {
+            while !stop.load(Relaxed) {
+                match other.accept() {
+                    Ok((s, _)) => {
+                        reached.fetch_add(1, Relaxed);
+                        // What it asked, if it says (a bare connection says nothing).
+                        s.set_nonblocking(false).ok();
+                        s.set_read_timeout(Some(Duration::from_millis(500))).ok();
+                        let mut first = String::new();
+                        let _ = BufReader::new(s).read_line(&mut first);
+                        asked.lock().unwrap().push(first.trim_end().to_string());
+                    }
+                    Err(_) => std::thread::sleep(Duration::from_millis(20)),
+                }
+            }
+        }
+    });
+    drop(TcpStream::connect(("127.0.0.1", port)).unwrap());
+    assert!(wait(Duration::from_secs(5), || reached.load(Relaxed) == 1), "the listener counts");
+    reached.store(0, Relaxed);
+    asked.lock().unwrap().clear();
+
+    // The page watched from its first load: every refusal of the policy kept, by its directive and
+    // what it refused.
+    let mut page = Browser::open("about:blank");
+    page.call("Page.enable", json!({}));
+    page.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": "window.__refused = []; document.addEventListener('securitypolicyviolation', (e) => window.__refused.push([e.effectiveDirective, e.blockedURI]));" }));
+    page.call("Page.navigate", json!({ "url": format!("http://{addr}/s/loop/") }));
+    page.wait_for(r#"document.getElementById("pic") && document.getElementById("outlet-1")?.classList.contains("sv-obj") ? true : null"#, Duration::from_secs(20));
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(page.eval("window.__refused"), json!([]), "the page as built, its embedded picture among what it loads, refused nothing");
+    // Each kind alone, then the listener read: what asked anything of the other host is named by its
+    // kind. (A connection opened bare, asking nothing, the browser's own preconnect for a frame before
+    // its policy refuses the frame, is the stated limit: nothing is asked of another host, which is not
+    // to say no socket is opened to it.)
+    let other_host = serde_json::to_string(&format!("http://127.0.0.1:{port}")).unwrap();
+    let kinds: Vec<String> = page.eval(ELSEWHERE).as_array().unwrap().iter().map(|k| k.as_str().unwrap().to_string()).collect();
+    assert_eq!(kinds.len(), 16, "{kinds:?}");
+    let mut through: Vec<String> = Vec::new();
+    for kind in &kinds {
+        let before = asked.lock().unwrap().len();
+        page.eval(&format!("window.__probes[{}]({other_host})", serde_json::to_string(kind).unwrap()));
+        std::thread::sleep(Duration::from_millis(700));
+        if asked.lock().unwrap()[before..].iter().any(|l| !l.is_empty()) {
+            through.push(kind.clone());
+        }
+    }
+    assert_eq!(through, Vec::<String>::new(), "a kind that asked something of the other host: {:?}", asked.lock().unwrap());
+    let refused: std::collections::BTreeSet<String> = page.eval("window.__refused").as_array().unwrap().iter().map(|v| v[0].as_str().unwrap().to_string()).collect();
+    let every: std::collections::BTreeSet<String> = ["connect-src", "font-src", "frame-src", "img-src", "object-src", "script-src-attr", "script-src-elem", "style-src-elem"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(refused, every, "each kind refused by its directive: {}", page.eval("window.__refused"));
+    assert_eq!(page.eval("window.__ran"), json!([]), "no script of another origin or written inline ran");
+    // The drawing opened alone, at its own route: an origin of no one's (the sandbox), and the same
+    // kinds put into it (a picture by an SVG image and by an HTML one in a foreign object, a sheet
+    // importing another and painting from another, a script written inline and one linked, a
+    // handler, a fetch), asking nothing of the other host and running nothing.
+    let mut alone = Browser::open(&format!("http://{addr}/s/loop/layout.svg"));
+    alone.wait_for("document.documentElement && document.documentElement.tagName === 'svg' && document.getElementById('outlet-1') ? true : null", Duration::from_secs(20));
+    assert_eq!(alone.eval("window.origin"), json!("null"), "the drawing alone, in a sandbox of no origin");
+    let before = asked.lock().unwrap().len();
+    alone.eval(&DRAWING_ALONE.replace("OTHER", &other_host));
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(alone.eval("window.__ran"), json!([]), "nothing run in the drawing alone");
+    let in_drawing: Vec<String> = asked.lock().unwrap()[before..].to_vec();
+    assert!(in_drawing.iter().all(|l| l.is_empty()), "nothing asked of the other host from the drawing alone: {in_drawing:?}");
+    drop(alone);
+    stop.store(true, Relaxed);
+    watcher.join().unwrap();
+    assert!(asked.lock().unwrap().iter().all(|l| l.is_empty()), "nothing asked of the other host: {:?}", asked.lock().unwrap());
+    drop(page);
+    host.stop();
 }

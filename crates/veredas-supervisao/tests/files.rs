@@ -1018,7 +1018,11 @@ A path is relative to the binding file's folder.
   (Q25): its own elements (`sodipodi:*` and `inkscape:*` as children of the drawing's root or of the
   root's `defs`, `rdf:RDF` in the root's `metadata` with `cc:*` and `dc:*` inside it) dropped on
   read, unread, with all they hold (nothing of them reaches the page); its attributes in those
-  namespaces on the drawing's elements read by nothing. Without one the session has dashboards and
+  namespaces on the drawing's elements read by nothing. A picture in it is embedded (Q23: an
+  image's `href`, plain or `xlink:`, a `data:image/…` URI, Inkscape's "Embed"). The page loads and
+  runs nothing a drawing points to elsewhere: the host serves it under a content policy that lets
+  the browser load and run the page's own files alone, and the drawing's own route under one that
+  runs and loads nothing but its embedded pictures. Without one the session has dashboards and
   no layout view.
 - `headline` (none): object IDs shown in the top bar, in order.
 - `object` (none): `[[object]]` tables.
@@ -1195,7 +1199,8 @@ property (a `style` declaration whose name begins `--`, however CSS spells it) a
 `direction` (an attribute or in a `style`) outside a text and its spans (`text`, `tspan`, `textPath`),
 both of which the page's reset leaves to inheritance (the state colours read custom properties),
 foreign content (an
-element outside the SVG namespace, Inkscape's own apart where Inkscape writes them), an event handler, a script link (a `javascript:` URL in any
+element outside the SVG namespace, Inkscape's own apart where Inkscape writes them), an event handler, an image linking its picture rather than embedding it (an `href`, plain or
+`xlink:`, other than a `data:image/…` URI), a script link (a `javascript:` URL in any
 attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
 declaring attribute defaults or using a parameter entity (a browser would apply them unchecked); an
 object's element of another kind than the page draws on (a clone or an image told what to do in
@@ -1486,6 +1491,25 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
         assert!(outcome(&texts).is_ok(), "{attr} on a text and its spans: {:?}", outcome(&texts).err());
         let bound = with_svg(INFEED, &format!("<text id=\"infeed\" x=\"20\" y=\"96\" {attr}>a<tspan {attr}>b</tspan></text>"));
         assert!(outcome(&bound).is_ok(), "{attr} on a bound text: {:?}", outcome(&bound).err());
+    }
+    // A picture embedded in the drawing (Q23): an image whose `href`, plain or `xlink:`, is anything
+    // but a `data:image/…` URI (another host, a scheme-relative or relative path, a file, data of
+    // another kind) refused at every depth beside the object, naming the link; one embedded (in any
+    // case, after spaces, a tab inside it read through as a browser reads a URL) and one with no
+    // picture loading.
+    const XLINK: &str = "xmlns:xlink=\"http://www.w3.org/1999/xlink\"";
+    let linked = |href: &str| format!("layout.svg holds an <image> linking its picture (`{}`), which the page would load from where it points: embed it in Inkscape (on import, choose \"Embed\"; for a picture already linked, Extensions › Images › Embed Images)", href.trim());
+    for href in ["http://other.example/plan.png", "https://other.example/plan.png", "//other.example/plan.png", "plan.png", "file:///C:/plan.png", "data:text/plain,plan"] {
+        for attr in [format!("href=\"{href}\""), format!("{XLINK} xlink:href=\"{href}\""), format!("{XLINK} href=\"data:image/png;base64,AAAA\" xlink:href=\"{href}\"")] {
+            for (open, close) in depths {
+                let got = binding_refusal(&with_svg(INFEED, &format!("{INFEED}{open}<image {attr} width=\"4\" height=\"4\"/>{close}")));
+                assert!(got.ends_with(&linked(href)), "{attr} {open}: {got}");
+            }
+        }
+    }
+    for attr in ["href=\"data:image/png;base64,AAAA\"", "href=\"DATA:IMAGE/PNG;base64,AAAA\"", "href=\"  data:image/svg+xml;utf8,x\"", "href=\"da&#9;ta:image/png;base64,AAAA\"", &format!("{XLINK} xlink:href=\"data:image/jpeg;base64,AAAA\""), ""] {
+        let ex = with_svg(INFEED, &format!("{INFEED}<g><image {attr} width=\"4\" height=\"4\"/></g>"));
+        assert!(outcome(&ex).is_ok(), "{attr}: {:?}", outcome(&ex).err());
     }
     // The root's own transform refused, however it is written: the page lays its own frame over the
     // root.

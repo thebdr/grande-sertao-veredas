@@ -184,6 +184,15 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
         if !DIRECTED.contains(&name) && (node.attribute("direction").is_some() || styled.iter().any(|p| p == "direction")) {
             return Err(format!("{} holds `direction` (on <{name}>), which would reach what the page writes beside the drawing: Inkscape writes it on a text and its spans alone", path.display()));
         }
+        // A picture is embedded in the drawing (Q23): an image's `href`, plain or `xlink:`, is a
+        // `data:image/…` URI, read as a browser reads a URL. Any other the page would load from where
+        // it points. (What else could make the page load from elsewhere the host's policy bars.)
+        if name == "image" {
+            let linked = node.attributes().filter(|a| a.name() == "href" && (a.namespace().is_none() || a.namespace() == Some(XLINK_NS))).map(|a| a.value()).find(|v| !embedded(v));
+            if let Some(href) = linked {
+                return Err(format!("{} holds an <image> linking its picture (`{}`), which the page would load from where it points: embed it in Inkscape (on import, choose \"Embed\"; for a picture already linked, Extensions › Images › Embed Images)", path.display(), href.trim()));
+            }
+        }
         if let Some(id) = node.attribute("id") {
             let e = ids.entry(id.to_string()).or_insert_with(|| (name.to_string(), 0));
             e.1 += 1;
@@ -363,6 +372,16 @@ pub fn the_pages_id(id: &str) -> bool {
 /// What may stand inside an object's element: the elements the page draws on, a text's spans, and a
 /// title or a description (which draw nothing).
 pub const HOLDS: [&str; 12] = ["g", "rect", "circle", "ellipse", "path", "polygon", "polyline", "line", "text", "tspan", "title", "desc"];
+
+/// The XLink namespace, in which Inkscape writes an image's `href`.
+pub const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
+
+/// Whether an image's `href` embeds its picture: a `data:image/…` URI, read as a browser reads a URL
+/// (tabs and line breaks anywhere dropped, leading controls and spaces trimmed), in any case.
+pub fn embedded(href: &str) -> bool {
+    let kept: String = href.chars().filter(|c| !matches!(c, '\t' | '\n' | '\r')).collect();
+    kept.trim_start_matches(|c: char| c <= ' ').to_ascii_lowercase().starts_with("data:image/")
+}
 
 /// Whether an attribute's value is, or holds as an item of a `;`-separated list (an animation's
 /// `values`), a `javascript:` URL as a browser parses one (the URL standard drops tabs and line

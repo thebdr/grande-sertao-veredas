@@ -100,6 +100,10 @@ the gateway, the desktop, the supervision app) each did.
 - **The browser decides nothing.** States, staleness, positions and every panel's numbers are
   computed in Rust and tested there with exact values; the page maps what it receives onto the SVG
   and the panels, and is verified by driving it (`zen-verify`), never by a unit test alone.
+- **The page loads its own files alone** (Q23, decided 2026-11-15). The reader asks a drawing's
+  pictures to be embedded; the host serves the page under a content policy that lets the browser
+  load and run the page's own files alone, and the drawing's own route sandboxed, so nothing a
+  drawing points to on another host is loaded or run, whatever its syntax.
 - **Every state has a mark and a word** (the design's rule): normal ●, near ■, warn ■, alarm !,
   disabled ▨, stale ◌, selected ◆. A rule names the class and the word ("full", "stopped",
   "fault"); the accent (Veredas' green `#30D158`, Q22) marks selection, focus and primary actions, never a

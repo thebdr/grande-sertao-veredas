@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::{Path as UrlPath, Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
@@ -149,8 +149,29 @@ fn text(content_type: &'static str, body: &'static str) -> Response {
     ([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "no-cache")], body).into_response()
 }
 
+/// The page's content policy (Q23): the browser loads and runs the page's own files alone. Its
+/// bundle the one script (no inline script, no handler written in markup), its own sheet (and a
+/// `style` attribute, in which Inkscape writes a drawing's paint), pictures its own or embedded
+/// (`data:`), connections to its own address (the feed, the reads, a write) and fonts its own;
+/// nothing else of any kind (a frame, an object, a worker, a manifest), no base address moved, a
+/// form sent nowhere but here.
+pub const PAGE_POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'";
+
+/// The drawing's own route's policy (Q23): opened alone, the drawing is a document that runs
+/// nothing and loads nothing but its embedded pictures, sandboxed (an origin of its own, no script).
+pub const DRAWING_POLICY: &str = "default-src 'none'; style-src-attr 'unsafe-inline'; img-src data:; sandbox";
+
 async fn index() -> Response {
-    text("text/html; charset=utf-8", web::INDEX_HTML)
+    let mut r = text("text/html; charset=utf-8", web::INDEX_HTML);
+    r.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(PAGE_POLICY));
+    r
+}
+
+/// Every answer the host gives (portal's nested ones too), its type to be believed: no browser
+/// sniffs another (`nosniff`).
+async fn nosniff(mut r: Response) -> Response {
+    r.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    r
 }
 
 /// Everything the host serves: the page and its bundle, the sessions' list, and per session its
@@ -179,7 +200,7 @@ pub fn router(apps: Vec<Arc<SessionApp>>) -> Router {
             .nest("/portal", veredas_portal::serve::router(Arc::clone(&app.live)));
         r = r.route(&base, get(index)).route(&format!("{base}/"), get(index)).nest(&base, session);
     }
-    r.fallback(|uri: axum::http::Uri| async move { not_found(format!("nothing is served at {}", uri.path())) })
+    r.fallback(|uri: axum::http::Uri| async move { not_found(format!("nothing is served at {}", uri.path())) }).layer(axum::middleware::map_response(nosniff))
 }
 
 async fn binding(State(app): State<Arc<SessionApp>>) -> Json<serde_json::Value> {
@@ -190,7 +211,7 @@ async fn binding(State(app): State<Arc<SessionApp>>) -> Json<serde_json::Value> 
 
 async fn layout(State(app): State<Arc<SessionApp>>) -> Response {
     match &app.binding.layout {
-        Some(l) => ([(header::CONTENT_TYPE, "image/svg+xml"), (header::CACHE_CONTROL, "no-cache")], l.text.clone()).into_response(),
+        Some(l) => ([(header::CONTENT_TYPE, "image/svg+xml"), (header::CACHE_CONTROL, "no-cache"), (header::CONTENT_SECURITY_POLICY, DRAWING_POLICY)], l.text.clone()).into_response(),
         None => not_found(format!("session `{}` has no layout", app.name)),
     }
 }

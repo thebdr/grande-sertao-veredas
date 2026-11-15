@@ -448,9 +448,25 @@ content in a layout.
 answer is "refuse", it is a new refusal in the reference (an `@import` or a `url()` outside the
 document in a layout's style) with its exact text, and C-048 states it.
 
-**No effect while Q25 stands** (2026-11-15): the reader refuses a layout's `<style>` sheet
-altogether (C-048's tenth round), and Inkscape writes none, so no layout's style can import
-anything. The question returns only if a sheet is ever let in.
+**Decided** 2026-11-15 (the operator, asked "Should the page be barred from loading anything a
+layout points to on another host?"): "Yes, bar it" (the other choice read "Leave it open"). Two
+layers, one job each. The reader, for the engineer: a picture is embedded (an image's `href`,
+plain or `xlink:`, a `data:image/…` URI, Inkscape's "Embed"), any other refused with what to do
+in Inkscape; the reader's rule stays that small, no list of every syntax that can fetch. The host,
+for the guarantee: it serves the page under a Content-Security-Policy that lets the browser load
+and run the page's own files alone (its bundle the one script, no inline script or handler, its
+own sheet and the drawing's `style` attributes, pictures its own or embedded, connections to its
+own address, fonts its own, no base address moved, a form sent nowhere but here), and the
+drawing's own route under one that runs and loads nothing but its embedded pictures, sandboxed;
+every answer `nosniff`. The claim that nothing a drawing writes makes the page load from another
+host or run script rests on the header, proven in the browser by putting every kind of load and
+script straight into the page and the drawing (C-049). Limits: a link navigates on a click and
+loads nothing by itself; the browser may open a bare connection to a frame's host (its preconnect)
+before its policy refuses the frame, asking nothing; portal's nested surface answers with its own
+headers; the policy is the browser's to enforce. Another site framing the page is not barred (no
+`frame-ancestors`, which the ruling did not ask for; a press there still asks its question).
+(Before the ruling, while Q25 stood, the question had no effect on a sheet: the reader refuses a
+layout's `<style>` sheet altogether, and Inkscape writes none.)
 
 ## Q24 - Does a timeline replay a rule over another series?
 

@@ -696,7 +696,9 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     // version cargo resolves) called anywhere in supervisão's sources, counted, against the calls
     // reviewed here (the routes swept above, the two nests: portal's router under `/portal` and a
     // session's own under its name, the one 404, the state); a `route_service`, a `merge`, a
-    // `nest_service` or a fallback service added is refused until it is reviewed and swept.
+    // `nest_service` or a fallback service added is refused until it is reviewed and swept; and the one
+    // layer (every answer marked `nosniff`, Q23), its argument and the function it maps answers with
+    // held token for token.
     let meta: serde_json::Value = serde_json::from_slice(&std::process::Command::new(env!("CARGO")).args(["metadata", "--format-version", "1", "--manifest-path"]).arg(root.join("Cargo.toml")).output().unwrap().stdout).unwrap();
     let axum_dir = meta["packages"].as_array().unwrap().iter().filter(|p| p["name"] == "axum").map(|p| std::path::PathBuf::from(p["manifest_path"].as_str().unwrap()).parent().unwrap().to_path_buf()).collect::<Vec<_>>();
     assert_eq!(axum_dir.len(), 1, "one axum");
@@ -706,6 +708,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     let mut calls: BTreeMap<String, usize> = BTreeMap::new();
     let mut nests: Vec<String> = Vec::new();
     let mut fallbacks: Vec<String> = Vec::new();
+    let mut layers: Vec<String> = Vec::new();
     for (_, text) in &sources {
         let toks = lex(text);
         for i in 0..toks.len().saturating_sub(2) {
@@ -716,8 +719,8 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
                 if toks[i + 1].text == "nest" {
                     nests.push(toks[i + 3..(i + 8).min(toks.len())].iter().map(|t| t.text.as_str()).collect::<Vec<_>>().join(" "));
                 }
-                // A fallback's whole argument, to its closing parenthesis.
-                if toks[i + 1].text == "fallback" && toks.get(i + 2).is_some_and(|t| t.is("(")) {
+                // A fallback's and a layer's whole argument, to its closing parenthesis.
+                if (toks[i + 1].text == "fallback" || toks[i + 1].text == "layer") && toks.get(i + 2).is_some_and(|t| t.is("(")) {
                     let mut depth = 0;
                     let mut end = i + 2;
                     for (j, tok) in toks.iter().enumerate().skip(i + 2) {
@@ -731,18 +734,30 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
                             }
                         }
                     }
-                    fallbacks.push(toks[i + 3..end].iter().map(|t| t.text.as_str()).collect::<Vec<_>>().join(" "));
+                    let arg = toks[i + 3..end].iter().map(|t| t.text.as_str()).collect::<Vec<_>>().join(" ");
+                    if toks[i + 1].text == "fallback" { fallbacks.push(arg) } else { layers.push(arg) }
                 }
             }
         }
     }
-    let reviewed: BTreeMap<String, usize> = [("fallback", 1), ("nest", 2), ("route", own_routes.len() - 2 + written), ("with_state", 1)].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+    let reviewed: BTreeMap<String, usize> = [("fallback", 1), ("layer", 1), ("nest", 2), ("route", own_routes.len() - 2 + written), ("with_state", 1)].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
     assert_eq!(calls, reviewed, "every call of axum's Router methods in supervisão's sources, reviewed");
     assert_eq!(nests, ["\"/portal\" , veredas_portal :: serve", "& base , session )"], "portal's router under `/portal`, a session's own under its name");
     // The one fallback as reviewed, whole: it takes the path alone and answers that nothing is
     // served there, whatever the method (no write, no other answer).
     let reviewed_fallback = lex(r#"|uri: axum::http::Uri| async move { not_found(format!("nothing is served at {}", uri.path())) }"#).iter().map(|t| t.text.clone()).collect::<Vec<_>>().join(" ");
     assert_eq!(fallbacks, [reviewed_fallback], "the fallback, token for token");
+    // The one layer as reviewed: it maps every answer, adding a header alone (no route, no write).
+    let tokens = |s: &str| lex(s).iter().map(|t| t.text.clone()).collect::<Vec<_>>().join(" ");
+    assert_eq!(layers, [tokens("axum::middleware::map_response(nosniff)")], "the layer, token for token");
+    let host_src = &sources.iter().find(|(f, _)| f.ends_with("host.rs")).unwrap().1;
+    let at = host_src.find("async fn nosniff(").unwrap();
+    let mapper = &host_src[at..at + host_src[at..].find("\n}").unwrap() + 2];
+    let reviewed_mapper = r#"async fn nosniff(mut r: Response) -> Response {
+    r.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    r
+}"#;
+    assert_eq!(tokens(mapper), tokens(reviewed_mapper), "the function the layer maps answers with, token for token");
     for p in swept {
         for method in ["POST", "PUT", "DELETE", "PATCH"] {
             let (status, _, _) = http(addr, method, p, Some(&body.to_string()));

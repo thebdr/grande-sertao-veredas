@@ -275,7 +275,11 @@ A path is relative to the binding file's folder.
   (Q25): its own elements (`sodipodi:*` and `inkscape:*` as children of the drawing's root or of the
   root's `defs`, `rdf:RDF` in the root's `metadata` with `cc:*` and `dc:*` inside it) dropped on
   read, unread, with all they hold (nothing of them reaches the page); its attributes in those
-  namespaces on the drawing's elements read by nothing. Without one the session has dashboards and
+  namespaces on the drawing's elements read by nothing. A picture in it is embedded (Q23: an
+  image's `href`, plain or `xlink:`, a `data:image/…` URI, Inkscape's "Embed"). The page loads and
+  runs nothing a drawing points to elsewhere: the host serves it under a content policy that lets
+  the browser load and run the page's own files alone, and the drawing's own route under one that
+  runs and loads nothing but its embedded pictures. Without one the session has dashboards and
   no layout view.
 - `headline` (none): object IDs shown in the top bar, in order.
 - `object` (none): `[[object]]` tables.
@@ -452,7 +456,8 @@ property (a `style` declaration whose name begins `--`, however CSS spells it) a
 `direction` (an attribute or in a `style`) outside a text and its spans (`text`, `tspan`, `textPath`),
 both of which the page's reset leaves to inheritance (the state colours read custom properties),
 foreign content (an
-element outside the SVG namespace, Inkscape's own apart where Inkscape writes them), an event handler, a script link (a `javascript:` URL in any
+element outside the SVG namespace, Inkscape's own apart where Inkscape writes them), an event handler, an image linking its picture rather than embedding it (an `href`, plain or
+`xlink:`, other than a `data:image/…` URI), a script link (a `javascript:` URL in any
 attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
 declaring attribute defaults or using a parameter entity (a browser would apply them unchecked); an
 object's element of another kind than the page draws on (a clone or an image told what to do in
