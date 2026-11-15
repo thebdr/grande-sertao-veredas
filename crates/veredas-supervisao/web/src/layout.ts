@@ -114,9 +114,11 @@ function widened(b: Box, w: number): Box {
   return out;
 }
 
-/// What a layout may not carry into the page: scripts, foreign content, event handlers.
+/// What a layout may not carry into the page: scripts, foreign content, event handlers; and every
+/// element outside the SVG namespace dropped on read (Inkscape's own, the reader's only exception).
 function clean(doc: Document) {
   doc.querySelectorAll("script, foreignObject").forEach((n) => n.remove());
+  doc.querySelectorAll("*").forEach((el) => { if (el.namespaceURI !== "http://www.w3.org/2000/svg") el.remove(); });
   doc.querySelectorAll("*").forEach((el) => {
     for (const a of Array.from(el.attributes)) if (/^on/i.test(a.name)) el.removeAttribute(a.name);
   });

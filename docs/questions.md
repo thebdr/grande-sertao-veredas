@@ -448,6 +448,10 @@ content in a layout.
 answer is "refuse", it is a new refusal in the reference (an `@import` or a `url()` outside the
 document in a layout's style) with its exact text, and C-048 states it.
 
+**No effect while Q25 stands** (2026-11-15): the reader refuses a layout's `<style>` sheet
+altogether (C-048's tenth round), and Inkscape writes none, so no layout's style can import
+anything. The question returns only if a sheet is ever let in.
+
 ## Q24 - Does a timeline replay a rule over another series?
 
 **Raised** 2026-11-14, by C-052's ninth refute round.
@@ -463,6 +467,10 @@ store serves today.
 a timeline, by name, and the reference says so; a rule that writes the object's own series out in
 full reads what the timeline replays, and stands. If the answer is "replay it", the refusal goes and
 the timeline merges the series' histories (numeric ones first), the test driving both kinds of rule.
+
+**Decided** 2026-11-15 (the operator, asked "Keep refusing, or replay such rules?"): "Keep
+refusing": a timeline shows objects whose rules read their own series; replay can come later. The
+refusal stands as built and tested (C-048, C-052), its `DECISION PENDING` mark gone.
 
 ## Q25 - What drawing does the layout draw objects on?
 
@@ -492,3 +500,18 @@ transform undoes what the page writes): the drawing is still, the page animates 
 "draw more", each refusal goes with the page learning that construct (a sheet scoped to the drawing,
 a `use` painted through its shadow tree, a nested viewport measured through its own frame), the test
 driving it.
+
+**Decided** 2026-11-15 (the operator, asked "Which tool will draw the layouts?"): "Inkscape": the
+reader takes Inkscape files as saved, its editor-only elements dropped on read; style attributes,
+text spans and matrix transforms kept. The drawing language is what Inkscape saves: its own
+elements (`sodipodi:*`, `inkscape:*` beside the drawing or in its `defs`, the `rdf` block in
+`metadata`, by namespace, `svg::EDITOR`) are dropped on read by the reader and the page, anywhere
+else refused; its attributes are kept and read by nothing; every other foreign namespace stays
+refused. The subset above stands (Inkscape writes no sheet, class, animation, script, moving CSS or
+`pointer-events` unless its user goes out of the way). An object's element or a marker's path in a
+hidden layer (`display: none`) is refused, the hiding element named; a clone or an image where an
+object's element is refused with what to do in Inkscape (unlink the clone; draw the image as
+shapes, or move it out of the group). A construct Inkscape does not write is answered at the
+reader, never by teaching the page a new one. No Inkscape is installed here and the operator
+supplies no saved file: the fixture is a drawing written by hand to Inkscape 1.3's format, and no
+file saved by Inkscape has gone through the reader or the page (C-048 and C-051 state it).

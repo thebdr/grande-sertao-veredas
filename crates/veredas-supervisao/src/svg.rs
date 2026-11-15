@@ -11,8 +11,25 @@ pub const SVG_NS: &str = "http://www.w3.org/2000/svg";
 /// The elements a marker can follow: those whose outline the page can measure along.
 pub const FOLLOWABLE: [&str; 7] = ["path", "line", "polyline", "polygon", "rect", "circle", "ellipse"];
 
-// DECISION PENDING (docs/questions.md Q25): the drawing the page draws on is the subset below; the
-// reader refuses the rest rather than drawing it otherwise than the reference says.
+// Decided (docs/questions.md Q25, the operator, 2026-11-15): layouts are drawn in Inkscape and read
+// as it saves them. The page draws on the subset below; the reader refuses the rest by name rather
+// than draw it otherwise than the reference says, and drops Inkscape's own elements (`EDITOR`).
+
+/// Inkscape's namespaces, as it saves a drawing.
+pub const INKSCAPE_NS: &str = "http://www.inkscape.org/namespaces/inkscape";
+pub const SODIPODI_NS: &str = "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd";
+pub const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+pub const CC_NS: &str = "http://creativecommons.org/ns#";
+pub const DC_NS: &str = "http://purl.org/dc/elements/1.1/";
+
+/// Inkscape's own elements, by namespace, with the SVG elements each stands in as Inkscape writes
+/// it: its editor's state (`sodipodi:namedview` and what it holds, a path effect or a perspective in
+/// `defs`) beside the drawing or in its `defs`; the metadata block (`rdf:RDF`, holding `cc:Work` and
+/// `dc:*`) in `metadata`. Each is dropped on read, what it holds with it, by the reader and by the
+/// page; one standing anywhere else is refused, and so is every other foreign namespace. Inkscape's
+/// attributes on the drawing's elements (`inkscape:label`, `sodipodi:nodetypes`, ...) are read by
+/// nothing: no check of the reader's and no rule of the page's names one.
+pub const EDITOR: [(&str, &[&str]); 5] = [(SODIPODI_NS, &["svg", "defs"]), (INKSCAPE_NS, &["svg", "defs"]), (RDF_NS, &["metadata"]), (CC_NS, &[]), (DC_NS, &[])];
 
 /// The elements the page draws an object on: a group, the shapes it paints, a text.
 pub const DRAWN: [&str; 9] = ["g", "rect", "circle", "ellipse", "path", "polygon", "polyline", "line", "text"];
@@ -38,6 +55,9 @@ pub struct Placed {
     pub holds: Option<String>,
     /// Whether a `style` attribute on it or inside it marks a declaration `!important`.
     pub important: bool,
+    /// The nearest element, itself or around it, that hides it (`display: none`, as an attribute or in
+    /// a `style`: Inkscape's hidden layer), as named in a refusal.
+    pub hidden: Option<String>,
 }
 
 /// A layout as read: the file, its text, and every element id with the element's name and how
@@ -95,8 +115,22 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
     }
     let mut ids: BTreeMap<String, (String, usize)> = BTreeMap::new();
     let mut placed: BTreeMap<String, Placed> = BTreeMap::new();
+    // Inkscape's own elements, each dropped with all it holds where Inkscape writes it.
+    let mut dropped: Vec<std::ops::Range<usize>> = Vec::new();
     for node in root.descendants().filter(|n| n.is_element()) {
         let name = node.tag_name().name();
+        if dropped.iter().any(|r| r.contains(&node.range().start)) {
+            continue;
+        }
+        if let Some((ns, places)) = EDITOR.iter().find(|(ns, _)| node.tag_name().namespace() == Some(*ns)) {
+            let parent = node.parent_element();
+            if !parent.is_some_and(|p| p.tag_name().namespace() == Some(SVG_NS) && places.contains(&p.tag_name().name())) {
+                let within = parent.map(|p| p.tag_name().name().to_string()).unwrap_or_default();
+                return Err(format!("{} holds an Inkscape element (<{name}> of `{ns}`) inside a <{within}>, where Inkscape writes none: its editor's state stands beside the drawing or in its `defs`, its metadata in `metadata`", path.display()));
+            }
+            dropped.push(node.range());
+            continue;
+        }
         if name == "script" || name == "foreignObject" {
             return Err(format!("{} holds a <{name}> element: a layout is a drawing, with no script and no foreign content", path.display()));
         }
@@ -109,7 +143,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
         // a `path` of no namespace a marker would follow) is no drawing either.
         if node.tag_name().namespace() != Some(SVG_NS) {
             let ns = node.tag_name().namespace().unwrap_or("none");
-            return Err(format!("{} holds a <{name}> element of the namespace `{ns}`: a layout is a drawing in the SVG namespace, with no foreign content", path.display()));
+            return Err(format!("{} holds a <{name}> element of the namespace `{ns}`: a layout is a drawing in the SVG namespace (Inkscape's own elements apart), with no foreign content", path.display()));
         }
         if let Some(attr) = node.attributes().find(|a| a.name().len() > 2 && a.name().as_bytes()[..2].eq_ignore_ascii_case(b"on")) {
             return Err(format!("{} holds an event handler (`{}` on <{name}>): a layout is a drawing, with no script", path.display(), attr.name()));
@@ -146,6 +180,10 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
                     apart: up.iter().map(|a| a.tag_name().name()).find(|n| !AROUND.contains(n)).map(String::from),
                     holds: node.descendants().skip(1).filter(|d| d.is_element()).map(|d| d.tag_name().name()).find(|n| !HOLDS.contains(n)).map(String::from),
                     important: node.descendants().filter(|d| d.is_element()).any(|d| important(&d)),
+                    hidden: node.ancestors().filter(|a| a.is_element()).find(|a| a.attribute("display").is_some_and(|v| v.trim().eq_ignore_ascii_case("none")) || a.attribute("style").and_then(|s| style_value(s, "display")).is_some_and(|v| v == "none")).map(|a| match a.attribute("id") {
+                        Some(id) => format!("<{}> `{id}`", a.tag_name().name()),
+                        None => format!("<{}>", a.tag_name().name()),
+                    }),
                 }
             });
         }
@@ -241,6 +279,38 @@ pub fn declared(style: &str) -> Vec<String> {
         }
     }
     names
+}
+
+/// The value a `style` attribute declares for a property, as CSS reads it (its last declaration of it,
+/// lowercase and trimmed, a priority apart), or none.
+pub fn style_value(style: &str, property: &str) -> Option<String> {
+    let out = css_read(style);
+    let written = |c: &(char, bool)| c.1 || !css_space(c.0);
+    let mut found = None;
+    for decl in out.split(|c| *c == (';', false)) {
+        let Some(colon) = decl.iter().position(|c| *c == (':', false)) else { continue };
+        let raw = &decl[..colon];
+        let (Some(start), Some(end)) = (raw.iter().position(written), raw.iter().rposition(written)) else { continue };
+        if raw[start..=end].iter().any(|c| !written(c)) {
+            continue;
+        }
+        let name: String = raw[start..=end].iter().map(|(c, _)| c.to_ascii_lowercase()).collect();
+        if name == property {
+            let value: String = decl[colon + 1..].iter().map(|(c, _)| *c).collect();
+            found = Some(value.split('!').next().unwrap_or("").trim().to_ascii_lowercase());
+        }
+    }
+    found
+}
+
+/// What an engineer does in Inkscape to make an element the page draws an object on, for one it
+/// does not: a clone unlinked, an image drawn or moved out.
+pub fn inkscape_hint(name: &str) -> &'static str {
+    match name {
+        "use" => " (a clone: unlink it in Inkscape, Edit › Clone › Unlink Clone)",
+        "image" => " (an image: draw it as shapes, or move it out of the object's group)",
+        _ => "",
+    }
 }
 
 /// Whether a CSS property moves, times or unpins what the page writes on the drawing: a transform

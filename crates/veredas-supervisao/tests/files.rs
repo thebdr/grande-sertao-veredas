@@ -1014,8 +1014,11 @@ A path is relative to the binding file's folder.
 - `format` (required): always `"veredas-binding"`.
 - `version` (required): this reader knows `1`.
 - `title` (the project's name): the session's name on the screen.
-- `layout` (none): the path of the SVG layout. Without one the session has dashboards and no
-  layout view.
+- `layout` (none): the path of the SVG layout, drawn in Inkscape and read as Inkscape saves it
+  (Q25): its own elements (`sodipodi:*` and `inkscape:*` beside the drawing or in its `defs`, the
+  `rdf` block in `metadata`) dropped on read, what they hold with them; its attributes in those
+  namespaces on the drawing's elements read by nothing. Without one the session has dashboards and
+  no layout view.
 - `headline` (none): object IDs shown in the top bar, in order.
 - `object` (none): `[[object]]` tables.
 - `dashboard` (none): `[[dashboard]]` tables.
@@ -1179,12 +1182,13 @@ an SVG document (its root an `svg` in the SVG namespace), or holds a script, a `
 `perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, in a
 `style`, a name with white space or a comment inside it declaring nothing; the attributes
 `transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), foreign content (an
-element outside the SVG namespace), an event handler, a script link (a `javascript:` URL in any
+element outside the SVG namespace, Inkscape's own apart where Inkscape writes them), an event handler, a script link (a `javascript:` URL in any
 attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
 declaring attribute defaults or using a parameter entity (a browser would apply them unchecked); an
-object's element of another kind than the page draws on, inside another object's element or
-anything but groups, holding anything but groups, shapes, texts and their spans, or saying `!important` in a `style` on it or inside it, and a
-marker's path inside anything but groups:
+object's element of another kind than the page draws on (a clone or an image told what to do in
+Inkscape), inside another object's element or anything but groups, hidden (`display: none` on it
+or on a group around it, as a hidden layer is), holding anything but groups, shapes, texts and their spans, or saying `!important` in a `style` on it or inside it, and a
+marker's path inside anything but groups or hidden:
 each is refused when the file loads, with its place named, before any session starts.
 "###;
 
@@ -1236,10 +1240,10 @@ fn a_layout_is_an_svg_document_with_no_script() {
     assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\" onload=\"x()\"/>", p).unwrap_err(), "l.svg holds an event handler (`onload` on <svg>): a layout is a drawing, with no script");
     // Foreign content of any other form: an element outside the SVG namespace, an XHTML frame, a
     // `path` of another namespace a marker would otherwise follow.
-    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><iframe xmlns=\"http://www.w3.org/1999/xhtml\" srcdoc=\"x\"/></svg>", p).unwrap_err(), "l.svg holds a <iframe> element of the namespace `http://www.w3.org/1999/xhtml`: a layout is a drawing in the SVG namespace, with no foreign content");
-    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:h=\"http://www.w3.org/1999/xhtml\"><h:object data=\"x\"/></svg>", p).unwrap_err(), "l.svg holds a <object> element of the namespace `http://www.w3.org/1999/xhtml`: a layout is a drawing in the SVG namespace, with no foreign content");
-    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:x=\"urn:not-svg\"><x:path id=\"loop\"/></svg>", p).unwrap_err(), "l.svg holds a <path> element of the namespace `urn:not-svg`: a layout is a drawing in the SVG namespace, with no foreign content");
-    assert_eq!(parse("<s:svg xmlns:s=\"http://www.w3.org/2000/svg\"><rect/></s:svg>", p).unwrap_err(), "l.svg holds a <rect> element of the namespace `none`: a layout is a drawing in the SVG namespace, with no foreign content");
+    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><iframe xmlns=\"http://www.w3.org/1999/xhtml\" srcdoc=\"x\"/></svg>", p).unwrap_err(), "l.svg holds a <iframe> element of the namespace `http://www.w3.org/1999/xhtml`: a layout is a drawing in the SVG namespace (Inkscape's own elements apart), with no foreign content");
+    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:h=\"http://www.w3.org/1999/xhtml\"><h:object data=\"x\"/></svg>", p).unwrap_err(), "l.svg holds a <object> element of the namespace `http://www.w3.org/1999/xhtml`: a layout is a drawing in the SVG namespace (Inkscape's own elements apart), with no foreign content");
+    assert_eq!(parse("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:x=\"urn:not-svg\"><x:path id=\"loop\"/></svg>", p).unwrap_err(), "l.svg holds a <path> element of the namespace `urn:not-svg`: a layout is a drawing in the SVG namespace (Inkscape's own elements apart), with no foreign content");
+    assert_eq!(parse("<s:svg xmlns:s=\"http://www.w3.org/2000/svg\"><rect/></s:svg>", p).unwrap_err(), "l.svg holds a <rect> element of the namespace `none`: a layout is a drawing in the SVG namespace (Inkscape's own elements apart), with no foreign content");
     // A list of values (an animation's `values`) is read item by item, as a browser reads each.
     for values in ["#a;javascript:alert(1)", "#a; javascript:alert(1)", "#a;java&#9;script:x()"] {
         let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\"><a><animate attributeName=\"href\" values=\"{values}\" dur=\"1s\"/><rect/></a></svg>");
@@ -1257,6 +1261,16 @@ fn a_layout_is_an_svg_document_with_no_script() {
     assert!(parse("<!DOCTYPE svg [<!ENTITY w \"40\">]><svg xmlns=\"http://www.w3.org/2000/svg\"><rect id=\"r\" width=\"&w;\"/></svg>", p).unwrap().element("r") == Some("rect"), "a general entity, expanded and checked, is read");
     // A document type, as drawing tools export it, is read.
     assert!(parse("<?xml version=\"1.0\"?>\n<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\n<svg xmlns=\"http://www.w3.org/2000/svg\"><rect id=\"x\"/></svg>", p).unwrap().element("x") == Some("rect"));
+}
+
+/// What the reader tells an engineer to do in Inkscape for an element the page draws no object on,
+/// in the test's own words: a clone unlinked, an image drawn or moved out.
+fn hint(kind: &str) -> &'static str {
+    match kind {
+        "use" => " (a clone: unlink it in Inkscape, Edit › Clone › Unlink Clone)",
+        "image" => " (an image: draw it as shapes, or move it out of the object's group)",
+        _ => "",
+    }
 }
 
 /// The drawing the page draws on (Q25), by the reader's own lists: an object on every element of
@@ -1320,7 +1334,7 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
     }
     for kind in ["tspan", "use", "image", "svg", "textPath", "switch", "a", "symbol"] {
         let ex = with_svg(INFEED, &format!("<{kind} id=\"infeed\"/>"));
-        assert_eq!(binding_refusal(&ex), format!("object `infeed`: its element is a <{kind}>, which the page draws no object on (one of {})", DRAWN.join(", ")), "{kind}");
+        assert_eq!(binding_refusal(&ex), format!("object `infeed`: its element is a <{kind}>{}, which the page draws no object on (one of {})", hint(kind), DRAWN.join(", ")), "{kind}");
     }
     // What stands around: groups load at every depth; anything else is refused by its name.
     for (open, close) in depths {
@@ -1346,7 +1360,7 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
     assert!(outcome(&with_svg(outlet, &format!("<g id=\"layer-1\">{outlet}</g>"))).is_ok());
     // A `use` inside an object's element refused at every depth; one outside any, loading.
     for (open, close) in depths {
-        assert_eq!(binding_refusal(&with_svg(INFEED, &format!("<g id=\"infeed\">{open}<use href=\"#loop\"/>{close}</g>"))), "object `infeed`: its element holds a <use>, which the page does not paint as the object (it holds groups, shapes, texts and their spans alone)", "{open}");
+        assert_eq!(binding_refusal(&with_svg(INFEED, &format!("<g id=\"infeed\">{open}<use href=\"#loop\"/>{close}</g>"))), "object `infeed`: its element holds a <use> (a clone: unlink it in Inkscape, Edit › Clone › Unlink Clone), which the page does not paint as the object (it holds groups, shapes, texts and their spans alone)", "{open}");
     }
     assert!(outcome(&with_svg(INFEED, &format!("{INFEED}<use href=\"#loop\"/>"))).is_ok());
     // `!important` as CSS reads a declaration (its `!` itself, white space and comments after it, the
@@ -1380,7 +1394,7 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
             assert!(outcome(&with_svg(INFEED, &format!("<g id=\"infeed\">{open}{el}{close}</g>"))).is_ok(), "{inner} {open}");
         }
         for other in ["use", "a", "switch", "svg", "image", "foo", "pattern", "clipPath"] {
-            assert_eq!(binding_refusal(&with_svg(INFEED, &format!("<g id=\"infeed\">{open}<{other}/>{close}</g>"))), format!("object `infeed`: its element holds a <{other}>, which the page does not paint as the object (it holds groups, shapes, texts and their spans alone)"), "{other} {open}");
+            assert_eq!(binding_refusal(&with_svg(INFEED, &format!("<g id=\"infeed\">{open}<{other}/>{close}</g>"))), format!("object `infeed`: its element holds a <{other}>{}, which the page does not paint as the object (it holds groups, shapes, texts and their spans alone)", hint(other)), "{other} {open}");
         }
     }
     // A `class` anywhere, at every place: with no sheet of its own a drawing's class meets only the
@@ -2477,4 +2491,64 @@ fn every_state_and_every_kind_of_value_a_rule_meets_by_the_reader_s_own_lists() 
         }
     }
     assert_eq!(kinds.len(), 7, "every kind of TOML value: {kinds:?}");
+}
+
+/// A drawing as Inkscape saves it (Q25 decided: layouts are drawn in Inkscape): the reference's
+/// drawing written by hand to Inkscape 1.3's format (`INKSCAPE_LOOP`; no file saved by Inkscape has
+/// gone through this reader, the limit) loads with the reference's binding, Inkscape's own elements
+/// dropped (their ids gone) and every drawing element kept. Each namespace of the reader's own list of
+/// Inkscape's (`EDITOR`) loads in every place Inkscape writes it and is refused in every other; any
+/// other foreign namespace stays refused. An object's element or a marker's path in a hidden layer
+/// (`display: none`, in a `style` as Inkscape writes it or as an attribute) is refused, the hiding
+/// element named.
+#[test]
+fn a_drawing_saved_as_inkscape_saves_it_loads_its_editor_dropped() {
+    use common::INKSCAPE_LOOP;
+    use veredas_supervisao::svg::{EDITOR, SVG_NS, parse};
+    let mut ex = example();
+    ex.svg = INKSCAPE_LOOP.to_string();
+    assert!(outcome(&ex).is_ok(), "{:?}", outcome(&ex).err());
+    let p = std::path::Path::new("l.svg");
+    let layout = parse(INKSCAPE_LOOP, p).unwrap();
+    for gone in ["namedview1", "grid1", "page1", "guide1", "path-effect1", "perspective1"] {
+        assert!(!layout.ids.contains_key(gone), "{gone}: Inkscape's own, dropped");
+    }
+    for kept in ["svg1", "defs1", "linearGradient1", "stop1", "metadata1", "layer1", "layer2", "layer3", "rect9", "loop", "infeed", "g1", "outlet-1", "outlet-2", "outlet-3", "parcel-1", "parcel-2", "g2", "circle1", "path2", "path1", "text1", "tspan1", "text2", "tspan2"] {
+        assert!(layout.ids.contains_key(kept), "{kept}: the drawing's, kept");
+    }
+    // Every Inkscape namespace in every place: where Inkscape writes it, dropped with what it holds;
+    // anywhere else, refused naming it.
+    let places = ["svg", "defs", "metadata", "g", "text"];
+    for (ns, allowed) in EDITOR {
+        for place in places {
+            let el = format!("<e:thing xmlns:e=\"{ns}\" id=\"x1\"><e:inner id=\"x2\"/></e:thing>");
+            let body = if place == "svg" { el.clone() } else { format!("<{place} id=\"holder\">{el}</{place}>") };
+            let svg = format!("<svg xmlns=\"{SVG_NS}\" viewBox=\"0 0 10 10\">{body}<rect id=\"r\"/></svg>");
+            match parse(&svg, p) {
+                Ok(l) if allowed.contains(&place) => assert!(!l.ids.contains_key("x1") && !l.ids.contains_key("x2") && l.ids.contains_key("r"), "{ns} in <{place}>"),
+                Err(e) if !allowed.contains(&place) => assert_eq!(e, format!("l.svg holds an Inkscape element (<thing> of `{ns}`) inside a <{place}>, where Inkscape writes none: its editor's state stands beside the drawing or in its `defs`, its metadata in `metadata`"), "{ns} in <{place}>"),
+                other => panic!("{ns} in <{place}>: {other:?}"),
+            }
+        }
+    }
+    // Any other foreign namespace, in the places Inkscape's may stand too, refused.
+    for place in places {
+        let body = format!("<x:thing xmlns:x=\"urn:not-inkscape\"/>");
+        let svg = if place == "svg" { format!("<svg xmlns=\"{SVG_NS}\">{body}</svg>") } else { format!("<svg xmlns=\"{SVG_NS}\"><{place}>{body}</{place}></svg>") };
+        assert_eq!(parse(&svg, p).unwrap_err(), "l.svg holds a <thing> element of the namespace `urn:not-inkscape`: a layout is a drawing in the SVG namespace (Inkscape's own elements apart), with no foreign content", "{place}");
+    }
+    // A hidden layer or group around an object's element, as Inkscape writes it (in its `style`) and
+    // as an attribute, and around a marker's path: refused, the hiding element named.
+    let outlets = "<g\n       id=\"g1\"\n       inkscape:label=\"Outlets\">";
+    assert!(INKSCAPE_LOOP.contains(outlets));
+    for hide in ["style=\"display:none\"", "display=\"none\"", "style=\"opacity:1;DISPLAY : None\""] {
+        let mut hidden = example();
+        hidden.svg = INKSCAPE_LOOP.replacen(outlets, &format!("<g\n       id=\"g1\" {hide}\n       inkscape:label=\"Outlets\">"), 1);
+        assert_eq!(binding_refusal(&hidden), "object `outlet-1`: its element stands hidden (<g> `g1` says `display: none`, as a hidden layer does): show it in Inkscape, or move the element out of it", "{hide}");
+    }
+    let mut lost = example();
+    lost.svg = INKSCAPE_LOOP.replacen("id=\"layer1\"\n     transform=\"translate(12.5,-4)\"\n     style=\"display:inline\"", "id=\"layer1\"\n     transform=\"translate(12.5,-4)\"\n     style=\"display:none\"", 1);
+    assert!(lost.svg != INKSCAPE_LOOP);
+    let refused = binding_refusal(&lost);
+    assert!(refused.contains("stands hidden (<g> `layer1` says `display: none`, as a hidden layer does): show it in Inkscape"), "{refused}");
 }

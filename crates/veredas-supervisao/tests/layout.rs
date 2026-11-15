@@ -1511,3 +1511,59 @@ fn a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_th
     drop(page);
     host.stop();
 }
+
+/// The page draws a drawing as Inkscape saves it (Q25 decided: layouts are drawn in Inkscape): the
+/// reference's drawing written by hand to Inkscape 1.3's format (`INKSCAPE_LOOP`; no file saved by
+/// Inkscape has gone through the reader or the page, the limit). Nothing outside the SVG namespace
+/// reaches the page's drawing (Inkscape's elements dropped on read), Inkscape's attributes kept and
+/// read by nothing; every bound element shown in its state, each level's fill inside its element to
+/// its level, each label above its element and each tag under it, centred; the markers at their
+/// places along the loop through the layer's own transform; the hidden layer left hidden.
+#[test]
+fn the_page_draws_a_drawing_saved_as_inkscape_saves_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(&dir.path().join("bench"));
+    let mut ex = live_example(&bench, false);
+    ex.svg = INKSCAPE_LOOP.to_string();
+    let path = write_example(dir.path(), &ex);
+    std::fs::write(dir.path().join("loop/sorts.log"), "").unwrap();
+    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let addr = host.addr();
+    let mut page = Browser::open(&format!("http://{addr}/s/loop/"));
+    page.wait_for(
+        r#"(() => { const s = (id) => document.getElementById(id); return s("outlet-3")?.classList.contains("sv-state-warn") && s("outlet-2").classList.contains("sv-state-near") && s("parcel-1").getAttribute("transform") && s("parcel-2").getAttribute("transform") ? true : null; })()"#,
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    page.wait_for(r#"document.getAnimations().every((a) => a.playState !== "running") || null"#, Duration::from_secs(5));
+    let foreign = page.eval(r#"[...document.querySelectorAll("svg.plant *")].filter((e) => e.namespaceURI !== "http://www.w3.org/2000/svg").map((e) => e.tagName)"#);
+    assert_eq!(foreign, json!([]), "nothing outside the SVG namespace in the page's drawing");
+    assert_eq!(page.eval(r#"document.getElementById("layer1").getAttributeNS("http://www.inkscape.org/namespaces/inkscape", "label")"#), json!("Plant"), "Inkscape's attributes kept");
+    assert_eq!(page.eval(r#"getComputedStyle(document.getElementById("layer2")).display"#), json!("none"), "the hidden layer left hidden");
+    let d = page.eval(DRAWN);
+    let rect = |v: &Value| -> Vec<f64> { v.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect() };
+    for (id, state) in [("infeed", "sv-state-normal"), ("outlet-1", "sv-state-normal"), ("outlet-2", "sv-state-near"), ("outlet-3", "sv-state-warn")] {
+        let o = &d[id];
+        assert_eq!((o["state"].clone(), o["shown"].clone()), (json!(state), json!(true)), "{id}: {o}");
+        let r = rect(&o["rect"]);
+        let mid = r[0] + r[2] / 2.0;
+        let label = rect(&o["label_rect"]);
+        assert!(label[1] + label[3] <= r[1] + 1.0 && near(label[0] + label[2] / 2.0, mid, 1.5), "{id}: its label above it, centred: {label:?} over {r:?}");
+        if state != "sv-state-normal" {
+            let tag = rect(&o["tag_rect"]);
+            assert!(tag[1] >= r[1] + r[3] - 1.0 && near(tag[0] + tag[2] / 2.0, mid, 1.5) && o["tag_shown"] == json!(true), "{id}: its tag under it, centred: {tag:?} under {r:?}");
+        }
+    }
+    for (id, level) in [("outlet-1", 0.35), ("outlet-2", 0.85), ("outlet-3", 1.0)] {
+        let (r, f) = (rect(&d[id]["rect"]), rect(&d[id]["fill"]["rect"]));
+        assert!(d[id]["fill"]["shown"] == json!(true) && f[0] >= r[0] - 0.5 && f[0] + f[2] <= r[0] + r[2] + 0.5 && near(f[1] + f[3], r[1] + r[3], 0.75) && near(f[3], r[3] * level, 1.0), "{id}: its fill inside it at {level}: {f:?} in {r:?}");
+    }
+    for (id, place) in [("parcel-1", 0.25), ("parcel-2", 0.75)] {
+        assert_eq!(d[id]["shown"], json!(true), "{id}");
+        let (x, y) = translate(d[id]["transform"].as_str().unwrap());
+        let (lx, ly) = on_loop(place);
+        assert!(near(x, lx, 0.05) && near(y, ly, 0.05), "{id} at {place} along the loop: ({x}, {y}), the loop's point ({lx}, {ly})");
+    }
+    drop(page);
+    host.stop();
+}

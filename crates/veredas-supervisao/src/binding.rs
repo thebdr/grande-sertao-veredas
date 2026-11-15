@@ -759,6 +759,9 @@ pub fn load(text: &str, base: &Path, universe: &Universe, project_name: &str) ->
                     Some(_) if let Some(a) = layout.placed.get(&p).and_then(|x| x.apart.as_ref()) => {
                         return Err(format!("{place}: the path `{p}` stands inside a <{a}> of the layout, where the page cannot measure it as drawn"));
                     }
+                    Some(_) if let Some(h) = layout.placed.get(&p).and_then(|x| x.hidden.as_ref()) => {
+                        return Err(format!("{place}: the path `{p}` stands hidden ({h} says `display: none`, as a hidden layer does): show it in Inkscape, or move the path out of it"));
+                    }
                     Some(_) => Some(p),
                 }
             }
@@ -811,7 +814,7 @@ pub fn load(text: &str, base: &Path, universe: &Universe, project_name: &str) ->
         });
     }
 
-    // DECISION PENDING (docs/questions.md Q25): the elements the page draws an object on, where it
+    // Decided (docs/questions.md Q25, the operator, 2026-11-15: layouts drawn in Inkscape): the elements the page draws an object on, where it
     // can measure and paint them as drawn (svg::DRAWN, svg::AROUND).
     if let Some(layout) = &layout {
         let bound: std::collections::BTreeSet<&str> = objects.iter().filter(|o| layout.ids.contains_key(&o.id)).map(|o| o.id.as_str()).collect();
@@ -821,7 +824,7 @@ pub fn load(text: &str, base: &Path, universe: &Universe, project_name: &str) ->
                 return Err(format!("object `{}`: the layout carries the id on {n} elements", o.id));
             }
             if !svg::DRAWN.contains(&name.as_str()) {
-                return Err(format!("object `{}`: its element is a <{name}>, which the page draws no object on (one of {})", o.id, svg::DRAWN.join(", ")));
+                return Err(format!("object `{}`: its element is a <{name}>{}, which the page draws no object on (one of {})", o.id, svg::inkscape_hint(name), svg::DRAWN.join(", ")));
             }
             let Some(p) = layout.placed.get(&o.id) else { continue };
             if let Some(outer) = p.around.iter().find(|a| bound.contains(a.as_str())) {
@@ -830,8 +833,11 @@ pub fn load(text: &str, base: &Path, universe: &Universe, project_name: &str) ->
             if let Some(a) = &p.apart {
                 return Err(format!("object `{}`: its element stands inside a <{a}> of the layout, where the page cannot measure or paint it as drawn", o.id));
             }
+            if let Some(h) = &p.hidden {
+                return Err(format!("object `{}`: its element stands hidden ({h} says `display: none`, as a hidden layer does): show it in Inkscape, or move the element out of it", o.id));
+            }
             if let Some(inner) = &p.holds {
-                return Err(format!("object `{}`: its element holds a <{inner}>, which the page does not paint as the object (it holds groups, shapes, texts and their spans alone)", o.id));
+                return Err(format!("object `{}`: its element holds a <{inner}>{}, which the page does not paint as the object (it holds groups, shapes, texts and their spans alone)", o.id, svg::inkscape_hint(inner)));
             }
             if p.important {
                 return Err(format!("object `{}`: a `style` attribute on its element or inside it says `!important`, which would outrank the state's paint", o.id));
@@ -949,7 +955,7 @@ fn compile_panel(place: &str, kind: &str, t: toml::Value, objects: &[Object], u:
             let objs = resolve_objects(place, &p.objects, objects)?;
             for i in &objs {
                 numeric_object(place, *i, objects)?;
-                // DECISION PENDING (docs/questions.md Q24): a timeline replays an object's own
+                // Decided (docs/questions.md Q24, the operator, 2026-11-15): a timeline replays an object's own
                 // series alone; a rule over another series has no history read here, so such an
                 // object is refused on a timeline rather than drawn without that rule's states.
                 // A rule naming the object's own series (its source, series and key as the

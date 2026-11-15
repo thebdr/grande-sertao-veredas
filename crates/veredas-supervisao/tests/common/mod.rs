@@ -315,3 +315,252 @@ impl Sse {
 pub fn object<'a>(snapshot: &'a Value, id: &str) -> &'a Value {
     snapshot["objects"].as_array().unwrap().iter().find(|o| o["id"] == id).unwrap_or_else(|| panic!("no object {id} in {snapshot}"))
 }
+
+/// The reference's drawing (its loop, infeed, outlets and parcels, by the same ids) as Inkscape 1.3
+/// saves a drawing (Q25 decided: layouts are drawn in Inkscape): the XML declaration and a comment,
+/// the SVG namespace both unprefixed and as `svg:`, Inkscape's own namespaces, its editor's state
+/// (`sodipodi:namedview` with a grid, a page and a guide; a path effect and a perspective in `defs`),
+/// the metadata block in `metadata`, layers (one locked, one moved, one hidden), every paint in a
+/// `style`, lines as paths with their node types, an arc as a path, a group turned by a matrix, a
+/// text with its line span. Written by hand to Inkscape's format: no file saved by Inkscape has gone
+/// through the reader or the page (the limit C-048 and C-051 state).
+pub const INKSCAPE_LOOP: &str = r##"<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="105.83333mm"
+   height="58.208332mm"
+   viewBox="0 0 400 220"
+   version="1.1"
+   id="svg1"
+   inkscape:version="1.3.2 (091e20e, 2023-11-25, custom)"
+   sodipodi:docname="loop.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:document-units="mm"
+     showgrid="true"
+     inkscape:zoom="0.73"
+     inkscape:cx="396"
+     inkscape:cy="561"
+     inkscape:window-width="1920"
+     inkscape:window-height="1017"
+     inkscape:window-x="-8"
+     inkscape:window-y="-8"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1">
+    <inkscape:grid
+       id="grid1"
+       units="mm"
+       originx="0"
+       originy="0"
+       spacingx="1"
+       spacingy="1"
+       empcolor="#0099e5"
+       empopacity="0.30196078"
+       color="#0099e5"
+       opacity="0.14901961"
+       empspacing="5"
+       dotted="false"
+       gridanglex="30"
+       gridanglez="30"
+       visible="true" />
+    <inkscape:page
+       x="0"
+       y="0"
+       width="400"
+       height="220"
+       id="page1"
+       margin="0"
+       bleed="0" />
+    <sodipodi:guide
+       position="20,124"
+       orientation="0,-1"
+       id="guide1"
+       inkscape:locked="false" />
+  </sodipodi:namedview>
+  <defs
+     id="defs1">
+    <inkscape:path-effect
+       effect="spiro"
+       id="path-effect1"
+       is_visible="true"
+       lpeversion="1" />
+    <inkscape:perspective
+       sodipodi:type="inkscape:persp3d"
+       inkscape:vp_x="0 : 110 : 1"
+       inkscape:vp_y="0 : 1000 : 0"
+       inkscape:vp_z="400 : 110 : 1"
+       inkscape:persp3d-origin="200 : 73.333333 : 1"
+       id="perspective1" />
+    <linearGradient
+       id="linearGradient1"
+       inkscape:collect="always">
+      <stop
+         style="stop-color:#26262a;stop-opacity:1"
+         offset="0"
+         id="stop1" />
+      <stop
+         style="stop-color:#3a3a40;stop-opacity:1"
+         offset="1"
+         id="stop2" />
+    </linearGradient>
+  </defs>
+  <metadata
+     id="metadata1">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title>Loop</dc:title>
+        <dc:creator>
+          <cc:Agent>
+            <dc:title>Plant engineering</dc:title>
+          </cc:Agent>
+        </dc:creator>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <g
+     inkscape:label="Frame"
+     inkscape:groupmode="layer"
+     id="layer3"
+     sodipodi:insensitive="true"
+     style="display:inline">
+    <rect
+       style="fill:none;stroke:#3a3a40;stroke-width:0.5;stroke-dasharray:2,2"
+       id="rect9"
+       width="396"
+       height="216"
+       x="2"
+       y="2" />
+  </g>
+  <g
+     inkscape:label="Plant"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(12.5,-4)"
+     style="display:inline">
+    <path
+       style="fill:none;stroke:#26262a;stroke-width:14;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+       d="M 80,40 H 320 A 70,70 0 0 1 320,180 H 80 A 70,70 0 0 1 80,40 Z"
+       id="loop"
+       inkscape:label="Loop"
+       sodipodi:nodetypes="ccccc" />
+    <rect
+       style="fill:#cccccc;stroke:#000000;stroke-width:0.264583"
+       id="infeed"
+       width="40"
+       height="28"
+       x="20"
+       y="96"
+       ry="2"
+       inkscape:label="Infeed" />
+    <g
+       id="g1"
+       inkscape:label="Outlets">
+      <rect
+         style="fill:#cccccc;stroke:#000000;stroke-width:0.264583"
+         id="outlet-1"
+         width="24"
+         height="28"
+         x="130"
+         y="4" />
+      <rect
+         style="fill:#cccccc;stroke:#000000;stroke-width:0.264583"
+         id="outlet-2"
+         width="24"
+         height="28"
+         x="190"
+         y="4" />
+      <rect
+         style="fill:#cccccc;stroke:#000000;stroke-width:0.264583"
+         id="outlet-3"
+         width="24"
+         height="28"
+         x="250"
+         y="4" />
+    </g>
+    <circle
+       style="fill:#ffffff;stroke:#000000;stroke-width:0.264583"
+       id="parcel-1"
+       r="5" />
+    <circle
+       style="fill:#ffffff;stroke:#000000;stroke-width:0.264583"
+       id="parcel-2"
+       r="5" />
+    <g
+       id="g2"
+       transform="matrix(0.8660254,0.5,-0.5,0.8660254,90.5,-36)"
+       inkscape:label="Turned">
+      <circle
+         style="fill:url(#linearGradient1);stroke:#000000;stroke-width:0.264583"
+         id="circle1"
+         cx="200"
+         cy="110"
+         r="6" />
+    </g>
+    <path
+       style="fill:none;stroke:#3a3a40;stroke-width:1"
+       id="path2"
+       sodipodi:type="arc"
+       sodipodi:cx="200"
+       sodipodi:cy="110"
+       sodipodi:rx="12"
+       sodipodi:ry="12"
+       sodipodi:start="0"
+       sodipodi:end="3.1415927"
+       sodipodi:arc-type="arc"
+       d="M 212,110 A 12,12 0 0 1 200,122 12,12 0 0 1 188,110"
+       sodipodi:open="true" />
+    <path
+       style="fill:none;stroke:#3a3a40;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+       d="M 60,110 H 80"
+       id="path1"
+       sodipodi:nodetypes="cc" />
+    <text
+       xml:space="preserve"
+       style="font-size:10.5833px;font-family:sans-serif;-inkscape-font-specification:sans-serif;fill:#e8e8ec;stroke-width:0.264583"
+       x="20"
+       y="140"
+       id="text1"><tspan
+         sodipodi:role="line"
+         id="tspan1"
+         style="stroke-width:0.264583"
+         x="20"
+         y="140">Infeed</tspan></text>
+  </g>
+  <g
+     inkscape:label="Notes"
+     inkscape:groupmode="layer"
+     id="layer2"
+     style="display:none"
+     sodipodi:insensitive="true">
+    <text
+       xml:space="preserve"
+       style="font-size:8px;font-family:sans-serif;-inkscape-font-specification:sans-serif;fill:#ff8f8f"
+       x="20"
+       y="200"
+       id="text2"><tspan
+         sodipodi:role="line"
+         id="tspan2"
+         x="20"
+         y="200">check the outlet 3 sensor</tspan></text>
+  </g>
+</svg>
+"##;

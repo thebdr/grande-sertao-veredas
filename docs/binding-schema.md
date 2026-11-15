@@ -271,8 +271,11 @@ A path is relative to the binding file's folder.
 - `format` (required): always `"veredas-binding"`.
 - `version` (required): this reader knows `1`.
 - `title` (the project's name): the session's name on the screen.
-- `layout` (none): the path of the SVG layout. Without one the session has dashboards and no
-  layout view.
+- `layout` (none): the path of the SVG layout, drawn in Inkscape and read as Inkscape saves it
+  (Q25): its own elements (`sodipodi:*` and `inkscape:*` beside the drawing or in its `defs`, the
+  `rdf` block in `metadata`) dropped on read, what they hold with them; its attributes in those
+  namespaces on the drawing's elements read by nothing. Without one the session has dashboards and
+  no layout view.
 - `headline` (none): object IDs shown in the top bar, in order.
 - `object` (none): `[[object]]` tables.
 - `dashboard` (none): `[[dashboard]]` tables.
@@ -436,10 +439,11 @@ an SVG document (its root an `svg` in the SVG namespace), or holds a script, a `
 `perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, in a
 `style`, a name with white space or a comment inside it declaring nothing; the attributes
 `transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), foreign content (an
-element outside the SVG namespace), an event handler, a script link (a `javascript:` URL in any
+element outside the SVG namespace, Inkscape's own apart where Inkscape writes them), an event handler, a script link (a `javascript:` URL in any
 attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
 declaring attribute defaults or using a parameter entity (a browser would apply them unchecked); an
-object's element of another kind than the page draws on, inside another object's element or
-anything but groups, holding anything but groups, shapes, texts and their spans, or saying `!important` in a `style` on it or inside it, and a
-marker's path inside anything but groups:
+object's element of another kind than the page draws on (a clone or an image told what to do in
+Inkscape), inside another object's element or anything but groups, hidden (`display: none` on it
+or on a group around it, as a hidden layer is), holding anything but groups, shapes, texts and their spans, or saying `!important` in a `style` on it or inside it, and a
+marker's path inside anything but groups or hidden:
 each is refused when the file loads, with its place named, before any session starts.

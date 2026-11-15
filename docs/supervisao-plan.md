@@ -86,7 +86,11 @@ the gateway, the desktop, the supervision app) each did.
   supervisão's code; the switch is armed by the project, never over the wire.
 - **The plant model is configuration.** A binding file and an SVG, plain text, written by a person
   or by anything; no export, workbook or vendor project format is read (Q18). The layout's geometry
-  is the SVG's, never computed from a plant's data.
+  is the SVG's, never computed from a plant's data. The layout is drawn in Inkscape (Q25, decided
+  2026-11-15) and read as Inkscape saves it, its editor's own elements dropped; a construct
+  Inkscape does not write is answered at the reader (refused by name), never by teaching the page
+  a new construct. Naming the drawing tool is the operator's decision on the file format, not plant
+  content (Q8 keeps the plant's devices, vendors and customers out).
 - **Content-agnostic** (Q8): no device, vendor, product or customer named in code, comments, tests,
   fixtures or the built bundle; the sample plants are invented and named for their shape. The
   component test reads every file git holds or could hold under the crate, `web/dist/` included.
