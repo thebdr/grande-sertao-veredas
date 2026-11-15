@@ -96,6 +96,26 @@ impl Browser {
         b
     }
 
+    /// Watched as `watched` is, every request to a URL matching one of `blocked` (the protocol's
+    /// patterns, `*` a wildcard) refused by the browser from the first: a feed that never reaches
+    /// the page, say.
+    #[allow(dead_code)]
+    pub fn watched_blocking(url: &str, blocked: &[&str]) -> Browser {
+        let mut b = Browser::start("about:blank");
+        b.call("Network.enable", json!({}));
+        b.call("Network.setBlockedURLs", json!({ "urls": blocked }));
+        b.call("Page.navigate", json!({ "url": url }));
+        b
+    }
+
+    /// The protocol's events of one method received so far, in order (a request paused by
+    /// `Fetch.enable`, say).
+    #[allow(dead_code)]
+    pub fn events_of(&mut self, method: &str) -> Vec<Value> {
+        self.eval("0");
+        self.events.iter().filter(|e| e["method"] == method).cloned().collect()
+    }
+
     /// Every request the page made since it was watched, as (URL, the protocol's resource type:
     /// Document, Script, Fetch, EventSource, Image, Ping, ...), streams and other origins included;
     /// a WebSocket, which the protocol reports apart, as (its URL, "WebSocket").

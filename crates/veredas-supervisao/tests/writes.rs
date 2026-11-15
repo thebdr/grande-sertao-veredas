@@ -778,8 +778,8 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     const BUTTON: &str = r#"(() => { const b = document.querySelector('.side .actions button[data-action="Release"]'); return b ? { disabled: b.disabled, gate: document.querySelector(".side .gate-note").textContent, note: document.querySelector(".side .write-note").textContent } : null; })()"#;
     let b = page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && b.gate !== '' ? b : null; }})()"), Duration::from_secs(20));
     assert_eq!(b, json!({ "disabled": true, "gate": "Writes go through portal. Its write switch is off.", "note": "" }));
-    const BUTTONS: &str = r#"[...document.querySelectorAll(".side .actions button")].map((b) => [b.dataset.action, b.disabled])"#;
-    assert_eq!(page.eval(BUTTONS), json!([["Release", true], ["Hold", true]]), "both offered, both off while the switch is off");
+    const BUTTONS: &str = r#"[...document.querySelectorAll(".side .actions button")].map((b) => [b.dataset.action, b.disabled, b.classList.contains("gated")])"#;
+    assert_eq!(page.eval(BUTTONS), json!([["Release", true, true], ["Hold", true, true]]), "both offered, both off and shown gated while the switch is off");
     page.eval(r#"(() => { window.answer = true; const b = document.querySelector('.side .actions button[data-action="Release"]'); b.click(); return b.disabled; })()"#);
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(page.eval(BUTTON)["note"], json!(""), "a disabled button sends nothing");
@@ -791,7 +791,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     host.session("loop").unwrap().set_writes_armed(true);
     let b = page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && !b.disabled ? b : null; }})()"), Duration::from_secs(10));
     assert_eq!(b["gate"], json!("Writes go through portal. Its write switch is on."));
-    assert_eq!(page.eval(BUTTONS), json!([["Release", false], ["Hold", false]]), "both on while it is on");
+    assert_eq!(page.eval(BUTTONS), json!([["Release", false, true], ["Hold", false, true]]), "both on while it is on, shown gated");
     page.eval(r#"(() => { window.answer = false; document.querySelector('.side .actions button[data-action="Release"]').click(); return true; })()"#);
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!((page.eval(BUTTON)["note"].clone(), release(&bench)), (json!("Release: refused, 403: writes are turned off for this project"), "0".to_string()), "not confirmed, nothing sent");
@@ -814,7 +814,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     assert_eq!(sent, vec![(to.clone(), release_body.clone()), (to.clone(), release_body), (to, hold_body)], "the refused post, the release, the hold: each the binding's action");
     host.session("loop").unwrap().set_writes_armed(false);
     page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && b.disabled && b.gate.endsWith('is off.') ? b : null; }})()"), Duration::from_secs(10));
-    assert_eq!(page.eval(BUTTONS), json!([["Release", true], ["Hold", true]]), "both off again");
+    assert_eq!(page.eval(BUTTONS), json!([["Release", true, true], ["Hold", true, true]]), "both off again, shown gated");
     // Every request the page made for a write went to portal's route under the session.
     let posts = page.eval(r#"performance.getEntriesByType("resource").filter((e) => e.name.includes("/write")).map((e) => new URL(e.name).pathname)"#);
     assert_eq!(posts, json!(["/s/loop/portal/api/opc/write", "/s/loop/portal/api/opc/write", "/s/loop/portal/api/opc/write"]), "the refused post, the release and the hold");
@@ -879,12 +879,14 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
         let note = page.wait_for(&format!("(() => {{ const t = document.querySelector('.side .sel-title'); const n = document.querySelector('.side .write-note'); return t && t.dataset.id === {id} && n ? n.textContent : null; }})()"), Duration::from_secs(10));
         assert_eq!(note, json!(said), "{id}: its own last answer, said again");
     }
-    // A post that never left (the network refused it) is said, and the button is the switch's again.
+    // A post with no answer (here the network refused it before it left, which the page cannot tell
+    // from an answer lost on the way back) is said as one, the write perhaps landed, and the button
+    // is the switch's again.
     page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
     page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(10));
     page.eval(r#"(() => { const f = window.fetch; window.fetch = (...a) => { if (String(a[0]).includes("/api/opc/write") && !window.__failedOnce) { window.__failedOnce = true; return Promise.reject(new TypeError("Failed to fetch")); } return f(...a); }; document.querySelector(".side .write-note").textContent = ""; document.querySelector('.side .actions button[data-action="Release"]').click(); return true; })()"#);
     let note = page.wait_for(r#"document.querySelector(".side .write-note").textContent || null"#, Duration::from_secs(10));
-    assert_eq!(note, json!("Release: not sent, TypeError: Failed to fetch"));
+    assert_eq!(note, json!("Release: no answer, the write may have reached the plant (TypeError: Failed to fetch)"));
     let freed = page.wait_for(&format!("(() => {{ const b = document.querySelector('.side .actions button[data-action=\"Release\"]'); return b && !b.disabled && b.dataset.busy === undefined ? true : null; }})()"), Duration::from_secs(10));
     assert_eq!(freed, json!(true), "the button the switch's again");
     // An answer stays with the object pressed: outlet 3's Release pressed, its post held back (refused
@@ -892,7 +894,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     // selected, says nothing there (that object's own answer, or none, as it was), and is said on
     // outlet 3 once it is selected again.
     page.eval(r#"(() => { window.__plainFetch = window.__plainFetch ?? window.fetch; return true; })()"#);
-    for (fail, other, said) in [(true, "outlet-1", "Release: not sent, TypeError: Failed to fetch"), (false, "outlet-2", "Release: refused, 403: writes are turned off for this project")] {
+    for (fail, other, said) in [(true, "outlet-1", "Release: no answer, the write may have reached the plant (TypeError: Failed to fetch)"), (false, "outlet-2", "Release: refused, 403: writes are turned off for this project")] {
         host.session("loop").unwrap().set_writes_armed(true);
         assert!(wait(Duration::from_secs(10), || get(addr, "/s/loop/objects.json").1["session"]["writes_armed"] == json!(true)));
         bench.server("plc").unwrap().set("release3", 0);
@@ -1073,6 +1075,96 @@ fn every_answer_portal_gives_a_write_is_said_as_it_means() {
     assert!(note.starts_with(&format!("Go: {}, {}: ", said(&not_sent), code(&not_sent))), "{note}");
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(at("go"), "0", "nothing reached the plant");
+    drop(page);
+    host.stop();
+}
+
+/// What the page says when portal's answer does not come whole, and what it offers before it knows
+/// the switch. Before any status (the feed's stream blocked by the browser from the first), an
+/// object's buttons are disabled and shown gated, the switch said nothing of, though the project is
+/// armed. A press whose answer the browser's own network loses after portal gave it (the connection
+/// reset once the answer is back), and one whose answer comes unreadable (a 200 whose body is no
+/// JSON), are each said "no answer", the write perhaps landed, and the write did land: the page
+/// cannot tell a post that never left from an answer lost, so it never says such a press was not
+/// sent. And the object pressed, left and selected again while its post is out, says the answer
+/// when it comes.
+#[test]
+fn a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(&dir.path().join("bench"));
+    let path = write_example(dir.path(), &live_example(&bench, true));
+    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let addr = host.addr();
+    assert!(wait(Duration::from_secs(20), || { let s = get(addr, "/s/loop/objects.json").1; s["session"]["writes_armed"] == json!(true) && s["session"]["health"]["plc"]["state"] == json!("live") }));
+    const PICK: &str = r#"(() => { window.confirm = () => true; document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); return true; })()"#;
+    const DRAWN: &str = r#"document.getElementById("outlet-3")?.classList.contains("sv-obj") ? true : null"#;
+    const RELEASE: &str = r#"(() => { const b = document.querySelector('.side .actions button[data-action="Release"]'); return b ? { disabled: b.disabled, gated: b.classList.contains("gated"), gate: document.querySelector(".side .gate-note").textContent } : null; })()"#;
+
+    // No status yet: the buttons off and gated, the switch said nothing of, and still so a while on.
+    let mut blind = Browser::watched_blocking(&format!("http://{addr}/s/loop/"), &["*/s/loop/objects"]);
+    blind.wait_for(DRAWN, Duration::from_secs(20));
+    blind.eval(PICK);
+    blind.wait_for(RELEASE, Duration::from_secs(20));
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(blind.eval(RELEASE), json!({ "disabled": true, "gated": true, "gate": "" }), "before any status, armed though the project is");
+    assert_eq!(blind.eval(r#"/\d\d:\d\d:\d\d/.test(document.querySelector(".live")?.textContent ?? "")"#), json!(false), "no status held");
+    drop(blind);
+
+    let mut page = Browser::watched(&format!("http://{addr}/s/loop/"));
+    page.wait_for(DRAWN, Duration::from_secs(20));
+    page.eval(PICK);
+    page.wait_for(&format!("(() => {{ const b = {RELEASE}; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(20));
+    const NOTE: &str = r#"document.querySelector(".side .write-note").textContent || null"#;
+    // The write's answer paused by the browser once it is back from the host, then lost or spoiled.
+    page.call("Fetch.enable", json!({ "patterns": [{ "urlPattern": "*/api/opc/write*", "requestStage": "Response" }] }));
+    let paused = |page: &mut Browser, seen: usize| -> serde_json::Value {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            let all = page.events_of("Fetch.requestPaused");
+            if all.len() > seen {
+                return all[seen].clone();
+            }
+            assert!(std::time::Instant::now() < deadline, "no write paused");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    let press = |page: &mut Browser| {
+        page.wait_for(&format!("(() => {{ const b = document.querySelector('.side .actions button[data-action=\"Release\"]'); return b && !b.disabled && b.dataset.busy === undefined ? true : null; }})()"), Duration::from_secs(20));
+        page.eval(r#"(() => { document.querySelector(".side .write-note").textContent = ""; document.querySelector('.side .actions button[data-action="Release"]').click(); return true; })()"#);
+    };
+    let zero = |bench: &Bench| {
+        bench.server("plc").unwrap().set("release3", 0);
+        assert!(wait(Duration::from_secs(10), || release(bench) == "0"));
+    };
+    // The answer lost: portal answered 200, the connection reset before the page had it.
+    zero(&bench);
+    press(&mut page);
+    let lost = paused(&mut page, 0);
+    assert_eq!(lost["params"]["responseStatusCode"], json!(200), "portal answered: {lost}");
+    page.call("Fetch.failRequest", json!({ "requestId": lost["params"]["requestId"], "errorReason": "ConnectionReset" }));
+    let note = page.wait_for(NOTE, Duration::from_secs(10));
+    assert_eq!(note, json!("Release: no answer, the write may have reached the plant (TypeError: Failed to fetch)"));
+    assert!(wait(Duration::from_secs(10), || release(&bench) == "1"), "the write with no answer landed");
+    // The answer unreadable: a 200 whose body is no JSON.
+    zero(&bench);
+    press(&mut page);
+    let spoiled = paused(&mut page, 1);
+    page.call("Fetch.fulfillRequest", json!({ "requestId": spoiled["params"]["requestId"], "responseCode": 200, "responseHeaders": [{ "name": "content-type", "value": "application/json" }], "body": "bm90IGpzb24=" }));
+    let note = page.wait_for(NOTE, Duration::from_secs(10));
+    assert!(note.as_str().unwrap().starts_with("Release: no answer, the write may have reached the plant (200, its answer unreadable: "), "{note}");
+    assert!(wait(Duration::from_secs(10), || release(&bench) == "1"), "the write with an unreadable answer landed");
+    page.call("Fetch.disable", json!({}));
+    // The object pressed, left and selected again while its post is out: the answer said there.
+    zero(&bench);
+    page.wait_for(&format!("(() => {{ const b = {RELEASE}; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(20));
+    page.eval(r#"(() => { const f = window.fetch; window.fetch = (...a) => String(a[0]).includes("/api/opc/write") ? new Promise((ok, no) => setTimeout(() => f(...a).then(ok, no), 1500)) : f(...a); document.querySelector('.side .actions button[data-action="Release"]').click(); return true; })()"#);
+    page.eval(r#"document.getElementById("outlet-2").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+    page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-2" || null"#, Duration::from_secs(10));
+    page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+    page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-3" || null"#, Duration::from_secs(10));
+    let said = page.wait_for(r#"(() => { const t = document.querySelector(".side .write-note")?.textContent ?? ""; return t.startsWith("Release: written") ? t : null; })()"#, Duration::from_secs(10));
+    assert!(said.as_str().unwrap().starts_with("Release: written"), "{said}");
+    assert!(wait(Duration::from_secs(10), || release(&bench) == "1"), "the write landed");
     drop(page);
     host.stop();
 }

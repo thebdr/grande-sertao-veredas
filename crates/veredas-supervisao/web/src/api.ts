@@ -109,17 +109,34 @@ export function openFeed(name: string, h: FeedHandlers): EventSource {
 
 /// What portal's answer to a write means: written (the plant took it); refused (by portal's switch
 /// or whitelist, a value or a body it cannot read, or the plant's own status); not sent (503: the
-/// plant never saw it); not confirmed (504: it may have reached the plant).
-export type WriteSaid = "written" | "refused" | "not sent" | "not confirmed";
+/// plant never saw it); not confirmed (504: it may have reached the plant); no answer (portal's
+/// answer never came whole, or came unreadable: the post may have left, and the write landed).
+export type WriteSaid = "written" | "refused" | "not sent" | "not confirmed" | "no answer";
+
+/// Why a write with no answer may still have landed: a request fails the same way whether it never
+/// left or its answer was lost on the way back (a connection reset, a host restarted), and portal
+/// does not take back a write it has handed to the plant.
+const MAY_HAVE_LANDED = "the write may have reached the plant";
 
 /// A write, posted to the session's portal surface; portal's switch and whitelist answer.
 export async function postWrite(name: string, a: Action): Promise<{ said: WriteSaid; text: string }> {
-  const r = await fetch(`${base(name)}/portal/api/opc/write`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ source: a.source, tag: a.tag, value: a.value }),
-  });
-  const body = await r.json().catch(() => ({}));
+  let r: Response;
+  try {
+    r = await fetch(`${base(name)}/portal/api/opc/write`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ source: a.source, tag: a.tag, value: a.value }),
+    });
+  } catch (e) {
+    return { said: "no answer", text: `${MAY_HAVE_LANDED} (${String(e)})` };
+  }
+  let body: unknown = {};
+  try {
+    body = await r.json();
+  } catch (e) {
+    // A success whose body cannot be read says nothing of the write; a refusal is told by its code.
+    if (r.ok) return { said: "no answer", text: `${MAY_HAVE_LANDED} (${r.status}, its answer unreadable: ${String(e)})` };
+  }
   if (r.ok) return { said: (body as { ok?: boolean }).ok ? "written" : "refused", text: (body as { status?: string }).status ?? "written" };
   const said: WriteSaid = r.status === 504 ? "not confirmed" : r.status === 503 ? "not sent" : "refused";
   return { said, text: `${r.status}: ${(body as { error?: string }).error ?? r.statusText}` };

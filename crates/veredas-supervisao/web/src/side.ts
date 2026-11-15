@@ -100,8 +100,8 @@ export class Side {
       if (!confirm(`Write ${a.value} to ${a.tag} of ${a.source}?`)) return;
       b.dataset.busy = "1";
       b.disabled = true;
-      // Its answer said, or why it was not sent; the button freed either way, for the switch to
-      // gate again at the next status.
+      // Its answer said, or that none came (the write may have landed); the button freed either
+      // way, for the switch to gate again at the next status.
       const say = (text: string) => {
         this.notes.set(id, text);
         if (this.sel && this.sel.def.id === id) this.sel.note.textContent = text;
@@ -110,7 +110,7 @@ export class Side {
         const r = await postWrite(this.name, a);
         say(r.said === "written" ? `${a.label}: written (${r.text})` : `${a.label}: ${r.said}, ${r.text}`);
       } catch (e) {
-        say(`${a.label}: not sent, ${String(e)}`);
+        say(`${a.label}: no answer, the write may have reached the plant (${String(e)})`);
       } finally {
         delete b.dataset.busy;
       }
