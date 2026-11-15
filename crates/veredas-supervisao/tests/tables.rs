@@ -107,6 +107,35 @@ fn unescape(v: &str) -> String {
 }
 
 /// A request's query value by its name, unescaped.
+/// A number to `places` as the page's `toFixed` writes it: the exact value of the double rounded, a
+/// tie away from zero (Rust's own formatting rounds a tie to even: 0.0625 is "0.062" there and
+/// "0.063" in the page).
+fn to_fixed(x: f64, places: usize) -> String {
+    let exact = format!("{:.40}", x.abs());
+    let (int, frac) = exact.split_once('.').unwrap();
+    let mut digits: Vec<u8> = int.bytes().chain(frac.bytes().take(places)).map(|b| b - b'0').collect();
+    if frac.as_bytes()[places] >= b'5' {
+        let mut i = digits.len();
+        loop {
+            if i == 0 {
+                digits.insert(0, 1);
+                break;
+            }
+            i -= 1;
+            if digits[i] == 9 {
+                digits[i] = 0;
+            } else {
+                digits[i] += 1;
+                break;
+            }
+        }
+    }
+    let s: String = digits.iter().map(|d| (b'0' + d) as char).collect();
+    let (whole, part) = s.split_at(s.len() - places);
+    let body = if places == 0 { whole.to_string() } else { format!("{whole}.{part}") };
+    if x < 0.0 && body.bytes().any(|b| b != b'0' && b != b'.') { format!("-{body}") } else { body }
+}
+
 fn param(url: &str, k: &str) -> Option<String> {
     url.split_once('?')?.1.split('&').find_map(|kv| kv.strip_prefix(&format!("{k}="))).map(unescape)
 }
@@ -156,7 +185,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // rule: `index_ms`, else `ts`, else none) is a table here; and one of numbers from 1e21 up,
     // where a script writes a number with an exponent (and one just below), each exact in binary,
     // and numbers below 0 a script writes as it is (a fraction, a whole one, one that rounds to 0).
-    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"{VIEW}\"\nsql = \"SELECT outlet, travel > 12 AS slow FROM sorts\"\n\n[[table]]\nname = \"stamped\"\nsql = \"SELECT ts, outlet FROM sorts\"\n\n[[table]]\nname = \"magnitudes\"\nsql = \"SELECT 9.5e20::DOUBLE AS below, 1e21::DOUBLE AS edge, -3.5e21::DOUBLE AS negative, 1e22::DOUBLE AS big, -0.25::DOUBLE AS quarter, -7.0::DOUBLE AS seven, -0.0001::DOUBLE AS tiny\"\n")).unwrap();
+    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"{VIEW}\"\nsql = \"SELECT outlet, travel > 12 AS slow FROM sorts\"\n\n[[table]]\nname = \"stamped\"\nsql = \"SELECT ts, outlet FROM sorts\"\n\n[[table]]\nname = \"indexed\"\nsql = \"SELECT index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"shifted\"\nsql = \"SELECT index_ms, ts + INTERVAL 1 MINUTE AS ts, outlet FROM sorts\"\n\n[[table]]\nname = \"magnitudes\"\nsql = \"SELECT 9.5e20::DOUBLE AS below, 1e21::DOUBLE AS edge, -3.5e21::DOUBLE AS negative, 1e22::DOUBLE AS big, -0.25::DOUBLE AS quarter, -7.0::DOUBLE AS seven, -0.0001::DOUBLE AS tiny\"\n")).unwrap();
     let log = dir.path().join("loop/sorts.log");
     std::fs::write(&log, "").unwrap();
     let hall_log = dir.path().join("hall/sorts.log");
@@ -181,7 +210,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     assert_eq!(status, 200);
     let mut names: Vec<(String, String)> = t["tables"].as_array().unwrap().iter().map(|x| (x["name"].as_str().unwrap().to_string(), x["kind"].as_str().unwrap().to_string())).collect();
     names.sort();
-    assert_eq!(names.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["magnitudes", "outlets", "plc_main", "samples", VIEW, "sorts", "stamped"]);
+    assert_eq!(names.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["indexed", "magnitudes", "outlets", "plc_main", "samples", "shifted", VIEW, "sorts", "stamped"]);
     assert_eq!(names.iter().find(|(n, _)| n == "outlets").unwrap().1, "view");
     let sorts = t["tables"].as_array().unwrap().iter().find(|x| x["name"] == "sorts").unwrap();
     let cols: Vec<&str> = sorts["columns"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
@@ -298,7 +327,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let cell = |v: &Value| match v {
         Value::Null => String::new(),
         Value::Number(n) => {
-            let t = format!("{:.3}", n.as_f64().unwrap());
+            let t = to_fixed(n.as_f64().unwrap(), 3);
             let t = if t.contains('.') { t.trim_end_matches('0').trim_end_matches('.').to_string() } else { t };
             if t == "-0" { "0".to_string() } else { t }
         }
@@ -781,64 +810,85 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     );
     drop(page);
 
-    // A table picked before the page holds any status (the object stream held back, so no now): its
-    // first page asked with no window's end, its newest row's time held as the window from then on,
-    // so the rows stored since join no page and its pages do not shift.
+    // Every table of portal's catalog with a time column, picked before the page holds any status
+    // (the object stream held back, so no now): its first page asked with no window's end, its
+    // newest row's time by portal's own rule (`index_ms`, else `ts`) held as the window from then
+    // on, so the rows stored since join no page and its pages do not shift. Among them the capture
+    // rule's table, the OPC rule's, a view of `index_ms` alone, one whose `ts` is a minute past its
+    // `index_ms`, and one of `ts` alone.
     let mut blind = Browser::open("about:blank");
     blind.call("Page.enable", json!({}));
-    blind.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": "window.EventSource = class { constructor() {} addEventListener() {} close() {} };" }));
+    // A stream the test drives: each feed the page opens kept, its handlers with it, nothing sent
+    // until the test sends it.
+    blind.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": "window.EventSource = class { constructor(url) { this.url = url; this.h = {}; (window.__feeds = window.__feeds || []).push(this); } addEventListener(t, f) { (this.h[t] = this.h[t] || []).push(f); } close() {} };" }));
     blind.call("Page.navigate", json!({ "url": format!("http://{addr}/s/loop/#tables") }));
     blind.wait_for(r#"document.querySelector('.list button[data-table="sorts"]') ? true : null"#, Duration::from_secs(20));
     blind.eval(KEEP_ANSWERS);
     assert_eq!(blind.eval(r#"/\d\d:\d\d:\d\d/.test(document.querySelector(".live")?.textContent ?? "")"#), json!(false), "no status held");
-    blind.eval(r#"document.querySelector('.list button[data-table="sorts"]').click()"#);
-    let unheld = shown_at(&mut blind, "1-50/112");
-    let stored = store_now();
-    append(&log, &(0..10).map(|i| format!("{} SORT outlet=6 travel=2.0 rate=99.0", stamp(stored + i))).collect::<Vec<_>>());
-    assert!(sorts_rows(122));
-    click(&mut blind, "Older ›");
-    let held = shown_at(&mut blind, "51-100/112");
-    assert!(held["body"].as_array().unwrap().iter().all(|r| !unheld["body"].as_array().unwrap().contains(r)), "a row of the first page shown again");
-    let answers = blind.eval("window.__answers");
-    let answers = answers.as_array().unwrap();
-    let first_url = answers[0]["url"].as_str().unwrap();
-    let index = answers[0]["body"]["schema"].as_array().unwrap().iter().position(|c| c["name"] == "index_ms").unwrap();
-    let newest = answers[0]["body"]["rows"][0][index].as_i64().unwrap();
-    // (A capture rule's table carries `ts` as well, the same time as `index_ms` on every row, so
-    // holding at either is one window: portal's own order prefers `index_ms`.)
-    let ts_at = answers[0]["body"]["schema"].as_array().unwrap().iter().position(|c| c["name"] == "ts").unwrap();
-    assert!(answers[0]["body"]["rows"].as_array().unwrap().iter().all(|r| r[index] == r[ts_at]), "{}", answers[0]["body"]["rows"][0]);
-    assert_eq!((param(first_url, "to"), param(answers.last().unwrap()["url"].as_str().unwrap(), "to")), (None, Some(newest.to_string())), "{answers:?}");
-    // And a table with `ts` alone for its time (the view), still with no status: held at its first
-    // page's newest `ts`, as portal orders it.
-    blind.eval("window.__answers = []; true");
-    blind.eval(r#"document.querySelector('.list button[data-table="stamped"]').click()"#);
-    let stamped_at = |rows: &str| format!("(() => {{ const s = {shown_js}; return s && s.table === 'stamped' && s.rows === '{rows}' && s.all_shown ? s : null; }})()");
-    let unheld = blind.wait_for(&stamped_at("1-50/122"), Duration::from_secs(20));
-    let stored = store_now();
-    append(&log, &(0..10).map(|i| format!("{} SORT outlet=5 travel=2.5 rate=99.0", stamp(stored + i))).collect::<Vec<_>>());
-    assert!(sorts_rows(132));
-    click(&mut blind, "Older ›");
-    let held = blind.wait_for(&stamped_at("51-100/122"), Duration::from_secs(20));
-    assert!(held["body"].as_array().unwrap().iter().all(|r| !unheld["body"].as_array().unwrap().contains(r)), "a row of the first page shown again");
-    let answers = blind.eval("window.__answers");
-    let answers = answers.as_array().unwrap();
-    let ts = answers[0]["body"]["schema"].as_array().unwrap().iter().position(|c| c["name"] == "ts").unwrap();
-    let newest = answers[0]["body"]["rows"][0][ts].as_i64().unwrap_or_else(|| panic!("ts as a number: {}", answers[0]["body"]["rows"][0]));
-    assert_eq!((param(answers[0]["url"].as_str().unwrap(), "to"), param(answers.last().unwrap()["url"].as_str().unwrap(), "to")), (None, Some(newest.to_string())), "{answers:?}");
+    let page_of = |page: &mut Browser, table: &str, rows: Option<&str>| -> Value {
+        let want = match rows {
+            Some(r) => format!("s.rows === {}", serde_json::to_string(r).unwrap()),
+            None => "(s.rows.startsWith('1-') || s.rows === '0-0/0')".to_string(),
+        };
+        page.wait_for(&format!("(() => {{ const s = {shown_js}; return s && s.table === {} && s.all_shown && {want} ? s : null; }})()", serde_json::to_string(table).unwrap()), Duration::from_secs(20))
+    };
+    let (_, catalog) = get(addr, "/s/loop/portal/api/tables");
+    let timed: Vec<(String, &str)> = catalog["tables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| {
+            let cols: Vec<&str> = t["columns"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
+            let time = if cols.contains(&"index_ms") { "index_ms" } else if cols.contains(&"ts") { "ts" } else { return None };
+            Some((t["name"].as_str().unwrap().to_string(), time))
+        })
+        .collect();
+    let timed_names: Vec<&str> = timed.iter().map(|(n, _)| n.as_str()).collect();
+    for t in ["indexed", "plc_main", "samples", "shifted", "sorts", "stamped"] {
+        assert!(timed_names.contains(&t), "{t} among the timed tables: {timed:?}");
+    }
+    let mut sorts_now: u64 = 112;
+    let mut held: Vec<&str> = Vec::new();
+    for (table, time) in &timed {
+        blind.eval("window.__answers = []; true");
+        blind.eval(&format!("document.querySelector('.list button[data-table={}]').click()", serde_json::to_string(table).unwrap()));
+        let first = page_of(&mut blind, table, None);
+        let total: u64 = first["rows"].as_str().unwrap().split('/').nth(1).unwrap().parse().unwrap();
+        if total <= 50 {
+            let answers = blind.eval("window.__answers");
+            assert!(answers.as_array().unwrap().iter().all(|a| param(a["url"].as_str().unwrap(), "to").is_none()), "{table}: {answers}");
+            continue;
+        }
+        let stored = store_now();
+        append(&log, &(0..10).map(|i| format!("{} SORT outlet=6 travel=2.0 rate=99.0", stamp(stored + i))).collect::<Vec<_>>());
+        sorts_now += 10;
+        assert!(sorts_rows(sorts_now));
+        click(&mut blind, "Older ›");
+        let second = page_of(&mut blind, table, Some(&format!("51-{}/{total}", total.min(100))));
+        assert!(second["body"].as_array().unwrap().iter().all(|r| !first["body"].as_array().unwrap().contains(r)), "{table}: a row of the first page shown again");
+        let answers = blind.eval("window.__answers");
+        let answers = answers.as_array().unwrap();
+        let at = answers[0]["body"]["schema"].as_array().unwrap().iter().position(|c| c["name"] == *time).unwrap();
+        let newest = answers[0]["body"]["rows"][0][at].as_i64().unwrap_or_else(|| panic!("{table}: its {time} as a number: {}", answers[0]["body"]["rows"][0]));
+        assert_eq!((param(answers[0]["url"].as_str().unwrap(), "to"), param(answers.last().unwrap()["url"].as_str().unwrap(), "to")), (None, Some(newest.to_string())), "{table} held at its newest {time}: {answers:?}");
+        held.push(table);
+    }
+    for t in ["indexed", "shifted", "sorts", "stamped"] {
+        assert!(held.contains(&t), "{t} held: {held:?}");
+    }
     // Shown again with no status, on its second page: the window it held kept, so Newer brings the
     // first page back whole at the same window's end.
     blind.eval("window.__answers = []; true");
     blind.eval(r#"document.querySelector('.list button[data-table="sorts"]').click()"#);
-    let first_again = shown_at(&mut blind, "1-50/132");
+    let first_again = shown_at(&mut blind, &format!("1-50/{sorts_now}"));
     click(&mut blind, "Older ›");
-    shown_at(&mut blind, "51-100/132");
+    shown_at(&mut blind, &format!("51-100/{sorts_now}"));
     blind.eval(r#"location.hash = "series""#);
     blind.wait_for(r#"document.querySelector(".list button[data-series]") ? true : null"#, Duration::from_secs(20));
     blind.eval(r#"location.hash = "tables""#);
-    shown_at(&mut blind, "51-100/132");
+    shown_at(&mut blind, &format!("51-100/{sorts_now}"));
     click(&mut blind, "‹ Newer");
-    let newer = shown_at(&mut blind, "1-50/132");
+    let newer = shown_at(&mut blind, &format!("1-50/{sorts_now}"));
     assert_eq!(newer["body"], first_again["body"], "the newest rows back, the window held");
     let answers = blind.eval("window.__answers");
     let urls: Vec<&str> = answers.as_array().unwrap().iter().map(|a| a["url"].as_str().unwrap()).collect();
@@ -855,6 +905,27 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     assert_eq!(waiting, json!(["waiting", "waiting for the session's clock"]));
     std::thread::sleep(Duration::from_millis(1000));
     assert_eq!(blind.eval("window.__answers.filter((a) => a.url.includes('/api/series/data')).length"), json!(0), "no window asked before the session's now");
+    // The session's clock arriving (the feed's snapshot, its now chosen here): one window asked, an
+    // hour to that now exactly, at 600 points, and the chart drawn; and a table picked then asks its
+    // pages to that now.
+    let (_, mut snapshot) = get(addr, "/s/loop/objects.json");
+    let now = store_now();
+    snapshot["session"]["now_ms"] = json!(now);
+    let feeds = blind.eval(&format!("(() => {{ const d = {snapshot}; for (const es of window.__feeds || []) for (const f of es.h.snapshot || []) f({{ data: JSON.stringify(d) }}); return (window.__feeds || []).length; }})()"));
+    assert!(feeds.as_u64().unwrap() >= 1, "the page's feed: {feeds}");
+    blind.wait_for(r#"(() => { const p = document.querySelector(".list-main .pager [data-points]"); return p && p.dataset.points !== "waiting" ? true : null; })()"#, Duration::from_secs(20));
+    std::thread::sleep(Duration::from_millis(1000));
+    let asked: Vec<String> = blind.eval("window.__answers.filter((a) => a.url.includes('/api/series/data')).map((a) => a.url)").as_array().unwrap().iter().map(|u| u.as_str().unwrap().to_string()).collect();
+    assert_eq!(asked.len(), 1, "one window asked once the clock came: {asked:?}");
+    assert_eq!((param(&asked[0], "from"), param(&asked[0], "to"), param(&asked[0], "points")), (Some((now - 3_600_000).to_string()), Some(now.to_string()), Some("600".to_string())), "{asked:?}");
+    blind.eval("window.__answers = []; true");
+    blind.eval(r#"location.hash = "tables""#);
+    blind.wait_for(r#"document.querySelector('.list button[data-table="sorts"]') ? true : null"#, Duration::from_secs(20));
+    blind.eval(r#"document.querySelector('.list button[data-table="sorts"]').click()"#);
+    blind.wait_for("window.__answers.some((a) => a.url.includes('/api/table/data')) || null", Duration::from_secs(20));
+    page_of(&mut blind, "sorts", None);
+    let urls: Vec<String> = blind.eval("window.__answers.filter((a) => a.url.includes('/api/table/data')).map((a) => a.url)").as_array().unwrap().iter().map(|u| u.as_str().unwrap().to_string()).collect();
+    assert!(!urls.is_empty() && urls.iter().all(|u| param(u, "to") == Some(now.to_string())), "the pages asked to the session's now: {urls:?}");
     drop(blind);
 
     // The other session's page reads the other session's router alone: its catalog (no sort
