@@ -31,6 +31,11 @@ interface SeriesInfo {
 
 const PAGE = 50;
 
+/// The end of the window a page with no status asks before it holds one: the largest whole number a
+/// script holds exactly, past every time. Asked so, its first page counts what every held page
+/// counts: portal's window by time leaves a row whose time is null out of each alike.
+const UNHELD = Number.MAX_SAFE_INTEGER;
+
 function cell(v: unknown): string {
   if (v === null || v === undefined) return "";
   if (typeof v === "number") return num(v, 3);
@@ -46,14 +51,21 @@ export class Tables {
   /// The window paged through, frozen at the session's now when the view or a table is shown: a
   /// row stamped later joins no page until the view is shown again. Portal holds the window by
   /// time, so a row stamped inside it but stored late (a late line, the tail's lag) still joins it.
-  /// Shown before the page holds any status (no now yet), the window is held at the first page's
-  /// newest row, the latest time it has.
+  /// Shown before the page holds any status (no now yet), the first page is asked to `UNHELD` and
+  /// the window then held at its newest row's time (a whole millisecond, rounded up, as portal's
+  /// window takes one), the latest time it has.
   private to: number | null = null;
   /// The latest request: an answer to an earlier one is not drawn.
   private asked = 0;
 
   constructor(private name: string, private status: () => SessionStatus | null) {
     this.root.append(this.list, this.main);
+  }
+
+  /// What the view draws, named (`data-screen`): its prompt, a page or a refusal.
+  private draw(drawn: "prompt" | "page" | "error", ...nodes: Node[]) {
+    this.main.dataset.screen = drawn;
+    this.main.replaceChildren(...nodes);
   }
 
   async show(picked = false) {
@@ -74,10 +86,10 @@ export class Tables {
         return b;
       }));
       if (this.table) await this.page();
-      else this.main.replaceChildren(h("p", { class: "muted" }, "Pick a table."));
+      else this.draw("prompt", h("p", { class: "muted" }, "Pick a table."));
     } catch (e) {
       // A listing refused for a pick no longer the latest says nothing over the latest's page.
-      if (token === this.asked) this.main.replaceChildren(h("p", { class: "error" }, String(e)));
+      if (token === this.asked) this.draw("error", h("p", { class: "error" }, String(e)));
     }
   }
 
@@ -86,31 +98,33 @@ export class Tables {
     const table = this.table!, offset = this.offset, to = this.to, token = ++this.asked;
     for (const b of Array.from(this.main.querySelectorAll(".pager button"))) (b as HTMLButtonElement).disabled = true;
     try {
-      const q = new URLSearchParams({ name: table, limit: String(PAGE), offset: String(offset) });
-      if (to !== null) q.set("to", String(to));
+      const q = new URLSearchParams({ name: table, limit: String(PAGE), offset: String(offset), to: String(to ?? UNHELD) });
       const p = await getJson<Page>(`${base(this.name)}/portal/api/table/data?${q}`);
       if (token !== this.asked) return;
       // Portal orders a table newest first by its time (`index_ms`, else `ts`) and holds its window
       // by it; one with neither comes in the store's own order, unheld, and is said to be unordered.
       const ordered = p.schema.some((c) => c.name === "index_ms" || c.name === "ts");
       // No now when it was asked: the window held from here at the newest row's time (portal's own
-      // order: `index_ms`, else `ts`), so a row stored since joins no page.
+      // order: `index_ms`, else `ts`), so a row stored since joins no page; a time that is no whole
+      // number (a view's average, say) rounded up, so the window still holds that row and portal
+      // reads its end as the whole millisecond it takes.
       const at = p.schema.findIndex((c) => c.name === "index_ms");
       const time = at >= 0 ? at : p.schema.findIndex((c) => c.name === "ts");
-      if (to === null && this.to === null && this.table === table && time >= 0 && typeof p.rows[0]?.[time] === "number") this.to = p.rows[0][time] as number;
+      if (to === null && this.to === null && this.table === table && time >= 0 && typeof p.rows[0]?.[time] === "number") this.to = Math.ceil(p.rows[0][time] as number);
       const prev = h("button", { disabled: offset === 0 }, "‹ Newer") as HTMLButtonElement;
       const next = h("button", { disabled: offset + PAGE >= p.total }, "Older ›") as HTMLButtonElement;
       prev.onclick = () => { if (this.table === table) { this.offset = Math.max(0, offset - PAGE); void this.page(); } };
       next.onclick = () => { if (this.table === table && offset + PAGE < p.total) { this.offset = offset + PAGE; void this.page(); } };
       const from = p.total === 0 ? 0 : offset + 1;
-      this.main.replaceChildren(
+      this.draw(
+        "page",
         h("div", { class: "pager" }, h("strong", {}, table), h("span", { class: "mono muted", "data-rows": `${from}-${offset + p.rows.length}/${p.total}` }, `rows ${from}–${offset + p.rows.length} of ${p.total}${ordered ? ", newest first" : ", unordered"}`), prev, next),
         h("div", { class: "scroll" }, h("table", { class: "dt" },
           h("thead", {}, h("tr", {}, ...p.schema.map((c) => h("th", {}, c.name, h("span", { class: "muted" }, ` ${c.type.toLowerCase()}`))))),
           h("tbody", {}, ...p.rows.map((r) => h("tr", {}, ...r.map((v) => h("td", { class: "mono" }, cell(v)))))))),
       );
     } catch (e) {
-      if (token === this.asked) this.main.replaceChildren(h("p", { class: "error" }, String(e)));
+      if (token === this.asked) this.draw("error", h("p", { class: "error" }, String(e)));
     }
   }
 }
@@ -125,6 +139,13 @@ export class Series {
 
   constructor(private name: string, private status: () => SessionStatus | null) {
     this.root.append(this.list, this.main);
+  }
+
+  /// What the view draws, named (`data-screen`): its prompt, a chart waiting for the session's clock,
+  /// a chart or a refusal.
+  private draw(drawn: "prompt" | "waiting" | "chart" | "error", ...nodes: Node[]) {
+    this.main.dataset.screen = drawn;
+    this.main.replaceChildren(...nodes);
   }
 
   async show() {
@@ -142,9 +163,9 @@ export class Series {
         return b;
       }));
       if (this.pick) await this.chart(this.pick, token);
-      else this.main.replaceChildren(h("p", { class: "muted" }, "Pick a series."));
+      else this.draw("prompt", h("p", { class: "muted" }, "Pick a series."));
     } catch (e) {
-      if (token === this.asked) this.main.replaceChildren(h("p", { class: "error" }, String(e)));
+      if (token === this.asked) this.draw("error", h("p", { class: "error" }, String(e)));
     }
   }
 
@@ -152,7 +173,7 @@ export class Series {
     // The hour to the session's now: with no now yet, the chart waits for one and says so.
     let now = this.status()?.now_ms ?? null;
     if (now === null) {
-      this.main.replaceChildren(h("div", { class: "pager" }, h("strong", {}, `${x.source} · ${x.series}`), h("span", { class: "mono muted", "data-points": "waiting" }, "waiting for the session's clock")));
+      this.draw("waiting", h("div", { class: "pager" }, h("strong", {}, `${x.source} · ${x.series}`), h("span", { class: "mono muted", "data-points": "waiting" }, "waiting for the session's clock")));
       while (now === null) {
         await new Promise((done) => setTimeout(done, 250));
         if (token !== this.asked) return;
@@ -163,7 +184,8 @@ export class Series {
     const q = new URLSearchParams({ source: x.source, series: x.series, from: String(from), to: String(now), points: "600" });
     const w = await getJson<{ points: Pt[]; total: number; downsampled: boolean }>(`${base(this.name)}/portal/api/series/data?${q}`);
     if (token !== this.asked) return;
-    this.main.replaceChildren(
+    this.draw(
+      "chart",
       h("div", { class: "pager" }, h("strong", {}, `${x.source} · ${x.series}`), h("span", { class: "mono muted", "data-points": `${w.points.length}/${w.total}` }, `last 60 min · ${w.points.length} of ${w.total} points${w.downsampled ? ", downsampled" : ""} · last ${x.last_value}`)),
       h("div", { class: "panel" }, trend(w.points, [], from, now, null, "")),
     );
