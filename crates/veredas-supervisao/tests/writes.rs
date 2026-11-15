@@ -19,6 +19,12 @@ use veredas_maquinar::bench::Bench;
 use veredas_maquinar::opc::render_value;
 use veredas_supervisao::{Host, config};
 
+/// The answers said under the selected object, one line per action answered, as [action, words].
+const LINES: &str = r#"[...document.querySelectorAll(".side .write-note > [data-action]")].map((s) => [s.dataset.action, s.textContent])"#;
+
+/// The release's own answer line, when one is said.
+const RELEASE_SAID: &str = r#"document.querySelector('.side .write-note [data-action="Release"]')?.textContent || null"#;
+
 fn release(bench: &Bench) -> String {
     render_value(&bench.server("plc").unwrap().get("release3"))
 }
@@ -790,7 +796,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     page.wait_for(r#"document.getElementById("outlet-3") !== null && document.getElementById("outlet-3").classList.contains("sv-obj")"#, Duration::from_secs(20));
     page.eval(r#"(() => { window.asked = []; window.answer = true; window.confirm = (m) => { window.asked.push(m); return window.answer; }; return true; })()"#);
     page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true }))"#);
-    const BUTTON: &str = r#"(() => { const b = document.querySelector('.side .actions button[data-action="Release"]'); return b ? { disabled: b.disabled, gate: document.querySelector(".side .gate-note").textContent, note: document.querySelector(".side .write-note").textContent } : null; })()"#;
+    const BUTTON: &str = r#"(() => { const b = document.querySelector('.side .actions button[data-action="Release"]'); return b ? { disabled: b.disabled, gate: document.querySelector(".side .gate-note").textContent, note: document.querySelector('.side .write-note [data-action="Release"]')?.textContent ?? "" } : null; })()"#;
     let b = page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && b.gate !== '' ? b : null; }})()"), Duration::from_secs(20));
     assert_eq!(b, json!({ "disabled": true, "gate": "Writes go through portal. Its write switch is off.", "note": "" }));
     const BUTTONS: &str = r#"[...document.querySelectorAll(".side .actions button")].map((b) => [b.dataset.action, b.disabled, b.classList.contains("gated")])"#;
@@ -817,7 +823,11 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     bench.server("plc").unwrap().set("release3", 0);
     assert!(wait(Duration::from_secs(10), || release(&bench) == "0"));
     page.eval(r#"(() => { window.answer = true; document.querySelector('.side .actions button[data-action="Hold"]').click(); return true; })()"#);
-    page.wait_for(r#"document.querySelector(".side .write-note").textContent.startsWith("Hold: written")"#, Duration::from_secs(10));
+    page.wait_for(r#"(document.querySelector('.side .write-note [data-action="Hold"]')?.textContent ?? "").startsWith("Hold: written") || null"#, Duration::from_secs(10));
+    // Both answers said under the object, one line each, in its actions' order: the hold's never
+    // overtakes the release's.
+    let lines = page.eval(LINES);
+    assert!(lines[0][0] == json!("Release") && lines[0][1].as_str().unwrap().starts_with("Release: written") && lines[1][0] == json!("Hold") && lines[1][1].as_str().unwrap().starts_with("Hold: written") && lines.as_array().unwrap().len() == 2, "each action's answer in its own line: {lines}");
     assert!(wait(Duration::from_secs(10), || hold(&bench) == "3"), "the hold landed at its own controller: {}", hold(&bench));
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(release(&bench), "0", "the hold wrote nothing to the release");
@@ -848,7 +858,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
         (o["id"].as_str().unwrap().to_string(), actions)
     }).collect();
     let (mut offering, mut silent) = (0, 0);
-    let mut last_said: BTreeMap<String, String> = BTreeMap::new();
+    let mut last_said: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
     for o in &drawn {
         let id = serde_json::to_string(o["id"].as_str().unwrap()).unwrap();
         let own = &from_file[o["id"].as_str().unwrap()];
@@ -874,8 +884,8 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
             assert_eq!(gated, json!([true, true]), "{id}: its button {i} shown gated, in the warn colour");
             page.eval(&format!("document.querySelector('.side .write-note').textContent = ''; document.querySelectorAll('.side .actions button')[{i}].click(); true"));
             let label = a["label"].as_str().unwrap();
-            let note = page.wait_for(&format!("(() => {{ const t = document.querySelector('.side .write-note').textContent; return t.startsWith({}) ? t : null; }})()", serde_json::to_string(&format!("{label}: written")).unwrap()), Duration::from_secs(10));
-            last_said.insert(o["id"].as_str().unwrap().to_string(), note.as_str().unwrap().to_string());
+            let note = page.wait_for(&format!("(() => {{ const t = document.querySelector('.side .write-note [data-action=\"{label}\"]')?.textContent ?? ''; return t.startsWith({}) ? t : null; }})()", serde_json::to_string(&format!("{label}: written")).unwrap()), Duration::from_secs(10));
+            last_said.entry(o["id"].as_str().unwrap().to_string()).or_default().push(json!([label, note]));
             let (source, tag, value) = (a["source"].as_str().unwrap(), a["tag"].as_str().unwrap(), a["value"].as_str().unwrap());
             assert_eq!(page.eval("window.asked"), json!([format!("Write {value} to {tag} of {source}?")]), "{id} {label}: the question its own");
             let sent = page.posts();
@@ -887,12 +897,13 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
         }
     }
     assert!(offering >= 2 && silent >= 1, "objects offering writes ({offering}) and offering none ({silent})");
-    // Each object pressed, selected again, says its own last answer, whatever was pressed since.
+    // Each object pressed, selected again, says the last answer of each of its actions pressed, one
+    // line each in its actions' order, whatever was pressed since.
     for (id, said) in &last_said {
         let id = serde_json::to_string(id).unwrap();
         page.eval(&format!("document.getElementById({id}).dispatchEvent(new MouseEvent('click', {{ bubbles: true }}))"));
-        let note = page.wait_for(&format!("(() => {{ const t = document.querySelector('.side .sel-title'); const n = document.querySelector('.side .write-note'); return t && t.dataset.id === {id} && n ? n.textContent : null; }})()"), Duration::from_secs(10));
-        assert_eq!(note, json!(said), "{id}: its own last answer, said again");
+        page.wait_for(&format!("document.querySelector('.side .sel-title')?.dataset.id === {id} || null"), Duration::from_secs(10));
+        assert_eq!(page.eval(LINES), json!(said), "{id}: each of its actions' last answer, said again");
     }
     // A post with no answer (here the network refused it before it left, which the page cannot tell
     // from an answer lost on the way back) is said as one, the write perhaps landed, and the button
@@ -900,7 +911,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
     page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(10));
     page.eval(r#"(() => { const f = window.fetch; window.fetch = (...a) => { if (String(a[0]).includes("/api/opc/write") && !window.__failedOnce) { window.__failedOnce = true; return Promise.reject(new TypeError("Failed to fetch")); } return f(...a); }; document.querySelector(".side .write-note").textContent = ""; document.querySelector('.side .actions button[data-action="Release"]').click(); return true; })()"#);
-    let note = page.wait_for(r#"document.querySelector(".side .write-note").textContent || null"#, Duration::from_secs(10));
+    let note = page.wait_for(RELEASE_SAID, Duration::from_secs(10));
     assert_eq!(note, json!("Release: no answer, the write may have reached the plant (TypeError: Failed to fetch)"));
     let freed = page.wait_for(&format!("(() => {{ const b = document.querySelector('.side .actions button[data-action=\"Release\"]'); return b && !b.disabled && b.dataset.busy === undefined ? true : null; }})()"), Duration::from_secs(10));
     assert_eq!(freed, json!(true), "the button the switch's again");
@@ -909,7 +920,15 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     // selected, says nothing there (that object's own answer, or none, as it was), and is said on
     // outlet 3 once it is selected again.
     page.eval(r#"(() => { window.__plainFetch = window.__plainFetch ?? window.fetch; return true; })()"#);
-    for (fail, other, said) in [(true, "outlet-1", "Release: no answer, the write may have reached the plant (TypeError: Failed to fetch)"), (false, "outlet-2", "Release: refused, 403: writes are turned off for this project")] {
+    // What is selected when the answer comes, each of the panel's own cases (`Side.sel`): another
+    // object with actions, one with none, and nothing (the drawing's background clicked); outlet 3
+    // itself is the loop above. The first refused by the network, the second by the switch turned off
+    // while the post is out, the third written.
+    for (fail, other, disarm, said) in [
+        (true, Some("outlet-1"), false, "Release: no answer, the write may have reached the plant (TypeError: Failed to fetch)"),
+        (false, Some("outlet-2"), true, "Release: refused, 403: writes are turned off for this project"),
+        (false, None, false, "Release: written"),
+    ] {
         host.session("loop").unwrap().set_writes_armed(true);
         assert!(wait(Duration::from_secs(10), || get(addr, "/s/loop/objects.json").1["session"]["writes_armed"] == json!(true)));
         bench.server("plc").unwrap().set("release3", 0);
@@ -917,22 +936,61 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
         page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
         page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(10));
         page.eval(&format!(r#"(() => {{ const f = window.__plainFetch; window.fetch = (...a) => String(a[0]).includes("/api/opc/write") ? new Promise((ok, no) => setTimeout(() => {} ? no(new TypeError("Failed to fetch")) : f(...a).then(ok, no), 1500)) : f(...a); window.answer = true; document.querySelector('.side .actions button[data-action="Release"]').click(); return true; }})()"#, fail));
-        page.eval(&format!("document.getElementById({}).dispatchEvent(new MouseEvent('click', {{ bubbles: true }})); true", serde_json::to_string(other).unwrap()));
-        page.wait_for(&format!("document.querySelector('.side .sel-title')?.dataset.id === {} || null", serde_json::to_string(other).unwrap()), Duration::from_secs(10));
-        if !fail {
+        match other {
+            Some(o) => {
+                page.eval(&format!("document.getElementById({}).dispatchEvent(new MouseEvent('click', {{ bubbles: true }})); true", serde_json::to_string(o).unwrap()));
+                page.wait_for(&format!("document.querySelector('.side .sel-title')?.dataset.id === {} || null", serde_json::to_string(o).unwrap()), Duration::from_secs(10));
+            }
+            None => {
+                page.eval(r#"document.querySelector(".plant-wrap > svg").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+                page.wait_for(r#"document.querySelector('.side .sel-title') === null || null"#, Duration::from_secs(10));
+            }
+        }
+        if disarm {
             host.session("loop").unwrap().set_writes_armed(false);
         }
-        let note_here = r#"document.querySelector(".side .write-note")?.textContent ?? null"#;
-        let before = page.eval(note_here);
-        assert_eq!(before, last_said.get(other).map(|s| json!(s)).unwrap_or(serde_json::Value::Null), "{other}: its own last answer, or none");
+        let before = page.eval(LINES);
+        let own = other.and_then(|o| last_said.get(o)).cloned().unwrap_or_default();
+        assert_eq!(before, json!(own), "{other:?}: its own answers, or none");
         std::thread::sleep(Duration::from_millis(2200));
-        assert_eq!(page.eval(note_here), before, "{other}: nothing said there of outlet 3's press");
-        assert!(page.eval("document.body.textContent").as_str().unwrap().matches(said).count() == 0 || before.as_str().is_some_and(|b| b.starts_with(said)), "{other}: outlet 3's answer said under another object");
+        assert_eq!(page.eval(LINES), before, "{other:?}: nothing said there of outlet 3's press");
+        assert!(page.eval("document.querySelector('.side').textContent").as_str().unwrap().matches(said).count() == 0 || own.iter().any(|l| l[1].as_str().is_some_and(|b| b.starts_with(said))), "{other:?}: outlet 3's answer said under another object, or with none selected");
         page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
-        let back = page.wait_for(r#"(() => { const t = document.querySelector('.side .sel-title'); const n = document.querySelector(".side .write-note"); return t && t.dataset.id === "outlet-3" && n ? n.textContent : null; })()"#, Duration::from_secs(10));
+        page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-3" || null"#, Duration::from_secs(10));
+        let back = page.wait_for(RELEASE_SAID, Duration::from_secs(10));
         assert!(back.as_str().unwrap().starts_with(said), "outlet 3's own answer, said again: {back}");
-        assert_eq!(release(&bench), "0", "nothing reached the plant");
+        assert_eq!(release(&bench), if other.is_some() { "0" } else { "7" }, "what reached the plant");
     }
+    // Two presses of one object out at once, answered while it is away: the release landing with its
+    // answer lost, the hold written later. While both are out, outlet 3 selected again shows both
+    // buttons busy (never pressed twice at once), the switch on; selected again once both have come,
+    // it says both answers, one line each: the hold's never overtakes the release's.
+    host.session("loop").unwrap().set_writes_armed(true);
+    assert!(wait(Duration::from_secs(10), || get(addr, "/s/loop/objects.json").1["session"]["writes_armed"] == json!(true)));
+    bench.server("plc").unwrap().set("release3", 0);
+    bench.server("aux").unwrap().set("hold3", 0);
+    assert!(wait(Duration::from_secs(10), || release(&bench) == "0" && hold(&bench) == "0"));
+    page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+    page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(10));
+    page.eval(r#"(() => { const f = window.__plainFetch; window.fetch = (...a) => { const u = String(a[0]), body = String(a[1]?.body ?? ""); if (!u.includes("/api/opc/write")) return f(...a); if (body.includes("release3")) return new Promise((ok, no) => setTimeout(() => f(...a).then(() => no(new TypeError("Failed to fetch")), no), 800)); return new Promise((ok, no) => setTimeout(() => f(...a).then(ok, no), 1600)); }; window.answer = true; document.querySelector('.side .actions button[data-action="Release"]').click(); document.querySelector('.side .actions button[data-action="Hold"]').click(); return true; })()"#);
+    page.eval(r#"document.getElementById("outlet-2").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+    page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-2" || null"#, Duration::from_secs(10));
+    page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+    page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-3" || null"#, Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(300));
+    // Read, then the release's button forced live and clicked: no question asked, so nothing posted.
+    let busy = page.eval(r#"(() => { const read = [...document.querySelectorAll(".side .actions button")].map((b) => [b.dataset.action, b.disabled, b.dataset.busy ?? null]); const asked = window.asked.length; const r = document.querySelector('.side .actions button[data-action="Release"]'); r.disabled = false; r.click(); return [read, window.asked.length - asked]; })()"#);
+    assert_eq!(busy, json!([[["Release", true, "1"], ["Hold", true, "1"]], 0]), "both presses out: both buttons busy on the panel built again, the switch on, and the release pressed no second time");
+    page.eval(r#"document.getElementById("outlet-2").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+    page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-2" || null"#, Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(2500));
+    assert!(wait(Duration::from_secs(10), || release(&bench) == "7" && hold(&bench) == "3"), "both landed: release {} hold {}", release(&bench), hold(&bench));
+    page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+    page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-3" || null"#, Duration::from_secs(10));
+    let lines = page.eval(LINES);
+    assert!(lines.as_array().unwrap().len() == 2 && lines[0] == json!(["Release", "Release: no answer, the write may have reached the plant (TypeError: Failed to fetch)"]) && lines[1][0] == json!("Hold") && lines[1][1].as_str().unwrap().starts_with("Hold: written"), "both answers said, one line each: {lines}");
+    let freed = page.wait_for(r#"(() => { const b = [...document.querySelectorAll(".side .actions button")]; return b.length === 2 && b.every((x) => !x.disabled && x.dataset.busy === undefined) ? true : null; })()"#, Duration::from_secs(10));
+    assert_eq!(freed, json!(true), "both buttons the switch's again");
     page.eval("window.fetch = window.__plainFetch; true");
     host.session("loop").unwrap().set_writes_armed(false);
     drop(page);
@@ -976,7 +1034,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
         page.eval(r#"(() => { window.confirm = () => true; document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); return true; })()"#);
         page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && b.gate.endsWith({}) ? true : null; }})()", if armed { "'is on.'" } else { "'is off.'" }), Duration::from_secs(20));
         page.eval(r#"(() => { const b = document.querySelector('.side .actions button[data-action="Release"]'); b.disabled = false; b.click(); return true; })()"#);
-        let note = page.wait_for(r#"document.querySelector(".side .write-note").textContent || null"#, Duration::from_secs(10));
+        let note = page.wait_for(RELEASE_SAID, Duration::from_secs(10));
         if armed {
             assert!(note.as_str().unwrap().starts_with("Release: written"), "{name}: {note}");
             assert!(wait(Duration::from_secs(10), || release(plant_of) == "4"), "{name}'s plant, its own value");
@@ -1056,7 +1114,7 @@ fn every_answer_portal_gives_a_write_is_said_as_it_means() {
     let press = |page: &mut Browser, label: &str| -> String {
         page.wait_for(&format!("(() => {{ const b = document.querySelector('.side .actions button[data-action=\"{label}\"]'); return b && !b.disabled && b.dataset.busy === undefined ? true : null; }})()"), Duration::from_secs(30));
         page.eval(&format!("document.querySelector('.side .write-note').textContent = ''; document.querySelector('.side .actions button[data-action=\"{label}\"]').click(); true"));
-        page.wait_for(r#"document.querySelector(".side .write-note").textContent || null"#, Duration::from_secs(90)).as_str().unwrap().to_string()
+        page.wait_for(&format!("document.querySelector('.side .write-note [data-action=\"{label}\"]')?.textContent || null"), Duration::from_secs(90)).as_str().unwrap().to_string()
     };
     // Written: `on` posted as written, the tag taking it as 1.
     let note = press(&mut page, "Go");
@@ -1129,7 +1187,7 @@ fn a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are() {
     page.wait_for(DRAWN, Duration::from_secs(20));
     page.eval(PICK);
     page.wait_for(&format!("(() => {{ const b = {RELEASE}; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(20));
-    const NOTE: &str = r#"document.querySelector(".side .write-note").textContent || null"#;
+    const NOTE: &str = RELEASE_SAID;
     // The write's answer paused by the browser once it is back from the host, then lost or spoiled.
     page.call("Fetch.enable", json!({ "patterns": [{ "urlPattern": "*/api/opc/write*", "requestStage": "Response" }] }));
     let paused = |page: &mut Browser, seen: usize| -> serde_json::Value {
@@ -1177,9 +1235,12 @@ fn a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are() {
     page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-2" || null"#, Duration::from_secs(10));
     page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
     page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-3" || null"#, Duration::from_secs(10));
-    let said = page.wait_for(r#"(() => { const t = document.querySelector(".side .write-note")?.textContent ?? ""; return t.startsWith("Release: written") ? t : null; })()"#, Duration::from_secs(10));
+    let said = page.wait_for(r#"(() => { const t = document.querySelector('.side .write-note [data-action="Release"]')?.textContent ?? ""; return t.startsWith("Release: written") ? t : null; })()"#, Duration::from_secs(10));
     assert!(said.as_str().unwrap().starts_with("Release: written"), "{said}");
     assert!(wait(Duration::from_secs(10), || release(&bench) == "1"), "the write landed");
+    // The button of the panel built again while the post was out, freed once its answer came.
+    let freed = page.wait_for(&format!("(() => {{ const b = {RELEASE}; return b && !b.disabled && document.querySelector('.side .actions button[data-action=\"Release\"]').dataset.busy === undefined ? true : null; }})()"), Duration::from_secs(10));
+    assert_eq!(freed, json!(true), "the release's button on the panel built again, the switch's again");
     drop(page);
     host.stop();
 }

@@ -127,6 +127,7 @@ button.gated { border-color: rgba(255,200,100,.45); color: var(--warn); backgrou
 button.gated:disabled { color: var(--weak2); border-color: var(--border); background: transparent; }
 .gate-note { color: var(--weak2); font-size: 11.5px; margin: 6px 0; }
 .write-note { color: var(--warn); }
+.write-note > span { display: block; }
 .attention { list-style: none; margin: 0; padding: 0; }
 .attention li { display: flex; gap: 8px; align-items: center; padding: 5px 6px; border-radius: 6px; cursor: pointer; }
 .attention li:hover { background: var(--raised); }

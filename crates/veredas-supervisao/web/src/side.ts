@@ -40,9 +40,13 @@ export class Side {
   private listKey = "";
   private sel: Selected | null = null;
   private inState = new Map<string, { state: string; at: number }>();
-  /// The last answer to a press, by the object pressed: said under it whenever it is selected, never
-  /// under another one selected while the post was out.
-  private notes = new Map<string, string>();
+  /// The last answer to a press of each of an object's actions, by the object pressed and the
+  /// action: all said under it, each in its own line, whenever it is selected (one action's answer
+  /// never overtakes another's), never under another one selected while the post was out.
+  private notes = new Map<string, Map<string, string>>();
+  /// The presses whose post is out, by object and action: that action's button stays busy, however
+  /// often the object is selected again, so it is never pressed twice at once.
+  private out = new Set<string>();
 
   constructor(
     private name: string,
@@ -74,9 +78,10 @@ export class Side {
       spark: h("div", { class: "spark-wrap" }),
       buttons: def.actions.map((a) => this.actionButton(def.id, a)),
       gate: h("p", { class: "gate-note" }),
-      note: h("p", { class: "write-note mono" }, this.notes.get(def.id) ?? ""),
+      note: h("p", { class: "write-note mono" }),
       sparkAt: 0,
     };
+    this.sayAll(s);
     this.sel = s;
     const parts: Node[] = [
       h("div", { class: "side-head" }, h("span", { class: "caps" }, "Selected")),
@@ -94,17 +99,28 @@ export class Side {
     this.top.replaceChildren(...parts);
   }
 
+  /// Every answer kept for the selected object, one line per action answered, in its actions' order.
+  private sayAll(s: Selected) {
+    const said = this.notes.get(s.def.id);
+    s.note.replaceChildren(...s.def.actions.filter((a) => said?.has(a.label)).map((a) => h("span", { "data-action": a.label }, said!.get(a.label)!)));
+  }
+
   private actionButton(id: string, a: Action): HTMLButtonElement {
     const b = h("button", { class: "gated", disabled: true, "data-action": a.label }, a.label) as HTMLButtonElement;
+    const pressing = `${id}\u0000${a.label}`;
+    if (this.out.has(pressing)) b.dataset.busy = "1";
     b.onclick = async () => {
-      if (!confirm(`Write ${a.value} to ${a.tag} of ${a.source}?`)) return;
+      if (this.out.has(pressing) || !confirm(`Write ${a.value} to ${a.tag} of ${a.source}?`)) return;
+      this.out.add(pressing);
       b.dataset.busy = "1";
       b.disabled = true;
-      // Its answer said, or that none came (the write may have landed); the button freed either
-      // way, for the switch to gate again at the next status.
+      // Its answer kept and said, or that none came (the write may have landed); the button freed
+      // either way (the one shown now, if the object was selected again since), for the switch to
+      // gate again at the next status.
       const say = (text: string) => {
-        this.notes.set(id, text);
-        if (this.sel && this.sel.def.id === id) this.sel.note.textContent = text;
+        if (!this.notes.has(id)) this.notes.set(id, new Map());
+        this.notes.get(id)!.set(a.label, text);
+        if (this.sel && this.sel.def.id === id) this.sayAll(this.sel);
       };
       try {
         const r = await postWrite(this.name, a);
@@ -112,7 +128,10 @@ export class Side {
       } catch (e) {
         say(`${a.label}: no answer, the write may have reached the plant (${String(e)})`);
       } finally {
+        this.out.delete(pressing);
         delete b.dataset.busy;
+        const shown = this.sel && this.sel.def.id === id ? this.sel.buttons.find((x) => x.dataset.action === a.label) : undefined;
+        if (shown) delete shown.dataset.busy;
       }
     };
     return b;
