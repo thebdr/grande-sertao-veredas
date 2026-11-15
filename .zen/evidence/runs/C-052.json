@@ -10,15 +10,15 @@
     "dashboards"
   ],
   "exitCode": 0,
-  "outputSha": "e66c3dc8f7c99b578a031fba48cc27e7bd4d72604dd10f14f594a05debcedc0a",
-  "outputTail": "\nrunning 6 tests\ntest a_table_sorts_numbers_as_numbers_with_nulls_last ... ok\ntest medians_sigmas_and_distributions_are_exact ... ok\ntest buckets_align_on_the_clock_and_mark_the_running_one ... ok\ntest every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says ... ok\ntest the_cells_read_each_row_once_while_rows_arrive ... ok\ntest every_panel_kind_is_computed_exactly_from_the_store ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.43s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.04s\n     Running tests\\dashboards.rs (target\\debug\\deps\\dashboards-ce910fef682bb201.exe)",
-  "ranAt": "2026-11-14T08:10:49.108Z",
-  "headCommit": "aa00437c580868becf137266a9ff6fa9bcc5af00",
+  "outputSha": "7d7dbf5790060a9ba1218d7c959e5e666663cea2f29748c95baa5dd471cde5eb",
+  "outputTail": "\nrunning 6 tests\ntest a_table_sorts_numbers_as_numbers_with_nulls_last ... ok\ntest medians_sigmas_and_distributions_are_exact ... ok\ntest buckets_align_on_the_clock_and_mark_the_running_one ... ok\ntest every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says ... ok\ntest the_cells_read_each_row_once_while_rows_arrive ... ok\ntest every_panel_kind_is_computed_exactly_from_the_store ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.31s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.88s\n     Running tests\\dashboards.rs (target\\debug\\deps\\dashboards-ce910fef682bb201.exe)",
+  "ranAt": "2026-11-15T02:08:27.696Z",
+  "headCommit": "385fd8dc1fbf2b9dd743bb69ea2c5509b5e60e56",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/dashboards.rs",
       "file": "crates/veredas-supervisao/tests/dashboards.rs",
-      "fileSha": "03b12ce88804dd5a29ebd2dccf6c70facf2b55fbb223b1a4338ff5da4eb90db4"
+      "fileSha": "5255f5f9ff783f7b4001fc1bad8c041a9385c684232cf3ff547391bfc574f7f6"
     }
   ]
 }
