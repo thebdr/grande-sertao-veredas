@@ -455,6 +455,7 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     assert_eq!((tr["from"].clone(), tr["to"].clone(), tr["total"].clone(), tr["limit"].clone(), tr["unit"].clone()), (json!(to - 60 * MIN), json!(to), json!(9), json!({ "below": 98.0 }), json!("%")));
     assert_eq!(tr["points"].as_array().unwrap().iter().map(|p| p[1].as_f64().unwrap()).collect::<Vec<_>>(), [99.0, 97.0, 98.5, 96.5, 99.5, 99.0, 98.0, 97.5, 99.2]);
     assert_eq!(tr["breaches"], json!([[at(2.0), 97.0], [at(6.0), 96.5], [at(29.0), 97.5]]));
+    assert_eq!(tr["limit_text"], json!("98"), "the limit in full, as the binding writes it");
 
     // The bars: thirteen buckets of five minutes on the clock, the hour's first six empty, the
     // last running; the mean of each, its count, the target.
@@ -542,6 +543,7 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let up = panel(&d, 12);
     assert_eq!((up["limit"].clone(), up["unit"].clone(), up["total"].clone()), (json!({ "above": 16.0 }), json!("s"), json!(9)));
     assert_eq!(up["breaches"], json!([[at(10.0), 20.0], [at(30.5), 21.0]]), "16 is not past 16");
+    assert_eq!(up["limit_text"], json!("16"));
     // A value below its target says how far, signed.
     let t = panel(&d, 13);
     assert_eq!((t["text"].clone(), t["state"].clone(), t["sub"].clone()), (json!("99.2"), json!("normal"), json!("-1% on the 100 target")));
@@ -847,6 +849,13 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let gave_up = page.wait_for("window.__said.length ? window.__said : null", Duration::from_secs(20));
     assert_eq!(gave_up, json!(["Error: no answer within 10 s"]));
     page.wait_for(r#"document.querySelectorAll(".dash-grid > .panel").length === 17 || null"#, Duration::from_secs(15));
+    // The refresh every five seconds: over sixteen seconds and a half, each ask of the dashboard
+    // shown five seconds after the last, within half a second.
+    page.eval("window.__askAt = []; true");
+    std::thread::sleep(Duration::from_millis(16_500));
+    let asked: Vec<f64> = page.eval("window.__askAt").as_array().unwrap().iter().map(|t| t.as_f64().unwrap()).collect();
+    assert!(asked.len() >= 3 && asked.windows(2).all(|w| (4500.0..=5600.0).contains(&(w[1] - w[0]))), "asked every five seconds: {asked:?}");
+    page.eval("window.__askAt = null; true");
     // The second dashboard (every key written, every aggregate, a grid in every state) and then a
     // probe built from the first's panels: every state of the vocabulary on every surface (a tile,
     // its badge, sub-line and sparkline; a grid cell and its value; a level's fill and figure; a
@@ -902,6 +911,8 @@ const KEEP_DASHBOARD: &str = r#"(() => {
     const dash = String(a[0]).includes("/dashboard/");
     // Every dashboard asked, counted.
     if (dash) window.__asks = (window.__asks ?? 0) + 1;
+    // And when, while `__askAt` is kept.
+    if (dash && window.__askAt) window.__askAt.push(performance.now());
     // A dashboard the test hands over in place of the next one asked (the probes), taken as it is
     // asked, so an answer already on its way never carries it.
     const probe = dash ? window.__probe : null;
@@ -1193,6 +1204,9 @@ fn probe_dashboard(d: &Value) -> Value {
     let mut one = p(4);
     one["data"]["points"] = json!([one["data"]["points"][0].clone()]);
     one["data"]["breaches"] = json!([]);
+    // A limit of four places, drawn as the host writes it, never rounded by the page.
+    one["data"]["limit"] = json!({ "below": 97.0625 });
+    one["data"]["limit_text"] = json!("97.0625");
     panels.push(one);
     let mut none = p(4);
     none["data"]["points"] = json!([]);
@@ -1234,7 +1248,8 @@ fn probe_dashboard(d: &Value) -> Value {
             b["value"] = json!(-v);
         }
     }
-    under["data"]["target"] = json!(-12.0);
+    under["data"]["target"] = json!(-12.0625);
+    under["data"]["target_text"] = json!("-12.0625");
     panels.push(under);
     json!({ "name": "Probe", "columns": d["columns"], "to": d["to"], "panels": panels })
 }
@@ -1308,8 +1323,9 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                     r["right"] = match limit {
                         None => json!(format!("{} points", x["total"])),
                         Some(_) => {
-                            let (word, at) = if x["limit"].get("above").is_some() { ("max", &x["limit"]["above"]) } else { ("min", &x["limit"]["below"]) };
-                            json!(format!("{word} {}{unit} · {n} breach{}", num(at, 2), if n == 1 { "" } else { "es" }))
+                            // The limit as the host wrote it, in full (its `limit_text`).
+                            let word = if x["limit"].get("above").is_some() { "max" } else { "min" };
+                            json!(format!("{word} {}{unit} · {n} breach{}", x["limit_text"].as_str().unwrap(), if n == 1 { "" } else { "es" }))
                         }
                     };
                 }
@@ -1349,10 +1365,10 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                         }
                     }
                     if let Some(t) = target {
-                        axis.push(json!([format!("target {}", num(&json!(t), 2)), 590.0, py(t) - 4.0]));
+                        axis.push(json!([format!("target {}", x["target_text"].as_str().unwrap()), 590.0, py(t) - 4.0]));
                     }
                     r["axis"] = json!(axis);
-                    r["right"] = if x["target"].is_null() { Value::Null } else { json!(format!("target {}{unit}", num(&x["target"], 2))) };
+                    r["right"] = if x["target"].is_null() { Value::Null } else { json!(format!("target {}{unit}", x["target_text"].as_str().unwrap())) };
                 }
                 "timeline" => {
                     // 400 wide: a run from its start to its end in the window, clipped to it.
@@ -1519,6 +1535,18 @@ id = "t-keyed"
 value = { source = "sorter", series = "rate" }
 unit = "%"
 states = [ { above = 15, source = "sorter", series = "at", key = "A1", state = "warn", word = "far" } ]
+
+[[object]]
+id = "t-tiny"
+value = { source = "sorter", series = "travel" }
+unit = "s"
+states = [ { above = 0.0001, state = "warn", word = "moving" } ]
+
+[[object]]
+id = "t-half"
+value = { source = "sorter", series = "rate" }
+unit = "%"
+states = [ { below = 99.0005, state = "near", word = "under" } ]
 
 [[dashboard]]
 name = "Rules"
@@ -1689,6 +1717,55 @@ spread = 5
 kind = "table"
 table = "ends"
 sort = { column = "n" }
+
+[[dashboard.panel]]
+kind = "table"
+table = "codes"
+sort = { column = "code" }
+
+[[dashboard.panel]]
+kind = "table"
+table = "huge"
+columns = [ { name = "h", bar = true, decimals = 2, states = [ { above = 10, state = "alarm", word = "big" } ] } ]
+sort = { column = "h" }
+
+[[dashboard.panel]]
+kind = "cells"
+table = "huge"
+key = "outlet"
+value = "h"
+spread = 5
+
+[[dashboard.panel]]
+kind = "cells"
+table = "worded"
+key = "outlet"
+value = "word"
+spread = 5
+
+[[dashboard.panel]]
+kind = "value"
+object = "t-tiny"
+
+[[dashboard.panel]]
+kind = "value"
+object = "t-half"
+
+[[dashboard.panel]]
+kind = "value"
+object = "plain"
+target = 0.0005
+
+[[dashboard.panel]]
+kind = "trend"
+object = "keyed"
+limit = { above = 0.004 }
+
+[[dashboard.panel]]
+kind = "bars"
+object = "keyed"
+aggregate = "max"
+target = 0.0005
 "#;
 
 /// The project's rules and views for `RULES`: a keyed numeric series, float keys, a series never
@@ -1788,6 +1865,26 @@ sql = "SELECT outlet, travel FROM sorts"
 [[table]]
 name = "doubled"
 sql = "SELECT index_ms, source, seq, outlet, travel FROM sorts UNION ALL SELECT index_ms, source, seq, outlet, travel FROM sorts"
+
+[[table]]
+name = "codes"
+sql = "SELECT * FROM (VALUES ('100000000000000000000'), ('99999999999999999999'), ('5'), ('9000000000000000000')) AS c(code)"
+
+[[table]]
+name = "huge"
+sql = "SELECT index_ms, source, seq, outlet, CASE outlet WHEN 1 THEN CAST('18446744073709551617' AS HUGEINT) ELSE CAST(5 AS HUGEINT) END AS h, travel FROM sorts"
+
+[[table]]
+name = "worded"
+sql = "SELECT index_ms, source, seq, outlet, CAST(travel AS VARCHAR) AS word FROM sorts"
+
+[[table]]
+name = "keyclocks"
+sql = "SELECT index_ms, source, seq, travel, CAST(ts AS TIMESTAMP_S) AS s, CAST(ts AS TIMESTAMP_MS) AS ms, ts AS us, CAST(ts AS TIMESTAMP_NS) AS ns, CAST(ts AS TIMESTAMPTZ) AS tz, CAST(ts AS DATE) AS day, CAST(ts AS TIME) AS hour, CAST(CAST(ts AS TIME) AS TIMETZ) AS hourtz FROM sorts"
+
+[[table]]
+name = "others"
+sql = "SELECT DISTINCT logical_type AS t FROM duckdb_types() WHERE type_category IS DISTINCT FROM 'NUMERIC'"
 "#;
 
 #[test]
@@ -1829,9 +1926,9 @@ fn every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says() {
     assert!(wait(Duration::from_secs(20), || { let d = get_d(); panel(&d, 2)["state"] == json!("warn") && panel(&d, 5)["text"] == json!("20") && panel(&d, 18)["state"] == json!("warn") && panel(&d, 19)["state"] == json!("warn") }), "{}", get_d());
     let d = get_d();
 
-    // Every panel computed but the three said in their places (two refusals, one panic).
+    // Every panel computed but the four said in their places (three refusals, one panic).
     for (i, p) in d["panels"].as_array().unwrap().iter().enumerate() {
-        assert_eq!(p["error"].is_null(), ![12, 13, 22].contains(&i), "panel {i}: {p}");
+        assert_eq!(p["error"].is_null(), ![12, 13, 22, 35].contains(&i), "panel {i}: {p}");
     }
     // A rule written over the object's own series (its source alone, or its source and series) is
     // the object's own on a timeline: normal to the slow sort, slow from it to the window's end.
@@ -1908,7 +2005,7 @@ fn every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says() {
     // state or a comparison added there fails here until a tile says it.
     use veredas_supervisao::binding::{PanelKind, Rule};
     use veredas_supervisao::state::{Comparand, Compare, StateClass};
-    let picked: BTreeMap<usize, usize> = [(1, 1), (2, 0), (15, 0), (16, 0), (17, 0), (18, 0), (19, 0)].into_iter().collect();
+    let picked: BTreeMap<usize, usize> = [(1, 1), (2, 0), (15, 0), (16, 0), (17, 0), (18, 0), (19, 0), (36, 0), (37, 0)].into_iter().collect();
     let (mut states, mut comparisons) = (BTreeSet::new(), BTreeSet::new());
     for (i, p) in binding.dashboards[0].panels.iter().enumerate() {
         let PanelKind::Value { object, .. } = &p.kind else { continue };
@@ -2026,6 +2123,48 @@ fn every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says() {
     assert_eq!(ends_types, whole_types, "every whole-number type at its ends");
     let want: Vec<Vec<Value>> = said.iter().map(|r| r.iter().map(|c| json!(c.as_str().map(String::from).unwrap_or_else(|| c.to_string()))).collect::<Vec<Value>>()).collect();
     assert_eq!(texts(31), want, "each written as the engine writes it");
+    // A column read by its engine type, every type the engine lists: each NUMERIC one holds numbers
+    // (a decimal of any precision and scale among them), each of every other category does not.
+    use veredas_supervisao::panel::numeric as holds_numbers;
+    let others: BTreeSet<String> = live.store.query_rows("others", &veredas_portal::store::RowsQuery { limit: 1000, ..Default::default() }).unwrap().rows.iter().map(|r| r[0].as_str().unwrap().to_string()).collect();
+    assert!(others.contains("VARCHAR") && others.contains("BOOLEAN") && others.contains("DATE"), "{others:?}");
+    assert!(numeric.iter().all(|t| holds_numbers(t)) && holds_numbers("DECIMAL(38,0)") && holds_numbers("DECIMAL(4,1)"), "{numeric:?}");
+    let not: Vec<&String> = others.iter().filter(|t| holds_numbers(t)).collect();
+    assert_eq!(not, Vec::<&String>::new(), "a type of another category read as numbers");
+    let as_texts = |rows: &[&[&str]]| rows.iter().map(|r| r.iter().map(|t| json!(t)).collect::<Vec<_>>()).collect::<Vec<_>>();
+    // A text column's digits sorted as text (a code is no number), whatever their length.
+    assert_eq!(texts(32), as_texts(&[&["100000000000000000000"], &["5"], &["9000000000000000000"], &["99999999999999999999"]]), "a text column in text's order");
+    // A numeric column holding an integer past 64 bits (portal's digits) beside a small one: sorted
+    // as the integers they are, its places written as zeros, its bar against it as the largest, its
+    // rule holding over it (through the double nearest it).
+    let hg: Vec<Vec<Value>> = panel(&d, 33)["rows"].as_array().unwrap().iter().map(|r| vec![r[0]["text"].clone(), r[0]["bar"].clone(), r[0]["state"].clone(), r[0]["word"].clone()]).collect();
+    let small = as_served(&json!(5.0 / 18446744073709551617.0_f64));
+    let big = vec![json!("18446744073709551617.00"), json!(1.0), json!("alarm"), json!("big")];
+    assert_eq!(hg, vec![vec![json!("5.00"), small, json!("normal"), json!("")], big.clone(), big], "an integer past 64 bits in a numeric column");
+    // Charted in cells, never dropped: outlet 1's two values past 64 bits and outlet 2's 5.
+    let huge = panel(&d, 34);
+    assert_eq!((keyed(34), huge["read"].clone(), huge["rows"][0]["median"].clone()), (vec![(json!("1"), json!(2)), (json!("2"), json!(1))], json!(3), as_served(&json!(18446744073709551617.0_f64))));
+    // A value column that is no number, refused in the panel's place by its engine type.
+    assert_eq!(d["panels"][35]["error"], json!("`worded`'s `word` is VARCHAR, not a number: cells chart a numeric column"));
+    // A target and a limit of more places than the screen's three, each written in full (the
+    // tiles' thresholds of four places are read with the others above).
+    assert_eq!(panel(&d, 38)["sub"], json!("+19799900% on the 0.0005 target"));
+    assert_eq!((panel(&d, 39)["limit"].clone(), panel(&d, 39)["limit_text"].clone()), (json!({ "above": 0.004 }), json!("0.004")));
+    assert_eq!((panel(&d, 40)["target"].clone(), panel(&d, 40)["target_text"].clone()), (json!(0.0005), json!("0.0005")));
+    // A cells key of every date and time type the engine lists (the driver's TIME_NS apart, the
+    // limit), each written as the store's clock reads it, never its milliseconds.
+    let kc = live.store.query_rows("keyclocks", &veredas_portal::store::RowsQuery { limit: 100, ..Default::default() }).unwrap();
+    let key_types: Vec<(String, String)> = kc.columns.iter().skip(4).map(|c| (c.name.clone(), c.data_type.clone())).collect();
+    assert_eq!(key_types.iter().map(|(_, t)| t.clone()).chain(["TIME_NS".to_string()]).collect::<BTreeSet<_>>(), engine, "a key of every date and time type");
+    for (i, (name, t)) in key_types.iter().enumerate() {
+        let c = veredas_supervisao::panel::cells(&live, "keyclocks", name, "travel", 60, 5, 5.0, to, 50, 1000).unwrap();
+        let got: BTreeMap<String, u64> = c["rows"].as_array().unwrap().iter().map(|r| (r["key"].as_str().unwrap().to_string(), r["n"].as_u64().unwrap())).collect();
+        let mut want: BTreeMap<String, u64> = BTreeMap::new();
+        for r in &kc.rows {
+            *want.entry(clock(r[4 + i].as_i64().unwrap(), read_as(t))).or_default() += 1;
+        }
+        assert_eq!(got, want, "keyed by {name}, a {t}");
+    }
     host.stop();
 }
 
@@ -2214,14 +2353,23 @@ fn a_table_sorts_numbers_as_numbers_with_nulls_last() {
     let rows = || vec![vec![json!(10.5)], vec![Value::Null], vec![json!(9.5)], vec![json!(20.5)], vec![json!(100)]];
     let column = |r: &[Vec<Value>]| r.iter().map(|x| x[0].clone()).collect::<Vec<_>>();
     let mut down = rows();
-    sort_rows(&mut down, 0, true);
+    sort_rows(&mut down, 0, true, true);
     assert_eq!(column(&down), [json!(100), json!(20.5), json!(10.5), json!(9.5), Value::Null], "numbers, not their text; the null last");
     let mut up = rows();
-    sort_rows(&mut up, 0, false);
+    sort_rows(&mut up, 0, false, true);
     assert_eq!(column(&up), [json!(9.5), json!(10.5), json!(20.5), json!(100), Value::Null]);
     let mut words = vec![vec![json!("b")], vec![Value::Null], vec![json!("a")]];
-    sort_rows(&mut words, 0, true);
+    sort_rows(&mut words, 0, true, false);
     assert_eq!(column(&words), [json!("b"), json!("a"), Value::Null]);
+    // Digits in a text column are text (a code is no number), whatever their length; in a numeric
+    // column the digits portal writes for an integer past 64 bits are that integer, beside numbers.
+    let digits = || vec![vec![json!("100000000000000000000")], vec![json!("99999999999999999999")], vec![json!("5")], vec![json!("9000000000000000000")]];
+    let mut text = digits();
+    sort_rows(&mut text, 0, false, false);
+    assert_eq!(column(&text), [json!("100000000000000000000"), json!("5"), json!("9000000000000000000"), json!("99999999999999999999")]);
+    let mut huge = vec![vec![json!("18446744073709551617")], vec![json!(5)], vec![json!("-18446744073709551617")], vec![json!("18446744073709551616")]];
+    sort_rows(&mut huge, 0, false, true);
+    assert_eq!(column(&huge), [json!("-18446744073709551617"), json!(5), json!("18446744073709551616"), json!("18446744073709551617")]);
 }
 
 #[test]

@@ -90,8 +90,9 @@ export interface Bucket {
 
 /// Bars per bucket against a dashed target; the running bucket outlined. A bar runs from 0 up to
 /// its value or down to it: the axis spans the lowest to the highest of 0, the values and the
-/// target, a tenth past an end that is not 0, labelled at both ends and at 0 between them.
-export function bars(buckets: Bucket[], target: number | null): SVGElement {
+/// target, a tenth past an end that is not 0, labelled at both ends and at 0 between them; the
+/// target labelled as the host wrote it (`targetText`, in full).
+export function bars(buckets: Bucket[], target: number | null, targetText: string | null): SVGElement {
   const W = 600, H = 180, L = 44, R = 10, T = 10, B = 22;
   const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", class: "chart bars" });
   const vals = buckets.map((b) => b.value ?? 0).concat(target === null ? [] : [target], [0]);
@@ -113,7 +114,7 @@ export function bars(buckets: Bucket[], target: number | null): SVGElement {
   });
   if (target !== null) {
     svg.append(s("line", { x1: L, x2: W - R, y1: y(target), y2: y(target), class: "limit" }));
-    svg.append(s("text", { x: W - R, y: y(target) - 4, class: "axis", "text-anchor": "end" }, `target ${num(target, 2)}`));
+    svg.append(s("text", { x: W - R, y: y(target) - 4, class: "axis", "text-anchor": "end" }, `target ${targetText}`));
   }
   return svg;
 }

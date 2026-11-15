@@ -15,7 +15,7 @@ use veredas_portal::store::{MAX_PAGE, RowsQuery};
 
 use crate::binding::{Aggregate, Binding, CELLS_BINS, CELLS_ROWS_MAX, Column, Limit, Object, Panel, PanelKind};
 use crate::feed::{ObjectView, Snapshot};
-use crate::state::{Reading, StateClass, format_number};
+use crate::state::{Reading, StateClass, format_number, full_number};
 
 /// The points a trend line is drawn with, and a sparkline.
 pub const TREND_POINTS: usize = 300;
@@ -75,7 +75,7 @@ pub fn tile_sub(o: &Object, v: Option<&ObjectView>, target: Option<f64>, now_ms:
         (Some(t), Some(x)) if t != 0.0 => {
             let pct = (x - t) / t.abs() * 100.0;
             let sign = if pct >= 0.0 { "+" } else { "" };
-            format!("{sign}{}% on the {} target", format_number(pct, Some(0)), format_number(t, None))
+            format!("{sign}{}% on the {} target", format_number(pct, Some(0)), full_number(t))
         }
         _ => String::new(),
     }
@@ -171,9 +171,35 @@ pub fn distribution(vals: &[f64], center: f64, spread: f64, bins: usize) -> (Vec
     (counts, below, above)
 }
 
-fn cell_text(v: &Json, decimals: Option<u8>) -> String {
+/// Whether a column's engine type holds numbers: every integer type, signed or not, of any width, a
+/// decimal, a float or a double (the engine's NUMERIC category). Portal writes an integer past 64
+/// bits of such a column as a string of its digits; in a column of any other type a string is text,
+/// whatever its characters.
+pub fn numeric(data_type: &str) -> bool {
+    let t = data_type.trim().to_ascii_uppercase();
+    const NUMBERS: [&str; 12] = ["TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT", "FLOAT", "DOUBLE"];
+    NUMBERS.contains(&t.as_str()) || t == "DECIMAL" || t.starts_with("DECIMAL(")
+}
+
+/// A cell of a numeric column (`digits`) as a number: a JSON number, or the digits portal writes for
+/// an integer past 64 bits, read as the double nearest it.
+fn number_of(v: &Json, digits: bool) -> Option<f64> {
+    match v {
+        Json::Number(n) => n.as_f64(),
+        Json::String(_) if digits => whole(v, true).map(|x| x as f64),
+        _ => None,
+    }
+}
+
+fn cell_text(v: &Json, decimals: Option<u8>, digits: bool) -> String {
     match v {
         Json::Null => String::new(),
+        // The digits portal writes for an integer past 64 bits, in a numeric column: as they are, its
+        // places written as zeros when the column asks for some.
+        Json::String(s) if whole(v, digits).is_some() => match decimals {
+            Some(d) if d > 0 => format!("{s}.{}", "0".repeat(d as usize)),
+            _ => s.clone(),
+        },
         // An integer a double cannot hold (past 2^53) in its own digits, never rounded; its places
         // written as zeros when the column asks for some.
         Json::Number(n) if n.as_i64().map(|i| i.unsigned_abs()).or(n.as_u64()).is_some_and(|i| i > 1 << 53) => match decimals {
@@ -221,13 +247,16 @@ pub fn time_text(v: &Json, clock: Clock) -> String {
         (Clock::Stamp, Some(t)) => t.format("%Y-%m-%d %H:%M:%S").to_string(),
         (Clock::Day, Some(t)) => t.format("%Y-%m-%d").to_string(),
         (Clock::Hour, Some(t)) => t.format("%H:%M:%S").to_string(),
-        (_, None) => cell_text(v, None),
+        (_, None) => cell_text(v, None, false),
     }
 }
 
-fn reading_of(v: &Json) -> Option<Reading> {
+/// A cell as a rule reads it: a number (the digits of an integer past 64 bits too, in a numeric
+/// column, through the double nearest it), a text, a boolean as 1 or 0.
+fn reading_of(v: &Json, digits: bool) -> Option<Reading> {
     match v {
-        Json::Number(n) => n.as_f64().map(Reading::Num),
+        Json::Number(_) => number_of(v, digits).map(Reading::Num),
+        Json::String(_) if whole(v, digits).is_some() => number_of(v, digits).map(Reading::Num),
         Json::String(s) => Some(Reading::Text(s.clone())),
         Json::Bool(b) => Some(Reading::Num(if *b { 1.0 } else { 0.0 })),
         _ => None,
@@ -246,38 +275,40 @@ fn key_text(v: &Json) -> Option<String> {
     }
 }
 
-/// Rows sorted by their column `k`: numbers as numbers, anything else as its text, and nulls
-/// last whichever way the rest goes.
-pub fn sort_rows(rows: &mut [Vec<Json>], k: usize, desc: bool) {
+/// Rows sorted by their column `k`: numbers as numbers (in a numeric column, `digits`, the digits
+/// of an integer past 64 bits among them), anything else as its text, and nulls last whichever way
+/// the rest goes.
+pub fn sort_rows(rows: &mut [Vec<Json>], k: usize, desc: bool, digits: bool) {
     rows.sort_by(|a, b| {
-        let o = compare_cells(&a[k], &b[k]);
+        let o = compare_cells(&a[k], &b[k], digits);
         if desc && !a[k].is_null() && !b[k].is_null() { o.reverse() } else { o }
     });
 }
 
-/// A cell as a whole number, exactly: an integer JSON number, or the digits portal writes for an
-/// integer past 64 bits.
-fn whole(v: &Json) -> Option<i128> {
+/// A cell as a whole number, exactly: an integer JSON number, or, in a numeric column (`digits`),
+/// the digits portal writes for an integer past 64 bits (never a text column's digits).
+fn whole(v: &Json, digits: bool) -> Option<i128> {
     match v {
         Json::Number(n) => n.as_i64().map(i128::from).or_else(|| n.as_u64().map(i128::from)),
-        Json::String(s) if s.len() > 18 && s.strip_prefix('-').unwrap_or(s).bytes().all(|b| b.is_ascii_digit()) => s.parse().ok(),
+        Json::String(s) if digits && s.len() > 18 && s.strip_prefix('-').unwrap_or(s).bytes().all(|b| b.is_ascii_digit()) => s.parse().ok(),
         _ => None,
     }
 }
 
 /// Two cells in a column's order: whole numbers exactly (never through a double, which merges
-/// integers past 2^53), other numbers by their values, anything else as its text.
-fn compare_cells(a: &Json, b: &Json) -> std::cmp::Ordering {
+/// integers past 2^53), other numbers by their values, anything else as its text (a text column's
+/// digits as text: `digits` says the column is numeric).
+fn compare_cells(a: &Json, b: &Json, digits: bool) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (a, b) {
         (Json::Null, Json::Null) => Ordering::Equal,
         (Json::Null, _) => Ordering::Greater,
         (_, Json::Null) => Ordering::Less,
-        _ => match (whole(a), whole(b)) {
+        _ => match (whole(a, digits), whole(b, digits)) {
             (Some(x), Some(y)) => x.cmp(&y),
-            _ => match (a.as_f64().or_else(|| whole(a).map(|x| x as f64)), b.as_f64().or_else(|| whole(b).map(|x| x as f64))) {
+            _ => match (number_of(a, digits), number_of(b, digits)) {
                 (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
-                _ => cell_text(a, None).cmp(&cell_text(b, None)),
+                _ => cell_text(a, None, digits).cmp(&cell_text(b, None, digits)),
             },
         },
     }
@@ -297,13 +328,16 @@ fn table_panel(live: &Live, table: &str, columns: &[Column], sort: &Option<(Stri
         idx.push(i);
     }
     let mut rows: Vec<Vec<Json>> = page.rows.iter().map(|r| idx.iter().map(|i| r.get(*i).cloned().unwrap_or(Json::Null)).collect()).collect();
+    // Each column read by its engine type: a numeric one's digits (an integer past 64 bits) are a
+    // number for its sort, its places, its bar and its rules; any other's are text.
+    let digits: Vec<bool> = idx.iter().map(|i| numeric(&page.columns[*i].data_type)).collect();
     if let Some((col, desc)) = sort {
         let Some(k) = chosen.iter().position(|c| &c.name == col) else {
             return Err(format!("the sort column `{col}` is not shown"));
         };
-        sort_rows(&mut rows, k, *desc);
+        sort_rows(&mut rows, k, *desc, digits[k]);
     }
-    let maxes: Vec<f64> = (0..chosen.len()).map(|k| rows.iter().filter_map(|r| r[k].as_f64()).fold(0.0_f64, |m, v| m.max(v.abs()))).collect();
+    let maxes: Vec<f64> = (0..chosen.len()).map(|k| rows.iter().filter_map(|r| number_of(&r[k], digits[k])).fold(0.0_f64, |m, v| m.max(v.abs()))).collect();
     // A time column (the store keeps a time as milliseconds on its axis) written as its clock reads it.
     let times: Vec<Option<Clock>> = idx.iter().map(|i| clock_of(&page.columns[*i].data_type)).collect();
     let out_rows: Vec<Json> = rows
@@ -315,16 +349,16 @@ fn table_panel(live: &Live, table: &str, columns: &[Column], sort: &Option<(Stri
                     .enumerate()
                     .map(|(k, c)| {
                         let v = &r[k];
-                        let text = match times[k] { Some(clock) => time_text(v, clock), None => cell_text(v, c.decimals) };
+                        let text = match times[k] { Some(clock) => time_text(v, clock), None => cell_text(v, c.decimals, digits[k]) };
                         let mut cell = json!({ "text": text, "value": v });
                         if c.bar {
-                            cell["bar"] = match v.as_f64() {
+                            cell["bar"] = match number_of(v, digits[k]) {
                                 Some(x) if maxes[k] > 0.0 => json!((x.abs() / maxes[k]).clamp(0.0, 1.0)),
                                 _ => json!(0.0),
                             };
                         }
                         if !c.rules.is_empty() {
-                            let reading = reading_of(v);
+                            let reading = reading_of(v, digits[k]);
                             let hit = reading.as_ref().and_then(|x| c.rules.iter().find(|rule| rule.compare.holds(x)));
                             let (class, word) = match hit {
                                 Some(rule) => (rule.class, rule.word.clone()),
@@ -413,6 +447,11 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
     rows.truncate(cap);
     let find = |name: &str| columns.iter().position(|c| c == name).ok_or_else(|| format!("`{table}` has no column `{name}` (its columns: {})", columns.join(", ")));
     let (ki, vi) = (find(key)?, find(value)?);
+    // The value charted is a number: a column of another type is refused, by its engine type.
+    let value_type = types.get(vi).cloned().unwrap_or_default();
+    if !numeric(&value_type) {
+        return Err(format!("`{table}`'s `{value}` is {value_type}, not a number: cells chart a numeric column"));
+    }
     let ti = columns.iter().position(|c| c == "index_ms");
     // A key of a time kind written as the store's clock reads it, as the table writes one.
     let key_clock = types.get(ki).and_then(|t| clock_of(t));
@@ -422,7 +461,7 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
     };
     let mut groups: BTreeMap<String, Vec<(Option<i64>, f64)>> = BTreeMap::new();
     for r in &rows {
-        let (Some(k), Some(v)) = (r.get(ki).and_then(key_of), r.get(vi).and_then(Json::as_f64)) else { continue };
+        let (Some(k), Some(v)) = (r.get(ki).and_then(key_of), r.get(vi).and_then(|v| number_of(v, true))) else { continue };
         let t = ti.and_then(|i| r.get(i)).and_then(Json::as_i64);
         groups.entry(k).or_default().push((t, v));
     }
@@ -493,6 +532,8 @@ fn panel_body(live: &Live, b: &Binding, snap: &Snapshot, p: &Panel, to: i64, now
                 "object": o.id, "unit": o.unit, "from": from, "to": to, "total": raw.len(),
                 "points": pairs(&line), "breaches": pairs(&breaches),
                 "limit": match limit { Some(Limit::Above(x)) => json!({ "above": x }), Some(Limit::Below(x)) => json!({ "below": x }), None => Json::Null },
+                // The limit in full, as the binding writes it, for the page to say.
+                "limit_text": match limit { Some(Limit::Above(x)) | Some(Limit::Below(x)) => json!(full_number(*x)), None => Json::Null },
             })
         }
         PanelKind::Bars { object, minutes, bucket_minutes, aggregate, target } => {
@@ -501,7 +542,7 @@ fn panel_body(live: &Live, b: &Binding, snap: &Snapshot, p: &Panel, to: i64, now
             let bucket_ms = *bucket_minutes as i64 * MINUTE_MS;
             let first = from.div_euclid(bucket_ms) * bucket_ms;
             let raw = points(live, o, first, to);
-            json!({ "object": o.id, "unit": o.unit, "from": first, "to": to, "buckets": buckets(&raw, from, to, bucket_ms, *aggregate), "target": target })
+            json!({ "object": o.id, "unit": o.unit, "from": first, "to": to, "buckets": buckets(&raw, from, to, bucket_ms, *aggregate), "target": target, "target_text": target.map(full_number) })
         }
         PanelKind::Timeline { objects, minutes } => {
             let (from, to) = window(*minutes, to);

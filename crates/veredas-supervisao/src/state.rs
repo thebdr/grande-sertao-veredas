@@ -103,10 +103,11 @@ impl Compare {
         }
     }
 
-    /// The comparison as a person reads it, the unit after the number: `below 98 %`.
+    /// The comparison as a person reads it, the unit after the number: `below 98 %`. Its number in
+    /// full, as the binding writes it (`above 0.0001`, never rounded to the screen's three places).
     pub fn describe(&self, unit: &str) -> String {
         let with_unit = |v: f64| {
-            let n = format_number(v, None);
+            let n = full_number(v);
             if unit.is_empty() { n } else { format!("{n} {unit}") }
         };
         match self {
@@ -118,6 +119,15 @@ impl Compare {
             Compare::AtMost(x) => format!("at most {}", with_unit(*x)),
         }
     }
+}
+
+/// A number a person wrote (a rule's threshold, a target, a limit) in full: the shortest text that
+/// reads back as the same double, never with an exponent, never `-0`.
+pub fn full_number(v: f64) -> String {
+    if v == 0.0 {
+        return "0".to_string();
+    }
+    format!("{v}")
 }
 
 /// A number as the screen shows it: with `decimals` places when given, else as it reads with at

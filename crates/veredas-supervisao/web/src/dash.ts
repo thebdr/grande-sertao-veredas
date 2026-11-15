@@ -60,13 +60,14 @@ function valueTile(p: PanelOut): HTMLElement {
 function trendPanel(p: PanelOut): HTMLElement {
   const d = p.data;
   const limit = d.limit ? (d.limit.above ?? d.limit.below) : null;
-  const right = d.limit ? `${d.limit.above !== undefined ? "max" : "min"} ${num(limit)}${d.unit ? " " + d.unit : ""} · ${d.breaches.length} breach${d.breaches.length === 1 ? "" : "es"}` : `${d.total} points`;
+  // The limit as the host wrote it, in full (the binding's own number, never rounded here).
+  const right = d.limit ? `${d.limit.above !== undefined ? "max" : "min"} ${d.limit_text}${d.unit ? " " + d.unit : ""} · ${d.breaches.length} breach${d.breaches.length === 1 ? "" : "es"}` : `${d.total} points`;
   return h("div", { class: "panel" }, head(p.title, right), trend(d.points, d.breaches, d.from, d.to, limit, d.unit));
 }
 
 function barsPanel(p: PanelOut): HTMLElement {
   const d = p.data;
-  return h("div", { class: "panel" }, head(p.title, d.target !== null ? `target ${num(d.target)}${d.unit ? " " + d.unit : ""}` : undefined), bars(d.buckets as Bucket[], d.target));
+  return h("div", { class: "panel" }, head(p.title, d.target !== null ? `target ${d.target_text}${d.unit ? " " + d.unit : ""}` : undefined), bars(d.buckets as Bucket[], d.target, d.target_text));
 }
 
 function timelinePanel(p: PanelOut): HTMLElement {
