@@ -515,3 +515,31 @@ shapes, or move it out of the group). A construct Inkscape does not write is ans
 reader, never by teaching the page a new one. No Inkscape is installed here and the operator
 supplies no saved file: the fixture is a drawing written by hand to Inkscape 1.3's format, and no
 file saved by Inkscape has gone through the reader or the page (C-048 and C-051 state it).
+
+## Q26 - Does supervisão's name check guard against deliberate hiding?
+
+**Raised** 2026-11-15, by the orchestrator, from the trend of C-047's refute rounds.
+
+After fourteen rounds the component check (no device, vendor, product or customer named in any file
+under the crate; nothing compiled in from outside it; nothing brought into its graph but through
+core and portal) was refuted only by constructions made to evade it: a name split by a character
+entity nested eight levels deep, a file hidden from the check by a git index flag, a cargo
+configuration placed in a folder between the crate and the repository's root. Each was answered,
+and each answer invited the next.
+
+**Taken meanwhile**: every construction answered as it came.
+
+**Decided** 2026-11-15 (the operator, asked "Should supervisão's name check guard against accidents
+only, not deliberate hiding?"): "Accidents only" (the other choice read "Deliberate hiding too").
+The check is for a change made in good faith with ordinary tools: a name written as an editor, a
+formatter or the build toolchain writes text; a dependency, a file or a source brought in the ways
+cargo, the compiler and git work in ordinary use. It lists the forms it reads. Deliberate
+concealment is outside it: a name encoded, split, nested or computed so that it is not read; a
+tool's flags or configuration used to keep a file or a source away from the check. The orchestrator
+reads the answer as the threat model of the whole clause, both its halves (the name scan, and what
+is compiled in or brought into the graph), the examples the operator read coming from both.
+Nothing built comes out: every check and test stays, the ruling ends the escalation. A refutation of
+C-047 is a way a good-faith change gets past the check, named with the tool or the workflow that
+produces it; a construction whose only purpose is to evade is no finding. The ruling is C-047's
+alone: the reader's refusals of script and foreign content (C-048) keep their adversary, a layout
+being a file from outside the repository.

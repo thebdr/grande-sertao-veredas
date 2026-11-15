@@ -94,6 +94,9 @@ the gateway, the desktop, the supervision app) each did.
 - **Content-agnostic** (Q8): no device, vendor, product or customer named in code, comments, tests,
   fixtures or the built bundle; the sample plants are invented and named for their shape. The
   component test reads every file git holds or could hold under the crate, `web/dist/` included.
+  It guards against accidents, not deliberate hiding (Q26, decided 2026-11-15): a name written as an
+  editor, a formatter or the build toolchain writes text, a file or a source brought in as cargo,
+  the compiler and git work in ordinary use; a name or a file concealed on purpose is outside it.
 - **The browser decides nothing.** States, staleness, positions and every panel's numbers are
   computed in Rust and tested there with exact values; the page maps what it receives onto the SVG
   and the panels, and is verified by driving it (`zen-verify`), never by a unit test alone.
