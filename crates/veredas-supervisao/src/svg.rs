@@ -33,6 +33,13 @@ pub const DC_NS: &str = "http://purl.org/dc/elements/1.1/";
 /// nothing: no check of the reader's and no rule of the page's names one.
 pub const EDITOR: [(&str, &[&str]); 5] = [(SODIPODI_NS, &["svg", "defs"]), (INKSCAPE_NS, &["svg", "defs"]), (RDF_NS, &["metadata"]), (CC_NS, &[]), (DC_NS, &[])];
 
+/// Inkscape's script beside a mesh gradient and beside an SVG2 hatch, which a browser cannot draw,
+/// by the id Inkscape gives each (Q27, decided 2026-11-15: "Drop the script, load it"). Where
+/// Inkscape writes it (a `script` of the root's own, writing nothing but its id and a type) it is
+/// dropped on read with all it holds, as Inkscape's other elements are, and the mesh or the hatch is
+/// drawn as the browser draws it, which is nothing; any other script is refused.
+pub const POLYFILLS: [&str; 2] = ["mesh_polyfill", "hatch_polyfill"];
+
 /// The elements the page draws an object on: a group, the shapes it paints, a text.
 pub const DRAWN: [&str; 9] = ["g", "rect", "circle", "ellipse", "path", "polygon", "polyline", "line", "text"];
 
@@ -132,6 +139,18 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
                 let within = parent.map(|p| p.tag_name().name().to_string()).unwrap_or_default();
                 return Err(format!("{} holds an Inkscape element (<{name}> of `{ns}`) inside a <{within}>, where Inkscape writes none: its editor's state stands beside the drawing (a child of its root) or in the root's `defs`, its metadata in the root's `metadata`", path.display()));
             }
+            dropped.push(node.range());
+            continue;
+        }
+        // Inkscape's script for a mesh or a hatch, where and as Inkscape writes it (`POLYFILLS`):
+        // dropped, never run (the page removes every script before it draws, and neither of the
+        // host's policies runs one).
+        let polyfill = name == "script"
+            && node.tag_name().namespace() == Some(SVG_NS)
+            && node.parent_element() == Some(root)
+            && node.attribute("id").is_some_and(|id| POLYFILLS.contains(&id))
+            && node.attributes().all(|a| a.namespace().is_none() && matches!(a.name(), "id" | "type"));
+        if polyfill {
             dropped.push(node.range());
             continue;
         }

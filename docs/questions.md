@@ -463,8 +463,10 @@ host or run script rests on the header, proven in the browser by putting every k
 script straight into the page and the drawing (C-049). Limits: a link navigates on a click and
 loads nothing by itself; the browser may open a bare connection to a frame's host (its preconnect)
 before its policy refuses the frame, asking nothing; portal's nested surface answers with its own
-headers; the policy is the browser's to enforce. Another site framing the page is not barred (no
-`frame-ancestors`, which the ruling did not ask for; a press there still asks its question).
+headers; the policy is the browser's to enforce. Another site framing the page was not barred by
+this ruling; the operator barred it on 2026-11-15 (a site open in the same browser could lay the
+page under its own clicks): both policies say `frame-ancestors 'none'`, so no page shows the page or
+the drawing inside a frame, and a page meant to frame supervisão's would have to be named there.
 (Before the ruling, while Q25 stood, the question had no effect on a sheet: the reader refuses a
 layout's `<style>` sheet altogether, and Inkscape writes none.)
 
@@ -581,3 +583,12 @@ state it as a limit; (c) drop Inkscape's polyfill script on read like its other 
 let a mesh draw as the browser draws it (nothing).
 
 **Taken meanwhile** (the most reversible): (b), nothing changed; the clause states the limit.
+
+**Decided** 2026-11-15, by the operator: "Drop the script, load it", (c), against the recommendation.
+The reader drops Inkscape's script beside a mesh gradient or a hatch (`svg::POLYFILLS`:
+`mesh_polyfill`, `hatch_polyfill`) where and as Inkscape writes it, a `script` of the root's own
+writing nothing but its id and a type, with all it holds, as it drops Inkscape's other elements;
+the drawing loads, and the shape filled with the mesh or the hatch shows no fill on the page, with
+no message. Any other script stays refused: the operator was asked about Inkscape's alone. The
+script runs nowhere: the page removes every script before it draws, and neither of the host's
+policies runs one (C-048, C-049).

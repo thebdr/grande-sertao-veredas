@@ -977,8 +977,8 @@ impl Drop for OtherHost {
     }
 }
 
-/// A server on this machine answering every request with `body` as an SVG drawing and no policy at
-/// all (the control for the drawing served alone), until it is dropped.
+/// A server on this machine answering every request with `body` and no policy at all (an SVG
+/// drawing: the control for the drawing served alone; or a page of another origin), until dropped.
 struct Plain {
     port: u16,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -987,6 +987,10 @@ struct Plain {
 
 impl Plain {
     fn serve(body: String) -> Plain {
+        Plain::serve_as(body, "image/svg+xml")
+    }
+
+    fn serve_as(body: String, kind: &'static str) -> Plain {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
         l.set_nonblocking(true).unwrap();
@@ -1004,7 +1008,7 @@ impl Plain {
                             while r.read_line(&mut line).is_ok_and(|n| n > 2) {
                                 line.clear();
                             }
-                            let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: image/svg+xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                            let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
                         }
                         Err(_) => std::thread::sleep(Duration::from_millis(20)),
                     }
@@ -1071,15 +1075,21 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     let dir = tempfile::tempdir().unwrap();
     let (a, b) = (plant(&dir.path().join("bench-a")), plant(&dir.path().join("bench-b")));
     let path = two_plants(dir.path(), &a, &b);
-    // A picture embedded in loop's drawing, beside the objects.
+    // The other host, which counts (a connection made from here is seen, asking nothing).
+    let other = OtherHost::start();
+    // A picture embedded in loop's drawing, beside the objects; and Inkscape's script beside a mesh
+    // gradient as the root's last child (Q27, decided: the reader drops it and loads the drawing),
+    // its code asking the other host, so a run of it anywhere is seen.
     let svg_path = dir.path().join("loop/layout.svg");
     let svg = std::fs::read_to_string(&svg_path).unwrap();
     assert!(svg.contains("</svg>"));
-    std::fs::write(&svg_path, svg.replacen("</svg>", "  <image id=\"pic\" x=\"2\" y=\"2\" width=\"8\" height=\"8\" href=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==\"/>\n</svg>", 1)).unwrap();
+    let polyfill = format!("  <script id=\"mesh_polyfill\" type=\"text/javascript\"><![CDATA[\n// Use Canvas to render a mesh gradient, passing the rendering to an image via a data stream.\nfetch(\"{}/polyfill-ran\");\n]]></script>\n", other.address());
+    std::fs::write(&svg_path, svg.replacen("</svg>", &format!("  <image id=\"pic\" x=\"2\" y=\"2\" width=\"8\" height=\"8\" href=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==\"/>\n{polyfill}</svg>"), 1)).unwrap();
+    let polyfill_ran = |from: usize| other.requests_since(from).iter().any(|l| l.contains("/polyfill-ran"));
     let host = Host::start(config::load_file(&path).unwrap()).unwrap();
     let addr = host.addr();
-    const PAGE: &str = "default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'";
-    const DRAWING: &str = "default-src 'none'; style-src-attr 'unsafe-inline'; img-src data:; sandbox";
+    const PAGE: &str = "default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+    const DRAWING: &str = "default-src 'none'; style-src-attr 'unsafe-inline'; img-src data:; sandbox; frame-ancestors 'none'";
     for p in ["/", "/s/loop", "/s/loop/", "/s/hall/"] {
         let (status, h) = headers_of(addr, p);
         assert_eq!((status, h.get("content-security-policy").map(String::as_str), h.get("x-content-type-options").map(String::as_str)), (200, Some(PAGE), Some("nosniff")), "{p}");
@@ -1092,8 +1102,6 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
         assert!(!h.contains_key("content-security-policy"), "{p}: a policy on an answer no browser renders as the page");
     }
 
-    // The other host, which counts (a connection made from here is seen, asking nothing).
-    let other = OtherHost::start();
     drop(TcpStream::connect(("127.0.0.1", other.port)).unwrap());
     assert!(wait(Duration::from_secs(5), || other.count() == 1), "the listener counts");
     let other_js = serde_json::to_string(&other.address()).unwrap();
@@ -1169,11 +1177,16 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     // The drawing opened alone, at its own route: an origin of no one's (the sandbox). Each of its
     // kinds live in the same drawing served with no policy from this machine (it asks the other host
     // or runs), and in the drawing alone asking nothing and running nothing.
+    // Inkscape's script in the drawing ran nowhere in the page, on any of its screens (the page drops
+    // every script before it draws); served with no policy, it runs (the probe live).
+    assert!(!polyfill_ran(0), "Inkscape's script beside the mesh ran in the page");
+    let plain_from = other.count();
     let plain = Plain::serve(std::fs::read_to_string(&svg_path).unwrap());
     let mut bare = Browser::open("about:blank");
     bare.call("Page.enable", json!({}));
     bare.navigate_loaded(&format!("http://127.0.0.1:{}/layout.svg", plain.port), Duration::from_secs(20));
     bare.wait_for("document.documentElement && document.documentElement.tagName === 'svg' ? true : null", Duration::from_secs(20));
+    assert!(wait(Duration::from_secs(10), || polyfill_ran(plain_from)), "Inkscape's script live in the drawing served with no policy");
     let drawing_kinds: Vec<(String, String)> = bare.eval(DRAWING_KINDS).as_array().unwrap().iter().map(|k| (k[0].as_str().unwrap().to_string(), k[1].as_str().unwrap().to_string())).collect();
     let mut drawing_live = std::collections::BTreeSet::new();
     let mut drawing_silent = Vec::new();
@@ -1196,6 +1209,7 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     // (Waited for through the protocol's page events, never by evaluating into it while it commits:
     // a sandboxed document can then offer no context, CI's red on 114bcc8.)
     let drawing = format!("http://{addr}/s/loop/layout.svg");
+    let alone_from = other.count();
     let mut alone = Browser::open("about:blank");
     alone.call("Page.enable", json!({}));
     alone.navigate_loaded(&drawing, Duration::from_secs(20));
@@ -1217,7 +1231,40 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
         alone.navigate_loaded(&drawing, Duration::from_secs(20));
         assert_eq!(alone.eval("window.origin"), json!("null"), "open {i}");
     }
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!polyfill_ran(alone_from), "Inkscape's script ran in the drawing alone");
     drop(alone);
+
+    // Framed by another site (the operator's ruling of 2026-11-15, both policies' `frame-ancestors`):
+    // a page of another origin framing the page and the drawing's route sees each refused, by the
+    // browser's own report of the directive (one per frame, naming the host's origin, as the browser
+    // reports a frame), and no document of either in its frames; a file of the host's that carries
+    // no policy, framed beside them, shown (the control).
+    let page_url = format!("http://{addr}/s/loop/");
+    let control = format!("http://{addr}/assets/app.css");
+    let framer = Plain::serve_as(format!("<!doctype html><title>framer</title><iframe src=\"{page_url}\"></iframe><iframe src=\"{drawing}\"></iframe><iframe src=\"{control}\"></iframe>"), "text/html; charset=utf-8");
+    let mut outer = Browser::open("about:blank");
+    outer.call("Page.enable", json!({}));
+    outer.call("Log.enable", json!({}));
+    outer.navigate_loaded(&format!("http://127.0.0.1:{}/", framer.port), Duration::from_secs(20));
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let tree = outer.call("Page.getFrameTree", json!({}));
+        let kids: Vec<String> = tree["frameTree"]["childFrames"].as_array().map(|c| c.iter().map(|f| f["frame"]["url"].as_str().unwrap_or("").to_string()).collect()).unwrap_or_default();
+        let said: Vec<String> = outer.events_of("Log.entryAdded").iter().map(|e| e["params"]["entry"]["text"].as_str().unwrap_or("").to_string()).collect();
+        let refused = said.iter().filter(|t| t.contains("frame-ancestors 'none'") && t.contains(&format!("'http://{addr}/'"))).count();
+        if kids.contains(&control) && refused >= 2 {
+            std::thread::sleep(Duration::from_millis(300));
+            let said = outer.events_of("Log.entryAdded").iter().filter(|e| e["params"]["entry"]["text"].as_str().is_some_and(|t| t.contains("frame-ancestors"))).count();
+            assert_eq!(said, 2, "a refusal for each of the two framed documents with the directive, none for the control");
+            assert!(!kids.contains(&page_url) && !kids.contains(&drawing), "a refused frame holding its document: {kids:?}");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the page and the drawing never refused in another site's frames, or the control never shown: {kids:?} {said:?}");
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    drop(outer);
+    drop(framer);
     drop(page);
     drop(other);
     host.stop();

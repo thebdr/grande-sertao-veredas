@@ -276,11 +276,14 @@ A path is relative to the binding file's folder.
   root's `defs`, `rdf:RDF` in the root's `metadata` with `cc:*` and `dc:*` inside it) dropped on
   read, unread, with all they hold (nothing of them reaches the page); its attributes in those
   namespaces on the drawing's elements read by nothing. A picture in it is embedded (Q23: an
-  image's `href`, plain or `xlink:`, a `data:image/…` URI, Inkscape's "Embed"). The page loads and
-  runs nothing a drawing points to elsewhere: the host serves it under a content policy that lets
-  the browser load and run the page's own files alone, and the drawing's own route under one that
-  runs and loads nothing but its embedded pictures. Without one the session has dashboards and
-  no layout view.
+  image's `href`, plain or `xlink:`, a `data:image/…` URI, Inkscape's "Embed"). Inkscape's script
+  beside a mesh gradient or a hatch (a `script` of the root's own with the id `mesh_polyfill` or
+  `hatch_polyfill`, writing nothing else but a type) is dropped the same way (Q27), the mesh or the
+  hatch then drawn as the browser draws it, which is nothing; any other script is refused. The page
+  loads and runs nothing a drawing points to elsewhere: the host serves it under a content policy
+  that lets the browser load and run the page's own files alone, and the drawing's own route under
+  one that runs and loads nothing but its embedded pictures; neither may be shown inside another
+  page's frame. Without one the session has dashboards and no layout view.
 - `headline` (none): object IDs shown in the top bar, in order.
 - `object` (none): `[[object]]` tables.
 - `dashboard` (none): `[[dashboard]]` tables.

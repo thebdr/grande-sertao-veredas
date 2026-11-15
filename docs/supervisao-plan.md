@@ -87,7 +87,8 @@ the gateway, the desktop, the supervision app) each did.
 - **The plant model is configuration.** A binding file and an SVG, plain text, written by a person
   or by anything; no export, workbook or vendor project format is read (Q18). The layout's geometry
   is the SVG's, never computed from a plant's data. The layout is drawn in Inkscape (Q25, decided
-  2026-11-15) and read as Inkscape saves it, its editor's own elements dropped; a construct
+  2026-11-15) and read as Inkscape saves it, its editor's own elements dropped (its script beside
+  a mesh gradient or a hatch among them, Q27, the mesh then showing no fill); a construct
   Inkscape does not write is answered at the reader (refused by name), never by teaching the page
   a new construct. Naming the drawing tool is the operator's decision on the file format, not plant
   content (Q8 keeps the plant's devices, vendors and customers out).
@@ -103,7 +104,8 @@ the gateway, the desktop, the supervision app) each did.
 - **The page loads its own files alone** (Q23, decided 2026-11-15). The reader asks a drawing's
   pictures to be embedded; the host serves the page under a content policy that lets the browser
   load and run the page's own files alone, and the drawing's own route sandboxed, so nothing a
-  drawing points to on another host is loaded or run, whatever its syntax.
+  drawing points to on another host is loaded or run, whatever its syntax; and no other page may
+  show the page, or the drawing, inside a frame (the operator's ruling of 2026-11-15).
 - **Every state has a mark and a word** (the design's rule): normal ●, near ■, warn ■, alarm !,
   disabled ▨, stale ◌, selected ◆. A rule names the class and the word ("full", "stopped",
   "fault"); the accent (Veredas' green `#30D158`, Q22) marks selection, focus and primary actions, never a

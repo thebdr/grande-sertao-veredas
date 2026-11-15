@@ -154,12 +154,15 @@ fn text(content_type: &'static str, body: &'static str) -> Response {
 /// `style` attribute, in which Inkscape writes a drawing's paint), pictures its own or embedded
 /// (`data:`), connections to its own address (the feed, the reads, a write) and fonts its own;
 /// nothing else of any kind (a frame, an object, a worker, a manifest), no base address moved, a
-/// form sent nowhere but here.
-pub const PAGE_POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'";
+/// form sent nowhere but here; and no page anywhere may show it inside a frame (the operator's
+/// ruling of 2026-11-15: a site open in the same browser cannot lay the page under its own clicks).
+/// A page meant to frame supervisão's would have to be named here.
+pub const PAGE_POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 /// The drawing's own route's policy (Q23): opened alone, the drawing is a document that runs
-/// nothing and loads nothing but its embedded pictures, sandboxed (an origin of its own, no script).
-pub const DRAWING_POLICY: &str = "default-src 'none'; style-src-attr 'unsafe-inline'; img-src data:; sandbox";
+/// nothing and loads nothing but its embedded pictures, sandboxed (an origin of its own, no script),
+/// framed by no page either (the page reads the drawing's text, never frames it).
+pub const DRAWING_POLICY: &str = "default-src 'none'; style-src-attr 'unsafe-inline'; img-src data:; sandbox; frame-ancestors 'none'";
 
 async fn index() -> Response {
     let mut r = text("text/html; charset=utf-8", web::INDEX_HTML);

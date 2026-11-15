@@ -1019,11 +1019,14 @@ A path is relative to the binding file's folder.
   root's `defs`, `rdf:RDF` in the root's `metadata` with `cc:*` and `dc:*` inside it) dropped on
   read, unread, with all they hold (nothing of them reaches the page); its attributes in those
   namespaces on the drawing's elements read by nothing. A picture in it is embedded (Q23: an
-  image's `href`, plain or `xlink:`, a `data:image/…` URI, Inkscape's "Embed"). The page loads and
-  runs nothing a drawing points to elsewhere: the host serves it under a content policy that lets
-  the browser load and run the page's own files alone, and the drawing's own route under one that
-  runs and loads nothing but its embedded pictures. Without one the session has dashboards and
-  no layout view.
+  image's `href`, plain or `xlink:`, a `data:image/…` URI, Inkscape's "Embed"). Inkscape's script
+  beside a mesh gradient or a hatch (a `script` of the root's own with the id `mesh_polyfill` or
+  `hatch_polyfill`, writing nothing else but a type) is dropped the same way (Q27), the mesh or the
+  hatch then drawn as the browser draws it, which is nothing; any other script is refused. The page
+  loads and runs nothing a drawing points to elsewhere: the host serves it under a content policy
+  that lets the browser load and run the page's own files alone, and the drawing's own route under
+  one that runs and loads nothing but its embedded pictures; neither may be shown inside another
+  page's frame. Without one the session has dashboards and no layout view.
 - `headline` (none): object IDs shown in the top bar, in order.
 - `object` (none): `[[object]]` tables.
 - `dashboard` (none): `[[dashboard]]` tables.
@@ -2577,6 +2580,60 @@ fn every_state_and_every_kind_of_value_a_rule_meets_by_the_reader_s_own_lists() 
 /// other foreign namespace stays refused. An object's element or a marker's path in a hidden layer
 /// (`display: none`, in a `style` as Inkscape writes it or as an attribute) is refused, the hiding
 /// element named.
+/// Q27 (decided 2026-11-15: "Drop the script, load it"): Inkscape's script beside a mesh gradient and
+/// beside an SVG2 hatch, as Inkscape writes it (the root's last child, its id, a type, its code in a
+/// CDATA section), dropped on read with all it holds, for each id of the reader's own list
+/// (`POLYFILLS`), the drawing and its mesh or hatch kept; and loaded through the binding. Any other
+/// script stays refused: another id or none, the same id where Inkscape writes none (in `defs`, in a
+/// group, in a nested drawing), writing anything else (a source by `href` or `xlink:href`, a handler,
+/// an attribute of any other name or namespace), or a `script` of another namespace.
+#[test]
+fn inkscapes_script_beside_a_mesh_or_a_hatch_is_dropped_and_no_other() {
+    use veredas_supervisao::svg::{POLYFILLS, SVG_NS, parse};
+    assert_eq!(POLYFILLS, ["mesh_polyfill", "hatch_polyfill"]);
+    let p = std::path::Path::new("l.svg");
+    let refused = "l.svg holds a <script> element: a layout is a drawing, with no script and no foreign content";
+    let code = "<![CDATA[\n// Use Canvas to render a mesh gradient, passing the rendering to an image via a data stream.\n(function () { if (document.querySelector('x') < 1) { return; } })();\n]]>";
+    let paint = |id: &str| if id == "mesh_polyfill" {
+        ("<meshgradient id=\"mg\" x=\"0\" y=\"0\" gradientUnits=\"userSpaceOnUse\"><meshrow id=\"mr\"><meshpatch id=\"mp\"><stop path=\"c 3,0 7,0 10,0\" style=\"stop-color:#ff0000;stop-opacity:1\" id=\"s1\"/><stop path=\"c 0,3 0,7 0,10\" style=\"stop-color:#00ff00;stop-opacity:1\" id=\"s2\"/></meshpatch></meshrow></meshgradient>", "url(#mg)")
+    } else {
+        ("<hatch id=\"hg\" hatchUnits=\"userSpaceOnUse\" pitch=\"4\" rotate=\"45\"><hatchpath d=\"L 0,4\" style=\"stroke:#000000;stroke-width:1\" id=\"hp\"/></hatch>", "url(#hg)")
+    };
+    let drawing = |id: &str, script: &str| {
+        let (defs, fill) = paint(id);
+        format!("<svg xmlns=\"{SVG_NS}\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" viewBox=\"0 0 10 10\" id=\"svg1\"><defs id=\"defs1\">{defs}</defs><g id=\"layer1\"><rect id=\"r\" width=\"10\" height=\"10\" style=\"fill:{fill}\"/></g>{script}</svg>")
+    };
+    for id in POLYFILLS {
+        let script = format!("<script id=\"{id}\" type=\"text/javascript\">{code}</script>");
+        let l = parse(&drawing(id, &script), p).unwrap_or_else(|e| panic!("{id}: {e}"));
+        assert!(!l.ids.contains_key(id) && ["svg1", "defs1", "layer1", "r"].iter().all(|k| l.ids.contains_key(*k)), "{id}: dropped, the drawing and its paint kept: {:?}", l.ids.keys().collect::<Vec<_>>());
+        assert!(l.ids.contains_key(if id == "mesh_polyfill" { "mg" } else { "hg" }), "{id}: the mesh or the hatch kept, the browser drawing it as it does");
+        // Loaded through the binding, an object on the shape it paints.
+        let mut ex = example();
+        ex.svg = common::INKSCAPE_LOOP.replacen("</svg>", &format!("  {script}\n</svg>"), 1);
+        assert!(outcome(&ex).is_ok(), "{id}: Inkscape's drawing with its script: {:?}", outcome(&ex).err());
+        // Any other script, refused as before.
+        let others = [
+            format!("<script id=\"{id}x\" type=\"text/javascript\">{code}</script>"),
+            format!("<script type=\"text/javascript\">{code}</script>"),
+            format!("<script id=\"{id}\" type=\"text/javascript\" href=\"poly.js\"></script>"),
+            format!("<script id=\"{id}\" xlink:href=\"poly.js\"></script>"),
+            format!("<script id=\"{id}\" type=\"text/javascript\" onload=\"x()\">{code}</script>"),
+            format!("<script id=\"{id}\" type=\"text/javascript\" async=\"\">{code}</script>"),
+            format!("<script id=\"{id}\" xml:space=\"preserve\">{code}</script>"),
+        ];
+        for other in &others {
+            assert_eq!(parse(&drawing(id, other), p).unwrap_err(), refused, "{other}");
+        }
+        for (open, close) in [("<defs>", "</defs>"), ("<g id=\"g9\">", "</g>"), ("<svg id=\"inner\">", "</svg>")] {
+            let svg = drawing(id, &format!("{open}{script}{close}"));
+            assert_eq!(parse(&svg, p).unwrap_err(), refused, "{id} in {open}");
+        }
+        let foreign = drawing(id, &format!("<s:script xmlns:s=\"urn:not-svg\" id=\"{id}\">{code}</s:script>"));
+        assert_eq!(parse(&foreign, p).unwrap_err(), refused, "{id} of another namespace");
+    }
+}
+
 #[test]
 fn a_drawing_saved_as_inkscape_saves_it_loads_its_editor_dropped() {
     use common::INKSCAPE_LOOP;
