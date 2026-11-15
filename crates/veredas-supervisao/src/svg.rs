@@ -204,7 +204,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
                     apart: up.iter().map(|a| a.tag_name().name()).find(|n| !AROUND.contains(n)).map(String::from),
                     holds: node.descendants().skip(1).filter(|d| d.is_element()).map(|d| d.tag_name().name()).find(|n| !HOLDS.contains(n)).map(String::from),
                     important: node.descendants().filter(|d| d.is_element()).any(|d| important(&d)),
-                    hidden: node.ancestors().filter(|a| a.is_element()).find(|a| a.attribute("display").is_some_and(|v| v.trim().eq_ignore_ascii_case("none")) || a.attribute("style").is_some_and(|s| style_values(s, "display").iter().any(|v| v == "none"))).map(|a| match a.attribute("id") {
+                    hidden: node.ancestors().filter(|a| a.is_element()).find(|a| a.attribute("display").is_some_and(|v| style_values(&format!("display:{v}"), "display").iter().any(|x| x == "none")) || a.attribute("style").is_some_and(|s| style_values(s, "display").iter().any(|v| v == "none"))).map(|a| match a.attribute("id") {
                         Some(id) => format!("<{}> `{id}`", a.tag_name().name()),
                         None => format!("<{}>", a.tag_name().name()),
                     }),

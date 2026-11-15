@@ -559,3 +559,25 @@ C-047 is a way a good-faith change gets past the check, named with the tool or t
 produces it; a construction whose only purpose is to evade is no finding. The ruling is C-047's
 alone: the reader's refusals of script and foreign content (C-048) keep their adversary, a layout
 being a file from outside the repository.
+
+## Q27 - What does the reader do with a mesh gradient Inkscape saves with its script?
+
+**Raised** 2026-11-15, by C-048's thirteenth refute round (from Inkscape's source, not run here: no
+Inkscape is installed).
+
+When a drawing's `defs` hold a mesh gradient (Fill and Stroke offers one in a click), Inkscape 1.x
+saves a script beside it, `<script id="mesh_polyfill">` as the root's last child, which draws the
+mesh in a browser that cannot (Chromium among them). A preference governs it (Edit › Preferences ›
+Input/Output › SVG export, "Insert JavaScript code for mesh gradients", on by default, as the
+critic read the source); an SVG2 hatch gets a `hatch_polyfill` the same way. The reader refuses the
+script as any script ("holds a <script> element: a layout is a drawing, with no script and no
+foreign content"), naming a script the engineer never wrote and giving no step in Inkscape. Without
+the script the mesh loads, and Chromium draws it as nothing (the host's policy would bar the
+polyfill anyway, Q23).
+
+The choices: (a) refuse a mesh gradient and a hatch by name, with the step in Inkscape (a flat,
+linear or radial fill instead, or the preference unticked); (b) keep refusing the script as now and
+state it as a limit; (c) drop Inkscape's polyfill script on read like its other editor elements and
+let a mesh draw as the browser draws it (nothing).
+
+**Taken meanwhile** (the most reversible): (b), nothing changed; the clause states the limit.

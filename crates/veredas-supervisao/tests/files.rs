@@ -1450,10 +1450,12 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
     let moving: Vec<String> = MOVING.iter().map(|p| p.to_string()).chain(MOVING_FAMILIES.iter().flat_map(|f| [f.to_string(), longhand(f)])).collect();
     for prop in &moving {
         let escaped = format!("\\{:x} {}", prop.chars().next().unwrap() as u32, &prop[1..]);
+        // At every place: the root, a group around the object, the object's element, inside it and
+        // beside it at every depth.
         for style in [format!("{prop}: x"), format!("fill: red; {prop}: x"), format!("-webkit-{prop}: x"), format!("{escaped}: x"), format!("/* note */ {}: x", prop.to_uppercase())] {
-            for (open, close) in depths {
-                let got = binding_refusal(&with_svg(INFEED, &format!("{INFEED}{open}<rect style=\"{style}\"/>{close}")));
-                assert!(got.ends_with(&format!("layout.svg holds `{prop}` (on <rect>), which would move, time or unpin what the page writes: the page places, animates and takes the clicks itself")), "{style} {open}: {got}");
+            for (place, el, ex) in places(&format!("style=\"{style}\"")) {
+                let got = binding_refusal(&ex);
+                assert!(got.ends_with(&format!("layout.svg holds `{prop}` (on <{el}>), which would move, time or unpin what the page writes: the page places, animates and takes the clicks itself")), "{style}, {place}: {got}");
             }
         }
     }
@@ -1461,6 +1463,21 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
         for (place, el, ex) in places(&format!("{attr}=\"none\"")) {
             assert!(binding_refusal(&ex).ends_with(&format!("layout.svg holds `{attr}` (on <{el}>), which would move, time or unpin what the page writes: the page places, animates and takes the clicks itself")), "{attr}, {place}");
         }
+    }
+    // A script and foreign content refused at every depth, beside the object and inside its element;
+    // an event handler at every place (the root, a group around the object, the object's element,
+    // inside it and beside it at every depth).
+    for el in ["script", "foreignObject"] {
+        for (open, close) in depths {
+            for svg in [format!("{INFEED}{open}<{el}/>{close}"), format!("<g id=\"infeed\">{open}<rect/><{el}/>{close}</g>")] {
+                let got = binding_refusal(&with_svg(INFEED, &svg));
+                assert!(got.ends_with(&format!("layout.svg holds a <{el}> element: a layout is a drawing, with no script and no foreign content")), "{svg}: {got}");
+            }
+        }
+    }
+    for (place, el, ex) in places("onclick=\"alert(1)\"") {
+        let got = binding_refusal(&ex);
+        assert!(got.ends_with(&format!("layout.svg holds an event handler (`onclick` on <{el}>): a layout is a drawing, with no script")), "{place}: {got}");
     }
     // Near misses, at every place: a `style` of other properties, one whose value only names a
     // moving one, a name split by a comment or white space (no declaration, as CSS reads it), and the
@@ -2624,7 +2641,9 @@ fn a_drawing_saved_as_inkscape_saves_it_loads_its_editor_dropped() {
     // case, a priority, a comment, an escape, and among other `display` declarations wherever it
     // stands: the reader fails closed on any `none`), and as an attribute (trimmed, any case).
     let styles = ["display:none", "opacity:1;DISPLAY : None", "display:none !important", "display:none !important;display:inline", "display:none;display:bogus", "display:none;display:", "display:inline;display:none", "display:/* c */none", "display:\\6e one"];
-    let attributes = ["display=\"none\"", "display=\" NONE \""];
+    // As an attribute read as CSS reads it, as a browser reads a presentation attribute: trimmed, in
+    // any case, a comment before or after, an escape.
+    let attributes = ["display=\"none\"", "display=\" NONE \"", "display=\"/**/none\"", "display=\"none/* hidden */\"", "display=\"\\6e one\"", "display=\"n\\one\""];
     let outlet = "style=\"fill:#cccccc;stroke:#000000;stroke-width:0.264583\"\n         id=\"outlet-1\"";
     let loop_style = "stroke-opacity:1\"\n       d=\"M 80,40";
     let g1_open = "<g\n       id=\"g1\"\n       inkscape:label=\"Outlets\">";
