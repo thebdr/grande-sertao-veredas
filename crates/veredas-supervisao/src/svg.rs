@@ -22,10 +22,12 @@ pub const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 pub const CC_NS: &str = "http://creativecommons.org/ns#";
 pub const DC_NS: &str = "http://purl.org/dc/elements/1.1/";
 
-/// Inkscape's own elements, by namespace, with the SVG elements each stands in as Inkscape writes
-/// it: its editor's state (`sodipodi:namedview` and what it holds, a path effect or a perspective in
-/// `defs`) beside the drawing or in its `defs`; the metadata block (`rdf:RDF`, holding `cc:Work` and
-/// `dc:*`) in `metadata`. Each is dropped on read, what it holds with it, by the reader and by the
+/// Inkscape's own elements, by namespace, with where each stands as Inkscape writes it, by
+/// position: `svg` the drawing's root itself, `defs` and `metadata` the root's own (children of it):
+/// its editor's state (`sodipodi:namedview` and what it holds, a path effect or a perspective in
+/// `defs`) beside the drawing or in the root's `defs`; the metadata block (`rdf:RDF`, holding
+/// `cc:Work` and `dc:*`) in the root's `metadata`; `cc:*` and `dc:*` nowhere but inside that block.
+/// Each is dropped on read, unread, what it holds with it, by the reader and by the
 /// page; one standing anywhere else is refused, and so is every other foreign namespace. Inkscape's
 /// attributes on the drawing's elements (`inkscape:label`, `sodipodi:nodetypes`, ...) are read by
 /// nothing: no check of the reader's and no rule of the page's names one.
@@ -123,10 +125,12 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
             continue;
         }
         if let Some((ns, places)) = EDITOR.iter().find(|(ns, _)| node.tag_name().namespace() == Some(*ns)) {
+            // Judged by position: the root itself, or the root's own `defs` or `metadata`.
             let parent = node.parent_element();
-            if !parent.is_some_and(|p| p.tag_name().namespace() == Some(SVG_NS) && places.contains(&p.tag_name().name())) {
+            let at = |p: roxmltree::Node, place: &str| p.tag_name().namespace() == Some(SVG_NS) && if place == "svg" { p == root } else { p.tag_name().name() == place && p.parent_element() == Some(root) };
+            if !parent.is_some_and(|p| places.iter().any(|place| at(p, place))) {
                 let within = parent.map(|p| p.tag_name().name().to_string()).unwrap_or_default();
-                return Err(format!("{} holds an Inkscape element (<{name}> of `{ns}`) inside a <{within}>, where Inkscape writes none: its editor's state stands beside the drawing or in its `defs`, its metadata in `metadata`", path.display()));
+                return Err(format!("{} holds an Inkscape element (<{name}> of `{ns}`) inside a <{within}>, where Inkscape writes none: its editor's state stands beside the drawing (a child of its root) or in the root's `defs`, its metadata in the root's `metadata`", path.display()));
             }
             dropped.push(node.range());
             continue;
@@ -180,7 +184,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
                     apart: up.iter().map(|a| a.tag_name().name()).find(|n| !AROUND.contains(n)).map(String::from),
                     holds: node.descendants().skip(1).filter(|d| d.is_element()).map(|d| d.tag_name().name()).find(|n| !HOLDS.contains(n)).map(String::from),
                     important: node.descendants().filter(|d| d.is_element()).any(|d| important(&d)),
-                    hidden: node.ancestors().filter(|a| a.is_element()).find(|a| a.attribute("display").is_some_and(|v| v.trim().eq_ignore_ascii_case("none")) || a.attribute("style").and_then(|s| style_value(s, "display")).is_some_and(|v| v == "none")).map(|a| match a.attribute("id") {
+                    hidden: node.ancestors().filter(|a| a.is_element()).find(|a| a.attribute("display").is_some_and(|v| v.trim().eq_ignore_ascii_case("none")) || a.attribute("style").is_some_and(|s| style_values(s, "display").iter().any(|v| v == "none"))).map(|a| match a.attribute("id") {
                         Some(id) => format!("<{}> `{id}`", a.tag_name().name()),
                         None => format!("<{}>", a.tag_name().name()),
                     }),
@@ -281,12 +285,13 @@ pub fn declared(style: &str) -> Vec<String> {
     names
 }
 
-/// The value a `style` attribute declares for a property, as CSS reads it (its last declaration of it,
-/// lowercase and trimmed, a priority apart), or none.
-pub fn style_value(style: &str, property: &str) -> Option<String> {
+/// Every value a `style` attribute declares for a property, as CSS reads them (each lowercase and
+/// trimmed, a priority apart), in order: a reader that fails closed asks whether any says a value,
+/// since which one a browser keeps turns on priorities and values it cannot parse.
+pub fn style_values(style: &str, property: &str) -> Vec<String> {
     let out = css_read(style);
     let written = |c: &(char, bool)| c.1 || !css_space(c.0);
-    let mut found = None;
+    let mut found = Vec::new();
     for decl in out.split(|c| *c == (';', false)) {
         let Some(colon) = decl.iter().position(|c| *c == (':', false)) else { continue };
         let raw = &decl[..colon];
@@ -297,7 +302,7 @@ pub fn style_value(style: &str, property: &str) -> Option<String> {
         let name: String = raw[start..=end].iter().map(|(c, _)| c.to_ascii_lowercase()).collect();
         if name == property {
             let value: String = decl[colon + 1..].iter().map(|(c, _)| *c).collect();
-            found = Some(value.split('!').next().unwrap_or("").trim().to_ascii_lowercase());
+            found.push(value.split('!').next().unwrap_or("").trim().to_ascii_lowercase());
         }
     }
     found

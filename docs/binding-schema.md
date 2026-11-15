@@ -272,8 +272,9 @@ A path is relative to the binding file's folder.
 - `version` (required): this reader knows `1`.
 - `title` (the project's name): the session's name on the screen.
 - `layout` (none): the path of the SVG layout, drawn in Inkscape and read as Inkscape saves it
-  (Q25): its own elements (`sodipodi:*` and `inkscape:*` beside the drawing or in its `defs`, the
-  `rdf` block in `metadata`) dropped on read, what they hold with them; its attributes in those
+  (Q25): its own elements (`sodipodi:*` and `inkscape:*` as children of the drawing's root or of the
+  root's `defs`, `rdf:RDF` in the root's `metadata` with `cc:*` and `dc:*` inside it) dropped on
+  read, unread, with all they hold (nothing of them reaches the page); its attributes in those
   namespaces on the drawing's elements read by nothing. Without one the session has dashboards and
   no layout view.
 - `headline` (none): object IDs shown in the top bar, in order.
@@ -432,7 +433,7 @@ table the project lacks; a table panel's limit outside 1 to
 1000, a column with an empty name, places past 6 or a rule over another series, a sort column the
 panel or its table lacks; a column, key or value the table lacks where the project states its
 columns, a value that is not numeric; a `spread` not above 0; a layout that cannot be read, is not
-an SVG document (its root an `svg` in the SVG namespace), or holds a script, a `<style>` sheet, an animation (`animate`, `animateColor`, `animateMotion`,
+an SVG document (its root an `svg` in the SVG namespace), or holds (outside Inkscape's own elements, dropped unread) a script, a `<style>` sheet, an animation (`animate`, `animateColor`, `animateMotion`,
 `animateTransform`, `discard`, `set`), a `class`, an id the page names its own (`app` and any beginning
 `sv-`, its case as written), CSS that moves, times or unpins what the page writes (the properties
 `transform`, `translate`, `rotate`, `scale`, `transform-origin`, `transform-box`, `transform-style`,

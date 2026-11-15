@@ -1015,8 +1015,9 @@ A path is relative to the binding file's folder.
 - `version` (required): this reader knows `1`.
 - `title` (the project's name): the session's name on the screen.
 - `layout` (none): the path of the SVG layout, drawn in Inkscape and read as Inkscape saves it
-  (Q25): its own elements (`sodipodi:*` and `inkscape:*` beside the drawing or in its `defs`, the
-  `rdf` block in `metadata`) dropped on read, what they hold with them; its attributes in those
+  (Q25): its own elements (`sodipodi:*` and `inkscape:*` as children of the drawing's root or of the
+  root's `defs`, `rdf:RDF` in the root's `metadata` with `cc:*` and `dc:*` inside it) dropped on
+  read, unread, with all they hold (nothing of them reaches the page); its attributes in those
   namespaces on the drawing's elements read by nothing. Without one the session has dashboards and
   no layout view.
 - `headline` (none): object IDs shown in the top bar, in order.
@@ -1175,7 +1176,7 @@ table the project lacks; a table panel's limit outside 1 to
 1000, a column with an empty name, places past 6 or a rule over another series, a sort column the
 panel or its table lacks; a column, key or value the table lacks where the project states its
 columns, a value that is not numeric; a `spread` not above 0; a layout that cannot be read, is not
-an SVG document (its root an `svg` in the SVG namespace), or holds a script, a `<style>` sheet, an animation (`animate`, `animateColor`, `animateMotion`,
+an SVG document (its root an `svg` in the SVG namespace), or holds (outside Inkscape's own elements, dropped unread) a script, a `<style>` sheet, an animation (`animate`, `animateColor`, `animateMotion`,
 `animateTransform`, `discard`, `set`), a `class`, an id the page names its own (`app` and any beginning
 `sv-`, its case as written), CSS that moves, times or unpins what the page writes (the properties
 `transform`, `translate`, `rotate`, `scale`, `transform-origin`, `transform-box`, `transform-style`,
@@ -2516,39 +2517,101 @@ fn a_drawing_saved_as_inkscape_saves_it_loads_its_editor_dropped() {
     for kept in ["svg1", "defs1", "linearGradient1", "stop1", "metadata1", "layer1", "layer2", "layer3", "rect9", "loop", "infeed", "g1", "outlet-1", "outlet-2", "outlet-3", "parcel-1", "parcel-2", "g2", "circle1", "path2", "path1", "text1", "tspan1", "text2", "tspan2"] {
         assert!(layout.ids.contains_key(kept), "{kept}: the drawing's, kept");
     }
-    // Every Inkscape namespace in every place: where Inkscape writes it, dropped with what it holds;
-    // anywhere else, refused naming it.
-    let places = ["svg", "defs", "metadata", "g", "text"];
-    for (ns, allowed) in EDITOR {
-        for place in places {
-            let el = format!("<e:thing xmlns:e=\"{ns}\" id=\"x1\"><e:inner id=\"x2\"/></e:thing>");
-            let body = if place == "svg" { el.clone() } else { format!("<{place} id=\"holder\">{el}</{place}>") };
-            let svg = format!("<svg xmlns=\"{SVG_NS}\" viewBox=\"0 0 10 10\">{body}<rect id=\"r\"/></svg>");
-            match parse(&svg, p) {
-                Ok(l) if allowed.contains(&place) => assert!(!l.ids.contains_key("x1") && !l.ids.contains_key("x2") && l.ids.contains_key("r"), "{ns} in <{place}>"),
-                Err(e) if !allowed.contains(&place) => assert_eq!(e, format!("l.svg holds an Inkscape element (<thing> of `{ns}`) inside a <{place}>, where Inkscape writes none: its editor's state stands beside the drawing or in its `defs`, its metadata in `metadata`"), "{ns} in <{place}>"),
-                other => panic!("{ns} in <{place}>: {other:?}"),
+    // The reader's list of Inkscape's namespaces is the reference's: its sentence names each by the
+    // prefix the drawing declares for it and says where it stands, read here as written (the root
+    // itself; the root's own `defs` or `metadata`; inside the metadata block alone).
+    let flat = REFERENCE.replace("\n  ", " ");
+    let sentence = "(`sodipodi:*` and `inkscape:*` as children of the drawing's root or of the root's `defs`, `rdf:RDF` in the root's `metadata` with `cc:*` and `dc:*` inside it)";
+    assert!(flat.contains(sentence), "the reference's sentence on Inkscape's elements");
+    let declared = |prefix: &str| {
+        let at = INKSCAPE_LOOP.find(&format!("xmlns:{prefix}=\"")).unwrap() + prefix.len() + 8;
+        INKSCAPE_LOOP[at..at + INKSCAPE_LOOP[at..].find('"').unwrap()].to_string()
+    };
+    let read: Vec<(String, Vec<&str>)> = [("sodipodi", vec!["svg", "defs"]), ("inkscape", vec!["svg", "defs"]), ("rdf", vec!["metadata"]), ("cc", vec![]), ("dc", vec![])].into_iter().map(|(prefix, at)| (declared(prefix), at)).collect();
+    let listed: Vec<(String, Vec<&str>)> = EDITOR.iter().map(|(ns, at)| (ns.to_string(), at.to_vec())).collect();
+    assert_eq!(listed, read, "the reader's list of Inkscape's namespaces, the reference's");
+    // Every Inkscape namespace at every place, judged by position: where the reference says it stands
+    // dropped with all it holds; anywhere else refused naming it: the same names one level down (a
+    // `defs`, a `metadata`, an `svg` inside a group) and every element a drawing may hold.
+    let mut places: Vec<(String, String, String, String, Option<&str>)> = vec![
+        ("the root".into(), String::new(), String::new(), "svg".into(), Some("svg")),
+        ("the root's defs".into(), "<defs id=\"holder\">".into(), "</defs>".into(), "defs".into(), Some("defs")),
+        ("the root's metadata".into(), "<metadata id=\"holder\">".into(), "</metadata>".into(), "metadata".into(), Some("metadata")),
+    ];
+    for c in ["defs", "metadata", "svg"] {
+        places.push((format!("a {c} in a group"), format!("<g><{c}>"), format!("</{c}></g>"), c.into(), None));
+    }
+    let mut held: Vec<&str> = veredas_supervisao::svg::HOLDS.into_iter().chain(["symbol", "pattern", "marker", "clipPath", "mask", "switch", "a", "linearGradient"]).collect();
+    held.dedup();
+    for c in held {
+        places.push((format!("a {c}"), format!("<{c}>"), format!("</{c}>"), c.into(), None));
+    }
+    for (ns, allowed) in &read {
+        for (label, open, close, parent, at) in &places {
+            let svg = format!("<svg xmlns=\"{SVG_NS}\" viewBox=\"0 0 10 10\">{open}<e:thing xmlns:e=\"{ns}\" id=\"x1\"><e:inner id=\"x2\"/></e:thing>{close}<rect id=\"r\"/></svg>");
+            match (parse(&svg, p), at.is_some_and(|a| allowed.contains(&a))) {
+                (Ok(l), true) => assert!(!l.ids.contains_key("x1") && !l.ids.contains_key("x2") && l.ids.contains_key("r"), "{ns} in {label}"),
+                (Err(e), false) => assert_eq!(e, format!("l.svg holds an Inkscape element (<thing> of `{ns}`) inside a <{parent}>, where Inkscape writes none: its editor's state stands beside the drawing (a child of its root) or in the root's `defs`, its metadata in the root's `metadata`"), "{ns} in {label}"),
+                (other, _) => panic!("{ns} in {label}: {other:?}"),
             }
         }
     }
-    // Any other foreign namespace, in the places Inkscape's may stand too, refused.
-    for place in places {
-        let body = format!("<x:thing xmlns:x=\"urn:not-inkscape\"/>");
-        let svg = if place == "svg" { format!("<svg xmlns=\"{SVG_NS}\">{body}</svg>") } else { format!("<svg xmlns=\"{SVG_NS}\"><{place}>{body}</{place}></svg>") };
-        assert_eq!(parse(&svg, p).unwrap_err(), "l.svg holds a <thing> element of the namespace `urn:not-inkscape`: a layout is a drawing in the SVG namespace (Inkscape's own elements apart), with no foreign content", "{place}");
+    // Any other foreign namespace, at every one of those places, refused.
+    for (label, open, close, _, _) in &places {
+        let svg = format!("<svg xmlns=\"{SVG_NS}\">{open}<x:thing xmlns:x=\"urn:not-inkscape\"/>{close}</svg>");
+        assert_eq!(parse(&svg, p).unwrap_err(), "l.svg holds a <thing> element of the namespace `urn:not-inkscape`: a layout is a drawing in the SVG namespace (Inkscape's own elements apart), with no foreign content", "{label}");
     }
-    // A hidden layer or group around an object's element, as Inkscape writes it (in its `style`) and
-    // as an attribute, and around a marker's path: refused, the hiding element named.
-    let outlets = "<g\n       id=\"g1\"\n       inkscape:label=\"Outlets\">";
-    assert!(INKSCAPE_LOOP.contains(outlets));
-    for hide in ["style=\"display:none\"", "display=\"none\"", "style=\"opacity:1;DISPLAY : None\""] {
+    // Hidden, refused naming the hiding element: on the object's element itself (as Inkscape hides an
+    // object), on its group, and two groups up (a sublayer under a hidden layer); and a marker's path
+    // on itself and in a hidden group, the objects shown. In a `style` however CSS spells it (any
+    // case, a priority, a comment, an escape, and among other `display` declarations wherever it
+    // stands: the reader fails closed on any `none`), and as an attribute (trimmed, any case).
+    let styles = ["display:none", "opacity:1;DISPLAY : None", "display:none !important", "display:none !important;display:inline", "display:none;display:bogus", "display:none;display:", "display:inline;display:none", "display:/* c */none", "display:\\6e one"];
+    let attributes = ["display=\"none\"", "display=\" NONE \""];
+    let outlet = "style=\"fill:#cccccc;stroke:#000000;stroke-width:0.264583\"\n         id=\"outlet-1\"";
+    let loop_style = "stroke-opacity:1\"\n       d=\"M 80,40";
+    let g1_open = "<g\n       id=\"g1\"\n       inkscape:label=\"Outlets\">";
+    let g1_at = INKSCAPE_LOOP.find("    <g\n       id=\"g1\"").unwrap();
+    let g1_end = INKSCAPE_LOOP[g1_at..].find("    </g>\n").unwrap() + g1_at + "    </g>\n".len();
+    let loop_at = INKSCAPE_LOOP.find("    <path\n       style=\"fill:none;stroke:#26262a;stroke-width:14").unwrap();
+    let loop_end = INKSCAPE_LOOP[loop_at..].find("sodipodi:nodetypes=\"ccccc\" />\n").unwrap() + loop_at + "sodipodi:nodetypes=\"ccccc\" />\n".len();
+    for s in [outlet, loop_style, g1_open] {
+        assert!(INKSCAPE_LOOP.contains(s), "{s}");
+    }
+    let wrap = |at: usize, end: usize, open: &str| format!("{}<g id=\"hid\" {open}>\n{}</g>\n{}", &INKSCAPE_LOOP[..at], &INKSCAPE_LOOP[at..end], &INKSCAPE_LOOP[end..]);
+    let element = |h: &str| format!("object `outlet-1`: its element stands hidden ({h} says `display: none`, as a hidden layer does): show it in Inkscape, or move the element out of it");
+    let path = |h: &str| format!("object `parcel-1`: the path `loop` stands hidden ({h} says `display: none`, as a hidden layer does): show it in Inkscape, or move the path out of it");
+    let mut cases: Vec<(String, String, String)> = Vec::new();
+    for s in styles {
+        cases.push((format!("its own style {s}"), INKSCAPE_LOOP.replacen(outlet, &format!("style=\"fill:#cccccc;stroke:#000000;stroke-width:0.264583;{s}\"\n         id=\"outlet-1\""), 1), element("<rect> `outlet-1`")));
+        cases.push((format!("its group's style {s}"), INKSCAPE_LOOP.replacen(g1_open, &format!("<g\n       id=\"g1\" style=\"{s}\"\n       inkscape:label=\"Outlets\">"), 1), element("<g> `g1`")));
+        cases.push((format!("two groups up, style {s}"), wrap(g1_at, g1_end, &format!("style=\"{s}\"")), element("<g> `hid`")));
+        cases.push((format!("the path's own style {s}"), INKSCAPE_LOOP.replacen(loop_style, &format!("stroke-opacity:1;{s}\"\n       d=\"M 80,40"), 1), path("<path> `loop`")));
+        cases.push((format!("the path's group's style {s}"), wrap(loop_at, loop_end, &format!("style=\"{s}\"")), path("<g> `hid`")));
+    }
+    for a in attributes {
+        cases.push((format!("its own {a}"), INKSCAPE_LOOP.replacen("id=\"outlet-1\"", &format!("id=\"outlet-1\" {a}"), 1), element("<rect> `outlet-1`")));
+        cases.push((format!("its group's {a}"), INKSCAPE_LOOP.replacen(g1_open, &format!("<g\n       id=\"g1\" {a}\n       inkscape:label=\"Outlets\">"), 1), element("<g> `g1`")));
+        cases.push((format!("two groups up, {a}"), wrap(g1_at, g1_end, a), element("<g> `hid`")));
+        cases.push((format!("the path's own {a}"), INKSCAPE_LOOP.replacen("id=\"loop\"", &format!("id=\"loop\" {a}"), 1), path("<path> `loop`")));
+        cases.push((format!("the path's group's {a}"), wrap(loop_at, loop_end, a), path("<g> `hid`")));
+    }
+    for (what, svg, want) in cases {
         let mut hidden = example();
-        hidden.svg = INKSCAPE_LOOP.replacen(outlets, &format!("<g\n       id=\"g1\" {hide}\n       inkscape:label=\"Outlets\">"), 1);
-        assert_eq!(binding_refusal(&hidden), "object `outlet-1`: its element stands hidden (<g> `g1` says `display: none`, as a hidden layer does): show it in Inkscape, or move the element out of it", "{hide}");
+        assert!(svg != INKSCAPE_LOOP, "{what}");
+        hidden.svg = svg;
+        assert_eq!(binding_refusal(&hidden), want, "{what}");
     }
+    // Shown however its style spells it: `display` other than `none` loads.
+    for s in ["display:inline", "display:block", "display:none-ish"] {
+        let mut shown = example();
+        shown.svg = INKSCAPE_LOOP.replacen(g1_open, &format!("<g\n       id=\"g1\" style=\"{s}\"\n       inkscape:label=\"Outlets\">"), 1);
+        assert!(outcome(&shown).is_ok(), "{s}: {:?}", outcome(&shown).err());
+    }
+    // The whole plant layer hidden: the first refusal the loop's (its markers read before the
+    // objects' places), exactly.
     let mut lost = example();
     lost.svg = INKSCAPE_LOOP.replacen("id=\"layer1\"\n     transform=\"translate(12.5,-4)\"\n     style=\"display:inline\"", "id=\"layer1\"\n     transform=\"translate(12.5,-4)\"\n     style=\"display:none\"", 1);
     assert!(lost.svg != INKSCAPE_LOOP);
-    let refused = binding_refusal(&lost);
-    assert!(refused.contains("stands hidden (<g> `layer1` says `display: none`, as a hidden layer does): show it in Inkscape"), "{refused}");
+    assert_eq!(binding_refusal(&lost), path("<g> `layer1`"));
 }
