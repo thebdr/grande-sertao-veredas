@@ -817,88 +817,229 @@ fn headers_of(addr: SocketAddr, path: &str) -> (u16, BTreeMap<String, String>) {
 /// an HTML image and a style's background; a script by its element, written inline and as a
 /// handler; a sheet linked and one written inline importing another; a frame, an object, a font;
 /// a fetch, a feed, a WebSocket, a beacon and a module imported. What runs says so in `__ran`.
-/// The same kinds put into the drawing opened alone (an SVG document, no body), aimed at `OTHER`.
-const DRAWING_ALONE: &str = r#"(async () => {
-  const other = OTHER;
-  window.__ran = [];
+/// Kept in a page from its first load: every refusal of its content policy, as `[directive, address]`
+/// (the address the browser refused, or `inline`).
+const WATCH: &str = "window.__refused = []; document.addEventListener('securitypolicyviolation', (e) => window.__refused.push([e.effectiveDirective, e.blockedURI]));";
+
+/// Every kind of load and of script a page can be made to do, each aimed at its own address on the
+/// other host (`fire(other)`), with the directive the policy refuses it by and the address it
+/// refuses (`inline` for one written in the page): a picture by an SVG image, an HTML image, a
+/// style's background and its cursor; a paint, a filter, a mask, a clip path and a marker from
+/// another document, each in a `style` attribute as a drawing writes its paint; a script by its
+/// element, written inline and as a handler; a sheet linked and one written inline importing
+/// another; a frame, an object, a font; a fetch, a feed, a WebSocket, a beacon and a module
+/// imported. Run in a page (its `svg.plant`) or in a blank document (an `svg.plant` made in it).
+/// What runs says so in `__ran`.
+const PAGE_KINDS: &str = r#"(() => {
   const svgNS = "http://www.w3.org/2000/svg";
-  const root = document.documentElement;
-  const image = document.createElementNS(svgNS, "image");
-  image.setAttribute("href", other + "/drawing-image.png");
-  image.setAttribute("width", "4");
-  image.setAttribute("height", "4");
-  root.append(image);
-  const fo = document.createElementNS(svgNS, "foreignObject");
-  fo.setAttribute("width", "4");
-  fo.setAttribute("height", "4");
-  const img = document.createElementNS("http://www.w3.org/1999/xhtml", "img");
-  img.setAttribute("src", other + "/drawing-img.png");
-  fo.append(img);
-  root.append(fo);
-  const style = document.createElementNS(svgNS, "style");
-  style.textContent = `@import url(${other}/drawing.css); rect { fill: url(${other}/paint.svg#p) }`;
-  root.append(style);
-  const inline = document.createElementNS(svgNS, "script");
-  inline.textContent = "window.__ran.push('script')";
-  root.append(inline);
-  const linked = document.createElementNS(svgNS, "script");
-  linked.setAttribute("href", other + "/drawing.js");
-  root.append(linked);
-  const r = document.createElementNS(svgNS, "rect");
-  r.setAttribute("onclick", "window.__ran.push('handler')");
-  root.append(r);
-  r.dispatchEvent(new MouseEvent("click"));
-  try { await fetch(other + "/drawing-fetch"); } catch {}
-  return true;
+  window.__ran = [];
+  let plant = document.querySelector("svg.plant");
+  if (!plant) { plant = document.createElementNS(svgNS, "svg"); plant.setAttribute("class", "plant"); plant.setAttribute("width", "40"); plant.setAttribute("height", "40"); document.body.append(plant); }
+  const shape = (name, style) => { const e = document.createElementNS(svgNS, name); e.setAttribute("style", style); if (name === "path") e.setAttribute("d", "M 1 1 L 9 9"); else { e.setAttribute("width", "4"); e.setAttribute("height", "4"); } plant.append(e); };
+  const kinds = [
+    ["an SVG image", "img-src", "/svg-image.png", (o) => { const e = document.createElementNS(svgNS, "image"); e.setAttribute("href", o + "/svg-image.png"); e.setAttribute("width", "4"); e.setAttribute("height", "4"); plant.append(e); }],
+    ["an HTML image", "img-src", "/img.png", (o) => { const e = new Image(); e.src = o + "/img.png"; document.body.append(e); }],
+    ["a style's background", "img-src", "/bg.png", (o) => { const e = document.createElement("div"); e.setAttribute("style", `background-image: url(${o}/bg.png); width: 4px; height: 4px`); document.body.append(e); }],
+    ["a style's cursor", "img-src", "/cursor.png", (o) => { const e = document.createElement("div"); e.setAttribute("style", `cursor: url(${o}/cursor.png), auto; width: 4px; height: 4px`); document.body.append(e); }],
+    ["a paint from another document", "img-src", "/paint.svg", (o) => shape("rect", `fill: url(${o}/paint.svg#p)`)],
+    ["a filter from another document", "img-src", "/filter.svg", (o) => shape("rect", `filter: url(${o}/filter.svg#f)`)],
+    ["a mask from another document", "img-src", "/mask.svg", (o) => shape("rect", `mask: url(${o}/mask.svg#m)`)],
+    ["a clip path from another document", "img-src", "/clip.svg", (o) => shape("rect", `clip-path: url(${o}/clip.svg#c)`)],
+    ["a marker from another document", "img-src", "/marker.svg", (o) => shape("path", `marker-start: url(${o}/marker.svg#m); stroke: black`)],
+    ["a script element", "script-src-elem", "/s.js", (o) => { const e = document.createElement("script"); e.src = o + "/s.js"; document.head.append(e); }],
+    ["a script written inline", "script-src-elem", "inline", () => { const e = document.createElement("script"); e.textContent = "window.__ran.push('inline')"; document.head.append(e); }],
+    ["a handler written in markup", "script-src-attr", "inline", () => { const e = document.createElement("button"); e.setAttribute("onclick", "window.__ran.push('handler')"); document.body.append(e); e.click(); }],
+    ["a sheet linked", "style-src-elem", "/x.css", (o) => { const e = document.createElement("link"); e.rel = "stylesheet"; e.href = o + "/x.css"; document.head.append(e); }],
+    ["a sheet written inline", "style-src-elem", "inline", (o) => { const e = document.createElement("style"); e.textContent = `@import url(${o}/imported.css); body { --probe: 1 }`; document.head.append(e); }],
+    ["a frame", "frame-src", "/frame", (o) => { const e = document.createElement("iframe"); e.src = o + "/frame"; document.body.append(e); }],
+    ["an object", "object-src", "/object", (o) => { const e = document.createElement("object"); e.data = o + "/object"; document.body.append(e); }],
+    ["a font", "font-src", "/f.woff", async (o) => { try { await new FontFace("probe", `url(${o}/f.woff)`).load(); } catch {} }],
+    ["a fetch", "connect-src", "/fetch", async (o) => { try { await fetch(o + "/fetch"); } catch {} }],
+    ["a feed", "connect-src", "/feed", (o) => { try { new EventSource(o + "/feed"); } catch {} }],
+    ["a WebSocket", "connect-src", "/socket", (o) => { try { new WebSocket(o.replace("http:", "ws:") + "/socket"); } catch {} }],
+    ["a beacon", "connect-src", "/beacon", (o) => { try { navigator.sendBeacon(o + "/beacon", "x"); } catch {} }],
+    ["a module imported", "script-src-elem", "/module.js", async (o) => { try { await import(o + "/module.js"); } catch {} }],
+  ];
+  window.__probes = Object.fromEntries(kinds.map(([n, , , f]) => [n, f]));
+  return kinds.map(([n, d, a]) => [n, d, a]);
 })()"#;
 
-const ELSEWHERE: &str = r#"(() => {
+/// The kinds a drawing opened alone can be made to do (an SVG document, no body), each aimed at its
+/// own address: a picture by an SVG image and by an HTML image in a foreign object; a paint, a
+/// filter, a mask, a clip path and a marker from another document in a `style` attribute; a sheet
+/// importing another; a script written inline and one linked; a handler; a fetch.
+const DRAWING_KINDS: &str = r#"(() => {
   const svgNS = "http://www.w3.org/2000/svg";
   window.__ran = [];
-  window.__probes = {
-    "an SVG image": async (other) => { const e = document.createElementNS(svgNS, "image"); e.setAttribute("href", other + "/svg-image.png"); e.setAttribute("width", "4"); e.setAttribute("height", "4"); document.querySelector("svg.plant").append(e); },
-    "an HTML image": async (other) => { const e = new Image(); e.src = other + "/img.png"; document.body.append(e); },
-    "a style's background": async (other) => { const e = document.createElement("div"); e.setAttribute("style", `background-image: url(${other}/bg.png); width: 4px; height: 4px`); document.body.append(e); },
-    "a script element": async (other) => { const e = document.createElement("script"); e.src = other + "/s.js"; document.head.append(e); },
-    "a script written inline": async () => { const e = document.createElement("script"); e.textContent = "window.__ran.push('inline')"; document.head.append(e); },
-    "a handler written in markup": async () => { const e = document.createElement("button"); e.setAttribute("onclick", "window.__ran.push('handler')"); document.body.append(e); e.click(); },
-    "a sheet linked": async (other) => { const e = document.createElement("link"); e.rel = "stylesheet"; e.href = other + "/x.css"; document.head.append(e); },
-    "a sheet written inline": async (other) => { const e = document.createElement("style"); e.textContent = `@import url(${other}/imported.css); body { --probe: 1 }`; document.head.append(e); },
-    "a frame": async (other) => { const e = document.createElement("iframe"); e.src = other + "/frame"; document.body.append(e); },
-    "an object": async (other) => { const e = document.createElement("object"); e.data = other + "/object"; document.body.append(e); },
-    "a font": async (other) => { try { await new FontFace("probe", `url(${other}/f.woff)`).load(); } catch {} },
-    "a fetch": async (other) => { try { await fetch(other + "/fetch"); } catch {} },
-    "a feed": async (other) => { try { new EventSource(other + "/feed"); } catch {} },
-    "a WebSocket": async (other) => { try { new WebSocket(other.replace("http:", "ws:") + "/socket"); } catch {} },
-    "a beacon": async (other) => { try { navigator.sendBeacon(other + "/beacon", "x"); } catch {} },
-    "a module imported": async (other) => { try { await import(other + "/module.js"); } catch {} },
-  };
-  return Object.keys(window.__probes);
+  const root = document.documentElement;
+  const shape = (name, style) => { const e = document.createElementNS(svgNS, name); e.setAttribute("style", style); if (name === "path") e.setAttribute("d", "M 1 1 L 9 9"); else { e.setAttribute("width", "4"); e.setAttribute("height", "4"); } root.append(e); };
+  const kinds = [
+    ["an SVG image", "/drawing-image.png", (o) => { const e = document.createElementNS(svgNS, "image"); e.setAttribute("href", o + "/drawing-image.png"); e.setAttribute("width", "4"); e.setAttribute("height", "4"); root.append(e); }],
+    ["an HTML image in a foreign object", "/drawing-img.png", (o) => { const f = document.createElementNS(svgNS, "foreignObject"); f.setAttribute("width", "4"); f.setAttribute("height", "4"); const i = document.createElementNS("http://www.w3.org/1999/xhtml", "img"); i.setAttribute("src", o + "/drawing-img.png"); f.append(i); root.append(f); }],
+    ["a paint from another document", "/drawing-paint.svg", (o) => shape("rect", `fill: url(${o}/drawing-paint.svg#p)`)],
+    ["a filter from another document", "/drawing-filter.svg", (o) => shape("rect", `filter: url(${o}/drawing-filter.svg#f)`)],
+    ["a mask from another document", "/drawing-mask.svg", (o) => shape("rect", `mask: url(${o}/drawing-mask.svg#m)`)],
+    ["a clip path from another document", "/drawing-clip.svg", (o) => shape("rect", `clip-path: url(${o}/drawing-clip.svg#c)`)],
+    ["a marker from another document", "/drawing-marker.svg", (o) => shape("path", `marker-start: url(${o}/drawing-marker.svg#m); stroke: black`)],
+    ["a sheet importing another", "/drawing.css", (o) => { const e = document.createElementNS(svgNS, "style"); e.textContent = `@import url(${o}/drawing.css);`; root.append(e); }],
+    ["a script written inline", "inline", () => { const e = document.createElementNS(svgNS, "script"); e.textContent = "window.__ran.push('script')"; root.append(e); }],
+    ["a script linked", "/drawing.js", (o) => { const e = document.createElementNS(svgNS, "script"); e.setAttribute("href", o + "/drawing.js"); root.append(e); }],
+    ["a handler", "inline", () => { const e = document.createElementNS(svgNS, "rect"); e.setAttribute("onclick", "window.__ran.push('handler')"); root.append(e); e.dispatchEvent(new MouseEvent("click")); }],
+    ["a fetch", "/drawing-fetch", async (o) => { try { await fetch(o + "/drawing-fetch"); } catch {} }],
+  ];
+  window.__probes = Object.fromEntries(kinds.map(([n, , f]) => [n, f]));
+  return kinds.map(([n, a]) => [n, a]);
 })()"#;
+
+/// The other host: a listener counting every connection made to it, keeping the first line each one
+/// asks (empty for one opened bare, asking nothing), until `stop`.
+struct OtherHost {
+    port: u16,
+    asked: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    watcher: Option<std::thread::JoinHandle<()>>,
+}
+
+impl OtherHost {
+    fn start() -> OtherHost {
+        let other = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = other.local_addr().unwrap().port();
+        other.set_nonblocking(true).unwrap();
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = std::thread::spawn({
+            let (asked, stop) = (std::sync::Arc::clone(&asked), std::sync::Arc::clone(&stop));
+            move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    match other.accept() {
+                        Ok((s, _)) => {
+                            let asked = std::sync::Arc::clone(&asked);
+                            // Each connection read apart, so a slow one never holds the next back.
+                            std::thread::spawn(move || {
+                                s.set_nonblocking(false).ok();
+                                s.set_read_timeout(Some(Duration::from_millis(500))).ok();
+                                let mut first = String::new();
+                                let _ = BufReader::new(s).read_line(&mut first);
+                                asked.lock().unwrap().push(first.trim_end().to_string());
+                            });
+                        }
+                        Err(_) => std::thread::sleep(Duration::from_millis(20)),
+                    }
+                }
+            }
+        });
+        OtherHost { port, asked, stop, watcher: Some(watcher) }
+    }
+
+    fn address(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+
+    /// What was asked since `from` (a count of connections), the bare connections apart.
+    fn requests_since(&self, from: usize) -> Vec<String> {
+        self.asked.lock().unwrap()[from..].iter().filter(|l| !l.is_empty()).cloned().collect()
+    }
+
+    fn count(&self) -> usize {
+        self.asked.lock().unwrap().len()
+    }
+}
+
+impl Drop for OtherHost {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(w) = self.watcher.take() {
+            let _ = w.join();
+        }
+    }
+}
+
+/// A server on this machine answering every request with `body` as an SVG drawing and no policy at
+/// all (the control for the drawing served alone), until it is dropped.
+struct Plain {
+    port: u16,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    server: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Plain {
+    fn serve(body: String) -> Plain {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        l.set_nonblocking(true).unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server = std::thread::spawn({
+            let stop = std::sync::Arc::clone(&stop);
+            move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    match l.accept() {
+                        Ok((mut s, _)) => {
+                            s.set_nonblocking(false).ok();
+                            s.set_read_timeout(Some(Duration::from_millis(500))).ok();
+                            let mut r = BufReader::new(s.try_clone().unwrap());
+                            let mut line = String::new();
+                            while r.read_line(&mut line).is_ok_and(|n| n > 2) {
+                                line.clear();
+                            }
+                            let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: image/svg+xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                        }
+                        Err(_) => std::thread::sleep(Duration::from_millis(20)),
+                    }
+                }
+            }
+        });
+        Plain { port, stop, server: Some(server) }
+    }
+}
+
+impl Drop for Plain {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(s) = self.server.take() {
+            let _ = s.join();
+        }
+    }
+}
+
+/// A browser watched from its first load at `url` (`WATCH` registered before it), returned once that
+/// document has loaded, waited for through the protocol's page events (`navigate_loaded`).
+fn watched_from_first_load(url: &str) -> Browser {
+    let mut p = Browser::open("about:blank");
+    p.call("Page.enable", json!({}));
+    p.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": WATCH }));
+    p.navigate_loaded(url, Duration::from_secs(20));
+    p
+}
 
 /// The host's content policy (Q23), word for word on the page and on the drawing's own route, and
-/// every answer the host gives `nosniff`; and in the browser, proven as a layer of its own: the page
-/// as built loads and runs under it with nothing refused, the drawing's embedded picture among what
-/// it loads; then every kind of load and of script (`ELSEWHERE`), each put alone straight into the
-/// mounted page and aimed at a listener standing for another host, asks nothing of it and runs
-/// nothing, the browser refusing each by its directive; and the drawing opened alone at its own
-/// route is sandboxed (an origin of no one's), the same kinds put into it asking and running
-/// nothing. A connection opened bare, asking nothing (the browser's own preconnect for a frame,
-/// before its policy refuses the frame), is the stated limit.
+/// every answer the host gives `nosniff`; and in the browser, proven as a layer of its own, past
+/// the reader. Every screen of the page as built refuses nothing under it: the sessions' list at
+/// `/`, and of a session every view its own tabs list, each drawn (the layout with an embedded
+/// picture in its drawing, a dashboard, a table and a series picked, the alarms) and an object
+/// selected with its sparkline. Then every kind of load and of script (`PAGE_KINDS`), each alone:
+/// in a blank document with no policy it asks the other host (a listener standing for it) or runs,
+/// so the probe is live; put into the mounted page it asks nothing and runs nothing, refused by its
+/// own address under its directive. A kind the browser asks nothing for even with no policy (some
+/// of the references to another document) is named, and asks nothing under the policy either. The
+/// drawing opened alone at its own route is sandboxed (an origin of no one's): each of its kinds
+/// (`DRAWING_KINDS`) live in a drawing with no policy (a `data:` one) asks and runs nothing there.
+/// A connection opened bare, asking nothing (the browser's own preconnect for a frame, before its
+/// policy refuses the frame), is the stated limit.
 #[test]
 fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() {
     let dir = tempfile::tempdir().unwrap();
-    let bench = plant(&dir.path().join("bench"));
-    let mut ex = live_example(&bench, false);
-    // A picture embedded in the drawing, beside the objects.
-    assert!(ex.svg.ends_with("</svg>\n"));
-    ex.svg = ex.svg.replacen("</svg>", "  <image id=\"pic\" x=\"2\" y=\"2\" width=\"8\" height=\"8\" href=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==\"/>\n</svg>", 1);
-    let path = write_example(dir.path(), &ex);
+    let (a, b) = (plant(&dir.path().join("bench-a")), plant(&dir.path().join("bench-b")));
+    let path = two_plants(dir.path(), &a, &b);
+    // A picture embedded in loop's drawing, beside the objects.
+    let svg_path = dir.path().join("loop/layout.svg");
+    let svg = std::fs::read_to_string(&svg_path).unwrap();
+    assert!(svg.contains("</svg>"));
+    std::fs::write(&svg_path, svg.replacen("</svg>", "  <image id=\"pic\" x=\"2\" y=\"2\" width=\"8\" height=\"8\" href=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==\"/>\n</svg>", 1)).unwrap();
     let host = Host::start(config::load_file(&path).unwrap()).unwrap();
     let addr = host.addr();
     const PAGE: &str = "default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'";
     const DRAWING: &str = "default-src 'none'; style-src-attr 'unsafe-inline'; img-src data:; sandbox";
-    for p in ["/", "/s/loop", "/s/loop/"] {
+    for p in ["/", "/s/loop", "/s/loop/", "/s/hall/"] {
         let (status, h) = headers_of(addr, p);
         assert_eq!((status, h.get("content-security-policy").map(String::as_str), h.get("x-content-type-options").map(String::as_str)), (200, Some(PAGE), Some("nosniff")), "{p}");
     }
@@ -910,73 +1051,111 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
         assert!(!h.contains_key("content-security-policy"), "{p}: a policy on an answer no browser renders as the page");
     }
 
-    // The other host: a listener counting every connection made to it, which counts (a connection
-    // made from here is seen).
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
-    let other = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = other.local_addr().unwrap().port();
-    other.set_nonblocking(true).unwrap();
-    let reached = std::sync::Arc::new(AtomicUsize::new(0));
-    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-    let stop = std::sync::Arc::new(AtomicBool::new(false));
-    let watcher = std::thread::spawn({
-        let (reached, stop, asked) = (std::sync::Arc::clone(&reached), std::sync::Arc::clone(&stop), std::sync::Arc::clone(&asked));
-        move || {
-            while !stop.load(Relaxed) {
-                match other.accept() {
-                    Ok((s, _)) => {
-                        reached.fetch_add(1, Relaxed);
-                        // What it asked, if it says (a bare connection says nothing).
-                        s.set_nonblocking(false).ok();
-                        s.set_read_timeout(Some(Duration::from_millis(500))).ok();
-                        let mut first = String::new();
-                        let _ = BufReader::new(s).read_line(&mut first);
-                        asked.lock().unwrap().push(first.trim_end().to_string());
-                    }
-                    Err(_) => std::thread::sleep(Duration::from_millis(20)),
-                }
-            }
-        }
-    });
-    drop(TcpStream::connect(("127.0.0.1", port)).unwrap());
-    assert!(wait(Duration::from_secs(5), || reached.load(Relaxed) == 1), "the listener counts");
-    reached.store(0, Relaxed);
-    asked.lock().unwrap().clear();
+    // The other host, which counts (a connection made from here is seen, asking nothing).
+    let other = OtherHost::start();
+    drop(TcpStream::connect(("127.0.0.1", other.port)).unwrap());
+    assert!(wait(Duration::from_secs(5), || other.count() == 1), "the listener counts");
+    let other_js = serde_json::to_string(&other.address()).unwrap();
 
-    // The page watched from its first load: every refusal of the policy kept, by its directive and
-    // what it refused.
-    let mut page = Browser::open("about:blank");
-    page.call("Page.enable", json!({}));
-    page.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": "window.__refused = []; document.addEventListener('securitypolicyviolation', (e) => window.__refused.push([e.effectiveDirective, e.blockedURI]));" }));
-    page.navigate_loaded(&format!("http://{addr}/s/loop/"), Duration::from_secs(20));
-    page.wait_for(r#"document.getElementById("pic") && document.getElementById("outlet-1")?.classList.contains("sv-obj") ? true : null"#, Duration::from_secs(20));
+    // Every screen of the page as built, refusing nothing: the sessions' list, then each view the
+    // page's own tabs list, drawn, and an object selected.
+    let mut list = watched_from_first_load(&format!("http://{addr}/"));
+    list.wait_for("document.querySelectorAll('.session-card').length === 2 || null", Duration::from_secs(20));
     std::thread::sleep(Duration::from_millis(500));
-    assert_eq!(page.eval("window.__refused"), json!([]), "the page as built, its embedded picture among what it loads, refused nothing");
-    // Each kind alone, then the listener read: what asked anything of the other host is named by its
-    // kind. (A connection opened bare, asking nothing, the browser's own preconnect for a frame before
-    // its policy refuses the frame, is the stated limit: nothing is asked of another host, which is not
-    // to say no socket is opened to it.)
-    let other_host = serde_json::to_string(&format!("http://127.0.0.1:{port}")).unwrap();
-    let kinds: Vec<String> = page.eval(ELSEWHERE).as_array().unwrap().iter().map(|k| k.as_str().unwrap().to_string()).collect();
-    assert_eq!(kinds.len(), 16, "{kinds:?}");
-    let mut through: Vec<String> = Vec::new();
-    for kind in &kinds {
-        let before = asked.lock().unwrap().len();
-        page.eval(&format!("window.__probes[{}]({other_host})", serde_json::to_string(kind).unwrap()));
+    assert_eq!(list.eval("window.__refused"), json!([]), "the sessions' list refused nothing");
+    drop(list);
+    let mut page = watched_from_first_load(&format!("http://{addr}/s/loop/"));
+    page.wait_for(r#"document.getElementById("pic") && document.getElementById("outlet-1")?.classList.contains("sv-obj") ? true : null"#, Duration::from_secs(20));
+    let views: Vec<String> = page.eval(r#"[...document.querySelectorAll(".tabs [data-view]")].map((a) => a.dataset.view)"#).as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    assert!(views.len() >= 5 && views.contains(&"layout".to_string()), "{views:?}");
+    for view in &views {
+        page.eval(&format!("location.hash = {}; true", serde_json::to_string(view).unwrap()));
+        page.wait_for("document.querySelector('main') && document.querySelector('main').children.length > 0 ? true : null", Duration::from_secs(20));
+        // A table and a series picked: the first of each list.
+        if view == "tables" || view == "series" {
+            page.wait_for("document.querySelector('.list button[data-table], .list button[data-series]') ? true : null", Duration::from_secs(20));
+            page.eval("document.querySelector('.list button[data-table], .list button[data-series]').click(); true");
+            page.wait_for("['page', 'chart', 'waiting', 'error'].includes(document.querySelector('.list-main')?.dataset.screen) ? true : null", Duration::from_secs(20));
+        }
+        std::thread::sleep(Duration::from_millis(1200));
+        assert_eq!(page.eval("window.__refused"), json!([]), "the {view} view refused nothing");
+    }
+    page.eval("location.hash = 'layout'; true");
+    page.wait_for(r#"document.getElementById("outlet-1")?.classList.contains("sv-obj") ? true : null"#, Duration::from_secs(20));
+    page.eval(r#"document.getElementById("outlet-1").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+    page.wait_for("document.querySelector('.side .spark-wrap')?.children.length ? true : null", Duration::from_secs(20));
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(page.eval("window.__refused"), json!([]), "an object selected, its sparkline drawn, refused nothing");
+
+    // Each kind alone in a blank document with no policy: live (it asks the other host, or runs).
+    let mut blank = Browser::open("about:blank");
+    let kinds: Vec<(String, String, String)> = blank.eval(PAGE_KINDS).as_array().unwrap().iter().map(|k| (k[0].as_str().unwrap().to_string(), k[1].as_str().unwrap().to_string(), k[2].as_str().unwrap().to_string())).collect();
+    let mut live = std::collections::BTreeSet::new();
+    let mut silent = Vec::new();
+    for (kind, _, address) in &kinds {
+        let (from, ran) = (other.count(), blank.eval("window.__ran.length").as_u64().unwrap());
+        blank.eval(&format!("window.__probes[{}]({other_js})", serde_json::to_string(kind).unwrap()));
         std::thread::sleep(Duration::from_millis(700));
-        if asked.lock().unwrap()[before..].iter().any(|l| !l.is_empty()) {
-            through.push(kind.clone());
+        let asked = other.requests_since(from);
+        let ran_now = blank.eval("window.__ran.length").as_u64().unwrap() > ran;
+        if (address != "inline" && asked.iter().any(|l| l.contains(address.as_str()))) || (address == "inline" && (ran_now || !asked.is_empty())) {
+            live.insert(kind.clone());
+        } else {
+            silent.push(kind.clone());
         }
     }
-    assert_eq!(through, Vec::<String>::new(), "a kind that asked something of the other host: {:?}", asked.lock().unwrap());
-    let refused: std::collections::BTreeSet<String> = page.eval("window.__refused").as_array().unwrap().iter().map(|v| v[0].as_str().unwrap().to_string()).collect();
-    let every: std::collections::BTreeSet<String> = ["connect-src", "font-src", "frame-src", "img-src", "object-src", "script-src-attr", "script-src-elem", "style-src-elem"].iter().map(|s| s.to_string()).collect();
-    assert_eq!(refused, every, "each kind refused by its directive: {}", page.eval("window.__refused"));
-    assert_eq!(page.eval("window.__ran"), json!([]), "no script of another origin or written inline ran");
-    // The drawing opened alone, at its own route: an origin of no one's (the sandbox), and the same
-    // kinds put into it (a picture by an SVG image and by an HTML one in a foreign object, a sheet
-    // importing another and painting from another, a script written inline and one linked, a
-    // handler, a fetch), asking nothing of the other host and running nothing.
+    drop(blank);
+    // Every kind live but the references to another document a browser may never fetch; those the
+    // browser asks nothing for even with no policy are named (and held below to asking nothing).
+    let may_be_silent = ["a style's cursor", "a paint from another document", "a filter from another document", "a mask from another document", "a clip path from another document", "a marker from another document"];
+    assert!(silent.iter().all(|k| may_be_silent.contains(&k.as_str())), "a probe that tried nothing with no policy: {silent:?}");
+    eprintln!("kinds the browser asks nothing for even with no policy: {silent:?}");
+
+    // Then each kind alone in the mounted page: asking nothing, running nothing, refused by its own
+    // address under its directive where it is live.
+    page.call("Runtime.evaluate", json!({ "expression": PAGE_KINDS, "returnByValue": true }));
+    for (kind, directive, address) in &kinds {
+        let (from, refused_before) = (other.count(), page.eval("window.__refused.length").as_u64().unwrap() as usize);
+        page.eval(&format!("window.__probes[{}]({other_js})", serde_json::to_string(kind).unwrap()));
+        std::thread::sleep(Duration::from_millis(700));
+        assert_eq!(other.requests_since(from), Vec::<String>::new(), "{kind}: asked of the other host");
+        assert_eq!(page.eval("window.__ran"), json!([]), "{kind}: ran");
+        let refused: Vec<(String, String)> = page.eval("window.__refused").as_array().unwrap()[refused_before..].iter().map(|r| (r[0].as_str().unwrap().to_string(), r[1].as_str().unwrap().to_string())).collect();
+        if live.contains(kind) {
+            // Its own address, or the other host's origin alone where the browser strips a path from
+            // what it reports (a frame's navigation): the kind ran alone, so what it refused is its own.
+            let own = refused.iter().any(|(d, u)| d == directive && (if address == "inline" { u == "inline" } else { u.ends_with(address.as_str()) || *u == other.address() }));
+            assert!(own, "{kind}: refused by its own address ({address}) under {directive}: {refused:?}");
+        }
+    }
+
+    // The drawing opened alone, at its own route: an origin of no one's (the sandbox). Each of its
+    // kinds live in the same drawing served with no policy from this machine (it asks the other host
+    // or runs), and in the drawing alone asking nothing and running nothing.
+    let plain = Plain::serve(std::fs::read_to_string(&svg_path).unwrap());
+    let mut bare = Browser::open("about:blank");
+    bare.call("Page.enable", json!({}));
+    bare.navigate_loaded(&format!("http://127.0.0.1:{}/layout.svg", plain.port), Duration::from_secs(20));
+    bare.wait_for("document.documentElement && document.documentElement.tagName === 'svg' ? true : null", Duration::from_secs(20));
+    let drawing_kinds: Vec<(String, String)> = bare.eval(DRAWING_KINDS).as_array().unwrap().iter().map(|k| (k[0].as_str().unwrap().to_string(), k[1].as_str().unwrap().to_string())).collect();
+    let mut drawing_live = std::collections::BTreeSet::new();
+    let mut drawing_silent = Vec::new();
+    for (kind, address) in &drawing_kinds {
+        let (from, ran) = (other.count(), bare.eval("window.__ran.length").as_u64().unwrap());
+        bare.eval(&format!("window.__probes[{}]({other_js})", serde_json::to_string(kind).unwrap()));
+        std::thread::sleep(Duration::from_millis(700));
+        let asked = other.requests_since(from);
+        let ran_now = bare.eval("window.__ran.length").as_u64().unwrap() > ran;
+        if (address != "inline" && asked.iter().any(|l| l.contains(address.as_str()))) || (address == "inline" && ran_now) {
+            drawing_live.insert(kind.clone());
+        } else {
+            drawing_silent.push(kind.clone());
+        }
+    }
+    drop(bare);
+    drop(plain);
+    assert!(drawing_silent.iter().all(|k| k.contains("from another document")), "a probe that tried nothing in a drawing with no policy: {drawing_silent:?}");
+    eprintln!("kinds a drawing with no policy asks nothing for: {drawing_silent:?}");
     // (Waited for through the protocol's page events, never by evaluating into it while it commits:
     // a sandboxed document can then offer no context, CI's red on 114bcc8.)
     let drawing = format!("http://{addr}/s/loop/layout.svg");
@@ -985,12 +1164,15 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     alone.navigate_loaded(&drawing, Duration::from_secs(20));
     alone.wait_for("document.documentElement && document.documentElement.tagName === 'svg' && document.getElementById('outlet-1') ? true : null", Duration::from_secs(20));
     assert_eq!(alone.eval("window.origin"), json!("null"), "the drawing alone, in a sandbox of no origin");
-    let before = asked.lock().unwrap().len();
-    alone.eval(&DRAWING_ALONE.replace("OTHER", &other_host));
-    std::thread::sleep(Duration::from_millis(1500));
-    assert_eq!(alone.eval("window.__ran"), json!([]), "nothing run in the drawing alone");
-    let in_drawing: Vec<String> = asked.lock().unwrap()[before..].to_vec();
-    assert!(in_drawing.iter().all(|l| l.is_empty()), "nothing asked of the other host from the drawing alone: {in_drawing:?}");
+    alone.eval(DRAWING_KINDS);
+    for (kind, _) in &drawing_kinds {
+        let from = other.count();
+        alone.eval(&format!("window.__probes[{}]({other_js})", serde_json::to_string(kind).unwrap()));
+        std::thread::sleep(Duration::from_millis(700));
+        assert_eq!(other.requests_since(from), Vec::<String>::new(), "{kind}: asked of the other host from the drawing alone");
+        assert_eq!(alone.eval("window.__ran"), json!([]), "{kind}: ran in the drawing alone");
+    }
+    assert!(drawing_live.len() >= 6, "the drawing's kinds live with no policy: {drawing_live:?}");
     // Opened alone ten times more, from a blank page each time: the first evaluate after its load
     // runs in the sandboxed drawing every time.
     for i in 0..10 {
@@ -999,9 +1181,7 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
         assert_eq!(alone.eval("window.origin"), json!("null"), "open {i}");
     }
     drop(alone);
-    stop.store(true, Relaxed);
-    watcher.join().unwrap();
-    assert!(asked.lock().unwrap().iter().all(|l| l.is_empty()), "nothing asked of the other host: {:?}", asked.lock().unwrap());
     drop(page);
+    drop(other);
     host.stop();
 }
