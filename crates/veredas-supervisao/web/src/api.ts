@@ -107,14 +107,20 @@ export function openFeed(name: string, h: FeedHandlers): EventSource {
   return es;
 }
 
+/// What portal's answer to a write means: written (the plant took it); refused (by portal's switch
+/// or whitelist, a value or a body it cannot read, or the plant's own status); not sent (503: the
+/// plant never saw it); not confirmed (504: it may have reached the plant).
+export type WriteSaid = "written" | "refused" | "not sent" | "not confirmed";
+
 /// A write, posted to the session's portal surface; portal's switch and whitelist answer.
-export async function postWrite(name: string, a: Action): Promise<{ ok: boolean; text: string }> {
+export async function postWrite(name: string, a: Action): Promise<{ said: WriteSaid; text: string }> {
   const r = await fetch(`${base(name)}/portal/api/opc/write`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ source: a.source, tag: a.tag, value: a.value }),
   });
   const body = await r.json().catch(() => ({}));
-  if (r.ok) return { ok: Boolean((body as { ok?: boolean }).ok), text: (body as { status?: string }).status ?? "written" };
-  return { ok: false, text: `${r.status}: ${(body as { error?: string }).error ?? r.statusText}` };
+  if (r.ok) return { said: (body as { ok?: boolean }).ok ? "written" : "refused", text: (body as { status?: string }).status ?? "written" };
+  const said: WriteSaid = r.status === 504 ? "not confirmed" : r.status === 503 ? "not sent" : "refused";
+  return { said, text: `${r.status}: ${(body as { error?: string }).error ?? r.statusText}` };
 }

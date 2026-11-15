@@ -108,7 +108,7 @@ export class Side {
       };
       try {
         const r = await postWrite(this.name, a);
-        say(r.ok ? `${a.label}: written (${r.text})` : `${a.label}: refused, ${r.text}`);
+        say(r.said === "written" ? `${a.label}: written (${r.text})` : `${a.label}: ${r.said}, ${r.text}`);
       } catch (e) {
         say(`${a.label}: not sent, ${String(e)}`);
       } finally {

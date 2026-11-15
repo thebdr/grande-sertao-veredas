@@ -705,6 +705,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     assert!(["route", "route_service", "nest", "nest_service", "merge", "fallback", "fallback_service", "method_not_allowed_fallback"].iter().all(|m| router_methods.contains(*m)), "axum's Router read: {router_methods:?}");
     let mut calls: BTreeMap<String, usize> = BTreeMap::new();
     let mut nests: Vec<String> = Vec::new();
+    let mut fallbacks: Vec<String> = Vec::new();
     for (_, text) in &sources {
         let toks = lex(text);
         for i in 0..toks.len().saturating_sub(2) {
@@ -715,12 +716,33 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
                 if toks[i + 1].text == "nest" {
                     nests.push(toks[i + 3..(i + 8).min(toks.len())].iter().map(|t| t.text.as_str()).collect::<Vec<_>>().join(" "));
                 }
+                // A fallback's whole argument, to its closing parenthesis.
+                if toks[i + 1].text == "fallback" && toks.get(i + 2).is_some_and(|t| t.is("(")) {
+                    let mut depth = 0;
+                    let mut end = i + 2;
+                    for (j, tok) in toks.iter().enumerate().skip(i + 2) {
+                        if tok.is("(") {
+                            depth += 1;
+                        } else if tok.is(")") {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = j;
+                                break;
+                            }
+                        }
+                    }
+                    fallbacks.push(toks[i + 3..end].iter().map(|t| t.text.as_str()).collect::<Vec<_>>().join(" "));
+                }
             }
         }
     }
     let reviewed: BTreeMap<String, usize> = [("fallback", 1), ("nest", 2), ("route", own_routes.len() - 2 + written), ("with_state", 1)].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
     assert_eq!(calls, reviewed, "every call of axum's Router methods in supervisão's sources, reviewed");
     assert_eq!(nests, ["\"/portal\" , veredas_portal :: serve", "& base , session )"], "portal's router under `/portal`, a session's own under its name");
+    // The one fallback as reviewed, whole: it takes the path alone and answers that nothing is
+    // served there, whatever the method (no write, no other answer).
+    let reviewed_fallback = lex(r#"|uri: axum::http::Uri| async move { not_found(format!("nothing is served at {}", uri.path())) }"#).iter().map(|t| t.text.clone()).collect::<Vec<_>>().join(" ");
+    assert_eq!(fallbacks, [reviewed_fallback], "the fallback, token for token");
     for p in swept {
         for method in ["POST", "PUT", "DELETE", "PATCH"] {
             let (status, _, _) = http(addr, method, p, Some(&body.to_string()));
@@ -811,6 +833,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
         (o["id"].as_str().unwrap().to_string(), actions)
     }).collect();
     let (mut offering, mut silent) = (0, 0);
+    let mut last_said: BTreeMap<String, String> = BTreeMap::new();
     for o in &drawn {
         let id = serde_json::to_string(o["id"].as_str().unwrap()).unwrap();
         let own = &from_file[o["id"].as_str().unwrap()];
@@ -831,9 +854,13 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
             let before = page.posts().len();
             page.eval("window.asked = []; window.answer = true; true");
             page.wait_for(&format!("(() => {{ const b = document.querySelectorAll('.side .actions button')[{i}]; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(10));
+            // Shown gated: its class, and the warn colour while it is live (the design's word).
+            let gated = page.eval(&format!(r#"(() => {{ const p = document.createElement("span"); p.style.color = "var(--warn)"; document.body.append(p); const warn = getComputedStyle(p).color; p.remove(); const b = document.querySelectorAll('.side .actions button')[{i}]; return [b.classList.contains("gated"), getComputedStyle(b).color === warn]; }})()"#));
+            assert_eq!(gated, json!([true, true]), "{id}: its button {i} shown gated, in the warn colour");
             page.eval(&format!("document.querySelector('.side .write-note').textContent = ''; document.querySelectorAll('.side .actions button')[{i}].click(); true"));
             let label = a["label"].as_str().unwrap();
-            page.wait_for(&format!("document.querySelector('.side .write-note').textContent.startsWith({}) || null", serde_json::to_string(&format!("{label}: written")).unwrap()), Duration::from_secs(10));
+            let note = page.wait_for(&format!("(() => {{ const t = document.querySelector('.side .write-note').textContent; return t.startsWith({}) ? t : null; }})()", serde_json::to_string(&format!("{label}: written")).unwrap()), Duration::from_secs(10));
+            last_said.insert(o["id"].as_str().unwrap().to_string(), note.as_str().unwrap().to_string());
             let (source, tag, value) = (a["source"].as_str().unwrap(), a["tag"].as_str().unwrap(), a["value"].as_str().unwrap());
             assert_eq!(page.eval("window.asked"), json!([format!("Write {value} to {tag} of {source}?")]), "{id} {label}: the question its own");
             let sent = page.posts();
@@ -845,6 +872,13 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
         }
     }
     assert!(offering >= 2 && silent >= 1, "objects offering writes ({offering}) and offering none ({silent})");
+    // Each object pressed, selected again, says its own last answer, whatever was pressed since.
+    for (id, said) in &last_said {
+        let id = serde_json::to_string(id).unwrap();
+        page.eval(&format!("document.getElementById({id}).dispatchEvent(new MouseEvent('click', {{ bubbles: true }}))"));
+        let note = page.wait_for(&format!("(() => {{ const t = document.querySelector('.side .sel-title'); const n = document.querySelector('.side .write-note'); return t && t.dataset.id === {id} && n ? n.textContent : null; }})()"), Duration::from_secs(10));
+        assert_eq!(note, json!(said), "{id}: its own last answer, said again");
+    }
     // A post that never left (the network refused it) is said, and the button is the switch's again.
     page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
     page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(10));
@@ -873,6 +907,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
         }
         let note_here = r#"document.querySelector(".side .write-note")?.textContent ?? null"#;
         let before = page.eval(note_here);
+        assert_eq!(before, last_said.get(other).map(|s| json!(s)).unwrap_or(serde_json::Value::Null), "{other}: its own last answer, or none");
         std::thread::sleep(Duration::from_millis(2200));
         assert_eq!(page.eval(note_here), before, "{other}: nothing said there of outlet 3's press");
         assert!(page.eval("document.body.textContent").as_str().unwrap().matches(said).count() == 0 || before.as_str().is_some_and(|b| b.starts_with(said)), "{other}: outlet 3's answer said under another object");
@@ -941,5 +976,103 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
         drop(page);
     }
     assert_eq!(release(&loop_bench), "0", "hall's write reached hall's plant alone");
+    host.stop();
+}
+
+/// A controller reached through a relay the test freezes and closes, with a tag the plant lets be
+/// written and one it does not (read-only at the plant, marked writable in the project).
+const FAR: &str = "\n[[opc]]\nname = \"far\"\nport = 0\ntags = [\n  { id = \"go\", type = \"int\", value = \"0\", access = \"read-write\" },\n  { id = \"ro\", type = \"int\", value = \"0\" },\n]\n";
+
+/// Every answer portal gives a write, said under the object pressed as it means: written (a value
+/// written otherwise than in digits, `on`, posted as the binding writes it and landing as the tag
+/// takes it); refused for a value the tag cannot take (400), for a body past portal's limit (413),
+/// by the plant's own status (200, not good); and, by core's own refusals matched in full and the
+/// code portal answers each with, not confirmed while the link is frozen (504: the write then
+/// lands once it thaws) and not sent once the link is closed (503: nothing reaches the plant).
+#[test]
+fn every_answer_portal_gives_a_write_is_said_as_it_means() {
+    use veredas_core::opc::{OpcError, WriteError};
+    // What the page says of each refusal core gives, by the code portal answers it with; the switch
+    // off is the test above's, a tag no rule marks writable the reader's (no page meets it, C-048).
+    let said = |e: &WriteError| match e {
+        WriteError::Disarmed | WriteError::NotWritable { .. } => "refused",
+        WriteError::NotSent(_) => "not sent",
+        WriteError::Unconfirmed(_) => "not confirmed",
+    };
+    let (not_sent, unconfirmed) = (WriteError::NotSent(OpcError::NotConnected), WriteError::Unconfirmed(OpcError::NotConnected));
+    let code = veredas_portal::serve::refused_code;
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant_with(&dir.path().join("bench"), FAR);
+    let far = bench.server("far").unwrap();
+    let relay = far.relay().unwrap();
+    let mut ex = live_example(&bench, true);
+    // Polled once a minute (its first poll at once): no poll stands on the wire when the link
+    // freezes, so the write is the call left without an answer (a poll stuck there would end the
+    // session first, and the write queued behind it be never sent).
+    ex.project.push_str(&format!(
+        "\n[[opc]]\nsource_id = \"far\"\nendpoint_url = \"{}\"\npoll_ms = 60000\nrules = [\n  {{ name = \"far_main\", tags = [\n    {{ node_id = \"ns={ns};s=go\", series = \"go\", type = \"int\", writable = true }},\n    {{ node_id = \"ns={ns};s=ro\", series = \"ro\", type = \"int\", writable = true }},\n  ] }},\n]\n",
+        relay.endpoint_url,
+        ns = far.namespace
+    ));
+    let tag = |t: &str| format!("ns={};s={t}", far.namespace);
+    let big = "1".repeat(70_000);
+    let actions = format!(
+        "actions = [ {{ label = \"Go\", source = \"far\", tag = \"{}\", value = \"on\" }}, {{ label = \"Bad\", source = \"far\", tag = \"{}\", value = \"abc\" }}, {{ label = \"Locked\", source = \"far\", tag = \"{}\", value = \"1\" }}, {{ label = \"Big\", source = \"far\", tag = \"{}\", value = \"{big}\" }} ]\n",
+        tag("go"),
+        tag("go"),
+        tag("ro"),
+        tag("go")
+    );
+    assert!(ex.binding.contains("id = \"outlet-1\"\n"), "{}", ex.binding);
+    ex.binding = ex.binding.replacen("id = \"outlet-1\"\n", &format!("id = \"outlet-1\"\n{actions}"), 1);
+    let path = write_example(dir.path(), &ex);
+    std::fs::write(dir.path().join("loop/sorts.log"), "").unwrap();
+    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let addr = host.addr();
+    let at = |t: &str| render_value(&far.get(t));
+    // The far controller reached through its link before anything is pressed.
+    let live = host.session("loop").unwrap().live();
+    assert!(wait(Duration::from_secs(30), || matches!(live.health.read().unwrap().get("far").map(|h| &h.state), Some(veredas_portal::session::HealthState::Live))), "far reached through its link");
+    let mut page = Browser::watched(&format!("http://{addr}/s/loop/"));
+    page.wait_for(r#"document.getElementById("outlet-1")?.classList.contains("sv-obj") ? true : null"#, Duration::from_secs(20));
+    page.eval(r#"(() => { window.confirm = () => true; document.getElementById("outlet-1").dispatchEvent(new MouseEvent("click", { bubbles: true })); return true; })()"#);
+    let press = |page: &mut Browser, label: &str| -> String {
+        page.wait_for(&format!("(() => {{ const b = document.querySelector('.side .actions button[data-action=\"{label}\"]'); return b && !b.disabled && b.dataset.busy === undefined ? true : null; }})()"), Duration::from_secs(30));
+        page.eval(&format!("document.querySelector('.side .write-note').textContent = ''; document.querySelector('.side .actions button[data-action=\"{label}\"]').click(); true"));
+        page.wait_for(r#"document.querySelector(".side .write-note").textContent || null"#, Duration::from_secs(90)).as_str().unwrap().to_string()
+    };
+    // Written: `on` posted as written, the tag taking it as 1.
+    let note = press(&mut page, "Go");
+    assert!(note.starts_with("Go: written (Good"), "{note}");
+    assert!(wait(Duration::from_secs(10), || at("go") == "1"), "go {}", at("go"));
+    let (url, body) = page.posts().last().unwrap().clone();
+    assert_eq!((url, body), (format!("http://{addr}/s/loop/portal/api/opc/write"), format!("{{\"source\":\"far\",\"tag\":\"{}\",\"value\":\"on\"}}", tag("go"))), "the body as the binding writes it, byte for byte");
+    far.set("go", 0);
+    assert!(wait(Duration::from_secs(10), || at("go") == "0"));
+    // Refused: a value the tag cannot take, a body past portal's limit, the plant's own status.
+    assert_eq!(press(&mut page, "Bad"), "Bad: refused, 400: `abc` is not a whole number");
+    let note = press(&mut page, "Big");
+    assert!(note.starts_with("Big: refused, 413: ") && note.ends_with("over 65536 bytes"), "{note}");
+    let note = press(&mut page, "Locked");
+    assert!(note.starts_with("Locked: refused, Bad"), "{note}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!((at("go"), at("ro")), ("0".to_string(), "0".to_string()), "nothing of the refused ones at the plant");
+    // Not confirmed: the link frozen, no answer comes; the write lands once it thaws.
+    relay.freeze();
+    let note = press(&mut page, "Go");
+    assert!(note.starts_with(&format!("Go: {}, {}: the write may have reached the plant", said(&unconfirmed), code(&unconfirmed))), "{note}");
+    assert_eq!(at("go"), "0", "held while frozen");
+    relay.thaw();
+    assert!(wait(Duration::from_secs(30), || at("go") == "1"), "the write said not confirmed landed once the link thawed: go {}", at("go"));
+    far.set("go", 0);
+    assert!(wait(Duration::from_secs(10), || at("go") == "0"));
+    // Not sent: the link closed, the source retrying; nothing reaches the plant.
+    drop(relay);
+    assert!(wait(Duration::from_secs(30), || matches!(live.health.read().unwrap().get("far").map(|h| &h.state), Some(veredas_portal::session::HealthState::Retrying(_)))), "far retrying once its link closed");
+    let note = press(&mut page, "Go");
+    assert!(note.starts_with(&format!("Go: {}, {}: ", said(&not_sent), code(&not_sent))), "{note}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(at("go"), "0", "nothing reached the plant");
+    drop(page);
     host.stop();
 }

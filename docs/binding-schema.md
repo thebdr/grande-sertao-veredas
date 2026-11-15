@@ -345,7 +345,9 @@ surface (`POST /s/<name>/portal/api/opc/write`), never written by supervisão it
 - `value` (required): the value written, as text, coerced by portal to the tag's type.
 
 The page shows an action gated (the warn colour) and disabled while the session's switch is off;
-portal answers a post 403 while it is off, whoever sends it.
+portal answers a post 403 while it is off, whoever sends it. A press's answer is said under the
+object pressed: written, refused (by the switch, a value or a body portal cannot read, or the
+plant), not sent (the plant never saw it) or not confirmed (it may have reached the plant).
 
 **A dashboard** (`[[dashboard]]`):
 - `name` (required): its name on the screen, unique in the file.
