@@ -255,14 +255,31 @@ pub fn sort_rows(rows: &mut [Vec<Json>], k: usize, desc: bool) {
     });
 }
 
+/// A cell as a whole number, exactly: an integer JSON number, or the digits portal writes for an
+/// integer past 64 bits.
+fn whole(v: &Json) -> Option<i128> {
+    match v {
+        Json::Number(n) => n.as_i64().map(i128::from).or_else(|| n.as_u64().map(i128::from)),
+        Json::String(s) if s.len() > 18 && s.strip_prefix('-').unwrap_or(s).bytes().all(|b| b.is_ascii_digit()) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+/// Two cells in a column's order: whole numbers exactly (never through a double, which merges
+/// integers past 2^53), other numbers by their values, anything else as its text.
 fn compare_cells(a: &Json, b: &Json) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (a, b) {
         (Json::Null, Json::Null) => Ordering::Equal,
         (Json::Null, _) => Ordering::Greater,
         (_, Json::Null) => Ordering::Less,
-        (Json::Number(x), Json::Number(y)) => x.as_f64().unwrap_or(0.0).partial_cmp(&y.as_f64().unwrap_or(0.0)).unwrap_or(Ordering::Equal),
-        _ => cell_text(a, None).cmp(&cell_text(b, None)),
+        _ => match (whole(a), whole(b)) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            _ => match (a.as_f64().or_else(|| whole(a).map(|x| x as f64)), b.as_f64().or_else(|| whole(b).map(|x| x as f64))) {
+                (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+                _ => cell_text(a, None).cmp(&cell_text(b, None)),
+            },
+        },
     }
 }
 
@@ -337,6 +354,7 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
     let (from, to) = window(minutes, to);
     let mut rows: Vec<Vec<Json>> = Vec::new();
     let mut columns: Vec<String> = Vec::new();
+    let mut types: Vec<String> = Vec::new();
     let mut total: Option<u64> = None;
     // Paged newest first by stamp: each page reads the rows at or before the last stamp taken,
     // past those already read at that stamp. A row stored between two reads stamped after the
@@ -358,6 +376,7 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
             Some(at) => at,
             None => {
                 columns = page.columns.iter().map(|c| c.name.clone()).collect();
+                types = page.columns.iter().map(|c| c.data_type.clone()).collect();
                 let has = |name: &str| columns.iter().position(|c| c == name);
                 match (has("index_ms"), has("source"), has("seq")) {
                     (Some(ti), Some(si), Some(qi)) => *at.insert((ti, si, qi)),
@@ -395,15 +414,24 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
     let find = |name: &str| columns.iter().position(|c| c == name).ok_or_else(|| format!("`{table}` has no column `{name}` (its columns: {})", columns.join(", ")));
     let (ki, vi) = (find(key)?, find(value)?);
     let ti = columns.iter().position(|c| c == "index_ms");
+    // A key of a time kind written as the store's clock reads it, as the table writes one.
+    let key_clock = types.get(ki).and_then(|t| clock_of(t));
+    let key_of = |v: &Json| match key_clock {
+        Some(c) if v.as_i64().is_some() => Some(time_text(v, c)),
+        _ => key_text(v),
+    };
     let mut groups: BTreeMap<String, Vec<(Option<i64>, f64)>> = BTreeMap::new();
     for r in &rows {
-        let (Some(k), Some(v)) = (r.get(ki).and_then(key_text), r.get(vi).and_then(Json::as_f64)) else { continue };
+        let (Some(k), Some(v)) = (r.get(ki).and_then(key_of), r.get(vi).and_then(Json::as_f64)) else { continue };
         let t = ti.and_then(|i| r.get(i)).and_then(Json::as_i64);
         groups.entry(k).or_default().push((t, v));
     }
     let mut keys: Vec<String> = groups.keys().cloned().collect();
-    // Keys that all read as numbers sort as numbers; any other set sorts as text.
-    if keys.iter().all(|k| k.parse::<f64>().is_ok()) {
+    // Keys that all read as whole numbers sort exactly; as numbers, by their values; any other set
+    // (a time's clock text among them, in its own order) as text.
+    if keys.iter().all(|k| k.parse::<i128>().is_ok()) {
+        keys.sort_by_key(|k| k.parse::<i128>().unwrap_or(0));
+    } else if keys.iter().all(|k| k.parse::<f64>().is_ok()) {
         keys.sort_by(|a, b| a.parse::<f64>().unwrap_or(0.0).partial_cmp(&b.parse::<f64>().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
     }
     let bucket_ms = bucket_minutes as i64 * MINUTE_MS;

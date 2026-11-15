@@ -782,10 +782,10 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
         let v = page.eval(DRAWN_PANELS);
         if !v.is_null() {
             let want = expected_panels(&v["dash"]);
-            if close(&v["drawn"], &json!(want)) && v["columns"] == v["dash"]["columns"] {
+            if close(&v["drawn"], &json!(want)) && v["columns"] == v["dash"]["columns"] && v["marks"] == json!([]) {
                 break (v["dash"].clone(), v["drawn"].clone());
             }
-            assert!(std::time::Instant::now() < deadline, "the page never drew its dashboard:\n drawn {:#}\n want {:#}", v["drawn"], json!(want));
+            assert!(std::time::Instant::now() < deadline, "the page never drew its dashboard:\n drawn {:#}\n want {:#}\n marks {}", v["drawn"], json!(want), v["marks"]);
         }
         assert!(std::time::Instant::now() < deadline, "the page never fetched its dashboard");
         std::thread::sleep(Duration::from_millis(200));
@@ -837,6 +837,16 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     page.wait_for("window.__held === true || null", Duration::from_secs(15));
     assert_eq!(page.eval("window.__asks"), json!(1), "a refresh overtook the answer still out");
     page.wait_for("window.__asks >= 2 || null", Duration::from_secs(10));
+    // An answer that never comes (held a minute) is given up on at ten seconds and said in the
+    // dashboard's place; the next tick asks again and draws it.
+    page.eval("location.hash = 'layout'; true");
+    page.wait_for("document.querySelector('.dash-grid') ? null : true", Duration::from_secs(10));
+    // (What it says is recorded as it is drawn: the tick that asks again can draw over it at once.)
+    page.eval(r#"(() => { window.__said = []; new MutationObserver(() => { const e = document.querySelector(".dash-grid > p.error"); if (e && !window.__said.includes(e.textContent)) window.__said.push(e.textContent); }).observe(document.body, { childList: true, subtree: true, characterData: true }); return true; })()"#);
+    page.eval("window.__hold = '/dashboard/0'; window.__holdMs = 60000; location.hash = 'dashboards/0'; true");
+    let gave_up = page.wait_for("window.__said.length ? window.__said : null", Duration::from_secs(20));
+    assert_eq!(gave_up, json!(["Error: no answer within 10 s"]));
+    page.wait_for(r#"document.querySelectorAll(".dash-grid > .panel").length === 17 || null"#, Duration::from_secs(15));
     // The second dashboard (every key written, every aggregate, a grid in every state) and then a
     // probe built from the first's panels: every state of the vocabulary on every surface (a tile,
     // its badge, sub-line and sparkline; a grid cell and its value; a level's fill and figure; a
@@ -853,10 +863,10 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
             let v = page.eval(DRAWN_PANELS);
             if v["dash"]["name"] == json!(name) {
                 let want = expected_panels(&v["dash"]);
-                if close(&v["drawn"], &json!(want)) && v["columns"] == v["dash"]["columns"] {
+                if close(&v["drawn"], &json!(want)) && v["columns"] == v["dash"]["columns"] && v["marks"] == json!([]) {
                     return v;
                 }
-                assert!(std::time::Instant::now() < deadline, "{name}: never drawn as received:\n drawn {:#}\n want {:#}", v["drawn"], json!(want));
+                assert!(std::time::Instant::now() < deadline, "{name}: never drawn as received:\n drawn {:#}\n want {:#}\n marks {}", v["drawn"], json!(want), v["marks"]);
             }
             assert!(std::time::Instant::now() < deadline, "{name} never fetched");
             std::thread::sleep(Duration::from_millis(200));
@@ -1036,9 +1046,47 @@ const DRAWN_PANELS: &str = r#"(() => {
     }
     return r;
   });
+  // Every mark a chart paints read: each SVG shape one of the kinds its chart draws, and those the
+  // readings above leave held to the frame they stand in (a sparkline's dot by its size, a trend's
+  // grid lines at its value labels, a distribution's area its line closed down to the base and its
+  // median at the middle).
+  const KINDS = {
+    spark: ["path.line", "circle.point"],
+    trend: ["line.grid", "text.axis", "line.limit", "path.line", "circle.point", "circle.breach", "circle.tipdot", "text.tiptext"],
+    bars: ["text.axis", "rect.bar", "rect.bar running", "line.limit"],
+    dist: ["path.area", "path.line", "line.median"],
+  };
+  const marks = [];
+  for (const svg of document.querySelectorAll(".dash-grid svg")) {
+    const kind = ["spark", "trend", "bars", "statebar", "dist"].find((k) => svg.classList.contains(k));
+    if (!kind) { marks.push(`an svg of no chart this test reads: ${svg.getAttribute("class")}`); continue; }
+    for (const el of svg.querySelectorAll("*")) {
+      const tag = el.tagName.toLowerCase();
+      if (!SHAPES.has(tag)) continue;
+      const k = `${tag}.${el.getAttribute("class") ?? ""}`;
+      if (kind === "statebar" ? !/^rect\.st-[a-z]+$/.test(k) : !KINDS[kind].includes(k)) marks.push(`${kind}: a mark this test does not read, ${k}`);
+    }
+    const vb = svg.viewBox.baseVal;
+    if (kind === "spark") for (const c of svg.querySelectorAll("circle.point")) if (num(c, "r") !== 2) marks.push(`spark: its dot of radius ${num(c, "r")}`);
+    if (kind === "trend") {
+      const grids = [...svg.querySelectorAll("line.grid")];
+      const labels = [...svg.querySelectorAll("text.axis")].filter((t) => t.getAttribute("text-anchor") === "end" && num(t, "y") < vb.height - 6);
+      if (grids.length !== labels.length) marks.push(`trend: ${grids.length} grid lines for ${labels.length} value labels`);
+      grids.forEach((g, i) => {
+        const l = labels[i];
+        if (!l || Math.abs(num(g, "y1") - (num(l, "y") - 4)) > 0.01 || num(g, "y1") !== num(g, "y2") || Math.abs(num(g, "x1") - (num(l, "x") + 6)) > 0.01 || Math.abs(num(g, "x2") - (vb.width - 10)) > 0.01) marks.push(`trend: grid line ${i} off its label`);
+      });
+    }
+    if (kind === "dist") {
+      const line = svg.querySelector("path.line"), area = svg.querySelector("path.area"), med = svg.querySelector("line.median");
+      const n = pts(line).length, W = vb.width, H = vb.height, bw = W / n;
+      if (!area || area.getAttribute("d") !== `${line.getAttribute("d")} L${W - bw / 2} ${H - 1} L${bw / 2} ${H - 1} Z`) marks.push(`dist: its area not its line closed to the base: ${area?.getAttribute("d")}`);
+      if (!med || num(med, "x1") !== W / 2 || num(med, "x2") !== W / 2 || num(med, "y1") !== 0 || num(med, "y2") !== H) marks.push("dist: its median not at the middle");
+    }
+  }
   // The grid's columns as laid out: one track per column.
   const columns = getComputedStyle(document.querySelector(".dash-grid")).gridTemplateColumns.split(" ").filter(Boolean).length;
-  return { dash: d, drawn, columns };
+  return { dash: d, drawn, columns, marks };
 })()"#;
 
 /// A number to `places` as the page's `toFixed` writes it: the exact value of the double rounded,
@@ -1438,6 +1486,12 @@ value = { source = "sorter", series = "at", key = "A1" }
 states = [ { above = 30, state = "warn", word = "far" } ]
 
 [[object]]
+id = "two-rules"
+value = { source = "sorter", series = "travel" }
+unit = "s"
+states = [ { above = 15, state = "warn", word = "slow" }, { above = 22, state = "alarm", word = "late" } ]
+
+[[object]]
 id = "t-near"
 value = { source = "sorter", series = "travel" }
 unit = "s"
@@ -1471,7 +1525,7 @@ name = "Rules"
 
 [[dashboard.panel]]
 kind = "timeline"
-objects = ["own-source", "own-written", "keyed"]
+objects = ["own-source", "own-written", "keyed", "two-rules"]
 
 [[dashboard.panel]]
 kind = "value"
@@ -1505,7 +1559,7 @@ aggregate = "max"
 [[dashboard.panel]]
 kind = "table"
 table = "signed"
-columns = [ { name = "plain" }, { name = "bar", bar = true }, { name = "ruled", states = [ { below = 0, state = "alarm", word = "under" } ] }, { name = "both", bar = true, states = [ { below = 0, state = "alarm", word = "under" } ] } ]
+columns = [ { name = "plain" }, { name = "bar", bar = true }, { name = "ruled", states = [ { below = 0, state = "alarm", word = "under" } ] }, { name = "both", bar = true, states = [ { below = 0, state = "alarm", word = "under" } ] }, { name = "twice", states = [ { below = 0, state = "alarm", word = "under" }, { below = 8, state = "warn", word = "low" } ] } ]
 
 [[dashboard.panel]]
 kind = "table"
@@ -1591,6 +1645,50 @@ spread = 5
 kind = "table"
 table = "big"
 columns = [ { name = "k" }, { name = "u", decimals = 2 } ]
+
+[[dashboard.panel]]
+kind = "table"
+table = "close"
+columns = [ { name = "k" } ]
+sort = { column = "k" }
+
+[[dashboard.panel]]
+kind = "cells"
+table = "near"
+key = "k"
+value = "travel"
+spread = 5
+
+[[dashboard.panel]]
+kind = "table"
+table = "wide"
+columns = [ { name = "h" }, { name = "d" } ]
+
+[[dashboard.panel]]
+kind = "cells"
+table = "wide"
+key = "hk"
+value = "travel"
+spread = 5
+
+[[dashboard.panel]]
+kind = "cells"
+table = "timed"
+key = "ts"
+value = "travel"
+spread = 5
+
+[[dashboard.panel]]
+kind = "cells"
+table = "timed"
+key = "day"
+value = "travel"
+spread = 5
+
+[[dashboard.panel]]
+kind = "table"
+table = "ends"
+sort = { column = "n" }
 "#;
 
 /// The project's rules and views for `RULES`: a keyed numeric series, float keys, a series never
@@ -1636,6 +1734,34 @@ name = "nanos"
 sql = "SELECT index_ms, CAST(CAST(ts AS VARCHAR)[12:] AS TIME_NS) AS at FROM sorts"
 
 [[table]]
+name = "close"
+sql = "SELECT index_ms, CASE outlet WHEN 1 THEN 9007199254740993 ELSE 9007199254740992 END AS k FROM sorts"
+
+[[table]]
+name = "near"
+sql = "SELECT index_ms, source, seq, CASE outlet WHEN 1 THEN 9999999999999999 ELSE 10000000000000000 END AS k, travel FROM sorts"
+
+[[table]]
+name = "wide"
+sql = "SELECT index_ms, source, seq, CAST('18446744073709551616' AS HUGEINT) + outlet AS h, CAST(CAST('18446744073709551616' AS HUGEINT) + outlet AS DECIMAL(38,0)) AS d, CASE outlet WHEN 1 THEN CAST(1 AS HUGEINT) ELSE CAST('18446744073709551617' AS HUGEINT) END AS hk, travel FROM sorts"
+
+[[table]]
+name = "timed"
+sql = "SELECT index_ms, source, seq, ts, CAST(ts AS DATE) AS day, travel FROM sorts"
+
+[[table]]
+name = "ends"
+sql = "SELECT 0 AS n, CAST(-128 AS TINYINT) AS ti, CAST(-32768 AS SMALLINT) AS si, CAST(-2147483648 AS INTEGER) AS i, CAST(-9223372036854775808 AS BIGINT) AS bi, CAST('-170141183460469231731687303715884105728' AS HUGEINT) AS hi, CAST(0 AS UTINYINT) AS uti, CAST(0 AS USMALLINT) AS usi, CAST(0 AS UINTEGER) AS ui, CAST(0 AS UBIGINT) AS ubi, CAST('-99999999999999999999999999999999999999' AS DECIMAL(38,0)) AS d38 UNION ALL SELECT 1, CAST(127 AS TINYINT), CAST(32767 AS SMALLINT), CAST(2147483647 AS INTEGER), CAST(9223372036854775807 AS BIGINT), CAST('170141183460469231731687303715884105727' AS HUGEINT), CAST(255 AS UTINYINT), CAST(65535 AS USMALLINT), CAST(4294967295 AS UINTEGER), CAST(18446744073709551615 AS UBIGINT), CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0))"
+
+[[table]]
+name = "ends_text"
+sql = "SELECT n, CAST(ti AS VARCHAR) AS ti, CAST(si AS VARCHAR) AS si, CAST(i AS VARCHAR) AS i, CAST(bi AS VARCHAR) AS bi, CAST(hi AS VARCHAR) AS hi, CAST(uti AS VARCHAR) AS uti, CAST(usi AS VARCHAR) AS usi, CAST(ui AS VARCHAR) AS ui, CAST(ubi AS VARCHAR) AS ubi, CAST(d38 AS VARCHAR) AS d38 FROM ends"
+
+[[table]]
+name = "numerics"
+sql = "SELECT DISTINCT logical_type AS t FROM duckdb_types() WHERE type_category = 'NUMERIC'"
+
+[[table]]
 name = "big"
 sql = "SELECT index_ms, source, seq, CASE WHEN outlet = 1 THEN 9007199254740993 ELSE -9007199254740995 END AS k, CAST(18446744073709551615 AS UBIGINT) - CAST(outlet AS UBIGINT) AS u, travel FROM sorts"
 
@@ -1653,7 +1779,7 @@ sql = "SELECT index_ms, ts, CAST(ts AS DATE) AS day, CAST(ts AS TIME) AS at FROM
 
 [[table]]
 name = "signed"
-sql = "SELECT index_ms, travel - 15 AS plain, travel - 15 AS bar, travel - 15 AS ruled, travel - 15 AS both FROM sorts"
+sql = "SELECT index_ms, travel - 15 AS plain, travel - 15 AS bar, travel - 15 AS ruled, travel - 15 AS both, travel - 15 AS twice FROM sorts"
 
 [[table]]
 name = "unordered"
@@ -1860,6 +1986,46 @@ fn every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says() {
         let c = veredas_supervisao::panel::cells(&live, table, "outlet", "travel", 60, 5, 5.0, to, 2, cap).unwrap();
         assert_eq!((c["read"].clone(), c["capped"].clone()), (json!(read), json!(capped)), "{table} under {cap}");
     }
+    // The rules' order where the panels apply rules themselves: the first that holds names the state
+    // (a timeline's run and a table's cell), never a later one that holds too.
+    let runs: Vec<(Value, Value, Value)> = tl["rows"][3]["segments"].as_array().unwrap().iter().map(|s| (s["from"].clone(), s["state"].clone(), s["word"].clone())).collect();
+    assert_eq!(runs, [(json!(at(0.0)), json!("normal"), json!("ok")), (json!(at(10.0)), json!("warn"), json!("slow"))], "25 s holds both rules: the first names it");
+    let twice: Vec<(Value, Value)> = (0..3).map(|r| (cell(r, 4)["state"].clone(), cell(r, 4)["word"].clone())).collect();
+    assert_eq!(twice[1..], [(json!("warn"), json!("low")), (json!("alarm"), json!("under"))], "-15 holds both rules: the first names it");
+    assert_eq!(twice[0].0, json!("normal"));
+    // Whole numbers in their exact order: integers past 2^53 sorted as themselves, and as cells keys.
+    let texts = |i: usize| -> Vec<Vec<Value>> { panel(&d, i)["rows"].as_array().unwrap().iter().map(|r| r.as_array().unwrap().iter().map(|c| c["text"].clone()).collect()).collect() };
+    assert_eq!(texts(25), [[json!("9007199254740992")], [json!("9007199254740993")], [json!("9007199254740993")]], "sorted exactly");
+    let keyed = |i: usize| -> Vec<(Value, Value)> { panel(&d, i)["rows"].as_array().unwrap().iter().map(|r| (r["key"].clone(), r["n"].clone())).collect() };
+    assert_eq!(keyed(26), [(json!("9999999999999999"), json!(2)), (json!("10000000000000000"), json!(1))], "keys in their exact order");
+    // Integers past 64 bits (a HUGEINT, a whole DECIMAL of 38 digits) in their own digits, never
+    // wrapped, as cells and as keys.
+    assert_eq!(texts(27), [[json!("18446744073709551617"), json!("18446744073709551617")], [json!("18446744073709551618"), json!("18446744073709551618")], [json!("18446744073709551617"), json!("18446744073709551617")]]);
+    assert_eq!(keyed(28), [(json!("1"), json!(2)), (json!("18446744073709551617"), json!(1))]);
+    // A key of a time kind written as the store's clock reads it (a timestamp, a date).
+    let mut by_stamp: BTreeMap<String, u64> = BTreeMap::new();
+    let mut by_day: BTreeMap<String, u64> = BTreeMap::new();
+    for m in [0.0, 10.0, 20.0] {
+        *by_stamp.entry(clock(at(m), "%Y-%m-%d %H:%M:%S")).or_default() += 1;
+        *by_day.entry(clock(at(m), "%Y-%m-%d")).or_default() += 1;
+    }
+    let as_rows = |m: BTreeMap<String, u64>| m.into_iter().map(|(k, n)| (json!(k), json!(n))).collect::<Vec<_>>();
+    assert_eq!((keyed(29), keyed(30)), (as_rows(by_stamp), as_rows(by_day)), "time keys by the clock");
+    // Every whole-number type the engine lists, at both ends of its range, written as the engine
+    // itself writes it (its own cast to text); the rest of its NUMERIC types the stated limits (a
+    // FLOAT and a DOUBLE to three places, a DECIMAL through the double nearest it, a UHUGEINT the
+    // driver hands over as a double).
+    let listed = live.store.query_rows("numerics", &veredas_portal::store::RowsQuery { limit: 100, ..Default::default() }).unwrap();
+    let numeric: BTreeSet<String> = listed.rows.iter().map(|r| r[0].as_str().unwrap().to_string()).collect();
+    let whole_types: BTreeSet<String> = ["TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT"].iter().map(|s| s.to_string()).collect();
+    let limits: BTreeSet<String> = ["UHUGEINT", "FLOAT", "DOUBLE", "DECIMAL"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(numeric, whole_types.union(&limits).cloned().collect::<BTreeSet<_>>(), "the engine's NUMERIC types, each driven or a stated limit");
+    let mut said = live.store.query_rows("ends_text", &veredas_portal::store::RowsQuery { limit: 10, ..Default::default() }).unwrap().rows;
+    said.sort_by_key(|r| r[0].as_i64().unwrap());
+    let ends_types: BTreeSet<String> = live.store.query_rows("ends", &veredas_portal::store::RowsQuery { limit: 1, ..Default::default() }).unwrap().columns.iter().skip(1).filter(|c| !c.data_type.starts_with("DECIMAL")).map(|c| c.data_type.clone()).collect();
+    assert_eq!(ends_types, whole_types, "every whole-number type at its ends");
+    let want: Vec<Vec<Value>> = said.iter().map(|r| r.iter().map(|c| json!(c.as_str().map(String::from).unwrap_or_else(|| c.to_string()))).collect::<Vec<Value>>()).collect();
+    assert_eq!(texts(31), want, "each written as the engine writes it");
     host.stop();
 }
 

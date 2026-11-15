@@ -353,7 +353,8 @@ plant), not sent (the plant never saw it) or not confirmed (it may have reached 
 - `name` (required): its name on the screen, unique in the file.
 - `columns` (`4`): the grid's columns, 1 to 12.
 - `panel` (none): `[[dashboard.panel]]` tables, laid out in order. The page asks again for the dashboard
-  shown every five seconds, never while its last ask is unanswered.
+  shown every five seconds, never while its last ask is unanswered, and gives an ask up after ten
+  seconds with no answer, saying so in the dashboard's place.
 
 **A panel** (`[[dashboard.panel]]`): every panel has a `kind` (required), a `title` (the object's
 label for a panel of one object, the table's name for a table's, else `"State over time"`,
@@ -396,8 +397,10 @@ in its own place and the others are drawn (a view's column of a type the engine'
   when the panel names none), `limit` (`50`, 1 to 1000). A column's `decimals` are 0 to 6; its
   rules compare its own value; a time is written as the store's clock reads it: a timestamp of any
   unit or zone to the second, a date as its day, a time of day, with its zone or without, to the
-  second; an integer in its own digits, however large.
-- `cells`: charts in cells, one row per value of a key column (a number by its full value, an integer however large) of a table over a window: the
+  second; an integer in its own digits, however large (a DECIMAL is read as the double nearest it);
+  whole numbers sort exactly.
+- `cells`: charts in cells, one row per value of a key column (a number by its full value, an integer however large, a time as
+  the clock reads it) of a table over a window: the
   median, a sparkline of the median per `bucket_minutes`, the distribution from median − `spread`
   to median + `spread` in 20 bins, σ and n. `table` (required; a view must carry `index_ms`,
   `source` and `seq`, by which its rows are read in order while rows arrive, each once, a row told

@@ -5,6 +5,9 @@ import { base, getJson } from "./api";
 import { bars, type Bucket, distribution, type Pt, type Segment, sparkline, stateBar, trend } from "./charts";
 import { clock, h, num } from "./dom";
 
+/// How long a dashboard's answer is waited for before the page gives up on it.
+const ASK_MS = 10_000;
+
 interface Tile {
   id: string;
   label: string;
@@ -179,7 +182,13 @@ export class Dashboards {
     const token = ++this.asked;
     this.out = token;
     try {
-      const d = await getJson<DashOut>(`${base(this.name)}/dashboard/${this.current}`);
+      // An answer that never comes (a link dropped silently) is given up on, said in the dashboard's
+      // place, and the next tick asks again.
+      let late = 0;
+      const d = await Promise.race([
+        getJson<DashOut>(`${base(this.name)}/dashboard/${this.current}`),
+        new Promise<never>((_, no) => { late = window.setTimeout(() => no(new Error(`no answer within ${ASK_MS / 1000} s`)), ASK_MS); }),
+      ]).finally(() => window.clearTimeout(late));
       if (token !== this.asked) return;
       this.body.style.gridTemplateColumns = `repeat(${d.columns}, minmax(0, 1fr))`;
       this.body.replaceChildren(...d.panels.map((p) => {

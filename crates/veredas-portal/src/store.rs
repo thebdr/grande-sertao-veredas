@@ -1168,7 +1168,9 @@ fn duck_to_json(v: &DuckValue) -> serde_json::Value {
         DuckValue::SmallInt(i) => J::from(*i),
         DuckValue::Int(i) => J::from(*i),
         DuckValue::BigInt(i) => J::from(*i),
-        DuckValue::HugeInt(i) => J::from(*i as i64),
+        // A 128-bit integer (a HUGEINT, a whole DECIMAL past 18 digits) as a JSON number where 64
+        // bits hold it, else its own digits: never wrapped.
+        DuckValue::HugeInt(i) => i64::try_from(*i).map(J::from).or_else(|_| u64::try_from(*i).map(J::from)).unwrap_or_else(|_| J::String(i.to_string())),
         DuckValue::UTinyInt(i) => J::from(*i),
         DuckValue::USmallInt(i) => J::from(*i),
         DuckValue::UInt(i) => J::from(*i),
@@ -1200,7 +1202,8 @@ fn duck_to_value(v: &DuckValue, ty: SeriesType) -> Option<Value> {
         (_, DuckValue::Null) => None,
         (SeriesType::Int, DuckValue::BigInt(i)) => Some(Value::Int(*i)),
         (SeriesType::Int, DuckValue::Int(i)) => Some(Value::Int(*i as i64)),
-        (SeriesType::Int, DuckValue::HugeInt(i)) => Some(Value::Int(*i as i64)),
+        // Past 64 bits no `Int` holds it: no value, never a wrapped one.
+        (SeriesType::Int, DuckValue::HugeInt(i)) => i64::try_from(*i).ok().map(Value::Int),
         (SeriesType::Int, DuckValue::Double(f)) => Some(Value::Int(*f as i64)),
         (SeriesType::Float, DuckValue::Double(f)) => Some(Value::Float(*f)),
         (SeriesType::Float, DuckValue::Float(f)) => Some(Value::Float(*f as f64)),
