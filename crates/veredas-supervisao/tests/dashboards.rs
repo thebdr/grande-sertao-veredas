@@ -817,6 +817,10 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     for refused in [false, true] {
         page.eval(&format!("window.__hold = '/dashboard/1'; window.__holdError = {refused}; location.hash = 'dashboards/1'; true"));
         page.wait_for("window.__held === false || null", Duration::from_secs(10));
+        // While the second is asked, its tab on, the grid holds none of the first's panels: it says
+        // the second is asked.
+        let asking = page.eval(r#"[document.querySelectorAll(".dash-grid > .panel").length, document.querySelector(".dash-grid > p.asking")?.textContent ?? null, document.querySelector(".subtabs button.on").textContent]"#);
+        assert_eq!(asking, json!([0, "asking for Keys", "Keys"]), "the first dashboard's panels under the second's tab");
         page.eval("location.hash = 'dashboards/0'; true");
         page.wait_for("window.__held === true", Duration::from_secs(10));
         let after = page.eval(FIRST_DRAWN);
@@ -966,10 +970,13 @@ const DRAWN_PANELS: &str = r#"(() => {
   const SHAPES = new Set(["path", "circle", "rect", "line", "polyline", "polygon", "ellipse", "text"]);
   const ownText = (el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim() !== "");
   const border = (c) => Math.max(...["Top", "Right", "Bottom", "Left"].map((s) => parseFloat(c[`border${s}Width`]) > 0 && c[`border${s}Style`] !== "none" ? alpha(c[`border${s}Color`]) : 0));
+  // A box the page writes empty (a level or a bar at zero: its inline width 0 %) paints nothing.
+  const empty = (el) => !(el instanceof SVGElement) && /(^|;)\s*width:\s*0(\.0+)?%/.test(el.getAttribute("style") ?? "");
   const paints = (el) => {
     if (el.closest(".tip")) return false;
     if (el instanceof SVGElement) return SHAPES.has(el.tagName.toLowerCase());
     if (ownText(el)) return true;
+    if (empty(el)) return false;
     const c = getComputedStyle(el);
     return alpha(c.backgroundColor) > 0 || c.backgroundImage !== "none" || border(c) > 0;
   };
@@ -987,9 +994,11 @@ const DRAWN_PANELS: &str = r#"(() => {
     }
     return false;
   };
+  // A box of no area shows nothing: an HTML element (text, a background, a border) needs both its
+  // width and its height; an SVG line or a level text may lie along one of them.
   const shown = (el) => {
     const b = el.getBoundingClientRect();
-    if (!(b.width > 0 || b.height > 0)) return false;
+    if (el instanceof SVGElement ? !(b.width > 0 || b.height > 0) : !(b.width > 0 && b.height > 0)) return false;
     if (clipped(el, b)) return false;
     const c = getComputedStyle(el);
     if (c.visibility !== "visible") return false;
@@ -1001,20 +1010,27 @@ const DRAWN_PANELS: &str = r#"(() => {
     return o * paint > 0.05;
   };
   const hidden = (p) => [p, ...p.querySelectorAll("*")].filter(paints).filter((el) => !shown(el)).map((el) => `${el.tagName}.${el.getAttribute("class") ?? ""} "${el.textContent.trim().slice(0, 30)}"`);
-  const pts = (path) => path ? (path.getAttribute("d").match(/[ML][^ML]*/g) || []).map((s) => s.slice(1).trim().split(/\s+/).map(Number)) : [];
-  const num = (el, a) => el ? Number(el.getAttribute(a)) : null;
-  const txt = (el) => el ? el.textContent : null;
+  // Every element a reading takes, kept: the census below asks every text and shape a panel shows
+  // to be one of them, so a mark the page adds (or draws twice) is a mark this test does not read.
+  const seen = new Set();
+  const see = (el) => { if (el) seen.add(el); return el; };
+  const pts = (path) => path ? (see(path).getAttribute("d").match(/[ML][^ML]*/g) || []).map((s) => s.slice(1).trim().split(/\s+/).map(Number)) : [];
+  const num = (el, a) => el ? Number(see(el).getAttribute(a)) : null;
+  const txt = (el) => el ? see(el).textContent : null;
+  // A text read whole: the element and every element inside it whose words it holds.
+  const txtAll = (el) => { if (!el) return null; for (const e of [el, ...el.querySelectorAll("*")]) see(e); return el.textContent; };
   const dot = (svg) => { const c = svg ? svg.querySelector("circle.point") : null; return c ? [num(c, "cx"), num(c, "cy")] : null; };
-  const axis = (svg) => [...svg.querySelectorAll("text.axis")].map((t) => [t.textContent, num(t, "x"), num(t, "y")]);
+  const axis = (svg) => [...svg.querySelectorAll("text.axis")].map((t) => [txt(t), num(t, "x"), num(t, "y")]);
   const drawn = [...document.querySelectorAll(".dash-grid > .panel")].map((p) => {
     const r = { kind: p.dataset.kind, title: txt(p.querySelector(".panel-title")), span: getComputedStyle(p).gridColumnStart };
     r.hidden = hidden(p);
     const err = p.querySelector(":scope > p.error");
-    if (err) { r.error = err.textContent; r.right = txt(p.querySelector(".panel-bind")); return r; }
+    if (err) { r.error = txt(err); r.right = txt(p.querySelector(".panel-bind")); return r; }
     switch (r.kind) {
       case "value": {
         r.box = [...p.classList].find((c) => c.startsWith("st-box-")) ?? null;
-        r.big = txt(p.querySelector(".big")); r.big_cls = p.querySelector(".big").className;
+        r.big = txtAll(p.querySelector(".big")); r.big_cls = p.querySelector(".big").className;
+        r.id = txt(p.querySelector(".panel-bind > .mono"));
         r.badge = txt(p.querySelector(".panel-head .badge")); r.sub = txt(p.querySelector(".sub"));
         r.badge_cls = p.querySelector(".panel-head .badge")?.className ?? null; r.sub_cls = p.querySelector(".sub").className;
         const sp = p.querySelector("svg.spark");
@@ -1040,7 +1056,8 @@ const DRAWN_PANELS: &str = r#"(() => {
       }
       case "timeline":
         r.rows = [...p.querySelectorAll(".tl-row")].map((x) => [txt(x.querySelector(".tl-label")), txt(x.querySelector(".tl-now")), x.querySelector(".tl-now").className,
-          [...x.querySelectorAll("svg.statebar rect:not(.st-none)")].map((g) => [g.getAttribute("class"), num(g, "x"), num(g, "width"), num(g, "y"), num(g, "height")])]);
+          [...x.querySelectorAll("svg.statebar rect:not(.st-none)")].map((g) => [g.getAttribute("class"), num(g, "x"), num(g, "width"), num(g, "y"), num(g, "height")]),
+          ((g) => g ? [num(g, "x"), num(g, "width"), num(g, "y"), num(g, "height")] : null)(x.querySelector("svg.statebar rect.st-none"))]);
         r.axis = [...p.querySelectorAll(".tl-axis span")].map(txt); break;
       case "grid":
         r.cells = [...p.querySelectorAll(".grid-cells .cell")].map((c) => [txt(c.querySelector(".cell-id")), txt(c.querySelector(".cell-v")), c.className, c.querySelector(".cell-v").className]);
@@ -1049,9 +1066,10 @@ const DRAWN_PANELS: &str = r#"(() => {
         r.rows = [...p.querySelectorAll(".lv-row")].map((x) => [txt(x.querySelector(".lv-label")), x.querySelector(".lv-fill").getAttribute("style"), x.querySelector(".lv-fill").className, [...x.querySelectorAll(".lv-tick")].map((t) => t.getAttribute("style")), txt(x.querySelector(".lv-v")), x.querySelector(".lv-v").className]); break;
       case "table":
         r.head = [...p.querySelectorAll("thead th")].map(txt);
-        r.rows = [...p.querySelectorAll("tbody tr")].map((tr) => [...tr.children].map((td) => [td.textContent, td.className, td.querySelector(".inbar-fill")?.getAttribute("style") ?? null]));
+        r.rows = [...p.querySelectorAll("tbody tr")].map((tr) => [...tr.children].map((td) => [txtAll(td), td.className, td.querySelector(".inbar-fill")?.getAttribute("style") ?? null]));
         r.right = txt(p.querySelector(".panel-bind")); break;
       case "cells":
+        r.head = [...p.querySelectorAll("thead th")].map(txt);
         r.rows = [...p.querySelectorAll("tbody tr")].map((tr) => { const td = [...tr.children]; return [txt(td[0]), txt(td[1]), pts(td[2].querySelector("path.line")), pts(td[3].querySelector("path.line")), txt(td[4]), txt(td[5]), dot(td[2].querySelector("svg"))]; });
         r.right = txt(p.querySelector(".panel-bind")); break;
     }
@@ -1080,7 +1098,7 @@ const DRAWN_PANELS: &str = r#"(() => {
     const vb = svg.viewBox.baseVal;
     if (kind === "spark") for (const c of svg.querySelectorAll("circle.point")) if (num(c, "r") !== 2) marks.push(`spark: its dot of radius ${num(c, "r")}`);
     if (kind === "trend") {
-      const grids = [...svg.querySelectorAll("line.grid")];
+      const grids = [...svg.querySelectorAll("line.grid")].map(see);
       const labels = [...svg.querySelectorAll("text.axis")].filter((t) => t.getAttribute("text-anchor") === "end" && num(t, "y") < vb.height - 6);
       if (grids.length !== labels.length) marks.push(`trend: ${grids.length} grid lines for ${labels.length} value labels`);
       grids.forEach((g, i) => {
@@ -1089,10 +1107,52 @@ const DRAWN_PANELS: &str = r#"(() => {
       });
     }
     if (kind === "dist") {
-      const line = svg.querySelector("path.line"), area = svg.querySelector("path.area"), med = svg.querySelector("line.median");
+      const line = svg.querySelector("path.line"), area = see(svg.querySelector("path.area")), med = see(svg.querySelector("line.median"));
       const n = pts(line).length, W = vb.width, H = vb.height, bw = W / n;
       if (!area || area.getAttribute("d") !== `${line.getAttribute("d")} L${W - bw / 2} ${H - 1} L${bw / 2} ${H - 1} Z`) marks.push(`dist: its area not its line closed to the base: ${area?.getAttribute("d")}`);
       if (!med || num(med, "x1") !== W / 2 || num(med, "x2") !== W / 2 || num(med, "y1") !== 0 || num(med, "y2") !== H) marks.push("dist: its median not at the middle");
+    }
+  }
+  // The census: every text and every SVG shape a panel shows is one a reading above took, one to
+  // one (a second of a kind the readings take the first of is unread).
+  for (const p of document.querySelectorAll(".dash-grid > .panel")) {
+    for (const el of [p, ...p.querySelectorAll("*")]) {
+      const shape = el instanceof SVGElement && SHAPES.has(el.tagName.toLowerCase());
+      if ((shape || (!(el instanceof SVGElement) && ownText(el))) && !el.closest(".tip, title") && shown(el) && !seen.has(el)) {
+        marks.push(`${p.dataset.kind}: a mark this test does not read, ${el.tagName}.${el.getAttribute("class") ?? ""} "${el.textContent.trim().slice(0, 30)}"`);
+      }
+    }
+  }
+  // Where the browser draws each mark is where the page wrote it: no transform on a shape or on any
+  // element between it and its chart (nor the chart itself), and the geometry CSS can set on a shape
+  // (a rect's, a circle's, an ellipse's, a path's) its attribute's; an HTML box the page places by
+  // its inline width or left, by its own percent of what holds it, and moved by no transform.
+  const GEOMETRY = { rect: ["x", "y", "width", "height", "rx", "ry"], circle: ["cx", "cy", "r"], ellipse: ["cx", "cy", "rx", "ry"], path: ["d"] };
+  const numbers = (s) => (String(s).match(/-?\d*\.?\d+(e[-+]?\d+)?/gi) || []).map(Number);
+  const moved = (e) => { const s = getComputedStyle(e); return ["transform", "translate", "rotate", "scale"].some((k) => s[k] && s[k] !== "none"); };
+  for (const el of document.querySelectorAll(".dash-grid svg *, .dash-grid svg")) {
+    const tag = el.tagName.toLowerCase();
+    if (!SHAPES.has(tag) && tag !== "svg" && tag !== "g") continue;
+    if (moved(el)) marks.push(`${tag}.${el.getAttribute("class") ?? ""}: moved by a transform`);
+    for (const a of GEOMETRY[tag] ?? []) {
+      if (!el.hasAttribute(a)) continue;
+      const css = getComputedStyle(el)[a];
+      const want = numbers(el.getAttribute(a)), got = numbers(css);
+      if (want.length !== got.length || want.some((w, i) => Math.abs(w - got[i]) > 1e-3)) marks.push(`${tag}.${el.getAttribute("class") ?? ""}: its ${a} drawn ${css}, written ${el.getAttribute(a)}`);
+    }
+  }
+  for (const el of document.querySelectorAll(".dash-grid [style]")) {
+    if (el.matches(".dash-grid > .panel")) continue;
+    if (moved(el)) marks.push(`${el.className}: moved by a transform`);
+    const c = getComputedStyle(el);
+    for (const prop of ["width", "left"]) {
+      const inline = el.style[prop];
+      if (!inline || !inline.endsWith("%")) continue;
+      const holder = c.position === "absolute" ? el.offsetParent : el.parentElement;
+      const hs = getComputedStyle(holder);
+      const room = c.position === "absolute" ? holder.clientWidth : holder.clientWidth - parseFloat(hs.paddingLeft) - parseFloat(hs.paddingRight);
+      const want = (parseFloat(inline) / 100) * room, got = parseFloat(c[prop]);
+      if (Math.abs(want - got) > 0.5) marks.push(`${el.className}: its ${prop} drawn ${c[prop]}, written ${inline} of ${room}px`);
     }
   }
   // The grid's columns as laid out: one track per column.
@@ -1236,6 +1296,11 @@ fn probe_dashboard(d: &Value) -> Value {
     panels.push(tb);
     let mut cl = p(10);
     cl["data"]["rows"][0]["spark"] = json!([cl["data"]["rows"][0]["spark"][0].clone()]);
+    // A spread of four places, drawn as the host writes it, never rounded by the page; and rows left
+    // out (no key or no value), said.
+    cl["data"]["spread"] = json!(0.0005);
+    cl["data"]["spread_text"] = json!("0.0005");
+    cl["data"]["left_out"] = json!(2);
     panels.push(cl);
     // Bars of every sign: a bucket below 0 among the others; and every bucket and the target below 0.
     let mut mixed = p(5);
@@ -1287,6 +1352,8 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                     r["big"] = json!(format!("{}{}", x["text"].as_str().unwrap_or("\u{2014}"), s(&x["unit"])));
                     r["big_cls"] = json!(format!("big mono st-text-{}", s(&x["state"])));
                     r["badge"] = if x["state"] == "normal" { Value::Null } else { json!(format!("{} {}", s(&x["mark"]), s(&x["word"]).to_uppercase())) };
+                    // Its object's id beside the title while it is normal, the badge in its place else.
+                    r["id"] = if x["state"] == "normal" { x["id"].clone() } else { Value::Null };
                     r["sub"] = json!(s(&x["sub"]));
                     r["spark"] = json!(spark_at(&pairs_of(&x["spark"]), 260.0, 30.0));
                     // The state on every part of the tile: its badge, its sub-line and its sparkline.
@@ -1378,7 +1445,8 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                             let (x0, x1) = (px(g["from"].as_f64().unwrap()).max(0.0), px(g["to"].as_f64().unwrap()).min(400.0));
                             (x1 > x0).then(|| json!([format!("st-{}", s(&g["state"])), x0, x1 - x0, 0.0, 14.0]))
                         }).collect();
-                        json!([row["label"], format!("{} {}", s(&row["now"]["mark"]), s(&row["now"]["word"])), format!("tl-now st-text-{}", s(&row["now"]["state"])), segs])
+                        // Under the runs, the rail of no state the whole window across.
+                        json!([row["label"], format!("{} {}", s(&row["now"]["mark"]), s(&row["now"]["word"])), format!("tl-now st-text-{}", s(&row["now"]["state"])), segs, [0.0, 400.0, 0.0, 14.0]])
                     }).collect::<Vec<_>>());
                     r["axis"] = json!([clock(x["from"].as_f64().unwrap()), "now"]);
                 }
@@ -1418,6 +1486,7 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                     r["right"] = json!(format!("{} rows", x["total"]));
                 }
                 "cells" => {
+                    r["head"] = json!(["Key", "Median", "Median, window", "Distribution", "σ", "n"]);
                     // A distribution 160 by 26: bin i at its middle across, its count up from y 25
                     // to 2 against the largest (one at least).
                     r["rows"] = json!(x["rows"].as_array().unwrap().iter().map(|row| {
@@ -1430,7 +1499,12 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                     }).collect::<Vec<_>>());
                     let minutes = ((x["to"].as_f64().unwrap() - x["from"].as_f64().unwrap()) / 60_000.0).round();
                     let cap = if x["capped"] == json!(true) { format!(" · newest {} of {} rows", x["read"], x["total"]) } else { String::new() };
-                    r["right"] = json!(format!("last {minutes} min · distribution ±{} around each median, same scale on every row{cap}", num(&x["spread"], 2)));
+                    // The spread as the host wrote it (in full), and the rows left out, counted.
+                    let left = match x["left_out"].as_u64() {
+                        Some(n) if n > 0 => format!(" · {n} with no key or no value"),
+                        _ => String::new(),
+                    };
+                    r["right"] = json!(format!("last {minutes} min · distribution ±{} around each median, same scale on every row{cap}{left}", x["spread_text"].as_str().unwrap()));
                 }
                 _ => {}
             }
@@ -1547,6 +1621,21 @@ id = "t-half"
 value = { source = "sorter", series = "rate" }
 unit = "%"
 states = [ { below = 99.0005, state = "near", word = "under" } ]
+
+[[object]]
+id = "k-source"
+value = { source = "sorter", series = "at", key = "A1" }
+states = [ { above = 30, source = "sorter", state = "warn", word = "far" } ]
+
+[[object]]
+id = "k-series"
+value = { source = "sorter", series = "at", key = "A1" }
+states = [ { above = 30, source = "sorter", series = "at", state = "warn", word = "far" } ]
+
+[[object]]
+id = "k-key"
+value = { source = "sorter", series = "at", key = "A1" }
+states = [ { above = 30, source = "sorter", series = "at", key = "A1", state = "warn", word = "far" } ]
 
 [[dashboard]]
 name = "Rules"
@@ -1766,6 +1855,72 @@ kind = "bars"
 object = "keyed"
 aggregate = "max"
 target = 0.0005
+
+[[dashboard.panel]]
+kind = "cells"
+table = "digits"
+key = "code"
+value = "travel"
+spread = 5
+
+[[dashboard.panel]]
+kind = "cells"
+table = "digits"
+key = "n5"
+value = "travel"
+spread = 5
+
+[[dashboard.panel]]
+kind = "cells"
+table = "nulls"
+key = "k"
+value = "v"
+spread = 5
+
+[[dashboard.panel]]
+kind = "table"
+table = "flags"
+columns = [ { name = "hot", bar = true, states = [ { equals = 1, state = "warn", word = "hot" } ] } ]
+sort = { column = "hot" }
+
+[[dashboard.panel]]
+kind = "table"
+table = "edges"
+columns = [ { name = "h" } ]
+
+[[dashboard.panel]]
+kind = "cells"
+table = "edges"
+key = "h"
+value = "travel"
+spread = 5
+
+[[dashboard.panel]]
+kind = "table"
+table = "far"
+
+[[dashboard.panel]]
+kind = "cells"
+table = "sorts"
+key = "outlet"
+value = "travel"
+spread = 0.0005
+
+[[dashboard.panel]]
+kind = "timeline"
+objects = ["keyed", "k-source", "k-series", "k-key"]
+
+[[dashboard.panel]]
+kind = "value"
+object = "k-source"
+
+[[dashboard.panel]]
+kind = "value"
+object = "k-series"
+
+[[dashboard.panel]]
+kind = "value"
+object = "k-key"
 "#;
 
 /// The project's rules and views for `RULES`: a keyed numeric series, float keys, a series never
@@ -1885,6 +2040,26 @@ sql = "SELECT index_ms, source, seq, travel, CAST(ts AS TIMESTAMP_S) AS s, CAST(
 [[table]]
 name = "others"
 sql = "SELECT DISTINCT logical_type AS t FROM duckdb_types() WHERE type_category IS DISTINCT FROM 'NUMERIC'"
+
+[[table]]
+name = "digits"
+sql = "SELECT index_ms, source, seq, CAST(outlet * 5 AS VARCHAR) AS code, outlet * 5 AS n5, travel FROM sorts"
+
+[[table]]
+name = "nulls"
+sql = "SELECT index_ms, source, seq, CASE WHEN travel = 0 THEN NULL ELSE outlet END AS k, CASE WHEN travel = 20 THEN NULL ELSE travel END AS v FROM sorts"
+
+[[table]]
+name = "flags"
+sql = "SELECT index_ms, outlet, travel > 15 AS hot FROM sorts"
+
+[[table]]
+name = "edges"
+sql = "SELECT index_ms, source, seq, CASE outlet WHEN 2 THEN CAST('24:00:00' AS TIME) ELSE CAST('00:00:00' AS TIME) END AS h, travel FROM sorts"
+
+[[table]]
+name = "far"
+sql = "SELECT CAST('infinity' AS TIMESTAMP) AS a, CAST('-infinity' AS TIMESTAMP) AS b, CAST('infinity' AS DATE) AS c, CAST('-infinity' AS DATE) AS d, CAST('294000-01-01 00:00:00' AS TIMESTAMP) AS e"
 "#;
 
 #[test]
@@ -2164,6 +2339,49 @@ fn every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says() {
             *want.entry(clock(r[4 + i].as_i64().unwrap(), read_as(t))).or_default() += 1;
         }
         assert_eq!(got, want, "keyed by {name}, a {t}");
+    }
+    // Cells keys in their column's own order, by its engine type: a text column's digits as text
+    // ("10" before "5"), the same numbers in a numeric column as numbers.
+    assert_eq!(keyed(41), [(json!("10"), json!(1)), (json!("5"), json!(2))], "a text key's digits in text's order");
+    assert_eq!(keyed(42), [(json!("5"), json!(2)), (json!("10"), json!(1))], "a numeric key in numbers' order");
+    // A row with no key and one with no value charted in no row, and counted.
+    let nulls = panel(&d, 43);
+    assert_eq!((keyed(43), nulls["read"].clone(), nulls["left_out"].clone()), (vec![(json!("1"), json!(1))], json!(3), json!(2)), "{nulls}");
+    for i in [10, 11, 14, 23, 26, 28, 29, 30, 34, 41, 42, 46] {
+        assert_eq!(panel(&d, i)["left_out"], json!(0), "panel {i}: nothing left out");
+    }
+    // A boolean read as 1 or 0 by its rules, its bar and its sort, written true or false: false
+    // first, then the two trues, each warned and at the bar's full length.
+    let flags: Vec<Vec<Value>> = panel(&d, 44)["rows"].as_array().unwrap().iter().map(|r| vec![r[0]["text"].clone(), r[0]["bar"].clone(), r[0]["state"].clone(), r[0]["word"].clone()]).collect();
+    let hot = vec![json!("true"), json!(1.0), json!("warn"), json!("hot")];
+    assert_eq!(flags, vec![vec![json!("false"), json!(0.0), json!("normal"), json!("")], hot.clone(), hot], "a boolean column");
+    // The day's end, which the engine holds apart from midnight, written as itself, in a table and as
+    // a key of its own after midnight's.
+    assert_eq!(texts(45), [[json!("00:00:00")], [json!("24:00:00")], [json!("00:00:00")]], "24:00:00 as itself");
+    assert_eq!(keyed(46), [(json!("00:00:00"), json!(2)), (json!("24:00:00"), json!(1))], "24:00:00 a key of its own");
+    // Times past the clock's reach (the engine's infinities, a year past chrono's) written as the
+    // milliseconds the store holds.
+    let far = panel(&d, 47);
+    let far_row = far["rows"][0].as_array().unwrap();
+    assert_eq!(far_row.len(), 5, "{far}");
+    for c in far_row {
+        let ms = c["value"].as_i64().unwrap_or_else(|| panic!("a far time as milliseconds: {c}"));
+        assert!(chrono::DateTime::from_timestamp_millis(ms).is_none(), "{ms}: past the clock's reach");
+        assert_eq!(c["text"], json!(ms.to_string()), "a far time written as its milliseconds: {c}");
+    }
+    // A spread of four places, written in full for the page to draw as written.
+    assert_eq!((panel(&d, 48)["spread"].clone(), panel(&d, 48)["spread_text"].clone(), panel(&d, 10)["spread_text"].clone()), (json!(0.0005), json!("0.0005"), json!("5")));
+    // A keyed object's rule written out in each form (its source alone, its source and series, all
+    // three) is the object's own, key and all: on a timeline beside the object's rule left bare, the
+    // same runs; on a tile, the same reading, never another series named.
+    let ktl = panel(&d, 49);
+    let runs = |i: usize| ktl["rows"][i]["segments"].clone();
+    for (i, id) in ["k-source", "k-series", "k-key"].into_iter().enumerate() {
+        assert_eq!((runs(i + 1), ktl["rows"][i + 1]["now"]["state"].clone()), (runs(0), ktl["rows"][0]["now"]["state"].clone()), "{id} on the timeline");
+        let (tile, own) = (panel(&d, 50 + i), panel(&d, 5));
+        for k in ["state", "text", "sub", "spark", "word"] {
+            assert_eq!(tile[k], own[k], "{id}'s tile, its {k}");
+        }
     }
     host.stop();
 }

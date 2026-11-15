@@ -182,10 +182,12 @@ pub fn numeric(data_type: &str) -> bool {
 }
 
 /// A cell of a numeric column (`digits`) as a number: a JSON number, or the digits portal writes for
-/// an integer past 64 bits, read as the double nearest it.
+/// an integer past 64 bits, read as the double nearest it; and a boolean as 1 or 0, as its rules read
+/// it (its bar and its sort alike), written `true` or `false`.
 fn number_of(v: &Json, digits: bool) -> Option<f64> {
     match v {
         Json::Number(n) => n.as_f64(),
+        Json::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
         Json::String(_) if digits => whole(v, true).map(|x| x as f64),
         _ => None,
     }
@@ -240,9 +242,13 @@ pub fn clock_of(data_type: &str) -> Option<Clock> {
 }
 
 /// A time as the store holds it, written as the store's clock reads it: a timestamp to the second,
-/// a date as its day, a time of day (with its zone or without) to the second.
+/// a date as its day, a time of day (with its zone or without) to the second, the day's end
+/// (`24:00:00`, which the engine holds apart from midnight) as itself.
 pub fn time_text(v: &Json, clock: Clock) -> String {
     let at = v.as_i64().and_then(chrono::DateTime::from_timestamp_millis);
+    if clock == Clock::Hour && v.as_i64() == Some(24 * 60 * MINUTE_MS) {
+        return "24:00:00".to_string();
+    }
     match (clock, at) {
         (Clock::Stamp, Some(t)) => t.format("%Y-%m-%d %H:%M:%S").to_string(),
         (Clock::Day, Some(t)) => t.format("%Y-%m-%d").to_string(),
@@ -459,25 +465,30 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
         Some(c) if v.as_i64().is_some() => Some(time_text(v, c)),
         _ => key_text(v),
     };
-    let mut groups: BTreeMap<String, Vec<(Option<i64>, f64)>> = BTreeMap::new();
+    // Each key with the value it was first read from, for its order; a row with no key or no value
+    // (null) charted in no row and counted, said beside the panel's window.
+    let mut groups: BTreeMap<String, (Json, Vec<(Option<i64>, f64)>)> = BTreeMap::new();
+    let mut left_out = 0usize;
     for r in &rows {
-        let (Some(k), Some(v)) = (r.get(ki).and_then(key_of), r.get(vi).and_then(|v| number_of(v, true))) else { continue };
+        let raw = r.get(ki).cloned().unwrap_or(Json::Null);
+        let (Some(k), Some(v)) = (key_of(&raw), r.get(vi).and_then(|v| number_of(v, true))) else {
+            left_out += 1;
+            continue;
+        };
         let t = ti.and_then(|i| r.get(i)).and_then(Json::as_i64);
-        groups.entry(k).or_default().push((t, v));
+        groups.entry(k).or_insert_with(|| (raw, Vec::new())).1.push((t, v));
     }
     let mut keys: Vec<String> = groups.keys().cloned().collect();
-    // Keys that all read as whole numbers sort exactly; as numbers, by their values; any other set
-    // (a time's clock text among them, in its own order) as text.
-    if keys.iter().all(|k| k.parse::<i128>().is_ok()) {
-        keys.sort_by_key(|k| k.parse::<i128>().unwrap_or(0));
-    } else if keys.iter().all(|k| k.parse::<f64>().is_ok()) {
-        keys.sort_by(|a, b| a.parse::<f64>().unwrap_or(0.0).partial_cmp(&b.parse::<f64>().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
-    }
+    // Keys in the key column's own order, by its engine type, as a table sorts it: a numeric
+    // column's exactly (an integer past 64 bits among them), a time's by its clock, a boolean false
+    // before true, any other column's as text (a code's digits as text, whatever its other keys).
+    let key_digits = types.get(ki).is_some_and(|t| numeric(t));
+    keys.sort_by(|a, b| compare_cells(&groups[a].0, &groups[b].0, key_digits).then_with(|| a.cmp(b)));
     let bucket_ms = bucket_minutes as i64 * MINUTE_MS;
     let out: Vec<Json> = keys
         .iter()
         .map(|k| {
-            let g = &groups[k];
+            let g = &groups[k].1;
             let mut vals: Vec<f64> = g.iter().map(|(_, v)| *v).collect();
             vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let med = median(&vals).unwrap_or(0.0);
@@ -500,7 +511,8 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
         })
         .collect();
     // Capped: the window held a row past the cap, which the read stopped before.
-    Ok(json!({ "from": from, "to": to, "spread": spread, "rows": out, "read": rows.len(), "total": total, "capped": capped }))
+    // The spread in full, as the binding writes it, for the page to draw as written.
+    Ok(json!({ "from": from, "to": to, "spread": spread, "spread_text": full_number(spread), "rows": out, "read": rows.len(), "left_out": left_out, "total": total, "capped": capped }))
 }
 
 fn panel_body(live: &Live, b: &Binding, snap: &Snapshot, p: &Panel, to: i64, now_unix: i64) -> Result<Json, String> {

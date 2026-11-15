@@ -125,7 +125,10 @@ function cellsPanel(p: PanelOut): HTMLElement {
       h("td", { class: "mono" }, num(r.sigma, 1)),
       h("td", { class: "mono" }, String(r.n))),
   );
-  const note = `last ${Math.round((d.to - d.from) / 60000)} min · distribution ±${num(d.spread)} around each median, same scale on every row${d.capped ? ` · newest ${d.read} of ${d.total} rows` : ""}`;
+  // The spread as the host wrote it, in full (the binding's own number, never rounded here); the
+  // rows with no key or no value, charted in no row, counted.
+  const left = d.left_out > 0 ? ` · ${d.left_out} with no key or no value` : "";
+  const note = `last ${Math.round((d.to - d.from) / 60000)} min · distribution ±${d.spread_text} around each median, same scale on every row${d.capped ? ` · newest ${d.read} of ${d.total} rows` : ""}${left}`;
   return h("div", { class: "panel" }, head(p.title, note),
     h("table", { class: "dt" }, h("thead", {}, h("tr", {}, ...["Key", "Median", "Median, window", "Distribution", "σ", "n"].map((x) => h("th", {}, x)))), h("tbody", {}, ...rows)));
 }
@@ -152,6 +155,8 @@ export class Dashboards {
   private asked = 0;
   // The refresh still out, if any: the five-second tick waits for its answer rather than overtake it.
   private out = 0;
+  // The dashboard the grid holds (its panels, or its refusal); none before the first answer.
+  private drawn: number | null = null;
 
   constructor(private name: string, private dashboards: { name: string }[]) {
     this.root.append(this.tabs, this.body);
@@ -167,6 +172,13 @@ export class Dashboards {
     if (this.dashboards.length === 0) {
       this.body.replaceChildren(h("p", { class: "muted" }, "This binding has no dashboard."));
       return;
+    }
+    // Another dashboard's panels never stand under this one's tab: until its answer comes, the grid
+    // says it is asked.
+    if (this.drawn !== this.current) {
+      this.drawn = null;
+      this.body.style.gridTemplateColumns = "";
+      this.body.replaceChildren(h("p", { class: "muted asking" }, `asking for ${this.dashboards[this.current].name}`));
     }
     void this.refresh(true);
     window.clearInterval(this.timer);
@@ -191,6 +203,7 @@ export class Dashboards {
         new Promise<never>((_, no) => { late = window.setTimeout(() => no(new Error(`no answer within ${ASK_MS / 1000} s`)), ASK_MS); }),
       ]).finally(() => window.clearTimeout(late));
       if (token !== this.asked) return;
+      this.drawn = this.current;
       this.body.style.gridTemplateColumns = `repeat(${d.columns}, minmax(0, 1fr))`;
       this.body.replaceChildren(...d.panels.map((p) => {
         const el = p.error !== undefined ? h("div", { class: "panel" }, head(p.title, p.kind), h("p", { class: "error" }, p.error)) : (DRAW[p.kind] ?? (() => h("div", { class: "panel" }, head(p.title, p.kind))))(p);
@@ -199,7 +212,10 @@ export class Dashboards {
         return el;
       }));
     } catch (e) {
-      if (token === this.asked) this.body.replaceChildren(h("p", { class: "error" }, String(e)));
+      if (token === this.asked) {
+        this.drawn = this.current;
+        this.body.replaceChildren(h("p", { class: "error" }, String(e)));
+      }
     } finally {
       if (this.out === token) this.out = 0;
     }
