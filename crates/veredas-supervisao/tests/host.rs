@@ -705,6 +705,15 @@ fn nothing_starts_before_the_address_is_held_nor_under_check() {
         other => panic!("{:?}", other.err()),
     }
     assert!(!store.exists(), "a session started before the address was held");
+    // A check of the same file while its address is held (its host running, say): the plan all the
+    // same, both sessions in it, nothing bound, nothing started, each way the executable takes one.
+    for args in [vec![path.as_os_str().to_owned(), "--check".into()], vec!["--check".into(), path.as_os_str().to_owned()]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).args(&args).stdin(Stdio::null()).output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{args:?} with {taken} held: {}", String::from_utf8_lossy(&out.stderr));
+        let plan = String::from_utf8_lossy(&out.stdout).to_string();
+        assert!(plan.contains("session `loop` at /s/loop/") && plan.contains("session `hall` at /s/hall/") && !plan.contains("serving on"), "{args:?} with {taken} held: {plan}");
+        assert!(!store.exists(), "{args:?}: a check started a session");
+    }
     drop(held);
 }
 
@@ -924,7 +933,7 @@ const LISTEN: &str = r#"window.__listening = []; window.__fired = {}; window.__f
 /// The elements a page listens on for the pointer or the wheel, in the document and not driven yet,
 /// each with the kinds it listens for (kept in `__targets` for `__at` and `__missed`).
 const TARGETS: &str = r#"(() => {
-  const mouse = ["click", "mousedown", "mousemove", "mouseleave", "wheel"];
+  const mouse = ["click", "mousedown", "mouseup", "mousemove", "mouseleave", "wheel"];
   const kinds = new Map();
   for (const [type, t] of window.__listening) if (t instanceof Element && t.isConnected && !window.__driven.has(t) && mouse.includes(type)) { if (!kinds.has(t)) kinds.set(t, new Set()); kinds.get(t).add(type); }
   window.__targets = [...kinds.keys()];
@@ -945,7 +954,7 @@ const UNHEARD: &str = r#"(() => {
 const DRIVEN: [(&str, &str); 13] = [
     ("click", "pressed and released on every element listening, and every button and attention row pressed (PRESS_ALL)"),
     ("mousedown", "dragged from every element listening"),
-    ("mouseup", "released after every drag and press"),
+    ("mouseup", "released after every drag and press, and pressed and released on every element listening"),
     ("mousemove", "moved over every element listening, and dragged"),
     ("mouseleave", "moved over and off every element listening"),
     ("wheel", "turned both ways over every element listening"),
@@ -959,17 +968,21 @@ const DRIVEN: [(&str, &str); 13] = [
 ];
 
 /// Every kind of event the page's source listens for (`web/src`): each `addEventListener("…")`
-/// and each `.on… =` it writes.
+/// and each `.on… =` it writes (with or without spaces round the `=`). A registration the reading
+/// cannot take (its kind in a variable, in other quotes) fails the reading: every
+/// `addEventListener(` is one with its kind written in double quotes.
 fn listened_kinds() -> std::collections::BTreeSet<String> {
     let mut kinds = std::collections::BTreeSet::new();
-    for (_, text) in page_sources() {
+    for (file, text) in page_sources() {
+        assert_eq!(text.matches("addEventListener(").count(), text.matches("addEventListener(\"").count(), "{file}: a listener whose kind the reading cannot take");
         for (at, _) in text.match_indices("addEventListener(\"") {
             let kind: String = text[at + 18..].chars().take_while(|c| c.is_ascii_lowercase()).collect();
             kinds.insert(kind);
         }
         for (at, _) in text.match_indices(".on") {
             let kind: String = text[at + 3..].chars().take_while(|c| c.is_ascii_lowercase()).collect();
-            if !kind.is_empty() && text[at + 3 + kind.len()..].starts_with(" = ") {
+            let rest = text[at + 3 + kind.len()..].trim_start_matches(' ');
+            if !kind.is_empty() && rest.starts_with('=') && !rest.starts_with("==") && !rest.starts_with("=>") {
                 kinds.insert(kind);
             }
         }
@@ -985,15 +998,40 @@ fn page_sources() -> Vec<(String, String)> {
     out
 }
 
+/// Every way the page's source can ask anything of a server, the reading's starts: `getJson` (typed
+/// or not), `fetch`, an `EventSource`; and the ways no ask of it is written today (a WebSocket, a
+/// beacon, an `XMLHttpRequest`, a module loaded at run time), each of which the reading refuses
+/// until it is read.
+const ASK_STARTS: [&str; 8] = ["getJson<", "getJson(", "fetch(", "new EventSource(", "new WebSocket(", "sendBeacon(", "XMLHttpRequest", "import("];
+
 /// Every ask the page's source makes: the address each `getJson`, `fetch` and `EventSource` is
-/// written with as a string, the session's base dropped and every value put in it written `*`.
+/// written with as a string, the session's base dropped and every value put in it written `*`. An
+/// ask the reading cannot take (its address not written there as a string, or by a way of asking
+/// not read) fails the reading; the one call it passes is `getJson`'s own `fetch` of the address it
+/// is given (`api.ts`), and `getJson`'s own declaration.
 fn page_asks() -> std::collections::BTreeSet<String> {
     let mut asks = std::collections::BTreeSet::new();
-    for (_, text) in page_sources() {
-        for start in ["getJson<", "fetch(", "new EventSource("] {
+    let mut unread = Vec::new();
+    for (file, text) in page_sources() {
+        for start in ASK_STARTS {
             for (at, _) in text.match_indices(start) {
                 let line = &text[at..at + text[at..].find('\n').unwrap_or(text.len() - at)];
-                let Some(open) = line.find("(\u{60}").or_else(|| line.find("(\"")) else { continue };
+                let whole = &text[text[..at].rfind('\n').map_or(0, |n| n + 1)..at + line.len()];
+                if whole.contains("function getJson") || (file == "api.ts" && whole.trim_start().starts_with("const r = await fetch(url,")) {
+                    continue;
+                }
+                // The call's own parenthesis (after a type argument, for a typed `getJson`), its address
+                // a string written there.
+                let open = match start {
+                    "getJson<" => line.find(">(").map(|g| g + 1),
+                    "getJson(" | "fetch(" | "new EventSource(" => Some(start.len() - 1),
+                    _ => None,
+                };
+                let read = open.filter(|o| matches!(line[o + 1..].chars().next(), Some('\u{60}') | Some('"')));
+                let Some(open) = read else {
+                    unread.push(format!("{file}: {}", whole.trim()));
+                    continue;
+                };
                 let quote = line[open + 1..].chars().next().unwrap();
                 let body = &line[open + 2..];
                 let mut written = body[..body.find(quote).unwrap()].to_string();
@@ -1008,9 +1046,9 @@ fn page_asks() -> std::collections::BTreeSet<String> {
             }
         }
     }
+    assert_eq!(unread, Vec::<String>::new(), "an ask of the page's source the reading cannot take");
     asks
 }
-
 /// Every ask the page makes (`page_asks`) and the page of the policy test it is refused on: 0 the
 /// sessions' list, 1 to 5 a session's page (1 and 2 its start failing, 3 to 5 its views shown).
 const FAILING: [(&str, usize); 10] = [
@@ -1120,7 +1158,7 @@ fn drive_a_pass(page: &mut Browser, what: &str, driven: &mut usize, clones: &mut
                 pointer(page, "mouseMoved", x + w / 8.0, y, 0);
                 pointer(page, "mouseMoved", 1.0, 1.0, 0);
             }
-            if has("click") {
+            if has("click") || has("mouseup") {
                 pointer(page, "mouseMoved", x, y, 0);
                 pointer(page, "mousePressed", x, y, 1);
                 pointer(page, "mouseReleased", x, y, 0);
@@ -1403,6 +1441,11 @@ fn every_view_refuses_nothing(page: &mut Browser, session: &str) -> usize {
     }
     assert!(pressed >= views.len() && driven >= views.len(), "{session}: controls pressed: {pressed}, elements driven: {driven}");
     assert_eq!(page.eval(UNHEARD), json!([]), "{session}: kinds of pointer input the page listens for and never heard");
+    // And every kind of event the page registered as it ran (on the window, the document, an
+    // element or the feed, however its source wrote it), one the test drives (`DRIVEN`).
+    let registered: Vec<String> = page.eval("[...new Set(window.__listening.map(([k]) => k))].sort()").as_array().unwrap().iter().map(|k| k.as_str().unwrap().to_string()).collect();
+    let undriven: Vec<&String> = registered.iter().filter(|k| !DRIVEN.iter().any(|(d, _)| d == k)).collect();
+    assert!(undriven.is_empty(), "{session}: kinds of event the page registered and the test does not drive: {undriven:?}");
     clones
 }
 
