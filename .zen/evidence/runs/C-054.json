@@ -12,15 +12,15 @@
     "component"
   ],
   "exitCode": 0,
-  "outputSha": "1ca7e07655a2f7372fdf8826f30deb766db92b4e62b59426163a69e919c4b4c0",
-  "outputTail": "\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.00s\n\n\nrunning 3 tests\ntest a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are ... ok\ntest every_answer_portal_gives_a_write_is_said_as_it_means ... ok\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.34s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.65s\n     Running tests\\component.rs (target\\debug\\deps\\component-3e5a68c69a6a67d6.exe)\n     Running tests\\writes.rs (target\\debug\\deps\\writes-6ce7c1b2f8355b43.exe)",
-  "ranAt": "2026-11-16T06:44:59.912Z",
-  "headCommit": "39422a7ae017893c54d89839c3f785d2dbce8360",
+  "outputSha": "3bdc3ee5e9a0fc75e58566ffd60ca65d76153bae93ec212d12e304a419bd0b13",
+  "outputTail": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.52s\n\n\nrunning 4 tests\ntest before_any_status_every_action_is_off_and_posts_nothing ... ok\ntest every_answer_portal_gives_a_write_is_said_as_it_means ... ok\ntest a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are ... ok\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 38.54s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.95s\n     Running tests\\component.rs (target\\debug\\deps\\component-3e5a68c69a6a67d6.exe)\n     Running tests\\writes.rs (target\\debug\\deps\\writes-6ce7c1b2f8355b43.exe)",
+  "ranAt": "2026-11-16T17:41:21.151Z",
+  "headCommit": "7479db3746d274bb753b81427aa74b7146ff3635",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/writes.rs",
       "file": "crates/veredas-supervisao/tests/writes.rs",
-      "fileSha": "f7ad239d3ded7e5c7b59fba800dad1c3b1389f2ac48ad58dac67a52e7efd6f07"
+      "fileSha": "8b29be0474a72ca67a5befd5d2723c1c6563f5f1aec79feef8c7f35b9bcbb068"
     },
     {
       "name": "crates/veredas-supervisao/tests/component.rs",
