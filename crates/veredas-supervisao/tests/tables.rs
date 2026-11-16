@@ -20,7 +20,7 @@ const VIEW: &str = "slows";
 
 /// Shown, as a person would see it: a box, visible, displayed through every ancestor, and painted
 /// with some alpha once every opacity is multiplied with its paint's (an SVG shape's fill or stroke
-/// and their opacities, a text's colour). A mask, a filter, a font or a cover that takes no pointer
+/// and their opacities, the colour a text's glyphs are filled with and the stroke round them). A mask, a filter, a font or a cover that takes no pointer
 /// is not read (the clause states the limit).
 const SHOWN_FN: &str = r#"const shown = (el) => {
   if (!el) return false;
@@ -32,7 +32,7 @@ const SHOWN_FN: &str = r#"const shown = (el) => {
   for (let e = el; e; e = e.parentElement) { const s = getComputedStyle(e); if (s.display === "none") return false; o *= Number(s.opacity); }
   const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true });
   const alpha = (p) => { if (!p || p === "none") return 0; if (p.startsWith("url(")) return 1; ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillStyle = p; ctx.fillRect(0, 0, 1, 1); return ctx.getImageData(0, 0, 1, 1).data[3] / 255; };
-  const paint = el instanceof SVGElement ? Math.max(alpha(c.fill) * Number(c.fillOpacity), parseFloat(c.strokeWidth) > 0 ? alpha(c.stroke) * Number(c.strokeOpacity) : 0) : alpha(c.color);
+  const paint = el instanceof SVGElement ? Math.max(alpha(c.fill) * Number(c.fillOpacity), parseFloat(c.strokeWidth) > 0 ? alpha(c.stroke) * Number(c.strokeOpacity) : 0) : Math.max(alpha(c.webkitTextFillColor || c.color), parseFloat(c.webkitTextStrokeWidth) > 0 ? alpha(c.webkitTextStrokeColor) : 0);
   return o * paint > 0.05;
 };"#;
 

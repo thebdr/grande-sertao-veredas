@@ -394,7 +394,8 @@ in its own place and the others are drawn (a view's column of a type the engine'
   in full, as the binding writes it, never rounded to the screen's three places.
 - `trend`: the object's series over a window with a dashed limit and its breaches marked.
   `object` (required), `minutes` (`60`), `limit` (none): `{ above = x }` or `{ below = x }`; a
-  breach is a point past it.
+  breach is a point past it. A sample that is no finite number (NaN, an infinity) is no value: a
+  trend, a sparkline and a bucket leave it out.
 - `bars`: the object's series in buckets of `bucket_minutes` aligned on the clock (a width that
   divides a day from midnight, another from the epoch: a week from a Thursday), the bucket now
   running marked, against a dashed `target`; a bar runs from 0 up to its value, or down to it below 0. `object` (required), `minutes` (`60`),
@@ -424,7 +425,7 @@ in its own place and the others are drawn (a view's column of a type the engine'
   written true or false. A time past the clock's reach (beyond the year 262 143
   either way, the engine's infinities among them) is written as its milliseconds.
 - `cells`: charts in cells, one row per value of a key column (a number by its full value, an integer however large, a time as
-  the clock reads it), in the key column's own order by its engine type (a number by its value, a boolean false before true, a text column's digits as
+  the clock reads it), in the key column's own order by its engine type (a number by its value, a time by the clock, a boolean false before true, any other type as text, an ENUM's labels among them, a text column's digits as
   text), of a table over a window, a row with no key or no value left out and counted: the
   median, a sparkline of the median per `bucket_minutes`, the distribution from median − `spread`
   to median + `spread` in 20 bins, σ and n. `table` (required; a view must carry `index_ms`,

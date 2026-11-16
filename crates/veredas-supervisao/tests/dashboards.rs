@@ -805,7 +805,7 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     assert_eq!(running, 1, "the running bucket drawn marked: {}", drawn[5]["bars"]);
     assert_eq!(drawn[6]["rows"].as_array().unwrap().len(), 2, "two rows on the timeline");
     assert_eq!((drawn[0]["big"].clone(), drawn[0]["box"].clone(), drawn[0]["badge"].clone()), (json!("99.2%"), json!("st-box-normal"), Value::Null));
-    assert_eq!((drawn[2]["box"].clone(), drawn[2]["badge"].clone()), (json!("st-box-alarm"), json!("! UNDER 99.5 %")));
+    assert_eq!((drawn[2]["box"].clone(), drawn[2]["badge"].clone()), (json!("st-box-alarm"), json!("! under 99.5 %")));
     assert_eq!(drawn[7]["cells"], json!([["Outlet 1", "35", "cell st-box-normal", "cell-v mono st-text-normal", "Outlet 1: ok"], ["Outlet 2", "85", "cell st-box-near", "cell-v mono st-text-near", "Outlet 2: near full"], ["Outlet 3", "full", "cell st-box-warn", "cell-v mono st-text-warn", "Outlet 3: full"]]));
     assert_eq!(drawn[9]["rows"][0], json!([["3", "mono", null], ["2", "mono st-text-normal", "width:50.0%"], ["■ slow", "mono st-text-warn", null]]), "sorted by travel, descending");
     assert!(drawn[9]["rows"].as_array().unwrap().iter().any(|r| r[1][0].as_str().is_some_and(|t| t.ends_with(" ■ busy")) && r[1][1] == json!("mono st-text-warn") && r[1][2].as_str().is_some_and(|w| w.starts_with("width:"))), "a bar with its state and word: {}", drawn[9]["rows"]);
@@ -819,8 +819,8 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
         page.wait_for("window.__held === false || null", Duration::from_secs(10));
         // While the second is asked, its tab on, the grid holds none of the first's panels: it says
         // the second is asked.
-        let asking = page.eval(r#"[document.querySelectorAll(".dash-grid > .panel").length, document.querySelector(".dash-grid > p.asking")?.textContent ?? null, document.querySelector(".subtabs button.on").textContent]"#);
-        assert_eq!(asking, json!([0, "asking for Keys", "Keys"]), "the first dashboard's panels under the second's tab");
+        let asking = page.eval(r#"(() => { const p = document.querySelector(".dash-grid > p.asking"); return [document.querySelectorAll(".dash-grid > .panel").length, p?.textContent ?? null, document.querySelector(".subtabs button.on").textContent, p ? window.__shownMark(p) : null, p ? window.__textAsWritten(p) : null]; })()"#);
+        assert_eq!(asking, json!([0, "asking for Keys", "Keys", true, []]), "the first dashboard's panels under the second's tab, or what it says there not shown as written");
         page.eval("location.hash = 'dashboards/0'; true");
         page.wait_for("window.__held === true", Duration::from_secs(10));
         let after = page.eval(FIRST_DRAWN);
@@ -830,8 +830,8 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     page.eval("location.hash = 'layout'; true");
     page.wait_for("document.querySelector('.dash-grid') ? null : true", Duration::from_secs(10));
     page.eval("window.__failNext = true; location.hash = 'dashboards/0'; true");
-    let said = page.wait_for(r#"document.querySelector(".dash-grid > p.error")?.textContent ?? null"#, Duration::from_secs(10));
-    assert_eq!(said, json!("Error: probe failure"));
+    let said = page.wait_for(r#"(() => { const p = document.querySelector(".dash-grid > p.error"); return p ? [p.textContent, window.__shownMark(p), window.__textAsWritten(p)] : null; })()"#, Duration::from_secs(10));
+    assert_eq!(said, json!(["Error: probe failure", true, []]), "the refusal said in the dashboard's place, shown as written");
     page.wait_for(r#"document.querySelectorAll(".dash-grid > .panel").length === 17 || null"#, Duration::from_secs(15));
     // The five-second refresh waits for an answer still out rather than overtake it: the first
     // dashboard asked and its answer held back six and a half seconds, the tick at five asks
@@ -848,10 +848,10 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     page.eval("location.hash = 'layout'; true");
     page.wait_for("document.querySelector('.dash-grid') ? null : true", Duration::from_secs(10));
     // (What it says is recorded as it is drawn: the tick that asks again can draw over it at once.)
-    page.eval(r#"(() => { window.__said = []; new MutationObserver(() => { const e = document.querySelector(".dash-grid > p.error"); if (e && !window.__said.includes(e.textContent)) window.__said.push(e.textContent); }).observe(document.body, { childList: true, subtree: true, characterData: true }); return true; })()"#);
+    page.eval(r#"(() => { window.__said = []; new MutationObserver(() => { const e = document.querySelector(".dash-grid > p.error"); if (e && !window.__said.some((s) => s[0] === e.textContent)) window.__said.push([e.textContent, window.__shownMark(e), window.__textAsWritten(e)]); }).observe(document.body, { childList: true, subtree: true, characterData: true }); return true; })()"#);
     page.eval("window.__hold = '/dashboard/0'; window.__holdMs = 60000; location.hash = 'dashboards/0'; true");
     let gave_up = page.wait_for("window.__said.length ? window.__said : null", Duration::from_secs(20));
-    assert_eq!(gave_up, json!(["Error: no answer within 10 s"]));
+    assert_eq!(gave_up, json!([["Error: no answer within 10 s", true, []]]), "given up on, said in the dashboard's place, shown as written");
     page.wait_for(r#"document.querySelectorAll(".dash-grid > .panel").length === 17 || null"#, Duration::from_secs(15));
     // The refresh every five seconds: over sixteen seconds and a half, each ask of the dashboard
     // shown five seconds after the last, within half a second.
@@ -894,7 +894,7 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let probe = probe_dashboard(&dash);
     let v = drawn_as(&mut page, "Probe", "dashboards/0", Some(&probe));
     let kinds: Vec<&str> = v["drawn"].as_array().unwrap().iter().map(|p| p["kind"].as_str().unwrap()).collect();
-    assert_eq!(kinds.len(), every_state().len() + 17, "{kinds:?}");
+    assert_eq!(kinds.len(), every_state().len() + 21, "{kinds:?}");
     // Bars of every sign drawn from 0: a bucket below it among the others, and every bucket and
     // the target below it, each bar inside the chart, the axis labelled at both ends and at 0.
     let n = kinds.len();
@@ -974,8 +974,6 @@ const KEEP_DASHBOARD: &str = r#"(() => {
 /// opacity is multiplied with its paint's; a mask, a filter, a font or a cover that takes no
 /// pointer is not read, the limit the clause states).
 const DRAWN_PANELS: &str = r#"(() => {
-  const d = window.__dash;
-  if (!d) return null;
   const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true });
   const alpha = (p) => { if (!p || p === "none") return 0; if (p.startsWith("url(")) return 1; ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillStyle = p; ctx.fillRect(0, 0, 1, 1); return ctx.getImageData(0, 0, 1, 1).data[3] / 255; };
   // What a panel paints: every element with text of its own, every SVG shape, every box painted by
@@ -994,8 +992,8 @@ const DRAWN_PANELS: &str = r#"(() => {
     const c = getComputedStyle(el);
     return alpha(c.backgroundColor) > 0 || c.backgroundImage !== "none" || border(c) > 0;
   };
-  // Clipped: outside an ancestor that hides its overflow, below the nearest one that scrolls (what
-  // scrolls into view shows).
+  // Clipped: any part of it outside an ancestor that hides its overflow (a label cut at a chart's
+  // edge is cut), below the nearest one that scrolls (what scrolls into view shows).
   const clipped = (el, b) => {
     for (let e = el.parentElement; e; e = e.parentElement) {
       const s = getComputedStyle(e);
@@ -1003,7 +1001,7 @@ const DRAWN_PANELS: &str = r#"(() => {
       if (o.some((v) => v === "auto" || v === "scroll")) return false;
       if (o.some((v) => v === "hidden" || v === "clip")) {
         const a = e.getBoundingClientRect();
-        if (b.right < a.left - 0.5 || b.left > a.right + 0.5 || b.bottom < a.top - 0.5 || b.top > a.bottom + 0.5) return true;
+        if (b.left < a.left - 0.5 || b.right > a.right + 0.5 || b.top < a.top - 0.5 || b.bottom > a.bottom + 0.5) return true;
       }
     }
     return false;
@@ -1020,7 +1018,7 @@ const DRAWN_PANELS: &str = r#"(() => {
     for (let e = el; e; e = e.parentElement) { const s = getComputedStyle(e); if (s.display === "none") return false; o *= Number(s.opacity); }
     const paint = el instanceof SVGElement
       ? Math.max(alpha(c.fill) * Number(c.fillOpacity), parseFloat(c.strokeWidth) > 0 ? alpha(c.stroke) * Number(c.strokeOpacity) : 0)
-      : ownText(el) ? alpha(c.color) : Math.max(alpha(c.backgroundColor), c.backgroundImage !== "none" ? 1 : 0, border(c));
+      : ownText(el) ? Math.max(alpha(c.webkitTextFillColor || c.color), parseFloat(c.webkitTextStrokeWidth) > 0 ? alpha(c.webkitTextStrokeColor) : 0) : Math.max(alpha(c.backgroundColor), c.backgroundImage !== "none" ? 1 : 0, border(c));
     return o * paint > 0.05;
   };
   const hidden = (p) => [p, ...p.querySelectorAll("*")].filter(paints).filter((el) => !shown(el)).map((el) => `${el.tagName}.${el.getAttribute("class") ?? ""} "${el.textContent.trim().slice(0, 30)}"`);
@@ -1038,6 +1036,34 @@ const DRAWN_PANELS: &str = r#"(() => {
   const txtAll = (el) => { if (!el) return null; for (const e of [el, ...el.querySelectorAll("*")]) see(e); return el.textContent; };
   const dot = (svg) => { const c = svg ? svg.querySelector("circle.point") : null; return c ? [num(c, "cx"), num(c, "cy")] : null; };
   const axis = (svg) => [...svg.querySelectorAll("text.axis")].map((t) => [txt(t), num(t, "x"), num(t, "y")]);
+  // Text drawn as the page wrote it, by the browser's computed style: no text the stylesheet
+  // generates (before or after an element, a list item's marker); none it draws otherwise than
+  // written: its case changed (by `text-transform`, on it or on its first letter or line, or by small
+  // capitals), its letters masked, or reordered (a direction other than left to right, an override
+  // of the text's own order). What else a stylesheet or a font can do to glyphs is the stated limit.
+  const asWritten = (el) => {
+    const out = [];
+    for (const pseudo of ["::before", "::after", "::marker"]) {
+      const g = getComputedStyle(el, pseudo).content;
+      if (g && g !== "none" && g !== "normal") out.push(`${pseudo}: text the stylesheet generates, ${g}`);
+    }
+    const c = getComputedStyle(el);
+    if (c.display.includes("list-item") && (c.listStyleType !== "none" || c.listStyleImage !== "none")) out.push("a list item's marker");
+    if (ownText(el)) {
+      for (const pseudo of ["", "::first-letter", "::first-line"]) {
+        const s = pseudo ? getComputedStyle(el, pseudo) : c;
+        if (s.textTransform !== "none") out.push(`its text${pseudo} drawn ${s.textTransform}`);
+      }
+      if (c.fontVariantCaps !== "normal") out.push(`its case drawn as ${c.fontVariantCaps}`);
+      if ((c.webkitTextSecurity ?? "none") !== "none") out.push(`its letters masked, ${c.webkitTextSecurity}`);
+      if (c.direction !== "ltr" || ["bidi-override", "isolate-override"].includes(c.unicodeBidi)) out.push(`its letters reordered, ${c.direction} ${c.unicodeBidi}`);
+    }
+    return out;
+  };
+  window.__shownMark = shown;
+  window.__textAsWritten = asWritten;
+  const d = window.__dash;
+  if (!d) return null;
   const drawn = [...document.querySelectorAll(".dash-grid > .panel")].map((p) => {
     const r = { kind: p.dataset.kind, title: txt(p.querySelector(".panel-title")), span: getComputedStyle(p).gridColumnStart };
     r.hidden = hidden(p);
@@ -1144,13 +1170,7 @@ const DRAWN_PANELS: &str = r#"(() => {
       }
       if (el instanceof SVGElement && el.tagName.toLowerCase() === "title" && !seen.has(el)) marks.push(`${at}: a hover text this test does not read, "${el.textContent.trim().slice(0, 30)}"`);
       if (el.hasAttribute("title") && !titled.has(el)) marks.push(`${at}: a hover text this test does not read, "${el.getAttribute("title").slice(0, 30)}"`);
-      for (const pseudo of ["::before", "::after", "::marker"]) {
-        const g = getComputedStyle(el, pseudo).content;
-        if (g && g !== "none" && g !== "normal") marks.push(`${at}${pseudo}: text the stylesheet generates, ${g}`);
-      }
-      const c = getComputedStyle(el);
-      if (c.display.includes("list-item") && (c.listStyleType !== "none" || c.listStyleImage !== "none")) marks.push(`${at}: a list item's marker`);
-      if (ownText(el) && (c.textTransform !== "none" || (c.webkitTextSecurity ?? "none") !== "none")) marks.push(`${at}: its text drawn otherwise than written, ${c.textTransform} ${c.webkitTextSecurity}`);
+      for (const said of asWritten(el)) marks.push(`${at}: ${said}`);
     }
   }
   // Where the browser draws each mark is where the page wrote it: no transform on a shape or on any
@@ -1347,6 +1367,27 @@ fn probe_dashboard(d: &Value) -> Value {
     cl["data"]["spread_text"] = json!("0.0005");
     cl["data"]["left_out"] = json!(2);
     panels.push(cl);
+    // A rule's word written with a symbol and a unit's case (`over 3σ in mA`), drawn on the badge as
+    // written (Q28); trends of values of seven digits and more and of large negatives, and bars of
+    // large values, every value label with room at the chart's left edge (`leftFor`).
+    let mut worded = p(0);
+    (worded["data"]["state"], worded["data"]["word"], worded["data"]["mark"]) = (json!("warn"), json!("over 3σ in mA"), json!("■"));
+    panels.push(worded);
+    let at = p(4)["data"]["points"].as_array().unwrap().clone();
+    for vals in [[123456.7, 131234.5, 127000.25], [-1234.5, -1500.25, -1100.0]] {
+        let mut t = p(4);
+        t["data"]["total"] = json!(3);
+        (t["data"]["points"], t["data"]["breaches"], t["data"]["limit"], t["data"]["limit_text"]) = (json!(vals.iter().enumerate().map(|(i, v)| json!([at[i][0], v])).collect::<Vec<_>>()), json!([]), Value::Null, Value::Null);
+        panels.push(t);
+    }
+    let mut big = p(5);
+    for b in big["data"]["buckets"].as_array_mut().unwrap() {
+        if let Some(v) = b["value"].as_f64() {
+            b["value"] = json!(v * 10000.0);
+        }
+    }
+    (big["data"]["target"], big["data"]["target_text"]) = (Value::Null, Value::Null);
+    panels.push(big);
     // Each input of a chart's value axis its end at least once: bars whose target lies past every
     // bucket (above them, then below 0 under them), bars all at 0 with no target (the axis 0 to 1),
     // a trend of no point and no limit (0 to 1), and one whose points are all one value.
@@ -1398,6 +1439,12 @@ fn clock_s(t: f64) -> String {
     chrono::DateTime::from_timestamp_millis(t as i64).unwrap().format("%H:%M:%S").to_string()
 }
 
+/// A chart's left edge as the page sizes it (`leftFor`): room for its longest value label, ten
+/// units of mono type each glyph at most two thirds of that wide, then 6; never less than 44.
+fn left_for(labels: &[String]) -> f64 {
+    (44.0f64).max((12.0 + 6.6 * labels.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64).ceil())
+}
+
 /// The highest value of a bars panel's buckets.
 fn top_of(p: &Value) -> f64 {
     p["data"]["buckets"].as_array().unwrap().iter().filter_map(|b| b["value"].as_f64()).fold(f64::MIN, f64::max)
@@ -1430,7 +1477,7 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                     r["box"] = json!(format!("st-box-{}", s(&x["state"])));
                     r["big"] = json!(format!("{}{}", x["text"].as_str().unwrap_or("\u{2014}"), s(&x["unit"])));
                     r["big_cls"] = json!(format!("big mono st-text-{}", s(&x["state"])));
-                    r["badge"] = if x["state"] == "normal" { Value::Null } else { json!(format!("{} {}", s(&x["mark"]), s(&x["word"]).to_uppercase())) };
+                    r["badge"] = if x["state"] == "normal" { Value::Null } else { json!(format!("{} {}", s(&x["mark"]), s(&x["word"]))) };
                     // Its object's id beside the title while it is normal, the badge in its place else.
                     r["id"] = if x["state"] == "normal" { x["id"].clone() } else { Value::Null };
                     r["sub"] = json!(s(&x["sub"]));
@@ -1453,19 +1500,21 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                     let mut vals: Vec<f64> = points.iter().map(|p| p.1).collect();
                     vals.extend(limit);
                     let (lo, hi) = extent(&vals);
-                    let px = scale(x["from"].as_f64().unwrap(), x["to"].as_f64().unwrap(), 44.0, 590.0);
+                    // The plot's left edge room for the longest value label (`leftFor`).
+                    let left = left_for(&(0..=3).map(|i| num(&json!(lo + (hi - lo) * i as f64 / 3.0), 1)).collect::<Vec<_>>());
+                    let px = scale(x["from"].as_f64().unwrap(), x["to"].as_f64().unwrap(), left, 590.0);
                     let py = scale(lo, hi, 178.0, 10.0);
                     r["line"] = json!(if points.len() > 1 { points.iter().map(|(t, v)| json!([px(*t), py(*v)])).collect::<Vec<_>>() } else { Vec::new() });
                     r["point"] = if points.len() == 1 { json!([px(points[0].0), py(points[0].1), 3.0]) } else { Value::Null };
                     // Its axes: four values a third apart, each beside its height, and five times a
                     // quarter apart on the store's clock, the last "now".
                     let (from, to) = (x["from"].as_f64().unwrap(), x["to"].as_f64().unwrap());
-                    let mut axis: Vec<Value> = (0..=3).map(|i| { let v = lo + (hi - lo) * i as f64 / 3.0; json!([num(&json!(v), 1), 38.0, py(v) + 4.0]) }).collect();
+                    let mut axis: Vec<Value> = (0..=3).map(|i| { let v = lo + (hi - lo) * i as f64 / 3.0; json!([num(&json!(v), 1), left - 6.0, py(v) + 4.0]) }).collect();
                     axis.extend((0..=4).map(|i| { let t = from + (to - from) * i as f64 / 4.0; json!([if i == 4 { "now".to_string() } else { clock(t) }, px(t), 194.0]) }));
                     r["axis"] = json!(axis);
                     // A breach a dot of radius 3; the limit a line across the plot at its value.
                     r["breaches"] = json!(pairs_of(&x["breaches"]).iter().map(|(t, v)| json!([px(*t), py(*v), 3.0])).collect::<Vec<_>>());
-                    r["limit"] = json!(limit.map(|l| json!([44.0, 590.0, py(l), py(l)])));
+                    r["limit"] = json!(limit.map(|l| json!([left, 590.0, py(l), py(l)])));
                     r["right"] = match limit {
                         None => json!(format!("{} points", x["total"])),
                         Some(_) => {
@@ -1490,26 +1539,28 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                     let hi = if top > 0.0 { top * 1.1 } else if bottom < 0.0 { 0.0 } else { 1.0 };
                     let lo = if bottom < 0.0 { bottom * 1.1 } else { 0.0 };
                     let py = scale(lo, hi, 158.0, 10.0);
-                    let bw = 546.0 / (buckets.len().max(1) as f64);
+                    // The plot's left edge room for the longest value label (`leftFor`).
+                    let label = |v: f64| if v == 0.0 { "0".to_string() } else { num(&json!(v), 1) };
+                    let left = left_for(&[label(hi), label(lo), "0".to_string()]);
+                    let bw = (590.0 - left) / (buckets.len().max(1) as f64);
                     r["bars"] = json!(buckets.iter().enumerate().filter(|(_, b)| !b["value"].is_null()).map(|(i, b)| {
                         let v = b["value"].as_f64().unwrap();
                         // Its hover text: the bucket's start, its value to two places and its count.
                         let title = format!("{} \u{b7} {} (n {})", clock(b["start"].as_f64().unwrap()), num(&b["value"], 2), b["n"]);
-                        json!([44.0 + i as f64 * bw + 2.0, py(v).min(py(0.0)), bw - 4.0, (py(0.0) - py(v)).abs(), b["running"], title])
+                        json!([left + i as f64 * bw + 2.0, py(v).min(py(0.0)), bw - 4.0, (py(0.0) - py(v)).abs(), b["running"], title])
                     }).collect::<Vec<_>>());
-                    r["target"] = json!(target.map(|t| json!([44.0, 590.0, py(t), py(t)])));
+                    r["target"] = json!(target.map(|t| json!([left, 590.0, py(t), py(t)])));
                     // Its axis: the top value and the bottom one (0 written so), 0 at its height
                     // between them, a bucket's start on the store's clock every sixth of them, and
                     // the target's own words.
-                    let label = |v: f64| if v == 0.0 { "0".to_string() } else { num(&json!(v), 1) };
-                    let mut axis = vec![json!([label(hi), 38.0, py(hi) + 10.0]), json!([label(lo), 38.0, 158.0])];
+                    let mut axis = vec![json!([label(hi), left - 6.0, py(hi) + 10.0]), json!([label(lo), left - 6.0, 158.0])];
                     if lo < 0.0 && hi > 0.0 {
-                        axis.push(json!(["0", 38.0, py(0.0) + 4.0]));
+                        axis.push(json!(["0", left - 6.0, py(0.0) + 4.0]));
                     }
                     let every = (buckets.len() as f64 / 6.0).ceil() as usize;
                     for (i, b) in buckets.iter().enumerate() {
                         if every > 0 && i % every == 0 {
-                            axis.push(json!([clock(b["start"].as_f64().unwrap()), 44.0 + i as f64 * bw + 2.0, 174.0]));
+                            axis.push(json!([clock(b["start"].as_f64().unwrap()), left + i as f64 * bw + 2.0, 174.0]));
                         }
                     }
                     if let Some(t) = target {
@@ -1733,6 +1784,10 @@ id = "class-only"
 value = { source = "sorter", series = "travel" }
 unit = "s"
 states = [ { above = 22, state = "alarm", word = "slow" }, { above = 15, state = "warn", word = "slow" } ]
+
+[[object]]
+id = "odd"
+value = { source = "sorter", series = "ov" }
 
 [[dashboard]]
 name = "Rules"
@@ -2023,6 +2078,24 @@ object = "k-key"
 kind = "table"
 table = "places"
 columns = [ { name = "small", decimals = 0 }, { name = "k", decimals = 0 }, { name = "u", decimals = 0 }, { name = "h", decimals = 0 }, { name = "small", decimals = 6 }, { name = "k", decimals = 6 }, { name = "u", decimals = 6 }, { name = "h", decimals = 6 } ]
+
+[[dashboard.panel]]
+kind = "trend"
+object = "odd"
+
+[[dashboard.panel]]
+kind = "value"
+object = "odd"
+
+[[dashboard.panel]]
+kind = "bars"
+object = "odd"
+aggregate = "mean"
+
+[[dashboard.panel]]
+kind = "table"
+table = "nonfinite"
+columns = [ { name = "p", bar = true, states = [ { above = 100, state = "alarm", word = "over" } ] }, { name = "q" } ]
 "#;
 
 /// The project's rules and views for `RULES`: a keyed numeric series, float keys, a series never
@@ -2054,6 +2127,12 @@ name = "modes"
 pattern = 'MODE m=(?P<mode>\w+)'
 scope = "sorter"
 types = { mode = "text" }
+
+[[rule]]
+name = "odds"
+pattern = 'ODD v=(?P<ov>\S+)'
+scope = "sorter"
+types = { ov = "float" }
 
 [[table]]
 name = "datetimes"
@@ -2170,6 +2249,18 @@ sql = "SELECT index_ms, source, seq, travel, CAST(CASE travel WHEN 0 THEN -1 WHE
 [[table]]
 name = "places"
 sql = "SELECT index_ms, CASE travel WHEN 20 THEN -5 ELSE 5 END AS small, CASE travel WHEN 20 THEN -9007199254740995 ELSE 9007199254740993 END AS k, CAST('18446744073709551615' AS UBIGINT) - CAST(travel AS UBIGINT) AS u, CASE travel WHEN 20 THEN CAST('-18446744073709551617' AS HUGEINT) ELSE CAST('18446744073709551617' AS HUGEINT) END AS h FROM sorts"
+
+[[table]]
+name = "keytimes"
+sql = "SELECT index_ms, source, seq, travel, CASE travel WHEN 0 THEN DATE '2026-01-01' WHEN 20 THEN DATE '10000-01-01' ELSE DATE 'infinity' END AS day, CASE travel WHEN 0 THEN TIMESTAMP '2026-01-01 00:00:00' WHEN 20 THEN TIMESTAMP '10000-01-01 00:00:00' ELSE TIMESTAMP '-infinity' END AS ts, CAST(CASE travel WHEN 0 THEN '2026-01-01' WHEN 20 THEN '10000-01-01' ELSE '2027-01-01' END AS TIMESTAMP_S) AS s, CAST(CASE travel WHEN 0 THEN '2026-01-01' WHEN 20 THEN '10000-01-01' ELSE '2027-01-01' END AS TIMESTAMP_MS) AS ms, CAST(CASE travel WHEN 0 THEN '2026-01-01' WHEN 20 THEN '10000-01-01' ELSE '2027-01-01' END AS TIMESTAMPTZ) AS tz FROM sorts"
+
+[[table]]
+name = "enums"
+sql = "SELECT index_ms, source, seq, travel, CAST(CASE travel WHEN 0 THEN 'low' WHEN 20 THEN 'mid' ELSE 'high' END AS ENUM('low', 'mid', 'high')) AS lv FROM sorts"
+
+[[table]]
+name = "nonfinite"
+sql = "SELECT CAST('inf' AS DOUBLE) AS p, CAST('nan' AS DOUBLE) AS q UNION ALL SELECT 5.0, 1.0"
 "#;
 
 #[test]
@@ -2203,9 +2294,14 @@ fn every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says() {
         format!("{} MODE m=hold", stamp(at(7.0))),
         format!("{} SORT outlet=2 travel=20.0 rate=99.0", stamp(at(10.0))),
         format!("{} SORT outlet=1 travel=25.0 rate=99.0", stamp(at(20.0))),
+        format!("{} ODD v=97", stamp(at(21.0))),
+        format!("{} ODD v=NaN", stamp(at(22.0))),
+        format!("{} ODD v=99", stamp(at(23.0))),
+        format!("{} ODD v=inf", stamp(at(24.0))),
+        format!("{} ODD v=98", stamp(at(25.0))),
     ]);
     let rows = |t: &str| live.store.query_rows(t, &veredas_portal::store::RowsQuery { limit: 1, ..Default::default() }).map(|p| p.total).unwrap_or(0);
-    assert!(wait(Duration::from_secs(20), || rows("sorts") == 3 && rows("positions") == 4 && rows("keyed") == 2 && rows("modes") == 1), "the lines are stored");
+    assert!(wait(Duration::from_secs(20), || rows("sorts") == 3 && rows("positions") == 4 && rows("keyed") == 2 && rows("modes") == 1 && rows("odds") == 5), "the lines are stored");
     let to = at(26.0);
     let get_d = || get(addr, &format!("/s/loop/dashboard/0?to={to}")).1;
     assert!(wait(Duration::from_secs(20), || { let d = get_d(); panel(&d, 2)["state"] == json!("warn") && panel(&d, 5)["text"] == json!("20") && panel(&d, 18)["state"] == json!("warn") && panel(&d, 19)["state"] == json!("warn") }), "{}", get_d());
@@ -2544,6 +2640,46 @@ fn every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says() {
         })
         .collect();
     assert_eq!(texts(53), want, "places at 0 and at 6");
+    // A sample that is no finite number (NaN, an infinity: a plant can send one and portal keeps it)
+    // is no value: left out of a trend's points and its total, a tile's sparkline and every bucket
+    // alike (a bucket of none of them empty), never drawn as 0.
+    let finite = [(at(21.0), 97.0), (at(23.0), 99.0), (at(25.0), 98.0)];
+    let pairs = json!(finite.iter().map(|(t, v)| json!([t, v])).collect::<Vec<_>>());
+    assert_eq!((panel(&d, 54)["points"].clone(), panel(&d, 54)["total"].clone(), panel(&d, 55)["spark"].clone()), (pairs.clone(), json!(3), pairs), "the finite samples alone");
+    let mut per: BTreeMap<i64, Vec<f64>> = BTreeMap::new();
+    for (t, v) in finite {
+        per.entry(t.div_euclid(5 * MIN) * 5 * MIN).or_default().push(v);
+    }
+    let want: Vec<(i64, u64, f64)> = per.into_iter().map(|(s, vs)| (s, vs.len() as u64, vs.iter().sum::<f64>() / vs.len() as f64)).collect();
+    let got: Vec<(i64, u64, f64)> = panel(&d, 56)["buckets"].as_array().unwrap().iter().filter(|b| !b["value"].is_null()).map(|b| (b["start"].as_i64().unwrap(), b["n"].as_u64().unwrap(), b["value"].as_f64().unwrap())).collect();
+    assert_eq!(got, want, "each bucket's mean of its finite samples, counted");
+    assert!(panel(&d, 56)["buckets"].as_array().unwrap().iter().all(|b| b["value"].is_null() == (b["n"] == json!(0))), "a bucket empty only of finite samples");
+    // (A view's double that is no finite number: portal writes it as null (C-041's conversion), so
+    // its cell is blank and its rules and bar read no value; the limit, pinned.)
+    let nf: Vec<Vec<Value>> = panel(&d, 57)["rows"].as_array().unwrap().iter().map(|r| vec![r[0]["text"].clone(), r[0]["state"].clone(), r[1]["text"].clone()]).collect();
+    assert_eq!(nf, vec![vec![json!(""), json!("normal"), json!("")], vec![json!("5"), json!("normal"), json!("1")]], "non-finite doubles as portal writes them");
+    // Cells keys of a time kind in the clock's order, never their text's: a date and a timestamp past
+    // the year 9999 (written with a sign) and the engine's infinities (written as their milliseconds)
+    // beside dates of this century.
+    let kt = live.store.query_rows("keytimes", &veredas_portal::store::RowsQuery { limit: 10, ..Default::default() }).unwrap();
+    for (i, col) in kt.columns.iter().enumerate().skip(4) {
+        let fmt = if col.data_type == "DATE" { "%Y-%m-%d" } else { "%Y-%m-%d %H:%M:%S" };
+        let mut raw: Vec<i64> = kt.rows.iter().map(|r| r[i].as_i64().unwrap_or_else(|| panic!("{}: {}", col.name, r[i]))).collect();
+        raw.sort();
+        raw.dedup();
+        let want: Vec<String> = raw.iter().map(|ms| chrono::DateTime::from_timestamp_millis(*ms).map(|t| t.format(fmt).to_string()).unwrap_or(ms.to_string())).collect();
+        let c = veredas_supervisao::panel::cells(&live, "keytimes", &col.name, "travel", 60, 5, 5.0, to, 50, 1000).unwrap();
+        let got: Vec<String> = c["rows"].as_array().unwrap().iter().map(|r| r["key"].as_str().unwrap().to_string()).collect();
+        assert_eq!(got, want, "keyed by {}, a {}, in the clock's order", col.name, col.data_type);
+        let mut as_text = want.clone();
+        as_text.sort();
+        assert_ne!(as_text, want, "{}: values whose order text's would keep tell nothing", col.name);
+    }
+    // An ENUM key in text's order, as any type but a number, a time or a boolean (its labels' own
+    // order is not read: the stated rule).
+    let en = veredas_supervisao::panel::cells(&live, "enums", "lv", "travel", 60, 5, 5.0, to, 50, 1000).unwrap();
+    let keys: Vec<&str> = en["rows"].as_array().unwrap().iter().map(|r| r["key"].as_str().unwrap()).collect();
+    assert_eq!(keys, ["high", "low", "mid"], "an ENUM's keys as text");
     host.stop();
 }
 

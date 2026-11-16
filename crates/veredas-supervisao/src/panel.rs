@@ -31,10 +31,14 @@ fn window(minutes: u32, to: i64) -> (i64, i64) {
     (to - minutes as i64 * MINUTE_MS, to)
 }
 
+/// An object's samples over a window, each a finite number: a sample that is none (NaN, an
+/// infinity, which a plant can send and portal keeps) is no value, left out of every chart and every
+/// bucket alike (JSON has no number for it, and drawn as one it would read as 0).
 fn points(live: &Live, o: &Object, from: i64, to: i64) -> Vec<(i64, f64)> {
     live.store
         .query_numeric(&SeriesRef::new(&o.value.source, &o.value.series), o.value.key.as_deref(), from, to)
         .into_iter()
+        .filter(|p| p.value.is_finite())
         .map(|p| (p.index_ms, p.value))
         .collect()
 }

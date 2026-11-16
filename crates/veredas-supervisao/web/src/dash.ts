@@ -48,7 +48,8 @@ function head(title: string, right?: Node | string): HTMLElement {
 
 function valueTile(p: PanelOut): HTMLElement {
   const t = p.data as Tile;
-  const word = t.state === "normal" ? null : h("span", { class: `badge st-${t.state}` }, `${t.mark} ${t.word.toUpperCase()}`);
+  // The rule's word as the engineer wrote it (Q28: a word in capitals is written so; σ stays σ).
+  const word = t.state === "normal" ? null : h("span", { class: `badge st-${t.state}` }, `${t.mark} ${t.word}`);
   return h("div", { class: `panel tile st-box-${t.state}` },
     head(p.title, word ?? h("span", { class: "mono muted" }, t.id)),
     h("div", { class: `big mono st-text-${t.state}` }, t.text ?? "—", h("span", { class: "unit" }, t.unit)),

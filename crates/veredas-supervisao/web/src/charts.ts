@@ -36,16 +36,24 @@ export function sparkline(pts: Pt[], w = 220, hgt = 32, cls = "spark"): SVGEleme
   return svg;
 }
 
+/// The plot's left edge: room for the longest value label left of it (ten units of mono type, each
+/// glyph at most two thirds of that wide, then 6 between the label and the plot), never less than
+/// 44, so no label is cut by the chart's edge whatever its digits.
+export function leftFor(labels: string[]): number {
+  return Math.max(44, Math.ceil(12 + 6.6 * Math.max(0, ...labels.map((l) => l.length))));
+}
+
 /// A trend over [from, to] with a dashed limit and its breaches as dots; hover shows a value.
 export function trend(pts: Pt[], breaches: Pt[], from: number, to: number, limit: number | null, unit: string): SVGElement {
-  const W = 600, H = 200, L = 44, R = 10, T = 10, B = 22;
+  const W = 600, H = 200, R = 10, T = 10, B = 22;
   const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", class: "chart trend" });
   const vals = pts.map((p) => p[1]).concat(limit === null ? [] : [limit]);
   const [lo, hi] = extent(vals);
+  const ticks = [0, 1, 2, 3].map((i) => lo + ((hi - lo) * i) / 3);
+  const L = leftFor(ticks.map((v) => num(v, 1)));
   const x = scale(from, to, L, W - R);
   const y = scale(lo, hi, H - B, T);
-  for (let i = 0; i <= 3; i++) {
-    const v = lo + ((hi - lo) * i) / 3;
+  for (const v of ticks) {
     svg.append(s("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), class: "grid" }));
     svg.append(s("text", { x: L - 6, y: y(v) + 4, class: "axis", "text-anchor": "end" }, num(v, 1)));
   }
@@ -93,7 +101,7 @@ export interface Bucket {
 /// target, a tenth past an end that is not 0, labelled at both ends and at 0 between them; the
 /// target labelled as the host wrote it (`targetText`, in full).
 export function bars(buckets: Bucket[], target: number | null, targetText: string | null): SVGElement {
-  const W = 600, H = 180, L = 44, R = 10, T = 10, B = 22;
+  const W = 600, H = 180, R = 10, T = 10, B = 22;
   const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", class: "chart bars" });
   const vals = buckets.map((b) => b.value ?? 0).concat(target === null ? [] : [target], [0]);
   const top = Math.max(...vals), bottom = Math.min(...vals);
@@ -101,6 +109,7 @@ export function bars(buckets: Bucket[], target: number | null, targetText: strin
   const lo = bottom < 0 ? bottom * 1.1 : 0;
   const y = scale(lo, hi, H - B, T);
   const label = (v: number) => (v === 0 ? "0" : num(v, 1));
+  const L = leftFor([label(hi), label(lo), "0"]);
   const bw = (W - L - R) / Math.max(buckets.length, 1);
   svg.append(s("text", { x: L - 6, y: y(hi) + 10, class: "axis", "text-anchor": "end" }, label(hi)));
   svg.append(s("text", { x: L - 6, y: H - B, class: "axis", "text-anchor": "end" }, label(lo)));
