@@ -123,7 +123,7 @@ pub fn buckets(pts: &[(i64, f64)], from: i64, to: i64, bucket_ms: i64, agg: Aggr
             if agg == Aggregate::Count { Some(0.0) } else { None }
         } else {
             Some(match agg {
-                Aggregate::Mean => vals.iter().sum::<f64>() / vals.len() as f64,
+                Aggregate::Mean => mean(&vals).unwrap_or(0.0),
                 Aggregate::Sum => vals.iter().sum(),
                 Aggregate::Count => vals.len() as f64,
                 Aggregate::Min => vals.iter().cloned().fold(f64::INFINITY, f64::min),
@@ -137,22 +137,51 @@ pub fn buckets(pts: &[(i64, f64)], from: i64, to: i64, bucket_ms: i64, agg: Aggr
     out
 }
 
-/// The median of values (the mean of the two middle ones for an even count).
+/// The mean of finite values, a value wherever it is one (none for no values): where their sum
+/// passes a double's reach (two samples of the largest double, a "no reading" some controllers
+/// write), each is first scaled by the largest magnitude among them.
+pub fn mean(vals: &[f64]) -> Option<f64> {
+    if vals.is_empty() {
+        return None;
+    }
+    let n = vals.len() as f64;
+    let m = vals.iter().sum::<f64>() / n;
+    if m.is_finite() {
+        return Some(m);
+    }
+    let s = vals.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+    Some(vals.iter().map(|v| v / s).sum::<f64>() / n * s)
+}
+
+/// The median of values (the mean of the two middle ones for an even count, halved first where
+/// their sum passes a double's reach).
 pub fn median(sorted: &[f64]) -> Option<f64> {
     let n = sorted.len();
     if n == 0 {
         return None;
     }
-    Some(if n % 2 == 1 { sorted[n / 2] } else { (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0 })
+    Some(if n % 2 == 1 {
+        sorted[n / 2]
+    } else {
+        let (a, b) = (sorted[n / 2 - 1], sorted[n / 2]);
+        let m = (a + b) / 2.0;
+        if m.is_finite() { m } else { a / 2.0 + b / 2.0 }
+    })
 }
 
-/// The population standard deviation.
+/// The population standard deviation of finite values: where a square or a sum passes a double's
+/// reach (values from about 1e154 up), computed on the values scaled by their largest magnitude.
 pub fn sigma(vals: &[f64]) -> Option<f64> {
-    if vals.is_empty() {
-        return None;
+    let m = mean(vals)?;
+    let n = vals.len() as f64;
+    let s = (vals.iter().map(|v| (v - m).powi(2)).sum::<f64>() / n).sqrt();
+    if s.is_finite() {
+        return Some(s);
     }
-    let mean = vals.iter().sum::<f64>() / vals.len() as f64;
-    Some((vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / vals.len() as f64).sqrt())
+    let k = vals.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+    let scaled: Vec<f64> = vals.iter().map(|v| v / k).collect();
+    let sm = scaled.iter().sum::<f64>() / n;
+    Some((scaled.iter().map(|v| (v - sm).powi(2)).sum::<f64>() / n).sqrt() * k)
 }
 
 /// A distribution of values in `bins` equal bins from `center - spread` to `center + spread`
@@ -279,7 +308,8 @@ fn key_text(v: &Json) -> Option<String> {
     match v {
         Json::Null => None,
         Json::Number(n) if n.is_i64() || n.is_u64() => Some(n.to_string()),
-        Json::Number(n) => n.as_f64().map(|x| format!("{x}")),
+        // Zero one key whatever its sign (-0 and 0 are one value; no number writer writes "-0").
+        Json::Number(n) => n.as_f64().map(|x| format!("{}", if x == 0.0 { 0.0 } else { x })),
         Json::String(s) => Some(s.clone()),
         other => Some(other.to_string()),
     }
@@ -465,8 +495,12 @@ pub fn cells(live: &Live, table: &str, key: &str, value: &str, minutes: u32, buc
     let ti = columns.iter().position(|c| c == "index_ms");
     // A key of a time kind written as the store's clock reads it, as the table writes one.
     let key_clock = types.get(ki).and_then(|t| clock_of(t));
+    // A key of the engine's single-precision `FLOAT` written as that float's own shortest text:
+    // portal hands it over as the double nearest it (0.1 as 0.10000000149011612).
+    let key_single = types.get(ki).is_some_and(|t| t == "FLOAT");
     let key_of = |v: &Json| match key_clock {
         Some(c) if v.as_i64().is_some() => Some(time_text(v, c)),
+        _ if key_single => v.as_f64().map(|x| x as f32).map(|f| format!("{}", if f == 0.0 { 0.0 } else { f })).or_else(|| key_text(v)),
         _ => key_text(v),
     };
     // Each key with the value it was first read from, for its order; a row with no key or no value

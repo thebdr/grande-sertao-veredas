@@ -848,10 +848,14 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     page.eval("location.hash = 'layout'; true");
     page.wait_for("document.querySelector('.dash-grid') ? null : true", Duration::from_secs(10));
     // (What it says is recorded as it is drawn: the tick that asks again can draw over it at once.)
-    page.eval(r#"(() => { window.__said = []; new MutationObserver(() => { const e = document.querySelector(".dash-grid > p.error"); if (e && !window.__said.some((s) => s[0] === e.textContent)) window.__said.push([e.textContent, window.__shownMark(e), window.__textAsWritten(e)]); }).observe(document.body, { childList: true, subtree: true, characterData: true }); return true; })()"#);
-    page.eval("window.__hold = '/dashboard/0'; window.__holdMs = 60000; location.hash = 'dashboards/0'; true");
+    page.eval(r#"(() => { window.__said = []; window.__saidAt = null; new MutationObserver(() => { const e = document.querySelector(".dash-grid > p.error"); if (e && !window.__said.some((s) => s[0] === e.textContent)) { window.__saidAt = window.__saidAt ?? performance.now(); window.__said.push([e.textContent, window.__shownMark(e), window.__textAsWritten(e)]); } }).observe(document.body, { childList: true, subtree: true, characterData: true }); return true; })()"#);
+    page.eval("window.__askAt = []; window.__hold = '/dashboard/0'; window.__holdMs = 60000; location.hash = 'dashboards/0'; true");
     let gave_up = page.wait_for("window.__said.length ? window.__said : null", Duration::from_secs(20));
     assert_eq!(gave_up, json!([["Error: no answer within 10 s", true, []]]), "given up on, said in the dashboard's place, shown as written");
+    // Given up on at ten seconds (`ASK_MS`), from the ask to the words, within half a second.
+    let after = page.eval("window.__saidAt - window.__askAt[0]").as_f64().unwrap();
+    page.eval("window.__askAt = null; true");
+    assert!((9500.0..=10_500.0).contains(&after), "given up on {after} ms after the ask");
     page.wait_for(r#"document.querySelectorAll(".dash-grid > .panel").length === 17 || null"#, Duration::from_secs(15));
     // The refresh every five seconds: over sixteen seconds and a half, each ask of the dashboard
     // shown five seconds after the last, within half a second.
@@ -973,14 +977,15 @@ const KEEP_DASHBOARD: &str = r#"(() => {
 /// that scrolls, visible, displayed through every ancestor, and painted with some alpha once every
 /// opacity is multiplied with its paint's; a mask, a filter, a font or a cover that takes no
 /// pointer is not read, the limit the clause states).
-/// `DRAWN_PANELS` with the views' shared census of text as written in its place.
+/// `DRAWN_PANELS` with the views' shared census of text as written, and of what hides a mark, in its
+/// place.
 fn drawn_panels() -> String {
-    DRAWN_PANELS.replacen("/*AS_WRITTEN*/", AS_WRITTEN_FN, 1)
+    DRAWN_PANELS.replacen("/*AS_WRITTEN*/", &format!("{AS_WRITTEN_FN}\n{HIDDEN_BY_FN}"), 1)
 }
 
 const DRAWN_PANELS: &str = r#"(() => {
   const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true });
-  const alpha = (p) => { if (!p || p === "none") return 0; if (p.startsWith("url(")) return 1; ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillStyle = p; ctx.fillRect(0, 0, 1, 1); return ctx.getImageData(0, 0, 1, 1).data[3] / 255; };
+  const alpha = (p) => { if (!p || p === "none") return 0; if (p.startsWith("url(")) return referenced(p) ? 1 : 0; ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillStyle = p; ctx.fillRect(0, 0, 1, 1); return ctx.getImageData(0, 0, 1, 1).data[3] / 255; };
   // What a panel paints: every element with text of its own, every SVG shape, every box painted by
   // its own background or border (the panel's own box among them); the hover tip, shown on hover,
   // and an SVG title, a tooltip, apart.
@@ -1018,12 +1023,13 @@ const DRAWN_PANELS: &str = r#"(() => {
     if (el instanceof SVGElement ? !(b.width > 0 || b.height > 0) : !(b.width > 0 && b.height > 0)) return false;
     if (clipped(el, b)) return false;
     if (!el.checkVisibility({ contentVisibilityAuto: true, opacityProperty: true, visibilityProperty: true })) return false;
+    if (hiddenBy(el)) return false;
     const c = getComputedStyle(el);
     if (c.visibility !== "visible") return false;
     let o = 1;
     for (let e = el; e; e = e.parentElement) { const s = getComputedStyle(e); if (s.display === "none") return false; o *= Number(s.opacity); }
     const paint = el instanceof SVGElement
-      ? Math.max(alpha(c.fill) * Number(c.fillOpacity), parseFloat(c.strokeWidth) > 0 ? alpha(c.stroke) * Number(c.strokeOpacity) : 0)
+      ? Math.max(alpha(c.fill) * Number(c.fillOpacity), parseFloat(c.strokeWidth) > 0 && strokeDrawn(c) ? alpha(c.stroke) * Number(c.strokeOpacity) : 0)
       : ownText(el) ? Math.max(alpha(c.webkitTextFillColor || c.color), parseFloat(c.webkitTextStrokeWidth) > 0 ? alpha(c.webkitTextStrokeColor) : 0) : Math.max(alpha(c.backgroundColor), c.backgroundImage !== "none" ? 1 : 0, border(c));
     return o * paint > 0.05;
   };
@@ -1087,17 +1093,17 @@ const DRAWN_PANELS: &str = r#"(() => {
           ((g) => g ? [num(g, "x"), num(g, "width"), num(g, "y"), num(g, "height")] : null)(x.querySelector("svg.statebar rect.st-none"))]);
         r.axis = [...p.querySelectorAll(".tl-axis span")].map(txt); break;
       case "grid":
-        r.cells = [...p.querySelectorAll(".grid-cells .cell")].map((c) => [txt(c.querySelector(".cell-id")), txt(c.querySelector(".cell-v")), c.className, c.querySelector(".cell-v").className, attr(c, "title")]);
+        r.cells = [...p.querySelectorAll(".grid-cells .cell")].map((c) => [see(c) && txt(c.querySelector(".cell-id")), txt(c.querySelector(".cell-v")), c.className, c.querySelector(".cell-v").className, attr(c, "title")]);
         r.right = txt(p.querySelector(".panel-bind")); break;
       case "levels":
-        r.rows = [...p.querySelectorAll(".lv-row")].map((x) => [txt(x.querySelector(".lv-label")), x.querySelector(".lv-fill").getAttribute("style"), x.querySelector(".lv-fill").className, [...x.querySelectorAll(".lv-tick")].map((t) => t.getAttribute("style")), txt(x.querySelector(".lv-v")), x.querySelector(".lv-v").className]); break;
+        r.rows = [...p.querySelectorAll(".lv-row")].map((x) => [see(x.querySelector(".lv-track")) && txt(x.querySelector(".lv-label")), see(x.querySelector(".lv-fill")).getAttribute("style"), x.querySelector(".lv-fill").className, [...x.querySelectorAll(".lv-tick")].map((t) => see(t).getAttribute("style")), txt(x.querySelector(".lv-v")), x.querySelector(".lv-v").className]); break;
       case "table":
         r.head = [...p.querySelectorAll("thead th")].map(txt);
         r.rows = [...p.querySelectorAll("tbody tr")].map((tr) => [...tr.children].map((td) => [txtAll(td), td.className, td.querySelector(".inbar-fill")?.getAttribute("style") ?? null]));
         r.right = txt(p.querySelector(".panel-bind")); break;
       case "cells":
         r.head = [...p.querySelectorAll("thead th")].map(txt);
-        r.rows = [...p.querySelectorAll("tbody tr")].map((tr) => { const td = [...tr.children]; return [txt(td[0]), txt(td[1]), pts(td[2].querySelector("path.line")), pts(td[3].querySelector("path.line")), txt(td[4]), txt(td[5]), dot(td[2].querySelector("svg"))]; });
+        r.rows = [...p.querySelectorAll("tbody tr")].map((tr) => { const td = [...tr.children]; return [txt(td[0]), txt(td[1]), see(td[2]) && pts(td[2].querySelector("path.line")), see(td[3]) && pts(td[3].querySelector("path.line")), txt(td[4]), txt(td[5]), dot(td[2].querySelector("svg"))]; });
         r.right = txt(p.querySelector(".panel-bind")); break;
     }
     return r;
@@ -1113,6 +1119,9 @@ const DRAWN_PANELS: &str = r#"(() => {
     dist: ["path.area", "path.line", "line.median"],
   };
   const marks = [];
+  // The boxes the readings take the first of, one of each: a level's track and its fill, a cell's bar.
+  for (const x of document.querySelectorAll(".dash-grid .lv-row")) { const t = x.querySelectorAll(".lv-track").length, f = x.querySelectorAll(".lv-fill").length; if (t !== 1 || f !== 1) marks.push(`levels: a row of ${t} tracks and ${f} fills`); }
+  for (const td of document.querySelectorAll(".dash-grid td")) if (td.querySelectorAll(".inbar").length > 1 || td.querySelectorAll(".inbar-fill").length > 1) marks.push("table: a cell of more than one bar");
   for (const svg of document.querySelectorAll(".dash-grid svg")) {
     const kind = ["spark", "trend", "bars", "statebar", "dist"].find((k) => svg.classList.contains(k));
     if (!kind) { marks.push(`an svg of no chart this test reads: ${svg.getAttribute("class")}`); continue; }
@@ -1140,8 +1149,9 @@ const DRAWN_PANELS: &str = r#"(() => {
       if (!med || num(med, "x1") !== W / 2 || num(med, "x2") !== W / 2 || num(med, "y1") !== 0 || num(med, "y2") !== H) marks.push("dist: its median not at the middle");
     }
   }
-  // The census: every text and every SVG shape a panel shows is one a reading above took, one to
-  // one (a second of a kind the readings take the first of is unread); every hover text (an SVG
+  // The census: every mark a panel paints (a text, an SVG shape, a box painted by its background or
+  // its border) is one a reading above took, one to one (a second of a kind the readings take the
+  // first of is unread); every hover text (an SVG
   // title, a `title` attribute) one a reading took; no text the stylesheet generates (before or
   // after an element, a list item's marker) and none it draws otherwise than written (its case
   // changed, its letters masked).
@@ -1149,7 +1159,7 @@ const DRAWN_PANELS: &str = r#"(() => {
     for (const el of [p, ...p.querySelectorAll("*")]) {
       const at = `${p.dataset.kind}: ${el.tagName}.${el.getAttribute("class") ?? ""}`;
       const shape = el instanceof SVGElement && SHAPES.has(el.tagName.toLowerCase());
-      if ((shape || (!(el instanceof SVGElement) && ownText(el))) && !el.closest(".tip, title") && shown(el) && !seen.has(el)) {
+      if (el !== p && paints(el) && !el.closest(".tip, title") && shown(el) && !seen.has(el)) {
         marks.push(`${p.dataset.kind}: a mark this test does not read, ${el.tagName}.${el.getAttribute("class") ?? ""} "${el.textContent.trim().slice(0, 30)}"`);
       }
       if (el instanceof SVGElement && el.tagName.toLowerCase() === "title" && !seen.has(el)) marks.push(`${at}: a hover text this test does not read, "${el.textContent.trim().slice(0, 30)}"`);
@@ -1188,6 +1198,37 @@ const DRAWN_PANELS: &str = r#"(() => {
       const want = (parseFloat(inline) / 100) * room, got = parseFloat(c[prop]);
       if (Math.abs(want - got) > 0.5) marks.push(`${el.className}: its ${prop} drawn ${c[prop]}, written ${inline} of ${room}px`);
     }
+  }
+  // Where and in what order the browser draws each text and row, read from its boxes: every text of
+  // a chart at its anchor (its start, middle or end at its x, carried by the chart's own matrix) and
+  // on its baseline; a table's heading above its rows, each row below the one before, its cells left
+  // to right; a timeline's and a level's rows each below the one before; a grid's cells in reading
+  // order.
+  const box = (e) => e.getBoundingClientRect();
+  for (const t of document.querySelectorAll(".dash-grid svg text")) {
+    if (t.closest(".tip") || !t.hasAttribute("x") || !t.textContent.trim()) continue;
+    const X = new DOMPoint(Number(t.getAttribute("x")), Number(t.getAttribute("y"))).matrixTransform(t.getScreenCTM());
+    const b = box(t), anchor = t.getAttribute("text-anchor") ?? "start";
+    const edge = anchor === "end" ? b.right : anchor === "middle" ? (b.left + b.right) / 2 : b.left;
+    if (Math.abs(edge - X.x) > 1.5) marks.push(`a chart's text ${JSON.stringify(t.textContent)} drawn with its ${anchor} at ${edge.toFixed(1)}, written at ${X.x.toFixed(1)}`);
+    if (!(b.height > 0 && X.y <= b.bottom + 0.5 && (X.y - b.top) / b.height > 0.55)) marks.push(`a chart's text ${JSON.stringify(t.textContent)} off its baseline: [${b.top.toFixed(1)}, ${b.bottom.toFixed(1)}] for ${X.y.toFixed(1)}`);
+  }
+  const below = (els, what) => { for (let i = 1; i < els.length; i++) if (box(els[i]).top < box(els[i - 1]).bottom - 0.5) marks.push(`${what} ${i} drawn above the one before`); };
+  for (const p of document.querySelectorAll(".dash-grid > .panel")) {
+    for (const tb of p.querySelectorAll("table")) {
+      below([...tb.querySelectorAll("thead tr, tbody tr")], `${p.dataset.kind}: the table's row`);
+      for (const tr of tb.querySelectorAll("tr")) { const c = [...tr.children]; for (let i = 1; i < c.length; i++) if (box(c[i]).left < box(c[i - 1]).right - 0.5) marks.push(`${p.dataset.kind}: a cell ${i} drawn left of the one before`); }
+    }
+    below([...p.querySelectorAll(":scope > .tl-row")], `${p.dataset.kind}: the timeline's row`);
+    below([...p.querySelectorAll(":scope > .lv-row")], `${p.dataset.kind}: the level's row`);
+    const cells = [...p.querySelectorAll(".grid-cells > .cell")];
+    for (let i = 1; i < cells.length; i++) { const a = box(cells[i - 1]), b = box(cells[i]); if (!(b.top >= a.bottom - 0.5 || (Math.abs(b.top - a.top) < 0.5 && b.left >= a.right - 0.5))) marks.push(`grid: a cell ${i} drawn before the one before`); }
+  }
+  // The dashboards' tabs (the binding's names for them, "its name on the screen"): each shown and
+  // drawn as written.
+  for (const b of document.querySelectorAll(".subtabs button")) {
+    if (!shown(b)) marks.push(`a dashboard's tab not shown: ${JSON.stringify(b.textContent)}`);
+    for (const said of asWritten(b)) marks.push(`a dashboard's tab ${JSON.stringify(b.textContent)}: ${said}`);
   }
   // The grid's columns as laid out: one track per column.
   const columns = getComputedStyle(document.querySelector(".dash-grid")).gridTemplateColumns.split(" ").filter(Boolean).length;
@@ -2245,6 +2286,18 @@ sql = "SELECT index_ms, source, seq, travel, CAST(CASE travel WHEN 0 THEN 'low' 
 [[table]]
 name = "nonfinite"
 sql = "SELECT CAST('inf' AS DOUBLE) AS p, CAST('nan' AS DOUBLE) AS q UNION ALL SELECT 5.0, 1.0"
+
+[[table]]
+name = "zeros"
+sql = "SELECT index_ms, source, seq, travel, CASE travel WHEN 0 THEN CAST('-0.0' AS DOUBLE) ELSE CAST('0.0' AS DOUBLE) END AS k, CASE travel WHEN 0 THEN CAST('-0.0' AS FLOAT) ELSE CAST('0.0' AS FLOAT) END AS kf FROM sorts"
+
+[[table]]
+name = "extremes"
+sql = "SELECT index_ms, source, seq, 'k' AS key, CAST('1.7976931348623157e308' AS DOUBLE) AS top, CASE travel WHEN 0 THEN CAST('1e155' AS DOUBLE) ELSE CAST('-1e155' AS DOUBLE) END AS wide FROM sorts"
+
+[[table]]
+name = "singles"
+sql = "SELECT index_ms, source, seq, travel, CAST(CASE travel WHEN 0 THEN 0.1 WHEN 20 THEN 0.2 ELSE 0.3 END AS FLOAT) AS f FROM sorts"
 "#;
 
 #[test]
@@ -2664,6 +2717,31 @@ fn every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says() {
     let en = veredas_supervisao::panel::cells(&live, "enums", "lv", "travel", 60, 5, 5.0, to, 50, 1000).unwrap();
     let keys: Vec<&str> = en["rows"].as_array().unwrap().iter().map(|r| r["key"].as_str().unwrap()).collect();
     assert_eq!(keys, ["high", "low", "mid"], "an ENUM's keys as text");
+    // A key of negative zero is the key 0, a double's and a single's alike (one value; the crate's
+    // number writers write no "-0"), its rows one row of the cells.
+    for k in ["k", "kf"] {
+        let z = veredas_supervisao::panel::cells(&live, "zeros", k, "travel", 60, 5, 5.0, to, 50, 1000).unwrap();
+        let keys: Vec<(Value, Value)> = z["rows"].as_array().unwrap().iter().map(|r| (r["key"].clone(), r["n"].clone())).collect();
+        assert_eq!(keys, vec![(json!("0"), json!(3))], "{k}: -0 and 0 one key");
+    }
+    // A key of the engine's single-precision FLOAT by that float's own text, never the double portal
+    // hands over (0.1 as 0.10000000149011612).
+    let si = veredas_supervisao::panel::cells(&live, "singles", "f", "travel", 60, 5, 5.0, to, 50, 1000).unwrap();
+    let keys: Vec<&str> = si["rows"].as_array().unwrap().iter().map(|r| r["key"].as_str().unwrap()).collect();
+    assert_eq!(keys, ["0.1", "0.2", "0.3"], "a FLOAT's keys as written");
+    // Finite samples whose sum or squares pass a double's reach: their mean, median and σ all the same
+    // (the largest double twice, a "no reading" some controllers write; ±1e155, whose squares pass
+    // it), through the route's cells and in a mean's bucket.
+    let m = f64::MAX;
+    let top = veredas_supervisao::panel::cells(&live, "extremes", "key", "top", 60, 5, 5.0, to, 50, 1000).unwrap();
+    assert_eq!((top["rows"][0]["median"].clone(), top["rows"][0]["sigma"].clone(), top["rows"][0]["n"].clone()), (json!(m), json!(0.0), json!(3)), "{top}");
+    let wide = veredas_supervisao::panel::cells(&live, "extremes", "key", "wide", 60, 5, 5.0, to, 50, 1000).unwrap();
+    let s = wide["rows"][0]["sigma"].as_f64().unwrap_or_else(|| panic!("{wide}"));
+    assert!((s / 9.428090415820634e154 - 1.0).abs() < 1e-12, "σ of 1e155 once and -1e155 twice: {s}");
+    use veredas_supervisao::panel::{buckets, mean, median, sigma};
+    assert_eq!((mean(&[m, m]), median(&[m, m]), sigma(&[m, m]), sigma(&[m, -m]), median(&[-m, m])), (Some(m), Some(m), Some(0.0), Some(m), Some(0.0)));
+    let b = buckets(&[(0, m), (1, m)], 0, 299_999, 300_000, veredas_supervisao::binding::Aggregate::Mean);
+    assert_eq!((b[0]["value"].clone(), b[0]["n"].clone()), (json!(m), json!(2)), "a mean's bucket of the largest double twice");
     host.stop();
 }
 

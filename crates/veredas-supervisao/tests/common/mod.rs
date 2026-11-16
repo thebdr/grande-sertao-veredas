@@ -366,6 +366,40 @@ pub const AS_WRITTEN_FN: &str = r#"const asWritten = (el) => {
   return out;
 };"#;
 
+/// What stops a mark painting that its box, its visibility and its paint's colour do not say, for the
+/// views' tests' readings of a mark shown: `hiddenBy(el)` a clip (`clip-path`, `clip`), a filter or a
+/// mask on it or on any element around it (the page writes none), or its own box cutting what it
+/// holds (its overflow hidden, its content past it: an ellipsis among it); `strokeDrawn(c)` false for a
+/// stroke whose dashes are all of no length; `referenced(p)` whether a paint by reference
+/// (`url(#…)`) reaches a gradient or a pattern, or falls back to a colour.
+#[allow(dead_code)]
+pub const HIDDEN_BY_FN: &str = r#"const hiddenBy = (el) => {
+  for (let e = el; e && e.nodeType === 1; e = e.parentElement) {
+    const s = getComputedStyle(e), at = e.tagName.toLowerCase();
+    if ((s.clipPath || "none") !== "none") return `clipped by clip-path on ${at}`;
+    if ((s.clip || "auto") !== "auto") return `clipped by clip on ${at}`;
+    if ((s.filter || "none") !== "none") return `filtered on ${at}`;
+    if ([s.maskImage, s.webkitMaskImage].some((v) => v && v !== "none")) return `masked on ${at}`;
+  }
+  if (!(el instanceof SVGElement)) {
+    const s = getComputedStyle(el);
+    if ([s.overflowX, s.overflowY].some((v) => v === "hidden" || v === "clip") && (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1)) return "cut by its own box";
+  }
+  return null;
+};
+const strokeDrawn = (c) => {
+  if (!c.strokeDasharray || c.strokeDasharray === "none") return true;
+  const d = c.strokeDasharray.split(/[\s,]+/).map(parseFloat).filter((x) => !Number.isNaN(x));
+  return (d.length % 2 ? d.concat(d) : d).some((x, i) => i % 2 === 0 && x > 0);
+};
+const referenced = (p) => {
+  const m = /^url\(\s*["']?[^"')#]*#([^"')]+)["']?\s*\)\s*(.*)$/.exec(p);
+  if (!m) return false;
+  const t = document.getElementById(decodeURIComponent(m[1]));
+  if (t && ["lineargradient", "radialgradient", "pattern"].includes(t.tagName.toLowerCase())) return true;
+  return m[2] !== "" && m[2] !== "none";
+};"#;
+
 /// The reference's drawing (its loop, infeed, outlets and parcels, by the same ids) as Inkscape 1.3
 /// saves a drawing (Q25 decided: layouts are drawn in Inkscape): the XML declaration and a comment,
 /// the SVG namespace both unprefixed and as `svg:`, Inkscape's own namespaces, its editor's state

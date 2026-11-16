@@ -22,20 +22,23 @@ const VIEW: &str = "slows";
 /// with some alpha once every opacity is multiplied with its paint's (an SVG shape's fill or stroke
 /// and their opacities, the colour a text's glyphs are filled with and the stroke round them), and
 /// by the browser's own reading (`checkVisibility`: its content skipped, `content-visibility`, an
-/// opacity, a visibility). A mask, a filter, a font or a cover that takes no pointer is not read (the
-/// clause states the limit).
+/// opacity, a visibility), and by the views' shared census of what hides a mark (`HIDDEN_BY_FN`, kept
+/// in the page by `keep_answers`: a clip, a filter or a mask on it or around it, its own box cutting
+/// it, a stroke of dashes of no length, a paint by reference to nothing). A font or a cover that
+/// takes no pointer is not read (the clause states the limit).
 const SHOWN_FN: &str = r#"const shown = (el) => {
   if (!el) return false;
   const b = el.getBoundingClientRect();
   if (!(b.width > 0 || b.height > 0)) return false;
   if (!el.checkVisibility({ contentVisibilityAuto: true, opacityProperty: true, visibilityProperty: true })) return false;
+  if (window.__hidden.hiddenBy(el)) return false;
   const c = getComputedStyle(el);
   if (c.visibility !== "visible") return false;
   let o = 1;
   for (let e = el; e; e = e.parentElement) { const s = getComputedStyle(e); if (s.display === "none") return false; o *= Number(s.opacity); }
   const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true });
-  const alpha = (p) => { if (!p || p === "none") return 0; if (p.startsWith("url(")) return 1; ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillStyle = p; ctx.fillRect(0, 0, 1, 1); return ctx.getImageData(0, 0, 1, 1).data[3] / 255; };
-  const paint = el instanceof SVGElement ? Math.max(alpha(c.fill) * Number(c.fillOpacity), parseFloat(c.strokeWidth) > 0 ? alpha(c.stroke) * Number(c.strokeOpacity) : 0) : Math.max(alpha(c.webkitTextFillColor || c.color), parseFloat(c.webkitTextStrokeWidth) > 0 ? alpha(c.webkitTextStrokeColor) : 0);
+  const alpha = (p) => { if (!p || p === "none") return 0; if (p.startsWith("url(")) return window.__hidden.referenced(p) ? 1 : 0; ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillStyle = p; ctx.fillRect(0, 0, 1, 1); return ctx.getImageData(0, 0, 1, 1).data[3] / 255; };
+  const paint = el instanceof SVGElement ? Math.max(alpha(c.fill) * Number(c.fillOpacity), parseFloat(c.strokeWidth) > 0 && window.__hidden.strokeDrawn(c) ? alpha(c.stroke) * Number(c.strokeOpacity) : 0) : Math.max(alpha(c.webkitTextFillColor || c.color), parseFloat(c.webkitTextStrokeWidth) > 0 ? alpha(c.webkitTextStrokeColor) : 0);
   return o * paint > 0.05;
 };"#;
 
@@ -208,6 +211,12 @@ fn every_mark_shown(page: &mut Browser, when: &str) {
 /// request whose address holds `part` answered `ms` late (refused then, as portal refuses, when
 /// `refused` is set), its state in `__held[part]` ("sent", then "done" once the page has had it), so
 /// any order of arrival, of an answer or a refusal, can be driven.
+/// `KEEP_ANSWERS`, and the views' shared census of what hides a mark kept in the page beside it
+/// (`window.__hidden`, read by `SHOWN_FN`).
+fn keep_answers() -> String {
+    format!("(() => {{ {HIDDEN_BY_FN} window.__hidden = {{ hiddenBy, strokeDrawn, referenced }}; return {KEEP_ANSWERS}; }})()")
+}
+
 const KEEP_ANSWERS: &str = r#"(() => {
   window.__answers = [];
   window.__holds = [];
@@ -441,7 +450,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     }));
     let (_, before) = get(addr, "/s/loop/portal/api/tables");
     let mut page = Browser::watched(&format!("http://{addr}/s/loop/#tables"));
-    page.eval(KEEP_ANSWERS);
+    page.eval(&keep_answers());
 
     // The Tables view lists the catalog as portal lists it: each button's name, kind and count.
     const LISTED: &str = r#"(() => { const b = [...document.querySelectorAll(".list button[data-table]")]; return b.length ? b.map((x) => [x.dataset.table, x.children[0].textContent, x.children[1].textContent]) : null; })()"#;
@@ -1098,7 +1107,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     blind.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": "window.EventSource = class { constructor(url) { this.url = url; this.h = {}; (window.__feeds = window.__feeds || []).push(this); } addEventListener(t, f) { (this.h[t] = this.h[t] || []).push(f); } close() {} };" }));
     blind.call("Page.navigate", json!({ "url": format!("http://{addr}/s/loop/#tables") }));
     blind.wait_for(r#"document.querySelector('.list button[data-table="sorts"]') ? true : null"#, Duration::from_secs(20));
-    blind.eval(KEEP_ANSWERS);
+    blind.eval(&keep_answers());
     assert_eq!(blind.eval(r#"/\d\d:\d\d:\d\d/.test(document.querySelector(".live")?.textContent ?? "")"#), json!(false), "no status held");
     let page_of = |page: &mut Browser, table: &str, rows: Option<&str>| -> Value {
         let want = match rows {
@@ -1242,7 +1251,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // logged there), never this one's.
     let mut page = Browser::watched(&format!("http://{addr}/s/hall/#tables"));
     let listed = page.wait_for(LISTED, Duration::from_secs(20));
-    page.eval(KEEP_ANSWERS);
+    page.eval(&keep_answers());
     let (_, t) = get(addr, "/s/hall/portal/api/tables");
     let want: Vec<(Value, Value)> = t["tables"].as_array().unwrap().iter().map(|x| (x["name"].clone(), json!(format!("{} · {}", x["kind"].as_str().unwrap(), x["rows"])))).collect();
     let sorts_there = want.iter().find(|(n, _)| n == "sorts").unwrap().1.clone();
