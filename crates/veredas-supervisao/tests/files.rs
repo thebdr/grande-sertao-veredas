@@ -1211,7 +1211,9 @@ writes (the properties `all`, `transform`, `translate`, `rotate`, `scale`, `tran
 `perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, each by
 its name and every longhand of it (the name, a hyphen and more), in a `style`, under any vendor's
 prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`), a name with white space or a comment inside it declaring nothing; the attributes
-`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), a custom
+`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), on the root the attributes
+`preserveAspectRatio` and `overflow` (the second in its `style` too, and every longhand of it), with
+which the drawing would cut what the page writes at its edge or reach past its frame, a custom
 property (a `style` declaration whose name begins `--`, however CSS spells it) anywhere, a
 `direction` (an attribute or in a `style`) outside a text and its spans (`text`, `tspan`, `textPath`),
 both of which the page's reset leaves to inheritance (the state colours read custom properties),
@@ -1323,7 +1325,7 @@ fn hint(kind: &str) -> &'static str {
 /// object's element, inside it and beside it). Every list is held to the reference's own sentence.
 #[test]
 fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
-    use veredas_supervisao::svg::{ANIMATIONS, AROUND, DIRECTED, DRAWN, HOLDS, MOVING, MOVING_ATTRIBUTES, MOVING_FAMILIES, VENDOR_PREFIXES, declared, moves_the_page, says_important};
+    use veredas_supervisao::svg::{ANIMATIONS, AROUND, DIRECTED, DRAWN, HOLDS, MOVING, MOVING_ATTRIBUTES, MOVING_FAMILIES, ROOT_FRAMED, VENDOR_PREFIXES, declared, moves_the_page, says_important};
     // The lists are the reference's, each member named in its own sentence: the kinds an object is
     // shown on, what may stand around them and inside them, the animations, the properties and
     // attributes that move, time or unpin what the page writes.
@@ -1577,6 +1579,26 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
         let ex = with_svg(ROOT, &ROOT.replacen("<svg ", &format!("<svg transform=\"{t}\" "), 1));
         assert!(binding_refusal(&ex).ends_with("layout.svg writes a `transform` on its root <svg>: the page lays its own frame over the drawing's root, which may not move"), "{t}");
     }
+    // How the root fits and clips its frame, the page's (`ROOT_FRAMED`, the reference's list): each
+    // as an attribute on the root, and `overflow` in its `style` however CSS writes it and by every
+    // longhand, refused naming it; each on an element inside loading (Inkscape writes an image's
+    // `preserveAspectRatio` and a marker's `overflow`).
+    assert_eq!(named("on the root the attributes ", " (the second"), ROOT_FRAMED);
+    let framed = |what: &str| format!("layout.svg writes `{what}` on its root <svg>: the page fits the drawing into its frame and keeps it cut there");
+    for (attr, value) in ROOT_FRAMED.iter().map(|a| (*a, if *a == "overflow" { "visible" } else { "xMidYMid slice" })) {
+        let ex = with_svg(ROOT, &ROOT.replacen("<svg ", &format!("<svg {attr}=\"{value}\" "), 1));
+        let got = binding_refusal(&ex);
+        assert!(got.ends_with(&framed(attr)), "{attr}: {got}");
+        let inside = with_svg(INFEED, &format!("{INFEED}<g {attr}=\"{value}\"><image {attr}=\"{value}\" width=\"4\" height=\"4\"/></g>"));
+        assert!(outcome(&inside).is_ok(), "{attr} inside: {:?}", outcome(&inside).err());
+    }
+    for (style, shown) in [("overflow: visible", "overflow"), ("fill: red; OVERFLOW : visible", "overflow"), ("/* c */ overflow-x: visible", "overflow-x"), ("-webkit-overflow-y: visible", "overflow-y"), ("\\6f verflow: visible", "overflow")] {
+        let ex = with_svg(ROOT, &ROOT.replacen("<svg ", &format!("<svg style=\"{style}\" "), 1));
+        let got = binding_refusal(&ex);
+        assert!(got.ends_with(&framed(shown)), "{style}: {got}");
+    }
+    let inside = with_svg(INFEED, &format!("{INFEED}<g style=\"overflow:visible\"><rect/></g>"));
+    assert!(outcome(&inside).is_ok(), "an inner overflow: {:?}", outcome(&inside).err());
     assert_eq!(declared("fill: red; -WEBKIT-Transform : x; /* c */ \\74 ransition: y"), ["fill", "transform", "transition"]);
     assert_eq!(declared("trans/**/form: x; pointer /* c */-events: y; trans form: z; \\74 rans\\ form: w; opacity : 1"), ["trans form", "opacity"]);
     assert!(moves_the_page("transition-delay") && moves_the_page("offset-rotate") && !moves_the_page("transitions") && !moves_the_page("fill"));

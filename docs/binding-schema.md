@@ -464,7 +464,9 @@ writes (the properties `all`, `transform`, `translate`, `rotate`, `scale`, `tran
 `perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, each by
 its name and every longhand of it (the name, a hyphen and more), in a `style`, under any vendor's
 prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`), a name with white space or a comment inside it declaring nothing; the attributes
-`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), a custom
+`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), on the root the attributes
+`preserveAspectRatio` and `overflow` (the second in its `style` too, and every longhand of it), with
+which the drawing would cut what the page writes at its edge or reach past its frame, a custom
 property (a `style` declaration whose name begins `--`, however CSS spells it) anywhere, a
 `direction` (an attribute or in a `style`) outside a text and its spans (`text`, `tspan`, `textPath`),
 both of which the page's reset leaves to inheritance (the state colours read custom properties),

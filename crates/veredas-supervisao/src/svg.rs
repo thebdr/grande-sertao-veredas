@@ -119,6 +119,15 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
     if root.attribute("transform").is_some() {
         return Err(format!("{} writes a `transform` on its root <svg>: the page lays its own frame over the drawing's root, which may not move", path.display()));
     }
+    // How the root fits and clips its frame is the page's: a `preserveAspectRatio` that slices the
+    // drawing would cut what the page writes at its edges, an `overflow` that shows what lies past
+    // it would draw it over the page's own controls (Q25: Inkscape writes neither on a root).
+    let framed = ROOT_FRAMED.iter().map(|a| a.to_string()).find(|a| root.attribute(a.as_str()).is_some()).or_else(|| {
+        root.attribute("style").and_then(|s| declared(s).into_iter().find(|p| ROOT_FRAMED.iter().any(|a| { let a = a.to_ascii_lowercase(); *p == a || p.starts_with(&format!("{a}-")) })))
+    });
+    if let Some(attr) = framed {
+        return Err(format!("{} writes `{attr}` on its root <svg>: the page fits the drawing into its frame and keeps it cut there", path.display()));
+    }
     // The document type's attribute defaults (`<!ATTLIST`), which a browser applies and this
     // reader does not: an element's namespace, a link or a handler added unseen. (A parameter
     // entity's reference, the other way to declare unseen, is no XML this reader reads.)
@@ -404,6 +413,10 @@ pub const MOVING_FAMILIES: [&str; 3] = ["transition", "animation", "offset"];
 
 /// The properties `moves_the_page` names whole, each with any longhand of it too.
 pub const MOVING: [&str; 10] = ["all", "transform", "translate", "rotate", "scale", "transform-origin", "transform-box", "transform-style", "perspective", "pointer-events"];
+
+/// What the root may not write of how it fits and clips its frame (as an attribute; `overflow` in its
+/// `style` too, by its name and every longhand of it): the page fits the drawing and keeps it cut.
+pub const ROOT_FRAMED: [&str; 2] = ["preserveAspectRatio", "overflow"];
 
 /// The vendors' prefixes `declared` takes off a property's name: each engine reads its own spelling
 /// of a property as the property (`-moz-transform` in Firefox, `-webkit-transform` in Blink).
