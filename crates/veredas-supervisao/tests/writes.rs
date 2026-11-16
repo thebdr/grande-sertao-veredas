@@ -991,6 +991,36 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     assert!(lines.as_array().unwrap().len() == 2 && lines[0] == json!(["Release", "Release: no answer, the write may have reached the plant (TypeError: Failed to fetch)"]) && lines[1][0] == json!("Hold") && lines[1][1].as_str().unwrap().starts_with("Hold: written"), "both answers said, one line each: {lines}");
     let freed = page.wait_for(r#"(() => { const b = [...document.querySelectorAll(".side .actions button")]; return b.length === 2 && b.every((x) => !x.disabled && x.dataset.busy === undefined) ? true : null; })()"#, Duration::from_secs(10));
     assert_eq!(freed, json!(true), "both buttons the switch's again");
+    // The busy guard, keyed by the object and the action's place, on every panel a button stands on:
+    // outlet 3's release (its first action) out, read on its own panel after a status: busy and off;
+    // outlet 2, whose own release stands at the same place, selected meanwhile: its button live and
+    // not busy, its press asked and posted (held longer); outlet 3's answer coming while outlet 2 is
+    // shown leaving outlet 2's button busy and off; outlet 2's own answer freeing it.
+    bench.server("plc").unwrap().set("release3", 0);
+    bench.server("aux").unwrap().set("hold3", 0);
+    assert!(wait(Duration::from_secs(10), || release(&bench) == "0" && hold(&bench) == "0"));
+    page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+    page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-3" || null"#, Duration::from_secs(10));
+    page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(10));
+    page.eval(r#"(() => { const f = window.__plainFetch; window.fetch = (...a) => { const u = String(a[0]), body = String(a[1]?.body ?? ""); if (!u.includes("/api/opc/write")) return f(...a); const ms = body.includes("release3") ? 2500 : 6000; return new Promise((ok, no) => setTimeout(() => f(...a).then(ok, no), ms)); }; window.asked = []; window.answer = true; document.querySelector('.side .actions button[data-action="Release"]').click(); return true; })()"#);
+    let release_button = r#"(() => { const b = document.querySelector('.side .actions button[data-action="Release"]'); return [document.querySelector('.side .sel-title').dataset.id, b.disabled, b.dataset.busy ?? null]; })()"#;
+    std::thread::sleep(Duration::from_millis(1300));
+    assert_eq!(page.eval(release_button), json!(["outlet-3", true, "1"]), "outlet 3's release out, read on the panel it was pressed on after a status: busy and off");
+    page.eval(r#"document.getElementById("outlet-2").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+    page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-2" || null"#, Duration::from_secs(10));
+    let live = page.wait_for(r#"(() => { const b = document.querySelector('.side .actions button[data-action="Release"]'); return b && !b.disabled ? [b.disabled, b.dataset.busy ?? null] : null; })()"#, Duration::from_secs(10));
+    assert_eq!(live, json!([false, null]), "outlet 2's release, at outlet 3's place, live and not busy while outlet 3's is out");
+    page.eval(r#"(() => { document.querySelector('.side .actions button[data-action="Release"]').click(); return true; })()"#);
+    let aux_ns = bench.server("aux").unwrap().namespace;
+    let plc_ns = bench.server("plc").unwrap().namespace;
+    assert_eq!(page.eval("window.asked"), json!([format!("Write 7 to ns={plc_ns};s=release3 of plc?"), format!("Write 5 to ns={aux_ns};s=hold3 of aux?")]), "outlet 2's release asked as its own while outlet 3's is out");
+    assert!(wait(Duration::from_secs(10), || release(&bench) == "7"), "outlet 3's release landed");
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(page.eval(release_button), json!(["outlet-2", true, "1"]), "outlet 3's answer come while outlet 2 is shown: outlet 2's own release, still out, busy and off");
+    let said = page.wait_for(r#"(() => { const t = document.querySelector('.side .write-note [data-action="Release"]')?.textContent ?? ""; return t.startsWith("Release: written") ? t : null; })()"#, Duration::from_secs(15));
+    assert!(said.as_str().unwrap().starts_with("Release: written"), "outlet 2's own answer, under it: {said}");
+    assert!(wait(Duration::from_secs(10), || hold(&bench) == "5"), "outlet 2's release landed: hold {}", hold(&bench));
+    page.wait_for(r#"(() => { const b = document.querySelector('.side .actions button[data-action="Release"]'); return b && !b.disabled && b.dataset.busy === undefined ? true : null; })()"#, Duration::from_secs(10));
     page.eval("window.fetch = window.__plainFetch; true");
     host.session("loop").unwrap().set_writes_armed(false);
     drop(page);
@@ -1269,6 +1299,65 @@ fn a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are() {
         assert!(wait(Duration::from_secs(10), || release(&bench) == "1"), "{status}: the write landed");
     }
     page.call("Fetch.disable", json!({}));
+    // Every form an answer can come in, each said as it means, through a stand-in for the page's own
+    // fetch of the write (nothing reaches the plant): every status a response may carry (200 to 599)
+    // in portal's refusal form, `{ error }`, said as no answer but under portal's own refusal codes
+    // (the page's list, held to portal's own elsewhere), where it is said as each means; each of
+    // portal's codes with a body of every other shape (none, another key, an error no string, a
+    // string, a list) said as no answer; a 200 saying `ok` as no boolean said as no answer, saying it
+    // as one said written or refused. A body a status may not carry (204, 205, 304) none at all.
+    let api = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/src/api.ts")).unwrap();
+    let codes: Vec<u16> = api.split_once("const PORTAL_REFUSALS = [").and_then(|(_, r)| r.split_once(']')).map(|(l, _)| l).unwrap().split(',').map(|c| c.trim().parse().unwrap()).collect();
+    let none = |status: u16| format!("Release: no answer, the write may have reached the plant ({status}, ");
+    let mut cases: Vec<(u16, Option<String>, String)> = Vec::new();
+    for status in 200..=599u16 {
+        let body = (![204, 205, 304].contains(&status)).then(|| r#"{"error":"probe"}"#.to_string());
+        let want = if !codes.contains(&status) {
+            none(status)
+        } else {
+            let said = match status { 503 => "not sent", 504 => "not confirmed", _ => "refused" };
+            format!("Release: {said}, {status}: probe")
+        };
+        cases.push((status, body, want));
+    }
+    for status in &codes {
+        for body in ["{}", r#"{"message":"probe"}"#, r#"{"error":1}"#, r#"{"error":null}"#, r#""probe""#, "[]", "null"] {
+            cases.push((*status, Some(body.to_string()), none(*status)));
+        }
+    }
+    for body in [r#"{"ok":"true"}"#, r#"{"ok":1}"#, r#"{"ok":null}"#, "{}", r#"{"status":"Good"}"#, r#""probe""#, "[]"] {
+        cases.push((200, Some(body.to_string()), none(200)));
+    }
+    cases.push((200, Some(r#"{"ok":true,"status":"Good"}"#.to_string()), "Release: written (Good)".to_string()));
+    cases.push((200, Some(r#"{"ok":false,"status":"BadOutOfRange"}"#.to_string()), "Release: refused, BadOutOfRange".to_string()));
+    zero(&bench);
+    let said = page.eval(&format!(
+        r#"(async (cases) => {{
+  const f = window.fetch, rest = (ms) => new Promise((ok) => setTimeout(ok, ms));
+  let answer = null;
+  window.fetch = (...a) => String(a[0]).includes("/api/opc/write") ? Promise.resolve(answer()) : f(...a);
+  const out = [];
+  for (const [status, body] of cases) {{
+    answer = () => new Response(body, {{ status, headers: {{ "content-type": "application/json" }} }});
+    const b = document.querySelector('.side .actions button[data-action="Release"]');
+    b.disabled = false;
+    document.querySelector(".side .write-note").textContent = "";
+    b.click();
+    let t = null;
+    for (let i = 0; i < 300 && !t; i++) {{ await rest(5); t = document.querySelector('.side .write-note [data-action="Release"]')?.textContent || null; }}
+    for (let i = 0; i < 300 && b.dataset.busy !== undefined; i++) await rest(5);
+    out.push([status, body, t]);
+  }}
+  window.fetch = f;
+  return out;
+}})({})"#,
+        serde_json::to_string(&cases.iter().map(|(s, b, _)| json!([s, b])).collect::<Vec<_>>()).unwrap()
+    ));
+    let said = said.as_array().unwrap();
+    assert_eq!(said.len(), cases.len());
+    let wrong: Vec<String> = cases.iter().zip(said).filter(|((_, _, want), got)| !got[2].as_str().is_some_and(|t| t.starts_with(want.as_str()))).map(|((s, b, want), got)| format!("{s} {b:?}: {} against {want}", got[2])).collect();
+    assert_eq!(wrong, Vec::<String>::new(), "an answer said otherwise than it means");
+    assert_eq!(release(&bench), "0", "the stand-in answered every press: nothing reached the plant");
     // The object pressed, left and selected again while its post is out: the answer said there.
     zero(&bench);
     page.wait_for(&format!("(() => {{ const b = {RELEASE}; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(20));

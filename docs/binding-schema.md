@@ -361,7 +361,7 @@ surface (`POST /s/<name>/portal/api/opc/write`), never written by supervisão it
 The page shows an action gated (the warn colour) and disabled while the session's switch is off;
 portal answers a post 403 while it is off, whoever sends it. A press's answer is said under the
 object pressed, the last answer of each of its actions in a line of its own, in the actions' order
-(two of one label are two actions; an action stays busy while its post is out): written, refused (by the switch, a value or a body portal cannot read, or the
+(two of one label are two actions; an action stays busy while its post is out, that action alone): written, refused (by the switch, a value or a body portal cannot read, or the
 plant), not sent (the plant never saw it), not confirmed (it may have reached the plant) or no
 answer (portal's answer never came whole, came unreadable, or came in no form of portal's, another
 code or a success that says no `ok`: the post may have left and the write landed, the page unable to
