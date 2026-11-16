@@ -81,7 +81,7 @@ async function run(name: string, sessions: SessionEntry[]) {
 
   function renderAlarms() {
     const rows = binding.objects.filter((d) => objs.get(d.id) && objs.get(d.id)!.state !== "normal");
-    alarms.replaceChildren(h("table", { class: "dt" }, h("thead", {}, h("tr", {}, ...["State", "Object", "Value", "Since"].map((x) => h("th", {}, x)))),
+    alarms.replaceChildren(h("table", { class: "dt" }, h("thead", {}, h("tr", {}, ...["STATE", "OBJECT", "VALUE", "SINCE"].map((x) => h("th", {}, x)))),
       h("tbody", {}, ...rows.map((d) => { const o = objs.get(d.id)!; return h("tr", {}, h("td", {}, badge(o)), h("td", {}, d.label), h("td", { class: "mono" }, o.text ?? "—"), h("td", { class: "mono" }, ago(o.since_ms))); }))));
   }
 

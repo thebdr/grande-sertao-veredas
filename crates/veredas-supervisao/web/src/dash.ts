@@ -114,6 +114,10 @@ function tablePanel(p: PanelOut): HTMLElement {
   return h("div", { class: "panel" }, head(p.title, `${d.total} rows`), h("table", { class: "dt" }, h("thead", {}, thead), h("tbody", {}, ...body)));
 }
 
+/// The cells table's headings, the page's own words typed in capitals, its σ small (Q28: never
+/// capitalised by the stylesheet, which would draw σ as Σ, a sum).
+export const CELLS_HEADINGS = ["KEY", "MEDIAN", "MEDIAN, WINDOW", "DISTRIBUTION", "σ", "N"];
+
 function cellsPanel(p: PanelOut): HTMLElement {
   const d = p.data;
   const rows = (d.rows as { key: string; n: number; median: number; sigma: number | null; spark: [number, number | null][]; bins: number[] }[]).map((r) =>
@@ -130,7 +134,7 @@ function cellsPanel(p: PanelOut): HTMLElement {
   const left = d.left_out > 0 ? ` · ${d.left_out} with no key or no value` : "";
   const note = `last ${Math.round((d.to - d.from) / 60000)} min · distribution ±${d.spread_text} around each median, same scale on every row${d.capped ? ` · newest ${d.read} of ${d.total} rows` : ""}${left}`;
   return h("div", { class: "panel" }, head(p.title, note),
-    h("table", { class: "dt" }, h("thead", {}, h("tr", {}, ...["Key", "Median", "Median, window", "Distribution", "σ", "n"].map((x) => h("th", {}, x)))), h("tbody", {}, ...rows)));
+    h("table", { class: "dt" }, h("thead", {}, h("tr", {}, ...CELLS_HEADINGS.map((x) => h("th", {}, x)))), h("tbody", {}, ...rows)));
 }
 
 const DRAW: Record<string, (p: PanelOut) => HTMLElement> = {

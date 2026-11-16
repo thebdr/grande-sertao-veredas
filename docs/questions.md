@@ -613,3 +613,12 @@ written; (c) every heading in capitals by style, σ drawn Σ and a unit's case l
 
 **Taken meanwhile** (the most reversible): (a), the one CSS property removed (`web/src/style.css`,
 `DECISION PENDING (Q28)` beside it); the census holds every text a panel shows to be drawn as written.
+
+**Decided** 2026-11-16, by the operator: "Page's own words only", (b), as the mock does it: "The
+page's own headings are written in capitals (STATE, OBJECT, KEY, MEDIAN, N); the symbol σ, an
+engineer's label and a view's column name are drawn exactly as written." An engineer who wants a
+label in capitals writes it so. The page types its own headings in capitals in its source (the
+cells table's KEY, MEDIAN, MEDIAN, WINDOW, DISTRIBUTION, σ, N; the alarms table's STATE, OBJECT,
+VALUE, SINCE), the Tables view's type word as it writes it; no heading goes through
+`text-transform` (C-052's census refuses any). `docs/design/README.md` says the same of column
+headers.

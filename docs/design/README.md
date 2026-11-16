@@ -19,7 +19,10 @@ stands on its own.
 The mockups use Geist and Geist Mono as stand-ins; the desktop apps ship Monaspace Xenon.
 Scale: screen title 18/600 · section title 13.5/600 · body 12–13 · label 11.5 · caption
 10–11 · mono data 11.5–12.5 · big value 26 mono · column headers 10 mono 600, uppercase,
-.06–.1em tracking.
+.06–.1em tracking. Uppercase is typed, never made by a stylesheet (`text-transform`): an app's own
+heading words are written in capitals in its source; a label an engineer wrote, a column name and a
+symbol are drawn exactly as written (σ stays σ, never Σ; `I (mA)` never `I (MA)`). Q28, decided
+2026-11-16.
 
 **Neutrals (dark).**
 

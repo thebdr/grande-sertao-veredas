@@ -1570,7 +1570,8 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                     r["right"] = json!(format!("{} rows", x["total"]));
                 }
                 "cells" => {
-                    r["head"] = json!(["Key", "Median", "Median, window", "Distribution", "σ", "n"]);
+                    // The page's own words typed in capitals, σ small (Q28).
+                    r["head"] = json!(["KEY", "MEDIAN", "MEDIAN, WINDOW", "DISTRIBUTION", "σ", "N"]);
                     // A distribution 160 by 26: bin i at its middle across, its count up from y 25
                     // to 2 against the largest (one at least).
                     r["rows"] = json!(x["rows"].as_array().unwrap().iter().map(|row| {
