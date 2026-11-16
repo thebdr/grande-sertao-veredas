@@ -592,3 +592,24 @@ the drawing loads, and the shape filled with the mesh or the hatch shows no fill
 no message. Any other script stays refused: the operator was asked about Inkscape's alone. The
 script runs nowhere: the page removes every script before it draws, and neither of the host's
 policies runs one (C-048, C-049).
+
+## Q28 - Are a table's column headings drawn in capitals?
+
+**Raised** 2026-11-16, by C-052's fifteenth refute round (the census reading text as drawn).
+
+`docs/design/README.md` sets column headers in mono 600, uppercase, and the page drew every table
+heading through `text-transform: uppercase` (`.dt th`). A heading drawn so says something else than
+it was written: the cells' σ column (the standard deviation) is drawn Σ, the sign of a sum; a
+binding's label carrying a unit loses its case (`Rate (kW)` as RATE (KW), `I (mA)` as I (MA), a
+megaampere), and a Tables view column name is drawn in other letters than the project wrote. The
+design's own mock does not capitalise by style: `docs/design/supervisao/Objects.dc.html` types its
+cells headings in capitals in the markup (CHUTE, MEDIAN, MEDIAN, 60 MIN, DISTRIBUTION, N, NOTE),
+with no `text-transform` in the file, and draws σ small.
+
+The choices: (a) headings as written, the binding's labels and the page's own words alike (the
+design's capitals dropped); (b) as the mock: the page's own words written in capitals in its source
+(KEY, MEDIAN, DISTRIBUTION, N, STATE, OBJECT), σ small, a binding's label and a column's name as
+written; (c) every heading in capitals by style, σ drawn Σ and a unit's case lost.
+
+**Taken meanwhile** (the most reversible): (a), the one CSS property removed (`web/src/style.css`,
+`DECISION PENDING (Q28)` beside it); the census holds every text a panel shows to be drawn as written.

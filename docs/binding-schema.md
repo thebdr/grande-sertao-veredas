@@ -416,13 +416,13 @@ in its own place and the others are drawn (a view's column of a type the engine'
   unit or zone to the second, a date as its day, a time of day, with its zone or without, to the
   second (the day's end, 24:00:00, as itself); an integer in its own digits, however large (a DECIMAL is read as the double nearest it);
   whole numbers sort exactly. A column is read by its engine type: in a numeric one an integer past
-  64 bits (which portal writes as its digits) is a number, its places written as zeros, its bar
+  64 bits (which portal writes as its digits) is a number, its places written as zeros (none, with no point, at 0), its bar
   and its rules reading it (a rule through the double nearest it); in any other a string is text,
   sorted as text, whatever its characters; a boolean is 1 or 0 to its rules, its bar and its sort,
   written true or false. A time past the clock's reach (beyond the year 262 143
   either way, the engine's infinities among them) is written as its milliseconds.
 - `cells`: charts in cells, one row per value of a key column (a number by its full value, an integer however large, a time as
-  the clock reads it), in the key column's own order by its engine type (a text column's digits as
+  the clock reads it), in the key column's own order by its engine type (a number by its value, a boolean false before true, a text column's digits as
   text), of a table over a window, a row with no key or no value left out and counted: the
   median, a sparkline of the median per `bucket_minutes`, the distribution from median − `spread`
   to median + `spread` in 20 bins, σ and n. `table` (required; a view must carry `index_ms`,

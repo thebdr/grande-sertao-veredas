@@ -212,7 +212,9 @@ svg.spark.st-line-stale .point { fill: var(--muted); }
 .lv-tick { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--weak2); }
 .lv-v { text-align: right; }
 table.dt { width: 100%; border-collapse: collapse; }
-.dt th { font: 600 10px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--label); text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+/* DECISION PENDING (Q28): headings drawn as written, never through `text-transform` (σ drawn as Σ,
+   a label's unit losing its case); the design's capitals await the operator. */
+.dt th { font: 600 10px var(--mono); letter-spacing: .06em; color: var(--label); text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }
 .dt td { padding: 4px 8px; border-bottom: 1px solid var(--hair); vertical-align: middle; }
 .inbar { position: relative; min-width: 80px; }
 .inbar-fill { position: absolute; left: 0; top: 2px; bottom: 2px; background: var(--accent-soft); border-radius: 2px; }

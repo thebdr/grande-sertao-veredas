@@ -806,7 +806,7 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     assert_eq!(drawn[6]["rows"].as_array().unwrap().len(), 2, "two rows on the timeline");
     assert_eq!((drawn[0]["big"].clone(), drawn[0]["box"].clone(), drawn[0]["badge"].clone()), (json!("99.2%"), json!("st-box-normal"), Value::Null));
     assert_eq!((drawn[2]["box"].clone(), drawn[2]["badge"].clone()), (json!("st-box-alarm"), json!("! UNDER 99.5 %")));
-    assert_eq!(drawn[7]["cells"], json!([["Outlet 1", "35", "cell st-box-normal", "cell-v mono st-text-normal"], ["Outlet 2", "85", "cell st-box-near", "cell-v mono st-text-near"], ["Outlet 3", "full", "cell st-box-warn", "cell-v mono st-text-warn"]]));
+    assert_eq!(drawn[7]["cells"], json!([["Outlet 1", "35", "cell st-box-normal", "cell-v mono st-text-normal", "Outlet 1: ok"], ["Outlet 2", "85", "cell st-box-near", "cell-v mono st-text-near", "Outlet 2: near full"], ["Outlet 3", "full", "cell st-box-warn", "cell-v mono st-text-warn", "Outlet 3: full"]]));
     assert_eq!(drawn[9]["rows"][0], json!([["3", "mono", null], ["2", "mono st-text-normal", "width:50.0%"], ["■ slow", "mono st-text-warn", null]]), "sorted by travel, descending");
     assert!(drawn[9]["rows"].as_array().unwrap().iter().any(|r| r[1][0].as_str().is_some_and(|t| t.ends_with(" ■ busy")) && r[1][1] == json!("mono st-text-warn") && r[1][2].as_str().is_some_and(|w| w.starts_with("width:"))), "a bar with its state and word: {}", drawn[9]["rows"]);
     assert_eq!(drawn[11]["error"], json!("`outlets` has no column `nothing` (its columns: outlet, sorted, travel)"));
@@ -872,6 +872,9 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
         }
         page.eval(&format!("location.hash = '{hash}'; true"));
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        // The last drawing of it read, for the failure: a probe is handed over once, so the next
+        // refresh draws the dashboard again in its place.
+        let mut last: Option<String> = None;
         loop {
             let v = page.eval(DRAWN_PANELS);
             if v["dash"]["name"] == json!(name) {
@@ -879,9 +882,9 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
                 if close(&v["drawn"], &json!(want)) && v["columns"] == v["dash"]["columns"] && v["marks"] == json!([]) {
                     return v;
                 }
-                assert!(std::time::Instant::now() < deadline, "{name}: never drawn as received:\n drawn {:#}\n want {:#}\n marks {}", v["drawn"], json!(want), v["marks"]);
+                last = Some(format!("never drawn as received:\n drawn {:#}\n want {:#}\n marks {}", v["drawn"], json!(want), v["marks"]));
             }
-            assert!(std::time::Instant::now() < deadline, "{name} never fetched");
+            assert!(std::time::Instant::now() < deadline, "{name}: {}", last.as_deref().unwrap_or("never fetched"));
             std::thread::sleep(Duration::from_millis(200));
         }
     };
@@ -891,7 +894,7 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let probe = probe_dashboard(&dash);
     let v = drawn_as(&mut page, "Probe", "dashboards/0", Some(&probe));
     let kinds: Vec<&str> = v["drawn"].as_array().unwrap().iter().map(|p| p["kind"].as_str().unwrap()).collect();
-    assert_eq!(kinds.len(), every_state().len() + 12, "{kinds:?}");
+    assert_eq!(kinds.len(), every_state().len() + 17, "{kinds:?}");
     // Bars of every sign drawn from 0: a bucket below it among the others, and every bucket and
     // the target below it, each bar inside the chart, the axis labelled at both ends and at 0.
     let n = kinds.len();
@@ -902,6 +905,17 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
         assert!(labels[0] != "0" || sign == "under", "{sign}: {labels:?}");
         assert!(labels[1].starts_with('-') && (sign == "under" || labels[2] == "0"), "{sign}: {labels:?}");
     }
+    // Each input of a value axis its end: the target the top, then the bottom; nothing but 0, the
+    // axis 0 to 1; a trend of no point and no limit 0 to 1; one of a single value that value less
+    // and more one, each padded.
+    let label = |i: usize, k: usize| v["drawn"][i]["axis"][k][0].as_str().unwrap().to_string();
+    let target = |i: usize| probe["panels"][i]["data"]["target"].as_f64().unwrap();
+    assert_eq!((label(n - 7, 0), label(n - 7, 1)), (num(&json!(target(n - 7) * 1.1), 1), "0".to_string()), "the target the top");
+    assert!(target(n - 7) > top_of(&probe["panels"][n - 7]), "past every bucket");
+    assert_eq!(label(n - 6, 1), num(&json!(target(n - 6) * 1.1), 1), "the target the bottom");
+    assert_eq!((label(n - 5, 0), label(n - 5, 1)), ("1".to_string(), "0".to_string()), "nothing but 0");
+    assert_eq!((0..4).map(|k| label(n - 4, k)).collect::<Vec<_>>(), ["0", "0.3", "0.7", "1"], "no point and no limit");
+    assert_eq!((0..4).map(|k| label(n - 3, k)).collect::<Vec<_>>(), ["5.8", "6.6", "7.4", "8.2"], "one value, 7");
     drop(page);
     host.stop();
 }
@@ -1014,6 +1028,9 @@ const DRAWN_PANELS: &str = r#"(() => {
   // to be one of them, so a mark the page adds (or draws twice) is a mark this test does not read.
   const seen = new Set();
   const see = (el) => { if (el) seen.add(el); return el; };
+  // Every hover text a reading takes (an element's `title`), kept for the census alike.
+  const titled = new Set();
+  const attr = (el, a) => { if (!el) return null; titled.add(el); return el.getAttribute(a); };
   const pts = (path) => path ? (see(path).getAttribute("d").match(/[ML][^ML]*/g) || []).map((s) => s.slice(1).trim().split(/\s+/).map(Number)) : [];
   const num = (el, a) => el ? Number(see(el).getAttribute(a)) : null;
   const txt = (el) => el ? see(el).textContent : null;
@@ -1049,18 +1066,18 @@ const DRAWN_PANELS: &str = r#"(() => {
       }
       case "bars": {
         const svg = p.querySelector("svg.bars");
-        r.bars = [...svg.querySelectorAll("rect.bar")].map((b) => [num(b, "x"), num(b, "y"), num(b, "width"), num(b, "height"), b.classList.contains("running")]);
+        r.bars = [...svg.querySelectorAll("rect.bar")].map((b) => [num(b, "x"), num(b, "y"), num(b, "width"), num(b, "height"), b.classList.contains("running"), txt(b.querySelector("title"))]);
         const tg = svg.querySelector("line.limit");
         r.target = tg ? [num(tg, "x1"), num(tg, "x2"), num(tg, "y1"), num(tg, "y2")] : null; r.right = txt(p.querySelector(".panel-bind"));
         r.axis = axis(svg); break;
       }
       case "timeline":
         r.rows = [...p.querySelectorAll(".tl-row")].map((x) => [txt(x.querySelector(".tl-label")), txt(x.querySelector(".tl-now")), x.querySelector(".tl-now").className,
-          [...x.querySelectorAll("svg.statebar rect:not(.st-none)")].map((g) => [g.getAttribute("class"), num(g, "x"), num(g, "width"), num(g, "y"), num(g, "height")]),
+          [...x.querySelectorAll("svg.statebar rect:not(.st-none)")].map((g) => [g.getAttribute("class"), num(g, "x"), num(g, "width"), num(g, "y"), num(g, "height"), txt(g.querySelector("title"))]),
           ((g) => g ? [num(g, "x"), num(g, "width"), num(g, "y"), num(g, "height")] : null)(x.querySelector("svg.statebar rect.st-none"))]);
         r.axis = [...p.querySelectorAll(".tl-axis span")].map(txt); break;
       case "grid":
-        r.cells = [...p.querySelectorAll(".grid-cells .cell")].map((c) => [txt(c.querySelector(".cell-id")), txt(c.querySelector(".cell-v")), c.className, c.querySelector(".cell-v").className]);
+        r.cells = [...p.querySelectorAll(".grid-cells .cell")].map((c) => [txt(c.querySelector(".cell-id")), txt(c.querySelector(".cell-v")), c.className, c.querySelector(".cell-v").className, attr(c, "title")]);
         r.right = txt(p.querySelector(".panel-bind")); break;
       case "levels":
         r.rows = [...p.querySelectorAll(".lv-row")].map((x) => [txt(x.querySelector(".lv-label")), x.querySelector(".lv-fill").getAttribute("style"), x.querySelector(".lv-fill").className, [...x.querySelectorAll(".lv-tick")].map((t) => t.getAttribute("style")), txt(x.querySelector(".lv-v")), x.querySelector(".lv-v").className]); break;
@@ -1114,13 +1131,26 @@ const DRAWN_PANELS: &str = r#"(() => {
     }
   }
   // The census: every text and every SVG shape a panel shows is one a reading above took, one to
-  // one (a second of a kind the readings take the first of is unread).
+  // one (a second of a kind the readings take the first of is unread); every hover text (an SVG
+  // title, a `title` attribute) one a reading took; no text the stylesheet generates (before or
+  // after an element, a list item's marker) and none it draws otherwise than written (its case
+  // changed, its letters masked).
   for (const p of document.querySelectorAll(".dash-grid > .panel")) {
     for (const el of [p, ...p.querySelectorAll("*")]) {
+      const at = `${p.dataset.kind}: ${el.tagName}.${el.getAttribute("class") ?? ""}`;
       const shape = el instanceof SVGElement && SHAPES.has(el.tagName.toLowerCase());
       if ((shape || (!(el instanceof SVGElement) && ownText(el))) && !el.closest(".tip, title") && shown(el) && !seen.has(el)) {
         marks.push(`${p.dataset.kind}: a mark this test does not read, ${el.tagName}.${el.getAttribute("class") ?? ""} "${el.textContent.trim().slice(0, 30)}"`);
       }
+      if (el instanceof SVGElement && el.tagName.toLowerCase() === "title" && !seen.has(el)) marks.push(`${at}: a hover text this test does not read, "${el.textContent.trim().slice(0, 30)}"`);
+      if (el.hasAttribute("title") && !titled.has(el)) marks.push(`${at}: a hover text this test does not read, "${el.getAttribute("title").slice(0, 30)}"`);
+      for (const pseudo of ["::before", "::after", "::marker"]) {
+        const g = getComputedStyle(el, pseudo).content;
+        if (g && g !== "none" && g !== "normal") marks.push(`${at}${pseudo}: text the stylesheet generates, ${g}`);
+      }
+      const c = getComputedStyle(el);
+      if (c.display.includes("list-item") && (c.listStyleType !== "none" || c.listStyleImage !== "none")) marks.push(`${at}: a list item's marker`);
+      if (ownText(el) && (c.textTransform !== "none" || (c.webkitTextSecurity ?? "none") !== "none")) marks.push(`${at}: its text drawn otherwise than written, ${c.textTransform} ${c.webkitTextSecurity}`);
     }
   }
   // Where the browser draws each mark is where the page wrote it: no transform on a shape or on any
@@ -1273,14 +1303,29 @@ fn probe_dashboard(d: &Value) -> Value {
     none["data"]["breaches"] = json!([]);
     none["data"]["total"] = json!(0);
     panels.push(none);
+    // A cell and a level with no value: the host's own form (stale, "no value", no text, a level no
+    // fraction) and a normal one with no text, so every fallback of the page the host can reach is
+    // drawn.
     let mut g = p(7);
     let c0 = g["data"]["cells"][0].clone();
-    g["data"]["cells"] = json!(states.iter().map(|s| { let mut c = c0.clone(); c["state"] = json!(s); c["word"] = word(s); c["label"] = json!(format!("Cell {s}")); c }).collect::<Vec<_>>());
-    g["data"]["not_normal"] = json!(states.len() - 1);
+    let mut cells: Vec<Value> = states.iter().map(|s| { let mut c = c0.clone(); c["state"] = json!(s); c["word"] = word(s); c["label"] = json!(format!("Cell {s}")); c }).collect();
+    for (label, state, word) in [("Cell gone", "stale", "no value"), ("Cell blank", "normal", "ok")] {
+        let mut c = c0.clone();
+        (c["label"], c["state"], c["word"], c["text"]) = (json!(label), json!(state), json!(word), Value::Null);
+        cells.push(c);
+    }
+    g["data"]["not_normal"] = json!(cells.iter().filter(|c| c["state"] != "normal").count());
+    g["data"]["cells"] = json!(cells);
     panels.push(g);
     let mut l = p(8);
     let r0 = l["data"]["rows"][0].clone();
-    l["data"]["rows"] = json!(states.iter().map(|s| { let mut r = r0.clone(); r["state"] = json!(s); r["word"] = word(s); r }).collect::<Vec<_>>());
+    let mut rows: Vec<Value> = states.iter().map(|s| { let mut r = r0.clone(); r["state"] = json!(s); r["word"] = word(s); r }).collect();
+    for (label, state, word) in [("Level gone", "stale", "no value"), ("Level blank", "normal", "ok")] {
+        let mut r = r0.clone();
+        (r["label"], r["state"], r["word"], r["text"], r["fraction"]) = (json!(label), json!(state), json!(word), Value::Null, Value::Null);
+        rows.push(r);
+    }
+    l["data"]["rows"] = json!(rows);
     panels.push(l);
     let mut tl = p(6);
     let (from, to) = (tl["data"]["from"].as_i64().unwrap(), tl["data"]["to"].as_i64().unwrap());
@@ -1302,10 +1347,34 @@ fn probe_dashboard(d: &Value) -> Value {
     cl["data"]["spread_text"] = json!("0.0005");
     cl["data"]["left_out"] = json!(2);
     panels.push(cl);
+    // Each input of a chart's value axis its end at least once: bars whose target lies past every
+    // bucket (above them, then below 0 under them), bars all at 0 with no target (the axis 0 to 1),
+    // a trend of no point and no limit (0 to 1), and one whose points are all one value.
+    for target in [(top_of(&p(5)) * 2.0).ceil() + 0.25, -7.75] {
+        let mut b = p(5);
+        (b["data"]["target"], b["data"]["target_text"]) = (json!(target), json!(format!("{target}")));
+        panels.push(b);
+    }
+    let mut zero = p(5);
+    for b in zero["data"]["buckets"].as_array_mut().unwrap() {
+        if !b["value"].is_null() {
+            b["value"] = json!(0.0);
+        }
+    }
+    (zero["data"]["target"], zero["data"]["target_text"]) = (Value::Null, Value::Null);
+    panels.push(zero);
+    let ends = p(4)["data"]["points"].as_array().unwrap().clone();
+    for points in [json!([]), json!([[ends[0][0], 7.0], [ends[ends.len() - 1][0], 7.0]])] {
+        let mut t = p(4);
+        t["data"]["total"] = json!(points.as_array().unwrap().len());
+        (t["data"]["points"], t["data"]["breaches"], t["data"]["limit"], t["data"]["limit_text"]) = (points, json!([]), Value::Null, Value::Null);
+        panels.push(t);
+    }
     // Bars of every sign: a bucket below 0 among the others; and every bucket and the target below 0.
     let mut mixed = p(5);
     let first = mixed["data"]["buckets"].as_array().unwrap().iter().position(|b| !b["value"].is_null()).unwrap();
-    mixed["data"]["buckets"][first]["value"] = json!(-5.0);
+    // Two places, so a bar's hover text is read to its two.
+    mixed["data"]["buckets"][first]["value"] = json!(-5.25);
     panels.push(mixed);
     let mut under = p(5);
     for b in under["data"]["buckets"].as_array_mut().unwrap() {
@@ -1322,6 +1391,16 @@ fn probe_dashboard(d: &Value) -> Value {
 /// A time on the store's clock as the page writes it (`clock(t, false)`): hours and minutes.
 fn clock(t: f64) -> String {
     chrono::DateTime::from_timestamp_millis(t as i64).unwrap().format("%H:%M").to_string()
+}
+
+/// A time on the store's clock as the page writes it with its seconds (`clock(t)`).
+fn clock_s(t: f64) -> String {
+    chrono::DateTime::from_timestamp_millis(t as i64).unwrap().format("%H:%M:%S").to_string()
+}
+
+/// The highest value of a bars panel's buckets.
+fn top_of(p: &Value) -> f64 {
+    p["data"]["buckets"].as_array().unwrap().iter().filter_map(|b| b["value"].as_f64()).fold(f64::MIN, f64::max)
 }
 
 fn pairs_of(v: &Value) -> Vec<(f64, f64)> {
@@ -1414,7 +1493,9 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                     let bw = 546.0 / (buckets.len().max(1) as f64);
                     r["bars"] = json!(buckets.iter().enumerate().filter(|(_, b)| !b["value"].is_null()).map(|(i, b)| {
                         let v = b["value"].as_f64().unwrap();
-                        json!([44.0 + i as f64 * bw + 2.0, py(v).min(py(0.0)), bw - 4.0, (py(0.0) - py(v)).abs(), b["running"]])
+                        // Its hover text: the bucket's start, its value to two places and its count.
+                        let title = format!("{} \u{b7} {} (n {})", clock(b["start"].as_f64().unwrap()), num(&b["value"], 2), b["n"]);
+                        json!([44.0 + i as f64 * bw + 2.0, py(v).min(py(0.0)), bw - 4.0, (py(0.0) - py(v)).abs(), b["running"], title])
                     }).collect::<Vec<_>>());
                     r["target"] = json!(target.map(|t| json!([44.0, 590.0, py(t), py(t)])));
                     // Its axis: the top value and the bottom one (0 written so), 0 at its height
@@ -1443,7 +1524,9 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                     r["rows"] = json!(x["rows"].as_array().unwrap().iter().map(|row| {
                         let segs: Vec<Value> = row["segments"].as_array().unwrap().iter().filter_map(|g| {
                             let (x0, x1) = (px(g["from"].as_f64().unwrap()).max(0.0), px(g["to"].as_f64().unwrap()).min(400.0));
-                            (x1 > x0).then(|| json!([format!("st-{}", s(&g["state"])), x0, x1 - x0, 0.0, 14.0]))
+                            // Its hover text: its word and its times to the second, as the host gave them.
+                            let title = format!("{} {}\u{2013}{}", s(&g["word"]), clock_s(g["from"].as_f64().unwrap()), clock_s(g["to"].as_f64().unwrap()));
+                            (x1 > x0).then(|| json!([format!("st-{}", s(&g["state"])), x0, x1 - x0, 0.0, 14.0, title]))
                         }).collect();
                         // Under the runs, the rail of no state the whole window across.
                         json!([row["label"], format!("{} {}", s(&row["now"]["mark"]), s(&row["now"]["word"])), format!("tl-now st-text-{}", s(&row["now"]["state"])), segs, [0.0, 400.0, 0.0, 14.0]])
@@ -1453,7 +1536,8 @@ fn expected_panels(d: &Value) -> Vec<Value> {
                 "grid" => {
                     r["cells"] = json!(x["cells"].as_array().unwrap().iter().map(|c| {
                         let v = if quiet(&c["state"]) { c["text"].as_str().unwrap_or("\u{2014}").to_string() } else { s(&c["word"]) };
-                        json!([c["label"], v, format!("cell st-box-{}", s(&c["state"])), format!("cell-v mono st-text-{}", s(&c["state"]))])
+                        // Its hover text: its label and its word.
+                        json!([c["label"], v, format!("cell st-box-{}", s(&c["state"])), format!("cell-v mono st-text-{}", s(&c["state"])), format!("{}: {}", s(&c["label"]), s(&c["word"]))])
                     }).collect::<Vec<_>>());
                     r["right"] = json!(format!("{} · {} not normal", x["cells"].as_array().unwrap().len(), x["not_normal"]));
                 }
@@ -1637,12 +1721,24 @@ id = "k-key"
 value = { source = "sorter", series = "at", key = "A1" }
 states = [ { above = 30, source = "sorter", series = "at", key = "A1", state = "warn", word = "far" } ]
 
+[[object]]
+id = "word-only"
+value = { source = "sorter", series = "travel" }
+unit = "s"
+states = [ { above = 22, state = "warn", word = "late" }, { above = 15, state = "warn", word = "slow" } ]
+
+[[object]]
+id = "class-only"
+value = { source = "sorter", series = "travel" }
+unit = "s"
+states = [ { above = 22, state = "alarm", word = "slow" }, { above = 15, state = "warn", word = "slow" } ]
+
 [[dashboard]]
 name = "Rules"
 
 [[dashboard.panel]]
 kind = "timeline"
-objects = ["own-source", "own-written", "keyed", "two-rules"]
+objects = ["own-source", "own-written", "keyed", "two-rules", "word-only", "class-only"]
 
 [[dashboard.panel]]
 kind = "value"
@@ -1921,6 +2017,11 @@ object = "k-series"
 [[dashboard.panel]]
 kind = "value"
 object = "k-key"
+
+[[dashboard.panel]]
+kind = "table"
+table = "places"
+columns = [ { name = "small", decimals = 0 }, { name = "k", decimals = 0 }, { name = "u", decimals = 0 }, { name = "h", decimals = 0 }, { name = "small", decimals = 6 }, { name = "k", decimals = 6 }, { name = "u", decimals = 6 }, { name = "h", decimals = 6 } ]
 "#;
 
 /// The project's rules and views for `RULES`: a keyed numeric series, float keys, a series never
@@ -2060,6 +2161,14 @@ sql = "SELECT index_ms, source, seq, CASE outlet WHEN 2 THEN CAST('24:00:00' AS 
 [[table]]
 name = "far"
 sql = "SELECT CAST('infinity' AS TIMESTAMP) AS a, CAST('-infinity' AS TIMESTAMP) AS b, CAST('infinity' AS DATE) AS c, CAST('-infinity' AS DATE) AS d, CAST('294000-01-01 00:00:00' AS TIMESTAMP) AS e"
+
+[[table]]
+name = "keynums"
+sql = "SELECT index_ms, source, seq, travel, CAST(CASE travel WHEN 0 THEN -1 WHEN 20 THEN -2 ELSE 10 END AS TINYINT) AS ti, CAST(CASE travel WHEN 0 THEN -1 WHEN 20 THEN -2 ELSE 10 END AS SMALLINT) AS si, CAST(CASE travel WHEN 0 THEN -1 WHEN 20 THEN -2 ELSE 10 END AS INTEGER) AS i, CAST(CASE travel WHEN 0 THEN -1 WHEN 20 THEN -2 ELSE 10 END AS BIGINT) AS bi, CASE travel WHEN 0 THEN CAST('-18446744073709551617' AS HUGEINT) WHEN 20 THEN CAST('-18446744073709551616' AS HUGEINT) ELSE CAST('18446744073709551617' AS HUGEINT) END AS hi, CASE travel WHEN 0 THEN CAST(5 AS HUGEINT) WHEN 20 THEN CAST('18446744073709551617' AS HUGEINT) ELSE CAST(10 AS HUGEINT) END AS hi5, CAST(CASE travel WHEN 0 THEN 5 WHEN 20 THEN 10 ELSE 100 END AS UTINYINT) AS uti, CAST(CASE travel WHEN 0 THEN 5 WHEN 20 THEN 10 ELSE 100 END AS USMALLINT) AS usi, CAST(CASE travel WHEN 0 THEN 5 WHEN 20 THEN 10 ELSE 100 END AS UINTEGER) AS ui, CASE travel WHEN 0 THEN CAST(5 AS UBIGINT) WHEN 20 THEN CAST(10 AS UBIGINT) ELSE CAST('18446744073709551615' AS UBIGINT) END AS ubi, CAST(CASE travel WHEN 0 THEN 5 WHEN 20 THEN 10 ELSE 100 END AS UHUGEINT) AS uhi, CAST(CASE travel WHEN 0 THEN -0.5 WHEN 20 THEN -1.5 ELSE 10.5 END AS FLOAT) AS f, CAST(CASE travel WHEN 0 THEN -0.5 WHEN 20 THEN -1.5 ELSE 10.5 END AS DOUBLE) AS d, CAST(CASE travel WHEN 0 THEN -0.5 WHEN 20 THEN -1.5 ELSE 10.5 END AS DECIMAL(4,1)) AS de, CASE travel WHEN 0 THEN CAST(5 AS DECIMAL(38,0)) WHEN 20 THEN CAST('18446744073709551617' AS DECIMAL(38,0)) ELSE CAST(10 AS DECIMAL(38,0)) END AS de38, travel > 15 AS b FROM sorts"
+
+[[table]]
+name = "places"
+sql = "SELECT index_ms, CASE travel WHEN 20 THEN -5 ELSE 5 END AS small, CASE travel WHEN 20 THEN -9007199254740995 ELSE 9007199254740993 END AS k, CAST('18446744073709551615' AS UBIGINT) - CAST(travel AS UBIGINT) AS u, CASE travel WHEN 20 THEN CAST('-18446744073709551617' AS HUGEINT) ELSE CAST('18446744073709551617' AS HUGEINT) END AS h FROM sorts"
 "#;
 
 #[test]
@@ -2262,6 +2371,12 @@ fn every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says() {
     // (a timeline's run and a table's cell), never a later one that holds too.
     let runs: Vec<(Value, Value, Value)> = tl["rows"][3]["segments"].as_array().unwrap().iter().map(|s| (s["from"].clone(), s["state"].clone(), s["word"].clone())).collect();
     assert_eq!(runs, [(json!(at(0.0)), json!("normal"), json!("ok")), (json!(at(10.0)), json!("warn"), json!("slow"))], "25 s holds both rules: the first names it");
+    // A run is one state, its class and its word: two samples apart in the word alone are two runs,
+    // and two apart in the class alone.
+    for (row, id, last) in [(4, "word-only", ("warn", "late")), (5, "class-only", ("alarm", "slow"))] {
+        let runs: Vec<(Value, Value, Value)> = tl["rows"][row]["segments"].as_array().unwrap().iter().map(|s| (s["from"].clone(), s["state"].clone(), s["word"].clone())).collect();
+        assert_eq!(runs, [(json!(at(0.0)), json!("normal"), json!("ok")), (json!(at(10.0)), json!("warn"), json!("slow")), (json!(at(20.0)), json!(last.0), json!(last.1))], "{id}");
+    }
     let twice: Vec<(Value, Value)> = (0..3).map(|r| (cell(r, 4)["state"].clone(), cell(r, 4)["word"].clone())).collect();
     assert_eq!(twice[1..], [(json!("warn"), json!("low")), (json!("alarm"), json!("under"))], "-15 holds both rules: the first names it");
     assert_eq!(twice[0].0, json!("normal"));
@@ -2383,6 +2498,51 @@ fn every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says() {
             assert_eq!(tile[k], own[k], "{id}'s tile, its {k}");
         }
     }
+    // Cells keys in their column's own order by its engine type: a key column of every type the
+    // engine lists as NUMERIC (its own catalog) and a boolean, each column's values such that text's
+    // order is not the column's (a sign, a count of digits, a value past 64 bits either way), the
+    // boolean's false before its true. A NUMERIC type the engine adds fails here until a column
+    // holds it.
+    let kn = live.store.query_rows("keynums", &veredas_portal::store::RowsQuery { limit: 1, ..Default::default() }).unwrap();
+    let kn_types: Vec<(String, String)> = kn.columns.iter().skip(4).map(|c| (c.name.clone(), c.data_type.clone())).collect();
+    let held: BTreeSet<String> = kn_types.iter().map(|(_, t)| t.split('(').next().unwrap().to_string()).filter(|t| t != "BOOLEAN").collect();
+    assert_eq!(held, numeric, "a key column of every NUMERIC type the engine lists");
+    assert!(kn_types.iter().any(|(_, t)| t == "BOOLEAN"), "{kn_types:?}");
+    let (signed, unsigned, halves, past) = (vec!["-2", "-1", "10"], vec!["5", "10", "100"], vec!["-1.5", "-0.5", "10.5"], vec!["5", "10", "18446744073709551617"]);
+    let want_keys: BTreeMap<&str, Vec<&str>> = [
+        ("ti", signed.clone()), ("si", signed.clone()), ("i", signed.clone()), ("bi", signed),
+        ("hi", vec!["-18446744073709551617", "-18446744073709551616", "18446744073709551617"]), ("hi5", past.clone()),
+        ("uti", unsigned.clone()), ("usi", unsigned.clone()), ("ui", unsigned.clone()), ("ubi", vec!["5", "10", "18446744073709551615"]), ("uhi", unsigned),
+        ("f", halves.clone()), ("d", halves.clone()), ("de", halves), ("de38", past),
+        ("b", vec!["false", "true"]),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(kn_types.iter().map(|(n, _)| n.as_str()).collect::<BTreeSet<_>>(), want_keys.keys().cloned().collect::<BTreeSet<_>>(), "every key column read");
+    for (name, t) in &kn_types {
+        let c = veredas_supervisao::panel::cells(&live, "keynums", name, "travel", 60, 5, 5.0, to, 50, 1000).unwrap();
+        let got: Vec<(String, u64)> = c["rows"].as_array().unwrap().iter().map(|r| (r["key"].as_str().unwrap().to_string(), r["n"].as_u64().unwrap())).collect();
+        let want: Vec<(String, u64)> = want_keys[name.as_str()].iter().map(|k| (k.to_string(), if *k == "true" { 2 } else { 1 })).collect();
+        assert_eq!((got, c["left_out"].clone()), (want.clone(), json!(0)), "keyed by {name}, a {t}");
+        if t != "BOOLEAN" {
+            let keys: Vec<&String> = want.iter().map(|(k, _)| k).collect();
+            let mut as_text = keys.clone();
+            as_text.sort();
+            assert_ne!(as_text, keys, "{name}: values whose order text's would keep tell nothing");
+        }
+    }
+    // Places at the reader's bounds, 0 and 6: a small integer, one a double cannot hold, one past 64
+    // bits (portal's digits) and the largest unsigned less the travel, each with no point under 0 and
+    // six zeros under 6; newest first.
+    let want: Vec<Vec<Value>> = [25u64, 20, 0]
+        .iter()
+        .map(|t| {
+            let neg = *t == 20;
+            let row = [if neg { "-5" } else { "5" }.to_string(), if neg { "-9007199254740995" } else { "9007199254740993" }.to_string(), (u64::MAX - t).to_string(), if neg { "-18446744073709551617" } else { "18446744073709551617" }.to_string()];
+            row.iter().map(|s| json!(s)).chain(row.iter().map(|s| json!(format!("{s}.000000")))).collect()
+        })
+        .collect();
+    assert_eq!(texts(53), want, "places at 0 and at 6");
     host.stop();
 }
 
