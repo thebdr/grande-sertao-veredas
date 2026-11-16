@@ -11,15 +11,15 @@
     "host"
   ],
   "exitCode": 0,
-  "outputSha": "98a63312917ad774aafc5f83f609e2b87e6ab76858c774ce49e73a14d64708d6",
-  "outputTail": "        PASS [   1.008s] (1/9) veredas-supervisao::host a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first\n        PASS [  16.353s] (2/9) veredas-supervisao::host a_stop_waits_for_a_dashboard_still_computed\n        PASS [   0.078s] (3/9) veredas-supervisao::host a_stream_sends_a_snapshot_on_connect_and_again_once_it_falls_behind\n        PASS [   0.672s] (4/9) veredas-supervisao::host every_answer_is_marked_nosniff_whatever_its_status\n        PASS [   0.787s] (5/9) veredas-supervisao::host nothing_starts_before_the_address_is_held_nor_under_check\n        PASS [   4.549s] (6/9) veredas-supervisao::host one_session_at_the_root_hands_over_to_its_page_refusing_nothing\n        PASS [   4.849s] (7/9) veredas-supervisao::host the_executable_serves_a_file_until_stdin_closes\n        PASS [  12.822s] (8/9) veredas-supervisao::host two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal\n        SLOW [> 60.000s] (───) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        SLOW [>120.000s] (───) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        SLOW [>180.000s] (───) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        SLOW [>240.000s] (───) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        PASS [ 250.960s] (9/9) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n────────────\n     Summary [ 268.322s] 9 tests run: 9 passed (1 slow), 0 skipped",
-  "ranAt": "2026-11-16T14:34:44.345Z",
-  "headCommit": "b27fab485f9a270c38b14cb4938bfb84cd5e5d01",
+  "outputSha": "21eadb8d92dc4dd859cddd698cd6062d229ea8366c7d6b8e83ddfe23ffc823e5",
+  "outputTail": "        PASS [   0.954s] (1/9) veredas-supervisao::host a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first\n        PASS [  14.653s] (2/9) veredas-supervisao::host a_stop_waits_for_a_dashboard_still_computed\n        PASS [   0.067s] (3/9) veredas-supervisao::host a_stream_sends_a_snapshot_on_connect_and_again_once_it_falls_behind\n        PASS [   0.583s] (4/9) veredas-supervisao::host every_answer_is_marked_nosniff_whatever_its_status\n        PASS [   0.553s] (5/9) veredas-supervisao::host nothing_starts_before_the_address_is_held_nor_under_check\n        PASS [   3.283s] (6/9) veredas-supervisao::host one_session_at_the_root_hands_over_to_its_page_refusing_nothing\n        PASS [   4.446s] (7/9) veredas-supervisao::host the_executable_serves_a_file_until_stdin_closes\n        PASS [  12.169s] (8/9) veredas-supervisao::host two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal\n        SLOW [> 60.000s] (───) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        SLOW [>120.000s] (───) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        SLOW [>180.000s] (───) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        SLOW [>240.000s] (───) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        PASS [ 247.299s] (9/9) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n────────────\n     Summary [ 266.774s] 9 tests run: 9 passed (1 slow), 0 skipped",
+  "ranAt": "2026-11-16T20:46:01.661Z",
+  "headCommit": "53dcb46726349661f6cb7ea1f69ed0b387a98406",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/host.rs",
       "file": "crates/veredas-supervisao/tests/host.rs",
-      "fileSha": "b630c24aed3796190ae188123593ebb756fe85677a70d1ac2b6b96440b301c59"
+      "fileSha": "3abf40ed4715e0322614400d366bb035a03e14c3513ab51203bcf089710e8df0"
     }
   ]
 }
