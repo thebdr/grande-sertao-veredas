@@ -717,6 +717,11 @@ pub fn load(text: &str, base: &Path, universe: &Universe, project_name: &str) ->
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
     for (i, o) in raw.object.into_iter().enumerate() {
         id_shape(&o.id).map_err(|e| format!("object {i}: {e}"))?;
+        // The page finds an object's element by its id among its own (`svg::the_pages_id`): an
+        // object of one of those, which no drawing may hold, would be bound to the page's own.
+        if svg::the_pages_id(&o.id) {
+            return Err(format!("object {i}: the id `{}` is one the page names its own (`app`, or beginning `sv-`)", o.id));
+        }
         let place = format!("object `{}`", o.id);
         if let Some(first) = seen.insert(o.id.to_ascii_lowercase(), o.id.clone()) {
             return Err(format!("{place}: the id is taken by `{first}` (ids differ by more than their case)"));

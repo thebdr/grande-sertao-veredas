@@ -28,10 +28,14 @@ pub const DC_NS: &str = "http://purl.org/dc/elements/1.1/";
 /// `defs`) beside the drawing or in the root's `defs`; the metadata block (`rdf:RDF`, holding
 /// `cc:Work` and `dc:*`) in the root's `metadata`; `cc:*` and `dc:*` nowhere but inside that block.
 /// Each is dropped on read, unread, what it holds with it, by the reader and by the
-/// page; one standing anywhere else is refused, and so is every other foreign namespace. Inkscape's
-/// attributes on the drawing's elements (`inkscape:label`, `sodipodi:nodetypes`, ...) are read by
-/// nothing: no check of the reader's and no rule of the page's names one.
+/// page; one standing anywhere else is refused, and so is every other foreign namespace (and, of
+/// the RDF namespace, any element but `RDF_ROOT`). Inkscape's attributes on the drawing's elements
+/// (`inkscape:label`, `sodipodi:nodetypes`, ...) are read by nothing but the script-link check every
+/// attribute meets: no other check of the reader's and no rule of the page's names one.
 pub const EDITOR: [(&str, &[&str]); 5] = [(SODIPODI_NS, &["svg", "defs"]), (INKSCAPE_NS, &["svg", "defs"]), (RDF_NS, &["metadata"]), (CC_NS, &[]), (DC_NS, &[])];
+
+/// The one element of the RDF namespace Inkscape writes in the root's `metadata`: `rdf:RDF`.
+pub const RDF_ROOT: &str = "RDF";
 
 /// Inkscape's script beside a mesh gradient and beside an SVG2 hatch, which a browser cannot draw,
 /// by the id Inkscape gives each (Q27, decided 2026-11-15: "Drop the script, load it"). Where
@@ -122,6 +126,14 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
     if prolog.contains("<!ATTLIST") {
         return Err(format!("{} declares attribute defaults (`<!ATTLIST`) in its document type: a browser would add attributes this check never sees", path.display()));
     }
+    // A reference in the document type (`&`: a character reference, an entity's, a predefined one).
+    // XML replaces the character references of an entity's value where the entity is declared, so
+    // `&#60;` there is markup wherever the entity is referenced, where this reader's parser reads a
+    // character. With none, an entity's value is its text as written, which both read alike (its
+    // markup an element this reader sees, refused below). Inkscape writes no entity.
+    if prolog.find("<!DOCTYPE").is_some_and(|at| prolog[at..].contains('&')) {
+        return Err(format!("{} writes a reference (`&`) in its document type: a browser expands an entity's value holding one otherwise than this reader (a character reference there becomes markup); Inkscape writes none", path.display()));
+    }
     let mut ids: BTreeMap<String, (String, usize)> = BTreeMap::new();
     let mut placed: BTreeMap<String, Placed> = BTreeMap::new();
     // Inkscape's own elements, each dropped with all it holds where Inkscape writes it: what a
@@ -146,6 +158,11 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
             if !parent.is_some_and(|p| places.iter().any(|place| at(p, place))) {
                 let within = parent.map(|p| p.tag_name().name().to_string()).unwrap_or_default();
                 return Err(format!("{} holds an Inkscape element (<{name}> of `{ns}`) inside a <{within}>, where Inkscape writes none: its editor's state stands beside the drawing (a child of its root) or in the root's `defs`, its metadata in the root's `metadata`", path.display()));
+            }
+            // Of the RDF namespace, Inkscape writes its `RDF` alone there (the metadata's `cc:*` and
+            // `dc:*` inside it, dropped with it).
+            if *ns == RDF_NS && name != RDF_ROOT {
+                return Err(format!("{} holds an Inkscape element (<{name}> of `{ns}`) in the root's <metadata>, where Inkscape writes its <{RDF_ROOT}> alone", path.display()));
             }
             dropped.push(node.id());
             continue;

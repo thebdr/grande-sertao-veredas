@@ -185,6 +185,10 @@ fn a_binding_refuses_what_it_cannot_light_up_by_its_place() {
         (Box::new(|b| b.replace("id = \"speed\"", "id = \"1speed\"")), "object 0: the id `1speed` does not start with an ASCII letter"),
         (Box::new(|b| b.replace("id = \"speed\"", "id = \"sp eed\"")), "object 0: the id `sp eed` holds ` `: an id is ASCII letters, digits, `-`, `_` and `.`"),
         (Box::new(|b| b.replace("id = \"speed\"", &format!("id = \"s{}\"", "x".repeat(64)))), "object 0: the id `sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx` is longer than 64"),
+        // An id the page names its own (`svg::the_pages_id`), which no drawing holds: the page would
+        // find its own element for it.
+        (Box::new(|b| b.replace("id = \"speed\"", "id = \"app\"")), "object 0: the id `app` is one the page names its own (`app`, or beginning `sv-`)"),
+        (Box::new(|b| b.replace("id = \"speed\"", "id = \"sv-hatch\"")), "object 0: the id `sv-hatch` is one the page names its own (`app`, or beginning `sv-`)"),
         (Box::new(|b| b.replace("id = \"read-rate\"", "id = \"Speed\"").replace("headline = [\"speed\", \"read-rate\"]", "headline = [\"speed\"]").replace("object = \"read-rate\"", "object = \"speed\"")), "object `Speed`: the id is taken by `speed` (ids differ by more than their case)"),
         (Box::new(|b| b.replace("value = { source = \"plc\", series = \"speed\" }", "value = { source = \"plcx\", series = \"speed\" }")), "object `speed`, value: `plcx` is no source of the project (its sources: `plc`, `sorter`)"),
         (Box::new(|b| b.replace("value = { source = \"plc\", series = \"speed\" }", "value = { source = \"plc\", series = \"speeed\" }")), "object `speed`, value: the opc source `plc` carries no series `speeed` (it carries: `fill1`, `fill2`, `fill3`, `infeed`, `p1`, `p2`, `release3`, `speed`)"),
@@ -1018,7 +1022,9 @@ A path is relative to the binding file's folder.
   (Q25): its own elements (`sodipodi:*` and `inkscape:*` as children of the drawing's root or of the
   root's `defs`, `rdf:RDF` in the root's `metadata` with `cc:*` and `dc:*` inside it) dropped on
   read, unread, with all they hold (nothing of them reaches the page); its attributes in those
-  namespaces on the drawing's elements read by nothing. A picture in it is embedded (Q23: an
+  namespaces on the drawing's elements read by nothing but the script-link check every attribute
+  meets (a `javascript:` value refused there too); an element of the RDF namespace but `rdf:RDF`
+  refused. A picture in it is embedded (Q23: an
   image's `href`, plain or `xlink:`, a `data:image/…` URI, Inkscape's "Embed"). Inkscape's script
   beside a mesh gradient or a hatch (a `script` of the root's own with the id `mesh_polyfill` or
   `hatch_polyfill`, writing nothing else but a type) is dropped the same way (Q27), the mesh or the
@@ -1033,7 +1039,7 @@ A path is relative to the binding file's folder.
 
 **An object** (`[[object]]`): something on the plant with a value.
 - `id` (required): an ASCII letter, then ASCII letters, digits, `-`, `_` and `.`, at most 64; no two
-  objects share one, whatever the case. The layout's element with this `id` shows the object: a
+  objects share one, whatever the case; never one the page names its own (`app`, or beginning `sv-`). The layout's element with this `id` shows the object: a
   group, a shape or a text (`g`, `rect`, `circle`, `ellipse`, `path`, `polygon`, `polyline`, `line`,
   `text`), inside no other object's element, with nothing but groups (`g`) between it and the
   drawing's root, holding nothing but groups, shapes, texts and their spans, a title or a
@@ -1210,8 +1216,10 @@ foreign content (an
 element outside the SVG namespace, Inkscape's own apart where Inkscape writes them), an event handler, an image linking its picture rather than embedding it (an `href`, plain or
 `xlink:`, other than a `data:image/…` URI), a script link (a `javascript:` URL in any
 attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
-declaring attribute defaults or using a parameter entity (a browser would apply them unchecked), or an
-entity of it expanding to an element (Inkscape writes none; an entity of text alone is read); an
+declaring attribute defaults or using a parameter entity (a browser would apply them unchecked), an
+entity of it expanding to an element, or a reference (`&`) in it (a browser expands a character
+reference in an entity's value to markup; Inkscape writes none; an entity of text alone, as it
+reads, is read); an
 object's element of another kind than the page draws on (a clone or an image told what to do in
 Inkscape), inside another object's element or anything but groups, hidden (`display: none` on it
 or on a group around it, as a hidden layer is), holding anything but groups, shapes, texts and their spans, or saying `!important` in a `style` on it or inside it, and a
@@ -1487,6 +1495,14 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
     for (place, el, ex) in places("onclick=\"alert(1)\"") {
         let got = binding_refusal(&ex);
         assert!(got.ends_with(&format!("layout.svg holds an event handler (`onclick` on <{el}>): a layout is a drawing, with no script")), "{place}: {got}");
+    }
+    // A script link in any attribute, as a browser reads a URL (a link's own in any case and spacing,
+    // another's with a tab in its scheme, an item of a list), at every place alike.
+    for (attr, shown) in [("href=\" JavaScript:alert(1)\"", "JavaScript:alert(1)"), ("data-x=\"java&#9;script:alert(1)\"", "java\tscript:alert(1)"), ("values=\"#a;javascript:alert(1)\"", "#a;javascript:alert(1)")] {
+        for (place, el, ex) in places(attr) {
+            let got = binding_refusal(&ex);
+            assert!(got.ends_with(&format!("layout.svg holds a script link (`{shown}` on <{el}>): a layout is a drawing, with no script")), "{attr}, {place}: {got}");
+        }
     }
     // Near misses, at every place: a `style` of other properties, one whose value only names a
     // moving one, a name split by a comment or white space (no declaration, as CSS reads it), and the
@@ -2612,6 +2628,12 @@ fn every_element_refusal_holds_at_every_place_and_through_no_entity() {
         for id in ["", " id=\"image1\""] {
             refusals.push((format!("<image{id} href=\"{href}\" width=\"4\" height=\"4\"/>"), linked(href)));
             refusals.push((format!("<image{id} xlink:href=\"{href}\" width=\"4\" height=\"4\"/>"), linked(href)));
+            // Its two links in every combination: either linking beside the other embedded, in
+            // either order (a browser draws from the plain `href` when both are written).
+            for (links, embeds) in [("href", "xlink:href"), ("xlink:href", "href")] {
+                refusals.push((format!("<image{id} {links}=\"{href}\" {embeds}=\"data:image/png;base64,AAAA\" width=\"4\" height=\"4\"/>"), linked(href)));
+                refusals.push((format!("<image{id} {embeds}=\"data:image/png;base64,AAAA\" {links}=\"{href}\" width=\"4\" height=\"4\"/>"), linked(href)));
+            }
         }
     }
     let mut places: Vec<(String, String)> = vec![
@@ -2657,6 +2679,35 @@ fn every_element_refusal_holds_at_every_place_and_through_no_entity() {
     // An entity of text alone, in an attribute and in a text, read.
     let t = parse(&format!("<!DOCTYPE svg [<!ENTITY w \"40\"><!ENTITY t \"Outlet\">]><svg xmlns=\"{SVG_NS}\"><rect id=\"r\" width=\"&w;\"/><text id=\"l\">&t; 1</text></svg>"), p).unwrap();
     assert!(t.element("r") == Some("rect") && t.element("l") == Some("text"), "an entity of text alone read");
+    // A reference in the document type, refused there: each refusal above through an entity whose
+    // markup is written as character references (decimal and hexadecimal, which XML turns into
+    // markup where the entity is declared and this reader's parser reads as characters), and every
+    // other reference an entity's value may hold (a character of text, another entity, a predefined
+    // one, one escaped), and one in a comment of it (the check reads the document type whole). The
+    // drawing's own references stay its own (a script link spelled with one is read, above).
+    let amp = "l.svg writes a reference (`&`) in its document type: a browser expands an entity's value holding one otherwise than this reader (a character reference there becomes markup); Inkscape writes none";
+    for (el, _) in &refusals {
+        let text = el.replace('"', "'");
+        for (lt, gt) in [("&#60;", "&#62;"), ("&#x3C;", "&#x3E;"), ("&#x3c;", "&#x3e;")] {
+            let written = text.replace('<', lt).replace('>', gt);
+            for body in ["<g>&e;</g>", "&e;", "<g id=\"wrap\"><rect id=\"infeed\"/>&e;</g>"] {
+                assert_eq!(parse(&entity(&written, body), p).unwrap_err(), amp, "{written} in {body}");
+            }
+        }
+    }
+    for subset in ["<!ENTITY deg \"&#176;\">", "<!ENTITY a \"x\"><!ENTITY b \"&a;\">", "<!ENTITY lt2 \"&lt;\">", "<!ENTITY q \"&amp;#60;rect/&amp;#62;\">", "<!ENTITY w \"40\"><!-- &#60; -->"] {
+        let svg = format!("<!DOCTYPE svg [{subset}]><svg xmlns=\"{SVG_NS}\"><rect id=\"r\"/></svg>");
+        assert_eq!(parse(&svg, p).unwrap_err(), amp, "{subset}");
+    }
+    // Through the host's load: the worked example with the critic's entity (an animation turning the
+    // infeed's fill) referenced beside the infeed, refused before any session starts.
+    let mut ex = example();
+    let at = ex.svg.find("<svg").unwrap();
+    ex.svg.insert_str(at, "<!DOCTYPE svg [<!ENTITY e \"&#60;set href='#infeed' attributeName='fill' to='red'/&#62;\">]>");
+    let end = ex.svg.rfind("</svg>").unwrap();
+    ex.svg.insert_str(end, "<g>&e;</g>");
+    let got = binding_refusal(&ex);
+    assert!(got.ends_with(&amp.replacen("l.svg", "layout.svg", 1)), "{got}");
 }
 
 /// Q27 (decided 2026-11-15: "Drop the script, load it"): Inkscape's script beside a mesh gradient and
@@ -2721,7 +2772,7 @@ fn inkscapes_script_beside_a_mesh_or_a_hatch_is_dropped_and_no_other() {
 #[test]
 fn a_drawing_saved_as_inkscape_saves_it_loads_its_editor_dropped() {
     use common::INKSCAPE_LOOP;
-    use veredas_supervisao::svg::{EDITOR, SVG_NS, parse};
+    use veredas_supervisao::svg::{EDITOR, RDF_NS, RDF_ROOT, SVG_NS, parse};
     let mut ex = example();
     ex.svg = INKSCAPE_LOOP.to_string();
     assert!(outcome(&ex).is_ok(), "{:?}", outcome(&ex).err());
@@ -2762,13 +2813,21 @@ fn a_drawing_saved_as_inkscape_saves_it_loads_its_editor_dropped() {
     for c in held {
         places.push((format!("a {c}"), format!("<{c}>"), format!("</{c}>"), c.into(), None));
     }
+    // Of the RDF namespace, the one element Inkscape writes there, the reference's own: `rdf:RDF`;
+    // any other name of it refused where the namespace stands.
+    assert!(sentence.contains(&format!("`rdf:{RDF_ROOT}` in the root's `metadata`")), "the reference names the RDF element");
     for (ns, allowed) in &read {
-        for (label, open, close, parent, at) in &places {
-            let svg = format!("<svg xmlns=\"{SVG_NS}\" viewBox=\"0 0 10 10\">{open}<e:thing xmlns:e=\"{ns}\" id=\"x1\"><e:inner id=\"x2\"/></e:thing>{close}<rect id=\"r\"/></svg>");
-            match (parse(&svg, p), at.is_some_and(|a| allowed.contains(&a))) {
-                (Ok(l), true) => assert!(!l.ids.contains_key("x1") && !l.ids.contains_key("x2") && l.ids.contains_key("r"), "{ns} in {label}"),
-                (Err(e), false) => assert_eq!(e, format!("l.svg holds an Inkscape element (<thing> of `{ns}`) inside a <{parent}>, where Inkscape writes none: its editor's state stands beside the drawing (a child of its root) or in the root's `defs`, its metadata in the root's `metadata`"), "{ns} in {label}"),
-                (other, _) => panic!("{ns} in {label}: {other:?}"),
+        let names: Vec<&str> = if ns == RDF_NS { vec![RDF_ROOT, "Description", "li", "thing"] } else { vec!["thing"] };
+        for name in names {
+            for (label, open, close, parent, at) in &places {
+                let svg = format!("<svg xmlns=\"{SVG_NS}\" viewBox=\"0 0 10 10\">{open}<e:{name} xmlns:e=\"{ns}\" id=\"x1\"><e:inner id=\"x2\"/></e:{name}>{close}<rect id=\"r\"/></svg>");
+                let placed = at.is_some_and(|a| allowed.contains(&a));
+                match (parse(&svg, p), placed && (ns != RDF_NS || name == RDF_ROOT)) {
+                    (Ok(l), true) => assert!(!l.ids.contains_key("x1") && !l.ids.contains_key("x2") && l.ids.contains_key("r"), "{ns} {name} in {label}"),
+                    (Err(e), false) if !placed => assert_eq!(e, format!("l.svg holds an Inkscape element (<{name}> of `{ns}`) inside a <{parent}>, where Inkscape writes none: its editor's state stands beside the drawing (a child of its root) or in the root's `defs`, its metadata in the root's `metadata`"), "{ns} {name} in {label}"),
+                    (Err(e), false) => assert_eq!(e, format!("l.svg holds an Inkscape element (<{name}> of `{ns}`) in the root's <metadata>, where Inkscape writes its <RDF> alone"), "{ns} {name} in {label}"),
+                    (other, _) => panic!("{ns} {name} in {label}: {other:?}"),
+                }
             }
         }
     }

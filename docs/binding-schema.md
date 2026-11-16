@@ -275,7 +275,9 @@ A path is relative to the binding file's folder.
   (Q25): its own elements (`sodipodi:*` and `inkscape:*` as children of the drawing's root or of the
   root's `defs`, `rdf:RDF` in the root's `metadata` with `cc:*` and `dc:*` inside it) dropped on
   read, unread, with all they hold (nothing of them reaches the page); its attributes in those
-  namespaces on the drawing's elements read by nothing. A picture in it is embedded (Q23: an
+  namespaces on the drawing's elements read by nothing but the script-link check every attribute
+  meets (a `javascript:` value refused there too); an element of the RDF namespace but `rdf:RDF`
+  refused. A picture in it is embedded (Q23: an
   image's `href`, plain or `xlink:`, a `data:image/…` URI, Inkscape's "Embed"). Inkscape's script
   beside a mesh gradient or a hatch (a `script` of the root's own with the id `mesh_polyfill` or
   `hatch_polyfill`, writing nothing else but a type) is dropped the same way (Q27), the mesh or the
@@ -290,7 +292,7 @@ A path is relative to the binding file's folder.
 
 **An object** (`[[object]]`): something on the plant with a value.
 - `id` (required): an ASCII letter, then ASCII letters, digits, `-`, `_` and `.`, at most 64; no two
-  objects share one, whatever the case. The layout's element with this `id` shows the object: a
+  objects share one, whatever the case; never one the page names its own (`app`, or beginning `sv-`). The layout's element with this `id` shows the object: a
   group, a shape or a text (`g`, `rect`, `circle`, `ellipse`, `path`, `polygon`, `polyline`, `line`,
   `text`), inside no other object's element, with nothing but groups (`g`) between it and the
   drawing's root, holding nothing but groups, shapes, texts and their spans, a title or a
@@ -467,8 +469,10 @@ foreign content (an
 element outside the SVG namespace, Inkscape's own apart where Inkscape writes them), an event handler, an image linking its picture rather than embedding it (an `href`, plain or
 `xlink:`, other than a `data:image/…` URI), a script link (a `javascript:` URL in any
 attribute or any item of a `;`-separated list, read as a browser reads a URL) or a document type
-declaring attribute defaults or using a parameter entity (a browser would apply them unchecked), or an
-entity of it expanding to an element (Inkscape writes none; an entity of text alone is read); an
+declaring attribute defaults or using a parameter entity (a browser would apply them unchecked), an
+entity of it expanding to an element, or a reference (`&`) in it (a browser expands a character
+reference in an entity's value to markup; Inkscape writes none; an entity of text alone, as it
+reads, is read); an
 object's element of another kind than the page draws on (a clone or an image told what to do in
 Inkscape), inside another object's element or anything but groups, hidden (`display: none` on it
 or on a group around it, as a hidden layer is), holding anything but groups, shapes, texts and their spans, or saying `!important` in a `style` on it or inside it, and a
