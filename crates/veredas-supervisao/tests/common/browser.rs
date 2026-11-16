@@ -143,26 +143,37 @@ impl Browser {
     }
 
     fn start(url: &str) -> Browser {
-        let profile = tempfile::tempdir().unwrap();
-        let child = Command::new(executable())
-            .args(["--headless=new", "--disable-gpu", "--no-sandbox", "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--remote-debugging-port=0", "--window-size=1440,900"])
-            .arg(format!("--user-data-dir={}", profile.path().display()))
-            .arg(url)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        // The port the browser picked, written in its profile once it listens.
-        let file = profile.path().join("DevToolsActivePort");
-        let deadline = Instant::now() + Duration::from_secs(30);
-        let port: u16 = loop {
-            if let Some(p) = std::fs::read_to_string(&file).ok().and_then(|t| t.lines().next().and_then(|l| l.trim().parse().ok())) {
-                break p;
+        // A browser that has not opened its port within a minute (a machine under load: CI's runner
+        // starting many at once, red on b995622 at 30 s) is ended and started once more before the
+        // test fails; its start is not what any test proves.
+        let (child, profile, port) = (|| {
+            for attempt in 1..=2 {
+                let profile = tempfile::tempdir().unwrap();
+                let mut child = Command::new(executable())
+                    .args(["--headless=new", "--disable-gpu", "--no-sandbox", "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--remote-debugging-port=0", "--window-size=1440,900"])
+                    .arg(format!("--user-data-dir={}", profile.path().display()))
+                    .arg(url)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap();
+                // The port the browser picked, written in its profile once it listens.
+                let file = profile.path().join("DevToolsActivePort");
+                let deadline = Instant::now() + Duration::from_secs(60);
+                while Instant::now() < deadline {
+                    if let Some(p) = std::fs::read_to_string(&file).ok().and_then(|t| t.lines().next().and_then(|l| l.trim().parse::<u16>().ok())) {
+                        return (child, profile, p);
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                assert!(attempt < 2, "the browser never opened its debugging port, twice in a minute each");
             }
-            assert!(Instant::now() < deadline, "the browser never opened its debugging port");
-            std::thread::sleep(Duration::from_millis(100));
-        };
+            unreachable!()
+        })();
+        let deadline = Instant::now() + Duration::from_secs(60);
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         let page = loop {
             let list = devtools_get(addr, "/json/list");
