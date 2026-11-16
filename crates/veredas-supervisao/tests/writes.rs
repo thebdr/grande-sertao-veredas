@@ -1092,10 +1092,11 @@ fn every_answer_portal_gives_a_write_is_said_as_it_means() {
     let tag = |t: &str| format!("ns={};s={t}", far.namespace);
     let big = "1".repeat(70_000);
     let actions = format!(
-        "actions = [ {{ label = \"Go\", source = \"far\", tag = \"{}\", value = \"on\" }}, {{ label = \"Bad\", source = \"far\", tag = \"{}\", value = \"abc\" }}, {{ label = \"Locked\", source = \"far\", tag = \"{}\", value = \"1\" }}, {{ label = \"Big\", source = \"far\", tag = \"{}\", value = \"{big}\" }} ]\n",
+        "actions = [ {{ label = \"Go\", source = \"far\", tag = \"{}\", value = \"on\" }}, {{ label = \"Bad\", source = \"far\", tag = \"{}\", value = \"abc\" }}, {{ label = \"Locked\", source = \"far\", tag = \"{}\", value = \"1\" }}, {{ label = \"Big\", source = \"far\", tag = \"{}\", value = \"{big}\" }}, {{ label = \"Go\", source = \"far\", tag = \"{}\", value = \"abc\" }} ]\n",
         tag("go"),
         tag("go"),
         tag("ro"),
+        tag("go"),
         tag("go")
     );
     assert!(ex.binding.contains("id = \"outlet-1\"\n"), "{}", ex.binding);
@@ -1132,6 +1133,34 @@ fn every_answer_portal_gives_a_write_is_said_as_it_means() {
     assert!(note.starts_with("Locked: refused, Bad"), "{note}");
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!((at("go"), at("ro")), ("0".to_string(), "0".to_string()), "nothing of the refused ones at the plant");
+    // Two actions of one label (the binding asks only that a label be written), each its own by its
+    // place among the object's actions: pressed together, both asked and posted, each its own body;
+    // every answer in a line of its own in the actions' order (Big's and Locked's came out of it
+    // above), each line drawn below the one before.
+    page.wait_for(r#"(() => { const b = document.querySelectorAll('.side .actions button'); return b.length === 5 && [0, 4].every((i) => !b[i].disabled && b[i].dataset.busy === undefined) ? true : null; })()"#, Duration::from_secs(30));
+    let before = page.posts().len();
+    page.eval("(() => { document.querySelector('.side .write-note').textContent = ''; const b = document.querySelectorAll('.side .actions button'); b[0].click(); b[4].click(); return true; })()");
+    let lines = page.wait_for(r#"(() => { const s = [...document.querySelectorAll('.side .write-note > [data-index]')]; return s.length === 5 && document.querySelectorAll('.side .actions button[data-busy]').length === 0 ? s.map((x) => [x.dataset.index, x.dataset.action, x.textContent]) : null; })()"#, Duration::from_secs(30));
+    let lines: Vec<(String, String, String)> = lines.as_array().unwrap().iter().map(|l| (l[0].as_str().unwrap().into(), l[1].as_str().unwrap().into(), l[2].as_str().unwrap().into())).collect();
+    let order: Vec<(&str, &str)> = lines.iter().map(|(i, a, _)| (i.as_str(), a.as_str())).collect();
+    assert_eq!(order, [("0", "Go"), ("1", "Bad"), ("2", "Locked"), ("3", "Big"), ("4", "Go")], "a line per action answered, in the actions' order");
+    assert!(lines[0].2.starts_with("Go: written (Good") && lines[4].2 == "Go: refused, 400: `abc` is not a whole number", "each Go its own answer: {lines:?}");
+    let sent: Vec<String> = page.posts()[before..].iter().map(|(_, b)| serde_json::from_str::<serde_json::Value>(b).unwrap()["value"].as_str().unwrap().to_string()).collect();
+    assert_eq!(sent, ["on", "abc"], "both pressed, each its own body");
+    let drawn = page.eval(r#"[...document.querySelectorAll('.side .write-note > [data-index]')].map((s) => { const r = s.getClientRects()[0]; return [r.top, r.bottom]; })"#);
+    let boxes: Vec<(f64, f64)> = drawn.as_array().unwrap().iter().map(|b| (b[0].as_f64().unwrap(), b[1].as_f64().unwrap())).collect();
+    assert!(boxes.windows(2).all(|w| w[1].0 >= w[0].1 - 0.5), "each answer drawn in a line below the one before: {boxes:?}");
+    assert!(wait(Duration::from_secs(10), || at("go") == "1"), "the first Go landed");
+    far.set("go", 0);
+    assert!(wait(Duration::from_secs(10), || at("go") == "0"));
+    // The page reads as portal's refusals exactly the codes portal refuses a write with: a value or a
+    // body it cannot read and a body past its limit (both met above), and core's refusals by
+    // portal's own code for each.
+    let api = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/src/api.ts")).unwrap();
+    let list = api.split_once("const PORTAL_REFUSALS = [").and_then(|(_, r)| r.split_once(']')).map(|(l, _)| l).expect("the page's list of portal's refusals");
+    let page_codes: BTreeSet<u16> = list.split(',').map(|c| c.trim().parse().unwrap()).collect();
+    let portal_codes: BTreeSet<u16> = [400, 413].into_iter().chain([&WriteError::Disarmed, &not_sent, &unconfirmed].into_iter().map(code)).collect();
+    assert_eq!(page_codes, portal_codes, "the page's list of portal's refusal codes, portal's own");
     // Not confirmed: the link frozen, no answer comes; the write lands once it thaws.
     relay.freeze();
     let note = press(&mut page, "Go");
@@ -1226,6 +1255,19 @@ fn a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are() {
     let note = page.wait_for(NOTE, Duration::from_secs(10));
     assert!(note.as_str().unwrap().starts_with("Release: no answer, the write may have reached the plant (200, its answer unreadable: "), "{note}");
     assert!(wait(Duration::from_secs(10), || release(&bench) == "1"), "the write with an unreadable answer landed");
+    // An answer not of portal's shape, after portal has answered and the write landed: a 200 that
+    // says no `ok`, and a code portal never answers a write with (a gateway's page), each said as no
+    // answer, never as portal's refusal (the gateway's in portal's own form, `{ error }`, its code
+    // alone telling it apart).
+    for (n, (status, ctype, body, said)) in [(200, "application/json", "e30=", "(200, an answer not portal's)"), (502, "application/json", "eyJlcnJvciI6IkJhZCBHYXRld2F5In0=", "(502, an answer not portal's)")].into_iter().enumerate() {
+        zero(&bench);
+        press(&mut page);
+        let foreign = paused(&mut page, 2 + n);
+        page.call("Fetch.fulfillRequest", json!({ "requestId": foreign["params"]["requestId"], "responseCode": status, "responseHeaders": [{ "name": "content-type", "value": ctype }], "body": body }));
+        let note = page.wait_for(NOTE, Duration::from_secs(10));
+        assert!(note.as_str().unwrap().starts_with(&format!("Release: no answer, the write may have reached the plant {said}")), "{status}: {note}");
+        assert!(wait(Duration::from_secs(10), || release(&bench) == "1"), "{status}: the write landed");
+    }
     page.call("Fetch.disable", json!({}));
     // The object pressed, left and selected again while its post is out: the answer said there.
     zero(&bench);

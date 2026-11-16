@@ -130,14 +130,26 @@ export async function postWrite(name: string, a: Action): Promise<{ said: WriteS
   } catch (e) {
     return { said: "no answer", text: `${MAY_HAVE_LANDED} (${String(e)})` };
   }
-  let body: unknown = {};
+  // Portal's answers, by its own route: a 200 saying `ok` (the plant's own status beside it), or a
+  // refusal `{ error }` under one of its codes. Anything else (a body that cannot be read, another
+  // shape, another code: an answer of something between the page and portal) says nothing of the
+  // write, which may have reached the plant.
+  let body: unknown;
   try {
     body = await r.json();
   } catch (e) {
-    // A success whose body cannot be read says nothing of the write; a refusal is told by its code.
-    if (r.ok) return { said: "no answer", text: `${MAY_HAVE_LANDED} (${r.status}, its answer unreadable: ${String(e)})` };
+    return { said: "no answer", text: `${MAY_HAVE_LANDED} (${r.status}, its answer unreadable: ${String(e)})` };
   }
-  if (r.ok) return { said: (body as { ok?: boolean }).ok ? "written" : "refused", text: (body as { status?: string }).status ?? "written" };
-  const said: WriteSaid = r.status === 504 ? "not confirmed" : r.status === 503 ? "not sent" : "refused";
-  return { said, text: `${r.status}: ${(body as { error?: string }).error ?? r.statusText}` };
+  const o = (typeof body === "object" && body !== null ? body : {}) as { ok?: unknown; status?: unknown; error?: unknown };
+  if (r.status === 200 && typeof o.ok === "boolean") return { said: o.ok ? "written" : "refused", text: typeof o.status === "string" ? o.status : "no status" };
+  if (PORTAL_REFUSALS.includes(r.status) && typeof o.error === "string") {
+    const said: WriteSaid = r.status === 504 ? "not confirmed" : r.status === 503 ? "not sent" : "refused";
+    return { said, text: `${r.status}: ${o.error}` };
+  }
+  return { said: "no answer", text: `${MAY_HAVE_LANDED} (${r.status}, an answer not portal's)` };
 }
+
+/// The codes portal refuses a write with, each with its `{ error }`: a value or a body it cannot read
+/// (400), the switch or a tag it does not write (403), a body past its limit (413), the plant never
+/// reached (503), no answer from the plant (504).
+const PORTAL_REFUSALS = [400, 403, 413, 503, 504];

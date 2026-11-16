@@ -41,11 +41,12 @@ export class Side {
   private sel: Selected | null = null;
   private inState = new Map<string, { state: string; at: number }>();
   /// The last answer to a press of each of an object's actions, by the object pressed and the
-  /// action: all said under it, each in its own line, whenever it is selected (one action's answer
-  /// never overtakes another's), never under another one selected while the post was out.
-  private notes = new Map<string, Map<string, string>>();
-  /// The presses whose post is out, by object and action: that action's button stays busy, however
-  /// often the object is selected again, so it is never pressed twice at once.
+  /// action's place among its actions (two of one label are two actions): all said under it, each in
+  /// its own line, whenever it is selected (one action's answer never overtakes another's), never
+  /// under another one selected while the post was out.
+  private notes = new Map<string, Map<number, string>>();
+  /// The presses whose post is out, by object and action's place: that action's button stays busy,
+  /// however often the object is selected again, so it is never pressed twice at once.
   private out = new Set<string>();
 
   constructor(
@@ -76,7 +77,7 @@ export class Side {
       value: h("dd", { class: "mono" }),
       since: h("dd", { class: "mono" }),
       spark: h("div", { class: "spark-wrap" }),
-      buttons: def.actions.map((a) => this.actionButton(def.id, a)),
+      buttons: def.actions.map((a, i) => this.actionButton(def.id, a, i)),
       gate: h("p", { class: "gate-note" }),
       note: h("p", { class: "write-note mono" }),
       sparkAt: 0,
@@ -102,12 +103,12 @@ export class Side {
   /// Every answer kept for the selected object, one line per action answered, in its actions' order.
   private sayAll(s: Selected) {
     const said = this.notes.get(s.def.id);
-    s.note.replaceChildren(...s.def.actions.filter((a) => said?.has(a.label)).map((a) => h("span", { "data-action": a.label }, said!.get(a.label)!)));
+    s.note.replaceChildren(...s.def.actions.flatMap((a, i) => (said?.has(i) ? [h("span", { "data-action": a.label, "data-index": String(i) }, said.get(i)!)] : [])));
   }
 
-  private actionButton(id: string, a: Action): HTMLButtonElement {
-    const b = h("button", { class: "gated", disabled: true, "data-action": a.label }, a.label) as HTMLButtonElement;
-    const pressing = `${id}\u0000${a.label}`;
+  private actionButton(id: string, a: Action, at: number): HTMLButtonElement {
+    const b = h("button", { class: "gated", disabled: true, "data-action": a.label, "data-index": String(at) }, a.label) as HTMLButtonElement;
+    const pressing = `${id}\u0000${at}`;
     if (this.out.has(pressing)) b.dataset.busy = "1";
     b.onclick = async () => {
       if (this.out.has(pressing) || !confirm(`Write ${a.value} to ${a.tag} of ${a.source}?`)) return;
@@ -119,7 +120,7 @@ export class Side {
       // gate again at the next status.
       const say = (text: string) => {
         if (!this.notes.has(id)) this.notes.set(id, new Map());
-        this.notes.get(id)!.set(a.label, text);
+        this.notes.get(id)!.set(at, text);
         if (this.sel && this.sel.def.id === id) this.sayAll(this.sel);
       };
       try {
@@ -130,7 +131,7 @@ export class Side {
       } finally {
         this.out.delete(pressing);
         delete b.dataset.busy;
-        const shown = this.sel && this.sel.def.id === id ? this.sel.buttons.find((x) => x.dataset.action === a.label) : undefined;
+        const shown = this.sel && this.sel.def.id === id ? this.sel.buttons[at] : undefined;
         if (shown) delete shown.dataset.busy;
       }
     };
