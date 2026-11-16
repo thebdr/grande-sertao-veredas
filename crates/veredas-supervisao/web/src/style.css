@@ -49,7 +49,9 @@ select.plant option { background: var(--chrome); }
 .layout { display: flex; height: 100%; }
 .plant-pane { position: relative; flex: 1; min-width: 0; background: var(--canvas); }
 /* The drawing's box stands clear of the page's own controls (the layers above it, the legend below
-   it, the zoom beside it), so none ever lies over the drawing or what the page writes at its edge. */
+   it, the zoom beside it), so none ever lies over the drawing or what the page writes at its edge:
+   the top and bottom paddings here are the first frame's, the page then sets them from the layers'
+   and the legend's heights, whatever lines they wrap to (main.ts). */
 .plant-wrap { position: absolute; inset: 0; padding: 52px 52px 48px 12px; box-sizing: border-box; }
 svg.plant { width: 100%; height: 100%; display: block; user-select: none; }
 .layers { position: absolute; top: 12px; left: 12px; display: flex; gap: 2px; background: var(--chrome); border: 1px solid var(--border); border-radius: 8px; padding: 3px; }

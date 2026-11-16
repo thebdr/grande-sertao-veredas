@@ -1038,36 +1038,43 @@ fn assert_controls_clear(page: &mut Browser, what: &str) {
     assert!(got[0].as_u64().unwrap() >= 14 && got[1] == json!([]), "{what}: the page's own controls over the drawing: {got}");
 }
 
-/// Every marker placed by its element's box as the browser gives it now (no slide running): its
+/// Every marker placed by its element's box as the browser gives it now (no slide running), and every
+/// key's clone of a keyed one by its own: its
 /// box's centre, carried to the overlay through its own matrices, on its path's point at the place
 /// the feed gives, and its mark and word centred across it and below it; each within the hundredth
-/// the page writes a place to. With the count read.
+/// the page writes a place to. With the count read, and of clones.
 const MARKERS_NOW: &str = r#"(async () => {
   const at = location.pathname.replace(/\/$/, "");
   const [feed, binding] = await Promise.all([fetch(`${at}/objects.json`).then((r) => r.json()), fetch(`${at}/binding`).then((r) => r.json())]);
   const svg = document.querySelector("svg.plant"), overlay = svg.querySelector(".sv-overlay"), O = overlay.getCTM().inverse();
   const out = [];
-  let read = 0;
+  let read = 0, clones = 0;
   const off = (id, what, got, want) => { read++; if (Math.abs(got - want) > 0.011) out.push(`${id}: its ${what} at ${got}, the box says ${want}`); };
   for (const def of binding.objects.filter((o) => o.show === "move")) {
     const el = document.getElementById(def.id), o = feed.objects.find((x) => x.id === def.id);
-    if (!el || !o || o.place === null || o.items.length) continue;
+    if (!el || !o) continue;
     const p = document.getElementById(def.path);
-    const pt = p.getPointAtLength(o.place * p.getTotalLength());
-    const q = new DOMPoint(pt.x, pt.y).matrixTransform(O.multiply(p.getCTM()));
-    const b = el.getBBox(), m = O.multiply(el.getCTM());
-    const pts = [[b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]].map(([x, y]) => new DOMPoint(x, y).matrixTransform(m));
-    const c = new DOMPoint(b.x + b.width / 2, b.y + b.height / 2).matrixTransform(m);
-    off(def.id, "centre across", c.x, q.x);
-    off(def.id, "centre down", c.y, q.y);
-    const t = overlay.querySelector(`.sv-tag[data-for="${def.id}"][data-key=""]`);
-    if (t && t.textContent) {
-      const fs = Number(t.getAttribute("font-size")) / 0.8;
-      off(def.id, "tag across", Number(t.getAttribute("x")), (Math.min(...pts.map((p) => p.x)) + Math.max(...pts.map((p) => p.x))) / 2);
-      off(def.id, "tag's height", Number(t.getAttribute("y")), Math.max(...pts.map((p) => p.y)) + fs * 0.9);
+    // One marker (its element, the key "") or every key's clone, each at its own place.
+    const each = o.items.length ? o.items.map((it) => [`${def.id} ${it.key}`, svg.querySelector(`[data-object="${def.id}"][data-key="${CSS.escape(it.key)}"]`), it.key, it.place]) : o.place === null ? [] : [[def.id, el, "", o.place]];
+    for (const [who, node, key, place] of each) {
+      if (!node) { out.push(`${who}: no clone drawn`); continue; }
+      if (key !== "") clones++;
+      const pt = p.getPointAtLength(place * p.getTotalLength());
+      const q = new DOMPoint(pt.x, pt.y).matrixTransform(O.multiply(p.getCTM()));
+      const b = node.getBBox(), m = O.multiply(node.getCTM());
+      const pts = [[b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]].map(([x, y]) => new DOMPoint(x, y).matrixTransform(m));
+      const c = new DOMPoint(b.x + b.width / 2, b.y + b.height / 2).matrixTransform(m);
+      off(who, "centre across", c.x, q.x);
+      off(who, "centre down", c.y, q.y);
+      const t = overlay.querySelector(`.sv-tag[data-for="${def.id}"][data-key="${CSS.escape(key)}"]`);
+      if (t && t.textContent) {
+        const fs = Number(t.getAttribute("font-size")) / 0.8;
+        off(who, "tag across", Number(t.getAttribute("x")), (Math.min(...pts.map((p) => p.x)) + Math.max(...pts.map((p) => p.x))) / 2);
+        off(who, "tag's height", Number(t.getAttribute("y")), Math.max(...pts.map((p) => p.y)) + fs * 0.9);
+      }
     }
   }
-  return [read, out.slice(0, 20)];
+  return [read, out.slice(0, 20), clones];
 })()"#;
 
 /// What the page placed for every bound element but a marker against the element's box as the
@@ -1551,6 +1558,8 @@ const NO_AREA_SVG: &str = r##"  <line id="nv-vt-o" x1="0" y1="0" x2="0" y2="20" 
   <g id="nv-freed" style="fill:#cccccc;stroke:#000000;stroke-width:2;stroke-dasharray:4,1;fill-opacity:0.9;stroke-opacity:0.8"><rect x="320" y="318" width="40" height="16"/><g><g><text x="324" y="330" style="font-size:8px;stroke-width:0.5">O2</text></g></g></g>
   <rect id="nv-edge" x="370" y="372" width="24" height="28"/>
   <g id="nv-gpipe"><path d="M 120,336 H 150" style="fill:none;stroke:#3a3a40;stroke-width:6"/><path d="M 0,0 H 15" transform="translate(150 336) scale(2 1)" style="fill:none;stroke:#3a3a40;stroke-width:6"/></g>
+  <g id="nv-gpoly"><polyline points="20,328 50,328 80,328" style="fill:none;stroke:#3a3a40;stroke-width:6"/></g>
+  <g id="nv-gpgon"><polygon points="20,340 50,340 80,340" style="fill:none;stroke:#3a3a40;stroke-width:6"/></g>
 </svg>"##;
 
 /// The levels with no area whose stroke the page fills over, each with its level: the twenty-four
@@ -1576,8 +1585,22 @@ fn no_area_levels() -> Vec<(String, f64)> {
     out.push(("nv-gline".into(), 0.85));
     out.push(("nv-gvline".into(), 0.85));
     out.push(("nv-gpipe".into(), 0.85));
+    for (id, _) in NO_AREA_GROUPS {
+        if !out.iter().any(|(o, _)| o == id) {
+            out.push((id.to_string(), 0.85));
+        }
+    }
     out
 }
+
+/// The groups with no area the test draws, each with the kind of shape it holds: every kind the
+/// reader lets an object draw on (`svg::DRAWN`, a group and a text apart) that can be drawn with no
+/// area (`NOTHING_DRAWN` the others, which draw nothing at all with none).
+const NO_AREA_GROUPS: [(&str, &str); 5] = [("nv-gline", "path"), ("nv-gvline", "line"), ("nv-gpipe", "path"), ("nv-gpoly", "polyline"), ("nv-gpgon", "polygon")];
+
+/// The kinds of shape that draw nothing with no area: a rect with no width or height, a circle or
+/// an ellipse with no radius.
+const NOTHING_DRAWN: [&str; 3] = ["rect", "circle", "ellipse"];
 
 /// Each level with no area against its stroke as the browser paints it: on a line the screen keeps
 /// level or upright, the stroke's painted width across it (scanned from its middle outward by what
@@ -1596,9 +1619,12 @@ const NO_AREA_FILLS: &str = r##"(() => {
     // whole group, the fill from the first shape's start to the last one's end and taking each one's
     // middle.
     const shape = el instanceof SVGGeometryElement ? el : el.querySelector("path, line, polyline, polygon, rect");
+    // A group's shapes by their boxes' corners and middles (a polygon closes on its start, so its
+    // ends say nothing of its reach).
+    const box = (g) => { const b = g.getBBox(), m = g.getScreenCTM(); return [[b.x, b.y], [b.x + b.width, b.y + b.height], [b.x + b.width / 2, b.y + b.height / 2]].map(([x, y]) => new DOMPoint(x, y).matrixTransform(m)); };
     if (!(el instanceof SVGGeometryElement)) {
       const shapes = [...el.querySelectorAll("path, line, polyline, polygon, rect")];
-      const ends = shapes.flatMap((g) => [pt(g, 0), pt(g, g.getTotalLength())]);
+      const ends = shapes.flatMap((g) => box(g).slice(0, 2));
       const r = fill.getBoundingClientRect();
       const xs = ends.map((p) => p.x), ys = ends.map((p) => p.y);
       const flatGroup = Math.max(...ys) - Math.min(...ys) < 0.5;
@@ -1609,20 +1635,20 @@ const NO_AREA_FILLS: &str = r##"(() => {
       const prev = fill.style.pointerEvents;
       fill.style.pointerEvents = "visiblePainted";
       for (const [i, g] of shapes.entries()) {
-        const m = pt(g, g.getTotalLength() / 2);
+        const m = box(g)[2];
         const y = flatGroup ? r.bottom - 1 : m.y, x = flatGroup ? m.x : r.left + 1;
         if (document.elementFromPoint(x, y) !== fill) out.push(`${id}: its fill missing at its shape ${i}'s middle`);
       }
       fill.style.pointerEvents = prev;
     }
     const len = shape.getTotalLength();
-    const a = pt(shape, 0), b = pt(shape, len);
+    const [a, b, middle] = el instanceof SVGGeometryElement ? [pt(shape, 0), pt(shape, len), pt(shape, len / 2)] : box(shape);
     const r = fill.getBoundingClientRect();
     const ce = getComputedStyle(el), cf = getComputedStyle(fill);
     if (cf.fill === ce.stroke) out.push(`${id}: its fill painted as its track (${cf.fill})`);
     const upright = Math.abs(a.x - b.x) < 0.5, flat = Math.abs(a.y - b.y) < 0.5;
     if (upright || flat) {
-      const mid = pt(shape, len / 2);
+      const mid = middle;
       const hits = (d) => { const x = upright ? mid.x + d : mid.x, y = flat ? mid.y + d : mid.y; const at = document.elementFromPoint(x, y); return at === el || el.contains(at); };
       let lo = 0, hi = 0;
       while (hits(lo - 0.25) && lo > -100) lo -= 0.25;
@@ -1719,6 +1745,14 @@ fn a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_th
     let dir = tempfile::tempdir().unwrap();
     let bench = plant(&dir.path().join("bench"));
     let mut ex = live_example(&bench, false);
+    // A group with no area of every kind of shape the reader lets an object draw on that can have
+    // none, each holding that kind (its id's element in the drawing).
+    let kinds: std::collections::BTreeSet<&str> = NO_AREA_GROUPS.iter().map(|(_, k)| *k).chain(NOTHING_DRAWN).collect();
+    assert_eq!(kinds, veredas_supervisao::svg::DRAWN.into_iter().filter(|k| *k != "g" && *k != "text").collect(), "a group with no area of every kind of shape that can have none");
+    for (id, kind) in NO_AREA_GROUPS {
+        let at = NO_AREA_SVG.find(&format!("<g id=\"{id}\">")).unwrap_or_else(|| panic!("{id}"));
+        assert!(NO_AREA_SVG[at..at + NO_AREA_SVG[at..].find("</g>").unwrap()].contains(&format!("<{kind} ")), "{id} holds a {kind}");
+    }
     assert!(ex.svg.contains("viewBox=\"0 0 400 220\"") && ex.svg.ends_with("</svg>\n"));
     ex.svg = ex.svg.replace("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 400 400\"").replace("</svg>\n", NO_AREA_SVG).to_string() + "\n";
     let mut objects = String::new();
@@ -1942,6 +1976,11 @@ fn portrait_groups() -> String {
     svg
 }
 
+/// Two views the same but for the page's measuring (each edge within a twentieth of a unit).
+fn same_view(a: &Value, b: &Value) -> bool {
+    (0..4).all(|i| (a[i].as_f64().unwrap() - b[i].as_f64().unwrap()).abs() < 0.05)
+}
+
 /// The page's own controls (the layers, the legend, the zoom) stand clear of the drawing, and what it
 /// writes at the drawing's edges is cut and covered by nothing, at every window size; everything it
 /// places by a box (a group holding a text, a marker a group with a text or a text) placed anew at
@@ -1952,12 +1991,20 @@ fn the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan() {
     let dir = tempfile::tempdir().unwrap();
     let bench = plant(&dir.path().join("bench"));
     let mut ex = live_example(&bench, false);
-    ex.svg = portrait_groups();
+    // And a keyed marker drawn as Inkscape draws a parcel (a group of a circle and its letter beside
+    // it), one clone per key, its keys kept across every step (a key is forgotten 10 s after its last
+    // sample by default).
+    ex.svg = portrait_groups().replacen("</svg>", "  <g\n     id=\"tracked\"\n     style=\"display:inline\">\n    <circle\n       style=\"fill:#ffffff;stroke:#000000;stroke-width:0.264583\"\n       id=\"circle-tracked\"\n       cx=\"0\"\n       cy=\"0\"\n       r=\"4\" />\n    <text\n       xml:space=\"preserve\"\n       style=\"font-size:5px;font-family:sans-serif;fill:#26262a\"\n       x=\"6\"\n       y=\"2\"\n       id=\"text-tracked\">T</text>\n  </g>\n</svg>", 1);
+    ex.project.push_str("\n[[rule]]\nname = \"positions\"\npattern = 'POS item=(?P<item>\\w+) at=(?P<at>[0-9.]+)'\nscope = \"sorter\"\ntypes = { at = \"float\" }\nkey = \"item\"\n");
+    ex.binding = ex.binding.replacen("\n[[dashboard]]", "\n[[object]]\nid = \"tracked\"\nlabel = \"Tracked\"\nvalue = { source = \"sorter\", series = \"at\" }\nshow = \"move\"\npath = \"loop\"\nstale_after_ms = 3600000\n\n[[dashboard]]", 1);
     let path = write_example(dir.path(), &ex);
     std::fs::write(dir.path().join("loop/sorts.log"), "").unwrap();
     let host = Host::start(config::load_file(&path).unwrap()).unwrap();
     let addr = host.addr();
+    let now = store_now();
+    append(&dir.path().join("loop/sorts.log"), &[format!("{} POS item=A1 at=10", stamp(now)), format!("{} POS item=B2 at=50", stamp(now))]);
     let mut page = Browser::open(&format!("http://{addr}/s/loop/"));
+    page.wait_for(r#"document.querySelectorAll('svg.plant [data-object="tracked"][data-key]').length === 2 || null"#, Duration::from_secs(20));
     page.wait_for(
         r#"(() => { const s = (id) => document.getElementById(id); return s("outlet-3")?.classList.contains("sv-state-warn") && s("parcel-1").getAttribute("transform") && s("parcel-2").getAttribute("transform") ? true : null; })()"#,
         Duration::from_secs(20),
@@ -1985,12 +2032,16 @@ fn the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan() {
 
     // At every window size: the controls clear of the drawing; nothing the page writes beside it, at
     // its top-left and bottom-left edges among them, cut by its frame or covered.
-    for size in [None, Some((1100, 700)), Some((900, 640)), None] {
+    // Narrow windows among them, where the legend wraps (its height read at each size).
+    let mut legend = Vec::new();
+    for size in [None, Some((1100, 700)), Some((900, 640)), Some((700, 600)), Some((600, 480)), None] {
         window(&mut page, size);
         still(&mut page);
         assert_controls_clear(&mut page, &format!("at {size:?}"));
         assert_inside_frame(&mut page, [0.0, 0.0, 400.0, 600.0], 6, &format!("at {size:?}"));
+        legend.push(page.eval(r#"document.querySelector(".legend").getBoundingClientRect().height"#).as_f64().unwrap());
     }
+    assert!(legend.iter().cloned().fold(0.0, f64::max) > 1.4 * legend[0], "a window where the legend wraps driven: its heights {legend:?}");
     // Placed by the element's box as it stands at every scale, whatever changed it (the fit, the
     // buttons, the wheel, Fit, the window): a group holding a text, a marker a group with a text or
     // a text, each box moving with the scale.
@@ -2011,7 +2062,7 @@ fn the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan() {
         let off = page.eval(PLACED_NOW);
         assert!(off[0].as_u64().unwrap() >= 12 && off[1] == json!([]), "after {step}: placed otherwise than by the box as it stands: {off}");
         let moved = page.eval(MARKERS_NOW);
-        assert!(moved[0].as_u64().unwrap() >= 4 && moved[1] == json!([]), "after {step}: a marker placed otherwise than by its box as it stands: {moved}");
+        assert!(moved[0].as_u64().unwrap() >= 8 && moved[1] == json!([]) && moved[2] == json!(2), "after {step}: a marker or a key's clone placed otherwise than by its box as it stands: {moved}");
         assert_controls_clear(&mut page, &format!("after {step}"));
     }
     // The wheel's zoom, the person's until Fit, as the buttons' is: it narrows the view, which holds
@@ -2068,6 +2119,58 @@ fn the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan() {
     still(&mut page);
     let panned = vb(&mut page);
     assert!(panned != fit && page.eval(SELECTED) == json!(["outlet-3"]), "a drag from the background pans the view and clears nothing: {panned} from {fit}, selected {}", page.eval(SELECTED));
+    // The slop, 4 px from where the press went down (`SLOP`, the clause's): a press released under
+    // it across, down, aslant and back is a click (the view kept, outlet 3 picked, the background
+    // clicked first to clear it); one released past it each way a pan (the view moved, the infeed
+    // not picked).
+    for (dx, dy) in [(3.0, 0.0), (0.0, 3.0), (2.0, 2.0), (-3.0, 0.0), (0.0, -3.0)] {
+        button(&mut page, "Fit");
+        still(&mut page);
+        gesture(&mut page, ground, (0.0, 0.0), 0);
+        still(&mut page);
+        let outlet3 = centre_of(&mut page, "outlet-3");
+        gesture(&mut page, outlet3, (dx, dy), 1);
+        still(&mut page);
+        // A click leaves the view fitted (Fit again moves it by no more than its measuring, a
+        // hundredth of a unit, where the least pan moves it by units); a pan does not.
+        let now = vb(&mut page);
+        button(&mut page, "Fit");
+        still(&mut page);
+        let fitted = vb(&mut page);
+        assert!(same_view(&now, &fitted) && page.eval(SELECTED) == json!(["outlet-3"]), "a press released ({dx}, {dy}) from where it went down, under the slop: a click: {now} against {fitted}, selected {}", page.eval(SELECTED));
+    }
+    for (dx, dy) in [(5.0, 0.0), (0.0, 5.0), (3.0, 3.0), (-5.0, 0.0), (0.0, -5.0)] {
+        button(&mut page, "Fit");
+        still(&mut page);
+        let infeed = centre_of(&mut page, "infeed");
+        gesture(&mut page, infeed, (dx, dy), 1);
+        still(&mut page);
+        let now = vb(&mut page);
+        button(&mut page, "Fit");
+        still(&mut page);
+        let fitted = vb(&mut page);
+        assert!(!same_view(&now, &fitted) && page.eval(SELECTED) == json!(["outlet-3"]), "a press released ({dx}, {dy}) away, past the slop: a pan, the infeed not picked: {now} from {fitted}, selected {}", page.eval(SELECTED));
+    }
+    // A drag from the drawing released off it (over the side panel): the pan ends with the press,
+    // and the pointer moved over the drawing after it, no button held, moves nothing.
+    button(&mut page, "Fit");
+    still(&mut page);
+    let fitted = vb(&mut page);
+    let side = page.eval(r#"(() => { const r = document.querySelector(".side").getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()"#);
+    let side = (side[0].as_f64().unwrap(), side[1].as_f64().unwrap());
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": ground.0, "y": ground.1 }));
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mousePressed", "x": ground.0, "y": ground.1, "button": "left", "buttons": 1, "clickCount": 1 }));
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": ground.0 - 20.0, "y": ground.1 - 15.0, "button": "left", "buttons": 1 }));
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": side.0, "y": side.1, "button": "left", "buttons": 1 }));
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mouseReleased", "x": side.0, "y": side.1, "button": "left", "buttons": 0, "clickCount": 1 }));
+    still(&mut page);
+    let released = vb(&mut page);
+    assert!(!same_view(&released, &fitted), "the drag panned before it left the drawing: {released}");
+    for i in 1..=6 {
+        page.call("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": ground.0 - 10.0 * i as f64, "y": ground.1 - 6.0 * i as f64 }));
+    }
+    still(&mut page);
+    assert_eq!(vb(&mut page), released, "a drag released off the drawing: the pointer moved over it after, no button held, pans nothing");
     // And a still click on the background clears the selection, as before.
     button(&mut page, "Fit");
     still(&mut page);

@@ -65,6 +65,15 @@ async function run(name: string, sessions: SessionEntry[]) {
     }));
     const legend = h("div", { class: "legend" }, ...[["normal", "●", "normal"], ["near", "■", "near"], ["warn", "■", "warn"], ["alarm", "!", "alarm"], ["disabled", "▨", "disabled"], ["stale", "◌", "stale"]].map(([c, m, w]) => h("span", { class: `st-text-${c}` }, `${m} ${w}`)), h("span", { class: "sel" }, "◆ selected"));
     plantPane.append(layout.root, toggles, legend);
+    // The drawing's box clear of the layers above it and the legend below it at every window size,
+    // whatever lines they wrap to: the wrap's padding follows their heights (12 from the pane's
+    // edge, their height, 12 more).
+    const clear = () => {
+      layout!.root.style.paddingTop = `${toggles.offsetHeight + 24}px`;
+      layout!.root.style.paddingBottom = `${legend.offsetHeight + 24}px`;
+    };
+    new ResizeObserver(clear).observe(toggles);
+    new ResizeObserver(clear).observe(legend);
   } else {
     plantPane.append(h("p", { class: "muted pad" }, "This binding has no layout."));
   }
