@@ -12,3 +12,13 @@ threads-required = 'num-cpus'
 [[profile.default.overrides]]
 filter = 'test(a_stop_waits_for_a_dashboard_still_computed)'
 threads-required = 'num-cpus'
+
+# The tests that drive a headless browser run two at a time: on CI's runner (four cores) the whole
+# suite's browsers at once left one page unbooted for 20 s and one browser's port unwritten for
+# 30 s (CI red on b995622 and 9bca3b1), the load's doing, not the code's.
+[test-groups]
+browser = { max-threads = 2 }
+
+[[profile.default.overrides]]
+filter = 'package(veredas-supervisao) & (binary(dashboards) | binary(host) | binary(layout) | binary(tables) | binary(writes))'
+test-group = 'browser'
