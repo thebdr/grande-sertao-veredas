@@ -1242,6 +1242,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // logged there), never this one's.
     let mut page = Browser::watched(&format!("http://{addr}/s/hall/#tables"));
     let listed = page.wait_for(LISTED, Duration::from_secs(20));
+    page.eval(KEEP_ANSWERS);
     let (_, t) = get(addr, "/s/hall/portal/api/tables");
     let want: Vec<(Value, Value)> = t["tables"].as_array().unwrap().iter().map(|x| (x["name"].clone(), json!(format!("{} · {}", x["kind"].as_str().unwrap(), x["rows"])))).collect();
     let sorts_there = want.iter().find(|(n, _)| n == "sorts").unwrap().1.clone();
@@ -1278,6 +1279,19 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let names: Vec<String> = s["series"].as_array().unwrap().iter().map(|x| format!("{}/{}", x["source"].as_str().unwrap(), x["series"].as_str().unwrap())).collect();
     assert_eq!(listed, json!(names), "hall's series, as hall's portal lists them");
     page.eval(r#"document.querySelector('.list button[data-series="sorter/travel"]').click()"#);
+    // Every window the page asked answered and no other asked since (the view shown again asks
+    // the picked series' window, the click asks it again; the page draws the latest alone), so the
+    // dot read below is the latest window's, read against that window (CI red on f391436: the dot
+    // of the first window read against the second's, asked 1.2 s later).
+    let windows = |page: &mut Browser| page.requests().into_iter().filter(|(u, _)| u.contains("/portal/api/series/data?")).count();
+    loop {
+        let n = windows(&mut page);
+        page.wait_for(&format!("window.__answers.filter((a) => a.url.includes('/api/series/data')).length >= {n} || null"), Duration::from_secs(20));
+        std::thread::sleep(Duration::from_millis(500));
+        if windows(&mut page) == n {
+            break;
+        }
+    }
     let one = page.wait_for(
         &format!("(() => {{ {SHOWN_FN} const r = {}; if (r) r.shown = r.shown && shown(document.querySelector('.list-main svg.trend circle.point')); return r; }})()", r#"(() => { const p = document.querySelector(".list-main .pager [data-points]"); const dot = document.querySelector(".list-main svg.trend circle.point"); return p && dot ? { points: p.dataset.points, said: p.textContent, line: document.querySelectorAll(".list-main svg.trend path.line").length, cx: Number(dot.getAttribute("cx")), cy: Number(dot.getAttribute("cy")), shown: (() => { const c = getComputedStyle(dot), b = dot.getBoundingClientRect(); const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true }); ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillStyle = c.fill; ctx.clearRect(0, 0, 1, 1); ctx.fillRect(0, 0, 1, 1); const alpha = c.fill === "none" ? 0 : ctx.getImageData(0, 0, 1, 1).data[3] / 255; let o = 1; for (let e = dot; e; e = e.parentElement) { const s = getComputedStyle(e); o *= Number(s.opacity); if (s.display === "none") o = 0; } return b.width > 0 && b.height > 0 && c.visibility === "visible" && o > 0 && alpha * Number(c.fillOpacity) > 0 && document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2) === dot; })() } : null; })()"#),
         Duration::from_secs(20),
