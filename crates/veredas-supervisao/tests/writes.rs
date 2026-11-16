@@ -1220,6 +1220,38 @@ fn every_answer_portal_gives_a_write_is_said_as_it_means() {
 /// cannot tell a post that never left from an answer lost, so it never says such a press was not
 /// sent. And the object pressed, left and selected again while its post is out, says the answer
 /// when it comes.
+/// Before the page holds any status (the object feed refused by the browser), every action an object
+/// offers (outlet 3's two, read from the binding) shown off and gated, the switch said nothing of, and
+/// each pressed: nothing posted, nothing reaching either controller, though the project is armed.
+#[test]
+fn before_any_status_every_action_is_off_and_posts_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant_with(&dir.path().join("bench"), AUX);
+    let path = write_example(dir.path(), &with_aux(live_example(&bench, true), &bench));
+    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let addr = host.addr();
+    assert!(wait(Duration::from_secs(20), || { let s = get(addr, "/s/loop/objects.json").1; s["session"]["writes_armed"] == json!(true) && s["session"]["health"]["plc"]["state"] == json!("live") && s["session"]["health"]["aux"]["state"] == json!("live") }));
+    let (_, view) = get(addr, "/s/loop/binding");
+    let labels: Vec<String> = view["objects"].as_array().unwrap().iter().find(|o| o["id"] == "outlet-3").unwrap()["actions"].as_array().unwrap().iter().map(|a| a["label"].as_str().unwrap().to_string()).collect();
+    assert!(labels.len() >= 2, "{labels:?}");
+    let mut blind = Browser::watched_blocking(&format!("http://{addr}/s/loop/"), &["*/s/loop/objects"]);
+    blind.wait_for(r#"document.getElementById("outlet-3")?.classList.contains("sv-obj") ? true : null"#, Duration::from_secs(20));
+    blind.eval(r#"(() => { window.confirm = () => true; document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); return true; })()"#);
+    blind.wait_for(&format!("document.querySelectorAll('.side .actions button').length === {} || null", labels.len()), Duration::from_secs(20));
+    std::thread::sleep(Duration::from_millis(1500));
+    const EVERY: &str = r#"[...document.querySelectorAll(".side .actions button")].map((b) => [b.dataset.action, b.disabled, b.classList.contains("gated")])"#;
+    let want: Vec<serde_json::Value> = labels.iter().map(|l| json!([l, true, true])).collect();
+    assert_eq!(blind.eval(EVERY), json!(want), "before any status, every action off and gated, armed though the project is");
+    assert_eq!(blind.eval(r#"document.querySelector(".side .gate-note").textContent"#), json!(""), "the switch said nothing of");
+    blind.eval("document.querySelectorAll('.side .actions button').forEach((b) => b.click()); true");
+    std::thread::sleep(Duration::from_millis(1500));
+    let posted: Vec<(String, String)> = blind.posts().into_iter().filter(|(u, _)| u.contains("/api/opc/write")).collect();
+    assert_eq!(posted, Vec::<(String, String)>::new(), "a write posted before any status");
+    assert_eq!((release(&bench), hold(&bench)), ("0".to_string(), "0".to_string()), "nothing reached either controller");
+    drop(blind);
+    host.stop();
+}
+
 #[test]
 fn a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are() {
     let dir = tempfile::tempdir().unwrap();
@@ -1301,24 +1333,38 @@ fn a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are() {
     page.call("Fetch.disable", json!({}));
     // Every form an answer can come in, each said as it means, through a stand-in for the page's own
     // fetch of the write (nothing reaches the plant): every status a response may carry (200 to 599)
-    // in portal's refusal form, `{ error }`, said as no answer but under portal's own refusal codes
-    // (the page's list, held to portal's own elsewhere), where it is said as each means; each of
-    // portal's codes with a body of every other shape (none, another key, an error no string, a
-    // string, a list) said as no answer; a 200 saying `ok` as no boolean said as no answer, saying it
-    // as one said written or refused. A body a status may not carry (204, 205, 304) none at all.
+    // with every form of body (portal's refusal, `{ error }`; portal's answer, `{ ok }` true and
+    // false; another shape of JSON; a body that is no JSON, a gateway's page; and none), each said as
+    // no answer but in portal's own pairs: its refusal under its own refusal codes (the page's list,
+    // held to portal's own elsewhere), said as each means, and its answer under a 200, said written
+    // or refused. Then each of portal's codes with a body of every other shape (another key, an error
+    // no string, a string, a list, `null`) and a 200 saying `ok` as no boolean, said as no answer.
+    // A status that may carry no body (204, 205, 304) none at all.
     let api = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/src/api.ts")).unwrap();
     let codes: Vec<u16> = api.split_once("const PORTAL_REFUSALS = [").and_then(|(_, r)| r.split_once(']')).map(|(l, _)| l).unwrap().split(',').map(|c| c.trim().parse().unwrap()).collect();
     let none = |status: u16| format!("Release: no answer, the write may have reached the plant ({status}, ");
     let mut cases: Vec<(u16, Option<String>, String)> = Vec::new();
+    let forms: [(&str, Option<&str>); 6] = [
+        ("refusal", Some(r#"{"error":"probe"}"#)),
+        ("written", Some(r#"{"ok":true,"status":"Good"}"#)),
+        ("refused", Some(r#"{"ok":false,"status":"BadOutOfRange"}"#)),
+        ("another shape", Some(r#"{"message":"probe"}"#)),
+        ("no JSON", Some("<html><body>Bad Gateway</body></html>")),
+        ("none", None),
+    ];
     for status in 200..=599u16 {
-        let body = (![204, 205, 304].contains(&status)).then(|| r#"{"error":"probe"}"#.to_string());
-        let want = if !codes.contains(&status) {
-            none(status)
-        } else {
-            let said = match status { 503 => "not sent", 504 => "not confirmed", _ => "refused" };
-            format!("Release: {said}, {status}: probe")
-        };
-        cases.push((status, body, want));
+        for (form, body) in forms {
+            if [204, 205, 304].contains(&status) && body.is_some() {
+                continue;
+            }
+            let want = match form {
+                "refusal" if codes.contains(&status) => format!("Release: {}, {status}: probe", match status { 503 => "not sent", 504 => "not confirmed", _ => "refused" }),
+                "written" if status == 200 => "Release: written (Good)".to_string(),
+                "refused" if status == 200 => "Release: refused, BadOutOfRange".to_string(),
+                _ => none(status),
+            };
+            cases.push((status, body.map(String::from), want));
+        }
     }
     for status in &codes {
         for body in ["{}", r#"{"message":"probe"}"#, r#"{"error":1}"#, r#"{"error":null}"#, r#""probe""#, "[]", "null"] {
@@ -1328,8 +1374,6 @@ fn a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are() {
     for body in [r#"{"ok":"true"}"#, r#"{"ok":1}"#, r#"{"ok":null}"#, "{}", r#"{"status":"Good"}"#, r#""probe""#, "[]"] {
         cases.push((200, Some(body.to_string()), none(200)));
     }
-    cases.push((200, Some(r#"{"ok":true,"status":"Good"}"#.to_string()), "Release: written (Good)".to_string()));
-    cases.push((200, Some(r#"{"ok":false,"status":"BadOutOfRange"}"#.to_string()), "Release: refused, BadOutOfRange".to_string()));
     zero(&bench);
     let said = page.eval(&format!(
         r#"(async (cases) => {{
