@@ -1213,7 +1213,9 @@ its name and every longhand of it (the name, a hyphen and more), in a `style`, u
 prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`), a name with white space or a comment inside it declaring nothing; the attributes
 `transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), on the root the attributes
 `preserveAspectRatio` and `overflow` (the second in its `style` too, and every longhand of it), with
-which the drawing would cut what the page writes at its edge or reach past its frame, a custom
+which the drawing would cut what the page writes at its edge or reach past its frame, and on its root
+nothing but `width`, `height`, `viewBox`, `version` and `id` and Inkscape's own attributes (and the
+XML ones), any other (a `style`, a presentation attribute) the page's to set, a custom
 property (a `style` declaration whose name begins `--`, however CSS spells it) anywhere, a
 `direction` (an attribute or in a `style`) outside a text and its spans (`text`, `tspan`, `textPath`),
 both of which the page's reset leaves to inheritance (the state colours read custom properties),
@@ -1325,7 +1327,7 @@ fn hint(kind: &str) -> &'static str {
 /// object's element, inside it and beside it). Every list is held to the reference's own sentence.
 #[test]
 fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
-    use veredas_supervisao::svg::{ANIMATIONS, AROUND, DIRECTED, DRAWN, HOLDS, MOVING, MOVING_ATTRIBUTES, MOVING_FAMILIES, ROOT_FRAMED, VENDOR_PREFIXES, declared, moves_the_page, says_important};
+    use veredas_supervisao::svg::{ANIMATIONS, AROUND, DIRECTED, DRAWN, HOLDS, MOVING, MOVING_ATTRIBUTES, MOVING_FAMILIES, ROOT_ATTRIBUTES, ROOT_FRAMED, VENDOR_PREFIXES, declared, moves_the_page, says_important};
     // The lists are the reference's, each member named in its own sentence: the kinds an object is
     // shown on, what may stand around them and inside them, the animations, the properties and
     // attributes that move, time or unpin what the page writes.
@@ -1410,14 +1412,14 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
     // word, and one outside every object's element, loading. (XML keeps a tab, a line feed or a
     // carriage return written as a reference; form feed is no XML character.)
     let important = "object `infeed`: a `style` attribute on its element or inside it says `!important`, which would outrank the state's paint";
-    let spellings = ["fill: red ! IMPORTANT", "fill:red !&#9;important", "fill:red !&#10;important", "fill:red !&#13;important", "fill:red !/**/important", "fill:red !/* x */ important", "fill:red !\\important", "fill:red !\\69 mportant", "fill:red !impor\\tant", "fill:red!important;stroke:#000"];
+    let spellings = ["fill: red ! IMPORTANT", "fill:red !&#9;important", "fill:red !&#10;important", "fill:red !&#13;important", "fill:red !/**/important", "fill:red !/* x */ important", "fill:red !\\important", "fill:red !\\69 mportant", "fill:red !impor\\tant", "fill:red!important;stroke:#000", "font-family:'/*';fill:red !important;font-weight:'*/'", "fill:url(/*);fill:red !important;stroke:url(*/)", "fill:red !\\69&#13;&#10;mportant"];
     for s in spellings {
         assert_eq!(binding_refusal(&with_svg(INFEED, &format!("<rect id=\"infeed\" style=\"{s}\"/>"))), important, "{s}");
         for (open, close) in depths {
             assert_eq!(binding_refusal(&with_svg(INFEED, &format!("<g id=\"infeed\">{open}<rect style=\"{s}\"/>{close}</g>"))), important, "{s} {open}");
         }
     }
-    for s in ["fill: red; stroke: #000", "fill: red /* !important */", "fill: red !importantly", "fill: red ! impor tant", "fill: red !impor/**/tant"] {
+    for s in ["fill: red; stroke: #000", "fill: red /* !important */", "fill: red !importantly", "fill: red ! impor tant", "fill: red !impor/**/tant", "font-family: 'a !important'", "fill: url(#a!important)"] {
         assert!(outcome(&with_svg(INFEED, &format!("<rect id=\"infeed\" style=\"{s}\"/>"))).is_ok(), "{s}");
     }
     assert!(outcome(&with_svg(INFEED, &format!("{INFEED}<rect style=\"fill:#000 !important\"/>"))).is_ok());
@@ -1476,7 +1478,8 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
         let escaped = format!("\\{:x} {}", prop.chars().next().unwrap() as u32, &prop[1..]);
         // At every place: the root, a group around the object, the object's element, inside it and
         // beside it at every depth.
-        let styles = [format!("{prop}: x"), format!("fill: red; {prop}: x"), format!("{escaped}: x"), format!("/* note */ {}: x", prop.to_uppercase())].into_iter().chain(VENDOR_PREFIXES.iter().map(|v| format!("{v}{prop}: x")));
+        let crlf = format!("\\{:x}&#13;&#10;{}", prop.chars().next().unwrap() as u32, &prop[1..]);
+        let styles = [format!("{prop}: x"), format!("fill: red; {prop}: x"), format!("{escaped}: x"), format!("/* note */ {}: x", prop.to_uppercase()), format!("font-family:'/*'; {prop}: x; font-weight:'*/'"), format!("fill:url(/*); {prop}: x; stroke:url(*/)"), format!("{crlf}: x")].into_iter().chain(VENDOR_PREFIXES.iter().map(|v| format!("{v}{prop}: x")));
         for style in styles {
             for (place, el, ex) in places(&format!("style=\"{style}\"")) {
                 let got = binding_refusal(&ex);
@@ -1523,13 +1526,36 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
             assert!(got.ends_with(&format!("layout.svg holds a script link (`{shown}` on <{el}>): a layout is a drawing, with no script")), "{attr}, {place}: {got}");
         }
     }
-    // Near misses, at every place: a `style` of other properties, one whose value only names a
-    // moving one, a name split by a comment or white space (no declaration, as CSS reads it), and the
-    // element's own `transform` attribute (which drawing tools write everywhere).
-    for ok in ["style=\"display:inline; fill: red; stroke-width: 2\"", "style=\"font-family: transform\"", "style=\"trans/**/form: rotate(9deg)\"", "style=\"trans form: rotate(9deg)\"", "style=\"trans&#10;form: rotate(9deg)\"", "style=\"pointer/**/-events: none\"", "style=\"font-family: all\"", "datakey=\"A1\"", "data=\"A1\"", "transform=\"translate(10 0)\""] {
-        // (The root's own transform apart: refused, below.)
-        for (place, _, ex) in places(ok).into_iter().filter(|(p, _, _)| !(ok.starts_with("transform=") && p == "the root")) {
+    // Near misses, at every place but the root (whose own list, below, refuses each): a `style` of
+    // other properties, one whose value only names a moving one, a name split by a comment or white
+    // space (no declaration, as CSS reads it), one held in a string or a url, and the element's own
+    // `transform` attribute (which drawing tools write everywhere).
+    for ok in ["style=\"font-family:'transform: x; /*'; fill: red\"", "style=\"fill:url(transform:x;--near:y); stroke: red\"", "style=\"display:inline; fill: red; stroke-width: 2\"", "style=\"font-family: transform\"", "style=\"trans/**/form: rotate(9deg)\"", "style=\"trans form: rotate(9deg)\"", "style=\"trans&#10;form: rotate(9deg)\"", "style=\"pointer/**/-events: none\"", "style=\"font-family: all\"", "datakey=\"A1\"", "data=\"A1\"", "transform=\"translate(10 0)\""] {
+        for (place, _, ex) in places(ok).into_iter().filter(|(p, _, _)| p != "the root") {
             assert!(outcome(&ex).is_ok(), "{ok}, {place}: {:?}", outcome(&ex).err());
+        }
+    }
+    // The root holds what Inkscape writes there and nothing else (`ROOT_ATTRIBUTES`, the reference's
+    // list, with Inkscape's own attributes and the XML ones): those load (the Inkscape fixture's root
+    // writes them all); any other is refused naming it: a `style` placing its box over the page
+    // (fixed, the whole window) or hiding it, a presentation attribute hiding the drawing, a position,
+    // an attribute of another namespace, and every near miss above.
+    assert_eq!(named("on its root nothing but ", " and Inkscape"), ROOT_ATTRIBUTES);
+    let rooted = |what: &str| format!("layout.svg writes `{what}` on its root <svg>, which Inkscape writes none of there: the page sets the root's box and how it shows itself (Inkscape's root holds its size, its view, its version and its id, and Inkscape's own attributes)");
+    for (attr, name) in [("style=\"position:fixed;inset:0;z-index:1\"", "style"), ("style=\"display:none\"", "style"), ("style=\"margin:-60px\"", "style"), ("visibility=\"hidden\"", "visibility"), ("opacity=\"0\"", "opacity"), ("display=\"none\"", "display"), ("clip-path=\"url(#c)\"", "clip-path"), ("x=\"10\"", "x"), ("xmlns:o=\"urn:other\" o:y=\"1\"", "y"), ("style=\"display:inline; fill: red; stroke-width: 2\"", "style"), ("datakey=\"A1\"", "datakey")] {
+        let got = binding_refusal(&with_svg(ROOT, &ROOT.replacen("<svg ", &format!("<svg {attr} "), 1)));
+        assert!(got.ends_with(&rooted(name)), "{attr}: {got}");
+    }
+    for attr in ["width=\"400\" height=\"220\" version=\"1.1\" id=\"svg1\"", "xml:space=\"preserve\"", "xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" inkscape:label=\"Plant\"", "xmlns:sodipodi=\"http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd\" sodipodi:docname=\"loop.svg\""] {
+        let ex = with_svg(ROOT, &ROOT.replacen("<svg ", &format!("<svg {attr} "), 1));
+        assert!(outcome(&ex).is_ok(), "{attr}: {:?}", outcome(&ex).err());
+    }
+    // A script link in an attribute of each of the editor's own namespaces (`EDITOR`; read by nothing
+    // but this check, the reference's sentence), at every place.
+    for (ns, _) in veredas_supervisao::svg::EDITOR {
+        for (place, el, ex) in places(&format!("xmlns:ed=\"{ns}\" ed:x=\"javascript:alert(1)\"")) {
+            let got = binding_refusal(&ex);
+            assert!(got.ends_with(&format!("layout.svg holds a script link (`javascript:alert(1)` on <{el}>): a layout is a drawing, with no script")), "{ns}, {place}: {got}");
         }
     }
     // What the page's reset (`all: initial`) leaves to inheritance: a custom property, however CSS
@@ -1537,13 +1563,13 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
     // `direction`, as an attribute or in a `style` however spelled, at every place but a text and its
     // spans (`DIRECTED`, the reference's list), where it loads (on a text bound as an object too).
     assert_eq!(named("outside a text and its spans (", ")"), DIRECTED);
-    for style in ["--near: #30d158", "fill: red; --near: #30d158", "/* c */ --near : x", "\\2d\\2d near: x", "--NEAR: x"] {
+    for style in ["--near: #30d158", "fill: red; --near: #30d158", "/* c */ --near : x", "\\2d\\2d near: x", "--NEAR: x", "font-family:'/*'; --near: x; font-weight:'*/'", "fill:url(/*); --near: x; stroke:url(*/)", "\\2d&#13;&#10;-near: x"] {
         for (place, el, ex) in places(&format!("style=\"{style}\"")) {
             let got = binding_refusal(&ex);
             assert!(got.ends_with(&format!("layout.svg holds the custom property `--near` (on <{el}>), which the page's own colours would read: write the drawing's paint by its properties")), "{style}, {place}: {got}");
         }
     }
-    let directions: Vec<String> = ["direction=\"rtl\"", "style=\"direction: rtl\"", "style=\"fill: red; DIRECTION : rtl\"", "style=\"\\64 irection: rtl\""].into_iter().map(String::from).chain(VENDOR_PREFIXES.iter().map(|v| format!("style=\"{v}direction: rtl\""))).collect();
+    let directions: Vec<String> = ["direction=\"rtl\"", "style=\"direction: rtl\"", "style=\"fill: red; DIRECTION : rtl\"", "style=\"\\64 irection: rtl\"", "style=\"font-family:'/*'; direction: rtl; font-weight:'*/'\"", "style=\"fill:url(/*); direction: rtl; stroke:url(*/)\"", "style=\"\\64&#13;&#10;irection: rtl\""].into_iter().map(String::from).chain(VENDOR_PREFIXES.iter().map(|v| format!("style=\"{v}direction: rtl\""))).collect();
     for attr in &directions {
         for (place, el, ex) in places(attr) {
             let got = binding_refusal(&ex);
@@ -2912,10 +2938,10 @@ fn a_drawing_saved_as_inkscape_saves_it_loads_its_editor_dropped() {
     // on itself and in a hidden group, the objects shown. In a `style` however CSS spells it (any
     // case, a priority, a comment, an escape, and among other `display` declarations wherever it
     // stands: the reader fails closed on any `none`), and as an attribute (trimmed, any case).
-    let styles = ["display:none", "opacity:1;DISPLAY : None", "display:none !important", "display:none !important;display:inline", "display:none;display:bogus", "display:none;display:", "display:inline;display:none", "display:/* c */none", "display:\\6e one"];
+    let styles = ["display:none", "opacity:1;DISPLAY : None", "display:none !important", "display:none !important;display:inline", "display:none;display:bogus", "display:none;display:", "display:inline;display:none", "display:/* c */none", "display:\\6e one", "font-family:'/*';display:none;font-weight:'*/'", "fill:url(/*);display:none;stroke:url(*/)", "\\64&#13;&#10;isplay:none", "display:\\6e&#13;&#10;one"];
     // As an attribute read as CSS reads it, as a browser reads a presentation attribute: trimmed, in
     // any case, a comment before or after, an escape.
-    let attributes = ["display=\"none\"", "display=\" NONE \"", "display=\"/**/none\"", "display=\"none/* hidden */\"", "display=\"\\6e one\"", "display=\"n\\one\""];
+    let attributes = ["display=\"none\"", "display=\" NONE \"", "display=\"/**/none\"", "display=\"none/* hidden */\"", "display=\"\\6e one\"", "display=\"n\\one\"", "display=\"\\6e&#13;&#10;one\""];
     let outlet = "style=\"fill:#cccccc;stroke:#000000;stroke-width:0.264583\"\n         id=\"outlet-1\"";
     let loop_style = "stroke-opacity:1\"\n       d=\"M 80,40";
     let g1_open = "<g\n       id=\"g1\"\n       inkscape:label=\"Outlets\">";

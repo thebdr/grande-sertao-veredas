@@ -271,15 +271,53 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
             });
         }
     }
+    // The root holds what Inkscape writes on it and nothing else (Q25): its size, its view, its
+    // version and its id (`ROOT_ATTRIBUTES`), and the editor's own attributes and the XML ones. Any
+    // other is the page's to set: a `style` placing or sizing its box past its frame (over the page's
+    // own controls), a presentation attribute hiding the drawing, how it fits.
+    if let Some(a) = root.attributes().find(|a| match a.namespace() {
+        None => !ROOT_ATTRIBUTES.contains(&a.name()),
+        Some(ns) => ns != XML_NS && !EDITOR.iter().any(|(e, _)| *e == ns),
+    }) {
+        return Err(format!("{} writes `{}` on its root <svg>, which Inkscape writes none of there: the page sets the root's box and how it shows itself (Inkscape's root holds its size, its view, its version and its id, and Inkscape's own attributes)", path.display(), a.name()));
+    }
     Ok(Layout { file: path.to_path_buf(), text: text.to_string(), ids, placed })
 }
 
-/// A `style` attribute read as CSS reads it: its comments as white space, its escapes decoded (one
-/// to six hex digits and the white space that may end them, or any other character as itself),
-/// each character with whether an escape wrote it (an escaped `!`, `:`, `;` or space is a letter).
+/// The attributes of no namespace Inkscape writes on a drawing's root, the only ones it may hold.
+pub const ROOT_ATTRIBUTES: [&str; 5] = ["width", "height", "viewBox", "version", "id"];
+
+/// The XML namespace (`xml:space`, `xml:lang`), whose attributes a root may hold.
+pub const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
+
+/// A `style` attribute read as CSS reads it (CSS Syntax, the parts a declaration's name and its
+/// priority turn on): its line breaks first made one (section 3.3: a CR LF pair, a CR and a form feed each a
+/// line feed); its comments as white space; its escapes decoded (one to six hex digits and the white
+/// space that may end them, or any other character as itself); a string, quoted either way, and an
+/// unquoted `url(…)` read as text to their ends, a `/*`, a `;`, a `:` or a `!` inside them no syntax.
+/// Each character with whether it is text rather than syntax (an escaped `!`, `:`, `;` or space is a
+/// letter; so is every character of a string or a url).
 fn css_read(style: &str) -> Vec<(char, bool)> {
+    let style = style.replace("\r\n", "\n").replace(['\r', '\x0c'], "\n");
     let cs: Vec<char> = style.chars().collect();
     let mut out: Vec<(char, bool)> = Vec::new();
+    // An escape at `i` (its backslash): the character it writes pushed, the index past it returned.
+    let escape = |i: usize, out: &mut Vec<(char, bool)>| -> usize {
+        let hex: String = cs[i + 1..].iter().take(6).take_while(|c| c.is_ascii_hexdigit()).collect();
+        if !hex.is_empty() {
+            if let Some(c) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                out.push((c, true));
+            }
+            let past = i + 1 + hex.len();
+            if cs.get(past).is_some_and(|c| css_space(*c)) { past + 1 } else { past }
+        } else {
+            if let Some(c) = cs.get(i + 1).filter(|c| **c != '\n') {
+                out.push((*c, true));
+            }
+            i + 2
+        }
+    };
+    let ident = |c: &(char, bool)| c.1 || c.0.is_alphanumeric() || c.0 == '-' || c.0 == '_' || !c.0.is_ascii();
     let mut i = 0;
     while i < cs.len() {
         if cs[i] == '/' && cs.get(i + 1) == Some(&'*') {
@@ -292,22 +330,47 @@ fn css_read(style: &str) -> Vec<(char, bool)> {
             continue;
         }
         if cs[i] == '\\' {
-            let hex: String = cs[i + 1..].iter().take(6).take_while(|c| c.is_ascii_hexdigit()).collect();
-            if !hex.is_empty() {
-                if let Some(c) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
-                    out.push((c, true));
+            i = escape(i, &mut out);
+            continue;
+        }
+        if cs[i] == '"' || cs[i] == '\'' {
+            let q = cs[i];
+            out.push((q, true));
+            i += 1;
+            while i < cs.len() && cs[i] != q && cs[i] != '\n' {
+                if cs[i] == '\\' {
+                    i = if cs.get(i + 1) == Some(&'\n') { i + 2 } else { escape(i, &mut out) };
+                    continue;
                 }
-                i += 1 + hex.len();
-                if cs.get(i).is_some_and(|c| css_space(*c)) {
-                    i += 1;
-                }
-            } else {
-                if let Some(c) = cs.get(i + 1).filter(|c| **c != '\n') {
-                    out.push((*c, true));
-                }
-                i += 2;
+                out.push((cs[i], true));
+                i += 1;
+            }
+            if cs.get(i) == Some(&q) {
+                out.push((q, true));
+                i += 1;
             }
             continue;
+        }
+        // `url(` (the name in any case, escaped or not, standing alone) then no quote: a url token.
+        let n = out.len();
+        if cs[i] == '(' && n >= 3 && out[n - 3..].iter().map(|c| c.0.to_ascii_lowercase()).eq("url".chars()) && (n == 3 || !ident(&out[n - 4])) {
+            let mut j = i + 1;
+            while j < cs.len() && css_space(cs[j]) {
+                j += 1;
+            }
+            if cs.get(j) != Some(&'"') && cs.get(j) != Some(&'\'') {
+                out.push(('(', false));
+                i = j;
+                while i < cs.len() && cs[i] != ')' {
+                    if cs[i] == '\\' {
+                        i = escape(i, &mut out);
+                        continue;
+                    }
+                    out.push((cs[i], true));
+                    i += 1;
+                }
+                continue;
+            }
         }
         out.push((cs[i], false));
         i += 1;
@@ -322,8 +385,8 @@ fn css_space(c: char) -> bool {
 
 /// Whether a `style` attribute's declarations say `!important` as CSS reads them: a `!` written as
 /// itself, then any white space or comments, then the word `important` in any case, its letters
-/// written or escaped, the word ending there. (Inside a string it is no priority, and is refused
-/// all the same.)
+/// written or escaped, the word ending there. (Inside a string or a url it is no priority, as CSS
+/// reads it: text, not syntax.)
 pub fn says_important(style: &str) -> bool {
     let out = css_read(style);
     let letter = |(c, escaped): (char, bool)| escaped || c.is_alphanumeric() || c == '-' || c == '_' || !c.is_ascii();

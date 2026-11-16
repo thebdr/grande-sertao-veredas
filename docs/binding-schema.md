@@ -466,7 +466,9 @@ its name and every longhand of it (the name, a hyphen and more), in a `style`, u
 prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`), a name with white space or a comment inside it declaring nothing; the attributes
 `transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), on the root the attributes
 `preserveAspectRatio` and `overflow` (the second in its `style` too, and every longhand of it), with
-which the drawing would cut what the page writes at its edge or reach past its frame, a custom
+which the drawing would cut what the page writes at its edge or reach past its frame, and on its root
+nothing but `width`, `height`, `viewBox`, `version` and `id` and Inkscape's own attributes (and the
+XML ones), any other (a `style`, a presentation attribute) the page's to set, a custom
 property (a `style` declaration whose name begins `--`, however CSS spells it) anywhere, a
 `direction` (an attribute or in a `style`) outside a text and its spans (`text`, `tspan`, `textPath`),
 both of which the page's reset leaves to inheritance (the state colours read custom properties),
