@@ -2,7 +2,7 @@
 // `/s/<name>/portal/`. Nothing here reaches past that router.
 
 import { base, getJson, type SessionStatus } from "./api";
-import { type Pt, trend } from "./charts";
+import { finite, type Pt, trend } from "./charts";
 import { h, num } from "./dom";
 
 interface TableInfo {
@@ -186,9 +186,11 @@ export class Series {
     const q = new URLSearchParams({ source: x.source, series: x.series, from: String(from), to: String(now), points: "600" });
     const w = await getJson<{ points: Pt[]; total: number; downsampled: boolean }>(`${base(this.name)}/portal/api/series/data?${q}`);
     if (token !== this.asked) return;
+    // Portal's samples that are no finite number (written null), counted and left out of the chart.
+    const none = w.points.length - finite(w.points).length;
     this.draw(
       "chart",
-      h("div", { class: "pager" }, h("strong", {}, `${x.source} · ${x.series}`), h("span", { class: "mono muted", "data-points": `${w.points.length}/${w.total}` }, `last 60 min · ${w.points.length} of ${w.total} points${w.downsampled ? ", downsampled" : ""} · last ${x.last_value}`)),
+      h("div", { class: "pager" }, h("strong", {}, `${x.source} · ${x.series}`), h("span", { class: "mono muted", "data-points": `${w.points.length}/${w.total}` }, `last 60 min · ${w.points.length} of ${w.total} points${w.downsampled ? ", downsampled" : ""}${none ? ` · ${none} with no value, left out` : ""} · last ${x.last_value}`)),
       h("div", { class: "panel" }, trend(w.points, [], from, now, null, "")),
     );
   }

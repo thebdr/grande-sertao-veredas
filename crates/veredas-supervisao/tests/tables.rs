@@ -20,12 +20,15 @@ const VIEW: &str = "slows";
 
 /// Shown, as a person would see it: a box, visible, displayed through every ancestor, and painted
 /// with some alpha once every opacity is multiplied with its paint's (an SVG shape's fill or stroke
-/// and their opacities, the colour a text's glyphs are filled with and the stroke round them). A mask, a filter, a font or a cover that takes no pointer
-/// is not read (the clause states the limit).
+/// and their opacities, the colour a text's glyphs are filled with and the stroke round them), and
+/// by the browser's own reading (`checkVisibility`: its content skipped, `content-visibility`, an
+/// opacity, a visibility). A mask, a filter, a font or a cover that takes no pointer is not read (the
+/// clause states the limit).
 const SHOWN_FN: &str = r#"const shown = (el) => {
   if (!el) return false;
   const b = el.getBoundingClientRect();
   if (!(b.width > 0 || b.height > 0)) return false;
+  if (!el.checkVisibility({ contentVisibilityAuto: true, opacityProperty: true, visibilityProperty: true })) return false;
   const c = getComputedStyle(el);
   if (c.visibility !== "visible") return false;
   let o = 1;
@@ -43,28 +46,22 @@ const EVERY_MARK: &str = r#"[...document.querySelector("main.view").querySelecto
   .filter((el) => !shown(el))
   .map((el) => `${el.tagName}.${el.getAttribute("class")} ${JSON.stringify((el.textContent || "").slice(0, 40))}`)"#;
 
-/// Every mark of the view drawn as the page wrote it, by the browser's computed style: no text the
-/// stylesheet generates (before or after an element, a list item's marker) and none it draws
-/// otherwise than written (its case changed, its letters masked); no shape, group or chart moved by
-/// a transform, and the geometry CSS can set on a shape (a rect's, a circle's, an ellipse's, a
-/// path's) its attribute's. The offences, named.
-const DRAWN_AS_WRITTEN: &str = r#"(() => {
+/// Every mark of the view drawn as the page wrote it, by the browser's computed style: every text as
+/// written (`AS_WRITTEN_FN`, given as `asWritten`); no element of the view (HTML or SVG) moved by a
+/// transform or put on a motion path (`offset-path`); and the geometry CSS can set on a shape (a
+/// rect's, a circle's, an ellipse's, a path's) its attribute's. The offences, named.
+const DRAWN_AS_WRITTEN: &str = r#"((asWritten) => {
   const out = [];
   const at = (el) => `${el.tagName.toLowerCase()}.${el.getAttribute("class") ?? ""}`;
   for (const el of document.querySelector("main.view").querySelectorAll("*")) {
-    for (const pseudo of ["::before", "::after", "::marker"]) {
-      const g = getComputedStyle(el, pseudo).content;
-      if (g && g !== "none" && g !== "normal") out.push(`${at(el)}${pseudo}: text the stylesheet generates, ${g}`);
-    }
-    const c = getComputedStyle(el);
-    if (c.display.includes("list-item") && (c.listStyleType !== "none" || c.listStyleImage !== "none")) out.push(`${at(el)}: a list item's marker`);
-    if ([...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && (c.textTransform !== "none" || (c.webkitTextSecurity ?? "none") !== "none")) out.push(`${at(el)} ${JSON.stringify(el.textContent.slice(0, 30))}: drawn ${c.textTransform} ${c.webkitTextSecurity}`);
+    for (const said of asWritten(el)) out.push(`${at(el)} ${JSON.stringify(el.textContent.slice(0, 30))}: ${said}`);
+    const s = getComputedStyle(el);
+    if (["transform", "translate", "rotate", "scale"].some((k) => s[k] && s[k] !== "none") || (s.offsetPath ?? "none") !== "none") out.push(`${at(el)}: moved by a transform`);
   }
   const GEOMETRY = { rect: ["x", "y", "width", "height", "rx", "ry"], circle: ["cx", "cy", "r"], ellipse: ["cx", "cy", "rx", "ry"], path: ["d"] };
   const numbers = (s) => (String(s).match(/-?\d*\.?\d+(e[-+]?\d+)?/gi) || []).map(Number);
   for (const el of document.querySelectorAll("main.view svg, main.view svg *")) {
     const s = getComputedStyle(el);
-    if (["transform", "translate", "rotate", "scale"].some((k) => s[k] && s[k] !== "none")) out.push(`${at(el)}: moved by a transform`);
     for (const a of GEOMETRY[el.tagName.toLowerCase()] ?? []) {
       if (!el.hasAttribute(a)) continue;
       const want = numbers(el.getAttribute(a)), got = numbers(s[a]);
@@ -72,7 +69,89 @@ const DRAWN_AS_WRITTEN: &str = r#"(() => {
     }
   }
   return out.slice(0, 20);
+})"#;
+
+/// Every mark drawn where and in the order the page wrote it, read from the boxes the browser draws:
+/// a list's caption above its buttons and each button below the one before (portal's order); a
+/// table's heading above its rows and each row below the one before (newest first), each row's cells
+/// left to right as its headings; every label of a chart at the place its attributes write, by its
+/// anchor (its start, middle or end at its x, carried to the screen by the chart's own matrix) and
+/// on its baseline (its y in the lower part of its box); and the line drawn over the box its path
+/// writes. The offences, named.
+const DRAWN_PLACES: &str = r#"(() => {
+  const out = [];
+  const v = document.querySelector("main.view");
+  const box = (el) => el.getBoundingClientRect();
+  const below = (els, what) => { for (let i = 1; i < els.length; i++) if (box(els[i]).top < box(els[i - 1]).bottom - 0.5) out.push(`${what} ${i} drawn above the one before`); };
+  for (const l of v.querySelectorAll(".list")) below([...l.querySelectorAll(":scope > .caps, :scope > button")], "the list's mark");
+  for (const m of v.querySelectorAll(".list-main")) {
+    below([...m.querySelectorAll("thead tr, tbody tr")], "the table's row");
+    for (const tr of m.querySelectorAll("tr")) {
+      const c = [...tr.children];
+      for (let i = 1; i < c.length; i++) if (box(c[i]).left < box(c[i - 1]).right - 0.5) out.push(`a cell ${i} drawn left of the one before`);
+    }
+    for (const t of m.querySelectorAll("svg.trend text.axis")) {
+      const X = new DOMPoint(Number(t.getAttribute("x")), Number(t.getAttribute("y"))).matrixTransform(t.getScreenCTM());
+      const b = box(t), anchor = t.getAttribute("text-anchor") ?? "start";
+      const edge = anchor === "end" ? b.right : anchor === "middle" ? (b.left + b.right) / 2 : b.left;
+      if (Math.abs(edge - X.x) > 1.5) out.push(`the label ${JSON.stringify(t.textContent)} drawn with its ${anchor} at ${edge.toFixed(1)}, written at ${X.x.toFixed(1)}`);
+      if (!(b.height > 0 && X.y <= b.bottom + 0.5 && (X.y - b.top) / b.height > 0.55)) out.push(`the label ${JSON.stringify(t.textContent)} off its baseline: [${b.top.toFixed(1)}, ${b.bottom.toFixed(1)}] for ${X.y.toFixed(1)}`);
+    }
+    for (const p of m.querySelectorAll("svg.trend path.line")) {
+      const g = p.getBBox(), M = p.getScreenCTM();
+      const a = new DOMPoint(g.x, g.y).matrixTransform(M), z = new DOMPoint(g.x + g.width, g.y + g.height).matrixTransform(M), b = box(p);
+      if ([b.left - Math.min(a.x, z.x), b.top - Math.min(a.y, z.y), b.right - Math.max(a.x, z.x), b.bottom - Math.max(a.y, z.y)].some((d) => Math.abs(d) > 1)) out.push(`the line drawn at [${b.left.toFixed(1)}, ${b.top.toFixed(1)}, ${b.right.toFixed(1)}, ${b.bottom.toFixed(1)}], its path at [${a.x.toFixed(1)}, ${a.y.toFixed(1)}, ${z.x.toFixed(1)}, ${z.y.toFixed(1)}]`);
+    }
+  }
+  return out.slice(0, 20);
 })()"#;
+
+/// The marks a view holds, by the count the comparisons read them by: a list one caption and its
+/// buttons alone, each button two spans (its names, its kind and count); a pager one heading, one
+/// count (of rows or of points) and no button or two (a page's); one refusal and one prompt at
+/// most; each heading one span (its type), each row as many cells as there are headings; a trend
+/// nine labels (four values, five times). A mark beside them is one no comparison reads.
+const MARK_COUNTS: &str = r#"(() => {
+  const out = [];
+  const v = document.querySelector("main.view");
+  for (const l of v.querySelectorAll(".list")) {
+    const kids = [...l.children];
+    if (kids.filter((k) => k.matches(".caps")).length !== 1 || kids.some((k) => !k.matches(".caps, button"))) out.push(`a list holding ${kids.map((k) => k.tagName + "." + k.className).join(" ")}`);
+    for (const b of l.querySelectorAll(":scope > button")) if (b.children.length !== 2 || [...b.children].some((c) => c.tagName !== "SPAN")) out.push(`a list button holding ${b.children.length} marks: ${JSON.stringify(b.textContent)}`);
+  }
+  for (const m of v.querySelectorAll(".list-main")) {
+    for (const p of m.querySelectorAll(":scope > .pager")) {
+      const kids = [...p.children];
+      const strong = kids.filter((k) => k.tagName === "STRONG").length, said = kids.filter((k) => k.matches("[data-rows], [data-points]")).length, buttons = kids.filter((k) => k.tagName === "BUTTON").length;
+      if (strong !== 1 || said !== 1 || ![0, 2].includes(buttons) || kids.length !== strong + said + buttons) out.push(`a pager holding ${kids.map((k) => k.tagName).join(" ")}`);
+    }
+    for (const sel of ["p.error", "p.muted"]) { const n = m.querySelectorAll(`:scope > ${sel}`).length; if (n > 1) out.push(`${n} of ${sel}`); }
+    const ths = m.querySelectorAll("thead th");
+    for (const th of ths) if (th.children.length !== 1) out.push(`a heading holding ${th.children.length} marks: ${JSON.stringify(th.textContent)}`);
+    for (const tr of m.querySelectorAll("tbody tr")) if (tr.children.length !== ths.length) out.push(`a row of ${tr.children.length} cells under ${ths.length} headings`);
+    for (const svg of m.querySelectorAll("svg.trend")) { const n = svg.querySelectorAll("text.axis").length; if (n !== 9) out.push(`a trend of ${n} labels`); }
+  }
+  return out;
+})()"#;
+
+/// A number as the page writes it to one place (`num`: `toFixed`, a tie away from zero, its zeros
+/// trimmed, "-0" as "0").
+fn num1(v: f64) -> String {
+    let t = to_fixed(v, 1);
+    let t = t.trim_end_matches('0').trim_end_matches('.').to_string();
+    if t == "-0" { "0".to_string() } else { t }
+}
+
+/// A trend's left edge (`charts.ts`'s `leftFor`): room for its longest value label, ten units of
+/// mono type a glyph at most two thirds of that wide, then 6, never less than 44.
+fn left_for(labels: &[String]) -> f64 {
+    (12.0 + 6.6 * labels.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64).ceil().max(44.0)
+}
+
+/// The four value labels of a trend over the values' extent `[lo, hi]` (padded), bottom up.
+fn value_labels(lo: f64, hi: f64) -> Vec<String> {
+    (0..4).map(|i| num1(lo + (hi - lo) * i as f64 / 3.0)).collect()
+}
 
 /// Every place of a view whose words this test compares with portal's answer or with what it
 /// asked (the lists' captions and buttons, a page's heading, its count and its buttons, a table's
@@ -109,8 +188,10 @@ fn every_mark_shown(page: &mut Browser, when: &str) {
     READ_DRAWN.with(|r| r.borrow_mut().insert(drawn));
     let hidden = page.eval(&format!("(() => {{ {SHOWN_FN} return {EVERY_MARK}; }})()"));
     assert_eq!(hidden, json!([]), "{when}: a mark of the view not shown");
-    let restyled = page.eval(DRAWN_AS_WRITTEN);
+    let restyled = page.eval(&format!("(() => {{ {AS_WRITTEN_FN} return {DRAWN_AS_WRITTEN}(asWritten); }})()"));
     assert_eq!(restyled, json!([]), "{when}: words or shapes drawn otherwise than the page wrote them");
+    assert_eq!(page.eval(DRAWN_PLACES), json!([]), "{when}: marks drawn elsewhere or in another order than the page wrote them");
+    assert_eq!(page.eval(MARK_COUNTS), json!([]), "{when}: a view's marks other than the ones the comparisons read, by count");
     // And every mark with words of its own is one whose words this test reads: a mark added to a
     // view fails here until it is.
     let unread = page.eval(&format!(
@@ -213,8 +294,9 @@ fn param(url: &str, k: &str) -> Option<String> {
     url.split_once('?')?.1.split('&').find_map(|kv| kv.strip_prefix(&format!("{k}="))).map(unescape)
 }
 
-/// Where a trend's line differs from the window it draws (`charts.ts`: 600 by 200, the plot from x
-/// 44 to 590 and from y 178 up to 10, the values' extent padded by 8 % each way), point by point.
+/// Where a trend's line differs from the window it draws (`charts.ts`: 600 by 200, the plot from its
+/// left edge, `left_for` its value labels, to 590 and from y 178 up to 10, the values' extent padded
+/// by 8 % each way), point by point, of the finite points alone.
 fn misplaced(d: &str, points: &[(f64, f64)], from: i64, to: i64) -> Vec<String> {
     let drawn: Vec<(f64, f64)> = d
         .split(['M', 'L'])
@@ -230,12 +312,13 @@ fn misplaced(d: &str, points: &[(f64, f64)], from: i64, to: i64) -> Vec<String> 
     let (mut lo, mut hi) = points.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
     let pad = (hi - lo) * 0.08;
     (lo, hi) = (lo - pad, hi + pad);
+    let left = left_for(&value_labels(lo, hi));
     drawn
         .iter()
         .zip(points)
         .enumerate()
         .filter_map(|(i, ((dx, dy), (t, v)))| {
-            let x = 44.0 + (t - from as f64) / (to - from) as f64 * 546.0;
+            let x = left + (t - from as f64) / (to - from) as f64 * (590.0 - left);
             let y = if hi > lo { 178.0 + (v - lo) / (hi - lo) * (10.0 - 178.0) } else { 94.0 };
             ((dx - x).abs() > 0.051 || (dy - y).abs() > 0.051).then(|| format!("point {i} ({t}, {v}) drawn at ({dx}, {dy}), its place ({x:.2}, {y:.2})"))
         })
@@ -593,38 +676,33 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let (_, w) = get(addr, &format!("/s/loop/portal/api/series/data?source=sorter&series=travel&from={from}&to={to}&points=600"));
     let points: Vec<(f64, f64)> = w["points"].as_array().unwrap().iter().map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect();
     assert_eq!(drawn.len(), points.len());
-    // The trend's frame (charts.ts): 600 by 200, the plot from x 44 to 590 and from y 178 up to
-    // 10, the values' extent padded by 8 % each way.
+    // The trend's frame (charts.ts): 600 by 200, the plot from its left edge (`left_for`, room for its
+    // longest value label) to 590 and from y 178 up to 10, the values' extent padded by 8 % each way.
     let (mut lo, mut hi) = points.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
     let pad = (hi - lo) * 0.08;
     (lo, hi) = (lo - pad, hi + pad);
+    let left = left_for(&value_labels(lo, hi));
     for (i, ((dx, dy), (t, v))) in drawn.iter().zip(&points).enumerate() {
-        let x = 44.0 + (t - from as f64) / (to - from) as f64 * 546.0;
+        let x = left + (t - from as f64) / (to - from) as f64 * (590.0 - left);
         let y = 178.0 + (v - lo) / (hi - lo) * (10.0 - 178.0);
         assert!((dx - x).abs() <= 0.051 && (dy - y).abs() <= 0.051, "point {i} ({t}, {v}) drawn at ({dx}, {dy}), its place ({x:.2}, {y:.2})");
     }
-    // As the page writes it (`num`: `toFixed`, a tie away from zero, its zeros trimmed, "-0" as "0").
-    let num1 = |v: f64| {
-        let t = to_fixed(v, 1);
-        let t = t.trim_end_matches('0').trim_end_matches('.').to_string();
-        if t == "-0" { "0".to_string() } else { t }
-    };
     // The value axis: four labels at a third apart, each beside its value's height (its baseline
-    // 4 below it), from the bottom up.
+    // 4 below it), 6 left of the plot, from the bottom up.
     let near = |a: f64, b: f64| (a - b).abs() <= 0.051;
     let axis = chart["axis"].as_array().unwrap();
     assert_eq!(axis.len(), 9, "{axis:?}");
     for i in 0..4 {
         let v = lo + (hi - lo) * i as f64 / 3.0;
         let at = 178.0 + (v - lo) / (hi - lo) * (10.0 - 178.0) + 4.0;
-        assert!(axis[i][0] == json!(num1(v)) && near(axis[i][1].as_f64().unwrap(), 38.0) && near(axis[i][2].as_f64().unwrap(), at), "value label {i}: {} against {} at (38, {at:.2})", axis[i], num1(v));
+        assert!(axis[i][0] == json!(num1(v)) && near(axis[i][1].as_f64().unwrap(), left - 6.0) && near(axis[i][2].as_f64().unwrap(), at), "value label {i}: {} against {} at ({}, {at:.2})", axis[i], num1(v), left - 6.0);
     }
     // The time axis: five labels a quarter of the window apart, each the store's clock (hours and
     // minutes) at its place, the last "now".
     for i in 0..5 {
         let t = from as f64 + (to - from) as f64 * i as f64 / 4.0;
         let said = if i == 4 { "now".to_string() } else { chrono::DateTime::from_timestamp_millis(t as i64).unwrap().format("%H:%M").to_string() };
-        let x = 44.0 + (t - from as f64) / (to - from) as f64 * 546.0;
+        let x = left + (t - from as f64) / (to - from) as f64 * (590.0 - left);
         assert!(axis[4 + i][0] == json!(said) && near(axis[4 + i][1].as_f64().unwrap(), x) && near(axis[4 + i][2].as_f64().unwrap(), 194.0), "time label {i}: {} against {said} at ({x:.2}, 194)", axis[4 + i]);
     }
 
@@ -647,9 +725,13 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         let (from, to): (i64, i64) = (param(url, "from").unwrap().parse().unwrap(), param(url, "to").unwrap().parse().unwrap());
         assert_eq!(to - from, 3_600_000);
         let body = &chart["answer"]["body"];
-        let points: Vec<(f64, f64)> = body["points"].as_array().unwrap().iter().map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect();
+        // Portal's points; a sample that is no finite number portal writes as null, which the chart
+        // leaves out (`finite`) and the words count.
+        let all = body["points"].as_array().unwrap();
+        let points: Vec<(f64, f64)> = all.iter().filter_map(|p| p[1].as_f64().map(|v| (p[0].as_f64().unwrap(), v))).collect();
+        let none = all.len() - points.len();
         let (total, down) = (body["total"].as_u64().unwrap(), body["downsampled"] == json!(true));
-        let said = format!("last 60 min · {} of {total} points{} · last ", points.len(), if down { ", downsampled" } else { "" });
+        let said = format!("last 60 min · {} of {total} points{}{} · last ", all.len(), if down { ", downsampled" } else { "" }, if none > 0 { format!(" · {none} with no value, left out") } else { String::new() });
         assert!(chart["said"].as_str().unwrap().starts_with(&said), "{} against {said}", chart["said"]);
         assert_eq!(misplaced(chart["d"].as_str().unwrap(), &points, from, to), Vec::<String>::new(), "{source}/{series}");
         assert_eq!((chart["line_shown"].clone(), chart["axis_shown"].clone()), (json!(true), json!(true)), "{source}/{series}");
@@ -702,6 +784,37 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let refused = page.wait_for(r#"document.querySelector(".list-main > p.error")?.textContent ?? null"#, Duration::from_secs(20));
     assert_eq!(refused, json!("Error: probe refusal, late"), "the refusal's own words");
     every_mark_shown(&mut page, "a refused window");
+    // A series whose samples are, for a while, no finite number (the bench writes NaN, then an
+    // infinity; portal keeps them and writes each as null): the line and the axes of its finite
+    // points alone, none drawn at 0, and the words saying how many were left out.
+    let plc = bench.server("plc").unwrap();
+    plc.set("fill1", f64::NAN);
+    std::thread::sleep(Duration::from_millis(1500));
+    plc.set("fill1", f64::INFINITY);
+    std::thread::sleep(Duration::from_millis(1000));
+    plc.set("fill1", 65.0);
+    std::thread::sleep(Duration::from_millis(1000));
+    let chart = chart_of(&mut page, "plc/fill1");
+    let nulls = chart["answer"]["body"]["points"].as_array().unwrap().iter().filter(|p| p[1].is_null()).count();
+    assert!(nulls >= 2, "the window holds samples that are no number: {}", chart["answer"]["body"]);
+    drawn_as_answered(&chart, "plc", "fill1");
+    assert!(chart["said"].as_str().unwrap().contains(&format!(" · {nulls} with no value, left out · ")), "{}", chart["said"]);
+    every_mark_shown(&mut page, "a window with samples that are no number");
+    // And the page's other chart of portal's points, the side panel's sparkline: outlet 1 (fill1)
+    // selected on the layout, its last half hour drawn of its finite points alone.
+    page.eval("window.__answers = []; location.hash = 'layout'; true");
+    page.wait_for(r#"document.getElementById("outlet-1")?.classList.contains("sv-obj") ? true : null"#, Duration::from_secs(20));
+    page.eval(r#"document.getElementById("outlet-1").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+    let spark = page.wait_for(
+        r#"(() => { const a = window.__answers.filter((x) => x.url.includes("/api/series/data") && x.url.includes("series=fill1")); const p = document.querySelector(".side .spark-wrap svg path.line"); return a.length && p ? [a[a.length - 1].body.points, p.getAttribute("d")] : null; })()"#,
+        Duration::from_secs(20),
+    );
+    let all = spark[0].as_array().unwrap();
+    let finite = all.iter().filter(|p| p[1].is_number()).count();
+    let drawn = spark[1].as_str().unwrap().matches(['M', 'L']).count();
+    assert!(all.len() > finite && drawn == finite, "the sparkline of {finite} finite points of {} drew {drawn}", all.len());
+    page.eval(r#"location.hash = "series"; true"#);
+    page.wait_for(r#"document.querySelector(".list button[data-series]") ? true : null"#, Duration::from_secs(20));
     // The other order of arrival in the Series view, at its one token (the page's own source): an
     // earlier pick's window held a little, a later pick's listing held long, the earlier window (an
     // answer, then a refusal) coming while the later listing is out, never drawn: the chart as it

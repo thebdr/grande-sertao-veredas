@@ -22,8 +22,16 @@ function extent(vals: number[], pad = 0.08): [number, number] {
   return [lo - p, hi + p];
 }
 
+/// The points a chart draws: a sample that is no finite number (portal writes NaN and an infinity
+/// as null) is no value, left out of the line and of the axes, as the host leaves it out of a
+/// dashboard's (C-052).
+export function finite(pts: Pt[]): Pt[] {
+  return pts.filter((p) => typeof p[1] === "number" && Number.isFinite(p[1]));
+}
+
 /// A small line, no axes.
-export function sparkline(pts: Pt[], w = 220, hgt = 32, cls = "spark"): SVGElement {
+export function sparkline(raw: Pt[], w = 220, hgt = 32, cls = "spark"): SVGElement {
+  const pts = finite(raw);
   const svg = s("svg", { viewBox: `0 0 ${w} ${hgt}`, width: "100%", height: hgt, preserveAspectRatio: "none", class: cls });
   // A window of one point has no line to draw: the point itself, in the middle (its time the
   // window's only one, its value the middle of its padded extent), as the trend draws one.
@@ -44,7 +52,8 @@ export function leftFor(labels: string[]): number {
 }
 
 /// A trend over [from, to] with a dashed limit and its breaches as dots; hover shows a value.
-export function trend(pts: Pt[], breaches: Pt[], from: number, to: number, limit: number | null, unit: string): SVGElement {
+export function trend(raw: Pt[], breaches: Pt[], from: number, to: number, limit: number | null, unit: string): SVGElement {
+  const pts = finite(raw);
   const W = 600, H = 200, R = 10, T = 10, B = 22;
   const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", class: "chart trend" });
   const vals = pts.map((p) => p[1]).concat(limit === null ? [] : [limit]);

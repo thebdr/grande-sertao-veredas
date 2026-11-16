@@ -316,6 +316,56 @@ pub fn object<'a>(snapshot: &'a Value, id: &str) -> &'a Value {
     snapshot["objects"].as_array().unwrap().iter().find(|o| o["id"] == id).unwrap_or_else(|| panic!("no object {id} in {snapshot}"))
 }
 
+/// Text drawn as the page wrote it, by the browser's computed style (`asWritten(el)`: its offences,
+/// none for an element drawn as written): no text the stylesheet generates (before or after it, a
+/// list item's marker); and of an element with words of its own, none drawn otherwise than
+/// written: its case changed (by `text-transform` on it, on its first letter or on its first line),
+/// its glyphs chosen otherwise (every `font-variant…` property the browser lists, and
+/// `font-feature-settings`, on it and on its first letter and line, each `normal`), its letters
+/// masked, set vertically (`writing-mode`), or reordered (a direction other than left to right, an
+/// override of the text's own order, or any letter drawn left of the one before it on its line, read
+/// by a range per letter). A font's own glyphs for the same characters are the stated limit. Shared
+/// by the views' tests (the dashboards', the Tables view's).
+#[allow(dead_code)]
+pub const AS_WRITTEN_FN: &str = r#"const asWritten = (el) => {
+  const out = [];
+  for (const pseudo of ["::before", "::after", "::marker"]) {
+    const g = getComputedStyle(el, pseudo).content;
+    if (g && g !== "none" && g !== "normal") out.push(`${pseudo}: text the stylesheet generates, ${g}`);
+  }
+  const c = getComputedStyle(el);
+  if (c.display.includes("list-item") && (c.listStyleType !== "none" || c.listStyleImage !== "none")) out.push("a list item's marker");
+  const texts = [...el.childNodes].filter((n) => n.nodeType === 3 && n.textContent.trim() !== "");
+  if (!texts.length) return out;
+  for (const pseudo of ["", "::first-letter", "::first-line"]) {
+    const s = pseudo ? getComputedStyle(el, pseudo) : c;
+    if (s.textTransform !== "none") out.push(`its text${pseudo} drawn ${s.textTransform}`);
+    for (const k of [...s].filter((k) => k.startsWith("font-variant") || k === "font-feature-settings")) {
+      if (s.getPropertyValue(k) !== "normal") out.push(`its glyphs${pseudo} chosen by ${k}: ${s.getPropertyValue(k)}`);
+    }
+  }
+  if ((c.webkitTextSecurity ?? "none") !== "none") out.push(`its letters masked, ${c.webkitTextSecurity}`);
+  if (c.writingMode !== "horizontal-tb") out.push(`its letters set ${c.writingMode}`);
+  if (c.direction !== "ltr" || ["bidi-override", "isolate-override"].includes(c.unicodeBidi)) out.push(`its letters reordered, ${c.direction} ${c.unicodeBidi}`);
+  const r = document.createRange();
+  for (const n of texts) {
+    let prev = null;
+    for (let i = 0; i < n.length; i++) {
+      const code = n.data.charCodeAt(i);
+      const end = code >= 0xd800 && code <= 0xdbff ? i + 2 : i + 1;
+      if (/\s/.test(n.data[i])) { i = end - 1; continue; }
+      r.setStart(n, i);
+      r.setEnd(n, Math.min(end, n.length));
+      const b = r.getBoundingClientRect();
+      i = end - 1;
+      if (!(b.width > 0)) continue;
+      if (prev && Math.abs(b.top - prev.top) < 1 && b.left < prev.left - 0.5) { out.push(`its letters drawn out of their order at ${i}: ${JSON.stringify(n.data.slice(0, 30))}`); break; }
+      prev = b;
+    }
+  }
+  return out;
+};"#;
+
 /// The reference's drawing (its loop, infeed, outlets and parcels, by the same ids) as Inkscape 1.3
 /// saves a drawing (Q25 decided: layouts are drawn in Inkscape): the XML declaration and a comment,
 /// the SVG namespace both unprefixed and as `svg:`, Inkscape's own namespaces, its editor's state

@@ -781,7 +781,7 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     page.eval(KEEP_DASHBOARD);
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let (dash, drawn) = loop {
-        let v = page.eval(DRAWN_PANELS);
+        let v = page.eval(&drawn_panels());
         if !v.is_null() {
             let want = expected_panels(&v["dash"]);
             if close(&v["drawn"], &json!(want)) && v["columns"] == v["dash"]["columns"] && v["marks"] == json!([]) {
@@ -876,7 +876,7 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
         // refresh draws the dashboard again in its place.
         let mut last: Option<String> = None;
         loop {
-            let v = page.eval(DRAWN_PANELS);
+            let v = page.eval(&drawn_panels());
             if v["dash"]["name"] == json!(name) {
                 let want = expected_panels(&v["dash"]);
                 if close(&v["drawn"], &json!(want)) && v["columns"] == v["dash"]["columns"] && v["marks"] == json!([]) {
@@ -973,6 +973,11 @@ const KEEP_DASHBOARD: &str = r#"(() => {
 /// that scrolls, visible, displayed through every ancestor, and painted with some alpha once every
 /// opacity is multiplied with its paint's; a mask, a filter, a font or a cover that takes no
 /// pointer is not read, the limit the clause states).
+/// `DRAWN_PANELS` with the views' shared census of text as written in its place.
+fn drawn_panels() -> String {
+    DRAWN_PANELS.replacen("/*AS_WRITTEN*/", AS_WRITTEN_FN, 1)
+}
+
 const DRAWN_PANELS: &str = r#"(() => {
   const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true });
   const alpha = (p) => { if (!p || p === "none") return 0; if (p.startsWith("url(")) return 1; ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillStyle = p; ctx.fillRect(0, 0, 1, 1); return ctx.getImageData(0, 0, 1, 1).data[3] / 255; };
@@ -1012,6 +1017,7 @@ const DRAWN_PANELS: &str = r#"(() => {
     const b = el.getBoundingClientRect();
     if (el instanceof SVGElement ? !(b.width > 0 || b.height > 0) : !(b.width > 0 && b.height > 0)) return false;
     if (clipped(el, b)) return false;
+    if (!el.checkVisibility({ contentVisibilityAuto: true, opacityProperty: true, visibilityProperty: true })) return false;
     const c = getComputedStyle(el);
     if (c.visibility !== "visible") return false;
     let o = 1;
@@ -1036,30 +1042,8 @@ const DRAWN_PANELS: &str = r#"(() => {
   const txtAll = (el) => { if (!el) return null; for (const e of [el, ...el.querySelectorAll("*")]) see(e); return el.textContent; };
   const dot = (svg) => { const c = svg ? svg.querySelector("circle.point") : null; return c ? [num(c, "cx"), num(c, "cy")] : null; };
   const axis = (svg) => [...svg.querySelectorAll("text.axis")].map((t) => [txt(t), num(t, "x"), num(t, "y")]);
-  // Text drawn as the page wrote it, by the browser's computed style: no text the stylesheet
-  // generates (before or after an element, a list item's marker); none it draws otherwise than
-  // written: its case changed (by `text-transform`, on it or on its first letter or line, or by small
-  // capitals), its letters masked, or reordered (a direction other than left to right, an override
-  // of the text's own order). What else a stylesheet or a font can do to glyphs is the stated limit.
-  const asWritten = (el) => {
-    const out = [];
-    for (const pseudo of ["::before", "::after", "::marker"]) {
-      const g = getComputedStyle(el, pseudo).content;
-      if (g && g !== "none" && g !== "normal") out.push(`${pseudo}: text the stylesheet generates, ${g}`);
-    }
-    const c = getComputedStyle(el);
-    if (c.display.includes("list-item") && (c.listStyleType !== "none" || c.listStyleImage !== "none")) out.push("a list item's marker");
-    if (ownText(el)) {
-      for (const pseudo of ["", "::first-letter", "::first-line"]) {
-        const s = pseudo ? getComputedStyle(el, pseudo) : c;
-        if (s.textTransform !== "none") out.push(`its text${pseudo} drawn ${s.textTransform}`);
-      }
-      if (c.fontVariantCaps !== "normal") out.push(`its case drawn as ${c.fontVariantCaps}`);
-      if ((c.webkitTextSecurity ?? "none") !== "none") out.push(`its letters masked, ${c.webkitTextSecurity}`);
-      if (c.direction !== "ltr" || ["bidi-override", "isolate-override"].includes(c.unicodeBidi)) out.push(`its letters reordered, ${c.direction} ${c.unicodeBidi}`);
-    }
-    return out;
-  };
+  // Text drawn as the page wrote it: the views' shared census (`AS_WRITTEN_FN`).
+  /*AS_WRITTEN*/
   window.__shownMark = shown;
   window.__textAsWritten = asWritten;
   const d = window.__dash;
@@ -1179,7 +1163,7 @@ const DRAWN_PANELS: &str = r#"(() => {
   // its inline width or left, by its own percent of what holds it, and moved by no transform.
   const GEOMETRY = { rect: ["x", "y", "width", "height", "rx", "ry"], circle: ["cx", "cy", "r"], ellipse: ["cx", "cy", "rx", "ry"], path: ["d"] };
   const numbers = (s) => (String(s).match(/-?\d*\.?\d+(e[-+]?\d+)?/gi) || []).map(Number);
-  const moved = (e) => { const s = getComputedStyle(e); return ["transform", "translate", "rotate", "scale"].some((k) => s[k] && s[k] !== "none"); };
+  const moved = (e) => { const s = getComputedStyle(e); return ["transform", "translate", "rotate", "scale"].some((k) => s[k] && s[k] !== "none") || (s.offsetPath ?? "none") !== "none"; };
   for (const el of document.querySelectorAll(".dash-grid svg *, .dash-grid svg")) {
     const tag = el.tagName.toLowerCase();
     if (!SHAPES.has(tag) && tag !== "svg" && tag !== "g") continue;
