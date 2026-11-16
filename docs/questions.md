@@ -641,3 +641,17 @@ the names taken from the machine's own (its host name, `localhost`); (c) leave i
 (a firewall, a reverse proxy) and state it as a limit.
 
 **Taken meanwhile** (the most reversible): (c), nothing changed; C-049 states it as a limit.
+
+**Decided** 2026-11-16, by the operator: "Leave it for the security round", (c); and, asked when
+portal's own server (run without supervisão) is to be closed, "With the security round". Nothing is
+built now: the host's gap stays a limit C-049 states, portal on its own is an open item of the
+round, and portal's clauses stay verified. A firewall does not close it: the request comes from a
+browser that is allowed to reach the address. The round's open items are P-014, which names both
+ways the operator was asked about: a name re-pointed at the address (above); and a write a page of
+any site posts as `text/plain`, which a browser sends to another site without asking it first and
+which portal's write and send routes parse as JSON whatever its `Content-Type` (`read_body`,
+`crates/veredas-portal/src/serve.rs`), while writes are armed, the page unable to read the answer.
+The second is read from the code, not yet shown by a test. What the operator was told of browsers
+is Chrome's own account of local network access: from Chrome 142 a page from the public internet
+asks the user before it reaches a local or loopback address; a page on the plant's own network is
+not covered.
