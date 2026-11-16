@@ -90,9 +90,10 @@ fn every_mark_shown(page: &mut Browser, when: &str) {
 /// address; while `__fail` is set, the next page of rows refused as portal refuses one; and the
 /// next request whose address holds `__slow` answered a second and a half late (refused then, as
 /// portal refuses, while `__slowRefuse` is set), so an answer comes after a later request's;
-/// `__slowDone` set once the page has had it. And each `[part, ms]` of `__holds`: the next request
-/// whose address holds `part` answered `ms` late, its state in `__held[part]` ("sent", then "done"
-/// once the page has had it), so any order of arrival can be driven.
+/// `__slowDone` set once the page has had it. And each `[part, ms, refused]` of `__holds`: the next
+/// request whose address holds `part` answered `ms` late (refused then, as portal refuses, when
+/// `refused` is set), its state in `__held[part]` ("sent", then "done" once the page has had it), so
+/// any order of arrival, of an answer or a refusal, can be driven.
 const KEEP_ANSWERS: &str = r#"(() => {
   window.__answers = [];
   window.__holds = [];
@@ -111,7 +112,11 @@ const KEEP_ANSWERS: &str = r#"(() => {
     const hold = at >= 0 ? window.__holds.splice(at, 1)[0] : null;
     if (hold) window.__held[hold[0]] = "sent";
     const r = await orig(...a);
-    if (hold) { await new Promise((done) => setTimeout(done, hold[1])); setTimeout(() => { window.__held[hold[0]] = "done"; }, 300); }
+    if (hold) {
+      await new Promise((done) => setTimeout(done, hold[1]));
+      setTimeout(() => { window.__held[hold[0]] = "done"; }, 300);
+      if (hold[2]) return new Response(JSON.stringify({ error: "probe refusal, held" }), { status: 500, headers: { "content-type": "application/json" } });
+    }
     if (slow) { await new Promise((done) => setTimeout(done, 1500)); setTimeout(() => { window.__slowDone = true; }, 300); }
     if (refuse) return new Response(JSON.stringify({ error: "probe refusal, late" }), { status: 500, headers: { "content-type": "application/json" } });
     if (!url.includes("/api/table/data") && !url.includes("/api/series/data")) return r;
@@ -219,11 +224,13 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // And a view with `ts` alone for its time, so every way portal finds a table's time (its own
     // rule: `index_ms`, else `ts`, else none) is a table here; and one of numbers from 1e21 up,
     // where a script writes a number with an exponent (and one just below), each exact in binary,
-    // and numbers below 0 a script writes as it is (a fraction, a whole one, one that rounds to 0).
+    // and numbers below 0 a script writes as it is (a fraction, a whole one, one that rounds to 0),
+    // and ties at the third place, each way of 0, and a number just below one in binary (1.0005),
+    // which the page's `toFixed` rounds as its exact value says.
     // And two times portal pages by that the page must hold a window over: `gaps`, whose time is null
     // on some rows (outlet 2's), `halves`, whose time is no whole number, and `decis`, whose time is
     // a DECIMAL finer than the double portal writes it as (the newest row's time above that double).
-    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"gaps\"\nsql = \"SELECT CASE WHEN outlet = 2 THEN NULL ELSE index_ms END AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"halves\"\nsql = \"SELECT (index_ms + 0.5)::DOUBLE AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"decis\"\nsql = \"SELECT (index_ms + 0.0001)::DECIMAL(18,4) AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"{VIEW}\"\nsql = \"SELECT outlet, travel > 12 AS slow FROM sorts\"\n\n[[table]]\nname = \"stamped\"\nsql = \"SELECT ts, outlet FROM sorts\"\n\n[[table]]\nname = \"indexed\"\nsql = \"SELECT index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"shifted\"\nsql = \"SELECT index_ms, ts + INTERVAL 1 MINUTE AS ts, outlet FROM sorts\"\n\n[[table]]\nname = \"magnitudes\"\nsql = \"SELECT 9.5e20::DOUBLE AS below, 1e21::DOUBLE AS edge, -3.5e21::DOUBLE AS negative, 1e22::DOUBLE AS big, -0.25::DOUBLE AS quarter, -7.0::DOUBLE AS seven, -0.0001::DOUBLE AS tiny\"\n")).unwrap();
+    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"gaps\"\nsql = \"SELECT CASE WHEN outlet = 2 THEN NULL ELSE index_ms END AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"halves\"\nsql = \"SELECT (index_ms + 0.5)::DOUBLE AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"decis\"\nsql = \"SELECT (index_ms + 0.0001)::DECIMAL(18,4) AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"{VIEW}\"\nsql = \"SELECT outlet, travel > 12 AS slow FROM sorts\"\n\n[[table]]\nname = \"stamped\"\nsql = \"SELECT ts, outlet FROM sorts\"\n\n[[table]]\nname = \"indexed\"\nsql = \"SELECT index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"shifted\"\nsql = \"SELECT index_ms, ts + INTERVAL 1 MINUTE AS ts, outlet FROM sorts\"\n\n[[table]]\nname = \"magnitudes\"\nsql = \"SELECT 9.5e20::DOUBLE AS below, 1e21::DOUBLE AS edge, -3.5e21::DOUBLE AS negative, 1e22::DOUBLE AS big, -0.25::DOUBLE AS quarter, -7.0::DOUBLE AS seven, -0.0001::DOUBLE AS tiny, -0.0625::DOUBLE AS ntie, 0.0625::DOUBLE AS ptie, 1.0005::DOUBLE AS under, -2.0625::DOUBLE AS ntie2\"\n")).unwrap();
     let log = dir.path().join("loop/sorts.log");
     std::fs::write(&log, "").unwrap();
     let hall_log = dir.path().join("hall/sorts.log");
@@ -638,6 +645,15 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     page.wait_for(&format!("({HEAD}) === 'plc · speed' || null"), Duration::from_secs(20));
     page.wait_for("window.__slowDone || null", Duration::from_secs(10));
     assert_eq!(page.eval(HEAD), json!("plc · speed"), "the later pick stays, the earlier window come late");
+    // A refusal come late is no more drawn than a window: the first series' window held back and
+    // refused, another picked while it is out: the later stays charted, no refusal over it.
+    page.eval(&format!(r#"(() => {{ window.__slowSent = false; window.__slowRefuse = true; window.__slow = "series=travel&"; {}; return true; }})()"#, series_button("sorter/travel")));
+    page.wait_for("window.__slowSent || null", Duration::from_secs(10));
+    page.eval(&series_button("plc/speed"));
+    page.wait_for(&format!("({HEAD}) === 'plc · speed' || null"), Duration::from_secs(20));
+    page.wait_for("window.__slowDone || null", Duration::from_secs(10));
+    let after = page.eval(&format!(r#"[{HEAD}, document.querySelector(".list-main > p.error")?.textContent ?? null]"#));
+    assert_eq!(after, json!(["plc · speed", null]), "the later series stays, the earlier window's refusal come late drawn over it");
     // A series picked after its value moved since the listing shown was drawn: its heading says
     // the last value of the listing its own click fetched.
     bench.server("plc").unwrap().set("fill1", 65.0);
@@ -766,19 +782,20 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         ("a pick's page", "name=outlets&", r#"document.querySelector('.list button[data-table="outlets"]').click()"#, ("outlets", "1-4/4")),
         ("the view shown again", "/api/tables", r#"location.hash = "series"; setTimeout(() => { location.hash = "tables"; }, 200)"#, ("sorts", "101-110/110")),
     ];
-    for (later, part, act, (table, rows)) in laters {
+    for (refused, (later, part, act, (table, rows))) in [false, true].into_iter().flat_map(|r| laters.iter().map(move |l| (r, *l))) {
+        // Older's page answered, then refused: neither drawn once a later request is out.
         pick(&mut page, "sorts");
         page.wait_for(r#"(() => { const b = [...document.querySelectorAll(".list-main .pager button")].find((b) => b.textContent === "Older ›"); return b && !b.disabled && document.querySelector(".list-main .pager [data-rows]").dataset.rows === "1-50/110" ? true : null; })()"#, Duration::from_secs(20));
         click(&mut page, "Older ›");
         shown_at(&mut page, "51-100/110");
-        page.eval(&format!(r#"(() => {{ window.__held = {{}}; window.__holds = [["offset=100", 1500], [{}, 5000]]; return true; }})()"#, serde_json::to_string(part).unwrap()));
+        page.eval(&format!(r#"(() => {{ window.__held = {{}}; window.__holds = [["offset=100", 1500, {refused}], [{}, 5000]]; return true; }})()"#, serde_json::to_string(part).unwrap()));
         click(&mut page, "Older ›");
         page.wait_for(r#"window.__held["offset=100"] === "sent" || null"#, Duration::from_secs(10));
         page.eval(&format!("(() => {{ {act}; return true; }})()"));
         page.wait_for(&format!("window.__held[{}] === 'sent' || null", serde_json::to_string(part).unwrap()), Duration::from_secs(10));
         page.wait_for(r#"window.__held["offset=100"] === "done" || null"#, Duration::from_secs(10));
-        let mid = page.eval(&format!(r#"(() => {{ const s = {shown_js}; return [s ? s.table : null, s ? s.rows : null, [...document.querySelectorAll(".list-main .pager button")].map((b) => b.disabled), window.__held[{}]]; }})()"#, serde_json::to_string(part).unwrap()));
-        assert_eq!(mid, json!(["sorts", "51-100/110", [true, true], "sent"]), "{later} held back: the earlier Older's answer, come first, drawn over it");
+        let mid = page.eval(&format!(r#"(() => {{ const s = {shown_js}; return [s ? s.table : null, s ? s.rows : null, [...document.querySelectorAll(".list-main .pager button")].map((b) => b.disabled), window.__held[{}], document.querySelector(".list-main > p.error")?.textContent ?? null]; }})()"#, serde_json::to_string(part).unwrap()));
+        assert_eq!(mid, json!(["sorts", "51-100/110", [true, true], "sent", null]), "{later} held back: the earlier Older's {}, come first, drawn over it", if refused { "refusal" } else { "answer" });
         page.wait_for(&format!("window.__held[{}] === 'done' || null", serde_json::to_string(part).unwrap()), Duration::from_secs(15));
         let at = page.wait_for(&format!("(() => {{ const s = {shown_js}; return s && s.table === '{table}' && s.rows === '{rows}' ? s : null; }})()"), Duration::from_secs(20));
         assert_eq!((at["table"].clone(), at["rows"].clone()), (json!(table), json!(rows)), "{later}: its own page once it came");
@@ -1017,6 +1034,13 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let asked: Vec<String> = blind.eval("window.__answers.filter((a) => a.url.includes('/api/series/data')).map((a) => a.url)").as_array().unwrap().iter().map(|u| u.as_str().unwrap().to_string()).collect();
     assert_eq!(asked.len(), 1, "one window asked once the clock came: {asked:?}");
     assert_eq!((param(&asked[0], "from"), param(&asked[0], "to"), param(&asked[0], "points")), (Some((now - 3_600_000).to_string()), Some(now.to_string()), Some("600".to_string())), "{asked:?}");
+    // The status now held, another series picked: its window asked at once, an hour to that same
+    // now exactly (the page's other read of the session's now).
+    blind.eval("window.__answers = []; true");
+    blind.eval(r#"[...document.querySelectorAll(".list button[data-series]")].find((x) => x.dataset.series === "plc/speed").click()"#);
+    blind.wait_for("window.__answers.some((a) => a.url.includes('/api/series/data')) || null", Duration::from_secs(20));
+    let asked: Vec<String> = blind.eval("window.__answers.filter((a) => a.url.includes('/api/series/data')).map((a) => a.url)").as_array().unwrap().iter().map(|u| u.as_str().unwrap().to_string()).collect();
+    assert_eq!(asked.iter().map(|u| (param(u, "series"), param(u, "from"), param(u, "to"))).collect::<Vec<_>>(), [(Some("speed".to_string()), Some((now - 3_600_000).to_string()), Some(now.to_string()))], "a series picked with the status held asks to its now: {asked:?}");
     blind.eval("window.__answers = []; true");
     blind.eval(r#"location.hash = "tables""#);
     blind.wait_for(r#"document.querySelector('.list button[data-table="sorts"]') ? true : null"#, Duration::from_secs(20));
