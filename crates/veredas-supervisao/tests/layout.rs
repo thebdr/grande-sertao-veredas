@@ -1976,9 +1976,14 @@ fn portrait_groups() -> String {
     svg
 }
 
-/// Two views the same but for the page's measuring (each edge within a twentieth of a unit).
-fn same_view(a: &Value, b: &Value) -> bool {
-    (0..4).all(|i| (a[i].as_f64().unwrap() - b[i].as_f64().unwrap()).abs() < 0.05)
+/// Whether the view moved from `a` to `b` as a pan moves it: its size kept (within a hundredth of a
+/// unit) and its corner carried by half a unit or more (the least pan, 4 px, carries it by about
+/// three here). A click moves nothing; a refit while fitted (the frame grown by what the page writes
+/// at an edge, which a selection changes and which turns on the platform's text metrics) changes
+/// its size.
+fn panned_between(a: &Value, b: &Value) -> bool {
+    let d = |i: usize| (b[i].as_f64().unwrap() - a[i].as_f64().unwrap()).abs();
+    d(2) < 0.01 && d(3) < 0.01 && (d(0) >= 0.5 || d(1) >= 0.5)
 }
 
 /// The page's own controls (the layers, the legend, the zoom) stand clear of the drawing, and what it
@@ -2120,36 +2125,30 @@ fn the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan() {
     let panned = vb(&mut page);
     assert!(panned != fit && page.eval(SELECTED) == json!(["outlet-3"]), "a drag from the background pans the view and clears nothing: {panned} from {fit}, selected {}", page.eval(SELECTED));
     // The slop, 4 px from where the press went down (`SLOP`, the clause's): a press released under
-    // it across, down, aslant and back is a click (the view kept, outlet 3 picked, the background
-    // clicked first to clear it); one released past it each way a pan (the view moved, the infeed
-    // not picked).
+    // it across, down, aslant and back is a click (the view not panned, `panned_between`, outlet 3
+    // picked, the background clicked first to clear it); one released past it each way a pan (the
+    // view panned, the infeed not picked).
     for (dx, dy) in [(3.0, 0.0), (0.0, 3.0), (2.0, 2.0), (-3.0, 0.0), (0.0, -3.0)] {
         button(&mut page, "Fit");
         still(&mut page);
         gesture(&mut page, ground, (0.0, 0.0), 0);
         still(&mut page);
+        let before = vb(&mut page);
         let outlet3 = centre_of(&mut page, "outlet-3");
         gesture(&mut page, outlet3, (dx, dy), 1);
         still(&mut page);
-        // A click leaves the view fitted (Fit again moves it by no more than its measuring, a
-        // hundredth of a unit, where the least pan moves it by units); a pan does not.
         let now = vb(&mut page);
-        button(&mut page, "Fit");
-        still(&mut page);
-        let fitted = vb(&mut page);
-        assert!(same_view(&now, &fitted) && page.eval(SELECTED) == json!(["outlet-3"]), "a press released ({dx}, {dy}) from where it went down, under the slop: a click: {now} against {fitted}, selected {}", page.eval(SELECTED));
+        assert!(!panned_between(&before, &now) && page.eval(SELECTED) == json!(["outlet-3"]), "a press released ({dx}, {dy}) from where it went down, under the slop: a click: {now} from {before}, selected {}", page.eval(SELECTED));
     }
     for (dx, dy) in [(5.0, 0.0), (0.0, 5.0), (3.0, 3.0), (-5.0, 0.0), (0.0, -5.0)] {
         button(&mut page, "Fit");
         still(&mut page);
+        let fitted = vb(&mut page);
         let infeed = centre_of(&mut page, "infeed");
         gesture(&mut page, infeed, (dx, dy), 1);
         still(&mut page);
         let now = vb(&mut page);
-        button(&mut page, "Fit");
-        still(&mut page);
-        let fitted = vb(&mut page);
-        assert!(!same_view(&now, &fitted) && page.eval(SELECTED) == json!(["outlet-3"]), "a press released ({dx}, {dy}) away, past the slop: a pan, the infeed not picked: {now} from {fitted}, selected {}", page.eval(SELECTED));
+        assert!(panned_between(&fitted, &now) && page.eval(SELECTED) == json!(["outlet-3"]), "a press released ({dx}, {dy}) away, past the slop: a pan, the infeed not picked: {now} from {fitted}, selected {}", page.eval(SELECTED));
     }
     // A drag from the drawing released off it (over the side panel): the pan ends with the press,
     // and the pointer moved over the drawing after it, no button held, moves nothing.
@@ -2165,7 +2164,7 @@ fn the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan() {
     page.call("Input.dispatchMouseEvent", json!({ "type": "mouseReleased", "x": side.0, "y": side.1, "button": "left", "buttons": 0, "clickCount": 1 }));
     still(&mut page);
     let released = vb(&mut page);
-    assert!(!same_view(&released, &fitted), "the drag panned before it left the drawing: {released}");
+    assert!(panned_between(&fitted, &released), "the drag panned before it left the drawing: {released} from {fitted}");
     for i in 1..=6 {
         page.call("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": ground.0 - 10.0 * i as f64, "y": ground.1 - 6.0 * i as f64 }));
     }
