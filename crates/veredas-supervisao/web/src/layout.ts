@@ -494,16 +494,28 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     vb.w *= f; vb.h *= f; vb.x = cx - vb.w / 2; vb.y = cy - vb.h / 2;
     setVb();
   };
-  let drag: { x: number; y: number } | null = null;
-  svg.addEventListener("mousedown", (e) => { drag = { x: e.clientX, y: e.clientY }; });
-  window.addEventListener("mouseup", () => { drag = null; });
+  // A press becomes a pan only once the pointer has gone a few pixels from where it went down (a
+  // hand's jitter in a click is no pan), and the click that ends a pan picks nothing and clears
+  // nothing: stopped ahead of every handler, the elements' and the background's (the capture).
+  const SLOP = 4;
+  let drag: { x: number; y: number; from: { x: number; y: number }; panning: boolean } | null = null;
+  let panned = false;
+  svg.addEventListener("mousedown", (e) => { drag = { x: e.clientX, y: e.clientY, from: { x: e.clientX, y: e.clientY }, panning: false }; panned = false; });
+  window.addEventListener("mouseup", () => { if (drag?.panning) panned = true; drag = null; });
+  svg.addEventListener("click", (e) => { if (panned) { panned = false; e.stopImmediatePropagation(); } }, true);
   svg.addEventListener("mousemove", (e) => {
-    if (!drag || (e.clientX === drag.x && e.clientY === drag.y)) return;
+    if (!drag) return;
+    if (!drag.panning) {
+      if (Math.hypot(e.clientX - drag.from.x, e.clientY - drag.from.y) < SLOP) return;
+      drag.panning = true;
+    }
+    if (e.clientX === drag.x && e.clientY === drag.y) return;
     fitted = false;
     const r = svg.getBoundingClientRect();
     vb.x -= ((e.clientX - drag.x) / r.width) * vb.w;
     vb.y -= ((e.clientY - drag.y) / r.height) * vb.h;
-    drag = { x: e.clientX, y: e.clientY };
+    drag.x = e.clientX;
+    drag.y = e.clientY;
     setVb();
   });
   svg.addEventListener("wheel", (e) => { e.preventDefault(); zoom(e.deltaY > 0 ? 1.12 : 1 / 1.12); }, { passive: false });

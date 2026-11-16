@@ -1010,11 +1010,65 @@ const INSIDE_FRAME: &str = r#"((drawn) => {
     const r = t.getBoundingClientRect();
     return r.left < s.left - 0.5 || r.top < s.top - 0.5 || r.right > s.right + 0.5 || r.bottom > s.bottom + 0.5 ? [`${t.getAttribute("class")} ${t.dataset.for} "${t.textContent}": [${r.left.toFixed(1)}, ${r.top.toFixed(1)}, ${r.right.toFixed(1)}, ${r.bottom.toFixed(1)}] beyond [${s.left.toFixed(1)}, ${s.top.toFixed(1)}, ${s.right.toFixed(1)}, ${s.bottom.toFixed(1)}]`] : [];
   });
+  // Nor covered: at its middle and inside each corner, the topmost thing on the screen is the
+  // drawing (or what lies in it), never anything of the page's over it.
+  const covered = said.flatMap((t) => {
+    const r = t.getBoundingClientRect();
+    const over = [[(r.left + r.right) / 2, (r.top + r.bottom) / 2], [r.left + 1, r.top + 1], [r.right - 1, r.top + 1], [r.left + 1, r.bottom - 1], [r.right - 1, r.bottom - 1]].map(([px, py]) => document.elementFromPoint(px, py)).filter((e) => !e || !(e === svg || svg.contains(e)));
+    return over.length ? [`${t.getAttribute("class")} ${t.dataset.for} "${t.textContent}" covered by ${over.map((e) => (e ? `${e.tagName.toLowerCase()}.${e.className}` : "nothing")).join(", ")}`] : [];
+  });
   const v = svg.viewBox.baseVal;
   const [x, y, w, h] = drawn;
   const kept = v.x <= x + 1e-3 && v.y <= y + 1e-3 && v.x + v.width >= x + w - 1e-3 && v.y + v.height >= y + h - 1e-3;
-  return [cut, kept, said.length, [v.x, v.y, v.width, v.height]];
+  return [cut.concat(covered), kept, said.length, [v.x, v.y, v.width, v.height]];
 })"#;
+
+/// The page's own controls beside the drawing (every element of the plant's pane outside the svg
+/// and around none of it: the layers and their buttons, the legend and its words, the zoom and its
+/// buttons), each box clear of the svg's: none lies over the drawing. With the count read.
+const CONTROLS_CLEAR: &str = r#"(() => {
+  const svg = document.querySelector("svg.plant"), s = svg.getBoundingClientRect();
+  const mine = [...svg.closest(".plant-pane").querySelectorAll("*")].filter((e) => !(e instanceof SVGElement) && !e.contains(svg));
+  const over = mine.map((e) => [e, e.getBoundingClientRect()]).filter(([, r]) => r.width > 0 && r.height > 0 && r.left < s.right && r.right > s.left && r.top < s.bottom && r.bottom > s.top).map(([e, r]) => `${e.tagName.toLowerCase()}.${e.className} "${e.textContent.trim().slice(0, 20)}" [${r.left.toFixed(1)}, ${r.top.toFixed(1)}, ${r.right.toFixed(1)}, ${r.bottom.toFixed(1)}]`);
+  return [mine.length, over, [s.left, s.top, s.right, s.bottom]];
+})()"#;
+
+fn assert_controls_clear(page: &mut Browser, what: &str) {
+    let got = page.eval(CONTROLS_CLEAR);
+    assert!(got[0].as_u64().unwrap() >= 14 && got[1] == json!([]), "{what}: the page's own controls over the drawing: {got}");
+}
+
+/// Every marker placed by its element's box as the browser gives it now (no slide running): its
+/// box's centre, carried to the overlay through its own matrices, on its path's point at the place
+/// the feed gives, and its mark and word centred across it and below it; each within the hundredth
+/// the page writes a place to. With the count read.
+const MARKERS_NOW: &str = r#"(async () => {
+  const at = location.pathname.replace(/\/$/, "");
+  const [feed, binding] = await Promise.all([fetch(`${at}/objects.json`).then((r) => r.json()), fetch(`${at}/binding`).then((r) => r.json())]);
+  const svg = document.querySelector("svg.plant"), overlay = svg.querySelector(".sv-overlay"), O = overlay.getCTM().inverse();
+  const out = [];
+  let read = 0;
+  const off = (id, what, got, want) => { read++; if (Math.abs(got - want) > 0.011) out.push(`${id}: its ${what} at ${got}, the box says ${want}`); };
+  for (const def of binding.objects.filter((o) => o.show === "move")) {
+    const el = document.getElementById(def.id), o = feed.objects.find((x) => x.id === def.id);
+    if (!el || !o || o.place === null || o.items.length) continue;
+    const p = document.getElementById(def.path);
+    const pt = p.getPointAtLength(o.place * p.getTotalLength());
+    const q = new DOMPoint(pt.x, pt.y).matrixTransform(O.multiply(p.getCTM()));
+    const b = el.getBBox(), m = O.multiply(el.getCTM());
+    const pts = [[b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]].map(([x, y]) => new DOMPoint(x, y).matrixTransform(m));
+    const c = new DOMPoint(b.x + b.width / 2, b.y + b.height / 2).matrixTransform(m);
+    off(def.id, "centre across", c.x, q.x);
+    off(def.id, "centre down", c.y, q.y);
+    const t = overlay.querySelector(`.sv-tag[data-for="${def.id}"][data-key=""]`);
+    if (t && t.textContent) {
+      const fs = Number(t.getAttribute("font-size")) / 0.8;
+      off(def.id, "tag across", Number(t.getAttribute("x")), (Math.min(...pts.map((p) => p.x)) + Math.max(...pts.map((p) => p.x))) / 2);
+      off(def.id, "tag's height", Number(t.getAttribute("y")), Math.max(...pts.map((p) => p.y)) + fs * 0.9);
+    }
+  }
+  return [read, out.slice(0, 20)];
+})()"#;
 
 /// What the page placed for every bound element but a marker against the element's box as the
 /// browser gives it now, carried to the overlay (its corners through the matrices between them): the
@@ -1413,6 +1467,11 @@ fn the_page_draws_the_layout_from_the_feed() {
         page.eval(r#"new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))"#);
         let off = page.eval(PLACED_NOW);
         assert!(off[0].as_u64().unwrap() >= 20 && off[1] == json!([]), "after {step}: placed otherwise than by the box as it stands: {off}");
+        page.wait_for(r#"document.getAnimations().every((a) => a.playState !== "running") || null"#, Duration::from_secs(5));
+        // (The plant away, a marker keeps the place it had or has none; those with one are read.)
+        let moved = page.eval(MARKERS_NOW);
+        assert!(moved[1] == json!([]), "after {step}: a marker placed otherwise than by its box as it stands: {moved}");
+        assert_controls_clear(&mut page, &format!("after {step}"));
     }
     assert_inside_frame(&mut page, [0.0, 0.0, 400.0, 300.0], 20, "Fit after zooms");
     drop(page);
@@ -1845,6 +1904,176 @@ fn the_page_draws_a_drawing_saved_as_inkscape_saves_it() {
     );
     assert_eq!(spans, json!([true, 2, []]), "the bound text's spans at every depth painted as the text");
     assert_inside_frame(&mut page, [0.0, 0.0, 400.0, 220.0], 5, "a drawing saved as Inkscape saves it");
+    drop(page);
+    host.stop();
+}
+
+/// Inkscape's drawing on a portrait page (Inkscape's default is A4 portrait): an outlet at the page's
+/// top-left edge and one at its bottom-left edge; the infeed and an outlet each a group of a shape
+/// and its name, under it and beside it (as a tank grouped with its name is drawn), the name setting
+/// an edge of the group's box; one marker a group of a circle and its number beside it, the other a
+/// text: each box moving with the view's scale.
+fn portrait_groups() -> String {
+    let mut svg = INKSCAPE_LOOP.to_string();
+    let swaps: [(&str, &str); 6] = [
+        ("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 400 600\""),
+        (
+            "    <rect\n       style=\"fill:#cccccc;stroke:#000000;stroke-width:0.264583\"\n       id=\"infeed\"\n       width=\"40\"\n       height=\"28\"\n       x=\"20\"\n       y=\"96\"\n       ry=\"2\"\n       inkscape:label=\"Infeed\" />\n",
+            "    <g\n       id=\"infeed\"\n       inkscape:label=\"Infeed\">\n      <rect\n         style=\"fill:#cccccc;stroke:#000000;stroke-width:0.264583\"\n         id=\"rect-infeed\"\n         width=\"40\"\n         height=\"28\"\n         x=\"20\"\n         y=\"96\"\n         ry=\"2\" />\n      <text\n         xml:space=\"preserve\"\n         style=\"font-size:6px;font-family:sans-serif;fill:#26262a\"\n         x=\"20\"\n         y=\"131\"\n         id=\"text-infeed\"><tspan\n           sodipodi:role=\"line\"\n           id=\"tspan-infeed\"\n           x=\"20\"\n           y=\"131\">Infeed</tspan></text>\n    </g>\n",
+        ),
+        (
+            "      <rect\n         style=\"fill:#cccccc;stroke:#000000;stroke-width:0.264583\"\n         id=\"outlet-1\"\n         width=\"24\"\n         height=\"28\"\n         x=\"130\"\n         y=\"4\" />\n",
+            "      <g\n         id=\"outlet-1\"\n         inkscape:label=\"Outlet 1\">\n        <rect\n           style=\"fill:#cccccc;stroke:#000000;stroke-width:0.264583\"\n           id=\"rect-outlet-1\"\n           width=\"24\"\n           height=\"28\"\n           x=\"-10\"\n           y=\"4\" />\n        <text\n           xml:space=\"preserve\"\n           style=\"font-size:6px;font-family:sans-serif;fill:#26262a\"\n           x=\"16\"\n           y=\"20\"\n           id=\"text-outlet-1\"><tspan\n             sodipodi:role=\"line\"\n             id=\"tspan-outlet-1\"\n             x=\"16\"\n             y=\"20\">Outlet 1</tspan></text>\n      </g>\n",
+        ),
+        ("         id=\"outlet-3\"\n         width=\"24\"\n         height=\"28\"\n         x=\"250\"\n         y=\"4\" />", "         id=\"outlet-3\"\n         width=\"24\"\n         height=\"28\"\n         x=\"-10\"\n         y=\"576\" />"),
+        (
+            "    <circle\n       style=\"display:inline;fill:#ffffff;stroke:#000000;stroke-width:0.264583\"\n       id=\"parcel-1\"\n       cx=\"150\"\n       cy=\"60\"\n       r=\"5\" />\n",
+            "    <g\n       id=\"parcel-1\"\n       style=\"display:inline\">\n      <circle\n         style=\"fill:#ffffff;stroke:#000000;stroke-width:0.264583\"\n         id=\"circle-parcel-1\"\n         cx=\"150\"\n         cy=\"60\"\n         r=\"5\" />\n      <text\n         xml:space=\"preserve\"\n         style=\"font-size:5px;font-family:sans-serif;fill:#26262a\"\n         x=\"157\"\n         y=\"62\"\n         id=\"text-parcel-1\">1</text>\n    </g>\n",
+        ),
+        (
+            "    <circle\n       style=\"display:inline;fill:#ffffff;stroke:#000000;stroke-width:0.264583\"\n       id=\"parcel-2\"\n       cx=\"250\"\n       cy=\"160\"\n       r=\"5\" />\n",
+            "    <text\n       xml:space=\"preserve\"\n       style=\"display:inline;font-size:8px;font-family:sans-serif;fill:#ffffff\"\n       x=\"246\"\n       y=\"163\"\n       id=\"parcel-2\">P2</text>\n",
+        ),
+    ];
+    for (from, to) in swaps {
+        assert_eq!(svg.matches(from).count(), 1, "{from}");
+        svg = svg.replacen(from, to, 1);
+    }
+    svg
+}
+
+/// The page's own controls (the layers, the legend, the zoom) stand clear of the drawing, and what it
+/// writes at the drawing's edges is cut and covered by nothing, at every window size; everything it
+/// places by a box (a group holding a text, a marker a group with a text or a text) placed anew at
+/// every scale, the wheel's among them; the wheel's zoom the person's until Fit, as the buttons' is;
+/// and a click told from a pan. On Inkscape's drawing on a portrait page (`portrait_groups`).
+#[test]
+fn the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(&dir.path().join("bench"));
+    let mut ex = live_example(&bench, false);
+    ex.svg = portrait_groups();
+    let path = write_example(dir.path(), &ex);
+    std::fs::write(dir.path().join("loop/sorts.log"), "").unwrap();
+    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let addr = host.addr();
+    let mut page = Browser::open(&format!("http://{addr}/s/loop/"));
+    page.wait_for(
+        r#"(() => { const s = (id) => document.getElementById(id); return s("outlet-3")?.classList.contains("sv-state-warn") && s("parcel-1").getAttribute("transform") && s("parcel-2").getAttribute("transform") ? true : null; })()"#,
+        Duration::from_secs(20),
+    );
+    let still = |page: &mut Browser| {
+        page.eval(r#"new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))"#);
+        std::thread::sleep(Duration::from_millis(300));
+        page.wait_for(r#"document.getAnimations().every((a) => a.playState !== "running") || null"#, Duration::from_secs(5));
+    };
+    still(&mut page);
+    let vb = |page: &mut Browser| page.eval(r#"(() => { const v = document.querySelector("svg.plant").viewBox.baseVal; return [v.x, v.y, v.width, v.height]; })()"#);
+    let button = |page: &mut Browser, title: &str| {
+        page.eval(&format!(r#"(() => {{ document.querySelector('.zoom button[title="{title}"]').click(); return true; }})()"#));
+    };
+    let window = |page: &mut Browser, size: Option<(u32, u32)>| match size {
+        Some((w, h)) => page.call("Emulation.setDeviceMetricsOverride", json!({ "width": w, "height": h, "deviceScaleFactor": 1, "mobile": false })),
+        None => page.call("Emulation.clearDeviceMetricsOverride", json!({})),
+    };
+    let wheel = |page: &mut Browser, dy: f64| {
+        let c = page.eval(r#"(() => { const r = document.querySelector("svg.plant").getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()"#);
+        let (x, y) = (c[0].as_f64().unwrap(), c[1].as_f64().unwrap());
+        page.call("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": x, "y": y }));
+        page.call("Input.dispatchMouseEvent", json!({ "type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": dy }));
+    };
+
+    // At every window size: the controls clear of the drawing; nothing the page writes beside it, at
+    // its top-left and bottom-left edges among them, cut by its frame or covered.
+    for size in [None, Some((1100, 700)), Some((900, 640)), None] {
+        window(&mut page, size);
+        still(&mut page);
+        assert_controls_clear(&mut page, &format!("at {size:?}"));
+        assert_inside_frame(&mut page, [0.0, 0.0, 400.0, 600.0], 6, &format!("at {size:?}"));
+    }
+    // Placed by the element's box as it stands at every scale, whatever changed it (the fit, the
+    // buttons, the wheel, Fit, the window): a group holding a text, a marker a group with a text or
+    // a text, each box moving with the scale.
+    for (step, act) in [("the fit", ""), ("a zoom in", "Zoom in"), ("a wheel in", "wheel in"), ("a wheel out", "wheel out"), ("a zoom out", "Zoom out"), ("Fit", "Fit"), ("a smaller window", "resize"), ("the window back", "restore")] {
+        match act {
+            "" => {}
+            "wheel in" => wheel(&mut page, -100.0),
+            "wheel out" => wheel(&mut page, 100.0),
+            "resize" => {
+                window(&mut page, Some((900, 640)));
+            }
+            "restore" => {
+                window(&mut page, None);
+            }
+            title => button(&mut page, title),
+        }
+        still(&mut page);
+        let off = page.eval(PLACED_NOW);
+        assert!(off[0].as_u64().unwrap() >= 12 && off[1] == json!([]), "after {step}: placed otherwise than by the box as it stands: {off}");
+        let moved = page.eval(MARKERS_NOW);
+        assert!(moved[0].as_u64().unwrap() >= 4 && moved[1] == json!([]), "after {step}: a marker placed otherwise than by its box as it stands: {moved}");
+        assert_controls_clear(&mut page, &format!("after {step}"));
+    }
+    // The wheel's zoom, the person's until Fit, as the buttons' is: it narrows the view, which holds
+    // across a change of the feed and of the window.
+    button(&mut page, "Fit");
+    still(&mut page);
+    let fit = vb(&mut page);
+    wheel(&mut page, -100.0);
+    still(&mut page);
+    let wheeled = vb(&mut page);
+    assert!(wheeled[2].as_f64().unwrap() < fit[2].as_f64().unwrap() - 1.0, "the wheel narrows the view: {wheeled} from {fit}");
+    bench.server("plc").unwrap().set("fill1", 60.0);
+    page.wait_for(r#"(() => { const f = document.querySelector('.sv-fill[data-for="outlet-1"]'); const r = document.getElementById("outlet-1").getBBox(); return f && Number(f.getAttribute("height")) > 0.5 * r.height ? true : null; })()"#, Duration::from_secs(20));
+    still(&mut page);
+    assert_eq!(vb(&mut page), wheeled, "the wheel's zoom kept across a change of the feed");
+    window(&mut page, Some((1100, 700)));
+    still(&mut page);
+    assert_eq!(vb(&mut page), wheeled, "the wheel's zoom kept across a change of the window");
+    window(&mut page, None);
+    // A click told from a pan, through the browser's own pointer: a press released a pixel from where
+    // it went down is a click (the view kept, the object picked); a drag from an element, and from the
+    // drawing's background, pans the view and picks nothing and clears nothing.
+    button(&mut page, "Fit");
+    still(&mut page);
+    let fit = vb(&mut page);
+    let centre_of = |page: &mut Browser, id: &str| {
+        let r = page.eval(&format!(r#"(() => {{ const r = document.getElementById("{id}").getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }})()"#));
+        (r[0].as_f64().unwrap(), r[1].as_f64().unwrap())
+    };
+    let gesture = |page: &mut Browser, (x, y): (f64, f64), (dx, dy): (f64, f64), steps: u32| {
+        page.call("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": x, "y": y }));
+        page.call("Input.dispatchMouseEvent", json!({ "type": "mousePressed", "x": x, "y": y, "button": "left", "buttons": 1, "clickCount": 1 }));
+        for i in 1..=steps {
+            let f = i as f64 / steps as f64;
+            page.call("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": x + dx * f, "y": y + dy * f, "button": "left", "buttons": 1 }));
+        }
+        page.call("Input.dispatchMouseEvent", json!({ "type": "mouseReleased", "x": x + dx, "y": y + dy, "button": "left", "buttons": 0, "clickCount": 1 }));
+    };
+    let outlet3 = centre_of(&mut page, "outlet-3");
+    gesture(&mut page, outlet3, (1.0, 0.0), 1);
+    still(&mut page);
+    assert_eq!((vb(&mut page), page.eval(SELECTED)), (fit.clone(), json!(["outlet-3"])), "a click with a pixel's jitter: the view kept, outlet 3 picked");
+    let infeed = centre_of(&mut page, "infeed");
+    gesture(&mut page, infeed, (40.0, 30.0), 8);
+    still(&mut page);
+    let panned = vb(&mut page);
+    assert!(panned != fit && page.eval(SELECTED) == json!(["outlet-3"]), "a drag from the infeed pans the view and picks nothing: {panned} from {fit}, selected {}", page.eval(SELECTED));
+    button(&mut page, "Fit");
+    still(&mut page);
+    let ground = page.eval(r#"(() => { const svg = document.querySelector("svg.plant"), r = svg.getBoundingClientRect(); for (const [x, y] of [[r.right - 60, r.top + 60], [r.right - 60, r.bottom - 60], [r.left + r.width / 2, r.bottom - 60]]) if (document.elementFromPoint(x, y) === svg) return [x, y]; return null; })()"#);
+    assert!(!ground.is_null(), "no background to drag from");
+    let ground = (ground[0].as_f64().unwrap(), ground[1].as_f64().unwrap());
+    gesture(&mut page, ground, (-40.0, -30.0), 8);
+    still(&mut page);
+    let panned = vb(&mut page);
+    assert!(panned != fit && page.eval(SELECTED) == json!(["outlet-3"]), "a drag from the background pans the view and clears nothing: {panned} from {fit}, selected {}", page.eval(SELECTED));
+    // And a still click on the background clears the selection, as before.
+    button(&mut page, "Fit");
+    still(&mut page);
+    gesture(&mut page, ground, (0.0, 0.0), 0);
+    still(&mut page);
+    assert_eq!(page.eval(SELECTED), json!([]), "a click on the background clears the selection");
     drop(page);
     host.stop();
 }
