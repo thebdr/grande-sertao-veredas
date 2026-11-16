@@ -655,3 +655,20 @@ The second is read from the code, not yet shown by a test. What the operator was
 is Chrome's own account of local network access: from Chrome 142 a page from the public internet
 asks the user before it reaches a local or loopback address; a page on the plant's own network is
 not covered.
+
+## Q30 - Does a state paint the inside of a drawing's stroke-only shape?
+
+**Raised** 2026-11-16, by C-051's eighteenth refute round.
+
+A shape Inkscape saves with `fill:none` (a pipe drawn with the pen or the connector tool, an open
+bent path; a ring drawn as a stroke) and bound to an object: the page outranks the drawing's paint
+with the state's, `fill` among it, so in a warn state the pipe's bend is painted as a yellow
+triangle the drawing never had, and a ring's inside is painted whole. A level on such a shape rises
+inside the area its outline closes. (A shape with no area at all, a straight line, two walls Inkscape
+combined, an L of separate runs, is filled over its strokes alone, C-051.)
+
+The choices: (a) as now: the state's colour paints the area the outline closes, the clause and the
+reference saying so for open paths and rings; (b) a shape the drawing writes `fill:none` on takes
+its state on its stroke alone, and a level on it fills over its stroke (as a shape with no area does).
+
+**Taken meanwhile** (the most reversible): (a), nothing changed; C-051 states it as pending on Q30.

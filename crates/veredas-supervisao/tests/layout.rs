@@ -961,8 +961,9 @@ const GROWN_OBJECTS: &str = "\n[[object]]\nid = \"ring\"\nlabel = \"Ring\"\nvalu
 /// a shape, on a grid of 11 by 11 points over the fill's box, each the browser reads inside the
 /// shape's fill (by its own fill rule: a ring with a hole, `evenodd` and `nonzero`) taking the fill
 /// and each outside it not (a point a pixel off the outline, read either way, is no verdict); a
-/// group's fill, and a shape's with no area (a line), its box, unclipped. Each level's element
-/// named by its tag.
+/// group's fill, and a shape's with no area (a line), its box, never clipped by the element itself:
+/// with no area, held to its runs' bands (a clip of rects alone, `sv-runs-…`), a group with an
+/// area unclipped. Each level's element named by its tag.
 const LEVEL_OUTLINES: &str = r#"(() => [...document.querySelectorAll("svg.plant .sv-show-level[data-object]")].flatMap((el) => {
   const id = el.dataset.object;
   const kind = el instanceof SVGGeometryElement ? "shape" : el instanceof SVGTextElement ? "text" : "group";
@@ -971,7 +972,10 @@ const LEVEL_OUTLINES: &str = r#"(() => [...document.querySelectorAll("svg.plant 
   const out = [];
   const box = el.getBBox();
   if (kind === "group" || el instanceof SVGLineElement || box.width === 0 || box.height === 0) {
-    if (clip) out.push(`${id}: a ${kind === "group" ? "group's" : "line's"} fill clipped (${clip})`);
+    const ref = clip && clip.match(/url\(["']?#([^"')]+)/);
+    const cp = ref ? document.getElementById(ref[1]) : null;
+    const bandsOnly = !!cp && cp.id === `sv-runs-${id}` && cp.children.length > 0 && [...cp.children].every((c) => c.tagName === "rect");
+    if (el.classList.contains("sv-noarea") ? !bandsOnly : clip) out.push(`${id}: a ${kind === "group" ? "group's" : "line's"} fill clipped otherwise than by its runs (${clip})`);
     return out.concat([`tag ${el.tagName}`]);
   }
   const ref = clip && clip.match(/url\(["']?#([^"')]+)/);
@@ -1558,6 +1562,10 @@ const NO_AREA_SVG: &str = r##"  <line id="nv-vt-o" x1="0" y1="0" x2="0" y2="20" 
   <g id="nv-freed" style="fill:#cccccc;stroke:#000000;stroke-width:2;stroke-dasharray:4,1;fill-opacity:0.9;stroke-opacity:0.8"><rect x="320" y="318" width="40" height="16"/><g><g><text x="324" y="330" style="font-size:8px;stroke-width:0.5">O2</text></g></g></g>
   <rect id="nv-edge" x="370" y="372" width="24" height="28"/>
   <g id="nv-gpipe"><path d="M 120,336 H 150" style="fill:none;stroke:#3a3a40;stroke-width:6"/><path d="M 0,0 H 15" transform="translate(150 336) scale(2 1)" style="fill:none;stroke:#3a3a40;stroke-width:6"/></g>
+  <path id="nv-walls" d="m 20,268 h 50 m -50,12 h 50" style="fill:none;stroke:#3a3a40;stroke-width:4"/>
+  <path id="nv-ell" d="M 100,268 H 140 M 140,268 V 284" style="fill:none;stroke:#3a3a40;stroke-width:4"/>
+  <g id="nv-gell"><path d="M 180,268 H 220" style="fill:none;stroke:#3a3a40;stroke-width:4"/><path d="M 220,268 V 284" style="fill:none;stroke:#3a3a40;stroke-width:4"/></g>
+  <g id="nv-ghid"><path d="M 250,276 H 300" style="fill:none;stroke:#3a3a40;stroke-width:6"/><path d="M 330,276 H 380" style="display:none;fill:none;stroke:#3a3a40;stroke-width:6"/></g>
   <g id="nv-gpoly"><polyline points="20,328 50,328 80,328" style="fill:none;stroke:#3a3a40;stroke-width:6"/></g>
   <g id="nv-gpgon"><polygon points="20,340 50,340 80,340" style="fill:none;stroke:#3a3a40;stroke-width:6"/></g>
 </svg>"##;
@@ -1596,7 +1604,30 @@ fn no_area_levels() -> Vec<(String, f64)> {
 /// The groups with no area the test draws, each with the kind of shape it holds: every kind the
 /// reader lets an object draw on (`svg::DRAWN`, a group and a text apart) that can be drawn with no
 /// area (`NOTHING_DRAWN` the others, which draw nothing at all with none).
-const NO_AREA_GROUPS: [(&str, &str); 5] = [("nv-gline", "path"), ("nv-gvline", "line"), ("nv-gpipe", "path"), ("nv-gpoly", "polyline"), ("nv-gpgon", "polygon")];
+const NO_AREA_GROUPS: [(&str, &str); 6] = [("nv-gline", "path"), ("nv-gvline", "line"), ("nv-gpipe", "path"), ("nv-gpoly", "polyline"), ("nv-gpgon", "polygon"), ("nv-ghid", "path")];
+
+/// Elements with no area whose runs lie on more than one line, each with points of its own
+/// coordinates on its strokes (the fill over them at a full level) and off them (between two walls,
+/// inside an L's corner: no fill there): two walls Inkscape's Combine made one path, an L of two
+/// subpaths, a group of an L of two paths.
+const RUNS: [(&str, &[(f64, f64)], &[(f64, f64)]); 3] = [
+    ("nv-walls", &[(45.0, 268.0), (45.0, 280.0)], &[(45.0, 274.0)]),
+    ("nv-ell", &[(120.0, 268.0), (140.0, 276.0)], &[(120.0, 278.0)]),
+    ("nv-gell", &[(200.0, 268.0), (220.0, 276.0)], &[(200.0, 278.0)]),
+];
+
+/// Each of `RUNS` filled over its strokes and nowhere between them, by what the browser hits.
+const RUNS_FILLED: &str = r#"((cases) => cases.flatMap(([id, on, off]) => {
+  const el = document.getElementById(id), fill = document.querySelector(`.sv-fill[data-for="${id}"]`);
+  if (!el || !fill) return [`${id}: no element or no fill`];
+  const m = el.getScreenCTM();
+  const prev = fill.style.pointerEvents;
+  fill.style.pointerEvents = "visiblePainted";
+  const hit = ([x, y]) => { const q = new DOMPoint(x, y).matrixTransform(m); return document.elementFromPoint(q.x, q.y) === fill; };
+  const out = [...on.filter((p) => !hit(p)).map((p) => `${id}: no fill over its stroke at ${p}`), ...off.filter(hit).map((p) => `${id}: filled off its strokes at ${p}`)];
+  fill.style.pointerEvents = prev;
+  return out;
+}))"#;
 
 /// The kinds of shape that draw nothing with no area: a rect with no width or height, a circle or
 /// an ellipse with no radius.
@@ -1623,7 +1654,7 @@ const NO_AREA_FILLS: &str = r##"(() => {
     // ends say nothing of its reach).
     const box = (g) => { const b = g.getBBox(), m = g.getScreenCTM(); return [[b.x, b.y], [b.x + b.width, b.y + b.height], [b.x + b.width / 2, b.y + b.height / 2]].map(([x, y]) => new DOMPoint(x, y).matrixTransform(m)); };
     if (!(el instanceof SVGGeometryElement)) {
-      const shapes = [...el.querySelectorAll("path, line, polyline, polygon, rect")];
+      const shapes = [...el.querySelectorAll("path, line, polyline, polygon, rect")].filter((g) => g.checkVisibility());
       const ends = shapes.flatMap((g) => box(g).slice(0, 2));
       const r = fill.getBoundingClientRect();
       const xs = ends.map((p) => p.x), ys = ends.map((p) => p.y);
@@ -1632,6 +1663,7 @@ const NO_AREA_FILLS: &str = r##"(() => {
       // Across a flat group the fill spans every shape from end to end; up an upright one it rises
       // from the lowest shape's foot (to its level).
       if ((flatGroup && rlo > lo + 1) || rhi < hi - 1) out.push(`${id}: its fill [${rlo.toFixed(2)}, ${rhi.toFixed(2)}] short of its shapes [${lo.toFixed(2)}, ${hi.toFixed(2)}]`);
+      if (flatGroup && (rlo < lo - 1 || rhi > hi + 1)) out.push(`${id}: its fill [${rlo.toFixed(2)}, ${rhi.toFixed(2)}] past its shapes [${lo.toFixed(2)}, ${hi.toFixed(2)}]`);
       const prev = fill.style.pointerEvents;
       fill.style.pointerEvents = "visiblePainted";
       for (const [i, g] of shapes.entries()) {
@@ -1761,6 +1793,9 @@ fn a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_th
         let rule = ["near", "warn", "alarm"].iter().find(|s| id == format!("nv-{s}")).map(|s| format!("states = [ {{ above = 50, state = \"{s}\" }} ]\n")).unwrap_or_default();
         objects.push_str(&format!("\n[[object]]\nid = \"{id}\"\nvalue = {{ source = \"plc\", series = \"{series}\" }}\nshow = \"level\"\n{rule}"));
     }
+    for (id, _, _) in RUNS {
+        objects.push_str(&format!("\n[[object]]\nid = \"{id}\"\nvalue = {{ source = \"plc\", series = \"fill3\" }}\nshow = \"level\"\n"));
+    }
     objects.push_str("\n[[object]]\nid = \"nv-box\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"nv-grp\"\nvalue = { source = \"plc\", series = \"fill1\" }\n\n[[object]]\nid = \"nv-grp6\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"nv-grpd\"\nvalue = { source = \"plc\", series = \"fill1\" }\nshow = \"level\"\n\n[[object]]\nid = \"nv-edge\"\nvalue = { source = \"plc\", series = \"fill2\" }\nstates = [ { above = 50, state = \"warn\" } ]\n");
     ex.binding = ex.binding.replacen("\n[[dashboard]]", &format!("{objects}\n[[dashboard]]"), 1);
     let path = write_example(dir.path(), &ex);
@@ -1779,6 +1814,10 @@ fn a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_th
     let got = page.eval(&format!("(() => {{ const LEVELS = {};\nreturn {NO_AREA_FILLS};\n}})()", serde_json::to_string(&levels).unwrap()));
     assert_eq!(got[0], json!([]), "a level with no area not filled over its stroke as painted");
     assert_eq!(got[1], json!({ "own": [], "group": [] }), "every transform function and both orientations a level with no area stands under, at both places");
+    // Runs on more than one line, each filled over its strokes, never between them.
+    let runs: Vec<Value> = RUNS.iter().map(|(id, on, off)| json!([id, on.iter().map(|(x, y)| json!([x, y])).collect::<Vec<_>>(), off.iter().map(|(x, y)| json!([x, y])).collect::<Vec<_>>()])).collect();
+    page.wait_for(&format!(r#"{}.every((id) => {{ const f = document.querySelector(`.sv-fill[data-for="${{id}}"]`); return f && parseFloat(f.getAttribute("height")) > 0; }}) || null"#, serde_json::to_string(&RUNS.iter().map(|(id, _, _)| *id).collect::<Vec<_>>()).unwrap()), Duration::from_secs(20));
+    assert_eq!(page.eval(&format!("{RUNS_FILLED}({})", serde_json::to_string(&runs).unwrap())), json!([]), "runs on more than one line filled over their strokes alone");
     let root = page.eval(ROOT_PAINT);
     assert!(root[0].as_u64().unwrap() > 60 && root[1].as_u64().unwrap() >= 3, "what the page adds, and where: {root}");
     assert_eq!(root[2], json!([]), "paint the drawing writes reaching what the page adds");
@@ -1819,7 +1858,7 @@ fn a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_th
     assert_eq!(vb(&mut page), zoomed, "the zoom kept across a change of the feed");
     click(&mut page, "Fit");
     let fitted = vb(&mut page);
-    page.eval(r#"(() => { const s = document.querySelector("svg.plant"); const r = s.getBoundingClientRect(); const at = (x, y) => ({ clientX: r.left + x, clientY: r.top + y, bubbles: true }); s.dispatchEvent(new MouseEvent("mousedown", at(200, 200))); s.dispatchEvent(new MouseEvent("mousemove", at(260, 230))); window.dispatchEvent(new MouseEvent("mouseup", at(260, 230))); return true; })()"#);
+    page.eval(r#"(() => { const s = document.querySelector("svg.plant"); const r = s.getBoundingClientRect(); const at = (x, y) => ({ clientX: r.left + x, clientY: r.top + y, bubbles: true, button: 0, buttons: 1 }); s.dispatchEvent(new MouseEvent("mousedown", at(200, 200))); s.dispatchEvent(new MouseEvent("mousemove", at(260, 230))); window.dispatchEvent(new MouseEvent("mouseup", at(260, 230))); return true; })()"#);
     page.eval(frames);
     let panned = vb(&mut page);
     assert!(panned[0] != fitted[0] && panned[1] != fitted[1] && panned[2] == fitted[2], "a drag pans the view: {panned} from {fitted}");
@@ -2128,7 +2167,7 @@ fn the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan() {
     // it across, down, aslant and back is a click (the view not panned, `panned_between`, outlet 3
     // picked, the background clicked first to clear it); one released past it each way a pan (the
     // view panned, the infeed not picked).
-    for (dx, dy) in [(3.0, 0.0), (0.0, 3.0), (2.0, 2.0), (-3.0, 0.0), (0.0, -3.0)] {
+    for (dx, dy) in [(3.0, 0.0), (0.0, 3.0), (2.0, 2.0), (3.0, 2.0), (-3.0, 0.0), (0.0, -3.0)] {
         button(&mut page, "Fit");
         still(&mut page);
         gesture(&mut page, ground, (0.0, 0.0), 0);
@@ -2140,7 +2179,7 @@ fn the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan() {
         let now = vb(&mut page);
         assert!(!panned_between(&before, &now) && page.eval(SELECTED) == json!(["outlet-3"]), "a press released ({dx}, {dy}) from where it went down, under the slop: a click: {now} from {before}, selected {}", page.eval(SELECTED));
     }
-    for (dx, dy) in [(5.0, 0.0), (0.0, 5.0), (3.0, 3.0), (-5.0, 0.0), (0.0, -5.0)] {
+    for (dx, dy) in [(4.0, 0.0), (0.0, 4.0), (5.0, 0.0), (0.0, 5.0), (3.0, 3.0), (-5.0, 0.0), (0.0, -5.0)] {
         button(&mut page, "Fit");
         still(&mut page);
         let fitted = vb(&mut page);
@@ -2150,6 +2189,69 @@ fn the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan() {
         let now = vb(&mut page);
         assert!(panned_between(&fitted, &now) && page.eval(SELECTED) == json!(["outlet-3"]), "a press released ({dx}, {dy}) away, past the slop: a pan, the infeed not picked: {now} from {fitted}, selected {}", page.eval(SELECTED));
     }
+    // A click leaves the view fitted: outlet 3's word unsaid at Fit (the frame then without it), a click
+    // with a pixel's jitter, the word said again at the drawing's bottom edge: the frame grows over it,
+    // nothing cut.
+    bench.server("plc").unwrap().set("fill3", 50.0);
+    page.wait_for(r#"document.getElementById("outlet-3")?.classList.contains("sv-state-normal") || null"#, Duration::from_secs(20));
+    button(&mut page, "Fit");
+    still(&mut page);
+    let outlet3 = centre_of(&mut page, "outlet-3");
+    gesture(&mut page, outlet3, (2.0, 1.0), 1);
+    still(&mut page);
+    bench.server("plc").unwrap().set("fill3", 100.0);
+    page.wait_for(r#"document.getElementById("outlet-3")?.classList.contains("sv-state-warn") || null"#, Duration::from_secs(20));
+    still(&mut page);
+    assert_inside_frame(&mut page, [0.0, 0.0, 400.0, 600.0], 6, "a word said at the bottom edge after a click with a pixel's jitter, the view still fitted");
+    // A click picks what its press went down on: a release a pixel past an element's edge (the
+    // infeed's box, pressed a pixel inside its right edge), and a marker slid from under a still
+    // pointer between the press and the release (parcel 1 moved along the loop meanwhile).
+    button(&mut page, "Fit");
+    still(&mut page);
+    gesture(&mut page, ground, (0.0, 0.0), 0);
+    still(&mut page);
+    let edge = page.eval(r#"(() => { const r = document.getElementById("rect-infeed").getBoundingClientRect(); return [r.right - 1, r.top + r.height / 2]; })()"#);
+    let edge = (edge[0].as_f64().unwrap(), edge[1].as_f64().unwrap());
+    gesture(&mut page, edge, (2.0, 0.0), 1);
+    still(&mut page);
+    assert_eq!(page.eval(SELECTED), json!(["infeed"]), "a release a pixel past the infeed's edge picks it");
+    let parcel = centre_of(&mut page, "circle-parcel-1");
+    let before = page.eval(r#"document.getElementById("parcel-1").getAttribute("transform")"#);
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": parcel.0, "y": parcel.1 }));
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mousePressed", "x": parcel.0, "y": parcel.1, "button": "left", "buttons": 1, "clickCount": 1 }));
+    bench.server("plc").unwrap().set("p1", 60.0);
+    page.wait_for(&format!(r#"document.getElementById("parcel-1").getAttribute("transform") !== {before} || null"#), Duration::from_secs(20));
+    still(&mut page);
+    let gone = page.eval(&format!("(() => {{ const e = document.elementFromPoint({}, {}); return !document.getElementById('parcel-1').contains(e); }})()", parcel.0, parcel.1));
+    assert_eq!(gone, json!(true), "parcel 1 slid from under the pointer");
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mouseReleased", "x": parcel.0, "y": parcel.1, "button": "left", "buttons": 0, "clickCount": 1 }));
+    still(&mut page);
+    assert_eq!(page.eval(SELECTED), json!(["parcel-1"]), "a press on parcel 1 released where it was, the parcel slid away: parcel 1 picked");
+    // Only the primary button pans, and a pan ends with its button: a right drag pans nothing, and a
+    // left press whose release never comes (a native menu took it), moved on with no button held,
+    // pans nothing past what the held button panned.
+    button(&mut page, "Fit");
+    still(&mut page);
+    let fitted = vb(&mut page);
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": ground.0, "y": ground.1 }));
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mousePressed", "x": ground.0, "y": ground.1, "button": "right", "buttons": 2, "clickCount": 1 }));
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": ground.0 - 30.0, "y": ground.1 - 20.0, "button": "right", "buttons": 2 }));
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mouseReleased", "x": ground.0 - 30.0, "y": ground.1 - 20.0, "button": "right", "buttons": 0, "clickCount": 1 }));
+    still(&mut page);
+    assert_eq!(vb(&mut page), fitted, "a right drag pans nothing");
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": ground.0, "y": ground.1 }));
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mousePressed", "x": ground.0, "y": ground.1, "button": "left", "buttons": 1, "clickCount": 1 }));
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": ground.0 - 20.0, "y": ground.1 - 15.0, "button": "left", "buttons": 1 }));
+    still(&mut page);
+    let held = vb(&mut page);
+    assert!(panned_between(&fitted, &held), "the held button pans: {held} from {fitted}");
+    for i in 1..=5 {
+        page.call("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": ground.0 - 20.0 - 8.0 * i as f64, "y": ground.1 - 15.0 - 5.0 * i as f64, "buttons": 0 }));
+    }
+    still(&mut page);
+    assert_eq!(vb(&mut page), held, "moves with no button held, the release never come, pan nothing");
+    page.call("Input.dispatchMouseEvent", json!({ "type": "mouseReleased", "x": ground.0 - 60.0, "y": ground.1 - 40.0, "button": "left", "buttons": 0, "clickCount": 1 }));
+    still(&mut page);
     // A drag from the drawing released off it (over the side panel): the pan ends with the press,
     // and the pointer moved over the drawing after it, no button held, moves nothing.
     button(&mut page, "Fit");

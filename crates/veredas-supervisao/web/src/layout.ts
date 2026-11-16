@@ -28,10 +28,13 @@ interface Bound {
   fillBox: Box;
   /// The element's box in the overlay's frame, as it stands.
   ob: Box;
-  /// For an element with no area: each shape that draws it (the element, or a group's shapes), its
-  /// box in the overlay's frame, the matrix from it to the overlay and the way it runs, in its own
-  /// coordinates.
-  noArea?: { el: SVGGraphicsElement; ob: Box; m: DOMMatrix; dir: { x: number; y: number } | null }[];
+  /// For an element with no area: each straight run that draws it (a line, a straight subpath of a
+  /// path, a straight polyline or polygon, of the element or of a group's shapes), its box in its
+  /// shape's own coordinates and in the overlay's frame, the matrix from its shape to the overlay and
+  /// the way it runs, in its own coordinates.
+  noArea?: { el: SVGGraphicsElement; box: Box; ob: Box; m: DOMMatrix; dir: { x: number; y: number } | null }[];
+  /// The level's fill held to the bands of its runs' strokes (an element with no area).
+  runsClip?: SVGClipPathElement;
   tag: SVGTextElement;
   label: SVGTextElement;
   fill?: SVGRectElement;
@@ -57,7 +60,7 @@ export interface LayoutView {
 /// An element's box in another element's coordinates: its corners mapped through every transform
 /// between them, as the box around them. Drawn there, a tag, a label or a fill follows a moved,
 /// scaled or grouped element.
-function boxIn(target: SVGGraphicsElement, el: SVGGraphicsElement, box: DOMRect): Box {
+function boxIn(target: SVGGraphicsElement, el: SVGGraphicsElement, box: Box): Box {
   const t = target.getCTM();
   const e = el.getCTM();
   if (!t || !e) return box;
@@ -73,26 +76,97 @@ function boxIn(target: SVGGraphicsElement, el: SVGGraphicsElement, box: DOMRect)
 /// The paint the page outranks on a bound element (and pins on a group's text, as drawn).
 const PAINT = ["fill", "stroke", "stroke-width", "stroke-dasharray", "fill-opacity", "stroke-opacity"];
 
-/// Whether an element draws no area, and the way it runs in its own coordinates: a line; any element
-/// with no width or no height (a shape, or a group of such shapes); or a shape every point of which
-/// lies on one straight line (a straight path, polyline or polygon, slanted or not: a polyline's and
-/// a polygon's own points, and 65 points along any shape), its way from its start to its farthest
-/// point. Null for an element with an area.
-function noAreaOf(el: SVGGraphicsElement, box: DOMRect): { dir: { x: number; y: number } | null } | null {
-  if (el instanceof SVGLineElement) return { dir: { x: el.x2.baseVal.value - el.x1.baseVal.value, y: el.y2.baseVal.value - el.y1.baseVal.value } };
-  if (box.width === 0) return { dir: { x: 0, y: 1 } };
-  if (box.height === 0) return { dir: { x: 1, y: 0 } };
-  if (!(el instanceof SVGGeometryElement)) return null;
-  const pts: { x: number; y: number }[] = [];
-  if (el instanceof SVGPolylineElement || el instanceof SVGPolygonElement) for (let i = 0; i < el.points.numberOfItems; i++) pts.push(el.points.getItem(i));
-  const len = el.getTotalLength();
-  for (let k = 0; k <= 64; k++) pts.push(el.getPointAtLength((len * k) / 64));
+type Pt = { x: number; y: number };
+type Run = { box: Box; dir: Pt | null };
+
+/// One straight run of points, its box and its way from its first point to its farthest (none for a
+/// run of one point); null where the points do not lie on one straight line.
+function straight(pts: Pt[]): Run | null {
   const a = pts[0];
   const far = pts.reduce((f, p) => (Math.hypot(p.x - a.x, p.y - a.y) > Math.hypot(f.x - a.x, f.y - a.y) ? p : f), a);
   const dx = far.x - a.x, dy = far.y - a.y, n = Math.hypot(dx, dy);
-  if (!n) return { dir: null };
+  const x = Math.min(...pts.map((p) => p.x)), y = Math.min(...pts.map((p) => p.y));
+  const box = { x, y, width: Math.max(...pts.map((p) => p.x)) - x, height: Math.max(...pts.map((p) => p.y)) - y };
+  if (!n) return { box, dir: null };
   const off = Math.max(...pts.map((p) => Math.abs((p.x - a.x) * dy - (p.y - a.y) * dx) / n));
-  return off <= n * 1e-6 + 1e-6 ? { dir: { x: dx, y: dy } } : null;
+  return off <= n * 1e-6 + 1e-6 ? { box, dir: { x: dx, y: dy } } : null;
+}
+
+/// A path's subpaths as the points that make each (every end and control point, absolute), from its
+/// data; null where a subpath holds an arc (no run of its points says it is straight).
+function subpaths(d: string): Pt[][] | null {
+  const toks = d.match(/[MmLlHhVvCcSsQqTtAaZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) ?? [];
+  const out: Pt[][] = [];
+  let cur: Pt[] = [];
+  let x = 0, y = 0, sx = 0, sy = 0, cmd = "", i = 0;
+  const num = () => Number(toks[i++]);
+  const put = (px: number, py: number) => { x = px; y = py; cur.push({ x, y }); };
+  while (i < toks.length) {
+    if (/[A-Za-z]/.test(toks[i])) cmd = toks[i++];
+    else if (!cmd) return null;
+    const rel = cmd === cmd.toLowerCase();
+    const ox = rel ? x : 0, oy = rel ? y : 0;
+    switch (cmd.toUpperCase()) {
+      case "M": {
+        if (cur.length) out.push(cur);
+        cur = [];
+        put(ox + num(), oy + num());
+        sx = x; sy = y;
+        cmd = rel ? "l" : "L";
+        break;
+      }
+      case "L": case "T": put(ox + num(), oy + num()); break;
+      case "H": put(ox + num(), y); break;
+      case "V": put(x, oy + num()); break;
+      case "C": { const p = [num(), num(), num(), num(), num(), num()]; cur.push({ x: ox + p[0], y: oy + p[1] }, { x: ox + p[2], y: oy + p[3] }); put(ox + p[4], oy + p[5]); break; }
+      case "S": case "Q": { const p = [num(), num(), num(), num()]; cur.push({ x: ox + p[0], y: oy + p[1] }); put(ox + p[2], oy + p[3]); break; }
+      case "Z": put(sx, sy); cmd = ""; break;
+      default: return null;
+    }
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+
+/// The straight runs an element draws with no area, each its box and its way in its own coordinates:
+/// a line; a shape with no width or no height; a path every subpath of which runs straight (two
+/// walls Inkscape's Combine made one, an L of two); a polyline or polygon all of whose points lie on
+/// one line. Null for an element with an area.
+function runsOf(el: SVGGraphicsElement, box: DOMRect): Run[] | null {
+  if (el instanceof SVGLineElement) return [straight([{ x: el.x1.baseVal.value, y: el.y1.baseVal.value }, { x: el.x2.baseVal.value, y: el.y2.baseVal.value }])!];
+  if (box.width === 0) return [{ box, dir: { x: 0, y: 1 } }];
+  if (box.height === 0) return [{ box, dir: { x: 1, y: 0 } }];
+  if (el instanceof SVGPathElement) {
+    const subs = subpaths(el.getAttribute("d") ?? "");
+    if (!subs || !subs.length) return null;
+    const runs = subs.map(straight);
+    return runs.every((r) => r !== null) ? (runs as Run[]) : null;
+  }
+  if (el instanceof SVGPolylineElement || el instanceof SVGPolygonElement) {
+    const pts: Pt[] = [];
+    for (let i = 0; i < el.points.numberOfItems; i++) pts.push(el.points.getItem(i));
+    const r = pts.length ? straight(pts) : null;
+    return r ? [r] : null;
+  }
+  return null;
+}
+
+/// Whether an element draws no area, and the runs that draw it (each with the shape it is one of):
+/// a shape's own runs (`runsOf`); a group every shape it shows of which draws none, and no text, its
+/// shapes' runs (a group of no shape: none where its box has no width or no height). Null for an
+/// element with an area.
+function noAreaParts(el: SVGGraphicsElement, box: DOMRect): { el: SVGGraphicsElement; run: Run }[] | null {
+  if (el instanceof SVGGeometryElement) return runsOf(el, box)?.map((run) => ({ el, run })) ?? null;
+  if (el instanceof SVGTextElement || Array.from(el.querySelectorAll("text")).some((t) => t.checkVisibility())) return null;
+  const shapes = Array.from(el.querySelectorAll<SVGGeometryElement>("path, rect, circle, ellipse, line, polyline, polygon")).filter((g) => g.checkVisibility());
+  if (!shapes.length) return box.width === 0 || box.height === 0 ? [] : null;
+  const out: { el: SVGGraphicsElement; run: Run }[] = [];
+  for (const g of shapes) {
+    const runs = runsOf(g, g.getBBox());
+    if (!runs) return null;
+    out.push(...runs.map((run) => ({ el: g as SVGGraphicsElement, run })));
+  }
+  return out;
 }
 
 /// A stroke's width across the way it runs, carried through a matrix: its band of width `sw` is
@@ -114,10 +188,10 @@ function union(boxes: Box[]): Box | null {
   return { x, y, width: Math.max(...boxes.map((b) => b.x + b.width)) - x, height: Math.max(...boxes.map((b) => b.y + b.height)) - y };
 }
 
-/// The box a level with no area fills: each shape's box widened to its stroke's width across it, the
-/// box around them; the element's own box where it has no shape to measure.
-function overStroke(parts: NonNullable<Bound["noArea"]>, ob: Box): Box {
-  return union(parts.map((p) => widened(p.ob, across(p.m, parseFloat(getComputedStyle(p.el).strokeWidth) || 0, p.dir)))) ?? ob;
+/// The bands a level with no area fills: each run's box widened to its shape's stroke's width across
+/// it.
+function bands(parts: NonNullable<Bound["noArea"]>): Box[] {
+  return parts.map((p) => widened(p.ob, across(p.m, parseFloat(getComputedStyle(p.el).strokeWidth) || 0, p.dir)));
 }
 
 /// A box widened, about its centre, to `w` where it is narrower or lower.
@@ -201,10 +275,14 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       b.valueText.setAttribute("y", String(y + height / 2 + fontSize * 0.35));
     }
     if (b.noArea) {
-      for (const p of b.noArea) p.ob = boxIn(overlay, p.el, p.el.getBBox());
+      for (const p of b.noArea) p.ob = boxIn(overlay, p.el, p.box);
       const sel = el.classList.contains("sv-selected");
       el.classList.remove("sv-selected");
-      b.fillBox = overStroke(b.noArea, b.ob);
+      // The fill rises over the box around its runs' bands, held to the bands themselves (an L, two
+      // walls: over their strokes, never between them).
+      const bs = bands(b.noArea);
+      b.fillBox = union(bs) ?? b.ob;
+      b.runsClip?.replaceChildren(...bs.map((r) => s("rect", { x: r.x, y: r.y, width: r.width, height: r.height })));
       if (sel) el.classList.add("sv-selected");
     } else b.fillBox = { ...b.ob };
     if (b.fill) {
@@ -243,17 +321,15 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     // (each of a group's shapes through its own matrix), the box around them; its stroke then drawn
     // as the level's track (`sv-noarea`, a group's shapes taking it from the group), the fill over
     // it in the state's colour.
-    const flat = def.show === "level" ? noAreaOf(el, box) : null;
-    const noArea = flat !== null;
+    const runs = def.show === "level" ? noAreaParts(el, box) : null;
+    const noArea = runs !== null;
     const oc0 = overlay.getCTM();
     let na: Bound["noArea"];
-    if (flat && oc0) {
-      const shapes: SVGGraphicsElement[] = el instanceof SVGGeometryElement ? [el] : Array.from(el.querySelectorAll<SVGGeometryElement>("path, rect, circle, ellipse, line, polyline, polygon")).filter((g) => g.checkVisibility());
-      na = shapes.flatMap((g) => {
+    if (runs && oc0) {
+      na = runs.flatMap(({ el: g, run }) => {
         const gc = g.getCTM();
         if (!gc) return [];
-        const gb = g.getBBox();
-        return [{ el: g, ob: boxIn(overlay, g, gb), m: oc0.inverse().multiply(gc), dir: g === el ? flat.dir : noAreaOf(g, gb)?.dir ?? null }];
+        return [{ el: g, box: run.box, ob: boxIn(overlay, g, run.box), m: oc0.inverse().multiply(gc), dir: run.dir }];
       });
       el.classList.add("sv-noarea");
     }
@@ -270,6 +346,12 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       const pc = (el.parentNode as SVGGraphicsElement).getCTM();
       const m = pc && oc0 ? pc.inverse().multiply(oc0) : new DOMMatrix();
       const frame = s("g", { transform: `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})` }, b.fill);
+      if (noArea) {
+        // Its runs' bands, in the overlay's frame as the fill is (written by `measure`).
+        b.runsClip = s("clipPath", { id: `sv-runs-${def.id}` }) as SVGClipPathElement;
+        frame.append(b.runsClip);
+        b.fill.setAttribute("clip-path", `url(#sv-runs-${def.id})`);
+      }
       const holder = s("g", { class: "sv-fill-holder", "data-for": def.id }, s("g", { class: "sv-reset" }, frame));
       if ((el instanceof SVGGeometryElement || el instanceof SVGTextElement) && !noArea) {
         const clipId = `sv-clip-${def.id}`;
@@ -434,7 +516,9 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       if (b.noArea) {
         const sel = b.el.classList.contains("sv-selected");
         b.el.classList.remove("sv-selected");
-        b.fillBox = overStroke(b.noArea, b.ob);
+        const bs = bands(b.noArea);
+        b.fillBox = union(bs) ?? b.ob;
+        b.runsClip?.replaceChildren(...bs.map((r) => s("rect", { x: r.x, y: r.y, width: r.width, height: r.height })));
         if (sel) b.el.classList.add("sv-selected");
         b.fill.setAttribute("x", String(b.fillBox.x));
         b.fill.setAttribute("width", String(b.fillBox.width));
@@ -497,14 +581,27 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
   // A press becomes a pan only once the pointer has gone a few pixels from where it went down (a
   // hand's jitter in a click is no pan), and the click that ends a pan picks nothing and clears
   // nothing: stopped ahead of every handler, the elements' and the background's (the capture).
+  // Only the primary button's press pans (another's release may never reach the page: a native menu
+  // takes it), and a pan ends on a move with that button no longer held, its release lost or not.
   const SLOP = 4;
   let drag: { x: number; y: number; from: { x: number; y: number }; panning: boolean } | null = null;
   let panned = false;
-  svg.addEventListener("mousedown", (e) => { drag = { x: e.clientX, y: e.clientY, from: { x: e.clientX, y: e.clientY }, panning: false }; panned = false; });
+  // What the last press went down on: a click that ends it picks that (`onSelect` below).
+  let pressedOn: EventTarget | null = null;
+  svg.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    pressedOn = e.target;
+    drag = { x: e.clientX, y: e.clientY, from: { x: e.clientX, y: e.clientY }, panning: false };
+    panned = false;
+  });
   window.addEventListener("mouseup", () => { if (drag?.panning) panned = true; drag = null; });
   svg.addEventListener("click", (e) => { if (panned) { panned = false; e.stopImmediatePropagation(); } }, true);
   svg.addEventListener("mousemove", (e) => {
     if (!drag) return;
+    if (!(e.buttons & 1)) {
+      drag = null;
+      return;
+    }
     if (!drag.panning) {
       if (Math.hypot(e.clientX - drag.from.x, e.clientY - drag.from.y) < SLOP) return;
       drag.panning = true;
@@ -519,7 +616,16 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     setVb();
   });
   svg.addEventListener("wheel", (e) => { e.preventDefault(); zoom(e.deltaY > 0 ? 1.12 : 1 / 1.12); }, { passive: false });
-  svg.addEventListener("click", () => onSelect("", null));
+  // A click no element took (the browser sends it to what the press and the release share): it picks
+  // what its press went down on (a marker slid from under a still pointer, a release a pixel past an
+  // element's edge), and clears the selection only when the press went down on the background. A
+  // click of no press (one dispatched, its `detail` 0) reads its own target.
+  svg.addEventListener("click", (e) => {
+    const from = e.detail > 0 ? pressedOn : e.target;
+    const at = from instanceof Element ? (from.closest("[data-object]") as SVGElement | null) : null;
+    if (at && svg.contains(at)) onSelect(at.dataset.object ?? "", at.dataset.key ?? null);
+    else onSelect("", null);
+  });
 
   const controls = document.createElement("div");
   controls.className = "zoom";
