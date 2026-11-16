@@ -43,6 +43,37 @@ const EVERY_MARK: &str = r#"[...document.querySelector("main.view").querySelecto
   .filter((el) => !shown(el))
   .map((el) => `${el.tagName}.${el.getAttribute("class")} ${JSON.stringify((el.textContent || "").slice(0, 40))}`)"#;
 
+/// Every mark of the view drawn as the page wrote it, by the browser's computed style: no text the
+/// stylesheet generates (before or after an element, a list item's marker) and none it draws
+/// otherwise than written (its case changed, its letters masked); no shape, group or chart moved by
+/// a transform, and the geometry CSS can set on a shape (a rect's, a circle's, an ellipse's, a
+/// path's) its attribute's. The offences, named.
+const DRAWN_AS_WRITTEN: &str = r#"(() => {
+  const out = [];
+  const at = (el) => `${el.tagName.toLowerCase()}.${el.getAttribute("class") ?? ""}`;
+  for (const el of document.querySelector("main.view").querySelectorAll("*")) {
+    for (const pseudo of ["::before", "::after", "::marker"]) {
+      const g = getComputedStyle(el, pseudo).content;
+      if (g && g !== "none" && g !== "normal") out.push(`${at(el)}${pseudo}: text the stylesheet generates, ${g}`);
+    }
+    const c = getComputedStyle(el);
+    if (c.display.includes("list-item") && (c.listStyleType !== "none" || c.listStyleImage !== "none")) out.push(`${at(el)}: a list item's marker`);
+    if ([...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && (c.textTransform !== "none" || (c.webkitTextSecurity ?? "none") !== "none")) out.push(`${at(el)} ${JSON.stringify(el.textContent.slice(0, 30))}: drawn ${c.textTransform} ${c.webkitTextSecurity}`);
+  }
+  const GEOMETRY = { rect: ["x", "y", "width", "height", "rx", "ry"], circle: ["cx", "cy", "r"], ellipse: ["cx", "cy", "rx", "ry"], path: ["d"] };
+  const numbers = (s) => (String(s).match(/-?\d*\.?\d+(e[-+]?\d+)?/gi) || []).map(Number);
+  for (const el of document.querySelectorAll("main.view svg, main.view svg *")) {
+    const s = getComputedStyle(el);
+    if (["transform", "translate", "rotate", "scale"].some((k) => s[k] && s[k] !== "none")) out.push(`${at(el)}: moved by a transform`);
+    for (const a of GEOMETRY[el.tagName.toLowerCase()] ?? []) {
+      if (!el.hasAttribute(a)) continue;
+      const want = numbers(el.getAttribute(a)), got = numbers(s[a]);
+      if (want.length !== got.length || want.some((w, i) => Math.abs(w - got[i]) > 1e-3)) out.push(`${at(el)}: its ${a} drawn ${s[a]}, written ${el.getAttribute(a)}`);
+    }
+  }
+  return out.slice(0, 20);
+})()"#;
+
 /// Every place of a view whose words this test compares with portal's answer or with what it
 /// asked (the lists' captions and buttons, a page's heading, its count and its buttons, a table's
 /// header and cells, a window's count and its axis, a refusal and the words before a pick).
@@ -73,11 +104,13 @@ fn drawn_states() -> std::collections::BTreeSet<String> {
 }
 
 fn every_mark_shown(page: &mut Browser, when: &str) {
-    let drawn = page.eval(r#"(() => { const v = document.querySelector("main.view .list > .caps")?.textContent.split(" ")[0]; const d = document.querySelector("main.view .list-main")?.dataset.screen; return v && d ? `${v} ${d}` : null; })()"#);
+    let drawn = page.eval(r#"(() => { const w = document.querySelector("main.view .list > .caps")?.textContent.split(" ")[0]; const v = w && w[0] + w.slice(1).toLowerCase(); const d = document.querySelector("main.view .list-main")?.dataset.screen; return v && d ? `${v} ${d}` : null; })()"#);
     let drawn = drawn.as_str().unwrap_or_else(|| panic!("{when}: no view's state named: {drawn}")).to_string();
     READ_DRAWN.with(|r| r.borrow_mut().insert(drawn));
     let hidden = page.eval(&format!("(() => {{ {SHOWN_FN} return {EVERY_MARK}; }})()"));
     assert_eq!(hidden, json!([]), "{when}: a mark of the view not shown");
+    let restyled = page.eval(DRAWN_AS_WRITTEN);
+    assert_eq!(restyled, json!([]), "{when}: words or shapes drawn otherwise than the page wrote them");
     // And every mark with words of its own is one whose words this test reads: a mark added to a
     // view fails here until it is.
     let unread = page.eval(&format!(
@@ -336,7 +369,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     assert_eq!(got, want);
     assert!(listed.as_array().unwrap().iter().any(|r| r[0] == "sorts" && r[2] == json!(format!("{} · 53", sorts["kind"].as_str().unwrap()))), "{listed}");
     // Its caption the catalog's length; before a pick, the words asking for one.
-    assert_eq!(page.eval(r#"[document.querySelector(".list > .caps")?.textContent ?? null, document.querySelector(".list-main > p.muted")?.textContent ?? null]"#), json!([format!("Tables · {}", t["tables"].as_array().unwrap().len()), "Pick a table."]));
+    assert_eq!(page.eval(r#"[document.querySelector(".list > .caps")?.textContent ?? null, document.querySelector(".list-main > p.muted")?.textContent ?? null]"#), json!([format!("TABLES · {}", t["tables"].as_array().unwrap().len()), "Pick a table."]));
     every_mark_shown(&mut page, "the catalog before a pick");
     // Every count: a count portal does not know shown as "?" (the view's), the others between
     // what portal counted before the page listed them and after (the OPC rule's keeps growing).
@@ -524,7 +557,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     }
     assert!(listed.as_array().unwrap().iter().any(|b| b[0] == "sorter/travel" && b[2] == "float · 53"), "{listed}");
     // Its caption the listing's length; before a pick, the words asking for one.
-    assert_eq!(page.eval(r#"[document.querySelector(".list > .caps")?.textContent ?? null, document.querySelector(".list-main > p.muted")?.textContent ?? null]"#), json!([format!("Series · {}", listed.as_array().unwrap().len()), "Pick a series."]));
+    assert_eq!(page.eval(r#"[document.querySelector(".list > .caps")?.textContent ?? null, document.querySelector(".list-main > p.muted")?.textContent ?? null]"#), json!([format!("SERIES · {}", listed.as_array().unwrap().len()), "Pick a series."]));
     every_mark_shown(&mut page, "the series before a pick");
 
     // A series picked: its last hour charted, every point of portal's window placed exactly where
@@ -669,6 +702,27 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let refused = page.wait_for(r#"document.querySelector(".list-main > p.error")?.textContent ?? null"#, Duration::from_secs(20));
     assert_eq!(refused, json!("Error: probe refusal, late"), "the refusal's own words");
     every_mark_shown(&mut page, "a refused window");
+    // The other order of arrival in the Series view, at its one token (the page's own source): an
+    // earlier pick's window held a little, a later pick's listing held long, the earlier window (an
+    // answer, then a refusal) coming while the later listing is out, never drawn: the chart as it
+    // stood, then the later pick's.
+    let series_src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/src/tables.ts")).unwrap();
+    assert_eq!(series_src.split_once("export class Series").unwrap().1.matches("++this.asked").count(), 1, "the Series view asks anew at one place, driven both ways here");
+    for refused in [false, true] {
+        page.eval(&series_button("plc/fill1"));
+        page.wait_for(&format!("({HEAD}) === 'plc · fill1' && !document.querySelector('.list-main > p.error') || null"), Duration::from_secs(20));
+        page.eval(&format!(r#"(() => {{ window.__held = {{}}; window.__holds = [["series=travel&", 1500, {refused}]]; return true; }})()"#));
+        page.eval(&series_button("sorter/travel"));
+        page.wait_for(r#"window.__held["series=travel&"] === "sent" || null"#, Duration::from_secs(10));
+        page.eval(r#"(() => { window.__holds.push(["/api/series", 5000]); return true; })()"#);
+        page.eval(&series_button("plc/speed"));
+        page.wait_for(r#"window.__held["/api/series"] === "sent" || null"#, Duration::from_secs(10));
+        page.wait_for(r#"window.__held["series=travel&"] === "done" || null"#, Duration::from_secs(10));
+        let mid = page.eval(&format!(r#"[{HEAD}, document.querySelector(".list-main > p.error")?.textContent ?? null, window.__held["/api/series"]]"#));
+        assert_eq!(mid, json!(["plc · fill1", null, "sent"]), "the later pick's listing held back: the earlier pick's window ({}), come first, drawn over it", if refused { "refused" } else { "answered" });
+        page.wait_for(r#"window.__held["/api/series"] === "done" || null"#, Duration::from_secs(15));
+        page.wait_for(&format!("({HEAD}) === 'plc · speed' || null"), Duration::from_secs(20));
+    }
 
     // A table of exactly a hundred rows: the second page is the last, nothing older.
     append(&log, &(0..47).map(|i| format!("{} SORT outlet=1 travel=30.0 rate=99.0", stamp(base + 240_000 + i * 1000))).collect::<Vec<_>>());
@@ -1049,6 +1103,24 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     page_of(&mut blind, "sorts", None);
     let urls: Vec<String> = blind.eval("window.__answers.filter((a) => a.url.includes('/api/table/data')).map((a) => a.url)").as_array().unwrap().iter().map(|u| u.as_str().unwrap().to_string()).collect();
     assert!(!urls.is_empty() && urls.iter().all(|u| param(u, "to") == Some(now.to_string())), "the pages asked to the session's now: {urls:?}");
+    // Shown again with the status held (the series view, then this one: the route's `show`, the
+    // other place the view takes the session's now): its pages asked to that same now exactly, so a
+    // sort stamped a minute past it, stored now, joins no page and shifts none.
+    blind.eval("window.__answers = []; true");
+    blind.eval(r#"location.hash = "series""#);
+    blind.wait_for(r#"document.querySelector(".list button[data-series]") ? true : null"#, Duration::from_secs(20));
+    blind.eval(r#"location.hash = "tables""#);
+    blind.wait_for("window.__answers.some((a) => a.url.includes('/api/table/data')) || null", Duration::from_secs(20));
+    let again = page_of(&mut blind, "sorts", None);
+    let urls: Vec<String> = blind.eval("window.__answers.filter((a) => a.url.includes('/api/table/data')).map((a) => a.url)").as_array().unwrap().iter().map(|u| u.as_str().unwrap().to_string()).collect();
+    assert!(!urls.is_empty() && urls.iter().all(|u| param(u, "to") == Some(now.to_string())), "the view shown again asks to the session's now exactly: {urls:?}");
+    let in_window: u64 = again["rows"].as_str().unwrap().split('/').nth(1).unwrap().parse().unwrap();
+    append(&log, &[format!("{} SORT outlet=8 travel=3.0 rate=99.0", stamp(now + 60_000))]);
+    sorts_now += 1;
+    assert!(sorts_rows(sorts_now));
+    click(&mut blind, "Older ›");
+    let older = shown_at(&mut blind, &format!("51-{}/{in_window}", in_window.min(100)));
+    assert!(older["body"].as_array().unwrap().iter().all(|r| !again["body"].as_array().unwrap().contains(r)), "a row of the first page shown again: the pages shifted");
     drop(blind);
     // Every state each view draws (the page's own `draw` calls) read with every mark shown.
     assert_eq!(READ_DRAWN.with(|r| r.borrow().clone()), drawn_states(), "each state a view draws, read as shown");

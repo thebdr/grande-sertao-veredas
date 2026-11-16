@@ -67,7 +67,7 @@ export class Side {
     const def = id ? this.defs.find((d) => d.id === id) : undefined;
     if (!def) {
       this.sel = null;
-      this.top.replaceChildren(h("div", { class: "side-head" }, h("span", { class: "caps" }, "Selected")), h("p", { class: "muted" }, "Pick an object on the layout."));
+      this.top.replaceChildren(h("div", { class: "side-head" }, h("span", { class: "caps" }, "SELECTED")), h("p", { class: "muted" }, "Pick an object on the layout."));
       return;
     }
     const s: Selected = {
@@ -85,7 +85,7 @@ export class Side {
     this.sayAll(s);
     this.sel = s;
     const parts: Node[] = [
-      h("div", { class: "side-head" }, h("span", { class: "caps" }, "Selected")),
+      h("div", { class: "side-head" }, h("span", { class: "caps" }, "SELECTED")),
       h("div", { class: "sel-title", "data-id": def.id }, h("strong", {}, key ? `${def.label} · ${key}` : def.label), s.badge),
       h("dl", { class: "facts" },
         h("dt", {}, "Value"), s.value,
@@ -93,7 +93,7 @@ export class Side {
         h("dt", {}, "Series"), h("dd", { class: "mono" }, `${def.source} · ${def.series}${def.key ? " · " + def.key : ""}`),
         ...(def.rules.length ? [h("dt", {}, "Rules"), h("dd", {}, ...def.rules.map((r) => h("div", { class: "rule" }, h("span", { class: `badge st-${r.state}` }, r.word), ` when ${r.when}`)))] : []),
       ),
-      h("div", { class: "caps small" }, "Last 30 min"),
+      h("div", { class: "caps small" }, "LAST 30 MIN"),
       s.spark,
     ];
     if (def.actions.length) parts.push(h("div", { class: "actions" }, ...s.buttons), s.gate, s.note);
@@ -173,7 +173,7 @@ export class Side {
       .map((d) => ({ d, o: objs.get(d.id) }))
       .filter((x) => x.o && x.o.state !== "normal")
       .sort((a, b) => WEIGHT[a.o!.state] - WEIGHT[b.o!.state]);
-    this.attentionHead.textContent = `Needs attention · ${attention.length}`;
+    this.attentionHead.textContent = `NEEDS ATTENTION · ${attention.length}`;
     // Since when each object reads as it does: when the page first saw it so (the feed's own
     // arrival, on the first snapshot).
     for (const { d, o } of attention) {

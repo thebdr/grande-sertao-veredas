@@ -80,7 +80,7 @@ export class Tables {
     try {
       const t = await getJson<{ tables: TableInfo[] }>(`${base(this.name)}/portal/api/tables`);
       if (token !== this.asked) return;
-      this.list.replaceChildren(h("div", { class: "caps small" }, `Tables · ${t.tables.length}`), ...t.tables.map((x) => {
+      this.list.replaceChildren(h("div", { class: "caps small" }, `TABLES · ${t.tables.length}`), ...t.tables.map((x) => {
         const b = h("button", { class: x.name === this.table ? "on" : "", "data-table": x.name }, h("span", {}, x.name), h("span", { class: "mono muted" }, `${x.kind} · ${x.rows ?? "?"}`));
         b.onclick = () => { this.table = x.name; this.offset = 0; void this.show(true); };
         return b;
@@ -158,7 +158,7 @@ export class Series {
       // The pick read again from the listing just fetched, so its heading's last value is this one's.
       const was = this.pick;
       if (was) this.pick = s.series.find((y) => y.source === was.source && y.series === was.series) ?? was;
-      this.list.replaceChildren(h("div", { class: "caps small" }, `Series · ${s.series.length}`), ...s.series.map((x) => {
+      this.list.replaceChildren(h("div", { class: "caps small" }, `SERIES · ${s.series.length}`), ...s.series.map((x) => {
         const on = this.pick && this.pick.source === x.source && this.pick.series === x.series;
         const b = h("button", { class: on ? "on" : "", "data-series": `${x.source}/${x.series}` }, h("span", {}, `${x.source} · ${x.series}`), h("span", { class: "mono muted" }, `${x.type} · ${x.count}`));
         b.onclick = () => { this.pick = x; void this.show(); };

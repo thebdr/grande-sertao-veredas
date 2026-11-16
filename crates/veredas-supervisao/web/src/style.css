@@ -22,7 +22,8 @@ a { color: inherit; text-decoration: none; }
 .mono { font-family: var(--mono); }
 .muted { color: var(--weak2); }
 .pad { padding: 16px; }
-.caps { font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--label); }
+/* A caption's capitals typed in the page's source, never made by the stylesheet (Q28; docs/design). */
+.caps { font: 600 10px var(--mono); letter-spacing: .08em; color: var(--label); }
 .small { margin: 10px 0 4px; }
 .error { color: var(--danger-text); font-family: var(--mono); }
 

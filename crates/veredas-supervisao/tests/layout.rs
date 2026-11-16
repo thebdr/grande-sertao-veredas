@@ -1253,7 +1253,7 @@ fn the_page_draws_the_layout_from_the_feed() {
     // Around it: the headline in its states, the objects not normal in order of weight.
     let around = around_when(&mut page, "a.attention.length === 5 && a.headline.length === 2");
     assert_eq!(around["headline"], json!([["speed", "1.5", "mono st-text-normal"], ["read-rate", "—", "mono st-text-stale"]]));
-    assert_eq!(around["attention_head"], json!("Needs attention · 5"));
+    assert_eq!(around["attention_head"], json!("NEEDS ATTENTION · 5"));
     let quiet = json!([
         ["outlet-3", "■", "mark st-warn", "Outlet 3 full"],
         ["outlet-2", "■", "mark st-near", "Outlet 2 near full"],
@@ -1478,7 +1478,7 @@ fn the_page_draws_the_layout_from_the_feed() {
     host.stop();
 
     // The bundle reads the session's binding, layout and feed, and styles every class.
-    for needle in ["/binding", "/layout.svg", "/objects", "getPointAtLength", "Needs attention"] {
+    for needle in ["/binding", "/layout.svg", "/objects", "getPointAtLength", "NEEDS ATTENTION"] {
         assert!(web::APP_JS.contains(needle), "{needle}");
     }
     for class in ["normal", "near", "warn", "alarm", "disabled", "stale"] {
