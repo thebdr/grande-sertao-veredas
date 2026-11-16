@@ -501,10 +501,14 @@ pub const INKSCAPE_LOOP: &str = r##"<?xml version="1.0" encoding="UTF-8" standal
     <circle
        style="display:inline;fill:#ffffff;stroke:#000000;stroke-width:0.264583"
        id="parcel-1"
+       cx="150"
+       cy="60"
        r="5" />
     <circle
        style="display:inline;fill:#ffffff;stroke:#000000;stroke-width:0.264583"
        id="parcel-2"
+       cx="250"
+       cy="160"
        r="5" />
     <g
        id="g2"

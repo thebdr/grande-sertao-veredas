@@ -327,10 +327,14 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
   // The view's scale changed: everything the page placed by a box measured anew and painted.
   const rescale = () => {
     if (!svg.isConnected) return;
-    for (const b of bound.values()) {
-      measure(b);
-      if (b.last) paint(b, b.last);
-    }
+    // A marker its layer hides is measured as it is drawn: the browser gives an element it does not
+    // display an empty box, so the layer's hiding is lifted while the boxes are read (as `measure`
+    // lifts the page's own hiding of one).
+    const off = svg.classList.contains("no-markers");
+    if (off) svg.classList.remove("no-markers");
+    for (const b of bound.values()) measure(b);
+    if (off) svg.classList.add("no-markers");
+    for (const b of bound.values()) if (b.last) paint(b, b.last);
   };
   onScale = rescale;
   new ResizeObserver(rescale).observe(svg);

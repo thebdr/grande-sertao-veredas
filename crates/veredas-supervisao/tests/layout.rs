@@ -1028,12 +1028,18 @@ const PLACED_NOW: &str = r#"(() => {
     if (el.classList.contains("sv-show-move")) continue;
     const id = el.id, b = el.getBBox(), m = overlay.getCTM().inverse().multiply(el.getCTM());
     const pts = [[b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]].map(([x, y]) => new DOMPoint(x, y).matrixTransform(m));
-    const x0 = Math.min(...pts.map((p) => p.x)), x1 = Math.max(...pts.map((p) => p.x)), y1 = Math.max(...pts.map((p) => p.y));
+    const x0 = Math.min(...pts.map((p) => p.x)), x1 = Math.max(...pts.map((p) => p.x)), y0 = Math.min(...pts.map((p) => p.y)), y1 = Math.max(...pts.map((p) => p.y));
     const mid = (x0 + x1) / 2;
     const off = (what, got, want) => { read++; if (Math.abs(got - want) > 1e-3) out.push(`${id}: its ${what} at ${got}, the box says ${want}`); };
+    // Each text across at the box's middle, and up and down by its own step from the box, in the
+    // page's own font steps (a label 0.85 of the page's size, a mark and word 0.8, a value 1).
+    const steps = { label: [0.85, (fs) => y0 - fs * 0.35], tag: [0.8, (fs) => y1 + fs * 1.05], value: [1, (fs) => (y0 + y1) / 2 + fs * 0.35] };
     for (const k of ["label", "tag", "value"]) {
       const t = overlay.querySelector(`.sv-${k}[data-for="${id}"]:not([data-key])`);
-      if (t) off(k, Number(t.getAttribute("x")), mid);
+      if (!t) continue;
+      off(k, Number(t.getAttribute("x")), mid);
+      const [share, at] = steps[k];
+      off(`${k}'s height`, Number(t.getAttribute("y")), at(Number(t.getAttribute("font-size")) / share));
     }
     const fill = svg.querySelector(`.sv-fill[data-for="${id}"]`);
     if (fill && !el.classList.contains("sv-noarea")) {
@@ -1390,10 +1396,20 @@ fn the_page_draws_the_layout_from_the_feed() {
     // Placed by the element's box as it stands at the view's scale, whatever changed the scale (the
     // fit, a zoom in, a zoom out, Fit): Chromium lays a text out at the size it is drawn, so a
     // text's box moves with the scale, and what was placed by the box measured once would not.
-    for (step, act) in [("the fit", ""), ("a zoom in", "Zoom in"), ("another zoom in", "Zoom in"), ("a zoom out", "Zoom out"), ("Fit", "Fit")] {
-        if !act.is_empty() {
-            page.eval(&format!(r#"(() => {{ document.querySelector('.zoom button[title="{act}"]').click(); return true; }})()"#));
+    for (step, act) in [("the fit", ""), ("a zoom in", "Zoom in"), ("another zoom in", "Zoom in"), ("a zoom out", "Zoom out"), ("Fit", "Fit"), ("a smaller window", "resize"), ("the window back", "restore")] {
+        match act {
+            "" => {}
+            "resize" => {
+                page.call("Emulation.setDeviceMetricsOverride", json!({ "width": 900, "height": 640, "deviceScaleFactor": 1, "mobile": false }));
+            }
+            "restore" => {
+                page.call("Emulation.clearDeviceMetricsOverride", json!({}));
+            }
+            _ => {
+                page.eval(&format!(r#"(() => {{ document.querySelector('.zoom button[title="{act}"]').click(); return true; }})()"#));
+            }
         }
+        std::thread::sleep(Duration::from_millis(200));
         page.eval(r#"new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))"#);
         let off = page.eval(PLACED_NOW);
         assert!(off[0].as_u64().unwrap() >= 20 && off[1] == json!([]), "after {step}: placed otherwise than by the box as it stands: {off}");
@@ -1475,6 +1491,7 @@ const NO_AREA_SVG: &str = r##"  <line id="nv-vt-o" x1="0" y1="0" x2="0" y2="20" 
   <g id="nv-grpd" style="fill:#cccccc;stroke:#000000;stroke-width:2;stroke-dasharray:4,1;fill-opacity:0.9;stroke-opacity:0.8"><rect x="260" y="318" width="40" height="16"/><g><g><text x="264" y="330" style="font-size:8px;stroke-width:0.5">O2</text></g></g></g>
   <g id="nv-freed" style="fill:#cccccc;stroke:#000000;stroke-width:2;stroke-dasharray:4,1;fill-opacity:0.9;stroke-opacity:0.8"><rect x="320" y="318" width="40" height="16"/><g><g><text x="324" y="330" style="font-size:8px;stroke-width:0.5">O2</text></g></g></g>
   <rect id="nv-edge" x="370" y="372" width="24" height="28"/>
+  <g id="nv-gpipe"><path d="M 120,336 H 150" style="fill:none;stroke:#3a3a40;stroke-width:6"/><path d="M 0,0 H 15" transform="translate(150 336) scale(2 1)" style="fill:none;stroke:#3a3a40;stroke-width:6"/></g>
 </svg>"##;
 
 /// The levels with no area whose stroke the page fills over, each with its level: the twenty-four
@@ -1495,9 +1512,11 @@ fn no_area_levels() -> Vec<(String, f64)> {
     }
     out.push(("nv-diag".into(), 1.0));
     out.push(("nv-diag2".into(), 1.0));
-    // A group with no area: its shapes' strokes are what it draws.
+    // A group with no area: its shapes' strokes are what it draws (a pipe of two segments, one under
+    // a scale of its own, among them).
     out.push(("nv-gline".into(), 0.85));
     out.push(("nv-gvline".into(), 0.85));
+    out.push(("nv-gpipe".into(), 0.85));
     out
 }
 
@@ -1514,8 +1533,29 @@ const NO_AREA_FILLS: &str = r##"(() => {
     const el = document.getElementById(id);
     const fill = document.querySelector(`.sv-fill[data-for="${id}"]`);
     if (!el || !fill) { out.push(`${id}: no element or no fill`); continue; }
-    // A group's stroke is its shape's (one here), hit as the group's.
+    // A group's stroke is its shapes', hit as the group's: read across at its first, and along the
+    // whole group, the fill from the first shape's start to the last one's end and taking each one's
+    // middle.
     const shape = el instanceof SVGGeometryElement ? el : el.querySelector("path, line, polyline, polygon, rect");
+    if (!(el instanceof SVGGeometryElement)) {
+      const shapes = [...el.querySelectorAll("path, line, polyline, polygon, rect")];
+      const ends = shapes.flatMap((g) => [pt(g, 0), pt(g, g.getTotalLength())]);
+      const r = fill.getBoundingClientRect();
+      const xs = ends.map((p) => p.x), ys = ends.map((p) => p.y);
+      const flatGroup = Math.max(...ys) - Math.min(...ys) < 0.5;
+      const [lo, hi, rlo, rhi] = flatGroup ? [Math.min(...xs), Math.max(...xs), r.left, r.right] : [Math.min(...ys), Math.max(...ys), r.top, r.bottom];
+      // Across a flat group the fill spans every shape from end to end; up an upright one it rises
+      // from the lowest shape's foot (to its level).
+      if ((flatGroup && rlo > lo + 1) || rhi < hi - 1) out.push(`${id}: its fill [${rlo.toFixed(2)}, ${rhi.toFixed(2)}] short of its shapes [${lo.toFixed(2)}, ${hi.toFixed(2)}]`);
+      const prev = fill.style.pointerEvents;
+      fill.style.pointerEvents = "visiblePainted";
+      for (const [i, g] of shapes.entries()) {
+        const m = pt(g, g.getTotalLength() / 2);
+        const y = flatGroup ? r.bottom - 1 : m.y, x = flatGroup ? m.x : r.left + 1;
+        if (document.elementFromPoint(x, y) !== fill) out.push(`${id}: its fill missing at its shape ${i}'s middle`);
+      }
+      fill.style.pointerEvents = prev;
+    }
     const len = shape.getTotalLength();
     const a = pt(shape, 0), b = pt(shape, len);
     const r = fill.getBoundingClientRect();
@@ -1663,6 +1703,42 @@ fn a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_th
     assert_inside_frame(&mut page, [0.0, 0.0, 400.0, 400.0], 40, "at the first fit");
     page.eval(r#"(() => { document.querySelector('.zoom button[title="Zoom in"]').click(); document.querySelector('.zoom button[title="Fit"]').click(); return true; })()"#);
     assert_inside_frame(&mut page, [0.0, 0.0, 400.0, 400.0], 40, "after a zoom and Fit");
+    // The view's own handlers, read on the view itself: a zoom kept across a change of the feed, a
+    // pan (a drag on the drawing) kept across one, and while fitted, the word under the element at
+    // the drawing's bottom edge unsaid and said again leaving the frame as it grew (never shrinking).
+    let vb = |page: &mut Browser| page.eval(r#"(() => { const v = document.querySelector("svg.plant").viewBox.baseVal; return [v.x, v.y, v.width, v.height]; })()"#);
+    let frames = r#"new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))"#;
+    let click = |page: &mut Browser, title: &str| {
+        page.eval(&format!(r#"(() => {{ document.querySelector('.zoom button[title="{title}"]').click(); return true; }})()"#));
+        page.eval(frames);
+    };
+    let feed_to = |page: &mut Browser, fill: f64, state: &str| {
+        bench.server("plc").unwrap().set("fill2", fill);
+        page.wait_for(&format!(r#"document.getElementById("nv-edge")?.classList.contains("sv-state-{state}") ? true : null"#), Duration::from_secs(20));
+        page.eval(frames);
+        std::thread::sleep(Duration::from_millis(300));
+    };
+    let fit = vb(&mut page);
+    click(&mut page, "Zoom in");
+    let zoomed = vb(&mut page);
+    assert!(zoomed[2].as_f64().unwrap() < fit[2].as_f64().unwrap() - 1.0, "a zoom in narrows the view: {zoomed} from {fit}");
+    feed_to(&mut page, 10.0, "normal");
+    assert_eq!(vb(&mut page), zoomed, "the zoom kept across a change of the feed");
+    click(&mut page, "Fit");
+    let fitted = vb(&mut page);
+    page.eval(r#"(() => { const s = document.querySelector("svg.plant"); const r = s.getBoundingClientRect(); const at = (x, y) => ({ clientX: r.left + x, clientY: r.top + y, bubbles: true }); s.dispatchEvent(new MouseEvent("mousedown", at(200, 200))); s.dispatchEvent(new MouseEvent("mousemove", at(260, 230))); window.dispatchEvent(new MouseEvent("mouseup", at(260, 230))); return true; })()"#);
+    page.eval(frames);
+    let panned = vb(&mut page);
+    assert!(panned[0] != fitted[0] && panned[1] != fitted[1] && panned[2] == fitted[2], "a drag pans the view: {panned} from {fitted}");
+    feed_to(&mut page, 85.0, "warn");
+    assert_eq!(vb(&mut page), panned, "the pan kept across a change of the feed");
+    click(&mut page, "Fit");
+    let framed = vb(&mut page);
+    assert_inside_frame(&mut page, [0.0, 0.0, 400.0, 400.0], 40, "fitted with the edge's word said");
+    feed_to(&mut page, 10.0, "normal");
+    assert_eq!(vb(&mut page), framed, "the frame never shrinks while the view stays fitted: the edge's word unsaid");
+    feed_to(&mut page, 85.0, "warn");
+    assert_eq!(vb(&mut page), framed, "the frame never shrinks while the view stays fitted: the edge's word said again");
     drop(page);
     host.stop();
 }
@@ -1713,11 +1789,51 @@ fn the_page_draws_a_drawing_saved_as_inkscape_saves_it() {
         let (r, f) = (rect(&d[id]["rect"]), rect(&d[id]["fill"]["rect"]));
         assert!(d[id]["fill"]["shown"] == json!(true) && f[0] >= r[0] - 0.5 && f[0] + f[2] <= r[0] + r[2] + 0.5 && near(f[1] + f[3], r[1] + r[3], 0.75) && near(f[3], r[3] * level, 1.0), "{id}: its fill inside it at {level}: {f:?} in {r:?}");
     }
-    for (id, place) in [("parcel-1", 0.25), ("parcel-2", 0.75)] {
+    // Each drawn where Inkscape writes a circle, at its own centre (`cx`, `cy`): moved by the place
+    // less that centre.
+    for (id, place, (cx, cy)) in [("parcel-1", 0.25, (150.0, 60.0)), ("parcel-2", 0.75, (250.0, 160.0))] {
         assert_eq!(d[id]["shown"], json!(true), "{id}");
         let (x, y) = translate(d[id]["transform"].as_str().unwrap());
         let (lx, ly) = on_loop(place);
-        assert!(near(x, lx, 0.05) && near(y, ly, 0.05), "{id} at {place} along the loop: ({x}, {y}), the loop's point ({lx}, {ly})");
+        assert!(near(x + cx, lx, 0.05) && near(y + cy, ly, 0.05), "{id} at {place} along the loop: its centre at ({}, {}), the loop's point ({lx}, {ly})", x + cx, y + cy);
+    }
+    // With the Markers layer turned off (the page's own button), each way the view's scale or its
+    // place in the page changes (a zoom, the window's size, another view and back), then the layer
+    // on again: every marker at its place along the loop, as the screen shows it.
+    let markers = r#"(() => { [...document.querySelectorAll(".layers button")].find((b) => b.textContent === "Markers").click(); return true; })()"#;
+    for how in ["a zoom", "the window", "another view"] {
+        page.eval(markers);
+        match how {
+            "a zoom" => {
+                page.eval(r#"(() => { document.querySelector('.zoom button[title="Zoom in"]').click(); return true; })()"#);
+            }
+            "the window" => {
+                page.call("Emulation.setDeviceMetricsOverride", json!({ "width": 1100, "height": 700, "deviceScaleFactor": 1, "mobile": false }));
+            }
+            _ => {
+                page.eval("location.hash = 'dashboards'; true");
+                page.wait_for("document.querySelector('.dash-grid') ? true : null", Duration::from_secs(10));
+                page.eval("location.hash = 'layout'; true");
+                page.wait_for(r#"document.getElementById("parcel-1")?.isConnected ? true : null"#, Duration::from_secs(10));
+            }
+        }
+        page.eval(r#"new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))"#);
+        std::thread::sleep(Duration::from_millis(300));
+        page.eval(markers);
+        page.wait_for(r#"document.getAnimations().every((a) => a.playState !== "running") || null"#, Duration::from_secs(5));
+        let d = page.eval(DRAWN);
+        for (id, place) in [("parcel-1", 0.25), ("parcel-2", 0.75)] {
+            assert!(d[id]["shown"] == json!(true) && at_place(&d, &d[id]["rect"], "loop", place), "{how} with the markers off: {id} at {:?} on screen, the loop's point {:?}", centre(&d[id]["rect"]), on_screen(&d["__ctm"]["loop"], on_loop(place)));
+        }
+        match how {
+            "a zoom" => {
+                page.eval(r#"(() => { document.querySelector('.zoom button[title="Fit"]').click(); return true; })()"#);
+            }
+            "the window" => {
+                page.call("Emulation.clearDeviceMetricsOverride", json!({}));
+            }
+            _ => {}
+        }
     }
     // The markers write `display:inline` (Inkscape's, on an object shown again): with their layer
     // turned off the page hides them all the same.
