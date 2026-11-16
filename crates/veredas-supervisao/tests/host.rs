@@ -457,8 +457,15 @@ fn two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal() {
                 false
             });
             assert!(same, "{m} {nested} answers otherwise than portal's own: {last:?}");
-            // And marked `nosniff` by the host, a stream's head too (portal's own answer is not).
-            assert!(head_of(addr, m, &nested).contains("x-content-type-options: nosniff"), "{m} {nested}");
+            // Its head portal's own, header for header (a stream's too; the date and a length the
+            // clocks move aside), `nosniff` the one header the host adds (portal's own answer has none).
+            let fields = |head: String| -> BTreeMap<String, String> {
+                head.lines().skip(1).filter_map(|l| l.split_once(':')).map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string())).filter(|(k, _)| k != "date" && k != "content-length").collect()
+            };
+            let (mut theirs, own) = (fields(head_of(addr, m, &nested)), fields(head_of(own_portal, m, p)));
+            assert_eq!(theirs.remove("x-content-type-options").as_deref(), Some("nosniff"), "{m} {nested}");
+            assert!(!own.contains_key("x-content-type-options"), "{m} {p}: portal's own answer marked");
+            assert_eq!(theirs, own, "{m} {nested}: portal's own head, `nosniff` the one header added");
         }
     }
     // Portal's own routers let go of the sessions' state before the sessions stop.
@@ -854,7 +861,9 @@ fn headers_of(addr: SocketAddr, path: &str) -> (u16, BTreeMap<String, String>) {
 /// a fetch, a feed, a WebSocket, a beacon and a module imported. What runs says so in `__ran`.
 /// Kept in a page from its first load: every refusal of its content policy, as `[directive, address]`
 /// (the address the browser refused, or `inline`).
-const WATCH: &str = "window.__refused = []; document.addEventListener('securitypolicyviolation', (e) => window.__refused.push([e.effectiveDirective, e.blockedURI]));";
+/// Every feed the page opens kept too (`__feeds`), so its loss and return can be told to the page as
+/// its own feed tells them (a browser offline keeps a stream it already holds).
+const WATCH: &str = "window.__refused = []; document.addEventListener('securitypolicyviolation', (e) => window.__refused.push([e.effectiveDirective, e.blockedURI])); window.__feeds = []; { const Feed = window.EventSource; window.EventSource = class extends Feed { constructor(...a) { super(...a); window.__feeds.push(this); } }; }";
 
 /// Every kind of load and of script a page can be made to do, each aimed at its own address on the
 /// other host (`fire(other)`), with the directive the policy refuses it by and the address it
@@ -1050,11 +1059,41 @@ impl Drop for Plain {
     }
 }
 
+/// Every control the page has built on the screen shown, pressed in turn, each found anew (a press
+/// may build others: a table's pager, a selected object's writes): every button (a layer, a zoom, a
+/// dashboard's tab, a table, a page of it, a series, a write, confirmed) and every row of the
+/// attention list. What a press leaves the page by (the session picker, a session's card) is driven
+/// apart. Returns what it pressed.
+const PRESS_ALL: &str = r#"(async () => {
+  window.confirm = () => true;
+  const pressed = [];
+  for (let i = 0; i < 80; i++) {
+    const all = [...document.querySelectorAll("button, .side ul.attention li")];
+    if (i >= all.length) break;
+    const el = all[i];
+    if (el.disabled) continue;
+    pressed.push(`${el.tagName.toLowerCase()}.${el.className} ${el.textContent.trim().slice(0, 24)}`);
+    el.click();
+    await new Promise((ok) => setTimeout(ok, 300));
+  }
+  return pressed;
+})()"#;
+
+/// What a watched page refused: nothing, by its own report (`WATCH`) and by the browser's log, which
+/// keeps a refusal of a document since left (`/` handing over to a session's page, a picker's).
+fn refused_nothing(page: &mut Browser, what: &str) {
+    assert_eq!(page.eval("window.__refused"), json!([]), "{what}: refused nothing");
+    let said: Vec<String> = page.events_of("Log.entryAdded").iter().map(|e| e["params"]["entry"]["text"].as_str().unwrap_or("").to_string()).filter(|t| t.contains("Content Security Policy")).collect();
+    assert_eq!(said, Vec::<String>::new(), "{what}: a refusal in the browser's log");
+}
+
 /// Every view a session's page lists in its tabs, shown in turn and drawn (a table and a series
-/// picked, the first of each list), its page refusing nothing under its policy.
+/// picked, the first of each list), then every control on it pressed (`PRESS_ALL`), its page
+/// refusing nothing under its policy.
 fn every_view_refuses_nothing(page: &mut Browser, session: &str) {
     let views: Vec<String> = page.eval(r#"[...document.querySelectorAll(".tabs [data-view]")].map((a) => a.dataset.view)"#).as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
     assert!(views.len() >= 5 && views.contains(&"layout".to_string()), "{session}: {views:?}");
+    let mut pressed = 0;
     for view in &views {
         page.eval(&format!("location.hash = {}; true", serde_json::to_string(view).unwrap()));
         page.wait_for("document.querySelector('main') && document.querySelector('main').children.length > 0 ? true : null", Duration::from_secs(20));
@@ -1064,15 +1103,21 @@ fn every_view_refuses_nothing(page: &mut Browser, session: &str) {
             page.wait_for("['page', 'chart', 'waiting', 'error'].includes(document.querySelector('.list-main')?.dataset.screen) ? true : null", Duration::from_secs(20));
         }
         std::thread::sleep(Duration::from_millis(1200));
-        assert_eq!(page.eval("window.__refused"), json!([]), "{session}: the {view} view refused nothing");
+        refused_nothing(page, &format!("{session}: the {view} view"));
+        pressed += page.eval(PRESS_ALL).as_array().unwrap().len();
+        std::thread::sleep(Duration::from_millis(1200));
+        refused_nothing(page, &format!("{session}: every control of the {view} view pressed"));
     }
+    assert!(pressed >= views.len(), "{session}: controls pressed: {pressed}");
 }
 
-/// A browser watched from its first load at `url` (`WATCH` registered before it), returned once that
-/// document has loaded, waited for through the protocol's page events (`navigate_loaded`).
+/// A browser watched from its first load at `url` (`WATCH` registered before it, the browser's log
+/// kept), returned once that document has loaded, waited for through the protocol's page events
+/// (`navigate_loaded`).
 fn watched_from_first_load(url: &str) -> Browser {
     let mut p = Browser::open("about:blank");
     p.call("Page.enable", json!({}));
+    p.call("Log.enable", json!({}));
     p.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": WATCH }));
     p.navigate_loaded(url, Duration::from_secs(20));
     p
@@ -1130,14 +1175,46 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
 
     // Every screen of the page as built, refusing nothing: the sessions' list, then each view the
     // page's own tabs list, drawn, and an object selected.
+    // Both switches armed, so every write the page offers is pressed and answered below.
+    for name in ["loop", "hall"] {
+        host.session(name).unwrap().set_writes_armed(true);
+    }
     let mut list = watched_from_first_load(&format!("http://{addr}/"));
     list.wait_for("document.querySelectorAll('.session-card').length === 2 || null", Duration::from_secs(20));
     std::thread::sleep(Duration::from_millis(500));
-    assert_eq!(list.eval("window.__refused"), json!([]), "the sessions' list refused nothing");
+    refused_nothing(&mut list, "the sessions' list");
+    // What leaves a page, driven apart: a session's card from the list, then the session picker to
+    // the other session, each document refusing nothing (the browser's log keeps a left one's).
+    list.eval("document.querySelector('a.session-card').click(); true");
+    list.wait_for("location.pathname.startsWith('/s/') && document.querySelectorAll('.tabs [data-view]').length > 0 ? true : null", Duration::from_secs(20));
+    let first = list.eval("location.pathname");
+    list.eval("(() => { const p = document.querySelector('select.plant'); p.value = [...p.options].find((o) => !o.selected).value; p.dispatchEvent(new Event('change')); return true; })()");
+    list.wait_for(&format!("location.pathname !== {first} && document.querySelectorAll('.tabs [data-view]').length > 0 ? true : null"), Duration::from_secs(20));
+    std::thread::sleep(Duration::from_millis(800));
+    refused_nothing(&mut list, "a session's card, then the picker to the other session");
     drop(list);
     let mut page = watched_from_first_load(&format!("http://{addr}/s/loop/"));
     page.wait_for(r#"document.getElementById("pic") && document.getElementById("outlet-1")?.classList.contains("sv-obj") ? true : null"#, Duration::from_secs(20));
     every_view_refuses_nothing(&mut page, "loop");
+    // The page as the plant moves under it, the feed's every event arriving while it is watched (a
+    // snapshot on load; `objects`, an object's state changed, the strip's alarm line and the
+    // attention list drawn; `session`, the switch armed above; `connection`, the feed's loss and
+    // return as the page's own feed reports them, its `error` and `open` dispatched on it), refusing
+    // nothing.
+    page.eval("location.hash = 'layout'; true");
+    a.server("plc").unwrap().set("fill1", 90.0);
+    page.wait_for("[...document.querySelectorAll('.strip .strip-items span')].some((s) => !s.classList.contains('muted')) ? true : null", Duration::from_secs(20));
+    std::thread::sleep(Duration::from_millis(800));
+    refused_nothing(&mut page, "loop: an object's state changed while open");
+    assert!(page.eval("window.__feeds.length").as_u64().unwrap() >= 1, "the page's feed kept");
+    page.eval("window.__feeds.forEach((f) => f.dispatchEvent(new Event('error'))); true");
+    page.wait_for("document.querySelector('.live.off') ? true : null", Duration::from_secs(20));
+    std::thread::sleep(Duration::from_millis(500));
+    page.eval("window.__feeds.forEach((f) => f.dispatchEvent(new Event('open'))); true");
+    page.wait_for("document.querySelector('.live.on') ? true : null", Duration::from_secs(20));
+    std::thread::sleep(Duration::from_millis(800));
+    refused_nothing(&mut page, "loop: the feed lost and back");
+    a.server("plc").unwrap().set("fill1", 35.0);
     // And every other session the host lists, its own page and every view (hall has no layout, its
     // layout view the page's words for that).
     let (_, sessions) = get(addr, "/api/sessions");
@@ -1152,7 +1229,7 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     page.eval(r#"document.getElementById("outlet-1").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
     page.wait_for("document.querySelector('.side .spark-wrap')?.children.length ? true : null", Duration::from_secs(20));
     std::thread::sleep(Duration::from_millis(800));
-    assert_eq!(page.eval("window.__refused"), json!([]), "an object selected, its sparkline drawn, refused nothing");
+    refused_nothing(&mut page, "an object selected, its sparkline drawn");
     // Every object of every session selected in turn (by its element where the layout draws it, else
     // by its row in the attention list), its side panel built (the writes it offers, their gate and
     // their answers' place among them), refusing nothing.
@@ -1171,9 +1248,16 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
             let Some(how) = how.as_str().map(String::from) else { continue };
             side.wait_for(&format!("document.querySelector('.side .sel-title')?.dataset.id === {id} || null"), Duration::from_secs(10));
             std::thread::sleep(Duration::from_millis(700));
-            assert_eq!(side.eval("window.__refused"), json!([]), "{name}: {id} selected by {how}, refused nothing");
-            if !o["actions"].as_array().unwrap().is_empty() {
-                assert!(side.eval("document.querySelectorAll('.side .actions button').length").as_u64().unwrap() > 0, "{name}: {id}'s writes offered");
+            refused_nothing(&mut side, &format!("{name}: {id} selected by {how}"));
+            let actions = o["actions"].as_array().unwrap().len();
+            if actions > 0 {
+                // Every write it offers pressed (the switch armed, each confirmed) and its answer said
+                // under it, refusing nothing.
+                side.wait_for(&format!("document.querySelectorAll('.side .actions button:not([disabled])').length === {actions} || null"), Duration::from_secs(10));
+                side.eval("window.confirm = () => true; document.querySelectorAll('.side .actions button').forEach((b) => b.click()); true");
+                side.wait_for(&format!("document.querySelectorAll('.side .write-note span').length === {actions} || null"), Duration::from_secs(20));
+                std::thread::sleep(Duration::from_millis(700));
+                refused_nothing(&mut side, &format!("{name}: {id}'s writes pressed and answered"));
                 offering += 1;
             }
             *selected.entry(name).or_insert(0) += 1;
@@ -1317,5 +1401,41 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     drop(framer);
     drop(page);
     drop(other);
+    host.stop();
+}
+
+/// A file of one session, the common deployment: `/` hands the browser over to the session's page
+/// (`location.replace`), and neither document refuses anything, by the page's own report and by the
+/// browser's log, which keeps what the document handed over from refused.
+#[test]
+fn one_session_at_the_root_hands_over_to_its_page_refusing_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(&dir.path().join("bench"));
+    let path = write_example(dir.path(), &live_example(&bench, false));
+    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let addr = host.addr();
+    let (_, sessions) = get(addr, "/api/sessions");
+    assert_eq!(sessions["sessions"].as_array().unwrap().len(), 1, "{sessions}");
+    // Watched from the first load of `/`, which may hand over before its own load event: waited for
+    // by the frame's address reaching the session's page, never by `/`'s load.
+    let mut page = Browser::open("about:blank");
+    page.call("Page.enable", json!({}));
+    page.call("Log.enable", json!({}));
+    page.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": WATCH }));
+    page.call("Page.navigate", json!({ "url": format!("http://{addr}/") }));
+    let to = format!("http://{addr}/s/loop/");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let tree = page.call("Page.getFrameTree", json!({}));
+        if tree["frameTree"]["frame"]["url"].as_str() == Some(to.as_str()) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "`/` never handed over to {to}: {tree}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    page.wait_for("document.querySelectorAll('.tabs [data-view]').length > 0 ? true : null", Duration::from_secs(20));
+    std::thread::sleep(Duration::from_millis(1000));
+    refused_nothing(&mut page, "one session: `/` handed over to its page");
+    drop(page);
     host.stop();
 }

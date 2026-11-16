@@ -622,3 +622,22 @@ cells table's KEY, MEDIAN, MEDIAN, WINDOW, DISTRIBUTION, σ, N; the alarms table
 VALUE, SINCE), the Tables view's type word as it writes it; no heading goes through
 `text-transform` (C-052's census refuses any). `docs/design/README.md` says the same of column
 headers.
+
+## Q29 - Does the host answer a request named for another host?
+
+**Raised** 2026-11-16, by C-049's fifteenth refute round (outside the clause; for the suite's owed
+cyber-security round).
+
+Neither supervisão's host (`host.rs`) nor portal's nested router (`serve.rs`) reads a request's
+`Host` or `Origin`. A site whose own name an attacker points at 127.0.0.1 after the page has loaded
+(DNS rebinding) becomes, to the browser, the same origin as the host: its script reads every
+session's data and presses an armed write, with no frame at all, which neither content policy can
+govern and which the framing ruling meant to bar. The page and portal answer any name that reaches
+the address.
+
+The choices: (a) answer only a request whose `Host` is the bound address or a name the supervisão
+file lists (`hosts = [...]`), and refuse a write whose `Origin` is not the page's own; (b) the same,
+the names taken from the machine's own (its host name, `localhost`); (c) leave it to the network
+(a firewall, a reverse proxy) and state it as a limit.
+
+**Taken meanwhile** (the most reversible): (c), nothing changed; C-049 states it as a limit.
