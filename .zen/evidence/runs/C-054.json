@@ -12,15 +12,15 @@
     "component"
   ],
   "exitCode": 0,
-  "outputSha": "e6c38bb7bc25ec8f62e5ecd298b40304cb4875b102274eeefaed488e998b1df0",
-  "outputTail": "\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.72s\n\n\nrunning 3 tests\ntest a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are ... ok\ntest every_answer_portal_gives_a_write_is_said_as_it_means ... ok\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.94s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.00s\n     Running tests\\component.rs (target\\debug\\deps\\component-3e5a68c69a6a67d6.exe)\n     Running tests\\writes.rs (target\\debug\\deps\\writes-6ce7c1b2f8355b43.exe)",
-  "ranAt": "2026-11-15T21:36:32.560Z",
-  "headCommit": "ec56ca265f449177f392066f8016ed148e3a94b4",
+  "outputSha": "b09cbeb72cde0c0050a0f5961d52eb3ddeaea0cc5bb937aaa7212ac460d59f48",
+  "outputTail": "\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.13s\n\n\nrunning 3 tests\ntest a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are ... ok\ntest every_answer_portal_gives_a_write_is_said_as_it_means ... ok\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.09s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.27s\n     Running tests\\component.rs (target\\debug\\deps\\component-3e5a68c69a6a67d6.exe)\n     Running tests\\writes.rs (target\\debug\\deps\\writes-6ce7c1b2f8355b43.exe)",
+  "ranAt": "2026-11-16T01:56:51.757Z",
+  "headCommit": "442fe226a2b08abfb92eff395347997318db86f2",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/writes.rs",
       "file": "crates/veredas-supervisao/tests/writes.rs",
-      "fileSha": "1d5673529ddbd1269712646b344fec31fc82141a956982b9a225862bb5f15394"
+      "fileSha": "4ce475c05f6a89c03bb2c52c5e033faf6daaba3ce08f601afe33f3b1721babd3"
     },
     {
       "name": "crates/veredas-supervisao/tests/component.rs",
