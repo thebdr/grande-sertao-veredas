@@ -865,6 +865,293 @@ fn headers_of(addr: SocketAddr, path: &str) -> (u16, BTreeMap<String, String>) {
 /// its own feed tells them (a browser offline keeps a stream it already holds).
 const WATCH: &str = "window.__refused = []; document.addEventListener('securitypolicyviolation', (e) => window.__refused.push([e.effectiveDirective, e.blockedURI])); window.__feeds = []; { const Feed = window.EventSource; window.EventSource = class extends Feed { constructor(...a) { super(...a); window.__feeds.push(this); } }; }";
 
+/// Kept in a page from its first load: every listener it registers (`__listening`, as `[kind,
+/// target]`, by `addEventListener` or an `on…` property), each wrapped so its call is counted by kind
+/// (`__fired`) and by the element it was registered on (`__firedOn`); `__at` a point of a listening
+/// element where it is topmost (scrolled into view), `__missed` the kinds a driven one never heard.
+const LISTEN: &str = r#"window.__listening = []; window.__fired = {}; window.__firedOn = new WeakMap(); window.__targets = [];
+{
+  const fired = (type, fn) => typeof fn !== "function" ? fn : function (...a) {
+    window.__fired[type] = (window.__fired[type] || 0) + 1;
+    if (this && typeof this === "object") { if (!window.__firedOn.has(this)) window.__firedOn.set(this, new Set()); window.__firedOn.get(this).add(type); }
+    return fn.apply(this, a);
+  };
+  const kept = new WeakMap();
+  const add = EventTarget.prototype.addEventListener, remove = EventTarget.prototype.removeEventListener;
+  EventTarget.prototype.addEventListener = function (type, fn, opts) {
+    window.__listening.push([type, this]);
+    if (typeof fn !== "function") return add.call(this, type, fn, opts);
+    if (!kept.has(fn)) kept.set(fn, {});
+    const m = kept.get(fn);
+    if (!m[type]) m[type] = fired(type, fn);
+    return add.call(this, type, m[type], opts);
+  };
+  EventTarget.prototype.removeEventListener = function (type, fn, opts) {
+    const m = typeof fn === "function" ? kept.get(fn) : undefined;
+    return remove.call(this, type, (m && m[type]) || fn, opts);
+  };
+  const protos = new Set();
+  for (let p of [HTMLElement.prototype, SVGElement.prototype, EventSource.prototype]) for (; p && p !== Object.prototype; p = Object.getPrototypeOf(p)) protos.add(p);
+  for (const proto of protos) {
+    for (const k of Object.getOwnPropertyNames(proto)) {
+      const d = Object.getOwnPropertyDescriptor(proto, k);
+      if (!k.startsWith("on") || !d || !d.set || !d.configurable) continue;
+      Object.defineProperty(proto, k, { ...d, set(fn) { window.__listening.push([k.slice(2), this]); d.set.call(this, fired(k.slice(2), fn)); } });
+    }
+  }
+  window.__at = (i) => {
+    const el = window.__targets[i];
+    if (!el || !el.isConnected || el.disabled) return null;
+    el.scrollIntoView({ block: "center", inline: "center" });
+    const b = el.getBoundingClientRect();
+    if (b.width < 1 || b.height < 1) return null;
+    for (const [fx, fy] of [[0.5, 0.5], [0.3, 0.5], [0.7, 0.5], [0.5, 0.3], [0.5, 0.7], [0.2, 0.2], [0.8, 0.8]]) {
+      const x = b.left + b.width * fx, y = b.top + b.height * fy;
+      const hit = document.elementFromPoint(x, y);
+      if (hit && (hit === el || el.contains(hit))) return [x, y, b.width, b.height, el.matches("svg.plant [data-key]")];
+    }
+    return null;
+  };
+  window.__driven = new WeakSet();
+  window.__missed = (i, kinds) => {
+    const el = window.__targets[i];
+    window.__driven.add(el);
+    const got = window.__firedOn.get(el) || new Set();
+    return el.isConnected ? kinds.filter((k) => !got.has(k)) : [];
+  };
+}"#;
+
+/// The elements a page listens on for the pointer or the wheel, in the document and not driven yet,
+/// each with the kinds it listens for (kept in `__targets` for `__at` and `__missed`).
+const TARGETS: &str = r#"(() => {
+  const mouse = ["click", "mousedown", "mousemove", "mouseleave", "wheel"];
+  const kinds = new Map();
+  for (const [type, t] of window.__listening) if (t instanceof Element && t.isConnected && !window.__driven.has(t) && mouse.includes(type)) { if (!kinds.has(t)) kinds.set(t, new Set()); kinds.get(t).add(type); }
+  window.__targets = [...kinds.keys()];
+  return window.__targets.map((el, i) => [i, [...kinds.get(el)]]);
+})()"#;
+
+/// The kinds of pointer input a page registered a listener for (on an element or the window) and
+/// never heard.
+const UNHEARD: &str = r#"(() => {
+  const mouse = ["click", "mousedown", "mouseup", "mousemove", "mouseleave", "wheel"];
+  const reg = new Set(window.__listening.filter(([k, t]) => mouse.includes(k) && (t instanceof Element || t === window)).map(([k]) => k));
+  return [...reg].filter((k) => !window.__fired[k]).sort();
+})()"#;
+
+/// How the policy test drives every kind of event the page's source listens for (`listened_kinds`):
+/// the pointer and the wheel through the browser's own input (`drive_every_listener`), the rest as
+/// the page meets them.
+const DRIVEN: [(&str, &str); 13] = [
+    ("click", "pressed and released on every element listening, and every button and attention row pressed (PRESS_ALL)"),
+    ("mousedown", "dragged from every element listening"),
+    ("mouseup", "released after every drag and press"),
+    ("mousemove", "moved over every element listening, and dragged"),
+    ("mouseleave", "moved over and off every element listening"),
+    ("wheel", "turned both ways over every element listening"),
+    ("change", "the session picker, driven apart (it leaves the page)"),
+    ("hashchange", "every view shown by its address"),
+    ("snapshot", "the feed's first event, on every load"),
+    ("objects", "an object's state changed while the page is open"),
+    ("session", "the session's status, sent while the page is open"),
+    ("open", "the feed's return, dispatched on it, and its first opening"),
+    ("error", "the feed's loss, dispatched on it, and the feed refused (FAILING)"),
+];
+
+/// Every kind of event the page's source listens for (`web/src`): each `addEventListener("…")`
+/// and each `.on… =` it writes.
+fn listened_kinds() -> std::collections::BTreeSet<String> {
+    let mut kinds = std::collections::BTreeSet::new();
+    for (_, text) in page_sources() {
+        for (at, _) in text.match_indices("addEventListener(\"") {
+            let kind: String = text[at + 18..].chars().take_while(|c| c.is_ascii_lowercase()).collect();
+            kinds.insert(kind);
+        }
+        for (at, _) in text.match_indices(".on") {
+            let kind: String = text[at + 3..].chars().take_while(|c| c.is_ascii_lowercase()).collect();
+            if !kind.is_empty() && text[at + 3 + kind.len()..].starts_with(" = ") {
+                kinds.insert(kind);
+            }
+        }
+    }
+    kinds
+}
+
+/// The page's TypeScript sources (`web/src`), by file name.
+fn page_sources() -> Vec<(String, String)> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/src");
+    let mut out: Vec<(String, String)> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "ts")).map(|p| (p.file_name().unwrap().to_string_lossy().into_owned(), std::fs::read_to_string(&p).unwrap().replace("\r\n", "\n"))).collect();
+    out.sort();
+    out
+}
+
+/// Every ask the page's source makes: the address each `getJson`, `fetch` and `EventSource` is
+/// written with as a string, the session's base dropped and every value put in it written `*`.
+fn page_asks() -> std::collections::BTreeSet<String> {
+    let mut asks = std::collections::BTreeSet::new();
+    for (_, text) in page_sources() {
+        for start in ["getJson<", "fetch(", "new EventSource("] {
+            for (at, _) in text.match_indices(start) {
+                let line = &text[at..at + text[at..].find('\n').unwrap_or(text.len() - at)];
+                let Some(open) = line.find("(\u{60}").or_else(|| line.find("(\"")) else { continue };
+                let quote = line[open + 1..].chars().next().unwrap();
+                let body = &line[open + 2..];
+                let mut written = body[..body.find(quote).unwrap()].to_string();
+                for b in ["${base(this.name)}", "${base(name)}", "${base}"] {
+                    written = written.replace(b, "");
+                }
+                while let Some(s) = written.find("${") {
+                    let e = s + written[s..].find('}').unwrap();
+                    written.replace_range(s..=e, "*");
+                }
+                asks.insert(written);
+            }
+        }
+    }
+    asks
+}
+
+/// Every ask the page makes (`page_asks`) and the page of the policy test it is refused on: 0 the
+/// sessions' list, 1 to 5 a session's page (1 and 2 its start failing, 3 to 5 its views shown).
+const FAILING: [(&str, usize); 10] = [
+    ("/api/sessions", 0),
+    ("/binding", 1),
+    ("/layout.svg", 2),
+    ("/objects", 3),
+    ("/dashboard/*", 3),
+    ("/portal/api/table/data?*", 3),
+    ("/portal/api/series/data?*", 4),
+    ("/portal/api/opc/write", 4),
+    ("/portal/api/tables", 5),
+    ("/portal/api/series", 5),
+];
+
+/// Whether `url` matches a pattern of the browser's blocking (`*` any run of characters).
+fn glob(pattern: &str, url: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    let mut at = 0;
+    for (i, p) in parts.iter().enumerate() {
+        if i == 0 {
+            if !url.starts_with(p) {
+                return false;
+            }
+            at = p.len();
+        } else if i == parts.len() - 1 {
+            return url.len() >= at + p.len() && url.ends_with(p);
+        } else {
+            match url[at..].find(p) {
+                Some(k) => at += k + p.len(),
+                None => return false,
+            }
+        }
+    }
+    at == url.len()
+}
+
+/// A page watched as `watched_from_first_load` watches one, every request matching one of
+/// `blocked` refused by the browser from its first load.
+fn watched_failing(url: &str, blocked: &[String]) -> Browser {
+    let mut p = Browser::open("about:blank");
+    p.call("Page.enable", json!({}));
+    p.call("Log.enable", json!({}));
+    p.call("Network.enable", json!({}));
+    p.call("Network.setBlockedURLs", json!({ "urls": blocked }));
+    p.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": WATCH }));
+    p.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": LISTEN }));
+    p.navigate_loaded(url, Duration::from_secs(20));
+    p
+}
+
+/// The addresses a watched page asked and the browser refused by its blocking, by its own report.
+fn blocked_by_browser(p: &mut Browser) -> Vec<String> {
+    let sent: BTreeMap<String, String> = p.events_of("Network.requestWillBeSent").iter().map(|e| (e["params"]["requestId"].as_str().unwrap_or("").to_string(), e["params"]["request"]["url"].as_str().unwrap_or("").to_string())).collect();
+    p.events_of("Network.loadingFailed").iter().filter(|e| e["params"]["blockedReason"].is_string()).filter_map(|e| sent.get(e["params"]["requestId"].as_str().unwrap_or("")).cloned()).collect()
+}
+
+/// One pointer event through the browser's own input.
+fn pointer(page: &mut Browser, kind: &str, x: f64, y: f64, buttons: u8) {
+    let button = if kind == "mouseMoved" && buttons == 0 { "none" } else { "left" };
+    page.call("Input.dispatchMouseEvent", json!({ "type": kind, "x": x, "y": y, "button": button, "buttons": buttons, "clickCount": if kind == "mouseMoved" { 0 } else { 1 } }));
+}
+
+/// Every element the page listens on for the pointer or the wheel (`LISTEN`'s census, `TARGETS`),
+/// still in the document, enabled, drawn and topmost at a point of it, driven through the
+/// browser's own input by each kind it listens for (moved over and off, pressed and released,
+/// dragged, the wheel turned both ways), every one of its kinds heard there; each once in the
+/// document. Again after a pass, for what a press built or showed (a selection's writes, a layer
+/// turned back on), up to three passes. Returns how many were driven and how many of those a keyed
+/// marker's clones.
+fn drive_every_listener(page: &mut Browser, what: &str) -> (usize, usize) {
+    let (mut driven, mut clones) = (0, 0);
+    for _ in 0..3 {
+        let before = driven;
+        drive_a_pass(page, what, &mut driven, &mut clones);
+        if driven == before {
+            break;
+        }
+    }
+    (driven, clones)
+}
+
+/// One pass of `drive_every_listener`.
+fn drive_a_pass(page: &mut Browser, what: &str, driven: &mut usize, clones: &mut usize) {
+    let targets = page.eval(TARGETS);
+    for t in targets.as_array().unwrap() {
+        let i = t[0].as_u64().unwrap();
+        let kinds: Vec<String> = t[1].as_array().unwrap().iter().map(|k| k.as_str().unwrap().to_string()).collect();
+        // Aimed anew and driven again, up to four times, while a kind is unheard: a marker slides
+        // between the place it is aimed at and the press (the page's own transition).
+        let mut missed = json!(null);
+        let mut clone = false;
+        for attempt in 0..4 {
+            let at = page.eval(&format!("window.__at({i})"));
+            let Some(a) = at.as_array() else {
+                if attempt == 0 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(150));
+                continue;
+            };
+            let (x, y, w) = (a[0].as_f64().unwrap(), a[1].as_f64().unwrap(), a[2].as_f64().unwrap());
+            clone = a[4] == json!(true);
+            let has = |k: &str| kinds.iter().any(|x| x == k);
+            if has("mousemove") || has("mouseleave") {
+                pointer(page, "mouseMoved", x, y, 0);
+                pointer(page, "mouseMoved", x + w / 8.0, y, 0);
+                pointer(page, "mouseMoved", 1.0, 1.0, 0);
+            }
+            if has("click") {
+                pointer(page, "mouseMoved", x, y, 0);
+                pointer(page, "mousePressed", x, y, 1);
+                pointer(page, "mouseReleased", x, y, 0);
+            }
+            if has("mousedown") {
+                pointer(page, "mouseMoved", x, y, 0);
+                pointer(page, "mousePressed", x, y, 1);
+                pointer(page, "mouseMoved", x + 20.0, y + 12.0, 1);
+                pointer(page, "mouseReleased", x + 20.0, y + 12.0, 0);
+            }
+            if has("wheel") {
+                for dy in [120.0, -120.0] {
+                    page.call("Input.dispatchMouseEvent", json!({ "type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": dy }));
+                }
+            }
+            missed = page.eval(&format!("window.__missed({i}, {})", serde_json::to_string(&kinds).unwrap()));
+            if missed == json!([]) {
+                break;
+            }
+        }
+        if missed.is_null() {
+            continue;
+        }
+        assert_eq!(missed, json!([]), "{what}: an element listening for {kinds:?} that did not hear the pointer: {}", page.eval(&format!("window.__targets[{i}].outerHTML.slice(0, 200)")));
+        *driven += 1;
+        if clone {
+            *clones += 1;
+        }
+    }
+}
+
 /// Every kind of load and of script a page can be made to do, each aimed at its own address on the
 /// other host (`fire(other)`), with the directive the policy refuses it by and the address it
 /// refuses (`inline` for one written in the page): a picture by an SVG image, an HTML image, a
@@ -1088,18 +1375,20 @@ fn refused_nothing(page: &mut Browser, what: &str) {
 }
 
 /// Every view a session's page lists in its tabs, shown in turn and drawn (a table and a series
-/// picked, the first of each list), then every control on it pressed (`PRESS_ALL`), its page
-/// refusing nothing under its policy.
-fn every_view_refuses_nothing(page: &mut Browser, session: &str) {
+/// picked, the first of each list, where the list came), then every control on it pressed
+/// (`PRESS_ALL`) and every element listening for the pointer or the wheel driven by the browser's
+/// own input (`drive_every_listener`), its page refusing nothing under its policy; every kind of
+/// pointer input the page listens for heard. Returns how many of a keyed marker's clones it drove.
+fn every_view_refuses_nothing(page: &mut Browser, session: &str) -> usize {
     let views: Vec<String> = page.eval(r#"[...document.querySelectorAll(".tabs [data-view]")].map((a) => a.dataset.view)"#).as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
     assert!(views.len() >= 5 && views.contains(&"layout".to_string()), "{session}: {views:?}");
-    let mut pressed = 0;
+    let (mut pressed, mut driven, mut clones) = (0, 0, 0);
     for view in &views {
         page.eval(&format!("location.hash = {}; true", serde_json::to_string(view).unwrap()));
         page.wait_for("document.querySelector('main') && document.querySelector('main').children.length > 0 ? true : null", Duration::from_secs(20));
         if view == "tables" || view == "series" {
-            page.wait_for("document.querySelector('.list button[data-table], .list button[data-series]') ? true : null", Duration::from_secs(20));
-            page.eval("document.querySelector('.list button[data-table], .list button[data-series]').click(); true");
+            page.wait_for("document.querySelector('.list button[data-table], .list button[data-series]') || document.querySelector('.list-main')?.dataset.screen === 'error' ? true : null", Duration::from_secs(20));
+            page.eval("document.querySelector('.list button[data-table], .list button[data-series]')?.click(); true");
             page.wait_for("['page', 'chart', 'waiting', 'error'].includes(document.querySelector('.list-main')?.dataset.screen) ? true : null", Duration::from_secs(20));
         }
         std::thread::sleep(Duration::from_millis(1200));
@@ -1107,8 +1396,14 @@ fn every_view_refuses_nothing(page: &mut Browser, session: &str) {
         pressed += page.eval(PRESS_ALL).as_array().unwrap().len();
         std::thread::sleep(Duration::from_millis(1200));
         refused_nothing(page, &format!("{session}: every control of the {view} view pressed"));
+        let (n, c) = drive_every_listener(page, &format!("{session}: the {view} view"));
+        (driven, clones) = (driven + n, clones + c);
+        std::thread::sleep(Duration::from_millis(1200));
+        refused_nothing(page, &format!("{session}: every element of the {view} view listening for the pointer driven"));
     }
-    assert!(pressed >= views.len(), "{session}: controls pressed: {pressed}");
+    assert!(pressed >= views.len() && driven >= views.len(), "{session}: controls pressed: {pressed}, elements driven: {driven}");
+    assert_eq!(page.eval(UNHEARD), json!([]), "{session}: kinds of pointer input the page listens for and never heard");
+    clones
 }
 
 /// A browser watched from its first load at `url` (`WATCH` registered before it, the browser's log
@@ -1119,6 +1414,7 @@ fn watched_from_first_load(url: &str) -> Browser {
     p.call("Page.enable", json!({}));
     p.call("Log.enable", json!({}));
     p.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": WATCH }));
+    p.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": LISTEN }));
     p.navigate_loaded(url, Duration::from_secs(20));
     p
 }
@@ -1151,10 +1447,29 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     let svg = std::fs::read_to_string(&svg_path).unwrap();
     assert!(svg.contains("</svg>"));
     let polyfill = format!("  <script id=\"mesh_polyfill\" type=\"text/javascript\"><![CDATA[\n// Use Canvas to render a mesh gradient, passing the rendering to an image via a data stream.\nfetch(\"{}/polyfill-ran\");\n]]></script>\n", other.address());
-    std::fs::write(&svg_path, svg.replacen("</svg>", &format!("  <image id=\"pic\" x=\"2\" y=\"2\" width=\"8\" height=\"8\" href=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==\"/>\n{polyfill}</svg>"), 1)).unwrap();
+    // A keyed marker on the loop (its positions read from the sorter's log), so a clone of it is
+    // drawn and driven like any element the page listens on; its keys kept an hour (a key is
+    // forgotten 10 s after its last sample by default, before the layout view is driven).
+    std::fs::write(&svg_path, svg.replacen("</svg>", &format!("  <circle id=\"tracked\" r=\"4\"/>\n  <image id=\"pic\" x=\"2\" y=\"2\" width=\"8\" height=\"8\" href=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==\"/>\n{polyfill}</svg>"), 1)).unwrap();
     let polyfill_ran = |from: usize| other.requests_since(from).iter().any(|l| l.contains("/polyfill-ran"));
+    let binding = dir.path().join("loop/binding.toml");
+    let text = std::fs::read_to_string(&binding).unwrap();
+    std::fs::write(&binding, text.replacen("\n[[dashboard]]", "\n[[object]]\nid = \"tracked\"\nlabel = \"Tracked\"\nvalue = { source = \"sorter\", series = \"at\" }\nshow = \"move\"\npath = \"loop\"\nstale_after_ms = 3600000\n\n[[dashboard]]", 1)).unwrap();
+    let project = dir.path().join("loop/project.toml");
+    let text = std::fs::read_to_string(&project).unwrap();
+    std::fs::write(&project, format!("{text}\n[[rule]]\nname = \"positions\"\npattern = 'POS item=(?P<item>\\w+) at=(?P<at>[0-9.]+)'\nscope = \"sorter\"\ntypes = {{ at = \"float\" }}\nkey = \"item\"\n")).unwrap();
+    std::fs::write(dir.path().join("loop/sorts.log"), "").unwrap();
     let host = Host::start(config::load_file(&path).unwrap()).unwrap();
     let addr = host.addr();
+    // Loop's sorts and two keys of its keyed marker said: a trend with points under the pointer, a
+    // clone for each key.
+    let now = store_now();
+    let log = dir.path().join("loop/sorts.log");
+    append(&log, &[1, 2, 3].map(|o| format!("{} SORT outlet={o} travel={}.0 rate=9{o}.5", stamp(now), 10 + o)));
+    append(&log, &[format!("{} POS item=A1 at=10", stamp(now)), format!("{} POS item=B2 at=50", stamp(now))]);
+    assert!(wait(Duration::from_secs(20), || object(&get(addr, "/s/loop/objects.json").1, "tracked")["items"].as_array().is_some_and(|i| i.len() == 2)), "loop's keyed marker");
+    // Every kind of event the page's source listens for is one the test drives (`DRIVEN`).
+    assert_eq!(listened_kinds(), DRIVEN.iter().map(|(k, _)| k.to_string()).collect::<std::collections::BTreeSet<_>>(), "the kinds of event the page listens for");
     const PAGE: &str = "default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
     const DRAWING: &str = "default-src 'none'; style-src-attr 'unsafe-inline'; img-src data:; sandbox; frame-ancestors 'none'";
     for p in ["/", "/s/loop", "/s/loop/", "/s/hall/"] {
@@ -1195,7 +1510,13 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     drop(list);
     let mut page = watched_from_first_load(&format!("http://{addr}/s/loop/"));
     page.wait_for(r#"document.getElementById("pic") && document.getElementById("outlet-1")?.classList.contains("sv-obj") ? true : null"#, Duration::from_secs(20));
-    every_view_refuses_nothing(&mut page, "loop");
+    let clones = every_view_refuses_nothing(&mut page, "loop");
+    if clones == 0 {
+        page.eval("location.hash = 'layout'; true");
+        std::thread::sleep(Duration::from_millis(1500));
+        let seen = page.eval(r#"[...document.querySelectorAll("svg.plant [data-key]")].map((c) => { c.scrollIntoView({ block: "center", inline: "center" }); const b = c.getBoundingClientRect(); const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); return [c.dataset.key, c.tagName, b.left, b.top, b.width, b.height, hit ? hit.outerHTML.slice(0, 120) : null, window.__targets.indexOf(c), window.__listening.filter(([k, t]) => t === c).map(([k]) => k)]; })"#);
+        panic!("a keyed marker's clone driven by the pointer: none; its clones: {seen}");
+    }
     // The page as the plant moves under it, the feed's every event arriving while it is watched (a
     // snapshot on load; `objects`, an object's state changed, the strip's alarm line and the
     // attention list drawn; `session`, the switch armed above; `connection`, the feed's loss and
@@ -1265,6 +1586,45 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
         drop(side);
     }
     assert!(selected.get("loop").is_some_and(|n| *n >= 5) && selected.contains_key("hall") && offering >= 2, "objects selected: {selected:?}, offering writes: {offering}");
+
+    // Every ask the page makes (read off its source, `page_asks`), refused by the browser on the
+    // page it fails on (`FAILING`): the start of the sessions' list and of a session's page failing
+    // (their words in the page's place), and with the session's page up, every view shown and driven
+    // as above while its feed, its dashboards, a table's rows, a series' points (a selected object's
+    // sparkline too), a write's post and the lists of tables and of series are each refused; every
+    // screen refusing nothing, and each ask refused at least once by the browser's own report, so
+    // each failure was reached.
+    assert_eq!(page_asks(), FAILING.iter().map(|(a, _)| a.to_string()).collect::<std::collections::BTreeSet<_>>(), "the page's asks, each failed on a page below");
+    for n in 0..=5 {
+        let blocked: Vec<String> = FAILING.iter().filter(|(_, p)| *p == n).map(|(a, _)| if a.starts_with("/api/") { format!("*{a}") } else { format!("*/s/loop{a}") }).collect();
+        let url = if n == 0 { format!("http://{addr}/") } else { format!("http://{addr}/s/loop/") };
+        let mut failing = watched_failing(&url, &blocked);
+        if n <= 2 {
+            failing.wait_for("document.querySelector('p.error') ? true : null", Duration::from_secs(20));
+        } else {
+            failing.wait_for("document.querySelectorAll('.tabs [data-view]').length > 0 ? true : null", Duration::from_secs(20));
+            if n == 3 {
+                failing.wait_for("document.querySelector('.live.off') ? true : null", Duration::from_secs(20));
+            }
+            every_view_refuses_nothing(&mut failing, &format!("loop, {blocked:?} refused"));
+            if n == 4 {
+                failing.eval("location.hash = 'layout'; true");
+                failing.wait_for(r#"document.getElementById("outlet-3")?.classList.contains("sv-obj") ? true : null"#, Duration::from_secs(20));
+                failing.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+                failing.wait_for("document.querySelector('.side .sel-title')?.dataset.id === 'outlet-3' && document.querySelector('.side .spark-wrap')?.children.length ? true : null", Duration::from_secs(20));
+                failing.wait_for("document.querySelector('.side .actions button:not([disabled])') ? true : null", Duration::from_secs(10));
+                failing.eval("window.confirm = () => true; document.querySelectorAll('.side .actions button').forEach((b) => b.click()); true");
+                failing.wait_for("[...document.querySelectorAll('.side .write-note span')].some((s) => s.textContent.includes('no answer')) ? true : null", Duration::from_secs(20));
+            }
+        }
+        std::thread::sleep(Duration::from_millis(800));
+        refused_nothing(&mut failing, &format!("{blocked:?} refused"));
+        let refused = blocked_by_browser(&mut failing);
+        for b in &blocked {
+            assert!(refused.iter().any(|u| glob(b, u)), "{b}: never asked, so never failed: {refused:?}");
+        }
+        drop(failing);
+    }
 
     // Each kind alone in a blank document with no policy: live (it asks the other host, or runs).
     let mut blank = Browser::open("about:blank");
@@ -1401,6 +1761,70 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     drop(framer);
     drop(page);
     drop(other);
+    host.stop();
+}
+
+/// Every answer the host gives is marked `nosniff`, whatever its status: the middleware itself over
+/// every status an answer can carry (100 to 999), and end to end every status the handlers write
+/// (read off the host's and portal's sources: each `StatusCode::…` and the codes of a write's
+/// refusals), each reached by a request of this file (here a body over portal's limit, a read and a
+/// write with the plant gone) or named as reached by the middleware's check alone.
+#[test]
+fn every_answer_is_marked_nosniff_whatever_its_status() {
+    let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    for code in 100..=999u16 {
+        let mut r = axum::response::Response::new(axum::body::Body::empty());
+        *r.status_mut() = axum::http::StatusCode::from_u16(code).unwrap();
+        let r = rt.block_on(veredas_supervisao::host::nosniff(r));
+        assert_eq!(r.headers().get("x-content-type-options").and_then(|v| v.to_str().ok()), Some("nosniff"), "{code}");
+    }
+    // The statuses the handlers write, by name and by a write's refusal's code.
+    const NAMED: [(&str, u16); 7] = [("BAD_REQUEST", 400), ("FORBIDDEN", 403), ("NOT_FOUND", 404), ("PAYLOAD_TOO_LARGE", 413), ("INTERNAL_SERVER_ERROR", 500), ("BAD_GATEWAY", 502), ("SERVICE_UNAVAILABLE", 503)];
+    let mut written = std::collections::BTreeSet::new();
+    for file in ["src/host.rs", "../veredas-portal/src/serve.rs"] {
+        let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap().replace("\r\n", "\n");
+        for (at, _) in text.match_indices("StatusCode::") {
+            let name: String = text[at + 12..].chars().take_while(|c| c.is_ascii_uppercase() || *c == '_').collect();
+            if !name.is_empty() {
+                written.insert(NAMED.iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("{file}: a status this test does not know: {name}")).1);
+            }
+        }
+        if let Some(f) = text.find("fn refused_code") {
+            let body = &text[f..f + text[f..].find("\n}\n").unwrap()];
+            for (at, _) in body.match_indices("=> ") {
+                written.insert(body[at + 3..at + 6].parse::<u16>().unwrap());
+            }
+        }
+    }
+    // Reached by a request of this file (200, 400, 403, 404 and 405 by `answered` above; 413, 502
+    // and 503 below), or by the middleware's check alone: a store or a computation failing (500) and
+    // a write the plant may have seen (504).
+    const REACHED: [u16; 8] = [200, 400, 403, 404, 405, 413, 502, 503];
+    const BY_THE_CHECK_ALONE: [u16; 2] = [500, 504];
+    assert!(written.contains(&504) && written.contains(&413), "{written:?}");
+    for code in &written {
+        assert!(REACHED.contains(code) != BY_THE_CHECK_ALONE.contains(code), "{code}: reached here or named as the check's alone, and not both");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(&dir.path().join("bench"));
+    let tag = format!("ns={};s=release3", bench.server("plc").unwrap().namespace);
+    let path = write_example(dir.path(), &live_example(&bench, true));
+    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let addr = host.addr();
+    let marked = |(status, head, body): (u16, String, String), want: u16, what: &str| {
+        assert!(status == want && head.contains("x-content-type-options: nosniff"), "{what}: {status} {head} {body}");
+    };
+    // A body over portal's limit to the armed write.
+    let big = format!("{{\"source\":\"plc\",\"tag\":{},\"value\":\"{}\"}}", serde_json::to_string(&tag).unwrap(), "9".repeat(70 * 1024));
+    marked(http(addr, "POST", "/s/loop/portal/api/opc/write", Some(&big)), 413, "a body over the limit");
+    // The plant read, then gone: a read failing, a write never sent.
+    let read = format!("/s/loop/portal/api/opc/read?source=plc&tag={}", enc(&tag));
+    assert!(wait(Duration::from_secs(20), || http(addr, "GET", &read, None).0 == 200), "the plant read");
+    drop(bench);
+    assert!(wait(Duration::from_secs(20), || http(addr, "GET", &read, None).0 == 502), "{:?}", http(addr, "GET", &read, None));
+    marked(http(addr, "GET", &read, None), 502, "a read with the plant gone");
+    let write = json!({ "source": "plc", "tag": tag, "value": "1" }).to_string();
+    marked(http(addr, "POST", "/s/loop/portal/api/opc/write", Some(&write)), 503, "a write with the plant gone");
     host.stop();
 }
 

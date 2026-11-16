@@ -171,8 +171,8 @@ async fn index() -> Response {
 }
 
 /// Every answer the host gives (portal's nested ones too), its type to be believed: no browser
-/// sniffs another (`nosniff`).
-async fn nosniff(mut r: Response) -> Response {
+/// sniffs another (`nosniff`), whatever its status.
+pub async fn nosniff(mut r: Response) -> Response {
     r.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     r
 }
