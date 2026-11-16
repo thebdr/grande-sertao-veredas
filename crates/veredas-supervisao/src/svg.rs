@@ -212,6 +212,12 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
         if let Some(id) = node.attribute("id").filter(|id| the_pages_id(id)) {
             return Err(format!("{} holds the id `{id}` (on <{name}>), which the page names its own", path.display()));
         }
+        // The page's own attributes beside its ids: it tags what it adds for an object
+        // (`data-for`) and reads a marker's key (`data-key`) by its `data-` attributes, which
+        // Inkscape writes none of (Q25). Any, in any case: the page may name more.
+        if let Some(attr) = node.attributes().find(|a| the_pages_attribute(a.name())) {
+            return Err(format!("{} holds `{}` (on <{name}>), a `data-` attribute, which the page names its own: it tags what it adds and reads a marker's key by them", path.display(), attr.name()));
+        }
         // What moves, times or unpins what the page writes, however the drawing writes it (Q25).
         let moving = node.attributes().map(|a| a.name().to_string()).find(|a| MOVING_ATTRIBUTES.contains(&a.as_str())).or_else(|| node.attribute("style").and_then(|st| declared(st).into_iter().find(|p| moves_the_page(p))));
         if let Some(property) = moving {
@@ -327,7 +333,7 @@ pub fn says_important(style: &str) -> bool {
 
 /// The properties a `style` attribute declares, as CSS reads them: each declaration's name (before
 /// its `:`, between its `;`s, white space and comments around it dropped), lowercase, a vendor's
-/// prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`) taken off. A name with white space or a comment
+/// prefix (`VENDOR_PREFIXES`) taken off. A name with white space or a comment
 /// inside it is no declaration (CSS drops it): `trans/**/form` declares nothing.
 pub fn declared(style: &str) -> Vec<String> {
     let out = css_read(style);
@@ -341,7 +347,7 @@ pub fn declared(style: &str) -> Vec<String> {
             continue;
         }
         let name: String = raw[start..=end].iter().map(|(c, _)| c.to_ascii_lowercase()).collect();
-        let bare = ["-webkit-", "-moz-", "-ms-", "-o-"].iter().find_map(|p| name.strip_prefix(p)).unwrap_or(&name).to_string();
+        let bare = VENDOR_PREFIXES.iter().find_map(|p| name.strip_prefix(p)).unwrap_or(&name).to_string();
         if !bare.is_empty() {
             names.push(bare);
         }
@@ -385,17 +391,23 @@ pub fn inkscape_hint(name: &str) -> &'static str {
 /// Whether a CSS property moves, times or unpins what the page writes on the drawing: a transform
 /// of any kind (the page places a marker by its `transform`), a transition, an animation or a
 /// motion offset (the page sets what an element shows and when), `pointer-events` (the page takes
-/// a click on an object's element).
+/// a click on an object's element), and `all`, which resets every one of them (a marker's
+/// placement undone as `transform: none` would). Each listed property by its name and every
+/// longhand of it (its name, a `-` and more: `transform-origin-x`, which Blink reads).
 pub fn moves_the_page(property: &str) -> bool {
-    MOVING.contains(&property) || MOVING_FAMILIES.iter().any(|p| property == *p || property.starts_with(&format!("{p}-")))
+    MOVING.iter().chain(MOVING_FAMILIES.iter()).any(|p| property == *p || property.starts_with(&format!("{p}-")))
 }
 
 /// The properties `moves_the_page` names by their family: a transition's, an animation's and a motion
 /// offset's, each by its name and every longhand of it.
 pub const MOVING_FAMILIES: [&str; 3] = ["transition", "animation", "offset"];
 
-/// The properties `moves_the_page` names whole (and `MOVING_FAMILIES` by their prefix).
-pub const MOVING: [&str; 9] = ["transform", "translate", "rotate", "scale", "transform-origin", "transform-box", "transform-style", "perspective", "pointer-events"];
+/// The properties `moves_the_page` names whole, each with any longhand of it too.
+pub const MOVING: [&str; 10] = ["all", "transform", "translate", "rotate", "scale", "transform-origin", "transform-box", "transform-style", "perspective", "pointer-events"];
+
+/// The vendors' prefixes `declared` takes off a property's name: each engine reads its own spelling
+/// of a property as the property (`-moz-transform` in Firefox, `-webkit-transform` in Blink).
+pub const VENDOR_PREFIXES: [&str; 4] = ["-webkit-", "-moz-", "-ms-", "-o-"];
 
 /// The presentation attributes of those properties SVG lets an element write (its own `transform`
 /// attribute aside: the page reads and keeps it).
@@ -411,6 +423,12 @@ pub const DIRECTED: [&str; 3] = ["text", "tspan", "textPath"];
 /// mode, where an id's case is its own: `APP` is not the page's).
 pub fn the_pages_id(id: &str) -> bool {
     id == "app" || id.starts_with("sv-")
+}
+
+/// The attributes the page names its own on the drawing: every `data-` attribute, in any case (it
+/// tags what it adds for an object by `data-for` and reads a marker's key by `data-key`).
+pub fn the_pages_attribute(name: &str) -> bool {
+    name.len() >= 5 && name.as_bytes()[..5].eq_ignore_ascii_case(b"data-")
 }
 
 /// What may stand inside an object's element: the elements the page draws on, a text's spans, and a

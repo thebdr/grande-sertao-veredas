@@ -458,10 +458,12 @@ panel or its table lacks; a column, key or value the table lacks where the proje
 columns, a value that is not numeric; a `spread` not above 0; a layout that cannot be read, is not
 an SVG document (its root an `svg` in the SVG namespace), or holds (outside Inkscape's own elements, dropped unread) a script, a `<style>` sheet, an animation (`animate`, `animateColor`, `animateMotion`,
 `animateTransform`, `discard`, `set`), a `class`, an id the page names its own (`app` and any beginning
-`sv-`, its case as written), CSS that moves, times or unpins what the page writes (the properties
-`transform`, `translate`, `rotate`, `scale`, `transform-origin`, `transform-box`, `transform-style`,
-`perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, in a
-`style`, a name with white space or a comment inside it declaring nothing; the attributes
+`sv-`, its case as written), an attribute beginning `data-`, in any case (the page's own: it
+tags what it adds and reads a marker's key by them), CSS that moves, times or unpins what the page
+writes (the properties `all`, `transform`, `translate`, `rotate`, `scale`, `transform-origin`, `transform-box`, `transform-style`,
+`perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, each by
+its name and every longhand of it (the name, a hyphen and more), in a `style`, under any vendor's
+prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`), a name with white space or a comment inside it declaring nothing; the attributes
 `transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), a custom
 property (a `style` declaration whose name begins `--`, however CSS spells it) anywhere, a
 `direction` (an attribute or in a `style`) outside a text and its spans (`text`, `tspan`, `textPath`),

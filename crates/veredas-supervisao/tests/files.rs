@@ -1205,10 +1205,12 @@ panel or its table lacks; a column, key or value the table lacks where the proje
 columns, a value that is not numeric; a `spread` not above 0; a layout that cannot be read, is not
 an SVG document (its root an `svg` in the SVG namespace), or holds (outside Inkscape's own elements, dropped unread) a script, a `<style>` sheet, an animation (`animate`, `animateColor`, `animateMotion`,
 `animateTransform`, `discard`, `set`), a `class`, an id the page names its own (`app` and any beginning
-`sv-`, its case as written), CSS that moves, times or unpins what the page writes (the properties
-`transform`, `translate`, `rotate`, `scale`, `transform-origin`, `transform-box`, `transform-style`,
-`perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, in a
-`style`, a name with white space or a comment inside it declaring nothing; the attributes
+`sv-`, its case as written), an attribute beginning `data-`, in any case (the page's own: it
+tags what it adds and reads a marker's key by them), CSS that moves, times or unpins what the page
+writes (the properties `all`, `transform`, `translate`, `rotate`, `scale`, `transform-origin`, `transform-box`, `transform-style`,
+`perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, each by
+its name and every longhand of it (the name, a hyphen and more), in a `style`, under any vendor's
+prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`), a name with white space or a comment inside it declaring nothing; the attributes
 `transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), a custom
 property (a `style` declaration whose name begins `--`, however CSS spells it) anywhere, a
 `direction` (an attribute or in a `style`) outside a text and its spans (`text`, `tspan`, `textPath`),
@@ -1321,7 +1323,7 @@ fn hint(kind: &str) -> &'static str {
 /// object's element, inside it and beside it). Every list is held to the reference's own sentence.
 #[test]
 fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
-    use veredas_supervisao::svg::{ANIMATIONS, AROUND, DIRECTED, DRAWN, HOLDS, MOVING, MOVING_ATTRIBUTES, MOVING_FAMILIES, declared, moves_the_page, says_important};
+    use veredas_supervisao::svg::{ANIMATIONS, AROUND, DIRECTED, DRAWN, HOLDS, MOVING, MOVING_ATTRIBUTES, MOVING_FAMILIES, VENDOR_PREFIXES, declared, moves_the_page, says_important};
     // The lists are the reference's, each member named in its own sentence: the kinds an object is
     // shown on, what may stand around them and inside them, the animations, the properties and
     // attributes that move, time or unpin what the page writes.
@@ -1335,7 +1337,8 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
     assert_eq!(named("holding nothing but groups, shapes, texts and their spans, a title or a description (", ")"), HOLDS);
     assert_eq!(named("an animation (", ")"), ANIMATIONS);
     assert_eq!(named("CSS that moves, times or unpins what the page writes (the properties ", " and every"), MOVING);
-    assert_eq!(named("`pointer-events` and every ", " property, in a"), MOVING_FAMILIES);
+    assert_eq!(named("`pointer-events` and every ", " property, each by"), MOVING_FAMILIES);
+    assert_eq!(named("under any vendor's prefix (", ")"), VENDOR_PREFIXES);
     assert_eq!(named("declaring nothing; the attributes ", ", an element's own"), MOVING_ATTRIBUTES);
     const INFEED: &str = "<rect id=\"infeed\" x=\"20\" y=\"96\" width=\"40\" height=\"28\"/>";
     const LOOP: &str = "<path id=\"loop\" d=\"M 80 40 H 320 A 70 70 0 0 1 320 180 H 80 A 70 70 0 0 1 80 40 Z\" fill=\"none\" stroke=\"#26262A\" stroke-width=\"14\"/>";
@@ -1459,18 +1462,20 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
             assert!(outcome(&with_svg(INFEED, &format!("{INFEED}<rect id=\"{n}\"/>"))).is_ok(), "{n}");
         }
     }
-    // What moves, times or unpins what the page writes: every property of `MOVING`, and a transition,
-    // an animation and a motion offset by their names and their longhands, each in a `style` however
-    // CSS writes it (plainly, after another, with a vendor's prefix, escaped, after a comment), and
+    // What moves, times or unpins what the page writes: every property of `MOVING` (`all` among
+    // them) by its name and a longhand, and a transition, an animation and a motion offset by their
+    // names and their longhands, each in a `style` however CSS writes it (plainly, after another,
+    // under every prefix of `VENDOR_PREFIXES`, escaped, after a comment), and
     // the presentation attributes of `MOVING_ATTRIBUTES`, anywhere, refused; a `style` of other
     // properties, a value that only names one, and the element's own `transform` attribute loading.
     let longhand = |f: &str| [("transition", "duration"), ("animation", "name"), ("offset", "path")].iter().find(|(g, _)| *g == f).map(|(_, l)| format!("{f}-{l}")).unwrap_or_else(|| panic!("{f}: a longhand of it"));
-    let moving: Vec<String> = MOVING.iter().map(|p| p.to_string()).chain(MOVING_FAMILIES.iter().flat_map(|f| [f.to_string(), longhand(f)])).collect();
+    let moving: Vec<String> = MOVING.iter().flat_map(|p| [p.to_string(), format!("{p}-x")]).chain(MOVING_FAMILIES.iter().flat_map(|f| [f.to_string(), longhand(f)])).collect();
     for prop in &moving {
         let escaped = format!("\\{:x} {}", prop.chars().next().unwrap() as u32, &prop[1..]);
         // At every place: the root, a group around the object, the object's element, inside it and
         // beside it at every depth.
-        for style in [format!("{prop}: x"), format!("fill: red; {prop}: x"), format!("-webkit-{prop}: x"), format!("{escaped}: x"), format!("/* note */ {}: x", prop.to_uppercase())] {
+        let styles = [format!("{prop}: x"), format!("fill: red; {prop}: x"), format!("{escaped}: x"), format!("/* note */ {}: x", prop.to_uppercase())].into_iter().chain(VENDOR_PREFIXES.iter().map(|v| format!("{v}{prop}: x")));
+        for style in styles {
             for (place, el, ex) in places(&format!("style=\"{style}\"")) {
                 let got = binding_refusal(&ex);
                 assert!(got.ends_with(&format!("layout.svg holds `{prop}` (on <{el}>), which would move, time or unpin what the page writes: the page places, animates and takes the clicks itself")), "{style}, {place}: {got}");
@@ -1480,6 +1485,17 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
     for attr in MOVING_ATTRIBUTES {
         for (place, el, ex) in places(&format!("{attr}=\"none\"")) {
             assert!(binding_refusal(&ex).ends_with(&format!("layout.svg holds `{attr}` (on <{el}>), which would move, time or unpin what the page writes: the page places, animates and takes the clicks itself")), "{attr}, {place}");
+        }
+    }
+    // The page's own attributes (Q25): every `data-` attribute the page's source names (read off it,
+    // so one the page comes to use is driven too), one in capitals and one it has no use for,
+    // refused at every place; an attribute that only begins `data` loading (below).
+    let data = page_data_attributes();
+    assert!(data.contains("data-for") && data.contains("data-key") && data.contains("data-object"), "{data:?}");
+    for attr in data.iter().cloned().chain(["DATA-Key".to_string(), "data-x2".to_string()]) {
+        for (place, el, ex) in places(&format!("{attr}=\"A1\"")) {
+            let got = binding_refusal(&ex);
+            assert!(got.ends_with(&format!("layout.svg holds `{attr}` (on <{el}>), a `data-` attribute, which the page names its own: it tags what it adds and reads a marker's key by them")), "{attr}, {place}: {got}");
         }
     }
     // A script and foreign content refused at every depth, beside the object and inside its element;
@@ -1508,7 +1524,7 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
     // Near misses, at every place: a `style` of other properties, one whose value only names a
     // moving one, a name split by a comment or white space (no declaration, as CSS reads it), and the
     // element's own `transform` attribute (which drawing tools write everywhere).
-    for ok in ["style=\"display:inline; fill: red; stroke-width: 2\"", "style=\"font-family: transform\"", "style=\"trans/**/form: rotate(9deg)\"", "style=\"trans form: rotate(9deg)\"", "style=\"trans&#10;form: rotate(9deg)\"", "style=\"pointer/**/-events: none\"", "transform=\"translate(10 0)\""] {
+    for ok in ["style=\"display:inline; fill: red; stroke-width: 2\"", "style=\"font-family: transform\"", "style=\"trans/**/form: rotate(9deg)\"", "style=\"trans form: rotate(9deg)\"", "style=\"trans&#10;form: rotate(9deg)\"", "style=\"pointer/**/-events: none\"", "style=\"font-family: all\"", "datakey=\"A1\"", "data=\"A1\"", "transform=\"translate(10 0)\""] {
         // (The root's own transform apart: refused, below.)
         for (place, _, ex) in places(ok).into_iter().filter(|(p, _, _)| !(ok.starts_with("transform=") && p == "the root")) {
             assert!(outcome(&ex).is_ok(), "{ok}, {place}: {:?}", outcome(&ex).err());
@@ -1525,7 +1541,8 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
             assert!(got.ends_with(&format!("layout.svg holds the custom property `--near` (on <{el}>), which the page's own colours would read: write the drawing's paint by its properties")), "{style}, {place}: {got}");
         }
     }
-    for attr in ["direction=\"rtl\"", "style=\"direction: rtl\"", "style=\"fill: red; DIRECTION : rtl\"", "style=\"\\64 irection: rtl\"", "style=\"-webkit-direction: rtl\""] {
+    let directions: Vec<String> = ["direction=\"rtl\"", "style=\"direction: rtl\"", "style=\"fill: red; DIRECTION : rtl\"", "style=\"\\64 irection: rtl\""].into_iter().map(String::from).chain(VENDOR_PREFIXES.iter().map(|v| format!("style=\"{v}direction: rtl\""))).collect();
+    for attr in &directions {
         for (place, el, ex) in places(attr) {
             let got = binding_refusal(&ex);
             assert!(got.ends_with(&format!("layout.svg holds `direction` (on <{el}>), which would reach what the page writes beside the drawing: Inkscape writes it on a text and its spans alone")), "{attr}, {place}: {got}");
@@ -1563,6 +1580,8 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
     assert_eq!(declared("fill: red; -WEBKIT-Transform : x; /* c */ \\74 ransition: y"), ["fill", "transform", "transition"]);
     assert_eq!(declared("trans/**/form: x; pointer /* c */-events: y; trans form: z; \\74 rans\\ form: w; opacity : 1"), ["trans form", "opacity"]);
     assert!(moves_the_page("transition-delay") && moves_the_page("offset-rotate") && !moves_the_page("transitions") && !moves_the_page("fill"));
+    assert_eq!(declared("-moz-transform: x; -MS-Transition: y; -o-offset-path: z; -webkit-all: w"), ["transform", "transition", "offset-path", "all"]);
+    assert!(moves_the_page("all") && moves_the_page("transform-origin-x") && moves_the_page("perspective-origin") && !moves_the_page("allx") && !moves_the_page("scaled"));
     // Every animation, anywhere: on an object's element and beside it, at every depth.
     for anim in ANIMATIONS {
         for (open, close) in depths {
@@ -2313,6 +2332,35 @@ fn with_probe(object: &str, panel: &str) -> Example {
 const CHANNEL: &str = "\n[[channel]]\nsource_id = \"line\"\nrole = \"connect\"\nhost = \"127.0.0.1\"\nport = 5020\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n";
 
 /// An example loaded with the channel `line` in its project, its files written beside it.
+/// Every `data-` attribute the page's own source names (`web/src`, its TypeScript): one written as
+/// an attribute (`"data-for"`) and one read through `dataset` (`dataset.key` is `data-key`).
+fn page_data_attributes() -> std::collections::BTreeSet<String> {
+    let mut names = std::collections::BTreeSet::new();
+    let word = |rest: &str| rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect::<String>();
+    for entry in std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/src")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "ts") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (at, _) in text.match_indices("data-") {
+            let before = text[..at].chars().next_back();
+            let rest = word(&text[at + 5..]);
+            if before.is_none_or(|c| !c.is_ascii_alphanumeric() && c != '-' && c != '_') && !rest.is_empty() {
+                names.insert(format!("data-{rest}"));
+            }
+        }
+        for (at, _) in text.match_indices("dataset.") {
+            let camel = word(&text[at + 8..]);
+            let kebab: String = camel.chars().flat_map(|c| if c.is_ascii_uppercase() { vec!['-', c.to_ascii_lowercase()] } else { vec![c] }).collect();
+            if !kebab.is_empty() {
+                names.insert(format!("data-{kebab}"));
+            }
+        }
+    }
+    names
+}
+
 fn load_with_channel(ex: &Example) -> Result<config::HostConfig, ConfigError> {
     let dir = tempfile::tempdir().unwrap();
     let mut ex = ex.clone();
