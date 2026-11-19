@@ -324,8 +324,11 @@ pub fn object<'a>(snapshot: &'a Value, id: &str) -> &'a Value {
 /// `font-feature-settings`, on it and on its first letter and line, each `normal`), its letters
 /// masked, set vertically (`writing-mode`), or reordered (a direction other than left to right, an
 /// override of the text's own order, or any letter drawn left of the one before it on its line, read
-/// by a range per letter). A font's own glyphs for the same characters are the stated limit. Shared
-/// by the views' tests (the dashboards', the Tables view's).
+/// by a range per letter), any letter drawn at no width, narrower than half its glyph's own advance
+/// (measured apart in its font, at its drawn scale) or over the one before it, and its first
+/// letter or first line painted, sized or spaced otherwise than the element. A font's own glyphs
+/// for the same characters are the stated limit. Shared by the views' tests (the dashboards', the
+/// Tables view's).
 #[allow(dead_code)]
 pub const AS_WRITTEN_FN: &str = r#"const asWritten = (el) => {
   const out = [];
@@ -337,6 +340,14 @@ pub const AS_WRITTEN_FN: &str = r#"const asWritten = (el) => {
   if (c.display.includes("list-item") && (c.listStyleType !== "none" || c.listStyleImage !== "none")) out.push("a list item's marker");
   const texts = [...el.childNodes].filter((n) => n.nodeType === 3 && n.textContent.trim() !== "");
   if (!texts.length) return out;
+  // Its first letter and its first line drawn as it is (the page writes no rule for either): their
+  // paint, their size and their spacing its own.
+  for (const pseudo of ["::first-letter", "::first-line"]) {
+    const s = getComputedStyle(el, pseudo);
+    for (const k of ["color", "-webkit-text-fill-color", "-webkit-text-stroke-color", "-webkit-text-stroke-width", "font-size", "font-weight", "font-style", "letter-spacing", "word-spacing", "visibility", "text-shadow"]) {
+      if (s.getPropertyValue(k) !== c.getPropertyValue(k)) out.push(`its text${pseudo} drawn with another ${k}: ${s.getPropertyValue(k)}`);
+    }
+  }
   for (const pseudo of ["", "::first-letter", "::first-line"]) {
     const s = pseudo ? getComputedStyle(el, pseudo) : c;
     if (s.textTransform !== "none") out.push(`its text${pseudo} drawn ${s.textTransform}`);
@@ -347,6 +358,16 @@ pub const AS_WRITTEN_FN: &str = r#"const asWritten = (el) => {
   if ((c.webkitTextSecurity ?? "none") !== "none") out.push(`its letters masked, ${c.webkitTextSecurity}`);
   if (c.writingMode !== "horizontal-tb") out.push(`its letters set ${c.writingMode}`);
   if (c.direction !== "ltr" || ["bidi-override", "isolate-override"].includes(c.unicodeBidi)) out.push(`its letters reordered, ${c.direction} ${c.unicodeBidi}`);
+  // Its letters read where they are drawn: an element the browser renders no box for (an SVG
+  // `title`, a hover text) draws none (whether a mark is shown at all is the shown census's).
+  if (!el.getClientRects().length) return out;
+  // Each letter's own advance in its font (measured apart, at the scale it is drawn at: an SVG text's
+  // by its chart's matrix), so a letter squeezed onto its neighbours (a negative spacing, a length
+  // forced on the text) is read as drawn narrower than its glyph.
+  const pen = document.createElement("canvas").getContext("2d");
+  pen.font = `${c.fontStyle} ${c.fontWeight} ${c.fontSize} ${c.fontFamily}`;
+  const m = el instanceof SVGGraphicsElement ? el.getScreenCTM() : null;
+  const k = m ? Math.hypot(m.a, m.b) : 1;
   const r = document.createRange();
   for (const n of texts) {
     let prev = null;
@@ -357,9 +378,19 @@ pub const AS_WRITTEN_FN: &str = r#"const asWritten = (el) => {
       r.setStart(n, i);
       r.setEnd(n, Math.min(end, n.length));
       const b = r.getBoundingClientRect();
+      const ch = n.data.slice(i, Math.min(end, n.length));
       i = end - 1;
-      if (!(b.width > 0)) continue;
+      // A letter drawn at no width (a combining mark or a format character apart, which draw
+      // none of their own), or over the one before it on its line by more than a quarter of the
+      // narrower (kerning moves a letter a little, never onto its neighbour).
+      if (!(b.width > 0)) {
+        if (!/[\p{M}\p{Cf}]/u.test(ch)) { out.push(`its letter ${JSON.stringify(ch)} drawn at no width: ${JSON.stringify(n.data.slice(0, 30))}`); break; }
+        continue;
+      }
+      const glyph = pen.measureText(ch).width * k;
+      if (glyph > 0 && b.width < 0.5 * glyph) { out.push(`its letter ${JSON.stringify(ch)} drawn ${b.width.toFixed(2)} wide, its glyph ${glyph.toFixed(2)}: ${JSON.stringify(n.data.slice(0, 30))}`); break; }
       if (prev && Math.abs(b.top - prev.top) < 1 && b.left < prev.left - 0.5) { out.push(`its letters drawn out of their order at ${i}: ${JSON.stringify(n.data.slice(0, 30))}`); break; }
+      if (prev && Math.abs(b.top - prev.top) < 1 && prev.right - b.left > 0.25 * Math.min(b.width, prev.width) + 0.5) { out.push(`its letters drawn over one another at ${i}: ${JSON.stringify(n.data.slice(0, 30))}`); break; }
       prev = b;
     }
   }

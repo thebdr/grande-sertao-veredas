@@ -51,8 +51,10 @@ const EVERY_MARK: &str = r#"[...document.querySelector("main.view").querySelecto
 
 /// Every mark of the view drawn as the page wrote it, by the browser's computed style: every text as
 /// written (`AS_WRITTEN_FN`, given as `asWritten`); no element of the view (HTML or SVG) moved by a
-/// transform or put on a motion path (`offset-path`); and the geometry CSS can set on a shape (a
-/// rect's, a circle's, an ellipse's, a path's) its attribute's. The offences, named.
+/// transform or put on a motion path (`offset-path`); every SVG element with the attributes the
+/// page writes for its kind and no other (a text's forced length, a letter's rotation or shift, a
+/// transform); and the geometry CSS can set on a shape (a rect's, a circle's, an ellipse's, a
+/// path's) its attribute's. The offences, named.
 const DRAWN_AS_WRITTEN: &str = r#"((asWritten) => {
   const out = [];
   const at = (el) => `${el.tagName.toLowerCase()}.${el.getAttribute("class") ?? ""}`;
@@ -60,6 +62,12 @@ const DRAWN_AS_WRITTEN: &str = r#"((asWritten) => {
     for (const said of asWritten(el)) out.push(`${at(el)} ${JSON.stringify(el.textContent.slice(0, 30))}: ${said}`);
     const s = getComputedStyle(el);
     if (["transform", "translate", "rotate", "scale"].some((k) => s[k] && s[k] !== "none") || (s.offsetPath ?? "none") !== "none") out.push(`${at(el)}: moved by a transform`);
+  }
+  // Every SVG element of the view with the attributes the page writes for its kind (`charts.ts`'s
+  // trend) and no other: no length forced on a text, no letter rotated or shifted, no transform.
+  const ATTRS = { svg: ["viewBox", "width", "class"], line: ["x1", "x2", "y1", "y2", "class"], text: ["x", "y", "class", "text-anchor"], path: ["d", "class"], circle: ["cx", "cy", "r", "class"], g: ["class", "visibility"] };
+  for (const el of document.querySelectorAll("main.view svg, main.view svg *")) {
+    for (const a of el.getAttributeNames()) if (!(ATTRS[el.tagName] ?? []).includes(a)) out.push(`${at(el)}: an attribute the page writes none of, ${a}="${el.getAttribute(a)}"`);
   }
   const GEOMETRY = { rect: ["x", "y", "width", "height", "rx", "ry"], circle: ["cx", "cy", "r"], ellipse: ["cx", "cy", "rx", "ry"], path: ["d"] };
   const numbers = (s) => (String(s).match(/-?\d*\.?\d+(e[-+]?\d+)?/gi) || []).map(Number);
@@ -80,11 +88,29 @@ const DRAWN_AS_WRITTEN: &str = r#"((asWritten) => {
 /// left to right as its headings; every label of a chart at the place its attributes write, by its
 /// anchor (its start, middle or end at its x, carried to the screen by the chart's own matrix) and
 /// on its baseline (its y in the lower part of its box); and the line drawn over the box its path
-/// writes. The offences, named.
+/// writes; each cell under its heading (its left and right edges the heading's), and every text of
+/// the view's (an HTML element's own) inside its element's box, a heading's and a cell's from its
+/// content's left edge (the page aligns them left). The offences, named.
 const DRAWN_PLACES: &str = r#"(() => {
   const out = [];
   const v = document.querySelector("main.view");
   const box = (el) => el.getBoundingClientRect();
+  const span = (b) => `[${b.left.toFixed(1)}, ${b.top.toFixed(1)}, ${b.right.toFixed(1)}, ${b.bottom.toFixed(1)}]`;
+  const r = document.createRange();
+  for (const el of v.querySelectorAll("*")) {
+    if (el instanceof SVGElement) continue;
+    for (const n of el.childNodes) {
+      if (n.nodeType !== 3 || !n.data.trim()) continue;
+      r.selectNodeContents(n);
+      const t = r.getBoundingClientRect(), b = box(el), mid = (t.top + t.bottom) / 2;
+      if (t.left < b.left - 0.5 || t.right > b.right + 0.5 || mid < b.top || mid > b.bottom) out.push(`the text ${JSON.stringify(n.data.slice(0, 30))} drawn at ${span(t)}, its ${el.tagName.toLowerCase()} at ${span(b)}`);
+      // A heading's and a cell's text from its content's left edge, as the page aligns them.
+      if (el.matches("th, td")) {
+        const s = getComputedStyle(el), at = b.left + parseFloat(s.borderLeftWidth) + parseFloat(s.paddingLeft);
+        if (Math.abs(t.left - at) > 0.5) out.push(`the text ${JSON.stringify(n.data.slice(0, 30))} drawn from ${t.left.toFixed(1)}, its ${el.tagName.toLowerCase()}'s content from ${at.toFixed(1)}`);
+      }
+    }
+  }
   const below = (els, what) => { for (let i = 1; i < els.length; i++) if (box(els[i]).top < box(els[i - 1]).bottom - 0.5) out.push(`${what} ${i} drawn above the one before`); };
   for (const l of v.querySelectorAll(".list")) below([...l.querySelectorAll(":scope > .caps, :scope > button")], "the list's mark");
   for (const m of v.querySelectorAll(".list-main")) {
@@ -93,6 +119,11 @@ const DRAWN_PLACES: &str = r#"(() => {
       const c = [...tr.children];
       for (let i = 1; i < c.length; i++) if (box(c[i]).left < box(c[i - 1]).right - 0.5) out.push(`a cell ${i} drawn left of the one before`);
     }
+    const heads = [...m.querySelectorAll("thead th")];
+    for (const tr of m.querySelectorAll("tbody tr")) [...tr.children].forEach((td, i) => {
+      const h = heads[i];
+      if (h && (Math.abs(box(td).left - box(h).left) > 0.5 || Math.abs(box(td).right - box(h).right) > 0.5)) out.push(`a cell ${i} drawn at ${span(box(td))}, its heading at ${span(box(h))}`);
+    });
     for (const t of m.querySelectorAll("svg.trend text.axis")) {
       const X = new DOMPoint(Number(t.getAttribute("x")), Number(t.getAttribute("y"))).matrixTransform(t.getScreenCTM());
       const b = box(t), anchor = t.getAttribute("text-anchor") ?? "start";
@@ -113,22 +144,35 @@ const DRAWN_PLACES: &str = r#"(() => {
 /// buttons alone, each button two spans (its names, its kind and count); a pager one heading, one
 /// count (of rows or of points) and no button or two (a page's); one refusal and one prompt at
 /// most; each heading one span (its type), each row as many cells as there are headings; a trend
-/// nine labels (four values, five times). A mark beside them is one no comparison reads.
+/// nine labels (four values, five times). And the view's main part holding the parts its state
+/// draws (`data-screen`, by `tables.ts`'s `draw` calls) and nothing else, in order: a prompt
+/// its words, a refusal its words, a page its pager and its table (a head and a body), a chart
+/// waiting its pager, a chart its pager and its trend; every element of the view one of the tags
+/// the page writes there (no field, no image, no frame: a mark whose words no comparison reads).
+/// A mark beside them is one no comparison reads.
 const MARK_COUNTS: &str = r#"(() => {
   const out = [];
   const v = document.querySelector("main.view");
+  const TAGS = { list: ["DIV", "BUTTON", "SPAN"], main: ["DIV", "P", "STRONG", "SPAN", "BUTTON", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "svg", "line", "text", "path", "circle", "g"] };
+  const PARTS = { prompt: ["P.muted"], error: ["P.error"], page: ["DIV.pager", "DIV.scroll"], waiting: ["DIV.pager"], chart: ["DIV.pager", "DIV.panel"] };
+  const named = (k) => `${k.tagName}.${k.getAttribute("class") ?? ""}`;
   for (const l of v.querySelectorAll(".list")) {
+    for (const el of l.querySelectorAll("*")) if (!TAGS.list.includes(el.tagName)) out.push(`a list holding a ${el.tagName}`);
     const kids = [...l.children];
     if (kids.filter((k) => k.matches(".caps")).length !== 1 || kids.some((k) => !k.matches(".caps, button"))) out.push(`a list holding ${kids.map((k) => k.tagName + "." + k.className).join(" ")}`);
     for (const b of l.querySelectorAll(":scope > button")) if (b.children.length !== 2 || [...b.children].some((c) => c.tagName !== "SPAN")) out.push(`a list button holding ${b.children.length} marks: ${JSON.stringify(b.textContent)}`);
   }
   for (const m of v.querySelectorAll(".list-main")) {
+    const want = PARTS[m.dataset.screen], got = [...m.children].map(named);
+    if (!want || got.join(" ") !== want.join(" ")) out.push(`the view's ${m.dataset.screen} holding ${got.join(" ")}`);
+    for (const el of m.querySelectorAll("*")) if (!TAGS.main.includes(el.tagName)) out.push(`the view holding a ${el.tagName}`);
+    for (const s of m.querySelectorAll(":scope > .scroll")) if (s.children.length !== 1 || !s.children[0].matches("table.dt") || [...s.children[0].children].map((k) => k.tagName).join(" ") !== "THEAD TBODY" || s.querySelector("thead").children.length !== 1) out.push(`a table's part holding ${s.innerHTML.slice(0, 80)}`);
+    for (const p of m.querySelectorAll(":scope > .panel")) if (p.children.length !== 1 || !p.children[0].matches("svg.trend")) out.push(`a chart's part holding ${[...p.children].map(named).join(" ")}`);
     for (const p of m.querySelectorAll(":scope > .pager")) {
       const kids = [...p.children];
       const strong = kids.filter((k) => k.tagName === "STRONG").length, said = kids.filter((k) => k.matches("[data-rows], [data-points]")).length, buttons = kids.filter((k) => k.tagName === "BUTTON").length;
       if (strong !== 1 || said !== 1 || ![0, 2].includes(buttons) || kids.length !== strong + said + buttons) out.push(`a pager holding ${kids.map((k) => k.tagName).join(" ")}`);
     }
-    for (const sel of ["p.error", "p.muted"]) { const n = m.querySelectorAll(`:scope > ${sel}`).length; if (n > 1) out.push(`${n} of ${sel}`); }
     const ths = m.querySelectorAll("thead th");
     for (const th of ths) if (th.children.length !== 1) out.push(`a heading holding ${th.children.length} marks: ${JSON.stringify(th.textContent)}`);
     for (const tr of m.querySelectorAll("tbody tr")) if (tr.children.length !== ths.length) out.push(`a row of ${tr.children.length} cells under ${ths.length} headings`);
@@ -303,24 +347,70 @@ fn param(url: &str, k: &str) -> Option<String> {
     url.split_once('?')?.1.split('&').find_map(|kv| kv.strip_prefix(&format!("{k}="))).map(unescape)
 }
 
-/// Where a trend's line differs from the window it draws (`charts.ts`: 600 by 200, the plot from its
-/// left edge, `left_for` its value labels, to 590 and from y 178 up to 10, the values' extent padded
-/// by 8 % each way), point by point, of the finite points alone.
-fn misplaced(d: &str, points: &[(f64, f64)], from: i64, to: i64) -> Vec<String> {
-    let drawn: Vec<(f64, f64)> = d
-        .split(['M', 'L'])
+/// The points of a line's path (`M x y L x y …`).
+fn path_points(d: &str) -> Vec<(f64, f64)> {
+    d.split(['M', 'L'])
         .filter(|p| !p.trim().is_empty())
         .map(|p| {
             let mut it = p.split_whitespace().map(|n| n.parse::<f64>().unwrap());
             (it.next().unwrap(), it.next().unwrap())
         })
-        .collect();
+        .collect()
+}
+
+/// The values' extent as `charts.ts`'s `extent` pads it: none, [0, 1]; one value, a unit each
+/// way of it; then 8 % of the span each way.
+fn extent(vals: &[f64]) -> (f64, f64) {
+    if vals.is_empty() {
+        return (0.0, 1.0);
+    }
+    let (mut lo, mut hi) = vals.iter().fold((f64::MAX, f64::MIN), |(a, b), v| (a.min(*v), b.max(*v)));
+    if lo == hi {
+        (lo, hi) = (lo - 1.0, hi + 1.0);
+    }
+    let pad = (hi - lo) * 0.08;
+    (lo - pad, hi + pad)
+}
+
+/// Where a trend's nine labels differ from the window's (`charts.ts`), each `[words, x, y]`: four
+/// values a third of the finite values' extent apart, bottom up, each 6 left of the plot beside its
+/// value's height (its baseline 4 below it); then five times a quarter of the window apart at the
+/// foot (y 194), the store's clock (hours and minutes) at its place, the last "now".
+fn axis_misplaced(axis: &[Value], points: &[(f64, f64)], from: i64, to: i64) -> Vec<String> {
+    if axis.len() != 9 {
+        return vec![format!("{} labels: {axis:?}", axis.len())];
+    }
+    let (lo, hi) = extent(&points.iter().map(|p| p.1).collect::<Vec<_>>());
+    let left = left_for(&value_labels(lo, hi));
+    let near = |a: &Value, b: f64| a.as_f64().is_some_and(|a| (a - b).abs() <= 0.051);
+    let mut out = Vec::new();
+    for i in 0..4 {
+        let v = lo + (hi - lo) * i as f64 / 3.0;
+        let at = 178.0 + (v - lo) / (hi - lo) * (10.0 - 178.0) + 4.0;
+        if !(axis[i][0] == json!(num1(v)) && near(&axis[i][1], left - 6.0) && near(&axis[i][2], at)) {
+            out.push(format!("value label {i}: {} against {} at ({}, {at:.2})", axis[i], num1(v), left - 6.0));
+        }
+    }
+    for i in 0..5 {
+        let t = from as f64 + (to - from) as f64 * i as f64 / 4.0;
+        let said = if i == 4 { "now".to_string() } else { chrono::DateTime::from_timestamp_millis(t as i64).unwrap().format("%H:%M").to_string() };
+        let x = left + (t - from as f64) / (to - from) as f64 * (590.0 - left);
+        if !(axis[4 + i][0] == json!(said) && near(&axis[4 + i][1], x) && near(&axis[4 + i][2], 194.0)) {
+            out.push(format!("time label {i}: {} against {said} at ({x:.2}, 194)", axis[4 + i]));
+        }
+    }
+    out
+}
+
+/// Where a trend's line differs from the window it draws (`charts.ts`: 600 by 200, the plot from its
+/// left edge, `left_for` its value labels, to 590 and from y 178 up to 10, the values' extent padded
+/// by 8 % each way), point by point, of the finite points alone.
+fn misplaced(d: &str, points: &[(f64, f64)], from: i64, to: i64) -> Vec<String> {
+    let drawn = path_points(d);
     if drawn.len() != points.len() {
         return vec![format!("{} points drawn for {}", drawn.len(), points.len())];
     }
-    let (mut lo, mut hi) = points.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
-    let pad = (hi - lo) * 0.08;
-    (lo, hi) = (lo - pad, hi + pad);
+    let (lo, hi) = extent(&points.iter().map(|p| p.1).collect::<Vec<_>>());
     let left = left_for(&value_labels(lo, hi));
     drawn
         .iter()
@@ -351,15 +441,22 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // where a script writes a number with an exponent (and one just below), each exact in binary,
     // and numbers below 0 a script writes as it is (a fraction, a whole one, one that rounds to 0),
     // and ties at the third place, each way of 0, and a number just below one in binary (1.0005),
-    // which the page's `toFixed` rounds as its exact value says.
+    // which the page's `toFixed` rounds as its exact value says. And a view of text whose white
+    // space is its own (two spaces, leading ones, a tab, a line break, a column named with two
+    // spaces), drawn as written.
     // And two times portal pages by that the page must hold a window over: `gaps`, whose time is null
     // on some rows (outlet 2's), `halves`, whose time is no whole number, and `decis`, whose time is
     // a DECIMAL finer than the double portal writes it as (the newest row's time above that double).
-    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"gaps\"\nsql = \"SELECT CASE WHEN outlet = 2 THEN NULL ELSE index_ms END AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"halves\"\nsql = \"SELECT (index_ms + 0.5)::DOUBLE AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"decis\"\nsql = \"SELECT (index_ms + 0.0001)::DECIMAL(18,4) AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"{VIEW}\"\nsql = \"SELECT outlet, travel > 12 AS slow FROM sorts\"\n\n[[table]]\nname = \"stamped\"\nsql = \"SELECT ts, outlet FROM sorts\"\n\n[[table]]\nname = \"indexed\"\nsql = \"SELECT index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"shifted\"\nsql = \"SELECT index_ms, ts + INTERVAL 1 MINUTE AS ts, outlet FROM sorts\"\n\n[[table]]\nname = \"magnitudes\"\nsql = \"SELECT 9.5e20::DOUBLE AS below, 1e21::DOUBLE AS edge, -3.5e21::DOUBLE AS negative, 1e22::DOUBLE AS big, -0.25::DOUBLE AS quarter, -7.0::DOUBLE AS seven, -0.0001::DOUBLE AS tiny, -0.0625::DOUBLE AS ntie, 0.0625::DOUBLE AS ptie, 1.0005::DOUBLE AS under, -2.0625::DOUBLE AS ntie2\"\n")).unwrap();
+    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"gaps\"\nsql = \"SELECT CASE WHEN outlet = 2 THEN NULL ELSE index_ms END AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"halves\"\nsql = \"SELECT (index_ms + 0.5)::DOUBLE AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"decis\"\nsql = \"SELECT (index_ms + 0.0001)::DECIMAL(18,4) AS index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"{VIEW}\"\nsql = \"SELECT outlet, travel > 12 AS slow FROM sorts\"\n\n[[table]]\nname = \"stamped\"\nsql = \"SELECT ts, outlet FROM sorts\"\n\n[[table]]\nname = \"indexed\"\nsql = \"SELECT index_ms, outlet FROM sorts\"\n\n[[table]]\nname = \"shifted\"\nsql = \"SELECT index_ms, ts + INTERVAL 1 MINUTE AS ts, outlet FROM sorts\"\n\n[[table]]\nname = \"spaces\"\nsql = \"SELECT index_ms, 'a  b' AS two, '   lead' AS lead, 'x' || chr(9) || 'y' AS tab, 'p' || chr(10) || 'q' AS line, 1 AS \\\"two  words\\\" FROM sorts\"\n\n[[table]]\nname = \"magnitudes\"\nsql = \"SELECT 9.5e20::DOUBLE AS below, 1e21::DOUBLE AS edge, -3.5e21::DOUBLE AS negative, 1e22::DOUBLE AS big, -0.25::DOUBLE AS quarter, -7.0::DOUBLE AS seven, -0.0001::DOUBLE AS tiny, -0.0625::DOUBLE AS ntie, 0.0625::DOUBLE AS ptie, 1.0005::DOUBLE AS under, -2.0625::DOUBLE AS ntie2\"\n")).unwrap();
     let log = dir.path().join("loop/sorts.log");
     std::fs::write(&log, "").unwrap();
     let hall_log = dir.path().join("hall/sorts.log");
     std::fs::write(&hall_log, "").unwrap();
+    // And on hall a rule of a value that may be no number (`ODD v=…`, a float, "NaN" among them), so
+    // a window can hold one finite point among samples that are none.
+    let hall_project = dir.path().join("hall/project.toml");
+    let text = std::fs::read_to_string(&hall_project).unwrap();
+    std::fs::write(&hall_project, format!("{text}\n[[rule]]\nname = \"odd\"\npattern = \"ODD v=(?P<ov>[^ ]+)\"\nscope = \"sorter\"\ntypes = {{ ov = \"float\" }}\n")).unwrap();
     let host = Host::start(config::load_file(&path).unwrap()).unwrap();
     let addr = host.addr();
     let live = host.session("loop").unwrap().live();
@@ -380,7 +477,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     assert_eq!(status, 200);
     let mut names: Vec<(String, String)> = t["tables"].as_array().unwrap().iter().map(|x| (x["name"].as_str().unwrap().to_string(), x["kind"].as_str().unwrap().to_string())).collect();
     names.sort();
-    assert_eq!(names.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["decis", "gaps", "halves", "indexed", "magnitudes", "outlets", "plc_main", "samples", "shifted", VIEW, "sorts", "stamped"]);
+    assert_eq!(names.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["decis", "gaps", "halves", "indexed", "magnitudes", "outlets", "plc_main", "samples", "shifted", VIEW, "sorts", "spaces", "stamped"]);
     assert_eq!(names.iter().find(|(n, _)| n == "outlets").unwrap().1, "view");
     let sorts = t["tables"].as_array().unwrap().iter().find(|x| x["name"] == "sorts").unwrap();
     let cols: Vec<&str> = sorts["columns"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
@@ -477,7 +574,8 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     assert!(listed.as_array().unwrap().iter().any(|r| r[0] == "outlets" && r[2] == "view · ?"), "{listed}");
 
     // A table picked: its first page of fifty, newest first, header (names and types) and every
-    // cell as portal pages it, no newer page; the older page; back to the newer one.
+    // cell as portal pages it, no newer page; the older page; back to the newer one. Headings and
+    // cells read as the browser renders them (`innerText`: white space collapsed is read so).
     let shown_js = format!(
         r#"(() => {{
   {SHOWN_FN}
@@ -487,8 +585,8 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     table: document.querySelector(".list-main .pager strong").textContent,
     all_shown: [pager, ...document.querySelectorAll(".list-main .pager strong, .list-main .pager button, .list-main thead th, .list-main tbody td"), ...[...document.querySelectorAll(".list-main *")].filter((el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()))].every(shown) && document.querySelectorAll(".list-main .pager button").length === 2,
     rows: pager.dataset.rows, said: pager.textContent,
-    head: [...document.querySelectorAll(".list-main thead th")].map((th) => th.textContent),
-    body: [...document.querySelectorAll(".list-main tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent)),
+    head: [...document.querySelectorAll(".list-main thead th")].map((th) => th.innerText),
+    body: [...document.querySelectorAll(".list-main tbody tr")].map((tr) => [...tr.children].map((td) => td.innerText)),
     newer: button("‹ Newer"), older: button("Older ›"),
   }} : null;
 }})()"#
@@ -696,24 +794,9 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         let y = 178.0 + (v - lo) / (hi - lo) * (10.0 - 178.0);
         assert!((dx - x).abs() <= 0.051 && (dy - y).abs() <= 0.051, "point {i} ({t}, {v}) drawn at ({dx}, {dy}), its place ({x:.2}, {y:.2})");
     }
-    // The value axis: four labels at a third apart, each beside its value's height (its baseline
-    // 4 below it), 6 left of the plot, from the bottom up.
-    let near = |a: f64, b: f64| (a - b).abs() <= 0.051;
-    let axis = chart["axis"].as_array().unwrap();
-    assert_eq!(axis.len(), 9, "{axis:?}");
-    for i in 0..4 {
-        let v = lo + (hi - lo) * i as f64 / 3.0;
-        let at = 178.0 + (v - lo) / (hi - lo) * (10.0 - 178.0) + 4.0;
-        assert!(axis[i][0] == json!(num1(v)) && near(axis[i][1].as_f64().unwrap(), left - 6.0) && near(axis[i][2].as_f64().unwrap(), at), "value label {i}: {} against {} at ({}, {at:.2})", axis[i], num1(v), left - 6.0);
-    }
-    // The time axis: five labels a quarter of the window apart, each the store's clock (hours and
-    // minutes) at its place, the last "now".
-    for i in 0..5 {
-        let t = from as f64 + (to - from) as f64 * i as f64 / 4.0;
-        let said = if i == 4 { "now".to_string() } else { chrono::DateTime::from_timestamp_millis(t as i64).unwrap().format("%H:%M").to_string() };
-        let x = left + (t - from as f64) / (to - from) as f64 * (590.0 - left);
-        assert!(axis[4 + i][0] == json!(said) && near(axis[4 + i][1].as_f64().unwrap(), x) && near(axis[4 + i][2].as_f64().unwrap(), 194.0), "time label {i}: {} against {said} at ({x:.2}, 194)", axis[4 + i]);
-    }
+    // The axes: four value labels at a third apart, each beside its value's height, 6 left of the
+    // plot, from the bottom up; five time labels a quarter of the window apart, the last "now".
+    assert_eq!(axis_misplaced(chart["axis"].as_array().unwrap(), &points, from, to), Vec::<String>::new(), "the travel's labels");
 
     // Every shape of window portal answers: one point (hall's, below), many (the travel's, above),
     // and past portal's 600 (the speed, polled every 50 ms, once it holds more than 650 samples):
@@ -724,7 +807,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         page.eval("window.__answers = []; true");
         page.eval(&format!("[...document.querySelectorAll('.list button[data-series]')].find((b) => b.dataset.series === {quoted}).click()"));
         page.wait_for(
-            &format!("(() => {{ {SHOWN_FN} const p = document.querySelector('.list-main .pager [data-points]'); const line = document.querySelector('.list-main svg.trend path.line'); const head = document.querySelector('.list-main .pager strong'); const a = window.__answers.filter((x) => x.url.includes('/api/series/data')); return p && line && head && head.textContent === {head} && a.length ? {{ said: p.textContent, d: line.getAttribute('d'), line_shown: shown(line), axis_shown: [...document.querySelectorAll('.list-main svg.trend text.axis')].every(shown), answer: a[a.length - 1] }} : null; }})()"),
+            &format!("(() => {{ {SHOWN_FN} const p = document.querySelector('.list-main .pager [data-points]'); const line = document.querySelector('.list-main svg.trend path.line'); const head = document.querySelector('.list-main .pager strong'); const a = window.__answers.filter((x) => x.url.includes('/api/series/data')); return p && line && head && head.textContent === {head} && a.length ? {{ said: p.textContent, d: line.getAttribute('d'), axis: [...document.querySelectorAll('.list-main svg.trend text.axis')].map((t) => [t.textContent, Number(t.getAttribute('x')), Number(t.getAttribute('y'))]), line_shown: shown(line), axis_shown: [...document.querySelectorAll('.list-main svg.trend text.axis')].every(shown), answer: a[a.length - 1] }} : null; }})()"),
             Duration::from_secs(20),
         )
     };
@@ -743,6 +826,8 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         let said = format!("last 60 min · {} of {total} points{}{} · last ", all.len(), if down { ", downsampled" } else { "" }, if none > 0 { format!(" · {none} with no value, left out") } else { String::new() });
         assert!(chart["said"].as_str().unwrap().starts_with(&said), "{} against {said}", chart["said"]);
         assert_eq!(misplaced(chart["d"].as_str().unwrap(), &points, from, to), Vec::<String>::new(), "{source}/{series}");
+        // Its labels of the finite points alone (a sample that is no number no 0 among them).
+        assert_eq!(axis_misplaced(chart["axis"].as_array().unwrap(), &points, from, to), Vec::<String>::new(), "{source}/{series}: its labels");
         assert_eq!((chart["line_shown"].clone(), chart["axis_shown"].clone()), (json!(true), json!(true)), "{source}/{series}");
         (total, down)
     };
@@ -819,9 +904,18 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         Duration::from_secs(20),
     );
     let all = spark[0].as_array().unwrap();
-    let finite = all.iter().filter(|p| p[1].is_number()).count();
-    let drawn = spark[1].as_str().unwrap().matches(['M', 'L']).count();
-    assert!(all.len() > finite && drawn == finite, "the sparkline of {finite} finite points of {} drew {drawn}", all.len());
+    let pts: Vec<(f64, f64)> = all.iter().filter_map(|p| p[1].as_f64().map(|v| (p[0].as_f64().unwrap(), v))).collect();
+    let drawn = path_points(spark[1].as_str().unwrap());
+    assert!(all.len() > pts.len() && drawn.len() == pts.len(), "the sparkline of {} finite points of {} drew {}", pts.len(), all.len(), drawn.len());
+    // Each where the side panel's frame puts it (`sparkline(points, 260, 44)`): from x 1 to 259 over
+    // the first to the last finite point's time, from y 42 up to 2 over the finite values' extent.
+    let (lo, hi) = extent(&pts.iter().map(|p| p.1).collect::<Vec<_>>());
+    let (t0, t1) = (pts[0].0, pts[pts.len() - 1].0);
+    for (i, ((dx, dy), (t, v))) in drawn.iter().zip(&pts).enumerate() {
+        let x = 1.0 + (t - t0) / if t1 > t0 { t1 - t0 } else { 1.0 } * 258.0;
+        let y = 42.0 + (v - lo) / (hi - lo) * (2.0 - 42.0);
+        assert!((dx - x).abs() <= 0.051 && (dy - y).abs() <= 0.051, "the sparkline's point {i} ({t}, {v}) drawn at ({dx}, {dy}), its place ({x:.2}, {y:.2})");
+    }
     page.eval(r#"location.hash = "series"; true"#);
     page.wait_for(r#"document.querySelector(".list button[data-series]") ? true : null"#, Duration::from_secs(20));
     // The other order of arrival in the Series view, at its one token (the page's own source): an
@@ -1315,6 +1409,45 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     let x = 44.0 + (at - from) as f64 / (to - from) as f64 * 546.0;
     assert_eq!((one["points"].clone(), one["line"].clone(), one["shown"].clone()), (json!("1/1"), json!(0), json!(true)), "{one}");
     assert!((one["cx"].as_f64().unwrap() - x).abs() <= 0.051 && (one["cy"].as_f64().unwrap() - 94.0).abs() <= 0.051, "the one point drawn at ({}, {}), its place ({x:.2}, 94)", one["cx"], one["cy"]);
+    // One finite point among samples that are no number (hall's `ODD` lines: NaN, 7.5, NaN): the
+    // one point drawn as a dot where the axes put it, no line, its labels the one value's, the words
+    // counting the two left out.
+    let at = store_now() - 4 * 60_000;
+    append(&hall_log, &[format!("{} ODD v=NaN", stamp(at - 60_000)), format!("{} ODD v=7.5", stamp(at)), format!("{} ODD v=NaN", stamp(at + 60_000))]);
+    assert!(
+        wait(Duration::from_secs(20), || get(addr, "/s/hall/portal/api/series").1["series"].as_array().unwrap().iter().any(|x| x["source"] == "sorter" && x["series"] == "ov" && x["count"] == json!(3))),
+        "hall's ov holds its three samples: {}",
+        get(addr, "/s/hall/portal/api/series").1
+    );
+    page.eval(r#"location.hash = "tables""#);
+    page.eval(r#"location.hash = "series""#);
+    page.wait_for(r#"[...document.querySelectorAll(".list button[data-series]")].some((x) => x.dataset.series === "sorter/ov") || null"#, Duration::from_secs(20));
+    page.eval(r#"document.querySelector('.list button[data-series="sorter/ov"]').click()"#);
+    loop {
+        let n = windows(&mut page);
+        page.wait_for(&format!("window.__answers.filter((a) => a.url.includes('/api/series/data')).length >= {n} || null"), Duration::from_secs(20));
+        std::thread::sleep(Duration::from_millis(500));
+        if windows(&mut page) == n {
+            break;
+        }
+    }
+    let odd = page.wait_for(
+        &format!("(() => {{ {SHOWN_FN} const p = document.querySelector('.list-main .pager [data-points]'), head = document.querySelector('.list-main .pager strong'), dot = document.querySelector('.list-main svg.trend circle.point'); const a = window.__answers.filter((x) => x.url.includes('series=ov')); return p && head && head.textContent === 'sorter · ov' && a.length ? {{ said: p.textContent, dot: dot ? [Number(dot.getAttribute('cx')), Number(dot.getAttribute('cy')), shown(dot)] : null, line: document.querySelectorAll('.list-main svg.trend path.line').length, axis: [...document.querySelectorAll('.list-main svg.trend text.axis')].map((t) => [t.textContent, Number(t.getAttribute('x')), Number(t.getAttribute('y'))]), answer: a[a.length - 1] }} : null; }})()"),
+        Duration::from_secs(20),
+    );
+    let url = odd["answer"]["url"].as_str().unwrap();
+    let (from, to): (i64, i64) = (param(url, "from").unwrap().parse().unwrap(), param(url, "to").unwrap().parse().unwrap());
+    let body = &odd["answer"]["body"];
+    let points: Vec<(f64, f64)> = body["points"].as_array().unwrap().iter().filter_map(|p| p[1].as_f64().map(|v| (p[0].as_f64().unwrap(), v))).collect();
+    assert_eq!((body["points"].as_array().unwrap().len(), points.clone()), (3, vec![(at as f64, 7.5)]), "one finite point among two that are none: {body}");
+    assert!(odd["said"].as_str().unwrap().starts_with("last 60 min · 3 of 3 points · 2 with no value, left out · last "), "{}", odd["said"]);
+    let (lo, hi) = extent(&[7.5]);
+    let left = left_for(&value_labels(lo, hi));
+    let x = left + (at - from) as f64 / (to - from) as f64 * (590.0 - left);
+    let dot = odd["dot"].as_array().unwrap_or_else(|| panic!("no dot for the one finite point: {odd}"));
+    assert!(odd["line"] == json!(0) && dot[2] == json!(true) && (dot[0].as_f64().unwrap() - x).abs() <= 0.051 && (dot[1].as_f64().unwrap() - 94.0).abs() <= 0.051, "the one finite point drawn at {dot:?}, its place ({x:.2}, 94): {odd}");
+    assert_eq!(axis_misplaced(odd["axis"].as_array().unwrap(), &points, from, to), Vec::<String>::new(), "the one finite point's labels");
+    every_mark_shown(&mut page, "one finite point among samples that are no number");
     let requests = page.requests();
     assert!(requests.iter().all(|(u, ty)| u.starts_with(&format!("http://{addr}/")) && ty != "WebSocket"), "{requests:?}");
     let paths: Vec<String> = requests.into_iter().map(|(u, _)| u).collect();

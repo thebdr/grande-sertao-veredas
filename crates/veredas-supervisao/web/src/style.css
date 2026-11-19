@@ -219,9 +219,11 @@ svg.spark.st-line-stale .point { fill: var(--muted); }
 table.dt { width: 100%; border-collapse: collapse; }
 /* Decided (Q28, the operator, 2026-11-16: "Page's own words only"): a heading is drawn as the page
    writes it, never through `text-transform` (which drew σ as Σ and a label's mA as MA): the page's
-   own words typed in capitals in its source, a label, a column name and a symbol as written. */
-.dt th { font: 600 10px var(--mono); letter-spacing: .06em; color: var(--label); text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }
-.dt td { padding: 4px 8px; border-bottom: 1px solid var(--hair); vertical-align: middle; }
+   own words typed in capitals in its source, a label, a column name and a symbol as written. And
+   its white space as written too (`pre-wrap`): a value's or a column's two spaces, its leading
+   ones, a tab and a line break are portal's, drawn, never collapsed into one. */
+.dt th { font: 600 10px var(--mono); letter-spacing: .06em; color: var(--label); text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); white-space: pre-wrap; }
+.dt td { padding: 4px 8px; border-bottom: 1px solid var(--hair); vertical-align: middle; white-space: pre-wrap; }
 .inbar { position: relative; min-width: 80px; }
 .inbar-fill { position: absolute; left: 0; top: 2px; bottom: 2px; background: var(--accent-soft); border-radius: 2px; }
 .inbar span { position: relative; }
