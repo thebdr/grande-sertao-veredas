@@ -205,8 +205,8 @@ for the whole suite").
 - Design: `design/supervisao/`.
 - Decided in the briefing of November 2026, not built (`docs/supervisao-plan.md`): colour, size,
   position and visibility as expressions of values, computed in Rust; a behaviour editor with
-  object types; translatable from day one; the accent moves from green to lavanda
-  (`docs/questions.md` Q22, reversed).
+  object types; translatable from day one; green as the colour of a good state. Built on
+  2026-11-19: the accent moved from green to lavanda (`docs/questions.md` Q22, reversed).
 
 ### veredas-oficina: the workshop
 The one native application through which a person sets up, programs, monitors and commissions

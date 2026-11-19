@@ -40,12 +40,19 @@ symbol are drawn exactly as written (σ stays σ, never Σ; `I (mA)` never `I (M
 | Text weak | `#9A9AA3`, `#8A8A92`; field label `#7F8088` |
 | Muted (decorative only) | `#6F6F77` |
 
-**Accents.**
+**Accent.** One for the whole suite, lavanda (`docs/questions.md` Q22, reversed on 2026-11-15).
 
-| Where | Accent | Notes |
+| Tone | Colour | Use |
 |---|---|---|
-| Desktop apps (comissionador) | green `#30D158` | soft bg `#1C3A27`, on-accent text `#08130B`, outline `#2F5A3D`, hover `#5FE07F` |
-| Web (supervisão) | the same green, `#5FE07F` as its working tint for data series | as the desktop; the mockups' magenta (`#AC007C`) is superseded (`docs/questions.md` Q22) |
+| Accent | `#B9A9E8` | selection, focus, primary actions |
+| Soft | `#2B2838` | the ground of a selected row, tab or button |
+| Outline | `#494360` | the edge of a selected or hovered control |
+| Text on the accent | `#12101C` | a label on a button filled with the accent |
+| Tint | `#CFC3F2` | neutral data series and hover (the assistant's proposal, not ruled) |
+
+The mockups in this folder were drawn before the reversal. Their green (`#30D158`, comissionador)
+and their magenta (`#AC007C`, supervisão) read as the accent wherever they mark selection, focus or
+a primary action.
 
 **Status.** Warn `#FFC864` (near-full fill `#B88F3E`), danger `#FF6B6B` (text `#FF8F8F`),
 neutral pill `rgba(154,160,166,.14)`.
@@ -56,5 +63,7 @@ number `#D2A8FF` · escape `#FFB86C` · punctuation and comments `#8A8A92`.
 **Rules both follow.**
 - Every state has a mark and a word, so it reads without colour.
 - The accent marks selection, focus and primary actions; it is never a plant state.
+- Green means a good state and is never the accent (`docs/questions.md` Q22). Which state is
+  "good" is open (Q45), so no state takes it yet.
 - Writes that touch the plant are shown as gated (warn colour) wherever they appear.
 - Radii: widgets 6 px, cards 8–12 px, pills 5–7 px, chips 999 px. Spacing on an 8 px rhythm.

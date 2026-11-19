@@ -12,8 +12,8 @@
 //! the headline, live; a selected object, chosen by a pointer at a point, alone in carrying the
 //! selection, with its value (a key's own for a keyed marker), sparkline (its own series over its
 //! half hour) and offered write; all read back from the page's document against the feed.
-//! Veredas' green accent marks the selection and no state, in the drawing, the headline, the
-//! attention list or a badge, nor any green of its hue, after every change; no magenta anywhere in
+//! Veredas' accent, lavanda, marks the selection and no state, in the drawing, the headline, the
+//! attention list or a badge, nor any colour of its band of hue, after every change; no magenta in
 //! the bundle.
 
 mod common;
@@ -155,16 +155,17 @@ const AROUND: &str = r#"(() => ({
   gate: document.querySelector(".side .gate-note")?.textContent ?? null,
 }))()"#;
 
-/// The colour readers the accent checks share. A green is one of the accent's four colours (the
+/// The colour readers the accent checks share. A colour of the accent is one of its four (the
 /// accent, its tint, its soft and its outline, by red, green and blue whatever the alpha) or any
-/// colour of the accent's band of hue (100° to 170°) with some saturation (above 0.2): a shade one
+/// colour of its band of hue (220° to 290°, 35° either side of its own) with some saturation
+/// (above 0.2), so a blue, a violet or a purple of any lightness, short of magenta: a shade one
 /// unit off the accent is still the accent to the eye. Every colour is read as the browser paints it
 /// (a 1×1 canvas filled with it, its bytes read back), whatever syntax the browser reports it in
 /// (`rgb()`, `color(srgb ...)` from a `color-mix()`, `oklch()`, `lab()`). A paint (`fill`, `stroke`)
 /// follows the paint grammar: a colour, or a `url(...)` with what follows it, the colour the
 /// browser paints when the reference is no paint server; a reference within the page is read
 /// through the colours it paints with (the fills, strokes and stop colours of the element it names
-/// and everything inside it). `greens` reads every property the browser computes for an element,
+/// and everything inside it). `accentOn` reads every property the browser computes for an element,
 /// from the browser's own list so none is left out (its custom properties apart): a paint as above,
 /// any other value through every colour in it (a border, an outline, a shadow, a decoration, a
 /// background image).
@@ -185,7 +186,7 @@ const COLOUR_READERS: &str = r##"
     const d = ctx.getImageData(0, 0, 1, 1).data;
     return [d[0], d[1], d[2], d[3] / 255];
   };
-  const green = (c) => {
+  const ofAccent = (c) => {
     const p = parts(c);
     if (!p || p[3] === 0) return false;
     if (family.includes(p.slice(0, 3).map(Math.round).join(","))) return true;
@@ -195,22 +196,22 @@ const COLOUR_READERS: &str = r##"
     const s = d / (1 - Math.abs(2 * l - 1));
     const h = mx === r ? 60 * (((g - b) / d) % 6) : mx === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
     const hue = (h + 360) % 360;
-    return hue >= 100 && hue <= 170 && s > 0.2;
+    return hue >= 220 && hue <= 290 && s > 0.2;
   };
   const painted = (v) => {
     const m = v.match(/^url\((["']?)(.*?)\1\)\s*(.*)$/);
-    if (!m) return green(v) ? [v] : [];
-    const fallback = m[3] && green(m[3]) ? [`${v} falls back to ${m[3]}`] : [];
+    if (!m) return ofAccent(v) ? [v] : [];
+    const fallback = m[3] && ofAccent(m[3]) ? [`${v} falls back to ${m[3]}`] : [];
     // A reference within the page names an element by its id; one to another document paints the
     // fallback alone.
     const at = m[2].indexOf("#");
     const local = at === 0 || (at > 0 && m[2].slice(0, at) === location.href.split("#")[0]);
     const ref = local ? document.getElementById(decodeURIComponent(m[2].slice(at + 1))) : null;
     if (!ref) return fallback;
-    return fallback.concat([ref, ...ref.querySelectorAll("*")].flatMap((d) => { const c = getComputedStyle(d); return [c.fill, c.stroke, c.stopColor].filter(green); }).map((g) => `${v} paints ${g}`));
+    return fallback.concat([ref, ...ref.querySelectorAll("*")].flatMap((d) => { const c = getComputedStyle(d); return [c.fill, c.stroke, c.stopColor].filter(ofAccent); }).map((g) => `${v} paints ${g}`));
   };
   const TOKENS = /(rgba?\([^)]*\)|hsla?\([^)]*\)|hwb\([^)]*\)|(?:ok)?l(?:ab|ch)\([^)]*\)|color\([^)]*\)|#[0-9a-f]{3,8}\b)/gi;
-  const greens = (el) => {
+  const accentOn = (el) => {
     const c = getComputedStyle(el);
     const out = [];
     for (let i = 0; i < c.length; i++) {
@@ -218,17 +219,17 @@ const COLOUR_READERS: &str = r##"
       if (p.startsWith("--")) continue;
       const v = c.getPropertyValue(p);
       if (p === "fill" || p === "stroke") out.push(...painted(v).map((g) => `${p} ${g}`));
-      else for (const t of v.match(TOKENS) || []) if (green(t)) out.push(`${p} ${t}`);
+      else for (const t of v.match(TOKENS) || []) if (ofAccent(t)) out.push(`${p} ${t}`);
     }
     return out;
   };
 "##;
 
-/// Every state drawn in a green: the drawing's elements and everything inside them (the selection
+/// Every state drawn in the accent: the drawing's elements and everything inside them (the selection
 /// apart, which the selection check pins to the one selected), its fills, tags, values and labels,
 /// the headline's figures, the attention list's marks and the side panel's badges, each by every
 /// property it has. The attention list's rows: the accent's own mark (`on`) on the selected
-/// object's row alone, and no other row painted in a green by any property. Every selected element
+/// object's row alone, and no other row painted in it by any property. Every selected element
 /// marked on every shape it draws (a group's shapes inside it, their own stroke written or not):
 /// stroked in the accent itself, a pixel wide or more, at half its alpha or more once every opacity
 /// is multiplied, shown.
@@ -236,20 +237,20 @@ const ACCENT_ON_STATES: &str = r##"
   const name = (el) => el.id || el.dataset.for || el.dataset.key || `${el.tagName} in ${el.closest("[id]")?.id}`;
   const drawn = [...document.querySelectorAll("svg.plant .sv-obj, svg.plant .sv-obj *, svg.plant [data-key], svg.plant [data-key] *, svg.plant .sv-fill, .sv-overlay .sv-tag, .sv-overlay .sv-value, .sv-overlay .sv-label")]
     .filter((el) => !el.closest(".sv-selected"))
-    .flatMap((el) => greens(el).map((g) => `${name(el)} ${g}`));
+    .flatMap((el) => accentOn(el).map((g) => `${name(el)} ${g}`));
   // Every element outside the drawing whose class names a state (`st-`, `sv-state-`), wherever the
   // page writes one: the headline, the attention list, the badges, the alarm strip, the legend, the
   // Alarms view.
   const stateful = (el) => /(^|\s)(st-|sv-state-)/.test(el.getAttribute("class") || "");
   const around = [...document.querySelectorAll("[class]")].filter((el) => stateful(el) && !el.closest("svg.plant"))
-    .flatMap((el) => greens(el).map((g) => `${el.getAttribute("class")} ${JSON.stringify(el.textContent)} ${g}`));
+    .flatMap((el) => accentOn(el).map((g) => `${el.getAttribute("class")} ${JSON.stringify(el.textContent)} ${g}`));
   // The side panel's own selection: every row's `on` mark by it, and nothing drawn selected but it.
   const chosen = document.querySelector(".side .sel-title")?.dataset.id ?? null;
   const strays = [...document.querySelectorAll("svg.plant .sv-selected")].map((e) => e.dataset.object ?? e.id).filter((id) => id !== chosen).map((id) => `${id} drawn selected while the side panel shows ${chosen}`);
   const rows = strays.concat([...document.querySelectorAll(".side ul.attention li")].flatMap((li) => {
     const on = li.classList.contains("on");
     const out = on !== (li.dataset.id === chosen) ? [`attention row ${li.dataset.id} on: ${on}, the side panel showing ${chosen}`] : [];
-    return on ? out : out.concat(greens(li).map((g) => `attention row ${li.dataset.id} ${g}`));
+    return on ? out : out.concat(accentOn(li).map((g) => `attention row ${li.dataset.id} ${g}`));
   }));
   const GEOMETRY = "rect, circle, ellipse, path, polygon, polyline, line, text";
   const strokeAlpha = (s) => { let op = 1; for (let a = s; a; a = a.parentElement) op *= Number(getComputedStyle(a).opacity); const c = getComputedStyle(s), p = parts(c.stroke); return p ? op * p[3] * Number(c.strokeOpacity) : 0; };
@@ -267,7 +268,7 @@ const ACCENT_ON_STATES: &str = r##"
 /// Every state the vocabulary has on every surface it is drawn on, by a probe element of each put
 /// where the page puts its own (so every rule of the stylesheet that could reach one does): an
 /// element and a group of every way of showing, a level's fill and a tag in the drawing, a figure
-/// of the headline, a mark of the attention list and a badge; each read by `greens`, then removed.
+/// of the headline, a mark of the attention list and a badge; each read by `accentOn`, then removed.
 /// The states and the ways of showing come from the crate's own enums (`STATES`, `KINDS`).
 const PROBES: &str = r##"
   const svgNS = "http://www.w3.org/2000/svg";
@@ -308,7 +309,7 @@ const PROBES: &str = r##"
     badge.textContent = "x";
     put(document.querySelector(".side"), badge, `a badge in ${s}`);
   }
-  const out = made.flatMap(([el, what]) => [el, ...el.querySelectorAll("*")].flatMap((x) => greens(x).map((g) => `${what}: ${x === el ? "" : `its ${x.tagName} `}${g}`)));
+  const out = made.flatMap(([el, what]) => [el, ...el.querySelectorAll("*")].flatMap((x) => accentOn(x).map((g) => `${what}: ${x === el ? "" : `its ${x.tagName} `}${g}`)));
   // Painted in its state: a group's shape (its own fill and stroke written) as a plain one is, and
   // on every surface each state painted otherwise than every other (a tag's normal apart: it is
   // empty).
@@ -506,7 +507,7 @@ fn places_told_apart(page: &mut Browser) -> Value {
 const SELECTED: &str = r#"[...document.querySelectorAll("svg.plant .sv-selected")].map((e) => e.dataset.key !== undefined ? `${e.dataset.object} ${e.dataset.key}` : e.id).sort()"#;
 
 /// The accent check once every transition has run: a fill or stroke sliding from the selection's
-/// green is not a state drawn in it.
+/// lavanda is not a state drawn in it.
 fn accent_on_states(page: &mut Browser) -> Value {
     page.wait_for(r#"document.getAnimations().every((a) => a.playState !== "running")"#, Duration::from_secs(5));
     page.eval(&format!("(() => {{\n{COLOUR_READERS}\n{ACCENT_ON_STATES}\n}})()"))
@@ -1309,7 +1310,7 @@ fn the_page_draws_the_layout_from_the_feed() {
 
     // A click of the pointer on outlet 3 (full, so its fill covers it) selects it: the side panel
     // holds its value, state, sparkline (its own series over its last half hour) and offered
-    // write, gated by portal's switch; the selection is drawn in Veredas' green (Q22).
+    // write, gated by portal's switch; the selection is drawn in the accent, lavanda (Q22).
     click_at(&mut page, &drawn["outlet-3"]["rect"]);
     let around = around_when(&mut page, "a.selected === 'Outlet 3' && a.spark > 0");
     assert_eq!((around["badge"].clone(), around["value"].clone()), (json!("■ full"), json!("100 %")));
@@ -1330,7 +1331,7 @@ fn the_page_draws_the_layout_from_the_feed() {
   return { selected: sel.classList.contains("sv-selected"), stroke: getComputedStyle(sel).stroke, accent: getComputedStyle(sel).getPropertyValue("--accent").trim() };
 })()"#,
     );
-    assert_eq!(accent, json!({ "selected": true, "stroke": "rgb(48, 209, 88)", "accent": "#30d158" }), "the accent marks the selection");
+    assert_eq!(accent, json!({ "selected": true, "stroke": "rgb(185, 169, 232)", "accent": "#b9a9e8" }), "the accent marks the selection");
     settle(&mut page, "outlet 3 selected", &["outlet-3"]);
 
     // Every state the vocabulary has, the attention list in order of weight and the headline
@@ -1495,22 +1496,22 @@ fn the_page_draws_the_layout_from_the_feed() {
     for class in ["normal", "near", "warn", "alarm", "disabled", "stale"] {
         assert!(web::APP_CSS.contains(&format!("sv-state-{class}")), "{class}");
     }
-    // Veredas' one green accent (Q22), the desktop's: never the mockups' magenta, by name (the
+    // Veredas' one accent, lavanda (Q22, reversed): never the mockups' magenta, by name (the
     // mockups' six, the text tint on it among them) or by hue (no colour of the bundle between
     // purple and pink).
-    assert!(web::APP_CSS.contains("--accent:#30d158") || web::APP_CSS.contains("--accent: #30d158"), "the accent is Veredas' green");
+    assert!(web::APP_CSS.contains("--accent:#b9a9e8") || web::APP_CSS.contains("--accent: #b9a9e8"), "the accent is lavanda");
     for magenta in ["ac007c", "d94ba0", "3a0b2c", "6e1a54", "e86fb5", "e8b9d6"] {
         assert!(!web::APP_CSS.to_ascii_lowercase().contains(magenta) && !web::APP_JS.to_ascii_lowercase().contains(magenta), "{magenta}");
     }
     let found: Vec<(String, f64, f64)> = colours(web::APP_CSS).into_iter().chain(colours(web::APP_JS)).collect();
-    assert!(found.iter().any(|(c, _, _)| c == "#30d158"), "{found:?}");
+    assert!(found.iter().any(|(c, _, _)| c == "#b9a9e8"), "{found:?}");
     let pink: Vec<&(String, f64, f64)> = found.iter().filter(|(_, h, s)| (280.0..=345.0).contains(h) && *s > 0.15).collect();
     assert_eq!(pink, Vec::<&(String, f64, f64)>::new());
     // The reader sees the mockups' colours in either spelling.
     for c in ["#ac007c", "#E8B9D6", "#d4b", "rgb(172, 0, 124)", "rgba(232,185,214,0.5)"] {
         assert!(colours(c).iter().any(|(_, h, s)| (280.0..=345.0).contains(h) && *s > 0.15), "{c}: {:?}", colours(c));
     }
-    assert!(colours("#30d158 #sv-hatch url(#loop) #26262A").iter().all(|(_, h, _)| !(280.0..=345.0).contains(h)));
+    assert!(colours("#b9a9e8 #sv-hatch url(#loop) #26262A").iter().all(|(_, h, _)| !(280.0..=345.0).contains(h)));
 }
 
 /// The drawing for the levels with no area and what the page adds around the drawing: a line with no
@@ -1727,7 +1728,7 @@ const ROOT_PAINT: &str = r##"(() => {
   const props = [...getComputedStyle(plant)].filter((p) => !p.startsWith("--"));
   const snap = () => added.map((e) => { const c = getComputedStyle(e); return props.map((p) => c.getPropertyValue(p)); });
   const before = snap();
-  const WRITE = { fill: "#30d158", stroke: "#30d158", "stroke-width": "3", "stroke-dasharray": "1 1", "stroke-dashoffset": "1", "fill-opacity": "0", "stroke-opacity": "0.5", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "1", "paint-order": "stroke", "fill-rule": "evenodd", "font-size": "40", "font-family": "serif", "font-weight": "100", "font-style": "italic", "letter-spacing": "3", "word-spacing": "3", "text-anchor": "end", "dominant-baseline": "hanging", "marker-start": "url(#nv-none)", "marker-mid": "url(#nv-none)", "marker-end": "url(#nv-none)", color: "#30d158", "shape-rendering": "crispEdges", "text-rendering": "optimizeSpeed" };
+  const WRITE = { fill: "#b9a9e8", stroke: "#b9a9e8", "stroke-width": "3", "stroke-dasharray": "1 1", "stroke-dashoffset": "1", "fill-opacity": "0", "stroke-opacity": "0.5", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-miterlimit": "1", "paint-order": "stroke", "fill-rule": "evenodd", "font-size": "40", "font-family": "serif", "font-weight": "100", "font-style": "italic", "letter-spacing": "3", "word-spacing": "3", "text-anchor": "end", "dominant-baseline": "hanging", "marker-start": "url(#nv-none)", "marker-mid": "url(#nv-none)", "marker-end": "url(#nv-none)", color: "#b9a9e8", "shape-rendering": "crispEdges", "text-rendering": "optimizeSpeed" };
   const targets = [plant, ...new Set([...plant.querySelectorAll(".sv-fill-holder")].map((h) => h.parentElement))];
   const was = targets.map((t) => Object.keys(WRITE).map((k) => t.getAttribute(k)));
   for (const t of targets) for (const [k, v] of Object.entries(WRITE)) t.setAttribute(k, v);

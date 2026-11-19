@@ -163,7 +163,8 @@ only. The operator kept it on 2026-11-15, under three rules:
 - **Repository changes owed with the first code:** `crates/veredas-oficina` at core's MAJOR,
   listed; its row in `MAP` (`tools/leis`), a contract change written with the crate (portal at
   least, and controlador if the laptop IO check's session is linked in);
-  `docs/design/README.md` gains the accent's tones, and the syntax palette's number colour
+  in `docs/design/README.md` (which holds the accent's tones since 2026-11-19) the syntax
+  palette's number colour
   (`#D2A8FF`) moves, sitting too close to the accent; licence files (Q35); P-015 becomes clauses.
 
 ## Open

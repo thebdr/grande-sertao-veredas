@@ -465,22 +465,33 @@ neutral data series, never a plant state.
 accent "has been an inconvenience": green is to mean a good state, so the accent became a colour
 that is memorable and carries no ready meaning (not blue, green, red, yellow or white). Lavanda
 `#B9A9E8`, soft `#2B2838`, outline `#494360`, on-accent text `#12101C`; the hover and data-series
-tint `#CFC3F2` is the assistant's proposal. Green `#30D158` is freed to mean a good state. NOT
-applied yet: supervisão's stylesheet, its built page, `docs/design/README.md` and any test that
-names the colour still carry the green (P-021). The syntax palette's number colour (`#D2A8FF`) sits
-too close to the new accent and should move. Whether "good" is a new state class or the colour of
-the normal one is open (Q45).
+tint `#CFC3F2` is the assistant's proposal. Green `#30D158` is freed to mean a good state. The
+syntax palette's number colour (`#D2A8FF`) sits too close to the new accent and should move.
+Whether "good" is a new state class or the colour of the normal one is open (Q45).
 
 **Its standing** 2026-11-19 (the operator, told that the accent was still applied nowhere):
-"lavanda is important". Read by the assistant, and not confirmed by the operator, as an order of
-work: the accent is applied ahead of everything else in P-021, as a change of its own. Nothing
-holds it back: it needs neither the expressions, the behaviour editor, the translation nor Q45's
-ruling (green stops being the accent, and no state takes it until Q45 is ruled). Open: whether it
-is applied on the Windows desk before the move, or on the Linux machine. Taken meanwhile: not
-applied on the desk, where development stopped that day; on the Linux machine it goes ahead of the
-rest of P-021. It edits C-051's wording and the values its test pins, so it lands between two of
-that clause's refute rounds; where that falls among the rounds and Q30's build is the operator's
-to say.
+"lavanda is important". Asked where it should be applied, on the Windows desk before development
+moved or first on the Linux machine: "Here, now".
+
+**Applied** 2026-11-19 in supervisão, as a change of its own (C-051). What moved:
+- the stylesheet's accent tokens, and the distribution chart's area, the one colour the stylesheet
+  spelled beside its tokens; the built page;
+- the layout test's pins: the accent `#b9a9e8` and the selection's stroke `rgb(185, 169, 232)`;
+- the layout test's band: no state is painted in the accent's four colours nor in any colour within
+  35° of its hue, 220° to 290° with a saturation above 0.2 (a blue, a violet or a purple), where
+  the band was the green's, 100° to 170°. A state in green is no longer refused; none takes it
+  until Q45 is ruled;
+- `docs/design/README.md`, which now gives the suite one accent.
+
+Three planted faults, each alone, the page rebuilt and restored after each: a near state's tag
+painted in the accent's tint, and the near colour made an indigo (`#5e5ce6`), each failed the
+layout test at "a state drawn in the accent"; the near colour made the old green (`#30d158`)
+passed it.
+
+Still the assistant's choices, none of them a ruling: the tint `#CFC3F2` (data series, the live
+mark, the legend's selection); the band's width, kept as the green's was; the unused token `--pill`
+(a dark green), which left the stylesheet with the family it belonged to. The syntax palette's
+number colour has not moved: no stylesheet uses it yet.
 
 ## Q23 - May a layout's stylesheet load from another host?
 

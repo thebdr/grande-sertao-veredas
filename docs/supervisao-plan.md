@@ -108,7 +108,7 @@ the gateway, the desktop, the supervision app) each did.
   show the page, or the drawing, inside a frame (the operator's ruling of 2026-11-15).
 - **Every state has a mark and a word** (the design's rule): normal ●, near ■, warn ■, alarm !,
   disabled ▨, stale ◌, selected ◆. A rule names the class and the word ("full", "stopped",
-  "fault"); the accent (Veredas' green `#30D158`, Q22) marks selection, focus and primary actions, never a
+  "fault"); the accent (lavanda `#B9A9E8`, Q22) marks selection, focus and primary actions, never a
   state. Writes are shown gated (the warn colour) wherever they appear, and disabled while the
   session's switch is off.
 - **Staleness is judged on the arrival clock.** An object is stale when it has no value yet, when its source
@@ -247,12 +247,10 @@ The operator's decisions of 13 to 15 November 2026 that touch supervisão
   selected objects, where the first selected is the master and only compatible parameters are
   applied.
 - **Translatable from day one**, the interface alone.
-- **The accent moves from green to lavanda `#B9A9E8`**; green means a good state
-  (`docs/questions.md` Q22, reversed on 2026-11-15). Not applied: the stylesheet, the built page,
-  `docs/design/README.md` and the tests that name the colour still carry the green. The operator
-  on 2026-11-19: "lavanda is important". It goes ahead of the other pieces listed here, as a
-  change of its own (the assistant's reading, not confirmed; `docs/questions.md` Q22, "Its
-  standing").
+- **Green means a good state** (`docs/questions.md` Q22, reversed on 2026-11-15). No state takes
+  it yet: which state "good" is stays open (Q45). The other half of that ruling is built: the
+  accent moved from green to lavanda `#B9A9E8` on 2026-11-19 (C-051), after the operator's
+  "lavanda is important" that day.
 - Open: the review's entries 22 (Oficina starting sessions against Q19), 24 (a colour by
   expression against the rule of a mark and a word; the string colour of the syntax palette) and
   43 (contrast, a light theme), all under Q31; whether "good" is a new state class or the colour
