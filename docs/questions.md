@@ -672,3 +672,21 @@ reference saying so for open paths and rings; (b) a shape the drawing writes `fi
 its state on its stroke alone, and a level on it fills over its stroke (as a shape with no area does).
 
 **Taken meanwhile** (the most reversible): (a), nothing changed; C-051 states it as pending on Q30.
+
+**Decided** 2026-11-19, by the operator: "Its line, as drawn", (b), and the line keeps the width it
+was drawn with. The line takes the state's colour and keeps the width it was drawn with (never
+thinner than the page's own outline); nothing is painted inside, and a level runs along the line.
+This is how the design mock shows a stopped induction (`docs/design/supervisao/Main.dc.html`, the
+inductions drawn as lines 10 wide, the stopped one the same line in amber). An outline that should
+be painted as a body needs a fill in Inkscape. Not chosen: the line redrawn at the page's own thin
+width (1.4, which every bound shape's outline takes today, so a conveyor drawn 10 wide would show
+its state as a hairline); the enclosed area painted, as now. Read with it (the foundation's
+reading, not the operator's words): drawn with no fill is the fill computing to `none` as the
+drawing stands before the page paints it, however it comes (an attribute, `style`, a group
+above), and a fill of zero opacity or of the background's colour is a fill; no width of the page's
+own thins such a line, the alarm's 2 and the selection's 2.5 among them; a level on such a shape
+runs along its line, as on a shape with no area; a bound group's shapes each go by their own fill
+as drawn.
+
+**Not yet built**: the page still paints (a). The suite's development moved to another machine on
+2026-11-19 before it was built; C-051 states the ruling as not built.

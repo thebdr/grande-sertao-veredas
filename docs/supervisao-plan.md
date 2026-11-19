@@ -274,3 +274,8 @@ Met during the port:
 - **The refute target's path must be short.** The bundled database engine's build overflows
   Windows path lengths under the session's scratch folder; the critic's target lives at
   `%TEMP%\vs-target`, and its first build takes over an hour.
+- **The desktop app's browser pane can hold a session for days.** A call to open a local file in
+  it (2026-11-16) came back fifty hours later, only as the machine woke from standby, and the pane
+  shows a local file as a static snapshot, its scripts not run. Probe a page with the headless
+  browser the tests drive (`tests/common/browser.rs`) or a node script driving headless Edge or
+  Chrome over its DevTools socket, never with a tool that waits on the app's window or on a person.
