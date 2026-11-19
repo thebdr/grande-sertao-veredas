@@ -183,6 +183,40 @@ and nothing served.
 Each phase ends with `cargo nextest run --workspace` green bare, `cargo test -p leis` green, and
 its clauses recorded, refuted and verified. Push at the end of each phase.
 
+## Decided in the briefing of November 2026, not built
+The operator's decisions of 13 to 19 November 2026 that touch portal (`docs/oficina-plan.md`,
+`docs/controlador-plan.md`, `docs/robustness.md`); status P-019. They override the lines above
+where they differ.
+- **Controlador embeds the full portal**, with its store and its server: "controlador embeds a
+  full version of portal" (2026-11-15). The build without the default features stays a build of
+  this crate, with no consumer named today; the lines above that say "for controlador's embedding"
+  are overtaken.
+- **Inside a controller, portal reads controlador's memory** (the variables list, the CPU's
+  states) asynchronously, outside the scan; controlador owns the real-time communication
+  (2026-11-15).
+- **Oficina embeds a portal too, and two portals speak portal's own HTTP interface**, "http
+  (https, later)": the event stream, the windowed reads, the gated write surface, on the
+  controller's loopback behind SSH. Forcing, breakpoints, downloads, start, stop and acknowledge
+  travel on the same link: portal carries them, and controlador handles them behind its portal
+  (2026-11-16).
+- **The embedded portal serves OPC UA and Modbus/TCP** to other controllers and higher-level
+  systems: the controller's state, its faults and the variables the program marks. Its master
+  switch is the gate for writes from outside, and its whitelist holds exactly the variables the
+  program marks writable. A protocol is bound only when the project names the interface; OPC UA
+  writes need a signed and encrypted channel and a user; Modbus writes come only from listed
+  client addresses (2026-11-15).
+- **Controller state changes and faults are stored like any other data**; the history view reads
+  them.
+- **On a controller the store is a window in memory by default**: the last stretch of values, as
+  long as the project sets, nothing written to the drive. Recording to the drive is the project's
+  choice, in files with a size limit; at a fault the window is written to the drive with the fault
+  record (2026-11-19; `docs/robustness.md`, "Wear and filling"). Today the store has no upper
+  bound and neither form exists: both are new work here.
+- **The grep engine** over logs at rest is on Oficina's first-release list.
+- **Q14 stands:** portal builds no desktop UI. Oficina is a component of its own.
+- Open: the review's entries 22 and 33 (Q31); robust requests (Q37); what gives way at a size
+  limit, and the window's ceiling (Q41); the security round (Q43, P-014).
+
 ## Traps
 Recorded as the port meets them.
 

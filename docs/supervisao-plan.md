@@ -235,6 +235,26 @@ Routes (all under one address; `<name>` a session):
 Each phase ends with `cargo nextest run --workspace` green bare, `cargo test -p leis` green, and
 its clauses recorded, refuted and verified. Push at the end of a phase green end to end.
 
+## Decided in the briefing of November 2026, not built
+The operator's decisions of 13 to 15 November 2026 that touch supervisão
+(`docs/oficina-plan.md`); status P-021.
+- **It stays web.** The browser still decides nothing and there are no scripts: the operator was
+  restating the border, not relaxing it. Oficina embeds its pages as tabs.
+- **Colour, size, position and visibility become expressions of values**, in the binding file's
+  rules, computed and tested in Rust.
+- **Edit mode gets a behaviour editor.** The binding file gains object types: a type holds the
+  behaviour and objects may override it. Applying is either to all objects of a type, or to the
+  selected objects, where the first selected is the master and only compatible parameters are
+  applied.
+- **Translatable from day one**, the interface alone.
+- **The accent moves from green to lavanda `#B9A9E8`**; green means a good state
+  (`docs/questions.md` Q22, reversed on 2026-11-15). Not applied: the stylesheet, the built page,
+  `docs/design/README.md` and the tests that name the colour still carry the green.
+- Open: the review's entries 22 (Oficina starting sessions against Q19), 24 (a colour by
+  expression against the rule of a mark and a word; the string colour of the syntax palette) and
+  43 (contrast, a light theme), all under Q31; whether "good" is a new state class or the colour
+  of the normal one (Q45).
+
 ## Traps
 Recorded as the port meets them. Carried from Veredas 1's supervision app, where they apply here:
 

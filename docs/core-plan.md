@@ -172,6 +172,27 @@ engines use, so what a channel sends is what the same catalog reads back).
 Each phase ends with `cargo nextest run --workspace` green bare, the laws green, and its
 clauses recorded, refuted and verified. Push at the end of phase 2 and of phase 3.
 
+## Decided in the briefing of November 2026, not built
+The operator's decisions of 13 to 16 November 2026 that touch core (`docs/controlador-plan.md`);
+status P-018.
+- **The controller's state text has one writer and one reader, here**, with the table of reason
+  numbers and words, so every screen, log and test shows the same characters
+  (`docs/controlador-plan.md`, "The state").
+- **The functions that drive hardware live in core**: the four fieldbus masters (PROFINET IO
+  controller, EtherCAT master, EtherNet/IP scanner, Modbus TCP client), safe in controlador on
+  Linux and callable by other crates for testing only (2026-11-14). The review set this against
+  Q9 and laws L4 and L5, and the operator kept it: "Core, rules amended" (2026-11-15).
+- **What is amended:** core's telegram framing still holds no frame layout of its own, and a
+  device spoken over a TCP telegram channel is still configuration. A standard fieldbus's frames
+  are fixed by its standard and are code in the masters; no vendor's device or catalog is named
+  there (`docs/questions.md` Q9, revisited). "Testing only" is a rule in prose that no law checks.
+- **Aranha's PROFINET codecs move into core** when the controller needs them, and the adopted
+  network libraries become core's dependencies.
+- **The OPC UA server code moves from maquinar into core**, since controlador's embedded portal
+  serves OPC UA.
+- Open: where the masters' tests against the bench live, law L4 standing (Q34); where the readers
+  of GSDML, ESI and EDS files live (Q45); the review's entries 23 and 26 (Q31).
+
 ## Traps
 Recorded as the port meets them.
 

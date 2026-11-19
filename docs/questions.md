@@ -72,6 +72,11 @@ architecture rule (test tools own their sockets, past portal) is not touched by 
 
 **Reversible?** Yes: one row of `MAP` and one line of the plan.
 
+**Revisited** 2026-11-14 and 2026-11-15 (the operator, the briefing on controlador): the functions
+that drive hardware live in `veredas-core`, so aranha's PROFINET codecs move into core when the
+controller needs them, and the bench then takes them from core. Aranha's row for maquinar in `MAP`
+stays until that move is made (`docs/core-plan.md`, "Decided in the briefing of November 2026").
+
 ---
 
 ## Q6 - The GENIBELT vendor specification
@@ -177,6 +182,15 @@ example and the engine's first test fixture, named for its shape (a segmented en
 its maker: a 12-byte envelope with a sequence, a length and a count is a shape, not a secret.
 The device's own file lives with its other rules, outside the suite's code.
 
+**Revisited** 2026-11-15 (the operator, ruling on the review's entry 10 of the briefing: "Core,
+rules amended"): the fieldbus masters stay in core, as decided on 2026-11-14, with the codecs of
+their standards (PROFINET, EtherCAT, EtherNet/IP, Modbus TCP). What this question settled is the
+telegram framing: core's framing engine holds no frame layout of its own, and a device spoken over
+a TCP telegram channel is still configuration. A standard fieldbus's frames are fixed by its
+standard and are code in core's masters; no vendor's device or catalog is named there either. The
+ruling asked for this rewording and gave none: the wording is the assistant's, written on
+2026-11-19 with `docs/veredas-plan.md` and `docs/core-plan.md`.
+
 ---
 
 ## Q10 - How a channel file is written
@@ -252,6 +266,11 @@ same library the tests do.
 TOML-driven executable; no desktop UI is planned, and `docs/maquinar-plan.md` no longer names
 one as a later phase.
 
+**Revisited** 2026-11-13 (the operator): the decision stands for the bench itself, which stays a
+library and an executable. The bench's surfaces (its file editor, a traffic monitor, starting a
+bench beside a session, later the pressure panel) are Oficina's (`docs/oficina-plan.md`), driving
+the same handles the tests do.
+
 ## Q13 - Should the bench raise the Windows timer resolution?
 
 **Context:** the bench ticks every 20 ms (the OPC server's service loop; the channel's
@@ -294,6 +313,11 @@ desktop UI is built. Every operator action the Veredas 1 shell had on a session 
 or remove a source, arm the writes, snapshot, export) is a method on the session's handle, so a
 shell, if one ever comes (P-008's web interface, or a thin window over the server), drives the same library the tests do; none is built in portal. The grep engine and the skew monitor
 wait with it (`docs/portal-plan.md`, "Scope").
+
+**Revisited** 2026-11-13 (the operator): portal still builds no desktop UI. The shell this question
+left open has come as a component of its own, Oficina, the suite's one native application
+(`docs/oficina-plan.md`): it embeds a portal and drives the same session handle. The grep engine is
+on Oficina's first-release list.
 
 **Reversible?** Yes: a shell is a crate or a module on top of the library; nothing below it
 changes.
@@ -412,6 +436,10 @@ the project, never over the wire) and on the actions the binding file declares.
 
 **Reversible?** Yes: accounts or a read-only remote mode sit in front of the same routes.
 
+**Revisited** 2026-11-13 (the operator): it stays, and it is extended to remote targets: Oficina
+reaches a target through SSH and has no accounts of its own. What a login adds is left to the
+security round (Q43, P-014).
+
 ## Q21 - The 3D view now or later?
 
 **Raised** 2026-11-09, planning supervisão (P-008).
@@ -432,6 +460,16 @@ magenta accent, after Veredas 1's dashboard, and the desktop side green.
 hover and data series `#5FE07F`, on-accent text `#08130B`); the mockups' magenta reads as the
 accent wherever it appears. The accent stays what it was: selection, focus, primary actions and
 neutral data series, never a plant state.
+
+**Reversed** 2026-11-15 (the operator): "Use Lavanda #B9A9E8 as the suite accent colour". The green
+accent "has been an inconvenience": green is to mean a good state, so the accent became a colour
+that is memorable and carries no ready meaning (not blue, green, red, yellow or white). Lavanda
+`#B9A9E8`, soft `#2B2838`, outline `#494360`, on-accent text `#12101C`; the hover and data-series
+tint `#CFC3F2` is the assistant's proposal. Green `#30D158` is freed to mean a good state. NOT
+applied yet: supervisão's stylesheet, its built page, `docs/design/README.md` and any test that
+names the colour still carry the green (P-021). The syntax palette's number colour (`#D2A8FF`) sits
+too close to the new accent and should move. Whether "good" is a new state class or the colour of
+the normal one is open (Q45).
 
 ## Q23 - May a layout's stylesheet load from another host?
 
@@ -690,3 +728,391 @@ as drawn.
 
 **Not yet built**: the page still paints (a). The suite's development moved to another machine on
 2026-11-19 before it was built; C-051 states the ruling as not built.
+
+---
+
+Q31 to Q45 were written on 2026-11-19, when the briefing of 13 to 16 November on Oficina and
+controlador, its adversarial review and the robustness round were merged into this repository
+(`docs/oficina-plan.md`, `docs/controlador-plan.md`, `docs/robustness.md`, `docs/briefing/`). The
+operator: "the pending questions will be resolved later". Each groups the open points of one
+subject; "the assistant" is the session that held the briefing.
+
+## Q31 - Which of the review's majors and minors stand?
+
+**Raised** 2026-11-15, by the adversarial review of the briefing (`docs/briefing/review.md`).
+
+The review's 14 blockers were ruled the same day (its table "The operator's rulings"). Its 32
+majors (entries 15 to 46) and its 9 minors (47 to 55) were not: each has its options and the
+assistant's pick in the review, and the review's last section proposes an order for deciding them.
+Some touch what is already built or decided here: entry 22 sets Oficina's starting of portal
+sessions against Q19; entry 24 sets a colour computed by an expression against supervisão's rule
+that every state has a mark and a word; entry 33 is P-014's ground.
+
+**Taken meanwhile** (the most reversible): none of them is written into a plan as settled. The
+plans carry the decisions as the operator made them, and each plan's "Open" names the entries that
+touch it. An entry becomes a rule only by the operator's word.
+
+## Q32 - What disqualifies an edit from a live takeover?
+
+**Raised** 2026-11-15, by the operator, ruling on the review's entry 5.
+
+"live fallback shall be enabled only when feasible. we need to build the specification for what
+disqualifies the edits for auto takeover. takeover after restart remains possible for all cases".
+The specification is not built. One candidate criterion, the assistant's and not ruled: the
+watching version keeps its right to take over only while the comparison has shown no difference
+between its outputs and the driven ones since the swap. Riders of the assistant's that nobody
+ruled on: a failed edit leaves a fault record; the state text gains a term for the armed fallback
+and its time left; the event is named "the edit failed", not a controller fault.
+
+**Taken meanwhile**: no live takeover is built before the specification. The previous version can
+always be put back for the next start.
+
+## Q33 - Where is controlador's execution model written, and what does it say?
+
+**Raised** 2026-11-15, by the review's entry 13; the operator chose the smaller first release
+alone.
+
+Not chosen: writing the execution model as the first section of controlador's plan, and a fixed
+build order. So these stay open:
+- where the model is written;
+- whether tasks share data only through the process image (K8, the assistant's reading, which is
+  what would make pre-emption safe without locks);
+- whether each block gets its own slice of the input and output image (K10);
+- how one block interrupts another inside the interpreter: a real-time thread per priority with an
+  interpreter that can be re-entered, or switching at instruction boundaries on one thread;
+- the fieldbus cycle's own real-time thread, which a breakpoint must not halt.
+
+K11, the period check of a shadow test with several pre-emptive blocks, is put off by the first
+release's limit of one cyclic task.
+
+**Taken meanwhile**: `docs/controlador-plan.md` says what was decided and names the model under
+"Before the code"; no code stands on an assumed model.
+
+## Q34 - Where do the tests of core's fieldbus masters against the bench live?
+
+**Raised** 2026-11-15, by the ruling on the review's entry 10 ("Core, rules amended").
+
+The masters stay in core. Law L4 stands: core depends on no other member in any table, the test
+table included, so core's own tests cannot start maquinar's bench devices. The ruling did not say
+where those tests live. And "callable by other crates for testing only" stays a rule in prose that
+no law checks.
+
+**Taken meanwhile**: nothing is written. The candidates: the tests of the first consumer
+(controlador), or a crate of repo tooling under `tools/`.
+
+## Q35 - Which licence expression do the crates carry?
+
+**Raised** 2026-11-15, by the ruling on the review's entry 14.
+
+Oficina is GPLv3. Core, portal, `orcl-std` and every crate Oficina links get a permissive licence
+that GPLv3 accepts, and a check of dependency licences runs in CI. Not ruled: whether that is MIT,
+Apache 2.0, or the dual expression `MIT OR Apache-2.0` usual for Rust crates. The review also
+noted that a licence file at the repository's root would cover the whole repository, where GPLv3
+is meant for Oficina alone, and that its reading is no legal advice.
+
+**Taken meanwhile**: no licence is stated in any manifest and no licence file is written. Nothing
+is published before this is answered.
+
+## Q36 - How is a download's integrity built?
+
+**Raised** 2026-11-16, by the operator's requirement that a download carry "a hash or crc so no
+corrupted program may run".
+
+Ruled so far: the requirement; the recheck at power-on; two copies with a hash per block
+(`docs/robustness.md`). The assistant's proposal for the rest, put to the operator on 2026-11-16
+and not confirmed:
+- a manifest lists every part of a download with its SHA-256 and length, and the SHA-256 of the
+  manifest is the download's identity (the download history already keeps a hash);
+- the controller stores to a temporary file, reads it back from the drive, verifies, and only then
+  renames it into place and answers with the identity it computed;
+- it verifies again before every load (a swap, a restart, a power-on); a failed check is the FAULT
+  reason 506 `load`, never an automatic substitute;
+- swap, start and rollback name the identity;
+- a hash guards against corruption, not against tampering, which needs a signature over the same
+  manifest and belongs to the security round (Q43).
+
+**Taken meanwhile**: nothing is built; the proposal is the assistant's pick.
+
+## Q37 - How is every request that alters the controller made robust?
+
+**Raised** 2026-11-16, by the operator: "every bit of data that alters the controller shall be
+robust, that includes commands such as variable writes, breakpoints setting, state change".
+
+The assistant's proposal, put the same day and not confirmed: one rule for every altering request,
+the download being its largest case, against the transmission faults listed in IEC 61784-3
+(borrowed as a checklist; no safety rating is claimed):
+- a SHA-256 of the content with every request (HTTP's Content-Digest, RFC 9530);
+- a session and a strictly increasing number; a repeat is answered with the first outcome and not
+  run again; a gap or an old number is refused;
+- the controller's identity named in the request;
+- the download's identity, and for a state change the state it expects to leave, named in the
+  request;
+- freshness, by echoing the controller's own last clock value;
+- no answer is shown as "unknown", and the outcome is asked for by number;
+- the change is applied whole, at one point of the scan;
+- the answer is read back from the controller: the value in memory, the new state text, the full
+  breakpoint list.
+
+Its limits and loose ends:
+- It guards against faults, not against a person; a keyed check (RFC 9421) belongs to the security
+  round.
+- Read literally, the operator's sentence also covers peers' writes, where secured OPC UA already
+  signs and numbers its messages and Modbus/TCP has nothing beyond TCP's checksum. The assistant
+  read the scope as the Oficina link.
+- The tunnel's end on the laptop is reachable by every program there, a page in a browser
+  included, so the server should refuse a `Host` it does not expect and the session value should
+  be random (P-014).
+- From the ruling that a write from outside is saved at once: the answer to a write should tell
+  its sender how far it got, applied and then saved, so a panel shows a setpoint as kept only when
+  it is. A write followed by a power cut inside the shortest gap is still lost.
+
+**Taken meanwhile**: nothing is built; the proposal is the assistant's pick.
+
+## Q38 - What must survive: which data is inside, and the border cases
+
+**Raised** 2026-11-16, in the robustness round (`docs/robustness.md`, "What must survive").
+
+The rule is the operator's: "every piece of data that is necessary for computing the logic
+flawlessly in RUN mode", the commissioning scope outside it. The assistant's application of it,
+given to the operator and not ruled:
+- inside: the running program; the hardware configuration and IO mapping; retained variables; the
+  settings a scan depends on; the interpreter, the operating system and what boots them; the
+  integrity data itself;
+- outside: forces, breakpoints, a shadow test, the commissioning switch (lost reads as off),
+  earlier downloads, fault records, the state history, the store, the logs, and everything on the
+  laptop;
+- what is outside may be lost, but must never harm what is inside: a size limit, and storage apart
+  from the program's.
+
+Border cases, each with the assistant's reading:
+- the source of the running program: RUN does not need it, but "the code is open" holds for the
+  next engineer only if it can be read from the machine, so inside;
+- what peers need, the Modbus and OPC UA settings and certificates: inside when the project uses
+  them;
+- a dry run: it keeps its ruling to survive a power cycle, without the protection meant for
+  decades;
+- the clock, for a program with time-of-day blocks.
+
+**Taken meanwhile**: the readings above, as readings.
+
+## Q39 - Time over decades: the details the rulings left
+
+**Raised** 2026-11-16, in the robustness round (`docs/robustness.md`, "Time over decades").
+
+Not ruled, each with the assistant's reading or proposal:
+- **64-bit only** has to cover the operating system too (x86-64 and 64-bit ARM under a 64-bit
+  Linux), since a 32-bit system on a 64-bit processor brings the 32-bit time value back; the build
+  refuses a 32-bit target. Out are the 32-bit ARM boards (BeagleBone Black, i.MX 6, STM32MP1, the
+  early Raspberry Pi models).
+- **When NTP counts as silent:** only after a waiting time without an answer (at power-on, the
+  start-up time), the request being not urgent until then. Otherwise every power-on with a dead
+  battery sends an urgent request for a few seconds.
+- **The urgency follows the present situation** (back to not urgent when NTP returns), while the
+  request itself stays until cleared in Oficina or a restart, by the rule of 2026-11-14.
+- **One maintenance reason or two** for the battery and NTP. A board with no clock chip counts as
+  a dead battery, and the "ignore" setting is what such a board needs.
+- **Which records carry the mark of an unconfirmed date:** fault records and the state history are
+  controlador's; the store's samples are portal's, whose format would have to change (law L7).
+  And whether a passing unconfirmed date shows as a condition term in the state text.
+- **Starts that were missed:** a time-of-day block set to start once, whose moment passed while
+  the date was unconfirmed, never runs; by the same reasoning a start that fell while the
+  controller was powered off would not run either. A function that must run at an interval
+  whatever the date belongs in a cyclic block.
+- **The certificates' one end date:** every certificate the suite issues ends at the same second,
+  so the year-ahead request comes up on every controller on 19 January 2037; a certificate issued
+  late lives short, and after the end date the rule can issue none. "Its certificates" is read as
+  every certificate in the controller's store, its own and its peers'. While its date is
+  unconfirmed a controller can judge no certificate's dates and cannot time the year-ahead
+  request. The end date that follows 2038, and what a secured link does meanwhile, are for the
+  security round (Q43).
+- **The cycle-time rule:** the maximum is the time error already decided (the handler on the first
+  overrun, a fault at twice the period) and gives a free-running main block the limit the review's
+  entry 13 missed; the warning is a maintenance request, not urgent, with a reason of its own
+  beside `overruns`; optionally the controller records each task's longest cycle per day, so the
+  drift shows before the warning.
+
+**Taken meanwhile**: the readings above, as readings; no reason number is assigned.
+
+## Q40 - The retained save: the details the rulings left
+
+**Raised** 2026-11-16, in the robustness round (`docs/robustness.md`, "Retained variables, by what
+the target can do").
+
+Ruled: on a target that cannot save at power loss, the last save, flagged; a write from outside
+saved at once, held to a shortest gap. Not ruled, each the assistant's reading or proposal:
+- **What a save holds:** the retained variables as they stood at the end of one successful cycle,
+  never a mix of two (the rule on temporary and permanent data, applied to each save).
+- **How it is stored:** as everything RUN needs, two copies, each with its hash, written one after
+  the other, which also leaves one whole copy when power is cut during a save. With both
+  unreadable at start, the retained variables reset with the request `retain_reset`.
+- **When the flag is raised:** only when cycles ran after the last save; a power cut while the
+  controller sits in STOP raises none. `warm` then means "as of the last save" on such a target.
+- **No maintenance request for a start from the last save**, a power cut being this target's
+  normal case; the state text shows it as a condition beside `retain(reset=true)`, spelling open.
+- **Who says what a target can do:** the target's hardware description, since hold-up power cannot
+  be detected.
+- **Nothing changed, nothing written:** a save whose content equals the last one is skipped.
+- **The period** is the engineer's and is never refused; where the drive reports its wear, Oficina
+  shows the years it has left at that period.
+- **The shortest gap** is the engineer's setting, with a default. It bounds the wear, the drive
+  seeing at most one save per gap, and Oficina shows the drive's shortest life at that gap. A
+  write that arrives inside the gap is applied at once and saved when the gap ends.
+- **A save on the program's request**, for example at the end of a batch.
+- **The place of the save failing while the machine runs** does not stop RUN, the values being in
+  memory. It raises a maintenance request, not urgent while one copy can still be written and
+  urgent when none can, since the next power cut would then reset the retained variables.
+
+**Taken meanwhile**: the readings above, as readings.
+
+## Q41 - Wear and filling: what gives way at a limit, and the proposals not ruled
+
+**Raised** 2026-11-16 and 2026-11-19, in the robustness round (`docs/robustness.md`, "Wear and
+filling").
+
+The question in hand when the round paused: when a growing record on a controller's drive reaches
+its size limit, what gives way? It comes up for a recording on the drive, fault records, the state
+history, earlier downloads, logs and the fault's copies of the window. The drive is finite, so
+either old data goes or new data is not written.
+- (a) The oldest is deleted (the assistant's pick), with two guards: a fault that repeats is
+  counted on its record and not written again, so it cannot push the history out; and the running
+  program and its fallback are never deleted.
+- (b) Recording stops and the controller raises a maintenance request. Nothing is ever deleted, as
+  Q16 decided for a project's disk store on a PC ("nothing is refused, deleted or merged").
+
+The assistant's other proposals in this area, none ruled:
+- **Storage in three kinds:** what RUN needs, written only at a download; the retained save,
+  written often and needed at the next start; everything that grows, on a data area apart, so that
+  wearing or filling it cannot touch the program.
+- **Wear is watched:** where the drive reports it, the controller reads it and raises a
+  maintenance request, not urgent, at a threshold the engineer sets; Oficina shows the years left
+  at the present write rate.
+- **Everything that grows has a size limit.**
+- **The window in memory needs a ceiling in bytes** beside its span, since the memory an hour of
+  values takes depends on how many variables change: the window is the shorter of the two, and the
+  controller says so when the ceiling came first. `memory_limit_mb = 0` means the engine's own
+  default (from memory and unverified: 80 % of the machine's memory), which a controller must not
+  leave as it is.
+- **What the window holds:** everything the embedded portal reads; the project may narrow it.
+  Oficina reads it over portal's HTTP interface when it connects, so it sees the time before its
+  connection.
+- **The fault's copy of the window** can use `DuckStore::save_to`. Copies are limited in number,
+  and no more than one is written per shortest gap. The program may ask for a copy too. A power
+  cut, or a fault that takes the runtime itself down, leaves no window: only the fault record
+  remains.
+- **How the window is built** is for portal's plan to prove: DuckDB's manual says its file hands
+  space back poorly after deletes; for its in-memory form nothing was checked. Dropping whole
+  slices of time is the form the assistant expects to hold.
+- **A full or failed data area never stops RUN:** recording stops and a maintenance request is
+  raised.
+- **The operating system's own writing** goes to the Linux study.
+- **Portals on PCs:** supervisão's and Oficina's portals have the same unbounded store. Whether
+  they get a default limit belongs to "which other components count as critical" (Q42).
+
+From memory and unverified: an S7-1500 reports its memory card's used life in percent and raises a
+maintenance alarm at a configurable threshold; DuckDB confirms each commit to the drive.
+
+**Taken meanwhile**: nothing is built. On a controller the store is the memory window, as ruled;
+the rest waits.
+
+## Q42 - The robustness round: the areas not opened, and the Linux study
+
+**Raised** 2026-11-16, when the round was called.
+
+Not opened:
+- running unattended beyond the cycle-time rule: the hardware watchdog, memory errors, slow leaks;
+- an old controller and a new Oficina: versions, migration, a rescue path;
+- replacing the hardware: backup, restore, what a stranger needs to rebuild;
+- which other components count as critical;
+- how each rule is proven by injecting faults on the bench.
+
+Owed before the operating-system rules: the study of Linux for real time and of its recovery
+methods (`docs/robustness.md`, "The Linux study"). The assistant's caution, not ruled: on hardware
+we do not choose, each cycle's data can be made consistent every cycle but reaches the drive only
+at set moments.
+
+**Taken meanwhile**: nothing. The round resumes with the operator.
+
+## Q43 - The security round: the positions going in, and its list
+
+**Raised** 2026-11-16, by the operator: "dedicated round to decide cyber security level
+suite-wise, future proof is the best way to design".
+
+The operator's positions going in: default user and password pairs written in a public manual do
+not cover it, "most users will leave defaults"; "a password is always better than no password, and
+on the network controlador appears as a regular linux machine"; "once secured behind a login,
+controlador is just another linux machine. it is open source, and the responsability to keep it
+safe belongs to the integrator imo". The briefing had put security out of controlador's first
+scope: "none for now, I need to study".
+
+The assistant's inputs, not ruled: no default credential at all, the first commissioning step
+setting it (or SSH keys only); the data format is public in an open project, so it is no barrier;
+European product rules put duties on whoever supplies a product commercially, so the operator's
+view holds while the suite itself is not sold (a reading, not legal advice).
+
+The round's list so far, beside P-014's two items (Q29):
+- whether an expired certificate of a known peer cuts a secured link or only warns; the
+  certificates' end date after 2038; what a secured link does while the controller's date is
+  unconfirmed (Q39);
+- a signature over a download's manifest, and a keyed check on altering requests (Q36, Q37);
+- the review's security entries, none ruled: 32 (opening a project must run nothing), 33 (loopback
+  and a tunnel are not a boundary), 34 (text from the plant shown as plain text), 35 (what the
+  controller keeps and publishes), 36 (a bench device passing for a real one), 37 (no record of
+  who did what), 38 (the Cyber Resilience Act) and 39 (the fieldbus organisations' terms).
+
+**Taken meanwhile**: nothing is built before the round (P-014).
+
+## Q44 - Conversion to native PLC code: the type table's open points
+
+**Raised** 2026-11-15, by the operator stating the goal: controlador's ORCL program and its
+hardware configuration convert to native PLC code, Siemens S7-1500 and S7-1200 first.
+
+The operator began a table mapping ORCL data types to S7 types. In it S7's BYTE, WORD, DWORD and
+LWORD map onto the unsigned integers, with no bit-string types of ORCL's own (the assistant's
+reading of the table). Checked on Siemens' TIA V21 pages that day: DATE runs to D#2169-06-06
+(2168-12-31 is the older S7-300/400 figure); DTL is 12 bytes, up to
+DTL#2262-04-11-23:47:16.854775807, weekday 1 being Sunday; the classic S7-1200 lacks LWORD, LINT,
+ULINT, S5TIME, LTIME, LTOD, DT and LDT, while the S7-1200 G2 is grouped with the 1500; references
+and named value types are S7-1500 only.
+
+Points the assistant raised, not decided:
+- below `f64` the table's left column is not Rust: `char` is 32 bits in Rust, and `string`,
+  `time`, `date` and the rest must be `orcl-std` types with a fixed representation (`orcl-std`
+  uses `core::time::Duration` today, which matches neither TIME nor LTIME);
+- the table needs a column per CPU family;
+- readable SCL needs names and comments, which ORCL's own notes say only a front end that reads
+  the source keeps. The interpreter stands on the compiler's intermediate form (ruled 2026-11-15),
+  so the SCL translators and the ladder view still need a second front end that reads the source
+  (the assistant's reading, not ruled).
+
+**Taken meanwhile**: nothing is written; the table is the operator's draft and is not in this
+repository.
+
+## Q45 - The briefing's readings and small open points
+
+**Raised** 2026-11-15, in the deliverables list (`docs/briefing/deliverables.md`, section K) and
+in the rulings that followed.
+
+Readings of the assistant's, none ruled:
+- the arguments inside `force` are always in the order in, out, var (K1);
+- every string value in the state text is quoted, and booleans stay bare, as `urgent=true` shows
+  (K2, corrected: "every non-numeric value" was wrong);
+- a force suspended at a halt applies again when the program continues (K3);
+- with the IO mapping allowed to differ, the shadow comparison is per physical channel (K4);
+- start-up phases have numbers but show no `id` in the text (K5);
+- several maintenance requests can be active, each as its own term (K6);
+- a crash is told from a power cycle by whether the machine itself rebooted (K7);
+- the conformance suite is only as good as the list of core operations ORCL allows;
+- Windows gains a third use beside development and simulation, the IO check from a laptop;
+- for an unaccepted shadow test at a power cycle, "always as before" means the version that was
+  driving drives again and the test stays unaccepted, the fallback flag resetting as decided;
+- the "knowledge protection" the operator mentioned in passing is a picture of the trade, not a
+  requirement: no such lock exists in ORCL's decisions.
+
+Open, never asked:
+- whether "identify, name and address" runs from the laptop or through a target (G2);
+- where the readers of GSDML, ESI and EDS files live (C5);
+- whether "good" in supervisão is a new state class or the colour of the normal one (K12);
+- whether the hardware configuration checks a Modbus module's own timeout in production too;
+- whether Npcap's licence allows what raw frames on Windows need.
+
+**Taken meanwhile**: the readings stand as readings, marked so wherever a plan leans on one.

@@ -46,7 +46,7 @@ scheme, one naming rule, and a clear role for each component.
 ## Naming
 `veredas-<nome>`:
 - **Portuguese, and it names the role.** Aranha, the spider, crawls the network. Ábaco, the
-  abacus, computes. Portal is the gateway.
+  abacus, computes. Portal is the gateway. Oficina is the workshop.
 - **ASCII ids, accented display names.** Crates and binaries stay plain
   (`veredas-abaco`, `veredas-supervisao`); screens say Ábaco and Supervisão.
 - **Exceptions.** `veredas-core` keeps its name. ORCL is a language, not a component, and
@@ -71,9 +71,17 @@ browsers) through **portal**. Two kinds of exception:
 - **Test tools own their sockets.** Maquinar plays the hardware and aranha scans the
   network; neither runs during production.
 - **Controlador's real-time path** goes straight to the fieldbus through its NIC. Everything
-  else it does rides an embedded portal-lite; its hardware configuration embeds aranha.
+  else it does rides an embedded portal, the full one with its store and its server (the
+  operator, 2026-11-15; this plan first said "portal-lite"); its hardware configuration embeds
+  aranha.
 
 `veredas-core` sits underneath everything as a library, not a service.
+
+**Oficina**, the one native application, reaches every component: a local one directly, a remote
+target over SSH, where it starts and stops the components' executables, copies files and carries
+their loopback interfaces inside the connection. Plant data and commands still go through portal:
+Oficina embeds a portal, which talks to the portal embedded in controlador over portal's own HTTP
+interface (the operator, 2026-11-13 to 2026-11-16; `docs/oficina-plan.md`).
 
 ## Components
 
@@ -90,6 +98,12 @@ Every class and library more than one component needs.
   content-agnostic: names no device, vendor or message catalog, because what a device's
   telegrams mean is configuration (decisions, 2026-11-05).
 - From Veredas 1: `veredas-telegram` (its socket, framing and capture only), `veredas-opc`.
+- Decided in the briefing of November 2026, not built (`docs/core-plan.md`): the controller's
+  state text, one writer and one reader, with the table of reason numbers; the functions that
+  drive hardware, the four fieldbus masters, safe in controlador on Linux and callable by other
+  crates for testing only; aranha's PROFINET codecs and the OPC UA server code move here. The
+  masters' frames are fixed by their standards; the rule that core's telegram framing holds no
+  layout of its own stands (`docs/questions.md` Q9, revisited).
 
 ### veredas-portal: the gateway
 The single point of information exchange between Veredas and the outside world.
@@ -102,18 +116,27 @@ The single point of information exchange between Veredas and the outside world.
   default); a device spoken over TCP is a telegram channel configured by encoding and
   decoding rules (plain text, versioned, in a project folder, as an OPC rule maps tags and a
   log rule captures fields), its data stored like any other protocol's, never vendor code;
-  ships a light, embeddable build for controlador.
+  ships a light, embeddable build (controlador embeds the full portal, not the light build: the
+  operator, 2026-11-15).
 - From Veredas 1: `veredas-core`, `veredas-store`, `veredas-server`, `veredas-desktop`.
+- Decided in the briefing of November 2026, not built (`docs/portal-plan.md`): Oficina embeds a
+  portal too, and two portals speak portal's own HTTP interface (HTTPS later), commands on the
+  same link; the portal embedded in a controller serves OPC UA and Modbus/TCP to other systems
+  and keeps its recorded values in memory, as a fixed window.
 
 ### veredas-controlador: the softPLC
 Programmed in ORCL (Open Rust Control Language), and in ladder later.
 - Scope: ORCL programs in a deterministic scan cycle with watchdog and safe outputs; direct
   NIC access for real-time communication; PLC Hardware Configuration built on an embedded
-  aranha; embedded portal-lite for logging and non-real-time protocols.
+  aranha; an embedded portal for logging and non-real-time protocols (the full portal: the
+  operator, 2026-11-15).
 - Rules: the only production component allowed past portal, and only on the real-time path;
-  everything else goes through its portal-lite; ORCL stays a translatable subset of real
+  everything else goes through its embedded portal; ORCL stays a translatable subset of real
   Rust, with its own SemVer; controlador states which ORCL versions it runs.
 - Builds on: `orcl-std`, `orcl-runtime`, `demos/conveyor`.
+- Plan: `docs/controlador-plan.md`, from the briefing of November 2026: the state model, faults,
+  forcing and debugging, the shadow test, four fieldbuses, what other systems may read and write,
+  and what keeps a machine running for decades (`docs/robustness.md`).
 
 ### veredas-maquinar: the bench
 Tools that simulate real hardware, so every consumer meets its plant on a bench first.
@@ -127,6 +150,9 @@ Tools that simulate real hardware, so every consumer meets its plant on a bench 
   to emulate the devices aranha scans, so the two never drift apart on the wire
   (`docs/questions.md` Q5).
 - From Veredas 1: `veredas-maquinar`, `veredas-trajetorias` (the automated replies only).
+- Decided in the briefing of November 2026, not built (`docs/maquinar-plan.md`): bench devices
+  for the four fieldbuses, and two extensions inside maquinar, `fisica` and `reflexo`, that
+  compute the plant simulator's physics and device behaviour headless.
 
 ### veredas-aranha: the network scanner
 For setup and troubleshooting, never for production.
@@ -137,6 +163,9 @@ For setup and troubleshooting, never for production.
   that owns its sockets; embedded by controlador as its PLC Hardware Configuration; also
   runs on its own for commissioning.
 - From Veredas 1: `veredas-aranha` and its plan.
+- Decided in the briefing of November 2026: its scan feeds the compare and merge of controlador's
+  hardware configuration and the topology view; its PROFINET codecs move into core when the
+  controller needs them (`docs/core-plan.md`).
 
 ### veredas-comissionador: the testing platform
 Predefined checks on portal data, live or replayed over history.
@@ -160,7 +189,9 @@ For engineering work where Excel gets too tight.
   (as test tooling), `python/veredas-acerto` (as the `acerto` extension).
 
 ### veredas-supervisao: the web interface
-The unified web interface for the whole suite.
+The suite's web interface: a plant watched and operated from a browser. Oficina shows its pages
+inside the workbench (the operator, 2026-11-13; this plan first said "the unified web interface
+for the whole suite").
 - Scope: layouts in 2D (SVG) and 3D (glTF) sharing one set of object IDs; objects that move
   live across the layout; dashboards, charts and tables, absorbing Veredas 1's dashboard;
   several sessions served side by side from one machine; editing in the browser or in
@@ -172,10 +203,32 @@ The unified web interface for the whole suite.
   (Q18); local, no accounts (Q20); 3D after the 2D views are verified (Q21).
 - From Veredas 1: `veredas-supervisao` (not its export readers), `dashboard/`.
 - Design: `design/supervisao/`.
+- Decided in the briefing of November 2026, not built (`docs/supervisao-plan.md`): colour, size,
+  position and visibility as expressions of values, computed in Rust; a behaviour editor with
+  object types; translatable from day one; the accent moves from green to lavanda
+  (`docs/questions.md` Q22, reversed).
+
+### veredas-oficina: the workshop
+The one native application through which a person sets up, programs, monitors and commissions
+every component.
+- Scope: a workbench (one project tree for every component, tabbed editors, inspector, docking,
+  command palette); every TOML file as a form and as text; portal's and the bench's surfaces
+  first, with supervisão's pages embedded; then each component's surfaces as it lands,
+  controlador's above all (the ORCL editor, forcing, breakpoints, the shadow test, hardware
+  configuration).
+- Rules: Qt Quick with its logic in Rust; Windows 11 and Linux; owns no plant connection, it
+  embeds a portal and reaches a remote target over SSH; only Oficina and the target change a
+  controller's state; translatable from day one; GPLv3, the crates it links under a permissive
+  licence; every test drives the real interface.
+- New in Veredas 2 (the operator, 2026-11-13). Plan: `docs/oficina-plan.md`.
+
+### A panel HMI: still to be planned
+A separate, lighter runtime for small operator panels, whose screens Oficina's HMI creator edits.
+It has no name, no technology and no plan yet (the briefing of November 2026).
 
 ### veredas-wms: later
 A production warehouse management system, structured for the job. It arrives after the
-eight above, with a dedicated study, then its own plan and development phase. Production
+components above, with a dedicated study, then its own plan and development phase. Production
 storage lives here, never in maquinar; its structure comes from the study, not from
 `veredas-trajetorias`.
 
@@ -194,7 +247,7 @@ storage lives here, never in maquinar; its structure comes from the study, not f
 | `orcl-std`, `orcl-runtime`, `demos/conveyor` | ORCL, used by controlador |
 | `veredas-telegram` (socket, framing, capture), `veredas-opc` | core |
 | `veredas-telegram` (GENIBELT catalog, sort plan, decision client) | not carried: rules a portal channel and maquinar's controller are configured with |
-| (new) | comissionador, controlador app, wms (later) |
+| (new) | comissionador, controlador app, oficina, a panel HMI (to be planned), wms (later) |
 
 ## Decisions log
 2026-11-05, plan review:
@@ -227,6 +280,25 @@ file, outside the suite's code.
 2026-11-09, planning supervisão (`docs/questions.md` Q18–Q21, the operator): Veredas 1's parsing
 of one company's engineering exports is not carried at all; supervisão starts the portal sessions
 in its own process; local, no accounts; the 3D view comes later.
+
+2026-11-13 to 2026-11-19, the briefing on Oficina and controlador (the operator;
+`docs/oficina-plan.md`, `docs/controlador-plan.md`, `docs/robustness.md`, `docs/questions.md`
+Q31–Q45; the list that was reviewed and its review are kept in `docs/briefing/`):
+1. A new component, `veredas-oficina`: the one native application, for every component.
+   Supervisão and the warehouse system stay web and appear inside it.
+2. Controlador's scope is set: its state model, faults, forcing and debugging, the shadow test,
+   four fieldbuses with their masters in core, Modbus/TCP and OPC UA to other systems.
+3. Nobody but a person, in Oficina or at the target, changes a controller's state; every
+   engineering change needs a switch armed at the target.
+4. Controlador embeds the full portal and Oficina embeds a portal; the two speak portal's own
+   HTTP interface, commands on the same link.
+5. Core gains the fieldbus masters; its telegram framing still holds no layout of its own
+   (`docs/questions.md` Q9, revisited).
+6. The accent is lavanda; green means a good state (`docs/questions.md` Q22, reversed).
+7. Oficina is GPLv3; the crates it links carry a permissive licence.
+8. A robustness round for the whole suite, for machines that run unattended for decades: begun,
+   not finished. A security round is owed.
+9. A panel HMI is a component still to be planned.
 
 ## Next steps
 1. Record each decision above where it applies (component plans, `docs/questions.md`).
