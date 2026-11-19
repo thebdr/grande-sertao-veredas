@@ -249,7 +249,10 @@ The operator's decisions of 13 to 15 November 2026 that touch supervisão
 - **Translatable from day one**, the interface alone.
 - **The accent moves from green to lavanda `#B9A9E8`**; green means a good state
   (`docs/questions.md` Q22, reversed on 2026-11-15). Not applied: the stylesheet, the built page,
-  `docs/design/README.md` and the tests that name the colour still carry the green.
+  `docs/design/README.md` and the tests that name the colour still carry the green. The operator
+  on 2026-11-19: "lavanda is important". It goes ahead of the other pieces listed here, as a
+  change of its own (the assistant's reading, not confirmed; `docs/questions.md` Q22, "Its
+  standing").
 - Open: the review's entries 22 (Oficina starting sessions against Q19), 24 (a colour by
   expression against the rule of a mark and a word; the string colour of the syntax palette) and
   43 (contrast, a light theme), all under Q31; whether "good" is a new state class or the colour

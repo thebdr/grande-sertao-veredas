@@ -471,6 +471,17 @@ names the colour still carry the green (P-021). The syntax palette's number colo
 too close to the new accent and should move. Whether "good" is a new state class or the colour of
 the normal one is open (Q45).
 
+**Its standing** 2026-11-19 (the operator, told that the accent was still applied nowhere):
+"lavanda is important". Read by the assistant, and not confirmed by the operator, as an order of
+work: the accent is applied ahead of everything else in P-021, as a change of its own. Nothing
+holds it back: it needs neither the expressions, the behaviour editor, the translation nor Q45's
+ruling (green stops being the accent, and no state takes it until Q45 is ruled). Open: whether it
+is applied on the Windows desk before the move, or on the Linux machine. Taken meanwhile: not
+applied on the desk, where development stopped that day; on the Linux machine it goes ahead of the
+rest of P-021. It edits C-051's wording and the values its test pins, so it lands between two of
+that clause's refute rounds; where that falls among the rounds and Q30's build is the operator's
+to say.
+
 ## Q23 - May a layout's stylesheet load from another host?
 
 **Raised** 2026-11-11, by C-048's fourth refute round.
