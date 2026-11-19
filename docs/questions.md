@@ -862,6 +862,11 @@ Its limits and loose ends:
 - The tunnel's end on the laptop is reachable by every program there, a page in a browser
   included, so the server should refuse a `Host` it does not expect and the session value should
   be random (P-014).
+- Which gate a command passes. Portal's write surface is "a whitelist over the handles' own
+  gates", "never a passthrough" (C-044), and every write path obeys portal's master switch
+  (`docs/portal-plan.md`, "Rules"). The ruling of 2026-11-16 has portal carry Oficina's commands
+  and controlador check the commissioning switch behind its portal. Whether a command needs
+  portal's switch too, the commissioning switch alone, or both is not ruled.
 - From the ruling that a write from outside is saved at once: the answer to a write should tell
   its sender how far it got, applied and then saved, so a panel shows a setpoint as kept only when
   it is. A write followed by a power cut inside the shortest gap is still lost.

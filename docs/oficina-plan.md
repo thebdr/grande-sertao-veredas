@@ -142,7 +142,9 @@ only. The operator kept it on 2026-11-15, under three rules:
 - **One seam for the bridge.** Nothing outside it knows which bridge joins QML and Rust.
 - **No project or plant logic in QML.**
 - **Through portal.** Oficina owns no plant connection: it reaches a plant through the portal it
-  embeds, and a target through SSH. It embeds supervisão's pages, never supervisão's code.
+  embeds, and a target through SSH. The one exception is the IO check from a laptop: the light
+  controlador session Oficina starts there drives a module itself, on controlador's real-time
+  path, behind Oficina's own arming step. It embeds supervisão's pages, never supervisão's code.
 - **Oficina changes a plant only through gates it does not own:** the commissioning switch armed
   at the target, portal's master switch and whitelist, and its own arming step for the laptop IO
   check.
@@ -159,7 +161,8 @@ only. The operator kept it on 2026-11-15, under three rules:
   (Windows on Hyper-V, VMware and VirtualBox, and Linux guests); one headless test that drives the
   interface.
 - **Repository changes owed with the first code:** `crates/veredas-oficina` at core's MAJOR,
-  listed; its row in `MAP` (`tools/leis`), a contract change written with the crate;
+  listed; its row in `MAP` (`tools/leis`), a contract change written with the crate (portal at
+  least, and controlador if the laptop IO check's session is linked in);
   `docs/design/README.md` gains the accent's tones, and the syntax palette's number colour
   (`#D2A8FF`) moves, sitting too close to the accent; licence files (Q35); P-015 becomes clauses.
 

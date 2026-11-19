@@ -288,7 +288,8 @@ Q31–Q45; the list that was reviewed and its review are kept in `docs/briefing/
    Supervisão and the warehouse system stay web and appear inside it.
 2. Controlador's scope is set: its state model, faults, forcing and debugging, the shadow test,
    four fieldbuses with their masters in core, Modbus/TCP and OPC UA to other systems.
-3. Nobody but a person, in Oficina or at the target, changes a controller's state; every
+3. Only a person, in Oficina or at the target, changes a controller's state (the program may
+   stop itself); every
    engineering change needs a switch armed at the target.
 4. Controlador embeds the full portal and Oficina embeds a portal; the two speak portal's own
    HTTP interface, commands on the same link.
