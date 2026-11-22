@@ -3991,6 +3991,24 @@ impl<'a> Model<'a> {
             .set_row_height(column, height)
     }
 
+    /// Moves the table `name` to the cells `reference` (`A1:F6`, on the table's own sheet), for
+    /// every formula parsed from now on: a structured reference (`Table1[Qty]`) is read as the
+    /// cells of the table when it is parsed, and inserting or deleting rows and columns moves
+    /// the cells and the formulas, never a table's range. A host that moves a table's cells (a
+    /// patcher rippling an insertion through a file) moves its range here.
+    pub fn set_table_reference(&mut self, name: &str, reference: &str) -> Result<(), String> {
+        crate::expressions::parser::parse_range(reference)
+            .map_err(|_| format!("not a range of cells: {reference}"))?;
+        let table = self
+            .workbook
+            .tables
+            .get_mut(name)
+            .ok_or_else(|| format!("no table named {name}"))?;
+        table.reference = reference.to_string();
+        self.parser.set_tables(self.workbook.tables.clone());
+        Ok(())
+    }
+
     /// Adds a new defined name. See [`DefinedNameEntry`] for the meaning of
     /// the fields.
     pub fn new_defined_name(&mut self, entry: DefinedNameEntry) -> Result<(), String> {
