@@ -700,3 +700,64 @@ fn a_mean_keeps_the_nanoseconds() {
     }
     assert_eq!(t.stats().mean_exec(), Duration::from_nanos(1_000_500));
 }
+
+// The sixth refute round: the scan the program itself is handed on late and skipped scans, periods of a second and
+// more, two thousand scans of a period that is no whole microsecond, and a first step more than a period late.
+
+#[test]
+fn the_program_is_handed_exactly_the_scan_the_engine_reports_late_or_skipped() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Loop::new(&clock, |k| [ms(1), ms(15), ms(1), ms(1)][k]);
+    let mut t = task(ms(10));
+    let mut handed = Vec::new();
+    for late in [ms(0), ms(0), ms(4), ms(0)] {
+        clock.advance(late);
+        let scan = t.step(&mut plant, &mut clock).scan;
+        assert_eq!(t.program().last_scan, scan, "the program's scan is the report's");
+        handed.push((scan.cycle, scan.now));
+    }
+    assert_eq!(handed, vec![(0, ms(0)), (1, ms(10)), (3, ms(30)), (4, ms(40))]);
+}
+
+#[test]
+fn periods_of_a_second_and_more_keep_their_deadlines() {
+    for period in [ms(1_000), ms(1_500), ms(5_000)] {
+        let mut clock = VirtualClock::new();
+        let mut plant = Timed::new(&clock, |_| ms(1), |_| Duration::ZERO);
+        let mut t = task(period);
+        for _ in 0..4 {
+            t.step(&mut plant, &mut clock);
+        }
+        let due: Vec<Duration> = (0..4).map(|k| period * k).collect();
+        assert_eq!(plant.reads, due, "a period of {period:?}");
+        assert_eq!(t.stats().skipped, 0);
+    }
+}
+
+#[test]
+fn two_thousand_scans_of_a_period_that_is_no_whole_microsecond_skip_nothing() {
+    let period = Duration::from_nanos(333_333);
+    let mut clock = VirtualClock::new();
+    let mut plant = Timed::new(&clock, |_| Duration::from_nanos(100), |_| Duration::ZERO);
+    let mut t = task(period);
+    for _ in 0..2_000 {
+        t.step(&mut plant, &mut clock);
+    }
+    assert_eq!(t.stats().skipped, 0);
+    assert!(plant.reads.iter().enumerate().all(|(k, &read)| read == period * u32::try_from(k).unwrap()));
+    assert_eq!(t.next_due(), period * 2_000);
+}
+
+#[test]
+fn a_first_step_more_than_a_period_late_runs_scan_zero_and_counts_the_rest_skipped() {
+    let mut clock = VirtualClock::new();
+    clock.advance(ms(25));
+    let mut plant = Timed::new(&clock, |_| ms(1), |_| Duration::ZERO);
+    let mut t = task(ms(10));
+    let first = t.step(&mut plant, &mut clock).scan;
+    let second = t.step(&mut plant, &mut clock).scan;
+    assert_eq!(((first.cycle, first.now), (second.cycle, second.now)), ((0, ms(25)), (3, ms(30))));
+    assert_eq!(plant.reads, vec![ms(25), ms(30)]);
+    let s = *t.stats();
+    assert_eq!((s.max_lateness, s.skipped, s.cycles + s.skipped), (ms(25), 2, t.next_cycle()));
+}
