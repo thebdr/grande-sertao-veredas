@@ -428,8 +428,10 @@ fn a_pulse_at_a_preset_time_of_zero_and_an_edge_on_the_scan_its_pulse_ends() {
 #[test]
 fn a_falling_edge_is_seen_every_time() {
     let mut fall = FTrig::default();
-    let seen: Vec<bool> = [true, false, true, false, true, false].map(|clk| fall.scan(clk)).to_vec();
-    assert_eq!(seen, vec![false, true, false, true, false, true]);
+    let clk = [true, false, true, false, true, false, true, false, true, false, true, false];
+    let seen: Vec<bool> = clk.map(|c| fall.scan(c)).to_vec();
+    let falls: Vec<bool> = clk.map(|c| !c).to_vec();
+    assert_eq!(seen, falls, "on for each of the six falling edges, off between");
 }
 
 #[test]
@@ -525,4 +527,59 @@ fn the_manifest_names_no_other_root_and_no_file_brings_in_another_crate() {
     }
     let listed = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src")).unwrap().count();
     assert_eq!(listed, 7, "every source file is read above");
+}
+
+// The sixth refute round: what cargo itself says of the crate, a reset at a preset of zero or below, and no file
+// pulled in from elsewhere.
+
+#[test]
+fn cargo_says_the_crate_depends_on_nothing_and_its_library_s_root_is_src_lib_rs() {
+    let manifest = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+    let out = std::process::Command::new(env!("CARGO"))
+        .args(["metadata", "--no-deps", "--format-version", "1", "--offline", "--manifest-path", manifest])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let meta: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let package = meta["packages"].as_array().unwrap().iter().find(|p| p["name"] == "orcl-std").unwrap();
+    let deps: Vec<(String, String)> = package["dependencies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| (d["name"].as_str().unwrap().to_string(), d["kind"].as_str().unwrap_or("normal").to_string()))
+        .collect();
+    assert_eq!(deps, vec![("serde_json".to_string(), "dev".to_string())], "no normal, build or target dependency");
+    let lib: Vec<String> = package["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["kind"].as_array().unwrap().iter().any(|k| k == "lib"))
+        .map(|t| t["src_path"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(lib, vec![concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs").to_string()]);
+}
+
+#[test]
+fn no_source_file_pulls_one_in_from_elsewhere() {
+    for (file, text) in [
+        ("lib.rs", include_str!("../src/lib.rs")),
+        ("bits.rs", include_str!("../src/bits.rs")),
+        ("counters.rs", include_str!("../src/counters.rs")),
+        ("edges.rs", include_str!("../src/edges.rs")),
+        ("o14.rs", include_str!("../src/o14.rs")),
+        ("scan.rs", include_str!("../src/scan.rs")),
+        ("timers.rs", include_str!("../src/timers.rs")),
+    ] {
+        for refused in ["#[path", "include!(", "include_str!(", "include_bytes!("] {
+            assert!(!text.contains(refused), "{file} pulls a file in with {refused}");
+        }
+    }
+}
+
+#[test]
+fn a_reset_at_a_preset_of_zero_or_below_leaves_q_on() {
+    let mut c = Ctu::default();
+    assert!(c.scan(false, true, 0), "a count of 0 reaches a preset of 0, reset or not");
+    assert!(c.scan(true, true, -1));
+    assert_eq!(c.cv(), 0);
 }

@@ -11,3 +11,8 @@ description = "The ORCL standard control library: the scan model, IEC-style time
 # no_std, no unsafe, no panic path: the lints in src/lib.rs and clippy.toml (ORCL's O13) are the language's
 # rules (docs/orcl/language/README.md). It depends on nothing.
 [dependencies]
+
+# Its tests read what cargo says of the crate (`cargo metadata`), as core's do: dev-dependencies are free (law L5)
+# and never reach the library.
+[dev-dependencies]
+serde_json = { workspace = true }

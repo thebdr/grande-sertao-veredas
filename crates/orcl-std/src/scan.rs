@@ -30,6 +30,21 @@
 //! }
 //! ```
 //!
+//! Nor is a value asked to cross threads or to live for ever: a program on a borrowed, thread-bound value compiles.
+//!
+//! ```
+//! use core::marker::PhantomData;
+//! use orcl_std::{Program, Scan};
+//! #[derive(Clone, Copy, Default)]
+//! struct Raw<'a>(PhantomData<&'a *const ()>);
+//! struct P<'a>(PhantomData<&'a ()>);
+//! impl<'a> Program for P<'a> {
+//!     type Inputs = Raw<'a>;
+//!     type Outputs = Raw<'a>;
+//!     fn scan(&mut self, _: &Scan, i: &Raw<'a>, o: &mut Raw<'a>) { *o = *i; }
+//! }
+//! ```
+//!
 //! ```compile_fail,E0277
 //! use orcl_std::{Program, Scan};
 //! struct P;

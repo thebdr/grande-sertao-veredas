@@ -1920,6 +1920,9 @@ dependencies = [
 [[package]]
 name = "orcl-std"
 version = "2.0.0-alpha.1"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "parking_lot"

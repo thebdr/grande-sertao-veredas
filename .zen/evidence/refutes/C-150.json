@@ -1,8 +1,8 @@
 {
   "clause": "C-150",
   "verdict": "refuted",
-  "ranAt": "2026-11-22T18:34:57.354Z",
-  "headCommit": "6d47e744803dd9d4dc0268f68b35cd84c8560d2f",
+  "ranAt": "2026-11-22T18:46:42.184Z",
+  "headCommit": "9db24869173515c0058ea2510c8df0c0e0fe40a7",
   "tests": [
     {
       "name": "crates/orcl-std/src/timers.rs",
