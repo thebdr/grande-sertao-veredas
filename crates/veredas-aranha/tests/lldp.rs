@@ -28,7 +28,7 @@ fn profinet_pdu() -> LldpPdu {
         mgmt_addrs: vec![MgmtAddr { subtype: 1, addr: vec![192, 168, 10, 11], if_subtype: 2, if_number: 1, oid: Vec::new() }],
         pn: PnTlvs {
             delays: Some(Delays { rx_local: 1, rx_remote: 2, tx_local: 3, tx_remote: 4, cable_local: 100 }),
-            port_status: Some(PortStatus { rtc2: 0x0000, rtc3: 0x0002 }),
+            port_status: Some(PortStatus { rtc2: 0x0102, rtc3: 0x0002 }),
             mrp: Some(MrpPortStatus { domain_uuid: [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F], mrrt: 2 }),
             chassis_mac: Some(DEVICE),
         },
@@ -401,7 +401,34 @@ fn every_tlv_the_codec_reads_kept_when_it_repeats_or_its_length_is_off_by_one() 
         ("mac/phy", Box::new(move |n| org(ieee3, 1, vec![1; n]))),
     ];
     let sizes = [("ttl", 2), ("capabilities", 4), ("delays", 20), ("port status", 4), ("mrp", 18), ("chassis mac", 6), ("port vlan", 2), ("mac/phy", 5)];
-    for ((name, make), (_, size)) in cases.iter().zip(sizes) {
+    let read: [fn(&LldpPdu) -> bool; 8] = [
+        |_| true,
+        |p| p.sys_caps.is_some(),
+        |p| p.pn.delays.is_some(),
+        |p| p.pn.port_status.is_some(),
+        |p| p.pn.mrp.is_some(),
+        |p| p.pn.chassis_mac.is_some(),
+        |p| p.port_vlan.is_some(),
+        |p| p.mac_phy.is_some(),
+    ];
+    for (((name, make), (_, size)), is_read) in cases.iter().zip(sizes).zip(read) {
+        // Alone: of its size read, one byte short or long kept unread (the time to live then
+        // missing), and written back.
+        let ttl_tlv = if *name == "ttl" { vec![] } else { tlv(3, &[0, 20]) };
+        let right = lldp::decode(&[head.clone(), ttl_tlv.clone(), make(size), tlv(0, &[])].concat()).unwrap();
+        assert!(is_read(&right), "{name}");
+        assert_eq!(right.unknown.len() + right.unknown_org.len(), 0, "{name}");
+        for n in [size - 1, size + 1] {
+            let p = [head.clone(), ttl_tlv.clone(), make(n), tlv(0, &[])].concat();
+            if *name == "ttl" {
+                assert_eq!(lldp::decode(&p), Err(LldpError::Missing("time to live")), "{n}");
+                continue;
+            }
+            let pdu = lldp::decode(&p).unwrap();
+            assert!(!is_read(&pdu), "{name} of {n} bytes read: {pdu:?}");
+            assert_eq!(pdu.unknown.len() + pdu.unknown_org.len(), 1, "{name} {n}");
+            assert_eq!(tlvs(&lldp::encode(&pdu).unwrap()), tlvs(&p), "{name} {n}");
+        }
         let ttl = if *name == "ttl" { vec![] } else { tlv(3, &[0, 20]) };
         for body in [
             vec![make(size), make(size)],
@@ -439,13 +466,19 @@ fn every_tlv_the_codec_reads_kept_when_it_repeats_or_its_length_is_off_by_one() 
 
 #[test]
 fn the_dissectors_read_text_as_ascii_and_stop_at_a_nul() {
-    // The codec writes the text it is given; the dissector reads printable ASCII as it is, stops
-    // at a NUL (warning of what follows), and shows other bytes as replacement characters.
+    // The codec writes the text it is given; the dissector reads ASCII as it is (control
+    // characters too), stops at a NUL (warning of what follows), and shows each byte past ASCII as
+    // a replacement character.
     let mut nul = LldpPdu::new(ChassisId::Local { id: "a".into() }, PortId::Local { id: "p".into() }, 20);
     nul.sys_desc = Some("a\0b".into());
     let mut accented = LldpPdu::new(ChassisId::Local { id: "a".into() }, PortId::Local { id: "porta-ü".into() }, 20);
     accented.sys_name = Some("estação".into());
-    let read = common::dissect(&[lldp::frame(PORT, &nul).unwrap(), lldp::frame(PORT, &accented).unwrap()]);
+    let mut control = LldpPdu::new(ChassisId::Local { id: "a".into() }, PortId::Local { id: "p".into() }, 20);
+    control.sys_name = Some("a\u{1}b\tc\u{7f}d".into());
+    let read = common::dissect(&[lldp::frame(PORT, &nul).unwrap(), lldp::frame(PORT, &accented).unwrap(), lldp::frame(PORT, &control).unwrap()]);
+    // Control characters are ASCII: read as they are, with no complaint.
+    assert_eq!(read[2].one("lldp", "lldp.tlv.system.name"), "a\u{1}b\tc\u{7f}d");
+    assert_eq!(read[2].complaints(), Vec::<String>::new());
     assert_eq!(read[0].one("lldp", "lldp.tlv.system.desc"), "a");
     assert_eq!(read[0].complaints().len(), 1, "{:?}", read[0].complaints());
     assert_eq!(lldp::decode(&lldp::encode(&nul).unwrap()).unwrap().sys_desc.as_deref(), Some("a\0b"));
@@ -462,10 +495,27 @@ fn a_short_pdu_with_no_end_keeps_its_absence_through_encode_not_through_a_padded
     let pdu = lldp::decode(&p).unwrap();
     assert_eq!(pdu.end, None);
     assert_eq!(lldp::encode(&pdu).unwrap(), p);
-    // In a frame, the pad's zeros read as an End: the absence does not survive a frame under 60
-    // bytes.
-    let f = lldp::frame(PORT, &pdu).unwrap();
-    assert_eq!(lldp::decode(ether::parse(&f).unwrap().payload).unwrap().end, Some(vec![]));
+    // A frame would pad it, and the pad would read as more of it (an End, a byte, or after a
+    // trailing byte a TLV running past the frame): refused, up to 45 bytes; at 46 the frame needs
+    // no pad, and the absence survives.
+    assert_eq!(lldp::frame(PORT, &pdu), Err(LldpError::NoEndInPad { len: 12, min: 46 }));
+    for t in [0x0B, 0x0A, 0x02, 0x00] {
+        let odd = LldpPdu { trailing: vec![t], ..pdu.clone() };
+        assert_eq!(lldp::encode(&odd).unwrap(), [&p[..], &[t]].concat());
+        assert_eq!(lldp::frame(PORT, &odd), Err(LldpError::NoEndInPad { len: 13, min: 46 }), "{t:#04x}");
+    }
+    let sized = |n: usize| LldpPdu { sys_desc: Some("d".repeat(n)), ..pdu.clone() };
+    assert_eq!(lldp::encode(&sized(31)).unwrap().len(), 45);
+    assert_eq!(lldp::frame(PORT, &sized(31)), Err(LldpError::NoEndInPad { len: 45, min: 46 }));
+    let f = lldp::frame(PORT, &sized(32)).unwrap();
+    assert_eq!(f.len(), 60);
+    assert_eq!(lldp::decode(ether::parse(&f).unwrap().payload).unwrap(), sized(32));
+    let with_end = LldpPdu { end: Some(vec![]), ..pdu.clone() };
+    assert_eq!(lldp::frame(PORT, &with_end).unwrap().len(), 60);
+    assert_eq!(
+        LldpError::NoEndInPad { len: 12, min: 46 }.to_string(),
+        "a PDU with no End is framed only when it fills the frame (46 bytes); this one is 12, and the pad would be read as more of it"
+    );
 }
 
 #[test]
@@ -487,7 +537,7 @@ fn any_bytes_decode_without_a_panic_and_rewrite_to_themselves() {
         let n = usize::from(noise.next() % 6);
         for _ in 0..n {
             let t = [4u8, 5, 6, 7, 8, 127, 127, 127, 9, 1][usize::from(noise.next()) % 10];
-            let len = usize::from(noise.next() % 24);
+            let len = usize::from(noise.next() % 28);
             let mut v = noise.bytes(len);
             if t == 127 && v.len() >= 4 {
                 let oui = [[0x00, 0x0E, 0xCF], [0x00, 0x80, 0xC2], [0x00, 0x12, 0x0F]][usize::from(noise.next()) % 3];
@@ -521,7 +571,11 @@ fn any_bytes_decode_without_a_panic_and_rewrite_to_themselves() {
 fn the_dissectors_read_every_frame_as_it_was_written() {
     let pdu = profinet_pdu();
     let mut switch = LldpPdu::new(ChassisId::Mac { mac: "02:1c:06:00:00:01".parse().unwrap() }, PortId::IfName { name: "eth3".into() }, 120);
-    switch.mgmt_addrs = vec![MgmtAddr { subtype: 1, addr: vec![10, 0, 0, 1], if_subtype: 3, if_number: 7, oid: vec![0x2B, 0x06, 0x01] }];
+    let fe80_1 = [0xFE, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1].to_vec();
+    switch.mgmt_addrs = vec![
+        MgmtAddr { subtype: 1, addr: vec![10, 0, 0, 1], if_subtype: 3, if_number: 7, oid: vec![0x2B, 0x06, 0x01] },
+        MgmtAddr { subtype: 2, addr: fe80_1, if_subtype: 2, if_number: 0x0102_0304, oid: vec![] },
+    ];
     switch.unknown_org = vec![OrgTlv { oui: [0x00, 0x0E, 0xCF], subtype: 4, data: vec![0; 18] }];
     let leaving = LldpPdu::new(ChassisId::Local { id: "station-b".into() }, PortId::Mac { mac: PORT }, 0);
     let read = common::dissect(&[lldp::frame(PORT, &pdu).unwrap(), lldp::frame(PORT, &switch).unwrap(), lldp::frame(PORT, &leaving).unwrap()]);
@@ -549,7 +603,7 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
     assert_eq!(p.one(l, "lldp.profinet.port_tx_delay_local"), "3");
     assert_eq!(p.one(l, "lldp.profinet.port_tx_delay_remote"), "4");
     assert_eq!(p.one(l, "lldp.profinet.cable_delay_local"), "100");
-    assert_eq!(p.one(l, "lldp.profinet.rtc2_port_status"), "0");
+    assert_eq!(p.one(l, "lldp.profinet.rtc2_port_status"), "258");
     assert_eq!(p.one(l, "lldp.profinet.rtc3_port_status"), "2");
     assert_eq!(p.one(l, "lldp.profinet.mrp_domain_uuid"), "00010203-0405-0607-0809-0a0b0c0d0e0f");
     assert_eq!(p.one(l, "lldp.profinet.mrrt_port_status"), "2");
@@ -567,8 +621,10 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
     assert_eq!(p.one(l, "lldp.port.id"), "eth3");
     assert_eq!(p.one(l, "lldp.time_to_live"), "120");
     assert_eq!(p.one(l, "lldp.mgn.addr.ip4"), "10.0.0.1");
-    assert_eq!(p.one(l, "lldp.mgn.interface.number"), "7");
-    assert_eq!(p.one(l, "lldp.mgn.obj.len"), "3");
+    assert_eq!(p.one(l, "lldp.mgn.addr.ip6"), "fe80::1");
+    assert_eq!(p.values(l, "lldp.mgn.interface.subtype"), ["3", "2"]);
+    assert_eq!(p.values(l, "lldp.mgn.interface.number"), ["7", "16909060"]);
+    assert_eq!(p.values(l, "lldp.mgn.obj.len"), ["3", "0"]);
     assert_eq!(p.one(l, "lldp.mgn.obj.id"), "1.3.6.1");
     assert_eq!(p.one(l, "lldp.profinet.mrrt_port_status"), "0");
 
@@ -659,8 +715,81 @@ fn the_dissector_reads_an_oid_as_ber_and_no_end_past_what_it_does_not_read() {
     assert_eq!(read[1].complaints(), Vec::<String>::new());
     // An End holding bytes, which this codec keeps as heard, the dissector calls malformed; a TLV
     // of a reserved type ends its reading, so it reads neither that TLV nor the End after it.
-    assert!(!read[2].complaints().is_empty());
+    let c = read[2].complaints();
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert!(c[0].contains("Invalid Length (3) for Type (End of LLDPDU), expected (0)"), "{c:?}");
     assert_eq!(read[3].values(l, "lldp.tlv.type"), ["1", "2", "3"]);
     assert_eq!(lldp::decode(&lldp::encode(&end_bytes).unwrap()).unwrap(), end_bytes);
     assert_eq!(lldp::decode(&lldp::encode(&kept).unwrap()).unwrap(), kept);
+}
+
+#[test]
+fn an_id_or_address_not_of_its_family_s_length_is_refused_and_kept_unread() {
+    let base = || LldpPdu::new(ChassisId::Local { id: "a".into() }, PortId::Local { id: "p".into() }, 20);
+    // A network-address id is its family byte and an address of its family's length: an IPv4 id of
+    // five bytes or of three, and a family byte alone, are refused, chassis and port alike.
+    for data in [vec![1u8, 10, 0, 0, 1, 9], vec![1, 10, 0, 0], vec![9], vec![2, 0xFE, 0x80]] {
+        let len = data.len();
+        let pdu = LldpPdu { chassis: ChassisId::Network { data: data.clone() }, ..base() };
+        assert_eq!(lldp::encode(&pdu), Err(LldpError::IdForm { what: "a chassis id", subtype: 5, len }), "{data:?}");
+        let pdu = LldpPdu { port: PortId::Other { subtype: 4, data: data.clone() }, ..base() };
+        assert_eq!(lldp::encode(&pdu), Err(LldpError::IdForm { what: "a port id", subtype: 4, len }), "{data:?}");
+        // Heard, the same bytes are no id: kept unread, and the PDU has none.
+        let chassis = [tlv(1, &[&[5u8][..], &data].concat()), tlv(2, b"\x07p"), tlv(3, &[0, 20])].concat();
+        assert_eq!(lldp::decode(&chassis), Err(LldpError::Missing("chassis id")), "{data:?}");
+        let port = [tlv(1, b"\x07a"), tlv(2, &[&[4u8][..], &data].concat()), tlv(3, &[0, 20])].concat();
+        assert_eq!(lldp::decode(&port), Err(LldpError::Missing("port id")), "{data:?}");
+    }
+    // Of its family's length, read.
+    let pdu = LldpPdu { chassis: ChassisId::Network { data: vec![1, 10, 0, 0, 1] }, port: PortId::Other { subtype: 4, data: vec![1, 10, 0, 0, 2] }, ..base() };
+    assert_eq!(lldp::decode(&lldp::encode(&pdu).unwrap()).unwrap(), pdu);
+
+    // A management address heard of another length than its family's, or an address string
+    // outside 2 to 32 bytes whatever the family: kept unread.
+    let ok = [tlv(1, b"\x07c"), tlv(2, b"\x07p"), tlv(3, &[0, 20])].concat();
+    let mgmt = |family: u8, addr: &[u8]| [&[addr.len() as u8 + 1, family][..], addr, &[2, 0, 0, 0, 1, 0]].concat();
+    for m in [mgmt(1, &[10, 0, 0]), mgmt(1, &[10, 0, 0, 1, 9]), mgmt(1, &[10]), mgmt(2, &[0xFE; 15]), mgmt(6, &[2; 7]), mgmt(5, &[]), mgmt(5, &[7; 32])] {
+        let pdu = lldp::decode(&[&ok[..], &tlv(8, &m)].concat()).unwrap();
+        assert_eq!((pdu.mgmt_addrs.len(), pdu.unknown.clone()), (0, vec![(8, m.clone())]), "{m:?}");
+        assert_eq!(lldp::decode(&lldp::encode(&pdu).unwrap()).unwrap(), pdu);
+    }
+    // At each family's length, and of an unknown family from 1 to 31 bytes, read.
+    for m in [mgmt(1, &[10, 0, 0, 1]), mgmt(2, &[0xFE; 16]), mgmt(6, &[2; 6]), mgmt(5, &[7]), mgmt(5, &[7; 31])] {
+        let pdu = lldp::decode(&[&ok[..], &tlv(8, &m)].concat()).unwrap();
+        assert_eq!((pdu.mgmt_addrs.len(), pdu.unknown.len()), (1, 0), "{m:?}");
+    }
+
+    // Two management addresses, IPv4 then IPv6: both read, both written back to the byte.
+    let both = [&ok[..], &tlv(8, &mgmt(1, &[10, 0, 0, 1])), &tlv(8, &mgmt(2, &[0xFE, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])), &tlv(0, &[])].concat();
+    let pdu = lldp::decode(&both).unwrap();
+    assert_eq!(pdu.mgmt_addrs.iter().map(|m| (m.subtype, m.addr.len())).collect::<Vec<_>>(), [(1, 4), (2, 16)]);
+    assert_eq!(lldp::encode(&pdu).unwrap(), both);
+}
+
+#[test]
+fn every_capability_bit_is_named_as_the_dissector_names_it() {
+    let names = ["other", "repeater", "bridge", "wlan-access-point", "router", "telephone", "docsis-cable-device", "station-only", "c-vlan", "s-vlan", "tpmr"];
+    let fields = ["other", "repeater", "bridge", "wlan_access_pt", "router", "telephone", "docsis_cable_device", "station_only", "cvlan", "svlan", "tpmr"];
+    assert_eq!(lldp::capability_names(0x07FF), names);
+    assert_eq!(lldp::capability_names(0xF800), Vec::<&str>::new());
+    let frames: Vec<Vec<u8>> = (0..11)
+        .map(|i| {
+            let mut p = LldpPdu::new(ChassisId::Local { id: "a".into() }, PortId::Local { id: "p".into() }, 20);
+            p.sys_caps = Some((1 << i, 1 << i));
+            lldp::frame(PORT, &p).unwrap()
+        })
+        .collect();
+    let read = common::dissect(&frames);
+    for (i, d) in read.iter().enumerate() {
+        assert_eq!(lldp::capability_names(1 << i), [names[i]]);
+        for (j, f) in fields.iter().enumerate() {
+            let v = d.values("lldp", &format!("lldp.tlv.system_cap.{f}"));
+            let set = v.iter().any(|x| x == "true" || x == "1");
+            assert_eq!(set, i == j, "bit {i}, field {f}: {v:?}");
+        }
+    }
+    // The short port name drops a station suffix only from a PROFINET port.
+    assert_eq!(PortId::Local { id: "port-003.station-c".into() }.short(), "port-003");
+    assert_eq!(PortId::Local { id: "eth.1".into() }.short(), "eth.1");
+    assert_eq!(PortId::Local { id: "port-003".into() }.short(), "port-003");
 }

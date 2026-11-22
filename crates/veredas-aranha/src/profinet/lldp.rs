@@ -326,6 +326,8 @@ pub enum LldpError {
     BadAddress { subtype: u8, want: usize, len: usize },
     #[error("{what} of subtype {subtype} is a MAC of 6 bytes or a network address of its family's length; this one is {len} bytes")]
     IdForm { what: &'static str, subtype: u8, len: usize },
+    #[error("a PDU with no End is framed only when it fills the frame ({min} bytes); this one is {len}, and the pad would be read as more of it")]
+    NoEndInPad { len: usize, min: usize },
     #[error("{0}")]
     Ether(#[from] EtherError),
 }
@@ -570,7 +572,14 @@ pub fn encode(pdu: &LldpPdu) -> Result<Vec<u8>, LldpError> {
 }
 
 /// A whole LLDP frame from `src`: on a PROFINET device, the port's own MAC (the device's MAC
-/// rides in the chassis MAC TLV).
+/// rides in the chassis MAC TLV). A PDU with no End that the frame would pad is refused: the pad
+/// would be read after its last TLV as more of it (an End, a byte, or with a trailing byte a TLV
+/// header running past the frame).
 pub fn frame(src: Mac, pdu: &LldpPdu) -> Result<Vec<u8>, LldpError> {
-    Ok(ether::build(Mac::LLDP_MULTICAST, src, ETHERTYPE_LLDP, &encode(pdu)?)?)
+    let bytes = encode(pdu)?;
+    let room = ether::MIN_FRAME - 14;
+    if pdu.end.is_none() && bytes.len() < room {
+        return Err(LldpError::NoEndInPad { len: bytes.len(), min: room });
+    }
+    Ok(ether::build(Mac::LLDP_MULTICAST, src, ETHERTYPE_LLDP, &bytes)?)
 }
