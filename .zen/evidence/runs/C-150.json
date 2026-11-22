@@ -7,10 +7,10 @@
     "cargo test -p orcl-std && cargo clippy -p orcl-std --all-targets -- -D warnings"
   ],
   "exitCode": 0,
-  "outputSha": "afda78d81c35b0cb06858683705df97f6c7abaab98e74a4740440de9bb843175",
-  "outputTail": "test crates/orcl-std/src/o14.rs - o14 (line 68) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 98) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 58) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 18) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 118) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 38) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 78) - compile fail ... ok\n\ntest result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s\n     Running unittests src/lib.rs (target/debug/build/orcl-std/e7684ae2d399d146/out/orcl_std-e7684ae2d399d146)\n     Running tests/blocks.rs (target/debug/build/orcl-std/b7189415b3b1f456/out/blocks-b7189415b3b1f456)\n   Doc-tests orcl_std\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s",
-  "ranAt": "2026-11-22T17:52:11.968Z",
-  "headCommit": "e98b6e852f793360b15dedbccc612428bdf505f3",
+  "outputSha": "5e6f604e88a14518c4bf96a14653791fc9067974e3bb1d9a61f1e267fab9aea4",
+  "outputTail": "test crates/orcl-std/src/scan.rs - scan (line 17) - compile fail ... ok\ntest crates/orcl-std/src/scan.rs - scan (line 29) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 30) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 90) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 180) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 60) - compile fail ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s\n\nall doctests ran in 0.17s; merged doctests compilation took 0.13s\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s\n     Running unittests src/lib.rs (target/debug/build/orcl-std/e7684ae2d399d146/out/orcl_std-e7684ae2d399d146)\n     Running tests/blocks.rs (target/debug/build/orcl-std/b7189415b3b1f456/out/blocks-b7189415b3b1f456)\n   Doc-tests orcl_std\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s",
+  "ranAt": "2026-11-22T18:01:58.249Z",
+  "headCommit": "4f58dc22190a36139d07c9c9f91b500254cf6276",
   "tests": [
     {
       "name": "crates/orcl-std/src/timers.rs",
@@ -35,17 +35,22 @@
     {
       "name": "crates/orcl-std/src/lib.rs",
       "file": "crates/orcl-std/src/lib.rs",
-      "fileSha": "27e868769d9919a62b41f33af95f1f2d32f06295041300b63d9895d5db0cfb7e"
+      "fileSha": "f691451de674ffa474857fe241c063522abd32f1d90a980c14637967f54c6774"
+    },
+    {
+      "name": "crates/orcl-std/src/scan.rs",
+      "file": "crates/orcl-std/src/scan.rs",
+      "fileSha": "7d9b5aa3f12a6c6fbf806bdd0aae5fbc0e3bb0b202a0be583e4e894483073d38"
     },
     {
       "name": "crates/orcl-std/src/o14.rs",
       "file": "crates/orcl-std/src/o14.rs",
-      "fileSha": "0e6694fdc77be3fa2dd97f9962ed012be6ddd55b49675309e49b2411975d8157"
+      "fileSha": "1b405cec96a1b5efcf06df32d5a4c9206ea73987e62ed353957bea8e360e7d92"
     },
     {
       "name": "crates/orcl-std/tests/blocks.rs",
       "file": "crates/orcl-std/tests/blocks.rs",
-      "fileSha": "7de42cf5045c8aff9755ff14784ba0ba59492ea63479ca1f529e5c006d3b5d0f"
+      "fileSha": "75056407a8aef3cd47873b22804c0dc7485343dc5eda596f4e1dd8d91b5df268"
     }
   ]
 }
