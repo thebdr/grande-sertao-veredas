@@ -1,0 +1,13 @@
+{
+  "clause": "C-112",
+  "verdict": "refuted",
+  "ranAt": "2026-11-22T23:09:53.401Z",
+  "headCommit": "786ca40a6730df59618e18fc6cde051f5d95f1ed",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/profinet_device.rs",
+      "file": "crates/veredas-maquinar/tests/profinet_device.rs",
+      "symbolSha": "6ead08fe8006f780f1f0f4a842306e6de4ccd7112299f6ed9501f925e777bf77"
+    }
+  ]
+}
