@@ -180,6 +180,9 @@ Predefined checks on portal data, live or replayed over history.
 - Rules: reads plant data only through portal; drives machinery only through portal's
   gated writes; tests are plain text, diff-able in git.
 - Design: `design/comissionador/`.
+- Plan: `docs/comissionador-plan.md`; the test file and the function file in
+  `docs/test-schema.md` (2026-11-22; the syntax is the assistant's until `docs/questions.md` Q310
+  is ruled).
 
 ### veredas-abaco: the engineering spreadsheet
 For engineering work where Excel gets too tight.

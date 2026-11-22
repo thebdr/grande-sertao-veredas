@@ -443,7 +443,7 @@ refute round found and what it changed is in the clause's evidence note.
 ### P-006: veredas-comissionador — the testing platform
 - **Date:** 2026-11-05
 - **Source:** user (docs/veredas-plan.md "veredas-comissionador: the testing platform"; decision 6; design docs/design/comissionador/)
-- **Description:** Predefined checks on portal data, live or replayed over a stored window, ending in an acceptance report per run; its own designer with one plain-text test file and two views (text, flow chart), script boxes, functions written in text and reused as blocks, branching on any outcome with retries. Reads plant data only through portal; drives machinery only through portal's gated writes; tests are diff-able in git. New in Veredas 2. Exit: `docs/comissionador-plan.md` (the grammar settled), `crates/veredas-comissionador` at 2.0.0-alpha.1 running a test against maquinar through portal, the laws green.
+- **Description:** Predefined checks on portal data, live or replayed over a stored window, ending in an acceptance report per run; its own designer with one plain-text test file and two views (text, flow chart), script boxes, functions written in text and reused as blocks, branching on any outcome with retries. Reads plant data only through portal; drives machinery only through portal's gated writes; tests are diff-able in git. New in Veredas 2. Exit: `docs/comissionador-plan.md` (the grammar settled), `crates/veredas-comissionador` at 2.0.0-alpha.1 running a test against maquinar through portal, the laws green. Plan: docs/comissionador-plan.md, the grammar docs/test-schema.md (2026-11-22); open: docs/questions.md Q310 to Q317.
 - **Status:** pending
 
 ### P-007: veredas-abaco — the engineering spreadsheet, with acerto

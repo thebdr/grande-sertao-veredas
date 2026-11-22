@@ -1543,3 +1543,213 @@ Options:
 **Recommended**: (c). **Taken meanwhile**: (b).
 
 **Reversible?** Yes: a corpus added to the evidence.
+
+---
+
+## Q310 - The test file's syntax
+
+**Raised** 2026-11-22, planning comissionador (P-006; `docs/comissionador-plan.md`).
+
+Decision 6 settles one plain-text test file with two views; the design draws a language of its own
+(`docs/design/comissionador/Text.dc.html`, "a sketch to make the idea concrete, not a settled
+grammar"), while the plan says every plain-text config and project file is TOML. A test is a
+program (steps, conditions, branches, scripts, loops in functions), so the choice is the
+architect's. Options:
+- (a) The design's language, refined (`docs/test-schema.md`): line by line, `step <name>
+  <action>`, `branch` with arms, `on <outcome> -> <route>`, functions in `.fn` files, the
+  `layout` block last; the suite's stamp kept as two TOML lines read by core's one header
+  reader, so a wrong format or version is refused by the texts every file shares.
+- (b) TOML throughout: settings as keys, steps as `[[step]]` tables, every condition, script and
+  function body a string inside them, the flow view's positions a table.
+- (c) A subset of Rust, as ORCL is: a test a Rust function over a test library, the flow chart
+  drawn from Rust's syntax.
+
+The assistant recommends (a): it reads as the design does, for testers who are not developers;
+the conditions and scripts need a language in any case, and (b) only moves that language into
+strings, which neither the text view nor a diff shows well; (c) suits a developer and makes the
+flow view a reading of arbitrary Rust.
+
+**Taken meanwhile**: (a).
+
+**Reversible?** Yes, while the files are few: the engine runs a model that does not depend on the
+syntax, and the syntax is one front end (`lex`, `parse`); the worked examples would be rewritten.
+
+---
+
+## Q311 - The script box's language
+
+**Raised** 2026-11-22, planning comissionador (P-006).
+
+A script box holds a step with no clean graphical form, a calculation say; a function's body is
+written in text too. Which language they are written in is open. Options:
+- (a) The test language's own statements, the same for script boxes and functions: assignments,
+  `if`, `for` over a range, arithmetic, comparisons, a few calls (`abs`, `min`, `round`, ...);
+  in a function also waits and awaits over portal's data; no other input or output.
+- (b) An embedded scripting language: Rhai (Rust-like, pure Rust, MIT or Apache) or Lua (through
+  a C library), behind the same `script` keyword.
+- (c) Python, as ábaco's macros are: an interpreter on every machine that runs a test, and a
+  sandbox to build around it.
+
+The assistant recommends (a): one language for the whole file, which the check can type and the
+flow view can show; deterministic, so a replay computes what the live run computed; and a script
+box that cannot reach the plant needs no review of what it might do. (b) is the way to a general
+language later, beside (a), if tests outgrow it.
+
+**Taken meanwhile**: (a). A script box reads no plant data and does not wait; a function reads
+and waits but never writes.
+
+**Reversible?** Yes: (b) can be added beside (a) under a tagged `script` block; replacing (a)
+rewrites the scripts and functions written meanwhile.
+
+---
+
+## Q312 - What an acceptance report holds, in which form, and who signs it
+
+**Raised** 2026-11-22, planning comissionador (P-006). The design leaves open who signs a report,
+whether a safety test needs a witness, and the PDF's layout.
+
+Taken as its contents, every run's: the test (its id, title, file, the exact text that ran and
+the function files with it); the run (its number, mode, the portal session's name, the window on
+the store's axis, its start and end, its verdict and the step that decided it); every executed
+step in order (attempt, outcome, detail, times); every criterion (each `check`, each `branch`'s
+decision: the expression, the values measured, the result); the values `report` recorded; every
+gated write made and the plant's answer; the evidence, the rows of every table the run read over
+its window; a tester's note; the signatures. Options for its form:
+- (a) A TOML record per run, `veredas-report` version 1, in `runs/<id>/<nnnn>/`, the evidence as
+  CSV files beside it; the PDF drawn from the record by Oficina's run-and-report screen.
+- (b) The engine writes the PDF itself, beside the record.
+- (c) An HTML page per run.
+
+And for signing:
+- (d) Anyone signs, by a name typed (no accounts, Q20); a signed report is frozen (a note or a
+  second signature is refused, a correction is a new run).
+- (e) As (d), and a test may name the roles that must sign (`sign tester, witness`); the report
+  reads "awaiting witness" until the roles have signed.
+
+The assistant recommends (a) and (e): the record is plain text, versioned and diff-able like
+every file of the suite, any drawing of it reads the record, and the PDF's layout stays with the
+screen the design gives it to (A6.2).
+
+**Taken meanwhile**: (a) and (d); (e) is not built until the answer.
+
+**Reversible?** Yes: the record is the source; a PDF or a page is a drawing of it. Freezing a
+signed report is the one thing a later answer could not undo for reports already signed.
+
+---
+
+## Q313 - How comissionador reaches portal
+
+**Raised** 2026-11-22, planning comissionador (P-006).
+
+A run reads the plant and writes to it through portal. Options:
+- (a) In process: the engine is handed a portal session (its `Live`), and comissionador's
+  executable starts the session from the plant's project file, as supervisão does (Q19).
+- (b) Over portal's own HTTP interface, the one two portals speak (P-019): windowed reads and the
+  write surface; the engine then runs against any portal it can reach (one it did not start, the
+  one embedded in a controller, through Oficina's SSH) without running a session itself.
+- (c) Both, behind one interface.
+
+The assistant recommends (c), built in the order (a) then (b): (a) needs nothing new from portal
+and gives the tests a session they control; a test run from Oficina against a controller will
+come through (b) once portal's link between two portals exists.
+
+**Taken meanwhile**: (a), behind the interface (`Plant`) that (b) would implement.
+
+**Reversible?** Yes: the interface is the engine's one door to portal.
+
+---
+
+## Q314 - Who arms portal's write switch for a run
+
+**Raised** 2026-11-22, planning comissionador (P-006).
+
+The design's inspector says a test's writes need "portal's write switch armed when the run
+starts", and its run screen reads "write switch: off (disarmed after run)". Options:
+- (a) Never comissionador: the switch is the project's and the person's (set in the project file
+  or by the process that owns the session); a live run whose test writes is refused while the
+  switch is off; a write the switch refuses mid-run ends its step in `error`.
+- (b) The run arms the switch at its start, once the person has confirmed the list of the test's
+  gated writes, and disarms it at its end.
+- (c) As (a), and a run disarms at its end a switch it found armed.
+
+The assistant recommends (a): portal sets the switch in process and never over the wire, and
+supervisão never arms it either; with (b) the engine would hold the power to arm, and the
+confirming step belongs to Oficina (as its own arming step for the laptop's IO check does). (c)
+can surprise another user of the same session, a supervisão page among them.
+
+**Taken meanwhile**: (a). The crate's sources name no call that arms the switch, and a test
+holds that by reading them as tokens, as supervisão's does.
+
+**Reversible?** Yes: (b) or (c) is a call added at the run's start or end.
+
+---
+
+## Q315 - What a write does in a replay
+
+**Raised** 2026-11-22, planning comissionador (P-006).
+
+A replay runs a test over a stored window, where the plant cannot be written. The design shows a
+test with writes run in replay. Options:
+- (a) Not sent: the step passes with the note "not sent: replay" and the clock does not move.
+- (b) Matched against the window: the clock moves to where the stored rows show the tag take the
+  written value (the live run's own write), the step failing when they never do.
+- (c) A test that writes is refused in replay.
+
+The assistant recommends (a): a replay of a live run's own window starts where that run started,
+so the waits after a write meet what the write caused; (b) fails on a tag that is written but
+never polled, and a message sent is not a row of the store.
+
+**Taken meanwhile**: (a).
+
+**Reversible?** Yes: one action's behaviour in one mode.
+
+---
+
+## Q316 - How retries count, and how they show in the report
+
+**Raised** 2026-11-22, planning comissionador (P-006). The design leaves open how retries count
+across nested branches and how they appear in the report.
+
+Options:
+- (a) Each retry route (a `retry <step> max <n>` in an arm or an `on` line) counts its own uses
+  over the whole run, never reset; exhausted, the step that took it ends in `fail`, "retry of
+  `<step>` exhausted after <n>".
+- (b) A route's count starts again whenever the run reaches the route's step by any other way
+  (a fresh pass through an outer loop).
+- (c) One budget of retries for the whole run.
+
+In the report, every attempt of a step is a row with its number (`route #1`, `route #2`), and the
+row of the step that retried says which retry it was ("retry 1 of 1").
+
+The assistant recommends (a): a reader counts it from the file alone, and a test that wants a
+fresh budget per outer pass writes a second route.
+
+**Taken meanwhile**: (a), with the report rows as above.
+
+**Reversible?** Yes: a counter's scope.
+
+---
+
+## Q317 - How a test names plant data
+
+**Raised** 2026-11-22, planning comissionador (P-006).
+
+The design writes `Chute[12].ForceFull` and `Parcel.Announced`, a plant's own symbolic names.
+Portal knows the plant by its tables and columns: a capture rule's, an OPC UA rule's or a
+message's table, its fields or tags the columns. Options:
+- (a) Portal's own names, `<table>.<column>`, as the store and the server list them; a write's
+  column is an OPC UA tag the rule marks writable, a send names a channel and a message.
+- (b) As (a), and aliases declared in a test or in a shared file (`tag ForceFull =
+  plc_main.chute12_force`), with an index form for families of objects (`Chute[n].ForceFull`)
+  mapped by a pattern.
+- (c) The plant's symbolic names (OPC UA browse paths, a controller's variables), resolved
+  through portal.
+
+The assistant recommends (a) now and (b) when tests over many alike objects need it: (a) is what
+a person sees in portal's tables and in supervisão, and needs nothing new; (c) reaches past what
+portal stores.
+
+**Taken meanwhile**: (a).
+
+**Reversible?** Yes: (b) adds a resolution step before (a); the files written with (a) keep
+working.

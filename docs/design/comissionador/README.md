@@ -110,7 +110,9 @@ gets a 2px accent border. The canvas is `#141416` with a 20px dot grid.
 - **Run history (right):** earlier runs of the test with their mode and result.
 
 ## Text format (draft)
-The syntax in the mockup is a sketch to make the idea concrete, not a settled grammar:
+The syntax in the mockup is a sketch to make the idea concrete, not a settled grammar. The
+grammar the engine reads is `docs/test-schema.md` (2026-11-22, the assistant's refinement of this
+draft, open as `docs/questions.md` Q310); where the two differ, that file is the later word.
 
 ```
 test "<name>" {
