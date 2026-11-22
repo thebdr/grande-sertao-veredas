@@ -149,7 +149,8 @@ veredas_core
   rng         Pcg32
   telegram    Endian; schema, framing, channel, capture, compose, catalog
   opc         spec, value, map, browse, worker, error; demo (feature "demo-server")
-  fieldbus    modbus (feature "modbus": Client, Target, Timeouts, ModbusError)
+  fieldbus    modbus (feature "modbus": Client, Target, Timeouts, ModbusError);
+              enip (feature "enip": Scanner, Spec, Header, LinkState, EnipError)
   state       ControllerState, State, the reasons, Conditions, MaintenanceRequest, Health;
               REASONS, PHASES, MAINTENANCE_REASONS; the writer (Display), the reader (FromStr)
 ```
@@ -218,14 +219,14 @@ plant is: a component that only polls or serves (portal, supervisão) carries no
 no fieldbus crate, and its pinned dependency graph does not move when a master lands (supervisão's
 `tests/component.rs` pins its own). Controlador switches on the masters it drives; core's own
 tests switch them on through the self dev-dependency.
-- **EtherNet/IP scanner** (`fieldbus::enip`): on a fork of rseip 0.3.1 (MIT), the young crate the
-  briefing names. It holds explicit messaging (the encapsulation session, unconnected and class-3
-  messages, Forward Open's parameters) and no implicit I/O; the fork adds what a scanner is: a
-  class-1 Forward Open naming the adapter's assemblies and their RPI, the cyclic exchange over UDP
-  port 2222 (sequenced address item, run/idle header, the producer's sequence count), the
-  connection's timeout at its multiplier of the RPI, and Forward Close. Where the fork lives (a
-  crate of the workspace, or vendored into core) is asked when it starts. Its bench device is
-  maquinar's EtherNet/IP adapter.
+- **EtherNet/IP scanner** (`fieldbus::enip`, C-072): built 2026-11-22. The young crates are
+  `ethernetip-core` and `ethernetip-connections` 0.1.1 (Apache-2.0), which the bench's adapter
+  test already used and which hold the encapsulation, the Common Packet Format, the Connection
+  Manager's requests and the Class 1 framing; rseip 0.3.1 has no implicit I/O. Core takes their
+  codecs, pinned exactly, and writes the scanner itself (Q102): their own scanner opens with no
+  bound in time, leaves the 16-bit sequence count out of a connection's sizes, names the Sockaddr
+  Info items the other way round (see "Traps"), and watches no silence. Met against maquinar's
+  EtherNet/IP adapter (C-111) from `tools/mestres`.
 - **PROFINET IO controller** (`fieldbus::profinet`): written here on aranha's codecs (DCP, the
   real-time frames), moved into core when the controller needs them (the cut asked of aranha
   through the orchestrator). Raw Ethernet frames.
@@ -243,6 +244,16 @@ network card needs `CAP_NET_RAW` on the controller's executable, an install step
 
 ## Traps
 Recorded as the port meets them.
+
+- **`ethernetip-core` swaps the Sockaddr Info items.** Its `SOCKADDR_INFO_T_TO_O` is 0x8000 and
+  carries the originator's own address in a Forward_Open's request; the standard, the bench's
+  adapter and Wireshark have 0x8001 for where T→O data goes (the scanner's address, in the request)
+  and 0x8000 for where O→T data goes (the adapter's, in the reply). `fieldbus::enip` names the
+  items by the standard's numbers and never uses the crate's constants; the dissectors check it.
+- **A connection's size counts the sequence count.** Each direction of a Class 1 Forward_Open
+  carries its data plus the 2-byte sequence count plus the 4-byte run/idle header where the
+  direction has one; the crate's own scanner leaves the count out and an adapter refuses it
+  (0x0127). The 16-bit Forward_Open carries 511 bytes at most.
 
 - **tokio-modbus's typed reads trust the device.** Its `Reader` methods only `debug_assert!` that
   an answer holds the quantity asked: a short answer panics a debug build and comes back short in

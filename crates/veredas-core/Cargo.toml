@@ -18,6 +18,8 @@ demo-server = ["dep:async-opcua-server"]
 # component that only polls carries no fieldbus code; the controller switches it on, and so do the
 # crates that test it (docs/core-plan.md, "The fieldbus masters").
 modbus = ["dep:tokio-modbus"]
+# The EtherNet/IP scanner (fieldbus::enip), off by default for the same reason.
+enip = ["dep:ethernetip-core", "dep:ethernetip-connections"]
 
 [dependencies]
 # The OPC UA client layer (opc): the client, its types, and the server behind demo-server.
@@ -39,11 +41,16 @@ tokio = { workspace = true }
 # The Modbus/TCP client's framing (fieldbus::modbus, feature "modbus"): the standard's frames,
 # checked here.
 tokio-modbus = { workspace = true, optional = true }
+# The EtherNet/IP scanner's codecs (fieldbus::enip, feature "enip"): encapsulation, CPF, the
+# Connection Manager's requests, Class 1 framing; the scanner itself is core's (docs/questions.md
+# Q102).
+ethernetip-connections = { workspace = true, optional = true }
+ethernetip-core = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Switches the demo plant and the fieldbus masters on for core's own tests (law L4 allows core
 # itself).
-veredas-core = { path = ".", features = ["demo-server", "modbus"] }
+veredas-core = { path = ".", features = ["demo-server", "modbus", "enip"] }
 # tests/opc_capabilities.rs drives the stack directly, to pin what the opc layer assumes of it.
 async-opcua-client = { workspace = true }
 async-opcua-types = { workspace = true }

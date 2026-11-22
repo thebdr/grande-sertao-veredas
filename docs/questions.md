@@ -2124,3 +2124,33 @@ cycle. Where it is silent the first build takes a reading, each marked `DECISION
 **Taken meanwhile**: the readings above, as readings.
 
 **Reversible?** Yes: each is a line of the controller and an assertion of its test.
+
+---
+
+## Q102 - What "fork a young Rust crate" means for the EtherNet/IP scanner
+
+**Raised** 2026-11-22, building the EtherNet/IP scanner (P-018, C-072; the briefing: "EtherNet/IP
+scanner (fork a young Rust crate, test on real devices)"). The review's entry 27 on the fork is
+not ruled (Q31).
+
+The young crates are `ethernetip-core` and `ethernetip-connections` 0.1.1 (Apache-2.0), the ones
+the bench's adapter test already drives it with: encapsulation, Common Packet Format, the
+Connection Manager's requests, Class 1 framing, and a scanner of their own. Read before choosing:
+their codecs check every length before they read; their scanner does not fit a controller (no
+bound on connecting or on an answer, the 16-bit sequence count left out of a connection's sizes,
+the Sockaddr Info items numbered the other way round from the standard, no watch on a silent
+adapter). Law L4 keeps any workspace member out of core's tables, so a fork cannot be a member core
+uses.
+
+Options:
+- (a) Core depends on the two crates, pinned exactly, for their codecs, and writes the scanner
+  itself; a codec that needs changing is then vendored into core with its licence notice.
+- (b) The two crates are vendored into core now, trimmed to what the scanner uses, and fixed in
+  place.
+- (c) A fork published under the architect's own account, as a git dependency.
+
+**Recommended**: (a). **Taken meanwhile**: (a): `fieldbus::enip` uses the codecs and none of the
+crates' constants for the Sockaddr items. A licence check of the dependencies (Q35) has to accept
+Apache-2.0.
+
+**Reversible?** Yes: (b) is the same code moved in; (c) needs the architect's account.

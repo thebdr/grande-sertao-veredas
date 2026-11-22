@@ -13,5 +13,5 @@ description = "Core's fieldbus masters met against the bench's devices (docs/cor
 
 [dev-dependencies]
 # Each master is a feature of core, switched on here for the test that meets its bench device.
-veredas-core = { path = "../../crates/veredas-core", features = ["modbus"] }
+veredas-core = { path = "../../crates/veredas-core", features = ["modbus", "enip"] }
 veredas-maquinar = { path = "../../crates/veredas-maquinar" }

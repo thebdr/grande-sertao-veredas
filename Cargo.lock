@@ -3628,6 +3628,8 @@ dependencies = [
  "async-opcua-server",
  "async-opcua-types",
  "chrono",
+ "ethernetip-connections",
+ "ethernetip-core",
  "regex",
  "serde",
  "serde_json",

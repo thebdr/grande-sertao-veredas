@@ -11,6 +11,10 @@
 //!
 //! - `modbus` ([`modbus`]): a Modbus/TCP client, ten public functions of a device's data model,
 //!   each answer checked against its request and every call bounded in time.
+//! - `enip` ([`enip`]): an EtherNet/IP scanner, one Class 1 connection to an adapter, its
+//!   outputs produced and its inputs consumed at the interval, every step bounded in time.
 
+#[cfg(feature = "enip")]
+pub mod enip;
 #[cfg(feature = "modbus")]
 pub mod modbus;
