@@ -146,13 +146,31 @@ pub fn validate(cfg: &ProfinetConfig) -> Result<(), ProfinetError> {
     if !cfg.station.is_empty() {
         dcp::check_station_name(&cfg.station).map_err(|e| bad(format!("profinet.station `{}`: {e}", cfg.station)))?;
     }
-    if !cfg.port.starts_with("port-") {
-        return Err(bad(format!("profinet.port `{}`: a port is named port-xyz", cfg.port)));
+    if !is_port_name(&cfg.port) {
+        return Err(bad(format!("profinet.port `{}`: a port is named port-xyz or port-xyz-abcde (xyz 001 to 255, abcde five digits)", cfg.port)));
+    }
+    if let Some(alias) = &cfg.alias {
+        // An alias is a neighbour's port and station, as LLDP names them: `port-xyz.station`.
+        let ok = alias.split_once('.').is_some_and(|(port, station)| is_port_name(port) && dcp::check_station_name(station).is_ok());
+        if !ok {
+            return Err(bad(format!("profinet.alias `{alias}`: an alias is a port name, a dot and a station name (port-001.switch-1)")));
+        }
     }
     if cfg.vendor.is_empty() || cfg.vendor.len() > 255 {
         return Err(bad("profinet.vendor: 1 to 255 characters".into()));
     }
     Ok(())
+}
+
+/// `port-xyz` or `port-xyz-abcde`: xyz 001 to 255, abcde five digits (IEC 61158-6-10's port names).
+pub fn is_port_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("port-") else { return false };
+    let (xyz, abcde) = match rest.split_once('-') {
+        Some((x, a)) => (x, Some(a)),
+        None => (rest, None),
+    };
+    let digits = |t: &str, n: usize| t.len() == n && t.bytes().all(|b| b.is_ascii_digit());
+    digits(xyz, 3) && (1..=255).contains(&xyz.parse::<u16>().unwrap_or(0)) && abcde.is_none_or(|a| digits(a, 5))
 }
 
 /// What the device reports.
@@ -161,6 +179,8 @@ pub struct ProfinetStatus {
     /// The interface's MAC, the device's.
     pub mac: Mac,
     pub hellos: u64,
+    /// Identify answers sent, counted as each goes out (an answer dropped by a mute or a stop is
+    /// not one).
     pub identify_answered: u64,
     /// Identify requests whose filter it did not match.
     pub identify_passed: u64,
@@ -234,7 +254,8 @@ impl ProfinetHandle {
         state.identity.ip_status = Some(IpStatus { set, conflict });
     }
 
-    /// Answer nothing (true), as a device whose DCP is off; LLDP goes on.
+    /// Answer nothing (true), as a device whose DCP is off; LLDP goes on. An Identify answer
+    /// waiting out its delay is dropped.
     pub fn set_muted(&self, muted: bool) {
         self.shared.muted.store(muted, Ordering::SeqCst);
     }
@@ -325,9 +346,13 @@ pub fn start(cfg: &ProfinetConfig) -> Result<ProfinetHandle, ProfinetError> {
 #[cfg(target_os = "linux")]
 fn lldp_frame(mac: Mac, cfg: &ProfinetConfig, id: &DeviceIdentity, ttl: u16) -> Option<Vec<u8>> {
     let station = id.name.clone().unwrap_or_default();
-    let port = if station.is_empty() { cfg.port.clone() } else { format!("{}.{station}", cfg.port) };
-    let mut pdu = LldpPdu::new(ChassisId::Local { id: station }, PortId::Local { id: port }, ttl);
-    pdu.pn.chassis_mac = Some(mac);
+    // An unnamed device has no NameOfStation to give: its chassis is its MAC.
+    let (chassis, port) = if station.is_empty() { (ChassisId::Mac { mac }, cfg.port.clone()) } else { (ChassisId::Local { id: station.clone() }, format!("{}.{station}", cfg.port)) };
+    let mut pdu = LldpPdu::new(chassis, PortId::Local { id: port }, ttl);
+    // A shutdown frame carries the chassis, the port and the TTL alone (802.1AB).
+    if ttl > 0 {
+        pdu.pn.chassis_mac = Some(mac);
+    }
     lldp::frame(mac, &pdu).ok()
 }
 
@@ -363,9 +388,17 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
                 next_lldp += every;
             }
         }
+        if shared.muted.load(Ordering::SeqCst) {
+            pending.clear();
+        }
         pending.retain(|(due, frame)| {
             if *due <= now {
-                let _ = link.send(frame);
+                // Counted as it goes out, so whoever reads the answer finds it counted; a send that
+                // fails takes it back.
+                shared.lock().status.identify_answered += 1;
+                if link.send(frame).is_err() {
+                    shared.lock().status.identify_answered -= 1;
+                }
                 false
             } else {
                 true
@@ -383,7 +416,12 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
             shared.lock().status.undecodable += 1;
             continue;
         };
-        if pdu.service_type != ServiceType::Request {
+        // A request under another service's frame id is not this device's to answer.
+        let frame_id = match pdu.service {
+            Service::Identify => dcp::FRAME_ID_IDENTIFY_REQ,
+            _ => dcp::FRAME_ID_GET_SET,
+        };
+        if pdu.service_type != ServiceType::Request || pdu.frame_id != frame_id {
             continue;
         }
         match pdu.service {
@@ -393,7 +431,6 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
                     state.status.identify_passed += 1;
                     continue;
                 }
-                state.status.identify_answered += 1;
                 let Ok(answer) = dcp::identify_response(frame.src, mac, pdu.xid, &state.identity) else { continue };
                 drop(state);
                 // Spread over the request's response delay: a factor of 1 (or 0) answers at once,
@@ -410,9 +447,22 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
             Service::Get if frame.dst == mac => {
                 let mut state = shared.lock();
                 state.status.gets += 1;
-                let wanted: Vec<(u8, u8)> = pdu.blocks.iter().map(|b| (b.option, b.suboption)).collect();
-                let blocks: Vec<Block> = state.identity.blocks().into_iter().filter(|b| wanted.contains(&(b.option, b.suboption))).collect();
+                let held = state.identity.blocks();
                 drop(state);
+                // Each pair asked, in the order asked: the block, or a control response saying the
+                // suboption is not there (0x02, "suboption not supported or no DataSet available").
+                let blocks: Vec<Block> = pdu
+                    .blocks
+                    .iter()
+                    .map(|w| {
+                        held.iter().find(|b| (b.option, b.suboption) == (w.option, w.suboption)).cloned().unwrap_or(Block {
+                            option: 5,
+                            suboption: 4,
+                            info: None,
+                            body: BlockBody::ControlResponse { option: w.option, suboption: w.suboption, error: error::SUBOPTION_UNSUPPORTED },
+                        })
+                    })
+                    .collect();
                 let answer = DcpPdu { frame_id: dcp::FRAME_ID_GET_SET, service: Service::Get, service_type: ServiceType::Success, xid: pdu.xid, response_delay: 0, blocks, trailing: Vec::new() };
                 if let Ok(f) = answer.frame(frame.src, mac) {
                     let _ = link.send(&f);
@@ -431,6 +481,11 @@ fn matches(id: &DeviceIdentity, filters: &[Block]) -> bool {
             BlockBody::AllSelector => true,
             BlockBody::NameOfStation { name } => id.name.as_deref().is_some_and(|n| !n.is_empty() && n == name),
             BlockBody::AliasName { name } => id.alias.as_deref() == Some(name.as_str()),
+            BlockBody::DeviceVendor { value } => id.vendor.as_deref() == Some(value.as_str()),
+            BlockBody::DeviceId { vendor_id, device_id } => (id.vendor_id, id.device_id) == (Some(*vendor_id), Some(*device_id)),
+            BlockBody::DeviceRole { role, .. } => id.role.is_some_and(|r| r & role != 0),
+            BlockBody::IpParameter { suite } => id.ip.as_ref() == Some(suite),
+            BlockBody::MacAddress { mac } => id.mac == Some(*mac),
             _ => false,
         })
 }
@@ -458,10 +513,14 @@ fn set(shared: &Shared, pdu: &DcpPdu) -> Vec<(u8, u8, u8)> {
                 state.identity.ip_status = Some(IpStatus { set, conflict });
                 error::NONE
             }
-            BlockBody::ControlSignal { .. } => {
+            // The identification signal: flash once (0x0100), the one value the standard defines.
+            BlockBody::ControlSignal { value: 0x0100 } => {
                 state.status.blinks += 1;
                 error::NONE
             }
+            BlockBody::ControlSignal { .. } => error::SET_NOT_POSSIBLE,
+            // A name block it holds but cannot read (not UTF-8, cut short): not possible.
+            _ if (b.option, b.suboption) == (2, 2) => error::SET_NOT_POSSIBLE,
             _ if b.option == 1 || b.option == 2 || b.option == 5 => error::SUBOPTION_UNSUPPORTED,
             _ => error::OPTION_UNSUPPORTED,
         };

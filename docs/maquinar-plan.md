@@ -413,7 +413,8 @@ Recorded as the port meets them.
   | test(a_connection_s_first_frame_comes_at_once_whatever_the_others_wait_for)
   | test(the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene)
   | test(an_identify_is_answered_within_its_response_delay)
-  | test(lldp_names_the_station_and_the_port_and_says_when_it_leaves) | binary(reflexo)`.
+  | test(lldp_names_the_station_and_the_port_and_says_when_it_leaves)
+  | test(round_1::the_delay_follows_the_factor) | test(round_1::lldp_comes_on_its_interval) | binary(reflexo)`.
   Free, by that rule: the bench file, the channels, the controller's rules, the component, the
   EtherCAT segment (ethercrab's own timeouts are deadlines), `fisica` but its runner, and every
   other test of the files above. A new test that measures time joins this list in its commit.

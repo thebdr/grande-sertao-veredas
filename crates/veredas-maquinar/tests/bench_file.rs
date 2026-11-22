@@ -817,7 +817,11 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     assert_eq!(refused(&format!("{h}[[profinet]]\nname = \"d\"\ninterface = \" \"\n"), &dir), "profinet[0] (`d`): profinet.interface is empty");
     let err = refused(&format!("{h}[[profinet]]\nname = \"d\"\ninterface = \"pn0\"\nstation = \"Bad_Name\"\n"), &dir);
     assert!(err.starts_with("profinet[0] (`d`): profinet.station `Bad_Name`: "), "{err}");
-    assert_eq!(refused(&format!("{h}[[profinet]]\nname = \"d\"\ninterface = \"pn0\"\nport = \"x1\"\n"), &dir), "profinet[0] (`d`): profinet.port `x1`: a port is named port-xyz");
+    assert_eq!(refused(&format!("{h}[[profinet]]\nname = \"d\"\ninterface = \"pn0\"\nport = \"x1\"\n"), &dir), "profinet[0] (`d`): profinet.port `x1`: a port is named port-xyz or port-xyz-abcde (xyz 001 to 255, abcde five digits)");
+    assert_eq!(
+        refused(&format!("{h}[[profinet]]\nname = \"d\"\ninterface = \"pn0\"\nalias = \"switch-1\"\n"), &dir),
+        "profinet[0] (`d`): profinet.alias `switch-1`: an alias is a port name, a dot and a station name (port-001.switch-1)"
+    );
     assert_eq!(refused(&emitter("[[ethercat]]\nname = \"e\"\ninterface = \"ec0\"\ndevices = [ { name = \"t\" } ]\n"), &dir), "ethercat[0]: `e` is already the name of the emitter `e`");
     assert_eq!(
         refused(&format!("{h}[[ethercat]]\nname = \"s\"\ninterface = \"ec0\"\ndevices = [ {{ name = \"t\", inputs = [ {{ index = 1, subindex = 1, bits = 0 }} ] }} ]\n"), &dir),
@@ -870,7 +874,7 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     );
     // The closing paragraph says so.
     let prose = doc_prose();
-    assert!(prose.contains("A misspelled key in any table, a part without a name or with a name another part has, an emitter's file name or timestamp format that is bad, a value's range that is empty or not finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name the standard refuses, a port not named `port-`) or the EtherCAT segment's (no device, two devices of one name, an entry of 0 bits, more than 255 entries a way), a scene file that cannot be read or does not load, a model whose scene, belt, sensor, mover or point is not there, a point of the other kind or written by two models, a ramp, a ratio, a stroke or a delay out of its range, a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that does not load against the catalog, a message the catalog lacks or whose fields leave a name unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the place named, before anything binds, opens or spawns."));
+    assert!(prose.contains("A misspelled key in any table, a part without a name or with a name another part has, an emitter's file name or timestamp format that is bad, a value's range that is empty or not finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name the standard refuses, a port not named `port-xyz` or `port-xyz-abcde`, an alias not a port and a station) or the EtherCAT segment's (no device, two devices of one name, an entry of 0 bits, more than 255 entries a way), a scene file that cannot be read or does not load, a model whose scene, belt, sensor, mover or point is not there, a point of the other kind or written by two models, a ramp, a ratio, a stroke or a delay out of its range, a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that does not load against the catalog, a message the catalog lacks or whose fields leave a name unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the place named, before anything binds, opens or spawns."));
     // A part that cannot start: a server on a taken port, named; the emitter before it stopped.
     assert!(prose.contains("A part that cannot start (a port taken, a folder that cannot be created, an interface that is not there) stops the parts started before it and is named."));
     let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1577,13 +1581,14 @@ each block answered, a Get answered, LLDP on its port.
 - `interface` (required): the network interface it answers on, by name.
 - `station` (`""`): its station name, the standard's rule for one; empty for a device not yet
   named, which answers no Identify by name.
-- `alias` (none): its alias name.
+- `alias` (none): its alias name, a port name, a dot and a station name (`port-001.switch-1`).
 - `vendor` (`"veredas bench device"`): the vendor's text for its type, 1 to 255 characters.
 - `vendor_id` (`0`), `device_id` (`0`): its vendor and device ids.
 - `ip` (none): its IP suite, as an inline table; absent, 0.0.0.0 and not set.
 - `hello` (`true`): a Hello at start.
 - `lldp_interval_ms` (`5000`): between LLDP frames; `0` sends none.
-- `port` (`"port-001"`): its port's name, `port-` and its number.
+- `port` (`"port-001"`): its port's name, `port-xyz` or `port-xyz-abcde` (xyz 001 to 255, abcde
+  five digits).
 - `seed` (none): the seed of its answers' spread over a response delay; the clock when absent.
 
 **An IP suite** (the value of `ip`).
@@ -1697,7 +1702,7 @@ finite, anything the OPC UA or the Modbus server's own checks refuse (a point ov
 its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP
 adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past
 its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name
-the standard refuses, a port not named `port-`) or the EtherCAT segment's (no device, two devices of
+the standard refuses, a port not named `port-xyz` or `port-xyz-abcde`, an alias not a port and a station) or the EtherCAT segment's (no device, two devices of
 one name, an entry of 0 bits, more than 255 entries a way), a scene file that cannot be read or does not load, a model whose scene, belt, sensor, mover or point is not there, a point of the other kind or written by two models, a ramp, a ratio, a stroke or a delay out of its range, a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that
 does not load against the catalog, a message the catalog lacks or whose fields leave a name
 unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the
