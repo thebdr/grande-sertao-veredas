@@ -392,6 +392,31 @@ Recorded as the port meets them.
   pace: at least 70, where a 31 ms tick (64) cannot reach, at most 102, where two draws a tick
   would; the 100 ms tag's 19 to 21 stays exact, a draw being due from its due time, not from
   the tick that serves it.
+- **Which of the bench's tests go behind the machine's lock** (the architect's rule as the
+  orchestrator relayed it, 2026-11-22: the lock is for a test that measures time or drives a
+  browser). Behind `flock /tmp/veredas-suite.lock`, built first: a test that measures the host's
+  clock, a rate, a tick or an upper bound on how soon something happens. Free: a test that reads a
+  file, checks a refusal, or talks over a socket with a deadline that only bounds a wait, and a
+  test whose only time check is a lower bound (a delay can only grow under load). The timed ones,
+  as a filter a run (a critic's mutant run too) leaves out to go free:
+  `test(draws_come_at_their_interval) | test(ramps_come_at_their_interval_counted_apart_from_draws)
+  | test(a_stall_skips_the_draws_and_steps_it_missed) | test(a_draw_or_a_step_is_next_due_an_interval_after_it_was_due)
+  | test(a_reaction_answers_a_write_with_a_timed_sequence) | test(a_stop_is_prompt_whatever_the_interval)
+  | test(the_machine_announces_awaits_the_answer_and_reports_the_outcome_tick_by_tick)
+  | test(a_destination_s_state_forces_the_outcome_and_the_bench_s_knobs_set_it)
+  | test(faults_mark_their_share_of_items_and_the_rate_is_the_interval_s_whatever_the_tick)
+  | test(the_machine_and_the_unit_converse_over_a_real_socket_and_the_knobs_turn_live)
+  | binary(pressure) | test(the_knobs_delay_silence_and_drop_every_connection)
+  | test(a_class_1_connection_produces_at_its_rpi_and_consumes_what_its_originator_runs)
+  | test(a_connection_whose_originator_falls_silent_is_closed_at_its_timeout)
+  | test(the_timeout_counts_the_consumed_rpi_and_the_multiplier_and_the_first_frame_waits_ten_seconds)
+  | test(a_connection_s_first_frame_comes_at_once_whatever_the_others_wait_for)
+  | test(the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene)
+  | test(an_identify_is_answered_within_its_response_delay)
+  | test(lldp_names_the_station_and_the_port_and_says_when_it_leaves) | binary(reflexo)`.
+  Free, by that rule: the bench file, the channels, the controller's rules, the component, the
+  EtherCAT segment (ethercrab's own timeouts are deadlines), `fisica` but its runner, and every
+  other test of the files above. A new test that measures time joins this list in its commit.
 - **A thread spawned is not a line written.** The emitter's loop reads its stop flag before its
   first line, so a part that fails right after it (a server on a taken port) can stop and join
   it before its thread's first tick, and its file is not there: CI on Linux did exactly that
