@@ -306,6 +306,10 @@ fn the_reading_finds_every_refused_form() {
     assert_eq!(one("fn f() { std::process::Command::new(\"x\"); }"), ["Command: a process of its own"]);
     assert_eq!(one("include!(\"elsewhere.rs\");"), ["include: tokens from a file the reading does not see"]);
     assert_eq!(one("const T: &str = include_str!(\"x\");"), ["include_str: text from a file the reading does not see"]);
+    assert_eq!(one("const B: &[u8] = include_bytes!(\"x\");"), ["include_bytes: bytes from a file the reading does not see"]);
+    // Every refused name is asserted above, by its own text: none can leave the list unseen.
+    let asserted = ["set_writes_armed", "WriteGate", "spawn", "opc", "telegram", "fieldbus", "net", "Command", "unsafe", "from_v1", "include", "include_str", "include_bytes"];
+    assert_eq!(REFUSED.iter().map(|(n, _)| *n).collect::<Vec<_>>(), asserted);
     assert_eq!(one("#[path = \"gate.txt\"] mod gate;"), ["path: a module read from a file of an attribute's choosing"]);
     assert_eq!(one("#[cfg_attr(unix, path = \"g.rs\")] mod gate;"), ["path: a module read from a file of an attribute's choosing"]);
     assert_eq!(one("mod m { #![path = \"g\"] }"), ["path: a module read from a file of an attribute's choosing"]);
