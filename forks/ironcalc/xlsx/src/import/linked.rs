@@ -127,7 +127,15 @@ impl LinkedResolver {
     /// The path the target of `book` resolves to: an absolute path as is, a
     /// relative one against the workbook's folder, a URL by its file name in
     /// that folder (Excel keeps the relative name beside the URL; this is
-    /// for the files where it did not).
+    /// for the files where it did not), a `file:` URL as the local path it
+    /// names (`file:///C:/x.xlsx` is `C:/x.xlsx` on Windows, `file:///tmp/x.xlsx`
+    /// is `/tmp/x.xlsx` elsewhere, `file://host/share/x.xlsx` the share
+    /// `//host/share/x.xlsx`).
+    ///
+    /// A relationship's target is a URI, and Excel percent-encodes it (a
+    /// space is `%20`): every form is decoded. A path target whose decoded
+    /// form names no file while its text as written does is taken as
+    /// written, for a file whose name holds a `%` sequence.
     pub fn resolve_target(&self, book: &ExternalBook) -> PathBuf {
         let target = book.target.as_str();
         if target.starts_with("http://") || target.starts_with("https://") {
@@ -135,10 +143,29 @@ impl LinkedResolver {
             let file_name = percent_decode(file_name);
             return self.base_dir.join(file_name);
         }
-        // file:///C:/x/y.xlsx
-        if let Some(rest) = target.strip_prefix("file:///") {
-            return PathBuf::from(percent_decode(rest));
+        if let Some(rest) = target.strip_prefix("file://") {
+            let rest = percent_decode(rest);
+            return match rest.strip_prefix('/') {
+                // file:///C:/x.xlsx names a drive's path on Windows
+                Some(local) if is_drive_path(local) => PathBuf::from(local),
+                // file:///tmp/x.xlsx, the absolute path /tmp/x.xlsx
+                Some(_) => PathBuf::from(rest),
+                // file://host/share/x.xlsx, a share
+                None => PathBuf::from(format!("//{rest}")),
+            };
         }
+        let decoded = self.against_base(&percent_decode(target));
+        if decoded.exists() {
+            return decoded;
+        }
+        let as_written = self.against_base(target);
+        if as_written != decoded && as_written.exists() {
+            return as_written;
+        }
+        decoded
+    }
+
+    fn against_base(&self, target: &str) -> PathBuf {
         let path = Path::new(target);
         if path.is_absolute() {
             path.to_path_buf()
@@ -308,6 +335,12 @@ impl ExternalResolver for LinkedResolver {
 
 fn canonical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// `C:/x` or `C:\x`: a drive letter, a colon and a separator.
+fn is_drive_path(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'/' || b[2] == b'\\')
 }
 
 /// `%20` → space, for a URL's file name. Bytes that are not valid UTF-8
@@ -554,5 +587,47 @@ mod tests {
         }
         assert_eq!(percent_decode("a%20b%2"), "a b%2");
         assert_eq!(percent_decode("%ZZx"), "%ZZx");
+        // Excel's spelling of a path target, and a file: URL on this platform
+        assert_eq!(
+            resolver.resolve_target(&book("sub%20dir/Zone%20list.xlsx")),
+            dir.join("sub dir/Zone list.xlsx")
+        );
+        if !cfg!(windows) {
+            assert_eq!(
+                resolver.resolve_target(&book("/Users/x/Plant%20books/Linked.xlsx")),
+                PathBuf::from("/Users/x/Plant books/Linked.xlsx")
+            );
+            assert_eq!(
+                resolver.resolve_target(&book("file:///tmp/a%20b/Linked.xlsx")),
+                PathBuf::from("/tmp/a b/Linked.xlsx")
+            );
+        }
+        assert_eq!(
+            resolver.resolve_target(&book("file://server/share/Linked.xlsx")),
+            PathBuf::from("//server/share/Linked.xlsx")
+        );
+        assert!(is_drive_path("C:/x") && is_drive_path("d:\\x"));
+        assert!(!is_drive_path("tmp/x") && !is_drive_path("C:") && !is_drive_path("1:/x"));
+    }
+
+    #[test]
+    fn a_target_is_taken_as_written_only_when_its_decoded_form_names_no_file() {
+        let dir = temp_dir("percent_names");
+        fs::create_dir_all(&dir).unwrap();
+        let main = dir.join("Main.xlsx");
+        let resolver = LinkedResolver::for_workbook(&main, "en", "UTC", "en");
+        let book = |target: &str| ExternalBook {
+            target: target.to_string(),
+            ..Default::default()
+        };
+        // neither exists: the decoded path is the one reported
+        assert_eq!(resolver.resolve_target(&book("a%20b.xlsx")), dir.join("a b.xlsx"));
+        // only the name as written exists: it is taken
+        fs::write(dir.join("a%20b.xlsx"), b"x").unwrap();
+        assert_eq!(resolver.resolve_target(&book("a%20b.xlsx")), dir.join("a%20b.xlsx"));
+        // both exist: the decoded one wins, as Excel wrote the target
+        fs::write(dir.join("a b.xlsx"), b"x").unwrap();
+        assert_eq!(resolver.resolve_target(&book("a%20b.xlsx")), dir.join("a b.xlsx"));
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
