@@ -300,6 +300,27 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
   first step whose poses overlap, since Rapier detects contacts before it moves the bodies (the
   clause states it; 4 ms at the default step, a real sensor's own delay is longer); a part's
   `size` is along its own axes, so a belt yawed 90° is still long in its own x.
+- **`reflexo`'s first half, as designed before its code** (2026-11-22). Ready-made models that make
+  a bench device behave as the machine behind it: a model reads what a controller wrote to the
+  device (its outputs) and writes what the controller reads (its inputs), and moves a `fisica`
+  scene's parts. A model names a device's point as `<part>.<point>`, of the bench's Modbus servers
+  and EtherNet/IP adapters (their points are named); a bool point carries 0 or 1, a number is
+  converted to the point's type (an integer rounded and held to its range). The models step on
+  the scene's thread, before each step and at its fixed step, so a model and the bodies it moves
+  share one clock and a run repeats. Four kinds:
+  - a **drive**: `run` and an optional `reverse` read, a `setpoint` read in the drive's own unit;
+    its speed ramps toward the setpoint (0 when not running) at its `accel` and `decel` (units a
+    second); it writes its `speed`, `running` (speed not 0) and `at_speed` (within its
+    `tolerance` of a running setpoint) where the file names those points;
+  - a **conveyor**: a drive whose speed moves a belt of the scene, `metres_per_unit` of surface
+    speed per unit of the drive's;
+  - a **sensor**: a scene sensor written to a bool point, occupied as 1 (0 when `normally_closed`),
+    after its `on_delay_ms` and `off_delay_ms`;
+  - an **actuator**: a cylinder; its `extend` read, a mover travelling between its `retracted` and
+    `extended` poses in `stroke_ms`, its end switches written when it is at either end.
+  The bench file gains `[[fisica]]` (a scene file run in real time) and `[[reflexo]]` (a scene
+  part's models). The second half, ORCL function blocks, waits for controlador's interpreter;
+  EtherCAT devices, whose process data has no named points, are bound by byte and bit then.
 
 ## Decided in the briefing of November 2026, not built
 The architect's decisions of 13 to 16 November 2026 that touch the bench
