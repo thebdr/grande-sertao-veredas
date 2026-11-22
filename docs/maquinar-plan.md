@@ -164,6 +164,8 @@ veredas_maquinar
               raw link, the knobs (Linux)
   ethercat    the emulated EtherCAT segment: the ESC core (registers, commands, AL, SII, DC, FMMUs)
               and the SII image, pure; the segment on a raw link, the knobs (Linux)
+  fisica      the scene file (veredas-cena), the World on Rapier stepped at a fixed step, its
+              runner in real time and its handle (designed; C-114 when it lands)
   bench       the bench file (schema), Bench::start, every part's status
   main.rs     veredas-maquinar <bench.toml> [--check] | --version; stops on stdin's end, `stop`,
               SIGTERM or SIGINT
@@ -265,6 +267,27 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
   tests run the device and the master inside such a namespace, on a veth pair, and the suite
   needs no privilege and no setting on the host; a real network card is the commissioning case,
   not the suite's.
+- **`fisica`, as designed before its code** (2026-11-22). The bodies of a plant's scene and their
+  motion, headless, at a fixed step, on Rapier (`docs/questions.md` Q160, taken meanwhile), which
+  only `fisica`'s own module names. A scene is a file of its own, `veredas-cena` version 1, read by
+  the bench file's `[[fisica]]` part, so that Oficina's view (review entry 31, option a) draws what
+  the bench moves from the same file. Metres, kilograms, seconds; z up, x along a line; a pose is
+  a centre and three angles in degrees (yaw about z, then pitch about the new y, then roll about
+  the new x). Its parts, boxes all in this first slice: fixed shapes (a floor, guides, a chute's
+  sides), belts (a fixed box whose top surface moves along its own x at a speed the plant side
+  sets: the solver's contacts with it given that tangent velocity, its sides left still), bodies
+  (cartons, parts: dynamic, a mass, a friction), movers (kinematic boxes the plant side moves, a
+  pusher's blade or a lift's table, which push bodies and are not pushed) and sensors (a box or a
+  ball that reports the bodies inside it, the step each entered and left: a light barrier's beam,
+  a proximity switch's field). A `World` is pure and stepped by its caller, so the tests pin the
+  physics without sleeping; `fisica::start` runs one on its own thread in real time, with a handle
+  that reads every pose and sensor, sets belts' speeds and movers' poses, adds and removes bodies.
+  The same scene and the same inputs give the same run, bit for bit (Rapier's
+  `enhanced-determinism`). Checked first with Rapier 0.36.1 (spike, 2026-11-22): a 0.3 m carton on
+  a belt at 0.5 m/s reached the belt's speed within 0.05 s and broke a 1 cm beam at 2.0 m from
+  x = 1.849 to x = 2.157 (its edges, to the step), and two runs agreed bit for bit; the tangent
+  velocity's sign follows which collider of the pair the belt is. `reflexo`'s models (a drive, a
+  sensor, a conveyor, an actuator) bind these to a bench device's points through their handles.
 
 ## Decided in the briefing of November 2026, not built
 The architect's decisions of 13 to 16 November 2026 that touch the bench
