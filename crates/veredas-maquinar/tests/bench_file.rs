@@ -845,6 +845,46 @@ fn the_executable_prints_every_part_s_line_at_the_start_with_the_address_it_got(
 }
 
 #[test]
+fn the_executable_says_its_version_and_stops_on_a_termination_signal() {
+    let exe = env!("CARGO_BIN_EXE_veredas-maquinar");
+    let out = Command::new(exe).arg("--version").output().unwrap();
+    assert_eq!((out.status.code(), String::from_utf8_lossy(&out.stdout).trim().to_string()), (Some(0), format!("veredas-maquinar {}", env!("CARGO_PKG_VERSION"))));
+    assert!(out.stderr.is_empty());
+    // With a file named too, the version alone: nothing read, nothing started.
+    let out = Command::new(exe).arg("missing.toml").arg("--version").output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    // SIGTERM (a service manager's stop) and SIGINT (a terminal's) end a run as closing stdin does:
+    // every part stopped, `stopped` printed, exit 0, the ports free.
+    #[cfg(unix)]
+    for signal in ["-TERM", "-INT"] {
+        let dir = scratch("signal");
+        let path = dir.join("bench.toml");
+        std::fs::write(&path, format!("{}[[modbus]]\nname = \"drive\"\nport = 0\n", header())).unwrap();
+        let mut child = Command::new(exe).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let mut reader = std::io::BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        let port = loop {
+            line.clear();
+            assert_ne!(reader.read_line(&mut line).unwrap(), 0, "ended before its Modbus line");
+            if line.starts_with("modbus drive: ") {
+                break port_after(line.trim_end(), "modbus drive: 127.0.0.1:");
+            }
+        };
+        // Stdin stays open: only the signal can stop it.
+        let status = Command::new("kill").arg(signal).arg(child.id().to_string()).status().unwrap();
+        assert!(status.success());
+        let mut rest = String::new();
+        std::io::Read::read_to_string(&mut reader, &mut rest).unwrap();
+        let exit = child.wait().unwrap();
+        assert_eq!(exit.code(), Some(0), "{signal}: {exit:?}");
+        assert_eq!(rest.lines().last(), Some("stopped"), "{signal}: {rest}");
+        assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(), "{signal}: the port is free");
+        drop(child.stdin.take());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[test]
 fn the_executable_checks_and_runs_a_bench_file() {
     let exe = env!("CARGO_BIN_EXE_veredas-maquinar");
     let dir = scratch("exe");
@@ -868,7 +908,7 @@ fn the_executable_checks_and_runs_a_bench_file() {
     assert!(String::from_utf8_lossy(&out.stderr).starts_with(&format!("{}: the bench file: read ", dir.join("missing.toml").display())));
     // No file, or an unknown option: exit 1 with the usage.
     let out = Command::new(exe).output().unwrap();
-    assert_eq!((out.status.code(), String::from_utf8_lossy(&out.stderr).trim()), (Some(1), "usage: veredas-maquinar <bench.toml> [--check]"));
+    assert_eq!((out.status.code(), String::from_utf8_lossy(&out.stderr).trim()), (Some(1), "usage: veredas-maquinar <bench.toml> [--check] | --version"));
     let out = Command::new(exe).arg(&path).arg("--nope").output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     // A run: every part's status line once a second, until stdin says stop.
