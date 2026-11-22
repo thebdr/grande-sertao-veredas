@@ -1,14 +1,15 @@
 # The bench file: `veredas-bench`, version 1
 
 A bench is the plant a consumer meets before the real one (`docs/veredas-plan.md`,
-"veredas-maquinar: the bench"): the log emitters, the OPC UA and Modbus servers and the telegram
-channels it talks to, each configured, none programmed. One bench file lists them all by name, and the
+"veredas-maquinar: the bench"): the log emitters, the OPC UA, Modbus and EtherNet/IP servers and
+the telegram channels it talks to, each configured, none programmed. One bench file lists them all by name, and the
 device's own files sit beside it: core's channel file (`docs/channel-schema.md`), the catalog
 (`docs/catalog-schema.md`) and, when a controller rides a channel, its rules file
 (`docs/controller-schema.md`). `veredas_maquinar::bench::load` reads the bench file and every
 file it points at and checks each part as its own module checks it, so a bench file that loads
 is a bench every part of which can start; `Bench::start` then runs every part behind one handle,
-emitters first, then servers (OPC UA, then Modbus), then channels, each kind in the file's order
+emitters first, then servers (OPC UA, then Modbus, then EtherNet/IP), then channels, each kind in
+the file's order
 (TOML groups a kind's tables under one key, so a file keeps no order across kinds), and the executable
 `veredas-maquinar <bench.toml>` runs it from the command line (`--check` reads, checks and
 prints the plan without starting anything). No device is named anywhere: a
@@ -97,6 +98,33 @@ points = [
 ]
 ```
 
+## A third example: an I/O block on EtherNet/IP
+
+An I/O block answers on the standard ports: a scanner opens a Class 1 connection naming its
+configuration, output and input assemblies, writes a start bit at its RPI, and reads back a ready
+bit and a speed the plant side sets. `crates/veredas-maquinar/tests/ethernetip_adapter.rs` loads this
+block on ports the machine chooses, opens the connection with codecs the bench did not write, and
+sees the plant side meet it.
+
+```toml
+format = "veredas-bench"
+version = 1
+
+[[ethernetip]]
+name = "remote-io"
+bind = "127.0.0.1"
+port = 44818
+io_port = 2222
+identity = { product_name = "bench remote io" }
+assemblies = [ { instance = 100, size = 4 }, { instance = 150, size = 2 }, { instance = 151, size = 0 } ]
+connections = [ { config = 151, output = 150, input = 100 } ]
+points = [
+  { name = "start", assembly = 150, byte = 0, bit = 0 },
+  { name = "ready", assembly = 100, byte = 0, bit = 0 },
+  { name = "speed", assembly = 100, byte = 2, type = "u16" },
+]
+```
+
 ## Keys
 
 Each key states in parentheses that it is required, or the value it takes when left out. Every
@@ -114,6 +142,7 @@ relative to the bench file's folder.
 - `emitter` (none): `[[emitter]]` tables.
 - `opc` (none): `[[opc]]` tables.
 - `modbus` (none): `[[modbus]]` tables.
+- `ethernetip` (none): `[[ethernetip]]` tables.
 - `channel` (none): `[[channel]]` tables.
 
 **An emitter** (`[[emitter]]`): a log a plant would write, line by line into rotating files.
@@ -223,6 +252,55 @@ share an address.
   none. A register's own two bytes are always high byte first, as the protocol sends them.
 - `value` (the type's zero): the initial value as text, parsed per the type.
 
+**An EtherNet/IP adapter** (`[[ethernetip]]`): a device's assemblies over EtherNet/IP, explicit
+messages on a TCP session and Class 1 cyclic I/O over UDP.
+- `name` (required): the part's name.
+- `bind` (`"127.0.0.1"`): the address the adapter listens on.
+- `port` (`44818`): the encapsulation port, TCP for sessions and UDP for a ListIdentity; `0` lets
+  the machine choose, the same port for both.
+- `io_port` (`2222`): the Class 1 port, UDP; `0` lets the machine choose, the port then given in
+  every Forward_Open's reply.
+- `identity` (the defaults below): what ListIdentity and the Identity object report.
+- `rpi_min_us` (`1000`), `rpi_max_us` (`10000000`): the RPIs accepted, in microseconds.
+- `max_sessions` (none): the most sessions registered at once.
+- `max_connections` (none): the most Class 1 connections open at once.
+- `assemblies` (none): the assemblies, as inline tables.
+- `connections` (none): the Class 1 connections the adapter accepts, as inline tables.
+- `points` (none): named values in the assemblies, as inline tables.
+
+**An identity** (the value of `identity`).
+- `vendor_id` (`0`), `device_type` (`12`), `product_code` (`0`): the Identity object's first three
+  attributes, 12 a communications adapter.
+- `revision` (`"1.1"`): `major.minor`, the major 1 to 127, the minor 1 to 255.
+- `serial` (`0`): the serial number.
+- `product_name` (`"veredas bench adapter"`): at most 32 ASCII characters.
+
+**An assembly** (an entry of `assemblies`): an instance of the Assembly object, its data a run of
+bytes, zeros at the start.
+- `instance` (required): 1 to 65535, no two alike.
+- `size` (required): its bytes, at most 65000.
+
+**A connection** (an entry of `connections`): a Class 1 connection the adapter accepts, by the
+three assemblies its Forward_Open's path names; the size each direction states counts the data,
+the 16-bit sequence count, and the run/idle header when the direction carries one.
+- `config` (required): the configuration assembly, named first; a Forward_Open's data segment is
+  written into it.
+- `output` (required): the assembly the adapter consumes (the originator's outputs, O→T).
+- `input` (required): the assembly the adapter produces (the originator's inputs, T→O).
+- `output_header` (`"run-idle"`): what the consumed data carries before its bytes: `run-idle` (a
+  32-bit run/idle header) or `modeless`.
+- `input_header` (`"modeless"`): the same for the produced data.
+
+**An assembly point** (an entry of `points` of an adapter): a named value in an assembly's bytes,
+little-endian as CIP carries it; no two points of an assembly share a byte, unless both are bools
+on different bits.
+- `name` (required): the name the bench's handle reads and sets it by.
+- `assembly` (required): the assembly's instance.
+- `byte` (required): the offset of its first byte.
+- `bit` (none): a bool's bit, 0 to 7; a bool names one and no other type takes one.
+- `type` (`bool` with a bit, `u8` without): `bool`, `u8`, `i8`, `u16`, `i16`, `u32`, `i32` or `f32`.
+- `value` (the type's zero): the initial value as text, parsed per the type.
+
 **A channel** (`[[channel]]`): one telegram link, listening or dialling.
 - `name` (required): the part's name.
 - `role` (required): `listen` (wait for the peer to connect) or `connect` (dial it).
@@ -246,8 +324,10 @@ interval, or on demand.
 A misspelled key in any table, a part without a name or with a name another part has, an
 emitter's file name or timestamp format that is bad, a value's range that is empty or not
 finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past
-its table's end, a type its table cannot hold, a value that does not parse), a file a channel
-points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that
+its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP
+adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past
+its assembly's bytes or over another), a file a channel points at that cannot be read or does not
+load, an `id_field` that does not ride in the framing, a controller file that
 does not load against the catalog, a message the catalog lacks or whose fields leave a name
 unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the
 place named, before anything binds, opens or spawns. A part that cannot start (a port taken, a

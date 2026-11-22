@@ -13,6 +13,7 @@ use veredas_core::telegram::Role;
 use veredas_maquinar::bench::*;
 use veredas_maquinar::channel::CyclicMessage;
 use veredas_maquinar::emit::{Encoding, ValueField};
+use veredas_maquinar::ethernetip::{AssemblyConfig, ConnectionConfig, DataHeader, EnipConfig, Identity, PointConfig as EnipPoint, PointType as EnipType};
 use veredas_maquinar::modbus::{ModbusConfig, PointConfig, PointType, Table, WordOrder};
 use veredas_maquinar::opc::{Access, Credentials, Ramp, Randomize, Reaction, Step, TagConfig, TagType};
 
@@ -234,6 +235,12 @@ fn full_file(port: u16) -> String {
          reactions = [ {{ on_write = \"t\", equals = \"5\", tag = \"t\", then = [ {{ after_ms = 1, set = \"6\" }} ] }} ]\n\n\
          [[modbus]]\nname = \"m\"\nbind = \"127.0.0.2\"\nport = 0\nunit = 1\nmax_connections = 2\ncoils = 4\ndiscrete_inputs = 5\ninput_registers = 6\nholding_registers = 7\n\
          points = [ {{ name = \"p\", table = \"holding-register\", address = 0, type = \"u32\", words = \"low-first\", value = \"1\" }} ]\n\n\
+         [[ethernetip]]\nname = \"x\"\nbind = \"127.0.0.3\"\nport = 0\nio_port = 0\n\
+         identity = {{ vendor_id = 1, device_type = 2, product_code = 3, revision = \"4.5\", serial = 6, product_name = \"n\" }}\n\
+         rpi_min_us = 2000\nrpi_max_us = 3000000\nmax_sessions = 2\nmax_connections = 3\n\
+         assemblies = [ {{ instance = 100, size = 4 }}, {{ instance = 150, size = 2 }}, {{ instance = 151, size = 1 }} ]\n\
+         connections = [ {{ config = 151, output = 150, input = 100, output_header = \"modeless\", input_header = \"run-idle\" }} ]\n\
+         points = [ {{ name = \"q\", assembly = 100, byte = 0, bit = 1, type = \"bool\", value = \"true\" }} ]\n\n\
          [[channel]]\nname = \"c\"\nrole = \"listen\"\nhost = \"127.0.0.1\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\ncontroller = \"machine.toml\"\n\
          messages = [ {{ message = \"status\", every_ms = 100, fields = [ {{ name = \"running\", value = 1 }}, {{ name = \"speed\", value = 1 }} ] }} ]\n",
         header()
@@ -295,8 +302,11 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
     let tables: Vec<&str> = documented.iter().map(|(t, _)| t.as_str()).collect();
     assert_eq!(
         tables,
-        ["The top level", "An emitter", "A value", "An OPC UA server", "A user", "A tag", "A draw", "A ramp", "A reaction", "A step", "A Modbus server", "A point", "A channel", "A message"],
-        "the reference's fourteen tables"
+        [
+            "The top level", "An emitter", "A value", "An OPC UA server", "A user", "A tag", "A draw", "A ramp", "A reaction", "A step", "A Modbus server", "A point",
+            "An EtherNet/IP adapter", "An identity", "An assembly", "A connection", "An assembly point", "A channel", "A message"
+        ],
+        "the reference's nineteen tables"
     );
     let dir = scratch("walk");
     let (_, port) = plant(&dir);
@@ -308,6 +318,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             "An emitter" => "[[emitter]]",
             "An OPC UA server" => "[[opc]]",
             "A Modbus server" => "[[modbus]]",
+            "An EtherNet/IP adapter" => "[[ethernetip]]",
             "A channel" => "[[channel]]",
             _ => return None,
         })
@@ -322,6 +333,10 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             "A reaction" => "on_write = \"t\"\nequals = \"5\"\ntag = \"t\"\nthen = [ { set = \"6\" } ]\n",
             "A step" => "after_ms = 1\nset = \"6\"\n",
             "A point" => "name = \"p\"\ntable = \"holding-register\"\naddress = 0\ntype = \"u32\"\nwords = \"low-first\"\nvalue = \"1\"\n",
+            "An identity" => "vendor_id = 1\ndevice_type = 2\nproduct_code = 3\nrevision = \"4.5\"\nserial = 6\nproduct_name = \"n\"\n",
+            "An assembly" => "instance = 100\nsize = 4\n",
+            "A connection" => "config = 151\noutput = 150\ninput = 100\noutput_header = \"modeless\"\ninput_header = \"run-idle\"\n",
+            "An assembly point" => "name = \"q\"\nassembly = 100\nbyte = 0\nbit = 1\ntype = \"bool\"\nvalue = \"true\"\n",
             "A message" => "message = \"status\"\nevery_ms = 100\nfields = [ { name = \"running\", value = 1 } ]\n",
             other => panic!("{other}"),
         }
@@ -339,6 +354,11 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             "An emitter" => full.replace("[[emitter]]\n", &format!("[[emitter]]\n{zz}")),
             "An OPC UA server" => full.replace("[[opc]]\n", &format!("[[opc]]\n{zz}")),
             "A Modbus server" => full.replace("[[modbus]]\n", &format!("[[modbus]]\n{zz}")),
+            "An EtherNet/IP adapter" => full.replace("[[ethernetip]]\n", &format!("[[ethernetip]]\n{zz}")),
+            "An identity" => full.replace("identity = { vendor_id = 1,", "identity = { vendor_id = 1, zz = 1,"),
+            "An assembly" => full.replace("{ instance = 100, size = 4 }", "{ instance = 100, zz = 1, size = 4 }"),
+            "A connection" => full.replace("{ config = 151,", "{ config = 151, zz = 1,"),
+            "An assembly point" => full.replace("{ name = \"q\",", "{ name = \"q\", zz = 1,"),
             "A channel" => full.replace("[[channel]]\n", &format!("[[channel]]\n{zz}")),
             "A value" => full.replace("{ name = \"v\",", "{ name = \"v\", zz = 1,"),
             "A user" => full.replace("{ name = \"u\",", "{ name = \"u\", zz = 1,"),
@@ -371,6 +391,11 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                     ("The top level", "emitter") => without_sections(&full, &["[[emitter]]"]),
                     ("The top level", "opc") => without_sections(&full, &["[[opc]]"]),
                     ("The top level", "modbus") => without_sections(&full, &["[[modbus]]"]),
+                    ("The top level", "ethernetip") => without_sections(&full, &["[[ethernetip]]"]),
+                    // Connections and points name the assemblies.
+                    ("An EtherNet/IP adapter", "assemblies") => {
+                        without_line(&without_line(&without_line(&full, "[[ethernetip]]", "assemblies"), "[[ethernetip]]", "connections"), "[[ethernetip]]", "points")
+                    }
                     ("The top level", "channel") => without_sections(&full, &["[[channel]]"]),
                     // A reaction needs its tags.
                     ("An OPC UA server", "tags") => without_line(&without_line(&full, "[[opc]]", "tags"), "[[opc]]", "reactions"),
@@ -393,6 +418,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                     ("The top level", "emitter") => assert!(default == "none" && spec.emitters.is_empty()),
                     ("The top level", "opc") => assert!(default == "none" && spec.servers.is_empty()),
                     ("The top level", "modbus") => assert!(default == "none" && spec.modbus.is_empty()),
+                    ("The top level", "ethernetip") => assert!(default == "none" && spec.ethernetip.is_empty()),
                     ("The top level", "channel") => assert!(default == "none" && spec.channels.is_empty()),
                     ("An emitter", "values") => assert!(default == "none" && spec.emitters[0].values.is_empty()),
                     ("An emitter", "max_lines") => assert_eq!((default.as_str(), spec.emitters[0].max_lines), ("0", 0)),
@@ -414,6 +440,17 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                     ("A Modbus server", "input_registers") => assert!(default == "none" && spec.modbus[0].1.input_registers.is_none()),
                     ("A Modbus server", "holding_registers") => assert!(default == "none" && spec.modbus[0].1.holding_registers.is_none()),
                     ("A Modbus server", "points") => assert!(default == "none" && spec.modbus[0].1.points.is_empty()),
+                    ("An EtherNet/IP adapter", "bind") => assert_eq!((default.as_str(), spec.ethernetip[0].1.bind.as_str()), ("\"127.0.0.1\"", "127.0.0.1")),
+                    ("An EtherNet/IP adapter", "port") => assert_eq!((default.as_str(), spec.ethernetip[0].1.port), ("44818", 44818)),
+                    ("An EtherNet/IP adapter", "io_port") => assert_eq!((default.as_str(), spec.ethernetip[0].1.io_port), ("2222", 2222)),
+                    ("An EtherNet/IP adapter", "identity") => assert!(default == "the defaults below" && spec.ethernetip[0].1.identity == Identity::default()),
+                    ("An EtherNet/IP adapter", "rpi_min_us") => assert_eq!((default.as_str(), spec.ethernetip[0].1.rpi_min_us), ("1000", 1000)),
+                    ("An EtherNet/IP adapter", "rpi_max_us") => assert_eq!((default.as_str(), spec.ethernetip[0].1.rpi_max_us), ("10000000", 10_000_000)),
+                    ("An EtherNet/IP adapter", "max_sessions") => assert!(default == "none" && spec.ethernetip[0].1.max_sessions.is_none()),
+                    ("An EtherNet/IP adapter", "max_connections") => assert!(default == "none" && spec.ethernetip[0].1.max_connections.is_none()),
+                    ("An EtherNet/IP adapter", "assemblies") => assert!(default == "none" && spec.ethernetip[0].1.assemblies.is_empty()),
+                    ("An EtherNet/IP adapter", "connections") => assert!(default == "none" && spec.ethernetip[0].1.connections.is_empty()),
+                    ("An EtherNet/IP adapter", "points") => assert!(default == "none" && spec.ethernetip[0].1.points.is_empty()),
                     ("A channel", "host") => assert_eq!((default.as_str(), &spec.channels[0].role), ("\"127.0.0.1\"", &Role::Listen { bind: "127.0.0.1".into(), port })),
                     ("A channel", "controller") => assert!(default == "none" && spec.channels[0].controller.is_none()),
                     ("A channel", "messages") => assert!(default == "none" && spec.channels[0].messages.is_empty()),
@@ -462,6 +499,21 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                 ("A point", "words") => check!(PointConfig, |p| default == "\"high-first\"" && p.words.is_none()),
                 ("A point", "value") => check!(PointConfig, |p| default == "the type's zero" && p.value.is_empty()),
                 ("A point", _) => check!(PointConfig, |_| false),
+                ("An identity", "vendor_id") => check!(Identity, |i| default == "0" && i.vendor_id == 0),
+                ("An identity", "device_type") => check!(Identity, |i| default == "12" && i.device_type == 12),
+                ("An identity", "product_code") => check!(Identity, |i| default == "0" && i.product_code == 0),
+                ("An identity", "revision") => check!(Identity, |i| default == "\"1.1\"" && i.revision == "1.1"),
+                ("An identity", "serial") => check!(Identity, |i| default == "0" && i.serial == 0),
+                ("An identity", "product_name") => check!(Identity, |i| default == "\"veredas bench adapter\"" && i.product_name == "veredas bench adapter"),
+                ("An identity", _) => check!(Identity, |_| false),
+                ("An assembly", _) => check!(AssemblyConfig, |_| false),
+                ("A connection", "output_header") => check!(ConnectionConfig, |c| default == "\"run-idle\"" && c.output_header.is_none()),
+                ("A connection", "input_header") => check!(ConnectionConfig, |c| default == "\"modeless\"" && c.input_header.is_none()),
+                ("A connection", _) => check!(ConnectionConfig, |_| false),
+                ("An assembly point", "bit") => check!(EnipPoint, |p| default == "none" && p.bit.is_none()),
+                ("An assembly point", "type") => check!(EnipPoint, |p| default == "bool` with a bit, `u8` without" && p.ty.is_none()),
+                ("An assembly point", "value") => check!(EnipPoint, |p| default == "the type's zero" && p.value.is_empty()),
+                ("An assembly point", _) => check!(EnipPoint, |_| false),
                 ("A message", "every_ms") => check!(CyclicMessage, |m| default == "0" && m.every_ms == 0),
                 ("A message", "fields") => check!(CyclicMessage, |m| default == "none" && m.fields.is_empty()),
                 ("A message", _) => check!(CyclicMessage, |_| false),
@@ -498,6 +550,33 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
     assert!(prose.contains("`words` (`\"high-first\"`): which of a two-register point's registers holds the high word, `high-first` (the one at its address) or `low-first`;"));
     assert_eq!(variants(toml::from_str::<PointConfig>(&point("table = \"coil\"\nwords = \"x\"")).unwrap_err().to_string()), ["high-first", "low-first"]);
     assert_eq!(toml::from_str::<PointConfig>(&point("table = \"coil\"\nwords = \"low-first\"")).unwrap().words, Some(WordOrder::LowFirst));
+    // Every key of an EtherNet/IP adapter reaches its configuration, each with a value of its own.
+    let x = load(&full, &dir).unwrap();
+    assert_eq!(x.ethernetip[0].0, "x");
+    assert_eq!(
+        x.ethernetip[0].1,
+        EnipConfig {
+            bind: "127.0.0.3".into(),
+            port: 0,
+            io_port: 0,
+            identity: Identity { vendor_id: 1, device_type: 2, product_code: 3, revision: "4.5".into(), serial: 6, product_name: "n".into() },
+            rpi_min_us: 2000,
+            rpi_max_us: 3_000_000,
+            max_sessions: Some(2),
+            max_connections: Some(3),
+            assemblies: vec![AssemblyConfig { instance: 100, size: 4 }, AssemblyConfig { instance: 150, size: 2 }, AssemblyConfig { instance: 151, size: 1 }],
+            connections: vec![ConnectionConfig { config: 151, output: 150, input: 100, output_header: Some(DataHeader::Modeless), input_header: Some(DataHeader::RunIdle) }],
+            points: vec![EnipPoint { name: "q".into(), assembly: 100, byte: 0, bit: Some(1), ty: Some(EnipType::Bool), value: "true".into() }],
+        }
+    );
+    let conn = |rest: &str| format!("config = 1\noutput = 2\ninput = 3\n{rest}");
+    assert!(prose.contains("`output_header` (`\"run-idle\"`): what the consumed data carries before its bytes: `run-idle` (a 32-bit run/idle header) or `modeless`."));
+    assert_eq!(variants(toml::from_str::<ConnectionConfig>(&conn("output_header = \"x\"")).unwrap_err().to_string()), ["modeless", "run-idle"]);
+    assert!(prose.contains("`type` (`bool` with a bit, `u8` without): `bool`, `u8`, `i8`, `u16`, `i16`, `u32`, `i32` or `f32`."));
+    assert_eq!(
+        variants(toml::from_str::<EnipPoint>("name = \"q\"\nassembly = 1\nbyte = 0\ntype = \"x\"").unwrap_err().to_string()),
+        ["bool", "f32", "i16", "i32", "i8", "u16", "u32", "u8"]
+    );
     // Every key of a Modbus server reaches its configuration, each with a value of its own.
     let m = load(&full, &dir).unwrap();
     assert_eq!(m.modbus[0].0, "m");
@@ -575,6 +654,15 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     );
     assert_eq!(refused(&format!("{h}[[opc]]\nname = \"s\"\nbind = \" \"\n"), &dir), "opc[0] (`s`): opc.bind is empty");
     assert_eq!(refused(&emitter("[[modbus]]\nname = \"e\"\n"), &dir), "modbus[0]: `e` is already the name of the emitter `e`");
+    assert_eq!(refused(&emitter("[[ethernetip]]\nname = \"e\"\n"), &dir), "ethernetip[0]: `e` is already the name of the emitter `e`");
+    assert_eq!(
+        refused(&format!("{h}[[ethernetip]]\nname = \"x\"\nassemblies = [ {{ instance = 5, size = 1 }}, {{ instance = 5, size = 2 }} ]\n"), &dir),
+        "ethernetip[0] (`x`): ethernetip.assemblies[1]: instance 5 is declared twice"
+    );
+    assert_eq!(
+        refused(&format!("{h}[[ethernetip]]\nname = \"x\"\nassemblies = [ {{ instance = 5, size = 1 }} ]\npoints = [ {{ name = \"p\", assembly = 5, byte = 1 }} ]\n"), &dir),
+        "ethernetip[0] (`x`): ethernetip.points[0] (`p`): a u8 at byte 1 runs past assembly 5's 1 byte(s)"
+    );
     assert_eq!(
         refused(&format!("{h}[[modbus]]\nname = \"m\"\npoints = [ {{ name = \"a\", table = \"coil\", address = 0, type = \"u16\" }} ]\n"), &dir),
         "modbus[0] (`m`): modbus.points[0] (`a`): a coil holds a bool, not u16"
@@ -614,7 +702,7 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     );
     // The closing paragraph says so.
     let prose = doc_prose();
-    assert!(prose.contains("A misspelled key in any table, a part without a name or with a name another part has, an emitter's file name or timestamp format that is bad, a value's range that is empty or not finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past its table's end, a type its table cannot hold, a value that does not parse), a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that does not load against the catalog, a message the catalog lacks or whose fields leave a name unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the place named, before anything binds, opens or spawns."));
+    assert!(prose.contains("A misspelled key in any table, a part without a name or with a name another part has, an emitter's file name or timestamp format that is bad, a value's range that is empty or not finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past its assembly's bytes or over another), a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that does not load against the catalog, a message the catalog lacks or whose fields leave a name unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the place named, before anything binds, opens or spawns."));
     // A part that cannot start: a server on a taken port, named; the emitter before it stopped.
     assert!(prose.contains("A part that cannot start (a port taken, a folder that cannot be created) stops the parts started before it and is named."));
     let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -648,6 +736,13 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     let spec = load(&format!("{h}[[modbus]]\nname = \"m\"\nport = {taken2}\n\n[[opc]]\nname = \"o\"\nport = {taken}\n"), &dir).unwrap();
     let err = start_err(spec);
     assert!(err.starts_with(&format!("opc `o`: bind 127.0.0.1:{taken}: ")), "{err}");
+    // Modbus servers before EtherNet/IP adapters, whatever the file's order.
+    let spec = load(&format!("{h}[[ethernetip]]\nname = \"x\"\nport = {taken}\nio_port = 0\n\n[[modbus]]\nname = \"m\"\nport = {taken2}\n"), &dir).unwrap();
+    let err = start_err(spec);
+    assert!(err.starts_with(&format!("modbus `m`: bind 127.0.0.1:{taken2}: ")), "{err}");
+    let spec = load(&format!("{h}[[ethernetip]]\nname = \"x\"\nport = {taken}\nio_port = 0\n"), &dir).unwrap();
+    let err = start_err(spec);
+    assert!(err.starts_with(&format!("ethernetip `x`: bind 127.0.0.1:{taken} (tcp): ")), "{err}");
     // Servers start before channels: a channel that would dial the test's own socket never
     // dials when a server before it fails.
     let ear = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -681,18 +776,18 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
 
 #[test]
 fn the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order() {
-    assert!(doc_prose().contains("emitters first, then servers (OPC UA, then Modbus), then channels, each kind in the file's order (TOML groups a kind's tables under one key, so a file keeps no order across kinds)"));
+    assert!(doc_prose().contains("emitters first, then servers (OPC UA, then Modbus, then EtherNet/IP), then channels, each kind in the file's order (TOML groups a kind's tables under one key, so a file keeps no order across kinds)"));
     let dir = scratch("order");
     let (_, port) = plant(&dir);
     let text = format!(
-        "{}[[modbus]]\nname = \"sixth\"\nport = 0\n\n[[opc]]\nname = \"first\"\nport = 0\n\n[[channel]]\nname = \"second\"\nrole = \"listen\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n\n[[emitter]]\nname = \"third\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 100\nfile = \"t.log\"\n\n[[emitter]]\nname = \"fourth\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 100\nfile = \"f.log\"\n\n[[opc]]\nname = \"fifth\"\nport = 0\n\n[[modbus]]\nname = \"seventh\"\nport = 0\n",
+        "{}[[modbus]]\nname = \"sixth\"\nport = 0\n\n[[opc]]\nname = \"first\"\nport = 0\n\n[[channel]]\nname = \"second\"\nrole = \"listen\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n\n[[emitter]]\nname = \"third\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 100\nfile = \"t.log\"\n\n[[emitter]]\nname = \"fourth\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 100\nfile = \"f.log\"\n\n[[opc]]\nname = \"fifth\"\nport = 0\n\n[[modbus]]\nname = \"seventh\"\nport = 0\n\n[[ethernetip]]\nname = \"eighth\"\nport = 0\nio_port = 0\n",
         header()
     );
     let spec = load(&text, &dir).unwrap();
     let order = |lines: &[String]| lines.iter().map(|l| l.split('`').nth(1).unwrap_or("").to_string()).collect::<Vec<_>>();
-    assert_eq!(order(&spec.plan()), ["third", "fourth", "first", "fifth", "sixth", "seventh", "second"]);
+    assert_eq!(order(&spec.plan()), ["third", "fourth", "first", "fifth", "sixth", "seventh", "eighth", "second"]);
     let bench = Bench::start(spec).unwrap();
-    assert_eq!(bench.status().iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(), ["third", "fourth", "first", "fifth", "sixth", "seventh", "second"]);
+    assert_eq!(bench.status().iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(), ["third", "fourth", "first", "fifth", "sixth", "seventh", "eighth", "second"]);
     // A Modbus server by name: the one named, none for a name no part has.
     assert!(bench.modbus("nope").is_none() && bench.modbus("first").is_none());
     let line_of = |name: &str| bench.lines().into_iter().find(|l| l.starts_with(&format!("modbus {name}: "))).unwrap();
@@ -701,7 +796,12 @@ fn the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_th
         assert!(line_of(name).starts_with(&format!("modbus {name}: {addr} ")), "{}", line_of(name));
     }
     assert_ne!(bench.modbus("sixth").unwrap().addr, bench.modbus("seventh").unwrap().addr);
-    assert_eq!(bench.lines().iter().map(|l| l.split(' ').nth(1).unwrap().trim_end_matches(':').to_string()).collect::<Vec<_>>(), ["third", "fourth", "first", "fifth", "sixth", "seventh", "second"]);
+    // An EtherNet/IP adapter by name, its line carrying the addresses it got.
+    assert!(bench.ethernetip("nope").is_none() && bench.ethernetip("seventh").is_none());
+    let eighth = bench.ethernetip("eighth").unwrap();
+    let line = bench.lines().into_iter().find(|l| l.starts_with("ethernetip eighth: ")).unwrap();
+    assert!(line.starts_with(&format!("ethernetip eighth: {} (class 1 on {}) 0 session(s), 0 connection(s) open", eighth.addr, eighth.io_addr)), "{line}");
+    assert_eq!(bench.lines().iter().map(|l| l.split(' ').nth(1).unwrap().trim_end_matches(':').to_string()).collect::<Vec<_>>(), ["third", "fourth", "first", "fifth", "sixth", "seventh", "eighth", "second"]);
     bench.stop();
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -989,14 +1089,15 @@ const REFERENCE: &str = r#"
 # The bench file: `veredas-bench`, version 1
 
 A bench is the plant a consumer meets before the real one (`docs/veredas-plan.md`,
-"veredas-maquinar: the bench"): the log emitters, the OPC UA and Modbus servers and the telegram
-channels it talks to, each configured, none programmed. One bench file lists them all by name, and the
+"veredas-maquinar: the bench"): the log emitters, the OPC UA, Modbus and EtherNet/IP servers and
+the telegram channels it talks to, each configured, none programmed. One bench file lists them all by name, and the
 device's own files sit beside it: core's channel file (`docs/channel-schema.md`), the catalog
 (`docs/catalog-schema.md`) and, when a controller rides a channel, its rules file
 (`docs/controller-schema.md`). `veredas_maquinar::bench::load` reads the bench file and every
 file it points at and checks each part as its own module checks it, so a bench file that loads
 is a bench every part of which can start; `Bench::start` then runs every part behind one handle,
-emitters first, then servers (OPC UA, then Modbus), then channels, each kind in the file's order
+emitters first, then servers (OPC UA, then Modbus, then EtherNet/IP), then channels, each kind in
+the file's order
 (TOML groups a kind's tables under one key, so a file keeps no order across kinds), and the executable
 `veredas-maquinar <bench.toml>` runs it from the command line (`--check` reads, checks and
 prints the plan without starting anything). No device is named anywhere: a
@@ -1028,6 +1129,14 @@ a port the machine chooses, drives it with a Modbus client the bench did not wri
 plant side meet it.
 
 
+## A third example: an I/O block on EtherNet/IP
+
+An I/O block answers on the standard ports: a scanner opens a Class 1 connection naming its
+configuration, output and input assemblies, writes a start bit at its RPI, and reads back a ready
+bit and a speed the plant side sets. `crates/veredas-maquinar/tests/ethernetip_adapter.rs` loads this
+block on ports the machine chooses, opens the connection with codecs the bench did not write, and
+sees the plant side meet it.
+
 ## Keys
 
 Each key states in parentheses that it is required, or the value it takes when left out. Every
@@ -1045,6 +1154,7 @@ relative to the bench file's folder.
 - `emitter` (none): `[[emitter]]` tables.
 - `opc` (none): `[[opc]]` tables.
 - `modbus` (none): `[[modbus]]` tables.
+- `ethernetip` (none): `[[ethernetip]]` tables.
 - `channel` (none): `[[channel]]` tables.
 
 **An emitter** (`[[emitter]]`): a log a plant would write, line by line into rotating files.
@@ -1154,6 +1264,55 @@ share an address.
   none. A register's own two bytes are always high byte first, as the protocol sends them.
 - `value` (the type's zero): the initial value as text, parsed per the type.
 
+**An EtherNet/IP adapter** (`[[ethernetip]]`): a device's assemblies over EtherNet/IP, explicit
+messages on a TCP session and Class 1 cyclic I/O over UDP.
+- `name` (required): the part's name.
+- `bind` (`"127.0.0.1"`): the address the adapter listens on.
+- `port` (`44818`): the encapsulation port, TCP for sessions and UDP for a ListIdentity; `0` lets
+  the machine choose, the same port for both.
+- `io_port` (`2222`): the Class 1 port, UDP; `0` lets the machine choose, the port then given in
+  every Forward_Open's reply.
+- `identity` (the defaults below): what ListIdentity and the Identity object report.
+- `rpi_min_us` (`1000`), `rpi_max_us` (`10000000`): the RPIs accepted, in microseconds.
+- `max_sessions` (none): the most sessions registered at once.
+- `max_connections` (none): the most Class 1 connections open at once.
+- `assemblies` (none): the assemblies, as inline tables.
+- `connections` (none): the Class 1 connections the adapter accepts, as inline tables.
+- `points` (none): named values in the assemblies, as inline tables.
+
+**An identity** (the value of `identity`).
+- `vendor_id` (`0`), `device_type` (`12`), `product_code` (`0`): the Identity object's first three
+  attributes, 12 a communications adapter.
+- `revision` (`"1.1"`): `major.minor`, the major 1 to 127, the minor 1 to 255.
+- `serial` (`0`): the serial number.
+- `product_name` (`"veredas bench adapter"`): at most 32 ASCII characters.
+
+**An assembly** (an entry of `assemblies`): an instance of the Assembly object, its data a run of
+bytes, zeros at the start.
+- `instance` (required): 1 to 65535, no two alike.
+- `size` (required): its bytes, at most 65000.
+
+**A connection** (an entry of `connections`): a Class 1 connection the adapter accepts, by the
+three assemblies its Forward_Open's path names; the size each direction states counts the data,
+the 16-bit sequence count, and the run/idle header when the direction carries one.
+- `config` (required): the configuration assembly, named first; a Forward_Open's data segment is
+  written into it.
+- `output` (required): the assembly the adapter consumes (the originator's outputs, O→T).
+- `input` (required): the assembly the adapter produces (the originator's inputs, T→O).
+- `output_header` (`"run-idle"`): what the consumed data carries before its bytes: `run-idle` (a
+  32-bit run/idle header) or `modeless`.
+- `input_header` (`"modeless"`): the same for the produced data.
+
+**An assembly point** (an entry of `points` of an adapter): a named value in an assembly's bytes,
+little-endian as CIP carries it; no two points of an assembly share a byte, unless both are bools
+on different bits.
+- `name` (required): the name the bench's handle reads and sets it by.
+- `assembly` (required): the assembly's instance.
+- `byte` (required): the offset of its first byte.
+- `bit` (none): a bool's bit, 0 to 7; a bool names one and no other type takes one.
+- `type` (`bool` with a bit, `u8` without): `bool`, `u8`, `i8`, `u16`, `i16`, `u32`, `i32` or `f32`.
+- `value` (the type's zero): the initial value as text, parsed per the type.
+
 **A channel** (`[[channel]]`): one telegram link, listening or dialling.
 - `name` (required): the part's name.
 - `role` (required): `listen` (wait for the peer to connect) or `connect` (dial it).
@@ -1177,8 +1336,10 @@ interval, or on demand.
 A misspelled key in any table, a part without a name or with a name another part has, an
 emitter's file name or timestamp format that is bad, a value's range that is empty or not
 finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past
-its table's end, a type its table cannot hold, a value that does not parse), a file a channel
-points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that
+its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP
+adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past
+its assembly's bytes or over another), a file a channel points at that cannot be read or does not
+load, an `id_field` that does not ride in the framing, a controller file that
 does not load against the catalog, a message the catalog lacks or whose fields leave a name
 unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the
 place named, before anything binds, opens or spawns. A part that cannot start (a port taken, a

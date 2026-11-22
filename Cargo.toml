@@ -110,6 +110,13 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 # A Modbus/TCP client: core's (fieldbus::modbus) frames its requests with it, and maquinar's tests
 # read and write the bench's Modbus server with it, an implementation the bench did not write.
 tokio-modbus = { version = "0.17", default-features = false, features = ["tcp"] }
+# EtherNet/IP codecs the bench did not write (maquinar's tests): the Forward_Open and its reply, the
+# Class 1 frame, the encapsulation header and the common packet format, each an implementation of
+# its own reading and writing the bench's adapter. Pinned: a young crate (0.1).
+ethernetip-connections = "=0.1.1"
+ethernetip-core = "=0.1.1"
+# Byte buffers, as the EtherNet/IP codecs take them (maquinar's tests).
+bytes = "1"
 # Whether a drive letter is a network drive (portal's tail polls a share and never watches it).
 windows-sys = "0.59"
 chacha20poly1305 = "0.10"

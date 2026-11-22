@@ -51,6 +51,13 @@ it never runs in production, owns its sockets, and carries no store and no deskt
   exceptions, a unit it does not play answered as a gateway answers; the plant side by point and
   by address; the knobs a client's failure paths need (every answer late, none at all, every
   connection dropped, a connection limit).
+- **An EtherNet/IP adapter** (`ethernetip`, P-020's second device): an identity, assemblies by
+  instance, the Class 1 connections it accepts, points in the assemblies' bytes; the encapsulation's
+  commands on TCP (ListIdentity on UDP too), the Identity and Assembly objects, the Connection
+  Manager's Forward_Open and Forward_Close (directly or inside an Unconnected_Send) with each
+  fault's status, Class 1 cyclic I/O over UDP produced at the RPI and consumed, a silent
+  originator's connection closed at its timeout; the plant side by point or as bytes; the knobs a
+  scanner's failure paths need (production stalled, the sessions silent, the device restarted).
 - **The bench file** (`bench`): one versioned TOML file for the whole plant (emitters, the OPC
   and Modbus servers, the channels and the files each points at), started as a library (`Bench::start`,
   for portal's tests and later comissionador) or from the command line (`veredas-maquinar
@@ -138,6 +145,8 @@ veredas_maquinar
   controller  the rules file (schema), the engine (items, answers, registers, commands, cyclic,
               destinations), the pressure knobs
   modbus      the Modbus/TCP server: four tables, points, the function codes, the knobs
+  ethernetip  the EtherNet/IP adapter: its wire (encapsulation, CPF, EPATH, Forward_Open, the Class 1
+              frame), its configuration, the objects, the sessions, Class 1 I/O, the knobs
   bench       the bench file (schema), Bench::start, every part's status
   main.rs     veredas-maquinar <bench.toml> [--check]
 veredas_core (added for the bench, kept for portal)
@@ -183,6 +192,20 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
   library (`modbus::start`) from a crate the map lets use maquinar, or as the executable on a
   bench file with `port = 0`, reading the bound address from the status line it prints at start
   (`modbus <name>: 127.0.0.1:<port> ...`).
+- **The EtherNet/IP adapter** (C-111, 2026-11-22). The bench's own code again, for the reason the
+  Modbus server is: what a bench must show (each Forward_Open fault's extended status, a stray
+  frame, a silent originator's timeout, production stalled) is the adapter's own behaviour. The
+  object model is the least a scanner meets: Identity, Assembly, the Connection Manager; Class 1
+  cyclic only, point to point both ways (a multicast T→O is refused 0x0108, and is the first thing
+  to add when a consumer needs it), no connected explicit messaging (SendUnitData answered 0x0001).
+  Its proof has three readers the bench did not write: `ethernetip-connections` (its Forward_Open
+  encoder, its reply decoder, its Class 1 frame codec), `ethernetip-core` (its encapsulation and
+  common packet format), and Wireshark's dissectors (tshark, in the home folder as aranha's tests
+  find it). The young crate is not taken whole: its scanner states a connection's size without the
+  16-bit sequence count, and its socket-address item codes are swapped (its originator endpoint
+  goes out as 0x8000, the protocol's O→T item); the test drives its codecs with the protocol's sizes
+  and codes, and shows its own scanner refused 0x0127 for the sizes. Core's EtherNet/IP scanner, if
+  it forks that crate, has both to fix.
 - **Raw frames without a privilege.** The EtherCAT and PROFINET devices answer raw Ethernet
   frames, which need `CAP_NET_RAW`, and the machines here have no sudo. Checked on the Linux
   machine (2026-11-22): `unshare -Urn` (an unprivileged user namespace with its own network
@@ -196,8 +219,8 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
 The architect's decisions of 13 to 16 November 2026 that touch the bench
 (`docs/controlador-plan.md`, `docs/oficina-plan.md`); status P-020.
 - **Bench devices for all four fieldbuses**, in Rust, inside maquinar: a PROFINET device, an
-  emulated EtherCAT device answering on a raw network card, an EtherNet/IP adapter, a Modbus
-  server (built: C-110).
+  emulated EtherCAT device answering on a raw network card, an EtherNet/IP adapter (built: C-111),
+  a Modbus server (built: C-110).
 - **Two extensions inside maquinar**, called by their bare names as `acerto` is in its host:
   `fisica` (the bodies, their motion, which sensor an object reached) and `reflexo` (what makes
   simulated devices behave: ready-made models for drive, sensor, conveyor and actuator, and beyond

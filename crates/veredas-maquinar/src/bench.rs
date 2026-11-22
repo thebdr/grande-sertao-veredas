@@ -2,7 +2,8 @@
 //! (`docs/bench-schema.md`), and [`Bench::start`], which runs every part of it behind one handle.
 //!
 //! A bench file lists its parts by name: log emitters ([`crate::emit`]), OPC UA servers
-//! ([`crate::opc`]), Modbus servers ([`crate::modbus`]) and telegram channels
+//! ([`crate::opc`]), Modbus servers ([`crate::modbus`]), EtherNet/IP adapters
+//! ([`crate::ethernetip`]) and telegram channels
 //! ([`crate::channel`]), each channel pointing at the
 //! device's own files kept beside the bench file (core's channel file, the catalog, and, when a
 //! controller rides the channel, its rules file). Every referenced file is read and checked when
@@ -21,6 +22,7 @@ use veredas_core::telegram::schema::{self as channel_schema, ChannelSpec};
 use crate::channel::{self, BenchChannel, ChannelConfig, ChannelError, ChannelStatus, CyclicMessage};
 use crate::controller::{self, Fields, Place, Rules};
 use crate::emit::{self, EmitterConfig, EmitterHandle, EmitterStatus, SpawnError};
+use crate::ethernetip::{self, EnipConfig, EnipError, EnipHandle, EnipStatus};
 use crate::modbus::{self, ModbusConfig, ModbusError, ModbusHandle, ModbusStatus};
 use crate::opc::{self, OpcConfig, OpcError, OpcHandle, OpcStatus};
 
@@ -50,6 +52,8 @@ pub enum BenchError {
     Opc { name: String, source: OpcError },
     #[error("modbus `{name}`: {source}")]
     Modbus { name: String, source: ModbusError },
+    #[error("ethernetip `{name}`: {source}")]
+    Enip { name: String, source: EnipError },
     #[error("channel `{name}`: {source}")]
     Channel { name: String, source: ChannelError },
 }
@@ -75,6 +79,8 @@ struct FileV1 {
     opc: Vec<NamedOpc>,
     #[serde(default)]
     modbus: Vec<NamedModbus>,
+    #[serde(default)]
+    ethernetip: Vec<NamedEnip>,
     #[serde(default)]
     channel: Vec<ChannelFile>,
 }
@@ -169,6 +175,57 @@ impl NamedModbus {
     }
 }
 
+/// An EtherNet/IP adapter with the name the bench calls it by, the adapter's own keys beside.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NamedEnip {
+    name: String,
+    #[serde(default)]
+    bind: Option<String>,
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default)]
+    io_port: Option<u16>,
+    #[serde(default)]
+    identity: Option<ethernetip::Identity>,
+    #[serde(default)]
+    rpi_min_us: Option<u32>,
+    #[serde(default)]
+    rpi_max_us: Option<u32>,
+    #[serde(default)]
+    max_sessions: Option<usize>,
+    #[serde(default)]
+    max_connections: Option<usize>,
+    #[serde(default)]
+    assemblies: Vec<ethernetip::AssemblyConfig>,
+    #[serde(default)]
+    connections: Vec<ethernetip::ConnectionConfig>,
+    #[serde(default)]
+    points: Vec<ethernetip::PointConfig>,
+}
+
+impl NamedEnip {
+    fn adapter(self) -> (String, EnipConfig) {
+        let d = EnipConfig::default();
+        (
+            self.name,
+            EnipConfig {
+                bind: self.bind.unwrap_or(d.bind),
+                port: self.port.unwrap_or(d.port),
+                io_port: self.io_port.unwrap_or(d.io_port),
+                identity: self.identity.unwrap_or(d.identity),
+                rpi_min_us: self.rpi_min_us.unwrap_or(d.rpi_min_us),
+                rpi_max_us: self.rpi_max_us.unwrap_or(d.rpi_max_us),
+                max_sessions: self.max_sessions,
+                max_connections: self.max_connections,
+                assemblies: self.assemblies,
+                connections: self.connections,
+                points: self.points,
+            },
+        )
+    }
+}
+
 /// A channel as the bench file declares it.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -210,6 +267,7 @@ pub struct BenchSpec {
     pub emitters: Vec<EmitterConfig>,
     pub servers: Vec<(String, OpcConfig)>,
     pub modbus: Vec<(String, ModbusConfig)>,
+    pub ethernetip: Vec<(String, EnipConfig)>,
     pub channels: Vec<ChannelPart>,
 }
 
@@ -236,6 +294,17 @@ impl BenchSpec {
         for (name, m) in &self.modbus {
             let unit = m.unit.map(|u| format!("unit {u}")).unwrap_or_else(|| "every unit".into());
             out.push(format!("modbus `{name}`: {}:{} answering {unit} with {} point(s)", m.bind, m.port, m.points.len()));
+        }
+        for (name, e) in &self.ethernetip {
+            out.push(format!(
+                "ethernetip `{name}`: {}:{} (class 1 on {}) with {} assembly(ies), {} connection(s), {} point(s)",
+                e.bind,
+                e.port,
+                e.io_port,
+                e.assemblies.len(),
+                e.connections.len(),
+                e.points.len()
+            ));
         }
         for c in &self.channels {
             let role = match &c.role {
@@ -321,6 +390,14 @@ pub fn load(text: &str, base: &Path) -> Result<BenchSpec, BenchError> {
         modbus::validate(&server).map_err(|e| invalid(format!("{place} (`{server_name}`): {e}")))?;
         modbus_servers.push((server_name, server));
     }
+    let mut adapters = Vec::new();
+    for (i, e) in file.ethernetip.into_iter().enumerate() {
+        let place = format!("ethernetip[{i}]");
+        let (adapter_name, adapter) = e.adapter();
+        name("ethernetip", &place, &adapter_name)?;
+        ethernetip::validate(&adapter).map_err(|e| invalid(format!("{place} (`{adapter_name}`): {e}")))?;
+        adapters.push((adapter_name, adapter));
+    }
     let mut channels = Vec::new();
     for (i, c) in file.channel.into_iter().enumerate() {
         let place = format!("channel[{i}]");
@@ -353,7 +430,7 @@ pub fn load(text: &str, base: &Path) -> Result<BenchSpec, BenchError> {
         };
         channels.push(ChannelPart { name: c.name, role, spec, catalog, controller, messages: c.messages });
     }
-    Ok(BenchSpec { seed: file.seed, out_dir, emitters, servers, modbus: modbus_servers, channels })
+    Ok(BenchSpec { seed: file.seed, out_dir, emitters, servers, modbus: modbus_servers, ethernetip: adapters, channels })
 }
 
 /// Read and check the bench file at `path`; its referenced files are beside it.
@@ -370,6 +447,8 @@ pub enum PartStatus {
     Opc { endpoint_url: String, status: OpcStatus },
     /// Boxed: a Modbus server's status carries its last hundred exchanges.
     Modbus { addr: std::net::SocketAddr, status: Box<ModbusStatus> },
+    /// Boxed: an adapter's status carries its open connections.
+    Enip { addr: std::net::SocketAddr, io_addr: std::net::SocketAddr, status: Box<EnipStatus> },
     /// Boxed: a channel's status carries its monitor's hundred lines.
     Channel(Box<ChannelStatus>),
 }
@@ -379,12 +458,13 @@ pub struct Bench {
     pub emitters: Vec<(String, EmitterHandle)>,
     pub servers: Vec<(String, OpcHandle)>,
     pub modbus: Vec<(String, ModbusHandle)>,
+    pub ethernetip: Vec<(String, EnipHandle)>,
     pub channels: Vec<(String, BenchChannel)>,
 }
 
 impl Bench {
-    /// Start every part of a loaded bench: emitters first, then servers (OPC UA, then Modbus),
-    /// then channels, each kind in the file's order (TOML groups a kind's tables under one key, so the file keeps
+    /// Start every part of a loaded bench: emitters first, then servers (OPC UA, then Modbus,
+    /// then EtherNet/IP), then channels, each kind in the file's order (TOML groups a kind's tables under one key, so the file keeps
     /// no order across kinds); the first part that cannot start stops the ones before it and
     /// is named. Emitters draw from the bench's seed plus their index when they have no seed
     /// of their own; channels from the bench's seed.
@@ -392,7 +472,7 @@ impl Bench {
         if !spec.emitters.is_empty() {
             std::fs::create_dir_all(&spec.out_dir).map_err(|source| BenchError::Read { place: "out_dir".into(), path: spec.out_dir.clone(), source })?;
         }
-        let mut bench = Bench { emitters: Vec::new(), servers: Vec::new(), modbus: Vec::new(), channels: Vec::new() };
+        let mut bench = Bench { emitters: Vec::new(), servers: Vec::new(), modbus: Vec::new(), ethernetip: Vec::new(), channels: Vec::new() };
         for (i, mut e) in spec.emitters.into_iter().enumerate() {
             if e.seed.is_none() {
                 e.seed = spec.seed.map(|s| s.wrapping_add(i as u64));
@@ -408,6 +488,10 @@ impl Bench {
         for (name, cfg) in spec.modbus {
             let handle = modbus::start(&cfg).map_err(|source| BenchError::Modbus { name: name.clone(), source })?;
             bench.modbus.push((name, handle));
+        }
+        for (name, cfg) in spec.ethernetip {
+            let handle = ethernetip::start(&cfg).map_err(|source| BenchError::Enip { name: name.clone(), source })?;
+            bench.ethernetip.push((name, handle));
         }
         for c in spec.channels {
             let name = c.name.clone();
@@ -429,6 +513,9 @@ impl Bench {
         }
         for (name, m) in &self.modbus {
             out.push((name.clone(), PartStatus::Modbus { addr: m.addr, status: Box::new(m.status()) }));
+        }
+        for (name, e) in &self.ethernetip {
+            out.push((name.clone(), PartStatus::Enip { addr: e.addr, io_addr: e.io_addr, status: Box::new(e.status()) }));
         }
         for (name, c) in &self.channels {
             out.push((name.clone(), PartStatus::Channel(Box::new(c.status()))));
@@ -458,6 +545,14 @@ impl Bench {
                     status.answered.values().sum::<u64>(),
                     status.exceptions.values().sum::<u64>(),
                     status.unanswered
+                ),
+                PartStatus::Enip { addr, io_addr, status } => format!(
+                    "ethernetip {name}: {addr} (class 1 on {io_addr}) {} session(s), {} connection(s) open, {} request(s), {} refused open(s), {} timed out",
+                    status.sessions,
+                    status.connections.len(),
+                    status.requests.values().sum::<u64>(),
+                    status.refused_opens.values().sum::<u64>(),
+                    status.timed_out
                 ),
                 PartStatus::Channel(s) => {
                     let sent: u64 = s.sent.values().sum();
@@ -489,6 +584,11 @@ impl Bench {
         self.modbus.iter().find(|(n, _)| n == name).map(|(_, m)| m)
     }
 
+    /// An EtherNet/IP adapter by name.
+    pub fn ethernetip(&self, name: &str) -> Option<&EnipHandle> {
+        self.ethernetip.iter().find(|(n, _)| n == name).map(|(_, e)| e)
+    }
+
     /// An OPC server by name.
     pub fn server(&self, name: &str) -> Option<&OpcHandle> {
         self.servers.iter().find(|(n, _)| n == name).map(|(_, s)| s)
@@ -504,6 +604,9 @@ impl Bench {
         }
         for (_, m) in self.modbus {
             m.stop();
+        }
+        for (_, e) in self.ethernetip {
+            e.stop();
         }
         for (_, c) in self.channels {
             c.stop();

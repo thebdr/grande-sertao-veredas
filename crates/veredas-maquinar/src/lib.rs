@@ -10,6 +10,7 @@
 //!   cyclic and on-demand messages and a monitor.
 //! - [`controller`]: the simulated controller, its behaviour a rules file, riding a channel.
 //! - [`modbus`]: a Modbus/TCP server, a device's four tables on a real socket.
+//! - [`ethernetip`]: an EtherNet/IP adapter, its assemblies over explicit messages and Class 1 I/O.
 //!
 //! Nothing here names a device, a vendor or a product: what a controller's telegrams mean is
 //! configuration (a channel file, a catalog, a rules file), as in core (`docs/questions.md` Q8).
@@ -18,6 +19,7 @@ pub mod bench;
 pub mod channel;
 pub mod controller;
 pub mod emit;
+pub mod ethernetip;
 pub mod modbus;
 pub mod opc;
 pub mod timer;

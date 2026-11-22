@@ -38,6 +38,10 @@ async-opcua-client = { workspace = true }
 serde_json = { workspace = true }
 # The Modbus server is driven by a client the bench did not write (tests/modbus_server.rs).
 tokio-modbus = { workspace = true }
+# The EtherNet/IP adapter is driven by codecs the bench did not write (tests/ethernetip_adapter.rs).
+ethernetip-connections = { workspace = true }
+ethernetip-core = { workspace = true }
+bytes = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # The bench holds the host's timer at a millisecond while it runs (timer.rs, Q13).
