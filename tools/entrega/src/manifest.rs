@@ -415,10 +415,10 @@ pub fn check_together(root: &Path, all: &[(PathBuf, Manifest)]) -> Result<Vec<St
             continue;
         }
         for x in &m.components {
-            let tree = match held.get(&x.name) {
-                Some(h) => git::object(root, &m.commit, &h.dir)?,
-                None => None,
-            };
+            // Only a true pin names a tree: a component absent at the commit, or there at another
+            // version, is `check`'s refusal and charges no other release.
+            let Some(h) = held.get(&x.name).filter(|h| h.version == x.version.to_string()) else { continue };
+            let tree = git::object(root, &m.commit, &h.dir)?;
             let key = (x.name.clone(), x.version.to_string());
             match first.get(&key) {
                 None => {

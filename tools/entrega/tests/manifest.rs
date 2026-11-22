@@ -780,6 +780,53 @@ fn a_submodule_a_sha256_repository_and_a_parent_that_is_not_utf8_are_refused_by_
 }
 
 #[test]
+fn a_false_pin_charges_no_true_release_and_hides_no_conflict() {
+    let run = |r: &Repo| {
+        let out = Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").current_dir(r.path()).output().unwrap();
+        (out.status.code(), String::from_utf8(out.stderr).unwrap())
+    };
+    // Case a: portal absent at the first release's commit, which lists it all the same.
+    let r = suite();
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"tools/ferramenta\", \"crates/veredas-core\", \"crates/veredas-maquinar\"]\n");
+    let c0 = r.commit("no portal yet");
+    r.write("Cargo.toml", WORKSPACE);
+    let c1 = r.commit("portal joins");
+    r.write("crates/veredas-portal/src/main.rs", "fn main() { println!(\"changed\"); }\n");
+    let c2 = r.commit("portal changed, its version not bumped");
+    for (rel, c) in [("2.0.0", c0.as_str()), ("2.0.1", c1.as_str()), ("2.0.2", c2.as_str())] {
+        r.write(&format!("releases/{rel}.toml"), &matching(rel, c));
+    }
+    r.commit("three releases, the first false");
+    let releases = r.path().canonicalize().unwrap().join("releases");
+    assert_eq!(
+        run(&r),
+        (
+            Some(2),
+            format!(
+                "{}: veredas-portal is no component at {c0}\nveredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.1 and 2.0.2 at different code: a version names one tree\n",
+                releases.join("2.0.0.toml").display()
+            )
+        )
+    );
+    // Case b: the first release states a version its commit does not hold; two true releases at
+    // one commit after it are charged with nothing.
+    let r = suite();
+    r.write("crates/veredas-portal/Cargo.toml", "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0-alpha.2\"\nedition = \"2024\"\n\n[[bin]]\nname = \"veredas-portal\"\npath = \"src/main.rs\"\n");
+    let c0 = r.commit("portal at alpha.2");
+    r.write("crates/veredas-portal/Cargo.toml", "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0-alpha.3\"\nedition = \"2024\"\n\n[[bin]]\nname = \"veredas-portal\"\npath = \"src/main.rs\"\n");
+    let c1 = r.commit("portal at alpha.3");
+    for (rel, c) in [("2.0.0", c0.as_str()), ("2.0.1", c1.as_str()), ("2.0.2", c1.as_str())] {
+        r.write(&format!("releases/{rel}.toml"), &matching(rel, c));
+    }
+    r.commit("three releases, the first false");
+    let releases = r.path().canonicalize().unwrap().join("releases");
+    assert_eq!(
+        run(&r),
+        (Some(2), format!("{}: veredas-portal is 2.0.0-alpha.2 at {c0}, not 2.0.0-alpha.3\n", releases.join("2.0.0.toml").display()))
+    );
+}
+
+#[test]
 fn an_annotated_tags_id_is_no_commit() {
     let r = suite();
     let c = r.commit("the suite");
