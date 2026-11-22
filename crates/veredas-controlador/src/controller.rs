@@ -136,8 +136,8 @@ pub struct Controller<P: Program + Default> {
     idle: P,
     /// The next exchange while no task runs, counted in periods of the target's clock.
     idle_cycle: u64,
-    /// The target's clock when the last cycle ended.
-    now: Duration,
+    /// When the last exchange with the plant read its inputs, on the target's clock.
+    last_exchange: Option<Duration>,
 }
 
 impl<P: Program + Default> Controller<P> {
@@ -156,7 +156,7 @@ impl<P: Program + Default> Controller<P> {
             origin: Duration::ZERO,
             idle: P::default(),
             idle_cycle: 0,
-            now: Duration::ZERO,
+            last_exchange: None,
         };
         match restart {
             // DECISION PENDING (Q228): a controller that never ran comes up in STOP with no reason.
@@ -232,8 +232,9 @@ impl<P: Program + Default> Controller<P> {
 
     /// One cycle of the controller on the target's clock. Starting, it finishes its start-up and runs the
     /// program's first scan at once; running, or faulted by its program, it runs the task's next scan; stopped,
-    /// or faulted before any program ran, it waits for its next period, reads the inputs and writes the safe
-    /// outputs, so the plant's exchange goes on.
+    /// or faulted before any program ran, it waits for the first period of the target's clock that is not before
+    /// this step and comes after the last exchange, reads the inputs and writes the safe outputs, so the plant's
+    /// exchange goes on, on those periods alone and at most once in each.
     pub fn step<D, C>(&mut self, io: &mut D, clock: &mut C)
     where
         D: Io<P::Inputs, P::Outputs>,
@@ -247,7 +248,8 @@ impl<P: Program + Default> Controller<P> {
             Some(task) => {
                 let mut program_clock = ProgramClock { target: &mut *clock, origin: self.origin };
                 let mut plant = TargetIo { plant: io, origin: self.origin };
-                task.step(&mut plant, &mut program_clock);
+                let report = task.step(&mut plant, &mut program_clock);
+                self.last_exchange = Some(self.origin.saturating_add(report.scan.now));
                 // DECISION PENDING (Q228): the condition `overruns` counts the time errors since the last start.
                 self.state.conditions.overruns = u32::try_from(task.stats().overruns).unwrap_or(u32::MAX);
                 if let (RunState::Faulted { fault: Fault::Watchdog { .. }, .. }, StateWord::Run) =
@@ -257,16 +259,21 @@ impl<P: Program + Default> Controller<P> {
                 }
             }
             None => {
+                // on the target's periods alone, at most once in each: the first not before this step and after
+                // the last exchange, the task's or this one's
                 let period = self.config.period;
+                let after_last = self.last_exchange.map_or(0, |at| periods_in(period, at).saturating_add(1));
+                let not_before_now = first_period_at_or_after(period, clock.now());
+                self.idle_cycle = self.idle_cycle.max(after_last).max(not_before_now);
                 clock.sleep_until(deadline(period, self.idle_cycle));
                 let now = clock.now();
                 let _ = io.read_inputs(now);
+                self.last_exchange = Some(now);
                 // DECISION PENDING (Q228): in STOP every output takes its safe value, as in FAULT.
                 io.write_outputs(clock.now(), &self.idle.safe_outputs());
-                self.idle_cycle = first_due_after(period, clock.now(), self.idle_cycle);
+                self.idle_cycle = self.idle_cycle.saturating_add(1);
             }
         }
-        self.now = clock.now();
     }
 
     /// Enters STARTUP, or STOP 105 on a production target without real-time scheduling. Whether it started.
@@ -289,13 +296,10 @@ impl<P: Program + Default> Controller<P> {
         self.state.state = if self.task.is_some() { State::Run } else { State::Fault(Some(FaultReason::Internal)) };
     }
 
-    /// Leaves the program: the task ends and the idle exchange takes over at the first of its periods not
-    /// before the last cycle's end.
+    /// Leaves the program: the task ends and the idle exchange takes over at the next step.
     fn halt(&mut self, to: State) {
         self.task = None;
         self.state.state = to;
-        let k = self.now.as_nanos().div_ceil(self.config.period.as_nanos().max(1));
-        self.idle_cycle = u64::try_from(k).unwrap_or(u64::MAX);
     }
 }
 
@@ -313,8 +317,14 @@ fn deadline(period: Duration, cycle: u64) -> Duration {
     Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
 }
 
-/// The next cycle after `done` whose deadline is not before `now`.
-fn first_due_after(period: Duration, now: Duration, done: u64) -> u64 {
-    let k = now.as_nanos().div_ceil(period.as_nanos().max(1));
-    u64::try_from(k).unwrap_or(u64::MAX).max(done.saturating_add(1))
+/// The first period whose start is not before `time`: `ceil(time / period)`.
+fn first_period_at_or_after(period: Duration, time: Duration) -> u64 {
+    let k = time.as_nanos().div_ceil(period.as_nanos().max(1));
+    u64::try_from(k).unwrap_or(u64::MAX)
+}
+
+/// How many whole periods lie in `time`: the period `time` falls in.
+fn periods_in(period: Duration, time: Duration) -> u64 {
+    let k = time.as_nanos().checked_div(period.as_nanos()).unwrap_or(0);
+    u64::try_from(k).unwrap_or(u64::MAX)
 }

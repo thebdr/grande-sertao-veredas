@@ -158,7 +158,7 @@ fn only_a_person_with_the_switch_armed_starts_it_and_only_from_stop() {
 }
 
 #[test]
-fn a_stop_is_free_the_program_may_stop_itself_and_the_safe_outputs_follow_at_once() {
+fn a_stop_is_free_the_program_may_stop_itself_and_the_safe_outputs_follow_at_the_next_period() {
     let mut clock = VirtualClock::new();
     let mut plant = Plant::new(&clock);
     let mut c = controller(PRODUCTION, Restart::First);
@@ -171,7 +171,7 @@ fn a_stop_is_free_the_program_may_stop_itself_and_the_safe_outputs_follow_at_onc
     assert!(c.program().is_none());
     c.step(&mut plant, &mut clock);
     c.step(&mut plant, &mut clock);
-    assert_eq!(plant.writes, vec![(ms(0), 101), (ms(10), 201), (ms(10), 7), (ms(20), 7)]);
+    assert_eq!(plant.writes, vec![(ms(0), 101), (ms(10), 201), (ms(20), 7), (ms(30), 7)], "never twice at 10 ms");
     let refused = c.stop(LOCAL).unwrap_err();
     assert_eq!(refused, Refusal::State { command: Command::Stop, state: StateWord::Stop });
     assert_eq!(refused.to_string(), "a stop refused in STOP");
@@ -297,4 +297,215 @@ fn time_errors_show_as_overruns_while_the_controller_runs() {
     assert_eq!(c.state().health(), Some(Health::Normal), "an overrun is no debug condition");
     c.step(&mut plant, &mut clock);
     assert_eq!(text(&c), "RUN overruns(count=1)");
+}
+
+fn run(c: &mut Controller<Count>, plant: &mut Plant, clock: &mut VirtualClock, steps: usize) {
+    for _ in 0..steps {
+        c.step(plant, clock);
+    }
+}
+
+// The first refute round: the commands in every state they meet, refusals that change nothing, each condition on
+// its own, and the exchange while no program runs on the target's periods alone, once in each.
+
+#[test]
+fn a_start_in_run_is_refused_and_the_running_program_goes_on() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    let refused = c.start(StartupReason::Cold, OFICINA, &ARMED).unwrap_err();
+    assert_eq!(refused, Refusal::State { command: Command::Start(StartupReason::Cold), state: StateWord::Run });
+    assert_eq!(refused.to_string(), "a cold start refused in RUN");
+    assert_eq!(text(&c), "RUN");
+    c.step(&mut plant, &mut clock);
+    assert_eq!(c.program().unwrap().scans, 3, "the program was not restarted");
+}
+
+#[test]
+fn an_acknowledge_outside_fault_is_refused_in_startup_and_run() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    let before = c.state().clone();
+    assert_eq!(
+        c.acknowledge(OFICINA, &ARMED),
+        Err(Refusal::State { command: Command::Acknowledge, state: StateWord::Startup })
+    );
+    assert_eq!(c.state(), &before);
+    c.step(&mut plant, &mut clock);
+    assert_eq!(c.acknowledge(OFICINA, &ARMED), Err(Refusal::State { command: Command::Acknowledge, state: StateWord::Run }));
+    assert_eq!(text(&c), "RUN");
+    assert!(c.program().is_some());
+}
+
+#[test]
+fn the_program_stops_itself_from_run() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(c.stop(PROGRAM), Ok(()));
+    assert_eq!(text(&c), r#"STOP command(id=101, source="program")"#);
+    assert!(c.program().is_none());
+}
+
+#[test]
+fn a_cold_start_is_a_person_s_with_the_switch_armed_too() {
+    let mut c = controller(PRODUCTION, Restart::First);
+    let cold = Command::Start(StartupReason::Cold);
+    let refused = c.start(StartupReason::Cold, PROGRAM, &ARMED).unwrap_err();
+    assert_eq!(refused, Refusal::Source { command: cold, source: PROGRAM });
+    assert_eq!(refused.to_string(), "a cold start from `program` refused: the program may only stop");
+    let refused = c.start(StartupReason::Cold, LOCAL, &OFF).unwrap_err();
+    assert_eq!(refused, Refusal::Switch { command: cold });
+    assert_eq!(refused.to_string(), "a cold start refused: the commissioning switch is not armed");
+    assert_eq!(text(&c), "STOP");
+}
+
+#[test]
+fn every_refusal_but_the_real_time_one_leaves_the_state_as_it_was() {
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, LOCAL, &ARMED).unwrap();
+    let before = c.state().clone();
+    c.start(StartupReason::Cold, OFICINA, &ARMED).unwrap_err();
+    assert_eq!(c.state(), &before);
+    assert_eq!(text(&c), "STARTUP warm(id=201) load()", "a warm start on command shows warm");
+
+    let mut c = controller(PRODUCTION, Restart::PowerCycle { was: StateWord::Hold });
+    let before = c.state().clone();
+    c.stop(LOCAL).unwrap_err();
+    c.acknowledge(LOCAL, &ARMED).unwrap_err();
+    c.start(StartupReason::Warm, PROGRAM, &ARMED).unwrap_err();
+    c.start(StartupReason::Warm, OFICINA, &OFF).unwrap_err();
+    assert_eq!(c.state(), &before);
+    assert_eq!(text(&c), r#"STOP power_on(id=102, was="HOLD")"#);
+
+    let mut c = controller(PRODUCTION, Restart::Crash);
+    let before = c.state().clone();
+    assert_eq!(
+        c.acknowledge(OFICINA, &OFF).unwrap_err().to_string(),
+        "an acknowledge refused: the commissioning switch is not armed"
+    );
+    assert_eq!(
+        c.acknowledge(PROGRAM, &ARMED).unwrap_err().to_string(),
+        "an acknowledge from `program` refused: the program may only stop"
+    );
+    assert_eq!(c.state(), &before);
+    c.acknowledge(OFICINA, &ARMED).unwrap();
+    let after = c.state().clone();
+    assert_eq!(c.acknowledge(OFICINA, &ARMED).unwrap_err().to_string(), "an acknowledge refused in STOP");
+    assert_eq!(c.state(), &after);
+}
+
+#[test]
+fn sim_and_no_realtime_each_say_how_it_runs_on_their_own() {
+    let desk_without_real_time = Target { production: false, realtime: false, simulated: false };
+    assert_eq!(text(&controller(desk_without_real_time, Restart::First)), "STOP no_realtime()");
+    let simulator_with_real_time = Target { production: false, realtime: true, simulated: true };
+    assert_eq!(text(&controller(simulator_with_real_time, Restart::First)), "STOP sim()");
+}
+
+#[test]
+fn a_start_up_cut_by_power_on_a_production_target_without_real_time_stays_in_stop() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let without = Target { production: true, realtime: false, simulated: false };
+    let mut c = controller(without, Restart::PowerCycle { was: StateWord::Startup });
+    assert_eq!(text(&c), "STOP realtime_refused(id=105)");
+    c.step(&mut plant, &mut clock);
+    assert!(c.program().is_none());
+    assert_eq!(plant.writes, vec![(ms(0), 7)]);
+}
+
+#[test]
+fn a_power_cycled_start_up_is_stepped_to_run() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::PowerCycle { was: StateWord::Startup });
+    c.step(&mut plant, &mut clock);
+    assert_eq!(text(&c), "RUN");
+    assert_eq!(plant.writes, vec![(ms(0), 101)]);
+}
+
+#[test]
+fn the_watchdog_names_the_task_and_a_stop_keeps_the_overruns_since_the_start() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    plant.stall = |read| if read == 0 { ms(25) } else { Duration::ZERO };
+    let conveyor = TaskConfig { name: "conveyor", period: ms(10) };
+    let mut c = Controller::<Count>::power_on(conveyor, PRODUCTION, Restart::First).unwrap();
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    c.step(&mut plant, &mut clock);
+    assert_eq!(text(&c), r#"FAULT watchdog(id=501, task="conveyor") overruns(count=1)"#);
+
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    plant.stall = |read| if read == 1 { ms(15) } else { Duration::ZERO };
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    c.stop(OFICINA).unwrap();
+    assert_eq!(text(&c), r#"STOP command(id=101, source="oficina") overruns(count=1)"#);
+}
+
+#[test]
+fn while_no_program_runs_the_exchange_keeps_the_target_s_periods_once_in_each() {
+    // a program started at 13 ms scans at 13 and 23 ms; after its stop the exchange is back on the target's
+    // periods, at 30 and 40 ms
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.step(&mut plant, &mut clock);
+    clock.advance(ms(13));
+    c.start(StartupReason::Cold, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    c.stop(OFICINA).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(plant.writes, vec![(ms(0), 7), (ms(13), 101), (ms(23), 201), (ms(30), 7), (ms(40), 7)]);
+
+    // a stop arriving at 13 ms, between periods: the first exchange at 20 ms
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    clock.advance(ms(3));
+    c.stop(OFICINA).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(plant.writes, vec![(ms(0), 101), (ms(10), 201), (ms(20), 7), (ms(30), 7)]);
+
+    // an acknowledge after exchanges at 0 and 10 ms: the next at 20, never a second at 10
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::Crash);
+    run(&mut c, &mut plant, &mut clock, 2);
+    c.acknowledge(OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(plant.reads, vec![ms(0), ms(10), ms(20), ms(30)]);
+
+    // a start and a stop from STARTUP after exchanges at 0, 10 and 20 ms, and a refused stop: 30, then 40
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::First);
+    run(&mut c, &mut plant, &mut clock, 3);
+    c.stop(LOCAL).unwrap_err();
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    c.stop(OFICINA).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(plant.reads, vec![ms(0), ms(10), ms(20), ms(30), ms(40)]);
+
+    // a fault, its exchanges by the faulted task, then an acknowledge: the next exchange after the task's last
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    plant.stall = |read| if read == 0 { ms(25) } else { Duration::ZERO };
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2); // the fault at 0 ms, written at 25; the faulted task at 30
+    c.acknowledge(OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(plant.reads, vec![ms(0), ms(30), ms(40), ms(50)]);
 }

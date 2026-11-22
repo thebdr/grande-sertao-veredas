@@ -1,0 +1,13 @@
+{
+  "clause": "C-152",
+  "verdict": "refuted",
+  "ranAt": "2026-11-22T18:33:44.763Z",
+  "headCommit": "ab95a90e74a44665bad84dcb0849c6c3774f781b",
+  "tests": [
+    {
+      "name": "crates/veredas-controlador/tests/states.rs",
+      "file": "crates/veredas-controlador/tests/states.rs",
+      "symbolSha": "bcb4a1000a58cd9250858f629f8f4356f908277dd7d7fc4eee794243990c12d1"
+    }
+  ]
+}
