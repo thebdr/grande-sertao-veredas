@@ -534,7 +534,8 @@ pub struct Exchange {
     pub unit: u8,
     /// The request's PDU: the function code and its data.
     pub request: Vec<u8>,
-    /// The answer's PDU; `None` when the server held its answer back (silent).
+    /// The answer's PDU, once it is sent; `None` while it waits out a delay, and for good when the
+    /// server withheld it (silent) or its connection was dropped first.
     pub response: Option<Vec<u8>>,
 }
 
@@ -547,11 +548,12 @@ pub struct ModbusStatus {
     pub accepted: u64,
     /// Connections closed at once because `max_connections` were open.
     pub refused: u64,
-    /// Requests answered normally, by function code.
+    /// Requests answered normally, by function code: the answer sent.
     pub answered: BTreeMap<u8, u64>,
-    /// Requests answered with an exception, by function code and exception code.
+    /// Requests answered with an exception, by function code and exception code: the answer sent.
     pub exceptions: BTreeMap<(u8, u8), u64>,
-    /// Requests read and not answered, the server being silent.
+    /// Requests whose answer the server withheld: read while it was silent, or waiting out a delay
+    /// when silence began.
     pub unanswered: u64,
     /// Frames dropped without an answer: their protocol identifier was not 0, Modbus's.
     pub dropped: u64,
@@ -564,6 +566,10 @@ pub struct ModbusStatus {
 struct State {
     image: Image,
     status: ModbusStatus,
+    /// Each exchange's own number, beside `status.recent` (popped with it), so an answer sent late
+    /// fills its own exchange, never a twin's.
+    recent_ids: VecDeque<u64>,
+    next_exchange: u64,
     /// The generation of `drop_connections` calls: a connection belongs to the one it was
     /// accepted in, and a call closes every connection of the generations before its own.
     generation: u64,
@@ -577,6 +583,9 @@ struct Shared {
     unit: Option<u8>,
     max_connections: Option<usize>,
     silent: AtomicBool,
+    /// How many times silence was switched on: an answer waiting out a delay is withheld when
+    /// silence began meanwhile, even if it ended before the delay did.
+    silenced: AtomicU64,
     delay_us: AtomicU64,
 }
 
@@ -651,10 +660,14 @@ impl ModbusHandle {
         }
         let size = self.shared.sizes[table.index()] as usize;
         let start = address as usize;
-        if start + count > size {
-            return Err(ModbusError::Range(format!("{} {start}..{} is past the table's end ({size} address(es))", table.label(), start + count)));
+        match start.checked_add(count) {
+            Some(end) if end <= size => Ok((start, end)),
+            _ => Err(ModbusError::Range(format!(
+                "{} {start}..{} is past the table's end ({size} address(es))",
+                table.label(),
+                start as u128 + count as u128
+            ))),
         }
-        Ok((start, start + count))
     }
 
     /// Bits of a coil or discrete-input table, read on the plant side.
@@ -693,6 +706,9 @@ impl ModbusHandle {
     /// read meanwhile, and an answer still waiting out a delay, are never sent; false answers the
     /// next request again.
     pub fn set_silent(&self, silent: bool) {
+        if silent {
+            self.shared.silenced.fetch_add(1, Ordering::SeqCst);
+        }
         self.shared.silent.store(silent, Ordering::SeqCst);
     }
 
@@ -748,11 +764,12 @@ pub fn start(cfg: &ModbusConfig) -> Result<ModbusHandle, ModbusError> {
     let bind = cfg.bind.trim().to_string();
     let port = cfg.port;
     let shared = Arc::new(Shared {
-        state: Mutex::new(State { image: compiled.image, status: ModbusStatus::default(), generation: 0, open: BTreeMap::new() }),
+        state: Mutex::new(State { image: compiled.image, status: ModbusStatus::default(), recent_ids: VecDeque::new(), next_exchange: 0, generation: 0, open: BTreeMap::new() }),
         sizes: compiled.sizes,
         unit: cfg.unit,
         max_connections: cfg.max_connections,
         silent: AtomicBool::new(false),
+        silenced: AtomicU64::new(0),
         delay_us: AtomicU64::new(0),
     });
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<SocketAddr, ModbusError>>();
@@ -913,6 +930,8 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
             shared.lock().status.dropped += 1;
             continue;
         }
+        // The silence count is read before the silence: a switch between the two is seen by one.
+        let epoch = shared.silenced.load(Ordering::SeqCst);
         let silent = shared.silent.load(Ordering::SeqCst);
         let response = {
             let mut state = shared.lock();
@@ -920,6 +939,8 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
                 state.status.unanswered += 1;
                 None
             } else {
+                // The request takes effect now, as a device does what it is asked before it
+                // answers; the answer is counted when it is sent.
                 let function = pdu[0];
                 let answer = if shared.unit.is_some_and(|u| u != unit) {
                     Err(exception::GATEWAY_TARGET_FAILED)
@@ -927,38 +948,42 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
                     answer(&mut state.image, &pdu)
                 };
                 Some(match answer {
-                    Ok(r) => {
-                        *state.status.answered.entry(function).or_default() += 1;
-                        r
-                    }
-                    Err(code) => {
-                        *state.status.exceptions.entry((function, code)).or_default() += 1;
-                        vec![function | 0x80, code]
-                    }
+                    Ok(r) => r,
+                    Err(code) => vec![function | 0x80, code],
                 })
             };
-            let recent = &mut state.status.recent;
-            if recent.len() == RECENT {
-                recent.pop_front();
+            if state.status.recent.len() == RECENT {
+                state.status.recent.pop_front();
+                state.recent_ids.pop_front();
             }
-            recent.push_back(Exchange { peer, transaction, unit, request: pdu.clone(), response: response.clone() });
-            response
+            state.status.recent.push_back(Exchange { peer, transaction, unit, request: pdu.clone(), response: None });
+            let id = state.next_exchange;
+            state.next_exchange += 1;
+            state.recent_ids.push_back(id);
+            response.map(|r| (r, id))
         };
-        let Some(response) = response else { continue };
+        let Some((response, exchange)) = response else { continue };
         let delay = Duration::from_micros(shared.delay_us.load(Ordering::SeqCst));
         if !delay.is_zero() {
             tokio::select! {
                 _ = tokio::time::sleep(delay) => {}
                 _ = ended(&mut gone, generation) => return,
             }
-            // Gone dumb while the answer waited: it is never sent.
-            if shared.silent.load(Ordering::SeqCst) {
-                let mut state = shared.lock();
-                state.status.unanswered += 1;
-                if let Some(x) = state.status.recent.iter_mut().rev().find(|x| x.peer == peer && x.transaction == transaction && x.response.is_some()) {
-                    x.response = None;
-                }
+            // Gone dumb while the answer waited, even for a moment: it is never sent.
+            if shared.silent.load(Ordering::SeqCst) || shared.silenced.load(Ordering::SeqCst) != epoch {
+                shared.lock().status.unanswered += 1;
                 continue;
+            }
+        }
+        {
+            let mut state = shared.lock();
+            if response[0] & 0x80 == 0 {
+                *state.status.answered.entry(response[0]).or_default() += 1;
+            } else {
+                *state.status.exceptions.entry((pdu[0], response[1])).or_default() += 1;
+            }
+            if let Some(i) = state.recent_ids.iter().position(|id| *id == exchange) {
+                state.status.recent[i].response = Some(response.clone());
             }
         }
         let mut frame = Vec::with_capacity(7 + response.len());

@@ -485,6 +485,12 @@ fn the_points_lie_in_their_tables_as_their_types_and_word_orders_say() {
         ]
     );
     assert_eq!(server.point_names()[0], "setpoint");
+    // Read as text, as a monitor shows a value.
+    let text = |name: &str| server.get(name).unwrap().to_string();
+    assert_eq!(
+        [text("setpoint"), text("setpoint_swapped"), text("count"), text("offset"), text("mode"), text("total"), text("ready"), text("run")],
+        ["1.5", "-2.25", "-100000", "-2", "3", "305419896", "true", "false"]
+    );
     // Set by point, by value or by text; a type or a name that is not the point's refused.
     server.set_value("total", Value::U32(0xCAFEF00D)).unwrap();
     assert_eq!(server.registers(Table::InputRegister, 1, 2).unwrap(), [0xF00D, 0xCAFE]);
@@ -502,6 +508,14 @@ fn the_points_lie_in_their_tables_as_their_types_and_word_orders_say() {
         Value::F32(v) => assert!(v.is_nan(), "{v}"),
         other => panic!("{other:?}"),
     }
+    assert_eq!(server.get("setpoint_swapped").unwrap().to_string(), "NaN");
+    // A count past every address is refused, never added past what a number holds.
+    assert_eq!(
+        server.registers(Table::HoldingRegister, 1, usize::MAX).unwrap_err().to_string(),
+        format!("holding-register 1..{} is past the table's end (20 address(es))", usize::MAX as u128 + 1)
+    );
+    assert!(server.bits(Table::Coil, 3, usize::MAX).is_err());
+    assert!(server.set_registers(Table::HoldingRegister, 0, &[]).is_ok(), "nothing written is in range");
 }
 
 #[test]
@@ -657,19 +671,30 @@ fn the_knobs_delay_silence_and_drop_every_connection() {
     server.set_delay(Duration::from_millis(500));
     c.send(&Raw::frame(14, 0, 1, &read));
     assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == 14)));
+    let answered = server.status().answered.get(&0x03).copied();
     server.set_silent(true);
     assert_eq!(c.arrives_within(Duration::from_millis(1000)), None, "the waiting answer withheld");
     let s = server.status();
     assert_eq!((s.unanswered, s.recent.back().unwrap().transaction, s.recent.back().unwrap().response.clone()), (1, 14, None));
+    assert_eq!(s.answered.get(&0x03).copied(), answered, "a withheld answer is no answer");
     server.set_silent(false);
+    // Silence for a moment inside the delay, over before the delay is: the answer is withheld too.
+    c.send(&Raw::frame(16, 0, 1, &read));
+    assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == 16)));
+    server.set_silent(true);
+    std::thread::sleep(Duration::from_millis(50));
+    server.set_silent(false);
+    assert_eq!(c.arrives_within(Duration::from_millis(1000)), None, "silence that came and went still withheld it");
+    let s = server.status();
+    assert_eq!((s.unanswered, s.answered.get(&0x03).copied()), (2, answered));
     server.set_delay(Duration::ZERO);
-    assert_eq!(c.ask(15, 1, &read), [0x03, 0x02, 0x00, 0x00]);
+    assert_eq!(c.ask(15, 1, &read), [0x03, 0x02, 0x00, 0x00], "the next answer is the next request's");
     // Silent: read, never answered, the connection up; answered again after, the silent ones never.
     server.set_silent(true);
     c.send(&Raw::frame(3, 0, 1, &read));
     c.send(&Raw::frame(4, 0, 1, &[0x06, 0x00, 0x00, 0x00, 0x05]));
     assert_eq!(c.arrives_within(Duration::from_millis(500)), None);
-    assert!(wait(Duration::from_secs(5), || server.status().unanswered == 3));
+    assert!(wait(Duration::from_secs(5), || server.status().unanswered == 4));
     assert_eq!(server.registers(Table::HoldingRegister, 0, 1).unwrap(), [0], "a silent device does nothing it is asked");
     let s = server.status();
     assert_eq!((s.recent.back().unwrap().transaction, s.recent.back().unwrap().response.clone()), (4, None));
@@ -689,10 +714,15 @@ fn the_knobs_delay_silence_and_drop_every_connection() {
     server.set_delay(Duration::from_secs(30));
     e.send(&Raw::frame(7, 0, 1, &read));
     assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == 7)));
+    let before = server.status().answered.get(&0x03).copied();
     let dropped = Instant::now();
     server.drop_connections();
     assert_eq!(e.arrives_within(Duration::from_secs(5)), Some(0));
     assert!(dropped.elapsed() < Duration::from_secs(5));
+    // An answer its connection never sent is not counted, and the exchange shows none.
+    let s = server.status();
+    assert_eq!(s.answered.get(&0x03).copied(), before);
+    assert_eq!((s.recent.back().unwrap().transaction, s.recent.back().unwrap().response.clone()), (7, None));
 }
 
 #[test]
@@ -718,12 +748,18 @@ fn a_client_that_reads_nothing_is_dropped_at_once() {
     // Requests for 125 registers, written until the socket takes no more: the answers back up until
     // the server's write waits on a client that does not read.
     c.stream.set_nonblocking(true).unwrap();
-    let request = Raw::frame(1, 0, 1, &[0x03, 0x00, 0x00, 0x00, 0x7D]);
+    // A hundred requests a write, the place kept when the socket takes part of them, so no frame is
+    // cut and a loaded machine still fills the buffers.
+    let requests = Raw::frame(1, 0, 1, &[0x03, 0x00, 0x00, 0x00, 0x7D]).repeat(100);
+    let mut at = 0;
     let started = Instant::now();
     let mut blocked = 0;
-    while blocked < 200 && started.elapsed() < Duration::from_secs(20) {
-        match c.stream.write(&request) {
-            Ok(_) => blocked = 0,
+    while blocked < 200 && started.elapsed() < Duration::from_secs(60) {
+        match c.stream.write(&requests[at..]) {
+            Ok(n) => {
+                at = (at + n) % requests.len();
+                blocked = 0;
+            }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 blocked += 1;
                 std::thread::sleep(Duration::from_millis(5));
