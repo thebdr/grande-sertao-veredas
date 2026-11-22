@@ -10,15 +10,15 @@
     "raw_link"
   ],
   "exitCode": 0,
-  "outputSha": "c6eba85ac191dd788fe9803b50a1ec7978c96510e7b452ea4fc84a8b28870641",
-  "outputTail": "test the_link_joins_every_group_while_open_and_leaves_the_interface_as_it_was ... ok\ntest a_frame_past_the_buffer_is_refused_never_handed_back_cut ... ok\ntest a_tagged_frame_is_heard_with_its_tag_where_the_kernel_took_it_out ... ok\ntest the_private_network_holds_only_what_the_test_made ... ok\ntest a_send_never_waits_and_a_full_queue_is_named ... ok\ntest a_filtered_link_on_the_sending_end_hears_its_type_behind_any_tag ... ok\ntest frames_cross_a_veth_pair_whole_both_ways ... ok\ntest a_link_hears_one_ethertype_and_can_leave_out_what_this_host_sends ... ok\ntest a_wait_lasts_its_timeout_through_signals_skipped_frames_and_under_a_millisecond ... ok\n\ntest result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.97s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s\n     Running tests/raw_link.rs (target/debug/build/veredas-aranha/e66552a4aaf043c1/out/raw_link-e66552a4aaf043c1)",
-  "ranAt": "2026-11-22T20:05:05.878Z",
-  "headCommit": "cf7c0cfb7888f9e2ee39d7b21ff3dabce254d4ed",
+  "outputSha": "127af705a1835406f85269d40895b988f15ea1d90325d93e1c2149a02275f09d",
+  "outputTail": "test a_tagged_frame_is_heard_with_its_tag_where_the_kernel_took_it_out ... ok\ntest a_wait_of_no_end_hands_back_the_next_frame ... ok\ntest the_private_network_holds_only_what_the_test_made ... ok\ntest a_send_never_waits_and_a_full_queue_is_named ... ok\ntest a_name_the_kernel_gives_an_interface_is_opened ... ok\ntest a_filtered_link_on_the_sending_end_hears_its_type_behind_any_tag ... ok\ntest frames_cross_a_veth_pair_whole_both_ways ... ok\ntest a_link_hears_one_ethertype_and_can_leave_out_what_this_host_sends ... ok\ntest a_wait_lasts_its_timeout_through_signals_skipped_frames_and_under_a_millisecond ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.94s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.18s\n     Running tests/raw_link.rs (target/debug/build/veredas-aranha/e66552a4aaf043c1/out/raw_link-e66552a4aaf043c1)",
+  "ranAt": "2026-11-22T20:36:32.566Z",
+  "headCommit": "5bcf85b5c1d59a857f8fcf03f040f4a3260f3a35",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/raw_link.rs",
       "file": "crates/veredas-aranha/tests/raw_link.rs",
-      "fileSha": "1cc1b60752479a4bcc11d67ad58127058af6824da628b1621bcc5bfca4813784"
+      "fileSha": "68bc534a7fd8030b9759ddba06e988a42cd30cb666d5a5ecb302da4feae2d41c"
     }
   ]
 }
