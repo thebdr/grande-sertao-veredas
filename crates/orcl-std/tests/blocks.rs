@@ -798,88 +798,264 @@ fn no_source_holds_a_panic_source_or_debug_only_code() {
     }
 }
 
-// The tenth refute round: the library's code holds no `assert` of any kind and no test function, the unit tests'
-// modules no item word, read with the comment lines taken out (a line that starts with `//` is never code, and a
-// comment saying "simple" holds no `impl`); timers on scans whose time goes back or whose period changes.
+// The tenth and eleventh refute rounds: the sources read as the compiler reads them, comments taken out and literals
+// emptied, word by word, the unit tests' module bounded by its braces; timers on scans whose time goes back, whose
+// period changes or is zero, and at the longest preset time.
 
-/// A source with every line that starts with `//` taken out: what is left is the code, doc examples aside.
+/// A source as the compiler reads it: its comments taken out (line and block comments, nested) and every string and
+/// character literal emptied (with its escapes, raw strings and their hashes), a lifetime kept. Doc examples are
+/// comments, so no code of the library.
 fn code_of(text: &str) -> String {
-    text.lines().filter(|line| !line.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n")
+    let chars: Vec<char> = text.chars().collect();
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut code = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        if c == '/' && next == Some('/') {
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+        } else if c == '/' && next == Some('*') {
+            let mut depth = 0;
+            while i < chars.len() {
+                if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
+                    depth += 1;
+                    i += 2;
+                } else if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+                    depth -= 1;
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            code.push(' ');
+        } else if c == 'r' && (i == 0 || !is_word(chars[i - 1]) || (chars[i - 1] == 'b' && (i < 2 || !is_word(chars[i - 2]))))
+            && {
+                let hashes = chars[i + 1..].iter().take_while(|h| **h == '#').count();
+                chars.get(i + 1 + hashes) == Some(&'"')
+            }
+        {
+            let hashes = chars[i + 1..].iter().take_while(|h| **h == '#').count();
+            i += 2 + hashes;
+            while i < chars.len() && !(chars[i] == '"' && chars[i + 1..].iter().take(hashes).filter(|h| **h == '#').count() == hashes) {
+                i += 1;
+            }
+            i += 1 + hashes;
+            code.push_str("\"\"");
+        } else if c == '"' {
+            i += 1;
+            while i < chars.len() && chars[i] != '"' {
+                i += if chars[i] == '\\' { 2 } else { 1 };
+            }
+            i += 1;
+            code.push_str("\"\"");
+        } else if c == '\'' && (next == Some('\\') || chars.get(i + 2) == Some(&'\'')) {
+            i += if next == Some('\\') { 3 } else { 2 };
+            while i < chars.len() && chars[i] != '\'' {
+                i += 1;
+            }
+            i += 1;
+            code.push_str("''");
+        } else {
+            code.push(c);
+            i += 1;
+        }
+    }
+    code
 }
 
-/// A source's code split at its unit tests' module: the library's code, then the module (empty when it has none).
+/// A source's code split at its unit tests' module, bounded by its braces: the library's code (before the module
+/// and after it), then the module (empty when it has none).
 fn library_and_tests(text: &str) -> (String, String) {
     let code = code_of(text);
-    match code.find("#[cfg(test)]") {
-        Some(at) => (code[..at].to_string(), code[at..].to_string()),
-        None => (code, String::new()),
+    let Some(start) = code.find("#[cfg(test)]") else { return (code, String::new()) };
+    let mut end = code.len();
+    if let Some(open) = code[start..].find('{').map(|at| start + at) {
+        let mut depth = 0;
+        for (at, c) in code[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + at + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
     }
+    (format!("{}{}", &code[..start], &code[end..]), code[start..end].to_string())
+}
+
+/// The words of a piece of code: what an identifier or a keyword is made of.
+fn words(code: &str) -> Vec<&str> {
+    code.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| !w.is_empty()).collect()
 }
 
 #[test]
-fn the_library_s_code_holds_no_assert_and_no_test_function_and_the_unit_tests_modules_no_item_word() {
+fn the_library_s_code_holds_no_assert_no_macro_and_no_test_and_the_unit_tests_modules_no_item_word() {
     for (file, text) in SOURCES {
         let (library, tests_module) = library_and_tests(text);
-        let tight = squeezed(&library);
-        // `assert!`, `assert_eq!`, `assert_ne!` and `debug_assert!` panic; a test attribute, by any path, builds a
-        // function for the tests alone
-        for refused in ["assert", "test]"] {
-            assert!(!tight.contains(refused), "{file}: the library's code holds {refused}");
+        let library_words = words(&library);
+        // the assertions panic, and so do the panic macros reached by another name, inside a macro too
+        for refused in [
+            "assert",
+            "assert_eq",
+            "assert_ne",
+            "assert_matches",
+            "debug_assert",
+            "debug_assert_eq",
+            "debug_assert_ne",
+            "debug_assert_matches",
+            "todo",
+            "unimplemented",
+            "unreachable",
+        ] {
+            assert!(!library_words.contains(&refused), "{file}: the library's code holds {refused}");
         }
-        let words: Vec<&str> =
-            tests_module.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| !w.is_empty()).collect();
+        // `test` in the library's code only in the root's no_std switch: no test attribute, by any path, name or
+        // macro; and the library's one macro is `impl_bits!`
+        let count = |word: &str| library_words.iter().filter(|w| **w == word).count();
+        assert_eq!(count("test"), usize::from(file == "lib.rs"), "{file}: the library's code names `test`");
+        assert_eq!(count("macro_rules"), usize::from(file == "bits.rs"), "{file}: a macro of the library's");
+        let module_words = words(&tests_module);
         for refused in ["impl", "trait", "macro_rules", "macro_use"] {
-            assert!(!words.contains(&refused), "{file}: the unit tests' module holds {refused}");
+            assert!(!module_words.contains(&refused), "{file}: the unit tests' module holds {refused}");
         }
     }
 }
 
 #[test]
-fn the_word_check_reads_code_and_words_alone() {
-    let source = "/// an example: assert!(x)\npub fn f() {}\n#[cfg(test)]\nmod tests {\n    // a simple test\n    #[test]\n    fn t() { assert!(true) }\n}\n";
+fn the_reading_finds_code_where_the_compiler_does_and_words_alone() {
+    let source = r##"/// an example: assert!(x), and an impl
+pub fn f(asserted: bool) -> bool { asserted } // de-asserted at pt; the trait's default
+const S: &str = "
+// */ assert!(false) is in a string, \" and an escaped quote
+";
+const R: &str = r#"a raw "string" with a # and impl"#;
+const C: [char; 3] = ['}', '\'', '"'];
+fn life<'a>(x: &'a u8) -> &'a u8 { x }
+/* a block comment /* nested */
+// */ fn hidden() {}
+#[cfg(test)]
+mod tests {
+    // a simple test, the trait's default
+    #[test]
+    fn t() { let _ = "impl {"; let _ = '}'; }
+}
+pub fn after() {}
+"##;
     let (library, tests_module) = library_and_tests(source);
-    assert_eq!(library, "pub fn f() {}\n");
-    assert!(!squeezed(&library).contains("assert"), "a doc example is no code of the library");
-    assert!(tests_module.starts_with("#[cfg(test)]") && tests_module.contains("fn t()"));
-    assert!(!tests_module.contains("simple"), "a comment line is taken out");
+    let library_words = words(&library);
+    for kept in ["asserted", "life", "a", "hidden", "after"] {
+        assert!(library_words.contains(&kept), "{kept} is the library's code");
+    }
+    for gone in ["assert", "example", "impl", "trait", "string", "raw", "nested"] {
+        assert!(!library_words.contains(&gone), "{gone} is a comment's or a literal's");
+    }
+    let module_words = words(&tests_module);
+    assert!(tests_module.starts_with("#[cfg(test)]") && tests_module.trim_end().ends_with('}'));
+    assert!(module_words.contains(&"t") && !module_words.contains(&"after"), "the module ends at its brace");
+    for gone in ["simple", "trait", "impl"] {
+        assert!(!module_words.contains(&gone), "{gone} is a comment's or a literal's");
+    }
 }
 
 #[test]
-fn a_scan_whose_time_goes_back_switches_no_timer_and_panics_none() {
+fn a_timer_s_elapsed_time_is_measured_from_its_start_on_a_scan_whose_time_goes_back_and_nothing_panics() {
     let pt = ms(100);
+    // an on-delay started at 100 ms
     let mut on = Ton::default();
-    on.scan(&at(100), true, pt);
-    assert!(!on.scan(&at(50), true, pt), "an on-delay started at 100 ms, scanned at 50: nothing elapsed");
-    assert_eq!(on.et(), ms(0));
-    assert!(on.scan(&at(200), true, pt), "and pt from its start, as before");
+    let mut ton = |t: u64, input: bool| (on.scan(&at(t), input, pt), on.et());
+    assert_eq!(ton(100, true), (false, ms(0)));
+    assert_eq!(ton(150, true), (false, ms(50)));
+    assert_eq!(ton(199, true), (false, ms(99)));
+    assert_eq!(ton(200, true), (true, ms(100)));
+    assert_eq!(ton(150, true), (false, ms(50)), "back after switching on: 50 ms from its start");
+    assert_eq!(ton(50, true), (false, ms(0)), "back before its start: nothing elapsed");
+    assert_eq!(ton(120, true), (false, ms(20)), "and its start where it was");
+    assert_eq!(ton(200, true), (true, ms(100)));
+    assert_eq!(ton(150, false), (false, ms(0)), "its input off on a scan back: off and restarted");
+    assert_eq!(ton(120, true), (false, ms(0)));
+    assert_eq!(ton(219, true), (false, ms(99)));
+    assert_eq!(ton(220, true), (true, ms(100)), "pt from the new start");
+    // an off-delay dropped at 100 ms
     let mut off = Tof::default();
-    off.scan(&at(0), true, pt);
-    off.scan(&at(100), false, pt);
-    assert!(off.scan(&at(50), false, pt), "an off-delay dropped at 100 ms, scanned at 50: still on");
-    assert_eq!(off.et(), ms(0));
-    assert!(!off.scan(&at(200), false, pt), "and off pt after its drop, as before");
+    let mut tof = |t: u64, input: bool| (off.scan(&at(t), input, pt), off.et());
+    assert_eq!(tof(0, true), (true, ms(0)));
+    assert_eq!(tof(100, false), (true, ms(0)));
+    assert_eq!(tof(180, false), (true, ms(80)));
+    assert_eq!(tof(150, false), (true, ms(50)), "back mid-delay: 50 ms from the drop");
+    assert_eq!(tof(50, false), (true, ms(0)), "back before the drop: nothing elapsed");
+    assert_eq!(tof(120, false), (true, ms(20)), "and the drop where it was");
+    assert_eq!(tof(199, false), (true, ms(99)));
+    assert_eq!(tof(200, false), (false, ms(100)));
+    assert_eq!(tof(150, false), (false, ms(100)), "back after switching off: off, its elapsed time held");
+    assert_eq!(tof(120, true), (true, ms(0)), "its input on on a scan back: on");
+    assert_eq!(tof(130, false), (true, ms(0)));
+    assert_eq!(tof(229, false), (true, ms(99)));
+    assert_eq!(tof(230, false), (false, ms(100)), "pt from the new drop");
+    // a pulse from an edge at 100 ms, its input held on
     let mut pulse = Tp::default();
-    pulse.scan(&at(100), true, pt);
-    assert!(pulse.scan(&at(50), true, pt), "a pulse started at 100 ms, scanned at 50: still on");
-    assert_eq!(pulse.et(), ms(0));
-    assert!(!pulse.scan(&at(200), true, pt), "and over pt after its edge, as before");
+    let mut tp = |t: u64, input: bool| (pulse.scan(&at(t), input, pt), pulse.et());
+    assert_eq!(tp(100, true), (true, ms(0)));
+    assert_eq!(tp(150, true), (true, ms(50)));
+    assert_eq!(tp(199, true), (true, ms(99)));
+    assert_eq!(tp(200, true), (false, ms(100)));
+    assert_eq!(tp(210, true), (false, ms(100)));
+    assert_eq!(tp(150, true), (true, ms(50)), "back after the pulse, its input on: 50 ms from its edge");
+    assert_eq!(tp(50, true), (true, ms(0)), "back before its edge: nothing elapsed");
+    assert_eq!(tp(120, true), (true, ms(20)), "and its edge where it was");
+    assert_eq!(tp(210, true), (false, ms(100)));
+    assert_eq!(tp(150, false), (true, ms(50)), "its input off on a scan back: 50 ms from its edge");
+    assert_eq!(tp(220, false), (false, ms(0)), "over, its input off: reset");
+    assert_eq!(tp(230, true), (true, ms(0)), "the next edge pulses again");
 }
 
 #[test]
-fn a_period_that_changes_moves_no_timer_s_switching_time() {
+fn a_period_that_changes_or_is_zero_moves_no_timer_s_switching_time() {
     let pt = ms(100);
     let scan = |t: u64, period: u64| Scan { now: ms(t), period: ms(period), cycle: t / 10 };
     let mut on = Ton::default();
     on.scan(&scan(0, 10), true, pt);
+    assert!(!on.scan(&scan(50, 0), true, pt), "a period of zero: still off");
     assert!(!on.scan(&scan(95, 20), true, pt), "95 ms on, the period now 20 ms: still off");
-    assert!(on.scan(&scan(100, 20), true, pt));
+    assert!(on.scan(&scan(100, 0), true, pt), "on at pt, the period zero");
+    assert!(on.scan(&scan(110, 20), true, pt));
     let mut off = Tof::default();
     off.scan(&scan(0, 10), true, pt);
-    off.scan(&scan(10, 10), false, pt);
-    assert!(off.scan(&scan(105, 20), false, pt), "95 ms after the drop: still on");
-    assert!(!off.scan(&scan(110, 20), false, pt));
+    off.scan(&scan(10, 0), false, pt);
+    assert!(off.scan(&scan(105, 20), false, pt), "95 ms after a drop on a period of zero: still on");
+    assert!(!off.scan(&scan(110, 0), false, pt), "off at pt, the period zero");
     let mut pulse = Tp::default();
-    pulse.scan(&scan(0, 10), true, pt);
-    assert!(pulse.scan(&scan(95, 20), true, pt), "95 ms into the pulse: still on");
-    assert!(!pulse.scan(&scan(100, 20), true, pt));
+    pulse.scan(&scan(0, 0), true, pt);
+    assert!(pulse.scan(&scan(95, 20), true, pt), "95 ms into a pulse begun on a period of zero: still on");
+    assert!(!pulse.scan(&scan(100, 0), true, pt), "over at pt, the period zero");
+}
+
+#[test]
+fn every_timer_at_the_longest_preset_time_waits_to_the_end_of_time_and_panics_none() {
+    let longest = Duration::MAX;
+    let late = Scan { now: ms(u64::MAX), period: ms(10), cycle: u64::MAX };
+    let end = Scan { now: Duration::MAX, period: ms(10), cycle: u64::MAX };
+    let mut on = Ton::default();
+    assert!(!on.scan(&at(0), true, longest));
+    assert_eq!((on.scan(&late, true, longest), on.et()), (false, ms(u64::MAX)));
+    assert_eq!((on.scan(&end, true, longest), on.et()), (true, Duration::MAX), "on at the very end");
+    let mut off = Tof::default();
+    off.scan(&at(0), true, longest);
+    off.scan(&at(0), false, longest);
+    assert_eq!((off.scan(&late, false, longest), off.et()), (true, ms(u64::MAX)));
+    assert_eq!((off.scan(&end, false, longest), off.et()), (false, Duration::MAX), "off at the very end");
+    let mut pulse = Tp::default();
+    pulse.scan(&at(0), true, longest);
+    assert_eq!((pulse.scan(&late, true, longest), pulse.et()), (true, ms(u64::MAX)));
+    assert_eq!((pulse.scan(&end, true, longest), pulse.et()), (false, Duration::MAX), "over at the very end");
 }
