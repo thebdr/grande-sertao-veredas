@@ -9,7 +9,7 @@
 //! Each master is a feature of the crate, off by default, so a component that never drives
 //! hardware carries none of their code or dependencies:
 //!
-//! - `modbus` ([`modbus`]): a Modbus/TCP client, every public function of a device's data model,
+//! - `modbus` ([`modbus`]): a Modbus/TCP client, ten public functions of a device's data model,
 //!   each answer checked against its request and every call bounded in time.
 
 #[cfg(feature = "modbus")]

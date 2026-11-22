@@ -3,9 +3,9 @@
 //!
 //! A Modbus device holds four tables: coils (bits a client reads and writes), discrete inputs
 //! (bits it only reads), holding registers (16-bit words it reads and writes) and input registers
-//! (words it only reads). A [`Client`] speaks every public function of that data model: the four
-//! reads, a coil or a register written alone or several at once, a register masked, registers
-//! read and written in one request. The frames are the standard's (an MBAP header with its
+//! (words it only reads). A [`Client`] speaks ten of the standard's public functions on that data
+//! model: the four reads, a coil or a register written alone or several at once, a register
+//! masked, registers read and written in one request (Read FIFO Queue, 0x18, is not spoken). The frames are the standard's (an MBAP header with its
 //! transaction number, protocol 0, length and unit identifier, then the function's PDU), framed
 //! by the tokio-modbus crate; this module adds what a controller needs of a link it leaves running
 //! for years:

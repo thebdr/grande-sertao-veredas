@@ -538,6 +538,68 @@ fn an_answer_that_does_not_answer_the_request_is_refused_and_ends_the_connection
     type Wrong = fn(&[u8]) -> Vec<u8>;
     type Call = fn(&mut Client) -> Result<(), ModbusError>;
     let wrongs: Vec<(&str, Wrong, Call, bool)> = vec![
+        // An exception is an answer too, held to its request like any other: one that answers
+        // another request must not be read as this write's "not done" nor keep the connection.
+        (
+            "a write's exception for another function",
+            |req| answer(req, &[0x83, 0x02]),
+            |c| c.write_register(1, 2),
+            true,
+        ),
+        (
+            "a write's exception for another transaction",
+            |req| {
+                adu(
+                    u16::from_be_bytes([req[0], req[1]]) ^ 0x5555,
+                    req[6],
+                    &[0x86, 0x02],
+                )
+            },
+            |c| c.write_register(1, 2),
+            true,
+        ),
+        (
+            "a write's exception for another unit",
+            |req| {
+                adu(
+                    u16::from_be_bytes([req[0], req[1]]),
+                    req[6] ^ 1,
+                    &[0x86, 0x02],
+                )
+            },
+            |c| c.write_register(1, 2),
+            true,
+        ),
+        (
+            "a read's exception for another function",
+            |req| answer(req, &[0x84, 0x02]),
+            |c| c.read_holding_registers(0, 1).map(|_| ()),
+            false,
+        ),
+        (
+            "a read's exception for another transaction",
+            |req| {
+                adu(
+                    u16::from_be_bytes([req[0], req[1]]) ^ 0x5555,
+                    req[6],
+                    &[0x83, 0x02],
+                )
+            },
+            |c| c.read_holding_registers(0, 1).map(|_| ()),
+            false,
+        ),
+        (
+            "a read's exception for another unit",
+            |req| {
+                adu(
+                    u16::from_be_bytes([req[0], req[1]]),
+                    req[6] ^ 1,
+                    &[0x83, 0x02],
+                )
+            },
+            |c| c.read_holding_registers(0, 1).map(|_| ()),
+            false,
+        ),
         (
             "another transaction",
             |req| {

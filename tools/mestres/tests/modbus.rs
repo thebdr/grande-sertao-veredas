@@ -106,7 +106,9 @@ fn every_function_reads_what_the_plant_holds_and_writes_what_it_then_holds() {
         c.read_write_registers(14, 2, 15, &[7]).unwrap(),
         vec![0xFF, 7]
     );
-    // The largest requests the standard allows, at the table's last addresses.
+    // The largest register requests the standard allows, at the table's last addresses (the
+    // largest coil requests, 2000 read and 1968 written, pass a bench table of 200; core's own
+    // test takes them at address 65535).
     let big = device(None);
     let mut b = client(&big, 1);
     let many: Vec<bool> = (0..200).map(|i| i % 7 == 0).collect();
