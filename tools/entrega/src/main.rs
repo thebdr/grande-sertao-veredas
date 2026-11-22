@@ -98,7 +98,8 @@ fn prova(release: &str) -> i32 {
             println!("  boot: {}", if proof.console.contains(&format!("VEREDAS-SUMS-OK {release}")) { "the release's sums checked" } else { "no check of the sums seen" });
             println!("  plant from the host: page {}, write {} {}", proof.plant.page.status, proof.plant.write.status, proof.plant.write.body);
             println!("  objects: {}", names(&proof.plant.second));
-            println!("  screen: {} colours ({})", proof.colours, proof.screen.display());
+            println!("  screen: {} colours, the page in its canvas colour over {:.0} % of it ({})", proof.colours, proof.page_share * 100.0, proof.screen.display());
+            println!("  the OVA as VMware reads it: {}", if proof.ova.is_empty() { "members, descriptor and sums right".to_string() } else { proof.ova.join("; ") });
             println!("  disk unchanged: {}", proof.before == proof.after);
             for f in &faults {
                 eprintln!("{f}");

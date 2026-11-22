@@ -383,9 +383,9 @@ pub fn from_release(root: &Path, release: &str, target: &str) -> Result<Paths, V
     build(&recipe, &bundle, &bundle_dir, release, &guide, &work.join("maquina"))
 }
 
-/// A PPM screen dump's distinct colours, counted on a grid of every fourth pixel; `None` for a
-/// file that is no binary PPM.
-pub fn colours(ppm: &[u8]) -> Option<usize> {
+/// The colours of a PPM screen dump sampled on a grid of every fourth pixel; `None` for a file
+/// that is no binary PPM.
+fn samples(ppm: &[u8]) -> Option<Vec<(u8, u8, u8)>> {
     let head = String::from_utf8_lossy(&ppm[..ppm.len().min(64)]).into_owned();
     let mut fields = head.split_ascii_whitespace();
     if fields.next() != Some("P6") {
@@ -395,41 +395,139 @@ pub fn colours(ppm: &[u8]) -> Option<usize> {
     let h: usize = fields.next()?.parse().ok()?;
     fields.next()?;
     let header = ppm.len().checked_sub(w * h * 3)?;
-    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
     for y in (0..h).step_by(4) {
         for x in (0..w).step_by(4) {
             let i = header + (y * w + x) * 3;
-            seen.insert((ppm[i], ppm[i + 1], ppm[i + 2]));
+            out.push((ppm[i], ppm[i + 1], ppm[i + 2]));
         }
     }
-    Some(seen.len())
+    Some(out)
+}
+
+/// A PPM screen dump's distinct colours, on the grid; `None` for a file that is no binary PPM.
+pub fn colours(ppm: &[u8]) -> Option<usize> {
+    let s = samples(ppm)?;
+    Some(s.iter().collect::<std::collections::BTreeSet<_>>().len())
+}
+
+/// The share of a PPM screen dump, on the grid, in exactly `colour`; `None` for no binary PPM.
+pub fn share_of(ppm: &[u8], colour: (u8, u8, u8)) -> Option<f64> {
+    let s = samples(ppm)?;
+    Some(s.iter().filter(|c| **c == colour).count() as f64 / s.len().max(1) as f64)
+}
+
+/// The share of the screen the page must cover, in its own canvas colour, for the proof to say the
+/// browser draws it (the first release's dump: 32 % with the window not yet maximised; a desktop
+/// without the page, its wallpaper and panel, holds none of that exact colour).
+pub const PAGE_SHARE: f64 = 0.15;
+
+/// Supervisão's page canvas as the release's page states it (`--canvas: #rrggbb` in its built
+/// stylesheet at `commit`), so the proof looks for the page it ships, whatever its design.
+pub fn page_canvas(root: &Path, commit: &str) -> Result<(u8, u8, u8), VmError> {
+    let css = crate::git::show(root, commit, "crates/veredas-supervisao/web/dist/assets/app.css")
+        .map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?
+        .unwrap_or_default();
+    let hex = css
+        .split("--canvas:")
+        .nth(1)
+        .map(str::trim_start)
+        .and_then(|r| r.strip_prefix('#'))
+        .map(|r| r.chars().take(6).collect::<String>());
+    let byte = |h: &str, at: usize| h.get(at..at + 2).and_then(|b| u8::from_str_radix(b, 16).ok());
+    match hex.as_deref().and_then(|h| Some((byte(h, 0)?, byte(h, 2)?, byte(h, 4)?))) {
+        Some(c) => Ok(c),
+        None => Err(VmError::Failed {
+            program: "the proof".into(),
+            status: "refused".into(),
+            stderr: format!("commit {commit}: supervisão's page states no `--canvas` colour"),
+        }),
+    }
+}
+
+/// What is wrong with an OVA as VMware reads it, opened into `opened`: its members in order (the
+/// descriptor, the manifest, the disk), owned by root by number and read as 0644; the descriptor
+/// well-formed, naming the disk with its size and capacity and the recipe's hardware; the
+/// manifest's sums those of the members. Empty when it is right.
+pub fn ova_faults(r: &Recipe, ova: &Path, release: &str, opened: &Path) -> Result<Vec<String>, VmError> {
+    let name = format!("veredas-{release}");
+    let mut out = Vec::new();
+    let members = vm::run("tar", &["-tf", &ova.display().to_string()], None)?;
+    let want = format!("{name}.ovf\n{name}.mf\n{name}-disk1.vmdk\n");
+    if members != want {
+        out.push(format!("the OVA's members are {members:?}, not {want:?}"));
+    }
+    let listing = vm::run("tar", &["-tvf", &ova.display().to_string()], None)?;
+    for l in listing.lines() {
+        if !l.starts_with("-rw-r--r-- 0/0 ") {
+            out.push(format!("an OVA member is not a 0644 file owned by root: {l}"));
+        }
+    }
+    let ovf_path = opened.join(format!("{name}.ovf"));
+    let vmdk = opened.join(format!("{name}-disk1.vmdk"));
+    let ovf = std::fs::read_to_string(&ovf_path).unwrap_or_default();
+    let size = std::fs::metadata(&vmdk).map(|m| m.len()).unwrap_or(0);
+    let capacity = u64::from(r.machine.disk_gb) << 30;
+    for needle in [
+        format!(r#"<File ovf:id="file1" ovf:href="{name}-disk1.vmdk" ovf:size="{size}"/>"#),
+        format!(r#"ovf:capacity="{capacity}" ovf:capacityAllocationUnits="byte""#),
+        "vmdk.html#streamOptimized".to_string(),
+        format!("<vssd:VirtualSystemType>vmx-{:02}</vssd:VirtualSystemType>", r.machine.hardware_version),
+        "<rasd:ResourceSubType>VirtualSCSI</rasd:ResourceSubType>".to_string(),
+        "<rasd:ResourceSubType>VmxNet3</rasd:ResourceSubType>".to_string(),
+        format!("<rasd:VirtualQuantity>{}</rasd:VirtualQuantity>", r.machine.cpus),
+        format!("<rasd:VirtualQuantity>{}</rasd:VirtualQuantity>", r.machine.memory_mb),
+        r#"vmw:key="firmware" vmw:value="bios""#.to_string(),
+    ] {
+        if !ovf.contains(&needle) {
+            out.push(format!("the descriptor holds no {needle}"));
+        }
+    }
+    if vm::run("xmllint", &["--noout", &ovf_path.display().to_string()], None).is_err() {
+        out.push("the descriptor is not well-formed XML".into());
+    }
+    let mf = std::fs::read_to_string(opened.join(format!("{name}.mf"))).unwrap_or_default();
+    let want_mf = format!(
+        "SHA256({name}.ovf)= {}\nSHA256({name}-disk1.vmdk)= {}\n",
+        cache::sha256(&ovf_path).unwrap_or_default(),
+        cache::sha256(&vmdk).unwrap_or_default()
+    );
+    if mf != want_mf {
+        out.push(format!("the manifest's sums are not the members': {mf:?}"));
+    }
+    Ok(out)
 }
 
 /// What the proof boot of an OVA's disk saw.
 pub struct Proof {
     /// The disk taken out of the OVA.
     pub vmdk: PathBuf,
+    /// What is wrong with the OVA as VMware reads it ([`ova_faults`]).
+    pub ova: Vec<String>,
     /// The serial console when the plant was read.
     pub console: String,
     /// The plant read from the host through the forwarded port.
     pub plant: crate::together::Report,
-    /// The last screen dump and its colours.
+    /// The last screen dump, its colours and the share of it in the page's canvas colour.
     pub screen: PathBuf,
     pub colours: usize,
+    pub page_share: f64,
     /// The disk's SHA-256 before the boot, and after it.
     pub before: String,
     pub after: String,
 }
 
 /// The proof of a tester machine (docs/entrega-plan.md, "How a build is proven"): the OVA opened
-/// into `work`, its disk booted copy-on-write on VMware's devices with a card address the
-/// provisioning never saw; the boot's check of the release's sums waited for on the console; the
-/// plant read from the host; the screen dumped until it shows the desktop; the disk hashed again.
-pub fn prove(r: &Recipe, ova: &Path, release: &str, work: &Path) -> Result<Proof, VmError> {
+/// into `work` and read as VMware reads it; its disk booted copy-on-write on VMware's devices with a
+/// card address the provisioning never saw; the boot's check of the release's sums and of its cards
+/// waited for on the console; the plant read from the host; the screen dumped until the page, in its
+/// canvas colour `canvas`, covers [`PAGE_SHARE`] of it; the disk hashed again.
+pub fn prove(r: &Recipe, ova: &Path, release: &str, canvas: (u8, u8, u8), work: &Path) -> Result<Proof, VmError> {
     let opened = work.join("opened");
     let _ = std::fs::remove_dir_all(&opened);
     std::fs::create_dir_all(&opened)?;
     vm::run("tar", &["-xf", &ova.display().to_string(), "-C", &opened.display().to_string()], None)?;
+    let ova_found = ova_faults(r, ova, release, &opened)?;
     let vmdk = opened.join(format!("veredas-{release}-disk1.vmdk"));
     let before = cache::sha256(&vmdk)?;
     let port = vm::free_port()?;
@@ -438,32 +536,34 @@ pub fn prove(r: &Recipe, ova: &Path, release: &str, work: &Path) -> Result<Proof
     let mut m = boot(r, &vmdk, port, Some(qmp), &console)?;
     m.wait_for("VEREDAS-SUMS-", Duration::from_secs(300))?;
     let plant = crate::together::read_plant(([127, 0, 0, 1], port).into(), Duration::from_secs(300), Duration::from_secs(2));
-    let console_text = m.console();
     let screen = work.join("proof-screen.ppm");
-    let mut seen = 0;
+    let (mut seen, mut share) = (0, 0.0);
     let start = std::time::Instant::now();
-    while start.elapsed() < Duration::from_secs(240) {
+    while start.elapsed() < Duration::from_secs(300) {
         std::thread::sleep(Duration::from_secs(10));
         let _ = std::fs::remove_file(&screen);
         if vm::screendump(qmp, &screen).is_ok()
             && let Ok(bytes) = std::fs::read(&screen)
         {
             seen = colours(&bytes).unwrap_or(0);
-            if seen > 200 {
+            share = share_of(&bytes, canvas).unwrap_or(0.0);
+            if share >= PAGE_SHARE {
                 break;
             }
         }
     }
+    let console_text = m.console();
     m.kill();
     let after = cache::sha256(&vmdk)?;
-    Ok(Proof { vmdk, console: console_text, plant, screen, colours: seen, before, after })
+    Ok(Proof { vmdk, ova: ova_found, console: console_text, plant, screen, colours: seen, page_share: share, before, after })
 }
 
-/// Why a proof does not show the machine working: the release's sums checked at boot, the guest
-/// on VMware's disk and network drivers, the plant from the host, a desktop drawn, the disk
-/// unchanged. Empty when it does.
+/// Why a proof does not show the machine working: the OVA as VMware reads it, the release's sums
+/// checked at boot, the guest on VMware's disk and network drivers and naming the proof's card, the
+/// plant from the host, the page drawn by the desktop's browser, the disk unchanged. Empty when it
+/// does.
 pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
-    let mut out = Vec::new();
+    let mut out = p.ova.clone();
     if !p.console.contains(&format!("VEREDAS-SUMS-OK {release}")) {
         out.push(format!("the boot did not check the release's sums (VEREDAS-SUMS-OK {release})"));
     }
@@ -472,9 +572,17 @@ pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
             out.push(format!("the guest did not name {driver}"));
         }
     }
+    if !p.console.lines().any(|l| l.contains("VEREDAS-CARD ") && l.trim_end().ends_with(PROOF_MAC)) {
+        out.push(format!("the guest named no card with the proof's address {PROOF_MAC}"));
+    }
     out.extend(crate::together::plant_faults(&p.plant));
-    if p.colours <= 200 {
-        out.push(format!("the screen shows {} colours: no desktop with a page ({})", p.colours, p.screen.display()));
+    if p.page_share < PAGE_SHARE {
+        out.push(format!(
+            "the page covers {:.0} % of the screen in its canvas colour, under {:.0} %: the browser does not draw it ({})",
+            p.page_share * 100.0,
+            PAGE_SHARE * 100.0,
+            p.screen.display()
+        ));
     }
     if p.before != p.after {
         out.push("the proof boot changed the shipped disk".into());
@@ -498,7 +606,8 @@ pub fn prove_release(root: &Path, release: &str, target: &str) -> Result<(Proof,
         .map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?
         .ok_or_else(|| VmError::Failed { program: "the proof".into(), status: "refused".into(), stderr: format!("commit {} holds no recipe", m.commit) })?;
     let recipe = Recipe::load(&recipe_text).map_err(|e| VmError::Failed { program: "the recipe".into(), status: "refused".into(), stderr: e.to_string() })?;
-    let proof = prove(&recipe, &ova, release, &work.join("prova"))?;
+    let canvas = page_canvas(root, &m.commit)?;
+    let proof = prove(&recipe, &ova, release, canvas, &work.join("prova"))?;
     let faults = proof_faults(&proof, release);
     Ok((proof, faults))
 }

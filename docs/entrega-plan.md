@@ -225,8 +225,11 @@ edit of that file.
   object live, the parcels move and the sorter's lines arrive; a write the binding offers is
   refused by portal's switch; the release's files are the bundle's (the boot's check of their
   sums, on the console).
-- **The desktop draws the page**: a screen dump over QEMU's monitor shows a screen of many
-  colours, not a console.
+- **The desktop draws the page**: screen dumps over QEMU's monitor until supervisão's own canvas
+  colour (read from the release's page) covers 15 % of the screen; a desktop without the page, its
+  wallpaper and panel, holds none of it, however many colours it has.
+- **The OVA is what VMware reads**: `entrega prova` checks the OVA's members, descriptor and sums
+  before it boots the disk, as the machine's test does.
 - **The package is what it says**: the OVA's members in order, the descriptor naming the disk with
   its size and capacity, the `.mf` sums matching the members.
 - What only VMware proves is listed below, and stays the architect's to try.

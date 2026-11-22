@@ -55,7 +55,7 @@ fn the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vm
         format!(r#"<File ovf:id="file1" ovf:href="{name}-disk1.vmdk" ovf:size="{size}"/>"#),
         format!(r#"ovf:capacity="{capacity}" ovf:capacityAllocationUnits="byte""#),
         "vmdk.html#streamOptimized".to_string(),
-        format!("<vssd:VirtualSystemType>vmx-{}</vssd:VirtualSystemType>", recipe.machine.hardware_version),
+        format!("<vssd:VirtualSystemType>vmx-{:02}</vssd:VirtualSystemType>", recipe.machine.hardware_version),
         "<rasd:ResourceSubType>VirtualSCSI</rasd:ResourceSubType>".to_string(),
         "<rasd:ResourceSubType>VmxNet3</rasd:ResourceSubType>".to_string(),
         format!("<rasd:VirtualQuantity>{}</rasd:VirtualQuantity>", recipe.machine.memory_mb),
@@ -77,7 +77,9 @@ fn the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vm
 
     // The shipped disk booted on VMware's devices, a card address the provisioning never saw: the
     // release's sums checked at boot, the plant read from the host, the desktop drawn.
-    let proof = maquina::prove(&recipe, &paths.ova, release, &work.join("prova")).unwrap();
+    let head = entrega::git::text(&root, &["rev-parse", "HEAD"]).unwrap().unwrap().trim().to_string();
+    let canvas = maquina::page_canvas(&root, &head).unwrap();
+    let proof = maquina::prove(&recipe, &paths.ova, release, canvas, &work.join("prova")).unwrap();
     assert_eq!(maquina::proof_faults(&proof, release), Vec::<String>::new());
     assert!(proof.console.contains(&format!("VEREDAS-SUMS-OK {release}")) && !proof.console.contains("VEREDAS-SUMS-FAILED"));
     assert!(proof.console.contains("vmw_pvscsi") && proof.console.contains("vmxnet3"), "the guest saw VMware's devices");
@@ -92,8 +94,11 @@ fn the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vm
         assert!(a != b && (0.0..=1.0).contains(&a) && (0.0..=1.0).contains(&b), "{id}: {a} then {b}");
     }
     assert_eq!(r.second["session"]["health"]["sorter"]["state"], "live");
+    assert!(proof.ova.is_empty(), "{:?}", proof.ova);
+    assert!(proof.page_share >= maquina::PAGE_SHARE, "the page covers {:.2} of the screen", proof.page_share);
     assert!(proof.colours > 200, "the screen shows {} colours", proof.colours);
     assert_eq!(proof.after, proof.before, "the proof boot changed the shipped disk");
     assert_eq!(proof.vmdk, work.join("prova/opened").join(format!("{name}-disk1.vmdk")));
     assert_eq!(cache::sha256(&proof.vmdk).unwrap(), cache::sha256(&vmdk).unwrap(), "the disk proven is the OVA's");
+    let _ = std::fs::remove_dir_all(&work);
 }
