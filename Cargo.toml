@@ -117,6 +117,12 @@ ethernetip-connections = "=0.1.1"
 ethernetip-core = "=0.1.1"
 # Byte buffers, as the EtherNet/IP codecs take them (maquinar's tests).
 bytes = "1"
+# An EtherCAT MainDevice (maquinar's tests): the crate core's EtherCAT master stands on
+# (docs/controlador-plan.md, "Networks and devices"), bringing the bench's emulated segment up.
+# Pinned: before 1.0. Its std raw socket and nothing else.
+ethercrab = { version = "=0.7.1", default-features = false, features = ["std"] }
+# The executor ethercrab's examples drive it with.
+futures-lite = "2"
 # Whether a drive letter is a network drive (portal's tail polls a share and never watches it).
 windows-sys = "0.59"
 chacha20poly1305 = "0.10"

@@ -11,6 +11,8 @@
 //! - [`controller`]: the simulated controller, its behaviour a rules file, riding a channel.
 //! - [`modbus`]: a Modbus/TCP server, a device's four tables on a real socket.
 //! - [`ethernetip`]: an EtherNet/IP adapter, its assemblies over explicit messages and Class 1 I/O.
+//! - [`ethercat`]: an emulated EtherCAT segment, SubDevices answering a master's frames on a raw
+//!   network interface (it runs on Linux).
 //! - [`profinet`]: a PROFINET device's discovery and naming on a raw network interface (it runs on
 //!   Linux, where aranha's raw link is).
 //!
@@ -21,6 +23,7 @@ pub mod bench;
 pub mod channel;
 pub mod controller;
 pub mod emit;
+pub mod ethercat;
 pub mod ethernetip;
 pub mod modbus;
 pub mod opc;

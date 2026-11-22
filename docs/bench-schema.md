@@ -2,14 +2,15 @@
 
 A bench is the plant a consumer meets before the real one (`docs/veredas-plan.md`,
 "veredas-maquinar: the bench"): the log emitters, the OPC UA, Modbus and EtherNet/IP servers, the
-PROFINET devices and the telegram channels it talks to, each configured, none programmed. One bench file lists them all by name, and the
+PROFINET devices, the emulated EtherCAT segments and the telegram channels it talks to, each
+configured, none programmed. One bench file lists them all by name, and the
 device's own files sit beside it: core's channel file (`docs/channel-schema.md`), the catalog
 (`docs/catalog-schema.md`) and, when a controller rides a channel, its rules file
 (`docs/controller-schema.md`). `veredas_maquinar::bench::load` reads the bench file and every
 file it points at and checks each part as its own module checks it, so a bench file that loads
 is a bench every part of which can start; `Bench::start` then runs every part behind one handle,
 emitters first, then servers (OPC UA, then Modbus, then EtherNet/IP), then PROFINET devices, then
-channels, each kind in the file's order
+EtherCAT segments, then channels, each kind in the file's order
 (TOML groups a kind's tables under one key, so a file keeps no order across kinds), and the executable
 `veredas-maquinar <bench.toml>` runs it from the command line (`--check` reads, checks and
 prints the plan without starting anything). No device is named anywhere: a
@@ -145,6 +146,29 @@ device_id = 9
 lldp_interval_ms = 1000
 ```
 
+## A fifth example: an EtherCAT segment of three devices
+
+A coupler, an output terminal of two bytes and an input terminal of one answer a master on a
+network interface, as a segment answers it from the far end of its cable: the master finds them,
+reads their EEPROMs, gives them addresses, takes them to OP and exchanges their process data.
+`crates/veredas-maquinar/tests/ethercat_segment.rs` runs this block inside a private network of the
+test's own, the segment on one end of a veth pair and the MainDevice core's master stands on
+(ethercrab) on the other.
+
+```toml
+format = "veredas-bench"
+version = 1
+
+[[ethercat]]
+name = "line"
+interface = "b0"
+devices = [
+  { name = "coupler", product_code = 1, product_name = "bench coupler" },
+  { name = "out16", product_code = 2, product_name = "bench outputs", outputs = [ { index = 0x7000, subindex = 1, bits = 8 }, { index = 0x7010, subindex = 1, bits = 8 } ] },
+  { name = "in8", product_code = 3, product_name = "bench inputs", inputs = [ { index = 0x6000, subindex = 1, bits = 8 } ] },
+]
+```
+
 ## Keys
 
 Each key states in parentheses that it is required, or the value it takes when left out. Every
@@ -164,6 +188,7 @@ relative to the bench file's folder.
 - `modbus` (none): `[[modbus]]` tables.
 - `ethernetip` (none): `[[ethernetip]]` tables.
 - `profinet` (none): `[[profinet]]` tables.
+- `ethercat` (none): `[[ethercat]]` tables.
 - `channel` (none): `[[channel]]` tables.
 
 **An emitter** (`[[emitter]]`): a log a plant would write, line by line into rotating files.
@@ -343,6 +368,27 @@ each block answered, a Get answered, LLDP on its port.
 - `address` (required), `mask` (required): dotted quads.
 - `gateway` (`"0.0.0.0"`): a dotted quad.
 
+**An EtherCAT segment** (`[[ethercat]]`): SubDevices answering a master's frames on a network
+interface, raw frames through aranha's link (Linux), each frame passed through the devices in order
+and sent back; functional, never exact in time.
+- `name` (required): the part's name.
+- `interface` (required): the network interface the master's frames arrive on, by name.
+- `devices` (none): the SubDevices in the order the frames pass them, as inline tables; a segment
+  holds at least one.
+
+**A SubDevice** (an entry of `devices`): what its EEPROM says of it, and its process data.
+- `name` (required): the name the bench's handle reads and sets it by.
+- `vendor_id` (`0`), `product_code` (`0`), `revision` (`0`), `serial` (`0`): its identity.
+- `product_name` (`"veredas bench terminal"`): the name its EEPROM gives a master, 1 to 255 ASCII
+  characters.
+- `alias` (`0`): its station alias.
+- `outputs` (none), `inputs` (none): its process-data entries, as inline tables, at most 1024 bytes
+  each way.
+
+**A process-data entry** (an entry of `outputs` or `inputs`).
+- `index` (required), `subindex` (required): the object the entry maps.
+- `bits` (required): its size, 1 to 64.
+
 **A channel** (`[[channel]]`): one telegram link, listening or dialling.
 - `name` (required): the part's name.
 - `role` (required): `listen` (wait for the peer to connect) or `connect` (dial it).
@@ -369,8 +415,8 @@ finite, anything the OPC UA or the Modbus server's own checks refuse (a point ov
 its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP
 adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past
 its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name
-the standard refuses, a port not named `port-`), a file a channel points at that cannot be read or
-does not load, an `id_field` that does not ride in the framing, a controller file that
+the standard refuses, a port not named `port-`) or the EtherCAT segment's (no device, two devices of
+one name, an entry of 0 bits), a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that
 does not load against the catalog, a message the catalog lacks or whose fields leave a name
 unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the
 place named, before anything binds, opens or spawns. A part that cannot start (a port taken, a

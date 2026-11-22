@@ -45,6 +45,10 @@ tokio-modbus = { workspace = true }
 ethernetip-connections = { workspace = true }
 ethernetip-core = { workspace = true }
 bytes = { workspace = true }
+# The emulated EtherCAT segment is brought up by the MainDevice core's master stands on
+# (tests/ethercat_segment.rs).
+ethercrab = { workspace = true }
+futures-lite = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # The bench holds the host's timer at a millisecond while it runs (timer.rs, Q13).

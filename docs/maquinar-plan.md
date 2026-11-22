@@ -65,6 +65,12 @@ it never runs in production, owns its sockets, and carries no store and no deskt
   block answered with its three-byte control response, a Get answered, LLDP on its port with the
   PROFINET fields; the plant side names it, flags an address conflict, mutes it. The AR and the
   cyclic data come with core's IO controller; the nameplate and port records after.
+- **An emulated EtherCAT segment** (`ethercat`, P-020's fourth device): SubDevices answering a
+  master's frames on a network interface (Linux, aranha's raw link), each an ESC whose memory
+  answers every command with the working counter the standard gives, its AL state machine, its SII
+  EEPROM read through the registers, its distributed clock latched and offset, its FMMUs mapping
+  the logical commands; the frame sent back from the segment's far end; the plant side reads the
+  outputs, sets the inputs, faults a device, silences the segment.
 - **The bench file** (`bench`): one versioned TOML file for the whole plant (emitters, the OPC
   and Modbus servers, the channels and the files each points at), started as a library (`Bench::start`,
   for portal's tests and later comissionador) or from the command line (`veredas-maquinar
@@ -156,6 +162,8 @@ veredas_maquinar
               frame), its configuration, the objects, the sessions, Class 1 I/O, the knobs
   profinet    the PROFINET device: DCP (Hello, Identify, Set, Get) and LLDP on aranha's codecs and
               raw link, the knobs (Linux)
+  ethercat    the emulated EtherCAT segment: the ESC core (registers, commands, AL, SII, DC, FMMUs)
+              and the SII image, pure; the segment on a raw link, the knobs (Linux)
   bench       the bench file (schema), Bench::start, every part's status
   main.rs     veredas-maquinar <bench.toml> [--check] | --version; stops on stdin's end, `stop`,
               SIGTERM or SIGINT
@@ -226,6 +234,22 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
   `netns::isolated` private network, a veth pair per test. Next: the AR (the DCE/RPC Connect, the
   parameter writes, PrmEnd and ApplicationReady) and the cyclic RT frames on aranha's C-135, with
   core's IO controller; then I&M and the port's neighbour data by the connectionless read.
+- **The emulated EtherCAT segment** (C-113, 2026-11-22). Review entry 27 said it plainly: an
+  EtherCAT device handles frames in a chip as they pass, and an emulation on an ordinary card is a
+  slave controller written in software, functional, never exact in time; its clause says what it
+  covers. The ESC is a memory of 8 KB answering every register as stored, with behaviour only where
+  the standard gives one: the read-only registers kept, the AL state machine (a transition it
+  refuses flagged with code 0x0011 until acknowledged), the SII interface (a read loads 8 bytes at
+  once, never busy), the distributed clock (a write to port 0's receive time latches every port's;
+  the system time read live, its offset the master's; an FRMW of it sets the difference), the
+  FMMUs for the logical commands. The EEPROM image is built from the bench file: the identity, one
+  string (the name, given as both order number and name, since a master names a device by its
+  order number), General, FMMU and SyncManager categories, the PDOs; no mailbox, so a master maps
+  the process data from the EEPROM. The frame goes back on the wire it came from with the source's
+  locally administered bit set, as a first device sets it: ethercrab drops a frame still carrying
+  its own source. Proof: ethercrab 0.7.1 (the crate core's master stands on) finds the devices,
+  reads them, addresses them, takes them to OP and exchanges process data; hand-built frames pin
+  each command's data and counter; tshark reads the frame as sent and as returned.
 - **Raw frames without a privilege.** The EtherCAT and PROFINET devices answer raw Ethernet
   frames, which need `CAP_NET_RAW`, and the machines here have no sudo. Checked on the Linux
   machine (2026-11-22): `unshare -Urn` (an unprivileged user namespace with its own network
@@ -239,7 +263,8 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
 The architect's decisions of 13 to 16 November 2026 that touch the bench
 (`docs/controlador-plan.md`, `docs/oficina-plan.md`); status P-020.
 - **Bench devices for all four fieldbuses**, in Rust, inside maquinar: a PROFINET device, an
-  emulated EtherCAT device answering on a raw network card, an EtherNet/IP adapter (built: C-111),
+  emulated EtherCAT device answering on a raw network card (built: C-113), an EtherNet/IP adapter
+  (built: C-111),
   a Modbus server (built: C-110).
 - **Two extensions inside maquinar**, called by their bare names as `acerto` is in its host:
   `fisica` (the bodies, their motion, which sensor an object reached) and `reflexo` (what makes
