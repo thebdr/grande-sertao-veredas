@@ -11,6 +11,9 @@ veredas-core = { path = "../../../crates/veredas-core" }
 # A TOML document that keeps every comment, space and quote of the text it was parsed from.
 toml_edit = "0.25"
 thiserror = "2"
+# The language server's messages (lsp) are JSON.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"
