@@ -23,8 +23,16 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
 }
 
+/// Cargo on the suite's manifest, `--locked`: a lock that does not match is an error, never
+/// rewritten.
 fn cargo(args: &[&str]) -> String {
-    let out = Command::new(env!("CARGO")).args(args).arg("--manifest-path").arg(root().join("Cargo.toml")).output().unwrap();
+    let out = Command::new(env!("CARGO"))
+        .args(args)
+        .arg("--locked")
+        .arg("--manifest-path")
+        .arg(root().join("Cargo.toml"))
+        .output()
+        .unwrap();
     assert!(out.status.success(), "cargo {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8(out.stdout).unwrap()
 }
@@ -159,8 +167,9 @@ fn the_fork_is_upstream_at_its_commit_then_each_listed_change_a_commit() {
     sorted_rows.sort();
     assert_eq!(sorted_named, sorted_rows, "the commits' changes and the record's rows");
     // and the working tree changes none of it unrecorded
-    let dirty = git(&["status", "--porcelain", "--", "forks/ironcalc/base", "forks/ironcalc/xlsx"]);
-    assert!(dirty.trim().is_empty(), "the engine changed outside a commit:\n{dirty}");
+    // and the working tree changes none of the fork (its manifests and lock included) unrecorded
+    let dirty = git(&["status", "--porcelain", "--untracked-files=all", "--", "forks/ironcalc"]);
+    assert!(dirty.trim().is_empty(), "the fork changed outside a commit:\n{dirty}");
 }
 
 /// Ábaco's normal graph on every platform, by crate name, as reviewed on 2026-11-22: the engine,
@@ -205,12 +214,15 @@ fn no_plant_connection_and_no_member_in_its_normal_graph_on_any_platform() {
     assert!(new.is_empty(), "crates not reviewed joined Ábaco's graph: {new:?}");
 }
 
-/// The registry packages of a lock file, `name` to its versions.
+const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-index";
+
+/// The packages of a lock file that come from crates.io, `name` to its versions (one from a git
+/// repository, a path or another registry is not counted, whatever its version).
 fn locked(path: &Path) -> BTreeMap<String, BTreeSet<String>> {
     let lock: toml::Table = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for p in lock["package"].as_array().unwrap() {
-        if p.get("source").is_some() {
+        if p.get("source").and_then(|s| s.as_str()) == Some(CRATES_IO) {
             out.entry(p["name"].as_str().unwrap().to_string()).or_default().insert(p["version"].as_str().unwrap().to_string());
         }
     }
@@ -240,6 +252,10 @@ fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
     // comes from crates.io as the lock says
     let manifest: toml::Table = toml::from_str(&std::fs::read_to_string(root().join("Cargo.toml")).unwrap()).unwrap();
     assert!(manifest.get("patch").is_none() && manifest.get("replace").is_none(), "the root manifest patches crates");
+    // nor the fork's own, whose suite would then build other crates than Ábaco links
+    let fork_manifest: toml::Table =
+        toml::from_str(&std::fs::read_to_string(root().join("forks/ironcalc/Cargo.toml")).unwrap()).unwrap();
+    assert!(fork_manifest.get("patch").is_none() && fork_manifest.get("replace").is_none(), "the fork's manifest patches crates");
     let paths = [
         format!("veredas-abaco v2.0.0-alpha.1 ({})", root().join("crates/veredas-abaco").display()),
         format!("ironcalc_base v0.9.1 ({})", root().join("forks/ironcalc/base").display()),
@@ -275,7 +291,12 @@ fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
         let text = if what == "Ábaco's build" {
             cargo(&args)
         } else {
-            let out = Command::new(env!("CARGO")).args(&args).arg(root().join("forks/ironcalc/Cargo.toml")).output().unwrap();
+            let out = Command::new(env!("CARGO"))
+                .args(&args)
+                .arg(root().join("forks/ironcalc/Cargo.toml"))
+                .arg("--locked")
+                .output()
+                .unwrap();
             assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
             String::from_utf8(out.stdout).unwrap()
         };
