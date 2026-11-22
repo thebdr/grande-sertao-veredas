@@ -135,6 +135,10 @@ pub enum Store {
     /// from the project's name and the session's start, so every run leaves its own
     /// (`docs/questions.md` Q16, decided 2026-11-09).
     PerSession { dir: PathBuf, memory_limit_mb: u32 },
+    /// In memory as a window: the rows that arrived within the last `span_s` seconds, nothing
+    /// written to the drive (P-019; `docs/robustness.md`, "The store of a controller's embedded
+    /// portal").
+    Window { span_s: u32 },
 }
 
 /// The file a per-session store opens: the project's name, with anything but a letter, a digit,
@@ -335,6 +339,8 @@ enum StoreFile {
         #[serde(default)]
         memory_limit_mb: u32,
     },
+    /// In memory as a window.
+    Window { window_s: u32 },
 }
 
 // A key that takes a word or an inline table is read key by key, never through an untagged enum:
@@ -397,8 +403,16 @@ impl<'de> Deserialize<'de> for StoreFile {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         match toml::Value::deserialize(d)? {
             toml::Value::String(s) => Ok(StoreFile::Named(s)),
+            toml::Value::Table(t) if t.contains_key("window_s") => {
+                // The window is in memory: a file and a memory ceiling belong to a store on disk.
+                if let Some(k) = ["disk", "dir", "memory_limit_mb"].into_iter().find(|k| t.contains_key(*k)) {
+                    return Err(serde::de::Error::custom(format!("`window_s` keeps the store in memory: `{k}` belongs to a store on disk")));
+                }
+                only_keys(&t, &["window_s"])?;
+                Ok(StoreFile::Window { window_s: u32_at(&t, "window_s", None)? })
+            }
             toml::Value::Table(t) => {
-                only_keys(&t, &["disk", "dir", "memory_limit_mb"])?;
+                only_keys(&t, &["disk", "dir", "memory_limit_mb", "window_s"])?;
                 let memory_limit_mb = u32_at(&t, "memory_limit_mb", Some(0))?;
                 match (t.contains_key("disk"), t.contains_key("dir")) {
                     (true, true) => Err(serde::de::Error::custom("`disk` (a file pinned by name) and `dir` (a file per session) exclude each other: name one")),
@@ -407,7 +421,7 @@ impl<'de> Deserialize<'de> for StoreFile {
                     (false, false) => Err(serde::de::Error::missing_field("disk")),
                 }
             }
-            other => Err(serde::de::Error::invalid_type(unexpected(&other), &"`ram`, { disk = \"<file>\", memory_limit_mb = N } or { dir = \"<folder>\", memory_limit_mb = N }")),
+            other => Err(serde::de::Error::invalid_type(unexpected(&other), &"`ram`, { window_s = N }, { disk = \"<file>\", memory_limit_mb = N } or { dir = \"<folder>\", memory_limit_mb = N }")),
         }
     }
 }
@@ -590,6 +604,12 @@ pub fn load(text: &str, base: &Path) -> Result<Project, ProjectError> {
                 return Err(invalid("session.store: `dir` is empty: name the folder the session files go in"));
             }
             Store::PerSession { dir: resolve(base, &dir), memory_limit_mb }
+        }
+        Some(StoreFile::Window { window_s }) => {
+            if window_s == 0 {
+                return Err(invalid("session.store: `window_s` is 0; name at least one second, or keep every row with `ram`"));
+            }
+            Store::Window { span_s: window_s }
         }
     };
     if session.idle_after_ms < 1 {
@@ -831,6 +851,11 @@ impl Project {
             // A file of its own for this run, named from the project and the start; the store's
             // guard against a database already standing there still holds for it.
             Store::PerSession { dir, memory_limit_mb } => Residency::Disk { path: dir.join(session_store_file(&self.name, now)), memory_limit_mb: *memory_limit_mb },
+            Store::Window { .. } => Residency::Ram,
+        };
+        cfg.store_window = match &self.store {
+            Store::Window { span_s } => Some(std::time::Duration::from_secs(u64::from(*span_s))),
+            _ => None,
         };
         cfg.writes_armed = self.writes_armed;
         cfg.idle_after_ms = self.idle_after_ms;

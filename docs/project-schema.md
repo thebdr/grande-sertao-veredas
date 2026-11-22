@@ -122,12 +122,16 @@ against the project file's folder.
   the plant's clock), a date-time `"YYYY-MM-DD HH:MM[:SS]"`, a date `"YYYY-MM-DD"`, or
   `{ last_hours = N }` with N at least 1. A start in the past reads a file whole and backfills a
   family from the located line (a family then needs its `timestamp`).
-- `store` (default `"ram"`): `"ram"`, gone when the session ends; `{ disk = "<file>",
-  memory_limit_mb = 0 }`, a database file pinned by name that the engine pages out of core,
-  refused when one already stands at the path; or `{ dir = "<folder>", memory_limit_mb = 0 }`,
-  a database file of each run's own in that folder, named from the project's name and the
-  session's start (`<name>-<yyyymmdd>-<hhmmss>.duckdb`, the name's other characters `_`), so
-  every run leaves its own. `memory_limit_mb` is the engine's ceiling (0 for its default).
+- `store` (default `"ram"`): `"ram"`, gone when the session ends; `{ window_s = N }`, in memory
+  as a window: the rows that arrived within the last N seconds (N at least 1, on the arrival
+  clock), the older let go every second, nothing written to the drive, the form a controller's
+  embedded portal takes (`docs/robustness.md`, "Wear and filling"), with no file and no memory
+  ceiling beside it; `{ disk = "<file>", memory_limit_mb = 0 }`, a database file pinned by name
+  that the engine pages out of core, refused when one already stands at the path; or
+  `{ dir = "<folder>", memory_limit_mb = 0 }`, a database file of each run's own in that folder,
+  named from the project's name and the session's start (`<name>-<yyyymmdd>-<hhmmss>.duckdb`, the
+  name's other characters `_`), so every run leaves its own. `memory_limit_mb` is the engine's
+  ceiling (0 for its default).
 - `writes_armed` (default `false`): the master switch. Off, every write path (an OPC write, a
   channel send, a reply rule) is refused before anything reaches the plant; the switch is set in
   process, never over the wire.

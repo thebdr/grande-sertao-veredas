@@ -200,6 +200,27 @@ fn the_worked_example_loads_as_its_prose_says() {
     let e = refused(&with(&text, "[session]", "store", "store = { disk = \"s.duckdb\", dir = \"runs\" }"), dir.path());
     assert!(e.contains("`disk` (a file pinned by name) and `dir` (a file per session) exclude each other: name one"), "{e}");
     assert_eq!(refused(&with(&text, "[session]", "store", "store = { dir = \" \" }"), dir.path()), "session.store: `dir` is empty: name the folder the session files go in");
+    // In memory as a window (P-019, C-090): the span in seconds, nothing on the drive, no file
+    // and no ceiling beside it; every other form keeps every row.
+    let p = project::load(&with(&text, "[session]", "store", "store = { window_s = 900 }"), dir.path()).unwrap();
+    assert_eq!(p.store, Store::Window { span_s: 900 });
+    let cfg = p.session_config(started);
+    assert_eq!((cfg.residency, cfg.store_window), (veredas_portal::store::Residency::Ram, Some(std::time::Duration::from_secs(900))));
+    assert_eq!(project::load(&text, dir.path()).unwrap().session_config(started).store_window, None, "`ram` keeps every row");
+    let p = project::load(&with(&text, "[session]", "store", "store = { window_s = 1 }"), dir.path()).unwrap();
+    assert_eq!(p.session_config(started).store_window, Some(std::time::Duration::from_secs(1)));
+    assert_eq!(
+        refused(&with(&text, "[session]", "store", "store = { window_s = 0 }"), dir.path()),
+        "session.store: `window_s` is 0; name at least one second, or keep every row with `ram`"
+    );
+    for (line, key) in [("store = { window_s = 60, disk = \"s.duckdb\" }", "disk"), ("store = { dir = \"runs\", window_s = 60 }", "dir"), ("store = { window_s = 60, memory_limit_mb = 64 }", "memory_limit_mb")] {
+        let e = refused(&with(&text, "[session]", "store", line), dir.path());
+        assert!(e.contains(&format!("`window_s` keeps the store in memory: `{key}` belongs to a store on disk")), "{line}: {e}");
+    }
+    let e = refused(&with(&text, "[session]", "store", "store = { window_s = -5 }"), dir.path());
+    assert!(e.contains("-5") && e.contains("a whole number"), "{e}");
+    let e = refused(&with(&text, "[session]", "store", "store = { window_s = \"15m\" }"), dir.path());
+    assert!(e.contains("invalid type: string \"15m\""), "{e}");
 }
 
 #[test]
@@ -221,6 +242,8 @@ fn the_header_is_refused_before_the_body_by_the_texts_every_file_shares() {
         ("[session]", "start", "start = { last_hourz = 4 }", "last_hourz"),
         ("[session]", "start", "start = { last_hours = 4, typo = 1 }", "typo"),
         ("[session]", "store", "store = { disk = \"s.duckdb\", memory_limt_mb = 512 }", "memory_limt_mb"),
+        ("[session]", "store", "store = { window_s = 60, windw = 1 }", "windw"),
+        ("[session]", "store", "store = { windw_s = 60 }", "windw_s"),
         ("[[log]]", "active", "active = { fixed = \"x1.log\", fixd = \"y\" }", "fixd"),
     ] {
         let e = refused(&with(&text, table, key, line), dir.path());
@@ -579,6 +602,11 @@ fn the_executable_checks_a_project_and_reads_a_veredas_1_folder() {
     let out = std::process::Command::new(exe).arg(&file).arg("--check").env_remove("VEREDAS_KEY").output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     std::fs::remove_file(dir.path().join("secrets.toml")).unwrap();
+    // A store kept as a window, as the check prints it.
+    std::fs::write(&file, with(&text, "[session]", "store", "store = { window_s = 900 }")).unwrap();
+    let out = std::process::Command::new(exe).arg(&file).arg("--check").env_remove("VEREDAS_KEY").output().unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("session: from midnight; store in memory as a window of the last 900 s; writes off"), "{}", String::from_utf8_lossy(&out.stdout));
+    std::fs::write(&file, &text).unwrap();
     // A bad file: the reason on stderr, exit 2. No file: usage, exit 1.
     std::fs::write(&file, text.replacen("version = 1", "version = 2", 1)).unwrap();
     let out = std::process::Command::new(exe).arg(&file).arg("--check").output().unwrap();
@@ -1059,12 +1087,16 @@ against the project file's folder.
   the plant's clock), a date-time `"YYYY-MM-DD HH:MM[:SS]"`, a date `"YYYY-MM-DD"`, or
   `{ last_hours = N }` with N at least 1. A start in the past reads a file whole and backfills a
   family from the located line (a family then needs its `timestamp`).
-- `store` (default `"ram"`): `"ram"`, gone when the session ends; `{ disk = "<file>",
-  memory_limit_mb = 0 }`, a database file pinned by name that the engine pages out of core,
-  refused when one already stands at the path; or `{ dir = "<folder>", memory_limit_mb = 0 }`,
-  a database file of each run's own in that folder, named from the project's name and the
-  session's start (`<name>-<yyyymmdd>-<hhmmss>.duckdb`, the name's other characters `_`), so
-  every run leaves its own. `memory_limit_mb` is the engine's ceiling (0 for its default).
+- `store` (default `"ram"`): `"ram"`, gone when the session ends; `{ window_s = N }`, in memory
+  as a window: the rows that arrived within the last N seconds (N at least 1, on the arrival
+  clock), the older let go every second, nothing written to the drive, the form a controller's
+  embedded portal takes (`docs/robustness.md`, "Wear and filling"), with no file and no memory
+  ceiling beside it; `{ disk = "<file>", memory_limit_mb = 0 }`, a database file pinned by name
+  that the engine pages out of core, refused when one already stands at the path; or
+  `{ dir = "<folder>", memory_limit_mb = 0 }`, a database file of each run's own in that folder,
+  named from the project's name and the session's start (`<name>-<yyyymmdd>-<hhmmss>.duckdb`, the
+  name's other characters `_`), so every run leaves its own. `memory_limit_mb` is the engine's
+  ceiling (0 for its default).
 - `writes_armed` (default `false`): the master switch. Off, every write path (an OPC write, a
   channel send, a reply rule) is refused before anything reaches the plant; the switch is set in
   process, never over the wire.

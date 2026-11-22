@@ -482,6 +482,21 @@ impl DuckStore {
         Ok(())
     }
 
+    /// The store's window: every base-table row that arrived before `cutoff_ms` (the arrival
+    /// clock, the one health is judged on) and every bare sample indexed before it (the narrow
+    /// table carries no arrival) let go, through the ingest connection, the writer's own. Rows at
+    /// the cutoff stay. Returns how many rows went. In memory the engine hands their space back
+    /// (C-042), so a window of a fixed span holds a bounded store.
+    pub fn evict_before(&self, cutoff_ms: i64) -> Result<u64, StoreError> {
+        let conn = recover(self.ingest.lock());
+        let mut gone = 0u64;
+        for base in &self.bases {
+            gone += conn.execute(&format!("DELETE FROM {} WHERE arrival_ms < ?", quote_ident(&base.name)), [cutoff_ms])? as u64;
+        }
+        gone += conn.execute(&format!("DELETE FROM {SAMPLES_TABLE} WHERE index_ms < ?"), [cutoff_ms])? as u64;
+        Ok(gone)
+    }
+
     // ---- the narrow surface ----------------------------------------------------------------
 
     fn list_on(&self, conn: &Connection) -> Vec<SeriesInfo> {

@@ -966,3 +966,48 @@ fn the_forced_reader_s_quote_its_window_s_rows_and_the_sniffer_s_tab() {
     let d: String = conn.query_row(&format!("SELECT Delimiter FROM sniff_csv('{tabs}')"), [], |r| r.get(0)).unwrap();
     assert_eq!(d, "\t");
 }
+
+/// In memory, rows deleted hand their space back (the store's window, C-090, rests on it). The
+/// engine's figure moves in steps, not row by row: a table appended two million rows in batches
+/// with every row past the newest 50 000 deleted after each batch (as probed, between 3.5 and 28
+/// MiB, no trend) stays below the figure of a table that deletes nothing once it holds a million
+/// rows, and ends below that table's figure at two million; the table that deletes nothing grows.
+#[test]
+fn deleted_rows_hand_their_memory_back_in_memory() {
+    fn figure(conn: &Connection) -> i64 {
+        conn.query_row("SELECT coalesce(sum(memory_usage_bytes), 0) FROM duckdb_memory()", [], |r| r.get(0)).unwrap()
+    }
+    /// The figures after every 100 000 rows appended.
+    fn fill(rows: i64, keep: Option<i64>) -> Vec<i64> {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE t (source VARCHAR, arrival_ms BIGINT, seq UBIGINT, v DOUBLE, s VARCHAR)").unwrap();
+        let mut n = 0i64;
+        let mut figures = Vec::new();
+        while n < rows {
+            {
+                let mut app = conn.appender("t").unwrap();
+                for _ in 0..5_000 {
+                    app.append_row(params!["plc", n, n as u64, n as f64 * 0.5, if n % 7 == 0 { "RUN" } else { "STOP" }]).unwrap();
+                    n += 1;
+                }
+                app.flush().unwrap();
+            }
+            if let Some(k) = keep {
+                conn.execute("DELETE FROM t WHERE arrival_ms < ?", params![n - k]).unwrap();
+            }
+            if n % 100_000 == 0 {
+                figures.push(figure(&conn));
+            }
+        }
+        let held: i64 = conn.query_row("SELECT count(*) FROM t", [], |r| r.get(0)).unwrap();
+        assert_eq!(held, keep.unwrap_or(rows).min(rows));
+        figures
+    }
+    let all = fill(2_000_000, None);
+    let window = fill(2_000_000, Some(50_000));
+    let (all_1m, all_2m) = (all[9], all[19]);
+    assert!(all_2m > all_1m && all_1m > all[1], "a table that deletes nothing grows: {all:?}");
+    let most = *window.iter().max().unwrap();
+    assert!(most < all_1m, "the window's figure, at most {most}, under a million rows kept ({all_1m}): {window:?}");
+    assert!(window[19] < all_2m, "{window:?} against {all:?}");
+}

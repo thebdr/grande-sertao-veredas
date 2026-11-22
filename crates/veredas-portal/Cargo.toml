@@ -8,8 +8,9 @@ description = "The gateway of Veredas 2: the one point where the suite reads the
 
 [features]
 default = ["store", "serve"]
-# The session store, DuckDB embedded. Off, the crate is the light build controlador embeds: the
-# data plane, the channels, the OPC sources and the project file, nothing persisted.
+# The session store, DuckDB embedded. Off, the crate is the light build: the data plane, the
+# channels, the OPC sources and the project file, nothing persisted (no consumer named today;
+# controlador embeds the full build, P-019).
 store = ["dep:duckdb", "dep:serde_json", "dep:tokio"]
 # The server over a session: the live stream, windowed REST, the gated write surface. Needs the
 # store it serves.
@@ -99,4 +100,8 @@ required-features = ["serve"]
 
 [[test]]
 name = "store_engine"
+required-features = ["store"]
+
+[[test]]
+name = "store_window"
 required-features = ["store"]

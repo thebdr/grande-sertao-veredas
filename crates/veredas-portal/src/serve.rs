@@ -102,7 +102,8 @@ fn health_label(state: &HealthState) -> (&'static str, Option<String>) {
 }
 
 /// The `/api/session` body, and the stream's `hello`: what runs, its sources and their health,
-/// the store's vitals and the ingest's counters, the two clocks' now, the switch's position.
+/// the store's vitals and the ingest's counters (the rows a window let go among them), the
+/// window's span when the store is kept as one, the two clocks' now, the switch's position.
 /// Nothing here queries the store: the session endpoint answers while the store grinds a heavy
 /// window.
 pub fn snapshot(live: &Live) -> Json_ {
@@ -111,6 +112,7 @@ pub fn snapshot(live: &Live) -> Json_ {
         "session_name": live.name,
         "started_ms": live.started_ms,
         "start_ms": live.start_ms,
+        "window_ms": live.window_ms,
         "now_ms": store_now_ms(),
         "arrival_now_ms": now_unix_ms(),
         "writes_armed": live.writes_armed(),
@@ -153,6 +155,7 @@ pub fn snapshot(live: &Live) -> Json_ {
             "store_errors": c.store_errors,
             "frames": c.frames,
             "passes": c.passes,
+            "evicted": c.evicted,
             "last_error": c.last_error,
         });
     }

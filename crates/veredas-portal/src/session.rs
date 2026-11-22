@@ -43,6 +43,8 @@ pub const VITALS_EVERY: Duration = Duration::from_millis(500);
 pub const KEYS_CAP: usize = 64;
 /// Numeric samples per data frame, so a backfill's flood becomes frames a client parses.
 pub const FRAME_SAMPLES: usize = 2_000;
+/// How often a store kept as a window lets go of what fell out of it.
+pub const WINDOW_EVERY: Duration = Duration::from_secs(1);
 /// A source alive but silent this long reads as idle (a quiet log, a share away) rather than live.
 pub use crate::project::DEFAULT_IDLE_MS;
 
@@ -58,6 +60,10 @@ pub struct SessionConfig {
     /// read whole); absent, every log is followed live from its end.
     pub start: Option<NaiveDateTime>,
     pub residency: Residency,
+    /// The store kept as a window (P-019, `docs/robustness.md` "Wear and filling"): the rows that
+    /// arrived within this span, the older let go every second, so the store holds a bounded
+    /// stretch however long the session runs. None keeps every row.
+    pub store_window: Option<Duration>,
     /// The master write switch's initial position. Off unless the project says so; set inside
     /// portal alone, so a shell reads it (`writes_armed()`) and never decides it.
     pub(crate) writes_armed: bool,
@@ -80,6 +86,7 @@ impl SessionConfig {
             name: name.into(),
             start: None,
             residency: Residency::Ram,
+            store_window: None,
             writes_armed: false,
             idle_after_ms: DEFAULT_IDLE_MS,
             logs: Vec::new(),
@@ -219,6 +226,8 @@ pub struct Counters {
     pub frames: u64,
     /// Passes of the pump, a liveness count.
     pub passes: u64,
+    /// Rows a store kept as a window let go.
+    pub evicted: u64,
     pub last_error: Option<String>,
 }
 
@@ -230,6 +239,8 @@ pub struct Live {
     pub started_ms: i64,
     /// The chosen start point, on the store's axis, when the session backfills.
     pub start_ms: Option<i64>,
+    /// The span of the store's window, when it is kept as one.
+    pub window_ms: Option<i64>,
     pub sources: Vec<SourceInfo>,
     pub store: Arc<DuckStore>,
     /// The master write switch, live, shared with every write path. Crate-private: outside
@@ -319,6 +330,9 @@ struct Inner {
     series: BTreeMap<String, SeriesLastLocal>,
     counters: Counters,
     vitals_at: Option<Instant>,
+    /// The window's span and its last pass, when the store is kept as one.
+    window_ms: Option<i64>,
+    evicted_at: Option<Instant>,
     idle_after_ms: i64,
     stopped: bool,
     /// Each worker's outcome at the stop (none for a clean end, the text of a failure), read by
@@ -355,6 +369,11 @@ fn value_type(v: &Value) -> SeriesType {
         Value::Text(_) => SeriesType::Text,
         Value::Time(_) => SeriesType::Time,
     }
+}
+
+/// The window's span in milliseconds, at least one.
+fn window_ms(cfg: &SessionConfig) -> Option<i64> {
+    cfg.store_window.map(|w| i64::try_from(w.as_millis()).unwrap_or(i64::MAX).max(1))
 }
 
 fn parse_type(text: &str) -> Option<SeriesType> {
@@ -540,6 +559,7 @@ impl Session {
 
         // The store, then the workers.
         let store = Arc::new(DuckStore::open(&cfg.residency, &specs, &cfg.tables)?);
+        let window = window_ms(&cfg);
         let gate = WriteGate::new(cfg.writes_armed);
         let (frames, _) = tokio::sync::broadcast::channel(256);
         let mut sources: Vec<SourceInfo> = Vec::new();
@@ -608,6 +628,7 @@ impl Session {
             name: cfg.name.clone(),
             started_ms: now_unix_ms(),
             start_ms: cfg.start.map(|t| t.and_utc().timestamp_millis()),
+            window_ms: window,
             sources,
             store: Arc::clone(&store),
             gate,
@@ -635,6 +656,8 @@ impl Session {
             series: BTreeMap::new(),
             counters: Counters::default(),
             vitals_at: None,
+            window_ms: window,
+            evicted_at: None,
             idle_after_ms: cfg.idle_after_ms.max(1),
             stopped: false,
             ended: HashMap::new(),
@@ -1075,7 +1098,25 @@ impl Inner {
         if drained > 0 {
             self.flush(live);
         }
+        self.evict(live);
         self.refresh(live);
         drained
+    }
+
+    /// The window's pass, once a second: what arrived before the span let go, through the
+    /// store's ingest connection, the pump's own.
+    fn evict(&mut self, live: &Live) {
+        let Some(span) = self.window_ms else { return };
+        if self.evicted_at.is_some_and(|at| at.elapsed() < WINDOW_EVERY) {
+            return;
+        }
+        self.evicted_at = Some(Instant::now());
+        match live.store.evict_before(now_unix_ms().saturating_sub(span)) {
+            Ok(n) => self.counters.evicted += n,
+            Err(e) => {
+                self.counters.store_errors += 1;
+                self.counters.last_error = Some(format!("store: the window: {e}"));
+            }
+        }
     }
 }

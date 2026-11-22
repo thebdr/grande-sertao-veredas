@@ -56,7 +56,8 @@ its sort brain, its supervision app and its desktop each spoke to the plant on t
   is a library and one executable, `veredas-portal <project.toml>`, serving a project from the
   command line, and that executable is its shell; no desktop UI is built in portal, Veredas 1's
   `veredas-desktop` screens being supervisão's (P-008) to take up or leave. A build without the
-  default features leaves the store and the server out, for controlador's embedding.
+  default features leaves the store and the server out; no consumer is named today (controlador
+  embeds the full build, P-019).
 - **Later, named, no code now:** the grep engine (Veredas 1's grep tab over logs at rest),
   supervisão's concern now that Q14 is decided; the clock-skew monitor as a derived source; the
   library of templates and recents; bundles.
@@ -156,9 +157,9 @@ veredas_core (added for portal, kept for every member)
   schema      one header reader: format and version read before the body, refused or migrated
 ```
 
-Features: `store` and `serve`, both on by default; without them (controlador's embedding) the
-crate holds the data plane, the channels, the OPC sources and the project file, nothing persisted
-and nothing served.
+Features: `store` and `serve`, both on by default; without them the crate holds the data plane,
+the channels, the OPC sources and the project file, nothing persisted and nothing served (no
+consumer named today; controlador embeds the full build, P-019).
 
 ## Phases
 1. **The crate and the data plane.** `crates/veredas-portal` at `2.0.0-alpha.1`, listed; the
@@ -210,8 +211,12 @@ where they differ.
 - **On a controller the store is a window in memory by default**: the last stretch of values, as
   long as the project sets, nothing written to the drive. Recording to the drive is the project's
   choice, in files with a size limit; at a fault the window is written to the drive with the fault
-  record (2026-11-19; `docs/robustness.md`, "Wear and filling"). Today the store has no upper
-  bound and neither form exists: both are new work here.
+  record (2026-11-19; `docs/robustness.md`, "Wear and filling"). **Built: the window (C-090)**,
+  `store = { window_s = N }` or `SessionConfig::store_window`: the rows that arrived within the
+  span (the arrival clock, not the plant's stamp), the older let go once a second by the pump
+  through the ingest connection with a plain DELETE (an in-memory store hands the space back,
+  probed and pinned in C-042), the listing still counting what was seen. Still to build: the
+  recording and the window at a fault.
 - **The grep engine** over logs at rest is on Oficina's first-release list.
 - **Q14 stands:** portal builds no desktop UI. Oficina is a component of its own.
 - Open: the review's entries 22 and 33 (Q31); robust requests (Q37); what gives way at a size
