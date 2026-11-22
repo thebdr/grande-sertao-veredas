@@ -164,17 +164,14 @@ pub fn assemble(
     if !refusals.is_empty() {
         return Err(VmError::Failed { program: "the executables' check".into(), status: "refused".into(), stderr: refusals.join("\n") });
     }
-    let archive = work.join("docs.tar");
     let rs = root.display().to_string();
-    let mut args = vec!["-C".to_string(), rs.clone(), "archive".into(), "--format=tar".into(), "-o".into(), archive.display().to_string(), commit.into(), "--".into()];
-    args.extend(doc_paths(root, commit, components)?);
-    args.push("tools/entrega/planta".into());
-    let a: Vec<&str> = args.iter().map(String::as_str).collect();
-    vm::run("git", &a, None)?;
-    vm::run("tar", &["-xf", &archive.display().to_string(), "-C", &dir.display().to_string()], None)?;
+    // The docs and the plant as git stores them at the commit, no attribute or filter applied.
+    let mut paths = doc_paths(root, commit, components)?;
+    paths.push("tools/entrega/planta".into());
+    let p: Vec<&str> = paths.iter().map(String::as_str).collect();
+    crate::git::export_tree(root, commit, &p, &dir).map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?;
     std::fs::rename(dir.join("tools/entrega/planta"), dir.join("planta"))?;
     std::fs::remove_dir_all(dir.join("tools"))?;
-    let _ = std::fs::remove_file(&archive);
     std::fs::write(dir.join("release.toml"), manifest_text)?;
     write_sums(&dir)?;
     let epoch = vm::run("git", &["-C", &rs, "show", "-s", "--format=%ct", commit], None)?;

@@ -201,7 +201,7 @@ pub enum CheckError {
 }
 
 /// The components (the workspace's members under `crates/`) the repository holds at `commit`, by
-/// name, as cargo itself reads them: the commit's tree taken out of git's objects (`git archive`)
+/// name, as cargo itself reads them: the commit's tree taken out of git's objects as stored
 /// into a scratch folder of this call's own and asked with `cargo metadata --no-deps --offline`,
 /// so a member's spelling and an edition's discovery rules are cargo's, never a model of them;
 /// each folder is read against the workspace root cargo names, in cargo's own spelling of paths.
@@ -218,16 +218,10 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
     let scratch_dir = tempfile::Builder::new().prefix("entrega-tree-").tempdir_in(parent)?;
     let scratch = scratch_dir.path().to_path_buf();
     let result = (|| -> Result<Option<String>, CheckError> {
-        let tar = scratch.join("tree.tar");
-        if git::run(root, &["archive", "--format=tar", "-o", &tar.display().to_string(), commit])?.is_none() {
-            return Ok(Some(format!("commit {commit}: git cannot archive its tree")));
-        }
+        // The tree as git stores it, no attribute or filter applied (git::export_tree).
         let tree = scratch.join("tree");
         std::fs::create_dir_all(&tree)?;
-        let untar = Command::new("tar").arg("-xf").arg(&tar).arg("-C").arg(&tree).status()?;
-        if !untar.success() {
-            return Ok(Some(format!("commit {commit}: its tree does not unpack")));
-        }
+        git::export_tree(root, commit, &[], &tree)?;
         if !tree.join("Cargo.toml").is_file() {
             return Ok(Some(format!("commit {commit} holds no Cargo.toml")));
         }
@@ -238,9 +232,10 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
             .stdin(Stdio::null())
             .output()?;
         if !out.status.success() {
-            let why = String::from_utf8_lossy(&out.stderr);
-            let first = why.lines().find(|l| l.starts_with("error")).unwrap_or("cargo failed").trim().to_string();
-            return Ok(Some(format!("commit {commit}: cargo cannot read its workspace: {first}")));
+            // Cargo's whole reason, its causes included, the scratch folder's path dropped.
+            let why = String::from_utf8_lossy(&out.stderr).replace(&format!("{}/", tree.display()), "");
+            let reason: Vec<&str> = why.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+            return Ok(Some(format!("commit {commit}: cargo cannot read its workspace: {}", reason.join(" / "))));
         }
         let meta: serde_json::Value = match serde_json::from_slice(&out.stdout) {
             Ok(m) => m,

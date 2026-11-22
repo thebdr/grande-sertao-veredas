@@ -330,6 +330,55 @@ fn the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_the
     manifest::components_at(r.path(), &c2, &mut refusals).unwrap();
     assert_eq!(refusals.len(), 1);
     assert!(refusals[0].starts_with(&format!("commit {c2}: cargo cannot read its workspace: error")), "{refusals:?}");
+    assert!(refusals[0].contains("invalid type: integer `3`, expected a string"), "cargo's reason: {refusals:?}");
+    assert!(!refusals[0].contains("entrega-tree-"), "no scratch path in the reason: {refusals:?}");
+    // A member the commit does not hold: cargo's cause, not only its first line.
+    std::fs::remove_dir_all(r.path().join("crates/veredas-velho")).unwrap();
+    let c3 = r.commit("a member gone");
+    let mut refusals = Vec::new();
+    manifest::components_at(r.path(), &c3, &mut refusals).unwrap();
+    assert_eq!(refusals.len(), 1);
+    assert!(refusals[0].contains("crates/veredas-velho") && refusals[0].contains("No such file or directory"), "{refusals:?}");
+}
+
+#[test]
+fn settings_outside_the_history_change_nothing_that_is_read() {
+    let r = suite();
+    r.write(".gitattributes", "crates/veredas-maquinar/Cargo.toml filter=muda\n");
+    let c = r.commit("the suite, a filter named in the tree");
+    let mut refusals = Vec::new();
+    let plain = manifest::components_at(r.path(), &c, &mut refusals).unwrap();
+    assert_eq!(refusals, Vec::<String>::new());
+    let porteiro: Vec<&String> = plain["veredas-portal"].bins.iter().collect();
+    assert_eq!(porteiro, ["porteiro", "veredas-portal"]);
+    // Export rules in the repository's own attributes, a local attributes file, a smudge filter:
+    // none in the history, none changing what is read.
+    r.write(".git/info/attributes", "crates/veredas-portal/src/bin/** export-ignore\ncrates/veredas-core export-ignore\n");
+    let global = r.path().join(".git/elsewhere-attributes");
+    std::fs::write(&global, "*.rs export-ignore\n").unwrap();
+    r.git(&["config", "core.attributesFile", &global.display().to_string()]);
+    r.git(&["config", "filter.muda.smudge", "sed s/2.1.0/9.9.9/"]);
+    let mut refusals = Vec::new();
+    assert_eq!(manifest::components_at(r.path(), &c, &mut refusals).unwrap(), plain);
+    assert_eq!(refusals, Vec::<String>::new());
+    let text = matching("2.0.0", &c);
+    assert_eq!(checked(&r, &text), Vec::<String>::new());
+    assert_eq!(
+        checked(&r, &text.replace("bins = [\"porteiro\", \"veredas-portal\"]", "bins = [\"veredas-portal\"]")),
+        vec![format!("veredas-portal builds `porteiro` at {c} and the manifest does not ship it")]
+    );
+    // The export itself writes the files as stored, executables and links kept.
+    let out = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(r.path().join("crates/veredas-maquinar/src/main.rs"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink("main.rs", r.path().join("crates/veredas-maquinar/src/ligacao.rs")).unwrap();
+    let c2 = r.commit("an executable file and a link");
+    let n = entrega::git::export_tree(r.path(), &c2, &["crates/veredas-maquinar"], out.path()).unwrap();
+    assert_eq!(n, 4);
+    let m = out.path().join("crates/veredas-maquinar");
+    assert_eq!(std::fs::read_to_string(m.join("Cargo.toml")).unwrap(), "[package]\nname = \"veredas-maquinar\"\nversion = \"2.1.0\"\nedition = \"2024\"\n");
+    assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(m.join("src/main.rs")).unwrap().permissions()) & 0o777, 0o755);
+    assert_eq!(std::fs::read_link(m.join("src/ligacao.rs")).unwrap(), std::path::PathBuf::from("main.rs"));
+    assert!(!out.path().join("crates/veredas-portal").exists(), "only the paths asked for");
 }
 
 #[test]

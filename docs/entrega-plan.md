@@ -101,7 +101,7 @@ Keys (each required unless a default is given):
 3. **Built on the oldest system the release targets**, a builder machine of the tester machine's
    own distribution (Debian 13, glibc 2.41) under QEMU with KVM, four processors and 6 GB, its
    build four jobs, holding the machine's lock for the database engine's compilation: the commit's
-   tree (`git archive`) and its dependencies' sources (`cargo vendor`, as `Cargo.lock` pins them)
+   tree as git stores it (its objects, no attribute or filter applied) and its dependencies' sources (`cargo vendor`, as `Cargo.lock` pins them)
    handed in on a disk as a tar stream, `cargo build --release --locked --offline` run inside
    under the toolchain the suite was tested with (the development machine's `rustc`), the
    executables handed back on another disk. Built on the development machine (Ubuntu 26.10,

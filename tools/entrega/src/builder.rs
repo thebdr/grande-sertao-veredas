@@ -72,16 +72,15 @@ pub struct Built {
 }
 
 /// Builds `packages`' executables at `commit` of the repository at `root` in a fresh copy of the
-/// builder: `git archive` of the commit, `cargo vendor` of its lock file, `cargo build --release
+/// builder: the commit's tree as git stores it, `cargo vendor` of its lock file, `cargo build --release
 /// --locked --offline` inside, the executables named in `bins` handed back.
 pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, packages: &[String], bins: &[String], work: &Path) -> Result<Built, VmError> {
     let builder = image(r, toolchain, work)?;
     let input = work.join("in");
     let _ = std::fs::remove_dir_all(&input);
     std::fs::create_dir_all(input.join("src"))?;
-    let archive = work.join("src.tar");
-    vm::run("git", &["-C", &root.display().to_string(), "archive", "--format=tar", "-o", &archive.display().to_string(), commit], None)?;
-    vm::run("tar", &["-xf", &archive.display().to_string(), "-C", &input.join("src").display().to_string()], None)?;
+    // The commit's tree as git stores it, no attribute or filter applied.
+    crate::git::export_tree(root, commit, &[], &input.join("src")).map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?;
     eprintln!("entrega: vendoring the dependencies Cargo.lock pins");
     let config = vm::run("cargo", &["vendor", "--locked", "--versioned-dirs", "../vendor"], Some(&input.join("src")))?;
     std::fs::create_dir_all(input.join("src/.cargo"))?;
@@ -160,7 +159,7 @@ pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, packages: &
     }
     let toolchain = std::fs::read_to_string(out.join("toolchain"))?.trim().to_string();
     let libc = std::fs::read_to_string(out.join("libc"))?.trim().to_string();
-    for f in [&disk, &out_raw, &in_tar, &archive] {
+    for f in [&disk, &out_raw, &in_tar] {
         let _ = std::fs::remove_file(f);
     }
     let _ = std::fs::remove_dir_all(&input);
