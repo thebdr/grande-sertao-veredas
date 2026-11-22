@@ -669,6 +669,32 @@ fn a_relative_cache_holding_a_glob_character_is_judged_where_it_lies() {
 }
 
 #[test]
+fn the_folder_is_judged_whole_and_a_shallow_clone_refused() {
+    let r = suite();
+    let c1 = r.commit("the suite");
+    r.write("releases/2.0.0.toml", &matching("2.0.0", &c1));
+    r.commit("release 2.0.0");
+    r.write("docs/a.md", "a\n");
+    r.commit("later");
+    // `check` takes no file: a manifest is never judged apart from its folder.
+    let named = Command::new(env!("CARGO_BIN_EXE_entrega")).args(["check", "releases/2.0.0.toml"]).current_dir(r.path()).output().unwrap();
+    assert_eq!(named.status.code(), Some(1));
+    let whole = Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").current_dir(r.path()).output().unwrap();
+    assert_eq!(whole.status.code(), Some(0), "{}", String::from_utf8_lossy(&whole.stderr));
+    // A shallow clone holding the release's commit: refused by name, never "not an ancestor".
+    let shallow = tempfile::tempdir().unwrap();
+    let clone = Command::new("git").args(["clone", "-q", "--depth", "1"]).arg(format!("file://{}", r.path().display())).arg(shallow.path()).output().unwrap();
+    assert!(clone.status.success());
+    let fetch = Command::new("git").arg("-C").arg(shallow.path()).args(["fetch", "-q", "--depth", "1", "origin", &c1]).output().unwrap();
+    assert!(fetch.status.success(), "{}", String::from_utf8_lossy(&fetch.stderr));
+    let m = manifest::load(&matching("2.0.0", &c1)).unwrap();
+    assert_eq!(
+        manifest::check(shallow.path(), &m).unwrap(),
+        vec!["the repository is a shallow clone: its history is cut, and a release is checked against the whole of it".to_string()]
+    );
+}
+
+#[test]
 fn an_annotated_tags_id_is_no_commit() {
     let r = suite();
     let c = r.commit("the suite");
@@ -774,7 +800,7 @@ fn the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused() {
     );
     let usage = Command::new(env!("CARGO_BIN_EXE_entrega")).output().unwrap();
     assert_eq!(usage.status.code(), Some(1));
-    assert_eq!(String::from_utf8(usage.stderr).unwrap(), "usage: entrega check [<manifest.toml>...]\n       entrega cut <release> [--trial] [--out <dir>]\n       entrega maquina <release>\n       entrega prova <release>\n");
+    assert_eq!(String::from_utf8(usage.stderr).unwrap(), "usage: entrega check\n       entrega cut <release> [--trial] [--out <dir>]\n       entrega maquina <release>\n       entrega prova <release>\n");
 }
 
 #[test]

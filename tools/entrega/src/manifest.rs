@@ -328,6 +328,12 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
 /// executables it builds, nothing else listed. Every refusal is returned, in a fixed order.
 pub fn check(root: &Path, m: &Manifest) -> Result<Vec<String>, CheckError> {
     let mut refusals = Vec::new();
+    // A shallow clone's history is cut: ancestry would be judged on what is missing (law L6
+    // refuses one likewise).
+    if git::text(root, &["rev-parse", "--is-shallow-repository"])?.is_some_and(|t| t.trim() == "true") {
+        refusals.push("the repository is a shallow clone: its history is cut, and a release is checked against the whole of it".to_string());
+        return Ok(refusals);
+    }
     let c = &m.commit;
     match git::text(root, &["cat-file", "-t", c])?.map(|t| t.trim().to_string()) {
         None => {

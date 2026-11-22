@@ -1,6 +1,7 @@
-//! `entrega check [<manifest>...]`: read the suite release manifests (by default every
-//! `releases/*.toml` of the repository the current folder is in) and check each against the
-//! repository's history and against each other, printing one line per manifest.
+//! `entrega check`: read every suite release manifest of the repository the current folder is in
+//! (`releases/*.toml`, the folder judged whole: a manifest is never judged apart from the others)
+//! and check each against the repository's history and against each other, printing one line per
+//! manifest.
 //!
 //! `entrega cut <release> [--trial] [--out <dir>]`: cut a suite release from HEAD of the
 //! repository the current folder is in (docs/entrega-plan.md, "How a release is cut"): the whole
@@ -20,16 +21,16 @@
 //! Exit codes: 0 when every manifest checks, the release is cut, the machine built or proven; 2 when one is refused, the
 //! reasons on stderr; 1 on a usage error.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use entrega::{git, manifest};
 
-const USAGE: &str = "usage: entrega check [<manifest.toml>...]\n       entrega cut <release> [--trial] [--out <dir>]\n       entrega maquina <release>\n       entrega prova <release>";
+const USAGE: &str = "usage: entrega check\n       entrega cut <release> [--trial] [--out <dir>]\n       entrega maquina <release>\n       entrega prova <release>";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("check") => std::process::exit(check(&args[1..])),
+        Some("check") if args.len() == 1 => std::process::exit(check()),
         Some("cut") => std::process::exit(cut(&args[1..])),
         Some("maquina") if args.len() == 2 => std::process::exit(maquina(&args[1])),
         Some("prova") if args.len() == 2 => std::process::exit(prova(&args[1])),
@@ -159,7 +160,7 @@ fn cut(args: &[String]) -> i32 {
     }
 }
 
-fn check(files: &[String]) -> i32 {
+fn check() -> i32 {
     let root = match repository() {
         Ok(r) => r,
         Err(e) => {
@@ -168,20 +169,7 @@ fn check(files: &[String]) -> i32 {
         }
     };
     // Every manifest that reads is judged, and every refusal said, whatever else was refused.
-    let (all, refusals) = if files.is_empty() {
-        manifest::load_dir(&root.join("releases"))
-    } else {
-        let mut out = Vec::new();
-        let mut refusals = Vec::new();
-        for f in files {
-            let p = Path::new(f);
-            match std::fs::read_to_string(p).map_err(|e| e.to_string()).and_then(|t| manifest::load(&t).map_err(|e| e.to_string())) {
-                Ok(m) => out.push((p.to_path_buf(), m)),
-                Err(e) => refusals.push(format!("{f}: {e}")),
-            }
-        }
-        (out, refusals)
-    };
+    let (all, refusals) = manifest::load_dir(&root.join("releases"));
     for r in &refusals {
         eprintln!("{r}");
     }
