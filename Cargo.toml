@@ -22,6 +22,13 @@ members = [
     # process and shows them through one set of object IDs, every write portal's own (law L5: core
     # and portal).
     "crates/veredas-supervisao",
+    # The language's crates (docs/orcl/README.md, one plan for all of them): ORCL, control logic in a
+    # translatable subset of real Rust, versioned apart from the components. The standard control library,
+    # no_std, depending on nothing.
+    "crates/orcl-std",
+    # The engine of an ORCL scan: a cyclic task over a process image, its watchdog and safe outputs, with no
+    # operating-system code; uses orcl-std alone (law L5: orcl-* use each other and core).
+    "crates/orcl-runtime",
 ]
 
 # No [workspace.package] version: each component owns its SemVer from 2.0.0 (the plan,

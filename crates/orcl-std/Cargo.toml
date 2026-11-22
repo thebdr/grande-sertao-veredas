@@ -1,0 +1,13 @@
+[package]
+name = "orcl-std"
+# ORCL keeps its own SemVer, apart from the suite's components; law L3 holds every crate under crates/ to
+# a version from 2.0.0, so the language's crates start at 2.0.0-alpha.1 (docs/orcl/README.md; what the
+# language's own version is beside them is docs/questions.md Q220).
+version = "2.0.0-alpha.1"
+edition.workspace = true
+publish = false
+description = "The ORCL standard control library: the scan model, IEC-style timers, edges, a counter and bit access (no_std)"
+
+# no_std, no unsafe, no panic path: the lints in src/lib.rs and clippy.toml (ORCL's O13) are the language's
+# rules (docs/orcl/language/README.md). It depends on nothing.
+[dependencies]
