@@ -1,16 +1,16 @@
 {
   "clause": "C-150",
-  "command": "sh -c cargo test -p orcl-std && cargo clippy -p orcl-std --all-targets -- -D warnings",
+  "command": "sh -c cargo test -p orcl-std && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none",
   "commandArgv": [
     "sh",
     "-c",
-    "cargo test -p orcl-std && cargo clippy -p orcl-std --all-targets -- -D warnings"
+    "cargo test -p orcl-std && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none"
   ],
   "exitCode": 0,
-  "outputSha": "6fb23546ae62ba57860cbac83fff0bf2c5adade0ed13f8cddd91850aeeb4139b",
-  "outputTail": "test crates/orcl-std/src/o14.rs - o14 (line 60) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 110) - compile fail ... ok\ntest crates/orcl-std/src/scan.rs - scan (line 18) - compile fail ... ok\ntest crates/orcl-std/src/scan.rs - scan (line 28) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 30) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 90) - compile fail ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s\n\nall doctests ran in 0.53s; merged doctests compilation took 0.34s\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s\n     Running unittests src/lib.rs (target/debug/build/orcl-std/e7684ae2d399d146/out/orcl_std-e7684ae2d399d146)\n     Running tests/blocks.rs (target/debug/build/orcl-std/b7189415b3b1f456/out/blocks-b7189415b3b1f456)\n   Doc-tests orcl_std\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.25s",
-  "ranAt": "2026-11-22T18:11:37.982Z",
-  "headCommit": "82338ee937e8574cd58d32a2c8298756eec99f05",
+  "outputSha": "6e3aef3a33a202f9e7d355e6e9480eddfd6fdd180d711107ec1668c75b459d9f",
+  "outputTail": "test crates/orcl-std/src/o14.rs - o14 (line 180) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 20) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 80) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 30) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 60) - compile fail ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s\n\nall doctests ran in 0.29s; merged doctests compilation took 0.19s\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running unittests src/lib.rs (target/debug/build/orcl-std/e7684ae2d399d146/out/orcl_std-e7684ae2d399d146)\n     Running tests/blocks.rs (target/debug/build/orcl-std/b7189415b3b1f456/out/blocks-b7189415b3b1f456)\n   Doc-tests orcl_std\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s",
+  "ranAt": "2026-11-22T18:22:48.591Z",
+  "headCommit": "d70c62343c34cbfe21c9d78ad4e9a5e7d92e9526",
   "tests": [
     {
       "name": "crates/orcl-std/src/timers.rs",
@@ -50,7 +50,7 @@
     {
       "name": "crates/orcl-std/tests/blocks.rs",
       "file": "crates/orcl-std/tests/blocks.rs",
-      "fileSha": "6669e13f51afe667dfda41815da55f13899a3b760faee77281e71fb33c6abfad"
+      "fileSha": "6e0f2780626a116dfe0b2eeb9f2699236f913a86e5322b738d4847b54095099e"
     }
   ]
 }
