@@ -76,6 +76,19 @@ impl Displacement<'_> {
         }
     }
 
+    /// A reference to a cell nothing moved (a cell of another workbook), stored as the cell where
+    /// it is now keeps it: its relative parts counted from the new place.
+    fn rebased(&self, absolute_row: bool, absolute_column: bool, row: i32, column: i32) -> (i32, i32) {
+        (
+            if absolute_row { row } else { row + self.from.0 - self.to.0 },
+            if absolute_column {
+                column
+            } else {
+                column + self.from.1 - self.to.1
+            },
+        )
+    }
+
     /// Where a reference stored as `(row, column)` points, in absolute terms (relative parts
     /// counted from where the cell was).
     fn absolute(&self, absolute_row: bool, absolute_column: bool, row: i32, column: i32) -> (i32, i32) {
@@ -540,11 +553,66 @@ pub(crate) fn displaced_node(node: &Node, displacement: &Displacement) -> Option
                 args: new_args.unwrap_or_else(|| args.clone()),
             })
         }
-        // Nothing in these points anywhere in this workbook (a cell of
-        // another workbook is not moved by an insertion in this one)
-        ExternalReferenceKind { .. }
-        | ExternalRangeKind { .. }
-        | BooleanKind(_)
+        // A cell of another workbook is not moved by an insertion in this
+        // one: it keeps its address, as in Excel, and where the formula's own
+        // cell moved, a relative part is counted from the cell's new place
+        ExternalReferenceKind {
+            book,
+            sheet_name,
+            absolute_row,
+            absolute_column,
+            row,
+            column,
+        } => {
+            let (new_row, new_column) =
+                displacement.rebased(*absolute_row, *absolute_column, *row, *column);
+            if (new_row, new_column) == (*row, *column) {
+                return None;
+            }
+            Some(ExternalReferenceKind {
+                book: *book,
+                sheet_name: sheet_name.clone(),
+                absolute_row: *absolute_row,
+                absolute_column: *absolute_column,
+                row: new_row,
+                column: new_column,
+            })
+        }
+        ExternalRangeKind {
+            book,
+            sheet_name,
+            absolute_row1,
+            absolute_column1,
+            row1,
+            column1,
+            absolute_row2,
+            absolute_column2,
+            row2,
+            column2,
+        } => {
+            let (new_row1, new_column1) =
+                displacement.rebased(*absolute_row1, *absolute_column1, *row1, *column1);
+            let (new_row2, new_column2) =
+                displacement.rebased(*absolute_row2, *absolute_column2, *row2, *column2);
+            if (new_row1, new_column1, new_row2, new_column2) == (*row1, *column1, *row2, *column2)
+            {
+                return None;
+            }
+            Some(ExternalRangeKind {
+                book: *book,
+                sheet_name: sheet_name.clone(),
+                absolute_row1: *absolute_row1,
+                absolute_column1: *absolute_column1,
+                row1: new_row1,
+                column1: new_column1,
+                absolute_row2: *absolute_row2,
+                absolute_column2: *absolute_column2,
+                row2: new_row2,
+                column2: new_column2,
+            })
+        }
+        // Nothing in these points anywhere
+        BooleanKind(_)
         | NumberKind(_)
         | StringKind(_)
         | ArrayKind(_)

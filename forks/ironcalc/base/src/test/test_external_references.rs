@@ -169,15 +169,26 @@ fn external_references_survive_sheet_operations() {
         "=[1]ZONES!$B$4+[1]ZONES!B4"
     );
     // inserting rows above the formula moves the formula, not the cells it
-    // reads in the other workbook: the relative one keeps its offset, as
-    // Excel does when the external book is not open
+    // reads in the other workbook: both keep their address, the relative one
+    // too, as in Excel (fork change 19; change 1 kept its offset instead)
     model.insert_rows(0, 1, 1).unwrap();
     assert_eq!(
         model._get_formula("B3"),
-        "=[1]ZONES!$B$4+[1]ZONES!B5"
+        "=[1]ZONES!$B$4+[1]ZONES!B4"
     );
     model.evaluate();
     assert_eq!(model._get_text("B3"), "4");
+    // and deleting rows above it: a relative reference near the top of the
+    // other workbook's sheet is not pushed off it
+    model._set("C3", "=[1]ZONES!D1+[1]ZONES!D1:D3");
+    model.delete_rows(0, 1, 2).unwrap();
+    assert_eq!(
+        model._get_formula("B1"),
+        "=[1]ZONES!$B$4+[1]ZONES!B4"
+    );
+    assert_eq!(model._get_formula("C1"), "=[1]ZONES!D1+[1]ZONES!D1:D3");
+    model.evaluate();
+    assert_eq!(model._get_text("B1"), "4");
 }
 
 #[test]
