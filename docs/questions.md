@@ -1325,7 +1325,8 @@ hardware version 14, x86_64 alone; a paravirtual SCSI controller, a VMXNET3 card
 
 **Raised** 2026-11-22.
 
-Options: (a) an **OVA**, one file every VMware product opens (VirtualBox too), about 1.5 to 2.5 GB;
+Options: (a) an **OVA**, one file every VMware product opens (VirtualBox too), 1.09 GB for the
+first release (measured on 2026-11-22);
 (b) a zipped folder with a `.vmx` and its `.vmdk`, which Workstation and Fusion open directly and
 ESXi does not; (c) both. And where: a GitHub release of the repository (public, 2 GB per file, so
 a larger OVA would be split), or a share the architect names.

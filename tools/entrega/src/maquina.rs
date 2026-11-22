@@ -112,7 +112,7 @@ cat > $H/.config/autostart/veredas-supervisao.desktop <<'DESK'
 [Desktop Entry]
 Type=Application
 Name=Supervisão
-Exec=chromium --no-first-run --no-default-browser-check --password-store=basic http://127.0.0.1:{port}/s/loop/
+Exec=chromium --no-first-run --no-default-browser-check --password-store=basic --start-maximized http://127.0.0.1:{port}/s/loop/
 DESK
 ln -sfn /opt/veredas/current/docs $H/Desktop/docs
 ln -sfn $H/planta $H/Desktop/planta

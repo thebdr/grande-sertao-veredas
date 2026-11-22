@@ -106,15 +106,18 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
         held.values().map(|h| (h.name.clone(), h.version.clone(), h.bins.iter().cloned().collect())).collect();
     let text = manifest_text(&o.release, &commit, target, &rustc, &components, if o.run_suite { SUITE } else { NOT_RUN });
     let manifest = manifest::load(&text).map_err(|e| refused(format!("the manifest to be written does not read back: {e}")))?;
-    // Checked as any manifest is, against the repository and against every release already cut
-    // (here and in `--out`), before anything is built: a version names one tree.
-    let mut all = manifest::load_dir(&releases).0;
-    if o.out != releases {
-        all.extend(manifest::load_dir(&o.out).0);
-    }
-    all.push((target_file.clone(), manifest.clone()));
+    // Checked as any manifest is, against the repository and, for a real cut, against every
+    // release already cut (here and in `--out`), before anything is built: a version names one
+    // tree. A trial's manifest is never committed, so it is checked against the repository alone.
     let mut against = manifest::check(root, &manifest)?;
-    against.extend(manifest::check_together(root, &all)?);
+    if o.run_suite {
+        let mut all = manifest::load_dir(&releases).0;
+        if o.out != releases {
+            all.extend(manifest::load_dir(&o.out).0);
+        }
+        all.push((target_file.clone(), manifest.clone()));
+        against.extend(manifest::check_together(root, &all)?);
+    }
     if !against.is_empty() {
         return Err(refused(format!("release {} would not check:\n{}", o.release, against.join("\n"))));
     }

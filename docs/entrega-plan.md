@@ -88,21 +88,23 @@ Keys (each required unless a default is given):
 1. **HEAD of a clean tree**, cut from a fresh `origin/main`: the cut refuses a tree that differs
    from HEAD (an untracked file included) and a release whose manifest exists. It plans the
    manifest first and checks it against the repository and every release already cut, so a
-   version another release pinned at other code is refused before anything is built. It then
+   version another release pinned at other code is refused before anything is built: a component
+   whose code changed since the last release bumps its version before the next one is cut. It then
    runs the whole suite there (`cargo nextest run --workspace`, the gate of `CLAUDE.md`, built
    first and run behind the machine's lock, its temporary files in the cache), and refuses a red
    one. "Tested together" means two runs: that one, which tests the components against each
    other from source, and the cut's own run of the bundle (step 5). A **trial cut** (`--trial`)
-   skips the suite, says so in its manifest (`suite = "not run: a trial cut"`) and writes it
-   elsewhere: it proves the recipe and is never committed.
+   skips the suite, says so in its manifest (`suite = "not run: a trial cut"`), is checked against
+   the repository alone and writes it elsewhere: it proves the recipe and is never committed.
 2. The components, their versions and their executables read from the commit as C-290 reads
    them (its tree out of git, asked of `cargo metadata`); the recipe's data
    (`tools/entrega/maquina/maquina.toml`) from git too.
 3. **Built on the oldest system the release targets**, a builder machine of the tester machine's
    own distribution (Debian 13, glibc 2.41) under QEMU with KVM, four processors and 6 GB, its
-   build four jobs, holding the machine's lock for the database engine's compilation: the commit's
-   tree as git stores it (its objects, no attribute or filter applied) and its dependencies' sources (`cargo vendor`, as `Cargo.lock` pins them)
-   handed in on a disk as a tar stream, `cargo build --release --locked --offline` run inside
+   build four jobs, holding the machine's lock for the database engine's compilation: the
+   commit's tree as git stores it (its objects, no attribute or filter applied) and its
+   dependencies' sources (`cargo vendor`, as `Cargo.lock` pins them) handed in on a disk as a tar
+   stream, `cargo build --release --locked --offline` run inside
    under the toolchain the suite was tested with (the development machine's `rustc`), the
    executables handed back on another disk. Built on the development machine (Ubuntu 26.10,
    glibc 2.44), portal and supervisão need `GLIBC_2.44` and do not start on Debian 13 (the probe
@@ -268,9 +270,10 @@ Verified by running each, not assumed:
   running it. Apple-silicon Macs run only arm64 guests in Fusion: this image is x86_64 (Q435).
 
 ### Delivery and updates
-- **An OVA**, one file every VMware product opens, VirtualBox too; about 1.5 to 2.5 GB (measured
-  on the first image). Where it is published is Q436: a GitHub release of the repository (2 GB per
-  file) or a share the architect names. Until ruled, it is built and kept on this machine.
+- **An OVA**, one file every VMware product opens, VirtualBox too: 1.09 GB for 2.0.0-alpha.1
+  (the disk 16 GB to the guest, 1.09 GB stream-optimized; provisioned in about 12 minutes).
+  Where it is published is Q436: a GitHub release of the repository (2 GB per file) or a share
+  the architect names. Until ruled, it is built and kept on this machine.
 - **Updates** (Q437): meanwhile a new OVA per release, the machine disposable; then an update
   command in the machine that fetches a newer bundle, checks its sums and its manifest, installs it
   beside the old one under `/opt/veredas/` and moves `current`, leaving the plant's files alone.

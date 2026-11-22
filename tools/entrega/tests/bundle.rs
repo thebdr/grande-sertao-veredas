@@ -252,7 +252,8 @@ fn the_cut_refuses_a_version_another_release_pinned_at_other_code_before_buildin
     r.write("crates/veredas-core/src/lib.rs", "pub fn changed() {}\n");
     r.commit("core changed, its version not bumped");
     let work = r.dir.path().join("target/entrega/2.0.1");
-    let options = Options { release: semver::Version::parse("2.0.1").unwrap(), out: r.dir.path().join("releases"), work: work.clone(), run_suite: false };
+    // A real cut (the suite is to run): the one-tree check comes first, so nothing runs or builds.
+    let options = Options { release: semver::Version::parse("2.0.1").unwrap(), out: r.dir.path().join("releases"), work: work.clone(), run_suite: true };
     match cut::cut(r.dir.path(), &options) {
         Err(CutError::Refused(e)) => assert_eq!(
             e,
@@ -260,6 +261,6 @@ fn the_cut_refuses_a_version_another_release_pinned_at_other_code_before_buildin
         ),
         other => panic!("not refused: {:?}", other.map(|c| c.manifest)),
     }
-    assert!(!work.exists(), "refused before anything was built");
+    assert!(!work.exists(), "refused before anything was run or built");
     assert!(!r.dir.path().join("releases/2.0.1.toml").exists());
 }
