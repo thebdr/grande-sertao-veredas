@@ -1106,9 +1106,15 @@ pub fn sniff_csv_options(path: &str) -> Result<CsvOptions, StoreError> {
             })
             .collect();
         match sniffed {
-            Some(((plain, comma, _), d)) => {
+            Some(((plain, comma, width), d)) => {
                 let typed = plain.max(comma);
-                let by_comma = candidates.into_iter().filter(|((p, c, _), _)| c > p && *c > typed).max_by_key(|((_, c, w), _)| (*c, *w));
+                // More numbers, or as many with fewer columns left as text (a headerless `;` file
+                // of decimal commas splits on `,` into as many numbers, the fractions and the
+                // integers, with text between them); a full tie stays the sniffer's.
+                let by_comma = candidates
+                    .into_iter()
+                    .filter(|((p, c, w), _)| c > p && (*c > typed || (*c == typed && w - c < width - typed)))
+                    .max_by_key(|((_, c, w), _)| (*c, *w));
                 Some(by_comma.map_or(d, |(_, c)| c))
             }
             // The first of the delimiters on a tie, in their order.
@@ -1124,7 +1130,7 @@ pub fn sniff_csv_options(path: &str) -> Result<CsvOptions, StoreError> {
     match describe_types(&conn, &csv_scan_sql(path, &opts)) {
         Ok(auto) if looks_unsplit(&auto) => {
             if let Some(o) = padded(&conn) {
-                opts = o;
+                opts = fitting(path, o);
             }
         }
         Ok(_) => {
@@ -1133,18 +1139,21 @@ pub fn sniff_csv_options(path: &str) -> Result<CsvOptions, StoreError> {
             // padded reader keeps every row, pads a short one and widens the schema for a long
             // one within its window, refusing the read by its line past it. Raggedness is read
             // off the file itself, the first 2 048 lines counted in the sniffer's delimiter with
-            // its quote and escape honoured, whatever the line ending.
-            if let Some(dialect) = sniffed_dialect(&conn, path, false).map(|d| with_quote_seen(d, sniffed_dialect(&conn, path, true)))
-                && csv_is_ragged(path, &dialect)
+            // its quote and escape honoured, whatever the line ending. A ragged file is read in
+            // the dialect that fits it, the sniffer's unless its header does not split as its
+            // rows do (a `;` file with a comma in a column name, read on `,`, loses its header
+            // line to the sniffer and is regular on `;`).
+            if let Some(sniffed) = sniffed_dialect(&conn, path, false).map(|d| with_quote_seen(d, sniffed_dialect(&conn, path, true)))
+                && csv_is_ragged(path, &sniffed)
             {
-                opts = dialect;
+                opts = fitting(path, sniffed);
             }
         }
         // The sniffer refused the file: the padded reader takes it when a delimiter splits it,
         // and the sniffer's own refusal stands when none does (a missing file, a file of one
         // column, a file that is no CSV).
         Err(e) => match padded(&conn) {
-            Some(o) => opts = o,
+            Some(o) => opts = fitting(path, o),
             None => return Err(e),
         },
     }
@@ -1215,7 +1224,53 @@ pub const CSV_RAGGED_WINDOW: usize = 2048;
 /// carriage return and line feed, or a carriage return alone, never inside quotes. A file that
 /// cannot be read here is not ragged: its reading is refused elsewhere, by name.
 pub fn csv_is_ragged(path: &str, opts: &CsvOptions) -> bool {
-    let Ok(text) = std::fs::read(path.trim()) else { return false };
+    csv_field_counts(path, opts).is_some_and(|counts| counts.windows(2).any(|w| w[0] != w[1]))
+}
+
+/// Whether a dialect fits a file: its header splits into at least two fields, and into as many
+/// as most of its rows do (a `;` file with decimal commas read on `,` splits its header into one
+/// field and its rows into several; a long or a short row here and there changes nothing).
+pub fn csv_header_fits(path: &str, opts: &CsvOptions) -> bool {
+    let Some(counts) = csv_field_counts(path, opts) else { return false };
+    let Some((&header, rows)) = counts.split_first() else { return false };
+    if header < 2 {
+        return false;
+    }
+    if rows.is_empty() {
+        return true;
+    }
+    let mut tally: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+    for r in rows {
+        *tally.entry(*r).or_default() += 1;
+    }
+    let most = tally.values().max().copied().unwrap_or(0);
+    tally.get(&header) == Some(&most)
+}
+
+/// The dialect a file is read in: `opts` when it fits the file (above), else the delimiter with
+/// the same quote and escape that fits and splits the header widest, the first in
+/// `CSV_DELIMS`'s order on a tie; `opts` again when none fits.
+fn fitting(path: &str, opts: CsvOptions) -> CsvOptions {
+    if csv_header_fits(path, &opts) {
+        return opts;
+    }
+    let mut best: Option<(usize, CsvOptions)> = None;
+    for d in CSV_DELIMS {
+        let c = CsvOptions { delim: Some(d.to_string()), ..opts.clone() };
+        if csv_header_fits(path, &c)
+            && let Some(header) = csv_field_counts(path, &c).and_then(|v| v.first().copied())
+            && best.as_ref().is_none_or(|(b, _)| header > *b)
+        {
+            best = Some((header, c));
+        }
+    }
+    best.map_or(opts, |(_, c)| c)
+}
+
+/// The fields of each row over the first 2 048 rows, read as [`csv_is_ragged`] says; nothing for
+/// a file that cannot be read.
+fn csv_field_counts(path: &str, opts: &CsvOptions) -> Option<Vec<usize>> {
+    let Ok(text) = std::fs::read(path.trim()) else { return None };
     let text = String::from_utf8_lossy(&text);
     let char_of = |s: &Option<String>, or: Option<char>| match s.as_deref() {
         None => or,
@@ -1280,7 +1335,7 @@ pub fn csv_is_ragged(path: &str, opts: &CsvOptions) -> bool {
     if !at_line_start && counts.len() < CSV_RAGGED_WINDOW {
         counts.push(fields);
     }
-    counts.windows(2).any(|w| w[0] != w[1])
+    Some(counts)
 }
 
 /// Whether reading `path` with `opts` still yields one unsplit column.

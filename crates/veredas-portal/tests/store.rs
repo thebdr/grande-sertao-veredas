@@ -1164,3 +1164,122 @@ fn the_sniffed_dialect_gives_way_to_the_decimal_comma_alone() {
     let page = preview_csv(&mixed, 10, &opts).unwrap();
     assert_eq!(page.columns[0].data_type, "DOUBLE");
 }
+
+// ---- the eighth refute round (2026-11-22) ----------------------------------------------------
+
+/// A dialect fits when the header splits into as many fields as most rows: a `;` or `|` file whose
+/// rows hold commas (decimal commas, lists, surnames) is read in its own delimiter, never on `,`,
+/// whatever the sniffer named.
+#[test]
+fn a_dialect_fits_the_header_as_it_fits_the_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    // Two columns of decimal commas: read on `;` with the comma.
+    let two = csv_file(dir.path(), "two.csv", "t;v\n1,5;2,5\n3,5\n4,5;5,5\n");
+    assert!(!csv_header_fits(&two, &delim(",")) && csv_header_fits(&two, &delim(";")));
+    let (opts, page) = read_as_sniffed(&two);
+    assert_eq!((opts.delim.as_deref(), opts.decimal_comma), (Some(";"), true), "{opts:?}");
+    assert_eq!((page.total, names(&page)), (3, vec!["t", "v"]));
+    assert_eq!((page.rows[0][0].clone(), page.rows[1][1].clone()), (serde_json::json!(1.5), serde_json::Value::Null));
+    // A `|` file of lists the sniffer refuses (a long row inside the window, a row after it):
+    // read on `|`, the long row widening the schema, every list whole.
+    let mut body = String::from("id|note|vals\n");
+    for i in 2..2048 {
+        body.push_str(&format!("{i}|a|10,20,30\n"));
+    }
+    body.push_str("9|9|9|9\n7|x|1,2\n");
+    let lists = csv_file(dir.path(), "lists_long.csv", &body);
+    let (opts, page) = read_as_sniffed(&lists);
+    assert_eq!(opts.delim.as_deref(), Some("|"), "{opts:?}");
+    assert_eq!((page.total, names(&page)), (2048, vec!["id", "note", "vals", "column3"]));
+    assert_eq!(page.rows[0][2], serde_json::json!("10,20,30"));
+    // Surnames with a comma, a short row: read on `;`, every name whole.
+    let names_file = csv_file(dir.path(), "surnames.csv", "name;age;city\nSilva, Ana;34;Lisboa\nCosta, Rui;28\nSousa, Bo;41;Faro\n");
+    let (opts, page) = read_as_sniffed(&names_file);
+    assert_eq!(opts.delim.as_deref(), Some(";"), "{opts:?}");
+    assert_eq!((page.total, page.rows[0][0].clone(), page.rows[1][2].clone()), (3, serde_json::json!("Silva, Ana"), serde_json::Value::Null));
+    // A dotted column beside decimal commas: on `;`, the comma refused (the dotted column would
+    // turn to text).
+    let mixed = csv_file(dir.path(), "dotted_and_commas.csv", "a;b;c\n7;1,5;4.0\n8;2,5\n9;3,5;6.0\n");
+    let (opts, page) = read_as_sniffed(&mixed);
+    assert_eq!((opts.delim.as_deref(), opts.decimal_comma, page.total), (Some(";"), false, 3), "{opts:?}");
+    assert_eq!((page.rows[0][1].clone(), page.rows[0][2].clone()), (serde_json::json!("1,5"), serde_json::json!(4.0)));
+    // A `|` file with a `;` decimal-comma cell: it fits on `|`, and stays there.
+    let piped = csv_file(dir.path(), "piped.csv", "id|a|b|note\n1|2|3|x;1,5\n4|5|6\n7|8|9|y;2,5\n");
+    let (opts, page) = read_as_sniffed(&piped);
+    assert_eq!(opts.delim.as_deref(), Some("|"), "{opts:?}");
+    assert_eq!((page.total, page.columns.len(), page.rows[0][3].clone()), (3, 4, serde_json::json!("x;1,5")));
+    // A `;` file with a comma in a column name: the sniffer reads it on `,` and drops its header
+    // line (regular on `;`, ragged on `,`); read on `;` with the comma, the name whole.
+    let unit = csv_file(dir.path(), "unit.csv", "time;pressure, bar\n1,5;2,5\n3,5;4,5\n5,5;6,5\n");
+    assert!(!csv_header_fits(&unit, &delim(",")) && csv_header_fits(&unit, &delim(";")));
+    assert!(csv_is_ragged(&unit, &delim(",")) && !csv_is_ragged(&unit, &delim(";")));
+    let (opts, page) = read_as_sniffed(&unit);
+    assert_eq!((opts.delim.as_deref(), opts.decimal_comma), (Some(";"), true), "{opts:?}");
+    assert_eq!((page.total, names(&page)), (3, vec!["time", "pressure, bar"]));
+    assert_eq!((page.rows[0][0].clone(), page.rows[0][1].clone()), (serde_json::json!(1.5), serde_json::json!(2.5)));
+    // A title line over a `;` table: no dialect splits a header of one field, so none replaces the
+    // sniffer's `;`, and the padded reader keeps the title's row (the sniffer alone drops it).
+    let titled = csv_file(dir.path(), "titled.csv", "Report\na;b;c\n1;2;3\n4;5;6\n7;8;9\n");
+    assert!(!csv_header_fits(&titled, &delim(";")) && !csv_header_fits(&titled, &delim("\t")));
+    let (opts, page) = read_as_sniffed(&titled);
+    assert_eq!(opts.delim.as_deref(), Some(";"), "{opts:?}");
+    assert_eq!((page.total, names(&page)), (4, vec!["Report", "column1", "column2"]));
+    // Collapsed by a short row, the padded sniff splitting on `,` the text and the lists of a `;`
+    // file: read on `;`, every cell whole.
+    let notes = csv_file(dir.path(), "notes.csv", "id;note\n1;a, b, c\n2\n3;d, e, f\n4;g, h, i\n");
+    let lists = csv_file(dir.path(), "lists_short.csv", "k;v\nx;10,20,30\ny;40,50,60\nz\nw;70,80,90\n");
+    for (file, cell) in [(notes, "a, b, c"), (lists, "10,20,30")] {
+        assert!(csv_looks_unsplit(&file, &CsvOptions::default()), "{file}");
+        let (opts, page) = read_as_sniffed(&file);
+        assert_eq!(opts.delim.as_deref(), Some(";"), "{file}: {opts:?}");
+        assert_eq!((page.total, page.columns.len(), page.rows[0][1].clone()), (4, 2, serde_json::json!(cell)), "{file}");
+    }
+}
+
+/// A headerless `;` file of decimal commas, collapsed by a short row (a logger's last line cut
+/// off as it writes): on `,` it types as many numbers as on `;` with the comma (the integers and
+/// the fractions, text between them), so the fewer columns left as text decide it; a full tie
+/// stays the sniffer's.
+#[test]
+fn a_headerless_file_of_decimal_commas_cut_short_reads_on_its_own_delimiter() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        ("headless.csv", "1,5;2,5\n3,5;4,5\n5,5\n6,5;7,5\n", 2),
+        ("cut.csv", "1,5;2,5\n3,5;4,5\n5,5;6,5\n7,\n", 2),
+        ("with_text.csv", "1,5;2,5;x,7\n3,5;4,5;y,8\n5,5\n6,5;7,5;z,9\n", 3),
+    ];
+    for (name, body, width) in cases {
+        let file = csv_file(dir.path(), name, body);
+        let (opts, page) = read_as_sniffed(&file);
+        assert_eq!((opts.delim.as_deref(), opts.decimal_comma), (Some(";"), true), "{name}: {opts:?}");
+        assert_eq!((page.total, page.columns.len()), (4, width), "{name}");
+        assert_eq!((page.rows[0][0].clone(), page.rows[0][1].clone()), (serde_json::json!(1.5), serde_json::json!(2.5)), "{name}");
+    }
+    let with_text = csv_file(dir.path(), "with_text.csv", cases[2].1);
+    assert_eq!(read_as_sniffed(&with_text).1.rows[0][2], serde_json::json!("x,7"));
+    // One number and one text column either way: the sniffer's `,` stands.
+    let tie = csv_file(dir.path(), "tie.csv", "1,5;x\n2,5;y\n3\n4,5;z\n");
+    let (opts, page) = read_as_sniffed(&tie);
+    assert_eq!((opts.delim.as_deref(), opts.decimal_comma), (Some(","), false), "{opts:?}");
+    assert_eq!((page.total, page.rows[0][1].clone()), (4, serde_json::json!("5;x")));
+}
+
+/// The one leading space a quote may follow is counted afresh at every field: two space-led
+/// quoted fields in a row, then a long row last, read every row.
+#[test]
+fn the_leading_space_is_counted_afresh_at_every_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut body = String::from("a, \"b,x\", \"c,y\"\n");
+    for i in 0..48 {
+        body.push_str(&format!("{i}, \"p,q\", \"r,s\"\n"));
+    }
+    body.push_str("1,2,3,4\n");
+    let file = csv_file(dir.path(), "two_spaced.csv", &body);
+    assert!(csv_is_ragged(&file, &delim(",")), "three fields a row, four on the last");
+    let (_, page) = read_as_sniffed(&file);
+    assert_eq!((page.total, page.columns.len()), (49, 4), "{:?}", page.columns);
+    assert_eq!((page.rows[0][1].clone(), page.rows[0][2].clone()), (serde_json::json!("p,q"), serde_json::json!("r,s")));
+}
+
+
+

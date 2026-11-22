@@ -451,6 +451,13 @@ Recorded as the port meets them.
   reads the file in that dialect as the engine does: a quote opens only at a field's start, a row
   ends at LF, CRLF or a bare CR, the window counts rows and a blank line moves it by none; a count
   that fails is the read's refusal, never a total of nothing.
+- **The sniffer's delimiter is not the file's when its rows all hold commas** (C-041, round 8).
+  A `;` file with commas in its text, its lists, a column name or its decimal numbers is named `,`
+  by the padded sniff, and the pieces of `1,5;2,5` type as many numbers on `,` as the decimals do
+  on `;`. The header tells: on the wrong delimiter it splits into one field, or fewer than its
+  rows. A dialect is read only where the header fits the rows; raggedness is still read in the
+  sniffer's own dialect (a file regular on `;` loses its header line to the sniffer on `,`). Title
+  lines are not detected: one over a table with a short row stays the sniffer's one text column.
 - **A public name of portal is supervisão's business too.** Supervisão's policy test reads portal's
   public functions and fields by name and refuses one its own sources hold that it has not
   reviewed: `CsvOptions.escape` and a session's `window` failed it (supervisão names an HTML
