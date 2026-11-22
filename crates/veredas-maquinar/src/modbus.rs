@@ -746,10 +746,12 @@ impl ModbusHandle {
     /// read meanwhile, and an answer still waiting out a delay, are never sent; false answers the
     /// next request again.
     pub fn set_silent(&self, silent: bool) {
+        // Silence first, then its epoch: a request read between the two sees silence on, never
+        // an epoch moved with silence still off.
+        self.shared.silent.store(silent, Ordering::SeqCst);
         if silent {
             self.shared.silenced.fetch_add(1, Ordering::SeqCst);
         }
-        self.shared.silent.store(silent, Ordering::SeqCst);
     }
 
     /// Close every open connection, as a device's restart does: those the server serves, those
@@ -1015,17 +1017,24 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
                 continue;
             }
         }
-        {
-            let mut state = shared.lock();
+        // Counted, and shown in its exchange, as its write begins: a client reading its answer finds
+        // it counted. A write that fails, or that a drop cuts before it is done, takes it back.
+        let count = |state: &mut State, by: i64| {
+            fn add<K: Ord>(map: &mut BTreeMap<K, u64>, key: K, by: i64) {
+                let n = map.entry(key).or_default();
+                *n = n.saturating_add_signed(by);
+                map.retain(|_, n| *n > 0);
+            }
             if response[0] & 0x80 == 0 {
-                *state.status.answered.entry(response[0]).or_default() += 1;
+                add(&mut state.status.answered, response[0], by);
             } else {
-                *state.status.exceptions.entry((pdu[0], response[1])).or_default() += 1;
+                add(&mut state.status.exceptions, (pdu[0], response[1]), by);
             }
             if let Some(i) = state.recent_ids.iter().position(|id| *id == exchange) {
-                state.status.recent[i].response = Some(response.clone());
+                state.status.recent[i].response = if by > 0 { Some(response.clone()) } else { None };
             }
-        }
+        };
+        count(&mut shared.lock(), 1);
         let mut frame = Vec::with_capacity(7 + response.len());
         frame.extend_from_slice(&transaction.to_be_bytes());
         frame.extend_from_slice(&0u16.to_be_bytes());
@@ -1033,9 +1042,13 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
         frame.push(unit);
         frame.extend_from_slice(&response);
         // A client that does not read leaves the write waiting: the drop does not wait for it.
-        tokio::select! {
-            r = wr.write_all(&frame) => if r.is_err() { return },
-            _ = ended(&mut gone, generation) => return,
+        let written = tokio::select! {
+            r = wr.write_all(&frame) => r.is_ok(),
+            _ = ended(&mut gone, generation) => false,
+        };
+        if !written {
+            count(&mut shared.lock(), -1);
+            return;
         }
     }
 }

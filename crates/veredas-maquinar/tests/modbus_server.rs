@@ -888,3 +888,317 @@ fn the_documented_drive_runs_from_its_bench_file() {
     plant.stop();
     assert!(std::net::TcpListener::bind(addr).is_ok());
 }
+
+/// C-110's third refute round: the critic's probes, kept as pins (an answer counted as its write
+/// begins and taken back when it fails or a drop cuts it; silence withholding what is not yet
+/// handed to the socket; 03 before 02 and for every length and zero quantity; a refused 05; the
+/// delay on exceptions; interleaved exchanges).
+mod round_3 {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::{Duration, Instant};
+
+    use veredas_maquinar::modbus::*;
+
+    fn config(text: &str) -> ModbusConfig {
+        toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+    }
+
+    fn wait(within: Duration, mut what: impl FnMut() -> bool) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < within {
+            if what() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        what()
+    }
+
+    struct Raw {
+        stream: TcpStream,
+    }
+
+    impl Raw {
+        fn connect(addr: SocketAddr) -> Raw {
+            let stream = TcpStream::connect(addr).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            stream.set_nodelay(true).unwrap();
+            Raw { stream }
+        }
+
+        fn frame(transaction: u16, protocol: u16, unit: u8, pdu: &[u8]) -> Vec<u8> {
+            let mut f = Vec::new();
+            f.extend_from_slice(&transaction.to_be_bytes());
+            f.extend_from_slice(&protocol.to_be_bytes());
+            f.extend_from_slice(&(pdu.len() as u16 + 1).to_be_bytes());
+            f.push(unit);
+            f.extend_from_slice(pdu);
+            f
+        }
+
+        fn send(&mut self, bytes: &[u8]) {
+            self.stream.write_all(bytes).unwrap();
+        }
+
+        fn read(&mut self) -> (u16, u16, u16, u8, Vec<u8>) {
+            let mut h = [0u8; 7];
+            self.stream.read_exact(&mut h).unwrap();
+            let length = u16::from_be_bytes([h[4], h[5]]);
+            let mut pdu = vec![0u8; length as usize - 1];
+            self.stream.read_exact(&mut pdu).unwrap();
+            (u16::from_be_bytes([h[0], h[1]]), u16::from_be_bytes([h[2], h[3]]), length, h[6], pdu)
+        }
+
+        fn ask(&mut self, transaction: u16, unit: u8, pdu: &[u8]) -> Vec<u8> {
+            self.send(&Raw::frame(transaction, 0, unit, pdu));
+            let (t, p, l, u, answer) = self.read();
+            assert_eq!((t, p, l as usize, u), (transaction, 0, answer.len() + 1, unit), "the answer's header to {pdu:02X?}");
+            answer
+        }
+    }
+
+    /// Pipelines 125-register reads (each its own transaction id, from 0) until the client's sends are
+    /// no longer taken: the server's write then waits on a client that reads nothing.
+    fn fill(c: &mut Raw) -> u16 {
+        c.stream.set_nonblocking(true).unwrap();
+        let mut next: u16 = 0;
+        let mut pending: Vec<u8> = Vec::new();
+        let started = Instant::now();
+        let mut blocked = 0;
+        while blocked < 200 && started.elapsed() < Duration::from_secs(60) {
+            if pending.is_empty() {
+                for _ in 0..100 {
+                    pending.extend(Raw::frame(next, 0, 1, &[0x03, 0x00, 0x00, 0x00, 0x7D]));
+                    next = next.wrapping_add(1);
+                }
+            }
+            match c.stream.write(&pending) {
+                Ok(n) => {
+                    pending.drain(..n);
+                    blocked = 0;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    blocked += 1;
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(e) => panic!("{e}"),
+            }
+        }
+        assert_eq!(blocked, 200, "the client's sends stopped being taken");
+        next
+    }
+
+    /// G1a. "an answer counted when it is sent": a client resets its connection while its answer waits
+    /// out a delay; the server's write then fails and the answer is never sent, yet it is counted as
+    /// answered and its exchange shows it.
+    #[test]
+    fn an_answer_whose_write_fails_is_taken_back() {
+        let server = start(&config("port = 0\nholding_registers = 1\n")).unwrap();
+        server.set_delay(Duration::from_millis(300));
+        let mut c = Raw::connect(server.addr);
+        c.send(&Raw::frame(1, 0, 1, &[0x03, 0x00, 0x00, 0x00, 0x01]));
+        assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == 1)));
+        // The client goes away with a reset, before the answer is sent.
+        socket2::SockRef::from(&c.stream).set_linger(Some(Duration::ZERO)).unwrap();
+        drop(c);
+        // The server's task ends once the delay is over and its write fails.
+        assert!(wait(Duration::from_secs(5), || server.status().connections == 0), "{:?}", server.status());
+        let s = server.status();
+        assert_eq!(s.answered.get(&0x03), None, "an answer never sent counted as answered");
+        assert_eq!(s.recent.back().unwrap().response, None, "its exchange shows an answer never sent");
+    }
+
+    /// G1b. "an answer counted when it is sent ... one whose connection was dropped first, counted as
+    /// none", "each showing its answer once sent": the answer whose write waits on a client that reads
+    /// nothing is counted and shown before it is sent, and stays so when drop_connections closes its
+    /// connection first.
+    #[test]
+    fn an_answer_is_counted_as_its_write_begins_and_taken_back_when_a_drop_cuts_it() {
+        let server = start(&config("port = 0\nholding_registers = 125\n")).unwrap();
+        let mut c = Raw::connect(server.addr);
+        fill(&mut c);
+        // Stable: the server reads no more requests, so its last exchange's answer is the one whose
+        // write waits (nothing else awaits on a connection with no delay).
+        let mut s = server.status();
+        assert!(wait(Duration::from_secs(5), || {
+            std::thread::sleep(Duration::from_millis(300));
+            let now = server.status();
+            let same = now.recent.back().map(|x| x.transaction) == s.recent.back().map(|x| x.transaction) && now.answered == s.answered;
+            s = now;
+            same
+        }));
+        // The answer whose write waits is counted and shown: its write has begun.
+        let last = s.recent.back().unwrap().clone();
+        let answered = s.answered.get(&0x03).copied().unwrap_or(0);
+        assert_eq!(last.response.as_ref().map(|r| r.len()), Some(252), "{answered} answered");
+        // A drop cuts it: taken back, its exchange showing none.
+        server.drop_connections();
+        assert!(wait(Duration::from_secs(5), || server.status().answered.get(&0x03).copied().unwrap_or(0) == answered - 1));
+        let after = server.status();
+        assert_eq!(after.connections, 0);
+        assert_eq!(after.recent.back().unwrap().transaction, last.transaction);
+        assert_eq!(after.recent.back().unwrap().response, None, "the answer a drop cut shows none");
+    }
+
+    /// G2 (wording). "withhold every answer not yet sent": silence begun while an answer waits on a
+    /// client that reads nothing; the client then reads, and that answer arrives after silence began.
+    #[test]
+    fn an_answer_already_handed_to_its_socket_goes_out_after_silence_begins() {
+        let server = start(&config("port = 0\nholding_registers = 125\n")).unwrap();
+        let mut c = Raw::connect(server.addr);
+        fill(&mut c);
+        let mut s = server.status();
+        assert!(wait(Duration::from_secs(5), || {
+            std::thread::sleep(Duration::from_millis(300));
+            let now = server.status();
+            let same = now.recent.back().map(|x| x.transaction) == s.recent.back().map(|x| x.transaction) && now.answered == s.answered;
+            s = now;
+            same
+        }));
+        let waiting = s.recent.back().unwrap().transaction;
+        server.set_silent(true);
+        // Read every answer that comes.
+        c.stream.set_nonblocking(false).unwrap();
+        c.stream.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let mut got: Vec<u16> = Vec::new();
+        loop {
+            let mut h = [0u8; 7];
+            if c.stream.read_exact(&mut h).is_err() {
+                break;
+            }
+            let length = u16::from_be_bytes([h[4], h[5]]);
+            let mut pdu = vec![0u8; length as usize - 1];
+            if c.stream.read_exact(&mut pdu).is_err() {
+                break;
+            }
+            got.push(u16::from_be_bytes([h[0], h[1]]));
+        }
+        // What was already handed to the socket goes out; nothing read after it is answered.
+        assert_eq!(got.last(), Some(&waiting), "{} answers read after silence began", got.len());
+        assert!(wait(Duration::from_secs(5), || server.status().unanswered > 0));
+    }
+
+    /// G3. "a length, quantity, byte count or coil value the function does not take with 03 before an
+    /// address past its table with 02", for 0F, 10, 16 and 17 (modbus_server.rs pins it for 01, 04 and
+    /// 05 only).
+    #[test]
+    fn the_03_comes_before_the_02_for_every_write_function() {
+        let server = start(&config("port = 0\ncoils = 16\nholding_registers = 16\n")).unwrap();
+        let mut c = Raw::connect(server.addr);
+        let coils = |at: u16, n: u16, count: u8, bytes: usize| {
+            let mut pdu = vec![0x0F];
+            pdu.extend_from_slice(&at.to_be_bytes());
+            pdu.extend_from_slice(&n.to_be_bytes());
+            pdu.push(count);
+            pdu.extend(std::iter::repeat_n(0xAA, bytes));
+            pdu
+        };
+        let regs = |at: u16, n: u16, count: u8, bytes: usize| {
+            let mut pdu = vec![0x10];
+            pdu.extend_from_slice(&at.to_be_bytes());
+            pdu.extend_from_slice(&n.to_be_bytes());
+            pdu.push(count);
+            pdu.extend(std::iter::repeat_n(0x01, bytes));
+            pdu
+        };
+        let rw = |read_at: u16, read_n: u16, write_at: u16, write_n: u16, count: u8, bytes: usize| {
+            let mut pdu = vec![0x17];
+            for v in [read_at, read_n, write_at, write_n] {
+                pdu.extend_from_slice(&v.to_be_bytes());
+            }
+            pdu.push(count);
+            pdu.extend(std::iter::repeat_n(0x07, bytes));
+            pdu
+        };
+        assert_eq!(c.ask(1, 1, &coils(0xFFF0, 1969, 247, 247)), [0x8F, 0x03], "0F: the quantity before the address");
+        assert_eq!(c.ask(2, 1, &coils(0xFFF0, 9, 1, 1)), [0x8F, 0x03], "0F: the byte count before the address");
+        assert_eq!(c.ask(3, 1, &regs(0xFFF0, 124, 248, 247)), [0x90, 0x03], "10: the quantity before the address");
+        assert_eq!(c.ask(4, 1, &regs(0xFFF0, 2, 3, 3)), [0x90, 0x03], "10: the byte count before the address");
+        assert_eq!(c.ask(5, 1, &[0x16, 0xFF, 0xF0, 0x00, 0x00, 0x00]), [0x96, 0x03], "16: the length before the address");
+        assert_eq!(c.ask(6, 1, &rw(0xFFF0, 126, 0, 1, 2, 2)), [0x97, 0x03], "17: the read quantity before the read address");
+        assert_eq!(c.ask(7, 1, &rw(0, 1, 0xFFF0, 122, 244, 243)), [0x97, 0x03], "17: the write quantity before the write address");
+        assert_eq!(c.ask(8, 1, &rw(0, 1, 0xFFF0, 1, 3, 3)), [0x97, 0x03], "17: the byte count before the write address");
+    }
+
+    /// G4. "a length ... the function does not take with 03": 01, 02 and 06 one byte long, 10 and 17
+    /// short of their fixed part, 17 a byte past its count (modbus_server.rs pins the length for 03, 05,
+    /// 0F and 16 only).
+    #[test]
+    fn a_length_the_function_does_not_take_is_03_for_every_function() {
+        let server = start(&config("port = 0\ncoils = 8\ndiscrete_inputs = 8\nholding_registers = 8\n")).unwrap();
+        let mut c = Raw::connect(server.addr);
+        server.set_registers(Table::HoldingRegister, 0, &[0xBEEF; 8]).unwrap();
+        assert_eq!(c.ask(1, 1, &[0x01, 0x00, 0x00, 0x00, 0x01, 0x00]), [0x81, 0x03], "01, a byte long");
+        assert_eq!(c.ask(2, 1, &[0x02, 0x00, 0x00, 0x00, 0x01, 0x00]), [0x82, 0x03], "02, a byte long");
+        assert_eq!(c.ask(3, 1, &[0x06, 0x00, 0x00, 0x00, 0x01, 0x00]), [0x86, 0x03], "06, a byte long");
+        assert_eq!(c.ask(4, 1, &[0x06, 0x00, 0x00, 0x00]), [0x86, 0x03], "06, a byte short");
+        assert_eq!(c.ask(5, 1, &[0x10, 0x00, 0x00, 0x00, 0x01]), [0x90, 0x03], "10 without its byte count");
+        assert_eq!(c.ask(6, 1, &[0x17, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01]), [0x97, 0x03], "17 without its byte count");
+        assert_eq!(
+            c.ask(7, 1, &[0x17, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x07, 0x00]),
+            [0x97, 0x03],
+            "17, a byte past its count"
+        );
+        assert_eq!(server.registers(Table::HoldingRegister, 0, 8).unwrap(), [0xBEEF; 8], "no refused request wrote");
+    }
+
+    /// G5. "(a refused request writes nothing)" for 05's 03: modbus_server.rs sends its bad coil values
+    /// before it sets the coils apart, and overwrites them before it reads them.
+    #[test]
+    fn a_refused_single_coil_writes_nothing() {
+        let server = start(&config("port = 0\ncoils = 2\n")).unwrap();
+        let mut c = Raw::connect(server.addr);
+        server.set_bits(Table::Coil, 0, &[false, true]).unwrap();
+        assert_eq!(c.ask(1, 1, &[0x05, 0x00, 0x00, 0x12, 0x34]), [0x85, 0x03]);
+        assert_eq!(c.ask(2, 1, &[0x05, 0x00, 0x01, 0x00, 0xFF]), [0x85, 0x03]);
+        assert_eq!(server.bits(Table::Coil, 0, 2).unwrap(), [false, true], "a refused coil value wrote");
+    }
+
+    /// G6. "its knobs hold every answer for a delay": an exception is an answer.
+    #[test]
+    fn the_delay_holds_an_exception_too() {
+        let server = start(&config("port = 0\nholding_registers = 1\n")).unwrap();
+        let mut c = Raw::connect(server.addr);
+        server.set_delay(Duration::from_millis(300));
+        let asked = Instant::now();
+        assert_eq!(c.ask(1, 1, &[0x07]), [0x87, 0x01]);
+        assert!(asked.elapsed() >= Duration::from_millis(300), "{:?}", asked.elapsed());
+        let asked = Instant::now();
+        assert_eq!(c.ask(2, 1, &[0x03, 0x00, 0x01, 0x00, 0x01]), [0x83, 0x02]);
+        assert!(asked.elapsed() >= Duration::from_millis(300), "{:?}", asked.elapsed());
+    }
+
+    /// G7. "a ... quantity ... the function does not take with 03": no register written by 10, none
+    /// read or written by 17 (modbus_server.rs pins the zero quantity for 01, 03 and 0F only).
+    #[test]
+    fn a_quantity_of_zero_is_03_for_10_and_17() {
+        let server = start(&config("port = 0\nholding_registers = 8\n")).unwrap();
+        let mut c = Raw::connect(server.addr);
+        assert_eq!(c.ask(1, 1, &[0x10, 0x00, 0x00, 0x00, 0x00, 0x00]), [0x90, 0x03], "10, no register");
+        assert_eq!(c.ask(2, 1, &[0x17, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x07]), [0x97, 0x03], "17, none read");
+        assert_eq!(c.ask(3, 1, &[0x17, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]), [0x97, 0x03], "17, none written");
+        assert_eq!(server.registers(Table::HoldingRegister, 0, 1).unwrap(), [0], "nothing written");
+    }
+
+    /// G8. "each showing its answer once sent": two connections whose answers wait out a delay
+    /// interleave; each exchange shows its own answer (a late answer filling the newest exchange
+    /// instead passes modbus_server.rs, whose delayed answers never interleave).
+    #[test]
+    fn each_exchange_shows_its_own_answer_when_two_delayed_ones_interleave() {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        server.set_registers(Table::HoldingRegister, 0, &[0x1111, 0x2222]).unwrap();
+        server.set_delay(Duration::from_millis(300));
+        let mut a = Raw::connect(server.addr);
+        let mut b = Raw::connect(server.addr);
+        a.send(&Raw::frame(1, 0, 1, &[0x03, 0x00, 0x00, 0x00, 0x01]));
+        assert!(wait(Duration::from_secs(5), || server.status().recent.len() == 1));
+        b.send(&Raw::frame(2, 0, 1, &[0x03, 0x00, 0x01, 0x00, 0x01]));
+        assert!(wait(Duration::from_secs(5), || server.status().recent.len() == 2));
+        assert_eq!(a.read().4, [0x03, 0x02, 0x11, 0x11]);
+        assert_eq!(b.read().4, [0x03, 0x02, 0x22, 0x22]);
+        let s = server.status();
+        let shown: Vec<(u16, Option<Vec<u8>>)> = s.recent.iter().map(|x| (x.transaction, x.response.clone())).collect();
+        assert_eq!(shown, [(1, Some(vec![0x03, 0x02, 0x11, 0x11])), (2, Some(vec![0x03, 0x02, 0x22, 0x22]))]);
+    }
+}
