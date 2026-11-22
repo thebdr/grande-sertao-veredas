@@ -103,6 +103,10 @@ fn prova(release: &str) -> i32 {
             for f in &faults {
                 eprintln!("{f}");
             }
+            // The OVA keeps the disk: the copy taken out of it for the boot is not kept.
+            if let Some(opened) = proof.vmdk.parent() {
+                let _ = std::fs::remove_dir_all(opened);
+            }
             if faults.is_empty() { 0 } else { 2 }
         }
         Err(e) => {

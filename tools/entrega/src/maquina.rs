@@ -140,10 +140,10 @@ echo ENTREGA-PROVISION-OK
     )
 }
 
-/// Where a machine's files are made.
+/// Where a machine's files are made: the OVA alone is kept (its disk, descriptor and manifest are
+/// inside it; the provisioning's disk and the loose copies are removed, a disk being 1 GB and more).
 pub struct Paths {
     pub ova: PathBuf,
-    pub vmdk: PathBuf,
 }
 
 /// The OVF descriptor: one virtual system on VMware's hardware at the recipe's version, its disk
@@ -333,11 +333,11 @@ pub fn build(r: &Recipe, bundle: &Path, bundle_dir: &str, release: &str, guide: 
         ],
         None,
     )?;
-    for f in [&disk, &in_tar] {
+    for f in [&disk, &in_tar, &vmdk, &work.join(&ovf_name), &work.join(&mf_name)] {
         let _ = std::fs::remove_file(f);
     }
     let _ = std::fs::remove_dir_all(&input);
-    Ok(Paths { ova, vmdk })
+    Ok(Paths { ova })
 }
 
 /// The address the proof boot gives the machine's card: VMware's own prefix, never the address

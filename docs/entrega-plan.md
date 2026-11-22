@@ -283,6 +283,20 @@ Verified by running each, not assumed:
   command in the machine that fetches a newer bundle, checks its sums and its manifest, installs it
   beside the old one under `/opt/veredas/` and moves `current`, leaving the plant's files alone.
 
+### What a cut and a machine cost in disk, and what is kept
+Measured on release 2.0.0-alpha.1 (2026-11-22):
+- **Kept across cuts, in the cache** (`~/.cache/veredas/entrega/`, outside the repository): the base
+  image (435 MB, once) and the builder machine's disk (1.6 GB, once per toolchain).
+- **During a cut**, under `target/entrega/<release>/`: the commit's tree and its vendored
+  dependencies (about 0.7 GB, and their tar stream as much), the builder's copy-on-write disk while
+  it builds and the output disk (sparse); all removed once the executables are out.
+- **Kept after a cut**: the bundle (48 MB), its extracted check (161 MB) and the executables as
+  built (160 MB), the run's copy of the plant (small).
+- **During a machine's build**: its copy-on-write disk (about 2.8 GB) and the VMDK, removed once
+  the OVA is packed; **kept**: the OVA alone (1.09 GB). The proof's copy of the disk taken out of
+  the OVA (1.09 GB) is removed after `entrega prova` reports.
+- A superseded or failed cut's folder is removed whole; a trial's, by its test when it passes.
+
 ## Rules
 - **A release pins a tree.** One release, one commit; a manifest checkable at any later commit
   against git's history, as L6 judges history: the tree read as git stores it, replace refs and
