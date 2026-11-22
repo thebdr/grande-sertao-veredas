@@ -1,0 +1,24 @@
+{
+  "clause": "C-094",
+  "command": "cargo test -p veredas-portal --test grep",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-portal",
+    "--test",
+    "grep"
+  ],
+  "exitCode": 0,
+  "outputSha": "3584f2c6fa916094c6a6fc5572ed8e8465080710a309985d7a20f64b21c7063e",
+  "outputTail": "\nrunning 8 tests\ntest every_encoding_the_tail_reads_is_searched_decoded ... ok\ntest matching_lines_stream_with_their_context_and_a_break_between_blocks ... ok\ntest a_tree_by_masks_recursive_or_not_in_name_order ... ok\ntest patterns_combine_per_line_and_mark_their_spans ... ok\ntest the_size_and_binary_guards_the_caps_and_a_missing_file ... ok\ntest literal_case_and_whole_word ... ok\ntest a_cancel_stops_a_running_search_and_a_bad_query_starts_none ... ok\ntest a_family_the_bench_wrote_is_searched_in_rotation_order_decoded ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s\n     Running tests/grep.rs (target/debug/build/veredas-portal/0759fc59e76c911b/out/grep-0759fc59e76c911b)",
+  "ranAt": "2026-11-22T20:53:24.330Z",
+  "headCommit": "ee6ce48df4b152f96259c333088d1ef2762b1edc",
+  "tests": [
+    {
+      "name": "crates/veredas-portal/tests/grep.rs",
+      "file": "crates/veredas-portal/tests/grep.rs",
+      "fileSha": "6da0f315a94388d02f81c1724865edb93966cddc38af11187c9b3c4822eee0ec"
+    }
+  ]
+}
