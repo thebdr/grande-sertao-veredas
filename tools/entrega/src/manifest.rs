@@ -229,6 +229,12 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
         if !tree.join("Cargo.toml").is_file() {
             return Ok(Some(format!("commit {commit} holds no Cargo.toml")));
         }
+        // A root that is no workspace sends cargo looking for one above the tree, in folders the
+        // history does not hold.
+        let root_manifest = std::fs::read_to_string(tree.join("Cargo.toml"))?;
+        if !toml::from_str::<toml::Table>(&root_manifest).is_ok_and(|t| t.contains_key("workspace")) {
+            return Ok(Some(format!("commit {commit}: its Cargo.toml is no workspace (`[workspace]`): cargo would look for one above the tree")));
+        }
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
         let out = Command::new(cargo)
             .args(["metadata", "--no-deps", "--offline", "--format-version", "1", "--manifest-path"])
@@ -246,6 +252,27 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
             Err(e) => return Ok(Some(format!("commit {commit}: cargo's metadata does not read: {e}"))),
         };
         let base = PathBuf::from(meta["workspace_root"].as_str().unwrap_or_default());
+        // Everything cargo read must lie in the commit's tree: its workspace root, every package's
+        // manifest, every path dependency (a path out of the tree reads a file the history does not
+        // hold).
+        let inside = |p: &Path| p.canonicalize().ok().zip(tree.canonicalize().ok()).is_some_and(|(p, t)| p.starts_with(t));
+        if base.canonicalize().ok() != tree.canonicalize().ok() {
+            return Ok(Some(format!("commit {commit}: cargo names a workspace root outside the commit's tree")));
+        }
+        for pkg in meta["packages"].as_array().into_iter().flatten() {
+            let name = pkg["name"].as_str().unwrap_or_default();
+            if !inside(Path::new(pkg["manifest_path"].as_str().unwrap_or_default())) {
+                return Ok(Some(format!("commit {commit}: the package `{name}` lies outside the commit's tree")));
+            }
+            for dep in pkg["dependencies"].as_array().into_iter().flatten() {
+                if let Some(path) = dep["path"].as_str()
+                    && !inside(Path::new(path))
+                {
+                    let dep_name = dep["name"].as_str().unwrap_or_default();
+                    return Ok(Some(format!("commit {commit}: the package `{name}` depends on `{dep_name}` by a path outside the commit's tree")));
+                }
+            }
+        }
         for pkg in meta["packages"].as_array().into_iter().flatten() {
             let manifest = PathBuf::from(pkg["manifest_path"].as_str().unwrap_or_default());
             let dir = manifest.parent().and_then(|d| d.strip_prefix(&base).ok()).map(|d| d.to_string_lossy().replace('\\', "/"));

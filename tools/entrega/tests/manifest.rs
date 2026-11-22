@@ -488,6 +488,66 @@ fn a_tree_holding_a_link_or_a_name_that_is_not_utf8_is_refused_by_its_path() {
 }
 
 #[test]
+fn nothing_outside_the_commits_tree_is_read_or_written() {
+    // A path dependency reaching out of the tree, refused whether or not the file it names exists.
+    let r = suite();
+    r.write(
+        "crates/veredas-core/Cargo.toml",
+        "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nfora = { path = \"../../../../fora\" }\n",
+    );
+    let c = r.commit("a path dependency out of the tree");
+    for planted in [false, true] {
+        let parent = tempfile::tempdir().unwrap();
+        if planted {
+            std::fs::create_dir_all(parent.path().join("fora/src")).unwrap();
+            std::fs::write(parent.path().join("fora/Cargo.toml"), "[package]\nname = \"fora\"\nversion = \"1.0.0\"\nedition = \"2024\"\n").unwrap();
+            std::fs::write(parent.path().join("fora/src/lib.rs"), "\n").unwrap();
+        }
+        let mut refusals = Vec::new();
+        let held = manifest::components_at_in(r.path(), &c, parent.path(), &mut refusals).unwrap();
+        assert!(held.is_empty(), "planted: {planted}");
+        assert_eq!(refusals.len(), 1, "planted: {planted}: {refusals:?}");
+        if planted {
+            assert_eq!(refusals[0], format!("commit {c}: the package `veredas-core` depends on `fora` by a path outside the commit's tree"));
+        } else {
+            assert!(refusals[0].starts_with(&format!("commit {c}: cargo cannot read its workspace: ")), "{refusals:?}");
+        }
+    }
+    // A root that is no workspace: refused before cargo looks above the tree.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[package]\nname = \"veredas-raiz\"\nversion = \"2.0.0\"\n");
+    r.write("src/lib.rs", "\n");
+    let c = r.commit("a package at the root");
+    let parent = tempfile::tempdir().unwrap();
+    std::fs::write(parent.path().join("Cargo.toml"), "[workspace]\nmembers = [\"entrega-tree-*/tree\", \"crates/*\"]\n").unwrap();
+    let mut refusals = Vec::new();
+    assert!(manifest::components_at_in(r.path(), &c, parent.path(), &mut refusals).unwrap().is_empty());
+    assert_eq!(refusals, vec![format!("commit {c}: its Cargo.toml is no workspace (`[workspace]`): cargo would look for one above the tree")]);
+    // A tree whose entry is `..` (git mktree makes one): refused, nothing written outside.
+    let r = suite();
+    let c = r.commit("the suite");
+    std::fs::write(r.path().join("planted.txt"), "planted\n").unwrap();
+    let blob = r.git(&["hash-object", "-w", "planted.txt"]);
+    std::fs::remove_file(r.path().join("planted.txt")).unwrap();
+    let mktree = |listing: String| -> String {
+        let mut child = Command::new("git").arg("-C").arg(r.path()).arg("mktree").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
+        use std::io::Write;
+        child.stdin.take().unwrap().write_all(listing.as_bytes()).unwrap();
+        String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap().trim().to_string()
+    };
+    let inner = mktree(format!("100644 blob {blob}\tplanted.txt\n"));
+    let up = mktree(format!("040000 tree {inner}\t..\n"));
+    let root_listing = r.git(&["ls-tree", &c]);
+    let root = mktree(format!("{root_listing}\n040000 tree {up}\t..\n"));
+    let escape = r.git(&["commit-tree", &root, "-p", &c, "-m", "a dot-dot entry"]);
+    let parent = tempfile::tempdir().unwrap();
+    let mut refusals = Vec::new();
+    assert!(manifest::components_at_in(r.path(), &escape, parent.path(), &mut refusals).unwrap().is_empty());
+    assert_eq!(refusals, vec![format!("commit {escape}: the path `../../planted.txt` has a `..`, `.` or empty part: it would be written outside its place")]);
+    assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0, "nothing written, nothing left");
+}
+
+#[test]
 fn an_annotated_tags_id_is_no_commit() {
     let r = suite();
     let c = r.commit("the suite");

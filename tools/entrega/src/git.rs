@@ -73,8 +73,9 @@ pub enum ExportError {
 /// filter or line-ending rule applied (`git archive` applies `export-ignore`, `export-subst` and
 /// smudge filters from settings outside the history, so two clones could export one commit two
 /// ways). Only the paths under one of `prefixes` are written (every path when it is empty); an
-/// executable keeps its mode, a submodule is left out. A release's tree holds no link and no path
-/// that is not UTF-8: a link, judged as text, can still reach outside through another link or make
+/// executable keeps its mode, a submodule is left out. A path with a `..`, `.` or empty part (a
+/// tree `git mktree` can make) is refused before anything is written. A release's tree holds no
+/// link and no path that is not UTF-8: a link, judged as text, can still reach outside through another link or make
 /// a member's folder somewhere else, and a name that is not UTF-8 cannot be written as stored; each
 /// is refused by its path, wherever it sits. Returns how many files were written.
 pub fn export_tree(root: &Path, commit: &str, prefixes: &[&str], dest: &Path) -> Result<usize, ExportError> {
@@ -91,6 +92,9 @@ pub fn export_tree(root: &Path, commit: &str, prefixes: &[&str], dest: &Path) ->
             return Err(ExportError::Refused(format!("the path `{path}` is not UTF-8: a release's tree names its files in UTF-8")));
         };
         let Some((info, path)) = rec.split_once('\t') else { continue };
+        if path.split('/').any(|part| part.is_empty() || part == "." || part == "..") {
+            return Err(ExportError::Refused(format!("the path `{path}` has a `..`, `.` or empty part: it would be written outside its place")));
+        }
         let mut f = info.split_whitespace();
         let (Some(mode), Some(kind), Some(oid)) = (f.next(), f.next(), f.next()) else { continue };
         if mode == "120000" {
