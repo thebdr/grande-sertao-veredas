@@ -89,6 +89,8 @@ pub enum EthercatError {
 
 /// The most process data a device holds each way, bytes.
 pub const MAX_PROCESS_DATA: usize = 0x400;
+/// The most entries a device's PDO holds each way: its EEPROM counts them in a byte.
+pub const MAX_ENTRIES: usize = 255;
 
 fn bytes_of(entries: &[EntryConfig]) -> usize {
     entries.iter().map(|e| e.bits as usize).sum::<usize>().div_ceil(8)
@@ -118,6 +120,9 @@ pub fn validate(cfg: &EthercatConfig) -> Result<(), EthercatError> {
         for (kind, entries) in [("outputs", &d.outputs), ("inputs", &d.inputs)] {
             if let Some((j, e)) = entries.iter().enumerate().find(|(_, e)| e.bits == 0 || e.bits > 64) {
                 return Err(bad(format!("{place}.{kind}[{j}]: {} bit(s), not 1 to 64", e.bits)));
+            }
+            if entries.len() > MAX_ENTRIES {
+                return Err(bad(format!("{place}.{kind}: {} entries, over {MAX_ENTRIES}", entries.len())));
             }
             if bytes_of(entries) > MAX_PROCESS_DATA {
                 return Err(bad(format!("{place}.{kind}: {} bytes, over {MAX_PROCESS_DATA}", bytes_of(entries))));
@@ -208,13 +213,15 @@ impl EthercatHandle {
         Ok(self.shared.lock().segment[i].station())
     }
 
-    /// A device falls back to SAFE-OP with an error and this AL status code, as a device whose
-    /// watchdog expired or whose sync was lost does; the master acknowledges it to recover.
+    /// A device reports an error with this AL status code, as a device whose watchdog expired or
+    /// whose sync was lost does: from OP it falls back to SAFE-OP, below it keeps its state; the
+    /// master acknowledges the error to recover. Never a state higher than the device's.
     pub fn fault(&self, device: &str, code: u16) -> Result<(), EthercatError> {
         let i = self.index(device)?;
         let mut state = self.shared.lock();
         let esc = &mut state.segment[i];
-        esc.mem[esc::reg::AL_STATUS as usize] = esc::state::SAFE_OP | esc::state::ERROR_FLAG;
+        let now = esc.al_state().min(esc::state::SAFE_OP);
+        esc.mem[esc::reg::AL_STATUS as usize] = now | esc::state::ERROR_FLAG;
         esc.mem[esc::reg::AL_STATUS_CODE as usize..esc::reg::AL_STATUS_CODE as usize + 2].copy_from_slice(&code.to_le_bytes());
         Ok(())
     }

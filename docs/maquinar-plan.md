@@ -246,7 +246,7 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
 - **The emulated EtherCAT segment** (C-113, 2026-11-22). Review entry 27 said it plainly: an
   EtherCAT device handles frames in a chip as they pass, and an emulation on an ordinary card is a
   slave controller written in software, functional, never exact in time; its clause says what it
-  covers. The ESC is a memory of 8 KB answering every register as stored, with behaviour only where
+  covers. The ESC is its registers and 8 KB of process RAM, answering every register as stored, with behaviour only where
   the standard gives one: the read-only registers kept, the AL state machine (a transition it
   refuses flagged with code 0x0011 until acknowledged), the SII interface (a read loads 8 bytes at
   once, never busy), the distributed clock (a write to port 0's receive time latches every port's;
@@ -259,6 +259,14 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
   its own source. Proof: ethercrab 0.7.1 (the crate core's master stands on) finds the devices,
   reads them, addresses them, takes them to OP and exchanges process data; hand-built frames pin
   each command's data and counter; tshark reads the frame as sent and as returned.
+  Its first refute round (2026-11-22) corrected what a master other than ethercrab would meet: an
+  LWR counts 1 a device (2 only for an LRW's write); FMMUs map bit by bit, as the features
+  register says they do, so masters that pack 1-bit terminals into shared bytes are served; the
+  system time difference is sign and magnitude, as an ESC states it; the registers EtherCAT only
+  reads are kept (the alias, each SyncManager's status, the receive times); the alias addresses a
+  device once the master sets DL control's bit 24; a fault never raises a state; a PDO holds 255
+  entries a way, the EEPROM counting them in a byte. The ESC core is pure, so its clock's values
+  are pinned to the nanosecond by calling it directly.
 - **Raw frames without a privilege.** The EtherCAT and PROFINET devices answer raw Ethernet
   frames, which need `CAP_NET_RAW`, and the machines here have no sudo. Checked on the Linux
   machine (2026-11-22): `unshare -Urn` (an unprivileged user namespace with its own network

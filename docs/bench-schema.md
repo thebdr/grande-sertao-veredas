@@ -382,8 +382,8 @@ and sent back; functional, never exact in time.
 - `product_name` (`"veredas bench terminal"`): the name its EEPROM gives a master, 1 to 255 ASCII
   characters.
 - `alias` (`0`): its station alias.
-- `outputs` (none), `inputs` (none): its process-data entries, as inline tables, at most 1024 bytes
-  each way.
+- `outputs` (none), `inputs` (none): its process-data entries, as inline tables, at most 255
+  entries and 1024 bytes each way.
 
 **A process-data entry** (an entry of `outputs` or `inputs`).
 - `index` (required), `subindex` (required): the object the entry maps.
@@ -416,7 +416,7 @@ its table's end, a type its table cannot hold, a value that does not parse) or t
 adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past
 its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name
 the standard refuses, a port not named `port-`) or the EtherCAT segment's (no device, two devices of
-one name, an entry of 0 bits), a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that
+one name, an entry of 0 bits, more than 255 entries a way), a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that
 does not load against the catalog, a message the catalog lacks or whose fields leave a name
 unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the
 place named, before anything binds, opens or spawns. A part that cannot start (a port taken, a

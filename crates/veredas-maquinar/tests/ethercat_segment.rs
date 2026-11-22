@@ -22,17 +22,20 @@ const MAX_PDU_DATA: usize = PduStorage::element_size(1100);
 const MAX_FRAMES: usize = 16;
 const PDI_LEN: usize = 64;
 
+// One storage per test that runs a MainDevice: `cargo test` runs them in one process, and a
+// storage splits once.
 static PDU_STORAGE: PduStorage<MAX_FRAMES, MAX_PDU_DATA> = PduStorage::new();
+static PDU_STORAGE_BENCH: PduStorage<MAX_FRAMES, MAX_PDU_DATA> = PduStorage::new();
 
 const SEGMENT: &str = "interface = \"b0\"\ndevices = [\n\
-  { name = \"coupler\", product_code = 1, revision = 1, serial = 11, product_name = \"bench coupler\" },\n\
-  { name = \"out16\", product_code = 2, revision = 3, serial = 12, product_name = \"bench outputs\", outputs = [ { index = 0x7000, subindex = 1, bits = 8 }, { index = 0x7010, subindex = 1, bits = 8 } ] },\n\
-  { name = \"in8\", product_code = 3, revision = 1, serial = 13, alias = 0x0102, product_name = \"bench inputs\", inputs = [ { index = 0x6000, subindex = 1, bits = 8 } ] },\n\
+  { name = \"coupler\", vendor_id = 0x0700, product_code = 1, revision = 1, serial = 11, product_name = \"bench coupler\" },\n\
+  { name = \"out16\", vendor_id = 0x0701, product_code = 2, revision = 3, serial = 12, product_name = \"bench outputs\", outputs = [ { index = 0x7000, subindex = 1, bits = 8 }, { index = 0x7010, subindex = 1, bits = 8 } ] },\n\
+  { name = \"in8\", vendor_id = 0x0702, product_code = 3, revision = 1, serial = 13, alias = 0x0102, product_name = \"bench inputs\", inputs = [ { index = 0x6000, subindex = 1, bits = 8 } ] },\n\
 ]\n";
 
 /// A MainDevice on `a0`, its frames carried by a thread of its own.
-fn maindevice() -> Arc<MainDevice<'static>> {
-    let (tx, rx, pdu_loop) = PDU_STORAGE.try_split().expect("split once");
+fn maindevice(storage: &'static PduStorage<MAX_FRAMES, MAX_PDU_DATA>) -> Arc<MainDevice<'static>> {
+    let (tx, rx, pdu_loop) = storage.try_split().expect("split once");
     let maindevice = Arc::new(MainDevice::new(
         pdu_loop,
         Timeouts { wait_loop_delay: Duration::from_millis(2), state_transition: Duration::from_secs(5), pdu: Duration::from_millis(500), ..Default::default() },
@@ -46,20 +49,20 @@ fn maindevice() -> Arc<MainDevice<'static>> {
 fn a_maindevice_finds_the_segment_brings_it_to_op_and_exchanges_process_data() {
     netns::isolated("a_maindevice_finds_the_segment_brings_it_to_op_and_exchanges_process_data", &[("a0", "b0")], || {
         let segment = start(&config(SEGMENT)).unwrap();
-        let maindevice = maindevice();
+        let maindevice = maindevice(&PDU_STORAGE);
         futures_lite::future::block_on(async {
             let group = maindevice.init_single_group::<MAX_SUBDEVICES, PDI_LEN>(ethercat_now).await.expect("init");
             // Found in order, each read from its EEPROM.
-            let found: Vec<(String, u32, u32, u32)> = group
+            let found: Vec<(String, u32, u32, u32, u32)> = group
                 .iter(&maindevice)
                 .map(|s| {
                     let id = s.identity();
-                    (s.name().to_string(), id.product_id, id.revision, id.serial)
+                    (s.name().to_string(), id.vendor_id, id.product_id, id.revision, id.serial)
                 })
                 .collect();
             assert_eq!(
                 found,
-                [("bench coupler".to_string(), 1, 1, 11), ("bench outputs".into(), 2, 3, 12), ("bench inputs".into(), 3, 1, 13)]
+                [("bench coupler".to_string(), 0x0700, 1, 1, 11), ("bench outputs".into(), 0x0701, 2, 3, 12), ("bench inputs".into(), 0x0702, 3, 1, 13)]
             );
             // Each given a configured address, which the segment now holds.
             let addresses: Vec<u16> = group.iter(&maindevice).map(|s| s.configured_address()).collect();
@@ -220,16 +223,29 @@ fn every_command_reads_writes_and_counts_as_the_standard_has_it() {
         assert_eq!((r[0].0.clone(), r[0].1), (vec![0x12, 0x34, 0x5A], 3));
         assert_eq!(segment.outputs("out16").unwrap(), [0x12, 0x34]);
         let (_, r) = ask(&[Dg(10, 0, vec![0; 3]), Dg(11, 0, vec![0x56, 0x78, 0xFF])]);
-        assert_eq!((r[0].0.clone(), r[0].1, r[1].1), (vec![0, 0, 0x5A], 1, 2), "LRD reads only, LWR writes only");
+        assert_eq!((r[0].0.clone(), r[0].1, r[1].1), (vec![0, 0, 0x5A], 1, 1), "LRD reads only, LWR writes only, each counted 1");
         assert_eq!(segment.outputs("out16").unwrap(), [0x56, 0x78]);
         // The EEPROM through its registers: a read command loads 8 bytes at a word address.
         ask(&[Dg(5, fp(0x1001, 0x0502), vec![0x00, 0x01, 0x08, 0x00, 0x00, 0x00])]);
         let (_, r) = ask(&[Dg(4, fp(0x1001, 0x0502), vec![0; 2]), Dg(4, fp(0x1001, 0x0508), vec![0; 8])]);
         assert_eq!(r[0].0[1] & 0x80, 0, "not busy");
-        assert_eq!(r[1].0, [0, 0, 0, 0, 2, 0, 0, 0], "vendor 0 and product 2, at words 8 to 11");
+        assert_eq!(r[1].0, [0x01, 0x07, 0, 0, 2, 0, 0, 0], "vendor 0x0701 and product 2, at words 8 to 11");
         // Distributed clocks: an ARMW of the system time, read by the first and written to the rest.
         let (_, r) = ask(&[Dg(13, ap(0, 0x0910), vec![0; 8])]);
         assert_eq!(r[0].1, 3);
+        // A device faulted below SAFE-OP keeps its state, the error flagged and coded; the plant
+        // side's names and sizes refused by name.
+        assert_eq!(segment.al_state("coupler").unwrap(), (1, false));
+        segment.fault("coupler", 0x001B).unwrap();
+        assert_eq!(segment.al_state("coupler").unwrap(), (1, true), "never raised to SAFE-OP");
+        assert_eq!(segment.al_state("out16").unwrap(), (2, false));
+        segment.fault("out16", 0x001A).unwrap();
+        assert_eq!(segment.al_state("out16").unwrap(), (2, true));
+        let (_, r) = ask(&[Dg(4, fp(0x1001, 0x0134), vec![0; 2])]);
+        assert_eq!(r[0].0, [0x1A, 0x00]);
+        assert_eq!(segment.outputs("ghost").unwrap_err().to_string(), "no device `ghost`");
+        assert_eq!(segment.set_inputs("in8", &[1, 2]).unwrap_err().to_string(), "device `in8` holds 1 byte(s) of inputs, not 2");
+        assert_eq!(segment.al_state("ghost").unwrap_err().to_string(), "no device `ghost`");
         // Silent: nothing comes back; then it answers again.
         segment.set_silent(true);
         link.send(&frame(me, &[Dg(7, 0, vec![0])])).unwrap();
@@ -285,4 +301,293 @@ fn the_dissectors_read_the_returned_frame_as_the_standard_has_it() {
         // APWR by the second, the FPRD by the device of that address; no complaint either way.
         assert_eq!(lines, ["0x07,0x02,0x04\t0,0,0\t\t", "0x07,0x02,0x04\t3,1,1\t\t"]);
     });
+}
+
+#[test]
+fn the_reference_s_segment_runs_from_its_bench_file_and_a_missing_interface_is_named() {
+    netns::isolated("the_reference_s_segment_runs_from_its_bench_file_and_a_missing_interface_is_named", &[("a0", "b0")], || {
+        let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/bench-schema.md")).unwrap().replace("\r\n", "\n");
+        let block = text.split("```toml\n").skip(1).map(|b| b[..b.find("```").unwrap()].to_string()).find(|b| b.contains("[[ethercat]]")).expect("the reference's EtherCAT example");
+        let spec = veredas_maquinar::bench::load(&block, std::path::Path::new(".")).unwrap();
+        assert_eq!(spec.plan(), ["ethercat `line`: on b0 with 3 device(s)"]);
+        let plant = veredas_maquinar::bench::Bench::start(spec).unwrap();
+        let line = plant.ethercat("line").expect("the part by its name");
+        assert_eq!(line.interface(), "b0");
+        let maindevice = maindevice(&PDU_STORAGE_BENCH);
+        futures_lite::future::block_on(async {
+            let group = maindevice.init_single_group::<MAX_SUBDEVICES, PDI_LEN>(ethercat_now).await.expect("init");
+            let names: Vec<String> = group.iter(&maindevice).map(|s| s.name().to_string()).collect();
+            assert_eq!(names, ["bench coupler", "bench outputs", "bench inputs"]);
+            assert_eq!(group.iter(&maindevice).nth(2).unwrap().configured_address(), line.station("in8").unwrap());
+            let group = group.into_op(&maindevice).await.expect("PRE-OP to OP");
+            group.tx_rx(&maindevice).await.expect("tx/rx");
+            assert_eq!(line.al_state("in8").unwrap(), (8, false));
+        });
+        // An interface the namespace lacks is named in the refusal.
+        let missing = start(&config("interface = \"nowhere0\"\ndevices = [ { name = \"d\" } ]\n")).err().expect("no such interface");
+        assert!(matches!(missing, EthercatError::Link(_)) && missing.to_string().starts_with("the interface: "), "{missing}");
+    });
+}
+
+#[test]
+fn every_configuration_refusal_is_named_before_the_interface_opens() {
+    let device = |extra: &str| format!("interface = \"b0\"\ndevices = [ {{ name = \"d\"{extra} }} ]\n");
+    let entries = |n: usize, bits: u8| (0..n).map(|i| format!("{{ index = 0x7000, subindex = {}, bits = {bits} }}", i % 256)).collect::<Vec<_>>().join(", ");
+    let cases: Vec<(String, String)> = vec![
+        ("interface = \" \"\ndevices = [ { name = \"d\" } ]\n".into(), "ethercat.interface is empty".into()),
+        ("interface = \"b0\"\n".into(), "ethercat.devices: a segment holds at least one device".into()),
+        ("interface = \"b0\"\ndevices = [ { name = \"\" } ]\n".into(), "ethercat.devices[0]: a device's name is not empty and has no surrounding whitespace".into()),
+        ("interface = \"b0\"\ndevices = [ { name = \"d \" } ]\n".into(), "ethercat.devices[0]: a device's name is not empty and has no surrounding whitespace".into()),
+        ("interface = \"b0\"\ndevices = [ { name = \"d\" }, { name = \"d\" } ]\n".into(), "ethercat.devices[1]: two devices are named `d`".into()),
+        (device(", product_name = \"\""), "ethercat.devices[0] (`d`).product_name: 1 to 255 ASCII characters".into()),
+        (device(&format!(", product_name = \"{}\"", "x".repeat(256))), "ethercat.devices[0] (`d`).product_name: 1 to 255 ASCII characters".into()),
+        (device(", product_name = \"bancada ç\""), "ethercat.devices[0] (`d`).product_name: 1 to 255 ASCII characters".into()),
+        (device(&format!(", outputs = [ {} ]", entries(1, 0))), "ethercat.devices[0] (`d`).outputs[0]: 0 bit(s), not 1 to 64".into()),
+        (device(&format!(", inputs = [ {} ]", entries(2, 65))), "ethercat.devices[0] (`d`).inputs[0]: 65 bit(s), not 1 to 64".into()),
+        (device(&format!(", outputs = [ {} ]", entries(129, 64))), "ethercat.devices[0] (`d`).outputs: 1032 bytes, over 1024".into()),
+        (device(&format!(", inputs = [ {} ]", entries(256, 1))), "ethercat.devices[0] (`d`).inputs: 256 entries, over 255".into()),
+    ];
+    for (text, message) in cases {
+        let cfg = config(&text);
+        assert_eq!(validate(&cfg).unwrap_err().to_string(), message, "{text}");
+        // start refuses it the same way, before any interface is looked for.
+        assert_eq!(start(&cfg).err().unwrap().to_string(), message);
+    }
+    // At the bounds: 255 entries, 1024 bytes, 64 bits, 255 characters.
+    validate(&config(&device(&format!(", product_name = \"{}\", inputs = [ {} ], outputs = [ {} ]", "x".repeat(255), entries(255, 1), entries(128, 64))))).unwrap();
+}
+
+// ---- The ESC core alone, its clock handed in: exact to the nanosecond ----
+
+use veredas_maquinar::ethercat::esc::{self, Datagram, Esc, Identity, PdoEntry};
+
+/// Three devices whose local clocks started 0, 1 and 2 µs into the segment's time, at stations
+/// 0x1000 to 0x1002, the last with alias 0x0102.
+fn line() -> Vec<Esc> {
+    (0..3u16)
+        .map(|i| {
+            let id = Identity { vendor_id: 7, product_code: u32::from(i), revision: 1, serial: 0, name: format!("d{i}"), alias: if i == 2 { 0x0102 } else { 0 } };
+            let mut e = Esc::new(esc::sii_image(&id, &[], &[]), u64::from(i) * 1_000);
+            e.mem[0x10..0x12].copy_from_slice(&(0x1000 + i).to_le_bytes());
+            e.mem[0x12..0x14].copy_from_slice(&id.alias.to_le_bytes());
+            e.set_link(i < 2);
+            e
+        })
+        .collect()
+}
+
+/// One frame's datagrams through the line at `now` nanoseconds: (data, counter, address) each.
+fn pass(line: &mut [Esc], now: u64, dgs: &[(u8, u32, Vec<u8>)]) -> Vec<(Vec<u8>, u16, u32)> {
+    let mut d: Vec<Datagram> = dgs.iter().map(|(cmd, address, data)| Datagram { cmd: *cmd, idx: 0, address: *address, circulating: false, more: false, irq: 0, data: data.clone(), wkc: 0 }).collect();
+    esc::process(line, &mut d, now);
+    d.into_iter().map(|x| (x.data, x.wkc, x.address)).collect()
+}
+
+fn get(line: &[Esc], i: usize, at: u16, n: usize) -> Vec<u8> {
+    line[i].read(at, n)
+}
+
+fn u32_at(line: &[Esc], i: usize, at: u16) -> u32 {
+    u32::from_le_bytes(get(line, i, at, 4).try_into().unwrap())
+}
+
+#[test]
+fn every_command_counts_and_addresses_as_the_standard_has_it() {
+    let mut l = line();
+    // Broadcast: a read ORs and counts every device, a write lands in each, a read-write counts
+    // 3 a device and returns what they held, ORed.
+    l[0].mem[0x0F80] = 0x01;
+    l[2].mem[0x0F80] = 0x40;
+    let r = pass(&mut l, 0, &[(7, 0x0F80 << 16, vec![0x80]), (8, 0x0F81 << 16, vec![0x5A])]);
+    assert_eq!((r[0].0.clone(), r[0].1), (vec![0xC1], 3));
+    assert_eq!(r[1].1, 3);
+    assert!((0..3).all(|i| l[i].mem[0x0F81] == 0x5A));
+    // A BRW: each device writes the data as it reaches it and ORs what it held into it.
+    let r = pass(&mut l, 0, &[(9, 0x0F80 << 16, vec![0x22, 0x00])]);
+    assert_eq!((r[0].0.clone(), r[0].1), (vec![0x63, 0x5A], 9));
+    assert_eq!([l[0].read(0x0F80, 2), l[1].read(0x0F80, 2), l[2].read(0x0F80, 2)], [vec![0x22, 0x00], vec![0x23, 0x5A], vec![0x23, 0x5A]]);
+    // Auto-increment: every device adds 1 to the position on the way, so the address comes back
+    // three more than it left; a read-write counts 3 and returns the old bytes.
+    let r = pass(&mut l, 0, &[(1, ap(1, 0x0F80), vec![0; 1]), (3, ap(2, 0x0F82), vec![0x77]), (2, ap(0, 0x0F83), vec![0x99])]);
+    assert_eq!((r[0].1, r[0].2 as u16), (1, 0u16.wrapping_sub(1).wrapping_add(3)));
+    assert_eq!((r[1].0.clone(), r[1].1, l[2].mem[0x0F82]), (vec![0x00], 3, 0x77));
+    assert_eq!((r[2].1, l[0].mem[0x0F83], l[1].mem[0x0F83]), (1, 0x99, 0x00));
+    // Configured: read, write, read-write; nobody at an address no device holds.
+    let r = pass(&mut l, 0, &[(4, fp(0x1001, 0x0F82), vec![0]), (5, fp(0x1002, 0x0F84), vec![1]), (6, fp(0x1000, 0x0F84), vec![2]), (4, fp(0x4444, 0), vec![0])]);
+    assert_eq!(r.iter().map(|x| x.1).collect::<Vec<_>>(), [1, 1, 3, 0]);
+    // The type and kinds of a frame the segment does not answer: only type 1, commands.
+    assert!(esc::parse(&[0x02, 0x20]).is_none());
+}
+
+/// An FMMU's sixteen bytes.
+fn fmmu(logical: u32, len: u16, bits: (u8, u8), physical: u16, physical_bit: u8, kind: u8) -> Vec<u8> {
+    let mut b = logical.to_le_bytes().to_vec();
+    b.extend_from_slice(&len.to_le_bytes());
+    b.extend_from_slice(&[bits.0, bits.1]);
+    b.extend_from_slice(&physical.to_le_bytes());
+    b.extend_from_slice(&[physical_bit, kind, 1, 0, 0, 0]);
+    b
+}
+
+#[test]
+fn fmmus_map_bit_by_bit_and_a_logical_write_counts_1_or_2_in_an_lrw() {
+    let mut l = line();
+    // Two devices, a 1-bit input each at physical bit 0 of 0x1000, mapped to bits 0 and 1 of one
+    // logical byte: an LRD gathers both and leaves the byte's other bits as they came.
+    l[0].mem[0x1000] = 0x01;
+    l[1].mem[0x1000] = 0xFF;
+    pass(&mut l, 0, &[(5, fp(0x1000, 0x0600), fmmu(0, 1, (0, 0), 0x1000, 0, 1)), (5, fp(0x1001, 0x0600), fmmu(0, 1, (1, 1), 0x1000, 0, 1))]);
+    let r = pass(&mut l, 0, &[(10, 0, vec![0xF0])]);
+    assert_eq!((r[0].0.clone(), r[0].1), (vec![0xF3], 2));
+    // A write of logical bit 1 lands on physical bit 0 alone, a byte holding 0xF0 becoming 0xF1,
+    // and back to 0xF0 when the bit is 0: counted 1 a device.
+    pass(&mut l, 0, &[(5, fp(0x1002, 0x0610), fmmu(0, 1, (1, 1), 0x1004, 0, 2))]);
+    l[2].mem[0x1004] = 0xF0;
+    let r = pass(&mut l, 0, &[(11, 0, vec![0x02])]);
+    assert_eq!((l[2].mem[0x1004], r[0].1), (0xF1, 1));
+    pass(&mut l, 0, &[(11, 0, vec![0xFD])]);
+    assert_eq!(l[2].mem[0x1004], 0xF0);
+    // A span across two logical bytes, bit 4 of the first to bit 3 of the second, onto a whole
+    // physical byte.
+    let mut l = line();
+    l[0].mem[0x1000] = 0xAB;
+    pass(&mut l, 0, &[(5, fp(0x1000, 0x0600), fmmu(0x10, 2, (4, 3), 0x1000, 0, 1))]);
+    let r = pass(&mut l, 0, &[(10, 0x10, vec![0, 0])]);
+    assert_eq!((r[0].0.clone(), r[0].1), (vec![0xB0, 0x0A], 1));
+    // An FMMU that reads and writes, under an LRW: the frame gets what the device held, the device
+    // what the frame brought; counted 3.
+    let mut l = line();
+    l[1].mem[0x1100] = 0x11;
+    pass(&mut l, 0, &[(5, fp(0x1001, 0x0600), fmmu(0x20, 1, (0, 7), 0x1100, 0, 3))]);
+    let r = pass(&mut l, 0, &[(12, 0x20, vec![0xAA])]);
+    assert_eq!((r[0].0.clone(), r[0].1, l[1].mem[0x1100]), (vec![0x11], 3, 0xAA));
+    // An LWR through two devices counts 2, an LRW reading one and writing another 3.
+    let mut l = line();
+    pass(&mut l, 0, &[(5, fp(0x1000, 0x0600), fmmu(0, 1, (0, 7), 0x1000, 0, 2)), (5, fp(0x1001, 0x0600), fmmu(1, 1, (0, 7), 0x1000, 0, 2)), (5, fp(0x1002, 0x0600), fmmu(2, 1, (0, 7), 0x1000, 0, 1))]);
+    l[2].mem[0x1000] = 0x3C;
+    let r = pass(&mut l, 0, &[(11, 0, vec![1, 2, 3]), (12, 0, vec![4, 5, 0])]);
+    assert_eq!((r[0].1, r[1].1, r[1].0.clone()), (2, 5, vec![4, 5, 0x3C]));
+    assert_eq!((l[0].mem[0x1000], l[1].mem[0x1000]), (4, 5));
+}
+
+#[test]
+fn the_clock_latches_takes_its_offset_and_compares_in_sign_and_magnitude() {
+    let mut l = line();
+    // A broadcast write to port 0's receive time latches every device's ports at its local time,
+    // port 1 40 ns later, the data written not kept; the processing unit's 64-bit time with them.
+    let t = 10_000_000u64;
+    let r = pass(&mut l, t, &[(8, 0x0900 << 16, vec![0xFF; 4])]);
+    assert_eq!(r[0].1, 3);
+    for (i, origin) in [0u64, 1_000, 2_000].iter().enumerate() {
+        assert_eq!(u32_at(&l, i, 0x0900), (t - origin) as u32, "device {i} port 0");
+        assert_eq!(u32_at(&l, i, 0x0904), (t - origin + 40) as u32, "device {i} port 1");
+        assert_eq!(u64::from_le_bytes(get(&l, i, 0x0918, 8).try_into().unwrap()), t - origin);
+    }
+    // The first device given an offset of 1 ms: an ARMW reads its system time and hands it to the
+    // others, each keeping its difference, behind by its own origin and the offset (bit 31).
+    pass(&mut l, t, &[(5, fp(0x1000, 0x0920), 1_000_000u64.to_le_bytes().to_vec())]);
+    let t2 = 20_000_000u64;
+    let r = pass(&mut l, t2, &[(13, ap(0, 0x0910), vec![0; 8])]);
+    assert_eq!((u64::from_le_bytes(r[0].0.clone().try_into().unwrap()), r[0].1), (t2 + 1_000_000, 3));
+    assert_eq!(u32_at(&l, 1, 0x092C), 0x8000_0000 | 1_001_000);
+    assert_eq!(u32_at(&l, 2, 0x092C), 0x8000_0000 | 1_002_000);
+    assert_eq!(u32_at(&l, 0, 0x092C), 0, "the reference itself compares nothing");
+    // The third device ahead by its own offset of 5 ms: bit 31 clear. An FRMW by the first's
+    // station counts 3 too.
+    pass(&mut l, t2, &[(5, fp(0x1002, 0x0920), 5_000_000u64.to_le_bytes().to_vec())]);
+    let t3 = 30_000_000u64;
+    let r = pass(&mut l, t3, &[(14, fp(0x1000, 0x0910), vec![0; 8])]);
+    assert_eq!((u64::from_le_bytes(r[0].0.clone().try_into().unwrap()), r[0].1), (t3 + 1_000_000, 3));
+    assert_eq!(u32_at(&l, 2, 0x092C), 3_998_000);
+    // A write of the low 32 bits compares those, and the system time is read live, never as
+    // written; the difference is EtherCAT's to read, not to write.
+    let mine = (t3 - 1_000) as u32;
+    pass(&mut l, t3, &[(5, fp(0x1001, 0x0910), (mine + 500).to_le_bytes().to_vec()), (5, fp(0x1001, 0x092C), vec![0; 4])]);
+    assert_eq!(u32_at(&l, 1, 0x092C), 0x8000_0000 | 500);
+    let r = pass(&mut l, t3 + 7, &[(4, fp(0x1001, 0x0910), vec![0; 8]), (4, fp(0x1002, 0x0910), vec![0; 8])]);
+    assert_eq!(u64::from_le_bytes(r[0].0.clone().try_into().unwrap()), t3 + 7 - 1_000);
+    assert_eq!(u64::from_le_bytes(r[1].0.clone().try_into().unwrap()), t3 + 7 - 2_000 + 5_000_000);
+    // A difference past 31 bits is held at the most it can say.
+    let mut l = line();
+    pass(&mut l, 0, &[(5, fp(0x1000, 0x0920), (1u64 << 40).to_le_bytes().to_vec())]);
+    pass(&mut l, 0, &[(13, ap(0, 0x0910), vec![0; 8])]);
+    assert_eq!(u32_at(&l, 1, 0x092C), 0xFFFF_FFFF);
+}
+
+#[test]
+fn registers_ethercat_only_reads_keep_their_values_and_the_ram_is_the_8_kb_stated() {
+    let mut l = line();
+    pass(&mut l, 5_000, &[(8, 0x0900 << 16, vec![0; 4])]);
+    let before: Vec<Vec<u8>> = [(0x0000u16, 10usize), (0x0012, 2), (0x0110, 2), (0x0130, 2), (0x0134, 2), (0x0805, 1), (0x0807, 1), (0x083D, 1), (0x0904, 4), (0x0918, 8), (0x092C, 4)].iter().map(|(a, n)| get(&l, 2, *a, *n)).collect();
+    let writes: Vec<(u8, u32, Vec<u8>)> = [(0x0000u16, 10usize), (0x0012, 2), (0x0110, 2), (0x0130, 2), (0x0134, 2), (0x0805, 1), (0x0807, 1), (0x083D, 1), (0x0904, 4), (0x0918, 8), (0x092C, 4)]
+        .iter()
+        .map(|(a, n)| (5u8, fp(0x1002, *a), vec![0xEE; *n]))
+        .collect();
+    let r = pass(&mut l, 9_000, &writes);
+    assert!(r.iter().all(|x| x.1 == 1), "each write counted");
+    let after: Vec<Vec<u8>> = [(0x0000u16, 10usize), (0x0012, 2), (0x0110, 2), (0x0130, 2), (0x0134, 2), (0x0805, 1), (0x0807, 1), (0x083D, 1), (0x0904, 4), (0x0918, 8), (0x092C, 4)].iter().map(|(a, n)| get(&l, 2, *a, *n)).collect();
+    assert_eq!(after, before);
+    assert_eq!((before[0][0], before[1].clone(), before[3][0]), (0x11, vec![0x02, 0x01], 0x01));
+    // The station address and the offset are written.
+    pass(&mut l, 9_000, &[(5, fp(0x1002, 0x0010), vec![0x34, 0x12]), (5, fp(0x1234, 0x0920), vec![9; 8])]);
+    assert_eq!((l[2].station(), get(&l, 2, 0x0920, 8)), (0x1234, vec![9; 8]));
+    // 8 KB of process RAM, as register 0x0006 states: 0x1000 to 0x2FFF, kept.
+    let r = pass(&mut l, 0, &[(4, fp(0x1234, 0x0006), vec![0]), (5, fp(0x1234, 0x2100), vec![0xAB]), (5, fp(0x1234, 0x2FFE), vec![0xCD, 0xEF])]);
+    assert_eq!(r[0].0, [8]);
+    let r = pass(&mut l, 0, &[(4, fp(0x1234, 0x2100), vec![0]), (4, fp(0x1234, 0x2FFE), vec![0, 0])]);
+    assert_eq!((r[0].0.clone(), r[1].0.clone()), (vec![0xAB], vec![0xCD, 0xEF]));
+}
+
+#[test]
+fn the_al_state_machine_holds_a_refusal_until_it_is_acknowledged() {
+    let mut l = line();
+    let state = |l: &[Esc]| (l[1].mem[0x0130], u16::from_le_bytes([l[1].mem[0x0134], l[1].mem[0x0135]]));
+    let ask = |l: &mut [Esc], control: u8| pass(l, 0, &[(5, fp(0x1001, 0x0120), vec![control, 0])]);
+    ask(&mut l, 0x08);
+    assert_eq!(state(&l), (0x11, 0x0011), "INIT to OP refused");
+    ask(&mut l, 0x02);
+    assert_eq!(state(&l), (0x11, 0x0011), "a request without the acknowledge is not taken");
+    ask(&mut l, 0x15);
+    assert_eq!(state(&l), (0x11, 0x0012), "a state that does not exist, acknowledged: refused as unknown");
+    ask(&mut l, 0x12);
+    assert_eq!(state(&l), (0x02, 0), "PRE-OP, acknowledged");
+    for (control, now) in [(0x04, 0x04), (0x08, 0x08), (0x02, 0x02), (0x04, 0x04), (0x08, 0x08), (0x01, 0x01)] {
+        ask(&mut l, control);
+        assert_eq!(state(&l), (now, 0));
+    }
+    // INIT clears an error without the acknowledge.
+    ask(&mut l, 0x04);
+    assert_eq!(state(&l), (0x11, 0x0011));
+    ask(&mut l, 0x01);
+    assert_eq!(state(&l), (0x01, 0));
+}
+
+#[test]
+fn the_alias_addresses_a_device_once_the_master_enables_it() {
+    let mut l = line();
+    let r = pass(&mut l, 0, &[(4, fp(0x0102, 0x0010), vec![0; 2])]);
+    assert_eq!(r[0].1, 0, "not by its alias while DL control's bit 24 is clear");
+    pass(&mut l, 0, &[(5, fp(0x1002, 0x0100), vec![0, 0, 0, 1])]);
+    let r = pass(&mut l, 0, &[(4, fp(0x0102, 0x0010), vec![0; 2]), (4, fp(0x1002, 0x0010), vec![0; 2])]);
+    assert_eq!((r[0].0.clone(), r[0].1, r[1].1), (vec![0x02, 0x10], 1, 1), "by its alias and by its address");
+}
+
+#[test]
+fn the_eeprom_states_its_port_and_its_size() {
+    let id = Identity { vendor_id: 1, product_code: 2, revision: 3, serial: 4, name: "x".into(), alias: 0 };
+    let general = |w: &[u16]| {
+        let mut at = 0x40;
+        while w[at] != 30 {
+            at += 2 + w[at + 1] as usize;
+        }
+        w[at + 2..at + 2 + w[at + 1] as usize].iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()
+    };
+    let small = esc::sii_image(&id, &[], &[]);
+    let g = general(&small);
+    assert_eq!((g[4], g[0x10], g[0x11]), (0, 0x11, 0), "ports 0 and 1 MII, at the physical-port bytes");
+    assert_eq!(small[0x3E], 15, "16 Kbit");
+    let many: Vec<PdoEntry> = (0..255).map(|i| PdoEntry { index: 0x7000, subindex: i as u8, bits: 32 }).collect();
+    let big = esc::sii_image(&id, &many, &many);
+    let kbit = big[0x3E] as usize + 1;
+    assert!(kbit.is_power_of_two() && kbit * 128 >= big.len() * 2 && kbit * 64 < big.len() * 2, "{kbit} Kbit for {} bytes", big.len() * 2);
 }

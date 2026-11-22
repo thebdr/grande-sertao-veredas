@@ -34,6 +34,8 @@ pub mod reg {
     pub const FEATURES: u16 = 0x0008;
     pub const STATION_ADDRESS: u16 = 0x0010;
     pub const STATION_ALIAS: u16 = 0x0012;
+    /// Byte 3 of the DL control: bit 0 lets the configured-address commands match the alias too.
+    pub const DL_CONTROL_ALIAS: u16 = 0x0103;
     pub const DL_STATUS: u16 = 0x0110;
     pub const AL_CONTROL: u16 = 0x0120;
     pub const AL_STATUS: u16 = 0x0130;
@@ -69,8 +71,9 @@ pub mod al_code {
     pub const UNKNOWN_STATE: u16 = 0x0012;
 }
 
-/// The memory an ESC holds: its registers and its process RAM, 0x0000 to 0x1FFF.
-pub const MEMORY: usize = 0x2000;
+/// The memory an ESC holds: its registers (to 0x0FFF) and the 8 KB of process RAM register 0x0006
+/// states, 0x1000 to 0x2FFF.
+pub const MEMORY: usize = 0x3000;
 
 /// One SubDevice: its ESC memory, its EEPROM (SII) words, its local clock's origin.
 #[derive(Clone, Debug)]
@@ -155,15 +158,23 @@ impl Esc {
         }
         // Whether the write overlaps the register `r` of width `w`.
         let touched = |r: u16, w: usize| (at as usize) < r as usize + w && (r as usize) < at as usize + data.len();
-        // Read-only registers keep their values: the type and the features, the DL and AL status.
-        let keep: Vec<(u16, Vec<u8>)> = [(reg::TYPE, 10usize), (reg::DL_STATUS, 2), (reg::AL_STATUS, 2), (reg::AL_STATUS_CODE, 2)]
-            .iter()
-            .filter(|(r, w)| touched(*r, *w))
-            .map(|(r, w)| (*r, self.read(*r, *w)))
-            .collect();
+        // The registers EtherCAT only reads keep their values: the type to the features, the
+        // alias (loaded from the EEPROM), the DL and AL status and the AL status code, each
+        // SyncManager's status and PDI control, the receive times (a write to port 0's latches
+        // them, its data unkept), the processing unit's receive time and the system time
+        // difference; the system time itself is compared, not stored.
+        let keep: Vec<(u16, Vec<u8>)> = READ_ONLY.iter().filter(|(r, w)| touched(*r, *w)).map(|(r, w)| (*r, self.read(*r, *w))).collect();
         self.mem[at as usize..at as usize + data.len()].copy_from_slice(data);
         for (r, v) in keep {
             self.mem[r as usize..r as usize + v.len()].copy_from_slice(&v);
+        }
+        if touched(reg::DC_SYSTEM_TIME, 8) && at >= reg::DC_SYSTEM_TIME && at as usize + data.len() <= reg::DC_SYSTEM_TIME as usize + 8 {
+            // A write of the system time (4 or 8 bytes) is the reference's time handed down: the
+            // device compares it with its own and keeps the difference.
+            let mut theirs = [0u8; 8];
+            let from = (at - reg::DC_SYSTEM_TIME) as usize;
+            theirs[from..from + data.len()].copy_from_slice(data);
+            self.compare_system_time(u64::from_le_bytes(theirs), data.len() <= 4, now_ns);
         }
         if touched(reg::AL_CONTROL, 2) {
             self.al_control();
@@ -181,6 +192,22 @@ impl Esc {
             }
             self.mem[reg::DC_RECEIVE_TIME_LOCAL as usize..reg::DC_RECEIVE_TIME_LOCAL as usize + 8].copy_from_slice(&local.to_le_bytes());
         }
+    }
+
+    /// The system time difference (0x092C) after the reference's time `theirs` was handed down:
+    /// its own system time less theirs, as sign and magnitude (bit 31 set when its own is the
+    /// smaller), the magnitude held to 31 bits; over the low 32 bits when only those were written.
+    pub fn compare_system_time(&mut self, theirs: u64, low_32: bool, now_ns: u64) {
+        let mine = self.system_time(now_ns);
+        let (mine, theirs) = if low_32 { (mine & 0xFFFF_FFFF, theirs & 0xFFFF_FFFF) } else { (mine, theirs) };
+        let v = if mine >= theirs { (mine - theirs).min(0x7FFF_FFFF) as u32 } else { 0x8000_0000 | (theirs - mine).min(0x7FFF_FFFF) as u32 };
+        let a = reg::DC_SYSTEM_TIME_DIFFERENCE as usize;
+        self.mem[a..a + 4].copy_from_slice(&v.to_le_bytes());
+    }
+
+    /// Whether the configured-address commands match the alias too (DL control bit 24).
+    pub fn alias_enabled(&self) -> bool {
+        self.mem[reg::DL_CONTROL_ALIAS as usize] & 1 != 0
     }
 
     /// The device's local time: the segment's clock less its origin.
@@ -241,22 +268,69 @@ impl Esc {
         self.put16(reg::SII_CONTROL, 0x0040);
     }
 
-    /// The FMMUs active, each as (logical start, length, physical start, read, write).
-    pub fn fmmus(&self) -> Vec<(u32, u16, u16, bool, bool)> {
+    /// The FMMUs active, as their registers hold them.
+    pub fn fmmus(&self) -> Vec<Fmmu> {
         (0..8u16)
             .filter_map(|i| {
                 let b = self.read(reg::FMMU0 + 16 * i, 16);
-                let active = b[12] & 1 == 1;
-                if !active {
+                if b[12] & 1 == 0 {
                     return None;
                 }
-                let logical = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
-                let len = u16::from_le_bytes([b[4], b[5]]);
-                let physical = u16::from_le_bytes([b[8], b[9]]);
-                Some((logical, len, physical, b[11] & 1 != 0, b[11] & 2 != 0))
+                Some(Fmmu {
+                    logical: u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+                    len: u16::from_le_bytes([b[4], b[5]]),
+                    start_bit: b[6] & 7,
+                    end_bit: b[7] & 7,
+                    physical: u16::from_le_bytes([b[8], b[9]]),
+                    physical_bit: b[10] & 7,
+                    read: b[11] & 1 != 0,
+                    write: b[11] & 2 != 0,
+                })
             })
             .collect()
     }
+}
+
+/// The registers EtherCAT only reads, each (address, width).
+const READ_ONLY: [(u16, usize); 24] = [
+    (reg::TYPE, 10),
+    (reg::STATION_ALIAS, 2),
+    (reg::DL_STATUS, 2),
+    (reg::AL_STATUS, 2),
+    (reg::AL_STATUS_CODE, 2),
+    (0x0805, 1),
+    (0x080D, 1),
+    (0x0815, 1),
+    (0x081D, 1),
+    (0x0825, 1),
+    (0x082D, 1),
+    (0x0835, 1),
+    (0x083D, 1),
+    (0x0807, 1),
+    (0x080F, 1),
+    (0x0817, 1),
+    (0x081F, 1),
+    (0x0827, 1),
+    (0x082F, 1),
+    (0x0837, 1),
+    (0x083F, 1),
+    (reg::DC_RECEIVE_TIME_PORT0, 16),
+    (reg::DC_RECEIVE_TIME_LOCAL, 8),
+    (reg::DC_SYSTEM_TIME_DIFFERENCE, 4),
+];
+
+/// One FMMU: a span of logical bits mapped onto physical bits from a start bit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fmmu {
+    pub logical: u32,
+    /// Bytes the logical span touches, its first and last partly when the bits say so.
+    pub len: u16,
+    pub start_bit: u8,
+    pub end_bit: u8,
+    pub physical: u16,
+    pub physical_bit: u8,
+    pub read: bool,
+    pub write: bool,
 }
 
 /// One datagram of a frame.
@@ -374,7 +448,7 @@ fn pass(esc: &mut Esc, d: &mut Datagram, now_ns: u64) {
             d.set_adp(d.adp().wrapping_add(1));
         }
         FPRD | FPWR | FPRW | FRMW => {
-            let addressed = d.adp() == esc.station();
+            let addressed = d.adp() == esc.station() || (esc.alias_enabled() && d.adp() == esc.get16(reg::STATION_ALIAS));
             if addressed || d.cmd == FRMW {
                 physical(esc, d, addressed, now_ns);
             }
@@ -439,12 +513,6 @@ fn physical(esc: &mut Esc, d: &mut Datagram, addressed: bool, now_ns: u64) {
         ARMW | FRMW => {
             if addressed {
                 d.data = local_read(esc, at, d.data.len(), now_ns);
-            } else if at == reg::DC_SYSTEM_TIME {
-                // A device written its system time adjusts its difference, not its clock.
-                let theirs = u64::from_le_bytes(d.data.clone().try_into().unwrap_or([0; 8]));
-                let diff = (esc.system_time(now_ns) as i64).wrapping_sub(theirs as i64) as u32;
-                let a = reg::DC_SYSTEM_TIME_DIFFERENCE as usize;
-                esc.mem[a..a + 4].copy_from_slice(&diff.to_le_bytes());
             } else {
                 esc.write(at, &d.data, now_ns);
             }
@@ -454,30 +522,53 @@ fn physical(esc: &mut Esc, d: &mut Datagram, addressed: bool, now_ns: u64) {
     }
 }
 
-/// A logical command through the device's FMMUs: each mapping that overlaps the datagram's span
-/// reads or writes its bytes; the counter counts a device once for a read and twice for a write.
+/// A logical command through the device's FMMUs, bit by bit: each mapped bit inside the datagram's
+/// span is read into the datagram (LRD, LRW) or written to the device (LWR, LRW). A mapping that
+/// both reads and writes writes what the datagram brought to the device and reads what the device
+/// held before. The counter counts a device 1 for a read, 1 for a write, 2 for an LRW's write.
 fn logical(esc: &mut Esc, d: &mut Datagram, now_ns: u64) {
     use cmd::*;
-    let start = d.address;
-    let end = start as u64 + d.data.len() as u64;
+    let bit = |bytes: &[u8], i: u64| bytes[(i / 8) as usize] >> (i % 8) & 1;
+    let set = |bytes: &mut [u8], i: u64, v: u8| {
+        let (byte, mask) = ((i / 8) as usize, 1u8 << (i % 8));
+        bytes[byte] = if v == 1 { bytes[byte] | mask } else { bytes[byte] & !mask };
+    };
+    let first = u64::from(d.address) * 8;
+    let last = first + d.data.len() as u64 * 8;
+    let incoming = d.data.clone();
     let (mut read, mut wrote) = (false, false);
-    for (logical, len, physical, can_read, can_write) in esc.fmmus() {
-        let (lo, hi) = (logical as u64, logical as u64 + len as u64);
-        let (from, to) = (lo.max(start as u64), hi.min(end));
-        if from >= to {
+    for f in esc.fmmus() {
+        if f.len == 0 {
             continue;
         }
-        let n = (to - from) as usize;
-        let in_dg = (from - start as u64) as usize;
-        let phys = physical.wrapping_add((from - lo) as u16);
-        if can_read && matches!(d.cmd, LRD | LRW) {
-            let local = esc.read(phys, n);
-            d.data[in_dg..in_dg + n].copy_from_slice(&local);
-            read = true;
+        let lo = u64::from(f.logical) * 8 + u64::from(f.start_bit);
+        let hi = (u64::from(f.logical) + u64::from(f.len) - 1) * 8 + u64::from(f.end_bit) + 1;
+        let (from, to) = (lo.max(first), hi.min(last));
+        let reads = f.read && matches!(d.cmd, LRD | LRW);
+        let writes = f.write && matches!(d.cmd, LWR | LRW);
+        if from >= to || !(reads || writes) {
+            continue;
         }
-        if can_write && matches!(d.cmd, LWR | LRW) {
-            let bytes = d.data[in_dg..in_dg + n].to_vec();
-            esc.write(phys, &bytes, now_ns);
+        let p0 = u64::from(f.physical) * 8 + u64::from(f.physical_bit) + (from - lo);
+        let n = to - from;
+        let (byte_lo, byte_hi) = (p0 / 8, (p0 + n - 1) / 8 + 1);
+        if byte_hi > 0x1_0000 {
+            continue;
+        }
+        let held = esc.read(byte_lo as u16, (byte_hi - byte_lo) as usize);
+        let mut bytes = held.clone();
+        for k in 0..n {
+            let (lb, pb) = (from + k - first, p0 + k - byte_lo * 8);
+            if reads {
+                set(&mut d.data, lb, bit(&held, pb));
+            }
+            if writes {
+                set(&mut bytes, pb, bit(&incoming, lb));
+            }
+        }
+        read |= reads;
+        if writes {
+            esc.write(byte_lo as u16, &bytes, now_ns);
             wrote = true;
         }
     }
@@ -485,7 +576,7 @@ fn logical(esc: &mut Esc, d: &mut Datagram, now_ns: u64) {
         d.wkc = d.wkc.wrapping_add(1);
     }
     if wrote {
-        d.wkc = d.wkc.wrapping_add(2);
+        d.wkc = d.wkc.wrapping_add(if d.cmd == LRW { 2 } else { 1 });
     }
 }
 
@@ -533,8 +624,7 @@ pub fn sii_image(id: &Identity, outputs: &[PdoEntry], inputs: &[PdoEntry]) -> Ve
     put32(&mut w, 0x0A, id.product_code);
     put32(&mut w, 0x0C, id.revision);
     put32(&mut w, 0x0E, id.serial);
-    // No mailbox: offsets and sizes 0, protocols none.
-    w[0x3E] = 0x000F;
+    // No mailbox: offsets and sizes 0, protocols none; the size (word 0x3E) is set at the end.
     w[0x3F] = 0x0001;
     let bytes_of = |entries: &[PdoEntry]| entries.iter().map(|e| e.bits as usize).sum::<usize>().div_ceil(8);
     let (out_len, in_len) = (bytes_of(outputs), bytes_of(inputs));
@@ -558,7 +648,7 @@ pub fn sii_image(id: &Identity, outputs: &[PdoEntry], inputs: &[PdoEntry]) -> Ve
     let mut general = vec![0u8; 32];
     general[2] = 1;
     general[3] = 1;
-    general[4] = 0x11;
+    general[0x10] = 0x11;
     cat(&mut w, 30, general);
     // FMMU usage: 0 outputs, 1 inputs.
     cat(&mut w, 40, vec![1, 2]);
@@ -593,6 +683,9 @@ pub fn sii_image(id: &Identity, outputs: &[PdoEntry], inputs: &[PdoEntry]) -> Ve
         cat(&mut w, 51, pdo(0x1600, 2, outputs));
     }
     w.push(0xFFFF);
+    // The EEPROM's size, in Kbit less 1: the smallest power of two from 16 Kbit that holds it.
+    let kbit = (w.len() * 16).div_ceil(1024).next_power_of_two().max(16);
+    w[0x3E] = (kbit - 1) as u16;
     w
 }
 
