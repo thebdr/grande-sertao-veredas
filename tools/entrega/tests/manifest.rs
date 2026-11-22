@@ -590,6 +590,50 @@ fn an_executable_named_in_any_script_is_listed_and_a_glob_in_the_scratch_path_is
 }
 
 #[test]
+fn a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none() {
+    let r = suite();
+    let c1 = r.commit("the suite");
+    r.write("crates/veredas-portal/src/main.rs", "fn main() { println!(\"changed\"); }\n");
+    let c2 = r.commit("portal changed, its version not bumped");
+    let mut ws = WORKSPACE.as_bytes().to_vec();
+    ws.extend_from_slice(b"# caf\xe9\n");
+    std::fs::write(r.path().join("Cargo.toml"), ws).unwrap();
+    let c3 = r.commit("a root manifest that is not UTF-8");
+    for (rel, c) in [("2.0.0", c1.as_str()), ("2.0.1", c2.as_str()), ("2.0.2", c3.as_str())] {
+        r.write(&format!("releases/{rel}.toml"), &matching(rel, c));
+    }
+    r.commit("three releases");
+    let mut refusals = Vec::new();
+    assert!(manifest::components_at(r.path(), &c3, &mut refusals).unwrap().is_empty());
+    assert_eq!(refusals, vec![format!("commit {c3}: its Cargo.toml is not UTF-8")]);
+    let out = Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").current_dir(r.path()).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(err.contains(&format!("commit {c3}: its Cargo.toml is not UTF-8")), "{err}");
+    assert!(err.contains("veredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.0 and 2.0.1 at different code"), "{err}");
+}
+
+#[test]
+fn a_relative_cache_holding_a_glob_character_is_judged_where_it_lies() {
+    let holder = tempfile::tempdir().unwrap();
+    let place = holder.path().join("t[1]");
+    std::fs::create_dir_all(&place).unwrap();
+    let r = suite();
+    let c = r.commit("the suite");
+    r.write("releases/2.0.0.toml", &matching("2.0.0", &c));
+    r.commit("a release");
+    // The repository cloned under `t[1]`, the cache named relative to it.
+    let inside = place.join("repo");
+    let clone = Command::new("git").args(["clone", "-q"]).arg(r.path()).arg(&inside).output().unwrap();
+    assert!(clone.status.success());
+    let out = Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").env("ENTREGA_CACHE", "relcache").current_dir(&inside).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8(out.stderr).unwrap();
+    let parent = inside.join("relcache/tmp");
+    assert!(err.contains(&format!("the scratch folder's parent {} holds a glob character cargo would read as a pattern", parent.display())), "{err}");
+}
+
+#[test]
 fn an_annotated_tags_id_is_no_commit() {
     let r = suite();
     let c = r.commit("the suite");

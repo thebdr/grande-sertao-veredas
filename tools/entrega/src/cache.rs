@@ -20,7 +20,7 @@ pub fn dir() -> Result<PathBuf, std::io::Error> {
         }
     };
     std::fs::create_dir_all(&d)?;
-    Ok(d)
+    std::path::absolute(&d)
 }
 
 fn hex(bytes: &[u8]) -> String {

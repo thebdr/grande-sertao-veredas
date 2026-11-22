@@ -222,12 +222,14 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
     use std::process::{Command, Stdio};
     let mut held = BTreeMap::new();
     // Cargo reads a workspace's member globs against the root's absolute path unescaped: a glob
-    // character in that path changes which members it finds.
+    // character in that path changes which members it finds. The path is judged absolute, as cargo
+    // will see it.
+    let parent = std::path::absolute(parent)?;
     if parent.to_string_lossy().contains(['*', '?', '[', ']', '{', '}']) {
         refusals.push(format!("the scratch folder's parent {} holds a glob character cargo would read as a pattern", parent.display()));
         return Ok(held);
     }
-    let scratch_dir = tempfile::Builder::new().prefix("entrega-tree-").tempdir_in(parent)?;
+    let scratch_dir = tempfile::Builder::new().prefix("entrega-tree-").tempdir_in(&parent)?;
     let scratch = scratch_dir.path().to_path_buf();
     let result = (|| -> Result<Option<String>, CheckError> {
         // The tree as git stores it, no attribute or filter applied (git::export_tree).
@@ -243,7 +245,9 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
         }
         // A root that is no workspace sends cargo looking for one above the tree, in folders the
         // history does not hold.
-        let root_manifest = std::fs::read_to_string(tree.join("Cargo.toml"))?;
+        let Ok(root_manifest) = String::from_utf8(std::fs::read(tree.join("Cargo.toml"))?) else {
+            return Ok(Some(format!("commit {commit}: its Cargo.toml is not UTF-8")));
+        };
         if !toml::from_str::<toml::Table>(&root_manifest).is_ok_and(|t| t.contains_key("workspace")) {
             return Ok(Some(format!("commit {commit}: its Cargo.toml is no workspace (`[workspace]`): cargo would look for one above the tree")));
         }
@@ -304,8 +308,15 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
         Ok(None)
     })();
     drop(scratch_dir);
-    if let Some(r) = result? {
-        refusals.push(r);
+    // Whatever went wrong reading this one commit is its refusal: it never aborts a check and
+    // hides the refusals of other commits.
+    match result {
+        Ok(Some(r)) => refusals.push(r),
+        Ok(None) => {}
+        Err(e) => {
+            held.clear();
+            refusals.push(format!("commit {commit}: its tree could not be read: {e}"));
+        }
     }
     Ok(held)
 }
