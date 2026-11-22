@@ -185,9 +185,15 @@ begins. It is not the crate: it proves no clause (its tests are evidence for P-0
 - `spikes/oficina/model`: the Rust side the bridge seam hides, with no Qt: the project tree
   (`tree`), the TOML document behind the form and the text (`document`), the formats' components
   (`formats`). It uses core's one header reader by path, and the laws' own reader of the suite's
-  TOML texts in its tests. `cargo nextest run --manifest-path spikes/oficina/Cargo.toml`.
-- `spikes/oficina/shell` (with Qt): the window, the QML and the bridge. Only its `bridge` module
-  names cxx-qt; the model's types never cross the seam as Qt types.
+  TOML texts in its tests. It builds anywhere:
+  `cargo nextest run --manifest-path spikes/oficina/Cargo.toml -p oficina-spike-model`.
+- `spikes/oficina/shell` (with Qt): the window, the QML and the bridge, a library with a thin
+  `main` so its tests link what it runs. Only its `bridge` module names cxx-qt, and one C++ file
+  inside the seam starts what Qt wants started in C++ (WebEngine, the docking library, the test
+  server); the model's types never cross the seam as Qt types. It builds where `QMAKE` names Qt's
+  qmake and `OFICINA_DEPS` (by default `~/.local/opt/oficina-deps`) holds KDDockWidgets, Spix and
+  AnyRPC. Its tests start the window on Qt's `offscreen` platform and drive it through Spix; a
+  timing is judged on a release build, alone on the machine.
 - Pinned for the spike: Qt 6.12.0 (6.12.1's WebEngine is not published yet), cxx-qt 0.10.0,
   KDDockWidgets 2.5.1 (its Qt Quick side), Spix 0.14 over AnyRPC 1.0.2, Monaco 0.57.0,
   rust-analyzer from rustup, CMake 4.5.1 for the C++ libraries. How the machine gets Qt is the
@@ -268,9 +274,22 @@ measures it so the answer exists whichever way it is ruled.
    driver takes Spix's place (Qt's own test library from C++, or the accessibility tree), at the
    cost entry 29 counts.
 
+### Results so far
+On this machine, Qt 6.12.0 on its `offscreen` platform, through Spix, never on a screen; the
+numbers and what was learnt on the way are in the evidence.
+
+1. **Passed** (2026-11-22). The planted project drawn row for row; a folder read when it opens
+   and not before; a refresh keeps the open folders and the selection; a name holding markup drawn
+   as its characters; a folder of 100 000 files opened in 157 to 343 ms from the click to its first
+   row drawn (a release build, three runs, the machine's load about 30 on 24 cores). The bridge
+   expresses the lazy item model in Rust alone; one C++ file starts the application.
+
+The X11 platform is not proven: Qt's X11 plugin lacks seven of the distribution's libraries here
+(the architect's to install), so nothing has run on X11 yet; the plan's "X11 first" stays to be
+shown on this machine once they are.
+
 ### Verdict
-Not given: the Rust side of points 1 and 2 is built and tested; every point that needs Qt waits
-for Qt on this machine.
+Not given: points 2 to 7 remain.
 
 ## Open
 - **Q31, the review's majors and minors**, none ruled. Those that touch Oficina: 22 (Oficina

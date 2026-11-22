@@ -9,6 +9,9 @@ resolver = "3"
 members = [
     # The Rust side behind the bridge seam: the project tree and the TOML document, no Qt.
     "model",
+    # The window, its QML and the bridge: needs Qt (QMAKE names its qmake), KDDockWidgets and Spix
+    # (OFICINA_DEPS names where they are installed).
+    "shell",
 ]
 
 [workspace.package]
