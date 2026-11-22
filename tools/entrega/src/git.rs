@@ -69,34 +69,14 @@ pub enum ExportError {
     Refused(String),
 }
 
-/// Whether a link at `path` (relative to the tree's root) pointing at `to` leads out of the tree:
-/// an absolute target, or one whose `..` climb above the root.
-pub fn leaves_tree(path: &str, to: &str) -> bool {
-    if to.starts_with('/') {
-        return true;
-    }
-    let mut depth: i64 = path.split('/').count() as i64 - 1;
-    for part in to.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                depth -= 1;
-                if depth < 0 {
-                    return true;
-                }
-            }
-            _ => depth += 1,
-        }
-    }
-    false
-}
-
 /// Writes the tree of `commit` into `dest` from git's objects as they are stored, no attribute,
 /// filter or line-ending rule applied (`git archive` applies `export-ignore`, `export-subst` and
 /// smudge filters from settings outside the history, so two clones could export one commit two
 /// ways). Only the paths under one of `prefixes` are written (every path when it is empty); an
-/// executable keeps its mode, a link is made a link (one leading out of the tree refused), a
-/// submodule is left out. Returns how many files were written.
+/// executable keeps its mode, a submodule is left out. A release's tree holds no link and no path
+/// that is not UTF-8: a link, judged as text, can still reach outside through another link or make
+/// a member's folder somewhere else, and a name that is not UTF-8 cannot be written as stored; each
+/// is refused by its path, wherever it sits. Returns how many files were written.
 pub fn export_tree(root: &Path, commit: &str, prefixes: &[&str], dest: &Path) -> Result<usize, ExportError> {
     use std::io::{BufRead, BufReader, Read, Write};
     let io = |source: std::io::Error| GitError { dir: root.display().to_string(), source };
@@ -104,11 +84,20 @@ pub fn export_tree(root: &Path, commit: &str, prefixes: &[&str], dest: &Path) ->
         .ok_or_else(|| io(std::io::Error::other(format!("git cannot list the tree of {commit}"))))?;
     // (mode, object id, path) of every blob wanted.
     let mut wanted: Vec<(String, String, String)> = Vec::new();
-    for rec in listing.split(|b| *b == 0).filter(|r| !r.is_empty()) {
-        let rec = String::from_utf8_lossy(rec);
+    for raw in listing.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+        let Ok(rec) = std::str::from_utf8(raw) else {
+            let lossy = String::from_utf8_lossy(raw);
+            let path = lossy.split_once('\t').map_or(lossy.as_ref(), |(_, p)| p);
+            return Err(ExportError::Refused(format!("the path `{path}` is not UTF-8: a release's tree names its files in UTF-8")));
+        };
         let Some((info, path)) = rec.split_once('\t') else { continue };
         let mut f = info.split_whitespace();
         let (Some(mode), Some(kind), Some(oid)) = (f.next(), f.next(), f.next()) else { continue };
+        if mode == "120000" {
+            return Err(ExportError::Refused(format!(
+                "the link `{path}`: a release's tree holds no link, which could lead outside the history"
+            )));
+        }
         if kind != "blob" {
             continue;
         }
@@ -148,19 +137,10 @@ pub fn export_tree(root: &Path, commit: &str, prefixes: &[&str], dest: &Path) ->
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(io)?;
         }
-        if mode == "120000" {
-            let to = String::from_utf8_lossy(&body).into_owned();
-            if leaves_tree(path, &to) {
-                let _ = child.kill();
-                return Err(ExportError::Refused(format!("the link `{path}` leads out of the tree (`{to}`): a file outside the history would decide")));
-            }
-            std::os::unix::fs::symlink(&to, &target).map_err(io)?;
-        } else {
-            std::fs::write(&target, &body).map_err(io)?;
-            if mode == "100755" {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).map_err(io)?;
-            }
+        std::fs::write(&target, &body).map_err(io)?;
+        if mode == "100755" {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).map_err(io)?;
         }
     }
     let _ = feeder.join();

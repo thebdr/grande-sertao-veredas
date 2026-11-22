@@ -367,17 +367,15 @@ fn settings_outside_the_history_change_nothing_that_is_read() {
         checked(&r, &text.replace("bins = [\"porteiro\", \"veredas-portal\"]", "bins = [\"veredas-portal\"]")),
         vec![format!("veredas-portal builds `porteiro` at {c} and the manifest does not ship it")]
     );
-    // The export itself writes the files as stored, executables and links kept.
+    // The export itself writes the files as stored, an executable's mode kept.
     let out = tempfile::tempdir().unwrap();
     std::fs::set_permissions(r.path().join("crates/veredas-maquinar/src/main.rs"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    std::os::unix::fs::symlink("main.rs", r.path().join("crates/veredas-maquinar/src/ligacao.rs")).unwrap();
-    let c2 = r.commit("an executable file and a link");
+    let c2 = r.commit("an executable file");
     let n = entrega::git::export_tree(r.path(), &c2, &["crates/veredas-maquinar"], out.path()).unwrap();
-    assert_eq!(n, 4);
+    assert_eq!(n, 3);
     let m = out.path().join("crates/veredas-maquinar");
     assert_eq!(std::fs::read_to_string(m.join("Cargo.toml")).unwrap(), "[package]\nname = \"veredas-maquinar\"\nversion = \"2.1.0\"\nedition = \"2024\"\n");
     assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(m.join("src/main.rs")).unwrap().permissions()) & 0o777, 0o755);
-    assert_eq!(std::fs::read_link(m.join("src/ligacao.rs")).unwrap(), std::path::PathBuf::from("main.rs"));
     assert!(!out.path().join("crates/veredas-portal").exists(), "only the paths asked for");
 }
 
@@ -446,23 +444,47 @@ fn replace_refs_and_grafts_change_neither_objects_nor_ancestry() {
 }
 
 #[test]
-fn a_link_leading_out_of_the_tree_is_refused_by_its_path() {
-    for (to, kind) in [("/etc/hostname", "absolute"), ("../../../outside/Cargo.toml", "climbing")] {
-        let r = suite();
-        std::fs::remove_file(r.path().join("crates/veredas-core/Cargo.toml")).unwrap();
-        std::os::unix::fs::symlink(to, r.path().join("crates/veredas-core/Cargo.toml")).unwrap();
-        let c = r.commit("a link out of the tree");
+fn a_tree_holding_a_link_or_a_name_that_is_not_utf8_is_refused_by_its_path() {
+    let refused_at = |r: &Repo, c: &str| {
         let mut refusals = Vec::new();
-        let held = manifest::components_at(r.path(), &c, &mut refusals).unwrap();
-        assert!(held.is_empty(), "{kind}");
-        assert_eq!(
-            refusals,
-            vec![format!("commit {c}: the link `crates/veredas-core/Cargo.toml` leads out of the tree (`{to}`): a file outside the history would decide")],
-            "{kind}"
-        );
+        let held = manifest::components_at(r.path(), c, &mut refusals).unwrap();
+        assert!(held.is_empty());
+        refusals
+    };
+    let link = |r: &Repo, at: &str, to: &str| {
+        let p = r.path().join(at);
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_dir_all(&p);
+        std::os::unix::fs::symlink(to, p).unwrap();
+    };
+    // An absolute link, and one climbing out.
+    for to in ["/etc/hostname", "../../../outside/Cargo.toml"] {
+        let r = suite();
+        link(&r, "crates/veredas-core/Cargo.toml", to);
+        let c = r.commit("a link out of the tree");
+        assert_eq!(refused_at(&r, &c), vec![format!("commit {c}: the link `crates/veredas-core/Cargo.toml`: a release's tree holds no link, which could lead outside the history")]);
     }
-    assert!(!entrega::git::leaves_tree("a/b/c", "../x") && !entrega::git::leaves_tree("a/b/c", "../../x") && entrega::git::leaves_tree("a/b/c", "../../../x"));
-    assert!(!entrega::git::leaves_tree("a/b", "./c/../d") && entrega::git::leaves_tree("a", "../b") && !entrega::git::leaves_tree("a/b", "c/../../d"));
+    // A pair of links that, read as text, stays inside and, on disk, reaches out.
+    let r = suite();
+    link(&r, "crates/veredas-core/r", "../..");
+    link(&r, "crates/veredas-core/Cargo.toml", "r/../../outside.toml");
+    let c = r.commit("a chained pair of links");
+    assert_eq!(refused_at(&r, &c), vec![format!("commit {c}: the link `crates/veredas-core/Cargo.toml`: a release's tree holds no link, which could lead outside the history")]);
+    // A member folder that is itself a link.
+    let r = suite();
+    std::fs::rename(r.path().join("crates/veredas-portal"), r.path().join("fonte")).unwrap();
+    link(&r, "crates/veredas-portal", "../fonte");
+    let c = r.commit("a member folder as a link");
+    assert_eq!(refused_at(&r, &c), vec![format!("commit {c}: the link `crates/veredas-portal`: a release's tree holds no link, which could lead outside the history")]);
+    // A file name that is not UTF-8.
+    let r = suite();
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::OsStr::from_bytes(b"\xff.rs");
+    std::fs::write(r.path().join("crates/veredas-core/src").join(name), "fn main() {}\n").unwrap();
+    let c = r.commit("a name that is not UTF-8");
+    let refusals = refused_at(&r, &c);
+    assert_eq!(refusals.len(), 1);
+    assert!(refusals[0].starts_with(&format!("commit {c}: the path `crates/veredas-core/src/")) && refusals[0].ends_with("` is not UTF-8: a release's tree names its files in UTF-8"), "{refusals:?}");
 }
 
 #[test]

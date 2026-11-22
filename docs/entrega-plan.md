@@ -280,7 +280,8 @@ Verified by running each, not assumed:
 
 ## Rules
 - **A release pins a tree.** One release, one commit; a manifest checkable at any later commit
-  against git's history, as L6 judges history.
+  against git's history, as L6 judges history: the tree read as git stores it, replace refs and
+  grafts off, and holding no link and no path that is not UTF-8.
 - **Built from the repository by a recipe.** The bundle from a commit, the machine from a bundle;
   no step by hand, no file of the image made anywhere but by the recipe.
 - **Large files are never committed.** The base image, the seed, the disk, the OVA and the bundle
