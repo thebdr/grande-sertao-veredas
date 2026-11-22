@@ -1,0 +1,29 @@
+{
+  "clause": "C-132",
+  "command": "cargo test -p veredas-aranha --test dcp",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-aranha",
+    "--test",
+    "dcp"
+  ],
+  "exitCode": 0,
+  "outputSha": "5d0fd16963a787e733090dcb0b5d28e9c37768ba29fdee0006c3a329e72dc535",
+  "outputTail": "test what_one_frame_cannot_carry_is_refused_never_cut ... ok\ntest a_damaged_header_is_an_error_that_names_it ... ok\ntest a_get_request_is_bare_pairs_and_its_answer_carries_block_info ... ok\ntest an_identify_request_is_the_canonical_frame_for_each_filter ... ok\ntest a_damaged_block_is_kept_with_its_reason_and_the_next_still_decodes ... ok\ntest a_set_is_written_to_one_device_with_its_qualifier ... ok\ntest any_bytes_decode_without_a_panic_and_rewrite_to_themselves ... ok\ntest the_dissectors_tell_a_wrong_reading_apart ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.88s\n     Running tests/dcp.rs (target/debug/build/veredas-aranha/e23a99a47216befc/out/dcp-e23a99a47216befc)",
+  "ranAt": "2026-11-22T18:30:16.322Z",
+  "headCommit": "fb689d6f002f4b300b1023acf1d738551ec6c2e6",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/dcp.rs",
+      "file": "crates/veredas-aranha/tests/dcp.rs",
+      "fileSha": "ebe5fb515f6428e7d62a7e89da11b7396e007ce7b18813d3d4cd67deb837328b"
+    },
+    {
+      "name": "crates/veredas-aranha/tests/common/mod.rs",
+      "file": "crates/veredas-aranha/tests/common/mod.rs",
+      "fileSha": "e3f228cd2b4bbd09bda4196228ab527e6f28dba06ee02306b362990c19b7edb6"
+    }
+  ]
+}

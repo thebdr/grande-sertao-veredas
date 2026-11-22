@@ -1,0 +1,29 @@
+{
+  "clause": "C-131",
+  "command": "cargo test -p veredas-aranha --test envelope",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-aranha",
+    "--test",
+    "envelope"
+  ],
+  "exitCode": 0,
+  "outputSha": "759bf2ccfbc49819ba88b663815320d00d785246d2aea2d52df80cecd32ec67e",
+  "outputTail": "test a_mac_reads_its_three_spellings_in_either_case_and_prints_one ... ok\ntest a_mac_serialises_as_its_printed_form ... ok\ntest a_tagged_frame_carries_its_priority_drop_bit_and_vlan ... ok\ntest an_untagged_frame_is_built_padded_and_read_back_exactly ... ok\ntest group_addresses_are_never_one_device ... ok\ntest what_the_wire_cannot_carry_is_refused_never_cut ... ok\ntest a_short_frame_is_an_error_that_says_its_length ... ok\ntest a_mac_refuses_every_other_spelling_with_the_text_it_got ... ok\ntest the_dissectors_read_the_envelope_as_it_was_written ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.07s\n     Running tests/envelope.rs (target/debug/build/veredas-aranha/a284cb515c6f1751/out/envelope-a284cb515c6f1751)",
+  "ranAt": "2026-11-22T18:30:14.454Z",
+  "headCommit": "fb689d6f002f4b300b1023acf1d738551ec6c2e6",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/envelope.rs",
+      "file": "crates/veredas-aranha/tests/envelope.rs",
+      "fileSha": "9fdd72e2699a25b6fcec1a8022ed23e8761c8c75b5f901fe02627ac947900e02"
+    },
+    {
+      "name": "crates/veredas-aranha/tests/common/mod.rs",
+      "file": "crates/veredas-aranha/tests/common/mod.rs",
+      "fileSha": "e3f228cd2b4bbd09bda4196228ab527e6f28dba06ee02306b362990c19b7edb6"
+    }
+  ]
+}

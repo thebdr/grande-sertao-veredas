@@ -1,0 +1,33 @@
+{
+  "clause": "C-130",
+  "command": "cargo test -p veredas-aranha -p leis --test component --test real_tree",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-aranha",
+    "-p",
+    "leis",
+    "--test",
+    "component",
+    "--test",
+    "real_tree"
+  ],
+  "exitCode": 0,
+  "outputSha": "1a185054c21820b4743427a762dabed286ece8e1bb525f950e29edc7fe6df55d",
+  "outputTail": "test the_check_refuses_every_target_but_the_library_and_its_one_executable ... ok\ntest the_walk_follows_what_ships_and_leaves_dev_dependencies_to_the_tests ... ok\ntest what_a_consumer_of_aranha_compiles_is_light ... ok\ntest the_codecs_compile_alone_on_what_core_already_has ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.35s\n\n    Blocking waiting for file lock on package cache\n   Compiling serde_json v1.0.154\n   Compiling serde v1.0.229\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n   Compiling leis v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/tools/leis)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.63s\n     Running tests/real_tree.rs (target/debug/build/leis/762cfc8440a90eb6/out/real_tree-762cfc8440a90eb6)\n     Running tests/component.rs (target/debug/build/veredas-aranha/27aaf6f4372015f2/out/component-27aaf6f4372015f2)",
+  "ranAt": "2026-11-22T18:30:10.878Z",
+  "headCommit": "fb689d6f002f4b300b1023acf1d738551ec6c2e6",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/component.rs",
+      "file": "crates/veredas-aranha/tests/component.rs",
+      "fileSha": "db3a1967e09054733cc2ea86470fab157897a138eed9311b8f1dd6f00e645ba3"
+    },
+    {
+      "name": "tools/leis/tests/real_tree.rs",
+      "file": "tools/leis/tests/real_tree.rs",
+      "fileSha": "8dcab973a8d2d31fbf3ed2986dd27bb0a6a15a58fb281883728ecea293c308e2"
+    }
+  ]
+}
