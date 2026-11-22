@@ -746,3 +746,40 @@ fn the_unit_tests_cases_on_the_build_programs_link() {
     }
     assert_eq!(c.cv(), 1);
 }
+
+// The eighth refute round: an edge's q() after a scan with no edge, and the words that let a source build apart,
+// bring in a crate or pull in a file, refused everywhere but at the five places the crate needs them.
+
+#[test]
+fn an_edge_s_q_is_off_again_on_the_scan_after_its_edge() {
+    let mut rise = RTrig::default();
+    rise.scan(true);
+    rise.scan(false);
+    assert!(!rise.q(), "a rising edge's q() is off on the next low scan");
+    let mut fall = FTrig::default();
+    fall.scan(true);
+    fall.scan(false);
+    assert!(fall.q());
+    fall.scan(true);
+    assert!(!fall.q(), "a falling edge's q() is off on the next high scan");
+}
+
+#[test]
+fn the_sources_hold_no_word_that_builds_apart_or_brings_anything_in_but_at_their_five_places() {
+    for (file, text) in SOURCES {
+        let tight = squeezed(text);
+        for word in ["path", "include", "extern", "env"] {
+            assert!(!tight.contains(word), "{file} holds `{word}`");
+        }
+        // `cfg` at exactly the five places: the root's no_std switch, and each unit tests' module
+        let allowed: &[&str] = match file {
+            "lib.rs" => &["#![cfg_attr(not(test),no_std)]"],
+            "bits.rs" | "counters.rs" | "edges.rs" | "timers.rs" => &["#[cfg(test)]"],
+            _ => &[],
+        };
+        assert_eq!(tight.matches("cfg").count(), allowed.len(), "{file} holds `cfg` elsewhere");
+        for site in allowed {
+            assert_eq!(tight.matches(site).count(), 1, "{file}: {site}");
+        }
+    }
+}
