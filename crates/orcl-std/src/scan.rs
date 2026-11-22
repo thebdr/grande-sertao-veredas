@@ -15,6 +15,21 @@
 //! }
 //! ```
 //!
+//! A program on a float, and on a structure that is `Copy` and `Default` and nothing else, compiles too: the bounds
+//! ask for no more.
+//!
+//! ```
+//! use orcl_std::{Program, Scan};
+//! #[derive(Clone, Copy, Default)]
+//! struct Valve { open: bool, position: f32 }
+//! struct P;
+//! impl Program for P {
+//!     type Inputs = f32;
+//!     type Outputs = Valve;
+//!     fn scan(&mut self, _: &Scan, level: &f32, valve: &mut Valve) { valve.open = *level > 0.5; valve.position = *level; }
+//! }
+//! ```
+//!
 //! ```compile_fail,E0277
 //! use orcl_std::{Program, Scan};
 //! struct P;

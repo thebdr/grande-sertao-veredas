@@ -474,3 +474,55 @@ fn a_read_far_past_the_width_is_false() {
 fn the_crate_is_the_version_its_clause_states() {
     assert_eq!(env!("CARGO_PKG_VERSION"), "2.0.0-alpha.1");
 }
+
+// The fifth refute round: a pulse ending with its input off, a preset raised above the count, many rising edges,
+// the manifest naming no other root, and no file of the crate bringing in another crate.
+
+#[test]
+fn a_pulse_ending_with_its_input_off_resets_at_once_and_the_next_edge_pulses_again() {
+    let pt = ms(100);
+    let mut p = Tp::default();
+    assert!(p.scan(&at(0), true, pt));
+    assert!(p.scan(&at(50), false, pt));
+    assert!(!p.scan(&at(100), false, pt), "the pulse ends, the input off");
+    assert_eq!(p.et(), ms(0), "and its elapsed time is back to zero on that scan");
+    assert!(p.scan(&at(110), true, pt), "the next rising edge, a new pulse");
+    assert!(p.scan(&at(200), true, pt));
+    assert!(!p.scan(&at(210), true, pt), "exactly pt");
+}
+
+#[test]
+fn the_counter_s_q_follows_its_preset_on_every_scan() {
+    let mut c = Ctu::default();
+    assert!(c.scan(true, false, 1), "a count of 1 reaches a preset of 1");
+    assert!(!c.scan(false, false, 5), "the preset raised to 5: off");
+    assert!(!c.q());
+    assert!(c.scan(false, false, 1), "back to 1: on");
+}
+
+#[test]
+fn a_rising_edge_is_seen_every_time() {
+    let mut rise = RTrig::default();
+    let clk = [true, false, true, false, true, false, true, false, true, false, true, false];
+    let seen: Vec<bool> = clk.map(|c| rise.scan(c)).to_vec();
+    assert_eq!(seen, clk.to_vec(), "on for each of the six rising edges, off between");
+}
+
+#[test]
+fn the_manifest_names_no_other_root_and_no_file_brings_in_another_crate() {
+    let manifest = include_str!("../Cargo.toml");
+    assert!(!manifest.contains("[lib]"), "the crate's root is src/lib.rs, the file the root's test reads");
+    for (file, text) in [
+        ("lib.rs", include_str!("../src/lib.rs")),
+        ("bits.rs", include_str!("../src/bits.rs")),
+        ("counters.rs", include_str!("../src/counters.rs")),
+        ("edges.rs", include_str!("../src/edges.rs")),
+        ("o14.rs", include_str!("../src/o14.rs")),
+        ("scan.rs", include_str!("../src/scan.rs")),
+        ("timers.rs", include_str!("../src/timers.rs")),
+    ] {
+        assert!(!text.contains("extern crate"), "{file} brings in a crate of its own");
+    }
+    let listed = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src")).unwrap().count();
+    assert_eq!(listed, 7, "every source file is read above");
+}
