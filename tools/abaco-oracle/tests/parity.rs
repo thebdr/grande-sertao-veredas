@@ -38,6 +38,10 @@ fn options(links: LinksMode) -> Options {
     Options { links, max_examples: 3, roundtrip_dir: None, verbose: false, clock }
 }
 
+/// Workbooks upstream's own tests write into the corpus folder while the fork's suite runs (beside
+/// these tests) and remove after: written by the fork's own writer, which the rule never takes.
+const UPSTREAM_SCRATCH: [&str; 2] = ["conditional_formatting/cf_tests_round_trip.xlsx", "templates/crossword_round_trip.xlsx"];
+
 /// The workbooks of the folder the rule leaves out, each for what its package says of itself.
 const NOT_EXCEL: [(&str, &str); 9] = [
     ("bad_merge_cells.xlsx", "no application, no Excel file version"),
@@ -80,7 +84,7 @@ fn the_corpus_is_every_workbook_excel_saved_and_the_baseline_names_each_once() {
             let p = e.unwrap().path();
             if p.is_dir() {
                 stack.push(p);
-            } else if p.extension().is_some_and(|x| x == "xlsx") {
+            } else if p.extension().is_some_and(|x| x == "xlsx") && !UPSTREAM_SCRATCH.contains(&rel(&p).as_str()) {
                 all.push(rel(&p));
             }
         }

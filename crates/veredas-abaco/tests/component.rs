@@ -176,7 +176,8 @@ fn the_fork_is_upstream_at_its_commit_then_each_listed_change_a_commit() {
         .filter(|l| {
             let scratch = ["?? forks/ironcalc/xlsx/", "?? forks/ironcalc/base/"]
                 .iter()
-                .any(|crate_dir| l.strip_prefix(crate_dir).is_some_and(|f| f.starts_with("temp_file_") && !f.contains('/')));
+                .any(|crate_dir| l.strip_prefix(crate_dir).is_some_and(|f| f.starts_with("temp_file_") && !f.contains('/')))
+                || l.strip_prefix("?? ").is_some_and(|f| UPSTREAM_SCRATCH.contains(&f));
             !scratch
         })
         .collect();
@@ -226,6 +227,15 @@ fn no_plant_connection_and_no_member_in_its_normal_graph_on_any_platform() {
 }
 
 const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-index";
+
+/// The other scratch workbooks upstream's own tests write while the fork's suite runs, and remove
+/// after (besides the `temp_file_*` ones beside each crate).
+const UPSTREAM_SCRATCH: [&str; 4] = [
+    "forks/ironcalc/xlsx/existing_file.xlsx",
+    "forks/ironcalc/xlsx/temp_cf_round_trip.xlsx",
+    "forks/ironcalc/xlsx/tests/conditional_formatting/cf_tests_round_trip.xlsx",
+    "forks/ironcalc/xlsx/tests/templates/crossword_round_trip.xlsx",
+];
 
 /// The packages of a lock file that come from crates.io, `name` to its versions (one from a git
 /// repository, a path or another registry is not counted, whatever its version).
