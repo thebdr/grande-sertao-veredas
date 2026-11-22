@@ -120,3 +120,85 @@ fn at_its_size_limit_a_recording_stops_and_nothing_is_deleted() {
     assert!(e.contains("a database already stands there") && e.contains("small.record.duckdb"), "{e}");
     assert_eq!(std::fs::metadata(&file).unwrap().len(), before);
 }
+
+/// The drive written seldom: against the bench's plant, polled every 50 ms, a record written every
+/// two seconds takes its rows in batches at least that far apart, never on every pass.
+#[test]
+fn a_record_is_written_once_a_period_whatever_the_poll_rate() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let port = machine_port(&bench);
+    let log = dir.path().join("plant.log");
+    std::fs::write(&log, "").unwrap();
+    let mut cfg = session_config("seldom", &log, &bench, port);
+    cfg.recording = Some(RecordingConfig { file: dir.path().join("seldom.record.duckdb"), limit_bytes: 64 << 20, write_every: Duration::from_secs(2) });
+    let session = Session::start(cfg).unwrap();
+    let live = session.live();
+    assert!(wait(Duration::from_secs(20), || live.counters.read().unwrap().polls >= 20));
+    // Six seconds of looks every 20 ms: the rows recorded change at writes alone.
+    let started = std::time::Instant::now();
+    let mut last = status(&live).recorded_rows;
+    let mut changes: Vec<std::time::Duration> = Vec::new();
+    while started.elapsed() < Duration::from_secs(6) {
+        let now = status(&live).recorded_rows;
+        if now != last {
+            changes.push(started.elapsed());
+            last = now;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!((2..=4).contains(&changes.len()), "writes in six seconds at one every two: {changes:?}");
+    for pair in changes.windows(2) {
+        assert!(pair[1] - pair[0] >= Duration::from_millis(1_800), "two writes {:?} apart: {changes:?}", pair[1] - pair[0]);
+    }
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+}
+
+/// The limit stops the recording at the first write that reaches it: written in batches under it,
+/// every size published before the stop is under the limit and the one at the stop at or past
+/// it; once closed, the size published is the one the drive holds, the log folded into the file.
+#[test]
+fn the_limit_stops_the_recording_at_the_first_write_that_reaches_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("plant.log");
+    std::fs::write(&log, "").unwrap();
+    let file = dir.path().join("chunks.record.duckdb");
+    let mut cfg = SessionConfig::new("chunks");
+    cfg.logs.push(log_source("log", &log));
+    cfg.rules.push(readings_rule(None));
+    cfg.recording = Some(RecordingConfig { file: file.clone(), limit_bytes: 400 * 1024, write_every: Duration::from_millis(200) });
+    let session = Session::start(cfg).unwrap();
+    let live = session.live();
+    let mut sizes: Vec<(u64, bool)> = Vec::new();
+    let mut i = 0u32;
+    let started = std::time::Instant::now();
+    while status(&live).stopped_why.is_none() && started.elapsed() < Duration::from_secs(60) {
+        write_lines(&log, i..i + 500);
+        i += 500;
+        let until = std::time::Instant::now() + Duration::from_millis(300);
+        while std::time::Instant::now() < until {
+            let st = status(&live);
+            if sizes.last() != Some(&(st.written_bytes, st.stopped_why.is_some())) {
+                sizes.push((st.written_bytes, st.stopped_why.is_some()));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    let at_stop = status(&live);
+    assert!(at_stop.stopped_why.is_some(), "{at_stop:?}");
+    let under: Vec<u64> = sizes.iter().filter(|(_, stopped)| !stopped).map(|(b, _)| *b).collect();
+    assert!(under.iter().filter(|b| **b > 0).count() >= 2, "several writes under the limit first: {sizes:?}");
+    assert!(under.iter().all(|b| *b < at_stop.limit_bytes), "every size published before the stop under the limit: {sizes:?}");
+    assert!(at_stop.written_bytes >= at_stop.limit_bytes, "{at_stop:?}");
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    let end = status(&live);
+    let wal = std::path::PathBuf::from(format!("{}.wal", file.display()));
+    let on_drive = std::fs::metadata(&file).unwrap().len() + std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+    assert_eq!(end.written_bytes, on_drive, "the size published is the drive's");
+    assert!(!wal.exists() || std::fs::metadata(&wal).unwrap().len() == 0, "the log folded into the file");
+    assert_eq!(recorded(&file, "readings") as u64, end.recorded_rows);
+}

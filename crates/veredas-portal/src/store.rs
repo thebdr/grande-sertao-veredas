@@ -482,6 +482,14 @@ impl DuckStore {
         Ok(())
     }
 
+    /// The store's write-ahead log folded into its file, through the ingest connection: what a
+    /// record does as it closes (C-091).
+    pub fn checkpoint(&self) -> Result<(), StoreError> {
+        let conn = recover(self.ingest.lock());
+        conn.execute_batch("CHECKPOINT;")?;
+        Ok(())
+    }
+
     /// The store's window: every base-table row that arrived before `cutoff_ms` (the arrival
     /// clock, the one health is judged on) and every bare sample indexed before it (the narrow
     /// table carries no arrival) let go, through the ingest connection, the writer's own. Rows at

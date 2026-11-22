@@ -97,6 +97,9 @@ enum ControllerEvent {
 #[derive(Clone)]
 pub struct ControllerFeed {
     tx: std::sync::mpsc::Sender<ControllerEvent>,
+    /// Closed by the session before its last drain: a push sends while holding it, so a push
+    /// either lands before the drain that stores it or is refused, never accepted and lost.
+    closed: Arc<Mutex<bool>>,
 }
 
 /// The session the feed belonged to has stopped.
@@ -108,13 +111,21 @@ impl ControllerFeed {
     /// A state change: the state as the controller holds it.
     pub fn push_state(&self, state: &veredas_core::state::ControllerState) -> Result<(), FeedClosed> {
         let (index_ms, arrival_ms) = controller_clocks();
-        self.tx.send(ControllerEvent::State { index_ms, arrival_ms, state: state.clone() }).map_err(|_| FeedClosed)
+        self.send(ControllerEvent::State { index_ms, arrival_ms, state: state.clone() })
     }
 
     /// A fault record.
     pub fn push_fault(&self, record: &FaultRecord) -> Result<(), FeedClosed> {
         let (index_ms, arrival_ms) = controller_clocks();
-        self.tx.send(ControllerEvent::Fault { index_ms, arrival_ms, record: record.clone() }).map_err(|_| FeedClosed)
+        self.send(ControllerEvent::Fault { index_ms, arrival_ms, record: record.clone() })
+    }
+
+    fn send(&self, event: ControllerEvent) -> Result<(), FeedClosed> {
+        let closed = self.closed.lock().unwrap_or_else(|p| p.into_inner());
+        if *closed {
+            return Err(FeedClosed);
+        }
+        self.tx.send(event).map_err(|_| FeedClosed)
     }
 }
 
@@ -456,6 +467,8 @@ struct Inner {
 struct ControllerRuntime {
     source: SourceId,
     rx: Receiver<ControllerEvent>,
+    /// The feed's gate, closed before the last drain.
+    closed: Arc<Mutex<bool>>,
     states: usize,
     faults: usize,
     seq: u64,
@@ -494,8 +507,10 @@ impl Recorder {
             match self.store.append_wide(i, &batch) {
                 Ok(()) => self.status.recorded_rows += batch.len() as u64,
                 Err(e) => {
+                    // Stopped at the first failure: nothing after it is written.
                     self.status.unrecorded_rows += batch.len() as u64;
                     self.status.stopped_why = Some(format!("a write to the record failed: {e}"));
+                    break;
                 }
             }
         }
@@ -852,6 +867,7 @@ impl Session {
         let (controller, controller_feed) = match (&cfg.controller, controller_tables) {
             (Some(c), Some((states, faults))) => {
                 let (tx, rx) = std::sync::mpsc::channel();
+                let closed = Arc::new(Mutex::new(false));
                 let id = c.source_id.trim().to_string();
                 let display = if c.display_name.trim().is_empty() { id.clone() } else { c.display_name.trim().to_string() };
                 stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None });
@@ -859,6 +875,7 @@ impl Session {
                 let runtime = ControllerRuntime {
                     source: SourceId::new(&id),
                     rx,
+                    closed: Arc::clone(&closed),
                     states,
                     faults,
                     seq: 0,
@@ -866,7 +883,7 @@ impl Session {
                     copy_dir: cfg.fault_copy_dir.clone(),
                     session_name: cfg.name.clone(),
                 };
-                (Some(runtime), Some(ControllerFeed { tx }))
+                (Some(runtime), Some(ControllerFeed { tx, closed }))
             }
             _ => (None, None),
         };
@@ -934,6 +951,7 @@ impl Session {
                     // the channels drain dry, cap or no cap, and every row they sent is stored;
                     // then the end is published, the refresh timer notwithstanding, so a reader
                     // still holding the session sees every source ended and the final counters.
+                    lock(&inner).close_feed();
                     while lock(&inner).pump(&live) > 0 {}
                     lock(&inner).record(&live, true);
                     lock(&inner).refresh_now(&live);
@@ -1215,6 +1233,14 @@ impl Inner {
         n
     }
 
+    /// The controller feed closed: every push from now on is refused, every one before it is in
+    /// the channel the last drain empties.
+    fn close_feed(&mut self) {
+        if let Some(c) = &self.controller {
+            *c.closed.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        }
+    }
+
     /// The controller's state changes and fault records into their tables' rows, every value a
     /// sample of the source like any other.
     fn pump_controller(&mut self) -> usize {
@@ -1456,6 +1482,15 @@ impl Inner {
             return;
         }
         r.write();
+        if last {
+            // The record closed: its log folded into its file now, and the size published the one
+            // the drive holds (the engine allocates the file in blocks, so a closed record may
+            // stand above the size the last write measured).
+            if let Err(e) = r.store.checkpoint() {
+                r.status.stopped_why.get_or_insert_with(|| format!("the record's last checkpoint failed: {e}"));
+            }
+            r.status.written_bytes = record_bytes(&r.status.file);
+        }
         if let Ok(mut s) = live.recording_status.write() {
             *s = Some(r.status.clone());
         }

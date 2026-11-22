@@ -51,6 +51,8 @@ fn a_controller_s_states_and_faults_are_stored_like_any_other_data() {
         ControllerState::new(State::Fault(Some(FaultReason::Watchdog { task: "main".into() }))),
         ControllerState::new(State::Stop(Some(StopReason::Command { source: CommandSource::Oficina }))),
     ];
+    let pushed_local = chrono::Local::now().naive_local().and_utc().timestamp_millis();
+    let pushed_unix = veredas_core::now_unix_ms();
     for s in &states {
         feed.push_state(s).unwrap();
     }
@@ -79,6 +81,13 @@ fn a_controller_s_states_and_faults_are_stored_like_any_other_data() {
     }
     let seqs: Vec<u64> = held.iter().map(|r| r["seq"].as_u64().unwrap()).collect();
     assert_eq!(seqs, vec![1, 2, 3, 4, 5]);
+    // Stamped on the controller's own clock (its local time, the store's axis) and on arrival.
+    for r in &held {
+        let (index, arrival) = (r["index_ms"].as_i64().unwrap(), r["arrival_ms"].as_i64().unwrap());
+        assert!((index - pushed_local).abs() < 1_000, "the controller's local clock: {index} against {pushed_local}");
+        assert!((arrival - pushed_unix).abs() < 1_000, "arrival on the unix clock: {arrival} against {pushed_unix}");
+        assert_eq!(r["ts"].as_i64().unwrap(), index, "the stamp is the index");
+    }
     // The fault record a row of its own.
     let fault = &rows(&live, CONTROLLER_FAULTS)[0];
     assert_eq!(
@@ -148,4 +157,36 @@ fn a_controller_source_is_checked_like_any_other() {
         Session::start(cfg).err().unwrap().to_string(),
         "two tables would be named `controller_faults`: capture rule `controller_faults` and the faults of controller `cpu`"
     );
+}
+
+/// A push racing the stop either lands or is refused: the feed is closed before the session's last
+/// drain, so every push that returned Ok is a row, whenever it came.
+#[test]
+fn a_push_racing_the_stop_lands_or_is_refused() {
+    for round in 0..10 {
+        let mut cfg = SessionConfig::new("race");
+        cfg.controller = Some(controller());
+        let session = Session::start(cfg).unwrap();
+        let live = session.live();
+        let feed = session.controller_feed().unwrap();
+        let pusher = std::thread::spawn(move || {
+            let (mut accepted, mut refused) = (0u64, 0u64);
+            while refused < 50 {
+                match feed.push_state(&ControllerState::new(State::Run)) {
+                    Ok(()) => accepted += 1,
+                    Err(FeedClosed) => refused += 1,
+                }
+                std::thread::sleep(Duration::from_micros(200));
+            }
+            accepted
+        });
+        std::thread::sleep(Duration::from_millis(20 + round * 7));
+        for (id, r) in session.stop() {
+            r.unwrap_or_else(|e| panic!("{id}: {e}"));
+        }
+        let accepted = pusher.join().unwrap();
+        assert!(accepted > 0);
+        let stored = live.store.query_rows(CONTROLLER_STATES, &RowsQuery { limit: 1, ..RowsQuery::default() }).unwrap().total;
+        assert_eq!(stored, accepted, "round {round}: every accepted push a row");
+    }
 }

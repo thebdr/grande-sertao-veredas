@@ -53,6 +53,10 @@ fn at_a_fault_the_window_is_written_to_the_drive_with_the_fault_record() {
     assert_eq!(written.len(), 1, "{written:?}");
     assert!(written[0].starts_with("press-") && written[0].ends_with(".fault.duckdb"), "{written:?}");
     let first = copies.join(&written[0]);
+    // Named for the session and the fault's time on the controller's clock, read off the copy.
+    let index: i64 = count(&first, "SELECT index_ms FROM controller_faults");
+    let at = chrono::DateTime::from_timestamp_millis(index).unwrap().naive_utc();
+    assert_eq!(written[0], format!("press-{}.fault.duckdb", at.format("%Y%m%d-%H%M%S")));
     assert_eq!(live.counters.read().unwrap().last_fault_copy.as_deref(), Some(first.display().to_string().as_str()));
     // The copy: the fault's record, the state it came with, the window's polls (a second of
     // them, not every poll), the project's view.

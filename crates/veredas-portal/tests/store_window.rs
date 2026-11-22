@@ -161,16 +161,20 @@ fn every_protocol_s_rows_are_kept_as_a_window_against_the_bench() {
     // older than the span, a pass and a margin for a loaded machine; and at its oldest at least
     // the span old, the window keeping what arrived within it.
     let watched = Instant::now();
-    let mut oldest_age = 0i64;
+    let (mut oldest_age, mut youngest_oldest) = (0i64, i64::MAX);
     while watched.elapsed() < Duration::from_secs(4) {
         let now = veredas_core::now_unix_ms();
         if let Some(first) = arrivals(&live.store, "plc_main").first() {
             oldest_age = oldest_age.max(now - first);
+            youngest_oldest = youngest_oldest.min(now - first);
         }
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(oldest_age <= 1_000 + 1_000 + 700, "the oldest poll held was {oldest_age} ms old");
-    assert!(oldest_age >= 1_000, "the window held polls for its span: the oldest at most {oldest_age} ms old");
+    // And at every look the oldest poll held is nearly the span old: with a poll every 50 ms, a
+    // window keeping its span always holds one that arrived about a span ago (a loaded machine
+    // only makes them older); a window cut short holds none.
+    assert!(youngest_oldest >= 500, "the window held polls for its span: the oldest was once only {youngest_oldest} ms old");
     let polls = live.counters.read().unwrap().polls;
     for table in ["plc_main", "announce"] {
         let held = arrivals(&live.store, table);
