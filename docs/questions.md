@@ -1395,3 +1395,151 @@ GitHub's included.
 feature, since it builds the suite in release mode.
 
 **Reversible?** Yes: a feature in the tool's manifest.
+
+---
+
+## Q340 - Where does the IronCalc fork live, and how do its fixes go upstream?
+
+**Raised** 2026-11-22, planning ábaco (P-007; `docs/abaco-plan.md`, "The fork").
+
+Ábaco's engine is a fork of IronCalc (MIT OR Apache-2.0). Veredas 1 kept it as a git subtree at
+`crates/ironcalc` with upstream's 2 222 commits, excluded from its workspace, and made eleven
+changes on it, none sent upstream. Here law L1 lets a crate out of the workspace only by an
+`exclude` entry, and only if it is not a `veredas-*` or `orcl-*` crate; law L2 makes every member
+under `crates/` a `veredas-<nome>`, so the fork's crates cannot be members; law L6 reads every
+commit of the history. The suite builds the fork's `base` (the engine) and `xlsx` (the file layer)
+only.
+
+Options:
+- (a) A copy inside its host: `crates/veredas-abaco/ironcalc/{base,xlsx}`, excluded, upstream's
+  files at a recorded commit in one commit and each change a commit of its own, listed in
+  `VEREDAS-FORK.md` with an upstream column; upstream's history not imported; a newer upstream
+  brought in by diff, measured by the oracle before and after; a fix sent upstream as a patch from a
+  clone of upstream. One repository, one push per change, builds offline.
+- (b) The same place as a full-history subtree, Veredas 1's way: `git subtree pull` and `push`
+  work, and this repository's history takes in upstream's 2 222 commits (L6 walks them; it is
+  tested to a bound at 3 000).
+- (c) A fork repository of its own on GitHub, the suite depending on it by git URL pinned to a
+  commit: pull requests upstream come straight from its branches and this repository holds no
+  engine code; every engine change lands in two repositories, and creating the fork is the
+  architect's act on their account.
+- (d) Where Veredas 1 had it, `crates/ironcalc`, excluded: L1 allows it, but a folder under
+  `crates/` that is no component reads as one.
+
+Whichever is chosen, opening a pull request on upstream's repository is public and is the
+architect's act.
+
+**Recommended and taken meanwhile**: (a). The fork arrives as Veredas 1 left it (`base` and
+`xlsx`, upstream `15ecfec` plus the eleven changes), checked against a clone of upstream.
+
+**Reversible?** Yes: a `git mv` and two path dependencies for (b) or (d); (c) replaces the folder
+with a git dependency.
+
+---
+
+## Q341 - What becomes of Veredas 1's grid, now that the grid's surface is Oficina's?
+
+**Raised** 2026-11-22, planning ábaco (P-007).
+
+Veredas 1 gave Ábaco its own grid, drawn with egui in the worker's process (its AB16, the
+architect's ruling of 2026-11-05: the whole keyboard reaches the grid, no round trip per
+keystroke), in a crate of its own, `veredas-abaco-grid`, over a renderer-neutral core inside
+`veredas-abaco`: Excel's navigation and selection, the editor's modes, the clipboard's TSV,
+filters, and the view the worker sends with the gestures it receives back. The briefing then put
+the grid in Oficina, as a tab, with the engine and Python of each workspace in its own process
+(A6.1), and Oficina is Qt Quick with its logic in Rust behind one bridge seam.
+
+Options:
+- (a) The renderer-neutral core is carried into `veredas-abaco` as a library module; Oficina links
+  it in its own process and paints, so no keystroke crosses a process; the worker serves the
+  model (cells, values, edits, recalculation) over a local interface agreed with Oficina's plan.
+  Oficina's `MAP` row (P-015) then names ábaco.
+- (b) The core runs in the worker and Oficina sends every key and gesture across the process
+  boundary: the round trip Veredas 1 ruled out when it chose egui over a browser.
+- (c) Nothing of the grid is carried: Oficina writes the grid's behaviour itself.
+- (d) The egui grid is carried as Ábaco's own window until Oficina's tab exists, then dropped.
+
+**Recommended**: (a). **Taken meanwhile**: nothing of the grid is ported until Oficina's tab is
+planned; the egui crate is not carried.
+
+**Reversible?** Yes: nothing is written.
+
+---
+
+## Q342 - Is Veredas 1's Excel host carried?
+
+**Raised** 2026-11-22, planning ábaco (P-007).
+
+Veredas 1 drove a controlled, out-of-process Excel over COM as Ábaco's first renderer (its AB4
+and AB13): the model pushed into Excel, gestures and the cells a tool declared editable read
+back, Windows only. It also backed one of the three answers when a workbook with links opens,
+"open and calculate in Excel" (AB7), which was never wired. In Veredas 2 the scope says
+byte-faithful edits with no Office on the machine, and Oficina is the one native application.
+
+Options:
+- (a) Not carried: Oficina's grid is the one renderer; Excel opens a file Ábaco wrote like any
+  other program, and the "open and calculate in Excel" answer is dropped.
+- (b) Carried as a Windows-only feature of the worker, a second renderer beside Oficina's tab.
+- (c) Carried later, after Oficina's tab, if a plant laptop with Excel and without Oficina needs
+  it.
+
+**Recommended and taken meanwhile**: (a); nothing of the host is ported.
+
+**Reversible?** Yes: the host stood on the same view and events as the grid, and can be ported
+on them later.
+
+---
+
+## Q343 - Is acerto carried into this public repository, and how?
+
+**Raised** 2026-11-22, planning ábaco (P-007; decision 4 of 2026-11-05).
+
+Decision 4 carries Veredas 1's `python/veredas-acerto` as `acerto`, an Ábaco extension inside its
+host. Acerto is a line-for-line port of an older in-house tool: it aligns one company's plant
+engineering files (its IO lists, the PLC's plant exports, the SCADA's workbooks) by that company's
+conventions, with that tool's tests ported unchanged. Two facts were not on the table on
+2026-11-05, or not side by side: this repository is public, while Veredas 1's is private; and on
+2026-11-09 the architect ruled that Veredas 1's parsing of one company's engineering exports is
+"not at all" carried into supervisão, "in the suite or beside it" (Q18), after the content-agnostic
+ruling of Q8. Carrying acerto publishes its logic, and whatever its tests and fixtures hold.
+
+Options:
+- (a) Carried whole, as decision 4 says: `crates/veredas-abaco/acerto/`, its logic public, its
+  fixtures read first and any customer, site or plant name, address or real file left out.
+- (b) Carried as a generic extension: the alignment's mechanics (two statements of one plant
+  brought into agreement, the queue, the apply through the patcher) with every company convention
+  as a rule file outside the repository, as Q8 and Q9 did for a device's telegrams.
+- (c) Not carried here: acerto stays a package of the private repository, installed into Ábaco
+  through the extension point (Veredas 1's tools found by entry point), and this repository holds
+  the extension point and a small public example.
+
+**Recommended**: (c), or (b) if acerto is to ship with the suite; (a) only if the architect is
+content for the in-house tool's logic to be public. **Taken meanwhile**: nothing of acerto is
+carried; it is the last phase of the plan, so nothing waits on the answer yet.
+
+**Reversible?** Only before: a publication is not undone by a revert.
+
+---
+
+## Q344 - What is ábaco's parity measured on while Veredas 1's workbooks are not here?
+
+**Raised** 2026-11-22, planning ábaco (P-007's exit: "at parity with Veredas 1's oracle numbers").
+
+Veredas 1's oracle numbers come from five real workbooks of one plant (1 217 533 formula cells, all
+equal to Excel's cached values). They were copied from a cloud folder on the Windows desk, never
+committed (Veredas 1's repository has only test workbooks), and they are not on this machine: not
+on its disk, not in Veredas 1's checkout, not in the Google Drive mount (searched by name
+2026-11-22). They hold a customer's engineering data and never enter this public repository.
+
+Options:
+- (a) The architect puts the five workbooks on this machine, outside any repository; the oracle
+  runs on them from that path and only the numbers and the files' hashes are recorded.
+- (b) Parity is measured on the workbooks Excel saved among the fork's own test files (about 250,
+  from Excel on Windows, on the Mac and online, their cached values Excel's): Veredas 1's oracle
+  and fork run on this machine give the baseline, and Veredas 2 must be equal or better file by
+  file.
+- (c) Both: (b) verifies the clause now, (a) is added to its evidence when the files come.
+
+**Recommended**: (c). **Taken meanwhile**: (b).
+
+**Reversible?** Yes: a corpus added to the evidence.

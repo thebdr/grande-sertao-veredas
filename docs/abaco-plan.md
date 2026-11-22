@@ -1,0 +1,225 @@
+# veredas-abaco: the plan
+
+The engineering spreadsheet of Veredas 2; screens say Ábaco. `docs/veredas-plan.md`
+("veredas-abaco: the engineering spreadsheet", decision 4) wins on intent; `.zen/contract.md`
+(P-007, then the `C-220`… clauses it becomes) wins on status. This file says what Ábaco holds,
+what it takes from Veredas 1 and what it leaves there, how the laws shape the port, in which order
+it is built, and the traps met on the way. Written 2026-11-22, before any code (law L6).
+
+## The role nobody covers
+**Ábaco computes and edits the engineering workbooks the suite works from, with no Office on the
+machine: a formula engine measured against Excel's own results, edits that leave every untouched
+byte of a workbook as it was, and Python for what a formula cannot do.**
+
+No other component answers this. Portal reads the plant and stores what it reads; it never opens
+a workbook. Supervisão draws a plant from its binding file and reads no engineering export (Q18).
+Comissionador checks plant data against tests. Oficina shows the grid as a tab (A6.1 of
+`docs/briefing/deliverables.md`) but computes nothing: the engine and the Python of each workspace
+run in a process of Ábaco's own. Without Ábaco every workbook the engineering of a plant lives in
+goes back to Excel on a Windows desk.
+
+## Scope
+- **The engine:** a fork of IronCalc (Rust, MIT OR Apache-2.0) modified for engineering work:
+  references to other workbooks kept as written and resolved by a policy, `TEXT` over numbers held
+  as text, user-defined functions through a host hook, and the file-layer fixes below. Accuracy is
+  measured against the values Excel cached in workbooks it saved, never claimed (the oracle).
+- **Links to other workbooks:** resolved from the cache the file carries (the default, Excel's own
+  behaviour with the linked book closed), from the linked workbook opened beside it, or asked of
+  the person; under a linked resolution, one log line per cell whose live value differs from the
+  cache.
+- **Byte-faithful edits** of a workbook Ábaco did not write: values, formulas, rows and columns,
+  sheets, names, widths and outlines; references re-spelled wherever they point; every part no edit
+  touched comes out byte for byte; a three-way check against what was read, an atomic write with a
+  backup, the source read again before the rename.
+- **The `.abaco` workspace file:** a workbook born in Ábaco, and at the same time the session that
+  works on other files: one zip of plain-text parts (sheets, macros, the references, decisions,
+  queue and log of its tools), readable with `unzip` and an editor; its export to `.xlsx`.
+- **Python:** macros that drive the model through the `abaco` module, custom functions callable
+  from a formula, CPython embedded in the executable, macros found nearest first (the workspace,
+  the person's library, the built-ins); one worker process per workspace, so a hung macro takes
+  down its workspace and nothing else (A6.1).
+- **Extensions**, inside their host and no member: `acerto` first, if it is carried (Q343).
+- **What Oficina draws** (A6.1: the grid as a tab, the Python editor, run with stop-on-error, a
+  debugger, forms): Oficina's surfaces, standing on what Ábaco's worker serves. What of the grid's
+  behaviour Ábaco carries is Q341.
+
+Not in scope: drawing anything (Oficina's); a plant connection (a sheet that reads plant data does
+so through portal, the row L5's map already holds); Excel as a renderer (Q342).
+
+## Rules
+- **Excel is the reference.** A formula's right value is the one Excel cached for it. Parity is a
+  number the oracle measures over workbooks Excel saved; a gap is counted and classified, never
+  waved through.
+- **A foreign workbook is patched, never rewritten.** The fork's writer regenerates every part
+  (Veredas 1 measured it: no part of five real workbooks survived its save); it is the `.abaco`
+  exporter only, never the save path of a file Ábaco did not write.
+- **A formula is spelled for the file** (`_xlfn.`, `_xlpm.`). Veredas 1's rule that a new formula
+  shape is done only once a real Excel opened a file Ábaco wrote stands; no Excel runs on this
+  machine, so that acceptance is owed on one that has it and each clause says which it owes.
+- **Everything visible.** The workspace file is plain text inside a zip; a failure names its cell,
+  row or file; the log is text a sheet can show.
+- **Plain text is TOML and states its schema** (the plan, "Versioning"; law L7): the `.abaco`
+  file's parts, the preferences, an edit file. Read through core's header reader
+  (`veredas_core::schema`), a newer version refused, never guessed.
+- **The engine's changes live in the fork**, one upstream-shaped commit each, listed in
+  `crates/veredas-abaco/ironcalc/VEREDAS-FORK.md`; Ábaco's own crate adds policy, never engine
+  behaviour, so each change can go upstream on its own.
+- **Opening runs nothing.** Opening a workbook or a workspace runs no Python. Veredas 1 loaded a
+  home's `functions` macro at open; here that waits for the security round's entry 32 (Q43): until
+  it is ruled, custom functions load on the person's command.
+- **No customer, site or vendor named.** This repository is public and Veredas 1's is private:
+  nothing carried names a plant, a customer or a company's file kinds, and no workbook of a real
+  plant is committed. The real workbooks are measured from a path outside the repository and only
+  their numbers and hashes are recorded.
+- **Typed errors** on the public surface; no `unwrap`/`expect` on an I/O path; tests may unwrap.
+- **Evidence is reality:** real workbooks Excel saved, opened, evaluated, patched, saved and read
+  again; a mock is never the evidence of a clause. One test file per capability, so a change to one
+  re-stales only its own recorded run.
+
+## How the laws shape the port
+- **L1, roots.** One member, `crates/veredas-abaco`, and one tool, `tools/abaco-oracle`. The fork's
+  two crates (`ironcalc_base`, `ironcalc`) sit inside the host's folder and are excluded by the root
+  manifest: they are not the suite's crates, so L1 lets them out of the workspace, and they are no
+  `veredas-*` or `orcl-*` crate, so nothing of the suite dodges the laws that way. Where the fork
+  lives for good is Q340.
+- **L2, naming.** Veredas 1's `veredas-abaco-py` is no component name (its `nome` would hold a
+  hyphen): the Python half folds into `veredas-abaco`, behind a cargo feature, with the executable.
+  Veredas 1's `veredas-abaco-grid` is not carried as a crate (Q341). `acerto` is a Python package
+  inside its host, with no cargo manifest, so it is no member (L2's rule for an extension).
+- **L3, versions.** `veredas-abaco` starts at `2.0.0-alpha.1`, core's MAJOR. The tool and the fork
+  version as they like; the fork keeps upstream's numbers (`0.9.1`), so a diff against upstream
+  shows only the changes.
+- **L5, direction.** The map already lets Ábaco use core and portal. It starts on core alone (the
+  header reader); portal arrives only with a sheet that reads plant data. The oracle, a tool, may
+  depend on anything.
+- **L6, plan first.** This file, committed before the crate.
+- **L7, stamps.** Every TOML part Ábaco writes states `format` (`veredas-abaco`,
+  `veredas-abaco-prefs`, `veredas-abaco-edits`) and `version` from 1. The fork's two crates hold no
+  TOML file but their manifests; upstream's bindings, which do, are not carried.
+
+## What it absorbs from Veredas 1
+Veredas 1's Ábaco (`/home/thebdr/code/Veredas`, branch `supervisao-plan`, its
+`docs/abaco-plan.md` and `docs/abaco-oracle.md`) was read in full before this plan. Its rulings AB1
+to AB16 were the architect's; those that stand are carried as rules above, those the suite changed
+are named below.
+
+| Veredas 1 | Veredas 2 | Why |
+|---|---|---|
+| `crates/ironcalc`: `base` and `xlsx`, upstream `15ecfec` (2026-11-02) plus fork changes 1 to 11 | `crates/veredas-abaco/ironcalc/{base,xlsx}`, excluded from the workspace (Q340, taken meanwhile) | the engine |
+| `crates/ironcalc`: the Python, WebAssembly and Node bindings, the web app, upstream's docs, the language and locale generators | not carried | the suite builds the engine and its file layer only; Ábaco's Python is its own (AB2) |
+| `veredas-abaco` `links`, `linkdiff`, `prefs`, `a1`, `workbook` | `veredas_abaco`, phase 1 | the link policy and the model the oracle and every later phase stand on |
+| `veredas-abaco` `patch` | phase 2 | byte-faithful edits |
+| `veredas-abaco` `abacofile`, `workspace` | phase 3, its JSON parts read into TOML | the workspace file |
+| `veredas-abaco` `homes`; `veredas-abaco-py` (module `abaco._core`, the `abaco` executable, its environment, console and command line) | phase 4, inside `veredas-abaco` behind a feature; the executable named `veredas-abaco` | L2; the plan names binaries `veredas-<nome>` |
+| `veredas-abaco` `view`, `grid` (the renderer-neutral core: navigation, selection, the editor's modes, the clipboard's TSV, filters) | Q341 | the grid's surface is Oficina's |
+| `veredas-abaco-grid` (egui) | not carried (Q341) | Oficina is the one native application |
+| `veredas-abaco` `excel` (the COM host, Windows only) | Q342 | a renderer beside Oficina |
+| `veredas-abaco` examples (the grid spike, cell and cache diffs, round trips) | not carried; what a phase needs becomes a subcommand of the oracle or a test | throwaway spikes and probes |
+| `abaco-oracle` | `tools/abaco-oracle` | test tooling (P-007) |
+| `python/veredas-acerto` | `crates/veredas-abaco/acerto/` if carried (Q343) | an extension inside its host (decision 4) |
+
+Changed on the way, each recorded in its clause's evidence note:
+- edition 2024 for Ábaco's crate and the oracle (the fork keeps upstream's 2021);
+- JSON becomes stamped TOML: the preferences (`abaco.json` becomes `abaco.toml`, in
+  `$XDG_CONFIG_HOME/veredas/` on Linux and `%APPDATA%\veredas\` on Windows), the `.abaco` file's
+  manifest, workbook and workspace parts, the patcher's edit list (Veredas 1's JSON lines);
+- the executable `abaco` becomes `veredas-abaco`; the Python import name stays `abaco`, the name
+  macros and extensions already use;
+- Veredas 1's window title (`abaco v…`, its brand rule) is not carried: Ábaco has no window, and
+  Oficina's tab says Ábaco;
+- custom functions are not loaded at open (Rules, "Opening runs nothing");
+- the person who decides is the architect; Veredas 1's documents said "the operator".
+
+## The fork
+Veredas 1 imported IronCalc as a git subtree with its 2 222 upstream commits, at upstream `15ecfec`,
+and made eleven changes on it, each one commit (its `VEREDAS-FORK.md`): external references
+`[n]Sheet!A1` kept as written and resolved through a pluggable resolver (1); external links read and
+written by the file layer (2); the linked resolver that opens the companion workbook (3); `TEXT`
+over numeric text (4); the external cells a workbook reads, listed (5); serde on the model's
+structure types (6); user-defined functions (7); inline strings decoding `_xHHHH_` (8);
+`Sheet!#REF!` lexed as the error (9); a package without `xl/styles.xml` (10); column outline groups
+(11). None was sent upstream.
+
+Taken meanwhile (Q340): the fork arrives as Veredas 1 left it, `base` and `xlsx` only, as a copy,
+not a subtree: one commit with upstream's files at `15ecfec`, checked against a clone of upstream
+at that commit (every difference one of the eleven), then the eleven changes as they stand.
+Upstream's own tests (in the fork's folder, with upstream's workbooks) run in the fork's own
+workspace, `cargo test --manifest-path crates/veredas-abaco/ironcalc/Cargo.toml`, before any fork
+change is pushed. Upstream has moved since (`main` at `f936620` on 2026-11-22): bringing it in is
+a step of its own, after parity, measured by the oracle before and after. A change goes upstream as
+a patch from a clone of upstream; opening the pull request is the architect's act.
+
+## The oracle and parity
+The oracle reads, for every formula cell, the value Excel cached beside it straight from the sheet
+XML (shared strings, rich text, shared formulas, `t="str"` handled), so the engine's own reader is
+never trusted for the expected side; it cross-checks that reading against an independent reader;
+then it opens the workbook through Ábaco under a link policy, evaluates it, and classifies every
+difference (external link, unknown function, error for value, value for error, error type, number
+beyond 1e-9 relative, text, boolean, empty against a value, number against text, spill, missing
+sheet). Its report is plain text.
+
+Veredas 1's numbers: on five real workbooks of a plant's engineering (two of about a million and a
+hundred thousand formulas, each linked to a configuration workbook, the two configuration
+workbooks, and an IO list), 1 217 533 formula cells, every one equal to Excel's under the cached
+resolution and under the linked one (its `docs/abaco-oracle.md`, "Phase B1b"). Those workbooks
+were never in Veredas 1's repository (they were copied from a cloud folder on the Windows desk)
+and are not on this machine: Q344.
+
+Taken meanwhile (Q344), the measure that can be made here: the corpus is every workbook among the
+fork's own test files that Microsoft Excel saved (its `docProps/app.xml` says so: about 250, from
+Excel on Windows, on the Mac and online), whose cached values are Excel's. The baseline is
+Veredas 1's own oracle and fork run on this machine over that corpus; Veredas 2 reaches parity
+when its numbers are equal or better, file by file. The five workbooks are run from a path outside
+the repository when the architect gives them, and their numbers join the evidence.
+
+## The module map
+`crates/veredas-abaco` (a library; the executable arrives with the worker in phase 4):
+- `book`: a workbook opened, evaluated and read, cell by cell, value and formula (Veredas 1's
+  `workbook`); `a1`: addresses and areas;
+- `links`, `linkdiff`, `prefs`: the link policy and its preference, the cache-against-live log;
+- `patch`: the byte-faithful patcher (phase 2);
+- `abacofile`, `workspace`: the `.abaco` file and the session it holds (phase 3);
+- `homes`, `py`, the worker and its command line (phase 4, the `python` feature);
+- `ironcalc/`: the fork, excluded; `acerto/`: the extension, if carried.
+
+`tools/abaco-oracle` (a library and its executable): the expected side, the comparison and its
+classes, the report, the corpus list, and the parity test.
+
+## Phases
+1. **The engine at parity** (P-007's exit). The fork in (above); `crates/veredas-abaco` at
+   `2.0.0-alpha.1` with `book`, `a1`, `links`, `linkdiff`, `prefs`; `tools/abaco-oracle`; the
+   baseline taken with Veredas 1's oracle, then Veredas 2's run, equal or better. Clauses: the
+   component, the link policy, the engine at parity.
+2. **Byte-faithful edits.** The patcher and its edit file; untouched parts byte for byte, caches
+   rewritten only where an edit moved the engine's value, references rippled through every sheet,
+   name, validation, conditional format, comment, drawing, chart and table; the output read back
+   through the engine. Proven on the corpus and on workbooks built for each structure; Excel's
+   acceptance owed where Excel runs.
+3. **The `.abaco` file.** Lossless round trip of every workbook of the corpus through the zip and
+   back; the workspace's parts; the `.xlsx` export.
+4. **Python.** CPython embedded (python-build-standalone, pinned, as Veredas 1 did: a release
+   carries the runtime beside the executable); the `abaco` module; custom functions; the macro
+   homes; the worker, one per workspace, and its command line; stop at the failing line with the
+   model inspectable. The interface Oficina's tab, editor and debugger speak to the worker is agreed
+   with Oficina's session (the review's entry 28, `docs/briefing/review.md`, puts one debugger
+   client on Oficina's side, shared with ORCL).
+5. **Acerto**, as Q343 rules.
+6. **The grid's model** for Oficina's tab, as Q341 rules.
+
+## On this machine
+- No Excel, no Office: Excel's acceptance of a written file is owed elsewhere (Rules).
+- Python 3.14.8 is installed with its shared library, but without `libpython3.14-dev`'s link name
+  `libpython3.14.so`, `pip`, `venv`, `ensurepip` or `pytest`. Embedding works against it once the
+  linker is shown the library (a link of one's own to `libpython3.14.so.1.0`, tried 2026-11-22).
+  Veredas 1's runtime, python-build-standalone, installs in the home folder from its official
+  source and brings all of these; phase 4 fetches it.
+
+## Open questions
+- Q340: where the IronCalc fork lives, and how its fixes go upstream.
+- Q341: what becomes of Veredas 1's grid, now that the grid's surface is Oficina's.
+- Q342: whether Veredas 1's Excel host is carried.
+- Q343: whether `acerto` is carried into this public repository, and how.
+- Q344: what parity is measured on while Veredas 1's five workbooks are not on this machine.
+
+## Traps
+(None yet: each one met goes here, with the commit that met it.)
