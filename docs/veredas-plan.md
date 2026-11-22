@@ -123,10 +123,13 @@ The single point of information exchange between Veredas and the outside world.
   ships a light, embeddable build (controlador embeds the full portal, not the light build: the
   architect, 2026-11-15).
 - From Veredas 1: `veredas-core`, `veredas-store`, `veredas-server`, `veredas-desktop`.
-- Decided in the briefing of November 2026, not built (`docs/portal-plan.md`): Oficina embeds a
-  portal too, and two portals speak portal's own HTTP interface (HTTPS later), commands on the
-  same link; the portal embedded in a controller serves OPC UA and Modbus/TCP to other systems
-  and keeps its recorded values in memory, as a fixed window.
+- Decided in the briefing of November 2026 (`docs/portal-plan.md`): Oficina embeds a portal too,
+  and two portals speak portal's own HTTP interface (HTTPS later), commands on the same link (not
+  built); the portal embedded in a controller keeps its store in memory as a fixed window (built,
+  C-090), records to the drive when the project says so (built, C-091), writes its store at a
+  fault (built, C-093), stores the controller's states and faults like any other data (built,
+  C-092), and serves OPC UA and Modbus/TCP to other systems (not built: it waits for core's
+  server, P-018); the grep over logs at rest is a library of portal's (built, C-094).
 
 ### veredas-controlador: the softPLC
 Programmed in ORCL (Open Rust Control Language), and in ladder later.
