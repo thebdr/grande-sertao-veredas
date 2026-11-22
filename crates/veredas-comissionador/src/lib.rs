@@ -10,6 +10,11 @@
 //! - [`parse`]: the stamp read by core's one header reader, then the file into the [`model`].
 //! - [`model`]: a test and its functions as the engine runs them, every part with its place.
 //! - [`check`]: a test and the function files it uses checked whole, every problem named.
+//! - [`eval`]: values and expressions, the comparisons across types, interpolation, built-ins.
+//! - [`plant`]: the engine's one door to portal: the catalog, rows in a window, the gated write
+//!   and send, the switch read and never set.
+//! - [`run`]: the interpreter: a checked test bound to a plant and run on a clock that is the
+//!   store's axis, live or replayed over a stored window.
 //!
 //! Nothing here names a device, a vendor or a product: a plant's tests are files like the
 //! reference's, kept outside the suite's code.
@@ -17,9 +22,12 @@
 use std::fmt;
 
 pub mod check;
+pub mod eval;
 pub mod lex;
 pub mod model;
 pub mod parse;
+pub mod plant;
+pub mod run;
 
 pub use check::{Checked, Counts, UsedFile, check_functions, check_test, load_functions, load_test};
 pub use model::{FunctionFile, Place, Span, TestFile};

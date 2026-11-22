@@ -100,16 +100,16 @@ function ItemRoute(dest: int, items: int) -> (delivered: int, rerouted: int) {
 Read, the test has eight steps, one branch, one function and three gated writes, its three
 `send`s. The engine is held to this: run live against the machine, every outcome for
 destination 4 is `FULL`, so `delivered` is 0, `rerouted` 20 and `ratio` 1, and the run passes at
-`summary`; its window replayed, the three sends are not sent, the function meets the same 20
+`summary`; its window replayed, the two sends it meets are noted not sent, the function meets the same 20
 outcomes in the store, and the replay passes with the same values. The engine's grammar test,
 `crates/veredas-comissionador/tests/grammar.rs`, loads these two blocks and holds each statement
 of this file about reading and checking against the reader; it keeps a copy of this text, so an
 edit here is an edit there.
 
-What is built, 2026-11-22: the reading and the check (`docs/comissionador-plan.md`, phase 1).
-What a run does with each part, the outcomes of the actions, the routes a run takes, the values
-and their comparisons, the clock, and the binding to a portal session, is the engine's, phases 2
-and 3, and nothing of it runs yet; this file states it as the engine will be held to it.
+What is built, 2026-11-22: the reading and the check (C-201), the engine run live against a portal
+session (C-202) and replayed over a stored window of one (C-203); every statement below about a
+run is held by their tests. What a run keeps on disk, its record and its acceptance report, is not
+built yet (`docs/comissionador-plan.md`, phase 4).
 
 ## The file, line by line
 
@@ -333,6 +333,12 @@ group.
 **No value yet.** Plant data with no row stamped at or before the clock, or a name not assigned
 yet, has no value. In a wait's condition, a comparison with no value does not hold yet; anywhere
 else it is the action's `error`, naming what had no value.
+
+**Shown.** A value is shown as the suite shows it: a whole number by its digits, a number by the
+shortest text that reads back to it (the worked example's `margin` is `0.050000000000000044`; a
+test that wants two places writes `round(margin, 2)`), a duration in the largest unit that divides
+it (`90s`, `2min`, `250ms`), a moment as the plant's clock to the millisecond, a truth value as
+`true` or `false`.
 
 ## Time
 

@@ -17,6 +17,8 @@ pub struct Checked {
     pub test: TestFile,
     /// The test file's name, as problems name it.
     pub file: String,
+    /// The test file's text: what a run quotes of it.
+    pub text: String,
     pub files: Vec<UsedFile>,
     pub counts: Counts,
 }
@@ -320,7 +322,7 @@ pub fn check_test(text: &str, file: &str, resolve: &dyn Fn(&str) -> Result<Strin
         }
     }
 
-    if out.is_empty() { Ok(Checked { test, file: file.to_string(), files, counts }) } else { Err(out) }
+    if out.is_empty() { Ok(Checked { test, file: file.to_string(), text: text.to_string(), files, counts }) } else { Err(out) }
 }
 
 /// The path problems name a used file by: from the test file's folder.

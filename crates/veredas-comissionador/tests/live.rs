@@ -1,0 +1,376 @@
+//! The engine, live (contract: C-202): a checked test bound to a portal session fed by the bench
+//! (its OPC UA server and the controller reference's machine over a real socket) and run step by
+//! step, every action, route, outcome and verdict as `docs/test-schema.md` says.
+
+mod common;
+
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
+use common::*;
+use veredas_comissionador::model::Outcome;
+use veredas_comissionador::run::{RunOptions, RunResult, RunVerdict};
+
+fn texts(r: &RunResult) -> Vec<String> {
+    r.reported.iter().map(|x| x.text.clone()).collect()
+}
+
+fn writes(r: &RunResult) -> Vec<(String, bool, String, bool)> {
+    r.writes.iter().map(|w| (w.text.clone(), w.sent, w.answer.clone(), w.ok)).collect()
+}
+
+/// Each step starts where the one before it ended: the clock never runs back.
+fn monotone(r: &RunResult) {
+    assert!(r.steps.windows(2).all(|w| w[1].start_ms == w[0].end_ms), "{:?}", r.steps);
+    assert!(r.steps.iter().all(|s| s.end_ms >= s.start_ms));
+    assert_eq!(r.steps.first().map(|s| s.start_ms), Some(r.start_ms));
+    assert_eq!(r.steps.last().map(|s| s.end_ms), Some(r.end_ms));
+}
+
+#[test]
+fn the_worked_example_passes_live_against_the_machine() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, true, 4));
+    let c = checked(&blocks("test-schema.md", "test").remove(0));
+    let (r, events) = run_with(&c, s.live(), &RunOptions::live()).unwrap();
+    let st = steps(&r);
+    assert_eq!(st.len(), 7, "{st:?}");
+    assert_eq!(st[0], "start #1 pass: sorter.command(code: 1): sent");
+    assert!(st[1].starts_with("running #1 pass: status.running == 1 held after "), "{}", st[1]);
+    assert_eq!(st[2..], [
+        "route #1 pass: delivered 0 · rerouted 20",
+        "ratio #1 pass: margin = 0.050000000000000044, ratio = 1",
+        "verdict #1 pass: 1 matched >= 0.95 -> release",
+        "release #1 pass: sorter.command(code: 0): sent",
+        "summary #1 pass: 3 reported",
+    ]);
+    assert_eq!((r.verdict, r.decided_at.as_deref(), r.reason.as_str()), (RunVerdict::Passed, Some("summary"), "`summary` passed the run"));
+    assert_eq!(texts(&r), ["ratio = 1", "margin = 0.050000000000000044", "rerouted = 20"]);
+    assert_eq!(r.criteria.len(), 1);
+    assert_eq!(r.criteria[0].text, "ratio: >= 0.95 -> release; 0.85 .. 0.95 -> retry route max 1; else -> fail_log");
+    assert_eq!((r.criteria[0].measured.clone(), r.criteria[0].result.as_str()), (vec!["ratio = 1".to_string()], ">= 0.95 -> release"));
+    assert_eq!(writes(&r), [
+        ("sorter.command(code: 1)".to_string(), true, "sent".to_string(), true),
+        ("sorter.command(code: 0)".to_string(), true, "sent".to_string(), true),
+    ]);
+    monotone(&r);
+    // The plant saw the stop the test sent last.
+    assert!(wait(Duration::from_secs(5), || bench.channel("machine").unwrap().status().controller.unwrap().registers["running"] == 0));
+    // Every step's start and end went to the listener, then the verdict.
+    let started = events.iter().filter(|e| matches!(e, veredas_comissionador::run::Event::StepStarted { .. })).count();
+    let ended = events.iter().filter(|e| matches!(e, veredas_comissionador::run::Event::StepEnded(_))).count();
+    assert_eq!((started, ended), (7, 7));
+    assert!(matches!(events.last(), Some(veredas_comissionador::run::Event::Ended { verdict: RunVerdict::Passed, .. })));
+}
+
+#[test]
+fn the_worked_example_fails_where_the_destination_is_free() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, true, 1));
+    // The example's function follows the destination the replies name.
+    let c = checked(&blocks("test-schema.md", "test").remove(0).replace("ItemRoute(dest: 4", "ItemRoute(dest: 1"));
+    let (r, _) = run_with(&c, s.live(), &RunOptions::live()).unwrap();
+    let names: Vec<&str> = r.steps.iter().map(|s| s.step.as_str()).collect();
+    assert_eq!(names, ["start", "running", "route", "ratio", "verdict", "fail_log"]);
+    assert!(r.steps[2].detail.ends_with(" · rerouted 0"), "{}", r.steps[2].detail);
+    assert_eq!(r.criteria[0].result, "else -> fail_log");
+    assert_eq!(texts(&r), ["rerouted 0/20"]);
+    assert_eq!((r.verdict, r.decided_at.as_deref(), r.reason.as_str()), (RunVerdict::Failed, Some("fail_log"), "`fail_log` failed the run"));
+    assert_eq!(writes(&r).len(), 2);
+    monotone(&r);
+}
+
+#[test]
+fn a_gated_write_lands_and_a_wait_meets_what_it_caused() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, true, 4));
+    let c = checked(&test_of(concat!(
+        "  step now   wait plc_main.level == 0.9 timeout 1s\n",
+        "  step go    write plc_main.run := 1\n",
+        "  step fast  wait plc_main.speed >= 2.0 timeout 5s\n",
+        "  step look  read plc_main.speed, plc_main.level -> s, l\n",
+        "  step ok    check s == 2.0 and l > 0.5 as \"speed reached\"\n",
+        "  step low   check s < 1\n",
+    )));
+    let (r, _) = run_with(&c, s.live(), &RunOptions::live()).unwrap();
+    let st = steps(&r);
+    assert_eq!(st[0], "now #1 pass: plc_main.level == 0.9 held after 0s", "a condition that holds as the step starts");
+    assert_eq!(st[1], "go #1 pass: plc_main.run := 1: Good");
+    let after: i64 = st[2].strip_prefix("fast #1 pass: plc_main.speed >= 2.0 held after ").unwrap().strip_suffix("ms").unwrap().parse().unwrap();
+    assert!((100..2000).contains(&after), "the reaction sets the speed 100 ms after the write: {after}");
+    assert_eq!(st[3..], ["look #1 pass: s = 2, l = 0.9", "ok #1 pass: speed reached: pass", "low #1 fail: s < 1: fail (s = 2)"]);
+    assert_eq!(tag(&bench, "run"), "Int32(1)", "the write reached the plant");
+    assert_eq!((r.verdict, r.decided_at.as_deref(), r.reason.as_str()), (RunVerdict::Failed, Some("low"), "`low` failed: s < 1: fail (s = 2)"));
+    let crit: Vec<(String, Vec<String>, String)> = r.criteria.iter().map(|c| (c.text.clone(), c.measured.clone(), c.result.clone())).collect();
+    assert_eq!(crit, [
+        ("speed reached".to_string(), vec!["s = 2".to_string(), "l = 0.9".to_string()], "pass".to_string()),
+        ("s < 1".to_string(), vec!["s = 2".to_string()], "fail".to_string()),
+    ]);
+    monotone(&r);
+}
+
+#[test]
+fn the_binding_refuses_before_anything_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, false, 4));
+    let c = checked(&format!(
+        "{HEAD}test \"t\" {{\n  id T\n  portal another hall\n  modes replay\n  step a write plc_main.run := 1\n  step b write plc_main.speed := 1\n  step c send sorter.nothing()\n  step d send elsewhere.command(code: 1)\n  step e check ghost.x == 1 and plc_main.nothing == 1\n  step f await nowhere -> x\n}}\n"
+    ));
+    let e = run_with(&c, s.live(), &RunOptions::live()).unwrap_err();
+    assert_eq!(e.0, [
+        "the test is written for the portal session `another hall`, and this one is `the press hall`",
+        "the test runs replay, not live",
+        "`plc_main.speed` is not an OPC UA tag the session marks writable",
+        "`sorter.nothing` is no channel and message of the session",
+        "`elsewhere.command` is no channel and message of the session",
+        "`nowhere` is no table of the session",
+        "`ghost` is no table of the session",
+        "`plc_main` has no column `nothing`",
+        "the test writes, and portal's write switch is off",
+    ]);
+    // A test that writes is refused while the switch is off, and nothing reached the plant.
+    let c = checked(&test_of("  step a write plc_main.run := 1\n"));
+    let e = run_with(&c, s.live(), &RunOptions::live()).unwrap_err();
+    assert_eq!(e.0, ["the test writes, and portal's write switch is off"]);
+    assert_eq!(e.to_string(), "the run is refused: the test writes, and portal's write switch is off");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(tag(&bench, "run"), "Int32(0)");
+    // A test that only reads runs with the switch off.
+    let c = checked(&test_of("  step a check plc_main.level == 0.9\n"));
+    assert_eq!(run_with(&c, s.live(), &RunOptions::live()).unwrap().0.verdict, RunVerdict::Passed);
+}
+
+#[test]
+fn routes_retries_and_ends_take_the_run_where_the_file_says() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, false, 4));
+    let go = |body: &str| run_with(&checked(&test_of(body)), s.live(), &RunOptions::live()).unwrap().0;
+    // A retry taken twice, then the else.
+    let r = go("  step init script { n = 0 }\n  step bump script { n += 1 }\n  step v branch n {\n    1 .. 2 -> retry bump max 2\n    else -> done\n  }\n  step done report n, \"n is {n}\"\n");
+    assert_eq!(steps(&r), [
+        "init #1 pass: n = 0",
+        "bump #1 pass: n = 1",
+        "v #1 pass: 1 matched 1 .. 2 -> retry bump max 2",
+        "bump #2 pass: n = 2",
+        "v #2 pass: 2 matched 1 .. 2 -> retry bump max 2",
+        "bump #3 pass: n = 3",
+        "v #3 pass: 3 matched else -> done",
+        "done #1 pass: 2 reported",
+    ]);
+    assert_eq!(texts(&r), ["n = 3", "n is 3"]);
+    assert_eq!((r.verdict, r.reason.as_str()), (RunVerdict::Passed, "the run passed its last step"));
+    assert_eq!(r.criteria.iter().map(|c| c.result.as_str()).collect::<Vec<_>>(), ["1 .. 2 -> retry bump max 2", "1 .. 2 -> retry bump max 2", "else -> done"]);
+    // A retry spent: the step fails with the reason, routed by its `on fail` or failing the run.
+    let body = "  step init script { n = 0 }\n  step bump script { n += 1 }\n  step v branch n {\n    1 .. 5 -> retry bump max 1\n  }\n";
+    let r = go(body);
+    assert_eq!(steps(&r)[4], "v #2 pass: 2 matched 1 .. 5 -> retry bump max 1");
+    assert_eq!((r.verdict, r.decided_at.as_deref(), r.reason.as_str()), (RunVerdict::Failed, Some("v"), "`v`: the retry of `bump` is spent after 1"));
+    let r = go(&format!("{body}         on fail -> rescue\n  step skipped stop fail\n  step rescue stop pass \"rescued after {{n}}\"\n"));
+    assert_eq!((r.verdict, r.decided_at.as_deref(), r.reason.as_str()), (RunVerdict::Passed, Some("rescue"), "rescued after 2"));
+    // No arm matched: a failure; `on fail` routes it, `stop` ends with its verdict.
+    let r = go("  step v branch 7 {\n    1 -> v\n  }\n");
+    assert_eq!((r.verdict, r.reason.as_str()), (RunVerdict::Failed, "`v` failed: 7 matched no arm"));
+    let r = go("  step v branch 7 {\n    1 -> v\n  }\n         on fail -> stop pass\n");
+    assert_eq!(r.verdict, RunVerdict::Passed);
+    // `on pass` skips what lies between; past the last step the run passes.
+    let r = go("  step a script { x = 1 }\n         on pass -> c\n  step b stop fail\n  step c report x\n");
+    assert_eq!(r.steps.iter().map(|s| s.step.as_str()).collect::<Vec<_>>(), ["a", "c"]);
+    assert_eq!(r.verdict, RunVerdict::Passed);
+    // A script's `fail` fails the run; a fault aborts it, unless routed.
+    let r = go("  step s script {\n    if 2 > 1 { fail \"too slow: {2 * 3}\" }\n  }\n");
+    assert_eq!((r.verdict, r.reason.as_str()), (RunVerdict::Failed, "`s` failed: too slow: 6"));
+    let r = go("  step s script { x = 1 / 0 }\n");
+    assert_eq!((r.verdict, r.reason.as_str()), (RunVerdict::Aborted, "`s`: a division by zero"));
+    assert_eq!(r.steps[0].outcome, Some(Outcome::Error));
+    let r = go("  step s script { x = 1 / 0 }\n         on error -> e\n  step e report \"handled\"\n");
+    assert_eq!((r.verdict, texts(&r)), (RunVerdict::Passed, vec!["handled".to_string()]));
+    // Several actions: the first that does not pass ends the step; a report always passes.
+    let r = go("  step s report later\n         check 1 == 2\n         report \"never\"\n  step t script { later = 1 }\n");
+    assert_eq!(texts(&r), ["later: `later` has no value yet"]);
+    assert_eq!(steps(&r), ["s #1 fail: 1 reported · 1 == 2: fail ()"]);
+    // A run with no end in sight is aborted, not hung.
+    let r = go("  step a script { x = 1 }\n         on pass -> a\n");
+    assert_eq!((r.verdict, r.reason.as_str()), (RunVerdict::Aborted, "more than 100000 steps without an end"));
+}
+
+#[test]
+fn timeouts_the_run_s_bound_and_the_tester_s_stop() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, false, 4));
+    let go = |text: &str, opts: &RunOptions| run_with(&checked(text), s.live(), opts).unwrap().0;
+    let r = go(&test_of("  step slow wait plc_main.speed >= 3.0 timeout 300ms\n"), &RunOptions::live());
+    assert_eq!(steps(&r), ["slow #1 timeout: plc_main.speed >= 3.0 did not hold within 300ms"]);
+    assert_eq!((r.verdict, r.reason.as_str()), (RunVerdict::Aborted, "`slow` timed out: plc_main.speed >= 3.0 did not hold within 300ms"));
+    assert_eq!(r.end_ms - r.start_ms, 300, "the clock moves to the bound");
+    let r = go(&test_of("  step slow wait plc_main.speed >= 3.0 timeout 300ms\n             on timeout -> next\n  step next report \"routed\"\n"), &RunOptions::live());
+    assert_eq!((r.verdict, texts(&r)), (RunVerdict::Passed, vec!["routed".to_string()]));
+    let r = go(&format!("{HEAD}test \"t\" {{\n  id T\n  timeout 500ms\n  step w wait plc_main.speed >= 3.0\n}}\n"), &RunOptions::live());
+    assert_eq!((r.verdict, r.decided_at.as_deref(), r.reason.as_str()), (RunVerdict::Aborted, Some("w"), "the run's bound of 500ms passed"));
+    assert_eq!(steps(&r), ["w #1 cut short: "]);
+    let opts = RunOptions::live();
+    let stop = opts.stop.clone();
+    let text = test_of("  step a report \"before\"\n  step w wait plc_main.speed >= 3.0\n");
+    let r = std::thread::scope(|sc| {
+        sc.spawn(|| {
+            std::thread::sleep(Duration::from_millis(400));
+            stop.store(true, Ordering::SeqCst);
+        });
+        go(&text, &opts)
+    });
+    assert_eq!((r.verdict, r.decided_at.as_deref(), r.reason.as_str()), (RunVerdict::Aborted, Some("w"), "stopped by the tester"));
+    assert_eq!(steps(&r), ["a #1 pass: 1 reported", "w #1 cut short: "]);
+    // A wait for a duration.
+    let t0 = std::time::Instant::now();
+    let r = go(&test_of("  step d wait 300ms\n"), &RunOptions::live());
+    assert!(t0.elapsed() >= Duration::from_millis(300));
+    assert_eq!((steps(&r), r.end_ms - r.start_ms), (vec!["d #1 pass: waited 300ms".to_string()], 300));
+}
+
+#[test]
+fn an_event_moves_the_clock_to_its_row_and_a_read_without_a_value_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, true, 4));
+    let c = checked(&test_of(concat!(
+        "  step ev   await announce where a.lane == 2 timeout 5s -> a\n",
+        "  step lane check a.lane == 2 and a.source == \"sorter\" and a.time <= now()\n",
+        "  step none await announce where a.lane == 7 timeout 400ms -> b\n",
+        "            on timeout -> ask\n",
+        "  step ask  read answer.dest -> d\n",
+    )));
+    let (r, _) = run_with(&c, s.live(), &RunOptions::live()).unwrap();
+    let st = steps(&r);
+    assert!(st[0].starts_with("ev #1 pass: a row of `announce` after "), "{}", st[0]);
+    assert_eq!(st[1], "lane #1 pass: a.lane == 2 and a.source == \"sorter\" and a.time <= now(): pass");
+    assert_eq!(st[2], "none #1 timeout: no row of `announce` within 400ms");
+    assert_eq!(st[3], "ask #1 error: `answer.dest` has no value yet", "portal stores no row of what it sends");
+    assert_eq!((r.verdict, r.reason.as_str()), (RunVerdict::Aborted, "`ask`: `answer.dest` has no value yet"));
+    // The event's step ends at the row's own stamp.
+    assert_eq!(r.steps[0].end_ms, r.steps[1].start_ms);
+    monotone(&r);
+}
+
+#[test]
+fn a_write_the_switch_or_the_plant_refuses_mid_run_ends_its_step_in_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, true, 4));
+    let c = checked(&test_of("  step d wait 400ms\n  step w write plc_main.run := 1\n"));
+    let l = s.live();
+    let r = std::thread::scope(|sc| {
+        sc.spawn(|| {
+            std::thread::sleep(Duration::from_millis(150));
+            s.set_writes_armed(false);
+        });
+        run_with(&c, l, &RunOptions::live()).unwrap().0
+    });
+    assert_eq!(steps(&r)[1], "w #1 error: plc_main.run := 1: writes are turned off for this project");
+    assert_eq!(writes(&r), [("plc_main.run := 1".to_string(), true, "writes are turned off for this project".to_string(), false)]);
+    assert_eq!((r.verdict, r.reason.as_str()), (RunVerdict::Aborted, "`w`: plc_main.run := 1: writes are turned off for this project"));
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(tag(&bench, "run"), "Int32(0)");
+    // The plant away: the server stopped, the write refused in portal's words.
+    s.set_writes_armed(true);
+    bench.stop();
+    std::thread::sleep(Duration::from_millis(500));
+    let (r, _) = run_with(&c, s.live(), &RunOptions::live()).unwrap();
+    let w = &r.writes[0];
+    assert!(w.sent && !w.ok, "{w:?}");
+    assert_eq!(r.steps[1].outcome, Some(Outcome::Error));
+    assert_eq!(r.verdict, RunVerdict::Aborted);
+}
+
+#[test]
+fn functions_take_typed_inputs_give_their_outputs_and_keep_their_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, true, 4));
+    let f = concat!(
+        "format = \"veredas-functions\"\nversion = 1\n\n",
+        "function Twice(x: float) -> (y: float) {\n  y = x * 2\n}\n",
+        "function Half(x: int) -> (y: int) {\n  if x > 5 { y = x - 4 }\n}\n",
+        "function Never() -> (o: int) {\n  reads outcome\n  timeout 300ms\n  r = await outcome where r.dest == 99\n  o = 1\n}\n",
+        "function Wait() {\n  reads plc_main\n  wait plc_main.speed >= 9.0 timeout 200ms\n}\n",
+        "function Sum(n: int) -> (s: int, t: int) {\n  s = 0\n  for i in 1 .. n { s += i }\n  t, u = Pair()\n  for j in 3 .. 1 { s = 1000 }\n}\n",
+        "function Pair() -> (a: int, b: int) {\n  a = 7\n  b = 8\n}\n",
+    );
+    let go = |body: &str| run_with(&checked_with(&test_of(&format!("  use f.fn\n{body}")), f), s.live(), &RunOptions::live()).unwrap().0;
+    let r = go("  step a call Twice(x: 2) -> y\n  step b call Sum(n: 4) -> s, t\n  step c report y, s, t\n");
+    assert_eq!(steps(&r)[..2], ["a #1 pass: y 4".to_string(), "b #1 pass: s 10 · t 7".to_string()]);
+    assert_eq!(texts(&r), ["y = 4", "s = 10", "t = 7"]);
+    let r = go("  step a call Twice(x: \"2\") -> y\n");
+    assert_eq!(steps(&r), ["a #1 error: Twice: input `x` takes float, not a text"]);
+    let r = go("  step a call Half(x: 1) -> y\n");
+    assert_eq!(steps(&r), ["a #1 error: Half: output `y` was never assigned"]);
+    let r = go("  step a call Half(x: 8) -> y\n  step b report y\n");
+    assert_eq!(texts(&r), ["y = 4"]);
+    let r = go("  step a call Never() -> o\n");
+    assert_eq!(steps(&r), ["a #1 timeout: Never: no row of `outcome` in time"]);
+    assert_eq!((r.verdict, r.end_ms - r.start_ms), (RunVerdict::Aborted, 300));
+    let r = go("  step a call Wait()\n");
+    assert_eq!(steps(&r), ["a #1 timeout: Wait: plc_main.speed >= 9.0 did not hold in time"]);
+}
+
+#[test]
+fn values_compute_and_compare_as_the_reference_says() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, false, 4));
+    let go = |body: &str| run_with(&checked(&test_of(body)), s.live(), &RunOptions::live()).unwrap().0;
+    let r = go(concat!(
+        "  step e script {\n",
+        "    a = 7 / 2; b = 7 % 3; c = 2 + 0.5; d = 90s - 30s; e = 2s * 3; f = 3s / 1500ms\n",
+        "    g = \"4\" == 4; h = \" 4 \" == 4.0; i = \"x\" == 4; j = \"x\" != 4; k = true == 1; l = false < true\n",
+        "    m = round(1.25, 1); n = seconds(1500ms); o = min(3, 1, 2); p = max(2.5, 1); q = int(3.9)\n",
+        "    r = float(\"2.5\"); s = text(12); t = abs(-3); u = \"{s}{t}\"; v = round(2.5); w = 1 - 2 * 3\n",
+        "    x = now() - now(); y = not (1 > 2 or 2 > 3) and 1 < 2; z = -(-1)\n",
+        "  }\n",
+    ));
+    assert_eq!(
+        steps(&r),
+        ["e #1 pass: a = 3.5, b = 1, c = 2.5, d = 1min, e = 6s, f = 2, g = true, h = true, i = false, j = true, k = true, l = true, m = 1.3, n = 1.5, o = 1, p = 2.5, q = 3, r = 2.5, s = 12, t = 3, u = 123, v = 3, w = -5, x = 0s, y = true, z = 1"]
+    );
+    let one = |e: &str| steps(&go(&format!("  step e script {{ x = {e} }}\n"))).remove(0);
+    assert_eq!(one("\"x\" < 4"), "e #1 error: \"x\" is no number to order against 4");
+    assert_eq!(one("1 + \"a\""), "e #1 error: `+` does not take a whole number and a text");
+    assert_eq!(one("true and 1"), "e #1 error: `and` takes truth values, not a whole number");
+    assert_eq!(one("1s == 1"), "e #1 error: a duration and a whole number do not compare");
+    assert_eq!(one("9223372036854775807 + 1"), "e #1 error: a whole number past its range");
+    assert_eq!(one("int(\"x\")"), "e #1 error: \"x\" is no whole number");
+    // Plant data has its type as portal stores it, a text read as a number where compared with one.
+    let r = go("  step c check plc_main.level > 0.5 and plc_main.run == 0 and plc_main.run == false\n");
+    assert_eq!(r.verdict, RunVerdict::Passed);
+}
+
+#[test]
+fn a_live_read_waits_until_its_moment_is_stored() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, false, 4));
+    let c = checked(&test_of("  step c check readings.temp == 21.5\n"));
+    // A line stamped about 40 ms before the run starts, written 60 ms after it: read, because the
+    // run reads its start only once it is 250 ms past.
+    let r = std::thread::scope(|sc| {
+        sc.spawn(|| {
+            std::thread::sleep(Duration::from_millis(60));
+            log_line(dir.path(), 100, "21.5");
+        });
+        run_with(&c, s.live(), &RunOptions::live()).unwrap().0
+    });
+    assert_eq!(steps(&r), ["c #1 pass: readings.temp == 21.5: pass"]);
+    // A line stamped after the run's moment is not that moment's: the check reads the value before it.
+    let r = std::thread::scope(|sc| {
+        sc.spawn(|| {
+            std::thread::sleep(Duration::from_millis(60));
+            log_line(dir.path(), -2000, "30.5");
+        });
+        run_with(&checked(&test_of("  step c check readings.temp == 21.5\n")), s.live(), &RunOptions::live()).unwrap().0
+    });
+    assert_eq!(steps(&r), ["c #1 pass: readings.temp == 21.5: pass"]);
+}

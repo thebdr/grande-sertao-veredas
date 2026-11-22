@@ -7,17 +7,27 @@ publish = false
 description = "The testing platform of Veredas 2 (Comissionador): a plant's acceptance tests, one plain-text file each, run through portal live or replayed, every run ending in its report"
 
 # A library first, one executable on top (docs/comissionador-plan.md, "Rules"; tests/component.rs
-# asks cargo what it would build). Depends on core and, once the engine runs tests, on portal
-# alone (law L5, the map); its tests will dev-depend on the bench, which plays the plant.
+# asks cargo what it would build). Depends on core and portal alone (law L5, the map); its tests
+# dev-depend on the bench, which plays the plant.
 
 [dependencies]
 # The one header reader every file of the suite shares: a test file's and a function file's stamp.
 veredas-core = { path = "../veredas-core" }
+# The plant, through a portal session: its store, its gated write and send, its switch read.
+veredas-portal = { path = "../veredas-portal" }
+# A write's answer is awaited on a runtime of the engine's own, one thread.
+tokio = { workspace = true }
+# The store's axis read as a date and a time in what a run shows.
+chrono = { workspace = true }
+# Typed errors on the public surface.
+thiserror = { workspace = true }
+# The store's typed cells.
+serde_json = { workspace = true }
 
 [dev-dependencies]
+# The bench plays the plant: its OPC UA server and the controller reference's machine.
+veredas-maquinar = { path = "../veredas-maquinar" }
 # Scratch directories, removed when a test ends.
 tempfile = { workspace = true }
-# cargo metadata's output (tests/component.rs).
-serde_json = { workspace = true }
 # The Rust lexer: the component test reads the crate's sources as the compiler's tokens.
 proc-macro2 = { workspace = true }

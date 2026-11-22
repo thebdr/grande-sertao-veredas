@@ -5,8 +5,9 @@ The testing platform of Veredas 2; screens say **Comissionador**. `docs/veredas-
 (P-006, then the `C-2xx` clauses it becomes) wins on status. This file says what comissionador
 holds, how a test runs against a plant, what the engine offers Oficina, in which order it lands,
 and the traps met on the way. The test file and the function file are `docs/test-schema.md`; the
-look is `docs/design/comissionador/`. Phase 1, the reading and the check, is built
-(C-200, C-201); the engine is not.
+look is `docs/design/comissionador/`. Phases 1 to 3 are built: the reading and the check (C-200,
+C-201) and the engine, live and replayed (C-202, C-203); the run record, the report and the
+executable are not.
 
 ## The role nobody covers
 **Comissionador runs a plant's acceptance tests: a test, written as one plain-text file, drives
@@ -231,6 +232,15 @@ Recorded as the build meets them.
   `retry <step> max <n>` and is also a built-in call, so `max(a, b)` could not be written. The
   route reads `max` by its place; the reserved list is the reader's and the reference's at once,
   held equal by the grammar test.
+- **A read waits for its moment to be stored** (C-202). The session's pump flushes every 50 ms,
+  so a live run reads a moment only once it is 250 ms past; read sooner, the rows stamped just
+  before it are not there yet, and a live run and its replay would disagree.
+- **A fixture must reply to the destination the test follows** (C-202). The worked example's
+  function counts outcomes for destination 4; a bench whose replies name another destination makes
+  it wait out its 60 s bound, which is right and reads like a hang.
+- **A column that is always empty is read back to the table's first row** (C-202, named, not
+  built): the latest value passes holes, so a rule's optional group that never matches makes every
+  read of it a scan of the table.
 - **A step is not named after an action.** The design names a step `report`; the reader refuses
   the language's words as names, so the reference's step is `summary`. A name that is an action
   would make a step's first line read two ways.
