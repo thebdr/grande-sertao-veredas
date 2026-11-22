@@ -72,7 +72,7 @@ browsers) through **portal**. Two kinds of exception:
   network; neither runs during production.
 - **Controlador's real-time path** goes straight to the fieldbus through its NIC. Everything
   else it does rides an embedded portal, the full one with its store and its server (the
-  operator, 2026-11-15; this plan first said "portal-lite"); its hardware configuration embeds
+  architect, 2026-11-15; this plan first said "portal-lite"); its hardware configuration embeds
   aranha.
 
 `veredas-core` sits underneath everything as a library, not a service.
@@ -81,7 +81,7 @@ browsers) through **portal**. Two kinds of exception:
 target over SSH, where it starts and stops the components' executables, copies files and carries
 their loopback interfaces inside the connection. Plant data and commands still go through portal:
 Oficina embeds a portal, which talks to the portal embedded in controlador over portal's own HTTP
-interface (the operator, 2026-11-13 to 2026-11-16; `docs/oficina-plan.md`).
+interface (the architect, 2026-11-13 to 2026-11-16; `docs/oficina-plan.md`).
 
 ## Components
 
@@ -117,7 +117,7 @@ The single point of information exchange between Veredas and the outside world.
   decoding rules (plain text, versioned, in a project folder, as an OPC rule maps tags and a
   log rule captures fields), its data stored like any other protocol's, never vendor code;
   ships a light, embeddable build (controlador embeds the full portal, not the light build: the
-  operator, 2026-11-15).
+  architect, 2026-11-15).
 - From Veredas 1: `veredas-core`, `veredas-store`, `veredas-server`, `veredas-desktop`.
 - Decided in the briefing of November 2026, not built (`docs/portal-plan.md`): Oficina embeds a
   portal too, and two portals speak portal's own HTTP interface (HTTPS later), commands on the
@@ -129,7 +129,7 @@ Programmed in ORCL (Open Rust Control Language), and in ladder later.
 - Scope: ORCL programs in a deterministic scan cycle with watchdog and safe outputs; direct
   NIC access for real-time communication; PLC Hardware Configuration built on an embedded
   aranha; an embedded portal for logging and non-real-time protocols (the full portal: the
-  operator, 2026-11-15).
+  architect, 2026-11-15).
 - Rules: the only production component allowed past portal, and only on the real-time path;
   everything else goes through its embedded portal; ORCL stays a translatable subset of real
   Rust, with its own SemVer; controlador states which ORCL versions it runs.
@@ -190,7 +190,7 @@ For engineering work where Excel gets too tight.
 
 ### veredas-supervisao: the web interface
 The suite's web interface: a plant watched and operated from a browser. Oficina shows its pages
-inside the workbench (the operator, 2026-11-13; this plan first said "the unified web interface
+inside the workbench (the architect, 2026-11-13; this plan first said "the unified web interface
 for the whole suite").
 - Scope: layouts in 2D (SVG) and 3D (glTF) sharing one set of object IDs; objects that move
   live across the layout; dashboards, charts and tables, absorbing Veredas 1's dashboard;
@@ -220,7 +220,7 @@ every component.
   embeds a portal and reaches a remote target over SSH; only Oficina and the target change a
   controller's state; translatable from day one; GPLv3, the crates it links under a permissive
   licence; every test drives the real interface.
-- New in Veredas 2 (the operator, 2026-11-13). Plan: `docs/oficina-plan.md`.
+- New in Veredas 2 (the architect, 2026-11-13). Plan: `docs/oficina-plan.md`.
 
 ### A panel HMI: still to be planned
 A separate, lighter runtime for small operator panels, whose screens Oficina's HMI creator edits.
@@ -266,7 +266,7 @@ review deck is committed; no session log; the plan wins on intent, the contract 
 maquinar may use aranha's codecs.
 
 2026-11-05, porting core (`docs/questions.md` Q8, Q9): GENIBELT does not belong in core. The
-operator: "genibelt is a machine my company manufactures and the interface via TCP socket
+architect: "genibelt is a machine my company manufactures and the interface via TCP socket
 should only be something veredas-portal manages, using encoding and decoding rules and storing
 the data in the database, as per the other protocols. veredas shall be a generic platform to
 build on top of, which reliably manages communication with the outside world, while being
@@ -277,11 +277,11 @@ configurable framing now": core holds no frame layout; a framing engine runs wha
 versioned channel file describes (`docs/channel-schema.md`), and GENIBELT's layout is such a
 file, outside the suite's code.
 
-2026-11-09, planning supervisão (`docs/questions.md` Q18–Q21, the operator): Veredas 1's parsing
+2026-11-09, planning supervisão (`docs/questions.md` Q18–Q21, the architect): Veredas 1's parsing
 of one company's engineering exports is not carried at all; supervisão starts the portal sessions
 in its own process; local, no accounts; the 3D view comes later.
 
-2026-11-13 to 2026-11-19, the briefing on Oficina and controlador (the operator;
+2026-11-13 to 2026-11-19, the briefing on Oficina and controlador (the architect;
 `docs/oficina-plan.md`, `docs/controlador-plan.md`, `docs/robustness.md`, `docs/questions.md`
 Q31–Q45; the list that was reviewed and its review are kept in `docs/briefing/`):
 1. A new component, `veredas-oficina`: the one native application, for every component.

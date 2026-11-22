@@ -819,7 +819,7 @@ pub fn load(text: &str, base: &Path, universe: &Universe, project_name: &str) ->
         });
     }
 
-    // Decided (docs/questions.md Q25, the operator, 2026-11-15: layouts drawn in Inkscape): the elements the page draws an object on, where it
+    // Decided (docs/questions.md Q25, the architect, 2026-11-15: layouts drawn in Inkscape): the elements the page draws an object on, where it
     // can measure and paint them as drawn (svg::DRAWN, svg::AROUND).
     if let Some(layout) = &layout {
         let bound: std::collections::BTreeSet<&str> = objects.iter().filter(|o| layout.ids.contains_key(&o.id)).map(|o| o.id.as_str()).collect();
@@ -960,7 +960,7 @@ fn compile_panel(place: &str, kind: &str, t: toml::Value, objects: &[Object], u:
             let objs = resolve_objects(place, &p.objects, objects)?;
             for i in &objs {
                 numeric_object(place, *i, objects)?;
-                // Decided (docs/questions.md Q24, the operator, 2026-11-15): a timeline replays an object's own
+                // Decided (docs/questions.md Q24, the architect, 2026-11-15): a timeline replays an object's own
                 // series alone; a rule over another series has no history read here, so such an
                 // object is refused on a timeline rather than drawn without that rule's states.
                 // A rule naming the object's own series (its source, series and key as the

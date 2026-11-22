@@ -1,14 +1,14 @@
 # Veredas briefing of 13 to 15 November 2026: what it shall deliver
 
 **A record, kept as it was reviewed.** This is the list of what the briefing of 13 to 15 November
-2026 decided, as the assistant wrote it for the operator and as five reviewers attacked it on 15
+2026 decided, as the assistant wrote it for the architect and as five reviewers attacked it on 15
 November (`docs/briefing/review.md`, whose entries cite the item numbers below). It is not updated.
-The operator's rulings on the review changed several items (among them B2.2, B2.5, B3.6, B5.4,
+The architect's rulings on the review changed several items (among them B2.2, B2.5, B3.6, B5.4,
 B7.3, B7.4 and D1); the current word is in `docs/oficina-plan.md`, `docs/controlador-plan.md`,
 `docs/robustness.md` and the component plans, and what is open is in `docs/questions.md`.
 
-Every decision below was made by the operator in interview rounds. Items marked (reading) are the
-assistant's interpretation, not the operator's words. Items marked (open) were never asked.
+Every decision below was made by the architect in interview rounds. Items marked (reading) are the
+assistant's interpretation, not the architect's words. Items marked (open) were never asked.
 
 Context for a reader who was not in the briefing. Veredas 2 is a Rust suite for industrial data
 logging, supervision and control: core (shared library), portal (the gateway: reads logs, OPC UA and
@@ -286,7 +286,7 @@ component. Supervisão and the future warehouse system stay web and appear insid
   back by a test; a run on each GPU-less virtual machine; one headless test that drives the UI.
 - J2 A study of the interpreter's front end and of the list of core-library operations ORCL allows.
 - J3 PROFINET International membership.
-- J4 The security study the operator postponed.
+- J4 The security study the architect postponed.
 
 ## K. Readings and open points (to be attacked, not assumed)
 - K1 (reading) Arguments inside `force` are always in the order in, out, var.

@@ -234,7 +234,7 @@ fn a_tag_configured_in_a_non_standard_spelling_is_found_by_that_text_and_polled_
 
 #[test]
 fn a_write_flag_is_always_respected() {
-    // The operator's rule (2026-11-06): the same text configured read-only in one place and
+    // The architect's rule (2026-11-06): the same text configured read-only in one place and
     // writable in another is writable, whichever comes first and in whichever rule.
     for read_only_first in [true, false] {
         let read_only = rule("plain", vec![tag("ns=1;s=cmd", "cmd_ro", SeriesType::Int, false, vec![])]);

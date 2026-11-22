@@ -51,7 +51,7 @@ it never runs in production, owns its sockets, and carries no store and no deskt
 - **Later phases**, named, no code now: the PROFINET device emulation (Veredas 1's `pnsim`,
   which speaks through aranha's codecs and waits for P-005; `docs/questions.md` Q5); the 2D/3D
   plant simulator; a PKI folder, when the OPC server first needs a secured endpoint. A desktop
-  UI is not planned: the operator decided (`docs/questions.md` Q12, 2026-11-07) that the bench
+  UI is not planned: the architect decided (`docs/questions.md` Q12, 2026-11-07) that the bench
   is the library and its executable.
 
 ## Rules
@@ -157,7 +157,7 @@ Each phase ends with `cargo nextest run --workspace` green bare, `cargo test -p 
 its clauses recorded, refuted and verified. Push at the end of each phase.
 
 ## Decided in the briefing of November 2026, not built
-The operator's decisions of 13 to 16 November 2026 that touch the bench
+The architect's decisions of 13 to 16 November 2026 that touch the bench
 (`docs/controlador-plan.md`, `docs/oficina-plan.md`); status P-020.
 - **Bench devices for all four fieldbuses**, in Rust, inside maquinar: a PROFINET device, an
   emulated EtherCAT device answering on a raw network card, an EtherNet/IP adapter, a Modbus
@@ -167,7 +167,7 @@ The operator's decisions of 13 to 16 November 2026 that touch the bench
   simulated devices behave: ready-made models for drive, sensor, conveyor and actuator, and beyond
   them ORCL function blocks run by the same interpreter as controlador). Both compute headless, at
   a fixed step; Oficina's 3D view only draws the positions it is sent.
-- **Two new dependencies**, allowed by the operator: the interpreter and a physics engine.
+- **Two new dependencies**, allowed by the architect: the interpreter and a physics engine.
 - **The codecs it shares with aranha move into core** with the fieldbus masters (Q5, revisited).
 - **Q12 stands:** the bench has no interface of its own. Its surfaces are Oficina's.
 - Open, all under Q31: the review's entries 25 (the two extensions can only be modules here, since

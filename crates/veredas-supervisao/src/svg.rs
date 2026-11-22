@@ -11,7 +11,7 @@ pub const SVG_NS: &str = "http://www.w3.org/2000/svg";
 /// The elements a marker can follow: those whose outline the page can measure along.
 pub const FOLLOWABLE: [&str; 7] = ["path", "line", "polyline", "polygon", "rect", "circle", "ellipse"];
 
-// Decided (docs/questions.md Q25, the operator, 2026-11-15): layouts are drawn in Inkscape and read
+// Decided (docs/questions.md Q25, the architect, 2026-11-15): layouts are drawn in Inkscape and read
 // as it saves them. The page draws on the subset below; the reader refuses the rest by name rather
 // than draw it otherwise than the reference says, and drops Inkscape's own elements (`EDITOR`).
 

@@ -2,7 +2,7 @@
 
 The soft PLC of Veredas 2. `docs/veredas-plan.md` ("veredas-controlador: the softPLC") wins on
 intent; `.zen/contract.md` (P-003) wins on status. Nothing is built. This file holds what the
-operator decided in the briefing of 13 to 16 November 2026, in the rulings of 15 November on its
+architect decided in the briefing of 13 to 16 November 2026, in the rulings of 15 November on its
 adversarial review, and in the robustness round begun on 16 November (`docs/robustness.md`). The
 list that was reviewed and the review itself are kept as they were delivered
 (`docs/briefing/deliverables.md`, `docs/briefing/review.md`); where they differ from this file,
@@ -16,7 +16,7 @@ it was left, for years, with nobody attending it.**
 
 No other component answers this: portal reads and stores a plant's data and gates writes to it,
 and never closes a control loop; the bench plays a plant and never runs in production. The
-operator's picture of it (2026-11-16): "picture a cpu doing simple i/o logic that is left there
+architect's picture of it (2026-11-16): "picture a cpu doing simple i/o logic that is left there
 for years. that is what a plc is, it runs as the day the software engineer left for an undefined
 time."
 
@@ -36,20 +36,20 @@ time."
 ### Execution
 - **Production on Linux with a real-time kernel only.** Windows is for development and simulation.
   A production target refused real-time scheduling does not run: it stays in STOP.
-- **64-bit processors only** (the operator, 2026-11-16).
+- **64-bit processors only** (the architect, 2026-11-16).
 - **Programs run in our own interpreter**, a crate of the ORCL family that maquinar uses too. Its
   bytecode is made from the Rust compiler's intermediate form, through `rustc_public` as it is
-  ("rustc_public is ok as is / proceed as decided", the operator, 2026-11-15), which means one
+  ("rustc_public is ok as is / proceed as decided", the architect, 2026-11-15), which means one
   pinned nightly toolchain.
 - **The interpreter is proven against Rust by a fixed conformance suite.**
 - **No check of a program's structure before it runs**, for now: "rust as a base gives us an
-  optimal linter and compiler. no further checks necessary (for now)" (the operator, 2026-11-16).
+  optimal linter and compiler. no further checks necessary (for now)" (the architect, 2026-11-16).
   The compiler and the linter on the sender's machine stand for the source, and the download's
   hash for the program that arrives.
 - **The program's clock pauses while the program is halted.**
 
 ### Entry points
-After Siemens' organisation blocks: the operator went through Siemens' list on 2026-11-14 ("I
+After Siemens' organisation blocks: the architect went through Siemens' list on 2026-11-14 ("I
 think Siemens did a great job in the PLC implementation") and kept every family except three.
 - Several main blocks and several start-up blocks, run in order.
 - Cyclic interrupts, each with its own period and priority.
@@ -73,13 +73,13 @@ think Siemens did a great job in the PLC implementation") and kept every family 
   devices. After the start-up time the controller goes to RUN regardless of missing devices and
   shows what is missing.
 - **After a power cycle**, as Siemens does: RUN returns as RUN; STOP, HOLD and FAULT all return as
-  STOP, the reason saying what it was. "Always as before" (the operator, 2026-11-15): no start-up
+  STOP, the reason saying what it was. "Always as before" (the architect, 2026-11-15): no start-up
   parameter, no STOP forced by a commissioning condition, no rule that ends a shadow test; the
   program handles the rest.
 - **A dry run survives a power cycle** (2026-11-15): RUN with the dry run on comes back the same,
   outputs safe until a person ends the dry run.
 - **Nobody switches states in normal work**: "we do not switch states in normal working
-  conditions, ever" (the operator, 2026-11-15). RUN is the only state with no user interaction
+  conditions, ever" (the architect, 2026-11-15). RUN is the only state with no user interaction
   going on; a fault needs a person, and a triggered stop follows the same logic.
 
 ### Monitoring, forcing, debugging
@@ -103,7 +103,7 @@ think Siemens did a great job in the PLC implementation") and kept every family 
   cold start, reset of retained data, hardware configuration and device naming, as well as writes,
   forcing, breakpoints, starting, continuing from HOLD and acknowledging a fault. Only reading and
   stopping are free, so any change to a plant needs someone to arm the switch at the target first.
-- **It is a file on the controller's operating system, not writable from outside** (the operator,
+- **It is a file on the controller's operating system, not writable from outside** (the architect,
   2026-11-15), and it is never set over the network.
 
 ### Online change
@@ -125,7 +125,7 @@ think Siemens did a great job in the PLC implementation") and kept every family 
 - **Fallback for a faulted edit.** A controller-wide flag, offered in the download popup, with a
   time limit, reset on shutdown. When the time limit runs out the edit is accepted and the old
   version stops watching. The review showed that taking over "from its own watcher data" is
-  unsafe as first written, and the operator ruled (2026-11-15): "live fallback shall be enabled
+  unsafe as first written, and the architect ruled (2026-11-15): "live fallback shall be enabled
   only when feasible. we need to build the specification for what disqualifies the edits for auto
   takeover. takeover after restart remains possible for all cases". So the previous version can
   always be put back for the next start; a live takeover happens only for an edit that nothing
@@ -145,7 +145,7 @@ think Siemens did a great job in the PLC implementation") and kept every family 
   which stops a crash loop).
 - **Overruns follow Siemens' OB80:** the time-error handler runs once on the first overrun, and
   the controller faults only when one scan exceeds twice its period.
-- **A maximum and a warning cycle time**, both set by the user (the operator, 2026-11-16): "the
+- **A maximum and a warning cycle time**, both set by the user (the architect, 2026-11-16): "the
   warning after years is a hint of possible degrading". How the two meet the overrun rule is Q39.
 - **A fault clears every debug condition** and records what was active.
 - **A fault record** holds the cause, the time, the download number, the task, the source
@@ -159,11 +159,11 @@ think Siemens did a great job in the PLC implementation") and kept every family 
   program reacts in its device-lost handler. A loss reaction set per device (carry on, stop or
   fault) was offered on 2026-11-15 and not chosen.
 - **While the device is away its inputs read zero or false** (the assistant's default, stated to
-  the operator on 2026-11-15 and not objected to).
+  the architect on 2026-11-15 and not objected to).
 - **A loss leaves an error that must be acknowledged.** From the device's return until then,
   "inputs can be read when a device is back online but the error was not yet acknowledged, outputs
   may be written by the program but not sent to the io device until the error is acknowledged"
-  (the operator, 2026-11-15).
+  (the architect, 2026-11-15).
 - **The program acknowledges it with a call**, for example on an operator's button. A program with
   no handler for it has the error acknowledged automatically after one full scan on valid inputs.
 - **A missing device raises an urgent maintenance request**: "in production a missing device
@@ -177,13 +177,13 @@ function-style terms after it, lowercase: at most one reason, then every conditi
 in a fixed order, with counts and identifiers and never lists.
 
 - **Spelling.** Values follow TOML's own rules for integers and quoted strings ("quoted string for
-  parsers", the operator, 2026-11-14): numbers bare, strings quoted.
+  parsers", the architect, 2026-11-14): numbers bare, strings quoted.
 - **One writer and one reader.** The controller holds the state as structured data; one writer and
   one reader in core produce the text, so every screen, log and test shows the same characters.
   The text stays English; its details are translatable.
 - **Numbers.** Every reason is an enum entry with a stable number and a word, and the text shows
   both, the number as the first argument `id`. A reason's hundreds digit is its state. The
-  assignment below and the order of the conditions are the assistant's, agreed by the operator
+  assignment below and the order of the conditions are the assistant's, agreed by the architect
   (2026-11-14).
 
 | State | Number | Reasons |
@@ -230,7 +230,7 @@ in a fixed order, with counts and identifiers and never lists.
   Rust crate, test on real devices), Modbus TCP client (existing crates).
 - **The functions that drive hardware live in `veredas-core`**: safe in controlador on Linux, and
   callable by other crates for testing only ("testers should be near a kill switch or estop
-  anyway"). The operator kept this on 2026-11-15 against the review, with core's rules amended
+  anyway"). The architect kept this on 2026-11-15 against the review, with core's rules amended
   (`docs/core-plan.md`; `docs/questions.md` Q9).
 - **Vendor description files** (GSDML, ESI, EDS) are copied into the project and read directly;
   the chosen configuration is written as Veredas TOML.
@@ -250,7 +250,7 @@ in a fixed order, with counts and identifiers and never lists.
   embedded portal's master switch, and its whitelist holds exactly the variables the program marks
   writable; controlador has no second setting (2026-11-15).
 - **Nobody outside changes the state.** "peers, intended as other controllers we controlador
-  interacts with, shall never be able to change its state" (the operator, 2026-11-15). The same
+  interacts with, shall never be able to change its state" (the architect, 2026-11-15). The same
   holds for supervisão, SCADA and MES: they read the state.
 - **Bound by the project, secured by the protocol** (2026-11-15): a protocol is bound only when
   the project names the interface; OPC UA writes need a signed and encrypted channel and a user;
@@ -262,7 +262,7 @@ in a fixed order, with counts and identifiers and never lists.
 - **Controlador owns the real-time communication, and nothing else on the wire.** "controlador
   shall own the RT communication / embedded portal in controlador shall get access to
   controlador's memory: variables list, cpu states, etc; it reads values asynchronously" (the
-  operator, 2026-11-15).
+  architect, 2026-11-15).
 - **The embedded portal is the full one**, with its store and its server: "controlador embeds a
   full version of portal" (2026-11-15).
 - **Oficina's portal talks to it over portal's own HTTP interface**, on the controller's loopback
@@ -283,10 +283,10 @@ in a fixed order, with counts and identifiers and never lists.
   both edge detectors and the up counter, and nothing else.
 
 ### Conversion to native PLC code
-The goal, stated outright by the operator on 2026-11-15: controlador's ORCL program **and its
+The goal, stated outright by the architect on 2026-11-15: controlador's ORCL program **and its
 hardware configuration** convert to native PLC code, Siemens S7-1500 and S7-1200 first. Veredas
 1's ORCL notes already planned the program translators, Siemens first; the hardware configuration
-is new. The operator began a table mapping ORCL data types to S7 types; its open points are Q44.
+is new. The architect began a table mapping ORCL data types to S7 types; its open points are Q44.
 
 ### What keeps it running for decades
 The robustness round's rulings, stated in `docs/robustness.md`, bind controlador first:
@@ -296,7 +296,7 @@ The robustness round's rulings, stated in `docs/robustness.md`, bind controlador
   integrity is rechecked at power-on and on a schedule while running;
 - "every cycles saved data is temporary and moves to permanent only on successful cycle";
 - the date is unconfirmed until NTP or the clock chip confirms it, with the maintenance requests
-  the operator ruled for the clock battery and NTP;
+  the architect ruled for the clock battery and NTP;
 - a maintenance request a year before any certificate expires;
 - retained variables by what the target can do, the last save flagged where it cannot save at
   power loss, and a write from outside saved at once.
@@ -320,7 +320,7 @@ and redundancy blocks.
   ORCL versions it runs.
 - **Fixture first:** every network and every device it drives has its bench device in maquinar
   before or alongside.
-- **Existing, tested Linux methods before our own** (the operator, 2026-11-16).
+- **Existing, tested Linux methods before our own** (the architect, 2026-11-16).
 
 ## Before the code
 - **`docs/orcl/README.md`**, the plan the language's crates share (law L6), and the ORCL crates.

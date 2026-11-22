@@ -2,9 +2,9 @@
 
 **A record, kept as it was delivered on 15 November 2026.** Five reviewers attacked the briefing's
 deliverables list (`docs/briefing/deliverables.md`, items A1.1 to K12), and the assistant merged
-their findings into the 55 entries below for the operator. In this text "I" and "my pick" are the
-assistant's, "you" and "your choice" the operator's. It is not updated, with one addition: the
-table of the operator's rulings on the 14 blockers, placed under "Blockers". The 32 majors and the
+their findings into the 55 entries below for the architect. In this text "I" and "my pick" are the
+assistant's, "you" and "your choice" the architect's. It is not updated, with one addition: the
+table of the architect's rulings on the 14 blockers, placed under "Blockers". The 32 majors and the
 9 minors are not ruled (`docs/questions.md` Q31). The current word on everything decided is in
 `docs/oficina-plan.md`, `docs/controlador-plan.md` and the component plans.
 
@@ -52,7 +52,7 @@ How to read an entry:
 
 ## Blockers
 
-### The operator's rulings (added to this record)
+### The architect's rulings (added to this record)
 
 All fourteen were ruled on 2026-11-15, in six rounds. The entries below are as delivered: "my pick"
 in them is what the assistant proposed, not what was ruled.

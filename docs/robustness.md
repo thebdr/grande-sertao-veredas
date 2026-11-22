@@ -1,12 +1,12 @@
 # Robustness: the specification round
 
-A round of decisions the operator called on 2026-11-16, for the whole suite: what a machine built
-on Veredas needs in order to run unattended for decades. It began the same day, by the operator
+A round of decisions the architect called on 2026-11-16, for the whole suite: what a machine built
+on Veredas needs in order to run unattended for decades. It began the same day, by the architect
 replying to single statements, and was paused on 2026-11-19 when development moved to a Linux
 environment. `docs/veredas-plan.md` wins on intent; `.zen/contract.md` (P-017) wins on status.
 Nothing of it is built.
 
-This file states what the operator ruled, in the operator's words where they carry the rule, and
+This file states what the architect ruled, in the architect's words where they carry the rule, and
 the facts the rulings rest on. What the assistant proposed and nobody ruled is not here: it is in
 `docs/questions.md` (Q36 to Q42), each with the option taken meanwhile. The rulings bind
 controlador first (`docs/controlador-plan.md`), then portal where it is embedded in a controller.
@@ -14,7 +14,7 @@ controlador first (`docs/controlador-plan.md`), then portal where it is embedded
 ## Why
 "these machines are meant to be used for decades left alone, people that program them die sooner."
 So the design horizon is decades without attention, and the machine has to explain itself to
-whoever comes after. The operator's picture of the trade, given with it: "a plc programmer's nr. 1
+whoever comes after. The architect's picture of the trade, given with it: "a plc programmer's nr. 1
 goal is to never go back to a plant for debug or repairs", hence logic that people on site and
 colleagues can read, and "set up proper remote connectivity, test it before leaving site".
 
@@ -61,12 +61,12 @@ So the rule is that last sentence, and the commissioning scope is outside it. Wh
 makes inside and outside, and the border cases, are Q38.
 
 ## Detecting and repairing damage
-- **Two copies and a hash per block.** The operator proposed to "store the program and the hash
+- **Two copies and a hash per block.** The architect proposed to "store the program and the hash
   twice, and use some corruption reconstruction algorithm", and agreed to its form (2026-11-16): a
   hash per block, so that two copies mend each other even when both are damaged in different
   places, and parity only for the block that is bad in both.
 - **A check on a schedule while running**, which repairs and then raises a maintenance request,
-  since such a machine may run for years without a power cycle. The operator's answer to it was
+  since such a machine may run for years without a power cycle. The architect's answer to it was
   "wow", taken as agreement.
 - **Where the copies live is the engineer's parameter**: "we provide a double store, so the choice
   to use two different hard drives is a parameter the engineer sets" (2026-11-16).
@@ -101,7 +101,7 @@ makes inside and outside, and the border cases, are Q38.
   timers, delays, hold times) are measured on a clock that only counts forward.
 - **Time-of-day blocks wait** ("No, they wait", 2026-11-16): they do not start while the date is
   unconfirmed, and starts that fall before the confirmation do not run afterwards.
-- **The clock battery and NTP raise maintenance requests**, by the operator's own formula
+- **The clock battery and NTP raise maintenance requests**, by the architect's own formula
   (2026-11-16): "dead battery AND (no ntp set OR ntp down) = maint req urgent / otherwise non
   urgent. a setting flag to ignore dead battery on working ntp may be forseen". With the case the
   formula left out ("Yes, not urgent"), every case is ruled:
@@ -162,7 +162,7 @@ target can afford is measured on the target, never taken from arithmetic.
 ### Retained variables, by what the target can do
 - **Memory that keeps its content without power:** a save every cycle, by the rule on temporary
   and permanent data above.
-- **Hold-up power with a power-fail signal:** a save at power loss, as in the operator's "small
+- **Hold-up power with a power-fail signal:** a save at power loss, as in the architect's "small
   battery that holds 2 cycles (to be able to save the state before shutdown)".
 - **Neither** (most small boards), ruled on 2026-11-16, "Last save, flagged":
   - the controller saves the retained variables at an orderly stop and at a period the engineer
@@ -196,7 +196,7 @@ Given with that answer as the assistant's two additions, and not objected to:
 
 What gives way when a record on a controller's drive reaches its size limit was the question in
 hand when the round paused. The assistant's "oldest deleted first" departs from Q16, where the
-operator decided for a project's disk store that "nothing is refused, deleted or merged"; it is
+architect decided for a project's disk store that "nothing is refused, deleted or merged"; it is
 Q41.
 
 ## The Linux study
@@ -223,7 +223,7 @@ Its list so far, named by the assistant from memory and not verified:
 - how a drive's wear is read (eMMC and SSDs report it; most SD cards do not).
 
 ## What is owed beside this round
-- **A suite-wide cyber-security round**, called by the operator on 2026-11-16: "dedicated round to
+- **A suite-wide cyber-security round**, called by the architect on 2026-11-16: "dedicated round to
   decide cyber security level suite-wise, future proof is the best way to design". Its open items
   are P-014 and Q43. A hash guards against corruption, not against a person: signatures and keyed
   checks belong to that round.

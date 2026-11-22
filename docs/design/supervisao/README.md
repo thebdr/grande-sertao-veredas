@@ -18,7 +18,7 @@ destination.
 **Mid-fidelity.** Layout, object anatomy, states and the concepts below are the intended
 direction; exact sizes and numbers are not. The look is the shared Console / IDE direction
 in `../README.md`. The mockups draw a **web magenta accent** (supervisão absorbs Veredas 1's
-dashboard, which introduced it); the operator chose Veredas' one **green** accent instead
+dashboard, which introduced it); the architect chose Veredas' one **green** accent instead
 (`docs/questions.md` Q22), so the page draws in green wherever a mockup shows magenta.
 
 ## Decisions the design builds on

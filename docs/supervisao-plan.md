@@ -20,18 +20,18 @@ the gateway, the desktop, the supervision app) each did.
 ## Decisions it builds on
 - **Decision 9** (the plan): 2D layouts in SVG, 3D in glTF, one set of object IDs; configuration is
   plain text, never binary; 3D models are assets it points to.
-- **Q18, decided** (the operator, 2026-11-09): Veredas 1's parsing of one company's engineering
+- **Q18, decided** (the architect, 2026-11-09): Veredas 1's parsing of one company's engineering
   exports and control-software project files is **not carried, at all**. The plant model comes only
   from plain-text TOML a person (or anything else) writes: the binding file, and the SVG layout it
   points to. No export reader is planned in the suite or beside it.
-- **Q19, decided** (the operator, 2026-11-09): **supervisão starts the sessions.** It runs each
+- **Q19, decided** (the architect, 2026-11-09): **supervisão starts the sessions.** It runs each
   plant's portal session in its own process from the plant's project file, through portal's library
   (`project::load_file`, `Session::start`), so one executable serves everything; it owns no plant
   connection of its own (the map, L5: supervisão uses portal; every value arrives through portal).
-- **Q20, decided** (the operator, 2026-11-09): **local, no accounts.** The host binds the loopback
+- **Q20, decided** (the architect, 2026-11-09): **local, no accounts.** The host binds the loopback
   by default; everyone who reaches it sees the same; a write rests on portal's switch (armed by the
   project, never over the wire) and on the actions the binding file declares.
-- **Q21, decided** (the operator, 2026-11-09): **3D later**, after the 2D layout, the dashboards,
+- **Q21, decided** (the architect, 2026-11-09): **3D later**, after the 2D layout, the dashboards,
   the gated writes and the sessions are verified. The binding file's object IDs are the ones a glTF
   model's nodes will carry; no 3D key exists until the 3D view does (a key that does nothing is a
   lie, and adding one later is a MINOR bump of the binding format).
@@ -76,7 +76,7 @@ the gateway, the desktop, the supervision app) each did.
   skew monitor that Q14 left waiting; a session's own `[server]` address (supervisão serves the
   session's surface under its own address and binds no other); the dashboards' charts
   interactive, zoomed in and out on the page, and each chart's data exported as CSV (the
-  operator, 2026-11-11, from a demo run).
+  architect, 2026-11-11, from a demo run).
 
 ## Rules
 - **Every value arrives through portal; every write rides portal's gated surface.** Supervisão
@@ -90,7 +90,7 @@ the gateway, the desktop, the supervision app) each did.
   2026-11-15) and read as Inkscape saves it, its editor's own elements dropped (its script beside
   a mesh gradient or a hatch among them, Q27, the mesh then showing no fill); a construct
   Inkscape does not write is answered at the reader (refused by name), never by teaching the page
-  a new construct. Naming the drawing tool is the operator's decision on the file format, not plant
+  a new construct. Naming the drawing tool is the architect's decision on the file format, not plant
   content (Q8 keeps the plant's devices, vendors and customers out).
 - **Content-agnostic** (Q8): no device, vendor, product or customer named in code, comments, tests,
   fixtures or the built bundle; the sample plants are invented and named for their shape. The
@@ -105,7 +105,7 @@ the gateway, the desktop, the supervision app) each did.
   pictures to be embedded; the host serves the page under a content policy that lets the browser
   load and run the page's own files alone, and the drawing's own route sandboxed, so nothing a
   drawing points to on another host is loaded or run, whatever its syntax; and no other page may
-  show the page, or the drawing, inside a frame (the operator's ruling of 2026-11-15).
+  show the page, or the drawing, inside a frame (the architect's ruling of 2026-11-15).
 - **Every state has a mark and a word** (the design's rule): normal ●, near ■, warn ■, alarm !,
   disabled ▨, stale ◌, selected ◆. A rule names the class and the word ("full", "stopped",
   "fault"); the accent (lavanda `#B9A9E8`, Q22) marks selection, focus and primary actions, never a
@@ -236,9 +236,9 @@ Each phase ends with `cargo nextest run --workspace` green bare, `cargo test -p 
 its clauses recorded, refuted and verified. Push at the end of a phase green end to end.
 
 ## Decided in the briefing of November 2026, not built
-The operator's decisions of 13 to 15 November 2026 that touch supervisão
+The architect's decisions of 13 to 15 November 2026 that touch supervisão
 (`docs/oficina-plan.md`); status P-021.
-- **It stays web.** The browser still decides nothing and there are no scripts: the operator was
+- **It stays web.** The browser still decides nothing and there are no scripts: the architect was
   restating the border, not relaxing it. Oficina embeds its pages as tabs.
 - **Colour, size, position and visibility become expressions of values**, in the binding file's
   rules, computed and tested in Rust.
@@ -249,7 +249,7 @@ The operator's decisions of 13 to 15 November 2026 that touch supervisão
 - **Translatable from day one**, the interface alone.
 - **Green means a good state** (`docs/questions.md` Q22, reversed on 2026-11-15). No state takes
   it yet: which state "good" is stays open (Q45). The other half of that ruling is built: the
-  accent moved from green to lavanda `#B9A9E8` on 2026-11-19 (C-051), after the operator's
+  accent moved from green to lavanda `#B9A9E8` on 2026-11-19 (C-051), after the architect's
   "lavanda is important" that day.
 - Open: the review's entries 22 (Oficina starting sessions against Q19), 24 (a colour by
   expression against the rule of a mark and a word; the string colour of the syntax palette) and

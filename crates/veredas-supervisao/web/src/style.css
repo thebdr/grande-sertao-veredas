@@ -217,7 +217,7 @@ svg.spark.st-line-stale .point { fill: var(--muted); }
 .lv-tick { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--weak2); }
 .lv-v { text-align: right; }
 table.dt { width: 100%; border-collapse: collapse; }
-/* Decided (Q28, the operator, 2026-11-16: "Page's own words only"): a heading is drawn as the page
+/* Decided (Q28, the architect, 2026-11-16: "Page's own words only"): a heading is drawn as the page
    writes it, never through `text-transform` (which drew σ as Σ and a label's mA as MA): the page's
    own words typed in capitals in its source, a label, a column name and a symbol as written. And
    its white space as written too (`pre-wrap`): a value's or a column's two spaces, its leading

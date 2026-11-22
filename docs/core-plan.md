@@ -173,7 +173,7 @@ Each phase ends with `cargo nextest run --workspace` green bare, the laws green,
 clauses recorded, refuted and verified. Push at the end of phase 2 and of phase 3.
 
 ## Decided in the briefing of November 2026, not built
-The operator's decisions of 13 to 16 November 2026 that touch core (`docs/controlador-plan.md`);
+The architect's decisions of 13 to 16 November 2026 that touch core (`docs/controlador-plan.md`);
 status P-018.
 - **The controller's state text has one writer and one reader, here**, with the table of reason
   numbers and words, so every screen, log and test shows the same characters
@@ -181,7 +181,7 @@ status P-018.
 - **The functions that drive hardware live in core**: the four fieldbus masters (PROFINET IO
   controller, EtherCAT master, EtherNet/IP scanner, Modbus TCP client), safe in controlador on
   Linux and callable by other crates for testing only (2026-11-14). The review set this against
-  Q9 and laws L4 and L5, and the operator kept it: "Core, rules amended" (2026-11-15).
+  Q9 and laws L4 and L5, and the architect kept it: "Core, rules amended" (2026-11-15).
 - **What is amended:** core's telegram framing still holds no frame layout of its own, and a
   device spoken over a TCP telegram channel is still configuration. A standard fieldbus's frames
   are fixed by its standard and are code in the masters; no vendor's device or catalog is named

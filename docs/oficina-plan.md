@@ -2,7 +2,7 @@
 
 The workshop of Veredas 2; screens say Oficina. `docs/veredas-plan.md` ("veredas-oficina: the
 workshop") wins on intent; `.zen/contract.md` (P-015) wins on status. Nothing is built. This file
-holds what the operator decided in the briefing of 13 to 16 November 2026 and in the rulings of
+holds what the architect decided in the briefing of 13 to 16 November 2026 and in the rulings of
 15 November on its adversarial review. The list that was reviewed and the review itself are kept as
 they were delivered (`docs/briefing/deliverables.md`, `docs/briefing/review.md`); where they differ
 from this file, this file is the later word. What is not decided is a question in
@@ -45,7 +45,7 @@ users, the PLC programmer, the commissioning technician and the software enginee
   `#30D158` means a good state and is never the accent (`docs/questions.md` Q22, reversed on
   2026-11-15).
 - **Licence GPLv3.** Every crate Oficina links carries a permissive licence that GPLv3 accepts,
-  MIT or Apache 2.0, and a check of dependency licences runs in CI (the operator, 2026-11-15;
+  MIT or Apache 2.0, and a check of dependency licences runs in CI (the architect, 2026-11-15;
   which expression is Q35).
 - **Every capability's test drives the real interface**: Rust tests through the Spix tool.
 - Qt Creator was dropped as a base and is kept as a reference.
@@ -55,7 +55,7 @@ users, the PLC programmer, the commissioning technician and the software enginee
   over the same LAN or a VPN, starts and stops the components' executables, copies files, and
   carries their interfaces inside the connection. No accounts of its own (Q20 stands).
 - **Portal to portal.** Oficina embeds a portal, and that portal talks to the portal embedded in
-  controlador (the operator, 2026-11-15) over portal's own HTTP interface, "http (https, later)"
+  controlador (the architect, 2026-11-15) over portal's own HTTP interface, "http (https, later)"
   (2026-11-16): the event stream, the windowed reads, the gated write surface. The interface
   answers on the controller's loopback only.
 - **Commands travel on the same link** (2026-11-16): forcing, breakpoints, downloads, start, stop
@@ -63,7 +63,7 @@ users, the PLC programmer, the commissioning technician and the software enginee
   commissioning switch is checked (`docs/controlador-plan.md`).
 - **Everything that alters the controller is robust**: "every bit of data that alters the
   controller shall be robust, that includes commands such as variable writes, breakpoints setting,
-  state change" (the operator, 2026-11-16). A download carries a hash, "so no corrupted program
+  state change" (the architect, 2026-11-16). A download carries a hash, "so no corrupted program
   may run". How both are built is Q36 and Q37.
 - **Only Oficina and the target change a controller's state** (2026-11-15): a person does it in
   Oficina or at the target, and the program may stop itself. Supervisão, SCADA, MES and other
@@ -130,7 +130,7 @@ controlador.
 ### The IO check from a laptop
 With no controlador target set, a light controlador session holding only the logic to drive a
 remote IO module runs on the laptop itself, with timeouts never above 2 s and with known devices
-only. The operator kept it on 2026-11-15, under three rules:
+only. The architect kept it on 2026-11-15, under three rules:
 - the laptop session has an arming step of its own in Oficina, per session, naming the device;
 - driving outputs is refused for a device that exchanges data with another controller, and on
   Modbus when the module has no timeout of its own or too long a one; renaming such a device needs

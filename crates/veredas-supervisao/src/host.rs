@@ -154,7 +154,7 @@ fn text(content_type: &'static str, body: &'static str) -> Response {
 /// `style` attribute, in which Inkscape writes a drawing's paint), pictures its own or embedded
 /// (`data:`), connections to its own address (the feed, the reads, a write) and fonts its own;
 /// nothing else of any kind (a frame, an object, a worker, a manifest), no base address moved, a
-/// form sent nowhere but here; and no page anywhere may show it inside a frame (the operator's
+/// form sent nowhere but here; and no page anywhere may show it inside a frame (the architect's
 /// ruling of 2026-11-15: a site open in the same browser cannot lay the page under its own clicks).
 /// A page meant to frame supervisão's would have to be named here.
 pub const PAGE_POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";

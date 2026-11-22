@@ -1772,7 +1772,7 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     assert!(!polyfill_ran(alone_from), "Inkscape's script ran in the drawing alone");
     drop(alone);
 
-    // Framed by another site (the operator's ruling of 2026-11-15, both policies' `frame-ancestors`):
+    // Framed by another site (the architect's ruling of 2026-11-15, both policies' `frame-ancestors`):
     // a page of another origin framing the page and the drawing's route sees each refused, by the
     // browser's own report of the directive (one per frame, naming the host's origin, as the browser
     // reports a frame), and no document of either in its frames; a file of the host's that carries

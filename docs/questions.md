@@ -15,7 +15,7 @@ The plan's structural rules (members under their roots, naming, versioning, core
 direction, plan before code) are checkable from the shape of the workspace. Candidates: a crate
 under `tools/`, integration tests inside `veredas-core`, a script.
 
-**Taken (operator):** `tools/leis`, a workspace member that is repo tooling, not a component (no
+**Taken (architect):** `tools/leis`, a workspace member that is repo tooling, not a component (no
 `veredas-` prefix, like `acerto` and `abaco-oracle` in Veredas 1; exempt from the component laws).
 The laws are pure functions over parsed manifests, so a refute round can attack them on synthetic
 suites; `cargo test -p leis` is the verdict. Core stays a library that knows nothing of the suite's
@@ -29,7 +29,7 @@ layout.
 
 **Raised** 2026-11-05. `docs/` held the deck as `Veredas 2.html` (625 KB) and `Veredas 2.pptx`.
 
-**Taken (operator):** both committed, renamed to ASCII (`veredas-2-review.html`, `.pptx`), as the
+**Taken (architect):** both committed, renamed to ASCII (`veredas-2-review.html`, `.pptx`), as the
 deliverable of the 2026-11-05 review. The markdown plan is the authority; the deck is not updated
 when the plan changes.
 
@@ -72,7 +72,7 @@ architecture rule (test tools own their sockets, past portal) is not touched by 
 
 **Reversible?** Yes: one row of `MAP` and one line of the plan.
 
-**Revisited** 2026-11-14 and 2026-11-15 (the operator, the briefing on controlador): the functions
+**Revisited** 2026-11-14 and 2026-11-15 (the architect, the briefing on controlador): the functions
 that drive hardware live in `veredas-core`, so aranha's PROFINET codecs move into core when the
 controller needs them, and the bench then takes them from core. Aranha's row for maquinar in `MAP`
 stays until that move is made (`docs/core-plan.md`, "Decided in the briefing of November 2026").
@@ -88,7 +88,7 @@ at `docs/vendor/genibelt-protocol.txt` there, gitignored because it is proprieta
 cites its section numbers. Veredas 2 needs it for reading, verifying and extending the catalog,
 not for building.
 
-**Taken (reversible, pending the operator):** not copied. `docs/vendor/` is gitignored here as
+**Taken (reversible, pending the architect):** not copied. `docs/vendor/` is gitignored here as
 there (its README says what belongs in it); the code keeps citing section numbers; the constants
 are in code and pinned by the telegram tests, so a machine without the file builds and tests.
 To read the spec, use the copy beside Veredas 1 or drop one into `docs/vendor/` here.
@@ -98,7 +98,7 @@ To read the spec, use the copy beside Veredas 1 or drop one into `docs/vendor/` 
 **Since Q8 (2026-11-05):** core names GENIBELT nowhere and cites none of its sections; the
 specification is for writing the rules a portal channel is configured with.
 
-**Decided** 2026-11-09 (the operator): not in the repo. `docs/vendor/` stays gitignored with its
+**Decided** 2026-11-09 (the architect): not in the repo. `docs/vendor/` stays gitignored with its
 README; whoever writes the device's rules file reads a local copy or the one beside Veredas 1.
 
 ---
@@ -109,7 +109,7 @@ README; whoever writes the device's rules file reads a local copy or the one bes
 bits 28-31 of a bin state (MAPPING, EMERGENCY_TRISTATE, ALARM_TRISTATE, WARNING_TRISTATE) without
 saying what they mean for parcel acceptance. Veredas 1 named none of them.
 
-**Taken (reversible, pending the operator):** they are named (a state word reads as words), and
+**Taken (reversible, pending the architect):** they are named (a state word reads as words), and
 `accepts_parcels` ignores them, as Veredas 1 did, so no chute that sorted before stops sorting.
 Marked `// DECISION PENDING` in `veredas_core::telegram::genibelt::bin_state`.
 
@@ -118,16 +118,16 @@ Marked `// DECISION PENDING` in `veredas_core::telegram::genibelt::bin_state`.
 **Moot (2026-11-05, Q8):** the bin-state words left core with the GENIBELT catalog; whether these
 bits stop a chute is a question for the rules a portal channel is configured with.
 
-**Closed** 2026-11-09: moot since Q8 (the operator's decision of 2026-11-05); nothing is left to
+**Closed** 2026-11-09: moot since Q8 (the architect's decision of 2026-11-05); nothing is left to
 decide in the suite, the question belongs to the device's rules file.
 
 ---
 
 ## Q8 - Does GENIBELT belong in core?
 
-**Raised** 2026-11-05 by the operator, while the telegram layer was being ported into core.
+**Raised** 2026-11-05 by the architect, while the telegram layer was being ported into core.
 
-**Taken (operator):** no. "genibelt is a machine my company manufactures and the interface via
+**Taken (architect):** no. "genibelt is a machine my company manufactures and the interface via
 TCP socket should only be something veredas-portal manages, using encoding and decoding rules
 and storing the data in the database, as per the other protocols. veredas shall be a generic
 platform to build on top of, which reliably manages communication with the outside world, while
@@ -160,7 +160,7 @@ keep-alive's number counting as the last seen) are that protocol's rules too. Q8
 framing "driven by configuration (delimiters, envelope, length fields, endianness, sequence
 stamping and duplicate skipping as rules)"; designing that is new work, not a split.
 
-**Taken (reversible, pending the operator):** the framing and the channel stay in core as they
+**Taken (reversible, pending the architect):** the framing and the channel stay in core as they
 are, with the vendor's name and section citations removed and the shape described in their
 docs; no other framing exists yet to generalise against. When the first telegram channel's
 configuration schema is written (portal, P-002), the framing's constants become that schema's
@@ -172,7 +172,7 @@ assumes they do: a keep-alive's number counts as the last one seen).
 **Reversible?** Yes: a configuration schema over the same code, or removing the framing from
 core altogether.
 
-**Answered (operator, 2026-11-05):** "Design configurable framing now". Core keeps no frame
+**Answered (architect, 2026-11-05):** "Design configurable framing now". Core keeps no frame
 layout of its own. `telegram::framing` is an engine that encodes and decodes any layout a
 channel file describes (optional start and end delimiters; envelope, segment-header and tail
 fields by size, byte order and role: sequence, length, count, opaque); `telegram::schema` reads
@@ -182,7 +182,7 @@ example and the engine's first test fixture, named for its shape (a segmented en
 its maker: a 12-byte envelope with a sequence, a length and a count is a shape, not a secret.
 The device's own file lives with its other rules, outside the suite's code.
 
-**Revisited** 2026-11-15 (the operator, ruling on the review's entry 10 of the briefing: "Core,
+**Revisited** 2026-11-15 (the architect, ruling on the review's entry 10 of the briefing: "Core,
 rules amended"): the fieldbus masters stay in core, as decided on 2026-11-14, with the codecs of
 their standards (PROFINET, EtherCAT, EtherNet/IP, Modbus TCP). What this question settled is the
 telegram framing: core's framing engine holds no frame layout of its own, and a device spoken over
@@ -199,7 +199,7 @@ ruling asked for this rewording and gave none: the wording is the assistant's, w
 file states its schema version and that a reader migrates or refuses; it does not fix the
 syntax.
 
-**Taken (reversible, pending the operator):**
+**Taken (reversible, pending the architect):**
 - TOML, the suite's existing configuration syntax (the workspace manifests); a file states
   `format = "veredas-channel"` and `version = 1`, and a reader refuses another format or an
   unknown version.
@@ -213,7 +213,7 @@ syntax.
 
 **Reversible?** Yes while no project file exists: a version 2 of the format, migrated by portal.
 
-**Answered (operator, 2026-11-05):** "TOML, suite-wide". The channel file stays as designed, and
+**Answered (architect, 2026-11-05):** "TOML, suite-wide". The channel file stays as designed, and
 the rule is wider than that file: every plain-text config and project file of Veredas 2 is TOML,
 stating its `format` and `version` as the channel file does, misspelled keys refused. Veredas 1's
 JSON project files are not carried as they are; whatever portal absorbs of them is read into
@@ -229,14 +229,14 @@ connect keep-alive from the others by its number alone. When `connect` lies insi
 `first..=last`, a keep-alive that takes that number in the cycle is not counted as seen, and in
 a two-number cycle the next data frame repeats the last one and is skipped.
 
-**Taken (reversible, pending the operator):** the channel file refuses a `connect` inside
+**Taken (reversible, pending the architect):** the channel file refuses a `connect` inside
 `first..=last`. Every layout seen so far (the worked example: `connect = 0`, cycle 1 to 255)
 keeps it outside. A device that needs it inside would need the receiver to exempt only the
 first keep-alive after connect instead, a version 2 of the rule.
 
 **Reversible?** Yes: loosening a refusal breaks no file that loads today.
 
-**Decided** 2026-11-09 (the operator): keep refusing. A `connect` inside `first..=last` is refused
+**Decided** 2026-11-09 (the architect): keep refusing. A `connect` inside `first..=last` is refused
 by the channel file; the pending note in `veredas_core::telegram::schema` becomes the rule's
 comment.
 
@@ -251,9 +251,9 @@ a project bar, tabs for logs, OPC UA, TCP and PROFINET, live previews and monito
 (every chute full, a random pick), and a JSON project it saves continuously. Whether the Veredas 2
 bench has a desktop UI at all, or is a library plus a TOML-driven executable driven from the
 command line (with its knobs on the library handle, which is what portal's tests and later
-comissionador embed), is the operator's call.
+comissionador embed), is the architect's call.
 
-**Taken (reversible, pending the operator):** a library first, with one executable that runs a
+**Taken (reversible, pending the architect):** a library first, with one executable that runs a
 bench file (`veredas-maquinar <bench.toml>`) until stopped; the UI is a later phase of
 `docs/maquinar-plan.md`, named there with no code. Every operator action the Veredas 1 UI had
 (start and stop a part, send a message now, set a destination's state, declare every destination
@@ -262,11 +262,11 @@ same library the tests do.
 
 **Reversible?** Yes: a UI is a crate or a module on top of the library; nothing below it changes.
 
-**Decided** 2026-11-07 (the operator): library only. The bench is the library and the
+**Decided** 2026-11-07 (the architect): library only. The bench is the library and the
 TOML-driven executable; no desktop UI is planned, and `docs/maquinar-plan.md` no longer names
 one as a later phase.
 
-**Revisited** 2026-11-13 (the operator): the decision stands for the bench itself, which stays a
+**Revisited** 2026-11-13 (the architect): the decision stands for the bench itself, which stays a
 library and an executable. The bench's surfaces (its file editor, a traffic monitor, starting a
 bench beside a session, later the pressure panel) are Oficina's (`docs/oficina-plan.md`), driving
 the same handles the tests do.
@@ -282,14 +282,14 @@ either way: every due time is scheduled from the last due time, never from the t
 served it, so a 100 ms draw is 20 in 2 s on both platforms and only the jitter differs
 (C-026, round 4; `docs/maquinar-plan.md`, "Traps").
 
-**Taken (reversible, pending the operator):** no FFI. The clause states the quantum, the tests
+**Taken (reversible, pending the architect):** no FFI. The clause states the quantum, the tests
 pin the rate on both platforms and the per-tick figure per platform, and the bench's two tick
 loops carry a `DECISION PENDING` note. Raising the resolution is one call at the start of the
-executable, behind `cfg(windows)`, when the operator wants 20 ms ticks on the bench.
+executable, behind `cfg(windows)`, when the architect wants 20 ms ticks on the bench.
 
 **Reversible?** Yes: one call, one place, nothing else changes.
 
-**Decided** 2026-11-09 (the operator): yes. The bench executable raises the Windows timer
+**Decided** 2026-11-09 (the architect): yes. The bench executable raises the Windows timer
 resolution with `timeBeginPeriod(1)` at its start, behind `cfg(windows)`, paired with
 `timeEndPeriod` at exit; the two tick loops lose their pending notes, and the clause and the bench
 plan state a 20 ms tick on both platforms.
@@ -307,14 +307,14 @@ project and shows health, the operator working in the browser), or no desktop at
 web interface (P-008) being the suite's one interface. The grep tab, the trailing view and the
 table browser are operator tooling that goes where the shell goes.
 
-**Decided (2026-11-09, the operator): the executable stands.** Portal is a library and one executable,
+**Decided (2026-11-09, the architect): the executable stands.** Portal is a library and one executable,
 `veredas-portal <project.toml>`, which serves a project from the command line until stopped; no
 desktop UI is built. Every operator action the Veredas 1 shell had on a session (start, stop, add
 or remove a source, arm the writes, snapshot, export) is a method on the session's handle, so a
 shell, if one ever comes (P-008's web interface, or a thin window over the server), drives the same library the tests do; none is built in portal. The grep engine and the skew monitor
 wait with it (`docs/portal-plan.md`, "Scope").
 
-**Revisited** 2026-11-13 (the operator): portal still builds no desktop UI. The shell this question
+**Revisited** 2026-11-13 (the architect): portal still builds no desktop UI. The shell this question
 left open has come as a component of its own, Oficina, the suite's one native application
 (`docs/oficina-plan.md`): it embeds a portal and drives the same session handle. The grep engine is
 on Oficina's first-release list.
@@ -333,7 +333,7 @@ and user), so a project folder could be committed and shared. Veredas 2's projec
 a project folder, meant for git like Veredas 1's, and runs on Linux in CI: a password cannot go in
 the file, and a platform vault is one platform's.
 
-**Taken (reversible, pending the operator):** the project file names the user and the name of an
+**Taken (reversible, pending the architect):** the project file names the user and the name of an
 environment variable that holds the password (`password_env`); portal reads the variable when the
 session starts and refuses to start a source whose variable is unset, naming the variable, never
 the value. No vault, no secrets file.
@@ -341,7 +341,7 @@ the value. No vault, no secrets file.
 **Reversible?** Yes: a second source of secrets (a vault, a file outside the project) is one more
 way to fill the same field.
 
-**Decided** 2026-11-09 (the operator): an encrypted secrets file in the project folder, committed
+**Decided** 2026-11-09 (the architect): an encrypted secrets file in the project folder, committed
 with the project, and the key in an environment variable the project file names. Portal reads the
 key when the session starts, decrypts the file in memory, and refuses to start a source whose
 secret is missing, naming the entry, never a value. `password_env` gives way to the secrets file;
@@ -359,13 +359,13 @@ table collision, as it did by accident). The choices: refuse by name until the o
 file; open fresh by deleting it; or name the file per session (the project's name and the start
 time) so every run leaves its own.
 
-**Taken (reversible, pending the operator):** refuse by name. The store's open says a database
+**Taken (reversible, pending the architect):** refuse by name. The store's open says a database
 already stands there and that a session store is fresh; nothing is deleted, nothing merged.
 
 **Reversible?** Yes: a per-session file name or an opening mode is one line in the project's
 store section, and the store's check stays as the guard for the fixed-name case.
 
-**Decided** 2026-11-09 (the operator): a file per session. The store's file is named from the
+**Decided** 2026-11-09 (the architect): a file per session. The store's file is named from the
 project's name and the session's start time, so every run leaves its own database and nothing is
 refused, deleted or merged; the refusal stays as the guard when a project pins a fixed name and a
 database already stands there.
@@ -383,13 +383,13 @@ refused past the sample), and two of them lose or rename an operator's rows in s
 padded path's behaviour is general: every row kept, a short one padded, a long one widening the
 schema within 2 048 lines and refusing the read by its line past them.
 
-**Taken (reversible, pending the operator):** the sniffer stays the first reader, its outcomes
+**Taken (reversible, pending the architect):** the sniffer stays the first reader, its outcomes
 stated and pinned; the padded path is forced on a collapse alone, as C-041 says.
 
 **Reversible?** Yes: forcing the padded path for every linked CSV, or for any file the sniffer
 reads ragged, is one branch in the store's CSV scan and one sentence in C-041.
 
-**Decided** 2026-11-09 (the operator): the padded path for any ragged file. The sniffer stays the
+**Decided** 2026-11-09 (the architect): the padded path for any ragged file. The sniffer stays the
 first reader; whenever it reads a file ragged (any outcome but a regular table), the padded reader
 takes the file: every row kept, a short one padded, a long one widening the schema within 2 048
 lines, the read refused by its line past them. No row is lost or renamed in silence.
@@ -407,7 +407,7 @@ tool that writes the binding file; or a generic importer inside supervisão driv
 **Taken while asking:** the plant model comes only from plain-text TOML a person or an outside tool
 writes (the binding file, `docs/binding-schema.md`) and the SVG layout it points to.
 
-**Decided** 2026-11-09 (the operator): **not at all.** No export reader is carried, in the suite or
+**Decided** 2026-11-09 (the architect): **not at all.** No export reader is carried, in the suite or
 beside it; binding files are written by hand or by anything, and supervisão reads nothing else.
 
 ## Q19 - Where do supervisão's sessions come from?
@@ -418,7 +418,7 @@ Either each session is a `veredas-portal` executable already running, which supe
 HTTP and owns nothing of, or supervisão runs the portal sessions in its own process from project
 files.
 
-**Decided** 2026-11-09 (the operator): **supervisão starts them.** It loads each plant's project
+**Decided** 2026-11-09 (the architect): **supervisão starts them.** It loads each plant's project
 file and starts its session through portal's library, one executable serving every session; the
 session's portal router is served under supervisão's address (`/s/<name>/portal/`). Supervisão
 still owns no plant connection: every value and every write is portal's.
@@ -430,13 +430,13 @@ still owns no plant connection: every value and every write is portal's.
 **Raised** 2026-11-09, the design's open point "session and permission model for several sessions
 on one host".
 
-**Decided** 2026-11-09 (the operator): **local, no accounts.** The host binds the loopback by
+**Decided** 2026-11-09 (the architect): **local, no accounts.** The host binds the loopback by
 default; whoever reaches it sees every session alike; a write rests on portal's switch (armed by
 the project, never over the wire) and on the actions the binding file declares.
 
 **Reversible?** Yes: accounts or a read-only remote mode sit in front of the same routes.
 
-**Revisited** 2026-11-13 (the operator): it stays, and it is extended to remote targets: Oficina
+**Revisited** 2026-11-13 (the architect): it stays, and it is extended to remote targets: Oficina
 reaches a target through SSH and has no accounts of its own. What a login adds is left to the
 security round (Q43, P-014).
 
@@ -444,24 +444,24 @@ security round (Q43, P-014).
 
 **Raised** 2026-11-09, planning supervisão (P-008).
 
-**Decided** 2026-11-09 (the operator): **later**, after the 2D layout, the dashboards, the gated
+**Decided** 2026-11-09 (the architect): **later**, after the 2D layout, the dashboards, the gated
 writes and the several sessions are verified. The binding file's object IDs are the ones a glTF
 model's nodes will carry; no 3D key exists in the binding format until the view does.
 
 ## Q22 - Which accent does supervisão draw?
 
-**Raised** 2026-11-09, by the operator, looking at the first page.
+**Raised** 2026-11-09, by the architect, looking at the first page.
 
 The design references (`docs/design/README.md`, `docs/design/supervisao/`) gave the web side a
 magenta accent, after Veredas 1's dashboard, and the desktop side green.
 
-**Decided** 2026-11-09 (the operator): "veredas accent color shall be green (see veredas-desktop
+**Decided** 2026-11-09 (the architect): "veredas accent color shall be green (see veredas-desktop
 1)". Supervisão draws Veredas 1's desktop green (`#30D158`, soft `#1C3A27`, outline `#2F5A3D`,
 hover and data series `#5FE07F`, on-accent text `#08130B`); the mockups' magenta reads as the
 accent wherever it appears. The accent stays what it was: selection, focus, primary actions and
 neutral data series, never a plant state.
 
-**Reversed** 2026-11-15 (the operator): "Use Lavanda #B9A9E8 as the suite accent colour". The green
+**Reversed** 2026-11-15 (the architect): "Use Lavanda #B9A9E8 as the suite accent colour". The green
 accent "has been an inconvenience": green is to mean a good state, so the accent became a colour
 that is memorable and carries no ready meaning (not blue, green, red, yellow or white). Lavanda
 `#B9A9E8`, soft `#2B2838`, outline `#494360`, on-accent text `#12101C`; the hover and data-series
@@ -469,7 +469,7 @@ tint `#CFC3F2` is the assistant's proposal. Green `#30D158` is freed to mean a g
 syntax palette's number colour (`#D2A8FF`) sits too close to the new accent and should move.
 Whether "good" is a new state class or the colour of the normal one is open (Q45).
 
-**Its standing** 2026-11-19 (the operator, told that the accent was still applied nowhere):
+**Its standing** 2026-11-19 (the architect, told that the accent was still applied nowhere):
 "lavanda is important". Asked where it should be applied, on the Windows desk before development
 moved or first on the Linux machine: "Here, now".
 
@@ -508,7 +508,7 @@ content in a layout.
 answer is "refuse", it is a new refusal in the reference (an `@import` or a `url()` outside the
 document in a layout's style) with its exact text, and C-048 states it.
 
-**Decided** 2026-11-15 (the operator, asked "Should the page be barred from loading anything a
+**Decided** 2026-11-15 (the architect, asked "Should the page be barred from loading anything a
 layout points to on another host?"): "Yes, bar it" (the other choice read "Leave it open"). Two
 layers, one job each. The reader, for the engineer: a picture is embedded (an image's `href`,
 plain or `xlink:`, a `data:image/…` URI, Inkscape's "Embed"), any other refused with what to do
@@ -524,7 +524,7 @@ script straight into the page and the drawing (C-049). Limits: a link navigates 
 loads nothing by itself; the browser may open a bare connection to a frame's host (its preconnect)
 before its policy refuses the frame, asking nothing; portal's nested surface answers with its own
 headers; the policy is the browser's to enforce. Another site framing the page was not barred by
-this ruling; the operator barred it on 2026-11-15 (a site open in the same browser could lay the
+this ruling; the architect barred it on 2026-11-15 (a site open in the same browser could lay the
 page under its own clicks): both policies say `frame-ancestors 'none'`, so no page shows the page or
 the drawing inside a frame, and a page meant to frame supervisão's would have to be named there.
 (Before the ruling, while Q25 stood, the question had no effect on a sheet: the reader refuses a
@@ -546,7 +546,7 @@ a timeline, by name, and the reference says so; a rule that writes the object's 
 full reads what the timeline replays, and stands. If the answer is "replay it", the refusal goes and
 the timeline merges the series' histories (numeric ones first), the test driving both kinds of rule.
 
-**Decided** 2026-11-15 (the operator, asked "Keep refusing, or replay such rules?"): "Keep
+**Decided** 2026-11-15 (the architect, asked "Keep refusing, or replay such rules?"): "Keep
 refusing": a timeline shows objects whose rules read their own series; replay can come later. The
 refusal stands as built and tested (C-048, C-052), its `DECISION PENDING` mark gone.
 
@@ -579,7 +579,7 @@ transform undoes what the page writes): the drawing is still, the page animates 
 a `use` painted through its shadow tree, a nested viewport measured through its own frame), the test
 driving it.
 
-**Decided** 2026-11-15 (the operator, asked "Which tool will draw the layouts?"): "Inkscape": the
+**Decided** 2026-11-15 (the architect, asked "Which tool will draw the layouts?"): "Inkscape": the
 reader takes Inkscape files as saved, its editor-only elements dropped on read; style attributes,
 text spans and matrix transforms kept. The drawing language is what Inkscape saves: its own
 elements (`sodipodi:*`, `inkscape:*` beside the drawing or in its `defs`, the `rdf` block in
@@ -590,7 +590,7 @@ refused. The subset above stands (Inkscape writes no sheet, class, animation, sc
 hidden layer (`display: none`) is refused, the hiding element named; a clone or an image where an
 object's element is refused with what to do in Inkscape (unlink the clone; draw the image as
 shapes, or move it out of the group). A construct Inkscape does not write is answered at the
-reader, never by teaching the page a new one. No Inkscape is installed here and the operator
+reader, never by teaching the page a new one. No Inkscape is installed here and the architect
 supplies no saved file: the fixture is a drawing written by hand to Inkscape 1.3's format, and no
 file saved by Inkscape has gone through the reader or the page (C-048 and C-051 state it).
 
@@ -607,7 +607,7 @@ and each answer invited the next.
 
 **Taken meanwhile**: every construction answered as it came.
 
-**Decided** 2026-11-15 (the operator, asked "Should supervisão's name check guard against accidents
+**Decided** 2026-11-15 (the architect, asked "Should supervisão's name check guard against accidents
 only, not deliberate hiding?"): "Accidents only" (the other choice read "Deliberate hiding too").
 The check is for a change made in good faith with ordinary tools: a name written as an editor, a
 formatter or the build toolchain writes text; a dependency, a file or a source brought in the ways
@@ -615,7 +615,7 @@ cargo, the compiler and git work in ordinary use. It lists the forms it reads. D
 concealment is outside it: a name encoded, split, nested or computed so that it is not read; a
 tool's flags or configuration used to keep a file or a source away from the check. The orchestrator
 reads the answer as the threat model of the whole clause, both its halves (the name scan, and what
-is compiled in or brought into the graph), the examples the operator read coming from both.
+is compiled in or brought into the graph), the examples the architect read coming from both.
 Nothing built comes out: every check and test stays, the ruling ends the escalation. A refutation of
 C-047 is a way a good-faith change gets past the check, named with the tool or the workflow that
 produces it; a construction whose only purpose is to evade is no finding. The ruling is C-047's
@@ -644,12 +644,12 @@ let a mesh draw as the browser draws it (nothing).
 
 **Taken meanwhile** (the most reversible): (b), nothing changed; the clause states the limit.
 
-**Decided** 2026-11-15, by the operator: "Drop the script, load it", (c), against the recommendation.
+**Decided** 2026-11-15, by the architect: "Drop the script, load it", (c), against the recommendation.
 The reader drops Inkscape's script beside a mesh gradient or a hatch (`svg::POLYFILLS`:
 `mesh_polyfill`, `hatch_polyfill`) where and as Inkscape writes it, a `script` of the root's own
 writing nothing but its id and a type, with all it holds, as it drops Inkscape's other elements;
 the drawing loads, and the shape filled with the mesh or the hatch shows no fill on the page, with
-no message. Any other script stays refused: the operator was asked about Inkscape's alone. The
+no message. Any other script stays refused: the architect was asked about Inkscape's alone. The
 script runs nowhere: the page removes every script before it draws, and neither of the host's
 policies runs one (C-048, C-049).
 
@@ -674,7 +674,7 @@ written; (c) every heading in capitals by style, σ drawn Σ and a unit's case l
 **Taken meanwhile** (the most reversible): (a), the one CSS property removed (`web/src/style.css`,
 `DECISION PENDING (Q28)` beside it); the census holds every text a panel shows to be drawn as written.
 
-**Decided** 2026-11-16, by the operator: "Page's own words only", (b), as the mock does it: "The
+**Decided** 2026-11-16, by the architect: "Page's own words only", (b), as the mock does it: "The
 page's own headings are written in capitals (STATE, OBJECT, KEY, MEDIAN, N); the symbol σ, an
 engineer's label and a view's column name are drawn exactly as written." An engineer who wants a
 label in capitals writes it so. The page types its own headings in capitals in its source (the
@@ -702,16 +702,16 @@ the names taken from the machine's own (its host name, `localhost`); (c) leave i
 
 **Taken meanwhile** (the most reversible): (c), nothing changed; C-049 states it as a limit.
 
-**Decided** 2026-11-16, by the operator: "Leave it for the security round", (c); and, asked when
+**Decided** 2026-11-16, by the architect: "Leave it for the security round", (c); and, asked when
 portal's own server (run without supervisão) is to be closed, "With the security round". Nothing is
 built now: the host's gap stays a limit C-049 states, portal on its own is an open item of the
 round, and portal's clauses stay verified. A firewall does not close it: the request comes from a
 browser that is allowed to reach the address. The round's open items are P-014, which names both
-ways the operator was asked about: a name re-pointed at the address (above); and a write a page of
+ways the architect was asked about: a name re-pointed at the address (above); and a write a page of
 any site posts as `text/plain`, which a browser sends to another site without asking it first and
 which portal's write and send routes parse as JSON whatever its `Content-Type` (`read_body`,
 `crates/veredas-portal/src/serve.rs`), while writes are armed, the page unable to read the answer.
-The second is read from the code, not yet shown by a test. What the operator was told of browsers
+The second is read from the code, not yet shown by a test. What the architect was told of browsers
 is Chrome's own account of local network access: from Chrome 142 a page from the public internet
 asks the user before it reaches a local or loopback address; a page on the plant's own network is
 not covered.
@@ -733,7 +733,7 @@ its state on its stroke alone, and a level on it fills over its stroke (as a sha
 
 **Taken meanwhile** (the most reversible): (a), nothing changed; C-051 states it as pending on Q30.
 
-**Decided** 2026-11-19, by the operator: "Its line, as drawn", (b), and the line keeps the width it
+**Decided** 2026-11-19, by the architect: "Its line, as drawn", (b), and the line keeps the width it
 was drawn with. The line takes the state's colour and keeps the width it was drawn with (never
 thinner than the page's own outline); nothing is painted inside, and a level runs along the line.
 This is how the design mock shows a stopped induction (`docs/design/supervisao/Main.dc.html`, the
@@ -741,7 +741,7 @@ inductions drawn as lines 10 wide, the stopped one the same line in amber). An o
 be painted as a body needs a fill in Inkscape. Not chosen: the line redrawn at the page's own thin
 width (1.4, which every bound shape's outline takes today, so a conveyor drawn 10 wide would show
 its state as a hairline); the enclosed area painted, as now. Read with it (the foundation's
-reading, not the operator's words): drawn with no fill is the fill computing to `none` as the
+reading, not the architect's words): drawn with no fill is the fill computing to `none` as the
 drawing stands before the page paints it, however it comes (an attribute, `style`, a group
 above), and a fill of zero opacity or of the background's colour is a fill; no width of the page's
 own thins such a line, the alarm's 2 and the selection's 2.5 among them; a level on such a shape
@@ -756,14 +756,14 @@ as drawn.
 Q31 to Q45 were written on 2026-11-19, when the briefing of 13 to 16 November on Oficina and
 controlador, its adversarial review and the robustness round were merged into this repository
 (`docs/oficina-plan.md`, `docs/controlador-plan.md`, `docs/robustness.md`, `docs/briefing/`). The
-operator: "the pending questions will be resolved later". Each groups the open points of one
+architect: "the pending questions will be resolved later". Each groups the open points of one
 subject; "the assistant" is the session that held the briefing.
 
 ## Q31 - Which of the review's majors and minors stand?
 
 **Raised** 2026-11-15, by the adversarial review of the briefing (`docs/briefing/review.md`).
 
-The review's 14 blockers were ruled the same day (its table "The operator's rulings"). Its 32
+The review's 14 blockers were ruled the same day (its table "The architect's rulings"). Its 32
 majors (entries 15 to 46) and its 9 minors (47 to 55) were not: each has its options and the
 assistant's pick in the review, and the review's last section proposes an order for deciding them.
 Some touch what is already built or decided here: entry 22 sets Oficina's starting of portal
@@ -771,12 +771,12 @@ sessions against Q19; entry 24 sets a colour computed by an expression against s
 that every state has a mark and a word; entry 33 is P-014's ground.
 
 **Taken meanwhile** (the most reversible): none of them is written into a plan as settled. The
-plans carry the decisions as the operator made them, and each plan's "Open" names the entries that
-touch it. An entry becomes a rule only by the operator's word.
+plans carry the decisions as the architect made them, and each plan's "Open" names the entries that
+touch it. An entry becomes a rule only by the architect's word.
 
 ## Q32 - What disqualifies an edit from a live takeover?
 
-**Raised** 2026-11-15, by the operator, ruling on the review's entry 5.
+**Raised** 2026-11-15, by the architect, ruling on the review's entry 5.
 
 "live fallback shall be enabled only when feasible. we need to build the specification for what
 disqualifies the edits for auto takeover. takeover after restart remains possible for all cases".
@@ -791,7 +791,7 @@ always be put back for the next start.
 
 ## Q33 - Where is controlador's execution model written, and what does it say?
 
-**Raised** 2026-11-15, by the review's entry 13; the operator chose the smaller first release
+**Raised** 2026-11-15, by the review's entry 13; the architect chose the smaller first release
 alone.
 
 Not chosen: writing the execution model as the first section of controlador's plan, and a fixed
@@ -837,11 +837,11 @@ is published before this is answered.
 
 ## Q36 - How is a download's integrity built?
 
-**Raised** 2026-11-16, by the operator's requirement that a download carry "a hash or crc so no
+**Raised** 2026-11-16, by the architect's requirement that a download carry "a hash or crc so no
 corrupted program may run".
 
 Ruled so far: the requirement; the recheck at power-on; two copies with a hash per block
-(`docs/robustness.md`). The assistant's proposal for the rest, put to the operator on 2026-11-16
+(`docs/robustness.md`). The assistant's proposal for the rest, put to the architect on 2026-11-16
 and not confirmed:
 - a manifest lists every part of a download with its SHA-256 and length, and the SHA-256 of the
   manifest is the download's identity (the download history already keeps a hash);
@@ -857,7 +857,7 @@ and not confirmed:
 
 ## Q37 - How is every request that alters the controller made robust?
 
-**Raised** 2026-11-16, by the operator: "every bit of data that alters the controller shall be
+**Raised** 2026-11-16, by the architect: "every bit of data that alters the controller shall be
 robust, that includes commands such as variable writes, breakpoints setting, state change".
 
 The assistant's proposal, put the same day and not confirmed: one rule for every altering request,
@@ -878,7 +878,7 @@ the download being its largest case, against the transmission faults listed in I
 Its limits and loose ends:
 - It guards against faults, not against a person; a keyed check (RFC 9421) belongs to the security
   round.
-- Read literally, the operator's sentence also covers peers' writes, where secured OPC UA already
+- Read literally, the architect's sentence also covers peers' writes, where secured OPC UA already
   signs and numbers its messages and Modbus/TCP has nothing beyond TCP's checksum. The assistant
   read the scope as the Oficina link.
 - The tunnel's end on the laptop is reachable by every program there, a page in a browser
@@ -899,9 +899,9 @@ Its limits and loose ends:
 
 **Raised** 2026-11-16, in the robustness round (`docs/robustness.md`, "What must survive").
 
-The rule is the operator's: "every piece of data that is necessary for computing the logic
+The rule is the architect's: "every piece of data that is necessary for computing the logic
 flawlessly in RUN mode", the commissioning scope outside it. The assistant's application of it,
-given to the operator and not ruled:
+given to the architect and not ruled:
 - inside: the running program; the hardware configuration and IO mapping; retained variables; the
   settings a scan depends on; the interpreter, the operating system and what boots them; the
   integrity data itself;
@@ -1057,14 +1057,14 @@ methods (`docs/robustness.md`, "The Linux study"). The assistant's caution, not 
 we do not choose, each cycle's data can be made consistent every cycle but reaches the drive only
 at set moments.
 
-**Taken meanwhile**: nothing. The round resumes with the operator.
+**Taken meanwhile**: nothing. The round resumes with the architect.
 
 ## Q43 - The security round: the positions going in, and its list
 
-**Raised** 2026-11-16, by the operator: "dedicated round to decide cyber security level
+**Raised** 2026-11-16, by the architect: "dedicated round to decide cyber security level
 suite-wise, future proof is the best way to design".
 
-The operator's positions going in: default user and password pairs written in a public manual do
+The architect's positions going in: default user and password pairs written in a public manual do
 not cover it, "most users will leave defaults"; "a password is always better than no password, and
 on the network controlador appears as a regular linux machine"; "once secured behind a login,
 controlador is just another linux machine. it is open source, and the responsability to keep it
@@ -1073,7 +1073,7 @@ scope: "none for now, I need to study".
 
 The assistant's inputs, not ruled: no default credential at all, the first commissioning step
 setting it (or SSH keys only); the data format is public in an open project, so it is no barrier;
-European product rules put duties on whoever supplies a product commercially, so the operator's
+European product rules put duties on whoever supplies a product commercially, so the architect's
 view holds while the suite itself is not sold (a reading, not legal advice).
 
 The round's list so far, beside P-014's two items (Q29):
@@ -1090,10 +1090,10 @@ The round's list so far, beside P-014's two items (Q29):
 
 ## Q44 - Conversion to native PLC code: the type table's open points
 
-**Raised** 2026-11-15, by the operator stating the goal: controlador's ORCL program and its
+**Raised** 2026-11-15, by the architect stating the goal: controlador's ORCL program and its
 hardware configuration convert to native PLC code, Siemens S7-1500 and S7-1200 first.
 
-The operator began a table mapping ORCL data types to S7 types. In it S7's BYTE, WORD, DWORD and
+The architect began a table mapping ORCL data types to S7 types. In it S7's BYTE, WORD, DWORD and
 LWORD map onto the unsigned integers, with no bit-string types of ORCL's own (the assistant's
 reading of the table). Checked on Siemens' TIA V21 pages that day: DATE runs to D#2169-06-06
 (2168-12-31 is the older S7-300/400 figure); DTL is 12 bytes, up to
@@ -1111,7 +1111,7 @@ Points the assistant raised, not decided:
   so the SCL translators and the ladder view still need a second front end that reads the source
   (the assistant's reading, not ruled).
 
-**Taken meanwhile**: nothing is written; the table is the operator's draft and is not in this
+**Taken meanwhile**: nothing is written; the table is the architect's draft and is not in this
 repository.
 
 ## Q45 - The briefing's readings and small open points
@@ -1132,7 +1132,7 @@ Readings of the assistant's, none ruled:
 - Windows gains a third use beside development and simulation, the IO check from a laptop;
 - for an unaccepted shadow test at a power cycle, "always as before" means the version that was
   driving drives again and the test stays unaccepted, the fallback flag resetting as decided;
-- the "knowledge protection" the operator mentioned in passing is a picture of the trade, not a
+- the "knowledge protection" the architect mentioned in passing is a picture of the trade, not a
   requirement: no such lock exists in ORCL's decisions.
 
 Open, never asked:

@@ -176,7 +176,7 @@ and nothing served.
 6. **The project file (P-010).** `project`: TOML with `format` and `version`, migration and
    refusal, Veredas 1's JSON read in; core's header reader replacing the four copies; the test
    over every file of the suite.
-7. **The shell and the embeddable build.** Q14 decided (the operator, 2026-11-09): the executable
+7. **The shell and the embeddable build.** Q14 decided (the architect, 2026-11-09): the executable
    stands as the shell, no desktop UI in portal; the build without default features for
    controlador's embedding.
 
@@ -184,7 +184,7 @@ Each phase ends with `cargo nextest run --workspace` green bare, `cargo test -p 
 its clauses recorded, refuted and verified. Push at the end of each phase.
 
 ## Decided in the briefing of November 2026, not built
-The operator's decisions of 13 to 19 November 2026 that touch portal (`docs/oficina-plan.md`,
+The architect's decisions of 13 to 19 November 2026 that touch portal (`docs/oficina-plan.md`,
 `docs/controlador-plan.md`, `docs/robustness.md`); status P-019. They override the lines above
 where they differ.
 - **Controlador embeds the full portal**, with its store and its server: "controlador embeds a
