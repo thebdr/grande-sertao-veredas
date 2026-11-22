@@ -10,15 +10,15 @@
     "opc_spec"
   ],
   "exitCode": 0,
-  "outputSha": "ec69371b1b4446a454447d70b2d8d309b3d6a10b9fc5b1be040a9eeb65a2ca54",
-  "outputTail": "test a_node_id_is_refused_with_the_input_quoted_and_the_form_shown ... ok\ntest only_tags_marked_writable_resolve_for_writing ... ok\ntest a_tag_configured_in_a_non_standard_spelling_is_found_by_that_text_and_polled_once ... ok\ntest node_ids_parse_in_every_standard_form ... ok\ntest columns_follow_tag_order_and_bits_expand_in_place_as_ints ... ok\ntest a_bits_only_tag_contributes_no_raw_column ... ok\ntest the_polled_node_set_is_deduplicated_across_and_within_rules_in_first_seen_order ... ok\ntest a_write_flag_is_always_respected ... ok\ntest a_tag_configured_with_surrounding_whitespace_still_resolves ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.06s\n     Running tests\\opc_spec.rs (target\\debug\\deps\\opc_spec-80c8a00bdb8b1ceb.exe)",
-  "ranAt": "2026-11-06T09:52:11.138Z",
-  "headCommit": "aed4d93c6319896b01d4e40ebbae671a0c55e050",
+  "outputSha": "4f48a0cafdcae05f997f6e7ae54f7da0f85a762fadec5239f8daaccb38c13e2a",
+  "outputTail": "test only_tags_marked_writable_resolve_for_writing ... ok\ntest node_ids_parse_in_every_standard_form ... ok\ntest the_polled_node_set_is_deduplicated_across_and_within_rules_in_first_seen_order ... ok\ntest columns_follow_tag_order_and_bits_expand_in_place_as_ints ... ok\ntest a_tag_configured_with_surrounding_whitespace_still_resolves ... ok\ntest a_write_flag_is_always_respected ... ok\ntest a_tag_configured_in_a_non_standard_spelling_is_found_by_that_text_and_polled_once ... ok\ntest a_node_id_is_refused_with_the_input_quoted_and_the_form_shown ... ok\ntest a_bits_only_tag_contributes_no_raw_column ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.47s\n     Running tests\\opc_spec.rs (target\\debug\\deps\\opc_spec-f13e233e4146b5cd.exe)",
+  "ranAt": "2026-11-22T03:34:04.923Z",
+  "headCommit": "bce672267cd54865220254335a17f2a5fba2a813",
   "tests": [
     {
       "name": "crates/veredas-core/tests/opc_spec.rs",
       "file": "crates/veredas-core/tests/opc_spec.rs",
-      "fileSha": "94d37913c3c8d23940e9f40d85b68d341fe2f1bdef939b8fe078289dc85310c5"
+      "fileSha": "79253b321829b7e03e24d03a78059519ba344f86ba60bce6d2775044cb8d9f79"
     }
   ]
 }
