@@ -332,7 +332,7 @@ Where each item stands on 2026-11-22:
   the assistant's proposal is `docs/controlador/execution-model.md`, for the architect to rule point
   by point (Q223). No code stands on it but the one case every option runs alike, one cyclic task.
 - **A study of the interpreter's front end** and of the list of core-library operations ORCL allows:
-  `docs/orcl/front-end.md` (Q221, Q222).
+  `docs/orcl/front-end.md` (Q221, Q222, Q227).
 - **The study of Linux for real time and of its recovery methods** (`docs/robustness.md`, "The Linux
   study"): `docs/controlador/linux-study.md`, its choices for the architect in Q226.
 - **PROFINET International membership**: the architect's.
@@ -357,4 +357,5 @@ Where each item stands on 2026-11-22:
   **Q44** the conversion's type table. **Q45** the briefing's readings.
 - **Q220** ORCL's version beside its crates'. **Q221, Q222** the front end's build and its pinned
   toolchain. **Q223** the execution model as proposed. **Q224** controlador's file names. **Q225**
-  a `clippy.toml` under law L7. **Q226** the Linux study's choices.
+  a `clippy.toml` under law L7. **Q226** the Linux study's choices. **Q227** the core-library
+  operations ORCL allows, a closed list or core's MIR interpreted.

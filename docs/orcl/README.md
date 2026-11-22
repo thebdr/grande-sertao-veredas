@@ -73,7 +73,8 @@ ruled, the engine runs one cyclic task, which stands on no assumed model.
 ### The interpreter
 A program compiled by rustc runs, on a controller, in an interpreter of our own (2026-11-13), for what native code
 cannot give: breakpoints and stepping on the real target, the shadow test and the online change, a scan halted at
-an instruction and resumed, every variable read and forced by name. Its requirements, from the briefing:
+an instruction and resumed, every variable read and forced by name. Its requirements, the first and the last the
+briefing's and the rest what its debugging, its faults and its online change need (the assistant's reading):
 - **bytecode from the compiler's intermediate form** through `rustc_public`, one pinned nightly (2026-11-15);
 - **suspendable at every instruction boundary**, which breakpoints, single cycle, a halt that holds every task and
   the fault at twice the period all need;
@@ -151,5 +152,5 @@ Read on 2026-11-22 from Veredas 1's branch `supervisao-plan` (2026-11-11): `crat
 - **Q33** controlador's execution model, which decides how the engine runs several tasks.
 - **Q35** the licence. **Q44** the type table, and a second front end for the translators.
 - **Q45** the reading that the conformance suite is only as good as the list of core operations ORCL allows.
-- **Q220** the language's version beside its crates'. **Q221** where the front end builds. **Q225** a `clippy.toml`
-  under law L7.
+- **Q220** the language's version beside its crates'. **Q221** where the front end builds. **Q222** the pinned nightly
+  and its moves. **Q225** a `clippy.toml` under law L7. **Q227** the list of core-library operations ORCL allows.

@@ -1945,3 +1945,117 @@ The assistant recommends (a).
 `crates/orcl-std/src/lib.rs`).
 
 **Reversible?** Yes: the file comes back as Veredas 1 had it.
+
+## Q221 - Where does ORCL's front end build, beside a workspace on stable?
+
+**Raised** 2026-11-22, by the controlador session, in the study of the interpreter's front end
+(`docs/orcl/front-end.md`).
+
+The front end is a `rustc_public` driver: it builds only on the pinned nightly, with `rustc-dev` and
+`#![feature(rustc_private)]`, and fails on stable (E0463). The workspace builds on stable, and law
+L1 holds every `orcl-*` crate to be a workspace member under `crates/`, never excluded.
+
+Options:
+- (a) `crates/orcl-front`, a member that builds on stable as an empty shell; its driver sits behind
+  a cargo feature that only the pinned nightly turns on (`cargo +<nightly> build -p orcl-front
+  --features driver`), so `cargo build --workspace` and the suite stay on stable, and the front
+  end's own tests run under the nightly by a command of their own.
+- (b) The whole workspace moves to the pinned nightly (`rust-toolchain.toml` at the root): one
+  toolchain, every member's build and every recorded run tied to a nightly that moves.
+- (c) A repository of its own, as Charon is; the interpreter here reads the program files it writes.
+- (d) A crate under `tools/` with a name outside `orcl-*`, excluded from the workspace with its own
+  toolchain file: L1 allows it, but it is part of the product, which Oficina ships, not repository
+  tooling.
+
+The assistant recommends (a).
+
+**Taken meanwhile**: nothing of the front end is built.
+
+**Reversible?** Yes: nothing is built.
+
+## Q222 - Which nightly does ORCL pin, and when does it move?
+
+**Raised** 2026-11-22, with Q221.
+
+`rustc_public` changes under one version number (six changes to MIR's enums in a year,
+`docs/orcl/front-end.md`), and the driver links its nightly's own compiler library at run time. So
+the pin decides what every sender's machine installs (293 MB, 1.5 GB installed), and each move means
+adapting the driver and running the conformance suite again.
+
+The assistant's proposal: pin `nightly-2026-11-21`, the one the study ran on (Kani pins the same);
+write it in the front end's toolchain file and in every program file's header; move it on purpose,
+at most a few times a year and never for a release that is being commissioned, each move a change of
+its own with the conformance suite as its gate; a controller runs program files from the nightlies
+its interpreter was proven against.
+
+**Taken meanwhile**: `nightly-2026-11-21`, for studies only, installed in the home folder of the
+development machine.
+
+**Reversible?** Yes, until a program file records its nightly.
+
+## Q226 - The Linux study's choices
+
+**Raised** 2026-11-22, by the controlador session, in the study of Linux for real time and recovery
+(`docs/controlador/linux-study.md`, owed by `docs/robustness.md` and Q42).
+
+The study found a tested method for every recovery mechanism the round asked about, corrected the
+list it started from (no `/sys/kernel/realtime` in mainline; systemd-timesyncd does not cross 2036;
+systemd rewinds a clock more than 15 years past its epoch) and leaves these choices, each with the
+assistant's recommendation:
+- **The kernel line**: kernel.org's long-term kernels (about four years) or the Civil Infrastructure
+  Platform's (ten years, 6.12-cip to 2035), and how a controller moves to the next line.
+  Recommended: CIP's.
+- **The update framework with fallback**: RAUC, SWUpdate with EFI Boot Guard, Mender,
+  systemd-sysupdate (UEFI only) or OSTree with greenboot; and what "booted well" means for a
+  controller. Recommended: SWUpdate with EFI Boot Guard, CIP's own reference, if CIP's kernel is
+  chosen; "booted well" meaning the controller's process up with its program loaded and its first
+  cycle within time.
+- **The system partition**: read-only under dm-verity, with correction or without, and what
+  uncorrectable damage does. Recommended: with correction (2 parity bytes, about 0.8 %),
+  uncorrectable damage restarting into the other slot, the count of corrected blocks a maintenance
+  request.
+- **The program's two copies**: Btrfs RAID1 (or DUP on one drive), a ZFS mirror (outside the kernel)
+  or dm-integrity under an LVM RAID1; the scrub's period and how its result becomes a maintenance
+  request. Recommended: Btrfs, in the kernel and repairing on read as well as on scrub.
+- **Time**: the NTP client (chrony or ntpd, not systemd-timesyncd); clock chips whose drivers answer
+  `RTC_VL_READ`, which an x86 PC's own clock does not; how systemd's 15-year rewind is switched off
+  in the system image. Recommended: chrony, a clock chip that reports, the rewind built out.
+- **The watchdog chain**: firmware or bootloader, kernel, PID 1, and the controller's own process
+  owning the last ping. Recommended: that chain, ending in the controller.
+- **Logs**: volatile, with pstore keeping a crash's record. Recommended.
+- **What a target must have**: ECC memory, a drive that reports its wear (eMMC or NVMe, not SD),
+  memory that keeps its content where retained data is saved every cycle, a power-fail line where
+  there is hold-up power. Recommended as the target's hardware description, read by Q40's "who says
+  what a target can do".
+
+**Taken meanwhile**: nothing is built on any of them. When controlador's check of real-time
+scheduling is built, it reads what mainline offers: the policy and priority the process got, its
+locked memory and `PREEMPT_RT` in the kernel's version string, never `/sys/kernel/realtime`.
+
+**Reversible?** Yes: nothing is built.
+
+## Q227 - The list of core-library operations ORCL allows: a closed list, or core's MIR interpreted?
+
+**Raised** 2026-11-22, by the controlador session, in the study of the interpreter's front end (the
+briefing's J2).
+
+The programs studied call into core at 27 distinct functions; core's own bodies use what ORCL never
+does (`isize`, `usize`, raw pointers, `Transmute`, closures, the formatting machinery of panics),
+and two leaves have no body in any build (`panic_impl`, `caller_location`).
+
+Options:
+- (a) A closed list, the cut at core: each allowed call from the program's crates into core is an
+  operation of the interpreter, implemented natively and proven against the native call by the
+  conformance suite; a call outside the list is refused when the program is lowered, by name and
+  place. The list grows one operation at a time. Eurydice does this.
+- (b) Core's MIR interpreted, as Miri does: a value model as wide as Rust's own (pointers, `usize`,
+  niches), a rebuilt standard library, the native list kept for the leaves anyway.
+
+The assistant recommends (a), with the list in `docs/orcl/front-end.md` as its start: what keeps
+ORCL's types and reaches no panic entry point by design. The refusal at lowering is what the
+interpreter cannot run, not a check of the program's structure, which the ruling of 2026-11-16
+leaves out.
+
+**Taken meanwhile**: nothing is built.
+
+**Reversible?** Yes: nothing is built.
