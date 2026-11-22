@@ -1,21 +1,21 @@
 {
   "clause": "C-150",
-  "command": "sh -c cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | grep -qE 'kind.:\\[.lib.\\],.crate_types.:\\[.lib.\\],.name.:.orcl_std.,.src_path.:.[^,]*/crates/orcl-std/src/lib[.]rs\"' && cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | grep -qE 'kind.:\\[.test.\\],.crate_types.:\\[.bin.\\],.name.:.blocks.,.src_path.:.[^,]*/crates/orcl-std/tests/blocks[.]rs\"' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none",
+  "command": "sh -c cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | python3 -I -c 'import json, os, sys; m = json.load(sys.stdin); found = sorted((p[\"name\"], t[\"name\"], t[\"kind\"], os.path.relpath(t[\"src_path\"], os.path.dirname(p[\"manifest_path\"]))) for p in m[\"packages\"] for t in p[\"targets\"] if t[\"name\"] in (\"orcl_std\", \"orcl-std\", \"blocks\")); sys.exit(found != [(\"orcl-std\", \"blocks\", [\"test\"], \"tests/blocks.rs\"), (\"orcl-std\", \"orcl_std\", [\"lib\"], \"src/lib.rs\")])' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none",
   "commandArgv": [
     "sh",
     "-c",
-    "cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | grep -qE 'kind.:\\[.lib.\\],.crate_types.:\\[.lib.\\],.name.:.orcl_std.,.src_path.:.[^,]*/crates/orcl-std/src/lib[.]rs\"' && cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | grep -qE 'kind.:\\[.test.\\],.crate_types.:\\[.bin.\\],.name.:.blocks.,.src_path.:.[^,]*/crates/orcl-std/tests/blocks[.]rs\"' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none"
+    "cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | python3 -I -c 'import json, os, sys; m = json.load(sys.stdin); found = sorted((p[\"name\"], t[\"name\"], t[\"kind\"], os.path.relpath(t[\"src_path\"], os.path.dirname(p[\"manifest_path\"]))) for p in m[\"packages\"] for t in p[\"targets\"] if t[\"name\"] in (\"orcl_std\", \"orcl-std\", \"blocks\")); sys.exit(found != [(\"orcl-std\", \"blocks\", [\"test\"], \"tests/blocks.rs\"), (\"orcl-std\", \"orcl_std\", [\"lib\"], \"src/lib.rs\")])' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none"
   ],
   "exitCode": 0,
-  "outputSha": "b11383e504d29d650709ba07e66c27ecdf025dcd8e158fa61f679946408c6e20",
-  "outputTail": "test crates/orcl-std/src/o14.rs - o14 (line 120) - compile fail ... ok\ntest crates/orcl-std/src/scan.rs - scan (line 70) - compile fail ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s\n\nall doctests ran in 0.75s; merged doctests compilation took 0.52s\n   Compiling orcl-std v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/controlador-4be04a/crates/orcl-std)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.75s\n     Running unittests src/lib.rs (target/debug/build/orcl-std/6f4af301044bd167/out/orcl_std-6f4af301044bd167)\n     Running tests/blocks.rs (target/debug/build/orcl-std/04ccbbb91e41921e/out/blocks-04ccbbb91e41921e)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n   Doc-tests orcl_std\n    Checking orcl-std v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/controlador-4be04a/crates/orcl-std)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.98s\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.30s",
-  "ranAt": "2026-11-22T23:19:32.869Z",
-  "headCommit": "3e757f38d9a034c46e9d5b5d9561ea10b9464e92",
+  "outputSha": "6bbe6310565ecf297708113ed6747609be6abfed4e87c8a19764ad7929909850",
+  "outputTail": "test crates/orcl-std/src/o14.rs - o14 (line 90) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 30) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 120) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 150) - compile fail ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s\n\nall doctests ran in 0.30s; merged doctests compilation took 0.26s\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s\n     Running unittests src/lib.rs (target/debug/build/orcl-std/6f4af301044bd167/out/orcl_std-6f4af301044bd167)\n     Running tests/blocks.rs (target/debug/build/orcl-std/04ccbbb91e41921e/out/blocks-04ccbbb91e41921e)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s\n   Doc-tests orcl_std\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s",
+  "ranAt": "2026-11-22T23:48:27.331Z",
+  "headCommit": "584d8e6a4fb10352b964870bfe0726656c64b875",
   "tests": [
     {
       "name": "crates/orcl-std/src/timers.rs",
       "file": "crates/orcl-std/src/timers.rs",
-      "fileSha": "db9c86e54b607abfedcf3bd621eab174c027322f93c6ee3284a2552dfc20f9d7"
+      "fileSha": "3f140333687c059a5e34d5725b6cd5016a7615ba95bde77f09ca27fc88be9390"
     },
     {
       "name": "crates/orcl-std/src/edges.rs",
@@ -50,7 +50,7 @@
     {
       "name": "crates/orcl-std/tests/blocks.rs",
       "file": "crates/orcl-std/tests/blocks.rs",
-      "fileSha": "c144743d08474bdf495f0af11de3ed00bd773a4330c2a98f59a0a6dc34ac097e"
+      "fileSha": "bf03ce7ed120560dc8dd7089d7cc99c4fac556f8fa2081352e9d34877bb98411"
     }
   ]
 }
