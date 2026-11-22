@@ -1259,8 +1259,8 @@ edit here is an edit there.
 
 What is built, 2026-11-22: the reading and the check (C-201), the engine run live against a portal
 session (C-202) and replayed over a stored window of one (C-203); every statement below about a
-run is held by their tests. What a run keeps on disk, its record and its acceptance report, is not
-built yet (`docs/comissionador-plan.md`, phase 4).
+run is held by their tests. What a run keeps on disk, its record and its acceptance report, is
+`docs/report-schema.md` (C-204).
 
 ## The file, line by line
 

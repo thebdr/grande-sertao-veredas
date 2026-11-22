@@ -15,6 +15,8 @@
 //!   and send, the switch read and never set.
 //! - [`run`]: the interpreter: a checked test bound to a plant and run on a clock that is the
 //!   store's axis, live or replayed over a stored window.
+//! - [`record`]: the runs folder: every run kept with the exact text that ran, its acceptance
+//!   report and the rows it read; read back, listed, noted and signed.
 //!
 //! Nothing here names a device, a vendor or a product: a plant's tests are files like the
 //! reference's, kept outside the suite's code.
@@ -27,6 +29,7 @@ pub mod lex;
 pub mod model;
 pub mod parse;
 pub mod plant;
+pub mod record;
 pub mod run;
 
 pub use check::{Checked, Counts, UsedFile, check_functions, check_test, load_functions, load_test};

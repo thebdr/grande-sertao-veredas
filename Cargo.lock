@@ -4353,10 +4353,12 @@ version = "2.0.0-alpha.1"
 dependencies = [
  "chrono",
  "proc-macro2",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "toml",
  "veredas-core",
  "veredas-maquinar",
  "veredas-portal",

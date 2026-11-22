@@ -5,9 +5,9 @@ The testing platform of Veredas 2; screens say **Comissionador**. `docs/veredas-
 (P-006, then the `C-2xx` clauses it becomes) wins on status. This file says what comissionador
 holds, how a test runs against a plant, what the engine offers Oficina, in which order it lands,
 and the traps met on the way. The test file and the function file are `docs/test-schema.md`; the
-look is `docs/design/comissionador/`. Phases 1 to 3 are built: the reading and the check (C-200,
-C-201) and the engine, live and replayed (C-202, C-203); the run record, the report and the
-executable are not.
+look is `docs/design/comissionador/`. Phases 1 to 4 are built: the reading and the check (C-200,
+C-201), the engine, live and replayed (C-202, C-203), the run record and the report (C-204,
+`docs/report-schema.md`); the executable is not.
 
 ## The role nobody covers
 **Comissionador runs a plant's acceptance tests: a test, written as one plain-text file, drives

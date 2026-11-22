@@ -23,6 +23,9 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 # The store's typed cells.
 serde_json = { workspace = true }
+# The acceptance report, a versioned TOML file written and read back.
+serde = { workspace = true }
+toml = { workspace = true }
 
 [dev-dependencies]
 # The bench plays the plant: its OPC UA server and the controller reference's machine.

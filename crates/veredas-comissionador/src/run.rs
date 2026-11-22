@@ -209,7 +209,14 @@ fn stmt_refs(body: &[Stmt], refs: &mut Vec<(String, String, Span)>, tables: &mut
 
 /// Check a test against the plant before its first step: everything the reference's binding
 /// paragraph lists, every problem named.
-pub fn bind(c: &Checked, plant: &dyn Plant, mode: &RunMode) -> Result<HashMap<String, Table>, Refused> {
+/// A test bound to a plant: the session's tables by name, and the ones the test reads.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bound {
+    pub tables: HashMap<String, Table>,
+    pub read: BTreeSet<String>,
+}
+
+pub fn bind(c: &Checked, plant: &dyn Plant, mode: &RunMode) -> Result<Bound, Refused> {
     let mut problems = Vec::new();
     let t = &c.test;
     if let Some(p) = t.portal()
@@ -284,6 +291,8 @@ pub fn bind(c: &Checked, plant: &dyn Plant, mode: &RunMode) -> Result<HashMap<St
         stmt_refs(&f.body, &mut refs, &mut await_tables);
     }
     let mut seen = BTreeSet::new();
+    let read: BTreeSet<String> =
+        await_tables.iter().cloned().chain(refs.iter().map(|(t, _, _)| t.clone())).filter(|t| tables.contains_key(t)).collect();
     for name in await_tables {
         if !tables.contains_key(&name) && seen.insert(name.clone()) {
             problems.push(format!("`{name}` is no table of the session"));
@@ -307,7 +316,7 @@ pub fn bind(c: &Checked, plant: &dyn Plant, mode: &RunMode) -> Result<HashMap<St
     if mode == &RunMode::Live && writes > 0 && !plant.armed() {
         problems.push("the test writes, and portal's write switch is off".to_string());
     }
-    if problems.is_empty() { Ok(tables) } else { Err(Refused(problems)) }
+    if problems.is_empty() { Ok(Bound { tables, read }) } else { Err(Refused(problems)) }
 }
 
 // ---- the run -------------------------------------------------------------------------------------
@@ -449,7 +458,7 @@ struct Runner<'a> {
 /// Run a checked test against a plant: bound first (nothing runs when it is refused), then step
 /// by step until a step ends it or it runs past its last step.
 pub fn run(c: &Checked, plant: &dyn Plant, opts: &RunOptions, listener: &mut dyn FnMut(&Event)) -> Result<RunResult, Refused> {
-    let tables = bind(c, plant, &opts.mode)?;
+    let Bound { tables, read } = bind(c, plant, &opts.mode)?;
     let (start, horizon) = match opts.mode {
         RunMode::Live => (plant.now_ms(), i64::MAX),
         RunMode::Replay { from_ms, to_ms } => (from_ms, to_ms),
@@ -465,7 +474,6 @@ pub fn run(c: &Checked, plant: &dyn Plant, opts: &RunOptions, listener: &mut dyn
             Err(err) => return Err(Refused(vec![format!("the constant `{}`: {err}", name.value)])),
         }
     }
-    let read: BTreeSet<String> = tables.keys().cloned().collect();
     let mut r = Runner {
         c,
         plant,
@@ -488,12 +496,11 @@ pub fn run(c: &Checked, plant: &dyn Plant, opts: &RunOptions, listener: &mut dyn
             criteria: Vec::new(),
             reported: Vec::new(),
             writes: Vec::new(),
-            tables: BTreeSet::new(),
+            tables: read,
         },
         listener,
         tables,
     };
-    let _ = read;
     r.main();
     Ok(r.result)
 }

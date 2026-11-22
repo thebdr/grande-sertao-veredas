@@ -274,7 +274,7 @@ fn its_sources_reach_the_plant_through_portal_alone_and_never_arm_the_switch() {
 }
 
 /// Its normal dependencies, each reviewed: no OPC UA stack, no socket or HTTP crate of its own.
-const DEPENDENCIES: &[&str] = &["chrono", "serde_json", "thiserror", "tokio", "veredas-core", "veredas-portal"];
+const DEPENDENCIES: &[&str] = &["chrono", "serde", "serde_json", "thiserror", "tokio", "toml", "veredas-core", "veredas-portal"];
 
 #[test]
 fn its_normal_dependencies_are_the_reviewed_ones() {
