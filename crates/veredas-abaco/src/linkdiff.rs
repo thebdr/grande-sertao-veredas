@@ -97,9 +97,9 @@ fn first_difference(a: &str, b: &str) -> Option<String> {
 /// return and a tab written `\n`, `\r` and `\t`, and written `\u{..}`: any other control
 /// character, every space but the plain one (a no-break space, a thin space), Unicode's line and
 /// paragraph separators, the listed invisible format characters (a zero-width space, a soft
-/// hyphen, a byte-order mark, the bidirectional controls) and the combining marks of Latin, Greek
-/// and Cyrillic text (so a decomposed accent reads apart from a composed one), so the line stays
-/// one line. Every other character as it is; a boolean upper-case, an error as itself, an empty
+/// hyphen, a byte-order mark, the bidirectional controls) and the combining marks Latin, Greek
+/// and Cyrillic letters decompose into (so a decomposed accent reads apart from a composed one), so
+/// the line stays one line. Every other character as it is; a boolean upper-case, an error as itself, an empty
 /// cell as `(empty)`. What else could read alike, a line tells apart by code point
 /// (`LinkDiff`'s display).
 pub fn format_value(value: Option<&ExternalValue>) -> String {
@@ -152,7 +152,7 @@ fn escaped(c: char) -> bool {
                 | '\u{fe00}'..='\u{fe0f}'
                 | '\u{feff}'
         )
-        // the combining marks Latin, Greek and Cyrillic text decomposes into
+        // the combining marks Latin, Greek and Cyrillic letters decompose into
         || matches!(c, '\u{0300}'..='\u{036f}' | '\u{1ab0}'..='\u{1aff}' | '\u{1dc0}'..='\u{1dff}' | '\u{20d0}'..='\u{20ff}' | '\u{fe20}'..='\u{fe2f}')
 }
 
