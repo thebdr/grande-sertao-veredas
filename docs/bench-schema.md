@@ -1,15 +1,15 @@
 # The bench file: `veredas-bench`, version 1
 
 A bench is the plant a consumer meets before the real one (`docs/veredas-plan.md`,
-"veredas-maquinar: the bench"): the log emitters, the OPC UA, Modbus and EtherNet/IP servers and
-the telegram channels it talks to, each configured, none programmed. One bench file lists them all by name, and the
+"veredas-maquinar: the bench"): the log emitters, the OPC UA, Modbus and EtherNet/IP servers, the
+PROFINET devices and the telegram channels it talks to, each configured, none programmed. One bench file lists them all by name, and the
 device's own files sit beside it: core's channel file (`docs/channel-schema.md`), the catalog
 (`docs/catalog-schema.md`) and, when a controller rides a channel, its rules file
 (`docs/controller-schema.md`). `veredas_maquinar::bench::load` reads the bench file and every
 file it points at and checks each part as its own module checks it, so a bench file that loads
 is a bench every part of which can start; `Bench::start` then runs every part behind one handle,
-emitters first, then servers (OPC UA, then Modbus, then EtherNet/IP), then channels, each kind in
-the file's order
+emitters first, then servers (OPC UA, then Modbus, then EtherNet/IP), then PROFINET devices, then
+channels, each kind in the file's order
 (TOML groups a kind's tables under one key, so a file keeps no order across kinds), and the executable
 `veredas-maquinar <bench.toml>` runs it from the command line (`--check` reads, checks and
 prints the plan without starting anything). No device is named anywhere: a
@@ -125,6 +125,26 @@ points = [
 ]
 ```
 
+## A fourth example: a PROFINET device not yet named
+
+A device answers on a network interface of its own, not yet named, as it comes from its box: an
+engineer's tool finds it by an Identify of every device, names it and gives it an address with a
+Set, and finds it again by its new name. `crates/veredas-maquinar/tests/profinet_device.rs` runs this
+block inside a private network of the test's own, the device on one end of a veth pair and the tool
+on the other.
+
+```toml
+format = "veredas-bench"
+version = 1
+
+[[profinet]]
+name = "fresh"
+interface = "b0"
+vendor_id = 7
+device_id = 9
+lldp_interval_ms = 1000
+```
+
 ## Keys
 
 Each key states in parentheses that it is required, or the value it takes when left out. Every
@@ -143,6 +163,7 @@ relative to the bench file's folder.
 - `opc` (none): `[[opc]]` tables.
 - `modbus` (none): `[[modbus]]` tables.
 - `ethernetip` (none): `[[ethernetip]]` tables.
+- `profinet` (none): `[[profinet]]` tables.
 - `channel` (none): `[[channel]]` tables.
 
 **An emitter** (`[[emitter]]`): a log a plant would write, line by line into rotating files.
@@ -301,6 +322,27 @@ on different bits.
 - `type` (`bool` with a bit, `u8` without): `bool`, `u8`, `i8`, `u16`, `i16`, `u32`, `i32` or `f32`.
 - `value` (the type's zero): the initial value as text, parsed per the type.
 
+**A PROFINET device** (`[[profinet]]`): a device's discovery and naming on a network interface, raw
+frames through aranha's link (Linux): a Hello at start, an Identify it matches answered within the
+request's response delay, a Set of its name, its address or the identification signal applied and
+each block answered, a Get answered, LLDP on its port.
+- `name` (required): the part's name.
+- `interface` (required): the network interface it answers on, by name.
+- `station` (`""`): its station name, the standard's rule for one; empty for a device not yet
+  named, which answers no Identify by name.
+- `alias` (none): its alias name.
+- `vendor` (`"veredas bench device"`): the vendor's text for its type, 1 to 255 characters.
+- `vendor_id` (`0`), `device_id` (`0`): its vendor and device ids.
+- `ip` (none): its IP suite, as an inline table; absent, 0.0.0.0 and not set.
+- `hello` (`true`): a Hello at start.
+- `lldp_interval_ms` (`5000`): between LLDP frames; `0` sends none.
+- `port` (`"port-001"`): its port's name, `port-` and its number.
+- `seed` (none): the seed of its answers' spread over a response delay; the clock when absent.
+
+**An IP suite** (the value of `ip`).
+- `address` (required), `mask` (required): dotted quads.
+- `gateway` (`"0.0.0.0"`): a dotted quad.
+
 **A channel** (`[[channel]]`): one telegram link, listening or dialling.
 - `name` (required): the part's name.
 - `role` (required): `listen` (wait for the peer to connect) or `connect` (dial it).
@@ -326,9 +368,11 @@ emitter's file name or timestamp format that is bad, a value's range that is emp
 finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past
 its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP
 adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past
-its assembly's bytes or over another), a file a channel points at that cannot be read or does not
-load, an `id_field` that does not ride in the framing, a controller file that
+its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name
+the standard refuses, a port not named `port-`), a file a channel points at that cannot be read or
+does not load, an `id_field` that does not ride in the framing, a controller file that
 does not load against the catalog, a message the catalog lacks or whose fields leave a name
 unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the
 place named, before anything binds, opens or spawns. A part that cannot start (a port taken, a
-folder that cannot be created) stops the parts started before it and is named.
+folder that cannot be created, an interface that is not there) stops the parts started before it and
+is named.

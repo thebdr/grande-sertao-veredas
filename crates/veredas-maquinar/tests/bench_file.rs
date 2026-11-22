@@ -15,6 +15,7 @@ use veredas_maquinar::channel::CyclicMessage;
 use veredas_maquinar::emit::{Encoding, ValueField};
 use veredas_maquinar::ethernetip::{AssemblyConfig, ConnectionConfig, DataHeader, EnipConfig, Identity, PointConfig as EnipPoint, PointType as EnipType};
 use veredas_maquinar::modbus::{ModbusConfig, PointConfig, PointType, Table, WordOrder};
+use veredas_maquinar::profinet::{IpConfig, ProfinetConfig};
 use veredas_maquinar::opc::{Access, Credentials, Ramp, Randomize, Reaction, Step, TagConfig, TagType};
 
 fn doc(name: &str) -> String {
@@ -241,6 +242,8 @@ fn full_file(port: u16) -> String {
          assemblies = [ {{ instance = 100, size = 4 }}, {{ instance = 150, size = 2 }}, {{ instance = 151, size = 1 }} ]\n\
          connections = [ {{ config = 151, output = 150, input = 100, output_header = \"modeless\", input_header = \"run-idle\" }} ]\n\
          points = [ {{ name = \"q\", assembly = 100, byte = 0, bit = 1, type = \"bool\", value = \"true\" }} ]\n\n\
+         [[profinet]]\nname = \"d\"\ninterface = \"pn0\"\nstation = \"io-1\"\nalias = \"port-001.sw\"\nvendor = \"v\"\nvendor_id = 7\ndevice_id = 9\n\
+         ip = {{ address = \"10.0.0.2\", mask = \"255.0.0.0\", gateway = \"10.0.0.1\" }}\nhello = false\nlldp_interval_ms = 0\nport = \"port-002\"\nseed = 4\n\n\
          [[channel]]\nname = \"c\"\nrole = \"listen\"\nhost = \"127.0.0.1\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\ncontroller = \"machine.toml\"\n\
          messages = [ {{ message = \"status\", every_ms = 100, fields = [ {{ name = \"running\", value = 1 }}, {{ name = \"speed\", value = 1 }} ] }} ]\n",
         header()
@@ -304,9 +307,10 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
         tables,
         [
             "The top level", "An emitter", "A value", "An OPC UA server", "A user", "A tag", "A draw", "A ramp", "A reaction", "A step", "A Modbus server", "A point",
-            "An EtherNet/IP adapter", "An identity", "An assembly", "A connection", "An assembly point", "A channel", "A message"
+            "An EtherNet/IP adapter", "An identity", "An assembly", "A connection", "An assembly point", "A PROFINET device", "An IP suite", "A channel",
+            "A message"
         ],
-        "the reference's nineteen tables"
+        "the reference's twenty-one tables"
     );
     let dir = scratch("walk");
     let (_, port) = plant(&dir);
@@ -319,6 +323,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             "An OPC UA server" => "[[opc]]",
             "A Modbus server" => "[[modbus]]",
             "An EtherNet/IP adapter" => "[[ethernetip]]",
+            "A PROFINET device" => "[[profinet]]",
             "A channel" => "[[channel]]",
             _ => return None,
         })
@@ -337,6 +342,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             "An assembly" => "instance = 100\nsize = 4\n",
             "A connection" => "config = 151\noutput = 150\ninput = 100\noutput_header = \"modeless\"\ninput_header = \"run-idle\"\n",
             "An assembly point" => "name = \"q\"\nassembly = 100\nbyte = 0\nbit = 1\ntype = \"bool\"\nvalue = \"true\"\n",
+            "An IP suite" => "address = \"10.0.0.2\"\nmask = \"255.0.0.0\"\ngateway = \"10.0.0.1\"\n",
             "A message" => "message = \"status\"\nevery_ms = 100\nfields = [ { name = \"running\", value = 1 } ]\n",
             other => panic!("{other}"),
         }
@@ -359,6 +365,8 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             "An assembly" => full.replace("{ instance = 100, size = 4 }", "{ instance = 100, zz = 1, size = 4 }"),
             "A connection" => full.replace("{ config = 151,", "{ config = 151, zz = 1,"),
             "An assembly point" => full.replace("{ name = \"q\",", "{ name = \"q\", zz = 1,"),
+            "A PROFINET device" => full.replace("[[profinet]]\n", &format!("[[profinet]]\n{zz}")),
+            "An IP suite" => full.replace("ip = { address = \"10.0.0.2\",", "ip = { address = \"10.0.0.2\", zz = 1,"),
             "A channel" => full.replace("[[channel]]\n", &format!("[[channel]]\n{zz}")),
             "A value" => full.replace("{ name = \"v\",", "{ name = \"v\", zz = 1,"),
             "A user" => full.replace("{ name = \"u\",", "{ name = \"u\", zz = 1,"),
@@ -392,6 +400,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                     ("The top level", "opc") => without_sections(&full, &["[[opc]]"]),
                     ("The top level", "modbus") => without_sections(&full, &["[[modbus]]"]),
                     ("The top level", "ethernetip") => without_sections(&full, &["[[ethernetip]]"]),
+                    ("The top level", "profinet") => without_sections(&full, &["[[profinet]]"]),
                     // Connections and points name the assemblies.
                     ("An EtherNet/IP adapter", "assemblies") => {
                         without_line(&without_line(&without_line(&full, "[[ethernetip]]", "assemblies"), "[[ethernetip]]", "connections"), "[[ethernetip]]", "points")
@@ -419,6 +428,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                     ("The top level", "opc") => assert!(default == "none" && spec.servers.is_empty()),
                     ("The top level", "modbus") => assert!(default == "none" && spec.modbus.is_empty()),
                     ("The top level", "ethernetip") => assert!(default == "none" && spec.ethernetip.is_empty()),
+                    ("The top level", "profinet") => assert!(default == "none" && spec.profinet.is_empty()),
                     ("The top level", "channel") => assert!(default == "none" && spec.channels.is_empty()),
                     ("An emitter", "values") => assert!(default == "none" && spec.emitters[0].values.is_empty()),
                     ("An emitter", "max_lines") => assert_eq!((default.as_str(), spec.emitters[0].max_lines), ("0", 0)),
@@ -451,6 +461,16 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                     ("An EtherNet/IP adapter", "assemblies") => assert!(default == "none" && spec.ethernetip[0].1.assemblies.is_empty()),
                     ("An EtherNet/IP adapter", "connections") => assert!(default == "none" && spec.ethernetip[0].1.connections.is_empty()),
                     ("An EtherNet/IP adapter", "points") => assert!(default == "none" && spec.ethernetip[0].1.points.is_empty()),
+                    ("A PROFINET device", "station") => assert!(default == "\"\"" && spec.profinet[0].1.station.is_empty()),
+                    ("A PROFINET device", "alias") => assert!(default == "none" && spec.profinet[0].1.alias.is_none()),
+                    ("A PROFINET device", "vendor") => assert_eq!((default.as_str(), spec.profinet[0].1.vendor.as_str()), ("\"veredas bench device\"", "veredas bench device")),
+                    ("A PROFINET device", "vendor_id") => assert_eq!((default.as_str(), spec.profinet[0].1.vendor_id), ("0", 0)),
+                    ("A PROFINET device", "device_id") => assert_eq!((default.as_str(), spec.profinet[0].1.device_id), ("0", 0)),
+                    ("A PROFINET device", "ip") => assert!(default == "none" && spec.profinet[0].1.ip.is_none()),
+                    ("A PROFINET device", "hello") => assert!(default == "true" && spec.profinet[0].1.hello),
+                    ("A PROFINET device", "lldp_interval_ms") => assert_eq!((default.as_str(), spec.profinet[0].1.lldp_interval_ms), ("5000", 5000)),
+                    ("A PROFINET device", "port") => assert_eq!((default.as_str(), spec.profinet[0].1.port.as_str()), ("\"port-001\"", "port-001")),
+                    ("A PROFINET device", "seed") => assert!(default == "none" && spec.profinet[0].1.seed.is_none()),
                     ("A channel", "host") => assert_eq!((default.as_str(), &spec.channels[0].role), ("\"127.0.0.1\"", &Role::Listen { bind: "127.0.0.1".into(), port })),
                     ("A channel", "controller") => assert!(default == "none" && spec.channels[0].controller.is_none()),
                     ("A channel", "messages") => assert!(default == "none" && spec.channels[0].messages.is_empty()),
@@ -514,6 +534,8 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                 ("An assembly point", "type") => check!(EnipPoint, |p| default == "bool` with a bit, `u8` without" && p.ty.is_none()),
                 ("An assembly point", "value") => check!(EnipPoint, |p| default == "the type's zero" && p.value.is_empty()),
                 ("An assembly point", _) => check!(EnipPoint, |_| false),
+                ("An IP suite", "gateway") => check!(IpConfig, |i| default == "\"0.0.0.0\"" && i.gateway.is_unspecified()),
+                ("An IP suite", _) => check!(IpConfig, |_| false),
                 ("A message", "every_ms") => check!(CyclicMessage, |m| default == "0" && m.every_ms == 0),
                 ("A message", "fields") => check!(CyclicMessage, |m| default == "none" && m.fields.is_empty()),
                 ("A message", _) => check!(CyclicMessage, |_| false),
@@ -550,6 +572,27 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
     assert!(prose.contains("`words` (`\"high-first\"`): which of a two-register point's registers holds the high word, `high-first` (the one at its address) or `low-first`;"));
     assert_eq!(variants(toml::from_str::<PointConfig>(&point("table = \"coil\"\nwords = \"x\"")).unwrap_err().to_string()), ["high-first", "low-first"]);
     assert_eq!(toml::from_str::<PointConfig>(&point("table = \"coil\"\nwords = \"low-first\"")).unwrap().words, Some(WordOrder::LowFirst));
+    // Every key of a PROFINET device reaches its configuration, each with a value of its own.
+    let d = load(&full, &dir).unwrap();
+    assert_eq!(
+        d.profinet,
+        vec![(
+            "d".to_string(),
+            ProfinetConfig {
+                interface: "pn0".into(),
+                station: "io-1".into(),
+                alias: Some("port-001.sw".into()),
+                vendor: "v".into(),
+                vendor_id: 7,
+                device_id: 9,
+                ip: Some(IpConfig { address: "10.0.0.2".parse().unwrap(), mask: "255.0.0.0".parse().unwrap(), gateway: "10.0.0.1".parse().unwrap() }),
+                hello: false,
+                lldp_interval_ms: 0,
+                port: "port-002".into(),
+                seed: Some(4),
+            }
+        )]
+    );
     // Every key of an EtherNet/IP adapter reaches its configuration, each with a value of its own.
     let x = load(&full, &dir).unwrap();
     assert_eq!(x.ethernetip[0].0, "x");
@@ -655,6 +698,11 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     assert_eq!(refused(&format!("{h}[[opc]]\nname = \"s\"\nbind = \" \"\n"), &dir), "opc[0] (`s`): opc.bind is empty");
     assert_eq!(refused(&emitter("[[modbus]]\nname = \"e\"\n"), &dir), "modbus[0]: `e` is already the name of the emitter `e`");
     assert_eq!(refused(&emitter("[[ethernetip]]\nname = \"e\"\n"), &dir), "ethernetip[0]: `e` is already the name of the emitter `e`");
+    assert_eq!(refused(&emitter("[[profinet]]\nname = \"e\"\ninterface = \"pn0\"\n"), &dir), "profinet[0]: `e` is already the name of the emitter `e`");
+    assert_eq!(refused(&format!("{h}[[profinet]]\nname = \"d\"\ninterface = \" \"\n"), &dir), "profinet[0] (`d`): profinet.interface is empty");
+    let err = refused(&format!("{h}[[profinet]]\nname = \"d\"\ninterface = \"pn0\"\nstation = \"Bad_Name\"\n"), &dir);
+    assert!(err.starts_with("profinet[0] (`d`): profinet.station `Bad_Name`: "), "{err}");
+    assert_eq!(refused(&format!("{h}[[profinet]]\nname = \"d\"\ninterface = \"pn0\"\nport = \"x1\"\n"), &dir), "profinet[0] (`d`): profinet.port `x1`: a port is named port-xyz");
     assert_eq!(
         refused(&format!("{h}[[ethernetip]]\nname = \"x\"\nassemblies = [ {{ instance = 5, size = 1 }}, {{ instance = 5, size = 2 }} ]\n"), &dir),
         "ethernetip[0] (`x`): ethernetip.assemblies[1]: instance 5 is declared twice"
@@ -702,9 +750,9 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     );
     // The closing paragraph says so.
     let prose = doc_prose();
-    assert!(prose.contains("A misspelled key in any table, a part without a name or with a name another part has, an emitter's file name or timestamp format that is bad, a value's range that is empty or not finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past its assembly's bytes or over another), a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that does not load against the catalog, a message the catalog lacks or whose fields leave a name unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the place named, before anything binds, opens or spawns."));
+    assert!(prose.contains("A misspelled key in any table, a part without a name or with a name another part has, an emitter's file name or timestamp format that is bad, a value's range that is empty or not finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name the standard refuses, a port not named `port-`), a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that does not load against the catalog, a message the catalog lacks or whose fields leave a name unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the place named, before anything binds, opens or spawns."));
     // A part that cannot start: a server on a taken port, named; the emitter before it stopped.
-    assert!(prose.contains("A part that cannot start (a port taken, a folder that cannot be created) stops the parts started before it and is named."));
+    assert!(prose.contains("A part that cannot start (a port taken, a folder that cannot be created, an interface that is not there) stops the parts started before it and is named."));
     let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let taken = squatter.local_addr().unwrap().port();
     let spec = load(&format!("{}[[opc]]\nname = \"s\"\nport = {taken}\n", emitter("")), &dir).unwrap();
@@ -743,6 +791,13 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     let spec = load(&format!("{h}[[ethernetip]]\nname = \"x\"\nport = {taken}\nio_port = 0\n"), &dir).unwrap();
     let err = start_err(spec);
     assert!(err.starts_with(&format!("ethernetip `x`: bind 127.0.0.1:{taken} (tcp): ")), "{err}");
+    // A PROFINET device on an interface that is not there, named; the adapter started before it
+    // stopped, its port free.
+    let q = free_port();
+    let spec = load(&format!("{h}[[profinet]]\nname = \"d\"\ninterface = \"nowhere0\"\n\n[[ethernetip]]\nname = \"x\"\nport = {q}\nio_port = 0\n"), &dir).unwrap();
+    let err = start_err(spec);
+    assert!(err.starts_with("profinet `d`: the interface: "), "{err}");
+    assert!(std::net::TcpListener::bind(("127.0.0.1", q)).is_ok(), "the adapter before it stopped");
     // Servers start before channels: a channel that would dial the test's own socket never
     // dials when a server before it fails.
     let ear = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -776,7 +831,7 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
 
 #[test]
 fn the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order() {
-    assert!(doc_prose().contains("emitters first, then servers (OPC UA, then Modbus, then EtherNet/IP), then channels, each kind in the file's order (TOML groups a kind's tables under one key, so a file keeps no order across kinds)"));
+    assert!(doc_prose().contains("emitters first, then servers (OPC UA, then Modbus, then EtherNet/IP), then PROFINET devices, then channels, each kind in the file's order (TOML groups a kind's tables under one key, so a file keeps no order across kinds)"));
     let dir = scratch("order");
     let (_, port) = plant(&dir);
     let text = format!(
@@ -1107,15 +1162,15 @@ const REFERENCE: &str = r#"
 # The bench file: `veredas-bench`, version 1
 
 A bench is the plant a consumer meets before the real one (`docs/veredas-plan.md`,
-"veredas-maquinar: the bench"): the log emitters, the OPC UA, Modbus and EtherNet/IP servers and
-the telegram channels it talks to, each configured, none programmed. One bench file lists them all by name, and the
+"veredas-maquinar: the bench"): the log emitters, the OPC UA, Modbus and EtherNet/IP servers, the
+PROFINET devices and the telegram channels it talks to, each configured, none programmed. One bench file lists them all by name, and the
 device's own files sit beside it: core's channel file (`docs/channel-schema.md`), the catalog
 (`docs/catalog-schema.md`) and, when a controller rides a channel, its rules file
 (`docs/controller-schema.md`). `veredas_maquinar::bench::load` reads the bench file and every
 file it points at and checks each part as its own module checks it, so a bench file that loads
 is a bench every part of which can start; `Bench::start` then runs every part behind one handle,
-emitters first, then servers (OPC UA, then Modbus, then EtherNet/IP), then channels, each kind in
-the file's order
+emitters first, then servers (OPC UA, then Modbus, then EtherNet/IP), then PROFINET devices, then
+channels, each kind in the file's order
 (TOML groups a kind's tables under one key, so a file keeps no order across kinds), and the executable
 `veredas-maquinar <bench.toml>` runs it from the command line (`--check` reads, checks and
 prints the plan without starting anything). No device is named anywhere: a
@@ -1155,6 +1210,14 @@ bit and a speed the plant side sets. `crates/veredas-maquinar/tests/ethernetip_a
 block on ports the machine chooses, opens the connection with codecs the bench did not write, and
 sees the plant side meet it.
 
+## A fourth example: a PROFINET device not yet named
+
+A device answers on a network interface of its own, not yet named, as it comes from its box: an
+engineer's tool finds it by an Identify of every device, names it and gives it an address with a
+Set, and finds it again by its new name. `crates/veredas-maquinar/tests/profinet_device.rs` runs this
+block inside a private network of the test's own, the device on one end of a veth pair and the tool
+on the other.
+
 ## Keys
 
 Each key states in parentheses that it is required, or the value it takes when left out. Every
@@ -1173,6 +1236,7 @@ relative to the bench file's folder.
 - `opc` (none): `[[opc]]` tables.
 - `modbus` (none): `[[modbus]]` tables.
 - `ethernetip` (none): `[[ethernetip]]` tables.
+- `profinet` (none): `[[profinet]]` tables.
 - `channel` (none): `[[channel]]` tables.
 
 **An emitter** (`[[emitter]]`): a log a plant would write, line by line into rotating files.
@@ -1331,6 +1395,27 @@ on different bits.
 - `type` (`bool` with a bit, `u8` without): `bool`, `u8`, `i8`, `u16`, `i16`, `u32`, `i32` or `f32`.
 - `value` (the type's zero): the initial value as text, parsed per the type.
 
+**A PROFINET device** (`[[profinet]]`): a device's discovery and naming on a network interface, raw
+frames through aranha's link (Linux): a Hello at start, an Identify it matches answered within the
+request's response delay, a Set of its name, its address or the identification signal applied and
+each block answered, a Get answered, LLDP on its port.
+- `name` (required): the part's name.
+- `interface` (required): the network interface it answers on, by name.
+- `station` (`""`): its station name, the standard's rule for one; empty for a device not yet
+  named, which answers no Identify by name.
+- `alias` (none): its alias name.
+- `vendor` (`"veredas bench device"`): the vendor's text for its type, 1 to 255 characters.
+- `vendor_id` (`0`), `device_id` (`0`): its vendor and device ids.
+- `ip` (none): its IP suite, as an inline table; absent, 0.0.0.0 and not set.
+- `hello` (`true`): a Hello at start.
+- `lldp_interval_ms` (`5000`): between LLDP frames; `0` sends none.
+- `port` (`"port-001"`): its port's name, `port-` and its number.
+- `seed` (none): the seed of its answers' spread over a response delay; the clock when absent.
+
+**An IP suite** (the value of `ip`).
+- `address` (required), `mask` (required): dotted quads.
+- `gateway` (`"0.0.0.0"`): a dotted quad.
+
 **A channel** (`[[channel]]`): one telegram link, listening or dialling.
 - `name` (required): the part's name.
 - `role` (required): `listen` (wait for the peer to connect) or `connect` (dial it).
@@ -1356,10 +1441,12 @@ emitter's file name or timestamp format that is bad, a value's range that is emp
 finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past
 its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP
 adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past
-its assembly's bytes or over another), a file a channel points at that cannot be read or does not
-load, an `id_field` that does not ride in the framing, a controller file that
+its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name
+the standard refuses, a port not named `port-`), a file a channel points at that cannot be read or
+does not load, an `id_field` that does not ride in the framing, a controller file that
 does not load against the catalog, a message the catalog lacks or whose fields leave a name
 unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the
 place named, before anything binds, opens or spawns. A part that cannot start (a port taken, a
-folder that cannot be created) stops the parts started before it and is named.
+folder that cannot be created, an interface that is not there) stops the parts started before it and
+is named.
 "#;

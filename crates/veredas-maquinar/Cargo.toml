@@ -13,6 +13,9 @@ description = "The bench of Veredas 2: simulated hardware on the real wire, by c
 # The shared types, the deterministic PCG32, the telegram layer (channel, framing, catalog,
 # compose) and the OPC demo plumbing (its relay) the bench builds on.
 veredas-core = { path = "../veredas-core", features = ["demo-server"] }
+# The PROFINET device speaks through the scanner's codecs and raw link, so the two cannot drift
+# apart on the wire (docs/questions.md Q5; the map's row from maquinar to aranha).
+veredas-aranha = { path = "../veredas-aranha" }
 # The OPC UA server the bench serves, and its types.
 async-opcua-server = { workspace = true }
 async-opcua-types = { workspace = true }

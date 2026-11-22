@@ -587,11 +587,15 @@ fn every_file_rustc_pulls_in_from_outside_the_crate_folder_is_read_too() {
 /// aranha exists; never portal, whose store and desktop the bench never pulls).
 const BANNED: &[&str] = &["duckdb", "libduckdb", "eframe", "egui", "winit", "veredas-"];
 
-/// The banned crates among `names`: the bench itself and `veredas-core` excepted.
+/// The members the bench may depend on: core, and aranha, whose PROFINET codecs and raw link the
+/// bench's PROFINET device speaks through (`docs/questions.md` Q5, the map's row).
+const MEMBERS_ALLOWED: &[&str] = &["veredas-core", "veredas-aranha"];
+
+/// The banned crates among `names`: the bench itself and the members it may use excepted.
 fn banned_among<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     names
         .into_iter()
-        .filter(|n| *n != "veredas-core" && *n != BINARY && BANNED.iter().any(|b| n.starts_with(b)))
+        .filter(|n| !MEMBERS_ALLOWED.contains(n) && *n != BINARY && BANNED.iter().any(|b| n.starts_with(b)))
         .map(String::from)
         .collect()
 }
@@ -641,20 +645,20 @@ fn dependency_graph(manifest: &Path) -> (std::collections::BTreeSet<String>, usi
 }
 
 #[test]
-fn the_bench_carries_no_database_no_desktop_and_no_member_but_core() {
+fn the_bench_carries_no_database_no_desktop_and_no_member_but_core_and_aranha() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     let (graph, nodes) = dependency_graph(&manifest);
     // The walk reaches the direct dependencies and the transitive ones behind them, and every
     // node, a crate present twice included (the graph holds more nodes than names).
-    for expected in ["veredas-core", "async-opcua-server", "async-opcua-client", "tokio", "async-opcua-core", "parking_lot", "regex-syntax"] {
+    for expected in ["veredas-core", "veredas-aranha", "async-opcua-server", "async-opcua-client", "tokio", "async-opcua-core", "parking_lot", "regex-syntax"] {
         assert!(graph.contains(expected), "{expected} not in the graph: {graph:?}");
     }
     assert!(nodes >= graph.len(), "{nodes} nodes, {} names", graph.len());
     assert_eq!(banned_among(graph.iter().map(String::as_str)), Vec::<String>::new());
     // The ban list itself, on planted names.
     assert_eq!(
-        banned_among(["duckdb", "libduckdb-sys", "eframe", "egui_extras", "winit", "veredas-portal", "veredas-core", "veredas-maquinar", "tokio", "veredas_portal"]),
-        ["duckdb", "libduckdb-sys", "eframe", "egui_extras", "winit", "veredas-portal"]
+        banned_among(["duckdb", "libduckdb-sys", "eframe", "egui_extras", "winit", "veredas-portal", "veredas-core", "veredas-aranha", "veredas-maquinar", "tokio", "veredas_portal", "veredas-controlador"]),
+        ["duckdb", "libduckdb-sys", "eframe", "egui_extras", "winit", "veredas-portal", "veredas-controlador"]
     );
 }
 

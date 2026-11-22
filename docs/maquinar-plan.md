@@ -58,6 +58,13 @@ it never runs in production, owns its sockets, and carries no store and no deskt
   fault's status, Class 1 cyclic I/O over UDP produced at the RPI and consumed, a silent
   originator's connection closed at its timeout; the plant side by point or as bytes; the knobs a
   scanner's failure paths need (production stalled, the sessions silent, the device restarted).
+- **A PROFINET device** (`profinet`, P-020's third device, its first slice): discovery and naming
+  on a network interface, raw frames through aranha's link and codecs (Linux): a DCP Hello at
+  start, an Identify it matches (all, its station name, its alias) answered within the request's
+  response delay, a Set of its name, its IP suite or the identification signal applied and each
+  block answered with its three-byte control response, a Get answered, LLDP on its port with the
+  PROFINET fields; the plant side names it, flags an address conflict, mutes it. The AR and the
+  cyclic data come with core's IO controller; the nameplate and port records after.
 - **The bench file** (`bench`): one versioned TOML file for the whole plant (emitters, the OPC
   and Modbus servers, the channels and the files each points at), started as a library (`Bench::start`,
   for portal's tests and later comissionador) or from the command line (`veredas-maquinar
@@ -147,6 +154,8 @@ veredas_maquinar
   modbus      the Modbus/TCP server: four tables, points, the function codes, the knobs
   ethernetip  the EtherNet/IP adapter: its wire (encapsulation, CPF, EPATH, Forward_Open, the Class 1
               frame), its configuration, the objects, the sessions, Class 1 I/O, the knobs
+  profinet    the PROFINET device: DCP (Hello, Identify, Set, Get) and LLDP on aranha's codecs and
+              raw link, the knobs (Linux)
   bench       the bench file (schema), Bench::start, every part's status
   main.rs     veredas-maquinar <bench.toml> [--check] | --version; stops on stdin's end, `stop`,
               SIGTERM or SIGINT
@@ -207,6 +216,16 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
   goes out as 0x8000, the protocol's O→T item); the test drives its codecs with the protocol's sizes
   and codes, and shows its own scanner refused 0x0127 for the sizes. Core's EtherNet/IP scanner, if
   it forks that crate, has both to fix.
+- **The PROFINET device's first slice** (C-112, 2026-11-22): discovery and naming, which aranha's
+  scanner and Oficina's engineering tool meet first. It speaks through aranha's codecs and raw
+  link (`docs/questions.md` Q5, the map's row: the scanner and the bench cannot drift apart on the
+  wire), so C-024's rule that the bench's graph holds no member but core now admits aranha. The
+  device and the test's controller share those codecs, so the second reading is Wireshark's
+  dissectors over every frame the device sends. aranha's builders refuse a bad station name, so a
+  test of the device's refusal writes that one request's bytes itself. Its tests run in aranha's
+  `netns::isolated` private network, a veth pair per test. Next: the AR (the DCE/RPC Connect, the
+  parameter writes, PrmEnd and ApplicationReady) and the cyclic RT frames on aranha's C-135, with
+  core's IO controller; then I&M and the port's neighbour data by the connectionless read.
 - **Raw frames without a privilege.** The EtherCAT and PROFINET devices answer raw Ethernet
   frames, which need `CAP_NET_RAW`, and the machines here have no sudo. Checked on the Linux
   machine (2026-11-22): `unshare -Urn` (an unprivileged user namespace with its own network

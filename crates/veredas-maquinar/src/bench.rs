@@ -3,7 +3,7 @@
 //!
 //! A bench file lists its parts by name: log emitters ([`crate::emit`]), OPC UA servers
 //! ([`crate::opc`]), Modbus servers ([`crate::modbus`]), EtherNet/IP adapters
-//! ([`crate::ethernetip`]) and telegram channels
+//! ([`crate::ethernetip`]), PROFINET devices ([`crate::profinet`]) and telegram channels
 //! ([`crate::channel`]), each channel pointing at the
 //! device's own files kept beside the bench file (core's channel file, the catalog, and, when a
 //! controller rides the channel, its rules file). Every referenced file is read and checked when
@@ -24,6 +24,7 @@ use crate::controller::{self, Fields, Place, Rules};
 use crate::emit::{self, EmitterConfig, EmitterHandle, EmitterStatus, SpawnError};
 use crate::ethernetip::{self, EnipConfig, EnipError, EnipHandle, EnipStatus};
 use crate::modbus::{self, ModbusConfig, ModbusError, ModbusHandle, ModbusStatus};
+use crate::profinet::{self, ProfinetConfig, ProfinetError, ProfinetHandle, ProfinetStatus};
 use crate::opc::{self, OpcConfig, OpcError, OpcHandle, OpcStatus};
 
 /// The format name every bench file states.
@@ -54,6 +55,8 @@ pub enum BenchError {
     Modbus { name: String, source: ModbusError },
     #[error("ethernetip `{name}`: {source}")]
     Enip { name: String, source: EnipError },
+    #[error("profinet `{name}`: {source}")]
+    Profinet { name: String, source: ProfinetError },
     #[error("channel `{name}`: {source}")]
     Channel { name: String, source: ChannelError },
 }
@@ -81,6 +84,8 @@ struct FileV1 {
     modbus: Vec<NamedModbus>,
     #[serde(default)]
     ethernetip: Vec<NamedEnip>,
+    #[serde(default)]
+    profinet: Vec<NamedProfinet>,
     #[serde(default)]
     channel: Vec<ChannelFile>,
 }
@@ -226,6 +231,56 @@ impl NamedEnip {
     }
 }
 
+/// A PROFINET device with the name the bench calls it by, the device's own keys beside.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NamedProfinet {
+    name: String,
+    interface: String,
+    #[serde(default)]
+    station: Option<String>,
+    #[serde(default)]
+    alias: Option<String>,
+    #[serde(default)]
+    vendor: Option<String>,
+    #[serde(default)]
+    vendor_id: Option<u16>,
+    #[serde(default)]
+    device_id: Option<u16>,
+    #[serde(default)]
+    ip: Option<profinet::IpConfig>,
+    #[serde(default)]
+    hello: Option<bool>,
+    #[serde(default)]
+    lldp_interval_ms: Option<u64>,
+    #[serde(default)]
+    port: Option<String>,
+    #[serde(default)]
+    seed: Option<u64>,
+}
+
+impl NamedProfinet {
+    fn device(self) -> (String, ProfinetConfig) {
+        let d: ProfinetConfig = ProfinetConfig::new(&self.interface);
+        (
+            self.name,
+            ProfinetConfig {
+                interface: self.interface,
+                station: self.station.unwrap_or(d.station),
+                alias: self.alias,
+                vendor: self.vendor.unwrap_or(d.vendor),
+                vendor_id: self.vendor_id.unwrap_or(d.vendor_id),
+                device_id: self.device_id.unwrap_or(d.device_id),
+                ip: self.ip,
+                hello: self.hello.unwrap_or(d.hello),
+                lldp_interval_ms: self.lldp_interval_ms.unwrap_or(d.lldp_interval_ms),
+                port: self.port.unwrap_or(d.port),
+                seed: self.seed,
+            },
+        )
+    }
+}
+
 /// A channel as the bench file declares it.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -268,6 +323,7 @@ pub struct BenchSpec {
     pub servers: Vec<(String, OpcConfig)>,
     pub modbus: Vec<(String, ModbusConfig)>,
     pub ethernetip: Vec<(String, EnipConfig)>,
+    pub profinet: Vec<(String, ProfinetConfig)>,
     pub channels: Vec<ChannelPart>,
 }
 
@@ -305,6 +361,10 @@ impl BenchSpec {
                 e.connections.len(),
                 e.points.len()
             ));
+        }
+        for (name, p) in &self.profinet {
+            let station = if p.station.is_empty() { "no station name".to_string() } else { format!("station `{}`", p.station) };
+            out.push(format!("profinet `{name}`: on {} as {station}", p.interface));
         }
         for c in &self.channels {
             let role = match &c.role {
@@ -398,6 +458,14 @@ pub fn load(text: &str, base: &Path) -> Result<BenchSpec, BenchError> {
         ethernetip::validate(&adapter).map_err(|e| invalid(format!("{place} (`{adapter_name}`): {e}")))?;
         adapters.push((adapter_name, adapter));
     }
+    let mut devices = Vec::new();
+    for (i, p) in file.profinet.into_iter().enumerate() {
+        let place = format!("profinet[{i}]");
+        let (device_name, device) = p.device();
+        name("profinet", &place, &device_name)?;
+        profinet::validate(&device).map_err(|e| invalid(format!("{place} (`{device_name}`): {e}")))?;
+        devices.push((device_name, device));
+    }
     let mut channels = Vec::new();
     for (i, c) in file.channel.into_iter().enumerate() {
         let place = format!("channel[{i}]");
@@ -430,7 +498,7 @@ pub fn load(text: &str, base: &Path) -> Result<BenchSpec, BenchError> {
         };
         channels.push(ChannelPart { name: c.name, role, spec, catalog, controller, messages: c.messages });
     }
-    Ok(BenchSpec { seed: file.seed, out_dir, emitters, servers, modbus: modbus_servers, ethernetip: adapters, channels })
+    Ok(BenchSpec { seed: file.seed, out_dir, emitters, servers, modbus: modbus_servers, ethernetip: adapters, profinet: devices, channels })
 }
 
 /// Read and check the bench file at `path`; its referenced files are beside it.
@@ -449,6 +517,7 @@ pub enum PartStatus {
     Modbus { addr: std::net::SocketAddr, status: Box<ModbusStatus> },
     /// Boxed: an adapter's status carries its open connections.
     Enip { addr: std::net::SocketAddr, io_addr: std::net::SocketAddr, status: Box<EnipStatus> },
+    Profinet { interface: String, station: String, status: ProfinetStatus },
     /// Boxed: a channel's status carries its monitor's hundred lines.
     Channel(Box<ChannelStatus>),
 }
@@ -459,12 +528,13 @@ pub struct Bench {
     pub servers: Vec<(String, OpcHandle)>,
     pub modbus: Vec<(String, ModbusHandle)>,
     pub ethernetip: Vec<(String, EnipHandle)>,
+    pub profinet: Vec<(String, ProfinetHandle)>,
     pub channels: Vec<(String, BenchChannel)>,
 }
 
 impl Bench {
     /// Start every part of a loaded bench: emitters first, then servers (OPC UA, then Modbus,
-    /// then EtherNet/IP), then channels, each kind in the file's order (TOML groups a kind's tables under one key, so the file keeps
+    /// then EtherNet/IP), then PROFINET devices, then channels, each kind in the file's order (TOML groups a kind's tables under one key, so the file keeps
     /// no order across kinds); the first part that cannot start stops the ones before it and
     /// is named. Emitters draw from the bench's seed plus their index when they have no seed
     /// of their own; channels from the bench's seed.
@@ -472,7 +542,7 @@ impl Bench {
         if !spec.emitters.is_empty() {
             std::fs::create_dir_all(&spec.out_dir).map_err(|source| BenchError::Read { place: "out_dir".into(), path: spec.out_dir.clone(), source })?;
         }
-        let mut bench = Bench { emitters: Vec::new(), servers: Vec::new(), modbus: Vec::new(), ethernetip: Vec::new(), channels: Vec::new() };
+        let mut bench = Bench { emitters: Vec::new(), servers: Vec::new(), modbus: Vec::new(), ethernetip: Vec::new(), profinet: Vec::new(), channels: Vec::new() };
         for (i, mut e) in spec.emitters.into_iter().enumerate() {
             if e.seed.is_none() {
                 e.seed = spec.seed.map(|s| s.wrapping_add(i as u64));
@@ -492,6 +562,10 @@ impl Bench {
         for (name, cfg) in spec.ethernetip {
             let handle = ethernetip::start(&cfg).map_err(|source| BenchError::Enip { name: name.clone(), source })?;
             bench.ethernetip.push((name, handle));
+        }
+        for (name, cfg) in spec.profinet {
+            let handle = profinet::start(&cfg).map_err(|source| BenchError::Profinet { name: name.clone(), source })?;
+            bench.profinet.push((name, handle));
         }
         for c in spec.channels {
             let name = c.name.clone();
@@ -516,6 +590,9 @@ impl Bench {
         }
         for (name, e) in &self.ethernetip {
             out.push((name.clone(), PartStatus::Enip { addr: e.addr, io_addr: e.io_addr, status: Box::new(e.status()) }));
+        }
+        for (name, p) in &self.profinet {
+            out.push((name.clone(), PartStatus::Profinet { interface: p.interface().to_string(), station: p.station(), status: p.status() }));
         }
         for (name, c) in &self.channels {
             out.push((name.clone(), PartStatus::Channel(Box::new(c.status()))));
@@ -554,6 +631,10 @@ impl Bench {
                     status.refused_opens.values().sum::<u64>(),
                     status.timed_out
                 ),
+                PartStatus::Profinet { interface, station, status } => format!(
+                    "profinet {name}: on {interface} as `{station}` ({}), {} identify answered, {} set(s), {} LLDP frame(s)",
+                    status.mac, status.identify_answered, status.sets, status.lldp_sent
+                ),
                 PartStatus::Channel(s) => {
                     let sent: u64 = s.sent.values().sum();
                     let received: u64 = s.received.values().sum();
@@ -589,6 +670,11 @@ impl Bench {
         self.ethernetip.iter().find(|(n, _)| n == name).map(|(_, e)| e)
     }
 
+    /// A PROFINET device by name.
+    pub fn profinet(&self, name: &str) -> Option<&ProfinetHandle> {
+        self.profinet.iter().find(|(n, _)| n == name).map(|(_, p)| p)
+    }
+
     /// An OPC server by name.
     pub fn server(&self, name: &str) -> Option<&OpcHandle> {
         self.servers.iter().find(|(n, _)| n == name).map(|(_, s)| s)
@@ -607,6 +693,9 @@ impl Bench {
         }
         for (_, e) in self.ethernetip {
             e.stop();
+        }
+        for (_, p) in self.profinet {
+            p.stop();
         }
         for (_, c) in self.channels {
             c.stop();
