@@ -53,6 +53,8 @@ struct Script {
     granted: Option<(u32, u32)>,
     /// Whether the reply names the adapter's I/O address (item 0x8000).
     names_io: bool,
+    /// The address the 0x8000 item names, the adapter's I/O socket's when `None`.
+    io_named: Option<SocketAddr>,
     /// Inputs carry a run/idle header.
     input_run_idle: bool,
     input_size: usize,
@@ -66,6 +68,7 @@ impl Default for Script {
             close: Answer::Normal,
             granted: None,
             names_io: true,
+            io_named: None,
             input_run_idle: false,
             input_size: 6,
         }
@@ -329,7 +332,8 @@ fn serve(
                 };
                 let mut reply_items = vec![(0x0000, vec![]), (0x00B2, mr_reply)];
                 if service == 0x54 && script.names_io {
-                    reply_items.push((0x8000, sockaddr(io.local_addr().unwrap())));
+                    let named = script.io_named.unwrap_or_else(|| io.local_addr().unwrap());
+                    reply_items.push((0x8000, sockaddr(named)));
                 }
                 answer(which, rr(&reply_items))
             }
@@ -360,6 +364,13 @@ fn input_frame(id: u32, seq: u32, count: u16, run: Option<bool>, data: &[u8]) ->
     }
     f.extend_from_slice(data);
     f
+}
+
+/// Waits for the scanner's UnRegisterSession to reach the adapter (its last frame).
+fn unregistered(a: &Adapter) -> bool {
+    wait(Duration::from_secs(1), || {
+        a.frames().last().map(|f| le16(f, 0)) == Some(0x0066)
+    })
 }
 
 fn spec(a: &Adapter) -> Spec {
@@ -486,6 +497,7 @@ fn every_request_is_the_standards_bytes_and_the_exchange_runs_at_the_interval() 
     // Close: Forward_Close, then UnRegisterSession, as the standard lays them out.
     let serial = opened.connection_serial;
     s.close().unwrap();
+    assert!(unregistered(&a));
     let frames = a.frames();
     let mut fc = vec![0x4E, 0x02, 0x20, 0x06, 0x24, 0x01, 0x0A, 0x0E];
     fc.extend_from_slice(&serial.to_le_bytes());
@@ -526,6 +538,7 @@ fn the_dissectors_read_the_whole_conversation_as_the_standard_has_it() {
         && a.outputs().len() > 2));
     let opened = s.opened();
     s.close().unwrap();
+    assert!(unregistered(&a));
     let log = a.log.lock().unwrap().clone();
     let datagrams: Vec<(bool, Vec<u8>)> = a
         .datagrams
@@ -879,12 +892,7 @@ fn a_refused_close_says_so_and_a_drop_closes() {
             extended: vec![0x0107]
         }
     );
-    let frames = a.frames();
-    assert_eq!(
-        le16(frames.last().unwrap(), 0),
-        0x0066,
-        "unregistered all the same"
-    );
+    assert!(unregistered(&a), "unregistered all the same");
     let produced = a.outputs().len();
     thread::sleep(RPI * 3);
     assert_eq!(a.outputs().len(), produced);
@@ -894,6 +902,7 @@ fn a_refused_close_says_so_and_a_drop_closes() {
     let t = Instant::now();
     drop(s);
     assert!(t.elapsed() < Duration::from_millis(500));
+    assert!(unregistered(&a));
     let commands: Vec<u16> = a.frames().iter().map(|f| le16(f, 0)).collect();
     assert_eq!(commands, [0x0065, 0x006F, 0x006F, 0x0066]);
     // A drop on an adapter that never answers the close is bounded by the response bound.
@@ -909,6 +918,221 @@ fn a_refused_close_says_so_and_a_drop_closes() {
         "{:?}",
         t.elapsed()
     );
+    // ...and unregisters all the same, the close unanswered.
+    assert!(
+        unregistered(&a),
+        "unregistered after a close with no answer"
+    );
+    let commands: Vec<u16> = a.frames().iter().map(|f| le16(f, 0)).collect();
+    assert_eq!(commands, [0x0065, 0x006F, 0x006F, 0x0066]);
+    let a = Adapter::start(Script {
+        close: Answer::Silent,
+        ..Script::default()
+    });
+    let s = Scanner::open(&spec(&a)).unwrap();
+    assert_eq!(
+        s.close().unwrap_err(),
+        EnipError::NoAnswer {
+            step: "Forward_Close",
+            cause: "no answer within 300 ms".into()
+        }
+    );
+    assert!(unregistered(&a));
+}
+
+/// The adapter is the address of its session and the one its reply names for the outputs; an
+/// unspecified address in the reply is the session's.
+#[test]
+fn inputs_come_from_the_adapters_session_or_io_address_and_no_other() {
+    let io2 = UdpSocket::bind("127.0.0.2:0").unwrap();
+    let a = Adapter::start(Script {
+        io_named: Some(io2.local_addr().unwrap()),
+        ..Script::default()
+    });
+    a.producing.store(false, Ordering::SeqCst);
+    let mut sp = spec(&a);
+    sp.timeout_multiplier = 7;
+    let s = Scanner::open(&sp).unwrap();
+    let (id, to) = (s.opened().t_to_o_id, s.opened().receives_on);
+    assert_eq!(s.opened().sends_to, io2.local_addr().unwrap());
+    // From the session's address (127.0.0.1): taken.
+    a.io.send_to(&input_frame(id, 1, 1, None, &[0xAA; 6]), to)
+        .unwrap();
+    assert!(wait(Duration::from_secs(1), || s.inputs().data == [0xAA; 6]));
+    // From the address the reply named (127.0.0.2): taken.
+    io2.send_to(&input_frame(id, 2, 2, None, &[0xBB; 6]), to)
+        .unwrap();
+    assert!(wait(Duration::from_secs(1), || s.inputs().data == [0xBB; 6]));
+    // From a third (127.0.0.3): stray.
+    let other = UdpSocket::bind("127.0.0.3:0").unwrap();
+    other
+        .send_to(&input_frame(id, 3, 3, None, &[0xCC; 6]), to)
+        .unwrap();
+    assert!(wait(Duration::from_secs(1), || s.counters().stray == 1));
+    assert_eq!(s.inputs().data, [0xBB; 6]);
+    // The outputs go where the reply named.
+    io2.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    let mut buf = [0u8; 64];
+    assert!(io2.recv_from(&mut buf).is_ok());
+    drop(s);
+    // An unspecified address in the reply: the session's address, at the port named.
+    let a = Adapter::start(Script {
+        io_named: Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)),
+        ..Script::default()
+    });
+    let s = Scanner::open(&spec(&a)).unwrap();
+    assert_eq!(
+        s.opened().sends_to,
+        SocketAddr::new(a.addr.ip(), IO_PORT),
+        "address and port both unspecified"
+    );
+    drop(s);
+    let real = a.io.local_addr().unwrap();
+    let a2 = Adapter::start(Script {
+        io_named: Some(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            real.port(),
+        )),
+        ..Script::default()
+    });
+    let s = Scanner::open(&spec(&a2)).unwrap();
+    assert_eq!(
+        s.opened().sends_to,
+        SocketAddr::new(a2.addr.ip(), real.port())
+    );
+}
+
+/// Only this connection's inputs from the adapter keep it alive.
+#[test]
+fn stray_frames_never_keep_a_silent_adapters_connection() {
+    let a = Adapter::start(Script::default());
+    let s = Scanner::open(&spec(&a)).unwrap();
+    let (id, to) = (s.opened().t_to_o_id, s.opened().receives_on);
+    assert!(wait(Duration::from_secs(1), || s.counters().consumed > 2));
+    a.producing.store(false, Ordering::SeqCst);
+    let t = Instant::now();
+    let other = UdpSocket::bind("127.0.0.2:0").unwrap();
+    while s.state() == LinkState::Running && t.elapsed() < Duration::from_secs(1) {
+        // Another host with this id, the adapter with another id: every 5 ms.
+        other
+            .send_to(&input_frame(id, 1, 1, None, &[1; 6]), to)
+            .unwrap();
+        a.io.send_to(&input_frame(id ^ 1, 1, 1, None, &[1; 6]), to)
+            .unwrap();
+        thread::sleep(Duration::from_millis(5));
+    }
+    let took = t.elapsed();
+    assert_eq!(s.state(), LinkState::Lost { timeout: RPI * 4 });
+    assert!(took < RPI * 4 + Duration::from_millis(200), "{took:?}");
+    assert!(s.counters().stray > 10);
+}
+
+/// The timeout runs from the open: an adapter that never sends an input loses the connection.
+#[test]
+fn the_timeout_runs_from_the_open() {
+    let a = Adapter::start(Script::default());
+    a.producing.store(false, Ordering::SeqCst);
+    let t = Instant::now();
+    let s = Scanner::open(&spec(&a)).unwrap();
+    assert!(wait(Duration::from_secs(1), || s.state() != LinkState::Running));
+    let took = t.elapsed();
+    assert_eq!(s.state(), LinkState::Lost { timeout: RPI * 4 });
+    assert!(
+        took >= RPI * 4 && took < RPI * 4 + Duration::from_millis(250),
+        "{took:?}"
+    );
+    assert_eq!(s.counters().consumed, 0);
+}
+
+/// Each direction at the interval the adapter granted it: outputs at O→T's, the timeout from
+/// T→O's.
+#[test]
+fn each_direction_runs_at_its_own_granted_interval() {
+    let a = Adapter::start(Script {
+        granted: Some((10_000, 100_000)),
+        ..Script::default()
+    });
+    let s = Scanner::open(&spec(&a)).unwrap();
+    let o = s.opened();
+    assert_eq!(
+        (o.o_to_t_rpi, o.t_to_o_rpi),
+        (Duration::from_millis(10), Duration::from_millis(100))
+    );
+    assert_eq!(o.timeout, Duration::from_millis(400));
+    let p0 = s.counters().produced;
+    thread::sleep(Duration::from_secs(1));
+    let produced = s.counters().produced - p0;
+    assert!(
+        (80..=110).contains(&produced),
+        "produced {produced} at 10 ms"
+    );
+    assert_eq!(
+        s.state(),
+        LinkState::Running,
+        "inputs every 100 ms keep a 400 ms timeout"
+    );
+    assert!(
+        (7..=11).contains(&s.counters().consumed),
+        "consumed {}",
+        s.counters().consumed
+    );
+    // A granted O→T interval of 0 is refused as a T→O one is.
+    let a = Adapter::start(Script {
+        granted: Some((0, 20_000)),
+        ..Script::default()
+    });
+    assert_eq!(
+        Scanner::open(&spec(&a)).unwrap_err(),
+        EnipError::NoAnswer {
+            step: "Forward_Open",
+            cause: "a granted interval of 0".into()
+        }
+    );
+}
+
+/// Outputs without a header carry the count and the data alone; inputs with one say idle when
+/// the adapter is idle.
+#[test]
+fn modeless_outputs_and_idle_inputs() {
+    let a = Adapter::start(Script {
+        input_run_idle: true,
+        ..Script::default()
+    });
+    let mut sp = spec(&a);
+    (sp.output_header, sp.input_header) = (Header::Modeless, Header::RunIdle);
+    let s = Scanner::open(&sp).unwrap();
+    // The Forward_Open's sizes: 4 + 2 out, 6 + 2 + 4 in.
+    let fo = &a.frames()[1];
+    let body = &items(&fo[24..])[1].1[6..];
+    assert_eq!(le16(body, 26) & 0x01FF, 6);
+    assert_eq!(le16(body, 32) & 0x01FF, 12);
+    s.set_outputs(&[5, 6, 7, 8]).unwrap();
+    assert!(wait(Duration::from_secs(1), || a
+        .outputs()
+        .iter()
+        .any(|f| f.ends_with(&[5, 6, 7, 8]))));
+    let f = a
+        .outputs()
+        .into_iter()
+        .find(|f| f.ends_with(&[5, 6, 7, 8]))
+        .unwrap();
+    assert_eq!(
+        &f[14..18],
+        [0xB1, 0x00, 6, 0],
+        "the count and 4 bytes, no header"
+    );
+    assert_eq!(f.len(), 24);
+    // The adapter idle: the inputs say so.
+    a.producing.store(false, Ordering::SeqCst);
+    let (id, to) = (s.opened().t_to_o_id, s.opened().receives_on);
+    a.io.send_to(&input_frame(id, 50, 500, Some(false), &[3; 6]), to)
+        .unwrap();
+    assert!(wait(Duration::from_secs(1), || s.inputs().run == Some(false)));
+    a.io.send_to(&input_frame(id, 51, 501, Some(true), &[4; 6]), to)
+        .unwrap();
+    assert!(wait(Duration::from_secs(1), || s.inputs().run
+        == Some(true)
+        && s.inputs().data == [4; 6]));
 }
 
 // ---------------------------------------------------------------------------------------------

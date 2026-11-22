@@ -20,13 +20,15 @@
 //! - the Sockaddr Info items carry the standard's numbers: the scanner names where the adapter
 //!   sends its inputs in item 0x8001 (T→O) and reads where to send its outputs from item 0x8000
 //!   (O→T), falling back to the adapter's address and port 2222;
-//! - inputs are taken from the adapter's address alone, for this connection's id and size; a
-//!   repeated sequence count is no new data;
+//! - inputs are taken from the adapter alone (the address of its session, or the one its reply
+//!   names for the outputs), for this connection's id and size; a repeated sequence count is no
+//!   new data, and nothing else resets the connection's timeout;
 //! - the connection's timeout is the adapter's actual interval times 4 shifted left by the
 //!   multiplier: an adapter silent that long has lost the connection ([`LinkState::Lost`]), the
 //!   scanner stops producing, and the inputs it holds are the last ones received;
 //! - [`Scanner::close`] (and a drop) stops producing, sends the Forward_Close and unregisters the
-//!   session, bounded, so the adapter frees its output at once rather than at its own timeout.
+//!   session whatever the close's answer, bounded, so the adapter frees its output at once rather
+//!   than at its own timeout.
 //!
 //! The scanner runs on a thread and a current-thread runtime of its own; its handle is blocking,
 //! so a cyclic task sets outputs and reads inputs between scans.
@@ -681,7 +683,10 @@ async fn run(
             }
             received = udp.recv_from(&mut buf) => {
                 let Ok((n, from)) = received else { continue };
-                let frame = (from.ip() == opened.sends_to.ip())
+                // From the adapter: the address of its session, or the one its reply named for the
+                // outputs (a device with an I/O interface of its own).
+                let from_adapter = from.ip() == spec.adapter.ip() || from.ip() == opened.sends_to.ip();
+                let frame = from_adapter
                     .then(|| decode_frame(&buf[..n], spec.input_header == Header::RunIdle).ok())
                     .flatten()
                     .filter(|f| f.connection_id == opened.t_to_o_id && f.data.len() == usize::from(spec.input_size));
@@ -852,15 +857,16 @@ async fn close(session: &mut Session, spec: &Spec, serial: u16) -> Result<(), En
         originator_serial: spec.originator_serial,
         connection_path: spec.connection_path(),
     };
-    let (header, _, _) = session
+    let closed = session
         .connection_manager(
             "Forward_Close",
             service::FORWARD_CLOSE,
             &request.encode(),
             Vec::new(),
         )
-        .await?;
-    // UnRegisterSession has no answer: sent, then the session is closed.
+        .await;
+    // UnRegisterSession has no answer: sent whatever the close's answer, then the session is
+    // closed.
     let mut frame = Vec::with_capacity(24);
     frame.extend_from_slice(&command::UNREGISTER_SESSION.to_le_bytes());
     frame.extend_from_slice(&0u16.to_le_bytes());
@@ -868,6 +874,7 @@ async fn close(session: &mut Session, spec: &Spec, serial: u16) -> Result<(), En
     frame.extend_from_slice(&[0u8; 16]);
     let _ = tokio::time::timeout(session.bound, session.stream.write_all(&frame)).await;
     let _ = tokio::time::timeout(session.bound, session.stream.shutdown()).await;
+    let (header, _, _) = closed?;
     if header.general_status != 0 {
         return Err(EnipError::Close {
             general: header.general_status,
