@@ -91,7 +91,14 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
     archive: &mut zip::read::ZipArchive<R>,
     theme: &Theme,
 ) -> Result<Styles, XlsxError> {
-    let file = archive.by_name("xl/styles.xml")?;
+    // The styles part is optional in OOXML (minimal writers omit it): a package without one
+    // reads as the default styles — the one font, the two fills, the one border and the one
+    // cell format every cell index 0 means.
+    let file = match archive.by_name("xl/styles.xml") {
+        Ok(file) => file,
+        Err(zip::result::ZipError::FileNotFound) => return Ok(Styles::default()),
+        Err(e) => return Err(e.into()),
+    };
     let doc = XmlNode::parse(BufReader::new(file))?;
     let style_sheet = &doc;
 
