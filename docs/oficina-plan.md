@@ -307,7 +307,12 @@ the numbers and what was learnt on the way are in the evidence. A test run names
    given to rust-analyzer as an inline description of its crates, build scripts and procedural
    macros off, the toolchain's own binary started in a folder of Oficina's. Spix cannot type into the
    page; a typing hook of Oficina's does, by the keyboard's path.
-5. Not yet run.
+5. **Passed** (2026-11-23). Supervisão's own host, started by the test on the reference's worked
+   example with maquinar's bench playing the plant, served its page into Oficina's web pane; the
+   loop's speed, set by the bench and read by portal, was read back from the page through
+   Oficina's hook (in a script world of Oficina's own, the page carrying no script for it) equal
+   to what the bench held, 0.16 to 0.34 s after each change; the served page found no bridge
+   object, where the page Oficina ships found its own.
 6. Not yet run.
 7. **Passed** (2026-11-23). One test, run by cargo nextest with no display, its exit code the
    verdict: a value typed into the form and the text following it, an edit typed into Monaco and
@@ -324,7 +329,7 @@ XWayland, OpenGL 4.6 on its Intel GPU), and the timings held in release (a milli
 its windows mapped on the desktop). Windows waits for its runs.
 
 ### Verdict
-Not given: points 5 and 6 remain, and point 3's frame times.
+Not given: point 6 remains, and point 3's frame times.
 
 ## Open
 - **Q31, the review's majors and minors**, none ruled. Those that touch Oficina: 22 (Oficina

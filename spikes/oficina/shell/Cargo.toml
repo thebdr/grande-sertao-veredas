@@ -17,3 +17,5 @@ cxx-qt-build = { version = "0.10", features = ["link_qt_object_files"] }
 
 [dev-dependencies]
 tempfile = "3"
+# Point 5's plant: the bench plays it as it does for supervisão's own tests (tests/supervisao.rs).
+veredas-maquinar = { path = "../../../crates/veredas-maquinar" }
