@@ -12,10 +12,12 @@ fn us(v: u64) -> Duration {
     Duration::from_micros(v)
 }
 
-/// Adds one to its input; safe outputs are 0. What it saw last is kept, so a test can read the scan it was given.
+/// Adds one to its input; its safe outputs are 7, which no default gives, so a test can tell them apart. What it
+/// saw last and how many scans it ran are kept, so a test can read the scan it was given.
 #[derive(Default)]
 struct Count {
     last_scan: Scan,
+    scans: u32,
 }
 
 impl Program for Count {
@@ -24,11 +26,12 @@ impl Program for Count {
 
     fn scan(&mut self, scan: &Scan, inputs: &u32, outputs: &mut u32) {
         self.last_scan = *scan;
+        self.scans += 1;
         *outputs = inputs.saturating_add(1);
     }
 
     fn safe_outputs(&self) -> u32 {
-        0
+        7
     }
 }
 
@@ -152,7 +155,9 @@ fn a_late_scan_is_a_time_error_and_skips_the_deadlines_it_missed_never_catching_
             (7, ms(70), ms(1), false, 2),
         ]
     );
-    assert_eq!(t.stats().overruns, 2);
+    let s = *t.stats();
+    assert_eq!((s.cycles, s.overruns, s.skipped), (8, 2, 2));
+    assert_eq!((s.max_exec, s.total_exec, s.mean_exec()), (ms(20), ms(41), us(5_125)), "the longest, not the last");
     assert_eq!(t.state(), RunState::Running, "twice the period is the limit, not past it");
     assert_eq!(plant.writes[2], (ms(35), 3), "a time error still writes the scan's own outputs");
 }
@@ -169,16 +174,61 @@ fn a_scan_past_twice_its_period_faults_and_never_writes_its_own_outputs() {
         fault: Fault::Watchdog { exec: ms(20) + Duration::from_nanos(1) },
     };
     assert_eq!(seen[2], (2, ms(20), 3, RunState::Running));
-    assert_eq!(seen[3], (3, ms(30), 0, fault), "the faulting scan writes the safe outputs, never its own 4");
-    assert_eq!(plant.writes[3], (ms(50) + Duration::from_nanos(1), 0));
+    assert_eq!(seen[3], (3, ms(30), 7, fault), "the faulting scan writes the safe outputs, never its own 4");
     // the deadlines at 40 and 50 ms passed: the next scan is at 60 ms, and every scan after the fault applies the
     // safe outputs without scanning the program, so the plant's exchange goes on
     let after: Vec<_> = seen[4..].iter().map(|&(c, now, out, st)| (c, now, out, st)).collect();
-    assert_eq!(after, vec![(6, ms(60), 0, fault), (7, ms(70), 0, fault), (8, ms(80), 0, fault), (9, ms(90), 0, fault)]);
+    assert_eq!(after, vec![(6, ms(60), 7, fault), (7, ms(70), 7, fault), (8, ms(80), 7, fault), (9, ms(90), 7, fault)]);
+    assert_eq!(
+        plant.writes,
+        vec![
+            (ms(1), 1),
+            (ms(11), 2),
+            (ms(21), 3),
+            (ms(50) + Duration::from_nanos(1), 7),
+            (ms(61), 7),
+            (ms(71), 7),
+            (ms(81), 7),
+            (ms(91), 7),
+        ],
+        "what reached the plant: one write per scan, at its end, the program's safe outputs from the faulting scan on"
+    );
     assert_eq!(t.program().last_scan.cycle, 3, "the program is not scanned once faulted");
+    assert_eq!(t.program().scans, 4);
     assert_eq!(plant.reads.len(), 8, "the inputs are still read every scan");
     let s = *t.stats();
     assert_eq!((s.cycles, s.overruns, s.skipped), (8, 1, 2));
+}
+
+#[test]
+fn a_scan_started_late_is_handed_its_start_and_its_lateness_is_counted() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Loop::new(&clock, |k| [ms(1), ms(3), ms(2)][k]);
+    let mut t = task(ms(10));
+    let first = t.step(&mut plant, &mut clock).scan.now;
+    assert_eq!(first, ms(0));
+    clock.advance(ms(12)); // the host comes back at 13 ms: cycle 1 was due at 10 ms
+    let r = t.step(&mut plant, &mut clock);
+    assert_eq!((r.scan.cycle, r.scan.now), (1, ms(13)), "the program is handed the scan's start, not its deadline");
+    assert_eq!(r.exec, ms(3));
+    t.step(&mut plant, &mut clock); // cycle 2, due at 20 ms, starts there
+    assert_eq!(plant.reads, vec![ms(0), ms(13), ms(20)]);
+    assert_eq!(plant.writes, vec![(ms(1), 1), (ms(16), 2), (ms(22), 3)]);
+    let s = *t.stats();
+    assert_eq!((s.max_lateness, s.total_lateness, s.mean_lateness()), (ms(3), ms(3), ms(1)));
+    assert_eq!((s.max_exec, s.total_exec, s.mean_exec()), (ms(3), ms(6), ms(2)));
+}
+
+#[test]
+fn a_fault_is_dated_at_the_scan_s_start_even_when_it_started_late() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Loop::new(&clock, |k| if k == 1 { ms(25) } else { ms(1) });
+    let mut t = task(ms(10));
+    t.step(&mut plant, &mut clock);
+    clock.advance(ms(13)); // now 14 ms, cycle 1 due at 10 ms
+    t.step(&mut plant, &mut clock);
+    assert_eq!(t.state(), RunState::Faulted { at: ms(14), fault: Fault::Watchdog { exec: ms(25) } });
+    assert_eq!(plant.writes, vec![(ms(1), 1), (ms(39), 7)]);
 }
 
 #[test]
