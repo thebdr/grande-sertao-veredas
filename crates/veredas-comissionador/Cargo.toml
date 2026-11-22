@@ -1,0 +1,25 @@
+[package]
+name = "veredas-comissionador"
+# Its own SemVer (law L3), starting at core's current MAJOR (the plan, "Versioning").
+version = "2.0.0-alpha.1"
+edition.workspace = true
+publish = false
+description = "The testing platform of Veredas 2 (Comissionador): a plant's acceptance tests, one plain-text file each, run through portal live or replayed, every run ending in its report"
+
+# A library first, one executable on top (docs/comissionador-plan.md, "Rules"; tests/component.rs
+# asks cargo what it would build). Depends on core and, once the engine runs tests, on portal
+# alone (law L5, the map); its tests will dev-depend on the bench, which plays the plant.
+
+[dependencies]
+# The one header reader every file of the suite shares: a test file's and a function file's stamp.
+veredas-core = { path = "../veredas-core" }
+# The stamp is two TOML lines; the header is read as TOML to refuse a key that is not the stamp.
+toml = { workspace = true }
+
+[dev-dependencies]
+# Scratch directories, removed when a test ends.
+tempfile = { workspace = true }
+# cargo metadata's output (tests/component.rs).
+serde_json = { workspace = true }
+# The Rust lexer: the component test reads the crate's sources as the compiler's tokens.
+proc-macro2 = { workspace = true }

@@ -5,7 +5,8 @@ The testing platform of Veredas 2; screens say **Comissionador**. `docs/veredas-
 (P-006, then the `C-2xx` clauses it becomes) wins on status. This file says what comissionador
 holds, how a test runs against a plant, what the engine offers Oficina, in which order it lands,
 and the traps met on the way. The test file and the function file are `docs/test-schema.md`; the
-look is `docs/design/comissionador/`. Nothing is built.
+look is `docs/design/comissionador/`. Phase 1, the reading and the check, is built
+(C-200, C-201); the engine is not.
 
 ## The role nobody covers
 **Comissionador runs a plant's acceptance tests: a test, written as one plain-text file, drives
@@ -225,3 +226,11 @@ function block shows before it collapses (the design's open point, Oficina's to 
 
 ## Traps
 Recorded as the build meets them.
+
+- **A word the language reads by its place is no reserved word** (C-201). `max` was reserved for
+  `retry <step> max <n>` and is also a built-in call, so `max(a, b)` could not be written. The
+  route reads `max` by its place; the reserved list is the reader's and the reference's at once,
+  held equal by the grammar test.
+- **A step is not named after an action.** The design names a step `report`; the reader refuses
+  the language's words as names, so the reference's step is `summary`. A name that is an action
+  would make a step's first line read two ways.

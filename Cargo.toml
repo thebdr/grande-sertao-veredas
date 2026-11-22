@@ -41,6 +41,10 @@ members = [
     # cabled to whom, with provenance; a test tool that owns its sockets (law L5: core only). Its
     # PROFINET codecs serve the bench's device meanwhile and move into core (P-018).
     "crates/veredas-aranha",
+    # The testing platform (docs/comissionador-plan.md): a plant's acceptance tests, one plain-text
+    # file each, run through portal live or replayed, every run ending in its report (law L5: core
+    # and portal).
+    "crates/veredas-comissionador",
 ]
 
 # No [workspace.package] version: each component owns its SemVer from 2.0.0 (the plan,

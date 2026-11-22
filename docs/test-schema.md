@@ -63,7 +63,7 @@ test "Destination 4 full, items come round" {
                     else          -> fail_log
                   }
   step release    send sorter.command(code: 0)
-  step report     report ratio, margin, rerouted
+  step summary    report ratio, margin, rerouted
                   stop pass
   step fail_log   send sorter.command(code: 0)
                   report "rerouted {rerouted}/{items}"
@@ -72,7 +72,7 @@ test "Destination 4 full, items come round" {
 
 # Flow-chart positions, written by the flow view.
 layout { start 0,1  running 0,2  route 0,3  ratio 0,4
-         verdict 0,5  fail_log 1,5  release 0,6  report 0,7 }
+         verdict 0,5  fail_log 1,5  release 0,6  summary 0,7 }
 ```
 
 The function file, `functions/routing.fn`:
@@ -100,11 +100,16 @@ function ItemRoute(dest: int, items: int) -> (delivered: int, rerouted: int) {
 Read, the test has eight steps, one branch, one function and three gated writes, its three
 `send`s. The engine is held to this: run live against the machine, every outcome for
 destination 4 is `FULL`, so `delivered` is 0, `rerouted` 20 and `ratio` 1, and the run passes at
-`report`; its window replayed, the three sends are not sent, the function meets the same 20
-outcomes in the store, and the replay passes with the same values. The engine's grammar test
-loads these two blocks and holds each statement of this file against the reader
-(`docs/comissionador-plan.md`, phase 1); it keeps a copy of this text, so an edit here is an edit
-there.
+`summary`; its window replayed, the three sends are not sent, the function meets the same 20
+outcomes in the store, and the replay passes with the same values. The engine's grammar test,
+`crates/veredas-comissionador/tests/grammar.rs`, loads these two blocks and holds each statement
+of this file about reading and checking against the reader; it keeps a copy of this text, so an
+edit here is an edit there.
+
+What is built, 2026-11-22: the reading and the check (`docs/comissionador-plan.md`, phase 1).
+What a run does with each part, the outcomes of the actions, the routes a run takes, the values
+and their comparisons, the clock, and the binding to a portal session, is the engine's, phases 2
+and 3, and nothing of it runs yet; this file states it as the engine will be held to it.
 
 ## The file, line by line
 
@@ -119,7 +124,7 @@ refused by its name.
 
 **Names.** A name is ASCII letters, digits and `_`, not starting with a digit. These words are
 the language's own and name nothing else: `and`, `as`, `await`, `branch`, `call`, `check`,
-`else`, `error`, `fail`, `false`, `for`, `function`, `if`, `in`, `layout`, `max`, `not`, `on`,
+`else`, `error`, `fail`, `false`, `for`, `function`, `if`, `in`, `layout`, `not`, `on`,
 `or`, `pass`, `read`, `reads`, `report`, `retry`, `script`, `send`, `step`, `stop`, `test`,
 `timeout`, `true`, `wait`, `where`, `write`. After a `.` any name is a column's or a message's,
 the language's own words included (`a.read`); a table whose name is one of them is written in
@@ -256,7 +261,7 @@ function <Name>(<input>: <type>, ...) -> (<output>: <type>, ...) {
 ```
 
 A function file holds one or more functions. A function's name is unique across the files a
-test uses. Its inputs are its block's left ports and its outputs its right ports; the arrow
+test uses, and is no built-in call's (`abs`, `min`, ...). Its inputs are its block's left ports and its outputs its right ports; the arrow
 and the outputs are left out for a function that returns nothing. The comment lines right
 above `function` are its description, shown on its block.
 
@@ -265,11 +270,13 @@ above `function` are its description, shown on its block.
   asked for.
 - `reads` (none): the tables the function reads. A reference to another table is refused.
 - `timeout` (none, the run's bound): the bound of one call.
-- **The body**: statements over the inputs, which are read only, and names of its own. Every
-  output is assigned before the body ends, or the call ends in `error`.
+- **The body**: statements over the inputs, which are read only, and names of its own; a name of
+  the test is not one of them. Every output is assigned somewhere in the body, or the check
+  refuses the function; one that the path a call takes leaves unassigned ends the call in
+  `error`.
 - **A function only reads.** No `write`, `send`, `report`, `check` or `stop` is a statement, so
-  a block that is a function can never touch the plant. A function may call another, never
-  itself, through others or directly.
+  a block that is a function can never touch the plant. A function may call another of its own
+  file, never itself, through others or directly.
 
 ## Statements
 
@@ -299,7 +306,8 @@ row).
 
 **Names.** A name is a variable: a `let` constant, a name a script box, a `read`, an `await` or
 a call assigned, an input, a loop's name. `<name>.<column>` reads a row's column when the name
-holds a row. **Any other `<table>.<column>` is plant data**: the column's latest value in
+is a variable; a name reads one column, so `a.b.c` is refused. **Any other `<table>.<column>`
+is plant data**: the column's latest value in
 portal's table of that name (a capture rule's, an OPC UA rule's, a message's, or a view with
 portal's time column), stamped at or before the run's clock, a hole in a row read past.
 
@@ -338,16 +346,30 @@ run's own window therefore reads the rows the live run read.
 
 ## What a check refuses
 
-Before a run, the engine reads the test and every function file it uses and checks them whole,
-naming each problem by its file, line and column: a header that is not the stamp; a word where
-another is expected; an unclosed string, parenthesis or brace; a setting given twice, unknown or
-after a step, `id` missing; a step's name given twice; a route to no step; `branch` or `stop`
-before a step's last action; an outcome routed twice by one step; `on pass` on a branch; an
-`else` arm that is not the last; `retry ... max 0`; a call to no function, an input not given,
-given twice or not the function's, more names than outputs; two functions of one name; a
-function calling itself; a name read that nothing assigns; a `let` constant or an input assigned;
-plant data in a script box, or a table a function does not declare in `reads`; a wait or an
-await, a call or a gated write in a script box; a position in `layout` for no step.
+Before a run, the engine reads the test and every function file it uses. Reading a file stops at
+its first error of form, named with its file, line and column: a header that is not the stamp or
+holds another key; something that cannot be read (a string, a backquote or a `{` not closed, an
+unknown escape or character, a number run into letters, a duration that is not whole
+milliseconds, a number past its range); a word where another is expected, a parenthesis or a
+brace not closed; one of the language's words used as a name; a setting that is unknown, has no
+value or comes after a step; a mode, an action, an outcome or a type that is none; an action after
+a step's `branch` or `stop`, or after its `on` lines; a `read` whose values and names differ in
+number; an `else` arm that is not the last, a branch with no arm; two comparisons in a row; a
+name reading more than one column; a built-in call's name given to a function; `reads` or
+`timeout` twice in a function; a write, a send or another step's action written as a statement;
+an `await` not assigned.
+
+The files read, it checks them whole and names every problem: `id` missing, or not letters,
+digits, `-` and `_`; a setting given twice, a path `use`d twice, a constant defined twice; a `let`
+made of anything but literals and the constants above it; a used file that cannot be read; two
+functions of one name; a step's name given twice; a route to no step; `retry ... max 0`; an
+outcome routed twice by one step; `on pass` on a branch; a `send`'s field given twice; a call to
+no function, an input not given, given twice or not the function's, more names than outputs; a
+built-in call given the wrong number of values, a call to no built-in, a function called inside
+an expression; a function calling itself; a name read that nothing assigns; a `let` constant or a
+function's input assigned; a port named twice; an output nothing assigns; plant data in a script
+box, or a table a function does not declare in `reads`; a wait, an await or a call in a script
+box; a step placed twice, or a position for no step, in the `layout`.
 
 Bound to a portal session as the run starts, the run is refused when the session's name is not
 the test's `portal`, the mode is not among the test's `modes`, a table or a column the test reads

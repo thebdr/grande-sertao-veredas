@@ -3165,6 +3165,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "veredas-comissionador"
+version = "2.0.0-alpha.1"
+dependencies = [
+ "proc-macro2",
+ "serde_json",
+ "tempfile",
+ "toml",
+ "veredas-core",
+]
+
+[[package]]
 name = "veredas-controlador"
 version = "2.0.0-alpha.1"
 dependencies = [
