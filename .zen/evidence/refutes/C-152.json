@@ -1,8 +1,8 @@
 {
   "clause": "C-152",
   "verdict": "refuted",
-  "ranAt": "2026-11-22T18:33:44.763Z",
-  "headCommit": "ab95a90e74a44665bad84dcb0849c6c3774f781b",
+  "ranAt": "2026-11-22T18:48:46.678Z",
+  "headCommit": "163308622b325b9be9d24379298e00aede98ff67",
   "tests": [
     {
       "name": "crates/veredas-controlador/tests/states.rs",

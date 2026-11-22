@@ -509,3 +509,123 @@ fn while_no_program_runs_the_exchange_keeps_the_target_s_periods_once_in_each() 
     run(&mut c, &mut plant, &mut clock, 2);
     assert_eq!(plant.reads, vec![ms(0), ms(30), ms(40), ms(50)]);
 }
+
+// The second refute round: steps that come late while no program runs, a program started on a period other than
+// zero, the warm path, a count of overruns past one, a start from every kind of STOP, and the crash's FAULT.
+
+#[test]
+fn a_late_step_while_no_program_runs_waits_for_the_target_s_next_period() {
+    // the stop and the next step come at 23 ms after scans at 0 and 10: the first exchange at 30, not at 23
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    clock.advance(ms(13));
+    c.stop(OFICINA).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(plant.writes, vec![(ms(0), 101), (ms(10), 201), (ms(30), 7), (ms(40), 7)]);
+
+    // a first step at 13 ms: the first exchange at 20
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::First);
+    clock.advance(ms(13));
+    run(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(plant.reads, vec![ms(20), ms(30)]);
+
+    // an idle read taking 15 ms: the next exchange at 20, not at 15
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    plant.stall = |read| if read == 0 { ms(15) } else { Duration::ZERO };
+    let mut c = controller(PRODUCTION, Restart::First);
+    run(&mut c, &mut plant, &mut clock, 3);
+    assert_eq!(plant.reads, vec![ms(0), ms(20), ms(30)]);
+
+    // a scan at 10 taking 15 ms, then a stop: the next exchange at 30, not at 25
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    plant.stall = |read| if read == 1 { ms(15) } else { Duration::ZERO };
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    c.stop(OFICINA).unwrap();
+    run(&mut c, &mut plant, &mut clock, 1);
+    assert_eq!(plant.reads, vec![ms(0), ms(10), ms(30)]);
+}
+
+#[test]
+fn a_program_started_on_a_later_period_never_exchanges_twice_at_its_last_scan() {
+    // exchanges at 0, 10 and 20 ms; a start at 20 scans at 20 and 30; a stop at 30: the next exchange at 40
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::First);
+    run(&mut c, &mut plant, &mut clock, 3);
+    c.start(StartupReason::Cold, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    c.stop(OFICINA).unwrap();
+    run(&mut c, &mut plant, &mut clock, 1);
+    assert_eq!(plant.writes, vec![(ms(0), 7), (ms(10), 7), (ms(20), 7), (ms(20), 101), (ms(30), 201), (ms(40), 7)]);
+}
+
+#[test]
+fn a_warm_start_runs_the_program_from_its_initial_values_and_its_clock_from_zero() {
+    // after a stop: the program again from its first scan, its clock at zero at 25 ms
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Cold, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    c.stop(OFICINA).unwrap();
+    run(&mut c, &mut plant, &mut clock, 1);
+    clock.advance(ms(5));
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    let p = c.program().unwrap();
+    assert_eq!((p.scans, p.last_now), (2, ms(10)));
+    assert_eq!(&plant.reads[3..], &[ms(25), ms(35)]);
+
+    // after an acknowledge of the watchdog's fault
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    plant.stall = |read| if read == 0 { ms(25) } else { Duration::ZERO };
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    c.acknowledge(OFICINA, &ARMED).unwrap();
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 1);
+    assert_eq!(text(&c), "RUN");
+    assert_eq!(c.program().unwrap().scans, 1);
+}
+
+#[test]
+fn overruns_count_every_time_error_since_the_start() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    plant.stall = |read| if read == 1 || read == 3 { ms(15) } else { Duration::ZERO };
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 4);
+    assert_eq!(text(&c), "RUN overruns(count=2)");
+}
+
+#[test]
+fn a_start_runs_from_every_kind_of_stop_and_the_crash_s_fault_refuses_stop_and_start() {
+    for was in [StateWord::Stop, StateWord::Hold, StateWord::Fault] {
+        let mut c = controller(PRODUCTION, Restart::PowerCycle { was });
+        assert_eq!(c.start(StartupReason::Cold, OFICINA, &ARMED), Ok(()));
+    }
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    c.stop(OFICINA).unwrap();
+    assert_eq!(c.start(StartupReason::Cold, LOCAL, &ARMED), Ok(()));
+
+    let mut c = controller(PRODUCTION, Restart::Crash);
+    assert_eq!(c.stop(OFICINA), Err(Refusal::State { command: Command::Stop, state: StateWord::Fault }));
+    assert_eq!(
+        c.start(StartupReason::Warm, OFICINA, &ARMED),
+        Err(Refusal::State { command: Command::Start(StartupReason::Warm), state: StateWord::Fault })
+    );
+    assert_eq!(text(&c), "FAULT internal(id=507)");
+}
