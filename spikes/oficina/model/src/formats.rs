@@ -33,6 +33,7 @@ pub const FORMATS: &[(&str, Component)] = &[
     ("veredas-catalog", CORE),
     ("veredas-bench", MAQUINAR),
     ("veredas-controller", MAQUINAR),
+    ("veredas-cena", MAQUINAR),
     ("veredas-supervisao", SUPERVISAO),
     ("veredas-binding", SUPERVISAO),
     ("veredas-abaco-oracle-baseline", ABACO),
