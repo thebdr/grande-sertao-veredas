@@ -1174,3 +1174,32 @@ new question takes the next free number of its block: core Q100, portal Q130, ma
 supervisão Q190, controlador (with ORCL) Q220, aranha Q280, comissionador Q310, ábaco Q340,
 oficina Q370, releases Q430; a block ends where the next begins. Suite-wide questions run on
 from Q46. A question is appended at the end of this file whatever its number.
+
+---
+
+## Q280 - Does aranha keep an interface of its own?
+
+**Raised** 2026-11-22, planning aranha (P-005; `docs/aranha-plan.md`).
+
+Veredas 1's aranha is an executable serving its own web page (axum, JSON and SSE, a vite and
+TypeScript page embedded in the binary, about 1 100 lines of server and the page beside it): the
+device table, the drawn topology, the baseline diff, the identify and write buttons. Since then
+the architect decided that the bench has no interface of its own and that its surfaces are
+Oficina's (Q12, revisited 2026-11-13), and the briefing gave Oficina the topology view and the
+hardware configuration's scan, compare and merge, which aranha's scan feeds (`docs/oficina-plan.md`;
+the briefing's G1).
+
+Options:
+- (a) No interface of its own: a library (what Oficina and controlador embed) and one command-line
+  executable (listen on an interface and write the scan file, identify, diff two scans). Aranha's
+  surfaces (the table, the topology, the diff, identify, name and address) are Oficina's, as the
+  bench's are; until Oficina draws them, the scan file is read as text.
+- (b) Keep Veredas 1's page, served by aranha's own executable: a commissioning tool usable today
+  in a browser, and a second front end beside Oficina's to keep in step.
+- (c) A page in supervisão: supervisão owns no plant connection and starts portal sessions only
+  (Q19), so it would show a scan file, never scan.
+
+**Recommended and taken meanwhile**: (a). Nothing of the page is carried; the library's types are
+what a surface draws, and the executable writes the same file a surface would read.
+
+**Reversible?** Yes: a page, or Oficina's surfaces, sit on the library; nothing below changes.
