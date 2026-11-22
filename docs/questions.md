@@ -2211,3 +2211,26 @@ Options:
 rulings (a download's identity) expect; (a) meanwhile, stated as a limit in C-290.
 
 **Reversible?** Yes: the check widens without changing the manifest's format.
+
+---
+
+## Q229 - A pulse that comes back with no new edge, and which preset a timer is judged against
+
+**Raised** 2026-11-23, by the controlador session, from C-150's refute rounds 11 and 12.
+
+`orcl-std`'s timers, carried from Veredas 1, judge their elapsed time on every scan against the `pt`
+that scan gives, as the counter judges its count against each scan's preset. While a timer measures,
+its elapsed time is the scan's time less its start. The pulse `Tp` goes on measuring after its pulse
+has ended for as long as its input stays on. So, with the input still on, a `pt` raised past the
+elapsed time turns the pulse on again with no new rising edge. So does a scan whose time goes back,
+which none of the runtime's clocks gives. IEC 61131-3's TP gives one pulse per rising edge.
+- (a) Keep the timers as carried: each scan's `pt`, and a pulse that can come back.
+- (b) Each scan's `pt`, but a pulse that has ended stays off until the next rising edge, whatever
+  `pt` or the time does. This changes the carried `Tp`.
+- (c) Every timer judged against the `pt` it started with, its switching time fixed at its start.
+  This changes all three timers.
+
+**Taken meanwhile**: (a), as carried. C-150 states it, and `crates/orcl-std/src/timers.rs` marks it
+`DECISION PENDING (Q229)`.
+
+**Reversible?** Yes: a few lines of `Tp`, or of all three timers, and the assertions that pin them.

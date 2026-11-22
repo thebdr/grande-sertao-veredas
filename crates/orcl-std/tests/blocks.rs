@@ -571,59 +571,6 @@ const SOURCES: [(&str, &str); 7] = [
     ("timers.rs", include_str!("../src/timers.rs")),
 ];
 
-/// A source with every whitespace character taken out, so a spacing Rust allows hides nothing from a reading.
-fn squeezed(text: &str) -> String {
-    text.chars().filter(|c| !c.is_whitespace()).collect()
-}
-
-#[test]
-fn read_without_whitespace_no_source_brings_in_a_crate_or_a_file_or_builds_apart_for_tests() {
-    for (file, text) in SOURCES {
-        let tight = squeezed(text);
-        for refused in ["externcrate", "#[path", "include!(", "include_str!(", "include_bytes!(", "cfg!("] {
-            assert!(!tight.contains(refused), "{file} holds {refused}");
-        }
-        // `not(test)` only in the crate root's no_std switch
-        let switches = if file == "lib.rs" { 1 } else { 0 };
-        assert_eq!(tight.matches("not(test)").count(), switches, "{file}: code built apart from the tests");
-        assert_eq!(tight.matches("#![cfg_attr(not(test),no_std)]").count(), switches);
-        // `cfg(test)` only on the unit tests' own module
-        let mut rest = tight.as_str();
-        while let Some(at) = rest.find("cfg(test)") {
-            let after = &rest[at + "cfg(test)".len()..];
-            let tests_module = after.strip_prefix(']').is_some_and(|mut next| {
-                // any further attributes, then the unit tests' module itself
-                while let Some(attribute) = next.strip_prefix("#[") {
-                    match attribute.find(']') {
-                        Some(end) => next = &attribute[end + 1..],
-                        None => return false,
-                    }
-                }
-                next.starts_with("modtests{")
-            });
-            assert!(tests_module, "{file}: cfg(test) outside the unit tests' module");
-            rest = after;
-        }
-    }
-}
-
-#[test]
-fn no_source_file_pulls_one_in_from_elsewhere() {
-    for (file, text) in [
-        ("lib.rs", include_str!("../src/lib.rs")),
-        ("bits.rs", include_str!("../src/bits.rs")),
-        ("counters.rs", include_str!("../src/counters.rs")),
-        ("edges.rs", include_str!("../src/edges.rs")),
-        ("o14.rs", include_str!("../src/o14.rs")),
-        ("scan.rs", include_str!("../src/scan.rs")),
-        ("timers.rs", include_str!("../src/timers.rs")),
-    ] {
-        for refused in ["#[path", "include!(", "include_str!(", "include_bytes!("] {
-            assert!(!text.contains(refused), "{file} pulls a file in with {refused}");
-        }
-    }
-}
-
 #[test]
 fn a_reset_at_a_preset_of_zero_or_below_leaves_q_on() {
     let mut c = Ctu::default();
@@ -748,8 +695,8 @@ fn the_unit_tests_cases_on_the_build_programs_link() {
     assert_eq!(c.cv(), 1);
 }
 
-// The eighth refute round: an edge's q() after a scan with no edge, and the words that let a source build apart,
-// bring in a crate or pull in a file, refused everywhere but at the five places the crate needs them.
+// The eighth refute round: an edge's q() after a scan with no edge. (Its reading of the sources, and the sixth,
+// seventh and ninth rounds', is the twelfth round's single reading, below.)
 
 #[test]
 fn an_edge_s_q_is_off_again_on_the_scan_after_its_edge() {
@@ -765,60 +712,29 @@ fn an_edge_s_q_is_off_again_on_the_scan_after_its_edge() {
     assert!(!fall.q(), "a falling edge's q() is off on the next high scan");
 }
 
-#[test]
-fn the_sources_hold_no_word_that_builds_apart_or_brings_anything_in_but_at_their_five_places() {
-    for (file, text) in SOURCES {
-        let tight = squeezed(text);
-        for word in ["path", "include", "extern", "env"] {
-            assert!(!tight.contains(word), "{file} holds `{word}`");
-        }
-        // `cfg` at exactly the five places: the root's no_std switch, and each unit tests' module
-        let allowed: &[&str] = match file {
-            "lib.rs" => &["#![cfg_attr(not(test),no_std)]"],
-            "bits.rs" | "counters.rs" | "edges.rs" | "timers.rs" => &["#[cfg(test)]"],
-            _ => &[],
-        };
-        assert_eq!(tight.matches("cfg").count(), allowed.len(), "{file} holds `cfg` elsewhere");
-        for site in allowed {
-            assert_eq!(tight.matches(site).count(), 1, "{file}: {site}");
-        }
-    }
-}
+// The sources read as the compiler reads them (refute rounds 6 to 12): one token after another, comments taken out
+// and every literal emptied, so a check finds code where rustc does and words where they are words ("an open valve"
+// holds no `env`). One reading for every textual promise of the clause.
 
-// The ninth refute round: no panic source and no debug-only code anywhere in the sources (clippy does not look inside
-// a local macro). Its check of the unit tests' modules is the tenth round's, below, word by word.
-
-#[test]
-fn no_source_holds_a_panic_source_or_debug_only_code() {
-    for (file, text) in SOURCES {
-        let tight = squeezed(text);
-        for refused in [".unwrap(", ".expect(", "panic!", "todo!", "unimplemented!", "unreachable!", "debug_assert"] {
-            assert!(!tight.contains(refused), "{file} holds {refused}");
-        }
-    }
-}
-
-// The tenth and eleventh refute rounds: the sources read as the compiler reads them, comments taken out and literals
-// emptied, word by word, the unit tests' module bounded by its braces; timers on scans whose time goes back, whose
-// period changes or is zero, and at the longest preset time.
-
-/// A source as the compiler reads it: its comments taken out (line and block comments, nested) and every string and
-/// character literal emptied (with its escapes, raw strings and their hashes), a lifetime kept. Doc examples are
-/// comments, so no code of the library.
+/// A source as the compiler reads it, its tokens joined by spaces: comments taken out (line and block comments,
+/// nested); every string and character literal emptied to `""` or `''`, with its escapes, its `b`, `c`, `r`, `br`
+/// or `cr` prefix and a raw string's hashes; a lifetime or a label kept whole; every other character a token of its
+/// own. Doc examples are comments, so no code of the library.
 fn code_of(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let is_word = |c: char| c.is_alphanumeric() || c == '_';
-    let mut code = String::new();
+    let mut tokens: Vec<String> = Vec::new();
     let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
+    while let Some(&c) = chars.get(i) {
         let next = chars.get(i + 1).copied();
-        if c == '/' && next == Some('/') {
-            while i < chars.len() && chars[i] != '\n' {
+        if c.is_whitespace() {
+            i += 1;
+        } else if c == '/' && next == Some('/') {
+            while chars.get(i).is_some_and(|&c| c != '\n') {
                 i += 1;
             }
         } else if c == '/' && next == Some('*') {
-            let mut depth = 0;
+            let mut depth = 0usize;
             while i < chars.len() {
                 if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
                     depth += 1;
@@ -833,47 +749,85 @@ fn code_of(text: &str) -> String {
                     i += 1;
                 }
             }
-            code.push(' ');
-        } else if c == 'r' && (i == 0 || !is_word(chars[i - 1]) || (chars[i - 1] == 'b' && (i < 2 || !is_word(chars[i - 2]))))
-            && {
-                let hashes = chars[i + 1..].iter().take_while(|h| **h == '#').count();
-                chars.get(i + 1 + hashes) == Some(&'"')
-            }
-        {
-            let hashes = chars[i + 1..].iter().take_while(|h| **h == '#').count();
-            i += 2 + hashes;
-            while i < chars.len() && !(chars[i] == '"' && chars[i + 1..].iter().take(hashes).filter(|h| **h == '#').count() == hashes) {
+        } else if is_word(c) {
+            let start = i;
+            while chars.get(i).is_some_and(|&c| is_word(c)) {
                 i += 1;
             }
-            i += 1 + hashes;
-            code.push_str("\"\"");
+            let word: String = chars[start..i].iter().collect();
+            let hashes = chars[i..].iter().take_while(|h| **h == '#').count();
+            if matches!(word.as_str(), "r" | "br" | "cr") && chars.get(i + hashes) == Some(&'"') {
+                i += hashes + 1;
+                while i < chars.len() && !(chars[i] == '"' && chars[i + 1..].iter().take_while(|h| **h == '#').count() >= hashes) {
+                    i += 1;
+                }
+                i += 1 + hashes;
+                tokens.push("\"\"".into());
+            } else if matches!(word.as_str(), "b" | "c") && next_is(&chars, i, '"') {
+                i = string_end(&chars, i);
+                tokens.push("\"\"".into());
+            } else if word == "b" && next_is(&chars, i, '\'') {
+                i = char_end(&chars, i);
+                tokens.push("''".into());
+            } else {
+                tokens.push(word);
+            }
         } else if c == '"' {
-            i += 1;
-            while i < chars.len() && chars[i] != '"' {
-                i += if chars[i] == '\\' { 2 } else { 1 };
-            }
-            i += 1;
-            code.push_str("\"\"");
+            i = string_end(&chars, i);
+            tokens.push("\"\"".into());
         } else if c == '\'' && (next == Some('\\') || chars.get(i + 2) == Some(&'\'')) {
-            i += if next == Some('\\') { 3 } else { 2 };
-            while i < chars.len() && chars[i] != '\'' {
+            i = char_end(&chars, i);
+            tokens.push("''".into());
+        } else if c == '\'' {
+            let start = i;
+            i += 1;
+            while chars.get(i).is_some_and(|&c| is_word(c)) {
                 i += 1;
             }
-            i += 1;
-            code.push_str("''");
+            tokens.push(chars[start..i].iter().collect());
         } else {
-            code.push(c);
+            tokens.push(c.to_string());
             i += 1;
         }
     }
-    code
+    tokens.join(" ")
 }
+
+fn next_is(chars: &[char], at: usize, c: char) -> bool {
+    chars.get(at) == Some(&c)
+}
+
+/// Past a string literal whose opening quote is at `open`, its escapes skipped.
+fn string_end(chars: &[char], open: usize) -> usize {
+    let mut i = open + 1;
+    while let Some(&c) = chars.get(i) {
+        if c == '"' {
+            return i + 1;
+        }
+        i += if c == '\\' { 2 } else { 1 };
+    }
+    i
+}
+
+/// Past a character literal whose opening quote is at `open`, an escape included.
+fn char_end(chars: &[char], open: usize) -> usize {
+    let mut i = open + if chars.get(open + 1) == Some(&'\\') { 3 } else { 2 };
+    while chars.get(i).is_some_and(|&c| c != '\'') {
+        i += 1;
+    }
+    i + 1
+}
+
+/// Where a source's unit tests' module starts: its `cfg(test)` attribute, however spaced.
+const TESTS_SITE: &str = "# [ cfg ( test ) ]";
+/// The crate root's `no_std` switch, however spaced.
+const NO_STD_SWITCH: &str = "# ! [ cfg_attr ( not ( test ) , no_std ) ]";
 
 /// A source's code split at its unit tests' module, bounded by its braces: the library's code (before the module
 /// and after it), then the module (empty when it has none).
 fn library_and_tests(text: &str) -> (String, String) {
     let code = code_of(text);
-    let Some(start) = code.find("#[cfg(test)]") else { return (code, String::new()) };
+    let Some(start) = code.find(TESTS_SITE) else { return (code, String::new()) };
     let mut end = code.len();
     if let Some(open) = code[start..].find('{').map(|at| start + at) {
         let mut depth = 0;
@@ -891,7 +845,26 @@ fn library_and_tests(text: &str) -> (String, String) {
             }
         }
     }
-    (format!("{}{}", &code[..start], &code[end..]), code[start..end].to_string())
+    (format!("{} {}", &code[..start], &code[end..]), code[start..end].to_string())
+}
+
+/// Whether a `cfg(test)` stands on the unit tests' module itself, after any other attribute.
+fn is_tests_module(module: &str) -> bool {
+    let mut rest = module.strip_prefix(TESTS_SITE).unwrap_or_default().trim_start();
+    while let Some(attribute) = rest.strip_prefix("# [") {
+        let mut depth = 1;
+        let close = attribute.char_indices().find_map(|(at, c)| {
+            match c {
+                '[' => depth += 1,
+                ']' => depth -= 1,
+                _ => {}
+            }
+            (depth == 0).then_some(at)
+        });
+        let Some(close) = close else { return false };
+        rest = attribute[close + 1..].trim_start();
+    }
+    rest.starts_with("mod tests {")
 }
 
 /// The words of a piece of code: what an identifier or a keyword is made of.
@@ -900,73 +873,100 @@ fn words(code: &str) -> Vec<&str> {
 }
 
 #[test]
-fn the_library_s_code_holds_no_assert_no_macro_and_no_test_and_the_unit_tests_modules_no_item_word() {
+fn the_sources_read_as_compiled_hold_only_the_words_the_clause_allows() {
     for (file, text) in SOURCES {
+        let code = code_of(text);
         let (library, tests_module) = library_and_tests(text);
-        let library_words = words(&library);
-        // the assertions panic, and so do the panic macros reached by another name, inside a macro too
+        let (all, library_words, module_words) = (words(&code), words(&library), words(&tests_module));
+        let count = |words: &[&str], word: &str| words.iter().filter(|w| **w == word).count();
+        // nothing brought in from another crate or file or read from the build's environment, and no panic source
+        // or debug-only code, anywhere
         for refused in [
-            "assert",
-            "assert_eq",
-            "assert_ne",
-            "assert_matches",
+            "extern",
+            "path",
+            "include",
+            "include_str",
+            "include_bytes",
+            "env",
+            "option_env",
+            "unwrap",
+            "expect",
+            "todo",
+            "unimplemented",
+            "unreachable",
             "debug_assert",
             "debug_assert_eq",
             "debug_assert_ne",
             "debug_assert_matches",
-            "todo",
-            "unimplemented",
-            "unreachable",
         ] {
-            assert!(!library_words.contains(&refused), "{file}: the library's code holds {refused}");
+            assert_eq!(count(&all, refused), 0, "{file} holds {refused}");
         }
-        // `test` in the library's code only in the root's no_std switch: no test attribute, by any path, name or
-        // macro; and the library's one macro is `impl_bits!`
-        let count = |word: &str| library_words.iter().filter(|w| **w == word).count();
-        assert_eq!(count("test"), usize::from(file == "lib.rs"), "{file}: the library's code names `test`");
-        assert_eq!(count("macro_rules"), usize::from(file == "bits.rs"), "{file}: a macro of the library's");
-        let module_words = words(&tests_module);
+        // `panic` once, among the root's denied lints, which are compared line by line
+        assert_eq!(count(&all, "panic"), usize::from(file == "lib.rs"), "{file} names `panic`");
+        for refused in ["assert", "assert_eq", "assert_ne", "assert_matches"] {
+            assert_eq!(count(&library_words, refused), 0, "{file}: the library's code holds {refused}");
+        }
+        // built apart for the tests only at the root's no_std switch and on each unit tests' module: `cfg` and
+        // `test` nowhere else, so no test attribute by any path, name or macro
+        let unit_tested = matches!(file, "bits.rs" | "counters.rs" | "edges.rs" | "timers.rs");
+        assert_eq!(count(&all, "cfg_attr"), usize::from(file == "lib.rs"), "{file}: cfg_attr");
+        assert_eq!(code.matches(NO_STD_SWITCH).count(), usize::from(file == "lib.rs"), "{file}: the no_std switch");
+        assert_eq!(count(&all, "cfg"), usize::from(unit_tested), "{file}: cfg");
+        assert_eq!(code.matches(TESTS_SITE).count(), usize::from(unit_tested), "{file}: cfg(test)");
+        assert_eq!(count(&library_words, "test"), usize::from(file == "lib.rs"), "{file}: `test` in the library's code");
+        assert_eq!(is_tests_module(&tests_module), unit_tested, "{file}: cfg(test) on the unit tests' module");
+        // the library's one macro is `impl_bits!`; the unit tests' modules hold no item that could make the test
+        // build differ from the one programs link
+        assert_eq!(count(&all, "macro_rules"), usize::from(file == "bits.rs"), "{file}: macro_rules");
         for refused in ["impl", "trait", "macro_rules", "macro_use"] {
-            assert!(!module_words.contains(&refused), "{file}: the unit tests' module holds {refused}");
+            assert_eq!(count(&module_words, refused), 0, "{file}: the unit tests' module holds {refused}");
         }
     }
 }
 
 #[test]
 fn the_reading_finds_code_where_the_compiler_does_and_words_alone() {
-    let source = r##"/// an example: assert!(x), and an impl
+    let source = r####"//! an example: assert!(x), and an impl; an open valve stops at half and includes nothing
 pub fn f(asserted: bool) -> bool { asserted } // de-asserted at pt; the trait's default
 const S: &str = "
 // */ assert!(false) is in a string, \" and an escaped quote
 ";
 const R: &str = r#"a raw "string" with a # and impl"#;
+const CR: &core::ffi::CStr = cr"\"; const BR: &[u8] = br##"x"# raw"##; const BC: u8 = b'"';
 const C: [char; 3] = ['}', '\'', '"'];
-fn life<'a>(x: &'a u8) -> &'a u8 { x }
+const L: &str = core::stringify!('r"\" "); fn shown_after_a_lifetime() {}
+fn life<'a>(x: &'a u8) -> &'a u8 { 'outer: loop { break 'outer x; } }
 /* a block comment /* nested */
 // */ fn hidden() {}
-#[cfg(test)]
+#[cfg( test )]
+#[allow(dead_code)]
 mod tests {
     // a simple test, the trait's default
     #[test]
     fn t() { let _ = "impl {"; let _ = '}'; }
 }
 pub fn after() {}
-"##;
+"####;
+    let code = code_of(source);
     let (library, tests_module) = library_and_tests(source);
     let library_words = words(&library);
-    for kept in ["asserted", "life", "a", "hidden", "after"] {
+    for kept in ["asserted", "CR", "BR", "BC", "life", "a", "outer", "shown_after_a_lifetime", "hidden", "after"] {
         assert!(library_words.contains(&kept), "{kept} is the library's code");
     }
-    for gone in ["assert", "example", "impl", "trait", "string", "raw", "nested"] {
+    for gone in ["assert", "example", "impl", "trait", "string", "raw", "nested", "open", "valve", "half", "includes"] {
         assert!(!library_words.contains(&gone), "{gone} is a comment's or a literal's");
     }
+    assert_eq!(code.matches(TESTS_SITE).count(), 1, "cfg(test) found however spaced");
+    assert!(is_tests_module(&tests_module), "on the module, after another attribute");
     let module_words = words(&tests_module);
-    assert!(tests_module.starts_with("#[cfg(test)]") && tests_module.trim_end().ends_with('}'));
     assert!(module_words.contains(&"t") && !module_words.contains(&"after"), "the module ends at its brace");
     for gone in ["simple", "trait", "impl"] {
         assert!(!module_words.contains(&gone), "{gone} is a comment's or a literal's");
     }
 }
+
+// The tenth and eleventh refute rounds: timers on scans whose time goes back, whose period changes or is zero, and
+// at the longest preset time; the twelfth: a preset time that changes, and the longest one from a start past zero.
 
 #[test]
 fn a_timer_s_elapsed_time_is_measured_from_its_start_on_a_scan_whose_time_goes_back_and_nothing_panics() {
@@ -1058,4 +1058,53 @@ fn every_timer_at_the_longest_preset_time_waits_to_the_end_of_time_and_panics_no
     pulse.scan(&at(0), true, longest);
     assert_eq!((pulse.scan(&late, true, longest), pulse.et()), (true, ms(u64::MAX)));
     assert_eq!((pulse.scan(&end, true, longest), pulse.et()), (false, Duration::MAX), "over at the very end");
+}
+
+#[test]
+fn every_timer_is_judged_on_each_scan_against_that_scan_s_preset_time() {
+    // an on-delay started at 0
+    let mut on = Ton::default();
+    let mut ton = |t: u64, pt: u64| (on.scan(&at(t), true, ms(pt)), on.et());
+    assert_eq!(ton(0, 100), (false, ms(0)));
+    assert_eq!(ton(50, 40), (true, ms(40)), "pt lowered below the elapsed time: on at once, et at the new pt");
+    assert_eq!(ton(60, 100), (false, ms(60)), "pt raised past it: off again");
+    assert_eq!(ton(100, 100), (true, ms(100)));
+    assert_eq!(ton(150, 200), (false, ms(150)), "raised after switching on: off");
+    assert_eq!(ton(200, 200), (true, ms(200)));
+    // an off-delay dropped at 10 ms
+    let mut off = Tof::default();
+    let mut tof = |t: u64, input: bool, pt: u64| (off.scan(&at(t), input, ms(pt)), off.et());
+    assert_eq!(tof(0, true, 100), (true, ms(0)));
+    assert_eq!(tof(10, false, 100), (true, ms(0)));
+    assert_eq!(tof(60, false, 200), (true, ms(50)), "pt raised: still on");
+    assert_eq!(tof(120, false, 200), (true, ms(110)), "past the old pt: still on");
+    assert_eq!(tof(130, false, 100), (false, ms(100)), "pt lowered below the elapsed time: off at once, et at the new pt");
+    assert_eq!(tof(140, false, 300), (false, ms(100)), "once off, its elapsed time held at the pt it switched off at");
+    // a pulse from an edge at 0, its input held on
+    let mut pulse = Tp::default();
+    let mut tp = |t: u64, input: bool, pt: u64| (pulse.scan(&at(t), input, ms(pt)), pulse.et());
+    assert_eq!(tp(0, true, 100), (true, ms(0)));
+    assert_eq!(tp(50, true, 40), (false, ms(40)), "pt lowered below the elapsed time: over at once");
+    assert_eq!(tp(60, true, 100), (true, ms(60)), "raised past it, the input still on: on again (Q229)");
+    assert_eq!(tp(100, true, 100), (false, ms(100)));
+    assert_eq!(tp(150, true, 200), (true, ms(150)), "raised after the pulse, the input on: on again, no new edge (Q229)");
+    assert_eq!(tp(160, false, 200), (true, ms(160)), "its input off: on to the raised pt");
+    assert_eq!(tp(200, false, 200), (false, ms(0)), "over, its input off: reset");
+}
+
+#[test]
+fn every_timer_started_after_zero_at_the_longest_preset_time_panics_none_at_the_end_of_time() {
+    let longest = Duration::MAX;
+    let end = Scan { now: Duration::MAX, period: ms(10), cycle: u64::MAX };
+    let almost = Duration::MAX.saturating_sub(ms(1));
+    let mut on = Ton::default();
+    on.scan(&at(1), true, longest);
+    assert_eq!((on.scan(&end, true, longest), on.et()), (false, almost));
+    let mut off = Tof::default();
+    off.scan(&at(0), true, longest);
+    off.scan(&at(1), false, longest);
+    assert_eq!((off.scan(&end, false, longest), off.et()), (true, almost));
+    let mut pulse = Tp::default();
+    pulse.scan(&at(1), true, longest);
+    assert_eq!((pulse.scan(&end, true, longest), pulse.et()), (true, almost));
 }

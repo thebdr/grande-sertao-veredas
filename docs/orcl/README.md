@@ -154,3 +154,4 @@ Read on 2026-11-22 from Veredas 1's branch `supervisao-plan` (2026-11-11): `crat
 - **Q45** the reading that the conformance suite is only as good as the list of core operations ORCL allows.
 - **Q220** the language's version beside its crates'. **Q221** where the front end builds. **Q222** the pinned nightly
   and its moves. **Q225** a `clippy.toml` under law L7. **Q227** the list of core-library operations ORCL allows.
+  **Q229** a pulse that comes back with no new edge, and which preset a timer is judged against.

@@ -75,6 +75,10 @@ impl Tof {
 /// Pulse timer (IEC TP). A rising edge of `input` starts a pulse: `q` is on for exactly `pt`, whatever `input`
 /// does meanwhile, and re-triggering during the pulse is ignored. After the pulse, `et` holds at `pt` while
 /// `input` stays on, and resets once it is off.
+///
+/// DECISION PENDING (Q229): like every timer here, a pulse is judged on each scan against that scan's `pt`, and
+/// it measures from its edge for as long as its input stays on. So a `pt` raised past the elapsed time after the
+/// pulse ended, with the input still on, turns it on again with no new edge, as carried from Veredas 1.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Tp {
     q: bool,
