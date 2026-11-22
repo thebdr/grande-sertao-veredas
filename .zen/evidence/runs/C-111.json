@@ -1,25 +1,24 @@
 {
   "clause": "C-111",
-  "command": "cargo nextest run -p veredas-maquinar --test ethernetip_adapter",
+  "command": "cargo test -p veredas-maquinar --test ethernetip_adapter",
   "commandArgv": [
     "cargo",
-    "nextest",
-    "run",
+    "test",
     "-p",
     "veredas-maquinar",
     "--test",
     "ethernetip_adapter"
   ],
   "exitCode": 0,
-  "outputSha": "45e4c542d3c22c9fe494b9336e0056dc1c877b73f1a4d29754d3d63b8c57b983",
-  "outputTail": "        PASS [   0.017s] ( 2/14) veredas-maquinar::ethernetip_adapter an_unconnected_send_is_answered_when_its_route_ends_here\n        PASS [   0.024s] ( 3/14) veredas-maquinar::ethernetip_adapter stopping_closes_everything_and_frees_every_port\n        PASS [   0.028s] ( 4/14) veredas-maquinar::ethernetip_adapter a_session_is_registered_once_and_held_to_its_handle\n        PASS [   0.026s] ( 5/14) veredas-maquinar::ethernetip_adapter list_identity_answers_on_tcp_and_udp_with_the_configured_identity\n        PASS [   0.029s] ( 6/14) veredas-maquinar::ethernetip_adapter every_forward_open_the_adapter_cannot_honour_is_refused_with_its_status\n        PASS [   0.029s] ( 7/14) veredas-maquinar::ethernetip_adapter the_assembly_object_reads_and_writes_the_data_the_plant_side_holds\n        PASS [   0.033s] ( 8/14) veredas-maquinar::ethernetip_adapter the_crate_s_own_scanner_leaves_the_sequence_count_out_and_is_refused_for_it\n        PASS [   0.031s] ( 9/14) veredas-maquinar::ethernetip_adapter the_configuration_reads_from_toml_with_its_defaults_and_refuses_what_cannot_serve\n        PASS [   0.049s] (10/14) veredas-maquinar::ethernetip_adapter the_documented_adapter_runs_from_its_bench_file\n        PASS [   0.161s] (11/14) veredas-maquinar::ethernetip_adapter a_connection_whose_originator_falls_silent_is_closed_at_its_timeout\n        PASS [   0.617s] (12/14) veredas-maquinar::ethernetip_adapter the_dissectors_read_a_whole_conversation_as_the_protocol_has_it\n        PASS [   0.871s] (13/14) veredas-maquinar::ethernetip_adapter the_knobs_stall_production_silence_the_sessions_and_restart_the_device\n        PASS [   1.584s] (14/14) veredas-maquinar::ethernetip_adapter a_class_1_connection_produces_at_its_rpi_and_consumes_what_its_originator_runs\n────────────\n     Summary [   1.585s] 14 tests run: 14 passed, 0 skipped",
-  "ranAt": "2026-11-22T20:17:20.158Z",
-  "headCommit": "b231e6c2a25a53f90df36613754b3f5e628fdacb",
+  "outputSha": "47716f52e91aadc3256a4fe2484c989919938045e6fde1ae83f207269e3640e3",
+  "outputTail": "test a_frame_late_from_its_originator_or_from_another_host_is_kept_out ... ok\ntest a_connection_whose_originator_falls_silent_is_closed_at_its_timeout ... ok\ntest a_connection_s_first_frame_comes_at_once_whatever_the_others_wait_for ... ok\ntest the_dissectors_read_a_whole_conversation_as_the_protocol_has_it ... ok\ntest list_identity_reaches_a_broadcast_and_names_the_address_it_answers_from ... ok\ntest produced_frames_go_to_the_originator_s_host_at_its_port_or_the_standard_one ... ok\ntest the_knobs_stall_production_silence_the_sessions_and_restart_the_device ... ok\ntest a_large_forward_open_with_unequal_rpis_is_taken_or_refused_as_a_forward_open_is ... ok\ntest a_class_1_connection_produces_at_its_rpi_and_consumes_what_its_originator_runs ... ok\ntest the_timeout_counts_the_consumed_rpi_and_the_multiplier_and_the_first_frame_waits_ten_seconds ... ok\n\ntest result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.20s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running tests/ethernetip_adapter.rs (target/debug/build/veredas-maquinar/597dd759b5076aba/out/ethernetip_adapter-597dd759b5076aba)",
+  "ranAt": "2026-11-22T21:33:21.017Z",
+  "headCommit": "88cf2709428949767edd6fc52fc35b737004a441",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/ethernetip_adapter.rs",
       "file": "crates/veredas-maquinar/tests/ethernetip_adapter.rs",
-      "fileSha": "98c6e17b0a162acda4980d784dfe87086db2fc1a66c6f2afdc8cd034cc3254b0"
+      "fileSha": "00877f24cb34baf5db668a6122da0a1e464a710ea5025b85709df757d2016206"
     }
   ]
 }
