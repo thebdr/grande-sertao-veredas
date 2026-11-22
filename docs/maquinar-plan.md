@@ -148,7 +148,8 @@ veredas_maquinar
   ethernetip  the EtherNet/IP adapter: its wire (encapsulation, CPF, EPATH, Forward_Open, the Class 1
               frame), its configuration, the objects, the sessions, Class 1 I/O, the knobs
   bench       the bench file (schema), Bench::start, every part's status
-  main.rs     veredas-maquinar <bench.toml> [--check]
+  main.rs     veredas-maquinar <bench.toml> [--check] | --version; stops on stdin's end, `stop`,
+              SIGTERM or SIGINT
 veredas_core (added for the bench, kept for portal)
   telegram::compose   a body built from named fields: binary fields at offsets, a text template
   telegram::catalog   the catalog file: messages by name, the id their frame carries, body rules,

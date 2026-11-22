@@ -952,11 +952,29 @@ fn the_executable_says_its_version_and_stops_on_a_termination_signal() {
     assert!(out.stderr.is_empty());
     // With a file named too, the version alone: nothing read, nothing started.
     let out = Command::new(exe).arg("missing.toml").arg("--version").output().unwrap();
-    assert_eq!(out.status.code(), Some(0));
+    assert_eq!((out.status.code(), String::from_utf8_lossy(&out.stdout).trim().to_string()), (Some(0), format!("veredas-maquinar {}", env!("CARGO_PKG_VERSION"))));
     // SIGTERM (a service manager's stop) and SIGINT (a terminal's) end a run as closing stdin does:
     // every part stopped, `stopped` printed, exit 0, the ports free.
     #[cfg(unix)]
     for signal in ["-TERM", "-INT"] {
+        // The handlers are in place before the bench file is read: the file is a pipe whose writer
+        // waits until the executable opens it, and the signal comes before a byte of it does.
+        let dir = scratch("early-signal");
+        let fifo = dir.join("bench.toml");
+        assert!(Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        let mut child = Command::new(exe).arg(&fifo).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let mut writer = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+        assert!(Command::new("kill").arg(signal).arg(child.id().to_string()).status().unwrap().success());
+        // A process the signal killed has closed the pipe: the write may fail, and the exit says so.
+        let _ = writer.write_all(format!("{}[[modbus]]\nname = \"drive\"\nport = 0\n", header()).as_bytes());
+        drop(writer);
+        let mut out = String::new();
+        std::io::Read::read_to_string(&mut child.stdout.take().unwrap(), &mut out).unwrap();
+        let exit = child.wait().unwrap();
+        assert_eq!(exit.code(), Some(0), "{signal} before the file was read: {exit:?} {out}");
+        assert_eq!(out.lines().last(), Some("stopped"), "{signal}: {out}");
+        drop(child.stdin.take());
+        std::fs::remove_dir_all(&dir).unwrap();
         let dir = scratch("signal");
         let path = dir.join("bench.toml");
         std::fs::write(&path, format!("{}[[modbus]]\nname = \"drive\"\nport = 0\n", header())).unwrap();
