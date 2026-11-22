@@ -49,8 +49,9 @@ chacha20poly1305 = { workspace = true }
 base64 = { workspace = true }
 getrandom = { workspace = true }
 
-# The session broadcasts its data frames on a tokio channel, which the server streams.
-tokio = { workspace = true, optional = true }
+# The session broadcasts its data frames on a tokio channel, which the server streams; the
+# executable takes SIGTERM and SIGINT as its stop (src/main.rs).
+tokio = { workspace = true, optional = true, features = ["signal"] }
 # The server is axum over tokio; the live stream wraps the frames broadcast as a stream.
 axum = { workspace = true, optional = true }
 tokio-stream = { workspace = true, optional = true }

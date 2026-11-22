@@ -1,5 +1,7 @@
 //! `veredas-portal <project.toml> [--check]`: run a project until stdin closes or the process is
-//! ended, printing every source's health once a second; with `--check`, read and check the file
+//! asked to end (SIGTERM or SIGINT on Unix, as a service manager or a terminal asks), printing
+//! every source's health once a second; `--version` prints the executable's name and version; with
+//! `--check`, read and check the file
 //! and its referenced files, print the plan, and exit without starting anything. With
 //! `--from-v1 <folder>`, read a Veredas 1 project folder into a project file on stdout, the
 //! notes on stderr, and exit.
@@ -10,7 +12,8 @@
 //! names, under the key its `key_env` variable holds (a key that does not open the entries already
 //! there is refused, nothing written), and exits; the value is never printed.
 //!
-//! Exit codes: 0 when the project ran, the check passed, a key was printed or an entry sealed; 2
+//! Exit codes: 0 when the project ran and stopped, the check passed, the version, a key was printed
+//! or an entry sealed; 2
 //! when the file, a referenced file or a Veredas 1 folder is refused, the secrets file or the key
 //! is refused, or the session or the server could not start, with the reason on stderr; 1 on a
 //! usage error.
@@ -24,10 +27,14 @@ use veredas_portal::secrets::{Key256, SecretsFile};
 use veredas_portal::serve;
 use veredas_portal::session::{HealthState, Session};
 
-const USAGE: &str = "usage: veredas-portal <project.toml> [--check] | veredas-portal --from-v1 <folder> | veredas-portal --new-key | veredas-portal --secret <project.toml> <entry>";
+const USAGE: &str = "usage: veredas-portal <project.toml> [--check] | veredas-portal --from-v1 <folder> | veredas-portal --new-key | veredas-portal --secret <project.toml> <entry> | veredas-portal --version";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--version") {
+        println!("veredas-portal {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     let mut check = false;
     let mut from_v1: Option<PathBuf> = None;
     let mut new_key = false;
@@ -211,8 +218,13 @@ fn plan(p: &Project) -> String {
     out
 }
 
-/// Run the session (and the server when the project names one) until stdin closes.
+/// Run the session (and the server when the project names one) until stdin closes, or on Unix
+/// until a SIGTERM or a SIGINT comes, which ends the run as closing stdin does.
 fn run(project: Project) {
+    // The handlers are taken before the session starts, so a signal that comes early ends the run
+    // as stdin closing does, every worker stopped and joined, never the process killed under them.
+    #[cfg(unix)]
+    let signals = stop_signals();
     let now = chrono::Local::now().naive_local();
     let session = match Session::start(project.session_config(now)) {
         Ok(s) => s,
@@ -242,8 +254,18 @@ fn run(project: Project) {
         runtime.spawn(serve::serve(listener, session.live()));
     }
     println!("running; close stdin to stop");
-    // Stdin closing is the stop signal; a status line a second meanwhile.
+    // Stdin closing is the stop signal, and on Unix a SIGTERM or a SIGINT; a status line a second
+    // meanwhile.
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    #[cfg(unix)]
+    if let Some(signals) = signals {
+        let stop_tx = stop_tx.clone();
+        std::thread::spawn(move || {
+            if signals.recv().is_ok() {
+                let _ = stop_tx.send(());
+            }
+        });
+    }
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
         let mut line = String::new();
@@ -285,4 +307,32 @@ fn run(project: Project) {
             eprintln!("{id}: {e}");
         }
     }
+}
+
+/// A thread that waits for SIGTERM or SIGINT, its handlers installed when this returns; the
+/// receiver gets one message when either comes. `None` when they could not be installed.
+#[cfg(unix)]
+fn stop_signals() -> Option<std::sync::mpsc::Receiver<()>> {
+    let (installed_tx, installed_rx) = std::sync::mpsc::channel::<bool>();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+            let _ = installed_tx.send(false);
+            return;
+        };
+        rt.block_on(async {
+            use tokio::signal::unix::{SignalKind, signal};
+            let (Ok(mut term), Ok(mut int)) = (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) else {
+                let _ = installed_tx.send(false);
+                return;
+            };
+            let _ = installed_tx.send(true);
+            tokio::select! {
+                _ = term.recv() => {}
+                _ = int.recv() => {}
+            }
+            let _ = tx.send(());
+        });
+    });
+    installed_rx.recv().ok().filter(|ok| *ok).map(|_| rx)
 }

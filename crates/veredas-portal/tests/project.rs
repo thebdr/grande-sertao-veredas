@@ -1004,7 +1004,9 @@ file it points at, resolves every path against the file's folder, and compiles e
 so a project that loads is a session that can start; the executable `veredas-portal <project.toml>`
 starts it (`--check` reads, checks and prints the plan without starting anything;
 `--from-v1 <folder>` reads a Veredas 1 project folder into this file and prints it, naming what it
-did not carry; `--new-key` and `--secret` keep the secrets file, below). No device is named
+did not carry; `--new-key` and `--secret` keep the secrets file, below; `--version` prints its
+name and version). A run ends when stdin closes or, on Unix, at a SIGTERM or a SIGINT, every source
+stopped, exit 0. No device is named
 anywhere: a plant's project is a folder of files like the ones below, kept outside the suite's
 code.
 
@@ -1236,3 +1238,44 @@ written then), and a file that is not a secrets file (named by its path, with th
 every file of the suite shares) are refused by name with exit code 2; a stray argument, or an
 option given twice or where a name should be, is a usage error, exit code 1.
 "##;
+
+/// The executable says its name and version, and on Unix a SIGTERM (a service manager's stop) or a
+/// SIGINT (a terminal's) ends a run as closing stdin does: the session stopped, exit 0, nothing on
+/// stderr, stdin still open.
+#[test]
+fn the_executable_says_its_version_and_stops_on_a_signal() {
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::{Command, Stdio};
+    let Some(exe) = option_env!("CARGO_BIN_EXE_veredas-portal") else {
+        return; // the light build has no executable
+    };
+    let out = Command::new(exe).arg("--version").stdin(Stdio::null()).output().unwrap();
+    assert_eq!((out.status.code(), String::from_utf8_lossy(&out.stdout).to_string()), (Some(0), format!("veredas-portal {}\n", env!("CARGO_PKG_VERSION"))));
+    #[cfg(unix)]
+    for signal in ["TERM", "INT"] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("plant.log"), "").unwrap();
+        let file = dir.path().join("project.toml");
+        std::fs::write(&file, "format = \"veredas-project\"\nversion = 1\nname = \"signal\"\n\n[[log]]\nid = \"log\"\nfile = \"plant.log\"\n").unwrap();
+        let mut child = Command::new(exe).arg(&file).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let mut out = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        while !line.starts_with("running") {
+            line.clear();
+            assert!(out.read_line(&mut line).unwrap() > 0, "the executable ended before it ran");
+        }
+        assert!(Command::new("kill").arg(format!("-{signal}")).arg(child.id().to_string()).status().unwrap().success());
+        let started = std::time::Instant::now();
+        let status = loop {
+            if let Some(s) = child.try_wait().unwrap() {
+                break s;
+            }
+            assert!(started.elapsed() < std::time::Duration::from_secs(15), "SIG{signal} did not end the run");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let mut errs = String::new();
+        child.stderr.take().unwrap().read_to_string(&mut errs).unwrap();
+        assert!(status.success() && errs.trim().is_empty(), "SIG{signal}: exit {status:?}; stderr:\n{errs}");
+        drop(child.stdin.take());
+    }
+}

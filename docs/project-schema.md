@@ -10,7 +10,9 @@ file it points at, resolves every path against the file's folder, and compiles e
 so a project that loads is a session that can start; the executable `veredas-portal <project.toml>`
 starts it (`--check` reads, checks and prints the plan without starting anything;
 `--from-v1 <folder>` reads a Veredas 1 project folder into this file and prints it, naming what it
-did not carry; `--new-key` and `--secret` keep the secrets file, below). No device is named
+did not carry; `--new-key` and `--secret` keep the secrets file, below; `--version` prints its
+name and version). A run ends when stdin closes or, on Unix, at a SIGTERM or a SIGINT, every source
+stopped, exit 0. No device is named
 anywhere: a plant's project is a folder of files like the ones below, kept outside the suite's
 code.
 
