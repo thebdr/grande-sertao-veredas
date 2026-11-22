@@ -3,4 +3,5 @@
 
 pub mod glue;
 pub mod document;
+pub mod table;
 pub mod tree;

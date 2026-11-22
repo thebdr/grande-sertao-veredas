@@ -15,9 +15,14 @@ Rectangle {
         id: projectTree
         objectName: "projectTree"
         Component.onCompleted: {
+            // The project folder is the first argument that is not an option.
             const args = Qt.application.arguments;
-            if (args.length > 1)
-                open(args[1]);
+            for (let i = 1; i < args.length; i++) {
+                if (!args[i].startsWith("--")) {
+                    open(args[i]);
+                    break;
+                }
+            }
         }
     }
 

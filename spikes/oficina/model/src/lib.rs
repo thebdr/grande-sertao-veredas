@@ -7,6 +7,7 @@
 //! - [`document`]: one TOML file as the document behind its two views, the form and the text,
 //!   whose edits keep every comment, space, quote and line ending they do not touch.
 //! - [`formats`]: which component reads each `veredas-*` format.
+//! - [`table`]: a table of a million rows computed cell by cell when a view asks.
 //!
 //! A spike, not a member: these tests drive no window, so by the plan's rule they prove no clause
 //! ("A test that does not drive the real interface proves no clause"). What they find is the
@@ -14,4 +15,5 @@
 
 pub mod document;
 pub mod formats;
+pub mod table;
 pub mod tree;

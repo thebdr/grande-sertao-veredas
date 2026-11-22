@@ -37,9 +37,19 @@ ApplicationWindow {
             }
         }
 
+        KDDW.DockWidget {
+            id: tableDock
+            uniqueName: "table"
+            title: qsTr("Table")
+            TablePane {
+                anchors.fill: parent
+            }
+        }
+
         Component.onCompleted: {
             addDockWidget(projectDock, KDDW.KDDockWidgets.Location_OnLeft, null, Qt.size(320, 800));
             addDockWidget(editorDock, KDDW.KDDockWidgets.Location_OnRight);
+            addDockWidget(tableDock, KDDW.KDDockWidgets.Location_OnBottom, editorDock);
         }
     }
 }

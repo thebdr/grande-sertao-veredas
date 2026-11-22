@@ -290,13 +290,18 @@ numbers and what was learnt on the way are in the evidence.
    kept its last state and saving was refused, and once mended the form followed; saved, the file's
    bytes were the CR LF and the byte-order mark it was read with. The text view is Qt Quick's own
    text editor, so the plan's fallback where Chromium cannot draw passed with it.
+3. **Passed** (2026-11-22), but for its frame times. A table of 1 000 000 rows of 8 columns, each
+   cell computed from its row when the view asks: open in about 40 ms, its last row drawn in 22 to
+   28 ms after the jump, every cell of it the model's own, and the process's memory with a million
+   rows within 0.2 MB of its memory with a thousand (release, three runs). The scrolling frame
+   times, with a GPU and without, are taken with point 6, where the drawing paths are set.
 
 The X11 platform is not proven: Qt's X11 plugin lacks seven of the distribution's libraries here
 (the architect's to install), so nothing has run on X11 yet; the plan's "X11 first" stays to be
 shown on this machine once they are.
 
 ### Verdict
-Not given: points 3 to 7 remain.
+Not given: points 4 to 7 remain, and point 3's frame times.
 
 ## Open
 - **Q31, the review's majors and minors**, none ruled. Those that touch Oficina: 22 (Oficina

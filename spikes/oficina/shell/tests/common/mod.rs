@@ -189,6 +189,17 @@ impl Shell {
         }
     }
 
+    /// The shell's resident memory in KiB, as the kernel counts it (`VmRSS`).
+    #[cfg(target_os = "linux")]
+    pub fn resident_kib(&self) -> u64 {
+        let status = std::fs::read_to_string(format!("/proc/{}/status", self.child.id())).expect("the process's status");
+        status
+            .lines()
+            .find_map(|l| l.strip_prefix("VmRSS:"))
+            .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
+            .expect("VmRSS")
+    }
+
     pub fn log_text(&self) -> String {
         std::fs::read_to_string(&self.log).unwrap_or_default()
     }
