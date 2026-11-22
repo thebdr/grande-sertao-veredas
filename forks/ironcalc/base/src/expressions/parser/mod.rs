@@ -184,6 +184,34 @@ pub enum Node {
         row2: i32,
         column2: i32,
     },
+    /// A cell of another workbook, `[1]Sheet!A1`, kept as written: `book` is
+    /// the 1-based index of the external book (the position of the link in
+    /// the workbook's `externalReferences`), `sheet_name` the sheet in that
+    /// book. Rows and columns follow the convention of `ReferenceKind`
+    /// (relative ones are offsets from the cell holding the formula). How
+    /// the cell is read — from the cache the file carries, from the linked
+    /// workbook, or from a host — is the model's `ExternalResolver`.
+    ExternalReferenceKind {
+        book: u32,
+        sheet_name: String,
+        absolute_row: bool,
+        absolute_column: bool,
+        row: i32,
+        column: i32,
+    },
+    /// A range of another workbook, `[1]Sheet!A1:B4`. See `ExternalReferenceKind`.
+    ExternalRangeKind {
+        book: u32,
+        sheet_name: String,
+        absolute_row1: bool,
+        absolute_column1: bool,
+        row1: i32,
+        column1: i32,
+        absolute_row2: bool,
+        absolute_column2: bool,
+        row2: i32,
+        column2: i32,
+    },
     OpRangeKind {
         left: Box<Node>,
         right: Box<Node>,
@@ -899,6 +927,87 @@ impl<'a> Parser<'a> {
                         absolute_row1,
                         absolute_row2,
                     },
+                }
+            }
+            TokenType::ExternalReference {
+                book,
+                sheet,
+                row,
+                column,
+                absolute_column,
+                absolute_row,
+            } => {
+                let context = &self.context;
+                let a1_mode = self.lexer.is_a1_mode();
+                let row = if absolute_row || !a1_mode {
+                    row
+                } else {
+                    row - context.row
+                };
+                let column = if absolute_column || !a1_mode {
+                    column
+                } else {
+                    column - context.column
+                };
+                Node::ExternalReferenceKind {
+                    book,
+                    sheet_name: sheet,
+                    row,
+                    column,
+                    absolute_row,
+                    absolute_column,
+                }
+            }
+            TokenType::ExternalRange {
+                book,
+                sheet,
+                left,
+                right,
+            } => {
+                let context = &self.context;
+                let mut row1 = left.row;
+                let mut column1 = left.column;
+                let mut row2 = right.row;
+                let mut column2 = right.column;
+
+                let mut absolute_column1 = left.absolute_column;
+                let mut absolute_column2 = right.absolute_column;
+                let mut absolute_row1 = left.absolute_row;
+                let mut absolute_row2 = right.absolute_row;
+
+                if self.lexer.is_a1_mode() {
+                    if row1 > row2 {
+                        (row2, row1) = (row1, row2);
+                        (absolute_row2, absolute_row1) = (absolute_row1, absolute_row2);
+                    }
+                    if column1 > column2 {
+                        (column2, column1) = (column1, column2);
+                        (absolute_column2, absolute_column1) = (absolute_column1, absolute_column2);
+                    }
+                    if !absolute_row1 {
+                        row1 -= context.row
+                    };
+                    if !absolute_column1 {
+                        column1 -= context.column
+                    };
+                    if !absolute_row2 {
+                        row2 -= context.row
+                    };
+                    if !absolute_column2 {
+                        column2 -= context.column
+                    };
+                }
+                Node::ExternalRangeKind {
+                    book,
+                    sheet_name: sheet,
+                    row1,
+                    column1,
+                    row2,
+                    column2,
+                    absolute_column1,
+                    absolute_column2,
+                    absolute_row1,
+                    absolute_row2,
                 }
             }
             TokenType::Ident(name) => {

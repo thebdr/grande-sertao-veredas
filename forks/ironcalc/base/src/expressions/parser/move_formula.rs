@@ -1,5 +1,7 @@
 use super::{
-    stringify::{defined_name_to_string, stringify_reference, DisplaceData},
+    stringify::{
+        defined_name_to_string, stringify_external_reference, stringify_reference, DisplaceData,
+    },
     ArrayNode, Node, Reference,
 };
 use crate::{
@@ -281,6 +283,75 @@ fn to_string_moved(
                     row: new_row2,
                     column: new_column2,
                 },
+                full_row,
+                full_column,
+            );
+            format!("{s1}:{s2}")
+        }
+        // A cell of another workbook stays where it is: the text is unchanged
+        ExternalReferenceKind {
+            book,
+            sheet_name,
+            absolute_row,
+            absolute_column,
+            row,
+            column,
+        } => {
+            let context = CellReferenceRC {
+                sheet: move_context.source_sheet_name.to_string(),
+                column: move_context.column,
+                row: move_context.row,
+            };
+            stringify_external_reference(
+                Some(&context),
+                Some((*book, sheet_name)),
+                *row,
+                *column,
+                *absolute_row,
+                *absolute_column,
+                false,
+                false,
+            )
+        }
+        ExternalRangeKind {
+            book,
+            sheet_name,
+            absolute_row1,
+            absolute_column1,
+            row1,
+            column1,
+            absolute_row2,
+            absolute_column2,
+            row2,
+            column2,
+        } => {
+            let full_row = *absolute_row1 && *absolute_row2 && (*row1 == 1) && (*row2 == LAST_ROW);
+            let full_column = *absolute_column1
+                && *absolute_column2
+                && (*column1 == 1)
+                && (*column2 == LAST_COLUMN);
+            let context = CellReferenceRC {
+                sheet: move_context.source_sheet_name.to_string(),
+                column: move_context.column,
+                row: move_context.row,
+            };
+            let s1 = stringify_external_reference(
+                Some(&context),
+                Some((*book, sheet_name)),
+                *row1,
+                *column1,
+                *absolute_row1,
+                *absolute_column1,
+                full_row,
+                full_column,
+            );
+            let s2 = stringify_external_reference(
+                Some(&context),
+                None,
+                *row2,
+                *column2,
+                *absolute_row2,
+                *absolute_column2,
                 full_row,
                 full_column,
             );

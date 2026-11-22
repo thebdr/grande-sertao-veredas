@@ -40,6 +40,7 @@ use crate::{
 };
 
 use crate::evaluation::{CellKey, Evaluation, FormulaCell, Seen};
+use crate::external::{CachedResolver, ExternalLookup, ExternalResolver, ExternalValue};
 use crate::{cf_types::CfCellResult, tz::Tz};
 
 #[cfg(any(test, feature = "mock_time"))]
@@ -107,6 +108,8 @@ fn has_unqualified_reference(node: &Node) -> bool {
             sheet_name.is_none()
         }
         Node::WrongReferenceKind { .. } | Node::WrongRangeKind { .. } => true,
+        // A cell of another workbook is always qualified with its sheet
+        Node::ExternalReferenceKind { .. } | Node::ExternalRangeKind { .. } => false,
         Node::OpRangeKind { left, right }
         | Node::OpConcatenateKind { left, right }
         | Node::OpSumKind { left, right, .. }
@@ -351,6 +354,8 @@ pub struct Model<'a> {
     /// (`parse_formulas`), extended when a formula is added. See
     /// `shared_formula_index`.
     pub(crate) shared_formula_lookup: Vec<SharedFormulaLookup>,
+    /// How cells of other workbooks (`[1]Sheet!A1`) are read. See `external`.
+    pub(crate) external_resolver: Box<dyn ExternalResolver>,
 }
 
 /// Formula text to index in `Worksheet::shared_formulas`, for one sheet.
@@ -780,6 +785,102 @@ impl<'a> Model<'a> {
         }
     }
 
+    /// Replaces how cells of other workbooks are read. The values already
+    /// evaluated do not change until the next `evaluate`.
+    pub fn set_external_resolver(&mut self, resolver: Box<dyn ExternalResolver>) {
+        self.external_resolver = resolver;
+    }
+
+    /// The name of the strategy that reads cells of other workbooks:
+    /// `cached`, `linked` or `host`.
+    pub fn external_strategy(&self) -> &'static str {
+        self.external_resolver.strategy()
+    }
+
+    /// One cell of another workbook, read through the resolver. A cell no
+    /// strategy can give is `#REF!`.
+    fn evaluate_external_cell(
+        &mut self,
+        book: u32,
+        sheet_name: &str,
+        row: i32,
+        column: i32,
+        cell: CellReferenceIndex,
+    ) -> CalcResult {
+        if row < 1 || column < 1 || row > LAST_ROW || column > LAST_COLUMN {
+            return CalcResult::new_error(Error::REF, cell, "Wrong reference".to_string());
+        }
+        let lookup = self.external_resolver.resolve(
+            &self.workbook.external_books,
+            book,
+            sheet_name,
+            row,
+            column,
+        );
+        match lookup {
+            ExternalLookup::Value(ExternalValue::Number(f)) => CalcResult::Number(f),
+            ExternalLookup::Value(ExternalValue::String(s)) => CalcResult::String(s),
+            ExternalLookup::Value(ExternalValue::Boolean(b)) => CalcResult::Boolean(b),
+            ExternalLookup::Value(ExternalValue::Error(error)) => {
+                let message = error.to_localized_error_string(self.language);
+                CalcResult::new_error(error, cell, message)
+            }
+            ExternalLookup::Empty => CalcResult::EmptyCell,
+            ExternalLookup::NotAvailable => CalcResult::new_error(
+                Error::REF,
+                cell,
+                format!(
+                    "[{book}]{sheet_name} could not be resolved ({} strategy)",
+                    self.external_resolver.strategy()
+                ),
+            ),
+        }
+    }
+
+    /// A range of another workbook is an array of its values: there is no
+    /// sheet of this workbook to point a `CalcResult::Range` at. A range the
+    /// size of a whole column is refused rather than materialised.
+    fn evaluate_external_range(
+        &mut self,
+        book: u32,
+        sheet_name: &str,
+        left: (i32, i32),
+        right: (i32, i32),
+        cell: CellReferenceIndex,
+    ) -> CalcResult {
+        const MAX_CELLS: i64 = 4_000_000;
+        let (row1, column1) = left;
+        let (row2, column2) = right;
+        if row1 < 1 || column1 < 1 || row2 > LAST_ROW || column2 > LAST_COLUMN {
+            return CalcResult::new_error(Error::REF, cell, "Wrong range".to_string());
+        }
+        let height = (row2 - row1 + 1) as i64;
+        let width = (column2 - column1 + 1) as i64;
+        if height * width > MAX_CELLS {
+            return CalcResult::new_error(
+                Error::NIMPL,
+                cell,
+                format!("External range too large: {height}x{width} cells"),
+            );
+        }
+        let mut array = Vec::with_capacity(height as usize);
+        for row in row1..=row2 {
+            let mut data_row = Vec::with_capacity(width as usize);
+            for column in column1..=column2 {
+                let node = match self.evaluate_external_cell(book, sheet_name, row, column, cell) {
+                    CalcResult::Number(f) => ArrayNode::Number(f),
+                    CalcResult::String(s) => ArrayNode::String(s),
+                    CalcResult::Boolean(b) => ArrayNode::Boolean(b),
+                    CalcResult::Error { error, .. } => ArrayNode::Error(error),
+                    _ => ArrayNode::Empty,
+                };
+                data_row.push(node);
+            }
+            array.push(data_row);
+        }
+        CalcResult::Array(array)
+    }
+
     pub(crate) fn evaluate_node_in_context(
         &mut self,
         node: &Node,
@@ -818,6 +919,62 @@ impl<'a> Model<'a> {
             }
             WrongReferenceKind { .. } => {
                 CalcResult::new_error(Error::REF, cell, "Wrong reference".to_string())
+            }
+            ExternalReferenceKind {
+                book,
+                sheet_name,
+                absolute_row,
+                absolute_column,
+                row,
+                column,
+            } => {
+                let row = if *absolute_row { *row } else { *row + cell.row };
+                let column = if *absolute_column {
+                    *column
+                } else {
+                    *column + cell.column
+                };
+                self.evaluate_external_cell(*book, sheet_name, row, column, cell)
+            }
+            ExternalRangeKind {
+                book,
+                sheet_name,
+                absolute_row1,
+                absolute_column1,
+                row1,
+                column1,
+                absolute_row2,
+                absolute_column2,
+                row2,
+                column2,
+            } => {
+                let r1 = if *absolute_row1 {
+                    *row1
+                } else {
+                    *row1 + cell.row
+                };
+                let r2 = if *absolute_row2 {
+                    *row2
+                } else {
+                    *row2 + cell.row
+                };
+                let c1 = if *absolute_column1 {
+                    *column1
+                } else {
+                    *column1 + cell.column
+                };
+                let c2 = if *absolute_column2 {
+                    *column2
+                } else {
+                    *column2 + cell.column
+                };
+                self.evaluate_external_range(
+                    *book,
+                    sheet_name,
+                    (r1.min(r2), c1.min(c2)),
+                    (r1.max(r2), c1.max(c2)),
+                    cell,
+                )
             }
             OpRangeKind { left, right } => self.get_range(left, right, cell),
             WrongRangeKind { .. } => {
@@ -1988,6 +2145,7 @@ impl<'a> Model<'a> {
             evaluation: Evaluation::default(),
             cf_cache: HashMap::new(),
             links: HashMap::new(),
+            external_resolver: Box::new(CachedResolver),
         };
 
         model.parse_formulas();

@@ -657,6 +657,7 @@ impl<'a> Model<'a> {
             },
             tables: HashMap::new(),
             theme: Default::default(),
+            external_books: Vec::new(),
         };
         let parsed_formulas = Vec::new();
         let worksheets = &workbook.worksheets;
@@ -680,6 +681,7 @@ impl<'a> Model<'a> {
             evaluation: crate::evaluation::Evaluation::default(),
             cf_cache: HashMap::new(),
             links: HashMap::new(),
+            external_resolver: Box::new(crate::external::CachedResolver),
         };
         model.parse_formulas();
         model.evaluate_conditional_formatting();

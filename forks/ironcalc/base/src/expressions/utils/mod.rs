@@ -297,6 +297,33 @@ pub fn quote_name(name: &str) -> String {
     name.to_string()
 }
 
+/// The sheet of an external workbook as it is spelled before the `!`:
+/// `[1]Sheet`, or `'[1]Sheet name'` when the sheet name needs quoting (the
+/// book index goes inside the quotes, as Excel writes it).
+pub fn quote_external_name(book: u32, name: &str) -> String {
+    let full = format!("[{book}]{name}");
+    if name_needs_quoting(name) {
+        return format!("'{}'", full.replace('\'', "''"));
+    }
+    full
+}
+
+/// Splits the `[1]` book index off a quoted external sheet name
+/// (`[1]Sheet name` → `(1, "Sheet name")`). `None` if there is no such prefix.
+pub(crate) fn split_external_prefix(name: &str) -> Option<(u32, &str)> {
+    let rest = name.strip_prefix('[')?;
+    let end = rest.find(']')?;
+    let digits = &rest[..end];
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let book = digits.parse::<u32>().ok()?;
+    if book == 0 {
+        return None;
+    }
+    Some((book, &rest[end + 1..]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +338,19 @@ mod tests {
         // any character outside [letters, digits, '_', '.'] needs quoting
         assert_eq!(quote_name("P&L"), "'P&L'");
         assert_eq!(quote_name("Q1=Q2"), "'Q1=Q2'");
+    }
+
+    #[test]
+    fn test_quote_external_name() {
+        assert_eq!(quote_external_name(1, "DB_X"), "[1]DB_X");
+        assert_eq!(quote_external_name(2, "Sheet 1"), "'[2]Sheet 1'");
+        assert_eq!(quote_external_name(1, "It's"), "'[1]It''s'");
+        assert_eq!(split_external_prefix("[1]Sheet 1"), Some((1, "Sheet 1")));
+        assert_eq!(split_external_prefix("[12]DB"), Some((12, "DB")));
+        assert_eq!(split_external_prefix("[0]DB"), None);
+        assert_eq!(split_external_prefix("[x]DB"), None);
+        assert_eq!(split_external_prefix("Sheet [1]"), None);
+        assert_eq!(split_external_prefix("[1"), None);
         assert_eq!(quote_name("Sheet!"), "'Sheet!'");
         assert_eq!(quote_name("100%"), "'100%'");
         assert_eq!(quote_name(".hidden"), "'.hidden'");

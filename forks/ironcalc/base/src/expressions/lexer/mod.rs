@@ -226,7 +226,7 @@ impl<'a> Lexer<'a> {
                     '=' => TokenType::Compare(OpCompare::Equal),
                     '{' => TokenType::LeftBrace,
                     '}' => TokenType::RightBrace,
-                    '[' => TokenType::LeftBracket,
+                    '[' => self.consume_left_bracket(),
                     ']' => TokenType::RightBracket,
                     ':' => TokenType::Colon,
                     ';' => TokenType::Semicolon,
@@ -795,7 +795,96 @@ impl<'a> Lexer<'a> {
         if self.next_token() != TokenType::Bang {
             return TokenType::Illegal(self.set_error("Expected '!'", self.position));
         }
+        // '[1]Sheet name'!A1: a sheet of another workbook. The book index is
+        // inside the quotes, where Excel puts it.
+        if let Some((book, sheet)) = utils::split_external_prefix(&sheet_name) {
+            let sheet = sheet.to_string();
+            return self.consume_external_range(book, sheet);
+        }
         self.consume_range(Some(sheet_name))
+    }
+
+    /// A `[` is the start of an external workbook reference, `[1]Sheet!A1`,
+    /// when the index of the book and the sheet name follow. Anything else
+    /// is a plain left bracket.
+    fn consume_left_bracket(&mut self) -> TokenType {
+        let start = self.position;
+        if let Some(book) = self.consume_book_index() {
+            let sheet = self.consume_identifier();
+            if !sheet.is_empty() && self.peek_char() == Some('!') {
+                self.position += 1;
+                return self.consume_external_range(book, sheet);
+            }
+        }
+        self.position = start;
+        TokenType::LeftBracket
+    }
+
+    /// The `1]` of `[1]Sheet!A1`, the `[` already consumed. `None` (position
+    /// unchanged) if the digits or the closing bracket are not there.
+    fn consume_book_index(&mut self) -> Option<u32> {
+        let start = self.position;
+        let mut position = self.position;
+        let mut digits = String::new();
+        while position < self.len && self.chars[position].is_ascii_digit() {
+            digits.push(self.chars[position]);
+            position += 1;
+        }
+        if digits.is_empty() || position >= self.len || self.chars[position] != ']' {
+            self.position = start;
+            return None;
+        }
+        match digits.parse::<u32>() {
+            Ok(book) if book > 0 => {
+                self.position = position + 1;
+                Some(book)
+            }
+            _ => {
+                self.position = start;
+                None
+            }
+        }
+    }
+
+    /// What follows `[1]Sheet!`: a cell or a range of the external book.
+    /// A name there (`[1]Sheet!Total`, an external defined name) is not
+    /// supported and is an error, never silently something else.
+    fn consume_external_range(&mut self, book: u32, sheet: String) -> TokenType {
+        let start = self.position;
+        let m = if self.mode == LexerMode::A1 {
+            self.consume_range_a1()
+        } else {
+            self.consume_range_r1c1()
+        };
+        match m {
+            Ok(ParsedRange { left, right }) => {
+                if self.peek_char().is_some_and(is_identifier_char) {
+                    return TokenType::Illegal(
+                        self.set_error("External defined names are not supported", start),
+                    );
+                }
+                match right {
+                    Some(right) => TokenType::ExternalRange {
+                        book,
+                        sheet,
+                        left,
+                        right,
+                    },
+                    None => TokenType::ExternalReference {
+                        book,
+                        sheet,
+                        row: left.row,
+                        column: left.column,
+                        absolute_column: left.absolute_column,
+                        absolute_row: left.absolute_row,
+                    },
+                }
+            }
+            Err(_) => TokenType::Illegal(self.set_error(
+                "Expected a cell or range after the external sheet (external defined names are not supported)",
+                start,
+            )),
+        }
     }
 
     fn consume_range(&mut self, sheet: Option<String>) -> TokenType {

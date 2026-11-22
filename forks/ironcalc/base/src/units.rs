@@ -287,6 +287,8 @@ impl<'a> Model<'a> {
             Node::StringKind(_) => None,
             Node::WrongReferenceKind { .. } => None,
             Node::WrongRangeKind { .. } => None,
+            Node::ExternalReferenceKind { .. } => None,
+            Node::ExternalRangeKind { .. } => None,
             Node::OpRangeKind { .. } => None,
             Node::OpConcatenateKind { .. } => None,
             Node::ErrorKind(_) => None,

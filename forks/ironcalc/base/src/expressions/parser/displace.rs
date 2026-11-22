@@ -496,8 +496,11 @@ pub(crate) fn displaced_node(node: &Node, displacement: &Displacement) -> Option
                 args: new_args.unwrap_or_else(|| args.clone()),
             })
         }
-        // Nothing in these points anywhere
-        BooleanKind(_)
+        // Nothing in these points anywhere in this workbook (a cell of
+        // another workbook is not moved by an insertion in this one)
+        ExternalReferenceKind { .. }
+        | ExternalRangeKind { .. }
+        | BooleanKind(_)
         | NumberKind(_)
         | StringKind(_)
         | ArrayKind(_)

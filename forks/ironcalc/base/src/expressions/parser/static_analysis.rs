@@ -72,6 +72,8 @@ pub fn add_implicit_intersection(node: &mut Node, add: bool) {
         | Node::ParseErrorKind { .. }
         | Node::WrongReferenceKind { .. }
         | Node::WrongRangeKind { .. }
+        | Node::ExternalReferenceKind { .. }
+        | Node::ExternalRangeKind { .. }
         | Node::NamedFunctionKind { .. }
         | Node::ArrayKind(_)
         | Node::ReferenceKind { .. }
@@ -227,6 +229,8 @@ pub fn remove_redundant_implicit_intersection(node: &mut Node, add: bool) {
         | Node::ParseErrorKind { .. }
         | Node::WrongReferenceKind { .. }
         | Node::WrongRangeKind { .. }
+        | Node::ExternalReferenceKind { .. }
+        | Node::ExternalRangeKind { .. }
         | Node::NamedFunctionKind { .. }
         | Node::ArrayKind(_)
         | Node::ReferenceKind { .. }
@@ -365,6 +369,14 @@ pub(crate) fn run_static_analysis_on_node(node: &Node) -> StaticResult {
             StaticResult::Unknown
         }
         Node::ReferenceKind { .. } => StaticResult::Scalar,
+        Node::ExternalReferenceKind { .. } => StaticResult::Scalar,
+        Node::ExternalRangeKind {
+            row1,
+            column1,
+            row2,
+            column2,
+            ..
+        } => StaticResult::Range(row2 - row1, column2 - column1),
 
         // binary operations
         Node::OpConcatenateKind { left, right }

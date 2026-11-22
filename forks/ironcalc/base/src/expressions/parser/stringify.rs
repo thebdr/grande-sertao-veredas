@@ -1,4 +1,7 @@
-use super::{super::utils::quote_name, Node, Reference};
+use super::{
+    super::utils::{quote_external_name, quote_name},
+    Node, Reference,
+};
 use crate::constants::{LAST_COLUMN, LAST_ROW};
 use crate::expressions::parser::move_formula::to_string_array_node;
 use crate::expressions::parser::static_analysis::remove_redundant_implicit_intersection;
@@ -206,6 +209,8 @@ fn prefix_bound_variables(node: &mut Node, bound: &mut Vec<String>) {
         | Node::RangeKind { .. }
         | Node::WrongReferenceKind { .. }
         | Node::WrongRangeKind { .. }
+        | Node::ExternalReferenceKind { .. }
+        | Node::ExternalRangeKind { .. }
         | Node::ArrayKind(_)
         | Node::DefinedNameKind { .. }
         | Node::TableNameKind(_)
@@ -469,6 +474,68 @@ pub(crate) fn stringify_reference(
     }
 }
 
+/// One corner of a reference into another workbook: `[1]Sheet!A1` (A1 style
+/// when `context` is given, `[1]Sheet!R1C1` otherwise). `prefix` is the
+/// `(book, sheet)` written before the `!`; `None` for the second corner of a
+/// range. Nothing in this workbook displaces a cell of another one, so no
+/// displacement applies.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn stringify_external_reference(
+    context: Option<&CellReferenceRC>,
+    prefix: Option<(u32, &str)>,
+    row: i32,
+    column: i32,
+    absolute_row: bool,
+    absolute_column: bool,
+    full_row: bool,
+    full_column: bool,
+) -> String {
+    let prefix = match prefix {
+        Some((book, sheet)) => format!("{}!", quote_external_name(book, sheet)),
+        None => String::new(),
+    };
+    match context {
+        Some(context) => {
+            let row = if absolute_row { row } else { row + context.row };
+            let column = if absolute_column {
+                column
+            } else {
+                column + context.column
+            };
+            if row < 1 || column < 1 {
+                return "#REF!".to_string();
+            }
+            let Some(column) = crate::expressions::utils::number_to_column(column) else {
+                return "#REF!".to_string();
+            };
+            let row_str = match (full_row, absolute_row) {
+                (true, _) => String::new(),
+                (false, true) => format!("${row}"),
+                (false, false) => format!("{row}"),
+            };
+            let column_str = match (full_column, absolute_column) {
+                (true, _) => String::new(),
+                (false, true) => format!("${column}"),
+                (false, false) => column,
+            };
+            format!("{prefix}{column_str}{row_str}")
+        }
+        None => {
+            let row_str = if absolute_row {
+                format!("R{row}")
+            } else {
+                format!("R[{row}]")
+            };
+            let column_str = if absolute_column {
+                format!("C{column}")
+            } else {
+                format!("C[{column}]")
+            };
+            format!("{prefix}{row_str}{column_str}")
+        }
+    }
+}
+
 fn format_function(
     name: &str,
     args: &Vec<Node>,
@@ -706,6 +773,62 @@ fn stringify(
             );
             format!("{s1}:{s2}")
         }
+        ExternalReferenceKind {
+            book,
+            sheet_name,
+            column,
+            row,
+            absolute_row,
+            absolute_column,
+        } => stringify_external_reference(
+            context,
+            Some((*book, sheet_name)),
+            *row,
+            *column,
+            *absolute_row,
+            *absolute_column,
+            false,
+            false,
+        ),
+        ExternalRangeKind {
+            book,
+            sheet_name,
+            absolute_row1,
+            absolute_column1,
+            row1,
+            column1,
+            absolute_row2,
+            absolute_column2,
+            row2,
+            column2,
+        } => {
+            let full_row = *absolute_row1 && *absolute_row2 && (*row1 == 1) && (*row2 == LAST_ROW);
+            let full_column = *absolute_column1
+                && *absolute_column2
+                && (*column1 == 1)
+                && (*column2 == LAST_COLUMN);
+            let s1 = stringify_external_reference(
+                context,
+                Some((*book, sheet_name)),
+                *row1,
+                *column1,
+                *absolute_row1,
+                *absolute_column1,
+                full_row,
+                full_column,
+            );
+            let s2 = stringify_external_reference(
+                context,
+                None,
+                *row2,
+                *column2,
+                *absolute_row2,
+                *absolute_column2,
+                full_row,
+                full_column,
+            );
+            format!("{s1}:{s2}")
+        }
         OpRangeKind { left, right } => format!(
             "{}:{}",
             stringify(
@@ -873,7 +996,9 @@ fn stringify(
                 | DefinedNameKind { .. }
                 | TableNameKind(_)
                 | NamedVariableKind { .. }
-                | WrongRangeKind { .. } => stringify(
+                | WrongRangeKind { .. }
+                | ExternalReferenceKind { .. }
+                | ExternalRangeKind { .. } => stringify(
                     left,
                     context,
                     displace_data,
@@ -918,7 +1043,9 @@ fn stringify(
                 | DefinedNameKind { .. }
                 | TableNameKind(_)
                 | NamedVariableKind { .. }
-                | WrongRangeKind { .. } => stringify(
+                | WrongRangeKind { .. }
+                | ExternalReferenceKind { .. }
+                | ExternalRangeKind { .. } => stringify(
                     right,
                     context,
                     displace_data,
@@ -1024,6 +1151,8 @@ fn stringify(
                     | RangeKind { .. }
                     | WrongReferenceKind { .. }
                     | WrongRangeKind { .. }
+                    | ExternalReferenceKind { .. }
+                    | ExternalRangeKind { .. }
                     | OpRangeKind { .. }
                     | OpProductKind { .. }
                     | FunctionKind { .. }
@@ -1253,6 +1382,8 @@ pub(crate) fn rename_sheet_in_node(node: &mut Node, sheet_index: u32, new_name: 
                 *sheet_name = Some(new_name.to_owned());
             }
         }
+        // A sheet of another workbook keeps its name whatever this one renames
+        Node::ExternalReferenceKind { .. } | Node::ExternalRangeKind { .. } => {}
 
         // Go next level
         Node::OpRangeKind { left, right } => {
@@ -1440,6 +1571,8 @@ pub(crate) fn rename_defined_name_in_node(
         Node::RangeKind { .. } => {}
         Node::WrongReferenceKind { .. } => {}
         Node::WrongRangeKind { .. } => {}
+        Node::ExternalReferenceKind { .. } => {}
+        Node::ExternalRangeKind { .. } => {}
         Node::TableNameKind(_) => {}
         Node::NamedVariableKind { .. } => {}
         Node::LambdaDefKind {

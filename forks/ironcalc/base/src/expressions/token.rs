@@ -265,4 +265,22 @@ pub enum TokenType {
         specifier: Option<TableSpecifier>,
         table_reference: Option<TableReference>,
     },
+    /// A cell in another workbook: `[1]Sheet!A1` or `'[1]Sheet name'!A1`.
+    /// `book` is the 1-based index of the external book as written, the
+    /// position of the link in the workbook's `externalReferences`.
+    ExternalReference {
+        book: u32,
+        sheet: String,
+        row: i32,
+        column: i32,
+        absolute_column: bool,
+        absolute_row: bool,
+    },
+    /// A range in another workbook: `[1]Sheet!A1:B4`
+    ExternalRange {
+        book: u32,
+        sheet: String,
+        left: ParsedReference,
+        right: ParsedReference,
+    },
 }

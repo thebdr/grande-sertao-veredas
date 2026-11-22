@@ -34,3 +34,4 @@ is replaced by neutral names on the way (a linked book is `Linked.xlsx`, its she
 
 | # | Change | Where | Upstream |
 |---|---|---|---|
+| 1 | **External workbook references** `[1]Sheet!A1` and `'[1]Sheet name'!A1` (cells and ranges, A1 and R1C1): lexer tokens and parser nodes kept as written and re-emitted as written; `Workbook.external_books` (`external::ExternalBook`: target, sheets, cached cells, defined names); evaluation through a pluggable `external::ExternalResolver` on the model: `CachedResolver` (the file's `sheetDataSet`, Excel's behaviour with the linked book closed; the default) and `HostResolver` (an application hook). Unresolvable is `#REF!`, never `#ERROR!`. An external defined name (`[1]Book!Name`) is refused by the lexer. | `base/src/external.rs`, `base/src/expressions/{token,lexer,parser}`, `base/src/model.rs` | none |

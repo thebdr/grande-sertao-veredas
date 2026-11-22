@@ -2,7 +2,7 @@ use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Display};
 
-use crate::{cf_types::ConditionalFormatting, expressions::token::Error};
+use crate::{cf_types::ConditionalFormatting, expressions::token::Error, external::ExternalBook};
 
 fn default_as_false() -> bool {
     false
@@ -120,6 +120,9 @@ pub struct Workbook {
     pub metadata: Metadata,
     pub tables: HashMap<String, Table>,
     pub theme: Theme,
+    /// The workbooks this one references with `[n]Sheet!A1`, in the order
+    /// of the file's `externalReferences`: `[1]` is `external_books[0]`.
+    pub external_books: Vec<ExternalBook>,
 }
 
 /// A defined name. The `sheet_id` is the sheet index in case the name is local.
