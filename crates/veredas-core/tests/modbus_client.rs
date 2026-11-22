@@ -357,16 +357,13 @@ fn an_exception_is_the_devices_no_and_the_connection_stays() {
 /// carried out; otherwise the write may have landed, and the connection stays either way.
 #[test]
 fn a_writes_exception_says_not_done_only_where_the_standard_does() {
-    // Every code the standard names, two it does not; each on every write, then on a read.
-    let codes: [u8; 11] = [
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x08, 0x0A, 0x0B, 0x00, 0x63,
-    ];
+    // Every code a byte holds: on each of the six writes, then on each of the four reads, over one
+    // connection. Only the standard's five "not carried out" codes are a write's no.
+    let codes: Vec<u8> = (0..=255).collect();
     let refused: Vec<u8> = codes.iter().copied().filter(|c| refuses(*c)).collect();
     assert_eq!(refused, vec![0x01, 0x02, 0x03, 0x06, 0x0A]);
-    let peer = Peer::start(move |i, req| {
-        let code = codes[i % codes.len()];
-        Reply::Send(answer(req, &[req[7] | 0x80, code]))
-    });
+    let peer =
+        Peer::start(move |i, req| Reply::Send(answer(req, &[req[7] | 0x80, (i % 256) as u8])));
     let mut c = client(&peer, 1);
     type Write = fn(&mut Client) -> Result<(), ModbusError>;
     let writes: [(u8, Write); 6] = [
@@ -378,7 +375,7 @@ fn a_writes_exception_says_not_done_only_where_the_standard_does() {
         (0x17, |c| c.read_write_registers(0, 1, 0, &[1]).map(|_| ())),
     ];
     for (function, write) in writes {
-        for code in codes {
+        for code in codes.iter().copied() {
             let e = write(&mut c).unwrap_err();
             let want = if refuses(code) {
                 ModbusError::Exception { function, code }
@@ -391,6 +388,29 @@ fn a_writes_exception_says_not_done_only_where_the_standard_does() {
             assert_eq!(e, want, "function {function:#04x}, exception {code:#04x}");
         }
     }
+    // A read's exception is always its no, whatever the code: no data came, and a read changes
+    // nothing.
+    type Read = fn(&mut Client) -> Result<(), ModbusError>;
+    let reads: [(u8, Read); 4] = [
+        (0x01, |c| c.read_coils(0, 1).map(|_| ())),
+        (0x02, |c| c.read_discrete_inputs(0, 1).map(|_| ())),
+        (0x03, |c| c.read_holding_registers(0, 1).map(|_| ())),
+        (0x04, |c| c.read_input_registers(0, 1).map(|_| ())),
+    ];
+    for (function, read) in reads {
+        for code in codes.iter().copied() {
+            assert_eq!(
+                read(&mut c).unwrap_err(),
+                ModbusError::Exception { function, code }
+            );
+        }
+    }
+    assert!(c.is_connected());
+    assert_eq!(
+        peer.connections(),
+        1,
+        "an exception keeps the connection, whatever its code"
+    );
     // The exact words of the two kinds.
     assert_eq!(
         Cause::Exception(0x05).to_string(),
@@ -404,22 +424,52 @@ fn a_writes_exception_says_not_done_only_where_the_standard_does() {
         .to_string(),
         "function 0x0f unconfirmed, it may have landed: the device answered exception 0x0b (gateway target device failed to respond)"
     );
-    // A read's exception is always its no: no data came, and a read changes nothing.
-    for code in codes {
-        assert_eq!(
-            c.read_holding_registers(0, 1).unwrap_err(),
-            ModbusError::Exception {
-                function: 0x03,
-                code
-            }
-        );
-    }
-    assert!(c.is_connected());
-    assert_eq!(
-        peer.connections(),
-        1,
-        "an exception keeps the connection, whatever its code"
+}
+
+/// The client is a feature of core, off by default, so a crate that never drives hardware carries
+/// none of it: cargo, asked what the manifest declares, names no default features and `modbus` as
+/// the one that brings the framing crate.
+#[test]
+fn the_client_is_a_feature_off_by_default() {
+    let out = std::process::Command::new(env!("CARGO"))
+        .args([
+            "metadata",
+            "--no-deps",
+            "--format-version",
+            "1",
+            "--offline",
+            "--manifest-path",
+        ])
+        .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
+    let meta: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let core = meta["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "veredas-core")
+        .unwrap();
+    let features = core["features"].as_object().unwrap();
+    assert!(
+        features
+            .get("default")
+            .is_none_or(|d| d.as_array().unwrap().is_empty()),
+        "{features:?}"
+    );
+    assert_eq!(features["modbus"], serde_json::json!(["dep:tokio-modbus"]));
+    let framing = core["dependencies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["name"] == "tokio-modbus" && d["kind"].is_null())
+        .unwrap();
+    assert_eq!(framing["optional"], serde_json::json!(true));
 }
 
 #[test]
