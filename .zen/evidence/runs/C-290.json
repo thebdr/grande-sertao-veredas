@@ -11,15 +11,15 @@
     "manifest"
   ],
   "exitCode": 0,
-  "outputSha": "9c443f3326a480dcb4b83a28da86e5af774aea7448764bef3483a0079760c2c6",
-  "outputTail": "        PASS [   0.138s] (14/26) entrega::manifest the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_them\n        PASS [   0.139s] (15/26) entrega::manifest a_tree_holding_a_link_or_a_name_that_is_not_utf8_is_refused_by_its_path\n        PASS [   0.144s] (16/26) entrega::manifest a_commit_not_there_or_not_an_ancestor_is_refused\n        PASS [   0.146s] (17/26) entrega::manifest a_manifest_that_matches_its_commit_checks\n        PASS [   0.183s] (18/26) entrega::manifest settings_outside_the_history_change_nothing_that_is_read\n        PASS [   0.179s] (19/26) entrega::manifest the_folder_is_judged_whole_and_a_shallow_clone_refused\n        PASS [   0.203s] (20/26) entrega::manifest replace_refs_and_grafts_change_neither_objects_nor_ancestry\n        PASS [   0.240s] (21/26) entrega::manifest a_version_names_one_tree_across_releases\n        PASS [   0.254s] (22/26) entrega::manifest the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused\n        PASS [   0.270s] (23/26) entrega::manifest a_version_or_an_executable_that_differs_is_refused\n        PASS [   0.342s] (24/26) entrega::manifest a_release_whose_commit_is_absent_hides_no_other_refusal\n        PASS [   0.622s] (25/26) entrega::manifest every_release_of_this_repository_checks_against_its_history\n        PASS [   0.791s] (26/26) entrega::manifest a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none\n────────────\n     Summary [   0.793s] 26 tests run: 26 passed, 0 skipped",
-  "ranAt": "2026-11-22T22:22:09.621Z",
-  "headCommit": "12bd4732d034574a0adefdb0f0115892e6254b98",
+  "outputSha": "ca5e159386aed33e2c03249c0319347a0e3d02a88cc6f79260f8694b8998ecea",
+  "outputTail": "        PASS [   0.294s] (15/27) entrega::manifest a_scratch_folder_reached_through_a_link_and_calls_at_once_read_the_same\n        PASS [   0.330s] (16/27) entrega::manifest a_manifest_that_matches_its_commit_checks\n        PASS [   0.338s] (17/27) entrega::manifest nothing_outside_the_commits_tree_is_read_or_written\n        PASS [   0.367s] (18/27) entrega::manifest settings_outside_the_history_change_nothing_that_is_read\n        PASS [   0.384s] (19/27) entrega::manifest the_folder_is_judged_whole_and_a_shallow_clone_refused\n        PASS [   0.431s] (20/27) entrega::manifest a_version_names_one_tree_across_releases\n        PASS [   0.423s] (21/27) entrega::manifest replace_refs_and_grafts_change_neither_objects_nor_ancestry\n        PASS [   0.463s] (22/27) entrega::manifest a_version_or_an_executable_that_differs_is_refused\n        PASS [   0.454s] (23/27) entrega::manifest every_release_of_this_repository_checks_against_its_history\n        PASS [   0.471s] (24/27) entrega::manifest the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused\n        PASS [   0.473s] (25/27) entrega::manifest a_repository_at_an_odd_path_a_root_that_does_not_parse_and_braces_in_the_scratch_path\n        PASS [   0.498s] (26/27) entrega::manifest a_release_whose_commit_is_absent_hides_no_other_refusal\n        PASS [   0.584s] (27/27) entrega::manifest a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none\n────────────\n     Summary [   0.585s] 27 tests run: 27 passed, 0 skipped",
+  "ranAt": "2026-11-22T22:35:06.470Z",
+  "headCommit": "f05a78e43d61b0a7034a382372df0941f694c6ad",
   "tests": [
     {
       "name": "tools/entrega/tests/manifest.rs",
       "file": "tools/entrega/tests/manifest.rs",
-      "fileSha": "0dcb9f48fe34b40683b3f23f0bfd93e16dc11bae1f0e3b0a15f63ce95d5edf80"
+      "fileSha": "ae0673674c4fb31d1a4d2590b85060ea92a84c7e9f6cc3999b2feabecd03b2de"
     }
   ]
 }
