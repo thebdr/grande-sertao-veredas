@@ -115,6 +115,8 @@ pub enum RecordError {
     CutShort(&'static str),
     #[error("the port's data has padding that is not zero before its {0}")]
     Padding(&'static str),
+    #[error("the port's data holds at most 255 peers; this one has {0}")]
+    Peers(usize),
     #[error("the {field} is {want} visible characters (space to tilde); {got:?} is not")]
     Text { field: &'static str, want: String, got: String },
 }
@@ -312,7 +314,7 @@ impl PortDataReal {
         x.extend_from_slice(&self.slot.to_be_bytes());
         x.extend_from_slice(&self.subslot.to_be_bytes());
         put_text(&mut x, "own port id", &self.own_port_id)?;
-        let n = u8::try_from(self.peers.len()).map_err(|_| RecordError::Length { what: "the port's peers", want: 255, got: self.peers.len() })?;
+        let n = u8::try_from(self.peers.len()).map_err(|_| RecordError::Peers(self.peers.len()))?;
         x.push(n);
         align(&mut x);
         for p in &self.peers {
