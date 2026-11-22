@@ -575,3 +575,57 @@ fn a_linked_workbook_that_opened_without_the_sheet_is_a_line_naming_the_sheet() 
     assert_eq!(cell(&opened, 1), "999");
     assert!(opened.link_diffs().is_empty());
 }
+
+/// A line between `cached` and `live` texts at `[1]ZONES!B6`.
+fn text_line(cached: &str, live: &str) -> String {
+    veredas_abaco::linkdiff::LinkDiff {
+        book: 1,
+        sheet: "ZONES".to_string(),
+        row: 6,
+        column: 2,
+        cached: Some(ExternalValue::String(cached.to_string())),
+        live: Some(ExternalValue::String(live.to_string())),
+        live_sheet_missing: false,
+    }
+    .to_string()
+}
+
+#[test]
+fn two_texts_drawn_alike_are_told_apart_by_their_first_differing_code_point() {
+    // characters Unicode holds as twins, and characters drawn alike: the line names where they part
+    assert_eq!(
+        text_line("10 k\u{3a9}", "10 k\u{2126}"),
+        "[1]ZONES!B6: cached \"10 k\u{3a9}\" → live \"10 k\u{2126}\" (first difference at character 5: U+03A9 against U+2126)"
+    );
+    assert_eq!(
+        text_line("300 K", "300 \u{212a}"),
+        "[1]ZONES!B6: cached \"300 K\" → live \"300 \u{212a}\" (first difference at character 5: U+004B against U+212A)"
+    );
+    assert_eq!(
+        text_line("L1-SEG", "L1\u{2011}SEG"),
+        "[1]ZONES!B6: cached \"L1-SEG\" → live \"L1\u{2011}SEG\" (first difference at character 3: U+002D against U+2011)"
+    );
+    assert_eq!(
+        text_line("\u{304c}", "\u{304b}\u{3099}"),
+        "[1]ZONES!B6: cached \"\u{304c}\" → live \"\u{304b}\u{3099}\" (first difference at character 1: U+304C against U+304B)"
+    );
+    assert_eq!(
+        text_line("Pump1", "Pump1\u{e0001}"),
+        "[1]ZONES!B6: cached \"Pump1\" → live \"Pump1\u{e0001}\" (first difference at character 6: end against U+E0001)"
+    );
+    // two plain ASCII texts need no more than their spelling
+    assert_eq!(text_line("Pump 1", "Pump 2"), "[1]ZONES!B6: cached \"Pump 1\" → live \"Pump 2\"");
+    // nor does a text against a number, or an empty side
+    let mut d = veredas_abaco::linkdiff::LinkDiff {
+        book: 1,
+        sheet: "ZONES".to_string(),
+        row: 6,
+        column: 2,
+        cached: Some(ExternalValue::String("ação".to_string())),
+        live: Some(ExternalValue::Number(1.0)),
+        live_sheet_missing: false,
+    };
+    assert_eq!(d.to_string(), "[1]ZONES!B6: cached \"ação\" → live 1");
+    d.live = None;
+    assert_eq!(d.to_string(), "[1]ZONES!B6: cached \"ação\" → live (empty)");
+}

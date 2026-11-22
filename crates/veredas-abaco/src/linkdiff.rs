@@ -55,11 +55,39 @@ impl LinkDiff {
 }
 
 /// `[1]ZONES!D23: cached 4 → live 5`, the log line; `live (no sheet ZONES)` when the linked
-/// workbook has no such sheet.
+/// workbook has no such sheet. Between two texts of which one holds a character beyond ASCII, the
+/// line ends with the first character where they differ, by its code point
+/// (`(first difference at character 5: U+2126 against U+03A9)`): an ohm sign and a Greek omega, a
+/// non-breaking hyphen and a hyphen, or any two characters drawn alike, never read the same.
 impl fmt::Display for LinkDiff {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let live = if self.live_sheet_missing { format!("(no sheet {})", self.sheet) } else { format_value(self.live.as_ref()) };
-        write!(f, "{}: cached {} → live {live}", self.address(), format_value(self.cached.as_ref()))
+        write!(f, "{}: cached {} → live {live}", self.address(), format_value(self.cached.as_ref()))?;
+        if let (Some(ExternalValue::String(a)), Some(ExternalValue::String(b))) = (&self.cached, &self.live)
+            && !(a.is_ascii() && b.is_ascii())
+            && let Some(at) = first_difference(a, b)
+        {
+            write!(f, " {at}")?;
+        }
+        Ok(())
+    }
+}
+
+/// `(first difference at character N: U+XXXX against U+YYYY)`, counting characters from 1, `end`
+/// for the side that stopped; `None` when the two are equal.
+fn first_difference(a: &str, b: &str) -> Option<String> {
+    let code = |c: Option<char>| c.map(|c| format!("U+{:04X}", c as u32)).unwrap_or_else(|| "end".to_string());
+    let (mut x, mut y) = (a.chars(), b.chars());
+    let mut at = 1;
+    loop {
+        let (p, q) = (x.next(), y.next());
+        if p.is_none() && q.is_none() {
+            return None;
+        }
+        if p != q {
+            return Some(format!("(first difference at character {at}: {} against {})", code(p), code(q)));
+        }
+        at += 1;
     }
 }
 
@@ -68,11 +96,12 @@ impl fmt::Display for LinkDiff {
 /// double quotes, a quote doubled as in a formula, a backslash doubled, a line feed, a carriage
 /// return and a tab written `\n`, `\r` and `\t`, and written `\u{..}`: any other control
 /// character, every space but the plain one (a no-break space, a thin space), Unicode's line and
-/// paragraph separators, the invisible format characters (a zero-width space, a soft hyphen, a
-/// byte-order mark, the bidirectional controls) and the combining marks (so a decomposed accent
-/// reads apart from a composed one); so the line stays one line and two different texts never read
-/// the same, but for letters of different scripts drawn alike, a limit. Every other character as
-/// it is; a boolean upper-case, an error as itself, an empty cell as `(empty)`.
+/// paragraph separators, the listed invisible format characters (a zero-width space, a soft
+/// hyphen, a byte-order mark, the bidirectional controls) and the combining marks of Latin, Greek
+/// and Cyrillic text (so a decomposed accent reads apart from a composed one), so the line stays
+/// one line. Every other character as it is; a boolean upper-case, an error as itself, an empty
+/// cell as `(empty)`. What else could read alike, a line tells apart by code point
+/// (`LinkDiff`'s display).
 pub fn format_value(value: Option<&ExternalValue>) -> String {
     match value {
         None => "(empty)".to_string(),
