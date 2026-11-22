@@ -179,6 +179,9 @@ fn plan(p: &Project) -> String {
         Store::Window { span_s } => format!("in memory as a window of the last {span_s} s"),
     };
     out.push_str(&format!("  session: {start}; store {store}; writes {}; idle after {} ms\n", if p.writes_armed() { "armed" } else { "off" }, p.idle_after_ms));
+    if let Some(r) = &p.recording {
+        out.push_str(&format!("  record: to {}, up to {} MB, written every {} s\n", r.dir.display(), r.max_mb, r.every_s));
+    }
     match p.server {
         Some(addr) => out.push_str(&format!("  server: {addr}\n")),
         None => out.push_str("  server: none\n"),

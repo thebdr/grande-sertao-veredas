@@ -45,6 +45,36 @@ pub const KEYS_CAP: usize = 64;
 pub const FRAME_SAMPLES: usize = 2_000;
 /// How often a store kept as a window lets go of what fell out of it.
 pub const WINDOW_EVERY: Duration = Duration::from_secs(1);
+/// The engine's memory ceiling for a record's database, which only takes appends.
+pub const RECORD_MEMORY_MB: u32 = 64;
+
+/// Recording to the drive (P-019, `docs/robustness.md` "Wear and filling"): every row the store
+/// takes also written to a database file of the session's own, in batches, until the file reaches
+/// its size limit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordingConfig {
+    /// The record's database file; one already standing there refuses the session (C-041's guard).
+    pub file: std::path::PathBuf,
+    /// The size limit of the record's files (the database and its write-ahead log), in bytes.
+    pub limit_bytes: u64,
+    /// How often what arrived is written to the drive.
+    pub write_every: Duration,
+}
+
+/// Where a recording stands, as the session publishes it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RecordingStatus {
+    pub file: std::path::PathBuf,
+    pub limit_bytes: u64,
+    /// The record's files' size after the last write.
+    pub written_bytes: u64,
+    /// Rows written to the record.
+    pub recorded_rows: u64,
+    /// Rows the store took after the recording stopped, never written to the record.
+    pub unrecorded_rows: u64,
+    /// Why the recording stopped: its size limit, or a write that failed.
+    pub stopped_why: Option<String>,
+}
 /// A source alive but silent this long reads as idle (a quiet log, a share away) rather than live.
 pub use crate::project::DEFAULT_IDLE_MS;
 
@@ -64,6 +94,8 @@ pub struct SessionConfig {
     /// arrived within this span, the older let go every second, so the store holds a bounded
     /// stretch however long the session runs. None keeps every row.
     pub store_window: Option<Duration>,
+    /// Recording to the drive, the project's choice; none records nothing.
+    pub recording: Option<RecordingConfig>,
     /// The master write switch's initial position. Off unless the project says so; set inside
     /// portal alone, so a shell reads it (`writes_armed()`) and never decides it.
     pub(crate) writes_armed: bool,
@@ -87,6 +119,7 @@ impl SessionConfig {
             start: None,
             residency: Residency::Ram,
             store_window: None,
+            recording: None,
             writes_armed: false,
             idle_after_ms: DEFAULT_IDLE_MS,
             logs: Vec::new(),
@@ -261,6 +294,8 @@ pub struct Live {
     pub frames: tokio::sync::broadcast::Sender<Arc<str>>,
     /// Set once the session has stopped and published its end: the server's running flag.
     pub stopped: AtomicBool,
+    /// The recording's state, when the session records to the drive.
+    pub recording_status: RwLock<Option<RecordingStatus>>,
 }
 
 impl Live {
@@ -333,11 +368,72 @@ struct Inner {
     /// The window's span and its last pass, when the store is kept as one.
     window_ms: Option<i64>,
     evicted_at: Option<Instant>,
+    recorder: Option<Recorder>,
     idle_after_ms: i64,
     stopped: bool,
     /// Each worker's outcome at the stop (none for a clean end, the text of a failure), read by
     /// the last refresh once the runtimes are gone, so a failed source stays failed.
     ended: HashMap<String, Option<String>>,
+}
+
+/// A recording in progress: its own store on the drive, the rows waiting for the next write.
+struct Recorder {
+    store: DuckStore,
+    pending: Vec<Vec<WideRow>>,
+    write_every: Duration,
+    written_at: Instant,
+    status: RecordingStatus,
+}
+
+impl Recorder {
+    /// Write what is pending, then measure the record's files; at the size limit the recording
+    /// stops. Nothing already written is deleted, and what comes after is counted, not written.
+    // DECISION PENDING (docs/questions.md Q41): what gives way at a record's limit is not ruled;
+    // the recording stopping and nothing deleted is the reversible answer, as Q16 decided for a
+    // project's disk store ("nothing is refused, deleted or merged").
+    fn write(&mut self) {
+        self.written_at = Instant::now();
+        if self.status.stopped_why.is_some() {
+            return;
+        }
+        for (i, rows) in self.pending.iter_mut().enumerate() {
+            if rows.is_empty() {
+                continue;
+            }
+            let batch = std::mem::take(rows);
+            match self.store.append_wide(i, &batch) {
+                Ok(()) => self.status.recorded_rows += batch.len() as u64,
+                Err(e) => {
+                    self.status.unrecorded_rows += batch.len() as u64;
+                    self.status.stopped_why = Some(format!("a write to the record failed: {e}"));
+                }
+            }
+        }
+        self.status.written_bytes = record_bytes(&self.status.file);
+        if self.status.stopped_why.is_none() && self.status.written_bytes >= self.status.limit_bytes {
+            self.status.stopped_why = Some(format!("the record reached its size limit ({} of {} bytes)", self.status.written_bytes, self.status.limit_bytes));
+        }
+        if self.status.stopped_why.is_some() {
+            let left: u64 = self.pending.iter().map(|r| r.len() as u64).sum();
+            self.status.unrecorded_rows += left;
+            self.pending.iter_mut().for_each(Vec::clear);
+        }
+    }
+
+    /// Rows the store took: pending for the next write, or counted unrecorded once stopped.
+    fn take(&mut self, table: usize, rows: &[WideRow]) {
+        if self.status.stopped_why.is_some() {
+            self.status.unrecorded_rows += rows.len() as u64;
+        } else if let Some(p) = self.pending.get_mut(table) {
+            p.extend_from_slice(rows);
+        }
+    }
+}
+
+/// The size of a record's files: the database and its write-ahead log beside it.
+fn record_bytes(file: &std::path::Path) -> u64 {
+    let wal = std::path::PathBuf::from(format!("{}.wal", file.display()));
+    [file.to_path_buf(), wal].iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum()
 }
 
 struct SeriesLastLocal {
@@ -557,9 +653,21 @@ impl Session {
             built.push((source, formats, ts.is_some(), display));
         }
 
-        // The store, then the workers.
+        // The store, then the record (refused like the store when a database stands at its
+        // file), then the workers.
         let store = Arc::new(DuckStore::open(&cfg.residency, &specs, &cfg.tables)?);
         let window = window_ms(&cfg);
+        let recorder = match &cfg.recording {
+            None => None,
+            Some(r) => Some(Recorder {
+                store: DuckStore::open(&Residency::Disk { path: r.file.clone(), memory_limit_mb: RECORD_MEMORY_MB }, &specs, &cfg.tables)?,
+                pending: specs.iter().map(|_| Vec::new()).collect(),
+                write_every: r.write_every.max(Duration::from_millis(1)),
+                written_at: Instant::now(),
+                status: RecordingStatus { file: r.file.clone(), limit_bytes: r.limit_bytes, written_bytes: record_bytes(&r.file), ..RecordingStatus::default() },
+            }),
+        };
+        let recording_status = RwLock::new(recorder.as_ref().map(|r| r.status.clone()));
         let gate = WriteGate::new(cfg.writes_armed);
         let (frames, _) = tokio::sync::broadcast::channel(256);
         let mut sources: Vec<SourceInfo> = Vec::new();
@@ -640,6 +748,7 @@ impl Session {
             counters: RwLock::new(Counters::default()),
             frames,
             stopped: AtomicBool::new(false),
+            recording_status,
         });
         let inner = Arc::new(Mutex::new(Inner {
             set: Some(set),
@@ -658,6 +767,7 @@ impl Session {
             vitals_at: None,
             window_ms: window,
             evicted_at: None,
+            recorder,
             idle_after_ms: cfg.idle_after_ms.max(1),
             stopped: false,
             ended: HashMap::new(),
@@ -685,6 +795,7 @@ impl Session {
                     // then the end is published, the refresh timer notwithstanding, so a reader
                     // still holding the session sees every source ended and the final counters.
                     while lock(&inner).pump(&live) > 0 {}
+                    lock(&inner).record(&live, true);
                     lock(&inner).refresh_now(&live);
                     live.stopped.store(true, Ordering::Relaxed);
                 })
@@ -961,7 +1072,12 @@ impl Inner {
             }
             let rows = std::mem::take(&mut self.wide_buf[i]);
             match live.store.append_wide(i, &rows) {
-                Ok(()) => self.counters.rows += rows.len() as u64,
+                Ok(()) => {
+                    self.counters.rows += rows.len() as u64;
+                    if let Some(r) = self.recorder.as_mut() {
+                        r.take(i, &rows);
+                    }
+                }
                 Err(e) => {
                     self.counters.store_errors += 1;
                     self.counters.last_error = Some(format!("store: {e}"));
@@ -1099,8 +1215,22 @@ impl Inner {
             self.flush(live);
         }
         self.evict(live);
+        self.record(live, false);
         self.refresh(live);
         drained
+    }
+
+    /// The recording's pass: what arrived written to the drive every `write_every`, and at the
+    /// stop whatever is left; its state published.
+    fn record(&mut self, live: &Live, last: bool) {
+        let Some(r) = self.recorder.as_mut() else { return };
+        if !last && r.written_at.elapsed() < r.write_every {
+            return;
+        }
+        r.write();
+        if let Ok(mut s) = live.recording_status.write() {
+            *s = Some(r.status.clone());
+        }
     }
 
     /// The window's pass, once a second: what arrived before the span let go, through the

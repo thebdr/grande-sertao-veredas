@@ -145,6 +145,19 @@ pub fn snapshot(live: &Live) -> Json_ {
         body["store_bytes"] = json!(v.bytes);
         body["type_conflicts"] = json!(v.type_conflicts);
     }
+    if let Ok(r) = live.recording_status.read() {
+        body["recording"] = match r.as_ref() {
+            None => Json_::Null,
+            Some(r) => json!({
+                "file": r.file.display().to_string(),
+                "limit_bytes": r.limit_bytes,
+                "written_bytes": r.written_bytes,
+                "recorded_rows": r.recorded_rows,
+                "unrecorded_rows": r.unrecorded_rows,
+                "stopped_why": r.stopped_why,
+            }),
+        };
+    }
     if let Ok(c) = live.counters.read() {
         body["counters"] = json!({
             "lines": c.lines,

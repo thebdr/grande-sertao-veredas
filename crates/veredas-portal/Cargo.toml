@@ -105,3 +105,7 @@ required-features = ["store"]
 [[test]]
 name = "store_window"
 required-features = ["store"]
+
+[[test]]
+name = "store_record"
+required-features = ["store"]

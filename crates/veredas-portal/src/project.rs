@@ -141,6 +141,22 @@ pub enum Store {
     Window { span_s: u32 },
 }
 
+/// Recording to the drive: the folder the record goes in (resolved against the project's folder),
+/// its size limit and how often it is written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Recording {
+    pub dir: PathBuf,
+    pub max_mb: u64,
+    pub every_s: u32,
+}
+
+/// The file a session's record opens in its folder: the store's own name for the run, marked as
+/// a record (`<name>-<yyyymmdd>-<hhmmss>.record.duckdb`).
+pub fn record_file(name: &str, started: NaiveDateTime) -> String {
+    let store = session_store_file(name, started);
+    format!("{}.record.duckdb", store.trim_end_matches(".duckdb"))
+}
+
 /// The file a per-session store opens: the project's name, with anything but a letter, a digit,
 /// `-` or `_` replaced by `_`, then the start's second, then `.duckdb`.
 pub fn session_store_file(name: &str, started: NaiveDateTime) -> String {
@@ -155,6 +171,8 @@ pub struct Project {
     pub name: String,
     pub start: Start,
     pub store: Store,
+    /// Recording to the drive, the project's choice (P-019): none records nothing.
+    pub recording: Option<Recording>,
     /// Where the sealed values live and which variable holds the key, when a source names one.
     pub secrets: Option<crate::secrets::SecretsSource>,
     /// The write switch's position at start, from the file alone (`writes_armed()` reads it).
@@ -280,16 +298,35 @@ struct SessionFile {
     start: Option<StartFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     store: Option<StoreFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    record: Option<RecordFile>,
     #[serde(default)]
     writes_armed: bool,
     #[serde(default = "default_idle")]
     idle_after_ms: i64,
 }
 
+/// `record = { dir, max_mb, every_s }`: recording to the drive.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordFile {
+    dir: String,
+    max_mb: u64,
+    #[serde(default = "default_record_every")]
+    every_s: u32,
+}
+
+fn default_record_every() -> u32 {
+    DEFAULT_RECORD_EVERY_S
+}
+
+/// How often a recording writes to the drive when the project does not say, in seconds.
+pub const DEFAULT_RECORD_EVERY_S: u32 = 10;
+
 /// The table absent: every default, the idle window included (a derived default would make it 0).
 impl Default for SessionFile {
     fn default() -> Self {
-        SessionFile { start: None, store: None, writes_armed: false, idle_after_ms: DEFAULT_IDLE_MS }
+        SessionFile { start: None, store: None, record: None, writes_armed: false, idle_after_ms: DEFAULT_IDLE_MS }
     }
 }
 
@@ -612,6 +649,21 @@ pub fn load(text: &str, base: &Path) -> Result<Project, ProjectError> {
             Store::Window { span_s: window_s }
         }
     };
+    let recording = match session.record {
+        None => None,
+        Some(r) => {
+            if r.dir.trim().is_empty() {
+                return Err(invalid("session.record: `dir` is empty: name the folder the record goes in"));
+            }
+            if r.max_mb == 0 {
+                return Err(invalid("session.record: `max_mb` is 0; a record needs room for at least a megabyte"));
+            }
+            if r.every_s == 0 {
+                return Err(invalid("session.record: `every_s` is 0; name at least one second"));
+            }
+            Some(Recording { dir: resolve(base, &r.dir), max_mb: r.max_mb, every_s: r.every_s })
+        }
+    };
     if session.idle_after_ms < 1 {
         return Err(invalid(format!("session.idle_after_ms: {} is under 1 ms", session.idle_after_ms)));
     }
@@ -820,7 +872,7 @@ pub fn load(text: &str, base: &Path) -> Result<Project, ProjectError> {
         }
     };
 
-    Ok(Project { name, start, store, secrets, writes_armed: session.writes_armed, idle_after_ms: session.idle_after_ms, server, logs, rules, opc: opcs, channels, tables: views })
+    Ok(Project { name, start, store, recording, secrets, writes_armed: session.writes_armed, idle_after_ms: session.idle_after_ms, server, logs, rules, opc: opcs, channels, tables: views })
 }
 
 /// Read a project file from disk; its folder is where its references live.
@@ -853,6 +905,11 @@ impl Project {
             Store::PerSession { dir, memory_limit_mb } => Residency::Disk { path: dir.join(session_store_file(&self.name, now)), memory_limit_mb: *memory_limit_mb },
             Store::Window { .. } => Residency::Ram,
         };
+        cfg.recording = self.recording.as_ref().map(|r| crate::session::RecordingConfig {
+            file: r.dir.join(record_file(&self.name, now)),
+            limit_bytes: r.max_mb.saturating_mul(1024 * 1024),
+            write_every: std::time::Duration::from_secs(u64::from(r.every_s)),
+        });
         cfg.store_window = match &self.store {
             Store::Window { span_s } => Some(std::time::Duration::from_secs(u64::from(*span_s))),
             _ => None,
@@ -1361,7 +1418,7 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
         format: FORMAT.into(),
         version: VERSION,
         name,
-        session: Some(SessionFile { start, store, writes_armed: commands.allow_writes, idle_after_ms: DEFAULT_IDLE_MS }),
+        session: Some(SessionFile { start, store, record: None, writes_armed: commands.allow_writes, idle_after_ms: DEFAULT_IDLE_MS }),
         secrets,
         server: None,
         log,

@@ -221,6 +221,33 @@ fn the_worked_example_loads_as_its_prose_says() {
     assert!(e.contains("-5") && e.contains("a whole number"), "{e}");
     let e = refused(&with(&text, "[session]", "store", "store = { window_s = \"15m\" }"), dir.path());
     assert!(e.contains("invalid type: string \"15m\""), "{e}");
+    // Recording to the drive (P-019, C-091): the folder, the limit, the period; a file of the run's
+    // own in the folder, beside the store's own name.
+    let p = project::load(&with(&text, "[session]", "store", "store = \"ram\"\nrecord = { dir = \"records\", max_mb = 256, every_s = 30 }"), dir.path()).unwrap();
+    assert_eq!(p.recording, Some(project::Recording { dir: dir.path().join("records"), max_mb: 256, every_s: 30 }));
+    assert_eq!(project::record_file("the press hall", started), "the_press_hall-20261108-060030.record.duckdb");
+    assert_eq!(
+        p.session_config(started).recording,
+        Some(veredas_portal::session::RecordingConfig {
+            file: dir.path().join("records").join("the_press_hall-20261108-060030.record.duckdb"),
+            limit_bytes: 256 * 1024 * 1024,
+            write_every: std::time::Duration::from_secs(30),
+        })
+    );
+    let p = project::load(&with(&text, "[session]", "store", "store = \"ram\"\nrecord = { dir = \"records\", max_mb = 1 }"), dir.path()).unwrap();
+    assert_eq!(p.recording.as_ref().map(|r| r.every_s), Some(10), "every ten seconds when absent");
+    assert_eq!(project::load(&text, dir.path()).unwrap().recording, None, "absent, nothing is recorded");
+    for (line, why) in [
+        ("record = { dir = \" \", max_mb = 1 }", "session.record: `dir` is empty: name the folder the record goes in"),
+        ("record = { dir = \"r\", max_mb = 0 }", "session.record: `max_mb` is 0; a record needs room for at least a megabyte"),
+        ("record = { dir = \"r\", max_mb = 1, every_s = 0 }", "session.record: `every_s` is 0; name at least one second"),
+    ] {
+        assert_eq!(refused(&with(&text, "[session]", "store", &format!("store = \"ram\"\n{line}")), dir.path()), why, "{line}");
+    }
+    for (line, word) in [("record = { dir = \"r\" }", "missing field `max_mb`"), ("record = { dir = \"r\", max_mb = 1, evry_s = 5 }", "unknown field `evry_s`"), ("record = { max_mb = 1 }", "missing field `dir`")] {
+        let e = refused(&with(&text, "[session]", "store", &format!("store = \"ram\"\n{line}")), dir.path());
+        assert!(e.contains(word), "{line}: {e}");
+    }
 }
 
 #[test]
@@ -602,10 +629,12 @@ fn the_executable_checks_a_project_and_reads_a_veredas_1_folder() {
     let out = std::process::Command::new(exe).arg(&file).arg("--check").env_remove("VEREDAS_KEY").output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     std::fs::remove_file(dir.path().join("secrets.toml")).unwrap();
-    // A store kept as a window, as the check prints it.
-    std::fs::write(&file, with(&text, "[session]", "store", "store = { window_s = 900 }")).unwrap();
+    // A store kept as a window and a record, as the check prints them.
+    std::fs::write(&file, with(&text, "[session]", "store", "store = { window_s = 900 }\nrecord = { dir = \"records\", max_mb = 64 }")).unwrap();
     let out = std::process::Command::new(exe).arg(&file).arg("--check").env_remove("VEREDAS_KEY").output().unwrap();
-    assert!(String::from_utf8_lossy(&out.stdout).contains("session: from midnight; store in memory as a window of the last 900 s; writes off"), "{}", String::from_utf8_lossy(&out.stdout));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("session: from midnight; store in memory as a window of the last 900 s; writes off"), "{stdout}");
+    assert!(stdout.contains(&format!("record: to {}, up to 64 MB, written every 10 s", dir.path().join("records").display())), "{stdout}");
     std::fs::write(&file, &text).unwrap();
     // A bad file: the reason on stderr, exit 2. No file: usage, exit 1.
     std::fs::write(&file, text.replacen("version = 1", "version = 2", 1)).unwrap();
@@ -1097,6 +1126,14 @@ against the project file's folder.
   named from the project's name and the session's start (`<name>-<yyyymmdd>-<hhmmss>.duckdb`, the
   name's other characters `_`), so every run leaves its own. `memory_limit_mb` is the engine's
   ceiling (0 for its default).
+- `record` (optional: absent, nothing is recorded): `{ dir = "<folder>", max_mb = N, every_s = 10 }`,
+  every row the store takes also written to the drive, in a database file of each run's own in
+  that folder (`<name>-<yyyymmdd>-<hhmmss>.record.duckdb`, refused when one already stands there),
+  in a batch every `every_s` seconds (at least 1; 10 when absent) and at the stop, until the
+  record's files (the database and its write-ahead log) reach `max_mb` megabytes (at least 1):
+  then the recording stops, nothing written is deleted, and the rows after are counted and not
+  written (what gives way at a limit is open, `docs/questions.md` Q41). With a store kept as a
+  window, the record holds what the window lets go.
 - `writes_armed` (default `false`): the master switch. Off, every write path (an OPC write, a
   channel send, a reply rule) is refused before anything reaches the plant; the switch is set in
   process, never over the wire.

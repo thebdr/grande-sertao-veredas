@@ -215,8 +215,11 @@ where they differ.
   `store = { window_s = N }` or `SessionConfig::store_window`: the rows that arrived within the
   span (the arrival clock, not the plant's stamp), the older let go once a second by the pump
   through the ingest connection with a plain DELETE (an in-memory store hands the space back,
-  probed and pinned in C-042), the listing still counting what was seen. Still to build: the
-  recording and the window at a fault.
+  probed and pinned in C-042), the listing still counting what was seen. **Built: the recording
+  (C-091)**, `record = { dir, max_mb, every_s }`: a second store on the drive with the same
+  tables and views, written in one batch every few seconds and at the stop, stopping at its size
+  limit with nothing deleted (Q41 open: the reversible answer, marked pending). Still to build: the
+  window written at a fault.
 - **The grep engine** over logs at rest is on Oficina's first-release list.
 - **Q14 stands:** portal builds no desktop UI. Oficina is a component of its own.
 - Open: the review's entries 22 and 33 (Q31); robust requests (Q37); what gives way at a size
