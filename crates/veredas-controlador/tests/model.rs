@@ -8,7 +8,10 @@
 //! sequence is cut at its first disagreement and reported with the operations that led to it. First written by the
 //! critic of the fourth refute round (`.zen/evidence/C-152.md`) and taken in here as C-152's own test; since the sixth
 //! round each sequence draws its task's period (1 to 50 ms) and every refusal is compared whole, its command and
-//! state named.
+//! state named. Since the seventh, the host may come back on a period of the target's clock or after seconds away,
+//! and a second mix runs long sequences that seldom stop, some of them with slow scans that never fault, so the count
+//! of overruns climbs past eight.
+use std::ops::Range;
 use std::time::Duration;
 
 use orcl_runtime::{Clock, Io, TaskConfig, VirtualClock};
@@ -89,7 +92,50 @@ impl Draw {
             _ => CommandSource::Oficina,
         }
     }
+
+    fn op(&mut self, mix: Mix) -> Op {
+        if mix.seldom_stops {
+            match self.below(40) {
+                0..=24 => Op::Step,
+                25..=28 => Op::Jump,
+                29..=31 => Op::Start,
+                32 => Op::Stop,
+                _ => Op::Acknowledge,
+            }
+        } else {
+            match self.below(10) {
+                0..=4 => Op::Step,
+                5 => Op::Jump,
+                6 => Op::Start,
+                7 | 8 => Op::Stop,
+                _ => Op::Acknowledge,
+            }
+        }
+    }
 }
+
+enum Op {
+    Step,
+    Jump,
+    Start,
+    Stop,
+    Acknowledge,
+}
+
+/// How long a sequence is and how its operations are drawn.
+#[derive(Clone, Copy)]
+struct Mix {
+    ops: usize,
+    seldom_stops: bool,
+}
+
+/// Short sequences, every command often.
+const SHORT: Mix = Mix { ops: 60, seldom_stops: false };
+/// Long sequences that seldom stop; half of them have slow scans that never fault.
+const LONG: Mix = Mix { ops: 400, seldom_stops: true };
+
+/// The target's clock past `u32::MAX` nanoseconds.
+const PAST_FOUR_SECONDS: Duration = Duration::from_nanos(1 << 32);
 
 /// The periods a sequence draws its task's from.
 const PERIODS: [Duration; 6] = [
@@ -132,21 +178,37 @@ struct Reached {
     late_idle_steps: u32,
     refusals: u32,
     starts_after_a_fault: u32,
+    /// An idle exchange held back to the period after a late scan's start, where its deadline lay in an earlier one.
+    held_back_by_a_late_scan: u32,
+    /// A time error that took the count of overruns past eight.
+    overruns_past_eight: u32,
+    /// An idle exchange past `u32::MAX` nanoseconds of the target's clock.
+    idle_exchanges_past_four_seconds: u32,
 }
 
 /// Runs one sequence; returns the first disagreement, with the operations that led to it.
-fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
+fn run_one(seed: u64, mix: Mix, reached: &mut Reached) -> Result<(), String> {
     let mut draw = Draw(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x0bad_c0de);
     let clock = VirtualClock::new();
     let mut host_clock = clock.clone();
     let period = PERIODS[usize::try_from(draw.below(6)).unwrap()];
-    let stalls: Vec<Duration> = (0..120)
-        .map(|_| match draw.below(10) {
-            0 => period * u32::try_from(draw.below(32)).unwrap() / 10,
-            1 => period * u32::try_from(draw.below(32_000)).unwrap() / 10_000,
-            2 => [period, period * 2, period + Duration::from_nanos(1), period * 2 + Duration::from_nanos(1)]
-                [usize::try_from(draw.below(4)).unwrap()],
-            _ => Duration::ZERO,
+    let never_faults = mix.seldom_stops && draw.below(2) == 0;
+    let stalls: Vec<Duration> = (0..mix.ops)
+        .map(|_| {
+            if never_faults {
+                // A time error one scan in four, never past twice the period: the count climbs while it runs.
+                return match draw.below(4) {
+                    0 => period + period * u32::try_from(1 + draw.below(1_000)).unwrap() / 1_000,
+                    _ => Duration::ZERO,
+                };
+            }
+            match draw.below(10) {
+                0 => period * u32::try_from(draw.below(32)).unwrap() / 10,
+                1 => period * u32::try_from(draw.below(32_000)).unwrap() / 10_000,
+                2 => [period, period * 2, period + Duration::from_nanos(1), period * 2 + Duration::from_nanos(1)]
+                    [usize::try_from(draw.below(4)).unwrap()],
+                _ => Duration::ZERO,
+            }
         })
         .collect();
     let mut plant = Plant { clock: clock.clone(), reads: Vec::new(), writes: Vec::new(), stalls: stalls.clone() };
@@ -177,13 +239,14 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
     };
     let mut task: Option<Task> = None;
     let mut last_read: Option<Duration> = None;
+    let mut last_was_a_late_scan = false;
     let mut faulted_before = false;
     let mut trace = vec![format!("{restart:?} on {target:?}")];
 
-    for op in 0..60 {
+    for op in 0..mix.ops {
         let word = m.state.word();
-        let what = match draw.below(10) {
-            0..=4 => {
+        let what = match draw.op(mix) {
+            Op::Step => {
                 let arrival = host_clock.now();
                 let (reads, writes) = (plant.reads.len(), plant.writes.len());
                 c.step(&mut plant, &mut host_clock);
@@ -194,7 +257,9 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
                 let stall = stalls.get(reads).copied().unwrap_or(Duration::ZERO);
                 let (read_at, written) = match task.as_mut() {
                     Some(t) => {
-                        let read_at = (t.origin + deadline(period, t.cycle)).max(arrival);
+                        let due = t.origin + deadline(period, t.cycle);
+                        let read_at = due.max(arrival);
+                        last_was_a_late_scan = period_of(period, due) < period_of(period, read_at);
                         let end = read_at + stall;
                         let mut out = 7;
                         if !t.faulted {
@@ -203,6 +268,9 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
                             out = t.scans * 100 + 1;
                             if stall > period {
                                 m.conditions.overruns += 1;
+                                if m.conditions.overruns > 8 {
+                                    reached.overruns_past_eight += 1;
+                                }
                                 if stall > period * 2 {
                                     t.faulted = true;
                                     out = 7;
@@ -218,11 +286,20 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
                         (read_at, (end, out))
                     }
                     None => {
-                        let k = periods_up_to(period, arrival).max(last_read.map_or(0, |l| period_of(period, l) + 1));
+                        let not_before_now = periods_up_to(period, arrival);
+                        let after_last = last_read.map_or(0, |l| period_of(period, l) + 1);
+                        let k = not_before_now.max(after_last);
                         if deadline(period, k) > arrival && !arrival.as_nanos().is_multiple_of(period.as_nanos()) {
                             reached.late_idle_steps += 1;
                         }
+                        if last_was_a_late_scan && after_last > not_before_now {
+                            reached.held_back_by_a_late_scan += 1;
+                        }
+                        last_was_a_late_scan = false;
                         let read_at = deadline(period, k);
+                        if read_at > PAST_FOUR_SECONDS {
+                            reached.idle_exchanges_past_four_seconds += 1;
+                        }
                         (read_at, (read_at + stall, 7))
                     }
                 };
@@ -235,12 +312,21 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
                 }
                 format!("step at {arrival:?}")
             }
-            5 => {
-                let jump = period * u32::try_from(draw.below(3_500)).unwrap() / 1_000;
+            Op::Jump => {
+                let jump = match draw.below(10) {
+                    // Away for seconds.
+                    0 => Duration::from_millis(draw.below(10_000)),
+                    // Back on a period of the target's clock, this one or one of the next two.
+                    1..=5 => {
+                        let now = clock.now();
+                        deadline(period, periods_up_to(period, now) + u128::from(draw.below(3))) - now
+                    }
+                    _ => period * u32::try_from(draw.below(3_500)).unwrap() / 1_000,
+                };
                 clock.advance(jump);
                 format!("clock +{jump:?}")
             }
-            6 => {
+            Op::Start => {
                 let kind = if draw.below(2) == 0 { StartupReason::Warm } else { StartupReason::Cold };
                 let source = draw.source();
                 let armed = draw.below(4) != 0;
@@ -274,7 +360,7 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
                 }
                 format!("start {kind:?} by {source:?}, armed {armed}: {got:?}")
             }
-            7 | 8 => {
+            Op::Stop => {
                 let source = draw.source();
                 let got = c.stop(source);
                 let allowed = matches!(word, StateWord::Run | StateWord::Startup);
@@ -293,7 +379,7 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
                 }
                 format!("stop by {source:?}: {got:?}")
             }
-            _ => {
+            Op::Acknowledge => {
                 let source = draw.source();
                 let armed = draw.below(3) != 0;
                 let got = c.acknowledge(source, &Key(armed));
@@ -337,11 +423,17 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
     Ok(())
 }
 
-#[test]
-fn the_controller_agrees_with_the_clause_s_model_over_five_thousand_random_sequences() {
+/// Runs every seed of `seeds` in `mix`; fails on the first sequence that disagrees, returns what the draws reached.
+fn agree(mix: Mix, seeds: Range<u64>) -> Reached {
     let mut reached = Reached::default();
-    let disagreements: Vec<String> = (0..5_000).filter_map(|seed| run_one(seed, &mut reached).err()).collect();
+    let disagreements: Vec<String> = seeds.filter_map(|seed| run_one(seed, mix, &mut reached).err()).collect();
     assert!(disagreements.is_empty(), "{} sequences disagree; the first: {}", disagreements.len(), disagreements[0]);
+    reached
+}
+
+#[test]
+fn the_controller_agrees_with_the_clause_s_model_over_ten_thousand_random_sequences() {
+    let reached = agree(SHORT, 0..10_000);
     for (case, count) in [
         ("a start", reached.starts),
         ("a stop while running", reached.stops_while_running),
@@ -350,6 +442,25 @@ fn the_controller_agrees_with_the_clause_s_model_over_five_thousand_random_seque
         ("an idle step coming between periods", reached.late_idle_steps),
         ("a refusal", reached.refusals),
         ("a start after a fault", reached.starts_after_a_fault),
+        ("an idle exchange held back by a late scan's start", reached.held_back_by_a_late_scan),
+        ("an idle exchange past 4.29 s", reached.idle_exchanges_past_four_seconds),
+    ] {
+        assert!(count >= 100, "{case}: reached {count} times only");
+    }
+}
+
+#[test]
+fn the_controller_agrees_with_the_clause_s_model_over_two_thousand_long_sequences_that_seldom_stop() {
+    let reached = agree(LONG, 20_000..22_000);
+    for (case, count) in [
+        ("a start", reached.starts),
+        ("a stop while running", reached.stops_while_running),
+        ("an acknowledge", reached.acknowledges),
+        ("a watchdog fault", reached.watchdog_faults),
+        ("a start after a fault", reached.starts_after_a_fault),
+        ("an idle exchange held back by a late scan's start", reached.held_back_by_a_late_scan),
+        ("an idle exchange past 4.29 s", reached.idle_exchanges_past_four_seconds),
+        ("a count of overruns past eight", reached.overruns_past_eight),
     ] {
         assert!(count >= 100, "{case}: reached {count} times only");
     }

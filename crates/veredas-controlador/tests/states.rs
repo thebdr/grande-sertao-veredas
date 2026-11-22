@@ -764,3 +764,45 @@ fn refusals_leave_the_exchange_while_no_program_runs_where_it_was() {
     run(&mut c, &mut plant, &mut clock, 2);
     assert_eq!(plant.reads, vec![ms(0), ms(10), ms(20), ms(30)]);
 }
+
+#[test]
+fn a_late_scan_on_a_target_period_is_the_last_exchange_from_its_start_not_its_deadline() {
+    // A program's scan that starts late, exactly on a period of the target's clock and taking no time, then a stop:
+    // the exchange while no program runs comes at the next period, never a second time at the instant just served.
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    c.step(&mut plant, &mut clock); // scan 1 at 0
+    clock.advance(ms(30)); // the host comes back at 30 ms, the scan due at 10
+    c.step(&mut plant, &mut clock); // scan 2 read and written at 30
+    c.stop(OFICINA).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(plant.writes, vec![(ms(0), 101), (ms(30), 201), (ms(40), 7), (ms(50), 7)]);
+
+    // The faulted task's late exchange, then an acknowledge.
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    plant.stall = |read| if read == 0 { ms(25) } else { Duration::ZERO };
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    c.step(&mut plant, &mut clock); // the fault at 0, written at 25; the faulted task's next due at 30
+    clock.advance(ms(25)); // the host comes back at 50
+    c.step(&mut plant, &mut clock); // the faulted task's exchange at 50
+    c.acknowledge(OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(plant.writes, vec![(ms(25), 7), (ms(50), 7), (ms(60), 7), (ms(70), 7)]);
+
+    // A program started off the target's periods, its late scan on one of them, then a stop.
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::First);
+    clock.advance(ms(13));
+    c.start(StartupReason::Cold, OFICINA, &ARMED).unwrap();
+    c.step(&mut plant, &mut clock); // scan 1 at 13
+    clock.advance(ms(27)); // back at 40, the scan due at 23
+    c.step(&mut plant, &mut clock); // scan 2 at 40
+    c.stop(LOCAL).unwrap();
+    run(&mut c, &mut plant, &mut clock, 1);
+    assert_eq!(plant.writes, vec![(ms(13), 101), (ms(40), 201), (ms(50), 7)]);
+}
