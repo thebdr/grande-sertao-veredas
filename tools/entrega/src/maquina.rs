@@ -317,7 +317,20 @@ pub fn build(r: &Recipe, bundle: &Path, bundle_dir: &str, release: &str, guide: 
     let _ = std::fs::remove_file(&ova);
     vm::run(
         "tar",
-        &["--format=ustar", "--owner=0", "--group=0", "--numeric-owner", "-cf", &ova.display().to_string(), "-C", &work.display().to_string(), &ovf_name, &mf_name, &vmdk_name],
+        &[
+            "--format=ustar",
+            "--owner=0",
+            "--group=0",
+            "--numeric-owner",
+            "--mode=a+r,u+w,go-w,a-x",
+            "-cf",
+            &ova.display().to_string(),
+            "-C",
+            &work.display().to_string(),
+            &ovf_name,
+            &mf_name,
+            &vmdk_name,
+        ],
         None,
     )?;
     for f in [&disk, &in_tar] {

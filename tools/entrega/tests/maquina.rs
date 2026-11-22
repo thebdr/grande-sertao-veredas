@@ -36,7 +36,8 @@ fn the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vm
     let members = vm::run("tar", &["-tf", &paths.ova.display().to_string()], None).unwrap();
     assert_eq!(members, format!("{name}.ovf\n{name}.mf\n{name}-disk1.vmdk\n"));
     let verbose = vm::run("tar", &["--full-time", "-tvf", &paths.ova.display().to_string()], None).unwrap();
-    assert!(verbose.lines().all(|l| l.starts_with("-rw") && l.contains(" root/root ")), "{verbose}");
+    // Owned by root by number (`0/0`), every member a plain file read as 0644 whatever the umask.
+    assert!(verbose.lines().all(|l| l.starts_with("-rw-r--r-- 0/0 ")), "{verbose}");
     // The OVA opened under target/ (on disk): /tmp is a tmpfs of the machine's memory.
     let opened = work.join("opened");
     let _ = std::fs::remove_dir_all(&opened);

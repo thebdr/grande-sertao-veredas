@@ -608,9 +608,44 @@ fn a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none() {
     assert_eq!(refusals, vec![format!("commit {c3}: its Cargo.toml is not UTF-8")]);
     let out = Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").current_dir(r.path()).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
-    let err = String::from_utf8(out.stderr).unwrap();
-    assert!(err.contains(&format!("commit {c3}: its Cargo.toml is not UTF-8")), "{err}");
-    assert!(err.contains("veredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.0 and 2.0.1 at different code"), "{err}");
+    let releases = r.path().canonicalize().unwrap().join("releases");
+    assert_eq!(
+        String::from_utf8(out.stderr).unwrap(),
+        format!(
+            "{}: commit {c3}: its Cargo.toml is not UTF-8\nveredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.0 and 2.0.1 at different code: a version names one tree\n",
+            releases.join("2.0.2.toml").display()
+        ),
+        "said line for line, no false one"
+    );
+    // The unreadable release first: it charges no other release and hides nothing.
+    for (rel, c) in [("2.0.0", c3.as_str()), ("2.0.1", c1.as_str()), ("2.0.2", c2.as_str())] {
+        r.write(&format!("releases/{rel}.toml"), &matching(rel, c));
+    }
+    r.commit("the unreadable release first");
+    let out = Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").current_dir(r.path()).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8(out.stderr).unwrap(),
+        format!(
+            "{}: commit {c3}: its Cargo.toml is not UTF-8\nveredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.1 and 2.0.2 at different code: a version names one tree\n",
+            releases.join("2.0.0.toml").display()
+        )
+    );
+}
+
+#[test]
+fn a_cache_reached_through_a_link_and_a_dot_dot_reads_where_the_tree_was_written() {
+    let r = suite();
+    let c = r.commit("the suite");
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("far/away")).unwrap();
+    std::fs::create_dir_all(d.path().join("home")).unwrap();
+    std::os::unix::fs::symlink(d.path().join("far/away"), d.path().join("home/lnk")).unwrap();
+    std::fs::create_dir_all(d.path().join("far/cache")).unwrap();
+    let odd = d.path().join("home/lnk/../cache");
+    let mut refusals = Vec::new();
+    let held = manifest::components_at_in(r.path(), &c, &odd, &mut refusals).unwrap();
+    assert_eq!((held.len(), refusals), (3, Vec::<String>::new()));
 }
 
 #[test]

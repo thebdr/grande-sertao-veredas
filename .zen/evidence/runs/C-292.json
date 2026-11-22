@@ -1,0 +1,27 @@
+{
+  "clause": "C-292",
+  "command": "cargo nextest run -p entrega --features maquina --test maquina",
+  "commandArgv": [
+    "cargo",
+    "nextest",
+    "run",
+    "-p",
+    "entrega",
+    "--features",
+    "maquina",
+    "--test",
+    "maquina"
+  ],
+  "exitCode": 100,
+  "outputSha": "0419a8fb0840768eb3ec9b97b2e20a9d932f6197d34483e25ad46b8fbfc75bfd",
+  "outputTail": "    entrega: provisioning the tester machine; its console is /home/thebdr/code/grande-sertao-veredas/.claude/worktrees/releases-9c0651/target/entrega/0.0.0-trial.292/maquina/maquina-console.log\n    entrega: flattening the disk into a stream-optimized VMDK\n\n    thread 'the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices' (4115506) panicked at tools/entrega/tests/maquina.rs:39:5:\n    -rw-rw-r-- 0/0            4439 2026-11-22 23:07:02 veredas-0.0.0-trial.292.ovf\n    -rw-rw-r-- 0/0             211 2026-11-22 23:07:25 veredas-0.0.0-trial.292.mf\n    -rw-r--r-- 0/0      1093017088 2026-11-22 23:07:02 veredas-0.0.0-trial.292-disk1.vmdk\n\n    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n  Cancelling due to test failure\n────────────\n     Summary [2928.634s] 1 test run: 0 passed, 1 failed, 0 skipped\n        FAIL [2928.633s] (1/1) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\nerror: test run failed",
+  "ranAt": "2026-11-22T22:07:27.157Z",
+  "headCommit": "77d4416d2b7093ea20b288fa5608b65f76fb5ba7",
+  "tests": [
+    {
+      "name": "tools/entrega/tests/maquina.rs",
+      "file": "tools/entrega/tests/maquina.rs",
+      "fileSha": "e368e4b8bdafedc8cbfc77b866c227b58ae6aade1d6d3c265db2057c15477086"
+    }
+  ]
+}

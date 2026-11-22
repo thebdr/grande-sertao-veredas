@@ -224,7 +224,9 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
     // Cargo reads a workspace's member globs against the root's absolute path unescaped: a glob
     // character in that path changes which members it finds. The path is judged absolute, as cargo
     // will see it.
-    let parent = std::path::absolute(parent)?;
+    // Canonical, links and `..` resolved as the kernel resolves them: cargo removes a `..` without
+    // following the link before it, and would look elsewhere than where the tree was written.
+    let parent = parent.canonicalize()?;
     if parent.to_string_lossy().contains(['*', '?', '[', ']', '{', '}']) {
         refusals.push(format!("the scratch folder's parent {} holds a glob character cargo would read as a pattern", parent.display()));
         return Ok(held);
@@ -341,7 +343,12 @@ pub fn check(root: &Path, m: &Manifest) -> Result<Vec<String>, CheckError> {
     if git::run(root, &["merge-base", "--is-ancestor", c, "HEAD"])?.is_none() {
         refusals.push(format!("commit {c} is not an ancestor of HEAD: a release is cut from the history it is committed in"));
     }
+    let before = refusals.len();
     let held = components_at(root, c, &mut refusals)?;
+    if refusals.len() > before {
+        // The tree did not read: its refusal says why, and no component is judged against it.
+        return Ok(refusals);
+    }
     for h in held.values() {
         if !m.components.iter().any(|x| x.name == h.name) {
             refusals.push(format!("{} {} is a component at {c} and the manifest leaves it out", h.name, h.version));
@@ -377,8 +384,13 @@ pub fn check_together(root: &Path, all: &[(PathBuf, Manifest)]) -> Result<Vec<St
         if git::text(root, &["cat-file", "-t", &m.commit])?.map(|t| t.trim().to_string()).as_deref() != Some("commit") {
             continue;
         }
-        let mut ignore = Vec::new();
-        let held = components_at(root, &m.commit, &mut ignore)?;
+        let mut unread = Vec::new();
+        let held = components_at(root, &m.commit, &mut unread)?;
+        if !unread.is_empty() {
+            // A tree that did not read pins nothing: `check` says why, and no other release is
+            // charged with a difference against it.
+            continue;
+        }
         for x in &m.components {
             let tree = match held.get(&x.name) {
                 Some(h) => git::object(root, &m.commit, &h.dir)?,
