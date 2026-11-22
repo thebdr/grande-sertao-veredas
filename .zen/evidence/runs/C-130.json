@@ -14,15 +14,15 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "58fef98c2c0ce13293019f8ebdda62374c31de64439c22dc05a50221673c274e",
-  "outputTail": "running 7 tests\ntest aranha_is_one_library_and_at_most_its_one_executable ... ok\ntest aranha_compiles_in_no_file_from_outside_its_folder ... ok\ntest the_check_refuses_every_target_but_the_library_and_its_one_executable ... ok\ntest aranha_names_no_vendor_and_cites_no_vendor_document ... ok\ntest the_walk_follows_what_ships_and_leaves_dev_dependencies_to_the_tests ... ok\ntest what_a_consumer_of_aranha_compiles_is_light ... ok\ntest the_codecs_build_alone_and_the_rest_of_aranha_builds_on_them_as_another_crate ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.33s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.93s\n     Running tests/real_tree.rs (target/debug/build/leis/4e3fbdc8717d6bf9/out/real_tree-4e3fbdc8717d6bf9)\n     Running tests/component.rs (target/debug/build/veredas-aranha/60dd338f4f2756b7/out/component-60dd338f4f2756b7)",
-  "ranAt": "2026-11-22T20:04:56.837Z",
-  "headCommit": "cf7c0cfb7888f9e2ee39d7b21ff3dabce254d4ed",
+  "outputSha": "2bd29ae404d354f1f6c2b50282b497ccc22fe367ca2af7656e9bd9330bb66b33",
+  "outputTail": "running 7 tests\ntest aranha_is_one_library_and_at_most_its_one_executable ... ok\ntest the_check_refuses_every_target_but_the_library_and_its_one_executable ... ok\ntest the_walk_follows_what_ships_and_leaves_dev_dependencies_to_the_tests ... ok\ntest aranha_names_no_vendor_and_cites_no_vendor_document ... ok\ntest what_a_consumer_of_aranha_compiles_is_light ... ok\ntest aranha_compiles_in_no_file_from_outside_its_folder ... ok\ntest the_codecs_build_alone_and_the_rest_of_aranha_builds_on_them_as_another_crate ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.77s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s\n     Running tests/real_tree.rs (target/debug/build/leis/4e3fbdc8717d6bf9/out/real_tree-4e3fbdc8717d6bf9)\n     Running tests/component.rs (target/debug/build/veredas-aranha/60dd338f4f2756b7/out/component-60dd338f4f2756b7)",
+  "ranAt": "2026-11-22T21:11:39.505Z",
+  "headCommit": "15094b664b1b777a8b7840750763c0e845e84248",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/component.rs",
       "file": "crates/veredas-aranha/tests/component.rs",
-      "fileSha": "b1f4422801f330eddf9ffa59ad407b5a8e20e7b456c75c2b86a32ca58577d975"
+      "fileSha": "f3c465b2841f47f1317b61a44bb688984c7b84a9c8df6905b4add5f357552080"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",
