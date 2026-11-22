@@ -1,0 +1,18 @@
+[package]
+name = "oficina-spike-model"
+version = "0.0.0"
+description = "Oficina's own-shell spike: the project tree and the TOML document behind the bridge seam, with no Qt"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The one header reader of the suite (veredas_core::schema): the tree names a file by its stamp.
+veredas-core = { path = "../../../crates/veredas-core" }
+# A TOML document that keeps every comment, space and quote of the text it was parsed from.
+toml_edit = "0.25"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+# The suite's laws, read as a library: the corpus of every TOML text L7 holds to the stamp.
+leis = { path = "../../../tools/leis" }

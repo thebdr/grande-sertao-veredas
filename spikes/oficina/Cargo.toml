@@ -1,0 +1,16 @@
+# Oficina's own-shell spike (docs/oficina-plan.md, "The own-shell spike"): code that proves or
+# refutes the framework before `crates/veredas-oficina` exists. A cargo workspace of its own,
+# outside the suite's: no member, no `veredas-*` or `orcl-*` name, so the laws leave it be (L1: a
+# crate elsewhere that is not the suite's is nobody's business), and the suite's
+# `cargo build --workspace` never needs Qt because of it. Run its tests from here:
+# `cargo nextest run --manifest-path spikes/oficina/Cargo.toml`.
+[workspace]
+resolver = "3"
+members = [
+    # The Rust side behind the bridge seam: the project tree and the TOML document, no Qt.
+    "model",
+]
+
+[workspace.package]
+edition = "2024"
+publish = false
