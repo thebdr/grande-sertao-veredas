@@ -445,7 +445,20 @@ impl<'a> Model<'a> {
                                 }
                             }
                             ArrayNode::Boolean(b) => ArrayNode::Boolean(b),
-                            ArrayNode::String(s) => ArrayNode::String(s),
+                            // Text that reads as a number is formatted as that
+                            // number ("25" with "0000" is "0025"); other text
+                            // is returned as it is
+                            ArrayNode::String(s) => match self.cast_number(&s) {
+                                Some(f) => {
+                                    let d = format_number(f, &format_code, locale);
+                                    if d.error.is_some() {
+                                        ArrayNode::Error(Error::VALUE)
+                                    } else {
+                                        ArrayNode::String(d.text)
+                                    }
+                                }
+                                None => ArrayNode::String(s),
+                            },
                             e @ ArrayNode::Error(_) => e,
                         };
                         data_row.push(out);
@@ -464,7 +477,13 @@ impl<'a> Model<'a> {
                 };
                 let value = match other {
                     CalcResult::Number(f) => f,
-                    CalcResult::String(s) => return CalcResult::String(s),
+                    // Text that reads as a number is formatted as that number,
+                    // as Excel does: TEXT("25","0000") is "0025". Other text
+                    // is returned as it is.
+                    CalcResult::String(s) => match self.cast_number(&s) {
+                        Some(f) => f,
+                        None => return CalcResult::String(s),
+                    },
                     CalcResult::Boolean(b) => return CalcResult::Boolean(b),
                     CalcResult::Range { .. } => {
                         return CalcResult::Error {

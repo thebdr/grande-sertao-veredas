@@ -130,6 +130,7 @@ mod test_fn_mmult;
 mod test_fn_oddfprice;
 mod test_fn_round;
 mod test_fn_scan;
+mod test_fn_text_numeric_text;
 mod test_fn_tocol_torow;
 mod test_fn_transpose;
 mod test_fn_type;
