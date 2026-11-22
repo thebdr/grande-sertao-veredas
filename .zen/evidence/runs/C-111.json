@@ -1,0 +1,25 @@
+{
+  "clause": "C-111",
+  "command": "cargo nextest run -p veredas-maquinar --test ethernetip_adapter",
+  "commandArgv": [
+    "cargo",
+    "nextest",
+    "run",
+    "-p",
+    "veredas-maquinar",
+    "--test",
+    "ethernetip_adapter"
+  ],
+  "exitCode": 0,
+  "outputSha": "45e4c542d3c22c9fe494b9336e0056dc1c877b73f1a4d29754d3d63b8c57b983",
+  "outputTail": "        PASS [   0.017s] ( 2/14) veredas-maquinar::ethernetip_adapter an_unconnected_send_is_answered_when_its_route_ends_here\n        PASS [   0.024s] ( 3/14) veredas-maquinar::ethernetip_adapter stopping_closes_everything_and_frees_every_port\n        PASS [   0.028s] ( 4/14) veredas-maquinar::ethernetip_adapter a_session_is_registered_once_and_held_to_its_handle\n        PASS [   0.026s] ( 5/14) veredas-maquinar::ethernetip_adapter list_identity_answers_on_tcp_and_udp_with_the_configured_identity\n        PASS [   0.029s] ( 6/14) veredas-maquinar::ethernetip_adapter every_forward_open_the_adapter_cannot_honour_is_refused_with_its_status\n        PASS [   0.029s] ( 7/14) veredas-maquinar::ethernetip_adapter the_assembly_object_reads_and_writes_the_data_the_plant_side_holds\n        PASS [   0.033s] ( 8/14) veredas-maquinar::ethernetip_adapter the_crate_s_own_scanner_leaves_the_sequence_count_out_and_is_refused_for_it\n        PASS [   0.031s] ( 9/14) veredas-maquinar::ethernetip_adapter the_configuration_reads_from_toml_with_its_defaults_and_refuses_what_cannot_serve\n        PASS [   0.049s] (10/14) veredas-maquinar::ethernetip_adapter the_documented_adapter_runs_from_its_bench_file\n        PASS [   0.161s] (11/14) veredas-maquinar::ethernetip_adapter a_connection_whose_originator_falls_silent_is_closed_at_its_timeout\n        PASS [   0.617s] (12/14) veredas-maquinar::ethernetip_adapter the_dissectors_read_a_whole_conversation_as_the_protocol_has_it\n        PASS [   0.871s] (13/14) veredas-maquinar::ethernetip_adapter the_knobs_stall_production_silence_the_sessions_and_restart_the_device\n        PASS [   1.584s] (14/14) veredas-maquinar::ethernetip_adapter a_class_1_connection_produces_at_its_rpi_and_consumes_what_its_originator_runs\n────────────\n     Summary [   1.585s] 14 tests run: 14 passed, 0 skipped",
+  "ranAt": "2026-11-22T20:17:20.158Z",
+  "headCommit": "b231e6c2a25a53f90df36613754b3f5e628fdacb",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/ethernetip_adapter.rs",
+      "file": "crates/veredas-maquinar/tests/ethernetip_adapter.rs",
+      "fileSha": "98c6e17b0a162acda4980d784dfe87086db2fc1a66c6f2afdc8cd034cc3254b0"
+    }
+  ]
+}
