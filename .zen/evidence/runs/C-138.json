@@ -1,0 +1,29 @@
+{
+  "clause": "C-138",
+  "command": "cargo test -p veredas-aranha --test record",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-aranha",
+    "--test",
+    "record"
+  ],
+  "exitCode": 0,
+  "outputSha": "07ef08b7c26688a960bcb6c496e092b2e465272292ff9ad15eb2a9e87ecdb020",
+  "outputTail": "\nrunning 4 tests\ntest i_m0_is_its_fields_to_the_byte ... ok\ntest what_does_not_fit_the_port_s_data_is_refused_by_name ... ok\ntest the_port_s_data_is_its_fields_aligned_to_the_byte ... ok\ntest the_dissectors_read_both_records_in_a_read_answer ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s\n     Running tests/record.rs (target/debug/build/veredas-aranha/fc588619e0557ba8/out/record-fc588619e0557ba8)",
+  "ranAt": "2026-11-22T22:14:06.599Z",
+  "headCommit": "909d1b146ac9f5abdbfebed4b9f23f995f7cccb7",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/record.rs",
+      "file": "crates/veredas-aranha/tests/record.rs",
+      "fileSha": "9b10a88c85ccfa77897bf244a75ae68403e9bffc7eee8fd2cbe04200be32261f"
+    },
+    {
+      "name": "crates/veredas-aranha/tests/common/mod.rs",
+      "file": "crates/veredas-aranha/tests/common/mod.rs",
+      "fileSha": "e3f228cd2b4bbd09bda4196228ab527e6f28dba06ee02306b362990c19b7edb6"
+    }
+  ]
+}
