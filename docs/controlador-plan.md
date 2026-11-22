@@ -323,18 +323,24 @@ and redundancy blocks.
 - **Existing, tested Linux methods before our own** (the architect, 2026-11-16).
 
 ## Before the code
-- **`docs/orcl/README.md`**, the plan the language's crates share (law L6), and the ORCL crates.
+Where each item stands on 2026-11-22:
+- **`docs/orcl/README.md`**, the plan the language's crates share (law L6), and the ORCL crates: the
+  plan written, with the language's rules carried from Veredas 1 (`docs/orcl/language/`); `orcl-std`
+  and `orcl-runtime` carried.
 - **The execution model**: how one block interrupts another inside the interpreter, what tasks
-  share, and each block's slice of the process image. Where it is written and what it says is Q33.
-- **A study of the interpreter's front end** and of the list of core-library operations ORCL
-  allows.
-- **The study of Linux for real time and of its recovery methods** (`docs/robustness.md`, "The
-  Linux study").
-- **PROFINET International membership.**
+  share, and each block's slice of the process image. Where it is written and what it says is Q33;
+  the assistant's proposal is `docs/controlador/execution-model.md`, for the architect to rule point
+  by point (Q223). No code stands on it but the one case every option runs alike, one cyclic task.
+- **A study of the interpreter's front end** and of the list of core-library operations ORCL allows:
+  `docs/orcl/front-end.md` (Q221, Q222).
+- **The study of Linux for real time and of its recovery methods** (`docs/robustness.md`, "The Linux
+  study"): `docs/controlador/linux-study.md`, its choices for the architect in Q226.
+- **PROFINET International membership**: the architect's.
 - **Names for controlador's own files** that do not clash with `veredas-controller`, already the
-  format of maquinar's simulated-controller file.
+  format of maquinar's simulated-controller file: proposed in `docs/controlador/files.md` (Q224).
 - **Rows in `MAP`** (`tools/leis`) for what controlador and the interpreter may depend on, each a
-  contract change.
+  contract change: the rows stand since 2026-11-05 (C-005: controlador uses portal, aranha and the
+  `orcl-*` crates; `orcl-*` use each other). The interpreter in maquinar is P-020's change.
 
 ## Open
 - **Q31**, the review's majors and minors, none ruled. Those that touch controlador: 15 (outputs
@@ -349,3 +355,6 @@ and redundancy blocks.
   where core's masters are tested against the bench. **Q36, Q37** the download's integrity and
   robust requests. **Q38 to Q42** the robustness round's open points. **Q43** the security round.
   **Q44** the conversion's type table. **Q45** the briefing's readings.
+- **Q220** ORCL's version beside its crates'. **Q221, Q222** the front end's build and its pinned
+  toolchain. **Q223** the execution model as proposed. **Q224** controlador's file names. **Q225**
+  a `clippy.toml` under law L7. **Q226** the Linux study's choices.

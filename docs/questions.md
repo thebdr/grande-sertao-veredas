@@ -808,7 +808,9 @@ K11, the period check of a shadow test with several pre-emptive blocks, is put o
 release's limit of one cyclic task.
 
 **Taken meanwhile**: `docs/controlador-plan.md` says what was decided and names the model under
-"Before the code"; no code stands on an assumed model.
+"Before the code"; no code stands on an assumed model. The assistant's proposal for every point,
+written on 2026-11-22, is `docs/controlador/execution-model.md` (Q223); code stands only on the one
+case every option runs alike, a single cyclic task.
 
 ## Q34 - Where do the tests of core's fieldbus masters against the bench live?
 
@@ -1053,9 +1055,10 @@ Not opened:
 - how each rule is proven by injecting faults on the bench.
 
 Owed before the operating-system rules: the study of Linux for real time and of its recovery
-methods (`docs/robustness.md`, "The Linux study"). The assistant's caution, not ruled: on hardware
-we do not choose, each cycle's data can be made consistent every cycle but reaches the drive only
-at set moments.
+methods (`docs/robustness.md`, "The Linux study"). Written as a study on 2026-11-22,
+`docs/controlador/linux-study.md`; the choices it leaves are Q226. The assistant's caution, not
+ruled: on hardware we do not choose, each cycle's data can be made consistent every cycle but
+reaches the drive only at set moments.
 
 **Taken meanwhile**: nothing. The round resumes with the architect.
 
@@ -1832,3 +1835,113 @@ meanwhile**: (a), once the bench's Modbus server is on `main`; until then C-071 
 verification.
 
 **Reversible?** Yes: a tool crate removed or its tests moved.
+
+## Q220 - ORCL's version as a language, beside its crates' versions
+
+**Raised** 2026-11-22, by the controlador session, carrying the ORCL crates in
+(`docs/orcl/README.md`).
+
+The suite's plan: "ORCL has its own SemVer as a language; controlador states which ORCL versions it
+runs." Law L3 holds every crate under `crates/` to a version from 2.0.0, and it reads the language's
+crates as it reads a component, so `orcl-std` and `orcl-runtime` start at `2.0.0-alpha.1`. In
+Veredas 1 they were `0.1.0`, and the language had no number of its own.
+
+Options:
+- (a) The language's version is `orcl-std`'s. A program is written against an `orcl-std` version,
+  and controlador states the `orcl-std` versions its interpreter runs. One number; a change to the
+  library that leaves the language alone moves it too.
+- (b) The language has a number of its own, ORCL 1, 2 and so on, as Rust has editions: stated by
+  `orcl-std`, written in a program's compiled header, and named by controlador. The crates keep
+  their SemVer from 2.0.0. Two numbers, each for its own reader.
+- (c) Law L3 leaves the language's crates out, and they version from 1.0.0 as the language does. A
+  change to a law and its clause (C-003).
+
+The assistant recommends (b): a program left running for decades names the language it was written
+in, which a library's version does not say.
+
+**Taken meanwhile**: (a), which adds nothing to undo: the crates start at `2.0.0-alpha.1` and
+nothing yet records a language version.
+
+**Reversible?** Yes, until a compiled program records one.
+
+## Q223 - Controlador's execution model, as proposed
+
+**Raised** 2026-11-22, by the controlador session, answering Q33 with a proposal.
+
+`docs/controlador/execution-model.md` proposes, point by point, for the architect to rule:
+1. **Where it is written:** that file, beside the plan; once ruled, the plan carries each decision
+   in a line.
+2. **What tasks share (K8):** only the process image. That is ORCL's O7, decided by the architect on
+   2026-10-06 in Veredas 1 (`docs/orcl/language/ownership.md`), which the review read as an open
+   reading. The controller applies forces, writes through its embedded portal and device events at a
+   task's scan boundary, never inside its scan. Whether O7's publish at the end of a scan should
+   give way to the prior art's LET (at the end of the logical period, the same values on every
+   platform, up to one period later) stays open with it.
+3. **Each task its own slice (K10):** yes; an output in one task's slice only, an input latched by
+   every task that reads it, a slice copied whole.
+4. **How one block interrupts another:** (a) a real-time thread per priority, the kernel
+   pre-empting, or (b) one logic thread switching at instruction boundaries. The rule "existing,
+   tested Linux methods before our own" (2026-11-16) speaks for (a); a hit halting every task and
+   the replay of a field incident speak for (b). The assistant's pick: (b) for the first release.
+5. **The fieldbus's own thread**, above the logic, never halted, sending halt or safe values, and
+   the logic's watchdog at twice a scan's period.
+6. **Time:** the program clock, paused at a halt; time-of-day blocks on the confirmed date alone; a
+   start that fell during a halt dropped (K9); the main cycle held to the maximum cycle time,
+   pre-emptions included.
+7. **Start-up, handlers and stop:** start-up blocks before the first main cycle with no cyclic
+   interrupt; a handler a task released by its event; a program error ending its block's scan, then
+   the handler or the fault 502; the stop handler's one last scan.
+8. **K11** put off by the first release's one cyclic task.
+
+**Taken meanwhile**: Q33's: no code stands on an assumed model. The engine of a scan runs one cyclic
+task, which every option runs alike.
+
+**Reversible?** Yes: nothing is built on points 2 to 8.
+
+## Q224 - Names for controlador's own files
+
+**Raised** 2026-11-22, by the controlador session (`docs/controlador-plan.md`, "Before the code").
+
+`docs/controlador/files.md` proposes, none of them confusable with maquinar's `veredas-controller`:
+`veredas-aplicacao` (the application: tasks, cycle times, halt settings, the retained save, the IO
+mapping, the Modbus addresses), `veredas-rede` (the hardware configuration), `veredas-alvo` (the
+target's own settings, written at the target and never downloaded), `veredas-carga` (a download's
+manifest, Q36); the compiled program a binary `<name>.orclb` with its own header; the commissioning
+switch a file whose presence arms it, so a lost switch reads as off.
+
+Options: those names; English ones (`veredas-application`, `veredas-network`, `veredas-target`,
+`veredas-download`), against the suite's rule that names are Portuguese; or one prefix for all
+(`veredas-controlador-*`), which brings back the near-clash with `veredas-controller`.
+
+**Taken meanwhile**: the names proposed, in documents only; no file of any of them exists.
+
+**Reversible?** Yes, until a file of the format exists anywhere.
+
+## Q225 - May a `clippy.toml` sit in the repository?
+
+**Raised** 2026-11-22, by the controlador session, carrying `orcl-std` in.
+
+ORCL's O13 (no interior mutability) is checked by clippy's `disallowed_types`, whose list of types
+every ORCL program crate carries in its `clippy.toml` (`docs/orcl/language/README.md`). Law L7 holds
+every TOML file the repository holds, but a cargo manifest and the test runner's
+`.config/nextest.toml`, to a `veredas-*` stamp. Clippy refuses a key it does not know: a
+`clippy.toml` with `format` and `version` first stops the build with "unknown field name" (tried on
+2026-11-22, with the clippy of Rust 1.100.0). So `orcl-std`'s `clippy.toml` cannot be carried as it
+is.
+
+Options:
+- (a) L7 treats `clippy.toml` as a tool's file, as it treats nextest's. A change to the law and to
+  the clause that states it (C-046, portal's), so the orchestrator carries it.
+- (b) The repository holds no `clippy.toml`. O13 is kept by convention in the repository's own
+  crates, or by a test that reads their sources; a program crate in a project, outside the
+  repository, still carries the file.
+- (c) Clippy's configuration is kept outside the repository and named through `CLIPPY_CONF_DIR`:
+  every run depends on a setting nobody sees.
+
+The assistant recommends (a).
+
+**Taken meanwhile**: (b), without the test: `orcl-std` and the conveyor fixture carry their lints,
+`disallowed_types` among them, with no list of types (DECISION PENDING in
+`crates/orcl-std/src/lib.rs`).
+
+**Reversible?** Yes: the file comes back as Veredas 1 had it.

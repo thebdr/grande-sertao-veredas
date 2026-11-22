@@ -222,6 +222,9 @@ Its list so far, named by the assistant from memory and not verified:
 - the operating system's own writing to the drive (its logs, its temporary files);
 - how a drive's wear is read (eMMC and SSDs report it; most SD cards do not).
 
+The study is written, with its sources, in `docs/controlador/linux-study.md` (2026-11-22). It rules
+nothing: what it leaves for the architect is `docs/questions.md` Q226.
+
 ## What is owed beside this round
 - **A suite-wide cyber-security round**, called by the architect on 2026-11-16: "dedicated round to
   decide cyber security level suite-wise, future proof is the best way to design". Its open items
