@@ -10,15 +10,15 @@
     "emitters"
   ],
   "exitCode": 0,
-  "outputSha": "be4d08049f13853a19edab06192a559696416af2d82eaa5f3c913e95c805de1b",
-  "outputTail": "test a_seeded_emitter_replays_the_same_values ... ok\ntest a_restart_never_appends_past_a_gap_in_the_family ... ok\ntest a_utf16_emitter_writes_a_bom_so_the_encoding_is_detectable ... ok\ntest a_bad_file_pattern_reports_instead_of_writing_rubbish ... ok\ntest a_restart_without_rotation_still_starts_a_new_file ... ok\ntest a_missing_output_folder_is_reported_and_then_recovered_from ... ok\ntest restarting_never_appends_to_a_file_it_already_wrote ... ok\ntest a_stop_is_prompt_whatever_the_interval ... ok\ntest an_emitter_writes_rotating_files_a_plant_would_recognise ... ok\ntest the_family_shape_describes_what_the_pattern_writes ... ok\n\ntest result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running tests/emitters.rs (target/debug/build/veredas-maquinar/6aa7e1d2c7835445/out/emitters-6aa7e1d2c7835445)",
-  "ranAt": "2026-11-22T15:41:40.445Z",
-  "headCommit": "974fe62f321b0ad7bbebef1ac965bedb5193f6a9",
+  "outputSha": "97ff4236a47c5623ebcf9b14451b0b220540fe25d1f45b31c6df45488d82f6ae",
+  "outputTail": "test a_utf16_emitter_writes_a_bom_so_the_encoding_is_detectable ... ok\ntest a_restart_never_appends_past_a_gap_in_the_family ... ok\ntest a_restart_without_rotation_still_starts_a_new_file ... ok\ntest a_bad_file_pattern_reports_instead_of_writing_rubbish ... ok\ntest a_seeded_emitter_replays_the_same_values ... ok\ntest a_missing_output_folder_is_reported_and_then_recovered_from ... ok\ntest an_emitter_writes_rotating_files_a_plant_would_recognise ... ok\ntest restarting_never_appends_to_a_file_it_already_wrote ... ok\ntest a_stop_is_prompt_whatever_the_interval ... ok\ntest the_family_shape_describes_what_the_pattern_writes ... ok\n\ntest result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running tests/emitters.rs (target/debug/build/veredas-maquinar/bde5ca5dbdcbc957/out/emitters-bde5ca5dbdcbc957)",
+  "ranAt": "2026-11-22T21:16:31.156Z",
+  "headCommit": "4a21bfdd329bd96e3f1b8de4a49977712c97a917",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/emitters.rs",
       "file": "crates/veredas-maquinar/tests/emitters.rs",
-      "fileSha": "b2d55835b64f32c78c2b84c4b000c27e00501fa38c333d17adc0219d69b90765"
+      "fileSha": "4b908b3c217f2bbbd4cb4aa556879c247aafb8a97c3fa1f684f5a5d91aeaa996"
     }
   ]
 }

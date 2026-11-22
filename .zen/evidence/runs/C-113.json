@@ -1,0 +1,24 @@
+{
+  "clause": "C-113",
+  "command": "cargo test -p veredas-maquinar --test ethercat_segment",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-maquinar",
+    "--test",
+    "ethercat_segment"
+  ],
+  "exitCode": 0,
+  "outputSha": "456295db88ca4a06da96e4727d70772d6d279450d2b90c0885e187e6daaad0f3",
+  "outputTail": "\nrunning 3 tests\ntest every_command_reads_writes_and_counts_as_the_standard_has_it ... ok\ntest the_dissectors_read_the_returned_frame_as_the_standard_has_it ... ok\ntest a_maindevice_finds_the_segment_brings_it_to_op_and_exchanges_process_data ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\n     Running tests/ethercat_segment.rs (target/debug/build/veredas-maquinar/ab29eea811ede4d0/out/ethercat_segment-ab29eea811ede4d0)",
+  "ranAt": "2026-11-22T21:16:50.711Z",
+  "headCommit": "4a21bfdd329bd96e3f1b8de4a49977712c97a917",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/ethercat_segment.rs",
+      "file": "crates/veredas-maquinar/tests/ethercat_segment.rs",
+      "fileSha": "6185a98fc660a84f4d6fe68d2a7b04576436ff8482b41475a8a524966e6208a4"
+    }
+  ]
+}
