@@ -5,6 +5,9 @@ members = [
     # docs/veredas-plan.md that a machine can check; .zen/contract.md C-001..C-006).
     # Exempt from the component laws; runs under `cargo test --workspace`.
     "tools/leis",
+    # Repo tooling, not a component: what the suite ships, the release manifest and its cut, and the
+    # tester machine (docs/entrega-plan.md). Exempt from the component laws.
+    "tools/entrega",
     # The foundation (docs/core-plan.md): the shared types and protocol layers more than one
     # component needs, depending on no other member (law L4).
     "crates/veredas-core",
