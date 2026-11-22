@@ -29,13 +29,18 @@ fn a_cyclic_frame_is_its_id_its_data_and_its_status_to_the_byte() {
     assert_eq!(&wire[12..20], &[0x81, 0x00, 0xC0, 0x00, 0x88, 0x92, 0x80, 0x01]);
     assert_eq!(wire.len(), 64);
     let e = ether::parse(&wire).unwrap();
+    assert_eq!((e.dst, e.src), (DEVICE, CONTROLLER));
+    assert_eq!(&wire[..12], &[2, 0, 0, 0, 0, 0x0D, 2, 0, 0, 0, 0, 0x0C]);
     assert_eq!((e.vlan, CyclicFrame::decode(e.payload).unwrap()), (Some(rt::CYCLIC_TAG), f.clone()));
-    // Untagged, 60 bytes exactly; with another tag, that tag.
-    assert_eq!(f.frame(DEVICE, CONTROLLER, None).unwrap().len(), 60);
+    // Untagged, 60 bytes exactly; with another tag, that tag; the addresses where they go.
+    let untagged = f.frame(DEVICE, CONTROLLER, None).unwrap();
+    assert_eq!(untagged.len(), 60);
+    assert_eq!(&untagged[..14], &[2, 0, 0, 0, 0, 0x0D, 2, 0, 0, 0, 0, 0x0C, 0x88, 0x92]);
     let other = VlanTag { priority: 5, drop_eligible: false, id: 100 };
     let wire = f.frame(DEVICE, CONTROLLER, Some(other)).unwrap();
     assert_eq!(&wire[12..18], &[0x81, 0x00, 0xA0, 0x64, 0x88, 0x92]);
-    assert_eq!(ether::parse(&wire).unwrap().vlan, Some(other));
+    let e = ether::parse(&wire).unwrap();
+    assert_eq!((e.dst, e.src, e.vlan), (DEVICE, CONTROLLER, Some(other)));
     // The longest data.
     let long = frame(0x0100, vec![0xA5; 1440], 0x35);
     let back = CyclicFrame::decode(&long.encode().unwrap()).unwrap();
@@ -95,6 +100,7 @@ fn what_is_not_a_cyclic_frame_is_refused_both_ways() {
     long.extend_from_slice(&[0; 1445]);
     assert_eq!(CyclicFrame::decode(&long), Err(RtError::DataLength(1441)));
     assert_eq!(RtError::DataLength(39).to_string(), "a cyclic frame's data is 40 to 1440 bytes; this one is 39");
+    assert_eq!(RtError::NotCyclic(0xFC01).to_string(), "frame id 0xfc01 is not a cyclic frame's");
     // Any bytes decode or are refused, never a panic.
     let mut noise = common::Noise(0xC1C);
     for _ in 0..20_000 {
@@ -119,6 +125,7 @@ fn the_status_bits_are_named() {
     }
     assert_eq!(names(DataStatus(0x48)), [false; 6], "bits 3 and 6 are reserved");
     assert!(IoxStatus::GOOD.good() && !IoxStatus::BAD.good());
+    assert_eq!((IoxStatus::GOOD, IoxStatus::BAD), (IoxStatus(0x80), IoxStatus(0x00)));
     // Each bit alone: good at 7, who decided at 6 and 5, extension at 0; 1 to 4 reserved.
     let iox = |b: u8| (IoxStatus(b).good(), IoxStatus(b).instance(), IoxStatus(b).extension());
     for (b, want) in [
@@ -147,9 +154,13 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
     ];
     let read = common::dissect(&frames);
     let r = "pn_rt";
-    for (i, p) in read.iter().enumerate() {
+    for (i, (p, f)) in read.iter().zip(&frames).enumerate() {
         assert_eq!(p.complaints(), Vec::<String>::new(), "frame {i}");
+        let e = ether::parse(f).unwrap();
+        assert_eq!((p.one("eth", "eth.dst"), p.one("eth", "eth.src")), (e.dst.to_string(), e.src.to_string()), "frame {i}");
     }
+    // The third was written from the device to the controller, the others the other way.
+    assert_eq!(read[2].one("eth", "eth.dst"), CONTROLLER.to_string());
     let ids: Vec<String> = read.iter().map(|p| p.one(r, "pn_rt.frame_id")).collect();
     assert_eq!(ids, ["32769", "256", "49152", "36864"]);
     let counters: Vec<String> = read.iter().map(|p| p.one(r, "pn_rt.cycle_counter")).collect();

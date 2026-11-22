@@ -41,7 +41,8 @@ pub enum FrameClass {
     AlarmLow,
     /// 0xFEFC to 0xFEFF.
     Dcp,
-    /// Anything else: reserved, time synchronisation, or not PROFINET's to give.
+    /// Anything else: reserved ids, time synchronisation, the alarms with security (0xFC41,
+    /// 0xFE41), the remote service interface (0xFE02, 0xFE42): no cyclic frame.
     Other,
 }
 
