@@ -21,6 +21,7 @@ const CORE: Component = Component { nome: "core", display: "Core" };
 const PORTAL: Component = Component { nome: "portal", display: "Portal" };
 const MAQUINAR: Component = Component { nome: "maquinar", display: "Maquinar" };
 const SUPERVISAO: Component = Component { nome: "supervisao", display: "Supervisão" };
+const ABACO: Component = Component { nome: "abaco", display: "Ábaco" };
 /// Suite releases: no component, but the files are the suite's (docs/entrega-plan.md).
 const ENTREGA: Component = Component { nome: "entrega", display: "Entrega" };
 
@@ -34,7 +35,9 @@ pub const FORMATS: &[(&str, Component)] = &[
     ("veredas-controller", MAQUINAR),
     ("veredas-supervisao", SUPERVISAO),
     ("veredas-binding", SUPERVISAO),
+    ("veredas-abaco-oracle-baseline", ABACO),
     ("veredas-release", ENTREGA),
+    ("veredas-machine", ENTREGA),
 ];
 
 /// The component whose reader states `format`, if the table knows it.

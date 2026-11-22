@@ -95,7 +95,57 @@ pub enum Scalar {
     Datetime(String),
 }
 
+impl Kind {
+    /// The kind's name in a form's field.
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::String => "string",
+            Kind::Integer => "integer",
+            Kind::Float => "float",
+            Kind::Boolean => "boolean",
+            Kind::Datetime => "datetime",
+        }
+    }
+}
+
 impl Scalar {
+    /// What a form's field holds for this value, as a person types it: a string as its
+    /// characters, an integer in decimal, a float as Rust writes it, `true` or `false`, a
+    /// date-time as TOML writes it.
+    pub fn to_text(&self) -> String {
+        match self {
+            Scalar::String(s) | Scalar::Datetime(s) => s.clone(),
+            Scalar::Integer(n) => n.to_string(),
+            Scalar::Float(x) => x.to_string(),
+            Scalar::Boolean(b) => b.to_string(),
+        }
+    }
+
+    /// A field's text read back as a value of `kind`, or why it is not one. A date-time is only
+    /// carried here; [`Document::set`] checks it.
+    pub fn parse(kind: Kind, text: &str) -> Result<Scalar, String> {
+        let t = text.trim();
+        match kind {
+            Kind::String => Ok(Scalar::String(text.to_string())),
+            Kind::Integer => t.parse().map(Scalar::Integer).map_err(|_| format!("`{text}` is not a whole number from -9223372036854775808 to 9223372036854775807")),
+            Kind::Float => match t {
+                "inf" | "+inf" => Ok(Scalar::Float(f64::INFINITY)),
+                "-inf" => Ok(Scalar::Float(f64::NEG_INFINITY)),
+                "nan" | "+nan" | "-nan" => Ok(Scalar::Float(f64::NAN)),
+                _ if t.chars().all(|c| c.is_ascii_digit() || matches!(c, '+' | '-' | '.' | 'e' | 'E')) && !t.is_empty() => {
+                    t.parse().map(Scalar::Float).map_err(|_| format!("`{text}` is not a number"))
+                }
+                _ => Err(format!("`{text}` is not a number")),
+            },
+            Kind::Boolean => match t {
+                "true" => Ok(Scalar::Boolean(true)),
+                "false" => Ok(Scalar::Boolean(false)),
+                _ => Err(format!("`{text}` is neither `true` nor `false`")),
+            },
+            Kind::Datetime => Ok(Scalar::Datetime(t.to_string())),
+        }
+    }
+
     pub fn kind(&self) -> Kind {
         match self {
             Scalar::String(_) => Kind::String,
@@ -369,6 +419,16 @@ impl Document {
             ending => out.push_str(&self.text().replace('\n', ending)),
         }
         out.into_bytes()
+    }
+
+    /// Write the file's bytes to `path` whole or not at all: into a file beside it, then renamed
+    /// over it, so a cut in the middle leaves the old file as it was.
+    pub fn write_to(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let mut beside = path.as_os_str().to_owned();
+        beside.push(".oficina-new");
+        let beside = std::path::PathBuf::from(beside);
+        std::fs::write(&beside, self.to_bytes())?;
+        std::fs::rename(&beside, path)
     }
 
     /// The text both views show: LF endings, no mark.

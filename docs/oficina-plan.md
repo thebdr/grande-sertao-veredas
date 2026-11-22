@@ -283,13 +283,20 @@ numbers and what was learnt on the way are in the evidence.
    as its characters; a folder of 100 000 files opened in 157 to 343 ms from the click to its first
    row drawn (a release build, three runs, the machine's load about 30 on 24 cores). The bridge
    expresses the lazy item model in Rust alone; one C++ file starts the application.
+2. **Passed** (2026-11-22). A TOML file opened from the tree shows as a form and as text. A value
+   typed into the form came back in the text as exactly the expected text (its radix and its
+   comment kept); a change typed into the text showed in its field; a value of the wrong type was
+   refused by name; a text that does not parse was marked at its line and column while the form
+   kept its last state and saving was refused, and once mended the form followed; saved, the file's
+   bytes were the CR LF and the byte-order mark it was read with. The text view is Qt Quick's own
+   text editor, so the plan's fallback where Chromium cannot draw passed with it.
 
 The X11 platform is not proven: Qt's X11 plugin lacks seven of the distribution's libraries here
 (the architect's to install), so nothing has run on X11 yet; the plan's "X11 first" stays to be
 shown on this machine once they are.
 
 ### Verdict
-Not given: points 2 to 7 remain.
+Not given: points 3 to 7 remain.
 
 ## Open
 - **Q31, the review's majors and minors**, none ruled. Those that touch Oficina: 22 (Oficina

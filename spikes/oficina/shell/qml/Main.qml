@@ -23,6 +23,7 @@ ApplicationWindow {
             title: qsTr("Project")
             ProjectPane {
                 anchors.fill: parent
+                onOpenFile: (path) => editor.open(path)
             }
         }
 
@@ -30,15 +31,9 @@ ApplicationWindow {
             id: editorDock
             uniqueName: "editor"
             title: qsTr("Editor")
-            Rectangle {
+            EditorPane {
+                id: editor
                 anchors.fill: parent
-                color: "#1B1B1E"
-                Button {
-                    objectName: "hello"
-                    property int clicks: 0
-                    text: "clicked " + clicks
-                    onClicked: clicks += 1
-                }
             }
         }
 

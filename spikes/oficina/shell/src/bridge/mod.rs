@@ -2,4 +2,5 @@
 //! the bridge (docs/oficina-plan.md, "One seam for the bridge").
 
 pub mod glue;
+pub mod document;
 pub mod tree;

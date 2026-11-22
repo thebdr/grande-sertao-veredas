@@ -8,6 +8,9 @@ Rectangle {
     id: pane
     color: "#161618"
 
+    // A file picked in the tree, to open in the editor.
+    signal openFile(string path)
+
     ProjectTree {
         id: projectTree
         objectName: "projectTree"
@@ -62,6 +65,7 @@ Rectangle {
             required property string detail
             required property string state
             required property bool hidden
+            required property string path
 
             objectName: "row" + row
             // What the row says, read whole by a test.
@@ -105,6 +109,8 @@ Rectangle {
                     node.treeView.selectionModel.setCurrentIndex(node.treeView.index(node.row, node.column), ItemSelectionModel.NoUpdate);
                     if (node.hasChildren)
                         node.treeView.toggleExpanded(node.row);
+                    else if (node.kind === "file")
+                        pane.openFile(node.path);
                 }
             }
         }

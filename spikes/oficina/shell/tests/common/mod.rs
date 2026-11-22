@@ -139,9 +139,14 @@ fn decode(value_body: &str) -> X {
     if b.starts_with("<nil") {
         return X::Nil;
     }
-    // A value with no type is a string.
-    X::Str(unescape(b))
+    // A value with no type is a string, every character of it, its spaces and line ends included.
+    X::Str(unescape(value_body))
 }
+
+/// Qt's key codes and Spix's modifier for the keys the tests press.
+pub const KEY_A: i64 = 0x41;
+pub const KEY_RETURN: i64 = 0x0100_0004;
+pub const CONTROL: i64 = 2;
 
 /// The shell, running with no display, and the port its test server listens on.
 pub struct Shell {
@@ -310,6 +315,32 @@ impl Shell {
             assert!(Instant::now() < until, "the tree's rows: waited for {expected:#?}\nlast read {rows:#?}\nthe shell's log:\n{}", self.log_text());
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    /// The path of the tree's first row whose label begins with `prefix`, waiting for it.
+    pub fn row_of(&self, prefix: &str) -> String {
+        let until = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(i) = self.rows().iter().position(|r| r.starts_with(prefix)) {
+                return format!("oficina/row{i}");
+            }
+            assert!(Instant::now() < until, "no row begins with {prefix:?}: {:#?}", self.rows());
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Press a key with modifiers (Spix's: 1 Shift, 2 Control, 4 Alt) at the item with focus.
+    pub fn key(&self, path: &str, key: i64, modifiers: i64) {
+        self.call("enterKey", &[X::Str(path.into()), X::Int(key), X::Int(modifiers)]);
+    }
+
+    /// Replace a text field's whole text as a person does: click it, select all, type, Return.
+    pub fn retype(&self, path: &str, text: &str) {
+        self.click(path);
+        self.wait_for(path, "activeFocus", "true");
+        self.key(path, KEY_A, CONTROL);
+        self.type_text(path, text);
+        self.key(path, KEY_RETURN, 0);
     }
 
     pub fn screenshot(&self, path: &str, file: &Path) {

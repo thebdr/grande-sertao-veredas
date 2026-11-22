@@ -102,6 +102,7 @@ const DETAIL: i32 = 257;
 const HIDDEN: i32 = 258;
 const STATE: i32 = 259;
 const NODE: i32 = 260;
+const PATH: i32 = 261;
 
 #[derive(Default)]
 pub struct ProjectTreeRust {
@@ -233,13 +234,14 @@ impl qobject::ProjectTree {
             HIDDEN => QVariant::from(&n.hidden),
             STATE => QVariant::from(&QString::from(state)),
             NODE => QVariant::from(&(id.raw() as i64)),
+            PATH => QVariant::from(&QString::from(tree.path(id).to_string_lossy().as_ref())),
             _ => QVariant::default(),
         }
     }
 
     fn role_names(&self) -> QHash<QHashPair_i32_QByteArray> {
         let mut roles = QHash::<QHashPair_i32_QByteArray>::default();
-        for (role, name) in [(0, "display"), (KIND, "kind"), (DETAIL, "detail"), (HIDDEN, "hidden"), (STATE, "state"), (NODE, "nodeId")] {
+        for (role, name) in [(0, "display"), (KIND, "kind"), (DETAIL, "detail"), (HIDDEN, "hidden"), (STATE, "state"), (NODE, "nodeId"), (PATH, "path")] {
             roles.insert(role, QByteArray::from(name));
         }
         roles

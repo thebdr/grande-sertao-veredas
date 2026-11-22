@@ -266,7 +266,11 @@ fn every_value_of_every_toml_text_of_the_suite_edits_alone() {
     for (place, text) in corpus() {
         let d = Document::from_bytes(text.as_bytes()).unwrap_or_else(|e| panic!("{place}: {e}"));
         let before = d.fields();
-        for f in before.iter().filter(|f| !f.stamp) {
+        // At most 40 values of a text, evenly spaced: every edit parses the text again, and a
+        // text of thousands of values (ábaco's oracle baseline) would cost minutes.
+        let editable: Vec<&Field> = before.iter().filter(|f| !f.stamp).collect();
+        let stride = editable.len().div_ceil(40).max(1);
+        for f in editable.into_iter().step_by(stride) {
             let Some(new) = other(&f.value) else { continue };
             let mut e = d.clone();
             e.set(&f.path, new.clone()).unwrap_or_else(|err| panic!("{place} `{}`: {err}", f.path));
@@ -290,4 +294,52 @@ fn every_value_of_every_toml_text_of_the_suite_edits_alone() {
     }
     assert!(edits > 0, "the corpus holds values to edit");
     eprintln!("{edits} edits, each alone");
+}
+
+#[test]
+fn a_field_is_written_as_a_person_types_it_and_read_back_by_its_kind() {
+    let cases: Vec<(Scalar, &str)> = vec![
+        (Scalar::String("C:\\dir 'x'".into()), "C:\\dir 'x'"),
+        (Scalar::Integer(5028), "5028"),
+        (Scalar::Integer(-1), "-1"),
+        (Scalar::Float(1.5), "1.5"),
+        (Scalar::Float(2.0), "2"),
+        (Scalar::Boolean(false), "false"),
+        (Scalar::Datetime("1979-05-27T07:32:00Z".into()), "1979-05-27T07:32:00Z"),
+    ];
+    for (value, text) in cases {
+        assert_eq!(value.to_text(), text);
+        assert_eq!(Scalar::parse(value.kind(), text), Ok(value.clone()), "{text}");
+    }
+    // Spaces around a number or a boolean are not part of it; a string keeps them.
+    assert_eq!(Scalar::parse(Kind::Integer, " 12 "), Ok(Scalar::Integer(12)));
+    assert_eq!(Scalar::parse(Kind::String, " 12 "), Ok(Scalar::String(" 12 ".into())));
+    assert_eq!(Scalar::parse(Kind::Float, "inf"), Ok(Scalar::Float(f64::INFINITY)));
+    assert!(matches!(Scalar::parse(Kind::Float, "nan"), Ok(Scalar::Float(x)) if x.is_nan()));
+    let refused = |k: Kind, t: &str| Scalar::parse(k, t).unwrap_err();
+    assert_eq!(refused(Kind::Integer, "0x13A5"), "`0x13A5` is not a whole number from -9223372036854775808 to 9223372036854775807");
+    assert_eq!(refused(Kind::Integer, "9223372036854775808"), "`9223372036854775808` is not a whole number from -9223372036854775808 to 9223372036854775807");
+    assert_eq!(refused(Kind::Float, "1,5"), "`1,5` is not a number");
+    assert_eq!(refused(Kind::Float, "infinity"), "`infinity` is not a number");
+    assert_eq!(refused(Kind::Boolean, "yes"), "`yes` is neither `true` nor `false`");
+    assert_eq!(refused(Kind::Boolean, "True"), "`True` is neither `true` nor `false`");
+    assert_eq!(
+        [Kind::String, Kind::Integer, Kind::Float, Kind::Boolean, Kind::Datetime].map(Kind::name),
+        ["string", "integer", "float", "boolean", "datetime"]
+    );
+}
+
+#[test]
+fn a_document_is_written_whole_over_its_file() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("a scratch folder");
+    let file = dir.path().join("channel.toml");
+    let crlf = format!("\u{feff}{}", SAMPLE.replace('\n', "\r\n"));
+    std::fs::write(&file, &crlf).expect("written");
+    let mut d = Document::from_bytes(&std::fs::read(&file).expect("read")).expect("opens");
+    d.set(&path("link.port"), Scalar::Integer(5029)).expect("an edit");
+    d.write_to(&file).expect("saved");
+    assert_eq!(std::fs::read(&file).expect("read"), crlf.replacen("0x13A4", "0x13A5", 1).into_bytes());
+    let mut names: Vec<String> = std::fs::read_dir(dir.path()).expect("listed").map(|e| e.expect("an entry").file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(names, vec!["channel.toml"], "nothing left beside it");
 }
