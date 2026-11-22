@@ -229,6 +229,8 @@ fn a_fault_is_dated_at_the_scan_s_start_even_when_it_started_late() {
     t.step(&mut plant, &mut clock);
     assert_eq!(t.state(), RunState::Faulted { at: ms(14), fault: Fault::Watchdog { exec: ms(25) } });
     assert_eq!(plant.writes, vec![(ms(1), 1), (ms(39), 7)]);
+    let s = *t.stats();
+    assert_eq!((s.max_lateness, s.total_lateness), (ms(4), ms(4)), "the faulting scan's lateness counted");
 }
 
 #[test]
@@ -351,6 +353,7 @@ fn the_rule_measures_a_scan_s_length_never_its_lateness() {
     clock.advance(ms(18));
     let r = t.step(&mut plant, &mut clock);
     assert_eq!((r.scan.now, r.exec, r.time_error, r.state), (ms(19), ms(15), true, RunState::Running));
+    assert_eq!(t.stats().overruns, 1, "counted, whenever it started");
     assert_eq!(plant.writes, vec![(ms(1), 1), (ms(34), 2)]);
 }
 
@@ -366,7 +369,8 @@ fn a_faulted_scan_started_late_reads_at_its_start_counts_its_lateness_and_is_no_
     let r = t.step(&mut plant, &mut clock);
     assert_eq!((r.scan.cycle, r.scan.now, r.time_error), (3, ms(34), false));
     assert_eq!(plant.reads, vec![ms(0), ms(34)]);
-    assert_eq!(t.stats().max_lateness, ms(4));
+    let s = *t.stats();
+    assert_eq!((s.max_lateness, s.total_lateness, s.mean_lateness()), (ms(4), ms(4), ms(2)));
 }
 
 #[test]
@@ -710,13 +714,16 @@ fn the_program_is_handed_exactly_the_scan_the_engine_reports_late_or_skipped() {
     let mut plant = Loop::new(&clock, |k| [ms(1), ms(15), ms(1), ms(1)][k]);
     let mut t = task(ms(10));
     let mut handed = Vec::new();
-    for late in [ms(0), ms(0), ms(4), ms(0)] {
+    for late in [ms(0), ms(0), ms(9), ms(0)] {
         clock.advance(late);
         let scan = t.step(&mut plant, &mut clock).scan;
         assert_eq!(t.program().last_scan, scan, "the program's scan is the report's");
         handed.push((scan.cycle, scan.now));
     }
-    assert_eq!(handed, vec![(0, ms(0)), (1, ms(10)), (3, ms(30)), (4, ms(40))]);
+    // scan 1 runs 15 ms and skips cycle 2; the host comes back at 34 ms, so cycle 3 (due at 30) runs 4 ms late and
+    // is handed its start, 34 ms, not its deadline
+    assert_eq!(handed, vec![(0, ms(0)), (1, ms(10)), (3, ms(34)), (4, ms(40))]);
+    assert_eq!(t.stats().max_lateness, ms(4), "a scan here really started late");
 }
 
 #[test]
