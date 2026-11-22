@@ -241,8 +241,20 @@ pub enum DcpError {
     LengthOverrun { declared: usize, available: usize },
     #[error("a DCP block holds at most 65535 bytes; option {option} suboption {suboption} has {len}")]
     BlockTooLong { option: u8, suboption: u8, len: usize },
-    #[error("the blocks make {0} bytes, past what one frame carries")]
+    #[error("the PDU makes {0} bytes, past the 1500 one frame carries")]
     PduTooLong(usize),
+    #[error("a Set request is written only with the one device it goes to (`DcpPdu::frame`)")]
+    SetNeedsTarget,
+    #[error("a Set request holds whole blocks; {0} trailing bytes are not written")]
+    SetTrailing(usize),
+    #[error("the identification signal is 0x0100; {0:#06x} is not written")]
+    Signal(u16),
+    #[error("a Hello goes to its own group address; {0} is not it")]
+    HelloTarget(Mac),
+    #[error("option {option} suboption {suboption} {} a BlockInfo or qualifier word in this PDU", if *carried { "carries" } else { "lacks" })]
+    InfoWord { option: u8, suboption: u8, carried: bool },
+    #[error("a {body} block has no place at option {option} suboption {suboption} of this PDU")]
+    Misplaced { option: u8, suboption: u8, body: &'static str },
     #[error("a DCP Set names one device by its MAC; {0} is a group address")]
     GroupTarget(Mac),
     #[error("a Set writes a station name, an IP suite or the identification signal, never option {option} suboption {suboption} ({body})")]
@@ -256,15 +268,16 @@ pub enum DcpError {
 }
 
 /// Does this block carry a BlockInfo or BlockQualifier word, in a PDU of this service and type?
-fn carries_info(service: Service, service_type: ServiceType, option: u8, suboption: u8) -> bool {
-    if (option, suboption) == (5, 4) || (option, suboption) == (0xFF, 0xFF) {
+/// Does this block carry a BlockInfo or BlockQualifier word, in a PDU of this service and type (as
+/// they travel)? An Identify answer, a Get answer and a Hello carry a BlockInfo, a Set request a
+/// qualifier; nothing else does, nor a control response, the all-selector, or a manufacturer's
+/// own option (0x80 to 0xFE), wherever they are.
+fn carries_info(service: u8, service_type: u8, option: u8, suboption: u8) -> bool {
+    if (option, suboption) == (5, 4) || (option, suboption) == (0xFF, 0xFF) || (0x80..=0xFE).contains(&option) {
         return false;
     }
-    match (service, service_type) {
-        (Service::Identify, ServiceType::Request) => false,
-        (Service::Set, t) if t.is_response() => false,
-        _ => true,
-    }
+    let response = service_type & 1 == 1;
+    matches!((service, response), (5, true) | (3, true) | (6, false) | (4, false))
 }
 
 /// Decode a DCP PDU from the PROFINET payload: the bytes after the EtherType, frame id included.
@@ -288,7 +301,7 @@ pub fn decode(payload: &[u8]) -> Result<DcpPdu, DcpError> {
     let data = &payload[12..12 + data_len];
     let mut pdu = DcpPdu { frame_id, service, service_type, xid, response_delay, blocks: Vec::new(), trailing: Vec::new() };
 
-    if service == Service::Get && service_type == ServiceType::Request {
+    if pdu.is_get_request() {
         let (pairs, rest) = data.as_chunks::<2>();
         for &[option, suboption] in pairs {
             pdu.blocks.push(Block { option, suboption, info: None, body: BlockBody::Requested });
@@ -312,7 +325,7 @@ pub fn decode(payload: &[u8]) -> Result<DcpPdu, DcpError> {
         }
         let mut bytes = &data[off..off + len];
         let mut info = None;
-        if carries_info(service, service_type, option, suboption) {
+        if carries_info(payload[2], payload[3], option, suboption) {
             match bytes.len() {
                 0 | 1 => {
                     let body = BlockBody::Damaged { data: bytes.to_vec(), damage: Damage::NoInfo };
@@ -420,7 +433,12 @@ fn check_set_block(b: &Block) -> Result<(), DcpError> {
             ("0 or 1", &[QUALIFIER_TEMPORARY, QUALIFIER_PERMANENT])
         }
         (BlockBody::IpParameter { .. }, 1, 2) => ("0 or 1", &[QUALIFIER_TEMPORARY, QUALIFIER_PERMANENT]),
-        (BlockBody::ControlSignal { .. }, 5, 3) => ("0", &[QUALIFIER_TEMPORARY]),
+        (BlockBody::ControlSignal { value }, 5, 3) => {
+            if *value != SIGNAL_FLASH {
+                return Err(DcpError::Signal(*value));
+            }
+            ("0", &[QUALIFIER_TEMPORARY])
+        }
         (body, option, suboption) => {
             return Err(DcpError::SetBlock { option, suboption, body: body.kind() });
         }
@@ -432,6 +450,30 @@ fn check_set_block(b: &Block) -> Result<(), DcpError> {
 }
 
 impl BlockBody {
+    /// The option and suboption a typed body is written under; `None` for the bodies that are
+    /// bytes as given (unread, damaged) or a Get request's pair.
+    pub fn code(&self) -> Option<(u8, u8)> {
+        Some(match self {
+            BlockBody::MacAddress { .. } => (1, 1),
+            BlockBody::IpParameter { .. } => (1, 2),
+            BlockBody::IpFullSuite { .. } => (1, 3),
+            BlockBody::DeviceVendor { .. } => (2, 1),
+            BlockBody::NameOfStation { .. } => (2, 2),
+            BlockBody::DeviceId { .. } => (2, 3),
+            BlockBody::DeviceRole { .. } => (2, 4),
+            BlockBody::DeviceOptions { .. } => (2, 5),
+            BlockBody::AliasName { .. } => (2, 6),
+            BlockBody::DeviceInstance { .. } => (2, 7),
+            BlockBody::OemDeviceId { .. } => (2, 8),
+            BlockBody::RsiProperties { .. } => (2, 10),
+            BlockBody::ControlSignal { .. } => (5, 3),
+            BlockBody::ControlResponse { .. } => (5, 4),
+            BlockBody::DeviceInitiative { .. } => (6, 1),
+            BlockBody::AllSelector => (0xFF, 0xFF),
+            BlockBody::Requested | BlockBody::Unknown { .. } | BlockBody::Damaged { .. } => return None,
+        })
+    }
+
     /// The kind's name, for a message.
     pub fn kind(&self) -> &'static str {
         match self {
@@ -477,52 +519,88 @@ fn push_block(out: &mut Vec<u8>, block: &Block) -> Result<(), DcpError> {
 }
 
 impl DcpPdu {
-    /// The PROFINET payload (frame id onward). A Get request is written as its pairs; every
-    /// other PDU as its blocks, each with its info word when it has one. A block's declared
-    /// length is always that of what it holds: a `Damaged` overrun is written as the bytes it
-    /// kept, so it decodes as a whole block.
+    /// The PROFINET payload (frame id onward) of any PDU but a Set request, which is written only
+    /// by `frame`, with the one device it goes to. A Get request is written as its pairs; every
+    /// other PDU as its blocks, each with its info word exactly where this PDU carries one (a
+    /// damaged block as it was heard); a typed block only under its own option and suboption. A
+    /// block's declared length is that of what it holds: a `Damaged` overrun is written as the
+    /// bytes it kept, so it decodes as a whole block. A PDU past 1500 bytes is refused.
     pub fn encode(&self) -> Result<Vec<u8>, DcpError> {
         if self.is_set_request() {
-            for b in &self.blocks {
-                check_set_block(b)?;
-            }
+            return Err(DcpError::SetNeedsTarget);
         }
+        self.write()
+    }
+
+    fn write(&self) -> Result<Vec<u8>, DcpError> {
+        let (service, service_type) = (self.service.to_u8(), self.service_type.to_u8());
         let mut blocks = Vec::new();
-        if self.service == Service::Get && self.service_type == ServiceType::Request {
+        if self.is_get_request() {
             for b in &self.blocks {
+                if b.body != BlockBody::Requested || b.info.is_some() {
+                    return Err(DcpError::Misplaced { option: b.option, suboption: b.suboption, body: b.body.kind() });
+                }
                 blocks.push(b.option);
                 blocks.push(b.suboption);
             }
         } else {
             for b in &self.blocks {
+                if b.body == BlockBody::Requested || b.body.code().is_some_and(|c| c != (b.option, b.suboption)) {
+                    return Err(DcpError::Misplaced { option: b.option, suboption: b.suboption, body: b.body.kind() });
+                }
+                let due = carries_info(service, service_type, b.option, b.suboption);
+                if !matches!(b.body, BlockBody::Damaged { .. }) && b.info.is_some() != due {
+                    return Err(DcpError::InfoWord { option: b.option, suboption: b.suboption, carried: b.info.is_some() });
+                }
                 push_block(&mut blocks, b)?;
             }
         }
         blocks.extend_from_slice(&self.trailing);
-        let data_len = u16::try_from(blocks.len()).map_err(|_| DcpError::PduTooLong(blocks.len()))?;
-        let mut out = Vec::with_capacity(12 + blocks.len());
+        let total = 12 + blocks.len();
+        if total > ether::MAX_PAYLOAD {
+            return Err(DcpError::PduTooLong(total));
+        }
+        let mut out = Vec::with_capacity(total);
         out.extend_from_slice(&self.frame_id.to_be_bytes());
-        out.push(self.service.to_u8());
-        out.push(self.service_type.to_u8());
+        out.push(service);
+        out.push(service_type);
         out.extend_from_slice(&self.xid.to_be_bytes());
         out.extend_from_slice(&self.response_delay.to_be_bytes());
-        out.extend_from_slice(&data_len.to_be_bytes());
+        out.extend_from_slice(&(blocks.len() as u16).to_be_bytes());
         out.extend_from_slice(&blocks);
         Ok(out)
     }
 
-    /// The whole Ethernet frame, untagged, padded to 60 bytes. A Set request to a group address
-    /// is refused, as is anything `encode` refuses.
+    /// The whole Ethernet frame, untagged, padded to 60 bytes. A Set request is written here
+    /// alone, and only to one device, only of what the gate lets through, with no trailing bytes;
+    /// a Hello only to its group address; anything else as `encode` writes it.
     pub fn frame(&self, dst: Mac, src: Mac) -> Result<Vec<u8>, DcpError> {
-        if self.is_set_request() && dst.is_multicast() {
-            return Err(DcpError::GroupTarget(dst));
+        if self.is_set_request() {
+            if dst.is_multicast() {
+                return Err(DcpError::GroupTarget(dst));
+            }
+            for b in &self.blocks {
+                check_set_block(b)?;
+            }
+            if !self.trailing.is_empty() {
+                return Err(DcpError::SetTrailing(self.trailing.len()));
+            }
         }
-        Ok(ether::build(dst, src, ETHERTYPE_PROFINET, &self.encode()?)?)
+        if self.service.to_u8() == 6 && dst != Mac::DCP_HELLO_MULTICAST {
+            return Err(DcpError::HelloTarget(dst));
+        }
+        Ok(ether::build(dst, src, ETHERTYPE_PROFINET, &self.write()?)?)
     }
 
-    /// A Set request: the one kind of PDU that configures a device.
+    /// A Set request, by the bytes it travels as (service 4, the selection bit clear): the one kind
+    /// of PDU that configures a device, however its service and type were spelled.
     pub fn is_set_request(&self) -> bool {
-        self.service == Service::Set && self.service_type == ServiceType::Request
+        self.service.to_u8() == 4 && self.service_type.to_u8() & 1 == 0
+    }
+
+    /// A Get request, by the bytes it travels as: bare option and suboption pairs.
+    pub fn is_get_request(&self) -> bool {
+        self.service.to_u8() == 3 && self.service_type.to_u8() & 1 == 0
     }
 
     fn request(frame_id: u16, service: Service, xid: u32, response_delay: u16, blocks: Vec<Block>) -> DcpPdu {

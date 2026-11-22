@@ -38,9 +38,22 @@ pub fn isolated<F: FnOnce()>(test: &str, pairs: &[(&str, &str)], body: F) {
         let _ = std::io::Write::flush(&mut std::io::stdout());
         std::process::exit(0);
     }
-    let out = match child(test).output() {
+    // The name is the calling test's own (libtest names a test's thread after it), and a test
+    // makes one private network: a copied test with another's name, or a second call, would run
+    // a body that is not this one, or none.
+    let own = std::thread::current().name().map(str::to_string);
+    if own.as_deref() != Some(test) {
+        panic!("netns::isolated({test:?}) was called from the test {own:?}: a test passes its own name");
+    }
+    thread_local! {
+        static MADE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if MADE.with(|m| m.replace(true)) {
+        panic!("{test} asked for a second private network: one per test");
+    }
+    let out = match run_child(test) {
         Ok(out) => out,
-        Err(e) => panic!("the private network for {test} could not be made: {e}\n{}", diagnosis()),
+        Err(why) => panic!("{why}"),
     };
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -49,6 +62,13 @@ pub fn isolated<F: FnOnce()>(test: &str, pairs: &[(&str, &str)], body: F) {
         let what = if out.status.success() { "the body never ran (is the test's name exact?)" } else { "the body failed" };
         panic!("{test} in its private network: {what} ({})\n--- its stdout ---\n{stdout}\n--- its stderr ---\n{stderr}", out.status);
     }
+}
+
+/// Run the test binary again for the test named `test` in a private network of its own, and hand
+/// back what it printed; where the network cannot be made, why, with what the system says of
+/// user namespaces.
+pub fn run_child(test: &str) -> Result<std::process::Output, String> {
+    child(test).output().map_err(|e| format!("the private network for {test} could not be made: {e}\n{}", diagnosis()))
 }
 
 /// The test binary, run again for one test, unshared into a user and network namespace of its

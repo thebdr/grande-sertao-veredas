@@ -30,8 +30,12 @@ fn a_cyclic_frame_is_its_id_its_data_and_its_status_to_the_byte() {
     assert_eq!(wire.len(), 64);
     let e = ether::parse(&wire).unwrap();
     assert_eq!((e.vlan, CyclicFrame::decode(e.payload).unwrap()), (Some(rt::CYCLIC_TAG), f.clone()));
-    // Untagged, 60 bytes exactly.
+    // Untagged, 60 bytes exactly; with another tag, that tag.
     assert_eq!(f.frame(DEVICE, CONTROLLER, None).unwrap().len(), 60);
+    let other = VlanTag { priority: 5, drop_eligible: false, id: 100 };
+    let wire = f.frame(DEVICE, CONTROLLER, Some(other)).unwrap();
+    assert_eq!(&wire[12..18], &[0x81, 0x00, 0xA0, 0x64, 0x88, 0x92]);
+    assert_eq!(ether::parse(&wire).unwrap().vlan, Some(other));
     // The longest data.
     let long = frame(0x0100, vec![0xA5; 1440], 0x35);
     let back = CyclicFrame::decode(&long.encode().unwrap()).unwrap();
@@ -54,7 +58,11 @@ fn a_frame_id_is_read_by_its_range() {
         (0xFBFF, FrameClass::Rtc1Legacy),
         (0xFC00, FrameClass::Other),
         (0xFC01, FrameClass::AlarmHigh),
+        (0xFC02, FrameClass::Other),
+        (0xFDFF, FrameClass::Other),
+        (0xFE00, FrameClass::Other),
         (0xFE01, FrameClass::AlarmLow),
+        (0xFE02, FrameClass::Other),
         (0xFEFB, FrameClass::Other),
         (0xFEFC, FrameClass::Dcp),
         (0xFEFF, FrameClass::Dcp),
@@ -111,7 +119,19 @@ fn the_status_bits_are_named() {
     }
     assert_eq!(names(DataStatus(0x48)), [false; 6], "bits 3 and 6 are reserved");
     assert!(IoxStatus::GOOD.good() && !IoxStatus::BAD.good());
-    assert_eq!((IoxStatus(0xE1).instance(), IoxStatus(0xE1).extension(), IoxStatus(0x40).instance()), (3, true, 2));
+    // Each bit alone: good at 7, who decided at 6 and 5, extension at 0; 1 to 4 reserved.
+    let iox = |b: u8| (IoxStatus(b).good(), IoxStatus(b).instance(), IoxStatus(b).extension());
+    for (b, want) in [
+        (0x80, (true, 0, false)),
+        (0x60, (false, 3, false)),
+        (0x40, (false, 2, false)),
+        (0x20, (false, 1, false)),
+        (0x01, (false, 0, true)),
+        (0x1E, (false, 0, false)),
+        (0xE1, (true, 3, true)),
+    ] {
+        assert_eq!(iox(b), want, "{b:#04x}");
+    }
 }
 
 #[test]
@@ -149,4 +169,24 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
     assert_eq!(bits(&read[3]), as_str(["0", "false", "1", "1", "1", "0"]));
     let ts: Vec<String> = read.iter().map(|p| p.one(r, "pn_rt.transfer_status")).collect();
     assert_eq!(ts, ["0", "0", "0", "0"]);
+
+    // Statuses that set each bit apart from the others, the dissector's reading of each bit held
+    // to this codec's accessor; and a frame with another tag.
+    let statuses = [0x15u8, 0x25, 0x06, 0x84, 0x35, 0x01];
+    let frames: Vec<Vec<u8>> = statuses
+        .iter()
+        .map(|&ds| frame(0xC001, (0..40).collect(), ds).frame(DEVICE, CONTROLLER, Some(VlanTag { priority: 5, drop_eligible: false, id: 100 })).unwrap())
+        .collect();
+    let read = common::dissect(&frames);
+    let flag = |s: String| s == "1" || s == "true";
+    for (p, &ds) in read.iter().zip(&statuses) {
+        assert_eq!(p.complaints(), Vec::<String>::new(), "{ds:#04x}");
+        let d = DataStatus(ds);
+        let theirs: Vec<bool> = ["pn_rt.ds_primary", "pn_rt.ds_redundancy", "pn_rt.ds_valid", "pn_rt.ds_operate", "pn_rt.ds_ok", "pn_rt.ds_ignore"]
+            .iter()
+            .map(|f| flag(p.one(r, f)))
+            .collect();
+        assert_eq!(theirs, [d.primary(), d.redundancy(), d.valid(), d.running(), d.station_ok(), d.ignore()], "{ds:#04x}");
+        assert_eq!((p.one("vlan", "vlan.priority"), p.one("vlan", "vlan.id")), ("5".into(), "100".into()));
+    }
 }

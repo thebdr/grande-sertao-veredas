@@ -260,10 +260,34 @@ fn what_a_tlv_cannot_carry_is_refused_never_cut() {
         assert_eq!(lldp::encode(&pdu), want, "{subtype} {len}");
     }
     let mut pdu = base();
-    pdu.mgmt_addrs = vec![MgmtAddr { subtype: 1, addr: vec![1; 4], if_subtype: 1, if_number: 0, oid: vec![0; 255] }];
+    pdu.mgmt_addrs = vec![MgmtAddr { subtype: 1, addr: vec![1; 4], if_subtype: 1, if_number: 0, oid: vec![0; 128] }];
     assert!(lldp::encode(&pdu).is_ok());
     pdu.mgmt_addrs[0].oid.push(0);
-    assert_eq!(lldp::encode(&pdu), length("an OID", 0, 255, 256));
+    assert_eq!(lldp::encode(&pdu), length("an OID", 0, 128, 129));
+    // An id of the MAC kind is six bytes; one of the network-address kind is its family's length.
+    let id_form = |what, subtype, len| Err(LldpError::IdForm { what, subtype, len });
+    for (chassis, want) in [
+        (ChassisId::Other { subtype: 4, data: vec![1; 5] }, id_form("a chassis id", 4, 5)),
+        (ChassisId::Other { subtype: 4, data: vec![1; 7] }, id_form("a chassis id", 4, 7)),
+        (ChassisId::Network { data: vec![1, 10] }, id_form("a chassis id", 5, 2)),
+        (ChassisId::Network { data: vec![1] }, id_form("a chassis id", 5, 1)),
+        (ChassisId::Network { data: vec![2, 1, 2, 3, 4] }, id_form("a chassis id", 5, 5)),
+        (ChassisId::Network { data: vec![1, 10, 0, 0, 1] }, Ok(())),
+        (ChassisId::Network { data: vec![9, 1, 2] }, Ok(())),
+    ] {
+        let mut pdu = base();
+        pdu.chassis = chassis.clone();
+        assert_eq!(lldp::encode(&pdu).map(|_| ()), want, "{chassis:?}");
+    }
+    for (port, want) in [
+        (PortId::Other { subtype: 3, data: vec![1; 5] }, id_form("a port id", 3, 5)),
+        (PortId::Other { subtype: 4, data: vec![1, 10] }, id_form("a port id", 4, 2)),
+        (PortId::Other { subtype: 4, data: vec![1, 10, 0, 0, 1] }, Ok(())),
+    ] {
+        let mut pdu = base();
+        pdu.port = port.clone();
+        assert_eq!(lldp::encode(&pdu).map(|_| ()), want, "{port:?}");
+    }
     // And a PDU past the frame.
     let mut pdu = base();
     pdu.unknown = vec![(9, vec![0; 500]), (10, vec![0; 500]), (11, vec![0; 500])];
@@ -326,6 +350,114 @@ fn a_sender_leaving_says_a_time_to_live_of_zero() {
     assert_eq!(back.port.short(), "port-001");
 }
 
+/// A PDU's TLVs as (type, value) up to its End or its last whole TLV, sorted, and its End's value.
+type Tlvs = (Vec<(u8, Vec<u8>)>, Option<Vec<u8>>);
+fn tlvs(p: &[u8]) -> Tlvs {
+    let (mut out, mut off) = (Vec::new(), 0);
+    while off + 2 <= p.len() {
+        let head = u16::from_be_bytes([p[off], p[off + 1]]);
+        let (t, len) = ((head >> 9) as u8, usize::from(head & 0x1FF));
+        if off + 2 + len > p.len() {
+            break;
+        }
+        let v = p[off + 2..off + 2 + len].to_vec();
+        off += 2 + len;
+        if t == 0 {
+            out.sort();
+            return (out, Some(v));
+        }
+        out.push((t, v));
+    }
+    out.sort();
+    (out, None)
+}
+
+#[test]
+fn every_tlv_the_codec_reads_kept_when_it_repeats_or_its_length_is_off_by_one() {
+    let head = [tlv(1, b"\x07a"), tlv(2, b"\x07p")].concat();
+    let org = |oui: [u8; 3], sub: u8, d: Vec<u8>| tlv(127, &[&oui[..], &[sub], &d].concat());
+    let pn = [0x00, 0x0E, 0xCF];
+    let ieee1 = [0x00, 0x80, 0xC2];
+    let ieee3 = [0x00, 0x12, 0x0F];
+    // (the TLV of the right size, the same type one byte short, one byte long)
+    type Make = Box<dyn Fn(usize) -> Vec<u8>>;
+    let cases: Vec<(&str, Make)> = vec![
+        ("ttl", Box::new(|n| tlv(3, &vec![0x14; n]))),
+        ("capabilities", Box::new(|n| tlv(7, &vec![0x01; n]))),
+        ("delays", Box::new(move |n| org(pn, 1, vec![1; n]))),
+        ("port status", Box::new(move |n| org(pn, 2, vec![1; n]))),
+        ("mrp", Box::new(move |n| org(pn, 4, vec![1; n]))),
+        ("chassis mac", Box::new(move |n| org(pn, 5, vec![2; n]))),
+        ("port vlan", Box::new(move |n| org(ieee1, 1, vec![1; n]))),
+        ("mac/phy", Box::new(move |n| org(ieee3, 1, vec![1; n]))),
+    ];
+    let sizes = [("ttl", 2), ("capabilities", 4), ("delays", 20), ("port status", 4), ("mrp", 18), ("chassis mac", 6), ("port vlan", 2), ("mac/phy", 5)];
+    for ((name, make), (_, size)) in cases.iter().zip(sizes) {
+        let ttl = if *name == "ttl" { vec![] } else { tlv(3, &[0, 20]) };
+        for body in [
+            vec![make(size), make(size)],
+            vec![make(size), make(size - 1)],
+            vec![make(size), make(size + 1)],
+        ] {
+            let mut p = [head.clone(), ttl.clone()].concat();
+            for b in &body {
+                p.extend_from_slice(b);
+            }
+            p.extend(tlv(0, &[]));
+            let pdu = lldp::decode(&p).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let written = lldp::encode(&pdu).unwrap();
+            assert_eq!(tlvs(&written), tlvs(&p), "{name}: the second {} kept", body[1].len());
+            let kept = pdu.unknown.len() + pdu.unknown_org.len();
+            assert_eq!(kept, 1, "{name}: {pdu:?}");
+        }
+    }
+    // A management address with a byte after its OID, and a MAC id of seven bytes: kept unread.
+    let p = [head.clone(), tlv(3, &[0, 20]), tlv(8, &[5, 1, 10, 0, 0, 1, 2, 0, 0, 0, 1, 1, 0x2B, 0xFF]), tlv(0, &[])].concat();
+    let pdu = lldp::decode(&p).unwrap();
+    assert_eq!((pdu.mgmt_addrs.len(), pdu.unknown.clone()), (0, vec![(8, vec![5, 1, 10, 0, 0, 1, 2, 0, 0, 0, 1, 1, 0x2B, 0xFF])]));
+    let p = [tlv(1, &[4, 2, 0, 0, 0, 0, 1, 9]), head.clone(), tlv(3, &[0, 20]), tlv(0, &[])].concat();
+    let pdu = lldp::decode(&p).unwrap();
+    assert_eq!(pdu.chassis, ChassisId::Local { id: "a".into() });
+    assert_eq!(pdu.unknown, [(1, vec![4, 2, 0, 0, 0, 0, 1, 9])]);
+    assert_eq!(lldp::decode(&[tlv(1, &[4, 2, 0, 0, 0, 0, 1, 9]), tlv(2, b"\x07p"), tlv(3, &[0, 1])].concat()), Err(LldpError::Missing("chassis id")));
+    // An OID of 129 bytes is past what the TLV carries (802.1AB: 167 bytes in all): kept unread.
+    let mut m = vec![5, 1, 10, 0, 0, 1, 2, 0, 0, 0, 1, 129];
+    m.extend_from_slice(&[0x2B; 129]);
+    let p = [head, tlv(3, &[0, 20]), tlv(8, &m), tlv(0, &[])].concat();
+    let pdu = lldp::decode(&p).unwrap();
+    assert_eq!((pdu.mgmt_addrs.len(), pdu.unknown.len()), (0, 1));
+}
+
+#[test]
+fn the_dissectors_read_text_as_ascii_and_stop_at_a_nul() {
+    // The codec writes the text it is given; the dissector reads printable ASCII as it is, stops
+    // at a NUL (warning of what follows), and shows other bytes as replacement characters.
+    let mut nul = LldpPdu::new(ChassisId::Local { id: "a".into() }, PortId::Local { id: "p".into() }, 20);
+    nul.sys_desc = Some("a\0b".into());
+    let mut accented = LldpPdu::new(ChassisId::Local { id: "a".into() }, PortId::Local { id: "porta-ü".into() }, 20);
+    accented.sys_name = Some("estação".into());
+    let read = common::dissect(&[lldp::frame(PORT, &nul).unwrap(), lldp::frame(PORT, &accented).unwrap()]);
+    assert_eq!(read[0].one("lldp", "lldp.tlv.system.desc"), "a");
+    assert_eq!(read[0].complaints().len(), 1, "{:?}", read[0].complaints());
+    assert_eq!(lldp::decode(&lldp::encode(&nul).unwrap()).unwrap().sys_desc.as_deref(), Some("a\0b"));
+    assert_eq!(read[1].complaints(), Vec::<String>::new());
+    assert_ne!(read[1].one("lldp", "lldp.tlv.system.name"), "estação");
+    assert_ne!(read[1].one("lldp", "lldp.port.id"), "porta-ü");
+    assert_eq!(lldp::decode(&lldp::encode(&accented).unwrap()).unwrap(), accented);
+}
+
+#[test]
+fn a_short_pdu_with_no_end_keeps_its_absence_through_encode_not_through_a_padded_frame() {
+    let p = [tlv(1, b"\x07a"), tlv(2, b"\x07p"), tlv(3, &[0, 20])].concat();
+    let pdu = lldp::decode(&p).unwrap();
+    assert_eq!(pdu.end, None);
+    assert_eq!(lldp::encode(&pdu).unwrap(), p);
+    // In a frame, the pad's zeros read as an End: the absence does not survive a frame under 60
+    // bytes.
+    let f = lldp::frame(PORT, &pdu).unwrap();
+    assert_eq!(lldp::decode(ether::parse(&f).unwrap().payload).unwrap().end, Some(vec![]));
+}
+
 #[test]
 fn any_bytes_decode_without_a_panic_and_rewrite_to_themselves() {
     let mut seeds = vec![lldp::encode(&profinet_pdu()).unwrap()];
@@ -363,8 +495,12 @@ fn any_bytes_decode_without_a_panic_and_rewrite_to_themselves() {
         for cut in 0..=s.len() {
             if let Ok(p0) = lldp::decode(&s[..cut]) {
                 decoded += 1;
-                let p1 = lldp::decode(&lldp::encode(&p0).unwrap()).unwrap();
+                let written = lldp::encode(&p0).unwrap();
+                let p1 = lldp::decode(&written).unwrap();
                 assert_eq!(p0, p1, "{:?}", &s[..cut]);
+                // Every TLV heard is written again, the same bytes, whatever their order; the End
+                // as it was.
+                assert_eq!(tlvs(&s[..cut]), tlvs(&written), "{:?}", &s[..cut]);
             }
         }
     }

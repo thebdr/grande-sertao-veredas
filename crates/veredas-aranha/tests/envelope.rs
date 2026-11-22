@@ -24,6 +24,11 @@ fn a_mac_reads_its_three_spellings_in_either_case_and_prints_one() {
     assert!(!m.is_multicast());
     assert!(m.is_local());
     assert!(!mac("00:0e:cf:12:34:56").is_local());
+    // The locally administered bit is bit 1 of the first octet, whatever the others.
+    for (s, local) in [("06:00:00:00:00:01", true), ("0a:00:00:00:00:01", true), ("03:00:00:00:00:01", true), ("01:00:00:00:00:01", false), ("04:00:00:00:00:01", false)] {
+        assert_eq!(mac(s).is_local(), local, "{s}");
+    }
+    assert!(Mac::BROADCAST.is_local() && !Mac::DCP_MULTICAST.is_local());
 }
 
 #[test]
@@ -49,6 +54,10 @@ fn a_mac_refuses_every_other_spelling_with_the_text_it_got() {
         "aabb.ccdd.eeff.0000",
         "éabb.ccdd.eeff",
         "02:0e:cf:12:34:٥٦",
+        // Non-ASCII groups exactly as wide, in bytes, as a group: refused by the digit check.
+        "aéb.ccdd.eeff",
+        "€a.ccdd.eeff",
+        "02:0e:cf:12:34:é",
     ] {
         assert_eq!(s.parse::<Mac>(), Err(MacParseError(s.to_string())), "{s:?}");
     }
@@ -61,9 +70,10 @@ fn a_mac_refuses_every_other_spelling_with_the_text_it_got() {
 #[test]
 fn group_addresses_are_never_one_device() {
     assert_eq!(Mac::DCP_MULTICAST.to_string(), "01:0e:cf:00:00:00");
+    assert_eq!(Mac::DCP_HELLO_MULTICAST.to_string(), "01:0e:cf:00:00:01");
     assert_eq!(Mac::LLDP_MULTICAST.to_string(), "01:80:c2:00:00:0e");
     assert_eq!(Mac::BROADCAST.to_string(), "ff:ff:ff:ff:ff:ff");
-    for m in [Mac::DCP_MULTICAST, Mac::LLDP_MULTICAST, Mac::BROADCAST, mac("03:00:00:00:00:00")] {
+    for m in [Mac::DCP_MULTICAST, Mac::DCP_HELLO_MULTICAST, Mac::LLDP_MULTICAST, Mac::BROADCAST, mac("03:00:00:00:00:00")] {
         assert!(m.is_multicast(), "{m}");
     }
     assert!(!mac("fe:ff:ff:ff:ff:ff").is_multicast());
@@ -154,6 +164,19 @@ fn a_length_field_is_read_as_a_length_never_as_an_ethertype() {
     assert_eq!((e.ethertype, &e.payload[..3]), (0x0026, &[0x42, 0x42, 0x03][..]));
     let lldp = ether::build(Mac::LLDP_MULTICAST, mac("02:00:00:00:00:02"), 0x88CC, &[0, 0]).unwrap();
     assert!(!ether::parse(&lldp).unwrap().is_length());
+    // At the boundary, tagged and not: below 0x0600 a length, from it an EtherType.
+    for (t, length) in [(0x05FFu16, true), (0x05DC, true), (0x0000, true), (0x0600, false), (0x0800, false), (0x86DD, false)] {
+        let mut untagged = vec![2, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 2];
+        untagged.extend_from_slice(&t.to_be_bytes());
+        untagged.resize(60, 0);
+        let mut tagged = vec![2, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 2, 0x81, 0x00, 0x00, 0x05];
+        tagged.extend_from_slice(&t.to_be_bytes());
+        tagged.resize(60, 0);
+        for f in [&untagged, &tagged] {
+            let e = ether::parse(f).unwrap();
+            assert_eq!((e.ethertype, e.is_length()), (t, length), "{t:#06x} {:?}", e.vlan);
+        }
+    }
 }
 
 #[test]
@@ -180,6 +203,11 @@ fn the_dissectors_read_the_envelope_as_it_was_written() {
         ether::build_tagged(dst, src, Some(VlanTag { priority: 3, drop_eligible: true, id: 1234 }), 0x88B5, &[0; 1496]).unwrap(),
         ether::build_tagged(dst, src, Some(VlanTag { priority: 6, drop_eligible: false, id: 0 }), 0x88B5, &[0; 1500]).unwrap(),
         ether::build(Mac::LLDP_MULTICAST, src, 0x88CC, &[0x02, 0x02, 0x07, 0x61, 0x04, 0x02, 0x07, 0x70, 0x06, 0x02, 0x00, 0x14, 0, 0]).unwrap(),
+        // PROFINET's EtherType, tagged as a cyclic frame rides and untagged as DCP does.
+        ether::build_tagged(dst, src, Some(VlanTag { priority: 6, drop_eligible: false, id: 0 }), 0x8892, &[0x80, 0x00]).unwrap(),
+        ether::build(Mac::DCP_MULTICAST, src, 0x8892, &[0xFE, 0xFE, 5, 0, 0, 0, 0, 1, 0, 1, 0, 4, 0xFF, 0xFF, 0, 0]).unwrap(),
+        // LLDP's, tagged.
+        ether::build_tagged(Mac::LLDP_MULTICAST, src, Some(VlanTag { priority: 7, drop_eligible: false, id: 9 }), 0x88CC, &[0x02, 0x02, 0x07, 0x61, 0x04, 0x02, 0x07, 0x70, 0x06, 0x02, 0x00, 0x14, 0, 0]).unwrap(),
     ];
     let read = common::dissect(&frames);
     for (i, p) in read.iter().enumerate() {
@@ -201,4 +229,11 @@ fn the_dissectors_read_the_envelope_as_it_was_written() {
     assert_eq!(read[3].one("frame", "frame.len"), "1518");
     assert_eq!(read[4].one("eth", "eth.type"), "35020");
     assert!(read[4].has("lldp"));
+    assert_eq!(read[5].one("vlan", "vlan.priority"), "6");
+    assert_eq!(read[5].one("vlan", "vlan.etype"), "34962");
+    assert_eq!(read[5].one("pn_rt", "pn_rt.frame_id"), "32768");
+    assert_eq!(read[6].one("eth", "eth.type"), "34962");
+    assert_eq!(read[6].one("pn_dcp", "pn_dcp.service_id"), "5");
+    assert_eq!((read[7].one("vlan", "vlan.priority"), read[7].one("vlan", "vlan.id"), read[7].one("vlan", "vlan.etype")), ("7".into(), "9".into(), "35020".into()));
+    assert!(read[7].has("lldp"));
 }

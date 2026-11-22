@@ -28,6 +28,22 @@ pub const MAX_TLV_VALUE: usize = 511;
 /// The longest chassis id, port id, port description, system name or description (802.1AB).
 pub const MAX_TEXT: usize = 255;
 
+/// Does an id (subtype, then data) have the form its subtype gives it: a MAC of six bytes, a
+/// network address of its family's length (a family byte, then the address)?
+fn id_fits(mac_subtype: u8, network_subtype: u8, v: &[u8]) -> bool {
+    let data = &v[1..];
+    if v[0] == mac_subtype {
+        data.len() == 6
+    } else if v[0] == network_subtype {
+        data.len() >= 2 && family_len(data[0]).is_none_or(|n| n == data.len() - 1)
+    } else {
+        true
+    }
+}
+
+/// The longest OID a management address carries (802.1AB: the TLV is at most 167 bytes).
+pub const MAX_OID: usize = 128;
+
 /// The address length a management address of this family has: IPv4, IPv6, an 802 MAC.
 fn family_len(subtype: u8) -> Option<usize> {
     match subtype {
@@ -303,6 +319,8 @@ pub enum LldpError {
     Length { what: &'static str, min: usize, max: usize, len: usize },
     #[error("a management address of family {subtype} is {want} bytes; this one is {len}")]
     BadAddress { subtype: u8, want: usize, len: usize },
+    #[error("{what} of subtype {subtype} is a MAC of 6 bytes or a network address of its family's length; this one is {len} bytes")]
+    IdForm { what: &'static str, subtype: u8, len: usize },
     #[error("{0}")]
     Ether(#[from] EtherError),
 }
@@ -337,11 +355,11 @@ pub fn decode(payload: &[u8]) -> Result<LldpPdu, LldpError> {
                 pdu.end = Some(v.to_vec());
                 break;
             }
-            1 if chassis.is_none() && (2..=256).contains(&v.len()) => {
+            1 if chassis.is_none() && (2..=256).contains(&v.len()) && id_fits(4, 5, v) => {
                 chassis = Some(ChassisId::decode(v));
                 true
             }
-            2 if port.is_none() && (2..=256).contains(&v.len()) => {
+            2 if port.is_none() && (2..=256).contains(&v.len()) && id_fits(3, 4, v) => {
                 port = Some(PortId::decode(v));
                 true
             }
@@ -420,7 +438,7 @@ fn decode_mgmt(v: &[u8]) -> Option<MgmtAddr> {
     }
     let rest = &v[1 + alen..];
     let oid_len = usize::from(rest[5]);
-    if rest.len() != 6 + oid_len || family_len(v[1]).is_some_and(|n| n != alen - 1) {
+    if rest.len() != 6 + oid_len || oid_len > MAX_OID || family_len(v[1]).is_some_and(|n| n != alen - 1) {
         return None;
     }
     Some(MgmtAddr {
@@ -465,15 +483,21 @@ fn check_len(what: &'static str, min: usize, max: usize, len: usize) -> Result<(
 /// Encode a PDU (no Ethernet header): the mandatory TLVs first, in the standard's order, then
 /// the optional ones, the organisation TLVs, those kept unread, and the End TLV as the PDU had it
 /// (none when it had none). What a TLV cannot carry is refused, never cut: a chassis or port id
-/// outside 1 to 255 bytes, a description or system name past 255, a management address outside
-/// 1 to 31 bytes or not its family's length, an OID past 255, any value past 511, a kept TLV of
-/// type 0 or past 127.
+/// outside 1 to 255 bytes, or a MAC id not of 6 bytes or a network-address id not of its family's
+/// length; a description or system name past 255; a management address outside 1 to 31 bytes or
+/// not its family's length; an OID past 128; any value past 511; a kept TLV of type 0 or past 127.
 pub fn encode(pdu: &LldpPdu) -> Result<Vec<u8>, LldpError> {
     let mut out = Vec::new();
     let chassis = pdu.chassis.encode();
     check_len("a chassis id", 1, MAX_TEXT, chassis.len() - 1)?;
+    if !id_fits(4, 5, &chassis) {
+        return Err(LldpError::IdForm { what: "a chassis id", subtype: chassis[0], len: chassis.len() - 1 });
+    }
     let port = pdu.port.encode();
     check_len("a port id", 1, MAX_TEXT, port.len() - 1)?;
+    if !id_fits(3, 4, &port) {
+        return Err(LldpError::IdForm { what: "a port id", subtype: port[0], len: port.len() - 1 });
+    }
     push_tlv(&mut out, 1, &chassis)?;
     push_tlv(&mut out, 2, &port)?;
     push_tlv(&mut out, 3, &pdu.ttl.to_be_bytes())?;
@@ -491,7 +515,7 @@ pub fn encode(pdu: &LldpPdu) -> Result<Vec<u8>, LldpError> {
         if let Some(want) = family_len(m.subtype).filter(|&n| n != m.addr.len()) {
             return Err(LldpError::BadAddress { subtype: m.subtype, want, len: m.addr.len() });
         }
-        check_len("an OID", 0, 255, m.oid.len())?;
+        check_len("an OID", 0, MAX_OID, m.oid.len())?;
         let mut v = vec![(m.addr.len() + 1) as u8, m.subtype];
         v.extend_from_slice(&m.addr);
         v.push(m.if_subtype);

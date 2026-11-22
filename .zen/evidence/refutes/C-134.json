@@ -1,0 +1,13 @@
+{
+  "clause": "C-134",
+  "verdict": "refuted",
+  "ranAt": "2026-11-22T19:19:43.566Z",
+  "headCommit": "6cf8765b0fb5b6c861614c4f5b25bc933d70c09a",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/raw_link.rs",
+      "file": "crates/veredas-aranha/tests/raw_link.rs",
+      "symbolSha": "529a21870e2d896680132224e1981dfdfedec05d9862505d90e5a3c686660d9f"
+    }
+  ]
+}

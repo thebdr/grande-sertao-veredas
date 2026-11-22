@@ -83,6 +83,60 @@ fn breaches(targets: &[(String, Vec<String>, Vec<String>)]) -> Vec<String> {
     out
 }
 
+/// Every target's source file, as cargo lists it.
+fn target_sources(dir: &Path) -> Vec<PathBuf> {
+    let meta = metadata(&dir.join("Cargo.toml"), &["--no-deps", "--offline"]);
+    let manifest = dir.join("Cargo.toml").canonicalize().unwrap();
+    let package = meta["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| Path::new(p["manifest_path"].as_str().unwrap()).canonicalize().unwrap() == manifest)
+        .unwrap()
+        .clone();
+    package["targets"].as_array().unwrap().iter().map(|t| PathBuf::from(t["src_path"].as_str().unwrap())).collect()
+}
+
+/// The ways a crate reads a source file from anywhere: the include macros and a module's path
+/// attribute, spelled here in pieces so that this file holds none of them whole.
+fn pulls_in(text: &str) -> Vec<String> {
+    let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    let forms = [format!("{}{}", "inclu", "de!("), format!("{}{}", "inclu", "de_str!("), format!("{}{}", "inclu", "de_bytes!("), format!("{}{}", "#[pa", "th="), format!("{}{}", ",pa", "th=")];
+    forms.iter().filter(|f| flat.contains(f.as_str())).cloned().collect()
+}
+
+#[test]
+fn aranha_compiles_in_no_file_from_outside_its_folder() {
+    let dir = manifest_dir().canonicalize().unwrap();
+    for src in target_sources(&dir) {
+        assert!(src.canonicalize().unwrap().starts_with(&dir), "a target outside the crate: {}", src.display());
+    }
+    let mut files = Vec::new();
+    crate_files(&dir, &mut files);
+    let pulling: Vec<String> = files
+        .iter()
+        .filter(|f| f.extension().is_some_and(|e| e == "rs"))
+        .flat_map(|f| pulls_in(&std::fs::read_to_string(f).unwrap()).into_iter().map(move |p| format!("{}: {p}", f.display())))
+        .collect();
+    assert_eq!(pulling, Vec::<String>::new());
+    // Both checks can fail: a test target whose path leaves the folder, and each form of pulling in.
+    let planted = planted("outside", &[("Cargo.toml", manifest("[[test]]\nname = \"outside\"\npath = \"../outside.rs\"\n")), ("src/lib.rs", String::new())]);
+    std::fs::write(planted.parent().unwrap().join("outside.rs"), "").unwrap();
+    let here = planted.canonicalize().unwrap();
+    assert!(target_sources(&planted).iter().any(|s| !s.canonicalize().unwrap().starts_with(&here)));
+    std::fs::remove_dir_all(&planted).unwrap();
+    let inc = "inclu";
+    for sample in [
+        format!("{inc}de!(\"x.rs\");"),
+        format!("const T: &str = {inc}de_str! (\"x\");"),
+        format!("{inc}de_bytes!(\"x\")"),
+        format!("#[pa{}th = \"x.rs\"] mod m;", ""),
+        format!("#[cfg_attr(unix, pa{}th = \"x.rs\")] mod m;", ""),
+    ] {
+        assert_eq!(pulls_in(&sample).len(), 1, "{sample}");
+    }
+}
+
 #[test]
 fn aranha_is_one_library_and_at_most_its_one_executable() {
     let t = targets(&manifest_dir());
@@ -281,7 +335,7 @@ struct Split {
 }
 
 impl Split {
-    fn plant(poison: Option<(&str, &str)>) -> Split {
+    fn plant(poisons: &[(&str, &str)]) -> Split {
         let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("codecs-alone");
         let ws = base.join("ws");
         let _ = std::fs::remove_dir_all(&ws);
@@ -309,7 +363,7 @@ impl Split {
         let lib = std::fs::read_to_string(ws.join("rest/src/lib.rs")).unwrap();
         assert_eq!(lib.matches("pub mod profinet;").count(), 1, "{lib}");
         write(ws.join("rest/src/lib.rs"), &lib.replace("pub mod profinet;", "pub use codecs_alone::profinet;"));
-        if let Some((file, text)) = poison {
+        for (file, text) in poisons {
             let f = ws.join(file);
             let old = std::fs::read_to_string(&f).unwrap();
             write(f, &format!("{old}\n{text}\n"));
@@ -343,39 +397,62 @@ fn the_codecs_build_alone_and_the_rest_of_aranha_builds_on_them_as_another_crate
     }
     // Every target of both crates (libraries, unit tests, aranha's integration tests) checks, and
     // the codecs' doctests run.
-    let split = Split::plant(None);
-    // The rest's manifest names what aranha's does, the codecs' crate besides.
-    let deps = |manifest: &Path| -> BTreeSet<(String, String)> {
+    let split = Split::plant(&[]);
+    // The rest's manifest names what aranha's does (each dependency with its kind and platform,
+    // and the features), the codecs' crate besides.
+    let deps = |manifest: &Path| -> (BTreeSet<(String, String, String)>, String) {
         let meta = metadata(manifest, &["--no-deps", "--offline"]);
         let id = root_id(&meta, manifest);
         let package = meta["packages"].as_array().unwrap().iter().find(|p| p["id"] == id.as_str()).unwrap().clone();
-        package["dependencies"]
+        let deps = package["dependencies"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|d| (d["name"].as_str().unwrap().to_string(), d["kind"].as_str().unwrap_or("normal").to_string()))
-            .filter(|(n, _)| n != "codecs-alone")
-            .collect()
+            .map(|d| {
+                let field = |k: &str| d[k].as_str().unwrap_or("").to_string();
+                (field("name"), field("kind"), field("target"))
+            })
+            .filter(|(n, _, _)| n != "codecs-alone")
+            .collect();
+        (deps, package["features"].to_string())
     };
     assert_eq!(deps(&split.base.join("ws/rest/Cargo.toml")), deps(&manifest_dir().join("Cargo.toml")));
-    let out = split.cargo(&["check", "--workspace", "--all-targets"]);
-    assert!(out.status.success(), "the split does not build:\n{}", String::from_utf8_lossy(&out.stderr));
+    // Every configuration a build of aranha may take: every feature on, in both profiles, and for
+    // a second platform (Windows, where the plan's Npcap phase adds code to the rest).
+    let checks: [&[&str]; 3] = [
+        &["check", "--workspace", "--all-targets", "--all-features"],
+        &["check", "--workspace", "--all-targets", "--all-features", "--release"],
+        &["check", "--workspace", "--all-targets", "--all-features", "--target", "x86_64-pc-windows-gnu"],
+    ];
+    for args in checks {
+        let out = split.cargo(args);
+        assert!(out.status.success(), "the split does not build with {args:?}:\n{}", String::from_utf8_lossy(&out.stderr));
+    }
     let out = split.cargo(&["test", "--doc", "-p", "codecs-alone"]);
     assert!(out.status.success(), "the codecs' doctests:\n{}", String::from_utf8_lossy(&out.stderr));
 
     // The check can fail, from either side: a codec test that reaches for the rest of the crate,
     // a codec that reaches for it, and the rest giving a codec type a method of its own (which it
     // could not do to core's type).
-    for (poison, want) in [
-        (("codecs/src/profinet/mod.rs", "#[cfg(test)]\nmod reach {\n    #[test]\n    fn f() {\n        let _ = crate::wire::raw::MAX_FRAME;\n    }\n}"), "wire"),
-        (("codecs/src/profinet/mod.rs", "pub use crate::wire::raw::RawLink;"), "wire"),
-        (("rest/src/lib.rs", "impl crate::profinet::mac::Mac {\n    pub fn heard(&self) -> bool {\n        true\n    }\n}"), "E0116"),
-    ] {
-        let out = Split::plant(Some(poison)).cargo(&["check", "--workspace", "--all-targets"]);
-        let err = String::from_utf8_lossy(&out.stderr).to_string();
-        assert!(!out.status.success() && err.contains(want), "{poison:?} went unseen:\n{err}");
+    let reach = "impl crate::profinet::mac::Mac {\n    pub fn heard(&self) -> bool {\n        true\n    }\n}";
+    let gated = |gate: &str| format!("#[cfg({gate})]\n{reach}");
+    let (windows, release, feature) = (gated("windows"), gated("not(debug_assertions)"), gated("feature = \"npcap\""));
+    let cases: Vec<(Vec<(&str, &str)>, &str)> = vec![
+        (vec![("codecs/src/profinet/mod.rs", "#[cfg(test)]\nmod reach {\n    #[test]\n    fn f() {\n        let _ = crate::wire::raw::MAX_FRAME;\n    }\n}")], "wire"),
+        (vec![("codecs/src/profinet/mod.rs", "pub use crate::wire::raw::RawLink;")], "wire"),
+        (vec![("rest/src/lib.rs", reach)], "E0116"),
+        // The same reach behind each configuration only some build takes.
+        (vec![("rest/src/lib.rs", &windows)], "E0116"),
+        (vec![("rest/src/lib.rs", &release)], "E0116"),
+        (vec![("rest/Cargo.toml", "[features]\nnpcap = []"), ("rest/src/lib.rs", &feature)], "E0116"),
+    ];
+    for (poisons, want) in cases {
+        let split = Split::plant(&poisons);
+        let errs: Vec<String> =
+            checks.iter().map(|a| split.cargo(a)).filter(|o| !o.status.success()).map(|o| String::from_utf8_lossy(&o.stderr).to_string()).collect();
+        assert!(errs.iter().any(|e| e.contains(want)), "{poisons:?} went unseen: {errs:?}");
     }
-    Split::plant(None);
+    Split::plant(&[]);
 }
 
 /// Text reversed: the banned terms are written backwards here, so that no line of this file,
@@ -393,7 +470,32 @@ const TERMS: [&str; 6] = ["tlebineg", "rodnevscod", "lortnoctrosretsam", "ecafre
 fn letters(line: &str) -> Vec<char> {
     let decomposed = icu_normalizer::DecomposingNormalizerBorrowed::new_nfkd().normalize(line);
     let class = icu_normalizer::properties::CanonicalCombiningClassMapBorrowed::new();
-    decomposed.chars().flat_map(char::to_lowercase).filter(|c| c.is_alphanumeric() && class.get32_u8(*c as u32) == 0).collect()
+    decomposed.chars().flat_map(char::to_lowercase).flat_map(fold).filter(|c| c.is_alphanumeric() && class.get32_u8(*c as u32) == 0).collect()
+}
+
+/// The Latin letters NFKD leaves whole, read as their base letters: supervisão's table
+/// (`crates/veredas-supervisao/tests/component.rs`).
+fn fold(c: char) -> Vec<char> {
+    let plain = match c {
+        'æ' => "ae",
+        'ð' | 'đ' => "d",
+        'ø' => "o",
+        'þ' => "th",
+        'ß' => "ss",
+        'ħ' => "h",
+        'ı' => "i",
+        'ĸ' => "k",
+        'ł' => "l",
+        'ŋ' => "n",
+        'œ' => "oe",
+        'ŧ' => "t",
+        '\u{2b0}'..='\u{2ff}' => "",
+        'ƒ' => "f",
+        'ƶ' => "z",
+        'ȷ' => "j",
+        c => return vec![c],
+    };
+    plain.chars().collect()
 }
 
 /// Where a text names the vendor protocol core's telegram layer came from, its terms, or cites a
@@ -420,8 +522,11 @@ fn vendor_mentions(text: &str) -> Vec<String> {
         }
     }
     let section = char::from_u32(0xA7).unwrap();
+    // The sign as it is, or as an entity or an escape writes it.
+    let spelled = [format!("&{}", "sect;"), format!("&#{}", "167;"), format!("&#{}", "xa7;"), format!("\\{}", "u{a7}"), format!("\\{}", "u{00a7}"), format!("\\{}", "xa7")];
     for (n, line) in text.lines().enumerate() {
-        if line.contains(section) {
+        let lower = line.to_lowercase();
+        if line.contains(section) || spelled.iter().any(|s| lower.contains(s.as_str())) {
             hits.push(format!("line {}: section sign", n + 1));
         }
     }
@@ -446,12 +551,20 @@ fn aranha_names_no_vendor_and_cites_no_vendor_document() {
     for f in ["Cargo.toml", "src/lib.rs", "src/profinet/dcp.rs", "tests/dcp.rs", "tests/common/mod.rs", "tests/component.rs"] {
         assert!(files.contains(&manifest_dir().join(f)), "{f} not read: {files:?}");
     }
+    // Every file is text and has a name that is text: a file or a name that is not UTF-8 (a
+    // Windows code page, Latin-1 bytes) would hide a spelling from the reader, so it is refused.
+    let not_text: Vec<String> = files
+        .iter()
+        .filter(|f| std::str::from_utf8(&std::fs::read(f).unwrap()).is_err() || f.strip_prefix(manifest_dir()).unwrap().to_str().is_none())
+        .map(|f| f.display().to_string())
+        .collect();
+    assert_eq!(not_text, Vec::<String>::new());
     // Every file's contents, and every file's name, its path from the crate's folder.
     let found: Vec<String> = files
         .iter()
         .flat_map(|f| {
-            let text = String::from_utf8_lossy(&std::fs::read(f).unwrap()).to_string();
-            let name = f.strip_prefix(manifest_dir()).unwrap().display().to_string();
+            let text = String::from_utf8(std::fs::read(f).unwrap()).unwrap();
+            let name = f.strip_prefix(manifest_dir()).unwrap().to_str().unwrap().to_string();
             let named = vendor_mentions(&name).into_iter().map(move |l| format!("the name {}: {l}", f.display()));
             vendor_mentions(&text).into_iter().map(move |l| format!("{}: {l}", f.display())).chain(named)
         })
@@ -476,6 +589,15 @@ fn aranha_names_no_vendor_and_cites_no_vendor_document() {
         (format!("// the {fullwidth} catalog"), 1),
         // A file's name.
         (format!("tests/fixtures/{}-io-device.bin", rev("tlebineg")), 1),
+        // Latin letters NFKD leaves whole.
+        (format!("// {}", rev("tlebineg").replacen('l', "\u{142}", 1)), 1),
+        (format!("// {}", rev("rodnevscod").replace('o', "\u{f8}")), 1),
+        (format!("// {}", rev("tlebineg").replacen('i', "\u{131}", 1)), 1),
+        (format!("// {}", rev("ecafretnitsoh").replacen('t', "\u{167}", 1)), 1),
+        // The citation sign as an entity and as escapes.
+        (format!("/// clause &{}4.3", "sect;"), 1),
+        (format!("let s = \"\\{}\";", "u{a7}"), 1),
+        (format!("/// clause &#{} 2", "167;"), 1),
     ];
     for (s, line) in &samples {
         let hits = vendor_mentions(s);

@@ -45,8 +45,12 @@ pub struct Received {
 pub enum RawError {
     #[error("no network interface is named {0:?}")]
     NoSuchInterface(String),
-    #[error("an interface name is 1 to 15 bytes with no NUL; {0:?} is not one")]
+    #[error("an interface name is 1 to 15 bytes, not `.` or `..`, with no `/`, `:`, white space or NUL; {0:?} is not one")]
     BadName(String),
+    #[error("{0:?} is not an Ethernet interface")]
+    NotEthernet(String),
+    #[error("the send queue of {0:?} is full: the frame is not sent, and the link did not wait")]
+    QueueFull(String),
     #[error(
         "opening a raw link on {iface:?} needs CAP_NET_RAW in its network namespace ({source}): \
          `setcap cap_net_raw+ep` on the executable, or run it in a namespace of its own"
@@ -88,18 +92,28 @@ pub struct RawLink {
 }
 
 /// A classic BPF program keeping the frames of one EtherType: the type at byte 12 (a tag the
-/// kernel took out is no longer there), or behind a tag still in the frame, at byte 16.
+/// kernel took out is no longer there), or behind one or two tags still in the frame (802.1Q
+/// 0x8100 or 802.1ad 0x88A8), at byte 16 or 20. A frame it keeps is kept whole.
 fn ethertype_filter(ethertype: u16) -> Vec<libc::sock_filter> {
     let op = |code: u32, jt: u8, jf: u8, k: u32| libc::sock_filter { code: code as u16, jt, jf, k };
+    let (ld, jeq, ret) = (libc::BPF_LD | libc::BPF_H | libc::BPF_ABS, libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K, libc::BPF_RET | libc::BPF_K);
     let t = u32::from(ethertype);
+    // 0: ldh [12]; 1: == T -> keep; 2: == 0x8100 -> 4; 3: == 0x88A8 -> 4 else drop
+    // 4: ldh [16]; 5: == T -> keep; 6: == 0x8100 -> 8; 7: == 0x88A8 -> 8 else drop
+    // 8: ldh [20]; 9: == T -> keep else drop; 10: keep; 11: drop
     vec![
-        op(libc::BPF_LD | libc::BPF_H | libc::BPF_ABS, 0, 0, 12),
-        op(libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K, 3, 0, t),
-        op(libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K, 0, 3, 0x8100),
-        op(libc::BPF_LD | libc::BPF_H | libc::BPF_ABS, 0, 0, 16),
-        op(libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K, 0, 1, t),
-        op(libc::BPF_RET | libc::BPF_K, 0, 0, MAX_FRAME as u32),
-        op(libc::BPF_RET | libc::BPF_K, 0, 0, 0),
+        op(ld, 0, 0, 12),
+        op(jeq, 8, 0, t),
+        op(jeq, 1, 0, 0x8100),
+        op(jeq, 0, 7, 0x88A8),
+        op(ld, 0, 0, 16),
+        op(jeq, 4, 0, t),
+        op(jeq, 1, 0, 0x8100),
+        op(jeq, 0, 3, 0x88A8),
+        op(ld, 0, 0, 20),
+        op(jeq, 0, 1, t),
+        op(ret, 0, 0, u32::MAX),
+        op(ret, 0, 0, 0),
     ]
 }
 
@@ -108,7 +122,14 @@ fn last_error() -> io::Error {
 }
 
 fn interface_index(name: &str) -> Result<(CString, i32), RawError> {
-    if name.is_empty() || name.len() >= libc::IFNAMSIZ {
+    // The kernel's own rule for an interface's name: 1 to 15 bytes, not `.` or `..`, no `/`, `:`
+    // or white space (and no NUL, which a C string cannot hold).
+    let bad = name.is_empty()
+        || name.len() >= libc::IFNAMSIZ
+        || name == "."
+        || name == ".."
+        || name.chars().any(|c| c == '/' || c == ':' || c.is_whitespace() || c == '\0');
+    if bad {
         return Err(RawError::BadName(name.to_string()));
     }
     let c = CString::new(name).map_err(|_| RawError::BadName(name.to_string()))?;
@@ -231,6 +252,11 @@ impl RawLink {
         }
         // SAFETY: after a successful SIOCGIFHWADDR the union holds `ifru_hwaddr`.
         let hw = unsafe { req.ifr_ifru.ifru_hwaddr };
+        // Loopback and the like deliver a host's own frames back to it as if heard: an Ethernet
+        // interface (a card, a veth end) only.
+        if hw.sa_family != libc::ARPHRD_ETHER {
+            return Err(RawError::NotEthernet(iface.to_string()));
+        }
         let mut mac = [0u8; 6];
         for (m, b) in mac.iter_mut().zip(hw.sa_data.iter()) {
             *m = *b as u8;
@@ -261,10 +287,11 @@ impl RawLink {
         let n = unsafe { libc::send(self.fd.as_raw_fd(), frame.as_ptr().cast(), frame.len(), libc::MSG_DONTWAIT) };
         if n < 0 {
             let source = last_error();
-            if source.raw_os_error() == Some(libc::EMSGSIZE) {
-                return Err(RawError::TooLong(frame.len()));
+            match source.raw_os_error() {
+                Some(libc::EMSGSIZE) => return Err(RawError::TooLong(frame.len())),
+                Some(libc::EAGAIN) | Some(libc::ENOBUFS) => return Err(RawError::QueueFull(self.iface.clone())),
+                _ => return Err(RawError::Io { op: "send", iface: self.iface.clone(), source }),
             }
-            return Err(RawError::Io { op: "send", iface: self.iface.clone(), source });
         }
         if n as usize != frame.len() {
             return Err(RawError::Io {
@@ -280,36 +307,51 @@ impl RawLink {
     /// where the kernel took it from. A frame longer than `MAX_FRAME` is an error, never handed
     /// back cut. With `outgoing` off, frames this host sent are passed over within the same wait.
     pub fn recv(&self, timeout: Duration) -> Result<Option<Received>, RawError> {
+        // One deadline for the whole wait: a signal, a frame passed over, or a wake-up with nothing
+        // to read waits on for what is left of it, never past it, never short of it.
         let deadline = std::time::Instant::now() + timeout;
         loop {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
-            match self.recv_one(left)? {
-                Some(r) if r.outgoing && !self.options.outgoing => {
-                    if left.is_zero() {
-                        return Ok(None);
-                    }
+            if !self.readable(left)? {
+                if std::time::Instant::now() >= deadline {
+                    return Ok(None);
                 }
-                other => return Ok(other),
+                continue;
+            }
+            match self.recv_one()? {
+                Some(r) if r.outgoing && !self.options.outgoing => {}
+                Some(r) => return Ok(Some(r)),
+                None => {}
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(None);
             }
         }
     }
 
-    fn recv_one(&self, timeout: Duration) -> Result<Option<Received>, RawError> {
-        let io_err = |op: &'static str, source: io::Error| RawError::Io { op, iface: self.iface.clone(), source };
+    /// Wait at most `timeout`, to the nanosecond, for a frame to read; `false` when none came or a
+    /// signal cut the wait short.
+    fn readable(&self, timeout: Duration) -> Result<bool, RawError> {
         let mut pfd = libc::pollfd { fd: self.fd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
-        let ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
-        // SAFETY: one valid pollfd.
-        let rc = unsafe { libc::poll(&raw mut pfd, 1, ms) };
+        let ts = libc::timespec {
+            tv_sec: libc::time_t::try_from(timeout.as_secs()).unwrap_or(libc::time_t::MAX),
+            tv_nsec: libc::c_long::from(timeout.subsec_nanos() as i32),
+        };
+        // SAFETY: one valid pollfd and a valid timespec; no signal mask is changed.
+        let rc = unsafe { libc::ppoll(&raw mut pfd, 1, &raw const ts, std::ptr::null()) };
         if rc < 0 {
             let source = last_error();
             if source.kind() == io::ErrorKind::Interrupted {
-                return Ok(None);
+                return Ok(false);
             }
-            return Err(io_err("poll", source));
+            return Err(RawError::Io { op: "poll", iface: self.iface.clone(), source });
         }
-        if rc == 0 {
-            return Ok(None);
-        }
+        Ok(rc > 0)
+    }
+
+    /// Read the frame that is there, or `None` when it is gone.
+    fn recv_one(&self) -> Result<Option<Received>, RawError> {
+        let io_err = |op: &'static str, source: io::Error| RawError::Io { op, iface: self.iface.clone(), source };
         let mut buf = vec![0u8; MAX_FRAME];
         // SAFETY: all-zero sockaddr_ll and msghdr are valid; they are filled in below.
         let mut from: libc::sockaddr_ll = unsafe { std::mem::zeroed() };

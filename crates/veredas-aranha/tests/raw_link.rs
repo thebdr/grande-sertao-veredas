@@ -188,7 +188,20 @@ fn the_link_joins_every_group_while_open_and_leaves_the_interface_as_it_was() {
 #[test]
 fn a_missing_interface_and_a_bad_name_are_refused_by_name() {
     // Asked on the host: naming an interface needs no privilege.
-    for (name, missing) in [("nope0", true), ("", false), ("a-name-of-16-ch", true), ("a-name-of-16-chr", false), ("a\0b", false)] {
+    let names = [
+        ("nope0", true),
+        ("a-name-of-16-ch", true),
+        ("", false),
+        ("a-name-of-16-chr", false),
+        ("a\0b", false),
+        ("a/b", false),
+        (".", false),
+        ("..", false),
+        ("a b", false),
+        ("a:b", false),
+        ("a\tb", false),
+    ];
+    for (name, missing) in names {
         let err = RawLink::open(name, false).unwrap_err();
         match (missing, &err) {
             (true, RawError::NoSuchInterface(n)) | (false, RawError::BadName(n)) => assert_eq!(n, name),
@@ -221,9 +234,43 @@ fn message(e: Box<dyn std::any::Any + Send>) -> String {
 
 #[test]
 fn a_body_that_never_ran_is_a_failure_not_a_pass() {
-    let r = panic::catch_unwind(|| netns::isolated("no_test_has_this_name", &[], || {}));
+    if std::env::var(netns::INNER).is_ok() {
+        // The child passes the call over: its body never runs.
+        return;
+    }
+    let r = panic::catch_unwind(|| netns::isolated("a_body_that_never_ran_is_a_failure_not_a_pass", &[], || {}));
     let msg = message(r.unwrap_err());
-    assert!(msg.starts_with("no_test_has_this_name in its private network: the body never ran"), "{msg}");
+    assert!(msg.starts_with("a_body_that_never_ran_is_a_failure_not_a_pass in its private network: the body never ran"), "{msg}");
+}
+
+#[test]
+fn a_test_passes_its_own_name_and_makes_one_private_network() {
+    // Another test's name would run that test's body, not this one's.
+    let r = panic::catch_unwind(|| netns::isolated("frames_cross_a_veth_pair_whole_both_ways", &[], || panic!("not this body")));
+    let msg = message(r.unwrap_err());
+    assert_eq!(
+        msg,
+        "netns::isolated(\"frames_cross_a_veth_pair_whole_both_ways\") was called from the test Some(\"a_test_passes_its_own_name_and_makes_one_private_network\"): a test passes its own name"
+    );
+}
+
+#[test]
+fn a_second_private_network_in_one_test_is_refused() {
+    netns::isolated("a_second_private_network_in_one_test_is_refused", &[], || {});
+    let r = panic::catch_unwind(|| netns::isolated("a_second_private_network_in_one_test_is_refused", &[("x0", "y0")], || panic!("the second body")));
+    assert_eq!(message(r.unwrap_err()), "a_second_private_network_in_one_test_is_refused asked for a second private network: one per test");
+}
+
+#[test]
+fn where_the_namespace_cannot_be_made_the_failure_says_why() {
+    netns::isolated("where_the_namespace_cannot_be_made_the_failure_says_why", &[], || {
+        // Inside, as the namespace's root, forbid any further user namespace, then ask for one.
+        std::fs::write("/proc/sys/user/max_user_namespaces", "0").unwrap();
+        let why = netns::run_child("any_test").unwrap_err();
+        assert!(why.starts_with("the private network for any_test could not be made: "), "{why}");
+        assert!(why.contains("user.max_user_namespaces = 0"), "{why}");
+        assert!(why.contains("kernel.apparmor_restrict_unprivileged_userns"), "{why}");
+    });
 }
 
 #[test]
@@ -254,6 +301,12 @@ fn the_private_network_holds_only_what_the_test_made() {
         for n in ["lo", "p0", "q0", "p1", "q1"] {
             assert!(flags(n).contains("UP"), "{n}: {}", flags(n));
         }
+        // IPv6 is off, so the links carry only what the test sends.
+        for knob in ["all", "default", "p0", "q1", "lo"] {
+            assert_eq!(std::fs::read_to_string(format!("/proc/sys/net/ipv6/conf/{knob}/disable_ipv6")).unwrap().trim(), "1", "{knob}");
+        }
+        // Loopback is not Ethernet: it would hand a host's own frames back as heard.
+        assert!(matches!(RawLink::open("lo", false), Err(RawError::NotEthernet(n)) if n == "lo"));
         // Root here, and only here.
         // SAFETY: geteuid cannot fail.
         assert_eq!(unsafe { libc_geteuid() }, 0);
@@ -267,4 +320,128 @@ fn the_private_network_holds_only_what_the_test_made() {
 unsafe extern "C" {
     #[link_name = "geteuid"]
     fn libc_geteuid() -> u32;
+}
+
+#[test]
+fn a_filtered_link_on_the_sending_end_hears_its_type_behind_any_tag() {
+    netns::isolated("a_filtered_link_on_the_sending_end_hears_its_type_behind_any_tag", &[("a0", "b0")], || {
+        let (a, b) = pair();
+        let watcher = RawLink::open_with("a0", Options { ethertype: Some(0x8892), ..Options::default() }).unwrap();
+        let far = RawLink::open_with("b0", Options { ethertype: Some(0x8892), ..Options::default() }).unwrap();
+        let mut q = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1, 0x81, 0x00, 0xC0, 0x00, 0x88, 0x92, 0x80, 0x00];
+        q.resize(60, 0);
+        let mut ad = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1, 0x88, 0xA8, 0x00, 0x05, 0x88, 0x92, 0x80, 0x00];
+        ad.resize(60, 0);
+        let mut double = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1, 0x88, 0xA8, 0x00, 0x05, 0x81, 0x00, 0xC0, 0x00, 0x88, 0x92, 0x80, 0x00];
+        double.resize(64, 0);
+        let mut other = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1, 0x81, 0x00, 0xC0, 0x00, 0x88, 0xB5, 0x80, 0x00];
+        other.resize(60, 0);
+        for f in [&q, &ad, &double, &other] {
+            a.send(f).unwrap();
+        }
+        for link in [&watcher, &far] {
+            let mut got = Vec::new();
+            while let Some(r) = link.recv(Duration::from_millis(300)).unwrap() {
+                got.push(r.bytes);
+            }
+            assert_eq!(got, [q.clone(), ad.clone(), double.clone()], "{}", link.iface());
+        }
+        drop(b);
+    });
+}
+
+#[test]
+fn a_wait_lasts_its_timeout_through_signals_skipped_frames_and_under_a_millisecond() {
+    netns::isolated("a_wait_lasts_its_timeout_through_signals_skipped_frames_and_under_a_millisecond", &[("a0", "b0")], || {
+        let (a, _b) = pair();
+        // A signal in the middle of the wait does not end it.
+        extern "C" fn nothing(_: libc::c_int) {}
+        // SAFETY: a handler that does nothing, installed without SA_RESTART so the wait is interrupted.
+        unsafe {
+            let mut act: libc::sigaction = std::mem::zeroed();
+            act.sa_sigaction = nothing as *const () as usize;
+            libc::sigaction(libc::SIGUSR1, &act, std::ptr::null_mut());
+        }
+        let me = unsafe { libc::pthread_self() };
+        let kicker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            // SAFETY: `me` is the waiting thread, alive until the wait ends.
+            unsafe { libc::pthread_kill(me, libc::SIGUSR1) };
+        });
+        let start = Instant::now();
+        assert_eq!(a.recv(Duration::from_millis(300)).unwrap(), None);
+        let waited = start.elapsed();
+        kicker.join().unwrap();
+        assert!(waited >= Duration::from_millis(295) && waited < Duration::from_millis(800), "{waited:?}");
+
+        // A link that leaves out what this host sends waits its timeout under a stream of them.
+        let blind = RawLink::open_with("a0", Options { outgoing: false, ..Options::default() }).unwrap();
+        let sender = RawLink::open("a0", false).unwrap();
+        let stream = std::thread::spawn(move || {
+            let f = ether::build(B, A, 0x88B5, &[1; 46]).unwrap();
+            let end = Instant::now() + Duration::from_millis(1500);
+            while Instant::now() < end {
+                let _ = sender.send(&f);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        let start = Instant::now();
+        assert_eq!(blind.recv(Duration::from_millis(300)).unwrap(), None);
+        let waited = start.elapsed();
+        stream.join().unwrap();
+        assert!(waited >= Duration::from_millis(295) && waited < Duration::from_millis(600), "{waited:?}");
+
+        // Under a millisecond, to the microsecond, on a link nothing reaches.
+        let idle = RawLink::open_with("a0", Options { ethertype: Some(0x9999), ..Options::default() }).unwrap();
+        let start = Instant::now();
+        assert_eq!(idle.recv(Duration::from_micros(900)).unwrap(), None);
+        let waited = start.elapsed();
+        assert!(waited >= Duration::from_micros(900) && waited < Duration::from_millis(50), "{waited:?}");
+    });
+}
+
+#[test]
+fn a_send_never_waits_and_a_full_queue_is_named() {
+    netns::isolated("a_send_never_waits_and_a_full_queue_is_named", &[("a0", "b0")], || {
+        let (a, _b) = pair();
+        // A slow queue on a0: 8 kbit/s, so it fills at once.
+        let out = Command::new("tc").args(["qdisc", "add", "dev", "a0", "root", "tbf", "rate", "8kbit", "burst", "1600", "latency", "1ms"]).output().unwrap();
+        assert!(out.status.success(), "tc: {}", String::from_utf8_lossy(&out.stderr));
+        let f = ether::build(B, A, 0x88B5, &[0; 1500]).unwrap();
+        let mut full = None;
+        for i in 0..2000 {
+            let start = Instant::now();
+            let r = a.send(&f);
+            assert!(start.elapsed() < Duration::from_millis(50), "send {i} took {:?}", start.elapsed());
+            if let Err(e) = r {
+                full = Some((i, e));
+                break;
+            }
+        }
+        let (i, e) = full.expect("the queue never filled");
+        assert!(i > 0, "the first send failed: {e:?}");
+        assert!(matches!(&e, RawError::QueueFull(n) if n == "a0"), "{e:?}");
+        assert_eq!(e.to_string(), "the send queue of \"a0\" is full: the frame is not sent, and the link did not wait");
+    });
+}
+
+#[test]
+fn a_frame_past_the_buffer_is_refused_never_handed_back_cut() {
+    netns::isolated("a_frame_past_the_buffer_is_refused_never_handed_back_cut", &[("a0", "b0")], || {
+        for iface in ["a0", "b0"] {
+            netns::ip(&["link", "set", iface, "mtu", "65535"]);
+        }
+        netns::wait_up(&["a0", "b0"]);
+        let a = RawLink::open("a0", false).unwrap();
+        let plain = RawLink::open("b0", false).unwrap();
+        let filtered = RawLink::open_with("b0", Options { ethertype: Some(0x88B5), ..Options::default() }).unwrap();
+        let mut f = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1, 0x88, 0xB5];
+        f.resize(14 + 65_535, 0x5A);
+        a.send(&f).unwrap();
+        for link in [&plain, &filtered] {
+            let r = link.recv(Duration::from_secs(2));
+            assert!(matches!(r, Err(RawError::TooLong(65_549))), "{r:?}");
+        }
+    });
 }
