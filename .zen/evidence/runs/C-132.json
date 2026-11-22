@@ -10,15 +10,15 @@
     "dcp"
   ],
   "exitCode": 0,
-  "outputSha": "c90aed65a3b56ac29c2cd0b2c082571b563754c7e6e1b062b2c3693dce0eabe1",
-  "outputTail": "test what_one_frame_cannot_carry_is_refused_never_cut ... ok\ntest an_identify_answer_says_every_identity_field_and_reads_back_whole ... ok\ntest an_identify_request_is_the_canonical_frame_for_each_filter ... ok\ntest a_set_built_or_decoded_by_hand_is_gated_as_the_helpers_are ... ok\ntest a_set_answer_carries_no_block_info_whatever_its_blocks ... ok\ntest the_dissectors_tell_a_wrong_reading_apart ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\ntest a_hello_is_written_to_its_group_alone_and_read_as_the_dissector_reads_it ... ok\ntest any_bytes_decode_without_a_panic_and_rewrite_to_themselves ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.60s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.12s\n     Running tests/dcp.rs (target/debug/build/veredas-aranha/c4009d9f19495971/out/dcp-c4009d9f19495971)",
-  "ranAt": "2026-11-22T20:05:01.456Z",
-  "headCommit": "cf7c0cfb7888f9e2ee39d7b21ff3dabce254d4ed",
+  "outputSha": "8d4ee72da946e23c315d36d3a06bdd9842ed4175402cb205c15f0a51ac078790",
+  "outputTail": "test exactly_three_shapes_of_block_pass_the_set_gate ... ok\ntest what_one_frame_cannot_carry_is_refused_never_cut ... ok\ntest the_dissectors_tell_a_wrong_reading_apart ... ok\ntest the_device_options_and_the_full_ip_suite_are_written_and_read_in_their_order ... ok\ntest the_info_word_is_where_the_dissector_reads_one_for_each_family_of_block ... ok\ntest a_set_answer_carries_no_block_info_whatever_its_blocks ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\ntest a_hello_is_written_to_its_group_alone_and_read_as_the_dissector_reads_it ... ok\ntest any_bytes_decode_without_a_panic_and_rewrite_to_themselves ... ok\n\ntest result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.42s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s\n     Running tests/dcp.rs (target/debug/build/veredas-aranha/c4009d9f19495971/out/dcp-c4009d9f19495971)",
+  "ranAt": "2026-11-22T20:21:05.029Z",
+  "headCommit": "8bd01104ab8cc2c239e6412542e48b0aa0361bc3",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/dcp.rs",
       "file": "crates/veredas-aranha/tests/dcp.rs",
-      "fileSha": "30ef294c7d5a7e0d6df6ad64d15d9e5c2dc7eebf47ed3c20b88248af3612876b"
+      "fileSha": "d05ca086cf92380dd941a8ff3a6ecdd0f4bb118186664c8c4df7094b767d1310"
     },
     {
       "name": "crates/veredas-aranha/tests/common/mod.rs",
