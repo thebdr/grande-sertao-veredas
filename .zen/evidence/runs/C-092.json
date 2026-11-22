@@ -10,10 +10,10 @@
     "controller_state"
   ],
   "exitCode": 0,
-  "outputSha": "658c12bd28ad9f46f19cdf2cd4856b5a08853928a24bc4cf0ced1713d072c4fa",
-  "outputTail": "\nrunning 3 tests\ntest a_controller_source_is_checked_like_any_other ... ok\ntest a_push_racing_the_stop_lands_or_is_refused ... ok\ntest a_controller_s_states_and_faults_are_stored_like_any_other_data ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.48s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s\n     Running tests/controller_state.rs (target/debug/build/veredas-portal/36c7c0f09a29fe17/out/controller_state-36c7c0f09a29fe17)",
-  "ranAt": "2026-11-22T20:36:42.977Z",
-  "headCommit": "1ec27f493689c51c9531eeb82c77b19495527aed",
+  "outputSha": "7e0331e349b100d7291e6aff987ec31bd6bffec42f6347f3a8012723af93f11d",
+  "outputTail": "\nrunning 3 tests\ntest a_controller_source_is_checked_like_any_other ... ok\ntest a_push_racing_the_stop_lands_or_is_refused ... ok\ntest a_controller_s_states_and_faults_are_stored_like_any_other_data ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.43s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s\n     Running tests/controller_state.rs (target/debug/build/veredas-portal/855b3e076270b542/out/controller_state-855b3e076270b542)",
+  "ranAt": "2026-11-22T22:50:41.615Z",
+  "headCommit": "0ab45e44df238854b6914b7b5aa7de7110e08e91",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/controller_state.rs",

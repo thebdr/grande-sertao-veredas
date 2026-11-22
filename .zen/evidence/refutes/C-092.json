@@ -1,0 +1,13 @@
+{
+  "clause": "C-092",
+  "verdict": "holds",
+  "ranAt": "2026-11-22T22:50:50.829Z",
+  "headCommit": "0ab45e44df238854b6914b7b5aa7de7110e08e91",
+  "tests": [
+    {
+      "name": "crates/veredas-portal/tests/controller_state.rs",
+      "file": "crates/veredas-portal/tests/controller_state.rs",
+      "symbolSha": "19a02b54639aa29b273aee0888e4752db6bdf263e7dd4ba0d02f2f635e5eb4f3"
+    }
+  ]
+}

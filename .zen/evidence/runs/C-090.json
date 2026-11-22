@@ -10,15 +10,15 @@
     "store_window"
   ],
   "exitCode": 0,
-  "outputSha": "a1181d3b323877cb9bd948d952df00f33657d7dc3e36b3cc93aa0649079f2804",
-  "outputTail": "\nrunning 5 tests\ntest a_window_on_a_disk_store_is_refused ... ok\ntest the_store_lets_go_of_every_row_that_arrived_before_the_cutoff_and_keeps_the_rest ... ok\ntest a_session_kept_as_a_window_lets_go_of_what_arrived_first_whatever_its_stamp ... ok\ntest the_window_s_pass_never_waits_on_a_reader ... ok\ntest every_protocol_s_rows_are_kept_as_a_window_against_the_bench ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.41s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s\n     Running tests/store_window.rs (target/debug/build/veredas-portal/75980f9bbb519427/out/store_window-75980f9bbb519427)",
-  "ranAt": "2026-11-22T20:36:32.375Z",
-  "headCommit": "1ec27f493689c51c9531eeb82c77b19495527aed",
+  "outputSha": "eb1d2bf65c9210bcc23b362d615250fa46e690983253eab00e7510f0d85db175",
+  "outputTail": "\nrunning 5 tests\ntest a_window_on_a_disk_store_is_refused ... ok\ntest the_store_lets_go_of_every_row_that_arrived_before_the_cutoff_and_keeps_the_rest ... ok\ntest a_session_kept_as_a_window_lets_go_of_what_arrived_first_whatever_its_stamp ... ok\ntest the_window_s_pass_never_waits_on_a_reader ... ok\ntest every_protocol_s_rows_are_kept_as_a_window_against_the_bench ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.29s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n     Running tests/store_window.rs (target/debug/build/veredas-portal/f8ed4c55fac10c93/out/store_window-f8ed4c55fac10c93)",
+  "ranAt": "2026-11-22T22:50:19.325Z",
+  "headCommit": "0ab45e44df238854b6914b7b5aa7de7110e08e91",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store_window.rs",
       "file": "crates/veredas-portal/tests/store_window.rs",
-      "fileSha": "12227da34f4ceb5d289b347b4687b4327f2b35c6658f6b738672618b551d0e87"
+      "fileSha": "9a132e7c971ed6f5d1ef792f944b89b3baf68155c38b7b795acd748f57580229"
     }
   ]
 }

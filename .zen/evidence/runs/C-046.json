@@ -16,15 +16,15 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "218f596fb6f1cc5a24220702242101b39b721dba4b33151aa5d09992d5857be7",
-  "outputTail": "test the_executable_checks_a_project_and_reads_a_veredas_1_folder ... ok\ntest every_key_statement_is_the_readers ... ok\ntest what_cannot_be_a_project_is_refused_by_name ... ok\ntest the_worked_example_loads_as_its_prose_says ... ok\ntest a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_named ... ok\ntest the_executable_runs_a_project_serving_and_reporting_until_stdin_closes ... ok\ntest the_sealed_password_reaches_the_source_through_the_session ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.61s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/portal-bf6010/crates/veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.12s\n     Running tests/l7_stamps.rs (target/debug/build/leis/1e9f1a0134502a31/out/l7_stamps-1e9f1a0134502a31)\n     Running tests/real_tree.rs (target/debug/build/leis/e681f4870dfd06df/out/real_tree-e681f4870dfd06df)\n     Running tests/project.rs (target/debug/build/veredas-portal/7b01f16c6e5c01b4/out/project-7b01f16c6e5c01b4)",
-  "ranAt": "2026-11-22T20:19:10.975Z",
-  "headCommit": "a49177ae70f933a3fa54cff599f33b7afaabb938",
+  "outputSha": "016e357ac2e48c27f99391e046c4dc76595bf0df7b0459d6019f77dc60ca1899",
+  "outputTail": "test the_executable_says_its_version_and_stops_on_a_signal ... ok\ntest the_executable_checks_a_project_and_reads_a_veredas_1_folder ... ok\ntest every_key_statement_is_the_readers ... ok\ntest what_cannot_be_a_project_is_refused_by_name ... ok\ntest the_worked_example_loads_as_its_prose_says ... ok\ntest a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_named ... ok\ntest the_executable_runs_a_project_serving_and_reporting_until_stdin_closes ... ok\ntest the_sealed_password_reaches_the_source_through_the_session ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.60s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.53s\n     Running tests/l7_stamps.rs (target/debug/build/leis/1e9f1a0134502a31/out/l7_stamps-1e9f1a0134502a31)\n     Running tests/real_tree.rs (target/debug/build/leis/e681f4870dfd06df/out/real_tree-e681f4870dfd06df)\n     Running tests/project.rs (target/debug/build/veredas-portal/183e7f1575c8cc93/out/project-183e7f1575c8cc93)",
+  "ranAt": "2026-11-22T22:50:04.806Z",
+  "headCommit": "0ab45e44df238854b6914b7b5aa7de7110e08e91",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/project.rs",
       "file": "crates/veredas-portal/tests/project.rs",
-      "fileSha": "551f18aea3afa46880d44e6815f378789f58ad527c544fa7ce5a276a1be8aafc"
+      "fileSha": "49851e5e4b9c95771c3db5de9b9ec819ace3a36a6cc5103dc0e9bc84732e17d6"
     }
   ]
 }
