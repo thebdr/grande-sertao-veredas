@@ -475,9 +475,7 @@ fn an_unknown_id_and_a_refused_body_are_counted_and_shown() {
     assert_ne!(plant_catalog, catalog_text());
     std::fs::write(dir.path().join("channel.toml"), channel_text()).unwrap();
     std::fs::write(dir.path().join("catalog.toml"), &plant_catalog).unwrap();
-    let text = format!(
-        "format = \"veredas-bench\"\nversion = 1\n\n[[channel]]\nname = \"plant\"\nrole = \"listen\"\nport = 0\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\nmessages = [ {{ message = \"extra\", fields = [ {{ name = \"x\", value = 5 }} ] }}, {{ message = \"command\", fields = [ {{ name = \"code\", value = 1 }} ] }}, {{ message = \"status\", fields = [ {{ name = \"running\", value = 1 }}, {{ name = \"speed\", value = 9 }} ] }} ]\n"
-    );
+    let text = "format = \"veredas-bench\"\nversion = 1\n\n[[channel]]\nname = \"plant\"\nrole = \"listen\"\nport = 0\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\nmessages = [ { message = \"extra\", fields = [ { name = \"x\", value = 5 } ] }, { message = \"command\", fields = [ { name = \"code\", value = 1 } ] }, { message = \"status\", fields = [ { name = \"running\", value = 1 }, { name = \"speed\", value = 9 } ] } ]\n".to_string();
     let bench = Bench::start(bench::load(&text, dir.path()).unwrap()).unwrap();
     let port = bench_listening_port(&bench, "plant");
     let (tx, rx) = std::sync::mpsc::channel();

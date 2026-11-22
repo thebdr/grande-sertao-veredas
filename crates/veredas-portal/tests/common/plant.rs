@@ -65,9 +65,7 @@ pub fn plant(dir: &Path) -> Bench {
     std::fs::write(dir.join("channel.toml"), channel_text()).unwrap();
     std::fs::write(dir.join("catalog.toml"), catalog_text()).unwrap();
     std::fs::write(dir.join("machine.toml"), machine_text()).unwrap();
-    let text = format!(
-        "format = \"veredas-bench\"\nversion = 1\nseed = 3\n\n[[opc]]\nname = \"plc\"\nport = 0\ntags = [\n  {{ id = \"speed\", type = \"float\", value = \"1.5\", randomize = {{ low = 1.0, high = 2.0, decimals = 2, interval_ms = 100 }} }},\n  {{ id = \"run\", type = \"bool\", access = \"read-write\" }},\n  {{ id = \"word\", type = \"int\", value = \"5\", access = \"read-write\" }},\n  {{ id = \"label\", type = \"text\", value = \"idle\", access = \"read-write\" }},\n  {{ id = \"cmd\", type = \"int\", access = \"write\" }},\n]\n\n[[channel]]\nname = \"machine\"\nrole = \"listen\"\nport = 0\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\ncontroller = \"machine.toml\"\n"
-    );
+    let text = "format = \"veredas-bench\"\nversion = 1\nseed = 3\n\n[[opc]]\nname = \"plc\"\nport = 0\ntags = [\n  { id = \"speed\", type = \"float\", value = \"1.5\", randomize = { low = 1.0, high = 2.0, decimals = 2, interval_ms = 100 } },\n  { id = \"run\", type = \"bool\", access = \"read-write\" },\n  { id = \"word\", type = \"int\", value = \"5\", access = \"read-write\" },\n  { id = \"label\", type = \"text\", value = \"idle\", access = \"read-write\" },\n  { id = \"cmd\", type = \"int\", access = \"write\" },\n]\n\n[[channel]]\nname = \"machine\"\nrole = \"listen\"\nport = 0\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\ncontroller = \"machine.toml\"\n".to_string();
     std::fs::write(dir.join("bench.toml"), &text).unwrap();
     let bench = Bench::start(bench::load(&text, dir).unwrap()).unwrap();
     super::ports::bench_listening_port(&bench, "machine");
