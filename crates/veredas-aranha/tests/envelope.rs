@@ -15,7 +15,7 @@ fn mac(s: &str) -> Mac {
 #[test]
 fn a_mac_reads_its_three_spellings_in_either_case_and_prints_one() {
     let m = Mac([0x02, 0x0e, 0xcf, 0x12, 0x34, 0x56]);
-    for s in ["02:0e:cf:12:34:56", "02:0E:CF:12:34:56", "02-0e-cf-12-34-56", "020e.cf12.3456", "020E.CF12.3456"] {
+    for s in ["02:0e:cf:12:34:56", "02:0E:CF:12:34:56", "02-0e-cf-12-34-56", "020e.cf12.3456", "020E.CF12.3456", "02:0E:cf:12:34:56", "020E.cf12.3456"] {
         assert_eq!(s.parse::<Mac>(), Ok(m), "{s}");
     }
     assert_eq!(m.to_string(), "02:0e:cf:12:34:56");
@@ -29,11 +29,13 @@ fn a_mac_reads_its_three_spellings_in_either_case_and_prints_one() {
         assert_eq!(mac(s).is_local(), local, "{s}");
     }
     assert!(Mac::BROADCAST.is_local() && !Mac::DCP_MULTICAST.is_local());
+    for (first, local) in [(0x80u8, false), (0xF0, false), (0x40, false), (0x10, false), (0xFE, true), (0xFD, false)] {
+        assert_eq!(Mac([first, 0, 0, 0, 0, 0]).is_local(), local, "{first:#04x}");
+    }
 }
 
-#[test]
-fn a_mac_refuses_every_other_spelling_with_the_text_it_got() {
-    for s in [
+/// Texts that are none of the three spellings.
+const REFUSED: [&str; 23] = [
         "",
         "02:0e:cf:12:34",
         "02:0e:cf:12:34:56:78",
@@ -58,7 +60,11 @@ fn a_mac_refuses_every_other_spelling_with_the_text_it_got() {
         "aéb.ccdd.eeff",
         "€a.ccdd.eeff",
         "02:0e:cf:12:34:é",
-    ] {
+];
+
+#[test]
+fn a_mac_refuses_every_other_spelling_with_the_text_it_got() {
+    for s in REFUSED {
         assert_eq!(s.parse::<Mac>(), Err(MacParseError(s.to_string())), "{s:?}");
     }
     assert_eq!(
@@ -88,6 +94,11 @@ fn a_mac_serialises_as_its_printed_form() {
     assert_eq!(serde_json::from_str::<Mac>("\"02-0E-CF-12-34-56\"").unwrap(), m);
     let err = serde_json::from_str::<Mac>("\"02:0e\"").unwrap_err().to_string();
     assert!(err.starts_with("not a MAC address: \"02:0e\""), "{err}");
+    // Read through serde, every refused text is refused as it was given, untrimmed.
+    for text in REFUSED {
+        let err = serde_json::from_str::<Mac>(&serde_json::to_string(text).unwrap()).unwrap_err().to_string();
+        assert!(err.starts_with(&MacParseError(text.to_string()).to_string()), "{text:?}: {err}");
+    }
 }
 
 #[test]
@@ -110,8 +121,10 @@ fn a_tagged_frame_carries_its_priority_drop_bit_and_vlan() {
     let (dst, src) = (mac("02:00:00:00:00:01"), mac("02:00:00:00:00:02"));
     let tag = VlanTag { priority: 6, drop_eligible: false, id: 0 };
     let f = ether::build_tagged(dst, src, Some(tag), 0x8892, &[0x80, 0x00]).unwrap();
-    assert_eq!(&f[12..20], &[0x81, 0x00, 0xC0, 0x00, 0x88, 0x92, 0x80, 0x00]);
-    assert_eq!(f.len(), 60);
+    let mut want = vec![2, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 2, 0x81, 0x00, 0xC0, 0x00, 0x88, 0x92, 0x80, 0x00];
+    want.resize(60, 0);
+    assert_eq!(f, want, "the whole frame, the pad's zeros included");
+    assert_eq!(ether::parse(&f).unwrap(), EtherFrame { dst, src, vlan: Some(tag), ethertype: 0x8892, payload: &want[18..] });
     let e = ether::parse(&f).unwrap();
     assert_eq!((e.vlan, e.ethertype, &e.payload[..2]), (Some(tag), 0x8892, &[0x80, 0x00][..]));
 
@@ -210,9 +223,25 @@ fn the_dissectors_read_the_envelope_as_it_was_written() {
         ether::build_tagged(Mac::LLDP_MULTICAST, src, Some(VlanTag { priority: 7, drop_eligible: false, id: 9 }), 0x88CC, &[0x02, 0x02, 0x07, 0x61, 0x04, 0x02, 0x07, 0x70, 0x06, 0x02, 0x00, 0x14, 0, 0]).unwrap(),
     ];
     let read = common::dissect(&frames);
-    for (i, p) in read.iter().enumerate() {
+    // Every field on every frame where it applies, against what the frame was built with.
+    for (i, (p, f)) in read.iter().zip(&frames).enumerate() {
+        let e = ether::parse(f).unwrap();
         assert_eq!(p.complaints(), Vec::<String>::new(), "frame {i}");
-        assert_eq!(p.one("eth", "eth.src"), "02:0a:0b:0c:0d:0e", "frame {i}");
+        assert_eq!(p.one("eth", "eth.src"), e.src.to_string(), "frame {i}");
+        assert_eq!(p.one("eth", "eth.dst"), e.dst.to_string(), "frame {i}");
+        match e.vlan {
+            None => {
+                assert!(!p.has("vlan"), "frame {i}");
+                assert_eq!(p.one("eth", "eth.type"), e.ethertype.to_string(), "frame {i}");
+            }
+            Some(tag) => {
+                assert_eq!(p.one("eth", "eth.type"), "33024", "frame {i}");
+                assert_eq!(p.one("vlan", "vlan.priority"), tag.priority.to_string(), "frame {i}");
+                assert_eq!(p.one("vlan", "vlan.dei"), tag.drop_eligible.to_string(), "frame {i}");
+                assert_eq!(p.one("vlan", "vlan.id"), tag.id.to_string(), "frame {i}");
+                assert_eq!(p.one("vlan", "vlan.etype"), e.ethertype.to_string(), "frame {i}");
+            }
+        }
     }
     assert_eq!(read[0].one("eth", "eth.dst"), "02:00:00:00:00:01");
     assert_eq!(read[0].one("eth", "eth.type"), "34997");
