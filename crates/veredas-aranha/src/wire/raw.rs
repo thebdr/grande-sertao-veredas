@@ -95,31 +95,52 @@ pub struct RawLink {
     options: Options,
 }
 
-/// A classic BPF program keeping the frames of one EtherType: the type at byte 12 (a tag the
-/// kernel took out is no longer there), or behind one or two tags still in the frame (802.1Q
-/// 0x8100 or 802.1ad 0x88A8), at byte 16 or 20. A frame it keeps is kept whole.
+/// A classic BPF program keeping the frames of one EtherType behind at most two tags (802.1Q
+/// 0x8100 or 802.1ad 0x88A8), counting the tag the kernel took out of the frame (it keeps it
+/// beside the frame, where the far end of a link finds a frame's outer tag): with none taken out,
+/// the type at byte 12, 16 or 20; with one taken out, at byte 12 or 16. So a frame is kept or
+/// dropped alike on the end that sent it and on the end that heard it. A frame it keeps is kept
+/// whole.
 fn ethertype_filter(ethertype: u16) -> Vec<libc::sock_filter> {
     let op = |code: u32, jt: u8, jf: u8, k: u32| libc::sock_filter { code: code as u16, jt, jf, k };
     let (ld, jeq, ret) = (libc::BPF_LD | libc::BPF_H | libc::BPF_ABS, libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K, libc::BPF_RET | libc::BPF_K);
+    let ld_word = libc::BPF_LD | libc::BPF_W | libc::BPF_ABS;
+    let tag_taken_out = (libc::SKF_AD_OFF + SKF_AD_VLAN_TAG_PRESENT) as u32;
     let t = u32::from(ethertype);
-    // 0: ldh [12]; 1: == T -> keep; 2: == 0x8100 -> 4; 3: == 0x88A8 -> 4 else drop
-    // 4: ldh [16]; 5: == T -> keep; 6: == 0x8100 -> 8; 7: == 0x88A8 -> 8 else drop
-    // 8: ldh [20]; 9: == T -> keep else drop; 10: keep; 11: drop
+    //  0: ld tag-taken-out; 1: == 0 -> 2 else -> 12
+    //  2: ldh [12]; 3: == T -> keep; 4: == 0x8100 -> 6; 5: == 0x88A8 -> 6 else drop
+    //  6: ldh [16]; 7: == T -> keep; 8: == 0x8100 -> 10; 9: == 0x88A8 -> 10 else drop
+    // 10: ldh [20]; 11: == T -> keep else drop
+    // 12: ldh [12]; 13: == T -> keep; 14: == 0x8100 -> 16; 15: == 0x88A8 -> 16 else drop
+    // 16: ldh [16]; 17: == T -> keep else drop
+    // 18: keep; 19: drop
     vec![
+        op(ld_word, 0, 0, tag_taken_out),
+        op(jeq, 0, 10, 0),
         op(ld, 0, 0, 12),
-        op(jeq, 8, 0, t),
+        op(jeq, 14, 0, t),
         op(jeq, 1, 0, 0x8100),
-        op(jeq, 0, 7, 0x88A8),
+        op(jeq, 0, 13, 0x88A8),
         op(ld, 0, 0, 16),
+        op(jeq, 10, 0, t),
+        op(jeq, 1, 0, 0x8100),
+        op(jeq, 0, 9, 0x88A8),
+        op(ld, 0, 0, 20),
+        op(jeq, 6, 7, t),
+        op(ld, 0, 0, 12),
         op(jeq, 4, 0, t),
         op(jeq, 1, 0, 0x8100),
         op(jeq, 0, 3, 0x88A8),
-        op(ld, 0, 0, 20),
+        op(ld, 0, 0, 16),
         op(jeq, 0, 1, t),
         op(ret, 0, 0, u32::MAX),
         op(ret, 0, 0, 0),
     ]
 }
+
+/// The ancillary load that says whether the kernel took a tag out of the frame (`linux/filter.h`;
+/// the `libc` crate names the offset, not this one).
+const SKF_AD_VLAN_TAG_PRESENT: i32 = 48;
 
 fn last_error() -> io::Error {
     io::Error::last_os_error()
@@ -328,10 +349,8 @@ impl RawLink {
                 }
                 continue;
             }
-            match self.recv_one()? {
-                Some(r) if r.outgoing && !self.options.outgoing => {}
-                Some(r) => return Ok(Some(r)),
-                None => {}
+            if let Some(r) = self.recv_one()? {
+                return Ok(Some(r));
             }
             if over() {
                 return Ok(None);
@@ -359,7 +378,8 @@ impl RawLink {
         Ok(rc > 0)
     }
 
-    /// Read the frame that is there, or `None` when it is gone.
+    /// Read the frame that is there, or `None` when it is gone or passed over (a frame this host
+    /// sent, with `outgoing` off: passed over whatever its length).
     fn recv_one(&self) -> Result<Option<Received>, RawError> {
         let io_err = |op: &'static str, source: io::Error| RawError::Io { op, iface: self.iface.clone(), source };
         let mut buf = vec![0u8; MAX_FRAME];
@@ -386,6 +406,10 @@ impl RawLink {
             return Err(io_err("receive", source));
         }
         let n = n as usize;
+        let outgoing = from.sll_pkttype == libc::PACKET_OUTGOING;
+        if outgoing && !self.options.outgoing {
+            return Ok(None);
+        }
         // The tag the kernel took out, if any: it counts in the frame handed back.
         let mut tag = None;
         // SAFETY: CMSG_FIRSTHDR and CMSG_NXTHDR walk the control buffer recvmsg filled, within
@@ -411,6 +435,6 @@ impl RawLink {
             buf.splice(12..12, tag);
         }
         buf.shrink_to_fit();
-        Ok(Some(Received { bytes: buf, at: SystemTime::now(), outgoing: from.sll_pkttype == libc::PACKET_OUTGOING }))
+        Ok(Some(Received { bytes: buf, at: SystemTime::now(), outgoing }))
     }
 }

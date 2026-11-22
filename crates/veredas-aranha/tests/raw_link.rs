@@ -40,7 +40,7 @@ fn pair() -> (RawLink, RawLink) {
         netns::ip(&["link", "set", iface, "address", &mac.to_string()]);
         netns::ip(&["link", "set", iface, "up"]);
     }
-    netns::wait_up(&["a0", "b0"]);
+    netns::wait_pairs(&[("a0", "b0")]);
     (RawLink::open("a0", false).unwrap(), RawLink::open("b0", false).unwrap())
 }
 
@@ -87,6 +87,18 @@ fn frames_cross_a_veth_pair_whole_both_ways() {
         assert_eq!(heard(&b, ether::ETHERTYPE_PROFINET, false, Duration::from_secs(2)).expect("b0 missed the second").bytes, identify);
         let pdu = dcp::decode(ether::parse(&got.bytes).unwrap().payload).unwrap();
         assert_eq!(pdu.xid, 0x0102_0304);
+        // The time a frame was read, not the time the wait began: one sent 400 ms into a wait.
+        let late = RawLink::open("a0", false).unwrap();
+        let frame = identify.clone();
+        let sender = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            let sent = SystemTime::now();
+            late.send(&frame).unwrap();
+            sent
+        });
+        let got = heard(&b, ether::ETHERTYPE_PROFINET, false, Duration::from_secs(2)).expect("b0 missed the late frame");
+        let sent = sender.join().unwrap();
+        assert!(got.at >= sent && got.at <= SystemTime::now(), "read at {:?}, sent at {sent:?}", got.at);
 
         // The other way: an LLDP frame to its group address, and an answer unicast to a0.
         let pdu = LldpPdu::new(ChassisId::Local { id: "station-b".into() }, PortId::Local { id: "port-001".into() }, 20);
@@ -200,10 +212,15 @@ fn a_missing_interface_and_a_bad_name_are_refused_by_name() {
         ("a b", false),
         ("a:b", false),
         ("a\tb", false),
+        ("a\nb", false),
+        ("a\u{b}b", false),
+        ("a\u{c}b", false),
+        ("a\rb", false),
         // The kernel reads white space byte by byte: 0xA0 is one (the second byte of `à`).
         ("à0", false),
         ("a\u{a0}b", false),
     ];
+    assert_eq!(names.iter().filter(|(_, missing)| !missing).count(), 15);
     for (name, missing) in names {
         let err = RawLink::open(name, false).unwrap_err();
         match (missing, &err) {
@@ -293,7 +310,8 @@ fn a_failing_body_fails_its_test_with_the_childs_words() {
 #[test]
 fn the_private_network_holds_only_what_the_test_made() {
     netns::isolated("the_private_network_holds_only_what_the_test_made", &[("p0", "q0"), ("p1", "q1")], || {
-        // The fixture waited for every end's carrier before the body.
+        // The fixture waited for every end's carrier, and for a frame to cross each pair each way,
+        // before the body (the first frame's test below runs the fixture twenty times).
         for n in ["p0", "q0", "p1", "q1"] {
             assert!(flags(n).split(',').any(|f| f == "LOWER_UP"), "{n}: {}", flags(n));
         }
@@ -349,9 +367,29 @@ fn a_filtered_link_on_the_sending_end_hears_its_type_behind_any_tag() {
         ad_ad.resize(64, 0);
         let mut q_q = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1, 0x81, 0x00, 0xC0, 0x00, 0x81, 0x00, 0x00, 0x07, 0x88, 0x92, 0x80, 0x00];
         q_q.resize(64, 0);
-        for f in [&q, &ad, &double, &q_ad, &ad_ad, &q_q, &other] {
+        // Three tags, and another type behind two tags in each order: kept by neither end.
+        let mut three = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1, 0x88, 0xA8, 0x00, 0x05, 0x81, 0x00, 0x00, 0x06, 0x81, 0x00, 0x00, 0x07, 0x88, 0x92, 0x80, 0x00];
+        three.resize(64, 0);
+        let others: Vec<Vec<u8>> = [[0x81, 0x00, 0x88, 0xA8], [0x88, 0xA8, 0x81, 0x00], [0x81, 0x00, 0x81, 0x00], [0x88, 0xA8, 0x88, 0xA8]]
+            .iter()
+            .map(|t| {
+                let mut f = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1, t[0], t[1], 0xC0, 0x00, t[2], t[3], 0x00, 0x07, 0x88, 0xB5, 0x80, 0x00];
+                f.resize(64, 0);
+                f
+            })
+            .collect();
+        let all = RawLink::open("b0", false).unwrap();
+        let mut sent = vec![q.clone(), ad.clone(), double.clone(), q_ad.clone(), ad_ad.clone(), q_q.clone(), other.clone(), three.clone()];
+        sent.extend(others.iter().cloned());
+        for f in &sent {
             a.send(f).unwrap();
         }
+        // Every one of them crossed (a link with no filter hears the twelve, each whole).
+        let mut crossed = Vec::new();
+        while let Some(r) = all.recv(Duration::from_millis(300)).unwrap() {
+            crossed.push(r.bytes);
+        }
+        assert_eq!(crossed, sent);
         for link in [&watcher, &far] {
             let mut got = Vec::new();
             while let Some(r) = link.recv(Duration::from_millis(300)).unwrap() {
@@ -398,6 +436,18 @@ fn a_wait_lasts_its_timeout_through_signals_skipped_frames_and_under_a_milliseco
         let waited = start.elapsed();
         kicker.join().unwrap();
         assert!(waited >= Duration::from_millis(295) && waited < Duration::from_millis(800), "{waited:?}");
+        // A signal late in the wait does not start it again: it ends at its timeout, not a
+        // timeout after the signal.
+        let kicker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(280));
+            // SAFETY: as above.
+            unsafe { libc::pthread_kill(me, libc::SIGUSR1) };
+        });
+        let start = Instant::now();
+        assert_eq!(a.recv(Duration::from_millis(300)).unwrap(), None);
+        let waited = start.elapsed();
+        kicker.join().unwrap();
+        assert!(waited >= Duration::from_millis(295) && waited < Duration::from_millis(480), "{waited:?}");
 
         // A link that leaves out what this host sends waits its timeout under a stream of them.
         let blind = RawLink::open_with("a0", Options { outgoing: false, ..Options::default() }).unwrap();
@@ -463,7 +513,7 @@ fn a_frame_past_the_buffer_is_refused_never_handed_back_cut() {
         for iface in ["a0", "b0"] {
             netns::ip(&["link", "set", iface, "mtu", "65535"]);
         }
-        netns::wait_up(&["a0", "b0"]);
+        netns::wait_pairs(&[("a0", "b0")]);
         let a = RawLink::open("a0", false).unwrap();
         let plain = RawLink::open("b0", false).unwrap();
         let filtered = RawLink::open_with("b0", Options { ethertype: Some(0x88B5), ..Options::default() }).unwrap();
@@ -490,6 +540,13 @@ fn a_frame_past_the_buffer_is_refused_never_handed_back_cut() {
                 }
             }
         }
+        // A link that leaves out what this host sends passes over its over-long frames too, and
+        // waits its timeout.
+        let blind = RawLink::open_with("a0", Options { outgoing: false, ..Options::default() }).unwrap();
+        a.send(&frame(65_537, false)).unwrap();
+        let start = Instant::now();
+        assert_eq!(blind.recv(Duration::from_millis(300)).unwrap(), None);
+        assert!(start.elapsed() >= Duration::from_millis(295), "{:?}", start.elapsed());
         assert_eq!(
             RawError::TooLongHeard(65_537).to_string(),
             "a frame of 65537 bytes was heard, past the link's 65536-byte buffer: it is not handed back"
@@ -517,5 +574,50 @@ fn a_name_the_kernel_gives_an_interface_is_opened() {
             assert!(RawLink::open(name, false).is_ok(), "{name:?}");
             netns::ip(&["link", "del", name]);
         }
+    });
+}
+
+/// The body the next test runs twenty times: the first frame sent from the end raised first, at
+/// once after the fixture, is heard.
+#[test]
+fn the_first_frame_after_the_fixture_crosses() {
+    netns::isolated("the_first_frame_after_the_fixture_crosses", &[("a0", "b0")], || {
+        let b = RawLink::open_with("b0", Options { ethertype: Some(0x88B5), ..Options::default() }).unwrap();
+        let a = RawLink::open("a0", false).unwrap();
+        let f = ether::build(Mac::BROADCAST, a.mac(), 0x88B5, &[1; 46]).unwrap();
+        a.send(&f).unwrap();
+        assert_eq!(b.recv(Duration::from_secs(1)).unwrap().map(|r| r.bytes), Some(f));
+        // The fixture's probes are gone before the body: a link opened now hears none.
+        let all = RawLink::open("b0", false).unwrap();
+        assert_eq!(all.recv(Duration::from_millis(100)).unwrap(), None);
+    });
+}
+
+#[test]
+fn the_first_frame_after_the_fixture_crosses_in_every_run() {
+    for run in 0..20 {
+        let out = netns::run_child("the_first_frame_after_the_fixture_crosses").unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.lines().any(|l| l == "veredas-netns: the body ran in the private network: the_first_frame_after_the_fixture_crosses"),
+            "run {run}: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[test]
+fn a_pair_that_carries_nothing_fails_the_fixture_by_name() {
+    netns::isolated("a_pair_that_carries_nothing_fails_the_fixture_by_name", &[("a0", "b0")], || {
+        // A pair whose one end drops everything it is given (a queue of no room): the wait fails,
+        // naming the way.
+        let out = Command::new("tc").args(["qdisc", "add", "dev", "a0", "root", "pfifo", "limit", "0"]).output().unwrap();
+        assert!(out.status.success(), "tc: {}", String::from_utf8_lossy(&out.stderr));
+        let start = Instant::now();
+        let err = panic::catch_unwind(|| netns::wait_pairs(&[("a0", "b0")])).unwrap_err();
+        let m = message(err);
+        assert!(m.starts_with("no frame crossed from a0 to b0 in 5 s ("), "{m}");
+        assert!(start.elapsed() >= Duration::from_secs(5), "{:?}", start.elapsed());
+        assert_eq!(netns::PROBE, 0x88B6);
     });
 }

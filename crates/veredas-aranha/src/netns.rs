@@ -128,8 +128,60 @@ fn prepare(pairs: &[(&str, &str)]) {
         ip(&["link", "set", a, "up"]);
         ip(&["link", "set", b, "up"]);
     }
+    wait_pairs(pairs);
+}
+
+/// The EtherType of the fixture's own probes (IEEE 802's second local experimental type), which no
+/// test sends.
+pub const PROBE: u16 = 0x88B6;
+
+/// Wait until each pair carries a frame each way: its carriers up, then a numbered probe sent from
+/// each end until the other end hears the latest one sent (5 s at most, failing by name). A carrier
+/// shows up before the end raised first sends what it is given: a frame sent at once from it can be
+/// lost (measured: about one in ten), never after this.
+pub fn wait_pairs(pairs: &[(&str, &str)]) {
     let ends: Vec<&str> = pairs.iter().flat_map(|(a, b)| [*a, *b]).collect();
     wait_up(&ends);
+    for (a, b) in pairs {
+        carries(a, b);
+        carries(b, a);
+    }
+}
+
+fn carries(from: &str, to: &str) {
+    use crate::profinet::mac::Mac;
+    use crate::wire::raw::{Options, RawError, RawLink};
+    use std::time::{Duration, Instant};
+    let rx = RawLink::open_with(to, Options { ethertype: Some(PROBE), promiscuous: false, outgoing: false })
+        .unwrap_or_else(|e| panic!("the probe's listener on {to}: {e}"));
+    let tx = RawLink::open(from, false).unwrap_or_else(|e| panic!("the probe's sender on {from}: {e}"));
+    let end = Instant::now() + Duration::from_secs(5);
+    let mut k: u32 = 0;
+    loop {
+        k += 1;
+        let mut f = Vec::with_capacity(60);
+        f.extend_from_slice(&Mac::BROADCAST.0);
+        f.extend_from_slice(&tx.mac().0);
+        f.extend_from_slice(&PROBE.to_be_bytes());
+        f.extend_from_slice(b"veredas-netns probe ");
+        f.extend_from_slice(&k.to_be_bytes());
+        f.resize(60, 0);
+        // A full queue loses the probe as a lost carrier would: it is sent again.
+        match tx.send(&f) {
+            Ok(()) | Err(RawError::QueueFull(_)) => {}
+            Err(e) => panic!("the probe from {from}: {e}"),
+        }
+        // Probes are 50 ms apart, so an earlier one is heard or lost before the next is sent.
+        let wait_end = Instant::now() + Duration::from_millis(50);
+        while let Some(r) = rx.recv(wait_end.saturating_duration_since(Instant::now())).unwrap_or_else(|e| panic!("the probe on {to}: {e}")) {
+            if r.bytes.get(34..38) == Some(&k.to_be_bytes()[..]) {
+                return;
+            }
+        }
+        if Instant::now() > end {
+            panic!("no frame crossed from {from} to {to} in 5 s ({k} probes sent)");
+        }
+    }
 }
 
 /// Wait until each interface has its carrier (`LOWER_UP`): a frame sent the moment a veth end is

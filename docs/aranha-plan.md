@@ -283,6 +283,15 @@ is pinned by a test when its phase lands.
   A codec that writes the counts big-endian under a little-endian header is read by the dissector
   as a gigabyte of arguments, and a status written byte by byte under it reads as another error
   (C-137, its first refute round).
+- **A veth end shows its carrier before it sends what it is given.** Right after a pair comes up,
+  a frame sent at once from the end raised first is lost about one time in ten (measured by C-134's
+  third critic), though `ip` already shows the end up, its carrier on and its queue set. The
+  fixture waits for a numbered probe to cross each pair each way (`netns::wait_pairs`); a test that
+  raises a pair again calls it too. The raw link's tests wait on deadlines: they run one at a time
+  on the machine, under the suite lock, as maquinar's timed tests do.
+- **The kernel takes a frame's outer tag out on the far end, not on the sending end**, so a filter
+  that counts the tags left in the frame looks one tag deeper on one end than on the other. The
+  raw link's filter counts the tag the kernel took out (C-134).
 - **A frame shorter than 60 bytes is padded on the wire, and a capture may or may not hold the
   pad**: DCP is bounded by its own data length and LLDP by its end TLV, never by the frame.
 - **This machine announces itself.** An operating system's own LLDP agent and its own ARP are on
