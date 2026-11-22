@@ -1,22 +1,26 @@
 //! # orcl-runtime - the engine of an ORCL scan
 //!
-//! Runs one [`orcl_std::Program`] as a cyclic task:
-//! - **absolute deadlines.** Scan `k` is due at `k * period` from the start, so the cycle never drifts. When
-//!   deadlines are missed, the skipped cycles are counted and the task resumes on the next due one;
-//! - **a process image.** The task reads its inputs once at the start of each scan, the program runs on that
-//!   snapshot, and the outputs are applied after the scan;
-//! - **a watchdog.** After `overrun_limit` consecutive cycles that ran longer than the period, the task faults:
-//!   from then on it applies the program's safe outputs;
-//! - **cycle statistics:** jitter (actual start vs deadline), execution time, overruns, skipped cycles.
+//! Runs one [`orcl_std::Program`] as a cyclic [`Task`] on a [`Clock`] its host hands in, so the same scan runs
+//! on a target's monotonic clock ([`MonoClock`]) and on virtual time in a test or a simulation
+//! ([`VirtualClock`]):
+//! - **absolute deadlines.** Scan `k` is due at `k * period` from the start and starts there, whatever the scans
+//!   before it took. A deadline that passed while a scan ran is skipped and counted, never caught up;
+//! - **a process image.** The inputs are read once at the start of a scan, the program runs on that snapshot and
+//!   the scan's time, and the outputs are written once at its end;
+//! - **the time-error rule** of `docs/controlador-plan.md` ("Faults"): a scan longer than its period is a time
+//!   error, reported with the scan for the host's time-error handler; a scan longer than twice its period faults
+//!   the task, its own outputs never written, and from then on every scan writes the program's safe outputs
+//!   without scanning it, so the plant's exchange goes on;
+//! - **cycle statistics:** scans, overruns, skipped cycles, each scan's lateness against its deadline and its
+//!   length.
 //!
-//! Carried from Veredas 1 (`docs/orcl/README.md`, "What it absorbs from Veredas 1"). Its real-time setup of a
-//! Linux process is not carried: the language's crates hold no operating-system code, and the host that runs a
-//! program on a target sets its own process up. The task runs on the operating system's sleep, then a short spin
-//! to each deadline.
+//! One cyclic task only: how several tasks pre-empt one another is controlador's execution model, not ruled
+//! (`docs/questions.md` Q33, Q223). No operating-system code: the host that runs a program on a target sets its
+//! own process up for real time (`docs/orcl/README.md`).
 #![forbid(unsafe_code)]
 
 mod clock;
 mod task;
 
-pub use clock::MonoClock;
-pub use task::{CycleStats, Io, Report, RunState, TaskConfig, run};
+pub use clock::{Clock, MonoClock, VirtualClock};
+pub use task::{CycleStats, Fault, Io, Report, RunState, Task, TaskConfig, TaskError};

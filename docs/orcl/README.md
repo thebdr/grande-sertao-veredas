@@ -124,7 +124,10 @@ Read on 2026-11-22 from Veredas 1's branch `supervisao-plan` (2026-11-11): `crat
 - **`orcl-runtime`** comes as the engine of a scan. Kept: the process image, absolute deadlines, skipped cycles,
   safe outputs once faulted, the statistics. Changed: the clock is handed in, so the same engine runs on virtual
   time; a scan is stepped by its host rather than looped for a fixed duration; the watchdog follows the plan's
-  time-error rule in place of Veredas 1's count of consecutive overruns. Moved out: the real-time setup of a Linux
+  time-error rule in place of Veredas 1's count of consecutive overruns, and the scan that faults never writes
+  its own outputs (Veredas 1 wrote them, then the safe ones); a deadline falling exactly at a scan's end runs
+  rather than being skipped; a period of zero is refused by name rather than raised to 100 µs; jitter is named
+  lateness, a scan's start against its absolute deadline, which is what it measured. Moved out: the real-time setup of a Linux
   process (`mlockall`, `SCHED_FIFO` by hand-declared foreign functions) goes to controlador, the one production
   host, by the rule above and on an existing, tested library (`docs/controlador-plan.md`, "Rules").
 - **`demos/conveyor`** comes as a fixture: its program (a conveyor with a guarded door and a start, stop and fault

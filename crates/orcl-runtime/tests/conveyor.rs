@@ -152,6 +152,8 @@ mod conveyor {
 }
 
 use conveyor::{Conveyor, Inputs, Outputs, State};
+use orcl_runtime::{Io, RunState, Task, TaskConfig, VirtualClock};
+use std::time::Duration;
 use orcl_std::{Program, Scan, ms};
 
 /// Drives the program on SIMULATED time: 10 ms scans from `from` to `to` (ms), the inputs given by `inputs`
@@ -288,4 +290,82 @@ fn stop_runs_the_belt_on_for_two_seconds_to_clear() {
     let o = run(&mut c, 2000, 2200, |_| closed());
     assert_eq!(c.state(), State::Idle);
     assert!(!o.motor_on);
+}
+
+/// The plant of Veredas 1's demo host, as it was: an operator's script (who presses what, when) and a belt that
+/// brings a part to the end sensor every 1.2 s while the motor runs, the motor being the last output written.
+struct Plant {
+    motor_on: bool,
+}
+
+fn between(t: u128, from: u128, to: u128) -> bool {
+    (from..to).contains(&t)
+}
+
+impl Io<Inputs, Outputs> for Plant {
+    fn read_inputs(&mut self, now: Duration) -> Inputs {
+        let t = now.as_millis();
+        Inputs {
+            start_pb: between(t, 1_000, 1_200) || between(t, 14_000, 14_200),
+            stop_pb: between(t, 19_000, 19_200),
+            ack_pb: between(t, 13_000, 13_200),
+            // a 300 ms flicker (filtered), then the door open for 2 s (alarm after 500 ms)
+            door_ch1: !(between(t, 7_000, 7_300) || between(t, 10_000, 12_000)),
+            door_ch2: true,
+            part_at_end: self.motor_on && t % 1_200 < 150,
+        }
+    }
+
+    fn write_outputs(&mut self, _now: Duration, outputs: &Outputs) {
+        self.motor_on = outputs.motor_on;
+    }
+}
+
+/// The demo's 22 s, run by the engine on virtual time with a 10 ms task: every change of state, of the door
+/// alarm and of the part count lands on the scan the program's own timers and edges say, and the run takes
+/// milliseconds.
+#[test]
+fn the_engine_runs_the_conveyor_against_its_plant_on_virtual_time() {
+    let mut clock = VirtualClock::new();
+    let mut task = Task::new(TaskConfig { name: "main", period: ms(10) }, Conveyor::default()).unwrap();
+    let mut plant = Plant { motor_on: false };
+    let (mut state, mut alarm, mut parts) = (State::Idle, false, 0);
+    let (mut states, mut alarms, mut counted) = (Vec::new(), Vec::new(), Vec::new());
+    task.run_until(&mut plant, &mut clock, ms(22_000), |r| {
+        let t = r.scan.now.as_millis() as u64;
+        if r.program.state() != state {
+            states.push((t, state, r.program.state()));
+            state = r.program.state();
+        }
+        if r.outputs.door_alarm != alarm {
+            alarm = r.outputs.door_alarm;
+            alarms.push((t, alarm));
+        }
+        if r.outputs.parts != parts {
+            parts = r.outputs.parts;
+            counted.push(t);
+        }
+    });
+    assert_eq!(
+        states,
+        vec![
+            (1_000, State::Idle, State::Running),
+            (10_500, State::Running, State::Fault),
+            (13_000, State::Fault, State::Idle),
+            (14_000, State::Idle, State::Running),
+            (19_000, State::Running, State::Stopping),
+            (21_010, State::Stopping, State::Idle),
+        ],
+        "start, the door's alarm 500 ms after it opened, the acknowledge, a new start, the stop and 2 s of clearing \
+         from the scan after it"
+    );
+    assert_eq!(alarms, vec![(10_500, true), (12_000, false)], "the 300 ms flicker at 7 s raised nothing");
+    assert_eq!(
+        counted,
+        vec![1_200, 2_400, 3_600, 4_800, 6_000, 7_200, 8_400, 9_600, 14_400, 15_600, 16_800, 18_000, 19_200, 20_400],
+        "a part every 1.2 s while the belt moves, clearing included"
+    );
+    let s = *task.stats();
+    assert_eq!((s.cycles, s.overruns, s.skipped), (2_200, 0, 0));
+    assert_eq!(task.state(), RunState::Running);
 }
