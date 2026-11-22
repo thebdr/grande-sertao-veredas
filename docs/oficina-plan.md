@@ -307,14 +307,24 @@ the numbers and what was learnt on the way are in the evidence. A test run names
    given to rust-analyzer as an inline description of its crates, build scripts and procedural
    macros off, the toolchain's own binary started in a folder of Oficina's. Spix cannot type into the
    page; a typing hook of Oficina's does, by the keyboard's path.
+5. Not yet run.
+6. Not yet run.
+7. **Passed** (2026-11-23). One test, run by cargo nextest with no display, its exit code the
+   verdict: a value typed into the form and the text following it, an edit typed into Monaco and
+   read back through Oficina's hook, and a named layout saved by KDDockWidgets' own saver, the
+   panes laid out anew (one closed, one floated into a window of its own) and the layout restored,
+   every pane back in the main window at its place and size, the page that floated and came back
+   still holding its edit (moved, not reloaded). Green 20 times in a row, about 2 s a run. Panes
+   floated to another monitor are not judged headless.
 
 On X11 too (2026-11-22, once the architect installed the seven libraries Qt's X11 plugin needs):
 the same tests passed on Qt's `xcb` platform, through this machine's display (the desktop's
 XWayland, OpenGL 4.6 on its Intel GPU), and the timings held in release (a million rows open in
-47 to 63 ms, 100 000 files in 154 to 226 ms). Windows waits for its runs.
+47 to 63 ms, 100 000 files in 154 to 226 ms); point 4 passed there once, and point 7 once (21.6 s,
+its windows mapped on the desktop). Windows waits for its runs.
 
 ### Verdict
-Not given: points 5 to 7 remain, and point 3's frame times.
+Not given: points 5 and 6 remain, and point 3's frame times.
 
 ## Open
 - **Q31, the review's majors and minors**, none ruled. Those that touch Oficina: 22 (Oficina
