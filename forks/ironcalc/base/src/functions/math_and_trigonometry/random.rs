@@ -5,14 +5,21 @@ use crate::{
     calc_result::CalcResult, expressions::parser::Node, expressions::token::Error, model::Model,
 };
 
+// Veredas fork change 16: a host's seed, when it set one, comes first (`crate::seed_random`).
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn random() -> f64 {
+    if let Some(v) = crate::model::next_seeded_random() {
+        return v;
+    }
     rand::random()
 }
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 fn random() -> f64 {
     use js_sys::Math;
+    if let Some(v) = crate::model::next_seeded_random() {
+        return v;
+    }
     Math::random()
 }
 
@@ -186,5 +193,42 @@ impl<'a> Model<'a> {
         }
 
         CalcResult::Array(result)
+    }
+}
+
+#[cfg(test)]
+mod seeded_tests {
+    use crate::test::util::new_empty_model;
+
+    fn draws() -> Vec<String> {
+        let mut model = new_empty_model();
+        model._set("A1", "=RAND()");
+        model._set("A2", "=RANDBETWEEN(1,1000000)");
+        model._set("A3", "=RANDARRAY(2,2,0,100,TRUE)");
+        model.evaluate();
+        ["A1", "A2", "A3", "B3", "A4", "B4"].iter().map(|c| model._get_text(c)).collect()
+    }
+
+    #[test]
+    fn a_seed_makes_the_draws_the_same_every_time_and_none_returns_to_chance() {
+        crate::seed_random(Some(42));
+        let first = draws();
+        crate::seed_random(Some(42));
+        assert_eq!(draws(), first);
+        assert!(crate::random_is_seeded());
+        // another seed, other draws
+        crate::seed_random(Some(43));
+        assert_ne!(draws(), first);
+        // unseeded: back to chance (a RAND() equal to the seeded one is out of reach)
+        crate::seed_random(None);
+        assert!(!crate::random_is_seeded());
+        assert_ne!(draws()[0], first[0]);
+        // every draw lies in [0, 1)
+        crate::seed_random(Some(7));
+        for _ in 0..10_000 {
+            let x = crate::model::next_seeded_random().unwrap();
+            assert!((0.0..1.0).contains(&x), "{x}");
+        }
+        crate::seed_random(None);
     }
 }

@@ -78,7 +78,7 @@ pub mod mock_time;
 pub use locale::get_supported_locales;
 pub use merged_cells::MergeStructure;
 pub use model::get_milliseconds_since_epoch;
-pub use model::{pin_clock, pinned_clock};
+pub use model::{pin_clock, pinned_clock, random_is_seeded, seed_random};
 pub use model::DefinedNameEntry;
 pub use model::FmtSettings;
 pub use model::Model;

@@ -68,6 +68,39 @@ pub fn pinned_clock() -> Option<i64> {
     PINNED_CLOCK.with(|c| c.get())
 }
 
+thread_local! {
+    /// Veredas fork change 16: the state of the random functions' generator a host seeded on
+    /// this thread, if any.
+    static SEEDED_RANDOM: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Seeds the random functions (RAND, RANDBETWEEN, RANDARRAY) on this thread: from now on they draw
+/// from a deterministic generator started at `seed`, so one workbook evaluated the same way draws
+/// the same numbers every time; `None` returns them to the system's randomness. Seeding again
+/// starts the sequence over. A host that compares evaluations (a measure against cached values)
+/// seeds it so its result does not depend on chance. Veredas fork change 16.
+pub fn seed_random(seed: Option<u64>) {
+    SEEDED_RANDOM.with(|s| s.set(seed));
+}
+
+/// Whether the random functions are seeded on this thread ([`seed_random`]).
+pub fn random_is_seeded() -> bool {
+    SEEDED_RANDOM.with(|s| s.get().is_some())
+}
+
+/// The next number in [0, 1) of the seeded generator (SplitMix64), `None` when not seeded.
+pub(crate) fn next_seeded_random() -> Option<f64> {
+    SEEDED_RANDOM.with(|s| {
+        let state = s.get()?.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        s.set(Some(state));
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        Some((z >> 11) as f64 / (1u64 << 53) as f64)
+    })
+}
+
 /// Number of milliseconds since January 1, 1970
 /// Used by time and date functions. It takes the value from the environment:
 /// * The clock a host pinned on this thread ([`pin_clock`])
