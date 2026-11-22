@@ -224,6 +224,13 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
   goes out as 0x8000, the protocol's O→T item); the test drives its codecs with the protocol's sizes
   and codes, and shows its own scanner refused 0x0127 for the sizes. Core's EtherNet/IP scanner, if
   it forks that crate, has both to fix.
+  Its first refute round set four borders a scanner's author meets: the adapter routes one level
+  (an Unconnected_Send nested in another is refused 0x08, else a thousand levels overflowed the
+  thread's stack and killed the bench); produced frames go to the originator's own host, at the
+  port its T→O item gives (the item's address is not obeyed, as OpENer does); a frame whose 32-bit
+  sequence is not newer than the last taken is dropped as stale; and a ListIdentity broadcast is
+  heard only by an adapter bound to `0.0.0.0` (Linux hands a broadcast to the any-address alone),
+  whose item then names the address its reply leaves from.
 - **The PROFINET device's first slice** (C-112, 2026-11-22): discovery and naming, which aranha's
   scanner and Oficina's engineering tool meet first. It speaks through aranha's codecs and raw
   link (`docs/questions.md` Q5, the map's row: the scanner and the bench cannot drift apart on the

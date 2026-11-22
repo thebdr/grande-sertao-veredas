@@ -958,3 +958,292 @@ fn the_documented_adapter_runs_from_its_bench_file() {
     assert!(lines[0].starts_with(&format!("ethernetip remote-io: {} (class 1 on {})", adapter.addr, adapter.io_addr)), "{lines:?}");
     plant.stop();
 }
+
+// ---- C-111, refute round 1: the pins (adapted from the critic's probes) ----
+
+/// A request wrapped in an Unconnected_Send with `route`.
+fn wrap_us(inner: &[u8], route: &[u8]) -> Vec<u8> {
+    let mut r = vec![0x52, 0x02, 0x20, 0x06, 0x24, 0x01, 0x0A, 0x05];
+    r.extend_from_slice(&(inner.len() as u16).to_le_bytes());
+    r.extend_from_slice(inner);
+    if inner.len() % 2 == 1 {
+        r.push(0);
+    }
+    r.push((route.len() / 2) as u8);
+    r.push(0);
+    r.extend_from_slice(route);
+    r
+}
+
+/// A Large_Forward_Open request (32-bit network parameters) for 151, 150, 100.
+fn large_fo(serial: u16, o_rpi: u32, t_rpi: u32, o_size: u16, t_size: u16) -> Vec<u8> {
+    let mut b = vec![0x5B, 0x02, 0x20, 0x06, 0x24, 0x01, 0x0A, 0x05];
+    b.extend_from_slice(&0u32.to_le_bytes());
+    b.extend_from_slice(&(0x8000_0000u32 | serial as u32).to_le_bytes());
+    b.extend_from_slice(&serial.to_le_bytes());
+    b.extend_from_slice(&0x00FEu16.to_le_bytes());
+    b.extend_from_slice(&0x0BADCAFEu32.to_le_bytes());
+    b.extend_from_slice(&[2, 0, 0, 0]);
+    b.extend_from_slice(&o_rpi.to_le_bytes());
+    b.extend_from_slice(&((2u32 << 29) | o_size as u32).to_le_bytes());
+    b.extend_from_slice(&t_rpi.to_le_bytes());
+    b.extend_from_slice(&((2u32 << 29) | t_size as u32).to_le_bytes());
+    b.push(0x01);
+    let path = [0x20, 0x04, 0x24, 151, 0x2C, 150, 0x2C, 100];
+    b.push((path.len() / 2) as u8);
+    b.extend_from_slice(&path);
+    b
+}
+
+fn count_frames(o: &Originator, within: Duration) -> usize {
+    let started = Instant::now();
+    let mut n = 0;
+    while started.elapsed() < within {
+        o.next_input(false);
+        n += 1;
+    }
+    n
+}
+
+#[test]
+fn an_unconnected_send_nested_in_another_is_refused_and_the_adapter_lives_on() {
+    let adapter = start(&config(&device(60))).unwrap();
+    let mut c = Encap::connect(adapter.addr);
+    let s = c.register();
+    let inner = [0x0E, 0x03, 0x20, 0x01, 0x24, 0x01, 0x30, 0x01];
+    // Two levels: the outer one's answer is the inner one's refusal, 0x08 for an Unconnected_Send.
+    assert_eq!(c.cip(s, &wrap_us(&wrap_us(&inner, &[]), &[])), vec![0xD2, 0, 0x08, 0]);
+    // A thousand levels, which overflowed the stack before: refused the same, and the adapter
+    // answers the next request.
+    let mut msg = inner.to_vec();
+    for _ in 0..1000 {
+        msg = wrap_us(&msg, &[]);
+    }
+    assert_eq!(c.cip(s, &msg), vec![0xD2, 0, 0x08, 0]);
+    assert_eq!(c.cip(s, &wrap_us(&inner, &[])), vec![0x8E, 0, 0, 0, 9, 0]);
+}
+
+#[test]
+fn a_large_forward_open_with_unequal_rpis_is_taken_or_refused_as_a_forward_open_is() {
+    let adapter = start(&config(&device(63))).unwrap();
+    let mut o = Originator::connect(&adapter);
+    let SocketAddr::V4(me) = o.udp.local_addr().unwrap() else { panic!() };
+    let sockaddr = ethernetip_core::cpf::encode_sockaddr_in_v4(SocketAddr::V4(me)).unwrap();
+    // O→T 50 ms, T→O 10 ms: the reply states each, and the inputs come every 10 ms.
+    let session = o.session;
+    let env = o.encap.rr(session, &large_fo(0x4444, 50_000, 10_000, 4 + 6, 8 + 2), vec![ethernetip_core::cpf::Item::new(0x8001, sockaddr)]);
+    let reply = env.find(0x00B2).unwrap().data.clone();
+    assert_eq!(&reply[..4], &[0xDB, 0, 0, 0]);
+    let api = |at: usize| u32::from_le_bytes(reply[4 + at..4 + at + 4].try_into().unwrap());
+    assert_eq!((api(16), api(20)), (50_000, 10_000), "O→T then T→O");
+    o.next_input(false);
+    let n = count_frames(&o, Duration::from_secs(1));
+    assert!((80..=110).contains(&n), "{n} frames in a second at a 10 ms T→O RPI");
+    // Refused for its size as a Forward_Open is, the size wanted beside it.
+    let env = o.encap.rr(session, &large_fo(0x4445, 50_000, 10_000, 4, 8 + 2), vec![]);
+    assert_eq!(status_of(&env.find(0x00B2).unwrap().data), (0x01, vec![0x0127, 10]));
+    // A T→O RPI alone outside the range: refused 0x0111.
+    let mut req = o.request(&open_for(4, 8));
+    req.t_to_o_rpi_us = 500;
+    let mut mr = vec![0x54, 0x02, 0x20, 0x06, 0x24, 0x01];
+    mr.extend(req.encode());
+    assert_eq!(status_of(&o.encap.cip(o.session, &mr)), (0x01, vec![0x0111]));
+}
+
+#[test]
+fn the_timeout_counts_the_consumed_rpi_and_the_multiplier_and_the_first_frame_waits_ten_seconds() {
+    let adapter = start(&config(&device(77))).unwrap();
+    let mut o = Originator::connect(&adapter);
+    // O→T 10 ms, T→O 30 ms, multiplier 1: 10 ms × 4 << 1 = 80 ms from the last frame.
+    let mut req = o.request(&Open { rpi_us: 10_000, multiplier: 1, ..open_for(4, 8) });
+    req.t_to_o_rpi_us = 30_000;
+    let mut mr = vec![0x54, 0x02, 0x20, 0x06, 0x24, 0x01];
+    mr.extend(req.encode());
+    let SocketAddr::V4(me) = o.udp.local_addr().unwrap() else { panic!() };
+    let sockaddr = ethernetip_core::cpf::encode_sockaddr_in_v4(SocketAddr::V4(me)).unwrap();
+    let env = o.encap.rr(o.session, &mr, vec![ethernetip_core::cpf::Item::new(0x8001, sockaddr)]);
+    let reply = env.find(0x00B2).unwrap().data.clone();
+    assert_eq!(reply[2], 0);
+    let to = env.find(0x8000).map(|i| SocketAddr::V4(ethernetip_core::cpf::decode_sockaddr_in_v4(&i.data).unwrap())).unwrap();
+    let id = u32::from_le_bytes(reply[4..8].try_into().unwrap());
+    for i in 0..10u32 {
+        o.send_output(to, id, i, i as u16, true, &[0; 4]);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let silent = Instant::now();
+    assert!(wait(Duration::from_secs(5), || adapter.status().timed_out == 1));
+    let after = silent.elapsed();
+    assert!(after >= Duration::from_millis(70) && after < Duration::from_millis(200), "{after:?}");
+    // No frame at all: still open at 9 s, closed by 10 s and a little.
+    let mut p = Originator::connect(&adapter);
+    p.open(&adapter, &Open { rpi_us: 10_000, multiplier: 0, serial: 0x0F0F, ..open_for(4, 8) });
+    std::thread::sleep(Duration::from_millis(9_000));
+    assert_eq!(adapter.status().connections.len(), 1, "closed before its 10 s");
+    assert!(wait(Duration::from_secs(3), || adapter.status().timed_out == 2));
+}
+
+#[test]
+fn the_configured_headers_carry_the_frames_both_ways() {
+    let text = device(66).replace("connections = [ { config = 151, output = 150, input = 100 } ]", "connections = [ { config = 151, output = 150, input = 100, output_header = \"modeless\", input_header = \"run-idle\" } ]");
+    let adapter = start(&config(&text)).unwrap();
+    let mut o = Originator::connect(&adapter);
+    // Sizes with the headers swapped: O→T the data and the count, T→O those and run/idle.
+    let (reply, to) = o.open(&adapter, &Open { o_to_t_size: 4 + 2, t_to_o_size: 8 + 2 + 4, ..open_for(4, 8) });
+    let f = o.next_input(true);
+    assert_eq!((f.run_idle, f.data.len()), (Some(true), 8));
+    let frame = ethernetip_connections::encode_frame(&ethernetip_connections::Frame { connection_id: reply.o_to_t_connection_id, sequence: 1, cip_sequence: 1, run_idle: None, data: vec![1, 0, 0x66, 0x66] });
+    o.udp.send_to(&frame, to).unwrap();
+    assert!(wait(Duration::from_secs(2), || adapter.get("setpoint").unwrap() == Value::U16(0x6666)));
+}
+
+#[test]
+fn a_frame_late_from_its_originator_or_from_another_host_is_kept_out() {
+    let adapter = start(&config(&device(64))).unwrap();
+    let mut o = Originator::connect(&adapter);
+    let (reply, to) = o.open(&adapter, &open_for(4, 8));
+    let id = reply.o_to_t_connection_id;
+    o.send_output(to, id, 10, 10, true, &[1, 0, 0x11, 0x11]);
+    assert!(wait(Duration::from_secs(5), || adapter.get("setpoint").unwrap() == Value::U16(0x1111)));
+    // An older sequence number, late: dropped, the newer data kept.
+    o.send_output(to, id, 9, 9, true, &[1, 0, 0x22, 0x22]);
+    o.send_output(to, id, 1, 11, true, &[1, 0, 0x33, 0x33]);
+    assert!(wait(Duration::from_secs(5), || adapter.status().stale_frames == 2));
+    assert_eq!(adapter.get("setpoint").unwrap(), Value::U16(0x1111));
+    // Forward in steps under 2^31 to the top and across the wrap: 0 is newer than 0xFFFFFFFF, and
+    // 0xFFFFFFFE after it is late again.
+    for (sequence, count) in [(0x7000_0000, 12), (0xE000_0000, 13), (0xFFFF_FFFF, 14)] {
+        o.send_output(to, id, sequence, count, true, &[1, 0, 0x44, count as u8]);
+        assert!(wait(Duration::from_secs(5), || adapter.get("setpoint").unwrap() == Value::U16(u16::from_le_bytes([0x44, count as u8]))), "{sequence:#X}");
+    }
+    o.send_output(to, id, 0, 15, true, &[1, 0, 0x55, 0x55]);
+    assert!(wait(Duration::from_secs(5), || adapter.get("setpoint").unwrap() == Value::U16(0x5555)));
+    o.send_output(to, id, 0xFFFF_FFFE, 16, true, &[1, 0, 0x66, 0x66]);
+    assert!(wait(Duration::from_secs(5), || adapter.status().stale_frames == 3));
+    assert_eq!(adapter.get("setpoint").unwrap(), Value::U16(0x5555));
+    // A valid frame from another host than the originator's: stray.
+    let other = UdpSocket::bind("127.0.0.2:0").unwrap();
+    let frame = ethernetip_connections::encode_frame(&ethernetip_connections::Frame { connection_id: id, sequence: 1, cip_sequence: 99, run_idle: Some(true), data: vec![1, 0, 0x66, 0x66] });
+    other.send_to(&frame, to).unwrap();
+    assert!(wait(Duration::from_secs(5), || adapter.status().stray_frames == 1));
+    assert_eq!(adapter.get("setpoint").unwrap(), Value::U16(0x5555));
+}
+
+#[test]
+fn produced_frames_go_to_the_originator_s_host_at_its_port_or_the_standard_one() {
+    // The item names another host: the frames go to the session's host at the item's port.
+    let adapter = start(&config(&device(67))).unwrap();
+    let mut o = Originator::connect(&adapter);
+    let third = UdpSocket::bind("127.0.0.9:0").unwrap();
+    third.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+    let mine = UdpSocket::bind(("127.0.0.1", third.local_addr().unwrap().port())).unwrap();
+    mine.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut mr = vec![0x54, 0x02, 0x20, 0x06, 0x24, 0x01];
+    mr.extend(o.request(&open_for(4, 8)).encode());
+    let sockaddr = ethernetip_core::cpf::encode_sockaddr_in_v4(third.local_addr().unwrap()).unwrap();
+    let env = o.encap.rr(o.session, &mr, vec![ethernetip_core::cpf::Item::new(0x8001, sockaddr)]);
+    assert_eq!(env.find(0x00B2).unwrap().data[2], 0);
+    let mut buf = [0u8; 600];
+    assert!(mine.recv_from(&mut buf).is_ok(), "the session's host, at the item's port");
+    assert!(third.recv_from(&mut buf).is_err(), "never another host");
+    // No item: the session's host at 2222, on an adapter whose own I/O port is 2222 (no O→T item
+    // in its reply then).
+    let Ok(standard) = UdpSocket::bind("127.0.0.1:2222") else { panic!("127.0.0.1:2222 is taken on this machine") };
+    standard.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let adapter = start(&config(&device(74).replace("io_port = 0", "io_port = 2222"))).unwrap();
+    let mut o = Originator::connect(&adapter);
+    let mut mr = vec![0x54, 0x02, 0x20, 0x06, 0x24, 0x01];
+    mr.extend(o.request(&open_for(4, 8)).encode());
+    let env = o.encap.rr(o.session, &mr, vec![]);
+    assert_eq!(env.find(0x00B2).unwrap().data[2], 0);
+    assert!(env.find(0x8000).is_none(), "no O→T item on the standard port");
+    assert!(standard.recv_from(&mut buf).is_ok(), "the originator's host at 2222");
+}
+
+#[test]
+fn a_connection_s_first_frame_comes_at_once_whatever_the_others_wait_for() {
+    let text = device(68).replace(
+        "connections = [ { config = 151, output = 150, input = 100 } ]",
+        "connections = [ { config = 151, output = 150, input = 100 }, { config = 151, output = 151, input = 100 } ]",
+    );
+    let adapter = start(&config(&text)).unwrap();
+    let mut a = Originator::connect(&adapter);
+    a.open(&adapter, &Open { rpi_us: 5_000_000, multiplier: 0, ..open_for(4, 8) });
+    a.next_input(false);
+    std::thread::sleep(Duration::from_millis(200));
+    let mut b = Originator::connect(&adapter);
+    let opened = Instant::now();
+    b.open(&adapter, &Open { output: 151, o_to_t_size: 2 + 2 + 4, serial: 0x0B0B, ..open_for(2, 8) });
+    b.next_input(false);
+    assert!(opened.elapsed() < Duration::from_millis(200), "{:?}", opened.elapsed());
+}
+
+#[test]
+fn a_forward_open_inside_an_unconnected_send_keeps_its_items() {
+    let adapter = start(&config(&device(75))).unwrap();
+    let mut o = Originator::connect(&adapter);
+    let mut fo = vec![0x54, 0x02, 0x20, 0x06, 0x24, 0x01];
+    fo.extend(o.request(&open_for(4, 8)).encode());
+    let SocketAddr::V4(me) = o.udp.local_addr().unwrap() else { panic!() };
+    let sockaddr = ethernetip_core::cpf::encode_sockaddr_in_v4(SocketAddr::V4(me)).unwrap();
+    let env = o.encap.rr(o.session, &wrap_us(&fo, &[]), vec![ethernetip_core::cpf::Item::new(0x8001, sockaddr)]);
+    assert_eq!(&env.find(0x00B2).unwrap().data[..4], &[0xD4, 0, 0, 0]);
+    assert!(env.find(0x8000).is_some(), "the O→T item kept");
+    o.next_input(false);
+}
+
+#[test]
+fn a_path_the_adapter_cannot_read_is_refused_0x0315() {
+    let adapter = start(&config(&device(76))).unwrap();
+    let mut o = Originator::connect(&adapter);
+    for path in [vec![0x20, 0x04, 0x24, 151, 0xE0, 0x00, 0x2C, 150, 0x2C, 100], vec![0x20, 0x04, 0x24, 151, 0x2C, 150]] {
+        let mut req = o.request(&open_for(4, 8));
+        req.connection_path = path.clone();
+        let mut mr = vec![0x54, 0x02, 0x20, 0x06, 0x24, 0x01];
+        mr.extend(req.encode());
+        assert_eq!(status_of(&o.encap.cip(o.session, &mr)), (0x01, vec![0x0315]), "{path:02X?}");
+    }
+}
+
+#[test]
+fn list_identity_reaches_a_broadcast_and_names_the_address_it_answers_from() {
+    // Bound to the any-address, a broadcast reaches it; its item names the address it answers
+    // from, not 0.0.0.0.
+    let adapter = start(&config("bind = \"0.0.0.0\"\nport = 0\nio_port = 0\n")).unwrap();
+    let port = adapter.addr.port();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    udp.set_broadcast(true).unwrap();
+    udp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    udp.send_to(&Encap::frame(0x63, 0, *b"bcast...", &[]), ("127.255.255.255", port)).unwrap();
+    let mut buf = [0u8; 600];
+    let (n, _) = udp.recv_from(&mut buf).unwrap();
+    // After the item count, type and length, the protocol version 1, then the socket address.
+    assert!(n > 24 + 8 + 16);
+    assert_eq!(&buf[24 + 6..24 + 8 + 8], &[1, 0, 0, 2, (port >> 8) as u8, port as u8, 127, 0, 0, 1]);
+    // Silent: the UDP ListIdentity is not answered either.
+    adapter.set_silent(true);
+    udp.set_read_timeout(Some(Duration::from_millis(300))).unwrap();
+    udp.send_to(&Encap::frame(0x63, 0, *b"udpquery", &[]), ("127.0.0.1", port)).unwrap();
+    assert!(udp.recv_from(&mut buf).is_err());
+}
+
+#[test]
+fn the_remaining_refusals_and_the_plant_side_by_bytes() {
+    let base = |rest: &str| format!("assemblies = [ {{ instance = 100, size = 8 }}, {{ instance = 150, size = 4 }}, {{ instance = 151, size = 0 }} ]\n{rest}");
+    assert_eq!(refused(&base("connections = [ { config = 151, output = 150, input = 100 }, { config = 151, output = 150, input = 100 } ]")), "ethernetip.connections[1]: the same three assemblies twice");
+    assert_eq!(refused("assemblies = [ { instance = 5, size = 65001 } ]"), "ethernetip.assemblies[0]: 65001 bytes, over 65000");
+    assert_eq!(refused(&base("points = [ { name = \"a\", assembly = 100, byte = 0 }, { name = \"a\", assembly = 100, byte = 1 } ]")), "ethernetip.points[1]: two points are named `a`");
+    assert_eq!(refused(&base("points = [ { name = \" a\", assembly = 100, byte = 0 } ]")), "ethernetip.points[0]: a point's name is not empty and has no surrounding whitespace");
+    assert_eq!(refused(&base("points = [ { name = \"a\", assembly = 7, byte = 0 } ]")), "ethernetip.points[0] (`a`): no assembly 7");
+    // A Class 1 port taken: named.
+    let taken = UdpSocket::bind("127.0.0.72:0").unwrap();
+    let port = taken.local_addr().unwrap().port();
+    let e = start(&config(&format!("bind = \"127.0.0.72\"\nport = 0\nio_port = {port}\n"))).unwrap_err();
+    assert!(e.to_string().starts_with(&format!("bind 127.0.0.72:{port} (udp, class 1): ")), "{e}");
+    // The plant side by bytes, read back by point; the Identity class's revision 1.
+    let adapter = start(&config(&device(70))).unwrap();
+    adapter.set_assembly(150, &[1, 0, 0x78, 0x56]).unwrap();
+    assert_eq!((adapter.get("start").unwrap(), adapter.get("setpoint").unwrap()), (Value::Bool(true), Value::U16(0x5678)));
+    let mut c = Encap::connect(adapter.addr);
+    let s = c.register();
+    assert_eq!(c.cip(s, &[0x0E, 0x03, 0x20, 0x01, 0x24, 0x00, 0x30, 0x01]), vec![0x8E, 0, 0, 0, 1, 0]);
+}

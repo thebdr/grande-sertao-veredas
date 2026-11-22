@@ -212,6 +212,8 @@ pub struct EnipStatus {
     /// Class 1 frames that named no open connection, or came from another host than its
     /// originator, or could not be read.
     pub stray_frames: u64,
+    /// Class 1 frames older than the last one taken on their connection.
+    pub stale_frames: u64,
 }
 
 struct Conn {
@@ -223,6 +225,8 @@ struct Conn {
     timeout: Duration,
     /// The last sequence count consumed, so a repeat carries no new data.
     last_count: Option<u16>,
+    /// The last 32-bit sequence number taken, so a late frame is dropped.
+    last_sequence: Option<u32>,
     next_produce: Instant,
     produce_sequence: u32,
     produce_count: u16,
@@ -245,6 +249,9 @@ struct Shared {
     cfg: EnipConfig,
     identity: (u8, u8),
     io_addr: Mutex<Option<SocketAddrV4>>,
+    /// Wakes the Class 1 loop when a connection opens, so its first frame is not held until the
+    /// loop's next due time.
+    opened: tokio::sync::Notify,
     producing: AtomicBool,
     silent: AtomicBool,
 }
@@ -424,6 +431,7 @@ pub fn start(cfg: &EnipConfig) -> Result<EnipHandle, EnipError> {
         cfg: cfg.clone(),
         identity,
         io_addr: Mutex::new(None),
+        opened: tokio::sync::Notify::new(),
         producing: AtomicBool::new(true),
         silent: AtomicBool::new(false),
     });
@@ -512,6 +520,14 @@ fn identity_status(shared: &Shared) -> u16 {
     if shared.lock().conns.is_empty() { 0x0000 } else { 0x0001 }
 }
 
+/// The local address a datagram to `to` leaves from: what an adapter bound to the any-address
+/// states in its identity item.
+fn leaving_address(to: SocketAddr) -> Option<std::net::IpAddr> {
+    let probe = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    probe.connect(to).ok()?;
+    probe.local_addr().ok().map(|a| a.ip())
+}
+
 async fn list_identity_udp(udp: UdpSocket, shared: Arc<Shared>) {
     let mut buf = vec![0u8; 1500];
     let own = udp.local_addr().ok();
@@ -526,6 +542,7 @@ async fn list_identity_udp(udp: UdpSocket, shared: Arc<Shared>) {
             continue;
         }
         let Some(own) = own else { continue };
+        let own = if own.ip().is_unspecified() { leaving_address(from).map(|ip| SocketAddr::new(ip, own.port())).unwrap_or(own) } else { own };
         let body = write_items(&[identity_item(&shared, own)]);
         *shared.lock().status.commands.entry(h.command).or_default() += 1;
         let _ = udp.send_to(&h.reply(0, encap_status::SUCCESS, &body), from).await;
@@ -838,6 +855,11 @@ fn unconnected_send(shared: &Shared, peer: SocketAddr, data: &[u8], t_to_o: Opti
         // 0x0312: the link address is not valid here: an adapter routes nowhere.
         return (general::CONNECTION_FAILURE, vec![0x0312], Vec::new(), Vec::new());
     }
+    // An Unconnected_Send wrapped in another goes nowhere either: the adapter routes one level
+    // and no more, so no request can nest the stack away.
+    if message.first() == Some(&service::UNCONNECTED_SEND) {
+        return status_only(general::SERVICE_NOT_SUPPORTED);
+    }
     let (reply, extra) = cip(shared, peer, message, t_to_o);
     (general::SUCCESS, Vec::new(), reply, extra)
 }
@@ -948,13 +970,10 @@ fn forward_open(shared: &Shared, peer: SocketAddr, body: &[u8], large: bool, t_t
         SocketAddr::V4(v) => *v.ip(),
         SocketAddr::V6(_) => Ipv4Addr::UNSPECIFIED,
     };
-    // Where the produced frames go: the originator's T→O socket address when it gave one (its
-    // address 0 meaning the session's own host), else its host at the standard I/O port.
-    let sends_to = match t_to_o {
-        Some(a) if !a.ip().is_unspecified() => SocketAddr::V4(a),
-        Some(a) => SocketAddr::V4(SocketAddrV4::new(originator_ip, a.port())),
-        None => SocketAddr::V4(SocketAddrV4::new(originator_ip, DEFAULT_IO_PORT)),
-    };
+    // Where the produced frames go: the originator's own host (the session's), at the port its T→O
+    // socket-address item gives, else at the standard I/O port. The item's address is not obeyed:
+    // a session cannot send another host the adapter's frames (OpENer takes the port alone too).
+    let sends_to = SocketAddr::V4(SocketAddrV4::new(originator_ip, t_to_o.map(|a| a.port()).unwrap_or(DEFAULT_IO_PORT)));
     let mut state = shared.lock();
     if state.conns.iter().any(|c| c.status.output == output) {
         drop(state);
@@ -997,12 +1016,15 @@ fn forward_open(shared: &Shared, peer: SocketAddr, body: &[u8], large: bool, t_t
         deadline: now + timeout.max(FIRST_FRAME_GRACE),
         timeout,
         last_count: None,
+        last_sequence: None,
         next_produce: now,
         produce_sequence: 0,
         produce_count: 0,
         originator_ip,
     });
     drop(state);
+    // The Class 1 loop may be asleep until another connection's due time: wake it for this one.
+    shared.opened.notify_one();
     let mut data = Vec::new();
     data.extend_from_slice(&o_to_t_id.to_le_bytes());
     data.extend_from_slice(&fo.t_to_o_id.to_le_bytes());
@@ -1061,6 +1083,7 @@ async fn class1(io: Arc<UdpSocket>, shared: Arc<Shared>) {
                 }
             }
             _ = tokio::time::sleep_until(wake) => {}
+            _ = shared.opened.notified() => {}
         }
         let now = Instant::now();
         let mut out: Vec<(SocketAddr, Vec<u8>)> = Vec::new();
@@ -1102,7 +1125,7 @@ async fn class1(io: Arc<UdpSocket>, shared: Arc<Shared>) {
 
 fn consume(shared: &Shared, frame: &[u8], from: SocketAddr) {
     let mut state = shared.lock();
-    let Some((id, _sequence, payload)) = read_class1(frame) else {
+    let Some((id, sequence, payload)) = read_class1(frame) else {
         state.status.stray_frames += 1;
         return;
     };
@@ -1121,6 +1144,15 @@ fn consume(shared: &Shared, frame: &[u8], from: SocketAddr) {
         status.stray_frames += 1;
         return;
     }
+    // A frame no newer than the last taken (the 32-bit sequence, read across its wrap) is a late
+    // one: it neither feeds the watchdog nor touches the outputs.
+    if let Some(last) = c.last_sequence
+        && (sequence.wrapping_sub(last) as i32) <= 0
+    {
+        status.stale_frames += 1;
+        return;
+    }
+    c.last_sequence = Some(sequence);
     c.deadline = Instant::now() + c.timeout;
     c.status.consumed += 1;
     let count = le16(&payload, 0);
