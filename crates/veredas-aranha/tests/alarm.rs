@@ -254,6 +254,20 @@ fn what_is_not_read_is_kept_with_its_reason() {
     assert_eq!(AlarmError::TooShort(13).to_string(), "an RTA PDU is a frame id and 12 header bytes; this one is 13 bytes");
     assert_eq!(AlarmError::NotAlarm(0xFC02).to_string(), "frame id 0xfc02 is not an alarm frame's");
     assert_eq!(AlarmError::Overrun { declared: 26, available: 25 }.to_string(), "the var part is said to be 26 bytes and 25 follow the header");
+    // A var part past what a frame carries is refused on reading as on writing, typed or not,
+    // whether its bytes are there or not.
+    for t in [5u8, 1] {
+        let mut b = header(t, &[0xAB; 1487], 0xFC01);
+        if t == 1 {
+            b[14..20].copy_from_slice(&[0x00, 0x01, 0x05, 0xCB, 1, 0]);
+        }
+        assert_eq!(RtaPdu::decode(&b), Err(AlarmError::TooLong(1487)), "type {t}");
+    }
+    let mut big = header(5, &[], 0xFC01);
+    big[12..14].copy_from_slice(&[0xFF, 0xFF]);
+    assert_eq!(RtaPdu::decode(&big), Err(AlarmError::TooLong(65_535)));
+    let longest = header(5, &[0xAB; 1486], 0xFE01);
+    assert_eq!(RtaPdu::decode(&longest).unwrap().encode().unwrap(), longest);
 
     // Every cut of every written PDU decodes or names its damage, never a panic.
     let mut noise = common::Noise(0xA1A2);
@@ -290,6 +304,27 @@ fn what_is_not_read_is_kept_with_its_reason() {
         assert_eq!(p.encode().unwrap(), b, "{heard:02x?}");
     }
     assert!(read > 500, "the noise reached the typed bodies {read} times");
+    // Long var parts, past what a frame carries among them: each decoded one is written back, each
+    // other refused by its length.
+    let (mut kept, mut refused) = (0, 0);
+    for i in 0..2_000 {
+        let len = (usize::from(noise.next()) << 4 | usize::from(noise.next() & 0x0F)) % 2_200;
+        let mut b = header(noise.next() % 6, &noise.bytes(len), 0xFC01);
+        if i % 2 == 0 && len >= 6 {
+            b[14..20].copy_from_slice(&[0x00, 0x01, ((len - 4) >> 8) as u8, (len - 4) as u8, 1, 0]);
+        }
+        match RtaPdu::decode(&b) {
+            Ok(p) => {
+                kept += 1;
+                assert_eq!(p.encode().unwrap(), b);
+            }
+            Err(e) => {
+                refused += 1;
+                assert_eq!((e, len > 1486), (AlarmError::TooLong(len), true));
+            }
+        }
+    }
+    assert!(kept > 500 && refused > 500, "{kept} kept, {refused} refused");
 }
 
 #[test]
@@ -492,6 +527,42 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
     assert_eq!(pn_io(&d[3], "pn_rt_pn_io_error_code2_pnio_60"), ["1"]);
     assert_eq!(pn_io(&d[5], "pn_rt_pn_io_error_code1_pnio"), ["253"]);
     assert_eq!(pn_io(&d[5], "pn_rt_pn_io_error_code2_pnio_253"), ["5"]);
+
+    // A maintenance item and the item it qualifies: this codec names the first identifier and keeps
+    // the rest as its data; the dissector reads both identifiers, with no complaint.
+    let maintenance = AlarmItem {
+        usi: 0x8100,
+        data: [hex("0F00 0008 0100 0000 00000001"), hex("8002"), hex("8000 0800 0001 0000 00000000")].concat(),
+    };
+    let two = RtaPdu::notification(Priority::High, 1, 2, 3, 4, diagnosis(Some(maintenance.clone())));
+    let back = RtaPdu::decode(&two.encode().unwrap()).unwrap();
+    assert_eq!(back, two);
+    // What the dissector complains of, as written: an item whose data does not fit its identifier's
+    // structure (a channel diagnosis with none), and three bodies kept unread and written as heard:
+    // a DATA PDU with no block, a PDU type it does not know, a block of version 2.0.
+    let bare = RtaPdu::notification(Priority::High, 1, 2, 3, 4, diagnosis(Some(AlarmItem { usi: 0x8000, data: vec![] })));
+    let unread = |pdu_type, bytes: Vec<u8>, why| pdu(pdu_type, 0x11, Body::Unread { bytes, why });
+    let mut v2 = RtaPdu::notification(Priority::High, 1, 2, 3, 4, diagnosis(None)).encode().unwrap()[14..].to_vec();
+    v2[4] = 2;
+    let odd = [
+        two.clone(),
+        bare,
+        unread(PduType::Data, vec![], Unread::Shape),
+        unread(PduType::Other(5), vec![], Unread::Type),
+        unread(PduType::Data, v2, Unread::Version(2, 0)),
+    ];
+    let frames: Vec<Vec<u8>> = odd.iter().map(|p| p.frame(CONTROLLER, DEVICE, Some(Priority::High.tag())).unwrap()).collect();
+    let d = common::dissect(&frames);
+    assert_eq!(pn_io(&d[0], "pn_io_pn_io_user_structure_identifier"), ["33024", "32770"]);
+    assert_eq!(d[0].complaints(), Vec::<String>::new());
+    let complaint = |i: usize, what: &str| {
+        let c = d[i].complaints();
+        assert!(c.iter().any(|x| x.contains(what)), "frame {i}: {c:?}");
+    };
+    complaint(1, "malformed");
+    complaint(2, "length >= 0");
+    complaint(3, "malformed");
+    complaint(4, "Block version 2.0 not implemented");
 
     // The dissector reads TACK as the whole high nibble of AddFlags, reserved bits with it: with
     // reserved bits set, this codec's TACK (bit 4) and the dissector's differ, as written.

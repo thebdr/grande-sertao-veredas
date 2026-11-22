@@ -199,8 +199,10 @@ impl PnioStatus {
     }
 }
 
-/// What follows an alarm notification's specifier: the user structure identifier and its data, as
-/// bytes (a channel diagnosis, a manufacturer's data: the device's to define).
+/// What follows an alarm notification's specifier: the first user structure identifier, and every
+/// byte after it as data (a channel diagnosis, a manufacturer's data: the device's to define). A
+/// maintenance item (0x8100) is followed by the item it qualifies: its 12 bytes, then that item's
+/// identifier and data, all in `data`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AlarmItem {
     pub usi: u16,
@@ -329,7 +331,8 @@ const ACK: usize = 16;
 
 impl RtaPdu {
     /// Read an RTA PDU from the PROFINET payload (the bytes after the EtherType, without the frame
-    /// check sequence). A damaged header is an error naming it; a var part this codec does not read
+    /// check sequence). A damaged header (cut short, a frame id not an alarm's, a var part past the
+    /// bytes or past what a frame carries) is an error naming it; a var part this codec does not read
     /// is kept with the reason; bytes after the var part are the frame's pad and are not kept.
     pub fn decode(payload: &[u8]) -> Result<RtaPdu, AlarmError> {
         if payload.len() < 2 + HEADER {
@@ -339,6 +342,9 @@ impl RtaPdu {
         let priority = Priority::of_frame_id(frame_id).ok_or(AlarmError::NotAlarm(frame_id))?;
         let h = &payload[2..];
         let declared = be16(h, 10) as usize;
+        if declared > MAX_VAR_PART {
+            return Err(AlarmError::TooLong(declared));
+        }
         let available = h.len() - HEADER;
         if declared > available {
             return Err(AlarmError::Overrun { declared, available });
