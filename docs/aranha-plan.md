@@ -177,7 +177,8 @@ veredas_aranha
     lldp          LLDP: the TLVs, the PROFINET, 802.1 and 802.3 organisation TLVs
     rt            the cyclic frame: frame id ranges, IO data, cycle counter, data and transfer status
     alarm         the acyclic real-time PDUs and the alarm notification and acknowledgement
-    rpc           connectionless DCE/RPC and NDR headers, the PNIO blocks, I&M, the port's data
+    rpc           connectionless DCE/RPC and NDR headers, the PNIO blocks, the record read
+    record        the records a read returns: I&M0, the port's real data with its peers
   wire          the seam; the raw link (Linux), the pcap file, the memory hub
   netns         the private network a test makes: a user and network namespace, veth pairs
   observe       a frame into observations with their witness; the frame's class
