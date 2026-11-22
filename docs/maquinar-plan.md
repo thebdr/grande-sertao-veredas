@@ -245,6 +245,13 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
   `netns::isolated` private network, a veth pair per test. Next: the AR (the DCE/RPC Connect, the
   parameter writes, PrmEnd and ApplicationReady) and the cyclic RT frames on aranha's C-135, with
   core's IO controller; then I&M and the port's neighbour data by the connectionless read.
+  Next, before the AR (2026-11-22): the record read aranha's phase 6 needs, fixture first. The
+  device answers on its raw link as a real one does, with no host address of its own: ARP for
+  the IP suite it holds (from the file or a DCP Set), and connectionless DCE/RPC on UDP 34964
+  with aranha's codecs (`profinet::rpc`, `profinet::record`): an implicit read of I&M0 (0xAFF0,
+  from the file's identity) and of the port's real data (0x802A at subslot 0x8001: its link, and
+  the neighbour its own LLDP reception heard), any other index refused with the PNIO status the
+  standard gives; tshark and aranha's own reader as the second readings.
 - **The emulated EtherCAT segment** (C-113, 2026-11-22). Review entry 27 said it plainly: an
   EtherCAT device handles frames in a chip as they pass, and an emulation on an ordinary card is a
   slave controller written in software, functional, never exact in time; its clause says what it
