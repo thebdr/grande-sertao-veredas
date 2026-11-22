@@ -13,7 +13,8 @@ use veredas_aranha::profinet::dcp::{self, Filter};
 use veredas_aranha::profinet::ether;
 use veredas_aranha::profinet::lldp::{self, ChassisId, LldpPdu, PortId};
 use veredas_aranha::profinet::mac::Mac;
-use veredas_aranha::wire::raw::{RawError, RawLink, Received};
+use veredas_aranha::profinet::ether::VlanTag;
+use veredas_aranha::wire::raw::{Options, RawError, RawLink, Received};
 
 const A: Mac = Mac([0x02, 0x00, 0x00, 0x00, 0x0A, 0x01]);
 const B: Mac = Mac([0x02, 0x00, 0x00, 0x00, 0x0B, 0x01]);
@@ -39,6 +40,7 @@ fn pair() -> (RawLink, RawLink) {
         netns::ip(&["link", "set", iface, "address", &mac.to_string()]);
         netns::ip(&["link", "set", iface, "up"]);
     }
+    netns::wait_up(&["a0", "b0"]);
     (RawLink::open("a0", false).unwrap(), RawLink::open("b0", false).unwrap())
 }
 
@@ -113,6 +115,57 @@ fn frames_cross_a_veth_pair_whole_both_ways() {
         assert_eq!(b.recv(Duration::from_millis(300)).unwrap(), None);
         let waited = start.elapsed();
         assert!(waited >= Duration::from_millis(290) && waited < Duration::from_millis(1500), "{waited:?}");
+    });
+}
+
+#[test]
+fn a_tagged_frame_is_heard_with_its_tag_where_the_kernel_took_it_out() {
+    netns::isolated("a_tagged_frame_is_heard_with_its_tag_where_the_kernel_took_it_out", &[("a0", "b0")], || {
+        let (a, b) = pair();
+        let cyclic = ether::build_tagged(B, A, Some(VlanTag { priority: 6, drop_eligible: false, id: 0 }), 0x8892, &[0x80, 0x00, 1, 2]).unwrap();
+        let tagged = ether::build_tagged(B, A, Some(VlanTag { priority: 3, drop_eligible: true, id: 5 }), 0x88B5, &[0x5A; 1500]).unwrap();
+        for f in [&cyclic, &tagged] {
+            a.send(f).unwrap();
+            let got = heard(&b, ether::parse(f).unwrap().ethertype, false, Duration::from_secs(2)).expect("nothing heard");
+            assert_eq!(got.bytes, *f);
+            assert_eq!(ether::parse(&got.bytes).unwrap().vlan, ether::parse(f).unwrap().vlan);
+        }
+        assert_eq!(tagged.len(), 1518);
+    });
+}
+
+#[test]
+fn a_link_hears_one_ethertype_and_can_leave_out_what_this_host_sends() {
+    netns::isolated("a_link_hears_one_ethertype_and_can_leave_out_what_this_host_sends", &[("a0", "b0")], || {
+        let (a, _b) = pair();
+        let only = |ethertype| RawLink::open_with("b0", Options { ethertype: Some(ethertype), ..Options::default() }).unwrap();
+        let (ethercat, profinet) = (only(0x88A4), only(0x8892));
+        let lldp_frame = lldp::frame(A, &LldpPdu::new(ChassisId::Local { id: "a".into() }, PortId::Local { id: "p".into() }, 20)).unwrap();
+        let ec = ether::build(Mac::BROADCAST, A, 0x88A4, &[0x0D, 0x10, 0, 0]).unwrap();
+        let rt = ether::build_tagged(B, A, Some(VlanTag { priority: 6, drop_eligible: false, id: 0 }), 0x8892, &[0x80, 0x00]).unwrap();
+        for f in [&lldp_frame, &ec, &rt] {
+            a.send(f).unwrap();
+        }
+        // Each hears its own type and nothing else; the tagged frame is matched by the type inside
+        // its tag, and heard with the tag.
+        assert_eq!(ethercat.recv(Duration::from_secs(2)).unwrap().map(|r| r.bytes), Some(ec.clone()));
+        assert_eq!(ethercat.recv(Duration::from_millis(300)).unwrap(), None);
+        assert_eq!(profinet.recv(Duration::from_secs(2)).unwrap().map(|r| r.bytes), Some(rt.clone()));
+        assert_eq!(profinet.recv(Duration::from_millis(300)).unwrap(), None);
+
+        // On the sending end: a watcher that takes outgoing frames sees a0's, one that leaves them
+        // out sees none, and still hears what comes in.
+        let sees = RawLink::open_with("a0", Options::default()).unwrap();
+        let blind = RawLink::open_with("a0", Options { outgoing: false, ..Options::default() }).unwrap();
+        a.send(&ec).unwrap();
+        assert_eq!(heard(&sees, 0x88A4, true, Duration::from_secs(2)).map(|r| r.bytes), Some(ec.clone()));
+        let start = Instant::now();
+        assert_eq!(blind.recv(Duration::from_millis(300)).unwrap(), None);
+        assert!(start.elapsed() >= Duration::from_millis(290), "{:?}", start.elapsed());
+        let answer = ether::build(A, B, 0x88A4, &[0x0D, 0x10, 1, 0]).unwrap();
+        _b.send(&answer).unwrap();
+        assert_eq!(blind.recv(Duration::from_secs(2)).unwrap().map(|r| (r.bytes, r.outgoing)), Some((answer, false)));
+        assert_eq!(Options::default(), Options { ethertype: None, promiscuous: false, outgoing: true });
     });
 }
 

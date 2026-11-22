@@ -108,19 +108,44 @@ fn prepare(pairs: &[(&str, &str)]) {
         ip(&["link", "set", a, "up"]);
         ip(&["link", "set", b, "up"]);
     }
+    let ends: Vec<&str> = pairs.iter().flat_map(|(a, b)| [*a, *b]).collect();
+    wait_up(&ends);
+}
+
+/// Wait until each interface has its carrier (`LOWER_UP`): a frame sent the moment a veth end is
+/// set up can be lost while its carrier comes up. Fails, naming the interface, after 5 s.
+pub fn wait_up(ifaces: &[&str]) {
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    for iface in ifaces {
+        loop {
+            let out = Command::new(ip_tool()).args(["-o", "link", "show", iface]).output();
+            let flags = out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+            if flags.split(['<', '>', ',']).any(|f| f == "LOWER_UP") {
+                break;
+            }
+            if std::time::Instant::now() > end {
+                panic!("{iface} has no carrier after 5 s: {flags}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
 }
 
 /// Run `ip` with these arguments inside the private network, failing with its own words and what
 /// the system says of user namespaces when it fails.
 pub fn ip(args: &[&str]) {
-    let tool = ["ip", "/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"]
-        .into_iter()
-        .find(|p| Command::new(p).arg("-V").output().map(|o| o.status.success()).unwrap_or(false))
-        .unwrap_or_else(|| panic!("the private network needs iproute2's `ip`, and none runs here\n{}", diagnosis()));
-    let out = Command::new(tool).args(args).output().unwrap_or_else(|e| panic!("ip {args:?}: {e}"));
+    let out = Command::new(ip_tool()).args(args).output().unwrap_or_else(|e| panic!("ip {args:?}: {e}"));
     if !out.status.success() {
         panic!("ip {}: {}\n{}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim(), diagnosis());
     }
+}
+
+/// iproute2's `ip`, wherever this system keeps it.
+fn ip_tool() -> &'static str {
+    ["ip", "/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"]
+        .into_iter()
+        .find(|p| Command::new(p).arg("-V").output().map(|o| o.status.success()).unwrap_or(false))
+        .unwrap_or_else(|| panic!("the private network needs iproute2's `ip`, and none runs here\n{}", diagnosis()))
 }
 
 /// What the system says of unprivileged user namespaces, for a failure's message.

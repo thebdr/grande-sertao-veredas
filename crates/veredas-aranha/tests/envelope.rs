@@ -109,8 +109,15 @@ fn a_tagged_frame_carries_its_priority_drop_bit_and_vlan() {
     let f = ether::build_tagged(dst, src, Some(every), 0x0800, &[]).unwrap();
     assert_eq!(&f[14..16], &[0xFF, 0xFF]);
     assert_eq!(ether::parse(&f).unwrap().vlan, Some(every));
-    let f = ether::build_tagged(dst, src, Some(VlanTag { priority: 0, drop_eligible: true, id: 5 }), 0x0800, &[]).unwrap();
+    // The drop bit alone, and the priority's low bit alone, read back apart.
+    let drop_only = VlanTag { priority: 0, drop_eligible: true, id: 5 };
+    let f = ether::build_tagged(dst, src, Some(drop_only), 0x0800, &[]).unwrap();
     assert_eq!(&f[14..16], &[0x10, 0x05]);
+    assert_eq!(ether::parse(&f).unwrap().vlan, Some(drop_only));
+    let low_priority = VlanTag { priority: 1, drop_eligible: false, id: 5 };
+    let f = ether::build_tagged(dst, src, Some(low_priority), 0x0800, &[]).unwrap();
+    assert_eq!(&f[14..16], &[0x20, 0x05]);
+    assert_eq!(ether::parse(&f).unwrap().vlan, Some(low_priority));
 }
 
 #[test]
@@ -119,9 +126,34 @@ fn what_the_wire_cannot_carry_is_refused_never_cut() {
     assert_eq!(ether::build(dst, src, 0x88CC, &[0; 1500]).unwrap().len(), 1514);
     assert_eq!(ether::build(dst, src, 0x88CC, &[0; 1501]), Err(EtherError::TooLong(1501)));
     let tag = |priority, id| Some(VlanTag { priority, drop_eligible: false, id });
+    // Tagged, the payload's limit is the same: the frame grows by the tag.
+    assert_eq!(ether::build_tagged(dst, src, tag(6, 0), 0x8892, &[0; 1500]).unwrap().len(), 1518);
+    assert_eq!(ether::build_tagged(dst, src, tag(6, 0), 0x8892, &[0; 1501]), Err(EtherError::TooLong(1501)));
+    // A type that is a length, or the tag's own, is no EtherType to write.
+    for t in [0x0000u16, 0x0026, 0x05DC, 0x05FF, 0x8100] {
+        assert_eq!(ether::build(dst, src, t, &[1, 2, 3]), Err(EtherError::NotEtherType(t)), "{t:#x}");
+        assert_eq!(ether::build_tagged(dst, src, tag(0, 1), t, &[1, 2, 3]), Err(EtherError::NotEtherType(t)), "{t:#x}");
+    }
+    assert!(ether::build(dst, src, 0x0600, &[]).is_ok());
+    assert_eq!(
+        EtherError::NotEtherType(0x26).to_string(),
+        "0x0026 is not an EtherType this envelope writes (below 0x0600 is an 802.3 length; 0x8100 is the tag's own)"
+    );
     assert_eq!(ether::build_tagged(dst, src, tag(8, 0), 0x8892, &[]), Err(EtherError::BadPriority(8)));
     assert_eq!(ether::build_tagged(dst, src, tag(0, 4096), 0x8892, &[]), Err(EtherError::BadVlanId(4096)));
     assert_eq!(EtherError::TooLong(1501).to_string(), "a payload of 1501 bytes is past Ethernet's 1500");
+}
+
+#[test]
+fn a_length_field_is_read_as_a_length_never_as_an_ethertype() {
+    // A spanning-tree frame: 802.3, its length 0x0026, an LLC header (42 42 03) following.
+    let mut stp = vec![0x01, 0x80, 0xC2, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0x00, 0x26, 0x42, 0x42, 0x03];
+    stp.resize(60, 0);
+    let e = ether::parse(&stp).unwrap();
+    assert!(e.is_length());
+    assert_eq!((e.ethertype, &e.payload[..3]), (0x0026, &[0x42, 0x42, 0x03][..]));
+    let lldp = ether::build(Mac::LLDP_MULTICAST, mac("02:00:00:00:00:02"), 0x88CC, &[0, 0]).unwrap();
+    assert!(!ether::parse(&lldp).unwrap().is_length());
 }
 
 #[test]
@@ -146,6 +178,8 @@ fn the_dissectors_read_the_envelope_as_it_was_written() {
         ether::build(dst, src, 0x88B5, &[1, 2, 3]).unwrap(),
         ether::build_tagged(Mac::BROADCAST, src, Some(VlanTag { priority: 6, drop_eligible: false, id: 0 }), 0x88B5, &[9]).unwrap(),
         ether::build_tagged(dst, src, Some(VlanTag { priority: 3, drop_eligible: true, id: 1234 }), 0x88B5, &[0; 1496]).unwrap(),
+        ether::build_tagged(dst, src, Some(VlanTag { priority: 6, drop_eligible: false, id: 0 }), 0x88B5, &[0; 1500]).unwrap(),
+        ether::build(Mac::LLDP_MULTICAST, src, 0x88CC, &[0x02, 0x02, 0x07, 0x61, 0x04, 0x02, 0x07, 0x70, 0x06, 0x02, 0x00, 0x14, 0, 0]).unwrap(),
     ];
     let read = common::dissect(&frames);
     for (i, p) in read.iter().enumerate() {
@@ -163,4 +197,8 @@ fn the_dissectors_read_the_envelope_as_it_was_written() {
     assert_eq!(read[2].one("vlan", "vlan.dei"), "true");
     assert_eq!(read[2].one("vlan", "vlan.id"), "1234");
     assert_eq!(read[2].one("frame", "frame.len"), "1514");
+    assert_eq!(read[3].one("vlan", "vlan.etype"), "34997");
+    assert_eq!(read[3].one("frame", "frame.len"), "1518");
+    assert_eq!(read[4].one("eth", "eth.type"), "35020");
+    assert!(read[4].has("lldp"));
 }

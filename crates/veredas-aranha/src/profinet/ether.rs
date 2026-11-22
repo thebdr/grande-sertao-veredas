@@ -7,6 +7,11 @@
 //! A frame shorter than 60 bytes (without its check sequence) is padded on the wire, and a capture
 //! may or may not hold the pad: the payload handed back runs to the end of the bytes given, and each
 //! protocol above bounds itself by its own length field.
+//!
+//! The two bytes after the addresses (and after a tag) are an EtherType from 0x0600 up; below it
+//! they are an IEEE 802.3 length, an LLC header following (a spanning-tree frame is one). `parse`
+//! hands the field back as it is and `EtherFrame::is_length` tells the two apart; `build` writes
+//! only an EtherType, and never the tag's own type as a frame's type.
 
 use serde::{Deserialize, Serialize};
 
@@ -26,8 +31,10 @@ pub const ETHERTYPE_PTP: u16 = 0x88F7;
 
 /// The shortest frame on the wire, without its check sequence.
 pub const MIN_FRAME: usize = 60;
-/// The longest payload of an untagged frame.
+/// The longest payload, tagged or not (a tag adds its four bytes to the frame).
 pub const MAX_PAYLOAD: usize = 1500;
+/// The lowest value that is an EtherType; below it the field is an 802.3 length.
+pub const MIN_ETHERTYPE: u16 = 0x0600;
 
 /// An 802.1Q tag: the priority (0 to 7; PROFINET's cyclic frames ride at 6), the drop-eligible
 /// bit, and the VLAN id (0 means "priority only, no VLAN").
@@ -53,11 +60,20 @@ pub struct EtherFrame<'a> {
     pub dst: Mac,
     pub src: Mac,
     pub vlan: Option<VlanTag>,
+    /// The type field as it travels: an EtherType, or an 802.3 length (`is_length`).
     pub ethertype: u16,
     pub payload: &'a [u8],
 }
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+impl EtherFrame<'_> {
+    /// The type field is an IEEE 802.3 length (below 0x0600), not an EtherType: an LLC header
+    /// follows.
+    pub fn is_length(&self) -> bool {
+        self.ethertype < MIN_ETHERTYPE
+    }
+}
+
+#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum EtherError {
     #[error("an Ethernet frame is at least 14 bytes (18 with a VLAN tag); this one is {0}")]
     TooShort(usize),
@@ -67,6 +83,8 @@ pub enum EtherError {
     BadPriority(u8),
     #[error("a VLAN id is 0 to 4095, not {0}")]
     BadVlanId(u16),
+    #[error("{0:#06x} is not an EtherType this envelope writes (below 0x0600 is an 802.3 length; 0x8100 is the tag's own)")]
+    NotEtherType(u16),
 }
 
 /// Open the envelope. The payload is everything after the EtherType, pad included.
@@ -96,7 +114,8 @@ pub fn build(dst: Mac, src: Mac, ethertype: u16, payload: &[u8]) -> Result<Vec<u
 }
 
 /// A frame with an optional 802.1Q tag, padded to 60 bytes. A payload past 1500 bytes, a
-/// priority past 7 or a VLAN id past 4095 is refused, never cut.
+/// priority past 7, a VLAN id past 4095, or a type that is not an EtherType (an 802.3 length below
+/// 0x0600, or the tag's own 0x8100) is refused, never cut or misread.
 pub fn build_tagged(
     dst: Mac,
     src: Mac,
@@ -106,6 +125,9 @@ pub fn build_tagged(
 ) -> Result<Vec<u8>, EtherError> {
     if payload.len() > MAX_PAYLOAD {
         return Err(EtherError::TooLong(payload.len()));
+    }
+    if ethertype < MIN_ETHERTYPE || ethertype == ETHERTYPE_VLAN {
+        return Err(EtherError::NotEtherType(ethertype));
     }
     let mut out = Vec::with_capacity(18 + payload.len().max(46));
     out.extend_from_slice(&dst.0);

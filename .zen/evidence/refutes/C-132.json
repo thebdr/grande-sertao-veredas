@@ -1,0 +1,18 @@
+{
+  "clause": "C-132",
+  "verdict": "refuted",
+  "ranAt": "2026-11-22T18:41:48.466Z",
+  "headCommit": "e5a3692acbf8d6595c28a93098f36e12678ab9d4",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/dcp.rs",
+      "file": "crates/veredas-aranha/tests/dcp.rs",
+      "symbolSha": "ebe5fb515f6428e7d62a7e89da11b7396e007ce7b18813d3d4cd67deb837328b"
+    },
+    {
+      "name": "crates/veredas-aranha/tests/common/mod.rs",
+      "file": "crates/veredas-aranha/tests/common/mod.rs",
+      "symbolSha": "e3f228cd2b4bbd09bda4196228ab527e6f28dba06ee02306b362990c19b7edb6"
+    }
+  ]
+}

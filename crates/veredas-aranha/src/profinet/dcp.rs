@@ -11,10 +11,17 @@
 //! it: an Identify request's blocks are filters and carry none; the blocks of an Identify or Get
 //! answer and of a Hello carry a BlockInfo (for the IP block, whether the address is set and
 //! whether the device saw a conflict); a Set request's blocks carry a BlockQualifier (keep the
-//! value for good, or only until power-off); a control response (option 5, suboption 4) carries
-//! none: it is the option and suboption answered and an error code, three bytes. A Get request
-//! is no blocks at all, only option and suboption pairs. A block of odd length is followed by one
-//! pad byte its length does not count.
+//! value for good, or only until power-off); a Set answer's blocks carry none, and a control
+//! response (option 5, suboption 4) carries none wherever it is: it is the option and suboption
+//! answered and an error code, three bytes. A Get request is no blocks at all, only option and
+//! suboption pairs. A block of odd length is followed by one pad byte its length does not count.
+//! A Hello goes to its own group address, `01:0e:cf:00:00:01`; an Identify request to
+//! `01:0e:cf:00:00:00`.
+//!
+//! Writing is gated where it configures a device: a Set request is written only to one device
+//! named by its MAC, only of a station name that keeps the standard's rules, an IP suite or the
+//! identification signal, each with a qualifier it may carry; nothing else a Set can do (a factory
+//! reset among it) is expressible, through the helpers or from a PDU built or decoded by hand.
 //!
 //! Decoding is total: a block too short for its kind is kept with its bytes and the reason, and
 //! the blocks around it still decode; only a damaged header is an error.
@@ -149,7 +156,7 @@ pub enum Damage {
     Length { expected: usize, got: usize },
     /// Its length runs past the bytes the PDU holds; decoding stopped here.
     Overrun { declared: usize, left: usize },
-    /// It should carry a BlockInfo or BlockQualifier word and holds a single byte.
+    /// It should carry a BlockInfo or BlockQualifier word and holds fewer than its two bytes.
     NoInfo,
     /// Its kind is text, and its bytes are not UTF-8.
     Text,
@@ -170,8 +177,8 @@ pub enum BlockBody {
     NameOfStation { name: String },
     /// Option 2, suboption 3.
     DeviceId { vendor_id: u16, device_id: u16 },
-    /// Option 2, suboption 4: the role bits and a reserved byte.
-    DeviceRole { role: u8 },
+    /// Option 2, suboption 4: the role bits and the reserved byte after them, kept as heard.
+    DeviceRole { role: u8, reserved: u8 },
     /// Option 2, suboption 5: the option and suboption pairs the device supports.
     DeviceOptions { options: Vec<(u8, u8)> },
     /// Option 2, suboption 6.
@@ -224,7 +231,7 @@ pub struct DcpPdu {
     pub trailing: Vec<u8>,
 }
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DcpError {
     #[error("a DCP PDU is at least 12 bytes; this one is {0}")]
     TooShort(usize),
@@ -236,6 +243,14 @@ pub enum DcpError {
     BlockTooLong { option: u8, suboption: u8, len: usize },
     #[error("the blocks make {0} bytes, past what one frame carries")]
     PduTooLong(usize),
+    #[error("a DCP Set names one device by its MAC; {0} is a group address")]
+    GroupTarget(Mac),
+    #[error("a Set writes a station name, an IP suite or the identification signal, never option {option} suboption {suboption} ({body})")]
+    SetBlock { option: u8, suboption: u8, body: &'static str },
+    #[error("a Set's block (option {option} suboption {suboption}) carries qualifier {qualifier:?}, where it may carry {allowed}")]
+    Qualifier { option: u8, suboption: u8, qualifier: Option<u16>, allowed: &'static str },
+    #[error("{0}")]
+    Name(#[from] NameError),
     #[error("{0}")]
     Ether(#[from] EtherError),
 }
@@ -245,7 +260,11 @@ fn carries_info(service: Service, service_type: ServiceType, option: u8, subopti
     if (option, suboption) == (5, 4) || (option, suboption) == (0xFF, 0xFF) {
         return false;
     }
-    !(service == Service::Identify && service_type == ServiceType::Request)
+    match (service, service_type) {
+        (Service::Identify, ServiceType::Request) => false,
+        (Service::Set, t) if t.is_response() => false,
+        _ => true,
+    }
 }
 
 /// Decode a DCP PDU from the PROFINET payload: the bytes after the EtherType, frame id included.
@@ -295,8 +314,7 @@ pub fn decode(payload: &[u8]) -> Result<DcpPdu, DcpError> {
         let mut info = None;
         if carries_info(service, service_type, option, suboption) {
             match bytes.len() {
-                0 => {}
-                1 => {
+                0 | 1 => {
                     let body = BlockBody::Damaged { data: bytes.to_vec(), damage: Damage::NoInfo };
                     pdu.blocks.push(Block { option, suboption, info: None, body });
                     off += len + (len & 1);
@@ -343,7 +361,7 @@ fn decode_body(option: u8, suboption: u8, b: &[u8]) -> BlockBody {
         (2, 1) => text(|value| BlockBody::DeviceVendor { value }),
         (2, 2) => text(|name| BlockBody::NameOfStation { name }),
         (2, 3) => exact(4).unwrap_or_else(|| BlockBody::DeviceId { vendor_id: u16_at(b, 0), device_id: u16_at(b, 2) }),
-        (2, 4) => exact(2).unwrap_or_else(|| BlockBody::DeviceRole { role: b[0] }),
+        (2, 4) => exact(2).unwrap_or_else(|| BlockBody::DeviceRole { role: b[0], reserved: b[1] }),
         (2, 5) => match b.len() % 2 {
             0 => BlockBody::DeviceOptions { options: b.as_chunks::<2>().0.iter().map(|&[o, s]| (o, s)).collect() },
             _ => BlockBody::Damaged { data: b.to_vec(), damage: Damage::Length { expected: b.len() + 1, got: b.len() } },
@@ -379,7 +397,7 @@ impl BlockBody {
             BlockBody::DeviceId { vendor_id, device_id } | BlockBody::OemDeviceId { vendor_id, device_id } => {
                 [vendor_id.to_be_bytes(), device_id.to_be_bytes()].concat()
             }
-            BlockBody::DeviceRole { role } => vec![*role, 0],
+            BlockBody::DeviceRole { role, reserved } => vec![*role, *reserved],
             BlockBody::DeviceOptions { options } => options.iter().flat_map(|(o, s)| [*o, *s]).collect(),
             BlockBody::DeviceInstance { high, low } => vec![*high, *low],
             BlockBody::RsiProperties { value } | BlockBody::ControlSignal { value } | BlockBody::DeviceInitiative { value } => {
@@ -388,6 +406,54 @@ impl BlockBody {
             BlockBody::ControlResponse { option, suboption, error } => vec![*option, *suboption, *error],
             BlockBody::AllSelector | BlockBody::Requested => Vec::new(),
             BlockBody::Unknown { data } | BlockBody::Damaged { data, .. } => data.clone(),
+        }
+    }
+}
+
+/// What a Set request may write: a station name that keeps the rules, an IP suite, or the
+/// identification signal, each with a qualifier it may carry (permanent or temporary for the
+/// first two, 0 for the signal).
+fn check_set_block(b: &Block) -> Result<(), DcpError> {
+    let (allowed, ok): (&'static str, &[u16]) = match (&b.body, b.option, b.suboption) {
+        (BlockBody::NameOfStation { name }, 2, 2) => {
+            check_station_name(name)?;
+            ("0 or 1", &[QUALIFIER_TEMPORARY, QUALIFIER_PERMANENT])
+        }
+        (BlockBody::IpParameter { .. }, 1, 2) => ("0 or 1", &[QUALIFIER_TEMPORARY, QUALIFIER_PERMANENT]),
+        (BlockBody::ControlSignal { .. }, 5, 3) => ("0", &[QUALIFIER_TEMPORARY]),
+        (body, option, suboption) => {
+            return Err(DcpError::SetBlock { option, suboption, body: body.kind() });
+        }
+    };
+    match b.info {
+        Some(q) if ok.contains(&q) => Ok(()),
+        qualifier => Err(DcpError::Qualifier { option: b.option, suboption: b.suboption, qualifier, allowed }),
+    }
+}
+
+impl BlockBody {
+    /// The kind's name, for a message.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            BlockBody::MacAddress { .. } => "mac-address",
+            BlockBody::IpParameter { .. } => "ip-parameter",
+            BlockBody::IpFullSuite { .. } => "ip-full-suite",
+            BlockBody::DeviceVendor { .. } => "device-vendor",
+            BlockBody::NameOfStation { .. } => "name-of-station",
+            BlockBody::DeviceId { .. } => "device-id",
+            BlockBody::DeviceRole { .. } => "device-role",
+            BlockBody::DeviceOptions { .. } => "device-options",
+            BlockBody::AliasName { .. } => "alias-name",
+            BlockBody::DeviceInstance { .. } => "device-instance",
+            BlockBody::OemDeviceId { .. } => "oem-device-id",
+            BlockBody::RsiProperties { .. } => "rsi-properties",
+            BlockBody::ControlSignal { .. } => "control-signal",
+            BlockBody::ControlResponse { .. } => "control-response",
+            BlockBody::DeviceInitiative { .. } => "device-initiative",
+            BlockBody::AllSelector => "all-selector",
+            BlockBody::Requested => "requested",
+            BlockBody::Unknown { .. } => "unknown",
+            BlockBody::Damaged { .. } => "damaged",
         }
     }
 }
@@ -416,6 +482,11 @@ impl DcpPdu {
     /// length is always that of what it holds: a `Damaged` overrun is written as the bytes it
     /// kept, so it decodes as a whole block.
     pub fn encode(&self) -> Result<Vec<u8>, DcpError> {
+        if self.is_set_request() {
+            for b in &self.blocks {
+                check_set_block(b)?;
+            }
+        }
         let mut blocks = Vec::new();
         if self.service == Service::Get && self.service_type == ServiceType::Request {
             for b in &self.blocks {
@@ -440,9 +511,18 @@ impl DcpPdu {
         Ok(out)
     }
 
-    /// The whole Ethernet frame, untagged, padded to 60 bytes.
+    /// The whole Ethernet frame, untagged, padded to 60 bytes. A Set request to a group address
+    /// is refused, as is anything `encode` refuses.
     pub fn frame(&self, dst: Mac, src: Mac) -> Result<Vec<u8>, DcpError> {
+        if self.is_set_request() && dst.is_multicast() {
+            return Err(DcpError::GroupTarget(dst));
+        }
         Ok(ether::build(dst, src, ETHERTYPE_PROFINET, &self.encode()?)?)
+    }
+
+    /// A Set request: the one kind of PDU that configures a device.
+    pub fn is_set_request(&self) -> bool {
+        self.service == Service::Set && self.service_type == ServiceType::Request
     }
 
     fn request(frame_id: u16, service: Service, xid: u32, response_delay: u16, blocks: Vec<Block>) -> DcpPdu {
@@ -487,7 +567,7 @@ impl DeviceIdentity {
                 }
                 BlockBody::OemDeviceId { vendor_id, device_id } => id.oem = Some((*vendor_id, *device_id)),
                 BlockBody::DeviceVendor { value } => id.vendor = Some(value.clone()),
-                BlockBody::DeviceRole { role } => id.role = Some(*role),
+                BlockBody::DeviceRole { role, .. } => id.role = Some(*role),
                 BlockBody::DeviceInstance { high, low } => id.instance = Some((*high, *low)),
                 BlockBody::DeviceOptions { options } => id.options = options.clone(),
                 BlockBody::MacAddress { mac } => id.mac = Some(*mac),
@@ -525,7 +605,7 @@ impl DeviceIdentity {
             out.push(described(2, 3, BlockBody::DeviceId { vendor_id, device_id }));
         }
         if let Some(role) = self.role {
-            out.push(described(2, 4, BlockBody::DeviceRole { role }));
+            out.push(described(2, 4, BlockBody::DeviceRole { role, reserved: 0 }));
         }
         if !self.options.is_empty() {
             out.push(described(2, 5, BlockBody::DeviceOptions { options: self.options.clone() }));
@@ -581,9 +661,9 @@ pub fn identify_response(dst: Mac, src: Mac, xid: u32, id: &DeviceIdentity) -> R
     pdu.frame(dst, src)
 }
 
-/// A Hello: a device announcing itself, multicast, as it starts.
+/// A Hello: a device announcing itself as it starts, to the Hello group address.
 pub fn hello(src: Mac, xid: u32, id: &DeviceIdentity) -> Result<Vec<u8>, DcpError> {
-    DcpPdu::request(FRAME_ID_HELLO, Service::Hello, xid, 0, id.blocks()).frame(Mac::DCP_MULTICAST, src)
+    DcpPdu::request(FRAME_ID_HELLO, Service::Hello, xid, 0, id.blocks()).frame(Mac::DCP_HELLO_MULTICAST, src)
 }
 
 /// A Get request for these option and suboption pairs, to one device.
@@ -656,44 +736,29 @@ pub fn check_station_name(name: &str) -> Result<(), NameError> {
     Ok(())
 }
 
-/// Why a Set is refused before it is written.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum SetError {
-    #[error("a DCP Set names one device by its MAC; {0} is a group address")]
-    GroupTarget(Mac),
-    #[error("{0}")]
-    Name(#[from] NameError),
-    #[error("{0}")]
-    Dcp(#[from] DcpError),
-}
-
-fn set_frame(dst: Mac, src: Mac, xid: u32, block: Block) -> Result<Vec<u8>, SetError> {
-    if dst.is_multicast() {
-        return Err(SetError::GroupTarget(dst));
-    }
-    Ok(DcpPdu::request(FRAME_ID_GET_SET, Service::Set, xid, 0, vec![block]).frame(dst, src)?)
+fn set_frame(dst: Mac, src: Mac, xid: u32, block: Block) -> Result<Vec<u8>, DcpError> {
+    DcpPdu::request(FRAME_ID_GET_SET, Service::Set, xid, 0, vec![block]).frame(dst, src)
 }
 
 fn qualifier(permanent: bool) -> u16 {
     if permanent { QUALIFIER_PERMANENT } else { QUALIFIER_TEMPORARY }
 }
 
-/// Set a device's NameOfStation. Refused for a group target or a name that breaks the rules.
-pub fn set_name_request(dst: Mac, src: Mac, xid: u32, name: &str, permanent: bool) -> Result<Vec<u8>, SetError> {
-    check_station_name(name)?;
+/// Set a device's NameOfStation. Refused for a name that breaks the rules or a group target.
+pub fn set_name_request(dst: Mac, src: Mac, xid: u32, name: &str, permanent: bool) -> Result<Vec<u8>, DcpError> {
     let body = BlockBody::NameOfStation { name: name.to_string() };
     set_frame(dst, src, xid, Block { option: 2, suboption: 2, info: Some(qualifier(permanent)), body })
 }
 
 /// Set a device's IP suite. Refused for a group target.
-pub fn set_ip_request(dst: Mac, src: Mac, xid: u32, suite: &IpSuite, permanent: bool) -> Result<Vec<u8>, SetError> {
+pub fn set_ip_request(dst: Mac, src: Mac, xid: u32, suite: &IpSuite, permanent: bool) -> Result<Vec<u8>, DcpError> {
     let body = BlockBody::IpParameter { suite: suite.clone() };
     set_frame(dst, src, xid, Block { option: 1, suboption: 2, info: Some(qualifier(permanent)), body })
 }
 
 /// Ask a device to flash its light, so a person sees which box answers to a MAC. Momentary: its
 /// qualifier is 0. Refused for a group target.
-pub fn signal_request(dst: Mac, src: Mac, xid: u32) -> Result<Vec<u8>, SetError> {
+pub fn signal_request(dst: Mac, src: Mac, xid: u32) -> Result<Vec<u8>, DcpError> {
     let body = BlockBody::ControlSignal { value: SIGNAL_FLASH };
     set_frame(dst, src, xid, Block { option: 5, suboption: 3, info: Some(QUALIFIER_TEMPORARY), body })
 }

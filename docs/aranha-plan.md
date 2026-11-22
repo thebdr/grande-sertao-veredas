@@ -261,6 +261,13 @@ is pinned by a test when its phase lands.
   word of the MRP port TLV is MRRT's port status (off, configured, up), not a ring port that is up
   or down, so "status 0 is not in a ring" would miss every ring whose MRRT is off: the ring is read
   from the domain. Both are pinned (C-132, C-133).
+- **A Hello goes to its own group address**, `01:0e:cf:00:00:01`, not the Identify one
+  (`01:0e:cf:00:00:00`); a listener and a bench device that use one address for both miss real
+  Hellos (C-132's first refute round).
+- **The kernel takes a VLAN tag out of a frame** before a packet socket reads it, keeping it beside
+  the frame; a socket bound to one EtherType gets a priority-tagged frame with its tag dropped for
+  good. The raw link reads every type, filters in the kernel with a program that looks inside a
+  tag, and puts the tag back (C-134). Core's IO controller meets the same on its cyclic frames.
 - **A frame shorter than 60 bytes is padded on the wire, and a capture may or may not hold the
   pad**: DCP is bounded by its own data length and LLDP by its end TLV, never by the frame.
 - **This machine announces itself.** An operating system's own LLDP agent and its own ARP are on

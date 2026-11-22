@@ -24,3 +24,6 @@ libc = { workspace = true }
 [dev-dependencies]
 # cargo metadata's output (tests/component.rs) and tshark's reading of a frame (the dissectors).
 serde_json = { workspace = true }
+# Unicode's own decomposition (NFKD), so the vendor reader of tests/component.rs reads an accented
+# or full-width letter as its base letter, as supervisão's reader does.
+icu_normalizer = { workspace = true }

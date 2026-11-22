@@ -29,13 +29,14 @@ fn profinet_pdu() -> LldpPdu {
         pn: PnTlvs {
             delays: Some(Delays { rx_local: 1, rx_remote: 2, tx_local: 3, tx_remote: 4, cable_local: 100 }),
             port_status: Some(PortStatus { rtc2: 0x0000, rtc3: 0x0002 }),
-            mrp: Some(MrpPortStatus { domain_uuid: [0xAB; 16], mrrt: 2 }),
+            mrp: Some(MrpPortStatus { domain_uuid: [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F], mrrt: 2 }),
             chassis_mac: Some(DEVICE),
         },
         port_vlan: Some(1),
         mac_phy: Some(MacPhy { autoneg: 3, pmd_capabilities: 0x6C00, mau_type: 16 }),
         unknown: Vec::new(),
         unknown_org: Vec::new(),
+        end: Some(Vec::new()),
     }
 }
 
@@ -72,7 +73,7 @@ fn a_profinet_port_says_every_tlv_and_reads_back_whole() {
     assert_eq!(back.chassis.key(), "local:station-a");
     assert_eq!(back.mgmt_addrs[0].ipv4(), Some(Ipv4Addr::new(192, 168, 10, 11)));
     let mrp = back.pn.mrp.as_ref().unwrap();
-    assert_eq!((mrp.mrrt_name(), mrp.domain_hex().as_str()), ("up", "abababababababababababababababab"));
+    assert_eq!((mrp.mrrt_name(), mrp.domain_hex().as_str()), ("up", "000102030405060708090a0b0c0d0e0f"));
     let names: Vec<&str> = (0..4).map(|m| MrpPortStatus { domain_uuid: [0; 16], mrrt: m }.mrrt_name()).collect();
     assert_eq!(names, ["off", "configured", "up", "unknown"]);
     assert!(!back.is_shutdown());
@@ -81,7 +82,7 @@ fn a_profinet_port_says_every_tlv_and_reads_back_whole() {
     assert!(lldp::capability_names(0xF800).is_empty());
     // The organisation TLVs to the byte: PROFINET's MRP port status and chassis MAC.
     let bytes = lldp::encode(&pdu).unwrap();
-    let mrp_tlv = [&[0xFE, 0x16, 0x00, 0x0E, 0xCF, 4][..], &[0xAB; 16], &[0, 2]].concat();
+    let mrp_tlv = [&[0xFE, 0x16, 0x00, 0x0E, 0xCF, 4][..], &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F], &[0, 2]].concat();
     assert!(bytes.windows(mrp_tlv.len()).any(|w| w == mrp_tlv));
     let mac_tlv = [0xFE, 0x0A, 0x00, 0x0E, 0xCF, 5, 2, 0, 0, 0, 0, 7];
     assert!(bytes.windows(mac_tlv.len()).any(|w| w == mac_tlv));
@@ -189,7 +190,8 @@ fn damage_and_missing_tlvs_are_errors_that_name_them() {
     assert_eq!(lldp::decode(&out).unwrap().sys_name, None);
     out.truncate(chassis.len() + port.len() + ttl.len());
     out.push(0x0A);
-    assert_eq!(lldp::decode(&out).unwrap().ttl, 9);
+    let pdu = lldp::decode(&out).unwrap();
+    assert_eq!((pdu.ttl, pdu.end.clone()), (9, None));
     assert_eq!(
         LldpError::Overrun { index: 0, tlv_type: 1, len: 7, left: 3 }.to_string(),
         "TLV 0 (type 1) says 7 bytes and 3 are left"
@@ -200,33 +202,120 @@ fn damage_and_missing_tlvs_are_errors_that_name_them() {
 #[test]
 fn what_a_tlv_cannot_carry_is_refused_never_cut() {
     let base = || LldpPdu::new(ChassisId::Local { id: "a".into() }, PortId::Local { id: "p".into() }, 20);
-    let mut pdu = base();
-    pdu.sys_desc = Some("d".repeat(511));
-    assert!(lldp::encode(&pdu).is_ok());
-    pdu.sys_desc = Some("d".repeat(512));
-    assert_eq!(lldp::encode(&pdu), Err(LldpError::TlvTooLong { tlv_type: 6, len: 512 }));
-    let mut pdu = base();
-    pdu.chassis = ChassisId::Local { id: "c".repeat(511) };
-    assert_eq!(lldp::encode(&pdu), Err(LldpError::TlvTooLong { tlv_type: 1, len: 512 }));
-    let mut pdu = base();
-    pdu.unknown = vec![(128, vec![])];
-    assert_eq!(lldp::encode(&pdu), Err(LldpError::BadType(128)));
-    for (len, ok) in [(0, false), (1, true), (31, true), (32, false)] {
+    let length = |what, min, max, len| Err(LldpError::Length { what, min, max, len });
+    // Ids of 1 to 255 bytes, texts of up to 255 (802.1AB).
+    for (id, ok) in [(0, false), (1, true), (255, true), (256, false)] {
         let mut pdu = base();
-        pdu.mgmt_addrs = vec![MgmtAddr { subtype: 1, addr: vec![1; len], if_subtype: 1, if_number: 0, oid: Vec::new() }];
-        assert_eq!(lldp::encode(&pdu).is_ok(), ok, "{len}");
+        pdu.chassis = ChassisId::Local { id: "c".repeat(id) };
+        assert_eq!(lldp::encode(&pdu).is_ok(), ok, "chassis {id}");
         if !ok {
-            assert_eq!(lldp::encode(&pdu), Err(LldpError::BadAddress(len)));
+            assert_eq!(lldp::encode(&pdu), length("a chassis id", 1, 255, id));
+        }
+        let mut pdu = base();
+        pdu.port = PortId::Local { id: "q".repeat(id) };
+        assert_eq!(lldp::encode(&pdu).is_ok(), ok, "port {id}");
+        if !ok {
+            assert_eq!(lldp::encode(&pdu), length("a port id", 1, 255, id));
         }
     }
     let mut pdu = base();
-    pdu.mgmt_addrs = vec![MgmtAddr { subtype: 1, addr: vec![1; 4], if_subtype: 1, if_number: 0, oid: vec![0; 256] }];
-    assert_eq!(lldp::encode(&pdu), Err(LldpError::TlvTooLong { tlv_type: 8, len: 256 }));
+    pdu.chassis = ChassisId::Network { data: vec![] };
+    assert_eq!(lldp::encode(&pdu), length("a chassis id", 1, 255, 0));
+    for (what, set) in [
+        ("a port description", (|p: &mut LldpPdu, s| p.port_desc = Some(s)) as fn(&mut LldpPdu, String)),
+        ("a system name", |p, s| p.sys_name = Some(s)),
+        ("a system description", |p, s| p.sys_desc = Some(s)),
+    ] {
+        let mut pdu = base();
+        set(&mut pdu, "d".repeat(255));
+        assert!(lldp::encode(&pdu).is_ok(), "{what}");
+        set(&mut pdu, "d".repeat(256));
+        assert_eq!(lldp::encode(&pdu), length(what, 0, 255, 256));
+    }
+    // Any value past 511 bytes, and a kept TLV of type 0 or past 127.
     let mut pdu = base();
-    pdu.sys_desc = Some("d".repeat(500));
-    pdu.port_desc = Some("d".repeat(500));
-    pdu.sys_name = Some("d".repeat(500));
+    pdu.unknown = vec![(9, vec![0; 511])];
+    assert!(lldp::encode(&pdu).is_ok());
+    pdu.unknown = vec![(9, vec![0; 512])];
+    assert_eq!(lldp::encode(&pdu), Err(LldpError::TlvTooLong { tlv_type: 9, len: 512 }));
+    pdu.unknown_org = vec![OrgTlv { oui: [0, 0x12, 0xBB], subtype: 1, data: vec![0; 508] }];
+    pdu.unknown = vec![];
+    assert_eq!(lldp::encode(&pdu), Err(LldpError::TlvTooLong { tlv_type: 127, len: 512 }));
+    let mut pdu = base();
+    pdu.unknown = vec![(128, vec![])];
+    assert_eq!(lldp::encode(&pdu), Err(LldpError::BadType(128)));
+    pdu.unknown = vec![(9, vec![1, 2, 3]), (0, vec![5, 5]), (10, vec![4])];
+    assert_eq!(lldp::encode(&pdu), Err(LldpError::BadType(0)));
+    // A management address: 1 to 31 bytes, its family's length where the family has one, an OID
+    // of up to 255 bytes.
+    for (subtype, len, ok) in [(5, 0, false), (5, 1, true), (5, 31, true), (5, 32, false), (1, 4, true), (1, 1, false), (2, 16, true), (2, 4, false), (6, 6, true), (6, 7, false)] {
+        let mut pdu = base();
+        pdu.mgmt_addrs = vec![MgmtAddr { subtype, addr: vec![1; len], if_subtype: 1, if_number: 0, oid: Vec::new() }];
+        assert_eq!(lldp::encode(&pdu).is_ok(), ok, "{subtype} {len}");
+        let want = match (ok, len) {
+            (true, _) => continue,
+            (false, 0 | 32) => length("a management address", 1, 31, len),
+            (false, _) => Err(LldpError::BadAddress { subtype, want: [0, 4, 16, 0, 0, 0, 6][usize::from(subtype)], len }),
+        };
+        assert_eq!(lldp::encode(&pdu), want, "{subtype} {len}");
+    }
+    let mut pdu = base();
+    pdu.mgmt_addrs = vec![MgmtAddr { subtype: 1, addr: vec![1; 4], if_subtype: 1, if_number: 0, oid: vec![0; 255] }];
+    assert!(lldp::encode(&pdu).is_ok());
+    pdu.mgmt_addrs[0].oid.push(0);
+    assert_eq!(lldp::encode(&pdu), length("an OID", 0, 255, 256));
+    // And a PDU past the frame.
+    let mut pdu = base();
+    pdu.unknown = vec![(9, vec![0; 500]), (10, vec![0; 500]), (11, vec![0; 500])];
     assert_eq!(lldp::frame(PORT, &pdu), Err(LldpError::Ether(ether::EtherError::TooLong(1520))));
+    assert_eq!(
+        LldpError::Length { what: "a chassis id", min: 1, max: 255, len: 256 }.to_string(),
+        "a chassis id is 1 to 255 bytes; this one is 256"
+    );
+}
+
+#[test]
+fn what_the_standard_does_not_let_a_tlv_say_is_read_as_unread() {
+    let ttl = tlv(3, &[0, 20]);
+    // An id of no bytes, or of 256, is no id: kept unread, and the PDU then has none.
+    for (t, v, missing) in [(1u8, vec![7u8], "chassis id"), (1, [vec![7], vec![b'c'; 256]].concat(), "chassis id"), (2, vec![7], "port id")] {
+        let mut out = if t == 1 { tlv(2, b"\x07p") } else { tlv(1, b"\x07c") };
+        out.extend(tlv(t, &v));
+        out.extend(ttl.clone());
+        assert_eq!(lldp::decode(&out), Err(LldpError::Missing(missing)), "{t} {}", v.len());
+    }
+    let mut out = [tlv(1, b"\x07c"), tlv(2, b"\x07p"), ttl.clone()].concat();
+    out.extend(tlv(1, &[7]));
+    out.extend(tlv(5, &[b'n'; 256]));
+    out.extend(tlv(8, &[2, 1, 10, 2, 0, 0, 0, 1, 0]));
+    out.extend(tlv(8, &[5, 1, 10, 0, 0, 1, 2, 0, 0, 0, 1, 0]));
+    let pdu = lldp::decode(&out).unwrap();
+    assert_eq!(pdu.sys_name, None);
+    assert_eq!(pdu.mgmt_addrs.len(), 1);
+    assert_eq!(pdu.unknown, [(1, vec![7]), (5, vec![b'n'; 256]), (8, vec![2, 1, 10, 2, 0, 0, 0, 1, 0])]);
+    assert_eq!(lldp::decode(&lldp::encode(&pdu).unwrap()).unwrap(), pdu);
+}
+
+#[test]
+fn the_end_tlv_is_kept_as_heard_with_its_bytes_or_its_absence() {
+    let head = [tlv(1, b"\x07a"), tlv(2, b"\x07p"), tlv(3, &[0, 20])].concat();
+    // An End with a value: the value kept, written back.
+    let with_value = [head.clone(), tlv(0, &[9, 9, 9])].concat();
+    let pdu = lldp::decode(&with_value).unwrap();
+    assert_eq!((pdu.end.clone(), pdu.unknown.clone()), (Some(vec![9, 9, 9]), vec![]));
+    assert_eq!(lldp::encode(&pdu).unwrap(), with_value);
+    // No End: none written back, so a full frame's PDU frames again.
+    let mut full = head.clone();
+    full.extend(tlv(9, &[0; 509]));
+    full.extend(tlv(10, &[0; 509]));
+    full.extend(tlv(11, &[0; 1500 - 12 - 2 * 511 - 2]));
+    assert_eq!(full.len(), 1500);
+    let pdu = lldp::decode(&full).unwrap();
+    assert_eq!(pdu.end, None);
+    assert_eq!(lldp::encode(&pdu).unwrap(), full);
+    assert_eq!(lldp::frame(PORT, &pdu).unwrap().len(), 1514);
+    // The standard's End is an empty one.
+    assert_eq!(&lldp::encode(&LldpPdu::new(ChassisId::Local { id: "a".into() }, PortId::Local { id: "p".into() }, 1)).unwrap()[12..], &[0, 0]);
 }
 
 #[test]
@@ -316,7 +405,7 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
     assert_eq!(p.one(l, "lldp.profinet.cable_delay_local"), "100");
     assert_eq!(p.one(l, "lldp.profinet.rtc2_port_status"), "0");
     assert_eq!(p.one(l, "lldp.profinet.rtc3_port_status"), "2");
-    assert_eq!(p.one(l, "lldp.profinet.mrp_domain_uuid"), "abababab-abab-abab-abab-abababababab");
+    assert_eq!(p.one(l, "lldp.profinet.mrp_domain_uuid"), "00010203-0405-0607-0809-0a0b0c0d0e0f");
     assert_eq!(p.one(l, "lldp.profinet.mrrt_port_status"), "2");
     assert_eq!(p.one(l, "lldp.profinet.cm_mac_add"), "02:00:00:00:00:07");
     assert_eq!(p.one(l, "lldp.ieee.802_1.port_vlan.id"), "1");

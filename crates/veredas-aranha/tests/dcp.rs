@@ -8,7 +8,6 @@ use std::net::Ipv4Addr;
 
 use veredas_aranha::profinet::dcp::{
     self, Block, BlockBody, Damage, DcpError, DcpPdu, DeviceIdentity, Filter, IpStatus, IpSuite, NameError, Service, ServiceType,
-    SetError,
 };
 use veredas_aranha::profinet::ether;
 use veredas_aranha::profinet::mac::Mac;
@@ -137,7 +136,9 @@ fn an_identify_answer_says_every_identity_field_and_reads_back_whole() {
 }
 
 #[test]
-fn a_hello_is_multicast_with_block_info_and_carries_the_address_conflict() {
+fn a_hello_goes_to_its_own_group_with_block_info_and_carries_the_address_conflict() {
+    assert_eq!(Mac::DCP_HELLO_MULTICAST, Mac([0x01, 0x0E, 0xCF, 0x00, 0x00, 0x01]));
+    assert_eq!(Mac::DCP_MULTICAST, Mac([0x01, 0x0E, 0xCF, 0x00, 0x00, 0x00]));
     let mut id = full_identity();
     for (info, status) in [
         (0x0000, IpStatus { set: 0, conflict: false }),
@@ -151,7 +152,7 @@ fn a_hello_is_multicast_with_block_info_and_carries_the_address_conflict() {
         assert_eq!(status.to_info(), info);
         id.ip_status = Some(status);
         let f = dcp::hello(DEV, 3, &id).unwrap();
-        let pdu = dcp::decode(&payload(&f, Mac::DCP_MULTICAST, DEV)).unwrap();
+        let pdu = dcp::decode(&payload(&f, Mac::DCP_HELLO_MULTICAST, DEV)).unwrap();
         assert_eq!((pdu.frame_id, pdu.service, pdu.service_type), (dcp::FRAME_ID_HELLO, Service::Hello, ServiceType::Request));
         let ipb = pdu.blocks.iter().find(|b| (b.option, b.suboption) == (1, 2)).unwrap();
         assert_eq!(ipb.info, Some(info));
@@ -159,7 +160,7 @@ fn a_hello_is_multicast_with_block_info_and_carries_the_address_conflict() {
     }
     // An address with no status given is said to be set, with no conflict.
     id.ip_status = None;
-    let pdu = dcp::decode(&payload(&dcp::hello(DEV, 3, &id).unwrap(), Mac::DCP_MULTICAST, DEV)).unwrap();
+    let pdu = dcp::decode(&payload(&dcp::hello(DEV, 3, &id).unwrap(), Mac::DCP_HELLO_MULTICAST, DEV)).unwrap();
     assert_eq!(DeviceIdentity::from_blocks(&pdu.blocks).ip_status, Some(IpStatus { set: 1, conflict: false }));
 }
 
@@ -225,16 +226,82 @@ fn a_set_is_written_to_one_device_with_its_qualifier() {
 #[test]
 fn a_set_to_a_group_address_is_refused_by_the_codec() {
     for target in [Mac::DCP_MULTICAST, Mac::BROADCAST, Mac::LLDP_MULTICAST, Mac([0x03, 0, 0, 0, 0, 0])] {
-        assert_eq!(dcp::set_name_request(target, ME, 1, "station-a", true), Err(SetError::GroupTarget(target)));
-        assert_eq!(dcp::set_ip_request(target, ME, 1, &suite(), true), Err(SetError::GroupTarget(target)));
-        assert_eq!(dcp::signal_request(target, ME, 1), Err(SetError::GroupTarget(target)));
+        assert_eq!(dcp::set_name_request(target, ME, 1, "station-a", true), Err(DcpError::GroupTarget(target)));
+        assert_eq!(dcp::set_ip_request(target, ME, 1, &suite(), true), Err(DcpError::GroupTarget(target)));
+        assert_eq!(dcp::signal_request(target, ME, 1), Err(DcpError::GroupTarget(target)));
     }
     assert_eq!(
-        SetError::GroupTarget(Mac::BROADCAST).to_string(),
+        DcpError::GroupTarget(Mac::BROADCAST).to_string(),
         "a DCP Set names one device by its MAC; ff:ff:ff:ff:ff:ff is a group address"
     );
-    // A name that breaks the rules is refused before anything is written, whatever the target.
-    assert_eq!(dcp::set_name_request(DEV, ME, 1, "Station", true), Err(SetError::Name(NameError::Character('S'))));
+    // A name that breaks the rules is refused before anything is written.
+    assert_eq!(dcp::set_name_request(DEV, ME, 1, "Station", true), Err(DcpError::Name(NameError::Character('S'))));
+}
+
+/// A Set request holding these blocks, as a caller could build or decode one by hand.
+fn set_pdu(blocks: Vec<Block>) -> DcpPdu {
+    DcpPdu {
+        frame_id: dcp::FRAME_ID_GET_SET,
+        service: Service::Set,
+        service_type: ServiceType::Request,
+        xid: 1,
+        response_delay: 0,
+        blocks,
+        trailing: Vec::new(),
+    }
+}
+
+#[test]
+fn a_set_built_or_decoded_by_hand_is_gated_as_the_helpers_are() {
+    let name = |n: &str, q: Option<u16>| Block { option: 2, suboption: 2, info: q, body: BlockBody::NameOfStation { name: n.into() } };
+    let ip = |q| Block { option: 1, suboption: 2, info: q, body: BlockBody::IpParameter { suite: suite() } };
+    let signal = |q| Block { option: 5, suboption: 3, info: q, body: BlockBody::ControlSignal { value: dcp::SIGNAL_FLASH } };
+    // What may be written: to one device, a good name, an IP suite and the signal, each with a
+    // qualifier it may carry.
+    for blocks in [vec![name("station-a", Some(1))], vec![name("station-a", Some(0)), ip(Some(1))], vec![ip(Some(0)), signal(Some(0))]] {
+        let pdu = set_pdu(blocks);
+        assert!(pdu.frame(DEV, ME).is_ok(), "{pdu:?}");
+        for group in [Mac::BROADCAST, Mac::DCP_MULTICAST, Mac::DCP_HELLO_MULTICAST, Mac([0x03, 0, 0, 0, 0, 9])] {
+            assert_eq!(pdu.frame(group, ME), Err(DcpError::GroupTarget(group)));
+        }
+    }
+    // What a Set can do beyond them is not expressible: a factory reset (5, 6), a reset of
+    // communication (5, 5), a name given as unread bytes, a damaged block, another kind of block.
+    let reset = Block { option: 5, suboption: 6, info: Some(2), body: BlockBody::Unknown { data: vec![] } };
+    let cases = vec![
+        (reset.clone(), DcpError::SetBlock { option: 5, suboption: 6, body: "unknown" }),
+        (Block { option: 5, suboption: 5, info: Some(0), body: BlockBody::Unknown { data: vec![] } }, DcpError::SetBlock { option: 5, suboption: 5, body: "unknown" }),
+        (Block { option: 2, suboption: 2, info: Some(1), body: BlockBody::Unknown { data: b"station-a".to_vec() } }, DcpError::SetBlock { option: 2, suboption: 2, body: "unknown" }),
+        (Block { option: 2, suboption: 2, info: Some(1), body: BlockBody::Damaged { data: vec![0xFF], damage: Damage::Text } }, DcpError::SetBlock { option: 2, suboption: 2, body: "damaged" }),
+        (Block { option: 2, suboption: 1, info: Some(1), body: BlockBody::DeviceVendor { value: "v".into() } }, DcpError::SetBlock { option: 2, suboption: 1, body: "device-vendor" }),
+        (Block { option: 2, suboption: 6, info: Some(1), body: BlockBody::NameOfStation { name: "station-a".into() } }, DcpError::SetBlock { option: 2, suboption: 6, body: "name-of-station" }),
+        (name("Port-001", Some(1)), DcpError::Name(NameError::Character('P'))),
+        (name("port-001", Some(1)), DcpError::Name(NameError::PortName)),
+        (name("station-a", Some(2)), DcpError::Qualifier { option: 2, suboption: 2, qualifier: Some(2), allowed: "0 or 1" }),
+        (name("station-a", None), DcpError::Qualifier { option: 2, suboption: 2, qualifier: None, allowed: "0 or 1" }),
+        (ip(Some(3)), DcpError::Qualifier { option: 1, suboption: 2, qualifier: Some(3), allowed: "0 or 1" }),
+        (signal(Some(1)), DcpError::Qualifier { option: 5, suboption: 3, qualifier: Some(1), allowed: "0" }),
+    ];
+    for (block, err) in cases {
+        let pdu = set_pdu(vec![name("station-a", Some(1)), block.clone()]);
+        assert_eq!(pdu.encode(), Err(err.clone()), "{block:?}");
+        assert_eq!(pdu.frame(DEV, ME), Err(err), "{block:?}");
+    }
+    // A Set read from the wire (here a factory reset with a broken name, broadcast) decodes, so
+    // the scanner can see it, and cannot be written again, to one device or to all.
+    let heard = [0xFE, 0xFD, 4, 0, 0, 0, 0, 1, 0, 0, 0, 20, 2, 2, 0, 10, 0, 1, b'P', b'o', b'r', b't', b'-', b'0', b'0', b'1', 5, 6, 0, 2, 0, 2];
+    let pdu = dcp::decode(&heard).unwrap();
+    assert!(pdu.is_set_request());
+    assert_eq!(pdu.blocks[1].body, BlockBody::Unknown { data: vec![] });
+    assert_eq!(pdu.encode(), Err(DcpError::Name(NameError::Character('P'))));
+    assert_eq!(pdu.frame(Mac::BROADCAST, ME), Err(DcpError::GroupTarget(Mac::BROADCAST)));
+    // A Set answer is not a request: it is written to whoever asked, its blocks unread by the gate.
+    let answer = DcpPdu { service_type: ServiceType::Success, ..set_pdu(vec![reset]) };
+    assert!(answer.frame(ME, DEV).is_ok());
+    assert_eq!(
+        DcpError::SetBlock { option: 5, suboption: 6, body: "unknown" }.to_string(),
+        "a Set writes a station name, an IP suite or the identification signal, never option 5 suboption 6 (unknown)"
+    );
 }
 
 #[test]
@@ -332,6 +399,9 @@ fn a_damaged_block_is_kept_with_its_reason_and_the_next_still_decodes() {
         (vec![5, 4, 0, 4, 2, 2, 0, 9], BlockBody::Damaged { data: vec![2, 2, 0, 9], damage: Damage::Length { expected: 3, got: 4 } }),
         (vec![6, 1, 0, 3, 0, 0, 1, 0], BlockBody::Damaged { data: vec![1], damage: Damage::Length { expected: 2, got: 1 } }),
         (vec![2, 2, 0, 1, 7, 0], BlockBody::Damaged { data: vec![7], damage: Damage::NoInfo }),
+        (vec![2, 2, 0, 0], BlockBody::Damaged { data: vec![], damage: Damage::NoInfo }),
+        (vec![2, 5, 0, 0], BlockBody::Damaged { data: vec![], damage: Damage::NoInfo }),
+        (vec![2, 4, 0, 4, 0, 0, 1, 0xFF], BlockBody::DeviceRole { role: 1, reserved: 0xFF }),
         (vec![9, 9, 0, 3, 0, 0, 1, 0], BlockBody::Unknown { data: vec![1] }),
         (vec![2, 2, 0, 4, 0, 0, 0xFF, 0xFE], BlockBody::Damaged { data: vec![0xFF, 0xFE], damage: Damage::Text }),
         (vec![2, 1, 0, 3, 0, 0, 0xC3, 0], BlockBody::Damaged { data: vec![0xC3], damage: Damage::Text }),
@@ -366,6 +436,55 @@ fn a_damaged_block_is_kept_with_its_reason_and_the_next_still_decodes() {
     p.extend_from_slice(&[0xAB; 30]);
     let pdu = dcp::decode(&p).unwrap();
     assert_eq!((pdu.blocks.len(), pdu.trailing.len()), (1, 0));
+}
+
+#[test]
+fn a_set_answer_carries_no_block_info_whatever_its_blocks() {
+    // A Set answer holding a name block (not a control response): no info word is taken from it.
+    let p = [0xFE, 0xFD, 4, 1, 0, 0, 0, 1, 0, 0, 0, 8, 2, 2, 0, 4, b'a', b'b', b'c', b'd'];
+    let pdu = dcp::decode(&p).unwrap();
+    assert_eq!(pdu.blocks, [Block { option: 2, suboption: 2, info: None, body: BlockBody::NameOfStation { name: "abcd".into() } }]);
+    assert_eq!(pdu.encode().unwrap(), p);
+    let mut frame = vec![2, 0, 0, 0, 0, 0xAA, 2, 0, 0, 0, 0, 1, 0x88, 0x92];
+    frame.extend_from_slice(&p);
+    frame.resize(60, 0);
+    let read = common::dissect(&[frame]);
+    assert_eq!(read[0].complaints(), Vec::<String>::new());
+    assert_eq!(read[0].one("pn_dcp", "pn_dcp.suboption_device_nameofstation"), "abcd");
+    assert!(read[0].values("pn_dcp", "pn_dcp.block_info").is_empty());
+}
+
+#[test]
+fn a_decoded_pdu_is_written_back_to_its_own_bytes_save_its_pads() {
+    // Every frame this codec writes, decoded and written again, is the same bytes.
+    let frames = [
+        dcp::identify_request(ME, 1, 1, &Filter::Name("station-a".into())).unwrap(),
+        dcp::identify_response(ME, DEV, 2, &full_identity()).unwrap(),
+        dcp::hello(DEV, 3, &full_identity()).unwrap(),
+        dcp::get_request(DEV, ME, 4, &[(2, 2), (1, 2), (2, 3)]).unwrap(),
+        dcp::set_name_request(DEV, ME, 5, "station-b", true).unwrap(),
+        dcp::set_ip_request(DEV, ME, 6, &suite(), false).unwrap(),
+        dcp::signal_request(DEV, ME, 7).unwrap(),
+        dcp::set_response(ME, DEV, 8, &[(2, 2, 0), (1, 2, 6)]).unwrap(),
+    ];
+    for f in &frames {
+        let p = ether::parse(f).unwrap().payload;
+        let len = 12 + usize::from(u16::from_be_bytes([p[10], p[11]]));
+        assert_eq!(dcp::decode(p).unwrap().encode().unwrap(), &p[..len]);
+    }
+    // A device's reserved role byte is kept as heard.
+    let role = answer_with(&[2, 4, 0, 4, 0, 0, 1, 0xFF]);
+    assert_eq!(dcp::decode(&role).unwrap().encode().unwrap(), role);
+    // The two bytes a decoded PDU does not keep, and what it writes in their place: a pad byte's
+    // value (the standard has it 0) and the pad a last odd block went without.
+    let odd = answer_with(&[2, 2, 0, 3, 0, 0, b'a', 0xAB, 2, 2, 0, 3, 0, 0, b'b']);
+    let back = dcp::decode(&odd).unwrap().encode().unwrap();
+    let mut want = odd.clone();
+    want[19] = 0;
+    want.push(0);
+    want[11] = 16;
+    assert_eq!(back, want);
+    assert_eq!(dcp::decode(&back).unwrap(), dcp::decode(&odd).unwrap());
 }
 
 #[test]
@@ -429,26 +548,42 @@ fn any_bytes_decode_without_a_panic_and_rewrite_to_themselves() {
         }
         seeds.push(p);
     }
-    let (mut decoded, mut overruns) = (0, 0);
+    let (mut decoded, mut overruns, mut gated) = (0, 0, 0);
     for s in &seeds {
         for cut in 0..=s.len() {
-            if let Ok(p0) = dcp::decode(&s[..cut]) {
+            // The data length restated for the cut, so every cut reaches the block decoder.
+            let mut c = s[..cut].to_vec();
+            if c.len() >= 12 {
+                let n = (c.len() - 12) as u16;
+                c[10..12].copy_from_slice(&n.to_be_bytes());
+            }
+            if let Ok(p0) = dcp::decode(&c) {
                 decoded += 1;
-                let p1 = dcp::decode(&p0.encode().unwrap()).unwrap();
+                // A Set request outside what may be written decodes and is never written again.
+                let bytes = match p0.encode() {
+                    Ok(b) => b,
+                    Err(e) => {
+                        assert!(p0.is_set_request(), "{e:?} {c:?}");
+                        assert!(matches!(e, DcpError::SetBlock { .. } | DcpError::Qualifier { .. } | DcpError::Name(_)), "{e:?}");
+                        gated += 1;
+                        continue;
+                    }
+                };
+                let p1 = dcp::decode(&bytes).unwrap();
                 // A block that ran past the data is written back as the bytes it kept, a whole
                 // block; everything else reads back as it was.
                 let overrun = p0.blocks.iter().any(|b| matches!(b.body, BlockBody::Damaged { damage: Damage::Overrun { .. }, .. }));
                 if overrun {
                     overruns += 1;
                     let p2 = dcp::decode(&p1.encode().unwrap()).unwrap();
-                    assert_eq!(p1, p2, "{:?}", &s[..cut]);
+                    assert_eq!(p1, p2, "{c:?}");
                 } else {
-                    assert_eq!(p0, p1, "{:?}", &s[..cut]);
+                    assert_eq!(p0, p1, "{c:?}");
                 }
             }
         }
     }
-    assert!(decoded > 10_000 && overruns > 1_000, "{decoded} decoded, {overruns} with an overrun");
+    assert!(decoded > 100_000 && overruns > 1_000 && gated > 1_000, "{decoded} decoded, {overruns} with an overrun, {gated} Sets gated");
 }
 
 #[test]
@@ -465,19 +600,37 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
         dcp::set_ip_request(DEV, ME, 8, &suite(), false).unwrap(),
         dcp::signal_request(DEV, ME, 9).unwrap(),
         dcp::set_response(ME, DEV, 10, &[(2, 2, 0), (1, 2, 6)]).unwrap(),
+        DcpPdu {
+            frame_id: dcp::FRAME_ID_GET_SET,
+            service: Service::Get,
+            service_type: ServiceType::Success,
+            xid: 11,
+            response_delay: 0,
+            blocks: vec![
+                Block { option: 2, suboption: 2, info: Some(0), body: BlockBody::NameOfStation { name: "station-a".into() } },
+                Block { option: 1, suboption: 2, info: Some(1), body: BlockBody::IpParameter { suite: suite() } },
+                Block { option: 5, suboption: 4, info: None, body: BlockBody::ControlResponse { option: 2, suboption: 3, error: 3 } },
+            ],
+            trailing: Vec::new(),
+        }
+        .frame(ME, DEV)
+        .unwrap(),
     ];
     let read = common::dissect(&frames);
+    let dsts: Vec<String> = read.iter().map(|p| p.one("eth", "eth.dst")).collect();
+    let (group, hello, dev, me) = ("01:0e:cf:00:00:00", "01:0e:cf:00:00:01", "02:00:00:00:00:01", "02:00:00:00:00:aa");
+    assert_eq!(dsts, [group, group, group, me, hello, dev, dev, dev, dev, me, me]);
     for (i, p) in read.iter().enumerate() {
         assert_eq!(p.complaints(), Vec::<String>::new(), "frame {i}");
         assert!(p.has("pn_dcp"), "frame {i}: {}", p.layers);
     }
     let d = "pn_dcp";
     let xids: Vec<String> = read.iter().map(|p| p.one(d, "pn_dcp.xid")).collect();
-    assert_eq!(xids, ["305419896", "2", "3", "168496141", "5", "6", "7", "8", "9", "10"]);
+    assert_eq!(xids, ["305419896", "2", "3", "168496141", "5", "6", "7", "8", "9", "10", "11"]);
     let services: Vec<String> = read.iter().map(|p| p.one(d, "pn_dcp.service_id")).collect();
-    assert_eq!(services, ["5", "5", "5", "5", "6", "3", "4", "4", "4", "4"]);
+    assert_eq!(services, ["5", "5", "5", "5", "6", "3", "4", "4", "4", "4", "3"]);
     let types: Vec<String> = read.iter().map(|p| p.one(d, "pn_dcp.service_type")).collect();
-    assert_eq!(types, ["0", "0", "0", "1", "0", "0", "0", "0", "0", "1"]);
+    assert_eq!(types, ["0", "0", "0", "1", "0", "0", "0", "0", "0", "1", "1"]);
 
     // The identify requests: the delay factor and the filters.
     assert_eq!(read[0].one(d, "pn_dcp.response_delay"), "1");
@@ -517,6 +670,12 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
     assert_eq!(read[7].one(d, "pn_dcp.suboption_ip_ip"), "192.168.10.11");
     assert_eq!(read[8].one(d, "pn_dcp.suboption_control_signal_value"), "256");
     assert_eq!(read[9].values(d, "pn_dcp.block_error"), ["0", "6"]);
+    // The Get answer: the name with its BlockInfo, the IP block's, and a control response's error.
+    assert_eq!(read[10].one(d, "pn_dcp.suboption_device_nameofstation"), "station-a");
+    assert_eq!(read[10].one(d, "pn_dcp.block_info"), "0");
+    assert_eq!(read[10].one(d, "pn_dcp.suboption_ip_block_info"), "1");
+    assert_eq!(read[10].one(d, "pn_dcp.suboption_ip_ip"), "192.168.10.11");
+    assert_eq!(read[10].values(d, "pn_dcp.block_error"), ["3"]);
 }
 
 #[test]

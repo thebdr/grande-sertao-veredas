@@ -25,6 +25,18 @@ pub const OUI_IEEE_802_3: [u8; 3] = [0x00, 0x12, 0x0F];
 
 /// The longest value a TLV's 9-bit length can say.
 pub const MAX_TLV_VALUE: usize = 511;
+/// The longest chassis id, port id, port description, system name or description (802.1AB).
+pub const MAX_TEXT: usize = 255;
+
+/// The address length a management address of this family has: IPv4, IPv6, an 802 MAC.
+fn family_len(subtype: u8) -> Option<usize> {
+    match subtype {
+        1 => Some(4),
+        2 => Some(16),
+        6 => Some(6),
+        _ => None,
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -233,6 +245,10 @@ pub struct LldpPdu {
     /// TLVs of a type this codec does not read (or too short for theirs): (type, value), kept.
     pub unknown: Vec<(u8, Vec<u8>)>,
     pub unknown_org: Vec<OrgTlv>,
+    /// The End TLV's value: `Some` of nothing as the standard writes it, `Some` of what a sender
+    /// put in it (kept as heard), or `None` when the PDU had no End TLV and ended at its last
+    /// whole TLV.
+    pub end: Option<Vec<u8>>,
 }
 
 impl LldpPdu {
@@ -252,6 +268,7 @@ impl LldpPdu {
             mac_phy: None,
             unknown: Vec::new(),
             unknown_org: Vec::new(),
+            end: Some(Vec::new()),
         }
     }
 
@@ -280,10 +297,12 @@ pub enum LldpError {
     Missing(&'static str),
     #[error("a TLV value holds at most 511 bytes; type {tlv_type} has {len}")]
     TlvTooLong { tlv_type: u8, len: usize },
-    #[error("a TLV type is 0 to 127, not {0}")]
+    #[error("a TLV kept unread is of type 1 to 127 (0 is the End TLV), not {0}")]
     BadType(u8),
-    #[error("a management address is 1 to 31 bytes; this one is {0}")]
-    BadAddress(usize),
+    #[error("{what} is {min} to {max} bytes; this one is {len}")]
+    Length { what: &'static str, min: usize, max: usize, len: usize },
+    #[error("a management address of family {subtype} is {want} bytes; this one is {len}")]
+    BadAddress { subtype: u8, want: usize, len: usize },
     #[error("{0}")]
     Ether(#[from] EtherError),
 }
@@ -298,6 +317,7 @@ pub fn decode(payload: &[u8]) -> Result<LldpPdu, LldpError> {
     let mut pdu = LldpPdu::new(ChassisId::Other { subtype: 0, data: Vec::new() }, PortId::Other { subtype: 0, data: Vec::new() }, 0);
     let mut off = 0usize;
     let mut index = 0usize;
+    pdu.end = None;
     while off + 2 <= payload.len() {
         let head = u16::from_be_bytes([payload[off], payload[off + 1]]);
         let tlv_type = (head >> 9) as u8;
@@ -313,12 +333,15 @@ pub fn decode(payload: &[u8]) -> Result<LldpPdu, LldpError> {
         // A TLV that says what is already said (a second chassis id, a second system name) or
         // that does not fit its type is kept among the unread, never dropped.
         let kept = match tlv_type {
-            0 => break,
-            1 if chassis.is_none() && !v.is_empty() => {
+            0 => {
+                pdu.end = Some(v.to_vec());
+                break;
+            }
+            1 if chassis.is_none() && (2..=256).contains(&v.len()) => {
                 chassis = Some(ChassisId::decode(v));
                 true
             }
-            2 if port.is_none() && !v.is_empty() => {
+            2 if port.is_none() && (2..=256).contains(&v.len()) => {
                 port = Some(PortId::decode(v));
                 true
             }
@@ -357,9 +380,9 @@ pub fn decode(payload: &[u8]) -> Result<LldpPdu, LldpError> {
 }
 
 /// Fill an empty text field from UTF-8 bytes; `false` (keep the TLV unread) when the field is
-/// already said or the bytes are not text.
+/// already said, the bytes are not text, or there are more than 802.1AB's 255.
 fn set_text(field: &mut Option<String>, v: &[u8]) -> bool {
-    match (field.is_none(), text(v)) {
+    match (field.is_none() && v.len() <= MAX_TEXT, text(v)) {
         (true, Some(t)) => {
             *field = Some(t);
             true
@@ -397,7 +420,7 @@ fn decode_mgmt(v: &[u8]) -> Option<MgmtAddr> {
     }
     let rest = &v[1 + alen..];
     let oid_len = usize::from(rest[5]);
-    if rest.len() != 6 + oid_len {
+    if rest.len() != 6 + oid_len || family_len(v[1]).is_some_and(|n| n != alen - 1) {
         return None;
     }
     Some(MgmtAddr {
@@ -435,35 +458,45 @@ fn push_org(out: &mut Vec<u8>, oui: [u8; 3], subtype: u8, data: &[u8]) -> Result
     push_tlv(out, 127, &[&oui[..], &[subtype], data].concat())
 }
 
+fn check_len(what: &'static str, min: usize, max: usize, len: usize) -> Result<(), LldpError> {
+    if (min..=max).contains(&len) { Ok(()) } else { Err(LldpError::Length { what, min, max, len }) }
+}
+
 /// Encode a PDU (no Ethernet header): the mandatory TLVs first, in the standard's order, then
-/// the optional ones, the organisation TLVs, those kept unread, and the End TLV. A value past 511
-/// bytes, or a management address outside 1 to 31 bytes, is refused, never cut.
+/// the optional ones, the organisation TLVs, those kept unread, and the End TLV as the PDU had it
+/// (none when it had none). What a TLV cannot carry is refused, never cut: a chassis or port id
+/// outside 1 to 255 bytes, a description or system name past 255, a management address outside
+/// 1 to 31 bytes or not its family's length, an OID past 255, any value past 511, a kept TLV of
+/// type 0 or past 127.
 pub fn encode(pdu: &LldpPdu) -> Result<Vec<u8>, LldpError> {
     let mut out = Vec::new();
-    push_tlv(&mut out, 1, &pdu.chassis.encode())?;
-    push_tlv(&mut out, 2, &pdu.port.encode())?;
+    let chassis = pdu.chassis.encode();
+    check_len("a chassis id", 1, MAX_TEXT, chassis.len() - 1)?;
+    let port = pdu.port.encode();
+    check_len("a port id", 1, MAX_TEXT, port.len() - 1)?;
+    push_tlv(&mut out, 1, &chassis)?;
+    push_tlv(&mut out, 2, &port)?;
     push_tlv(&mut out, 3, &pdu.ttl.to_be_bytes())?;
-    if let Some(s) = &pdu.port_desc {
-        push_tlv(&mut out, 4, s.as_bytes())?;
-    }
-    if let Some(s) = &pdu.sys_name {
-        push_tlv(&mut out, 5, s.as_bytes())?;
-    }
-    if let Some(s) = &pdu.sys_desc {
-        push_tlv(&mut out, 6, s.as_bytes())?;
+    for (t, what, s) in [(4, "a port description", &pdu.port_desc), (5, "a system name", &pdu.sys_name), (6, "a system description", &pdu.sys_desc)] {
+        if let Some(s) = s {
+            check_len(what, 0, MAX_TEXT, s.len())?;
+            push_tlv(&mut out, t, s.as_bytes())?;
+        }
     }
     if let Some((c, e)) = pdu.sys_caps {
         push_tlv(&mut out, 7, &[c.to_be_bytes(), e.to_be_bytes()].concat())?;
     }
     for m in &pdu.mgmt_addrs {
-        if m.addr.is_empty() || m.addr.len() > 31 {
-            return Err(LldpError::BadAddress(m.addr.len()));
+        check_len("a management address", 1, 31, m.addr.len())?;
+        if let Some(want) = family_len(m.subtype).filter(|&n| n != m.addr.len()) {
+            return Err(LldpError::BadAddress { subtype: m.subtype, want, len: m.addr.len() });
         }
+        check_len("an OID", 0, 255, m.oid.len())?;
         let mut v = vec![(m.addr.len() + 1) as u8, m.subtype];
         v.extend_from_slice(&m.addr);
         v.push(m.if_subtype);
         v.extend_from_slice(&m.if_number.to_be_bytes());
-        v.push(u8::try_from(m.oid.len()).map_err(|_| LldpError::TlvTooLong { tlv_type: 8, len: m.oid.len() })?);
+        v.push(m.oid.len() as u8);
         v.extend_from_slice(&m.oid);
         push_tlv(&mut out, 8, &v)?;
     }
@@ -490,9 +523,14 @@ pub fn encode(pdu: &LldpPdu) -> Result<Vec<u8>, LldpError> {
         push_org(&mut out, o.oui, o.subtype, &o.data)?;
     }
     for (t, v) in &pdu.unknown {
+        if *t == 0 {
+            return Err(LldpError::BadType(0));
+        }
         push_tlv(&mut out, *t, v)?;
     }
-    push_tlv(&mut out, 0, &[])?;
+    if let Some(end) = &pdu.end {
+        push_tlv(&mut out, 0, end)?;
+    }
     Ok(out)
 }
 

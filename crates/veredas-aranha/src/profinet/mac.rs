@@ -11,8 +11,10 @@ use serde::{Deserialize, Serialize};
 pub struct Mac(pub [u8; 6]);
 
 impl Mac {
-    /// The group address DCP's Identify requests and Hellos go to.
+    /// The group address DCP's Identify requests go to.
     pub const DCP_MULTICAST: Mac = Mac([0x01, 0x0E, 0xCF, 0x00, 0x00, 0x00]);
+    /// The group address a device's DCP Hello goes to (not the Identify address).
+    pub const DCP_HELLO_MULTICAST: Mac = Mac([0x01, 0x0E, 0xCF, 0x00, 0x00, 0x01]);
     /// The nearest-bridge group address LLDP goes to: no bridge forwards it, so an LLDP frame
     /// heard names the far end of the cable it came over.
     pub const LLDP_MULTICAST: Mac = Mac([0x01, 0x80, 0xC2, 0x00, 0x00, 0x0E]);

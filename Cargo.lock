@@ -3164,6 +3164,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 name = "veredas-aranha"
 version = "2.0.0-alpha.1"
 dependencies = [
+ "icu_normalizer",
  "libc",
  "serde",
  "serde_json",
