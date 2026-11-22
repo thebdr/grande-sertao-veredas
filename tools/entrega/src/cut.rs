@@ -75,11 +75,13 @@ pub fn manifest_text(release: &semver::Version, commit: &str, target: &str, tool
 }
 
 pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
-    let rs = root.display().to_string();
-    let commit = vm::run("git", &["-C", &rs, "rev-parse", "HEAD"], None)?.trim().to_string();
+    let git_text = |args: &[&str]| -> Result<String, CutError> {
+        git::text(root, args).map_err(|e| refused(e.to_string()))?.ok_or_else(|| refused(format!("git {} answered no", args.join(" "))))
+    };
+    let commit = git_text(&["rev-parse", "HEAD"])?.trim().to_string();
     // Untracked files count: the suite runs in this tree, and a file git does not hold would test
     // a tree the commit is not.
-    let dirty = vm::run("git", &["-C", &rs, "status", "--porcelain"], None)?;
+    let dirty = git_text(&["status", "--porcelain"])?;
     if !dirty.trim().is_empty() {
         return Err(refused(format!("the tree differs from HEAD ({commit}); a release is cut from a commit:\n{dirty}")));
     }

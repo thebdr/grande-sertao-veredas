@@ -15,12 +15,19 @@ pub struct GitError {
     pub source: std::io::Error,
 }
 
-/// Runs git at `root`: `Some(stdout)` when it succeeded, `None` when it answered no (an object
-/// that is not there, a commit that is no ancestor).
+/// git at `root`, with what is not history turned off: replace refs (`refs/replace/*`, which a
+/// clone does not fetch) and the grafts file both rewrite objects and ancestry, so every git this
+/// tool runs reads the objects and parents as committed.
+pub fn command(root: &Path) -> Command {
+    let mut c = Command::new("git");
+    c.arg("-C").arg(root).env("GIT_NO_REPLACE_OBJECTS", "1").env("GIT_GRAFT_FILE", "/dev/null");
+    c
+}
+
+/// Runs git at `root` ([`command`]): `Some(stdout)` when it succeeded, `None` when it answered no
+/// (an object that is not there, a commit that is no ancestor).
 pub fn run(root: &Path, args: &[&str]) -> Result<Option<Vec<u8>>, GitError> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(root)
+    let out = command(root)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -53,13 +60,44 @@ pub fn object(root: &Path, commit: &str, path: &str) -> Result<Option<String>, G
     Ok(text(root, &["rev-parse", "--verify", "--quiet", &spec])?.map(|t| t.trim().to_string()))
 }
 
+/// Why a tree was not exported: git could not run, or the tree holds what the export refuses.
+#[derive(Debug, Error)]
+pub enum ExportError {
+    #[error(transparent)]
+    Git(#[from] GitError),
+    #[error("{0}")]
+    Refused(String),
+}
+
+/// Whether a link at `path` (relative to the tree's root) pointing at `to` leads out of the tree:
+/// an absolute target, or one whose `..` climb above the root.
+pub fn leaves_tree(path: &str, to: &str) -> bool {
+    if to.starts_with('/') {
+        return true;
+    }
+    let mut depth: i64 = path.split('/').count() as i64 - 1;
+    for part in to.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                depth -= 1;
+                if depth < 0 {
+                    return true;
+                }
+            }
+            _ => depth += 1,
+        }
+    }
+    false
+}
+
 /// Writes the tree of `commit` into `dest` from git's objects as they are stored, no attribute,
 /// filter or line-ending rule applied (`git archive` applies `export-ignore`, `export-subst` and
 /// smudge filters from settings outside the history, so two clones could export one commit two
 /// ways). Only the paths under one of `prefixes` are written (every path when it is empty); an
-/// executable keeps its mode, a link is made a link, a submodule is left out. Returns how many
-/// files were written.
-pub fn export_tree(root: &Path, commit: &str, prefixes: &[&str], dest: &Path) -> Result<usize, GitError> {
+/// executable keeps its mode, a link is made a link (one leading out of the tree refused), a
+/// submodule is left out. Returns how many files were written.
+pub fn export_tree(root: &Path, commit: &str, prefixes: &[&str], dest: &Path) -> Result<usize, ExportError> {
     use std::io::{BufRead, BufReader, Read, Write};
     let io = |source: std::io::Error| GitError { dir: root.display().to_string(), source };
     let listing = run(root, &["ls-tree", "-r", "-z", "--full-tree", commit])?
@@ -79,9 +117,7 @@ pub fn export_tree(root: &Path, commit: &str, prefixes: &[&str], dest: &Path) ->
         }
         wanted.push((mode.to_string(), oid.to_string(), path.to_string()));
     }
-    let mut child = std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
+    let mut child = command(root)
         .args(["cat-file", "--batch"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -113,7 +149,12 @@ pub fn export_tree(root: &Path, commit: &str, prefixes: &[&str], dest: &Path) ->
             std::fs::create_dir_all(parent).map_err(io)?;
         }
         if mode == "120000" {
-            std::os::unix::fs::symlink(String::from_utf8_lossy(&body).as_ref(), &target).map_err(io)?;
+            let to = String::from_utf8_lossy(&body).into_owned();
+            if leaves_tree(path, &to) {
+                let _ = child.kill();
+                return Err(ExportError::Refused(format!("the link `{path}` leads out of the tree (`{to}`): a file outside the history would decide")));
+            }
+            std::os::unix::fs::symlink(&to, &target).map_err(io)?;
         } else {
             std::fs::write(&target, &body).map_err(io)?;
             if mode == "100755" {

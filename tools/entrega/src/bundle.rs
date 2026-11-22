@@ -164,7 +164,6 @@ pub fn assemble(
     if !refusals.is_empty() {
         return Err(VmError::Failed { program: "the executables' check".into(), status: "refused".into(), stderr: refusals.join("\n") });
     }
-    let rs = root.display().to_string();
     // The docs and the plant as git stores them at the commit, no attribute or filter applied.
     let mut paths = doc_paths(root, commit, components)?;
     paths.push("tools/entrega/planta".into());
@@ -174,7 +173,9 @@ pub fn assemble(
     std::fs::remove_dir_all(dir.join("tools"))?;
     std::fs::write(dir.join("release.toml"), manifest_text)?;
     write_sums(&dir)?;
-    let epoch = vm::run("git", &["-C", &rs, "show", "-s", "--format=%ct", commit], None)?;
+    let epoch = git::text(root, &["show", "-s", "--format=%ct", commit])
+        .map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?
+        .ok_or_else(|| VmError::Io(std::io::Error::other(format!("git cannot show {commit}"))))?;
     let out = work.join(format!("{name}.tar.gz"));
     pack(work, name, epoch.trim(), &out)?;
     Ok(out)

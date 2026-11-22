@@ -414,6 +414,58 @@ fn a_scratch_folder_reached_through_a_link_and_calls_at_once_read_the_same() {
 }
 
 #[test]
+fn replace_refs_and_grafts_change_neither_objects_nor_ancestry() {
+    let r = suite();
+    let c = r.commit("the suite");
+    let text = matching("2.0.0", &c);
+    let core_blob = r.git(&["rev-parse", &format!("{c}:crates/veredas-core/Cargo.toml")]);
+    r.write("other-core.toml", "[package]\nname = \"veredas-core\"\nversion = \"9.9.9\"\nedition = \"2024\"\n\n[[bin]]\nname = \"intruso\"\npath = \"src/lib.rs\"\n");
+    let fake = r.git(&["hash-object", "-w", "other-core.toml"]);
+    std::fs::remove_file(r.path().join("other-core.toml")).unwrap();
+    r.git(&["replace", &core_blob, &fake]);
+    assert!(r.git(&["show", &format!("{c}:crates/veredas-core/Cargo.toml")]).contains("9.9.9"), "git itself reads the replacement");
+    assert_eq!(checked(&r, &text), Vec::<String>::new(), "the true manifest still checks");
+    assert_eq!(
+        checked(&r, &text.replace("name = \"veredas-core\"\nversion = \"2.0.0\"", "name = \"veredas-core\"\nversion = \"9.9.9\"\nbins = [\"intruso\"]")),
+        vec![format!("veredas-core is 2.0.0 at {c}, not 9.9.9"), format!("veredas-core builds no `intruso` at {c}")]
+    );
+    r.git(&["replace", "-d", &core_blob]);
+    // A side commit made to look like an ancestor, by a replace graft and by the grafts file.
+    r.git(&["checkout", "-q", "-b", "side"]);
+    r.write("docs/side.md", "a side branch\n");
+    let side = r.commit("on a side branch");
+    r.git(&["checkout", "-q", "main"]);
+    r.write("docs/later.md", "later\n");
+    let later = r.commit("later on main");
+    let not_ancestor = vec![format!("commit {side} is not an ancestor of HEAD: a release is cut from the history it is committed in")];
+    r.git(&["replace", "--graft", &later, &c, &side]);
+    assert_eq!(checked(&r, &matching("2.0.0", &side)), not_ancestor);
+    r.git(&["replace", "-d", &later]);
+    r.write(".git/info/grafts", &format!("{later} {c} {side}\n"));
+    assert_eq!(checked(&r, &matching("2.0.0", &side)), not_ancestor);
+}
+
+#[test]
+fn a_link_leading_out_of_the_tree_is_refused_by_its_path() {
+    for (to, kind) in [("/etc/hostname", "absolute"), ("../../../outside/Cargo.toml", "climbing")] {
+        let r = suite();
+        std::fs::remove_file(r.path().join("crates/veredas-core/Cargo.toml")).unwrap();
+        std::os::unix::fs::symlink(to, r.path().join("crates/veredas-core/Cargo.toml")).unwrap();
+        let c = r.commit("a link out of the tree");
+        let mut refusals = Vec::new();
+        let held = manifest::components_at(r.path(), &c, &mut refusals).unwrap();
+        assert!(held.is_empty(), "{kind}");
+        assert_eq!(
+            refusals,
+            vec![format!("commit {c}: the link `crates/veredas-core/Cargo.toml` leads out of the tree (`{to}`): a file outside the history would decide")],
+            "{kind}"
+        );
+    }
+    assert!(!entrega::git::leaves_tree("a/b/c", "../x") && !entrega::git::leaves_tree("a/b/c", "../../x") && entrega::git::leaves_tree("a/b/c", "../../../x"));
+    assert!(!entrega::git::leaves_tree("a/b", "./c/../d") && entrega::git::leaves_tree("a", "../b") && !entrega::git::leaves_tree("a/b", "c/../../d"));
+}
+
+#[test]
 fn an_annotated_tags_id_is_no_commit() {
     let r = suite();
     let c = r.commit("the suite");

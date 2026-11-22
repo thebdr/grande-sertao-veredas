@@ -221,7 +221,11 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
         // The tree as git stores it, no attribute or filter applied (git::export_tree).
         let tree = scratch.join("tree");
         std::fs::create_dir_all(&tree)?;
-        git::export_tree(root, commit, &[], &tree)?;
+        match git::export_tree(root, commit, &[], &tree) {
+            Ok(_) => {}
+            Err(git::ExportError::Refused(why)) => return Ok(Some(format!("commit {commit}: {why}"))),
+            Err(git::ExportError::Git(e)) => return Err(e.into()),
+        }
         if !tree.join("Cargo.toml").is_file() {
             return Ok(Some(format!("commit {commit} holds no Cargo.toml")));
         }
