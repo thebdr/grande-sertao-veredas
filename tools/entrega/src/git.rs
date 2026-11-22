@@ -37,6 +37,17 @@ pub fn run(root: &Path, args: &[&str]) -> Result<Option<Vec<u8>>, GitError> {
     Ok(out.status.success().then_some(out.stdout))
 }
 
+/// Whether `id` is a commit's own full id here: an object of type commit that resolves to exactly
+/// itself (a ref named like an id, or a prefix of a longer id, resolves to another).
+pub fn is_commit_id(root: &Path, id: &str) -> Result<bool, GitError> {
+    let kind = text(root, &["cat-file", "-t", id])?.map(|t| t.trim().to_string());
+    if kind.as_deref() != Some("commit") {
+        return Ok(false);
+    }
+    let spec = format!("{id}^{{commit}}");
+    Ok(text(root, &["rev-parse", "--verify", "--quiet", &spec])?.is_some_and(|t| t.trim() == id))
+}
+
 /// [`run`], its output read as text.
 pub fn text(root: &Path, args: &[&str]) -> Result<Option<String>, GitError> {
     Ok(run(root, args)?.map(|b| String::from_utf8_lossy(&b).into_owned()))
@@ -100,6 +111,11 @@ pub fn export_tree(root: &Path, commit: &str, prefixes: &[&str], dest: &Path) ->
         if mode == "120000" {
             return Err(ExportError::Refused(format!(
                 "the link `{path}`: a release's tree holds no link, which could lead outside the history"
+            )));
+        }
+        if kind == "commit" {
+            return Err(ExportError::Refused(format!(
+                "the submodule `{path}`: a release's tree holds no submodule, whose code its history does not hold"
             )));
         }
         if kind != "blob" {

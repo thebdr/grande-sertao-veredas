@@ -228,6 +228,10 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
     // Canonical, links and `..` resolved as the kernel resolves them: cargo removes a `..` without
     // following the link before it, and would look elsewhere than where the tree was written.
     let parent = parent.canonicalize()?;
+    if parent.to_str().is_none() {
+        refusals.push(format!("the scratch folder's parent {} is not UTF-8: cargo takes no such path", parent.display()));
+        return Ok(held);
+    }
     if parent.to_string_lossy().contains(['*', '?', '[']) {
         refusals.push(format!("the scratch folder's parent {} holds a glob character cargo would read as a pattern", parent.display()));
         return Ok(held);
@@ -336,6 +340,13 @@ pub fn check(root: &Path, m: &Manifest) -> Result<Vec<String>, CheckError> {
         refusals.push("the repository is a shallow clone: its history is cut, and a release is checked against the whole of it".to_string());
         return Ok(refusals);
     }
+    // A release names its commit by SHA-1's 40 characters; in a repository of other ids such a
+    // string would be read as a ref or a prefix.
+    let format = git::text(root, &["rev-parse", "--show-object-format"])?.map(|t| t.trim().to_string());
+    if format.as_deref() != Some("sha1") {
+        refusals.push(format!("the repository names its objects by {}, not sha1: a release's commit is a SHA-1 id", format.unwrap_or_else(|| "an unknown format".into())));
+        return Ok(refusals);
+    }
     let c = &m.commit;
     match git::text(root, &["cat-file", "-t", c])?.map(|t| t.trim().to_string()) {
         None => {
@@ -347,6 +358,10 @@ pub fn check(root: &Path, m: &Manifest) -> Result<Vec<String>, CheckError> {
             return Ok(refusals);
         }
         Some(_) => {}
+    }
+    if !git::is_commit_id(root, c)? {
+        refusals.push(format!("{c} is not a commit's own id: a release names the commit itself"));
+        return Ok(refusals);
     }
     if git::run(root, &["merge-base", "--is-ancestor", c, "HEAD"])?.is_none() {
         refusals.push(format!("commit {c} is not an ancestor of HEAD: a release is cut from the history it is committed in"));
@@ -389,7 +404,7 @@ pub fn check_together(root: &Path, all: &[(PathBuf, Manifest)]) -> Result<Vec<St
     let mut first: BTreeMap<(String, String), (String, Option<String>)> = BTreeMap::new();
     for (_, m) in all {
         // A manifest whose commit is no commit here is `check`'s to refuse; it pins no tree.
-        if git::text(root, &["cat-file", "-t", &m.commit])?.map(|t| t.trim().to_string()).as_deref() != Some("commit") {
+        if !git::is_commit_id(root, &m.commit)? {
             continue;
         }
         let mut unread = Vec::new();

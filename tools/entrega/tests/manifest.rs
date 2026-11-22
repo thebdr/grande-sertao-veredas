@@ -733,6 +733,53 @@ fn a_repository_at_an_odd_path_a_root_that_does_not_parse_and_braces_in_the_scra
 }
 
 #[test]
+fn a_submodule_a_sha256_repository_and_a_parent_that_is_not_utf8_are_refused_by_name() {
+    // A gitlink under crates/: refused by its path, never left out without a word.
+    let r = suite();
+    let c = r.commit("the suite");
+    r.git(&["update-index", "--add", "--cacheinfo", &format!("160000,{c},crates/veredas-x")]);
+    r.git(&["commit", "-q", "-m", "a submodule"]);
+    let with = r.git(&["rev-parse", "HEAD"]);
+    let mut refusals = Vec::new();
+    assert!(manifest::components_at(r.path(), &with, &mut refusals).unwrap().is_empty());
+    assert_eq!(refusals, vec![format!("commit {with}: the submodule `crates/veredas-x`: a release's tree holds no submodule, whose code its history does not hold")]);
+    // A repository of SHA-256 ids, a branch named like a SHA-1 id: refused by name.
+    let d = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let out = Command::new("git").arg("-C").arg(d.path()).args(["-c", "user.name=e", "-c", "user.email=e@example.invalid"]).args(args).output().unwrap();
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    git(&["init", "-q", "--object-format=sha256", "-b", "main"]);
+    std::fs::write(d.path().join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "a sha256 repository"]);
+    let name = "0123456789abcdef0123456789abcdef01234567";
+    git(&["branch", name]);
+    let text = matching("2.0.0", name);
+    assert_eq!(manifest::check(d.path(), &manifest::load(&text).unwrap()).unwrap(), vec!["the repository names its objects by sha256, not sha1: a release's commit is a SHA-1 id".to_string()]);
+    // In a SHA-1 repository, a branch named like an id is no commit's own id.
+    let r = suite();
+    let c = r.commit("the suite");
+    let fake = "0123456789abcdef0123456789abcdef01234567";
+    r.git(&["branch", fake, &c]);
+    assert!(entrega::git::is_commit_id(r.path(), &c).unwrap());
+    assert!(!entrega::git::is_commit_id(r.path(), fake).unwrap());
+    assert_eq!(checked(&r, &matching("2.0.0", &c)), Vec::<String>::new());
+    // SHA-1 reads a 40-hex string as an id first: the branch is never taken for it.
+    assert_eq!(checked(&r, &matching("2.0.0", fake)), vec![format!("commit {fake} is not in the repository")]);
+    // A scratch parent that is not UTF-8: named, never handed to cargo.
+    use std::os::unix::ffi::OsStrExt;
+    let holder = tempfile::tempdir().unwrap();
+    let parent = holder.path().join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+    std::fs::create_dir_all(&parent).unwrap();
+    let mut refusals = Vec::new();
+    assert!(manifest::components_at_in(r.path(), &c, &parent, &mut refusals).unwrap().is_empty());
+    assert_eq!(refusals.len(), 1);
+    assert!(refusals[0].ends_with("is not UTF-8: cargo takes no such path"), "{refusals:?}");
+}
+
+#[test]
 fn an_annotated_tags_id_is_no_commit() {
     let r = suite();
     let c = r.commit("the suite");
