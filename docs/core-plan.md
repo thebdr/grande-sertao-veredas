@@ -34,6 +34,9 @@ configuration and names no device (`docs/questions.md` Q8).
 - **Seeded randomness:** the deterministic PCG32 (`rng`), for weighted draws and fixtures.
 - **The OPC UA client layer:** the compiled source shape (`PollSpec`), value conversion, the
   mapping of a poll to rows, the address-space browser, the poll worker with its gated writes.
+- **The controller's state:** the structured state of a controller (a PLC) and its one line
+  of text, with one writer, one reader and the table of reason numbers and words
+  (`docs/state-text.md`; `docs/controlador-plan.md`, "The state").
 - **Test-fixture plumbing:** the in-process OPC UA demo plant (`opc::demo`, behind the
   `demo-server` feature), seeded randomness.
 - **Later phases:** plain-text file schemas with their version stamps (the first being a
@@ -144,6 +147,8 @@ veredas_core
   rng         Pcg32
   telegram    Endian; schema, framing, channel, capture, compose, catalog
   opc         spec, value, map, browse, worker, error; demo (feature "demo-server")
+  state       ControllerState, State, the reasons, Conditions, MaintenanceRequest, Health;
+              REASONS, PHASES, MAINTENANCE_REASONS; the writer (Display), the reader (FromStr)
 ```
 
 Added for the bench (2026-11-06, `docs/maquinar-plan.md` phase 3), designed for portal's
@@ -177,7 +182,8 @@ The architect's decisions of 13 to 16 November 2026 that touch core (`docs/contr
 status P-018.
 - **The controller's state text has one writer and one reader, here**, with the table of reason
   numbers and words, so every screen, log and test shows the same characters
-  (`docs/controlador-plan.md`, "The state").
+  (`docs/controlador-plan.md`, "The state"). Built 2026-11-22 (C-070, `docs/state-text.md`): the
+  reader accepts exactly what the writer writes; the readings it took are Q100's.
 - **The functions that drive hardware live in core**: the four fieldbus masters (PROFINET IO
   controller, EtherCAT master, EtherNet/IP scanner, Modbus TCP client), safe in controlador on
   Linux and callable by other crates for testing only (2026-11-14). The review set this against
@@ -195,6 +201,11 @@ status P-018.
 
 ## Traps
 Recorded as the port meets them.
+
+- **The crate is not formatted by rustfmt as a whole.** `cargo fmt -p veredas-core --check`
+  differs on files written before the Linux machine; format a new file alone
+  (`rustfmt --edition 2024 <file>`), so a commit carries no reformatting of files it did not
+  change.
 
 - **A full disk corrupts the incremental cache.** On 2026-11-05 the C: drive filled mid-build
   ("no space on device"); the next build failed with "cached cgu ... should have an object file".

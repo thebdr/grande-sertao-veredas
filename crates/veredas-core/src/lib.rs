@@ -11,6 +11,8 @@
 //! - [`rng`]: a deterministic PCG32, for weighted draws and seeded fixtures.
 //! - [`opc`]: the OPC UA client layer (poll, gated write, browse), and the demo plant its tests
 //!   drive (feature `demo-server`).
+//! - [`state`]: a controller's state as structured data, and its one line of text with one
+//!   writer and one reader, the table of reason numbers and words beside it.
 //!
 //! Nothing here names its first caller: each type says what it means on the wire or in the
 //! plant, as if a second consumer already existed. Nothing here names a device or a vendor
@@ -21,6 +23,7 @@ pub mod opc;
 pub mod rng;
 pub mod schema;
 pub mod source;
+pub mod state;
 pub mod telegram;
 pub mod types;
 

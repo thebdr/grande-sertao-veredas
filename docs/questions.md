@@ -1753,3 +1753,55 @@ portal stores.
 
 **Reversible?** Yes: (b) adds a resolution step before (a); the files written with (a) keep
 working.
+
+---
+
+## Q100 - The controller's state text: the readings its writer and reader take
+
+**Raised** 2026-11-22, building the state text's writer and reader in core (P-018;
+`docs/state-text.md`; `docs/controlador-plan.md`, "The state").
+
+The plan fixes the words, the numbers, the order and the examples; the review's entries 17 to 21
+on this text are not ruled (Q31). The writer and the reader needed an answer to each point below.
+The plan's seven examples read and write back byte for byte under every reading taken.
+
+1. **The unknown state's word.** The plan numbers it 0 and gives it no word. (a) `UNKNOWN`;
+   (b) no text at all: a reader with no state shows nothing. Taken: (a). Its health: none.
+2. **Which conditions are debug conditions** (health gives function check for "any debug
+   condition", and a fault clears them; the plan never lists them; the review's entry 21).
+   (a) What someone did and the mode it runs in: `breakpoint`, `force`, `shadow`, `dry`, `sim`,
+   `no_realtime`; (b) only what someone did: `breakpoint`, `force`, `shadow`. Taken: (a), so a
+   simulated or dry-run controller never reads normal.
+3. **What `retain(reset)` holds.** (a) The number of retained variables reset; (b) a flag,
+   `retain(reset=true)`. Taken: (a), the plan's "counts and identifiers".
+4. **One name, two terms** (the review's entry 17). (a) The names stay and are told apart by
+   their arguments: `breakpoint(id, at)` the reason, `breakpoint(set)` the condition; `devices(up,
+   of)` the phase, `devices(missing)` the condition; a `HOLD` at a breakpoint also writes
+   `breakpoint(set=n)` while breakpoints are set; (b) as (a), but a `HOLD` at a breakpoint leaves
+   the count out, as the plan's third example reads; (c) the review's renames,
+   `breakpoints(set)` and the phase as arguments of the start kind. Taken: (a); the plan's third
+   example then reads as a halt whose breakpoint was removed while halted.
+5. **The spelling the review's entry 18 asked to pin.** Taken, as the review proposed it:
+   integers and booleans bare (`urgent=true`), strings in double quotes with TOML's escapes,
+   every term with parentheses (`sim()`), `, ` between arguments, no space around `=`, one space
+   between terms. Added: each value has one spelling (decimal only; a control character, a line
+   separator or an invisible or reordering format character escaped by number, uppercase), and
+   the reader refuses every other spelling, so a text and a state are one thing.
+6. **Several maintenance requests** (K6, and the review's entry 19). The plan's `id` 1 to 6
+   stands; requests stand by number, one not urgent before an urgent one, the same one twice
+   allowed. The review's 601 to 606 with a count is not taken.
+7. **A version, and a term a reader does not know** (the review's entry 20). Taken: no version,
+   and the reader refuses a term it does not know, by name. The terms the robustness round owes
+   (an unconfirmed date, the clock battery, a certificate near its end, the warning cycle time;
+   Q39, Q40) are therefore refused until they are added to the table.
+8. **The arguments' types.** `code` any 64-bit integer; `download`, the phase's counts and every
+   condition's count 0 to 4294967295; `was` a layer-1 word; `kind`, `task`, `event`, `at` free
+   strings. `STARTUP devices(up, of)` does not check `up <= of`.
+
+**Recommended**: as taken, and the review's entries 17 to 21 ruled with them. **Taken meanwhile**:
+as above, each marked `DECISION PENDING` in `crates/veredas-core/src/state.rs` where the code
+leans on it.
+
+**Reversible?** Yes while nothing stores the text: each point is a change to the writer, the
+reader and their test. Once controllers publish it and portal stores it, a change is a new
+version of the text, which point 7 does not yet give.
