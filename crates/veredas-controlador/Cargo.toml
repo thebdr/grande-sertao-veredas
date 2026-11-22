@@ -1,0 +1,14 @@
+[package]
+name = "veredas-controlador"
+# Its own SemVer, starting at core's current MAJOR (the plan, "Versioning"; law L3).
+version = "2.0.0-alpha.1"
+edition.workspace = true
+publish = false
+description = "The soft PLC of Veredas 2: an ORCL program in a deterministic scan, its states, faults and the commands that move them"
+
+# Law L5: controlador may use core, portal, aranha and the orcl-* crates. This first build uses core's
+# state text (C-070) and the language's crates.
+[dependencies]
+orcl-runtime = { path = "../orcl-runtime" }
+orcl-std = { path = "../orcl-std" }
+veredas-core = { path = "../veredas-core" }

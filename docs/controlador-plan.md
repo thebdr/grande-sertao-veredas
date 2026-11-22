@@ -1,13 +1,14 @@
 # veredas-controlador: the plan
 
 The soft PLC of Veredas 2. `docs/veredas-plan.md` ("veredas-controlador: the softPLC") wins on
-intent; `.zen/contract.md` (P-003) wins on status. Nothing is built. This file holds what the
-architect decided in the briefing of 13 to 16 November 2026, in the rulings of 15 November on its
-adversarial review, and in the robustness round begun on 16 November (`docs/robustness.md`). The
-list that was reviewed and the review itself are kept as they were delivered
-(`docs/briefing/deliverables.md`, `docs/briefing/review.md`); where they differ from this file,
-this file is the later word. What is not decided is a question in `docs/questions.md`, named under
-"Open" below; nothing open is written here as settled.
+intent; `.zen/contract.md` (P-003) wins on status. Built so far (2026-11-22): the engine of a scan
+(`orcl-runtime`, C-151) and the controller's states and commands over one cyclic task (C-152). This
+file holds what the architect decided in the briefing of 13 to 16 November 2026, in the rulings of
+15 November on its adversarial review, and in the robustness round begun on 16 November
+(`docs/robustness.md`). The list that was reviewed and the review itself are kept as they were
+delivered (`docs/briefing/deliverables.md`, `docs/briefing/review.md`); where they differ from this
+file, this file is the later word. What is not decided is a question in `docs/questions.md`, named
+under "Open" below; nothing open is written here as settled.
 
 ## The role nobody covers
 **Controlador is the suite's soft PLC: it runs an ORCL program in a deterministic scan on a
@@ -358,4 +359,5 @@ Where each item stands on 2026-11-22:
 - **Q220** ORCL's version beside its crates'. **Q221, Q222** the front end's build and its pinned
   toolchain. **Q223** the execution model as proposed. **Q224** controlador's file names. **Q225**
   a `clippy.toml` under law L7. **Q226** the Linux study's choices. **Q227** the core-library
-  operations ORCL allows, a closed list or core's MIR interpreted.
+  operations ORCL allows, a closed list or core's MIR interpreted. **Q228** the readings the
+  controller's first clause takes where this plan is silent (outputs in STOP among them).

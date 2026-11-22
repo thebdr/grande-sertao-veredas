@@ -2059,3 +2059,35 @@ leaves out.
 **Taken meanwhile**: nothing is built.
 
 **Reversible?** Yes: nothing is built.
+
+## Q228 - Controlador's states: the readings its first clause takes
+
+**Raised** 2026-11-22, by the controlador session, building the controller's states over one cyclic
+task (C-152).
+
+`docs/controlador-plan.md` decides the states, the commands, their gate and the return after a power
+cycle. Where it is silent the first build takes a reading, each marked `DECISION PENDING (Q228)` in
+`crates/veredas-controlador/src/controller.rs`:
+1. **The outputs in STOP** take the program's safe values, and the plant's exchange goes on, as the
+   plan rules for FAULT. The other reading: outputs held at their last values in STOP.
+2. **A controller that never ran** comes up in STOP with no reason. The other reading: `STOP
+   power_on(was="STOP")`.
+3. **A start-up a power cut interrupted** returns through a warm start, as RUN does, its aim having
+   been RUN: a flicker of the supply during a warm start would otherwise leave a plant stopped until
+   a person comes. The other reading: STOP `power_on(was="STARTUP")`.
+4. **Warm and cold starts** both start the program from its initial values, since ORCL marks no
+   variable as retained yet; how a program marks one is a language decision still to come.
+5. **The start-up's phases** (load, restore, handler, devices), with nothing to restore, no handler
+   and no device, pass in the cycle after the command, and the program's first scan runs in that
+   cycle.
+6. **The condition `overruns`** counts the time errors since the last start; the maintenance request
+   `overruns` waits for Q39.
+7. **A command that would change nothing** (a start outside STOP, a stop in STOP or FAULT, an
+   acknowledge outside FAULT) is refused, naming the state, and changes nothing.
+8. **A runtime that restarted while the machine did not** comes up in `FAULT internal`, the
+   briefing's reading K7 (Q45).
+9. **A stop from STARTUP** is allowed, as from RUN.
+
+**Taken meanwhile**: the readings above, as readings.
+
+**Reversible?** Yes: each is a line of the controller and an assertion of its test.
