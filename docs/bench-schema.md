@@ -393,7 +393,8 @@ on different bits.
 **A PROFINET device** (`[[profinet]]`): a device's discovery and naming on a network interface, raw
 frames through aranha's link (Linux): a Hello at start, an Identify it matches answered within the
 request's response delay, a Set of its name, its address or the identification signal applied and
-each block answered, a Get answered, LLDP on its port.
+each block answered, a Get answered, LLDP on its port; at its address, ARP and the record read of
+its I&M0 and its port's data.
 - `name` (required): the part's name.
 - `interface` (required): the network interface it answers on, by name.
 - `station` (`""`): its station name, the standard's rule for one; empty for a device not yet
@@ -407,6 +408,9 @@ each block answered, a Get answered, LLDP on its port.
 - `port` (`"port-001"`): its port's name, `port-xyz` or `port-xyz-abcde` (xyz 001 to 255, abcde
   five digits).
 - `seed` (none): the seed of its answers' spread over a response delay; the clock when absent.
+- `order_id` (`"veredas bench"`): its I&M0 order id, 1 to 20 visible characters.
+- `serial_number` (`""`): its I&M0 serial number, up to 16 visible characters; empty, its MAC's
+  twelve hex digits.
 
 **An IP suite** (the value of `ip`).
 - `address` (required), `mask` (required): dotted quads.
@@ -519,7 +523,7 @@ finite, anything the OPC UA or the Modbus server's own checks refuse (a point ov
 its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP
 adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past
 its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name
-the standard refuses, a port not named `port-xyz` or `port-xyz-abcde`, an alias not a port and a station) or the EtherCAT segment's (no device, two devices of
+the standard refuses, a port not named `port-xyz` or `port-xyz-abcde`, an alias not a port and a station, an order id or a serial number I&M0 cannot carry) or the EtherCAT segment's (no device, two devices of
 one name, an entry of 0 bits, more than 255 entries a way), a scene file that cannot be read or does not load, a model whose scene, belt, sensor, mover or point is not there, a point of the other kind or written by two models, a ramp, a ratio, a stroke or a delay out of its range, a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that
 does not load against the catalog, a message the catalog lacks or whose fields leave a name
 unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the

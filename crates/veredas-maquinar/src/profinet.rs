@@ -9,8 +9,12 @@
 //! station name, its alias) after a spread within the request's response delay, applies a DCP Set
 //! (its name, its IP suite, the identification signal) and answers each block with the three-byte
 //! control response, answers a DCP Get, and sends LLDP on its port with the PROFINET fields on an
-//! interval. The handle reads the identity as it stands, sets it from the plant side, mutes the
-//! device and counts what it did.
+//! interval. At the IP suite it holds it answers ARP and the connectionless record read of its
+//! I&M0 and its port's real data ([`ip`]), the neighbour its LLDP reception heard among the latter.
+//! The handle reads the identity as it stands, sets it from the plant side, mutes the device and
+//! counts what it did.
+
+pub mod ip;
 
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,6 +31,11 @@ use veredas_aranha::profinet::ether;
 #[cfg(target_os = "linux")]
 use veredas_aranha::profinet::lldp::{self, ChassisId, LldpPdu, PortId};
 use veredas_aranha::profinet::mac::Mac;
+use veredas_aranha::profinet::record::Peer;
+#[cfg(target_os = "linux")]
+use veredas_aranha::profinet::record::{Im0, LinkState, PortDataReal, SoftwareRevision};
+#[cfg(target_os = "linux")]
+use veredas_aranha::profinet::rpc::{PNIO_PORT, PnioStatus, ReadRequest};
 #[cfg(target_os = "linux")]
 use veredas_aranha::wire::raw::{Options, RawLink};
 #[cfg(target_os = "linux")]
@@ -90,6 +99,12 @@ pub struct ProfinetConfig {
     /// The seed of the response delay's spread; the clock when absent.
     #[serde(default)]
     pub seed: Option<u64>,
+    /// I&M0's order id, 1 to 20 visible characters (padded with spaces on the wire).
+    #[serde(default = "default_order_id")]
+    pub order_id: String,
+    /// I&M0's serial number, up to 16 visible characters; empty, the MAC's twelve hex digits.
+    #[serde(default)]
+    pub serial_number: String,
 }
 
 impl ProfinetConfig {
@@ -107,6 +122,8 @@ impl ProfinetConfig {
             lldp_interval_ms: default_lldp(),
             port: default_port(),
             seed: None,
+            order_id: default_order_id(),
+            serial_number: String::new(),
         }
     }
 }
@@ -119,6 +136,9 @@ fn yes() -> bool {
 }
 fn default_lldp() -> u64 {
     5000
+}
+fn default_order_id() -> String {
+    "veredas bench".into()
 }
 fn default_port() -> String {
     "port-001".into()
@@ -159,6 +179,13 @@ pub fn validate(cfg: &ProfinetConfig) -> Result<(), ProfinetError> {
     if cfg.vendor.is_empty() || cfg.vendor.len() > 255 {
         return Err(bad("profinet.vendor: 1 to 255 characters".into()));
     }
+    let visible = |t: &str| t.bytes().all(|b| (0x20..=0x7E).contains(&b));
+    if cfg.order_id.is_empty() || cfg.order_id.len() > 20 || !visible(&cfg.order_id) {
+        return Err(bad(format!("profinet.order_id `{}`: 1 to 20 visible characters", cfg.order_id)));
+    }
+    if cfg.serial_number.len() > 16 || !visible(&cfg.serial_number) {
+        return Err(bad(format!("profinet.serial_number `{}`: up to 16 visible characters", cfg.serial_number)));
+    }
     Ok(())
 }
 
@@ -190,18 +217,26 @@ pub struct ProfinetStatus {
     pub lldp_sent: u64,
     /// DCP frames it could not read.
     pub undecodable: u64,
+    /// ARP requests for its address answered.
+    pub arp_answered: u64,
+    /// Record reads answered with the record.
+    pub reads: u64,
+    /// Record reads answered with an error status.
+    pub reads_refused: u64,
 }
 
 impl ProfinetStatus {
     /// Nothing done yet, by the device of this MAC.
     pub fn new(mac: Mac) -> ProfinetStatus {
-        ProfinetStatus { mac, hellos: 0, identify_answered: 0, identify_passed: 0, sets: 0, gets: 0, blinks: 0, lldp_sent: 0, undecodable: 0 }
+        ProfinetStatus { mac, hellos: 0, identify_answered: 0, identify_passed: 0, sets: 0, gets: 0, blinks: 0, lldp_sent: 0, undecodable: 0, arp_answered: 0, reads: 0, reads_refused: 0 }
     }
 }
 
 struct State {
     identity: DeviceIdentity,
     status: ProfinetStatus,
+    /// The neighbour its LLDP reception heard last on its port, gone with a TTL of 0.
+    neighbour: Option<Peer>,
 }
 
 struct Shared {
@@ -264,6 +299,11 @@ impl ProfinetHandle {
         self.shared.lock().status.clone()
     }
 
+    /// The neighbour its LLDP reception heard on its port, as its port data states it.
+    pub fn neighbour(&self) -> Option<Peer> {
+        self.shared.lock().neighbour.clone()
+    }
+
     fn stop_and_join(&mut self) {
         self.shared.stop.store(true, Ordering::SeqCst);
         if let Some(t) = self.thread.take() {
@@ -318,11 +358,12 @@ pub fn start(cfg: &ProfinetConfig) -> Result<ProfinetHandle, ProfinetError> {
 #[cfg(target_os = "linux")]
 pub fn start(cfg: &ProfinetConfig) -> Result<ProfinetHandle, ProfinetError> {
     validate(cfg)?;
-    let link = RawLink::open_with(&cfg.interface, Options { ethertype: Some(ether::ETHERTYPE_PROFINET), promiscuous: false, outgoing: false })
+    // Every EtherType: DCP, LLDP from its neighbour, ARP and IPv4 for its record read.
+    let link = RawLink::open_with(&cfg.interface, Options { ethertype: None, promiscuous: false, outgoing: false })
         .map_err(|e| ProfinetError::Link(e.to_string()))?;
     let mac = link.mac();
     let shared = Arc::new(Shared {
-        state: Mutex::new(State { identity: identity_of(cfg, mac), status: ProfinetStatus::new(mac) }),
+        state: Mutex::new(State { identity: identity_of(cfg, mac), status: ProfinetStatus::new(mac), neighbour: None }),
         muted: AtomicBool::new(false),
         stop: AtomicBool::new(false),
     });
@@ -366,6 +407,9 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
     let mut pending: Vec<(Instant, Vec<u8>)> = Vec::new();
     let every = Duration::from_millis(cfg.lldp_interval_ms);
     let mut next_lldp = Instant::now();
+    // The RPC server's boot time: the start, in seconds since the epoch.
+    let server_boot = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as u32).unwrap_or(1);
+    let mut ip_id: u16 = 0;
     loop {
         if shared.stop.load(Ordering::SeqCst) {
             if cfg.lldp_interval_ms > 0 {
@@ -406,8 +450,42 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
         });
         let Ok(Some(received)) = link.recv(Duration::from_millis(5)) else { continue };
         let Ok(frame) = ether::parse(&received.bytes) else { continue };
-        if frame.ethertype != ether::ETHERTYPE_PROFINET || !(frame.dst == mac || frame.dst == Mac::DCP_MULTICAST) {
-            continue;
+        match frame.ethertype {
+            ether::ETHERTYPE_LLDP => {
+                if let Ok(pdu) = lldp::decode(frame.payload) {
+                    shared.lock().neighbour = (pdu.ttl > 0).then(|| neighbour_of(&pdu, frame.src));
+                }
+                continue;
+            }
+            ip::ETHERTYPE_ARP | ip::ETHERTYPE_IPV4 => {
+                let address = shared.lock().identity.ip.as_ref().map(|s| s.ip).unwrap_or(Ipv4Addr::UNSPECIFIED);
+                if let Some(reply) = ip::arp_reply(&received.bytes, mac, address) {
+                    shared.lock().status.arp_answered += 1;
+                    let _ = link.send(&reply);
+                } else if let Some((peer_mac, peer_ip, peer_port, payload)) = ip::udp_to(&received.bytes, address, PNIO_PORT) {
+                    let answered = std::cell::Cell::new(false);
+                    let records = |read: &ReadRequest| {
+                        let r = record(&shared.lock(), &cfg, mac, read);
+                        answered.set(r.is_ok());
+                        r
+                    };
+                    if let Some((_, answer)) = ip::answer(&payload, &records, server_boot) {
+                        {
+                            let mut state = shared.lock();
+                            if answered.get() {
+                                state.status.reads += 1;
+                            } else {
+                                state.status.reads_refused += 1;
+                            }
+                        }
+                        ip_id = ip_id.wrapping_add(1);
+                        let _ = link.send(&ip::udp_frame((peer_mac, peer_ip, peer_port), (mac, address, PNIO_PORT), ip_id, &answer));
+                    }
+                }
+                continue;
+            }
+            ether::ETHERTYPE_PROFINET if frame.dst == mac || frame.dst == Mac::DCP_MULTICAST => {}
+            _ => continue,
         }
         if shared.muted.load(Ordering::SeqCst) {
             continue;
@@ -471,6 +549,83 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
             _ => {}
         }
     }
+}
+
+/// The slot and subslots the device has: the access point's (slot 0, subslot 1) and its port's.
+#[cfg(target_os = "linux")]
+pub const SUBSLOT_DAP: u16 = 0x0001;
+#[cfg(target_os = "linux")]
+pub const SUBSLOT_PORT: u16 = 0x8001;
+
+/// A record the device holds, or the status that refuses the read: I&M0 at the access point,
+/// the port's real data at the port; an index it holds at another place refused as a slot it
+/// lacks, any other index as an index it lacks.
+#[cfg(target_os = "linux")]
+fn record(state: &State, cfg: &ProfinetConfig, mac: Mac, read: &ReadRequest) -> Result<Vec<u8>, PnioStatus> {
+    use veredas_aranha::profinet::record::{INDEX_IM0, INDEX_PORT_DATA_REAL};
+    let at = (read.api, read.slot, read.subslot);
+    let block = match read.index {
+        INDEX_IM0 if at == (0, 0, SUBSLOT_DAP) => im0(state, cfg, mac).block(),
+        INDEX_PORT_DATA_REAL if at == (0, 0, SUBSLOT_PORT) => port_data(state, cfg).block(),
+        INDEX_IM0 | INDEX_PORT_DATA_REAL => return Err(ip::INVALID_SLOT),
+        _ => return Err(ip::INVALID_INDEX),
+    };
+    block.ok().and_then(|b| b.encode().ok()).ok_or(ip::INVALID_INDEX)
+}
+
+/// I&M0 as the file states it: the vendor id, the order id and serial number padded with spaces
+/// (the serial, when the file gives none, the MAC's twelve hex digits), hardware revision 1,
+/// software V1.0.0, I&M version 1.1, no other I&M record.
+#[cfg(target_os = "linux")]
+fn im0(state: &State, cfg: &ProfinetConfig, mac: Mac) -> Im0 {
+    let serial = if cfg.serial_number.is_empty() { mac.0.iter().map(|b| format!("{b:02X}")).collect() } else { cfg.serial_number.clone() };
+    Im0 {
+        vendor_id: state.identity.vendor_id.unwrap_or(cfg.vendor_id),
+        order_id: format!("{:<20}", cfg.order_id),
+        serial_number: format!("{serial:<16}"),
+        hardware_revision: 1,
+        software_revision: SoftwareRevision { prefix: b'V', functional: 1, bugfix: 0, internal: 0 },
+        revision_counter: 0,
+        profile_id: 0,
+        profile_specific_type: 0,
+        version: (1, 1),
+        supported: 0,
+    }
+}
+
+/// The port's real data: its name, the neighbour LLDP heard (none before one is heard), copper
+/// at 100 Mbit/s full duplex, the link up.
+#[cfg(target_os = "linux")]
+fn port_data(state: &State, cfg: &ProfinetConfig) -> PortDataReal {
+    PortDataReal {
+        slot: 0,
+        subslot: SUBSLOT_PORT,
+        own_port_id: cfg.port.clone(),
+        peers: state.neighbour.iter().cloned().collect(),
+        mau_type: 0x0010,
+        domain_boundary: 0,
+        multicast_boundary: 0,
+        link_state: LinkState { port: 0, link: 1 },
+        media_type: 1,
+        extra: Vec::new(),
+    }
+}
+
+/// A neighbour as its LLDP frame names it: the port id and the chassis id as text (a MAC
+/// chassis as its address), its source MAC, no measured delay.
+#[cfg(target_os = "linux")]
+fn neighbour_of(pdu: &LldpPdu, src: Mac) -> Peer {
+    let chassis = match &pdu.chassis {
+        ChassisId::Local { id } => id.clone(),
+        ChassisId::Mac { mac } => mac.to_string(),
+        ChassisId::IfName { name } => name.clone(),
+        other => format!("{other:?}"),
+    };
+    let port = match &pdu.port {
+        PortId::Local { id } => id.clone(),
+        other => format!("{other:?}"),
+    };
+    Peer { port_id: port, chassis_id: chassis, line_delay: 0, mac: src }
 }
 
 /// Whether every filter block of an Identify request matches the device.

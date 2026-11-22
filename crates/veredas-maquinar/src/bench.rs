@@ -274,6 +274,10 @@ struct NamedProfinet {
     port: Option<String>,
     #[serde(default)]
     seed: Option<u64>,
+    #[serde(default)]
+    order_id: Option<String>,
+    #[serde(default)]
+    serial_number: Option<String>,
 }
 
 impl NamedProfinet {
@@ -293,6 +297,8 @@ impl NamedProfinet {
                 lldp_interval_ms: self.lldp_interval_ms.unwrap_or(d.lldp_interval_ms),
                 port: self.port.unwrap_or(d.port),
                 seed: self.seed,
+                order_id: self.order_id.unwrap_or(d.order_id),
+                serial_number: self.serial_number.unwrap_or(d.serial_number),
             },
         )
     }

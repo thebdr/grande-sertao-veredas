@@ -252,6 +252,12 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
   from the file's identity) and of the port's real data (0x802A at subslot 0x8001: its link, and
   the neighbour its own LLDP reception heard), any other index refused with the PNIO status the
   standard gives; tshark and aranha's own reader as the second readings.
+  Landed as C-116 on 2026-11-23. Its test's client is the kernel's own IP stack on the far end of
+  the veth pair, so ARP, IPv4 and the UDP checksum are judged by code the bench did not write.
+  Trap: a veth leaves a UDP checksum to an offload that never happens, so a raw socket on the
+  other end reads only its partial sum and the device (which checks it, as a device does) drops
+  the datagram; the test turns transmit offload off on the client's end (`ethtool -K a0 tx off`),
+  as a real card writes the whole checksum on the wire.
 - **The emulated EtherCAT segment** (C-113, 2026-11-22). Review entry 27 said it plainly: an
   EtherCAT device handles frames in a chip as they pass, and an emulation on an ordinary card is a
   slave controller written in software, functional, never exact in time; its clause says what it
