@@ -2183,3 +2183,31 @@ named in one module and a change of engine touches only that module. **Taken mea
 pinned to one version with `enhanced-determinism` on.
 
 **Reversible?** Yes: one dependency and one module; no file format names the engine.
+
+---
+
+## Q441 - What code does a component's version name in a release?
+
+**Raised** 2026-11-23, by the orchestrator's implications check on C-290.
+
+A release pins each component at a version, and "one version, one tree" (C-290) refuses two
+releases that pin one version at different trees of the component's folder. What the executable
+under that version is built from is wider: the members it uses (core, at their own versions), the
+lock file (every external crate's exact version), the workspace's manifest (profiles, shared
+dependency versions) and the toolchain the manifest states. Portal could keep its version and its
+folder while core's code or `Cargo.lock` changes, and a second release would ship another
+executable under the same version.
+
+Options:
+- (a) The folder alone (taken meanwhile): each member is judged by its own version; the lock file
+  and the workspace's manifest are not. A dependency's change ships under the same version.
+- (b) The folder and every member it uses, transitively: a core change without a portal bump is
+  refused for portal too. The lock file still free.
+- (c) Everything the build reads but the toolchain: the folder, the members it uses, the lock
+  file's entries for its dependency closure and the workspace's manifest. Any change to what goes
+  into an executable bumps its version; a lock file update bumps every component it reaches.
+
+**Recommended**: (c), so a version names one executable's inputs, as testers and the robustness
+rulings (a download's identity) expect; (a) meanwhile, stated as a limit in C-290.
+
+**Reversible?** Yes: the check widens without changing the manifest's format.

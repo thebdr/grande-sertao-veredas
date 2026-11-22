@@ -24,7 +24,8 @@ bench, a project and a binding before seeing anything.
 
 ### What a release is made of
 - **The manifest**, `releases/<release>.toml`, committed: a `veredas-release` file (version 1,
-  read by core's one header reader, a misspelled key refused like every file of the suite, L7). It
+  its header read by core's one header reader and held to its stamp by law L7; a misspelled key
+  refused by the manifest's own reader, C-290). It
   names the release, the commit it was cut from, the target and the toolchain, every component at
   that commit with its version and the executables it ships, and what was run to call the set
   tested. A manifest is checkable forever: at its commit every component of the workspace is
@@ -88,8 +89,10 @@ Keys (each required unless a default is given):
 1. **HEAD of a clean tree**, cut from a fresh `origin/main`: the cut refuses a tree that differs
    from HEAD (an untracked file included) and a release whose manifest exists. It plans the
    manifest first and checks it against the repository and every release already cut, so a
-   version another release pinned at other code is refused before anything is built: a component
-   whose code changed since the last release bumps its version before the next one is cut. It then
+   version another release pinned at another tree of the component's folder is refused before
+   anything is built: a component whose folder changed since the last release bumps its version
+   before the next one is cut. Whether a version also names the code it builds with (the members
+   it uses, the lock file, the workspace's manifest) is Q441; meanwhile the folder alone. It then
    runs the whole suite there (`cargo nextest run --workspace`, the gate of `CLAUDE.md`, built
    first and run behind the machine's lock, its temporary files in the cache), and refuses a red
    one. "Tested together" means two runs: that one, which tests the components against each
@@ -284,6 +287,9 @@ Verified by running each, not assumed:
 - **A release pins a tree.** One release, one commit; a manifest checkable at any later commit
   against git's history, as L6 judges history: the tree read as git stores it, replace refs and
   grafts off, and holding no link and no path that is not UTF-8.
+  The check keeps the repository's own record honest: a manifest the cut wrote, in the suite's
+  repository with its laws green. A hostile history or environment is outside its promise, though
+  every one a critic built has been refused by name (`.zen/evidence/C-290.md`).
 - **Built from the repository by a recipe.** The bundle from a commit, the machine from a bundle;
   no step by hand, no file of the image made anywhere but by the recipe.
 - **Large files are never committed.** The base image, the seed, the disk, the OVA and the bundle
