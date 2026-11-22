@@ -188,6 +188,7 @@ pub(crate) fn get_worksheet_xml(
 ) -> String {
     let mut sheet_data_str: Vec<String> = vec![];
     let mut cols_str: Vec<String> = vec![];
+    let mut max_outline: u8 = 0;
     let mut merged_cells_str: Vec<String> = vec![];
 
     for col in &worksheet.cols {
@@ -201,10 +202,24 @@ pub(crate) fn get_worksheet_xml(
             None => "".to_string(),
         };
         let hidden = if col.hidden { " hidden=\"1\"" } else { "" };
+        // Veredas fork change 11: column outline groups
+        let outline = match (col.outline_level, col.collapsed) {
+            (0, false) => String::new(),
+            (0, true) => " collapsed=\"1\"".to_string(),
+            (l, false) => format!(" outlineLevel=\"{l}\""),
+            (l, true) => format!(" outlineLevel=\"{l}\" collapsed=\"1\""),
+        };
+        max_outline = max_outline.max(col.outline_level);
         cols_str.push(format!(
-            "<col min=\"{min}\" max=\"{max}\" width=\"{width}\" customWidth=\"{custom_width}\"{column_style}{hidden}/>"
+            "<col min=\"{min}\" max=\"{max}\" width=\"{width}\" customWidth=\"{custom_width}\"{column_style}{hidden}{outline}/>"
         ));
     }
+    // Excel draws the outline bar only when the sheet declares its depth
+    let sheet_format = if max_outline > 0 {
+        format!("<sheetFormatPr defaultRowHeight=\"15\" outlineLevelCol=\"{max_outline}\"/>")
+    } else {
+        String::new()
+    };
 
     // this is a bit of an overkill. A dictionary of the row styles by row_index
     let mut row_style_dict = HashMap::new();
@@ -680,6 +695,7 @@ pub(crate) fn get_worksheet_xml(
         {pane}\
     </sheetView>\
   </sheetViews>\
+  {sheet_format}\
   {cols}\
   <sheetData>\
   {sheet_data}\

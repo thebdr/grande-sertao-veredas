@@ -276,6 +276,12 @@ pub struct Col {
     pub custom_width: bool,
     pub hidden: bool,
     pub style: Option<i32>,
+    /// Outline (grouping) level, 0 = none (Excel allows 1–7). Veredas fork change 11.
+    #[serde(default)]
+    pub outline_level: u8,
+    /// The group ending here is collapsed (Excel's `collapsed` on `<col>`).
+    #[serde(default)]
+    pub collapsed: bool,
 }
 
 /// Cell type enum matching Excel TYPE() function values.

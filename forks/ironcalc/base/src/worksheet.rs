@@ -98,6 +98,8 @@ impl Worksheet {
             custom_width: false,
             style: Some(style_index),
             hidden: false,
+            outline_level: 0,
+            collapsed: false,
         }];
         Ok(())
     }
@@ -182,6 +184,8 @@ impl Worksheet {
                 custom_width,
                 style: cols[index].style,
                 hidden: cols[index].hidden,
+                outline_level: cols[index].outline_level,
+                collapsed: cols[index].collapsed,
             };
             let col = Col {
                 min: column,
@@ -190,6 +194,8 @@ impl Worksheet {
                 custom_width,
                 style: None,
                 hidden: false,
+                outline_level: cols[index].outline_level,
+                collapsed: cols[index].collapsed,
             };
             let post = Col {
                 min: column + 1,
@@ -198,6 +204,8 @@ impl Worksheet {
                 custom_width,
                 style: cols[index].style,
                 hidden: cols[index].hidden,
+                outline_level: cols[index].outline_level,
+                collapsed: cols[index].collapsed,
             };
             cols.remove(index);
             if column != max {
@@ -457,6 +465,37 @@ impl Worksheet {
         self.set_column_width_and_style(column, width, hidden, style)
     }
 
+    /// Sets a column's outline (grouping) level, 0–7, and whether its group is
+    /// collapsed (Excel's `outlineLevel`/`collapsed` on `<col>`). Width, style and
+    /// hidden are kept. Veredas fork change 11.
+    pub fn set_column_outline(&mut self, column: i32, level: u8, collapsed: bool) -> Result<(), String> {
+        if level > 7 {
+            return Err(format!("Outline level {level} is not valid (0-7)."));
+        }
+        let width = self.get_actual_column_width(column).unwrap_or(constants::DEFAULT_COLUMN_WIDTH);
+        let style = self.get_column_style(column)?;
+        let hidden = self.is_column_hidden(column)?;
+        // isolate the column in its own <col> record, then mark it
+        self.set_column_width_and_style(column, width, hidden, style)?;
+        for c in self.cols.iter_mut() {
+            if c.min == column && c.max == column {
+                c.outline_level = level;
+                c.collapsed = collapsed;
+            }
+        }
+        Ok(())
+    }
+
+    /// A column's outline level and collapsed flag (0, false when ungrouped).
+    pub fn column_outline(&self, column: i32) -> (u8, bool) {
+        for c in &self.cols {
+            if c.min <= column && column <= c.max {
+                return (c.outline_level, c.collapsed);
+            }
+        }
+        (0, false)
+    }
+
     pub fn set_column_hidden(&mut self, column: i32, hidden: bool) -> Result<(), String> {
         let width = self
             .get_actual_column_width(column)
@@ -486,6 +525,8 @@ impl Worksheet {
             custom_width: width != constants::DEFAULT_COLUMN_WIDTH,
             style,
             hidden,
+            outline_level: 0,
+            collapsed: false,
         };
         let mut index = 0;
         let mut split = false;
@@ -519,6 +560,8 @@ impl Worksheet {
                 custom_width: cols[index].custom_width,
                 style: cols[index].style,
                 hidden: cols[index].hidden,
+                outline_level: cols[index].outline_level,
+                collapsed: cols[index].collapsed,
             };
             let post = Col {
                 min: column + 1,
@@ -527,8 +570,12 @@ impl Worksheet {
                 custom_width: cols[index].custom_width,
                 style: cols[index].style,
                 hidden: cols[index].hidden,
+                outline_level: cols[index].outline_level,
+                collapsed: cols[index].collapsed,
             };
             col.style = cols[index].style;
+            col.outline_level = cols[index].outline_level;
+            col.collapsed = cols[index].collapsed;
             cols.remove(index);
             if column != max {
                 cols.insert(index, post);
