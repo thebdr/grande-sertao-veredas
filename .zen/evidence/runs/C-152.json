@@ -10,15 +10,15 @@
     "states"
   ],
   "exitCode": 0,
-  "outputSha": "17a51c489d7aa4fcff54e23e2c1c22b1394113abb2301dda0e8bcc06ee6404b5",
-  "outputTail": "test a_warm_start_runs_the_program_from_its_initial_values_and_its_clock_from_zero ... ok\ntest an_acknowledge_outside_fault_is_refused_in_startup_and_run ... ok\ntest a_start_counts_its_overruns_afresh_from_the_moment_it_begins ... ok\ntest the_program_stops_itself_from_run ... ok\ntest a_cold_start_is_a_person_s_with_the_switch_armed_too ... ok\ntest while_no_program_runs_the_exchange_keeps_the_target_s_periods_once_in_each ... ok\ntest sim_and_no_realtime_each_say_how_it_runs_on_their_own ... ok\ntest small_sentences_an_acknowledge_refused_in_run_a_stop_from_local_and_a_clock_from_zero_after_an_acknowledge ... ok\ntest every_refusal_but_the_real_time_one_leaves_the_state_as_it_was ... ok\ntest only_a_person_with_the_switch_armed_starts_it_and_only_from_stop ... ok\n\ntest result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s\n     Running tests/states.rs (target/debug/build/veredas-controlador/980b47ab11d73959/out/states-980b47ab11d73959)",
-  "ranAt": "2026-11-22T19:01:03.415Z",
-  "headCommit": "f553739806fbaebb2bd5e46ae769a8ae28fc8247",
+  "outputSha": "8f11af2d442d14bef9f6c529d547d4672cb5006aa54403d2a6a9223665cd2770",
+  "outputTail": "test refusals_in_the_watchdog_s_fault_leave_the_faulted_program_and_its_exchange_as_they_were ... ok\ntest small_sentences_an_acknowledge_refused_in_run_a_stop_from_local_and_a_clock_from_zero_after_an_acknowledge ... ok\ntest on_a_production_target_without_real_time_the_person_and_the_switch_are_asked_first ... ok\ntest overruns_count_every_time_error_since_the_start ... ok\ntest a_new_controller_is_stopped_and_exchanges_the_safe_outputs_every_period ... ok\ntest a_warm_start_runs_the_program_from_its_initial_values_and_its_clock_from_zero ... ok\ntest every_refusal_but_the_real_time_one_leaves_the_state_as_it_was ... ok\ntest sim_and_no_realtime_each_say_how_it_runs_on_their_own ... ok\ntest while_no_program_runs_the_exchange_keeps_the_target_s_periods_once_in_each ... ok\ntest a_stop_is_free_the_program_may_stop_itself_and_the_safe_outputs_follow_at_the_next_period ... ok\n\ntest result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s\n     Running tests/states.rs (target/debug/build/veredas-controlador/980b47ab11d73959/out/states-980b47ab11d73959)",
+  "ranAt": "2026-11-22T19:13:44.880Z",
+  "headCommit": "537a0958b8e18db6c630b3a07c313bbf55b7d9ae",
   "tests": [
     {
       "name": "crates/veredas-controlador/tests/states.rs",
       "file": "crates/veredas-controlador/tests/states.rs",
-      "fileSha": "06d6d54f25bae53bc6cfcc6c8454bb0071168d36687ebd07fe9b615df7a1d47d"
+      "fileSha": "32ad55eb05572af073b40e2f6d800b9bf924928211bc7631567f879d10483635"
     }
   ]
 }
