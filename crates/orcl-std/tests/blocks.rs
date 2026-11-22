@@ -379,3 +379,98 @@ fn set_bit_past_the_width_writes_nothing_on_every_width() {
     check(0_u8);
     check(u64::MAX);
 }
+
+// The fourth refute round: a bit written with the value it holds, a reset released low, a pulse at a preset time of
+// zero and an edge on the scan its pulse ends, a second falling edge, presets below the millisecond, the counter's
+// q() below its preset, a read far past the width, and the version the clause states.
+
+#[test]
+fn a_bit_written_with_the_value_it_holds_stays_as_it_was_on_every_width() {
+    fn check<T: Bits + PartialEq + core::fmt::Debug + Copy>(ones: T, zero: T) {
+        let top = T::WIDTH - 1;
+        for n in [0, top] {
+            assert_eq!(ones.with_bit(n, true), ones, "setting a set bit {n}");
+            assert_eq!(zero.with_bit(n, false), zero, "clearing a clear bit {n}");
+            let mut v = ones;
+            v.set_bit(n, true);
+            assert_eq!(v, ones);
+            let mut v = zero;
+            v.set_bit(n, false);
+            assert_eq!(v, zero);
+        }
+    }
+    check(u8::MAX, 0_u8);
+    check(u16::MAX, 0_u16);
+    check(u32::MAX, 0_u32);
+    check(u64::MAX, 0_u64);
+    assert_eq!(0b1_u8.with_bit(0, true), 1);
+    assert_eq!(0_u64.with_bit(63, false), 0);
+}
+
+#[test]
+fn a_reset_released_with_the_input_low_counts_the_next_rising_edge() {
+    let mut c = Ctu::default();
+    c.scan(false, true, 3);
+    assert!(!c.scan(true, false, 3));
+    assert_eq!(c.cv(), 1, "the input rose after the reset: one edge");
+}
+
+#[test]
+fn a_pulse_at_a_preset_time_of_zero_and_an_edge_on_the_scan_its_pulse_ends() {
+    assert!(!Tp::default().scan(&at(0), true, ms(0)), "a pulse of zero length is off at once");
+    let pt = ms(100);
+    let mut pulse = Tp::default();
+    assert!(pulse.scan(&at(0), true, pt));
+    assert!(pulse.scan(&at(50), false, pt));
+    assert!(!pulse.scan(&at(100), true, pt), "a new edge on the scan the pulse ends starts nothing");
+}
+
+#[test]
+fn a_falling_edge_is_seen_every_time() {
+    let mut fall = FTrig::default();
+    let seen: Vec<bool> = [true, false, true, false, true, false].map(|clk| fall.scan(clk)).to_vec();
+    assert_eq!(seen, vec![false, true, false, true, false, true]);
+}
+
+#[test]
+fn every_timer_holds_its_state_until_a_preset_time_below_the_millisecond() {
+    let pt = Duration::from_micros(100_500);
+    let before = Scan { now: Duration::from_micros(100_200), period: ms(10), cycle: 10 };
+    let at_pt = Scan { now: pt, period: ms(10), cycle: 11 };
+    let mut on = Ton::default();
+    on.scan(&at(0), true, pt);
+    assert!(!on.scan(&before, true, pt));
+    assert!(on.scan(&at_pt, true, pt));
+    let mut off = Tof::default();
+    off.scan(&at(0), true, pt);
+    off.scan(&at(0), false, pt);
+    assert!(off.scan(&before, false, pt));
+    assert!(!off.scan(&at_pt, false, pt));
+    let mut pulse = Tp::default();
+    pulse.scan(&at(0), true, pt);
+    assert!(pulse.scan(&before, true, pt));
+    assert!(!pulse.scan(&at_pt, true, pt));
+}
+
+#[test]
+fn the_counter_s_q_says_what_its_last_scan_returned_below_the_preset_too() {
+    let mut c = Ctu::default();
+    for (cu, reset) in [(true, false), (false, false), (true, false), (true, true), (false, false)] {
+        let q = c.scan(cu, reset, 3);
+        assert_eq!(c.q(), q);
+    }
+    assert!(!c.q());
+}
+
+#[test]
+fn a_read_far_past_the_width_is_false() {
+    assert!(!0xFF_u8.get_bit(9));
+    assert!(!u16::MAX.get_bit(100));
+    assert!(!u32::MAX.get_bit(33));
+    assert!(!u64::MAX.get_bit(u32::MAX));
+}
+
+#[test]
+fn the_crate_is_the_version_its_clause_states() {
+    assert_eq!(env!("CARGO_PKG_VERSION"), "2.0.0-alpha.1");
+}
