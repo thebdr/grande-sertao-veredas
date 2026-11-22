@@ -629,3 +629,89 @@ fn a_start_runs_from_every_kind_of_stop_and_the_crash_s_fault_refuses_stop_and_s
     );
     assert_eq!(text(&c), "FAULT internal(id=507)");
 }
+
+// The third refute round: the count of overruns from the start's first moment, refusals in a watchdog's FAULT
+// leaving the faulted program as it was, the real-time target's refusals in their order, and small sentences.
+
+#[test]
+fn a_start_counts_its_overruns_afresh_from_the_moment_it_begins() {
+    // after a watchdog fault and its acknowledge, the cold start shows no count from the run before
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    plant.stall = |read| if read == 0 { ms(25) } else { Duration::ZERO };
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    c.step(&mut plant, &mut clock);
+    c.acknowledge(OFICINA, &ARMED).unwrap();
+    assert_eq!(text(&c), "STOP acknowledged(id=103) overruns(count=1)", "the stop keeps the run's count");
+    c.start(StartupReason::Cold, OFICINA, &ARMED).unwrap();
+    assert_eq!(text(&c), "STARTUP cold(id=202) load()");
+
+    // a run with a time error, a stop, a start stopped from STARTUP: no scan ran since, no count shown
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    plant.stall = |read| if read == 1 { ms(15) } else { Duration::ZERO };
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    c.stop(OFICINA).unwrap();
+    c.start(StartupReason::Warm, LOCAL, &ARMED).unwrap();
+    c.stop(LOCAL).unwrap();
+    run(&mut c, &mut plant, &mut clock, 5);
+    assert_eq!(text(&c), r#"STOP command(id=101, source="local")"#);
+}
+
+#[test]
+fn refusals_in_the_watchdog_s_fault_leave_the_faulted_program_and_its_exchange_as_they_were() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    plant.stall = |read| if read == 1 { ms(25) } else { Duration::ZERO };
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.step(&mut plant, &mut clock); // the idle exchange at 0
+    clock.advance(ms(13));
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    c.step(&mut plant, &mut clock); // the program's scan at 13, stalled 25 ms: the fault, written at 38
+    assert_eq!(text(&c), r#"FAULT watchdog(id=501, task="main") overruns(count=1)"#);
+    c.stop(OFICINA).unwrap_err();
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap_err();
+    assert!(c.program().is_some(), "the faulted program is still there");
+    c.step(&mut plant, &mut clock);
+    assert_eq!(plant.reads, vec![ms(0), ms(13), ms(43)], "the exchange on the program's periods, from 13 ms");
+}
+
+#[test]
+fn on_a_production_target_without_real_time_the_person_and_the_switch_are_asked_first() {
+    let without = Target { production: true, realtime: false, simulated: false };
+    let mut c = controller(without, Restart::First);
+    assert_eq!(
+        c.start(StartupReason::Warm, PROGRAM, &ARMED),
+        Err(Refusal::Source { command: Command::Start(StartupReason::Warm), source: PROGRAM })
+    );
+    assert_eq!(c.start(StartupReason::Cold, OFICINA, &OFF), Err(Refusal::Switch { command: Command::Start(StartupReason::Cold) }));
+    assert_eq!(text(&c), "STOP", "neither refusal changed the state");
+}
+
+#[test]
+fn small_sentences_an_acknowledge_refused_in_run_a_stop_from_local_and_a_clock_from_zero_after_an_acknowledge() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    c.acknowledge(OFICINA, &ARMED).unwrap_err();
+    c.step(&mut plant, &mut clock);
+    assert_eq!(c.program().unwrap().scans, 3, "the refused acknowledge restarted nothing");
+    assert_eq!(c.stop(LOCAL), Ok(()));
+    assert_eq!(text(&c), r#"STOP command(id=101, source="local")"#);
+
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    plant.stall = |read| if read == 0 { ms(25) } else { Duration::ZERO };
+    let mut c = controller(PRODUCTION, Restart::First);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    run(&mut c, &mut plant, &mut clock, 2);
+    c.acknowledge(OFICINA, &ARMED).unwrap();
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    c.step(&mut plant, &mut clock);
+    assert_eq!(c.program().unwrap().last_now, Duration::ZERO, "the program's clock from zero");
+}

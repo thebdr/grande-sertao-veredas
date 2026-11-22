@@ -282,6 +282,8 @@ impl<P: Program + Default> Controller<P> {
             self.state.state = State::Stop(Some(StopReason::RealtimeRefused));
             return false;
         }
+        // a start counts its time errors afresh from the moment it begins, its start-up included
+        self.state.conditions.overruns = 0;
         self.state.state = State::Startup { reason: Some(kind), phase: Some(StartupPhase::Load) };
         true
     }
@@ -292,7 +294,6 @@ impl<P: Program + Default> Controller<P> {
     fn finish_startup(&mut self, now: Duration) {
         self.task = Task::new(self.config.clone(), P::default()).ok();
         self.origin = now;
-        self.state.conditions.overruns = 0;
         self.state.state = if self.task.is_some() { State::Run } else { State::Fault(Some(FaultReason::Internal)) };
     }
 
