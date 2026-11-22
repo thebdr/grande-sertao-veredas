@@ -10,15 +10,15 @@
     "controller_state"
   ],
   "exitCode": 0,
-  "outputSha": "0cef911d7641813d8f6bc6e6dfd43cf38e75eab217ede050583e7c224d1dbcba",
-  "outputTail": "\nrunning 2 tests\ntest a_controller_source_is_checked_like_any_other ... ok\ntest a_controller_s_states_and_faults_are_stored_like_any_other_data ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.15s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/portal-bf6010/crates/veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.66s\n     Running tests/controller_state.rs (target/debug/build/veredas-portal/36c7c0f09a29fe17/out/controller_state-36c7c0f09a29fe17)",
-  "ranAt": "2026-11-22T20:10:27.694Z",
-  "headCommit": "fa270c6291c65d15926caff6a433efc1ce48020a",
+  "outputSha": "658c12bd28ad9f46f19cdf2cd4856b5a08853928a24bc4cf0ced1713d072c4fa",
+  "outputTail": "\nrunning 3 tests\ntest a_controller_source_is_checked_like_any_other ... ok\ntest a_push_racing_the_stop_lands_or_is_refused ... ok\ntest a_controller_s_states_and_faults_are_stored_like_any_other_data ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.48s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s\n     Running tests/controller_state.rs (target/debug/build/veredas-portal/36c7c0f09a29fe17/out/controller_state-36c7c0f09a29fe17)",
+  "ranAt": "2026-11-22T20:36:42.977Z",
+  "headCommit": "1ec27f493689c51c9531eeb82c77b19495527aed",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/controller_state.rs",
       "file": "crates/veredas-portal/tests/controller_state.rs",
-      "fileSha": "3671ec6e2b5d54f3607a1155f26d25595d3069f7db38b08ebdc8fa1ac711e842"
+      "fileSha": "19a02b54639aa29b273aee0888e4752db6bdf263e7dd4ba0d02f2f635e5eb4f3"
     }
   ]
 }

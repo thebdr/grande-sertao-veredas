@@ -10,15 +10,15 @@
     "store_window"
   ],
   "exitCode": 0,
-  "outputSha": "db8e9f563df3154d94f5291c35772eda126ff708ac449f425c4d73ff084c8405",
-  "outputTail": "\nrunning 5 tests\ntest a_window_on_a_disk_store_is_refused ... ok\ntest the_store_lets_go_of_every_row_that_arrived_before_the_cutoff_and_keeps_the_rest ... ok\ntest a_session_kept_as_a_window_lets_go_of_what_arrived_first_whatever_its_stamp ... ok\ntest the_window_s_pass_never_waits_on_a_reader ... ok\ntest every_protocol_s_rows_are_kept_as_a_window_against_the_bench ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.04s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/portal-bf6010/crates/veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.27s\n     Running tests/store_window.rs (target/debug/build/veredas-portal/75980f9bbb519427/out/store_window-75980f9bbb519427)",
-  "ranAt": "2026-11-22T20:10:18.308Z",
-  "headCommit": "fa270c6291c65d15926caff6a433efc1ce48020a",
+  "outputSha": "a1181d3b323877cb9bd948d952df00f33657d7dc3e36b3cc93aa0649079f2804",
+  "outputTail": "\nrunning 5 tests\ntest a_window_on_a_disk_store_is_refused ... ok\ntest the_store_lets_go_of_every_row_that_arrived_before_the_cutoff_and_keeps_the_rest ... ok\ntest a_session_kept_as_a_window_lets_go_of_what_arrived_first_whatever_its_stamp ... ok\ntest the_window_s_pass_never_waits_on_a_reader ... ok\ntest every_protocol_s_rows_are_kept_as_a_window_against_the_bench ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.41s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s\n     Running tests/store_window.rs (target/debug/build/veredas-portal/75980f9bbb519427/out/store_window-75980f9bbb519427)",
+  "ranAt": "2026-11-22T20:36:32.375Z",
+  "headCommit": "1ec27f493689c51c9531eeb82c77b19495527aed",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store_window.rs",
       "file": "crates/veredas-portal/tests/store_window.rs",
-      "fileSha": "2b121bfc9d38762c3929542a573af8098f3f7f105a83937e8698bc9d900788a2"
+      "fileSha": "12227da34f4ceb5d289b347b4687b4327f2b35c6658f6b738672618b551d0e87"
     }
   ]
 }

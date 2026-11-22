@@ -10,15 +10,15 @@
     "store_record"
   ],
   "exitCode": 0,
-  "outputSha": "19177586be1b09d1ca03544cc4f43528b1c6b9a23a8b365413f5ad71f7cc0dec",
-  "outputTail": "\nrunning 2 tests\ntest at_its_size_limit_a_recording_stops_and_nothing_is_deleted ... ok\ntest the_record_keeps_on_the_drive_what_the_window_lets_go ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.74s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/portal-bf6010/crates/veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.55s\n     Running tests/store_record.rs (target/debug/build/veredas-portal/915c3ea1f9d95226/out/store_record-915c3ea1f9d95226)",
-  "ranAt": "2026-11-22T20:10:23.746Z",
-  "headCommit": "fa270c6291c65d15926caff6a433efc1ce48020a",
+  "outputSha": "89131c3a827b4244c776ea170ac60f183173402354759b5cf7101c54ff01b29a",
+  "outputTail": "\nrunning 4 tests\ntest at_its_size_limit_a_recording_stops_and_nothing_is_deleted ... ok\ntest the_record_keeps_on_the_drive_what_the_window_lets_go ... ok\ntest the_limit_stops_the_recording_at_the_first_write_that_reaches_it ... ok\ntest a_record_is_written_once_a_period_whatever_the_poll_rate ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.48s\n\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running tests/store_record.rs (target/debug/build/veredas-portal/915c3ea1f9d95226/out/store_record-915c3ea1f9d95226)",
+  "ranAt": "2026-11-22T20:36:40.158Z",
+  "headCommit": "1ec27f493689c51c9531eeb82c77b19495527aed",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store_record.rs",
       "file": "crates/veredas-portal/tests/store_record.rs",
-      "fileSha": "4422b33c2a8d2813c2c5d9e5af13025562ce2c6a1b14c653cd6b1265d4013c18"
+      "fileSha": "778b5ca7dfa87df482fc2ad8600f3831d7461083a10fa6c382361680dc5d6c18"
     }
   ]
 }
