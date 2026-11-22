@@ -1,8 +1,8 @@
 {
   "clause": "C-151",
   "verdict": "refuted",
-  "ranAt": "2026-11-22T18:19:45.919Z",
-  "headCommit": "514fcec0e5631ba707fa4c1996cccad3b22fc6cb",
+  "ranAt": "2026-11-22T18:28:50.702Z",
+  "headCommit": "e24be8af25a2e2f4393a0e77fda625e5f8dce3f7",
   "tests": [
     {
       "name": "crates/orcl-runtime/tests/scan_cycle.rs",

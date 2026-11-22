@@ -416,18 +416,18 @@ fn a_program_is_handed_its_outputs_as_the_last_scan_left_them() {
 // the statistics across a fault, virtual time that never sleeps, cycles past 2^32, a time-error scan's outputs kept,
 // and a plant whose write takes time of its own.
 
-/// A plant whose read takes `read(k)` and whose write takes `write`, logging both.
+/// A plant whose `k`-th read takes `read(k)` and whose `k`-th write takes `write(k)`, logging both.
 struct Timed {
     clock: VirtualClock,
     read: fn(usize) -> Duration,
-    write: Duration,
+    write: fn(usize) -> Duration,
     value: u32,
     reads: Vec<Duration>,
     writes: Vec<(Duration, u32)>,
 }
 
 impl Timed {
-    fn new(clock: &VirtualClock, read: fn(usize) -> Duration, write: Duration) -> Self {
+    fn new(clock: &VirtualClock, read: fn(usize) -> Duration, write: fn(usize) -> Duration) -> Self {
         Timed { clock: clock.clone(), read, write, value: 0, reads: Vec::new(), writes: Vec::new() }
     }
 }
@@ -442,7 +442,7 @@ impl Io<u32, u32> for Timed {
     fn write_outputs(&mut self, now: Duration, outputs: &u32) {
         self.writes.push((now, *outputs));
         self.value = *outputs;
-        self.clock.advance(self.write);
+        self.clock.advance((self.write)(self.writes.len() - 1));
     }
 }
 
@@ -450,7 +450,7 @@ impl Io<u32, u32> for Timed {
 fn a_host_back_more_than_twice_a_period_late_is_no_time_error() {
     let mut clock = VirtualClock::new();
     let mut t = slow(&clock, |_| ms(1));
-    let mut plant = Timed::new(&clock, |_| Duration::ZERO, Duration::ZERO);
+    let mut plant = Timed::new(&clock, |_| Duration::ZERO, |_| Duration::ZERO);
     t.step(&mut plant, &mut clock);
     clock.advance(ms(34)); // 35 ms: cycle 1, due at 10 ms, starts 25 ms late
     let r = t.step(&mut plant, &mut clock);
@@ -473,7 +473,7 @@ fn a_scan_one_nanosecond_past_its_period_is_a_time_error() {
 #[test]
 fn the_fault_keeps_its_first_length_when_a_later_faulted_scan_runs_longer() {
     let mut clock = VirtualClock::new();
-    let mut plant = Timed::new(&clock, |k| if k == 0 { ms(25) } else { ms(30) }, Duration::ZERO);
+    let mut plant = Timed::new(&clock, |k| if k == 0 { ms(25) } else { ms(30) }, |_| Duration::ZERO);
     let mut t = slow(&clock, |_| Duration::ZERO);
     t.step(&mut plant, &mut clock);
     t.step(&mut plant, &mut clock);
@@ -483,7 +483,7 @@ fn the_fault_keeps_its_first_length_when_a_later_faulted_scan_runs_longer() {
 #[test]
 fn the_statistics_count_the_faulting_and_the_faulted_scans_lengths() {
     let mut clock = VirtualClock::new();
-    let mut plant = Timed::new(&clock, |k| [ms(1), ms(25), ms(3), ms(3)][k], Duration::ZERO);
+    let mut plant = Timed::new(&clock, |k| [ms(1), ms(25), ms(3), ms(3)][k], |_| Duration::ZERO);
     let mut t = slow(&clock, |_| Duration::ZERO);
     for _ in 0..4 {
         t.step(&mut plant, &mut clock);
@@ -559,7 +559,7 @@ fn a_scan_ends_when_its_outputs_are_handed_over_and_the_plant_s_write_is_not_its
     // runs, late by the write's millisecond, rather than being skipped
     let mut clock = VirtualClock::new();
     let mut t = task(ms(10));
-    let mut plant = Timed::new(&clock, |_| ms(10), ms(1));
+    let mut plant = Timed::new(&clock, |_| ms(10), |_| ms(1));
     let r = t.step(&mut plant, &mut clock);
     assert_eq!((r.exec, r.time_error, r.stats.skipped), (ms(10), false, 0));
     assert_eq!(t.next_cycle(), 1);
@@ -570,10 +570,86 @@ fn a_scan_ends_when_its_outputs_are_handed_over_and_the_plant_s_write_is_not_its
     // 9.5 ms to the write, the write 1 ms across the deadline at 10 ms: that deadline runs at 10.5 ms
     let mut clock = VirtualClock::new();
     let mut t = task(ms(10));
-    let mut plant = Timed::new(&clock, |_| Duration::from_micros(9_500), ms(1));
+    let mut plant = Timed::new(&clock, |_| Duration::from_micros(9_500), |_| ms(1));
     let r = t.step(&mut plant, &mut clock);
     assert_eq!((r.exec, r.time_error), (Duration::from_micros(9_500), false));
     let r = t.step(&mut plant, &mut clock);
     assert_eq!((r.scan.cycle, r.scan.now), (1, Duration::from_micros(10_500)));
     assert_eq!(t.stats().skipped, 0);
+}
+
+// The fourth refute round: the statistics and the watchdog when the plant's write takes time, lateness late twice,
+// and the deadlines a late scan finds passed.
+
+#[test]
+fn with_a_slow_write_the_statistics_and_the_watchdog_judge_the_scan_at_the_handover() {
+    // exactly one period to the handover, 1 ms of write: no overrun, the length 10 ms in every statistic
+    let mut clock = VirtualClock::new();
+    let mut t = task(ms(10));
+    let mut plant = Timed::new(&clock, |_| ms(10), |_| ms(1));
+    t.step(&mut plant, &mut clock);
+    let s = *t.stats();
+    assert_eq!((s.overruns, s.max_exec, s.total_exec, s.mean_exec()), (0, ms(10), ms(10), ms(10)));
+
+    // 19.5 ms to the handover, its write ending past 20 ms: a time error and no fault, the next scan the program's
+    let mut clock = VirtualClock::new();
+    let mut t = task(ms(10));
+    let mut plant = Timed::new(&clock, |k| if k == 0 { us(19_500) } else { ms(1) }, |_| ms(1));
+    let r = t.step(&mut plant, &mut clock);
+    assert_eq!((r.exec, r.time_error, r.state), (us(19_500), true, RunState::Running));
+    t.step(&mut plant, &mut clock);
+    assert_eq!(t.state(), RunState::Running);
+    assert_eq!(plant.writes[1].1, 2, "the next scan scanned the program");
+
+    // 25 ms to the handover and 1 ms of write: the fault names 25 ms
+    let mut clock = VirtualClock::new();
+    let mut t = task(ms(10));
+    let mut plant = Timed::new(&clock, |_| ms(25), |_| ms(1));
+    t.step(&mut plant, &mut clock);
+    assert_eq!(t.state(), RunState::Faulted { at: ms(0), fault: Fault::Watchdog { exec: ms(25) } });
+}
+
+#[test]
+fn lateness_over_two_late_scans_has_its_own_maximum_total_and_mean() {
+    let mut clock = VirtualClock::new();
+    let mut t = task(ms(10));
+    let mut plant = Timed::new(&clock, |_| ms(1), |_| Duration::ZERO);
+    t.step(&mut plant, &mut clock); // 0 to 1 ms
+    clock.advance(ms(12)); // 13 ms: cycle 1, due at 10, 3 ms late
+    t.step(&mut plant, &mut clock);
+    clock.advance(ms(8)); // 22 ms: cycle 2, due at 20, 2 ms late
+    t.step(&mut plant, &mut clock);
+    t.step(&mut plant, &mut clock); // 30 ms, on time
+    let s = *t.stats();
+    assert_eq!((s.cycles, s.max_lateness, s.total_lateness, s.mean_lateness()), (4, ms(3), ms(5), us(1_250)));
+}
+
+#[test]
+fn a_late_scan_runs_and_every_other_deadline_passed_by_its_end_is_skipped() {
+    // a host back 25 ms late: cycle 1 runs late at 35 ms, and the deadlines at 20 and 30 ms, passed by its end,
+    // are skipped and counted; cycle 4 runs on its deadline
+    let mut clock = VirtualClock::new();
+    let mut t = task(ms(10));
+    let mut plant = Timed::new(&clock, |_| ms(1), |_| Duration::ZERO);
+    t.step(&mut plant, &mut clock);
+    clock.advance(ms(34));
+    let r = t.step(&mut plant, &mut clock);
+    assert_eq!((r.scan.cycle, r.scan.now, r.stats.skipped), (1, ms(35), 2));
+    let r = t.step(&mut plant, &mut clock);
+    assert_eq!((r.scan.cycle, r.scan.now), (4, ms(40)));
+    let s = *t.stats();
+    assert_eq!(s.cycles + s.skipped, t.next_cycle(), "every cycle run or counted as skipped");
+
+    // a write from 5 to 30 ms passing the deadlines at 10 and 20 ms: the first runs late at 30 ms, the other is
+    // skipped at that scan's end with the one at 30 ms, and cycle 4 runs on its deadline
+    let mut clock = VirtualClock::new();
+    let mut t = task(ms(10));
+    let mut plant = Timed::new(&clock, |_| ms(5), |k| if k == 0 { ms(25) } else { Duration::ZERO });
+    let seen: Vec<_> = (0..3)
+        .map(|_| {
+            let r = t.step(&mut plant, &mut clock);
+            (r.scan.cycle, r.scan.now, r.exec, r.time_error, r.stats.skipped)
+        })
+        .collect();
+    assert_eq!(seen, vec![(0, ms(0), ms(5), false, 0), (1, ms(30), ms(5), false, 2), (4, ms(40), ms(5), false, 2)]);
 }
