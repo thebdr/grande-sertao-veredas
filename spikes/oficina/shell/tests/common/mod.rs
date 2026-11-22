@@ -356,6 +356,19 @@ impl Shell {
         self.key(path, KEY_RETURN, 0);
     }
 
+    /// Evaluate `expression` in the page of the pane at `pane` (its `evaluate` hook) and return the
+    /// result as JSON text. Each call is numbered, so a result left from an earlier call is never
+    /// taken for this one's.
+    pub fn eval(&self, pane: &str, expression: &str) -> String {
+        static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let script = format!("JSON.stringify([{n}, (function () {{ try {{ return {expression}; }} catch (e) {{ return 'error: ' + e; }} }})()])");
+        self.invoke(pane, "evaluate", &[X::Str(script)]);
+        let prefix = format!("[{n},");
+        let got = self.wait_until(pane, "probe", Duration::from_secs(10), |v| v.starts_with(&prefix), "the page's answer");
+        got[prefix.len()..got.len() - 1].to_string()
+    }
+
     pub fn screenshot(&self, path: &str, file: &Path) {
         self.call("takeScreenshot", &[X::Str(path.into()), X::Str(file.display().to_string())]);
     }

@@ -15,15 +15,16 @@ fn main() {
     let lib = deps.join("lib");
     let include = deps.join("include");
 
-    let qml = QmlModule::new("Oficina").qml_files(["qml/Main.qml", "qml/ProjectPane.qml", "qml/EditorPane.qml", "qml/TablePane.qml", "qml/WebPane.qml"]);
+    let qml = QmlModule::new("Oficina").qml_files(["qml/Main.qml", "qml/ProjectPane.qml", "qml/EditorPane.qml", "qml/TablePane.qml", "qml/WebPane.qml", "qml/CodePane.qml"]);
     let builder = CxxQtBuilder::new_qml_module(qml)
         .qt_module("Gui")
         .qt_module("Quick")
         .qt_module("QuickControls2")
         .qt_module("WebEngineQuick")
         .qt_module("WebChannel")
-        .files(["src/bridge/glue.rs", "src/bridge/tree.rs", "src/bridge/document.rs", "src/bridge/table.rs"])
-        .cpp_file("cpp/shell.cpp");
+        .files(["src/bridge/glue.rs", "src/bridge/tree.rs", "src/bridge/document.rs", "src/bridge/table.rs", "src/bridge/code.rs"])
+        .cpp_file("cpp/shell.cpp")
+        .cpp_file("cpp/keys.h");
     // SAFETY: the closure only adds include folders to the C++ build.
     let builder = unsafe {
         builder.cc_builder(|cc| {

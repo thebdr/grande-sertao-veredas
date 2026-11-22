@@ -23,7 +23,7 @@ ApplicationWindow {
             title: qsTr("Project")
             ProjectPane {
                 anchors.fill: parent
-                onOpenFile: (path) => editor.open(path)
+                onOpenFile: (path) => path.endsWith(".rs") ? codeEditor.open(path) : editor.open(path)
             }
         }
 
@@ -55,11 +55,22 @@ ApplicationWindow {
             }
         }
 
+        KDDW.DockWidget {
+            id: codeDock
+            uniqueName: "code"
+            title: qsTr("Code")
+            CodePane {
+                id: codeEditor
+                anchors.fill: parent
+            }
+        }
+
         Component.onCompleted: {
             addDockWidget(projectDock, KDDW.KDDockWidgets.Location_OnLeft, null, Qt.size(320, 800));
             addDockWidget(editorDock, KDDW.KDDockWidgets.Location_OnRight);
             addDockWidget(tableDock, KDDW.KDDockWidgets.Location_OnBottom, editorDock);
             addDockWidget(webDock, KDDW.KDDockWidgets.Location_OnRight, tableDock);
+            addDockWidget(codeDock, KDDW.KDDockWidgets.Location_OnRight, editorDock);
         }
     }
 }

@@ -1,4 +1,5 @@
 #include "oficina-spike-shell/cpp/shell.h"
+#include "oficina-spike-shell/cpp/keys.h"
 
 #include <memory>
 #include <string>
@@ -6,6 +7,7 @@
 
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlContext>
 #include <QtWebEngineQuick/QtWebEngineQuick>
 
 #include <kddockwidgets/Config.h>
@@ -44,6 +46,11 @@
         bot = std::make_unique<spix::QtQmlBot>();
         bot->runTestServer(*server);
     }
+
+    // The typing hook the tests use (keys.h); present only when a test asks for the test server.
+    OficinaKeys keys;
+    if (port > 0)
+        engine.rootContext()->setContextProperty(QStringLiteral("oficinaKeys"), &keys);
 
     engine.loadFromModule("Oficina", "Main");
     if (engine.rootObjects().isEmpty())

@@ -130,7 +130,8 @@ pub fn initialize(id: i64, root: &Path, settings: &Value) -> Value {
                     "synchronization": { "didSave": false }
                 },
                 "workspace": { "configuration": true },
-                "general": { "positionEncodings": ["utf-16"] }
+                "general": { "positionEncodings": ["utf-16"] },
+                "experimental": { "serverStatusNotification": true }
             },
             "initializationOptions": settings
         }
@@ -171,6 +172,9 @@ pub struct Completion {
 pub enum Event {
     /// The server answered `initialize`: the client sends `initialized` and opens its files.
     Initialized,
+    /// rust-analyzer's status: `quiescent` once it has nothing left to analyse, when the
+    /// diagnostics asked for are the whole of them.
+    Status { quiescent: bool },
     /// Diagnostics the server pushed for a file.
     Diagnostics { uri: String, items: Vec<Diagnostic> },
     Completions { ticket: i64, items: Vec<Completion> },
@@ -232,6 +236,7 @@ pub fn interpret(message: &Value, pending: &mut HashMap<i64, Pending>, settings:
             let items = message.pointer("/params/diagnostics").and_then(Value::as_array).map(|a| a.iter().map(diagnostic).collect()).unwrap_or_default();
             Event::Diagnostics { uri, items }
         }
+        (Some("experimental/serverStatus"), None) => Event::Status { quiescent: message.pointer("/params/quiescent").and_then(Value::as_bool).unwrap_or(false) },
         // The server asks: its settings are ours, every other request is acknowledged with nothing.
         (Some(method), Some(id)) => {
             let result = if method == "workspace/configuration" {

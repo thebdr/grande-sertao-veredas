@@ -296,6 +296,17 @@ the numbers and what was learnt on the way are in the evidence. A test run names
    28 ms after the jump, every cell of it the model's own, and the process's memory with a million
    rows within 0.2 MB of its memory with a thousand (release, three runs). The scrolling frame
    times, with a GPU and without, are taken with point 6, where the drawing paths are set.
+4. **Passed** (2026-11-22). An ORCL file opened from the tree shows in Monaco, in a page Oficina
+   ships, joined by Qt's web channel to a language-server client of Oficina's own (the review's
+   entry 28, its first option, written in the model so ábaco's Python can share it). rust-analyzer
+   marked a planted error at its place 3.8 to 6.1 s after the file was opened; Ctrl+Space offered
+   the timer's methods; a correction typed into Monaco removed the mark 0.13 to 0.20 s later; and
+   nothing of the project's folder ran (entry 32): a planted build script, a cargo configuration
+   naming a compiler wrapper and a toolchain file naming a toolchain of scripts stayed unrun, where
+   rust-analyzer started as editors commonly start it ran them. What holds them off: the project
+   given to rust-analyzer as an inline description of its crates, build scripts and procedural
+   macros off, the toolchain's own binary started in a folder of Oficina's. Spix cannot type into the
+   page; a typing hook of Oficina's does, by the keyboard's path.
 
 On X11 too (2026-11-22, once the architect installed the seven libraries Qt's X11 plugin needs):
 the same tests passed on Qt's `xcb` platform, through this machine's display (the desktop's
@@ -303,7 +314,7 @@ XWayland, OpenGL 4.6 on its Intel GPU), and the timings held in release (a milli
 47 to 63 ms, 100 000 files in 154 to 226 ms). Windows waits for its runs.
 
 ### Verdict
-Not given: points 4 to 7 remain, and point 3's frame times.
+Not given: points 5 to 7 remain, and point 3's frame times.
 
 ## Open
 - **Q31, the review's majors and minors**, none ruled. Those that touch Oficina: 22 (Oficina

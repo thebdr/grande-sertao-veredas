@@ -1,0 +1,9 @@
+{
+  "name": "oficina-spike-web",
+  "private": true,
+  "description": "The pages Oficina's own-shell spike ships: the code editor (Monaco), loaded from this folder, never from the network.",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "monaco-editor": "0.57.0"
+  }
+}

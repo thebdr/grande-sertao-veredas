@@ -1228,6 +1228,7 @@ dependencies = [
  "cxx-qt-build",
  "cxx-qt-lib",
  "oficina-spike-model",
+ "serde_json",
  "tempfile",
 ]
 

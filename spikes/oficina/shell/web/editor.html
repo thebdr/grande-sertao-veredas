@@ -1,0 +1,72 @@
+<!doctype html>
+<!-- The code editor Oficina ships (the spike's point 4): Monaco from this folder, never from the
+     network, joined to Oficina's language-server client by Qt's web channel. The page decides
+     nothing: it shows the file it is given, sends what is typed, and draws what it is told. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>code</title>
+<style>
+  html, body, #editor { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0F0F11; }
+</style>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script src="node_modules/monaco-editor/min/vs/loader.js"></script>
+</head>
+<body>
+<div id="editor"></div>
+<script>
+window.oficinaState = { ready: false, uri: "" };
+require.config({ paths: { vs: "node_modules/monaco-editor/min/vs" } });
+require(["vs/editor/editor.main"], function () {
+  const editor = monaco.editor.create(document.getElementById("editor"), {
+    value: "", language: "rust", theme: "vs-dark", automaticLayout: true, minimap: { enabled: false },
+    fontFamily: "monospace", fontSize: 13
+  });
+  window.oficinaEditor = editor;
+  new QWebChannel(qt.webChannelTransport, function (channel) {
+    const o = channel.objects.oficina;
+    let model = null;
+    let seq = 0;
+    const pending = {};
+    o.opened.connect(function (uri, text) {
+      if (model) model.dispose();
+      model = monaco.editor.createModel(text, "rust", monaco.Uri.parse(uri));
+      editor.setModel(model);
+      window.oficinaState.uri = uri;
+      model.onDidChangeContent(function () { o.edit(model.getValue()); });
+    });
+    const severity = { 1: monaco.MarkerSeverity.Error, 2: monaco.MarkerSeverity.Warning, 3: monaco.MarkerSeverity.Info, 4: monaco.MarkerSeverity.Hint };
+    o.diagnostics.connect(function (json) {
+      if (!model) return;
+      monaco.editor.setModelMarkers(model, "rust-analyzer", JSON.parse(json).map(function (d) {
+        return { startLineNumber: d.line + 1, startColumn: d.column + 1, endLineNumber: d.end_line + 1, endColumn: d.end_column + 1,
+                 message: d.message, code: d.code, severity: severity[d.severity] || monaco.MarkerSeverity.Error };
+      }));
+    });
+    monaco.languages.registerCompletionItemProvider("rust", {
+      triggerCharacters: [".", ":"],
+      provideCompletionItems: function (m, pos) {
+        const word = m.getWordUntilPosition(pos);
+        const range = new monaco.Range(pos.lineNumber, word.startColumn, pos.lineNumber, word.endColumn);
+        return new Promise(function (resolve) {
+          const ticket = ++seq;
+          pending[ticket] = { resolve: resolve, range: range };
+          o.complete(ticket, pos.lineNumber - 1, pos.column - 1);
+        });
+      }
+    });
+    o.completions.connect(function (ticket, json) {
+      const p = pending[ticket];
+      if (!p) return;
+      delete pending[ticket];
+      p.resolve({ suggestions: JSON.parse(json).map(function (c) {
+        return { label: c.label, insertText: c.insert, detail: c.detail, range: p.range, kind: monaco.languages.CompletionItemKind.Method };
+      }) });
+    });
+    window.oficinaState.ready = true;
+    o.pageReady();
+  });
+});
+</script>
+</body>
+</html>
