@@ -12,20 +12,20 @@
     "states"
   ],
   "exitCode": 0,
-  "outputSha": "f31ccf7cd0596935780508f05b767fe579232c5ea92967f62f6a87cc1755efc6",
-  "outputTail": "test a_start_counts_its_overruns_afresh_from_the_moment_it_begins ... ok\ntest a_start_in_run_is_refused_and_the_running_program_goes_on ... ok\ntest a_start_runs_from_every_kind_of_stop_and_the_crash_s_fault_refuses_stop_and_start ... ok\ntest development_and_simulation_run_without_real_time_and_say_so ... ok\ntest overruns_count_every_time_error_since_the_start ... ok\ntest every_refusal_but_the_real_time_one_leaves_the_state_as_it_was ... ok\ntest refusals_leave_the_exchange_while_no_program_runs_where_it_was ... ok\ntest a_start_goes_through_startup_to_run_and_the_program_scans_from_its_own_clock ... ok\n\ntest result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n   Compiling veredas-controlador v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/controlador-4be04a/crates/veredas-controlador)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.43s\n     Running tests/model.rs (target/debug/build/veredas-controlador/a6e509b3f84b8e56/out/model-a6e509b3f84b8e56)\n     Running tests/states.rs (target/debug/build/veredas-controlador/980b47ab11d73959/out/states-980b47ab11d73959)",
-  "ranAt": "2026-11-22T21:02:38.237Z",
-  "headCommit": "cacfc4caf1b80e9f1bb6156c681d7ceb7dc18d1c",
+  "outputSha": "1c579de45d6a466c5df6407854982e342dccc5e41cf5169d5ff4c3255449fdaa",
+  "outputTail": "test refusals_in_the_watchdog_s_fault_leave_the_faulted_program_and_its_exchange_as_they_were ... ok\ntest refusals_leave_the_exchange_while_no_program_runs_where_it_was ... ok\ntest sim_and_no_realtime_each_say_how_it_runs_on_their_own ... ok\ntest small_sentences_an_acknowledge_refused_in_run_a_stop_from_local_and_a_clock_from_zero_after_an_acknowledge ... ok\ntest the_program_stops_itself_from_run ... ok\ntest the_conditions_say_how_it_runs_after_a_power_cycle_and_a_crash_too ... ok\ntest time_errors_show_as_overruns_while_the_controller_runs ... ok\ntest the_watchdog_names_the_task_and_a_stop_keeps_the_overruns_since_the_start ... ok\ntest while_no_program_runs_the_exchange_keeps_the_target_s_periods_once_in_each ... ok\n\ntest result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n     Running tests/model.rs (target/debug/build/veredas-controlador/a6e509b3f84b8e56/out/model-a6e509b3f84b8e56)\n     Running tests/states.rs (target/debug/build/veredas-controlador/980b47ab11d73959/out/states-980b47ab11d73959)",
+  "ranAt": "2026-11-22T21:58:30.190Z",
+  "headCommit": "d3f661778330d01db8e25252c6d3ec91b23f5dee",
   "tests": [
     {
       "name": "crates/veredas-controlador/tests/model.rs",
       "file": "crates/veredas-controlador/tests/model.rs",
-      "fileSha": "1c08b084c71f5548a2b1704ad23c91eec0fae6424c528b5ef58acc3d3d831d92"
+      "fileSha": "66f8cf9c6e6610fd639f175d2a25de96c474609f5d00b285876a6e9e550fd1f0"
     },
     {
       "name": "crates/veredas-controlador/tests/states.rs",
       "file": "crates/veredas-controlador/tests/states.rs",
-      "fileSha": "32ad55eb05572af073b40e2f6d800b9bf924928211bc7631567f879d10483635"
+      "fileSha": "b37a80128f4be628a491b4070a86d404f76b474759ac16fb1d46d344c747d1b2"
     }
   ]
 }
