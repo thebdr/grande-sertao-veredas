@@ -236,7 +236,7 @@ pub fn check_test(text: &str, file: &str, resolve: &dyn Fn(&str) -> Result<Strin
                     }
                 }
                 ActionKind::Script { body } => {
-                    let ctx = StmtCtx::Script { consts: &lets };
+                    let ctx = StmtCtx::Script { consts: &lets, functions: &fnames };
                     check_stmts(body, &vars, &ctx, &mut push);
                 }
                 ActionKind::Branch { value, arms, .. } => {
@@ -394,6 +394,9 @@ fn resolve_expr(e: &mut Expr, vars: &BTreeSet<String>, plants: &Plants, function
                 plant(e, plants, push);
             }
             ExprKind::Plant { .. } => plant(e, plants, push),
+            ExprKind::Call { name, .. } if matches!(plants, Plants::Let) => {
+                push(span, format!("a `let` is made of literals and the constants above it: `{}(...)`", name.value));
+            }
             ExprKind::Call { name, args } => match BUILTINS.iter().find(|(b, _)| *b == name.value) {
                 Some((b, arity)) => {
                     let n = args.len();
@@ -468,13 +471,13 @@ fn check_call(function: &Spanned<String>, args: &[Arg], outputs: &[Spanned<Strin
 
 /// Where statements stand.
 enum StmtCtx<'a> {
-    Script { consts: &'a BTreeSet<String> },
+    Script { consts: &'a BTreeSet<String>, functions: &'a [&'a str] },
     Function { f: &'a Function, file_functions: &'a BTreeMap<String, Function> },
 }
 
 fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: &mut dyn FnMut(Span, String)) {
     let (plants, fnames): (Plants, Vec<&str>) = match ctx {
-        StmtCtx::Script { .. } => (Plants::Script, Vec::new()),
+        StmtCtx::Script { functions, .. } => (Plants::Script, functions.to_vec()),
         StmtCtx::Function { f, file_functions } => {
             (Plants::Reads { function: &f.name.value, tables: &f.reads }, file_functions.keys().map(String::as_str).collect())
         }
@@ -484,7 +487,7 @@ fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: 
         match &mut s.kind {
             StmtKind::Assign { target, value, .. } => {
                 match ctx {
-                    StmtCtx::Script { consts } => constant_assigned(target, consts, push),
+                    StmtCtx::Script { consts, .. } => constant_assigned(target, consts, push),
                     StmtCtx::Function { f, .. } => {
                         if f.inputs.iter().any(|i| i.name.value == target.value) {
                             push(target.span, format!("`{}` is an input of `{}`, read only", target.value, f.name.value));
@@ -508,7 +511,7 @@ fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: 
                 {
                     push(var.span, format!("`{}` is an input of `{}`, read only", var.value, f.name.value));
                 }
-                if let StmtCtx::Script { consts } = ctx {
+                if let StmtCtx::Script { consts, .. } = ctx {
                     constant_assigned(var, consts, push);
                 }
                 resolve_expr(from, vars, &plants, &fnames, push);

@@ -127,15 +127,16 @@ the language's own and name nothing else: `and`, `as`, `await`, `branch`, `call`
 `else`, `error`, `fail`, `false`, `for`, `function`, `if`, `in`, `layout`, `not`, `on`,
 `or`, `pass`, `read`, `reads`, `report`, `retry`, `script`, `send`, `step`, `stop`, `test`,
 `timeout`, `true`, `wait`, `where`, `write`. After a `.` any name is a column's or a message's,
-the language's own words included (`a.read`); a table whose name is one of them is written in
-backquotes (`` `check`.value ``).
+the language's own words included (`a.read`); a table, a channel, a field or an input whose name
+is one of them is written in backquotes (`` `check`.value ``, `` send sorter.announce(`read`: "N")
+``).
 
 **Lines.** A line ends what it holds, except inside parentheses, where lines may break freely,
 and a line whose first symbol is `->` continues the line before it.
 
 **Literals.** A whole number (`20`, `9_000`), a number with a fraction or an exponent (`0.95`,
 `1e3`), `true` and `false`, a duration (a number and its unit with no space between: `250ms`,
-`5s`, `2min`, `1h`) and a string in double quotes. In a string, `\"`, `\\`, `\n`, `\t`, `\{` and
+`5s`, `2min`, `1h`, read exactly, so `1.001s` is 1001 ms) and a string in double quotes. In a string, `\"`, `\\`, `\n`, `\t`, `\{` and
 `\}` are the character, and `{` an expression `}` is the expression's value as text
 (`"rerouted {rerouted}/{items}"`).
 
@@ -169,7 +170,7 @@ pair of quotes removed.
   what is left of it.
 - `use` (none; once per file): a function file, its path relative to the test file's folder.
 - `let` (none; once per name): `let <name> = <expression>`, a constant, the expression made of
-  literals and the constants above it.
+  literals and the constants above it, with no call in it.
 
 ### Steps
 
@@ -291,7 +292,8 @@ The body of a script box, of a function, and of an `if` or a `for`:
 - In a function only: `wait <condition> [timeout <duration>]` and `wait <duration>`;
   `<name> = await <table> [where <condition>] [timeout <duration>]`, the row the condition reads
   by that name (`o = await outcome where o.dest == dest`); and `<name>, ... = <Function>(<input>:
-  <expression>, ...)`. A wait or an await that times out ends the call in `timeout`.
+  <expression>, ...)`, a call whose inputs are named (or that has none), where a built-in's values
+  are not (`x = round(y)`). A wait or an await that times out ends the call in `timeout`.
 
 A block is `{`, statements one per line or apart by `;`, and `}`; it may sit on one line
 (`{ delivered += 1 }`). In a script box a name assigned is a variable of the test, read by the
@@ -355,13 +357,14 @@ brace not closed; one of the language's words used as a name; a setting that is 
 value or comes after a step; a mode, an action, an outcome or a type that is none; an action after
 a step's `branch` or `stop`, or after its `on` lines; a `read` whose values and names differ in
 number; an `else` arm that is not the last, a branch with no arm; two comparisons in a row; a
-name reading more than one column; a built-in call's name given to a function; `reads` or
-`timeout` twice in a function; a write, a send or another step's action written as a statement;
-an `await` not assigned.
+name reading more than one column; an expression nested deeper than 64 levels or holding more
+than 1000 operators, blocks nested deeper than 64; a built-in call's name given to a function;
+`reads` or `timeout` twice in a function; a write, a send or another step's action written as a
+statement; an `await` not assigned.
 
 The files read, it checks them whole and names every problem: `id` missing, or not letters,
 digits, `-` and `_`; a setting given twice, a path `use`d twice, a constant defined twice; a `let`
-made of anything but literals and the constants above it; a used file that cannot be read; two
+made of anything but literals and the constants above it (a call among them); a used file that cannot be read; two
 functions of one name; a step's name given twice; a route to no step; `retry ... max 0`; an
 outcome routed twice by one step; `on pass` on a branch; a `send`'s field given twice; a call to
 no function, an input not given, given twice or not the function's, more names than outputs; a

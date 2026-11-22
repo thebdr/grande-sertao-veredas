@@ -13,8 +13,6 @@ description = "The testing platform of Veredas 2 (Comissionador): a plant's acce
 [dependencies]
 # The one header reader every file of the suite shares: a test file's and a function file's stamp.
 veredas-core = { path = "../veredas-core" }
-# The stamp is two TOML lines; the header is read as TOML to refuse a key that is not the stamp.
-toml = { workspace = true }
 
 [dev-dependencies]
 # Scratch directories, removed when a test ends.

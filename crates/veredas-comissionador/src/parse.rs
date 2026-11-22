@@ -59,32 +59,33 @@ fn header(text: &str, file: &str, noun: &str, format: &str) -> Result<usize, Pro
     let body = body_start(text);
     let head = &text[..body];
     veredas_core::schema::check(head, noun, format, VERSION).map_err(|e| Problem::at(file, text, 0, e.to_string()))?;
-    // The header holds the stamp alone.
-    if let Ok(table) = head.parse::<toml::Table>() {
-        for key in table.keys() {
+    // The header holds the stamp alone: every line that is not blank or a comment sets `format`
+    // or `version`, whatever the type of another key's value (a table, a dotted key, a number past
+    // any width all named).
+    let mut at = 0;
+    for line in head.split_inclusive('\n') {
+        let t = line.trim();
+        let lead = line.len() - line.trim_start().len();
+        if !t.is_empty() && !t.starts_with('#') {
+            let key = header_key(t);
             if key != "format" && key != "version" {
-                let at = line_of_key(head, key).unwrap_or(0);
-                return Err(Problem::at(file, text, at, format!("the header holds `format` and `version` alone, not `{key}`")));
+                return Err(Problem::at(file, text, at + lead, format!("the header holds `format` and `version` alone, not `{key}`")));
             }
         }
+        at += line.len();
     }
     Ok(body)
 }
 
-/// The byte where a header line setting `key` begins.
-fn line_of_key(head: &str, key: &str) -> Option<usize> {
-    let mut at = 0;
-    for line in head.split_inclusive('\n') {
-        let t = line.trim_start();
-        let lead = line.len() - t.len();
-        let bare = t.strip_prefix(key).is_some_and(|r| r.trim_start().starts_with('='));
-        let quoted = t.strip_prefix(&format!("\"{key}\"")).is_some_and(|r| r.trim_start().starts_with('='));
-        if bare || quoted {
-            return Some(at + lead);
-        }
-        at += line.len();
+/// What a header line sets: the key before its `=`, unquoted, or a table's header as written.
+fn header_key(line: &str) -> String {
+    if line.starts_with('[') {
+        let end = line.find(']').map(|i| i + 1).unwrap_or(line.len());
+        let end = if line[end..].starts_with(']') { end + 1 } else { end };
+        return line[..end].to_string();
     }
-    None
+    let key = line.split('=').next().unwrap_or(line).trim();
+    key.trim_matches('"').trim_matches('\'').to_string()
 }
 
 /// What a statement may be: a script box's or a function's.
@@ -101,13 +102,28 @@ struct Parser<'a> {
     i: usize,
     /// Parentheses open: inside them a line's end is no end.
     paren: usize,
+    /// How deep the expression being read nests (parentheses, calls, `not`, `-`).
+    nest: usize,
+    /// The operators of the outermost expression being read.
+    ops: usize,
+    /// Expressions open, one inside another (a string's `{ }` aside).
+    exprs: usize,
+    /// How deep the blocks being read nest.
+    blocks: usize,
 }
+
+/// How deep an expression may nest, and how many operators one may hold: past these the reading
+/// names the problem rather than exhaust its stack.
+pub const MAX_NEST: usize = 64;
+pub const MAX_OPERATORS: usize = 1000;
+/// How deep blocks may nest.
+pub const MAX_BLOCKS: usize = 64;
 
 type R<T> = Result<T, Problem>;
 
 impl<'a> Parser<'a> {
     fn new(src: &'a str, file: &'a str, toks: Vec<Token>) -> Parser<'a> {
-        Parser { src, file, toks, i: 0, paren: 0 }
+        Parser { src, file, toks, i: 0, paren: 0, nest: 0, ops: 0, exprs: 0, blocks: 0 }
     }
 
     // ---- tokens --------------------------------------------------------------------------------
@@ -383,7 +399,11 @@ impl<'a> Parser<'a> {
     /// The rest of a setting's line: trimmed, its comment and a surrounding pair of quotes
     /// taken off; the tokens of the line passed over.
     fn rest_of_line(&mut self, key: &str, from: usize) -> R<Spanned<String>> {
-        let line_end = self.src[from..].find('\n').map(|i| from + i).unwrap_or(self.src.len());
+        let mut line_end = self.src[from..].find('\n').map(|i| from + i).unwrap_or(self.src.len());
+        // A CRLF line ends at its carriage return, where its line-end token begins.
+        if line_end > from && self.src.as_bytes()[line_end - 1] == b'\r' {
+            line_end -= 1;
+        }
         let raw = &self.src[from..line_end];
         let mut cut = raw.len();
         let mut quoted = false;
@@ -628,7 +648,7 @@ impl<'a> Parser<'a> {
         let mut out = Vec::new();
         if !self.is_sym(Sym::RParen) {
             loop {
-                let name = self.after_dot("a name and `:`")?;
+                let name = self.table("a name and `:`")?;
                 self.expect_sym(Sym::Colon, "`:`")?;
                 let value = self.expr()?;
                 out.push(Arg { name, value });
@@ -681,6 +701,8 @@ impl<'a> Parser<'a> {
     }
 
     fn pattern(&mut self) -> R<Pattern> {
+        // A pattern is an expression of its own: its operators counted afresh.
+        self.ops = 0;
         let op = match self.peek().tok {
             Tok::Sym(Sym::EqEq) => Some(CmpOp::Eq),
             Tok::Sym(Sym::NotEq) => Some(CmpOp::Ne),
@@ -887,10 +909,33 @@ impl<'a> Parser<'a> {
     // ---- statements ----------------------------------------------------------------------------
 
     fn block(&mut self, ctx: Context) -> R<Vec<Stmt>> {
-        self.expect_sym(Sym::LBrace, "`{`")?;
+        let open = self.expect_sym(Sym::LBrace, "`{`")?;
+        self.blocks += 1;
+        if self.blocks > MAX_BLOCKS {
+            return Err(self.problem(open.span.start, format!("blocks nested deeper than {MAX_BLOCKS}")));
+        }
         let body = self.statements(ctx)?;
         self.expect_sym(Sym::RBrace, "`}`")?;
+        self.blocks -= 1;
         Ok(body)
+    }
+
+    /// One level deeper into an expression, refused past the limit.
+    fn deeper(&mut self, at: usize) -> R<()> {
+        self.nest += 1;
+        if self.nest > MAX_NEST {
+            return Err(self.problem(at, format!("an expression nested deeper than {MAX_NEST}")));
+        }
+        Ok(())
+    }
+
+    /// One operator more in the outermost expression, refused past the limit.
+    fn operator(&mut self) -> R<()> {
+        self.ops += 1;
+        if self.ops > MAX_OPERATORS {
+            return Err(self.problem(self.peek().span.start, format!("an expression of more than {MAX_OPERATORS} operators")));
+        }
+        Ok(())
     }
 
     /// Statements up to a closing brace, which is left in place.
@@ -922,8 +967,10 @@ impl<'a> Parser<'a> {
                 self.next();
                 let var = self.name("the loop's name")?;
                 self.expect_word("in")?;
+                self.ops = 0;
                 let from = self.additive()?;
                 self.expect_sym(Sym::DotDot, "`..`")?;
+                self.ops = 0;
                 let to = self.additive()?;
                 let body = self.block(ctx)?;
                 StmtKind::For { var, from, to, body }
@@ -1016,6 +1063,8 @@ impl<'a> Parser<'a> {
                 && !is_keyword(f)
                 && !is_builtin(f)
                 && self.peek_at(1).tok == Tok::Sym(Sym::LParen)
+                && (self.peek_at(2).tok == Tok::Sym(Sym::RParen)
+                    || (matches!(self.peek_at(2).tok, Tok::Name(_) | Tok::Quoted(_)) && self.peek_at(3).tok == Tok::Sym(Sym::Colon)))
             {
                 let function = self.name("a function's name")?;
                 let args = self.args()?;
@@ -1029,18 +1078,25 @@ impl<'a> Parser<'a> {
     // ---- expressions ---------------------------------------------------------------------------
 
     fn expr(&mut self) -> R<Expr> {
+        if self.exprs == 0 {
+            self.ops = 0;
+        }
+        self.exprs += 1;
         let mut left = self.and_expr()?;
         while self.is_word("or") {
+            self.operator()?;
             self.next();
             let right = self.and_expr()?;
             left = binary(BinOp::Or, left, right);
         }
+        self.exprs -= 1;
         Ok(left)
     }
 
     fn and_expr(&mut self) -> R<Expr> {
         let mut left = self.not_expr()?;
         while self.is_word("and") {
+            self.operator()?;
             self.next();
             let right = self.not_expr()?;
             left = binary(BinOp::And, left, right);
@@ -1051,7 +1107,9 @@ impl<'a> Parser<'a> {
     fn not_expr(&mut self) -> R<Expr> {
         if self.is_word("not") {
             let start = self.next().span.start;
+            self.deeper(start)?;
             let inner = self.not_expr()?;
+            self.nest -= 1;
             let span = Span::new(start, inner.span.end);
             return Ok(Expr { kind: ExprKind::Unary { op: UnOp::Not, expr: Box::new(inner) }, span });
         }
@@ -1073,6 +1131,7 @@ impl<'a> Parser<'a> {
     fn comparison(&mut self) -> R<Expr> {
         let left = self.additive()?;
         let Some(op) = self.cmp_op() else { return Ok(left) };
+        self.operator()?;
         self.next();
         let right = self.additive()?;
         if self.cmp_op().is_some() {
@@ -1089,6 +1148,7 @@ impl<'a> Parser<'a> {
                 Tok::Sym(Sym::Minus) => BinOp::Sub,
                 _ => return Ok(left),
             };
+            self.operator()?;
             self.next();
             let right = self.multiplicative()?;
             left = binary(op, left, right);
@@ -1104,6 +1164,7 @@ impl<'a> Parser<'a> {
                 Tok::Sym(Sym::Percent) => BinOp::Rem,
                 _ => return Ok(left),
             };
+            self.operator()?;
             self.next();
             let right = self.unary()?;
             left = binary(op, left, right);
@@ -1113,7 +1174,9 @@ impl<'a> Parser<'a> {
     fn unary(&mut self) -> R<Expr> {
         if self.is_sym(Sym::Minus) {
             let start = self.next().span.start;
+            self.deeper(start)?;
             let inner = self.unary()?;
+            self.nest -= 1;
             let span = Span::new(start, inner.span.end);
             return Ok(Expr { kind: ExprKind::Unary { op: UnOp::Neg, expr: Box::new(inner) }, span });
         }
@@ -1145,7 +1208,8 @@ impl<'a> Parser<'a> {
                 self.next();
                 let name = Spanned::new(w.clone(), t.span);
                 if self.is_sym(Sym::LParen) {
-                    self.next();
+                    let open = self.next().span.start;
+                    self.deeper(open)?;
                     self.paren += 1;
                     let mut args = Vec::new();
                     if !self.is_sym(Sym::RParen) {
@@ -1158,6 +1222,7 @@ impl<'a> Parser<'a> {
                     }
                     let end = self.expect_sym(Sym::RParen, "`)`")?.span.end;
                     self.paren -= 1;
+                    self.nest -= 1;
                     return Ok(Expr { kind: ExprKind::Call { name, args }, span: Span::new(t.span.start, end) });
                 }
                 if self.eat_sym(Sym::Dot) {
@@ -1179,10 +1244,12 @@ impl<'a> Parser<'a> {
             }
             Tok::Sym(Sym::LParen) => {
                 self.next();
+                self.deeper(t.span.start)?;
                 self.paren += 1;
                 let inner = self.expr()?;
                 let end = self.expect_sym(Sym::RParen, "`)`")?.span.end;
                 self.paren -= 1;
+                self.nest -= 1;
                 return Ok(Expr { kind: inner.kind, span: Span::new(t.span.start, end) });
             }
             _ => return Err(self.expected(&t, "a value")),
@@ -1210,7 +1277,7 @@ impl<'a> Parser<'a> {
         let e = p.expr()?;
         let t = p.peek().clone();
         if t.tok != Tok::Eof {
-            return Err(p.problem(t.span.start, format!("{} where the `}}` closing the expression was expected", t.describe(self.src))));
+            return Err(p.expected(&t, "the `}` closing the expression"));
         }
         Ok(e)
     }

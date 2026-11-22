@@ -859,6 +859,140 @@ fn a_function_sees_its_own_names_and_not_the_test_s() {
     );
 }
 
+// ---- refute round 1 (each finding with its neighbours) ----------------------------------------
+
+#[test]
+fn a_duration_is_read_exactly() {
+    let one = |lit: &str| -> Result<i64, String> {
+        match check_with(&test_of(&format!("  let d = {lit}\n  step x stop pass\n")), &[]) {
+            Ok(c) => match c.test.lets()[0].1.kind {
+                ExprKind::Duration(ms) => Ok(ms),
+                ref other => Err(format!("{other:?}")),
+            },
+            Err(p) => Err(p[0].message.clone()),
+        }
+    };
+    // Every millisecond of the first three seconds, written with three places.
+    for n in 0..3 {
+        for d in 0..1000 {
+            assert_eq!(one(&format!("{n}.{d:03}s")), Ok(n * 1000 + d), "{n}.{d:03}s");
+        }
+    }
+    assert_eq!(one("1.001s"), Ok(1001));
+    assert_eq!(one("0.0011h"), Ok(3960));
+    assert_eq!(one("1e-3s"), Ok(1));
+    assert_eq!(one("2.5e-1min"), Ok(15_000));
+    assert_eq!(one("1.5E1s"), Ok(15_000));
+    assert_eq!(one("0.25ms").unwrap_err(), "`0.25ms` is not a whole number of milliseconds");
+    assert_eq!(one("1.0005s").unwrap_err(), "`1.0005s` is not a whole number of milliseconds");
+    assert_eq!(one("1e40h").unwrap_err(), "`1e40h` is past a duration's range");
+    assert_eq!(one("5e-400s").unwrap_err(), "`5e-400s` is not a whole number of milliseconds");
+    assert_eq!(one("0e-400s"), Ok(0));
+}
+
+#[test]
+fn another_header_key_is_refused_by_its_name_at_its_line_whatever_its_value() {
+    let body = "test \"t\" {\n  id T\n  step a stop pass\n}\n";
+    let one = |head: &str| {
+        let e = parse_test(&format!("format = \"veredas-test\"\nversion = 1\n{head}{body}"), "t").unwrap_err();
+        format!("{}:{}: {}", e.line, e.column, e.message)
+    };
+    assert_eq!(one("owner = 99999999999999999999\n"), "3:1: the header holds `format` and `version` alone, not `owner`");
+    assert_eq!(one("x = -9223372036854775809\n"), "3:1: the header holds `format` and `version` alone, not `x`");
+    assert_eq!(one("\n# a note\n  [extra]\n"), "5:3: the header holds `format` and `version` alone, not `[extra]`");
+    assert_eq!(one("[[many]]\n"), "3:1: the header holds `format` and `version` alone, not `[[many]]`");
+    assert_eq!(one("meta.x = 1\n"), "3:1: the header holds `format` and `version` alone, not `meta.x`");
+    assert_eq!(one("\"name\" = 1\n"), "3:1: the header holds `format` and `version` alone, not `name`");
+    // The stamp's own keys, quoted or commented, are the stamp.
+    assert!(parse_test(&format!("\"format\" = \"veredas-test\" # the stamp\nversion = 1 # one\n{body}"), "t").is_ok());
+}
+
+#[test]
+fn a_let_holds_no_call() {
+    let one = |e: &str| problems(&test_of(&format!("  let k = {e}\n  step x stop pass\n")));
+    assert_eq!(one("now()"), ["6:11: a `let` is made of literals and the constants above it: `now(...)`"]);
+    assert_eq!(one("max(1, 2)"), ["6:11: a `let` is made of literals and the constants above it: `max(...)`"]);
+    assert_eq!(one("-(1 + 2) * 3 % 2"), Vec::<String>::new());
+}
+
+#[test]
+fn a_call_in_a_statement_is_a_function_s_when_its_inputs_are_named() {
+    let f = format!("{FHEAD}function F() -> (r: int) {{\n  r = 1\n}}\n");
+    let script = |body: &str| problems_with(&test_of(&format!("  use f.fn\n  let z = 1\n  step s script {{ {body} }}\n")), &[("f.fn", &f)]);
+    assert_eq!(script("y = rnd(z)"), ["8:23: `rnd` is no built-in call (abs, min, max, round, seconds, now, int, float, text)"]);
+    assert_eq!(script("y = round(z)"), Vec::<String>::new());
+    assert_eq!(script("y = 1 + F()"), ["8:27: `F` is a function: a step calls it with `call`, a function by `<outputs> = F(...)`"]);
+    assert_eq!(script("y = F()"), ["8:23: a script box calls no function: `F` is called by a step (`call`)"]);
+    let one = |body: &str| fproblems(&format!("{FHEAD}function G(y: int) -> (x: int) {{\n  {body}\n}}\nfunction H(a: int) -> (r: int) {{\n  r = a\n}}\n"));
+    assert_eq!(one("x = rnd(y)"), ["5:7: `rnd` is no built-in call (abs, min, max, round, seconds, now, int, float, text)"]);
+    assert_eq!(one("x = H(a: y)"), Vec::<String>::new());
+    assert_eq!(one("x = H(y)"), ["5:7: `H` is a function: a step calls it with `call`, a function by `<outputs> = H(...)`"]);
+    assert_eq!(one("x = H()"), ["5:7: `H` needs its input `a`"]);
+}
+
+#[test]
+fn a_hash_inside_a_string_s_braces_is_no_comment() {
+    let one = |e: &str| problems(&test_of(&format!("  let a = 1\n  step x report {e}\n")));
+    assert_eq!(one("\"v {a # oops}\""), ["7:23: `#` is no part of the language"]);
+    assert_eq!(one("\"v {a #}\""), ["7:23: `#` is no part of the language"]);
+    assert_eq!(one("\"v # {a}\""), Vec::<String>::new());
+    assert_eq!(one("\"v {a}\" # a comment"), Vec::<String>::new());
+}
+
+#[test]
+fn a_crlf_file_names_every_problem_at_the_place_its_lf_twin_does() {
+    let cases = [
+        "  step a check 1 +\n    2 == 3\n",
+        "  step a await announce where a.lane == 1\n",
+        "  step a wait 1s\n         on timeout -> nowhere\n",
+        "  step a stop pass\n  area late\n",
+        "  step a script { x = 1 y = 2 }\n",
+        "  step a branch 1 {\n  }\n",
+    ];
+    for c in cases {
+        let lf = test_of(c);
+        let crlf = lf.replace('\n', "\r\n");
+        let (a, b) = (problems(&lf), problems(&crlf));
+        assert!(!a.is_empty(), "{c:?}");
+        assert_eq!(a, b, "{c:?}");
+    }
+    // A setting's rest of the line stops before its carriage return.
+    let c = checked(&format!("{HEAD}test \"t\" {{\r\n  id T\r\n  area out\r\n  step a stop pass\r\n}}\r\n").replace("\n\n", "\r\n\r\n"));
+    assert_eq!(c.test.area(), Some("out"));
+}
+
+#[test]
+fn a_field_or_an_input_named_as_a_word_of_the_language_is_backquoted() {
+    assert_eq!(
+        problems(&test_of("  step x send s.m(timeout: 1)\n")),
+        ["6:19: `timeout` is a word of the language, not a name (a name and `:`)"]
+    );
+    let c = checked(&test_of("  step x send sorter.announce(`read`: \"N\", item: 1)\n"));
+    let ActionKind::Send { fields, .. } = &c.test.steps[0].actions[0].kind else { panic!() };
+    assert_eq!(fields.iter().map(|f| f.name.value.as_str()).collect::<Vec<_>>(), ["read", "item"]);
+    assert!(prose().contains("a table, a channel, a field or an input whose name is one of them is written in backquotes"));
+}
+
+#[test]
+fn nesting_past_its_limits_is_named_not_a_crash() {
+    let one = |e: &str| problems(&test_of(&format!("  step x check {e}\n")));
+    let parens = |n: usize| format!("{}1{} == 1", "(".repeat(n), ")".repeat(n));
+    assert_eq!(one(&parens(64)), Vec::<String>::new(), "64 levels read");
+    assert_eq!(one(&parens(65)), ["6:80: an expression nested deeper than 64"]);
+    assert_eq!(one(&parens(3000)), ["6:80: an expression nested deeper than 64"]);
+    assert_eq!(one(&format!("{}true", "not ".repeat(20_000))), ["6:272: an expression nested deeper than 64"]);
+    assert_eq!(one(&format!("{}1", "-".repeat(1000))), ["6:80: an expression nested deeper than 64"]);
+    assert_eq!(one(&format!("abs({}1{}) == 1", "abs(".repeat(70), ")".repeat(70))), ["6:275: an expression nested deeper than 64"]);
+    let chain = |n: usize| format!("{} == 1", vec!["1"; n].join(" + "));
+    assert_eq!(one(&chain(1000)), Vec::<String>::new(), "a chain of 999 additions and a comparison");
+    assert_eq!(one(&chain(1001)), ["6:4018: an expression of more than 1000 operators"]);
+    assert_eq!(one(&chain(100_000)), ["6:4018: an expression of more than 1000 operators"]);
+    let blocks = |n: usize| format!("  step x script {{ {}x = 1{} }}\n", "if true { ".repeat(n), " }".repeat(n));
+    assert_eq!(problems(&test_of(&blocks(63))), Vec::<String>::new());
+    assert_eq!(problems(&test_of(&blocks(64))), ["6:657: blocks nested deeper than 64"]);
+    assert_eq!(problems(&test_of(&blocks(5000))), ["6:657: blocks nested deeper than 64"]);
+}
+
 // ---- the reference's text -------------------------------------------------------------------
 
 /// A text's paragraphs, each on one line, the blocks the tests load (`test`, `function`) left out.
@@ -956,15 +1090,16 @@ the language's own and name nothing else: `and`, `as`, `await`, `branch`, `call`
 `else`, `error`, `fail`, `false`, `for`, `function`, `if`, `in`, `layout`, `not`, `on`,
 `or`, `pass`, `read`, `reads`, `report`, `retry`, `script`, `send`, `step`, `stop`, `test`,
 `timeout`, `true`, `wait`, `where`, `write`. After a `.` any name is a column's or a message's,
-the language's own words included (`a.read`); a table whose name is one of them is written in
-backquotes (`` `check`.value ``).
+the language's own words included (`a.read`); a table, a channel, a field or an input whose name
+is one of them is written in backquotes (`` `check`.value ``, `` send sorter.announce(`read`: "N")
+``).
 
 **Lines.** A line ends what it holds, except inside parentheses, where lines may break freely,
 and a line whose first symbol is `->` continues the line before it.
 
 **Literals.** A whole number (`20`, `9_000`), a number with a fraction or an exponent (`0.95`,
 `1e3`), `true` and `false`, a duration (a number and its unit with no space between: `250ms`,
-`5s`, `2min`, `1h`) and a string in double quotes. In a string, `\"`, `\\`, `\n`, `\t`, `\{` and
+`5s`, `2min`, `1h`, read exactly, so `1.001s` is 1001 ms) and a string in double quotes. In a string, `\"`, `\\`, `\n`, `\t`, `\{` and
 `\}` are the character, and `{` an expression `}` is the expression's value as text
 (`"rerouted {rerouted}/{items}"`).
 
@@ -998,7 +1133,7 @@ pair of quotes removed.
   what is left of it.
 - `use` (none; once per file): a function file, its path relative to the test file's folder.
 - `let` (none; once per name): `let <name> = <expression>`, a constant, the expression made of
-  literals and the constants above it.
+  literals and the constants above it, with no call in it.
 
 ### Steps
 
@@ -1120,7 +1255,8 @@ The body of a script box, of a function, and of an `if` or a `for`:
 - In a function only: `wait <condition> [timeout <duration>]` and `wait <duration>`;
   `<name> = await <table> [where <condition>] [timeout <duration>]`, the row the condition reads
   by that name (`o = await outcome where o.dest == dest`); and `<name>, ... = <Function>(<input>:
-  <expression>, ...)`. A wait or an await that times out ends the call in `timeout`.
+  <expression>, ...)`, a call whose inputs are named (or that has none), where a built-in's values
+  are not (`x = round(y)`). A wait or an await that times out ends the call in `timeout`.
 
 A block is `{`, statements one per line or apart by `;`, and `}`; it may sit on one line
 (`{ delivered += 1 }`). In a script box a name assigned is a variable of the test, read by the
@@ -1184,13 +1320,14 @@ brace not closed; one of the language's words used as a name; a setting that is 
 value or comes after a step; a mode, an action, an outcome or a type that is none; an action after
 a step's `branch` or `stop`, or after its `on` lines; a `read` whose values and names differ in
 number; an `else` arm that is not the last, a branch with no arm; two comparisons in a row; a
-name reading more than one column; a built-in call's name given to a function; `reads` or
-`timeout` twice in a function; a write, a send or another step's action written as a statement;
-an `await` not assigned.
+name reading more than one column; an expression nested deeper than 64 levels or holding more
+than 1000 operators, blocks nested deeper than 64; a built-in call's name given to a function;
+`reads` or `timeout` twice in a function; a write, a send or another step's action written as a
+statement; an `await` not assigned.
 
 The files read, it checks them whole and names every problem: `id` missing, or not letters,
 digits, `-` and `_`; a setting given twice, a path `use`d twice, a constant defined twice; a `let`
-made of anything but literals and the constants above it; a used file that cannot be read; two
+made of anything but literals and the constants above it (a call among them); a used file that cannot be read; two
 functions of one name; a step's name given twice; a route to no step; `retry ... max 0`; an
 outcome routed twice by one step; `on pass` on a branch; a `send`'s field given twice; a call to
 no function, an input not given, given twice or not the function's, more names than outputs; a

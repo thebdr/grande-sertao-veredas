@@ -134,7 +134,7 @@ impl Token {
 
 /// The tokens of `src[from..]`, places counted in the whole of `src`, ending in [`Tok::Eof`].
 pub fn lex(src: &str, from: usize) -> Vec<Token> {
-    let mut out = Lexer { src, pos: from, end: src.len() }.run();
+    let mut out = Lexer { src, pos: from, end: src.len(), comments: true }.run();
     tidy(&mut out);
     out
 }
@@ -161,6 +161,8 @@ struct Lexer<'a> {
     src: &'a str,
     pos: usize,
     end: usize,
+    /// Whether `#` opens a comment: not inside a string's `{ }`.
+    comments: bool,
 }
 
 impl Lexer<'_> {
@@ -185,9 +187,10 @@ impl Lexer<'_> {
         loop {
             // Blanks and comments.
             while let Some(c) = self.peek() {
-                if c == ' ' || c == '\t' || c == '\r' {
+                // A carriage return right before a line feed is the line's end, not a blank.
+                if c == ' ' || c == '\t' || (c == '\r' && self.peek2() != Some('\n')) {
                     self.bump();
-                } else if c == '#' {
+                } else if c == '#' && self.comments {
                     while let Some(c) = self.peek() {
                         if c == '\n' {
                             break;
@@ -205,6 +208,10 @@ impl Lexer<'_> {
             };
             let tok = match c {
                 '\n' => Tok::Newline,
+                '\r' => {
+                    self.bump();
+                    Tok::Newline
+                }
                 '"' => self.string(),
                 '`' => self.quoted(),
                 c if c.is_ascii_digit() => self.number(start),
@@ -318,11 +325,11 @@ impl Lexer<'_> {
                 self.bump();
             }
             let unit = &self.src[unit_start..self.pos];
-            let per = match unit {
-                "ms" => 1.0,
-                "s" => 1_000.0,
-                "min" => 60_000.0,
-                "h" => 3_600_000.0,
+            let per: i128 = match unit {
+                "ms" => 1,
+                "s" => 1_000,
+                "min" => 60_000,
+                "h" => 3_600_000,
                 _ => {
                     return Tok::Bad(format!(
                         "`{}`: a number run into letters (a duration's units are ms, s, min and h)",
@@ -330,17 +337,11 @@ impl Lexer<'_> {
                     ));
                 }
             };
-            let Ok(n) = text.parse::<f64>() else {
-                return Tok::Bad(format!("`{}` is no number", &self.src[start..self.pos]));
+            return match exact_ms(&text, per) {
+                Exact::Ms(ms) => Tok::Duration(ms),
+                Exact::NotWhole => Tok::Bad(format!("`{}` is not a whole number of milliseconds", &self.src[start..self.pos])),
+                Exact::TooLarge => Tok::Bad(format!("`{}` is past a duration's range", &self.src[start..self.pos])),
             };
-            let ms = n * per;
-            if !ms.is_finite() || ms > i64::MAX as f64 / 2.0 {
-                return Tok::Bad(format!("`{}` is past a duration's range", &self.src[start..self.pos]));
-            }
-            if ms.fract() != 0.0 {
-                return Tok::Bad(format!("`{}` is not a whole number of milliseconds", &self.src[start..self.pos]));
-            }
-            return Tok::Duration(ms as i64);
         }
         if float {
             match text.parse::<f64>() {
@@ -407,7 +408,7 @@ impl Lexer<'_> {
                     if !text.is_empty() {
                         pieces.push(StrPiece::Text(std::mem::take(&mut text)));
                     }
-                    let mut tokens = Lexer { src: self.src, pos: inner, end: inner_end }.run();
+                    let mut tokens = Lexer { src: self.src, pos: inner, end: inner_end, comments: false }.run();
                     tokens.retain(|t| t.tok != Tok::Newline);
                     pieces.push(StrPiece::Expr(tokens, Span::new(inner, inner_end)));
                 }
@@ -435,4 +436,46 @@ impl Lexer<'_> {
             }
         }
     }
+}
+
+/// A duration's milliseconds, computed in exact decimal: `1.001s` is 1001, never 1000.999...
+enum Exact {
+    Ms(i64),
+    NotWhole,
+    TooLarge,
+}
+
+/// `text` (digits, an optional fraction, an optional exponent, no `_`) times `per`, exactly.
+fn exact_ms(text: &str, per: i128) -> Exact {
+    let (mantissa, exp) = match text.find(['e', 'E']) {
+        Some(i) => match text[i + 1..].parse::<i32>() {
+            Ok(e) => (&text[..i], e),
+            Err(_) => return Exact::TooLarge,
+        },
+        None => (text, 0),
+    };
+    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = format!("{int}{frac}");
+    let digits = digits.trim_start_matches('0');
+    let Ok(m) = (if digits.is_empty() { Ok(0) } else { digits.parse::<i128>() }) else { return Exact::TooLarge };
+    let Some(mut v) = m.checked_mul(per) else { return Exact::TooLarge };
+    let mut e = i64::from(exp) - frac.len() as i64;
+    while e > 0 {
+        if v == 0 {
+            break;
+        }
+        match v.checked_mul(10) {
+            Some(x) => v = x,
+            None => return Exact::TooLarge,
+        }
+        e -= 1;
+    }
+    while e < 0 {
+        if v % 10 != 0 {
+            return Exact::NotWhole;
+        }
+        v /= 10;
+        e += 1;
+    }
+    if v > i128::from(i64::MAX / 2) { Exact::TooLarge } else { Exact::Ms(v as i64) }
 }
