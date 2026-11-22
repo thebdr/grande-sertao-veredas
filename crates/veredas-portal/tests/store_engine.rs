@@ -968,12 +968,14 @@ fn the_forced_reader_s_quote_its_window_s_rows_and_the_sniffer_s_tab() {
 }
 
 /// In memory, rows deleted hand their space back (the store's window, C-090, rests on it). The
-/// engine's figure moves in steps, not row by row: a table appended two million rows in batches
-/// with every row past the newest 50 000 deleted after each batch (as probed, between 3.5 and 28
-/// MiB, no trend) stays below the figure of a table that deletes nothing once it holds a million
-/// rows, and ends below that table's figure at two million; the table that deletes nothing grows.
+/// engine's figure moves in steps, the same from run to run: a table appended four million rows in
+/// batches of 5 000, every row past the newest 50 000 deleted after each batch, cycles between 3
+/// and 27 MiB (as probed over six million, identical in two runs), never above 32 MiB, its peak in
+/// the second two million no higher than in the first; a table that deletes nothing passes 32 MiB
+/// within a million rows and keeps growing.
 #[test]
 fn deleted_rows_hand_their_memory_back_in_memory() {
+    const CEILING: i64 = 32 << 20;
     fn figure(conn: &Connection) -> i64 {
         conn.query_row("SELECT coalesce(sum(memory_usage_bytes), 0) FROM duckdb_memory()", [], |r| r.get(0)).unwrap()
     }
@@ -1003,13 +1005,12 @@ fn deleted_rows_hand_their_memory_back_in_memory() {
         assert_eq!(held, keep.unwrap_or(rows).min(rows));
         figures
     }
-    let all = fill(2_000_000, None);
-    let window = fill(2_000_000, Some(50_000));
-    let (all_1m, all_2m) = (all[9], all[19]);
-    assert!(all_2m > all_1m && all_1m > all[1], "a table that deletes nothing grows: {all:?}");
-    let most = *window.iter().max().unwrap();
-    assert!(most < all_1m, "the window's figure, at most {most}, under a million rows kept ({all_1m}): {window:?}");
-    assert!(window[19] < all_2m, "{window:?} against {all:?}");
+    let all = fill(1_000_000, None);
+    assert!(all[9] > CEILING && all[9] > all[4] && all[4] > all[0], "a table that deletes nothing grows past the ceiling: {all:?}");
+    let window = fill(4_000_000, Some(50_000));
+    assert!(window.iter().all(|f| *f <= CEILING), "the window's figure, never above 32 MiB: {window:?}");
+    let (first, second) = window.split_at(20);
+    assert!(second.iter().max() <= first.iter().max(), "no trend: the second two million's peak no higher than the first's: {window:?}");
 }
 
 /// What the store's sixth round rests on: a quote opens a field after leading spaces; the two

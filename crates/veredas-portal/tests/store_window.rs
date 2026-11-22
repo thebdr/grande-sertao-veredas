@@ -97,22 +97,30 @@ fn a_session_kept_as_a_window_lets_go_of_what_arrived_first_whatever_its_stamp()
     let live = session.live();
     assert_eq!(live.window_ms, Some(3_000));
     assert!(wait(Duration::from_secs(10), || rows_of(&live, "readings") == 10), "{:?}", live.counters.read().unwrap());
-    let stored = Instant::now();
     let batch1: Vec<f64> = (0..10).map(|i| 100.0 + i as f64 + 0.5).collect();
     assert_eq!(temps(&live), batch1);
-    // Two seconds on, ten lines stamped a day earlier arrive: the window keeps them past the first.
-    while stored.elapsed() < Duration::from_secs(2) {
-        std::thread::sleep(Duration::from_millis(20));
+    // The rows stay the whole span: read off their own arrivals, at 2.8 s past the first of them
+    // all ten are still held, however the machine is loaded (nothing that arrived within the span
+    // can go).
+    let first = arrivals(&live.store, "readings");
+    let (a_min, a_max) = (first[0], first[9]);
+    while veredas_core::now_unix_ms() < a_min + 2_800 {
+        std::thread::sleep(Duration::from_millis(10));
     }
+    assert_eq!(temps(&live), batch1, "held for the span");
+    // Ten lines stamped a day earlier arrive: the window keeps them past the first.
     let second: String = (20..30).map(|i| line_on(18, i)).collect();
     std::io::Write::write_all(&mut std::fs::OpenOptions::new().append(true).open(&log).unwrap(), second.as_bytes()).unwrap();
     let batch2: Vec<f64> = (20..30).map(|i| 100.0 + i as f64 + 0.5).collect();
-    assert!(
-        wait(Duration::from_secs(20), || temps(&live) == batch2),
-        "the first batch gone, the second whole: {:?} {:?}",
-        temps(&live),
-        live.counters.read().unwrap()
-    );
+    let both: Vec<f64> = batch1.iter().chain(batch2.iter()).copied().collect();
+    assert!(wait(Duration::from_secs(10), || temps(&live) == both || temps(&live) == batch2), "{:?}", temps(&live));
+    // The first batch goes once the span has passed, within a pass of the window (a second) and a
+    // margin for a loaded machine.
+    let gone = wait(Duration::from_secs(20), || temps(&live) == batch2);
+    let gone_at = veredas_core::now_unix_ms();
+    assert!(gone, "the first batch gone, the second whole: {:?} {:?}", temps(&live), live.counters.read().unwrap());
+    assert!(gone_at >= a_max + 3_000, "gone only once the span had passed: {} ms after its last arrival", gone_at - a_max);
+    assert!(gone_at <= a_min + 3_000 + 1_000 + 1_500, "gone within the span and a pass: {} ms after its first arrival", gone_at - a_min);
     assert!(wait(Duration::from_secs(2), || live.counters.read().unwrap().evicted == 10), "{:?}", live.counters.read().unwrap());
     // The listing counts what was seen, the store holds what the window keeps.
     assert!(wait(Duration::from_secs(2), || live.series.read().unwrap().get("log|temp").is_some_and(|s| s.count == 20)));
@@ -149,6 +157,20 @@ fn every_protocol_s_rows_are_kept_as_a_window_against_the_bench() {
         "{:?}",
         live.counters.read().unwrap()
     );
+    // The oldest poll held, watched for four seconds (every phase of the window's pass): never
+    // older than the span, a pass and a margin for a loaded machine; and at its oldest at least
+    // the span old, the window keeping what arrived within it.
+    let watched = Instant::now();
+    let mut oldest_age = 0i64;
+    while watched.elapsed() < Duration::from_secs(4) {
+        let now = veredas_core::now_unix_ms();
+        if let Some(first) = arrivals(&live.store, "plc_main").first() {
+            oldest_age = oldest_age.max(now - first);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(oldest_age <= 1_000 + 1_000 + 700, "the oldest poll held was {oldest_age} ms old");
+    assert!(oldest_age >= 1_000, "the window held polls for its span: the oldest at most {oldest_age} ms old");
     let polls = live.counters.read().unwrap().polls;
     for table in ["plc_main", "announce"] {
         let held = arrivals(&live.store, table);
@@ -173,4 +195,65 @@ fn every_protocol_s_rows_are_kept_as_a_window_against_the_bench() {
         r.unwrap_or_else(|e| panic!("{id}: {e}"));
     }
     assert_eq!(rows_of(&live, "plc_main"), live.counters.read().unwrap().polls, "every poll a row, none let go");
+}
+
+/// The window's pass never waits on a reader (C-043's promise, for a store kept as one): a
+/// session kept as a window of a minute (nothing goes) passes at least half its quiet pace while
+/// an export into a pipe nobody reads holds the store's query connection, and the lines written
+/// meanwhile are stored. Unix: the pipe is a FIFO.
+#[cfg(unix)]
+#[test]
+fn the_window_s_pass_never_waits_on_a_reader() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("plant.log");
+    let first: String = (0..10).map(|i| line_on(19, i)).collect();
+    std::fs::write(&log, first).unwrap();
+    let mut cfg = SessionConfig::new("held");
+    cfg.start = Some(midnight());
+    cfg.store_window = Some(Duration::from_secs(60));
+    cfg.logs.push(log_source("log", &log));
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    let live = session.live();
+    assert!(wait(Duration::from_secs(10), || rows_of(&live, "readings") == 10));
+    let passes_over = |span: Duration| {
+        let started = live.counters.read().unwrap().passes;
+        std::thread::sleep(span);
+        live.counters.read().unwrap().passes - started
+    };
+    let quiet = passes_over(Duration::from_secs(3));
+    let pipe = dir.path().join("pipe.csv");
+    assert!(std::process::Command::new("mkfifo").arg(&pipe).status().unwrap().success());
+    let (reader, path) = (Arc::clone(&live), pipe.clone());
+    let export = std::thread::spawn(move || reader.store.export_table_csv("readings", &path));
+    std::thread::sleep(Duration::from_millis(300));
+    let more: String = (10..15).map(|i| line_on(19, i)).collect();
+    std::io::Write::write_all(&mut std::fs::OpenOptions::new().append(true).open(&log).unwrap(), more.as_bytes()).unwrap();
+    let held_passes = passes_over(Duration::from_secs(3));
+    let counters = live.counters.read().unwrap().clone();
+    let held = !export.is_finished();
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut std::fs::File::open(&pipe).unwrap(), &mut text).unwrap();
+    export.join().unwrap().unwrap();
+    assert!(held, "the export held the query connection for the whole span");
+    assert!(held_passes * 2 >= quiet, "the window's pass behind the export: {held_passes} passes against {quiet} quiet");
+    assert_eq!((counters.lines, counters.rows, counters.evicted), (15, 15, 0));
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+}
+
+/// A store kept as a window is in memory: one on disk is refused before anything starts.
+#[test]
+fn a_window_on_a_disk_store_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("plant.log");
+    std::fs::write(&log, "").unwrap();
+    let mut cfg = SessionConfig::new("disk");
+    cfg.logs.push(log_source("log", &log));
+    cfg.residency = Residency::Disk { path: dir.path().join("store.duckdb"), memory_limit_mb: 0 };
+    cfg.store_window = Some(Duration::from_secs(60));
+    let e = Session::start(cfg).err().expect("refused").to_string();
+    assert_eq!(e, format!("a store kept as a window is in memory: this one is on disk at {}", dir.path().join("store.duckdb").display()));
+    assert!(!dir.path().join("store.duckdb").exists(), "nothing written");
 }

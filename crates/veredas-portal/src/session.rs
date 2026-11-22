@@ -166,6 +166,8 @@ pub enum SessionError {
     TableClash { name: String, first: String, second: String },
     #[error("the store: {0}")]
     Store(#[from] StoreError),
+    #[error("a store kept as a window is in memory: this one is on disk at {0}")]
+    WindowOnDisk(String),
     #[error("source `{id}`: {source}")]
     Spawn { id: String, source: SourceError },
 }
@@ -569,6 +571,12 @@ impl Session {
         // makes (C-046), made again here through the same type for a configuration built by hand.
         if cfg.logs.is_empty() && cfg.opc.is_empty() && cfg.channels.is_empty() {
             return Err(SessionError::NoSources);
+        }
+        // The window keeps nothing on the drive (P-019): a store on disk is no window.
+        if cfg.store_window.is_some()
+            && let Residency::Disk { path, .. } = &cfg.residency
+        {
+            return Err(SessionError::WindowOnDisk(path.display().to_string()));
         }
         let mut claims = Claims::default();
         for l in &cfg.logs {
