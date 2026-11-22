@@ -1,0 +1,24 @@
+{
+  "clause": "C-070",
+  "command": "cargo test -p veredas-core --test state_text",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-core",
+    "--test",
+    "state_text"
+  ],
+  "exitCode": 0,
+  "outputSha": "4280b4cb08784330be27464e8e7bfc157908643e02302b384517ab3693169bb3",
+  "outputTail": "test the_table_is_the_plans_and_every_hundreds_digit_is_its_state ... ok\ntest the_reader_refuses_every_spelling_the_writer_never_writes_in_a_string ... ok\ntest health_is_derived_from_the_state ... ok\ntest the_plans_seven_examples_read_and_write_back_byte_for_byte ... ok\ntest the_reader_refuses_every_other_spelling_of_the_text ... ok\ntest writing_then_reading_gives_the_state_back ... ok\ntest toml_reads_every_written_term_as_the_state_holds_it ... ok\ntest every_character_of_unicode_round_trips_and_toml_reads_the_same_string ... ok\ntest whatever_the_reader_accepts_the_writer_writes_back_unchanged ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.23s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.35s\n     Running tests/state_text.rs (target/debug/build/veredas-core/535c54e006045b55/out/state_text-535c54e006045b55)",
+  "ranAt": "2026-11-22T17:44:08.145Z",
+  "headCommit": "04598d0009337662bb5152e93823399782f7fcf4",
+  "tests": [
+    {
+      "name": "crates/veredas-core/tests/state_text.rs",
+      "file": "crates/veredas-core/tests/state_text.rs",
+      "fileSha": "5754f20717ebc230947cfe144e2e0b3e24fb1ee0468ddd4f67d17f67648a69df"
+    }
+  ]
+}

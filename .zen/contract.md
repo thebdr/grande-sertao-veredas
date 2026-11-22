@@ -432,7 +432,7 @@ refute round found and what it changed is in the clause's evidence note.
 - **Description:** `veredas_core::state` holds a controller's state as structured data (layer 1 with at most one reason of its own state, the start-up phase, the conditions, the maintenance requests) beside the table of reason, phase and maintenance numbers and words as the plan states them. Its one writer spells a state as one line (`docs/state-text.md`); its one reader accepts exactly the texts the writer writes and refuses every other spelling by name and byte, so a text read and written back is the same characters and a state written and read back is the same state (its maintenance requests in the table's order). Each value has one spelling, a TOML value TOML's own parser reads the same; health is derived as the plan says. The readings the plan left open are `docs/questions.md` Q100's.
 - **Verification:** automated → crates/veredas-core/tests/state_text.rs | the plan's table and seven examples, read and written back byte for byte; every reason, phase and condition in its order, an absent one unwritten; health; every Unicode character in a string, spelled as the list says and read the same by `toml`; every term of a seeded corpus of 4,000 states read by `toml` as the state holds it; round trips both ways; every one-character deletion, insertion and replacement in 600 of its texts either refused or written back unchanged; spellings the writer never writes refused by name, the messages pinned
 - **Evidence:** .zen/evidence/C-070.md
-- **Status:** pending verification
+- **Status:** verified
 
 ## C-071: The Modbus/TCP client: every function of a device's data model, bounded, every answer checked
 - **Date:** 2026-11-22
