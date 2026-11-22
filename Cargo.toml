@@ -37,6 +37,10 @@ members = [
     # commands that move them; uses core's state text and the language's crates (law L5: controlador may use
     # portal, aranha and the orcl-* crates besides core).
     "crates/veredas-controlador",
+    # The network scanner (docs/aranha-plan.md): who is on an industrial Ethernet segment and who is
+    # cabled to whom, with provenance; a test tool that owns its sockets (law L5: core only). Its
+    # PROFINET codecs serve the bench's device meanwhile and move into core (P-018).
+    "crates/veredas-aranha",
 ]
 
 # No [workspace.package] version: each component owns its SemVer from 2.0.0 (the plan,

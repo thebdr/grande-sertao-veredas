@@ -1,0 +1,21 @@
+[package]
+name = "veredas-aranha"
+# Its own SemVer (law L3), starting at core's current MAJOR (the plan, "Versioning").
+version = "2.0.0-alpha.1"
+edition.workspace = true
+publish = false
+description = "The network scanner of Veredas 2: who is on an industrial Ethernet segment, how each device names itself and who is cabled to whom, with the evidence behind every value"
+
+# A library first, one executable on top later (docs/aranha-plan.md, "Rules"; tests/component.rs
+# asks cargo what it would build). Light, because the bench depends on it for the PROFINET codecs:
+# no database, no web stack, no UI crate (tests/component.rs walks the graph). The codecs
+# (`src/profinet/`) depend on nothing of the suite and move into core with P-018.
+
+[dependencies]
+# The codecs' values (a MAC, a block, a PDU) serialise as the scan file will hold them.
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# cargo metadata's output (tests/component.rs) and tshark's reading of a frame (the dissectors).
+serde_json = { workspace = true }

@@ -161,7 +161,7 @@ Changed on the way, each recorded in its clause's evidence note:
 - edition 2024; the `String` errors of the pcap reader, the SNMP client and the write log typed;
 - a damaged DCP block carries a typed reason, not a sentence in a `String`;
 - the fixtures name no vendor and no product: neutral station names, the locally administered
-  MAC range (`02:…`), the vendor and device ids of no real vendor;
+  MAC range (`02:…`), made-up vendor and device ids;
 - the Windows-only raw binding gives way to the Linux link first;
 - JSON files give way to TOML;
 - what the dissectors show Veredas 1 read wrongly ("Traps") is fixed with a test that pins the
@@ -253,13 +253,13 @@ is pinned by a test when its phase lands.
   listener hears is the far end of its own cable. An interface hearing several senders is a mirror
   port or a hub, and no cable is drawn from it. Device-to-device links come from neighbour tables:
   the PROFINET port data (implicit read) and the switches' LLDP tables (SNMP).
-- **One reading of the standard agrees with itself.** Veredas 1's codecs have at least two places
-  where its encoder and decoder agree with each other and, as the dissectors are remembered here,
-  not with the standard: a Set's control response is option, suboption and error, three bytes and
-  no block info, where Veredas 1 wrote and read five; and the status word of the MRP port TLV is
-  the real-time redundancy status (off, configured, active), not a ring port that is up or down,
-  so "status 0 is not in a ring" would miss every ring whose real-time redundancy is off. A memory
-  is not evidence: the dissectors settle both when phase 2 lands.
+- **One reading of the standard agrees with itself.** Veredas 1's codecs had places where its
+  encoder and decoder agreed with each other and not with the dissectors (tshark 4.6.6, read on
+  2026-11-22): a Set's control response is option, suboption and error, three bytes and no block
+  info, where Veredas 1 wrote and read five (tshark reads that frame's error as 2); and the status
+  word of the MRP port TLV is MRRT's port status (off, configured, up), not a ring port that is up
+  or down, so "status 0 is not in a ring" would miss every ring whose MRRT is off: the ring is read
+  from the domain. Both are pinned (C-132, C-133).
 - **A frame shorter than 60 bytes is padded on the wire, and a capture may or may not hold the
   pad**: DCP is bounded by its own data length and LLDP by its end TLV, never by the frame.
 - **This machine announces itself.** An operating system's own LLDP agent and its own ARP are on
