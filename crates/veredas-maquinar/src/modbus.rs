@@ -608,6 +608,40 @@ pub struct ModbusHandle {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
+/// A running server's points, apart from its handle.
+#[derive(Clone)]
+pub struct ModbusPoints {
+    shared: Arc<Shared>,
+    points: Vec<(String, Point)>,
+}
+
+impl ModbusPoints {
+    fn point(&self, name: &str) -> Result<Point, ModbusError> {
+        self.points.iter().find(|(n, _)| n == name).map(|(_, p)| *p).ok_or_else(|| ModbusError::NoPoint(name.to_string()))
+    }
+
+    /// A point's value.
+    pub fn get(&self, point: &str) -> Result<Value, ModbusError> {
+        let p = self.point(point)?;
+        Ok(self.shared.lock().image.take(p))
+    }
+
+    /// Sets a point, of its own type.
+    pub fn set_value(&self, point: &str, value: Value) -> Result<(), ModbusError> {
+        let p = self.point(point)?;
+        if value.ty() != p.ty {
+            return Err(ModbusError::WrongType { point: point.to_string(), expected: p.ty.label(), given: value.ty().label() });
+        }
+        self.shared.lock().image.put(p, value);
+        Ok(())
+    }
+
+    /// A point's type.
+    pub fn ty(&self, point: &str) -> Result<PointType, ModbusError> {
+        Ok(self.point(point)?.ty)
+    }
+}
+
 impl std::fmt::Debug for ModbusHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ModbusHandle").field("addr", &self.addr).finish()
@@ -622,6 +656,12 @@ impl ModbusHandle {
     /// The names of the points, in the configuration's order.
     pub fn point_names(&self) -> Vec<String> {
         self.points.iter().map(|(n, _)| n.clone()).collect()
+    }
+
+    /// The points, readable and settable from another thread while the server runs (reflexo's
+    /// models): what [`ModbusHandle::get`] and [`ModbusHandle::set_value`] do, without the handle.
+    pub fn points(&self) -> ModbusPoints {
+        ModbusPoints { shared: Arc::clone(&self.shared), points: self.points.clone() }
     }
 
     /// A point's value, read on the plant side.

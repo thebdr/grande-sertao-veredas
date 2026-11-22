@@ -49,8 +49,12 @@ pub struct FisicaStatus {
     pub sensors: usize,
 }
 
+/// Work done on the scene's thread before each step, the world in hand (reflexo's models).
+pub type Hook = Box<dyn FnMut(&mut World) + Send>;
+
 struct Shared {
     world: Mutex<World>,
+    hooks: Mutex<Vec<Hook>>,
     stop: AtomicBool,
     late: AtomicU64,
 }
@@ -72,7 +76,7 @@ pub struct FisicaHandle {
 pub fn start(scene: &Scene) -> Result<FisicaHandle, FisicaError> {
     let world = World::new(scene)?;
     let step = world.step_length();
-    let shared = Arc::new(Shared { world: Mutex::new(world), stop: AtomicBool::new(false), late: AtomicU64::new(0) });
+    let shared = Arc::new(Shared { world: Mutex::new(world), hooks: Mutex::new(Vec::new()), stop: AtomicBool::new(false), late: AtomicU64::new(0) });
     let run = Arc::clone(&shared);
     let thread = std::thread::Builder::new()
         .name("fisica".into())
@@ -92,7 +96,11 @@ pub fn start(scene: &Scene) -> Result<FisicaHandle, FisicaError> {
                 if run.stop.load(Ordering::SeqCst) {
                     break;
                 }
-                run.world().step();
+                let mut world = run.world();
+                for hook in run.hooks.lock().unwrap_or_else(|e| e.into_inner()).iter_mut() {
+                    hook(&mut world);
+                }
+                world.step();
             }
         })
         .map_err(|e| FisicaError::Thread(e.to_string()))?;
@@ -158,6 +166,11 @@ impl FisicaHandle {
         let w = self.shared.world();
         let bodies = w.bodies().iter().filter(|b| b.kind == Kind::Body).count();
         FisicaStatus { steps: w.steps(), late: self.shared.late.load(Ordering::Relaxed), bodies, sensors: w.sensors().len() }
+    }
+
+    /// Runs `hook` on the scene's thread before every step from the next on, the world in hand.
+    pub fn add_hook(&self, hook: Hook) {
+        self.shared.hooks.lock().unwrap_or_else(|e| e.into_inner()).push(hook);
     }
 
     /// Stops the scene and waits for its thread; the world keeps the state of its last step.

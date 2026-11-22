@@ -4,7 +4,8 @@
 //! A bench file lists its parts by name: log emitters ([`crate::emit`]), OPC UA servers
 //! ([`crate::opc`]), Modbus servers ([`crate::modbus`]), EtherNet/IP adapters
 //! ([`crate::ethernetip`]), PROFINET devices ([`crate::profinet`]), emulated EtherCAT segments
-//! ([`crate::ethercat`]) and telegram channels
+//! ([`crate::ethercat`]), scenes ([`crate::fisica`]) and their models ([`crate::reflexo`]), and
+//! telegram channels
 //! ([`crate::channel`]), each channel pointing at the
 //! device's own files kept beside the bench file (core's channel file, the catalog, and, when a
 //! controller rides the channel, its rules file). Every referenced file is read and checked when
@@ -25,6 +26,8 @@ use crate::controller::{self, Fields, Place, Rules};
 use crate::emit::{self, EmitterConfig, EmitterHandle, EmitterStatus, SpawnError};
 use crate::ethercat::{self, EthercatConfig, EthercatError, EthercatHandle, EthercatStatus};
 use crate::ethernetip::{self, EnipConfig, EnipError, EnipHandle, EnipStatus};
+use crate::fisica::{self, FisicaError, FisicaHandle, FisicaStatus, Scene};
+use crate::reflexo::{self, PointKind, Points, ReflexoConfig, ReflexoError, ReflexoHandle, ReflexoStatus};
 use crate::modbus::{self, ModbusConfig, ModbusError, ModbusHandle, ModbusStatus};
 use crate::profinet::{self, ProfinetConfig, ProfinetError, ProfinetHandle, ProfinetStatus};
 use crate::opc::{self, OpcConfig, OpcError, OpcHandle, OpcStatus};
@@ -61,6 +64,10 @@ pub enum BenchError {
     Profinet { name: String, source: ProfinetError },
     #[error("ethercat `{name}`: {source}")]
     Ethercat { name: String, source: EthercatError },
+    #[error("fisica `{name}`: {source}")]
+    Fisica { name: String, source: FisicaError },
+    #[error("reflexo `{name}`: {source}")]
+    Reflexo { name: String, source: ReflexoError },
     #[error("channel `{name}`: {source}")]
     Channel { name: String, source: ChannelError },
 }
@@ -92,6 +99,10 @@ struct FileV1 {
     profinet: Vec<NamedProfinet>,
     #[serde(default)]
     ethercat: Vec<NamedEthercat>,
+    #[serde(default)]
+    fisica: Vec<NamedFisica>,
+    #[serde(default)]
+    reflexo: Vec<NamedReflexo>,
     #[serde(default)]
     channel: Vec<ChannelFile>,
 }
@@ -297,6 +308,31 @@ struct NamedEthercat {
     devices: Vec<ethercat::DeviceConfig>,
 }
 
+/// A scene with the name the bench calls it by: its file beside the bench file.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NamedFisica {
+    name: String,
+    scene: String,
+}
+
+/// A part's models with the name the bench calls them by, their keys beside.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NamedReflexo {
+    name: String,
+    #[serde(default)]
+    scene: Option<String>,
+    #[serde(default)]
+    drive: Vec<reflexo::Drive>,
+    #[serde(default)]
+    conveyor: Vec<reflexo::Conveyor>,
+    #[serde(default)]
+    sensor: Vec<reflexo::SensorModel>,
+    #[serde(default)]
+    actuator: Vec<reflexo::Actuator>,
+}
+
 /// A channel as the bench file declares it.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -341,7 +377,16 @@ pub struct BenchSpec {
     pub ethernetip: Vec<(String, EnipConfig)>,
     pub profinet: Vec<(String, ProfinetConfig)>,
     pub ethercat: Vec<(String, EthercatConfig)>,
+    pub fisica: Vec<FisicaPart>,
+    pub reflexo: Vec<(String, ReflexoConfig)>,
     pub channels: Vec<ChannelPart>,
+}
+
+/// A scene of the bench, its file read.
+pub struct FisicaPart {
+    pub name: String,
+    pub path: PathBuf,
+    pub scene: Scene,
 }
 
 /// A channel of the bench, its files loaded.
@@ -385,6 +430,27 @@ impl BenchSpec {
         }
         for (name, e) in &self.ethercat {
             out.push(format!("ethercat `{name}`: on {} with {} device(s)", e.interface, e.devices.len()));
+        }
+        for f in &self.fisica {
+            let s = &f.scene;
+            out.push(format!(
+                "fisica `{}`: {} with {} body(ies), {} belt(s), {} mover(s), {} sensor(s) at {} ms",
+                f.name,
+                f.path.display(),
+                s.bodies.len(),
+                s.belts.len(),
+                s.movers.len(),
+                s.sensors.len(),
+                s.step_ms
+            ));
+        }
+        for (name, r) in &self.reflexo {
+            let n = r.drive.len() + r.conveyor.len() + r.sensor.len() + r.actuator.len();
+            let on = match &r.scene {
+                Some(scene) => format!("on the scene `{scene}`"),
+                None => format!("every {} ms", reflexo::STEP_WITHOUT_SCENE.as_millis()),
+            };
+            out.push(format!("reflexo `{name}`: {n} model(s) {on}"));
         }
         for c in &self.channels {
             let role = match &c.role {
@@ -494,6 +560,41 @@ pub fn load(text: &str, base: &Path) -> Result<BenchSpec, BenchError> {
         ethercat::validate(&segment).map_err(|err| invalid(format!("{place} (`{}`): {err}", e.name)))?;
         segments.push((e.name, segment));
     }
+    let mut scenes = Vec::new();
+    for (i, f) in file.fisica.into_iter().enumerate() {
+        let place = format!("fisica[{i}]");
+        name("fisica", &place, &f.name)?;
+        let place = format!("{place} (`{}`)", f.name);
+        let (path, text) = read_beside(base, &format!("{place}.scene"), &f.scene)?;
+        let scene = fisica::load(&text).map_err(|e| invalid(format!("{place}.scene ({}): {e}", path.display())))?;
+        scenes.push(FisicaPart { name: f.name, path, scene });
+    }
+    let mut models = Vec::new();
+    for (i, r) in file.reflexo.into_iter().enumerate() {
+        let place = format!("reflexo[{i}]");
+        name("reflexo", &place, &r.name)?;
+        let place = format!("{place} (`{}`)", r.name);
+        let cfg = ReflexoConfig { scene: r.scene, drive: r.drive, conveyor: r.conveyor, sensor: r.sensor, actuator: r.actuator };
+        let scene = match &cfg.scene {
+            None => None,
+            Some(s) => Some(&scenes.iter().find(|f| &f.name == s).ok_or_else(|| invalid(format!("{place}.scene: no [[fisica]] part is named `{s}`")))?.scene),
+        };
+        // What a `<part>.<point>` carries, from the Modbus servers' and the adapters' own points.
+        let point = |part: &str, point: &str| -> Result<PointKind, String> {
+            let kind = |bool_: bool| if bool_ { PointKind::Bool } else { PointKind::Number };
+            if let Some((_, m)) = modbus_servers.iter().find(|(n, _): &&(String, ModbusConfig)| n == part) {
+                let p = m.points.iter().find(|p| p.name == point).ok_or_else(|| format!("`{part}` has no point `{point}`"))?;
+                return Ok(kind(p.ty.unwrap_or(if p.table.is_bits() { modbus::PointType::Bool } else { modbus::PointType::U16 }) == modbus::PointType::Bool));
+            }
+            if let Some((_, e)) = adapters.iter().find(|(n, _): &&(String, EnipConfig)| n == part) {
+                let p = e.points.iter().find(|p| p.name == point).ok_or_else(|| format!("`{part}` has no point `{point}`"))?;
+                return Ok(kind(p.ty.unwrap_or(if p.bit.is_some() { ethernetip::PointType::Bool } else { ethernetip::PointType::U8 }) == ethernetip::PointType::Bool));
+            }
+            Err(format!("no Modbus server or EtherNet/IP adapter is named `{part}`"))
+        };
+        reflexo::validate(&cfg, scene, &point).map_err(|e| invalid(format!("{place}.{e}")))?;
+        models.push((r.name, cfg));
+    }
     let mut channels = Vec::new();
     for (i, c) in file.channel.into_iter().enumerate() {
         let place = format!("channel[{i}]");
@@ -526,7 +627,7 @@ pub fn load(text: &str, base: &Path) -> Result<BenchSpec, BenchError> {
         };
         channels.push(ChannelPart { name: c.name, role, spec, catalog, controller, messages: c.messages });
     }
-    Ok(BenchSpec { seed: file.seed, out_dir, emitters, servers, modbus: modbus_servers, ethernetip: adapters, profinet: devices, ethercat: segments, channels })
+    Ok(BenchSpec { seed: file.seed, out_dir, emitters, servers, modbus: modbus_servers, ethernetip: adapters, profinet: devices, ethercat: segments, fisica: scenes, reflexo: models, channels })
 }
 
 /// Read and check the bench file at `path`; its referenced files are beside it.
@@ -547,6 +648,8 @@ pub enum PartStatus {
     Enip { addr: std::net::SocketAddr, io_addr: std::net::SocketAddr, status: Box<EnipStatus> },
     Profinet { interface: String, station: String, status: ProfinetStatus },
     Ethercat { interface: String, status: EthercatStatus },
+    Fisica(FisicaStatus),
+    Reflexo { models: usize, status: ReflexoStatus },
     /// Boxed: a channel's status carries its monitor's hundred lines.
     Channel(Box<ChannelStatus>),
 }
@@ -559,12 +662,15 @@ pub struct Bench {
     pub ethernetip: Vec<(String, EnipHandle)>,
     pub profinet: Vec<(String, ProfinetHandle)>,
     pub ethercat: Vec<(String, EthercatHandle)>,
+    pub fisica: Vec<(String, FisicaHandle)>,
+    pub reflexo: Vec<(String, ReflexoHandle)>,
     pub channels: Vec<(String, BenchChannel)>,
 }
 
 impl Bench {
     /// Start every part of a loaded bench: emitters first, then servers (OPC UA, then Modbus,
-    /// then EtherNet/IP), then PROFINET devices, then EtherCAT segments, then channels, each kind in the file's order (TOML groups a kind's tables under one key, so the file keeps
+    /// then EtherNet/IP), then PROFINET devices, then EtherCAT segments, then scenes, then their
+    /// models, then channels, each kind in the file's order (TOML groups a kind's tables under one key, so the file keeps
     /// no order across kinds); the first part that cannot start stops the ones before it and
     /// is named. Emitters draw from the bench's seed plus their index when they have no seed
     /// of their own; channels from the bench's seed.
@@ -572,7 +678,17 @@ impl Bench {
         if !spec.emitters.is_empty() {
             std::fs::create_dir_all(&spec.out_dir).map_err(|source| BenchError::Read { place: "out_dir".into(), path: spec.out_dir.clone(), source })?;
         }
-        let mut bench = Bench { emitters: Vec::new(), servers: Vec::new(), modbus: Vec::new(), ethernetip: Vec::new(), profinet: Vec::new(), ethercat: Vec::new(), channels: Vec::new() };
+        let mut bench = Bench {
+            emitters: Vec::new(),
+            servers: Vec::new(),
+            modbus: Vec::new(),
+            ethernetip: Vec::new(),
+            profinet: Vec::new(),
+            ethercat: Vec::new(),
+            fisica: Vec::new(),
+            reflexo: Vec::new(),
+            channels: Vec::new(),
+        };
         for (i, mut e) in spec.emitters.into_iter().enumerate() {
             if e.seed.is_none() {
                 e.seed = spec.seed.map(|s| s.wrapping_add(i as u64));
@@ -600,6 +716,26 @@ impl Bench {
         for (name, cfg) in spec.ethercat {
             let handle = ethercat::start(&cfg).map_err(|source| BenchError::Ethercat { name: name.clone(), source })?;
             bench.ethercat.push((name, handle));
+        }
+        for f in spec.fisica {
+            let handle = fisica::start(&f.scene).map_err(|source| BenchError::Fisica { name: f.name.clone(), source })?;
+            bench.fisica.push((f.name, handle));
+        }
+        for (name, cfg) in spec.reflexo {
+            let scene = cfg.scene.as_ref().and_then(|s| bench.fisica.iter().find(|(n, _)| n == s)).map(|(_, h)| h);
+            let step = match scene {
+                Some(h) => h.with(|w| w.step_length()),
+                None => reflexo::STEP_WITHOUT_SCENE,
+            };
+            let part = |p: &str| -> Option<std::sync::Arc<dyn Points>> {
+                if let Some((_, m)) = bench.modbus.iter().find(|(n, _)| n == p) {
+                    return Some(std::sync::Arc::new(m.points()));
+                }
+                bench.ethernetip.iter().find(|(n, _)| n == p).map(|(_, e)| std::sync::Arc::new(e.points()) as std::sync::Arc<dyn Points>)
+            };
+            let models = reflexo::Models::new(&cfg, step, &part).map_err(|source| BenchError::Reflexo { name: name.clone(), source })?;
+            let handle = reflexo::start(models, scene).map_err(|source| BenchError::Reflexo { name: name.clone(), source })?;
+            bench.reflexo.push((name, handle));
         }
         for c in spec.channels {
             let name = c.name.clone();
@@ -630,6 +766,12 @@ impl Bench {
         }
         for (name, e) in &self.ethercat {
             out.push((name.clone(), PartStatus::Ethercat { interface: e.interface().to_string(), status: e.status() }));
+        }
+        for (name, f) in &self.fisica {
+            out.push((name.clone(), PartStatus::Fisica(f.status())));
+        }
+        for (name, r) in &self.reflexo {
+            out.push((name.clone(), PartStatus::Reflexo { models: r.models(), status: r.status() }));
         }
         for (name, c) in &self.channels {
             out.push((name.clone(), PartStatus::Channel(Box::new(c.status()))));
@@ -676,6 +818,13 @@ impl Bench {
                     "ethercat {name}: on {interface} {} frame(s), {} datagram(s), {} dropped",
                     status.frames, status.datagrams, status.dropped
                 ),
+                PartStatus::Fisica(s) => format!("fisica {name}: {} step(s), {} late, {} body(ies), {} sensor(s)", s.steps, s.late, s.bodies, s.sensors),
+                PartStatus::Reflexo { models, status } => format!(
+                    "reflexo {name}: {models} model(s), {} step(s), {} error(s){}",
+                    status.steps,
+                    status.errors,
+                    status.last_error.as_ref().map(|e| format!(", last: {e}")).unwrap_or_default()
+                ),
                 PartStatus::Channel(s) => {
                     let sent: u64 = s.sent.values().sum();
                     let received: u64 = s.received.values().sum();
@@ -716,6 +865,16 @@ impl Bench {
         self.ethercat.iter().find(|(n, _)| n == name).map(|(_, e)| e)
     }
 
+    /// A scene by name.
+    pub fn fisica(&self, name: &str) -> Option<&FisicaHandle> {
+        self.fisica.iter().find(|(n, _)| n == name).map(|(_, f)| f)
+    }
+
+    /// A part's models by name.
+    pub fn reflexo(&self, name: &str) -> Option<&ReflexoHandle> {
+        self.reflexo.iter().find(|(n, _)| n == name).map(|(_, r)| r)
+    }
+
     /// A PROFINET device by name.
     pub fn profinet(&self, name: &str) -> Option<&ProfinetHandle> {
         self.profinet.iter().find(|(n, _)| n == name).map(|(_, p)| p)
@@ -745,6 +904,13 @@ impl Bench {
         }
         for (_, e) in self.ethercat {
             e.stop();
+        }
+        // The models first: none steps once its scene's thread is told to stop.
+        for (_, mut r) in self.reflexo {
+            r.stop();
+        }
+        for (_, mut f) in self.fisica {
+            f.stop();
         }
         for (_, c) in self.channels {
             c.stop();

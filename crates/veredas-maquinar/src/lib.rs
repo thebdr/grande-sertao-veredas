@@ -14,6 +14,8 @@
 //! - [`ethercat`]: an emulated EtherCAT segment, SubDevices answering a master's frames on a raw
 //!   network interface (it runs on Linux).
 //! - [`fisica`]: a plant's scene, its bodies' motion headless at a fixed step, its sensors.
+//! - [`reflexo`]: ready-made models (drive, conveyor, sensor, actuator) binding a device's points to
+//!   a scene.
 //! - [`profinet`]: a PROFINET device's discovery and naming on a raw network interface (it runs on
 //!   Linux, where aranha's raw link is).
 //!
@@ -30,4 +32,5 @@ pub mod fisica;
 pub mod modbus;
 pub mod opc;
 pub mod profinet;
+pub mod reflexo;
 pub mod timer;

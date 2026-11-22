@@ -279,6 +279,44 @@ pub struct EnipHandle {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
+/// A running adapter's points, apart from its handle.
+#[derive(Clone)]
+pub struct EnipPoints {
+    shared: Arc<Shared>,
+    points: Vec<(String, Point)>,
+}
+
+impl EnipPoints {
+    fn point(&self, name: &str) -> Result<Point, EnipError> {
+        self.points.iter().find(|(n, _)| n == name).map(|(_, p)| *p).ok_or_else(|| EnipError::NoPoint(name.to_string()))
+    }
+
+    /// A point's value.
+    pub fn get(&self, point: &str) -> Result<Value, EnipError> {
+        let p = self.point(point)?;
+        let state = self.shared.lock();
+        Ok(take(&state.assemblies[&p.assembly], p))
+    }
+
+    /// Sets a point, of its own type.
+    pub fn set_value(&self, point: &str, value: Value) -> Result<(), EnipError> {
+        let p = self.point(point)?;
+        if value.ty() != p.ty {
+            return Err(EnipError::WrongType { point: point.to_string(), expected: p.ty.label(), given: value.ty().label() });
+        }
+        let mut state = self.shared.lock();
+        if let Some(bytes) = state.assemblies.get_mut(&p.assembly) {
+            put(bytes, p, value);
+        }
+        Ok(())
+    }
+
+    /// A point's type.
+    pub fn ty(&self, point: &str) -> Result<PointType, EnipError> {
+        Ok(self.point(point)?.ty)
+    }
+}
+
 impl std::fmt::Debug for EnipHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EnipHandle").field("addr", &self.addr).field("io_addr", &self.io_addr).finish()
@@ -292,6 +330,12 @@ impl EnipHandle {
 
     pub fn point_names(&self) -> Vec<String> {
         self.points.iter().map(|(n, _)| n.clone()).collect()
+    }
+
+    /// The points, readable and settable from another thread while the adapter runs (reflexo's
+    /// models).
+    pub fn points(&self) -> EnipPoints {
+        EnipPoints { shared: Arc::clone(&self.shared), points: self.points.clone() }
     }
 
     pub fn get(&self, point: &str) -> Result<Value, EnipError> {

@@ -165,7 +165,9 @@ veredas_maquinar
   ethercat    the emulated EtherCAT segment: the ESC core (registers, commands, AL, SII, DC, FMMUs)
               and the SII image, pure; the segment on a raw link, the knobs (Linux)
   fisica      the scene file (veredas-cena), the World on Rapier stepped at a fixed step, its
-              runner in real time and its handle (C-114)
+              runner in real time and its handle, hooks before each step (C-114)
+  reflexo     ready-made models (drive, conveyor, sensor, actuator) between a device's named
+              points and a scene, stepped on the scene's thread (C-115)
   bench       the bench file (schema), Bench::start, every part's status
   main.rs     veredas-maquinar <bench.toml> [--check] | --version; stops on stdin's end, `stop`,
               SIGTERM or SIGINT
@@ -321,6 +323,10 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
   The bench file gains `[[fisica]]` (a scene file run in real time) and `[[reflexo]]` (a scene
   part's models). The second half, ORCL function blocks, waits for controlador's interpreter;
   EtherCAT devices, whose process data has no named points, are bound by byte and bit then.
+  Landed as C-115 the same day, without a `step_ms` key (models without a scene step every 4 ms:
+  a key that would be refused beside `scene` waits for a consumer that needs another step). Its
+  test found a ramp summed in floating point landing a step late (0.4 added 125 times is
+  49.9999999999999): a ramp within a billionth of a step's change of its goal lands on it.
 
 ## Decided in the briefing of November 2026, not built
 The architect's decisions of 13 to 16 November 2026 that touch the bench

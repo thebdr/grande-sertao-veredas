@@ -16,7 +16,9 @@ use veredas_maquinar::emit::{Encoding, ValueField};
 use veredas_maquinar::ethercat::{DeviceConfig, EntryConfig, EthercatConfig};
 use veredas_maquinar::ethernetip::{AssemblyConfig, ConnectionConfig, DataHeader, EnipConfig, Identity, PointConfig as EnipPoint, PointType as EnipType};
 use veredas_maquinar::modbus::{ModbusConfig, PointConfig, PointType, Table, WordOrder};
+use veredas_maquinar::fisica::Placement;
 use veredas_maquinar::profinet::{IpConfig, ProfinetConfig};
+use veredas_maquinar::reflexo::{Actuator, Conveyor, Drive, SensorModel};
 use veredas_maquinar::opc::{Access, Credentials, Ramp, Randomize, Reaction, Step, TagConfig, TagType};
 
 fn doc(name: &str) -> String {
@@ -105,6 +107,7 @@ fn plant(dir: &Path) -> (PathBuf, u16) {
     std::fs::write(dir.join("catalog.toml"), controller[0].as_bytes()).unwrap();
     std::fs::write(dir.join("machine.toml"), controller[1].as_bytes()).unwrap();
     std::fs::write(dir.join("unit.toml"), controller[2].as_bytes()).unwrap();
+    std::fs::write(dir.join("scene.toml"), blocks("cena-schema.md")[0].as_bytes()).unwrap();
     let bench = blocks("bench-schema.md")[0].replace("port = 5020", &format!("port = {port}"));
     let path = dir.join("bench.toml");
     std::fs::write(&path, bench.as_bytes()).unwrap();
@@ -236,7 +239,7 @@ fn full_file(port: u16) -> String {
          tags = [ {{ id = \"t\", name = \"T\", type = \"float\", access = \"read-write\", value = \"1\", randomize = {{ low = 1, high = 2, decimals = 1, interval_ms = 100 }} }}, {{ id = \"r\", type = \"float\", value = \"2\", ramp = {{ low = 0, high = 10, step = 2, decimals = 1, interval_ms = 100 }} }} ]\n\
          reactions = [ {{ on_write = \"t\", equals = \"5\", tag = \"t\", then = [ {{ after_ms = 1, set = \"6\" }} ] }} ]\n\n\
          [[modbus]]\nname = \"m\"\nbind = \"127.0.0.2\"\nport = 0\nunit = 1\nmax_connections = 2\ncoils = 4\ndiscrete_inputs = 5\ninput_registers = 6\nholding_registers = 7\n\
-         points = [ {{ name = \"p\", table = \"holding-register\", address = 0, type = \"u32\", words = \"low-first\", value = \"1\" }} ]\n\n\
+         points = [ {{ name = \"p\", table = \"holding-register\", address = 0, type = \"u32\", words = \"low-first\", value = \"1\" }}, {{ name = \"run\", table = \"coil\", address = 0 }}, {{ name = \"b1\", table = \"discrete-input\", address = 0 }} ]\n\n\
          [[ethernetip]]\nname = \"x\"\nbind = \"127.0.0.3\"\nport = 0\nio_port = 0\n\
          identity = {{ vendor_id = 1, device_type = 2, product_code = 3, revision = \"4.5\", serial = 6, product_name = \"n\" }}\n\
          rpi_min_us = 2000\nrpi_max_us = 3000000\nmax_sessions = 2\nmax_connections = 3\n\
@@ -247,6 +250,12 @@ fn full_file(port: u16) -> String {
          ip = {{ address = \"10.0.0.2\", mask = \"255.0.0.0\", gateway = \"10.0.0.1\" }}\nhello = false\nlldp_interval_ms = 0\nport = \"port-002\"\nseed = 4\n\n\
          [[ethercat]]\nname = \"seg\"\ninterface = \"ec0\"\n\
          devices = [ {{ name = \"t\", vendor_id = 1, product_code = 2, revision = 3, serial = 4, product_name = \"n\", alias = 5, outputs = [ {{ index = 28672, subindex = 1, bits = 8 }} ], inputs = [ {{ index = 24576, subindex = 2, bits = 16 }} ] }} ]\n\n\
+         [[fisica]]\nname = \"sc\"\nscene = \"scene.toml\"\n\n\
+         [[reflexo]]\nname = \"rx\"\nscene = \"sc\"\n\
+         drive = [ {{ name = \"dr\", run = \"m.run\", setpoint = \"m.p\", accel = 1, decel = 1 }} ]\n\
+         conveyor = [ {{ name = \"cv\", belt = \"infeed\", metres_per_unit = 0.1, run = \"m.run\", setpoint = \"m.p\", accel = 1, decel = 1 }} ]\n\
+         sensor = [ {{ name = \"sn\", sensor = \"B1\", point = \"m.b1\" }} ]\n\
+         actuator = [ {{ name = \"ac\", mover = \"pusher\", extend = \"m.run\", retracted = {{ at = [0.0, 0.0, 0.0] }}, extended = {{ at = [0.0, 0.1, 0.0], yaw = 0 }}, stroke_ms = 100 }} ]\n\n\
          [[channel]]\nname = \"c\"\nrole = \"listen\"\nhost = \"127.0.0.1\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\ncontroller = \"machine.toml\"\n\
          messages = [ {{ message = \"status\", every_ms = 100, fields = [ {{ name = \"running\", value = 1 }}, {{ name = \"speed\", value = 1 }} ] }} ]\n",
         header()
@@ -311,9 +320,9 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
         [
             "The top level", "An emitter", "A value", "An OPC UA server", "A user", "A tag", "A draw", "A ramp", "A reaction", "A step", "A Modbus server", "A point",
             "An EtherNet/IP adapter", "An identity", "An assembly", "A connection", "An assembly point", "A PROFINET device", "An IP suite", "An EtherCAT segment",
-            "A SubDevice", "A process-data entry", "A channel", "A message"
+            "A SubDevice", "A process-data entry", "A scene", "Its models", "A drive", "A conveyor", "A sensor model", "An actuator", "A pose", "A channel", "A message"
         ],
-        "the reference's twenty-four tables"
+        "the reference's thirty-one tables"
     );
     let dir = scratch("walk");
     let (_, port) = plant(&dir);
@@ -328,6 +337,8 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             "An EtherNet/IP adapter" => "[[ethernetip]]",
             "A PROFINET device" => "[[profinet]]",
             "An EtherCAT segment" => "[[ethercat]]",
+            "A scene" => "[[fisica]]",
+            "Its models" => "[[reflexo]]",
             "A channel" => "[[channel]]",
             _ => return None,
         })
@@ -350,6 +361,11 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             "A SubDevice" => "name = \"t\"\nvendor_id = 1\nproduct_code = 2\nrevision = 3\nserial = 4\nproduct_name = \"n\"\nalias = 5\noutputs = []\ninputs = []\n",
             "A process-data entry" => "index = 1\nsubindex = 2\nbits = 3\n",
             "A message" => "message = \"status\"\nevery_ms = 100\nfields = [ { name = \"running\", value = 1 } ]\n",
+            "A drive" => "name = \"d\"\nrun = \"m.r\"\nsetpoint = \"m.s\"\nreverse = \"m.v\"\naccel = 1\ndecel = 2\ntolerance = 0.5\nspeed = \"m.a\"\nrunning = \"m.b\"\nat_speed = \"m.c\"\n",
+            "A conveyor" => "name = \"c\"\nbelt = \"b\"\nmetres_per_unit = 0.1\nrun = \"m.r\"\nsetpoint = \"m.s\"\nreverse = \"m.v\"\naccel = 1\ndecel = 2\ntolerance = 0.5\nspeed = \"m.a\"\nrunning = \"m.b\"\nat_speed = \"m.c\"\n",
+            "A sensor model" => "name = \"s\"\nsensor = \"B1\"\npoint = \"m.b\"\nnormally_closed = true\non_delay_ms = 1\noff_delay_ms = 2\n",
+            "An actuator" => "name = \"a\"\nmover = \"p\"\nextend = \"m.e\"\nretracted = { at = [0.0, 0.0, 0.0] }\nextended = { at = [0.0, 1.0, 0.0] }\nstroke_ms = 100\nretracted_switch = \"m.r\"\nextended_switch = \"m.x\"\n",
+            "A pose" => "at = [1.0, 2.0, 3.0]\nyaw = 1\npitch = 2\nroll = 3\n",
             other => panic!("{other}"),
         }
     };
@@ -386,6 +402,13 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             "A step" => full.replace("{ after_ms = 1,", "{ after_ms = 1, zz = 1,"),
             "A point" => full.replace("{ name = \"p\",", "{ name = \"p\", zz = 1,"),
             "A message" => full.replace("{ message = \"status\",", "{ message = \"status\", zz = 1,"),
+            "A scene" => full.replace("[[fisica]]\n", &format!("[[fisica]]\n{zz}")),
+            "Its models" => full.replace("[[reflexo]]\n", &format!("[[reflexo]]\n{zz}")),
+            "A drive" => full.replace("{ name = \"dr\",", "{ name = \"dr\", zz = 1,"),
+            "A conveyor" => full.replace("{ name = \"cv\",", "{ name = \"cv\", zz = 1,"),
+            "A sensor model" => full.replace("{ name = \"sn\",", "{ name = \"sn\", zz = 1,"),
+            "An actuator" => full.replace("{ name = \"ac\",", "{ name = \"ac\", zz = 1,"),
+            "A pose" => full.replace("extended = { at", "extended = { zz = 1, at"),
             other => panic!("{other}"),
         }
     };
@@ -407,7 +430,11 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                 let text = match (table.as_str(), key.as_str()) {
                     ("The top level", "emitter") => without_sections(&full, &["[[emitter]]"]),
                     ("The top level", "opc") => without_sections(&full, &["[[opc]]"]),
-                    ("The top level", "modbus") => without_sections(&full, &["[[modbus]]"]),
+                    // The models name the Modbus server's points and the scene.
+                    ("The top level", "modbus") => without_sections(&full, &["[[modbus]]", "[[reflexo]]"]),
+                    ("A Modbus server", "points") => without_sections(&without_line(&full, "[[modbus]]", "points"), &["[[reflexo]]"]),
+                    ("The top level", "fisica") => without_sections(&full, &["[[fisica]]", "[[reflexo]]"]),
+                    ("The top level", "reflexo") => without_sections(&full, &["[[reflexo]]"]),
                     ("The top level", "ethernetip") => without_sections(&full, &["[[ethernetip]]"]),
                     ("The top level", "profinet") => without_sections(&full, &["[[profinet]]"]),
                     ("The top level", "ethercat") => without_sections(&full, &["[[ethercat]]"]),
@@ -430,6 +457,12 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                     assert!(err.contains(&expected), "{table}.{key} is documented required ({statement}): {err}");
                     continue;
                 }
+                if (table.as_str(), key.as_str()) == ("Its models", "scene") {
+                    assert_eq!(default, "none");
+                    let err = refused(&text, &dir);
+                    assert!(err.ends_with("reflexo[0] (`rx`).conveyor[0] (`cv`): a conveyor moves a belt of a scene; this part names no `scene`"), "{err}");
+                    continue;
+                }
                 if (table.as_str(), key.as_str()) == ("An EtherCAT segment", "devices") {
                     assert_eq!(default, "none");
                     let err = refused(&text, &dir);
@@ -447,6 +480,12 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                     ("The top level", "profinet") => assert!(default == "none" && spec.profinet.is_empty()),
                     ("The top level", "ethercat") => assert!(default == "none" && spec.ethercat.is_empty()),
                     ("The top level", "channel") => assert!(default == "none" && spec.channels.is_empty()),
+                    ("The top level", "fisica") => assert!(default == "none" && spec.fisica.is_empty()),
+                    ("The top level", "reflexo") => assert!(default == "none" && spec.reflexo.is_empty()),
+                    ("Its models", "drive") => assert!(default == "none" && spec.reflexo[0].1.drive.is_empty()),
+                    ("Its models", "conveyor") => assert!(default == "none" && spec.reflexo[0].1.conveyor.is_empty()),
+                    ("Its models", "sensor") => assert!(default == "none" && spec.reflexo[0].1.sensor.is_empty()),
+                    ("Its models", "actuator") => assert!(default == "none" && spec.reflexo[0].1.actuator.is_empty()),
                     ("An emitter", "values") => assert!(default == "none" && spec.emitters[0].values.is_empty()),
                     ("An emitter", "max_lines") => assert_eq!((default.as_str(), spec.emitters[0].max_lines), ("0", 0)),
                     ("An emitter", "encoding") => assert_eq!((default.as_str(), spec.emitters[0].encoding), ("\"utf-8\"", Encoding::Utf8)),
@@ -567,6 +606,29 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                 ("A message", "every_ms") => check!(CyclicMessage, |m| default == "0" && m.every_ms == 0),
                 ("A message", "fields") => check!(CyclicMessage, |m| default == "none" && m.fields.is_empty()),
                 ("A message", _) => check!(CyclicMessage, |_| false),
+                ("A drive", "reverse") => check!(Drive, |d| default == "none" && d.reverse.is_none()),
+                ("A drive", "tolerance") => check!(Drive, |d| default == "0" && d.tolerance == 0.0),
+                ("A drive", "speed") => check!(Drive, |d| default == "none" && d.speed.is_none()),
+                ("A drive", "running") => check!(Drive, |d| default == "none" && d.running.is_none()),
+                ("A drive", "at_speed") => check!(Drive, |d| default == "none" && d.at_speed.is_none()),
+                ("A drive", _) => check!(Drive, |_| false),
+                ("A conveyor", "reverse") => check!(Conveyor, |d| default == "none" && d.reverse.is_none()),
+                ("A conveyor", "tolerance") => check!(Conveyor, |d| default == "0" && d.tolerance == 0.0),
+                ("A conveyor", "speed") => check!(Conveyor, |d| default == "none" && d.speed.is_none()),
+                ("A conveyor", "running") => check!(Conveyor, |d| default == "none" && d.running.is_none()),
+                ("A conveyor", "at_speed") => check!(Conveyor, |d| default == "none" && d.at_speed.is_none()),
+                ("A conveyor", _) => check!(Conveyor, |_| false),
+                ("A sensor model", "normally_closed") => check!(SensorModel, |m| default == "false" && !m.normally_closed),
+                ("A sensor model", "on_delay_ms") => check!(SensorModel, |m| default == "0" && m.on_delay_ms == 0),
+                ("A sensor model", "off_delay_ms") => check!(SensorModel, |m| default == "0" && m.off_delay_ms == 0),
+                ("A sensor model", _) => check!(SensorModel, |_| false),
+                ("An actuator", "retracted_switch") => check!(Actuator, |a| default == "none" && a.retracted_switch.is_none()),
+                ("An actuator", "extended_switch") => check!(Actuator, |a| default == "none" && a.extended_switch.is_none()),
+                ("An actuator", _) => check!(Actuator, |_| false),
+                ("A pose", "yaw") => check!(Placement, |p| default == "0" && p.yaw == 0.0),
+                ("A pose", "pitch") => check!(Placement, |p| default == "0" && p.pitch == 0.0),
+                ("A pose", "roll") => check!(Placement, |p| default == "0" && p.roll == 0.0),
+                ("A pose", _) => check!(Placement, |_| false),
                 other => panic!("{other:?}: a key this test does not know how to check"),
             }
         }
@@ -684,16 +746,19 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             discrete_inputs: Some(5),
             input_registers: Some(6),
             holding_registers: Some(7),
-            points: vec![PointConfig {
-                name: "p".into(),
-                table: Table::HoldingRegister,
-                address: 0,
-                ty: Some(PointType::U32),
-                words: Some(WordOrder::LowFirst),
-                value: "1".into(),
-            }],
+            points: vec![
+                PointConfig { name: "p".into(), table: Table::HoldingRegister, address: 0, ty: Some(PointType::U32), words: Some(WordOrder::LowFirst), value: "1".into() },
+                PointConfig { name: "run".into(), table: Table::Coil, address: 0, ty: None, words: None, value: String::new() },
+                PointConfig { name: "b1".into(), table: Table::DiscreteInput, address: 0, ty: None, words: None, value: String::new() },
+            ],
         }
     );
+    // A scene's file and its models reach the plan, the scene read from beside the bench file.
+    assert_eq!((m.fisica[0].name.as_str(), m.fisica[0].path.clone(), m.fisica[0].scene.belts[0].name.as_str()), ("sc", dir.join("scene.toml"), "infeed"));
+    let r = &m.reflexo[0];
+    assert_eq!((r.0.as_str(), r.1.scene.as_deref(), r.1.drive[0].run.as_str(), r.1.conveyor[0].metres_per_unit, r.1.sensor[0].point.as_str(), r.1.actuator[0].extended.at), ("rx", Some("sc"), "m.run", 0.1, "m.b1", [0.0, 0.1, 0.0]));
+    assert!(m.plan().contains(&format!("fisica `sc`: {} with 1 body(ies), 1 belt(s), 1 mover(s), 2 sensor(s) at 4 ms", dir.join("scene.toml").display())));
+    assert!(m.plan().contains(&"reflexo `rx`: 4 model(s) on the scene `sc`".to_string()));
     assert!(prose.contains("`encoding` (`\"utf-8\"`): `\"utf-8\"` or `\"utf-16le\"`, the latter with a byte-order mark."));
     assert_eq!(variants(refused(&full.replace("encoding = \"utf-8\"", "encoding = \"x\""), &dir)), ["utf-16le", "utf-8"]);
     assert!(prose.contains("`role` (required): `listen` (wait for the peer to connect) or `connect` (dial it)."));
@@ -805,7 +870,7 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     );
     // The closing paragraph says so.
     let prose = doc_prose();
-    assert!(prose.contains("A misspelled key in any table, a part without a name or with a name another part has, an emitter's file name or timestamp format that is bad, a value's range that is empty or not finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name the standard refuses, a port not named `port-`) or the EtherCAT segment's (no device, two devices of one name, an entry of 0 bits, more than 255 entries a way), a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that does not load against the catalog, a message the catalog lacks or whose fields leave a name unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the place named, before anything binds, opens or spawns."));
+    assert!(prose.contains("A misspelled key in any table, a part without a name or with a name another part has, an emitter's file name or timestamp format that is bad, a value's range that is empty or not finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name the standard refuses, a port not named `port-`) or the EtherCAT segment's (no device, two devices of one name, an entry of 0 bits, more than 255 entries a way), a scene file that cannot be read or does not load, a model whose scene, belt, sensor, mover or point is not there, a point of the other kind or written by two models, a ramp, a ratio, a stroke or a delay out of its range, a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that does not load against the catalog, a message the catalog lacks or whose fields leave a name unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the place named, before anything binds, opens or spawns."));
     // A part that cannot start: a server on a taken port, named; the emitter before it stopped.
     assert!(prose.contains("A part that cannot start (a port taken, a folder that cannot be created, an interface that is not there) stops the parts started before it and is named."));
     let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -886,7 +951,7 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
 
 #[test]
 fn the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order() {
-    assert!(doc_prose().contains("emitters first, then servers (OPC UA, then Modbus, then EtherNet/IP), then PROFINET devices, then EtherCAT segments, then channels, each kind in the file's order (TOML groups a kind's tables under one key, so a file keeps no order across kinds)"));
+    assert!(doc_prose().contains("emitters first, then servers (OPC UA, then Modbus, then EtherNet/IP), then PROFINET devices, then EtherCAT segments, then scenes, then their models, then channels, each kind in the file's order (TOML groups a kind's tables under one key, so a file keeps no order across kinds)"));
     let dir = scratch("order");
     let (_, port) = plant(&dir);
     let text = format!(
@@ -1218,15 +1283,15 @@ const REFERENCE: &str = r#"
 
 A bench is the plant a consumer meets before the real one (`docs/veredas-plan.md`,
 "veredas-maquinar: the bench"): the log emitters, the OPC UA, Modbus and EtherNet/IP servers, the
-PROFINET devices, the emulated EtherCAT segments and the telegram channels it talks to, each
-configured, none programmed. One bench file lists them all by name, and the
+PROFINET devices, the emulated EtherCAT segments, the scenes and the models behind the devices'
+points, and the telegram channels it talks to, each configured, none programmed. One bench file lists them all by name, and the
 device's own files sit beside it: core's channel file (`docs/channel-schema.md`), the catalog
 (`docs/catalog-schema.md`) and, when a controller rides a channel, its rules file
 (`docs/controller-schema.md`). `veredas_maquinar::bench::load` reads the bench file and every
 file it points at and checks each part as its own module checks it, so a bench file that loads
 is a bench every part of which can start; `Bench::start` then runs every part behind one handle,
 emitters first, then servers (OPC UA, then Modbus, then EtherNet/IP), then PROFINET devices, then
-EtherCAT segments, then channels, each kind in the file's order
+EtherCAT segments, then scenes, then their models, then channels, each kind in the file's order
 (TOML groups a kind's tables under one key, so a file keeps no order across kinds), and the executable
 `veredas-maquinar <bench.toml>` runs it from the command line (`--check` reads, checks and
 prints the plan without starting anything). No device is named anywhere: a
@@ -1283,6 +1348,47 @@ reads their EEPROMs, gives them addresses, takes them to OP and exchanges their 
 test's own, the segment on one end of a veth pair and the MainDevice core's master stands on
 (ethercrab) on the other.
 
+## A sixth example: a conveyor line behind a Modbus server
+
+A controller's I/O on a Modbus server: it runs a conveyor at a setpoint, reads the conveyor's
+speed back, sees a light barrier across the belt, extends a pusher and reads its end switches.
+Behind the points stands the scene of `docs/cena-schema.md`'s worked example, saved beside the
+bench file as `line.cena.toml`: the conveyor's drive ramps at 100 units a second toward its
+setpoint and moves the belt 0.01 m/s for each unit (50 is the belt's 0.5 m/s), the barrier is
+normally closed (1 while the beam is clear), and the pusher takes half a second from one end to
+the other. `crates/veredas-maquinar/tests/reflexo.rs` runs this block with a Modbus client the
+bench did not write, as a controller would drive the line.
+
+```toml
+format = "veredas-bench"
+version = 1
+
+[[modbus]]
+name = "plc-io"
+port = 0
+points = [
+  { name = "conveyor_run", table = "coil", address = 0 },
+  { name = "conveyor_setpoint", table = "holding-register", address = 0, value = "50" },
+  { name = "conveyor_speed", table = "input-register", address = 0 },
+  { name = "conveyor_running", table = "discrete-input", address = 0 },
+  { name = "barrier", table = "discrete-input", address = 1 },
+  { name = "pusher_extend", table = "coil", address = 1 },
+  { name = "pusher_back", table = "discrete-input", address = 2 },
+  { name = "pusher_out", table = "discrete-input", address = 3 },
+]
+
+[[fisica]]
+name = "line"
+scene = "line.cena.toml"
+
+[[reflexo]]
+name = "line-models"
+scene = "line"
+conveyor = [ { name = "infeed", belt = "infeed", metres_per_unit = 0.01, run = "plc-io.conveyor_run", setpoint = "plc-io.conveyor_setpoint", accel = 100, decel = 100, speed = "plc-io.conveyor_speed", running = "plc-io.conveyor_running" } ]
+sensor = [ { name = "B1", sensor = "B1", point = "plc-io.barrier", normally_closed = true } ]
+actuator = [ { name = "pusher", mover = "pusher", extend = "plc-io.pusher_extend", retracted = { at = [3.5, -0.4, 0.95] }, extended = { at = [3.5, 0.25, 0.95] }, stroke_ms = 500, retracted_switch = "plc-io.pusher_back", extended_switch = "plc-io.pusher_out" } ]
+```
+
 ## Keys
 
 Each key states in parentheses that it is required, or the value it takes when left out. Every
@@ -1303,6 +1409,8 @@ relative to the bench file's folder.
 - `ethernetip` (none): `[[ethernetip]]` tables.
 - `profinet` (none): `[[profinet]]` tables.
 - `ethercat` (none): `[[ethercat]]` tables.
+- `fisica` (none): `[[fisica]]` tables.
+- `reflexo` (none): `[[reflexo]]` tables.
 - `channel` (none): `[[channel]]` tables.
 
 **An emitter** (`[[emitter]]`): a log a plant would write, line by line into rotating files.
@@ -1503,6 +1611,66 @@ and sent back; functional, never exact in time.
 - `index` (required), `subindex` (required): the object the entry maps.
 - `bits` (required): its size, 1 to 64.
 
+**A scene** (`[[fisica]]`): a plant's scene (`docs/cena-schema.md`), its bodies moved in real time
+at its step.
+- `name` (required): the part's name.
+- `scene` (required): the path of the scene file.
+
+**Its models** (`[[reflexo]]`): ready-made models making a device's points behave as the machine
+behind them. A point is named `<part>.<point>`, a point of a Modbus server or an EtherNet/IP
+adapter of the file; a bool point carries 0 or 1, a number is converted to the point's type (an
+integer rounded and held to its range). The models step together before each step of their scene,
+in this order: drives, conveyors, actuators, sensors; without a scene (drives alone) every 4 ms.
+A point is written by one model at most.
+- `name` (required): the part's name.
+- `scene` (none): the `[[fisica]]` part whose scene the models move; conveyors, sensors and
+  actuators need one.
+- `drive` (none), `conveyor` (none), `sensor` (none), `actuator` (none): the models, as inline
+  tables.
+
+**A drive** (an entry of `drive`): a speed ramped toward a setpoint while it runs, in the drive's
+own unit.
+- `name` (required): the model's name, unique in its part.
+- `run` (required): a bool point read, run while 1.
+- `setpoint` (required): a number point read, the speed wanted.
+- `reverse` (none): a bool point read, the setpoint negated while 1.
+- `accel` (required), `decel` (required): units a second the speed gains away from 0, and loses
+  toward 0 or a smaller setpoint; over 0. Through 0 when the sign changes; the setpoint landed on
+  exactly.
+- `tolerance` (`0`): how near the setpoint the speed counts as at it.
+- `speed` (none): a number point written, the speed.
+- `running` (none): a bool point written, 1 while the speed is not 0.
+- `at_speed` (none): a bool point written, 1 while running within the tolerance of the setpoint.
+
+**A conveyor** (an entry of `conveyor`): a drive whose speed moves a belt of the scene.
+- `name` (required), `run` (required), `setpoint` (required): as a drive's.
+- `reverse` (none), `accel` (required), `decel` (required), `tolerance` (`0`): as a drive's.
+- `speed` (none), `running` (none), `at_speed` (none): as a drive's.
+- `belt` (required): the scene's belt.
+- `metres_per_unit` (required): the belt's surface speed in m/s for one unit of the drive's speed,
+  not 0; the belt's speed held to the scene's 100 m/s.
+
+**A sensor model** (an entry of `sensor`): a scene sensor reported on a point.
+- `name` (required): the model's name.
+- `sensor` (required): the scene's sensor.
+- `point` (required): a bool point written, 1 while a body or a mover is inside.
+- `normally_closed` (`false`): the point 0 while something is inside, 1 while it is empty.
+- `on_delay_ms` (`0`), `off_delay_ms` (`0`): how long the scene's sensor stays occupied, or empty,
+  before the point says so, up to 600000; the first step at or after the delay.
+
+**An actuator** (an entry of `actuator`): a cylinder moving a mover of the scene between two poses.
+- `name` (required): the model's name.
+- `mover` (required): the scene's mover.
+- `extend` (required): a bool point read, extend while 1, retract while 0.
+- `retracted` (required), `extended` (required): its two poses.
+- `stroke_ms` (required): the time from one end to the other, 1 to 600000; the mover moves along
+  the straight line between the poses at an even speed, its angles with it.
+- `retracted_switch` (none), `extended_switch` (none): bool points written, 1 at that end.
+
+**A pose** (`retracted`, `extended`): as a scene file states one.
+- `at` (required): the centre, in metres.
+- `yaw` (`0`), `pitch` (`0`), `roll` (`0`): the angles, in degrees.
+
 **A channel** (`[[channel]]`): one telegram link, listening or dialling.
 - `name` (required): the part's name.
 - `role` (required): `listen` (wait for the peer to connect) or `connect` (dial it).
@@ -1530,7 +1698,7 @@ its table's end, a type its table cannot hold, a value that does not parse) or t
 adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past
 its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name
 the standard refuses, a port not named `port-`) or the EtherCAT segment's (no device, two devices of
-one name, an entry of 0 bits, more than 255 entries a way), a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that
+one name, an entry of 0 bits, more than 255 entries a way), a scene file that cannot be read or does not load, a model whose scene, belt, sensor, mover or point is not there, a point of the other kind or written by two models, a ramp, a ratio, a stroke or a delay out of its range, a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that
 does not load against the catalog, a message the catalog lacks or whose fields leave a name
 unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the
 place named, before anything binds, opens or spawns. A part that cannot start (a port taken, a

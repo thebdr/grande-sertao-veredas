@@ -2,15 +2,15 @@
 
 A bench is the plant a consumer meets before the real one (`docs/veredas-plan.md`,
 "veredas-maquinar: the bench"): the log emitters, the OPC UA, Modbus and EtherNet/IP servers, the
-PROFINET devices, the emulated EtherCAT segments and the telegram channels it talks to, each
-configured, none programmed. One bench file lists them all by name, and the
+PROFINET devices, the emulated EtherCAT segments, the scenes and the models behind the devices'
+points, and the telegram channels it talks to, each configured, none programmed. One bench file lists them all by name, and the
 device's own files sit beside it: core's channel file (`docs/channel-schema.md`), the catalog
 (`docs/catalog-schema.md`) and, when a controller rides a channel, its rules file
 (`docs/controller-schema.md`). `veredas_maquinar::bench::load` reads the bench file and every
 file it points at and checks each part as its own module checks it, so a bench file that loads
 is a bench every part of which can start; `Bench::start` then runs every part behind one handle,
 emitters first, then servers (OPC UA, then Modbus, then EtherNet/IP), then PROFINET devices, then
-EtherCAT segments, then channels, each kind in the file's order
+EtherCAT segments, then scenes, then their models, then channels, each kind in the file's order
 (TOML groups a kind's tables under one key, so a file keeps no order across kinds), and the executable
 `veredas-maquinar <bench.toml>` runs it from the command line (`--check` reads, checks and
 prints the plan without starting anything). No device is named anywhere: a
@@ -169,6 +169,47 @@ devices = [
 ]
 ```
 
+## A sixth example: a conveyor line behind a Modbus server
+
+A controller's I/O on a Modbus server: it runs a conveyor at a setpoint, reads the conveyor's
+speed back, sees a light barrier across the belt, extends a pusher and reads its end switches.
+Behind the points stands the scene of `docs/cena-schema.md`'s worked example, saved beside the
+bench file as `line.cena.toml`: the conveyor's drive ramps at 100 units a second toward its
+setpoint and moves the belt 0.01 m/s for each unit (50 is the belt's 0.5 m/s), the barrier is
+normally closed (1 while the beam is clear), and the pusher takes half a second from one end to
+the other. `crates/veredas-maquinar/tests/reflexo.rs` runs this block with a Modbus client the
+bench did not write, as a controller would drive the line.
+
+```toml
+format = "veredas-bench"
+version = 1
+
+[[modbus]]
+name = "plc-io"
+port = 0
+points = [
+  { name = "conveyor_run", table = "coil", address = 0 },
+  { name = "conveyor_setpoint", table = "holding-register", address = 0, value = "50" },
+  { name = "conveyor_speed", table = "input-register", address = 0 },
+  { name = "conveyor_running", table = "discrete-input", address = 0 },
+  { name = "barrier", table = "discrete-input", address = 1 },
+  { name = "pusher_extend", table = "coil", address = 1 },
+  { name = "pusher_back", table = "discrete-input", address = 2 },
+  { name = "pusher_out", table = "discrete-input", address = 3 },
+]
+
+[[fisica]]
+name = "line"
+scene = "line.cena.toml"
+
+[[reflexo]]
+name = "line-models"
+scene = "line"
+conveyor = [ { name = "infeed", belt = "infeed", metres_per_unit = 0.01, run = "plc-io.conveyor_run", setpoint = "plc-io.conveyor_setpoint", accel = 100, decel = 100, speed = "plc-io.conveyor_speed", running = "plc-io.conveyor_running" } ]
+sensor = [ { name = "B1", sensor = "B1", point = "plc-io.barrier", normally_closed = true } ]
+actuator = [ { name = "pusher", mover = "pusher", extend = "plc-io.pusher_extend", retracted = { at = [3.5, -0.4, 0.95] }, extended = { at = [3.5, 0.25, 0.95] }, stroke_ms = 500, retracted_switch = "plc-io.pusher_back", extended_switch = "plc-io.pusher_out" } ]
+```
+
 ## Keys
 
 Each key states in parentheses that it is required, or the value it takes when left out. Every
@@ -189,6 +230,8 @@ relative to the bench file's folder.
 - `ethernetip` (none): `[[ethernetip]]` tables.
 - `profinet` (none): `[[profinet]]` tables.
 - `ethercat` (none): `[[ethercat]]` tables.
+- `fisica` (none): `[[fisica]]` tables.
+- `reflexo` (none): `[[reflexo]]` tables.
 - `channel` (none): `[[channel]]` tables.
 
 **An emitter** (`[[emitter]]`): a log a plant would write, line by line into rotating files.
@@ -389,6 +432,66 @@ and sent back; functional, never exact in time.
 - `index` (required), `subindex` (required): the object the entry maps.
 - `bits` (required): its size, 1 to 64.
 
+**A scene** (`[[fisica]]`): a plant's scene (`docs/cena-schema.md`), its bodies moved in real time
+at its step.
+- `name` (required): the part's name.
+- `scene` (required): the path of the scene file.
+
+**Its models** (`[[reflexo]]`): ready-made models making a device's points behave as the machine
+behind them. A point is named `<part>.<point>`, a point of a Modbus server or an EtherNet/IP
+adapter of the file; a bool point carries 0 or 1, a number is converted to the point's type (an
+integer rounded and held to its range). The models step together before each step of their scene,
+in this order: drives, conveyors, actuators, sensors; without a scene (drives alone) every 4 ms.
+A point is written by one model at most.
+- `name` (required): the part's name.
+- `scene` (none): the `[[fisica]]` part whose scene the models move; conveyors, sensors and
+  actuators need one.
+- `drive` (none), `conveyor` (none), `sensor` (none), `actuator` (none): the models, as inline
+  tables.
+
+**A drive** (an entry of `drive`): a speed ramped toward a setpoint while it runs, in the drive's
+own unit.
+- `name` (required): the model's name, unique in its part.
+- `run` (required): a bool point read, run while 1.
+- `setpoint` (required): a number point read, the speed wanted.
+- `reverse` (none): a bool point read, the setpoint negated while 1.
+- `accel` (required), `decel` (required): units a second the speed gains away from 0, and loses
+  toward 0 or a smaller setpoint; over 0. Through 0 when the sign changes; the setpoint landed on
+  exactly.
+- `tolerance` (`0`): how near the setpoint the speed counts as at it.
+- `speed` (none): a number point written, the speed.
+- `running` (none): a bool point written, 1 while the speed is not 0.
+- `at_speed` (none): a bool point written, 1 while running within the tolerance of the setpoint.
+
+**A conveyor** (an entry of `conveyor`): a drive whose speed moves a belt of the scene.
+- `name` (required), `run` (required), `setpoint` (required): as a drive's.
+- `reverse` (none), `accel` (required), `decel` (required), `tolerance` (`0`): as a drive's.
+- `speed` (none), `running` (none), `at_speed` (none): as a drive's.
+- `belt` (required): the scene's belt.
+- `metres_per_unit` (required): the belt's surface speed in m/s for one unit of the drive's speed,
+  not 0; the belt's speed held to the scene's 100 m/s.
+
+**A sensor model** (an entry of `sensor`): a scene sensor reported on a point.
+- `name` (required): the model's name.
+- `sensor` (required): the scene's sensor.
+- `point` (required): a bool point written, 1 while a body or a mover is inside.
+- `normally_closed` (`false`): the point 0 while something is inside, 1 while it is empty.
+- `on_delay_ms` (`0`), `off_delay_ms` (`0`): how long the scene's sensor stays occupied, or empty,
+  before the point says so, up to 600000; the first step at or after the delay.
+
+**An actuator** (an entry of `actuator`): a cylinder moving a mover of the scene between two poses.
+- `name` (required): the model's name.
+- `mover` (required): the scene's mover.
+- `extend` (required): a bool point read, extend while 1, retract while 0.
+- `retracted` (required), `extended` (required): its two poses.
+- `stroke_ms` (required): the time from one end to the other, 1 to 600000; the mover moves along
+  the straight line between the poses at an even speed, its angles with it.
+- `retracted_switch` (none), `extended_switch` (none): bool points written, 1 at that end.
+
+**A pose** (`retracted`, `extended`): as a scene file states one.
+- `at` (required): the centre, in metres.
+- `yaw` (`0`), `pitch` (`0`), `roll` (`0`): the angles, in degrees.
+
 **A channel** (`[[channel]]`): one telegram link, listening or dialling.
 - `name` (required): the part's name.
 - `role` (required): `listen` (wait for the peer to connect) or `connect` (dial it).
@@ -416,7 +519,7 @@ its table's end, a type its table cannot hold, a value that does not parse) or t
 adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past
 its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name
 the standard refuses, a port not named `port-`) or the EtherCAT segment's (no device, two devices of
-one name, an entry of 0 bits, more than 255 entries a way), a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that
+one name, an entry of 0 bits, more than 255 entries a way), a scene file that cannot be read or does not load, a model whose scene, belt, sensor, mover or point is not there, a point of the other kind or written by two models, a ramp, a ratio, a stroke or a delay out of its range, a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that
 does not load against the catalog, a message the catalog lacks or whose fields leave a name
 unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the
 place named, before anything binds, opens or spawns. A part that cannot start (a port taken, a

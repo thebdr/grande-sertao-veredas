@@ -306,7 +306,7 @@ fn check_box(place: &str, size: [f64; 3], at: [f64; 3], angles: [f64; 3]) -> Res
     check_pose(place, at, angles)
 }
 
-pub(super) fn check_pose(place: &str, at: [f64; 3], angles: [f64; 3]) -> Result<(), FisicaError> {
+pub(crate) fn check_pose(place: &str, at: [f64; 3], angles: [f64; 3]) -> Result<(), FisicaError> {
     if at.iter().any(|a| !a.is_finite() || a.abs() > MAX_LENGTH) {
         return Err(invalid(format!("{place}.at: {at:?} m, each coordinate within {MAX_LENGTH} of the origin")));
     }
