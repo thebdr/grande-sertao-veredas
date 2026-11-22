@@ -12,7 +12,7 @@
 //! [`to_string_displaced`](super::stringify::to_string_displaced) and parsing
 //! it back in the cell's new place, without the writing and the parsing.
 
-use super::stringify::{displace_coordinates, DisplaceData};
+use super::stringify::{displace_coordinates, shrink_range, DisplaceData};
 use super::Node;
 use crate::constants::{LAST_COLUMN, LAST_ROW};
 use crate::expressions::token::Error;
@@ -59,14 +59,47 @@ impl Displacement<'_> {
         full_row: bool,
         full_column: bool,
     ) -> Option<Displaced> {
-        let absolute = (
+        let absolute = self.absolute(absolute_row, absolute_column, row, column);
+        match self.place(
+            sheet_index,
+            absolute_row,
+            absolute_column,
+            absolute,
+            full_row,
+            full_column,
+        ) {
+            Displaced::At {
+                row: new_row,
+                column: new_column,
+            } if new_row == row && new_column == column => None,
+            displaced => Some(displaced),
+        }
+    }
+
+    /// Where a reference stored as `(row, column)` points, in absolute terms (relative parts
+    /// counted from where the cell was).
+    fn absolute(&self, absolute_row: bool, absolute_column: bool, row: i32, column: i32) -> (i32, i32) {
+        (
             if absolute_row { row } else { row + self.from.0 },
             if absolute_column {
                 column
             } else {
                 column + self.from.1
             },
-        );
+        )
+    }
+
+    /// A reference to the cell at `absolute` after the displacement, stored as the cell where it is
+    /// now keeps it (relative parts counted from there), or gone.
+    fn place(
+        &self,
+        sheet_index: Option<u32>,
+        absolute_row: bool,
+        absolute_column: bool,
+        absolute: (i32, i32),
+        full_row: bool,
+        full_column: bool,
+    ) -> Displaced {
         let moved = match sheet_index {
             Some(sheet_index) => displace_coordinates(
                 sheet_index,
@@ -80,7 +113,7 @@ impl Displacement<'_> {
             None => Some(absolute),
         };
         let Some((mut new_row, mut new_column)) = moved else {
-            return Some(Displaced::Gone);
+            return Displaced::Gone;
         };
         // The rows of `A:A` and the columns of `3:3` are not written out, so
         // nothing that happens to them shows: they stay what they are.
@@ -91,7 +124,7 @@ impl Displacement<'_> {
             new_column = absolute.1;
         }
         if !(1..=LAST_ROW).contains(&new_row) || !(1..=LAST_COLUMN).contains(&new_column) {
-            return Some(Displaced::Gone);
+            return Displaced::Gone;
         }
         let new_row = if absolute_row {
             new_row
@@ -103,13 +136,9 @@ impl Displacement<'_> {
         } else {
             new_column - self.to.1
         };
-        if new_row == row && new_column == column {
-            None
-        } else {
-            Some(Displaced::At {
-                row: new_row,
-                column: new_column,
-            })
+        Displaced::At {
+            row: new_row,
+            column: new_column,
         }
     }
 }
@@ -156,9 +185,10 @@ impl Displacement<'_> {
 /// The formula after the displacement, or `None` if it is unchanged. Only
 /// references change: the rest of the formula is copied as it is.
 ///
-/// A reference to a deleted cell becomes `#REF!`; a range with a deleted end
-/// becomes the range operator on what is left, `#REF!:B4`, as it is when the
-/// formula is written out and read back.
+/// A reference to a deleted cell becomes `#REF!`; a range that deleted rows or
+/// columns cut into shrinks to what is left of it, as Excel does, and is
+/// `#REF!` when nothing is (`shrink_range`); a range with an end pushed off the
+/// sheet becomes the range operator on what is left, `#REF!:B4`.
 pub(crate) fn displaced_node(node: &Node, displacement: &Displacement) -> Option<Node> {
     use Node::*;
     match node {
@@ -235,27 +265,41 @@ pub(crate) fn displaced_node(node: &Node, displacement: &Displacement) -> Option
             let full_row = *absolute_row1 && *absolute_row2 && *row1 == 1 && *row2 == LAST_ROW;
             let full_column =
                 *absolute_column1 && *absolute_column2 && *column1 == 1 && *column2 == LAST_COLUMN;
-            let first = displacement.reference(
+            // deleted rows or columns that cut into the range shrink it, as Excel does; a range
+            // deleted whole is `#REF!` (`shrink_range`)
+            let Some((first, second)) = shrink_range(
+                *sheet_index,
+                displacement.absolute(*absolute_row1, *absolute_column1, *row1, *column1),
+                displacement.absolute(*absolute_row2, *absolute_column2, *row2, *column2),
+                full_row,
+                full_column,
+                displacement.data,
+            ) else {
+                return Some(ErrorKind(Error::REF));
+            };
+            let first = displacement.place(
                 Some(*sheet_index),
                 *absolute_row1,
                 *absolute_column1,
-                *row1,
-                *column1,
+                first,
                 full_row,
                 full_column,
             );
-            let second = displacement.reference(
+            let second = displacement.place(
                 Some(*sheet_index),
                 *absolute_row2,
                 *absolute_column2,
-                *row2,
-                *column2,
+                second,
                 full_row,
                 full_column,
             );
-            if first.is_none() && second.is_none() {
+            let unchanged = |d: &Displaced, r: i32, c: i32| {
+                matches!(d, Displaced::At { row, column } if *row == r && *column == c)
+            };
+            if unchanged(&first, *row1, *column1) && unchanged(&second, *row2, *column2) {
                 return None;
             }
+            let (first, second) = (Some(first), Some(second));
             let (row1, column1) = match first {
                 Some(Displaced::At { row, column }) => (row, column),
                 _ => (*row1, *column1),

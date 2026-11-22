@@ -195,9 +195,49 @@ fn test_delete_columns() {
     // A long as the borders of the range are not included that's ok.
     assert_eq!(model._get_formula("A2"), *"=SUM(C4:K4)");
 
-    // FIXME: In Excel this would be (lower limit won't change)
-    // assert_eq!(model._get_formula("A3"), *"=SUM(E4:K4)");
-    assert_eq!(model._get_formula("A3"), *"=SUM(#REF!:K4)");
+    // A range whose first column is deleted shrinks to what is left of it, as in Excel: E4:M4
+    // loses E, and F to M are now D to K
+    assert_eq!(model._get_formula("A3"), *"=SUM(D4:K4)");
+}
+
+#[test]
+fn deleted_rows_and_columns_shrink_the_ranges_they_cut_as_excel_does() {
+    let mut model = new_empty_model();
+    for row in 1..=6 {
+        model._set(&format!("A{row}"), &row.to_string());
+    }
+    model._set("C1", "=SUM(A1:A3)");
+    model._set("C2", "=SUM(A3:A6)");
+    model._set("D1", "=SUM(A3:A4)");
+    model._set("D2", "=SUM($A$2:$A$5)");
+    model.evaluate();
+    // rows 3 and 4 deleted: the last end of A1:A3 falls in them, the first of A3:A6, the whole
+    // of A3:A4; $A$2:$A$5 spans them and shrinks by two
+    model.delete_rows(0, 3, 2).unwrap();
+    model.evaluate();
+    assert_eq!(model._get_formula("C1"), *"=SUM(A1:A2)");
+    assert_eq!(model._get_text("C1"), *"3");
+    assert_eq!(model._get_formula("C2"), *"=SUM(A3:A4)");
+    assert_eq!(model._get_text("C2"), *"11");
+    assert_eq!(model._get_formula("D1"), *"=SUM(#REF!)");
+    assert_eq!(model._get_text("D1"), *"#REF!");
+    assert_eq!(model._get_formula("D2"), *"=SUM($A$2:$A$3)");
+    assert_eq!(model._get_text("D2"), *"7");
+
+    // columns: B to D deleted, a range ending in them and one starting in them
+    let mut model = new_empty_model();
+    model._set("A1", "1");
+    model._set("E1", "5");
+    model._set("F1", "6");
+    model._set("A3", "=SUM(A1:C1)");
+    model._set("A4", "=SUM(C1:F1)");
+    model.evaluate();
+    model.delete_columns(0, 2, 3).unwrap();
+    model.evaluate();
+    assert_eq!(model._get_formula("A3"), *"=SUM(A1:A1)");
+    assert_eq!(model._get_text("A3"), *"1");
+    assert_eq!(model._get_formula("A4"), *"=SUM(B1:C1)");
+    assert_eq!(model._get_text("A4"), *"11");
 }
 
 #[test]

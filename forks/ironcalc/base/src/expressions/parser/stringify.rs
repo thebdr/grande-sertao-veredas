@@ -384,6 +384,57 @@ pub(crate) fn displace_coordinates(
     Some((row, column))
 }
 
+/// The two ends of a range, `(row, column)` in absolute terms, once rows or columns that cut into
+/// it are deleted, as Excel does it: an end inside the deleted rows (columns) moves to the edge of
+/// what is left of the range, the first end to the first row after the deleted ones, the last end
+/// to the last row before them, so `SUM(A1:A3)` with row 3 deleted is `SUM(A1:A2)` and with rows 1
+/// to 2 deleted `SUM(A1)`'s range `A1:A1`. `None` when every row (column) of the range is deleted:
+/// the whole range is `#REF!`. Any other displacement leaves the ends as they are; they are then
+/// displaced one by one ([`displace_coordinates`]).
+pub(crate) fn shrink_range(
+    sheet_index: u32,
+    first: (i32, i32),
+    second: (i32, i32),
+    full_row: bool,
+    full_column: bool,
+    displace_data: &DisplaceData,
+) -> Option<((i32, i32), (i32, i32))> {
+    let (mut first, mut second) = (first, second);
+    let cut = |a: &mut i32, b: &mut i32, start: i32, end: i32| -> bool {
+        let (lo, hi) = if *a <= *b { (a, b) } else { (b, a) };
+        if *lo >= start && *hi <= end {
+            return false;
+        }
+        if (start..=end).contains(lo) {
+            *lo = end + 1;
+        }
+        if (start..=end).contains(hi) {
+            *hi = start - 1;
+        }
+        true
+    };
+    match displace_data {
+        DisplaceData::Row { sheet, row, delta }
+            if *sheet == sheet_index && *delta < 0 && !full_row =>
+        {
+            if !cut(&mut first.0, &mut second.0, *row, *row - *delta - 1) {
+                return None;
+            }
+        }
+        DisplaceData::Column {
+            sheet,
+            column,
+            delta,
+        } if *sheet == sheet_index && *delta < 0 && !full_column => {
+            if !cut(&mut first.1, &mut second.1, *column, *column - *delta - 1) {
+                return None;
+            }
+        }
+        _ => {}
+    }
+    Some((first, second))
+}
+
 /// Converts a local reference to a string applying some displacement if needed.
 /// It uses A1 style if context is not None. If context is None it uses R1C1 style
 /// If full_row is true then the row details will be omitted in the A1 case
@@ -694,14 +745,54 @@ fn stringify(
                 && *absolute_column2
                 && (*column1 == 1)
                 && (*column2 == LAST_COLUMN);
+            // deleted rows or columns that cut into the range shrink it (`shrink_range`)
+            let (mut row1, mut column1, mut row2, mut column2) = (*row1, *column1, *row2, *column2);
+            if let Some(context) = context {
+                let absolute = |is_absolute: bool, v: i32, origin: i32| {
+                    if is_absolute {
+                        v
+                    } else {
+                        v + origin
+                    }
+                };
+                let stored = |is_absolute: bool, v: i32, origin: i32| {
+                    if is_absolute {
+                        v
+                    } else {
+                        v - origin
+                    }
+                };
+                let first = (
+                    absolute(*absolute_row1, row1, context.row),
+                    absolute(*absolute_column1, column1, context.column),
+                );
+                let second = (
+                    absolute(*absolute_row2, row2, context.row),
+                    absolute(*absolute_column2, column2, context.column),
+                );
+                let Some((first, second)) = shrink_range(
+                    *sheet_index,
+                    first,
+                    second,
+                    full_row,
+                    full_column,
+                    displace_data,
+                ) else {
+                    return "#REF!".to_string();
+                };
+                row1 = stored(*absolute_row1, first.0, context.row);
+                column1 = stored(*absolute_column1, first.1, context.column);
+                row2 = stored(*absolute_row2, second.0, context.row);
+                column2 = stored(*absolute_column2, second.1, context.column);
+            }
             let s1 = stringify_reference(
                 context,
                 displace_data,
                 &Reference {
                     sheet_name,
                     sheet_index: *sheet_index,
-                    row: *row1,
-                    column: *column1,
+                    row: row1,
+                    column: column1,
                     absolute_row: *absolute_row1,
                     absolute_column: *absolute_column1,
                 },
@@ -714,8 +805,8 @@ fn stringify(
                 &Reference {
                     sheet_name: &None,
                     sheet_index: *sheet_index,
-                    row: *row2,
-                    column: *column2,
+                    row: row2,
+                    column: column2,
                     absolute_row: *absolute_row2,
                     absolute_column: *absolute_column2,
                 },

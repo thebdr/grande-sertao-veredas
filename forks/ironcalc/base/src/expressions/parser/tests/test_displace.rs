@@ -178,11 +178,13 @@ fn agrees_with_writing_out_and_parsing_back() {
                 let text =
                     to_string_displaced(&node, &reference(from.0, from.1), &data, locale, language);
                 if text.contains("#REF!:") || text.contains(":#REF!") {
-                    // A range with a deleted end is where the two part ways,
-                    // by design: written out, `Sheet2!A1:B5` loses its sheet
-                    // (`#REF!:B4`), `$A$3:#REF!` and `#REF!:A` do not parse
-                    // back at all. Displaced in place it is the range operator
-                    // on what is left. See `ranges_with_a_deleted_end`.
+                    // A range with an end pushed off the sheet is where the
+                    // two part ways, by design: written out, `Sheet2!A1:B5`
+                    // loses its sheet (`#REF!:B4`), `$A$3:#REF!` and `#REF!:A`
+                    // do not parse back at all. Displaced in place it is the
+                    // range operator on what is left. A range deleted rows or
+                    // columns cut into shrinks in both (fork change 17, see
+                    // `ranges_with_a_deleted_end`).
                     continue;
                 }
                 let expected = parser.parse(&text, &reference(to.0, to.1));
@@ -271,12 +273,14 @@ fn deleted_references_become_ref_errors() {
     let node = parser.parse("A2*2", &reference(5, 3));
     let displaced = displaced_node(&node, &displacement).unwrap();
     assert_eq!(to_rc_format(&displaced), "#REF!*2");
+    // a range with its last end deleted shrinks to what is left, as Excel does; one deleted whole
+    // is `#REF!`
     let node = parser.parse("SUM(A1:A3)", &reference(5, 3));
     let displaced = displaced_node(&node, &displacement).unwrap();
-    assert_eq!(to_rc_format(&displaced), "SUM(R[-2]C[-2]:#REF!)");
+    assert_eq!(to_rc_format(&displaced), "SUM(R[-2]C[-2]:R[-2]C[-2])");
     let node = parser.parse("SUM(A2:A3)", &reference(5, 3));
     let displaced = displaced_node(&node, &displacement).unwrap();
-    assert_eq!(to_rc_format(&displaced), "SUM(#REF!:#REF!)");
+    assert_eq!(to_rc_format(&displaced), "SUM(#REF!)");
 }
 
 #[test]
@@ -297,15 +301,17 @@ fn ranges_with_a_deleted_end() {
         from: (5, 3),
         to: (4, 3),
     };
+    // (fork change 17: the range shrinks to what is left of it, as Excel does, written out and
+    // displaced in place alike)
     let node = parser.parse("SUM(A2:A3)", &reference(5, 3));
     let text = to_string_displaced(&node, &reference(5, 3), &data, locale, language);
-    assert_eq!(text, "SUM(#REF!:A2)");
+    assert_eq!(text, "SUM(A2:A2)");
     let expected = parser.parse(&text, &reference(4, 3));
     let displaced = displaced_node(&node, &displacement).unwrap();
     assert_eq!(to_rc_format(&displaced), to_rc_format(&expected));
-    assert_eq!(to_rc_format(&displaced), "SUM(#REF!:R[-2]C[-2])");
+    assert_eq!(to_rc_format(&displaced), "SUM(R[-2]C[-2]:R[-2]C[-2])");
 
-    // An absolute end: written out it did not parse back
+    // An absolute end: the range keeps the columns before the deleted one
     let data = DisplaceData::Column {
         sheet: 0,
         column: 2,
@@ -317,10 +323,12 @@ fn ranges_with_a_deleted_end() {
         to: (5, 2),
     };
     let node = parser.parse("SUM($A$3:$B$10)", &reference(5, 3));
+    let text = to_string_displaced(&node, &reference(5, 3), &data, locale, language);
+    assert_eq!(text, "SUM($A$3:$A$10)");
     let displaced = displaced_node(&node, &displacement).unwrap();
-    assert_eq!(to_rc_format(&displaced), "SUM(R3C1:#REF!)");
+    assert_eq!(to_rc_format(&displaced), "SUM(R3C1:R10C1)");
 
-    // On another sheet: written out the surviving end lost its sheet
+    // On another sheet: the range keeps its sheet and what is left of its rows
     let data = DisplaceData::Row {
         sheet: 1,
         row: 1,
@@ -332,8 +340,11 @@ fn ranges_with_a_deleted_end() {
         to: (5, 3),
     };
     let node = parser.parse("SUM(Sheet2!A1:B5)", &reference(5, 3));
+    let text = to_string_displaced(&node, &reference(5, 3), &data, locale, language);
+    assert_eq!(text, "SUM(Sheet2!A1:B4)");
+    let expected = parser.parse(&text, &reference(5, 3));
     let displaced = displaced_node(&node, &displacement).unwrap();
-    assert_eq!(to_rc_format(&displaced), "SUM(#REF!:Sheet2!R[-1]C[-1])");
+    assert_eq!(to_rc_format(&displaced), to_rc_format(&expected));
 }
 
 #[test]
