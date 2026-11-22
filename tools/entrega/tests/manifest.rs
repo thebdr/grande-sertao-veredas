@@ -695,6 +695,44 @@ fn the_folder_is_judged_whole_and_a_shallow_clone_refused() {
 }
 
 #[test]
+fn a_repository_at_an_odd_path_a_root_that_does_not_parse_and_braces_in_the_scratch_path() {
+    // A repository whose path ends in a space: its releases are found and judged.
+    let r = suite();
+    let c = r.commit("the suite");
+    r.write("releases/2.0.0.toml", &matching("2.0.0", &c).replace("version = \"2.1.0\"", "version = \"9.9.9\""));
+    r.commit("a false release");
+    let holder = tempfile::tempdir().unwrap();
+    let odd = holder.path().join("b ");
+    let clone = Command::new("git").args(["clone", "-q"]).arg(r.path()).arg(&odd).output().unwrap();
+    assert!(clone.status.success());
+    let out = Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").current_dir(&odd).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8(out.stderr).unwrap(),
+        format!("{}: veredas-maquinar is 2.1.0 at {c}, not 9.9.9\n", odd.canonicalize().unwrap().join("releases/2.0.0.toml").display())
+    );
+    // A root manifest that does not parse: cargo's reason, not "no workspace".
+    let r = suite();
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"tools/ferramenta\", \"crates/*\"\n");
+    let c = r.commit("a root manifest that does not parse");
+    let mut refusals = Vec::new();
+    assert!(manifest::components_at(r.path(), &c, &mut refusals).unwrap().is_empty());
+    assert_eq!(refusals.len(), 1);
+    assert!(refusals[0].starts_with(&format!("commit {c}: cargo cannot read its workspace: ")), "{refusals:?}");
+    assert!(!refusals[0].contains("no workspace"), "{refusals:?}");
+    // Braces and `]` in the scratch folder's path are no pattern to cargo: the members are found.
+    let r = suite();
+    let c = r.commit("the suite");
+    for name in ["k{1}", "k]1", "k}1"] {
+        let parent = holder.path().join(name);
+        std::fs::create_dir_all(&parent).unwrap();
+        let mut refusals = Vec::new();
+        let held = manifest::components_at_in(r.path(), &c, &parent, &mut refusals).unwrap();
+        assert_eq!((held.len(), refusals), (3, Vec::<String>::new()), "{name}");
+    }
+}
+
+#[test]
 fn an_annotated_tags_id_is_no_commit() {
     let r = suite();
     let c = r.commit("the suite");

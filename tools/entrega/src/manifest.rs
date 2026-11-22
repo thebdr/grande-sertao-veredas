@@ -222,12 +222,13 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
     use std::process::{Command, Stdio};
     let mut held = BTreeMap::new();
     // Cargo reads a workspace's member globs against the root's absolute path unescaped: a glob
-    // character in that path changes which members it finds. The path is judged absolute, as cargo
+    // character in that path (`*`, `?` or `[`; braces are no pattern to it) changes which members
+    // it finds. The path is judged absolute, as cargo
     // will see it.
     // Canonical, links and `..` resolved as the kernel resolves them: cargo removes a `..` without
     // following the link before it, and would look elsewhere than where the tree was written.
     let parent = parent.canonicalize()?;
-    if parent.to_string_lossy().contains(['*', '?', '[', ']', '{', '}']) {
+    if parent.to_string_lossy().contains(['*', '?', '[']) {
         refusals.push(format!("the scratch folder's parent {} holds a glob character cargo would read as a pattern", parent.display()));
         return Ok(held);
     }
@@ -250,7 +251,8 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
         let Ok(root_manifest) = String::from_utf8(std::fs::read(tree.join("Cargo.toml"))?) else {
             return Ok(Some(format!("commit {commit}: its Cargo.toml is not UTF-8")));
         };
-        if !toml::from_str::<toml::Table>(&root_manifest).is_ok_and(|t| t.contains_key("workspace")) {
+        // A manifest that does not parse goes to cargo, which stops on it with its own reason.
+        if toml::from_str::<toml::Table>(&root_manifest).is_ok_and(|t| !t.contains_key("workspace")) {
             return Ok(Some(format!("commit {commit}: its Cargo.toml is no workspace (`[workspace]`): cargo would look for one above the tree")));
         }
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());

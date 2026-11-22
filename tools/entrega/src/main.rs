@@ -41,11 +41,20 @@ fn main() {
     }
 }
 
-/// The repository the current folder is in, or the reason it is none.
+/// The repository the current folder is in, or the reason it is none: git's answer taken as bytes,
+/// only its final line break dropped (a path may end in a space or not be UTF-8), and refused
+/// unless it is a folder.
 fn repository() -> Result<PathBuf, String> {
+    use std::os::unix::ffi::OsStrExt;
     let here = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    match git::text(&here, &["rev-parse", "--show-toplevel"]) {
-        Ok(Some(t)) => Ok(PathBuf::from(t.trim())),
+    match git::run(&here, &["rev-parse", "--show-toplevel"]) {
+        Ok(Some(mut bytes)) => {
+            if bytes.last() == Some(&b'\n') {
+                bytes.pop();
+            }
+            let root = PathBuf::from(std::ffi::OsStr::from_bytes(&bytes));
+            if root.is_dir() { Ok(root) } else { Err(format!("{}: git names a repository root that is no folder", root.display())) }
+        }
         Ok(None) => Err(format!("{}: not inside a git repository", here.display())),
         Err(e) => Err(e.to_string()),
     }
