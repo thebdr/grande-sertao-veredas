@@ -92,7 +92,7 @@ impl Color {
     }
 }
 
-#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone)]
 pub struct Metadata {
     pub application: String,
     pub app_version: String,
@@ -102,7 +102,7 @@ pub struct Metadata {
     pub last_modified: String, //"2020-11-20T16:24:35"
 }
 
-#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone)]
 pub struct WorkbookSettings {
     pub tz: String,
     pub locale: String,
@@ -129,7 +129,7 @@ pub struct Workbook {
 /// Hidden names are not shown in the UI (name manager, name box), but still
 /// resolve in formulas; see `hidden` in 18.2.5 definedName (Defined Name) of
 /// the OOXML spec.
-#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone)]
 pub struct DefinedName {
     pub name: String,
     pub formula: String,
@@ -142,7 +142,7 @@ pub struct DefinedName {
 /// * state:
 ///   18.18.68 ST_SheetState (Sheet Visibility Types)
 ///   hidden, veryHidden, visible
-#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone)]
 pub enum SheetState {
     Visible,
     Hidden,
@@ -253,7 +253,7 @@ pub struct Worksheet {
 pub use crate::sheet_data::SheetData;
 
 // ECMA-376-1:2016 section 18.3.1.73
-#[derive(Encode, Decode, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Clone)]
 pub struct Row {
     /// Row index
     pub r: i32,
@@ -265,7 +265,7 @@ pub struct Row {
 }
 
 // ECMA-376-1:2016 section 18.3.1.13
-#[derive(Encode, Decode, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Clone)]
 pub struct Col {
     // Column definitions are defined on ranges, unlike rows which store unique, per-row entries.
     /// First column affected by this record. Settings apply to column in \[min, max\] range.
@@ -405,7 +405,7 @@ impl Default for Cell {
     }
 }
 
-#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone)]
 pub struct Comment {
     pub text: String,
     pub author_name: String,
@@ -414,7 +414,7 @@ pub struct Comment {
 }
 
 // ECMA-376-1:2016 section 18.5.1.2
-#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone)]
 pub struct Table {
     pub name: String,
     pub display_name: String,
@@ -432,7 +432,7 @@ pub struct Table {
 
 // totals_row_label vs totals_row_function might be mutually exclusive. Use an enum?
 // the totals_row_function is an enum not String methinks
-#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone)]
 pub struct TableColumn {
     pub id: u32,
     pub name: String,
@@ -457,7 +457,7 @@ impl Default for TableColumn {
     }
 }
 
-#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone, Default)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone, Default)]
 pub struct TableStyleInfo {
     pub name: Option<String>,
     pub show_first_column: bool,
@@ -496,7 +496,7 @@ pub struct Dxf {
     pub alignment: Option<Alignment>,
 }
 
-#[derive(Encode, Decode, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Clone)]
 pub struct Styles {
     pub num_fmts: Vec<NumFmt>,
     pub fonts: Vec<Font>,
@@ -719,7 +719,7 @@ pub struct Alignment {
     pub wrap_text: bool,
 }
 
-#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone)]
 pub struct CellStyleXfs {
     pub num_fmt_id: i32,
     pub font_id: i32,
@@ -779,7 +779,7 @@ impl Default for StyleIncludes {
     }
 }
 
-#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone, Default)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone, Default)]
 pub struct CellXfs {
     pub xf_id: i32,
     pub num_fmt_id: i32,
@@ -796,7 +796,7 @@ pub struct CellXfs {
     pub alignment: Option<Alignment>,
 }
 
-#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone)]
 pub struct CellStyles {
     pub name: String,
     pub xf_id: i32,

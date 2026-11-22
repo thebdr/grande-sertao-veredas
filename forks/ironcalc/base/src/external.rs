@@ -26,13 +26,14 @@
 use std::collections::{BTreeSet, HashMap};
 
 use bitcode::{Decode, Encode};
+use serde::{Deserialize, Serialize};
 
 use crate::constants::{LAST_COLUMN, LAST_ROW};
 use crate::expressions::parser::Node;
 use crate::expressions::token::Error;
 
 /// The value an external cell holds.
-#[derive(Encode, Decode, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Clone)]
 pub enum ExternalValue {
     Number(f64),
     String(String),
@@ -42,16 +43,46 @@ pub enum ExternalValue {
 
 /// One sheet of an external book: its name and the cells the file carries a
 /// value for, keyed by `(row, column)`, both 1-based.
-#[derive(Encode, Decode, Debug, PartialEq, Clone, Default)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Clone, Default)]
 pub struct ExternalSheet {
     pub name: String,
+    /// Serialized as a list of `[row, column, value]` (JSON keys are strings),
+    /// sorted by row then column so the text is stable.
+    #[serde(with = "cell_map")]
     pub cells: HashMap<(i32, i32), ExternalValue>,
+}
+
+/// Serde for a `(row, column)`-keyed cell map: a sorted list of
+/// `[row, column, value]` triples.
+pub mod cell_map {
+    use std::collections::HashMap;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::ExternalValue;
+
+    pub fn serialize<S: Serializer>(
+        map: &HashMap<(i32, i32), ExternalValue>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mut entries: Vec<(i32, i32, &ExternalValue)> =
+            map.iter().map(|(&(r, c), v)| (r, c, v)).collect();
+        entries.sort_by_key(|&(r, c, _)| (r, c));
+        entries.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<HashMap<(i32, i32), ExternalValue>, D::Error> {
+        let entries = Vec::<(i32, i32, ExternalValue)>::deserialize(deserializer)?;
+        Ok(entries.into_iter().map(|(r, c, v)| ((r, c), v)).collect())
+    }
 }
 
 /// A defined name of an external book, kept as the file spells it so that it
 /// survives a save. Formulas cannot use it yet (`[1]Book!Name` is a parse
 /// error).
-#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone)]
 pub struct ExternalDefinedName {
     pub name: String,
     /// The `refersTo` attribute, verbatim.
@@ -62,7 +93,7 @@ pub struct ExternalDefinedName {
 }
 
 /// Another workbook this one references.
-#[derive(Encode, Decode, Debug, PartialEq, Clone, Default)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Clone, Default)]
 pub struct ExternalBook {
     /// The link target as the file spells it: a path relative to the
     /// workbook's folder (`Linked_01.xlsx`), an absolute path,
@@ -421,5 +452,24 @@ mod tests {
             ExternalLookup::NotAvailable
         );
         assert_eq!(none.strategy(), "host");
+    }
+
+    #[test]
+    fn an_external_book_round_trips_through_json_with_sorted_cells() {
+        let books = books();
+        let json = serde_json::to_string(&books).unwrap();
+        let back: Vec<ExternalBook> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, books);
+        // the (row, column) map is a sorted list of [row, column, value]
+        let mut sheet = ExternalSheet {
+            name: "S".to_string(),
+            cells: HashMap::new(),
+        };
+        sheet.cells.insert((2, 1), ExternalValue::Number(2.0));
+        sheet.cells.insert((1, 3), ExternalValue::String("a".to_string()));
+        assert_eq!(
+            serde_json::to_string(&sheet).unwrap(),
+            r#"{"name":"S","cells":[[1,3,{"String":"a"}],[2,1,{"Number":2.0}]]}"#
+        );
     }
 }
