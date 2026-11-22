@@ -1,0 +1,51 @@
+# A suite release (docs/entrega-plan.md), written by `entrega cut`.
+format = "veredas-release"
+version = 1
+release = "2.0.0-alpha.1"
+commit = "d74be940d51a4510e353ccd91303fb3691080462"
+target = "x86_64-unknown-linux-gnu"
+toolchain = "rustc 1.100.0 (0ef1bc386 2026-11-09)"
+
+[[component]]
+name = "orcl-runtime"
+version = "2.0.0-alpha.1"
+
+[[component]]
+name = "orcl-std"
+version = "2.0.0-alpha.1"
+
+[[component]]
+name = "veredas-aranha"
+version = "2.0.0-alpha.1"
+
+[[component]]
+name = "veredas-comissionador"
+version = "2.0.0-alpha.1"
+bins = ["veredas-comissionador"]
+
+[[component]]
+name = "veredas-controlador"
+version = "2.0.0-alpha.1"
+
+[[component]]
+name = "veredas-core"
+version = "2.0.0-alpha.1"
+
+[[component]]
+name = "veredas-maquinar"
+version = "2.0.0-alpha.1"
+bins = ["veredas-maquinar"]
+
+[[component]]
+name = "veredas-portal"
+version = "2.0.0-alpha.1"
+bins = ["veredas-portal"]
+
+[[component]]
+name = "veredas-supervisao"
+version = "2.0.0-alpha.1"
+bins = ["veredas-supervisao"]
+
+[tested]
+suite = "cargo nextest run --workspace"
+together = "the bundle's bench and supervisão on its plant"
