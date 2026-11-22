@@ -82,7 +82,8 @@ A Rust workspace; each component is a crate with a version of its own. Read this
   `cargo nextest run --workspace -E 'rdeps(veredas-<nome>) | package(leis)'` (for core, the whole
   suite); the orchestrator runs the whole suite on `main` as pushes land. A run that holds
   maquinar's or supervisão's tests (they measure time and drive browsers) goes one at a time on
-  the machine: `flock /tmp/veredas-suite.lock cargo nextest run ...` (the lock keeps the exit code).
+  the machine, built first so the lock is held for the tests alone: the command with `--no-run`,
+  then `flock /tmp/veredas-suite.lock cargo nextest run ...` (the lock keeps the exit code).
 
 ## Commit and push (this repository's policy: it wins over a session's global rules)
 - Commit every finished change and push it, without asking: Git is made for mistakes to be pushed,
