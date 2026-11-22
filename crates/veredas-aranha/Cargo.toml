@@ -16,6 +16,11 @@ description = "The network scanner of Veredas 2: who is on an industrial Etherne
 serde = { workspace = true }
 thiserror = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# The raw link (an AF_PACKET socket, its memberships, the interface's MAC) and the private network
+# a test makes (unshare between fork and exec): the system's own C interface.
+libc = { workspace = true }
+
 [dev-dependencies]
 # cargo metadata's output (tests/component.rs) and tshark's reading of a frame (the dissectors).
 serde_json = { workspace = true }

@@ -75,6 +75,9 @@ regex = "1"
 same-file = "1"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
+# The system's C interface (aranha's raw link and the private network a test makes: AF_PACKET,
+# unshare); already in the lock as a dependency of tokio and the rest.
+libc = "0.2"
 serde_json = "1"
 # Hashes (entrega): a bundle's SHA256SUMS, an OVA's manifest, the base image's pinned SHA-512.
 sha2 = "0.10"

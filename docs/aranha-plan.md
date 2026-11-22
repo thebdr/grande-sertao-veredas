@@ -179,6 +179,7 @@ veredas_aranha
     alarm         the acyclic real-time PDUs and the alarm notification and acknowledgement
     rpc           connectionless DCE/RPC and NDR headers, the PNIO blocks, I&M, the port's data
   wire          the seam; the raw link (Linux), the pcap file, the memory hub
+  netns         the private network a test makes: a user and network namespace, veth pairs
   observe       a frame into observations with their witness; the frame's class
   fusion        devices with per-field provenance; conflicts
   listen        the listener: a worker per interface, the kept frames, the paced sender, status
