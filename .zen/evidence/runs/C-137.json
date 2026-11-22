@@ -1,0 +1,29 @@
+{
+  "clause": "C-137",
+  "command": "cargo test -p veredas-aranha --test rpc",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-aranha",
+    "--test",
+    "rpc"
+  ],
+  "exitCode": 0,
+  "outputSha": "df0893cb92ec47fb4917df1904f565c9bb673cc8b52e4a03d543f2b1063ccc1f",
+  "outputTail": "test a_read_answer_is_its_status_its_header_and_the_record ... ok\ntest an_implicit_read_is_its_header_its_arguments_and_its_block_to_the_byte ... ok\ntest the_arguments_name_their_damage_and_keep_what_follows ... ok\ntest a_uuid_is_its_text_and_travels_in_the_header_s_byte_order ... ok\ntest blocks_are_read_in_order_and_what_is_not_a_whole_block_is_kept ... ok\ntest a_damaged_datagram_is_an_error_that_names_it_and_trailing_bytes_are_kept ... ok\ntest the_dissectors_read_every_datagram_as_it_was_written ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running tests/rpc.rs (target/debug/build/veredas-aranha/67b9f012fadd5247/out/rpc-67b9f012fadd5247)",
+  "ranAt": "2026-11-22T22:07:33.117Z",
+  "headCommit": "e818a380f4a9a0e040f2a7f42f13550fe8bfab51",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/rpc.rs",
+      "file": "crates/veredas-aranha/tests/rpc.rs",
+      "fileSha": "1a000f3eca6c0122ba288787de473953ff4a7428ac1ea22155d6c7ceefc24047"
+    },
+    {
+      "name": "crates/veredas-aranha/tests/common/mod.rs",
+      "file": "crates/veredas-aranha/tests/common/mod.rs",
+      "fileSha": "e3f228cd2b4bbd09bda4196228ab527e6f28dba06ee02306b362990c19b7edb6"
+    }
+  ]
+}
