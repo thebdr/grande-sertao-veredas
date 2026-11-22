@@ -201,6 +201,31 @@ fn test_delete_columns() {
 }
 
 #[test]
+fn a_moved_formula_keeps_its_kind() {
+    // a plain formula whose reference is deleted: its shape becomes unknown (`OFFSET(#REF!,2,0)`)
+    // and it stays the plain formula it was, read with an implicit intersection, not an array
+    let mut model = new_empty_model();
+    model._set("B1", "10");
+    model._set("B3", "30");
+    model._set("A1", "=2*IF(TRUE,OFFSET(B1,2,0),0)");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), *"60");
+    let plain = |model: &crate::Model| {
+        model
+            .workbook
+            .worksheet(0)
+            .unwrap()
+            .cell(1, 1)
+            .is_some_and(|c| matches!(c.as_ref(), crate::types::Cell::CellFormula { .. }))
+    };
+    assert!(plain(&model));
+    model.delete_columns(0, 2, 1).unwrap();
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), *"#REF!");
+    assert!(plain(&model), "a plain formula stays one");
+}
+
+#[test]
 fn deleted_rows_and_columns_shrink_the_ranges_they_cut_as_excel_does() {
     let mut model = new_empty_model();
     for row in 1..=6 {

@@ -2,7 +2,9 @@ use crate::cf_types::{CfRule, Cfvo};
 use crate::constants::{LAST_COLUMN, LAST_ROW};
 use crate::cut_paste::cf_sqref_anchor;
 use crate::expressions::parser::displace::{displaced_node, Displacement};
-use crate::expressions::parser::static_analysis::{run_static_analysis_on_node, StaticResult};
+use crate::expressions::parser::static_analysis::{
+    add_implicit_intersection, run_static_analysis_on_node,
+};
 use crate::expressions::parser::stringify::{to_string_displaced, DisplaceData};
 use crate::expressions::parser::Parser as ExprParser;
 use crate::expressions::types::CellReferenceRC;
@@ -452,14 +454,18 @@ impl<'a> Model<'a> {
         displace_data: &DisplaceData,
         moved: CellsMoved,
     ) -> Result<(), String> {
-        let mut formulas: Vec<(u32, i32, i32, i32)> = Vec::new();
+        // (sheet, row, column, formula, read as a legacy formula: a plain formula cell, not an array)
+        let mut formulas: Vec<(u32, i32, i32, i32, bool)> = Vec::new();
         let mut spills: Vec<(u32, i32, i32, (i32, i32))> = Vec::new();
         for (sheet, worksheet) in self.workbook.worksheets.iter().enumerate() {
             let sheet = sheet as u32;
             for (row, column, cell) in worksheet.sheet_data.cells() {
                 match &*cell {
-                    Cell::CellFormula { f, .. } | Cell::ArrayFormula { f, .. } => {
-                        formulas.push((sheet, row, column, *f));
+                    Cell::CellFormula { f, .. } => {
+                        formulas.push((sheet, row, column, *f, true));
+                    }
+                    Cell::ArrayFormula { f, .. } => {
+                        formulas.push((sheet, row, column, *f, false));
                     }
                     Cell::SpillCell { a, .. } => {
                         let anchor = moved.destination(sheet, a.0, a.1);
@@ -478,18 +484,25 @@ impl<'a> Model<'a> {
                 *a = anchor;
             }
         }
-        for (sheet, row, column, formula) in formulas {
+        for (sheet, row, column, formula, legacy) in formulas {
             let displacement = Displacement {
                 data: displace_data,
                 from: moved.origin(sheet, row, column),
                 to: (row, column),
             };
             let node = &self.parsed_formulas[sheet as usize][formula as usize].0;
-            let Some(new_node) = displaced_node(node, &displacement) else {
+            let Some(mut new_node) = displaced_node(node, &displacement) else {
                 continue;
             };
+            // A displaced formula keeps the kind it had: a reference turned `#REF!` can make a
+            // plain formula's shape unknown (`OFFSET(#REF!,2,0)`), and it is still the formula
+            // Excel reads with an implicit intersection, as the file it came from says; an array
+            // stays an array.
+            if legacy {
+                add_implicit_intersection(&mut new_node, true);
+            }
             let static_result = run_static_analysis_on_node(&new_node);
-            let is_dynamic = !matches!(static_result, StaticResult::Scalar);
+            let is_dynamic = !legacy;
             let new_formula = self.shared_formula_index(sheet, new_node, static_result)?;
             self.set_cell_formula_index(sheet, row, column, new_formula, is_dynamic)?;
         }
