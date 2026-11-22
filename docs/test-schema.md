@@ -357,8 +357,8 @@ brace not closed; one of the language's words used as a name; a setting that is 
 value or comes after a step; a mode, an action, an outcome or a type that is none; an action after
 a step's `branch` or `stop`, or after its `on` lines; a `read` whose values and names differ in
 number; an `else` arm that is not the last, a branch with no arm; two comparisons in a row; a
-name reading more than one column; an expression nested deeper than 64 levels or holding more
-than 1000 operators, blocks nested deeper than 64; a built-in call's name given to a function;
+name reading more than one column; blocks and expressions (parentheses, calls, `not`, `-`)
+nested deeper than 64 levels, counted together, or an expression holding more than 1000 operators; a built-in call's name given to a function;
 `reads` or `timeout` twice in a function; a write, a send or another step's action written as a
 statement; an `await` not assigned.
 
@@ -369,8 +369,9 @@ functions of one name; a step's name given twice; a route to no step; `retry ...
 outcome routed twice by one step; `on pass` on a branch; a `send`'s field given twice; a call to
 no function, an input not given, given twice or not the function's, more names than outputs; a
 built-in call given the wrong number of values, a call to no built-in, a function called inside
-an expression; a function calling itself; a name read that nothing assigns; a `let` constant or a
-function's input assigned; a port named twice; an output nothing assigns; plant data in a script
+an expression; a name read that nothing assigns; a `let` constant or a
+function's input assigned; a port named twice; an output nothing assigns; a function calling
+itself (each function on the cycle named, with its way back, a long one by its first five); plant data in a script
 box, or a table a function does not declare in `reads`; a wait, an await or a call in a script
 box; a step placed twice, or a position for no step, in the `layout`.
 

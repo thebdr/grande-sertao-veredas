@@ -63,21 +63,15 @@ fn header(text: &str, file: &str, noun: &str, format: &str) -> Result<usize, Pro
     // or `version`, whatever the type of another key's value (a table, a dotted key, a number past
     // any width all named).
     let mut at = 0;
-    let mut inside: Option<&str> = None;
+    let mut inside: Option<&'static str> = None;
     for line in head.split_inclusive('\n') {
         let line_at = at;
         at += line.len();
-        // A multi-line string's lines are its value's, not keys.
-        if let Some(q) = inside {
-            if line.matches(q).count() % 2 == 1 {
-                inside = None;
-            }
+        // A line that opens inside a multi-line string is its value's, not a key.
+        let opened_inside = inside.is_some();
+        inside = toml_line(line, inside);
+        if opened_inside {
             continue;
-        }
-        for q in ["\"\"\"", "'''"] {
-            if line.matches(q).count() % 2 == 1 {
-                inside = Some(q);
-            }
         }
         let bom = if line_at == 0 && line.starts_with('\u{feff}') { '\u{feff}'.len_utf8() } else { 0 };
         let line = &line[bom..];
@@ -91,6 +85,57 @@ fn header(text: &str, file: &str, noun: &str, format: &str) -> Result<usize, Pro
         }
     }
     Ok(body)
+}
+
+/// Read one TOML line as TOML does, from inside a multi-line string or not: a comment runs to the
+/// line's end, a string's text (its escapes in a basic string) is passed over, and a `"""` or a
+/// `'''` opens or closes a multi-line string. Returns the multi-line string still open at the end.
+fn toml_line(line: &str, mut inside: Option<&'static str>) -> Option<&'static str> {
+    let b = line.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if let Some(q) = inside {
+            if q == "\"\"\"" && b[i] == b'\\' {
+                i += 2;
+                continue;
+            }
+            if line[i..].starts_with(q) {
+                // A closing run may hold up to two quotes of the value before the delimiter.
+                let mut j = i + 3;
+                while j < b.len() && b[j] == q.as_bytes()[0] && j < i + 5 {
+                    j += 1;
+                }
+                inside = None;
+                i = j;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        match b[i] {
+            b'#' => return None,
+            b'"' | b'\'' => {
+                let q: &'static str = if b[i] == b'"' { "\"\"\"" } else { "'''" };
+                if line[i..].starts_with(q) {
+                    inside = Some(q);
+                    i += 3;
+                    continue;
+                }
+                // A single-line string: to its closing quote, a basic string's escapes passed over.
+                let quote = b[i];
+                i += 1;
+                while i < b.len() && b[i] != quote {
+                    if quote == b'"' && b[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    inside
 }
 
 /// What a header line sets: the key before its `=`, unquoted, or a table's header as written.
@@ -124,22 +169,23 @@ struct Parser<'a> {
     ops: usize,
     /// Expressions open, one inside another (a string's `{ }` aside).
     exprs: usize,
+    /// Reading a string's `{ }`: its end is the `}` that closes it, not the file's.
+    inner: bool,
     /// How deep the blocks being read nest.
     blocks: usize,
 }
 
-/// How deep an expression may nest, and how many operators one may hold: past these the reading
-/// names the problem rather than exhaust its stack.
+/// How deep blocks and expressions (parentheses, calls, `not`, `-`) may nest, counted together,
+/// and how many operators one expression may hold: past these the reading names the problem
+/// rather than exhaust its stack.
 pub const MAX_NEST: usize = 64;
 pub const MAX_OPERATORS: usize = 1000;
-/// How deep blocks may nest.
-pub const MAX_BLOCKS: usize = 64;
 
 type R<T> = Result<T, Problem>;
 
 impl<'a> Parser<'a> {
     fn new(src: &'a str, file: &'a str, toks: Vec<Token>) -> Parser<'a> {
-        Parser { src, file, toks, i: 0, paren: 0, nest: 0, ops: 0, exprs: 0, blocks: 0 }
+        Parser { src, file, toks, i: 0, paren: 0, nest: 0, ops: 0, exprs: 0, blocks: 0, inner: false }
     }
 
     // ---- tokens --------------------------------------------------------------------------------
@@ -218,6 +264,7 @@ impl<'a> Parser<'a> {
     fn expected(&self, tok: &Token, what: &str) -> Problem {
         match &tok.tok {
             Tok::Bad(reason) => self.problem(tok.span.start, reason.clone()),
+            Tok::Eof if self.inner => self.problem(tok.span.start, format!("`}}` where {what} was expected")),
             _ => self.problem(tok.span.start, format!("{} where {what} was expected", tok.describe(self.src))),
         }
     }
@@ -925,8 +972,8 @@ impl<'a> Parser<'a> {
     fn block(&mut self, ctx: Context) -> R<Vec<Stmt>> {
         let open = self.expect_sym(Sym::LBrace, "`{`")?;
         self.blocks += 1;
-        if self.blocks > MAX_BLOCKS {
-            return Err(self.problem(open.span.start, format!("blocks nested deeper than {MAX_BLOCKS}")));
+        if self.blocks + self.nest > MAX_NEST {
+            return Err(self.problem(open.span.start, format!("blocks and expressions nested deeper than {MAX_NEST}, counted together")));
         }
         let body = self.statements(ctx)?;
         self.expect_sym(Sym::RBrace, "`}`")?;
@@ -937,8 +984,8 @@ impl<'a> Parser<'a> {
     /// One level deeper into an expression, refused past the limit.
     fn deeper(&mut self, at: usize) -> R<()> {
         self.nest += 1;
-        if self.nest > MAX_NEST {
-            return Err(self.problem(at, format!("an expression nested deeper than {MAX_NEST}")));
+        if self.blocks + self.nest > MAX_NEST {
+            return Err(self.problem(at, format!("blocks and expressions nested deeper than {MAX_NEST}, counted together")));
         }
         Ok(())
     }
@@ -1321,6 +1368,8 @@ impl<'a> Parser<'a> {
         p.nest = self.nest;
         p.ops = self.ops;
         p.exprs = self.exprs;
+        p.blocks = self.blocks;
+        p.inner = true;
         if p.peek().tok == Tok::Eof {
             return Err(self.problem(span.start - 1, "a `{` in a string holds an expression (a `{` alone is written `\\{`)"));
         }

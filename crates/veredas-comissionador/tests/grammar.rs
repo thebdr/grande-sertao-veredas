@@ -980,19 +980,19 @@ fn nesting_past_its_limits_is_named_not_a_crash() {
     let one = |e: &str| problems(&test_of(&format!("  step x check {e}\n")));
     let parens = |n: usize| format!("{}1{} == 1", "(".repeat(n), ")".repeat(n));
     assert_eq!(one(&parens(64)), Vec::<String>::new(), "64 levels read");
-    assert_eq!(one(&parens(65)), ["6:80: an expression nested deeper than 64"]);
-    assert_eq!(one(&parens(3000)), ["6:80: an expression nested deeper than 64"]);
-    assert_eq!(one(&format!("{}true", "not ".repeat(20_000))), ["6:272: an expression nested deeper than 64"]);
-    assert_eq!(one(&format!("{}1", "-".repeat(1000))), ["6:80: an expression nested deeper than 64"]);
-    assert_eq!(one(&format!("abs({}1{}) == 1", "abs(".repeat(70), ")".repeat(70))), ["6:275: an expression nested deeper than 64"]);
+    assert_eq!(one(&parens(65)), ["6:80: blocks and expressions nested deeper than 64, counted together"]);
+    assert_eq!(one(&parens(3000)), ["6:80: blocks and expressions nested deeper than 64, counted together"]);
+    assert_eq!(one(&format!("{}true", "not ".repeat(20_000))), ["6:272: blocks and expressions nested deeper than 64, counted together"]);
+    assert_eq!(one(&format!("{}1", "-".repeat(1000))), ["6:80: blocks and expressions nested deeper than 64, counted together"]);
+    assert_eq!(one(&format!("abs({}1{}) == 1", "abs(".repeat(70), ")".repeat(70))), ["6:275: blocks and expressions nested deeper than 64, counted together"]);
     let chain = |n: usize| format!("{} == 1", vec!["1"; n].join(" + "));
     assert_eq!(one(&chain(1000)), Vec::<String>::new(), "a chain of 999 additions and a comparison");
     assert_eq!(one(&chain(1001)), ["6:4018: an expression of more than 1000 operators"]);
     assert_eq!(one(&chain(100_000)), ["6:4018: an expression of more than 1000 operators"]);
     let blocks = |n: usize| format!("  step x script {{ {}x = 1{} }}\n", "if true { ".repeat(n), " }".repeat(n));
     assert_eq!(problems(&test_of(&blocks(63))), Vec::<String>::new());
-    assert_eq!(problems(&test_of(&blocks(64))), ["6:657: blocks nested deeper than 64"]);
-    assert_eq!(problems(&test_of(&blocks(5000))), ["6:657: blocks nested deeper than 64"]);
+    assert_eq!(problems(&test_of(&blocks(64))), ["6:657: blocks and expressions nested deeper than 64, counted together"]);
+    assert_eq!(problems(&test_of(&blocks(5000))), ["6:657: blocks and expressions nested deeper than 64, counted together"]);
 }
 
 // ---- refute round 2 ------------------------------------------------------------------------
@@ -1030,7 +1030,7 @@ fn the_operator_limit_holds_in_patterns_ranges_parentheses_and_strings() {
         let line = format!("  step x report \"{}\"", piece.repeat(5));
         assert_eq!(problems(&test_of(&format!("{line}\n"))), [format!("6:{}: an expression of more than 1000 operators", column_of(&line, '+', 1001))]);
         let line = format!("  step x report {}\"{{{}1{}}}\"{}", "(".repeat(40), "(".repeat(40), ")".repeat(40), ")".repeat(40));
-        assert_eq!(problems(&test_of(&format!("{line}\n"))), [format!("6:{}: an expression nested deeper than 64", column_of(&line, '(', 65))]);
+        assert_eq!(problems(&test_of(&format!("{line}\n"))), [format!("6:{}: blocks and expressions nested deeper than 64, counted together", column_of(&line, '(', 65))]);
     });
 }
 
@@ -1098,6 +1098,85 @@ fn a_comment_before_a_crlf_line_end_keeps_the_columns_of_its_lf_twin() {
         assert!(!a.is_empty(), "{c:?}");
         assert_eq!(a, b, "{c:?}");
     }
+}
+
+// ---- refute round 3 ------------------------------------------------------------------------
+
+#[test]
+fn a_quote_run_in_a_header_comment_hides_no_key() {
+    let body = "test \"t\" {\n  id T\n  step a stop pass\n}\n";
+    let one = |head: &str| {
+        let e = parse_test(&format!("{head}{body}"), "t").unwrap_err();
+        format!("{}:{}: {}", e.line, e.column, e.message)
+    };
+    assert_eq!(one("format = \"veredas-test\"\nversion = 1 # it's ''' here\nextra = 2\n"), "3:1: the header holds `format` and `version` alone, not `extra`");
+    assert_eq!(one("# a ''' in a comment\nformat = \"veredas-test\"\nversion = 1\nextra = 2\n"), "4:1: the header holds `format` and `version` alone, not `extra`");
+    assert_eq!(one("format = \"veredas-test\" # \"\"\"\nversion = 1\n[meta]\nx = 1\n"), "3:1: the header holds `format` and `version` alone, not `[meta]`");
+    assert_eq!(one("format = \"\"\"\nveredas-test\"\"\" # \"\"\"\nversion = 1\nextra = 2\n"), "4:1: the header holds `format` and `version` alone, not `extra`");
+    // A quote run inside a single-line string is the string's; an escaped quote stays inside it.
+    assert_eq!(one("format = \"veredas-test\"\nversion = 1\nnote = \"a ''' b \\\" c\"\nextra = 2\n"), "3:1: the header holds `format` and `version` alone, not `note`");
+    // A multi-line literal string closed on its own line, then a key: named.
+    assert_eq!(one("format = \"veredas-test\"\nversion = 1\nnote = '''\nx\n'''\nextra = 2\n"), "3:1: the header holds `format` and `version` alone, not `note`");
+    assert!(parse_test(&format!("format = \"\"\"\nveredas-test\"\"\" # a comment\nversion = 1 # one\n{body}"), "t").is_ok());
+}
+
+#[test]
+fn a_long_call_chain_and_a_long_cycle_are_checked_at_once() {
+    let chain = |n: usize, back: bool| {
+        let mut f = String::from(FHEAD);
+        for i in 0..n {
+            let next = if i + 1 < n { format!("F{}()", i + 1) } else if back { "F0()".to_string() } else { "1".to_string() };
+            f.push_str(&format!("function F{i}() -> (x: int) {{\n  x = {next}\n}}\n"));
+        }
+        f
+    };
+    let text = chain(5000, false);
+    let t0 = std::time::Instant::now();
+    assert!(check_functions(&text, "f.fn").is_ok());
+    assert!(t0.elapsed() < std::time::Duration::from_secs(1), "a chain of 5000: {:?}", t0.elapsed());
+    let text = chain(1000, true);
+    let t0 = std::time::Instant::now();
+    let e = check_functions(&text, "f.fn").unwrap_err();
+    assert!(t0.elapsed() < std::time::Duration::from_secs(2), "a cycle of 1000: {:?}", t0.elapsed());
+    assert_eq!(e.len(), 1000, "each function on the cycle named once");
+    assert_eq!(e[0].message, "`F0` calls itself through `F1`, `F2`, `F3`, `F4`, `F5` and 994 others");
+    assert_eq!(e[999].message, "`F999` calls itself through `F0`, `F1`, `F2`, `F3`, `F4` and 994 others");
+    // Ten thousand problems in one file, each at its place, at once.
+    let mut f = String::from(FHEAD);
+    for i in 0..10_000 {
+        f.push_str(&format!("function G{i}() -> (x: int) {{\n  x = ghost{i}\n}}\n"));
+    }
+    let t0 = std::time::Instant::now();
+    let e = check_functions(&f, "f.fn").unwrap_err();
+    assert!(t0.elapsed() < std::time::Duration::from_secs(2), "{:?}", t0.elapsed());
+    assert_eq!(e.len(), 10_000);
+    assert_eq!((e[9_999].line, e[9_999].column, e[9_999].message.as_str()), (4 + 3 * 9_999 + 1, 7, "`ghost9999` is read but nothing assigns it"));
+}
+
+#[test]
+fn blocks_and_expressions_share_one_depth_on_a_small_stack() {
+    small_stack(|| {
+        // Blocks and levels together at the limit, an expression of 999 operators at the bottom.
+        for blocks in [63usize, 32, 1] {
+            let levels = 64 - blocks - 1;
+            let sum = vec!["1"; 1000].join("+");
+            let line = format!("  step x script {{ {}x = {}{sum}{}{} }}", "if 1 == 1 { ".repeat(blocks - 1), "(".repeat(levels), ")".repeat(levels), " }".repeat(blocks - 1));
+            assert_eq!(problems(&test_of(&format!("{line}\n"))), Vec::<String>::new(), "{blocks} blocks, {levels} levels");
+        }
+        // One level past it, wherever it falls: named, not a crash.
+        let line = format!("  step x script {{ {}x = {}1{} }}", "if 1 == 1 { ".repeat(40), "(".repeat(24), ")".repeat(24), );
+        let line = format!("{line}{}", " }".repeat(40));
+        assert_eq!(problems(&test_of(&format!("{line}\n"))), [format!("6:{}: blocks and expressions nested deeper than 64, counted together", column_of(&line, '(', 24))]);
+        let line = format!("  step x script {{ {}x = 1{} }}", "if 1 == 1 { ".repeat(64), " }".repeat(64));
+        assert_eq!(problems(&test_of(&format!("{line}\n"))), [format!("6:{}: blocks and expressions nested deeper than 64, counted together", column_of(&line, '{', 65))]);
+    });
+}
+
+#[test]
+fn an_unfinished_expression_in_a_string_s_braces_names_its_brace() {
+    let one = |e: &str| problems(&test_of(&format!("  step x script {{ z = {e} }}\n")));
+    assert_eq!(one("\"{1 +}\""), ["6:28: `}` where a value was expected"]);
+    assert_eq!(one("\"{(1}\""), ["6:27: `}` where `)` was expected"]);
 }
 
 // ---- the reference's text -------------------------------------------------------------------
@@ -1427,8 +1506,8 @@ brace not closed; one of the language's words used as a name; a setting that is 
 value or comes after a step; a mode, an action, an outcome or a type that is none; an action after
 a step's `branch` or `stop`, or after its `on` lines; a `read` whose values and names differ in
 number; an `else` arm that is not the last, a branch with no arm; two comparisons in a row; a
-name reading more than one column; an expression nested deeper than 64 levels or holding more
-than 1000 operators, blocks nested deeper than 64; a built-in call's name given to a function;
+name reading more than one column; blocks and expressions (parentheses, calls, `not`, `-`)
+nested deeper than 64 levels, counted together, or an expression holding more than 1000 operators; a built-in call's name given to a function;
 `reads` or `timeout` twice in a function; a write, a send or another step's action written as a
 statement; an `await` not assigned.
 
@@ -1439,8 +1518,9 @@ functions of one name; a step's name given twice; a route to no step; `retry ...
 outcome routed twice by one step; `on pass` on a branch; a `send`'s field given twice; a call to
 no function, an input not given, given twice or not the function's, more names than outputs; a
 built-in call given the wrong number of values, a call to no built-in, a function called inside
-an expression; a function calling itself; a name read that nothing assigns; a `let` constant or a
-function's input assigned; a port named twice; an output nothing assigns; plant data in a script
+an expression; a name read that nothing assigns; a `let` constant or a
+function's input assigned; a port named twice; an output nothing assigns; a function calling
+itself (each function on the cycle named, with its way back, a long one by its first five); plant data in a script
 box, or a table a function does not declare in `reads`; a wait, an await or a call in a script
 box; a step placed twice, or a position for no step, in the `layout`.
 

@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::Problem;
+use crate::{Lines, Problem};
 use crate::model::*;
 use crate::parse::{parse_functions, parse_test};
 
@@ -79,7 +79,8 @@ pub fn check_functions(text: &str, file: &str) -> Result<FunctionFile, Vec<Probl
 pub fn check_test(text: &str, file: &str, resolve: &dyn Fn(&str) -> Result<String, String>) -> Result<Checked, Vec<Problem>> {
     let mut test = parse_test(text, file).map_err(|p| vec![p])?;
     let mut out: Vec<Problem> = Vec::new();
-    let at = |span: Span, msg: String| Problem::at(file, text, span.start, msg);
+    let lines = Lines::new(text);
+    let at = |span: Span, msg: String| lines.problem(file, span.start, msg);
     let dir = Path::new(file).parent().map(Path::to_path_buf).unwrap_or_default();
 
     // The settings.
@@ -201,7 +202,7 @@ pub fn check_test(text: &str, file: &str, resolve: &dyn Fn(&str) -> Result<Strin
             if a.is_gated() {
                 counts.gated_writes += 1;
             }
-            let mut push = |span: Span, msg: String| out.push(Problem::at(file, text, span.start, msg));
+            let mut push = |span: Span, msg: String| out.push(lines.problem(file, span.start, msg));
             match &mut a.kind {
                 ActionKind::Write { value, .. } => resolve_expr(value, &vars, &Plants::Any, &fnames, &mut push),
                 ActionKind::Send { fields, .. } => {
@@ -472,15 +473,13 @@ fn check_call(function: &Spanned<String>, args: &[Arg], outputs: &[Spanned<Strin
 /// Where statements stand.
 enum StmtCtx<'a> {
     Script { consts: &'a BTreeSet<String>, functions: &'a [&'a str] },
-    Function { f: &'a Function, file_functions: &'a BTreeMap<String, Function> },
+    Function { f: &'a Function, file_functions: &'a BTreeMap<String, Function>, names: &'a [&'a str] },
 }
 
 fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: &mut dyn FnMut(Span, String)) {
     let (plants, fnames): (Plants, Vec<&str>) = match ctx {
         StmtCtx::Script { functions, .. } => (Plants::Script, functions.to_vec()),
-        StmtCtx::Function { f, file_functions } => {
-            (Plants::Reads { function: &f.name.value, tables: &f.reads }, file_functions.keys().map(String::as_str).collect())
-        }
+        StmtCtx::Function { f, names, .. } => (Plants::Reads { function: &f.name.value, tables: &f.reads }, names.to_vec()),
     };
     for s in body {
         let span = s.span;
@@ -550,7 +549,7 @@ fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: 
                 StmtCtx::Script { .. } => {
                     push(function.span, format!("a script box calls no function: `{}` is called by a step (`call`)", function.value));
                 }
-                StmtCtx::Function { f, file_functions } => {
+                StmtCtx::Function { f, file_functions, .. } => {
                     for a in args.iter_mut() {
                         resolve_expr(&mut a.value, vars, &plants, &fnames, push);
                     }
@@ -572,6 +571,7 @@ fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: 
 /// Every function of a file checked against the file: its ports, its names, its reads, its
 /// calls, and no call back to itself.
 fn check_function_file(ff: &mut FunctionFile, file: &str, text: &str, out: &mut Vec<Problem>) {
+    let lines = Lines::new(text);
     let mut by_name: BTreeMap<String, Function> = BTreeMap::new();
     for f in &ff.functions {
         if by_name.contains_key(&f.name.value) {
@@ -587,8 +587,9 @@ fn check_function_file(ff: &mut FunctionFile, file: &str, text: &str, out: &mut 
             by_name.insert(f.name.value.clone(), f.clone());
         }
     }
+    let file_names: Vec<&str> = by_name.keys().map(String::as_str).collect();
     for f in &mut ff.functions {
-        let mut push = |span: Span, msg: String| out.push(Problem::at(file, text, span.start, msg));
+        let mut push = |span: Span, msg: String| out.push(lines.problem(file, span.start, msg));
         let mut ports = BTreeSet::new();
         for p in f.inputs.iter().chain(f.outputs.iter()) {
             if !ports.insert(p.name.value.clone()) {
@@ -605,29 +606,124 @@ fn check_function_file(ff: &mut FunctionFile, file: &str, text: &str, out: &mut 
             }
         }
         let snapshot = f.clone();
-        let ctx = StmtCtx::Function { f: &snapshot, file_functions: &by_name };
+        let ctx = StmtCtx::Function { f: &snapshot, file_functions: &by_name, names: &file_names };
         check_stmts(&mut f.body, &scope, &ctx, &mut push);
     }
-    // No function calls itself, directly or through others.
-    let calls: BTreeMap<String, BTreeSet<String>> = ff
+    // No function calls itself, directly or through others: the cycles are the strongly
+    // connected components of the call graph (one pass), each function in one named with the way
+    // back to itself (a search inside its component, parent links, no path copied).
+    let names: Vec<String> = ff.functions.iter().map(|f| f.name.value.clone()).collect();
+    let index: BTreeMap<&str, usize> = names.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
+    let edges: Vec<Vec<usize>> = ff
         .functions
         .iter()
         .map(|f| {
             let mut c = BTreeSet::new();
             calls_in(&f.body, &mut c);
-            (f.name.value.clone(), c)
+            c.iter().filter_map(|n| index.get(n.as_str()).copied()).collect()
         })
         .collect();
-    for f in &ff.functions {
-        if let Some(path) = cycle(&f.name.value, &calls) {
-            let msg = if path.is_empty() {
-                format!("`{}` calls itself", f.name.value)
-            } else {
-                format!("`{}` calls itself through {}", f.name.value, path.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", "))
+    let component = components(&edges);
+    for (i, f) in ff.functions.iter().enumerate() {
+        if let Some(path) = way_back(i, &edges, &component) {
+            // A long way back is named by its first five and counted.
+            let shown: Vec<String> = path.iter().take(5).map(|&n| format!("`{}`", names[n])).collect();
+            let msg = match path.len() {
+                0 => format!("`{}` calls itself", f.name.value),
+                1..=5 => format!("`{}` calls itself through {}", f.name.value, shown.join(", ")),
+                n => format!("`{}` calls itself through {} and {} others", f.name.value, shown.join(", "), n - 5),
             };
-            out.push(Problem::at(file, text, f.name.span.start, msg));
+            out.push(lines.problem(file, f.name.span.start, msg));
         }
     }
+}
+
+/// Every node's strongly connected component, by Tarjan's method without recursion.
+fn components(edges: &[Vec<usize>]) -> Vec<usize> {
+    let n = edges.len();
+    let (mut index, mut low, mut comp) = (vec![usize::MAX; n], vec![0; n], vec![usize::MAX; n]);
+    let (mut on, mut stack, mut next, mut count) = (vec![false; n], Vec::new(), 0, 0);
+    for root in 0..n {
+        if index[root] != usize::MAX {
+            continue;
+        }
+        let mut work: Vec<(usize, usize)> = vec![(root, 0)];
+        index[root] = next;
+        low[root] = next;
+        next += 1;
+        stack.push(root);
+        on[root] = true;
+        while let Some(&mut (v, ref mut e)) = work.last_mut() {
+            if *e < edges[v].len() {
+                let w = edges[v][*e];
+                *e += 1;
+                if index[w] == usize::MAX {
+                    index[w] = next;
+                    low[w] = next;
+                    next += 1;
+                    stack.push(w);
+                    on[w] = true;
+                    work.push((w, 0));
+                } else if on[w] {
+                    low[v] = low[v].min(index[w]);
+                }
+            } else {
+                work.pop();
+                if let Some(&(parent, _)) = work.last() {
+                    low[parent] = low[parent].min(low[v]);
+                }
+                if low[v] == index[v] {
+                    while let Some(w) = stack.pop() {
+                        on[w] = false;
+                        comp[w] = count;
+                        if w == v {
+                            break;
+                        }
+                    }
+                    count += 1;
+                }
+            }
+        }
+    }
+    comp
+}
+
+/// The functions between `start` and itself on the shortest way back, searched inside its
+/// component alone; none when it is on no cycle.
+fn way_back(start: usize, edges: &[Vec<usize>], comp: &[usize]) -> Option<Vec<usize>> {
+    if edges[start].contains(&start) {
+        return Some(Vec::new());
+    }
+    let mut parent: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut queue = std::collections::VecDeque::new();
+    for &w in &edges[start] {
+        if comp[w] == comp[start] && !parent.contains_key(&w) {
+            parent.insert(w, start);
+            queue.push_back(w);
+        }
+    }
+    while let Some(v) = queue.pop_front() {
+        if edges[v].contains(&start) {
+            let mut path = vec![v];
+            let mut at = v;
+            while let Some(&p) = parent.get(&at) {
+                if p == start {
+                    break;
+                }
+                path.push(p);
+                at = p;
+            }
+            path.reverse();
+            return Some(path);
+        }
+        for &w in &edges[v] {
+            if w != start && comp[w] == comp[start] && !parent.contains_key(&w) {
+                parent.insert(w, v);
+                queue.push_back(w);
+            }
+        }
+    }
+    None
 }
 
 fn calls_in(body: &[Stmt], into: &mut BTreeSet<String>) {
@@ -650,25 +746,3 @@ fn calls_in(body: &[Stmt], into: &mut BTreeSet<String>) {
     }
 }
 
-/// The functions between `start` and itself on the shortest way back, when there is one.
-fn cycle(start: &str, calls: &BTreeMap<String, BTreeSet<String>>) -> Option<Vec<String>> {
-    let mut queue: std::collections::VecDeque<(String, Vec<String>)> = std::collections::VecDeque::new();
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    for c in calls.get(start).into_iter().flatten() {
-        queue.push_back((c.clone(), Vec::new()));
-    }
-    while let Some((at, path)) = queue.pop_front() {
-        if at == start {
-            return Some(path);
-        }
-        if !seen.insert(at.clone()) {
-            continue;
-        }
-        for c in calls.get(&at).into_iter().flatten() {
-            let mut p = path.clone();
-            p.push(at.clone());
-            queue.push_back((c.clone(), p));
-        }
-    }
-    None
-}

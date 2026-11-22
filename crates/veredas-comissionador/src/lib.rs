@@ -42,6 +42,34 @@ impl Problem {
     }
 }
 
+/// A text's line starts, found once, so many problems are placed without a scan each.
+pub struct Lines<'a> {
+    text: &'a str,
+    starts: Vec<usize>,
+}
+
+impl<'a> Lines<'a> {
+    pub fn new(text: &'a str) -> Lines<'a> {
+        let mut starts = vec![0];
+        starts.extend(text.match_indices('\n').map(|(i, _)| i + 1));
+        Lines { text, starts }
+    }
+
+    /// The place of byte `at`: its line found by a search, its column counted on that line alone.
+    pub fn place(&self, at: usize) -> Place {
+        let at = at.min(self.text.len());
+        let line = self.starts.partition_point(|&s| s <= at);
+        let start = self.starts[line - 1];
+        Place { line, column: self.text[start..at].chars().count() + 1 }
+    }
+
+    /// A problem at byte `at`.
+    pub fn problem(&self, file: &str, at: usize, message: impl Into<String>) -> Problem {
+        let p = self.place(at);
+        Problem { file: file.to_string(), line: p.line, column: p.column, message: message.into() }
+    }
+}
+
 impl fmt::Display for Problem {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}:{}:{}: {}", self.file, self.line, self.column, self.message)
