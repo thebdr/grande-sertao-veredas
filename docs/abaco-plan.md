@@ -251,6 +251,13 @@ classes, the report, the corpus list, and the parity test.
   the version and the workbook's file version.
 - **A link's target is a URI**: Excel percent-encodes it (`Zone%20list.xlsx`). Veredas 1's linked
   resolver decoded only URLs; fork change 12, found by C-221's refute round.
+- **A measure on `TODAY()` expires**: two calendar templates of the corpus build a year from
+  `YEAR(TODAY())`; unpinned, parity would have failed on 2027-01-01. The engine's clock is pinned at
+  run time (fork change 15) to the baseline's day; the compile-time `mock_time` would have changed
+  every other build of the engine in the same cargo run.
+- **One float path**: `statrs` without its `std` feature does its float math through `libm` unless
+  another crate of the build turns `num-traits`' `std` on, so the engine computed differently
+  alone and in the suite's workspace build (fork changes 13 and 14).
 - **A cached `inf` equals every infinity**: an oracle tolerance written `|a-b| <= e` lets a
   non-finite cached value match; Veredas 1's had it. A cached number must be finite.
 - **Calamine 0.26 does not build with zip 2.6**: the lock holds zip 2.4.2, the version Veredas 1's

@@ -29,8 +29,13 @@ fn corpus_dir(b: &Baseline) -> PathBuf {
     root().join(&b.corpus)
 }
 
+/// The baseline's day, the clock every measure here is pinned to: the workbooks' formulas on
+/// TODAY() (two calendars build a whole year from it) read the day Veredas 1 measured, whatever
+/// day the test runs.
 fn options(links: LinksMode) -> Options {
-    Options { links, max_examples: 3, roundtrip_dir: None, verbose: false }
+    let clock = abaco_oracle::noon_utc(&baseline().measured_on);
+    assert!(clock.is_some());
+    Options { links, max_examples: 3, roundtrip_dir: None, verbose: false, clock }
 }
 
 /// The workbooks of the folder the rule leaves out, each for what its package says of itself.
@@ -274,6 +279,40 @@ fn the_baseline_is_veredas_1_s_measure_as_taken_and_adds_up() {
         }
         assert_eq!((files, formulas, matched), (256, 76_245, 75_743), "{mode}");
     }
+}
+
+#[test]
+fn the_engine_s_clock_is_pinned_to_the_baseline_s_day_while_a_workbook_is_measured() {
+    assert_eq!(abaco_oracle::noon_utc("1970-01-01"), Some(12 * 3_600_000));
+    assert_eq!(abaco_oracle::noon_utc("2026-11-22"), Some(20_779 * 86_400_000 + 12 * 3_600_000));
+    assert_eq!(abaco_oracle::noon_utc("2000-02-29"), Some(11_016 * 86_400_000 + 12 * 3_600_000));
+    for bad in ["2026-13-01", "2026-11", "2026-11-22-1", "x", ""] {
+        assert_eq!(abaco_oracle::noon_utc(bad), None, "{bad}");
+    }
+    // a workbook with TODAY() and YEAR(TODAY()), written and measured with the clock pinned to a
+    // day that is not today: the engine reads that day (Excel's serial 46348 is 2026-11-22)
+    let dir = tempfile::tempdir().unwrap();
+    let mut model = ironcalc_base::Model::new_empty("today.xlsx", "en", "UTC", "en").unwrap();
+    model.set_user_input(0, 1, 1, "=TODAY()".to_string()).unwrap();
+    model.set_user_input(0, 2, 1, "=YEAR(TODAY())".to_string()).unwrap();
+    ironcalc_base::pin_clock(abaco_oracle::noon_utc("2026-11-22"));
+    model.evaluate();
+    assert_eq!(model.get_formatted_cell_value(0, 1, 1).unwrap(), "11/22/2026");
+    assert_eq!(model.get_cell_value_by_index(0, 1, 1).unwrap(), ironcalc_base::cell::CellValue::Number(46348.0));
+    assert_eq!(model.get_formatted_cell_value(0, 2, 1).unwrap(), "2026");
+    let path = dir.path().join("today.xlsx");
+    ironcalc::export::save_to_xlsx(&model, path.to_str().unwrap()).unwrap();
+    ironcalc_base::pin_clock(None);
+    // measured on the pinned day: both match what was cached; on another day: neither TODAY
+    let mut probe = Probe::default();
+    let on_the_day = run_file(&path, &options(LinksMode::Cached), &mut probe);
+    assert_eq!(on_the_day.measure().unwrap().matched, 2);
+    let mut later = options(LinksMode::Cached);
+    later.clock = abaco_oracle::noon_utc("2027-03-01");
+    let report = run_file(&path, &later, &mut probe);
+    assert_eq!(report.measure().unwrap().matched, 0);
+    // and the pin is released when the measure ends
+    assert_eq!(ironcalc_base::pinned_clock(), None);
 }
 
 /// The engine against the baseline under one resolution of the links, file by file.

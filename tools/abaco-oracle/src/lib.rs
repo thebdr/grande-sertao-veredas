@@ -837,10 +837,52 @@ pub struct Options {
     pub roundtrip_dir: Option<PathBuf>,
     /// Whether progress is written to stderr.
     pub verbose: bool,
+    /// The clock the engine's date functions read while a workbook is measured, in milliseconds
+    /// since 1970 UTC (`TODAY()`, `NOW()`); `None` is the system's. A measure compared with one
+    /// taken on another day pins the day it was taken ([`noon_utc`]).
+    pub clock: Option<i64>,
+}
+
+/// Noon UTC of a `YYYY-MM-DD` date, in milliseconds since 1970: the clock a measure taken that day
+/// is pinned to (noon, so the day is the same in every time zone from UTC-11 to UTC+11).
+pub fn noon_utc(date: &str) -> Option<i64> {
+    let mut parts = date.split('-');
+    let year: i64 = parts.next()?.parse().ok()?;
+    let month: i64 = parts.next()?.parse().ok()?;
+    let day: i64 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    // days from 1970-01-01 to the civil date (Howard Hinnant's algorithm)
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400_000 + 12 * 3_600_000)
+}
+
+/// The engine's clock pinned for as long as it lives, released when it drops.
+struct ClockPin;
+
+impl ClockPin {
+    fn new(clock: Option<i64>) -> ClockPin {
+        ironcalc_base::pin_clock(clock);
+        ClockPin
+    }
+}
+
+impl Drop for ClockPin {
+    fn drop(&mut self) {
+        ironcalc_base::pin_clock(None);
+    }
 }
 
 /// Measures one workbook.
 pub fn run_file(path: &Path, options: &Options, probe: &mut Probe) -> FileReport {
+    let _clock = ClockPin::new(options.clock);
     let mut rep = FileReport::new(path);
     let name = rep.name.clone();
     let say = |what: String| {

@@ -3,7 +3,13 @@
 //! ```text
 //! abaco-oracle [--out report.md] [--baseline-out baseline.toml --measured-by TEXT --measured-on DATE]
 //!              [--roundtrip-dir DIR | --no-roundtrip] [--examples N] [--links cached|linked|ask]
-//!              [--corpus DIR] <workbook.xlsx>...
+//!              [--today YYYY-MM-DD] [--corpus DIR] <workbook.xlsx>...
+//! ```
+//!
+//! `--today` pins the engine's clock to noon UTC of that day (TODAY, NOW), so a measure compares
+//! with one taken that day; without it the system's clock is read.
+//!
+//! ```text
 //! ```
 //!
 //! The report is Markdown, on stdout or in `--out`. `--corpus DIR` adds every workbook under DIR
@@ -17,7 +23,7 @@ use std::process::ExitCode;
 
 use abaco_oracle::{BASELINE_FORMAT, BASELINE_VERSION, Baseline, BaselineFile, LinksMode, Options, Probe, corpus, run_file, write_report};
 
-const USAGE: &str = "usage: abaco-oracle [--out report.md] [--baseline-out baseline.toml --measured-by TEXT --measured-on DATE] [--roundtrip-dir DIR | --no-roundtrip] [--examples N] [--links cached|linked|ask] [--corpus DIR] <workbook.xlsx>...";
+const USAGE: &str = "usage: abaco-oracle [--out report.md] [--baseline-out baseline.toml --measured-by TEXT --measured-on DATE] [--roundtrip-dir DIR | --no-roundtrip] [--examples N] [--links cached|linked|ask] [--today YYYY-MM-DD] [--corpus DIR] <workbook.xlsx>...";
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -30,6 +36,7 @@ fn main() -> ExitCode {
     let mut roundtrip_dir = Some(std::env::temp_dir().join("abaco-oracle"));
     let mut max_examples = 8usize;
     let mut links = LinksMode::Cached;
+    let mut clock: Option<i64> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--out" => out = args.next().map(PathBuf::from),
@@ -40,6 +47,16 @@ fn main() -> ExitCode {
             "--no-roundtrip" => roundtrip_dir = None,
             "--examples" => max_examples = args.next().and_then(|s| s.parse().ok()).unwrap_or(max_examples),
             "--corpus" => corpus_dir = args.next().map(PathBuf::from),
+            "--today" => {
+                let value = args.next().unwrap_or_default();
+                match abaco_oracle::noon_utc(&value) {
+                    Some(ms) => clock = Some(ms),
+                    None => {
+                        eprintln!("--today: expected YYYY-MM-DD, got `{value}`\n{USAGE}");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
             "--links" => {
                 let value = args.next().unwrap_or_default();
                 match LinksMode::parse(&value) {
@@ -72,7 +89,7 @@ fn main() -> ExitCode {
     }
 
     let mut probe = Probe::default();
-    let options = Options { links, max_examples, roundtrip_dir: roundtrip_dir.clone(), verbose: true };
+    let options = Options { links, max_examples, roundtrip_dir: roundtrip_dir.clone(), verbose: true, clock };
     let reports: Vec<_> = files.iter().map(|f| run_file(f, &options, &mut probe)).collect();
     let md = write_report(&reports, &probe, links, max_examples);
     match &out {
@@ -88,7 +105,7 @@ fn main() -> ExitCode {
 
     if let Some(path) = baseline_out {
         let root = corpus_dir.clone().unwrap_or_default();
-        let quiet = |links| Options { links, max_examples: 0, roundtrip_dir: None, verbose: false };
+        let quiet = |links| Options { links, max_examples: 0, roundtrip_dir: None, verbose: false, clock };
         let mut entries = Vec::new();
         for (f, cached) in files.iter().zip(&reports) {
             let cached = if links == LinksMode::Cached { cached.measure() } else { run_file(f, &quiet(LinksMode::Cached), &mut probe).measure() };
