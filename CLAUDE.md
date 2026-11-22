@@ -78,12 +78,14 @@ A Rust workspace; each component is a crate with a version of its own. Read this
   C-110/Q160, aranha C-130/Q280, controlador (with ORCL) C-150/Q220, comissionador C-200/Q310,
   ábaco C-220/Q340, oficina C-250/Q370, releases C-290/Q430; a block ends where the next begins.
   Suite-wide ones run on from C-300 and Q46.
-- Before a push a member runs the laws and every test its change can reach:
-  `cargo nextest run --workspace -E 'rdeps(veredas-<nome>) | package(leis)'` (for core, the whole
-  suite); the orchestrator runs the whole suite on `main` as pushes land. A run that holds
-  maquinar's or supervisão's tests (they measure time and drive browsers) goes one at a time on
-  the machine, built first so the lock is held for the tests alone: the command with `--no-run`,
-  then `flock /tmp/veredas-suite.lock cargo nextest run ...` (the lock keeps the exit code).
+- Before a push a member runs the laws and every test its change can reach, except supervisão's
+  browser tests, which supervisão alone runs before its own pushes:
+  `cargo nextest run --workspace --profile no-browser -E 'rdeps(veredas-<nome>) | package(leis)'`.
+  The orchestrator runs the whole suite on `main` as pushes land and names the push that turned
+  a test red. A run that holds a test that measures time or drives a browser (maquinar's and
+  supervisão's plans name them) goes one at a time on the machine, built first so the lock is
+  held for the tests alone: the command with `--no-run`, then
+  `flock /tmp/veredas-suite.lock cargo nextest run ...` (the lock keeps the exit code).
 
 ## Commit and push (this repository's policy: it wins over a session's global rules)
 - Commit every finished change and push it, without asking: Git is made for mistakes to be pushed,

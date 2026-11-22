@@ -320,6 +320,12 @@ Q31–Q45; the list that was reviewed and its review are kept in `docs/briefing/
 3. A new product: the tester machine, a VMware virtual machine on a light Linux distribution
    holding the whole release suite, for testers and designers ("How releases work").
 4. Every machine checks out LF (`docs/questions.md` Q46, taken meanwhile).
+5. Before a push, a member other than supervisão leaves supervisão's browser tests out of its
+   run; supervisão runs them before its own pushes and the orchestrating session runs the whole
+   suite on `main`. Asked "Let members other than supervisão skip its browser tests before a
+   push?", the architect answered "Yes, skip them". A browser test another member's push turns
+   red is so found on `main`, after the push, and answered by the next one (`CLAUDE.md`,
+   "Several sessions at once"; the runner's profile `no-browser`).
 
 ## Next steps
 1. Record each decision above where it applies (component plans, `docs/questions.md`).

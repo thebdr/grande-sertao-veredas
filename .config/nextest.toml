@@ -22,3 +22,10 @@ browser = { max-threads = 2 }
 [[profile.default.overrides]]
 filter = 'package(veredas-supervisao) & (binary(dashboards) | binary(host) | binary(layout) | binary(tables) | binary(writes))'
 test-group = 'browser'
+
+# A member's run before a push (`--profile no-browser`): everything but the tests that drive a
+# headless browser, which held the machine's lock eight minutes a run. Supervisão runs those
+# before its own pushes, and the orchestrating session runs the whole suite on `main`
+# (the architect, 2026-11-22; `CLAUDE.md`, "Several sessions at once").
+[profile.no-browser]
+default-filter = 'not (package(veredas-supervisao) & (binary(dashboards) | binary(host) | binary(layout) | binary(tables) | binary(writes)))'
