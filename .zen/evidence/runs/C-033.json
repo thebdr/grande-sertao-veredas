@@ -10,15 +10,15 @@
     "bench_file"
   ],
   "exitCode": 0,
-  "outputSha": "6739d6d6427e2972fc5488f4bdde03ee69bc89dcf26745ca74b31020aeb52905",
-  "outputTail": "test the_header_is_refused_four_ways_and_a_misspelled_key_in_any_table ... ok\ntest the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order ... ok\ntest the_executable_checks_and_runs_a_bench_file ... ok\ntest every_invalid_bench_is_refused_with_its_place_named_before_anything_starts ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest the_documented_bench_loads_starts_and_every_part_does_its_work ... ok\ntest the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.37s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running tests/bench_file.rs (target/debug/build/veredas-maquinar/b5572842a64bf1eb/out/bench_file-b5572842a64bf1eb)",
-  "ranAt": "2026-11-22T18:18:01.759Z",
-  "headCommit": "7b63e8094cb70944f09d6e8417b85afb2bb9fc34",
+  "outputSha": "28319a576af81e0951a24407cb41eb69f3261d9e81e8f2745b80efd91492d83e",
+  "outputTail": "test the_reference_is_the_text_this_test_holds ... ok\ntest the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order ... ok\ntest the_executable_checks_and_runs_a_bench_file ... ok\ntest every_invalid_bench_is_refused_with_its_place_named_before_anything_starts ... ok\ntest the_documented_bench_loads_starts_and_every_part_does_its_work ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.29s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s\n     Running tests/bench_file.rs (target/debug/build/veredas-maquinar/7bb2ffb68f7d2caf/out/bench_file-7bb2ffb68f7d2caf)",
+  "ranAt": "2026-11-22T18:36:02.014Z",
+  "headCommit": "dcfdcaa7d78186525797e1efcb413d3e2699bd09",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/bench_file.rs",
       "file": "crates/veredas-maquinar/tests/bench_file.rs",
-      "fileSha": "d677c6227cf213dfe77a328a94cfc063c6342af3118a1df22e9884a13fa3b59f"
+      "fileSha": "ac5bb956a7eedc535b2eb4add7deeaab63f1e1700b22290ee254d8327c0329e2"
     }
   ]
 }

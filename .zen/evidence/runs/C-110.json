@@ -1,0 +1,25 @@
+{
+  "clause": "C-110",
+  "command": "cargo nextest run -p veredas-maquinar --test modbus_server",
+  "commandArgv": [
+    "cargo",
+    "nextest",
+    "run",
+    "-p",
+    "veredas-maquinar",
+    "--test",
+    "modbus_server"
+  ],
+  "exitCode": 0,
+  "outputSha": "7117e10ce639c93e00b530edf7aa778b93521add96f89dfa8260c5da4e3b4e95",
+  "outputTail": "        PASS [   0.024s] ( 5/17) veredas-maquinar::modbus_server values_parse_per_type_and_nonsense_is_refused\n        PASS [   0.013s] ( 6/17) veredas-maquinar::modbus_server the_configuration_reads_from_toml_with_its_defaults_and_refuses_a_misspelled_key\n        PASS [   0.026s] ( 7/17) veredas-maquinar::modbus_server exceptions_come_where_the_protocol_puts_them\n        PASS [   0.025s] ( 8/17) veredas-maquinar::modbus_server the_points_lie_in_their_tables_as_their_types_and_word_orders_say\n        PASS [   0.029s] ( 9/17) veredas-maquinar::modbus_server the_protocol_s_own_examples_answer_byte_for_byte\n        PASS [   0.032s] (10/17) veredas-maquinar::modbus_server connections_past_the_limit_are_closed_at_once_and_counted\n        PASS [   0.020s] (11/17) veredas-maquinar::modbus_server stopping_closes_every_connection_and_frees_the_port\n        PASS [   0.036s] (12/17) veredas-maquinar::modbus_server a_connection_the_server_has_not_yet_taken_is_dropped_with_the_rest\n        PASS [   0.043s] (13/17) veredas-maquinar::modbus_server the_status_keeps_the_last_hundred_exchanges\n        PASS [   0.153s] (14/17) veredas-maquinar::modbus_server pipelined_and_split_requests_are_answered_in_order_and_whole\n        PASS [   0.321s] (15/17) veredas-maquinar::modbus_server a_frame_of_another_protocol_is_dropped_and_a_length_no_frame_has_closes_the_connection\n        PASS [   3.065s] (16/17) veredas-maquinar::modbus_server the_knobs_delay_silence_and_drop_every_connection\n        PASS [   6.976s] (17/17) veredas-maquinar::modbus_server a_client_that_reads_nothing_is_dropped_at_once\n────────────\n     Summary [   6.977s] 17 tests run: 17 passed, 0 skipped",
+  "ranAt": "2026-11-22T18:36:10.809Z",
+  "headCommit": "dcfdcaa7d78186525797e1efcb413d3e2699bd09",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/modbus_server.rs",
+      "file": "crates/veredas-maquinar/tests/modbus_server.rs",
+      "fileSha": "0a0f067c1cb33b248a72fc77b3cdfec247c1b95403a6c18d3d6b723d9b234472"
+    }
+  ]
+}
