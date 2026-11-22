@@ -35,6 +35,10 @@ interface Bound {
   noArea?: { el: SVGGraphicsElement; box: Box; ob: Box; m: DOMMatrix; dir: { x: number; y: number } | null }[];
   /// The level's fill held to the bands of its runs' strokes (an element with no area).
   runsClip?: SVGClipPathElement;
+  /// A level along lines (an element with an area drawn as a line, Q30): the copy of the element's
+  /// shapes the level is drawn on, clipped to the level's rect (`fill`, then held in a clip), carrying
+  /// the state.
+  along?: SVGGElement;
   tag: SVGTextElement;
   label: SVGTextElement;
   fill?: SVGRectElement;
@@ -75,6 +79,9 @@ function boxIn(target: SVGGraphicsElement, el: SVGGraphicsElement, box: Box): Bo
 
 /// The paint the page outranks on a bound element (and pins on a group's text, as drawn).
 const PAINT = ["fill", "stroke", "stroke-width", "stroke-dasharray", "fill-opacity", "stroke-opacity"];
+
+/// The shapes the page draws on (the reader's `DRAWN`, its group and text apart).
+const GEOMETRY = "path, rect, circle, ellipse, line, polyline, polygon";
 
 type Pt = { x: number; y: number };
 type Run = { box: Box; dir: Pt | null };
@@ -158,7 +165,7 @@ function runsOf(el: SVGGraphicsElement, box: DOMRect): Run[] | null {
 function noAreaParts(el: SVGGraphicsElement, box: DOMRect): { el: SVGGraphicsElement; run: Run }[] | null {
   if (el instanceof SVGGeometryElement) return runsOf(el, box)?.map((run) => ({ el, run })) ?? null;
   if (el instanceof SVGTextElement || Array.from(el.querySelectorAll("text")).some((t) => t.checkVisibility())) return null;
-  const shapes = Array.from(el.querySelectorAll<SVGGeometryElement>("path, rect, circle, ellipse, line, polyline, polygon")).filter((g) => g.checkVisibility());
+  const shapes = Array.from(el.querySelectorAll<SVGGeometryElement>(GEOMETRY)).filter((g) => g.checkVisibility());
   if (!shapes.length) return box.width === 0 || box.height === 0 ? [] : null;
   const out: { el: SVGGraphicsElement; run: Run }[] = [];
   for (const g of shapes) {
@@ -167,6 +174,43 @@ function noAreaParts(el: SVGGraphicsElement, box: DOMRect): { el: SVGGraphicsEle
     out.push(...runs.map((run) => ({ el: g as SVGGraphicsElement, run })));
   }
   return out;
+}
+
+/// The shapes an element draws as lines (Q30, decided 2026-11-19: "Its line, as drawn"): the element
+/// itself, or a group's shapes at any depth, each whose fill computes to `none` as the drawing
+/// stands (written as an attribute, in `style` or on a group above), or which draws no area (a line,
+/// a straight path or polyline: `runsOf`). A fill of zero opacity, or of the background's colour, is
+/// a fill; a text is a body whatever its fill. Read before the page paints anything.
+function linesOf(el: SVGGraphicsElement): SVGGeometryElement[] {
+  const shapes = el instanceof SVGGeometryElement ? [el] : el instanceof SVGTextElement ? [] : Array.from(el.querySelectorAll<SVGGeometryElement>(GEOMETRY));
+  return shapes.filter((g) => getComputedStyle(g).fill === "none" || runsOf(g, g.getBBox()) !== null);
+}
+
+/// The copy of an element's shapes a level along lines is drawn on: the element's geometry as it
+/// stands, carried by `m` from its own coordinates (its own transform among them) to the frame it is
+/// drawn in; its texts, titles and descriptions dropped; no id, class or `data-` attribute kept but a
+/// line's mark (`sv-line`, its drawn width in its `style`), every other shape marked a body
+/// (`sv-body`); each shape's caps, joins and mitre limit as the browser computes them on the
+/// original, so the level covers the track's line exactly.
+function copyOf(el: SVGGraphicsElement, m: DOMMatrix): SVGGraphicsElement {
+  const copy = el.cloneNode(true) as SVGGraphicsElement;
+  copy.querySelectorAll("text, title, desc").forEach((n) => n.remove());
+  for (const n of [copy, ...Array.from(copy.querySelectorAll("*"))]) {
+    n.removeAttribute("id");
+    for (const a of Array.from(n.attributes)) if (a.name.startsWith("data-")) n.removeAttribute(a.name);
+    const line = n.classList.contains("sv-line");
+    n.removeAttribute("class");
+    if (line) n.classList.add("sv-line");
+  }
+  const from = el.matches(GEOMETRY) ? [el] : Array.from(el.querySelectorAll(GEOMETRY));
+  const to = copy.matches(GEOMETRY) ? [copy] : Array.from(copy.querySelectorAll<SVGElement>(GEOMETRY));
+  to.forEach((g, i) => {
+    if (!g.classList.contains("sv-line")) g.classList.add("sv-body");
+    const c = getComputedStyle(from[i]);
+    for (const p of ["stroke-linecap", "stroke-linejoin", "stroke-miterlimit"]) g.style.setProperty(p, c.getPropertyValue(p));
+  });
+  copy.setAttribute("transform", `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})`);
+  return copy;
 }
 
 /// A stroke's width across the way it runs, carried through a matrix: its band of width `sw` is
@@ -250,6 +294,22 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
   const overlay = s("g", { class: "sv-overlay" }) as SVGGElement;
   svg.append(overlay);
 
+  /// The box a level along lines rises over, in the overlay's frame: each shape of its copy shown,
+  /// carried there through its own matrix, a line's box grown by half its stroke's width as it is
+  /// painted now (in the state the copy carries), a body's as it is; none for no shape shown.
+  function alongBox(along: SVGGElement): Box | null {
+    const oc = overlay.getCTM();
+    if (!oc) return null;
+    const boxes = Array.from(along.querySelectorAll<SVGGeometryElement>(GEOMETRY)).filter((g) => g.checkVisibility()).map((g) => {
+      const ob = boxIn(overlay, g, g.getBBox());
+      const gc = g.getCTM();
+      if (!g.classList.contains("sv-line") || !gc) return ob;
+      const h = across(oc.inverse().multiply(gc), parseFloat(getComputedStyle(g).strokeWidth) || 0, null) / 2;
+      return { x: ob.x - h, y: ob.y - h, width: ob.width + 2 * h, height: ob.height + 2 * h };
+    });
+    return union(boxes);
+  }
+
   /// Where the page draws what it adds for an object, from the element's box as it stands now: the
   /// box (a text's moves with the view's scale: Chromium lays a text out at the size it is drawn,
   /// so a fit or a zoom moves its box a little), carried to the overlay; its label over it, its
@@ -284,7 +344,8 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       b.fillBox = union(bs) ?? b.ob;
       b.runsClip?.replaceChildren(...bs.map((r) => s("rect", { x: r.x, y: r.y, width: r.width, height: r.height })));
       if (sel) el.classList.add("sv-selected");
-    } else b.fillBox = { ...b.ob };
+    } else if (b.along) b.fillBox = alongBox(b.along) ?? { ...b.ob };
+    else b.fillBox = { ...b.ob };
     if (b.fill) {
       const f = b.filled ? b.last?.level ?? 0 : 0;
       b.fill.setAttribute("x", String(b.fillBox.x));
@@ -304,6 +365,13 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       const c = getComputedStyle(t);
       return { t, vals: PAINT.map((p) => [p, c.getPropertyValue(p)] as const) };
     });
+    // A shape the drawing draws as a line takes its state on its line alone, at the width it was
+    // drawn with (Q30): marked, that width written beside it (`--sv-w`), as the drawing stands.
+    const lines = linesOf(el);
+    for (const g of lines) {
+      g.style.setProperty("--sv-w", getComputedStyle(g).strokeWidth);
+      g.classList.add("sv-line");
+    }
     el.classList.add("sv-obj", `sv-show-${def.show}`, "sv-state-stale");
     for (const { t, vals } of pinned) for (const [p, v] of vals) t.style.setProperty(p, v, "important");
     el.dataset.object = def.id;
@@ -323,6 +391,9 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
     // it in the state's colour.
     const runs = def.show === "level" ? noAreaParts(el, box) : null;
     const noArea = runs !== null;
+    // A level on a line that closes an area (Q30: a ring, a bent pipe, a hollow rect drawn with no
+    // fill, or a group holding one) runs along its lines: drawn on a copy of the element's shapes.
+    const along = def.show === "level" && !noArea && lines.some((g) => g.checkVisibility() && runsOf(g, g.getBBox()) === null);
     const oc0 = overlay.getCTM();
     let na: Bound["noArea"];
     if (runs && oc0) {
@@ -342,10 +413,21 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       // by the element itself when it is a shape or a text with an area (the clip's `use` draws
       // it with its own transform, in that same space); a clip's `use` may draw nothing else, so
       // a group, and an element with no area, fills its box.
-      b.fill = s("rect", { height: 0, class: "sv-fill", "data-for": def.id }) as SVGRectElement;
       const pc = (el.parentNode as SVGGraphicsElement).getCTM();
       const m = pc && oc0 ? pc.inverse().multiply(oc0) : new DOMMatrix();
-      const frame = s("g", { transform: `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})` }, b.fill);
+      const frame = s("g", { transform: `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})` });
+      if (along) {
+        // Along lines (Q30): the level's rect is a clip, in the overlay's frame, and what it clips a
+        // copy of the element's shapes, carried into that frame, over the element (its track): each
+        // line stroked and each body filled in the state's colour (`.sv-along`).
+        const ec = el.getCTM();
+        b.fill = s("rect", { height: 0, class: "sv-along-rect" }) as SVGRectElement;
+        b.along = s("g", { class: "sv-along", "data-for": def.id, "clip-path": `url(#sv-along-${def.id})` }, copyOf(el, oc0 && ec ? oc0.inverse().multiply(ec) : new DOMMatrix())) as SVGGElement;
+        frame.append(s("clipPath", { id: `sv-along-${def.id}` }, b.fill), b.along);
+      } else {
+        b.fill = s("rect", { height: 0, class: "sv-fill", "data-for": def.id }) as SVGRectElement;
+        frame.append(b.fill);
+      }
       if (noArea) {
         // Its runs' bands, in the overlay's frame as the fill is (written by `measure`).
         b.runsClip = s("clipPath", { id: `sv-runs-${def.id}` }) as SVGClipPathElement;
@@ -353,7 +435,7 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
         b.fill.setAttribute("clip-path", `url(#sv-runs-${def.id})`);
       }
       const holder = s("g", { class: "sv-fill-holder", "data-for": def.id }, s("g", { class: "sv-reset" }, frame));
-      if ((el instanceof SVGGeometryElement || el instanceof SVGTextElement) && !noArea) {
+      if ((el instanceof SVGGeometryElement || el instanceof SVGTextElement) && !noArea && !along) {
         const clipId = `sv-clip-${def.id}`;
         // A clip reads its shape's inside by `clip-rule`, never by the `fill-rule` it is painted by
         // (the hole Inkscape's Combine leaves, `fill-rule:evenodd`): the element's own rule is
@@ -511,6 +593,17 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
         const fill = b.fill;
         requestAnimationFrame(() => requestAnimationFrame(() => fill.classList.remove("sv-instant")));
       }
+      // The state on what draws the level: its fill, or the copy a level along lines is drawn on.
+      const carrier = b.along ?? b.fill;
+      for (const c of Array.from(carrier.classList)) if (c.startsWith("sv-state-")) carrier.classList.remove(c);
+      carrier.classList.add(cls);
+      // Along lines, the box read again in the state just set (the alarm's width), while the drawing
+      // is on screen (off it nothing is measured; the layout paints again when shown).
+      if (b.along && svg.isConnected) {
+        b.fillBox = alongBox(b.along) ?? b.fillBox;
+        b.fill.setAttribute("x", String(b.fillBox.x));
+        b.fill.setAttribute("width", String(b.fillBox.width));
+      }
       // With no area, the stroke's width read again in the state just set (unselected: the
       // selection's own stroke is no part of the track).
       if (b.noArea) {
@@ -526,8 +619,6 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       const f = o.level ?? 0;
       b.fill.setAttribute("y", String(b.fillBox.y + b.fillBox.height * (1 - f)));
       b.fill.setAttribute("height", String(b.fillBox.height * f));
-      for (const c of Array.from(b.fill.classList)) if (c.startsWith("sv-state-")) b.fill.classList.remove(c);
-      b.fill.classList.add(cls);
     }
     if (b.valueText) b.valueText.textContent = o.text === null ? "" : `${o.text}${b.def.unit ? " " + b.def.unit : ""}`;
     const said = o.state === "normal" ? "" : `${o.mark} ${o.word}`;

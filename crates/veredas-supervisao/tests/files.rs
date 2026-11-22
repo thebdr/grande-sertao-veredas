@@ -1065,11 +1065,24 @@ A path is relative to the binding file's folder.
   the bottom of the screen by the value's place in `range`, a shape or a text within its outline
   by its own fill rule (a hole `evenodd` leaves stays empty), a group its box, an element with no
   area (a line, a shape whose outline holds none: a straight path or polyline, or a group of them)
-  its box widened to its stroke across it, that stroke drawn as the level's track), `value` (as
+  its box widened to its stroke across it, that stroke drawn as the level's track, and a shape drawn
+  as a line around an area (below; or a group holding one) along its lines, over the box of its
+  lines as painted, those lines its track), `value` (as
   `state`, and the value
   written over its element) or `move` (its element is a marker placed along `path` by the value's
   place in `range`, its own transform kept). A level and a marker need a numeric
   series.
+
+  A shape drawn as a line (Q30, decided: "Its line, as drawn") shows its state on its line alone: a
+  shape whose fill is `none` as the drawing stands (written on it, in its `style` or on a group
+  above), and a shape with no area (a line, a straight path or polyline). Its line takes the state's
+  colour (a marker's, in normal, the colour a marker's body takes; stale dashed) at the width it was
+  drawn with, never thinner than the page's own outline (1.4, 2 in alarm, 2.5 selected); nothing is
+  painted inside it, so a click inside it picks what lies there. A level on it runs along its line,
+  the line its track. A shape drawn with a fill, of any colour or opacity (zero, or the background's
+  colour, included), is a body: its inside takes the state's colour. A group's shapes each go by
+  their own fill; a text is a body whatever its fill. An outline meant to be painted as a body needs
+  a fill in Inkscape (Fill and Stroke, a flat colour).
 - `range` (`[0, 100]`): the low and the high of a level or a marker, low below high, both finite.
 - `path` (required for `move`, refused otherwise): the `id` of the layout element the marker
   follows, a `path`, `line`, `polyline`, `polygon`, `rect`, `circle` or `ellipse`.

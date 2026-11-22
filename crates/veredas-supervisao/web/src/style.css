@@ -79,7 +79,8 @@ svg.plant { width: 100%; height: 100%; display: block; user-select: none; }
    are painted by their fill alone, never stroked. */
 .sv-overlay, .sv-reset { all: initial; }
 .sv-fill { pointer-events: none; fill: var(--neutral); stroke: none; transition: y .3s, height .3s; }
-.sv-fill.sv-instant { transition: none; }
+.sv-along-rect { transition: y .3s, height .3s; }
+.sv-fill.sv-instant, .sv-along-rect.sv-instant { transition: none; }
 :where(.sv-show-state.sv-state-normal, .sv-show-value.sv-state-normal) { fill: var(--neutral) !important; }
 :where(.sv-obj.sv-state-near) { stroke: var(--near) !important; }
 :where(.sv-show-state.sv-state-near, .sv-fill.sv-state-near) { fill: var(--near) !important; }
@@ -95,16 +96,50 @@ svg.plant { width: 100%; height: 100%; display: block; user-select: none; }
 :where(.sv-show-move.sv-state-warn) { fill: var(--warn) !important; }
 :where(.sv-show-move.sv-state-disabled) { fill: url(#sv-hatch) !important; stroke: var(--weak) !important; stroke-width: 1 !important; }
 :where(.sv-show-move.sv-state-alarm) { fill: var(--danger) !important; }
-/* A level with no area (a line): its stroke is the level's track, drawn as an area's inside is, the
-   fill over it in the state's colour (its width and dashes still the state's). */
-:where(.sv-show-level.sv-noarea) { stroke: var(--raised) !important; }
 /* A bound group's shapes, and the groups between it and them, take its state's paint, whatever the
    drawing wrote on them, and so do a bound text's spans. A group's text keeps its paint as drawn (a
    label: the page pins it as it stood before the group took a state), its spans their own. */
 :where(.sv-obj :is(g, rect, circle, ellipse, path, polygon, polyline, line), text.sv-obj tspan) { fill: inherit !important; stroke: inherit !important; stroke-width: inherit !important; stroke-dasharray: inherit !important; fill-opacity: inherit !important; stroke-opacity: inherit !important; }
 :where(.sv-fill.sv-state-disabled) { fill: url(#sv-hatch) !important; }
+/* A shape the drawing draws as a line (Q30, decided 2026-11-19: "Its line, as drawn"): drawn with no
+   fill, or with no area (a line, a straight path), the page marks it `sv-line` and writes the width
+   it was drawn with beside it as `--sv-w` (layout.ts). Its state is on its line alone, at that width
+   and never thinner than the page's own outline (1.4, the alarm's 2); nothing is painted inside. A
+   marker's line in normal takes the marker's own colour; a stale line is dashed at its own width. A
+   level's line is its track, the same in every state (its width and dashes still the state's), the
+   level running along it in the state's colour (`.sv-along`), as on a shape with no area. */
+:where(.sv-obj.sv-line, .sv-obj .sv-line) { fill: none !important; stroke: var(--neutral) !important; stroke-width: max(var(--sv-w), 1.4px) !important; }
+:where(.sv-show-move.sv-line, .sv-show-move .sv-line) { stroke: #d4d4da !important; }
+:where(.sv-obj.sv-state-near.sv-line, .sv-obj.sv-state-near .sv-line) { stroke: var(--near) !important; }
+:where(.sv-obj.sv-state-warn.sv-line, .sv-obj.sv-state-warn .sv-line) { stroke: var(--warn) !important; }
+:where(.sv-obj.sv-state-alarm.sv-line, .sv-obj.sv-state-alarm .sv-line) { stroke: var(--danger) !important; stroke-width: max(var(--sv-w), 2px) !important; }
+:where(.sv-obj.sv-state-disabled.sv-line, .sv-obj.sv-state-disabled .sv-line) { stroke: url(#sv-hatch) !important; }
+:where(.sv-obj.sv-state-stale.sv-line, .sv-obj.sv-state-stale .sv-line) { stroke: var(--muted) !important; stroke-dasharray: max(var(--sv-w), 2px) !important; }
+:where(.sv-show-level.sv-line, .sv-show-level .sv-line) { stroke: var(--raised) !important; }
+/* A level along a line: a copy of the element's shapes over its track, clipped to the level's height
+   (layout.ts), each line stroked and each body filled in the state's colour, at the track's width
+   and dashes. */
+.sv-along { pointer-events: none; }
+.sv-along :is(g, rect, circle, ellipse, path, polygon, polyline, line) { fill: none !important; stroke: none !important; fill-opacity: 1 !important; stroke-opacity: 1 !important; stroke-dasharray: none !important; marker: none !important; }
+.sv-along .sv-line { stroke: var(--neutral) !important; stroke-width: max(var(--sv-w), 1.4px) !important; }
+.sv-along .sv-body { fill: var(--neutral) !important; }
+.sv-along.sv-state-near .sv-line { stroke: var(--near) !important; }
+.sv-along.sv-state-near .sv-body { fill: var(--near) !important; }
+.sv-along.sv-state-warn .sv-line { stroke: var(--warn) !important; }
+.sv-along.sv-state-warn .sv-body { fill: var(--warn) !important; }
+.sv-along.sv-state-alarm .sv-line { stroke: var(--danger) !important; stroke-width: max(var(--sv-w), 2px) !important; }
+.sv-along.sv-state-alarm .sv-body { fill: var(--danger) !important; }
+.sv-along.sv-state-disabled .sv-line { stroke: url(#sv-hatch) !important; }
+.sv-along.sv-state-disabled .sv-body { fill: url(#sv-hatch) !important; }
+.sv-along.sv-state-stale .sv-line { stroke: var(--muted) !important; stroke-dasharray: max(var(--sv-w), 2px) !important; }
+.sv-along.sv-state-stale .sv-body { fill: #2a2a30 !important; }
 .sv-selected, .sv-selected :is(g, rect, circle, ellipse, path, polygon, polyline, line), text.sv-selected tspan { stroke: var(--accent) !important; stroke-width: 2.5 !important; stroke-dasharray: none !important; stroke-opacity: 1 !important; }
 .sv-show-move.sv-selected { fill: var(--accent) !important; }
+/* A line selected: the accent on its line, at its width and never thinner than the selection's 2.5,
+   nothing painted inside; a level's line wider than the level along it by a pixel on each side, so
+   the accent shows around the level wherever it runs. */
+.sv-selected.sv-line, .sv-selected .sv-line { fill: none !important; stroke-width: max(var(--sv-w), 2.5px) !important; }
+.sv-selected.sv-show-level.sv-line, .sv-selected.sv-show-level .sv-line { stroke-width: calc(max(var(--sv-w), 2px) + 2px) !important; }
 .sv-overlay text { pointer-events: none; font-family: var(--mono); }
 .sv-label { fill: var(--weak2); }
 .sv-value { fill: var(--strong); }

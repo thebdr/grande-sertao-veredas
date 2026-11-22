@@ -226,7 +226,8 @@ const COLOUR_READERS: &str = r##"
 "##;
 
 /// Every state drawn in the accent: the drawing's elements and everything inside them (the selection
-/// apart, which the selection check pins to the one selected), its fills, tags, values and labels,
+/// apart, which the selection check pins to the one selected), its fills and the copies a level along
+/// lines is drawn on, its tags, values and labels,
 /// the headline's figures, the attention list's marks and the side panel's badges, each by every
 /// property it has. The attention list's rows: the accent's own mark (`on`) on the selected
 /// object's row alone, and no other row painted in it by any property. Every selected element
@@ -235,7 +236,7 @@ const COLOUR_READERS: &str = r##"
 /// is multiplied, shown.
 const ACCENT_ON_STATES: &str = r##"
   const name = (el) => el.id || el.dataset.for || el.dataset.key || `${el.tagName} in ${el.closest("[id]")?.id}`;
-  const drawn = [...document.querySelectorAll("svg.plant .sv-obj, svg.plant .sv-obj *, svg.plant [data-key], svg.plant [data-key] *, svg.plant .sv-fill, .sv-overlay .sv-tag, .sv-overlay .sv-value, .sv-overlay .sv-label")]
+  const drawn = [...document.querySelectorAll("svg.plant .sv-obj, svg.plant .sv-obj *, svg.plant [data-key], svg.plant [data-key] *, svg.plant .sv-fill, svg.plant .sv-along, svg.plant .sv-along *, .sv-overlay .sv-tag, .sv-overlay .sv-value, .sv-overlay .sv-label")]
     .filter((el) => !el.closest(".sv-selected"))
     .flatMap((el) => accentOn(el).map((g) => `${name(el)} ${g}`));
   // Every element outside the drawing whose class names a state (`st-`, `sv-state-`), wherever the
@@ -268,8 +269,10 @@ const ACCENT_ON_STATES: &str = r##"
 /// Every state the vocabulary has on every surface it is drawn on, by a probe element of each put
 /// where the page puts its own (so every rule of the stylesheet that could reach one does): an
 /// element and a group of every way of showing, a level's fill and a tag in the drawing, a figure
-/// of the headline, a mark of the attention list and a badge; each read by `accentOn`, then removed.
-/// The states and the ways of showing come from the crate's own enums (`STATES`, `KINDS`).
+/// of the headline, a mark of the attention list and a badge; a shape drawn as a line (Q30) of every
+/// way of showing, thick and thin, alone and in a group, and the copy a level along lines is drawn
+/// on; each read by `accentOn`, then removed. The states and the ways of showing come from the
+/// crate's own enums (`STATES`, `KINDS`).
 const PROBES: &str = r##"
   const svgNS = "http://www.w3.org/2000/svg";
   const plant = document.querySelector("svg.plant"), overlay = plant.querySelector(".sv-overlay");
@@ -277,6 +280,8 @@ const PROBES: &str = r##"
   const paints = [];
   const put = (parent, el, what) => { parent.append(el); made.push([el, what]); };
   const shape = (cls) => { const r = document.createElementNS(svgNS, "rect"); r.setAttribute("class", cls); r.setAttribute("width", "4"); r.setAttribute("height", "4"); return r; };
+  const LINE_WIDTHS = [["7px", "line"], ["0.5px", "thin line"]];
+  const lined = (el, w) => { el.classList.add("sv-line"); el.style.setProperty("--sv-w", w); return el; };
   for (const s of STATES) {
     for (const k of KINDS) {
       put(plant, shape(`sv-obj sv-show-${k} sv-state-${s}`), `a ${k} element in ${s}`);
@@ -308,6 +313,25 @@ const PROBES: &str = r##"
     badge.className = `badge st-${s}`;
     badge.textContent = "x";
     put(document.querySelector(".side"), badge, `a badge in ${s}`);
+    // Lines (Q30): a shape the drawing draws as a line (`sv-line`, the width it was drawn with in
+    // `--sv-w`, as the page marks one), of every way of showing, drawn 7 wide and 0.5 wide, alone and
+    // as a group's shape writing its own paint; and the copy a level along lines is drawn on
+    // (`sv-along`), its line at each width and its body.
+    for (const k of KINDS) {
+      for (const [w, name] of LINE_WIDTHS) {
+        put(plant, lined(shape(`sv-obj sv-show-${k} sv-state-${s}`), w), `a ${name} ${k} element in ${s}`);
+        const lg = document.createElementNS(svgNS, "g");
+        lg.setAttribute("class", `sv-obj sv-show-${k} sv-state-${s}`);
+        const mine = lined(shape(""), w);
+        for (const [a, v] of [["fill", "#123456"], ["stroke", "#654321"], ["stroke-width", "3"], ["stroke-dasharray", "9 1"]]) mine.setAttribute(a, v);
+        lg.append(mine);
+        put(plant, lg, `a ${name} ${k} group in ${s}`);
+      }
+    }
+    const along = document.createElementNS(svgNS, "g");
+    along.setAttribute("class", `sv-along sv-state-${s}`);
+    along.append(...LINE_WIDTHS.map(([w]) => lined(shape(""), w)), shape("sv-body"));
+    put(plant, along, `a level along lines in ${s}`);
   }
   const out = made.flatMap(([el, what]) => [el, ...el.querySelectorAll("*")].flatMap((x) => accentOn(x).map((g) => `${what}: ${x === el ? "" : `its ${x.tagName} `}${g}`)));
   // Painted in its state: a group's shape (its own fill and stroke written) as a plain one is, and
@@ -456,6 +480,77 @@ const PROBES: &str = r##"
       const el = made.find(([, w]) => w === `${what} in ${s}`)[0];
       if (byFill(el) <= 0.05) out.push(`${what} in ${s} not shown by its fill`);
       if (getComputedStyle(el).stroke !== "none") out.push(`${what} in ${s} stroked ${getComputedStyle(el).stroke}`);
+    }
+  }
+  // Lines (Q30): every line unfilled, at the width it was drawn with and never thinner than the
+  // page's own outline (1.4, the alarm's 2), in its state's colour (normal the neutral, a marker's
+  // the colour a marker's body takes, near, warn, the alarm's danger, disabled the hatch, stale the
+  // muted one dashed at its own width), a level's line its track (raised in every state: the level
+  // along it carries the state); a group's line painted as a plain line; each state told apart on
+  // every line but a level's track, on a level's line and on its body; and selected, in every
+  // state alike, the accent on the line, unfilled, at its width and never thinner than the
+  // selection's 2.5, a level's track wider than the level along it by 2.
+  const ref = document.createElementNS(svgNS, "rect");
+  plant.append(ref);
+  const resolve = (v) => { ref.style.stroke = v; return getComputedStyle(ref).stroke; };
+  const marker = getComputedStyle(made.find(([, w]) => w === `a move element in normal`)[0]).fill;
+  const LINE = { normal: resolve("var(--neutral)"), near: resolve("var(--near)"), warn: resolve("var(--warn)"), alarm: resolve("var(--danger)"), disabled: resolve("url(#sv-hatch)"), stale: resolve("var(--muted)") };
+  const RAISED = resolve("var(--raised)");
+  ref.remove();
+  const px = (w, least) => `${Math.max(parseFloat(w), least)}px`;
+  const dashes = (w, s) => (s === "stale" ? px(w, 2) : "none");
+  for (const s of STATES) {
+    for (const k of KINDS) {
+      for (const [w, name] of LINE_WIDTHS) {
+        const el = made.find(([, x]) => x === `a ${name} ${k} element in ${s}`)[0];
+        const c = getComputedStyle(el);
+        const colour = k === "level" ? RAISED : k === "move" && s === "normal" ? marker : LINE[s];
+        if (c.fill !== "none" || c.stroke !== colour || c.strokeWidth !== px(w, s === "alarm" ? 2 : 1.4) || c.strokeDasharray !== dashes(w, s)) out.push(`a ${name} ${k} element in ${s}, drawn ${w}: filled ${c.fill}, stroked ${c.stroke} ${c.strokeWidth} dashed ${c.strokeDasharray}, its colour ${colour}`);
+        if (byStroke(el) <= 0.05) out.push(`a ${name} ${k} element in ${s} not shown`);
+        const g = made.find(([, x]) => x === `a ${name} ${k} group in ${s}`)[0].firstElementChild;
+        if (sig(g, SHAPE) !== sig(el, SHAPE)) out.push(`a ${name} ${k} group's line in ${s}: ${sig(g, SHAPE)}, a plain one ${sig(el, SHAPE)}`);
+      }
+    }
+    const [thick, thin, body] = made.find(([, x]) => x === `a level along lines in ${s}`)[0].children;
+    for (const [w, line] of [[LINE_WIDTHS[0][0], thick], [LINE_WIDTHS[1][0], thin]]) {
+      const c = getComputedStyle(line);
+      if (c.fill !== "none" || c.stroke !== LINE[s] || c.strokeWidth !== px(w, s === "alarm" ? 2 : 1.4) || c.strokeDasharray !== dashes(w, s) || byStroke(line) <= 0.05) out.push(`a level's line in ${s}, drawn ${w}: filled ${c.fill}, stroked ${c.stroke} ${c.strokeWidth} dashed ${c.strokeDasharray}`);
+    }
+    const cb = getComputedStyle(body);
+    if (cb.stroke !== "none" || byFill(body) <= 0.05) out.push(`a level's body in ${s}: stroked ${cb.stroke}, filled ${cb.fill}`);
+  }
+  const lineSurfaces = [
+    ...KINDS.filter((k) => k !== "level").flatMap((k) => LINE_WIDTHS.map(([, name]) => [`a ${name} ${k} element`, (s) => made.find(([, x]) => x === `a ${name} ${k} element in ${s}`)[0]])),
+    ...[0, 1, 2].map((i) => [`a level's ${["line", "thin line", "body"][i]}`, (s) => made.find(([, x]) => x === `a level along lines in ${s}`)[0].children[i]]),
+  ];
+  for (const [surface, at] of lineSurfaces) {
+    const seen = new Map();
+    for (const s of STATES) {
+      const v = sig(at(s), SHAPE);
+      if (seen.has(v)) out.push(`${surface} in ${s} painted as in ${seen.get(v)}: ${v}`);
+      else seen.set(v, s);
+    }
+  }
+  for (const k of KINDS) {
+    for (const [w, name] of LINE_WIDTHS) {
+      let first = null;
+      for (const s of STATES) {
+        const el = lined(shape(`sv-obj sv-show-${k} sv-state-${s} sv-selected`), w);
+        const g = document.createElementNS(svgNS, "g");
+        g.setAttribute("class", `sv-obj sv-show-${k} sv-state-${s} sv-selected`);
+        const mine = lined(shape(""), w);
+        mine.setAttribute("fill", "#123456");
+        mine.setAttribute("stroke-width", "3");
+        g.append(mine);
+        plant.append(el, g);
+        extra.push(el, g);
+        const c = getComputedStyle(el);
+        const want = k === "level" ? `${Math.max(parseFloat(w), 2) + 2}px` : px(w, 2.5);
+        if (c.fill !== "none" || c.strokeWidth !== want) out.push(`a ${name} ${k} element selected in ${s}: filled ${c.fill}, ${c.strokeWidth} wide, drawn ${w}`);
+        if (sig(mine, SEL) !== sig(el, SEL) || getComputedStyle(mine).fill !== "none") out.push(`a ${name} ${k} group's line selected in ${s}: ${sig(mine, SEL)}, a plain one ${sig(el, SEL)}`);
+        if (first === null) first = sig(el, SEL);
+        else if (sig(el, SEL) !== first) out.push(`a ${name} ${k} element selected in ${s}: ${sig(el, SEL)}, selected in ${STATES[0]} ${first}`);
+      }
     }
   }
   for (const e of extra) e.remove();
@@ -1872,6 +1967,302 @@ fn a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_th
     assert_eq!(vb(&mut page), framed, "the frame never shrinks while the view stays fitted: the edge's word unsaid");
     feed_to(&mut page, 85.0, "warn");
     assert_eq!(vb(&mut page), framed, "the frame never shrinks while the view stays fitted: the edge's word said again");
+    drop(page);
+    host.stop();
+}
+
+/// A drawing whose shapes are drawn as lines (Q30, the architect, 2026-11-19: "Its line, as
+/// drawn"): conveyors drawn as `<line>`s 10 wide, one per state (the design mock's inductions); rings
+/// drawn 1 wide with no fill, one per state; rings with no fill written as an attribute, in `style`
+/// and on a group above; an open bent pipe; a shape filled at zero opacity and one filled in the
+/// page's background colour (bodies, both); a group of a filled rect and a ring with no fill one group
+/// deeper; a ring marker on a track of its own; and levels on a ring, a bent pipe (its caps round,
+/// from a group above: the level covers its line's round end), a ring drawn at a low stroke opacity
+/// and a hollow rect drawn dashed (the page outranks both, on the track and on its level), a
+/// group of a filled rect and a ring, a thin ring in alarm, and a ring inside a turned and scaled
+/// group.
+const LINES_SVG: &str = r##"  <line id="ln-normal" x1="15" y1="240" x2="15" y2="280" stroke="#2c2c33" stroke-width="10"/>
+  <line id="ln-near" x1="40" y1="240" x2="40" y2="280" stroke="#2c2c33" stroke-width="10"/>
+  <line id="ln-warn" x1="65" y1="240" x2="65" y2="280" stroke="#2c2c33" stroke-width="10"/>
+  <line id="ln-alarm" x1="90" y1="240" x2="90" y2="280" stroke="#2c2c33" stroke-width="10"/>
+  <line id="ln-disabled" x1="115" y1="240" x2="115" y2="280" stroke="#2c2c33" stroke-width="10"/>
+  <line id="ln-stale" x1="140" y1="240" x2="140" y2="280" stroke="#2c2c33" stroke-width="10"/>
+  <circle id="th-normal" cx="175" cy="260" r="8" fill="none" stroke="#3a3a40" stroke-width="1"/>
+  <circle id="th-near" cx="205" cy="260" r="8" fill="none" stroke="#3a3a40" stroke-width="1"/>
+  <circle id="th-warn" cx="235" cy="260" r="8" fill="none" stroke="#3a3a40" stroke-width="1"/>
+  <circle id="th-alarm" cx="265" cy="260" r="8" fill="none" stroke="#3a3a40" stroke-width="1"/>
+  <circle id="th-disabled" cx="295" cy="260" r="8" fill="none" stroke="#3a3a40" stroke-width="1"/>
+  <circle id="th-stale" cx="325" cy="260" r="8" fill="none" stroke="#3a3a40" stroke-width="1"/>
+  <line id="nm-track" x1="355" y1="240" x2="355" y2="290" stroke="#26262A" stroke-width="2"/>
+  <circle id="nm-ring" r="5" fill="none" stroke="#ffffff" stroke-width="3"/>
+  <circle id="nf-attr" cx="25" cy="320" r="12" fill="none" stroke="#3a3a40" stroke-width="6"/>
+  <circle id="nf-style" cx="65" cy="320" r="12" style="fill:none;stroke:#3a3a40;stroke-width:6"/>
+  <g style="fill:none"><circle id="nf-above" cx="105" cy="320" r="12" stroke="#3a3a40" stroke-width="6"/></g>
+  <path id="nf-bent" d="M 135 305 H 175 V 335" fill="none" stroke="#3a3a40" stroke-width="8"/>
+  <rect id="nf-zero" x="190" y="305" width="30" height="30" style="fill:#ffffff;fill-opacity:0;stroke:#3a3a40"/>
+  <rect id="nf-bg" x="230" y="305" width="30" height="30" fill="#141416" stroke="#3a3a40"/>
+  <g id="nf-mixed"><rect x="270" y="305" width="30" height="30" fill="#cccccc"/><g><circle cx="335" cy="320" r="12" fill="none" stroke="#3a3a40" stroke-width="6"/></g></g>
+  <circle id="la-ring" cx="40" cy="370" r="16" fill="none" stroke="#3a3a40" stroke-width="6" stroke-opacity="0.3"/>
+  <g style="stroke-linecap:round"><path id="la-bent" d="M 80 350 V 390 H 120" fill="none" stroke="#3a3a40" stroke-width="8"/></g>
+  <rect id="la-hollow" x="140" y="350" width="40" height="40" fill="none" stroke="#3a3a40" stroke-width="4" stroke-dasharray="1 30"/>
+  <g id="la-mixed"><rect x="200" y="350" width="20" height="40"/><circle cx="250" cy="370" r="16" fill="none" stroke="#3a3a40" stroke-width="6"/></g>
+  <circle id="la-alarm" cx="300" cy="370" r="16" fill="none" stroke="#3a3a40" stroke-width="1"/>
+  <g transform="translate(330 350) rotate(20) scale(1.2)"><circle id="la-turned" cx="16" cy="16" r="12" fill="none" stroke="#3a3a40" stroke-width="5"/></g>
+</svg>"##;
+
+/// Each shape drawn as a line and bound to show its state: its id, its state, the width it was drawn
+/// with, a point on its line (in a dash of a stale one: its first, a circle's starting at its right)
+/// and a point inside what it closes (if it closes one), in its own coordinates. A conveyor drawn as
+/// a `<line>` draws no area; every other one draws its line around an area with no fill.
+#[allow(clippy::type_complexity)]
+const LINE_CASES: [(&str, &str, f64, (f64, f64), Option<(f64, f64)>); 18] = [
+    ("ln-normal", "normal", 10.0, (15.0, 245.0), None),
+    ("ln-near", "near", 10.0, (40.0, 245.0), None),
+    ("ln-warn", "warn", 10.0, (65.0, 245.0), None),
+    ("ln-alarm", "alarm", 10.0, (90.0, 245.0), None),
+    ("ln-disabled", "disabled", 10.0, (115.0, 245.0), None),
+    ("ln-stale", "stale", 10.0, (140.0, 245.0), None),
+    ("th-normal", "normal", 1.0, (175.0, 252.0), Some((175.0, 260.0))),
+    ("th-near", "near", 1.0, (205.0, 252.0), Some((205.0, 260.0))),
+    ("th-warn", "warn", 1.0, (235.0, 252.0), Some((235.0, 260.0))),
+    ("th-alarm", "alarm", 1.0, (265.0, 252.0), Some((265.0, 260.0))),
+    ("th-disabled", "disabled", 1.0, (295.0, 252.0), Some((295.0, 260.0))),
+    ("th-stale", "stale", 1.0, (332.938, 260.998), Some((325.0, 260.0))),
+    ("nm-ring", "normal", 3.0, (0.0, -5.0), Some((0.0, 0.0))),
+    ("nf-attr", "warn", 6.0, (25.0, 308.0), Some((25.0, 320.0))),
+    ("nf-style", "warn", 6.0, (65.0, 308.0), Some((65.0, 320.0))),
+    ("nf-above", "warn", 6.0, (105.0, 308.0), Some((105.0, 320.0))),
+    ("nf-bent", "warn", 8.0, (155.0, 305.0), Some((161.7, 315.0))),
+    ("nf-mixed", "warn", 6.0, (335.0, 308.0), Some((335.0, 320.0))),
+];
+
+/// Shapes drawn with a fill, bound to show a state (warn): one at zero opacity, one in the page's
+/// background colour, a group's rect beside a ring with none. Each with a point inside it.
+const BODY_CASES: [(&str, (f64, f64)); 3] = [("nf-zero", (205.0, 320.0)), ("nf-bg", (245.0, 320.0)), ("nf-mixed", (285.0, 320.0))];
+
+/// Each level along lines: its id, its level, its state, the width its line was drawn with, points
+/// on its lines below its level, on them above it, and inside what they close (off every line), in
+/// its own coordinates.
+#[allow(clippy::type_complexity)]
+const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 6] = [
+    ("la-ring", 0.35, "normal", 6.0, &[(40.0, 386.0)], &[(40.0, 354.0), (24.0, 370.0)], &[(40.0, 370.0), (40.0, 380.0)]),
+    ("la-bent", 0.35, "normal", 8.0, &[(100.0, 390.0), (80.0, 385.0), (122.5, 390.0)], &[(80.0, 360.0)], &[(95.0, 380.0)]),
+    ("la-hollow", 1.0, "normal", 4.0, &[(160.0, 350.0), (140.0, 370.0), (180.0, 370.0), (160.0, 390.0)], &[], &[(160.0, 370.0)]),
+    ("la-mixed", 0.35, "normal", 6.0, &[(210.0, 385.0), (250.0, 386.0)], &[(210.0, 360.0), (250.0, 354.0)], &[(250.0, 380.0), (250.0, 370.0)]),
+    ("la-alarm", 0.85, "alarm", 1.0, &[(300.0, 386.0)], &[(300.0, 354.0)], &[(300.0, 375.0)]),
+    ("la-turned", 0.35, "normal", 5.0, &[(20.10, 27.28)], &[(11.90, 4.72)], &[(16.0, 16.0)]),
+];
+
+/// The state's colours on a line, read from the page's own tokens as the browser computes a stroke:
+/// normal the neutral, near, warn, the alarm's danger, disabled the hatch, stale the muted; a marker's
+/// in normal as a marker's body is painted (`parcel-1`'s fill); a level's track the raised one; and
+/// the accent.
+const LINE_COLOURS: &str = r##"
+  const ref = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  document.querySelector("svg.plant").append(ref);
+  const resolve = (v) => { ref.style.stroke = v; return getComputedStyle(ref).stroke; };
+  const LINE = { normal: resolve("var(--neutral)"), near: resolve("var(--near)"), warn: resolve("var(--warn)"), alarm: resolve("var(--danger)"), disabled: resolve("url(#sv-hatch)"), stale: resolve("var(--muted)") };
+  const RAISED = resolve("var(--raised)");
+  const ACCENT = resolve("var(--accent)");
+  ref.remove();
+  const MARKER = getComputedStyle(document.getElementById("parcel-1")).fill;
+  const GEOM = "path, rect, circle, ellipse, line, polyline, polygon";
+  const screen = (el, [x, y]) => new DOMPoint(x, y).matrixTransform(el.getScreenCTM());
+  const hitAt = (el, p) => { const q = screen(el, p); return document.elementFromPoint(q.x, q.y); };
+  const within = (el, e) => !!e && (e === el || el.contains(e));
+"##;
+
+/// Every shape drawn as a line in its state (`LINE_CASES`): its lines unfilled, stroked in the state's
+/// colour at the width it was drawn with and never thinner than the page's own outline (1.4, the
+/// alarm's 2), a stale one dashed at its own width; hit on its line; nothing of it hit inside what it
+/// closes (the browser hits a shape where it paints it). And every body (`BODY_CASES`) filled in its
+/// state's colour, opaque, and hit inside.
+const LINE_PAINT: &str = r##"((cases, bodies) => {
+  /*COLOURS*/
+  const out = [];
+  for (const [id, state, drawn, on, inside] of cases) {
+    const el = document.getElementById(id);
+    if (!el) { out.push(`${id}: not drawn`); continue; }
+    const lines = el.matches(".sv-line") ? [el] : [...el.querySelectorAll(".sv-line")];
+    if (!el.classList.contains(`sv-state-${state}`) || lines.length !== 1) out.push(`${id}: ${el.getAttribute("class")}, ${lines.length} lines`);
+    const colour = el.classList.contains("sv-show-move") && state === "normal" ? MARKER : LINE[state];
+    const w = `${Math.max(drawn, state === "alarm" ? 2 : 1.4)}px`, d = state === "stale" ? `${Math.max(drawn, 2)}px` : "none";
+    for (const l of lines) {
+      const c = getComputedStyle(l);
+      if (c.fill !== "none" || c.stroke !== colour || c.strokeWidth !== w || c.strokeDasharray !== d || c.strokeOpacity !== "1" || c.visibility !== "visible") out.push(`${id}: filled ${c.fill}, stroked ${c.stroke} ${c.strokeWidth} dashed ${c.strokeDasharray} at ${c.strokeOpacity}; in ${state}, drawn ${drawn}, it is ${colour} ${w} dashed ${d}`);
+    }
+    if (!within(el, hitAt(el, on))) out.push(`${id}: not hit on its line at ${on} (${hitAt(el, on)?.tagName})`);
+    if (inside && within(el, hitAt(el, inside))) out.push(`${id}: hit inside its line at ${inside}`);
+  }
+  for (const [id, at] of bodies) {
+    const el = document.getElementById(id);
+    const hit = hitAt(el, at);
+    const shape = el.matches(GEOM) ? el : hit;
+    const c = getComputedStyle(shape);
+    if (!within(el, hit) || shape.classList.contains("sv-line") || c.fill !== LINE.warn || c.fillOpacity !== "1") out.push(`${id}: at ${at} hit ${hit?.tagName}, filled ${c.fill} at ${c.fillOpacity}, a body in warn is ${LINE.warn}`);
+  }
+  return out;
+})"##;
+
+/// Every level along lines (`ALONG_CASES`): its copy (`sv-along`) in the object's state, its lines
+/// stroked in the state's colour at the track's width, solid and opaque, and unfilled, its bodies
+/// filled in it, opaque; the element itself the track (its lines raised, solid and opaque); hit on its lines below its level as the level, above
+/// it as the element, and inside what they close as neither; its clip's rect over its shapes' box as
+/// painted on the screen (each shown shape's box, a line's grown by half its stroke), from that box's
+/// foot to its level, within half a pixel.
+const ALONG_PAINT: &str = r##"((cases) => {
+  /*COLOURS*/
+  const out = [];
+  for (const [id, level, state, drawn, below, above, inside] of cases) {
+    const el = document.getElementById(id), along = document.querySelector(`.sv-along[data-for="${id}"]`), rect = document.querySelector(`[id="sv-along-${id}"] rect`);
+    if (!el || !along || !rect) { out.push(`${id}: no level along its lines`); continue; }
+    if (!along.classList.contains(`sv-state-${state}`) || !el.classList.contains(`sv-state-${state}`)) out.push(`${id}: its level ${along.getAttribute("class")}, its element ${el.getAttribute("class")}`);
+    const w = `${Math.max(drawn, state === "alarm" ? 2 : 1.4)}px`;
+    const copies = [...along.querySelectorAll(GEOM)];
+    for (const g of copies) {
+      const c = getComputedStyle(g);
+      const ok = g.classList.contains("sv-line") ? c.fill === "none" && c.stroke === LINE[state] && c.strokeWidth === w && c.strokeDasharray === "none" && c.strokeOpacity === "1" : c.stroke === "none" && c.fill === LINE[state] && c.fillOpacity === "1";
+      if (!ok) out.push(`${id}: its level's ${g.tagName} filled ${c.fill}, stroked ${c.stroke} ${c.strokeWidth}`);
+    }
+    const tracks = el.matches(".sv-line") ? [el] : [...el.querySelectorAll(".sv-line")];
+    if (!tracks.length || copies.filter((g) => g.classList.contains("sv-line")).length !== tracks.length) out.push(`${id}: ${tracks.length} lines, ${copies.length} shapes in its level`);
+    for (const t of tracks) { const c = getComputedStyle(t); if (c.fill !== "none" || c.stroke !== RAISED || c.strokeWidth !== w || c.strokeDasharray !== "none" || c.strokeOpacity !== "1") out.push(`${id}: its track filled ${c.fill}, stroked ${c.stroke} ${c.strokeWidth} dashed ${c.strokeDasharray} at ${c.strokeOpacity}`); }
+    const prev = along.style.pointerEvents;
+    along.style.pointerEvents = "visiblePainted";
+    for (const p of below) if (!within(along, hitAt(el, p))) out.push(`${id}: no level on its line at ${p}, below its level (${hitAt(el, p)?.tagName})`);
+    for (const p of above) { const e = hitAt(el, p); if (!within(el, e)) out.push(`${id}: its track not hit at ${p}, above its level (${e?.tagName} ${within(along, e) ? "of its level" : ""})`); }
+    for (const p of inside) { const e = hitAt(el, p); if (within(el, e) || within(along, e)) out.push(`${id}: painted inside its lines at ${p} (${e?.tagName})`); }
+    along.style.pointerEvents = prev;
+    const shapes = (el.matches(GEOM) ? [el] : [...el.querySelectorAll(GEOM)]).filter((g) => g.checkVisibility());
+    const boxes = shapes.map((g) => {
+      const b = g.getBBox(), m = g.getScreenCTM();
+      const pts = [[b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]].map(([x, y]) => new DOMPoint(x, y).matrixTransform(m));
+      const h = g.classList.contains("sv-line") ? (parseFloat(getComputedStyle(g).strokeWidth) * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c))) / 2 : 0;
+      return [Math.min(...pts.map((p) => p.x)) - h, Math.min(...pts.map((p) => p.y)) - h, Math.max(...pts.map((p) => p.x)) + h, Math.max(...pts.map((p) => p.y)) + h];
+    });
+    const B = [Math.min(...boxes.map((b) => b[0])), Math.min(...boxes.map((b) => b[1])), Math.max(...boxes.map((b) => b[2])), Math.max(...boxes.map((b) => b[3]))];
+    const m = along.getScreenCTM();
+    const [x, y, rw, rh] = ["x", "y", "width", "height"].map((k) => Number(rect.getAttribute(k)));
+    const rp = [[x, y], [x + rw, y + rh]].map(([px, py]) => new DOMPoint(px, py).matrixTransform(m));
+    const [l, t, r, b] = [Math.min(rp[0].x, rp[1].x), Math.min(rp[0].y, rp[1].y), Math.max(rp[0].x, rp[1].x), Math.max(rp[0].y, rp[1].y)];
+    if (Math.abs(l - B[0]) > 0.5 || Math.abs(r - B[2]) > 0.5 || Math.abs(b - B[3]) > 0.5 || Math.abs(b - t - level * (B[3] - B[1])) > 0.5) out.push(`${id}: its level over [${[l, t, r, b].map((v) => v.toFixed(2))}], its lines' box [${B.map((v) => v.toFixed(2))}] at ${level}`);
+  }
+  return out;
+})"##;
+
+/// The selection on a shape drawn as a line, after a click of the pointer on its line: every line of
+/// it in the accent, unfilled, at the width it was drawn with and never thinner than the selection's
+/// 2.5; a level's track wider than its level by 2 (its level's lines as unselected); a group's body
+/// keeping its fill.
+const LINE_SELECTED: &str = r##"((id, drawn) => {
+  /*COLOURS*/
+  const el = document.getElementById(id);
+  const accent = ACCENT;
+  const out = [];
+  if (!el.classList.contains("sv-selected")) out.push(`${id}: not drawn selected`);
+  const level = el.classList.contains("sv-show-level");
+  const along = document.querySelector(`.sv-along[data-for="${id}"]`);
+  const alarm = el.classList.contains("sv-state-alarm");
+  for (const l of el.matches(".sv-line") ? [el] : [...el.querySelectorAll(".sv-line")]) {
+    const c = getComputedStyle(l);
+    const w = level ? `${Math.max(drawn, 2) + 2}px` : `${Math.max(drawn, 2.5)}px`;
+    if (c.fill !== "none" || c.stroke !== accent || c.strokeWidth !== w) out.push(`${id}: its line filled ${c.fill}, stroked ${c.stroke} ${c.strokeWidth}, selected drawn ${drawn} it is ${accent} ${w}`);
+  }
+  if (level) for (const g of along.querySelectorAll(".sv-line")) { const c = getComputedStyle(g); if (c.strokeWidth !== `${Math.max(drawn, alarm ? 2 : 1.4)}px`) out.push(`${id}: its level's line ${c.strokeWidth} wide while selected`); }
+  for (const b of el.matches(GEOM) ? [] : [...el.querySelectorAll(GEOM)].filter((g) => !g.classList.contains("sv-line"))) { const c = getComputedStyle(b); if (c.fill !== LINE.warn || c.stroke !== accent) out.push(`${id}: its body filled ${c.fill}, stroked ${c.stroke}`); }
+  return out;
+})"##;
+
+/// The page draws a shape the drawing draws as a line (Q30, the architect, 2026-11-19: "Its line, as
+/// drawn") with its state on its line alone: a shape whose fill computes to `none` as drawn (written
+/// as an attribute, in `style`, on a group above) or which draws no area (a conveyor drawn as a
+/// `<line>`), each in every state, unfilled and stroked in the state's colour at the width it was
+/// drawn with (10 wide throughout), never thinner than the page's own outline (a ring drawn 1 wide:
+/// 1.4, 2 in alarm, 2.5 selected), nothing of it painted or hit inside; a fill of zero opacity or of the
+/// background's colour a body, painted inside; a group's shapes each by its own fill; a ring marker in
+/// the colour a marker's body takes; a level running along its lines (a ring, a bent pipe, a hollow
+/// rect, a group of a body and a ring, a thin ring in alarm, a ring in a turned and scaled group),
+/// over the element's track and never inside; the selection, by a click on the line, in the accent at
+/// the line's width, a level's track wider than its level; a click inside a ring picking what lies
+/// there (nothing); no state in the accent; and what the page adds (the level's copy among it)
+/// inheriting nothing the drawing writes on its root or a group.
+#[test]
+fn a_shape_drawn_with_no_fill_shows_its_state_on_its_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(&dir.path().join("bench"));
+    let mut ex = live_example(&bench, false);
+    assert!(ex.svg.contains("viewBox=\"0 0 400 220\"") && ex.svg.ends_with("</svg>\n"));
+    ex.svg = ex.svg.replace("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 400 400\"").replace("</svg>\n", LINES_SVG) + "\n";
+    // Each object in its state: a rule over `fill2` (85) naming it, normal with none, stale on the
+    // sorter's rate (its log empty: no value yet).
+    let value_in = |state: &str| match state {
+        "normal" => "value = { source = \"plc\", series = \"fill2\" }\n".to_string(),
+        "stale" => "value = { source = \"sorter\", series = \"rate\" }\n".to_string(),
+        s => format!("value = {{ source = \"plc\", series = \"fill2\" }}\nstates = [ {{ above = 50, state = \"{s}\" }} ]\n"),
+    };
+    let mut objects = String::new();
+    for (id, state, _, _, _) in LINE_CASES {
+        if id == "nm-ring" {
+            objects.push_str("\n[[object]]\nid = \"nm-ring\"\nvalue = { source = \"plc\", series = \"p1\" }\nshow = \"move\"\npath = \"nm-track\"\n");
+        } else {
+            objects.push_str(&format!("\n[[object]]\nid = \"{id}\"\n{}", value_in(state)));
+        }
+    }
+    for (id, _) in BODY_CASES.iter().filter(|(id, _)| *id != "nf-mixed") {
+        objects.push_str(&format!("\n[[object]]\nid = \"{id}\"\n{}", value_in("warn")));
+    }
+    for (id, level, state, _, _, _, _) in ALONG_CASES {
+        let series = if level == 1.0 { "fill3" } else if level == 0.85 { "fill2" } else { "fill1" };
+        let rule = if state == "normal" { String::new() } else { format!("states = [ {{ above = 50, state = \"{state}\" }} ]\n") };
+        objects.push_str(&format!("\n[[object]]\nid = \"{id}\"\nvalue = {{ source = \"plc\", series = \"{series}\" }}\nshow = \"level\"\n{rule}"));
+    }
+    ex.binding = ex.binding.replacen("\n[[dashboard]]", &format!("{objects}\n[[dashboard]]"), 1);
+    let path = write_example(dir.path(), &ex);
+    std::fs::write(dir.path().join("loop/sorts.log"), "").unwrap();
+    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+    let addr = host.addr();
+    let mut page = Browser::open(&format!("http://{addr}/s/loop/"));
+    let states: Vec<(&str, &str)> = LINE_CASES.iter().map(|c| (c.0, c.1)).chain(ALONG_CASES.iter().map(|c| (c.0, c.2))).chain(BODY_CASES.iter().map(|c| (c.0, "warn"))).collect();
+    page.wait_for(
+        &format!(
+            r#"(() => {{ const want = {}; return want.every(([id, s]) => document.getElementById(id)?.classList.contains(`sv-state-${{s}}`)) && {}.every((id) => parseFloat(document.querySelector(`[id="sv-along-${{id}}"] rect`)?.getAttribute("height")) > 0) && !document.getElementById("nm-ring").classList.contains("sv-hidden") || null; }})()"#,
+            serde_json::to_string(&states).unwrap(),
+            serde_json::to_string(&ALONG_CASES.iter().map(|c| c.0).collect::<Vec<_>>()).unwrap()
+        ),
+        Duration::from_secs(20),
+    );
+    page.wait_for(r#"document.getAnimations().every((a) => a.playState !== "running") || null"#, Duration::from_secs(5));
+    let xy = |p: (f64, f64)| json!([p.0, p.1]);
+    let cases: Vec<Value> = LINE_CASES.iter().map(|(id, s, w, on, inside)| json!([id, s, w, xy(*on), inside.map(xy)])).collect();
+    let bodies: Vec<Value> = BODY_CASES.iter().map(|(id, at)| json!([id, xy(*at)])).collect();
+    let script = |s: &str| s.replacen("/*COLOURS*/", LINE_COLOURS, 1);
+    assert_eq!(page.eval(&format!("{}({}, {})", script(LINE_PAINT), json!(cases), json!(bodies))), json!([]), "a shape drawn as a line painted otherwise than its state on its line, at its width");
+    let along: Vec<Value> = ALONG_CASES.iter().map(|(id, l, s, w, below, above, inside)| json!([id, l, s, w, below.iter().map(|p| xy(*p)).collect::<Vec<_>>(), above.iter().map(|p| xy(*p)).collect::<Vec<_>>(), inside.iter().map(|p| xy(*p)).collect::<Vec<_>>()])).collect();
+    assert_eq!(page.eval(&format!("{}({})", script(ALONG_PAINT), json!(along))), json!([]), "a level along lines not drawn along them, over its track, to its level");
+    // What the page adds, the level's copies among it, inherits nothing the drawing writes on its root
+    // or on a group a level stands in.
+    let root = page.eval(ROOT_PAINT);
+    assert!(root[0].as_u64().unwrap() > 20 && root[1].as_u64().unwrap() >= 2, "what the page adds, and where: {root}");
+    assert_eq!(root[2], json!([]), "paint the drawing writes reaching what the page adds");
+    assert_eq!(accent_on_states(&mut page), json!([]), "a state drawn in the accent");
+    // The selection, by the pointer on each line: the accent at the line's width.
+    let at_on = |page: &mut Browser, id: &str, p: (f64, f64)| -> Value {
+        page.eval(&format!(r#"(() => {{ const q = new DOMPoint({}, {}).matrixTransform(document.getElementById("{id}").getScreenCTM()); return [q.x - 1, q.y - 1, 2, 2]; }})()"#, p.0, p.1))
+    };
+    for (id, p, drawn) in [("ln-near", (40.0, 260.0), 10.0), ("th-warn", (235.0, 252.0), 1.0), ("nf-mixed", (335.0, 308.0), 6.0), ("nm-ring", (0.0, -5.0), 3.0), ("la-ring", (40.0, 354.0), 6.0), ("la-alarm", (300.0, 354.0), 1.0)] {
+        let r = at_on(&mut page, id, p);
+        click_at(&mut page, &r);
+        page.wait_for(&format!(r#"document.querySelector(".side .sel-title")?.dataset.id === "{id}" || null"#), Duration::from_secs(10));
+        page.wait_for(r#"document.getAnimations().every((a) => a.playState !== "running") || null"#, Duration::from_secs(5));
+        assert_eq!(page.eval(SELECTED), json!([id]), "{id} picked by a click on its line");
+        assert_eq!(page.eval(&format!("{}(\"{id}\", {drawn})", script(LINE_SELECTED))), json!([]), "{id} selected");
+        assert_eq!(accent_on_states(&mut page), json!([]), "{id} selected: the accent on the selection alone");
+    }
+    // A click inside a ring picks what lies there: nothing, so the selection clears.
+    let r = at_on(&mut page, "nf-attr", (25.0, 320.0));
+    click_at(&mut page, &r);
+    page.wait_for(r#"document.querySelector(".side .sel-title") === null || null"#, Duration::from_secs(10));
+    assert_eq!(page.eval(SELECTED), json!([]), "a click inside a ring with no fill picks nothing of it");
     drop(page);
     host.stop();
 }

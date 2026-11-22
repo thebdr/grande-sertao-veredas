@@ -748,8 +748,20 @@ own thins such a line, the alarm's 2 and the selection's 2.5 among them; a level
 runs along its line, as on a shape with no area; a bound group's shapes each go by their own fill
 as drawn.
 
-**Not yet built**: the page still paints (a). The suite's development moved to another machine on
-2026-11-19 before it was built; C-051 states the ruling as not built.
+**Built** 2026-11-22 (C-051, `docs/binding-schema.md`, the `show` key). The page reads each bound
+shape's fill as the drawing stands before it paints anything; a shape whose fill is `none`, and a
+shape with no area (the design mock's inductions are `<line>`s 10 wide: a line has no fill to
+speak of), is drawn as a line: unfilled, its line in the state's colour at the width it was drawn
+with, never under 1.4 (2 in alarm, 2.5 selected). A level on such a shape that closes an area runs
+along its line: a copy of its shapes over it, clipped to the level, the shape's own line its track.
+Readings taken in building it, none of them the architect's words: a text stays a body whatever its
+fill (the ruling names shapes); the selection paints the line whole in the accent, the state then
+said by its mark and word and the side panel, and a selected level's line grows by 2 so the accent
+shows around the level running inside it; a stale line is dashed at its own width; in normal a line
+takes the neutral grey a body takes (`#4A4E5C`), a marker's line the marker's own light grey; a
+click inside a shape drawn as a line picks what lies there, the inside being nothing of it; a level
+on a group holding such a shape runs along the group's shapes, a group without one still fills its
+box.
 
 ---
 
