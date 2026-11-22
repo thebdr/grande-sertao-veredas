@@ -552,6 +552,14 @@ refute round found and what it changed is in the clause's evidence note.
 - **Evidence:** .zen/evidence/C-134.md
 - **Status:** pending verification
 
+## C-135: The cyclic frame: a frame id by its range, the IO data as bytes, the APDU status with its bits named
+- **Date:** 2026-11-22
+- **Source:** user (docs/aranha-plan.md "Scope", the frames a PROFINET IO controller and device exchange, phase 3; the briefing's PROFINET IO controller in core on aranha's codecs, P-018)
+- **Description:** `profinet::rt::CyclicFrame` reads and writes PROFINET IO's cyclic real-time frame: the frame id, the C_SDU as bytes (40 to 1440; its layout of data and status bytes is the connection's, not the frame's), and the APDU status (cycle counter, data status, transfer status), the status being the last four bytes of a frame that carries no pad; written with the cyclic tag (priority 6, VLAN 0), another tag or none. A frame id is read by its range as Wireshark's dissector reads it (RT class 3 0x0100 to 0x0FFF, RT class 1 0x8000 to 0xBFFF, its legacy range 0xC000 to 0xFBFF, the two alarm ids, DCP's four, everything else not cyclic); a frame id that is not a cyclic frame's, or data outside 40 to 1440 bytes, is refused both ways; any bytes decode or are refused without a panic, and a decoded frame writes back to its own bytes. The data status bits are named as the standard and the dissector read them (primary, redundancy, valid, run, station without problem, ignore at bit 7; bits 3 and 6 reserved), and a provider or consumer status byte's (good, who decided, extension).
+- **Verification:** automated → crates/veredas-aranha/tests/rt.rs, crates/veredas-aranha/tests/common/mod.rs | a frame to the byte both ways, tagged (64 bytes) and untagged (60), the longest (1440 bytes of data); eighteen frame ids against their classes; eight ids that are not cyclic and data of 0, 39 and 1441 bytes refused both ways, the messages; twenty thousand noisy payloads decoded or refused without a panic, each decoded one written back to its bytes; each data status bit alone named, the reserved bits naming nothing, the good status 0x35, the status byte's good, instance and extension; tshark reading four frames' ids (RT class 1, 3 and legacy), cycle counters, data status bytes and each named bit, and transfer status, with no complaint
+- **Evidence:** .zen/evidence/C-135.md
+- **Status:** pending verification
+
 ## Pending Contract Deltas
 
 ### P-003: veredas-controlador — the softPLC
