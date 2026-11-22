@@ -13,7 +13,7 @@ use veredas_core::telegram::Role;
 use veredas_maquinar::bench::*;
 use veredas_maquinar::channel::CyclicMessage;
 use veredas_maquinar::emit::{Encoding, ValueField};
-use veredas_maquinar::modbus::{PointConfig, PointType, Table, WordOrder};
+use veredas_maquinar::modbus::{ModbusConfig, PointConfig, PointType, Table, WordOrder};
 use veredas_maquinar::opc::{Access, Credentials, Ramp, Randomize, Reaction, Step, TagConfig, TagType};
 
 fn doc(name: &str) -> String {
@@ -232,7 +232,7 @@ fn full_file(port: u16) -> String {
          [[opc]]\nname = \"s\"\nbind = \"127.0.0.1\"\nport = 0\nuser = {{ name = \"u\", password = \"p\" }}\nmax_nodes_per_read = 10\nmax_sessions = 2\n\
          tags = [ {{ id = \"t\", name = \"T\", type = \"float\", access = \"read-write\", value = \"1\", randomize = {{ low = 1, high = 2, decimals = 1, interval_ms = 100 }} }}, {{ id = \"r\", type = \"float\", value = \"2\", ramp = {{ low = 0, high = 10, step = 2, decimals = 1, interval_ms = 100 }} }} ]\n\
          reactions = [ {{ on_write = \"t\", equals = \"5\", tag = \"t\", then = [ {{ after_ms = 1, set = \"6\" }} ] }} ]\n\n\
-         [[modbus]]\nname = \"m\"\nbind = \"127.0.0.1\"\nport = 0\nunit = 1\nmax_connections = 2\ncoils = 4\ndiscrete_inputs = 4\ninput_registers = 4\nholding_registers = 4\n\
+         [[modbus]]\nname = \"m\"\nbind = \"127.0.0.2\"\nport = 0\nunit = 1\nmax_connections = 2\ncoils = 4\ndiscrete_inputs = 5\ninput_registers = 6\nholding_registers = 7\n\
          points = [ {{ name = \"p\", table = \"holding-register\", address = 0, type = \"u32\", words = \"low-first\", value = \"1\" }} ]\n\n\
          [[channel]]\nname = \"c\"\nrole = \"listen\"\nhost = \"127.0.0.1\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\ncontroller = \"machine.toml\"\n\
          messages = [ {{ message = \"status\", every_ms = 100, fields = [ {{ name = \"running\", value = 1 }}, {{ name = \"speed\", value = 1 }} ] }} ]\n",
@@ -498,9 +498,30 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
     assert!(prose.contains("`words` (`\"high-first\"`): which of a two-register point's registers holds the high word, `high-first` (the one at its address) or `low-first`;"));
     assert_eq!(variants(toml::from_str::<PointConfig>(&point("table = \"coil\"\nwords = \"x\"")).unwrap_err().to_string()), ["high-first", "low-first"]);
     assert_eq!(toml::from_str::<PointConfig>(&point("table = \"coil\"\nwords = \"low-first\"")).unwrap().words, Some(WordOrder::LowFirst));
+    // Every key of a Modbus server reaches its configuration, each with a value of its own.
     let m = load(&full, &dir).unwrap();
     assert_eq!(m.modbus[0].0, "m");
-    assert_eq!((m.modbus[0].1.unit, m.modbus[0].1.max_connections, m.modbus[0].1.coils, m.modbus[0].1.holding_registers), (Some(1), Some(2), Some(4), Some(4)));
+    assert_eq!(
+        m.modbus[0].1,
+        ModbusConfig {
+            bind: "127.0.0.2".into(),
+            port: 0,
+            unit: Some(1),
+            max_connections: Some(2),
+            coils: Some(4),
+            discrete_inputs: Some(5),
+            input_registers: Some(6),
+            holding_registers: Some(7),
+            points: vec![PointConfig {
+                name: "p".into(),
+                table: Table::HoldingRegister,
+                address: 0,
+                ty: Some(PointType::U32),
+                words: Some(WordOrder::LowFirst),
+                value: "1".into(),
+            }],
+        }
+    );
     assert!(prose.contains("`encoding` (`\"utf-8\"`): `\"utf-8\"` or `\"utf-16le\"`, the latter with a byte-order mark."));
     assert_eq!(variants(refused(&full.replace("encoding = \"utf-8\"", "encoding = \"x\""), &dir)), ["utf-16le", "utf-8"]);
     assert!(prose.contains("`role` (required): `listen` (wait for the peer to connect) or `connect` (dial it)."));
@@ -620,6 +641,13 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     let err = start_err(spec);
     assert!(err.starts_with(&format!("modbus `b`: bind 127.0.0.1:{taken}: ")), "{err}");
     assert!(std::net::TcpListener::bind(("127.0.0.1", q)).is_ok(), "the server before it stopped");
+    // OPC UA servers start before Modbus servers, whatever the file's order: with both on taken
+    // ports, the OPC UA one is the one named.
+    let squatter2 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let taken2 = squatter2.local_addr().unwrap().port();
+    let spec = load(&format!("{h}[[modbus]]\nname = \"m\"\nport = {taken2}\n\n[[opc]]\nname = \"o\"\nport = {taken}\n"), &dir).unwrap();
+    let err = start_err(spec);
+    assert!(err.starts_with(&format!("opc `o`: bind 127.0.0.1:{taken}: ")), "{err}");
     // Servers start before channels: a channel that would dial the test's own socket never
     // dials when a server before it fails.
     let ear = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -632,6 +660,16 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     assert!(start_err(spec).starts_with("opc `s`: bind "));
     std::thread::sleep(Duration::from_millis(300));
     assert!(matches!(ear.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock), "nobody dialled: the channel after the server was never started");
+    // A Modbus server starts before the channels too.
+    let spec = load(
+        &format!("{h}[[modbus]]\nname = \"m\"\nport = {taken}\n\n[[channel]]\nname = \"c\"\nrole = \"connect\"\nport = {}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n", ear.local_addr().unwrap().port()),
+        &dir,
+    )
+    .unwrap();
+    assert!(start_err(spec).starts_with("modbus `m`: bind "));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(matches!(ear.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock), "nobody dialled: the channel after the Modbus server was never started");
+    drop(squatter2);
     let blocker = dir.join("blocker");
     std::fs::write(&blocker, b"a file where the folder should be").unwrap();
     let spec = load(&emitter("").replace(h, &format!("{h}out_dir = \"blocker\"\n")), &dir).unwrap();
@@ -655,6 +693,14 @@ fn the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_th
     assert_eq!(order(&spec.plan()), ["third", "fourth", "first", "fifth", "sixth", "seventh", "second"]);
     let bench = Bench::start(spec).unwrap();
     assert_eq!(bench.status().iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(), ["third", "fourth", "first", "fifth", "sixth", "seventh", "second"]);
+    // A Modbus server by name: the one named, none for a name no part has.
+    assert!(bench.modbus("nope").is_none() && bench.modbus("first").is_none());
+    let line_of = |name: &str| bench.lines().into_iter().find(|l| l.starts_with(&format!("modbus {name}: "))).unwrap();
+    for name in ["sixth", "seventh"] {
+        let addr = bench.modbus(name).unwrap().addr;
+        assert!(line_of(name).starts_with(&format!("modbus {name}: {addr} ")), "{}", line_of(name));
+    }
+    assert_ne!(bench.modbus("sixth").unwrap().addr, bench.modbus("seventh").unwrap().addr);
     assert_eq!(bench.lines().iter().map(|l| l.split(' ').nth(1).unwrap().trim_end_matches(':').to_string()).collect::<Vec<_>>(), ["third", "fourth", "first", "fifth", "sixth", "seventh", "second"]);
     bench.stop();
     std::fs::remove_dir_all(&dir).unwrap();
@@ -741,6 +787,61 @@ fn the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own() {
     assert_eq!(s1.len(), 4);
     assert_eq!(s1, speeds(7, "seedc2"), "the channel's draws under the bench's seed");
     assert_ne!(s1, speeds(8, "seedc3"));
+}
+
+/// The port in a status line after `lead` (`127.0.0.1:<port>` or `opc.tcp://127.0.0.1:<port>/`).
+fn port_after(line: &str, lead: &str) -> u16 {
+    let rest = line.strip_prefix(lead).unwrap_or_else(|| panic!("`{line}` does not start with `{lead}`"));
+    rest.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or_else(|_| panic!("no port in `{line}`"))
+}
+
+#[test]
+fn the_executable_prints_every_part_s_line_at_the_start_with_the_address_it_got() {
+    assert!(doc_prose().contains("`veredas-maquinar <bench.toml>` runs it from the command line"));
+    let exe = env!("CARGO_BIN_EXE_veredas-maquinar");
+    let dir = scratch("start-lines");
+    let path = dir.join("bench.toml");
+    std::fs::write(
+        &path,
+        format!("{}[[modbus]]\nname = \"drive\"\nport = 0\nunit = 1\npoints = [ {{ name = \"sp\", table = \"holding-register\", address = 0, value = \"7\" }} ]\n\n[[opc]]\nname = \"plc\"\nport = 0\n", header()),
+    )
+    .unwrap();
+    // `stop` is in its stdin before it runs: whatever it prints comes before its first second, so
+    // the status lines are the start's own.
+    let mut child = Command::new(exe).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    child.stdin.take().unwrap().write_all(b"stop\n").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 6, "{stdout}");
+    assert_eq!(lines[0], format!("{}: 2 part(s) running; close stdin or end the process to stop", path.display()));
+    assert_eq!(lines[1], "  opc `plc`: opc.tcp://127.0.0.1:0/ with 0 tag(s), 0 reaction(s)");
+    assert_eq!(lines[2], "  modbus `drive`: 127.0.0.1:0 answering unit 1 with 1 point(s)");
+    assert_ne!(port_after(lines[3], "opc plc: opc.tcp://127.0.0.1:"), 0, "{stdout}");
+    assert_ne!(port_after(lines[4], "modbus drive: 127.0.0.1:"), 0, "{stdout}");
+    assert!(lines[4].ends_with(" 0 connection(s), 0 request(s) answered, 0 exception(s), 0 unanswered"), "{stdout}");
+    assert_eq!(lines[5], "stopped");
+    // The address in the start's line is the one the server listens on: a client reads through it.
+    let mut child = Command::new(exe).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut reader = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    let port = loop {
+        line.clear();
+        assert_ne!(reader.read_line(&mut line).unwrap(), 0, "the executable ended before its Modbus line");
+        if line.starts_with("modbus drive: ") {
+            break port_after(line.trim_end(), "modbus drive: 127.0.0.1:");
+        }
+    };
+    let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    c.write_all(&[0, 1, 0, 0, 0, 6, 1, 0x03, 0, 0, 0, 1]).unwrap();
+    let mut answer = [0u8; 11];
+    std::io::Read::read_exact(&mut c, &mut answer).unwrap();
+    assert_eq!(answer, [0, 1, 0, 0, 0, 5, 1, 0x03, 2, 0, 7], "the point's value, read through the printed port");
+    child.stdin.take().unwrap().write_all(b"stop\n").unwrap();
+    assert!(child.wait().unwrap().success());
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
