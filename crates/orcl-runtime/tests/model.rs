@@ -195,7 +195,9 @@ fn length(draw: &mut Draw, period: u128, from: u128, rarely_long: bool) -> u128 
     }
 }
 
-fn run_one(seed: u64, steps: usize) {
+/// One sequence of `steps` scans; with `never_fault`, every scan's length is held to twice the period, so the task
+/// runs the whole sequence with its time errors, skips, late starts and output image.
+fn run_one(seed: u64, steps: usize, never_fault: bool) {
     let mut draw = Draw(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
     let periods: [u128; 7] = [1_000, 333_333, 500_000, 2_500_000, 10_000_000, 1_000_000_000, 1_500_000_000];
     let period = if draw.below(3) == 0 {
@@ -215,6 +217,7 @@ fn run_one(seed: u64, steps: usize) {
         let host = if draw.below(3) == 0 { length(&mut draw, period, model.now, true) } else { 0 };
         let start = (model.now + host).max(model.cycle * period);
         let total = length(&mut draw, period, start, true);
+        let total = if never_fault { total.min(2 * period) } else { total };
         let read = draw.below(total + 1);
         let scan = total - read;
         let write = if draw.below(4) == 0 { length(&mut draw, period, start + total, true) } else { 0 };
@@ -275,7 +278,7 @@ fn run_one(seed: u64, steps: usize) {
 #[test]
 fn the_engine_agrees_with_the_clause_s_model_over_four_thousand_random_sequences() {
     for seed in 0..4_000 {
-        run_one(seed, 50);
+        run_one(seed, 50, false);
     }
 }
 
@@ -283,8 +286,57 @@ fn the_engine_agrees_with_the_clause_s_model_over_four_thousand_random_sequences
 fn the_engine_agrees_with_the_model_over_forty_runs_of_two_thousand_scans() {
     // long enough that a statistic kept over a window, or reset every so many scans, shows
     for seed in 10_000..10_040 {
-        run_one(seed, 2_000);
+        run_one(seed, 2_000, false);
     }
+}
+
+#[test]
+fn a_task_that_never_faults_agrees_with_the_model_over_forty_runs_of_two_thousand_scans() {
+    // the faulting runs fault early; these run the whole way, with hundreds of time errors, late starts and skips each
+    for seed in 20_000..20_040 {
+        run_one(seed, 2_000, true);
+    }
+}
+
+/// Takes no time and outputs its input.
+struct Idle;
+
+impl Program for Idle {
+    type Inputs = u64;
+    type Outputs = u64;
+
+    fn scan(&mut self, _scan: &Scan, inputs: &u64, outputs: &mut u64) {
+        *outputs = *inputs;
+    }
+}
+
+struct Quiet;
+
+impl Io<u64, u64> for Quiet {
+    fn read_inputs(&mut self, _now: Duration) -> u64 {
+        1
+    }
+
+    fn write_outputs(&mut self, _now: Duration, _outputs: &u64) {}
+}
+
+#[test]
+fn a_long_absence_counts_every_deadline_it_skipped() {
+    // a host away for 300 periods, then for 2^33: every deadline passed is counted, past 8 and 32 bits
+    let period = Duration::from_millis(1);
+    let mut clock = VirtualClock::new();
+    let mut task = Task::new(TaskConfig { name: "absent", period }, Idle).unwrap();
+    task.step(&mut Quiet, &mut clock);
+    clock.advance(period * 300 + Duration::from_nanos(1));
+    task.step(&mut Quiet, &mut clock);
+    let s = *task.stats();
+    assert_eq!((s.skipped, s.cycles + s.skipped, task.next_cycle()), (299, 301, 301));
+    let k: u64 = 1 << 33;
+    clock.advance(Duration::from_nanos(1_000_000 * k));
+    task.step(&mut Quiet, &mut clock);
+    let s = *task.stats();
+    assert_eq!(s.cycles + s.skipped, task.next_cycle(), "every cycle run or counted");
+    assert_eq!(s.skipped, 299 + k - 1);
 }
 
 #[test]
