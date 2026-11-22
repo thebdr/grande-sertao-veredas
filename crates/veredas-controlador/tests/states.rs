@@ -715,3 +715,52 @@ fn small_sentences_an_acknowledge_refused_in_run_a_stop_from_local_and_a_clock_f
     c.step(&mut plant, &mut clock);
     assert_eq!(c.program().unwrap().last_now, Duration::ZERO, "the program's clock from zero");
 }
+
+// The fourth refute round: the conditions after a power cycle and a crash, and a production target without real
+// time on the power-cycle and crash paths and in FAULT.
+
+#[test]
+fn the_conditions_say_how_it_runs_after_a_power_cycle_and_a_crash_too() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let desk = Target { production: false, realtime: false, simulated: false };
+    let mut c = controller(desk, Restart::PowerCycle { was: StateWord::Stop });
+    assert_eq!(text(&c), r#"STOP power_on(id=102, was="STOP") no_realtime()"#);
+    c.start(StartupReason::Warm, OFICINA, &ARMED).unwrap();
+    c.step(&mut plant, &mut clock);
+    assert_eq!(text(&c), "RUN no_realtime()");
+    assert_eq!(c.state().health(), Some(Health::FunctionCheck));
+    let simulator = Target { production: false, realtime: false, simulated: true };
+    assert_eq!(text(&controller(simulator, Restart::Crash)), "FAULT internal(id=507) sim() no_realtime()");
+}
+
+#[test]
+fn a_production_target_without_real_time_keeps_its_power_cycle_crash_and_fault_states() {
+    let without = Target { production: true, realtime: false, simulated: false };
+    for (was, word) in [(StateWord::Stop, "STOP"), (StateWord::Hold, "HOLD"), (StateWord::Fault, "FAULT")] {
+        let c = controller(without, Restart::PowerCycle { was });
+        assert_eq!(text(&c), format!(r#"STOP power_on(id=102, was="{word}")"#));
+    }
+    let mut c = controller(without, Restart::Crash);
+    assert_eq!(text(&c), "FAULT internal(id=507)");
+    assert_eq!(c.state().health(), Some(Health::Failure));
+    assert_eq!(
+        c.start(StartupReason::Warm, LOCAL, &ARMED),
+        Err(Refusal::State { command: Command::Start(StartupReason::Warm), state: StateWord::Fault }),
+        "FAULT is left by an acknowledge alone, whatever the target"
+    );
+    assert_eq!(text(&c), "FAULT internal(id=507)");
+}
+
+#[test]
+fn refusals_leave_the_exchange_while_no_program_runs_where_it_was() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock);
+    let mut c = controller(PRODUCTION, Restart::First);
+    run(&mut c, &mut plant, &mut clock, 2); // 0 and 10 ms
+    c.start(StartupReason::Warm, OFICINA, &OFF).unwrap_err();
+    c.acknowledge(OFICINA, &ARMED).unwrap_err();
+    c.stop(LOCAL).unwrap_err();
+    run(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(plant.reads, vec![ms(0), ms(10), ms(20), ms(30)]);
+}
