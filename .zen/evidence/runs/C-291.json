@@ -1,0 +1,34 @@
+{
+  "clause": "C-291",
+  "command": "cargo nextest run -p entrega --features corte --test bundle --test cut",
+  "commandArgv": [
+    "cargo",
+    "nextest",
+    "run",
+    "-p",
+    "entrega",
+    "--features",
+    "corte",
+    "--test",
+    "bundle",
+    "--test",
+    "cut"
+  ],
+  "exitCode": 100,
+  "outputSha": "b952a425c4568f5980551ce059b8936b8f38177846623d55853ff3d87250cf01",
+  "outputTail": "    entrega: building in the builder machine (4 processors); its console is /home/thebdr/code/grande-sertao-veredas/.claude/worktrees/releases-9c0651/target/entrega/0.0.0-trial.291/build-console.log\n    entrega: built under rustc 1.100.0 (0ef1bc386 2026-11-09) on ldd (Debian GLIBC 2.41-12+deb13u5) 2.41\n    entrega: running the bundle's bench and supervisão together\n\n    thread 'a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together' (3254238) panicked at tools/entrega/tests/cut.rs:34:5:\n    assertion `left == right` failed\n      left: \"6cbc365b869efd0bead016aa021c354278cfaa09\"\n     right: \"43f6ffd2820587e3fadca6143c50660a584aaa6f\"\n    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n  Cancelling due to test failure\n────────────\n     Summary [1060.150s] 10 tests run: 9 passed, 1 failed, 0 skipped\n        FAIL [1060.149s] (10/10) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\nerror: test run failed",
+  "ranAt": "2026-11-22T20:56:50.056Z",
+  "headCommit": "43f6ffd2820587e3fadca6143c50660a584aaa6f",
+  "tests": [
+    {
+      "name": "tools/entrega/tests/bundle.rs",
+      "file": "tools/entrega/tests/bundle.rs",
+      "fileSha": "e1965b4d5a90488a39d98d369bf22910a91814e0a1471756926b60b0b380ac72"
+    },
+    {
+      "name": "tools/entrega/tests/cut.rs",
+      "file": "tools/entrega/tests/cut.rs",
+      "fileSha": "03daa4f0cbafb1079f57a2d29da72c1036a2e6713b8ae1cfb542c16844275d6c"
+    }
+  ]
+}

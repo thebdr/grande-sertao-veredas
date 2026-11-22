@@ -24,13 +24,14 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
     let release = "0.0.0-trial.291";
     let work = root.join("target/entrega").join(release);
     let options = Options { release: semver::Version::parse(release).unwrap(), out: out.path().to_path_buf(), work: work.clone(), run_suite: false };
+    // HEAD as the cut finds it: what it cuts, whatever is committed while it runs.
+    let head = entrega::git::text(&root, &["rev-parse", "HEAD"]).unwrap().unwrap().trim().to_string();
     let c = match cut::cut(&root, &options) {
         Ok(c) => c,
         Err(e) => panic!("the trial cut was refused: {e}"),
     };
 
     // The manifest: HEAD, every component at its version and executables, checked like any other.
-    let head = entrega::git::text(&root, &["rev-parse", "HEAD"]).unwrap().unwrap().trim().to_string();
     assert_eq!(c.manifest.commit, head);
     assert_eq!(c.manifest_path, out.path().join("0.0.0-trial.291.toml"));
     assert_eq!(manifest::check(&root, &c.manifest).unwrap(), Vec::<String>::new());
