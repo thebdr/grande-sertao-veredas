@@ -61,6 +61,68 @@ pub struct RecordingConfig {
     pub write_every: Duration,
 }
 
+/// The controller a portal is embedded in, as a source (P-019): its state changes and its faults,
+/// handed to the session in process by the embedding through a [`ControllerFeed`], stored like any
+/// other data in two tables, [`CONTROLLER_STATES`] and [`CONTROLLER_FAULTS`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ControllerSourceConfig {
+    pub source_id: String,
+    pub display_name: String,
+}
+
+/// The table of a controller's state changes: one row per state the embedding hands in.
+pub const CONTROLLER_STATES: &str = "controller_states";
+/// The table of a controller's faults: one row per fault record.
+pub const CONTROLLER_FAULTS: &str = "controller_faults";
+
+/// A fault as the controller records it: its FAULT state (the reason, with its task, location,
+/// code, event, kind or download; the debug conditions that were active), the download that was
+/// running, and its handler's outcome when one ran (docs/controlador-plan.md, "Faults").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FaultRecord {
+    pub fault_state: veredas_core::state::ControllerState,
+    pub download: Option<u32>,
+    pub outcome: Option<String>,
+}
+
+/// What the embedding hands its portal.
+enum ControllerEvent {
+    State { index_ms: i64, arrival_ms: i64, state: veredas_core::state::ControllerState },
+    Fault { index_ms: i64, arrival_ms: i64, record: FaultRecord },
+}
+
+/// The embedding's side of a controller source: every call is a row, stamped on the controller's
+/// own clock (its local time, the store's axis) and on arrival. A call after the session stopped
+/// is refused, nothing stored.
+#[derive(Clone)]
+pub struct ControllerFeed {
+    tx: std::sync::mpsc::Sender<ControllerEvent>,
+}
+
+/// The session the feed belonged to has stopped.
+#[derive(Debug, Error, PartialEq, Eq)]
+#[error("the session this controller feed belonged to has stopped")]
+pub struct FeedClosed;
+
+impl ControllerFeed {
+    /// A state change: the state as the controller holds it.
+    pub fn push_state(&self, state: &veredas_core::state::ControllerState) -> Result<(), FeedClosed> {
+        let (index_ms, arrival_ms) = controller_clocks();
+        self.tx.send(ControllerEvent::State { index_ms, arrival_ms, state: state.clone() }).map_err(|_| FeedClosed)
+    }
+
+    /// A fault record.
+    pub fn push_fault(&self, record: &FaultRecord) -> Result<(), FeedClosed> {
+        let (index_ms, arrival_ms) = controller_clocks();
+        self.tx.send(ControllerEvent::Fault { index_ms, arrival_ms, record: record.clone() }).map_err(|_| FeedClosed)
+    }
+}
+
+/// The controller's own clock read as the store's axis (local time as if UTC), and arrival.
+fn controller_clocks() -> (i64, i64) {
+    (chrono::Local::now().naive_local().and_utc().timestamp_millis(), now_unix_ms())
+}
+
 /// Where a recording stands, as the session publishes it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RecordingStatus {
@@ -96,6 +158,12 @@ pub struct SessionConfig {
     pub store_window: Option<Duration>,
     /// Recording to the drive, the project's choice; none records nothing.
     pub recording: Option<RecordingConfig>,
+    /// The controller the portal is embedded in, as a source fed in process; none for a portal
+    /// that reads no controller's memory.
+    pub controller: Option<ControllerSourceConfig>,
+    /// The folder the store's window is written to at every fault record the controller source
+    /// hands in (P-019); none writes nothing.
+    pub fault_copy_dir: Option<std::path::PathBuf>,
     /// The master write switch's initial position. Off unless the project says so; set inside
     /// portal alone, so a shell reads it (`writes_armed()`) and never decides it.
     pub(crate) writes_armed: bool,
@@ -120,6 +188,8 @@ impl SessionConfig {
             residency: Residency::Ram,
             store_window: None,
             recording: None,
+            controller: None,
+            fault_copy_dir: None,
             writes_armed: false,
             idle_after_ms: DEFAULT_IDLE_MS,
             logs: Vec::new(),
@@ -263,6 +333,9 @@ pub struct Counters {
     pub passes: u64,
     /// Rows a store kept as a window let go.
     pub evicted: u64,
+    /// Copies of the store written to the drive at a fault, and the last one's file.
+    pub fault_copies: u64,
+    pub last_fault_copy: Option<String>,
     pub last_error: Option<String>,
 }
 
@@ -357,6 +430,8 @@ struct Inner {
     rx: Receiver<LineEvent>,
     opc_rx: Receiver<OpcEvent>,
     channel_rx: Receiver<ChannelEvent>,
+    /// The controller source's events, its id and its two tables' indexes.
+    controller: Option<ControllerRuntime>,
     opc: Vec<OpcRuntime>,
     channels: Vec<ChannelRuntime>,
     captures: Vec<(CaptureRule, Vec<Arc<str>>)>,
@@ -376,6 +451,19 @@ struct Inner {
     /// Each worker's outcome at the stop (none for a clean end, the text of a failure), read by
     /// the last refresh once the runtimes are gone, so a failed source stays failed.
     ended: HashMap<String, Option<String>>,
+}
+
+struct ControllerRuntime {
+    source: SourceId,
+    rx: Receiver<ControllerEvent>,
+    states: usize,
+    faults: usize,
+    seq: u64,
+    /// Fault records drained this pass, each owed a copy of the window once its row is stored.
+    copies_owed: Vec<i64>,
+    /// Where those copies go, and the session's name their files carry.
+    copy_dir: Option<std::path::PathBuf>,
+    session_name: String,
 }
 
 /// A recording in progress: its own store on the drive, the rows waiting for the next write.
@@ -454,6 +542,8 @@ pub struct Session {
     inner: Arc<Mutex<Inner>>,
     stop: Arc<AtomicBool>,
     pump: Option<std::thread::JoinHandle<()>>,
+    /// The controller source's feed, when the session has one; handed out to the embedding.
+    controller_feed: Option<ControllerFeed>,
 }
 
 fn lock(m: &Mutex<Inner>) -> std::sync::MutexGuard<'_, Inner> {
@@ -493,6 +583,8 @@ pub struct Tables {
     captures: Vec<(CaptureRule, Vec<Arc<str>>)>,
     opc_specs: Vec<(PollSpec, usize)>,
     channel_tables: Vec<HashMap<String, (usize, MessageTable)>>,
+    /// The controller source's two tables, when there is one: states, then faults.
+    controller_tables: Option<(usize, usize)>,
 }
 
 pub fn compile_tables(cfg: &SessionConfig, secret: &dyn Fn(&str) -> Option<String>, claims: &mut Claims) -> Result<Tables, SessionError> {
@@ -556,11 +648,24 @@ pub fn compile_tables(cfg: &SessionConfig, secret: &dyn Fn(&str) -> Option<Strin
         }
         channel_tables.push(tables);
     }
+    // The controller's two tables, typed by what the state and a fault record carry.
+    let mut controller_tables = None;
+    if let Some(c) = &cfg.controller {
+        let id = c.source_id.trim();
+        let text = |n: &str| (n.to_string(), SeriesType::Text);
+        let int = |n: &str| (n.to_string(), SeriesType::Int);
+        claims.table(CONTROLLER_STATES, format!("the state changes of controller `{id}`"))?;
+        specs.push(BaseTableSpec { name: CONTROLLER_STATES.into(), columns: vec![text("state_text"), text("state"), int("reason"), text("reason_word"), text("health")], has_key: false });
+        let states = specs.len() - 1;
+        claims.table(CONTROLLER_FAULTS, format!("the faults of controller `{id}`"))?;
+        specs.push(BaseTableSpec { name: CONTROLLER_FAULTS.into(), columns: vec![text("fault_text"), int("cause"), text("cause_word"), int("download"), text("outcome")], has_key: false });
+        controller_tables = Some((states, specs.len() - 1));
+    }
     // The views, named once too: against the base tables and against each other.
     for def in &cfg.tables {
         claims.table(def.name.trim(), format!("table `{}`", def.name.trim()))?;
     }
-    Ok(Tables { specs, captures, opc_specs, channel_tables })
+    Ok(Tables { specs, captures, opc_specs, channel_tables, controller_tables })
 }
 
 impl Session {
@@ -569,7 +674,7 @@ impl Session {
     pub fn start(cfg: SessionConfig) -> Result<Session, SessionError> {
         // Every source has an id once and every table a name once: the claims a project file
         // makes (C-046), made again here through the same type for a configuration built by hand.
-        if cfg.logs.is_empty() && cfg.opc.is_empty() && cfg.channels.is_empty() {
+        if cfg.logs.is_empty() && cfg.opc.is_empty() && cfg.channels.is_empty() && cfg.controller.is_none() {
             return Err(SessionError::NoSources);
         }
         // The window keeps nothing on the drive (P-019): a store on disk is no window.
@@ -588,6 +693,9 @@ impl Session {
         for c in &cfg.channels {
             claims.source("channel", &c.source_id)?;
         }
+        if let Some(c) = &cfg.controller {
+            claims.source("controller", &c.source_id)?;
+        }
 
         // The secrets file opens first, decrypted in memory under the key the environment holds
         // (Q15): a session with no `[secrets]` table has none, and a source naming an entry
@@ -600,7 +708,7 @@ impl Session {
 
         // Every table the store is opened over, the names claimed as they are compiled; the
         // project's import compiles the same way (C-046), so the two never drift.
-        let Tables { specs, captures, opc_specs, channel_tables } =
+        let Tables { specs, captures, opc_specs, channel_tables, controller_tables } =
             compile_tables(&cfg, &|entry| secrets.get(entry).map(str::to_string), &mut claims)?;
 
         // The log sources, built before anything spawns so a bad one refuses the whole session.
@@ -739,6 +847,29 @@ impl Session {
             channel_runtimes.push(ChannelRuntime { handle: worker.handle, writer: worker.writer, tables, state: LinkState::Waiting });
         }
 
+        // The controller source: its feed kept by the session and handed out, its events drained
+        // by the pump like every other source's.
+        let (controller, controller_feed) = match (&cfg.controller, controller_tables) {
+            (Some(c), Some((states, faults))) => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let id = c.source_id.trim().to_string();
+                let display = if c.display_name.trim().is_empty() { id.clone() } else { c.display_name.trim().to_string() };
+                stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None });
+                sources.push(SourceInfo { id: id.clone(), display_name: display, kind: "controller", has_timestamp: false });
+                let runtime = ControllerRuntime {
+                    source: SourceId::new(&id),
+                    rx,
+                    states,
+                    faults,
+                    seq: 0,
+                    copies_owed: Vec::new(),
+                    copy_dir: cfg.fault_copy_dir.clone(),
+                    session_name: cfg.name.clone(),
+                };
+                (Some(runtime), Some(ControllerFeed { tx }))
+            }
+            _ => (None, None),
+        };
         let wide_buf = specs.iter().map(|_| Vec::new()).collect();
         let live = Arc::new(Live {
             name: cfg.name.clone(),
@@ -763,6 +894,7 @@ impl Session {
             rx,
             opc_rx,
             channel_rx,
+            controller,
             opc: opc_runtimes,
             channels: channel_runtimes,
             captures,
@@ -809,12 +941,19 @@ impl Session {
                 })
                 .map_err(|e| SessionError::Spawn { id: cfg.name.clone(), source: SourceError::NotConfigured(format!("spawn the pump: {e}")) })?
         };
-        Ok(Session { live, inner, stop, pump: Some(pump) })
+        Ok(Session { live, inner, stop, pump: Some(pump), controller_feed })
     }
 
     /// What the session shows: shared, refreshed by the pump.
     pub fn live(&self) -> Arc<Live> {
         Arc::clone(&self.live)
+    }
+
+    /// The feed of the session's controller source, for the embedding to hand its states and
+    /// faults to; none when the session has no controller source. A push after the stop is
+    /// refused.
+    pub fn controller_feed(&self) -> Option<ControllerFeed> {
+        self.controller_feed.clone()
     }
 
     /// Arm or disarm every write path at once, live: the next write obeys it.
@@ -869,6 +1008,9 @@ impl Inner {
         for rt in std::mem::take(&mut self.channels) {
             let id = SourceId::new(&rt.writer.source_id);
             out.push((id, rt.handle.join()));
+        }
+        if let Some(c) = &self.controller {
+            out.push((c.source.clone(), Ok(())));
         }
         for (id, r) in &out {
             self.ended.insert(id.as_str().to_string(), r.as_ref().err().map(|e| e.to_string()));
@@ -1073,6 +1215,73 @@ impl Inner {
         n
     }
 
+    /// The controller's state changes and fault records into their tables' rows, every value a
+    /// sample of the source like any other.
+    fn pump_controller(&mut self) -> usize {
+        let Some(c) = self.controller.as_mut() else { return 0 };
+        let batch: Vec<ControllerEvent> = c.rx.try_iter().take(MAX_DRAIN).collect();
+        let n = batch.len();
+        let (source, states, faults) = (c.source.clone(), c.states, c.faults);
+        for event in batch {
+            let seq = {
+                let c = self.controller.as_mut().expect("the controller source");
+                c.seq += 1;
+                c.seq
+            };
+            let (table, index_ms, arrival_ms, columns, values): (usize, i64, i64, [&str; 5], Vec<Option<Value>>) = match event {
+                ControllerEvent::State { index_ms, arrival_ms, state } => {
+                    let number = state.state.reason_number();
+                    (
+                        states,
+                        index_ms,
+                        arrival_ms,
+                        ["state_text", "state", "reason", "reason_word", "health"],
+                        vec![
+                            Some(Value::Text(Arc::from(state.to_string().as_str()))),
+                            Some(Value::Text(Arc::from(state.state.word().word()))),
+                            number.map(|n| Value::Int(i64::from(n))),
+                            number.and_then(veredas_core::state::reason_entry).map(|r| Value::Text(Arc::from(r.word))),
+                            state.health().map(|h| Value::Text(Arc::from(h.to_string().as_str()))),
+                        ],
+                    )
+                }
+                ControllerEvent::Fault { index_ms, arrival_ms, record } => {
+                    if let Some(c) = self.controller.as_mut() {
+                        c.copies_owed.push(index_ms);
+                    }
+                    let number = record.fault_state.state.reason_number();
+                    (
+                        faults,
+                        index_ms,
+                        arrival_ms,
+                        ["fault_text", "cause", "cause_word", "download", "outcome"],
+                        vec![
+                            Some(Value::Text(Arc::from(record.fault_state.to_string().as_str()))),
+                            number.map(|n| Value::Int(i64::from(n))),
+                            number.and_then(veredas_core::state::reason_entry).map(|r| Value::Text(Arc::from(r.word))),
+                            record.download.map(|d| Value::Int(i64::from(d))),
+                            record.outcome.as_deref().map(|o| Value::Text(Arc::from(o))),
+                        ],
+                    )
+                }
+            };
+            let ts = chrono::DateTime::from_timestamp_millis(index_ms).map(|d| d.naive_utc());
+            for (column, value) in columns.iter().zip(values.iter()) {
+                if let Some(v) = value {
+                    let sample = Sample { source: source.clone(), series: Arc::from(*column), key: None, ts, seq, arrival_unix_ms: arrival_ms, value: v.clone() };
+                    self.note_sample(&sample);
+                }
+            }
+            self.wide_buf[table].push(WideRow { source: source.clone(), key: None, index_ms, arrival_ms, seq, values });
+            if let Some(st) = self.stats.get_mut(source.as_str()) {
+                st.count += 1;
+                st.last_arrival_ms = arrival_ms;
+                st.last_ts = ts;
+            }
+        }
+        n
+    }
+
     fn flush(&mut self, live: &Live) {
         for i in 0..self.wide_buf.len() {
             if self.wide_buf[i].is_empty() {
@@ -1190,6 +1399,16 @@ impl Inner {
                 _ => {}
             }
         }
+        // The controller source: alive while the session runs; a state stands until it changes,
+        // so once one came it reads live however long since, never idle.
+        if let Some(c) = &self.controller {
+            reports.entry(c.source.as_str().to_string()).or_insert((false, None));
+            if let Some(st) = self.stats.get(c.source.as_str())
+                && st.count > 0
+            {
+                states.insert(c.source.as_str().to_string(), HealthState::Live);
+            }
+        }
         let mut health = BTreeMap::new();
         for (id, st) in &self.stats {
             let state = match reports.get(id) {
@@ -1217,11 +1436,12 @@ impl Inner {
         self.counters.passes += 1;
         let lines = self.pump_lines(live);
         let polls = self.pump_opc();
-        let messages = self.pump_channels();
+        let messages = self.pump_channels() + self.pump_controller();
         let drained = lines + polls + messages;
         if drained > 0 {
             self.flush(live);
         }
+        self.copy_at_faults(live);
         self.evict(live);
         self.record(live, false);
         self.refresh(live);
@@ -1238,6 +1458,38 @@ impl Inner {
         r.write();
         if let Ok(mut s) = live.recording_status.write() {
             *s = Some(r.status.clone());
+        }
+    }
+
+    /// At every fault record stored this pass, the store written to the drive (P-019: "at a
+    /// fault the window is written to the drive with the fault record"): through the ingest
+    /// connection, the fault's row already in it, a file of its own per fault, never over one.
+    fn copy_at_faults(&mut self, live: &Live) {
+        let Some(c) = self.controller.as_mut() else { return };
+        let owed = std::mem::take(&mut c.copies_owed);
+        let Some(dir) = c.copy_dir.clone() else { return };
+        let name = c.session_name.clone();
+        for index_ms in owed {
+            let at = chrono::DateTime::from_timestamp_millis(index_ms).map(|d| d.naive_utc()).unwrap_or_default();
+            let base = crate::project::session_store_file(&name, at);
+            let stem = base.trim_end_matches(".duckdb");
+            let file = (0u32..)
+                .map(|n| dir.join(if n == 0 { format!("{stem}.fault.duckdb") } else { format!("{stem}.fault-{n}.duckdb") }))
+                .find(|p| !p.exists())
+                .unwrap_or_else(|| dir.join(format!("{stem}.fault.duckdb")));
+            let written = std::fs::create_dir_all(&dir)
+                .map_err(|e| StoreError::Open(format!("create {}: {e}", dir.display())))
+                .and_then(|()| live.store.copy_to_drive(&file));
+            match written {
+                Ok(()) => {
+                    self.counters.fault_copies += 1;
+                    self.counters.last_fault_copy = Some(file.display().to_string());
+                }
+                Err(e) => {
+                    self.counters.store_errors += 1;
+                    self.counters.last_error = Some(format!("store: the copy at a fault: {e}"));
+                }
+            }
         }
     }
 

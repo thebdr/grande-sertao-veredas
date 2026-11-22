@@ -109,3 +109,11 @@ required-features = ["store"]
 [[test]]
 name = "store_record"
 required-features = ["store"]
+
+[[test]]
+name = "controller_state"
+required-features = ["store"]
+
+[[test]]
+name = "fault_copy"
+required-features = ["store"]

@@ -207,7 +207,9 @@ where they differ.
   writes need a signed and encrypted channel and a user; Modbus writes come only from listed
   client addresses (2026-11-15).
 - **Controller state changes and faults are stored like any other data**; the history view reads
-  them.
+  them. **Built (C-092)**: a controller source fed in process by the embedding
+  (`Session::controller_feed()`, `push_state` with core's `ControllerState`, `push_fault`), rows
+  of `controller_states` and `controller_faults`, series, frames and health like any other source's.
 - **On a controller the store is a window in memory by default**: the last stretch of values, as
   long as the project sets, nothing written to the drive. Recording to the drive is the project's
   choice, in files with a size limit; at a fault the window is written to the drive with the fault
@@ -218,8 +220,9 @@ where they differ.
   probed and pinned in C-042), the listing still counting what was seen. **Built: the recording
   (C-091)**, `record = { dir, max_mb, every_s }`: a second store on the drive with the same
   tables and views, written in one batch every few seconds and at the stop, stopping at its size
-  limit with nothing deleted (Q41 open: the reversible answer, marked pending). Still to build: the
-  window written at a fault.
+  limit with nothing deleted (Q41 open: the reversible answer, marked pending). **Built: the copy
+  at a fault (C-093)**, `SessionConfig::fault_copy_dir`: at every fault record the store is copied
+  to a file of its own through the ingest connection, the record in it.
 - **The grep engine** over logs at rest is on Oficina's first-release list.
 - **Q14 stands:** portal builds no desktop UI. Oficina is a component of its own.
 - Open: the review's entries 22 and 33 (Q31); robust requests (Q37); what gives way at a size

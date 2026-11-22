@@ -898,12 +898,27 @@ impl DuckStore {
             return Err(StoreError::Open(format!("snapshot {}: a file already stands there; a snapshot never writes over one", path.display())));
         }
         let conn = recover(self.api.lock());
+        Self::save_on(&conn, path, "_vsnap")
+    }
+
+    /// The same copy through the ingest connection, the session's pump's own, so the pump writing
+    /// its window to the drive at a fault waits on no reader (C-043); under an alias of its own,
+    /// so a shell's snapshot at the same moment attaches beside it.
+    pub fn copy_to_drive(&self, path: &Path) -> Result<(), StoreError> {
+        if path.exists() {
+            return Err(StoreError::Open(format!("copy {}: a file already stands there; a copy never writes over one", path.display())));
+        }
+        let conn = recover(self.ingest.lock());
+        Self::save_on(&conn, path, "_vcopy")
+    }
+
+    fn save_on(conn: &Connection, path: &Path, alias: &str) -> Result<(), StoreError> {
         let dbname: String = conn.query_row("SELECT current_database()", [], |r| r.get(0))?;
-        conn.execute_batch(&format!("ATTACH '{}' AS _vsnap;", sql_str(&path.display().to_string())))?;
+        conn.execute_batch(&format!("ATTACH '{}' AS {alias};", sql_str(&path.display().to_string())))?;
         // The copy may fail; the detach runs regardless, so a refused snapshot leaves nothing
         // attached and the next one writes. A half-written file is removed.
-        let copied = conn.execute_batch(&format!("COPY FROM DATABASE {} TO _vsnap;", quote_ident(&dbname)));
-        let detached = conn.execute_batch("DETACH _vsnap;");
+        let copied = conn.execute_batch(&format!("COPY FROM DATABASE {} TO {alias};", quote_ident(&dbname)));
+        let detached = conn.execute_batch(&format!("DETACH {alias};"));
         if copied.is_err() {
             let _ = std::fs::remove_file(path);
         }
