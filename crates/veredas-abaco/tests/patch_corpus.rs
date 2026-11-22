@@ -158,9 +158,11 @@ fn one_number_changed_changes_its_sheet_alone() {
             }
         }
         assert!(after.keys().all(|k| before.contains_key(k)), "{rel}: a part added");
-        // inside the sheet: the edited cell changed; any other changed cell is a formula whose
-        // value the edit moved; every other cell as it was
+        // inside the sheet: the edited cell changed; any other changed cell is one the engine
+        // computes (a formula, or a cell an array spilled into) whose value the edit moved, its
+        // formula text as it was; every other cell as it was
         let after_elements = read_elements(&std::fs::read(&dst).unwrap()).unwrap();
+        let wb_after = Workbook::open(&dst, LinkPolicy::AlwaysUseCached, |_| LinkChoice::UseCached).unwrap();
         for ((name, _, cells), (_, _, cells_after)) in elements.iter().zip(after_elements.iter()) {
             for (at, el) in cells {
                 let now = cells_after.get(at);
@@ -169,7 +171,17 @@ fn one_number_changed_changes_its_sheet_alone() {
                     continue;
                 }
                 if now != Some(el) {
-                    assert!(el.contains("<f"), "{rel}: {name}!{at:?} changed and is no formula: {el} → {now:?}");
+                    let i = wb.sheet_index(name).unwrap();
+                    let a = Addr::new(at.0, at.1);
+                    let (was, is) = (wb.value_now(i, a).unwrap(), wb_after.value_now(i, a).unwrap());
+                    assert_ne!(was, is, "{rel}: {name}!{at:?} rewritten and its value did not move: {el} → {now:?}");
+                    match formula_of(el) {
+                        Some(f) => assert_eq!(now.and_then(|n| formula_of(n)), Some(f), "{rel}: {name}!{at:?} formula changed"),
+                        None => assert!(
+                            computed(&wb, i, a),
+                            "{rel}: {name}!{at:?} a value the engine does not compute rewritten: {el} → {now:?}"
+                        ),
+                    }
                 }
             }
             assert!(cells_after.keys().all(|k| cells.contains_key(k)), "{rel}: a cell added in {name}");
@@ -180,6 +192,109 @@ fn one_number_changed_changes_its_sheet_alone() {
     }
     eprintln!("{patched} workbooks patched; {} hold no number to change: {without_a_number:?}", without_a_number.len());
     assert!(patched >= 200, "{patched}");
+}
+
+/// The structural edits every workbook takes, one at a time, on its first worksheet: rows and
+/// columns inserted and deleted, a defined name set, global and local.
+fn structural(sheet: &str) -> Vec<(&'static str, Edit)> {
+    let s = sheet.to_string();
+    let target = format!("='{}'!$A$1", sheet.replace('\'', "''"));
+    vec![
+        ("insert row 2", Edit::InsertRows { sheet: s.clone(), at: 2, count: 1 }),
+        ("delete row 2", Edit::DeleteRows { sheet: s.clone(), at: 2, count: 1 }),
+        ("insert column B", Edit::InsertColumns { sheet: s.clone(), at: "B".into(), count: 1 }),
+        ("delete column B", Edit::DeleteColumns { sheet: s.clone(), at: "B".into(), count: 1 }),
+        ("set a name", Edit::SetName { name: "AbacoProbe".into(), formula: target.clone(), scope: None }),
+        ("set a local name", Edit::SetName { name: "AbacoProbe".into(), formula: target, scope: Some(s) }),
+    ]
+}
+
+/// The structural edits the patcher refuses on a corpus workbook, by workbook, edit and the start
+/// of the reason: what it does not carry yet, said before anything is written.
+const STRUCTURAL_REFUSED: [(&str, &str, &str); 13] = [
+    // upstream's malformed merges: C2 holds a value under the merge B2:C3, which the engine does
+    // not show; with column B deleted it is the merge's first cell, as Excel keeps it, and the
+    // patcher's verification refuses a file the engine reads otherwise than its model
+    ("bad_merge_cells.xlsx", "delete column B", "verification failed: 1 cell(s) differ; first: Feuille 1!B2: model Empty"),
+    ("calc_test_no_export/tables.xlsx", "insert row 2", "not supported by the patcher yet: the move cuts into table Table1"),
+    ("calc_test_no_export/tables.xlsx", "delete row 2", "not supported by the patcher yet: the move cuts into table Table1"),
+    ("calc_test_no_export/tables.xlsx", "insert column B", "not supported by the patcher yet: the move cuts into table Table1"),
+    ("calc_test_no_export/tables.xlsx", "delete column B", "not supported by the patcher yet: the move cuts into table Table1"),
+    // the engine's own refusals, Excel's: a cell in the last column, an array cut in two
+    ("calc_tests/LOOKUP_AND_REFERENCE/ROW_COLUM.xlsx", "insert column B", "edit 0 (insert_columns): Cannot shift cells because that would delete cells at the end of a row"),
+    ("calc_tests/spill_operator.xlsx", "delete row 2", "edit 0 (delete_rows): Cannot delete rows because that would break an array formula"),
+    ("dynamic_arrays.xlsx", "insert row 2", "edit 0 (insert_rows): Cannot insert rows because that would break an array formula"),
+    ("dynamic_arrays.xlsx", "delete row 2", "edit 0 (delete_rows): Cannot delete rows because that would break an array formula"),
+    ("example.xlsx", "insert row 2", "not supported by the patcher yet: rows/columns moved in a workbook with pivot tables"),
+    ("example.xlsx", "delete row 2", "not supported by the patcher yet: rows/columns moved in a workbook with pivot tables"),
+    ("example.xlsx", "insert column B", "not supported by the patcher yet: rows/columns moved in a workbook with pivot tables"),
+    ("example.xlsx", "delete column B", "not supported by the patcher yet: rows/columns moved in a workbook with pivot tables"),
+];
+
+#[test]
+fn structural_edits_are_verified_or_refused_and_a_refusal_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut verified = 0;
+    let mut refused: Vec<(String, &str, String)> = Vec::new();
+    for rel in corpus() {
+        let src = corpus_dir().join(&rel);
+        let wb = Workbook::open(&src, LinkPolicy::AlwaysUseCached, |_| LinkChoice::UseCached).unwrap();
+        let first = wb.sheet_names()[0].clone();
+        for (label, edit) in structural(&first) {
+            let dst = dir.path().join("out.xlsx");
+            let _ = std::fs::remove_file(&dst);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| patch(&src, &dst, &[edit], &options())));
+            match run {
+                Ok(Ok(report)) => {
+                    assert_eq!(report.outcomes.len(), 1, "{rel}: {label}");
+                    assert!(report.verified_cells > 0 || wb.cells(0).unwrap().is_empty(), "{rel}: {label}: nothing verified");
+                    assert!(dst.exists(), "{rel}: {label}: nothing written");
+                    verified += 1;
+                }
+                Ok(Err(e)) => {
+                    // a refusal leaves the destination as it was: here, absent
+                    assert!(!dst.exists(), "{rel}: {label}: refused ({e}) and written");
+                    refused.push((rel.clone(), label, e.to_string()));
+                }
+                Err(_) => refused.push((rel.clone(), label, "PANIC".into())),
+            }
+        }
+        // nothing left beside the destination
+        let left: Vec<String> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).filter(|n| n != "out.xlsx").collect();
+        assert!(left.is_empty(), "{rel}: {left:?} left beside the destination");
+    }
+    for r in &refused {
+        eprintln!("REFUSED {} | {} | {}", r.0, r.1, r.2.chars().take(300).collect::<String>());
+    }
+    let got: Vec<(&str, &str)> = refused.iter().map(|(p, l, _)| (p.as_str(), *l)).collect();
+    let expected: Vec<(&str, &str)> = STRUCTURAL_REFUSED.iter().map(|(p, l, _)| (*p, *l)).collect();
+    assert_eq!(got, expected, "{} refused", refused.len());
+    for ((_, _, why), (_, _, start)) in refused.iter().zip(STRUCTURAL_REFUSED.iter()) {
+        assert!(why.starts_with(start), "{why}");
+    }
+    eprintln!("{verified} structural edits verified");
+}
+
+/// The text of a `<c>` element's `<f>`, empty for a shared child's `<f …/>`; `None` without one.
+fn formula_of(el: &str) -> Option<&str> {
+    let at = el.find("<f")?;
+    let open_end = at + el[at..].find('>')?;
+    if el[..open_end].ends_with('/') {
+        return Some("");
+    }
+    let close = el[open_end..].find("</f>")? + open_end;
+    Some(&el[open_end + 1..close])
+}
+
+/// Whether the engine computes the cell's value though the file holds no formula there: a cell
+/// an array spilled into.
+fn computed(wb: &Workbook, sheet: u32, a: Addr) -> bool {
+    wb.model()
+        .workbook
+        .worksheet(sheet)
+        .ok()
+        .and_then(|ws| ws.cell(a.row, a.column))
+        .is_some_and(|c| matches!(c.as_ref(), ironcalc_base::types::Cell::SpillCell { .. }))
 }
 
 fn column_letters(mut col: i32) -> String {

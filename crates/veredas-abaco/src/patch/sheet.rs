@@ -95,6 +95,8 @@ struct Group {
     master: (i32, i32),
     text: String,
     bounds: Option<(i32, i32, i32, i32)>,
+    /// Every cell of the group, the master among them.
+    members: Vec<(i32, i32)>,
 }
 
 fn parse_addr(r: &str) -> Option<(i32, i32)> {
@@ -179,6 +181,21 @@ fn set_or_remove(tag: &str, name: &str, value: Option<&str>) -> String {
         Some(v) => set_attr(tag, name, v),
         None => remove_attr(tag, name),
     }
+}
+
+/// A cell an array spilled into, as Excel writes one: the value with no formula, a text as `str`
+/// (an inline or shared string there is a constant, and blocks the array); `None` = no cell at all
+/// (the array no longer reaches it, and it has no style).
+fn spilled_cell(row: i32, col: i32, style: Option<&str>, value: &Value) -> Option<String> {
+    let s = style.map(|s| format!(" s=\"{s}\"")).unwrap_or_default();
+    let r = addr(row, col);
+    if matches!(value, Value::Empty) {
+        style?;
+        return Some(format!("<c r=\"{r}\"{s}/>"));
+    }
+    let (t, v) = cached_xml(value);
+    let t = t.map(|t| format!(" t=\"{t}\"")).unwrap_or_default();
+    Some(format!("<c r=\"{r}\"{s}{t}>{v}</c>"))
 }
 
 /// A fresh cell for a content write; `None` = no cell at all (cleared and
@@ -321,7 +338,13 @@ pub(crate) fn rewrite(
                 }
             })
         }) || (g.bounds.is_none() && !own.is_empty());
-        let text_moves = shift_text(&g.text, job).is_some();
+        // a move that reaches the formula of any member, the master's or a child's as it derives
+        // from the master's (`=A10` shared down B1:B3 reads A12 in B3: an insert at row 11 moves
+        // B3's reference and not the master's)
+        let text_moves = !job.shifts.is_empty()
+            && g.members.iter().any(|&(r, c)| {
+                shift_text(&refs::translate(&g.text, r - g.master.0, c - g.master.1), job).is_some()
+            });
         if overwritten || moved || text_moves {
             expand.insert(si.clone());
         }
@@ -487,6 +510,7 @@ pub(crate) fn rewrite(
 fn scan_shared(body: &str, groups: &mut HashMap<String, Group>) {
     let mut pos = 0;
     let mut cell: Option<(i32, i32)> = None;
+    let mut members: HashMap<String, Vec<(i32, i32)>> = HashMap::new();
     while let Some(t) = next_tag(body, pos) {
         pos = t.end;
         if t.closing {
@@ -494,10 +518,14 @@ fn scan_shared(body: &str, groups: &mut HashMap<String, Group>) {
         }
         if t.name == "c" {
             cell = attr(t.text, "r").and_then(parse_addr);
-        } else if t.name == "f" && attr(t.text, "t") == Some("shared") && !t.self_closing {
+        } else if t.name == "f" && attr(t.text, "t") == Some("shared") {
             let (Some(si), Some(at)) = (attr(t.text, "si"), cell) else {
                 continue;
             };
+            members.entry(si.to_string()).or_default().push(at);
+            if t.self_closing {
+                continue;
+            }
             let Some(close) = xml::find_close(body, &t) else {
                 continue;
             };
@@ -511,9 +539,15 @@ fn scan_shared(body: &str, groups: &mut HashMap<String, Group>) {
                     master: at,
                     text,
                     bounds,
+                    members: Vec::new(),
                 },
             );
             pos = close.end;
+        }
+    }
+    for (si, m) in members {
+        if let Some(g) = groups.get_mut(&si) {
+            g.members = m;
         }
     }
 }
@@ -932,6 +966,21 @@ fn rewrite_cell(
                 changed = true;
             }
         }
+    if !had_formula {
+        // a cell an array spilled into holds the array's value and no formula of its own: where
+        // the edits moved that value (its anchor deleted, an input changed) it follows the engine
+        // as a formula's cache does, and is empty where the array no longer reaches (left as a
+        // value, Excel would read it as a constant); a plain value is never the engine's to move
+        // (`moved` is false for a cell the engine did not compute)
+        let live = (job.value_at)(new.0, new.1);
+        if (job.moved)(orig, &live) {
+            out.refreshed += 1;
+            return Ok(match spilled_cell(new.0, new.1, attr(&new_tag, "s"), &live) {
+                Some(s) => CellOut::New(s),
+                None => CellOut::Gone,
+            });
+        }
+    }
     if !changed {
         return Ok(CellOut::Same);
     }

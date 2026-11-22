@@ -390,6 +390,11 @@ fn replace_inner(s: &str, name: &str, value: &str) -> String {
     let Some(open) = xml::find_open(s, name, 0) else {
         return s.to_string();
     };
+    if open.self_closing {
+        // `<x:Row/>`: opened and closed around the value
+        let tag = open.text.trim_end_matches("/>").trim_end();
+        return format!("{}{tag}>{value}</{name}>{}", &s[..open.start], &s[open.end..]);
+    }
     let Some(close) = xml::find_close(s, &open) else {
         return s.to_string();
     };

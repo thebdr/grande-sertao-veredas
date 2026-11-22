@@ -37,12 +37,13 @@
 //!   three-way check: the file already holding the new content is
 //!   "already there", holding something else is a conflict and the edit is
 //!   skipped;
-//! - the write is atomic, the destination's previous version kept as `.bak`,
-//!   and the source is re-read before the rename (it must not have moved
-//!   since it was read);
-//! - [`PatchOptions::verify`] re-opens the written file through the engine
-//!   and compares every cell (content and value) with the model the edits
-//!   produced.
+//! - the write is atomic: the new file is written beside the destination,
+//!   [`PatchOptions::verify`] re-opens THAT file through the engine and
+//!   compares every cell (content and value) with the model the edits
+//!   produced, the source is re-read (it must not have moved since it was
+//!   read), and only then is the file renamed over the destination, its
+//!   previous version kept as `.bak`; a failed verification or a moved
+//!   source leaves the destination as it was.
 
 pub mod cached;
 pub mod package;
@@ -358,11 +359,89 @@ pub struct PatchOptions {
     pub full_calc_on_load: bool,
 }
 
-/// Whether a formula's text calls a function whose value changes from one evaluation to the
-/// next (a text test: a false positive costs a value comparison, never a byte).
+/// The identifiers of a formula in A1 spelling, outside string literals and quoted sheet names,
+/// each with the first character after it that is not a space (`None` at the end).
+fn tokens(formula: &str) -> Vec<(&str, Option<char>)> {
+    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '.' || c == '\\';
+    let mut out = Vec::new();
+    let mut quote: Option<char> = None;
+    let mut start: Option<usize> = None;
+    for (i, c) in formula.char_indices().chain(std::iter::once((formula.len(), ' '))) {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        if i < formula.len() && ident(c) {
+            start.get_or_insert(i);
+            continue;
+        }
+        if let Some(a) = start.take() {
+            let next = formula[i..].chars().find(|c| !c.is_whitespace());
+            out.push((&formula[a..i], next));
+        }
+        if c == '"' || c == '\'' {
+            quote = Some(c);
+        }
+    }
+    out
+}
+
+/// Whether a formula (A1 spelling) calls a function whose value changes from one evaluation to the
+/// next, by name (`_xlfn.` allowed): `GRANDTOTAL(` or a text `"RAND()"` is no call.
 fn calls_volatile(formula: &str) -> bool {
-    let f = formula.to_ascii_uppercase();
-    f.contains("RAND") || f.contains("NOW(") || f.contains("TODAY(")
+    tokens(formula).iter().any(|(t, next)| {
+        let name = t.trim_start_matches("_xlfn.").trim_start_matches("_xlws.");
+        *next == Some('(')
+            && ["RAND", "RANDBETWEEN", "RANDARRAY", "NOW", "TODAY"].iter().any(|v| name.eq_ignore_ascii_case(v))
+    })
+}
+
+/// Whether a formula (A1 spelling) reads the defined name `name`: the name as a whole token, not a
+/// function's (`(`), a sheet's (`!`) or a table's (`[`).
+fn mentions(formula: &str, name: &str) -> bool {
+    tokens(formula)
+        .iter()
+        .any(|(t, next)| t.eq_ignore_ascii_case(name) && !matches!(next, Some('(' | '!' | '[')))
+}
+
+/// Every formula of every sheet in A1 spelling, by sheet and by the engine's formula index (the
+/// engine keeps them in R1C1, where `R[0]C[-2]` would read as a name `R`).
+fn a1_formulas(wb: &Workbook) -> Vec<Vec<String>> {
+    let model = wb.model();
+    model
+        .workbook
+        .worksheets
+        .iter()
+        .enumerate()
+        .map(|(i, ws)| {
+            let ctx = CellReferenceRC { sheet: ws.get_name(), row: 1, column: 1 };
+            model
+                .parsed_formulas
+                .get(i)
+                .map(|parsed| parsed.iter().map(|p| to_excel_string(p.0.as_ref(), &ctx)).collect())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// The defined names whose formula calls a volatile function, directly or through another such
+/// name.
+fn volatile_names(wb: &Workbook) -> Vec<String> {
+    let names = wb.names();
+    let mut out: Vec<String> = names.iter().filter(|n| calls_volatile(&n.formula)).map(|n| n.name.clone()).collect();
+    loop {
+        let more: Vec<String> = names
+            .iter()
+            .filter(|n| !out.contains(&n.name) && out.iter().any(|v| mentions(&n.formula, v)))
+            .map(|n| n.name.clone())
+            .collect();
+        if more.is_empty() {
+            return out;
+        }
+        out.extend(more);
+    }
 }
 
 /// The engine's value of every formula cell of the UNEDITED workbook, by
@@ -415,28 +494,30 @@ impl Before {
             .collect()
     }
 
-    /// Whether any formula of `wb` calls a volatile function (a text test:
-    /// a false positive costs one more evaluation, nothing else).
+    /// Whether any formula of `wb`, a cell's or a defined name's, calls a volatile function (a
+    /// text test: a false positive costs one more evaluation, nothing else).
     fn volatile(wb: &Workbook) -> bool {
-        wb.model().workbook.worksheets.iter().any(|ws| ws.shared_formulas.iter().any(|f| calls_volatile(f)))
+        a1_formulas(wb).iter().flatten().any(|f| calls_volatile(f)) || !volatile_names(wb).is_empty()
     }
 
-    /// The cells whose own formula calls a volatile function, and the cells such a formula spills
-    /// into: unstable whatever two evaluations happen to give (a random draw can repeat).
+    /// The cells whose own formula calls a volatile function, directly or through a defined name
+    /// that does, and the cells such a formula spills into: unstable whatever two evaluations
+    /// happen to give (a random draw can repeat).
     fn volatile_cells(wb: &Workbook) -> Vec<std::collections::HashSet<(i32, i32)>> {
+        let names = volatile_names(wb);
+        let formulas = a1_formulas(wb);
         wb.model()
             .workbook
             .worksheets
             .iter()
-            .map(|ws| {
+            .zip(formulas.iter())
+            .map(|(ws, texts)| {
+                let volatile: Vec<bool> =
+                    texts.iter().map(|f| calls_volatile(f) || names.iter().any(|n| mentions(f, n))).collect();
                 let mut cells: std::collections::HashSet<(i32, i32)> = ws
                     .sheet_data
                     .cells()
-                    .filter(|(_, _, c)| {
-                        c.get_formula()
-                            .and_then(|i| ws.shared_formulas.get(i as usize))
-                            .is_some_and(|f| calls_volatile(f))
-                    })
+                    .filter(|(_, _, c)| c.get_formula().and_then(|i| volatile.get(i as usize)).is_some_and(|v| *v))
                     .map(|(row, col, _)| (row, col))
                     .collect();
                 let spilled: Vec<(i32, i32)> = ws
@@ -829,6 +910,7 @@ pub fn patch(
                     Shift::DeleteRows { at: *at, n: *count }
                 };
                 move_model_names(&mut wb, &canonical, sh).map_err(fail)?;
+                move_model_tables(&mut wb, &canonical, sh)?;
                 shifts.push((canonical, sh));
             }
             Edit::InsertColumns { sheet, at, count } | Edit::DeleteColumns { sheet, at, count } => {
@@ -849,6 +931,7 @@ pub fn patch(
                     Shift::DeleteCols { at: c, n: *count }
                 };
                 move_model_names(&mut wb, &canonical, sh).map_err(fail)?;
+                move_model_tables(&mut wb, &canonical, sh)?;
                 shifts.push((canonical, sh));
             }
             Edit::AddSheet { name } => {
@@ -1279,23 +1362,7 @@ pub fn patch(
                         "drawing" => {
                             // charts hang off the drawing; their series formulas
                             // may point at any moved sheet
-                            let drels = package::rels_of(&r.target);
-                            if pkg.has(&drels) {
-                                let dx = pkg.read_text(&drels)?;
-                                for c in package::rels(&r.target, &dx) {
-                                    if c.kind == "chart"
-                                        && pkg.has(&c.target)
-                                        && !replaced.contains_key(&c.target)
-                                    {
-                                        let cx = pkg.read_text(&c.target)?;
-                                        if let Some(n) = package::shift_formula_elements(
-                                            &cx, "c:f", &shifts, None, &order,
-                                        ) {
-                                            replaced.insert(c.target.clone(), n.into_bytes());
-                                        }
-                                    }
-                                }
-                            }
+                            shift_charts(&mut pkg, &r.target, &shifts, &order, &mut replaced)?;
                             if own.is_empty() {
                                 None
                             } else {
@@ -1323,6 +1390,23 @@ pub fn patch(
                     if let Some(n) = new {
                         replaced.insert(r.target.clone(), n.into_bytes());
                     }
+                }
+            }
+        }
+    }
+
+    // a chart sheet's part is left as it is, but the chart on it reads the grid like any other:
+    // its series formulas follow the moves
+    if !shifts.is_empty() {
+        for e in entries.iter().filter(|e| !e.is_worksheet()) {
+            let rels_part = package::rels_of(&e.part);
+            if !pkg.has(&rels_part) {
+                continue;
+            }
+            let rels_xml = pkg.read_text(&rels_part)?;
+            for r in package::rels(&e.part, &rels_xml) {
+                if r.kind == "drawing" && !r.external && pkg.has(&r.target) {
+                    shift_charts(&mut pkg, &r.target, &shifts, &order, &mut replaced)?;
                 }
             }
         }
@@ -1415,31 +1499,79 @@ pub fn patch(
 
     let out = pkg.write(&replaced, &removed, &added)?;
 
-    // ---- atomic write, re-read before the rename --------------------------
-    let dir = dest
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
+    // ---- written beside the destination, verified there, then renamed ---------
+    commit(source, &fingerprint, dest, &out, |written| {
+        if options.verify {
+            report.verified_cells = verify(written, &mut wb)?;
+        }
+        Ok(())
+    })?;
+    Ok(report)
+}
+
+/// Writes `bytes` as `dest`'s next version: into a folder of its own beside `dest`, under `dest`'s
+/// own name (the engine names a workbook after its file); runs `check` on that file; then, the
+/// source still holding `fingerprint`, keeps a `dest` already there as `<name>.bak` and renames the
+/// new file over it. A failing check or a source changed since it was read removes what was
+/// written and leaves `dest` as it was.
+fn commit(
+    source: &Path,
+    fingerprint: &[u8],
+    dest: &Path,
+    bytes: &[u8],
+    check: impl FnOnce(&Path) -> Result<(), PatchError>,
+) -> Result<(), PatchError> {
+    let dir = dest.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let file_name = dest
         .file_name()
         .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| "patched.xlsx".into());
-    let tmp = dir.join(format!(".{file_name}.abaco-tmp"));
-    std::fs::write(&tmp, &out).map_err(|e| io_err(&tmp, e))?;
-    if crate::files::contents(source).map_err(|e| io_err(source, e))? != fingerprint {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(PatchError::SourceMoved(source.to_path_buf()));
+        .ok_or_else(|| PatchError::Malformed(format!("{}: not a file path", dest.display())))?;
+    let scratch = dir.join(format!(".{file_name}.abaco-tmp"));
+    if scratch.exists() {
+        // a previous run's, cut before it cleaned up
+        std::fs::remove_dir_all(&scratch).map_err(|e| io_err(&scratch, e))?;
     }
-    if dest.exists() {
-        let bak = dir.join(format!("{file_name}.bak"));
-        std::fs::copy(dest, &bak).map_err(|e| io_err(&bak, e))?;
-    }
-    std::fs::rename(&tmp, dest).map_err(|e| io_err(dest, e))?;
+    std::fs::create_dir(&scratch).map_err(|e| io_err(&scratch, e))?;
+    let written = scratch.join(&file_name);
+    let result = (|| {
+        std::fs::write(&written, bytes).map_err(|e| io_err(&written, e))?;
+        check(&written)?;
+        if crate::files::contents(source).map_err(|e| io_err(source, e))? != fingerprint {
+            return Err(PatchError::SourceMoved(source.to_path_buf()));
+        }
+        if dest.exists() {
+            let bak = dir.join(format!("{file_name}.bak"));
+            std::fs::copy(dest, &bak).map_err(|e| io_err(&bak, e))?;
+        }
+        std::fs::rename(&written, dest).map_err(|e| io_err(dest, e))
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
+}
 
-    if options.verify {
-        report.verified_cells = verify(dest, &mut wb)?;
+/// The charts a drawing part holds, their series formulas (`<c:f>`) moved with the grid; each
+/// chart rewritten once, whichever drawings reach it.
+fn shift_charts(
+    pkg: &mut package::Package,
+    drawing: &str,
+    shifts: &[(String, Shift)],
+    order: &[String],
+    replaced: &mut BTreeMap<String, Vec<u8>>,
+) -> Result<(), PatchError> {
+    let drels = package::rels_of(drawing);
+    if !pkg.has(&drels) {
+        return Ok(());
     }
-    Ok(report)
+    let dx = pkg.read_text(&drels)?;
+    for c in package::rels(drawing, &dx) {
+        if c.kind == "chart" && !c.external && pkg.has(&c.target) && !replaced.contains_key(&c.target) {
+            let cx = pkg.read_text(&c.target)?;
+            if let Some(n) = package::shift_formula_elements(&cx, "c:f", shifts, None, order) {
+                replaced.insert(c.target.clone(), n.into_bytes());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn value_or_formula(edit: &Edit) -> (String, bool) {
@@ -1513,6 +1645,8 @@ fn rewrite_defined_names(
     let mut kept: Vec<String> = Vec::new();
     let mut seen: Vec<(String, Option<String>)> = Vec::new();
     let (open_end, close_start, had) = match xml::find_open(workbook_xml, "definedNames", 0) {
+        // `<definedNames/>` (Google Sheets and openpyxl write it): no name inside
+        Some(open) if open.self_closing => (open.end, open.end, Some((open.start, open.end))),
         Some(open) => {
             let close = xml::find_close(workbook_xml, &open)
                 .ok_or_else(|| PatchError::Malformed("<definedNames> not closed".into()))?;
@@ -1624,10 +1758,11 @@ fn rewrite_defined_names(
     Ok(match had {
         Some((a, b)) => {
             let open = xml::find_open(workbook_xml, "definedNames", 0)
-                .map(|t| t.text.to_string())
+                .map(|t| if t.self_closing { format!("{}>", t.text.trim_end_matches("/>").trim_end()) } else { t.text.to_string() })
                 .unwrap_or_default();
             let names = if kept.is_empty() {
-                String::new()
+                // an empty element stays as the file wrote it; one whose names all went goes
+                if open_end == close_start { workbook_xml[a..b].to_string() } else { String::new() }
             } else {
                 format!("{open}{}</definedNames>", kept.concat())
             };
@@ -1671,6 +1806,49 @@ fn move_model_names(wb: &mut Workbook, sheet: &str, shift: Shift) -> Result<(), 
                 .map_err(|e| e.to_string())?;
             wb.set_name(&n.name, &moved, n.scope.as_deref())
                 .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// The engine does not move a table's range when rows or columns move (it reads a structured
+/// reference as the table's cells when it parses it): the patcher moves the model's tables on
+/// `sheet` as it moves the file's (`package::shift_table`), so a formula parsed after the move
+/// reads a table where it now is. A move that cuts into a table, inserting or deleting rows or
+/// columns inside it, is refused before anything is written: the table's columns are named in its
+/// part and its structured references are cells to the engine, and the patcher resizes neither yet.
+fn move_model_tables(wb: &mut Workbook, sheet: &str, shift: Shift) -> Result<(), PatchError> {
+    let tables: Vec<(String, String)> = wb
+        .model()
+        .workbook
+        .tables
+        .values()
+        .filter(|t| t.sheet_name.eq_ignore_ascii_case(sheet))
+        .map(|t| (t.name.clone(), t.reference.clone()))
+        .collect();
+    for (name, reference) in tables {
+        let Some(area) = refs::parse_area(&reference) else {
+            continue;
+        };
+        let (r1, c1, r2, c2) = area.bounds();
+        let cuts = match shift {
+            Shift::InsertRows { at, .. } => at > r1 && at <= r2,
+            Shift::DeleteRows { at, n } => at <= r2 && at + n - 1 >= r1,
+            Shift::InsertCols { at, .. } => at > c1 && at <= c2,
+            Shift::DeleteCols { at, n } => at <= c2 && at + n - 1 >= c1,
+        };
+        if cuts {
+            return Err(PatchError::Unsupported(format!(
+                "the move cuts into table {name} at {sheet}!{reference} (a table is moved whole, never resized, by the patcher yet)"
+            )));
+        }
+        if let Some(moved) = shift.area(area) {
+            let spelled = moved.spell();
+            if spelled != reference {
+                wb.model_mut()
+                    .set_table_reference(&name, &spelled)
+                    .map_err(PatchError::Malformed)?;
+            }
         }
     }
     Ok(())
@@ -1744,8 +1922,16 @@ fn verify(dest: &Path, wb: &mut Workbook) -> Result<usize, PatchError> {
             let theirs = back
                 .content(s, a)
                 .map_err(|e| PatchError::Verify(e.to_string()))?;
+            // a formula compared as the file spells it (the `@` the engine marks where Excel
+            // implies one is no difference), an array formula with an array formula; a dynamic
+            // formula of one cell is written as a plain one (one that spills is refused), and
+            // where Excel's reading of it differs, its value does
+            let array = |c: &Content| matches!(c, Content::ArrayFormula { .. });
             let content_ok = match (formula_text(&mine), formula_text(&theirs)) {
-                (Some(x), Some(y)) => x == y,
+                (Some(_), Some(_)) => {
+                    array(&mine) == array(&theirs)
+                        && current_file_formula(wb, s, a) == current_file_formula(&back, s, a)
+                }
                 (None, None) => true,
                 _ => false,
             };
@@ -1783,6 +1969,64 @@ fn verify(dest: &Path, wb: &mut Workbook) -> Result<usize, PatchError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn listing(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> =
+            std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_failed_check_or_a_moved_source_leaves_the_destination_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("in.xlsx");
+        let dest = dir.path().join("out.xlsx");
+        std::fs::write(&source, b"source").unwrap();
+        std::fs::write(&dest, b"before").unwrap();
+        // the check sees the new file under the destination's own name, and refuses it
+        let e = commit(&source, b"source", &dest, b"after", |written| {
+            assert_eq!(std::fs::read(written).unwrap(), b"after");
+            assert_eq!(written.file_name().unwrap(), "out.xlsx");
+            assert_ne!(written, dest.as_path());
+            Err(PatchError::Verify("refused".into()))
+        })
+        .unwrap_err();
+        assert!(matches!(e, PatchError::Verify(_)), "{e}");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"before");
+        // the source no longer holds what was read
+        let e = commit(&source, b"what was read", &dest, b"after", |_| Ok(())).unwrap_err();
+        assert!(matches!(e, PatchError::SourceMoved(_)), "{e}");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"before");
+        // nothing left beside the destination, no `.bak` made
+        assert_eq!(listing(dir.path()), ["in.xlsx", "out.xlsx"]);
+        // all well: renamed over the destination, its previous version kept
+        commit(&source, b"source", &dest, b"after", |_| Ok(())).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"after");
+        assert_eq!(std::fs::read(dir.path().join("out.xlsx.bak")).unwrap(), b"before");
+        assert_eq!(listing(dir.path()), ["in.xlsx", "out.xlsx", "out.xlsx.bak"]);
+    }
+
+    #[test]
+    fn a_name_is_read_as_a_whole_token_and_a_volatile_function_as_a_call() {
+        assert!(mentions("R*2", "R"));
+        assert!(mentions("SUM(rate,1)", "Rate"));
+        assert!(mentions("1+Sheet1!R", "R"));
+        assert!(!mentions("RAND()", "R"));
+        assert!(!mentions("R1*2", "R"));
+        assert!(!mentions("My.R", "R"));
+        assert!(!mentions("R!A1", "R"));
+        assert!(!mentions("R[Qty]", "R"));
+        assert!(!mentions("R (1)", "R"));
+        assert!(!mentions("\"R\"&'R'!A1", "R"));
+        assert!(calls_volatile("1+RAND()"));
+        assert!(calls_volatile("_xlfn.RANDARRAY(3)"));
+        assert!(calls_volatile("today ()+1"));
+        assert!(!calls_volatile("GRANDTOTAL(1)"));
+        assert!(!calls_volatile("\"RAND()\""));
+        assert!(!calls_volatile("NOW"));
+        assert!(!calls_volatile("'RAND('!A1"));
+    }
 
     #[test]
     fn edits_read_from_json_lines() {

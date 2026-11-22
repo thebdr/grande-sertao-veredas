@@ -152,7 +152,11 @@ refinement), the result checked equal to Veredas 1's fork once its test data's r
 replaced by neutral ones. Three changes of Ábaco's own followed, each found by a refute round: a
 link's target read as the URI Excel writes (12), the statistical functions on one float path in
 every build (13) and the chi-squared and gamma inverses to full precision (14), and a clock a host
-can pin at run time (15). The record lists each, with its upstream column. Upstream's own tests and the changes' (in the fork's folder, with
+can pin at run time (15), random functions a host can seed (16); and four found by the patcher's
+refute round, where the engine's model disagreed with what Excel makes of a move: a range a
+deletion cuts into shrinks (17), a table a host moves is read where it is (18), an external
+reference keeps its address when its cell moves (19), a moved formula keeps its kind (20). The
+record lists each, with its upstream column. Upstream's own tests and the changes' (in the fork's folder, with
 upstream's workbooks) run in the fork's own workspace,
 `cargo test --locked --manifest-path forks/ironcalc/Cargo.toml`, and Ábaco's component test runs
 them, so they run with Ábaco's tests. Upstream has moved since (`main` at `f936620` on 2026-11-22): bringing it in is
@@ -212,10 +216,15 @@ classes, the report, the corpus list, and the parity test.
    baseline taken with Veredas 1's oracle, then Veredas 2's run, equal or better. Clauses: the
    component, the link policy, the engine at parity.
 2. **Byte-faithful edits.** The patcher: untouched parts byte for byte, caches rewritten only where
-   an edit moved the engine's value, references rippled through every sheet, name, validation,
-   conditional format, comment, drawing, chart and table; the output read back through the engine.
+   an edit moved the engine's value (a spilled cell's too), references rippled through every sheet,
+   name, validation, conditional format, comment, drawing, chart (a chart sheet's included) and
+   table; the output read back through the engine beside the destination before it replaces it.
    Proven on workbooks built for each structure and on every workbook of the corpus (with nothing
-   to do and with one number changed); Excel's acceptance owed where Excel runs. Its edits come
+   to do, with one number changed, and with each row and column move and a name set, verified or
+   refused as pinned); Excel's acceptance owed where Excel runs. Not carried yet, refused before
+   anything is written: a move that cuts into a table (resizing it), a move in a workbook with
+   pivot tables, writing a formula that spills; a structured reference in a formula an edit writes
+   is written as the cells it reads (the engine parses it to them). Its edits come
    through the API; an edit file, stamped TOML, comes with the command line, once core's header
    reader can be had without core's network layers (asked of core).
 3. **The `.abaco` file.** Lossless round trip of every workbook of the corpus through the zip and
@@ -275,5 +284,22 @@ classes, the report, the corpus list, and the parity test.
   spilled cells were not seen as volatile, so the patcher's own verification failed, and a random
   draw that repeats by chance hid a volatile cell from a two-evaluation measure. Each is answered in
   `src/patch` and pinned by `tests/patch_corpus.rs`.
+- **The patcher's verification ran after the rename** (C-223's refute round, 2026-11-22): a file it
+  could not vouch for had already replaced the destination, an in-place patch's source with it. It
+  now verifies the new file beside the destination, under the destination's own name (the engine
+  names a workbook after its file), and renames only then.
+- **The engine's model and Excel part ways on moves**: a deleted end of a range made `A1:#REF!`
+  where Excel shrinks the range (fork change 17); an external reference's relative part kept its
+  offset, so its address moved with its cell (19); a reference turned `#REF!` made a plain formula
+  a dynamic array (20); a structured reference is cells to the engine and a table's range never
+  moved (18). The patcher's verification found each, on 49 to 51 of the corpus's 266 workbooks
+  with a row or a column deleted.
+- **A cell an array spilled into is a value with no formula**: left as it was when its anchor goes,
+  Excel reads it as a constant; rewritten as an inline string, it blocks the array (`#SPILL!`).
+  Excel writes a spilled text as `t="str"`, and so does the patcher.
+- **A text test of volatility reads names where there are none**: the engine stores formulas in
+  R1C1, where `R[0]C[-2]` is a name `R`, and `RAND` is a substring of `GRANDTOTAL(`; a false
+  positive keeps a stale cache. Volatile calls and names are read as whole tokens of each formula's
+  A1 spelling, outside strings and quoted names.
 - **Calamine 0.26 does not build with zip 2.6**: the lock holds zip 2.4.2, the version Veredas 1's
   lock had.

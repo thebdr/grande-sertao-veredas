@@ -657,3 +657,87 @@ fn a_formula_that_does_not_parse_fails_the_patch_and_writes_nothing() {
     assert!(err.to_string().contains("does not parse"), "{err}");
     assert!(!dst.exists());
 }
+
+#[test]
+fn deleted_columns_move_cells_formulas_widths_names_and_formats() {
+    let (_d, src, dst, report) = run(&[Edit::DeleteColumns {
+        sheet: "Data".into(),
+        at: "B".into(),
+        count: 1,
+    }]);
+    fates(&src, &dst, &report);
+    let s = part(&dst, "xl/worksheets/sheet1.xml");
+    // Price moved from C to B; the products read the deleted quantity
+    assert!(s.contains(r#"<c r="B3"><v>30</v></c>"#), "{s}");
+    assert!(s.contains(r#"<c r="D2" t="e"><f>SUM(C2:C6)</f><v>#REF!</v></c>"#), "{s}");
+    assert!(s.contains(r#"<f>#REF!*B3</f>"#), "{s}");
+    assert!(s.contains(r#"<cols><col min="1" max="1" width="20" customWidth="1"/><col min="2" max="2" width="9.140625" style="0"/></cols>"#), "{s}");
+    assert!(s.contains(r#"<mergeCell ref="E1:F1"/>"#), "{s}");
+    assert!(s.contains(r#"<conditionalFormatting sqref="C2:C6"><cfRule type="expression" dxfId="0" priority="1"><formula>C2&gt;100</formula>"#), "{s}");
+    // the validation covered the deleted column only: it goes
+    assert!(!s.contains("<dataValidation "), "{s}");
+    let wb = part(&dst, "xl/workbook.xml");
+    assert!(wb.contains(r#"<definedName name="Prices">Data!$B$2:$B$6</definedName>"#), "{wb}");
+    assert!(wb.contains(r#"<definedName name="_xlnm.Print_Area" localSheetId="0">Data!$A$1:$F$6</definedName>"#), "{wb}");
+    let sum = part(&dst, "xl/worksheets/sheet2.xml");
+    // a range deleted whole is `#REF!`, its sheet kept, as Excel writes it
+    assert!(sum.contains(r#"<f>SUM(Data!#REF!)</f><v>#REF!</v>"#), "{sum}");
+    assert!(sum.contains(r#"<c r="A4"><f>'Data'!B4</f><v>0.25</v></c>"#), "{sum}");
+}
+
+#[test]
+fn a_cleared_area_loses_its_contents_and_what_reads_it_follows() {
+    let (_d, src, dst, report) = run(&[Edit::Clear {
+        sheet: "Data".into(),
+        area: "B2:C3".into(),
+    }]);
+    fates(&src, &dst, &report);
+    let s = part(&dst, "xl/worksheets/sheet1.xml");
+    for gone in ["B2", "C2", "B3", "C3"] {
+        assert!(!s.contains(&format!(r#"<c r="{gone}""#)), "{gone} in {s}");
+    }
+    assert_eq!(cell(&dst, "Data", 2, 4).value, Value::Number(0.0));
+    assert_eq!(cell(&dst, "Data", 2, 5).value, Value::Number(47.0));
+    assert_eq!(cell(&dst, "Summary", 2, 1).value, Value::Number(108.0));
+    // what the clear did not reach keeps its bytes
+    assert!(s.contains(r#"<c r="B4"><v>100</v></c>"#), "{s}");
+}
+
+#[test]
+fn a_name_deleted_and_a_local_name_set() {
+    let (_d, src, dst, report) = run(&[
+        Edit::DeleteName {
+            name: "Total".into(),
+            scope: None,
+        },
+        Edit::SetName {
+            name: "Rate".into(),
+            formula: "=Data!$C$2".into(),
+            scope: Some("Summary".into()),
+        },
+    ]);
+    let (rewritten, _, _) = fates(&src, &dst, &report);
+    assert!(rewritten.contains(&"xl/workbook.xml".to_string()));
+    let wb = part(&dst, "xl/workbook.xml");
+    assert!(!wb.contains(r#"name="Total""#), "{wb}");
+    assert!(wb.contains(r#"<definedName name="Prices">Data!$C$2:$C$6</definedName>"#), "{wb}");
+    assert!(wb.contains(r#"<definedName name="Rate" localSheetId="1">Data!$C$2</definedName>"#), "{wb}");
+    // the formula that read the deleted name: its value moved, to Excel's #NAME?
+    let sum = part(&dst, "xl/worksheets/sheet2.xml");
+    assert!(sum.contains(r#"<c r="A3" t="e"><f>Total*2</f><v>#NAME?</v></c>"#), "{sum}");
+}
+
+#[test]
+fn full_calc_on_load_is_set_when_asked_and_only_then() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = fixture(dir.path());
+    for (full, calc) in [(true, r#"<calcPr calcId="191029" fullCalcOnLoad="1"/>"#), (false, r#"<calcPr calcId="191029"/>"#)] {
+        let dst = dir.path().join(format!("out-{full}.xlsx"));
+        let options = PatchOptions {
+            verify: true,
+            full_calc_on_load: full,
+        };
+        patch(&src, &dst, &[value("Data", "B3", serde_json::json!(6))], &options).unwrap();
+        assert!(part(&dst, "xl/workbook.xml").contains(calc), "{full}");
+    }
+}

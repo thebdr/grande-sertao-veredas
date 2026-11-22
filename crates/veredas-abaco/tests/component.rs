@@ -78,7 +78,7 @@ fn a_library_and_tests_nothing_else() {
         .filter(|t| strings(&t["kind"]) == ["test"])
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(tests, ["component", "links", "patch", "patch_corpus", "patch_no_styles", "patch_untouched"].iter().map(|s| s.to_string()).collect());
+    assert_eq!(tests, ["component", "links", "patch", "patch_corpus", "patch_no_styles", "patch_shapes", "patch_untouched"].iter().map(|s| s.to_string()).collect());
 }
 
 /// Ábaco's normal dependency graph as cargo prints it (`name vX.Y.Z`, a path package followed by its
@@ -255,7 +255,8 @@ fn locked(path: &Path) -> BTreeMap<String, BTreeSet<String>> {
 }
 
 /// The fork's suite, as upstream's tests and the changes' count them on 2026-11-22: upstream's
-/// 3 192 and their 8 ignored at `15ecfec`, and the changes' 50 (changes 12, 14, 16, 17, 18 and 20 added seven).
+/// 3 192 and their 8 ignored at `15ecfec`, and the changes' 50 (changes 12, 14, 16, 17, 18 and 20
+/// added seven).
 const FORK_PASSED: usize = 3242;
 const FORK_IGNORED: usize = 8;
 
