@@ -86,13 +86,14 @@ Keys (each required unless a default is given):
 ### How a release is cut (the recipe, `entrega cut <release>`)
 1. **HEAD of a clean tree**, cut from a fresh `origin/main`: the cut refuses a tree that differs
    from HEAD and a release whose manifest exists. It runs the whole suite there first (`cargo
-   nextest run --workspace`, the gate of `CLAUDE.md`, behind the machine's lock), and refuses a
-   red one. "Tested together" means two runs: that one, which tests the components against each
+   nextest run --workspace`, the gate of `CLAUDE.md`, behind the machine's lock, its temporary
+   files in the cache), and refuses a red one. "Tested together" means two runs: that one, which tests the components against each
    other from source, and the cut's own run of the bundle (step 5). A **trial cut** (`--trial`)
    skips the suite, says so in its manifest (`suite = "not run: a trial cut"`) and writes it
    elsewhere: it proves the recipe and is never committed.
-2. The components, their versions and their executables read from the commit (git's objects, as
-   C-290 reads them); the recipe's data (`tools/entrega/maquina/maquina.toml`) too.
+2. The components, their versions and their executables read from the commit as C-290 reads
+   them (its tree out of git, asked of `cargo metadata`); the recipe's data
+   (`tools/entrega/maquina/maquina.toml`) from git too.
 3. **Built on the oldest system the release targets**, a builder machine of the tester machine's
    own distribution (Debian 13, glibc 2.41) under QEMU with KVM, eight processors: the commit's
    tree (`git archive`) and its dependencies' sources (`cargo vendor`, as `Cargo.lock` pins them)
@@ -321,6 +322,9 @@ Recorded as the work meets them.
   a disk, and its tail is echoed to the console after.
 - **`/tmp` is a tmpfs of the machine's memory, shared by every session**, and its quota for the
   user ran out at 20 GB ("Disk quota exceeded"). Disks, bundles and OVAs go under `target/entrega/`
-  or the cache, never in `/tmp`.
+  or the cache, never in `/tmp`. A `TMPDIR` moved elsewhere must lie outside every git repository:
+  under the worktree's `target/`, a law's test of "a tree without git is refused" found the
+  worktree's repository around its tree and failed the cut's suite. The cut's suite takes
+  `~/.cache/veredas/entrega/tmp`.
 - **Debian's image has no `strings`** (binutils is not installed): what the guest is asked is
   answered with its own tools, or read on the host.

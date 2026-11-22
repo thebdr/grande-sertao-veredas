@@ -181,13 +181,13 @@ pub fn load(text: &str) -> Result<Manifest, ManifestError> {
 /// A component as the repository holds it at a commit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Held {
-    /// Its folder, as the workspace lists it (`crates/veredas-portal`).
+    /// Its folder, relative to the repository's root (`crates/veredas-portal`).
     pub dir: String,
     pub name: String,
-    /// The version its manifest states, as written.
+    /// Its version, as cargo reads its manifest.
     pub version: String,
-    /// The executables it builds, by cargo's rules: its `[[bin]]` tables, `src/main.rs` (named
-    /// after the package) and `src/bin/` unless `autobins = false`.
+    /// The executables `cargo build --release --bins` builds for it: the `bin` targets cargo
+    /// itself names, but those whose required features its default features do not hold.
     pub bins: BTreeSet<String>,
 }
 
@@ -196,102 +196,89 @@ pub struct Held {
 pub enum CheckError {
     #[error(transparent)]
     Git(#[from] GitError),
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
 }
 
-#[derive(Deserialize)]
-struct Workspace {
-    workspace: Option<WorkspaceTable>,
+/// The features a package's default features turn on, followed through the features they name
+/// (`dep:` entries and another crate's features are not the package's own).
+fn defaults(features: &serde_json::Map<String, serde_json::Value>) -> BTreeSet<String> {
+    let mut on = BTreeSet::new();
+    let mut todo = vec!["default".to_string()];
+    while let Some(f) = todo.pop() {
+        let Some(list) = features.get(&f).and_then(|v| v.as_array()) else { continue };
+        for x in list.iter().filter_map(|x| x.as_str()) {
+            if !x.contains(':') && !x.contains('/') && on.insert(x.to_string()) {
+                todo.push(x.to_string());
+            }
+        }
+    }
+    on
 }
 
-#[derive(Deserialize)]
-struct WorkspaceTable {
-    #[serde(default)]
-    members: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct CrateManifest {
-    package: Option<Package>,
-    #[serde(default)]
-    bin: Vec<BinTable>,
-}
-
-#[derive(Deserialize)]
-struct Package {
-    name: Option<String>,
-    version: Option<toml::Value>,
-    autobins: Option<bool>,
-}
-
-#[derive(Deserialize)]
-struct BinTable {
-    name: Option<String>,
-}
-
-/// The components (the members under `crates/`) the repository holds at `commit`, by name, with
-/// what each states; refusals for what cannot be read are pushed to `refusals`.
+/// The components (the workspace's members under `crates/`) the repository holds at `commit`, by
+/// name, as cargo itself reads them: the commit's tree taken out of git's objects (`git archive`)
+/// into a scratch folder and asked with `cargo metadata --no-deps --offline`, so a member's
+/// spelling, an edition's discovery rules and a bin's required features are cargo's, never a
+/// model of them. What cannot be read is pushed to `refusals`.
 pub fn components_at(root: &Path, commit: &str, refusals: &mut Vec<String>) -> Result<BTreeMap<String, Held>, CheckError> {
+    use std::process::{Command, Stdio};
     let mut held = BTreeMap::new();
-    let Some(ws) = git::show(root, commit, "Cargo.toml")? else {
-        refusals.push(format!("commit {commit} holds no Cargo.toml"));
-        return Ok(held);
-    };
-    let members = match toml::from_str::<Workspace>(&ws) {
-        Ok(Workspace { workspace: Some(w) }) => w.members,
-        _ => {
-            refusals.push(format!("commit {commit}: its Cargo.toml lists no workspace"));
-            return Ok(held);
+    let scratch = std::env::temp_dir().join(format!("entrega-tree-{}-{}", std::process::id(), &commit[..commit.len().min(12)]));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch)?;
+    let result = (|| -> Result<Option<String>, CheckError> {
+        let tar = scratch.join("tree.tar");
+        if git::run(root, &["archive", "--format=tar", "-o", &tar.display().to_string(), commit])?.is_none() {
+            return Ok(Some(format!("commit {commit}: git cannot archive its tree")));
         }
-    };
-    for dir in members.into_iter().filter(|m| m.starts_with("crates/")) {
-        let Some(text) = git::show(root, commit, &format!("{dir}/Cargo.toml"))? else {
-            refusals.push(format!("commit {commit}: member {dir} has no Cargo.toml"));
-            continue;
-        };
-        let m: CrateManifest = match toml::from_str(&text) {
+        let tree = scratch.join("tree");
+        std::fs::create_dir_all(&tree)?;
+        let untar = Command::new("tar").arg("-xf").arg(&tar).arg("-C").arg(&tree).status()?;
+        if !untar.success() {
+            return Ok(Some(format!("commit {commit}: its tree does not unpack")));
+        }
+        if !tree.join("Cargo.toml").is_file() {
+            return Ok(Some(format!("commit {commit} holds no Cargo.toml")));
+        }
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let out = Command::new(cargo)
+            .args(["metadata", "--no-deps", "--offline", "--format-version", "1", "--manifest-path"])
+            .arg(tree.join("Cargo.toml"))
+            .stdin(Stdio::null())
+            .output()?;
+        if !out.status.success() {
+            let why = String::from_utf8_lossy(&out.stderr);
+            let first = why.lines().find(|l| l.starts_with("error")).unwrap_or("cargo failed").trim().to_string();
+            return Ok(Some(format!("commit {commit}: cargo cannot read its workspace: {first}")));
+        }
+        let meta: serde_json::Value = match serde_json::from_slice(&out.stdout) {
             Ok(m) => m,
-            Err(e) => {
-                refusals.push(format!("commit {commit}: {dir}/Cargo.toml is not read: {}", e.message()));
-                continue;
-            }
+            Err(e) => return Ok(Some(format!("commit {commit}: cargo's metadata does not read: {e}"))),
         };
-        let Some(package) = m.package else {
-            refusals.push(format!("commit {commit}: {dir}/Cargo.toml has no [package]"));
-            continue;
-        };
-        let Some(name) = package.name else {
-            refusals.push(format!("commit {commit}: {dir}/Cargo.toml names no package"));
-            continue;
-        };
-        let version = match package.version {
-            Some(toml::Value::String(v)) => v,
-            _ => {
-                refusals.push(format!("commit {commit}: {name} states no version of its own"));
-                continue;
-            }
-        };
-        let mut bins: BTreeSet<String> = m.bin.iter().map(|b| b.name.clone().unwrap_or_else(|| name.clone())).collect();
-        if package.autobins != Some(false) {
-            if git::list(root, commit, &format!("{dir}/src"))?.is_some_and(|l| l.iter().any(|f| f == "main.rs")) {
-                bins.insert(name.clone());
-            }
-            if let Some(entries) = git::list(root, commit, &format!("{dir}/src/bin"))? {
-                for e in entries {
-                    match e.strip_suffix(".rs") {
-                        Some(stem) => {
-                            bins.insert(stem.to_string());
-                        }
-                        None => {
-                            let inner = git::list(root, commit, &format!("{dir}/src/bin/{e}"))?;
-                            if inner.is_some_and(|l| l.iter().any(|f| f == "main.rs")) {
-                                bins.insert(e);
-                            }
-                        }
-                    }
-                }
-            }
+        let base = tree.canonicalize()?;
+        for pkg in meta["packages"].as_array().into_iter().flatten() {
+            let manifest = PathBuf::from(pkg["manifest_path"].as_str().unwrap_or_default());
+            let dir = manifest.parent().and_then(|d| d.strip_prefix(&base).ok()).map(|d| d.to_string_lossy().replace('\\', "/"));
+            let Some(dir) = dir.filter(|d| d.starts_with("crates/")) else { continue };
+            let name = pkg["name"].as_str().unwrap_or_default().to_string();
+            let version = pkg["version"].as_str().unwrap_or_default().to_string();
+            let on = pkg["features"].as_object().map(defaults).unwrap_or_default();
+            let bins = pkg["targets"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "bin")))
+                .filter(|t| t["required-features"].as_array().is_none_or(|r| r.iter().filter_map(|f| f.as_str()).all(|f| on.contains(f))))
+                .filter_map(|t| t["name"].as_str().map(String::from))
+                .collect();
+            held.insert(name.clone(), Held { dir, name, version, bins });
         }
-        held.insert(name.clone(), Held { dir, name, version, bins });
+        Ok(None)
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    if let Some(r) = result? {
+        refusals.push(r);
     }
     Ok(held)
 }
@@ -302,9 +289,16 @@ pub fn components_at(root: &Path, commit: &str, refusals: &mut Vec<String>) -> R
 pub fn check(root: &Path, m: &Manifest) -> Result<Vec<String>, CheckError> {
     let mut refusals = Vec::new();
     let c = &m.commit;
-    if git::text(root, &["rev-parse", "--verify", "--quiet", &format!("{c}^{{commit}}")])?.is_none() {
-        refusals.push(format!("commit {c} is not in the repository"));
-        return Ok(refusals);
+    match git::text(root, &["cat-file", "-t", c])?.map(|t| t.trim().to_string()) {
+        None => {
+            refusals.push(format!("commit {c} is not in the repository"));
+            return Ok(refusals);
+        }
+        Some(kind) if kind != "commit" => {
+            refusals.push(format!("{c} names a {kind}, not a commit: a release names the commit itself"));
+            return Ok(refusals);
+        }
+        Some(_) => {}
     }
     if git::run(root, &["merge-base", "--is-ancestor", c, "HEAD"])?.is_none() {
         refusals.push(format!("commit {c} is not an ancestor of HEAD: a release is cut from the history it is committed in"));
@@ -364,15 +358,16 @@ pub fn check_together(root: &Path, all: &[(PathBuf, Manifest)]) -> Result<Vec<St
     Ok(refusals)
 }
 
-/// Reads every manifest of a releases folder (`<release>.toml`), refusing a file named after
-/// another release than its own. A folder that is not there holds none.
-pub fn load_dir(dir: &Path) -> Result<Vec<(PathBuf, Manifest)>, Vec<String>> {
+/// Reads every manifest of a releases folder (`<release>.toml`): the manifests that read, and a
+/// refusal for every file that does not or is named after another release than its own, so a
+/// caller judges the rest and says every refusal. A folder that is not there holds none.
+pub fn load_dir(dir: &Path) -> (Vec<(PathBuf, Manifest)>, Vec<String>) {
     let mut out = Vec::new();
     let mut refusals = Vec::new();
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
-        Err(e) => return Err(vec![format!("{}: {e}", dir.display())]),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (out, refusals),
+        Err(e) => return (out, vec![format!("{}: {e}", dir.display())]),
     };
     let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
     paths.sort();
@@ -392,5 +387,5 @@ pub fn load_dir(dir: &Path) -> Result<Vec<(PathBuf, Manifest)>, Vec<String>> {
             Err(e) => refusals.push(format!("{}: {e}", p.display())),
         }
     }
-    if refusals.is_empty() { Ok(out) } else { Err(refusals) }
+    (out, refusals)
 }

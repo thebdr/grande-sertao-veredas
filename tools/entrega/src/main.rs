@@ -130,7 +130,8 @@ fn check(files: &[String]) -> i32 {
             return 2;
         }
     };
-    let loaded = if files.is_empty() {
+    // Every manifest that reads is judged, and every refusal said, whatever else was refused.
+    let (all, refusals) = if files.is_empty() {
         manifest::load_dir(&root.join("releases"))
     } else {
         let mut out = Vec::new();
@@ -142,18 +143,12 @@ fn check(files: &[String]) -> i32 {
                 Err(e) => refusals.push(format!("{f}: {e}")),
             }
         }
-        if refusals.is_empty() { Ok(out) } else { Err(refusals) }
+        (out, refusals)
     };
-    let all = match loaded {
-        Ok(a) => a,
-        Err(refusals) => {
-            for r in refusals {
-                eprintln!("{r}");
-            }
-            return 2;
-        }
-    };
-    let mut failed = false;
+    for r in &refusals {
+        eprintln!("{r}");
+    }
+    let mut failed = !refusals.is_empty();
     for (p, m) in &all {
         match manifest::check(&root, m) {
             Ok(r) if r.is_empty() => println!(

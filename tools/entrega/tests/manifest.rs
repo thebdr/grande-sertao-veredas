@@ -184,14 +184,14 @@ fn suite() -> Repo {
     r.write("Cargo.toml", WORKSPACE);
     r.write("tools/ferramenta/Cargo.toml", "[package]\nname = \"ferramenta\"\nversion = \"0.1.0\"\n");
     r.write("tools/ferramenta/src/main.rs", "fn main() {}\n");
-    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\n");
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
     r.write("crates/veredas-core/src/lib.rs", "\n");
-    r.write("crates/veredas-maquinar/Cargo.toml", "[package]\nname = \"veredas-maquinar\"\nversion = \"2.1.0\"\n");
+    r.write("crates/veredas-maquinar/Cargo.toml", "[package]\nname = \"veredas-maquinar\"\nversion = \"2.1.0\"\nedition = \"2024\"\n");
     r.write("crates/veredas-maquinar/src/lib.rs", "\n");
     r.write("crates/veredas-maquinar/src/main.rs", "fn main() {}\n");
     r.write(
         "crates/veredas-portal/Cargo.toml",
-        "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0-alpha.3\"\n\n[[bin]]\nname = \"veredas-portal\"\npath = \"src/main.rs\"\n",
+        "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0-alpha.3\"\nedition = \"2024\"\n\n[[bin]]\nname = \"veredas-portal\"\npath = \"src/main.rs\"\n",
     );
     r.write("crates/veredas-portal/src/main.rs", "fn main() {}\n");
     r.write("crates/veredas-portal/src/bin/porteiro.rs", "fn main() {}\n");
@@ -222,7 +222,7 @@ fn a_manifest_that_matches_its_commit_checks() {
     let names: Vec<&String> = held.keys().collect();
     assert_eq!(names, ["veredas-core", "veredas-maquinar", "veredas-portal"], "the tool is no component");
     // Later commits do not move it: the manifest is judged at its own commit.
-    r.write("crates/veredas-portal/Cargo.toml", "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\n");
+    r.write("crates/veredas-portal/Cargo.toml", "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
     r.commit("portal moves on");
     assert_eq!(checked(&r, &matching("2.0.0", &c)), Vec::<String>::new());
 }
@@ -255,10 +255,10 @@ fn a_version_or_an_executable_that_differs_is_refused() {
         checked(&r, &text.replace("version = \"2.0.0\"\n\n[[component]]\nname = \"veredas-maquinar\"", "version = \"2.0.0\"\nbins = [\"veredas-core\"]\n\n[[component]]\nname = \"veredas-maquinar\"")),
         vec![format!("veredas-core builds no `veredas-core` at {c}")]
     );
-    // `autobins = false` keeps `src/main.rs` and `src/bin/` out, as cargo does.
+    // `autobins = false` keeps `src/bin/` out, as cargo reads it.
     r.write(
         "crates/veredas-portal/Cargo.toml",
-        "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0-alpha.3\"\nautobins = false\n\n[[bin]]\nname = \"veredas-portal\"\npath = \"src/main.rs\"\n",
+        "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0-alpha.3\"\nedition = \"2024\"\nautobins = false\n\n[[bin]]\nname = \"veredas-portal\"\npath = \"src/main.rs\"\n",
     );
     let c2 = r.commit("no autobins");
     assert_eq!(
@@ -275,6 +275,71 @@ fn a_version_or_an_executable_that_differs_is_refused() {
             format!("veredas-portal builds no `porteiro` at {c3}"),
         ]
     );
+}
+
+#[test]
+fn the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_them() {
+    let r = Repo::new();
+    // Members spelled with `./` and with a trailing slash, as cargo (and L1) accepts them.
+    r.write(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"./crates/veredas-portal\", \"crates/veredas-maquinar/\", \"crates/veredas-core\", \"crates/veredas-velho\"]\n",
+    );
+    // A bin claiming src/main.rs under another name: cargo builds that name alone.
+    r.write("crates/veredas-portal/Cargo.toml", "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[[bin]]\nname = \"porteiro\"\npath = \"src/main.rs\"\n");
+    r.write("crates/veredas-portal/src/main.rs", "fn main() {}\n");
+    // A bin named `a` at src/bin/b.rs: cargo builds `a`, never a `b` beside it.
+    r.write("crates/veredas-maquinar/Cargo.toml", "[package]\nname = \"veredas-maquinar\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[[bin]]\nname = \"a\"\npath = \"src/bin/b.rs\"\n");
+    r.write("crates/veredas-maquinar/src/lib.rs", "\n");
+    r.write("crates/veredas-maquinar/src/bin/b.rs", "fn main() {}\n");
+    // Required features: the default ones hold `serve` (through `full`), never `extra`.
+    r.write(
+        "crates/veredas-core/Cargo.toml",
+        "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[features]\ndefault = [\"full\"]\nfull = [\"serve\"]\nserve = []\nextra = []\n\n\
+         [[bin]]\nname = \"servido\"\npath = \"src/bin/servido.rs\"\nrequired-features = [\"serve\"]\n\n\
+         [[bin]]\nname = \"extra\"\npath = \"src/bin/extra.rs\"\nrequired-features = [\"extra\"]\n",
+    );
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    r.write("crates/veredas-core/src/bin/servido.rs", "fn main() {}\n");
+    r.write("crates/veredas-core/src/bin/extra.rs", "fn main() {}\n");
+    // Edition 2015: an explicit bin turns discovery of src/bin/ off.
+    r.write("crates/veredas-velho/Cargo.toml", "[package]\nname = \"veredas-velho\"\nversion = \"2.0.0\"\n\n[[bin]]\nname = \"velho\"\npath = \"src/main.rs\"\n");
+    r.write("crates/veredas-velho/src/main.rs", "fn main() {}\n");
+    r.write("crates/veredas-velho/src/bin/outro.rs", "fn main() {}\n");
+    let c = r.commit("cargo's own rules");
+    let mut refusals = Vec::new();
+    let held = manifest::components_at(r.path(), &c, &mut refusals).unwrap();
+    assert_eq!(refusals, Vec::<String>::new());
+    let got: Vec<(String, String, Vec<String>)> =
+        held.values().map(|h| (h.name.clone(), h.dir.clone(), h.bins.iter().cloned().collect())).collect();
+    let want = |n: &str, b: &[&str]| (n.to_string(), format!("crates/{n}"), b.iter().map(|x| x.to_string()).collect::<Vec<_>>());
+    assert_eq!(
+        got,
+        vec![
+            want("veredas-core", &["servido"]),
+            want("veredas-maquinar", &["a"]),
+            want("veredas-portal", &["porteiro"]),
+            want("veredas-velho", &["velho"]),
+        ]
+    );
+    // A workspace cargo cannot read is refused with cargo's reason.
+    r.write("crates/veredas-velho/Cargo.toml", "[package]\nname = 3\n");
+    let c2 = r.commit("a manifest cargo refuses");
+    let mut refusals = Vec::new();
+    manifest::components_at(r.path(), &c2, &mut refusals).unwrap();
+    assert_eq!(refusals.len(), 1);
+    assert!(refusals[0].starts_with(&format!("commit {c2}: cargo cannot read its workspace: error")), "{refusals:?}");
+}
+
+#[test]
+fn an_annotated_tags_id_is_no_commit() {
+    let r = suite();
+    let c = r.commit("the suite");
+    r.git(&["tag", "-a", "suite-2.0.0", "-m", "a tag"]);
+    let tag = r.git(&["rev-parse", "suite-2.0.0"]);
+    assert_ne!(tag, c);
+    assert_eq!(checked(&r, &matching("2.0.0", &tag)), vec![format!("{tag} names a tag, not a commit: a release names the commit itself")]);
+    assert_eq!(checked(&r, &matching("2.0.0", &c)), Vec::<String>::new());
 }
 
 #[test]
@@ -317,14 +382,17 @@ fn a_releases_folder_holds_manifests_named_after_their_release() {
     let r = suite();
     let c = r.commit("the suite");
     let dir = r.path().join("releases");
-    assert!(manifest::load_dir(&dir).unwrap().is_empty(), "no folder, no release");
+    let (none, no_refusal) = manifest::load_dir(&dir);
+    assert!(none.is_empty() && no_refusal.is_empty(), "no folder, no release");
     r.write("releases/2.0.0.toml", &matching("2.0.0", &c));
-    let loaded = manifest::load_dir(&dir).unwrap();
-    assert_eq!(loaded.len(), 1);
+    let (loaded, refusals) = manifest::load_dir(&dir);
+    assert_eq!((loaded.len(), refusals.len()), (1, 0));
     assert_eq!(loaded[0].1.release.to_string(), "2.0.0");
     r.write("releases/2.0.1.toml", &matching("2.0.2", &c));
     r.write("releases/notes.md", "not a manifest\n");
-    let refusals = manifest::load_dir(&dir).unwrap_err();
+    let (loaded, refusals) = manifest::load_dir(&dir);
+    let names: Vec<String> = loaded.iter().map(|(_, m)| m.release.to_string()).collect();
+    assert_eq!(names, ["2.0.0", "2.0.2"], "what reads is still read beside what is refused");
     assert_eq!(
         refusals,
         vec![
@@ -354,6 +422,19 @@ fn the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused() {
         String::from_utf8(out.stderr).unwrap(),
         format!("{}: veredas-maquinar is 2.1.0 at {c}, not 2.1.1\n", r.path().canonicalize().unwrap().join("releases/2.0.0.toml").display())
     );
+    // A file that is no manifest beside one that does not check: both said, the exit 2.
+    r.write("releases/notes.md", "not a manifest\n");
+    let out = run();
+    assert_eq!(out.status.code(), Some(2));
+    let releases = r.path().canonicalize().unwrap().join("releases");
+    assert_eq!(
+        String::from_utf8(out.stderr).unwrap(),
+        format!(
+            "{}: a releases folder holds manifests (`<release>.toml`) alone\n{}: veredas-maquinar is 2.1.0 at {c}, not 2.1.1\n",
+            releases.join("notes.md").display(),
+            releases.join("2.0.0.toml").display()
+        )
+    );
     let usage = Command::new(env!("CARGO_BIN_EXE_entrega")).output().unwrap();
     assert_eq!(usage.status.code(), Some(1));
     assert_eq!(String::from_utf8(usage.stderr).unwrap(), "usage: entrega check [<manifest.toml>...]\n       entrega cut <release> [--trial] [--out <dir>]\n       entrega maquina <release>\n");
@@ -362,7 +443,10 @@ fn the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused() {
 #[test]
 fn every_release_of_this_repository_checks_against_its_history() {
     let root = repo_root().canonicalize().unwrap();
-    let all = manifest::load_dir(&root.join("releases")).unwrap();
+    let (all, refusals) = manifest::load_dir(&root.join("releases"));
+    assert_eq!(refusals, Vec::<String>::new());
+    let names: Vec<String> = all.iter().map(|(_, m)| m.release.to_string()).collect();
+    assert!(names.iter().any(|n| n == "2.0.0-alpha.1"), "the first release is in releases/: {names:?}");
     for (p, m) in &all {
         assert_eq!(manifest::check(&root, m).unwrap(), Vec::<String>::new(), "{}", p.display());
     }

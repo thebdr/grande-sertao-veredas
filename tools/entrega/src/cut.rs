@@ -98,8 +98,13 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     let toolchain = rustc.split_whitespace().nth(1).ok_or_else(|| refused(format!("rustc printed `{rustc}`")))?.to_string();
     if o.run_suite {
         eprintln!("entrega: the whole suite at {commit}, behind the machine's lock");
+        // Its temporary files on disk, outside any repository: /tmp is a tmpfs of the machine's
+        // memory, and the laws' tests need a folder no git repository holds.
+        let tmp = crate::cache::dir()?.join("tmp");
+        std::fs::create_dir_all(&tmp)?;
         let status = Command::new("flock")
             .args(["/tmp/veredas-suite.lock", "cargo", "nextest", "run", "--workspace"])
+            .env("TMPDIR", &tmp)
             .current_dir(root)
             .status()
             .map_err(|source| VmError::Spawn { program: "flock cargo nextest".into(), source })?;
