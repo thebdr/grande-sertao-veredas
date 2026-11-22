@@ -10,15 +10,15 @@
     "dcp"
   ],
   "exitCode": 0,
-  "outputSha": "8d4ee72da946e23c315d36d3a06bdd9842ed4175402cb205c15f0a51ac078790",
-  "outputTail": "test exactly_three_shapes_of_block_pass_the_set_gate ... ok\ntest what_one_frame_cannot_carry_is_refused_never_cut ... ok\ntest the_dissectors_tell_a_wrong_reading_apart ... ok\ntest the_device_options_and_the_full_ip_suite_are_written_and_read_in_their_order ... ok\ntest the_info_word_is_where_the_dissector_reads_one_for_each_family_of_block ... ok\ntest a_set_answer_carries_no_block_info_whatever_its_blocks ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\ntest a_hello_is_written_to_its_group_alone_and_read_as_the_dissector_reads_it ... ok\ntest any_bytes_decode_without_a_panic_and_rewrite_to_themselves ... ok\n\ntest result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.42s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s\n     Running tests/dcp.rs (target/debug/build/veredas-aranha/c4009d9f19495971/out/dcp-c4009d9f19495971)",
-  "ranAt": "2026-11-22T20:21:05.029Z",
-  "headCommit": "8bd01104ab8cc2c239e6412542e48b0aa0361bc3",
+  "outputSha": "dd028a1d2108462eb5239b1af137489ff8fac146cb440cf823ac47bcf0cf2a8b",
+  "outputTail": "test bytes_as_given_are_written_only_where_no_typed_body_is_read ... ok\ntest exactly_three_shapes_of_block_pass_the_set_gate ... ok\ntest what_one_frame_cannot_carry_is_refused_never_cut ... ok\ntest the_dissectors_tell_a_wrong_reading_apart ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\ntest a_set_answer_carries_no_block_info_whatever_its_blocks ... ok\ntest the_device_options_and_the_full_ip_suite_are_written_and_read_in_their_order ... ok\ntest a_hello_is_written_to_its_group_alone_and_read_as_the_dissector_reads_it ... ok\ntest the_info_word_is_where_the_dissector_reads_one_for_each_family_of_block ... ok\ntest any_bytes_decode_without_a_panic_and_rewrite_to_themselves ... ok\n\ntest result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.76s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running tests/dcp.rs (target/debug/build/veredas-aranha/c4009d9f19495971/out/dcp-c4009d9f19495971)",
+  "ranAt": "2026-11-22T21:57:12.910Z",
+  "headCommit": "6cafa23048f2ec2f77295d47c382eb73385aa39f",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/dcp.rs",
       "file": "crates/veredas-aranha/tests/dcp.rs",
-      "fileSha": "d05ca086cf92380dd941a8ff3a6ecdd0f4bb118186664c8c4df7094b767d1310"
+      "fileSha": "5ce9ddb1257267aa94defa01defa196766a7086b55a88d0d7df6e51b1a29fadc"
     },
     {
       "name": "crates/veredas-aranha/tests/common/mod.rs",
