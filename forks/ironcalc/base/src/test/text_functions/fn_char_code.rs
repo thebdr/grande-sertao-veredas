@@ -1,0 +1,231 @@
+#![allow(clippy::unwrap_used)]
+
+use crate::test::util::new_empty_model;
+
+// ── CHAR ──────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_char_basic() {
+    let mut model = new_empty_model();
+    model._set("A1", "=CHAR(65)");
+    model._set("A2", "=CHAR(97)");
+    model._set("A3", "=CHAR(32)");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "A");
+    assert_eq!(model._get_text("A2"), "a");
+    assert_eq!(model._get_text("A3"), " ");
+}
+
+#[test]
+fn test_char_win1252() {
+    let mut model = new_empty_model();
+    // Code point 128 in Windows-1252 is €
+    model._set("A1", "=CHAR(128)");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "€");
+}
+
+#[test]
+fn test_char_error() {
+    let mut model = new_empty_model();
+    model._set("A1", "=CHAR(0)");
+    model._set("A2", "=CHAR(300)");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "#VALUE!");
+    assert_eq!(model._get_text("A2"), "#VALUE!");
+}
+
+#[test]
+fn test_char_inline_array_spills() {
+    let mut model = new_empty_model();
+    model._set("A1", "=CHAR({45,67,89})");
+    model._set("A2", "=CHAR({65;66})");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "-");
+    assert_eq!(model._get_text("B1"), "C");
+    assert_eq!(model._get_text("C1"), "Y");
+    assert_eq!(model._get_text("A2"), "A");
+    assert_eq!(model._get_text("A3"), "B");
+}
+
+#[test]
+fn test_char_range_spills() {
+    let mut model = new_empty_model();
+    for (i, code) in [72, 101, 108, 108, 111].iter().enumerate() {
+        model._set(&format!("A{}", i + 1), &code.to_string());
+    }
+    model._set("C1", "=CHAR(A1:A5)");
+    // Consumed element-wise inside another function and by an operator
+    model._set("D1", "=SUM(LEN(CHAR(A1:A5)))");
+    model._set("E1", "=CHAR(A1:A5)&\"!\"");
+    model.evaluate();
+    assert_eq!(model._get_text("C1"), "H");
+    assert_eq!(model._get_text("C2"), "e");
+    assert_eq!(model._get_text("C3"), "l");
+    assert_eq!(model._get_text("C4"), "l");
+    assert_eq!(model._get_text("C5"), "o");
+    assert_eq!(model._get_text("D1"), "5");
+    assert_eq!(model._get_text("E1"), "H!");
+    assert_eq!(model._get_text("E5"), "o!");
+}
+
+#[test]
+fn test_char_array_element_errors() {
+    let mut model = new_empty_model();
+    // Invalid codes and non-numeric text error per element; others still work.
+    model._set("A1", "=CHAR({65,0,300,\"B\",\"66\",TRUE})");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "A");
+    assert_eq!(model._get_text("B1"), "#VALUE!");
+    assert_eq!(model._get_text("C1"), "#VALUE!");
+    assert_eq!(model._get_text("D1"), "#VALUE!");
+    assert_eq!(model._get_text("E1"), "B");
+    // TRUE coerces to 1, which is a valid (control) character
+    assert_eq!(model._get_text("F1"), "\u{1}");
+}
+
+#[test]
+fn test_char_range_with_empty_and_error_cells() {
+    let mut model = new_empty_model();
+    model._set("A1", "65");
+    model._set("A3", "=1/0");
+    model._set("C1", "=CHAR(A1:A3)");
+    model.evaluate();
+    assert_eq!(model._get_text("C1"), "A");
+    // Empty cell is 0 → invalid code
+    assert_eq!(model._get_text("C2"), "#VALUE!");
+    assert_eq!(model._get_text("C3"), "#DIV/0!");
+}
+
+// ── CODE ──────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_code_basic() {
+    let mut model = new_empty_model();
+    model._set("A1", "=CODE(\"A\")");
+    model._set("A2", "=CODE(\"ABC\")");
+    model._set("A3", "=CODE(\" \")");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "65");
+    assert_eq!(model._get_text("A2"), "65"); // only first char
+    assert_eq!(model._get_text("A3"), "32");
+}
+
+#[test]
+fn test_code_empty() {
+    let mut model = new_empty_model();
+    model._set("A1", "=CODE(\"\")");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "#VALUE!");
+}
+
+#[test]
+fn test_code_inline_array_spills() {
+    let mut model = new_empty_model();
+    model._set("A1", "=CODE({\"-\",\"Cat\",\"Y\"})");
+    model._set("A2", "=CODE({\"a\";\"b\"})");
+    // Numbers and booleans are coerced to text first
+    model._set("A4", "=CODE({12,TRUE})");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "45");
+    assert_eq!(model._get_text("B1"), "67");
+    assert_eq!(model._get_text("C1"), "89");
+    assert_eq!(model._get_text("A2"), "97");
+    assert_eq!(model._get_text("A3"), "98");
+    assert_eq!(model._get_text("A4"), "49");
+    assert_eq!(model._get_text("B4"), "84");
+}
+
+#[test]
+fn test_code_range_spills() {
+    let mut model = new_empty_model();
+    model._set("A1", "Hello");
+    model._set("A2", "€");
+    model._set("A3", "=1/0");
+    model._set("A5", "☺");
+    model._set("C1", "=CODE(A1:A5)");
+    // Consumed element-wise by another function, and round trip with CHAR
+    model._set("D1", "=SUM(CODE(A1:A2))");
+    model._set("E1", "=CHAR(CODE(A1:A2))");
+    model.evaluate();
+    assert_eq!(model._get_text("C1"), "72");
+    assert_eq!(model._get_text("C2"), "128");
+    assert_eq!(model._get_text("C3"), "#DIV/0!");
+    // Empty cell is an empty text
+    assert_eq!(model._get_text("C4"), "#VALUE!");
+    // Not in Windows-1252
+    assert_eq!(model._get_text("C5"), "#VALUE!");
+    assert_eq!(model._get_text("D1"), "200");
+    assert_eq!(model._get_text("E1"), "H");
+    assert_eq!(model._get_text("E2"), "€");
+}
+
+// ── UNICHAR ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_unichar_basic() {
+    let mut model = new_empty_model();
+    model._set("A1", "=UNICHAR(65)");
+    model._set("A2", "=UNICHAR(9786)"); // ☺ U+263A
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "A");
+    assert_eq!(model._get_text("A2"), "☺");
+}
+
+#[test]
+fn test_unichar_error() {
+    let mut model = new_empty_model();
+    model._set("A1", "=UNICHAR(0)");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "#VALUE!");
+}
+
+#[test]
+fn test_unichar_inline_array_spills() {
+    let mut model = new_empty_model();
+    model._set("A1", "=UNICHAR({65,9786,8364})");
+    model._set("A2", "=UNICHAR({97;98})");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "A");
+    assert_eq!(model._get_text("B1"), "☺");
+    assert_eq!(model._get_text("C1"), "€");
+    assert_eq!(model._get_text("A2"), "a");
+    assert_eq!(model._get_text("A3"), "b");
+}
+
+#[test]
+fn test_unichar_range_spills() {
+    let mut model = new_empty_model();
+    for (i, code) in [72, 101, 108, 108, 111].iter().enumerate() {
+        model._set(&format!("A{}", i + 1), &code.to_string());
+    }
+    model._set("C1", "=UNICHAR(A1:A5)");
+    model._set("D1", "=SUM(LEN(UNICHAR(A1:A5)))");
+    model._set("E1", "=UNICHAR(A1:A5)&\"!\"");
+    model.evaluate();
+    assert_eq!(model._get_text("C1"), "H");
+    assert_eq!(model._get_text("C5"), "o");
+    assert_eq!(model._get_text("D1"), "5");
+    assert_eq!(model._get_text("E1"), "H!");
+    assert_eq!(model._get_text("E5"), "o!");
+}
+
+#[test]
+fn test_unichar_array_element_errors() {
+    let mut model = new_empty_model();
+    model._set("A1", "65");
+    model._set("A3", "=1/0");
+    // 0, a surrogate code point and non-numeric text error per element
+    model._set("C1", "=UNICHAR({66,0,55296,\"x\",\"67\"})");
+    model._set("C2", "=UNICHAR(A1:A3)");
+    model.evaluate();
+    assert_eq!(model._get_text("C1"), "B");
+    assert_eq!(model._get_text("D1"), "#VALUE!");
+    assert_eq!(model._get_text("E1"), "#VALUE!");
+    assert_eq!(model._get_text("F1"), "#VALUE!");
+    assert_eq!(model._get_text("G1"), "C");
+    assert_eq!(model._get_text("C2"), "A");
+    // Empty cell is 0 → invalid code point
+    assert_eq!(model._get_text("C3"), "#VALUE!");
+    assert_eq!(model._get_text("C4"), "#DIV/0!");
+}

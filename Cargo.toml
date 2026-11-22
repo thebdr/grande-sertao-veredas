@@ -46,6 +46,14 @@ members = [
     # and portal).
     "crates/veredas-comissionador",
 ]
+# Not the suite's crates: Ábaco's copy of IronCalc (the engine and its file layer), a cargo workspace
+# of its own for upstream's tests, reached by veredas-abaco by path (docs/abaco-plan.md, "The fork";
+# docs/questions.md Q340). Law L1 lets an excluded crate out only if it is no veredas-* or orcl-*
+# crate; it sits outside every member's folder, since cargo makes a crate beneath a member's folder a
+# member whatever this list says.
+exclude = [
+    "forks/ironcalc",
+]
 
 # No [workspace.package] version: each component owns its SemVer from 2.0.0 (the plan,
 # "Versioning"; law L3). The edition is shared because it is a language level, not a release.

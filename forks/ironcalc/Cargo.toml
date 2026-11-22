@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+
+# Veredas 2 carries upstream's engine and its file layer only (VEREDAS-FORK.md); upstream's
+# bindings, web app and generators are not in this copy.
+members = [
+  "base",
+  "xlsx",
+]
+
+[profile.release]
+lto = true
