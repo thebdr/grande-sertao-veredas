@@ -10,15 +10,15 @@
     "layout"
   ],
   "exitCode": 0,
-  "outputSha": "3a795f9e509b1850368c48fa0663e5fc1a1afa9864dd94fdff8394027a2d4baf",
-  "outputTail": "\nrunning 4 tests\ntest the_page_draws_a_drawing_saved_as_inkscape_saves_it ... ok\ntest a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_the_page_adds ... ok\ntest the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan ... ok\ntest the_page_draws_the_layout_from_the_feed ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 37.18s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/crates/veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.39s\n     Running tests/layout.rs (target/debug/build/veredas-supervisao/a059fcca6804e71f/out/layout-a059fcca6804e71f)",
-  "ranAt": "2026-11-22T15:50:34.480Z",
-  "headCommit": "974fe62f321b0ad7bbebef1ac965bedb5193f6a9",
+  "outputSha": "87c595d4cdf0ca10e113e912e0fb9765bf424a19e026293cd5302dcb6a00d852",
+  "outputTail": "\nrunning 5 tests\ntest the_page_draws_a_drawing_saved_as_inkscape_saves_it ... ok\ntest a_shape_drawn_with_no_fill_shows_its_state_on_its_line ... ok\ntest a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_the_page_adds ... ok\ntest the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan ... ok\ntest the_page_draws_the_layout_from_the_feed ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 39.53s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n     Running tests/layout.rs (target/debug/build/veredas-supervisao/b64282ea75df761c/out/layout-b64282ea75df761c)",
+  "ranAt": "2026-11-22T22:12:09.281Z",
+  "headCommit": "efd2a06f8cc96879743544e6a9e3c93592bae608",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/layout.rs",
       "file": "crates/veredas-supervisao/tests/layout.rs",
-      "fileSha": "fba5405617cc394bac0068107def2e91eff43e41aafe53e2feae741ce61a4e07"
+      "fileSha": "d97d20378e1b1cc721fa08247ad94fb6b1a978ab5dc77f36a0bc4e06ed7ab2d0"
     }
   ]
 }
