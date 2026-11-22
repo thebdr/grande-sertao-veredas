@@ -1,0 +1,29 @@
+{
+  "clause": "C-135",
+  "command": "cargo test -p veredas-aranha --test rt",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-aranha",
+    "--test",
+    "rt"
+  ],
+  "exitCode": 0,
+  "outputSha": "c5167b77e4e019ee619bfbd8d18400f71a30f4fb6d5e3ee6a30d650e82c5f73b",
+  "outputTail": "\nrunning 5 tests\ntest a_frame_id_is_read_by_its_range ... ok\ntest a_cyclic_frame_is_its_id_its_data_and_its_status_to_the_byte ... ok\ntest the_status_bits_are_named ... ok\ntest what_is_not_a_cyclic_frame_is_refused_both_ways ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.47s\n     Running tests/rt.rs (target/debug/build/veredas-aranha/e752af01c38ebc1c/out/rt-e752af01c38ebc1c)",
+  "ranAt": "2026-11-22T19:03:36.766Z",
+  "headCommit": "c358bae901689b7433a789db77c37619e31b87bf",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/rt.rs",
+      "file": "crates/veredas-aranha/tests/rt.rs",
+      "fileSha": "e892c72c5f214ee270e5a224757a69b355dfd27e3a34ccb241e2baaddc177603"
+    },
+    {
+      "name": "crates/veredas-aranha/tests/common/mod.rs",
+      "file": "crates/veredas-aranha/tests/common/mod.rs",
+      "fileSha": "e3f228cd2b4bbd09bda4196228ab527e6f28dba06ee02306b362990c19b7edb6"
+    }
+  ]
+}
