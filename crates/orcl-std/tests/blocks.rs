@@ -487,6 +487,7 @@ fn a_pulse_ending_with_its_input_off_resets_at_once_and_the_next_edge_pulses_aga
     assert!(p.scan(&at(0), true, pt));
     assert!(p.scan(&at(50), false, pt));
     assert!(!p.scan(&at(100), false, pt), "the pulse ends, the input off");
+    assert!(!p.q(), "and q() says so");
     assert_eq!(p.et(), ms(0), "and its elapsed time is back to zero on that scan");
     assert!(p.scan(&at(110), true, pt), "the next rising edge, a new pulse");
     assert!(p.scan(&at(200), true, pt));
@@ -780,6 +781,26 @@ fn the_sources_hold_no_word_that_builds_apart_or_brings_anything_in_but_at_their
         assert_eq!(tight.matches("cfg").count(), allowed.len(), "{file} holds `cfg` elsewhere");
         for site in allowed {
             assert_eq!(tight.matches(site).count(), 1, "{file}: {site}");
+        }
+    }
+}
+
+// The ninth refute round: no panic source and no debug-only code anywhere in the sources (clippy does not look inside
+// a local macro), and nothing in the unit tests' own modules that could make the test build differ from the one
+// programs link.
+
+#[test]
+fn no_source_holds_a_panic_source_or_debug_only_code_and_the_unit_tests_modules_hold_no_item_that_leaks() {
+    for (file, text) in SOURCES {
+        let tight = squeezed(text);
+        for refused in [".unwrap(", ".expect(", "panic!", "todo!", "unimplemented!", "unreachable!", "debug_assert"] {
+            assert!(!tight.contains(refused), "{file} holds {refused}");
+        }
+        if let Some(at) = tight.find("#[cfg(test)]") {
+            let tests_module = &tight[at..];
+            for refused in ["impl", "trait", "macro_rules", "macro_use"] {
+                assert!(!tests_module.contains(refused), "{file}: the unit tests' module holds {refused}");
+            }
         }
     }
 }
