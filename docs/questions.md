@@ -1259,9 +1259,9 @@ manifest's commit; (c) a tag per component too (`veredas-portal-2.0.0-alpha.1`).
 
 Options:
 - **Debian 13 "trixie"** (recommended): stable since 2025, supported to 2028 and to 2030 by its
-  long-term team; official cloud images with signed sums, the `generic` one carrying the full
-  kernel with VMware's drivers (paravirtual SCSI, VMXNET3, SVGA) and cloud-init for an unattended
-  build; glibc 2.41; Chromium and open-vm-tools packaged as plain packages. The base is
+  long-term team; official cloud images in dated builds with their SHA-512 sums, the `generic`
+  one carrying the full kernel with VMware's drivers (paravirtual SCSI, VMXNET3, SVGA) and
+  cloud-init for an unattended build; glibc 2.41; Chromium and open-vm-tools packaged as plain packages. The base is
   `debian-13-generic-amd64.qcow2` from `cloud.debian.org`, 435 MB, downloaded once.
 - **Alpine Linux**: the smallest (a 65 MB installer), but built on musl: the suite's executables
   would need a musl build, and the database engine's C++ needs a musl C++ toolchain this machine

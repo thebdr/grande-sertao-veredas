@@ -90,9 +90,17 @@ Keys (each required unless a default is given):
 2. The components and their versions read from the commit (git, not the working tree); a version
    already shipped under another release with other code is refused (a release pins a version to
    one tree).
-3. `cargo build --release --locked` of every shipped executable, for the target; each executable's
-   needs of the system's libraries read from its symbol versions and held to the guest's (part
-   two), so a binary that would not start on the tester machine is refused at the cut, by name.
+3. **Built on the oldest system the release targets**, a builder machine of the tester machine's
+   own distribution (Debian 13, glibc 2.41) under QEMU with KVM: the commit's tree (`git archive`)
+   and its dependencies' sources (`cargo vendor`, as `Cargo.lock` pins them) handed in on a disk,
+   `cargo build --release --locked --offline` run inside under the toolchain the manifest states,
+   the executables handed back on another disk. Built on the development machine (Ubuntu 26.10,
+   glibc 2.44), portal and supervisão need `GLIBC_2.44` and do not start on Debian 13 (the probe
+   below); built on the oldest, they run there and on every newer system. The builder is the base
+   image with the C and C++ compiler and the Rust toolchain from rustup's official source, built
+   once per toolchain and kept in the cache. Each executable's symbol versions are then read and
+   held to the guest's glibc and libstdc++, so a binary that would not start on the tester machine
+   is refused at the cut, by name.
 4. The bundle assembled, `SHA256SUMS` written, the bundle extracted again into a scratch folder.
 5. **Run together**: from the extracted bundle, the bench started on `planta/bench.toml`, then
    supervisão on `planta/supervisao.toml`, which starts the plant's portal session through
@@ -149,7 +157,8 @@ machine was found able to do is the next section). The recipe's choices that are
 `tools/entrega/maquina/maquina.toml` (`veredas-machine`, version 1), never code, so a ruling is an
 edit of that file.
 1. **The base**: the distribution's official cloud image (Debian 13, Q433), at a dated build
-   named by URL in `maquina.toml` with its SHA-512 from the distribution's signed list,
+   named by URL in `maquina.toml` with its SHA-512 copied from the build's own list (served
+   over HTTPS, not signed: the pin in the repository is what the recipe trusts),
    downloaded once into a cache outside the repository (`~/.cache/veredas/entrega/`) and checked
    on every use; a mismatch is refused. The image is never committed.
 2. **The disk**: a copy-on-write overlay of the base, grown to the size `maquina.toml` gives.
@@ -169,8 +178,10 @@ edit of that file.
 
 ### How a build is proven
 - **The shipped disk boots on VMware's devices**: the VMDK taken out of the OVA, never the
-  overlay, is booted under QEMU with KVM on the same device models VMware presents (QEMU emulates
-  `pvscsi`, `vmxnet3` and `vmware-svga`), copy-on-write so the proof changes nothing shipped.
+  overlay, is booted under QEMU with KVM on VMware's own disk and network devices (QEMU emulates
+  `pvscsi` and `vmxnet3`), copy-on-write so the proof changes nothing shipped. QEMU's
+  `vmware-svga` is older than today's `vmwgfx` driver accepts, so the display is VMware's to
+  prove; the proof boot draws on QEMU's standard VGA.
 - **The plant runs from the first boot**, with nobody logged in: from the host, through a port
   QEMU forwards to the machine's 8902, the test reads supervisão's page and the plant's object
   feed and sees the parcels move and the sorter's lines arrive; a write the binding offers is
@@ -188,8 +199,16 @@ Verified by running each, not assumed:
   `-accel kvm`.
 - **QEMU's user network** (slirp) is built in: the guest reaches the distribution's mirror and the
   host forwards a port in, no bridge or tap needed.
-- **QEMU emulates VMware's devices**: `pvscsi`, `vmxnet3`, `vmware-svga` (and `mptsas1068`,
-  VMware's "LSI Logic SAS"), so the boot proof runs on VMware's virtual hardware.
+- **QEMU emulates VMware's devices**: `pvscsi`, `vmxnet3` (and `mptsas1068`, VMware's "LSI Logic
+  SAS"), so the boot proof runs on VMware's disk and network hardware; its `vmware-svga` is
+  refused by Debian 13's `vmwgfx` ("unsupported hypervisor").
+- **The whole path, probed end to end** (2026-11-22): Debian 13's `generic` image of build
+  20261116-2664 (435 MB, its SHA-512 checked), a copy-on-write overlay grown to 8 GB, booted under
+  KVM on `pvscsi` and `vmxnet3` with a NoCloud seed on an IDE CD and a data disk holding a tar
+  stream: root found on the paravirtual disk, the network up through QEMU's NAT, the mirror
+  answering, cloud-init's last stage done 8 s after power-on and the machine off at 14 s. The disk
+  flattened by `qemu-img convert` into a stream-optimized VMDK (442 MiB for 852 MB used, 34 s),
+  which boots under QEMU copy-on-write on the same devices, its bytes unchanged after.
 - **Images**: `qemu-img` 11.0.3 converts to VMDK, `xorriso` writes the seed ISO, `tar` packs the
   OVA, `sha256sum`, `curl` and `gpg` fetch and check the base.
 - **libvirt** answers on `qemu:///session` and the user is in the `libvirt` group, but nothing
@@ -200,8 +219,9 @@ Verified by running each, not assumed:
 - **Not here, and not needed**: VMware, `ovftool`, packer, docker, podman, `genisoimage`,
   `cloud-localds`, mtools.
 - **The executables' needs**: built on this machine (Ubuntu 26.10, glibc 2.44), the bench's
-  executable needs glibc 2.34 at most; portal's and supervisão's, which link the database engine's
-  C++, are measured at the cut against the guest's glibc and libstdc++ (step 3 above).
+  executable needs glibc 2.34 and runs in Debian 13; portal's and supervisão's need `GLIBC_2.44`
+  (`sinh` and `cosh` took new symbol versions in glibc 2.44) and stop at once there, "version
+  `GLIBC_2.44' not found": hence the builder machine (step 3 of the cut).
 
 ### What only VMware proves
 - That the OVA imports into each product named by Q435 (Workstation Pro, Fusion, ESXi) and the
@@ -259,3 +279,14 @@ Recorded as the work meets them.
 - **A background shell may not load the profile**: `cargo` was not on `PATH` in a background
   command, which failed in a pipe that hid the exit code. Name `~/.cargo/bin/cargo` or export
   `PATH`, and never pipe a build.
+- **SeaBIOS boots the first disk it likes**: with a data disk attached and no `bootindex` on the
+  system disk, the probe hung ten minutes with nothing on the serial console. The system disk
+  always carries `bootindex=0`, and every boot runs under a bound.
+- **A Unix socket's path holds at most 107 bytes**, and the scratch folder's paths are longer:
+  QEMU's monitor (QMP) listens on the loopback by TCP.
+- **Debian's generic image ships an SSH server and a network configuration bound to the build's
+  card**: cloud-init writes a netplan matched to the card it saw, which VMware's card (another
+  address) would not match once cloud-init is disabled. The provisioning removes the server and
+  hands the network to a configuration that takes any wired card.
+- **Debian's image has no `strings`** (binutils is not installed): what the guest is asked is
+  answered with its own tools, or read on the host.
