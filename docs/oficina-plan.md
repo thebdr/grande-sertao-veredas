@@ -275,8 +275,9 @@ measures it so the answer exists whichever way it is ruled.
    cost entry 29 counts.
 
 ### Results so far
-On this machine, Qt 6.12.0 on its `offscreen` platform, through Spix, never on a screen; the
-numbers and what was learnt on the way are in the evidence.
+On this machine, Qt 6.12.0 on its `offscreen` platform, through Spix, and again on X11 (below);
+the numbers and what was learnt on the way are in the evidence. A test run names its platform with
+`OFICINA_TEST_PLATFORM` (`offscreen` when unnamed).
 
 1. **Passed** (2026-11-22). The planted project drawn row for row; a folder read when it opens
    and not before; a refresh keeps the open folders and the selection; a name holding markup drawn
@@ -296,9 +297,10 @@ numbers and what was learnt on the way are in the evidence.
    rows within 0.2 MB of its memory with a thousand (release, three runs). The scrolling frame
    times, with a GPU and without, are taken with point 6, where the drawing paths are set.
 
-The X11 platform is not proven: Qt's X11 plugin lacks seven of the distribution's libraries here
-(the architect's to install), so nothing has run on X11 yet; the plan's "X11 first" stays to be
-shown on this machine once they are.
+On X11 too (2026-11-22, once the architect installed the seven libraries Qt's X11 plugin needs):
+the same tests passed on Qt's `xcb` platform, through this machine's display (the desktop's
+XWayland, OpenGL 4.6 on its Intel GPU), and the timings held in release (a million rows open in
+47 to 63 ms, 100 000 files in 154 to 226 ms). Windows waits for its runs.
 
 ### Verdict
 Not given: points 4 to 7 remain, and point 3's frame times.

@@ -161,15 +161,17 @@ fn free_port() -> u16 {
 }
 
 impl Shell {
-    /// Start the shell on Qt's `offscreen` platform with `args`, and wait until its test server
-    /// answers.
+    /// Start the shell with `args` on Qt's `offscreen` platform, or on the one
+    /// `OFICINA_TEST_PLATFORM` names, and wait until its test server answers.
     pub fn start(args: &[&str], envs: &[(&str, &str)]) -> Shell {
         let port = free_port();
         let log = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("oficina-spike-shell-{port}.log"));
         let out = std::fs::File::create(&log).expect("the log");
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_oficina-spike-shell"));
+        // Qt's platform: `offscreen` (no display) unless the run names another, `xcb` for X11.
+        let platform = std::env::var("OFICINA_TEST_PLATFORM").unwrap_or_else(|_| "offscreen".to_string());
         cmd.args(args)
-            .env("QT_QPA_PLATFORM", "offscreen")
+            .env("QT_QPA_PLATFORM", platform)
             .env("OFICINA_SPIX_PORT", port.to_string())
             .stdin(Stdio::null())
             .stdout(out.try_clone().expect("the log"))
