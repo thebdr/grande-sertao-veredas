@@ -198,7 +198,10 @@ veredas_aranha
    the bench's PROFINET device needs them.
 3. **The IO codecs.** `profinet::{rt, alarm, rpc}`: what the IO controller (core) and the bench's
    device (maquinar) need of the frames, each pinned by exact bytes and by the dissectors. Their
-   order follows what those two sessions ask for first.
+   order follows what those two sessions ask for first; with no ask yet, the cyclic frame and the
+   alarm frame came first, then the RPC's header, arguments and record read (aranha's own need in
+   phase 6), and the records I&M0 and the port's data; connect, control, write and release follow
+   when core asks.
 4. **The wire and listening.** The raw link, the pcap file, the hub; the listener with its kept
    frames, observations and fusion; proven on a veth pair in a private namespace against
    maquinar's PROFINET device (fixture first: until it lands, this phase waits on it).
@@ -273,6 +276,11 @@ is pinned by a test when its phase lands.
   length (it reads on into the frame's pad), and breaks on a DATA PDU with no block. The alarm
   codec bounds every read by the var part, keeps the reserved bits apart, and keeps what it does
   not read with the reason (C-136).
+- **PNIO's RPC is two byte orders at once.** The connectionless header's integers, its UUIDs' first
+  three fields and PNIO's argument counts follow the header's data representation (most stacks
+  write little-endian); the PNIO status and the blocks are big-endian always. A codec that writes
+  the counts big-endian under a little-endian header is read by the dissector as a gigabyte of
+  arguments (C-137).
 - **A frame shorter than 60 bytes is padded on the wire, and a capture may or may not hold the
   pad**: DCP is bounded by its own data length and LLDP by its end TLV, never by the frame.
 - **This machine announces itself.** An operating system's own LLDP agent and its own ARP are on
