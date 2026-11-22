@@ -159,13 +159,118 @@ only. The architect kept it on 2026-11-15, under three rules:
   comments; a million-row table from a Rust model; a Monaco tab with a language server on an ORCL
   file; a supervisão page embedded and read back by a test; a run on each GPU-less virtual machine
   (Windows on Hyper-V, VMware and VirtualBox, and Linux guests); one headless test that drives the
-  interface.
+  interface. How each point is judged, and the spike's verdict, are below ("The own-shell
+  spike").
 - **Repository changes owed with the first code:** `crates/veredas-oficina` at core's MAJOR,
   listed; its row in `MAP` (`tools/leis`), a contract change written with the crate (portal at
   least, and controlador if the laptop IO check's session is linked in);
   in `docs/design/README.md` (which holds the accent's tones since 2026-11-19) the syntax
   palette's number colour
   (`#D2A8FF`) moves, sitting too close to the accent; licence files (Q35); P-015 becomes clauses.
+
+## The own-shell spike
+The spike answers one question before `crates/veredas-oficina` exists: does Qt Quick, with its
+logic in Rust through cxx-qt behind one seam, KDDockWidgets for docking, Qt WebEngine for Monaco
+and the embedded pages, and Spix for the tests, carry the workbench on Windows 11 and Linux, GPU or
+none? Its verdict, written at the end of this section, is the architect's to read before the crate
+begins. It is not the crate: it proves no clause (its tests are evidence for P-015,
+`.zen/evidence/P-015.md`), and what it builds is kept only where the verdict says so.
+
+### Where its code lives
+- `spikes/oficina/`, a cargo workspace of its own, outside the suite's. Its packages are named
+  `oficina-spike-*`: no `veredas-*` or `orcl-*` name and no folder under `crates/` or `tools/`, so
+  it is no member and the laws leave it be (L1: a crate elsewhere that is not the suite's is
+  nobody's business; L2 and L6 judge members). L7 still holds any TOML file it keeps to the stamp.
+  The suite's `cargo build --workspace` never builds it, so no machine needs Qt to build the suite.
+- `spikes/oficina/model`: the Rust side the bridge seam hides, with no Qt: the project tree
+  (`tree`), the TOML document behind the form and the text (`document`), the formats' components
+  (`formats`). It uses core's one header reader by path, and the laws' own reader of the suite's
+  TOML texts in its tests. `cargo nextest run --manifest-path spikes/oficina/Cargo.toml`.
+- `spikes/oficina/shell` (with Qt): the window, the QML and the bridge. Only its `bridge` module
+  names cxx-qt; the model's types never cross the seam as Qt types.
+- Pinned for the spike: Qt 6.12.0 (6.12.1's WebEngine is not published yet), cxx-qt 0.10.0,
+  KDDockWidgets 2.5.1 (its Qt Quick side), Spix 0.14 over AnyRPC 1.0.2, Monaco 0.57.0,
+  rust-analyzer from rustup, CMake 4.5.1 for the C++ libraries. How the machine gets Qt is the
+  architect's (the measured routes are in the evidence). Everything is built on Linux here; the
+  Windows runs are asked for through the orchestrator.
+
+### The seven points
+Each point is judged by a Rust test that drives the shell through Spix with no display, unless
+the point says otherwise; numbers are taken on this machine and on each virtual machine run.
+Where a point leans on one of the review's entries, the entry is not ruled (Q31): the spike
+measures it so the answer exists whichever way it is ruled.
+
+1. **A project folder opened, its tree shown.** Proves that a Rust model reaches a QML `TreeView`
+   through the bridge as a lazy item model, its ids kept across a re-read. Rust side, built: a
+   folder is read when it opens and once; folders first, then by name with case folded; each TOML
+   file named by its stamp through core's reader and by the component whose reader states the
+   format, a refusal in the reader's own words; a link shown and never followed; nothing in the
+   folder run or honoured. Judged by: the planted project of the model's tests shown row for row;
+   a folder read only when the view opens it; a refresh that keeps the selection and the open
+   folders; a name holding markup drawn as its characters (entry 34); a folder of 100 000 files
+   opening in under one second. Failing it: if the bridge cannot express a lazy item model, its
+   C++ side grows inside the seam (allowed, "C++ wherever Qt needs it"); if no glue makes it
+   lazy, the bridge itself is in question.
+2. **One TOML file as form and text, comments kept.** Proves two views of one document. Rust side,
+   built: a form edit changes the characters of one value and nothing else (its comment, spacing,
+   quoting and radix kept), proven on every TOML text the suite holds (544 edits, each changing
+   one line); a text that does not parse is refused at its line and UTF-16 column, the document
+   left as it was; CR LF and a byte-order mark, which the TOML editing library drops, put back on
+   writing. The form is built from the document's own values, not from a schema (entry 30).
+   Judged by: an edit in the form appearing in the text as exactly the expected text; a typed
+   change in the text appearing in the form's field; an invalid text marked where it fails while
+   the form keeps its last state; the saved bytes equal to the model's. The text view here is a
+   native QML editor, the plan's fallback where Chromium cannot draw, so this point proves that
+   fallback too. Failing it: if two views cannot stay in step through the bridge, the form and
+   the text become two modes of one view.
+3. **A million rows from a Rust model.** Proves that a QML `TableView` over a table model written
+   in Rust draws only what is visible. Rust side, to build with the point: cells computed on
+   demand from a deterministic source (core's PCG32), nothing materialised. Judged by: 1 000 000
+   rows of 8 columns open in under one second; the last row reached and its cell read back; the
+   process's memory with a million rows within 20 MB of its memory with a thousand; scrolling
+   frame times recorded with a GPU and without. Failing it: the cell path moves into C++ inside
+   the seam; if it is still too slow, the bridge is in question.
+4. **Monaco with a language server on an ORCL file.** Proves that Monaco runs in WebEngine from
+   files Oficina ships (no network), reaches Rust through a web channel, and that a
+   language-server client on Oficina's side (entry 28) drives rust-analyzer on an ORCL file using
+   `orcl-std`. Judged by: a planted type error marked at its line and column within 10 seconds of
+   opening, within 2 seconds of an edit; completion offering the timer's methods; and nothing
+   run on opening (entry 32): the test plants a build script, a procedural macro and a cargo
+   configuration naming a compiler wrapper, each writing a marker file if run, and no marker
+   appears. Failing it: a native code editor replaces Monaco (entry 28's third option); if
+   rust-analyzer cannot be held to running nothing, the ORCL subset checker is the only check.
+5. **A supervisão page embedded and read back.** Proves that a page served by a real supervisão
+   host, started by the test on supervisão's own fixtures, shows in a WebEngine tab and that a
+   test reads it back through a hook on Oficina's side, never through a script the page carries.
+   Judged by: the value of a known object, driven by the bench through portal, read from the page
+   equal to what the bench drove; the served page finding no native bridge object (entry 32:
+   pages not shipped with Oficina get none). Failing it: on hosts where WebEngine cannot draw,
+   web pages open in the system browser, as the plan already says; if it fails everywhere, the
+   embedded browser is in question.
+6. **Without a GPU.** Proves the plan's promise for virtual machines: everything but 3D works,
+   Oficina detects software drawing, switches effects off, starts WebEngine in software mode and
+   says so. Here: this machine with Mesa's software rasteriser forced, a Linux guest on QEMU/KVM
+   without a virtual GPU, and Windows 11 on QEMU/KVM (the orchestrator's machine) on WARP. Judged
+   by: points 1, 2, 3, 5 and 7 passing in each, the detection naming the software adapter, and
+   point 3's frame times recorded. **Stated remainder:** Windows on Hyper-V, VMware and
+   VirtualBox need machines this one does not have; they wait for the architect. Failing it: Qt
+   Quick's one fallback is the normal pipeline over a software rasteriser, chosen before the first
+   window (the review's minor 52); if that cannot carry the workbench, the plan's promise for
+   virtual machines changes.
+7. **One headless test that drives the interface.** Proves that a Rust test, run by cargo
+   nextest, starts the shell with Spix's server, drives QML items by name (click, type, read a
+   property) with no display, and that its exit code is the verdict. Judged by: one run that
+   drives a QML control and an edit inside Monaco, the page read through Oficina's hook (entry
+   29's first option); green 20 times in a row here; Qt's `offscreen` platform first, Xvfb only if
+   WebEngine needs a display server. The window is a KDDockWidgets main window from point 1 on:
+   its panes docked, and a named layout saved and restored inside the headless test; panes floated
+   to another monitor are not judged headless (entry 29's third option). Failing it: another
+   driver takes Spix's place (Qt's own test library from C++, or the accessibility tree), at the
+   cost entry 29 counts.
+
+### Verdict
+Not given: the Rust side of points 1 and 2 is built and tested; every point that needs Qt waits
+for Qt on this machine.
 
 ## Open
 - **Q31, the review's majors and minors**, none ruled. Those that touch Oficina: 22 (Oficina
@@ -176,6 +281,11 @@ only. The architect kept it on 2026-11-15, under three rules:
   run nothing), 33 (loopback and a tunnel are not a boundary), 34 (text from the plant shown as
   plain text), 42 (opening the project from the target; pairing in one step), 43 (the outline's
   contrast; no light theme), 45 (exports, examples, help), and the minors 51, 52 and 54.
+- **Q341** (ábaco's, not ruled): its recommendation that Oficina link the grid's
+  drawing-independent logic in its own process and paint it, the worker serving the model, which
+  would put ábaco in Oficina's `MAP` row. **Q280** (aranha's, not ruled): aranha keeps no interface
+  of its own, its surfaces (the device table, the topology, the diff, identify, name and address)
+  being Oficina's, as the bench's are.
 - **Q35** the licence expression. **Q36, Q37** the download's integrity and the robust link.
   **Q43** the security round. **Q45** the briefing's readings, among them where "identify, name
   and address" runs, on the laptop or through a target.
