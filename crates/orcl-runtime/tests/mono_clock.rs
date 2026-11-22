@@ -6,6 +6,8 @@ use std::time::Duration;
 
 #[test]
 fn a_wait_never_returns_before_its_deadline_and_the_clock_never_goes_back() {
+    // a wall clock started before the target's clock, so the target's own reading is judged too
+    let wall = std::time::Instant::now();
     let mut clock = MonoClock::new();
     let mut last = clock.now();
     for step in [50_u64, 200, 400, 1_000, 3_000, 6_000, 10_000, 20_000] {
@@ -13,6 +15,7 @@ fn a_wait_never_returns_before_its_deadline_and_the_clock_never_goes_back() {
         clock.sleep_until(deadline);
         let now = clock.now();
         assert!(now >= deadline, "woke at {now:?}, before its deadline {deadline:?}");
+        assert!(wall.elapsed() >= deadline, "the wall says {:?}, before the deadline {deadline:?}", wall.elapsed());
         assert!(now >= last);
         last = now;
     }
@@ -47,11 +50,13 @@ impl Io<u64, u64> for Feed {
 fn on_a_target_clock_every_scan_starts_at_its_deadline_or_after_it() {
     let period = Duration::from_millis(2);
     let mut task = Task::new(TaskConfig { name: "main", period }, Echo).unwrap();
+    let wall = std::time::Instant::now();
     let mut clock = MonoClock::new();
     let mut seen = 0_u64;
     task.run_until(&mut Feed(0), &mut clock, Duration::from_millis(60), |r| {
         let due = period * u32::try_from(r.scan.cycle).unwrap();
         assert!(r.scan.now >= due, "scan {} started at {:?}, before {due:?}", r.scan.cycle, r.scan.now);
+        assert!(wall.elapsed() >= due, "the wall says {:?}, before {due:?}", wall.elapsed());
         seen += 1;
     });
     let s = *task.stats();

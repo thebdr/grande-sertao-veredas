@@ -226,8 +226,9 @@ fn a_fault_is_dated_at_the_scan_s_start_even_when_it_started_late() {
     let mut t = task(ms(10));
     t.step(&mut plant, &mut clock);
     clock.advance(ms(13)); // now 14 ms, cycle 1 due at 10 ms
-    t.step(&mut plant, &mut clock);
+    assert!(t.step(&mut plant, &mut clock).time_error, "the faulting scan is a time error, late as it started");
     assert_eq!(t.state(), RunState::Faulted { at: ms(14), fault: Fault::Watchdog { exec: ms(25) } });
+    assert_eq!((t.stats().overruns, t.stats().skipped, t.next_cycle()), (1, 2, 4), "skips judged at its end, 39 ms");
     assert_eq!(plant.writes, vec![(ms(1), 1), (ms(39), 7)]);
     let s = *t.stats();
     assert_eq!((s.max_lateness, s.total_lateness), (ms(4), ms(4)), "the faulting scan's lateness counted");
@@ -355,6 +356,11 @@ fn the_rule_measures_a_scan_s_length_never_its_lateness() {
     assert_eq!((r.scan.now, r.exec, r.time_error, r.state), (ms(19), ms(15), true, RunState::Running));
     assert_eq!(t.stats().overruns, 1, "counted, whenever it started");
     assert_eq!(plant.writes, vec![(ms(1), 1), (ms(34), 2)]);
+    // it ran from 19 to 34 ms: the deadlines at 20 and 30 ms passed while it ran and are skipped, never caught up
+    let s = *t.stats();
+    assert_eq!((s.skipped, s.max_lateness, s.total_lateness), (2, ms(9), ms(9)));
+    let r = t.step(&mut plant, &mut clock);
+    assert_eq!((r.scan.cycle, r.scan.now), (4, ms(40)));
 }
 
 #[test]
