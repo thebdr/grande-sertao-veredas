@@ -10,15 +10,15 @@
     "reflexo"
   ],
   "exitCode": 0,
-  "outputSha": "27b4a648c2ec5f0a40efde36809207a3bddbd7d6af0ef17d2f3e3cb36459787e",
-  "outputTail": "running 9 tests\ntest a_point_that_cannot_be_read_or_written_is_counted_and_named_and_the_others_go_on ... ok\ntest a_drive_ramps_to_its_setpoint_exactly_and_through_zero_when_it_reverses ... ok\ntest a_sensor_model_says_so_after_its_delays_to_the_step_and_closed_inverts_it ... ok\ntest points_are_converted_to_each_type_of_a_modbus_server_and_an_adapter ... ok\ntest an_actuator_strokes_at_an_even_speed_between_its_poses_and_reports_its_ends ... ok\ntest every_refusal_is_named_by_its_place_through_the_bench_file ... ok\ntest a_conveyor_moves_its_belt_at_its_speed_and_the_carton_goes_with_it ... ok\ntest drives_without_a_scene_step_on_a_thread_of_their_own ... ok\ntest the_reference_s_conveyor_line_is_driven_by_a_modbus_client_as_a_controller_drives_it ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.53s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n     Running tests/reflexo.rs (target/debug/build/veredas-maquinar/c382fa13093955e3/out/reflexo-c382fa13093955e3)",
-  "ranAt": "2026-11-22T22:24:21.304Z",
-  "headCommit": "20947cbee01e34c9b49c9fcf07e34ae3fa907119",
+  "outputSha": "9d563ab0015888c08f7c78687691ec25337c4e6cd42cf171c68230f2cdb55ca4",
+  "outputTail": "running 9 tests\ntest a_point_that_cannot_be_read_or_written_is_counted_and_named_and_the_others_go_on ... ok\ntest a_drive_ramps_to_its_setpoint_exactly_and_through_zero_when_it_reverses ... ok\ntest points_are_converted_to_each_type_of_a_modbus_server_and_an_adapter ... ok\ntest a_sensor_model_says_so_after_its_delays_to_the_step_and_closed_inverts_it ... ok\ntest an_actuator_strokes_at_an_even_speed_between_its_poses_and_reports_its_ends ... ok\ntest every_refusal_is_named_by_its_place_through_the_bench_file ... ok\ntest a_conveyor_moves_its_belt_at_its_speed_and_the_carton_goes_with_it ... ok\ntest drives_without_a_scene_step_on_a_thread_of_their_own ... ok\ntest the_reference_s_conveyor_line_is_driven_by_a_modbus_client_as_a_controller_drives_it ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.55s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.78s\n     Running tests/reflexo.rs (target/debug/build/veredas-maquinar/c382fa13093955e3/out/reflexo-c382fa13093955e3)",
+  "ranAt": "2026-11-22T23:49:14.366Z",
+  "headCommit": "172cbea37f949a50f698ed78bf41affc623ad776",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/reflexo.rs",
       "file": "crates/veredas-maquinar/tests/reflexo.rs",
-      "fileSha": "40821b7ebdd6cc8832a2a9690e97680bc4fd521de1ba84563af43a3281cac123"
+      "fileSha": "ee8afbd0d4055615fe2ad7b2fcc1e1c379fdf0e4e68c462c822efad956bb0162"
     }
   ]
 }

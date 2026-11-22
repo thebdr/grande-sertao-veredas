@@ -1,0 +1,24 @@
+{
+  "clause": "C-116",
+  "command": "cargo test -p veredas-maquinar --test profinet_records",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-maquinar",
+    "--test",
+    "profinet_records"
+  ],
+  "exitCode": 0,
+  "outputSha": "b0e8e9591e0a8e7c9f92ce835435af388c3870a6cf6072448f36a36eaf77c23d",
+  "outputTail": "\nrunning 7 tests\ntest a_frame_it_must_not_take_is_not_answered ... ok\ntest an_order_id_or_a_serial_number_i_m0_cannot_carry_is_refused_before_anything_opens ... ok\ntest a_read_of_what_it_lacks_is_refused_with_the_status_and_no_record ... ok\ntest the_kernel_finds_the_device_by_arp_and_reads_its_i_m0 ... ok\ntest the_port_data_names_the_neighbour_its_lldp_heard_until_it_leaves ... ok\ntest the_dissectors_read_the_arp_and_the_record_read_as_the_standard_has_it ... ok\ntest it_answers_only_a_read_at_its_own_address_and_port_and_follows_a_dcp_set_of_its_address ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.72s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s\n     Running tests/profinet_records.rs (target/debug/build/veredas-maquinar/ef5059e55650b191/out/profinet_records-ef5059e55650b191)",
+  "ranAt": "2026-11-22T23:46:42.623Z",
+  "headCommit": "172cbea37f949a50f698ed78bf41affc623ad776",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/profinet_records.rs",
+      "file": "crates/veredas-maquinar/tests/profinet_records.rs",
+      "fileSha": "0091fe242578d017ec8e7bde9e53ab6224f34cc33d5e54021f40a821ddc60912"
+    }
+  ]
+}
