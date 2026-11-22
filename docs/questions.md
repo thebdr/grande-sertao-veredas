@@ -1831,8 +1831,8 @@ Options:
 - (c) Controlador's tests, once controlador exists: the first consumer proves what it uses.
 
 **Recommended**: (a) now, and (c) beside it when controlador drives real devices. **Taken
-meanwhile**: (a), once the bench's Modbus server is on `main`; until then C-071 stays pending
-verification.
+meanwhile**: (a). `tools/mestres` holds `tests/modbus.rs` since the bench's server (C-110) reached
+`main` the same day.
 
 **Reversible?** Yes: a tool crate removed or its tests moved.
 

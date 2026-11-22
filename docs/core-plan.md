@@ -191,8 +191,8 @@ status P-018.
   controller, EtherCAT master, EtherNet/IP scanner, Modbus TCP client), safe in controlador on
   Linux and callable by other crates for testing only (2026-11-14). The Modbus/TCP client was
   built first (2026-11-22, C-071, `fieldbus::modbus`), on the tokio-modbus crate's framing with
-  every answer checked here; its test against the bench's Modbus server waits on that server and
-  on Q101. The review set this against
+  every answer checked here, and met against the bench's Modbus server from the test-only tool
+  `tools/mestres` (Q101's option taken). The review set this against
   Q9 and laws L4 and L5, and the architect kept it: "Core, rules amended" (2026-11-15).
 - **What is amended:** core's telegram framing still holds no frame layout of its own, and a
   device spoken over a TCP telegram channel is still configuration. A standard fieldbus's frames
@@ -210,7 +210,8 @@ In the briefing's order for core (`docs/controlador-plan.md`, "Networks and devi
 module of `fieldbus`, a clause of its own, proven against its bench device in maquinar (P-020)
 from a crate law L4 allows (Q34, Q101), its frames held to the standard's own examples in core's
 test.
-- **Modbus/TCP client** (`fieldbus::modbus`, C-071): built, on tokio-modbus's framing.
+- **Modbus/TCP client** (`fieldbus::modbus`, C-071): built, on tokio-modbus's framing, and met
+  against the bench's Modbus server (C-110) from `tools/mestres` (Q101).
 
 Each master is a cargo feature of core, off by default (`modbus` the first), as the OPC demo
 plant is: a component that only polls or serves (portal, supervisão) carries no fieldbus code and

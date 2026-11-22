@@ -1,0 +1,17 @@
+[package]
+name = "mestres"
+# A tool versions as it likes (law L3 holds components only).
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "Core's fieldbus masters met against the bench's devices (docs/core-plan.md, \"The fieldbus masters\")"
+
+# Repository tooling, not a component, and test-only (docs/questions.md Q101, option taken; Q34):
+# law L4 keeps every member out of core's dependency tables, its test table included, so core's
+# masters meet the bench devices that play their devices here. A tool may depend on any member (L5)
+# and needs no plan (L6). Core's session writes it; one test file per master.
+
+[dev-dependencies]
+# Each master is a feature of core, switched on here for the test that meets its bench device.
+veredas-core = { path = "../../crates/veredas-core", features = ["modbus"] }
+veredas-maquinar = { path = "../../crates/veredas-maquinar" }

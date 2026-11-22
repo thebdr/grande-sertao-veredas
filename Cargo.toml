@@ -8,6 +8,10 @@ members = [
     # Repo tooling, not a component: what the suite ships, the release manifest and its cut, and the
     # tester machine (docs/entrega-plan.md). Exempt from the component laws.
     "tools/entrega",
+    # Repo tooling, not a component, test-only: core's fieldbus masters met against the bench's
+    # devices, which law L4 keeps out of core's own tests (docs/questions.md Q101). Exempt from the
+    # component laws.
+    "tools/mestres",
     # The foundation (docs/core-plan.md): the shared types and protocol layers more than one
     # component needs, depending on no other member (law L4).
     "crates/veredas-core",
