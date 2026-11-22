@@ -116,6 +116,7 @@ mod test_even_odd;
 mod test_exp_sign;
 mod test_extend;
 mod test_external_references;
+mod test_user_functions;
 mod test_floor;
 mod test_fn_bycol_byrow;
 mod test_fn_datevalue_timevalue;

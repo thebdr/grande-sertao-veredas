@@ -359,6 +359,8 @@ pub struct Model<'a> {
     pub(crate) shared_formula_lookup: Vec<SharedFormulaLookup>,
     /// How cells of other workbooks (`[1]Sheet!A1`) are read. See `external`.
     pub(crate) external_resolver: Box<dyn ExternalResolver>,
+    /// The host's user-defined functions (`user_functions`), if any.
+    pub(crate) user_functions: Option<Box<dyn crate::user_functions::UserFunctions>>,
 }
 
 /// Formula text to index in `Worksheet::shared_formulas`, for one sheet.
@@ -1109,11 +1111,14 @@ impl<'a> Model<'a> {
                             CalcResult::Lambda(lambda_id)
                         }
                         _ => {
+                            if let Some(result) = self.call_user_function(name, args, cell) {
+                                return result;
+                            }
                             return CalcResult::new_error(
                                 Error::NAME,
                                 cell,
                                 format!("Invalid function: {name}"),
-                            )
+                            );
                         }
                     }
                 };
@@ -2185,6 +2190,7 @@ impl<'a> Model<'a> {
             cf_cache: HashMap::new(),
             links: HashMap::new(),
             external_resolver: Box::new(CachedResolver),
+            user_functions: None,
         };
 
         model.parse_formulas();

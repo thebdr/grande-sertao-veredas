@@ -42,6 +42,7 @@ pub mod number_format;
 pub mod sheet_data;
 pub mod themes;
 pub mod types;
+pub mod user_functions;
 pub mod worksheet;
 
 pub use crate::constants::COLUMN_WIDTH_FACTOR;
