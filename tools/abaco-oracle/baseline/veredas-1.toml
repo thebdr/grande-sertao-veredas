@@ -1,0 +1,1295 @@
+# The baseline of Ábaco's parity: what Veredas 1's oracle measured, on this machine, of every
+# workbook Microsoft Excel saved among the fork's test files (docs/abaco-plan.md, "The oracle and
+# parity"; docs/questions.md Q344). Taken 2026-11-22 by running Veredas 1's abaco-oracle, built
+# from Veredas 1 at 671cdc43, once per workbook under `--links cached` and `--links linked`, and
+# reading each report's summary row and table of classes. The class names are the oracle's ids
+# (`abaco_oracle::Class::id`). Read by tools/abaco-oracle/tests/parity.rs.
+format = "veredas-abaco-oracle-baseline"
+version = 1
+measured_by = "Veredas 1's abaco-oracle and its fork of IronCalc (upstream 15ecfec plus fork changes 1 to 11), Veredas 1 at 671cdc43, release build"
+measured_on = "2026-11-22"
+corpus = "forks/ironcalc/xlsx/tests"
+
+[[file]]
+path = "basic_text.xlsx"
+cached = { formula_cells = 0, matched = 0, classes = {  } }
+linked = { formula_cells = 0, matched = 0, classes = {  } }
+
+[[file]]
+path = "calc_test_no_export/tables.xlsx"
+cached = { formula_cells = 212, matched = 212, classes = { match = 212 } }
+linked = { formula_cells = 212, matched = 212, classes = { match = 212 } }
+
+[[file]]
+path = "calc_tests/arithmetic.xlsx"
+cached = { formula_cells = 59, matched = 59, classes = { match = 59 } }
+linked = { formula_cells = 59, matched = 59, classes = { match = 59 } }
+
+[[file]]
+path = "calc_tests/consume_string.xlsx"
+cached = { formula_cells = 0, matched = 0, classes = {  } }
+linked = { formula_cells = 0, matched = 0, classes = {  } }
+
+[[file]]
+path = "calc_tests/DATABASE/DAVERAGE.xlsx"
+cached = { formula_cells = 4, matched = 4, classes = { match = 4 } }
+linked = { formula_cells = 4, matched = 4, classes = { match = 4 } }
+
+[[file]]
+path = "calc_tests/DATABASE/DCOUNT_DCOUNTA_DGET_DPRODUCT.xlsx"
+cached = { formula_cells = 212, matched = 212, classes = { match = 212 } }
+linked = { formula_cells = 212, matched = 212, classes = { match = 212 } }
+
+[[file]]
+path = "calc_tests/DATABASE/DMIN_DMAX_DAVERAGE_DSUM.xlsx"
+cached = { formula_cells = 175, matched = 175, classes = { match = 175 } }
+linked = { formula_cells = 175, matched = 175, classes = { match = 175 } }
+
+[[file]]
+path = "calc_tests/DATABASE/DVAR_DVARP_DSTDEV_DSTDEVP.xlsx"
+cached = { formula_cells = 175, matched = 175, classes = { match = 175 } }
+linked = { formula_cells = 175, matched = 175, classes = { match = 175 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/DATE_DAY_MONTH_YEAR.xlsx"
+cached = { formula_cells = 68, matched = 68, classes = { match = 68 } }
+linked = { formula_cells = 68, matched = 68, classes = { match = 68 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/DATEVALUE_issue_1379.xlsx"
+cached = { formula_cells = 4, matched = 4, classes = { match = 4 } }
+linked = { formula_cells = 4, matched = 4, classes = { match = 4 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/DATEVALUE_issue_1380.xlsx"
+cached = { formula_cells = 1, matched = 1, classes = { match = 1 } }
+linked = { formula_cells = 1, matched = 1, classes = { match = 1 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/DATEVALUE.xlsx"
+cached = { formula_cells = 73, matched = 73, classes = { match = 73 } }
+linked = { formula_cells = 73, matched = 73, classes = { match = 73 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/DATE.xlsx"
+cached = { formula_cells = 64, matched = 64, classes = { match = 64 } }
+linked = { formula_cells = 64, matched = 64, classes = { match = 64 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/DAY_MONTH_YEAR.xlsx"
+cached = { formula_cells = 115, matched = 115, classes = { match = 115 } }
+linked = { formula_cells = 115, matched = 115, classes = { match = 115 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/DAYS_DAYS360.xlsx"
+cached = { formula_cells = 277, matched = 277, classes = { match = 277 } }
+linked = { formula_cells = 277, matched = 277, classes = { match = 277 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/EDATE.xlsx"
+cached = { formula_cells = 83, matched = 83, classes = { match = 83 } }
+linked = { formula_cells = 83, matched = 83, classes = { match = 83 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/EOMONTH_issue_1388.xlsx"
+cached = { formula_cells = 10, matched = 10, classes = { match = 10 } }
+linked = { formula_cells = 10, matched = 10, classes = { match = 10 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/EOMONTH.xlsx"
+cached = { formula_cells = 105, matched = 105, classes = { match = 105 } }
+linked = { formula_cells = 105, matched = 105, classes = { match = 105 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/NETWORKDAYS_NETWORKDAYS.INTL.xlsx"
+cached = { formula_cells = 286, matched = 286, classes = { match = 286 } }
+linked = { formula_cells = 286, matched = 286, classes = { match = 286 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/NOW_TODAY.xlsx"
+cached = { formula_cells = 3, matched = 0, classes = { numeric = 3 } }
+linked = { formula_cells = 3, matched = 0, classes = { numeric = 3 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/TIME_HOUR_MINUTE_SECOND_issue_1362.xlsx"
+cached = { formula_cells = 22, matched = 22, classes = { match = 22 } }
+linked = { formula_cells = 22, matched = 22, classes = { match = 22 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/TIME_HOUR_MINUTE_SECOND.xlsx"
+cached = { formula_cells = 252, matched = 252, classes = { match = 252 } }
+linked = { formula_cells = 252, matched = 252, classes = { match = 252 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/TIMEVALUE_issue_1402.xlsx"
+cached = { formula_cells = 1, matched = 1, classes = { match = 1 } }
+linked = { formula_cells = 1, matched = 1, classes = { match = 1 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/TIMEVALUE.xlsx"
+cached = { formula_cells = 68, matched = 68, classes = { match = 68 } }
+linked = { formula_cells = 68, matched = 68, classes = { match = 68 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/WEEKDAY_WEEKNUM_ISOWEEKNUM_issue_1502.xlsx"
+cached = { formula_cells = 10, matched = 10, classes = { match = 10 } }
+linked = { formula_cells = 10, matched = 10, classes = { match = 10 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/WEEKDAY_WEEKNUM_ISOWEEKNUM.xlsx"
+cached = { formula_cells = 794, matched = 794, classes = { match = 794 } }
+linked = { formula_cells = 794, matched = 794, classes = { match = 794 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/WORKDAY_WORKDAY.INTL.xlsx"
+cached = { formula_cells = 213, matched = 213, classes = { match = 213 } }
+linked = { formula_cells = 213, matched = 213, classes = { match = 213 } }
+
+[[file]]
+path = "calc_tests/DATE_AND_TIME/YEARFRAC_DATEDIF.xlsx"
+cached = { formula_cells = 197, matched = 197, classes = { match = 197 } }
+linked = { formula_cells = 197, matched = 197, classes = { match = 197 } }
+
+[[file]]
+path = "calc_tests/defined_names_for_unit_test.xlsx"
+cached = { formula_cells = 3, matched = 3, classes = { match = 3 } }
+linked = { formula_cells = 3, matched = 3, classes = { match = 3 } }
+
+[[file]]
+path = "calc_tests/defined_names.xlsx"
+cached = { formula_cells = 24, matched = 24, classes = { match = 24 } }
+linked = { formula_cells = 24, matched = 24, classes = { match = 24 } }
+
+[[file]]
+path = "calc_tests/ENGINEERING/BESSEL.xlsx"
+cached = { formula_cells = 476, matched = 426, classes = { match = 426, numeric_epsilon = 50 } }
+linked = { formula_cells = 476, matched = 426, classes = { match = 426, numeric_epsilon = 50 } }
+
+[[file]]
+path = "calc_tests/ENGINEERING/BITs.xlsx"
+cached = { formula_cells = 164, matched = 164, classes = { match = 164 } }
+linked = { formula_cells = 164, matched = 164, classes = { match = 164 } }
+
+[[file]]
+path = "calc_tests/ENGINEERING/COMPLEXs.xlsx"
+cached = { formula_cells = 958, matched = 958, classes = { match = 958 } }
+linked = { formula_cells = 958, matched = 958, classes = { match = 958 } }
+
+[[file]]
+path = "calc_tests/ENGINEERING/CONVERT.xlsx"
+cached = { formula_cells = 509, matched = 509, classes = { match = 509 } }
+linked = { formula_cells = 509, matched = 509, classes = { match = 509 } }
+
+[[file]]
+path = "calc_tests/ENGINEERING/ERFs.xlsx"
+cached = { formula_cells = 96, matched = 96, classes = { match = 96 } }
+linked = { formula_cells = 96, matched = 96, classes = { match = 96 } }
+
+[[file]]
+path = "calc_tests/ENGINEERING/GESTEP_DELTA.xlsx"
+cached = { formula_cells = 63, matched = 63, classes = { match = 63 } }
+linked = { formula_cells = 63, matched = 63, classes = { match = 63 } }
+
+[[file]]
+path = "calc_tests/ENGINEERING/NUMBER_SYSTEMS.xlsx"
+cached = { formula_cells = 710, matched = 710, classes = { match = 710 } }
+linked = { formula_cells = 710, matched = 710, classes = { match = 710 } }
+
+[[file]]
+path = "calc_tests/escape_strings.xlsx"
+cached = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+linked = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/ACCRINT_ACCRINTM.xlsx"
+cached = { formula_cells = 51, matched = 51, classes = { match = 51 } }
+linked = { formula_cells = 51, matched = 51, classes = { match = 51 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/accrint_cases.xlsx"
+cached = { formula_cells = 400, matched = 400, classes = { match = 400 } }
+linked = { formula_cells = 400, matched = 400, classes = { match = 400 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/ACCRINT_extended.xlsx"
+cached = { formula_cells = 259, matched = 259, classes = { match = 259 } }
+linked = { formula_cells = 259, matched = 259, classes = { match = 259 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/ACCRINTM.xlsx"
+cached = { formula_cells = 17, matched = 17, classes = { match = 17 } }
+linked = { formula_cells = 17, matched = 17, classes = { match = 17 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/ACCRINT.xlsx"
+cached = { formula_cells = 39, matched = 39, classes = { match = 39 } }
+linked = { formula_cells = 39, matched = 39, classes = { match = 39 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/COUPDAYS.xlsx"
+cached = { formula_cells = 225, matched = 225, classes = { match = 225 } }
+linked = { formula_cells = 225, matched = 225, classes = { match = 225 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/CUMPRINC_CUMIPMT.xlsx"
+cached = { formula_cells = 70, matched = 70, classes = { match = 70 } }
+linked = { formula_cells = 70, matched = 70, classes = { match = 70 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/DB_DDB.xlsx"
+cached = { formula_cells = 80, matched = 80, classes = { match = 80 } }
+linked = { formula_cells = 80, matched = 80, classes = { match = 80 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/DISC.xlsx"
+cached = { formula_cells = 19, matched = 19, classes = { match = 19 } }
+linked = { formula_cells = 19, matched = 19, classes = { match = 19 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/FVSCHEDULE.xlsx"
+cached = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+linked = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/FV.xlsx"
+cached = { formula_cells = 47, matched = 47, classes = { match = 47 } }
+linked = { formula_cells = 47, matched = 47, classes = { match = 47 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/INTRATE.xlsx"
+cached = { formula_cells = 10, matched = 10, classes = { match = 10 } }
+linked = { formula_cells = 10, matched = 10, classes = { match = 10 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/IPMT_PPMT.xlsx"
+cached = { formula_cells = 128, matched = 128, classes = { match = 128 } }
+linked = { formula_cells = 128, matched = 128, classes = { match = 128 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/IRR.xlsx"
+cached = { formula_cells = 132, matched = 122, classes = { match = 122, numeric_epsilon = 10 } }
+linked = { formula_cells = 132, matched = 122, classes = { match = 122, numeric_epsilon = 10 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/ISPMT.xlsx"
+cached = { formula_cells = 29, matched = 29, classes = { match = 29 } }
+linked = { formula_cells = 29, matched = 29, classes = { match = 29 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/MIRR.xlsx"
+cached = { formula_cells = 225, matched = 225, classes = { match = 225 } }
+linked = { formula_cells = 225, matched = 225, classes = { match = 225 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/NOMINAL_EFFECT.xlsx"
+cached = { formula_cells = 90, matched = 90, classes = { match = 90 } }
+linked = { formula_cells = 90, matched = 90, classes = { match = 90 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/NPER.xlsx"
+cached = { formula_cells = 45, matched = 45, classes = { match = 45 } }
+linked = { formula_cells = 45, matched = 45, classes = { match = 45 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/NPV.xlsx"
+cached = { formula_cells = 34, matched = 34, classes = { match = 34 } }
+linked = { formula_cells = 34, matched = 34, classes = { match = 34 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/PDURATION.xlsx"
+cached = { formula_cells = 20, matched = 20, classes = { match = 20 } }
+linked = { formula_cells = 20, matched = 20, classes = { match = 20 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/PMT.xlsx"
+cached = { formula_cells = 309, matched = 309, classes = { match = 309 } }
+linked = { formula_cells = 309, matched = 309, classes = { match = 309 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/PRICE_YIELD.xlsx"
+cached = { formula_cells = 352, matched = 352, classes = { match = 352 } }
+linked = { formula_cells = 352, matched = 352, classes = { match = 352 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/PV.xlsx"
+cached = { formula_cells = 45, matched = 45, classes = { match = 45 } }
+linked = { formula_cells = 45, matched = 45, classes = { match = 45 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/RATE.xlsx"
+cached = { formula_cells = 51, matched = 51, classes = { match = 51 } }
+linked = { formula_cells = 51, matched = 51, classes = { match = 51 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/RRI.xlsx"
+cached = { formula_cells = 22, matched = 22, classes = { match = 22 } }
+linked = { formula_cells = 22, matched = 22, classes = { match = 22 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/SLN_SYD.xlsx"
+cached = { formula_cells = 43, matched = 43, classes = { match = 43 } }
+linked = { formula_cells = 43, matched = 43, classes = { match = 43 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/TBILLs.xlsx"
+cached = { formula_cells = 273, matched = 273, classes = { match = 273 } }
+linked = { formula_cells = 273, matched = 273, classes = { match = 273 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/XIRR.xlsx"
+cached = { formula_cells = 42, matched = 30, classes = { match = 30, numeric_epsilon = 12 } }
+linked = { formula_cells = 42, matched = 30, classes = { match = 30, numeric_epsilon = 12 } }
+
+[[file]]
+path = "calc_tests/FINANCIAL/XNPV.xlsx"
+cached = { formula_cells = 24, matched = 21, classes = { match = 21, numeric_epsilon = 3 } }
+linked = { formula_cells = 24, matched = 21, classes = { match = 21, numeric_epsilon = 3 } }
+
+[[file]]
+path = "calc_tests/INFORMATION/CELL.xlsx"
+cached = { formula_cells = 32, matched = 32, classes = { match = 32 } }
+linked = { formula_cells = 32, matched = 32, classes = { match = 32 } }
+
+[[file]]
+path = "calc_tests/INFORMATION/error_broadcast.xlsx"
+cached = { formula_cells = 86, matched = 86, classes = { match = 86 } }
+linked = { formula_cells = 86, matched = 86, classes = { match = 86 } }
+
+[[file]]
+path = "calc_tests/INFORMATION/ERROR.TYPE.xlsx"
+cached = { formula_cells = 16, matched = 16, classes = { match = 16 } }
+linked = { formula_cells = 16, matched = 16, classes = { match = 16 } }
+
+[[file]]
+path = "calc_tests/INFORMATION/FORMULATEXT.xlsx"
+cached = { formula_cells = 27, matched = 27, classes = { match = 27 } }
+linked = { formula_cells = 27, matched = 27, classes = { match = 27 } }
+
+[[file]]
+path = "calc_tests/INFORMATION/IS_INFORMATION.xlsx"
+cached = { formula_cells = 106, matched = 106, classes = { match = 106 } }
+linked = { formula_cells = 106, matched = 106, classes = { match = 106 } }
+
+[[file]]
+path = "calc_tests/INFORMATION/ISOMITTED.xlsx"
+cached = { formula_cells = 3, matched = 3, classes = { match = 3 } }
+linked = { formula_cells = 3, matched = 3, classes = { match = 3 } }
+
+[[file]]
+path = "calc_tests/INFORMATION/ISREF_ISFORMULA_ISODD_ISEVEN.xlsx"
+cached = { formula_cells = 66, matched = 66, classes = { match = 66 } }
+linked = { formula_cells = 66, matched = 66, classes = { match = 66 } }
+
+[[file]]
+path = "calc_tests/INFORMATION/ISREF.xlsx"
+cached = { formula_cells = 40, matched = 38, classes = { match = 38, spill = 2 } }
+linked = { formula_cells = 40, matched = 38, classes = { match = 38, spill = 2 } }
+
+[[file]]
+path = "calc_tests/INFORMATION/N.xlsx"
+cached = { formula_cells = 21, matched = 21, classes = { match = 21 } }
+linked = { formula_cells = 21, matched = 21, classes = { match = 21 } }
+
+[[file]]
+path = "calc_tests/INFORMATION/SHEET_SHEETS.xlsx"
+cached = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+linked = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+
+[[file]]
+path = "calc_tests/INFORMATION/TYPE.xlsx"
+cached = { formula_cells = 7, matched = 7, classes = { match = 7 } }
+linked = { formula_cells = 7, matched = 7, classes = { match = 7 } }
+
+[[file]]
+path = "calc_tests/issue_341.xlsx"
+cached = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+linked = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+
+[[file]]
+path = "calc_tests/LOGICAL/AND_OR_XOR.xlsx"
+cached = { formula_cells = 317, matched = 317, classes = { match = 317 } }
+linked = { formula_cells = 317, matched = 317, classes = { match = 317 } }
+
+[[file]]
+path = "calc_tests/LOGICAL/BYCOL_BYROW.xlsx"
+cached = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+linked = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+
+[[file]]
+path = "calc_tests/LOGICAL/IF_ARRAY.xlsx"
+cached = { formula_cells = 22, matched = 22, classes = { match = 22 } }
+linked = { formula_cells = 22, matched = 22, classes = { match = 22 } }
+
+[[file]]
+path = "calc_tests/LOGICAL/IFERROR.xlsx"
+cached = { formula_cells = 30, matched = 30, classes = { match = 30 } }
+linked = { formula_cells = 30, matched = 30, classes = { match = 30 } }
+
+[[file]]
+path = "calc_tests/LOGICAL/IFNA.xlsx"
+cached = { formula_cells = 11, matched = 11, classes = { match = 11 } }
+linked = { formula_cells = 11, matched = 11, classes = { match = 11 } }
+
+[[file]]
+path = "calc_tests/LOGICAL/IFS.xlsx"
+cached = { formula_cells = 45, matched = 45, classes = { match = 45 } }
+linked = { formula_cells = 45, matched = 45, classes = { match = 45 } }
+
+[[file]]
+path = "calc_tests/LOGICAL/LAMBDA.xlsx"
+cached = { formula_cells = 8, matched = 8, classes = { match = 8 } }
+linked = { formula_cells = 8, matched = 8, classes = { match = 8 } }
+
+[[file]]
+path = "calc_tests/LOGICAL/LET.xlsx"
+cached = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+linked = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+
+[[file]]
+path = "calc_tests/LOGICAL/MAKEARRAY.xlsx"
+cached = { formula_cells = 1, matched = 1, classes = { match = 1 } }
+linked = { formula_cells = 1, matched = 1, classes = { match = 1 } }
+
+[[file]]
+path = "calc_tests/LOGICAL/MAP_REDUCE.xlsx"
+cached = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+linked = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+
+[[file]]
+path = "calc_tests/LOGICAL/NOT.xlsx"
+cached = { formula_cells = 87, matched = 86, classes = { match = 86, text = 1 } }
+linked = { formula_cells = 87, matched = 86, classes = { match = 86, text = 1 } }
+
+[[file]]
+path = "calc_tests/LOGICAL/SCAN.xlsx"
+cached = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+linked = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+
+[[file]]
+path = "calc_tests/logical.xlsx"
+cached = { formula_cells = 188, matched = 188, classes = { match = 188 } }
+linked = { formula_cells = 188, matched = 188, classes = { match = 188 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/ADDRESS.xlsx"
+cached = { formula_cells = 34, matched = 34, classes = { match = 34 } }
+linked = { formula_cells = 34, matched = 34, classes = { match = 34 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/CHOOSECOLS_CHOOSEROWS.xlsx"
+cached = { formula_cells = 3, matched = 3, classes = { match = 3 } }
+linked = { formula_cells = 3, matched = 3, classes = { match = 3 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/CHOOSE.xlsx"
+cached = { formula_cells = 24, matched = 24, classes = { match = 24 } }
+linked = { formula_cells = 24, matched = 24, classes = { match = 24 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/DROP_TAKE.xlsx"
+cached = { formula_cells = 14, matched = 9, classes = { match = 9, spill = 5 } }
+linked = { formula_cells = 14, matched = 9, classes = { match = 9, spill = 5 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/EXPAND.xlsx"
+cached = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+linked = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/FILTER_ERRORS.xlsx"
+cached = { formula_cells = 5, matched = 4, classes = { match = 4, spill = 1 } }
+linked = { formula_cells = 5, matched = 4, classes = { match = 4, spill = 1 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/HSTACK_VSTACK.xlsx"
+cached = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+linked = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/HVLOOKUP.xlsx"
+cached = { formula_cells = 103, matched = 103, classes = { match = 103 } }
+linked = { formula_cells = 103, matched = 103, classes = { match = 103 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/INDEX.xlsx"
+cached = { formula_cells = 11, matched = 11, classes = { match = 11 } }
+linked = { formula_cells = 11, matched = 11, classes = { match = 11 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/INDIRECT.xlsx"
+unmeasured = "Veredas 1's oracle aborted before the engine ran: its calamine cross-check asked for 549 755 813 888 bytes"
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/MATCH_LOOKUP_arrays.xlsx"
+cached = { formula_cells = 23, matched = 23, classes = { match = 23 } }
+linked = { formula_cells = 23, matched = 23, classes = { match = 23 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/MATCH.xlsx"
+cached = { formula_cells = 34, matched = 34, classes = { match = 34 } }
+linked = { formula_cells = 34, matched = 34, classes = { match = 34 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/ROW_COLUM.xlsx"
+cached = { formula_cells = 192, matched = 192, classes = { match = 192 } }
+linked = { formula_cells = 192, matched = 192, classes = { match = 192 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/SORT.xlsx"
+cached = { formula_cells = 17, matched = 17, classes = { match = 17 } }
+linked = { formula_cells = 17, matched = 17, classes = { match = 17 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/TOCOL.xlsx"
+cached = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+linked = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/TRANSPOSE.xlsx"
+cached = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+linked = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/TRIMRANGE.xlsx"
+cached = { formula_cells = 3, matched = 3, classes = { match = 3 } }
+linked = { formula_cells = 3, matched = 3, classes = { match = 3 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/WRAPCOLS_ROWS.xlsx"
+cached = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+linked = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/XLOOKUP.xlsx"
+cached = { formula_cells = 439, matched = 439, classes = { match = 439 } }
+linked = { formula_cells = 439, matched = 439, classes = { match = 439 } }
+
+[[file]]
+path = "calc_tests/LOOKUP_AND_REFERENCE/XMATCH.xlsx"
+cached = { formula_cells = 8, matched = 8, classes = { match = 8 } }
+linked = { formula_cells = 8, matched = 8, classes = { match = 8 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/ABS.xlsx"
+cached = { formula_cells = 13, matched = 13, classes = { match = 13 } }
+linked = { formula_cells = 13, matched = 13, classes = { match = 13 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/ARABIC_ROMAN.xlsx"
+cached = { formula_cells = 40427, matched = 40427, classes = { match = 40427 } }
+linked = { formula_cells = 40427, matched = 40427, classes = { match = 40427 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/ATAN2_POWER.xlsx"
+cached = { formula_cells = 61, matched = 61, classes = { match = 61 } }
+linked = { formula_cells = 61, matched = 61, classes = { match = 61 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/BASE_DECIMAL.xlsx"
+cached = { formula_cells = 390, matched = 390, classes = { match = 390 } }
+linked = { formula_cells = 390, matched = 390, classes = { match = 390 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/COMBIN_COMBINA.xlsx"
+cached = { formula_cells = 76, matched = 76, classes = { match = 76 } }
+linked = { formula_cells = 76, matched = 76, classes = { match = 76 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/DEGREES_RADIANS.xlsx"
+cached = { formula_cells = 54, matched = 54, classes = { match = 54 } }
+linked = { formula_cells = 54, matched = 54, classes = { match = 54 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/EVEN_ODD.xlsx"
+cached = { formula_cells = 87, matched = 87, classes = { match = 87 } }
+linked = { formula_cells = 87, matched = 87, classes = { match = 87 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/EXP_SIGN.xlsx"
+cached = { formula_cells = 132, matched = 132, classes = { match = 132 } }
+linked = { formula_cells = 132, matched = 132, classes = { match = 132 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/FACT_DOUBLEFACT.xlsx"
+cached = { formula_cells = 14, matched = 14, classes = { match = 14 } }
+linked = { formula_cells = 14, matched = 14, classes = { match = 14 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/FLOOR_CEILING.xlsx"
+cached = { formula_cells = 11474, matched = 11474, classes = { match = 11474 } }
+linked = { formula_cells = 11474, matched = 11474, classes = { match = 11474 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/GCD_LCM.xlsx"
+cached = { formula_cells = 351, matched = 351, classes = { match = 351 } }
+linked = { formula_cells = 351, matched = 351, classes = { match = 351 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/LCM_GCD.xlsx"
+cached = { formula_cells = 132, matched = 132, classes = { match = 132 } }
+linked = { formula_cells = 132, matched = 132, classes = { match = 132 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/LOG_LOG10_LN.xlsx"
+cached = { formula_cells = 227, matched = 227, classes = { match = 227 } }
+linked = { formula_cells = 227, matched = 227, classes = { match = 227 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/MAX_MIN.xlsx"
+cached = { formula_cells = 55, matched = 54, classes = { match = 54, spill = 1 } }
+linked = { formula_cells = 55, matched = 54, classes = { match = 54, spill = 1 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/MIN_MAX_extras.xlsx"
+cached = { formula_cells = 21, matched = 21, classes = { match = 21 } }
+linked = { formula_cells = 21, matched = 21, classes = { match = 21 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/MMULT.xlsx"
+cached = { formula_cells = 89, matched = 89, classes = { match = 89 } }
+linked = { formula_cells = 89, matched = 89, classes = { match = 89 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/MOD_QUOTIENT.xlsx"
+cached = { formula_cells = 93, matched = 93, classes = { match = 93 } }
+linked = { formula_cells = 93, matched = 93, classes = { match = 93 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/MROUND_TRUNC_INT.xlsx"
+cached = { formula_cells = 249, matched = 246, classes = { error_for_value = 3, match = 246 } }
+linked = { formula_cells = 249, matched = 246, classes = { error_for_value = 3, match = 246 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/MULTINOMIAL.xlsx"
+cached = { formula_cells = 13, matched = 13, classes = { match = 13 } }
+linked = { formula_cells = 13, matched = 13, classes = { match = 13 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/MUNIT_MDETERM_MINVERSE.xlsx"
+cached = { formula_cells = 16, matched = 16, classes = { match = 16 } }
+linked = { formula_cells = 16, matched = 16, classes = { match = 16 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/POWER.xlsx"
+cached = { formula_cells = 32, matched = 32, classes = { match = 32 } }
+linked = { formula_cells = 32, matched = 32, classes = { match = 32 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/PRODUCT_SUM.xlsx"
+cached = { formula_cells = 77, matched = 77, classes = { match = 77 } }
+linked = { formula_cells = 77, matched = 77, classes = { match = 77 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/PRODUCT.xlsx"
+cached = { formula_cells = 35, matched = 35, classes = { match = 35 } }
+linked = { formula_cells = 35, matched = 35, classes = { match = 35 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/ROUND_ROUNDUP_ROUNDDOWN.xlsx"
+cached = { formula_cells = 326, matched = 326, classes = { match = 326 } }
+linked = { formula_cells = 326, matched = 326, classes = { match = 326 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/SEQUENCE.xlsx"
+cached = { formula_cells = 17, matched = 15, classes = { match = 15, spill = 2 } }
+linked = { formula_cells = 17, matched = 15, classes = { match = 15, spill = 2 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/SERIESSUM.xlsx"
+cached = { formula_cells = 12, matched = 12, classes = { match = 12 } }
+linked = { formula_cells = 12, matched = 12, classes = { match = 12 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/SQRT_SQRTPI.xlsx"
+cached = { formula_cells = 31, matched = 31, classes = { match = 31 } }
+linked = { formula_cells = 31, matched = 31, classes = { match = 31 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/SUMIF_array.xlsx"
+cached = { formula_cells = 9, matched = 9, classes = { match = 9 } }
+linked = { formula_cells = 9, matched = 9, classes = { match = 9 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/SUMIF_AVERAGE_IF.xlsx"
+cached = { formula_cells = 50, matched = 50, classes = { match = 50 } }
+linked = { formula_cells = 50, matched = 50, classes = { match = 50 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/SUMIFS.xlsx"
+cached = { formula_cells = 285, matched = 285, classes = { match = 285 } }
+linked = { formula_cells = 285, matched = 285, classes = { match = 285 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/SUMPRODUCT.xlsx"
+cached = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+linked = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/SUMSQ.xlsx"
+cached = { formula_cells = 60, matched = 60, classes = { match = 60 } }
+linked = { formula_cells = 60, matched = 60, classes = { match = 60 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/SUMX2MY2_SUMX2PY2_SUMXMY2.xlsx"
+cached = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+linked = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+
+[[file]]
+path = "calc_tests/MATH_AND_TRIGONOMETRY/TRIGONOMETRIC.xlsx"
+cached = { formula_cells = 1187, matched = 1181, classes = { match = 1181, numeric_epsilon = 6 } }
+linked = { formula_cells = 1187, matched = 1181, classes = { match = 1181, numeric_epsilon = 6 } }
+
+[[file]]
+path = "calc_tests/named_ranges.xlsx"
+cached = { formula_cells = 194, matched = 194, classes = { match = 194 } }
+linked = { formula_cells = 194, matched = 194, classes = { match = 194 } }
+
+[[file]]
+path = "calc_tests/percentage.xlsx"
+cached = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+linked = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+
+[[file]]
+path = "calc_tests/quotes.xlsx"
+cached = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+linked = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+
+[[file]]
+path = "calc_tests/range_operator.xlsx"
+cached = { formula_cells = 9, matched = 9, classes = { match = 9 } }
+linked = { formula_cells = 9, matched = 9, classes = { match = 9 } }
+
+[[file]]
+path = "calc_tests/simple_arrays.xlsx"
+cached = { formula_cells = 3, matched = 3, classes = { match = 3 } }
+linked = { formula_cells = 3, matched = 3, classes = { match = 3 } }
+
+[[file]]
+path = "calc_tests/simple_functions.xlsx"
+cached = { formula_cells = 199, matched = 199, classes = { match = 199 } }
+linked = { formula_cells = 199, matched = 199, classes = { match = 199 } }
+
+[[file]]
+path = "calc_tests/spill_operator.xlsx"
+cached = { formula_cells = 10, matched = 10, classes = { match = 10 } }
+linked = { formula_cells = 10, matched = 10, classes = { match = 10 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/AVEDEV.xlsx"
+cached = { formula_cells = 1, matched = 1, classes = { match = 1 } }
+linked = { formula_cells = 1, matched = 1, classes = { match = 1 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/AVERAGE.xlsx"
+cached = { formula_cells = 52, matched = 52, classes = { match = 52 } }
+linked = { formula_cells = 52, matched = 52, classes = { match = 52 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/BETADIST_BETAINV.xlsx"
+cached = { formula_cells = 147, matched = 147, classes = { match = 147 } }
+linked = { formula_cells = 147, matched = 147, classes = { match = 147 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/BETA_GAMMA.xlsx"
+cached = { formula_cells = 48, matched = 48, classes = { match = 48 } }
+linked = { formula_cells = 48, matched = 48, classes = { match = 48 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/BINOM.xlsx"
+cached = { formula_cells = 268, matched = 268, classes = { match = 268 } }
+linked = { formula_cells = 268, matched = 268, classes = { match = 268 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/CHISQ_TEST.xlsx"
+cached = { formula_cells = 1, matched = 1, classes = { match = 1 } }
+linked = { formula_cells = 1, matched = 1, classes = { match = 1 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/CHISQ.xlsx"
+cached = { formula_cells = 8, matched = 8, classes = { match = 8 } }
+linked = { formula_cells = 8, matched = 8, classes = { match = 8 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/CONFIDENCE.xlsx"
+cached = { formula_cells = 115, matched = 115, classes = { match = 115 } }
+linked = { formula_cells = 115, matched = 115, classes = { match = 115 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/CORREL_SLOPE_INTERCEPT_RSQ_STEYX.xlsx"
+cached = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+linked = { formula_cells = 5, matched = 5, classes = { match = 5 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/COUNTIFS.xlsx"
+cached = { formula_cells = 312, matched = 312, classes = { match = 312 } }
+linked = { formula_cells = 312, matched = 312, classes = { match = 312 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/COUNTIF.xlsx"
+cached = { formula_cells = 531, matched = 531, classes = { match = 531 } }
+linked = { formula_cells = 531, matched = 531, classes = { match = 531 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/COUNT.xlsx"
+cached = { formula_cells = 61, matched = 61, classes = { match = 61 } }
+linked = { formula_cells = 61, matched = 61, classes = { match = 61 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/COVARIANCE.xlsx"
+cached = { formula_cells = 74, matched = 74, classes = { match = 74 } }
+linked = { formula_cells = 74, matched = 74, classes = { match = 74 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/DEVSQ.xlsx"
+cached = { formula_cells = 1, matched = 1, classes = { match = 1 } }
+linked = { formula_cells = 1, matched = 1, classes = { match = 1 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/EXPON_DIST.xlsx"
+cached = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+linked = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/EXPONDIST.xlsx"
+cached = { formula_cells = 58, matched = 58, classes = { match = 58 } }
+linked = { formula_cells = 58, matched = 58, classes = { match = 58 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/F_DIST.xlsx"
+cached = { formula_cells = 8, matched = 8, classes = { match = 8 } }
+linked = { formula_cells = 8, matched = 8, classes = { match = 8 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/FISHER_FISHERINV.xlsx"
+cached = { formula_cells = 83, matched = 83, classes = { match = 83 } }
+linked = { formula_cells = 83, matched = 83, classes = { match = 83 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/FISHER.xlsx"
+cached = { formula_cells = 10, matched = 10, classes = { match = 10 } }
+linked = { formula_cells = 10, matched = 10, classes = { match = 10 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/FREQUENCY.xlsx"
+cached = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+linked = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/F_TEST.xlsx"
+cached = { formula_cells = 4, matched = 4, classes = { match = 4 } }
+linked = { formula_cells = 4, matched = 4, classes = { match = 4 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/GAMMALN_GAMMALNPRECISE.xlsx"
+cached = { formula_cells = 91, matched = 91, classes = { match = 91 } }
+linked = { formula_cells = 91, matched = 91, classes = { match = 91 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/GAMMA.xlsx"
+cached = { formula_cells = 167, matched = 167, classes = { match = 167 } }
+linked = { formula_cells = 167, matched = 167, classes = { match = 167 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/GAUSS.xlsx"
+cached = { formula_cells = 39, matched = 39, classes = { match = 39 } }
+linked = { formula_cells = 39, matched = 39, classes = { match = 39 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/HYPERGEOM_DIST.xlsx"
+cached = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+linked = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/LINEST_LOGEST.xlsx"
+cached = { formula_cells = 8, matched = 8, classes = { match = 8 } }
+linked = { formula_cells = 8, matched = 8, classes = { match = 8 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/LOGNORM.xlsx"
+cached = { formula_cells = 147, matched = 147, classes = { match = 147 } }
+linked = { formula_cells = 147, matched = 147, classes = { match = 147 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/MEADIAN_KURT_SKEW_HARMEAN.xlsx"
+cached = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+linked = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/MINA_MAXA.xlsx"
+cached = { formula_cells = 12, matched = 12, classes = { match = 12 } }
+linked = { formula_cells = 12, matched = 12, classes = { match = 12 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/MIN_MAX.xlsx"
+cached = { formula_cells = 14, matched = 14, classes = { match = 14 } }
+linked = { formula_cells = 14, matched = 14, classes = { match = 14 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/MODE.xlsx"
+cached = { formula_cells = 15, matched = 15, classes = { match = 15 } }
+linked = { formula_cells = 15, matched = 15, classes = { match = 15 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/NORM_DIST.xlsx"
+cached = { formula_cells = 252, matched = 252, classes = { match = 252 } }
+linked = { formula_cells = 252, matched = 252, classes = { match = 252 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/PEARSON.xlsx"
+cached = { formula_cells = 1, matched = 1, classes = { match = 1 } }
+linked = { formula_cells = 1, matched = 1, classes = { match = 1 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/PERCENTIL_QUARTIL.xlsx"
+cached = { formula_cells = 68, matched = 68, classes = { match = 68 } }
+linked = { formula_cells = 68, matched = 68, classes = { match = 68 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/PERMUT_PERMUTATIONA.xlsx"
+cached = { formula_cells = 35, matched = 35, classes = { match = 35 } }
+linked = { formula_cells = 35, matched = 35, classes = { match = 35 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/PHI.xlsx"
+cached = { formula_cells = 7, matched = 7, classes = { match = 7 } }
+linked = { formula_cells = 7, matched = 7, classes = { match = 7 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/POISSON.xlsx"
+cached = { formula_cells = 63, matched = 63, classes = { match = 63 } }
+linked = { formula_cells = 63, matched = 63, classes = { match = 63 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/PROB.xlsx"
+cached = { formula_cells = 28, matched = 28, classes = { match = 28 } }
+linked = { formula_cells = 28, matched = 28, classes = { match = 28 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/RANK_EQ_RANK_AVG.xlsx"
+cached = { formula_cells = 20, matched = 20, classes = { match = 20 } }
+linked = { formula_cells = 20, matched = 20, classes = { match = 20 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/SMALL_LARGE.xlsx"
+cached = { formula_cells = 26, matched = 26, classes = { match = 26 } }
+linked = { formula_cells = 26, matched = 26, classes = { match = 26 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/STANDARIZE.xlsx"
+cached = { formula_cells = 4, matched = 4, classes = { match = 4 } }
+linked = { formula_cells = 4, matched = 4, classes = { match = 4 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/STDEV.xlsx"
+cached = { formula_cells = 4, matched = 4, classes = { match = 4 } }
+linked = { formula_cells = 4, matched = 4, classes = { match = 4 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/T_DIST.xlsx"
+cached = { formula_cells = 295, matched = 294, classes = { match = 294, numeric_epsilon = 1 } }
+linked = { formula_cells = 295, matched = 294, classes = { match = 294, numeric_epsilon = 1 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/TREND_GROWTH.xlsx"
+cached = { formula_cells = 12, matched = 12, classes = { match = 12 } }
+linked = { formula_cells = 12, matched = 12, classes = { match = 12 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/TRIMMEAN.xlsx"
+cached = { formula_cells = 19, matched = 19, classes = { match = 19 } }
+linked = { formula_cells = 19, matched = 19, classes = { match = 19 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/T_TEST.xlsx"
+cached = { formula_cells = 9, matched = 9, classes = { match = 9 } }
+linked = { formula_cells = 9, matched = 9, classes = { match = 9 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/VARIANCE.xlsx"
+cached = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+linked = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/WEIBULL_DIST.xlsx"
+cached = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+linked = { formula_cells = 2, matched = 2, classes = { match = 2 } }
+
+[[file]]
+path = "calc_tests/STATISTICAL/Z_TEST.xlsx"
+cached = { formula_cells = 4, matched = 4, classes = { match = 4 } }
+linked = { formula_cells = 4, matched = 4, classes = { match = 4 } }
+
+[[file]]
+path = "calc_tests/TEXT/ARRAYTOTEXT.xlsx"
+cached = { formula_cells = 3, matched = 3, classes = { match = 3 } }
+linked = { formula_cells = 3, matched = 3, classes = { match = 3 } }
+
+[[file]]
+path = "calc_tests/TEXT/CHAR.xlsx"
+cached = { formula_cells = 257, matched = 227, classes = { match = 227, text = 30 } }
+linked = { formula_cells = 257, matched = 227, classes = { match = 227, text = 30 } }
+
+[[file]]
+path = "calc_tests/TEXT/CONCATENATE.xlsx"
+cached = { formula_cells = 31, matched = 31, classes = { match = 31 } }
+linked = { formula_cells = 31, matched = 31, classes = { match = 31 } }
+
+[[file]]
+path = "calc_tests/TEXT/CONCAT.xlsx"
+cached = { formula_cells = 29, matched = 29, classes = { match = 29 } }
+linked = { formula_cells = 29, matched = 29, classes = { match = 29 } }
+
+[[file]]
+path = "calc_tests/TEXT/DOLLARs.xlsx"
+cached = { formula_cells = 36, matched = 36, classes = { match = 36 } }
+linked = { formula_cells = 36, matched = 36, classes = { match = 36 } }
+
+[[file]]
+path = "calc_tests/TEXT/ENCODEURL.xlsx"
+cached = { formula_cells = 65, matched = 62, classes = { match = 62, text = 3 } }
+linked = { formula_cells = 65, matched = 62, classes = { match = 62, text = 3 } }
+
+[[file]]
+path = "calc_tests/TEXT/EXACT.xlsx"
+cached = { formula_cells = 13, matched = 13, classes = { match = 13 } }
+linked = { formula_cells = 13, matched = 13, classes = { match = 13 } }
+
+[[file]]
+path = "calc_tests/TEXT/FIND_SEARCH.xlsx"
+cached = { formula_cells = 62, matched = 62, classes = { match = 62 } }
+linked = { formula_cells = 62, matched = 62, classes = { match = 62 } }
+
+[[file]]
+path = "calc_tests/TEXT/MID_LEFT_RIGHT_arrays.xlsx"
+cached = { formula_cells = 31, matched = 31, classes = { match = 31 } }
+linked = { formula_cells = 31, matched = 31, classes = { match = 31 } }
+
+[[file]]
+path = "calc_tests/TEXT/MINUS_MINUS.xlsx"
+cached = { formula_cells = 43, matched = 43, classes = { match = 43 } }
+linked = { formula_cells = 43, matched = 43, classes = { match = 43 } }
+
+[[file]]
+path = "calc_tests/TEXT/PROPER.xlsx"
+cached = { formula_cells = 11, matched = 10, classes = { match = 10, text = 1 } }
+linked = { formula_cells = 11, matched = 10, classes = { match = 10, text = 1 } }
+
+[[file]]
+path = "calc_tests/TEXT/REGEX.xlsx"
+cached = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+linked = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+
+[[file]]
+path = "calc_tests/TEXT/REPT.xlsx"
+cached = { formula_cells = 17, matched = 17, classes = { match = 17 } }
+linked = { formula_cells = 17, matched = 17, classes = { match = 17 } }
+
+[[file]]
+path = "calc_tests/TEXT/STRING_HANDLING.xlsx"
+cached = { formula_cells = 147, matched = 142, classes = { error_for_value = 5, match = 142 } }
+linked = { formula_cells = 147, matched = 142, classes = { error_for_value = 5, match = 142 } }
+
+[[file]]
+path = "calc_tests/TEXT/SUBSTITUTE.xlsx"
+cached = { formula_cells = 34, matched = 34, classes = { match = 34 } }
+linked = { formula_cells = 34, matched = 34, classes = { match = 34 } }
+
+[[file]]
+path = "calc_tests/TEXT/TEXTBEFORE_TEXTAFTER.xlsx"
+cached = { formula_cells = 143, matched = 143, classes = { match = 143 } }
+linked = { formula_cells = 143, matched = 143, classes = { match = 143 } }
+
+[[file]]
+path = "calc_tests/TEXT/TEXTJOIN.xlsx"
+cached = { formula_cells = 42, matched = 42, classes = { match = 42 } }
+linked = { formula_cells = 42, matched = 42, classes = { match = 42 } }
+
+[[file]]
+path = "calc_tests/TEXT/TEXTSPLIT.xlsx"
+cached = { formula_cells = 18, matched = 18, classes = { match = 18 } }
+linked = { formula_cells = 18, matched = 18, classes = { match = 18 } }
+
+[[file]]
+path = "calc_tests/TEXT/TEXT.xlsx"
+cached = { formula_cells = 374, matched = 374, classes = { match = 374 } }
+linked = { formula_cells = 374, matched = 374, classes = { match = 374 } }
+
+[[file]]
+path = "calc_tests/TEXT/T_VALUE_VALUETOTEXT.xlsx"
+cached = { formula_cells = 63, matched = 59, classes = { error_for_value = 2, match = 59, numeric = 2 } }
+linked = { formula_cells = 63, matched = 59, classes = { error_for_value = 2, match = 59, numeric = 2 } }
+
+[[file]]
+path = "calc_tests/TEXT/UNICODE.xlsx"
+cached = { formula_cells = 24, matched = 24, classes = { match = 24 } }
+linked = { formula_cells = 24, matched = 24, classes = { match = 24 } }
+
+[[file]]
+path = "calc_tests/TEXT/UPPER_LOWER.xlsx"
+cached = { formula_cells = 8, matched = 8, classes = { match = 8 } }
+linked = { formula_cells = 8, matched = 8, classes = { match = 8 } }
+
+[[file]]
+path = "conditional_formatting/cf_tests.xlsx"
+cached = { formula_cells = 12, matched = 0, classes = { numeric = 12 } }
+linked = { formula_cells = 12, matched = 0, classes = { numeric = 12 } }
+
+[[file]]
+path = "crossword_ranges.xlsx"
+cached = { formula_cells = 4, matched = 4, classes = { match = 4 } }
+linked = { formula_cells = 4, matched = 4, classes = { match = 4 } }
+
+[[file]]
+path = "custom_theme_colors.xlsx"
+cached = { formula_cells = 16, matched = 16, classes = { match = 16 } }
+linked = { formula_cells = 16, matched = 16, classes = { match = 16 } }
+
+[[file]]
+path = "docs/CHOOSE.xlsx"
+cached = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+linked = { formula_cells = 6, matched = 6, classes = { match = 6 } }
+
+[[file]]
+path = "docs/COS.xlsx"
+cached = { formula_cells = 20, matched = 20, classes = { match = 20 } }
+linked = { formula_cells = 20, matched = 20, classes = { match = 20 } }
+
+[[file]]
+path = "docs/DATE.xlsx"
+cached = { formula_cells = 16, matched = 16, classes = { match = 16 } }
+linked = { formula_cells = 16, matched = 16, classes = { match = 16 } }
+
+[[file]]
+path = "docs/DAY.xlsx"
+cached = { formula_cells = 30, matched = 26, classes = { error_for_value = 1, match = 26, numeric = 3 } }
+linked = { formula_cells = 30, matched = 26, classes = { error_for_value = 1, match = 26, numeric = 3 } }
+
+[[file]]
+path = "docs/ERFC-PRECISE.xlsx"
+cached = { formula_cells = 72, matched = 72, classes = { match = 72 } }
+linked = { formula_cells = 72, matched = 72, classes = { match = 72 } }
+
+[[file]]
+path = "docs/ERFC.xlsx"
+cached = { formula_cells = 72, matched = 72, classes = { match = 72 } }
+linked = { formula_cells = 72, matched = 72, classes = { match = 72 } }
+
+[[file]]
+path = "docs/ERF-PRECISE.xlsx"
+cached = { formula_cells = 72, matched = 72, classes = { match = 72 } }
+linked = { formula_cells = 72, matched = 72, classes = { match = 72 } }
+
+[[file]]
+path = "docs/ERF.xlsx"
+cached = { formula_cells = 84, matched = 84, classes = { match = 84 } }
+linked = { formula_cells = 84, matched = 84, classes = { match = 84 } }
+
+[[file]]
+path = "docs/FV.xlsx"
+cached = { formula_cells = 20, matched = 20, classes = { match = 20 } }
+linked = { formula_cells = 20, matched = 20, classes = { match = 20 } }
+
+[[file]]
+path = "docs/MONTH.xlsx"
+cached = { formula_cells = 30, matched = 27, classes = { error_for_value = 1, match = 27, numeric = 2 } }
+linked = { formula_cells = 30, matched = 27, classes = { error_for_value = 1, match = 27, numeric = 2 } }
+
+[[file]]
+path = "docs/PV.xlsx"
+cached = { formula_cells = 20, matched = 20, classes = { match = 20 } }
+linked = { formula_cells = 20, matched = 20, classes = { match = 20 } }
+
+[[file]]
+path = "docs/SIN.xlsx"
+cached = { formula_cells = 20, matched = 20, classes = { match = 20 } }
+linked = { formula_cells = 20, matched = 20, classes = { match = 20 } }
+
+[[file]]
+path = "docs/TAN.xlsx"
+cached = { formula_cells = 32, matched = 28, classes = { match = 28, numeric = 4 } }
+linked = { formula_cells = 32, matched = 28, classes = { match = 28, numeric = 4 } }
+
+[[file]]
+path = "docs/YEAR.xlsx"
+cached = { formula_cells = 30, matched = 28, classes = { error_for_value = 1, match = 28, numeric = 1 } }
+linked = { formula_cells = 30, matched = 28, classes = { error_for_value = 1, match = 28, numeric = 1 } }
+
+[[file]]
+path = "dynamic_arrays.xlsx"
+cached = { formula_cells = 11, matched = 11, classes = { match = 11 } }
+linked = { formula_cells = 11, matched = 11, classes = { match = 11 } }
+
+[[file]]
+path = "DynamicArrays.xlsx"
+cached = { formula_cells = 14, matched = 5, classes = { match = 5, numeric = 8, spill = 1 } }
+linked = { formula_cells = 14, matched = 5, classes = { match = 5, numeric = 8, spill = 1 } }
+
+[[file]]
+path = "example.xlsx"
+cached = { formula_cells = 36, matched = 36, classes = { match = 36 } }
+linked = { formula_cells = 36, matched = 36, classes = { match = 36 } }
+
+[[file]]
+path = "freeze.xlsx"
+cached = { formula_cells = 0, matched = 0, classes = {  } }
+linked = { formula_cells = 0, matched = 0, classes = {  } }
+
+[[file]]
+path = "gridlines_issue_1269.xlsx"
+cached = { formula_cells = 0, matched = 0, classes = {  } }
+linked = { formula_cells = 0, matched = 0, classes = {  } }
+
+[[file]]
+path = "link_test.xlsx"
+cached = { formula_cells = 9, matched = 8, classes = { external_link = 1, match = 8 } }
+linked = { formula_cells = 9, matched = 8, classes = { external_link = 1, match = 8 } }
+
+[[file]]
+path = "NoGrid.xlsx"
+cached = { formula_cells = 0, matched = 0, classes = {  } }
+linked = { formula_cells = 0, matched = 0, classes = {  } }
+
+[[file]]
+path = "split.xlsx"
+cached = { formula_cells = 0, matched = 0, classes = {  } }
+linked = { formula_cells = 0, matched = 0, classes = {  } }
+
+[[file]]
+path = "templates/crossword.xlsx"
+cached = { formula_cells = 3, matched = 3, classes = { match = 3 } }
+linked = { formula_cells = 3, matched = 3, classes = { match = 3 } }
+
+[[file]]
+path = "templates/event_calendar.xlsx"
+cached = { formula_cells = 907, matched = 906, classes = { match = 906, numeric = 1 } }
+linked = { formula_cells = 907, matched = 906, classes = { match = 906, numeric = 1 } }
+
+[[file]]
+path = "templates/gantt_project_tracker.xlsx"
+cached = { formula_cells = 444, matched = 232, classes = { match = 232, number_vs_text = 8, numeric = 204 } }
+linked = { formula_cells = 444, matched = 232, classes = { match = 232, number_vs_text = 8, numeric = 204 } }
+
+[[file]]
+path = "templates/invoice.xlsx"
+cached = { formula_cells = 25, matched = 22, classes = { match = 22, numeric = 3 } }
+linked = { formula_cells = 25, matched = 22, classes = { match = 22, numeric = 3 } }
+
+[[file]]
+path = "templates/travel_expenses_tracker.xlsx"
+cached = { formula_cells = 40, matched = 40, classes = { match = 40 } }
+linked = { formula_cells = 40, matched = 40, classes = { match = 40 } }
+
+[[file]]
+path = "templates/weekly_timesheet.xlsx"
+cached = { formula_cells = 109, matched = 3, classes = { empty_vs_value = 2, error_for_value = 6, match = 3, numeric = 37, spill = 32, text = 29 } }
+linked = { formula_cells = 109, matched = 3, classes = { empty_vs_value = 2, error_for_value = 6, match = 3, numeric = 37, spill = 32, text = 29 } }
+
+[[file]]
+path = "templates/wordle.xlsx"
+cached = { formula_cells = 782, matched = 781, classes = { match = 781, spill = 1 } }
+linked = { formula_cells = 782, matched = 781, classes = { match = 781, spill = 1 } }
+
+[[file]]
+path = "templates/yearly_calendar.xlsx"
+cached = { formula_cells = 530, matched = 529, classes = { match = 529, numeric = 1 } }
+linked = { formula_cells = 530, matched = 529, classes = { match = 529, numeric = 1 } }

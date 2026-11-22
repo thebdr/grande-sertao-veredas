@@ -1,0 +1,27 @@
+[package]
+name = "abaco-oracle"
+# Repo tooling, not a component: it versions as it likes (law L3).
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "Ábaco's oracle: the engine measured against the values Excel cached in workbooks it saved (docs/abaco-plan.md)"
+
+[dependencies]
+# The component under measurement, and its engine (the fork, by path, as the component reaches it).
+veredas-abaco = { path = "../../crates/veredas-abaco" }
+ironcalc_base = { path = "../../forks/ironcalc/base" }
+ironcalc = { path = "../../forks/ironcalc/xlsx" }
+# The expected side is read from the sheet XML itself (the zip and patterns), never through the
+# engine's reader, and cross-checked against an independent reader (calamine).
+calamine = { workspace = true }
+regex = { workspace = true }
+zip = { workspace = true }
+# The baseline is stamped TOML (law L7), its stamp read by core's header reader.
+veredas-core = { path = "../../crates/veredas-core" }
+serde = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+sha2 = { workspace = true }
+tempfile = { workspace = true }

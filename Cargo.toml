@@ -12,6 +12,10 @@ members = [
     # devices, which law L4 keeps out of core's own tests (docs/questions.md Q101). Exempt from the
     # component laws.
     "tools/mestres",
+    # Repo tooling, not a component: Ábaco's oracle, the engine measured against the values Excel
+    # cached in workbooks it saved (docs/abaco-plan.md, "The oracle and parity"). Exempt from the
+    # component laws.
+    "tools/abaco-oracle",
     # The foundation (docs/core-plan.md): the shared types and protocol layers more than one
     # component needs, depending on no other member (law L4).
     "crates/veredas-core",
@@ -45,6 +49,10 @@ members = [
     # file each, run through portal live or replayed, every run ending in its report (law L5: core
     # and portal).
     "crates/veredas-comissionador",
+    # The engineering spreadsheet (docs/abaco-plan.md): workbooks computed and edited with no Office on
+    # the machine, on its fork of IronCalc (forks/ironcalc, excluded below); depends on no member yet
+    # (law L5 allows core and portal).
+    "crates/veredas-abaco",
 ]
 # Not the suite's crates: Ábaco's copy of IronCalc (the engine and its file layer), a cargo workspace
 # of its own for upstream's tests, reached by veredas-abaco by path (docs/abaco-plan.md, "The fork";
@@ -112,6 +120,11 @@ roxmltree = "0.20"
 # The Rust lexer, for supervisão's test that reads its own sources as tokens (tests/writes.rs):
 # a raw identifier read as its name, comments gone, so no spelling hides a path from the reading.
 proc-macro2 = "1"
+# Ábaco's oracle: an independent reader of a workbook's cached values, to cross-check its own
+# reading of the sheet XML (the version Veredas 1's oracle used), and the zip both read through
+# (the major the engine's file layer uses).
+calamine = "0.26"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 # Unicode's own decomposition (NFKD), for supervisão's test that reads every file for names
 # (tests/component.rs): an accented letter read as its base letter, whatever its block.
 icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }

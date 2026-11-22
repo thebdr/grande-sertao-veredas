@@ -62,7 +62,7 @@ so through portal, the row L5's map already holds); Excel as a renderer (Q342).
   file's parts, the preferences, an edit file. Read through core's header reader
   (`veredas_core::schema`), a newer version refused, never guessed.
 - **The engine's changes live in the fork**, one upstream-shaped commit each, listed in
-  `crates/veredas-abaco/ironcalc/VEREDAS-FORK.md`; Ábaco's own crate adds policy, never engine
+  `forks/ironcalc/VEREDAS-FORK.md`; Ábaco's own crate adds policy, never engine
   behaviour, so each change can go upstream on its own.
 - **Opening runs nothing.** Opening a workbook or a workspace runs no Python. Veredas 1 loaded a
   home's `functions` macro at open; here that waits for the security round's entry 32 (Q43): until
@@ -78,10 +78,12 @@ so through portal, the row L5's map already holds); Excel as a renderer (Q342).
 
 ## How the laws shape the port
 - **L1, roots.** One member, `crates/veredas-abaco`, and one tool, `tools/abaco-oracle`. The fork's
-  two crates (`ironcalc_base`, `ironcalc`) sit inside the host's folder and are excluded by the root
-  manifest: they are not the suite's crates, so L1 lets them out of the workspace, and they are no
-  `veredas-*` or `orcl-*` crate, so nothing of the suite dodges the laws that way. Where the fork
-  lives for good is Q340.
+  two crates (`ironcalc_base`, `ironcalc`) sit at the repository's root, in `forks/ironcalc`, and are
+  excluded by the root manifest: they are not the suite's crates, so L1 lets them out of the
+  workspace, and they are no `veredas-*` or `orcl-*` crate, so nothing of the suite dodges the laws
+  that way. They cannot sit inside the host's folder, as this plan first said: cargo makes a crate
+  beneath a listed member's folder a member whatever `exclude` says (Traps). Where the fork lives
+  for good is Q340.
 - **L2, naming.** Veredas 1's `veredas-abaco-py` is no component name (its `nome` would hold a
   hyphen): the Python half folds into `veredas-abaco`, behind a cargo feature, with the executable.
   Veredas 1's `veredas-abaco-grid` is not carried as a crate (Q341). `acerto` is a Python package
@@ -89,9 +91,10 @@ so through portal, the row L5's map already holds); Excel as a renderer (Q342).
 - **L3, versions.** `veredas-abaco` starts at `2.0.0-alpha.1`, core's MAJOR. The tool and the fork
   version as they like; the fork keeps upstream's numbers (`0.9.1`), so a diff against upstream
   shows only the changes.
-- **L5, direction.** The map already lets Ábaco use core and portal. It starts on core alone (the
-  header reader); portal arrives only with a sheet that reads plant data. The oracle, a tool, may
-  depend on anything.
+- **L5, direction.** The map already lets Ábaco use core and portal. It depends on no member yet;
+  core arrives with the first stamped file it reads (its header reader), portal only with a sheet
+  that reads plant data. The oracle, a tool, may depend on anything, and reads its baseline through
+  core's header reader.
 - **L6, plan first.** This file, committed before the crate.
 - **L7, stamps.** Every TOML part Ábaco writes states `format` (`veredas-abaco`,
   `veredas-abaco-prefs`, `veredas-abaco-edits`) and `version` from 1. The fork's two crates hold no
@@ -105,9 +108,11 @@ are named below.
 
 | Veredas 1 | Veredas 2 | Why |
 |---|---|---|
-| `crates/ironcalc`: `base` and `xlsx`, upstream `15ecfec` (2026-11-02) plus fork changes 1 to 11 | `crates/veredas-abaco/ironcalc/{base,xlsx}`, excluded from the workspace (Q340, taken meanwhile) | the engine |
+| `crates/ironcalc`: `base` and `xlsx`, upstream `15ecfec` (2026-11-02) plus fork changes 1 to 11 | `forks/ironcalc/{base,xlsx}`, excluded from the workspace (Q340, taken meanwhile) | the engine |
 | `crates/ironcalc`: the Python, WebAssembly and Node bindings, the web app, upstream's docs, the language and locale generators | not carried | the suite builds the engine and its file layer only; Ábaco's Python is its own (AB2) |
-| `veredas-abaco` `links`, `linkdiff`, `prefs`, `a1`, `workbook` | `veredas_abaco`, phase 1 | the link policy and the model the oracle and every later phase stand on |
+| `veredas-abaco` `links`, `linkdiff` | `veredas_abaco`, phase 1 | the link policy the oracle opens every workbook through |
+| `veredas-abaco` `a1`, `workbook` | phase 2, as `a1` and `book` | the model the patcher and every later phase stand on |
+| `veredas-abaco` `prefs` (the link policy and the renderer as a preference) | phase 4, the link policy alone, in stamped TOML | a preference is the worker's; the renderer is Q341's and Q342's |
 | `veredas-abaco` `patch` | phase 2 | byte-faithful edits |
 | `veredas-abaco` `abacofile`, `workspace` | phase 3, its JSON parts read into TOML | the workspace file |
 | `veredas-abaco` `homes`; `veredas-abaco-py` (module `abaco._core`, the `abaco` executable, its environment, console and command line) | phase 4, inside `veredas-abaco` behind a feature; the executable named `veredas-abaco` | L2; the plan names binaries `veredas-<nome>` |
@@ -141,11 +146,13 @@ structure types (6); user-defined functions (7); inline strings decoding `_xHHHH
 (11). None was sent upstream.
 
 Taken meanwhile (Q340): the fork arrives as Veredas 1 left it, `base` and `xlsx` only, as a copy,
-not a subtree: one commit with upstream's files at `15ecfec`, checked against a clone of upstream
-at that commit (every difference one of the eleven), then the eleven changes as they stand.
-Upstream's own tests (in the fork's folder, with upstream's workbooks) run in the fork's own
-workspace, `cargo test --manifest-path crates/veredas-abaco/ironcalc/Cargo.toml`, before any fork
-change is pushed. Upstream has moved since (`main` at `f936620` on 2026-11-22): bringing it in is
+not a subtree, at `forks/ironcalc`: one commit with upstream's files at `15ecfec`, checked against
+a fetch of upstream at that commit, then each change as a commit of its own (twelve: change 1 had a
+refinement), the result checked equal to Veredas 1's fork once its test data's real names are
+replaced by neutral ones. Upstream's own tests and the changes' (in the fork's folder, with
+upstream's workbooks) run in the fork's own workspace,
+`cargo test --locked --manifest-path forks/ironcalc/Cargo.toml`, and Ábaco's component test runs
+them, so they run with Ábaco's tests. Upstream has moved since (`main` at `f936620` on 2026-11-22): bringing it in is
 a step of its own, after parity, measured by the oracle before and after. A change goes upstream as
 a patch from a clone of upstream; opening the pull request is the architect's act.
 
@@ -166,28 +173,36 @@ were never in Veredas 1's repository (they were copied from a cloud folder on th
 and are not on this machine: Q344.
 
 Taken meanwhile (Q344), the measure that can be made here: the corpus is every workbook among the
-fork's own test files that Microsoft Excel saved (its `docProps/app.xml` says so: about 250, from
-Excel on Windows, on the Mac and online), whose cached values are Excel's. The baseline is
-Veredas 1's own oracle and fork run on this machine over that corpus; Veredas 2 reaches parity
-when its numbers are equal or better, file by file. The five workbooks are run from a path outside
-the repository when the architect gives them, and their numbers join the evidence.
+fork's own test files that Microsoft Excel saved, whose cached values are Excel's. The package says
+so three ways, all required: `docProps/app.xml` names Excel on Windows, on the Mac, online or on
+Android exactly, at version 14 or later, and `xl/workbook.xml` carries Excel's own file version
+(openpyxl calls itself "Microsoft Excel Compatible", XlsxWriter claims an Excel of version 12). That
+is 257 workbooks. The baseline is Veredas 1's own oracle and fork, built and run on this machine over that
+corpus (`tools/abaco-oracle/baseline/veredas-1.toml`); Veredas 2 reaches parity when its numbers
+are equal or better, file by file, under the cached and the linked resolution. Veredas 1 measured
+256 of them, 75 743 of 76 245 formula cells equal to Excel's (99.34 %; the rest volatile dates,
+numerical tails and functions the engine lacks); its oracle aborted on the 257th before the engine
+ran. The corpus's three workbooks with links name workbooks that are not here, so it shows no
+parity against linked workbooks read live: that waits for the plant's own. The five workbooks are run from a path outside the repository when the architect gives them,
+and their numbers join the evidence.
 
 ## The module map
 `crates/veredas-abaco` (a library; the executable arrives with the worker in phase 4):
+- `links`, `linkdiff`: the link policy and the cache-against-live log (phase 1);
 - `book`: a workbook opened, evaluated and read, cell by cell, value and formula (Veredas 1's
-  `workbook`); `a1`: addresses and areas;
-- `links`, `linkdiff`, `prefs`: the link policy and its preference, the cache-against-live log;
-- `patch`: the byte-faithful patcher (phase 2);
+  `workbook`); `a1`: addresses and areas; `patch`: the byte-faithful patcher (phase 2);
 - `abacofile`, `workspace`: the `.abaco` file and the session it holds (phase 3);
-- `homes`, `py`, the worker and its command line (phase 4, the `python` feature);
-- `ironcalc/`: the fork, excluded; `acerto/`: the extension, if carried.
+- `prefs`, `homes`, `py`, the worker and its command line (phase 4, the `python` feature);
+- `acerto/`: the extension, if carried.
+
+`forks/ironcalc` (not a member, excluded): the engine and its file layer.
 
 `tools/abaco-oracle` (a library and its executable): the expected side, the comparison and its
 classes, the report, the corpus list, and the parity test.
 
 ## Phases
 1. **The engine at parity** (P-007's exit). The fork in (above); `crates/veredas-abaco` at
-   `2.0.0-alpha.1` with `book`, `a1`, `links`, `linkdiff`, `prefs`; `tools/abaco-oracle`; the
+   `2.0.0-alpha.1` with `links` and `linkdiff`; `tools/abaco-oracle`; the
    baseline taken with Veredas 1's oracle, then Veredas 2's run, equal or better. Clauses: the
    component, the link policy, the engine at parity.
 2. **Byte-faithful edits.** The patcher and its edit file; untouched parts byte for byte, caches
@@ -222,4 +237,21 @@ classes, the report, the corpus list, and the parity test.
 - Q344: what parity is measured on while Veredas 1's five workbooks are not on this machine.
 
 ## Traps
-(None yet: each one met goes here, with the commit that met it.)
+- **Cargo makes a crate beneath a listed member's folder a member, whatever `exclude` says**: a
+  member's path that is a prefix of the crate's wins over an exclusion. Met 2026-11-22 with the
+  fork at `crates/veredas-abaco/ironcalc`: the laws passed (they read the manifest's lists as
+  written), and cargo built and tested the fork's crates as members of the suite. The component
+  test asks cargo itself (`workspace_members`), and the fork moved to `forks/ironcalc`.
+- **Calamine 0.26 gathers a sheet's whole declared range**: on a workbook whose sheet declares an
+  enormous dimension it asked for 512 GB and aborted Veredas 1's oracle. The cross-check streams
+  calamine's cells instead.
+- **Not every package that says "Microsoft Excel" was saved by Excel**: openpyxl writes "Microsoft
+  Excel Compatible / Openpyxl" and caches no value; XlsxWriter writes "Microsoft Excel" with version
+  12. And Excel on Android calls itself "Excel Android". The corpus's rule reads the exact name,
+  the version and the workbook's file version.
+- **A link's target is a URI**: Excel percent-encodes it (`Zone%20list.xlsx`). Veredas 1's linked
+  resolver decoded only URLs; fork change 12, found by C-221's refute round.
+- **A cached `inf` equals every infinity**: an oracle tolerance written `|a-b| <= e` lets a
+  non-finite cached value match; Veredas 1's had it. A cached number must be finite.
+- **Calamine 0.26 does not build with zip 2.6**: the lock holds zip 2.4.2, the version Veredas 1's
+  lock had.

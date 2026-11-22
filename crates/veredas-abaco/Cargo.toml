@@ -1,0 +1,25 @@
+[package]
+name = "veredas-abaco"
+# Its own SemVer (law L3), starting at core's current MAJOR (the plan, "Versioning").
+version = "2.0.0-alpha.1"
+edition.workspace = true
+publish = false
+description = "Ábaco, the engineering spreadsheet of Veredas 2: workbooks computed and edited with no Office on the machine"
+
+# A library; the executable arrives with the worker (docs/abaco-plan.md, "Phases"). It depends on
+# no member of the suite yet (law L5 allows core and portal): the engine is the fork at
+# forks/ironcalc, reached by path, never through crates.io (docs/abaco-plan.md, "The fork").
+
+[dependencies]
+# The engine (IronCalc's base, forked) and its file layer (IronCalc's xlsx, forked), excluded from
+# the workspace by the root manifest.
+ironcalc_base = { path = "../../forks/ironcalc/base" }
+ironcalc = { path = "../../forks/ironcalc/xlsx" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# tests/component.rs reads cargo's metadata and the root manifest.
+serde_json = { workspace = true }
+toml = { workspace = true }
+# tests/links.rs writes its workbooks into scratch folders.
+tempfile = { workspace = true }

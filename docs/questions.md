@@ -1435,6 +1435,18 @@ architect's act.
 **Recommended and taken meanwhile**: (a). The fork arrives as Veredas 1 left it (`base` and
 `xlsx`, upstream `15ecfec` plus the eleven changes), checked against a clone of upstream.
 
+**Found** 2026-11-22, building on (a): cargo makes a crate beneath a listed member's folder a member
+whatever `exclude` says (a member's path that is a prefix of the crate's wins over the exclusion).
+With the fork at `crates/veredas-abaco/ironcalc`, cargo built and tested the fork's two crates as
+members of the suite, while the laws passed (L1 reads the manifest's lists as written). So (a) is
+not to be had as written, and one more option joins the list:
+- (e) A copy at the repository's root, `forks/ironcalc`, excluded: outside every member's folder, so
+  the exclusion holds; outside `crates/` and `tools/`, where L1 leaves a crate that is not the
+  suite's alone; otherwise as (a).
+
+**Recommended now and taken meanwhile**: (e), the fork arriving as (a) described; (c) if the
+architect wants upstream pull requests to flow often.
+
 **Reversible?** Yes: a `git mv` and two path dependencies for (b) or (d); (c) replaces the folder
 with a git dependency.
 
