@@ -594,7 +594,7 @@ pub struct ModbusHandle {
     pub port: u16,
     shared: Arc<Shared>,
     points: Vec<(String, Point)>,
-    drops: tokio::sync::watch::Sender<u64>,
+    restarts: tokio::sync::mpsc::UnboundedSender<std::sync::mpsc::Sender<u64>>,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -689,23 +689,25 @@ impl ModbusHandle {
         self.shared.delay_us.store(d.as_micros().min(u64::MAX as u128) as u64, Ordering::SeqCst);
     }
 
-    /// Read every request and answer none (true), as a device gone dumb with its connection up;
-    /// false answers again. A request read while silent is never answered later.
+    /// Answer nothing from now on (true), as a device gone dumb with its connection up: a request
+    /// read meanwhile, and an answer still waiting out a delay, are never sent; false answers the
+    /// next request again.
     pub fn set_silent(&self, silent: bool) {
         self.shared.silent.store(silent, Ordering::SeqCst);
     }
 
-    /// Close every open connection, as a device's restart does; the server keeps listening and a
-    /// client may connect again at once. Returns when every connection open at the call is closed
-    /// (or after 5 s); one accepted since is not touched.
+    /// Close every open connection, as a device's restart does: those the server serves, those
+    /// still in the listen queue (a client whose connect returned before the call), and those
+    /// blocked on an answer the client does not read; the server keeps listening and a client may
+    /// connect again at once. Returns when every connection open at the call is closed (or after
+    /// 5 s); one accepted since is not touched.
     pub fn drop_connections(&self) {
-        let ended = {
-            let mut state = self.shared.lock();
-            state.generation += 1;
-            state.generation
-        };
-        self.drops.send_modify(|g| *g = ended);
         let started = std::time::Instant::now();
+        let (tx, rx) = std::sync::mpsc::channel();
+        if self.restarts.send(tx).is_err() {
+            return;
+        }
+        let Ok(ended) = rx.recv_timeout(Duration::from_secs(5)) else { return };
         while started.elapsed() < Duration::from_secs(5) {
             if self.shared.lock().open.range(..ended).all(|(_, n)| *n == 0) {
                 return;
@@ -756,7 +758,7 @@ pub fn start(cfg: &ModbusConfig) -> Result<ModbusHandle, ModbusError> {
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<SocketAddr, ModbusError>>();
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let (drops_tx, _) = tokio::sync::watch::channel(0u64);
-    let drops = drops_tx.clone();
+    let (restarts_tx, restarts_rx) = tokio::sync::mpsc::unbounded_channel();
     let server = Arc::clone(&shared);
     let thread = std::thread::Builder::new()
         .name("maquinar-modbus".into())
@@ -790,7 +792,7 @@ pub fn start(cfg: &ModbusConfig) -> Result<ModbusHandle, ModbusError> {
                         return;
                     }
                 }
-                accept_loop(listener, server, drops_tx, shutdown_rx).await;
+                accept_loop(listener, server, drops_tx, restarts_rx, shutdown_rx).await;
             });
             // Dropping the runtime here closes every connection still open.
         })
@@ -801,16 +803,40 @@ pub fn start(cfg: &ModbusConfig) -> Result<ModbusHandle, ModbusError> {
         port: addr.port(),
         shared,
         points: compiled.points,
-        drops,
+        restarts: restarts_tx,
         shutdown: Some(shutdown_tx),
         thread: Some(thread),
     })
 }
 
-async fn accept_loop(listener: TcpListener, shared: Arc<Shared>, drops: tokio::sync::watch::Sender<u64>, mut shutdown: tokio::sync::oneshot::Receiver<()>) {
+async fn accept_loop(
+    listener: TcpListener,
+    shared: Arc<Shared>,
+    drops: tokio::sync::watch::Sender<u64>,
+    mut restarts: tokio::sync::mpsc::UnboundedReceiver<std::sync::mpsc::Sender<u64>>,
+    mut shutdown: tokio::sync::oneshot::Receiver<()>,
+) {
     loop {
         tokio::select! {
             _ = &mut shutdown => return,
+            Some(reply) = restarts.recv() => {
+                // The kernel completes a connection before this loop takes it: a client whose
+                // connect returned before the call may still sit in the listen queue. Take every
+                // one there now, straight from the socket, and close it with the rest.
+                let mut queued = 0u64;
+                while let Ok((socket, _)) = socket2::SockRef::from(&listener).accept() {
+                    drop(socket);
+                    queued += 1;
+                }
+                let ended = {
+                    let mut state = shared.lock();
+                    state.status.accepted += queued;
+                    state.generation += 1;
+                    state.generation
+                };
+                drops.send_modify(|g| *g = ended);
+                let _ = reply.send(ended);
+            }
             accepted = listener.accept() => {
                 let Ok((stream, peer)) = accepted else { continue };
                 let generation = {
@@ -925,6 +951,15 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
                 _ = tokio::time::sleep(delay) => {}
                 _ = ended(&mut gone, generation) => return,
             }
+            // Gone dumb while the answer waited: it is never sent.
+            if shared.silent.load(Ordering::SeqCst) {
+                let mut state = shared.lock();
+                state.status.unanswered += 1;
+                if let Some(x) = state.status.recent.iter_mut().rev().find(|x| x.peer == peer && x.transaction == transaction && x.response.is_some()) {
+                    x.response = None;
+                }
+                continue;
+            }
         }
         let mut frame = Vec::with_capacity(7 + response.len());
         frame.extend_from_slice(&transaction.to_be_bytes());
@@ -932,8 +967,10 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
         frame.extend_from_slice(&(response.len() as u16 + 1).to_be_bytes());
         frame.push(unit);
         frame.extend_from_slice(&response);
-        if wr.write_all(&frame).await.is_err() {
-            return;
+        // A client that does not read leaves the write waiting: the drop does not wait for it.
+        tokio::select! {
+            r = wr.write_all(&frame) => if r.is_err() { return },
+            _ = ended(&mut gone, generation) => return,
         }
     }
 }

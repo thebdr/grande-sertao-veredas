@@ -20,6 +20,9 @@ async-opcua-types = { workspace = true }
 chrono = { workspace = true }
 # The controller's decision rules match a field against a pattern.
 regex = { workspace = true }
+# The Modbus server takes the connections waiting in its listen queue straight from the socket
+# when it drops every connection (modbus.rs).
+socket2 = { workspace = true }
 # Every bench file is TOML, read by serde.
 serde = { workspace = true }
 thiserror = { workspace = true }

@@ -990,8 +990,9 @@ holding registers only.
 - `port` (`502`): the protocol's port; on Linux a port below 1024 needs a privilege, so a bench
   there names another; `0` lets the machine choose a free port.
 - `unit` (none): the unit identifier the device plays, a request to another unit answered with
-  exception 0B as a gateway answers for a device that is not there; absent, every unit is the
-  device.
+  exception 0B as a gateway answers for a device that is not there, 0 and 255 included (the ones a
+  client addressing a device on TCP directly sends: leave `unit` out for such a device); absent,
+  every unit is the device.
 - `max_connections` (none): the most connections held at once; one more is accepted and closed at
   once.
 - `coils` (none), `discrete_inputs` (none), `input_registers` (none), `holding_registers` (none):

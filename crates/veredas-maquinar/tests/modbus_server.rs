@@ -337,6 +337,9 @@ fn exceptions_come_where_the_protocol_puts_them() {
         pdu
     };
     assert_eq!(ask(&coils(1968, 246, 246)), [0x0F, 0x00, 0x00, 0x07, 0xB0]);
+    // Every coil set apart from what any request below writes (its bytes 0xAA), so a refused
+    // request that wrote anyway shows.
+    server.set_bits(Table::Coil, 0, &[true; 2000]).unwrap();
     assert_eq!(ask(&coils(1969, 247, 247)), [0x8F, 0x03]);
     assert_eq!(ask(&coils(0, 0, 0)), [0x8F, 0x03]);
     assert_eq!(ask(&coils(9, 1, 1)), [0x8F, 0x03], "nine coils need two bytes");
@@ -346,6 +349,7 @@ fn exceptions_come_where_the_protocol_puts_them() {
     let mut past = coils(1, 1, 1);
     past[1..3].copy_from_slice(&2000u16.to_be_bytes());
     assert_eq!(ask(&past), [0x8F, 0x02]);
+    assert_eq!(server.bits(Table::Coil, 0, 2000).unwrap(), [true; 2000], "no refused write of coils wrote");
     // Several registers: 1 to 123, the byte count twice the quantity.
     let regs = |at: u16, n: u16, count: u8, bytes: usize| {
         let mut pdu = vec![0x10];
@@ -356,15 +360,21 @@ fn exceptions_come_where_the_protocol_puts_them() {
         pdu
     };
     assert_eq!(ask(&regs(0, 123, 246, 246)), [0x10, 0x00, 0x00, 0x00, 0x7B]);
+    server.set_registers(Table::HoldingRegister, 0, &[0xBEEF; 130]).unwrap();
     // 124 registers cannot fit a frame (their PDU would be 254 bytes, one more than a frame holds):
     // asked in the largest frame there is, they are refused 03.
     assert_eq!(ask(&regs(0, 124, 248, 247)), [0x90, 0x03]);
     assert_eq!(ask(&regs(0, 2, 3, 3)), [0x90, 0x03]);
     assert_eq!(ask(&regs(0, 2, 4, 3)), [0x90, 0x03]);
     assert_eq!(ask(&regs(129, 2, 4, 4)), [0x90, 0x02]);
+    assert_eq!(server.registers(Table::HoldingRegister, 0, 130).unwrap(), [0xBEEF; 130], "no refused write of registers wrote");
     assert_eq!(ask(&regs(129, 1, 2, 2)), [0x10, 0x00, 0x81, 0x00, 0x01]);
+    assert_eq!(server.registers(Table::HoldingRegister, 129, 1).unwrap(), [0x0101]);
     // The mask on an address past the table.
     assert_eq!(ask(&[0x16, 0x00, 0x82, 0xFF, 0xFF, 0x00, 0x00]), [0x96, 0x02]);
+    server.set_registers(Table::HoldingRegister, 0, &[0xBEEF; 2]).unwrap();
+    assert_eq!(ask(&[0x16, 0x00, 0x00, 0x00, 0x00, 0x00]), [0x96, 0x03]);
+    assert_eq!(server.registers(Table::HoldingRegister, 0, 1).unwrap(), [0xBEEF], "a refused mask masked nothing");
     // Read and write in one: 1 to 125 read, 1 to 121 written, either range past the table 02,
     // nothing written when either is refused.
     let rw = |read_at: u16, read_n: u16, write_at: u16, write_n: u16, count: u8, bytes: usize| {
@@ -377,9 +387,11 @@ fn exceptions_come_where_the_protocol_puts_them() {
         pdu
     };
     assert_eq!(ask(&rw(0, 125, 0, 121, 242, 242)).len(), 2 + 250);
+    server.set_registers(Table::HoldingRegister, 0, &[0xBEEF; 130]).unwrap();
     assert_eq!(ask(&rw(0, 126, 0, 1, 2, 2)), [0x97, 0x03]);
     assert_eq!(ask(&rw(0, 1, 0, 122, 244, 243)), [0x97, 0x03], "122 written, in the largest frame there is");
     assert_eq!(ask(&rw(0, 1, 0, 1, 3, 3)), [0x97, 0x03]);
+    assert_eq!(server.registers(Table::HoldingRegister, 0, 130).unwrap(), [0xBEEF; 130], "no refused read-and-write wrote");
     server.set_registers(Table::HoldingRegister, 0, &[0x0000]).unwrap();
     assert_eq!(ask(&rw(130, 1, 0, 1, 2, 2)), [0x97, 0x02], "the read past the table");
     assert_eq!(ask(&rw(0, 1, 130, 1, 2, 2)), [0x97, 0x02], "the write past the table");
@@ -393,6 +405,7 @@ fn exceptions_come_where_the_protocol_puts_them() {
     assert_eq!(s.exceptions.get(&(0x2B, 0x01)), Some(&2));
     assert_eq!(s.exceptions.get(&(0x97, 0x03)), None, "counted under the request's function, not the answer's");
     assert_eq!(s.exceptions.get(&(0x17, 0x03)), Some(&3));
+    assert_eq!(s.exceptions.get(&(0x16, 0x03)), Some(&2));
 }
 
 #[test]
@@ -626,12 +639,37 @@ fn the_knobs_delay_silence_and_drop_every_connection() {
     let asked = Instant::now();
     c.ask(2, 1, &read);
     assert!(asked.elapsed() < late, "{:?} after a delay of {late:?}", asked.elapsed());
+    // Every answer held, not the next one alone: two asked in turn, then two pipelined (answered one
+    // after the other, as a device serves a connection).
+    server.set_delay(Duration::from_millis(300));
+    for t in [10u16, 11] {
+        let asked = Instant::now();
+        c.ask(t, 1, &read);
+        assert!(asked.elapsed() >= Duration::from_millis(300), "answer {t}: {:?}", asked.elapsed());
+    }
+    let asked = Instant::now();
+    c.send(&[Raw::frame(12, 0, 1, &read), Raw::frame(13, 0, 1, &read)].concat());
+    assert_eq!(c.read().0, 12);
+    assert!(asked.elapsed() >= Duration::from_millis(300), "{:?}", asked.elapsed());
+    assert_eq!(c.read().0, 13);
+    assert!(asked.elapsed() >= Duration::from_millis(600), "the second after the first: {:?}", asked.elapsed());
+    // Gone dumb while an answer waits out its delay: that answer is never sent either.
+    server.set_delay(Duration::from_millis(500));
+    c.send(&Raw::frame(14, 0, 1, &read));
+    assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == 14)));
+    server.set_silent(true);
+    assert_eq!(c.arrives_within(Duration::from_millis(1000)), None, "the waiting answer withheld");
+    let s = server.status();
+    assert_eq!((s.unanswered, s.recent.back().unwrap().transaction, s.recent.back().unwrap().response.clone()), (1, 14, None));
+    server.set_silent(false);
+    server.set_delay(Duration::ZERO);
+    assert_eq!(c.ask(15, 1, &read), [0x03, 0x02, 0x00, 0x00]);
     // Silent: read, never answered, the connection up; answered again after, the silent ones never.
     server.set_silent(true);
     c.send(&Raw::frame(3, 0, 1, &read));
     c.send(&Raw::frame(4, 0, 1, &[0x06, 0x00, 0x00, 0x00, 0x05]));
     assert_eq!(c.arrives_within(Duration::from_millis(500)), None);
-    assert!(wait(Duration::from_secs(5), || server.status().unanswered == 2));
+    assert!(wait(Duration::from_secs(5), || server.status().unanswered == 3));
     assert_eq!(server.registers(Table::HoldingRegister, 0, 1).unwrap(), [0], "a silent device does nothing it is asked");
     let s = server.status();
     assert_eq!((s.recent.back().unwrap().transaction, s.recent.back().unwrap().response.clone()), (4, None));
@@ -655,6 +693,83 @@ fn the_knobs_delay_silence_and_drop_every_connection() {
     server.drop_connections();
     assert_eq!(e.arrives_within(Duration::from_secs(5)), Some(0));
     assert!(dropped.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
+fn a_connection_the_server_has_not_yet_taken_is_dropped_with_the_rest() {
+    let server = start(&config("port = 0\nholding_registers = 1\n")).unwrap();
+    // A client's connect returns once the kernel has the connection, before the server takes it:
+    // dropped at once, every time, never answered after.
+    for _ in 0..50 {
+        let mut fresh = Raw::connect(server.addr);
+        server.drop_connections();
+        fresh.send(&Raw::frame(1, 0, 1, &[0x03, 0x00, 0x00, 0x00, 0x01]));
+        assert_eq!(fresh.arrives_within(Duration::from_secs(5)), Some(0), "closed, not answered");
+    }
+    assert_eq!(server.status().connections, 0);
+    let mut after = Raw::connect(server.addr);
+    assert_eq!(after.ask(2, 1, &[0x03, 0x00, 0x00, 0x00, 0x01]), [0x03, 0x02, 0x00, 0x00], "the next one is served");
+}
+
+#[test]
+fn a_client_that_reads_nothing_is_dropped_at_once() {
+    let server = start(&config("port = 0\nholding_registers = 125\n")).unwrap();
+    let mut c = Raw::connect(server.addr);
+    // Requests for 125 registers, written until the socket takes no more: the answers back up until
+    // the server's write waits on a client that does not read.
+    c.stream.set_nonblocking(true).unwrap();
+    let request = Raw::frame(1, 0, 1, &[0x03, 0x00, 0x00, 0x00, 0x7D]);
+    let started = Instant::now();
+    let mut blocked = 0;
+    while blocked < 200 && started.elapsed() < Duration::from_secs(20) {
+        match c.stream.write(&request) {
+            Ok(_) => blocked = 0,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                blocked += 1;
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(e) => panic!("{e}"),
+        }
+    }
+    assert_eq!(blocked, 200, "the client's sends stopped being taken");
+    let answered = server.status().answered.get(&0x03).copied().unwrap_or(0);
+    assert!(answered > 0, "the server answered until its writes backed up");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(server.status().answered.get(&0x03).copied().unwrap_or(0), answered, "and answers no more: its write waits");
+    let dropped = Instant::now();
+    server.drop_connections();
+    assert!(dropped.elapsed() < Duration::from_secs(1), "{:?}", dropped.elapsed());
+    assert_eq!(server.status().connections, 0);
+    // The client meets the end once it reads what came before it.
+    c.stream.set_nonblocking(false).unwrap();
+    c.stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut buf = vec![0u8; 1 << 16];
+    let reading = Instant::now();
+    let ended = loop {
+        if reading.elapsed() > Duration::from_secs(10) {
+            break false;
+        }
+        match c.stream.read(&mut buf) {
+            Ok(0) => break true,
+            Ok(_) => continue,
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => break false,
+            Err(_) => break true,
+        }
+    };
+    assert!(ended, "the connection ended");
+}
+
+#[test]
+fn the_status_keeps_the_last_hundred_exchanges() {
+    let server = start(&config("port = 0\nholding_registers = 1\n")).unwrap();
+    let mut c = Raw::connect(server.addr);
+    for t in 0..150u16 {
+        c.ask(t, 1, &[0x03, 0x00, 0x00, 0x00, 0x01]);
+    }
+    let s = server.status();
+    assert_eq!(s.recent.len(), RECENT);
+    assert_eq!((s.recent.front().unwrap().transaction, s.recent.back().unwrap().transaction), (50, 149));
+    assert_eq!(s.answered.get(&0x03), Some(&150));
 }
 
 #[test]
