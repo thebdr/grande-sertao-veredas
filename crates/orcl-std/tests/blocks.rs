@@ -559,6 +559,53 @@ fn cargo_says_the_crate_depends_on_nothing_and_its_library_s_root_is_src_lib_rs(
     assert_eq!(lib, vec![concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs").to_string()]);
 }
 
+/// Every source file of the crate, by name, as the tests that read the sources need them.
+const SOURCES: [(&str, &str); 7] = [
+    ("lib.rs", include_str!("../src/lib.rs")),
+    ("bits.rs", include_str!("../src/bits.rs")),
+    ("counters.rs", include_str!("../src/counters.rs")),
+    ("edges.rs", include_str!("../src/edges.rs")),
+    ("o14.rs", include_str!("../src/o14.rs")),
+    ("scan.rs", include_str!("../src/scan.rs")),
+    ("timers.rs", include_str!("../src/timers.rs")),
+];
+
+/// A source with every whitespace character taken out, so a spacing Rust allows hides nothing from a reading.
+fn squeezed(text: &str) -> String {
+    text.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+#[test]
+fn read_without_whitespace_no_source_brings_in_a_crate_or_a_file_or_builds_apart_for_tests() {
+    for (file, text) in SOURCES {
+        let tight = squeezed(text);
+        for refused in ["externcrate", "#[path", "include!(", "include_str!(", "include_bytes!(", "cfg!("] {
+            assert!(!tight.contains(refused), "{file} holds {refused}");
+        }
+        // `not(test)` only in the crate root's no_std switch
+        let switches = if file == "lib.rs" { 1 } else { 0 };
+        assert_eq!(tight.matches("not(test)").count(), switches, "{file}: code built apart from the tests");
+        assert_eq!(tight.matches("#![cfg_attr(not(test),no_std)]").count(), switches);
+        // `cfg(test)` only on the unit tests' own module
+        let mut rest = tight.as_str();
+        while let Some(at) = rest.find("cfg(test)") {
+            let after = &rest[at + "cfg(test)".len()..];
+            let tests_module = after.strip_prefix(']').is_some_and(|mut next| {
+                // any further attributes, then the unit tests' module itself
+                while let Some(attribute) = next.strip_prefix("#[") {
+                    match attribute.find(']') {
+                        Some(end) => next = &attribute[end + 1..],
+                        None => return false,
+                    }
+                }
+                next.starts_with("modtests{")
+            });
+            assert!(tests_module, "{file}: cfg(test) outside the unit tests' module");
+            rest = after;
+        }
+    }
+}
+
 #[test]
 fn no_source_file_pulls_one_in_from_elsewhere() {
     for (file, text) in [
@@ -582,4 +629,120 @@ fn a_reset_at_a_preset_of_zero_or_below_leaves_q_on() {
     assert!(c.scan(false, true, 0), "a count of 0 reaches a preset of 0, reset or not");
     assert!(c.scan(true, true, -1));
     assert_eq!(c.cv(), 0);
+}
+
+// The seventh refute round: a set bit cleared below the top, the extreme presets, a preset time at the nanosecond,
+// q() mid-delay, restarts after a timer has switched, and the unit tests' cases on the build programs link.
+
+#[test]
+fn clearing_a_set_bit_below_the_top_leaves_every_other_bit() {
+    fn check<T: Bits + PartialEq + core::fmt::Debug + Copy>(all: T, all_but_bit_3: T) {
+        assert_eq!(all.with_bit(3, false), all_but_bit_3);
+        let mut v = all;
+        v.set_bit(3, false);
+        assert_eq!(v, all_but_bit_3);
+    }
+    check(u8::MAX, u8::MAX ^ 8);
+    check(u16::MAX, u16::MAX ^ 8);
+    check(u32::MAX, u32::MAX ^ 8);
+    check(u64::MAX, u64::MAX ^ 8);
+}
+
+#[test]
+fn the_counter_at_the_extreme_presets() {
+    let mut c = Ctu::default();
+    assert!(c.scan(false, false, i32::MIN), "a count of 0 reaches the lowest preset");
+    assert!(c.scan(true, false, i32::MIN));
+    assert_eq!(c.cv(), 1);
+}
+
+#[test]
+fn every_timer_switches_at_a_preset_time_of_nanoseconds_and_not_a_nanosecond_before() {
+    let pt = Duration::from_nanos(100_000_500);
+    let before = Scan { now: Duration::from_nanos(100_000_499), period: ms(10), cycle: 10 };
+    let at_pt = Scan { now: pt, period: ms(10), cycle: 11 };
+    let mut on = Ton::default();
+    on.scan(&at(0), true, pt);
+    assert!(!on.scan(&before, true, pt));
+    assert!(on.scan(&at_pt, true, pt));
+    let mut off = Tof::default();
+    off.scan(&at(0), true, pt);
+    off.scan(&at(0), false, pt);
+    assert!(off.scan(&before, false, pt));
+    assert!(!off.scan(&at_pt, false, pt));
+    let mut pulse = Tp::default();
+    pulse.scan(&at(0), true, pt);
+    assert!(pulse.scan(&before, true, pt));
+    assert!(!pulse.scan(&at_pt, true, pt));
+}
+
+#[test]
+fn every_timer_s_q_mid_delay_and_a_fresh_off_delay_s() {
+    let pt = ms(100);
+    assert!(!Tof::default().q(), "a fresh off-delay is off");
+    let mut on = Ton::default();
+    on.scan(&at(0), true, pt);
+    assert_eq!((on.scan(&at(50), true, pt), on.q()), (false, false), "mid-delay: off");
+    let mut off = Tof::default();
+    off.scan(&at(0), true, pt);
+    off.scan(&at(10), false, pt);
+    assert_eq!((off.scan(&at(50), false, pt), off.q()), (true, true), "mid-delay: on");
+    let mut pulse = Tp::default();
+    pulse.scan(&at(0), true, pt);
+    assert_eq!((pulse.scan(&at(50), true, pt), pulse.q()), (true, true), "mid-pulse: on");
+}
+
+#[test]
+fn a_timer_restarts_from_its_new_start_after_it_has_switched() {
+    let pt = ms(100);
+    // an on-delay that switched on, dropped and came back times pt from the new start
+    let mut on = Ton::default();
+    on.scan(&at(0), true, pt);
+    assert!(on.scan(&at(100), true, pt));
+    on.scan(&at(110), false, pt);
+    assert!(!on.scan(&at(120), true, pt));
+    assert!(!on.scan(&at(210), true, pt), "90 ms into the new start");
+    assert!(on.scan(&at(220), true, pt));
+    // an off-delay that ran out, came back and dropped again holds pt from the new drop
+    let mut off = Tof::default();
+    off.scan(&at(0), true, pt);
+    off.scan(&at(10), false, pt);
+    assert!(!off.scan(&at(110), false, pt));
+    assert!(off.scan(&at(200), true, pt));
+    assert!(off.scan(&at(210), false, pt));
+    assert!(off.scan(&at(300), false, pt), "90 ms after the new drop");
+    assert!(!off.scan(&at(310), false, pt));
+}
+
+#[test]
+fn the_unit_tests_cases_on_the_build_programs_link() {
+    // the interrupted on-delay restarts from zero
+    let pt = ms(100);
+    let mut on = Ton::default();
+    on.scan(&at(0), true, pt);
+    on.scan(&at(80), false, pt);
+    assert_eq!(on.et(), ms(0));
+    on.scan(&at(90), true, pt);
+    assert!(!on.scan(&at(170), true, pt));
+    assert!(on.scan(&at(190), true, pt));
+    // a retrigger during a pulse is ignored: the pulse ends at pt from the first edge
+    let mut pulse = Tp::default();
+    pulse.scan(&at(0), true, pt);
+    pulse.scan(&at(50), false, pt);
+    assert!(pulse.scan(&at(60), true, pt));
+    assert!(!pulse.scan(&at(100), true, pt));
+    // an off-delay's elapsed time is zero again when its input returns
+    let mut off = Tof::default();
+    off.scan(&at(0), true, pt);
+    off.scan(&at(10), false, pt);
+    off.scan(&at(50), false, pt);
+    assert_eq!(off.et(), ms(40));
+    off.scan(&at(60), true, pt);
+    assert_eq!(off.et(), ms(0));
+    // a held input counts once
+    let mut c = Ctu::default();
+    for _ in 0..5 {
+        c.scan(true, false, 3);
+    }
+    assert_eq!(c.cv(), 1);
 }

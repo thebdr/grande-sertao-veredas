@@ -30,18 +30,19 @@
 //! }
 //! ```
 //!
-//! Nor is a value asked to cross threads or to live for ever: a program on a borrowed, thread-bound value compiles.
+//! Nor is a value asked anything else: a program on a value that is `Copy` and `Default` and nothing more (not
+//! `Send`, `Sync`, `'static`, `Unpin`, `UnwindSafe` or `RefUnwindSafe`) compiles.
 //!
 //! ```
-//! use core::marker::PhantomData;
+//! use core::marker::{PhantomData, PhantomPinned};
 //! use orcl_std::{Program, Scan};
 //! #[derive(Clone, Copy, Default)]
-//! struct Raw<'a>(PhantomData<&'a *const ()>);
+//! struct Bare<'a>(PhantomData<(&'a mut (), core::cell::Cell<()>, *const ())>, PhantomPinned);
 //! struct P<'a>(PhantomData<&'a ()>);
 //! impl<'a> Program for P<'a> {
-//!     type Inputs = Raw<'a>;
-//!     type Outputs = Raw<'a>;
-//!     fn scan(&mut self, _: &Scan, i: &Raw<'a>, o: &mut Raw<'a>) { *o = *i; }
+//!     type Inputs = Bare<'a>;
+//!     type Outputs = Bare<'a>;
+//!     fn scan(&mut self, _: &Scan, i: &Bare<'a>, o: &mut Bare<'a>) { *o = *i; }
 //! }
 //! ```
 //!

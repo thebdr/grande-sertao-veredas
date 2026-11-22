@@ -1,8 +1,8 @@
 {
   "clause": "C-150",
   "verdict": "refuted",
-  "ranAt": "2026-11-22T18:46:42.184Z",
-  "headCommit": "9db24869173515c0058ea2510c8df0c0e0fe40a7",
+  "ranAt": "2026-11-22T19:03:08.473Z",
+  "headCommit": "9ee28cab84a6e3398aea670779c73d8cce6731b5",
   "tests": [
     {
       "name": "crates/orcl-std/src/timers.rs",
@@ -32,7 +32,7 @@
     {
       "name": "crates/orcl-std/src/scan.rs",
       "file": "crates/orcl-std/src/scan.rs",
-      "symbolSha": "c2da311860f86b0e5ebbfa9ed8bdb03aa933d453dd4229c815521cf4030bcc6d"
+      "symbolSha": "2789dfb1605181dabd19f511c86ea419c3c8b9850ef080ee0c9d70a7dfaae026"
     },
     {
       "name": "crates/orcl-std/src/o14.rs",
@@ -42,7 +42,7 @@
     {
       "name": "crates/orcl-std/tests/blocks.rs",
       "file": "crates/orcl-std/tests/blocks.rs",
-      "symbolSha": "6348cf05153869f528ac54616e1e7482f3a760dbfe8697ba998bc104166eb9a0"
+      "symbolSha": "0b0c1f4210d9089bb19dad0affaecde4da3578b1ed33f4c94f7eec998404506a"
     }
   ]
 }
