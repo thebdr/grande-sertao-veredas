@@ -888,6 +888,15 @@ impl<'a> Lexer<'a> {
     }
 
     fn consume_range(&mut self, sheet: Option<String>) -> TokenType {
+        // `Sheet1!#REF!`: how Excel spells a reference whose cells were
+        // deleted — the sheet is kept, the reference is the error.
+        if sheet.is_some() && self.peek_char() == Some('#') {
+            let rest: String = self.chars[self.position..self.len.min(self.position + 5)].iter().collect();
+            if rest.eq_ignore_ascii_case("#REF!") {
+                self.position += 5;
+                return TokenType::Error(Error::REF);
+            }
+        }
         let start = self.position;
         let m = if self.mode == LexerMode::A1 {
             self.consume_range_a1()

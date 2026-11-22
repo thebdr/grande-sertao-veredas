@@ -116,3 +116,15 @@ fn qualified_reference_followed_by_an_invalid_name_is_illegal() {
     let mut lx = new_lexer(&formula, true);
     assert!(matches!(lx.next_token(), Illegal(_)));
 }
+
+// `Sheet1!#REF!` / `'My sheet'!#REF!`: a reference whose cells were deleted,
+// as Excel writes it into the file — the #REF! error, not a parse failure
+#[test]
+fn sheet_qualified_ref_error() {
+    use crate::expressions::token::Error;
+    for formula in ["Data!#REF!+1", "'My sheet'!#ref!+1"] {
+        let mut lx = new_lexer(formula, true);
+        assert_eq!(lx.next_token(), Error(Error::REF), "{formula}");
+        assert_eq!(lx.next_token(), Addition(crate::expressions::token::OpSum::Add), "{formula}");
+    }
+}
