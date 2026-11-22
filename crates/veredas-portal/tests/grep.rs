@@ -1,0 +1,291 @@
+//! Search over logs at rest (contract: the grep clause, P-019): queries of patterns combined per
+//! line, a tree, a file list or a log family as scope, files decoded as the live tail decodes
+//! them, context lines and breaks, the size and binary guards, the caps, the cancel. Against the
+//! bench's emitter writing a rotating family, and files the test writes for the edges.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use veredas_maquinar::emit::{self, EmitterConfig, Encoding, ValueField, family_shape};
+use veredas_portal::family::{ActiveMode, FamilySpec};
+use veredas_portal::grep::*;
+
+fn write(path: &Path, text: &str) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(path, text).unwrap();
+}
+
+fn run(scope: GrepScope, q: &GrepQuery, o: GrepOptions) -> (Vec<GrepEvent>, GrepSummary) {
+    let s = search(scope, q, o).unwrap();
+    let mut events = Vec::new();
+    for e in s.events.iter() {
+        if let GrepEvent::Done(summary) = e {
+            s.worker.join().unwrap();
+            return (events, summary);
+        }
+        events.push(e);
+    }
+    panic!("no Done event");
+}
+
+/// The lines as (file name, line number, match or context, text), breaks as ("--", 0, false, "").
+fn lines(events: &[GrepEvent]) -> Vec<(String, u64, bool, String)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            GrepEvent::Line(l) => Some((l.path.file_name().unwrap().to_string_lossy().into_owned(), l.line_number, l.is_match, l.text.clone())),
+            GrepEvent::Break { .. } => Some(("--".into(), 0, false, String::new())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn matched(events: &[GrepEvent]) -> Vec<(String, u64)> {
+    lines(events).into_iter().filter(|(_, _, m, _)| *m).map(|(f, n, _, _)| (f, n)).collect()
+}
+
+fn q(patterns: &[(&str, bool)], combine: Combine) -> GrepQuery {
+    GrepQuery { patterns: patterns.iter().map(|(p, n)| GrepPattern { pattern: p.to_string(), negated: *n }).collect(), combine, ..GrepQuery::default() }
+}
+
+fn emitter(file: &str) -> EmitterConfig {
+    EmitterConfig {
+        name: "scanner".into(),
+        template: "{ts} SCAN code={code} weight={weight}".into(),
+        ts_format: "%Y-%m-%d %H:%M:%S%.3f".into(),
+        values: vec![
+            ValueField { name: "code".into(), low: 1000.0, high: 2999.0, decimals: 0 },
+            ValueField { name: "weight".into(), low: 0.1, high: 30.0, decimals: 2 },
+        ],
+        interval_ms: 1,
+        file: file.into(),
+        max_lines: 25,
+        encoding: Encoding::Utf16le,
+        seed: Some(11),
+    }
+}
+
+/// The bench writes a rotating family in UTF-16 with its mark; the grep reads it as the family
+/// reads, oldest file first, every line decoded, and finds exactly the lines a reading of the
+/// files finds, with their files and numbers.
+#[test]
+fn a_family_the_bench_wrote_is_searched_in_rotation_order_decoded() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = "%d%m%Y_Trace{n}.txt";
+    let handle = emit::spawn(emitter(file), dir.path().to_path_buf(), 0).unwrap();
+    std::thread::sleep(Duration::from_millis(600));
+    handle.join();
+    let shape = family_shape(file).unwrap();
+    let spec = FamilySpec::new(dir.path(), &shape.regex, Some(&shape.date_format), ActiveMode::NewestByOrder).unwrap();
+    let members = spec.resolve().unwrap();
+    assert!(members.len() >= 3, "the bench rotated at least twice: {}", members.len());
+    // What a reading of the files finds: the lines whose code is in the 1000s.
+    let code = regex::Regex::new(r"code=1\d{3} ").unwrap();
+    let mut expected: Vec<(String, u64)> = Vec::new();
+    for m in &members {
+        let bytes = std::fs::read(&m.path).unwrap();
+        let units: Vec<u16> = bytes[2..].chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        for (i, l) in String::from_utf16(&units).unwrap().lines().enumerate() {
+            if code.is_match(l) {
+                expected.push((m.file_name.clone(), i as u64 + 1));
+            }
+        }
+    }
+    assert!(expected.len() >= 10, "{expected:?}");
+    let (events, summary) = run(GrepScope::from_family(&spec).unwrap(), &GrepQuery::single(r"code=1\d{3} "), GrepOptions::default());
+    assert_eq!(matched(&events), expected);
+    let first = events.iter().find_map(|e| if let GrepEvent::Line(l) = e { Some(l.clone()) } else { None }).unwrap();
+    assert!(first.text.contains(" SCAN code=1") && !first.text.contains('\u{feff}'), "decoded, the mark gone: {:?}", first.text);
+    assert_eq!(first.spans.len(), 1);
+    assert_eq!(&first.text[first.spans[0].start..first.spans[0].end], &first.text[first.text.find("code=").unwrap()..first.text.find("code=").unwrap() + 10]);
+    assert_eq!((summary.stopped, summary.stats.files_searched, summary.stats.matches), (GrepStop::Completed, members.len() as u64, expected.len() as u64));
+}
+
+#[test]
+fn matching_lines_stream_with_their_context_and_a_break_between_blocks() {
+    let dir = tempfile::tempdir().unwrap();
+    let text: String = (1..=10).map(|i| if [3, 4, 9].contains(&i) { format!("line {i} ERR\r\n") } else { format!("line {i} ok\n") }).collect();
+    write(&dir.path().join("a.log"), &text);
+    let (events, summary) = run(GrepScope::Files(vec![dir.path().join("a.log")]), &GrepQuery::single("ERR"), GrepOptions { context_before: 1, context_after: 1, ..GrepOptions::default() });
+    let got: Vec<(u64, bool, String)> = lines(&events).into_iter().map(|(_, n, m, t)| (n, m, t)).collect();
+    assert_eq!(
+        got,
+        vec![
+            (2, false, "line 2 ok".to_string()),
+            (3, true, "line 3 ERR".to_string()),
+            (4, true, "line 4 ERR".to_string()),
+            (5, false, "line 5 ok".to_string()),
+            (0, false, String::new()),
+            (8, false, "line 8 ok".to_string()),
+            (9, true, "line 9 ERR".to_string()),
+            (10, false, "line 10 ok".to_string()),
+        ]
+    );
+    assert!(matches!(events.last(), Some(GrepEvent::FileDone { matches: 3, capped: false, .. })), "{:?}", events.last());
+    assert_eq!((summary.stats.files_matched, summary.stats.matches, summary.stopped), (1, 3, GrepStop::Completed));
+    // No context: no break, the matches alone; a file with none says nothing.
+    write(&dir.path().join("b.log"), "nothing here\n");
+    let (events, _) = run(GrepScope::Files(vec![dir.path().join("a.log"), dir.path().join("b.log")]), &GrepQuery::single("ERR"), GrepOptions::default());
+    assert_eq!(lines(&events).len(), 3);
+    assert_eq!(events.iter().filter(|e| matches!(e, GrepEvent::FileDone { .. })).count(), 1);
+}
+
+#[test]
+fn patterns_combine_per_line_and_mark_their_spans() {
+    let dir = tempfile::tempdir().unwrap();
+    write(&dir.path().join("p.log"), "temp ok\ntemp alarm\nalarm alone\nnothing\n");
+    let scope = || GrepScope::Files(vec![dir.path().join("p.log")]);
+    let numbers = |events: &[GrepEvent]| matched(events).into_iter().map(|(_, n)| n).collect::<Vec<_>>();
+    assert_eq!(numbers(&run(scope(), &q(&[("temp", false), ("alarm", false)], Combine::And), GrepOptions::default()).0), vec![2]);
+    assert_eq!(numbers(&run(scope(), &q(&[("temp", false), ("alarm", true)], Combine::And), GrepOptions::default()).0), vec![1]);
+    assert_eq!(numbers(&run(scope(), &q(&[("temp", false), ("alarm", false)], Combine::Or), GrepOptions::default()).0), vec![1, 2, 3]);
+    assert_eq!(numbers(&run(scope(), &q(&[("temp", false), ("alarm", false)], Combine::Xor), GrepOptions::default()).0), vec![1, 3]);
+    assert_eq!(numbers(&run(scope(), &q(&[("temp", true), ("alarm", true)], Combine::And), GrepOptions::default()).0), vec![4]);
+    // Spans: each pattern's matches tagged by its index; a negated pattern marks nothing; an
+    // overlap with an earlier span dropped.
+    let (events, _) = run(scope(), &q(&[("alarm", false), ("temp", false), ("emp a", false)], Combine::And), GrepOptions::default());
+    let line = events.iter().find_map(|e| if let GrepEvent::Line(l) = e { Some(l.clone()) } else { None }).unwrap();
+    assert_eq!((line.line_number, line.spans), (2, vec![Span { start: 0, end: 4, pattern: 1 }, Span { start: 5, end: 10, pattern: 0 }]));
+    let (events, _) = run(scope(), &q(&[("temp", false), ("alarm", true)], Combine::And), GrepOptions::default());
+    let line = events.iter().find_map(|e| if let GrepEvent::Line(l) = e { Some(l.clone()) } else { None }).unwrap();
+    assert_eq!(line.spans, vec![Span { start: 0, end: 4, pattern: 0 }]);
+}
+
+#[test]
+fn literal_case_and_whole_word() {
+    let dir = tempfile::tempdir().unwrap();
+    write(&dir.path().join("o.log"), "a.b\naxb\nRUN\nrunning\nrun now\n");
+    let scope = || GrepScope::Files(vec![dir.path().join("o.log")]);
+    let numbers = |query: GrepQuery| matched(&run(scope(), &query, GrepOptions::default()).0).into_iter().map(|(_, n)| n).collect::<Vec<_>>();
+    assert_eq!(numbers(GrepQuery::single("a.b")), vec![1, 2], "a regex");
+    assert_eq!(numbers(GrepQuery { literal: true, ..GrepQuery::single("a.b") }), vec![1], "literal");
+    assert_eq!(numbers(GrepQuery::single("run")), vec![4, 5]);
+    assert_eq!(numbers(GrepQuery { case_insensitive: true, ..GrepQuery::single("run") }), vec![3, 4, 5]);
+    assert_eq!(numbers(GrepQuery { whole_word: true, ..GrepQuery::single("run") }), vec![5]);
+    assert_eq!(numbers(GrepQuery { whole_word: true, case_insensitive: true, ..GrepQuery::single("run") }), vec![3, 5]);
+}
+
+#[test]
+fn every_encoding_the_tail_reads_is_searched_decoded() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = "first\ntemp 25\u{b0}C\nlast\n";
+    let utf16 = |be: bool, mark: bool| -> Vec<u8> {
+        let mut out = Vec::new();
+        if mark {
+            out.extend(if be { [0xFE, 0xFF] } else { [0xFF, 0xFE] });
+        }
+        for u in text.encode_utf16() {
+            out.extend(if be { u.to_be_bytes() } else { u.to_le_bytes() });
+        }
+        out
+    };
+    let files: Vec<(&str, Vec<u8>)> = vec![
+        ("utf8.log", text.as_bytes().to_vec()),
+        ("utf8bom.log", [&[0xEF, 0xBB, 0xBF][..], text.as_bytes()].concat()),
+        ("le.log", utf16(false, true)),
+        ("be.log", utf16(true, true)),
+        ("le_nomark.log", utf16(false, false)),
+        ("cp1252.log", b"first\ntemp 25\xb0C\nlast\n".to_vec()),
+    ];
+    for (name, bytes) in &files {
+        std::fs::write(dir.path().join(name), bytes).unwrap();
+    }
+    let (events, summary) = run(GrepScope::Files(files.iter().map(|(n, _)| dir.path().join(n)).collect()), &GrepQuery::single("25\u{b0}C"), GrepOptions::default());
+    let got: Vec<(String, u64, String)> = lines(&events).into_iter().map(|(f, n, _, t)| (f, n, t)).collect();
+    assert_eq!(got, files.iter().map(|(n, _)| (n.to_string(), 2, "temp 25\u{b0}C".to_string())).collect::<Vec<_>>());
+    assert_eq!((summary.stats.files_searched, summary.stats.skipped_binary), (6, 0), "a UTF-16 file is no binary file");
+}
+
+#[test]
+fn a_tree_by_masks_recursive_or_not_in_name_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a");
+    let b = dir.path().join("b");
+    for p in ["x.log", "y.LOG", "z.txt", "plant1.txt", "deep/w.log", "deep/deeper/v.log"] {
+        write(&a.join(p), "hit\n");
+    }
+    write(&b.join("u.log"), "hit\n");
+    let names = |events: &[GrepEvent]| matched(events).into_iter().map(|(f, _)| f).collect::<Vec<_>>();
+    let tree = |masks: &[&str], recursive: bool| GrepScope::Tree { roots: vec![a.clone(), b.clone()], masks: masks.iter().map(|m| m.to_string()).collect(), recursive };
+    assert_eq!(names(&run(tree(&["*.log"], true), &GrepQuery::single("hit"), GrepOptions::default()).0), vec!["v.log", "w.log", "x.log", "y.LOG", "u.log"]);
+    assert_eq!(names(&run(tree(&["*.log"], false), &GrepQuery::single("hit"), GrepOptions::default()).0), vec!["x.log", "y.LOG", "u.log"]);
+    assert_eq!(names(&run(tree(&["plant?.txt"], true), &GrepQuery::single("hit"), GrepOptions::default()).0), vec!["plant1.txt"]);
+    assert_eq!(names(&run(tree(&[], false), &GrepQuery::single("hit"), GrepOptions::default()).0), vec!["plant1.txt", "x.log", "y.LOG", "z.txt", "u.log"]);
+    // A root that is not there: an error in its place, the others searched.
+    let (events, summary) = run(GrepScope::Tree { roots: vec![dir.path().join("gone"), b.clone()], masks: vec![], recursive: true }, &GrepQuery::single("hit"), GrepOptions::default());
+    assert!(matches!(&events[0], GrepEvent::WalkError { error } if error.contains("gone")), "{:?}", events[0]);
+    assert_eq!((names(&events), summary.stats.errors), (vec!["u.log".to_string()], 1));
+}
+
+#[test]
+fn the_size_and_binary_guards_the_caps_and_a_missing_file() {
+    let dir = tempfile::tempdir().unwrap();
+    write(&dir.path().join("big.log"), &"hit\n".repeat(1000));
+    std::fs::write(dir.path().join("bin.dat"), b"hit\0\x01\x02hit\n").unwrap();
+    write(&dir.path().join("five.log"), &"hit\n".repeat(5));
+    let files = |names: &[&str]| GrepScope::Files(names.iter().map(|n| dir.path().join(n)).collect());
+    // A file past the size limit: skipped and named; a binary file: skipped, counted; asked for,
+    // searched.
+    let (events, s) = run(files(&["big.log", "bin.dat", "five.log"]), &GrepQuery::single("hit"), GrepOptions { max_file_size: Some(1000), ..GrepOptions::default() });
+    assert!(matches!(&events[0], GrepEvent::SkippedLarge { size: 4000, path } if path.ends_with("big.log")), "{:?}", events[0]);
+    assert_eq!((s.stats.skipped_large, s.stats.skipped_binary, s.stats.files_searched, s.stats.matches), (1, 1, 1, 5));
+    let (events, s) = run(files(&["bin.dat"]), &GrepQuery::single("hit"), GrepOptions { search_binary: true, ..GrepOptions::default() });
+    assert_eq!((matched(&events).len(), s.stats.skipped_binary), (1, 0));
+    // A cap per file: its done event says so; a total cap: the search stops there.
+    let (events, s) = run(files(&["five.log", "big.log"]), &GrepQuery::single("hit"), GrepOptions { max_matches_per_file: Some(2), ..GrepOptions::default() });
+    assert_eq!(events.iter().filter(|e| matches!(e, GrepEvent::FileDone { matches: 2, capped: true, .. })).count(), 2);
+    assert_eq!((s.stats.matches, s.stopped), (4, GrepStop::Completed));
+    let (events, s) = run(files(&["five.log", "big.log"]), &GrepQuery::single("hit"), GrepOptions { max_total_matches: Some(7), ..GrepOptions::default() });
+    assert_eq!((matched(&events).len(), s.stats.matches, s.stopped), (7, 7, GrepStop::MatchCap));
+    // A file that is not there: an error in its place, the next searched.
+    let (events, s) = run(files(&["nope.log", "five.log"]), &GrepQuery::single("hit"), GrepOptions::default());
+    assert!(matches!(&events[0], GrepEvent::FileError { path, .. } if path.ends_with("nope.log")), "{:?}", events[0]);
+    assert_eq!((s.stats.errors, s.stats.matches), (1, 5));
+}
+
+#[test]
+fn a_cancel_stops_a_running_search_and_a_bad_query_starts_none() {
+    let dir = tempfile::tempdir().unwrap();
+    // One large file: a cancel is heard inside a file, not only between files.
+    let big = dir.path().join("big.log");
+    write(&big, &"line with a hit\n".repeat(2_000_000));
+    let names: Vec<PathBuf> = vec![big, dir.path().join("big.log")];
+    let s = search(GrepScope::Files(names), &GrepQuery::single("hit"), GrepOptions::default()).unwrap();
+    let handle: Arc<GrepHandle> = Arc::clone(&s.handle);
+    let mut seen = 0u64;
+    let mut done = None;
+    for e in s.events.iter() {
+        match e {
+            GrepEvent::Line(_) => {
+                seen += 1;
+                if seen == 10 {
+                    handle.cancel();
+                }
+            }
+            GrepEvent::Done(summary) => {
+                done = Some(summary);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let done = done.unwrap();
+    assert_eq!(done.stopped, GrepStop::Cancelled);
+    assert!(done.stats.matches < 2_000_000, "stopped inside the first file: {:?}", done.stats);
+    s.worker.join().unwrap();
+    // Refused before anything is read.
+    let scope = || GrepScope::Files(vec![]);
+    assert_eq!(search(scope(), &GrepQuery::default(), GrepOptions::default()).err(), Some(GrepError::Pattern("the query has no pattern".into())));
+    assert_eq!(search(scope(), &GrepQuery::single(""), GrepOptions::default()).err(), Some(GrepError::Pattern("pattern 1 is empty".into())));
+    let e = search(scope(), &q(&[("ok", false), ("(", false)], Combine::And), GrepOptions::default()).err().unwrap();
+    assert!(matches!(&e, GrepError::Pattern(m) if m.starts_with("pattern 2 `(`: ")), "{e:?}");
+    assert_eq!(
+        search(GrepScope::Tree { roots: vec![], masks: vec![], recursive: true }, &GrepQuery::single("x"), GrepOptions::default()).err(),
+        Some(GrepError::Scope("a tree with no root".into()))
+    );
+    // Lookaround is not the suite's syntax: refused by the engine's own words.
+    assert!(matches!(search(scope(), &GrepQuery::single("(?<=a)b"), GrepOptions::default()), Err(GrepError::Pattern(_))));
+}

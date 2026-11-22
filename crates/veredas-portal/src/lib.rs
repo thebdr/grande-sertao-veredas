@@ -28,6 +28,7 @@ pub mod capture;
 pub mod channel;
 pub mod encoding;
 pub mod family;
+pub mod grep;
 pub mod opc;
 pub mod source;
 pub mod project;

@@ -58,9 +58,9 @@ its sort brain, its supervision app and its desktop each spoke to the plant on t
   `veredas-desktop` screens being supervisão's (P-008) to take up or leave. A build without the
   default features leaves the store and the server out; no consumer is named today (controlador
   embeds the full build, P-019).
-- **Later, named, no code now:** the grep engine (Veredas 1's grep tab over logs at rest),
-  supervisão's concern now that Q14 is decided; the clock-skew monitor as a derived source; the
-  library of templates and recents; bundles.
+- **The grep engine** (Veredas 1's grep tab over logs at rest): built as a library (C-094,
+  P-019). **Later, named, no code now:** the clock-skew monitor as a derived source; the library
+  of templates and recents; bundles.
 
 ## Rules
 - **Every component exchanges data through portal**, except the test tools and controlador's
@@ -107,7 +107,8 @@ Read in full before the port: Veredas 1's `veredas-core` (the data plane), `vere
 | core `tail/{single,family,cursor,backfill}`, `family`, `encoding`, `pathkind`, `timestamp`, `timeparse`, `ring` | `veredas_portal::tail`, `family`, `encoding` | the data plane, as it was, with typed errors |
 | core `source` (`Source`, `SourceSet`, `Emitter`, `WorkerReport`), `LineEvent` | `veredas_portal::source` | the line-producing side of one worker model; the handle itself is core's `SourceHandle` |
 | core `extract` (`ExtractRule`, `GroupType`) | `veredas_portal::capture` | a line into typed series by rules; `GroupType` is core's `SeriesType` |
-| core `capture` (the grep tab's ad-hoc tables, CSV and Markdown), `grep`, `highlight` | later, with supervisão (Q14 decided: no shell in portal) | operator tooling over logs at rest, not the gateway |
+| core `grep` | `veredas_portal::grep` (C-094, P-019) | the grep engine over logs at rest, on Oficina's first-release list, as a library |
+| core `capture` (the grep tab's ad-hoc tables, CSV and Markdown), `highlight` | later, with the workbench (Q14 decided: no shell in portal) | operator tooling over the grep's results |
 | core `store` (`SeriesStore`, `Point`, `SeriesInfo`), `DERIVED_SOURCE` | `veredas_portal::store` | the store's own surface, beside its one implementation |
 | core `skew` | later | a derived source of its own once the store takes derived producers |
 | core `tcp` (the D5 stub) | not carried | a telegram channel is the TCP source |
@@ -146,6 +147,7 @@ veredas_portal
   tail        FileTailSource, FamilyTailSource, backfill: lines from files, zero lost
   source      Source, SourceSet, Emitter, LineEvent: the line-producing worker model
   capture     CaptureRule: a line into typed series by a regex's named groups
+  grep        search over logs at rest: patterns combined per line, a tree, a list or a family
   channel     a portal telegram channel: channel file + catalog + reply rules, rows per message
   opc         an OPC source compiled from the project, core's worker polled into rows
   store       the DuckDB session store: base tables, samples, views, windows, snapshots, CSV
@@ -223,7 +225,9 @@ where they differ.
   limit with nothing deleted (Q41 open: the reversible answer, marked pending). **Built: the copy
   at a fault (C-093)**, `SessionConfig::fault_copy_dir`: at every fault record the store is copied
   to a file of its own through the ingest connection, the record in it.
-- **The grep engine** over logs at rest is on Oficina's first-release list.
+- **The grep engine** over logs at rest is on Oficina's first-release list. **Built (C-094)** as
+  the library module `grep` (the light build keeps it): Veredas 1's engine without `fancy-regex`
+  and without ripgrep's crates, every file decoded by portal's own decoder.
 - **Q14 stands:** portal builds no desktop UI. Oficina is a component of its own.
 - Open: the review's entries 22 and 33 (Q31); robust requests (Q37); what gives way at a size
   limit, and the window's ceiling (Q41); the security round (Q43, P-014).
