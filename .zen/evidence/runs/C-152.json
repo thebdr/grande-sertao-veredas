@@ -1,0 +1,24 @@
+{
+  "clause": "C-152",
+  "command": "cargo test -p veredas-controlador --test states",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-controlador",
+    "--test",
+    "states"
+  ],
+  "exitCode": 0,
+  "outputSha": "0ba852de04d1b64ec327f5723d563a40afd1deb51ab2c4d869fbb8a428e653a2",
+  "outputTail": "test a_period_of_zero_is_refused_when_the_controller_comes_up ... ok\ntest a_production_target_without_real_time_stays_in_stop ... ok\ntest a_scan_past_twice_its_period_faults_the_controller_and_only_an_acknowledge_then_a_start_leave_fault ... ok\ntest a_runtime_that_restarted_alone_comes_up_in_fault_and_exchanges_the_safe_outputs ... ok\ntest a_start_goes_through_startup_to_run_and_the_program_scans_from_its_own_clock ... ok\ntest a_stop_is_free_the_program_may_stop_itself_and_the_safe_outputs_follow_at_once ... ok\ntest development_and_simulation_run_without_real_time_and_say_so ... ok\ntest only_a_person_with_the_switch_armed_starts_it_and_only_from_stop ... ok\ntest after_a_power_cycle_run_returns_as_run_and_stop_hold_and_fault_as_stop ... ok\ntest time_errors_show_as_overruns_while_the_controller_runs ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s\n     Running tests/states.rs (target/debug/build/veredas-controlador/980b47ab11d73959/out/states-980b47ab11d73959)",
+  "ranAt": "2026-11-22T18:21:34.229Z",
+  "headCommit": "77753ee238b197e8b3b72fa90756ecc1a014642b",
+  "tests": [
+    {
+      "name": "crates/veredas-controlador/tests/states.rs",
+      "file": "crates/veredas-controlador/tests/states.rs",
+      "fileSha": "7d2f74cc977fe5a755055b01e4b7076ded9e71759ab0791ac9f3cd6e6e84b1df"
+    }
+  ]
+}
