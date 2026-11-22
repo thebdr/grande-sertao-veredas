@@ -404,11 +404,14 @@ fn holds(toks: &[Tok], word: &str) -> bool {
 /// a field, a listing, a window's bounds), the session's own start, stop, live state and
 /// subscription, a path already judged by the reading above (`load_file`, `compile`, `router`,
 /// `downsample`, ...), or a name portal shares with std, tokio, a crate or supervisão's own code
-/// (`send`, `spawn`, `new`, `format`, `list`, `of`, `width`, ...), which this reading cannot tell apart.
+/// (`send`, `spawn`, `new`, `format`, `list`, `of`, `width`, ...), which this reading cannot tell apart:
+/// portal's search over logs at rest (C-094) named its fields `end`, `errors`, `events` and `matches`,
+/// which supervisão holds as a span's end of its own, tokio's `errors` module, its feed's own
+/// `events` and std's `matches!`, and calls nothing of that search.
 const PORTAL_MEMBERS: &[&str] = &[
-    "as_str", "bytes", "channels", "check", "columns", "compile", "count", "data_type", "dir", "downsample", "error", "extract", "feed", "file", "file_name", "files", "format", "fresh", "from",
+    "as_str", "bytes", "channels", "check", "columns", "compile", "count", "data_type", "dir", "downsample", "end", "error", "errors", "events", "extract", "feed", "file", "file_name", "files", "format", "fresh", "from",
     "from_ms", "get", "health", "id", "idx", "index_ms", "key", "keyed", "keys", "kind", "last_index_ms", "last_value", "len", "limit", "line", "list", "live", "load", "load_file",
-    "logs", "message", "name", "names", "new", "of", "offset", "opc", "parse_type", "path", "pattern", "points", "query_numeric", "query_rows", "remove", "router", "rows", "rules",
+    "logs", "matches", "message", "name", "names", "new", "of", "offset", "opc", "parse_type", "path", "pattern", "points", "query_numeric", "query_rows", "remove", "router", "rows", "rules",
     "samples", "scope", "send", "series", "serve", "server", "session_config", "snapshot", "source", "source_id", "sources", "spawn", "spec", "start", "state", "status", "stop",
     "stopped", "store", "store_now_ms", "subscribe", "table", "table_of", "tables", "tag", "tags", "text", "to", "to_ms", "toml", "total", "ty", "types", "value", "values",
     "width", "writable", "writes_armed", "y",
