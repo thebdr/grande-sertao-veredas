@@ -79,14 +79,22 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 UNIT
+mkdir -p /usr/local/libexec
+cat > /usr/local/libexec/veredas-verifica <<'SCRIPT'
+#!/bin/sh
+# The release's files checked against its SHA256SUMS, and the network cards the machine sees.
+cd /opt/veredas/current
+if sha256sum --quiet -c SHA256SUMS; then echo "VEREDAS-SUMS-OK {release}"; else echo "VEREDAS-SUMS-FAILED {release}"; fi
+for c in /sys/class/net/*; do n=$(basename "$c"); [ "$n" = lo ] || echo "VEREDAS-CARD $n $(cat "$c/address")"; done
+SCRIPT
+chmod 755 /usr/local/libexec/veredas-verifica
 cat > /etc/systemd/system/veredas-verifica.service <<'UNIT'
 [Unit]
 Description=Veredas: the release's files checked against its SHA256SUMS
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/veredas/current
-ExecStart=/bin/sh -c 'if sha256sum --quiet -c SHA256SUMS; then echo "VEREDAS-SUMS-OK {release}"; else echo "VEREDAS-SUMS-FAILED {release}"; fi'
+ExecStart=/usr/local/libexec/veredas-verifica
 StandardOutput=journal+console
 
 [Install]
@@ -360,4 +368,124 @@ pub fn from_release(root: &Path, release: &str, target: &str) -> Result<Paths, V
     let recipe = Recipe::load(&at("tools/entrega/maquina/maquina.toml")?).map_err(|e| VmError::Failed { program: "the recipe".into(), status: "refused".into(), stderr: e.to_string() })?;
     let guide = at("tools/entrega/maquina/guide.md")?;
     build(&recipe, &bundle, &bundle_dir, release, &guide, &work.join("maquina"))
+}
+
+/// A PPM screen dump's distinct colours, counted on a grid of every fourth pixel; `None` for a
+/// file that is no binary PPM.
+pub fn colours(ppm: &[u8]) -> Option<usize> {
+    let head = String::from_utf8_lossy(&ppm[..ppm.len().min(64)]).into_owned();
+    let mut fields = head.split_ascii_whitespace();
+    if fields.next() != Some("P6") {
+        return None;
+    }
+    let w: usize = fields.next()?.parse().ok()?;
+    let h: usize = fields.next()?.parse().ok()?;
+    fields.next()?;
+    let header = ppm.len().checked_sub(w * h * 3)?;
+    let mut seen = std::collections::BTreeSet::new();
+    for y in (0..h).step_by(4) {
+        for x in (0..w).step_by(4) {
+            let i = header + (y * w + x) * 3;
+            seen.insert((ppm[i], ppm[i + 1], ppm[i + 2]));
+        }
+    }
+    Some(seen.len())
+}
+
+/// What the proof boot of an OVA's disk saw.
+pub struct Proof {
+    /// The disk taken out of the OVA.
+    pub vmdk: PathBuf,
+    /// The serial console when the plant was read.
+    pub console: String,
+    /// The plant read from the host through the forwarded port.
+    pub plant: crate::together::Report,
+    /// The last screen dump and its colours.
+    pub screen: PathBuf,
+    pub colours: usize,
+    /// The disk's SHA-256 before the boot, and after it.
+    pub before: String,
+    pub after: String,
+}
+
+/// The proof of a tester machine (docs/entrega-plan.md, "How a build is proven"): the OVA opened
+/// into `work`, its disk booted copy-on-write on VMware's devices with a card address the
+/// provisioning never saw; the boot's check of the release's sums waited for on the console; the
+/// plant read from the host; the screen dumped until it shows the desktop; the disk hashed again.
+pub fn prove(r: &Recipe, ova: &Path, release: &str, work: &Path) -> Result<Proof, VmError> {
+    let opened = work.join("opened");
+    let _ = std::fs::remove_dir_all(&opened);
+    std::fs::create_dir_all(&opened)?;
+    vm::run("tar", &["-xf", &ova.display().to_string(), "-C", &opened.display().to_string()], None)?;
+    let vmdk = opened.join(format!("veredas-{release}-disk1.vmdk"));
+    let before = cache::sha256(&vmdk)?;
+    let port = vm::free_port()?;
+    let qmp = vm::free_port()?;
+    let console = work.join("proof-console.log");
+    let mut m = boot(r, &vmdk, port, Some(qmp), &console)?;
+    m.wait_for("VEREDAS-SUMS-", Duration::from_secs(300))?;
+    let plant = crate::together::read_plant(([127, 0, 0, 1], port).into(), Duration::from_secs(300), Duration::from_secs(2));
+    let console_text = m.console();
+    let screen = work.join("proof-screen.ppm");
+    let mut seen = 0;
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_secs(240) {
+        std::thread::sleep(Duration::from_secs(10));
+        let _ = std::fs::remove_file(&screen);
+        if vm::screendump(qmp, &screen).is_ok()
+            && let Ok(bytes) = std::fs::read(&screen)
+        {
+            seen = colours(&bytes).unwrap_or(0);
+            if seen > 200 {
+                break;
+            }
+        }
+    }
+    m.kill();
+    let after = cache::sha256(&vmdk)?;
+    Ok(Proof { vmdk, console: console_text, plant, screen, colours: seen, before, after })
+}
+
+/// Why a proof does not show the machine working: the release's sums checked at boot, the guest
+/// on VMware's disk and network drivers, the plant from the host, a desktop drawn, the disk
+/// unchanged. Empty when it does.
+pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if !p.console.contains(&format!("VEREDAS-SUMS-OK {release}")) {
+        out.push(format!("the boot did not check the release's sums (VEREDAS-SUMS-OK {release})"));
+    }
+    for driver in ["vmw_pvscsi", "vmxnet3"] {
+        if !p.console.contains(driver) {
+            out.push(format!("the guest did not name {driver}"));
+        }
+    }
+    out.extend(crate::together::plant_faults(&p.plant));
+    if p.colours <= 200 {
+        out.push(format!("the screen shows {} colours: no desktop with a page ({})", p.colours, p.screen.display()));
+    }
+    if p.before != p.after {
+        out.push("the proof boot changed the shipped disk".into());
+    }
+    out
+}
+
+/// Proves the tester machine already built for a release (`entrega maquina`), the recipe read at
+/// the commit its manifest names; the proof and its faults.
+pub fn prove_release(root: &Path, release: &str, target: &str) -> Result<(Proof, Vec<String>), VmError> {
+    let work = root.join("target/entrega").join(release);
+    let bundle_dir = format!("veredas-{release}-{target}");
+    let bundle = work.join(format!("{bundle_dir}.tar.gz"));
+    let ova = work.join("maquina").join(format!("veredas-{release}.ova"));
+    if !ova.exists() {
+        return Err(VmError::Failed { program: "the proof".into(), status: "refused".into(), stderr: format!("{} is not there: build the machine first", ova.display()) });
+    }
+    let text = vm::run("tar", &["-xzf", &bundle.display().to_string(), "-O", &format!("{bundle_dir}/release.toml")], None)?;
+    let m = crate::manifest::load(&text).map_err(|e| VmError::Failed { program: "the bundle's manifest".into(), status: "refused".into(), stderr: e.to_string() })?;
+    let recipe_text = crate::git::show(root, &m.commit, "tools/entrega/maquina/maquina.toml")
+        .map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?
+        .ok_or_else(|| VmError::Failed { program: "the proof".into(), status: "refused".into(), stderr: format!("commit {} holds no recipe", m.commit) })?;
+    let recipe = Recipe::load(&recipe_text).map_err(|e| VmError::Failed { program: "the recipe".into(), status: "refused".into(), stderr: e.to_string() })?;
+    let proof = prove(&recipe, &ova, release, &work.join("prova"))?;
+    let faults = proof_faults(&proof, release);
+    Ok((proof, faults))
 }

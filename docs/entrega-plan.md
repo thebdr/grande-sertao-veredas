@@ -78,16 +78,20 @@ Keys (each required unless a default is given):
 - `target`: the Rust target triple the executables were built for.
 - `toolchain`: what `rustc --version` printed at the cut, stated, not enforced.
 - `[[component]]`: `name` (a `veredas-*` or `orcl-*` member at the commit), `version` (SemVer, the
-  one its manifest states at the commit), `bins` (default none: a library such as core ships
-  none; each a `[[bin]]` of the component, built with its default features).
+  one cargo reads at the commit), `bins` (default none: a library such as core ships none; every
+  `bin` target cargo names for the component, each built with the default features or the cut
+  refuses it).
 - `[tested]`: `suite`, the command whose green run at the commit made the set tested; `together`,
   what the cut ran from the bundle itself. Statements of what was run, written by the cut.
 
 ### How a release is cut (the recipe, `entrega cut <release>`)
 1. **HEAD of a clean tree**, cut from a fresh `origin/main`: the cut refuses a tree that differs
-   from HEAD and a release whose manifest exists. It runs the whole suite there first (`cargo
-   nextest run --workspace`, the gate of `CLAUDE.md`, behind the machine's lock, its temporary
-   files in the cache), and refuses a red one. "Tested together" means two runs: that one, which tests the components against each
+   from HEAD (an untracked file included) and a release whose manifest exists. It plans the
+   manifest first and checks it against the repository and every release already cut, so a
+   version another release pinned at other code is refused before anything is built. It then
+   runs the whole suite there (`cargo nextest run --workspace`, the gate of `CLAUDE.md`, built
+   first and run behind the machine's lock, its temporary files in the cache), and refuses a red
+   one. "Tested together" means two runs: that one, which tests the components against each
    other from source, and the cut's own run of the bundle (step 5). A **trial cut** (`--trial`)
    skips the suite, says so in its manifest (`suite = "not run: a trial cut"`) and writes it
    elsewhere: it proves the recipe and is never committed.
@@ -95,7 +99,8 @@ Keys (each required unless a default is given):
    them (its tree out of git, asked of `cargo metadata`); the recipe's data
    (`tools/entrega/maquina/maquina.toml`) from git too.
 3. **Built on the oldest system the release targets**, a builder machine of the tester machine's
-   own distribution (Debian 13, glibc 2.41) under QEMU with KVM, eight processors: the commit's
+   own distribution (Debian 13, glibc 2.41) under QEMU with KVM, four processors and 6 GB, its
+   build four jobs, holding the machine's lock for the database engine's compilation: the commit's
    tree (`git archive`) and its dependencies' sources (`cargo vendor`, as `Cargo.lock` pins them)
    handed in on a disk as a tar stream, `cargo build --release --locked --offline` run inside
    under the toolchain the suite was tested with (the development machine's `rustc`), the
@@ -108,8 +113,9 @@ Keys (each required unless a default is given):
    ABI as the recipe states them, so a binary that would not start on the tester machine is
    refused at the cut, by name.
 4. **The bundle** assembled from git's objects at the commit and the built executables,
-   `SHA256SUMS` written, packed with its entries in name order, owned by root and dated at the
-   commit (one commit packs to the same bytes), then extracted again and its sums checked.
+   `SHA256SUMS` written, packed with its entries in name order, owned by root, dated at the
+   commit and every mode read as 0644 or 0755 (one commit packs to the same bytes whatever the
+   umask), then extracted again and its sums checked.
 5. **Run together**: from the extracted bundle, the bench started on `planta/bench.toml`, then
    supervisão on `planta/supervisao.toml`, which starts the plant's portal session through
    portal's library. The plant is copied and only its ports change, to free ones on the loopback
@@ -199,14 +205,14 @@ edit of that file.
    BIOS firmware, 2 processors and 4 GB by default), the VMDK and a `.mf` of their SHA-256 sums,
    tarred in that order (ustar, owned by root) into `veredas-<release>.ova`.
 
-### How a build is proven
+### How a build is proven (`entrega prova <release>`, and the machine's test)
 - **The shipped disk boots on VMware's devices**: the VMDK taken out of the OVA, never the
   overlay, is booted under QEMU with KVM on VMware's own disk and network devices (QEMU emulates
   `pvscsi` and `vmxnet3`), copy-on-write so the proof changes nothing shipped. QEMU's
   `vmware-svga` is older than today's `vmwgfx` driver accepts, so the display is VMware's to
   prove; the proof boot draws on QEMU's standard VGA.
 - **The network takes VMware's card**: the proof boot gives the card an address of VMware's
-  prefix that the provisioning never saw.
+  prefix that the provisioning never saw, and the boot's check names the cards it sees.
 - **The plant runs from the first boot**: from the host, through a port QEMU forwards to the
   machine's 8902, the test reads supervisão's page and the plant's object feed and sees every
   object live, the parcels move and the sorter's lines arrive; a write the binding offers is

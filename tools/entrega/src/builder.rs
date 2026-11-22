@@ -87,12 +87,17 @@ pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, packages: &
     std::fs::create_dir_all(input.join("src/.cargo"))?;
     std::fs::write(input.join("src/.cargo/config.toml"), config)?;
     let pkgs: String = packages.iter().map(|p| format!(" -p {p}")).collect();
-    let copies: String = bins.iter().map(|b| format!("cp target/release/{b} /build/out/bin/\n")).collect();
+    // A bin cargo did not build (a required feature the defaults do not turn on) is named, never
+    // skipped: the cut refuses a release that would ship less than its components name.
+    let copies: String = bins
+        .iter()
+        .map(|b| format!("if [ -f target/release/{b} ]; then cp target/release/{b} /build/out/bin/; else echo \"ENTREGA-MISSING {b}\"; missing=1; fi\n"))
+        .collect();
     let script = format!(
         "set -eu\nexport RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
          cd /build/src\nmkdir -p /build/out/bin\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
-         cargo build --release --locked --offline --jobs {cpus}{pkgs} --bins\n{copies}\
-         echo ENTREGA-BUILD-OK\n",
+         cargo build --release --locked --offline --jobs {cpus}{pkgs} --bins\nmissing=\n{copies}\
+         [ -z \"$missing\" ]\necho ENTREGA-BUILD-OK\n",
         cpus = r.builder.cpus
     );
     std::fs::write(input.join("build.sh"), script)?;
@@ -112,6 +117,8 @@ pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, packages: &
     let seed = work.join("build-seed.iso");
     vm::seed(&work.join("build-seed"), &seed, user_data, &format!("entrega-build-{}", &nonce[..16]))?;
     let console = work.join("build-console.log");
+    // The build compiles the database engine: one such build at a time on the host.
+    let _engine = vm::engine_lock()?;
     eprintln!("entrega: building in the builder machine ({} processors); its console is {}", r.builder.cpus, console.display());
     let mut m = Vm::start(&Spec {
         disk: disk.clone(),
@@ -136,6 +143,14 @@ pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, packages: &
     let unpacked = vm::run("tar", &["-xf", &out_raw.display().to_string(), "-C", &out.display().to_string()], None);
     let log = std::fs::read_to_string(out.join("build.log")).unwrap_or_default();
     let text = vm::read_console(&console);
+    let missing: Vec<&str> = log.lines().filter_map(|l| l.strip_prefix("ENTREGA-MISSING ")).collect();
+    if !missing.is_empty() {
+        return Err(VmError::Failed {
+            program: "the build in the builder machine".into(),
+            status: "refused".into(),
+            stderr: missing.iter().map(|b| format!("cargo built no `{b}` with the default features (a required feature they do not turn on): the release would not ship it")).collect::<Vec<_>>().join("\n"),
+        });
+    }
     if unpacked.is_err() || !log.contains("ENTREGA-BUILD-OK") || !text.contains("ENTREGA-BUILD-EXIT 0") {
         return Err(VmError::Failed {
             program: "the build in the builder machine".into(),

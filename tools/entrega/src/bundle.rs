@@ -179,6 +179,14 @@ pub fn assemble(
     write_sums(&dir)?;
     let epoch = vm::run("git", &["-C", &rs, "show", "-s", "--format=%ct", commit], None)?;
     let out = work.join(format!("{name}.tar.gz"));
+    pack(work, name, epoch.trim(), &out)?;
+    Ok(out)
+}
+
+/// Packs `work/<name>` into `out` so that the same files give the same bytes whatever made them:
+/// entries in name order, owned by root, dated at `epoch` (seconds), every mode read as `0644`
+/// or, for a folder or an executable, `0755` (the umask that made the files plays no part).
+pub fn pack(work: &Path, name: &str, epoch: &str, out: &Path) -> Result<(), VmError> {
     vm::run(
         "tar",
         &[
@@ -186,7 +194,8 @@ pub fn assemble(
             "--owner=0",
             "--group=0",
             "--numeric-owner",
-            &format!("--mtime=@{}", epoch.trim()),
+            "--mode=a+rX,u+w,go-w",
+            &format!("--mtime=@{epoch}"),
             "--use-compress-program=gzip -n",
             "-cf",
             &out.display().to_string(),
@@ -196,5 +205,5 @@ pub fn assemble(
         ],
         None,
     )?;
-    Ok(out)
+    Ok(())
 }

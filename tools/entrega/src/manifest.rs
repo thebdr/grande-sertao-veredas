@@ -186,8 +186,8 @@ pub struct Held {
     pub name: String,
     /// Its version, as cargo reads its manifest.
     pub version: String,
-    /// The executables `cargo build --release --bins` builds for it: the `bin` targets cargo
-    /// itself names, but those whose required features its default features do not hold.
+    /// Its executables: every `bin` target cargo itself names for it. Whether cargo builds each
+    /// with the default features is the cut's to see (C-291), never modelled here.
     pub bins: BTreeSet<String>,
 }
 
@@ -200,33 +200,23 @@ pub enum CheckError {
     Io(#[from] std::io::Error),
 }
 
-/// The features a package's default features turn on, followed through the features they name
-/// (`dep:` entries and another crate's features are not the package's own).
-fn defaults(features: &serde_json::Map<String, serde_json::Value>) -> BTreeSet<String> {
-    let mut on = BTreeSet::new();
-    let mut todo = vec!["default".to_string()];
-    while let Some(f) = todo.pop() {
-        let Some(list) = features.get(&f).and_then(|v| v.as_array()) else { continue };
-        for x in list.iter().filter_map(|x| x.as_str()) {
-            if !x.contains(':') && !x.contains('/') && on.insert(x.to_string()) {
-                todo.push(x.to_string());
-            }
-        }
-    }
-    on
-}
-
 /// The components (the workspace's members under `crates/`) the repository holds at `commit`, by
 /// name, as cargo itself reads them: the commit's tree taken out of git's objects (`git archive`)
-/// into a scratch folder and asked with `cargo metadata --no-deps --offline`, so a member's
-/// spelling, an edition's discovery rules and a bin's required features are cargo's, never a
-/// model of them. What cannot be read is pushed to `refusals`.
+/// into a scratch folder of this call's own and asked with `cargo metadata --no-deps --offline`,
+/// so a member's spelling and an edition's discovery rules are cargo's, never a model of them;
+/// each folder is read against the workspace root cargo names, in cargo's own spelling of paths.
+/// What cannot be read is pushed to `refusals`.
 pub fn components_at(root: &Path, commit: &str, refusals: &mut Vec<String>) -> Result<BTreeMap<String, Held>, CheckError> {
+    components_at_in(root, commit, &std::env::temp_dir(), refusals)
+}
+
+/// [`components_at`], its scratch folder made under `parent` (a folder reached through a link
+/// included).
+pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut Vec<String>) -> Result<BTreeMap<String, Held>, CheckError> {
     use std::process::{Command, Stdio};
     let mut held = BTreeMap::new();
-    let scratch = std::env::temp_dir().join(format!("entrega-tree-{}-{}", std::process::id(), &commit[..commit.len().min(12)]));
-    let _ = std::fs::remove_dir_all(&scratch);
-    std::fs::create_dir_all(&scratch)?;
+    let scratch_dir = tempfile::Builder::new().prefix("entrega-tree-").tempdir_in(parent)?;
+    let scratch = scratch_dir.path().to_path_buf();
     let result = (|| -> Result<Option<String>, CheckError> {
         let tar = scratch.join("tree.tar");
         if git::run(root, &["archive", "--format=tar", "-o", &tar.display().to_string(), commit])?.is_none() {
@@ -256,27 +246,25 @@ pub fn components_at(root: &Path, commit: &str, refusals: &mut Vec<String>) -> R
             Ok(m) => m,
             Err(e) => return Ok(Some(format!("commit {commit}: cargo's metadata does not read: {e}"))),
         };
-        let base = tree.canonicalize()?;
+        let base = PathBuf::from(meta["workspace_root"].as_str().unwrap_or_default());
         for pkg in meta["packages"].as_array().into_iter().flatten() {
             let manifest = PathBuf::from(pkg["manifest_path"].as_str().unwrap_or_default());
             let dir = manifest.parent().and_then(|d| d.strip_prefix(&base).ok()).map(|d| d.to_string_lossy().replace('\\', "/"));
             let Some(dir) = dir.filter(|d| d.starts_with("crates/")) else { continue };
             let name = pkg["name"].as_str().unwrap_or_default().to_string();
             let version = pkg["version"].as_str().unwrap_or_default().to_string();
-            let on = pkg["features"].as_object().map(defaults).unwrap_or_default();
             let bins = pkg["targets"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .filter(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "bin")))
-                .filter(|t| t["required-features"].as_array().is_none_or(|r| r.iter().filter_map(|f| f.as_str()).all(|f| on.contains(f))))
                 .filter_map(|t| t["name"].as_str().map(String::from))
                 .collect();
             held.insert(name.clone(), Held { dir, name, version, bins });
         }
         Ok(None)
     })();
-    let _ = std::fs::remove_dir_all(&scratch);
+    drop(scratch_dir);
     if let Some(r) = result? {
         refusals.push(r);
     }

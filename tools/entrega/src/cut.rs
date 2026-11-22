@@ -77,13 +77,18 @@ pub fn manifest_text(release: &semver::Version, commit: &str, target: &str, tool
 pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     let rs = root.display().to_string();
     let commit = vm::run("git", &["-C", &rs, "rev-parse", "HEAD"], None)?.trim().to_string();
-    let dirty = vm::run("git", &["-C", &rs, "status", "--porcelain", "--untracked-files=no"], None)?;
+    // Untracked files count: the suite runs in this tree, and a file git does not hold would test
+    // a tree the commit is not.
+    let dirty = vm::run("git", &["-C", &rs, "status", "--porcelain"], None)?;
     if !dirty.trim().is_empty() {
         return Err(refused(format!("the tree differs from HEAD ({commit}); a release is cut from a commit:\n{dirty}")));
     }
+    let releases = root.join("releases");
     let target_file = o.out.join(format!("{}.toml", o.release));
-    if target_file.exists() {
-        return Err(refused(format!("{} exists: release {} is cut already", target_file.display(), o.release)));
+    for f in [target_file.clone(), releases.join(format!("{}.toml", o.release))] {
+        if f.exists() {
+            return Err(refused(format!("{} exists: release {} is cut already", f.display(), o.release)));
+        }
     }
     let recipe_text = git::show(root, &commit, "tools/entrega/maquina/maquina.toml")
         .map_err(|e| refused(e.to_string()))?
@@ -94,14 +99,41 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     if !refusals.is_empty() {
         return Err(refused(refusals.join("\n")));
     }
-    let rustc = vm::run("rustc", &["--version"], None)?;
+    let rustc = vm::run("rustc", &["--version"], None)?.trim().to_string();
     let toolchain = rustc.split_whitespace().nth(1).ok_or_else(|| refused(format!("rustc printed `{rustc}`")))?.to_string();
+    let target = "x86_64-unknown-linux-gnu";
+    let components: Vec<(String, String, Vec<String>)> =
+        held.values().map(|h| (h.name.clone(), h.version.clone(), h.bins.iter().cloned().collect())).collect();
+    let text = manifest_text(&o.release, &commit, target, &rustc, &components, if o.run_suite { SUITE } else { NOT_RUN });
+    let manifest = manifest::load(&text).map_err(|e| refused(format!("the manifest to be written does not read back: {e}")))?;
+    // Checked as any manifest is, against the repository and against every release already cut
+    // (here and in `--out`), before anything is built: a version names one tree.
+    let mut all = manifest::load_dir(&releases).0;
+    if o.out != releases {
+        all.extend(manifest::load_dir(&o.out).0);
+    }
+    all.push((target_file.clone(), manifest.clone()));
+    let mut against = manifest::check(root, &manifest)?;
+    against.extend(manifest::check_together(root, &all)?);
+    if !against.is_empty() {
+        return Err(refused(format!("release {} would not check:\n{}", o.release, against.join("\n"))));
+    }
     if o.run_suite {
         eprintln!("entrega: the whole suite at {commit}, behind the machine's lock");
         // Its temporary files on disk, outside any repository: /tmp is a tmpfs of the machine's
         // memory, and the laws' tests need a folder no git repository holds.
         let tmp = crate::cache::dir()?.join("tmp");
         std::fs::create_dir_all(&tmp)?;
+        // Built first, so the machine's lock is held for the tests alone (CLAUDE.md).
+        let built = Command::new("cargo")
+            .args(["nextest", "run", "--workspace", "--no-run"])
+            .env("TMPDIR", &tmp)
+            .current_dir(root)
+            .status()
+            .map_err(|source| VmError::Spawn { program: "cargo nextest --no-run".into(), source })?;
+        if !built.success() {
+            return Err(refused(format!("the suite does not build at {commit} ({built}): no release is cut from it")));
+        }
         let status = Command::new("flock")
             .args(["/tmp/veredas-suite.lock", "cargo", "nextest", "run", "--workspace"])
             .env("TMPDIR", &tmp)
@@ -117,11 +149,9 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     std::fs::create_dir_all(&o.work)?;
     let built = builder::build(&recipe, root, &commit, &toolchain, &packages, &bins, &o.work)?;
     eprintln!("entrega: built under {} on {}", built.toolchain, built.libc);
-    let target = "x86_64-unknown-linux-gnu";
-    let components: Vec<(String, String, Vec<String>)> =
-        held.values().map(|h| (h.name.clone(), h.version.clone(), h.bins.iter().cloned().collect())).collect();
-    let text = manifest_text(&o.release, &commit, target, &built.toolchain, &components, if o.run_suite { SUITE } else { NOT_RUN });
-    let manifest = manifest::load(&text).map_err(|e| refused(format!("the manifest written does not read back: {e}")))?;
+    if built.toolchain != rustc {
+        return Err(refused(format!("the builder ran `{}`, the suite was tested with `{rustc}`", built.toolchain)));
+    }
     let name = format!("veredas-{}-{target}", o.release);
     let names: Vec<String> = held.keys().cloned().collect();
     let packed = bundle::assemble(&recipe, root, &commit, &name, &built.out.join("bin"), &bins, &names, &text, &o.work)?;
@@ -142,9 +172,5 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     }
     std::fs::create_dir_all(&o.out)?;
     std::fs::write(&target_file, &text)?;
-    let after = manifest::check(root, &manifest)?;
-    if !after.is_empty() {
-        return Err(refused(format!("the manifest written does not check: {}", after.join("\n"))));
-    }
     Ok(Cut { manifest, manifest_path: target_file, bundle: packed, extracted, report })
 }

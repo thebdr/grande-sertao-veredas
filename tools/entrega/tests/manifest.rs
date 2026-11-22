@@ -292,7 +292,8 @@ fn the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_the
     r.write("crates/veredas-maquinar/Cargo.toml", "[package]\nname = \"veredas-maquinar\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[[bin]]\nname = \"a\"\npath = \"src/bin/b.rs\"\n");
     r.write("crates/veredas-maquinar/src/lib.rs", "\n");
     r.write("crates/veredas-maquinar/src/bin/b.rs", "fn main() {}\n");
-    // Required features: the default ones hold `serve` (through `full`), never `extra`.
+    // Required features change nothing here: every bin target cargo names is the component's
+    // (whether cargo builds it with the defaults is the cut's to see, C-291).
     r.write(
         "crates/veredas-core/Cargo.toml",
         "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[features]\ndefault = [\"full\"]\nfull = [\"serve\"]\nserve = []\nextra = []\n\n\
@@ -316,7 +317,7 @@ fn the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_the
     assert_eq!(
         got,
         vec![
-            want("veredas-core", &["servido"]),
+            want("veredas-core", &["extra", "servido"]),
             want("veredas-maquinar", &["a"]),
             want("veredas-portal", &["porteiro"]),
             want("veredas-velho", &["velho"]),
@@ -329,6 +330,38 @@ fn the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_the
     manifest::components_at(r.path(), &c2, &mut refusals).unwrap();
     assert_eq!(refusals.len(), 1);
     assert!(refusals[0].starts_with(&format!("commit {c2}: cargo cannot read its workspace: error")), "{refusals:?}");
+}
+
+#[test]
+fn a_scratch_folder_reached_through_a_link_and_calls_at_once_read_the_same() {
+    let r = suite();
+    let c = r.commit("the suite");
+    let mut refusals = Vec::new();
+    let plain = manifest::components_at(r.path(), &c, &mut refusals).unwrap();
+    assert_eq!((plain.len(), refusals.len()), (3, 0));
+    let real = tempfile::tempdir().unwrap();
+    let holder = tempfile::tempdir().unwrap();
+    let link = holder.path().join("link");
+    std::os::unix::fs::symlink(real.path(), &link).unwrap();
+    let mut refusals = Vec::new();
+    assert_eq!(manifest::components_at_in(r.path(), &c, &link, &mut refusals).unwrap(), plain);
+    assert_eq!(refusals, Vec::<String>::new());
+    std::thread::scope(|scope| {
+        let calls: Vec<_> = (0..8)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut refusals = Vec::new();
+                    let held = manifest::components_at(r.path(), &c, &mut refusals).unwrap();
+                    (held, refusals)
+                })
+            })
+            .collect();
+        for call in calls {
+            let (held, refusals) = call.join().unwrap();
+            assert_eq!((held, refusals), (plain.clone(), Vec::<String>::new()));
+        }
+    });
+    assert_eq!(std::fs::read_dir(real.path()).unwrap().count(), 0, "no scratch folder left behind");
 }
 
 #[test]
@@ -437,7 +470,7 @@ fn the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused() {
     );
     let usage = Command::new(env!("CARGO_BIN_EXE_entrega")).output().unwrap();
     assert_eq!(usage.status.code(), Some(1));
-    assert_eq!(String::from_utf8(usage.stderr).unwrap(), "usage: entrega check [<manifest.toml>...]\n       entrega cut <release> [--trial] [--out <dir>]\n       entrega maquina <release>\n");
+    assert_eq!(String::from_utf8(usage.stderr).unwrap(), "usage: entrega check [<manifest.toml>...]\n       entrega cut <release> [--trial] [--out <dir>]\n       entrega maquina <release>\n       entrega prova <release>\n");
 }
 
 #[test]

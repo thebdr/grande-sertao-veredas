@@ -12,14 +12,19 @@
 //! under `target/entrega/<release>/`, into `veredas-<release>.ova` beside it
 //! (docs/entrega-plan.md, "How the image is built").
 //!
-//! Exit codes: 0 when every manifest checks, the release is cut or the machine built; 2 when one is refused, the
+//! `entrega prova <release>`: prove the tester machine built for a release: its OVA's disk booted
+//! copy-on-write under QEMU on VMware's disk and network devices, the release's sums checked at
+//! boot, the plant read from the host, the desktop drawn, the disk unchanged
+//! (docs/entrega-plan.md, "How a build is proven").
+//!
+//! Exit codes: 0 when every manifest checks, the release is cut, the machine built or proven; 2 when one is refused, the
 //! reasons on stderr; 1 on a usage error.
 
 use std::path::{Path, PathBuf};
 
 use entrega::{git, manifest};
 
-const USAGE: &str = "usage: entrega check [<manifest.toml>...]\n       entrega cut <release> [--trial] [--out <dir>]\n       entrega maquina <release>";
+const USAGE: &str = "usage: entrega check [<manifest.toml>...]\n       entrega cut <release> [--trial] [--out <dir>]\n       entrega maquina <release>\n       entrega prova <release>";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -27,6 +32,7 @@ fn main() {
         Some("check") => std::process::exit(check(&args[1..])),
         Some("cut") => std::process::exit(cut(&args[1..])),
         Some("maquina") if args.len() == 2 => std::process::exit(maquina(&args[1])),
+        Some("prova") if args.len() == 2 => std::process::exit(prova(&args[1])),
         _ => {
             eprintln!("{USAGE}");
             std::process::exit(1);
@@ -57,6 +63,37 @@ fn maquina(release: &str) -> i32 {
             println!("tester machine of release {release}");
             println!("  ova  {}", p.ova.display());
             0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
+
+fn prova(release: &str) -> i32 {
+    let root = match repository() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+    match entrega::maquina::prove_release(&root, release, "x86_64-unknown-linux-gnu") {
+        Ok((proof, faults)) => {
+            let names = |s: &serde_json::Value| -> String {
+                s["objects"].as_array().into_iter().flatten().map(|o| format!("{}={}", o["id"].as_str().unwrap_or("?"), o["value"])).collect::<Vec<_>>().join(" ")
+            };
+            println!("tester machine of release {release}, its disk {}", proof.vmdk.display());
+            println!("  boot: {}", if proof.console.contains(&format!("VEREDAS-SUMS-OK {release}")) { "the release's sums checked" } else { "no check of the sums seen" });
+            println!("  plant from the host: page {}, write {} {}", proof.plant.page.status, proof.plant.write.status, proof.plant.write.body);
+            println!("  objects: {}", names(&proof.plant.second));
+            println!("  screen: {} colours ({})", proof.colours, proof.screen.display());
+            println!("  disk unchanged: {}", proof.before == proof.after);
+            for f in &faults {
+                eprintln!("{f}");
+            }
+            if faults.is_empty() { 0 } else { 2 }
         }
         Err(e) => {
             eprintln!("{e}");

@@ -80,10 +80,24 @@ pub fn object<'a>(snapshot: &'a Value, id: &str) -> Option<&'a Value> {
     snapshot["objects"].as_array()?.iter().find(|o| o["id"] == id)
 }
 
-/// Why a report does not show the plant running: every object of the loop carrying a value, not
-/// stale; both sources live; both parcels moved between the snapshots; the write refused by the
-/// switch; both executables ending with 0. Empty when it does.
+/// Why a report does not show the plant running: [`plant_faults`], and both executables ending
+/// with 0. Empty when it does.
 pub fn faults(r: &Report) -> Vec<String> {
+    let mut out = plant_faults(r);
+    if r.bench_exit != Some(0) {
+        out.push(format!("the bench ended with {:?}: {}", r.bench_exit, r.bench_out));
+    }
+    if r.supervisao_exit != Some(0) {
+        out.push(format!("supervisão ended with {:?}: {}", r.supervisao_exit, r.supervisao_out));
+    }
+    out
+}
+
+/// Why what was read over HTTP does not show the plant running: the page served; every object of
+/// the loop carrying a value, not stale; both sources live; both parcels moved between the
+/// snapshots; the write refused by the switch. The executables' exits are not read here (a
+/// machine's services are not stopped to be judged).
+pub fn plant_faults(r: &Report) -> Vec<String> {
     let mut out = Vec::new();
     if r.page.status != 200 || !r.page.body.contains("<html") {
         out.push(format!("the page answered {} without a page", r.page.status));
@@ -111,13 +125,32 @@ pub fn faults(r: &Report) -> Vec<String> {
     if r.write.status != 403 || !r.write.body.contains("writes are turned off") {
         out.push(format!("the offered write was not refused by the switch: {} {}", r.write.status, r.write.body));
     }
-    if r.bench_exit != Some(0) {
-        out.push(format!("the bench ended with {:?}: {}", r.bench_exit, r.bench_out));
-    }
-    if r.supervisao_exit != Some(0) {
-        out.push(format!("supervisão ended with {:?}: {}", r.supervisao_exit, r.supervisao_out));
-    }
     out
+}
+
+/// Reads the plant served at `addr` as the cut's run does: waits within `within` until every
+/// object carries a value, reads the feed again `apart` later, then the page and the offered
+/// write. The exits are left unknown.
+pub fn read_plant(addr: SocketAddr, within: Duration, apart: Duration) -> Report {
+    let snapshot = || http(addr, "GET", "/s/loop/objects.json", None).and_then(|a| serde_json::from_str::<Value>(&a.body).ok());
+    let all_valued = |s: &Value| s["objects"].as_array().is_some_and(|v| !v.is_empty() && v.iter().all(|o| o["value"].is_number()));
+    let start = Instant::now();
+    let mut first = Value::Null;
+    while start.elapsed() < within {
+        if let Some(s) = snapshot()
+            && all_valued(&s)
+        {
+            first = s;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    std::thread::sleep(apart);
+    let second = snapshot().unwrap_or(Value::Null);
+    let none = || Answer { status: 0, body: String::new() };
+    let page = http(addr, "GET", "/", None).unwrap_or_else(none);
+    let write = http(addr, "POST", "/s/loop/portal/api/opc/write", Some(r#"{"source":"plc","tag":"ns=2;s=release3","value":"1"}"#)).unwrap_or_else(none);
+    Report { page, first, second, apart, write, bench_exit: None, supervisao_exit: None, bench_out: String::new(), supervisao_out: String::new() }
 }
 
 fn replace_once(path: &Path, from: &str, to: &str) -> Result<(), VmError> {
@@ -180,26 +213,8 @@ pub fn run(bundle: &Path, work: &Path) -> Result<Report, VmError> {
     std::thread::sleep(Duration::from_millis(500));
     let sup = spawn(&bin.join("veredas-supervisao"), "supervisao.toml", &plant)?;
     let addr: SocketAddr = ([127, 0, 0, 1], web).into();
-    let start = Instant::now();
-    let snapshot = || http(addr, "GET", "/s/loop/objects.json", None).and_then(|a| serde_json::from_str::<Value>(&a.body).ok());
-    let all_valued = |s: &Value| s["objects"].as_array().is_some_and(|v| !v.is_empty() && v.iter().all(|o| o["value"].is_number()));
-    let mut first = Value::Null;
-    while start.elapsed() < Duration::from_secs(60) {
-        if let Some(s) = snapshot()
-            && all_valued(&s)
-        {
-            first = s;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    let apart = Duration::from_secs(2);
-    std::thread::sleep(apart);
-    let second = snapshot().unwrap_or(Value::Null);
-    let page = http(addr, "GET", "/", None).unwrap_or(Answer { status: 0, body: String::new() });
-    let write = http(addr, "POST", "/s/loop/portal/api/opc/write", Some(r#"{"source":"plc","tag":"ns=2;s=release3","value":"1"}"#))
-        .unwrap_or(Answer { status: 0, body: String::new() });
+    let read = read_plant(addr, Duration::from_secs(60), Duration::from_secs(2));
     let (supervisao_exit, supervisao_out) = finish(sup, Duration::from_secs(30));
     let (bench_exit, bench_out) = finish(bench, Duration::from_secs(30));
-    Ok(Report { page, first, second, apart, write, bench_exit, supervisao_exit, bench_out, supervisao_out })
+    Ok(Report { bench_exit, supervisao_exit, bench_out, supervisao_out, ..read })
 }

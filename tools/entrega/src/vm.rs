@@ -128,10 +128,16 @@ pub fn args(spec: &Spec) -> Vec<String> {
 }
 
 impl Vm {
+    /// Starts the machine once the host has the memory for it ([`wait_for_memory`]); QEMU's own
+    /// temporary files (a copy-on-write boot's overlay) go to the cache, never to `/tmp`.
     pub fn start(spec: &Spec) -> Result<Vm, VmError> {
+        wait_for_memory(AVAILABLE_BEFORE_A_MACHINE, Duration::from_secs(30 * 60))?;
         let _ = std::fs::remove_file(&spec.console);
+        let tmp = crate::cache::dir()?.join("tmp");
+        std::fs::create_dir_all(&tmp)?;
         let child = Command::new("qemu-system-x86_64")
             .args(args(spec))
+            .env("TMPDIR", &tmp)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -235,6 +241,50 @@ pub fn screendump(port: u16, file: &Path) -> Result<(), VmError> {
         return Err(VmError::Failed { program: "QMP screendump".into(), status: "error".into(), stderr: answer });
     }
     Ok(())
+}
+
+/// The memory the host must have available before a machine starts: under it the development
+/// machine is short for its other work (the orchestrator's rule of 2026-11-22: under 12 GB, wait).
+pub const AVAILABLE_BEFORE_A_MACHINE: u64 = 12 << 30;
+
+/// The host's available memory in bytes, `MemAvailable` of `/proc/meminfo`.
+pub fn available_memory() -> Result<u64, VmError> {
+    let text = std::fs::read_to_string("/proc/meminfo")?;
+    text.lines()
+        .find_map(|l| l.strip_prefix("MemAvailable:"))
+        .and_then(|v| v.split_whitespace().next())
+        .and_then(|kb| kb.parse::<u64>().ok())
+        .map(|kb| kb * 1024)
+        .ok_or_else(|| VmError::Io(std::io::Error::other("/proc/meminfo holds no MemAvailable")))
+}
+
+/// Waits until the host has `bytes` available, checking every 30 s, and refuses after `within`.
+pub fn wait_for_memory(bytes: u64, within: Duration) -> Result<(), VmError> {
+    let start = Instant::now();
+    loop {
+        let now = available_memory()?;
+        if now >= bytes {
+            return Ok(());
+        }
+        if start.elapsed() > within {
+            return Err(VmError::Failed {
+                program: "the machine's start".into(),
+                status: "refused".into(),
+                stderr: format!("the host has {} MB available, a machine waits for {} MB", now >> 20, bytes >> 20),
+            });
+        }
+        eprintln!("entrega: {} MB available, waiting for {} MB before a machine starts", now >> 20, bytes >> 20);
+        std::thread::sleep(Duration::from_secs(30));
+    }
+}
+
+/// Holds the machine's lock for compiling the database engine (`/tmp/veredas-engine.lock`, the
+/// one `flock` takes): one build of the engine at a time on the host, a builder machine's included.
+pub fn engine_lock() -> Result<std::fs::File, VmError> {
+    let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open("/tmp/veredas-engine.lock")?;
+    eprintln!("entrega: waiting for the engine's lock (/tmp/veredas-engine.lock)");
+    f.lock()?;
+    Ok(f)
 }
 
 /// A console file's text, carriage returns dropped, invalid UTF-8 replaced.

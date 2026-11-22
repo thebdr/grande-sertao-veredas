@@ -96,13 +96,15 @@ fn the_recipe_is_read_through_cores_header_and_refused_by_key() {
     let text = std::fs::read_to_string(repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
     let r = Recipe::load(&text).unwrap();
     assert_eq!(r.base_name(), "debian-13-generic-amd64-20261116-2664.qcow2");
-    assert_eq!((r.builder.cpus, r.machine.user.as_str(), r.machine.supervisao_port, r.machine.hardware_version), (8, "veredas", 8902, 14));
+    assert_eq!((r.builder.cpus, r.builder.memory_mb), (4, 6144), "one machine at a time takes at most 4 cores and 6 GB here");
+    assert_eq!((r.machine.cpus, r.machine.memory_mb), (2, 4096));
+    assert_eq!((r.machine.user.as_str(), r.machine.supervisao_port, r.machine.hardware_version), ("veredas", 8902, 14));
     let refused = |from: &str, to: &str| {
         assert_eq!(text.matches(from).count(), 1, "{from}");
         Recipe::load(&text.replacen(from, to, 1)).unwrap_err().to_string()
     };
     assert_eq!(refused("format = \"veredas-machine\"", "format = \"veredas-bench\""), "`format` is `veredas-bench`, not `veredas-machine`");
-    assert!(refused("cpus = 8", "cpu = 8").starts_with("a machine recipe: unknown field `cpu`"));
+    assert!(refused("cpus = 4", "cpu = 4").starts_with("a machine recipe: unknown field `cpu`"));
     assert_eq!(refused("url = \"https://", "url = \"http://"), "a machine recipe: `base.url` is `http://cloud.debian.org/images/cloud/trixie/20261116-2664/debian-13-generic-amd64-20261116-2664.qcow2`, not an https address");
     assert_eq!(refused("sha512 = \"e53a", "sha512 = \"E53a"), "a machine recipe: `base.sha512` is not 128 lowercase hexadecimal characters");
     assert_eq!(refused("\"chromium\"", "\"chromium; rm\""), "a machine recipe: `chromium; rm` is not a package's name");
@@ -139,4 +141,125 @@ fn the_cut_refuses_a_tree_that_differs_from_head_and_a_release_already_cut() {
         Err(CutError::Refused(e)) => assert!(e.contains("the tree differs from HEAD") && e.contains(" M README.md"), "{e}"),
         other => panic!("not refused: {:?}", other.map(|c| c.manifest)),
     }
+}
+
+#[test]
+fn a_bundle_packs_to_the_same_bytes_whatever_the_modes_its_files_were_made_with() {
+    use std::os::unix::fs::PermissionsExt;
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().join("veredas-x");
+    std::fs::create_dir_all(dir.join("bin")).unwrap();
+    std::fs::create_dir_all(dir.join("docs")).unwrap();
+    std::fs::write(dir.join("bin/tool"), "#!/bin/sh\n").unwrap();
+    std::fs::write(dir.join("docs/a.md"), "a\n").unwrap();
+    let set = |path: &str, mode: u32| std::fs::set_permissions(dir.join(path), std::fs::Permissions::from_mode(mode)).unwrap();
+    // As a umask of 0077 would leave them, then as 0002 would.
+    for (p, m) in [("bin/tool", 0o700), ("docs/a.md", 0o600), ("docs", 0o700), ("bin", 0o700)] {
+        set(p, m);
+    }
+    let first = work.path().join("first.tar.gz");
+    bundle::pack(work.path(), "veredas-x", "1795300000", &first).unwrap();
+    for (p, m) in [("bin/tool", 0o775), ("docs/a.md", 0o664), ("docs", 0o775), ("bin", 0o775)] {
+        set(p, m);
+    }
+    let second = work.path().join("second.tar.gz");
+    bundle::pack(work.path(), "veredas-x", "1795300000", &second).unwrap();
+    assert_eq!(std::fs::read(&first).unwrap(), std::fs::read(&second).unwrap());
+    let listing = Command::new("tar").arg("-tvzf").arg(&first).output().unwrap();
+    let modes: Vec<String> = String::from_utf8(listing.stdout).unwrap().lines().map(|l| l.split_whitespace().next().unwrap().to_string()).collect();
+    assert_eq!(modes, ["drwxr-xr-x", "drwxr-xr-x", "-rwxr-xr-x", "drwxr-xr-x", "-rw-r--r--"]);
+}
+
+#[test]
+fn the_recipes_library_limits_are_versions_of_dotted_digits() {
+    let text = std::fs::read_to_string(repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    for (from, to, key, value) in [
+        ("glibc = \"2.41\"", "glibc = \"v2.41\"", "base.glibc", "v2.41"),
+        ("glibcxx = \"3.4.33\"", "glibcxx = \"3.4.\"", "base.glibcxx", "3.4."),
+        ("cxxabi = \"1.3.15\"", "cxxabi = \"\"", "base.cxxabi", ""),
+    ] {
+        assert_eq!(text.matches(from).count(), 1, "{from}");
+        assert_eq!(
+            Recipe::load(&text.replacen(from, to, 1)).unwrap_err().to_string(),
+            format!("a machine recipe: `{key}` is `{value}`, not a version of dotted digits")
+        );
+    }
+}
+
+#[test]
+fn the_cut_refuses_an_untracked_file_and_a_release_already_in_releases() {
+    let c = clone();
+    let out = tempfile::tempdir().unwrap();
+    let options = |release: &str| Options {
+        release: semver::Version::parse(release).unwrap(),
+        out: out.path().to_path_buf(),
+        work: c.path().join("target/entrega").join(release),
+        run_suite: false,
+    };
+    match cut::cut(c.path(), &options("2.0.0-alpha.1")) {
+        Err(CutError::Refused(e)) => assert_eq!(e, format!("{} exists: release 2.0.0-alpha.1 is cut already", c.path().join("releases/2.0.0-alpha.1.toml").display())),
+        other => panic!("not refused: {:?}", other.map(|c| c.manifest)),
+    }
+    std::fs::write(c.path().join("notes.txt"), "never committed\n").unwrap();
+    match cut::cut(c.path(), &options("9.9.9")) {
+        Err(CutError::Refused(e)) => assert!(e.contains("the tree differs from HEAD") && e.contains("?? notes.txt"), "{e}"),
+        other => panic!("not refused: {:?}", other.map(|c| c.manifest)),
+    }
+}
+
+/// A throwaway repository holding the recipe and one component, committed on `main`.
+struct Repo {
+    dir: tempfile::TempDir,
+}
+
+impl Repo {
+    fn git(&self, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(self.dir.path())
+            .args(["-c", "user.name=entrega", "-c", "user.email=entrega@example.invalid", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+    fn write(&self, rel: &str, text: &str) {
+        let p = self.dir.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+    fn commit(&self, msg: &str) -> String {
+        self.git(&["add", "-A"]);
+        self.git(&["commit", "-q", "-m", msg]);
+        self.git(&["rev-parse", "HEAD"])
+    }
+}
+
+#[test]
+fn the_cut_refuses_a_version_another_release_pinned_at_other_code_before_building_anything() {
+    let r = Repo { dir: tempfile::tempdir().unwrap() };
+    r.git(&["init", "-q", "-b", "main"]);
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-core\"]\n");
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    r.write("tools/entrega/maquina/maquina.toml", &std::fs::read_to_string(repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap());
+    let c1 = r.commit("core 2.0.0");
+    let components = vec![("veredas-core".to_string(), "2.0.0".to_string(), vec![])];
+    let first = semver::Version::parse("2.0.0").unwrap();
+    r.write("releases/2.0.0.toml", &cut::manifest_text(&first, &c1, "x86_64-unknown-linux-gnu", "rustc 1", &components, cut::SUITE));
+    r.commit("release 2.0.0");
+    r.write("crates/veredas-core/src/lib.rs", "pub fn changed() {}\n");
+    r.commit("core changed, its version not bumped");
+    let work = r.dir.path().join("target/entrega/2.0.1");
+    let options = Options { release: semver::Version::parse("2.0.1").unwrap(), out: r.dir.path().join("releases"), work: work.clone(), run_suite: false };
+    match cut::cut(r.dir.path(), &options) {
+        Err(CutError::Refused(e)) => assert_eq!(
+            e,
+            "release 2.0.1 would not check:\nveredas-core 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different code: a version names one tree"
+        ),
+        other => panic!("not refused: {:?}", other.map(|c| c.manifest)),
+    }
+    assert!(!work.exists(), "refused before anything was built");
+    assert!(!r.dir.path().join("releases/2.0.1.toml").exists());
 }

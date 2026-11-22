@@ -82,6 +82,11 @@ impl Recipe {
         if r.base.sha512.len() != 128 || !r.base.sha512.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) {
             return Err(RecipeError::Invalid("`base.sha512` is not 128 lowercase hexadecimal characters".into()));
         }
+        for (key, v) in [("base.glibc", &r.base.glibc), ("base.glibcxx", &r.base.glibcxx), ("base.cxxabi", &r.base.cxxabi)] {
+            if !v.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())) {
+                return Err(RecipeError::Invalid(format!("`{key}` is `{v}`, not a version of dotted digits")));
+            }
+        }
         for p in r.builder.packages.iter().chain(&r.machine.packages).chain(&r.machine.remove) {
             if !is_package(p) {
                 return Err(RecipeError::Invalid(format!("`{p}` is not a package's name")));
