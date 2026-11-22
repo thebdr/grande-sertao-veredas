@@ -243,8 +243,8 @@ pub enum DcpError {
     BlockTooLong { option: u8, suboption: u8, len: usize },
     #[error("the PDU makes {0} bytes, past the 1500 one frame carries")]
     PduTooLong(usize),
-    #[error("a Set request is written only with the one device it goes to (`DcpPdu::frame`)")]
-    SetNeedsTarget,
+    #[error("a {0} is written only with where it goes (`DcpPdu::frame`)")]
+    NeedsTarget(&'static str),
     #[error("a Set request holds whole blocks; {0} trailing bytes are not written")]
     SetTrailing(usize),
     #[error("the identification signal is 0x0100; {0:#06x} is not written")]
@@ -269,16 +269,27 @@ pub enum DcpError {
 
 /// Does this block carry a BlockInfo or BlockQualifier word, in a PDU of this service and type?
 /// Does this block carry a BlockInfo or BlockQualifier word, in a PDU of this service and type (as
-/// they travel)? An Identify answer, a Get answer and a Hello carry a BlockInfo, a Set request a
-/// qualifier; nothing else does, nor a control response, the all-selector, or a manufacturer's
-/// own option (0x80 to 0xFE), wherever they are.
+/// they travel)? As Wireshark's dissector reads it: a control block (option 5) carries a qualifier
+/// wherever it is, but for the control response (5, 4), which never does; the all-selector's option
+/// (0xFF), a manufacturer's own option (0x80 to 0xFE) and an IP option outside its three suboptions
+/// carry none; any other block carries a BlockInfo in an Identify answer, a Get answer and a Hello
+/// request, and a qualifier in a Set request, and nothing elsewhere.
 fn carries_info(service: u8, service_type: u8, option: u8, suboption: u8) -> bool {
-    if (option, suboption) == (5, 4) || (option, suboption) == (0xFF, 0xFF) || (0x80..=0xFE).contains(&option) {
-        return false;
+    match (option, suboption) {
+        (5, 4) => false,
+        (5, _) => true,
+        (0x80..=0xFF, _) => false,
+        (1, s) if !(1..=3).contains(&s) => false,
+        _ => {
+            let response = service_type & 1 == 1;
+            matches!((service, response), (5, true) | (3, true) | (6, false) | (4, false))
+        }
     }
-    let response = service_type & 1 == 1;
-    matches!((service, response), (5, true) | (3, true) | (6, false) | (4, false))
 }
+
+/// The codes a typed body is read and written under.
+const TYPED: [(u8, u8); 16] =
+    [(1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6), (2, 7), (2, 8), (2, 10), (5, 3), (5, 4), (6, 1), (0xFF, 0xFF)];
 
 /// Decode a DCP PDU from the PROFINET payload: the bytes after the EtherType, frame id included.
 pub fn decode(payload: &[u8]) -> Result<DcpPdu, DcpError> {
@@ -519,20 +530,27 @@ fn push_block(out: &mut Vec<u8>, block: &Block) -> Result<(), DcpError> {
 }
 
 impl DcpPdu {
-    /// The PROFINET payload (frame id onward) of any PDU but a Set request, which is written only
-    /// by `frame`, with the one device it goes to. A Get request is written as its pairs; every
+    /// The PROFINET payload (frame id onward) of any PDU but a Set request and a Hello, which are
+    /// written only by `frame`, with where they go. A Get request is written as its pairs; every
     /// other PDU as its blocks, each with its info word exactly where this PDU carries one (a
-    /// damaged block as it was heard); a typed block only under its own option and suboption. A
-    /// block's declared length is that of what it holds: a `Damaged` overrun is written as the
-    /// bytes it kept, so it decodes as a whole block. A PDU past 1500 bytes is refused.
+    /// damaged block as it was heard); a typed block only under its own option and suboption, and
+    /// bytes as given only where no typed body is read. A block's declared length is that of what
+    /// it holds: a `Damaged` overrun is written as the bytes it kept, so it decodes as a whole
+    /// block. A frame id that is not DCP's, or a PDU past 1500 bytes, is refused.
     pub fn encode(&self) -> Result<Vec<u8>, DcpError> {
         if self.is_set_request() {
-            return Err(DcpError::SetNeedsTarget);
+            return Err(DcpError::NeedsTarget("Set request"));
+        }
+        if self.is_hello() {
+            return Err(DcpError::NeedsTarget("Hello"));
         }
         self.write()
     }
 
     fn write(&self) -> Result<Vec<u8>, DcpError> {
+        if !is_dcp_frame_id(self.frame_id) {
+            return Err(DcpError::NotDcp(self.frame_id));
+        }
         let (service, service_type) = (self.service.to_u8(), self.service_type.to_u8());
         let mut blocks = Vec::new();
         if self.is_get_request() {
@@ -548,8 +566,19 @@ impl DcpPdu {
                 if b.body == BlockBody::Requested || b.body.code().is_some_and(|c| c != (b.option, b.suboption)) {
                     return Err(DcpError::Misplaced { option: b.option, suboption: b.suboption, body: b.body.kind() });
                 }
-                let due = carries_info(service, service_type, b.option, b.suboption);
-                if !matches!(b.body, BlockBody::Damaged { .. }) && b.info.is_some() != due {
+                // Bytes as given only where no typed body is read: under a typed code, a block is
+                // its typed body, or the damage it was heard with.
+                if matches!(b.body, BlockBody::Unknown { .. }) && TYPED.contains(&(b.option, b.suboption)) {
+                    return Err(DcpError::Misplaced { option: b.option, suboption: b.suboption, body: b.body.kind() });
+                }
+                // The info word exactly where this PDU carries one; a damaged block with it only as
+                // the decoder would have kept it (none when the damage is a missing word or an
+                // overrun).
+                let due = match &b.body {
+                    BlockBody::Damaged { damage: Damage::NoInfo | Damage::Overrun { .. }, .. } => false,
+                    _ => carries_info(service, service_type, b.option, b.suboption),
+                };
+                if b.info.is_some() != due {
                     return Err(DcpError::InfoWord { option: b.option, suboption: b.suboption, carried: b.info.is_some() });
                 }
                 push_block(&mut blocks, b)?;
@@ -586,7 +615,7 @@ impl DcpPdu {
                 return Err(DcpError::SetTrailing(self.trailing.len()));
             }
         }
-        if self.service.to_u8() == 6 && dst != Mac::DCP_HELLO_MULTICAST {
+        if self.is_hello() && dst != Mac::DCP_HELLO_MULTICAST {
             return Err(DcpError::HelloTarget(dst));
         }
         Ok(ether::build(dst, src, ETHERTYPE_PROFINET, &self.write()?)?)
@@ -596,6 +625,11 @@ impl DcpPdu {
     /// of PDU that configures a device, however its service and type were spelled.
     pub fn is_set_request(&self) -> bool {
         self.service.to_u8() == 4 && self.service_type.to_u8() & 1 == 0
+    }
+
+    /// A Hello, by the bytes it travels as (service 6), however its service is spelled.
+    pub fn is_hello(&self) -> bool {
+        self.service.to_u8() == 6
     }
 
     /// A Get request, by the bytes it travels as: bare option and suboption pairs.
