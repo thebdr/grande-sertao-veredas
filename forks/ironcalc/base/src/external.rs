@@ -23,10 +23,12 @@
 //! Whatever the strategy, a cell it cannot resolve is `#REF!`: the formula
 //! is well formed, it is the data that is missing.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use bitcode::{Decode, Encode};
 
+use crate::constants::{LAST_COLUMN, LAST_ROW};
+use crate::expressions::parser::Node;
 use crate::expressions::token::Error;
 
 /// The value an external cell holds.
@@ -96,6 +98,136 @@ pub fn same_sheet_name(a: &str, b: &str) -> bool {
         a.eq_ignore_ascii_case(b)
     } else {
         a.to_lowercase() == b.to_lowercase()
+    }
+}
+
+/// A cell of another workbook that a formula reads: `[book]sheet!row,column`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ExternalCellRef {
+    /// 1-based, as written in the formula.
+    pub book: u32,
+    pub sheet: String,
+    pub row: i32,
+    pub column: i32,
+}
+
+/// The most cells one external range contributes to a listing; the same
+/// bound the evaluation puts on materialising such a range.
+pub(crate) const MAX_EXTERNAL_RANGE_CELLS: i64 = 4_000_000;
+
+/// Adds to `out` every cell of another workbook that `node` reads, with the
+/// formula sitting at (`row`, `column`) so relative references resolve.
+pub(crate) fn collect_external_references(
+    node: &Node,
+    row: i32,
+    column: i32,
+    out: &mut BTreeSet<ExternalCellRef>,
+) {
+    match node {
+        Node::ExternalReferenceKind {
+            book,
+            sheet_name,
+            absolute_row,
+            absolute_column,
+            row: r,
+            column: c,
+        } => {
+            let r = if *absolute_row { *r } else { *r + row };
+            let c = if *absolute_column { *c } else { *c + column };
+            if r >= 1 && c >= 1 && r <= LAST_ROW && c <= LAST_COLUMN {
+                out.insert(ExternalCellRef {
+                    book: *book,
+                    sheet: sheet_name.clone(),
+                    row: r,
+                    column: c,
+                });
+            }
+        }
+        Node::ExternalRangeKind {
+            book,
+            sheet_name,
+            absolute_row1,
+            absolute_column1,
+            row1,
+            column1,
+            absolute_row2,
+            absolute_column2,
+            row2,
+            column2,
+        } => {
+            let r1 = if *absolute_row1 { *row1 } else { *row1 + row };
+            let r2 = if *absolute_row2 { *row2 } else { *row2 + row };
+            let c1 = if *absolute_column1 {
+                *column1
+            } else {
+                *column1 + column
+            };
+            let c2 = if *absolute_column2 {
+                *column2
+            } else {
+                *column2 + column
+            };
+            let (r1, r2) = (r1.min(r2).max(1), r1.max(r2).min(LAST_ROW));
+            let (c1, c2) = (c1.min(c2).max(1), c1.max(c2).min(LAST_COLUMN));
+            if r1 > r2 || c1 > c2 {
+                return;
+            }
+            let cells = (r2 - r1 + 1) as i64 * (c2 - c1 + 1) as i64;
+            if cells > MAX_EXTERNAL_RANGE_CELLS {
+                return;
+            }
+            for r in r1..=r2 {
+                for c in c1..=c2 {
+                    out.insert(ExternalCellRef {
+                        book: *book,
+                        sheet: sheet_name.clone(),
+                        row: r,
+                        column: c,
+                    });
+                }
+            }
+        }
+        Node::OpRangeKind { left, right }
+        | Node::OpConcatenateKind { left, right }
+        | Node::OpSumKind { left, right, .. }
+        | Node::OpProductKind { left, right, .. }
+        | Node::OpPowerKind { left, right }
+        | Node::CompareKind { left, right, .. } => {
+            collect_external_references(left, row, column, out);
+            collect_external_references(right, row, column, out);
+        }
+        Node::UnaryKind { right, .. } => collect_external_references(right, row, column, out),
+        Node::ImplicitIntersection { child, .. } | Node::SpillRangeOperator { child } => {
+            collect_external_references(child, row, column, out)
+        }
+        Node::FunctionKind { args, .. } | Node::NamedFunctionKind { args, .. } => {
+            for arg in args {
+                collect_external_references(arg, row, column, out);
+            }
+        }
+        Node::LambdaDefKind { body, .. } => collect_external_references(body, row, column, out),
+        Node::LambdaCallKind { lambda, args } => {
+            collect_external_references(lambda, row, column, out);
+            for arg in args {
+                collect_external_references(arg, row, column, out);
+            }
+        }
+        // Leaves, and nodes whose text is not parsed here (a defined name's
+        // formula is its own model entry)
+        Node::BooleanKind(_)
+        | Node::NumberKind(_)
+        | Node::StringKind(_)
+        | Node::ReferenceKind { .. }
+        | Node::RangeKind { .. }
+        | Node::WrongReferenceKind { .. }
+        | Node::WrongRangeKind { .. }
+        | Node::ArrayKind(_)
+        | Node::DefinedNameKind { .. }
+        | Node::TableNameKind(_)
+        | Node::NamedVariableKind { .. }
+        | Node::ErrorKind(_)
+        | Node::ParseErrorKind { .. }
+        | Node::EmptyArgKind => {}
     }
 }
 

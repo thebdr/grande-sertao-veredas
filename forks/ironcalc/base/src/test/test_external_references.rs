@@ -7,7 +7,8 @@ use std::collections::HashMap;
 
 use crate::expressions::token::Error;
 use crate::external::{
-    CachedResolver, ExternalBook, ExternalLookup, ExternalSheet, ExternalValue, HostResolver,
+    CachedResolver, ExternalBook, ExternalCellRef, ExternalLookup, ExternalSheet, ExternalValue,
+    HostResolver,
 };
 use crate::test::util::new_empty_model;
 
@@ -186,4 +187,47 @@ fn an_external_range_too_large_is_refused() {
     model._set("A1", "=SUM([1]ZONES!A:D)");
     model.evaluate();
     assert_eq!(model._get_text("A1"), "#N/IMPL!");
+}
+
+#[test]
+fn the_model_lists_every_external_cell_its_formulas_read() {
+    let mut model = new_empty_model();
+    model.workbook.external_books.push(linked_book());
+    // absolute, relative (from C3: B4 is one row down, one column left),
+    // a range, a nested one inside a function, and one repeated
+    model._set("C3", "=[1]ZONES!$B$4+[1]ZONES!B4");
+    model._set("C4", "=SUM([1]ZONES!$D$1:$D$3)+LEN([1]Cover!$A$1)");
+    model._set("C5", "=[1]ZONES!$B$4");
+    // a local formula contributes nothing
+    model._set("C6", "=C3+C4");
+    let refs: Vec<ExternalCellRef> = model.external_references().into_iter().collect();
+    let r = |sheet: &str, row: i32, column: i32| ExternalCellRef {
+        book: 1,
+        sheet: sheet.to_string(),
+        row,
+        column,
+    };
+    assert_eq!(
+        refs,
+        vec![
+            r("Cover", 1, 1),
+            r("ZONES", 1, 4),
+            r("ZONES", 2, 4),
+            r("ZONES", 3, 4),
+            r("ZONES", 4, 2),
+        ]
+    );
+    // and the current strategy answers for one of them
+    assert_eq!(
+        model.resolve_external(1, "ZONES", 4, 2),
+        ExternalLookup::Value(ExternalValue::Number(2.0))
+    );
+    assert_eq!(
+        model.resolve_external(1, "ZONES", 88, 6),
+        ExternalLookup::Empty
+    );
+    assert_eq!(
+        model.resolve_external(2, "ZONES", 4, 2),
+        ExternalLookup::NotAvailable
+    );
 }

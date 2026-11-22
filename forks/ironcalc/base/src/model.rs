@@ -40,7 +40,10 @@ use crate::{
 };
 
 use crate::evaluation::{CellKey, Evaluation, FormulaCell, Seen};
-use crate::external::{CachedResolver, ExternalLookup, ExternalResolver, ExternalValue};
+use crate::external::{
+    collect_external_references, CachedResolver, ExternalCellRef, ExternalLookup, ExternalResolver,
+    ExternalValue,
+};
 use crate::{cf_types::CfCellResult, tz::Tz};
 
 #[cfg(any(test, feature = "mock_time"))]
@@ -795,6 +798,42 @@ impl<'a> Model<'a> {
     /// `cached`, `linked` or `host`.
     pub fn external_strategy(&self) -> &'static str {
         self.external_resolver.strategy()
+    }
+
+    /// Every cell of another workbook that a formula of this one reads, each
+    /// once, in book / sheet / row / column order. Relative references are
+    /// resolved from the cell that holds the formula; a range contributes
+    /// each of its cells (bounded like the evaluation bounds it).
+    pub fn external_references(&self) -> std::collections::BTreeSet<ExternalCellRef> {
+        let mut out = std::collections::BTreeSet::new();
+        for (sheet, worksheet) in self.workbook.worksheets.iter().enumerate() {
+            let Some(parsed) = self.parsed_formulas.get(sheet) else {
+                continue;
+            };
+            for (row, column, cell) in worksheet.sheet_data.cells() {
+                let formula = match &*cell {
+                    Cell::CellFormula { f, .. } | Cell::ArrayFormula { f, .. } => *f,
+                    _ => continue,
+                };
+                if let Some((node, _)) = parsed.get(formula as usize) {
+                    collect_external_references(node, row, column, &mut out);
+                }
+            }
+        }
+        out
+    }
+
+    /// One cell of another workbook as the current strategy reads it: what a
+    /// formula referencing `[book]sheet!cell` would see.
+    pub fn resolve_external(
+        &mut self,
+        book: u32,
+        sheet: &str,
+        row: i32,
+        column: i32,
+    ) -> ExternalLookup {
+        self.external_resolver
+            .resolve(&self.workbook.external_books, book, sheet, row, column)
     }
 
     /// One cell of another workbook, read through the resolver. A cell no
