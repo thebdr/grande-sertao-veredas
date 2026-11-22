@@ -189,11 +189,19 @@ pub enum BlockBody {
     OemDeviceId { vendor_id: u16, device_id: u16 },
     /// Option 2, suboption 10: which remote service interfaces the device offers.
     RsiProperties { value: u16 },
+    /// Option 5, suboption 1: the start of a transaction, its qualifier alone.
+    StartTransaction,
+    /// Option 5, suboption 2: the end of a transaction, its qualifier alone.
+    EndTransaction,
     /// Option 5, suboption 3: the identification signal.
     ControlSignal { value: u16 },
     /// Option 5, suboption 4: the answer to one block of a Set or Get: which option and
     /// suboption, and the error (0 is success).
     ControlResponse { option: u8, suboption: u8, error: u8 },
+    /// Option 5, suboption 5: reset the factory settings, its qualifier alone.
+    FactoryReset,
+    /// Option 5, suboption 6: reset to factory, the qualifier saying what.
+    ResetToFactory,
     /// Option 6, suboption 1.
     DeviceInitiative { value: u16 },
     /// Option 255, suboption 255: the Identify-All filter, no data.
@@ -245,6 +253,8 @@ pub enum DcpError {
     PduTooLong(usize),
     #[error("a {0} is written only with where it goes (`DcpPdu::frame`)")]
     NeedsTarget(&'static str),
+    #[error("this PDU would be read back as another: {0}")]
+    NotItself(String),
     #[error("a Set request holds whole blocks; {0} trailing bytes are not written")]
     SetTrailing(usize),
     #[error("the identification signal is 0x0100; {0:#06x} is not written")]
@@ -267,17 +277,18 @@ pub enum DcpError {
     Ether(#[from] EtherError),
 }
 
-/// Does this block carry a BlockInfo or BlockQualifier word, in a PDU of this service and type?
 /// Does this block carry a BlockInfo or BlockQualifier word, in a PDU of this service and type (as
-/// they travel)? As Wireshark's dissector reads it: a control block (option 5) carries a qualifier
-/// wherever it is, but for the control response (5, 4), which never does; the all-selector's option
+/// they travel)? As Wireshark's dissector reads it: a control block (option 5, suboptions 1 to 6)
+/// carries a qualifier wherever it is, but for the control response (5, 4), which never does; a
+/// control option outside its six suboptions carries none; the all-selector's option
 /// (0xFF), a manufacturer's own option (0x80 to 0xFE) and an IP option outside its three suboptions
 /// carry none; any other block carries a BlockInfo in an Identify answer, a Get answer and a Hello
 /// request, and a qualifier in a Set request, and nothing elsewhere.
 fn carries_info(service: u8, service_type: u8, option: u8, suboption: u8) -> bool {
     match (option, suboption) {
         (5, 4) => false,
-        (5, _) => true,
+        (5, 1..=6) => true,
+        (5, _) => false,
         (0x80..=0xFF, _) => false,
         (1, s) if !(1..=3).contains(&s) => false,
         _ => {
@@ -288,8 +299,28 @@ fn carries_info(service: u8, service_type: u8, option: u8, suboption: u8) -> boo
 }
 
 /// The codes a typed body is read and written under.
-const TYPED: [(u8, u8); 16] =
-    [(1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6), (2, 7), (2, 8), (2, 10), (5, 3), (5, 4), (6, 1), (0xFF, 0xFF)];
+pub const TYPED: [(u8, u8); 20] = [
+    (1, 1),
+    (1, 2),
+    (1, 3),
+    (2, 1),
+    (2, 2),
+    (2, 3),
+    (2, 4),
+    (2, 5),
+    (2, 6),
+    (2, 7),
+    (2, 8),
+    (2, 10),
+    (5, 1),
+    (5, 2),
+    (5, 3),
+    (5, 4),
+    (5, 5),
+    (5, 6),
+    (6, 1),
+    (0xFF, 0xFF),
+];
 
 /// Decode a DCP PDU from the PROFINET payload: the bytes after the EtherType, frame id included.
 pub fn decode(payload: &[u8]) -> Result<DcpPdu, DcpError> {
@@ -394,7 +425,13 @@ fn decode_body(option: u8, suboption: u8, b: &[u8]) -> BlockBody {
         (2, 7) => exact(2).unwrap_or_else(|| BlockBody::DeviceInstance { high: b[0], low: b[1] }),
         (2, 8) => exact(4).unwrap_or_else(|| BlockBody::OemDeviceId { vendor_id: u16_at(b, 0), device_id: u16_at(b, 2) }),
         (2, 10) => exact(2).unwrap_or_else(|| BlockBody::RsiProperties { value: u16_at(b, 0) }),
+        // The dissector reads a qualifier-only control block as its qualifier, whatever its length
+        // says; one with more is kept damaged.
+        (5, 1) => exact(0).unwrap_or(BlockBody::StartTransaction),
+        (5, 2) => exact(0).unwrap_or(BlockBody::EndTransaction),
         (5, 3) => exact(2).unwrap_or_else(|| BlockBody::ControlSignal { value: u16_at(b, 0) }),
+        (5, 5) => exact(0).unwrap_or(BlockBody::FactoryReset),
+        (5, 6) => exact(0).unwrap_or(BlockBody::ResetToFactory),
         (5, 4) => exact(3).unwrap_or_else(|| BlockBody::ControlResponse { option: b[0], suboption: b[1], error: b[2] }),
         (6, 1) => exact(2).unwrap_or_else(|| BlockBody::DeviceInitiative { value: u16_at(b, 0) }),
         (0xFF, 0xFF) => exact(0).unwrap_or(BlockBody::AllSelector),
@@ -428,7 +465,12 @@ impl BlockBody {
                 value.to_be_bytes().to_vec()
             }
             BlockBody::ControlResponse { option, suboption, error } => vec![*option, *suboption, *error],
-            BlockBody::AllSelector | BlockBody::Requested => Vec::new(),
+            BlockBody::AllSelector
+            | BlockBody::Requested
+            | BlockBody::StartTransaction
+            | BlockBody::EndTransaction
+            | BlockBody::FactoryReset
+            | BlockBody::ResetToFactory => Vec::new(),
             BlockBody::Unknown { data } | BlockBody::Damaged { data, .. } => data.clone(),
         }
     }
@@ -477,8 +519,12 @@ impl BlockBody {
             BlockBody::DeviceInstance { .. } => (2, 7),
             BlockBody::OemDeviceId { .. } => (2, 8),
             BlockBody::RsiProperties { .. } => (2, 10),
+            BlockBody::StartTransaction => (5, 1),
+            BlockBody::EndTransaction => (5, 2),
             BlockBody::ControlSignal { .. } => (5, 3),
             BlockBody::ControlResponse { .. } => (5, 4),
+            BlockBody::FactoryReset => (5, 5),
+            BlockBody::ResetToFactory => (5, 6),
             BlockBody::DeviceInitiative { .. } => (6, 1),
             BlockBody::AllSelector => (0xFF, 0xFF),
             BlockBody::Requested | BlockBody::Unknown { .. } | BlockBody::Damaged { .. } => return None,
@@ -500,8 +546,12 @@ impl BlockBody {
             BlockBody::DeviceInstance { .. } => "device-instance",
             BlockBody::OemDeviceId { .. } => "oem-device-id",
             BlockBody::RsiProperties { .. } => "rsi-properties",
+            BlockBody::StartTransaction => "start-transaction",
+            BlockBody::EndTransaction => "end-transaction",
             BlockBody::ControlSignal { .. } => "control-signal",
             BlockBody::ControlResponse { .. } => "control-response",
+            BlockBody::FactoryReset => "factory-reset",
+            BlockBody::ResetToFactory => "reset-to-factory",
             BlockBody::DeviceInitiative { .. } => "device-initiative",
             BlockBody::AllSelector => "all-selector",
             BlockBody::Requested => "requested",
@@ -536,7 +586,9 @@ impl DcpPdu {
     /// damaged block as it was heard); a typed block only under its own option and suboption, and
     /// bytes as given only where no typed body is read. A block's declared length is that of what
     /// it holds: a `Damaged` overrun is written as the bytes it kept, so it decodes as a whole
-    /// block. A frame id that is not DCP's, or a PDU past 1500 bytes, is refused.
+    /// block. What would be read back as another PDU (a damaged block or trailing bytes as the
+    /// decoder would not have kept them), a frame id that is not DCP's, or a PDU past 1500 bytes,
+    /// is refused.
     pub fn encode(&self) -> Result<Vec<u8>, DcpError> {
         if self.is_set_request() {
             return Err(DcpError::NeedsTarget("Set request"));
@@ -597,7 +649,32 @@ impl DcpPdu {
         out.extend_from_slice(&self.response_delay.to_be_bytes());
         out.extend_from_slice(&(blocks.len() as u16).to_be_bytes());
         out.extend_from_slice(&blocks);
+        self.reads_back_as_itself(&out)?;
         Ok(out)
+    }
+
+    /// What is written is read back as this PDU (its service and type as they travel): a damaged
+    /// block or trailing bytes the decoder would not have kept so (a missing word over more than
+    /// one byte, an overrun before the last block, bytes that make a block) are refused. The one
+    /// difference allowed is the decoder's own: a last block that ran past the data, with nothing
+    /// after it, is read back as the whole block it kept.
+    fn reads_back_as_itself(&self, out: &[u8]) -> Result<(), DcpError> {
+        let back = decode(out)?;
+        let mut want = DcpPdu {
+            service: Service::from_u8(self.service.to_u8()),
+            service_type: ServiceType::from_u8(self.service_type.to_u8()),
+            ..self.clone()
+        };
+        let overrun = matches!(want.blocks.last(), Some(Block { body: BlockBody::Damaged { damage: Damage::Overrun { .. }, .. }, .. }));
+        let mut got = back;
+        if overrun && want.trailing.is_empty() && got.blocks.len() == want.blocks.len() {
+            want.blocks.pop();
+            got.blocks.pop();
+        }
+        if got != want {
+            return Err(DcpError::NotItself(format!("{got:?}")));
+        }
+        Ok(())
     }
 
     /// The whole Ethernet frame, untagged, padded to 60 bytes. A Set request is written here
