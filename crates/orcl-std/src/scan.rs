@@ -31,7 +31,8 @@
 //! ```
 //!
 //! Nor is a value asked anything else: a program on a value that is `Copy` and `Default` and nothing more (not
-//! `Send`, `Sync`, `'static`, `Unpin`, `UnwindSafe` or `RefUnwindSafe`) compiles.
+//! `Send`, `Sync`, `'static`, `Unpin`, `UnwindSafe` or `RefUnwindSafe`) compiles, and is scanned and asked its safe
+//! outputs, through a generic runner and directly.
 //!
 //! ```
 //! use core::marker::{PhantomData, PhantomPinned};
@@ -44,6 +45,16 @@
 //!     type Outputs = Bare<'a>;
 //!     fn scan(&mut self, _: &Scan, i: &Bare<'a>, o: &mut Bare<'a>) { *o = *i; }
 //! }
+//! fn run<Q: Program>(program: &mut Q) -> Q::Outputs {
+//!     let mut outputs = Q::Outputs::default();
+//!     program.scan(&Scan::default(), &Q::Inputs::default(), &mut outputs);
+//!     program.safe_outputs()
+//! }
+//! let mut program = P(PhantomData);
+//! let _ = run(&mut program);
+//! let mut outputs = Bare::default();
+//! program.scan(&Scan::default(), &Bare::default(), &mut outputs);
+//! let _ = program.safe_outputs();
 //! ```
 //!
 //! ```compile_fail,E0277

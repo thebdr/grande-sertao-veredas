@@ -786,21 +786,100 @@ fn the_sources_hold_no_word_that_builds_apart_or_brings_anything_in_but_at_their
 }
 
 // The ninth refute round: no panic source and no debug-only code anywhere in the sources (clippy does not look inside
-// a local macro), and nothing in the unit tests' own modules that could make the test build differ from the one
-// programs link.
+// a local macro). Its check of the unit tests' modules is the tenth round's, below, word by word.
 
 #[test]
-fn no_source_holds_a_panic_source_or_debug_only_code_and_the_unit_tests_modules_hold_no_item_that_leaks() {
+fn no_source_holds_a_panic_source_or_debug_only_code() {
     for (file, text) in SOURCES {
         let tight = squeezed(text);
         for refused in [".unwrap(", ".expect(", "panic!", "todo!", "unimplemented!", "unreachable!", "debug_assert"] {
             assert!(!tight.contains(refused), "{file} holds {refused}");
         }
-        if let Some(at) = tight.find("#[cfg(test)]") {
-            let tests_module = &tight[at..];
-            for refused in ["impl", "trait", "macro_rules", "macro_use"] {
-                assert!(!tests_module.contains(refused), "{file}: the unit tests' module holds {refused}");
-            }
+    }
+}
+
+// The tenth refute round: the library's code holds no `assert` of any kind and no test function, the unit tests'
+// modules no item word, read with the comment lines taken out (a line that starts with `//` is never code, and a
+// comment saying "simple" holds no `impl`); timers on scans whose time goes back or whose period changes.
+
+/// A source with every line that starts with `//` taken out: what is left is the code, doc examples aside.
+fn code_of(text: &str) -> String {
+    text.lines().filter(|line| !line.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n")
+}
+
+/// A source's code split at its unit tests' module: the library's code, then the module (empty when it has none).
+fn library_and_tests(text: &str) -> (String, String) {
+    let code = code_of(text);
+    match code.find("#[cfg(test)]") {
+        Some(at) => (code[..at].to_string(), code[at..].to_string()),
+        None => (code, String::new()),
+    }
+}
+
+#[test]
+fn the_library_s_code_holds_no_assert_and_no_test_function_and_the_unit_tests_modules_no_item_word() {
+    for (file, text) in SOURCES {
+        let (library, tests_module) = library_and_tests(text);
+        let tight = squeezed(&library);
+        // `assert!`, `assert_eq!`, `assert_ne!` and `debug_assert!` panic; a test attribute, by any path, builds a
+        // function for the tests alone
+        for refused in ["assert", "test]"] {
+            assert!(!tight.contains(refused), "{file}: the library's code holds {refused}");
+        }
+        let words: Vec<&str> =
+            tests_module.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| !w.is_empty()).collect();
+        for refused in ["impl", "trait", "macro_rules", "macro_use"] {
+            assert!(!words.contains(&refused), "{file}: the unit tests' module holds {refused}");
         }
     }
+}
+
+#[test]
+fn the_word_check_reads_code_and_words_alone() {
+    let source = "/// an example: assert!(x)\npub fn f() {}\n#[cfg(test)]\nmod tests {\n    // a simple test\n    #[test]\n    fn t() { assert!(true) }\n}\n";
+    let (library, tests_module) = library_and_tests(source);
+    assert_eq!(library, "pub fn f() {}\n");
+    assert!(!squeezed(&library).contains("assert"), "a doc example is no code of the library");
+    assert!(tests_module.starts_with("#[cfg(test)]") && tests_module.contains("fn t()"));
+    assert!(!tests_module.contains("simple"), "a comment line is taken out");
+}
+
+#[test]
+fn a_scan_whose_time_goes_back_switches_no_timer_and_panics_none() {
+    let pt = ms(100);
+    let mut on = Ton::default();
+    on.scan(&at(100), true, pt);
+    assert!(!on.scan(&at(50), true, pt), "an on-delay started at 100 ms, scanned at 50: nothing elapsed");
+    assert_eq!(on.et(), ms(0));
+    assert!(on.scan(&at(200), true, pt), "and pt from its start, as before");
+    let mut off = Tof::default();
+    off.scan(&at(0), true, pt);
+    off.scan(&at(100), false, pt);
+    assert!(off.scan(&at(50), false, pt), "an off-delay dropped at 100 ms, scanned at 50: still on");
+    assert_eq!(off.et(), ms(0));
+    assert!(!off.scan(&at(200), false, pt), "and off pt after its drop, as before");
+    let mut pulse = Tp::default();
+    pulse.scan(&at(100), true, pt);
+    assert!(pulse.scan(&at(50), true, pt), "a pulse started at 100 ms, scanned at 50: still on");
+    assert_eq!(pulse.et(), ms(0));
+    assert!(!pulse.scan(&at(200), true, pt), "and over pt after its edge, as before");
+}
+
+#[test]
+fn a_period_that_changes_moves_no_timer_s_switching_time() {
+    let pt = ms(100);
+    let scan = |t: u64, period: u64| Scan { now: ms(t), period: ms(period), cycle: t / 10 };
+    let mut on = Ton::default();
+    on.scan(&scan(0, 10), true, pt);
+    assert!(!on.scan(&scan(95, 20), true, pt), "95 ms on, the period now 20 ms: still off");
+    assert!(on.scan(&scan(100, 20), true, pt));
+    let mut off = Tof::default();
+    off.scan(&scan(0, 10), true, pt);
+    off.scan(&scan(10, 10), false, pt);
+    assert!(off.scan(&scan(105, 20), false, pt), "95 ms after the drop: still on");
+    assert!(!off.scan(&scan(110, 20), false, pt));
+    let mut pulse = Tp::default();
+    pulse.scan(&scan(0, 10), true, pt);
+    assert!(pulse.scan(&scan(95, 20), true, pt), "95 ms into the pulse: still on");
+    assert!(!pulse.scan(&scan(100, 20), true, pt));
 }
