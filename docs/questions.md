@@ -1052,8 +1052,16 @@ The assistant's other proposals in this area, none ruled:
 From memory and unverified: an S7-1500 reports its memory card's used life in percent and raises a
 maintenance alarm at a configurable threshold; DuckDB confirms each commit to the drive.
 
-**Taken meanwhile**: nothing is built. On a controller the store is the memory window, as ruled;
-the rest waits.
+**Taken meanwhile**: on a controller the store is the memory window, as ruled. Since 2026-11-22
+portal has built three pieces of this area, each on the most reversible answer and none ruled:
+- the window in memory has a span and no ceiling in bytes (C-090);
+- a recording on the drive stops at its size limit, deletes nothing and counts the rows that came
+  after, which is (b) for that record (C-091);
+- every fault gets a copy of the store, none is deleted, and nothing limits their number or their
+  rate (C-093).
+
+The rest waits: fault records, the state history, earlier downloads and the logs have no limit
+and no rule yet.
 
 ## Q42 - The robustness round: the areas not opened, and the Linux study
 
