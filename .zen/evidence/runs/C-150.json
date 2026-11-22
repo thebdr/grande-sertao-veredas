@@ -1,16 +1,16 @@
 {
   "clause": "C-150",
-  "command": "sh -c cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none",
+  "command": "sh -c cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | grep -qE 'name.:.orcl_std.,.src_path.:.[^,]*/crates/orcl-std/src/lib[.]rs\"' && cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | grep -qE 'name.:.blocks.,.src_path.:.[^,]*/crates/orcl-std/tests/blocks[.]rs\"' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none",
   "commandArgv": [
     "sh",
     "-c",
-    "cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none"
+    "cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | grep -qE 'name.:.orcl_std.,.src_path.:.[^,]*/crates/orcl-std/src/lib[.]rs\"' && cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | grep -qE 'name.:.blocks.,.src_path.:.[^,]*/crates/orcl-std/tests/blocks[.]rs\"' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none"
   ],
   "exitCode": 0,
-  "outputSha": "05073bcab4575b7e1ffc6d9962b5d9420418aa0819138aab1c56ad61148cdf78",
-  "outputTail": "test crates/orcl-std/src/scan.rs - scan (line 59) - compile fail ... ok\ntest crates/orcl-std/src/scan.rs - scan (line 49) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 180) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 120) - compile fail ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s\n\nall doctests ran in 0.27s; merged doctests compilation took 0.19s\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s\n     Running unittests src/lib.rs (target/debug/build/orcl-std/6f4af301044bd167/out/orcl_std-6f4af301044bd167)\n     Running tests/blocks.rs (target/debug/build/orcl-std/04ccbbb91e41921e/out/blocks-04ccbbb91e41921e)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n   Doc-tests orcl_std\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s",
-  "ranAt": "2026-11-22T21:19:15.730Z",
-  "headCommit": "073983d71a311abe4c7c510d00d4b2ac3ba3ca43",
+  "outputSha": "34bd6a515d43e2ca2865ec93a78ce8b7357225d290f64be6de12d15879361507",
+  "outputTail": "test crates/orcl-std/src/o14.rs - o14 (line 20) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 80) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 180) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 60) - compile fail ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s\n\nall doctests ran in 0.24s; merged doctests compilation took 0.19s\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.72s\n     Running unittests src/lib.rs (target/debug/build/orcl-std/6f4af301044bd167/out/orcl_std-6f4af301044bd167)\n     Running tests/blocks.rs (target/debug/build/orcl-std/04ccbbb91e41921e/out/blocks-04ccbbb91e41921e)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s\n   Doc-tests orcl_std\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s",
+  "ranAt": "2026-11-22T22:42:35.733Z",
+  "headCommit": "3b7f7484bab27da351c478e86229bf6764ee7371",
   "tests": [
     {
       "name": "crates/orcl-std/src/timers.rs",
@@ -40,7 +40,7 @@
     {
       "name": "crates/orcl-std/src/scan.rs",
       "file": "crates/orcl-std/src/scan.rs",
-      "fileSha": "ab05af121ee9d5328951870bf987c16fd1741f094e52a26ba2d611bff0f3add8"
+      "fileSha": "09a3e414b2b30dcce033d5d9b79c15e09caf07c45aa7d267c8db3b0d30733257"
     },
     {
       "name": "crates/orcl-std/src/o14.rs",
@@ -50,7 +50,7 @@
     {
       "name": "crates/orcl-std/tests/blocks.rs",
       "file": "crates/orcl-std/tests/blocks.rs",
-      "fileSha": "91a4c12f3749707a27921140323c6a5598e792f34b687aadca8739317df40f81"
+      "fileSha": "d4f9e9fc18585618ec49c1ab2f2a9898a503c88492c6e72180ae016d25af6db8"
     }
   ]
 }
