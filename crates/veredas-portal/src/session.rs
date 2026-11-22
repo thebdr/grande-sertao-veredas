@@ -172,8 +172,8 @@ pub struct SessionConfig {
     /// The controller the portal is embedded in, as a source fed in process; none for a portal
     /// that reads no controller's memory.
     pub controller: Option<ControllerSourceConfig>,
-    /// The folder the store's window is written to at every fault record the controller source
-    /// hands in (P-019); none writes nothing.
+    /// The folder the store is written to at every fault record the controller source hands in
+    /// (P-019: its window when it is kept as one, the whole store otherwise); none writes nothing.
     pub fault_copy_dir: Option<std::path::PathBuf>,
     /// The master write switch's initial position. Off unless the project says so; set inside
     /// portal alone, so a shell reads it (`writes_armed()`) and never decides it.
@@ -249,6 +249,8 @@ pub enum SessionError {
     Store(#[from] StoreError),
     #[error("a store kept as a window is in memory: this one is on disk at {0}")]
     WindowOnDisk(String),
+    #[error("a record is for a store in memory: this one is on disk at {0}, where every row already goes")]
+    RecordOnDisk(String),
     #[error("source `{id}`: {source}")]
     Spawn { id: String, source: SourceError },
 }
@@ -698,6 +700,13 @@ impl Session {
         {
             return Err(SessionError::WindowOnDisk(path.display().to_string()));
         }
+        // A record is a store in memory's way to the drive (C-091): a store on disk already
+        // holds every row.
+        if cfg.recording.is_some()
+            && let Residency::Disk { path, .. } = &cfg.residency
+        {
+            return Err(SessionError::RecordOnDisk(path.display().to_string()));
+        }
         let mut claims = Claims::default();
         for l in &cfg.logs {
             claims.source("log", &l.id)?;
@@ -784,8 +793,11 @@ impl Session {
             built.push((source, formats, ts.is_some(), display));
         }
 
-        // The store, then the record (refused like the store when a database stands at its
-        // file), then the workers.
+        // The record's file asked first (refused like the store when a database stands there),
+        // so a refused session leaves no store behind; then the store, the record, the workers.
+        if let Some(r) = &cfg.recording {
+            crate::store::fresh_at(&r.file)?;
+        }
         let store = Arc::new(DuckStore::open(&cfg.residency, &specs, &cfg.tables)?);
         let window = window_ms(&cfg);
         let recorder = match &cfg.recording {
@@ -1500,6 +1512,8 @@ impl Inner {
     /// fault the window is written to the drive with the fault record"): through the ingest
     /// connection, the fault's row already in it, a file of its own per fault, never over one.
     fn copy_at_faults(&mut self, live: &Live) {
+        // DECISION PENDING (docs/questions.md Q41): how many copies are kept and how often one may
+        // be written is not ruled; every fault gets its copy and none is deleted.
         let Some(c) = self.controller.as_mut() else { return };
         let owed = std::mem::take(&mut c.copies_owed);
         let Some(dir) = c.copy_dir.clone() else { return };

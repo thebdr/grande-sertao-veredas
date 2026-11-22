@@ -169,6 +169,8 @@ pub fn snapshot(live: &Live) -> Json_ {
             "frames": c.frames,
             "passes": c.passes,
             "evicted": c.evicted,
+            "fault_copies": c.fault_copies,
+            "last_fault_copy": c.last_fault_copy,
             "last_error": c.last_error,
         });
     }

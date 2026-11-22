@@ -1,7 +1,7 @@
 //! The store's window written to the drive at a fault (contract: the fault-copy clause, P-019): at
 //! every fault record the controller source hands in, the session writes its store, the fault's
-//! row in it, to a file of its own in the project's folder, through its own connection. Against
-//! the bench's plant, a store kept as a window, the copies read back by a plain connection.
+//! row in it, to a file of its own in the folder the embedding names, through its own connection.
+//! Against the bench's plant, a store kept as a window, the copies read back by a plain connection.
 
 mod common;
 
@@ -73,12 +73,73 @@ fn at_a_fault_the_window_is_written_to_the_drive_with_the_fault_record() {
     assert!(wait(Duration::from_secs(10), || live.counters.read().unwrap().fault_copies == 3));
     let written = files(&copies);
     assert_eq!(written.len(), 3, "{written:?}");
-    let last = copies.join(written.iter().find(|f| f.contains(".fault-")).expect("a second name for a second fault in the same second"));
-    assert!(count(&last, "SELECT count(*) FROM controller_faults") >= 2);
+    // Each copy named for its fault's second, `.fault` for the first in a second and `.fault-1`
+    // on for the next, in the order the faults came (read off the copy that holds all three); the
+    // counters naming the newest.
+    let whole = written.iter().map(|f| copies.join(f)).max_by_key(|f| count(f, "SELECT count(*) FROM controller_faults")).unwrap();
+    let conn = duckdb::Connection::open(&whole).unwrap();
+    let mut stmt = conn.prepare("SELECT index_ms FROM controller_faults ORDER BY seq").unwrap();
+    let faults: Vec<i64> = stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    drop(stmt);
+    drop(conn);
+    assert_eq!(faults.len(), 3);
+    let mut names: Vec<String> = Vec::new();
+    for (i, ms) in faults.iter().enumerate() {
+        let second = chrono::DateTime::from_timestamp_millis(*ms).unwrap().naive_utc().format("%Y%m%d-%H%M%S").to_string();
+        let before = faults[..i].iter().filter(|m| chrono::DateTime::from_timestamp_millis(**m).unwrap().naive_utc().format("%Y%m%d-%H%M%S").to_string() == second).count();
+        names.push(if before == 0 { format!("press-{second}.fault.duckdb") } else { format!("press-{second}.fault-{before}.duckdb") });
+    }
+    let mut want = names.clone();
+    want.sort();
+    assert_eq!(written, want, "the faults came at {faults:?}");
+    assert!(names.iter().any(|n| n.contains(".fault-1.")), "a second fault in the same second: {names:?}");
+    assert_eq!(live.counters.read().unwrap().last_fault_copy.as_deref(), Some(copies.join(&names[2]).display().to_string().as_str()));
+    // The snapshot (C-044) carries the two counters, published within a refresh.
+    assert!(
+        wait(Duration::from_secs(2), || {
+            let c = &veredas_portal::serve::snapshot(&live)["counters"];
+            c["fault_copies"] == 3 && c["last_fault_copy"] == copies.join(&names[2]).display().to_string()
+        }),
+        "{}",
+        veredas_portal::serve::snapshot(&live)["counters"]
+    );
     for (id, r) in session.stop() {
         r.unwrap_or_else(|e| panic!("{id}: {e}"));
     }
     assert_eq!(count(&first, "SELECT count(*) FROM controller_faults"), 1, "a copy is never written again");
+}
+
+/// A fault accepted while the session stops has its copy: the feed closes before the last drain,
+/// and the last passes copy what they store. Every push that returned Ok is a file.
+#[test]
+fn a_fault_accepted_while_the_session_stops_has_its_copy() {
+    for round in 0..3u64 {
+        let dir = tempfile::tempdir().unwrap();
+        let copies = dir.path().join("faults");
+        let mut cfg = veredas_portal::session::SessionConfig::new("race");
+        cfg.controller = Some(ControllerSourceConfig { source_id: "cpu".into(), display_name: String::new() });
+        cfg.fault_copy_dir = Some(copies.clone());
+        let session = Session::start(cfg).unwrap();
+        let feed = session.controller_feed().unwrap();
+        let pusher = std::thread::spawn(move || {
+            let (mut accepted, mut refused) = (0u64, 0u64);
+            while refused < 5 {
+                match feed.push_fault(&fault("main")) {
+                    Ok(()) => accepted += 1,
+                    Err(_) => refused += 1,
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            accepted
+        });
+        std::thread::sleep(Duration::from_millis(30 + round * 11));
+        for (id, r) in session.stop() {
+            r.unwrap_or_else(|e| panic!("{id}: {e}"));
+        }
+        let accepted = pusher.join().unwrap();
+        assert!(accepted > 0);
+        assert_eq!(files(&copies).len() as u64, accepted, "round {round}: every accepted fault a copy");
+    }
 }
 
 #[test]

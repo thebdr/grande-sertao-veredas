@@ -141,7 +141,8 @@ against the project file's folder.
   record's files (the database and its write-ahead log) reach `max_mb` megabytes (at least 1):
   then the recording stops, nothing written is deleted, and the rows after are counted and not
   written (what gives way at a limit is open, `docs/questions.md` Q41). With a store kept as a
-  window, the record holds what the window lets go.
+  window, the record holds what the window lets go. Refused beside a store on the drive (`disk`
+  or `dir`), which already holds every row.
 - `writes_armed` (default `false`): the master switch. Off, every write path (an OPC write, a
   channel send, a reply rule) is refused before anything reaches the plant; the switch is set in
   process, never over the wire.

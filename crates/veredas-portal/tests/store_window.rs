@@ -157,20 +157,38 @@ fn every_protocol_s_rows_are_kept_as_a_window_against_the_bench() {
         "{:?}",
         live.counters.read().unwrap()
     );
-    // The oldest poll held, watched for four seconds (every phase of the window's pass): never
-    // older than the span, a pass and a margin for a loaded machine; and at its oldest at least
-    // the span old, the window keeping what arrived within it.
+    // The oldest poll held, watched for six seconds every 20 ms (every phase of the window's
+    // pass): never older than the span, a pass and a margin for a loaded machine; and at its
+    // oldest at least the span old, the window keeping what arrived within it. A poll let go
+    // between two looks was more than the span old when the look after it read the store (it
+    // went at a pass before that look, whose cutoff was the span before the pass; a loaded machine
+    // only makes it older). The oldest held moves at a pass alone (each pass lets twenty polls
+    // go): once a second, so at least five times in six seconds and never 1.45 s apart.
     let watched = Instant::now();
-    let (mut oldest_age, mut youngest_oldest) = (0i64, i64::MAX);
-    while watched.elapsed() < Duration::from_secs(4) {
+    let (mut oldest_age, mut youngest_oldest, mut youngest_gone) = (0i64, i64::MAX, i64::MAX);
+    let mut moves: Vec<Instant> = Vec::new();
+    let mut before: Vec<i64> = arrivals(&live.store, "plc_main");
+    while watched.elapsed() < Duration::from_secs(6) {
+        std::thread::sleep(Duration::from_millis(20));
+        let held = arrivals(&live.store, "plc_main");
         let now = veredas_core::now_unix_ms();
-        if let Some(first) = arrivals(&live.store, "plc_main").first() {
+        if let Some(first) = held.first() {
             oldest_age = oldest_age.max(now - first);
             youngest_oldest = youngest_oldest.min(now - first);
         }
-        std::thread::sleep(Duration::from_millis(20));
+        // What went since the last look: the arrivals before the oldest still held, every one of
+        // them if none is.
+        let gone = before.iter().filter(|a| held.first().is_none_or(|f| *a < f)).max();
+        if let Some(gone) = gone {
+            youngest_gone = youngest_gone.min(now - gone);
+            moves.push(Instant::now());
+        }
+        before = held;
     }
     assert!(oldest_age <= 1_000 + 1_000 + 700, "the oldest poll held was {oldest_age} ms old");
+    assert!(youngest_gone >= 1_000, "a poll was let go {youngest_gone} ms after it arrived, inside the span");
+    let gaps: Vec<u128> = moves.windows(2).map(|w| (w[1] - w[0]).as_millis()).collect();
+    assert!(moves.len() >= 5 && gaps.iter().all(|g| *g < 1_450), "the window's passes, {} in six seconds, apart by {gaps:?} ms", moves.len());
     // And at every look the oldest poll held is nearly the span old: with a poll every 50 ms, a
     // window keeping its span always holds one that arrived about a span ago (a loaded machine
     // only makes them older); a window cut short holds none.

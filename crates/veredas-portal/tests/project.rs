@@ -244,6 +244,14 @@ fn the_worked_example_loads_as_its_prose_says() {
     ] {
         assert_eq!(refused(&with(&text, "[session]", "store", &format!("store = \"ram\"\n{line}")), dir.path()), why, "{line}");
     }
+    // Beside a store on the drive a record is refused: that store already holds every row.
+    for store in ["store = { disk = \"s.duckdb\" }", "store = { dir = \"runs\" }"] {
+        assert_eq!(
+            refused(&with(&text, "[session]", "store", &format!("{store}\nrecord = {{ dir = \"r\", max_mb = 1 }}")), dir.path()),
+            "session.record: the store is on the drive already (`disk` or `dir`); a record is for a store in memory (`ram` or `window_s`)",
+            "{store}"
+        );
+    }
     for (line, word) in [("record = { dir = \"r\" }", "missing field `max_mb`"), ("record = { dir = \"r\", max_mb = 1, evry_s = 5 }", "unknown field `evry_s`"), ("record = { max_mb = 1 }", "missing field `dir`")] {
         let e = refused(&with(&text, "[session]", "store", &format!("store = \"ram\"\n{line}")), dir.path());
         assert!(e.contains(word), "{line}: {e}");
@@ -587,7 +595,7 @@ fn a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_n
         "session.start: `last_hours` was 0 and is carried as 1 (a start names at least one hour)",
         "session.store: mode `Hybrid` is not known (Veredas 1 had `Ram` and `Disk`); the store is in memory",
         "session.store: the memory limit of 512 MB is not carried: an in-memory store has none here (a limit belongs to a disk store)",
-        "session.store: the auto-export (every 15 minutes to `exp`) is not carried: a snapshot is taken on request (C-041), not on a timer",
+        "session.store: the auto-export (every 15 minutes to `exp`) is not carried: its nearest form, `record = { dir, max_mb, every_s }` (C-091), needs a size limit Veredas 1 never set",
     ] {
         assert!(notes.contains(expected), "no note `{expected}` in:\n{notes}");
     }
@@ -1135,7 +1143,8 @@ against the project file's folder.
   record's files (the database and its write-ahead log) reach `max_mb` megabytes (at least 1):
   then the recording stops, nothing written is deleted, and the rows after are counted and not
   written (what gives way at a limit is open, `docs/questions.md` Q41). With a store kept as a
-  window, the record holds what the window lets go.
+  window, the record holds what the window lets go. Refused beside a store on the drive (`disk`
+  or `dir`), which already holds every row.
 - `writes_armed` (default `false`): the master switch. Off, every write path (an OPC write, a
   channel send, a reply rule) is refused before anything reaches the plant; the switch is set in
   process, never over the wire.

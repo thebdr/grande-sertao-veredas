@@ -114,6 +114,29 @@ fn at_its_size_limit_a_recording_stops_and_nothing_is_deleted() {
     assert_eq!(end.recorded_rows + end.unrecorded_rows, 20_050, "{end:?}");
     assert_eq!(end.stopped_why, at_stop.stopped_why);
     assert_eq!(recorded(&file, "readings") as u64, end.recorded_rows, "what was written stays");
+    // The snapshot carries the recording whole: its file, its limit, its size, the rows recorded
+    // and not, and why it stopped.
+    assert_eq!(
+        veredas_portal::serve::snapshot(&live)["recording"],
+        json!({
+            "file": file.display().to_string(),
+            "limit_bytes": 200 * 1024,
+            "written_bytes": end.written_bytes,
+            "recorded_rows": end.recorded_rows,
+            "unrecorded_rows": end.unrecorded_rows,
+            "stopped_why": end.stopped_why,
+        })
+    );
+    assert!(end.unrecorded_rows >= 50 && end.written_bytes >= end.limit_bytes, "{end:?}");
+    // Beside a store on the drive a record is refused by name before anything opens: that store
+    // already holds every row.
+    let mut on_disk = cfg.clone();
+    let disk = dir.path().join("kept.duckdb");
+    on_disk.residency = veredas_portal::store::Residency::Disk { path: disk.clone(), memory_limit_mb: 0 };
+    on_disk.recording = Some(RecordingConfig { file: dir.path().join("other.record.duckdb"), limit_bytes: 1 << 20, write_every: Duration::from_secs(1) });
+    let e = Session::start(on_disk).err().expect("refused").to_string();
+    assert_eq!(e, format!("a record is for a store in memory: this one is on disk at {}, where every row already goes", disk.display()));
+    assert!(!disk.exists() && !dir.path().join("other.record.duckdb").exists());
     // A second session onto the same record file is refused by name, the record untouched.
     let before = std::fs::metadata(&file).unwrap().len();
     let e = Session::start(cfg).err().expect("refused").to_string();
@@ -135,11 +158,13 @@ fn a_record_is_written_once_a_period_whatever_the_poll_rate() {
     let session = Session::start(cfg).unwrap();
     let live = session.live();
     assert!(wait(Duration::from_secs(20), || live.counters.read().unwrap().polls >= 20));
-    // Six seconds of looks every 20 ms: the rows recorded change at writes alone.
+    // Looks every 20 ms until four writes are seen: the rows recorded change at writes alone (the
+    // status is published at each), every write two seconds after the one before, a pass's
+    // lateness and a margin for a loaded machine aside, never sooner.
     let started = std::time::Instant::now();
     let mut last = status(&live).recorded_rows;
     let mut changes: Vec<std::time::Duration> = Vec::new();
-    while started.elapsed() < Duration::from_secs(6) {
+    while changes.len() < 4 && started.elapsed() < Duration::from_secs(12) {
         let now = status(&live).recorded_rows;
         if now != last {
             changes.push(started.elapsed());
@@ -147,9 +172,10 @@ fn a_record_is_written_once_a_period_whatever_the_poll_rate() {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    assert!((2..=4).contains(&changes.len()), "writes in six seconds at one every two: {changes:?}");
+    assert_eq!(changes.len(), 4, "four writes at one every two seconds: {changes:?}");
     for pair in changes.windows(2) {
-        assert!(pair[1] - pair[0] >= Duration::from_millis(1_800), "two writes {:?} apart: {changes:?}", pair[1] - pair[0]);
+        let gap = pair[1] - pair[0];
+        assert!(gap >= Duration::from_millis(1_800) && gap <= Duration::from_millis(2_600), "two writes {gap:?} apart: {changes:?}");
     }
     for (id, r) in session.stop() {
         r.unwrap_or_else(|e| panic!("{id}: {e}"));

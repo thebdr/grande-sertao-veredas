@@ -105,11 +105,11 @@ required-features = ["store"]
 
 [[test]]
 name = "store_window"
-required-features = ["store"]
+required-features = ["store", "serve"]
 
 [[test]]
 name = "store_record"
-required-features = ["store"]
+required-features = ["store", "serve"]
 
 [[test]]
 name = "controller_state"
@@ -117,4 +117,4 @@ required-features = ["store"]
 
 [[test]]
 name = "fault_copy"
-required-features = ["store"]
+required-features = ["store", "serve"]

@@ -222,7 +222,8 @@ where they differ.
   probed and pinned in C-042), the listing still counting what was seen. **Built: the recording
   (C-091)**, `record = { dir, max_mb, every_s }`: a second store on the drive with the same
   tables and views, written in one batch every few seconds and at the stop, stopping at its size
-  limit with nothing deleted (Q41 open: the reversible answer, marked pending). **Built: the copy
+  limit with nothing deleted (Q41 open: the reversible answer, marked pending); refused beside a store
+  on the drive, which already holds every row. **Built: the copy
   at a fault (C-093)**, `SessionConfig::fault_copy_dir`: at every fault record the store is copied
   to a file of its own through the ingest connection, the record in it.
 - **The grep engine** over logs at rest is on Oficina's first-release list. **Built (C-094)** as

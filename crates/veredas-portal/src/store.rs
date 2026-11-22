@@ -250,9 +250,7 @@ impl DuckStore {
             Residency::Disk { path, memory_limit_mb } => {
                 // A session store is fresh: a database already at the path is refused by name,
                 // never a second session's rows beside the first's (docs/questions.md Q16).
-                if path.exists() {
-                    return Err(StoreError::Open(format!("open {}: a database already stands there; a session store is fresh, move it or snapshot elsewhere", path.display())));
-                }
+                fresh_at(path)?;
                 if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
                     std::fs::create_dir_all(parent).map_err(|e| StoreError::Open(format!("create {}: {e}", parent.display())))?;
                 }
@@ -912,7 +910,7 @@ impl DuckStore {
     /// The same copy through the ingest connection, the session's pump's own, so the pump writing
     /// its window to the drive at a fault waits on no reader (C-043); under an alias of its own,
     /// so a shell's snapshot at the same moment attaches beside it.
-    pub fn copy_to_drive(&self, path: &Path) -> Result<(), StoreError> {
+    pub(crate) fn copy_to_drive(&self, path: &Path) -> Result<(), StoreError> {
         if path.exists() {
             return Err(StoreError::Open(format!("copy {}: a file already stands there; a copy never writes over one", path.display())));
         }
@@ -1336,6 +1334,15 @@ fn csv_field_counts(path: &str, opts: &CsvOptions) -> Option<Vec<usize>> {
         counts.push(fields);
     }
     Some(counts)
+}
+
+/// A store on the drive is fresh: a database already at its path is refused by name, never a
+/// second session's rows beside the first's (docs/questions.md Q16). Asked before anything opens.
+pub(crate) fn fresh_at(path: &Path) -> Result<(), StoreError> {
+    if path.exists() {
+        return Err(StoreError::Open(format!("open {}: a database already stands there; a session store is fresh, move it or snapshot elsewhere", path.display())));
+    }
+    Ok(())
 }
 
 /// Whether reading `path` with `opts` still yields one unsplit column.

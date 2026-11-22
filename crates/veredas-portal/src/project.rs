@@ -661,6 +661,9 @@ pub fn load(text: &str, base: &Path) -> Result<Project, ProjectError> {
             if r.every_s == 0 {
                 return Err(invalid("session.record: `every_s` is 0; name at least one second"));
             }
+            if matches!(store, Store::Disk { .. } | Store::PerSession { .. }) {
+                return Err(invalid("session.record: the store is on the drive already (`disk` or `dir`); a record is for a store in memory (`ram` or `window_s`)"));
+            }
             Some(Recording { dir: resolve(base, &r.dir), max_mb: r.max_mb, every_s: r.every_s })
         }
     };
@@ -1387,7 +1390,7 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
         Some(st) => {
             if st.auto_export_mins > 0 || !st.export_dir.trim().is_empty() {
                 notes.push(format!(
-                    "session.store: the auto-export (every {} minutes to `{}`) is not carried: a snapshot is taken on request (C-041), not on a timer",
+                    "session.store: the auto-export (every {} minutes to `{}`) is not carried: its nearest form, `record = {{ dir, max_mb, every_s }}` (C-091), needs a size limit Veredas 1 never set",
                     st.auto_export_mins,
                     st.export_dir.trim()
                 ));

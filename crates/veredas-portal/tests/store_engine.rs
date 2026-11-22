@@ -171,6 +171,36 @@ fn a_file_backed_database_takes_its_limits_and_reopens() {
     assert_eq!(n, 100);
 }
 
+/// A file database's write-ahead log, which a record's size counts (C-091): rows committed stand
+/// in `<file>.wal` beside the file, `CHECKPOINT` folds them into the file and leaves no log behind,
+/// and the file grows in whole blocks (the engine's block size, read from the engine), so its size
+/// on the drive steps.
+#[test]
+fn a_file_database_logs_beside_itself_until_a_checkpoint_folds_the_log_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("record.duckdb");
+    let wal = dir.path().join("record.duckdb.wal");
+    let conn = Connection::open(&db).unwrap();
+    conn.execute_batch("CREATE TABLE t (v BIGINT, s VARCHAR)").unwrap();
+    let mut app = conn.appender("t").unwrap();
+    for i in 0..10_000i64 {
+        app.append_row(params![i, format!("row {i}")]).unwrap();
+    }
+    app.flush().unwrap();
+    drop(app);
+    let logged = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+    assert!(logged > 0, "committed rows logged beside the file, in {}", wal.display());
+    conn.execute_batch("CHECKPOINT").unwrap();
+    assert!(!wal.exists() || std::fs::metadata(&wal).unwrap().len() == 0, "the log folded in");
+    let block: i64 = conn.query_row("SELECT block_size FROM pragma_database_size()", [], |r| r.get(0)).unwrap();
+    let blocks: i64 = conn.query_row("SELECT total_blocks FROM pragma_database_size()", [], |r| r.get(0)).unwrap();
+    let size = std::fs::metadata(&db).unwrap().len() as i64;
+    assert!(blocks > 0 && size >= blocks * block, "{size} bytes for {blocks} blocks of {block}");
+    assert_eq!((size - blocks * block) % 4096, 0, "a header of whole pages beside the blocks: {size} bytes, {blocks} blocks of {block}");
+    let n: i64 = conn.query_row("SELECT count(*) FROM t", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 10_000);
+}
+
 /// A connection behind a mutex is shared across threads: the store's layout.
 #[test]
 fn a_mutexed_connection_is_shared_across_threads() {
