@@ -3,7 +3,9 @@
 //! access on every width, and a program's default safe outputs. O14 (function blocks are not copied) is pinned by
 //! the `compile_fail` doctests of `src/o14.rs`, each beside a twin that compiles. The second refute round added
 //! boundaries off the 10 ms grid, scans whose time disagrees with their cycle, every block's `q()`, the counter at
-//! a preset of zero and at its top, and the crate's own attributes.
+//! a preset of zero and at its top, and the crate's own attributes. The third round added timers started off
+//! the grid, a preset time of zero, a one-scan trigger, a negative preset, `set_bit` past the width, and the crate
+//! root compared line by line.
 use orcl_std::{Bits, Ctu, Duration, FTrig, Program, RTrig, Scan, Tof, Ton, Tp, ms};
 
 fn at(t: u64) -> Scan {
@@ -275,23 +277,105 @@ fn the_counter_at_a_preset_of_zero_at_a_held_reset_and_at_its_top() {
 }
 
 #[test]
-fn the_crate_holds_itself_to_the_language_s_rules() {
-    let lib = include_str!("../src/lib.rs");
-    for attribute in ["#![cfg_attr(not(test), no_std)]", "#![forbid(unsafe_code)]"] {
-        assert!(lib.contains(attribute), "src/lib.rs lacks {attribute}");
-    }
-    let deny = lib.split("#![deny(").nth(1).and_then(|rest| rest.split(")]").next()).expect("a #![deny(...)] list");
-    let lints: Vec<&str> = deny.split(',').map(str::trim).filter(|l| !l.is_empty()).collect();
+fn the_crate_root_is_exactly_its_attributes_its_modules_and_its_exports() {
+    // Every line of src/lib.rs but its `//!` documentation, as it must stand: `no_std`, `unsafe` forbidden, the six
+    // denied lints, nothing allowed back, no `std` brought in, nothing commented out. A change to the root is a
+    // change to this list.
+    let root: Vec<&str> = include_str!("../src/lib.rs")
+        .lines()
+        .filter(|line| !line.starts_with("//!") && !line.trim().is_empty())
+        .collect();
     assert_eq!(
-        lints,
+        root,
         vec![
-            "clippy::arithmetic_side_effects",
-            "clippy::indexing_slicing",
-            "clippy::panic",
-            "clippy::unwrap_used",
-            "clippy::expect_used",
-            "clippy::disallowed_types"
+            "#![cfg_attr(not(test), no_std)]",
+            "#![forbid(unsafe_code)]",
+            "#![deny(",
+            "    clippy::arithmetic_side_effects,",
+            "    clippy::indexing_slicing,",
+            "    clippy::panic,",
+            "    clippy::unwrap_used,",
+            "    clippy::expect_used,",
+            "    clippy::disallowed_types",
+            ")]",
+            "mod bits;",
+            "mod counters;",
+            "mod edges;",
+            "mod o14;",
+            "mod scan;",
+            "mod timers;",
+            "pub use bits::Bits;",
+            "pub use core::time::Duration;",
+            "pub use counters::Ctu;",
+            "pub use edges::{FTrig, RTrig};",
+            "pub use scan::{Program, Scan, ms, s};",
+            "pub use timers::{Tof, Ton, Tp};",
         ]
     );
     let _: Duration = ms(1);
+}
+
+#[test]
+fn a_timer_started_off_the_cycle_grid_times_from_the_scan_s_time() {
+    // every timer started by a scan whose time (500 ms) is not its cycle number times the period (30 ms)
+    let pt = ms(100);
+    let mut on = Ton::default();
+    assert!(!on.scan(&scan_at(500, 3), true, pt));
+    assert!(!on.scan(&scan_at(510, 4), true, pt));
+    assert_eq!(on.et(), ms(10));
+    assert!(on.scan(&scan_at(600, 5), true, pt));
+
+    let mut off = Tof::default();
+    off.scan(&scan_at(490, 2), true, pt);
+    assert!(off.scan(&scan_at(500, 3), false, pt), "the drop starts the delay at 500 ms");
+    assert!(off.scan(&scan_at(510, 4), false, pt));
+    assert_eq!(off.et(), ms(10));
+    assert!(!off.scan(&scan_at(600, 5), false, pt));
+
+    let mut pulse = Tp::default();
+    assert!(pulse.scan(&scan_at(500, 3), true, pt), "the edge starts the pulse at 500 ms");
+    assert!(pulse.scan(&scan_at(510, 4), true, pt));
+    assert_eq!(pulse.et(), ms(10));
+    assert!(!pulse.scan(&scan_at(600, 5), true, pt));
+}
+
+#[test]
+fn a_preset_time_of_zero_switches_on_the_same_scan() {
+    let mut on = Ton::default();
+    assert!(on.scan(&at(0), true, ms(0)), "on the first scan its input is on");
+    let mut off = Tof::default();
+    assert!(off.scan(&at(0), true, ms(0)));
+    assert!(!off.scan(&at(10), false, ms(0)), "off on the scan of the drop");
+}
+
+#[test]
+fn a_pulse_triggered_for_one_scan_lasts_exactly_pt() {
+    let pt = ms(100);
+    let mut pulse = Tp::default();
+    let seen: Vec<bool> = (0..12).map(|k| pulse.scan(&at(k * 10), k == 0, pt)).collect();
+    assert_eq!(seen, [vec![true; 10], vec![false; 2]].concat(), "on from 0 to 90 ms with the input off, off at 100");
+}
+
+#[test]
+fn a_negative_preset_is_reached_at_once() {
+    let mut c = Ctu::default();
+    assert!(c.scan(false, false, -1));
+    assert_eq!(c.cv(), 0);
+}
+
+#[test]
+fn set_bit_past_the_width_writes_nothing_on_every_width() {
+    fn check<T: Bits + PartialEq + core::fmt::Debug + Copy>(value: T) {
+        let mut v = value;
+        v.set_bit(T::WIDTH, true);
+        v.set_bit(T::WIDTH, false);
+        v.set_bit(u32::MAX, true);
+        assert_eq!(v, value);
+    }
+    check(0x5A_u8);
+    check(0x5A5A_u16);
+    check(0x5A5A_5A5A_u32);
+    check(0x5A5A_5A5A_5A5A_5A5A_u64);
+    check(0_u8);
+    check(u64::MAX);
 }

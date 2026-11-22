@@ -54,7 +54,10 @@ mod tests {
             q: false,
             last_cu: false,
         };
-        c.scan(true, false, 1);
+        assert!(c.scan(true, false, 1), "q on at the top");
+        assert_eq!(c.cv(), i32::MAX);
+        assert!(c.q());
+        assert!(c.scan(false, false, i32::MAX), "the top reaches a preset of i32::MAX");
         assert_eq!(c.cv(), i32::MAX);
     }
 }

@@ -1,8 +1,9 @@
 //! The scan model: what a program sees each cycle, and what a program is.
 //!
 //! A program's inputs and outputs are values, copied into and out of the process image: both must be `Copy`. A
-//! program whose inputs or outputs are not does not compile (each `compile_fail` below has a twin that compiles,
-//! since stable rustdoc does not check the error code it names):
+//! program whose inputs or outputs are not does not compile, even with every other trait (a `Vec` below: `Clone`,
+//! `Default`, `Debug`, `PartialEq`...). Each `compile_fail` has a twin that compiles, since stable rustdoc does not
+//! check the error code it names:
 //!
 //! ```
 //! use orcl_std::{Program, Scan};
@@ -16,25 +17,21 @@
 //!
 //! ```compile_fail,E0277
 //! use orcl_std::{Program, Scan};
-//! #[derive(Default)]
-//! struct Held(u8);
 //! struct P;
 //! impl Program for P {
-//!     type Inputs = Held;
+//!     type Inputs = Vec<u8>;
 //!     type Outputs = [u8; 4];
-//!     fn scan(&mut self, _: &Scan, _: &Held, _: &mut [u8; 4]) {}
+//!     fn scan(&mut self, _: &Scan, _: &Vec<u8>, _: &mut [u8; 4]) {}
 //! }
 //! ```
 //!
 //! ```compile_fail,E0277
 //! use orcl_std::{Program, Scan};
-//! #[derive(Default)]
-//! struct Held(u8);
 //! struct P;
 //! impl Program for P {
 //!     type Inputs = [u8; 4];
-//!     type Outputs = Held;
-//!     fn scan(&mut self, _: &Scan, _: &[u8; 4], _: &mut Held) {}
+//!     type Outputs = Vec<u8>;
+//!     fn scan(&mut self, _: &Scan, _: &[u8; 4], _: &mut Vec<u8>) {}
 //! }
 //! ```
 use core::time::Duration;
