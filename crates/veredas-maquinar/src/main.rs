@@ -1,5 +1,6 @@
 //! `veredas-maquinar <bench.toml> [--check]`: run a bench file until stdin closes or the process
-//! is ended, printing every part's status line once a second; with `--check`, read and check
+//! is ended, printing every part's status line once at the start and then once a second (a server's
+//! line carries the address it got); with `--check`, read and check
 //! the file and its referenced files, print the plan, and exit without starting anything.
 //!
 //! Exit codes: 0 when the bench ran or the check passed; 2 when the file or a referenced file is
@@ -56,6 +57,11 @@ fn main() {
     println!("{}: {} part(s) running; close stdin or end the process to stop", file.display(), plan.len());
     for line in &plan {
         println!("  {line}");
+    }
+    // Every part's status at once, with the addresses the servers got: a consumer that started the
+    // bench on port 0 reads its port here rather than a second later.
+    for line in bench.lines() {
+        println!("{line}");
     }
     // Stdin closing is the stop signal: a line "stop" too.
     let (tx, rx) = std::sync::mpsc::channel::<()>();

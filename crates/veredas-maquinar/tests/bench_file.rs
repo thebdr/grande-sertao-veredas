@@ -13,6 +13,7 @@ use veredas_core::telegram::Role;
 use veredas_maquinar::bench::*;
 use veredas_maquinar::channel::CyclicMessage;
 use veredas_maquinar::emit::{Encoding, ValueField};
+use veredas_maquinar::modbus::{PointConfig, PointType, Table, WordOrder};
 use veredas_maquinar::opc::{Access, Credentials, Ramp, Randomize, Reaction, Step, TagConfig, TagType};
 
 fn doc(name: &str) -> String {
@@ -231,6 +232,8 @@ fn full_file(port: u16) -> String {
          [[opc]]\nname = \"s\"\nbind = \"127.0.0.1\"\nport = 0\nuser = {{ name = \"u\", password = \"p\" }}\nmax_nodes_per_read = 10\nmax_sessions = 2\n\
          tags = [ {{ id = \"t\", name = \"T\", type = \"float\", access = \"read-write\", value = \"1\", randomize = {{ low = 1, high = 2, decimals = 1, interval_ms = 100 }} }}, {{ id = \"r\", type = \"float\", value = \"2\", ramp = {{ low = 0, high = 10, step = 2, decimals = 1, interval_ms = 100 }} }} ]\n\
          reactions = [ {{ on_write = \"t\", equals = \"5\", tag = \"t\", then = [ {{ after_ms = 1, set = \"6\" }} ] }} ]\n\n\
+         [[modbus]]\nname = \"m\"\nbind = \"127.0.0.1\"\nport = 0\nunit = 1\nmax_connections = 2\ncoils = 4\ndiscrete_inputs = 4\ninput_registers = 4\nholding_registers = 4\n\
+         points = [ {{ name = \"p\", table = \"holding-register\", address = 0, type = \"u32\", words = \"low-first\", value = \"1\" }} ]\n\n\
          [[channel]]\nname = \"c\"\nrole = \"listen\"\nhost = \"127.0.0.1\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\ncontroller = \"machine.toml\"\n\
          messages = [ {{ message = \"status\", every_ms = 100, fields = [ {{ name = \"running\", value = 1 }}, {{ name = \"speed\", value = 1 }} ] }} ]\n",
         header()
@@ -292,8 +295,8 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
     let tables: Vec<&str> = documented.iter().map(|(t, _)| t.as_str()).collect();
     assert_eq!(
         tables,
-        ["The top level", "An emitter", "A value", "An OPC UA server", "A user", "A tag", "A draw", "A ramp", "A reaction", "A step", "A channel", "A message"],
-        "the reference's twelve tables"
+        ["The top level", "An emitter", "A value", "An OPC UA server", "A user", "A tag", "A draw", "A ramp", "A reaction", "A step", "A Modbus server", "A point", "A channel", "A message"],
+        "the reference's fourteen tables"
     );
     let dir = scratch("walk");
     let (_, port) = plant(&dir);
@@ -304,6 +307,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             "The top level" => "",
             "An emitter" => "[[emitter]]",
             "An OPC UA server" => "[[opc]]",
+            "A Modbus server" => "[[modbus]]",
             "A channel" => "[[channel]]",
             _ => return None,
         })
@@ -317,6 +321,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             "A ramp" => "low = 1\nhigh = 2\nstep = 1\ndecimals = 1\ninterval_ms = 100\n",
             "A reaction" => "on_write = \"t\"\nequals = \"5\"\ntag = \"t\"\nthen = [ { set = \"6\" } ]\n",
             "A step" => "after_ms = 1\nset = \"6\"\n",
+            "A point" => "name = \"p\"\ntable = \"holding-register\"\naddress = 0\ntype = \"u32\"\nwords = \"low-first\"\nvalue = \"1\"\n",
             "A message" => "message = \"status\"\nevery_ms = 100\nfields = [ { name = \"running\", value = 1 } ]\n",
             other => panic!("{other}"),
         }
@@ -333,6 +338,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             "The top level" => format!("{}{zz}", header()),
             "An emitter" => full.replace("[[emitter]]\n", &format!("[[emitter]]\n{zz}")),
             "An OPC UA server" => full.replace("[[opc]]\n", &format!("[[opc]]\n{zz}")),
+            "A Modbus server" => full.replace("[[modbus]]\n", &format!("[[modbus]]\n{zz}")),
             "A channel" => full.replace("[[channel]]\n", &format!("[[channel]]\n{zz}")),
             "A value" => full.replace("{ name = \"v\",", "{ name = \"v\", zz = 1,"),
             "A user" => full.replace("{ name = \"u\",", "{ name = \"u\", zz = 1,"),
@@ -341,6 +347,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
             "A ramp" => full.replace("ramp = { low = 0,", "ramp = { low = 0, zz = 1,"),
             "A reaction" => full.replace("{ on_write = \"t\",", "{ on_write = \"t\", zz = 1,"),
             "A step" => full.replace("{ after_ms = 1,", "{ after_ms = 1, zz = 1,"),
+            "A point" => full.replace("{ name = \"p\",", "{ name = \"p\", zz = 1,"),
             "A message" => full.replace("{ message = \"status\",", "{ message = \"status\", zz = 1,"),
             other => panic!("{other}"),
         }
@@ -363,6 +370,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                 let text = match (table.as_str(), key.as_str()) {
                     ("The top level", "emitter") => without_sections(&full, &["[[emitter]]"]),
                     ("The top level", "opc") => without_sections(&full, &["[[opc]]"]),
+                    ("The top level", "modbus") => without_sections(&full, &["[[modbus]]"]),
                     ("The top level", "channel") => without_sections(&full, &["[[channel]]"]),
                     // A reaction needs its tags.
                     ("An OPC UA server", "tags") => without_line(&without_line(&full, "[[opc]]", "tags"), "[[opc]]", "reactions"),
@@ -384,6 +392,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                     ("The top level", "out_dir") => assert_eq!((default.as_str(), spec.out_dir.clone()), ("\".\"", dir.join("."))),
                     ("The top level", "emitter") => assert!(default == "none" && spec.emitters.is_empty()),
                     ("The top level", "opc") => assert!(default == "none" && spec.servers.is_empty()),
+                    ("The top level", "modbus") => assert!(default == "none" && spec.modbus.is_empty()),
                     ("The top level", "channel") => assert!(default == "none" && spec.channels.is_empty()),
                     ("An emitter", "values") => assert!(default == "none" && spec.emitters[0].values.is_empty()),
                     ("An emitter", "max_lines") => assert_eq!((default.as_str(), spec.emitters[0].max_lines), ("0", 0)),
@@ -396,6 +405,15 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                     ("An OPC UA server", "max_sessions") => assert!(default == "none" && spec.servers[0].1.max_sessions.is_none()),
                     ("An OPC UA server", "tags") => assert!(default == "none" && spec.servers[0].1.tags.is_empty()),
                     ("An OPC UA server", "reactions") => assert!(default == "none" && spec.servers[0].1.reactions.is_empty()),
+                    ("A Modbus server", "bind") => assert_eq!((default.as_str(), spec.modbus[0].1.bind.as_str()), ("\"127.0.0.1\"", "127.0.0.1")),
+                    ("A Modbus server", "port") => assert_eq!((default.as_str(), spec.modbus[0].1.port), ("502", 502)),
+                    ("A Modbus server", "unit") => assert!(default == "none" && spec.modbus[0].1.unit.is_none()),
+                    ("A Modbus server", "max_connections") => assert!(default == "none" && spec.modbus[0].1.max_connections.is_none()),
+                    ("A Modbus server", "coils") => assert!(default == "none" && spec.modbus[0].1.coils.is_none()),
+                    ("A Modbus server", "discrete_inputs") => assert!(default == "none" && spec.modbus[0].1.discrete_inputs.is_none()),
+                    ("A Modbus server", "input_registers") => assert!(default == "none" && spec.modbus[0].1.input_registers.is_none()),
+                    ("A Modbus server", "holding_registers") => assert!(default == "none" && spec.modbus[0].1.holding_registers.is_none()),
+                    ("A Modbus server", "points") => assert!(default == "none" && spec.modbus[0].1.points.is_empty()),
                     ("A channel", "host") => assert_eq!((default.as_str(), &spec.channels[0].role), ("\"127.0.0.1\"", &Role::Listen { bind: "127.0.0.1".into(), port })),
                     ("A channel", "controller") => assert!(default == "none" && spec.channels[0].controller.is_none()),
                     ("A channel", "messages") => assert!(default == "none" && spec.channels[0].messages.is_empty()),
@@ -440,6 +458,10 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
                 ("A reaction", _) => check!(Reaction, |_| false),
                 ("A step", "after_ms") => check!(Step, |s| default == "0" && s.after_ms == 0),
                 ("A step", _) => check!(Step, |_| false),
+                ("A point", "type") => check!(PointConfig, |p| default == "bool` in a bit table, `u16` in a register table" && p.ty.is_none()),
+                ("A point", "words") => check!(PointConfig, |p| default == "\"high-first\"" && p.words.is_none()),
+                ("A point", "value") => check!(PointConfig, |p| default == "the type's zero" && p.value.is_empty()),
+                ("A point", _) => check!(PointConfig, |_| false),
                 ("A message", "every_ms") => check!(CyclicMessage, |m| default == "0" && m.every_ms == 0),
                 ("A message", "fields") => check!(CyclicMessage, |m| default == "none" && m.fields.is_empty()),
                 ("A message", _) => check!(CyclicMessage, |_| false),
@@ -464,6 +486,21 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
     assert_eq!(toml::from_str::<TagConfig>("id = \"t\"\ntype = \"int\"\n").unwrap().ty, TagType::Int);
     assert!(prose.contains("`access` (`\"read\"`): `read`, `write` (a command the controller takes but does not report) or `read-write`."));
     assert_eq!(variants(toml::from_str::<TagConfig>("id = \"t\"\ntype = \"int\"\naccess = \"x\"\n").unwrap_err().to_string()), ["read", "read-write", "write"]);
+    assert!(prose.contains("`table` (required): `coil`, `discrete-input`, `input-register` or `holding-register`."));
+    let point = |rest: &str| format!("name = \"p\"\naddress = 0\n{rest}");
+    assert_eq!(variants(toml::from_str::<PointConfig>(&point("table = \"x\"")).unwrap_err().to_string()), ["coil", "discrete-input", "holding-register", "input-register"]);
+    for (word, table) in [("coil", Table::Coil), ("discrete-input", Table::DiscreteInput), ("input-register", Table::InputRegister), ("holding-register", Table::HoldingRegister)] {
+        assert_eq!(toml::from_str::<PointConfig>(&point(&format!("table = \"{word}\""))).unwrap().table, table);
+    }
+    assert!(prose.contains("`type` (`bool` in a bit table, `u16` in a register table): `bool` in a coil or a discrete input; `u16`, `i16`, `u32`, `i32` or `f32` (a single-precision float) in a register table, the last three over two registers."));
+    assert_eq!(variants(toml::from_str::<PointConfig>(&point("table = \"coil\"\ntype = \"x\"")).unwrap_err().to_string()), ["bool", "f32", "i16", "i32", "u16", "u32"]);
+    assert_eq!(toml::from_str::<PointConfig>(&point("table = \"coil\"\ntype = \"f32\"")).unwrap().ty, Some(PointType::F32));
+    assert!(prose.contains("`words` (`\"high-first\"`): which of a two-register point's registers holds the high word, `high-first` (the one at its address) or `low-first`;"));
+    assert_eq!(variants(toml::from_str::<PointConfig>(&point("table = \"coil\"\nwords = \"x\"")).unwrap_err().to_string()), ["high-first", "low-first"]);
+    assert_eq!(toml::from_str::<PointConfig>(&point("table = \"coil\"\nwords = \"low-first\"")).unwrap().words, Some(WordOrder::LowFirst));
+    let m = load(&full, &dir).unwrap();
+    assert_eq!(m.modbus[0].0, "m");
+    assert_eq!((m.modbus[0].1.unit, m.modbus[0].1.max_connections, m.modbus[0].1.coils, m.modbus[0].1.holding_registers), (Some(1), Some(2), Some(4), Some(4)));
     assert!(prose.contains("`encoding` (`\"utf-8\"`): `\"utf-8\"` or `\"utf-16le\"`, the latter with a byte-order mark."));
     assert_eq!(variants(refused(&full.replace("encoding = \"utf-8\"", "encoding = \"x\""), &dir)), ["utf-16le", "utf-8"]);
     assert!(prose.contains("`role` (required): `listen` (wait for the peer to connect) or `connect` (dial it)."));
@@ -516,6 +553,15 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
         "opc[0] (`s`): opc.tags[0] (`z`).randomize.interval_ms is 0"
     );
     assert_eq!(refused(&format!("{h}[[opc]]\nname = \"s\"\nbind = \" \"\n"), &dir), "opc[0] (`s`): opc.bind is empty");
+    assert_eq!(refused(&emitter("[[modbus]]\nname = \"e\"\n"), &dir), "modbus[0]: `e` is already the name of the emitter `e`");
+    assert_eq!(
+        refused(&format!("{h}[[modbus]]\nname = \"m\"\npoints = [ {{ name = \"a\", table = \"coil\", address = 0, type = \"u16\" }} ]\n"), &dir),
+        "modbus[0] (`m`): modbus.points[0] (`a`): a coil holds a bool, not u16"
+    );
+    assert_eq!(
+        refused(&format!("{h}[[modbus]]\nname = \"m\"\nholding_registers = 1\npoints = [ {{ name = \"a\", table = \"holding-register\", address = 1 }} ]\n"), &dir),
+        "modbus[0] (`m`): modbus.points: point `a` (u16 at 1) is past the end of the holding-register table (holding_registers = 1)"
+    );
     // The channel's files and rules.
     let channel = |body: &str| format!("{h}[[channel]]\nname = \"c\"\nrole = \"listen\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n{body}");
     assert_eq!(refused(&channel("host = \" \"\n"), &dir), "channel[0] (`c`).host is empty");
@@ -547,7 +593,7 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     );
     // The closing paragraph says so.
     let prose = doc_prose();
-    assert!(prose.contains("A misspelled key in any table, a part without a name or with a name another part has, an emitter's file name or timestamp format that is bad, a value's range that is empty or not finite, anything the OPC UA server's own checks refuse, a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that does not load against the catalog, a message the catalog lacks or whose fields leave a name unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the place named, before anything binds, opens or spawns."));
+    assert!(prose.contains("A misspelled key in any table, a part without a name or with a name another part has, an emitter's file name or timestamp format that is bad, a value's range that is empty or not finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past its table's end, a type its table cannot hold, a value that does not parse), a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that does not load against the catalog, a message the catalog lacks or whose fields leave a name unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the place named, before anything binds, opens or spawns."));
     // A part that cannot start: a server on a taken port, named; the emitter before it stopped.
     assert!(prose.contains("A part that cannot start (a port taken, a folder that cannot be created) stops the parts started before it and is named."));
     let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -568,6 +614,12 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     let spec = load(&format!("{h}[[opc]]\nname = \"a\"\nport = {q}\n\n[[opc]]\nname = \"b\"\nport = {taken}\n"), &dir).unwrap();
     assert!(start_err(spec).starts_with("opc `b`: bind "));
     assert!(std::net::TcpListener::bind(("127.0.0.1", q)).is_ok(), "the first server's port is free at once");
+    // A Modbus server on a taken port, named, the OPC UA server before it stopped and its port free.
+    let q = free_port();
+    let spec = load(&format!("{h}[[opc]]\nname = \"a\"\nport = {q}\n\n[[modbus]]\nname = \"b\"\nport = {taken}\n"), &dir).unwrap();
+    let err = start_err(spec);
+    assert!(err.starts_with(&format!("modbus `b`: bind 127.0.0.1:{taken}: ")), "{err}");
+    assert!(std::net::TcpListener::bind(("127.0.0.1", q)).is_ok(), "the server before it stopped");
     // Servers start before channels: a channel that would dial the test's own socket never
     // dials when a server before it fails.
     let ear = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -591,19 +643,19 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
 
 #[test]
 fn the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order() {
-    assert!(doc_prose().contains("emitters first, then servers, then channels, each kind in the file's order (TOML groups a kind's tables under one key, so a file keeps no order across kinds)"));
+    assert!(doc_prose().contains("emitters first, then servers (OPC UA, then Modbus), then channels, each kind in the file's order (TOML groups a kind's tables under one key, so a file keeps no order across kinds)"));
     let dir = scratch("order");
     let (_, port) = plant(&dir);
     let text = format!(
-        "{}[[opc]]\nname = \"first\"\nport = 0\n\n[[channel]]\nname = \"second\"\nrole = \"listen\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n\n[[emitter]]\nname = \"third\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 100\nfile = \"t.log\"\n\n[[emitter]]\nname = \"fourth\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 100\nfile = \"f.log\"\n\n[[opc]]\nname = \"fifth\"\nport = 0\n",
+        "{}[[modbus]]\nname = \"sixth\"\nport = 0\n\n[[opc]]\nname = \"first\"\nport = 0\n\n[[channel]]\nname = \"second\"\nrole = \"listen\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n\n[[emitter]]\nname = \"third\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 100\nfile = \"t.log\"\n\n[[emitter]]\nname = \"fourth\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 100\nfile = \"f.log\"\n\n[[opc]]\nname = \"fifth\"\nport = 0\n\n[[modbus]]\nname = \"seventh\"\nport = 0\n",
         header()
     );
     let spec = load(&text, &dir).unwrap();
     let order = |lines: &[String]| lines.iter().map(|l| l.split('`').nth(1).unwrap_or("").to_string()).collect::<Vec<_>>();
-    assert_eq!(order(&spec.plan()), ["third", "fourth", "first", "fifth", "second"]);
+    assert_eq!(order(&spec.plan()), ["third", "fourth", "first", "fifth", "sixth", "seventh", "second"]);
     let bench = Bench::start(spec).unwrap();
-    assert_eq!(bench.status().iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(), ["third", "fourth", "first", "fifth", "second"]);
-    assert_eq!(bench.lines().iter().map(|l| l.split(' ').nth(1).unwrap().trim_end_matches(':').to_string()).collect::<Vec<_>>(), ["third", "fourth", "first", "fifth", "second"]);
+    assert_eq!(bench.status().iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(), ["third", "fourth", "first", "fifth", "sixth", "seventh", "second"]);
+    assert_eq!(bench.lines().iter().map(|l| l.split(' ').nth(1).unwrap().trim_end_matches(':').to_string()).collect::<Vec<_>>(), ["third", "fourth", "first", "fifth", "sixth", "seventh", "second"]);
     bench.stop();
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -796,15 +848,15 @@ const REFERENCE: &str = r#"
 # The bench file: `veredas-bench`, version 1
 
 A bench is the plant a consumer meets before the real one (`docs/veredas-plan.md`,
-"veredas-maquinar: the bench"): the log emitters, the OPC UA servers and the telegram channels
-it talks to, each configured, none programmed. One bench file lists them all by name, and the
+"veredas-maquinar: the bench"): the log emitters, the OPC UA and Modbus servers and the telegram
+channels it talks to, each configured, none programmed. One bench file lists them all by name, and the
 device's own files sit beside it: core's channel file (`docs/channel-schema.md`), the catalog
 (`docs/catalog-schema.md`) and, when a controller rides a channel, its rules file
 (`docs/controller-schema.md`). `veredas_maquinar::bench::load` reads the bench file and every
 file it points at and checks each part as its own module checks it, so a bench file that loads
 is a bench every part of which can start; `Bench::start` then runs every part behind one handle,
-emitters first, then servers, then channels, each kind in the file's order (TOML groups a
-kind's tables under one key, so a file keeps no order across kinds), and the executable
+emitters first, then servers (OPC UA, then Modbus), then channels, each kind in the file's order
+(TOML groups a kind's tables under one key, so a file keeps no order across kinds), and the executable
 `veredas-maquinar <bench.toml>` runs it from the command line (`--check` reads, checks and
 prints the plan without starting anything). No device is named anywhere: a
 plant's bench is a folder of files like the ones below, kept outside the suite's code.
@@ -826,6 +878,15 @@ beside this file under the names it gives; the emitter writes under `logs`, besi
 sees every part do its work, and runs the executable on it; it holds a copy of this text, so an
 edit here is an edit there.
 
+## A second example: a drive on Modbus/TCP
+
+A drive answers as unit 1 on port 5502: a client writes its speed setpoint into a holding register
+and starts it with a coil; the plant side answers with the speed reached, a float over two input
+registers, and a ready input. `crates/veredas-maquinar/tests/modbus_server.rs` loads this block on
+a port the machine chooses, drives it with a Modbus client the bench did not write, and sees the
+plant side meet it.
+
+
 ## Keys
 
 Each key states in parentheses that it is required, or the value it takes when left out. Every
@@ -842,6 +903,7 @@ relative to the bench file's folder.
 - `out_dir` (`"."`): where the emitters write, created when there is an emitter.
 - `emitter` (none): `[[emitter]]` tables.
 - `opc` (none): `[[opc]]` tables.
+- `modbus` (none): `[[modbus]]` tables.
 - `channel` (none): `[[channel]]` tables.
 
 **An emitter** (`[[emitter]]`): a log a plant would write, line by line into rotating files.
@@ -920,6 +982,36 @@ starts again at `low`, one inside it moves the ramp on from there.
 - `after_ms` (`0`): the delay.
 - `set` (required): the value set, as text parsed per the target tag's type.
 
+**A Modbus server** (`[[modbus]]`): a device's four tables over Modbus/TCP: coils and discrete
+inputs (bits), input and holding registers (16-bit words), a client writing the coils and the
+holding registers only.
+- `name` (required): the part's name.
+- `bind` (`"127.0.0.1"`): the address the server listens on.
+- `port` (`502`): the protocol's port; on Linux a port below 1024 needs a privilege, so a bench
+  there names another; `0` lets the machine choose a free port.
+- `unit` (none): the unit identifier the device plays, a request to another unit answered with
+  exception 0B as a gateway answers for a device that is not there; absent, every unit is the
+  device.
+- `max_connections` (none): the most connections held at once; one more is accepted and closed at
+  once.
+- `coils` (none), `discrete_inputs` (none), `input_registers` (none), `holding_registers` (none):
+  a table's size, at most 65536, its addresses 0 to the size less one; absent, the table reaches
+  the end of its last point, and holds nothing without one.
+- `points` (none): the points, as inline tables.
+
+**A point** (an entry of `points`): a named value in one of the tables; no two points of a table
+share an address.
+- `name` (required): the name the bench's handle reads and sets it by.
+- `table` (required): `coil`, `discrete-input`, `input-register` or `holding-register`.
+- `address` (required): the protocol's address, from 0, as a request carries it.
+- `type` (`bool` in a bit table, `u16` in a register table): `bool` in a coil or a discrete input;
+  `u16`, `i16`, `u32`, `i32` or `f32` (a single-precision float) in a register table, the last
+  three over two registers.
+- `words` (`"high-first"`): which of a two-register point's registers holds the high word,
+  `high-first` (the one at its address) or `low-first`; a point of one register or a bit takes
+  none. A register's own two bytes are always high byte first, as the protocol sends them.
+- `value` (the type's zero): the initial value as text, parsed per the type.
+
 **A channel** (`[[channel]]`): one telegram link, listening or dialling.
 - `name` (required): the part's name.
 - `role` (required): `listen` (wait for the peer to connect) or `connect` (dial it).
@@ -942,8 +1034,9 @@ interval, or on demand.
 
 A misspelled key in any table, a part without a name or with a name another part has, an
 emitter's file name or timestamp format that is bad, a value's range that is empty or not
-finite, anything the OPC UA server's own checks refuse, a file a channel points at that cannot be
-read or does not load, an `id_field` that does not ride in the framing, a controller file that
+finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past
+its table's end, a type its table cannot hold, a value that does not parse), a file a channel
+points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that
 does not load against the catalog, a message the catalog lacks or whose fields leave a name
 unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the
 place named, before anything binds, opens or spawns. A part that cannot start (a port taken, a

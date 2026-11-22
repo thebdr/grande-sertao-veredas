@@ -44,13 +44,20 @@ it never runs in production, owns its sockets, and carries no store and no deskt
 - **Controllable pressure**: the announcement rate, named faults as a percentage of items
   (a no-read: the fields a fault blanks or sets), destination states (a full chute), every one
   live on the handle while the bench runs.
+- **A Modbus server** (`modbus`, P-020's first device): a device's four tables (coils, discrete
+  inputs, input and holding registers) sized by the bench file, named points in them (a bool, or a
+  `u16`, `i16`, `u32`, `i32` or `f32` over one or two registers in either word order), every
+  public function code of the data model answered on a real TCP socket with the protocol's
+  exceptions, a unit it does not play answered as a gateway answers; the plant side by point and
+  by address; the knobs a client's failure paths need (every answer late, none at all, every
+  connection dropped, a connection limit).
 - **The bench file** (`bench`): one versioned TOML file for the whole plant (emitters, the OPC
-  server, the channels and the files each points at), started as a library (`Bench::start`,
+  and Modbus servers, the channels and the files each points at), started as a library (`Bench::start`,
   for portal's tests and later comissionador) or from the command line (`veredas-maquinar
   <bench.toml>`, until stopped).
-- **Later phases**, named, no code now: the PROFINET device emulation (Veredas 1's `pnsim`,
-  which speaks through aranha's codecs and waits for P-005; `docs/questions.md` Q5); the 2D/3D
-  plant simulator; a PKI folder, when the OPC server first needs a secured endpoint. A desktop
+- **Later phases**, named, no code now: the rest of P-020 (phase 6 below: the EtherNet/IP
+  adapter, the PROFINET device on aranha's codecs, the EtherCAT device, `fisica`, `reflexo`); a
+  PKI folder, when the OPC server first needs a secured endpoint. A desktop
   UI is not planned: the architect decided (`docs/questions.md` Q12, 2026-11-07) that the bench
   is the library and its executable.
 
@@ -130,6 +137,7 @@ veredas_maquinar
   channel     a bench channel: channel file + catalog, cyclic and on-demand messages, the monitor
   controller  the rules file (schema), the engine (items, answers, registers, commands, cyclic,
               destinations), the pressure knobs
+  modbus      the Modbus/TCP server: four tables, points, the function codes, the knobs
   bench       the bench file (schema), Bench::start, every part's status
   main.rs     veredas-maquinar <bench.toml> [--check]
 veredas_core (added for the bench, kept for portal)
@@ -153,15 +161,43 @@ veredas_core (added for the bench, kept for portal)
 5. **The bench file and the executable.** `docs/bench-schema.md`; `Bench::start`; `main.rs`
    run as a process with a bench file; Q12 asked and decided: library only.
 
+6. **P-020, fixture first** (the briefing of November 2026, below), each device before or alongside
+   the master in core that meets it, each a clause of its own proven on the real wire: the Modbus
+   server (C-110), then the EtherNet/IP adapter, the PROFINET device on aranha's codecs, the
+   EtherCAT device on a raw network card, then `fisica` and `reflexo`'s ready-made models.
+
 Each phase ends with `cargo nextest run --workspace` green bare, `cargo test -p leis` green, and
 its clauses recorded, refuted and verified. Push at the end of each phase.
+
+## P-020: the bench devices, as they land
+- **The Modbus server** (C-110, 2026-11-22). Written here, not taken from a crate: the protocol is
+  small, and what a bench needs of it (the exceptions in the protocol's order, a frame of another
+  protocol dropped, a length no frame has closing the stream, answers held or withheld, every
+  connection dropped) is the server's own behaviour, which a library would hide. Its proof is
+  the protocol specification's own worked examples byte for byte from a raw client, and a client
+  library the bench did not write (`tokio-modbus`, a dev-dependency) reading and writing every
+  table. No draws, ramps or reactions of its own, unlike the OPC UA server: what makes a device
+  move is `reflexo`'s models, driving any bench device's points through its handle, so each
+  fieldbus device carries its wire and nothing more. Core's Modbus TCP client meets it: law L4
+  keeps core's own tests from starting it (`docs/questions.md` Q34), so a test starts it as the
+  library (`modbus::start`) from a crate the map lets use maquinar, or as the executable on a
+  bench file with `port = 0`, reading the bound address from the status line it prints at start
+  (`modbus <name>: 127.0.0.1:<port> ...`).
+- **Raw frames without a privilege.** The EtherCAT and PROFINET devices answer raw Ethernet
+  frames, which need `CAP_NET_RAW`, and the machines here have no sudo. Checked on the Linux
+  machine (2026-11-22): `unshare -Urn` (an unprivileged user namespace with its own network
+  namespace) gives a process root inside it; there it creates a veth pair, brings it up and sends
+  an EtherCAT frame (EtherType 88A4) from one end to an `AF_PACKET` socket on the other. So those
+  tests run the device and the master inside such a namespace, on a veth pair, and the suite
+  needs no privilege and no setting on the host; a real network card is the commissioning case,
+  not the suite's.
 
 ## Decided in the briefing of November 2026, not built
 The architect's decisions of 13 to 16 November 2026 that touch the bench
 (`docs/controlador-plan.md`, `docs/oficina-plan.md`); status P-020.
 - **Bench devices for all four fieldbuses**, in Rust, inside maquinar: a PROFINET device, an
   emulated EtherCAT device answering on a raw network card, an EtherNet/IP adapter, a Modbus
-  server.
+  server (built: C-110).
 - **Two extensions inside maquinar**, called by their bare names as `acerto` is in its host:
   `fisica` (the bodies, their motion, which sensor an object reached) and `reflexo` (what makes
   simulated devices behave: ready-made models for drive, sensor, conveyor and actuator, and beyond
@@ -256,3 +292,7 @@ Recorded as the port meets them.
   right after connecting and, on a slow runner, got the configured 0 outside the range it drew
   in (C-026, found by CI twice). A test of what a clock moves waits for the move it asserts: the
   status counts the draws, so the read waits for the first.
+- **A Modbus frame holds 253 bytes of PDU, and a request past it is no request.** A write of 124
+  registers with its 248 bytes needs a PDU of 254: its length field says 255, which no frame has,
+  and the server closes the stream rather than answer 03. A test of a quantity one past the limit
+  asks it inside the largest frame there is (C-110).

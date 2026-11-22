@@ -9,6 +9,7 @@
 //! - [`channel`]: a telegram channel held by core's channel file, speaking a catalog, with
 //!   cyclic and on-demand messages and a monitor.
 //! - [`controller`]: the simulated controller, its behaviour a rules file, riding a channel.
+//! - [`modbus`]: a Modbus/TCP server, a device's four tables on a real socket.
 //!
 //! Nothing here names a device, a vendor or a product: what a controller's telegrams mean is
 //! configuration (a channel file, a catalog, a rules file), as in core (`docs/questions.md` Q8).
@@ -17,5 +18,6 @@ pub mod bench;
 pub mod channel;
 pub mod controller;
 pub mod emit;
+pub mod modbus;
 pub mod opc;
 pub mod timer;

@@ -2,7 +2,8 @@
 //! (`docs/bench-schema.md`), and [`Bench::start`], which runs every part of it behind one handle.
 //!
 //! A bench file lists its parts by name: log emitters ([`crate::emit`]), OPC UA servers
-//! ([`crate::opc`]) and telegram channels ([`crate::channel`]), each channel pointing at the
+//! ([`crate::opc`]), Modbus servers ([`crate::modbus`]) and telegram channels
+//! ([`crate::channel`]), each channel pointing at the
 //! device's own files kept beside the bench file (core's channel file, the catalog, and, when a
 //! controller rides the channel, its rules file). Every referenced file is read and checked when
 //! the bench file loads, so a bench that loads is a bench every part of which can start; what
@@ -20,6 +21,7 @@ use veredas_core::telegram::schema::{self as channel_schema, ChannelSpec};
 use crate::channel::{self, BenchChannel, ChannelConfig, ChannelError, ChannelStatus, CyclicMessage};
 use crate::controller::{self, Fields, Place, Rules};
 use crate::emit::{self, EmitterConfig, EmitterHandle, EmitterStatus, SpawnError};
+use crate::modbus::{self, ModbusConfig, ModbusError, ModbusHandle, ModbusStatus};
 use crate::opc::{self, OpcConfig, OpcError, OpcHandle, OpcStatus};
 
 /// The format name every bench file states.
@@ -46,6 +48,8 @@ pub enum BenchError {
     Emitter { name: String, source: SpawnError },
     #[error("opc `{name}`: {source}")]
     Opc { name: String, source: OpcError },
+    #[error("modbus `{name}`: {source}")]
+    Modbus { name: String, source: ModbusError },
     #[error("channel `{name}`: {source}")]
     Channel { name: String, source: ChannelError },
 }
@@ -69,6 +73,8 @@ struct FileV1 {
     emitter: Vec<EmitterConfig>,
     #[serde(default)]
     opc: Vec<NamedOpc>,
+    #[serde(default)]
+    modbus: Vec<NamedModbus>,
     #[serde(default)]
     channel: Vec<ChannelFile>,
 }
@@ -117,6 +123,52 @@ impl NamedOpc {
     }
 }
 
+/// A Modbus server with the name the bench calls it by, and the server's own keys beside
+/// (spelled out, as the OPC UA server's are).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NamedModbus {
+    name: String,
+    #[serde(default)]
+    bind: Option<String>,
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default)]
+    unit: Option<u8>,
+    #[serde(default)]
+    max_connections: Option<usize>,
+    #[serde(default)]
+    coils: Option<u32>,
+    #[serde(default)]
+    discrete_inputs: Option<u32>,
+    #[serde(default)]
+    input_registers: Option<u32>,
+    #[serde(default)]
+    holding_registers: Option<u32>,
+    #[serde(default)]
+    points: Vec<modbus::PointConfig>,
+}
+
+impl NamedModbus {
+    fn server(self) -> (String, ModbusConfig) {
+        let defaults = ModbusConfig::default();
+        (
+            self.name,
+            ModbusConfig {
+                bind: self.bind.unwrap_or(defaults.bind),
+                port: self.port.unwrap_or(defaults.port),
+                unit: self.unit,
+                max_connections: self.max_connections,
+                coils: self.coils,
+                discrete_inputs: self.discrete_inputs,
+                input_registers: self.input_registers,
+                holding_registers: self.holding_registers,
+                points: self.points,
+            },
+        )
+    }
+}
+
 /// A channel as the bench file declares it.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -157,6 +209,7 @@ pub struct BenchSpec {
     pub out_dir: PathBuf,
     pub emitters: Vec<EmitterConfig>,
     pub servers: Vec<(String, OpcConfig)>,
+    pub modbus: Vec<(String, ModbusConfig)>,
     pub channels: Vec<ChannelPart>,
 }
 
@@ -179,6 +232,10 @@ impl BenchSpec {
         }
         for (name, s) in &self.servers {
             out.push(format!("opc `{name}`: opc.tcp://{}:{}/ with {} tag(s), {} reaction(s)", s.bind, s.port, s.tags.len(), s.reactions.len()));
+        }
+        for (name, m) in &self.modbus {
+            let unit = m.unit.map(|u| format!("unit {u}")).unwrap_or_else(|| "every unit".into());
+            out.push(format!("modbus `{name}`: {}:{} answering {unit} with {} point(s)", m.bind, m.port, m.points.len()));
         }
         for c in &self.channels {
             let role = match &c.role {
@@ -256,6 +313,14 @@ pub fn load(text: &str, base: &Path) -> Result<BenchSpec, BenchError> {
         opc::validate(&server).map_err(|e| invalid(format!("{place} (`{server_name}`): {e}")))?;
         servers.push((server_name, server));
     }
+    let mut modbus_servers = Vec::new();
+    for (i, m) in file.modbus.into_iter().enumerate() {
+        let place = format!("modbus[{i}]");
+        let (server_name, server) = m.server();
+        name("modbus", &place, &server_name)?;
+        modbus::validate(&server).map_err(|e| invalid(format!("{place} (`{server_name}`): {e}")))?;
+        modbus_servers.push((server_name, server));
+    }
     let mut channels = Vec::new();
     for (i, c) in file.channel.into_iter().enumerate() {
         let place = format!("channel[{i}]");
@@ -288,7 +353,7 @@ pub fn load(text: &str, base: &Path) -> Result<BenchSpec, BenchError> {
         };
         channels.push(ChannelPart { name: c.name, role, spec, catalog, controller, messages: c.messages });
     }
-    Ok(BenchSpec { seed: file.seed, out_dir, emitters, servers, channels })
+    Ok(BenchSpec { seed: file.seed, out_dir, emitters, servers, modbus: modbus_servers, channels })
 }
 
 /// Read and check the bench file at `path`; its referenced files are beside it.
@@ -303,6 +368,8 @@ pub fn load_file(path: &Path) -> Result<BenchSpec, BenchError> {
 pub enum PartStatus {
     Emitter(EmitterStatus),
     Opc { endpoint_url: String, status: OpcStatus },
+    /// Boxed: a Modbus server's status carries its last hundred exchanges.
+    Modbus { addr: std::net::SocketAddr, status: Box<ModbusStatus> },
     /// Boxed: a channel's status carries its monitor's hundred lines.
     Channel(Box<ChannelStatus>),
 }
@@ -311,12 +378,13 @@ pub enum PartStatus {
 pub struct Bench {
     pub emitters: Vec<(String, EmitterHandle)>,
     pub servers: Vec<(String, OpcHandle)>,
+    pub modbus: Vec<(String, ModbusHandle)>,
     pub channels: Vec<(String, BenchChannel)>,
 }
 
 impl Bench {
-    /// Start every part of a loaded bench: emitters first, then servers, then channels, each
-    /// kind in the file's order (TOML groups a kind's tables under one key, so the file keeps
+    /// Start every part of a loaded bench: emitters first, then servers (OPC UA, then Modbus),
+    /// then channels, each kind in the file's order (TOML groups a kind's tables under one key, so the file keeps
     /// no order across kinds); the first part that cannot start stops the ones before it and
     /// is named. Emitters draw from the bench's seed plus their index when they have no seed
     /// of their own; channels from the bench's seed.
@@ -324,7 +392,7 @@ impl Bench {
         if !spec.emitters.is_empty() {
             std::fs::create_dir_all(&spec.out_dir).map_err(|source| BenchError::Read { place: "out_dir".into(), path: spec.out_dir.clone(), source })?;
         }
-        let mut bench = Bench { emitters: Vec::new(), servers: Vec::new(), channels: Vec::new() };
+        let mut bench = Bench { emitters: Vec::new(), servers: Vec::new(), modbus: Vec::new(), channels: Vec::new() };
         for (i, mut e) in spec.emitters.into_iter().enumerate() {
             if e.seed.is_none() {
                 e.seed = spec.seed.map(|s| s.wrapping_add(i as u64));
@@ -336,6 +404,10 @@ impl Bench {
         for (name, cfg) in spec.servers {
             let handle = opc::start(&cfg).map_err(|source| BenchError::Opc { name: name.clone(), source })?;
             bench.servers.push((name, handle));
+        }
+        for (name, cfg) in spec.modbus {
+            let handle = modbus::start(&cfg).map_err(|source| BenchError::Modbus { name: name.clone(), source })?;
+            bench.modbus.push((name, handle));
         }
         for c in spec.channels {
             let name = c.name.clone();
@@ -354,6 +426,9 @@ impl Bench {
         }
         for (name, s) in &self.servers {
             out.push((name.clone(), PartStatus::Opc { endpoint_url: s.endpoint_url.clone(), status: s.status() }));
+        }
+        for (name, m) in &self.modbus {
+            out.push((name.clone(), PartStatus::Modbus { addr: m.addr, status: Box::new(m.status()) }));
         }
         for (name, c) in &self.channels {
             out.push((name.clone(), PartStatus::Channel(Box::new(c.status()))));
@@ -376,6 +451,13 @@ impl Bench {
                 PartStatus::Opc { endpoint_url, status } => format!(
                     "opc {name}: {endpoint_url} {} draw(s), {} reaction(s) fired, {} type mismatch(es)",
                     status.draws, status.reactions_fired, status.type_mismatches
+                ),
+                PartStatus::Modbus { addr, status } => format!(
+                    "modbus {name}: {addr} {} connection(s), {} request(s) answered, {} exception(s), {} unanswered",
+                    status.connections,
+                    status.answered.values().sum::<u64>(),
+                    status.exceptions.values().sum::<u64>(),
+                    status.unanswered
                 ),
                 PartStatus::Channel(s) => {
                     let sent: u64 = s.sent.values().sum();
@@ -402,6 +484,11 @@ impl Bench {
         self.channels.iter().find(|(n, _)| n == name).map(|(_, c)| c)
     }
 
+    /// A Modbus server by name.
+    pub fn modbus(&self, name: &str) -> Option<&ModbusHandle> {
+        self.modbus.iter().find(|(n, _)| n == name).map(|(_, m)| m)
+    }
+
     /// An OPC server by name.
     pub fn server(&self, name: &str) -> Option<&OpcHandle> {
         self.servers.iter().find(|(n, _)| n == name).map(|(_, s)| s)
@@ -414,6 +501,9 @@ impl Bench {
         }
         for (_, s) in self.servers {
             s.stop();
+        }
+        for (_, m) in self.modbus {
+            m.stop();
         }
         for (_, c) in self.channels {
             c.stop();

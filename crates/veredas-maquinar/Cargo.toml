@@ -32,6 +32,8 @@ tokio = { workspace = true }
 async-opcua-client = { workspace = true }
 # cargo metadata's output (tests/component.rs).
 serde_json = { workspace = true }
+# The Modbus server is driven by a client the bench did not write (tests/modbus_server.rs).
+tokio-modbus = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # The bench holds the host's timer at a millisecond while it runs (timer.rs, Q13).

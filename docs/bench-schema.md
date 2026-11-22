@@ -1,15 +1,15 @@
 # The bench file: `veredas-bench`, version 1
 
 A bench is the plant a consumer meets before the real one (`docs/veredas-plan.md`,
-"veredas-maquinar: the bench"): the log emitters, the OPC UA servers and the telegram channels
-it talks to, each configured, none programmed. One bench file lists them all by name, and the
+"veredas-maquinar: the bench"): the log emitters, the OPC UA and Modbus servers and the telegram
+channels it talks to, each configured, none programmed. One bench file lists them all by name, and the
 device's own files sit beside it: core's channel file (`docs/channel-schema.md`), the catalog
 (`docs/catalog-schema.md`) and, when a controller rides a channel, its rules file
 (`docs/controller-schema.md`). `veredas_maquinar::bench::load` reads the bench file and every
 file it points at and checks each part as its own module checks it, so a bench file that loads
 is a bench every part of which can start; `Bench::start` then runs every part behind one handle,
-emitters first, then servers, then channels, each kind in the file's order (TOML groups a
-kind's tables under one key, so a file keeps no order across kinds), and the executable
+emitters first, then servers (OPC UA, then Modbus), then channels, each kind in the file's order
+(TOML groups a kind's tables under one key, so a file keeps no order across kinds), and the executable
 `veredas-maquinar <bench.toml>` runs it from the command line (`--check` reads, checks and
 prints the plan without starting anything). No device is named anywhere: a
 plant's bench is a folder of files like the ones below, kept outside the suite's code.
@@ -73,6 +73,30 @@ controller = "unit.toml"
 messages = [ { message = "status", fields = [ { name = "running", value = 1 }, { name = "speed", value = 50 } ] } ]
 ```
 
+## A second example: a drive on Modbus/TCP
+
+A drive answers as unit 1 on port 5502: a client writes its speed setpoint into a holding register
+and starts it with a coil; the plant side answers with the speed reached, a float over two input
+registers, and a ready input. `crates/veredas-maquinar/tests/modbus_server.rs` loads this block on
+a port the machine chooses, drives it with a Modbus client the bench did not write, and sees the
+plant side meet it.
+
+```toml
+format = "veredas-bench"
+version = 1
+
+[[modbus]]
+name = "drive"
+port = 5502
+unit = 1
+points = [
+  { name = "setpoint", table = "holding-register", address = 0 },
+  { name = "run", table = "coil", address = 0 },
+  { name = "speed", table = "input-register", address = 0, type = "f32" },
+  { name = "ready", table = "discrete-input", address = 0, value = "true" },
+]
+```
+
 ## Keys
 
 Each key states in parentheses that it is required, or the value it takes when left out. Every
@@ -89,6 +113,7 @@ relative to the bench file's folder.
 - `out_dir` (`"."`): where the emitters write, created when there is an emitter.
 - `emitter` (none): `[[emitter]]` tables.
 - `opc` (none): `[[opc]]` tables.
+- `modbus` (none): `[[modbus]]` tables.
 - `channel` (none): `[[channel]]` tables.
 
 **An emitter** (`[[emitter]]`): a log a plant would write, line by line into rotating files.
@@ -167,6 +192,36 @@ starts again at `low`, one inside it moves the ramp on from there.
 - `after_ms` (`0`): the delay.
 - `set` (required): the value set, as text parsed per the target tag's type.
 
+**A Modbus server** (`[[modbus]]`): a device's four tables over Modbus/TCP: coils and discrete
+inputs (bits), input and holding registers (16-bit words), a client writing the coils and the
+holding registers only.
+- `name` (required): the part's name.
+- `bind` (`"127.0.0.1"`): the address the server listens on.
+- `port` (`502`): the protocol's port; on Linux a port below 1024 needs a privilege, so a bench
+  there names another; `0` lets the machine choose a free port.
+- `unit` (none): the unit identifier the device plays, a request to another unit answered with
+  exception 0B as a gateway answers for a device that is not there; absent, every unit is the
+  device.
+- `max_connections` (none): the most connections held at once; one more is accepted and closed at
+  once.
+- `coils` (none), `discrete_inputs` (none), `input_registers` (none), `holding_registers` (none):
+  a table's size, at most 65536, its addresses 0 to the size less one; absent, the table reaches
+  the end of its last point, and holds nothing without one.
+- `points` (none): the points, as inline tables.
+
+**A point** (an entry of `points`): a named value in one of the tables; no two points of a table
+share an address.
+- `name` (required): the name the bench's handle reads and sets it by.
+- `table` (required): `coil`, `discrete-input`, `input-register` or `holding-register`.
+- `address` (required): the protocol's address, from 0, as a request carries it.
+- `type` (`bool` in a bit table, `u16` in a register table): `bool` in a coil or a discrete input;
+  `u16`, `i16`, `u32`, `i32` or `f32` (a single-precision float) in a register table, the last
+  three over two registers.
+- `words` (`"high-first"`): which of a two-register point's registers holds the high word,
+  `high-first` (the one at its address) or `low-first`; a point of one register or a bit takes
+  none. A register's own two bytes are always high byte first, as the protocol sends them.
+- `value` (the type's zero): the initial value as text, parsed per the type.
+
 **A channel** (`[[channel]]`): one telegram link, listening or dialling.
 - `name` (required): the part's name.
 - `role` (required): `listen` (wait for the peer to connect) or `connect` (dial it).
@@ -189,8 +244,9 @@ interval, or on demand.
 
 A misspelled key in any table, a part without a name or with a name another part has, an
 emitter's file name or timestamp format that is bad, a value's range that is empty or not
-finite, anything the OPC UA server's own checks refuse, a file a channel points at that cannot be
-read or does not load, an `id_field` that does not ride in the framing, a controller file that
+finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past
+its table's end, a type its table cannot hold, a value that does not parse), a file a channel
+points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that
 does not load against the catalog, a message the catalog lacks or whose fields leave a name
 unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the
 place named, before anything binds, opens or spawns. A part that cannot start (a port taken, a
