@@ -127,9 +127,9 @@ the language's own and name nothing else: `and`, `as`, `await`, `branch`, `call`
 `else`, `error`, `fail`, `false`, `for`, `function`, `if`, `in`, `layout`, `not`, `on`,
 `or`, `pass`, `read`, `reads`, `report`, `retry`, `script`, `send`, `step`, `stop`, `test`,
 `timeout`, `true`, `wait`, `where`, `write`. After a `.` any name is a column's or a message's,
-the language's own words included (`a.read`); a table, a channel, a field or an input whose name
+the language's own words included (`a.read`); a table, a channel or a message's field whose name
 is one of them is written in backquotes (`` `check`.value ``, `` send sorter.announce(`read`: "N")
-``).
+``). A function's inputs are named by its author, never one of them.
 
 **Lines.** A line ends what it holds, except inside parentheses, where lines may break freely,
 and a line whose first symbol is `->` continues the line before it.

@@ -63,16 +63,32 @@ fn header(text: &str, file: &str, noun: &str, format: &str) -> Result<usize, Pro
     // or `version`, whatever the type of another key's value (a table, a dotted key, a number past
     // any width all named).
     let mut at = 0;
+    let mut inside: Option<&str> = None;
     for line in head.split_inclusive('\n') {
+        let line_at = at;
+        at += line.len();
+        // A multi-line string's lines are its value's, not keys.
+        if let Some(q) = inside {
+            if line.matches(q).count() % 2 == 1 {
+                inside = None;
+            }
+            continue;
+        }
+        for q in ["\"\"\"", "'''"] {
+            if line.matches(q).count() % 2 == 1 {
+                inside = Some(q);
+            }
+        }
+        let bom = if line_at == 0 && line.starts_with('\u{feff}') { '\u{feff}'.len_utf8() } else { 0 };
+        let line = &line[bom..];
         let t = line.trim();
-        let lead = line.len() - line.trim_start().len();
+        let lead = bom + line.len() - line.trim_start().len();
         if !t.is_empty() && !t.starts_with('#') {
             let key = header_key(t);
             if key != "format" && key != "version" {
-                return Err(Problem::at(file, text, at + lead, format!("the header holds `format` and `version` alone, not `{key}`")));
+                return Err(Problem::at(file, text, line_at + lead, format!("the header holds `format` and `version` alone, not `{key}`")));
             }
         }
-        at += line.len();
     }
     Ok(body)
 }
@@ -701,8 +717,6 @@ impl<'a> Parser<'a> {
     }
 
     fn pattern(&mut self) -> R<Pattern> {
-        // A pattern is an expression of its own: its operators counted afresh.
-        self.ops = 0;
         let op = match self.peek().tok {
             Tok::Sym(Sym::EqEq) => Some(CmpOp::Eq),
             Tok::Sym(Sym::NotEq) => Some(CmpOp::Ne),
@@ -714,11 +728,11 @@ impl<'a> Parser<'a> {
         };
         if let Some(op) = op {
             self.next();
-            return Ok(Pattern::Compare { op, value: self.additive()? });
+            return Ok(Pattern::Compare { op, value: self.sum()? });
         }
-        let low = self.additive()?;
+        let low = self.sum()?;
         if self.eat_sym(Sym::DotDot) {
-            let high = self.additive()?;
+            let high = self.sum()?;
             return Ok(Pattern::Range { low, high });
         }
         Ok(Pattern::Value(low))
@@ -967,11 +981,9 @@ impl<'a> Parser<'a> {
                 self.next();
                 let var = self.name("the loop's name")?;
                 self.expect_word("in")?;
-                self.ops = 0;
-                let from = self.additive()?;
+                let from = self.sum()?;
                 self.expect_sym(Sym::DotDot, "`..`")?;
-                self.ops = 0;
-                let to = self.additive()?;
+                let to = self.sum()?;
                 let body = self.block(ctx)?;
                 StmtKind::For { var, from, to, body }
             }
@@ -1063,8 +1075,7 @@ impl<'a> Parser<'a> {
                 && !is_keyword(f)
                 && !is_builtin(f)
                 && self.peek_at(1).tok == Tok::Sym(Sym::LParen)
-                && (self.peek_at(2).tok == Tok::Sym(Sym::RParen)
-                    || (matches!(self.peek_at(2).tok, Tok::Name(_) | Tok::Quoted(_)) && self.peek_at(3).tok == Tok::Sym(Sym::Colon)))
+                && self.named_inputs()
             {
                 let function = self.name("a function's name")?;
                 let args = self.args()?;
@@ -1075,13 +1086,29 @@ impl<'a> Parser<'a> {
         Ok(StmtKind::Assign { target: first, op, value })
     }
 
+    /// After a name and its `(`: whether what follows is `)` or a name and `:` (a function's
+    /// named inputs, or none), line ends inside the parentheses passed over.
+    fn named_inputs(&self) -> bool {
+        let after = |mut j: usize| {
+            j += 1;
+            while j + 1 < self.toks.len() && self.toks[j].tok == Tok::Newline {
+                j += 1;
+            }
+            j
+        };
+        let open = after(self.index());
+        let first = after(open);
+        match &self.toks[first].tok {
+            Tok::Sym(Sym::RParen) => true,
+            Tok::Name(_) | Tok::Quoted(_) => self.toks[after(first)].tok == Tok::Sym(Sym::Colon),
+            _ => false,
+        }
+    }
+
     // ---- expressions ---------------------------------------------------------------------------
 
     fn expr(&mut self) -> R<Expr> {
-        if self.exprs == 0 {
-            self.ops = 0;
-        }
-        self.exprs += 1;
+        self.open();
         let mut left = self.and_expr()?;
         while self.is_word("or") {
             self.operator()?;
@@ -1091,6 +1118,22 @@ impl<'a> Parser<'a> {
         }
         self.exprs -= 1;
         Ok(left)
+    }
+
+    /// An expression opens: the outermost one counts its operators afresh.
+    fn open(&mut self) {
+        if self.exprs == 0 {
+            self.ops = 0;
+        }
+        self.exprs += 1;
+    }
+
+    /// An expression read at the additive level as an outermost one (a pattern, a range's end).
+    fn sum(&mut self) -> R<Expr> {
+        self.open();
+        let e = self.additive()?;
+        self.exprs -= 1;
+        Ok(e)
     }
 
     fn and_expr(&mut self) -> R<Expr> {
@@ -1194,7 +1237,10 @@ impl<'a> Parser<'a> {
                 for p in pieces {
                     match p {
                         StrPiece::Text(s) => parts.push(StrPart::Text(s.clone())),
-                        StrPiece::Expr(tokens, span) => parts.push(StrPart::Expr(self.interpolated(tokens, *span)?)),
+                        StrPiece::Expr(tokens, span) => {
+                            let e = self.interpolated(tokens, *span)?;
+                            parts.push(StrPart::Expr(e));
+                        }
                     }
                 }
                 ExprKind::Str(parts)
@@ -1267,10 +1313,14 @@ impl<'a> Parser<'a> {
     }
 
     /// The expression of a string's `{ }`.
-    fn interpolated(&self, tokens: &[Token], span: Span) -> R<Expr> {
+    fn interpolated(&mut self, tokens: &[Token], span: Span) -> R<Expr> {
         let mut toks = tokens.to_vec();
         toks.push(Token { tok: Tok::Eof, span: Span::new(span.end, span.end) });
         let mut p = Parser::new(self.src, self.file, toks);
+        // The limits count on from the expression the string sits in.
+        p.nest = self.nest;
+        p.ops = self.ops;
+        p.exprs = self.exprs;
         if p.peek().tok == Tok::Eof {
             return Err(self.problem(span.start - 1, "a `{` in a string holds an expression (a `{` alone is written `\\{`)"));
         }
@@ -1279,6 +1329,7 @@ impl<'a> Parser<'a> {
         if t.tok != Tok::Eof {
             return Err(p.expected(&t, "the `}` closing the expression"));
         }
+        self.ops = p.ops;
         Ok(e)
     }
 }

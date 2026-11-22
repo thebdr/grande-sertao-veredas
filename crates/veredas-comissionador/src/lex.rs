@@ -192,7 +192,7 @@ impl Lexer<'_> {
                     self.bump();
                 } else if c == '#' && self.comments {
                     while let Some(c) = self.peek() {
-                        if c == '\n' {
+                        if c == '\n' || (c == '\r' && self.peek2() == Some('\n')) {
                             break;
                         }
                         self.bump();
@@ -445,37 +445,66 @@ enum Exact {
     TooLarge,
 }
 
-/// `text` (digits, an optional fraction, an optional exponent, no `_`) times `per`, exactly.
+/// `text` (digits, an optional fraction, an optional exponent, no `_`) times `per` (one of a
+/// unit's 1, 1 000, 60 000 or 3 600 000), exactly, with no loop over the exponent: the digits
+/// with their zeros trimmed are `M`, the unit is `q` times a power of ten, and the result is
+/// `M * q * 10^e`, whole only when `10^-e` divides `M * q`, which it never does past `10^2`
+/// (`M` ends in no zero and `q` is 1, 6 or 36).
 fn exact_ms(text: &str, per: i128) -> Exact {
     let (mantissa, exp) = match text.find(['e', 'E']) {
-        Some(i) => match text[i + 1..].parse::<i32>() {
-            Ok(e) => (&text[..i], e),
-            Err(_) => return Exact::TooLarge,
-        },
+        Some(i) => (&text[..i], exponent(&text[i + 1..])),
         None => (text, 0),
     };
     let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    let digits = format!("{int}{frac}");
-    let digits = digits.trim_start_matches('0');
-    let Ok(m) = (if digits.is_empty() { Ok(0) } else { digits.parse::<i128>() }) else { return Exact::TooLarge };
-    let Some(mut v) = m.checked_mul(per) else { return Exact::TooLarge };
-    let mut e = i64::from(exp) - frac.len() as i64;
-    while e > 0 {
-        if v == 0 {
-            break;
-        }
-        match v.checked_mul(10) {
-            Some(x) => v = x,
-            None => return Exact::TooLarge,
-        }
-        e -= 1;
+    let all = format!("{int}{frac}");
+    let lead = all.trim_start_matches('0');
+    if lead.is_empty() {
+        return Exact::Ms(0);
     }
-    while e < 0 {
-        if v % 10 != 0 {
+    let digits = lead.trim_end_matches('0');
+    let trailing = (lead.len() - digits.len()) as i64;
+    let (q, k): (i128, i64) = match per {
+        1 => (1, 0),
+        1_000 => (1, 3),
+        60_000 => (6, 4),
+        _ => (36, 5),
+    };
+    let e = exp.saturating_sub(frac.len() as i64).saturating_add(trailing).saturating_add(k);
+    let value = if e < 0 {
+        if e < -2 {
             return Exact::NotWhole;
         }
-        v /= 10;
-        e += 1;
-    }
-    if v > i128::from(i64::MAX / 2) { Exact::TooLarge } else { Exact::Ms(v as i64) }
+        let div = 10i128.pow((-e) as u32);
+        let last: i128 = digits[digits.len().saturating_sub(4)..].parse().unwrap_or(0);
+        if (last * q) % div != 0 {
+            return Exact::NotWhole;
+        }
+        if digits.len() > 22 {
+            return Exact::TooLarge;
+        }
+        match digits.parse::<i128>() {
+            Ok(m) => m * q / div,
+            Err(_) => return Exact::TooLarge,
+        }
+    } else {
+        if digits.len() as i64 + e > 22 {
+            return Exact::TooLarge;
+        }
+        match digits.parse::<i128>() {
+            Ok(m) => m * q * 10i128.pow(e as u32),
+            Err(_) => return Exact::TooLarge,
+        }
+    };
+    if value > i128::from(i64::MAX / 2) { Exact::TooLarge } else { Exact::Ms(value as i64) }
+}
+
+/// An exponent's value, its sign kept, saturated far past any duration's range.
+fn exponent(text: &str) -> i64 {
+    let (neg, digits) = match text.strip_prefix('-') {
+        Some(d) => (true, d),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let v = digits.trim_start_matches('0');
+    let n = if v.len() > 12 { 1_000_000_000_000 } else { v.parse::<i64>().unwrap_or(0) };
+    if neg { -n } else { n }
 }

@@ -970,7 +970,9 @@ fn a_field_or_an_input_named_as_a_word_of_the_language_is_backquoted() {
     let c = checked(&test_of("  step x send sorter.announce(`read`: \"N\", item: 1)\n"));
     let ActionKind::Send { fields, .. } = &c.test.steps[0].actions[0].kind else { panic!() };
     assert_eq!(fields.iter().map(|f| f.name.value.as_str()).collect::<Vec<_>>(), ["read", "item"]);
-    assert!(prose().contains("a table, a channel, a field or an input whose name is one of them is written in backquotes"));
+    assert!(prose().contains("a table, a channel or a message's field whose name is one of them is written in backquotes"));
+    assert!(prose().contains("A function's inputs are named by its author, never one of them."));
+    assert_eq!(fproblems(&format!("{FHEAD}function G(`read`: int) {{\n}}\n")), ["4:12: ``read`` where a port's name was expected"]);
 }
 
 #[test]
@@ -991,6 +993,111 @@ fn nesting_past_its_limits_is_named_not_a_crash() {
     assert_eq!(problems(&test_of(&blocks(63))), Vec::<String>::new());
     assert_eq!(problems(&test_of(&blocks(64))), ["6:657: blocks nested deeper than 64"]);
     assert_eq!(problems(&test_of(&blocks(5000))), ["6:657: blocks nested deeper than 64"]);
+}
+
+// ---- refute round 2 ------------------------------------------------------------------------
+
+/// Run on a thread with a 2 MB stack, a spawned thread's default, as a designer's reader runs.
+fn small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new().stack_size(2 << 20).spawn(f).unwrap().join().unwrap()
+}
+
+/// The column of the `n`-th `needle` in `line`, counted in characters from 1.
+fn column_of(line: &str, needle: char, n: usize) -> usize {
+    line.chars().enumerate().filter(|(_, c)| *c == needle).nth(n - 1).map(|(i, _)| i + 1).unwrap()
+}
+
+#[test]
+fn the_operator_limit_holds_in_patterns_ranges_parentheses_and_strings() {
+    small_stack(|| {
+        let terms = |n: usize, op: &str| vec!["(1)"; n].join(op);
+        // A pattern of 1001 operators, and of 50 000: refused at the 1001st, the stack spared.
+        for n in [1002usize, 50_000] {
+            let line = format!("    == {} -> x", terms(n, "+"));
+            let text = test_of(&format!("  step x branch 1 {{\n{line}\n  }}\n"));
+            assert_eq!(problems(&text), [format!("7:{}: an expression of more than 1000 operators", column_of(&line, '+', 1001))]);
+        }
+        let line = format!("    == {} -> x", terms(1001, "+"));
+        assert_eq!(problems(&test_of(&format!("  step x branch 1 {{\n{line}\n  }}\n"))), Vec::<String>::new(), "1000 operators read");
+        // A range's end, and a `for`'s.
+        let line = format!("  step x script {{ for i in {} .. 2 {{ }} }}", terms(50_000, "*"));
+        assert_eq!(problems(&test_of(&format!("{line}\n"))), [format!("6:{}: an expression of more than 1000 operators", column_of(&line, '*', 1001))]);
+        // Operators inside parentheses count with the expression around them.
+        let line = format!("  step x check {} == 1", vec!["(1+1)"; 2000].join("+"));
+        assert_eq!(problems(&test_of(&format!("{line}\n"))), [format!("6:{}: an expression of more than 1000 operators", column_of(&line, '+', 1001))]);
+        // A string's `{ }` counts with the expression it sits in: operators and levels.
+        let piece = format!("{{{}}}", vec!["1"; 251].join("+"));
+        let line = format!("  step x report \"{}\"", piece.repeat(5));
+        assert_eq!(problems(&test_of(&format!("{line}\n"))), [format!("6:{}: an expression of more than 1000 operators", column_of(&line, '+', 1001))]);
+        let line = format!("  step x report {}\"{{{}1{}}}\"{}", "(".repeat(40), "(".repeat(40), ")".repeat(40), ")".repeat(40));
+        assert_eq!(problems(&test_of(&format!("{line}\n"))), [format!("6:{}: an expression nested deeper than 64", column_of(&line, '(', 65))]);
+    });
+}
+
+#[test]
+fn a_duration_s_exponent_is_read_without_a_loop_over_it() {
+    let one = |lit: &str| -> Result<i64, String> {
+        match check_with(&test_of(&format!("  let d = {lit}\n  step x stop pass\n")), &[]) {
+            Ok(c) => match c.test.lets()[0].1.kind {
+                ExprKind::Duration(ms) => Ok(ms),
+                ref other => Err(format!("{other:?}")),
+            },
+            Err(p) => Err(p[0].message.clone()),
+        }
+    };
+    let t0 = std::time::Instant::now();
+    assert_eq!(one("0e-2147483648ms"), Ok(0));
+    assert_eq!(one("0e99999999999999h"), Ok(0));
+    assert!(t0.elapsed() < std::time::Duration::from_secs(1), "{:?}", t0.elapsed());
+    assert_eq!(one("1.0000000000000000000000000000000000000000s"), Ok(1000), "trailing zeros are no digits");
+    assert_eq!(one("0001.5000s"), Ok(1500));
+    assert_eq!(one("1e-99999999999s").unwrap_err(), "`1e-99999999999s` is not a whole number of milliseconds");
+    assert_eq!(one("1e99999999999s").unwrap_err(), "`1e99999999999s` is past a duration's range");
+    assert_eq!(
+        one("0.0000000000000000000000000000000000000001ms").unwrap_err(),
+        "`0.0000000000000000000000000000000000000001ms` is not a whole number of milliseconds"
+    );
+    // An hour is 36 times a power of ten: the fractions that make whole milliseconds read.
+    assert_eq!(one("1e-5h"), Ok(36));
+    assert_eq!(one("5e-6h"), Ok(18));
+    assert_eq!(one("25e-7h"), Ok(9));
+    assert_eq!(one("36e-1h"), Ok(12_960_000));
+    assert_eq!(one("1e-6h").unwrap_err(), "`1e-6h` is not a whole number of milliseconds");
+    assert_eq!(one("1.5e-3s").unwrap_err(), "`1.5e-3s` is not a whole number of milliseconds");
+    assert_eq!(one("5e-1min"), Ok(30_000));
+    // The range's end: half the largest whole number of milliseconds.
+    assert_eq!(one("4611686018427387903ms"), Ok(4_611_686_018_427_387_903));
+    assert_eq!(one("4611686018427387904ms").unwrap_err(), "`4611686018427387904ms` is past a duration's range");
+}
+
+#[test]
+fn a_call_statement_breaks_its_lines_inside_its_parentheses() {
+    let f = |body: &str| fproblems(&format!("{FHEAD}function G(a: int) -> (r: int) {{\n  r = a\n}}\nfunction H() -> (y: int) {{\n  {body}\n}}\n"));
+    assert_eq!(f("y = G(\n    a: 1)"), Vec::<String>::new());
+    assert_eq!(f("y = G(\n    a: 1,\n  )"), ["10:3: `)` where a name and `:` was expected"]);
+    assert_eq!(f("y, z = G(\n    a: 1)"), ["8:6: `G` gives 1 output, not 2"]);
+    assert_eq!(f("y = G(\n  )"), ["8:7: `G` needs its input `a`"]);
+}
+
+#[test]
+fn a_byte_order_mark_and_a_multi_line_stamp_are_the_stamp() {
+    let body = "test \"t\" {\n  id T\n  step a stop pass\n}\n";
+    assert!(parse_test(&format!("\u{feff}format = \"veredas-test\"\nversion = 1\n{body}"), "t").is_ok());
+    assert!(parse_test(&format!("format = \"\"\"\nveredas-test\"\"\"\nversion = 1\n{body}"), "t").is_ok());
+    let e = parse_test(&format!("\u{feff}format = \"veredas-test\"\nversion = 1\nname = 1\n{body}"), "t").unwrap_err();
+    assert_eq!((e.line, e.column, e.message.as_str()), (3, 1, "the header holds `format` and `version` alone, not `name`"));
+    let e = parse_test(&format!("format = \"veredas-test\"\nversion = 1\nnote = '''\nformat\n'''\n{body}"), "t").unwrap_err();
+    assert_eq!((e.line, e.message.as_str()), (3, "the header holds `format` and `version` alone, not `note`"));
+}
+
+#[test]
+fn a_comment_before_a_crlf_line_end_keeps_the_columns_of_its_lf_twin() {
+    for c in ["  step a send # c\n", "  step a check 1 == # c\n", "  step a wait 1s # fine\n         on late -> a\n"] {
+        let lf = test_of(c);
+        let (a, b) = (problems(&lf), problems(&lf.replace('\n', "\r\n")));
+        assert!(!a.is_empty(), "{c:?}");
+        assert_eq!(a, b, "{c:?}");
+    }
 }
 
 // ---- the reference's text -------------------------------------------------------------------
@@ -1090,9 +1197,9 @@ the language's own and name nothing else: `and`, `as`, `await`, `branch`, `call`
 `else`, `error`, `fail`, `false`, `for`, `function`, `if`, `in`, `layout`, `not`, `on`,
 `or`, `pass`, `read`, `reads`, `report`, `retry`, `script`, `send`, `step`, `stop`, `test`,
 `timeout`, `true`, `wait`, `where`, `write`. After a `.` any name is a column's or a message's,
-the language's own words included (`a.read`); a table, a channel, a field or an input whose name
+the language's own words included (`a.read`); a table, a channel or a message's field whose name
 is one of them is written in backquotes (`` `check`.value ``, `` send sorter.announce(`read`: "N")
-``).
+``). A function's inputs are named by its author, never one of them.
 
 **Lines.** A line ends what it holds, except inside parentheses, where lines may break freely,
 and a line whose first symbol is `->` continues the line before it.
