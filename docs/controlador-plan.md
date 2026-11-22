@@ -150,8 +150,11 @@ think Siemens did a great job in the PLC implementation") and kept every family 
   warning after years is a hint of possible degrading". How the two meet the overrun rule is Q39.
 - **A fault clears every debug condition** and records what was active.
 - **A fault record** holds the cause, the time, the download number, the task, the source
-  location, the debug conditions that were active, a snapshot of all data, the last seconds before
-  it, and the handler's outcome. Its details are in the popup and in the fault history.
+  location, the debug conditions that were active, a snapshot of the data, the last seconds before
+  it, and the handler's outcome. Its details are in the popup and in the fault history. On `main`
+  the snapshot is portal's copy of its store at the fault (C-093), which holds what the store
+  holds. It is all the controller's data only once portal reads the controller's memory, which
+  is not built yet (see "The engineering link").
 - **The program may** raise a fault with a code, request a stop, raise a maintenance request, or
   record an event only.
 
@@ -273,7 +276,16 @@ in a fixed order, with counts and identifiers and never lists.
   carries a hash, "so no corrupted program may run" (Q36, Q37).
 - **State changes and faults are stored like any other data**, and the history view reads them.
 - **By default the embedded portal keeps its recorded values in memory, as a fixed window**, and
-  writes nothing to the drive (2026-11-19; `docs/robustness.md`, "Wear and filling").
+  writes nothing to the drive (2026-11-19; `docs/robustness.md`, "Wear and filling"). Two
+  additions came with that ruling and were not objected to. Portal has built them and the window
+  on three answers it took meanwhile, none of them ruled (`docs/questions.md` Q41):
+  - the project may turn on recording to the drive (C-091). Every row is written in batches to a
+    record of the run's own, which stops at its size limit and deletes nothing;
+  - at a fault, portal writes its store to the drive with the fault record (C-093), when the
+    embedding names a fault folder. Every fault gets its copy, and none is deleted;
+  - the window has no ceiling in bytes yet (C-090).
+- **Controlador owes the embedding**, none of it built yet: portal as a dependency, its controller
+  source fed with every state and fault record (C-092), and the fault folder named (C-093).
 
 ### Language and project data
 - **ORCL text first; ladder later**, as a view of the same source.
