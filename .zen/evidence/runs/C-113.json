@@ -10,15 +10,15 @@
     "ethercat_segment"
   ],
   "exitCode": 0,
-  "outputSha": "456295db88ca4a06da96e4727d70772d6d279450d2b90c0885e187e6daaad0f3",
-  "outputTail": "\nrunning 3 tests\ntest every_command_reads_writes_and_counts_as_the_standard_has_it ... ok\ntest the_dissectors_read_the_returned_frame_as_the_standard_has_it ... ok\ntest a_maindevice_finds_the_segment_brings_it_to_op_and_exchanges_process_data ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\n     Running tests/ethercat_segment.rs (target/debug/build/veredas-maquinar/ab29eea811ede4d0/out/ethercat_segment-ab29eea811ede4d0)",
-  "ranAt": "2026-11-22T21:16:50.711Z",
-  "headCommit": "4a21bfdd329bd96e3f1b8de4a49977712c97a917",
+  "outputSha": "cdffa02a576ca0f0713d7dfceb9905029be62d3886aee01628e48d72fdae0053",
+  "outputTail": "test fmmus_map_bit_by_bit_and_a_logical_write_counts_1_or_2_in_an_lrw ... ok\ntest every_configuration_refusal_is_named_before_the_interface_opens ... ok\ntest every_command_reads_writes_and_counts_as_the_standard_has_it ... ok\ntest the_reference_s_segment_runs_from_its_bench_file_and_a_missing_interface_is_named ... ok\ntest the_dissectors_read_the_returned_frame_as_the_standard_has_it ... ok\ntest a_maindevice_finds_the_segment_brings_it_to_op_and_exchanges_process_data ... ok\n\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.86s\n     Running tests/ethercat_segment.rs (target/debug/build/veredas-maquinar/46c1bb92f4aab7a8/out/ethercat_segment-46c1bb92f4aab7a8)",
+  "ranAt": "2026-11-22T22:03:08.494Z",
+  "headCommit": "3f9fdf09cce221afea0a850143b54adf2113f796",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/ethercat_segment.rs",
       "file": "crates/veredas-maquinar/tests/ethercat_segment.rs",
-      "fileSha": "6185a98fc660a84f4d6fe68d2a7b04576436ff8482b41475a8a524966e6208a4"
+      "fileSha": "4d3e7e694b6e5d66714f7ec4f8f32b153bb810c8f99c5b7ca98473fea4a6b766"
     }
   ]
 }
