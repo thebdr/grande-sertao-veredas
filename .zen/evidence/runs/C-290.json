@@ -1,0 +1,25 @@
+{
+  "clause": "C-290",
+  "command": "cargo nextest run -p entrega --test manifest",
+  "commandArgv": [
+    "cargo",
+    "nextest",
+    "run",
+    "-p",
+    "entrega",
+    "--test",
+    "manifest"
+  ],
+  "exitCode": 0,
+  "outputSha": "cf9f5dbf6ae9848aa0aeda89e2aa793de9313039f027b66af91dbed6db19e2bc",
+  "outputTail": "        PASS [   0.022s] ( 3/15) entrega::manifest the_components_are_suite_crates_each_once_with_their_executables_once\n        PASS [   0.016s] ( 4/15) entrega::manifest the_plans_example_reads_as_its_keys_say\n        PASS [   0.017s] ( 5/15) entrega::manifest every_value_is_checked_for_its_form\n        PASS [   0.041s] ( 6/15) entrega::manifest a_releases_folder_holds_manifests_named_after_their_release\n        PASS [   0.140s] ( 7/15) entrega::manifest a_component_left_out_or_one_too_many_is_refused\n        PASS [   0.142s] ( 8/15) entrega::manifest an_annotated_tags_id_is_no_commit\n        PASS [   0.158s] ( 9/15) entrega::manifest the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_them\n        PASS [   0.183s] (10/15) entrega::manifest a_manifest_that_matches_its_commit_checks\n        PASS [   0.209s] (11/15) entrega::manifest a_commit_not_there_or_not_an_ancestor_is_refused\n        PASS [   0.299s] (12/15) entrega::manifest a_version_names_one_tree_across_releases\n        PASS [   0.301s] (13/15) entrega::manifest a_version_or_an_executable_that_differs_is_refused\n        PASS [   0.318s] (14/15) entrega::manifest the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused\n        PASS [   0.326s] (15/15) entrega::manifest every_release_of_this_repository_checks_against_its_history\n────────────\n     Summary [   0.328s] 15 tests run: 15 passed, 0 skipped",
+  "ranAt": "2026-11-22T19:05:27.122Z",
+  "headCommit": "567a721e94444ae6e565e5c0ae01f57c84d996c4",
+  "tests": [
+    {
+      "name": "tools/entrega/tests/manifest.rs",
+      "file": "tools/entrega/tests/manifest.rs",
+      "fileSha": "f7af67194c363b66f2788eae3ec2bfbd7dde5706eb6a6ed24af952cbdf830337"
+    }
+  ]
+}
