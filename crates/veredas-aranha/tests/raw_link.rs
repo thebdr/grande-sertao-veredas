@@ -200,6 +200,9 @@ fn a_missing_interface_and_a_bad_name_are_refused_by_name() {
         ("a b", false),
         ("a:b", false),
         ("a\tb", false),
+        // The kernel reads white space byte by byte: 0xA0 is one (the second byte of `à`).
+        ("à0", false),
+        ("a\u{a0}b", false),
     ];
     for (name, missing) in names {
         let err = RawLink::open(name, false).unwrap_err();
@@ -290,6 +293,10 @@ fn a_failing_body_fails_its_test_with_the_childs_words() {
 #[test]
 fn the_private_network_holds_only_what_the_test_made() {
     netns::isolated("the_private_network_holds_only_what_the_test_made", &[("p0", "q0"), ("p1", "q1")], || {
+        // The fixture waited for every end's carrier before the body.
+        for n in ["p0", "q0", "p1", "q1"] {
+            assert!(flags(n).split(',').any(|f| f == "LOWER_UP"), "{n}: {}", flags(n));
+        }
         let out = Command::new("ip").args(["-o", "link", "show"]).output().unwrap();
         let names: Vec<String> = String::from_utf8_lossy(&out.stdout)
             .lines()
@@ -336,7 +343,13 @@ fn a_filtered_link_on_the_sending_end_hears_its_type_behind_any_tag() {
         double.resize(64, 0);
         let mut other = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1, 0x81, 0x00, 0xC0, 0x00, 0x88, 0xB5, 0x80, 0x00];
         other.resize(60, 0);
-        for f in [&q, &ad, &double, &other] {
+        let mut q_ad = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1, 0x81, 0x00, 0xC0, 0x00, 0x88, 0xA8, 0x00, 0x05, 0x88, 0x92, 0x80, 0x00];
+        q_ad.resize(64, 0);
+        let mut ad_ad = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1, 0x88, 0xA8, 0x00, 0x05, 0x88, 0xA8, 0x00, 0x06, 0x88, 0x92, 0x80, 0x00];
+        ad_ad.resize(64, 0);
+        let mut q_q = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1, 0x81, 0x00, 0xC0, 0x00, 0x81, 0x00, 0x00, 0x07, 0x88, 0x92, 0x80, 0x00];
+        q_q.resize(64, 0);
+        for f in [&q, &ad, &double, &q_ad, &ad_ad, &q_q, &other] {
             a.send(f).unwrap();
         }
         for link in [&watcher, &far] {
@@ -344,8 +357,20 @@ fn a_filtered_link_on_the_sending_end_hears_its_type_behind_any_tag() {
             while let Some(r) = link.recv(Duration::from_millis(300)).unwrap() {
                 got.push(r.bytes);
             }
-            assert_eq!(got, [q.clone(), ad.clone(), double.clone()], "{}", link.iface());
+            assert_eq!(got, [q.clone(), ad.clone(), double.clone(), q_ad.clone(), ad_ad.clone(), q_q.clone()], "{}", link.iface());
         }
+        // A tag's own type is no type to keep behind the tags.
+        for t in [0x8100u16, 0x88A8] {
+            let r = RawLink::open_with("a0", Options { ethertype: Some(t), ..Options::default() });
+            assert!(matches!(r, Err(RawError::FilterType(x)) if x == t), "{r:?}");
+        }
+        // The kernel counts an 802.1ad tag in the 1514, an 802.1Q tag not.
+        let mut ad_long = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1, 0x88, 0xA8, 0x00, 0x05, 0x88, 0xB5];
+        ad_long.resize(1518, 0);
+        assert!(matches!(a.send(&ad_long), Err(RawError::TooLong(1518))));
+        let mut q_long = ad_long.clone();
+        q_long[12..14].copy_from_slice(&[0x81, 0x00]);
+        assert!(a.send(&q_long).is_ok());
         drop(b);
     });
 }
@@ -405,24 +430,30 @@ fn a_wait_lasts_its_timeout_through_signals_skipped_frames_and_under_a_milliseco
 fn a_send_never_waits_and_a_full_queue_is_named() {
     netns::isolated("a_send_never_waits_and_a_full_queue_is_named", &[("a0", "b0")], || {
         let (a, _b) = pair();
-        // A slow queue on a0: 8 kbit/s, so it fills at once.
-        let out = Command::new("tc").args(["qdisc", "add", "dev", "a0", "root", "tbf", "rate", "8kbit", "burst", "1600", "latency", "1ms"]).output().unwrap();
-        assert!(out.status.success(), "tc: {}", String::from_utf8_lossy(&out.stderr));
-        let f = ether::build(B, A, 0x88B5, &[0; 1500]).unwrap();
-        let mut full = None;
-        for i in 0..2000 {
-            let start = Instant::now();
-            let r = a.send(&f);
-            assert!(start.elapsed() < Duration::from_millis(50), "send {i} took {:?}", start.elapsed());
-            if let Err(e) = r {
-                full = Some((i, e));
-                break;
+        // Two slow queues on a0, 8 kbit/s: a shallow one (the queue drops: ENOBUFS), and a deep
+        // one, where the socket's own send buffer fills, the place a send would wait.
+        for latency in ["1ms", "1000s"] {
+            let _ = Command::new("tc").args(["qdisc", "del", "dev", "a0", "root"]).output();
+            let out = Command::new("tc").args(["qdisc", "add", "dev", "a0", "root", "tbf", "rate", "8kbit", "burst", "1600", "latency", latency]).output().unwrap();
+            assert!(out.status.success(), "tc: {}", String::from_utf8_lossy(&out.stderr));
+            let f = ether::build(B, A, 0x88B5, &[0; 1500]).unwrap();
+            let mut full = None;
+            for i in 0..5000 {
+                let start = Instant::now();
+                let r = a.send(&f);
+                assert!(start.elapsed() < Duration::from_millis(50), "{latency}: send {i} took {:?}", start.elapsed());
+                if let Err(e) = r {
+                    full = Some((i, e));
+                    break;
+                }
             }
+            let (i, e) = full.unwrap_or_else(|| panic!("{latency}: the queue never filled"));
+            assert!(i > 0, "{latency}: the first send failed: {e:?}");
+            assert!(matches!(&e, RawError::QueueFull(n) if n == "a0"), "{latency}: {e:?}");
         }
-        let (i, e) = full.expect("the queue never filled");
-        assert!(i > 0, "the first send failed: {e:?}");
-        assert!(matches!(&e, RawError::QueueFull(n) if n == "a0"), "{e:?}");
+        let e = RawError::QueueFull("a0".into());
         assert_eq!(e.to_string(), "the send queue of \"a0\" is full: the frame is not sent, and the link did not wait");
+        drop(a);
     });
 }
 
@@ -436,12 +467,55 @@ fn a_frame_past_the_buffer_is_refused_never_handed_back_cut() {
         let a = RawLink::open("a0", false).unwrap();
         let plain = RawLink::open("b0", false).unwrap();
         let filtered = RawLink::open_with("b0", Options { ethertype: Some(0x88B5), ..Options::default() }).unwrap();
-        let mut f = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1, 0x88, 0xB5];
-        f.resize(14 + 65_535, 0x5A);
+        // Untagged and tagged, the buffer's 65 536 bytes are heard whole (a tag the kernel took out
+        // counted), and a byte more is refused, its whole length named.
+        let frame = |len: usize, tagged: bool| {
+            let mut f = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1];
+            if tagged {
+                f.extend_from_slice(&[0x81, 0x00, 0x00, 0x05]);
+            }
+            f.extend_from_slice(&[0x88, 0xB5]);
+            f.resize(len, 0x5A);
+            f
+        };
+        for (len, tagged) in [(65_536, false), (65_536, true), (65_537, false), (65_537, true), (65_549, false)] {
+            let f = frame(len, tagged);
+            a.send(&f).unwrap();
+            for link in [&plain, &filtered] {
+                let r = link.recv(Duration::from_secs(2));
+                if len <= 65_536 {
+                    assert_eq!(r.unwrap().map(|r| r.bytes), Some(f.clone()), "{len} {tagged}");
+                } else {
+                    assert!(matches!(r, Err(RawError::TooLongHeard(n)) if n == len), "{len} {tagged}: {r:?}");
+                }
+            }
+        }
+        assert_eq!(
+            RawError::TooLongHeard(65_537).to_string(),
+            "a frame of 65537 bytes was heard, past the link's 65536-byte buffer: it is not handed back"
+        );
+    });
+}
+
+#[test]
+fn a_wait_of_no_end_hands_back_the_next_frame() {
+    netns::isolated("a_wait_of_no_end_hands_back_the_next_frame", &[("a0", "b0")], || {
+        let (a, b) = pair();
+        let f = ether::build(B, A, 0x88B5, &[7; 46]).unwrap();
         a.send(&f).unwrap();
-        for link in [&plain, &filtered] {
-            let r = link.recv(Duration::from_secs(2));
-            assert!(matches!(r, Err(RawError::TooLong(65_549))), "{r:?}");
+        assert_eq!(b.recv(Duration::MAX).unwrap().map(|r| r.bytes), Some(f));
+    });
+}
+
+#[test]
+fn a_name_the_kernel_gives_an_interface_is_opened() {
+    netns::isolated("a_name_the_kernel_gives_an_interface_is_opened", &[], || {
+        // Unicode's white space that is not the kernel's: the kernel names an interface so.
+        for name in ["a\u{2003}b", "a\u{85}b"] {
+            netns::ip(&["link", "add", name, "type", "veth", "peer", "name", &format!("{}x", &name[..1])]);
+            netns::ip(&["link", "set", name, "up"]);
+            assert!(RawLink::open(name, false).is_ok(), "{name:?}");
+            netns::ip(&["link", "del", name]);
         }
     });
 }

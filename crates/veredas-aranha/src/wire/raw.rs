@@ -33,7 +33,7 @@ use crate::profinet::mac::Mac;
 pub const MAX_FRAME: usize = 65_536;
 
 /// One frame heard: its bytes as they arrived (no check sequence), when the link read it, and
-/// whether this host sent it.
+/// whether it left by this interface (this host sent it on it), rather than arrived on it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Received {
     pub bytes: Vec<u8>,
@@ -45,8 +45,12 @@ pub struct Received {
 pub enum RawError {
     #[error("no network interface is named {0:?}")]
     NoSuchInterface(String),
-    #[error("an interface name is 1 to 15 bytes, not `.` or `..`, with no `/`, `:`, white space or NUL; {0:?} is not one")]
+    #[error("an interface name is 1 to 15 bytes, not `.` or `..`, with no `/`, `:`, NUL or byte the kernel takes for white space; {0:?} is not one")]
     BadName(String),
+    #[error("a link of one EtherType keeps the type behind a frame's tags; {0:#06x} is a tag's own")]
+    FilterType(u16),
+    #[error("a frame of {0} bytes was heard, past the link's {MAX_FRAME}-byte buffer: it is not handed back")]
+    TooLongHeard(usize),
     #[error("{0:?} is not an Ethernet interface")]
     NotEthernet(String),
     #[error("the send queue of {0:?} is full: the frame is not sent, and the link did not wait")]
@@ -122,13 +126,14 @@ fn last_error() -> io::Error {
 }
 
 fn interface_index(name: &str) -> Result<(CString, i32), RawError> {
-    // The kernel's own rule for an interface's name: 1 to 15 bytes, not `.` or `..`, no `/`, `:`
-    // or white space (and no NUL, which a C string cannot hold).
+    // The kernel's own rule for an interface's name, byte by byte (`dev_valid_name`): 1 to 15
+    // bytes, not `.` or `..`, no `/`, `:` or byte the kernel's `isspace` takes (9 to 13, 32, 0xA0),
+    // and no NUL, which a C string cannot hold.
     let bad = name.is_empty()
         || name.len() >= libc::IFNAMSIZ
         || name == "."
         || name == ".."
-        || name.chars().any(|c| c == '/' || c == ':' || c.is_whitespace() || c == '\0');
+        || name.bytes().any(|b| matches!(b, b'/' | b':' | 0 | 9..=13 | 32 | 0xA0));
     if bad {
         return Err(RawError::BadName(name.to_string()));
     }
@@ -168,6 +173,9 @@ impl RawLink {
         }
         // SAFETY: `fd` was just returned by socket() and is owned by nothing else.
         let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        if let Some(t @ (0x8100 | 0x88A8)) = options.ethertype {
+            return Err(RawError::FilterType(t));
+        }
         if let Some(ethertype) = options.ethertype {
             let mut program = ethertype_filter(ethertype);
             let fprog = libc::sock_fprog { len: program.len() as u16, filter: program.as_mut_ptr() };
@@ -309,11 +317,13 @@ impl RawLink {
     pub fn recv(&self, timeout: Duration) -> Result<Option<Received>, RawError> {
         // One deadline for the whole wait: a signal, a frame passed over, or a wake-up with nothing
         // to read waits on for what is left of it, never past it, never short of it.
-        let deadline = std::time::Instant::now() + timeout;
+        // A timeout past what the clock can count is no deadline: the wait lasts until a frame.
+        let deadline = std::time::Instant::now().checked_add(timeout);
+        let over = || deadline.is_some_and(|d| std::time::Instant::now() >= d);
         loop {
-            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let left = deadline.map_or(Duration::MAX, |d| d.saturating_duration_since(std::time::Instant::now()));
             if !self.readable(left)? {
-                if std::time::Instant::now() >= deadline {
+                if over() {
                     return Ok(None);
                 }
                 continue;
@@ -323,7 +333,7 @@ impl RawLink {
                 Some(r) => return Ok(Some(r)),
                 None => {}
             }
-            if std::time::Instant::now() >= deadline {
+            if over() {
                 return Ok(None);
             }
         }
@@ -376,10 +386,8 @@ impl RawLink {
             return Err(io_err("receive", source));
         }
         let n = n as usize;
-        if n > buf.len() {
-            return Err(RawError::TooLong(n));
-        }
-        buf.truncate(n);
+        // The tag the kernel took out, if any: it counts in the frame handed back.
+        let mut tag = None;
         // SAFETY: CMSG_FIRSTHDR and CMSG_NXTHDR walk the control buffer recvmsg filled, within
         // `msg_controllen`; the aux data is read unaligned from its message's data.
         let mut cmsg = unsafe { libc::CMSG_FIRSTHDR(&raw const msg) };
@@ -387,14 +395,22 @@ impl RawLink {
             let (level, kind) = unsafe { ((*cmsg).cmsg_level, (*cmsg).cmsg_type) };
             if level == libc::SOL_PACKET && kind == libc::PACKET_AUXDATA {
                 let aux: libc::tpacket_auxdata = unsafe { std::ptr::read_unaligned(libc::CMSG_DATA(cmsg).cast()) };
-                if aux.tp_status & libc::TP_STATUS_VLAN_VALID != 0 && buf.len() >= 12 {
+                if aux.tp_status & libc::TP_STATUS_VLAN_VALID != 0 {
                     let tpid = if aux.tp_status & libc::TP_STATUS_VLAN_TPID_VALID != 0 { aux.tp_vlan_tpid } else { 0x8100 };
-                    let tag = [tpid.to_be_bytes(), aux.tp_vlan_tci.to_be_bytes()].concat();
-                    buf.splice(12..12, tag);
+                    tag = Some([tpid.to_be_bytes(), aux.tp_vlan_tci.to_be_bytes()].concat());
                 }
             }
             cmsg = unsafe { libc::CMSG_NXTHDR(&raw const msg, cmsg) };
         }
+        let whole = n + tag.as_ref().map_or(0, Vec::len);
+        if whole > MAX_FRAME {
+            return Err(RawError::TooLongHeard(whole));
+        }
+        buf.truncate(n);
+        if let Some(tag) = tag.filter(|_| n >= 12) {
+            buf.splice(12..12, tag);
+        }
+        buf.shrink_to_fit();
         Ok(Some(Received { bytes: buf, at: SystemTime::now(), outgoing: from.sll_pkttype == libc::PACKET_OUTGOING }))
     }
 }
