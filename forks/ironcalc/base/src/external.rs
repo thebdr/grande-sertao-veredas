@@ -77,16 +77,25 @@ pub struct ExternalBook {
 impl ExternalBook {
     /// The sheet called `name`. Sheet names compare case-insensitively, as in Excel.
     pub fn sheet(&self, name: &str) -> Option<&ExternalSheet> {
-        self.sheets.iter().find(|s| {
-            s.name.eq_ignore_ascii_case(name) || s.name.to_lowercase() == name.to_lowercase()
-        })
+        self.sheets.iter().find(|s| same_sheet_name(&s.name, name))
     }
 
     /// The sheet called `name`, mutable. See [`ExternalBook::sheet`].
     pub fn sheet_mut(&mut self, name: &str) -> Option<&mut ExternalSheet> {
-        self.sheets.iter_mut().find(|s| {
-            s.name.eq_ignore_ascii_case(name) || s.name.to_lowercase() == name.to_lowercase()
-        })
+        self.sheets
+            .iter_mut()
+            .find(|s| same_sheet_name(&s.name, name))
+    }
+}
+
+/// Excel compares sheet names without case. The ASCII comparison allocates
+/// nothing, which matters: a large workbook asks this for every one of its
+/// hundreds of thousands of external references.
+pub fn same_sheet_name(a: &str, b: &str) -> bool {
+    if a.is_ascii() && b.is_ascii() {
+        a.eq_ignore_ascii_case(b)
+    } else {
+        a.to_lowercase() == b.to_lowercase()
     }
 }
 

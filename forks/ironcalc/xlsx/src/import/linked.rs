@@ -21,7 +21,10 @@ use std::{
 };
 
 use ironcalc_base::{
-    external::{CachedResolver, ExternalBook, ExternalLookup, ExternalResolver, ExternalValue},
+    external::{
+        same_sheet_name, CachedResolver, ExternalBook, ExternalLookup, ExternalResolver,
+        ExternalValue,
+    },
     types::{Cell, FormulaValue, SpillValue},
     Model,
 };
@@ -278,10 +281,11 @@ impl ExternalResolver for LinkedResolver {
         self.load(index, external);
         match self.books.get(&index) {
             Some(LinkedBook::Loaded(model)) => {
-                let sheet_index = model.workbook.worksheets.iter().position(|ws| {
-                    ws.name.eq_ignore_ascii_case(sheet)
-                        || ws.name.to_lowercase() == sheet.to_lowercase()
-                });
+                let sheet_index = model
+                    .workbook
+                    .worksheets
+                    .iter()
+                    .position(|ws| same_sheet_name(&ws.name, sheet));
                 match sheet_index {
                     Some(i) => value_of(model, i as u32, row, column),
                     None => ExternalLookup::NotAvailable,
