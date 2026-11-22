@@ -1,0 +1,13 @@
+{
+  "clause": "C-290",
+  "verdict": "holds",
+  "ranAt": "2026-11-22T23:27:00.170Z",
+  "headCommit": "2fc06c707e72819d28f6ba7c2b10c05be999bd61",
+  "tests": [
+    {
+      "name": "tools/entrega/tests/manifest.rs",
+      "file": "tools/entrega/tests/manifest.rs",
+      "symbolSha": "cf402c1890dec87ce063ad96c4e052e63692dc7588f3ba6b89c3755540b8ef3f"
+    }
+  ]
+}
