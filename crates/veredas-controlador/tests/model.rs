@@ -6,12 +6,14 @@
 //! scans and clock; and every exchange with the plant by its time and value, the program's on its own periods and the
 //! safe outputs' on the target's, once in each, while host steps come late, the clock jumps and reads stall. A
 //! sequence is cut at its first disagreement and reported with the operations that led to it. First written by the
-//! critic of the fourth refute round (`.zen/evidence/C-152.md`) and taken in here as C-152's own test.
+//! critic of the fourth refute round (`.zen/evidence/C-152.md`) and taken in here as C-152's own test; since the sixth
+//! round each sequence draws its task's period (1 to 50 ms) and every refusal is compared whole, its command and
+//! state named.
 use std::time::Duration;
 
 use orcl_runtime::{Clock, Io, TaskConfig, VirtualClock};
 use orcl_std::{Program, Scan};
-use veredas_controlador::{Controller, Refusal, Restart, Switch, Target};
+use veredas_controlador::{Command, Controller, Refusal, Restart, Switch, Target};
 use veredas_core::state::{
     CommandSource, ControllerState, FaultReason, StartupPhase, StartupReason, State, StateWord, StopReason,
 };
@@ -89,18 +91,26 @@ impl Draw {
     }
 }
 
-const PERIOD: Duration = Duration::from_millis(10);
+/// The periods a sequence draws its task's from.
+const PERIODS: [Duration; 6] = [
+    Duration::from_millis(1),
+    Duration::from_micros(3_333),
+    Duration::from_millis(7),
+    Duration::from_millis(10),
+    Duration::from_millis(25),
+    Duration::from_millis(50),
+];
 
-fn periods_up_to(t: Duration) -> u128 {
-    t.as_nanos().div_ceil(PERIOD.as_nanos())
+fn periods_up_to(period: Duration, t: Duration) -> u128 {
+    t.as_nanos().div_ceil(period.as_nanos())
 }
 
-fn period_of(t: Duration) -> u128 {
-    t.as_nanos() / PERIOD.as_nanos()
+fn period_of(period: Duration, t: Duration) -> u128 {
+    t.as_nanos() / period.as_nanos()
 }
 
-fn deadline(k: u128) -> Duration {
-    Duration::from_nanos(u64::try_from(k * PERIOD.as_nanos()).unwrap())
+fn deadline(period: Duration, k: u128) -> Duration {
+    Duration::from_nanos(u64::try_from(k * period.as_nanos()).unwrap())
 }
 
 /// The model's task: where its program's clock starts, its next cycle, its program's scans and clock, faulted or not.
@@ -129,11 +139,12 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
     let mut draw = Draw(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x0bad_c0de);
     let clock = VirtualClock::new();
     let mut host_clock = clock.clone();
+    let period = PERIODS[usize::try_from(draw.below(6)).unwrap()];
     let stalls: Vec<Duration> = (0..120)
         .map(|_| match draw.below(10) {
-            0 => Duration::from_millis(draw.below(32)),
-            1 => Duration::from_micros(draw.below(32_000)),
-            2 => [PERIOD, PERIOD * 2, PERIOD + Duration::from_nanos(1), PERIOD * 2 + Duration::from_nanos(1)]
+            0 => period * u32::try_from(draw.below(32)).unwrap() / 10,
+            1 => period * u32::try_from(draw.below(32_000)).unwrap() / 10_000,
+            2 => [period, period * 2, period + Duration::from_nanos(1), period * 2 + Duration::from_nanos(1)]
                 [usize::try_from(draw.below(4)).unwrap()],
             _ => Duration::ZERO,
         })
@@ -150,7 +161,7 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
     };
     let target = Target { production: draw.below(3) != 0, realtime: draw.below(3) != 0, simulated: draw.below(2) == 0 };
     let may_run = !(target.production && !target.realtime);
-    let mut c = Controller::<Count>::power_on(TaskConfig { name: "t", period: PERIOD }, target, restart).unwrap();
+    let mut c = Controller::<Count>::power_on(TaskConfig { name: "t", period }, target, restart).unwrap();
 
     let mut m = ControllerState::new(State::Stop(None));
     m.conditions.sim = target.simulated;
@@ -183,16 +194,16 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
                 let stall = stalls.get(reads).copied().unwrap_or(Duration::ZERO);
                 let (read_at, written) = match task.as_mut() {
                     Some(t) => {
-                        let read_at = (t.origin + deadline(t.cycle)).max(arrival);
+                        let read_at = (t.origin + deadline(period, t.cycle)).max(arrival);
                         let end = read_at + stall;
                         let mut out = 7;
                         if !t.faulted {
                             t.scans += 1;
                             t.last_now = read_at - t.origin;
                             out = t.scans * 100 + 1;
-                            if stall > PERIOD {
+                            if stall > period {
                                 m.conditions.overruns += 1;
-                                if stall > PERIOD * 2 {
+                                if stall > period * 2 {
                                     t.faulted = true;
                                     out = 7;
                                     if m.state.word() == StateWord::Run {
@@ -203,15 +214,15 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
                                 }
                             }
                         }
-                        t.cycle = (t.cycle + 1).max(periods_up_to(end - t.origin));
+                        t.cycle = (t.cycle + 1).max(periods_up_to(period, end - t.origin));
                         (read_at, (end, out))
                     }
                     None => {
-                        let k = periods_up_to(arrival).max(last_read.map_or(0, |l| period_of(l) + 1));
-                        if deadline(k) > arrival && !arrival.as_nanos().is_multiple_of(PERIOD.as_nanos()) {
+                        let k = periods_up_to(period, arrival).max(last_read.map_or(0, |l| period_of(period, l) + 1));
+                        if deadline(period, k) > arrival && !arrival.as_nanos().is_multiple_of(period.as_nanos()) {
                             reached.late_idle_steps += 1;
                         }
-                        let read_at = deadline(k);
+                        let read_at = deadline(period, k);
                         (read_at, (read_at + stall, 7))
                     }
                 };
@@ -225,7 +236,7 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
                 format!("step at {arrival:?}")
             }
             5 => {
-                let jump = Duration::from_micros(draw.below(35_000));
+                let jump = period * u32::try_from(draw.below(3_500)).unwrap() / 1_000;
                 clock.advance(jump);
                 format!("clock +{jump:?}")
             }
@@ -234,24 +245,19 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
                 let source = draw.source();
                 let armed = draw.below(4) != 0;
                 let got = c.start(kind, source, &Key(armed));
+                let command = Command::Start(kind);
                 let want = if source == CommandSource::Program {
-                    Err("source")
+                    Err(Refusal::Source { command, source })
                 } else if !armed {
-                    Err("switch")
+                    Err(Refusal::Switch { command })
                 } else if word != StateWord::Stop {
-                    Err("state")
+                    Err(Refusal::State { command, state: word })
                 } else if !may_run {
-                    Err("real time")
+                    Err(Refusal::Realtime)
                 } else {
                     Ok(())
                 };
-                let got_kind = got.as_ref().map(|_| ()).map_err(|r| match r {
-                    Refusal::Source { .. } => "source",
-                    Refusal::Switch { .. } => "switch",
-                    Refusal::State { .. } => "state",
-                    Refusal::Realtime => "real time",
-                });
-                if got_kind != want {
+                if got != want {
                     return Err(format!("seed {seed} op {op}: start {got:?}, the model's {want:?} in {m}"));
                 }
                 match want {
@@ -263,7 +269,7 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
                             reached.starts_after_a_fault += 1;
                         }
                     }
-                    Err("real time") => m.state = State::Stop(Some(StopReason::RealtimeRefused)),
+                    Err(Refusal::Realtime) => m.state = State::Stop(Some(StopReason::RealtimeRefused)),
                     Err(_) => reached.refusals += 1,
                 }
                 format!("start {kind:?} by {source:?}, armed {armed}: {got:?}")
@@ -272,8 +278,9 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
                 let source = draw.source();
                 let got = c.stop(source);
                 let allowed = matches!(word, StateWord::Run | StateWord::Startup);
-                if got.is_ok() != allowed {
-                    return Err(format!("seed {seed} op {op}: stop {got:?} in {m}"));
+                let want = if allowed { Ok(()) } else { Err(Refusal::State { command: Command::Stop, state: word }) };
+                if got != want {
+                    return Err(format!("seed {seed} op {op}: stop {got:?}, the model's {want:?} in {m}"));
                 }
                 if allowed {
                     m.state = State::Stop(Some(StopReason::Command { source }));
@@ -290,10 +297,20 @@ fn run_one(seed: u64, reached: &mut Reached) -> Result<(), String> {
                 let source = draw.source();
                 let armed = draw.below(3) != 0;
                 let got = c.acknowledge(source, &Key(armed));
-                let allowed = source != CommandSource::Program && armed && word == StateWord::Fault;
-                if got.is_ok() != allowed {
-                    return Err(format!("seed {seed} op {op}: acknowledge {got:?} in {m}"));
+                let command = Command::Acknowledge;
+                let want = if source == CommandSource::Program {
+                    Err(Refusal::Source { command, source })
+                } else if !armed {
+                    Err(Refusal::Switch { command })
+                } else if word != StateWord::Fault {
+                    Err(Refusal::State { command, state: word })
+                } else {
+                    Ok(())
+                };
+                if got != want {
+                    return Err(format!("seed {seed} op {op}: acknowledge {got:?}, the model's {want:?} in {m}"));
                 }
+                let allowed = want.is_ok();
                 if allowed {
                     m.state = State::Stop(Some(StopReason::Acknowledged));
                     task = None;
