@@ -752,7 +752,7 @@ fn a_utf16_emitter_writes_a_bom_so_the_encoding_is_detectable() {
     let bytes = std::fs::read(dir.path().join("wide1.log")).unwrap();
     assert_eq!(&bytes[..2], &[0xFF, 0xFE], "UTF-16LE BOM");
     assert_eq!(bytes.len() % 2, 0);
-    let units: Vec<u16> = bytes[2..].chunks_exact(2).map(|p| u16::from_le_bytes([p[0], p[1]])).collect();
+    let units: Vec<u16> = bytes[2..].as_chunks::<2>().0.iter().map(|p| u16::from_le_bytes(*p)).collect();
     assert!(!units.contains(&0xFEFF), "one BOM, at the start only");
     let text = String::from_utf16(&units).expect("valid utf-16");
     assert!(text.contains(";T="), "{text}");
