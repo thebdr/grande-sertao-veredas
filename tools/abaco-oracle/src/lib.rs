@@ -841,6 +841,10 @@ pub struct Options {
     /// since 1970 UTC (`TODAY()`, `NOW()`); `None` is the system's. A measure compared with one
     /// taken on another day pins the day it was taken ([`noon_utc`]).
     pub clock: Option<i64>,
+    /// The seed of the engine's random functions while a workbook is measured (`RAND()`,
+    /// `RANDARRAY()`), so a random draw that equals Excel's cache by chance is the same chance on
+    /// every run; `None` is the system's randomness.
+    pub random_seed: Option<u64>,
 }
 
 /// Noon UTC of a `YYYY-MM-DD` date, in milliseconds since 1970: the clock a measure taken that day
@@ -872,6 +876,23 @@ pub fn noon_utc(date: &str) -> Option<i64> {
     Some(days * 86_400_000 + 12 * 3_600_000)
 }
 
+/// The engine's random functions seeded for as long as it lives (the sequence started at the
+/// seed), returned to chance when it drops.
+struct SeedPin;
+
+impl SeedPin {
+    fn new(seed: Option<u64>) -> SeedPin {
+        ironcalc_base::seed_random(seed);
+        SeedPin
+    }
+}
+
+impl Drop for SeedPin {
+    fn drop(&mut self) {
+        ironcalc_base::seed_random(None);
+    }
+}
+
 /// The engine's clock pinned for as long as it lives; when it drops, the clock is what it was.
 struct ClockPin {
     before: Option<i64>,
@@ -894,6 +915,7 @@ impl Drop for ClockPin {
 /// Measures one workbook.
 pub fn run_file(path: &Path, options: &Options, probe: &mut Probe) -> FileReport {
     let _clock = ClockPin::new(options.clock);
+    let _seed = SeedPin::new(options.random_seed);
     let mut rep = FileReport::new(path);
     let name = rep.name.clone();
     let say = |what: String| {

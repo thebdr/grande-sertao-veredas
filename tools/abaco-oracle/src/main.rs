@@ -7,7 +7,8 @@
 //! ```
 //!
 //! `--today` pins the engine's clock to noon UTC of that day (TODAY, NOW), so a measure compares
-//! with one taken that day; without it the system's clock is read.
+//! with one taken that day; without it the system's clock is read. The random functions are always
+//! seeded (1), so a run's numbers never depend on chance.
 //!
 //! ```text
 //! ```
@@ -89,7 +90,7 @@ fn main() -> ExitCode {
     }
 
     let mut probe = Probe::default();
-    let options = Options { links, max_examples, roundtrip_dir: roundtrip_dir.clone(), verbose: true, clock };
+    let options = Options { links, max_examples, roundtrip_dir: roundtrip_dir.clone(), verbose: true, clock, random_seed: Some(1) };
     let reports: Vec<_> = files.iter().map(|f| run_file(f, &options, &mut probe)).collect();
     let md = write_report(&reports, &probe, links, max_examples);
     match &out {
@@ -105,7 +106,7 @@ fn main() -> ExitCode {
 
     if let Some(path) = baseline_out {
         let root = corpus_dir.clone().unwrap_or_default();
-        let quiet = |links| Options { links, max_examples: 0, roundtrip_dir: None, verbose: false, clock };
+        let quiet = |links| Options { links, max_examples: 0, roundtrip_dir: None, verbose: false, clock, random_seed: Some(1) };
         let mut entries = Vec::new();
         for (f, cached) in files.iter().zip(&reports) {
             let cached = if links == LinksMode::Cached { cached.measure() } else { run_file(f, &quiet(LinksMode::Cached), &mut probe).measure() };

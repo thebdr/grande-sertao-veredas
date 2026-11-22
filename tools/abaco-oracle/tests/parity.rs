@@ -31,11 +31,12 @@ fn corpus_dir(b: &Baseline) -> PathBuf {
 
 /// The baseline's day, the clock every measure here is pinned to: the workbooks' formulas on
 /// TODAY() (two calendars build a whole year from it) read the day Veredas 1 measured, whatever
-/// day the test runs.
+/// day the test runs. And the random functions seeded: a RANDARRAY of integers 0 to 100 matches
+/// Excel's cache by chance now and then, the same chance on every run once seeded.
 fn options(links: LinksMode) -> Options {
     let clock = abaco_oracle::noon_utc(&baseline().measured_on);
     assert!(clock.is_some());
-    Options { links, max_examples: 3, roundtrip_dir: None, verbose: false, clock }
+    Options { links, max_examples: 3, roundtrip_dir: None, verbose: false, clock, random_seed: Some(1) }
 }
 
 /// Workbooks upstream's own tests write into the corpus folder while the fork's suite runs (beside
@@ -316,8 +317,10 @@ fn the_engine_s_clock_is_pinned_to_the_baseline_s_day_while_a_workbook_is_measur
     later.clock = abaco_oracle::noon_utc("2027-03-01");
     let report = run_file(&path, &later, &mut probe);
     assert_eq!(report.measure().unwrap().matched, 0);
-    // and the pin is released when the measure ends, to what it was before it
+    // and the pin is released when the measure ends, to what it was before it, the random functions
+    // returned to chance
     assert_eq!(ironcalc_base::pinned_clock(), None);
+    assert!(!ironcalc_base::random_is_seeded());
     ironcalc_base::pin_clock(Some(7));
     run_file(&path, &later, &mut probe);
     assert_eq!(ironcalc_base::pinned_clock(), Some(7));
