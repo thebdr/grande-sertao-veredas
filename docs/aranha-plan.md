@@ -278,10 +278,11 @@ is pinned by a test when its phase lands.
   codec bounds every read by the var part, keeps the reserved bits apart, and keeps what it does
   not read with the reason (C-136).
 - **PNIO's RPC is two byte orders at once.** The connectionless header's integers, its UUIDs' first
-  three fields and PNIO's argument counts follow the header's data representation (most stacks
-  write little-endian); the PNIO status and the blocks are big-endian always. A codec that writes
-  the counts big-endian under a little-endian header is read by the dissector as a gigabyte of
-  arguments (C-137).
+  three fields, PNIO's argument counts and a response's PNIO status (a 32-bit value) follow the
+  header's data representation (most stacks write little-endian); the blocks are big-endian always.
+  A codec that writes the counts big-endian under a little-endian header is read by the dissector
+  as a gigabyte of arguments, and a status written byte by byte under it reads as another error
+  (C-137, its first refute round).
 - **A frame shorter than 60 bytes is padded on the wire, and a capture may or may not hold the
   pad**: DCP is bounded by its own data length and LLDP by its end TLV, never by the frame.
 - **This machine announces itself.** An operating system's own LLDP agent and its own ARP are on

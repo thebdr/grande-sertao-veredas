@@ -8,9 +8,10 @@
 //! the data: PNIO blocks (BlockType u16 | BlockLength u16 | version high | version low | body)
 //! ```
 //!
-//! The RPC header's integers, the first three fields of its UUIDs and the arguments' counts follow
-//! the header's data representation (`drep`: byte order big or little); the PNIO status and the
-//! blocks are big-endian always. This module reads and writes one datagram: a body split into
+//! The RPC header's integers, the first three fields of its UUIDs, the arguments' counts and a
+//! response's PNIO status (a 32-bit value: error code, decode, code 1, code 2 from its most
+//! significant byte) follow the header's data representation (`drep`: byte order big or little);
+//! the blocks are big-endian always. This module reads and writes one datagram: a body split into
 //! fragments is carried as each fragment's bytes with its number, and joined by the caller; the
 //! retries, the activity's sequence and the ports the answers come from are the caller's.
 
@@ -26,6 +27,9 @@ pub const PNIO_PORT: u16 = 34964;
 
 /// The connectionless header's length.
 pub const HEADER: usize = 80;
+
+/// The longest datagram UDP over IPv4 carries (65535 less the IPv4 and UDP headers).
+pub const MAX_DATAGRAM: usize = 65_507;
 
 /// A UUID, held in the order its text spells it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -306,8 +310,8 @@ pub enum RpcError {
     NotConnectionless(u8),
     #[error("the body is said to be {declared} bytes and {available} follow the header")]
     Overrun { declared: usize, available: usize },
-    #[error("a body of {0} bytes is past what the header's length counts (65535)")]
-    BodyTooLong(usize),
+    #[error("a datagram of {0} bytes is past what UDP over IPv4 carries ({MAX_DATAGRAM})")]
+    TooLong(usize),
     #[error("PNIO's arguments are {want} bytes before their data; this body is {len}")]
     ArgsTooShort { want: usize, len: usize },
     #[error("the arguments' data is said to be {declared} bytes and {available} follow")]
@@ -337,11 +341,15 @@ impl RpcPdu {
         ByteOrder::of_drep(self.drep)
     }
 
-    /// Read one datagram (the UDP payload). A header shorter than 80 bytes, a version other than
-    /// 4, or a body past the datagram is an error naming it; bytes after the body are kept.
+    /// Read one datagram (the UDP payload). A header shorter than 80 bytes, a datagram past what
+    /// UDP over IPv4 carries, a version other than 4, or a body past the datagram is an error
+    /// naming it; bytes after the body are kept.
     pub fn decode(d: &[u8]) -> Result<RpcPdu, RpcError> {
         if d.len() < HEADER {
             return Err(RpcError::TooShort(d.len()));
+        }
+        if d.len() > MAX_DATAGRAM {
+            return Err(RpcError::TooLong(d.len()));
         }
         if d[0] != 4 {
             return Err(RpcError::NotConnectionless(d[0]));
@@ -375,10 +383,12 @@ impl RpcPdu {
         })
     }
 
-    /// The datagram: header, body, trailing bytes. A body past 65535 bytes is refused.
+    /// The datagram: header, body, trailing bytes. A datagram past what UDP over IPv4 carries
+    /// (65 507 bytes) is refused.
     pub fn encode(&self) -> Result<Vec<u8>, RpcError> {
-        if self.body.len() > u16::MAX as usize {
-            return Err(RpcError::BodyTooLong(self.body.len()));
+        let total = HEADER + self.body.len() + self.trailing.len();
+        if total > MAX_DATAGRAM {
+            return Err(RpcError::TooLong(total));
         }
         let o = self.byte_order();
         let mut out = Vec::with_capacity(HEADER + self.body.len() + self.trailing.len());
@@ -468,7 +478,8 @@ pub struct RequestArgs {
     pub trailing: Vec<u8>,
 }
 
-/// A PNIO response's arguments: the status, and the data.
+/// A PNIO response's arguments: the status (a 32-bit value in the header's byte order), and the
+/// data.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResponseArgs {
     pub status: PnioStatus,
@@ -538,7 +549,7 @@ impl ResponseArgs {
     pub fn decode(body: &[u8], order: ByteOrder) -> Result<ResponseArgs, RpcError> {
         let (data, trailing) = args_data(body, order)?;
         Ok(ResponseArgs {
-            status: PnioStatus::from_bytes([body[0], body[1], body[2], body[3]]),
+            status: PnioStatus::from_bytes(order.u32(body, 0).to_be_bytes()),
             args_length: order.u32(body, 4),
             max_count: order.u32(body, 8),
             offset: order.u32(body, 12),
@@ -550,7 +561,7 @@ impl ResponseArgs {
     /// The body; the actual count is the data's length.
     pub fn encode(&self, order: ByteOrder) -> Vec<u8> {
         let mut out = Vec::with_capacity(ARGS + self.data.len() + self.trailing.len());
-        out.extend_from_slice(&self.status.to_bytes());
+        order.put32(&mut out, u32::from_be_bytes(self.status.to_bytes()));
         for v in [self.args_length, self.max_count, self.offset, self.data.len() as u32] {
             order.put32(&mut out, v);
         }
@@ -609,7 +620,9 @@ pub const READ_REQUEST: u16 = 0x0009;
 pub const READ_RESPONSE: u16 = 0x8009;
 
 /// What a read asks for: which record of which subslot, and at most how many bytes. An implicit
-/// read (no connection) carries the nil AR UUID, a read under a connection its AR's.
+/// read (no connection) carries the nil AR UUID and may name a target AR; a read under a connection
+/// carries its AR's UUID, and the target AR's place is then padding (written zero, read only when
+/// zero, so `target_ar` is nil).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReadRequest {
     pub seq: u16,
@@ -658,7 +671,11 @@ impl ReadRequest {
         ReadRequest { seq, ar: Uuid::NIL, api: 0, slot, subslot, index, length, target_ar: Uuid::NIL }
     }
 
-    pub fn block(&self) -> Block {
+    /// The block. A target AR under an AR that is not nil (where its place is padding) is refused.
+    pub fn block(&self) -> Result<Block, RpcError> {
+        if self.ar != Uuid::NIL && self.target_ar != Uuid::NIL {
+            return Err(RpcError::Unfit(format!("a target AR travels only under the nil AR (an implicit read); this read's AR is {}", self.ar)));
+        }
         let mut b = Vec::with_capacity(READ_BODY);
         b.extend_from_slice(&self.seq.to_be_bytes());
         b.extend_from_slice(&self.ar.0);
@@ -670,13 +687,21 @@ impl ReadRequest {
         b.extend_from_slice(&self.length.to_be_bytes());
         b.extend_from_slice(&self.target_ar.0);
         b.extend_from_slice(&[0; 8]);
-        Block::new(READ_REQUEST, b)
+        Ok(Block::new(READ_REQUEST, b))
     }
 
-    /// The read request a block holds: type 0x0009, version 1.0, 60 bytes, its padding zero.
+    /// The read request a block holds: type 0x0009, version 1.0, 60 bytes, its padding zero (the
+    /// target AR's place among it under an AR that is not nil).
     pub fn from_block(b: &Block) -> Result<ReadRequest, RpcError> {
         let x = &b.body;
-        if b.block_type != READ_REQUEST || b.version != (1, 0) || x.len() != READ_BODY || x[26..28] != [0, 0] || x[50..58] != [0; 8] {
+        let explicit = x.len() == READ_BODY && x[2..18] != [0; 16];
+        if b.block_type != READ_REQUEST
+            || b.version != (1, 0)
+            || x.len() != READ_BODY
+            || x[26..28] != [0, 0]
+            || x[50..58] != [0; 8]
+            || (explicit && x[34..50] != [0; 16])
+        {
             return Err(unfit("a read request", b));
         }
         Ok(ReadRequest {
@@ -753,11 +778,15 @@ impl ReadResponse {
     }
 }
 
-/// The data of a read request (its one block) and the datagram of an implicit read, in the byte
-/// order given; `args_maximum` is the largest answer taken, the request's record length what is
-/// left of it after the answer's header.
+/// The datagram of an implicit read (operation 5) of `request`, in the byte order given;
+/// `args_maximum` is the largest answer taken, the request's record length what is left of it
+/// after the answer's header. A request under an AR that is not nil is refused: that is a read
+/// under a connection (operation 2).
 pub fn read_implicit(order: ByteOrder, object: Uuid, activity: Uuid, sequence: u32, request: &ReadRequest, args_maximum: u32) -> Result<RpcPdu, RpcError> {
-    let data = request.block().encode()?;
+    if request.ar != Uuid::NIL {
+        return Err(RpcError::Unfit(format!("an implicit read carries the nil AR; this one carries {}", request.ar)));
+    }
+    let data = request.block()?.encode()?;
     Ok(RpcPdu::pnio_request(order, object, activity, sequence, opnum::READ_IMPLICIT, &RequestArgs::new(args_maximum, data)))
 }
 

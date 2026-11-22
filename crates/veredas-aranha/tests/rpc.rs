@@ -83,7 +83,7 @@ fn a_uuid_is_its_text_and_travels_in_the_header_s_byte_order() {
     assert_eq!(object().pnio_object_parts(), Some((0x0001, 0x0203, 0x002A)));
     assert_eq!(Uuid::pnio_object(0xFFFF, 0, 0x1234).pnio_object_parts(), Some((0xFFFF, 0, 0x1234)));
     assert_eq!(Uuid::PNIO_DEVICE.pnio_object_parts(), None);
-    for near in ["dea00000-6c97-11d1-8272-00010203002a", "dea00000-6c97-11d1-8371-00010203002a", "dea00000-6c97-11d2-8271-00010203002a", "dea00001-6c97-11d1-8271-00010203002a"] {
+    for near in ["dea00000-6c98-11d1-8271-00010203002a", "dea00000-6c97-11d1-8272-00010203002a", "dea00000-6c97-11d1-8371-00010203002a", "dea00000-6c97-11d2-8271-00010203002a", "dea00001-6c97-11d1-8271-00010203002a"] {
         assert_eq!(near.parse::<Uuid>().unwrap().pnio_object_parts(), None, "{near}");
     }
     assert_eq!(activity().pnio_object_parts(), None);
@@ -110,7 +110,7 @@ fn an_implicit_read_is_its_header_its_arguments_and_its_block_to_the_byte() {
         (PacketType::Request, flags1::IDEMPOTENT, [0x10, 0, 0], Uuid::PNIO_DEVICE, opnum::READ_IMPLICIT, 1)
     );
     let args = RequestArgs::decode(&pdu.body, pdu.byte_order()).unwrap();
-    assert_eq!(args, RequestArgs::new(4096, im0_read().block().encode().unwrap()));
+    assert_eq!(args, RequestArgs::new(4096, im0_read().block().unwrap().encode().unwrap()));
     let (blocks, rest) = rpc::read_blocks(&args.data);
     assert_eq!((blocks.len(), rest.len()), (1, 0));
     assert_eq!(ReadRequest::from_block(&blocks[0]).unwrap(), im0_read());
@@ -156,7 +156,8 @@ fn a_read_answer_is_its_status_its_header_and_the_record() {
     let refused = PnioStatus { code: 0xDE, decode: 0x80, code1: 0xB0, code2: 0x00 };
     let no = rpc::read_answer(&request, &im0_read(), refused, &[], 0).unwrap();
     let b = no.encode().unwrap();
-    assert_eq!(&b[80..84], &[0xDE, 0x80, 0xB0, 0x00]);
+    // The status is a 32-bit value in the header's byte order: little-endian here.
+    assert_eq!(&b[80..84], &[0x00, 0xB0, 0x80, 0xDE]);
     let args = ResponseArgs::decode(&no.body, ByteOrder::Little).unwrap();
     assert_eq!((args.status, args.data.len()), (refused, 64));
     assert_eq!(ReadResponse::split(&args.data).unwrap().1, Vec::<u8>::new());
@@ -227,14 +228,22 @@ fn a_damaged_datagram_is_an_error_that_names_it_and_trailing_bytes_are_kept() {
     assert_eq!(ByteOrder::of_drep([0xE0, 0, 0]), ByteOrder::Big);
     assert_eq!((ByteOrder::Big.drep(), ByteOrder::Little.drep()), ([0, 0, 0], [0x10, 0, 0]));
 
-    // A body past what the length counts is refused; 65535 is written.
+    // A datagram past what UDP over IPv4 carries is refused both ways; 65 507 bytes are written and
+    // read back.
     let mut pdu = RpcPdu::decode(&good).unwrap();
-    pdu.body = vec![0; 65_536];
-    assert_eq!(pdu.encode(), Err(RpcError::BodyTooLong(65_536)));
-    pdu.body = vec![0; 65_535];
+    pdu.body = vec![0; 65_427];
     let bytes = pdu.encode().unwrap();
+    assert_eq!(bytes.len(), rpc::MAX_DATAGRAM);
     assert_eq!(RpcPdu::decode(&bytes).unwrap(), pdu);
-    assert_eq!(RpcError::BodyTooLong(65_536).to_string(), "a body of 65536 bytes is past what the header's length counts (65535)");
+    pdu.trailing = vec![1];
+    assert_eq!(pdu.encode(), Err(RpcError::TooLong(65_508)));
+    pdu.trailing = vec![];
+    pdu.body = vec![0; 65_535];
+    assert_eq!(pdu.encode(), Err(RpcError::TooLong(65_615)));
+    let mut over = bytes.clone();
+    over.push(0);
+    assert_eq!(RpcPdu::decode(&over), Err(RpcError::TooLong(65_508)));
+    assert_eq!(RpcError::TooLong(65_508).to_string(), "a datagram of 65508 bytes is past what UDP over IPv4 carries (65507)");
 
     // Every cut of a good datagram, and twenty thousand noisy ones, decode or name their damage
     // without a panic; each decoded one writes back to its own bytes.
@@ -290,7 +299,8 @@ fn the_arguments_name_their_damage_and_keep_what_follows() {
         assert_eq!(read.encode(o), more);
         let res = ResponseArgs::new(PnioStatus { code: 0xDE, decode: 0x81, code1: 0x01, code2: 0x02 }, 512, vec![7; 5]);
         let body = res.encode(o);
-        assert_eq!(&body[..4], &[0xDE, 0x81, 0x01, 0x02]);
+        let want: &[u8] = if o == ByteOrder::Big { &[0xDE, 0x81, 0x01, 0x02] } else { &[0x02, 0x01, 0x81, 0xDE] };
+        assert_eq!(&body[..4], want);
         assert_eq!(ResponseArgs::decode(&body, o).unwrap(), res);
         assert_eq!(ResponseArgs::decode(&body[..24], o), Err(RpcError::ArgsOverrun { declared: 5, available: 4 }));
         assert_eq!(ResponseArgs::decode(&body[..3], o), Err(RpcError::ArgsTooShort { want: 20, len: 3 }));
@@ -327,12 +337,35 @@ fn blocks_are_read_in_order_and_what_is_not_a_whole_block_is_kept() {
 
 #[test]
 fn a_read_header_is_read_only_from_its_own_block() {
-    let req = ReadRequest { seq: 0x0102, ar: activity(), api: 0x0304_0506, slot: 7, subslot: 0x8001, index: 0x802A, length: 99, target_ar: object() };
-    let block = req.block();
+    // An implicit read naming a target AR; a read under an AR, its target's place padding.
+    let req = ReadRequest { seq: 0x0102, ar: Uuid::NIL, api: 0x0304_0506, slot: 7, subslot: 0x8001, index: 0x802A, length: 99, target_ar: object() };
+    let block = req.block().unwrap();
+    assert_eq!(&block.encode().unwrap()[40..56], &object().0);
+    let under = ReadRequest { ar: activity(), target_ar: Uuid::NIL, ..req.clone() };
+    let ublock = under.block().unwrap();
+    assert_eq!(&ublock.encode().unwrap()[8..24], &activity().0);
+    assert_eq!(&ublock.encode().unwrap()[40..64], &[0; 24]);
+    assert_eq!(ReadRequest::from_block(&ublock).unwrap(), under);
+    assert_eq!(
+        ReadRequest { ar: activity(), ..req.clone() }.block().unwrap_err().to_string(),
+        "a target AR travels only under the nil AR (an implicit read); this read's AR is 12345678-1234-5678-9abc-def012345678"
+    );
+    let mut padded = ublock.clone();
+    padded.body[34] = 1;
+    assert!(ReadRequest::from_block(&padded).is_err());
+    padded.body[34] = 0;
+    padded.body[49] = 1;
+    assert!(ReadRequest::from_block(&padded).is_err());
+    assert_eq!(
+        rpc::read_implicit(ByteOrder::Little, object(), activity(), 1, &under, 4096).unwrap_err().to_string(),
+        "an implicit read carries the nil AR; this one carries 12345678-1234-5678-9abc-def012345678"
+    );
     assert_eq!((block.block_type, block.version, block.body.len()), (rpc::READ_REQUEST, (1, 0), 58));
     assert_eq!(ReadRequest::from_block(&block).unwrap(), req);
     let res = ReadResponse { seq: 2, ar: activity(), api: 1, slot: 2, subslot: 3, index: 4, length: 5, add1: 6, add2: 7 };
     let rblock = res.block();
+    assert_eq!(&rblock.encode().unwrap()[8..24], &activity().0);
+    assert_eq!(&rblock.encode().unwrap()[40..44], &[0, 6, 0, 7]);
     assert_eq!((rblock.block_type, rblock.version, rblock.body.len()), (rpc::READ_RESPONSE, (1, 0), 58));
     assert_eq!(ReadResponse::from_block(&rblock).unwrap(), res);
     // Another type, version or length, or padding that is not zero: not a read header.
@@ -517,4 +550,83 @@ fn the_dissectors_read_every_datagram_as_it_was_written() {
     // The answer is paired with its request by the dissector.
     assert_eq!(field(&d[1], "dcerpc", "dcerpc_dcerpc_request_in"), ["1"]);
     assert_eq!(field(&d[3], "dcerpc", "dcerpc_dcerpc_request_in"), ["3"]);
+}
+
+#[test]
+fn the_dissectors_read_an_answer_s_identity_the_status_s_order_and_every_header_field() {
+    let me = (CONTROLLER, [10, 0, 0, 1], 50_000);
+    let dev = (DEVICE, [10, 0, 0, 2], rpc::PNIO_PORT);
+    let ar: Uuid = "aabbccdd-eeff-1122-3344-556677889900".parse().unwrap();
+    // A read under a connection: its AR, API 5, slot 3; answered with a refusal whose four bytes
+    // differ, little-endian, so each is seen where it is.
+    let read = ReadRequest { seq: 9, ar, api: 5, slot: 3, subslot: 0x8001, index: 0x802A, length: 4032, target_ar: Uuid::NIL };
+    let request = RpcPdu::pnio_request(ByteOrder::Little, object(), activity(), 11, opnum::READ, &RequestArgs::new(4096, read.block().unwrap().encode().unwrap()));
+    let refused = PnioStatus { code: 0xDE, decode: 0x80, code1: 0xB0, code2: 0x07 };
+    let answer = rpc::read_answer(&request, &read, refused, &[], 0).unwrap();
+    let args = ResponseArgs::decode(&answer.body, ByteOrder::Little).unwrap();
+    assert_eq!(&answer.body[..4], &[0x07, 0xB0, 0x80, 0xDE]);
+    assert_eq!(args.status, refused);
+    let (header, record) = ReadResponse::split(&args.data).unwrap();
+    assert_eq!((header, record), (ReadResponse { seq: 9, ar, api: 5, slot: 3, subslot: 0x8001, index: 0x802A, length: 0, add1: 0, add2: 0 }, vec![]));
+
+    // Every header field distinct and not zero, byte for byte.
+    let odd = RpcPdu {
+        flags1: flags1::IDEMPOTENT | flags1::NO_FACK,
+        flags2: rpc::flags2::CANCEL_PENDING,
+        serial: 0x0A0B,
+        server_boot: 0x0102_0304,
+        sequence: 0x1122_3344,
+        interface_hint: 0x0102,
+        activity_hint: 0x0304,
+        fragment: 7,
+        auth_proto: 5,
+        ..rpc::read_implicit(ByteOrder::Little, object(), activity(), 0, &im0_read(), 4096).unwrap()
+    };
+    let bytes = odd.encode().unwrap();
+    assert_eq!(&bytes[..8], &hex("04 00 28 02 100000 0a")[..]);
+    assert_eq!(&bytes[56..80], &hex("04030201 01000000 44332211 0500 0201 0403 5400 0700 05 0b")[..]);
+    assert_eq!(RpcPdu::decode(&bytes).unwrap(), odd);
+    // An answer with additional values, written by hand.
+    let with_values = {
+        let data = ReadResponse { add1: 0x1122, add2: 0x3344, ..ReadResponse::answering(&im0_read(), 0) }.block().encode().unwrap();
+        let base = rpc::read_implicit(ByteOrder::Little, object(), activity(), 12, &im0_read(), 4096).unwrap();
+        RpcPdu::pnio_response(&base, 0, &ResponseArgs::new(PnioStatus::OK, 4096, data))
+    };
+    // A record that is not its index's block, which the dissector calls malformed: the record is
+    // the device's to shape.
+    let im_request = rpc::read_implicit(ByteOrder::Little, object(), activity(), 13, &im0_read(), 4096).unwrap();
+    let not_a_block = rpc::read_answer(&im_request, &im0_read(), PnioStatus::OK, &[1, 2, 3, 4], 0).unwrap();
+    let base = rpc::read_implicit(ByteOrder::Little, object(), activity(), 12, &im0_read(), 4096).unwrap();
+    let frames = vec![
+        udp(dev, me, &request.encode().unwrap()),
+        udp(me, dev, &answer.encode().unwrap()),
+        udp(dev, me, &bytes),
+        udp(dev, me, &base.encode().unwrap()),
+        udp(me, dev, &with_values.encode().unwrap()),
+        udp(dev, me, &im_request.encode().unwrap()),
+        udp(me, dev, &not_a_block.encode().unwrap()),
+    ];
+    let d = common::dissect(&frames);
+    for (i, p) in d.iter().take(6).enumerate() {
+        assert!(p.complaints().is_empty(), "frame {i}: {:?}", p.complaints());
+    }
+    let io = |i: usize, k: &str| field(&d[i], "pn_io_device", k);
+    assert_eq!(io(0, "pn_io_pn_io_ar_uuid"), [ar.to_string()]);
+    assert!(io(0, "pn_io_pn_io_target_ar_uuid").is_empty());
+    assert_eq!(io(1, "pn_io_pn_io_ar_uuid"), [ar.to_string()]);
+    assert_eq!((io(1, "pn_io_pn_io_api"), io(1, "pn_io_pn_io_slot_nr")), (vec!["5".to_string()], vec!["3".to_string()]));
+    assert_eq!(io(1, "pn_rt_pn_io_error_code"), ["222"]);
+    assert_eq!(io(1, "pn_rt_pn_io_error_decode"), ["128"]);
+    assert_eq!(io(1, "pn_rt_pn_io_error_code1_pniorw"), ["176"]);
+    assert_eq!(io(1, "pn_rt_pnio_error_code2_pniorw"), ["7"]);
+    let rpc_field = |k: &str| field(&d[2], "dcerpc", &format!("dcerpc_dcerpc_{k}"));
+    assert_eq!(rpc_field("dg_flags1"), ["40"]);
+    assert_eq!(rpc_field("dg_flags2"), ["2"]);
+    assert_eq!((rpc_field("dg_serial_hi"), rpc_field("dg_serial_lo")), (vec!["10".to_string()], vec!["11".to_string()]));
+    assert_eq!(rpc_field("dg_seqnum"), ["287454020"]);
+    assert_eq!((rpc_field("dg_ihint"), rpc_field("dg_ahint")), (vec!["258".to_string()], vec!["772".to_string()]));
+    assert_eq!(rpc_field("dg_frag_num"), ["7"]);
+    assert_eq!(rpc_field("dg_auth_proto"), ["5"]);
+    assert_eq!((io(4, "pn_io_pn_io_add_val1"), io(4, "pn_io_pn_io_add_val2")), (vec!["4386".to_string()], vec!["13124".to_string()]));
+    assert!(d[6].complaints().iter().any(|c| c.contains("malformed")), "{:?}", d[6].complaints());
 }
