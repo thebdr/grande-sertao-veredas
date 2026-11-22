@@ -149,7 +149,10 @@ Taken meanwhile (Q340): the fork arrives as Veredas 1 left it, `base` and `xlsx`
 not a subtree, at `forks/ironcalc`: one commit with upstream's files at `15ecfec`, checked against
 a fetch of upstream at that commit, then each change as a commit of its own (twelve: change 1 had a
 refinement), the result checked equal to Veredas 1's fork once its test data's real names are
-replaced by neutral ones. Upstream's own tests and the changes' (in the fork's folder, with
+replaced by neutral ones. Three changes of Ábaco's own followed, each found by a refute round: a
+link's target read as the URI Excel writes (12), the statistical functions on one float path in
+every build (13) and the chi-squared and gamma inverses to full precision (14), and a clock a host
+can pin at run time (15). The record lists each, with its upstream column. Upstream's own tests and the changes' (in the fork's folder, with
 upstream's workbooks) run in the fork's own workspace,
 `cargo test --locked --manifest-path forks/ironcalc/Cargo.toml`, and Ábaco's component test runs
 them, so they run with Ábaco's tests. Upstream has moved since (`main` at `f936620` on 2026-11-22): bringing it in is
