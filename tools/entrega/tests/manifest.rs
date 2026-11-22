@@ -548,6 +548,48 @@ fn nothing_outside_the_commits_tree_is_read_or_written() {
 }
 
 #[test]
+fn a_release_whose_commit_is_absent_hides_no_other_refusal() {
+    let r = suite();
+    let c1 = r.commit("the suite");
+    r.write("crates/veredas-portal/src/main.rs", "fn main() { println!(\"changed\"); }\n");
+    let c2 = r.commit("portal changed, its version not bumped");
+    let load = |rel: &str, c: &str| (PathBuf::from(rel), manifest::load(&matching(rel, c)).unwrap());
+    let absent = "0123456789abcdef0123456789abcdef01234567";
+    let all: Vec<(PathBuf, Manifest)> = vec![load("2.0.0", &c1), load("2.0.1", &c2), load("2.0.2", absent)];
+    assert_eq!(
+        manifest::check_together(r.path(), &all).unwrap(),
+        vec!["veredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.0 and 2.0.1 at different code: a version names one tree".to_string()]
+    );
+    // Through the executable, every refusal said: the absent commit's and the one tree's.
+    for (rel, c) in [("2.0.0", c1.as_str()), ("2.0.1", c2.as_str()), ("2.0.2", absent)] {
+        r.write(&format!("releases/{rel}.toml"), &matching(rel, c));
+    }
+    r.commit("three releases");
+    let out = Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").current_dir(r.path()).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(err.contains(&format!("commit {absent} is not in the repository")), "{err}");
+    assert!(err.contains("veredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.0 and 2.0.1 at different code"), "{err}");
+}
+
+#[test]
+fn an_executable_named_in_any_script_is_listed_and_a_glob_in_the_scratch_path_is_named() {
+    let r = suite();
+    r.write("crates/veredas-maquinar/src/bin/ação.rs", "fn main() {}\n");
+    let c = r.commit("a bin named in Portuguese");
+    let text = matching("2.0.0", &c).replace("bins = [\"veredas-maquinar\"]", "bins = [\"ação\", \"veredas-maquinar\"]");
+    assert_eq!(checked(&r, &text), Vec::<String>::new());
+    // The scratch folder lies in the tool's cache, whatever TMPDIR says; a parent with a glob
+    // character is refused by name, never read by cargo as a pattern.
+    let holder = tempfile::tempdir().unwrap();
+    let globbed = holder.path().join("t[1]");
+    std::fs::create_dir_all(&globbed).unwrap();
+    let mut refusals = Vec::new();
+    assert!(manifest::components_at_in(r.path(), &c, &globbed, &mut refusals).unwrap().is_empty());
+    assert_eq!(refusals, vec![format!("the scratch folder's parent {} holds a glob character cargo would read as a pattern", globbed.display())]);
+}
+
+#[test]
 fn an_annotated_tags_id_is_no_commit() {
     let r = suite();
     let c = r.commit("the suite");

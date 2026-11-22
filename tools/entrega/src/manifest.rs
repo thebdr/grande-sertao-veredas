@@ -113,8 +113,10 @@ fn is_commit_id(s: &str) -> bool {
     s.len() == 40 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// An executable's name as cargo makes one: letters (any script's, as `ação`), digits, `-` and
+/// `_`; never a path, a space or a control character.
 fn is_bin_name(s: &str) -> bool {
-    !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
 }
 
 fn stated(key: &str, value: &str) -> Result<String, ManifestError> {
@@ -206,8 +208,12 @@ pub enum CheckError {
 /// so a member's spelling and an edition's discovery rules are cargo's, never a model of them;
 /// each folder is read against the workspace root cargo names, in cargo's own spelling of paths.
 /// What cannot be read is pushed to `refusals`.
+/// The scratch folder's parent is the tool's cache (`tmp/` there, on disk), whatever `TMPDIR`
+/// says: the verdict must not depend on where the system puts temporary files.
 pub fn components_at(root: &Path, commit: &str, refusals: &mut Vec<String>) -> Result<BTreeMap<String, Held>, CheckError> {
-    components_at_in(root, commit, &std::env::temp_dir(), refusals)
+    let parent = crate::cache::dir()?.join("tmp");
+    std::fs::create_dir_all(&parent)?;
+    components_at_in(root, commit, &parent, refusals)
 }
 
 /// [`components_at`], its scratch folder made under `parent` (a folder reached through a link
@@ -215,6 +221,12 @@ pub fn components_at(root: &Path, commit: &str, refusals: &mut Vec<String>) -> R
 pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut Vec<String>) -> Result<BTreeMap<String, Held>, CheckError> {
     use std::process::{Command, Stdio};
     let mut held = BTreeMap::new();
+    // Cargo reads a workspace's member globs against the root's absolute path unescaped: a glob
+    // character in that path changes which members it finds.
+    if parent.to_string_lossy().contains(['*', '?', '[', ']', '{', '}']) {
+        refusals.push(format!("the scratch folder's parent {} holds a glob character cargo would read as a pattern", parent.display()));
+        return Ok(held);
+    }
     let scratch_dir = tempfile::Builder::new().prefix("entrega-tree-").tempdir_in(parent)?;
     let scratch = scratch_dir.path().to_path_buf();
     let result = (|| -> Result<Option<String>, CheckError> {
@@ -224,7 +236,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
         match git::export_tree(root, commit, &[], &tree) {
             Ok(_) => {}
             Err(git::ExportError::Refused(why)) => return Ok(Some(format!("commit {commit}: {why}"))),
-            Err(git::ExportError::Git(e)) => return Err(e.into()),
+            Err(git::ExportError::Git(e)) => return Ok(Some(format!("commit {commit}: git cannot give its tree: {}", e.source))),
         }
         if !tree.join("Cargo.toml").is_file() {
             return Ok(Some(format!("commit {commit} holds no Cargo.toml")));
@@ -239,6 +251,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
         let out = Command::new(cargo)
             .args(["metadata", "--no-deps", "--offline", "--format-version", "1", "--manifest-path"])
             .arg(tree.join("Cargo.toml"))
+            .current_dir(&tree)
             .stdin(Stdio::null())
             .output()?;
         if !out.status.success() {
@@ -349,6 +362,10 @@ pub fn check_together(root: &Path, all: &[(PathBuf, Manifest)]) -> Result<Vec<St
     // (name, version) -> the first release seen pinning it, with its folder's tree there.
     let mut first: BTreeMap<(String, String), (String, Option<String>)> = BTreeMap::new();
     for (_, m) in all {
+        // A manifest whose commit is no commit here is `check`'s to refuse; it pins no tree.
+        if git::text(root, &["cat-file", "-t", &m.commit])?.map(|t| t.trim().to_string()).as_deref() != Some("commit") {
+            continue;
+        }
         let mut ignore = Vec::new();
         let held = components_at(root, &m.commit, &mut ignore)?;
         for x in &m.components {
