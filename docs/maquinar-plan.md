@@ -397,7 +397,8 @@ Recorded as the port meets them.
   browser). Behind `flock /tmp/veredas-suite.lock`, built first: a test that measures the host's
   clock, a rate, a tick or an upper bound on how soon something happens. Free: a test that reads a
   file, checks a refusal, or talks over a socket with a deadline that only bounds a wait, and a
-  test whose only time check is a lower bound (a delay can only grow under load). The timed ones,
+  test whose only time check is a lower bound (a delay can only grow under load; not so against a
+  runner that takes its late steps at once, whose own steps are then the measure). The timed ones,
   as a filter a run (a critic's mutant run too) leaves out to go free:
   `test(draws_come_at_their_interval) | test(ramps_come_at_their_interval_counted_apart_from_draws)
   | test(a_stall_skips_the_draws_and_steps_it_missed) | test(a_draw_or_a_step_is_next_due_an_interval_after_it_was_due)

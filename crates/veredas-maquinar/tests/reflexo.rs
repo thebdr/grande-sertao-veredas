@@ -386,12 +386,16 @@ fn the_reference_s_conveyor_line_is_driven_by_a_modbus_client_as_a_controller_dr
     let plant = Bench::start(spec).unwrap();
     let addr = plant.modbus("plc-io").unwrap().addr;
     let models = plant.reflexo("line-models").unwrap();
+    // The scene's own steps measure the ramp and the stroke: a runner late on the clock takes its
+    // missed steps at once, so wall time can run behind the scene's.
+    let scene = plant.fisica("line").unwrap();
     runtime().block_on(async {
         let mut ctx = tokio_modbus::client::tcp::connect_slave(addr, Slave(1)).await.unwrap();
         // Stopped: the beam clear (normally closed, 1), the pusher back.
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(inputs(&mut ctx).await, [false, true, true, false]);
         // Started: at its setpoint of 50 within half a second and a little, running.
+        let commanded = scene.steps();
         ctx.write_single_coil(0, true).await.unwrap().unwrap();
         let begun = Instant::now();
         loop {
@@ -401,7 +405,8 @@ fn the_reference_s_conveyor_line_is_driven_by_a_modbus_client_as_a_controller_dr
             assert!(begun.elapsed() < Duration::from_secs(3), "the conveyor at its setpoint");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert!(begun.elapsed() >= Duration::from_millis(450), "{:?}: the ramp takes half a second", begun.elapsed());
+        // 50 rounds from 49.5, the 124th step of 0.4.
+        assert!(scene.steps() - commanded >= 124, "{} steps: the ramp takes half a second", scene.steps() - commanded);
         assert!(inputs(&mut ctx).await[0], "running");
         // The carton reaches the barrier: the beam broken (0), then clear again.
         for want in [false, true] {
@@ -413,13 +418,14 @@ fn the_reference_s_conveyor_line_is_driven_by_a_modbus_client_as_a_controller_dr
         }
         // Stopped; the pusher extended: out after its half-second stroke.
         ctx.write_single_coil(0, false).await.unwrap().unwrap();
+        let commanded = scene.steps();
         ctx.write_single_coil(1, true).await.unwrap().unwrap();
         let begun = Instant::now();
         while !inputs(&mut ctx).await[3] {
             assert!(begun.elapsed() < Duration::from_secs(3), "the pusher out");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        assert!(begun.elapsed() >= Duration::from_millis(450), "{:?}", begun.elapsed());
+        assert!(scene.steps() - commanded >= 125, "{} steps: the stroke takes half a second", scene.steps() - commanded);
         let now = inputs(&mut ctx).await;
         assert_eq!((now[0], now[2], now[3]), (false, false, true), "stopped, the pusher out and not back");
     });
