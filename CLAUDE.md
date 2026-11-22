@@ -55,6 +55,26 @@ A Rust workspace; each component is a crate with a version of its own. Read this
 - Typed errors in library code, no `unwrap`/`expect` on I/O paths; tests may unwrap.
 - Blocked on ambiguity: write the question to `docs/questions.md`, take the most reversible
   option, mark it `// DECISION PENDING`, continue.
-- Commits go to `main` directly (one maintainer, no PR workflow); the global commit policy applies.
+- Commits go to `main` directly (no PR workflow), under "Commit and push" below.
 - Component traps, recipes and harness hooks go to `docs/<nome>-plan.md` and `.zen/evidence/`,
   never here. This file stays one screen; Veredas 1's grew to 42 KB.
+
+## Commit and push (this repository's policy: it wins over a session's global rules)
+- Commit every finished change and push it, without asking: Git is made for mistakes to be pushed,
+  and a commit made by these rules is taken back with one `git revert`. In doubt, push. A turn
+  that ends on "commit?", "push?" or "pushable when you want" has a defect.
+- A commit is one finished change: it builds, the suite is green, and the docs the repository
+  keeps for it (its contract clause and plan among them) moved with it. One logical change per
+  commit; a cosmetic and a semantic change split when they can. Its message: a title naming the
+  component or area, what changed and why, then the attribution trailer the session is given.
+- Never committed: work that does not build or has a red suite (no WIP commit); half a feature,
+  unless the half stands on its own; files that are not the repository's (tool folders, scratch
+  outputs, session notes such as `HANDOFF.md`, secrets, build outputs, IDE files, anything over a
+  few MB that is not a fixture); someone else's uncommitted work, which is named and left.
+- Stage by path (`git add <paths>`), never `git add -A`: the repository is public, and a revert
+  does not unpublish a secret or a session note. Say what a commit left out of the tree.
+- Push to `origin` as soon as the change in hand is committed: what is fit to commit is fit to
+  push. Name the commits pushed in that turn. One thing holds a push, someone else's unpushed
+  commits on the branch: say so in one line and carry on with the work.
+- A pushed mistake is answered by a new commit, a fix or a `git revert`; after a red CI run it is
+  the next push. Never force-push, rewrite pushed history or amend a pushed commit.
