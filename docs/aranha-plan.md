@@ -268,6 +268,11 @@ is pinned by a test when its phase lands.
   the frame; a socket bound to one EtherType gets a priority-tagged frame with its tag dropped for
   good. The raw link reads every type, filters in the kernel with a program that looks inside a
   tag, and puts the tag back (C-134). Core's IO controller meets the same on its cyclic frames.
+- **The dissector reads the alarm frame more loosely than it is written.** It reads TACK as the
+  whole high nibble of AddFlags (reserved bits with it), does not bound a block by the var part's
+  length (it reads on into the frame's pad), and breaks on a DATA PDU with no block. The alarm
+  codec bounds every read by the var part, keeps the reserved bits apart, and keeps what it does
+  not read with the reason (C-136).
 - **A frame shorter than 60 bytes is padded on the wire, and a capture may or may not hold the
   pad**: DCP is bounded by its own data length and LLDP by its end TLV, never by the frame.
 - **This machine announces itself.** An operating system's own LLDP agent and its own ARP are on

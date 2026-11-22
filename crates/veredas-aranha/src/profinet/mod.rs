@@ -6,6 +6,7 @@
 //! Every encoder refuses what the wire cannot carry (a value past its length field, a group
 //! address where one device must be named), never cutting it to fit.
 
+pub mod alarm;
 pub mod dcp;
 pub mod ether;
 pub mod lldp;
