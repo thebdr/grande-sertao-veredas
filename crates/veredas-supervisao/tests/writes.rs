@@ -1089,6 +1089,12 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
 
 /// A controller reached through a relay the test freezes and closes, with a tag the plant lets be
 /// written and one it does not (read-only at the plant, marked writable in the project).
+/// The page's posts to the session's write route, counted from the browser's own record of its
+/// requests.
+fn writes(page: &mut Browser) -> usize {
+    page.posts().iter().filter(|(u, _)| u.ends_with("/portal/api/opc/write")).count()
+}
+
 const FAR: &str = "\n[[opc]]\nname = \"far\"\nport = 0\ntags = [\n  { id = \"go\", type = \"int\", value = \"0\", access = \"read-write\" },\n  { id = \"ro\", type = \"int\", value = \"0\" },\n]\n";
 
 /// Every answer portal gives a write, said under the object pressed as it means: written (a value
@@ -1096,7 +1102,8 @@ const FAR: &str = "\n[[opc]]\nname = \"far\"\nport = 0\ntags = [\n  { id = \"go\
 /// takes it); refused for a value the tag cannot take (400), for a body past portal's limit (413),
 /// by the plant's own status (200, not good); and, by core's own refusals matched in full and the
 /// code portal answers each with, not confirmed while the link is frozen (504: the write then
-/// lands once it thaws) and not sent once the link is closed (503: nothing reaches the plant).
+/// lands once it thaws) and not sent once the link is closed (503: nothing reaches the plant). Every
+/// press posts once, whatever its answer: the page's posts counted half a second past it.
 #[test]
 fn every_answer_portal_gives_a_write_is_said_as_it_means() {
     use veredas_core::opc::{OpcError, WriteError};
@@ -1145,10 +1152,17 @@ fn every_answer_portal_gives_a_write_is_said_as_it_means() {
     let mut page = Browser::watched(&format!("http://{addr}/s/loop/"));
     page.wait_for(r#"document.getElementById("outlet-1")?.classList.contains("sv-obj") ? true : null"#, Duration::from_secs(20));
     page.eval(r#"(() => { window.confirm = () => true; document.getElementById("outlet-1").dispatchEvent(new MouseEvent("click", { bubbles: true })); return true; })()"#);
+    // One press, one post, whatever the answer: the page's posts to the write route counted before
+    // the press and again half a second past its answer (a second post of the same value would read
+    // at the plant as one).
     let press = |page: &mut Browser, label: &str| -> String {
         page.wait_for(&format!("(() => {{ const b = document.querySelector('.side .actions button[data-action=\"{label}\"]'); return b && !b.disabled && b.dataset.busy === undefined ? true : null; }})()"), Duration::from_secs(30));
+        let before = writes(page);
         page.eval(&format!("document.querySelector('.side .write-note').textContent = ''; document.querySelector('.side .actions button[data-action=\"{label}\"]').click(); true"));
-        page.wait_for(&format!("document.querySelector('.side .write-note [data-action=\"{label}\"]')?.textContent || null"), Duration::from_secs(90)).as_str().unwrap().to_string()
+        let note = page.wait_for(&format!("document.querySelector('.side .write-note [data-action=\"{label}\"]')?.textContent || null"), Duration::from_secs(90)).as_str().unwrap().to_string();
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(writes(page), before + 1, "{label}: one press, one post ({note})");
+        note
     };
     // Written: `on` posted as written, the tag taking it as 1.
     let note = press(&mut page, "Go");
@@ -1222,7 +1236,8 @@ fn every_answer_portal_gives_a_write_is_said_as_it_means() {
 /// JSON), are each said "no answer", the write perhaps landed, and the write did land: the page
 /// cannot tell a post that never left from an answer lost, so it never says such a press was not
 /// sent. And the object pressed, left and selected again while its post is out, says the answer
-/// when it comes.
+/// when it comes. Every press posts once, whatever became of its answer: the page's posts counted
+/// half a second past it, and the stand-in's calls between one press and the next.
 /// Before the page holds any status (the object feed refused by the browser), every action an object
 /// offers (outlet 3's two, read from the binding) shown off and gated, the switch said nothing of, and
 /// each pressed: nothing posted, nothing reaching either controller, though the project is armed.
@@ -1295,9 +1310,17 @@ fn a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are() {
             std::thread::sleep(Duration::from_millis(100));
         }
     };
-    let press = |page: &mut Browser| {
+    // A press, and the page's posts to the write route before it: once its answer is said, half a
+    // second on, one more (`one_post`), whatever became of the answer.
+    let press = |page: &mut Browser| -> usize {
         page.wait_for(&format!("(() => {{ const b = document.querySelector('.side .actions button[data-action=\"Release\"]'); return b && !b.disabled && b.dataset.busy === undefined ? true : null; }})()"), Duration::from_secs(20));
+        let before = writes(page);
         page.eval(r#"(() => { document.querySelector(".side .write-note").textContent = ""; document.querySelector('.side .actions button[data-action="Release"]').click(); return true; })()"#);
+        before
+    };
+    let one_post = |page: &mut Browser, before: usize, what: &str| {
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(writes(page), before + 1, "{what}: one press, one post");
     };
     let zero = |bench: &Bench| {
         bench.server("plc").unwrap().set("release3", 0);
@@ -1305,20 +1328,22 @@ fn a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are() {
     };
     // The answer lost: portal answered 200, the connection reset before the page had it.
     zero(&bench);
-    press(&mut page);
+    let before = press(&mut page);
     let lost = paused(&mut page, 0);
     assert_eq!(lost["params"]["responseStatusCode"], json!(200), "portal answered: {lost}");
     page.call("Fetch.failRequest", json!({ "requestId": lost["params"]["requestId"], "errorReason": "ConnectionReset" }));
     let note = page.wait_for(NOTE, Duration::from_secs(10));
     assert_eq!(note, json!("Release: no answer, the write may have reached the plant (TypeError: Failed to fetch)"));
+    one_post(&mut page, before, "the answer lost");
     assert!(wait(Duration::from_secs(10), || release(&bench) == "1"), "the write with no answer landed");
     // The answer unreadable: a 200 whose body is no JSON.
     zero(&bench);
-    press(&mut page);
+    let before = press(&mut page);
     let spoiled = paused(&mut page, 1);
     page.call("Fetch.fulfillRequest", json!({ "requestId": spoiled["params"]["requestId"], "responseCode": 200, "responseHeaders": [{ "name": "content-type", "value": "application/json" }], "body": "bm90IGpzb24=" }));
     let note = page.wait_for(NOTE, Duration::from_secs(10));
     assert!(note.as_str().unwrap().starts_with("Release: no answer, the write may have reached the plant (200, its answer unreadable: "), "{note}");
+    one_post(&mut page, before, "the answer unreadable");
     assert!(wait(Duration::from_secs(10), || release(&bench) == "1"), "the write with an unreadable answer landed");
     // An answer not of portal's shape, after portal has answered and the write landed: a 200 that
     // says no `ok`, and a code portal never answers a write with (a gateway's page), each said as no
@@ -1326,11 +1351,12 @@ fn a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are() {
     // alone telling it apart).
     for (n, (status, ctype, body, said)) in [(200, "application/json", "e30=", "(200, an answer not portal's)"), (502, "application/json", "eyJlcnJvciI6IkJhZCBHYXRld2F5In0=", "(502, an answer not portal's)")].into_iter().enumerate() {
         zero(&bench);
-        press(&mut page);
+        let before = press(&mut page);
         let foreign = paused(&mut page, 2 + n);
         page.call("Fetch.fulfillRequest", json!({ "requestId": foreign["params"]["requestId"], "responseCode": status, "responseHeaders": [{ "name": "content-type", "value": ctype }], "body": body }));
         let note = page.wait_for(NOTE, Duration::from_secs(10));
         assert!(note.as_str().unwrap().starts_with(&format!("Release: no answer, the write may have reached the plant {said}")), "{status}: {note}");
+        one_post(&mut page, before, &format!("{status}, an answer not portal's"));
         assert!(wait(Duration::from_secs(10), || release(&bench) == "1"), "{status}: the write landed");
     }
     page.call("Fetch.disable", json!({}));
@@ -1381,10 +1407,11 @@ fn a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are() {
     let said = page.eval(&format!(
         r#"(async (cases) => {{
   const f = window.fetch, rest = (ms) => new Promise((ok) => setTimeout(ok, ms));
-  let answer = null;
-  window.fetch = (...a) => String(a[0]).includes("/api/opc/write") ? Promise.resolve(answer()) : f(...a);
-  const out = [];
+  let answer = null, calls = 0;
+  window.fetch = (...a) => String(a[0]).includes("/api/opc/write") ? (calls++, Promise.resolve(answer())) : f(...a);
+  const out = [], starts = [];
   for (const [status, body] of cases) {{
+    starts.push(calls);
     answer = () => new Response(body, {{ status, headers: {{ "content-type": "application/json" }} }});
     const b = document.querySelector('.side .actions button[data-action="Release"]');
     b.disabled = false;
@@ -1395,8 +1422,12 @@ fn a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are() {
     for (let i = 0; i < 300 && b.dataset.busy !== undefined; i++) await rest(5);
     out.push([status, body, t]);
   }}
+  // The stand-in's calls between one press and the next, the last's a second past its answer: one
+  // each, a second post (at once or later) counted where it falls.
+  await rest(1000);
+  starts.push(calls);
   window.fetch = f;
-  return out;
+  return out.map((o, i) => o.concat([starts[i + 1] - starts[i]]));
 }})({})"#,
         serde_json::to_string(&cases.iter().map(|(s, b, _)| json!([s, b])).collect::<Vec<_>>()).unwrap()
     ));
@@ -1404,10 +1435,13 @@ fn a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are() {
     assert_eq!(said.len(), cases.len());
     let wrong: Vec<String> = cases.iter().zip(said).filter(|((_, _, want), got)| !got[2].as_str().is_some_and(|t| t.starts_with(want.as_str()))).map(|((s, b, want), got)| format!("{s} {b:?}: {} against {want}", got[2])).collect();
     assert_eq!(wrong, Vec::<String>::new(), "an answer said otherwise than it means");
+    let twice: Vec<String> = cases.iter().zip(said).filter(|(_, got)| got[3] != json!(1)).map(|((s, b, _), got)| format!("{s} {b:?}: {} posts", got[3])).collect();
+    assert_eq!(twice, Vec::<String>::new(), "one press, one post, whatever the answer");
     assert_eq!(release(&bench), "0", "the stand-in answered every press: nothing reached the plant");
     // The object pressed, left and selected again while its post is out: the answer said there.
     zero(&bench);
     page.wait_for(&format!("(() => {{ const b = {RELEASE}; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(20));
+    let before = writes(&mut page);
     page.eval(r#"(() => { const f = window.fetch; window.fetch = (...a) => String(a[0]).includes("/api/opc/write") ? new Promise((ok, no) => setTimeout(() => f(...a).then(ok, no), 1500)) : f(...a); document.querySelector('.side .actions button[data-action="Release"]').click(); return true; })()"#);
     page.eval(r#"document.getElementById("outlet-2").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
     page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-2" || null"#, Duration::from_secs(10));
@@ -1416,6 +1450,7 @@ fn a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are() {
     let said = page.wait_for(r#"(() => { const t = document.querySelector('.side .write-note [data-action="Release"]')?.textContent ?? ""; return t.startsWith("Release: written") ? t : null; })()"#, Duration::from_secs(10));
     assert!(said.as_str().unwrap().starts_with("Release: written"), "{said}");
     assert!(wait(Duration::from_secs(10), || release(&bench) == "1"), "the write landed");
+    one_post(&mut page, before, "pressed, left and selected again");
     // The button of the panel built again while the post was out, freed once its answer came.
     let freed = page.wait_for(&format!("(() => {{ const b = {RELEASE}; return b && !b.disabled && document.querySelector('.side .actions button[data-action=\"Release\"]').dataset.busy === undefined ? true : null; }})()"), Duration::from_secs(10));
     assert_eq!(freed, json!(true), "the release's button on the panel built again, the switch's again");
