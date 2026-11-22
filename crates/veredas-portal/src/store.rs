@@ -238,6 +238,9 @@ fn recover<'a, T>(r: Result<MutexGuard<'a, T>, std::sync::PoisonError<MutexGuard
     r.unwrap_or_else(|e| e.into_inner())
 }
 
+#[cfg(test)]
+mod connections_test;
+
 impl DuckStore {
     /// Open a fresh session database, create the `samples` and base tables, then apply the view
     /// definitions (in any order: a fixpoint resolves the references). Every failure is typed.

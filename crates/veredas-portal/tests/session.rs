@@ -466,12 +466,14 @@ fn the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_s
     }
 }
 
-/// The pump never waits on a reader: while a reader holds the store's query connection (here a
-/// CSV export into a named pipe nobody reads, which blocks for as long as the pipe stays shut),
-/// the pump keeps passing and the lines written meanwhile reach the store. Before, the pump read
-/// its memory figure through that connection, and a slow query stopped the ingest whole (0 passes
-/// and no row while the export blocked; found by the server test under load, where a client
-/// polling the store held the pump to a pass a second). Unix: the pipe is a FIFO.
+/// The pump never waits on a reader, measured against its own pace in the same session: its
+/// passes over three seconds while a reader holds the store's query connection (a CSV export into
+/// a named pipe nobody reads, which blocks for as long as the pipe stays shut), and while four
+/// readers take that connection in short grabs (a page each, back to back: the server under a
+/// polling client), are each at least half of its passes over three quiet seconds, and the lines
+/// written during the hold are stored before the pipe is read. Before, the pump read its memory
+/// figure through that connection: no pass and no row while the export blocked, a pass a second
+/// under a polling client. Unix: the pipe is a FIFO.
 #[cfg(unix)]
 #[test]
 fn a_reader_holding_the_store_never_holds_the_pump() {
@@ -485,18 +487,23 @@ fn a_reader_holding_the_store_never_holds_the_pump() {
     let session = Session::start(cfg).unwrap();
     let live = session.live();
     assert!(wait(Duration::from_secs(10), || live.counters.read().unwrap().rows == 40), "{:?}", live.counters.read().unwrap());
+    // The passes over a span, as the published counters show them.
+    let passes_over = |span: Duration| {
+        let started = live.counters.read().unwrap().passes;
+        std::thread::sleep(span);
+        live.counters.read().unwrap().passes - started
+    };
+    let quiet = passes_over(Duration::from_secs(3));
+    assert!(quiet >= 20, "the pump's own pace: {quiet} passes in three seconds");
+
+    // Held: the export blocks on the pipe with the query connection taken.
     let pipe = dir.path().join("pipe.csv");
     assert!(std::process::Command::new("mkfifo").arg(&pipe).status().unwrap().success());
     let (reader, path) = (Arc::clone(&live), pipe.clone());
     let export = std::thread::spawn(move || reader.store.export_table_csv("readings", &path));
-    // The export holds the query connection until the pipe is opened for reading.
     std::thread::sleep(Duration::from_millis(300));
-    let passes = live.counters.read().unwrap().passes;
     write_lines(&log, 40..45);
-    let went_on = wait(Duration::from_secs(5), || {
-        let c = live.counters.read().unwrap();
-        c.rows == 45 && c.lines == 45 && c.passes >= passes + 10
-    });
+    let held_passes = passes_over(Duration::from_secs(3));
     let counters = live.counters.read().unwrap().clone();
     let held = !export.is_finished();
     // The pipe read before anything is asserted, so a pump stuck behind the export is set free
@@ -504,10 +511,33 @@ fn a_reader_holding_the_store_never_holds_the_pump() {
     let mut text = String::new();
     std::io::Read::read_to_string(&mut std::fs::File::open(&pipe).unwrap(), &mut text).unwrap();
     export.join().unwrap().unwrap();
-    assert!(held, "the export held the query connection while the lines came");
-    assert!(went_on, "the pump stood still behind the export: {counters:?}");
+    assert!(held, "the export held the query connection for the whole span");
+    assert!(held_passes * 2 >= quiet, "the pump behind the export: {held_passes} passes against {quiet} quiet");
+    assert_eq!((counters.lines, counters.rows), (45, 45), "the lines written during the hold stored during it");
     assert_eq!(text.lines().count(), 41, "{text}");
     assert!(text.lines().next().unwrap().starts_with("source,key,index_ms,ts,arrival_ms,seq,temp,state"), "{text}");
+
+    // Grabbed: four readers taking the query connection back to back.
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let readers: Vec<_> = (0..4)
+        .map(|_| {
+            let (live, stop) = (Arc::clone(&live), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                let mut pages = 0u64;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    rows(&live, "readings");
+                    pages += 1;
+                }
+                pages
+            })
+        })
+        .collect();
+    std::thread::sleep(Duration::from_millis(200));
+    let grabbed_passes = passes_over(Duration::from_secs(3));
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let pages: u64 = readers.into_iter().map(|r| r.join().unwrap()).sum();
+    assert!(pages >= 40, "the readers kept the connection busy: {pages} pages");
+    assert!(grabbed_passes * 2 >= quiet, "the pump behind the readers: {grabbed_passes} passes against {quiet} quiet");
     for (id, r) in session.stop() {
         r.unwrap_or_else(|e| panic!("{id}: {e}"));
     }
