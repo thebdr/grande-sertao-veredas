@@ -6,6 +6,7 @@
 //! row, and every other element goes into a small tree (the worksheet without
 //! its cells) that the rest of the importer reads.
 
+use super::shared_strings::decode_xlsx_escapes;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::BufRead;
@@ -269,7 +270,9 @@ impl SheetDataReader<'_, '_> {
             }
             Some(Tag::Text) if self.stack.contains(&Tag::InlineString) => {
                 if let Some(rich_text) = cell.rich_text.as_mut() {
-                    rich_text.push_str(text);
+                    // Excel writes characters XML cannot carry as _xHHHH_,
+                    // inline strings as much as shared ones.
+                    rich_text.push_str(&decode_xlsx_escapes(text));
                 }
             }
             _ => {}
@@ -668,4 +671,25 @@ pub(super) fn read_sheet_data<R: BufRead>(
         rows: state.rows,
         shared_formulas: state.shared_formulas,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use std::collections::HashMap;
+
+    use ironcalc_base::expressions::parser::new_parser_english;
+
+    use super::*;
+
+    #[test]
+    fn inline_strings_decode_the_ooxml_escape_like_shared_strings() {
+        // Excel writes a character XML cannot carry as _xHHHH_ in inline
+        // strings too; a literal "_x0041_" is written "_x005F_x0041_".
+        let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>a_x0001_b</t></is></c><c r="B1" t="inlineStr"><is><t>_x005F_x0041_</t></is></c></row></sheetData></worksheet>"#;
+        let mut parser = new_parser_english(vec!["Sheet1".to_string()], vec![], HashMap::new());
+        let mut strings = SharedStringTable::new(Vec::new());
+        read_sheet_data(xml.as_bytes(), "Sheet1", &mut parser, &mut strings).unwrap();
+        assert_eq!(strings.into_strings(), vec!["a\u{1}b".to_string(), "_x0041_".to_string()]);
+    }
 }
