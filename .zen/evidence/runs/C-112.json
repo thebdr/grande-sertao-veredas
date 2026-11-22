@@ -1,0 +1,25 @@
+{
+  "clause": "C-112",
+  "command": "cargo nextest run -p veredas-maquinar --test profinet_device",
+  "commandArgv": [
+    "cargo",
+    "nextest",
+    "run",
+    "-p",
+    "veredas-maquinar",
+    "--test",
+    "profinet_device"
+  ],
+  "exitCode": 0,
+  "outputSha": "83292759555be0a88b17b3b0aef117fa54fd476189f25fa5ac6ba6974f4cae4e",
+  "outputTail": "    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s\n────────────\n Nextest run ID 2455fdf8-6e05-452e-972b-294c33aab455 with nextest profile: default\n    Starting 6 tests across 1 binary\n        PASS [   0.079s] (1/6) veredas-maquinar::profinet_device the_documented_fresh_device_is_found_named_and_found_again_through_its_bench_file\n        PASS [   0.464s] (2/6) veredas-maquinar::profinet_device lldp_names_the_station_and_the_port_and_says_when_it_leaves\n        PASS [   0.659s] (3/6) veredas-maquinar::profinet_device a_set_names_addresses_and_blinks_the_device_and_each_block_is_answered\n        PASS [   0.676s] (4/6) veredas-maquinar::profinet_device it_says_hello_and_answers_an_identify_it_matches\n        PASS [   1.522s] (5/6) veredas-maquinar::profinet_device the_dissectors_read_every_frame_the_device_sends_as_the_standard_has_it\n        PASS [   3.942s] (6/6) veredas-maquinar::profinet_device an_identify_is_answered_within_its_response_delay\n────────────\n     Summary [   3.943s] 6 tests run: 6 passed, 0 skipped",
+  "ranAt": "2026-11-22T20:24:51.121Z",
+  "headCommit": "9e8dc735b8b3ea729b5da12f63bad9f1ae771e34",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/profinet_device.rs",
+      "file": "crates/veredas-maquinar/tests/profinet_device.rs",
+      "fileSha": "51dd1aee61b45f23124a38e394249e62382223305a43d378f004e3d1cae99c2d"
+    }
+  ]
+}

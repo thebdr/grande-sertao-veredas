@@ -14,15 +14,15 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "87df1224ae39ab65085fd322c10b234fd7dea44d76c9f171b80d7c669e56d238",
-  "outputTail": "\nrunning 6 tests\ntest the_bench_is_one_library_and_at_most_one_executable ... ok\ntest the_check_allows_one_named_binary_and_refuses_every_other_executable ... ok\ntest the_bench_carries_no_database_no_desktop_and_no_member_but_core ... ok\ntest the_graph_walk_sees_every_version_every_feature_and_every_table ... ok\ntest every_file_rustc_pulls_in_from_outside_the_crate_folder_is_read_too ... ok\ntest the_bench_names_no_vendor_and_cites_no_vendor_document ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.93s\n\n   Compiling veredas-maquinar v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/crates/veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.85s\n     Running tests/real_tree.rs (target/debug/build/leis/46f30fe1b6a22f3a/out/real_tree-46f30fe1b6a22f3a)\n     Running tests/component.rs (target/debug/build/veredas-maquinar/c46eac59430fc323/out/component-c46eac59430fc323)",
-  "ranAt": "2026-11-22T15:41:39.818Z",
-  "headCommit": "974fe62f321b0ad7bbebef1ac965bedb5193f6a9",
+  "outputSha": "da2147909d3eaf671c0e1d6f16742b7a56fc0a2431f1ad976b673c43c682ff8a",
+  "outputTail": "\n\nrunning 6 tests\ntest the_bench_is_one_library_and_at_most_one_executable ... ok\ntest the_check_allows_one_named_binary_and_refuses_every_other_executable ... ok\ntest the_bench_carries_no_database_no_desktop_and_no_member_but_core_and_aranha ... ok\ntest every_file_rustc_pulls_in_from_outside_the_crate_folder_is_read_too ... ok\ntest the_graph_walk_sees_every_version_every_feature_and_every_table ... ok\ntest the_bench_names_no_vendor_and_cites_no_vendor_document ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.39s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running tests/real_tree.rs (target/debug/build/leis/46f30fe1b6a22f3a/out/real_tree-46f30fe1b6a22f3a)\n     Running tests/component.rs (target/debug/build/veredas-maquinar/ffae932a4b1cff72/out/component-ffae932a4b1cff72)",
+  "ranAt": "2026-11-22T20:24:38.528Z",
+  "headCommit": "9e8dc735b8b3ea729b5da12f63bad9f1ae771e34",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/component.rs",
       "file": "crates/veredas-maquinar/tests/component.rs",
-      "fileSha": "b57098f18e3873eb27e616308947d6f76a84b89e210ce982c4f4576922ac94ac"
+      "fileSha": "cdb0d652830fd5fd15e2c200e23802360a47c31a0bf20eb735ae0e6546721575"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",
