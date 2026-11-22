@@ -37,6 +37,7 @@ fn profinet_pdu() -> LldpPdu {
         unknown: Vec::new(),
         unknown_org: Vec::new(),
         end: Some(Vec::new()),
+        trailing: Vec::new(),
     }
 }
 
@@ -191,7 +192,15 @@ fn damage_and_missing_tlvs_are_errors_that_name_them() {
     out.truncate(chassis.len() + port.len() + ttl.len());
     out.push(0x0A);
     let pdu = lldp::decode(&out).unwrap();
-    assert_eq!((pdu.ttl, pdu.end.clone()), (9, None));
+    // The lone byte after the last whole TLV is kept, and written back.
+    assert_eq!((pdu.ttl, pdu.end.clone(), pdu.trailing.clone()), (9, None, vec![0x0A]));
+    assert_eq!(lldp::encode(&pdu).unwrap(), out);
+    let mut wrong = pdu.clone();
+    wrong.end = Some(vec![]);
+    assert_eq!(lldp::encode(&wrong), Err(LldpError::Trailing(1)));
+    wrong.end = None;
+    wrong.trailing = vec![1, 2];
+    assert_eq!(lldp::encode(&wrong), Err(LldpError::Trailing(2)));
     assert_eq!(
         LldpError::Overrun { index: 0, tlv_type: 1, len: 7, left: 3 }.to_string(),
         "TLV 0 (type 1) says 7 bytes and 3 are left"
@@ -441,8 +450,9 @@ fn the_dissectors_read_text_as_ascii_and_stop_at_a_nul() {
     assert_eq!(read[0].complaints().len(), 1, "{:?}", read[0].complaints());
     assert_eq!(lldp::decode(&lldp::encode(&nul).unwrap()).unwrap().sys_desc.as_deref(), Some("a\0b"));
     assert_eq!(read[1].complaints(), Vec::<String>::new());
-    assert_ne!(read[1].one("lldp", "lldp.tlv.system.name"), "estação");
-    assert_ne!(read[1].one("lldp", "lldp.port.id"), "porta-ü");
+    // One replacement character per byte that is not ASCII.
+    assert_eq!(read[1].one("lldp", "lldp.tlv.system.name"), "esta\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}o");
+    assert_eq!(read[1].one("lldp", "lldp.port.id"), "porta-\u{FFFD}\u{FFFD}");
     assert_eq!(lldp::decode(&lldp::encode(&accented).unwrap()).unwrap(), accented);
 }
 
@@ -559,10 +569,98 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
     assert_eq!(p.one(l, "lldp.mgn.addr.ip4"), "10.0.0.1");
     assert_eq!(p.one(l, "lldp.mgn.interface.number"), "7");
     assert_eq!(p.one(l, "lldp.mgn.obj.len"), "3");
+    assert_eq!(p.one(l, "lldp.mgn.obj.id"), "1.3.6.1");
     assert_eq!(p.one(l, "lldp.profinet.mrrt_port_status"), "0");
 
     let p = &read[2];
     assert_eq!(p.one(l, "lldp.time_to_live"), "0");
     assert_eq!(p.one(l, "lldp.port.subtype"), "3");
     assert_eq!(p.one(l, "lldp.port.id.mac"), "02:00:00:00:00:08");
+}
+
+#[test]
+fn what_the_writer_takes_at_each_bound_the_reader_reads_back() {
+    let base = || LldpPdu::new(ChassisId::Local { id: "a".into() }, PortId::Local { id: "p".into() }, 20);
+    let mut cases = Vec::new();
+    let mut p = base();
+    p.chassis = ChassisId::Local { id: "c".repeat(255) };
+    cases.push(p);
+    let mut p = base();
+    p.port = PortId::Local { id: "q".repeat(255) };
+    cases.push(p);
+    let mut p = base();
+    p.chassis = ChassisId::Network { data: vec![9, 1] };
+    cases.push(p);
+    let mut p = base();
+    (p.port_desc, p.sys_name, p.sys_desc) = (Some("d".repeat(255)), Some("n".repeat(255)), Some("s".repeat(255)));
+    cases.push(p);
+    for (subtype, len, oid) in [(5u8, 1usize, 0usize), (5, 31, 0), (1, 4, 128)] {
+        let mut p = base();
+        p.mgmt_addrs = vec![MgmtAddr { subtype, addr: vec![1; len], if_subtype: 2, if_number: 1, oid: vec![0x2B; oid] }];
+        cases.push(p);
+    }
+    for pdu in cases {
+        let bytes = lldp::encode(&pdu).unwrap();
+        assert_eq!(lldp::decode(&bytes).unwrap(), pdu, "{pdu:?}");
+    }
+    // And past each bound, what the writer refuses the reader keeps unread.
+    let head = [tlv(1, b"\x07c"), tlv(3, &[0, 20])].concat();
+    let long_port = [&head[..], &tlv(2, &[&[7u8][..], &[b'q'; 256]].concat())].concat();
+    assert_eq!(lldp::decode(&long_port), Err(LldpError::Missing("port id")));
+    let ok = [tlv(1, b"\x07c"), tlv(2, b"\x07p"), tlv(3, &[0, 20])].concat();
+    for address_string in [1u8, 33] {
+        let mut m = vec![address_string, 1];
+        m.extend_from_slice(&vec![10; usize::from(address_string).saturating_sub(1)]);
+        m.extend_from_slice(&[2, 0, 0, 0, 1, 0]);
+        let pdu = lldp::decode(&[&ok[..], &tlv(8, &m)].concat()).unwrap();
+        assert_eq!((pdu.mgmt_addrs.len(), pdu.unknown.clone()), (0, vec![(8, m.clone())]), "{address_string}");
+    }
+}
+
+#[test]
+fn every_kind_of_id_reads_from_its_bytes_with_its_key() {
+    let read = |chassis: &[u8], port: &[u8]| lldp::decode(&[tlv(1, chassis), tlv(2, port), tlv(3, &[0, 20])].concat()).unwrap();
+    let pdu = read(&[5, 1, 10, 0, 0, 1], &[1, b'u', b'p', b'l', b'i', b'n', b'k']);
+    assert_eq!(pdu.chassis, ChassisId::Network { data: vec![1, 10, 0, 0, 1] });
+    assert_eq!(pdu.chassis.key(), "net:010a000001");
+    assert_eq!(pdu.port, PortId::IfAlias { name: "uplink".into() });
+    assert_eq!(pdu.port.short(), "uplink");
+    let pdu = read(&[6, b'e', b't', b'h', b'0'], &[3, 2, 0, 0, 0, 0, 9]);
+    assert_eq!(pdu.chassis, ChassisId::IfName { name: "eth0".into() });
+    assert_eq!(pdu.chassis.key(), "ifname:eth0");
+    assert_eq!(pdu.port, PortId::Mac { mac: Mac([2, 0, 0, 0, 0, 9]) });
+    assert_eq!(pdu.port.short(), "02:00:00:00:00:09");
+    let pdu = read(&[1, b'x'], &[2, b'y']);
+    assert_eq!((pdu.chassis.key(), pdu.port.short()), ("other1:78".to_string(), "other2:79".to_string()));
+}
+
+#[test]
+fn the_dissector_reads_an_oid_as_ber_and_no_end_past_what_it_does_not_read() {
+    let base = || LldpPdu::new(ChassisId::Local { id: "a".into() }, PortId::Local { id: "p".into() }, 20);
+    let with_oid = |oid: Vec<u8>| {
+        let mut p = base();
+        p.mgmt_addrs = vec![MgmtAddr { subtype: 1, addr: vec![10, 0, 0, 1], if_subtype: 2, if_number: 1, oid }];
+        p
+    };
+    let mut end_bytes = base();
+    end_bytes.end = Some(vec![1, 2, 3]);
+    let mut kept = base();
+    kept.unknown = vec![(9, vec![1, 2, 3])];
+    let frames: Vec<Vec<u8>> = [with_oid(vec![0x2B, 0x06, 0x01]), with_oid(vec![0xFF]), end_bytes.clone(), kept.clone()]
+        .iter()
+        .map(|p| lldp::frame(PORT, p).unwrap())
+        .collect();
+    let read = common::dissect(&frames);
+    let l = "lldp";
+    // The OID is bytes to this codec; the dissector reads them as a BER object identifier, and
+    // shows bytes that are not one as it reads them.
+    assert_eq!(read[0].one(l, "lldp.mgn.obj.id"), "1.3.6.1");
+    assert_eq!(read[1].one(l, "lldp.mgn.obj.id"), "0");
+    assert_eq!(read[1].complaints(), Vec::<String>::new());
+    // An End holding bytes, which this codec keeps as heard, the dissector calls malformed; a TLV
+    // of a reserved type ends its reading, so it reads neither that TLV nor the End after it.
+    assert!(!read[2].complaints().is_empty());
+    assert_eq!(read[3].values(l, "lldp.tlv.type"), ["1", "2", "3"]);
+    assert_eq!(lldp::decode(&lldp::encode(&end_bytes).unwrap()).unwrap(), end_bytes);
+    assert_eq!(lldp::decode(&lldp::encode(&kept).unwrap()).unwrap(), kept);
 }

@@ -265,6 +265,8 @@ pub struct LldpPdu {
     /// put in it (kept as heard), or `None` when the PDU had no End TLV and ended at its last
     /// whole TLV.
     pub end: Option<Vec<u8>>,
+    /// A PDU with no End: the byte after its last whole TLV, too short for a TLV's header, kept.
+    pub trailing: Vec<u8>,
 }
 
 impl LldpPdu {
@@ -285,6 +287,7 @@ impl LldpPdu {
             unknown: Vec::new(),
             unknown_org: Vec::new(),
             end: Some(Vec::new()),
+            trailing: Vec::new(),
         }
     }
 
@@ -313,6 +316,8 @@ pub enum LldpError {
     Missing(&'static str),
     #[error("a TLV value holds at most 511 bytes; type {tlv_type} has {len}")]
     TlvTooLong { tlv_type: u8, len: usize },
+    #[error("a PDU's trailing bytes are the one byte after its last TLV when it has no End; {0} cannot be written")]
+    Trailing(usize),
     #[error("a TLV kept unread is of type 1 to 127 (0 is the End TLV), not {0}")]
     BadType(u8),
     #[error("{what} is {min} to {max} bytes; this one is {len}")]
@@ -390,6 +395,9 @@ pub fn decode(payload: &[u8]) -> Result<LldpPdu, LldpError> {
         if !kept {
             pdu.unknown.push((tlv_type, v.to_vec()));
         }
+    }
+    if pdu.end.is_none() {
+        pdu.trailing = payload[off..].to_vec();
     }
     pdu.chassis = chassis.ok_or(LldpError::Missing("chassis id"))?;
     pdu.port = port.ok_or(LldpError::Missing("port id"))?;
@@ -552,8 +560,11 @@ pub fn encode(pdu: &LldpPdu) -> Result<Vec<u8>, LldpError> {
         }
         push_tlv(&mut out, *t, v)?;
     }
-    if let Some(end) = &pdu.end {
-        push_tlv(&mut out, 0, end)?;
+    match &pdu.end {
+        Some(end) if pdu.trailing.is_empty() => push_tlv(&mut out, 0, end)?,
+        Some(_) => return Err(LldpError::Trailing(pdu.trailing.len())),
+        None if pdu.trailing.len() > 1 => return Err(LldpError::Trailing(pdu.trailing.len())),
+        None => out.extend_from_slice(&pdu.trailing),
     }
     Ok(out)
 }
