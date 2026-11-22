@@ -111,9 +111,9 @@ are named below.
 | `crates/ironcalc`: `base` and `xlsx`, upstream `15ecfec` (2026-11-02) plus fork changes 1 to 11 | `forks/ironcalc/{base,xlsx}`, excluded from the workspace (Q340, taken meanwhile) | the engine |
 | `crates/ironcalc`: the Python, WebAssembly and Node bindings, the web app, upstream's docs, the language and locale generators | not carried | the suite builds the engine and its file layer only; Ábaco's Python is its own (AB2) |
 | `veredas-abaco` `links`, `linkdiff` | `veredas_abaco`, phase 1 | the link policy the oracle opens every workbook through |
-| `veredas-abaco` `a1`, `workbook` | phase 2, as `a1` and `book` | the model the patcher and every later phase stand on |
+| `veredas-abaco` `a1`, `workbook` (its model half) | `veredas_abaco::a1`, `book`, phase 2 | the model the patcher and every later phase stand on; its workspace half comes with the `.abaco` file |
 | `veredas-abaco` `prefs` (the link policy and the renderer as a preference) | phase 4, the link policy alone, in stamped TOML | a preference is the worker's; the renderer is Q341's and Q342's |
-| `veredas-abaco` `patch` | phase 2 | byte-faithful edits |
+| `veredas-abaco` `patch` | `veredas_abaco::patch`, phase 2; edits through the API (an edit file arrives with the command line) | byte-faithful edits |
 | `veredas-abaco` `abacofile`, `workspace` | phase 3, its JSON parts read into TOML | the workspace file |
 | `veredas-abaco` `homes`; `veredas-abaco-py` (module `abaco._core`, the `abaco` executable, its environment, console and command line) | phase 4, inside `veredas-abaco` behind a feature; the executable named `veredas-abaco` | L2; the plan names binaries `veredas-<nome>` |
 | `veredas-abaco` `view`, `grid` (the renderer-neutral core: navigation, selection, the editor's modes, the clipboard's TSV, filters) | Q341 | the grid's surface is Oficina's |
@@ -200,6 +200,9 @@ and their numbers join the evidence.
 
 `forks/ironcalc` (not a member, excluded): the engine and its file layer.
 
+`crates/veredas-abaco/tests/fixtures/no-styles.xlsx`: upstream's `arithmetic.xlsx` without its
+styles part (Veredas 1's fixture, carried as it was).
+
 `tools/abaco-oracle` (a library and its executable): the expected side, the comparison and its
 classes, the report, the corpus list, and the parity test.
 
@@ -208,11 +211,13 @@ classes, the report, the corpus list, and the parity test.
    `2.0.0-alpha.1` with `links` and `linkdiff`; `tools/abaco-oracle`; the
    baseline taken with Veredas 1's oracle, then Veredas 2's run, equal or better. Clauses: the
    component, the link policy, the engine at parity.
-2. **Byte-faithful edits.** The patcher and its edit file; untouched parts byte for byte, caches
-   rewritten only where an edit moved the engine's value, references rippled through every sheet,
-   name, validation, conditional format, comment, drawing, chart and table; the output read back
-   through the engine. Proven on the corpus and on workbooks built for each structure; Excel's
-   acceptance owed where Excel runs.
+2. **Byte-faithful edits.** The patcher: untouched parts byte for byte, caches rewritten only where
+   an edit moved the engine's value, references rippled through every sheet, name, validation,
+   conditional format, comment, drawing, chart and table; the output read back through the engine.
+   Proven on workbooks built for each structure and on every workbook of the corpus (with nothing
+   to do and with one number changed); Excel's acceptance owed where Excel runs. Its edits come
+   through the API; an edit file, stamped TOML, comes with the command line, once core's header
+   reader can be had without core's network layers (asked of core).
 3. **The `.abaco` file.** Lossless round trip of every workbook of the corpus through the zip and
    back; the workspace's parts; the `.xlsx` export.
 4. **Python.** CPython embedded (python-build-standalone, pinned, as Veredas 1 did: a release
@@ -263,5 +268,12 @@ classes, the report, the corpus list, and the parity test.
   alone and in the suite's workspace build (fork changes 13 and 14).
 - **A cached `inf` equals every infinity**: an oracle tolerance written `|a-b| <= e` lets a
   non-finite cached value match; Veredas 1's had it. A cached number must be finite.
+- **The patcher on real files** (phase 2's corpus test, 2026-11-22): a row with no `r` attribute
+  (rows may leave it implicit) made Veredas 1's patcher rewrite a sheet no edit touched; a chart
+  sheet (`chartsheet`, no cells) made it refuse the whole workbook, and a local name's
+  `localSheetId` was written from the engine's order, which skips chart sheets; a random array's
+  spilled cells were not seen as volatile, so the patcher's own verification failed, and a random
+  draw that repeats by chance hid a volatile cell from a two-evaluation measure. Each is answered in
+  `src/patch` and pinned by `tests/patch_corpus.rs`.
 - **Calamine 0.26 does not build with zip 2.6**: the lock holds zip 2.4.2, the version Veredas 1's
   lock had.

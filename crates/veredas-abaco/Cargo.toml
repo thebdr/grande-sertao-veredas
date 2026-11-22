@@ -16,11 +16,16 @@ description = "Ábaco, the engineering spreadsheet of Veredas 2: workbooks compu
 ironcalc_base = { path = "../../forks/ironcalc/base" }
 ironcalc = { path = "../../forks/ironcalc/xlsx" }
 thiserror = { workspace = true }
+# The patcher reads and writes a workbook's package itself (its untouched parts copied as they
+# are), the same zip major the engine's file layer uses.
+zip = { workspace = true }
+# An edit's value and its expected value are JSON-shaped (the form Veredas 1's tools sent), and the
+# edits and the patch report serialise.
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # tests/component.rs reads cargo's metadata and the root manifest.
-serde_json = { workspace = true }
 toml = { workspace = true }
-# tests/links.rs writes its workbooks into scratch folders, and rewrites one's parts.
+# tests/links.rs writes its workbooks into scratch folders.
 tempfile = { workspace = true }
-zip = { workspace = true }

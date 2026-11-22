@@ -78,7 +78,7 @@ fn a_library_and_tests_nothing_else() {
         .filter(|t| strings(&t["kind"]) == ["test"])
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(tests, ["component", "links"].iter().map(|s| s.to_string()).collect());
+    assert_eq!(tests, ["component", "links", "patch", "patch_corpus", "patch_no_styles", "patch_untouched"].iter().map(|s| s.to_string()).collect());
 }
 
 /// Ábaco's normal dependency graph as cargo prints it (`name vX.Y.Z`, a path package followed by its
@@ -118,8 +118,9 @@ fn the_engine_is_the_fork_at_its_folder_and_no_member() {
     let manifest: toml::Table = toml::from_str(&std::fs::read_to_string(root().join("Cargo.toml")).unwrap()).unwrap();
     let exclude = manifest["workspace"]["exclude"].as_array().unwrap();
     assert!(exclude.iter().any(|e| e.as_str() == Some("forks/ironcalc")), "{exclude:?}");
-    // its direct normal dependencies: the engine, its file layer and the error derive, the engine's
-    // two by path under the fork's folder
+    // its direct normal dependencies: the engine, its file layer, the zip the patcher reads and
+    // writes packages with, serialisation and the error derive, the engine's two by path under the
+    // fork's folder
     let abaco = package(&meta, "veredas-abaco");
     let normal: BTreeSet<String> = abaco["dependencies"]
         .as_array()
@@ -128,7 +129,10 @@ fn the_engine_is_the_fork_at_its_folder_and_no_member() {
         .filter(|d| d["kind"].is_null())
         .map(|d| d["name"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(normal, ["ironcalc", "ironcalc_base", "thiserror"].iter().map(|s| s.to_string()).collect());
+    assert_eq!(
+        normal,
+        ["ironcalc", "ironcalc_base", "serde", "serde_json", "thiserror", "zip"].iter().map(|s| s.to_string()).collect()
+    );
     for d in abaco["dependencies"].as_array().unwrap() {
         if d["name"] == "ironcalc" || d["name"] == "ironcalc_base" {
             assert!(d["source"].is_null() && d["path"].as_str().unwrap().starts_with(fork.to_str().unwrap()), "{d}");

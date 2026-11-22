@@ -3577,6 +3577,7 @@ version = "2.0.0-alpha.1"
 dependencies = [
  "ironcalc",
  "ironcalc_base",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
