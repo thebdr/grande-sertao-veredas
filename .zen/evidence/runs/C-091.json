@@ -1,0 +1,24 @@
+{
+  "clause": "C-091",
+  "command": "cargo test -p veredas-portal --test store_record",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-portal",
+    "--test",
+    "store_record"
+  ],
+  "exitCode": 0,
+  "outputSha": "19177586be1b09d1ca03544cc4f43528b1c6b9a23a8b365413f5ad71f7cc0dec",
+  "outputTail": "\nrunning 2 tests\ntest at_its_size_limit_a_recording_stops_and_nothing_is_deleted ... ok\ntest the_record_keeps_on_the_drive_what_the_window_lets_go ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.74s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/portal-bf6010/crates/veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.55s\n     Running tests/store_record.rs (target/debug/build/veredas-portal/915c3ea1f9d95226/out/store_record-915c3ea1f9d95226)",
+  "ranAt": "2026-11-22T20:10:23.746Z",
+  "headCommit": "fa270c6291c65d15926caff6a433efc1ce48020a",
+  "tests": [
+    {
+      "name": "crates/veredas-portal/tests/store_record.rs",
+      "file": "crates/veredas-portal/tests/store_record.rs",
+      "fileSha": "4422b33c2a8d2813c2c5d9e5af13025562ce2c6a1b14c653cd6b1265d4013c18"
+    }
+  ]
+}

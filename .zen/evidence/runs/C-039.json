@@ -10,15 +10,15 @@
     "channel"
   ],
   "exitCode": 0,
-  "outputSha": "5255fddad8e8508678cf05ba9d51da8c2d716fcda83bc83abcb90c798be9c1c3",
-  "outputTail": "test a_message_s_table_is_typed_by_the_catalog_and_a_row_has_a_hole_where_a_name_is_missing ... ok\ntest an_unknown_id_and_a_refused_body_are_counted_and_shown ... ok\ntest the_peer_is_asked_for_last_so_the_catalog_s_refusals_come_first_with_nobody_there ... ok\ntest a_listener_waits_for_the_plant_to_dial_and_a_peer_gone_reads_as_waiting ... ok\ntest a_dialler_with_nobody_there_reports_trouble_and_links_when_the_plant_appears ... ok\ntest every_refusal_names_its_place_and_nothing_dials_before_it_all_holds ... ok\ntest the_handle_s_send_is_gated_and_reaches_the_plant_by_name ... ok\ntest the_machine_s_messages_are_read_into_rows_and_answered_by_rule_while_the_switch_is_on ... ok\ntest with_the_switch_off_nothing_is_answered_and_arming_it_live_answers_the_next_item ... ok\ntest pressure_turned_on_the_bench_shows_in_the_rows ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.86s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s\n     Running tests/channel.rs (target/debug/build/veredas-portal/6650961bf178e5d4/out/channel-6650961bf178e5d4)",
-  "ranAt": "2026-11-22T15:43:01.930Z",
-  "headCommit": "974fe62f321b0ad7bbebef1ac965bedb5193f6a9",
+  "outputSha": "0beabdc74eedc50f10380e488a25af6bb8810f14ebec2e0f0c8ca85673e15f06",
+  "outputTail": "test an_unknown_id_and_a_refused_body_are_counted_and_shown ... ok\ntest a_message_s_table_is_typed_by_the_catalog_and_a_row_has_a_hole_where_a_name_is_missing ... ok\ntest a_listener_waits_for_the_plant_to_dial_and_a_peer_gone_reads_as_waiting ... ok\ntest a_dialler_with_nobody_there_reports_trouble_and_links_when_the_plant_appears ... ok\ntest every_refusal_names_its_place_and_nothing_dials_before_it_all_holds ... ok\ntest the_handle_s_send_is_gated_and_reaches_the_plant_by_name ... ok\ntest the_machine_s_messages_are_read_into_rows_and_answered_by_rule_while_the_switch_is_on ... ok\ntest with_the_switch_off_nothing_is_answered_and_arming_it_live_answers_the_next_item ... ok\ntest pressure_turned_on_the_bench_shows_in_the_rows ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.96s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/portal-bf6010/crates/veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.53s\n     Running tests/channel.rs (target/debug/build/veredas-portal/5fa8e49c93f4d409/out/channel-5fa8e49c93f4d409)",
+  "ranAt": "2026-11-22T20:09:03.225Z",
+  "headCommit": "fa270c6291c65d15926caff6a433efc1ce48020a",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/channel.rs",
       "file": "crates/veredas-portal/tests/channel.rs",
-      "fileSha": "b44e7af33cd3c4a742a81714d652faf211972b3217a44f89ce078125ae8196b0"
+      "fileSha": "09d9962710b6621073464cf922a8983cb8c906a914bcb368fcdd7a74ee0ff04c"
     }
   ]
 }

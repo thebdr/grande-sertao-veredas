@@ -10,15 +10,15 @@
     "store"
   ],
   "exitCode": 0,
-  "outputSha": "eba0ef7df139d39e9195d0c1c70806478220ec0cc0e67ac7989baeb4b35db6cb",
-  "outputTail": "test a_snapshot_refuses_an_existing_file_and_a_refusal_leaves_the_next_one_free ... ok\ntest a_disk_store_persists_and_reopens_with_its_rows ... ok\ntest a_linked_csv_is_read_live_through_a_view_never_held_open_and_previewed_without_a_session ... ok\ntest rows_of_a_capture_rule_an_opc_rule_and_a_telegram_message_are_stored_alike_and_feed_the_narrow_surface ... ok\ntest the_csv_sniffer_adopts_a_decimal_comma_only_when_it_strictly_improves_the_typing ... ok\ntest reserved_duplicate_and_empty_names_are_refused_and_type_conflicts_counted ... ok\ntest views_join_across_sources_apply_in_any_order_and_a_broken_one_names_itself ... ok\ntest the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves_a_single_column_alone ... ok\ntest newest_first_pages_neither_repeat_nor_skip_rows_that_share_a_time ... ok\ntest pages_see_each_row_once_across_sources_and_on_a_view_without_a_sequence ... ok\n\ntest result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s\n     Running tests/store.rs (target/debug/build/veredas-portal/646f71a118454a7c/out/store-646f71a118454a7c)",
-  "ranAt": "2026-11-22T15:43:07.633Z",
-  "headCommit": "974fe62f321b0ad7bbebef1ac965bedb5193f6a9",
+  "outputSha": "c4aaf87bfeee243bf170b731184b79bc26767cd19e27a4604aa1046785bc683b",
+  "outputTail": "test rows_of_a_capture_rule_an_opc_rule_and_a_telegram_message_are_stored_alike_and_feed_the_narrow_surface ... ok\ntest quotes_escapes_and_line_endings_are_read_as_the_file_writes_them ... ok\ntest the_csv_sniffer_adopts_a_decimal_comma_only_when_it_strictly_improves_the_typing ... ok\ntest reserved_duplicate_and_empty_names_are_refused_and_type_conflicts_counted ... ok\ntest views_join_across_sources_apply_in_any_order_and_a_broken_one_names_itself ... ok\ntest the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves_a_single_column_alone ... ok\ntest newest_first_pages_neither_repeat_nor_skip_rows_that_share_a_time ... ok\ntest pages_see_each_row_once_across_sources_and_on_a_view_without_a_sequence ... ok\n\ntest result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.70s\n\n    Blocking waiting for file lock on package cache\n   Compiling veredas-portal v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/portal-bf6010/crates/veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.60s\n     Running tests/store.rs (target/debug/build/veredas-portal/1c63c99ea8879708/out/store-1c63c99ea8879708)",
+  "ranAt": "2026-11-22T20:09:06.680Z",
+  "headCommit": "fa270c6291c65d15926caff6a433efc1ce48020a",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store.rs",
       "file": "crates/veredas-portal/tests/store.rs",
-      "fileSha": "a6367bacdb190ff9b2fda7fe12662f51f6b3608c10f49b3ce9af38b4b2b87bf9"
+      "fileSha": "7052947c8e7a45c88709724f5a0ee668b554f319976ba6f5dc41af246cde293d"
     }
   ]
 }

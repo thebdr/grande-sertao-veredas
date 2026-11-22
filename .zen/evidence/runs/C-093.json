@@ -1,0 +1,24 @@
+{
+  "clause": "C-093",
+  "command": "cargo test -p veredas-portal --test fault_copy",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-portal",
+    "--test",
+    "fault_copy"
+  ],
+  "exitCode": 0,
+  "outputSha": "42788d8421e99c76210c9f176beaf7f99d50491d117ea6042d37307e39c8ce86",
+  "outputTail": "\nrunning 3 tests\ntest a_reader_holding_the_store_holds_no_copy_back ... ok\ntest no_folder_no_copy_and_a_folder_that_cannot_be_made_is_an_error_with_its_text ... ok\ntest at_a_fault_the_window_is_written_to_the_drive_with_the_fault_record ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.50s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/portal-bf6010/crates/veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.31s\n     Running tests/fault_copy.rs (target/debug/build/veredas-portal/91f41432a3817c93/out/fault_copy-91f41432a3817c93)",
+  "ranAt": "2026-11-22T20:10:32.917Z",
+  "headCommit": "fa270c6291c65d15926caff6a433efc1ce48020a",
+  "tests": [
+    {
+      "name": "crates/veredas-portal/tests/fault_copy.rs",
+      "file": "crates/veredas-portal/tests/fault_copy.rs",
+      "fileSha": "4414ab0416ea9d1ac3c43cdef77452775d367c2371e349e6e361d84ee126b103"
+    }
+  ]
+}
