@@ -167,9 +167,20 @@ fn the_fork_is_upstream_at_its_commit_then_each_listed_change_a_commit() {
     sorted_rows.sort();
     assert_eq!(sorted_named, sorted_rows, "the commits' changes and the record's rows");
     // and the working tree changes none of it unrecorded
-    // and the working tree changes none of the fork (its manifests and lock included) unrecorded
+    // and the working tree changes none of the fork (its manifests and lock included) unrecorded;
+    // the scratch workbooks upstream's own tests write beside their crate while they run (the fork's
+    // suite runs beside this test) are not a change
     let dirty = git(&["status", "--porcelain", "--untracked-files=all", "--", "forks/ironcalc"]);
-    assert!(dirty.trim().is_empty(), "the fork changed outside a commit:\n{dirty}");
+    let dirty: Vec<&str> = dirty
+        .lines()
+        .filter(|l| {
+            let scratch = ["?? forks/ironcalc/xlsx/", "?? forks/ironcalc/base/"]
+                .iter()
+                .any(|crate_dir| l.strip_prefix(crate_dir).is_some_and(|f| f.starts_with("temp_file_") && !f.contains('/')));
+            !scratch
+        })
+        .collect();
+    assert!(dirty.is_empty(), "the fork changed outside a commit:\n{}", dirty.join("\n"));
 }
 
 /// Ábaco's normal graph on every platform, by crate name, as reviewed on 2026-11-22: the engine,
