@@ -8,7 +8,8 @@ C-001..C-006 are the suite's structural laws, each proven by one test file per l
 tree as it is; one file per law, so a change to one law re-stales only its clause. A law changes
 only with its clause. From C-007 the clauses are a component's capabilities, one test file per
 capability under the component's `tests/`, run against reality (real sockets, the real server),
-never a mock; its plan (`docs/<nome>-plan.md`) says what each absorbed from Veredas 1. The
+never a mock; its plan (`docs/<nome>-plan.md`) says what each absorbed from Veredas 1. A tool's
+capabilities are clauses too (`tools/entrega`, from C-290), tested under the tool's `tests/`. The
 components and the suite-wide rules that need code (among them what the briefing of November 2026 decided, P-015 to P-021) live as
 `P-xxx` under **Pending Contract Deltas**, one per component, each citing the plan's section and
 the Veredas 1 crates it absorbs; none copies the plan's prose. A member arrives this way: its
