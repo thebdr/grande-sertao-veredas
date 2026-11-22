@@ -1057,23 +1057,37 @@ pub fn sniff_csv_options(path: &str) -> Result<CsvOptions, StoreError> {
     // (a long row inside the window with rows after it, a short row past it): in the dialect the
     // sniffer finds when it is asked to pad (its delimiter, quote and escape), when that splits
     // the file; else in the delimiter that splits it widest; else nothing does.
+    // The dialect the sniffer finds when asked to pad, when it splits the file; another delimiter
+    // only where it types strictly more columns as numbers, with or without the decimal comma (a
+    // `;` file written with decimal commas splits on `,` too, into nonsense); with no sniffed
+    // dialect, the delimiter typing the most numbers, then the widest.
     let padded = |conn: &Connection| -> Option<CsvOptions> {
-        let splits = |o: &CsvOptions| describe_types(conn, &csv_scan_sql(path, o)).map(|c| c.len()).unwrap_or(0);
-        if let Some(d) = sniffed_dialect(conn, path, true)
-            && splits(&d) > 1
-        {
-            return Some(d);
-        }
-        let mut best: Option<(usize, CsvOptions)> = None;
+        let read = |o: &CsvOptions| describe_types(conn, &csv_scan_sql(path, o)).ok().filter(|cols| cols.len() > 1);
+        let numbers = |cols: &[(String, String)]| cols.iter().filter(|(_, t)| is_numeric_type(t)).count();
+        let score = |o: &CsvOptions| {
+            read(o).map(|plain| {
+                let comma = read(&CsvOptions { decimal_comma: true, ..o.clone() }).map(|cols| numbers(&cols)).unwrap_or(0);
+                (numbers(&plain).max(comma), plain.len())
+            })
+        };
+        let sniffed = sniffed_dialect(conn, path, true)
+            .map(|d| with_quote_seen(d, sniffed_dialect(conn, path, false)))
+            .and_then(|d| score(&d).map(|s| (s, d)));
+        let mut best: Option<((usize, usize), CsvOptions)> = None;
         for d in CSV_DELIMS {
             // The reader's own quote, written out, so it detects none of its own.
-            let probe = CsvOptions { delim: Some(d.to_string()), quote_char: Some("\"".into()), escape_char: Some("\"".into()), decimal_comma: false };
-            let n = splits(&probe);
-            if n > 1 && best.as_ref().is_none_or(|(b, _)| n > *b) {
-                best = Some((n, probe));
+            let c = CsvOptions { delim: Some(d.to_string()), quote_char: Some("\"".into()), escape_char: Some("\"".into()), decimal_comma: false };
+            if let Some(sc) = score(&c)
+                && best.as_ref().is_none_or(|(b, _)| sc > *b)
+            {
+                best = Some((sc, c));
             }
         }
-        best.map(|(_, o)| o)
+        match (sniffed, best) {
+            (Some(((n, _), d)), Some(((m, _), c))) => Some(if m > n { c } else { d }),
+            (Some((_, d)), None) => Some(d),
+            (None, b) => b.map(|(_, c)| c),
+        }
     };
     match describe_types(&conn, &csv_scan_sql(path, &opts)) {
         Ok(auto) if looks_unsplit(&auto) => {
@@ -1088,7 +1102,7 @@ pub fn sniff_csv_options(path: &str) -> Result<CsvOptions, StoreError> {
             // one within its window, refusing the read by its line past it. Raggedness is read
             // off the file itself, the first 2 048 lines counted in the sniffer's delimiter with
             // its quote and escape honoured, whatever the line ending.
-            if let Some(dialect) = sniffed_dialect(&conn, path, false)
+            if let Some(dialect) = sniffed_dialect(&conn, path, false).map(|d| with_quote_seen(d, sniffed_dialect(&conn, path, true)))
                 && csv_is_ragged(path, &dialect)
             {
                 opts = dialect;
@@ -1112,10 +1126,9 @@ pub fn sniff_csv_options(path: &str) -> Result<CsvOptions, StoreError> {
         return Ok(opts);
     }
     let mut gained = 0usize;
-    for ((n_plain, t_plain), (n_comma, t_comma)) in plain.iter().zip(comma.iter()) {
-        if n_plain != n_comma {
-            return Ok(opts);
-        }
+    // By position: on the padded path the engine may take a header for a row in one reading and
+    // not in the other, so the names differ while the columns are the same.
+    for ((_, t_plain), (_, t_comma)) in plain.iter().zip(comma.iter()) {
         match (is_numeric_type(t_plain), is_numeric_type(t_comma)) {
             (true, false) => return Ok(opts),
             (false, true) => gained += 1,
@@ -1143,6 +1156,20 @@ fn sniffed_dialect(conn: &Connection, path: &str, padded: bool) -> Option<CsvOpt
     (!d.is_empty() && d != "(empty)").then_some(CsvOptions { delim: Some(d), quote_char: Some(quote), escape_char: Some(escape), decimal_comma: false })
 }
 
+/// A dialect with the quote either sniff saw: its own, or, when it saw none, the other's (the
+/// sniffer reading a ragged file as it is may see no quote where, asked to pad, it sees one, and
+/// the other way round), with that sniff's escape.
+fn with_quote_seen(mut dialect: CsvOptions, other: Option<CsvOptions>) -> CsvOptions {
+    if dialect.quote_char.as_deref() == Some("")
+        && let Some(o) = other
+        && o.quote_char.as_deref().is_some_and(|q| !q.is_empty())
+    {
+        dialect.quote_char = o.quote_char;
+        dialect.escape_char = o.escape_char;
+    }
+    dialect
+}
+
 /// The rows the raggedness check reads, the engine's own window for widening the schema.
 pub const CSV_RAGGED_WINDOW: usize = 2048;
 
@@ -1150,7 +1177,8 @@ pub const CSV_RAGGED_WINDOW: usize = 2048;
 /// over its first 2 048 rows (the header among them; a blank line is no row and moves the window
 /// by none, as the engine's own window). Its delimiter is `,` when none is set; its quote `"`
 /// when none is set and none at all when set empty; its escape the quote when none is set. A
-/// quote opens a field only at the field's start (elsewhere it is text, as the engine reads it),
+/// quote opens a field only at the field's start, after any leading spaces (elsewhere it is text,
+/// as the engine reads it),
 /// and inside one a doubled quote or an escaped character is text; a row ends at a line feed, a
 /// carriage return and line feed, or a carriage return alone, never inside quotes. A file that
 /// cannot be read here is not ragged: its reading is refused elsewhere, by name.
@@ -1203,8 +1231,11 @@ pub fn csv_is_ragged(path: &str, opts: &CsvOptions) -> bool {
         } else {
             if field_start && Some(c) == quote {
                 quoted = true;
+                field_start = false;
+            } else if !(field_start && c == ' ') {
+                // Leading spaces keep a field's start: the engine opens a quote after them.
+                field_start = false;
             }
-            field_start = false;
             at_line_start = false;
         }
     }

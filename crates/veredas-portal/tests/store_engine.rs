@@ -1011,3 +1011,45 @@ fn deleted_rows_hand_their_memory_back_in_memory() {
     assert!(most < all_1m, "the window's figure, at most {most}, under a million rows kept ({all_1m}): {window:?}");
     assert!(window[19] < all_2m, "{window:?} against {all:?}");
 }
+
+/// What the store's sixth round rests on: a quote opens a field after leading spaces; the two
+/// sniffs disagree on a ragged file's quote both ways (a file with a quoted line break and a short
+/// row: none read as it is, `"` asked to pad; a quoted line break before a long row on the 2 048th
+/// row: `"` read as it is, none asked to pad), so the store takes the quote either saw; and a `"`
+/// quote with no escape refuses a doubled quote, which the sniffer reports with its escape `"`.
+#[test]
+fn a_quote_after_spaces_the_two_sniffs_quotes_and_a_doubled_quote_without_its_escape() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    let file = |name: &str, body: &str| {
+        let p = dir.path().join(name);
+        std::fs::write(&p, body).unwrap();
+        sql_path(&p)
+    };
+    let spaced = file("spaced.csv", "a,b,c\n1, \"x,y\",3\n");
+    let cells: (i64, String, i64) = conn
+        .query_row(&format!("SELECT a, b, c FROM read_csv('{spaced}', delim=',', quote='\"', escape='\"', header=true)"), [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap();
+    assert_eq!(cells, (1, "x,y".to_string(), 3));
+    let sniff = |p: &str, extra: &str| -> (String, String) {
+        conn.query_row(&format!("SELECT Quote, Escape FROM sniff_csv('{p}'{extra})"), [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
+    };
+    let addresses = file("addresses.csv", "name,addr,qty\nAna,\"R. Augusta 1\nLisboa\",3\nRui,Porto\nBo,\"Faro, PT\",5\n");
+    assert_eq!(sniff(&addresses, "").0, "(empty)");
+    assert_eq!(sniff(&addresses, ", null_padding=true").0, "\"");
+    let mut body = String::from("a,b,c\n1,\"x\ny\",3\n");
+    for i in 3..2048 {
+        body.push_str(&format!("{i},1,2\n"));
+    }
+    body.push_str("9,9,9,9\n");
+    let late = file("late.csv", &body);
+    assert_eq!(sniff(&late, ""), ("\"".to_string(), "\"".to_string()));
+    assert_eq!(sniff(&late, ", null_padding=true").0, "(empty)");
+    let doubled = file("doubled.csv", "a,b,c\n1,\"say \"\"hi, there\"\"\",3\n4,5,6\n");
+    assert_eq!(sniff(&doubled, ""), ("\"".to_string(), "\"".to_string()), "a doubled quote reported with its escape");
+    let e = conn
+        .query_row(&format!("SELECT count(*) FROM read_csv('{doubled}', delim=',', quote='\"', escape='', null_padding=true, parallel=false)"), [], |r| r.get::<_, i64>(0))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("dialect"), "{e}");
+}

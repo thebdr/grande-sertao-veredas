@@ -1044,7 +1044,6 @@ fn a_quote_opens_a_field_only_at_its_start_and_only_the_sniffer_s() {
     // A doubled quote inside quotes is one quote: the file is regular.
     let doubled = csv_file(dir.path(), "doubled.csv", "a,b\n\"x\"\",y\",2\n3,4\n");
     assert!(!csv_is_ragged(&doubled, &delim(",")));
-    assert!(csv_is_ragged(&doubled, &dialect(",", "\"", "")), "with no escape the doubled quote closes and reopens: three fields");
     // An escape outside quotes is text.
     let bare = csv_file(dir.path(), "bare.csv", "a,b\nx\\,y\n3,4\n");
     assert!(!csv_is_ragged(&bare, &dialect(",", "\"", "\\")));
@@ -1058,4 +1057,56 @@ fn a_quote_opens_a_field_only_at_its_start_and_only_the_sniffer_s() {
     std::fs::write(&binary, (0u8..=255).cycle().take(4096).collect::<Vec<u8>>()).unwrap();
     let e = sniff_csv_options(&binary.display().to_string()).unwrap_err().to_string();
     assert!(e.contains("binary.csv"), "{e}");
+}
+
+// ---- the sixth refute round (2026-11-22) -----------------------------------------------------
+
+/// A quote either sniff saw: a ragged file the sniffer reads as it is with no quote, where asked
+/// to pad it sees `"`, is read with `"`, every quoted cell whole (round 5 wrote none and split
+/// them); a quote opens a field after leading spaces, as the engine reads it.
+#[test]
+fn a_quote_either_sniff_saw_and_a_quote_after_leading_spaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let addresses = csv_file(dir.path(), "addresses.csv", "name,addr,qty\nAna,\"R. Augusta 1\nLisboa\",3\nRui,Porto\nBo,\"Faro, PT\",5\n");
+    let (opts, page) = read_as_sniffed(&addresses);
+    assert_eq!(opts.quote_char.as_deref(), Some("\""), "{opts:?}");
+    assert_eq!((page.total, names(&page)), (3, vec!["name", "addr", "qty"]));
+    assert_eq!(page.rows[0][1], serde_json::json!("R. Augusta 1\nLisboa"));
+    assert_eq!(page.rows[1][2], serde_json::Value::Null, "the short row padded");
+    assert_eq!(page.rows[2][1], serde_json::json!("Faro, PT"));
+    let mixed = csv_file(dir.path(), "mixed.csv", "a,b,c\n1,\"x\ny\",3\n4,5\n6,\"p,q\",8\n");
+    let (_, page) = read_as_sniffed(&mixed);
+    assert_eq!((page.total, page.rows[2][1].clone()), (3, serde_json::json!("p,q")));
+    // Leading spaces before a quote: the quote is the field's, the long row last is seen.
+    let spaced = csv_file(dir.path(), "spaced.csv", "id, \"name, full\",qty\n1, \"Ana, S\",3\n2, \"Rui, P\",4\n3,Bo,5,9\n");
+    assert!(csv_is_ragged(&spaced, &delim(",")), "three fields, three, three, four");
+    let (opts, page) = read_as_sniffed(&spaced);
+    assert_eq!(opts.delim.as_deref(), Some(","));
+    assert_eq!((page.total, page.columns.len()), (3, 4), "{:?}", page.columns);
+    assert_eq!(page.rows[0][1], serde_json::json!("Ana, S"));
+    // A space inside a field, right before a quote, is no field's start.
+    assert!(!csv_is_ragged(&csv_file(dir.path(), "inner.csv", "a,b\nx \"z,1\nw,2\n"), &delim(",")));
+}
+
+/// The decimal comma on the padded path: judged by position (the engine may take the header for
+/// a row in one reading and not in the other), and, for a file the sniffer collapses, judged for
+/// every candidate delimiter, so a `;` file written with decimal commas is not split on `,`.
+#[test]
+fn the_decimal_comma_on_the_padded_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let long = csv_file(dir.path(), "euro_long.csv", "a;b;c\n1,5;2,5;3,5\n4,5;5,5;6,5\n9;9;9;9\n");
+    let (opts, page) = read_as_sniffed(&long);
+    assert_eq!((opts.delim.as_deref(), opts.decimal_comma), (Some(";"), true), "{opts:?}");
+    assert_eq!((page.total, names(&page)), (3, vec!["a", "b", "c", "column3"]));
+    assert!(page.columns[..3].iter().all(|c| c.data_type == "DOUBLE"), "{:?}", page.columns);
+    assert_eq!(page.rows[0][0], serde_json::json!(1.5));
+    let short = csv_file(dir.path(), "euro_short.csv", "a;b;c\n1,5;2,5;3,5\n4,5;5,5\n6,5;7,5;8,5\n");
+    let (opts, page) = read_as_sniffed(&short);
+    assert_eq!((opts.delim.as_deref(), opts.decimal_comma), (Some(";"), true), "{opts:?}");
+    assert_eq!((page.total, names(&page)), (3, vec!["a", "b", "c"]));
+    assert_eq!((page.rows[1][1].clone(), page.rows[1][2].clone()), (serde_json::json!(5.5), serde_json::Value::Null), "the short row padded");
+    // A ragged `,` file of plain numbers stays on `,`.
+    let plain = csv_file(dir.path(), "plain_short.csv", "a,b,c\n1.5,2.5,3.5\n4.5,5.5\n6.5,7.5,8.5\n");
+    let (opts, page) = read_as_sniffed(&plain);
+    assert_eq!((opts.delim.as_deref(), opts.decimal_comma, page.total), (Some(","), false, 3));
 }
