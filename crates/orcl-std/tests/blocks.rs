@@ -1,8 +1,10 @@
 //! What C-150 states of `orcl-std` beyond Veredas 1's own unit tests (`src/*.rs`), pinned after its first
 //! refute round (`.zen/evidence/C-150.md`): every block's behaviour where a mutant of it passed those tests, bit
 //! access on every width, and a program's default safe outputs. O14 (function blocks are not copied) is pinned by
-//! the `compile_fail` doctests of `src/o14.rs`.
-use orcl_std::{Bits, Ctu, FTrig, Program, RTrig, Scan, Tof, Tp, ms};
+//! the `compile_fail` doctests of `src/o14.rs`, each beside a twin that compiles. The second refute round added
+//! boundaries off the 10 ms grid, scans whose time disagrees with their cycle, every block's `q()`, the counter at
+//! a preset of zero and at its top, and the crate's own attributes.
+use orcl_std::{Bits, Ctu, Duration, FTrig, Program, RTrig, Scan, Tof, Ton, Tp, ms};
 
 fn at(t: u64) -> Scan {
     Scan {
@@ -143,4 +145,153 @@ fn a_program_s_safe_outputs_are_all_default_unless_it_says_otherwise() {
     assert_eq!(o, Out { run: true, speed: 900 });
     assert_eq!(Plain.safe_outputs(), Out { run: false, speed: 0 });
     assert_eq!(Declares.safe_outputs(), Out { run: false, speed: 5 });
+}
+
+/// A scan whose time is `now` ms whatever its cycle number says.
+fn scan_at(now: u64, cycle: u64) -> Scan {
+    Scan {
+        now: ms(now),
+        period: ms(10),
+        cycle,
+    }
+}
+
+#[test]
+fn every_timer_switches_at_pt_and_not_a_moment_before() {
+    let pt = ms(100);
+    let mut on = Ton::default();
+    on.scan(&at(0), true, pt);
+    assert!(!on.scan(&scan_at(99, 9), true, pt), "the on-delay still off 1 ms before pt");
+    assert_eq!(on.et(), ms(99));
+    assert!(on.scan(&scan_at(100, 10), true, pt));
+
+    let mut off = Tof::default();
+    off.scan(&at(0), true, pt);
+    off.scan(&at(10), false, pt);
+    assert!(off.scan(&scan_at(109, 10), false, pt), "the off-delay still on 1 ms before pt");
+    assert!(!off.scan(&scan_at(110, 11), false, pt));
+
+    let mut pulse = Tp::default();
+    pulse.scan(&at(0), true, pt);
+    assert!(pulse.scan(&scan_at(99, 9), true, pt), "the pulse still on 1 ms before pt");
+    assert!(!pulse.scan(&scan_at(100, 10), true, pt));
+}
+
+#[test]
+fn the_timers_take_their_time_from_the_scan_s_time_not_its_cycle_number() {
+    // cycle 1 arrives 150 ms after cycle 0, as after an overrun: the timers read 150 ms, not 10
+    let pt = ms(100);
+    let mut on = Ton::default();
+    on.scan(&scan_at(0, 0), true, pt);
+    assert!(on.scan(&scan_at(150, 1), true, pt));
+    assert_eq!(on.et(), pt);
+
+    let mut off = Tof::default();
+    off.scan(&scan_at(0, 0), true, pt);
+    off.scan(&scan_at(10, 1), false, pt);
+    assert!(!off.scan(&scan_at(150, 2), false, pt));
+
+    let mut pulse = Tp::default();
+    pulse.scan(&scan_at(0, 0), true, pt);
+    assert!(!pulse.scan(&scan_at(150, 1), true, pt), "the pulse is over");
+    assert_eq!(pulse.et(), pt);
+}
+
+#[test]
+fn an_off_delay_scanned_late_switches_off_with_its_elapsed_time_capped_at_pt() {
+    let pt = ms(100);
+    let mut t = Tof::default();
+    t.scan(&at(0), true, pt);
+    t.scan(&at(20), false, pt);
+    assert!(!t.scan(&scan_at(150, 3), false, pt), "130 ms after the drop");
+    assert_eq!(t.et(), pt, "capped at pt, not 130 ms");
+    assert!(!t.scan(&scan_at(400, 4), false, pt));
+    assert_eq!(t.et(), pt);
+}
+
+#[test]
+fn every_block_s_q_says_what_its_last_scan_returned() {
+    let pt = ms(100);
+    let mut on = Ton::default();
+    for (t, input) in [(0, true), (100, true), (110, false)] {
+        let q = on.scan(&at(t), input, pt);
+        assert_eq!(on.q(), q);
+    }
+    let mut off = Tof::default();
+    for (t, input) in [(0, true), (10, false), (110, false)] {
+        let q = off.scan(&at(t), input, pt);
+        assert_eq!(off.q(), q);
+    }
+    let mut pulse = Tp::default();
+    for (t, input) in [(0, true), (100, true)] {
+        let q = pulse.scan(&at(t), input, pt);
+        assert_eq!(pulse.q(), q);
+    }
+    assert!(!pulse.q());
+    let mut rise = RTrig::default();
+    for clk in [true, true] {
+        let q = rise.scan(clk);
+        assert_eq!(rise.q(), q);
+    }
+    assert!(!rise.q());
+    let mut fall = FTrig::default();
+    for clk in [true, false, false] {
+        let q = fall.scan(clk);
+        assert_eq!(fall.q(), q);
+    }
+    let mut seen = Vec::new();
+    let mut fall = FTrig::default();
+    for clk in [true, false, false] {
+        fall.scan(clk);
+        seen.push(fall.q());
+    }
+    assert_eq!(seen, vec![false, true, false]);
+    let mut on = Ton::default();
+    on.scan(&at(0), true, pt);
+    assert!(!on.q());
+    on.scan(&at(100), true, pt);
+    assert!(on.q());
+}
+
+#[test]
+fn the_counter_at_a_preset_of_zero_at_a_held_reset_and_at_its_top() {
+    let mut c = Ctu::default();
+    assert!(c.scan(false, false, 0), "a count of zero reaches a preset of zero");
+    assert!(c.q());
+
+    let mut c = Ctu::default();
+    c.scan(false, false, 3);
+    c.scan(true, true, 3);
+    assert!(!c.scan(true, false, 3), "released with the input held high: no new edge, nothing counted");
+    assert_eq!(c.cv(), 0);
+
+    let mut c = Ctu::default();
+    for _ in 0..3 {
+        c.scan(true, false, 2);
+        c.scan(false, false, 2);
+    }
+    assert_eq!(c.cv(), 3);
+    assert!(c.q(), "past the preset, still on");
+}
+
+#[test]
+fn the_crate_holds_itself_to_the_language_s_rules() {
+    let lib = include_str!("../src/lib.rs");
+    for attribute in ["#![cfg_attr(not(test), no_std)]", "#![forbid(unsafe_code)]"] {
+        assert!(lib.contains(attribute), "src/lib.rs lacks {attribute}");
+    }
+    let deny = lib.split("#![deny(").nth(1).and_then(|rest| rest.split(")]").next()).expect("a #![deny(...)] list");
+    let lints: Vec<&str> = deny.split(',').map(str::trim).filter(|l| !l.is_empty()).collect();
+    assert_eq!(
+        lints,
+        vec![
+            "clippy::arithmetic_side_effects",
+            "clippy::indexing_slicing",
+            "clippy::panic",
+            "clippy::unwrap_used",
+            "clippy::expect_used",
+            "clippy::disallowed_types"
+        ]
+    );
+    let _: Duration = ms(1);
 }

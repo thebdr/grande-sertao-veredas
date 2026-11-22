@@ -1,4 +1,42 @@
 //! The scan model: what a program sees each cycle, and what a program is.
+//!
+//! A program's inputs and outputs are values, copied into and out of the process image: both must be `Copy`. A
+//! program whose inputs or outputs are not does not compile (each `compile_fail` below has a twin that compiles,
+//! since stable rustdoc does not check the error code it names):
+//!
+//! ```
+//! use orcl_std::{Program, Scan};
+//! struct P;
+//! impl Program for P {
+//!     type Inputs = [u8; 4];
+//!     type Outputs = [u8; 4];
+//!     fn scan(&mut self, _: &Scan, i: &[u8; 4], o: &mut [u8; 4]) { *o = *i; }
+//! }
+//! ```
+//!
+//! ```compile_fail,E0277
+//! use orcl_std::{Program, Scan};
+//! #[derive(Default)]
+//! struct Held(u8);
+//! struct P;
+//! impl Program for P {
+//!     type Inputs = Held;
+//!     type Outputs = [u8; 4];
+//!     fn scan(&mut self, _: &Scan, _: &Held, _: &mut [u8; 4]) {}
+//! }
+//! ```
+//!
+//! ```compile_fail,E0277
+//! use orcl_std::{Program, Scan};
+//! #[derive(Default)]
+//! struct Held(u8);
+//! struct P;
+//! impl Program for P {
+//!     type Inputs = [u8; 4];
+//!     type Outputs = Held;
+//!     fn scan(&mut self, _: &Scan, _: &[u8; 4], _: &mut Held) {}
+//! }
+//! ```
 use core::time::Duration;
 
 /// One scan of a task. `now` is the time since the runtime started, read ONCE at the start of the scan; every

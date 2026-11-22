@@ -37,6 +37,22 @@
 //! }
 //! ```
 //!
+//! Scanned in place, the same guard compiles (and so the example above fails for the copy alone):
+//!
+//! ```
+//! use orcl_std::{Scan, Ton, ms};
+//!
+//! struct Guard {
+//!     delay: Ton,
+//! }
+//!
+//! impl Guard {
+//!     fn scan(&mut self, scan: &Scan, open: bool) -> bool {
+//!         self.delay.scan(scan, open, ms(500))
+//!     }
+//! }
+//! ```
+//!
 //! The last two are the ownership rules O13 and O14 in `docs/orcl/language/ownership.md`.
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
