@@ -1,5 +1,6 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Text files detected and checked out with LF on every machine, Windows included: development is
+# on Linux, and a run record hashes a test file's bytes as they stand on disk (docs/questions.md Q46).
+* text=auto eol=lf
 # The supervision page's sources and build checked out with LF on every machine, so a rebuild on
 # Windows writes the committed page byte for byte (vite keeps a CR of a CRLF source in index.html).
 crates/veredas-supervisao/web/** eol=lf

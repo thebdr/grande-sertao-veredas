@@ -30,6 +30,9 @@ scheme, one naming rule, and a clear role for each component.
   workspace version.
 - **Suite releases.** A suite release is a manifest that pins a tested set of component
   versions, shipped and installed together.
+- **The tester machine.** A suite release also ships as a virtual machine for VMware, on a light
+  Linux distribution, holding the whole release suite: testers and designers run the suite
+  without building it (the architect, 2026-11-22). It has no plan yet (the contract's P-022).
 - **Core ripples outward.** A MAJOR bump of `veredas-core` means every dependent is rebuilt
   and retested before its own next release.
 - **Versioned files.** Every plain-text config and project file is TOML and states its
@@ -300,6 +303,19 @@ Q31–Q45; the list that was reviewed and its review are kept in `docs/briefing/
 8. A robustness round for the whole suite, for machines that run unattended for decades: begun,
    not finished. A security round is owed.
 9. A panel HMI is a component still to be planned.
+
+2026-11-22, the move to Linux (the architect):
+1. Development is on a Linux machine, with a Windows 11 virtual machine on it for testing on
+   Windows. The suite green on that machine is the gate; GitHub's run on every push stays as a
+   clean-checkout check no push waits for.
+2. One session per component, its main developer, for the nine components planned (core,
+   maquinar, portal, supervisão, controlador, aranha, comissionador, ábaco, oficina), and one for
+   suite releases; an orchestrating session checks their results and carries the questions. The
+   warehouse system and the panel HMI stay parked. This overtakes "one member at a time" and
+   aranha's wait for the architect's word (`CLAUDE.md`, "Several sessions at once").
+3. A new product: the tester machine, a VMware virtual machine on a light Linux distribution
+   holding the whole release suite, for testers and designers ("How releases work").
+4. Every machine checks out LF (`docs/questions.md` Q46, taken meanwhile).
 
 ## Next steps
 1. Record each decision above where it applies (component plans, `docs/questions.md`).

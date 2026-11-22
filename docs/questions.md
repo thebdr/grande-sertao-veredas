@@ -1143,3 +1143,34 @@ Open, never asked:
 - whether Npcap's licence allows what raw frames on Windows need.
 
 **Taken meanwhile**: the readings stand as readings, marked so wherever a plan leans on one.
+
+---
+
+## Q46 - Line endings on every machine
+
+**Raised** 2026-11-22, taking the work up on the Linux machine (the handoff's first decision).
+
+A run record hashes a test file's bytes as they stand on disk. The Windows desk checked out CRLF
+(`core.autocrlf=true`), so its records read stale on a Linux clone, whose files are LF, and the
+reverse would hold for records taken on Linux and read in a Windows clone.
+
+Options: every machine checks out LF (`* text=auto eol=lf` in `.gitattributes`; the repository
+holds no script that needs CRLF, and the page's folder already worked this way on Windows); or
+`.gitattributes` stays as it was, records are taken on Linux only and the contract tool is never
+run in a Windows clone.
+
+**Taken meanwhile**: every machine checks out LF, and the runs are recorded again once on the
+Linux machine. The Windows VM gets a clone of its own and takes no records.
+
+**Reversible?** Yes: one line of `.gitattributes`, and the records taken again.
+
+---
+
+## Numbers from Q100 on: one block per member
+
+From 2026-11-22 several member sessions write at once, each in a worktree of its own
+(`CLAUDE.md`, "Several sessions at once"). So that no two members claim one number, a member's
+new question takes the next free number of its block: core Q100, portal Q130, maquinar Q160,
+supervisão Q190, controlador (with ORCL) Q220, aranha Q280, comissionador Q310, ábaco Q340,
+oficina Q370, releases Q430; a block ends where the next begins. Suite-wide questions run on
+from Q46. A question is appended at the end of this file whatever its number.
