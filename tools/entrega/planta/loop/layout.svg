@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 220">
+  <path id="loop" d="M 80 40 H 320 A 70 70 0 0 1 320 180 H 80 A 70 70 0 0 1 80 40 Z" fill="none" stroke="#26262A" stroke-width="14"/>
+  <rect id="infeed" x="20" y="96" width="40" height="28"/>
+  <rect id="outlet-1" x="130" y="4" width="24" height="28"/>
+  <rect id="outlet-2" x="190" y="4" width="24" height="28"/>
+  <rect id="outlet-3" x="250" y="4" width="24" height="28"/>
+  <circle id="parcel-1" r="5"/>
+  <circle id="parcel-2" r="5"/>
+</svg>

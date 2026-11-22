@@ -1,0 +1,10 @@
+# The tester machine's supervisão: the loop, served on every interface of the machine so the
+# host's browser reaches it (docs/questions.md Q439); the loopback alone is `127.0.0.1:8902`.
+format = "veredas-supervisao"
+version = 1
+bind = "0.0.0.0:8902"
+
+[[session]]
+name = "loop"
+project = "loop/project.toml"
+binding = "loop/binding.toml"

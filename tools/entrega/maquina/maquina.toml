@@ -1,0 +1,45 @@
+# The tester machine's recipe data (docs/entrega-plan.md, "How the image is built"): the
+# architect's choices are here, never in code, so a ruling is an edit of this file. Read by
+# `entrega` (tools/entrega/src/machine.rs); the options taken meanwhile are named by their question.
+format = "veredas-machine"
+version = 1
+
+# The distribution (Q433): Debian 13's generic cloud image, a dated build, its SHA-512 copied from
+# that build's SHA512SUMS (served over HTTPS, not signed: this pin is what the recipe trusts).
+[base]
+url = "https://cloud.debian.org/images/cloud/trixie/20261116-2664/debian-13-generic-amd64-20261116-2664.qcow2"
+sha512 = "e53a93ef33f828ceed0e7278c2cc2753bdc7d5098fbfae15bd64b6d878db350ea3744247763a1c8ecb6b4019a0f623c38caf6038ad6f9c357fb4e01493ddf1a3"
+# The newest symbol versions its libraries offer: a shipped executable needing more is refused.
+glibc = "2.41"
+glibcxx = "3.4.33"
+cxxabi = "1.3.15"
+
+# The builder machine the release's executables are built in: the base, a C and C++ compiler,
+# and the Rust toolchain the suite was tested with, from rustup's official source. Eight
+# processors, as a cargo run on the development machine takes.
+[builder]
+cpus = 8
+memory_mb = 12288
+disk_gb = 40
+packages = ["build-essential", "pkg-config", "curl", "ca-certificates"]
+
+# The tester machine itself.
+[machine]
+cpus = 2
+memory_mb = 4096
+disk_gb = 16
+# VMware's virtual hardware version (Q435): 14 opens in Workstation 14, Fusion 10, ESXi 6.7 and later.
+hardware_version = 14
+# The user (Q438): logged in automatically; sudo asks this password.
+user = "veredas"
+password = "veredas"
+# The desktop (Q434), the browser, the guest tools, an editor; NetworkManager takes any wired card.
+packages = [
+  "xfce4", "xfce4-terminal", "mousepad", "lightdm", "xserver-xorg", "xserver-xorg-video-vmware",
+  "chromium", "open-vm-tools", "open-vm-tools-desktop", "network-manager", "network-manager-gnome",
+  "fonts-dejavu", "sudo",
+]
+# Removed from the base: no SSH server on the machine (docs/entrega-plan.md, "What it holds").
+remove = ["openssh-server"]
+# The port supervisão serves the plant on inside the machine (Q439).
+supervisao_port = 8902

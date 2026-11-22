@@ -1,0 +1,43 @@
+# The loop's portal project: the controller polled over OPC UA, the sorter's daily log family
+# captured by rule. Its writes stay disarmed: the binding offers "Release" and portal refuses it.
+format = "veredas-project"
+version = 1
+name = "the loop"
+
+[session]
+store = "ram"
+writes_armed = false
+
+[[log]]
+id = "sorter"
+dir = "../logs"
+pattern = "(?P<date>\\d{8})_sorts(?P<idx>\\d+)\\.log"
+date_format = "%Y%m%d"
+timestamp = { pattern = "^(?P<ts>\\S+ \\S+)", formats = ["%Y-%m-%d %H:%M:%S%.3f"] }
+
+[[rule]]
+name = "sorts"
+pattern = "SORT outlet=(?P<outlet>\\d+) travel=(?P<travel>[0-9.]+) rate=(?P<rate>[0-9.]+)"
+scope = "sorter"
+types = { outlet = "int", travel = "float", rate = "float" }
+
+[[opc]]
+source_id = "plc"
+endpoint_url = "opc.tcp://127.0.0.1:4855/"
+poll_ms = 200
+rules = [
+  { name = "plc_main", tags = [
+    { node_id = "ns=2;s=speed", series = "speed", type = "float" },
+    { node_id = "ns=2;s=p1", series = "p1", type = "float" },
+    { node_id = "ns=2;s=p2", series = "p2", type = "float" },
+    { node_id = "ns=2;s=fill1", series = "fill1", type = "float" },
+    { node_id = "ns=2;s=fill2", series = "fill2", type = "float" },
+    { node_id = "ns=2;s=fill3", series = "fill3", type = "float" },
+    { node_id = "ns=2;s=infeed", series = "infeed", type = "int" },
+    { node_id = "ns=2;s=release3", series = "release3", type = "int", writable = true },
+  ] },
+]
+
+[[table]]
+name = "outlets"
+sql = "SELECT outlet, count(*) AS sorted, avg(travel) AS travel FROM sorts GROUP BY outlet"

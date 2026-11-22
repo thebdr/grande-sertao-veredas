@@ -84,32 +84,42 @@ Keys (each required unless a default is given):
   what the cut ran from the bundle itself. Statements of what was run, written by the cut.
 
 ### How a release is cut (the recipe, `entrega cut <release>`)
-1. A clean tree at a commit of `main` that the whole suite passed (`cargo nextest run
-   --workspace`, the gate of `CLAUDE.md`). "Tested together" means two runs: that one, which
-   tests the components against each other from source, and the cut's own run of the bundle.
-2. The components and their versions read from the commit (git, not the working tree); a version
-   already shipped under another release with other code is refused (a release pins a version to
-   one tree).
+1. **HEAD of a clean tree**, cut from a fresh `origin/main`: the cut refuses a tree that differs
+   from HEAD and a release whose manifest exists. It runs the whole suite there first (`cargo
+   nextest run --workspace`, the gate of `CLAUDE.md`, behind the machine's lock), and refuses a
+   red one. "Tested together" means two runs: that one, which tests the components against each
+   other from source, and the cut's own run of the bundle (step 5). A **trial cut** (`--trial`)
+   skips the suite, says so in its manifest (`suite = "not run: a trial cut"`) and writes it
+   elsewhere: it proves the recipe and is never committed.
+2. The components, their versions and their executables read from the commit (git's objects, as
+   C-290 reads them); the recipe's data (`tools/entrega/maquina/maquina.toml`) too.
 3. **Built on the oldest system the release targets**, a builder machine of the tester machine's
-   own distribution (Debian 13, glibc 2.41) under QEMU with KVM: the commit's tree (`git archive`)
-   and its dependencies' sources (`cargo vendor`, as `Cargo.lock` pins them) handed in on a disk,
-   `cargo build --release --locked --offline` run inside under the toolchain the manifest states,
-   the executables handed back on another disk. Built on the development machine (Ubuntu 26.10,
+   own distribution (Debian 13, glibc 2.41) under QEMU with KVM, eight processors: the commit's
+   tree (`git archive`) and its dependencies' sources (`cargo vendor`, as `Cargo.lock` pins them)
+   handed in on a disk as a tar stream, `cargo build --release --locked --offline` run inside
+   under the toolchain the suite was tested with (the development machine's `rustc`), the
+   executables handed back on another disk. Built on the development machine (Ubuntu 26.10,
    glibc 2.44), portal and supervisão need `GLIBC_2.44` and do not start on Debian 13 (the probe
-   below); built on the oldest, they run there and on every newer system. The builder is the base
-   image with the C and C++ compiler and the Rust toolchain from rustup's official source, built
-   once per toolchain and kept in the cache. Each executable's symbol versions are then read and
-   held to the guest's glibc and libstdc++, so a binary that would not start on the tester machine
-   is refused at the cut, by name.
-4. The bundle assembled, `SHA256SUMS` written, the bundle extracted again into a scratch folder.
+   below); built on the oldest, they run there and on every newer system. The builder's disk is
+   the base image with the recipe's packages (a C and C++ compiler) and the toolchain from
+   rustup's official source, built once per toolchain and kept in the cache. Each executable's
+   symbol versions are then read (`objdump -p`) and held to the guest's glibc, libstdc++ and C++
+   ABI as the recipe states them, so a binary that would not start on the tester machine is
+   refused at the cut, by name.
+4. **The bundle** assembled from git's objects at the commit and the built executables,
+   `SHA256SUMS` written, packed with its entries in name order, owned by root and dated at the
+   commit (one commit packs to the same bytes), then extracted again and its sums checked.
 5. **Run together**: from the extracted bundle, the bench started on `planta/bench.toml`, then
    supervisão on `planta/supervisao.toml`, which starts the plant's portal session through
-   portal's library; the cut waits until the session's objects carry live values from both the
-   bench's OPC UA server and its log emitter, the layout's markers move, and a write the binding
-   offers is refused by portal's switch (the plant ships disarmed); then both are stopped by
-   closing their stdin and must exit 0.
-6. The manifest written, naming the commit and what was run; the person cutting commits it under
-   `releases/` and pushes. A git tag `suite-<release>` on the commit is Q432's.
+   portal's library. The plant is copied and only its ports change, to free ones on the loopback
+   (the bench's OPC UA port, the project's endpoint, supervisão's address), so the run never meets
+   another on the machine. The cut waits until every object of the loop carries a value, reads
+   the object feed twice: every object live, both sources live, both parcels moved along the
+   loop; posts the write the binding offers and sees portal's switch refuse it (the plant ships
+   disarmed); then closes both stdins and sees both exit 0.
+6. **The manifest** written into `releases/` only then, naming the commit and what was run, and
+   checked like any other (C-290); the person cutting commits it and pushes. The bundle stays under
+   `target/entrega/<release>/`. A git tag `suite-<release>` on the commit is Q432's.
 
 A MAJOR bump of `veredas-core` ripples (the plan): every dependent's next version is cut only once
 it has been rebuilt and retested against it, which the cut sees as the suite green at the commit.
@@ -128,29 +138,38 @@ it has been rebuilt and retested against it, which the cut sees as the suite gre
 Neither needs Rust, Node, git or a network beyond the machine.
 
 ### What it holds
-- **The release**, its bundle installed under `/opt/veredas/<release>/`, `/opt/veredas/current`
-  pointing at it, the executables on every user's `PATH`.
+- **The release**, its bundle installed under `/opt/veredas/<bundle>/`, `/opt/veredas/current`
+  pointing at it, the executables on every user's `PATH`; a service checks its files against
+  `SHA256SUMS` at every boot and says so on the console and in the journal.
 - **A plant from the first boot**: `planta/`, "the loop" of `docs/binding-schema.md` (a loop with
   three outlets, two parcels and an infeed) fed by a bench file of its own: the controller's OPC UA
   server with the parcels' places ramping along the loop, the outlets filling, the speed drawn, and
-  a log emitter writing the sorter's lines the project's capture rule reads. Two services start at
-  boot, `veredas-bancada` (the bench) and `veredas-supervisao` (supervisão serving the plant), and
-  restart on failure; their output is in the journal. The plant ships disarmed: the binding's
-  "Release" is offered and portal refuses it.
+  a log emitter writing the sorter's lines the project's capture rule reads
+  (`tools/entrega/planta/`, copied into the user's home, where the tester edits it). Two services
+  start at boot as the user, `veredas-bancada` (the bench) and `veredas-supervisao` (supervisão
+  serving the plant), and restart on failure; their output is in the journal. Each executable
+  runs until its stdin closes, so a service holds it open with a pipe and its stop ends it
+  abruptly, which the bench and an in-memory store bear (a clean stop on a signal is asked of
+  maquinar, portal and supervisão). The plant ships disarmed: the binding's "Release" is offered
+  and portal refuses it.
 - **Supervisão reachable from the host**: the plant's supervisão file binds every interface of
   the machine on port 8902, so the host's browser reaches it at the machine's address (Q439);
   inside, the machine's browser opens it at login.
 - **A browser**: Chromium, the engine supervisão's page is tested on (C-051 and its siblings drive
   Chrome for Testing).
-- **A desktop**, Xfce (Q434), logged in automatically, with the browser on the plant, a terminal,
-  a text editor for the plant's files, and the docs one click away (`/opt/veredas/current/docs`).
+- **A desktop**, Xfce (Q434) under LightDM, logged in automatically, its panel set up beforehand
+  so no first-start dialog asks, the browser opened on the plant at login, a terminal, a text
+  editor for the plant's files, and on the desktop the docs (`/opt/veredas/current/docs`), the
+  plant and a short guide (`tools/entrega/maquina/guide.md`).
+- **A network that takes any card**: NetworkManager, the build's card-bound configuration removed,
+  so VMware's card (its own address, NAT or bridged) comes up by DHCP.
 - **The guest tools**: `open-vm-tools` and its desktop part, so VMware sizes the screen, shares
   the clipboard, keeps the clock and shuts the machine down cleanly.
 - **Later**: Oficina (Qt Quick on X11 first, its foundations name a virtual machine without a GPU
   as a host, where it switches to software drawing), then each component as it reaches a release.
 - **A user**, `veredas` (Q438), the only account that logs in; no SSH server.
 
-### How the image is built (the recipe, `entrega maquina <bundle>`)
+### How the image is built (the recipe, `entrega maquina <release>`)
 Everything below runs as the user, without sudo, without VMware, packer or docker (what this
 machine was found able to do is the next section). The recipe's choices that are the architect's
 (the distribution, the desktop, the user, the virtual hardware) are data in one stamped file,
@@ -164,17 +183,20 @@ edit of that file.
 2. **The disk**: a copy-on-write overlay of the base, grown to the size `maquina.toml` gives.
 3. **Provisioning, unattended**: the overlay booted under QEMU with KVM, headless, the serial
    console written to a log; a NoCloud seed (an ISO labelled `cidata`, written by `xorriso`)
-   carries the cloud-init user data and the bundle. The first boot installs the desktop, the
-   browser and the guest tools from the distribution's mirror, installs the bundle and the plant,
-   the services and the autologin, creates the user, then disables cloud-init, empties the package
-   cache, zeroes the free space and powers off; the recipe waits for the power-off within a bound
-   and refuses a log without the provisioning's last line.
+   carries the cloud-init user data, and a data disk carries the release's bundle, the guide and
+   the provisioning script as a tar stream. The first boot installs the recipe's packages (the
+   desktop, the browser, the guest tools, NetworkManager) from the distribution's mirror, removes
+   the SSH server, creates the user, installs the bundle and the plant, the services and the
+   autologin, hands the network to NetworkManager, disables cloud-init, empties the package cache,
+   blanks the machine's identity (each import draws its own), trims the free space and powers off;
+   the recipe waits for the power-off within a bound and refuses a log without the provisioning's
+   last line. The release's recipe and guide are read at the commit its manifest names.
 4. **The shipped disk**: the overlay flattened by `qemu-img convert` into a stream-optimized VMDK,
    VMware's compressed format for an OVA.
 5. **The package**: an OVF descriptor for VMware's virtual hardware (Q435's version; a
-   paravirtual SCSI controller, a VMXNET3 network card, VMware's SVGA display, BIOS firmware, 2
-   processors and 4 GB by default), the VMDK and a `.mf` of their SHA-256 sums, tarred in that
-   order into `veredas-<release>.ova`.
+   paravirtual SCSI controller, a VMXNET3 network card on a network named `nat`, a video card,
+   BIOS firmware, 2 processors and 4 GB by default), the VMDK and a `.mf` of their SHA-256 sums,
+   tarred in that order (ustar, owned by root) into `veredas-<release>.ova`.
 
 ### How a build is proven
 - **The shipped disk boots on VMware's devices**: the VMDK taken out of the OVA, never the
@@ -182,10 +204,15 @@ edit of that file.
   `pvscsi` and `vmxnet3`), copy-on-write so the proof changes nothing shipped. QEMU's
   `vmware-svga` is older than today's `vmwgfx` driver accepts, so the display is VMware's to
   prove; the proof boot draws on QEMU's standard VGA.
-- **The plant runs from the first boot**, with nobody logged in: from the host, through a port
-  QEMU forwards to the machine's 8902, the test reads supervisão's page and the plant's object
-  feed and sees the parcels move and the sorter's lines arrive; a write the binding offers is
-  refused by portal's switch; the executables in the machine are the bundle's (their sums).
+- **The network takes VMware's card**: the proof boot gives the card an address of VMware's
+  prefix that the provisioning never saw.
+- **The plant runs from the first boot**: from the host, through a port QEMU forwards to the
+  machine's 8902, the test reads supervisão's page and the plant's object feed and sees every
+  object live, the parcels move and the sorter's lines arrive; a write the binding offers is
+  refused by portal's switch; the release's files are the bundle's (the boot's check of their
+  sums, on the console).
+- **The desktop draws the page**: a screen dump over QEMU's monitor shows a screen of many
+  colours, not a console.
 - **The package is what it says**: the OVA's members in order, the descriptor naming the disk with
   its size and capacity, the `.mf` sums matching the members.
 - What only VMware proves is listed below, and stays the architect's to try.
@@ -288,5 +315,12 @@ Recorded as the work meets them.
   card**: cloud-init writes a netplan matched to the card it saw, which VMware's card (another
   address) would not match once cloud-init is disabled. The provisioning removes the server and
   hands the network to a configuration that takes any wired card.
+- **agetty hangs up the serial line when it starts**: a build whose output went to `/dev/ttyS0`
+  from cloud-init's first stage lost every line once the login prompt came up, and only the exit
+  code, written by a later `echo`, arrived. A guest's long job logs to a file, which comes back on
+  a disk, and its tail is echoed to the console after.
+- **`/tmp` is a tmpfs of the machine's memory, shared by every session**, and its quota for the
+  user ran out at 20 GB ("Disk quota exceeded"). Disks, bundles and OVAs go under `target/entrega/`
+  or the cache, never in `/tmp`.
 - **Debian's image has no `strings`** (binutils is not installed): what the guest is asked is
   answered with its own tools, or read on the host.

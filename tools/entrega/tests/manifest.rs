@@ -356,7 +356,7 @@ fn the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused() {
     );
     let usage = Command::new(env!("CARGO_BIN_EXE_entrega")).output().unwrap();
     assert_eq!(usage.status.code(), Some(1));
-    assert_eq!(String::from_utf8(usage.stderr).unwrap(), "usage: entrega check [<manifest.toml>...]\n");
+    assert_eq!(String::from_utf8(usage.stderr).unwrap(), "usage: entrega check [<manifest.toml>...]\n       entrega cut <release> [--trial] [--out <dir>]\n       entrega maquina <release>\n");
 }
 
 #[test]

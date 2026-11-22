@@ -1,0 +1,35 @@
+# The tester machine's plant, played by the bench (docs/entrega-plan.md, "What it holds"): the
+# controller of the loop in docs/binding-schema.md on OPC UA, its parcels moving along the loop and
+# its outlets filling, and the sorter's log. Invented, named for its shape.
+format = "veredas-bench"
+version = 1
+out_dir = "logs"
+
+[[emitter]]
+name = "sorter"
+template = "{ts} SORT outlet={outlet} travel={travel} rate={rate}"
+ts_format = "%Y-%m-%d %H:%M:%S%.3f"
+values = [
+  { name = "outlet", low = 1, high = 3 },
+  { name = "travel", low = 4.0, high = 9.0, decimals = 2 },
+  { name = "rate", low = 97.5, high = 100.0, decimals = 1 },
+]
+interval_ms = 1000
+file = "%Y%m%d_sorts{n}.log"
+max_lines = 20000
+
+[[opc]]
+name = "plc"
+port = 4855
+tags = [
+  { id = "speed", type = "float", value = "1.5", randomize = { low = 1.2, high = 1.8, decimals = 2, interval_ms = 2000 } },
+  { id = "p1", type = "float", value = "0", ramp = { low = 0, high = 100, step = 0.5, decimals = 1, interval_ms = 100 } },
+  { id = "p2", type = "float", value = "50", ramp = { low = 0, high = 100, step = 0.5, decimals = 1, interval_ms = 100 } },
+  { id = "fill1", type = "float", value = "35", ramp = { low = 0, high = 100, step = 1, decimals = 0, interval_ms = 700 } },
+  { id = "fill2", type = "float", value = "85", ramp = { low = 0, high = 100, step = 1, decimals = 0, interval_ms = 400 } },
+  { id = "fill3", type = "float", value = "10", ramp = { low = 0, high = 100, step = 1, decimals = 0, interval_ms = 1000 } },
+  { id = "infeed", type = "int", value = "1" },
+  { id = "release3", type = "int", value = "0", access = "read-write" },
+]
+# Outlet 3's release empties it, once a project arms its writes (this plant's does not).
+reactions = [ { on_write = "release3", equals = "1", tag = "fill3", then = [ { after_ms = 500, set = "0" } ] } ]

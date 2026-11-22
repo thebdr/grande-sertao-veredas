@@ -17,7 +17,27 @@ semver = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
+# The object feed and portal's answers, read by the cut's run of the bundle.
+serde_json = { workspace = true }
+# The bundle's sums, the OVA's manifest, the base image's check.
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # Throwaway repositories for the manifest's check against history, removed when a test ends.
 tempfile = { workspace = true }
+
+[features]
+# The cut's own test (tests/cut.rs): a trial cut builds the suite in release mode inside the builder
+# machine, minutes even with its disk cached; run by its own command (docs/questions.md Q440).
+corte = []
+# The tester machine's test (tests/maquina.rs): a trial cut, then the image provisioned from the
+# distribution's mirror and booted; the base image downloaded once, KVM needed (Q440).
+maquina = []
+
+[[test]]
+name = "cut"
+required-features = ["corte"]
+
+[[test]]
+name = "maquina"
+required-features = ["maquina"]

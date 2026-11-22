@@ -1,0 +1,129 @@
+# The loop's binding: the objects of docs/binding-schema.md's worked example, bound to the
+# bench's controller and the sorter's log.
+format = "veredas-binding"
+version = 1
+title = "The loop"
+layout = "layout.svg"
+headline = ["speed", "read-rate"]
+
+[[object]]
+id = "speed"
+label = "Loop speed"
+value = { source = "plc", series = "speed" }
+unit = "m/s"
+decimals = 1
+states = [ { below = 0.5, state = "warn", word = "slow" } ]
+normal = "running"
+
+[[object]]
+id = "read-rate"
+label = "Read rate"
+value = { source = "sorter", series = "rate" }
+unit = "%"
+decimals = 1
+states = [ { below = 98.0, state = "alarm", word = "under 98 %" } ]
+stale_after_ms = 30000
+
+[[object]]
+id = "infeed"
+label = "Infeed"
+value = { source = "plc", series = "infeed" }
+states = [
+  { equals = 0, state = "warn", word = "stopped" },
+  { equals = 2, state = "alarm", word = "fault" },
+]
+normal = "running"
+
+[[object]]
+id = "outlet-1"
+label = "Outlet 1"
+value = { source = "plc", series = "fill1" }
+unit = "%"
+decimals = 0
+show = "level"
+states = [ { at_least = 100, state = "warn", word = "full" }, { at_least = 80, state = "near", word = "near full" } ]
+
+[[object]]
+id = "outlet-2"
+label = "Outlet 2"
+value = { source = "plc", series = "fill2" }
+unit = "%"
+decimals = 0
+show = "level"
+states = [ { at_least = 100, state = "warn", word = "full" }, { at_least = 80, state = "near", word = "near full" } ]
+
+[[object]]
+id = "outlet-3"
+label = "Outlet 3"
+value = { source = "plc", series = "fill3" }
+unit = "%"
+decimals = 0
+show = "level"
+states = [ { at_least = 100, state = "warn", word = "full" }, { at_least = 80, state = "near", word = "near full" } ]
+actions = [ { label = "Release", source = "plc", tag = "ns=2;s=release3", value = "1" } ]
+
+[[object]]
+id = "parcel-1"
+label = "Parcel 1"
+value = { source = "plc", series = "p1" }
+show = "move"
+path = "loop"
+
+[[object]]
+id = "parcel-2"
+label = "Parcel 2"
+value = { source = "plc", series = "p2" }
+show = "move"
+path = "loop"
+
+[[dashboard]]
+name = "Overview"
+columns = 4
+
+[[dashboard.panel]]
+kind = "value"
+object = "read-rate"
+target = 99.0
+
+[[dashboard.panel]]
+kind = "trend"
+object = "read-rate"
+minutes = 60
+limit = { below = 98.0 }
+span = 2
+
+[[dashboard.panel]]
+kind = "bars"
+object = "speed"
+minutes = 60
+bucket_minutes = 5
+aggregate = "mean"
+target = 1.5
+
+[[dashboard.panel]]
+kind = "timeline"
+objects = ["infeed"]
+minutes = 60
+
+[[dashboard.panel]]
+kind = "grid"
+objects = ["outlet-*"]
+
+[[dashboard.panel]]
+kind = "levels"
+objects = ["outlet-*"]
+ticks = [80, 90]
+
+[[dashboard.panel]]
+kind = "table"
+table = "outlets"
+columns = [ { name = "outlet" }, { name = "sorted", bar = true }, { name = "travel", decimals = 1 } ]
+sort = { column = "sorted", descending = true }
+
+[[dashboard.panel]]
+kind = "cells"
+table = "sorts"
+key = "outlet"
+value = "travel"
+minutes = 60
+spread = 10.0
