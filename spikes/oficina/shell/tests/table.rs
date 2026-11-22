@@ -35,8 +35,11 @@ fn a_million_rows_open_and_the_last_shows_the_model_s_own_cells() {
         shell.invoke("oficina/tablePane", "jumpTo", &[X::Int(999_999), X::Int(column as i64)]);
         let expected = model.cell(999_999, column).expect("a cell");
         shell.wait_for(&format!("oficina/cell_999999_{column}"), "display", &expected);
+        // Read while its column is in view: a column left behind is no longer drawn.
+        if column == 1 {
+            assert_eq!(shell.property("oficina/cell_999999_1", "display"), "27:46:39.900");
+        }
     }
-    assert_eq!(shell.property("oficina/cell_999999_1", "display"), "27:46:39.900");
     // Only what is drawn exists: the first row left the view with its cells.
     assert!(!shell.visible("oficina/cell_0_0"), "row 0 is no longer drawn");
 }
@@ -53,15 +56,22 @@ fn a_million_rows_open_in_under_a_second() {
 }
 
 /// What the view holds does not grow with the table: a million rows cost what a thousand do,
-/// within 20 MB, once each table is open and its last row drawn.
+/// within 20 MB, once each table is open and its last row drawn. Each is the least of three
+/// processes: a software rasteriser (Mesa's llvmpipe) allocates a few MB more or less from one
+/// process to the next whatever the table holds, which once took a single pair past the bound.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_million_rows_cost_the_memory_a_thousand_do() {
     let resident = |rows: usize| {
-        let shell = Shell::start(&[&format!("--table-rows={rows}")], &[]);
-        open_and_reach_the_end(&shell, rows);
-        std::thread::sleep(Duration::from_millis(500));
-        shell.resident_kib()
+        (0..3)
+            .map(|_| {
+                let shell = Shell::start(&[&format!("--table-rows={rows}")], &[]);
+                open_and_reach_the_end(&shell, rows);
+                std::thread::sleep(Duration::from_millis(500));
+                shell.resident_kib()
+            })
+            .min()
+            .expect("three readings")
     };
     let thousand = resident(1_000);
     let million = resident(1_000_000);

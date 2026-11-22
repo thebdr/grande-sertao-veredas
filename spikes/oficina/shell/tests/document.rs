@@ -69,8 +69,15 @@ fn select_in_text(shell: &Shell, text: &str, what: &str) {
     let at = text.find(what).unwrap_or_else(|| panic!("no {what:?} in the text"));
     let start = text[..at].encode_utf16().count() as i64;
     let end = start + what.encode_utf16().count() as i64;
-    shell.click("oficina/textView");
-    shell.wait_for("oficina/textView", "activeFocus", "true");
+    // Clicked where a person sees it, unless the caret is already there: the text view grows with
+    // its text, so its own centre can lie below the part shown (X11's larger rows put it there for
+    // this file); and a click lands after Spix answers, so one sent while the text has the focus
+    // could land after the selection below and undo it.
+    if shell.property("oficina/textView", "activeFocus") != "true" {
+        shell.click("oficina/textScroll");
+        shell.wait_for("oficina/textView", "activeFocus", "true");
+        std::thread::sleep(Duration::from_millis(200));
+    }
     shell.invoke("oficina/textView", "select", &[X::Int(start), X::Int(end)]);
     shell.wait_for("oficina/textView", "selectedText", what);
 }

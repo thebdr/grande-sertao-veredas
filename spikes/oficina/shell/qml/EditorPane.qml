@@ -129,6 +129,9 @@ Rectangle {
         }
 
         ScrollView {
+            // What a person clicks to type in the text: its visible part (the text view itself grows
+            // with its text, its centre below the view for a long file).
+            objectName: "textScroll"
             SplitView.fillWidth: true
             TextArea {
                 id: textView
