@@ -427,3 +427,17 @@ Recorded as the port meets them.
   polling the store (or one heavy window) held every pass behind that lock: 16 passes in 16
   seconds. Whatever the pump reads, it reads through the ingest connection, which nobody else
   holds; a reader blocked for good (an export into a pipe nobody opens) proves it.
+- **A sniffer that collapses a ragged file hides its dialect** (C-041, round 4). On a ragged file
+  quoted with `'`, the engine's sniffer settles on `|` and one column; asked to pad
+  (`sniff_csv(..., null_padding=true)`) it names `,` and `'`. And the padded reader refuses a quoted
+  line break unless it runs on one thread (`parallel=false`), and a forced reader left to find its
+  own quote may find none and refuse what it reads whole when given one: the sniffer's quote and
+  escape are always written out, empty for one it did not see (round 5). The raggedness count
+  reads the file in that dialect as the engine does: a quote opens only at a field's start, a row
+  ends at LF, CRLF or a bare CR, the window counts rows and a blank line moves it by none; a count
+  that fails is the read's refusal, never a total of nothing.
+- **A public name of portal is supervisão's business too.** Supervisão's policy test reads portal's
+  public functions and fields by name and refuses one its own sources hold that it has not
+  reviewed: `CsvOptions.escape` and a session's `window` failed it (supervisão names an HTML
+  `escape` and its time windows). New public names are checked against supervisão's sources, or
+  run its `writes` test, before they land.

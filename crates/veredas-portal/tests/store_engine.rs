@@ -847,3 +847,122 @@ fn a_trailing_run_s_header_is_decided_by_text_columns_or_an_unreadable_cell() {
     let rows: Vec<(String, String, String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
     assert_eq!(rows, vec![("p".to_string(), "q".to_string(), "r".to_string(), "s".to_string())]);
 }
+
+/// The padded reader on one thread, as the store forces it, and the sniffer's dialect, which the
+/// store's raggedness check and its forced reader take (C-041's fourth round): on a ragged file
+/// a quoted line break is refused by the parallel padded reader and read whole by the one-thread
+/// one; the one-thread reader keeps the window's edge (a long last row on line 2 048 widening the
+/// schema, on 2 049 refusing the read by its line) and reads lines ending in a bare carriage
+/// return; the sniffer reports a quote and an escape it did not see as `(empty)`, the `'` of a
+/// regular file quoted with it, a bare carriage return as the line ending, and, asked to pad, the
+/// delimiter, quote and escape of a ragged file it otherwise collapses on `|`.
+#[test]
+fn the_one_thread_padded_reader_and_the_sniffer_s_dialect() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    let file = |name: &str, body: &str| {
+        let p = dir.path().join(name);
+        std::fs::write(&p, body).unwrap();
+        sql_path(&p)
+    };
+    let err = |sql: &str| conn.prepare(sql).and_then(|mut s| s.query_row([], |r| r.get::<_, i64>(0))).unwrap_err().to_string();
+    let rows = |sql: &str| -> Vec<Vec<String>> {
+        let mut stmt = conn.prepare(sql).unwrap();
+        let mut out = Vec::new();
+        let mut q = stmt.query([]).unwrap();
+        let n = q.as_ref().unwrap().column_count();
+        while let Some(r) = q.next().unwrap() {
+            out.push((0..n).map(|i| match r.get::<_, Value>(i).unwrap() { Value::Null => "∅".to_string(), Value::Text(t) => t, Value::BigInt(v) => v.to_string(), other => format!("{other:?}") }).collect());
+        }
+        out
+    };
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    // A quoted line break.
+    let qnl = file("qnl.csv", "a,b,c\n1,\"x\ny\",3\n4,5\n6,7,8\n");
+    let e = err(&format!("SELECT count(*) FROM read_csv('{qnl}', delim=',', null_padding=true)"));
+    assert!(e.contains("CSV Error on Line: 2"), "{e}");
+    assert_eq!(rows(&format!("SELECT * FROM read_csv('{qnl}', delim=',', null_padding=true, parallel=false)")), vec![s(&["1", "x\ny", "3"]), s(&["4", "5", "∅"]), s(&["6", "7", "8"])]);
+    // The window's edge on one thread.
+    let edge = |line: usize| {
+        let mut body = String::from("a,b,c\n");
+        for i in 2..line {
+            body.push_str(&format!("{i},1,2\n"));
+        }
+        body.push_str("9,9,9,9\n");
+        file(&format!("edge{line}.csv"), &body)
+    };
+    let one = |p: &str| format!("read_csv('{p}', delim=',', null_padding=true, parallel=false)");
+    assert_eq!(rows(&format!("SELECT count(*), count(column3) FROM {}", one(&edge(2048)))), vec![s(&["2047", "1"])]);
+    let e = err(&format!("SELECT count(*) FROM {}", one(&edge(2049))));
+    assert!(e.contains("CSV Error on Line: 2049"), "{e}");
+    // Lines ending in a bare carriage return.
+    let cr = file("cr.csv", "a,b,c\r1,2,3\r4,5,6\r9,9,9,9\r");
+    assert_eq!(rows(&format!("SELECT * FROM {}", one(&cr))), vec![s(&["1", "2", "3", "∅"]), s(&["4", "5", "6", "∅"]), s(&["9", "9", "9", "9"])]);
+    // The sniffer's dialect.
+    let dialect = |p: &str, extra: &str| rows(&format!("SELECT Delimiter, Quote, Escape, NewLineDelimiter FROM sniff_csv('{p}'{extra})")).remove(0);
+    assert_eq!(dialect(&file("plain.csv", "a,b\n1,2\n"), ""), s(&[",", "(empty)", "(empty)", "\\n"]));
+    assert_eq!(dialect(&file("squote.csv", "a,b\n'x\ny',2\n3,4\n"), ""), s(&[",", "'", "(empty)", "\\n"]));
+    assert_eq!(dialect(&cr, ""), s(&[",", "(empty)", "(empty)", "\\r"]));
+    let sragged = file("sragged.csv", "a,b,c\n'x,y',2,3\n4,5\n6,7,8\n");
+    assert_eq!(dialect(&sragged, "")[0], "|", "collapsed when it is not asked to pad");
+    assert_eq!(dialect(&sragged, ", null_padding=true")[..2], s(&[",", "'"]));
+    let escaped = file("escaped.csv", "a,b,c\n\"x\\\",y\",2,3\n4,5\n6,7,8\n");
+    assert_eq!(dialect(&escaped, "")[0], "|");
+    assert_eq!(dialect(&escaped, ", null_padding=true")[..3], s(&[",", "\"", "\\"]));
+}
+
+/// What the store's forced reader and its raggedness count rest on (C-041's fifth round): a
+/// forced reader given a quote reads with it, and left to find its own it may pick none and
+/// refuse a file it reads whole with one; it opens a quote only at a field's start, and with no
+/// quote at all (`quote=''`) a `"` is text; its window counts rows, a blank line moving it by
+/// none; the sniffer prints a tab delimiter as the tab itself.
+#[test]
+fn the_forced_reader_s_quote_its_window_s_rows_and_the_sniffer_s_tab() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = Connection::open_in_memory().unwrap();
+    let file = |name: &str, body: &str| {
+        let p = dir.path().join(name);
+        std::fs::write(&p, body).unwrap();
+        sql_path(&p)
+    };
+    let count = |sql: &str| conn.query_row(sql, [], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)));
+    // A quoted line break, then a long row on the 2 048th row.
+    let mut body = String::from("a,b,c\n1,\"x\ny\",3\n");
+    for i in 3..2048 {
+        body.push_str(&format!("{i},1,2\n"));
+    }
+    body.push_str("9,9,9,9\n");
+    let late = file("late.csv", &body);
+    let given = format!("read_csv('{late}', delim=',', quote='\"', escape='\"', null_padding=true, parallel=false)");
+    assert_eq!(count(&format!("SELECT count(*), count(column3) FROM {given}")).unwrap(), (2047, 1));
+    let cell: String = conn.query_row(&format!("SELECT b FROM {given} WHERE a = 1"), [], |r| r.get(0)).unwrap();
+    assert_eq!(cell, "x\ny");
+    let e = count(&format!("SELECT count(*), 0 FROM read_csv('{late}', delim=',', null_padding=true, parallel=false)")).unwrap_err().to_string();
+    assert!(e.contains("CSV Error on Line: 2049"), "left to find its own quote: {e}");
+    // A `"` inside a field is text, with no quote and with `"` alike.
+    let inches = file("inches.csv", "item,size,qty\nruler,12\" long,3\npipe,M8,2\nbolt,M8,3/4\" wide,5\n");
+    for quote in ["quote='', escape=''", "quote='\"', escape='\"'"] {
+        let scan = format!("read_csv('{inches}', delim=',', {quote}, null_padding=true, parallel=false)");
+        assert_eq!(count(&format!("SELECT count(*), count(column3) FROM {scan}")).unwrap(), (4, 1), "{quote}");
+        let cells: Vec<String> = conn.prepare(&format!("SELECT column1 FROM {scan}")).unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(cells, ["size", "12\" long", "M8", "M8"], "{quote}");
+    }
+    // A blank line moves the window by none: a long row on line 2 049 after one is the 2 048th
+    // row and widens the schema; on line 2 050 it refuses the read by that line.
+    let blank = |line: usize| {
+        let mut s = String::from("a,b,c\n\n");
+        for i in 3..line {
+            s.push_str(&format!("{i},1,2\n"));
+        }
+        s.push_str("9,9,9,9\n");
+        file(&format!("blank{line}.csv"), &s)
+    };
+    let scan = |p: &str| format!("read_csv('{p}', delim=',', quote='', escape='', null_padding=true, parallel=false)");
+    assert_eq!(count(&format!("SELECT count(*), count(column3) FROM {}", scan(&blank(2049)))).unwrap(), (2047, 1));
+    let e = count(&format!("SELECT count(*), 0 FROM {}", scan(&blank(2050)))).unwrap_err().to_string();
+    assert!(e.contains("CSV Error on Line: 2050"), "{e}");
+    // The sniffer's tab.
+    let tabs = file("tabs.csv", "a\tb\tc\n1\t2\t3\n4\t5\t6\n9\t9\t9\t9\n");
+    let d: String = conn.query_row(&format!("SELECT Delimiter FROM sniff_csv('{tabs}')"), [], |r| r.get(0)).unwrap();
+    assert_eq!(d, "\t");
+}

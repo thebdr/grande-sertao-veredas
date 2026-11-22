@@ -1254,7 +1254,7 @@ pub fn from_v1(dir: &Path) -> Result<Migrated, ProjectError> {
         }
         if !t.csv_path.trim().is_empty() {
             let d = t.csv_delim.trim();
-            let scan = csv_scan_sql(&t.csv_path, &CsvOptions { delim: (!d.is_empty()).then(|| d.to_string()), decimal_comma: t.csv_decimal_comma });
+            let scan = csv_scan_sql(&t.csv_path, &CsvOptions { delim: (!d.is_empty()).then(|| d.to_string()), decimal_comma: t.csv_decimal_comma, ..CsvOptions::default() });
             pending.push(TableFile { name: t.name.clone(), sql: format!("SELECT * FROM {scan}") });
         } else if !t.sql.trim().is_empty() {
             pending.push(TableFile { name: t.name.clone(), sql: t.sql.trim().to_string() });

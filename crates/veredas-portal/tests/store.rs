@@ -13,6 +13,22 @@ use veredas_portal::opc::{OpcRuleConfig, OpcSourceConfig, OpcTagConfig, compile,
 use veredas_portal::store::*;
 use veredas_portal::{CaptureRule, Sample, SeriesRef, SeriesType, SourceId, Value};
 
+/// The options of a file read in `d` with the reader's own quote and escape.
+fn delim(d: &str) -> CsvOptions {
+    CsvOptions { delim: Some(d.to_string()), ..CsvOptions::default() }
+}
+
+/// The options a ragged file is forced onto: the sniffer's delimiter, quote and escape, written
+/// out (empty for one it did not see).
+fn dialect(d: &str, quote: &str, escape: &str) -> CsvOptions {
+    CsvOptions { delim: Some(d.to_string()), quote_char: Some(quote.to_string()), escape_char: Some(escape.to_string()), decimal_comma: false }
+}
+
+/// A file the sniffer saw no quote in.
+fn unquoted(d: &str) -> CsvOptions {
+    dialect(d, "", "")
+}
+
 fn ram() -> DuckStore {
     DuckStore::open(&Residency::Ram, &[], &[]).unwrap()
 }
@@ -493,7 +509,14 @@ fn the_csv_sniffer_adopts_a_decimal_comma_only_when_it_strictly_improves_the_typ
     assert!(!dc(&text));
     assert!(sniff_csv_options("   ").is_err());
     assert_eq!(csv_scan_sql(" /p/a's.csv ", &CsvOptions::default()), "read_csv_auto('/p/a''s.csv')");
-    assert_eq!(csv_scan_sql("x.csv", &CsvOptions { delim: Some(";".into()), decimal_comma: true }), "read_csv('x.csv', delim=';', null_padding=true, decimal_separator=',')");
+    assert_eq!(
+        csv_scan_sql("x.csv", &CsvOptions { delim: Some(";".into()), decimal_comma: true, ..CsvOptions::default() }),
+        "read_csv('x.csv', delim=';', null_padding=true, parallel=false, decimal_separator=',')"
+    );
+    assert_eq!(
+        csv_scan_sql("x.csv", &CsvOptions { delim: Some(",".into()), quote_char: Some("'".into()), escape_char: Some("\\".into()), decimal_comma: false }),
+        r"read_csv('x.csv', delim=',', quote='''', escape='\', null_padding=true, parallel=false)"
+    );
 }
 
 #[test]
@@ -525,13 +548,13 @@ fn the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves
     // Q17): a short row and a long row the sniffer would keep, drop or rename on its own terms
     // are read with every row kept, the short one padded, the long one widening the schema.
     let short = write("short.csv", "a,b,c\r\n1,2,3\r\n4,5\r\n6,7,8\r\n");
-    assert!(csv_is_ragged(&short, ","), "a short row is ragged");
+    assert!(csv_is_ragged(&short, &delim(",")), "a short row is ragged");
     let opts = sniff_csv_options(&short).unwrap();
     assert_eq!(opts.delim.as_deref(), Some(","), "the padded reader, forced by the sniffer's delimiter");
     let page = preview_csv(&short, 10, &opts).unwrap();
     assert_eq!((page.total, page.columns.len()), (3, 3), "{:?}", page.columns);
     let long = write("long.csv", "a;b\r\n1;2\r\n3;4;5\r\n6;7\r\n");
-    assert!(csv_is_ragged(&long, ";"));
+    assert!(csv_is_ragged(&long, &delim(";")));
     let opts = sniff_csv_options(&long).unwrap();
     assert_eq!(opts.delim.as_deref(), Some(";"));
     let page = preview_csv(&long, 10, &opts).unwrap();
@@ -539,7 +562,7 @@ fn the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves
     // A regular file stays the sniffer's: a delimiter inside quotes is no field, a blank last
     // line is no row, and a ragged row past the 2 048-line window is not the window's to count.
     let regular = write("regular.csv", "a,b\r\n\"x,y\",2\r\n3,4\r\n\r\n");
-    assert!(!csv_is_ragged(&regular, ","));
+    assert!(!csv_is_ragged(&regular, &delim(",")));
     assert_eq!(sniff_csv_options(&regular).unwrap().delim, None);
     let mut far = String::from("a,b\r\n");
     for i in 0..2100 {
@@ -547,14 +570,14 @@ fn the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves
     }
     far.push_str("1,2,3\r\n");
     let far = write("far.csv", &far);
-    assert!(!csv_is_ragged(&far, ","), "a long row past the window is the engine's to refuse by its line");
+    assert!(!csv_is_ragged(&far, &delim(",")), "a long row past the window is the engine's to refuse by its line");
     let mut near = String::from("a,b\r\n");
     for i in 0..100 {
         near.push_str(&format!("{i},x\r\n"));
     }
     near.push_str("1,2,3\r\n");
-    assert!(csv_is_ragged(&write("near.csv", &near), ","));
-    assert!(!csv_is_ragged("nope.csv", ","), "a missing file is not ragged, it is an error elsewhere");
+    assert!(csv_is_ragged(&write("near.csv", &near), &delim(",")));
+    assert!(!csv_is_ragged("nope.csv", &delim(",")), "a missing file is not ragged, it is an error elsewhere");
 }
 
 // ---- the first refute round ------------------------------------------------------------------
@@ -791,4 +814,248 @@ fn a_negative_interval_keeps_its_sign() {
     let cell = |name: &str| page.rows[0][page.columns.iter().position(|c| c.name == name).unwrap()].clone();
     assert_eq!(cell("neg"), serde_json::json!("P0M0DT-1.500000000S"));
     assert_eq!(cell("pos"), serde_json::json!("P0M0DT1.500000000S"));
+}
+
+// ---- the fourth refute round (2026-11-22) ----------------------------------------------------
+
+/// A file `body` written as `name`, its path.
+fn csv_file(dir: &std::path::Path, name: &str, body: &str) -> String {
+    let p = dir.join(name);
+    std::fs::write(&p, body).unwrap();
+    p.display().to_string()
+}
+
+/// A header `a,b,c`, regular rows up to line `last - 1`, then `tail` from line `last` on.
+fn long_file(last: usize, tail: &str) -> String {
+    let mut s = String::from("a,b,c\n");
+    for i in 2..last {
+        s.push_str(&format!("{i},1,2\n"));
+    }
+    s.push_str(tail);
+    s
+}
+
+/// What a preview of `path` reads with the options the sniffer settles on: the total, the column
+/// names, the first rows.
+fn read_as_sniffed(path: &str) -> (CsvOptions, RowsPage) {
+    let opts = sniff_csv_options(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let page = preview_csv(path, 500, &opts).unwrap_or_else(|e| panic!("{path} with {opts:?}: {e}"));
+    (opts, page)
+}
+
+fn names(page: &RowsPage) -> Vec<&str> {
+    page.columns.iter().map(|c| c.name.as_str()).collect()
+}
+
+/// Q17's own case: a long row the sniffer does not collapse (it keeps the long row alone) takes
+/// the padded reader, every row kept; the 2 048-line window holds at its edge (a long last row
+/// on line 2 048 ragged and widening, on line 2 049 not the window's).
+#[test]
+fn a_long_row_the_sniffer_keeps_alone_takes_the_padded_reader_and_the_window_holds_at_its_edge() {
+    let dir = tempfile::tempdir().unwrap();
+    let last = csv_file(dir.path(), "last.csv", "a,b,c\n1,2,3\n4,5,6\n9,9,9,9\n");
+    assert!(!csv_looks_unsplit(&last, &CsvOptions::default()), "the sniffer does not collapse it");
+    assert_eq!(preview_csv(&last, 10, &CsvOptions::default()).unwrap().total, 1, "the sniffer alone keeps the long row only");
+    assert!(csv_is_ragged(&last, &delim(",")));
+    let (opts, page) = read_as_sniffed(&last);
+    assert_eq!(opts, unquoted(","));
+    assert_eq!((page.total, page.columns.len()), (3, 4), "{:?}", page.columns);
+    assert_eq!(page.rows[0], [serde_json::json!(1), serde_json::json!(2), serde_json::json!(3), serde_json::Value::Null]);
+    assert_eq!(page.rows[2], [serde_json::json!(9), serde_json::json!(9), serde_json::json!(9), serde_json::json!(9)]);
+
+    // The window's edge: the long row last, on line 2 047, 2 048 and 2 049.
+    let at = |line: usize| csv_file(dir.path(), &format!("edge{line}.csv"), &long_file(line, "9,9,9,9\n"));
+    assert!(csv_is_ragged(&at(2047), &delim(",")));
+    assert!(csv_is_ragged(&at(2048), &delim(",")), "line 2 048 is inside the window");
+    assert!(!csv_is_ragged(&at(2049), &delim(",")), "line 2 049 is past it");
+    let (opts, page) = read_as_sniffed(&at(2048));
+    assert_eq!(opts, unquoted(","));
+    assert_eq!((page.total, page.columns.len()), (2047, 4), "every row kept, the schema widened: {:?}", page.columns);
+    // A carriage return and line feed is one line end: the same edge in a CRLF file.
+    let crlf = |line: usize| csv_file(dir.path(), &format!("crlf{line}.csv"), &long_file(line, "9,9,9,9\n").replace('\n', "\r\n"));
+    assert!(csv_is_ragged(&crlf(2048), &delim(",")));
+    assert!(!csv_is_ragged(&crlf(2049), &delim(",")));
+}
+
+/// A file the sniffer cannot read at all is read padded in the delimiter that splits it widest:
+/// a long row inside the window with a row after it, a short row past the window. The sniffer's
+/// refusal stands where no delimiter splits it (a missing file).
+#[test]
+fn a_file_the_sniffer_refuses_is_read_padded_when_a_delimiter_splits_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let inside = csv_file(dir.path(), "inside.csv", &long_file(2048, "9,9,9,9\n7,7,7\n"));
+    assert!(csv_is_ragged(&inside, &delim(",")));
+    let (opts, page) = read_as_sniffed(&inside);
+    assert_eq!(opts, unquoted(","));
+    assert_eq!((page.total, page.columns.len()), (2048, 4), "{:?}", page.columns);
+    let short_far = csv_file(dir.path(), "short_far.csv", &long_file(2102, "4,5\n7,7,7\n"));
+    assert!(!csv_is_ragged(&short_far, &delim(",")), "the short row is past the window");
+    let (opts, page) = read_as_sniffed(&short_far);
+    assert_eq!(opts, unquoted(","));
+    assert_eq!((page.total, names(&page)), (2102, vec!["a", "b", "c"]), "every row kept, the short one padded");
+    let missing = dir.path().join("nope.csv").display().to_string();
+    let e = sniff_csv_options(&missing).unwrap_err().to_string();
+    assert!(e.contains("nope.csv"), "the sniffer's own refusal, naming the file: {e}");
+}
+
+/// A long row past the window is refused by its line, by the preview and by a page of the view
+/// over the file alike: never a total of nothing beside the rows a LIMIT read before the line.
+#[test]
+fn a_long_row_past_the_window_is_refused_by_its_line_never_a_total_of_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    // Ragged inside the window (a short row on line 3), and a long row on line 2 104.
+    let mut body = String::from("a,b,c\n1,2,3\n4,5\n");
+    for i in 0..2100 {
+        body.push_str(&format!("{i},1,2\n"));
+    }
+    body.push_str("9,9,9,9\n");
+    let file = csv_file(dir.path(), "far_long.csv", &body);
+    let opts = sniff_csv_options(&file).unwrap();
+    assert_eq!(opts, unquoted(","));
+    let e = preview_csv(&file, 10, &opts).unwrap_err().to_string();
+    assert!(e.contains("Line: 2104"), "the preview refused by the line: {e}");
+    let store = DuckStore::open(&Residency::Ram, &[], &[TableDef { name: "linked".into(), sql: format!("SELECT * FROM {}", csv_scan_sql(&file, &opts)) }]).unwrap();
+    let e = store.query_rows("linked", &RowsQuery { limit: 10, ..RowsQuery::default() }).unwrap_err().to_string();
+    assert!(e.contains("Line: 2104"), "the page refused by the line: {e}");
+    // Regular inside the window, the long row past it: the sniffer refuses the file, the padded
+    // reader takes it, and the read is refused by the long row's line.
+    let mut far = String::from("a,b\r\n");
+    for i in 0..2100 {
+        far.push_str(&format!("{i},x\r\n"));
+    }
+    far.push_str("1,2,3\r\n");
+    let far = csv_file(dir.path(), "far.csv", &far);
+    let opts = sniff_csv_options(&far).unwrap();
+    assert_eq!(opts, unquoted(","));
+    let e = preview_csv(&far, 10, &opts).unwrap_err().to_string();
+    assert!(e.contains("Line: 2102"), "{e}");
+}
+
+/// The padded reader keeps a quoted line break, and reads with the quote and the escape the
+/// sniffer saw; a regular file quoted otherwise than `"` stays the sniffer's. A line may end in a
+/// bare carriage return.
+#[test]
+fn quotes_escapes_and_line_endings_are_read_as_the_file_writes_them() {
+    let dir = tempfile::tempdir().unwrap();
+    // A quoted line break in a ragged file: every row kept, the cell whole.
+    let qnl = csv_file(dir.path(), "qnl.csv", "a,b,c\n1,\"x\ny\",3\n4,5\n6,7,8\n");
+    let (opts, page) = read_as_sniffed(&qnl);
+    assert_eq!(opts, dialect(",", "\"", ""));
+    assert_eq!((page.total, names(&page)), (3, vec!["a", "b", "c"]));
+    assert_eq!(page.rows[0][1], serde_json::json!("x\ny"));
+    assert_eq!(page.rows[1][2], serde_json::Value::Null, "the short row padded");
+    // A regular file quoted with `'`, a line break inside the quotes: not ragged in its own
+    // quote, the sniffer's to read.
+    let squote = csv_file(dir.path(), "squote.csv", "a,b\n'x\ny',2\n3,4\n");
+    assert!(csv_is_ragged(&squote, &delim(",")), "counted in `\"` it would look ragged");
+    assert!(!csv_is_ragged(&squote, &CsvOptions { quote_char: Some("'".into()), ..delim(",") }));
+    let (opts, page) = read_as_sniffed(&squote);
+    assert_eq!(opts, CsvOptions::default());
+    assert_eq!((page.total, page.rows[0][0].clone()), (2, serde_json::json!("x\ny")));
+    // A ragged file quoted with `'`: the padded reader with that quote.
+    let sragged = csv_file(dir.path(), "sragged.csv", "a,b,c\n'x,y',2,3\n4,5\n6,7,8\n");
+    let (opts, page) = read_as_sniffed(&sragged);
+    assert_eq!(opts, dialect(",", "'", ""));
+    assert_eq!((page.total, page.rows[0][0].clone(), page.rows[1][2].clone()), (3, serde_json::json!("x,y"), serde_json::Value::Null));
+    // A backslash escape inside quotes: an escaped quote is no quote.
+    let escaped = csv_file(dir.path(), "escaped.csv", "a,b,c\n\"x\\\",y\",2,3\n4,5\n6,7,8\n");
+    assert!(csv_is_ragged(&escaped, &CsvOptions { escape_char: Some("\\".into()), ..delim(",") }));
+    // Regular once the escape is honoured; an escaped quote taken for a closing one would leave
+    // the next quote open to the end of the file, and the row short.
+    let escaped_regular = csv_file(dir.path(), "escaped_regular.csv", "a,b\n\"x\\\",y\",2\n3,4\n");
+    assert!(!csv_is_ragged(&escaped_regular, &CsvOptions { escape_char: Some("\\".into()), ..delim(",") }));
+    assert!(csv_is_ragged(&escaped_regular, &delim(",")), "read without the escape it is ragged");
+    let (opts, page) = read_as_sniffed(&escaped);
+    assert_eq!(opts, dialect(",", "\"", "\\"));
+    assert_eq!((page.total, page.rows[0][0].clone()), (3, serde_json::json!("x\",y")));
+    // Lines ending in a bare carriage return: a long row seen, every row kept.
+    let cr = csv_file(dir.path(), "cr.csv", "a,b,c\r1,2,3\r4,5,6\r9,9,9,9\r");
+    assert!(csv_is_ragged(&cr, &delim(",")));
+    assert!(!csv_is_ragged(&csv_file(dir.path(), "cr_regular.csv", "a,b\r1,2\r3,4\r"), &delim(",")));
+    assert!(!csv_is_ragged(&csv_file(dir.path(), "crlf_regular.csv", "a,b\r\n1,2\r\n3,4\r\n\r\n"), &delim(",")), "a CRLF is one line end");
+    let (opts, page) = read_as_sniffed(&cr);
+    assert_eq!(opts, unquoted(","));
+    assert_eq!((page.total, page.columns.len()), (3, 4), "{:?}", page.columns);
+}
+
+// ---- the fifth refute round (2026-11-22) -----------------------------------------------------
+
+/// The window counts rows, as the engine's does: a blank line moves it by none, so a long row on
+/// the 2 048th row is inside it on physical line 2 049 and the read is refused by line 2 050 one
+/// row on.
+#[test]
+fn a_blank_line_moves_the_window_by_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let blank = |line: usize| {
+        let mut s = String::from("a,b,c\n\n");
+        for i in 3..line {
+            s.push_str(&format!("{i},1,2\n"));
+        }
+        s.push_str("9,9,9,9\n");
+        csv_file(dir.path(), &format!("blank{line}.csv"), &s)
+    };
+    let inside = blank(2049);
+    assert!(csv_is_ragged(&inside, &delim(",")), "the 2 048th row, on line 2 049");
+    let (opts, page) = read_as_sniffed(&inside);
+    assert_eq!(opts, unquoted(","));
+    assert_eq!((page.total, names(&page)), (2047, vec!["a", "b", "c", "column3"]));
+    let past = blank(2050);
+    assert!(!csv_is_ragged(&past, &delim(",")), "the 2 049th row is past it");
+    let opts = sniff_csv_options(&past).unwrap();
+    let e = preview_csv(&past, 10, &opts).unwrap_err().to_string();
+    assert!(e.contains("Line: 2050"), "{e}");
+}
+
+/// The forced reader is given the sniffer's quote, never left to find one: a quoted line break
+/// near the window's end and a long row on its last row read whole, where a reader left to
+/// itself refuses the file (C-042).
+#[test]
+fn the_forced_reader_reads_with_the_sniffer_s_quote() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut body = String::from("a,b,c\n1,\"x\ny\",3\n");
+    for i in 3..2048 {
+        body.push_str(&format!("{i},1,2\n"));
+    }
+    body.push_str("9,9,9,9\n");
+    let file = csv_file(dir.path(), "late.csv", &body);
+    assert!(csv_is_ragged(&file, &dialect(",", "\"", "\"")), "the long row is the 2 048th row");
+    let (opts, page) = read_as_sniffed(&file);
+    assert_eq!(opts, dialect(",", "\"", "\""));
+    assert_eq!((page.total, names(&page)), (2047, vec!["a", "b", "c", "column3"]));
+    assert_eq!(page.rows.iter().filter(|r| r[1] == serde_json::json!("x\ny")).count(), 1, "the quoted line break whole");
+    assert!(preview_csv(&file, 10, &CsvOptions { quote_char: None, escape_char: None, ..opts.clone() }).is_err(), "a reader left to find its own quote refuses it");
+}
+
+/// A quote opens a field only at its start, and only the quote the sniffer saw: a stray `"`
+/// inside a field of a file with no quoting is text, so the long row after it is seen; inside a
+/// quoted field a doubled quote is text, and an escape outside quotes is text.
+#[test]
+fn a_quote_opens_a_field_only_at_its_start_and_only_the_sniffer_s() {
+    let dir = tempfile::tempdir().unwrap();
+    let inches = csv_file(dir.path(), "inches.csv", "item,size,qty\nruler,12\" long,3\npipe,M8,2\nbolt,M8,3/4\" wide,5\n");
+    assert!(csv_is_ragged(&inches, &unquoted(",")));
+    assert!(csv_is_ragged(&inches, &delim(",")), "in `\"` too: neither stray quote starts a field");
+    let (opts, page) = read_as_sniffed(&inches);
+    assert_eq!(opts, unquoted(","));
+    // Every line kept; the engine reads an all-text file's header as a row on the padded path.
+    assert_eq!((page.total, page.columns.len()), (4, 4), "{:?}", page.columns);
+    assert_eq!(page.rows[1][1], serde_json::json!("12\" long"));
+    assert_eq!(page.rows[3][2], serde_json::json!("3/4\" wide"));
+    // A doubled quote inside quotes is one quote: the file is regular.
+    let doubled = csv_file(dir.path(), "doubled.csv", "a,b\n\"x\"\",y\",2\n3,4\n");
+    assert!(!csv_is_ragged(&doubled, &delim(",")));
+    assert!(csv_is_ragged(&doubled, &dialect(",", "\"", "")), "with no escape the doubled quote closes and reopens: three fields");
+    // An escape outside quotes is text.
+    let bare = csv_file(dir.path(), "bare.csv", "a,b\nx\\,y\n3,4\n");
+    assert!(!csv_is_ragged(&bare, &dialect(",", "\"", "\\")));
+    // A ragged file in tabs, its long row last: the tab the sniffer names.
+    let tabs = csv_file(dir.path(), "tabs_long.csv", "a\tb\tc\n1\t2\t3\n4\t5\t6\n9\t9\t9\t9\n");
+    let (opts, page) = read_as_sniffed(&tabs);
+    assert_eq!(opts, unquoted("\t"));
+    assert_eq!((page.total, names(&page)), (3, vec!["a", "b", "c", "column3"]));
+    // A file the sniffer refuses and no delimiter splits keeps the sniffer's refusal.
+    let binary = dir.path().join("binary.csv");
+    std::fs::write(&binary, (0u8..=255).cycle().take(4096).collect::<Vec<u8>>()).unwrap();
+    let e = sniff_csv_options(&binary.display().to_string()).unwrap_err().to_string();
+    assert!(e.contains("binary.csv"), "{e}");
 }

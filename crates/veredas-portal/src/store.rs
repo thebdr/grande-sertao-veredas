@@ -765,10 +765,12 @@ impl DuckStore {
         let limit = q.limit.clamp(1, MAX_PAGE);
         let qt = quote_ident(table);
 
+        // A count that fails (a view over a file the reader refuses by its line) is the page's
+        // refusal, never a total of nothing beside the rows a LIMIT read before the bad line.
         let total = {
             let sql = format!("SELECT count(*) FROM {qt}{where_sql}");
             let mut stmt = conn.prepare(&sql)?;
-            stmt.query_row(duckdb::params_from_iter(params.iter()), |r| r.get::<_, i64>(0)).map(|n| n.max(0) as u64).unwrap_or(0)
+            stmt.query_row(duckdb::params_from_iter(params.iter()), |r| r.get::<_, i64>(0)).map(|n| n.max(0) as u64)?
         };
 
         let sql = format!("SELECT * FROM {qt}{where_sql}{order} LIMIT {limit} OFFSET {}", q.offset);
@@ -946,11 +948,18 @@ fn push_points(conn: &Connection, sql: &str, params: Vec<DuckValue>, out: &mut V
 }
 
 /// How a linked CSV is read. Nothing set lets the engine sniff it, right for most files; the
-/// two overrides exist for the two ways sniffing goes wrong in the field.
+/// overrides exist for the ways sniffing goes wrong in the field: a ragged file read by the padded
+/// reader in a forced delimiter (with the quote and the escape the sniffer saw, written out), and
+/// a decimal comma.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CsvOptions {
-    /// Force the field delimiter (`;`, a tab, `|`, `,`); none sniffs it.
+    /// Force the field delimiter (`;`, a tab, `|`, `,`) and the padded reader; none sniffs it.
     pub delim: Option<String>,
+    /// The quote character; empty for none; unset leaves it to the reader (the sniffer, or a
+    /// forced reader's own detection, which a forced read never relies on).
+    pub quote_char: Option<String>,
+    /// The escape character inside quotes; empty for none; unset as the quote.
+    pub escape_char: Option<String>,
     /// Numbers are written with a decimal comma (`4,0`).
     pub decimal_comma: bool,
 }
@@ -965,9 +974,19 @@ pub fn csv_scan_sql(path: &str, opts: &CsvOptions) -> String {
     let mut args: Vec<String> = Vec::new();
     if let Some(d) = &opts.delim {
         args.push(format!("delim='{}'", d.replace('\'', "''")));
+    }
+    if let Some(q) = &opts.quote_char {
+        args.push(format!("quote='{}'", q.replace('\'', "''")));
+    }
+    if let Some(e) = &opts.escape_char {
+        args.push(format!("escape='{}'", e.replace('\'', "''")));
+    }
+    if opts.delim.is_some() {
         // A forced delimiter needs null padding: the files that need forcing are the ragged
-        // ones, and without padding the engine errors or silently drops the offending row.
+        // ones, and without padding the engine errors or silently drops the offending row. The
+        // padded reader reads a quoted line break only on one thread (C-042).
         args.push("null_padding=true".to_string());
+        args.push("parallel=false".to_string());
     }
     if opts.decimal_comma {
         args.push("decimal_separator=','".to_string());
@@ -1016,33 +1035,54 @@ pub fn sniff_csv_options(path: &str) -> Result<CsvOptions, StoreError> {
     let conn = Connection::open_in_memory()?;
     let mut opts = CsvOptions::default();
 
-    let auto = describe_types(&conn, &csv_scan_sql(path, &opts))?;
-    if looks_unsplit(&auto) {
-        let mut best: Option<(usize, String)> = None;
+    // The padded reader for a file the sniffer collapsed to one column, or could not read at all
+    // (a long row inside the window with rows after it, a short row past it): in the dialect the
+    // sniffer finds when it is asked to pad (its delimiter, quote and escape), when that splits
+    // the file; else in the delimiter that splits it widest; else nothing does.
+    let padded = |conn: &Connection| -> Option<CsvOptions> {
+        let splits = |o: &CsvOptions| describe_types(conn, &csv_scan_sql(path, o)).map(|c| c.len()).unwrap_or(0);
+        if let Some(d) = sniffed_dialect(conn, path, true)
+            && splits(&d) > 1
+        {
+            return Some(d);
+        }
+        let mut best: Option<(usize, CsvOptions)> = None;
         for d in CSV_DELIMS {
-            let probe = CsvOptions { delim: Some(d.to_string()), ..Default::default() };
-            if let Ok(cols) = describe_types(&conn, &csv_scan_sql(path, &probe))
-                && cols.len() > 1
-                && best.as_ref().is_none_or(|(n, _)| cols.len() > *n)
-            {
-                best = Some((cols.len(), d.to_string()));
+            // The reader's own quote, written out, so it detects none of its own.
+            let probe = CsvOptions { delim: Some(d.to_string()), quote_char: Some("\"".into()), escape_char: Some("\"".into()), decimal_comma: false };
+            let n = splits(&probe);
+            if n > 1 && best.as_ref().is_none_or(|(b, _)| n > *b) {
+                best = Some((n, probe));
             }
         }
-        if let Some((_, d)) = best {
-            opts.delim = Some(d);
+        best.map(|(_, o)| o)
+    };
+    match describe_types(&conn, &csv_scan_sql(path, &opts)) {
+        Ok(auto) if looks_unsplit(&auto) => {
+            if let Some(o) = padded(&conn) {
+                opts = o;
+            }
         }
-    }
-
-    // A ragged file of any shape takes the padded reader (docs/questions.md Q17, decided
-    // 2026-11-09): where the sniffer kept, dropped or renamed rows on its own terms, the padded
-    // reader keeps every row, pads a short one and widens the schema for a long one within its
-    // window, refusing the read by its line past it. Raggedness is read off the file itself,
-    // the first 2 048 lines counted in the sniffer's delimiter, quotes honoured.
-    if opts.delim.is_none()
-        && let Some(delim) = sniffed_delimiter(&conn, path)
-        && csv_is_ragged(path, &delim)
-    {
-        opts.delim = Some(delim);
+        Ok(_) => {
+            // A ragged file of any shape takes the padded reader (docs/questions.md Q17, decided
+            // 2026-11-09): where the sniffer kept, dropped or renamed rows on its own terms, the
+            // padded reader keeps every row, pads a short one and widens the schema for a long
+            // one within its window, refusing the read by its line past it. Raggedness is read
+            // off the file itself, the first 2 048 lines counted in the sniffer's delimiter with
+            // its quote and escape honoured, whatever the line ending.
+            if let Some(dialect) = sniffed_dialect(&conn, path, false)
+                && csv_is_ragged(path, &dialect)
+            {
+                opts = dialect;
+            }
+        }
+        // The sniffer refused the file: the padded reader takes it when a delimiter splits it,
+        // and the sniffer's own refusal stands when none does (a missing file, a file of one
+        // column, a file that is no CSV).
+        Err(e) => match padded(&conn) {
+            Some(o) => opts = o,
+            None => return Err(e),
+        },
     }
 
     let plain = describe_types(&conn, &csv_scan_sql(path, &opts))?;
@@ -1068,51 +1108,89 @@ pub fn sniff_csv_options(path: &str) -> Result<CsvOptions, StoreError> {
     Ok(opts)
 }
 
-/// The delimiter the engine's sniffer settles on for a file, or nothing when it cannot sniff it.
-fn sniffed_delimiter(conn: &Connection, path: &str) -> Option<String> {
+/// The dialect the engine's sniffer settles on for a file, read as it is or asked to pad short
+/// rows (`padded`, which finds the dialect of a ragged file it would otherwise collapse), as the
+/// padded reader's options: its delimiter, its quote and its escape, none (`''`) for one it did
+/// not see (it writes `(empty)`); nothing when it cannot sniff the file.
+fn sniffed_dialect(conn: &Connection, path: &str, padded: bool) -> Option<CsvOptions> {
     let lit = path.trim().replace('\'', "''");
-    let mut stmt = conn.prepare(&format!("SELECT Delimiter FROM sniff_csv('{lit}')")).ok()?;
-    let d: String = stmt.query_row([], |r| r.get(0)).ok()?;
-    (!d.is_empty()).then_some(d)
+    let pad = if padded { ", null_padding=true" } else { "" };
+    let mut stmt = conn.prepare(&format!("SELECT Delimiter, Quote, Escape FROM sniff_csv('{lit}'{pad})")).ok()?;
+    let (d, q, e): (String, String, String) = stmt.query_row([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).ok()?;
+    // Written out always, even the reader's own `"`: a forced reader given no quote detects one
+    // of its own and may pick another (C-042). A quote or an escape the sniffer did not see is
+    // none (`''`).
+    let seen = |s: &str| if s.chars().count() == 1 { s.to_string() } else { String::new() };
+    let (quote, escape) = (seen(&q), seen(&e));
+    (!d.is_empty() && d != "(empty)").then_some(CsvOptions { delim: Some(d), quote_char: Some(quote), escape_char: Some(escape), decimal_comma: false })
 }
 
-/// The lines the raggedness check reads, the engine's own window for widening the schema.
+/// The rows the raggedness check reads, the engine's own window for widening the schema.
 pub const CSV_RAGGED_WINDOW: usize = 2048;
 
-/// Whether the file's rows, counted in `delim` over the first 2 048 lines with quotes honoured,
-/// do not all hold the same number of fields (a blank last line is no row). A file that cannot
-/// be read here is not ragged: its reading is refused elsewhere, by name.
-pub fn csv_is_ragged(path: &str, delim: &str) -> bool {
+/// Whether the file's rows, read as `opts` reads them, do not all hold the same number of fields,
+/// over its first 2 048 rows (the header among them; a blank line is no row and moves the window
+/// by none, as the engine's own window). Its delimiter is `,` when none is set; its quote `"`
+/// when none is set and none at all when set empty; its escape the quote when none is set. A
+/// quote opens a field only at the field's start (elsewhere it is text, as the engine reads it),
+/// and inside one a doubled quote or an escaped character is text; a row ends at a line feed, a
+/// carriage return and line feed, or a carriage return alone, never inside quotes. A file that
+/// cannot be read here is not ragged: its reading is refused elsewhere, by name.
+pub fn csv_is_ragged(path: &str, opts: &CsvOptions) -> bool {
     let Ok(text) = std::fs::read(path.trim()) else { return false };
     let text = String::from_utf8_lossy(&text);
+    let char_of = |s: &Option<String>, or: Option<char>| match s.as_deref() {
+        None => or,
+        Some(s) => s.chars().next(),
+    };
+    let d = char_of(&opts.delim, Some(',')).unwrap_or(',');
+    let quote = char_of(&opts.quote_char, Some('"'));
+    let escape = char_of(&opts.escape_char, quote);
     let mut counts: Vec<usize> = Vec::new();
     let mut fields = 1usize;
     let mut quoted = false;
+    let mut field_start = true;
     let mut at_line_start = true;
-    let mut lines = 0usize;
-    let d = delim.chars().next().unwrap_or(',');
-    for c in text.chars() {
-        if c == '"' {
-            quoted = !quoted;
-            at_line_start = false;
-        } else if !quoted && c == '\n' {
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if quoted {
+            if Some(c) == escape && escape != quote {
+                // An escaped character inside quotes is text, whatever it is.
+                chars.next();
+            } else if Some(c) == quote {
+                if escape == quote && chars.peek() == Some(&c) {
+                    // A doubled quote is one quote, text.
+                    chars.next();
+                } else {
+                    quoted = false;
+                }
+            }
+        } else if c == '\n' || c == '\r' {
+            if c == '\r' && chars.peek() == Some(&'\n') {
+                chars.next();
+            }
             if !at_line_start {
                 counts.push(fields);
+                if counts.len() >= CSV_RAGGED_WINDOW {
+                    break;
+                }
             }
             fields = 1;
+            field_start = true;
             at_line_start = true;
-            lines += 1;
-            if lines >= CSV_RAGGED_WINDOW {
-                break;
-            }
-        } else if !quoted && c == d {
+        } else if c == d {
             fields += 1;
+            field_start = true;
             at_line_start = false;
-        } else if c != '\r' {
+        } else {
+            if field_start && Some(c) == quote {
+                quoted = true;
+            }
+            field_start = false;
             at_line_start = false;
         }
     }
-    if !at_line_start && lines < CSV_RAGGED_WINDOW {
+    if !at_line_start && counts.len() < CSV_RAGGED_WINDOW {
         counts.push(fields);
     }
     counts.windows(2).any(|w| w[0] != w[1])
@@ -1142,9 +1220,11 @@ pub fn preview_csv(path: &str, limit: usize, opts: &CsvOptions) -> Result<RowsPa
             columns.push(ColumnInfo { name: row.get::<_, String>(0)?, data_type: row.get::<_, String>(1)? });
         }
     }
+    // The count reads the whole file: a row the reader refuses (a long one past the window) is
+    // refused here by its line, never a total of nothing.
     let total = {
         let mut stmt = conn.prepare(&format!("SELECT count(*) FROM {scan}"))?;
-        stmt.query_row([], |r| r.get::<_, i64>(0)).map(|n| n.max(0) as u64).unwrap_or(0)
+        stmt.query_row([], |r| r.get::<_, i64>(0)).map(|n| n.max(0) as u64)?
     };
     let limit = limit.clamp(1, 500);
     let mut stmt = conn.prepare(&format!("SELECT * FROM {scan} LIMIT {limit}"))?;
