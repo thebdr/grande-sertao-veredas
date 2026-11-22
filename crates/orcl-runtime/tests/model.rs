@@ -44,8 +44,9 @@ fn ns(v: u128) -> Duration {
     Duration::from_nanos(u64::try_from(v).unwrap())
 }
 
-/// Takes the time it is told, outputs its input plus one, and declares safe outputs that depend on its state: 1000
-/// plus the last input it scanned.
+/// Takes the time it is told, computes its output from the outputs it is handed and its input (three times the
+/// output it is handed, plus its input, plus one), so the output image the engine hands it shows in every write, and
+/// declares safe outputs that depend on its state: 1000 plus the last input it scanned.
 struct Program1 {
     clock: VirtualClock,
     costs: Rc<RefCell<Costs>>,
@@ -64,7 +65,7 @@ impl Program for Program1 {
         self.last_input = *inputs;
         self.last_scan = Some(*scan);
         self.clock.advance(ns(cost));
-        *outputs = inputs + 1;
+        *outputs = outputs.wrapping_mul(3).wrapping_add(inputs + 1);
     }
 
     fn safe_outputs(&self) -> u64 {
@@ -103,6 +104,8 @@ struct Model {
     cycle: u128,
     faulted: Option<(u128, u128)>,
     last_input: u64,
+    /// The output image as the last scan left it, which the next scan's program is handed.
+    image: u64,
     reads: Vec<u128>,
     writes: Vec<(u128, u64)>,
     cycles: u128,
@@ -145,7 +148,12 @@ impl Model {
                 self.faulted = Some((start, exec));
             }
         }
-        let outputs = if self.faulted.is_none() { input + 1 } else { 1000 + self.last_input };
+        let outputs = if self.faulted.is_none() {
+            self.image.wrapping_mul(3).wrapping_add(input + 1)
+        } else {
+            1000 + self.last_input
+        };
+        self.image = outputs;
         self.writes.push((end, outputs));
         self.cycles += 1;
         self.lateness = (self.lateness.0.max(start - due), self.lateness.1 + (start - due));
@@ -187,7 +195,7 @@ fn length(draw: &mut Draw, period: u128, from: u128, rarely_long: bool) -> u128 
     }
 }
 
-fn run_one(seed: u64) {
+fn run_one(seed: u64, steps: usize) {
     let mut draw = Draw(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
     let periods: [u128; 7] = [1_000, 333_333, 500_000, 2_500_000, 10_000_000, 1_000_000_000, 1_500_000_000];
     let period = if draw.below(3) == 0 {
@@ -202,7 +210,7 @@ fn run_one(seed: u64) {
     let mut plant = Plant { clock: clock.clone(), costs: costs.clone(), reads: Vec::new(), writes: Vec::new() };
     let mut model = Model { period, ..Model::default() };
 
-    for step in 0..50 {
+    for step in 0..steps {
         // the host's delay before this step, drawn from the model's own time
         let host = if draw.below(3) == 0 { length(&mut draw, period, model.now, true) } else { 0 };
         let start = (model.now + host).max(model.cycle * period);
@@ -228,7 +236,7 @@ fn run_one(seed: u64) {
         assert_eq!(report.scan.period.as_nanos(), period, "{at}: the scan's period");
         assert_eq!(report.exec.as_nanos(), want.exec, "{at}: the scan's length");
         assert_eq!(report.time_error, want.time_error, "{at}: the time error");
-        assert_eq!(*report.inputs, 100 + step as u64, "{at}: the inputs read");
+        assert_eq!(*report.inputs, 100 + u64::try_from(step).unwrap(), "{at}: the inputs read");
         assert_eq!(*report.outputs, model.writes.last().unwrap().1, "{at}: the outputs written");
         let state = match model.faulted {
             None => RunState::Running,
@@ -267,7 +275,15 @@ fn run_one(seed: u64) {
 #[test]
 fn the_engine_agrees_with_the_clause_s_model_over_four_thousand_random_sequences() {
     for seed in 0..4_000 {
-        run_one(seed);
+        run_one(seed, 50);
+    }
+}
+
+#[test]
+fn the_engine_agrees_with_the_model_over_forty_runs_of_two_thousand_scans() {
+    // long enough that a statistic kept over a window, or reset every so many scans, shows
+    for seed in 10_000..10_040 {
+        run_one(seed, 2_000);
     }
 }
 
