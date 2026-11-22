@@ -1070,38 +1070,47 @@ pub fn sniff_csv_options(path: &str) -> Result<CsvOptions, StoreError> {
 
     // The padded reader for a file the sniffer collapsed to one column, or could not read at all
     // (a long row inside the window with rows after it, a short row past it): in the dialect the
-    // sniffer finds when it is asked to pad (its delimiter, quote and escape), when that splits
-    // the file; else in the delimiter that splits it widest; else nothing does.
-    // The dialect the sniffer finds when asked to pad, when it splits the file; another delimiter
-    // only where it types strictly more columns as numbers, with or without the decimal comma (a
-    // `;` file written with decimal commas splits on `,` too, into nonsense); with no sniffed
-    // dialect, the delimiter typing the most numbers, then the widest.
+    // sniffer finds when asked to pad (its delimiter, quote and escape), when that splits the
+    // file; another delimiter only where the decimal comma is what makes it type more columns as
+    // numbers than the sniffed dialect does (a `;` file written with decimal commas splits on `,`
+    // too, into nonsense; a list `10,20,30` split on `,` types more numbers too, by splitting a text
+    // column, and is no reason); with no sniffed dialect, the delimiter typing the most numbers,
+    // then the widest; else nothing splits it.
     let padded = |conn: &Connection| -> Option<CsvOptions> {
         let read = |o: &CsvOptions| describe_types(conn, &csv_scan_sql(path, o)).ok().filter(|cols| cols.len() > 1);
         let numbers = |cols: &[(String, String)]| cols.iter().filter(|(_, t)| is_numeric_type(t)).count();
+        // (numbers read plain, numbers read with the decimal comma, width)
         let score = |o: &CsvOptions| {
             read(o).map(|plain| {
                 let comma = read(&CsvOptions { decimal_comma: true, ..o.clone() }).map(|cols| numbers(&cols)).unwrap_or(0);
-                (numbers(&plain).max(comma), plain.len())
+                (numbers(&plain), comma, plain.len())
             })
         };
         let sniffed = sniffed_dialect(conn, path, true)
             .map(|d| with_quote_seen(d, sniffed_dialect(conn, path, false)))
             .and_then(|d| score(&d).map(|s| (s, d)));
-        let mut best: Option<((usize, usize), CsvOptions)> = None;
-        for d in CSV_DELIMS {
-            // The reader's own quote, written out, so it detects none of its own.
-            let c = CsvOptions { delim: Some(d.to_string()), quote_char: Some("\"".into()), escape_char: Some("\"".into()), decimal_comma: false };
-            if let Some(sc) = score(&c)
-                && best.as_ref().is_none_or(|(b, _)| sc > *b)
-            {
-                best = Some((sc, c));
+        let candidates: Vec<((usize, usize, usize), CsvOptions)> = CSV_DELIMS
+            .iter()
+            .filter_map(|d| {
+                // The reader's own quote, written out, so it detects none of its own.
+                let c = CsvOptions { delim: Some(d.to_string()), quote_char: Some("\"".into()), escape_char: Some("\"".into()), decimal_comma: false };
+                score(&c).map(|s| (s, c))
+            })
+            .collect();
+        match sniffed {
+            Some(((plain, comma, _), d)) => {
+                let typed = plain.max(comma);
+                let by_comma = candidates.into_iter().filter(|((p, c, _), _)| c > p && *c > typed).max_by_key(|((_, c, w), _)| (*c, *w));
+                Some(by_comma.map_or(d, |(_, c)| c))
             }
-        }
-        match (sniffed, best) {
-            (Some(((n, _), d)), Some(((m, _), c))) => Some(if m > n { c } else { d }),
-            (Some((_, d)), None) => Some(d),
-            (None, b) => b.map(|(_, c)| c),
+            // The first of the delimiters on a tie, in their order.
+            None => candidates
+                .into_iter()
+                .fold(None::<((usize, usize), CsvOptions)>, |best, ((p, c, w), o)| match best {
+                    Some((b, _)) if (p.max(c), w) <= b => best,
+                    _ => Some(((p.max(c), w), o)),
+                })
+                .map(|(_, o)| o),
         }
     };
     match describe_types(&conn, &csv_scan_sql(path, &opts)) {
@@ -1211,6 +1220,7 @@ pub fn csv_is_ragged(path: &str, opts: &CsvOptions) -> bool {
     let mut fields = 1usize;
     let mut quoted = false;
     let mut field_start = true;
+    let mut lead_space = false;
     let mut at_line_start = true;
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
@@ -1238,17 +1248,22 @@ pub fn csv_is_ragged(path: &str, opts: &CsvOptions) -> bool {
             }
             fields = 1;
             field_start = true;
+            lead_space = false;
             at_line_start = true;
         } else if c == d {
             fields += 1;
             field_start = true;
+            lead_space = false;
             at_line_start = false;
         } else {
             if field_start && Some(c) == quote {
                 quoted = true;
                 field_start = false;
-            } else if !(field_start && c == ' ') {
-                // Leading spaces keep a field's start: the engine opens a quote after them.
+            } else if field_start && c == ' ' && !lead_space {
+                // One leading space keeps a field's start: the engine opens a quote after it, and
+                // after two, or after a tab, it opens none (C-042).
+                lead_space = true;
+            } else {
                 field_start = false;
             }
             at_line_start = false;

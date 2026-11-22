@@ -1110,3 +1110,57 @@ fn the_decimal_comma_on_the_padded_path() {
     let (opts, page) = read_as_sniffed(&plain);
     assert_eq!((opts.delim.as_deref(), opts.decimal_comma, page.total), (Some(","), false, 3));
 }
+
+// ---- the seventh refute round (2026-11-22) ---------------------------------------------------
+
+/// Forty-eight rows `i,"p,q",3`, then `last` (and `after`).
+fn quoted_rows(last: &str, after: &str) -> String {
+    let mut s = String::from("a,b,c\n");
+    for i in 0..48 {
+        s.push_str(&format!("{i},\"p,q\",3\n"));
+    }
+    s.push_str(last);
+    s.push_str(after);
+    s
+}
+
+/// One leading space before a quote opens it, as the engine reads it; two spaces or a tab open
+/// none, so the field holds the quote as text and the row is long: the long row is seen and every
+/// row kept, the quoted cells whole.
+#[test]
+fn one_space_before_a_quote_opens_it_two_or_a_tab_do_not() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, last) in [("two", "1,  \"x,y\",3\n"), ("three", "1,   \"x,y\",3\n"), ("tab", "1,\t\"x,y\",3\n")] {
+        let file = csv_file(dir.path(), &format!("{name}.csv"), &quoted_rows(last, ""));
+        assert!(csv_is_ragged(&file, &delim(",")), "{name}: the last row is long");
+        let (opts, page) = read_as_sniffed(&file);
+        assert_eq!((opts.delim.as_deref(), page.total, page.columns.len()), (Some(","), 49, 4), "{name}: {opts:?} {:?}", page.columns);
+        assert_eq!(page.rows[0][1], serde_json::json!("p,q"), "{name}");
+    }
+    let one = csv_file(dir.path(), "one.csv", &quoted_rows("1, \"x,y\",3\n", ""));
+    assert!(!csv_is_ragged(&one, &delim(",")), "one space: the quote opens, three fields");
+    // Two rows after the long one: every quoted cell still whole.
+    let after = csv_file(dir.path(), "after.csv", &quoted_rows("1,  \"x,y\",3\n", "7,\"r,s\",9\n8,\"t,u\",9\n"));
+    let (_, page) = read_as_sniffed(&after);
+    assert_eq!(page.total, 51);
+    assert!(page.rows.iter().filter(|r| r[1] == serde_json::json!("p,q")).count() == 48, "{:?}", &page.rows[..2]);
+}
+
+/// The sniffer's padded dialect gives way only to the decimal comma: a `|` file whose last column
+/// is a list `10,20,30` types more numbers split on `,`, by splitting a text column, and stays on
+/// `|`; and the decimal comma is never adopted where a column that read as numbers would stop.
+#[test]
+fn the_sniffed_dialect_gives_way_to_the_decimal_comma_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let lists = csv_file(dir.path(), "lists.csv", "id|note|vals\n1|a|10,20,30\n2|b|40,50,60\n3|c\n");
+    let (opts, page) = read_as_sniffed(&lists);
+    assert_eq!(opts.delim.as_deref(), Some("|"), "{opts:?}");
+    assert_eq!((page.total, names(&page)), (3, vec!["id", "note", "vals"]));
+    assert_eq!(page.rows[0][2], serde_json::json!("10,20,30"));
+    // A regular file where the comma would turn a dotted column to text: no decimal comma.
+    let mixed = csv_file(dir.path(), "mixed_decimals.csv", "a;b\n4.0;1,5\n5.0;2,5\n");
+    let opts = sniff_csv_options(&mixed).unwrap();
+    assert!(!opts.decimal_comma, "{opts:?}");
+    let page = preview_csv(&mixed, 10, &opts).unwrap();
+    assert_eq!(page.columns[0].data_type, "DOUBLE");
+}

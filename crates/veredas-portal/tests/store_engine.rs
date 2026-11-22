@@ -1031,7 +1031,15 @@ fn a_quote_after_spaces_the_two_sniffs_quotes_and_a_doubled_quote_without_its_es
     let cells: (i64, String, i64) = conn
         .query_row(&format!("SELECT a, b, c FROM read_csv('{spaced}', delim=',', quote='\"', escape='\"', header=true)"), [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
         .unwrap();
-    assert_eq!(cells, (1, "x,y".to_string(), 3));
+    assert_eq!(cells, (1, "x,y".to_string(), 3), "one space: the quote opens");
+    // Two spaces, or a tab, and no quote opens: the row reads four cells, the quote text.
+    for lead in ["  ", "\t"] {
+        let p = file("lead.csv", &format!("a,b,c\n1,{lead}\"x,y\",3\n"));
+        let n: i64 = conn
+            .query_row(&format!("SELECT count(*) FROM (DESCRIBE SELECT * FROM read_csv('{p}', delim=',', quote='\"', escape='\"', header=true, null_padding=true, parallel=false))"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 4, "{lead:?} before the quote: no quote opens");
+    }
     let sniff = |p: &str, extra: &str| -> (String, String) {
         conn.query_row(&format!("SELECT Quote, Escape FROM sniff_csv('{p}'{extra})"), [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
     };
