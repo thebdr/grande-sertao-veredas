@@ -123,6 +123,9 @@ bytes = "1"
 ethercrab = { version = "=0.7.1", default-features = false, features = ["std"] }
 # The executor ethercrab's examples drive it with.
 futures-lite = "2"
+# fisica's physics engine (docs/questions.md Q160, taken meanwhile): one version, the same run on
+# every machine.
+rapier3d = { version = "=0.36.1", features = ["enhanced-determinism"] }
 # Whether a drive letter is a network drive (portal's tail polls a share and never watches it).
 windows-sys = "0.59"
 chacha20poly1305 = "0.10"

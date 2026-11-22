@@ -33,6 +33,8 @@ toml = { workspace = true }
 # The server and the channels run on their own runtimes; the executable takes SIGTERM and SIGINT as
 # its stop (src/main.rs).
 tokio = { workspace = true, features = ["signal"] }
+# fisica's bodies, contacts and sensors (docs/questions.md Q160); named only in src/fisica/world.rs.
+rapier3d = { workspace = true }
 
 [dev-dependencies]
 # The OPC server is driven by the same client library portal will use.

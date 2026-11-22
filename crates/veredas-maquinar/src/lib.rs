@@ -13,6 +13,7 @@
 //! - [`ethernetip`]: an EtherNet/IP adapter, its assemblies over explicit messages and Class 1 I/O.
 //! - [`ethercat`]: an emulated EtherCAT segment, SubDevices answering a master's frames on a raw
 //!   network interface (it runs on Linux).
+//! - [`fisica`]: a plant's scene, its bodies' motion headless at a fixed step, its sensors.
 //! - [`profinet`]: a PROFINET device's discovery and naming on a raw network interface (it runs on
 //!   Linux, where aranha's raw link is).
 //!
@@ -25,6 +26,7 @@ pub mod controller;
 pub mod emit;
 pub mod ethercat;
 pub mod ethernetip;
+pub mod fisica;
 pub mod modbus;
 pub mod opc;
 pub mod profinet;

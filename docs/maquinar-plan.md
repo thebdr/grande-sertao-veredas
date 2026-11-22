@@ -165,7 +165,7 @@ veredas_maquinar
   ethercat    the emulated EtherCAT segment: the ESC core (registers, commands, AL, SII, DC, FMMUs)
               and the SII image, pure; the segment on a raw link, the knobs (Linux)
   fisica      the scene file (veredas-cena), the World on Rapier stepped at a fixed step, its
-              runner in real time and its handle (designed; C-114 when it lands)
+              runner in real time and its handle (C-114)
   bench       the bench file (schema), Bench::start, every part's status
   main.rs     veredas-maquinar <bench.toml> [--check] | --version; stops on stdin's end, `stop`,
               SIGTERM or SIGINT
@@ -288,6 +288,10 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
   x = 1.849 to x = 2.157 (its edges, to the step), and two runs agreed bit for bit; the tangent
   velocity's sign follows which collider of the pair the belt is. `reflexo`'s models (a drive, a
   sensor, a conveyor, an actuator) bind these to a bench device's points through their handles.
+  Landed as C-114 the same day. What its test taught: a sensor sees a body one step after the
+  first step whose poses overlap, since Rapier detects contacts before it moves the bodies (the
+  clause states it; 4 ms at the default step, a real sensor's own delay is longer); a part's
+  `size` is along its own axes, so a belt yawed 90° is still long in its own x.
 
 ## Decided in the briefing of November 2026, not built
 The architect's decisions of 13 to 16 November 2026 that touch the bench
