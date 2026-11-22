@@ -12,20 +12,20 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "fcce642bf1e55a0ccddbb66fc296a18dd1bcb3dc4813b257828c552520fe9666",
-  "outputTail": "test l4_core_depending_on_a_member_is_named_in_every_table ... ok\ntest l4_the_underscore_tables_of_edition_2021_count ... ok\ntest l4_a_dependency_renamed_in_the_workspace_table_is_seen ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 1 test\ntest the_real_tree_obeys_every_law ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s\n     Running tests\\l4_core.rs (target\\debug\\deps\\l4_core-40076d32cf3aa310.exe)\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-74c5871007f3318b.exe)",
-  "ranAt": "2026-11-05T19:18:59.693Z",
-  "headCommit": "8862b155934c547241d658456513401dd64e9b77",
+  "outputSha": "92fed29fa8e28c182615242097182c1bb05c2f6d0211ff5c2556e2332ed4639e",
+  "outputTail": "test l4_the_underscore_tables_of_edition_2021_count ... ok\ntest l4_core_depending_on_a_member_is_named_in_every_table ... ok\ntest l4_a_dependency_renamed_in_the_workspace_table_is_seen ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 1 test\ntest the_real_tree_obeys_every_law ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running tests/l4_core.rs (target/debug/build/leis/c2ef35f13dea1254/out/l4_core-c2ef35f13dea1254)\n     Running tests/real_tree.rs (target/debug/build/leis/c39453b0a0afb411/out/real_tree-c39453b0a0afb411)",
+  "ranAt": "2026-11-22T15:39:46.014Z",
+  "headCommit": "974fe62f321b0ad7bbebef1ac965bedb5193f6a9",
   "tests": [
     {
       "name": "tools/leis/tests/l4_core.rs",
       "file": "tools/leis/tests/l4_core.rs",
-      "fileSha": "64ba3b022fc8fe417ca5a863e7e86fa8a8b8d1ba1ee50c31b094a073980b3503"
+      "fileSha": "46faea35c98015abb078e037d41bf00b28ada72450db0b3b19a5ee445b520ff5"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",
       "file": "tools/leis/tests/real_tree.rs",
-      "fileSha": "1d0099b3c3b1a8ed9531a55c85d6bb7c17c72dce5443d2c1054a5fd589d7c839"
+      "fileSha": "8dcab973a8d2d31fbf3ed2986dd27bb0a6a15a58fb281883728ecea293c308e2"
     }
   ]
 }

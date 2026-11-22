@@ -10,15 +10,15 @@
     "opc_browse"
   ],
   "exitCode": 0,
-  "outputSha": "8d0330380ea46c156a81ecc9fd01999ee9f5fa1d4d361a44c2d6b5dc811e5c1e",
-  "outputTail": "test a_malformed_node_id_fails_that_request_and_the_browser_serves_the_next ... ok\ntest the_browser_walks_the_tree_and_prefills_tag_types ... ok\ntest hascomponent_subtrees_browse_like_organizes_ones ... ok\ntest details_read_the_standard_attribute_set ... ok\ntest sixty_four_pages_are_followed_to_the_end_and_a_sixty_fifth_is_refused ... ok\ntest methods_are_neither_variables_nor_containers ... ok\ntest an_unreachable_endpoint_reports_instead_of_hanging ... ok\ntest a_silent_endpoint_fails_within_the_connect_timeout ... ok\ntest a_stalled_server_times_a_browse_out_and_a_drop_does_not_wait_for_it ... ok\n\ntest result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.82s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.85s\n     Running tests\\opc_browse.rs (target\\debug\\deps\\opc_browse-444d97496083c3c6.exe)",
-  "ranAt": "2026-11-06T09:52:32.829Z",
-  "headCommit": "aed4d93c6319896b01d4e40ebbae671a0c55e050",
+  "outputSha": "7295b1564f6743cf17ea0b44d48737ee744aaf97648bccfac947783c79d426f4",
+  "outputTail": "test folders_larger_than_one_page_arrive_whole ... ok\ntest a_malformed_node_id_fails_that_request_and_the_browser_serves_the_next ... ok\ntest details_read_the_standard_attribute_set ... ok\ntest a_server_refusing_a_browse_is_a_refusal_not_an_empty_folder ... ok\ntest methods_are_neither_variables_nor_containers ... ok\ntest sixty_four_pages_are_followed_to_the_end_and_a_sixty_fifth_is_refused ... ok\ntest an_unreachable_endpoint_reports_instead_of_hanging ... ok\ntest a_silent_endpoint_fails_within_the_connect_timeout ... ok\ntest a_stalled_server_times_a_browse_out_and_a_drop_does_not_wait_for_it ... ok\n\ntest result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.77s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.92s\n     Running tests/opc_browse.rs (target/debug/build/veredas-core/719d2b8af8a96258/out/opc_browse-719d2b8af8a96258)",
+  "ranAt": "2026-11-22T15:41:11.850Z",
+  "headCommit": "974fe62f321b0ad7bbebef1ac965bedb5193f6a9",
   "tests": [
     {
       "name": "crates/veredas-core/tests/opc_browse.rs",
       "file": "crates/veredas-core/tests/opc_browse.rs",
-      "fileSha": "7e0e0a0c587207b438acc1cc5bf23b449c835b1166eb974517539e2837961047"
+      "fileSha": "0a08fd43d25150f31ecd2f7c6dbe46b2cb515505ea40596a18e98b0fcefb7512"
     }
   ]
 }

@@ -12,20 +12,20 @@
     "component"
   ],
   "exitCode": 0,
-  "outputSha": "3bdc3ee5e9a0fc75e58566ffd60ca65d76153bae93ec212d12e304a419bd0b13",
-  "outputTail": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.52s\n\n\nrunning 4 tests\ntest before_any_status_every_action_is_off_and_posts_nothing ... ok\ntest every_answer_portal_gives_a_write_is_said_as_it_means ... ok\ntest a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are ... ok\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 38.54s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.95s\n     Running tests\\component.rs (target\\debug\\deps\\component-3e5a68c69a6a67d6.exe)\n     Running tests\\writes.rs (target\\debug\\deps\\writes-6ce7c1b2f8355b43.exe)",
-  "ranAt": "2026-11-16T17:41:21.151Z",
-  "headCommit": "7479db3746d274bb753b81427aa74b7146ff3635",
+  "outputSha": "f21156fc47d0b37c381d4f546bb30ebec0aa8de238bf31e961934761485d2889",
+  "outputTail": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.49s\n\n\nrunning 4 tests\ntest before_any_status_every_action_is_off_and_posts_nothing ... ok\ntest every_answer_portal_gives_a_write_is_said_as_it_means ... ok\ntest a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are ... ok\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 29.55s\n\n   Compiling veredas-supervisao v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/crates/veredas-supervisao)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.02s\n     Running tests/component.rs (target/debug/build/veredas-supervisao/7260c940606abcdf/out/component-7260c940606abcdf)\n     Running tests/writes.rs (target/debug/build/veredas-supervisao/6fc7c3402b0ff2ba/out/writes-6fc7c3402b0ff2ba)",
+  "ranAt": "2026-11-22T15:54:38.293Z",
+  "headCommit": "974fe62f321b0ad7bbebef1ac965bedb5193f6a9",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/writes.rs",
       "file": "crates/veredas-supervisao/tests/writes.rs",
-      "fileSha": "8b29be0474a72ca67a5befd5d2723c1c6563f5f1aec79feef8c7f35b9bcbb068"
+      "fileSha": "7087e3a33cb1526ff00b4191f3a74758a78f594bfad0686da632968ae3bca56d"
     },
     {
       "name": "crates/veredas-supervisao/tests/component.rs",
       "file": "crates/veredas-supervisao/tests/component.rs",
-      "fileSha": "2af9517808c330e8723153f62d74624b78bf08efc7a0e2349764abd9a20e0678"
+      "fileSha": "4c076069273392f57abeae49f84d0358eaff1ac9ea0ebc626c34f30ce9f955bb"
     }
   ]
 }

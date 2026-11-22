@@ -10,10 +10,10 @@
     "component"
   ],
   "exitCode": 0,
-  "outputSha": "f7ba3c10c4ff723e345058c656c60e84a27b5773e07b9a07456177fc83d50209",
-  "outputTail": "running 5 tests\ntest the_gateway_is_one_library_and_at_most_one_executable ... ok\ntest the_gateway_names_no_vendor_and_cites_no_vendor_document ... ok\ntest the_check_allows_one_named_binary_and_refuses_every_other_executable has been running for over 60 seconds\ntest the_graph_walk_follows_normal_and_build_edges_and_skips_dev_ones has been running for over 60 seconds\ntest the_light_build_carries_no_database_no_server_no_desktop_and_no_member_but_core has been running for over 60 seconds\ntest the_check_allows_one_named_binary_and_refuses_every_other_executable ... ok\ntest the_light_build_carries_no_database_no_server_no_desktop_and_no_member_but_core ... ok\ntest the_graph_walk_follows_normal_and_build_edges_and_skips_dev_ones ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 77.31s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 7m 55s\n     Running tests\\component.rs (target\\debug\\deps\\component-129172080a72c8ac.exe)",
-  "ranAt": "2026-11-09T21:47:28.182Z",
-  "headCommit": "ded70a0d44b2dbb0b4b801d9058a2c6a784bf347",
+  "outputSha": "7674e62d4d85476c486f0fb30edd56f4198617224a538902fe3845dce3de52ef",
+  "outputTail": "\nrunning 5 tests\ntest the_gateway_is_one_library_and_at_most_one_executable ... ok\ntest the_light_build_carries_no_database_no_server_no_desktop_and_no_member_but_core ... ok\ntest the_check_allows_one_named_binary_and_refuses_every_other_executable ... ok\ntest the_gateway_names_no_vendor_and_cites_no_vendor_document ... ok\ntest the_graph_walk_follows_normal_and_build_edges_and_skips_dev_ones ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s\n     Running tests/component.rs (target/debug/build/veredas-portal/d2bebd17abbe8821/out/component-d2bebd17abbe8821)",
+  "ranAt": "2026-11-22T15:42:45.944Z",
+  "headCommit": "974fe62f321b0ad7bbebef1ac965bedb5193f6a9",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/component.rs",
@@ -23,7 +23,7 @@
     {
       "name": "tools/leis/tests/real_tree.rs",
       "file": "tools/leis/tests/real_tree.rs",
-      "fileSha": "1d0099b3c3b1a8ed9531a55c85d6bb7c17c72dce5443d2c1054a5fd589d7c839"
+      "fileSha": "8dcab973a8d2d31fbf3ed2986dd27bb0a6a15a58fb281883728ecea293c308e2"
     }
   ]
 }

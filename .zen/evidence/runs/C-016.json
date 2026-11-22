@@ -10,15 +10,15 @@
     "rng"
   ],
   "exitCode": 0,
-  "outputSha": "662c46d47d3badd3544578cb18349d0b27b4468c19753d3b9e9f3cc0d143c85a",
-  "outputTail": "test int_in_covers_both_ends_and_flip_produces_both_faces ... ok\ntest it_is_the_reference_pcg32_and_replays_its_whole_sequence ... ok\ntest streams_are_taken_modulo_two_to_the_63 ... ok\ntest int_in_survives_ranges_wider_than_i64 ... ok\ntest the_same_seed_replays_and_streams_diverge ... ok\ntest uniform_survives_the_values_a_gui_lets_you_type ... ok\ntest uniform_never_returns_nan_when_the_width_overflows ... ok\ntest uniform_never_leaves_the_range_even_when_rounding_fights_it ... ok\ntest next_f64_is_in_zero_to_one_and_scales_the_reference_draws ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.35s\n     Running tests\\rng.rs (target\\debug\\deps\\rng-dd1f958b3f04538b.exe)",
-  "ranAt": "2026-11-05T22:37:14.789Z",
-  "headCommit": "ab5d52115af3aff0daaab4e147a5ce3a781b8c0f",
+  "outputSha": "f9f8e8823c67c90ff4f439247949269f69c2d082b97b7d3f8ff98f9b168ed3a4",
+  "outputTail": "test streams_are_taken_modulo_two_to_the_63 ... ok\ntest int_in_covers_both_ends_and_flip_produces_both_faces ... ok\ntest int_in_survives_ranges_wider_than_i64 ... ok\ntest the_same_seed_replays_and_streams_diverge ... ok\ntest it_is_the_reference_pcg32_and_replays_its_whole_sequence ... ok\ntest uniform_survives_the_values_a_gui_lets_you_type ... ok\ntest uniform_never_returns_nan_when_the_width_overflows ... ok\ntest uniform_never_leaves_the_range_even_when_rounding_fights_it ... ok\ntest next_f64_is_in_zero_to_one_and_scales_the_reference_draws ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.17s\n     Running tests/rng.rs (target/debug/build/veredas-core/1e7f5f97dfd87895/out/rng-1e7f5f97dfd87895)",
+  "ranAt": "2026-11-22T15:40:48.176Z",
+  "headCommit": "974fe62f321b0ad7bbebef1ac965bedb5193f6a9",
   "tests": [
     {
       "name": "crates/veredas-core/tests/rng.rs",
       "file": "crates/veredas-core/tests/rng.rs",
-      "fileSha": "f41872647ace7b2699b2c7ff0ba8d0f4a12695c2961c6d46be63e06b3a46db8a"
+      "fileSha": "9bf8f59819115c321a8b0a88c5ea8cd9c9307fdae98f2467d353c2897fcb624e"
     }
   ]
 }

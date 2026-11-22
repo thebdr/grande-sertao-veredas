@@ -10,15 +10,15 @@
     "schema"
   ],
   "exitCode": 0,
-  "outputSha": "c58415bce90d126ebedcf02bbccc6407d0f6e1cb28ae6e7a665b35fb66c7c0d0",
-  "outputTail": "\nrunning 1 test\ntest schema::tests::the_header_is_checked_format_first_then_version_with_the_pinned_texts ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.79s\n     Running unittests src\\lib.rs (target\\debug\\deps\\veredas_core-f3622936377c590b.exe)",
-  "ranAt": "2026-11-09T04:49:36.395Z",
-  "headCommit": "a6c2296403392400f20baf032af6907af15f0b9a",
+  "outputSha": "43b6e703c7887cd1f3a09f121a0b9e7107da62afe56d19f289b6a2bc3fb8b559",
+  "outputTail": "\nrunning 1 test\ntest schema::tests::the_header_is_checked_format_first_then_version_with_the_pinned_texts ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.19s\n     Running unittests src/lib.rs (target/debug/build/veredas-core/c925160466cc73e3/out/veredas_core-c925160466cc73e3)",
+  "ranAt": "2026-11-22T15:43:39.190Z",
+  "headCommit": "974fe62f321b0ad7bbebef1ac965bedb5193f6a9",
   "tests": [
     {
       "name": "crates/veredas-core/src/schema.rs",
       "file": "crates/veredas-core/src/schema.rs",
-      "fileSha": "5ce35a4c93672bebfd107ba9d10c3f97342ef92502a19868bcc3e45004c8fe45"
+      "fileSha": "ef339a80b19e350cd48ad3d63f9eadf61b5e7465de9b9fbba7adf01a74751bd0"
     }
   ]
 }

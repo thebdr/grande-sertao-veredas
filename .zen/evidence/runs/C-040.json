@@ -10,15 +10,15 @@
     "opc"
   ],
   "exitCode": 0,
-  "outputSha": "e2242a8e0191f6c897e90d589670991a6193fdf6c2c328b061230652317e2309",
-  "outputTail": "\nrunning 4 tests\ntest every_configuration_mistake_is_refused_by_name_before_anything_connects ... ok\ntest writes_are_gated_by_the_switch_and_the_whitelist_and_land_on_the_server_side ... ok\ntest the_identity_comes_from_a_named_secret_and_a_wrong_one_never_connects ... ok\ntest the_bench_s_server_is_polled_into_typed_rows_with_bits_and_on_change_kept ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.91s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.09s\n     Running tests\\opc.rs (target\\debug\\deps\\opc-c2878f766fa9a8be.exe)",
-  "ranAt": "2026-11-09T19:17:38.172Z",
-  "headCommit": "f1019250da07c0ce1683b836b70ca68e2010f146",
+  "outputSha": "502c0280217b8dd725e3312c9540777a2c77b3f7ba37a74c1b00b2124c721737",
+  "outputTail": "\nrunning 4 tests\ntest every_configuration_mistake_is_refused_by_name_before_anything_connects ... ok\ntest writes_are_gated_by_the_switch_and_the_whitelist_and_land_on_the_server_side ... ok\ntest the_identity_comes_from_a_named_secret_and_a_wrong_one_never_connects ... ok\ntest the_bench_s_server_is_polled_into_typed_rows_with_bits_and_on_change_kept ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.90s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s\n     Running tests/opc.rs (target/debug/build/veredas-portal/3f99a32d187aa905/out/opc-3f99a32d187aa905)",
+  "ranAt": "2026-11-22T15:43:06.295Z",
+  "headCommit": "974fe62f321b0ad7bbebef1ac965bedb5193f6a9",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/opc.rs",
       "file": "crates/veredas-portal/tests/opc.rs",
-      "fileSha": "d6b77a2de8b51a350e2bcb9be6a4bce0e936c1b39788ad468d0fe5abfaf66562"
+      "fileSha": "962213c9e5340d55fb2560ed9a5f3cf90157e6f26646680e7154930b8aae03ac"
     }
   ]
 }

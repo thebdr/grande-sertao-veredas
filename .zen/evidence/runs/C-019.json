@@ -10,15 +10,15 @@
     "opc_value"
   ],
   "exitCode": 0,
-  "outputSha": "da3e29b4ff4056f662f8be202583d5aa140799d9cd0304bf9a550df1af23c883",
-  "outputTail": "test negative_words_expose_exactly_their_own_twos_complement_bits ... ok\ntest bits_refuse_non_integers ... ok\ntest packed_multi_bit_fields ... ok\ntest every_integer_wire_type_reaches_an_int_series_exactly_at_its_edges ... ok\ntest text_is_no_number ... ok\ntest integers_widen_but_floats_never_narrow ... ok\ntest single_bits_read_off_a_status_word ... ok\ntest text_accepts_anything_rendering_text_as_text_and_numbers_as_numbers ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n    Blocking waiting for file lock on build directory\n   Compiling veredas-core v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.27s\n     Running tests\\opc_value.rs (target\\debug\\deps\\opc_value-6a4aa695b71ef1db.exe)",
-  "ranAt": "2026-11-06T05:11:45.744Z",
-  "headCommit": "7b7d34eecac53bf2a55a9ea4fb249b7846d9a36a",
+  "outputSha": "df8820282912ff4539eb7be79ce409c4d7cd65f75742ffdc445a0a35891d8ae5",
+  "outputTail": "test booleans_are_integers_and_empty_is_an_error_for_every_series ... ok\ntest negative_words_expose_exactly_their_own_twos_complement_bits ... ok\ntest packed_multi_bit_fields ... ok\ntest bits_refuse_non_integers ... ok\ntest integers_widen_but_floats_never_narrow ... ok\ntest a_byte_word_has_its_eight_bits ... ok\ntest a_u64_beyond_i64_refuses_rather_than_wrapping ... ok\ntest a_datetime_reaches_a_time_series_as_naive_utc_and_nothing_else_does ... ok\ntest text_is_no_number ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.08s\n     Running tests/opc_value.rs (target/debug/build/veredas-core/83f8bb88c04d319e/out/opc_value-83f8bb88c04d319e)",
+  "ranAt": "2026-11-22T15:40:52.568Z",
+  "headCommit": "974fe62f321b0ad7bbebef1ac965bedb5193f6a9",
   "tests": [
     {
       "name": "crates/veredas-core/tests/opc_value.rs",
       "file": "crates/veredas-core/tests/opc_value.rs",
-      "fileSha": "796b34f9800de3486a00494bb513270c42a09c76e7b372109502729721163c78"
+      "fileSha": "4daa4c3192681128408adff00f73c740cf47ffe2eb4410ff92ab2abc9cb43b4b"
     }
   ]
 }

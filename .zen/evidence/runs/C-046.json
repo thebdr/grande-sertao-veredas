@@ -16,15 +16,15 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "dd72ef002f6dceb7334b1c07521c57fcee1fd9ee52a8f79a6339032a56bb38a0",
-  "outputTail": "test the_worked_example_loads_as_its_prose_says ... ok\ntest every_key_statement_is_the_readers ... ok\ntest what_cannot_be_a_project_is_refused_by_name ... ok\ntest the_executable_checks_a_project_and_reads_a_veredas_1_folder ... ok\ntest a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_named ... ok\ntest the_executable_runs_a_project_serving_and_reporting_until_stdin_closes ... ok\ntest the_sealed_password_reaches_the_source_through_the_session ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.35s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.22s\n     Running tests\\l7_stamps.rs (target\\debug\\deps\\l7_stamps-3ac18b9feb45ffc7.exe)\n     Running tests\\real_tree.rs (target\\debug\\deps\\real_tree-d1a4d457ef4f6d46.exe)\n     Running tests\\project.rs (target\\debug\\deps\\project-fae91b24d88e3171.exe)",
-  "ranAt": "2026-11-11T19:21:06.085Z",
-  "headCommit": "21ebfa4bfc8af156b0b2d3108638b359abd58ca5",
+  "outputSha": "bf907f113d623dd70752ec97d4ee922ffdd3f0e905624997e6b65d973b835b27",
+  "outputTail": "test the_worked_example_loads_as_its_prose_says ... ok\ntest what_cannot_be_a_project_is_refused_by_name ... ok\ntest every_key_statement_is_the_readers ... ok\ntest a_veredas_1_project_folder_is_read_into_the_file_and_what_is_not_carried_is_named ... ok\ntest the_executable_runs_a_project_serving_and_reporting_until_stdin_closes ... ok\ntest the_sealed_password_reaches_the_source_through_the_session ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.73s\n\n   Compiling leis v0.1.0 (/home/thebdr/code/grande-sertao-veredas/tools/leis)\n   Compiling veredas-portal v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/crates/veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.57s\n     Running tests/l7_stamps.rs (target/debug/build/leis/1e9f1a0134502a31/out/l7_stamps-1e9f1a0134502a31)\n     Running tests/real_tree.rs (target/debug/build/leis/e681f4870dfd06df/out/real_tree-e681f4870dfd06df)\n     Running tests/project.rs (target/debug/build/veredas-portal/cc29e5d1866f1f0e/out/project-cc29e5d1866f1f0e)",
+  "ranAt": "2026-11-22T15:43:57.833Z",
+  "headCommit": "974fe62f321b0ad7bbebef1ac965bedb5193f6a9",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/project.rs",
       "file": "crates/veredas-portal/tests/project.rs",
-      "fileSha": "4ce3557826f438087c0356395c87b51677b7ee6d3041eb8cc9b3e46f65f886a0"
+      "fileSha": "9ae2c5802043030326a1e8d1f7d7e3a3aa6269d3a82d6a6d2c71dc26bd99104b"
     }
   ]
 }

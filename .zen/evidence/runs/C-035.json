@@ -10,15 +10,15 @@
     "tail_file"
   ],
   "exitCode": 0,
-  "outputSha": "c0d951931a730b806470e0ba8dd5818057ad419dafa8745e1c336e87ee4d1bee",
-  "outputTail": "test a_file_held_at_the_start_is_read_from_where_it_stood_and_a_replacement_whole ... ok\ntest utf16_both_orders_with_a_mark_and_little_endian_without ... ok\ntest waits_for_a_file_to_appear_and_reads_it_whole ... ok\ntest three_files_tailed_at_once_merge_tagged_with_dense_sequences ... ok\ntest a_fast_writer_cannot_pin_the_reader_and_every_line_arrives_once ... ok\ntest a_utf16_file_tailed_from_its_end_emits_the_first_new_line_and_skips_a_torn_one ... ok\ntest a_start_returns_attached_so_a_line_written_right_after_is_read ... ok\ntest a_retired_file_found_shorter_than_what_was_read_is_reread_from_its_top ... ok\ntest a_tail_without_a_watcher_polls_at_its_interval_and_reads_the_file_when_it_comes ... ok\n\ntest result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.34s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (C:\\Source\\Repos\\grande-sertao-veredas\\crates\\veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.48s\n     Running tests\\tail_file.rs (target\\debug\\deps\\tail_file-7b76946d20ae27e4.exe)",
-  "ranAt": "2026-11-11T20:06:54.448Z",
-  "headCommit": "cede1a7b7fabf3b9202ed4d0b572bda9011bcead",
+  "outputSha": "106c4b2a04ddb7a00d2c7912d6e87f5d515eb3dbea9a99423b7b06e5c3b2ed25",
+  "outputTail": "test a_file_holding_its_mark_alone_tailed_from_its_end_emits_the_first_line_written ... ok\ntest a_torn_utf8_lead_at_the_end_of_an_ascii_opened_file_is_a_replacement_character ... ok\ntest an_attach_inside_a_utf16_code_unit_moves_back_to_the_unit_boundary ... ok\ntest a_head_under_four_bytes_decides_with_what_follows_it ... ok\ntest a_utf16_file_tailed_from_its_end_emits_the_first_new_line_and_skips_a_torn_one ... ok\ntest a_short_head_that_proves_no_mark_is_text_from_before_the_attach_and_never_emitted ... ok\ntest a_file_unreadable_at_the_start_is_told_from_its_replacement_by_the_directory_entry ... ok\ntest a_file_in_a_folder_denying_search_at_the_start_is_read_whole_when_it_opens ... ok\ntest a_retired_file_found_shorter_than_what_was_read_is_reread_from_its_top ... ok\ntest a_tail_without_a_watcher_polls_at_its_interval_and_reads_the_file_when_it_comes ... ok\n\ntest result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.13s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s\n     Running tests/tail_file.rs (target/debug/build/veredas-portal/276b58ed1da200c8/out/tail_file-276b58ed1da200c8)",
+  "ranAt": "2026-11-22T15:42:49.538Z",
+  "headCommit": "974fe62f321b0ad7bbebef1ac965bedb5193f6a9",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/tail_file.rs",
       "file": "crates/veredas-portal/tests/tail_file.rs",
-      "fileSha": "1e7c04f11af6b895de3d5e2bbc8b5105866f6fbfcc2838faa5ed86471534893d"
+      "fileSha": "c233286cec60416cca34c3c0ce5b93840b3011417445a7db24672205c6c7b95f"
     }
   ]
 }
