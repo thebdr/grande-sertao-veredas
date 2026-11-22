@@ -97,44 +97,85 @@ fn target_sources(dir: &Path) -> Vec<PathBuf> {
     package["targets"].as_array().unwrap().iter().map(|t| PathBuf::from(t["src_path"].as_str().unwrap())).collect()
 }
 
-/// The ways a crate reads a source file from anywhere: the include macros and a module's path
-/// attribute, spelled here in pieces so that this file holds none of them whole.
-fn pulls_in(text: &str) -> Vec<String> {
-    let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-    let forms = [format!("{}{}", "inclu", "de!("), format!("{}{}", "inclu", "de_str!("), format!("{}{}", "inclu", "de_bytes!("), format!("{}{}", "#[pa", "th="), format!("{}{}", ",pa", "th=")];
-    forms.iter().filter(|f| flat.contains(f.as_str())).cloned().collect()
+/// Every file rustc read to compile the targets of the package at `manifest`, by the dep-info it
+/// wrote for each, in a check of every target with `args`, into `target_dir`.
+fn files_rustc_read(manifest: &Path, target_dir: &Path, args: &[&str]) -> BTreeSet<PathBuf> {
+    let out = Command::new(env!("CARGO"))
+        .args(["check", "--offline", "--all-targets", "--message-format=json", "--manifest-path"])
+        .arg(manifest)
+        .args(args)
+        .env("CARGO_TARGET_DIR", target_dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "check {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    let manifest = manifest.canonicalize().unwrap();
+    // Dep-info names a file relative to the workspace's root.
+    let meta = metadata(&manifest, &["--no-deps", "--offline"]);
+    let root = PathBuf::from(meta["workspace_root"].as_str().unwrap());
+    let mut files = BTreeSet::new();
+    let mut units = 0;
+    for line in String::from_utf8(out.stdout).unwrap().lines() {
+        let Ok(msg) = serde_json::from_str::<Value>(line) else { continue };
+        if msg["reason"] != "compiler-artifact" || Path::new(msg["manifest_path"].as_str().unwrap_or("")).canonicalize().ok() != Some(manifest.clone()) {
+            continue;
+        }
+        // The artifact `deps/lib<name>-<hash>.rmeta` has its dep-info beside it, `<name>-<hash>.d`.
+        let artifact = PathBuf::from(msg["filenames"][0].as_str().unwrap());
+        let stem = artifact.file_stem().unwrap().to_str().unwrap();
+        let dep = artifact.with_file_name(format!("{}.d", stem.strip_prefix("lib").unwrap_or(stem)));
+        let text = std::fs::read_to_string(&dep).unwrap_or_else(|e| panic!("{}: {e}", dep.display()));
+        let first = text.lines().next().unwrap();
+        let (_, inputs) = first.split_once(": ").unwrap_or((first, ""));
+        // Spaces in a path are written `\ `.
+        let inputs = inputs.replace("\\ ", "\u{0}");
+        files.extend(inputs.split_whitespace().map(|p| root.join(p.replace('\u{0}', " "))));
+        units += 1;
+    }
+    assert!(units > 0, "no unit of the package was checked");
+    files
+}
+
+/// The files of `files` that do not lie in `dir`, once every link is followed.
+fn outside(files: &BTreeSet<PathBuf>, dir: &Path) -> Vec<PathBuf> {
+    files.iter().filter(|f| !f.canonicalize().unwrap_or_else(|_| (*f).clone()).starts_with(dir)).cloned().collect()
 }
 
 #[test]
 fn aranha_compiles_in_no_file_from_outside_its_folder() {
     let dir = manifest_dir().canonicalize().unwrap();
+    // Every target is one cargo finds by itself (src/lib.rs, a file under tests/): the split of
+    // the test below, which copies those, holds every one.
     for src in target_sources(&dir) {
-        assert!(src.canonicalize().unwrap().starts_with(&dir), "a target outside the crate: {}", src.display());
+        let rel = src.canonicalize().unwrap().strip_prefix(&dir).unwrap().to_path_buf();
+        assert!(rel == Path::new("src/lib.rs") || rel.parent() == Some(Path::new("tests")), "a target cargo would not find by itself: {}", rel.display());
     }
-    let mut files = Vec::new();
-    crate_files(&dir, &mut files);
-    let pulling: Vec<String> = files
-        .iter()
-        .filter(|f| f.extension().is_some_and(|e| e == "rs"))
-        .flat_map(|f| pulls_in(&std::fs::read_to_string(f).unwrap()).into_iter().map(move |p| format!("{}: {p}", f.display())))
-        .collect();
-    assert_eq!(pulling, Vec::<String>::new());
-    // Both checks can fail: a test target whose path leaves the folder, and each form of pulling in.
-    let planted = planted("outside", &[("Cargo.toml", manifest("[[test]]\nname = \"outside\"\npath = \"../outside.rs\"\n")), ("src/lib.rs", String::new())]);
-    std::fs::write(planted.parent().unwrap().join("outside.rs"), "").unwrap();
-    let here = planted.canonicalize().unwrap();
-    assert!(target_sources(&planted).iter().any(|s| !s.canonicalize().unwrap().starts_with(&here)));
-    std::fs::remove_dir_all(&planted).unwrap();
-    let inc = "inclu";
-    for sample in [
-        format!("{inc}de!(\"x.rs\");"),
-        format!("const T: &str = {inc}de_str! (\"x\");"),
-        format!("{inc}de_bytes!(\"x\")"),
-        format!("#[pa{}th = \"x.rs\"] mod m;", ""),
-        format!("#[cfg_attr(unix, pa{}th = \"x.rs\")] mod m;", ""),
-    ] {
-        assert_eq!(pulls_in(&sample).len(), 1, "{sample}");
+    // Every file rustc reads for every target, in every build checked, by its own dep-info: no
+    // spelling of an include, no module path, no link hides a file from it.
+    let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("depinfo");
+    for args in [&["--all-features"][..], &["--all-features", "--release"], &["--all-features", "--target", "x86_64-pc-windows-gnu"]] {
+        let read = files_rustc_read(&dir.join("Cargo.toml"), &target, args);
+        assert!(read.iter().any(|f| f.ends_with("src/profinet/dcp.rs")) && read.iter().any(|f| f.ends_with("tests/component.rs")), "{read:?}");
+        assert_eq!(outside(&read, &dir), Vec::<PathBuf>::new(), "{args:?}");
     }
+    // The check can fail: a crate that pulls in a file by an include in braces behind a comment,
+    // and a module that is a link to a file outside.
+    let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("depinfo-planted");
+    let _ = std::fs::remove_dir_all(&base);
+    let krate = base.join("krate");
+    std::fs::create_dir_all(krate.join("src")).unwrap();
+    std::fs::write(base.join("note.txt"), "x").unwrap();
+    std::fs::write(base.join("outside_mod.rs"), "pub const M: u8 = 1;\n").unwrap();
+    let inc = format!("{}{}", "inclu", "de_str!");
+    std::fs::write(krate.join("Cargo.toml"), manifest("")).unwrap();
+    std::fs::write(krate.join("src/lib.rs"), format!("pub const N: &str = {inc} /* c */ {{\"../../note.txt\"}};\npub mod borrowed;\n")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(base.join("outside_mod.rs"), krate.join("src/borrowed.rs")).unwrap();
+    let read = files_rustc_read(&krate.join("Cargo.toml"), &base.join("target"), &[]);
+    let here = krate.canonicalize().unwrap();
+    let mut out: Vec<String> = outside(&read, &here).iter().map(|p| p.file_name().unwrap().to_str().unwrap().to_string()).collect();
+    out.sort();
+    assert_eq!(out, ["borrowed.rs", "note.txt"]);
+    std::fs::remove_dir_all(&base).unwrap();
 }
 
 #[test]
@@ -287,8 +328,17 @@ fn the_walk_follows_what_ships_and_leaves_dev_dependencies_to_the_tests() {
     let dir = planted(
         "walk",
         &[
-            ("Cargo.toml", "[workspace]\nmembers = [\"root\", \"a\", \"b\", \"c\", \"d\"]\nresolver = \"3\"\n".into()),
-            ("root/Cargo.toml", "[package]\nname = \"root\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[dependencies]\na = { path = \"../a\" }\n[build-dependencies]\nb = { path = \"../b\" }\n[dev-dependencies]\nc = { path = \"../c\" }\n".into()),
+            ("Cargo.toml", "[workspace]\nmembers = [\"root\", \"a\", \"b\", \"c\", \"d\", \"e\", \"f\", \"g\"]\nresolver = \"3\"\n".into()),
+            (
+                "root/Cargo.toml",
+                "[package]\nname = \"root\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[features]\nextra = [\"dep:e\"]\n[dependencies]\na = { path = \"../a\" }\ne = { path = \"../e\", optional = true }\n[build-dependencies]\nb = { path = \"../b\" }\n[dev-dependencies]\nc = { path = \"../c\" }\n[target.'cfg(windows)'.dependencies]\nf = { path = \"../f\" }\n[target.'cfg(target_arch = \"aarch64\")'.dependencies]\ng = { path = \"../g\" }\n".into(),
+            ),
+            ("e/Cargo.toml", "[package]\nname = \"e\"\nversion = \"0.1.0\"\nedition = \"2024\"\n".into()),
+            ("e/src/lib.rs", String::new()),
+            ("f/Cargo.toml", "[package]\nname = \"f\"\nversion = \"0.1.0\"\nedition = \"2024\"\n".into()),
+            ("f/src/lib.rs", String::new()),
+            ("g/Cargo.toml", "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n".into()),
+            ("g/src/lib.rs", String::new()),
             ("root/src/lib.rs", String::new()),
             ("a/Cargo.toml", "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[dependencies]\nd = { path = \"../d\" }\n".into()),
             ("a/src/lib.rs", String::new()),
@@ -306,9 +356,11 @@ fn the_walk_follows_what_ships_and_leaves_dev_dependencies_to_the_tests() {
     let graph = reached(&meta, &root);
     let members = members_reached(&meta, &root, &["root"]);
     std::fs::remove_dir_all(&dir).unwrap();
-    assert_eq!(graph.into_iter().collect::<Vec<_>>(), ["a", "b", "d", "root"]);
+    // An optional dependency behind a feature, and dependencies on Windows and on another
+    // architecture, all reached: every feature on, every platform.
+    assert_eq!(graph.into_iter().collect::<Vec<_>>(), ["a", "b", "d", "e", "f", "g", "root"]);
     // Every one of them a member of that workspace, named however: each reached member is named.
-    assert_eq!(members, ["a", "b", "d"]);
+    assert_eq!(members, ["a", "b", "d", "e", "f", "g"]);
 }
 
 /// Copy the tree at `from` into `to`, leaving out `skip` (a folder under `from`).
@@ -489,6 +541,7 @@ fn fold(c: char) -> Vec<char> {
         'ŋ' => "n",
         'œ' => "oe",
         'ŧ' => "t",
+        // The spacing modifier letters NFKD leaves (the apostrophe of `ŉ`, the half ring of `ẚ`).
         '\u{2b0}'..='\u{2ff}' => "",
         'ƒ' => "f",
         'ƶ' => "z",
@@ -521,16 +574,57 @@ fn vendor_mentions(text: &str) -> Vec<String> {
             }
         }
     }
-    let section = char::from_u32(0xA7).unwrap();
-    // The sign as it is, or as an entity or an escape writes it.
-    let spelled = [format!("&{}", "sect;"), format!("&#{}", "167;"), format!("&#{}", "xa7;"), format!("\\{}", "u{a7}"), format!("\\{}", "u{00a7}"), format!("\\{}", "xa7")];
     for (n, line) in text.lines().enumerate() {
-        let lower = line.to_lowercase();
-        if line.contains(section) || spelled.iter().any(|s| lower.contains(s.as_str())) {
+        if has_section_sign(line) {
             hits.push(format!("line {}: section sign", n + 1));
         }
     }
     hits
+}
+
+/// Whether a line holds the section sign as itself, or as an entity, an escape or a percent
+/// encoding writes it: its named entity (with its semicolon or without, as browsers read it), a
+/// numeric entity in decimal or hex with any leading zeros, a Rust escape in braces (any zeros,
+/// underscores), a JSON or TOML escape of four or eight hex digits, a byte escape, and its UTF-8
+/// bytes percent-encoded. The sign's spellings are decoded, not listed (and are written here in
+/// pieces, so this file holds none whole).
+fn has_section_sign(line: &str) -> bool {
+    if line.contains(char::from_u32(0xA7).unwrap()) {
+        return true;
+    }
+    let named = format!("&{}", "sect");
+    let percent = format!("%c2{}", "%a7");
+    let l = line.to_lowercase();
+    let b = l.as_bytes();
+    let hex_value = |digits: &str| u32::from_str_radix(digits, 16).ok();
+    let mut i = 0;
+    while i < b.len() {
+        let rest = &l[i..];
+        let found = if let Some(r) = rest.strip_prefix(named.as_str()) {
+            r.is_empty() || !r.as_bytes()[0].is_ascii_alphanumeric()
+        } else if let Some(r) = rest.strip_prefix("&#x") {
+            let d: String = r.chars().take_while(char::is_ascii_hexdigit).collect();
+            !d.is_empty() && hex_value(&d) == Some(0xA7)
+        } else if let Some(r) = rest.strip_prefix("&#") {
+            let d: String = r.chars().take_while(char::is_ascii_digit).collect();
+            !d.is_empty() && d.parse::<u32>().ok() == Some(167)
+        } else if let Some(r) = rest.strip_prefix("\\u{") {
+            let inner: String = r.chars().take_while(|c| *c != '}').filter(|c| *c != '_').collect();
+            hex_value(&inner) == Some(0xA7)
+        } else if let Some(r) = rest.strip_prefix("\\u") {
+            let d: String = r.chars().take_while(char::is_ascii_hexdigit).take(8).collect();
+            (d.len() >= 4 && hex_value(&d[..4]) == Some(0xA7)) || (d.len() == 8 && hex_value(&d) == Some(0xA7))
+        } else if let Some(r) = rest.strip_prefix("\\x") {
+            r.len() >= 2 && hex_value(&r[..2]) == Some(0xA7)
+        } else {
+            rest.starts_with(percent.as_str())
+        };
+        if found {
+            return true;
+        }
+        i += rest.chars().next().map_or(1, char::len_utf8);
+    }
+    false
 }
 
 fn crate_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -570,6 +664,23 @@ fn aranha_names_no_vendor_and_cites_no_vendor_document() {
         })
         .collect();
     assert_eq!(found, Vec::<String>::new());
+    // The letter table is supervisão's, held to its file; with it every letter of Latin-1 and
+    // Latin Extended-A, and the table's three of Extended-B, reads as plain letters.
+    let body = |file: &str| -> String {
+        let text = std::fs::read_to_string(file).unwrap();
+        let start = text.find("fn fold(c: char) -> Vec<char> {").unwrap();
+        let end = start + text[start..].find("c => return vec![c],").unwrap();
+        text[start..end].lines().map(str::trim).collect::<Vec<_>>().join("\n")
+    };
+    let own = manifest_dir().join("tests/component.rs");
+    let theirs = manifest_dir().join("../veredas-supervisao/tests/component.rs");
+    assert_eq!(body(own.to_str().unwrap()), body(theirs.to_str().unwrap()));
+    let not_plain: Vec<char> = ('\u{c0}'..='\u{17f}')
+        .chain(['ƒ', 'ƶ', 'ȷ'])
+        .filter(|c| c.is_alphabetic())
+        .filter(|c| !letters(&c.to_string()).iter().all(|l| l.is_ascii_lowercase()))
+        .collect();
+    assert_eq!(not_plain, Vec::<char>::new());
     // The terms are core's, held to core's own file.
     let core = std::fs::read_to_string(manifest_dir().join("../veredas-core/tests/foundation.rs")).unwrap();
     let list = format!("[{}]", TERMS.iter().map(|t| format!("\"{t}\"")).collect::<Vec<_>>().join(", "));
@@ -596,8 +707,18 @@ fn aranha_names_no_vendor_and_cites_no_vendor_document() {
         (format!("// {}", rev("ecafretnitsoh").replacen('t', "\u{167}", 1)), 1),
         // The citation sign as an entity and as escapes.
         (format!("/// clause &{}4.3", "sect;"), 1),
+        (format!("/// clause &{} 4.3", "sect"), 1),
         (format!("let s = \"\\{}\";", "u{a7}"), 1),
+        (format!("let s = \"\\{}{}\";", "u{0", "a7}"), 1),
+        (format!("let s = \"\\{}{}\";", "u{0000", "a7}"), 1),
+        (format!("let s = \"\\{}{}\";", "u{a_", "7}"), 1),
         (format!("/// clause &#{} 2", "167;"), 1),
+        (format!("/// clause &#{} 2", "0167"), 1),
+        (format!("/// clause &#{} 2", "x00a7;"), 1),
+        (format!("description = \"\\{}{} 4.2\"", "u00", "A7"), 1),
+        (format!("description = \"\\{}{} 4.2\"", "U000000", "A7"), 1),
+        (format!("b\"\\{}{}\"", "x", "a7"), 1),
+        (format!("https://x/{}{}", "%C2", "%A7"), 1),
     ];
     for (s, line) in &samples {
         let hits = vendor_mentions(s);
@@ -605,4 +726,8 @@ fn aranha_names_no_vendor_and_cites_no_vendor_document() {
         assert!(hits[0].starts_with(&format!("line {line}: ")), "{s}: {hits:?}");
     }
     assert_eq!(vendor_mentions("// the host's own interface"), Vec::<String>::new());
+    // Near the sign's spellings, but not it.
+    for innocent in [format!("&{}ion", "sect"), format!("&#{}", "168;"), format!("\\{}", "u00a8"), format!("{}{}", "%C2", "%A8")] {
+        assert_eq!(vendor_mentions(&innocent), Vec::<String>::new(), "{innocent}");
+    }
 }
