@@ -22,7 +22,7 @@
 //! - **function blocks are not copied** - a timer, an edge or a counter is state with an identity. It is neither
 //!   `Copy` nor `Clone`, so scanning a copy by mistake does not compile:
 //!
-//! ```compile_fail
+//! ```compile_fail,E0507
 //! use orcl_std::{Scan, Ton, ms};
 //!
 //! struct Guard {
@@ -52,6 +52,7 @@
 mod bits;
 mod counters;
 mod edges;
+mod o14;
 mod scan;
 mod timers;
 

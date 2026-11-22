@@ -1,0 +1,33 @@
+{
+  "clause": "C-150",
+  "verdict": "refuted",
+  "ranAt": "2026-11-22T17:50:55.965Z",
+  "headCommit": "11a15e4c037fe5a6cf778318deb3c90a94b1ad43",
+  "tests": [
+    {
+      "name": "crates/orcl-std/src/timers.rs",
+      "file": "crates/orcl-std/src/timers.rs",
+      "symbolSha": "db9c86e54b607abfedcf3bd621eab174c027322f93c6ee3284a2552dfc20f9d7"
+    },
+    {
+      "name": "crates/orcl-std/src/edges.rs",
+      "file": "crates/orcl-std/src/edges.rs",
+      "symbolSha": "e09dfc420fd30d05b8571ece3c4cf9aa6f2120fc979f13e267da27858297174b"
+    },
+    {
+      "name": "crates/orcl-std/src/counters.rs",
+      "file": "crates/orcl-std/src/counters.rs",
+      "symbolSha": "fe2a5a9af417a26cae5a44fb10e70b364e5fe1c6c8d98f242eff4ea54f0acfdc"
+    },
+    {
+      "name": "crates/orcl-std/src/bits.rs",
+      "file": "crates/orcl-std/src/bits.rs",
+      "symbolSha": "bbc0b5a236ec90c920a9809c709f3876f2d3f7043915fe2e6a183596d7386fee"
+    },
+    {
+      "name": "crates/orcl-std/src/lib.rs",
+      "file": "crates/orcl-std/src/lib.rs",
+      "symbolSha": "2f2165452406da98d99ad9ca6d04d1279fa36772323a344702ef90f76cc34039"
+    }
+  ]
+}
