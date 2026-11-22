@@ -8,6 +8,7 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use ironcalc::export::save_to_xlsx;
@@ -448,8 +449,110 @@ fn the_comparison_rules_and_the_spelling_of_values() {
     assert_eq!(f(ExternalValue::String("a\u{a0}b".to_string())), "\"a\u{a0}b\"");
     let decomposed = "ac\u{327}a\u{303}o";
     assert_eq!(f(ExternalValue::String(decomposed.to_string())), format!("\"{decomposed}\""));
-    assert_eq!(f(ExternalValue::String("C:\\x".to_string())), "\"C:\\x\"");
+    // a backslash doubled, so two different texts never read the same
+    assert_eq!(f(ExternalValue::String("C:\\x".to_string())), "\"C:\\\\x\"");
+    let backslash_n = f(ExternalValue::String("C:\\new".to_string()));
+    let line_feed = f(ExternalValue::String("C:\new".to_string()));
+    assert_eq!((backslash_n.as_str(), line_feed.as_str()), ("\"C:\\\\new\"", "\"C:\\new\""));
+    assert_ne!(backslash_n, line_feed);
+    // Unicode's line and paragraph separators and the bidirectional controls escaped
+    assert_eq!(f(ExternalValue::String("a\u{2028}b\u{2029}c\u{202e}d\u{2066}e\u{200f}".to_string())), "\"a\\u{2028}b\\u{2029}c\\u{202e}d\\u{2066}e\\u{200f}\"");
     assert_eq!(f(ExternalValue::Boolean(true)), "TRUE");
     assert_eq!(f(ExternalValue::Boolean(false)), "FALSE");
     assert_eq!(f(ExternalValue::Error(Error::DIV)), "#DIV/0!");
+}
+
+/// Copies the package at `from` to `to`, `part` replaced by `text` (or removed when `None`) and
+/// `drop` removed; every other part as it is.
+fn rewrite(from: &Path, to: &Path, part: &str, text: Option<&str>, drop: &[&str]) {
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(from).unwrap()).unwrap();
+    let mut writer = zip::ZipWriter::new(std::fs::File::create(to).unwrap());
+    let mut seen = false;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).unwrap();
+        let name = entry.name().unwrap().to_string();
+        if drop.contains(&name.as_str()) {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        if name == part {
+            seen = true;
+            match text {
+                Some(t) => bytes = t.as_bytes().to_vec(),
+                None => continue,
+            }
+        }
+        writer.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&bytes).unwrap();
+    }
+    writer.finish().unwrap();
+    assert!(seen, "{part} not in the package");
+}
+
+/// A DDE link as Excel writes one: a PLC read through a DDE server.
+const DDE_LINK: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<externalLink xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><ddeLink xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ddeService="RSLinx" ddeTopic="PLC5"><ddeItems><ddeItem name="N7:0" advise="1"><values><value><val>3</val></value></values></ddeItem></ddeItems></ddeLink></externalLink>"#;
+
+#[test]
+fn a_dde_link_is_no_workbook_never_asked_counted_or_listed() {
+    let dir = tempfile::tempdir().unwrap();
+    // a file whose only link is a DDE link
+    let saved = save_book(dir.path(), "saved.xlsx", &[("A1", "=1+1")], vec![link_to("placeholder.xlsx", 1.0)]);
+    let dde_only = dir.path().join("dde_only.xlsx");
+    rewrite(&saved, &dde_only, "xl/externalLinks/externalLink1.xml", Some(DDE_LINK), &["xl/externalLinks/_rels/externalLink1.xml.rels"]);
+    for policy in [LinkPolicy::AlwaysAsk, LinkPolicy::AlwaysRecalculateLinked, LinkPolicy::AlwaysUseCached] {
+        let opened = open(&dde_only, policy, |books| panic!("asked about {books:?}")).unwrap();
+        assert_eq!(opened.links, LinkOutcome::NoLinks, "{policy:?}");
+        assert_eq!(opened.choice, None);
+        assert_eq!(cell(&opened, 1), "2");
+    }
+    // a DDE link beside a workbook link: only the workbook is asked about, counted and listed,
+    // and `[2]` is still the second link
+    save_book(dir.path(), "companion.xlsx", &[("B2", "10")], vec![]);
+    let saved = save_book(
+        dir.path(),
+        "saved2.xlsx",
+        &[("A1", "=[2]Sheet1!$B$2")],
+        vec![link_to("placeholder.xlsx", 1.0), link_to("companion.xlsx", 999.0)],
+    );
+    let mixed = dir.path().join("mixed.xlsx");
+    rewrite(&saved, &mixed, "xl/externalLinks/externalLink1.xml", Some(DDE_LINK), &["xl/externalLinks/_rels/externalLink1.xml.rels"]);
+    let asked = Cell::new(0);
+    let opened = open(&mixed, LinkPolicy::AlwaysAsk, |books| {
+        asked.set(asked.get() + 1);
+        assert_eq!(books.iter().map(|b| b.target.as_str()).collect::<Vec<_>>(), vec!["companion.xlsx"]);
+        LinkChoice::UseCached
+    })
+    .unwrap();
+    assert_eq!(asked.get(), 1);
+    assert_eq!(opened.links, LinkOutcome::Cached { books: 1 });
+    assert_eq!(cell(&opened, 1), "999");
+    let opened = open(&mixed, LinkPolicy::AlwaysRecalculateLinked, |_| panic!("asked")).unwrap();
+    let LinkOutcome::Linked(statuses) = &opened.links else { panic!("{:?}", opened.links) };
+    assert_eq!(statuses.len(), 1);
+    assert_eq!((statuses[0].index, statuses[0].target.as_str(), &statuses[0].state), (2, "companion.xlsx", &LinkState::Loaded));
+    assert_eq!(cell(&opened, 1), "10");
+}
+
+#[test]
+fn a_linked_workbook_that_opened_without_the_sheet_is_a_line_naming_the_sheet() {
+    let dir = tempfile::tempdir().unwrap();
+    // the linked workbook opens, but its sheet was renamed: it has Sheet1, the link reads ZONES
+    save_book(dir.path(), "companion.xlsx", &[("B2", "10")], vec![]);
+    let mut book = link_to("companion.xlsx", 999.0);
+    book.sheets[0].name = "ZONES".to_string();
+    let main = save_book(dir.path(), "main.xlsx", &[("A1", "=[1]ZONES!$B$2"), ("A2", "=[1]ZONES!$B$3")], vec![book]);
+    let mut opened = open(&main, LinkPolicy::AlwaysRecalculateLinked, |_| panic!("asked")).unwrap();
+    let LinkOutcome::Linked(statuses) = &opened.links else { panic!("{:?}", opened.links) };
+    assert_eq!(statuses[0].state, LinkState::Loaded);
+    assert_eq!(cell(&opened, 1), "#REF!");
+    let diffs = opened.link_diffs();
+    let lines: Vec<String> = diffs.iter().map(|d| d.to_string()).collect();
+    assert_eq!(lines, vec!["[1]ZONES!B2: cached 999 → live (no sheet ZONES)", "[1]ZONES!B3: cached (empty) → live (no sheet ZONES)"]);
+    assert!(diffs.iter().all(|d| d.live_sheet_missing && d.live.is_none()));
+    // under the cache, nothing
+    let mut opened = open(&main, LinkPolicy::AlwaysUseCached, |_| panic!("asked")).unwrap();
+    assert_eq!(cell(&opened, 1), "999");
+    assert!(opened.link_diffs().is_empty());
 }

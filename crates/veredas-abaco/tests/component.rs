@@ -11,7 +11,9 @@
 //! - It holds no plant connection (`docs/abaco-plan.md`, "Scope"): its normal dependency graph, on
 //!   every platform, is a reviewed list of crates, none of them a member of the suite.
 //! - The fork's own suite (upstream's tests and each local change's) passes in the fork's own
-//!   workspace, on a lock that pins every crate of Ábaco's graph at the version the suite builds.
+//!   workspace, upstream's eight ignored tests ignored and no other, on a lock that pins every
+//!   crate of Ábaco's graph at the version and the source the suite builds, every one from
+//!   crates.io, and with the engine's float math on the platform's functions in both builds.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -139,16 +141,23 @@ fn the_fork_is_upstream_at_its_commit_then_each_listed_change_a_commit() {
     let base = added[0];
     assert_eq!(git(&["rev-parse", &format!("{base}:forks/ironcalc/base")]).trim(), UPSTREAM_BASE_TREE);
     assert_eq!(git(&["rev-parse", &format!("{base}:forks/ironcalc/xlsx")]).trim(), UPSTREAM_XLSX_TREE);
-    // every later commit touching the engine is a change the record lists, one row each
-    let later = git(&["rev-list", &format!("{base}..HEAD"), "--", "forks/ironcalc/base", "forks/ironcalc/xlsx"]);
-    let later = later.lines().count();
+    // every later commit touching the engine is a change the record lists, one row each: its
+    // subject names the change (`(fork change 7)`, a refinement `(fork change 1, refined)` row 1b)
+    let later = git(&["log", "--format=%s", &format!("{base}..HEAD"), "--", "forks/ironcalc/base", "forks/ironcalc/xlsx"]);
+    let named = regex_free_change_ids(&later);
     let record = std::fs::read_to_string(root().join("forks/ironcalc/VEREDAS-FORK.md")).unwrap();
     let table = record.split("## Local changes").nth(1).unwrap();
-    let rows = table
+    let rows: Vec<String> = table
         .lines()
         .filter(|l| l.starts_with("| ") && !l.starts_with("| # ") && !l.starts_with("|---"))
-        .count();
-    assert_eq!(later, rows, "{later} commits changed the engine since upstream's, the record lists {rows}");
+        .map(|l| l.trim_start_matches("| ").split(' ').next().unwrap().to_string())
+        .collect();
+    assert_eq!(named.len(), later.lines().count(), "a commit changed the engine without naming its change:\n{later}");
+    let mut sorted_named = named.clone();
+    sorted_named.sort();
+    let mut sorted_rows = rows.clone();
+    sorted_rows.sort();
+    assert_eq!(sorted_named, sorted_rows, "the commits' changes and the record's rows");
     // and the working tree changes none of it unrecorded
     let dirty = git(&["status", "--porcelain", "--", "forks/ironcalc/base", "forks/ironcalc/xlsx"]);
     assert!(dirty.trim().is_empty(), "the engine changed outside a commit:\n{dirty}");
@@ -209,26 +218,70 @@ fn locked(path: &Path) -> BTreeMap<String, BTreeSet<String>> {
 }
 
 /// The fork's suite, as upstream's tests and the changes' count them on 2026-11-22: upstream's
-/// 3 192 and their 8 ignored at `15ecfec`, and the changes' 44 (change 12 added one).
-const FORK_PASSED: usize = 3236;
+/// 3 192 and their 8 ignored at `15ecfec`, and the changes' 46 (changes 12 and 14 added three).
+const FORK_PASSED: usize = 3238;
 const FORK_IGNORED: usize = 8;
+
+/// Upstream's ignored tests at `15ecfec`, by name.
+const UPSTREAM_IGNORED: [&str; 8] = [
+    "formatter::test::test_de_examples::format_millions_scale_decimal_de",
+    "formatter::test::test_en_examples::format_fraction_eighths",
+    "formatter::test::test_en_examples::format_fraction_simple",
+    "formatter::test::test_en_examples::format_fraction_two_digit_den",
+    "formatter::test::test_en_examples::format_group_with_leading_hashes",
+    "formatter::test::test_en_examples::format_scientific_failing",
+    "test::test_fn_or_xor::spill_behaviour",
+    "test::test_general::test_xlfn",
+];
 
 #[test]
 fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
-    // the fork's lock pins every crate of Ábaco's graph on this host at the version the suite's
-    // lock gives it, so the fork's suite tests the engine Ábaco links
+    // no crate of the workspace is patched or replaced: every crate but the three path packages
+    // comes from crates.io as the lock says
+    let manifest: toml::Table = toml::from_str(&std::fs::read_to_string(root().join("Cargo.toml")).unwrap()).unwrap();
+    assert!(manifest.get("patch").is_none() && manifest.get("replace").is_none(), "the root manifest patches crates");
+    let paths = [
+        format!("veredas-abaco v2.0.0-alpha.1 ({})", root().join("crates/veredas-abaco").display()),
+        format!("ironcalc_base v0.9.1 ({})", root().join("forks/ironcalc/base").display()),
+        format!("ironcalc v0.9.1 ({})", root().join("forks/ironcalc/xlsx").display()),
+    ];
+    // the fork's lock pins every crate of Ábaco's graph on every platform at the version and the
+    // source the suite's lock gives it, so the fork's suite tests the versions Ábaco links
     let fork_lock = locked(&root().join("forks/ironcalc/Cargo.lock"));
-    for p in normal_graph(false) {
+    let root_lock = locked(&root().join("Cargo.lock"));
+    for p in normal_graph(true) {
+        if paths.contains(&p) {
+            continue;
+        }
+        assert!(!p.contains('('), "{p}: not from crates.io");
         let mut words = p.split_whitespace();
         let (name, version) = (words.next().unwrap(), words.next().unwrap().trim_start_matches('v'));
-        if p.contains('(') {
-            continue; // a path package: Ábaco itself and the fork's two crates
-        }
+        assert!(root_lock.get(name).is_some_and(|v| v.contains(version)), "{name} {version} not in the suite's lock from crates.io");
         assert!(
             fork_lock.get(name).is_some_and(|v| v.contains(version)),
             "{name} {version} in Ábaco's graph, {:?} in the fork's lock",
             fork_lock.get(name)
         );
+    }
+    // one float path: `num-traits` (the statistical functions' float math) with `std` in Ábaco's
+    // own build and in the fork's test build (fork change 13), so neither falls back to `libm`
+    for (what, args) in [
+        ("Ábaco's build", vec!["tree", "-e", "normal", "--prefix", "none", "-f", "{p} {f}", "-p", "veredas-abaco"]),
+        (
+            "the fork's test build",
+            vec!["tree", "-e", "normal,dev", "--prefix", "none", "-f", "{p} {f}", "-p", "ironcalc_base", "--manifest-path"],
+        ),
+    ] {
+        let text = if what == "Ábaco's build" {
+            cargo(&args)
+        } else {
+            let out = Command::new(env!("CARGO")).args(&args).arg(root().join("forks/ironcalc/Cargo.toml")).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8(out.stdout).unwrap()
+        };
+        let line = text.lines().find(|l| l.starts_with("num-traits ")).unwrap_or_else(|| panic!("{what}: no num-traits"));
+        let features = line.split(' ').nth(2).unwrap_or("");
+        assert!(features.split(',').any(|f| f == "std"), "{what}: {line}");
     }
     // upstream's tests and the changes', in the fork's own workspace, its lock as committed, into a
     // target folder of its own beside the suite's
@@ -253,8 +306,35 @@ fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
     }
     eprintln!("the fork's suite: {passed} passed, {failed} failed, {ignored} ignored, {filtered} filtered out");
     assert_eq!((passed, failed, ignored, filtered), (FORK_PASSED, 0, FORK_IGNORED, 0));
+    // and the ignored ones are upstream's, by name
+    let ignored_names: BTreeSet<&str> = stdout
+        .lines()
+        .filter(|l| l.starts_with("test ") && l.contains(" ... ignored"))
+        .map(|l| l.trim_start_matches("test ").split(" ... ").next().unwrap())
+        .collect();
+    assert_eq!(ignored_names, UPSTREAM_IGNORED.iter().copied().collect());
     // the changes' own test files ran
     for file in ["tests/column_outline_roundtrip.rs", "tests/missing_styles_part_import.rs"] {
         assert!(stderr.contains(file), "{file} did not run:\n{stderr}");
     }
+}
+
+/// The change each commit subject names, `(fork change 7)` as `7`, `(fork change 1, refined)` as
+/// `1b`; a subject naming none is left out (the caller counts them).
+fn regex_free_change_ids(subjects: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for s in subjects.lines() {
+        let Some(at) = s.rfind("(fork change ") else { continue };
+        let rest = &s[at + "(fork change ".len()..];
+        let Some(end) = rest.find(')') else { continue };
+        let inner = &rest[..end];
+        let (number, refined) = match inner.split_once(", refined") {
+            Some((n, _)) => (n, true),
+            None => (inner, false),
+        };
+        if number.chars().all(|c| c.is_ascii_digit()) && !number.is_empty() {
+            out.push(if refined { format!("{number}b") } else { number.to_string() });
+        }
+    }
+    out
 }

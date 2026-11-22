@@ -21,5 +21,6 @@ thiserror = { workspace = true }
 # tests/component.rs reads cargo's metadata and the root manifest.
 serde_json = { workspace = true }
 toml = { workspace = true }
-# tests/links.rs writes its workbooks into scratch folders.
+# tests/links.rs writes its workbooks into scratch folders, and rewrites one's parts.
 tempfile = { workspace = true }
+zip = { workspace = true }

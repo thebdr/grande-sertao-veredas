@@ -3522,6 +3522,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
+ "zip 9.8.1",
 ]
 
 [[package]]

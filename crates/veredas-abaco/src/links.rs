@@ -111,8 +111,10 @@ pub const TZ: &str = "UTC";
 pub const LANGUAGE: &str = "en";
 
 /// Opens `path` under `policy` and evaluates it. `prompt` is called only when the policy is
-/// [`LinkPolicy::AlwaysAsk`] *and* the file links to other workbooks; it is given the books
-/// (targets, sheet names, cached cells) so the question can name them.
+/// [`LinkPolicy::AlwaysAsk`] *and* the file links to other workbooks; it is given those books
+/// (targets, sheet names, cached cells) so the question can name them. A DDE or OLE link (a
+/// spreadsheet reading a PLC through a DDE server, say) is no workbook: the engine keeps it as a
+/// placeholder with no target, and it is neither asked about, counted nor listed.
 pub fn open(
     path: &Path,
     policy: LinkPolicy,
@@ -121,26 +123,34 @@ pub fn open(
     let path_str = path.to_string_lossy().to_string();
     let mut model = load_from_xlsx(&path_str, LOCALE, TZ, LANGUAGE)
         .map_err(|source| OpenError::Load { path: path.to_path_buf(), source })?;
-    if model.workbook.external_books.is_empty() {
+    let workbooks: Vec<ExternalBook> = model.workbook.external_books.iter().filter(|b| is_workbook(b)).cloned().collect();
+    if workbooks.is_empty() {
         model.evaluate();
         return Ok(OpenedWorkbook { path: path.to_path_buf(), model, choice: None, links: LinkOutcome::NoLinks });
     }
     let choice = match policy.choice() {
         Some(choice) => choice,
-        None => prompt(&model.workbook.external_books),
+        None => prompt(&workbooks),
     };
     let links = match choice {
         LinkChoice::UseCached => {
             model.set_external_resolver(Box::new(CachedResolver));
-            LinkOutcome::Cached { books: model.workbook.external_books.len() }
+            LinkOutcome::Cached { books: workbooks.len() }
         }
         LinkChoice::OpenAndCalculate => {
             let mut resolver = LinkedResolver::for_workbook(path, LOCALE, TZ, LANGUAGE);
             let statuses = resolver.preload(&model.workbook.external_books);
             model.set_external_resolver(Box::new(resolver));
-            LinkOutcome::Linked(statuses)
+            // the books keep their numbers (`[2]` is the second link whatever the first is)
+            LinkOutcome::Linked(statuses.into_iter().filter(|s| !s.target.is_empty()).collect())
         }
     };
     model.evaluate();
     Ok(OpenedWorkbook { path: path.to_path_buf(), model, choice: Some(choice), links })
+}
+
+/// Whether a link is to another workbook: the engine reads a DDE or OLE link into a placeholder
+/// with no target.
+fn is_workbook(book: &ExternalBook) -> bool {
+    !book.target.is_empty()
 }
