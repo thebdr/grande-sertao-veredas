@@ -49,8 +49,28 @@ use crate::{cf_types::CfCellResult, tz::Tz};
 #[cfg(any(test, feature = "mock_time"))]
 pub use crate::mock_time::get_milliseconds_since_epoch;
 
+thread_local! {
+    /// Veredas fork change 15: the clock a host pinned for this thread, if any.
+    static PINNED_CLOCK: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Fixes the clock the date and time functions (TODAY, NOW, and conditional formats on dates)
+/// read on this thread, in milliseconds since January 1, 1970, UTC; `None` returns them to the
+/// system's clock. A host that compares evaluations made on different days (a measure against
+/// values cached on a known date) pins it; the compiled-in mock of the engine's own tests is
+/// unaffected. Veredas fork change 15.
+pub fn pin_clock(milliseconds_since_epoch: Option<i64>) {
+    PINNED_CLOCK.with(|c| c.set(milliseconds_since_epoch));
+}
+
+/// The clock pinned on this thread by [`pin_clock`], if any.
+pub fn pinned_clock() -> Option<i64> {
+    PINNED_CLOCK.with(|c| c.get())
+}
+
 /// Number of milliseconds since January 1, 1970
 /// Used by time and date functions. It takes the value from the environment:
+/// * The clock a host pinned on this thread ([`pin_clock`])
 /// * The Operative System
 /// * The JavaScript environment
 /// * Or mocked for tests
@@ -59,6 +79,9 @@ pub use crate::mock_time::get_milliseconds_since_epoch;
 #[allow(clippy::expect_used)]
 pub fn get_milliseconds_since_epoch() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
+    if let Some(pinned) = pinned_clock() {
+        return pinned;
+    }
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("problem with system time")
@@ -67,6 +90,7 @@ pub fn get_milliseconds_since_epoch() -> i64 {
 
 /// Number of milliseconds since January 1, 1970
 /// Used by time and date functions. It takes the value from the environment:
+/// * The clock a host pinned on this thread ([`pin_clock`])
 /// * The Operative System
 /// * The JavaScript environment
 /// * Or mocked for tests
@@ -74,6 +98,9 @@ pub fn get_milliseconds_since_epoch() -> i64 {
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 pub fn get_milliseconds_since_epoch() -> i64 {
     use js_sys::Date;
+    if let Some(pinned) = pinned_clock() {
+        return pinned;
+    }
     Date::now() as i64
 }
 
