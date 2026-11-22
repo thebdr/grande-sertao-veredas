@@ -1,13 +1,13 @@
 {
   "clause": "C-151",
   "verdict": "refuted",
-  "ranAt": "2026-11-22T17:49:38.120Z",
-  "headCommit": "fd6ec2820c52c110a46dbce2115f0f4eb0c49d47",
+  "ranAt": "2026-11-22T17:59:16.908Z",
+  "headCommit": "698e52bc937a99fa3f8c5294205d90490aa98b08",
   "tests": [
     {
       "name": "crates/orcl-runtime/tests/scan_cycle.rs",
       "file": "crates/orcl-runtime/tests/scan_cycle.rs",
-      "symbolSha": "3ac42fe6a865029d27c33ca6049b89b983919ce3ab5a07775637059158bdb1bc"
+      "symbolSha": "6e5263aa7f9f003bd1bee736198a0aeb96f29e1497433df6cbee0ee3f2fbcca5"
     },
     {
       "name": "crates/orcl-runtime/tests/conveyor.rs",

@@ -257,3 +257,157 @@ fn virtual_time_never_waits_and_never_goes_back() {
     shared.advance(ms(1));
     assert_eq!(clock.now(), ms(6), "clones share one time");
 }
+
+// A scan's length is the program's own run as much as the plant's: the programs below move the shared virtual
+// clock inside their own scan, and the plant's reads and writes take no time (the second refute round).
+
+/// Takes `cost(cycle)` of its own time per scan; adds one to its input; its safe outputs are 7.
+struct Slow {
+    clock: VirtualClock,
+    cost: fn(u64) -> Duration,
+}
+
+impl Program for Slow {
+    type Inputs = u32;
+    type Outputs = u32;
+
+    fn scan(&mut self, scan: &Scan, inputs: &u32, outputs: &mut u32) {
+        self.clock.advance((self.cost)(scan.cycle));
+        *outputs = inputs.saturating_add(1);
+    }
+
+    fn safe_outputs(&self) -> u32 {
+        7
+    }
+}
+
+/// A plant whose reads and writes take no time.
+#[derive(Default)]
+struct Still {
+    value: u32,
+    reads: Vec<Duration>,
+    writes: Vec<(Duration, u32)>,
+}
+
+impl Io<u32, u32> for Still {
+    fn read_inputs(&mut self, now: Duration) -> u32 {
+        self.reads.push(now);
+        self.value
+    }
+
+    fn write_outputs(&mut self, now: Duration, outputs: &u32) {
+        self.writes.push((now, *outputs));
+        self.value = *outputs;
+    }
+}
+
+fn slow(clock: &VirtualClock, cost: fn(u64) -> Duration) -> Task<Slow> {
+    let program = Slow { clock: clock.clone(), cost };
+    Task::new(TaskConfig { name: "main", period: ms(10) }, program).unwrap()
+}
+
+#[test]
+fn a_program_that_itself_runs_past_its_period_is_a_time_error() {
+    let mut clock = VirtualClock::new();
+    let mut t = slow(&clock, |_| ms(15));
+    let mut plant = Still::default();
+    let r = t.step(&mut plant, &mut clock);
+    assert_eq!((r.exec, r.time_error, r.state), (ms(15), true, RunState::Running));
+    assert_eq!(t.stats().overruns, 1);
+    assert_eq!(plant.writes, vec![(ms(15), 1)], "the outputs written after the program ran, at the scan's end");
+}
+
+#[test]
+fn a_program_that_itself_runs_past_twice_its_period_faults() {
+    let mut clock = VirtualClock::new();
+    let mut t = slow(&clock, |k| if k == 1 { ms(25) } else { ms(1) });
+    let mut plant = Still::default();
+    t.step(&mut plant, &mut clock);
+    let r = t.step(&mut plant, &mut clock);
+    assert_eq!((r.exec, r.time_error), (ms(25), true), "the faulting scan is a time error too");
+    assert_eq!(t.state(), RunState::Faulted { at: ms(10), fault: Fault::Watchdog { exec: ms(25) } });
+    assert_eq!(plant.writes, vec![(ms(1), 1), (ms(35), 7)]);
+}
+
+#[test]
+fn the_rule_measures_a_scan_s_length_never_its_lateness() {
+    // cycle 1, due at 10 ms, starts 8 ms late and runs 5 ms: it ends 13 ms after its deadline, a period past it,
+    // and is still no time error
+    let mut clock = VirtualClock::new();
+    let mut t = slow(&clock, |k| if k == 1 { ms(5) } else { ms(1) });
+    let mut plant = Still::default();
+    t.step(&mut plant, &mut clock);
+    clock.advance(ms(17));
+    let r = t.step(&mut plant, &mut clock);
+    assert_eq!((r.scan.now, r.exec, r.time_error), (ms(18), ms(5), false));
+    assert_eq!(t.stats().overruns, 0);
+
+    // cycle 1 starts 9 ms late and runs 15 ms: 24 ms past its deadline, more than twice the period, and only a
+    // time error, its own outputs written
+    let mut clock = VirtualClock::new();
+    let mut t = slow(&clock, |k| if k == 1 { ms(15) } else { ms(1) });
+    let mut plant = Still::default();
+    t.step(&mut plant, &mut clock);
+    clock.advance(ms(18));
+    let r = t.step(&mut plant, &mut clock);
+    assert_eq!((r.scan.now, r.exec, r.time_error, r.state), (ms(19), ms(15), true, RunState::Running));
+    assert_eq!(plant.writes, vec![(ms(1), 1), (ms(34), 2)]);
+}
+
+#[test]
+fn a_faulted_scan_started_late_reads_at_its_start_counts_its_lateness_and_is_no_time_error() {
+    let mut clock = VirtualClock::new();
+    let mut t = slow(&clock, |k| if k == 0 { ms(25) } else { ms(1) });
+    let mut plant = Still::default();
+    t.step(&mut plant, &mut clock); // 0 to 25 ms: faults; the next scan is cycle 3, due at 30 ms
+    let fault = RunState::Faulted { at: ms(0), fault: Fault::Watchdog { exec: ms(25) } };
+    assert_eq!(t.state(), fault);
+    clock.advance(ms(9)); // the host comes back at 34 ms
+    let r = t.step(&mut plant, &mut clock);
+    assert_eq!((r.scan.cycle, r.scan.now, r.time_error), (3, ms(34), false));
+    assert_eq!(plant.reads, vec![ms(0), ms(34)]);
+    assert_eq!(t.stats().max_lateness, ms(4));
+}
+
+#[test]
+fn once_faulted_no_scan_is_a_time_error_and_the_fault_keeps_its_first_cause() {
+    // the plant itself stalls 25 ms on the first scan and on the second: the first faults the task, the second,
+    // faulted, is neither a time error nor an overrun and leaves the fault as the first scan dated it
+    let mut clock = VirtualClock::new();
+    let mut plant = Loop::new(&clock, |k| if k < 2 { ms(25) } else { ms(1) });
+    let mut t = task(ms(10));
+    t.step(&mut plant, &mut clock);
+    let fault = RunState::Faulted { at: ms(0), fault: Fault::Watchdog { exec: ms(25) } };
+    assert_eq!(t.state(), fault);
+    let r = t.step(&mut plant, &mut clock);
+    assert_eq!((r.scan.cycle, r.scan.now, r.exec, r.time_error), (3, ms(30), ms(25), false));
+    assert_eq!(t.state(), fault);
+    let s = *t.stats();
+    assert_eq!((s.cycles, s.overruns, s.skipped), (2, 1, 4));
+    assert_eq!(plant.writes, vec![(ms(25), 7), (ms(55), 7)]);
+}
+
+/// Writes its output on even cycles only, so the odd ones show what the engine hands it.
+#[derive(Default)]
+struct EvenOnly;
+
+impl Program for EvenOnly {
+    type Inputs = u32;
+    type Outputs = u32;
+
+    fn scan(&mut self, scan: &Scan, _inputs: &u32, outputs: &mut u32) {
+        if scan.cycle.is_multiple_of(2) {
+            *outputs = u32::try_from(scan.cycle).unwrap() + 100;
+        }
+    }
+}
+
+#[test]
+fn a_program_is_handed_its_outputs_as_the_last_scan_left_them() {
+    let mut clock = VirtualClock::new();
+    let mut t = Task::new(TaskConfig { name: "main", period: ms(10) }, EvenOnly).unwrap();
+    let mut plant = Still::default();
+    t.run_until(&mut plant, &mut clock, ms(50), |_| {});
+    let written: Vec<u32> = plant.writes.iter().map(|&(_, v)| v).collect();
+    assert_eq!(written, vec![100, 100, 102, 102, 104], "an output the program leaves alone keeps its value");
+}
