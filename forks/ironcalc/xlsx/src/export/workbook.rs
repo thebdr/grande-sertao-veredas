@@ -119,14 +119,17 @@ pub(crate) fn get_workbook_xml(workbook: &Workbook, selected_sheet: u32) -> Stri
 
     let sheets = sheets_str.join("");
     let defined_names = defined_names_str.join("");
+    // <externalReferences> goes between <sheets> and <definedNames> (CT_Workbook order)
+    let external_references = super::external_links::external_references_xml(workbook);
     format!("{XML_DECLARATION}\n\
     <workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\
     <bookViews>
     <workbookView activeTab=\"{selected_sheet}\"/>\
-    </bookViews>
+    </bookViews>\
       <sheets>\
         {sheets}\
       </sheets>\
+      {external_references}\
       <definedNames>\
         {defined_names}\
       </definedNames>\

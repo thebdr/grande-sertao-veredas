@@ -1,4 +1,5 @@
 mod conditional_formatting;
+mod external_links;
 mod metadata;
 pub(crate) mod shared_strings;
 mod sheet_data;
@@ -31,6 +32,7 @@ use crate::error::XlsxError;
 
 use shared_strings::{read_shared_strings, SharedStringTable};
 
+use external_links::load_external_links;
 use metadata::load_metadata;
 use styles::load_styles;
 use util::get_attribute;
@@ -123,6 +125,8 @@ fn load_xlsx_from_reader<R: Read + std::io::Seek>(
     for dn in &mut workbook.defined_names {
         dn.formula = reparse_formula_hack(&dn.formula, &worksheet_names)?;
     }
+    // The workbooks this one links to, in the order the formulas count them
+    let external_books = load_external_links(&mut archive, &workbook.external_references, &rels)?;
     let metadata = match load_metadata(&mut archive) {
         Ok(metadata) => metadata,
         Err(_) => {
@@ -150,7 +154,7 @@ fn load_xlsx_from_reader<R: Read + std::io::Seek>(
         metadata,
         tables,
         theme,
-        external_books: Vec::new(),
+        external_books,
     })
 }
 

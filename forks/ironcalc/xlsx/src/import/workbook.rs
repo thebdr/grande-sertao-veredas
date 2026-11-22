@@ -73,9 +73,25 @@ pub(super) fn load_workbook<R: Read + std::io::Seek>(
             comment,
         })
     }
-    // read the relationships file
+    // The linked workbooks, in the order the formulas count them ([1], [2], …)
+    let mut external_references = Vec::new();
+    for node in doc
+        .descendants()
+        .filter(|n| n.has_tag_name("externalReference"))
+    {
+        let id = node
+            .attribute_ns(
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+                "id",
+            )
+            .ok_or_else(|| {
+                XlsxError::Xml("Missing \"r:id\" XML attribute in externalReference".to_string())
+            })?;
+        external_references.push(id.to_string());
+    }
     Ok(WorkbookXML {
         worksheets: sheets,
         defined_names,
+        external_references,
     })
 }

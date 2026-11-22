@@ -1,5 +1,6 @@
 use ironcalc_base::types::Workbook;
 
+use super::external_links::workbook_relationships;
 use super::xml_constants::{XML_DECLARATION, XML_WORKSHEET};
 
 pub(crate) fn get_workbook_xml_rels(workbook: &Workbook) -> String {
@@ -26,6 +27,8 @@ pub(crate) fn get_workbook_xml_rels(workbook: &Workbook) -> String {
     relationships_str.push(
         format!("<Relationship Id=\"rId{id}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme\" Target=\"theme/theme1.xml\"/>")
     );
+    // external links take the ids after the theme (see external_links.rs)
+    relationships_str.extend(workbook_relationships(workbook));
     format!(
         "{XML_DECLARATION}\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{}</Relationships>",
         relationships_str.join("")

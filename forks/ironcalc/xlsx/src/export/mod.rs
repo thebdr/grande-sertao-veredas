@@ -5,6 +5,7 @@ mod conditional_formatting;
 mod doc_props;
 mod dxfs_styles;
 mod escape;
+mod external_links;
 mod shared_strings;
 mod styles;
 mod styles_util;
@@ -49,6 +50,7 @@ fn get_content_types_xml(workbook: &Workbook) -> String {
     content.push(
         r#"<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>"#.to_string(),
     );
+    content.extend(external_links::content_type_overrides(workbook));
     content.extend([
         r#"<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>"#.to_string(),
         r#"<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>"#.to_string(),
@@ -120,6 +122,22 @@ pub fn save_xlsx_to_writer<W: Write + Seek>(model: &Model, writer: W) -> Result<
     zip.add_directory("xl/_rels", options)?;
     zip.start_file("xl/_rels/workbook.xml.rels", options)?;
     zip.write_all(workbook_xml_rels::get_workbook_xml_rels(workbook).as_bytes())?;
+
+    // the workbooks this one links to: one part each, with its rels
+    if !workbook.external_books.is_empty() {
+        zip.add_directory("xl/externalLinks", options)?;
+        zip.add_directory("xl/externalLinks/_rels", options)?;
+        for (index, book) in workbook.external_books.iter().enumerate() {
+            let id = index + 1;
+            zip.start_file(format!("xl/externalLinks/externalLink{id}.xml"), options)?;
+            zip.write_all(external_links::external_link_xml(book).as_bytes())?;
+            zip.start_file(
+                format!("xl/externalLinks/_rels/externalLink{id}.xml.rels"),
+                options,
+            )?;
+            zip.write_all(external_links::external_link_rels_xml(book).as_bytes())?;
+        }
+    }
 
     zip.add_directory("xl/worksheets", options)?;
     // sheet rels parts (one per sheet with external hyperlinks)

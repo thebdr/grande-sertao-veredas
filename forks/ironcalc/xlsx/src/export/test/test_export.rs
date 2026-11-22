@@ -433,3 +433,106 @@ fn theme_tints_keep_every_digit() {
     assert_eq!(a2.font.color, Color::Theme(1, -0.0499893185216834));
     fs::remove_file(temp_file_name).unwrap();
 }
+
+/// `[1]Sheet!A1` and the linked book's cache survive a save: the part, its
+/// rels, the content type, the workbook relationship and `<externalReferences>`
+/// are all written, and the reloaded model evaluates the same.
+#[test]
+fn test_external_links_roundtrip() {
+    use ironcalc_base::external::{ExternalBook, ExternalSheet, ExternalValue};
+    use std::collections::HashMap;
+    use std::io::Read;
+
+    let mut model = new_empty_model();
+    let mut cells = HashMap::new();
+    cells.insert((4, 2), ExternalValue::Number(2.0));
+    cells.insert(
+        (6, 2),
+        ExternalValue::String("L1.SEG%1.ZONE%2.STATE".to_string()),
+    );
+    model.workbook.external_books.push(ExternalBook {
+        target: "Linked_02.xlsx".to_string(),
+        absolute_url: Some("https://example.invalid/x/Linked_02.xlsx".to_string()),
+        sheets: vec![
+            ExternalSheet {
+                name: "Cover".to_string(),
+                cells: HashMap::new(),
+            },
+            ExternalSheet {
+                name: "ZONE LIST".to_string(),
+                cells,
+            },
+        ],
+        defined_names: vec![],
+    });
+    model
+        .set_user_input(0, 1, 1, "='[1]ZONE LIST'!$B$4".to_string())
+        .unwrap();
+    model
+        .set_user_input(
+            0,
+            2,
+            1,
+            "=SUBSTITUTE('[1]ZONE LIST'!$B$6,\"%1\",\"03\")".to_string(),
+        )
+        .unwrap();
+    model
+        .set_user_input(0, 3, 1, "='[1]ZONE LIST'!$F$88".to_string())
+        .unwrap();
+    model.evaluate();
+    assert_eq!(model.get_formatted_cell_value(0, 1, 1).unwrap(), "2");
+
+    let temp_file_name = "temp_file_test_external_links.xlsx";
+    save_to_xlsx(&model, temp_file_name).unwrap();
+
+    // the package carries every part of the link
+    {
+        let file = fs::File::open(temp_file_name).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let mut read = |name: &str| {
+            let mut s = String::new();
+            archive
+                .by_name(name)
+                .unwrap()
+                .read_to_string(&mut s)
+                .unwrap();
+            s
+        };
+        let link = read("xl/externalLinks/externalLink1.xml");
+        assert!(link.contains("<sheetName val=\"ZONE LIST\"/>"));
+        assert!(link.contains("<cell r=\"B6\" t=\"str\"><v>L1.SEG%1.ZONE%2.STATE</v></cell>"));
+        let rels = read("xl/externalLinks/_rels/externalLink1.xml.rels");
+        assert!(rels.contains("Target=\"Linked_02.xlsx\" TargetMode=\"External\""));
+        let workbook = read("xl/workbook.xml");
+        assert!(workbook.contains(
+            "<externalReferences><externalReference r:id=\"rId6\"/></externalReferences>"
+        ));
+        let workbook_rels = read("xl/_rels/workbook.xml.rels");
+        assert!(workbook_rels.contains("Id=\"rId6\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink\" Target=\"externalLinks/externalLink1.xml\""));
+        let content_types = read("[Content_Types].xml");
+        assert!(content_types.contains("PartName=\"/xl/externalLinks/externalLink1.xml\""));
+        let sheet = read("xl/worksheets/sheet1.xml");
+        assert!(
+            sheet.contains("<f>&apos;[1]ZONE LIST&apos;!$B$4</f>"),
+            "{sheet}"
+        );
+    }
+
+    let mut model2 = load_from_xlsx(temp_file_name, "en", "UTC", "en").unwrap();
+    assert_eq!(
+        model2.workbook.external_books,
+        model.workbook.external_books
+    );
+    assert_eq!(
+        model2.get_cell_formula(0, 1, 1).unwrap(),
+        Some("='[1]ZONE LIST'!$B$4".to_string())
+    );
+    model2.evaluate();
+    assert_eq!(model2.get_formatted_cell_value(0, 1, 1).unwrap(), "2");
+    assert_eq!(
+        model2.get_formatted_cell_value(0, 2, 1).unwrap(),
+        "L1.SEG03.ZONE%2.STATE"
+    );
+    assert_eq!(model2.get_formatted_cell_value(0, 3, 1).unwrap(), "0");
+    fs::remove_file(temp_file_name).unwrap();
+}
