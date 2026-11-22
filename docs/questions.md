@@ -1203,3 +1203,195 @@ Options:
 what a surface draws, and the executable writes the same file a surface would read.
 
 **Reversible?** Yes: a page, or Oficina's surfaces, sit on the library; nothing below changes.
+
+---
+
+## Q430 - What is the release member's name?
+
+**Raised** 2026-11-22, planning suite releases and the tester machine (`docs/entrega-plan.md`).
+
+The suite names things in Portuguese by their role. What ships is no component, so it takes no
+`veredas-` crate: a plan, `docs/<name>-plan.md`, and a tool, `tools/<name>`.
+
+Options: **entrega** (delivery: what is handed over, the release and the machine alike);
+**lancamento** (lançamento, a launch, as a version is "lançada"); **safra** (a harvest's vintage,
+one release a year's crop).
+
+**Taken meanwhile** (recommended): `entrega`.
+
+**Reversible?** Yes: a `git mv` of the plan and the tool, and the clauses' links.
+
+---
+
+## Q431 - What version does a suite release carry?
+
+**Raised** 2026-11-22, planning suite releases. Each component has its own SemVer (the plan,
+"Versioning"); P-011's exit names `2.0.0-alpha.1` as the first release.
+
+Options: (a) a SemVer of the release's own, from `2.0.0-alpha.1`, bumped by the largest bump among
+its components since the release before (a component's MAJOR makes the release's MAJOR), so the
+release's number still says whether something broke; (b) the date, `2026.11` then `2026.11.1`,
+which says when and nothing of compatibility; (c) core's version, which says nothing of the apps.
+
+**Taken meanwhile** (recommended): (a), the first release `2.0.0-alpha.1`.
+
+**Reversible?** Yes, until a release is published: the manifest's `release` and its file's name.
+
+---
+
+## Q432 - Does a release tag its commit in git?
+
+**Raised** 2026-11-22. A manifest names the commit it was cut from; a tag `suite-<release>` on it
+would make the commit findable by name and show on GitHub.
+
+Options: (a) a manifest alone, no tag; (b) an annotated tag `suite-<release>`, pushed with the
+manifest's commit; (c) a tag per component too (`veredas-portal-2.0.0-alpha.1`).
+
+**Taken meanwhile** (most reversible): (a). A tag pushed is public; nothing is tagged until ruled.
+
+**Reversible?** Yes, while nothing is tagged.
+
+---
+
+## Q433 - Which light Linux distribution does the tester machine run?
+
+**Raised** 2026-11-22, by the architect's "a light linux distro" (P-022).
+
+Options:
+- **Debian 13 "trixie"** (recommended): stable since 2025, supported to 2028 and to 2030 by its
+  long-term team; official cloud images with signed sums, the `generic` one carrying the full
+  kernel with VMware's drivers (paravirtual SCSI, VMXNET3, SVGA) and cloud-init for an unattended
+  build; glibc 2.41; Chromium and open-vm-tools packaged as plain packages. The base is
+  `debian-13-generic-amd64.qcow2` from `cloud.debian.org`, 435 MB, downloaded once.
+- **Alpine Linux**: the smallest (a 65 MB installer), but built on musl: the suite's executables
+  would need a musl build, and the database engine's C++ needs a musl C++ toolchain this machine
+  lacks.
+- **Ubuntu 26.04 LTS** (minimal cloud image): newer libraries, but its Chromium and Firefox are
+  snaps, which a small appliance carries badly.
+- **Fedora**: 13 months of support per release, too short for a machine testers keep.
+
+**Taken meanwhile**: Debian 13, the smallest official image that fits (the `genericcloud` one, 344
+MB, carries a kernel without VMware's display driver).
+
+**Reversible?** Yes: one table of the recipe's file (`tools/entrega/maquina/maquina.toml`) and the
+provisioning's package names.
+
+---
+
+## Q434 - Which desktop does the tester machine carry, if any?
+
+**Raised** 2026-11-22. Designers look at supervisão in a browser; Oficina (Qt Quick, X11 first)
+comes later and needs a desktop.
+
+Options:
+- **Xfce** (recommended): light (about 500 MB of memory with the browser open), on X11 as Oficina's
+  first Linux target is, and open-vm-tools' screen resizing works with it.
+- **LXQt**: lighter still, built on Qt as Oficina is, younger on X11 and Wayland both.
+- **No desktop**: the machine serves supervisão to the host's browser and shows a console; the
+  smallest image, no Oficina later without adding one.
+- **A kiosk**: the browser alone, full screen, on supervisão; no terminal or editor for the plant's
+  files, no Oficina.
+
+**Taken meanwhile**: Xfce, logged in automatically, the browser opened on the plant.
+
+**Reversible?** Yes: the recipe's package list and its login settings.
+
+---
+
+## Q435 - Which VMware products and versions must the machine open in?
+
+**Raised** 2026-11-22. VMware cannot be run on the development machine; what opens where is
+decided by the OVF descriptor's virtual hardware version and devices.
+
+Options for the products: VMware Workstation Pro 17 (Windows and Linux, free for every use since
+November 2024), Fusion 13 (Macs with Intel processors), ESXi 7 and 8. Apple-silicon Macs run only
+arm64 guests in Fusion: reaching them needs a second, arm64 image (the suite built for aarch64).
+
+Options for the virtual hardware: version 14 (Workstation 14, Fusion 10, ESXi 6.7 and every later
+one), version 19 (ESXi 7.0 U2, Workstation 16.2) or version 21 (ESXi 8.0 U2, Workstation 17.5):
+a later product opens an older version, never the reverse.
+
+**Taken meanwhile** (recommended): Workstation Pro 17, Fusion 13 on Intel and ESXi 7 and 8, at
+hardware version 14, x86_64 alone; a paravirtual SCSI controller, a VMXNET3 card, BIOS firmware.
+
+**Reversible?** Yes: the descriptor's version and devices are the recipe's data.
+
+---
+
+## Q436 - How is the tester machine delivered?
+
+**Raised** 2026-11-22.
+
+Options: (a) an **OVA**, one file every VMware product opens (VirtualBox too), about 1.5 to 2.5 GB;
+(b) a zipped folder with a `.vmx` and its `.vmdk`, which Workstation and Fusion open directly and
+ESXi does not; (c) both. And where: a GitHub release of the repository (public, 2 GB per file, so
+a larger OVA would be split), or a share the architect names.
+
+**Taken meanwhile** (recommended): (a), built and kept on the development machine, published
+nowhere until ruled (publishing is outward-facing).
+
+**Reversible?** Yes: nothing is published.
+
+---
+
+## Q437 - How does a tester update the machine?
+
+**Raised** 2026-11-22.
+
+Options: (a) a new OVA per release, the old machine thrown away (its plant files with it); (b) an
+update command in the machine that fetches a newer release bundle, checks its sums and its
+manifest, installs it beside the old one under `/opt/veredas/` and moves `current`, the plant's
+files left alone; (c) a package repository of the suite, signed, that the distribution's own
+updater reads.
+
+**Taken meanwhile**: (a), since nothing is published yet; (b) recommended once releases are.
+
+**Reversible?** Yes.
+
+---
+
+## Q438 - What user and password does the machine ship with?
+
+**Raised** 2026-11-22.
+
+Options: (a) user `veredas`, password `veredas`, logged in automatically, `sudo` asking that
+password, no SSH server, the password stated on the release's page (recommended: a test machine,
+behind VMware's NAT by default); (b) a password drawn per build, printed in the release's notes;
+(c) no password at all, `sudo` without one; (d) a password changed at the first login, which ends
+the automatic login.
+
+**Taken meanwhile**: (a).
+
+**Reversible?** Yes: the recipe's user table.
+
+---
+
+## Q439 - Where does supervisão listen inside the tester machine?
+
+**Raised** 2026-11-22. Supervisão binds the loopback by default (Q20: local, no accounts); a
+tester's or a designer's browser on the host reaches the machine only on its network address.
+
+Options: (a) every interface of the machine, port 8902, writes disarmed in the plant (VMware's
+default NAT lets the host alone reach it; a bridged network would show it to the LAN); (b) the
+loopback alone, the page seen only in the machine's own browser.
+
+**Taken meanwhile** (recommended): (a), as a plant's own supervisão file (`bind = "0.0.0.0:8902"`):
+no code of supervisão changes. Q29's gaps hold as everywhere.
+
+**Reversible?** Yes: one line of the plant's supervisão file.
+
+---
+
+## Q440 - Does the tester machine's test run with the suite?
+
+**Raised** 2026-11-22. The image test downloads a 435 MB base once, needs KVM, and takes minutes:
+it installs a desktop from the distribution's mirror.
+
+Options: (a) its own command (`cargo nextest run -p entrega --features maquina`), recorded with its
+clause and run at every cut, outside `cargo nextest run --workspace`; (b) in every run of the suite,
+GitHub's included.
+
+**Taken meanwhile** (recommended): (a); the cut's run of the bundle (C-291) likewise rides a
+feature, since it builds the suite in release mode.
+
+**Reversible?** Yes: a feature in the tool's manifest.
