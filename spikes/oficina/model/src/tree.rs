@@ -13,7 +13,6 @@
 //! as text (a name that is not UTF-8 shows U+FFFD where its bytes fail) while the node keeps the
 //! exact name to reach the file.
 
-use std::cmp::Ordering;
 use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
@@ -31,6 +30,45 @@ pub const STAMP_READ_LIMIT: u64 = 1 << 20;
 /// A node, for as long as its entry stays in its folder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NodeId(usize);
+
+impl NodeId {
+    /// The number a view keeps in its index for this node ([`Tree::get`] reads it back).
+    pub fn raw(self) -> usize {
+        self.0
+    }
+}
+
+/// A folder's entries as the disk listed them, in the tree's order, before they enter the tree.
+#[derive(Clone, Debug)]
+pub struct Listing {
+    folder: NodeId,
+    entries: Vec<(OsString, Entry)>,
+}
+
+impl Listing {
+    pub fn folder(&self) -> NodeId {
+        self.folder
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// One change of a folder's entries, at a row as the rows stand when it applies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// The entry at `row` left.
+    Remove { row: usize },
+    /// The listing's entry `at` comes in at `row`.
+    Insert { row: usize, at: usize },
+    /// The entry at `row` stayed and is now what the listing's entry `at` says.
+    Update { row: usize, at: usize },
+}
 
 /// What a node is.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -165,73 +203,44 @@ impl Tree {
 
     /// Read a folder's entries, once: a folder already read is left as it is.
     pub fn expand(&mut self, id: NodeId) -> Result<&[NodeId], TreeError> {
-        self.live(id)?;
-        if self.nodes[id.0].entry != Entry::Folder {
-            return Err(TreeError::NotAFolder { path: self.path(id).display().to_string() });
-        }
-        if !matches!(self.nodes[id.0].contents, Contents::Read(_)) {
-            let listed = self.list(id)?;
-            let ids = listed.into_iter().map(|(os_name, entry)| self.push(id, os_name, entry)).collect();
-            self.nodes[id.0].contents = Contents::Read(ids);
-            self.sort(id);
+        if self.children(id).is_none() {
+            let listing = self.read_folder(id)?;
+            self.attach(listing);
         }
         Ok(self.children(id).unwrap_or(&[]))
     }
 
     /// Read an opened folder again: an entry still there under the same name, still a folder or
     /// still not, keeps its id (a file is named again by its stamp, a folder keeps what was read
-    /// of it); the others leave, with everything under them, and new entries come.
+    /// of it); the others leave, with everything under them, and new entries come. A folder not
+    /// read yet is read, every entry new.
     pub fn refresh(&mut self, id: NodeId) -> Result<Refreshed, TreeError> {
-        self.live(id)?;
-        let Some(old) = self.children(id).map(<[NodeId]>::to_vec) else {
-            self.expand(id)?;
-            return Ok(Refreshed { removed: Vec::new(), added: self.children(id).unwrap_or(&[]).to_vec() });
-        };
-        let listed = self.list(id)?;
+        let listing = self.read_folder(id)?;
+        if self.children(id).is_none() {
+            let added = self.attach(listing).to_vec();
+            return Ok(Refreshed { removed: Vec::new(), added });
+        }
         let mut out = Refreshed::default();
-        let mut kept = Vec::new();
-        let mut left: Vec<NodeId> = old;
-        for (os_name, entry) in listed {
-            let same = left.iter().position(|c| {
-                let n = &self.nodes[c.0];
-                n.os_name == os_name && (n.entry == Entry::Folder) == (entry == Entry::Folder)
-            });
-            match same {
-                Some(i) => {
-                    let c = left.swap_remove(i);
-                    if entry != Entry::Folder {
-                        self.nodes[c.0].entry = entry;
-                    }
-                    kept.push(c);
-                }
-                None => {
-                    let c = self.push(id, os_name, entry);
-                    out.added.push(c);
-                    kept.push(c);
-                }
+        for step in self.steps(&listing) {
+            let c = self.apply(&listing, &step);
+            match step {
+                Step::Remove { .. } => out.removed.push(c),
+                Step::Insert { .. } => out.added.push(c),
+                Step::Update { .. } => {}
             }
         }
-        for c in &left {
-            self.bury(*c);
-        }
-        left.sort();
-        out.removed = left;
-        self.nodes[id.0].contents = Contents::Read(kept);
-        self.sort(id);
-        out.added.sort_by_key(|c| self.row(*c));
+        out.removed.sort();
         Ok(out)
     }
 
-    fn live(&self, id: NodeId) -> Result<(), TreeError> {
-        match self.nodes.get(id.0) {
-            Some(n) if !n.gone => Ok(()),
-            _ => Err(TreeError::Gone(id)),
+    /// A folder's entries as the disk lists them now, in the tree's order, not yet in the tree.
+    /// A folder never read that cannot be listed is marked so; one already read keeps what was
+    /// read of it. Either way the error is returned.
+    pub fn read_folder(&mut self, id: NodeId) -> Result<Listing, TreeError> {
+        self.live(id)?;
+        if self.nodes[id.0].entry != Entry::Folder {
+            return Err(TreeError::NotAFolder { path: self.path(id).display().to_string() });
         }
-    }
-
-    /// The folder's entries as the disk lists them, each named and classified. A folder that
-    /// cannot be listed is marked so, and the error returned.
-    fn list(&mut self, id: NodeId) -> Result<Vec<(OsString, Entry)>, TreeError> {
         let dir = self.path(id);
         let fail = |e: std::io::Error| (dir.display().to_string(), e.to_string());
         let listed: Result<Vec<(OsString, Entry)>, (String, String)> = (|| {
@@ -253,10 +262,99 @@ impl Tree {
             }
             Ok(out)
         })();
-        listed.map_err(|(path, why)| {
-            self.nodes[id.0].contents = Contents::Unreadable(why.clone());
-            TreeError::Read { path, why }
-        })
+        match listed {
+            Ok(mut entries) => {
+                entries.sort_by_cached_key(|(os_name, entry)| order_key(os_name, entry));
+                Ok(Listing { folder: id, entries })
+            }
+            Err((path, why)) => {
+                if self.children(id).is_none() {
+                    self.nodes[id.0].contents = Contents::Unreadable(why.clone());
+                }
+                Err(TreeError::Read { path, why })
+            }
+        }
+    }
+
+    /// Put a listing in the tree as its folder's entries, all at once: for a folder not read yet
+    /// (a view announces the rows `0..listing.len()` before and after).
+    pub fn attach(&mut self, listing: Listing) -> &[NodeId] {
+        let id = listing.folder;
+        let ids = listing.entries.into_iter().map(|(os_name, entry)| self.push(id, os_name, entry)).collect();
+        self.nodes[id.0].contents = Contents::Read(ids);
+        self.children(id).unwrap_or(&[])
+    }
+
+    /// The steps that turn a read folder's entries into a new listing of it, in the order they
+    /// apply, each naming the row it touches as the rows stand when it applies: the entries that
+    /// left, from the last row up; then the new ones, from the first row down; then the entries
+    /// that stayed and changed what they are. An entry stays when its name is the same and it is
+    /// still a folder or still not; a folder that stays keeps what was read of it. A view applies
+    /// them one at a time, announcing each, and so keeps its open folders and its selection.
+    pub fn steps(&self, listing: &Listing) -> Vec<Step> {
+        let old = self.children(listing.folder).unwrap_or(&[]);
+        let same = |c: &NodeId, (os_name, entry): &(OsString, Entry)| {
+            let n = &self.nodes[c.0];
+            n.os_name == *os_name && (n.entry == Entry::Folder) == (*entry == Entry::Folder)
+        };
+        // Each listed entry's old node, if it stayed; the order of what stayed is the order it had.
+        let mut kept = vec![None; listing.entries.len()];
+        let mut stays = vec![false; old.len()];
+        for (i, e) in listing.entries.iter().enumerate() {
+            if let Some(row) = old.iter().enumerate().position(|(r, c)| !stays[r] && same(c, e)) {
+                stays[row] = true;
+                kept[i] = Some(old[row]);
+            }
+        }
+        let mut steps: Vec<Step> = (0..old.len()).rev().filter(|r| !stays[*r]).map(|row| Step::Remove { row }).collect();
+        steps.extend((0..listing.entries.len()).filter(|i| kept[*i].is_none()).map(|i| Step::Insert { row: i, at: i }));
+        steps.extend((0..listing.entries.len()).filter(|i| {
+            kept[*i].is_some_and(|c| {
+                let entry = &listing.entries[*i].1;
+                *entry != Entry::Folder && self.nodes[c.0].entry != *entry
+            })
+        }).map(|i| Step::Update { row: i, at: i }));
+        steps
+    }
+
+    /// Apply one step of [`Tree::steps`], returning the node it touched.
+    pub fn apply(&mut self, listing: &Listing, step: &Step) -> NodeId {
+        let id = listing.folder;
+        let Contents::Read(mut ids) = std::mem::replace(&mut self.nodes[id.0].contents, Contents::NotRead) else {
+            panic!("a step applies to a folder already read");
+        };
+        let touched = match *step {
+            Step::Remove { row } => {
+                let c = ids.remove(row);
+                self.bury(c);
+                c
+            }
+            Step::Insert { row, at } => {
+                let (os_name, entry) = listing.entries[at].clone();
+                let c = self.push(id, os_name, entry);
+                ids.insert(row, c);
+                c
+            }
+            Step::Update { row, at } => {
+                let c = ids[row];
+                self.nodes[c.0].entry = listing.entries[at].1.clone();
+                c
+            }
+        };
+        self.nodes[id.0].contents = Contents::Read(ids);
+        touched
+    }
+
+    /// The node an index names, if it names one that is still in the tree.
+    pub fn get(&self, raw: usize) -> Option<NodeId> {
+        self.nodes.get(raw).filter(|n| !n.gone).map(|_| NodeId(raw))
+    }
+
+    fn live(&self, id: NodeId) -> Result<(), TreeError> {
+        match self.nodes.get(id.0) {
+            Some(n) if !n.gone => Ok(()),
+            _ => Err(TreeError::Gone(id)),
+        }
     }
 
     fn push(&mut self, parent: NodeId, os_name: OsString, entry: Entry) -> NodeId {
@@ -274,23 +372,13 @@ impl Tree {
             }
         }
     }
-
-    /// Folders first, then by name with case folded, then by name as written, so the order is
-    /// one on every system.
-    fn sort(&mut self, id: NodeId) {
-        let Contents::Read(mut ids) = std::mem::replace(&mut self.nodes[id.0].contents, Contents::NotRead) else { return };
-        ids.sort_by(|a, b| order(&self.nodes[a.0], &self.nodes[b.0]));
-        self.nodes[id.0].contents = Contents::Read(ids);
-    }
 }
 
-fn order(a: &Node, b: &Node) -> Ordering {
-    let folder = |n: &Node| n.entry != Entry::Folder;
-    folder(a)
-        .cmp(&folder(b))
-        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        .then_with(|| a.name.cmp(&b.name))
-        .then_with(|| a.os_name.cmp(&b.os_name))
+/// Folders first, then by name with case folded, then by name as written, so the order is one on
+/// every system.
+fn order_key(name: &OsString, entry: &Entry) -> (bool, String, String, OsString) {
+    let shown = name.to_string_lossy();
+    (*entry != Entry::Folder, shown.to_lowercase(), shown.into_owned(), name.clone())
 }
 
 /// A file named by what it says it is.

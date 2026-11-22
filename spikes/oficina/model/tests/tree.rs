@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::Path;
 
-use oficina_spike_model::tree::{Contents, Entry, FileKind, NodeId, Refreshed, STAMP_READ_LIMIT, Tree, TreeError};
+use oficina_spike_model::tree::{Contents, Entry, FileKind, NodeId, Refreshed, STAMP_READ_LIMIT, Step, Tree, TreeError};
 use veredas_core::schema;
 
 fn write(root: &Path, rel: &str, text: &str) {
@@ -185,6 +185,61 @@ fn refresh_keeps_the_ids_of_what_stayed_and_says_what_left_and_what_came() {
     let cargo = child(&t, root, ".cargo");
     let first = t.refresh(cargo).expect("read");
     assert_eq!(first, Refreshed { removed: vec![], added: vec![child(&t, cargo, "config.toml")] });
+}
+
+/// What a view applies one step at a time, announcing each: removals from the last row up, then
+/// insertions from the first row down, then the entries that changed what they are, each row as
+/// the rows stand when it applies.
+#[test]
+fn a_re_read_is_a_list_of_steps_a_view_can_announce_one_at_a_time() {
+    let dir = project();
+    let r = dir.path();
+    let mut t = Tree::open(r).expect("the folder opens");
+    let root = t.root();
+    write(r, "new.toml", &stamped("veredas-catalog", 1));
+    fs::remove_file(r.join("notes.txt")).expect("removed");
+    write(r, "B.toml", &stamped("veredas-catalog", 1));
+    fs::remove_dir(r.join("Zeta")).expect("removed");
+    write(r, "Zeta", "now a file");
+    let listing = t.read_folder(root).expect("the folder lists");
+    assert_eq!((listing.folder(), listing.len()), (root, 13));
+    // Reading changed nothing yet.
+    assert_eq!(t.children(root).map(<[NodeId]>::len), Some(13));
+    assert_eq!(label(&t, child(&t, root, "notes.txt")), "notes.txt | file");
+    let steps = t.steps(&listing);
+    assert_eq!(
+        steps,
+        vec![
+            Step::Remove { row: 11 },
+            Step::Remove { row: 2 },
+            Step::Insert { row: 10, at: 10 },
+            Step::Insert { row: 12, at: 12 },
+            Step::Update { row: 3, at: 3 },
+        ]
+    );
+    // Each step leaves the rows as a view that announced it expects them.
+    let lengths: Vec<usize> = steps
+        .iter()
+        .map(|s| {
+            t.apply(&listing, s);
+            t.children(root).map_or(0, <[NodeId]>::len)
+        })
+        .collect();
+    assert_eq!(lengths, vec![12, 11, 12, 13, 13]);
+    assert_eq!(label(&t, t.children(root).expect("read")[3]), "B.toml | veredas-catalog 1 of Core");
+    assert_eq!(label(&t, t.children(root).expect("read")[12]), "Zeta | file");
+    // Listed again with nothing changed: no step.
+    let again = t.read_folder(root).expect("lists");
+    assert_eq!(t.steps(&again), Vec::<Step>::new());
+    // A folder never read lists, and its listing attaches whole.
+    let alpha = child(&t, root, "alpha");
+    let listing = t.read_folder(alpha).expect("alpha lists");
+    assert_eq!(t.children(alpha), None);
+    assert_eq!(t.attach(listing).len(), 2);
+    // A node's number reads back while the node is in the tree.
+    let notes_gone = t.get(9999);
+    assert_eq!(notes_gone, None);
+    assert_eq!(t.get(alpha.raw()), Some(alpha));
 }
 
 #[test]
