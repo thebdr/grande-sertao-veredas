@@ -15,7 +15,7 @@ fn main() {
     let lib = deps.join("lib");
     let include = deps.join("include");
 
-    let qml = QmlModule::new("Oficina").qml_files(["qml/Main.qml", "qml/ProjectPane.qml", "qml/EditorPane.qml", "qml/TablePane.qml"]);
+    let qml = QmlModule::new("Oficina").qml_files(["qml/Main.qml", "qml/ProjectPane.qml", "qml/EditorPane.qml", "qml/TablePane.qml", "qml/WebPane.qml"]);
     let builder = CxxQtBuilder::new_qml_module(qml)
         .qt_module("Gui")
         .qt_module("Quick")

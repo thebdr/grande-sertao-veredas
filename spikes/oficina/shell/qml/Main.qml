@@ -46,10 +46,20 @@ ApplicationWindow {
             }
         }
 
+        KDDW.DockWidget {
+            id: webDock
+            uniqueName: "web"
+            title: qsTr("Page")
+            WebPane {
+                anchors.fill: parent
+            }
+        }
+
         Component.onCompleted: {
             addDockWidget(projectDock, KDDW.KDDockWidgets.Location_OnLeft, null, Qt.size(320, 800));
             addDockWidget(editorDock, KDDW.KDDockWidgets.Location_OnRight);
             addDockWidget(tableDock, KDDW.KDDockWidgets.Location_OnBottom, editorDock);
+            addDockWidget(webDock, KDDW.KDDockWidgets.Location_OnRight, tableDock);
         }
     }
 }
