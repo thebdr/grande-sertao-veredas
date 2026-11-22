@@ -1,0 +1,24 @@
+{
+  "clause": "C-221",
+  "command": "cargo test -p veredas-abaco --test links",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-abaco",
+    "--test",
+    "links"
+  ],
+  "exitCode": 0,
+  "outputSha": "0b8c00cae7f7ef21eb784159f847341e6ac3e82f01e25860021bac1296f22d91",
+  "outputTail": "test a_missing_linked_workbook_is_reported_and_the_cache_answers_for_it ... ok\ntest a_target_written_as_excel_writes_it_opens_the_workbook_it_names ... ok\ntest a_linked_workbook_that_opened_without_the_sheet_is_a_line_naming_the_sheet ... ok\ntest the_values_shown_are_computed_at_opening_not_the_ones_the_file_stored ... ok\ntest the_log_lists_changed_linked_cells_only_under_a_linked_resolution ... ok\ntest only_always_ask_asks_and_the_answer_decides_the_values ... ok\ntest a_dde_link_is_no_workbook_never_asked_counted_or_listed ... ok\n\ntest result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s\n\n   Compiling ironcalc_base v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/forks/ironcalc/base)\n   Compiling ironcalc v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/forks/ironcalc/xlsx)\n   Compiling veredas-abaco v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/crates/veredas-abaco)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.25s\n     Running tests/links.rs (target/debug/build/veredas-abaco/e3c18ad4adbb1834/out/links-e3c18ad4adbb1834)",
+  "ranAt": "2026-11-22T21:37:40.080Z",
+  "headCommit": "f9dd804fc0d03a6294a0fd460d316531aeecec21",
+  "tests": [
+    {
+      "name": "crates/veredas-abaco/tests/links.rs",
+      "file": "crates/veredas-abaco/tests/links.rs",
+      "fileSha": "9c71b072b0c28c200af8040faba599c83a32f6d564ed360178049e4ed47dadb9"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "clause": "C-222",
+  "command": "cargo test -p abaco-oracle --test parity",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "abaco-oracle",
+    "--test",
+    "parity"
+  ],
+  "exitCode": 0,
+  "outputSha": "098516096c002f2f6600d22402db8654de43634fe6871543b140e0421ba2f43a",
+  "outputTail": "test the_engine_s_clock_is_pinned_to_the_baseline_s_day_while_a_workbook_is_measured ... ok\ntest a_package_that_only_claims_excel_is_not_in_the_corpus ... ok\ntest the_corpus_is_every_workbook_excel_saved_and_the_baseline_names_each_once ... ok\ntest a_cached_value_excel_never_wrote_is_counted_as_a_mismatch ... ok\ntest parity_under_the_cached_resolution ... ok\ntest parity_under_the_linked_resolution ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.26s\n\n   Compiling ironcalc_base v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/forks/ironcalc/base)\n   Compiling ironcalc v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/forks/ironcalc/xlsx)\n   Compiling veredas-abaco v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/crates/veredas-abaco)\n   Compiling abaco-oracle v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/tools/abaco-oracle)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.27s\n     Running tests/parity.rs (target/debug/build/abaco-oracle/cf4fb7df5246a492/out/parity-cf4fb7df5246a492)",
+  "ranAt": "2026-11-22T21:38:18.737Z",
+  "headCommit": "f9dd804fc0d03a6294a0fd460d316531aeecec21",
+  "tests": [
+    {
+      "name": "tools/abaco-oracle/tests/parity.rs",
+      "file": "tools/abaco-oracle/tests/parity.rs",
+      "fileSha": "7be558b53f090502eb51b8d00b879d6cab386c60a855ee3037ead0deb5f05809"
+    }
+  ]
+}

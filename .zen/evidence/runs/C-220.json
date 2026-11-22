@@ -1,0 +1,33 @@
+{
+  "clause": "C-220",
+  "command": "cargo test -p veredas-abaco -p leis --test component --test real_tree",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-abaco",
+    "-p",
+    "leis",
+    "--test",
+    "component",
+    "--test",
+    "real_tree"
+  ],
+  "exitCode": 0,
+  "outputSha": "50192f61d92c763b8686dc255589ac70124e41124ed8adc8912433c624bf696d",
+  "outputTail": "test the_fork_is_upstream_at_its_commit_then_each_listed_change_a_commit ... ok\ntest no_plant_connection_and_no_member_in_its_normal_graph_on_any_platform ... ok\ntest the_engine_is_the_fork_at_its_folder_and_no_member ... ok\ntest the_fork_s_own_suite_passes_on_the_versions_abaco_builds ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.83s\n\n    Blocking waiting for file lock on package cache\n   Compiling ironcalc_base v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/forks/ironcalc/base)\n   Compiling ironcalc v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/forks/ironcalc/xlsx)\n   Compiling leis v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/tools/leis)\n   Compiling veredas-abaco v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/crates/veredas-abaco)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.17s\n     Running tests/real_tree.rs (target/debug/build/leis/2d072341d39254e6/out/real_tree-2d072341d39254e6)\n     Running tests/component.rs (target/debug/build/veredas-abaco/5b3a92eae3fc9709/out/component-5b3a92eae3fc9709)",
+  "ranAt": "2026-11-22T21:37:36.691Z",
+  "headCommit": "f9dd804fc0d03a6294a0fd460d316531aeecec21",
+  "tests": [
+    {
+      "name": "crates/veredas-abaco/tests/component.rs",
+      "file": "crates/veredas-abaco/tests/component.rs",
+      "fileSha": "175531f2de9175c8f81fb8175212614120a8bdbaff7bb86a57ae0b151f2915a6"
+    },
+    {
+      "name": "tools/leis/tests/real_tree.rs",
+      "file": "tools/leis/tests/real_tree.rs",
+      "fileSha": "8dcab973a8d2d31fbf3ed2986dd27bb0a6a15a58fb281883728ecea293c308e2"
+    }
+  ]
+}

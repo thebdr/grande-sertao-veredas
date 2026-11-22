@@ -1,0 +1,13 @@
+{
+  "clause": "C-221",
+  "verdict": "holds",
+  "ranAt": "2026-11-22T21:38:22.671Z",
+  "headCommit": "f9dd804fc0d03a6294a0fd460d316531aeecec21",
+  "tests": [
+    {
+      "name": "crates/veredas-abaco/tests/links.rs",
+      "file": "crates/veredas-abaco/tests/links.rs",
+      "symbolSha": "9c71b072b0c28c200af8040faba599c83a32f6d564ed360178049e4ed47dadb9"
+    }
+  ]
+}
