@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
 import com.kdab.dockwidgets 2.0 as KDDW
 
 ApplicationWindow {
@@ -10,6 +11,39 @@ ApplicationWindow {
     height: 800
     title: "Oficina"
     color: "#141416"
+
+    // How the window is drawn (the spike's point 6): the adapter the shell found before the first
+    // window, and what Qt Quick says it draws through once its scene graph is up; effects only where
+    // a GPU draws, and the footer says which.
+    readonly property bool effects: !drawing.software
+
+    footer: Rectangle {
+        height: 22
+        color: "#0F0F11"
+
+        Text {
+            id: drawing
+            objectName: "drawing"
+            anchors { left: parent.left; verticalCenter: parent.verticalCenter; leftMargin: 8 }
+            readonly property string adapter: oficinaDrawing.adapter
+            readonly property string api: ["unknown", "software", "OpenVG", "OpenGL", "Direct3D 11", "Vulkan", "Metal", "null", "Direct3D 12"][GraphicsInfo.api] || ("API " + GraphicsInfo.api)
+            // Qt Quick's own renderer: where the platform gives it no path to a GPU (`offscreen`),
+            // whatever an OpenGL context would reach.
+            readonly property bool ownRenderer: GraphicsInfo.api === GraphicsInfo.Software
+            readonly property bool software: oficinaDrawing.software || ownRenderer
+            readonly property bool shadowed: layer.enabled
+            text: ownRenderer ? "Drawing in software, Qt Quick's own renderer: effects off, pages drawn without the GPU"
+                : software ? "Drawing in software, " + adapter + ", through " + api + ": effects off, pages drawn without the GPU"
+                : "Drawing on " + adapter + ", through " + api
+            textFormat: Text.PlainText
+            color: "#9A9AA3"
+            layer.enabled: window.effects
+            layer.effect: MultiEffect {
+                shadowEnabled: true
+                shadowBlur: 0.4
+            }
+        }
+    }
 
     KDDW.DockingArea {
         id: area

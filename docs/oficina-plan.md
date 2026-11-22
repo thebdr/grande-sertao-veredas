@@ -313,7 +313,18 @@ the numbers and what was learnt on the way are in the evidence. A test run names
    Oficina's hook (in a script world of Oficina's own, the page carrying no script for it) equal
    to what the bench held, 0.16 to 0.34 s after each change; the served page found no bridge
    object, where the page Oficina ships found its own.
-6. Not yet run.
+6. **Passed on this machine; its guests not yet run** (2026-11-23). With Mesa's software
+   rasteriser forced (`LIBGL_ALWAYS_SOFTWARE=1`, on X11), Oficina named llvmpipe as what draws it
+   before its first window, switched its effects off, started WebEngine without the GPU (pages
+   get no WebGL) and said so in its footer; Qt Quick kept its normal pipeline (OpenGL) over
+   llvmpipe, the plan's fallback. Points 1, 2, 3, 5 and 7 passed there (the spike's 40 tests; in
+   release 100 000 files open in 174 to 227 ms, a million rows in 51 to 63 ms). Point 3's frame
+   times, scrolling 500 rows a second for 3 s (median, 95th percentile and worst interval, ms): on
+   the GPU 17, 29 to 40, 41 to 105; over llvmpipe 25 to 31, 42 to 54, 54 to 67; on `offscreen`,
+   where Qt Quick draws with its own software renderer and Oficina counts that as software too,
+   16, 17 to 24, 18 to 45. **Not run yet:** a Linux guest on QEMU/KVM with no virtual GPU, and
+   Windows 11 on QEMU/KVM over WARP (the orchestrator's machine), where the probe must ask
+   Direct3D 11's adapter, not OpenGL's; and the stated remainder, Hyper-V, VMware and VirtualBox.
 7. **Passed** (2026-11-23). One test, run by cargo nextest with no display, its exit code the
    verdict: a value typed into the form and the text following it, an edit typed into Monaco and
    read back through Oficina's hook, and a named layout saved by KDDockWidgets' own saver, the
@@ -325,11 +336,12 @@ the numbers and what was learnt on the way are in the evidence. A test run names
 On X11 too (2026-11-22, once the architect installed the seven libraries Qt's X11 plugin needs):
 the same tests passed on Qt's `xcb` platform, through this machine's display (the desktop's
 XWayland, OpenGL 4.6 on its Intel GPU), and the timings held in release (a million rows open in
-47 to 63 ms, 100 000 files in 154 to 226 ms); point 4 passed there once, and point 7 once (21.6 s,
-its windows mapped on the desktop). Windows waits for its runs.
+47 to 63 ms, 100 000 files in 154 to 226 ms); on 2026-11-23 the spike's 40 tests, points 4, 5 and
+7 among them, passed there with the GPU and over llvmpipe. Windows waits for its runs.
 
 ### Verdict
-Not given: point 6 remains, and point 3's frame times.
+Not given: point 6's guests remain (a Linux guest on QEMU/KVM, Windows 11 over WARP), and Windows
+for every point.
 
 ## Open
 - **Q31, the review's majors and minors**, none ruled. Those that touch Oficina: 22 (Oficina

@@ -22,6 +22,45 @@ Rectangle {
         table.positionViewAtCell(Qt.point(column, row), TableView.AlignBottom | TableView.AlignRight);
     }
 
+    // Scroll the table steadily for `ms` at `rowsPerSecond` and time each frame meanwhile (point 3's
+    // frame times, taken with point 6): `frames` then reads {frames, p50, p95, max}, the intervals
+    // in milliseconds between the window's frames as its GUI thread advances them (`afterAnimating`,
+    // the thread that makes the rows' cells).
+    property string frames: ""
+    property var ticks: []
+
+    function scrollFor(ms, rowsPerSecond) {
+        frames = "";
+        ticks = [];
+        scroll.from = table.contentY;
+        scroll.to = table.contentY + rowsPerSecond * (ms / 1000) * (20 + table.rowSpacing);
+        scroll.duration = ms;
+        scroll.start();
+    }
+
+    NumberAnimation {
+        id: scroll
+        target: table
+        property: "contentY"
+        easing.type: Easing.Linear
+        onStopped: {
+            const gaps = [];
+            for (let i = 1; i < pane.ticks.length; i++)
+                gaps.push(pane.ticks[i] - pane.ticks[i - 1]);
+            gaps.sort((a, b) => a - b);
+            const at = (q) => gaps.length ? gaps[Math.min(gaps.length - 1, Math.floor(q * gaps.length))] : null;
+            pane.frames = JSON.stringify({ frames: gaps.length, p50: at(0.5), p95: at(0.95), max: gaps.length ? gaps[gaps.length - 1] : null });
+        }
+    }
+
+    Connections {
+        target: pane.Window.window
+        enabled: scroll.running
+        function onAfterAnimating() {
+            pane.ticks.push(Date.now());
+        }
+    }
+
     TableSource {
         id: source
     }
