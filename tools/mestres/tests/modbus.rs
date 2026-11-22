@@ -213,6 +213,30 @@ fn the_devices_exceptions_come_back_as_its_no_and_the_connection_stays() {
         "the device answered function 0x01 with exception 0x0b (gateway target device failed to respond)"
     );
     assert_eq!(dev.status().exceptions.get(&(0x01, 0x0B)), Some(&1));
+    // A write the gateway answers 0x0B: the standard does not say it was not done (a gateway that
+    // sent it on and heard nothing back answers the same), so the client calls it unconfirmed.
+    // Here the bench never played the unit, so nothing landed; the connection stays.
+    assert_eq!(
+        other.write_register(5, 9).unwrap_err(),
+        ModbusError::Unconfirmed {
+            function: 0x06,
+            cause: Cause::Exception(0x0B)
+        }
+    );
+    assert_eq!(
+        dev.registers(Table::HoldingRegister, 5, 1).unwrap(),
+        vec![0]
+    );
+    assert!(other.is_connected());
+    // And an address past a table on a write is the device's no, as the standard says.
+    assert_eq!(
+        c.write_register(200, 1).unwrap_err(),
+        ModbusError::Exception {
+            function: 0x06,
+            code: 0x02
+        }
+    );
+    assert_eq!(dev.status().accepted, 2);
 }
 
 #[test]
@@ -272,8 +296,21 @@ fn a_slow_device_lands_the_write_it_never_confirms_and_a_silent_one_does_not() {
         dev.registers(Table::HoldingRegister, 11, 1).unwrap(),
         vec![43]
     );
+    // The bench's own record: the silent write read and never answered, the same write answered
+    // once the device speaks again. (Its count of unanswered requests also takes in a slow answer
+    // still waiting when the device went silent, so the count is not this test's to pin.)
     let status = dev.status();
-    assert_eq!(status.unanswered, 1);
+    let silent_write: Vec<Option<Vec<u8>>> = status
+        .recent
+        .iter()
+        .filter(|x| x.request == [0x06, 0x00, 0x0B, 0x00, 0x2B])
+        .map(|x| x.response.clone())
+        .collect();
+    assert_eq!(
+        silent_write,
+        vec![None, Some(vec![0x06, 0x00, 0x0B, 0x00, 0x2B])]
+    );
+    assert!(status.unanswered >= 1);
     assert_eq!(
         status.accepted, 4,
         "each unanswered call ended its connection"

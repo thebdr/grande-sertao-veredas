@@ -18,10 +18,14 @@
 //!   value or quantity, masks). A short or mismatched answer is never handed on;
 //! - a call whose answer does not come in time, comes broken, or does not match ends the
 //!   connection, so a late answer is never read as the next request's; the next call connects
-//!   again. A device's exception answer keeps the connection: the device is there and said no;
+//!   again. A device's exception answer keeps the connection: the device is there and answered;
 //! - a write says what the device may have done. Refused before the wire, or no connection: it
-//!   never left. An exception: the device answered that it did not do it. No answer, a broken
-//!   answer or a mismatched echo after the request left: [`ModbusError::Unconfirmed`], because the
+//!   never left. An exception the standard gives for a request not carried out (an illegal
+//!   function, address or value, a device busy, a gateway with no path): the device did not do it
+//!   ([`ModbusError::Exception`]). No answer, a broken answer or a mismatched echo after the
+//!   request left, or an exception that does not say the write was not done (a device failure
+//!   while performing it, an acknowledge of a request still running, a gateway's target that did
+//!   not answer, a code the standard does not name): [`ModbusError::Unconfirmed`], because the
 //!   request may have landed and no client can recall it.
 //!
 //! The client is blocking, on a current-thread runtime of its own, so a cyclic task calls it
@@ -104,6 +108,9 @@ pub enum Cause {
     Link(String),
     /// An answer came that does not answer the request.
     Mismatch(String),
+    /// The device answered a write with an exception that does not say it was not done
+    /// ([`refuses`] is false for the code); the connection stays.
+    Exception(u8),
 }
 
 impl fmt::Display for Cause {
@@ -112,6 +119,13 @@ impl fmt::Display for Cause {
             Cause::Timeout(d) => write!(f, "no answer within {} ms", d.as_millis()),
             Cause::Link(r) => write!(f, "the link failed: {r}"),
             Cause::Mismatch(r) => write!(f, "the answer does not match the request: {r}"),
+            Cause::Exception(code) => {
+                write!(
+                    f,
+                    "the device answered exception {code:#04x} ({})",
+                    exception_name(*code)
+                )
+            }
         }
     }
 }
@@ -125,14 +139,16 @@ pub enum ModbusError {
     /// No connection within the bound: nothing was sent.
     #[error("no connection to {addr}: {reason}")]
     NotConnected { addr: SocketAddr, reason: String },
-    /// The device answered with an exception: it did not do what was asked. The connection stays.
+    /// The device answered with an exception: a read's data did not come, or a write was not
+    /// carried out (a write's exception that does not say so is [`ModbusError::Unconfirmed`]).
+    /// The connection stays.
     #[error("the device answered function {function:#04x} with exception {code:#04x} ({})", exception_name(*code))]
     Exception { function: u8, code: u8 },
     /// A read left and its answer was not taken; the connection was closed.
     #[error("function {function:#04x} got no answer: {cause}")]
     NoAnswer { function: u8, cause: Cause },
-    /// A write left and its answer was not taken; the connection was closed. The device may have
-    /// done it.
+    /// A write left and no answer said it was not done; the device may have done it. The
+    /// connection was closed, but for [`Cause::Exception`], a proper answer, when it stays.
     #[error("function {function:#04x} unconfirmed, it may have landed: {cause}")]
     Unconfirmed { function: u8, cause: Cause },
 }
@@ -417,9 +433,14 @@ impl Client {
                 tokio_modbus::Error::Protocol(p) => Cause::Mismatch(p.to_string()),
             },
             Ok(Ok(Err(exception))) => {
-                return Err(ModbusError::Exception {
-                    function,
-                    code: u8::from(exception),
+                let code = u8::from(exception);
+                return Err(if writes(function) && !refuses(code) {
+                    ModbusError::Unconfirmed {
+                        function,
+                        cause: Cause::Exception(code),
+                    }
+                } else {
+                    ModbusError::Exception { function, code }
                 });
             }
             Ok(Ok(Ok(response))) => match check(&asked, &response) {
@@ -432,9 +453,9 @@ impl Client {
     }
 }
 
-/// A write that left unanswered may have landed; a read only got nothing.
-fn failed(function: u8, cause: Cause) -> ModbusError {
-    let writes = matches!(
+/// Whether a function writes to the device.
+fn writes(function: u8) -> bool {
+    matches!(
         function,
         function::WRITE_SINGLE_COIL
             | function::WRITE_SINGLE_REGISTER
@@ -442,8 +463,22 @@ fn failed(function: u8, cause: Cause) -> ModbusError {
             | function::WRITE_MULTIPLE_REGISTERS
             | function::MASK_WRITE_REGISTER
             | function::READ_WRITE_MULTIPLE_REGISTERS
-    );
-    if writes {
+    )
+}
+
+/// Whether an exception code says the request was not carried out: an illegal function (0x01),
+/// data address (0x02) or data value (0x03), a device busy with a long command (0x06, retry
+/// later), a gateway with no path to the target (0x0A). The rest do not: a device failure while
+/// performing the request (0x04), an acknowledge of a request it goes on processing (0x05), a
+/// memory parity error (0x08), a gateway whose target did not answer after it was sent (0x0B), and
+/// any code the standard does not name.
+pub fn refuses(code: u8) -> bool {
+    matches!(code, 0x01 | 0x02 | 0x03 | 0x06 | 0x0A)
+}
+
+/// A write that left unanswered may have landed; a read only got nothing.
+fn failed(function: u8, cause: Cause) -> ModbusError {
+    if writes(function) {
         ModbusError::Unconfirmed { function, cause }
     } else {
         ModbusError::NoAnswer { function, cause }

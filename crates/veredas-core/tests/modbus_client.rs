@@ -328,8 +328,7 @@ fn every_function_sends_the_standards_bytes_and_reads_its_answer() {
 fn an_exception_is_the_devices_no_and_the_connection_stays() {
     let peer = Peer::start(|i, req| match i {
         0 => Reply::Send(answer(req, &[0x81, 0x02])),
-        1 => Reply::Send(answer(req, &[0x86, 0x04])),
-        2 => Reply::Send(answer(req, &[0x83, 0x0B])),
+        1 => Reply::Send(answer(req, &[0x83, 0x0B])),
         _ => Reply::Send(answer(req, &[0x03, 0x02, 0x00, 0x07])),
     });
     let mut c = client(&peer, 1);
@@ -346,19 +345,81 @@ fn an_exception_is_the_devices_no_and_the_connection_stays() {
         "the device answered function 0x01 with exception 0x02 (illegal data address)"
     );
     assert_eq!(
-        c.write_register(1, 2).unwrap_err(),
-        ModbusError::Exception {
-            function: 0x06,
-            code: 0x04
-        }
-    );
-    assert_eq!(
         c.read_holding_registers(0, 1).unwrap_err().to_string(),
         "the device answered function 0x03 with exception 0x0b (gateway target device failed to respond)"
     );
     assert_eq!(c.read_holding_registers(0, 1).unwrap(), vec![7]);
     assert_eq!(peer.connections(), 1);
     assert_eq!(exception_name(0x63), "not a standard exception");
+}
+
+/// A write's exception is the device's no only when the standard says the request was not
+/// carried out; otherwise the write may have landed, and the connection stays either way.
+#[test]
+fn a_writes_exception_says_not_done_only_where_the_standard_does() {
+    // Every code the standard names, two it does not; each on every write, then on a read.
+    let codes: [u8; 11] = [
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x08, 0x0A, 0x0B, 0x00, 0x63,
+    ];
+    let refused: Vec<u8> = codes.iter().copied().filter(|c| refuses(*c)).collect();
+    assert_eq!(refused, vec![0x01, 0x02, 0x03, 0x06, 0x0A]);
+    let peer = Peer::start(move |i, req| {
+        let code = codes[i % codes.len()];
+        Reply::Send(answer(req, &[req[7] | 0x80, code]))
+    });
+    let mut c = client(&peer, 1);
+    type Write = fn(&mut Client) -> Result<(), ModbusError>;
+    let writes: [(u8, Write); 6] = [
+        (0x05, |c| c.write_coil(1, true)),
+        (0x06, |c| c.write_register(1, 2)),
+        (0x0F, |c| c.write_coils(0, &[true; 3])),
+        (0x10, |c| c.write_registers(0, &[1, 2, 3])),
+        (0x16, |c| c.mask_write_register(4, 0xF2, 0x25)),
+        (0x17, |c| c.read_write_registers(0, 1, 0, &[1]).map(|_| ())),
+    ];
+    for (function, write) in writes {
+        for code in codes {
+            let e = write(&mut c).unwrap_err();
+            let want = if refuses(code) {
+                ModbusError::Exception { function, code }
+            } else {
+                ModbusError::Unconfirmed {
+                    function,
+                    cause: Cause::Exception(code),
+                }
+            };
+            assert_eq!(e, want, "function {function:#04x}, exception {code:#04x}");
+        }
+    }
+    // The exact words of the two kinds.
+    assert_eq!(
+        Cause::Exception(0x05).to_string(),
+        "the device answered exception 0x05 (acknowledge)"
+    );
+    assert_eq!(
+        ModbusError::Unconfirmed {
+            function: 0x0F,
+            cause: Cause::Exception(0x0B)
+        }
+        .to_string(),
+        "function 0x0f unconfirmed, it may have landed: the device answered exception 0x0b (gateway target device failed to respond)"
+    );
+    // A read's exception is always its no: no data came, and a read changes nothing.
+    for code in codes {
+        assert_eq!(
+            c.read_holding_registers(0, 1).unwrap_err(),
+            ModbusError::Exception {
+                function: 0x03,
+                code
+            }
+        );
+    }
+    assert!(c.is_connected());
+    assert_eq!(
+        peer.connections(),
+        1,
+        "an exception keeps the connection, whatever its code"
+    );
 }
 
 #[test]
@@ -608,17 +669,31 @@ fn a_request_outside_the_standards_bounds_never_reaches_the_wire() {
         Err(ModbusError::Refused { reason }) => reason,
         other => panic!("{other:?}"),
     };
+    // Every function with a quantity, each of its bounds: none, one past its limit, a range past
+    // the last address.
     let reasons = vec![
         refused(c.read_coils(0, 0).map(|_| ())),
         refused(c.read_coils(0, 2001).map(|_| ())),
+        refused(c.read_coils(65535, 2).map(|_| ())),
+        refused(c.read_discrete_inputs(0, 0).map(|_| ())),
+        refused(c.read_discrete_inputs(0, 2001).map(|_| ())),
         refused(c.read_discrete_inputs(65535, 2).map(|_| ())),
+        refused(c.read_holding_registers(0, 0).map(|_| ())),
         refused(c.read_holding_registers(0, 126).map(|_| ())),
+        refused(c.read_holding_registers(65535, 2).map(|_| ())),
+        refused(c.read_input_registers(0, 0).map(|_| ())),
+        refused(c.read_input_registers(0, 126).map(|_| ())),
         refused(c.read_input_registers(65500, 37).map(|_| ())),
-        refused(c.write_coils(0, &[]).map(|_| ())),
+        refused(c.write_coils(0, &[])),
         refused(c.write_coils(0, &vec![true; 1969])),
         refused(c.write_coils(65535, &[true, true])),
+        refused(c.write_registers(0, &[])),
         refused(c.write_registers(0, &vec![0; 124])),
+        refused(c.write_registers(65535, &[1, 2])),
+        refused(c.read_write_registers(0, 0, 0, &[1]).map(|_| ())),
         refused(c.read_write_registers(0, 126, 0, &[1]).map(|_| ())),
+        refused(c.read_write_registers(65535, 2, 0, &[1]).map(|_| ())),
+        refused(c.read_write_registers(0, 1, 0, &[]).map(|_| ())),
         refused(c.read_write_registers(0, 1, 0, &vec![0; 122]).map(|_| ())),
         refused(c.read_write_registers(0, 1, 65535, &[1, 2]).map(|_| ())),
     ];
@@ -627,31 +702,45 @@ fn a_request_outside_the_standards_bounds_never_reaches_the_wire() {
         vec![
             "0 coils read: the standard takes 1 to 2000",
             "2001 coils read: the standard takes 1 to 2000",
+            "2 coils read from 65535 run past address 65535",
+            "0 discrete inputs read: the standard takes 1 to 2000",
+            "2001 discrete inputs read: the standard takes 1 to 2000",
             "2 discrete inputs read from 65535 run past address 65535",
+            "0 holding registers read: the standard takes 1 to 125",
             "126 holding registers read: the standard takes 1 to 125",
+            "2 holding registers read from 65535 run past address 65535",
+            "0 input registers read: the standard takes 1 to 125",
+            "126 input registers read: the standard takes 1 to 125",
             "37 input registers read from 65500 run past address 65535",
             "0 coils written: the standard takes 1 to 1968",
             "1969 coils written: the standard takes 1 to 1968",
             "2 coils written from 65535 run past address 65535",
+            "0 registers written: the standard takes 1 to 123",
             "124 registers written: the standard takes 1 to 123",
+            "2 registers written from 65535 run past address 65535",
+            "0 registers read: the standard takes 1 to 125",
             "126 registers read: the standard takes 1 to 125",
+            "2 registers read from 65535 run past address 65535",
+            "0 registers written: the standard takes 1 to 121",
             "122 registers written: the standard takes 1 to 121",
             "2 registers written from 65535 run past address 65535",
         ]
     );
     assert_eq!(peer.connections(), 0, "nothing sent, not even a connection");
-    // The limits themselves are taken: the last address, the largest quantities.
+    // Every limit taken, at the last addresses it can reach: the largest quantity of each
+    // function ending on address 65535, and one item at 65535.
     let peer = Peer::start(|_, req| {
         let pdu = &req[7..];
         let count = u16::from_be_bytes([pdu[3], pdu[4]]);
         match pdu[0] {
-            0x01 => {
-                let mut a = vec![0x01, count.div_ceil(8) as u8];
-                a.resize(2 + count.div_ceil(8) as usize, 0);
+            f @ (0x01 | 0x02) => {
+                let bytes = count.div_ceil(8) as usize;
+                let mut a = vec![f, bytes as u8];
+                a.resize(2 + bytes, 0);
                 Reply::Send(answer(req, &a))
             }
-            0x03 => {
-                let mut a = vec![0x03, (count * 2) as u8];
+            f @ (0x03 | 0x04 | 0x17) => {
+                let mut a = vec![f, (count * 2) as u8];
                 a.resize(2 + count as usize * 2, 0);
                 Reply::Send(answer(req, &a))
             }
@@ -661,10 +750,19 @@ fn a_request_outside_the_standards_bounds_never_reaches_the_wire() {
     });
     let mut c = client(&peer, 1);
     assert_eq!(c.read_coils(65535, 1).unwrap(), vec![false]);
-    assert_eq!(c.read_coils(0, 2000).unwrap().len(), 2000);
+    assert_eq!(c.read_coils(63536, 2000).unwrap().len(), 2000);
+    assert_eq!(c.read_discrete_inputs(63536, 2000).unwrap().len(), 2000);
     assert_eq!(c.read_holding_registers(65411, 125).unwrap().len(), 125);
-    c.write_coils(0, &vec![true; 1968]).unwrap();
+    assert_eq!(c.read_input_registers(65411, 125).unwrap().len(), 125);
+    c.write_coils(63568, &vec![true; 1968]).unwrap();
     c.write_registers(65413, &[7; 123]).unwrap();
+    assert_eq!(
+        c.read_write_registers(65411, 125, 65415, &[7; 121])
+            .unwrap()
+            .len(),
+        125
+    );
+    assert_eq!(peer.connections(), 1);
 }
 
 #[test]
