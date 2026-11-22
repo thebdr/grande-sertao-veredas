@@ -10,15 +10,15 @@
     "lldp"
   ],
   "exitCode": 0,
-  "outputSha": "43c34f97b1d24fc896d7f0b58befba44b55c02c88c0daa991ad356e7181b23fb",
-  "outputTail": "test a_profinet_port_says_every_tlv_and_reads_back_whole ... ok\ntest a_switch_port_reads_with_every_unread_tlv_kept_with_its_bytes ... ok\ntest what_a_tlv_cannot_carry_is_refused_never_cut ... ok\ntest a_sender_leaving_says_a_time_to_live_of_zero ... ok\ntest damage_and_missing_tlvs_are_errors_that_name_them ... ok\ntest a_tlv_that_says_what_is_already_said_or_does_not_fit_is_kept_unread ... ok\ntest the_smallest_pdu_is_its_three_mandatory_tlvs_and_the_end_to_the_byte ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\ntest any_bytes_decode_without_a_panic_and_rewrite_to_themselves ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.90s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.77s\n     Running tests/lldp.rs (target/debug/build/veredas-aranha/84ddea5d85ae8d56/out/lldp-84ddea5d85ae8d56)",
-  "ranAt": "2026-11-22T18:30:19.217Z",
-  "headCommit": "fb689d6f002f4b300b1023acf1d738551ec6c2e6",
+  "outputSha": "fe31326bb7eb07c6d4add77e75fe0c35cf7793884ec961eca22977ac77787168",
+  "outputTail": "test a_profinet_port_says_every_tlv_and_reads_back_whole ... ok\ntest damage_and_missing_tlvs_are_errors_that_name_them ... ok\ntest the_smallest_pdu_is_its_three_mandatory_tlvs_and_the_end_to_the_byte ... ok\ntest what_a_tlv_cannot_carry_is_refused_never_cut ... ok\ntest a_switch_port_reads_with_every_unread_tlv_kept_with_its_bytes ... ok\ntest a_sender_leaving_says_a_time_to_live_of_zero ... ok\ntest what_the_standard_does_not_let_a_tlv_say_is_read_as_unread ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\ntest any_bytes_decode_without_a_panic_and_rewrite_to_themselves ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.62s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s\n     Running tests/lldp.rs (target/debug/build/veredas-aranha/5fcd2ef5fbf0fd0e/out/lldp-5fcd2ef5fbf0fd0e)",
+  "ranAt": "2026-11-22T18:57:57.072Z",
+  "headCommit": "7bb31aec40f5c639880d7f32a4e5256662e9a54b",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/lldp.rs",
       "file": "crates/veredas-aranha/tests/lldp.rs",
-      "fileSha": "577997b063b33b6ceecb82b1f34ed2cfebe914cabbf4724c6a347674b91ff610"
+      "fileSha": "5cfc858322bf243bc5f37b3bf16f7bf16cb7ef9de01becee99e46d6f36f7f1ef"
     },
     {
       "name": "crates/veredas-aranha/tests/common/mod.rs",
