@@ -66,10 +66,13 @@ impl fmt::Display for LinkDiff {
 /// A value as the log spells it: a number as Excel turns it into text (15 significant digits,
 /// `1E+21` from an exponent of 15 on, `0.0000001` below, `0` for a negative zero); text between
 /// double quotes, a quote doubled as in a formula, a backslash doubled, a line feed, a carriage
-/// return and a tab written `\n`, `\r` and `\t`, and any other control character, Unicode's line
-/// and paragraph separators and the bidirectional controls written `\u{..}`, so the line stays one
-/// line and two different texts never read the same; every other character as it is; a boolean
-/// upper-case, an error as itself, an empty cell as `(empty)`.
+/// return and a tab written `\n`, `\r` and `\t`, and written `\u{..}`: any other control
+/// character, every space but the plain one (a no-break space, a thin space), Unicode's line and
+/// paragraph separators, the invisible format characters (a zero-width space, a soft hyphen, a
+/// byte-order mark, the bidirectional controls) and the combining marks (so a decomposed accent
+/// reads apart from a composed one); so the line stays one line and two different texts never read
+/// the same, but for letters of different scripts drawn alike, a limit. Every other character as
+/// it is; a boolean upper-case, an error as itself, an empty cell as `(empty)`.
 pub fn format_value(value: Option<&ExternalValue>) -> String {
     match value {
         None => "(empty)".to_string(),
@@ -91,7 +94,7 @@ fn quote(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if c.is_control() || is_layout_control(c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c if escaped(c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
             c => out.push(c),
         }
     }
@@ -99,10 +102,29 @@ fn quote(s: &str) -> String {
     out
 }
 
-/// Unicode's line and paragraph separators, and the controls that reorder text on a line (the
-/// marks and the embeddings, overrides and isolates).
-fn is_layout_control(c: char) -> bool {
-    matches!(c, '\u{2028}' | '\u{2029}' | '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+/// A character the log writes `\u{..}`: one that is invisible, or drawn like another, on a line.
+fn escaped(c: char) -> bool {
+    c.is_control()
+        // every space but the plain one, and Unicode's line and paragraph separators
+        || (c.is_whitespace() && c != ' ')
+        // the invisible format characters: the soft hyphen, the Mongolian selectors, the
+        // zero-width space, joiners and the left-to-right and right-to-left marks, the
+        // bidirectional embeddings, overrides and isolates, the word joiner and the invisible
+        // operators, the variation selectors, the byte-order mark
+        || matches!(
+            c,
+            '\u{00ad}'
+                | '\u{061c}'
+                | '\u{180b}'..='\u{180f}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{206f}'
+                | '\u{fe00}'..='\u{fe0f}'
+                | '\u{feff}'
+        )
+        // the combining marks Latin, Greek and Cyrillic text decomposes into
+        || matches!(c, '\u{0300}'..='\u{036f}' | '\u{1ab0}'..='\u{1aff}' | '\u{1dc0}'..='\u{1dff}' | '\u{20d0}'..='\u{20ff}' | '\u{fe20}'..='\u{fe2f}')
 }
 
 /// A lookup as a comparable value: `None` when the side cannot answer, `Some(None)` for an empty

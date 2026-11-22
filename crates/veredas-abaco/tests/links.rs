@@ -446,9 +446,28 @@ fn the_comparison_rules_and_the_spelling_of_values() {
     // text quoted as in a formula, one line, every other character as it is
     assert_eq!(f(ExternalValue::String("a\"b".to_string())), "\"a\"\"b\"");
     assert_eq!(f(ExternalValue::String("one\ntwo\r\tx\u{7}".to_string())), "\"one\\ntwo\\r\\tx\\u{7}\"");
-    assert_eq!(f(ExternalValue::String("a\u{a0}b".to_string())), "\"a\u{a0}b\"");
-    let decomposed = "ac\u{327}a\u{303}o";
-    assert_eq!(f(ExternalValue::String(decomposed.to_string())), format!("\"{decomposed}\""));
+    // spaces but the plain one, invisible characters and combining marks written so the eye sees
+    // them; a composed accent and every other letter as they are
+    assert_eq!(f(ExternalValue::String("a\u{a0}b".to_string())), "\"a\\u{a0}b\"");
+    assert_eq!(f(ExternalValue::String("ac\u{327}a\u{303}o".to_string())), "\"ac\\u{327}a\\u{303}o\"");
+    assert_eq!(f(ExternalValue::String("ação ÁBACO".to_string())), "\"ação ÁBACO\"");
+    for (plain, other) in [
+        ("Pump 1", "Pump\u{a0}1"),
+        ("Pump 1", "Pump\u{2009}1"),
+        ("Pump 1", "Pump\u{202f}1"),
+        ("Pump 1", "Pump\u{3000}1"),
+        ("Pump1", "Pump\u{200b}1"),
+        ("Pump1", "Pump\u{ad}1"),
+        ("Pump1", "\u{feff}Pump1"),
+        ("Pump1", "Pump\u{2060}1"),
+        ("Pump1", "Pump\u{fe0f}1"),
+        ("ação", "ac\u{327}a\u{303}o"),
+    ] {
+        let (a, b) = (f(ExternalValue::String(plain.to_string())), f(ExternalValue::String(other.to_string())));
+        assert_ne!(a, b, "{other:?}");
+        assert!(b.contains("\\u{"), "{other:?}: {b}");
+        assert!(!a.contains("\\u{"), "{plain:?}: {a}");
+    }
     // a backslash doubled, so two different texts never read the same
     assert_eq!(f(ExternalValue::String("C:\\x".to_string())), "\"C:\\\\x\"");
     let backslash_n = f(ExternalValue::String("C:\\new".to_string()));
