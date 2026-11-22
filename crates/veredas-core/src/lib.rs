@@ -8,6 +8,8 @@
 //! - [`source`]: the stop/join handle every worker thread returns, and its error.
 //! - [`telegram`]: the TCP telegram layer (the envelope framing, a hardened channel, a capture
 //!   rules engine), content-agnostic.
+//! - [`fieldbus`]: the fieldbus masters, the functions that drive a plant's devices over a
+//!   standard fieldbus: a Modbus/TCP client first.
 //! - [`rng`]: a deterministic PCG32, for weighted draws and seeded fixtures.
 //! - [`opc`]: the OPC UA client layer (poll, gated write, browse), and the demo plant its tests
 //!   drive (feature `demo-server`).
@@ -19,6 +21,7 @@
 //! either: what a device's telegrams mean is configuration, not core code (the plan's decision
 //! of 2026-11-05).
 
+pub mod fieldbus;
 pub mod opc;
 pub mod rng;
 pub mod schema;

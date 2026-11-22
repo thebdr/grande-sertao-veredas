@@ -14,6 +14,10 @@ description = "The foundation of Veredas 2: the shared types and content-agnosti
 # that only polls carries the client half alone. Core's own tests switch it on through the self
 # dev-dependency below (dev-dependencies resolve apart from the library's own: not a cycle).
 demo-server = ["dep:async-opcua-server"]
+# The Modbus/TCP client (fieldbus::modbus): a function that drives hardware, off by default so a
+# component that only polls carries no fieldbus code; the controller switches it on, and so do the
+# crates that test it (docs/core-plan.md, "The fieldbus masters").
+modbus = ["dep:tokio-modbus"]
 
 [dependencies]
 # The OPC UA client layer (opc): the client, its types, and the server behind demo-server.
@@ -32,10 +36,14 @@ socket2 = { workspace = true }
 toml = { workspace = true }
 # The telegram channel runs on its own current-thread runtime.
 tokio = { workspace = true }
+# The Modbus/TCP client's framing (fieldbus::modbus, feature "modbus"): the standard's frames,
+# checked here.
+tokio-modbus = { workspace = true, optional = true }
 
 [dev-dependencies]
-# Switches the demo plant on for core's own tests (law L4 allows core itself).
-veredas-core = { path = ".", features = ["demo-server"] }
+# Switches the demo plant and the fieldbus masters on for core's own tests (law L4 allows core
+# itself).
+veredas-core = { path = ".", features = ["demo-server", "modbus"] }
 # tests/opc_capabilities.rs drives the stack directly, to pin what the opc layer assumes of it.
 async-opcua-client = { workspace = true }
 async-opcua-types = { workspace = true }

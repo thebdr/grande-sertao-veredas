@@ -1805,3 +1805,30 @@ leans on it.
 **Reversible?** Yes while nothing stores the text: each point is a change to the writer, the
 reader and their test. Once controllers publish it and portal stores it, a change is a new
 version of the text, which point 7 does not yet give.
+
+---
+
+## Q101 - Where core's Modbus client meets the bench's Modbus server
+
+**Raised** 2026-11-22, building the first of core's fieldbus masters (P-018, C-071). Q34 asks the
+same for every master and was left with nothing written; the first master now needs an answer.
+
+Law L4 keeps every member out of core's dependency tables, the test table included, so core's own
+tests cannot start the bench's Modbus server. Core's test holds the client to the standard's
+example frames over real TCP, and to every way a link fails; the whole device, the bench's
+server, has to be met from a crate the laws allow.
+
+Options:
+- (a) A crate of repo tooling, `tools/mestres` ("the masters"), test-only: it depends on core and
+  maquinar and holds one test file per master against the bench device that plays its devices.
+  Core's session writes it; a tool may depend on anything (L5), needs no plan (L6) and keeps a
+  version of its own.
+- (b) The bench's own tests drive core's client against its server; the test is maquinar's file
+  and the clause core's.
+- (c) Controlador's tests, once controlador exists: the first consumer proves what it uses.
+
+**Recommended**: (a) now, and (c) beside it when controlador drives real devices. **Taken
+meanwhile**: (a), once the bench's Modbus server is on `main`; until then C-071 stays pending
+verification.
+
+**Reversible?** Yes: a tool crate removed or its tests moved.

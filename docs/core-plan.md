@@ -37,6 +37,8 @@ configuration and names no device (`docs/questions.md` Q8).
 - **The controller's state:** the structured state of a controller (a PLC) and its one line
   of text, with one writer, one reader and the table of reason numbers and words
   (`docs/state-text.md`; `docs/controlador-plan.md`, "The state").
+- **The fieldbus masters:** the functions that drive a plant's devices over a standard fieldbus
+  (`fieldbus`), a standard's frames being code here (Q9, revisited): a Modbus/TCP client first.
 - **Test-fixture plumbing:** the in-process OPC UA demo plant (`opc::demo`, behind the
   `demo-server` feature), seeded randomness.
 - **Later phases:** plain-text file schemas with their version stamps (the first being a
@@ -147,6 +149,7 @@ veredas_core
   rng         Pcg32
   telegram    Endian; schema, framing, channel, capture, compose, catalog
   opc         spec, value, map, browse, worker, error; demo (feature "demo-server")
+  fieldbus    modbus (feature "modbus": Client, Target, Timeouts, ModbusError)
   state       ControllerState, State, the reasons, Conditions, MaintenanceRequest, Health;
               REASONS, PHASES, MAINTENANCE_REASONS; the writer (Display), the reader (FromStr)
 ```
@@ -186,7 +189,10 @@ status P-018.
   reader accepts exactly what the writer writes; the readings it took are Q100's.
 - **The functions that drive hardware live in core**: the four fieldbus masters (PROFINET IO
   controller, EtherCAT master, EtherNet/IP scanner, Modbus TCP client), safe in controlador on
-  Linux and callable by other crates for testing only (2026-11-14). The review set this against
+  Linux and callable by other crates for testing only (2026-11-14). The Modbus/TCP client was
+  built first (2026-11-22, C-071, `fieldbus::modbus`), on the tokio-modbus crate's framing with
+  every answer checked here; its test against the bench's Modbus server waits on that server and
+  on Q101. The review set this against
   Q9 and laws L4 and L5, and the architect kept it: "Core, rules amended" (2026-11-15).
 - **What is amended:** core's telegram framing still holds no frame layout of its own, and a
   device spoken over a TCP telegram channel is still configuration. A standard fieldbus's frames
@@ -199,8 +205,51 @@ status P-018.
 - Open: where the masters' tests against the bench live, law L4 standing (Q34); where the readers
   of GSDML, ESI and EDS files live (Q45); the review's entries 23 and 26 (Q31).
 
+## The fieldbus masters: how each is built (P-018)
+In the briefing's order for core (`docs/controlador-plan.md`, "Networks and devices"); each is a
+module of `fieldbus`, a clause of its own, proven against its bench device in maquinar (P-020)
+from a crate law L4 allows (Q34, Q101), its frames held to the standard's own examples in core's
+test.
+- **Modbus/TCP client** (`fieldbus::modbus`, C-071): built, on tokio-modbus's framing.
+
+Each master is a cargo feature of core, off by default (`modbus` the first), as the OPC demo
+plant is: a component that only polls or serves (portal, supervisão) carries no fieldbus code and
+no fieldbus crate, and its pinned dependency graph does not move when a master lands (supervisão's
+`tests/component.rs` pins its own). Controlador switches on the masters it drives; core's own
+tests switch them on through the self dev-dependency.
+- **EtherNet/IP scanner** (`fieldbus::enip`): on a fork of rseip 0.3.1 (MIT), the young crate the
+  briefing names. It holds explicit messaging (the encapsulation session, unconnected and class-3
+  messages, Forward Open's parameters) and no implicit I/O; the fork adds what a scanner is: a
+  class-1 Forward Open naming the adapter's assemblies and their RPI, the cyclic exchange over UDP
+  port 2222 (sequenced address item, run/idle header, the producer's sequence count), the
+  connection's timeout at its multiplier of the RPI, and Forward Close. Where the fork lives (a
+  crate of the workspace, or vendored into core) is asked when it starts. Its bench device is
+  maquinar's EtherNet/IP adapter.
+- **PROFINET IO controller** (`fieldbus::profinet`): written here on aranha's codecs (DCP, the
+  real-time frames), moved into core when the controller needs them (the cut asked of aranha
+  through the orchestrator). Raw Ethernet frames.
+- **EtherCAT master** (`fieldbus::ethercat`): on ethercrab 0.7.1 (MIT or Apache-2.0), its
+  MainDevice over a raw socket. Raw Ethernet frames; its bench device is maquinar's emulated
+  SubDevice.
+
+Raw frames in tests need no privilege from the sessions the desktop app starts: an unprivileged
+user and network namespace (`unshare -Urn`) holds a veth pair whose ends take raw sockets, the
+host's links untouched (measured 2026-11-22; aranha's note on the shared folder has the two
+traps: a multi-threaded process cannot enter a new user namespace, so the test re-runs itself in
+a child, and the child needs its uid map). Outside the app (a plain terminal, CI) the host's
+AppArmor rule refuses it unless `kernel.apparmor_restrict_unprivileged_userns` is 0. A real
+network card needs `CAP_NET_RAW` on the controller's executable, an install step.
+
 ## Traps
 Recorded as the port meets them.
+
+- **tokio-modbus's typed reads trust the device.** Its `Reader` methods only `debug_assert!` that
+  an answer holds the quantity asked: a short answer panics a debug build and comes back short in
+  a release one, and a write's echo is checked the same way. `fieldbus::modbus` goes through the
+  crate's `call` and checks every answer itself (C-071).
+- **A tokio timer is made inside its runtime.** `runtime.block_on(tokio::time::timeout(..))`
+  builds the timer outside the runtime and panics ("no reactor running"); wrap it in an `async`
+  block.
 
 - **The crate is not formatted by rustfmt as a whole.** `cargo fmt -p veredas-core --check`
   differs on files written before the Linux machine; format a new file alone
