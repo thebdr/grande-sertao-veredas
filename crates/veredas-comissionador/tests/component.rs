@@ -133,22 +133,33 @@ fn its_members_are_core_and_portal_at_most() {
 
 /// The reading of one Rust file: the identifiers as the compiler reads them (a raw identifier read
 /// as its name, comments gone, macro bodies and groups walked), the identifiers inside attributes
-/// (`#[...]`, `#![...]`, `cfg_attr` within them), and the literals' source text.
+/// (`#[...]`, `#![...]`, `cfg_attr` within them), the literals' source text (a doc comment's
+/// text aside: `///` is a `doc` attribute to the lexer, and a comment is not code), and every
+/// `writes_armed` that is not the switch's position read, `.writes_armed()`.
 #[derive(Default, Debug)]
 struct Reading {
     idents: Vec<String>,
     in_attributes: Vec<String>,
     literals: Vec<String>,
+    switch_set: usize,
 }
 
 fn read(text: &str) -> Reading {
-    fn walk(stream: proc_macro2::TokenStream, attr: bool, out: &mut Reading) {
+    fn walk(stream: proc_macro2::TokenStream, attr: bool, doc: bool, out: &mut Reading) {
         let trees: Vec<proc_macro2::TokenTree> = stream.into_iter().collect();
         for (i, tree) in trees.iter().enumerate() {
             match tree {
                 proc_macro2::TokenTree::Ident(id) => {
                     let s = id.to_string();
                     let s = s.strip_prefix("r#").map(str::to_string).unwrap_or(s);
+                    if s == "writes_armed" {
+                        let after_dot = i > 0 && matches!(&trees[i - 1], proc_macro2::TokenTree::Punct(p) if p.as_char() == '.');
+                        let called_bare = matches!(trees.get(i + 1), Some(proc_macro2::TokenTree::Group(g))
+                            if g.delimiter() == proc_macro2::Delimiter::Parenthesis && g.stream().is_empty());
+                        if !(after_dot && called_bare) {
+                            out.switch_set += 1;
+                        }
+                    }
                     if attr {
                         out.in_attributes.push(s.clone());
                     }
@@ -165,8 +176,11 @@ fn read(text: &str) -> Reading {
                             }
                             _ => false,
                         };
-                    walk(g.stream(), attr || is_attr, out);
+                    // A doc attribute's text is a comment's.
+                    let is_doc = is_attr && matches!(g.stream().into_iter().next(), Some(proc_macro2::TokenTree::Ident(d)) if d == "doc");
+                    walk(g.stream(), attr || is_attr, doc || is_doc, out);
                 }
+                proc_macro2::TokenTree::Literal(_) if doc => {}
                 proc_macro2::TokenTree::Literal(l) => out.literals.push(l.to_string()),
                 proc_macro2::TokenTree::Punct(_) => {}
             }
@@ -174,7 +188,7 @@ fn read(text: &str) -> Reading {
     }
     let stream: proc_macro2::TokenStream = text.parse().unwrap_or_else(|e| panic!("a source that does not lex: {e:?}"));
     let mut out = Reading::default();
-    walk(stream, false, &mut out);
+    walk(stream, false, false, &mut out);
     out
 }
 
@@ -188,6 +202,8 @@ const REFUSED: &[(&str, &str)] = &[
     ("fieldbus", "core's fieldbus masters, past the session"),
     ("net", "a socket of its own"),
     ("Command", "a process of its own"),
+    ("unsafe", "code past the compiler's guarantees: a socket by the system's own calls, among others"),
+    ("from_v1", "Veredas 1's project read in, its own spelling of the switch with it"),
     ("include", "tokens from a file the reading does not see"),
     ("include_str", "text from a file the reading does not see"),
     ("include_bytes", "bytes from a file the reading does not see"),
@@ -202,11 +218,14 @@ fn breaches_of(text: &str) -> Vec<String> {
             out.push(format!("{id}: {why}"));
         }
     }
+    for _ in 0..r.switch_set {
+        out.push("writes_armed: the switch's position set, not read".to_string());
+    }
     if r.in_attributes.iter().any(|i| i == "path") {
         out.push("path: a module read from a file of an attribute's choosing".to_string());
     }
     for l in &r.literals {
-        if l.contains("writes_armed") {
+        if ["writes_armed", "allow_writes", "allow_dashboard_writes"].iter().any(|k| l.contains(k)) {
             out.push(format!("{l}: a project's text that arms the switch"));
         }
     }
@@ -255,7 +274,7 @@ fn its_sources_reach_the_plant_through_portal_alone_and_never_arm_the_switch() {
 }
 
 /// Its normal dependencies, each reviewed: no OPC UA stack, no socket or HTTP crate of its own.
-const DEPENDENCIES: &[&str] = &["chrono", "serde", "serde_json", "thiserror", "tokio", "toml", "veredas-core", "veredas-portal"];
+const DEPENDENCIES: &[&str] = &["chrono", "serde_json", "thiserror", "tokio", "veredas-core", "veredas-portal"];
 
 #[test]
 fn its_normal_dependencies_are_the_reviewed_ones() {
@@ -294,9 +313,23 @@ fn the_reading_finds_every_refused_form() {
         one("const P: &str = \"[session]\\nwrites_armed = true\";"),
         ["\"[session]\\nwrites_armed = true\": a project's text that arms the switch"]
     );
-    // A comment is not code; a path outside an attribute is a path; reading the switch is not
-    // arming it; the protocol layers' names as parts of other names are other names.
+    // The switch's position set by a field, a struct literal, an assignment: anything but a read.
+    assert_eq!(one("struct S { writes_armed: bool }"), ["writes_armed: the switch's position set, not read"]);
+    assert_eq!(one("fn f() { let s = S { store: 1, writes_armed: true }; }"), ["writes_armed: the switch's position set, not read"]);
+    assert_eq!(one("fn f(s: &mut S) { s.writes_armed = true; }"), ["writes_armed: the switch's position set, not read"]);
+    assert_eq!(one("fn f(l: &Live) -> bool { l.writes_armed(true) }"), ["writes_armed: the switch's position set, not read"]);
+    // Veredas 1's project read in, and its spellings of the switch in a literal.
+    assert_eq!(one("fn f(d: &Path) { veredas_portal::project::from_v1(d); }"), ["from_v1: Veredas 1's project read in, its own spelling of the switch with it"]);
+    assert_eq!(one("const C: &str = r#\"{ \"allow_writes\": true }\"#;"), ["r#\"{ \"allow_writes\": true }\"#: a project's text that arms the switch"]);
+    assert_eq!(one("const C: &str = \"allow_dashboard_writes\";"), ["\"allow_dashboard_writes\": a project's text that arms the switch"]);
+    // Code past the compiler's guarantees.
+    assert_eq!(one("unsafe extern \"C\" { fn socket(a: i32) -> i32; }"), ["unsafe: code past the compiler's guarantees: a socket by the system's own calls, among others"]);
+    assert_eq!(one("fn f() { unsafe { g() } }"), ["unsafe: code past the compiler's guarantees: a socket by the system's own calls, among others"]);
+    // A comment is not code, a doc comment included; a path outside an attribute is a path;
+    // reading the switch is not arming it; the protocol layers' names as parts of other names are
+    // other names.
     assert_eq!(one("// set_writes_armed spawn opc\nfn f() {}"), Vec::<String>::new());
+    assert_eq!(one("/// reads `Live::writes_armed`, never `writes_armed = true`\n//! allow_writes\nfn f() {}"), Vec::<String>::new());
     assert_eq!(one("fn f(path: &std::path::Path) {}"), Vec::<String>::new());
     assert_eq!(one("fn f(l: &Live) -> bool { l.writes_armed() && l.opc_handle(\"x\").is_some() }"), Vec::<String>::new());
 }
