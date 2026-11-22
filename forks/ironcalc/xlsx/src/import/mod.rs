@@ -1,5 +1,6 @@
 mod conditional_formatting;
 mod external_links;
+pub mod linked;
 mod metadata;
 pub(crate) mod shared_strings;
 mod sheet_data;
@@ -33,6 +34,7 @@ use crate::error::XlsxError;
 use shared_strings::{read_shared_strings, SharedStringTable};
 
 use external_links::load_external_links;
+pub use linked::{LinkState, LinkStatus, LinkedResolver, DEFAULT_LINK_DEPTH};
 use metadata::load_metadata;
 use styles::load_styles;
 use util::get_attribute;
