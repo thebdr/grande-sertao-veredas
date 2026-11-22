@@ -234,3 +234,6 @@ pub fn assert_exact(name: &str, got: &[String], expected: &[String]) {
 /// The plant the session and the server tests meet, and the session over it.
 #[cfg(feature = "store")] // the plant needs the session, which the light build has not
 pub mod plant;
+
+/// Ports a test holds: a listener binds port 0 and the test reads it back; a port nobody answers on is held.
+pub mod ports;

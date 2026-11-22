@@ -3,6 +3,8 @@
 //! answering by rule only while the master switch is on; against the bench's machine, its
 //! simulated controller and its pressure, over real loopback sockets, started from a bench file.
 
+mod common;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
@@ -15,6 +17,7 @@ use veredas_portal::channel::{
     ChannelConfig, ChannelError, ChannelEvent, ChannelHandle, LinkState, Literal, MAX_REPEAT_COLUMNS, MessageTable, ReplyField,
     ReplyOutcome, ReplyRule, SendError, spawn,
 };
+use common::ports::{bench_listening_port, held_port, listening_port};
 use veredas_portal::{SeriesType, Value};
 
 fn doc(name: &str) -> String {
@@ -47,10 +50,6 @@ fn catalog_text() -> String {
 
 fn machine_text() -> String {
     blocks("controller-schema.md")[1].clone()
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
 fn wait(within: Duration, mut what: impl FnMut() -> bool) -> bool {
@@ -214,8 +213,8 @@ fn a_message_s_table_is_typed_by_the_catalog_and_a_row_has_a_hole_where_a_name_i
 #[test]
 fn the_machine_s_messages_are_read_into_rows_and_answered_by_rule_while_the_switch_is_on() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let bench = machine_bench(dir.path(), "listen", port, &catalog_text());
+    let bench = machine_bench(dir.path(), "listen", 0, &catalog_text());
+    let port = bench_listening_port(&bench, "machine");
     let gate = WriteGate::new(true);
     let (tx, rx) = std::sync::mpsc::channel();
     let cfg = config(dial(port), vec![answer_rule()]);
@@ -323,8 +322,8 @@ fn the_machine_s_messages_are_read_into_rows_and_answered_by_rule_while_the_swit
 #[test]
 fn with_the_switch_off_nothing_is_answered_and_arming_it_live_answers_the_next_item() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let bench = machine_bench(dir.path(), "listen", port, &catalog_text());
+    let bench = machine_bench(dir.path(), "listen", 0, &catalog_text());
+    let port = bench_listening_port(&bench, "machine");
     let gate = WriteGate::new(false);
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = spawn(config(dial(port), vec![answer_rule()]), tx, gate.clone()).unwrap();
@@ -369,8 +368,8 @@ fn with_the_switch_off_nothing_is_answered_and_arming_it_live_answers_the_next_i
 #[test]
 fn the_handle_s_send_is_gated_and_reaches_the_plant_by_name() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let bench = machine_bench(dir.path(), "listen", port, &catalog_text());
+    let bench = machine_bench(dir.path(), "listen", 0, &catalog_text());
+    let port = bench_listening_port(&bench, "machine");
     let gate = WriteGate::new(false);
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = spawn(config(dial(port), vec![]), tx, gate.clone()).unwrap();
@@ -432,8 +431,8 @@ fn the_handle_s_send_is_gated_and_reaches_the_plant_by_name() {
 #[test]
 fn pressure_turned_on_the_bench_shows_in_the_rows() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let bench = machine_bench(dir.path(), "listen", port, &catalog_text());
+    let bench = machine_bench(dir.path(), "listen", 0, &catalog_text());
+    let port = bench_listening_port(&bench, "machine");
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = spawn(config(dial(port), vec![answer_rule()]), tx, WriteGate::new(true)).unwrap();
     let mut seen = Seen::new();
@@ -469,7 +468,6 @@ fn pressure_turned_on_the_bench_shows_in_the_rows() {
 #[test]
 fn an_unknown_id_and_a_refused_body_are_counted_and_shown() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
     // The plant's catalog has a message the gateway's lacks (id 99) and a command one byte
     // longer than the gateway's.
     let plant_catalog = catalog_text().replace("name = \"command\"\nid = 24\nlen = 2", "name = \"command\"\nid = 24\nlen = 3")
@@ -478,9 +476,10 @@ fn an_unknown_id_and_a_refused_body_are_counted_and_shown() {
     std::fs::write(dir.path().join("channel.toml"), channel_text()).unwrap();
     std::fs::write(dir.path().join("catalog.toml"), &plant_catalog).unwrap();
     let text = format!(
-        "format = \"veredas-bench\"\nversion = 1\n\n[[channel]]\nname = \"plant\"\nrole = \"listen\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\nmessages = [ {{ message = \"extra\", fields = [ {{ name = \"x\", value = 5 }} ] }}, {{ message = \"command\", fields = [ {{ name = \"code\", value = 1 }} ] }}, {{ message = \"status\", fields = [ {{ name = \"running\", value = 1 }}, {{ name = \"speed\", value = 9 }} ] }} ]\n"
+        "format = \"veredas-bench\"\nversion = 1\n\n[[channel]]\nname = \"plant\"\nrole = \"listen\"\nport = 0\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\nmessages = [ {{ message = \"extra\", fields = [ {{ name = \"x\", value = 5 }} ] }}, {{ message = \"command\", fields = [ {{ name = \"code\", value = 1 }} ] }}, {{ message = \"status\", fields = [ {{ name = \"running\", value = 1 }}, {{ name = \"speed\", value = 9 }} ] }} ]\n"
     );
     let bench = Bench::start(bench::load(&text, dir.path()).unwrap()).unwrap();
+    let port = bench_listening_port(&bench, "plant");
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = spawn(config(dial(port), vec![]), tx, WriteGate::new(true)).unwrap();
     let plant = bench.channel("plant").unwrap();
@@ -510,14 +509,15 @@ fn an_unknown_id_and_a_refused_body_are_counted_and_shown() {
 #[test]
 fn a_listener_waits_for_the_plant_to_dial_and_a_peer_gone_reads_as_waiting() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
     let (tx, rx) = std::sync::mpsc::channel();
-    let worker = spawn(config(Role::Listen { bind: "127.0.0.1".into(), port }, vec![answer_rule()]), tx, WriteGate::new(true)).unwrap();
+    // On port 0: the system hands the listener its port as it binds, and the test reads it back.
+    let worker = spawn(config(Role::Listen { bind: "127.0.0.1".into(), port: 0 }, vec![answer_rule()]), tx, WriteGate::new(true)).unwrap();
     let mut seen = Seen::new();
     // Listening once its socket is bound: waited for, a loaded host binding later than a fixed
     // pause allowed ("starting" read once at 300 ms).
-    let listening = format!("listening on 127.0.0.1:{port}");
-    assert!(wait(Duration::from_secs(10), || worker.writer.status().wire.state == listening), "{}", worker.writer.status().wire.state);
+    assert!(wait(Duration::from_secs(10), || listening_port(&worker.writer.status().wire.state).is_some()), "{}", worker.writer.status().wire.state);
+    let port = listening_port(&worker.writer.status().wire.state).unwrap();
+    assert!(port > 0);
     seen.drain(&rx);
     assert_eq!(seen.states, [LinkState::Waiting]);
     let bench = machine_bench(dir.path(), "connect", port, &catalog_text());
@@ -548,7 +548,10 @@ fn a_listener_waits_for_the_plant_to_dial_and_a_peer_gone_reads_as_waiting() {
 #[test]
 fn a_dialler_with_nobody_there_reports_trouble_and_links_when_the_plant_appears() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
+    // A port held bound and listening for nobody: refused until the plant binds it, and no other
+    // socket can come to listen on it meanwhile.
+    let mut held = held_port();
+    let port = held.port;
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = spawn(config(dial(port), vec![]), tx, WriteGate::new(false)).unwrap();
     let mut seen = Seen::new();
@@ -559,7 +562,9 @@ fn a_dialler_with_nobody_there_reports_trouble_and_links_when_the_plant_appears(
     assert!(matches!(seen.states.last(), Some(LinkState::Trouble(why)) if why.starts_with("connecting: ")), "{:?}", seen.states);
     assert_eq!(seen.states[0], LinkState::Waiting);
     assert!(worker.writer.status().wire.last_error.is_some());
+    held.yield_to_listener();
     let bench = machine_bench(dir.path(), "listen", port, &catalog_text());
+    assert_eq!(bench_listening_port(&bench, "machine"), port, "the plant listens on the port the dialler dials");
     assert!(wait(Duration::from_secs(20), || {
         seen.drain(&rx);
         seen.states.last() == Some(&LinkState::Linked { peers: 1 })
@@ -580,8 +585,8 @@ fn refused(cfg: ChannelConfig) -> ChannelError {
 
 #[test]
 fn every_refusal_names_its_place_and_nothing_dials_before_it_all_holds() {
-    let port = free_port();
-    let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
     listener.set_nonblocking(true).unwrap();
     let sid = || "sorter".to_string();
 
@@ -639,7 +644,8 @@ fn every_refusal_names_its_place_and_nothing_dials_before_it_all_holds() {
     }
     // A payload group is a name the message reads (asked of the catalog): a rule taking its
     // fields from the outcome's groups is accepted, on a port nobody listens on, and stopped.
-    let other = free_port();
+    let nobody = held_port();
+    let other = nobody.port;
     let accepted = spawn(
         config(dial(other), vec![rule("outcome", "answer", vec![field("item", Some("item"), None), field("dest", Some("dest"), None), field("flag", Some("result"), None)])]),
         std::sync::mpsc::channel().0,
@@ -673,7 +679,8 @@ fn every_refusal_names_its_place_and_nothing_dials_before_it_all_holds() {
 fn a_disarmed_send_is_the_last_refusal() {
     let gate = WriteGate::new(true);
     let (tx, _rx) = std::sync::mpsc::channel();
-    let worker = spawn(config(dial(free_port()), vec![]), tx, gate.clone()).unwrap();
+    let nobody = held_port();
+    let worker = spawn(config(dial(nobody.port), vec![]), tx, gate.clone()).unwrap();
     let w = worker.writer.clone();
     let stop = HashMap::from([("code".to_string(), "0".to_string())]);
     assert_eq!(w.send(Some(999), "command", stop.clone()), Err(SendError::NoPeer(999)));
@@ -691,7 +698,8 @@ fn a_disarmed_send_is_the_last_refusal() {
 fn the_peer_is_asked_for_last_so_the_catalog_s_refusals_come_first_with_nobody_there() {
     let gate = WriteGate::new(true);
     let (tx, _rx) = std::sync::mpsc::channel();
-    let worker = spawn(config(dial(free_port()), vec![]), tx, gate).unwrap();
+    let nobody = held_port();
+    let worker = spawn(config(dial(nobody.port), vec![]), tx, gate).unwrap();
     let w = worker.writer.clone();
     assert_eq!(w.send(None, "nope", HashMap::new()), Err(SendError::UnknownMessage("nope".into())));
     assert!(matches!(w.send(None, "command", HashMap::new()), Err(SendError::Compose { .. })), "{:?}", w.status().last_error);

@@ -7,6 +7,7 @@
 mod common;
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::NaiveDate;
@@ -29,8 +30,8 @@ fn midnight() -> chrono::NaiveDateTime {
 #[test]
 fn the_three_protocols_run_into_one_store_alike() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let bench = plant(dir.path(), port);
+    let bench = plant(dir.path());
+    let port = machine_port(&bench);
     let log = dir.path().join("plant.log");
     write_lines(&log, 0..20);
     let mut cfg = session_config("plant", &log, &bench, port);
@@ -211,7 +212,8 @@ fn a_start_is_refused_by_name_before_anything_spawns() {
     let mut rule = readings_rule(None);
     rule.name = "announce".into();
     clash.rules.push(rule);
-    clash.channels.push(channel_config(free_port()));
+    let nobody = common::ports::held_port();
+    clash.channels.push(channel_config(nobody.port));
     assert_eq!(refused(clash), "two tables would be named `announce`: capture rule `announce` and message `announce` of channel `sorter`");
     // A start point in the past into a family without a timestamp rule: nothing to locate it by.
     let mut fam = SessionConfig::new("fam");
@@ -251,8 +253,8 @@ fn a_start_is_refused_by_name_before_anything_spawns() {
 #[test]
 fn the_master_switch_is_off_by_default_and_arms_every_write_path_at_once() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let bench = plant(dir.path(), port);
+    let bench = plant(dir.path());
+    let port = machine_port(&bench);
     let log = dir.path().join("plant.log");
     std::fs::write(&log, "").unwrap();
     let session = Session::start(session_config("plant", &log, &bench, port)).unwrap();
@@ -403,17 +405,20 @@ fn a_failed_worker_still_reads_as_failed_after_the_stop() {
 #[test]
 fn the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_says() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let bench = plant(dir.path(), port);
+    let bench = plant(dir.path());
     let log = dir.path().join("keys.log");
     let mut text = String::new();
     for i in 0..70 {
         text.push_str(&format!("2026-07-19 10:00:00 temp=1.0 item=K{i} state=run\n"));
     }
     std::fs::write(&log, text).unwrap();
-    let mut cfg = session_config("away", &log, &bench, port);
+    // The plant is gone before the session starts: the server and the peer are away. The session
+    // dials two ports held bound and listening for nobody, never the ones the stopped bench freed,
+    // which another test's server or machine could take and answer on.
+    let (opc_away, peer_away) = (common::ports::held_port(), common::ports::held_port());
+    let mut cfg = session_config("away", &log, &bench, peer_away.port);
+    cfg.opc[0].endpoint_url = format!("opc.tcp://127.0.0.1:{}/", opc_away.port);
     cfg.start = Some(midnight());
-    // The plant is gone before the session starts: the server and the peer are away.
     bench.stop();
     let session = Session::start(cfg).unwrap();
     let live = session.live();
@@ -421,9 +426,8 @@ fn the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_s
     assert!(wait(Duration::from_secs(10), || live.series.read().unwrap().get("log|temp").is_some_and(|e| e.count == 70)), "{:?}", live.series.read().unwrap().get("log|temp"));
     let temp = live.series.read().unwrap()["log|temp"].clone();
     assert_eq!((temp.keys, temp.keys_capped), (64, true), "seventy keys: the cache holds 64 and says so");
-    // A connection attempt may take the worker's whole connect timeout (10 s) before it reads as
-    // retrying (a port freed by the bench can be taken by another test's server, which then never
-    // answers this client's handshake): the bound is that timeout and a margin, for a hang.
+    // Both dials are refused at once; the bound is the worker's connect timeout and a margin, for
+    // a hang.
     assert!(
         wait(veredas_core::opc::worker::CONNECT_TIMEOUT + Duration::from_secs(20), || {
             let h = live.health.read().unwrap();
@@ -457,6 +461,53 @@ fn the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_s
     assert!(counters.frames > 260, "{counters:?}");
     assert!(matches!(frames.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) if n > 0), "a listener that never read lags");
     assert_eq!(counters.lines, expected, "every line reached the store meanwhile");
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+}
+
+/// The pump never waits on a reader: while a reader holds the store's query connection (here a
+/// CSV export into a named pipe nobody reads, which blocks for as long as the pipe stays shut),
+/// the pump keeps passing and the lines written meanwhile reach the store. Before, the pump read
+/// its memory figure through that connection, and a slow query stopped the ingest whole (0 passes
+/// and no row while the export blocked; found by the server test under load, where a client
+/// polling the store held the pump to a pass a second). Unix: the pipe is a FIFO.
+#[cfg(unix)]
+#[test]
+fn a_reader_holding_the_store_never_holds_the_pump() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("plant.log");
+    write_lines(&log, 0..40);
+    let mut cfg = SessionConfig::new("held");
+    cfg.start = Some(midnight());
+    cfg.logs.push(log_source("log", &log));
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    let live = session.live();
+    assert!(wait(Duration::from_secs(10), || live.counters.read().unwrap().rows == 40), "{:?}", live.counters.read().unwrap());
+    let pipe = dir.path().join("pipe.csv");
+    assert!(std::process::Command::new("mkfifo").arg(&pipe).status().unwrap().success());
+    let (reader, path) = (Arc::clone(&live), pipe.clone());
+    let export = std::thread::spawn(move || reader.store.export_table_csv("readings", &path));
+    // The export holds the query connection until the pipe is opened for reading.
+    std::thread::sleep(Duration::from_millis(300));
+    let passes = live.counters.read().unwrap().passes;
+    write_lines(&log, 40..45);
+    let went_on = wait(Duration::from_secs(5), || {
+        let c = live.counters.read().unwrap();
+        c.rows == 45 && c.lines == 45 && c.passes >= passes + 10
+    });
+    let counters = live.counters.read().unwrap().clone();
+    let held = !export.is_finished();
+    // The pipe read before anything is asserted, so a pump stuck behind the export is set free
+    // and the session stops: the export ends with the rows it saw, a header and the first forty.
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut std::fs::File::open(&pipe).unwrap(), &mut text).unwrap();
+    export.join().unwrap().unwrap();
+    assert!(held, "the export held the query connection while the lines came");
+    assert!(went_on, "the pump stood still behind the export: {counters:?}");
+    assert_eq!(text.lines().count(), 41, "{text}");
+    assert!(text.lines().next().unwrap().starts_with("source,key,index_ms,ts,arrival_ms,seq,temp,state"), "{text}");
     for (id, r) in session.stop() {
         r.unwrap_or_else(|e| panic!("{id}: {e}"));
     }

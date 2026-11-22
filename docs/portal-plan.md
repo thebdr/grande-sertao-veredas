@@ -412,3 +412,18 @@ Recorded as the port meets them.
   hand. No poll interval follows the kind on either system; `poll_interval` is the operator's.
   The fix reads the mount's filesystem type (P-013; found by the station-hardware research,
   2026-11-10).
+- **A port a test picks is anybody's until it binds it** (C-044, the flaky wait, diagnosed on the
+  Linux machine on 2026-11-22). `free_port()` bound port 0, read the number and closed the socket;
+  the bench bound that number later, on its own thread, after its start had returned. With ten
+  sessions binding and dialling at once another socket took the port between the two about once
+  in five hundred runs: the bench's listener failed (`Address already in use`) with the bench
+  reporting a start, and the session waited for a peer that was never there. A listener binds
+  port 0 itself and the test reads its port back (`tests/common/ports.rs`, from the channel's
+  `listening on <addr>`); a port where nobody may answer is held bound and listening for nobody.
+  Played under a churner in a private network namespace (`unshare --user --map-root-user --net`,
+  no sudo), the old fixture failed 9 runs in 12 and the new one none.
+- **The pump reads through its own connection** (C-043, found by the same diagnostic). Its
+  refresh read the store's memory figure through the server's query connection, so a client
+  polling the store (or one heavy window) held every pass behind that lock: 16 passes in 16
+  seconds. Whatever the pump reads, it reads through the ingest connection, which nobody else
+  holds; a reader blocked for good (an export into a pipe nobody opens) proves it.

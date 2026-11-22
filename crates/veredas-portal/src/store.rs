@@ -663,9 +663,12 @@ impl DuckStore {
         self.total.load(Ordering::Relaxed)
     }
 
-    /// The engine's own memory figure: a rough footprint.
+    /// The engine's own memory figure: a rough footprint. Read through the ingest's connection,
+    /// the one the session's pump writes through and nobody else holds, so the pump reading its
+    /// vitals never waits behind the server's queries (the figure is the database's, whichever
+    /// connection asks).
     pub fn approx_bytes(&self) -> usize {
-        let conn = recover(self.api.lock());
+        let conn = recover(self.ingest.lock());
         self.approx_bytes_on(&conn)
     }
 

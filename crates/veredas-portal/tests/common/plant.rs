@@ -57,22 +57,26 @@ pub fn machine_text() -> String {
     blocks("controller-schema.md")[1].clone()
 }
 
-pub fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
-}
-
-/// The bench: the OPC UA server `plc` on a free port (a drawn speed, a run flag, a packed word,
-/// a label, a write-only command) and the machine `machine` of the controller reference,
-/// listening on `port`.
-pub fn plant(dir: &Path, port: u16) -> Bench {
+/// The bench: the OPC UA server `plc` (a drawn speed, a run flag, a packed word, a label, a
+/// write-only command) and the machine `machine` of the controller reference, each on a port the
+/// system hands it as it binds (never one a test picked and freed, which another socket can take
+/// first: `common::ports`). Returned once the machine listens; `machine_port` reads its port.
+pub fn plant(dir: &Path) -> Bench {
     std::fs::write(dir.join("channel.toml"), channel_text()).unwrap();
     std::fs::write(dir.join("catalog.toml"), catalog_text()).unwrap();
     std::fs::write(dir.join("machine.toml"), machine_text()).unwrap();
     let text = format!(
-        "format = \"veredas-bench\"\nversion = 1\nseed = 3\n\n[[opc]]\nname = \"plc\"\nport = 0\ntags = [\n  {{ id = \"speed\", type = \"float\", value = \"1.5\", randomize = {{ low = 1.0, high = 2.0, decimals = 2, interval_ms = 100 }} }},\n  {{ id = \"run\", type = \"bool\", access = \"read-write\" }},\n  {{ id = \"word\", type = \"int\", value = \"5\", access = \"read-write\" }},\n  {{ id = \"label\", type = \"text\", value = \"idle\", access = \"read-write\" }},\n  {{ id = \"cmd\", type = \"int\", access = \"write\" }},\n]\n\n[[channel]]\nname = \"machine\"\nrole = \"listen\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\ncontroller = \"machine.toml\"\n"
+        "format = \"veredas-bench\"\nversion = 1\nseed = 3\n\n[[opc]]\nname = \"plc\"\nport = 0\ntags = [\n  {{ id = \"speed\", type = \"float\", value = \"1.5\", randomize = {{ low = 1.0, high = 2.0, decimals = 2, interval_ms = 100 }} }},\n  {{ id = \"run\", type = \"bool\", access = \"read-write\" }},\n  {{ id = \"word\", type = \"int\", value = \"5\", access = \"read-write\" }},\n  {{ id = \"label\", type = \"text\", value = \"idle\", access = \"read-write\" }},\n  {{ id = \"cmd\", type = \"int\", access = \"write\" }},\n]\n\n[[channel]]\nname = \"machine\"\nrole = \"listen\"\nport = 0\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\ncontroller = \"machine.toml\"\n"
     );
     std::fs::write(dir.join("bench.toml"), &text).unwrap();
-    Bench::start(bench::load(&text, dir).unwrap()).unwrap()
+    let bench = Bench::start(bench::load(&text, dir).unwrap()).unwrap();
+    super::ports::bench_listening_port(&bench, "machine");
+    bench
+}
+
+/// The port the bench's machine listens on, the one a session's channel dials.
+pub fn machine_port(bench: &Bench) -> u16 {
+    super::ports::bench_listening_port(bench, "machine")
 }
 
 /// The machine's controller, as the bench reports it.

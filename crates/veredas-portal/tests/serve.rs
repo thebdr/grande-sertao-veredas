@@ -123,8 +123,8 @@ fn total(live: &Live, table: &str) -> u64 {
 #[test]
 fn the_snapshot_the_listing_the_windows_and_the_tables_over_a_running_session() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let bench = plant(dir.path(), port);
+    let bench = plant(dir.path());
+    let port = machine_port(&bench);
     let log = dir.path().join("plant.log");
     write_lines(&log, 0..40);
     let mut cfg = session_config("plant", &log, &bench, port);
@@ -134,7 +134,15 @@ fn the_snapshot_the_listing_the_windows_and_the_tables_over_a_running_session() 
     let live = session.live();
     let server = serve(Arc::clone(&live));
     let addr = server.addr;
-    assert!(wait(Duration::from_secs(15), || total(&live, "readings") == 40 && total(&live, "plc_main") >= 3 && total(&live, "announce") >= 1));
+    assert!(
+        wait(Duration::from_secs(15), || total(&live, "readings") == 40 && total(&live, "plc_main") >= 3 && total(&live, "announce") >= 1),
+        "readings {} plc_main {} announce {}; the machine's wire {:?}; {}",
+        total(&live, "readings"),
+        total(&live, "plc_main"),
+        total(&live, "announce"),
+        bench.channel("machine").map(|c| c.status().wire),
+        veredas_portal::serve::snapshot(&live)
+    );
 
     // The snapshot, from the caches: what runs, its sources, the two clocks, the switch.
     let (status, v) = get(addr, "/api/session");
@@ -231,8 +239,8 @@ fn the_snapshot_the_listing_the_windows_and_the_tables_over_a_running_session() 
 #[test]
 fn the_write_surface_is_refused_by_default_on_the_wire_and_whitelisted_when_armed() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let bench = plant(dir.path(), port);
+    let bench = plant(dir.path());
+    let port = machine_port(&bench);
     let log = dir.path().join("plant.log");
     std::fs::write(&log, "").unwrap();
     let session = Session::start(session_config("plant", &log, &bench, port)).unwrap();
@@ -374,13 +382,14 @@ fn the_write_surface_s_other_answers_the_budget_the_lag_and_the_end() {
     assert_eq!(refused_code(&WriteError::Disarmed), 403);
 
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let bench = plant(dir.path(), port);
+    let bench = plant(dir.path());
     let word = node(&bench, "word");
     let log = dir.path().join("rest.log");
     write_lines(&log, 0..40);
-    // The channel dials a port nobody listens on: a peer never there.
-    let mut cfg = session_config("rest", &log, &bench, free_port());
+    // The channel dials a port held bound and listening for nobody: a peer never there, and no
+    // other socket can come to listen on it while the test runs.
+    let nobody = common::ports::held_port();
+    let mut cfg = session_config("rest", &log, &bench, nobody.port);
     cfg.start = Some(midnight());
     let session = Session::start(cfg).unwrap();
     let live = session.live();
