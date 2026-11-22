@@ -7,7 +7,7 @@ publish = false
 description = "The gateway of Veredas 2: the one point where the suite reads the plant's logs, telegrams and OPC UA servers, stores their data alike and serves it, writes gated"
 
 [features]
-default = ["store", "serve"]
+default = ["store", "serve", "peer"]
 # The session store, DuckDB embedded. Off, the crate is the light build: the data plane, the
 # channels, the OPC sources and the project file, nothing persisted (no consumer named today;
 # controlador embeds the full build, P-019).
@@ -15,6 +15,10 @@ store = ["dep:duckdb", "dep:serde_json", "dep:tokio"]
 # The server over a session: the live stream, windowed REST, the gated write surface. Needs the
 # store it serves.
 serve = ["store", "dep:axum", "dep:tokio-stream", "dep:http-body-util"]
+# Portal to portal, the reading side: another portal's HTTP interface read over a socket (the
+# event stream, the snapshot, the windowed reads), HTTP/1.1 spoken over tokio itself. Needs no
+# store of its own.
+peer = ["dep:tokio", "dep:serde_json"]
 
 # A library first, one executable on top (docs/portal-plan.md, "Rules"; tests/component.rs asks
 # cargo what it would build). Depends on core alone (law L5, the map); its tests dev-depend on the
@@ -98,6 +102,10 @@ required-features = ["store"]
 [[test]]
 name = "serve"
 required-features = ["serve"]
+
+[[test]]
+name = "peer"
+required-features = ["peer", "serve"]
 
 [[test]]
 name = "store_engine"

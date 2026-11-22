@@ -153,15 +153,17 @@ veredas_portal
   store       the DuckDB session store: base tables, samples, views, windows, snapshots, CSV
   session     a project's sources running, pumped into the store and the feed; health
   serve       SSE, windowed REST, the gated write surface (feature "serve")
+  peer        another portal read over its HTTP interface: stream, snapshot, windows (feature "peer")
   project     the project file (veredas-project), migration, Veredas 1's folder read in
   main.rs     veredas-portal <project.toml> [--check]
 veredas_core (added for portal, kept for every member)
   schema      one header reader: format and version read before the body, refused or migrated
 ```
 
-Features: `store` and `serve`, both on by default; without them the crate holds the data plane,
-the channels, the OPC sources and the project file, nothing persisted and nothing served (no
-consumer named today; controlador embeds the full build, P-019).
+Features: `store`, `serve` and `peer`, all on by default; without them the crate holds the data
+plane, the channels, the OPC sources and the project file, nothing persisted and nothing served
+(no consumer named today; controlador embeds the full build, P-019). `peer` needs no store: a
+light portal reads a full one.
 
 ## Phases
 1. **The crate and the data plane.** `crates/veredas-portal` at `2.0.0-alpha.1`, listed; the
@@ -201,7 +203,15 @@ where they differ.
   (https, later)": the event stream, the windowed reads, the gated write surface, on the
   controller's loopback behind SSH. Forcing, breakpoints, downloads, start, stop and acknowledge
   travel on the same link: portal carries them, and controlador handles them behind its portal
-  (2026-11-16).
+  (2026-11-16). **Built: the reading side (C-095)**, the module `peer`: `PeerClient` reads
+  another portal's snapshot, listing, series windows, table pages and charts, a tag on demand,
+  and follows its event stream (hello, data, lag), every call a connection of its own speaking
+  HTTP/1.1 itself over a tokio socket, bounded in time (ten seconds), in size (32 MiB an answer,
+  64 KiB a head) and, for the stream, in silence (15 seconds, three of the server's keep-alive
+  comments missed). An error is the peer's own text with its status. A stream that ends stays
+  ended: the reader opens a new one, whose hello says where the peer is, and reads the gap again
+  by window. Not built: the commands, which wait for Q37; storing what is read in the reader's
+  own store (a peer as a source), until Oficina says what it keeps.
 - **The embedded portal serves OPC UA and Modbus/TCP** to other controllers and higher-level
   systems: the controller's state, its faults and the variables the program marks. Its master
   switch is the gate for writes from outside, and its whitelist holds exactly the variables the
@@ -464,3 +474,9 @@ Recorded as the port meets them.
   reviewed: `CsvOptions.escape` and a session's `window` failed it (supervisão names an HTML
   `escape` and its time windows). New public names are checked against supervisão's sources, or
   run its `writes` test, before they land.
+- **A feature turned on in a shared crate moves other members' builds** (C-095). Portal's first
+  reader used hyper's client side (`client`, `http1`): every crate sharing hyper was built anew,
+  the database engine's build script among them (six minutes and the memory that kills a
+  machine), and supervisão's graph without portal gained two crates its review had not read
+  (`try-lock`, `want`). The reader speaks HTTP/1.1 itself over tokio instead; a new feature on a
+  crate the workspace shares is weighed before it lands.

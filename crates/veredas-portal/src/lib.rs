@@ -30,6 +30,8 @@ pub mod encoding;
 pub mod family;
 pub mod grep;
 pub mod opc;
+#[cfg(feature = "peer")]
+pub mod peer;
 pub mod source;
 pub mod project;
 pub mod secrets;
