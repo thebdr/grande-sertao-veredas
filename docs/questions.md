@@ -2154,3 +2154,32 @@ crates' constants for the Sockaddr items. A licence check of the dependencies (Q
 Apache-2.0.
 
 **Reversible?** Yes: (b) is the same code moved in; (c) needs the architect's account.
+
+## Q160 - Which physics engine `fisica` stands on
+
+**Raised** 2026-11-22, starting `fisica` (P-020; `docs/maquinar-plan.md`, "Decided in the briefing
+of November 2026, not built"). The architect allowed a physics engine as a new dependency; which
+one is this question.
+
+What `fisica` has to do: bodies in a plant's scene (a carton on a belt, a part pushed off it, a
+part dropped into a chute), their motion at a fixed step, headless, the same run for the same
+inputs, and which sensor an object reached (a light barrier's beam, a proximity switch's field).
+Oficina's 3D view only draws the positions it is sent.
+
+Options:
+- (a) Rapier (`rapier3d`, Dimforge, Apache-2.0): rigid bodies, colliders, sensors reported as
+  intersection events, a pipeline stepped by the caller at a fixed step, determinism across
+  machines with its `enhanced-determinism` feature; pure Rust, no engine or ECS around it.
+- (b) Avian (`avian3d`): an ECS physics engine built on Bevy; it brings Bevy's ECS and app model
+  into the bench, which has neither.
+- (c) Parry (`parry3d`, Rapier's geometry half) with `fisica`'s own kinematics: shapes and sensor
+  queries without dynamics, conveyors moving parts as kinematic bodies along a path. Smaller, but
+  no contact is resolved (a part pushed off a belt, a stack, a chute) unless `fisica` writes it.
+- (d) No dependency: `fisica`'s own one-dimensional motion along conveyor paths, sensors as
+  points on them. Enough for a conveyor line, not for a scene.
+
+**Recommended**: (a), behind `fisica`'s own types (a body, a sensor, a step), so the engine is
+named in one module and a change of engine touches only that module. **Taken meanwhile**: (a),
+pinned to one version with `enhanced-determinism` on.
+
+**Reversible?** Yes: one dependency and one module; no file format names the engine.
