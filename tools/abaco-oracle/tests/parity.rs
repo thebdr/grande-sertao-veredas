@@ -286,7 +286,8 @@ fn the_engine_s_clock_is_pinned_to_the_baseline_s_day_while_a_workbook_is_measur
     assert_eq!(abaco_oracle::noon_utc("1970-01-01"), Some(12 * 3_600_000));
     assert_eq!(abaco_oracle::noon_utc("2026-11-22"), Some(20_779 * 86_400_000 + 12 * 3_600_000));
     assert_eq!(abaco_oracle::noon_utc("2000-02-29"), Some(11_016 * 86_400_000 + 12 * 3_600_000));
-    for bad in ["2026-13-01", "2026-11", "2026-11-22-1", "x", ""] {
+    assert_eq!(abaco_oracle::noon_utc("2024-02-29"), Some(19_782 * 86_400_000 + 12 * 3_600_000));
+    for bad in ["2026-13-01", "2026-11", "2026-11-22-1", "x", "", "2026-02-29", "2026-02-31", "2026-04-31", "1900-02-29", "2026-00-10"] {
         assert_eq!(abaco_oracle::noon_utc(bad), None, "{bad}");
     }
     // a workbook with TODAY() and YEAR(TODAY()), written and measured with the clock pinned to a
@@ -311,8 +312,12 @@ fn the_engine_s_clock_is_pinned_to_the_baseline_s_day_while_a_workbook_is_measur
     later.clock = abaco_oracle::noon_utc("2027-03-01");
     let report = run_file(&path, &later, &mut probe);
     assert_eq!(report.measure().unwrap().matched, 0);
-    // and the pin is released when the measure ends
+    // and the pin is released when the measure ends, to what it was before it
     assert_eq!(ironcalc_base::pinned_clock(), None);
+    ironcalc_base::pin_clock(Some(7));
+    run_file(&path, &later, &mut probe);
+    assert_eq!(ironcalc_base::pinned_clock(), Some(7));
+    ironcalc_base::pin_clock(None);
 }
 
 /// The engine against the baseline under one resolution of the links, file by file.

@@ -850,7 +850,15 @@ pub fn noon_utc(date: &str) -> Option<i64> {
     let year: i64 = parts.next()?.parse().ok()?;
     let month: i64 = parts.next()?.parse().ok()?;
     let day: i64 = parts.next()?.parse().ok()?;
-    if parts.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let days_in_month = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        1..=12 => 31,
+        _ => return None,
+    };
+    if parts.next().is_some() || !(1..=days_in_month).contains(&day) {
         return None;
     }
     // days from 1970-01-01 to the civil date (Howard Hinnant's algorithm)
@@ -864,19 +872,22 @@ pub fn noon_utc(date: &str) -> Option<i64> {
     Some(days * 86_400_000 + 12 * 3_600_000)
 }
 
-/// The engine's clock pinned for as long as it lives, released when it drops.
-struct ClockPin;
+/// The engine's clock pinned for as long as it lives; when it drops, the clock is what it was.
+struct ClockPin {
+    before: Option<i64>,
+}
 
 impl ClockPin {
     fn new(clock: Option<i64>) -> ClockPin {
+        let before = ironcalc_base::pinned_clock();
         ironcalc_base::pin_clock(clock);
-        ClockPin
+        ClockPin { before }
     }
 }
 
 impl Drop for ClockPin {
     fn drop(&mut self) {
-        ironcalc_base::pin_clock(None);
+        ironcalc_base::pin_clock(self.before);
     }
 }
 
