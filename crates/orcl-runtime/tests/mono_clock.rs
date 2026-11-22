@@ -8,7 +8,7 @@ use std::time::Duration;
 fn a_wait_never_returns_before_its_deadline_and_the_clock_never_goes_back() {
     let mut clock = MonoClock::new();
     let mut last = clock.now();
-    for step in [50_u64, 200, 400, 1_000, 3_000] {
+    for step in [50_u64, 200, 400, 1_000, 3_000, 6_000, 10_000, 20_000] {
         let deadline = clock.now() + Duration::from_micros(step);
         clock.sleep_until(deadline);
         let now = clock.now();

@@ -478,6 +478,12 @@ fn the_fault_keeps_its_first_length_when_a_later_faulted_scan_runs_longer() {
     t.step(&mut plant, &mut clock);
     t.step(&mut plant, &mut clock);
     assert_eq!(t.state(), RunState::Faulted { at: ms(0), fault: Fault::Watchdog { exec: ms(25) } });
+    let s = *t.stats();
+    assert_eq!(
+        (s.cycles, s.max_exec, s.total_exec, s.mean_exec()),
+        (2, ms(30), ms(55), us(27_500)),
+        "the faulted scan's 30 ms is the longest"
+    );
 }
 
 #[test]
@@ -652,4 +658,45 @@ fn a_late_scan_runs_and_every_other_deadline_passed_by_its_end_is_skipped() {
         })
         .collect();
     assert_eq!(seen, vec![(0, ms(0), ms(5), false, 0), (1, ms(30), ms(5), false, 2), (4, ms(40), ms(5), false, 2)]);
+}
+
+// The fifth refute round: periods that are no whole number of milliseconds, a first step after the clock's zero,
+// and a mean below the microsecond.
+
+#[test]
+fn a_period_that_is_no_whole_number_of_milliseconds_keeps_its_deadlines() {
+    for period in [us(2_500), us(500), Duration::from_nanos(333_333)] {
+        let mut clock = VirtualClock::new();
+        let mut plant = Timed::new(&clock, |_| Duration::from_nanos(100), |_| Duration::ZERO);
+        let mut t = task(period);
+        for _ in 0..4 {
+            t.step(&mut plant, &mut clock);
+        }
+        let due: Vec<Duration> = (0..4).map(|k| period * k).collect();
+        assert_eq!(plant.reads, due, "a period of {period:?}");
+        assert_eq!(t.next_due(), period * 4);
+    }
+}
+
+#[test]
+fn the_schedule_starts_at_the_clock_s_zero_whenever_the_first_step_comes() {
+    let mut clock = VirtualClock::new();
+    clock.advance(ms(5));
+    let mut plant = Timed::new(&clock, |_| ms(1), |_| Duration::ZERO);
+    let mut t = task(ms(10));
+    t.step(&mut plant, &mut clock);
+    t.step(&mut plant, &mut clock);
+    assert_eq!(plant.reads, vec![ms(5), ms(10)], "scan 0 runs late at 5 ms, scan 1 on its deadline at 10");
+    assert_eq!(t.stats().max_lateness, ms(5));
+}
+
+#[test]
+fn a_mean_keeps_the_nanoseconds() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Timed::new(&clock, |k| if k == 2 { ms(1) + Duration::from_nanos(1_500) } else { ms(1) }, |_| Duration::ZERO);
+    let mut t = task(ms(10));
+    for _ in 0..3 {
+        t.step(&mut plant, &mut clock);
+    }
+    assert_eq!(t.stats().mean_exec(), Duration::from_nanos(1_000_500));
 }
