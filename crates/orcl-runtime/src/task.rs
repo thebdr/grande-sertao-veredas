@@ -178,7 +178,9 @@ impl<P: Program> Task<P> {
     }
 
     /// Waits on `clock` for the next scan's deadline, then runs it: the inputs read once, the program scanned on
-    /// that snapshot (or, faulted, not scanned), the outputs written once at the end. A scan longer than the
+    /// that snapshot (or, faulted, not scanned), the outputs written once at the end. The scan ends when its
+    /// outputs are handed to the plant: its length, the time-error rule and the deadlines it skipped are all judged
+    /// at that moment, and the plant's own time to take the outputs is not the scan's. A scan longer than the
     /// period is a time error; a scan longer than twice the period faults the task, and its own outputs are never
     /// written: the safe outputs are, from that scan on. Deadlines that passed while the scan ran are skipped and
     /// counted, never caught up.
@@ -222,8 +224,10 @@ impl<P: Program> Task<P> {
         io.write_outputs(end, &self.outputs);
         self.stats.record(start.saturating_sub(due), exec);
 
+        // the scan ended when its outputs were handed over: the plant's own time to take them is not the scan's,
+        // and a deadline that passes meanwhile runs late rather than being skipped
         let next = self.cycle.saturating_add(1);
-        let first_due = first_due_at_or_after(period, clock.now());
+        let first_due = first_due_at_or_after(period, end);
         if first_due > next {
             self.stats.skipped = self.stats.skipped.saturating_add(first_due.saturating_sub(next));
             self.cycle = first_due;
