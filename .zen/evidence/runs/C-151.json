@@ -14,15 +14,15 @@
     "mono_clock"
   ],
   "exitCode": 0,
-  "outputSha": "5315d2f8b205ee7591d3ee094f2d4c0ffcc6d92da03dab2cdcc2329c0d9fc50f",
-  "outputTail": "test the_program_is_handed_exactly_the_scan_the_engine_reports_late_or_skipped ... ok\ntest the_rule_measures_a_scan_s_length_never_its_lateness ... ok\ntest the_schedule_starts_at_the_clock_s_zero_whenever_the_first_step_comes ... ok\ntest the_statistics_count_the_faulting_and_the_faulted_scans_lengths ... ok\ntest virtual_time_never_waits_and_never_goes_back ... ok\ntest the_same_inputs_and_times_give_the_same_scans ... ok\ntest with_a_slow_write_the_statistics_and_the_watchdog_judge_the_scan_at_the_handover ... ok\ntest two_thousand_scans_of_a_period_that_is_no_whole_microsecond_skip_nothing ... ok\n\ntest result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running tests/conveyor.rs (target/debug/build/orcl-runtime/c57057b1c5b8026a/out/conveyor-c57057b1c5b8026a)\n     Running tests/mono_clock.rs (target/debug/build/orcl-runtime/f95001293860bbd7/out/mono_clock-f95001293860bbd7)\n     Running tests/scan_cycle.rs (target/debug/build/orcl-runtime/98fce8709de6b29a/out/scan_cycle-98fce8709de6b29a)",
-  "ranAt": "2026-11-22T19:02:11.229Z",
-  "headCommit": "9ca3ef49a681d74f4194f795d92e58e922b3c55e",
+  "outputSha": "53e9d5f89bc80dd527dc84ced6bdbd86f093d95df3cccf5534e1e2265a264254",
+  "outputTail": "test the_schedule_starts_at_the_clock_s_zero_whenever_the_first_step_comes ... ok\ntest with_a_slow_write_the_statistics_and_the_watchdog_judge_the_scan_at_the_handover ... ok\ntest the_statistics_count_the_faulting_and_the_faulted_scans_lengths ... ok\ntest the_same_inputs_and_times_give_the_same_scans ... ok\ntest the_fault_keeps_its_first_length_when_a_later_faulted_scan_runs_longer ... ok\ntest the_rule_measures_a_scan_s_length_never_its_lateness ... ok\ntest the_program_is_handed_exactly_the_scan_the_engine_reports_late_or_skipped ... ok\ntest two_thousand_scans_of_a_period_that_is_no_whole_microsecond_skip_nothing ... ok\n\ntest result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s\n     Running tests/conveyor.rs (target/debug/build/orcl-runtime/c57057b1c5b8026a/out/conveyor-c57057b1c5b8026a)\n     Running tests/mono_clock.rs (target/debug/build/orcl-runtime/f95001293860bbd7/out/mono_clock-f95001293860bbd7)\n     Running tests/scan_cycle.rs (target/debug/build/orcl-runtime/98fce8709de6b29a/out/scan_cycle-98fce8709de6b29a)",
+  "ranAt": "2026-11-22T19:14:34.404Z",
+  "headCommit": "77fdb88752223ec4a2d542a86b442f754a2b0417",
   "tests": [
     {
       "name": "crates/orcl-runtime/tests/scan_cycle.rs",
       "file": "crates/orcl-runtime/tests/scan_cycle.rs",
-      "fileSha": "d9fdf52761f1ada72f10af518deb43684c68b4e416f8baecdfd094c1b8ee6844"
+      "fileSha": "5832bc30842b923d918c5ddfd3d214f8804251531377fd104fc921efad0e9a42"
     },
     {
       "name": "crates/orcl-runtime/tests/conveyor.rs",
@@ -32,7 +32,7 @@
     {
       "name": "crates/orcl-runtime/tests/mono_clock.rs",
       "file": "crates/orcl-runtime/tests/mono_clock.rs",
-      "fileSha": "8499c3561c9be0c76eef50d6511ce8a75b87af69a0037d4f097a4cc9ea3ef524"
+      "fileSha": "60a962dace17b71a7ec8e94111267eaefbdb2e93fb7b3e28e8b1179db27a54f4"
     }
   ]
 }
