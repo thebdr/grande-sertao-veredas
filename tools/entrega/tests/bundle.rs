@@ -159,7 +159,8 @@ fn a_bundle_packs_to_the_same_bytes_whatever_the_modes_its_files_were_made_with(
     }
     let first = work.path().join("first.tar.gz");
     bundle::pack(work.path(), "veredas-x", "1795300000", &first).unwrap();
-    for (p, m) in [("bin/tool", 0o775), ("docs/a.md", 0o664), ("docs", 0o775), ("bin", 0o775)] {
+    // As a umask of 0002 would leave them, under a folder whose setgid bit its children inherit.
+    for (p, m) in [("bin/tool", 0o775), ("docs/a.md", 0o664), ("docs", 0o2775), ("bin", 0o2775)] {
         set(p, m);
     }
     let second = work.path().join("second.tar.gz");
@@ -263,4 +264,49 @@ fn the_cut_refuses_a_version_another_release_pinned_at_other_code_before_buildin
     }
     assert!(!work.exists(), "refused before anything was run or built");
     assert!(!r.dir.path().join("releases/2.0.1.toml").exists());
+}
+
+#[test]
+fn the_tree_is_hers_only_when_git_looks_at_every_file() {
+    // Untracked files counted whatever `status.showUntrackedFiles` says; a file git is told not to
+    // look at, either way, makes the tree unknown; HEAD moved is said as such.
+    let c = clone();
+    let commit = Command::new("git").arg("-C").arg(c.path()).args(["rev-parse", "HEAD"]).output().unwrap();
+    let commit = String::from_utf8(commit.stdout).unwrap().trim().to_string();
+    let git = |args: &[&str]| assert!(Command::new("git").arg("-C").arg(c.path()).args(args).status().unwrap().success(), "{args:?}");
+    assert_eq!(cut::differs_from(c.path(), &commit).unwrap(), None);
+    git(&["config", "status.showUntrackedFiles", "no"]);
+    std::fs::write(c.path().join("notes.txt"), "never committed\n").unwrap();
+    let why = cut::differs_from(c.path(), &commit).unwrap().unwrap();
+    assert!(why.contains("?? notes.txt"), "{why}");
+    std::fs::remove_file(c.path().join("notes.txt")).unwrap();
+    for flag in ["--skip-worktree", "--assume-unchanged"] {
+        git(&["update-index", flag, "README.md"]);
+        std::fs::write(c.path().join("README.md"), "changed behind git's back\n").unwrap();
+        let why = cut::differs_from(c.path(), &commit).unwrap().unwrap();
+        assert!(why.starts_with("files are marked for git not to look at them") && why.contains("README.md"), "{flag}: {why}");
+        git(&["update-index", &flag.replace("--", "--no-"), "README.md"]);
+        git(&["checkout", "--", "README.md"]);
+    }
+    assert_eq!(cut::differs_from(c.path(), &commit).unwrap(), None);
+    std::fs::write(c.path().join("docs/x.md"), "x\n").unwrap();
+    git(&["add", "docs/x.md"]);
+    git(&["-c", "user.name=e", "-c", "user.email=e@example.invalid", "commit", "-q", "-m", "moved on"]);
+    let why = cut::differs_from(c.path(), &commit).unwrap().unwrap();
+    assert!(why.starts_with("HEAD is ") && why.ends_with(&format!("not {commit}: a release is cut from one commit")), "{why}");
+}
+
+#[test]
+fn a_trials_manifest_never_goes_into_releases() {
+    let c = clone();
+    let options = Options {
+        release: semver::Version::parse("9.9.9-trial.1").unwrap(),
+        out: c.path().join("releases"),
+        work: c.path().join("target/entrega/9.9.9-trial.1"),
+        run_suite: false,
+    };
+    match cut::cut(c.path(), &options) {
+        Err(CutError::Refused(e)) => assert_eq!(e, format!("a trial's manifest is never committed: it goes elsewhere than {}", c.path().join("releases").display())),
+        other => panic!("not refused: {:?}", other.map(|c| c.manifest)),
+    }
 }

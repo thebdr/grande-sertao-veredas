@@ -95,7 +95,9 @@ Keys (each required unless a default is given):
    one. "Tested together" means two runs: that one, which tests the components against each
    other from source, and the cut's own run of the bundle (step 5). A **trial cut** (`--trial`)
    skips the suite, says so in its manifest (`suite = "not run: a trial cut"`), is checked against
-   the repository alone and writes it elsewhere: it proves the recipe and is never committed.
+   the repository alone and writes it beside its bundle, never into `releases/`: it proves the
+   recipe and is never committed. After a real cut's suite, the tree is checked again: a commit or
+   an edit made while it ran refuses the cut.
 2. The components, their versions and their executables read from the commit as C-290 reads
    them (its tree out of git, asked of `cargo metadata`); the recipe's data
    (`tools/entrega/maquina/maquina.toml`) from git too.

@@ -150,7 +150,8 @@ fn cut(args: &[String]) -> i32 {
         }
     };
     let options = entrega::cut::Options {
-        out: out.unwrap_or_else(|| root.join("releases")),
+        // A trial's manifest goes beside its bundle, never into releases/.
+        out: out.unwrap_or_else(|| if trial { root.join("target/entrega").join(release.to_string()) } else { root.join("releases") }),
         work: root.join("target/entrega").join(release.to_string()),
         release,
         run_suite: !trial,

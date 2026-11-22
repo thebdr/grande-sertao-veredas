@@ -192,7 +192,7 @@ pub fn pack(work: &Path, name: &str, epoch: &str, out: &Path) -> Result<(), VmEr
             "--owner=0",
             "--group=0",
             "--numeric-owner",
-            "--mode=a+rX,u+w,go-w",
+            "--mode=a+rX,u+w,go-w,ug-s",
             &format!("--mtime=@{epoch}"),
             "--use-compress-program=gzip -n",
             "-cf",

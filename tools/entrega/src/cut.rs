@@ -74,18 +74,42 @@ pub fn manifest_text(release: &semver::Version, commit: &str, target: &str, tool
     t
 }
 
+/// Why the working tree at `root` is not exactly `commit`, or `None`: HEAD moved, a tracked file
+/// changed, an untracked file stands (whatever `status.showUntrackedFiles` says), or a file is
+/// marked so git does not look at it (`--assume-unchanged`, `--skip-worktree`).
+pub fn differs_from(root: &Path, commit: &str) -> Result<Option<String>, git::GitError> {
+    let head = git::text(root, &["rev-parse", "HEAD"])?.map(|t| t.trim().to_string());
+    if head.as_deref() != Some(commit) {
+        return Ok(Some(format!("HEAD is {}, not {commit}: a release is cut from one commit", head.unwrap_or_default())));
+    }
+    let dirty = git::text(root, &["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"])?.unwrap_or_default();
+    if !dirty.trim().is_empty() {
+        return Ok(Some(format!("the tree differs from HEAD ({commit}); a release is cut from a commit:\n{dirty}")));
+    }
+    let flagged: Vec<String> = git::text(root, &["ls-files", "-v"])?
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.chars().next().is_some_and(|t| t.is_ascii_lowercase() || t == 'S'))
+        .map(String::from)
+        .collect();
+    if !flagged.is_empty() {
+        return Ok(Some(format!("files are marked for git not to look at them, so the tree is not known to be HEAD's:\n{}", flagged.join("\n"))));
+    }
+    Ok(None)
+}
+
 pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     let git_text = |args: &[&str]| -> Result<String, CutError> {
         git::text(root, args).map_err(|e| refused(e.to_string()))?.ok_or_else(|| refused(format!("git {} answered no", args.join(" "))))
     };
     let commit = git_text(&["rev-parse", "HEAD"])?.trim().to_string();
-    // Untracked files count: the suite runs in this tree, and a file git does not hold would test
-    // a tree the commit is not.
-    let dirty = git_text(&["status", "--porcelain"])?;
-    if !dirty.trim().is_empty() {
-        return Err(refused(format!("the tree differs from HEAD ({commit}); a release is cut from a commit:\n{dirty}")));
+    if let Some(why) = differs_from(root, &commit).map_err(|e| refused(e.to_string()))? {
+        return Err(refused(why));
     }
     let releases = root.join("releases");
+    if !o.run_suite && o.out.canonicalize().ok().is_some_and(|out| releases.canonicalize().ok() == Some(out)) {
+        return Err(refused(format!("a trial's manifest is never committed: it goes elsewhere than {}", releases.display())));
+    }
     let target_file = o.out.join(format!("{}.toml", o.release));
     for f in [target_file.clone(), releases.join(format!("{}.toml", o.release))] {
         if f.exists() {
@@ -147,6 +171,10 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
             .map_err(|source| VmError::Spawn { program: "flock cargo nextest".into(), source })?;
         if !status.success() {
             return Err(refused(format!("the suite is not green at {commit} ({status}): no release is cut from it")));
+        }
+        // The suite tested the tree as it stood while it ran: it must still be the commit.
+        if let Some(why) = differs_from(root, &commit).map_err(|e| refused(e.to_string()))? {
+            return Err(refused(format!("while the suite ran, {why}")));
         }
     }
     let packages: Vec<String> = held.values().filter(|h| !h.bins.is_empty()).map(|h| h.name.clone()).collect();

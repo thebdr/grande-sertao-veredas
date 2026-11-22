@@ -322,7 +322,7 @@ pub fn build(r: &Recipe, bundle: &Path, bundle_dir: &str, release: &str, guide: 
             "--owner=0",
             "--group=0",
             "--numeric-owner",
-            "--mode=a+r,u+w,go-w,a-x",
+            "--mode=a+r,u+w,go-w,a-x,ug-s",
             "-cf",
             &ova.display().to_string(),
             "-C",
