@@ -1,0 +1,29 @@
+{
+  "clause": "C-200",
+  "command": "cargo nextest run --workspace -E (package(veredas-comissionador) & binary(component)) | (package(leis) & binary(real_tree))",
+  "commandArgv": [
+    "cargo",
+    "nextest",
+    "run",
+    "--workspace",
+    "-E",
+    "(package(veredas-comissionador) & binary(component)) | (package(leis) & binary(real_tree))"
+  ],
+  "exitCode": 0,
+  "outputSha": "5dc252947525f28dcab663a352a7140d683df5a9abbda888e2a74a8f02092d52",
+  "outputTail": "   Compiling abaco-oracle v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/tools/abaco-oracle)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.63s\n────────────\n Nextest run ID 98ad58a5-acee-4482-be67-53ba45f7822f with nextest profile: default\n    Starting 8 tests across 2 binaries (104 binaries skipped)\n        PASS [   0.008s] (1/8) veredas-comissionador::component the_rule_of_targets_refuses_what_it_should\n        PASS [   0.008s] (2/8) veredas-comissionador::component the_reading_finds_every_refused_form\n        PASS [   0.031s] (3/8) veredas-comissionador::component its_library_and_executable_are_built_from_its_src_folder_alone\n        PASS [   0.032s] (4/8) veredas-comissionador::component comissionador_is_one_library_and_one_executable_named_for_it\n        PASS [   0.032s] (5/8) veredas-comissionador::component its_normal_dependencies_are_the_reviewed_ones\n        PASS [   0.040s] (6/8) veredas-comissionador::component its_members_are_core_and_portal_at_most\n        PASS [   0.084s] (7/8) veredas-comissionador::component its_sources_reach_the_plant_through_portal_alone_and_never_arm_the_switch\n        PASS [   0.188s] (8/8) leis::real_tree the_real_tree_obeys_every_law\n────────────\n     Summary [   0.188s] 8 tests run: 8 passed, 0 skipped",
+  "ranAt": "2026-11-22T21:59:42.257Z",
+  "headCommit": "d7f9c896c9e0a0b086904402441c8acc41ee44cc",
+  "tests": [
+    {
+      "name": "crates/veredas-comissionador/tests/component.rs",
+      "file": "crates/veredas-comissionador/tests/component.rs",
+      "fileSha": "92fc11349b904c3fbfa082675b9b75d4885aaa9f23746621a868b5ae89269bb8"
+    },
+    {
+      "name": "tools/leis/tests/real_tree.rs",
+      "file": "tools/leis/tests/real_tree.rs",
+      "fileSha": "8dcab973a8d2d31fbf3ed2986dd27bb0a6a15a58fb281883728ecea293c308e2"
+    }
+  ]
+}

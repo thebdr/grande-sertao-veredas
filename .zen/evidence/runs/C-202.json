@@ -1,0 +1,24 @@
+{
+  "clause": "C-202",
+  "command": "cargo nextest run --workspace -E package(veredas-comissionador) & binary(live)",
+  "commandArgv": [
+    "cargo",
+    "nextest",
+    "run",
+    "--workspace",
+    "-E",
+    "package(veredas-comissionador) & binary(live)"
+  ],
+  "exitCode": 0,
+  "outputSha": "587768d6058f8f69e85e1773f483c79045d8443e7ff3c786f576eabad25330d0",
+  "outputTail": " Nextest run ID 5148f604-f591-4c8d-bfdc-f7caf61f5837 with nextest profile: default\n    Starting 11 tests across 1 binary (105 binaries skipped)\n        PASS [   1.457s] ( 1/11) veredas-comissionador::live values_compute_and_compare_as_the_reference_says\n        PASS [   1.547s] ( 2/11) veredas-comissionador::live the_binding_refuses_before_anything_runs\n        PASS [   1.576s] ( 3/11) veredas-comissionador::live a_live_read_waits_until_its_moment_is_stored\n        PASS [   1.651s] ( 4/11) veredas-comissionador::live routes_retries_and_ends_take_the_run_where_the_file_says\n        PASS [   1.707s] ( 5/11) veredas-comissionador::live a_gated_write_lands_and_a_wait_meets_what_it_caused\n        PASS [   1.830s] ( 6/11) veredas-comissionador::live an_event_moves_the_clock_to_its_row_and_a_read_without_a_value_is_an_error\n        PASS [   2.198s] ( 7/11) veredas-comissionador::live functions_take_typed_inputs_give_their_outputs_and_keep_their_bound\n        PASS [   2.627s] ( 8/11) veredas-comissionador::live a_write_the_switch_or_the_plant_refuses_mid_run_ends_its_step_in_error\n        PASS [   3.680s] ( 9/11) veredas-comissionador::live timeouts_the_run_s_bound_and_the_tester_s_stop\n        PASS [   6.852s] (10/11) veredas-comissionador::live the_worked_example_passes_live_against_the_machine\n        PASS [   7.484s] (11/11) veredas-comissionador::live the_worked_example_fails_where_the_destination_is_free\n────────────\n     Summary [   7.485s] 11 tests run: 11 passed, 0 skipped",
+  "ranAt": "2026-11-22T22:00:03.421Z",
+  "headCommit": "d7f9c896c9e0a0b086904402441c8acc41ee44cc",
+  "tests": [
+    {
+      "name": "crates/veredas-comissionador/tests/live.rs",
+      "file": "crates/veredas-comissionador/tests/live.rs",
+      "fileSha": "9977b80596a81a8197b77b8882e4f5f262a8dec8cf12c5f80027e052438bac42"
+    }
+  ]
+}
