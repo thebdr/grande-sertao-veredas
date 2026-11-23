@@ -1792,6 +1792,36 @@ working.
 
 ---
 
+## Q318 - Where a replay's clock stands after a write
+
+**Raised** 2026-11-23, by the comissionador session, from C-203's first refute round.
+
+Live, a `write` or a `send` moves the run's clock to the moment the plant answered. A replay sends
+nothing, and its clock stays where it was. After a step that read the plant, the live clock sits
+at least the read's settle (250 ms) behind the machine. So a wait right after a write starts that
+much, plus the plant's answer, earlier in a replay of the live run's own window. A wait whose
+bound is tighter than that lag plus the plant's reaction holds live and times out replayed: a test
+that writes `run := 1` after reading the plant, then waits 300 ms for a reaction 150 ms after the
+write, passes live and aborts replayed. Options:
+- (a) Portal keeps every gated write and send in the store with the moment it was answered, and a
+  replay's write moves its clock to that moment when the window holds it. Needs portal (a
+  table of writes), and replays every live run exactly.
+- (b) A replay's write moves its clock by the read's settle, 250 ms. Closer, never exact: the
+  lag depends on what the step before did, and the answer's time is not stored.
+- (c) The claim narrowed: a replay gives a live run's verdict and values when no wait after a
+  write needs a bound tighter than that lag and the reaction, and the reference says so.
+
+The assistant recommends (a): portal already holds every write's answer in the live run, and a
+store row per write would also show supervisão and the record who wrote what, when.
+
+**Taken meanwhile**: (c). `docs/test-schema.md` ("Time") states the limit, C-203 states it, and
+`crates/veredas-comissionador/tests/replay.rs` pins it.
+
+**Reversible?** Yes: (a) or (b) changes where a replay's write leaves the clock, in one place of
+the engine, and the test that pins the limit turns into one that asserts the same verdict.
+
+---
+
 ## Q100 - The controller's state text: the readings its writer and reader take
 
 **Raised** 2026-11-22, building the state text's writer and reader in core (P-018;
