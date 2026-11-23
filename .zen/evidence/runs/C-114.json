@@ -11,15 +11,15 @@
     "fisica"
   ],
   "exitCode": 0,
-  "outputSha": "a9566cff571864317ab37a2cab442ad382b1d2094bef185d45fafe83e864aab7",
-  "outputTail": "        PASS [   0.013s] (30/42) veredas-maquinar::fisica round_2::a_mover_s_velocity_is_read_while_it_moves_and_0_once_held\n        PASS [   0.043s] (31/42) veredas-maquinar::fisica round_2::a_mover_inside_a_sensor_is_seen_from_the_start_and_seen_leaving\n        PASS [   0.058s] (32/42) veredas-maquinar::fisica round_1::any_finite_angle_is_the_angle_it_names\n        PASS [   0.094s] (33/42) veredas-maquinar::fisica round_1::the_angles_are_yaw_then_pitch_about_the_new_y_then_roll\n        PASS [   0.157s] (34/42) veredas-maquinar::fisica round_1::drop_ends_the_thread\n        PASS [   0.199s] (35/42) veredas-maquinar::fisica round_1::friction_is_the_mean_of_the_two\n        PASS [   0.343s] (36/42) veredas-maquinar::fisica round_2::a_body_rests_on_a_fixed_part_within_a_tenth_of_a_millimetre_and_sinks_into_a_lighter_one\n        PASS [   0.412s] (37/42) veredas-maquinar::fisica round_1::the_event_cap_drops_the_oldest_and_counts_them\n        PASS [   0.705s] (38/42) veredas-maquinar::fisica round_2::a_stack_on_a_slow_belt_rides_together\n        PASS [   1.079s] (39/42) veredas-maquinar::fisica the_documented_scene_loads_with_its_numbers_and_runs_as_the_reference_says\n        PASS [   1.795s] (40/42) veredas-maquinar::fisica round_2::two_worlds_on_two_threads_at_once_run_as_one_alone\n        PASS [   1.482s] (41/42) veredas-maquinar::fisica the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene\n        PASS [   2.573s] (42/42) veredas-maquinar::fisica the_same_scene_and_inputs_give_the_same_run_bit_for_bit\n────────────\n     Summary [  12.834s] 42 tests run: 42 passed, 0 skipped",
-  "ranAt": "2026-11-23T12:26:11.528Z",
-  "headCommit": "d0326902ba406a35ec2b4b35b0bc8b66171cf929",
+  "outputSha": "38f96754fb883e8c87cc7a719ed384caab05d1749d03e79219d86b979f0bb0de",
+  "outputTail": "        PASS [   4.455s] (40/52) veredas-maquinar::fisica round_3::a_step_a_step_and_a_half_late_is_counted_late\n        PASS [   4.579s] (41/52) veredas-maquinar::fisica round_3::a_step_the_handle_held_past_its_time_is_counted_late\n        PASS [   0.005s] (42/52) veredas-maquinar::fisica round_3::the_engine_is_rapier_0_36_1_with_enhanced_determinism_named_in_the_world_module_alone\n        PASS [   0.007s] (43/52) veredas-maquinar::fisica round_3::every_range_takes_its_bounds_and_refuses_past_them\n        PASS [   0.009s] (44/52) veredas-maquinar::fisica sensors_see_bodies_and_movers_in_order_and_a_body_taken_away_leaves_them\n        PASS [   0.055s] (45/52) veredas-maquinar::fisica round_3::an_added_body_standing_at_a_belt_side_is_not_carried\n        PASS [   0.237s] (46/52) veredas-maquinar::fisica round_3::an_added_body_under_a_belt_is_not_carried\n        PASS [   0.259s] (47/52) veredas-maquinar::fisica round_3::an_added_body_against_a_belt_side_is_not_carried\n        PASS [   0.364s] (48/52) veredas-maquinar::fisica round_3::the_depth_a_body_rests_grows_with_gravity\n        PASS [   0.758s] (49/52) veredas-maquinar::fisica the_documented_scene_loads_with_its_numbers_and_runs_as_the_reference_says\n        PASS [   1.557s] (50/52) veredas-maquinar::fisica round_3::an_added_body_on_a_slow_belt_is_carried\n        PASS [   1.482s] (51/52) veredas-maquinar::fisica the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene\n        PASS [   1.695s] (52/52) veredas-maquinar::fisica the_same_scene_and_inputs_give_the_same_run_bit_for_bit\n────────────\n     Summary [  19.667s] 52 tests run: 52 passed, 0 skipped",
+  "ranAt": "2026-11-23T19:18:47.345Z",
+  "headCommit": "34eef3b5853f7a352e299d9a930d0e424ccf9db4",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/fisica.rs",
       "file": "crates/veredas-maquinar/tests/fisica.rs",
-      "fileSha": "980a187f22592a681f4e5b827edae4e1a2b66e73c39f6aec6dd73b8160d9a9ae"
+      "fileSha": "91f119ee71ed9d08005ac43b81dc0d1267b4aa88133869faef4c77e8cf068287"
     }
   ]
 }
