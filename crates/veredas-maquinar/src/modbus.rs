@@ -907,8 +907,16 @@ async fn accept_loop(
                 if shared.max_connections.is_some_and(|m| shared.lock().status.connections >= m) {
                     // A client that closed and connects again at once: its close and this accept
                     // wake together, and this loop runs first. Let the woken connections end before
-                    // the place is judged taken.
-                    tokio::task::yield_now().await;
+                    // the place is judged taken: one yield lets the scheduler run some 61 tasks
+                    // (tokio's event interval), so a busy server yields once per 61 connections
+                    // and a little more, till the place frees or the woken have all run.
+                    let busy = shared.lock().status.connections;
+                    for _ in 0..busy / 61 + 3 {
+                        tokio::task::yield_now().await;
+                        if !shared.max_connections.is_some_and(|m| shared.lock().status.connections >= m) {
+                            break;
+                        }
+                    }
                 }
                 let generation = {
                     let mut state = shared.lock();
@@ -962,7 +970,12 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
     let (mut rd, mut wr) = stream.into_split();
     // What the client sent while an answer waited out its delay, read so its close is seen.
     let mut ahead: Vec<u8> = Vec::new();
+    // How many bytes at the front of `ahead` were read during a delay silence touched: the
+    // requests they hold are withheld with the answer that waited (read while silent, or not yet
+    // handed to the socket when silence began).
+    let mut tainted: usize = 0;
     loop {
+        let frame_tainted = tainted > 0;
         let mut header = [0u8; 7];
         tokio::select! {
             r = fill_exact(&mut rd, &mut ahead, &mut header) => if r.is_err() { return },
@@ -982,13 +995,14 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
             r = fill_exact(&mut rd, &mut ahead, &mut pdu) => if r.is_err() { return },
             _ = ended(&mut gone, generation) => return,
         }
+        tainted = tainted.saturating_sub(usize::from(length) + 6);
         if protocol != 0 {
             shared.lock().status.dropped += 1;
             continue;
         }
         // The silence count is read before the silence: a switch between the two is seen by one.
         let epoch = shared.silenced.load(Ordering::SeqCst);
-        let silent = shared.silent.load(Ordering::SeqCst);
+        let silent = shared.silent.load(Ordering::SeqCst) || frame_tainted;
         let response = {
             let mut state = shared.lock();
             let response = if silent {
@@ -1069,6 +1083,7 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
             let mut state = shared.lock();
             if shared.silent.load(Ordering::SeqCst) || shared.silenced.load(Ordering::SeqCst) != epoch {
                 state.status.unanswered += 1;
+                tainted = ahead.len();
                 continue;
             }
             count(&mut state, 1);
@@ -1092,7 +1107,8 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
 }
 
 /// The most a connection reads ahead of its requests while an answer waits out its delay: past it,
-/// the client's close is seen once the delay ends.
+/// the client's close is seen only by a write that fails (up to two delays, the answer counted, the
+/// next request done).
 const READ_AHEAD: usize = 64 * 1024;
 
 /// Fills `out` from what was read ahead first, then from the socket.
