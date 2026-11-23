@@ -77,9 +77,10 @@ fn the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vm
 
     // The shipped disk booted on VMware's devices, a card address the provisioning never saw: the
     // release's sums checked at boot, the plant read from the host, the desktop drawn.
-    let head = entrega::git::text(&root, &["rev-parse", "HEAD"]).unwrap().unwrap().trim().to_string();
-    let canvas = maquina::page_canvas(&root, &head).unwrap();
-    let proof = maquina::prove(&recipe, &paths.ova, release, canvas, &work.join("prova")).unwrap();
+    // As `entrega prova` sets it up: the cut's bundle's digest, the recipe and canvas at its commit.
+    let setup = maquina::proof_setup(&root, release, target).unwrap();
+    assert_eq!(setup.bundle, cache::sha256(&cut.extracted.join("SHA256SUMS")).unwrap());
+    let proof = maquina::prove(&setup.recipe, &setup.ova, release, setup.canvas, &setup.bundle, &work.join("prova")).unwrap();
     assert_eq!(maquina::proof_faults(&proof, release), Vec::<String>::new());
     assert!(proof.console.contains(&format!("VEREDAS-SUMS-OK {release}")) && !proof.console.contains("VEREDAS-SUMS-FAILED"));
     assert!(proof.console.contains("vmw_pvscsi") && proof.console.contains("vmxnet3"), "the guest saw VMware's devices");

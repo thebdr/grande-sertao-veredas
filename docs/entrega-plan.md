@@ -239,7 +239,11 @@ release left beside the bundle); a bundle a refused cut left behind is refused.
   wallpaper and panel, holds none of it, however many colours it has.
 - **The OVA is what VMware reads**: `entrega prova` checks the OVA's members, descriptor and sums
   before it boots the disk, as the machine's test does, with the recipe and supervisão's page canvas
-  at the release's own commit, so an older release is proven by its own.
+  at the release's own commit, so an older release is proven by its own; every raw header is walked,
+  three plain ustar files in order, so a pax or GNU extension header is refused.
+- **The machine is this cut's**: the boot's check says the digest of the bundle's `SHA256SUMS` it
+  holds, and the proof requires the digest of the bundle of the cut that ran to its end, so a
+  machine left from another cut of the same release is never proven as this one.
 - **The package is what it says**: the OVA's members in order, the descriptor naming the disk with
   its size and capacity, the `.mf` sums matching the members.
 - What only VMware proves is listed below, and stays the architect's to try.

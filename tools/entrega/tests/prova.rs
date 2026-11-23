@@ -77,13 +77,14 @@ fn proof(console: &str, share: f64, after: &str) -> Proof {
         page_share: share,
         before: "a".into(),
         after: after.into(),
+        bundle: "ab".repeat(32),
     }
 }
 
 #[test]
 fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
     let card = format!("VEREDAS-CARD ens4 {}", maquina::PROOF_MAC);
-    let promised = "VEREDAS-PACKAGES ok\nVEREDAS-SERVICES-USER ok\nVEREDAS-SSH absent\nVEREDAS-CLOUD-INIT disabled\nVEREDAS-ON-PATH ok\n[    7.123998] systemd[1]: Initializing machine ID from random generator.\n";
+    let promised = "VEREDAS-BUNDLE abababababababababababababababababababababababababababababababab\nVEREDAS-PACKAGES ok\nVEREDAS-SERVICES-USER ok\nVEREDAS-SSH absent\nVEREDAS-CLOUD-INIT disabled\nVEREDAS-ON-PATH ok\n[    7.123998] systemd[1]: Initializing machine ID from random generator.\n";
     let good = format!("vmw_pvscsi\nvmxnet3\nVEREDAS-SUMS-OK 2.0.0\n{card}\n{promised}");
     assert_eq!(maquina::proof_faults(&proof(&good, 0.3, "a"), "2.0.0"), Vec::<String>::new());
     let no_card = good.replace(&card, "VEREDAS-CARD ens4 52:54:00:12:34:56");
@@ -111,6 +112,11 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
             "VEREDAS-SERVICES-USER ok",
             "VEREDAS-SERVICES-USER other: veredas-bancada veredas-supervisao",
             "the bench and supervisão are not services of the recipe's user (no `VEREDAS-SERVICES-USER ok` on the console)",
+        ),
+        (
+            "VEREDAS-BUNDLE abababababababababababababababababababababababababababababababab",
+            "VEREDAS-BUNDLE cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "the machine does not hold this cut's bundle (no `VEREDAS-BUNDLE abababababababababababababababababababababababababababababababab` on the console)",
         ),
         ("vmw_pvscsi\n", "", "the guest did not name vmw_pvscsi"),
         ("vmxnet3\n", "", "the guest did not name vmxnet3"),
@@ -152,6 +158,7 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
         "for b in /opt/veredas/current/bin/*; do ln -sf \"$b\" /usr/local/bin/; done",
         "touch /etc/cloud/cloud-init.disabled",
         "truncate -s 0 /etc/machine-id",
+        "echo \"VEREDAS-BUNDLE $(sha256sum SHA256SUMS | cut -d' ' -f1)\"",
         "fstrim -av || true",
     ] {
         assert!(s.lines().any(|l| l == line), "{line}");
@@ -314,6 +321,17 @@ fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
         maquina::ova_faults(&r, &ova, "9.9.9", &opened).unwrap(),
         [format!("the descriptor's References name no one file `{vmdk_name}` of {size} bytes as file1")]
     );
+    // A pax archive (`--format=posix`) of the members, their sums right again: its listing reads the
+    // same and its headers' magic is ustar's, but a reader that knows only ustar meets an extension
+    // header first.
+    std::fs::write(members.join(format!("{name}.mf")), format!(
+        "SHA256({name}.ovf)= {}\nSHA256({vmdk_name})= {}\n",
+        entrega::cache::sha256(&members.join(format!("{name}.ovf"))).unwrap(),
+        entrega::cache::sha256(&members.join(&vmdk_name)).unwrap()
+    )).unwrap();
+    let pax = repack("pax", &["--format=posix", "--owner=0", "--group=0", "--numeric-owner", "--mode=a+r,u+w,go-w,a-x,ug-s"]);
+    let f = maquina::ova_faults(&r, &pax, "9.9.9", &members).unwrap();
+    assert!(f.len() == 1 && f[0].starts_with("the OVA's raw headers are [\"./PaxHeaders/"), "{f:?}");
     // Another tar format than ustar (GNU's): its listing reads the same, its headers do not.
     let (_, opened) = make("gnu", "streamOptimized", r.machine.disk_gb, &same, right);
     let gnu = work.path().join("gnu-format.ova");
@@ -324,7 +342,7 @@ fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
     entrega::vm::run("tar", &args, None).unwrap();
     assert_eq!(maquina::ova_faults(&r, &gnu, "9.9.9", &opened).unwrap(), [r#"the OVA is no POSIX ustar archive: its first header's magic is "ustar  \0""#]);
     let f = faults("disordered", "streamOptimized", r.machine.disk_gb, &same, ["-disk1.vmdk", ".ovf", ".mf"]);
-    assert!(f.len() == 1 && f[0].starts_with("the OVA's members are"), "{f:?}");
+    assert!(f.len() == 2 && f[0].starts_with("the OVA's members are") && f[1].starts_with("the OVA's raw headers are"), "{f:?}");
     // The disk itself: another subformat, another size than the descriptor states.
     let f = faults("sparse", "monolithicSparse", r.machine.disk_gb, &same, right);
     assert_eq!(f, ["the disk is no stream-optimized VMDK (\"vmdk\" \"monolithicSparse\")"]);
@@ -505,6 +523,8 @@ fn a_release_is_proven_by_its_own_recipe_and_page_at_its_commit() {
         entrega::cut::NOT_RUN,
     );
     std::fs::write(work.join(&name).join("release.toml"), &text).unwrap();
+    entrega::bundle::write_sums(&work.join(&name)).unwrap();
+    let sums = entrega::cache::sha256(&work.join(&name).join("SHA256SUMS")).unwrap();
     entrega::bundle::pack(&work, &name, "1", &work.join(format!("{name}.tar.gz"))).unwrap();
     // No OVA yet: refused, naming where `entrega maquina` builds it.
     let ova = work.join("maquina").join(format!("veredas-{release}.ova"));
@@ -514,6 +534,12 @@ fn a_release_is_proven_by_its_own_recipe_and_page_at_its_commit() {
     }
     std::fs::create_dir_all(ova.parent().unwrap()).unwrap();
     std::fs::write(&ova, "").unwrap();
+    // A machine of a cut that did not run to its end (no manifest where a cut writes it): refused.
+    match maquina::proof_setup(root, release, target) {
+        Err(entrega::vm::VmError::Failed { stderr, .. }) => assert!(stderr.starts_with(&format!("release {release} was not cut to its end")), "{stderr}"),
+        other => panic!("not refused: {:?}", other.map(|s| s.bundle)),
+    }
+    std::fs::write(work.join(format!("{release}.toml")), &text).unwrap();
     let s = maquina::proof_setup(root, release, target).unwrap();
-    assert_eq!((s.recipe.machine.memory_mb, s.ova, s.canvas), (3072, ova, (0x10, 0x20, 0x30)));
+    assert_eq!((s.recipe.machine.memory_mb, s.ova, s.canvas, s.bundle), (3072, ova, (0x10, 0x20, 0x30), sums));
 }

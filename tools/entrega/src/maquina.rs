@@ -87,6 +87,7 @@ cat > /usr/local/libexec/veredas-verifica <<'SCRIPT'
 # of the recipe's user, no SSH server, cloud-init off, every executable on the PATH.
 cd /opt/veredas/current
 if sha256sum --quiet -c SHA256SUMS; then echo "VEREDAS-SUMS-OK {release}"; else echo "VEREDAS-SUMS-FAILED {release}"; fi
+echo "VEREDAS-BUNDLE $(sha256sum SHA256SUMS | cut -d' ' -f1)"
 for c in /sys/class/net/*; do n=$(basename "$c"); [ "$n" = lo ] || echo "VEREDAS-CARD $n $(cat "$c/address")"; done
 if [ -e /usr/sbin/sshd ] || [ -e /lib/systemd/system/ssh.service ] || [ -e /usr/lib/systemd/system/ssh.service ]; then echo "VEREDAS-SSH present"; else echo "VEREDAS-SSH absent"; fi
 if [ -e /etc/cloud/cloud-init.disabled ]; then echo "VEREDAS-CLOUD-INIT disabled"; else echo "VEREDAS-CLOUD-INIT enabled"; fi
@@ -505,6 +506,22 @@ pub fn page_canvas(root: &Path, commit: &str) -> Result<(u8, u8, u8), VmError> {
     }
 }
 
+/// An archive's raw tar headers in order, as a reader that knows only ustar walks them: each one's
+/// name, type flag and magic; the data blocks between skipped by the size each header states.
+fn raw_headers(archive: &Path) -> std::io::Result<Vec<(String, u8, Vec<u8>)>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(archive)?;
+    let mut out = Vec::new();
+    let mut head = [0u8; 512];
+    while out.len() < 64 && f.read_exact(&mut head).is_ok() && head.iter().any(|b| *b != 0) {
+        let field = |a: usize, b: usize| String::from_utf8_lossy(&head[a..b]).trim_end_matches('\0').to_string();
+        let size = u64::from_str_radix(field(124, 136).trim(), 8).unwrap_or(0);
+        out.push((field(0, 100), head[156], head[257..265].to_vec()));
+        f.seek(SeekFrom::Current(i64::try_from(size.div_ceil(512) * 512).unwrap_or(i64::MAX)))?;
+    }
+    Ok(out)
+}
+
 /// What is wrong with an OVA as VMware reads it, opened into `opened`: its members in order (the
 /// descriptor, the manifest, the disk), owned by root by number and read as 0644; the disk itself a
 /// stream-optimized VMDK (as `qemu-img` reads it) whose size the descriptor's capacity states; the
@@ -521,12 +538,16 @@ pub fn ova_faults(r: &Recipe, ova: &Path, release: &str, opened: &Path) -> Resul
     if members != want {
         out.push(format!("the OVA's members are {members:?}, not {want:?}"));
     }
-    // A POSIX ustar archive, as VMware's OVF tools write and read one: its first header's magic.
-    let mut head = vec![0u8; 512];
-    let read = std::fs::File::open(ova).and_then(|mut f| std::io::Read::read(&mut f, &mut head))?;
-    let magic: &[u8] = head.get(257..265).filter(|_| read == 512).unwrap_or_default();
-    if magic != b"ustar\x0000" {
+    // A POSIX ustar archive of three plain files, as a reader that knows only ustar walks it: every
+    // raw header's magic, type and name (a pax or GNU extension header is a member to such a reader).
+    let headers = raw_headers(ova)?;
+    if let Some((_, _, magic)) = headers.iter().find(|(_, _, m)| m.as_slice() != b"ustar\x0000") {
         out.push(format!("the OVA is no POSIX ustar archive: its first header's magic is {:?}", String::from_utf8_lossy(magic)));
+    }
+    let raw: Vec<String> = headers.iter().map(|(n, t, _)| format!("{n} ({})", *t as char)).collect();
+    let plain: Vec<String> = [format!("{name}.ovf"), format!("{name}.mf"), vmdk_name.clone()].iter().map(|n| format!("{n} (0)")).collect();
+    if raw != plain {
+        out.push(format!("the OVA's raw headers are {raw:?}, not the descriptor, the manifest and the disk as plain files"));
     }
     let listing = vm::run_clean("tar", &["-tvf", &ova.display().to_string()], None)?;
     for l in listing.lines() {
@@ -678,6 +699,9 @@ pub struct Proof {
     /// The disk's SHA-256 before the boot, and after it.
     pub before: String,
     pub after: String,
+    /// The SHA-256 of the cut's bundle's `SHA256SUMS` (every file of it), which the boot's check
+    /// must say the machine holds.
+    pub bundle: String,
 }
 
 /// The proof of a tester machine (docs/entrega-plan.md, "How a build is proven"): the OVA opened
@@ -685,7 +709,7 @@ pub struct Proof {
 /// card address the provisioning never saw; the boot's check of the release's sums and of its cards
 /// waited for on the console; the plant read from the host; the screen dumped until the page, in its
 /// canvas colour `canvas`, covers [`PAGE_SHARE`] of it; the disk hashed again.
-pub fn prove(r: &Recipe, ova: &Path, release: &str, canvas: (u8, u8, u8), work: &Path) -> Result<Proof, VmError> {
+pub fn prove(r: &Recipe, ova: &Path, release: &str, canvas: (u8, u8, u8), bundle: &str, work: &Path) -> Result<Proof, VmError> {
     let opened = work.join("opened");
     let _ = std::fs::remove_dir_all(&opened);
     std::fs::create_dir_all(&opened)?;
@@ -718,7 +742,7 @@ pub fn prove(r: &Recipe, ova: &Path, release: &str, canvas: (u8, u8, u8), work: 
     let console_text = m.console();
     m.kill();
     let after = cache::sha256(&vmdk)?;
-    Ok(Proof { vmdk, ova: ova_found, console: console_text, plant, screen, colours: seen, page_share: share, before, after })
+    Ok(Proof { vmdk, ova: ova_found, console: console_text, plant, screen, colours: seen, page_share: share, before, after, bundle: bundle.to_string() })
 }
 
 /// Why a proof does not show the machine working: the OVA as VMware reads it, the release's sums
@@ -729,6 +753,10 @@ pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
     let mut out = p.ova.clone();
     if !p.console.contains(&format!("VEREDAS-SUMS-OK {release}")) {
         out.push(format!("the boot did not check the release's sums (VEREDAS-SUMS-OK {release})"));
+    }
+    // The machine holds this cut's bundle, not another cut's of the same release.
+    if p.bundle.is_empty() || !p.console.contains(&format!("VEREDAS-BUNDLE {}", p.bundle)) {
+        out.push(format!("the machine does not hold this cut's bundle (no `VEREDAS-BUNDLE {}` on the console)", p.bundle));
     }
     // What the provisioning promised, as the boot's check says it and systemd at a first boot.
     for (line, what) in [
@@ -770,7 +798,7 @@ pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
 /// the commit its manifest names; the proof and its faults.
 pub fn prove_release(root: &Path, release: &str, target: &str) -> Result<(Proof, Vec<String>), VmError> {
     let s = proof_setup(root, release, target)?;
-    let proof = prove(&s.recipe, &s.ova, release, s.canvas, &root.join("target/entrega").join(release).join("prova"))?;
+    let proof = prove(&s.recipe, &s.ova, release, s.canvas, &s.bundle, &root.join("target/entrega").join(release).join("prova"))?;
     let faults = proof_faults(&proof, release);
     Ok((proof, faults))
 }
@@ -783,9 +811,12 @@ pub struct Setup {
     pub ova: PathBuf,
     /// Supervisão's page canvas at the release's commit.
     pub canvas: (u8, u8, u8),
+    /// The SHA-256 of the release's bundle's `SHA256SUMS`, the bundle the machine must hold.
+    pub bundle: String,
 }
 
 /// What `entrega prova <release>` proves with: the release's OVA where `entrega maquina` builds it,
+/// a cut of the release that ran to its end ([`cut_finished`]) and the digest of its bundle's sums,
 /// and the recipe and supervisão's page canvas at the commit the release's manifest names (never
 /// HEAD's, never the working tree's), so an older release is proven by its own.
 pub fn proof_setup(root: &Path, release: &str, target: &str) -> Result<Setup, VmError> {
@@ -797,11 +828,13 @@ pub fn proof_setup(root: &Path, release: &str, target: &str) -> Result<Setup, Vm
         return Err(VmError::Failed { program: "the proof".into(), status: "refused".into(), stderr: format!("{} is not there: build the machine first", ova.display()) });
     }
     let text = vm::run("tar", &["-xzf", &bundle.display().to_string(), "-O", &format!("{bundle_dir}/release.toml")], None)?;
+    cut_finished(root, release, &work, &text)?;
+    let sums = vm::run("tar", &["-xzf", &bundle.display().to_string(), "-O", &format!("{bundle_dir}/SHA256SUMS")], None)?;
     let m = crate::manifest::load(&text).map_err(|e| VmError::Failed { program: "the bundle's manifest".into(), status: "refused".into(), stderr: e.to_string() })?;
     let recipe_text = crate::git::show(root, &m.commit, "tools/entrega/maquina/maquina.toml")
         .map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?
         .ok_or_else(|| VmError::Failed { program: "the proof".into(), status: "refused".into(), stderr: format!("commit {} holds no recipe", m.commit) })?;
     let recipe = Recipe::load(&recipe_text).map_err(|e| VmError::Failed { program: "the recipe".into(), status: "refused".into(), stderr: e.to_string() })?;
     let canvas = page_canvas(root, &m.commit)?;
-    Ok(Setup { recipe, ova, canvas })
+    Ok(Setup { recipe, ova, canvas, bundle: cache::sha256_text(&sums) })
 }
