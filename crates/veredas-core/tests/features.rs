@@ -695,11 +695,19 @@ fn every_feature_gate_is_where_it_belongs() {
     assert_eq!(gates, want);
 }
 
-/// The twelve forms core can be asked for: the plant-facing layer off, on, or on with the demo
-/// plant; each master off or on. The last is every feature, the form core's own tests run in.
+/// The twenty forms core can be asked for: the plant-facing layer off, on, or on with the demo
+/// plant, each with `net` with the feature `default` or without it (a member that keeps the
+/// default features gets `default` too, and a gate may name it); each master off or on. The last
+/// is every feature, the form core's own tests run in.
 fn forms() -> Vec<Vec<&'static str>> {
     let mut forms = Vec::new();
-    for net in [&[][..], &["net"][..], &["net", "demo-server"][..]] {
+    for net in [
+        &[][..],
+        &["net"][..],
+        &["net", "default"][..],
+        &["net", "demo-server"][..],
+        &["net", "demo-server", "default"][..],
+    ] {
         for modbus in [&[][..], &["modbus"][..]] {
             for enip in [&[][..], &["enip"][..]] {
                 forms.push([net, modbus, enip].concat());
@@ -800,12 +808,12 @@ fn capitalized_literals(source: &str) -> Vec<String> {
 }
 
 /// The slim layer behaves the same in every form: a probe crate asking for core in each of the
-/// twelve forms alone, run, calls every public function and reads every public table of `schema`,
+/// twenty forms alone, run, calls every public function and reads every public table of `schema`,
 /// `rng` and `state` (bar the PCG32's seeding from entropy) on the inputs listed here and prints
 /// what each answers. That covers every stamp and check of a set of headers with the refusals'
 /// texts; every state line of core's own state-text tests read, written back and asked its state,
 /// reasons, health and conditions; every health and maintenance request; and PCG32 draws from
-/// fixed seeds with the edges of each range. All twelve must print the same, so the form core's
+/// fixed seeds with the edges of each range. All twenty must print the same, so the form core's
 /// own tests run in (every feature) speaks for each. A gate that changes what an item does
 /// without changing what rustdoc renders of it (a constant's value, a derive's attribute, a
 /// function's body) shows here as a form that prints otherwise, for these calls and inputs. For
@@ -1315,13 +1323,14 @@ fn public_paths(view: &BTreeMap<String, String>) -> BTreeSet<String> {
     paths
 }
 
-/// The compiler's own view of every form core can be asked for, built for each of the twelve
-/// forms (the plant-facing layer off, on, or on with the demo plant; each master off or on):
-/// rustdoc's pages of core with private items and without them, and a consumer crate of the
-/// test's own naming every public path the form's view shows, checked by cargo against that form
-/// alone, so rustdoc's view is the build's (rustdoc sets `cfg(doc)`, a build does not). Adding a
-/// feature to any form keeps every key of the smaller form, rendered the same (an item's
-/// declaration, a header, a field's type, a row's visibility), and adds only where that feature's
+/// The compiler's own view of every form core can be asked for, built for each of the twenty
+/// forms ([`forms`]): rustdoc's pages of core with private items, from core's source, and the
+/// pages of its public items as the build holds them, from a facade crate inlining core in that
+/// form (rendered from core's compiled metadata, where `cfg(doc)` was never set); and a consumer
+/// crate of the test's own naming every public path the facade shows, checked by cargo against
+/// that form alone. Adding `default` changes nothing. Adding any other feature to any form keeps
+/// every key of the smaller form, rendered the same (an item's declaration, a header, a field's
+/// type, a row's visibility), and adds only where that feature's
 /// layer lies: `net` under its four modules and the crate root's re-exports of them and rows to
 /// them, the demo plant under `opc::demo` and its row, each master under its module and its line in
 /// `fieldbus`. However an item's gate is written (a comment inside it, a line break, a macro, an
@@ -1419,6 +1428,14 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
                     .keys()
                     .filter(|k| !views[a].contains_key(*k))
                     .collect();
+                // `default` is `net` by another name: it adds nothing at all.
+                if step == "default" {
+                    assert!(
+                        gained.is_empty(),
+                        "{base:?} + default (private items {private}) adds {gained:?}"
+                    );
+                    continue;
+                }
                 assert!(!gained.is_empty(), "{base:?} + {step} adds nothing");
                 let astray: Vec<&&String> = gained.iter().filter(|e| !belongs(step, e)).collect();
                 assert!(
@@ -1428,9 +1445,14 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
             }
         }
         assert_eq!(
-            steps, 20,
-            "four steps of net, four of the demo plant, six of each master"
+            steps, 40,
+            "four steps of net, eight of default, eight of the demo plant, ten of each master"
         );
+        // The members' default form: `net` with `default`, no demo plant, no master.
+        let members = forms
+            .iter()
+            .position(|f| f[..] == ["net", "default"])
+            .unwrap();
         // A form holds nothing of a feature it lacks: no page, row or re-export in that
         // feature's layer (the line in `fieldbus` both masters share aside).
         let strict = |feature: &str, entry: &str| -> bool {
@@ -1453,7 +1475,7 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
         }
         // A dependency's type is named by its full path: the variant `SourceError::Pattern`
         // carries regex's error, told from any other crate's `Error`.
-        let pattern = &views[4]["source/enum.SourceError.html#variant.Pattern"];
+        let pattern = &views[members]["source/enum.SourceError.html#variant.Pattern"];
         assert!(pattern.contains("‹enum regex::error::Error›"), "{pattern}");
         for page in [
             "schema/index.html",
@@ -1472,7 +1494,7 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
             "opc/struct.StatusCode.html",
         ] {
             assert!(
-                !views[0].contains_key(page) && views[4].contains_key(page),
+                !views[0].contains_key(page) && views[members].contains_key(page),
                 "{page}: the plant-facing layer's"
             );
         }
