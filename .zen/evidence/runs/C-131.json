@@ -1,24 +1,26 @@
 {
   "clause": "C-131",
-  "command": "cargo test -p veredas-aranha --test envelope",
+  "command": "cargo test -j 4 -p veredas-aranha --test envelope",
   "commandArgv": [
     "cargo",
     "test",
+    "-j",
+    "4",
     "-p",
     "veredas-aranha",
     "--test",
     "envelope"
   ],
   "exitCode": 0,
-  "outputSha": "fa6bae67adcd8d55000c018d6f4eefc8fda546f5882069c31d22afb834eb98d5",
-  "outputTail": "test group_addresses_are_never_one_device ... ok\ntest a_tag_of_another_type_is_read_as_the_frame_s_type ... ok\ntest a_mac_refuses_every_other_spelling_with_the_text_it_got ... ok\ntest a_mac_serialises_as_its_printed_form ... ok\ntest a_short_frame_is_an_error_that_says_its_length ... ok\ntest a_mac_reads_its_three_spellings_in_either_case_and_prints_one ... ok\ntest an_untagged_frame_is_built_padded_and_read_back_exactly ... ok\ntest a_tagged_frame_carries_its_priority_drop_bit_and_vlan ... ok\ntest what_the_wire_cannot_carry_is_refused_never_cut ... ok\ntest the_dissectors_read_the_envelope_as_it_was_written ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s\n     Running tests/envelope.rs (target/debug/build/veredas-aranha/bfa8bbe62bbca5f2/out/envelope-bfa8bbe62bbca5f2)",
-  "ranAt": "2026-11-23T06:17:51.483Z",
-  "headCommit": "70dfd376b65db20b16160239fff204d0854af20a",
+  "outputSha": "f5d869a45b94f9e07e806653e20b2040d407223def3d43f8c853c33769108946",
+  "outputTail": "test a_mac_serialises_as_its_printed_form ... ok\ntest the_dissectors_read_the_envelope_as_it_was_written ... ok\ntest every_type_is_written_but_a_length_and_a_tag_s_and_every_bound_refuses_all_past_it ... ok\n\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s\n\n   Compiling zerotrie v0.2.5\n   Compiling tinystr v0.8.5\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n   Compiling icu_locale_core v2.4.0\n   Compiling icu_provider v2.4.0\n   Compiling icu_normalizer v2.4.0\n   Compiling icu_properties v2.4.0\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.21s\n     Running tests/envelope.rs (target/debug/build/veredas-aranha/9fc8c0ebe4435a93/out/envelope-9fc8c0ebe4435a93)",
+  "ranAt": "2026-11-23T13:24:56.261Z",
+  "headCommit": "9c15b566b050910d5623fc629eebe09c508d2e86",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/envelope.rs",
       "file": "crates/veredas-aranha/tests/envelope.rs",
-      "fileSha": "01e44a223578326c6fdde6cb50996160bd5b609a13245d68c536f77a02de18fb"
+      "fileSha": "3f9bcefda609839f2dd064a29dfac186935a3f44925c7ce005851553fa0b5aea"
     },
     {
       "name": "crates/veredas-aranha/tests/common/mod.rs",
