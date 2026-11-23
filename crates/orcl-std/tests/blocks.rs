@@ -1220,3 +1220,52 @@ fn an_input_held_for_several_scans_gives_one_edge() {
     let want = [f, f, f, f, f, f, t, f, f, f, t];
     assert_eq!(seen, want.map(|q| (q, q)).to_vec(), "low from the start: nothing; then one pulse per falling edge");
 }
+
+// The eighteenth refute round: a pulse reset with its input off stays off whatever its pt or its time then does (so
+// under every option Q229 offers); a pulse's elapsed time read mid-pulse with its input off; Veredas 1's held end
+// and new press on the build programs link; bits read and set beside other set bits.
+
+#[test]
+fn a_pulse_reset_with_its_input_off_stays_off_until_a_new_edge() {
+    let tp = |p: &mut Tp, t: u64, input: bool, pt: u64| (p.scan(&at(t), input, ms(pt)), p.q(), p.et());
+    // dropped mid-pulse, over at pt: reset, then pt raised past the time since the edge
+    let mut p = Tp::default();
+    tp(&mut p, 0, true, 100);
+    assert_eq!(tp(&mut p, 30, false, 100), (true, true, ms(30)), "mid-pulse, its input off");
+    assert_eq!(tp(&mut p, 60, false, 100), (true, true, ms(60)), "and again: its elapsed time from its edge");
+    assert_eq!(tp(&mut p, 100, false, 100), (false, false, ms(0)), "over, its input off: reset");
+    assert_eq!(tp(&mut p, 110, false, 200), (false, false, ms(0)), "pt raised past the time since the edge");
+    assert_eq!(tp(&mut p, 60, false, 100), (false, false, ms(0)), "a scan whose time goes back");
+    // held past its end, then dropped: reset, then pt raised
+    let mut p = Tp::default();
+    tp(&mut p, 0, true, 100);
+    assert_eq!(tp(&mut p, 100, true, 100), (false, false, ms(100)), "over, its input held");
+    assert_eq!(tp(&mut p, 110, false, 100), (false, false, ms(0)), "dropped: reset");
+    assert_eq!(tp(&mut p, 120, false, 200), (false, false, ms(0)), "pt raised, its input off");
+    // Veredas 1's unit test on the build programs link: a retrigger ignored, a held end, a drop, a new press
+    let mut p = Tp::default();
+    assert_eq!(tp(&mut p, 0, true, 100), (true, true, ms(0)));
+    assert_eq!(tp(&mut p, 50, false, 100), (true, true, ms(50)));
+    assert_eq!(tp(&mut p, 60, true, 100), (true, true, ms(60)), "a retrigger during the pulse is ignored");
+    assert_eq!(tp(&mut p, 100, true, 100), (false, false, ms(100)));
+    assert_eq!(tp(&mut p, 150, false, 100), (false, false, ms(0)));
+    assert_eq!(tp(&mut p, 160, true, 100), (true, true, ms(0)), "a new edge, a new pulse");
+}
+
+#[test]
+fn a_bit_is_read_and_written_beside_other_set_bits_on_every_width() {
+    fn check<T: Bits + PartialEq + core::fmt::Debug + Copy>(low_bits: T, top: T, top_with_bit_3: T) {
+        // 0b1010: bits 1 and 3 set, 0 and 2 clear
+        assert_eq!([0, 1, 2, 3].map(|n| low_bits.get_bit(n)), [false, true, false, true]);
+        // the top bit and bit 0 set: bit 3 set beside them, the others kept
+        assert_eq!(top.with_bit(3, true), top_with_bit_3);
+        let mut v = top;
+        v.set_bit(3, true);
+        assert_eq!(v, top_with_bit_3);
+        assert_eq!(top_with_bit_3.with_bit(3, false), top, "and cleared again, the others kept");
+    }
+    check(0b1010_u8, 0x81_u8, 0x89_u8);
+    check(0b1010_u16, 0x8001_u16, 0x8009_u16);
+    check(0b1010_u32, 0x8000_0001_u32, 0x8000_0009_u32);
+    check(0b1010_u64, 0x8000_0000_0000_0001_u64, 0x8000_0000_0000_0009_u64);
+}
