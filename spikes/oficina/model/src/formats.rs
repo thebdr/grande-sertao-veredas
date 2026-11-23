@@ -22,6 +22,7 @@ const PORTAL: Component = Component { nome: "portal", display: "Portal" };
 const MAQUINAR: Component = Component { nome: "maquinar", display: "Maquinar" };
 const SUPERVISAO: Component = Component { nome: "supervisao", display: "Supervisão" };
 const ABACO: Component = Component { nome: "abaco", display: "Ábaco" };
+const COMISSIONADOR: Component = Component { nome: "comissionador", display: "Comissionador" };
 /// Suite releases: no component, but the files are the suite's (docs/entrega-plan.md).
 const ENTREGA: Component = Component { nome: "entrega", display: "Entrega" };
 
@@ -37,6 +38,7 @@ pub const FORMATS: &[(&str, Component)] = &[
     ("veredas-supervisao", SUPERVISAO),
     ("veredas-binding", SUPERVISAO),
     ("veredas-abaco-oracle-baseline", ABACO),
+    ("veredas-report", COMISSIONADOR),
     ("veredas-release", ENTREGA),
     ("veredas-machine", ENTREGA),
 ];
