@@ -446,14 +446,18 @@ pub fn page_canvas(root: &Path, commit: &str) -> Result<(u8, u8, u8), VmError> {
 }
 
 /// What is wrong with an OVA as VMware reads it, opened into `opened`: its members in order (the
-/// descriptor, the manifest, the disk), owned by root by number and read as 0644; the descriptor
-/// well-formed, naming the disk with its size and capacity and the recipe's hardware; the
-/// manifest's sums those of the members. Empty when it is right.
+/// descriptor, the manifest, the disk), owned by root by number and read as 0644; the disk itself a
+/// stream-optimized VMDK (as `qemu-img` reads it) whose size the descriptor's capacity states; the
+/// descriptor parsed as XML and every value read inside its own element: the file and its size,
+/// the disk and its capacity and format, the hardware version, the processors, the memory, the
+/// paravirtual SCSI controller, the disk under that controller, the VMXNET3 card, BIOS firmware;
+/// the manifest's sums the members'. Empty when it is right.
 pub fn ova_faults(r: &Recipe, ova: &Path, release: &str, opened: &Path) -> Result<Vec<String>, VmError> {
     let name = format!("veredas-{release}");
+    let vmdk_name = format!("{name}-disk1.vmdk");
     let mut out = Vec::new();
     let members = vm::run("tar", &["-tf", &ova.display().to_string()], None)?;
-    let want = format!("{name}.ovf\n{name}.mf\n{name}-disk1.vmdk\n");
+    let want = format!("{name}.ovf\n{name}.mf\n{vmdk_name}\n");
     if members != want {
         out.push(format!("the OVA's members are {members:?}, not {want:?}"));
     }
@@ -464,31 +468,31 @@ pub fn ova_faults(r: &Recipe, ova: &Path, release: &str, opened: &Path) -> Resul
         }
     }
     let ovf_path = opened.join(format!("{name}.ovf"));
-    let vmdk = opened.join(format!("{name}-disk1.vmdk"));
-    let ovf = std::fs::read_to_string(&ovf_path).unwrap_or_default();
+    let vmdk = opened.join(&vmdk_name);
     let size = std::fs::metadata(&vmdk).map(|m| m.len()).unwrap_or(0);
     let capacity = u64::from(r.machine.disk_gb) << 30;
-    for needle in [
-        format!(r#"<File ovf:id="file1" ovf:href="{name}-disk1.vmdk" ovf:size="{size}"/>"#),
-        format!(r#"ovf:capacity="{capacity}" ovf:capacityAllocationUnits="byte""#),
-        "vmdk.html#streamOptimized".to_string(),
-        format!("<vssd:VirtualSystemType>vmx-{:02}</vssd:VirtualSystemType>", r.machine.hardware_version),
-        "<rasd:ResourceSubType>VirtualSCSI</rasd:ResourceSubType>".to_string(),
-        "<rasd:ResourceSubType>VmxNet3</rasd:ResourceSubType>".to_string(),
-        format!("<rasd:VirtualQuantity>{}</rasd:VirtualQuantity>", r.machine.cpus),
-        format!("<rasd:VirtualQuantity>{}</rasd:VirtualQuantity>", r.machine.memory_mb),
-        r#"vmw:key="firmware" vmw:value="bios""#.to_string(),
-    ] {
-        if !ovf.contains(&needle) {
-            out.push(format!("the descriptor holds no {needle}"));
+    // The disk as qemu-img reads it.
+    match vm::run("qemu-img", &["info", "--output=json", &vmdk.display().to_string()], None) {
+        Ok(json) => {
+            let info: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+            if info["format"] != "vmdk" || info["format-specific"]["data"]["create-type"] != "streamOptimized" {
+                out.push(format!("the disk is no stream-optimized VMDK ({} {})", info["format"], info["format-specific"]["data"]["create-type"]));
+            }
+            if info["virtual-size"].as_u64() != Some(capacity) {
+                out.push(format!("the disk holds {} bytes, the descriptor states {capacity}", info["virtual-size"]));
+            }
         }
+        Err(e) => out.push(format!("the disk does not read as a VMDK: {e}")),
     }
-    if vm::run("xmllint", &["--noout", &ovf_path.display().to_string()], None).is_err() {
-        out.push("the descriptor is not well-formed XML".into());
+    // The descriptor, parsed.
+    let text = std::fs::read_to_string(&ovf_path).unwrap_or_default();
+    match roxmltree::Document::parse(&text) {
+        Err(e) => out.push(format!("the descriptor is not well-formed XML: {e}")),
+        Ok(doc) => out.extend(descriptor_faults(r, &doc, &vmdk_name, size, capacity)),
     }
     let mf = std::fs::read_to_string(opened.join(format!("{name}.mf"))).unwrap_or_default();
     let want_mf = format!(
-        "SHA256({name}.ovf)= {}\nSHA256({name}-disk1.vmdk)= {}\n",
+        "SHA256({name}.ovf)= {}\nSHA256({vmdk_name})= {}\n",
         cache::sha256(&ovf_path).unwrap_or_default(),
         cache::sha256(&vmdk).unwrap_or_default()
     );
@@ -496,6 +500,68 @@ pub fn ova_faults(r: &Recipe, ova: &Path, release: &str, opened: &Path) -> Resul
         out.push(format!("the manifest's sums are not the members': {mf:?}"));
     }
     Ok(out)
+}
+
+/// The OVF descriptor's faults, each value read inside its own element.
+fn descriptor_faults(r: &Recipe, doc: &roxmltree::Document, vmdk_name: &str, size: u64, capacity: u64) -> Vec<String> {
+    const OVF: &str = "http://schemas.dmtf.org/ovf/envelope/1";
+    const VMW: &str = "http://www.vmware.com/schema/ovf";
+    let mut out = Vec::new();
+    let named = |n: &roxmltree::Node, local: &str| n.is_element() && n.tag_name().name() == local;
+    let child_text = |n: &roxmltree::Node, local: &str| -> Option<String> {
+        n.children().find(|c| named(c, local)).and_then(|c| c.text()).map(|t| t.trim().to_string())
+    };
+    let all = |local: &str| doc.descendants().filter(|n| named(n, local)).collect::<Vec<_>>();
+    let files = all("File");
+    match files.as_slice() {
+        [f] if f.attribute((OVF, "id")) == Some("file1") && f.attribute((OVF, "href")) == Some(vmdk_name) && f.attribute((OVF, "size")) == Some(&size.to_string()) => {}
+        _ => out.push(format!("the descriptor names no one file `{vmdk_name}` of {size} bytes as file1")),
+    }
+    let disks = all("Disk");
+    let cap = capacity.to_string();
+    match disks.as_slice() {
+        [d] if d.attribute((OVF, "diskId")) == Some("vmdisk1")
+            && d.attribute((OVF, "fileRef")) == Some("file1")
+            && d.attribute((OVF, "capacity")) == Some(cap.as_str())
+            && d.attribute((OVF, "capacityAllocationUnits")) == Some("byte")
+            && d.attribute((OVF, "format")) == Some("http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized") => {}
+        _ => out.push(format!("the descriptor names no one stream-optimized disk vmdisk1 of {capacity} bytes on file1")),
+    }
+    let system = format!("vmx-{:02}", r.machine.hardware_version);
+    if !all("VirtualSystemType").iter().any(|n| n.text().map(str::trim) == Some(system.as_str())) {
+        out.push(format!("the descriptor's hardware version is not {system}"));
+    }
+    let items = all("Item");
+    let of_type = |t: &str| items.iter().filter(|i| child_text(i, "ResourceType").as_deref() == Some(t)).copied().collect::<Vec<_>>();
+    match of_type("3").as_slice() {
+        [cpu] if child_text(cpu, "VirtualQuantity") == Some(r.machine.cpus.to_string()) => {}
+        _ => out.push(format!("the descriptor's processors are not one item of {}", r.machine.cpus)),
+    }
+    match of_type("4").as_slice() {
+        [mem] if child_text(mem, "VirtualQuantity") == Some(r.machine.memory_mb.to_string()) && child_text(mem, "AllocationUnits").as_deref() == Some("byte * 2^20") => {}
+        _ => out.push(format!("the descriptor's memory is not one item of {} MB", r.machine.memory_mb)),
+    }
+    let scsi = of_type("6");
+    let controller = match scsi.as_slice() {
+        [c] if child_text(c, "ResourceSubType").as_deref() == Some("VirtualSCSI") => child_text(c, "InstanceID"),
+        _ => {
+            out.push("the descriptor holds no one paravirtual SCSI controller (VirtualSCSI)".into());
+            None
+        }
+    };
+    match of_type("17").as_slice() {
+        [d] if child_text(d, "HostResource").as_deref() == Some("ovf:/disk/vmdisk1") && controller.is_some() && child_text(d, "Parent") == controller => {}
+        _ => out.push("the descriptor's hard disk is not one item on vmdisk1 under the paravirtual SCSI controller".into()),
+    }
+    match of_type("10").as_slice() {
+        [n] if child_text(n, "ResourceSubType").as_deref() == Some("VmxNet3") => {}
+        _ => out.push("the descriptor holds no one VMXNET3 card".into()),
+    }
+    let firmware = doc.descendants().any(|n| named(&n, "Config") && n.attribute((VMW, "key")) == Some("firmware") && n.attribute((VMW, "value")) == Some("bios"));
+    if !firmware {
+        out.push("the descriptor's firmware is not BIOS".into());
+    }
+    out
 }
 
 /// What the proof boot of an OVA's disk saw.

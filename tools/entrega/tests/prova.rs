@@ -106,50 +106,67 @@ fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
     let r = Recipe::load_file(&repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
     let work = tempfile::tempdir().unwrap();
     let name = "veredas-9.9.9";
-    let dir = work.path().join("made");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join(format!("{name}-disk1.vmdk")), b"a disk").unwrap();
-    let size = 6;
-    let ovf = maquina::ovf(&r, name, &format!("{name}-disk1.vmdk"), size, u64::from(r.machine.disk_gb) << 30, "9.9.9");
-    std::fs::write(dir.join(format!("{name}.ovf")), &ovf).unwrap();
-    let mf = format!(
-        "SHA256({name}.ovf)= {}\nSHA256({name}-disk1.vmdk)= {}\n",
-        entrega::cache::sha256(&dir.join(format!("{name}.ovf"))).unwrap(),
-        entrega::cache::sha256(&dir.join(format!("{name}-disk1.vmdk"))).unwrap()
-    );
-    std::fs::write(dir.join(format!("{name}.mf")), &mf).unwrap();
-    let pack = |order: [&str; 3], out: &Path| {
+    let vmdk_name = format!("{name}-disk1.vmdk");
+    let capacity = u64::from(r.machine.disk_gb) << 30;
+    // Makes an OVA from a disk (`subformat`, `gb`) and a descriptor edited by `edit`, opened into a
+    // folder of its own; returns its path and that folder.
+    let make = |label: &str, subformat: &str, gb: u32, edit: &dyn Fn(String) -> String, order: [&str; 3]| -> (PathBuf, PathBuf) {
+        let dir = work.path().join(label);
+        std::fs::create_dir_all(&dir).unwrap();
+        let disk = dir.join(&vmdk_name);
+        entrega::vm::run("qemu-img", &["create", "-q", "-f", "vmdk", "-o", &format!("subformat={subformat}"), &disk.display().to_string(), &format!("{gb}G")], None).unwrap();
+        let size = std::fs::metadata(&disk).unwrap().len();
+        let ovf = edit(maquina::ovf(&r, name, &vmdk_name, size, capacity, "9.9.9"));
+        std::fs::write(dir.join(format!("{name}.ovf")), &ovf).unwrap();
+        let mf = format!(
+            "SHA256({name}.ovf)= {}\nSHA256({vmdk_name})= {}\n",
+            entrega::cache::sha256(&dir.join(format!("{name}.ovf"))).unwrap(),
+            entrega::cache::sha256(&disk).unwrap()
+        );
+        std::fs::write(dir.join(format!("{name}.mf")), &mf).unwrap();
+        let ova = work.path().join(format!("{label}.ova"));
         let names: Vec<String> = order.iter().map(|n| format!("{name}{n}")).collect();
-        let mut args = vec!["--format=ustar", "--owner=0", "--group=0", "--numeric-owner", "--mode=a+r,u+w,go-w,a-x", "-cf"];
-        let o = out.display().to_string();
-        let d = dir.display().to_string();
-        args.push(&o);
-        args.push("-C");
-        args.push(&d);
+        let (o, d) = (ova.display().to_string(), dir.display().to_string());
+        let mut args = vec!["--format=ustar", "--owner=0", "--group=0", "--numeric-owner", "--mode=a+r,u+w,go-w,a-x,ug-s", "-cf", &o, "-C", &d];
         args.extend(names.iter().map(String::as_str));
         entrega::vm::run("tar", &args, None).unwrap();
+        let opened = work.path().join(format!("{label}-opened"));
+        std::fs::create_dir_all(&opened).unwrap();
+        entrega::vm::run("tar", &["-xf", &o, "-C", &opened.display().to_string()], None).unwrap();
+        (ova, opened)
     };
-    let opened = work.path().join("opened");
-    std::fs::create_dir_all(&opened).unwrap();
-    let good = work.path().join("good.ova");
-    pack([".ovf", ".mf", "-disk1.vmdk"], &good);
-    entrega::vm::run("tar", &["-xf", &good.display().to_string(), "-C", &opened.display().to_string()], None).unwrap();
-    assert_eq!(maquina::ova_faults(&r, &good, "9.9.9", &opened).unwrap(), Vec::<String>::new());
-    // The disk first: VMware reads the descriptor first.
-    let disordered = work.path().join("disordered.ova");
-    pack(["-disk1.vmdk", ".ovf", ".mf"], &disordered);
-    let faults = maquina::ova_faults(&r, &disordered, "9.9.9", &opened).unwrap();
-    assert_eq!(faults.len(), 1);
-    assert!(faults[0].starts_with("the OVA's members are"), "{faults:?}");
-    // A manifest whose sums are not the members'.
-    std::fs::write(opened.join(format!("{name}.mf")), mf.replace("SHA256(", "SHA1(")).unwrap();
-    let faults = maquina::ova_faults(&r, &good, "9.9.9", &opened).unwrap();
-    assert_eq!(faults.len(), 1);
-    assert!(faults[0].starts_with("the manifest's sums are not the members'"), "{faults:?}");
-    // A descriptor for other hardware.
-    std::fs::write(opened.join(format!("{name}.mf")), &mf).unwrap();
-    std::fs::write(opened.join(format!("{name}.ovf")), ovf.replace("VirtualSCSI", "lsilogic")).unwrap();
-    let faults = maquina::ova_faults(&r, &good, "9.9.9", &opened).unwrap();
-    assert!(faults.iter().any(|f| f == "the descriptor holds no <rasd:ResourceSubType>VirtualSCSI</rasd:ResourceSubType>"), "{faults:?}");
-    assert!(faults.iter().any(|f| f.starts_with("the manifest's sums are not the members'")), "{faults:?}");
+    let same = |s: String| s;
+    let right = [".ovf", ".mf", "-disk1.vmdk"];
+    let faults = |label: &str, subformat: &str, gb: u32, edit: &dyn Fn(String) -> String, order: [&str; 3]| {
+        let (ova, opened) = make(label, subformat, gb, edit, order);
+        maquina::ova_faults(&r, &ova, "9.9.9", &opened).unwrap()
+    };
+    assert_eq!(faults("good", "streamOptimized", r.machine.disk_gb, &same, right), Vec::<String>::new());
+    let f = faults("disordered", "streamOptimized", r.machine.disk_gb, &same, ["-disk1.vmdk", ".ovf", ".mf"]);
+    assert!(f.len() == 1 && f[0].starts_with("the OVA's members are"), "{f:?}");
+    // The disk itself: another subformat, another size than the descriptor states.
+    let f = faults("sparse", "monolithicSparse", r.machine.disk_gb, &same, right);
+    assert_eq!(f, ["the disk is no stream-optimized VMDK (\"vmdk\" \"monolithicSparse\")"]);
+    let f = faults("small", "streamOptimized", 8, &same, right);
+    assert_eq!(f, [format!("the disk holds {} bytes, the descriptor states {capacity}", 8u64 << 30)]);
+    // The descriptor's values inside their own elements.
+    let swap = |s: String| {
+        let cpus = format!("<rasd:VirtualQuantity>{}</rasd:VirtualQuantity>", r.machine.cpus);
+        let mem = format!("<rasd:VirtualQuantity>{}</rasd:VirtualQuantity>", r.machine.memory_mb);
+        s.replacen(&cpus, "@CPU@", 1).replacen(&mem, &cpus, 1).replacen("@CPU@", &mem, 1)
+    };
+    let f = faults("swapped", "streamOptimized", r.machine.disk_gb, &swap, right);
+    assert_eq!(
+        f,
+        [
+            format!("the descriptor's processors are not one item of {}", r.machine.cpus),
+            format!("the descriptor's memory is not one item of {} MB", r.machine.memory_mb)
+        ]
+    );
+    let orphan = |s: String| s.replacen("<rasd:Parent>3</rasd:Parent>", "<rasd:Parent>9</rasd:Parent>", 1);
+    let f = faults("orphan", "streamOptimized", r.machine.disk_gb, &orphan, right);
+    assert_eq!(f, ["the descriptor's hard disk is not one item on vmdisk1 under the paravirtual SCSI controller"]);
+    let broken = |s: String| s.replacen("</Envelope>", "", 1);
+    let f = faults("broken", "streamOptimized", r.machine.disk_gb, &broken, right);
+    assert!(f.len() == 1 && f[0].starts_with("the descriptor is not well-formed XML"), "{f:?}");
 }

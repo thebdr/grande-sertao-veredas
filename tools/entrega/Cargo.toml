@@ -23,6 +23,8 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 # A scratch folder of each call's own for a commit's tree, removed when the call ends.
 tempfile = { workspace = true }
+# The OVA's descriptor read as XML, each value inside its own element (the proof, C-292).
+roxmltree = { workspace = true }
 
 [dev-dependencies]
 # Throwaway repositories for the manifest's check against history, removed when a test ends.
