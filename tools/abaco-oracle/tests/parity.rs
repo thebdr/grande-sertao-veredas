@@ -187,6 +187,8 @@ fn sheet_of(path: &Path, reference: &str, is: impl Fn(&abaco_oracle::Expected) -
 fn a_text_cache_is_read_as_xml_and_excel_write_it() {
     // XML's line ends and references, then Excel's `_xHHHH_` (`_x005F_` its literal underscore)
     assert_eq!(xml_text("a\r\nb\rc&#13;d &amp;&#x41; _x0001_ _x005F_x0041_ _xD83D__xDE00_"), "a\nb\nc\rd &A \u{1} _x0041_ \u{1F600}");
+    // four hex digits make an escape, nothing else: a sign or a space is the text it is
+    assert_eq!(xml_text("_x+041_ _x 41_ id_x+0ab_z"), "_x+041_ _x 41_ id_x+0ab_z");
     // the corpus's texts Excel escaped (CHAR's control characters, a line ending's CR LF, a literal
     // underscore escape) read as the engine computes them: every one a match
     let b = baseline();
@@ -281,7 +283,7 @@ fn an_error_or_a_text_excel_never_wrote_is_a_mismatch_and_never_stops_a_measure(
         assert_eq!((m.formula_cells, m.matched), (cells, matched - 1), "{error}");
         let e = report.examples.values().flatten().find(|e| e.reference == target.reference).unwrap();
         // the engine computes that very error: the old reading counted it a match
-        assert_eq!((e.expected.as_str(), e.actual.as_str()), (format!("{error:?}").as_str(), error), "{error}");
+        assert_eq!((e.expected.as_str(), e.actual.as_str()), (format!("(never written so: {error:?})").as_str(), error), "{error}");
     }
     // ISREF.xlsx's D1, where the engine computes "": a shared-string cache that is no index, one past
     // the table, and no cached value at all, each one mismatch, none stopping the measure
@@ -299,6 +301,109 @@ fn an_error_or_a_text_excel_never_wrote_is_a_mismatch_and_never_stops_a_measure(
         let (wrong, cells_now, matched_now) = mismatches(&copy, &mut probe);
         assert_eq!((cells_now, matched_now), (cells, matched - 1), "{t:?} {v:?}");
         assert!(wrong.contains(&format!("{sheet}!D1")), "{t:?} {v:?}: {wrong:?}");
+    }
+}
+
+#[test]
+fn excel_s_spill_and_calc_errors_are_read_through_their_value_metadata() {
+    // Excel writes `#SPILL!` and `#CALC!` as `#VALUE!` with value metadata pointing at a rich
+    // value whose `errorType` names the error; the engine computes each as Excel did
+    let b = baseline();
+    let dir = corpus_dir(&b);
+    let mut probe = Probe::default();
+    for (path, at) in [
+        ("calc_tests/INFORMATION/ISREF.xlsx", &["D7", "D9"][..]),
+        ("calc_tests/LOOKUP_AND_REFERENCE/DROP_TAKE.xlsx", &["C2", "E2", "F2", "I2", "L2"][..]),
+        ("calc_tests/LOOKUP_AND_REFERENCE/FILTER_ERRORS.xlsx", &["E1"][..]),
+        ("calc_tests/MATH_AND_TRIGONOMETRY/MAX_MIN.xlsx", &["H42"][..]),
+        ("calc_tests/MATH_AND_TRIGONOMETRY/SEQUENCE.xlsx", &["C16", "E18"][..]),
+    ] {
+        let (wrong, cells, matched) = mismatches(&dir.join(path), &mut probe);
+        assert_eq!(matched, cells, "{path}: not whole: {wrong:?}");
+        for r in at {
+            assert!(scan_raw(&dir.join(path)).unwrap().formula_cells.iter().any(|c| c.reference == *r
+                && matches!(&c.expected, abaco_oracle::Expected::Error(e) if e == "#SPILL!" || e == "#CALC!")), "{path}: {r}");
+        }
+    }
+    // ISREF's D7 (`#CALC!`): its value metadata taken off, the `#VALUE!` the file then says, one
+    // mismatch; its rich value's `errorType` made 8, `#SPILL!`, one mismatch
+    let source = dir.join("calc_tests/INFORMATION/ISREF.xlsx");
+    let sheet = sheet_of(&source, "D7", |e| *e == abaco_oracle::Expected::Error("#CALC!".into()));
+    let (_, cells, matched) = mismatches(&source, &mut probe);
+    let planted = tempfile::tempdir().unwrap();
+    let copy = planted.path().join("no-vm.xlsx");
+    rewrite_cell(&source, &copy, &sheet, "D7", |attrs, inner| {
+        format!("{}>{inner}", regex::Regex::new(r#"\svm="[^"]*""#).unwrap().replace(attrs, ""))
+    });
+    let (wrong, cells_now, matched_now) = mismatches(&copy, &mut probe);
+    assert_eq!((cells_now, matched_now), (cells, matched - 1));
+    assert!(wrong.contains(&format!("{sheet}!D7")), "{wrong:?}");
+    let copy = planted.path().join("spill.xlsx");
+    rewrite_part(&source, &copy, "xl/richData/rdrichvalue.xml", |text| text.replacen("<rv s=\"0\"><v>13</v>", "<rv s=\"0\"><v>8</v>", 1));
+    let raw = scan_raw(&copy).unwrap();
+    assert_eq!(raw.formula_cells.iter().find(|c| c.reference == "D7").unwrap().expected, abaco_oracle::Expected::Error("#SPILL!".into()));
+    let (wrong, _, matched_now) = mismatches(&copy, &mut probe);
+    assert_eq!(matched_now, matched - 1);
+    assert!(wrong.contains(&format!("{sheet}!D7")), "{wrong:?}");
+}
+
+#[test]
+fn a_cache_whose_type_and_text_excel_never_pairs_matches_nothing_the_engine_computes() {
+    let b = baseline();
+    let dir = corpus_dir(&b);
+    let mut probe = Probe::default();
+    let planted = tempfile::tempdir().unwrap();
+    // STRING_HANDLING's C8, the engine's text `#div/0!` as Excel cached it (`t="str"`), retyped
+    let source = dir.join("calc_tests/TEXT/STRING_HANDLING.xlsx");
+    let sheet = sheet_of(&source, "C8", |e| *e == abaco_oracle::Expected::Text("#div/0!".into()));
+    let (_, cells, matched) = mismatches(&source, &mut probe);
+    for (i, t) in [Some("e"), Some("s"), Some("b"), None].into_iter().enumerate() {
+        let copy = planted.path().join(format!("c8-{i}.xlsx"));
+        rewrite_cell(&source, &copy, &sheet, "C8", |attrs, inner| {
+            format!("{}{}>{inner}", strip_type(attrs), t.map(|t| format!(r#" t="{t}""#)).unwrap_or_default())
+        });
+        let (wrong, cells_now, matched_now) = mismatches(&copy, &mut probe);
+        assert_eq!((cells_now, matched_now), (cells, matched - 1), "{t:?}");
+        assert!(wrong.contains(&format!("{sheet}!C8")), "{t:?}: {wrong:?}");
+    }
+    // ABS.xlsx's cell made to compute a text or a number, cached with a type Excel never gives it
+    let source = dir.join("calc_tests/MATH_AND_TRIGONOMETRY/ABS.xlsx");
+    let (_, cells, matched) = mismatches(&source, &mut probe);
+    let target = scan_raw(&source)
+        .unwrap()
+        .formula_cells
+        .into_iter()
+        .find(|c| matches!(c.expected, abaco_oracle::Expected::Number(_)) && !c.shared_copy)
+        .unwrap();
+    let cases: [(&str, &str); 14] = [
+        (r##"<f>"#CIRC!"</f>"##, r##" t="e"><f>"#CIRC!"</f><v>#CIRC!</v>"##),
+        (r##"<f>"TRUE"</f>"##, r##" t="b"><f>"TRUE"</f><v>TRUE</v>"##),
+        (r##"<f>"abc"</f>"##, r##" t="b"><f>"abc"</f><v>abc</v>"##),
+        (r##"<f>"abc"</f>"##, r##" t="s"><f>"abc"</f><v>abc</v>"##),
+        (r##"<f>"abc"</f>"##, r##"><f>"abc"</f><v>abc</v>"##),
+        (r##"<f>"abc"</f>"##, r##" t="n"><f>"abc"</f><v>abc</v>"##),
+        (r##"<f>"inf"</f>"##, r##"><f>"inf"</f><v>inf</v>"##),
+        (r##"<f>""</f>"##, r##"><f>""</f><v/>"##),
+        (r##"<f>""</f>"##, r##"><f>""</f><v></v>"##),
+        ("<f>5</f>", r##" t="d"><f>5</f><v>5</v>"##),
+        ("<f>5</f>", r##" t="zz"><f>5</f><v>5</v>"##),
+        (r##"<f>"abc"</f>"##, r##" t="inlineStr"><f>"abc"</f><v>abc</v>"##),
+        (r##"<f>"abc"</f>"##, r##" t="e"><f>"abc"</f><is><t>abc</t></is>"##),
+        (r##"<f>"abc"</f>"##, r##"><f>"abc"</f><is><t>abc</t></is>"##),
+    ];
+    for (i, (_, cell)) in cases.iter().enumerate() {
+        let copy = planted.path().join(format!("abs-{i}.xlsx"));
+        rewrite_cell(&source, &copy, &target.sheet, &target.reference, |attrs, _| format!("{}{cell}", strip_type(attrs)));
+        let (wrong, cells_now, matched_now) = mismatches(&copy, &mut probe);
+        assert_eq!((cells_now, matched_now), (cells, matched - 1), "{cell}");
+        assert!(wrong.contains(&format!("{}!{}", target.sheet, target.reference)), "{cell}: {wrong:?}");
+    }
+    // and the same text cached as Excel writes it: a match (`_x+041_` is no escape)
+    for (i, cell) in [r#" t="str"><f>"abc"</f><v>abc</v>"#, r#" t="str"><f>"_x+041_"</f><v>_x+041_</v>"#].into_iter().enumerate() {
+        let copy = planted.path().join(format!("abs-str-{i}.xlsx"));
+        rewrite_cell(&source, &copy, &target.sheet, &target.reference, |attrs, _| format!("{}{cell}", strip_type(attrs)));
+        let (wrong, _, matched_now) = mismatches(&copy, &mut probe);
+        assert_eq!(matched_now, matched, "{cell}: {wrong:?}");
     }
 }
 
@@ -586,8 +691,10 @@ fn parity(links_mode: LinksMode) {
     assert!(matched >= base_matched);
     // Veredas 2's own totals, a change a decision made here: 75 857 measured on 2026-11-22; 75 901
     // on 2026-11-23, the expected side reading Excel's escaped texts and the engine's side its
-    // texts that read like errors as they are (C-222's third confirmation round, 44 cells)
-    assert_eq!((matched, formulas, base_matched), (75_901, 76_359, 75_743));
+    // texts that read like errors as they are (C-222's third confirmation round, 44 cells); 75 912
+    // the same day, Excel's `#SPILL!` and `#CALC!` read through their value metadata (the fourth,
+    // 11 cells)
+    assert_eq!((matched, formulas, base_matched), (75_912, 76_359, 75_743));
     // the corpus's workbooks with links: three, none of whose linked workbooks is here, so the
     // linked resolution reports each unavailable and answers from its cache (C-221's tests open
     // present ones; a plant's real linked workbooks are owed, Q344)

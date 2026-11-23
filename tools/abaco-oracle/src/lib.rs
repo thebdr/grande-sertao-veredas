@@ -110,6 +110,10 @@ pub enum Expected {
     /// A formula cell with no `<v>` at all: Excel writes the value every formula computed, so this
     /// is a cache it never wrote, and equals nothing the engine computes.
     Missing,
+    /// A cache whose type and text Excel never pairs (a boolean that is neither 1 nor 0, an error
+    /// none a file holds, a number that is none or not finite, a shared string or an inline one on
+    /// a formula, a type Excel writes for no formula): the raw text, equal to nothing.
+    Unwritten(String),
 }
 
 /// One formula cell of the file, with what Excel cached.
@@ -144,9 +148,11 @@ fn re(pattern: &str) -> Regex {
     Regex::new(pattern).expect("a constant pattern")
 }
 
-static RE_SI: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)<si>(.*?)</si>"));
 static RE_T: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)<t(?:\s[^>]*)?>(.*?)</t>"));
 static RE_REL: LazyLock<Regex> = LazyLock::new(|| re(r#"<Relationship\s[^>]*?Id="([^"]+)"[^>]*?Target="([^"]+)""#));
+static RE_TYPED_REL: LazyLock<Regex> = LazyLock::new(|| re(r#"<Relationship\s[^>]*?Type="([^"]+)"[^>]*?Target="([^"]+)""#));
+static RE_TYPED_REL2: LazyLock<Regex> = LazyLock::new(|| re(r#"<Relationship\s[^>]*?Target="([^"]+)"[^>]*?Type="([^"]+)""#));
+static RE_ATTR_VM: LazyLock<Regex> = LazyLock::new(|| re(r#"\svm="([0-9]+)""#));
 static RE_REL2: LazyLock<Regex> = LazyLock::new(|| re(r#"<Relationship\s[^>]*?Target="([^"]+)"[^>]*?Id="([^"]+)""#));
 static RE_SHEET: LazyLock<Regex> = LazyLock::new(|| re(r#"<sheet\s[^>]*?name="([^"]+)"[^>]*?r:id="([^"]+)""#));
 static RE_CELL: LazyLock<Regex> =
@@ -222,8 +228,9 @@ fn decode_escapes(s: &str) -> String {
     if !s.contains("_x") {
         return s.to_string();
     }
+    // `_x`, four ASCII hex digits, `_`: anything else (a sign, a space) is the text it is
     let unit = |b: &[u8], i: usize| -> Option<u32> {
-        (b.len() >= i + 7 && b[i] == b'_' && b[i + 1] == b'x' && b[i + 6] == b'_')
+        (b.len() >= i + 7 && b[i] == b'_' && b[i + 1] == b'x' && b[i + 6] == b'_' && b[i + 2..i + 6].iter().all(u8::is_ascii_hexdigit))
             .then(|| std::str::from_utf8(&b[i + 2..i + 6]).ok().and_then(|h| u32::from_str_radix(h, 16).ok()))
             .flatten()
     };
@@ -258,6 +265,80 @@ fn decode_escapes(s: &str) -> String {
 pub const FILE_ERRORS: [&str; 8] = ["#NULL!", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#GETTING_DATA"];
 
 static RE_RPH: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)<rPh\b.*?</rPh>"));
+static RE_BK: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)<bk>(.*?)</bk>"));
+static RE_RC: LazyLock<Regex> = LazyLock::new(|| re(r#"<rc\s+t="([0-9]+)"\s+v="([0-9]+)""#));
+static RE_RVB: LazyLock<Regex> = LazyLock::new(|| re(r#"<xlrd:rvb\s+i="([0-9]+)""#));
+static RE_RV: LazyLock<Regex> = LazyLock::new(|| re(r#"(?s)<rv\s+s="([0-9]+)"\s*>(.*?)</rv>"#));
+static RE_RV_V: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)<v(?:\s[^>]*)?>(.*?)</v>"));
+static RE_STRUCT: LazyLock<Regex> = LazyLock::new(|| re(r#"(?s)<s\s+t="([^"]+)"\s*>(.*?)</s>"#));
+static RE_KEY: LazyLock<Regex> = LazyLock::new(|| re(r#"<k\s+n="([^"]+)""#));
+static RE_META_TYPE: LazyLock<Regex> = LazyLock::new(|| re(r#"<metadataType\s+name="([^"]+)""#));
+
+/// The errors Excel writes as `#VALUE!` with value metadata, by the `errorType` of the rich
+/// value the metadata points at (the corpus's two; another stays the `#VALUE!` the file says).
+const RICH_ERRORS: [(&str, &str); 2] = [("8", "#SPILL!"), ("13", "#CALC!")];
+
+/// What each value-metadata index (a cell's `vm`, from 1) says the cell's error is, where Excel
+/// wrote a `#SPILL!` or a `#CALC!` as `#VALUE!`: the metadata part's value metadata, its
+/// `XLRICHVALUE` entry, the rich value it points at, and that value's `errorType`.
+fn rich_errors(archive: &mut zip::ZipArchive<fs::File>, rels: &[(String, String)]) -> HashMap<usize, String> {
+    let part = |kind: &str| -> Option<String> {
+        rels.iter().find(|(t, _)| t.ends_with(kind)).map(|(_, target)| match target.strip_prefix('/') {
+            Some(absolute) => absolute.to_string(),
+            None => format!("xl/{target}"),
+        })
+    };
+    let mut out = HashMap::new();
+    let (Some(meta), Some(values), Some(structures)) = (
+        part("/sheetMetadata").and_then(|p| read_part(archive, &p)),
+        part("/rdRichValue").and_then(|p| read_part(archive, &p)),
+        part("/rdRichValueStructure").and_then(|p| read_part(archive, &p)),
+    ) else {
+        return out;
+    };
+    let Some(rich_type) = RE_META_TYPE.captures_iter(&meta).position(|c| &c[1] == "XLRICHVALUE").map(|i| i + 1) else {
+        return out;
+    };
+    let section = |name: &str| -> String {
+        let open = meta.find(&format!("<{name}")).unwrap_or(meta.len());
+        let close = meta[open..].find(&format!("</{name}>")).map(|c| open + c).unwrap_or(meta.len());
+        meta[open..close].to_string()
+    };
+    let future = meta
+        .find(r#"<futureMetadata name="XLRICHVALUE""#)
+        .map(|open| {
+            let close = meta[open..].find("</futureMetadata>").map(|c| open + c).unwrap_or(meta.len());
+            RE_BK.captures_iter(&meta[open..close]).map(|bk| RE_RVB.captures(&bk[1]).and_then(|c| c[1].parse::<usize>().ok())).collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let structs: Vec<(String, Vec<String>)> =
+        RE_STRUCT.captures_iter(&structures).map(|c| (c[1].to_string(), RE_KEY.captures_iter(&c[2]).map(|k| k[1].to_string()).collect())).collect();
+    let rvs: Vec<(usize, Vec<String>)> = RE_RV
+        .captures_iter(&values)
+        .map(|c| (c[1].parse().unwrap_or(usize::MAX), RE_RV_V.captures_iter(&c[2]).map(|v| v[1].trim().to_string()).collect()))
+        .collect();
+    for (i, bk) in RE_BK.captures_iter(&section("valueMetadata")).enumerate() {
+        let Some(rc) = RE_RC.captures(&bk[1]) else { continue };
+        if rc[1].parse::<usize>().ok() != Some(rich_type) {
+            continue;
+        }
+        let error = rc[2]
+            .parse::<usize>()
+            .ok()
+            .and_then(|v| future.get(v).copied().flatten())
+            .and_then(|rv| rvs.get(rv))
+            .and_then(|(s, vals)| {
+                let (kind, keys) = structs.get(*s)?;
+                let at = keys.iter().position(|k| k == "errorType").filter(|_| kind == "_error")?;
+                let code = vals.get(at)?;
+                RICH_ERRORS.iter().find(|(c, _)| c == code).map(|(_, e)| e.to_string())
+            });
+        if let Some(e) = error {
+            out.insert(i + 1, e);
+        }
+    }
+    out
+}
 
 /// `A` is 1, `Z` 26, `AA` 27.
 pub fn column_index(letters: &str) -> u32 {
@@ -328,18 +409,8 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
         parts.insert(name, (e.size(), e.crc32()));
     }
 
-    // Shared strings: every <t> inside an <si>, concatenated (rich text runs).
-    let shared: Vec<String> = match read_part(&mut archive, "xl/sharedStrings.xml") {
-        Some(xml) => RE_SI
-            .captures_iter(&xml)
-            .map(|c| {
-                // a phonetic run (`<rPh>`) is a reading aid, not the string's text
-                let text = RE_RPH.replace_all(&c[1], "");
-                RE_T.captures_iter(&text).map(|t| xml_text(&t[1])).collect::<String>()
-            })
-            .collect(),
-        None => Vec::new(),
-    };
+    // Excel writes a formula's text as `t="str"`, never as a shared string: the shared strings are
+    // no formula's cache, and are not read
 
     // Sheet order and names, to part names, through workbook.xml and its relationships.
     let workbook_xml = read_part(&mut archive, "xl/workbook.xml")
@@ -350,6 +421,10 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
     for c in RE_REL.captures_iter(&rels_xml) {
         rels.insert(c[1].to_string(), c[2].to_string());
     }
+    // the relationships by their type, for the parts found that way (the metadata, rich data)
+    let mut typed: Vec<(String, String)> = RE_TYPED_REL.captures_iter(&rels_xml).map(|c| (c[1].to_string(), c[2].to_string())).collect();
+    typed.extend(RE_TYPED_REL2.captures_iter(&rels_xml).map(|c| (c[2].to_string(), c[1].to_string())));
+    let rich = rich_errors(&mut archive, &typed);
     for c in RE_REL2.captures_iter(&rels_xml) {
         rels.entry(c[2].to_string()).or_insert_with(|| c[1].to_string());
     }
@@ -414,41 +489,44 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
             // the value's raw text: decoded as a text where the cell's type says text
             let v_raw = RE_V.captures(inner).map(|m| m[1].to_string()).or_else(|| inner.contains("<v/>").then(String::new));
             let v = v_raw.as_deref().map(unescape);
-            let expected = match (t.as_deref(), v) {
-                (_, None) => match RE_IS.captures(inner) {
-                    Some(is) => {
-                        let text = RE_RPH.replace_all(&is[1], "");
-                        Expected::Text(RE_T.captures_iter(&text).map(|t| xml_text(&t[1])).collect())
-                    }
-                    // Excel writes the value every formula computed: no `<v>` is a cache it never
-                    // wrote
-                    None => Expected::Missing,
-                },
-                // an index into the shared strings; anything else is the text it is (a mismatch
-                // unless the engine computed that very text)
-                (Some("s"), Some(v)) => {
-                    Expected::Text(v.trim().parse::<usize>().ok().and_then(|i| shared.get(i).cloned()).unwrap_or(v))
+            let is = RE_IS.captures(inner).map(|m| m[1].to_string());
+            let never = |what: String| Expected::Unwritten(what);
+            let expected = match (t.as_deref(), v, is) {
+                // an inline string's text is its `<is>`, and only an inline string's
+                (Some("inlineStr"), None, Some(is)) => {
+                    let text = RE_RPH.replace_all(&is, "");
+                    Expected::Text(RE_T.captures_iter(&text).map(|t| xml_text(&t[1])).collect())
                 }
-                (Some("str"), Some(_)) | (Some("inlineStr"), Some(_)) => Expected::Text(xml_text(v_raw.as_deref().unwrap_or_default())),
-                // a boolean Excel writes as 1 or 0; any other text is a cache Excel never wrote,
-                // read as the text it is (a mismatch)
-                (Some("b"), Some(v)) => match v.trim() {
+                (_, None, Some(is)) => never(format!("<is>{is}</is>")),
+                // Excel writes the value every formula computed: no `<v>` is a cache it never wrote
+                (_, None, None) => Expected::Missing,
+                (_, Some(v), Some(_)) => never(v),
+                // a formula's text Excel writes `str`
+                (Some("str"), Some(_), None) => Expected::Text(xml_text(v_raw.as_deref().unwrap_or_default())),
+                // a boolean Excel writes as 1 or 0
+                (Some("b"), Some(v), None) => match v.trim() {
                     "1" => Expected::Bool(true),
                     "0" => Expected::Bool(false),
-                    other => Expected::Text(other.to_string()),
+                    _ => never(v),
                 },
-                // an error a file holds; any other text is no error Excel writes, read as the text
-                // it is (a mismatch)
-                (Some("e"), Some(v)) => match FILE_ERRORS.iter().find(|e| **e == v.trim()) {
-                    Some(e) => Expected::Error(e.to_string()),
-                    None => Expected::Text(v),
+                // an error a file holds; a `#VALUE!` with value metadata is the error the rich value
+                // names (Excel's `#SPILL!` and `#CALC!`)
+                (Some("e"), Some(v), None) => match FILE_ERRORS.iter().find(|e| **e == v.trim()) {
+                    Some(e) => {
+                        let vm = RE_ATTR_VM.captures(attrs).and_then(|m| m[1].parse::<usize>().ok());
+                        Expected::Error(vm.and_then(|i| rich.get(&i).cloned()).filter(|_| *e == "#VALUE!").unwrap_or_else(|| e.to_string()))
+                    }
+                    None => never(v),
                 },
-                // a number Excel can cache is finite: `inf`, `NaN` or `1E+999` in a `<v>` is
-                // read as the text it is, never as a number every engine value would equal
-                (_, Some(v)) => match v.trim().parse::<f64>() {
-                    Ok(n) if n.is_finite() => Expected::Number(n),
-                    _ => Expected::Text(v),
+                // a number Excel can cache is finite: `inf`, `NaN`, `1E+999`, a word or nothing is
+                // none
+                (None | Some("n"), Some(v), None) => match v.trim().parse::<f64>() {
+                    Ok(n) if n.is_finite() && !v.trim().is_empty() => Expected::Number(n),
+                    _ => never(v),
                 },
+                // a shared string (`s`), a date (`d`), an inline string holding `<v>`, any other
+                // type: none Excel writes for a formula's value
+                (Some(_), Some(v), None) => never(v),
             };
             formula_cells.push(FormulaCell {
                 sheet: sheet_name.clone(),
@@ -646,6 +724,7 @@ fn fmt_expected(e: &Expected) -> String {
         Expected::Bool(b) => (if *b { "TRUE" } else { "FALSE" }).to_string(),
         Expected::Error(e) => e.clone(),
         Expected::Missing => "(no cached value)".into(),
+        Expected::Unwritten(raw) => format!("(never written so: {raw:?})"),
     }
 }
 
@@ -771,6 +850,11 @@ pub fn classify(cell: &FormulaCell, actual: &Actual, unsupported_in_formula: boo
     if matched {
         return Class::Match;
     }
+    // a cache Excel never wrote is classed as the text it is (it matched nothing above)
+    let expected = match &cell.expected {
+        E::Unwritten(raw) => E::Text(raw.clone()),
+        e => e.clone(),
+    };
     if matches!(actual, A::NoSheet) {
         return Class::MissingSheet;
     }
@@ -780,7 +864,7 @@ pub fn classify(cell: &FormulaCell, actual: &Actual, unsupported_in_formula: boo
     if has_external {
         return Class::ExternalLink;
     }
-    match (&cell.expected, actual) {
+    match (&expected, actual) {
         (E::Error(_), A::Error(_)) => Class::ErrorType,
         (E::Error(_), _) => Class::ValueForError,
         (_, A::Error(e)) if e == "#NAME?" => {
