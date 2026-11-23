@@ -241,14 +241,23 @@ impl Compiled {
                 return Err(GrepError::Pattern(format!("pattern {} is empty", i + 1)));
             }
             let body = if q.literal { regex::escape(&p.pattern) } else { p.pattern.clone() };
+            let build = |body: &str| RegexBuilder::new(body).case_insensitive(q.case_insensitive).build();
+            let refused = |e: regex::Error| GrepError::Pattern(format!("pattern {} `{}`: {e}", i + 1, p.pattern));
+            // Checked bare first: a refusal speaks of the operator's own text, and a group the
+            // pattern leaves unbalanced (`a)|(?:b`) cannot escape a wrapper around it.
+            let bare = build(&body).map_err(refused)?;
             // A whole word stands apart from word characters on both sides, whatever the pattern's
             // own ends are (`-5` alone in `offset -5 mm`, not glued in `a-5 b`), as Veredas 1's
-            // engine read it.
-            let body = if q.whole_word { format!(r"\b{{start-half}}(?:{body})\b{{end-half}}") } else { body };
-            let re = RegexBuilder::new(&body)
-                .case_insensitive(q.case_insensitive)
-                .build()
-                .map_err(|e| GrepError::Pattern(format!("pattern {} `{}`: {e}", i + 1, p.pattern)))?;
+            // engine read it. A valid pattern wraps whole, but for a comment of its extended mode
+            // (`(?x)run # word`), which runs to the line's end and would swallow the wrapper's
+            // close: a line end closes the comment first, whitespace in that mode.
+            let re = if q.whole_word {
+                build(&format!(r"\b{{start-half}}(?:{body})\b{{end-half}}"))
+                    .or_else(|_| build(&format!("\\b{{start-half}}(?:{body}\n)\\b{{end-half}}")))
+                    .map_err(refused)?
+            } else {
+                bare
+            };
             patterns.push((re, p.negated));
         }
         Ok(Compiled { patterns, combine: q.combine })
@@ -358,43 +367,66 @@ fn send(tx: &Sender<GrepEvent>, e: GrepEvent) -> Result<(), Gone> {
     tx.send(e).map_err(|_| Gone)
 }
 
+/// As many bytes as `buf` holds, or the file's end: a slice of the tail's size, whatever short
+/// reads the drive gives.
+fn read_slice(f: &mut std::fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut n = 0;
+    while n < buf.len() {
+        match f.read(&mut buf[n..]) {
+            Ok(0) => break,
+            Ok(k) => n += k,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(n)
+}
+
 fn search_file(path: &Arc<PathBuf>, q: &Compiled, o: &GrepOptions, h: &GrepHandle, tx: &Sender<GrepEvent>) -> Result<FileOutcome, Gone> {
-    let read = || -> std::io::Result<(u64, Vec<u8>)> {
-        let mut f = std::fs::File::open(path.as_path())?;
-        let size = f.metadata()?.len();
-        if o.max_file_size.is_some_and(|max| size > max) {
-            return Ok((size, Vec::new()));
-        }
-        let mut bytes = Vec::with_capacity(size as usize);
-        f.read_to_end(&mut bytes)?;
-        Ok((size, bytes))
+    let failed = |e: std::io::Error| -> Result<FileOutcome, Gone> {
+        h.errors.fetch_add(1, Ordering::Relaxed);
+        send(tx, GrepEvent::FileError { path: Arc::clone(path), error: e.to_string() })?;
+        Ok(FileOutcome::Searched)
     };
-    let (size, bytes) = match read() {
+    let opened = std::fs::File::open(path.as_path()).and_then(|f| f.metadata().map(|m| (f, m.len())));
+    let (mut f, size) = match opened {
         Ok(r) => r,
-        Err(e) => {
-            h.errors.fetch_add(1, Ordering::Relaxed);
-            send(tx, GrepEvent::FileError { path: Arc::clone(path), error: e.to_string() })?;
-            return Ok(FileOutcome::Searched);
-        }
+        Err(e) => return failed(e),
     };
     if o.max_file_size.is_some_and(|max| size > max) {
         h.skipped_large.fetch_add(1, Ordering::Relaxed);
         send(tx, GrepEvent::SkippedLarge { path: Arc::clone(path), size })?;
         return Ok(FileOutcome::Searched);
     }
-    let head = &bytes[..bytes.len().min(HEAD)];
+    // Read and decoded in the tail's own slices (C-035): the decoder settles UTF-8 or CP1252 on
+    // the slice that holds the first byte past ASCII, so a file at rest decodes here as a tail
+    // reading it whole from its start decodes it. A cancel is heard at every slice.
+    let mut buf = vec![0u8; crate::tail::READ_CHUNK];
+    let first = match read_slice(&mut f, &mut buf) {
+        Ok(n) => n,
+        Err(e) => return failed(e),
+    };
+    let head = &buf[..first.min(HEAD)];
     let utf16 = matches!(detect(head), DetectedEncoding::Utf16Le | DetectedEncoding::Utf16Be);
     if !utf16 && !o.search_binary && head.contains(&0) {
         h.skipped_binary.fetch_add(1, Ordering::Relaxed);
         return Ok(FileOutcome::Searched);
     }
     h.files_searched.fetch_add(1, Ordering::Relaxed);
-    let mut text = String::with_capacity(bytes.len());
+    let mut text = String::with_capacity(size as usize);
     let mut decoder = TextDecoder::new();
-    // In the tail's own slices: the decoder settles UTF-8 or CP1252 on the slice that holds the
-    // first byte past ASCII, so a file decodes here as the tail decodes it (C-035).
-    for slice in bytes.chunks(crate::tail::READ_CHUNK) {
-        decoder.feed(slice, &mut text);
+    decoder.feed(&buf[..first], &mut text);
+    let mut more = first == buf.len();
+    while more {
+        if h.is_cancelled() {
+            return Ok(FileOutcome::Cancelled);
+        }
+        let n = match read_slice(&mut f, &mut buf) {
+            Ok(n) => n,
+            Err(e) => return failed(e),
+        };
+        decoder.feed(&buf[..n], &mut text);
+        more = n == buf.len();
     }
     decoder.finish(&mut text);
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);

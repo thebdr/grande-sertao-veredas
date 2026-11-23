@@ -166,6 +166,13 @@ fn literal_case_and_whole_word() {
     assert_eq!(numbers(GrepQuery { case_insensitive: true, ..GrepQuery::single("run") }), vec![3, 4, 5]);
     assert_eq!(numbers(GrepQuery { whole_word: true, ..GrepQuery::single("run") }), vec![5]);
     assert_eq!(numbers(GrepQuery { whole_word: true, case_insensitive: true, ..GrepQuery::single("run") }), vec![3, 5]);
+    // Whole word around the operator's own pattern, never its text: an unbalanced group refused
+    // in its own words, a comment of the extended mode closed before the wrapper's end.
+    let scope_once = GrepScope::Files(vec![dir.path().join("o.log")]);
+    let e = search(scope_once, &GrepQuery { whole_word: true, ..GrepQuery::single("a)|(?:b") }, GrepOptions::default()).err().unwrap();
+    assert!(matches!(&e, GrepError::Pattern(m) if m.starts_with("pattern 1 `a)|(?:b`: ") && m.contains("unopened group")), "{e:?}");
+    assert_eq!(numbers(GrepQuery { whole_word: true, ..GrepQuery::single("(?x)run # word") }), vec![5]);
+    assert_eq!(numbers(GrepQuery::single("(?x)run # word")), vec![4, 5]);
     // A pattern whose ends are no word characters: whole where it stands apart, never where it is
     // glued to a word.
     write(&dir.path().join("o.log"), "offset -5 mm\nreg a-5b\nset a-5 b\ntemp 25°C\ntemp 25 °C\n");
@@ -265,6 +272,16 @@ fn the_size_and_binary_guards_the_caps_and_a_missing_file() {
     assert_eq!((s.stats.skipped_large, s.stats.skipped_binary, s.stats.files_searched, s.stats.matches), (1, 1, 1, 5));
     let (events, s) = run(files(&["bin.dat"]), &GrepQuery::single("hit"), GrepOptions { search_binary: true, ..GrepOptions::default() });
     assert_eq!((matched(&events).len(), s.stats.skipped_binary), (1, 0));
+    // The edges: a file of exactly the limit is searched; a NUL past the head is no binary file
+    // (a log padded with NULs after a power cut).
+    let (events, s) = run(files(&["five.log"]), &GrepQuery::single("hit"), GrepOptions { max_file_size: Some(20), ..GrepOptions::default() });
+    assert_eq!((matched(&events).len(), s.stats.skipped_large), (5, 0), "five lines of four bytes, the limit twenty");
+    let mut padded = "hit\n".repeat(2_100).into_bytes();
+    padded.extend_from_slice(&[0u8; 64]);
+    padded.extend_from_slice(b"\nhit\n");
+    std::fs::write(dir.path().join("padded.log"), &padded).unwrap();
+    let (events, s) = run(files(&["padded.log"]), &GrepQuery::single("hit"), GrepOptions::default());
+    assert_eq!((matched(&events).len(), s.stats.skipped_binary), (2_101, 0), "its first NUL at byte {}", 2_100 * 4);
     // A cap per file: its done event says so; a total cap: the search stops there.
     let (events, s) = run(files(&["five.log", "big.log"]), &GrepQuery::single("hit"), GrepOptions { max_matches_per_file: Some(2), ..GrepOptions::default() });
     assert_eq!(events.iter().filter(|e| matches!(e, GrepEvent::FileDone { matches: 2, capped: true, .. })).count(), 2);
@@ -357,4 +374,30 @@ fn the_walk_follows_no_link_and_reads_a_read_only_file() {
     assert_eq!(matched(&events), vec![("x.log".to_string(), 1), ("z.log".to_string(), 1)]);
     let s = summary.stats;
     assert_eq!((s.files_searched, s.files_matched, s.matches, s.errors), (2, 2, 2, 0), "{s:?}");
+}
+
+
+/// A cancel is heard while a file is read and decoded, not only once its lines are scanned: a
+/// file whose reading takes seconds, a query that matches nothing, a cancel 50 ms in.
+#[test]
+fn a_cancel_is_heard_while_a_file_is_read() {
+    // In the build's own scratch folder: the file is large, and /tmp is kept small on this machine.
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let big = dir.path().join("huge.log");
+    {
+        let mut f = std::io::BufWriter::new(std::fs::File::create(&big).unwrap());
+        let line = format!("{}\n", "a reading with nothing in it ".repeat(4));
+        for _ in 0..(192usize << 20) / line.len() {
+            std::io::Write::write_all(&mut f, line.as_bytes()).unwrap();
+        }
+    }
+    let s = search(GrepScope::Files(vec![big]), &GrepQuery::single("zzz"), GrepOptions::default()).unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    let cancelled = std::time::Instant::now();
+    s.handle.cancel();
+    let done = s.events.iter().find_map(|e| if let GrepEvent::Done(summary) = e { Some(summary) } else { None }).expect("a done event");
+    let took = cancelled.elapsed();
+    s.worker.join().unwrap();
+    assert_eq!(done.stopped, GrepStop::Cancelled, "{done:?}");
+    assert!(took < Duration::from_millis(500), "the cancel heard {took:?} after it was asked, the file still being read");
 }

@@ -238,8 +238,9 @@ where they differ.
   to a file of its own through the ingest connection, the record in it.
 - **The grep engine** over logs at rest is on Oficina's first-release list. **Built (C-094)** as
   the library module `grep` (the light build keeps it): Veredas 1's engine without `fancy-regex`
-  and without ripgrep's crates, every file decoded by portal's own decoder in the tail's own slices,
-  no link followed.
+  and without ripgrep's crates, every file decoded by portal's own decoder in the tail's own slices
+  (as a tail reading it whole from its start; a live tail may have settled UTF-8 or CP1252 otherwise
+  on a file mixing them), no link followed, a cancel heard while a file is read.
 - **Q14 stands:** portal builds no desktop UI. Oficina is a component of its own.
 - Open: the review's entries 22 and 33 (Q31); robust requests (Q37); what gives way at a size
   limit, and the window's ceiling (Q41); the security round (Q43, P-014).
