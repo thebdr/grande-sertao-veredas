@@ -211,6 +211,48 @@ styles part (Veredas 1's fixture, carried as it was).
 `tools/abaco-oracle` (a library and its executable): the expected side, the comparison and its
 classes, the report, the corpus list, and the parity test.
 
+## The `.abaco` file (phase 3)
+A zip of plain-text parts, readable with `unzip` and an editor; the reference, its keys and a
+worked example, is `docs/abaco-file.md`, written with the code.
+
+```text
+manifest.toml                 who wrote it, the workbook's name, its sheets in order, its macros
+workbook.toml                 styles, defined names, metadata, settings, theme, tables, links
+sheets/01-<name>.toml         a sheet: its structure, then its cells, one line per cell
+macros/<name>.py              the macros the workspace carries (never run at open)
+workspace/references.toml     the foreign files it works on, each fingerprinted
+workspace/decisions.toml      what its tools decided, oldest first
+workspace/queue.toml          what its tools queued, in order
+workspace/state/<tool>.toml   a tool's own state
+workspace/log.txt             the log, one escaped entry per line
+```
+
+- **Every TOML part states its schema**: `format` (`veredas-abaco` for the manifest,
+  `veredas-abaco-<part>` for the others, so a part in the wrong place is refused by name) and
+  `version` from 1, read through core's header reader before the body; a newer version refused, an
+  older one migrated (none yet).
+- **One line per cell**, row-major, in the sheet's `[cells]` table, its key the address:
+  `A1 = { n = 42 }`, `B1 = { s = "text", style = 3 }`, `C1 = { f = "A1*2", v = 84 }` (the value is
+  for the reader, recomputed at open), `D1 = { array = "A1:A3*2", size = [1, 3] }`,
+  `E1 = { dynamic = "SEQUENCE(3)" }`, `F1 = { style = 5 }`; a boolean `b`, an error `e`. A cell an
+  array spills into is not written (it is computed), only its style. TOML's own strings escape
+  text and formulas: Veredas 1's tab-separated lines and their escapes are not carried.
+- **Numbers read back exactly**: a whole number under 10^15 written as an integer, any other as
+  the shortest text that reads back as the same double.
+- **Tools' records are TOML tables**: a decision, a queue entry or a state holds no null (TOML has
+  none); one is refused when written, by its tool and place.
+- **What it does not know it keeps**: a part this Ábaco does not read is written back as it came,
+  so a newer Ábaco's additions survive an older one's save.
+- **Written through a file beside the destination**, then renamed over it, the previous file kept
+  as `.bak` (the patcher's commit step); the same workbook writes the same bytes (each zip entry
+  dated at the format's epoch).
+- **Proof:** every workbook of the corpus opened, written as `.abaco`, read back: every cell's
+  content, style and value after recalculation, and every part the engine holds (styles, names,
+  metadata, settings, theme, tables, links, each sheet's structure) equal; written again to the
+  same bytes; exported to `.xlsx` through the fork's writer and opened again to the same values.
+  The workspace's parts round trip on their own tests; a wrong format, a newer version, a missing
+  part and a broken line are each refused by name.
+
 ## Phases
 1. **The engine at parity** (P-007's exit). The fork in (above); `crates/veredas-abaco` at
    `2.0.0-alpha.1` with `links` and `linkdiff`; `tools/abaco-oracle`; the
@@ -228,8 +270,10 @@ classes, the report, the corpus list, and the parity test.
    is written as the cells it reads (the engine parses it to them). Its edits come
    through the API; an edit file, stamped TOML, comes with the command line, once core's header
    reader can be had without core's network layers (asked of core).
-3. **The `.abaco` file.** Lossless round trip of every workbook of the corpus through the zip and
-   back; the workspace's parts; the `.xlsx` export.
+3. **The `.abaco` file** (above). Lossless round trip of every workbook of the corpus through the
+   zip and back; the workspace's parts; the `.xlsx` export. Its stamps are read through core's
+   header reader, which Ábaco takes once core's network layers sit behind a feature (asked of
+   core, 2026-11-23); everything else of the phase is written first.
 4. **Python.** CPython embedded (python-build-standalone, pinned, as Veredas 1 did: a release
    carries the runtime beside the executable); the `abaco` module; custom functions; the macro
    homes; the worker, one per workspace, and its command line; stop at the failing line with the
