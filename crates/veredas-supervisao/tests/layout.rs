@@ -2017,6 +2017,34 @@ const LINES_SVG: &str = r##"  <line id="ln-normal" x1="15" y1="240" x2="15" y2="
   <g style="stroke-linejoin:round;stroke-miterlimit:2;stroke-dashoffset:3;fill-rule:evenodd;stroke-linecap:square"><path id="la-join" d="M 240 410 V 450 H 280" fill="none" stroke="#3a3a40" stroke-width="8"/></g>
   <g id="nf-kinds"><path d="M 300 410 H 316 V 424" fill="none" stroke="#3a3a40" stroke-width="3"/><rect x="322" y="410" width="12" height="12" fill="none" stroke="#3a3a40" stroke-width="3"/><circle cx="346" cy="416" r="6" fill="none" stroke="#3a3a40" stroke-width="3"/><ellipse cx="366" cy="416" rx="7" ry="5" fill="none" stroke="#3a3a40" stroke-width="3"/><line x1="384" y1="410" x2="384" y2="424" stroke="#3a3a40" stroke-width="3"/><polyline points="300,432 312,444 324,432" fill="none" stroke="#3a3a40" stroke-width="3"/><polygon points="332,432 346,432 339,446" fill="none" stroke="#3a3a40" stroke-width="3"/></g>
   <g transform="matrix(3 0 0 3 0 0)"><circle id="la-grows" cx="20" cy="163" r="5" fill="none" stroke="#3a3a40" stroke-width="1"/></g>
+  <path id="cf-up-l" d="M 8 532 L 24 548" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cf-lo-l" d="M 36 532 l 16 16" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cf-up-c" d="M 64 532 C 68 536 76 544 80 548" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cf-lo-c" d="M 92 532 c 4 4 12 12 16 16" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cf-up-s" d="M 120 532 S 128 540 136 548" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cf-lo-s" d="M 148 532 s 8 8 16 16" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cf-up-q" d="M 176 532 Q 184 540 192 548" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cf-lo-q" d="M 204 532 q 8 8 16 16" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cf-up-t" d="M 232 532 T 248 548" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cf-lo-t" d="M 260 532 t 16 16" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cb-up-l" d="M 8 556 L 24 572 L 8 572 Z" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cb-lo-l" d="M 36 556 l 16 16 l -16 0 z" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cb-up-h" d="M 64 556 L 64 572 H 80 Z" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cb-lo-h" d="M 92 556 L 92 572 h 16 z" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cb-up-v" d="M 120 556 L 136 556 V 572 Z" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cb-lo-v" d="M 148 556 L 164 556 v 16 z" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cb-up-c" d="M 176 564 C 176 554 192 554 192 564 C 192 574 176 574 176 564 Z" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cb-lo-c" d="M 204 564 c 0 -10 16 -10 16 0 c 0 10 -16 10 -16 0 z" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cb-up-s" d="M 232 564 S 248 554 248 564 S 232 574 232 564 Z" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cb-lo-s" d="M 260 564 s 16 -10 16 0 s -16 10 -16 0 z" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cb-up-q" d="M 288 564 Q 296 554 304 564 Q 296 574 288 564 Z" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cb-lo-q" d="M 316 564 q 8 -10 16 0 q -8 10 -16 0 z" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cb-up-a" d="M 344 564 A 8 8 0 0 1 360 564 A 8 8 0 0 1 344 564 Z" fill="#cccccc" stroke="#3a3a40"/>
+  <path id="cb-lo-a" d="M 372 564 a 8 8 0 0 1 16 0 a 8 8 0 0 1 -16 0 z" fill="#cccccc" stroke="#3a3a40"/>
+  <polyline id="la-cap-poly" points="20,600 50,600 50,640" fill="none" stroke="#3a3a40" stroke-width="6" stroke-linecap="square"/>
+  <path id="la-cap-curve" d="M 80 600 c 20 0 30 10 30 40" fill="none" stroke="#3a3a40" stroke-width="6" stroke-linecap="square"/>
+  <path id="la-cap-arc" d="M 140 600 a 20 20 0 0 1 20 20" fill="none" stroke="#3a3a40" stroke-width="6" stroke-linecap="square"/>
+  <g id="la-cap-line"><circle cx="200" cy="615" r="12" fill="none" stroke="#3a3a40" stroke-width="6"/><line x1="230" y1="600" x2="230" y2="640" stroke="#3a3a40" stroke-width="6" stroke-linecap="square"/></g>
 </svg>"##;
 
 /// Each shape drawn as a line and bound to show its state: its id, its state, the width it was drawn
@@ -2053,7 +2081,7 @@ const BODY_CASES: [(&str, (f64, f64)); 3] = [("nf-zero", (205.0, 320.0)), ("nf-b
 /// on its lines below its level, on them above it, and inside what they close (off every line), in
 /// its own coordinates.
 #[allow(clippy::type_complexity)]
-const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 10] = [
+const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 14] = [
     ("la-ring", 0.35, "normal", 6.0, &[(40.0, 386.0)], &[(40.0, 354.0), (24.0, 370.0)], &[(40.0, 370.0), (40.0, 380.0)]),
     ("la-bent", 0.35, "normal", 8.0, &[(100.0, 390.0), (80.0, 385.0), (122.5, 390.0)], &[(80.0, 360.0)], &[(95.0, 380.0)]),
     ("la-hollow", 1.0, "normal", 4.0, &[(160.0, 350.0), (140.0, 370.0), (180.0, 370.0), (160.0, 390.0)], &[], &[(160.0, 370.0)]),
@@ -2064,6 +2092,12 @@ const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64,
     ("la-squash", 0.35, "normal", 4.0, &[(100.0, 299.0)], &[(100.0, 275.0)], &[(100.0, 287.0)]),
     ("la-hole", 0.35, "normal", 5.0, &[(155.0, 447.0), (200.0, 444.0)], &[(155.0, 413.0), (200.0, 416.0)], &[(155.0, 438.0), (200.0, 430.0)]),
     ("la-join", 1.0, "normal", 8.0, &[(240.0, 430.0), (260.0, 450.0), (283.0, 450.0), (240.0, 407.0)], &[], &[(236.7, 453.3)]),
+    // An open run of every kind the page reads ends from (`openEnds`), each with square caps at its
+    // foot: a polyline, a curve, an arc, and a `<line>` in a group beside a ring.
+    ("la-cap-poly", 1.0, "normal", 6.0, &[(35.0, 600.0)], &[], &[]),
+    ("la-cap-curve", 1.0, "normal", 6.0, &[(110.0, 639.0)], &[], &[]),
+    ("la-cap-arc", 1.0, "normal", 6.0, &[(160.0, 619.0)], &[], &[]),
+    ("la-cap-line", 1.0, "normal", 6.0, &[(230.0, 630.0)], &[], &[(200.0, 615.0)]),
 ];
 
 /// The state's colours on a line, read from the page's own tokens as the browser computes a stroke:
@@ -2177,6 +2211,26 @@ const ALONG_PAINT: &str = r##"((cases, carried) => {
   return out;
 })"##;
 
+/// Filled paths written with each command of a path's data (`cf-…` straight, `cb-…` around an area),
+/// their command in their id: `up-x` the letter in capitals, `lo-x` in small letters.
+const CMD_FLAT: [&str; 10] = ["cf-up-l", "cf-lo-l", "cf-up-c", "cf-lo-c", "cf-up-s", "cf-lo-s", "cf-up-q", "cf-lo-q", "cf-up-t", "cf-lo-t"];
+const CMD_BOW: [&str; 14] = ["cb-up-l", "cb-lo-l", "cb-up-h", "cb-lo-h", "cb-up-v", "cb-lo-v", "cb-up-c", "cb-lo-c", "cb-up-s", "cb-lo-s", "cb-up-q", "cb-lo-q", "cb-up-a", "cb-lo-a"];
+
+/// The command a `cf-`/`cb-` id names.
+fn letter(id: &str) -> char {
+    let c = id.chars().last().unwrap();
+    if id.contains("-up-") { c.to_ascii_uppercase() } else { c }
+}
+
+/// Each straight path a line (`sv-line`, its fill none), each one around an area a body (no
+/// `sv-line`, filled).
+const CMD_PAINT: &str = r##"((flat, bow) => {
+  const out = [];
+  for (const id of flat) { const el = document.getElementById(id); if (!el.classList.contains("sv-line") || getComputedStyle(el).fill !== "none") out.push(`${id}: straight, drawn as a body (${el.getAttribute("class")}, filled ${getComputedStyle(el).fill})`); }
+  for (const id of bow) { const el = document.getElementById(id); if (el.classList.contains("sv-line") || getComputedStyle(el).fill === "none") out.push(`${id}: around an area, drawn as a line (${el.getAttribute("class")}, filled ${getComputedStyle(el).fill})`); }
+  return out;
+})"##;
+
 /// A bound group holding one shape of every kind the page draws on, each drawn with no fill (`nf-kinds`,
 /// warn): its kinds every one given (`kinds`), each a line, unfilled, stroked in the state's colour at
 /// its drawn width (3); nothing of the group hit at a point inside what a shape closes.
@@ -2238,7 +2292,7 @@ fn a_shape_drawn_with_no_fill_shows_its_state_on_its_line() {
     let bench = plant(&dir.path().join("bench"));
     let mut ex = live_example(&bench, false);
     assert!(ex.svg.contains("viewBox=\"0 0 400 220\"") && ex.svg.ends_with("</svg>\n"));
-    ex.svg = ex.svg.replace("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 400 520\"").replace("</svg>\n", LINES_SVG) + "\n";
+    ex.svg = ex.svg.replace("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 400 660\"").replace("</svg>\n", LINES_SVG) + "\n";
     // Each object in its state: a rule over `fill2` (85) naming it, normal with none, stale on the
     // sorter's rate (its log empty: no value yet).
     let value_in = |state: &str| match state {
@@ -2258,6 +2312,9 @@ fn a_shape_drawn_with_no_fill_shows_its_state_on_its_line() {
         objects.push_str(&format!("\n[[object]]\nid = \"{id}\"\n{}", value_in("warn")));
     }
     objects.push_str(&format!("\n[[object]]\nid = \"nf-kinds\"\n{}", value_in("warn")));
+    for id in CMD_FLAT.iter().chain(CMD_BOW.iter()) {
+        objects.push_str(&format!("\n[[object]]\nid = \"{id}\"\n{}", value_in("warn")));
+    }
     for (id, level, state, _, _, _, _) in ALONG_CASES {
         let series = if level == 1.0 { "fill3" } else if level == 0.85 { "fill2" } else { "fill1" };
         let rule = if state == "normal" { String::new() } else { format!("states = [ {{ above = 50, state = \"{state}\" }} ]\n") };
@@ -2272,7 +2329,7 @@ fn a_shape_drawn_with_no_fill_shows_its_state_on_its_line() {
     let host = Host::start(config::load_file(&path).unwrap()).unwrap();
     let addr = host.addr();
     let mut page = Browser::open(&format!("http://{addr}/s/loop/"));
-    let states: Vec<(&str, &str)> = LINE_CASES.iter().map(|c| (c.0, c.1)).chain(ALONG_CASES.iter().map(|c| (c.0, c.2))).chain(BODY_CASES.iter().map(|c| (c.0, "warn"))).chain([("nf-kinds", "warn"), ("la-grows", "normal")]).collect();
+    let states: Vec<(&str, &str)> = LINE_CASES.iter().map(|c| (c.0, c.1)).chain(ALONG_CASES.iter().map(|c| (c.0, c.2))).chain(BODY_CASES.iter().map(|c| (c.0, "warn"))).chain([("nf-kinds", "warn"), ("la-grows", "normal")]).chain(CMD_FLAT.iter().chain(CMD_BOW.iter()).map(|id| (*id, "warn"))).collect();
     page.wait_for(
         &format!(
             r#"(() => {{ const want = {}; return want.every(([id, s]) => document.getElementById(id)?.classList.contains(`sv-state-${{s}}`)) && {}.every((id) => parseFloat(document.querySelector(`[id="sv-along-${{id}}"] rect`)?.getAttribute("height")) > 0) && !document.getElementById("nm-ring").classList.contains("sv-hidden") || null; }})()"#,
@@ -2302,6 +2359,16 @@ fn a_shape_drawn_with_no_fill_shows_its_state_on_its_line() {
     let kinds: Vec<&str> = veredas_supervisao::svg::DRAWN.into_iter().filter(|k| *k != "g" && *k != "text").collect();
     let inside = json!([[310.0, 416.0], [328.0, 416.0], [346.0, 416.0], [366.0, 416.0], [312.0, 437.0], [339.0, 436.0]]);
     assert_eq!(page.eval(&format!("{}({}, {})", script(KINDS_PAINT), json!(kinds), inside)), json!([]), "a group's shapes of every kind drawn with no fill");
+    // A path written with each command the page's reader of a path's data takes (its own list, read
+    // from its source; a move and a close apart), filled: one whose points all lie on one line, a
+    // line with no area, its fill not drawn; one that bends around an area, a body. A `T` bends only
+    // where the curve before it does, so it is met straight alone.
+    let pattern = ts.split_once("d.match(/[").and_then(|(_, r)| r.split_once(']')).map(|(l, _)| l.to_string()).unwrap();
+    let flat: std::collections::BTreeSet<char> = CMD_FLAT.iter().map(|id| letter(id)).collect();
+    let bow: std::collections::BTreeSet<char> = CMD_BOW.iter().map(|id| letter(id)).collect();
+    let met: std::collections::BTreeSet<char> = flat.union(&bow).copied().chain("MmZz".chars()).collect();
+    assert_eq!(met, pattern.chars().collect(), "every command the page reads a path's data by, met");
+    assert_eq!(page.eval(&format!("{}({}, {})", CMD_PAINT, json!(CMD_FLAT), json!(CMD_BOW))), json!([]), "a path read otherwise than it draws, by its commands");
     // What the page adds, the level's copies among it, inherits nothing the drawing writes on its root
     // or on a group a level stands in.
     let root = page.eval(ROOT_PAINT);
