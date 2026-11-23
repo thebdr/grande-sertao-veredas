@@ -117,12 +117,15 @@ export class Tables {
       const next = h("button", { disabled: offset + PAGE >= p.total }, "Older ›") as HTMLButtonElement;
       prev.onclick = () => { if (this.table === table) { this.offset = Math.max(0, offset - PAGE); void this.page(); } };
       next.onclick = () => { if (this.table === table && offset + PAGE < p.total) { this.offset = offset + PAGE; void this.page(); } };
-      const from = p.total === 0 ? 0 : offset + 1;
+      // A page with no rows (a table with none, or one whose rows went out of a store kept as a
+      // window while it was paged: portal drops them by their arrival) says none, never a range
+      // past its end.
+      const [from, last] = p.rows.length === 0 ? [0, 0] : [offset + 1, offset + p.rows.length];
       this.draw(
         "page",
-        h("div", { class: "pager" }, h("strong", {}, table), h("span", { class: "mono muted", "data-rows": `${from}-${offset + p.rows.length}/${p.total}` }, `rows ${from}–${offset + p.rows.length} of ${p.total}${ordered ? ", newest first" : ", unordered"}`), prev, next),
+        h("div", { class: "pager" }, h("strong", {}, table), h("span", { class: "mono muted", "data-rows": `${from}-${last}/${p.total}` }, `rows ${from}–${last} of ${p.total}${ordered ? ", newest first" : ", unordered"}`), prev, next),
         h("div", { class: "scroll" }, h("table", { class: "dt" },
-          h("thead", {}, h("tr", {}, ...p.schema.map((c) => h("th", {}, c.name, h("span", { class: "muted" }, ` ${c.type.toLowerCase()}`))))),
+          h("thead", {}, h("tr", {}, ...p.schema.map((c) => h("th", {}, c.name, h("span", { class: "muted" }, ` ${c.type}`))))),
           h("tbody", {}, ...p.rows.map((r) => h("tr", {}, ...r.map((v) => h("td", { class: "mono" }, cell(v)))))))),
       );
     } catch (e) {

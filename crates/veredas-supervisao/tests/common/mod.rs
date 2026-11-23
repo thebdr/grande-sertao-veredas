@@ -327,7 +327,10 @@ pub fn object<'a>(snapshot: &'a Value, id: &str) -> &'a Value {
 /// masked, set vertically (`writing-mode`), or reordered (a direction other than left to right, an
 /// override of the text's own order, or any letter drawn left of the one before it on its line, read
 /// by a range per letter), any letter drawn at no width, narrower than half its glyph's own advance
-/// (measured apart in its font, at its drawn scale) or over the one before it, and its first
+/// (measured apart in its font, at its drawn scale) or over the one before it, any space or tab it
+/// draws (every one where white space is kept, a space between two letters where it collapses)
+/// narrower than half a space of its font, one a line breaks at apart (a tab's width, a word's
+/// spacing: a space drawn at no width reads as none written), and its first
 /// letter or first line painted, sized or spaced otherwise than the element. A font's own glyphs
 /// for the same characters are the stated limit. Shared by the views' tests (the dashboards', the
 /// Tables view's).
@@ -384,7 +387,25 @@ pub const AS_WRITTEN_FN: &str = r#"const asWritten = (el) => {
     for (let i = 0; i < n.length; i++) {
       const code = n.data.charCodeAt(i);
       const end = code >= 0xd800 && code <= 0xdbff ? i + 2 : i + 1;
-      if (/\s/.test(n.data[i])) { i = end - 1; continue; }
+      if (/\s/.test(n.data[i])) {
+        // A space or a tab, where it is drawn (every one where white space is kept, a space
+        // between two letters where it collapses), drawn at least half a space of its font wide:
+        // one a line breaks at apart (the next letter on another line), as the line's own.
+        const ws = n.data[i];
+        const kept = ["preserve", "break-spaces", "preserve-spaces"].includes(collapse);
+        const inner = ws === " " && i > 0 && i + 1 < n.length && !/\s/.test(n.data[i - 1]) && !/\s/.test(n.data[i + 1]);
+        if ((ws === " " || ws === "\t") && (kept || inner) && i + 1 < n.length && !/[\n\r]/.test(n.data[i + 1])) {
+          r.setStart(n, i);
+          r.setEnd(n, i + 1);
+          const b = r.getBoundingClientRect();
+          r.setStart(n, i + 1);
+          r.setEnd(n, i + 2);
+          const next = r.getBoundingClientRect();
+          const space = pen.measureText(" ").width * k;
+          if (Math.abs(next.top - b.top) < 1 && space > 0 && !(b.width >= 0.5 * space)) { out.push(`its ${ws === " " ? "space" : "tab"} at ${i} drawn ${b.width.toFixed(2)} wide, a space ${space.toFixed(2)}: ${JSON.stringify(n.data.slice(0, 30))}`); break; }
+        }
+        continue;
+      }
       r.setStart(n, i);
       r.setEnd(n, Math.min(end, n.length));
       const b = r.getBoundingClientRect();

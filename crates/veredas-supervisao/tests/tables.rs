@@ -254,7 +254,10 @@ fn every_mark_shown(page: &mut Browser, when: &str) {
 /// `__slowDone` set once the page has had it. And each `[part, ms, refused]` of `__holds`: the next
 /// request whose address holds `part` answered `ms` late (refused then, as portal refuses, when
 /// `refused` is set), its state in `__held[part]` ("sent", then "done" once the page has had it), so
-/// any order of arrival, of an answer or a refusal, can be driven.
+/// any order of arrival, of an answer or a refusal, can be driven. And while `__gone` is set, the
+/// next page of rows answered as portal answers once that many of a table's oldest rows have gone
+/// out of a store kept as a window (C-090: portal drops them by their arrival): its total less
+/// them, its rows cut where the table now ends.
 /// `KEEP_ANSWERS`, and the views' shared census of what hides a mark kept in the page beside it
 /// (`window.__hidden`, read by `SHOWN_FN`).
 fn keep_answers() -> String {
@@ -288,6 +291,14 @@ const KEEP_ANSWERS: &str = r#"(() => {
     if (refuse) return new Response(JSON.stringify({ error: "probe refusal, late" }), { status: 500, headers: { "content-type": "application/json" } });
     if (!url.includes("/api/table/data") && !url.includes("/api/series/data")) return r;
     const j = await r.clone().json();
+    if (window.__gone && url.includes("/api/table/data") && r.ok) {
+      const offset = Number(new URL(url, location.href).searchParams.get("offset"));
+      j.total -= window.__gone;
+      j.rows = j.rows.slice(0, Math.max(0, j.total - offset));
+      window.__gone = 0;
+      window.__answers.push({ url, body: j });
+      return new Response(JSON.stringify(j), { status: 200, headers: { "content-type": "application/json" } });
+    }
     window.__answers.push({ url, body: j });
     return r;
   };
@@ -604,7 +615,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     };
     let as_shown = |p: &Value| -> (Vec<String>, Vec<Vec<String>>) {
         (
-            p["schema"].as_array().unwrap().iter().map(|c| format!("{} {}", c["name"].as_str().unwrap(), c["type"].as_str().unwrap().to_lowercase())).collect(),
+            p["schema"].as_array().unwrap().iter().map(|c| format!("{} {}", c["name"].as_str().unwrap(), c["type"].as_str().unwrap())).collect(),
             p["rows"].as_array().unwrap().iter().map(|r| r.as_array().unwrap().iter().map(cell).collect()).collect(),
         )
     };
@@ -689,10 +700,14 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         let time_kind = if has("index_ms") { "index_ms" } else if has("ts") { "ts" } else { "none" };
         times.insert(time_kind);
         let ordered = has("index_ms") || has("ts");
-        let said = format!("rows {}–{n} of {total}{}", if total == 0 { 0 } else { 1 }, if ordered { ", newest first" } else { ", unordered" });
+        let said = format!("rows {}–{n} of {total}{}", if n == 0 { 0 } else { 1 }, if ordered { ", newest first" } else { ", unordered" });
         assert_eq!((s["head"].clone(), s["body"].clone(), s["said"].clone(), s["all_shown"].clone()), (json!(head), json!(body), json!(said), json!(true)), "{name}");
         // Its first page's buttons by its place: Newer off, Older off when it is the last too.
         assert_eq!((s["newer"].clone(), s["older"].clone()), (json!(true), json!(total <= 50)), "{name}: its pager on a first page of {total}");
+        // And drawn as the page wrote it, by the views' shared census: its words, its white space at
+        // its width among them (the `spaces` view's two spaces, leading ones and tab).
+        let restyled = page.eval(&format!("(() => {{ {AS_WRITTEN_FN} return {DRAWN_AS_WRITTEN}(asWritten); }})()"));
+        assert_eq!(restyled, json!([]), "{name}: words drawn otherwise than the page wrote them");
         // A table of more than one page, paged to its second page as portal answered the page's own
         // request and back to its first whole: every way portal finds a table's time among them.
         if total > 50 {
@@ -988,6 +1003,19 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     shown_at(&mut page, "101-110/110");
     click(&mut page, "‹ Newer");
     shown_at(&mut page, "51-100/110");
+    // Rows going out of the store while the sorts are paged, as a store kept as a window drops its
+    // oldest by their arrival (portal's answer with them gone): twenty gone, the page past where
+    // the table now ends says none, never a range past its end, Newer live and Older off; five
+    // gone, the last page short. Newer back to the middle page each time (portal's own answer).
+    for (gone, rows, said, left) in [(20, "0-0/90", "rows 0–0 of 90, newest first", 0), (5, "101-105/105", "rows 101–105 of 105, newest first", 5)] {
+        page.eval(&format!("(() => {{ window.__gone = {gone}; return true; }})()"));
+        click(&mut page, "Older ›");
+        page.wait_for(&format!(r#"document.querySelector(".list-main .pager [data-rows]")?.dataset.rows === "{rows}" || null"#), Duration::from_secs(20));
+        let past = page.eval(shown_js);
+        assert_eq!((past["said"].clone(), past["body"].as_array().unwrap().len(), past["newer"].clone(), past["older"].clone(), past["all_shown"].clone()), (json!(said), left, json!(false), json!(true), json!(true)), "{gone} rows gone while paged");
+        click(&mut page, "‹ Newer");
+        shown_at(&mut page, "51-100/110");
+    }
     // Every ordered pair of the view's own controls (a pick, Newer, Older) from that middle page,
     // the first one's answer held back so the second comes while it is out: the page shown is the
     // later pick's, else the first action's, never a page past the end nor another table's offset.
