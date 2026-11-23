@@ -237,6 +237,12 @@ pub fn unescape(s: &str) -> Cow<'_, str> {
 /// String → XML text (element content). Control characters Excel cannot
 /// carry raw are written as `_xHHHH_`, the OOXML escape Excel reads back.
 pub fn escape_text(s: &str) -> String {
+    escape(s, false)
+}
+
+/// [`escape_text`] for element text (`attr` false) or a double-quoted attribute value (`attr`
+/// true): one pass, so an escape written never meets a later replacement.
+fn escape(s: &str, attr: bool) -> String {
     let b = s.as_bytes();
     let mut out = String::with_capacity(s.len() + 8);
     for (i, c) in s.char_indices() {
@@ -247,7 +253,15 @@ pub fn escape_text(s: &str) -> String {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
-            '\t' | '\n' | '\r' => out.push(c),
+            '"' if attr => out.push_str("&quot;"),
+            // an attribute's tab, line feed and carriage return read back as spaces unless they
+            // are character references
+            '\t' if attr => out.push_str("&#9;"),
+            '\n' if attr => out.push_str("&#10;"),
+            '\r' if attr => out.push_str("&#13;"),
+            // XML reads a raw carriage return as a line feed: in text, written as Excel writes it
+            '\r' => out.push_str("_x000D_"),
+            '\t' | '\n' => out.push(c),
             // what XML cannot carry: control characters, and the two non-characters U+FFFE and U+FFFF
             c if (c as u32) < 0x20 || c == '\u{FFFE}' || c == '\u{FFFF}' => out.push_str(&format!("_x{:04X}_", c as u32)),
             c => out.push(c),
@@ -295,7 +309,7 @@ pub fn decode_text(s: &str) -> String {
 
 /// String → attribute value (double-quoted).
 pub fn escape_attr(s: &str) -> String {
-    escape_text(s).replace('"', "&quot;")
+    escape(s, true)
 }
 
 /// The inner text of the first `<name …>…</name>` in `s` (raw, escaped).
@@ -364,6 +378,12 @@ mod tests {
         assert_eq!(escape_text("_x0041_"), "_x005F_x0041_");
         assert_eq!(decode_text("a_x000D_b"), "a\rb");
         assert_eq!(decode_text(&escape_text("_x0041_ \u{2}")), "_x0041_ \u{2}");
+        // a carriage return in text is Excel's escape, in an attribute a character reference; a
+        // literal `_x000D_` keeps its underscore escaped either way
+        assert_eq!(escape_text("a\rb _x000D_"), "a_x000D_b _x005F_x000D_");
+        assert_eq!(decode_text(&escape_text("a\rb _x000D_")), "a\rb _x000D_");
+        assert_eq!(escape_attr("a\r\n\tb\" _x000D_"), "a&#13;&#10;&#9;b&quot; _x005F_x000D_");
+        assert_eq!(unescape(&escape_attr("a\r\n\tb\"")), "a\r\n\tb\"");
         // a literal escape of a control character stays literal too
         assert_eq!(escape_text("_x0001_\u{1}"), "_x005F_x0001__x0001_");
         assert_eq!(decode_text(&escape_text("_x0001_\u{1}\u{FFFF}")), "_x0001_\u{1}\u{FFFF}");

@@ -412,6 +412,10 @@ workspace/log.txt             the log, one escaped entry per line
 - **A formula's text is escaped as a cell's** (`_x005F_`; fork change 23).
 - **A shared group is expanded only where a move changes what a member derives to**; moved whole,
   it keeps its sharing and its master's `ref` moves.
+- **Excel's cache judges the kind against the engine before the edits** (C-223's seventh round):
+  an input edited first changes what the engine computes, never what Excel cached.
+- **A one-cell merge is no merge**; an empty list (`<hyperlinks/>`, `<mergeCells/>`) is no list.
+- **A carriage return is `_x000D_` in text and `&#13;` in an attribute**, written in one pass.
 - **TOML has no null, and the engine's `Color::None` serialises as one** (an untagged enum's unit
   variant): the `.abaco` file writes the engine's structures through JSON, null as `nan`.
 - **The zip reader keeps one entry of a name**: a file holding two cannot be told apart from one.

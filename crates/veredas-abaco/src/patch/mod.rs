@@ -900,8 +900,8 @@ fn forward(shifts: &[(String, Shift)], from: usize, sheet: &str, mut row: i32, m
 enum Writer {
     /// An earlier edit of the list: the file will hold it as the patcher writes that text.
     Edit,
-    /// The source, plain, with the value Excel cached for it.
-    Source(Value),
+    /// The source, plain, with the value Excel cached for it and where the cell was in the source.
+    Source { cache: Value, at: (i32, i32) },
     /// Neither found (no formula of the source lands here).
     Unknown,
 }
@@ -933,26 +933,27 @@ fn writer_of(
                 name.eq_ignore_ascii_case(sheet) && (cell.formula.is_some() || cell.shared) && forward(shifts, 0, sheet, *r, *c) == Some(here)
             })
         })
-        .map_or(Writer::Unknown, |(_, cell)| Writer::Source(cell.value.clone())))
+        .map_or(Writer::Unknown, |((_, r, c), cell)| Writer::Source { cache: cell.value.clone(), at: (*r, *c) }))
 }
 
 /// Whether the formula the cell holds (its text already found equal to `formula`'s) is, to
 /// Excel, the formula an edit writes as `formula`: both arrays, a formula the engine reads as one
 /// value (written plain, and plain or an array alike to Excel), one an earlier edit wrote (the
 /// patcher writes one text one way), or a plain one of the source that Excel computed to what the
-/// engine computes for the array the edit writes (its cache says implicit intersection changed
-/// nothing there: `Rate*2` with `Rate` one cell). A plain one with no cache to judge by is not.
-fn same_kind(wb: &mut Workbook, fixed: &Fixed, sheet: u32, a: Addr, formula: &str, writer: &Writer) -> bool {
+/// engine computed for it before the edits (its cache says implicit intersection changed nothing
+/// there: `Rate*2` with `Rate` one cell), whatever the edits since changed of its inputs. A plain
+/// one Excel cached nothing for is judged by `uncached`: an expectation holds on the text, a
+/// formula written over it is written as the array it is.
+fn same_kind(wb: &Workbook, before: &Before, sheet: u32, a: Addr, formula: &str, writer: &Writer, uncached: bool) -> bool {
     if holds_an_array(wb, sheet, a) || !writes_as_array(wb, sheet, a, formula) {
         return true;
     }
     match writer {
         Writer::Edit => true,
         Writer::Unknown => false,
-        Writer::Source(cache) => {
-            fixed.reference();
-            wb.ensure_calculated();
-            wb.value_now(sheet, a).is_ok_and(|v| cache_holds(cache, &v))
+        Writer::Source { cache: Value::Empty, .. } => uncached,
+        Writer::Source { cache, at } => {
+            before.values.get(sheet as usize).and_then(|m| m.get(at)).is_some_and(|then| cache_holds(cache, then))
         }
     }
 }
@@ -1064,8 +1065,8 @@ fn describe(wb: &Workbook, sheet: u32, a: Addr) -> String {
 
 /// Whether the cell holds what `expect` says; a formula of the same text judged by [`same_kind`].
 fn holds(
-    wb: &mut Workbook,
-    fixed: &Fixed,
+    wb: &Workbook,
+    before: &Before,
     sheet: u32,
     a: Addr,
     expect: &Expect,
@@ -1080,7 +1081,7 @@ fn holds(
                 return Ok(false);
             }
             let writer = writer()?;
-            Ok(same_kind(wb, fixed, sheet, a, formula, &writer))
+            Ok(same_kind(wb, before, sheet, a, formula, &writer, true))
         }
         Expect::Value { value } => {
             if current.is_some() {
@@ -1142,6 +1143,8 @@ pub fn patch(
     let mut new_sheets: Vec<String> = Vec::new();
     let mut names_touched = false;
     let mut set_names: Vec<(String, Option<String>)> = Vec::new();
+    // the names an edit deleted and none set again since: gone from the file, a built-in one too
+    let mut deleted_names: Vec<(String, Option<String>)> = Vec::new();
     // the source's cells as the file states them, read the first time a cache is asked for
     let mut source_cells: Option<cached::Cells> = None;
 
@@ -1204,7 +1207,7 @@ pub fn patch(
                         .ok_or_else(|| fail(format!("the formula does not parse: {target}")))?;
                     current_file_formula(&wb, s, a).as_deref() == Some(want.as_str()) && {
                         let writer = writer_of(source, &mut source_cells, &shifts, &writes, &canonical, a)?;
-                        same_kind(&mut wb, &fixed, s, a, &target, &writer)
+                        same_kind(&wb, &before, s, a, &target, &writer, false)
                     }
                 } else {
                     let v = json_value(match edit {
@@ -1222,7 +1225,7 @@ pub fn patch(
                     continue;
                 }
                 if let Some(expect) = expect
-                    && !holds(&mut wb, &fixed, s, a, expect, || {
+                    && !holds(&wb, &before, s, a, expect, || {
                         writer_of(source, &mut source_cells, &shifts, &writes, &canonical, a).map_err(|e| e.to_string())
                     })
                     .map_err(fail)?
@@ -1374,15 +1377,17 @@ pub fn patch(
                 }
                 wb.set_name(name, &user, scope.as_deref())
                     .map_err(|e| fail(e.to_string()))?;
-                set_names.push((
-                    name.to_lowercase(),
-                    scope.as_ref().map(|s| s.to_lowercase()),
-                ));
+                let key = (name.to_lowercase(), scope.as_ref().map(|s| s.to_lowercase()));
+                deleted_names.retain(|k| *k != key);
+                set_names.push(key);
                 names_touched = true;
             }
             Edit::DeleteName { name, scope } => {
                 wb.delete_name(name, scope.as_deref())
                     .map_err(|e| fail(e.to_string()))?;
+                let key = (name.to_lowercase(), scope.as_ref().map(|s| s.to_lowercase()));
+                set_names.retain(|k| *k != key);
+                deleted_names.push(key);
                 names_touched = true;
             }
             Edit::ColumnWidth {
@@ -2077,7 +2082,7 @@ pub fn patch(
     // ---- workbook.xml: defined names, calcPr ------------------------------
     if !shifts.is_empty() || names_touched {
         workbook_xml =
-            rewrite_defined_names(&workbook_xml, &wb, &shifts, &order, &entries, &set_names)?;
+            rewrite_defined_names(&workbook_xml, &wb, &shifts, &order, &entries, &set_names, &deleted_names)?;
     }
     if options.full_calc_on_load
         && let Some(t) = xml::find_open(&workbook_xml, "calcPr", 0) {
@@ -2446,6 +2451,7 @@ fn rewrite_defined_names(
     order: &[String],
     entries: &[package::SheetEntry],
     set_names: &[(String, Option<String>)],
+    deleted_names: &[(String, Option<String>)],
 ) -> Result<String, PatchError> {
     let model_names = wb.names();
     let in_file: Vec<String> = entries
@@ -2482,12 +2488,15 @@ fn rewrite_defined_names(
                 .map(xml::decode_text)
                 .unwrap_or_default();
             let scope = scope_of(xml::attr(t.text, "localSheetId"));
-            // still in the model? (a deleted name goes)
-            let in_model = model_names.iter().any(|n| {
+            // still in the model? (a deleted name goes; a built-in one the engine may not hold,
+            // `_xlnm._FilterDatabase`, stays unless an edit deleted it)
+            let key = (name.to_lowercase(), scope.as_ref().map(|s| s.to_lowercase()));
+            let in_model = (model_names.iter().any(|n| {
                 n.name.eq_ignore_ascii_case(&name)
                     && n.scope.as_deref().map(str::to_lowercase)
                         == scope.as_deref().map(str::to_lowercase)
-            }) || name.starts_with("_xlnm.");
+            }) || name.starts_with("_xlnm."))
+                && !deleted_names.contains(&key);
             if !in_model {
                 continue;
             }

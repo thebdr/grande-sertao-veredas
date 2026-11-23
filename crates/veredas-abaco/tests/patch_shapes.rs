@@ -1439,3 +1439,108 @@ fn a_shared_group_moved_without_changing_what_its_members_read_is_kept() {
     let report = patch(&src, &dst, &[Edit::InsertRows { sheet: "S".into(), at: 1, count: 1 }], &verified()).unwrap();
     assert_eq!(report.expanded, 1, "Z1 moved too: the members' formula reads $Z$2 now");
 }
+
+// ---- refute round 7 ---------------------------------------------------------------------------
+
+#[test]
+fn a_plain_formula_is_judged_on_excel_s_cache_against_the_engine_before_the_edits() {
+    // `Rate` one cell: Excel computed `Rate*2` and `INDEX(A1:A3,2)` as their arrays; F1 holds a
+    // formula with no cache, as other writers leave one
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("inputs.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>5</v></c><c r="D1"><f>Rate*2</f><v>10</v></c><c r="E1"><f>INDEX(A1:A3,2)</f><v>6</v></c><c r="F1"><f>Rate*3</f></c></row><row r="2"><c r="A2"><v>6</v></c></row><row r="3"><c r="A3"><v>7</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], r#"<definedName name="Rate">S!$A$1</definedName>"#, &[]);
+    let dst = dir.path().join("out.xlsx");
+    let expecting = |cell: &str, f: &str| Edit::Value {
+        sheet: "S".into(),
+        cell: cell.into(),
+        value: serde_json::json!(3),
+        expect: Some(Expect::Formula { formula: f.into() }),
+    };
+    let formula = |cell: &str, f: &str| Edit::Formula { sheet: "S".into(), cell: cell.into(), formula: f.into(), expect: None };
+    let statuses = |edits: &[Edit]| -> Vec<Status> {
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, edits, &verified()).unwrap().outcomes.into_iter().map(|o| o.status).collect()
+    };
+    // the inputs changed first: the expectations still hold, the formulas are still there
+    let inputs = [value("S", "A1", serde_json::json!(50)), value("S", "A2", serde_json::json!(60))];
+    let mut edits = inputs.to_vec();
+    edits.extend([expecting("D1", "=Rate*2"), expecting("E1", "=INDEX(A1:A3,2)")]);
+    assert_eq!(statuses(&edits), [Status::Applied; 4]);
+    let mut edits = inputs.to_vec();
+    edits.extend([formula("D1", "=Rate*2"), formula("E1", "=INDEX(A1:A3,2)")]);
+    assert_eq!(statuses(&edits), [Status::Applied, Status::Applied, Status::AlreadyThere, Status::AlreadyThere]);
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert_eq!(element(&sheet, "D1"), Some(r#"<c r="D1"><f>Rate*2</f><v>100</v></c>"#), "{sheet}");
+    assert_eq!(element(&sheet, "E1"), Some(r#"<c r="E1"><f>INDEX(A1:A3,2)</f><v>60</v></c>"#), "{sheet}");
+    assert!(!parts(&dst).contains_key("xl/metadata.xml"));
+    // a row deleted first: the expectation of the formula as the move left it holds
+    assert_eq!(statuses(&[Edit::DeleteRows { sheet: "S".into(), at: 2, count: 1 }, expecting("E1", "=INDEX(A1:A2,2)")]), [Status::Applied; 2]);
+    // no cache to judge by: an expectation holds on its text; the formula written over it is
+    // written as the array the engine computes
+    assert_eq!(statuses(&[expecting("F1", "=Rate*3")]), [Status::Applied]);
+    assert_eq!(statuses(&[formula("F1", "=Rate*3")]), [Status::Applied]);
+    assert!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "F1").unwrap().contains(r#"<f t="array" ref="F1">Rate*3</f>"#));
+}
+
+#[test]
+fn a_built_in_name_deleted_goes_and_one_not_deleted_stays_as_it_was() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("print.xlsx");
+    let data: String = (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="B{r}"><v>{r}</v></c></row>"#)).collect();
+    let filter = r#"<definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">S!$A$1:$B$3</definedName>"#;
+    let names = format!(r#"{filter}<definedName name="_xlnm.Print_Area" localSheetId="0">S!$A$1:$B$2</definedName>"#);
+    plain_book(&src, &[("S", worksheet(&data, r#"<autoFilter ref="A1:B3"/>"#))], &names, &[]);
+    let dst = dir.path().join("out.xlsx");
+    let report = patch(&src, &dst, &[Edit::DeleteName { name: "_xlnm.Print_Area".into(), scope: Some("S".into()) }], &verified()).unwrap();
+    assert_eq!(report.outcomes[0].status, Status::Applied);
+    let wb = part(&dst, "xl/workbook.xml");
+    assert!(!wb.contains("Print_Area"), "{wb}");
+    assert!(wb.contains(filter), "{wb}");
+}
+
+#[test]
+fn a_merge_cut_to_one_cell_is_unmerged_and_an_emptied_list_goes() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("merges.xlsx");
+    let data: String = (1..=3)
+        .map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="B{r}"><v>{r}</v></c><c r="E{r}"><v>{r}</v></c></row>"#))
+        .collect();
+    let after = r#"<mergeCells count="2"><mergeCell ref="B2:C2"/><mergeCell ref="E2:E3"/></mergeCells><hyperlinks><hyperlink ref="A3" location="S!A1" display="top"/></hyperlinks>"#;
+    plain_book(&src, &[("S", worksheet(&data, after))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let edits = [Edit::DeleteColumns { sheet: "S".into(), at: "C".into(), count: 1 }, Edit::DeleteRows { sheet: "S".into(), at: 3, count: 1 }];
+    patch(&src, &dst, &edits, &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(!sheet.contains("mergeCell") && !sheet.contains("hyperlink"), "{sheet}");
+    assert!(sheet.ends_with("</sheetData></worksheet>"), "{sheet}");
+    // a merge that keeps two cells stays, its list counted
+    let _ = std::fs::remove_file(&dst);
+    patch(&src, &dst, &[Edit::DeleteRows { sheet: "S".into(), at: 1, count: 1 }], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(r#"<mergeCells count="2"><mergeCell ref="B1:C1"/><mergeCell ref="E1:E2"/></mergeCells>"#), "{sheet}");
+}
+
+#[test]
+fn a_carriage_return_in_a_formula_or_a_name_reads_back_as_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("cr.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1" t="str"><f>"a_x000D_b"&amp;A1</f><v>a_x000D_b1</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let edits = vec![
+        rows("S", 1, 1),
+        Edit::Formula { sheet: "S".into(), cell: "C2".into(), formula: "=\"x\ry\"&A2".into(), expect: None },
+        Edit::SetName { name: "Cr".into(), formula: "\"p\rq\"".into(), scope: None },
+    ];
+    for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &edits, &options).unwrap();
+        let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+        assert!(sheet.contains(r#"<f>"a_x000D_b"&amp;A2</f>"#) && sheet.contains(r#"<f>"x_x000D_y"&amp;A2</f>"#), "{sheet}");
+        assert!(!sheet.contains('\r'));
+        assert!(part(&dst, "xl/workbook.xml").contains(r#"<definedName name="Cr">"p_x000D_q"</definedName>"#));
+        assert_eq!(read_back(&dst, "S", "B2"), Value::Text("a\rb1".into()));
+        assert_eq!(read_back(&dst, "S", "C2"), Value::Text("x\ry1".into()));
+    }
+}

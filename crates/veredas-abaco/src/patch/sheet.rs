@@ -214,7 +214,7 @@ fn text_element(name: &str, s: &str) -> String {
         } else {
             ""
         },
-        escape_text(s).replace('\r', "_x000D_")
+        escape_text(s)
     )
 }
 
@@ -1371,13 +1371,20 @@ fn rewrite_tail(tail: &str, job: &SheetJob, own: &[Shift]) -> Option<String> {
 const DROP_IF_GONE_TAG: &[&str] = &["mergeCell", "hyperlink", "ignoredError", "protectedRange", "sortCondition"];
 const DROP_IF_GONE_ELEMENT: &[&str] = &["conditionalFormatting", "dataValidation", "autoFilter", "sortState"];
 const FORMULA_TEXT: &[&str] = &["formula", "formula1", "formula2", "xm:f"];
-const X14_ELEMENTS: &[&str] = &["x14:conditionalFormatting", "x14:dataValidation"];
+const X14_ELEMENTS: &[&str] = &["x14:conditionalFormatting", "x14:dataValidation", "x14:protectedRange", "x14:ignoredError"];
 /// A list and what it lists (`""`: any element): dropped when the moves leave it none.
 const CONTAINERS: &[(&str, &str)] = &[
+    ("mergeCells", "mergeCell"),
+    ("hyperlinks", "hyperlink"),
+    ("protectedRanges", "protectedRange"),
+    ("ignoredErrors", "ignoredError"),
+    ("dataValidations", "dataValidation"),
     ("x14:sparklineGroup", "x14:sparkline"),
     ("x14:sparklineGroups", "x14:sparklineGroup"),
     ("x14:conditionalFormattings", "x14:conditionalFormatting"),
     ("x14:dataValidations", "x14:dataValidation"),
+    ("x14:protectedRanges", "x14:protectedRange"),
+    ("x14:ignoredErrors", "x14:ignoredError"),
     ("ext", ""),
     ("extLst", "ext"),
 ];
@@ -1524,8 +1531,15 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
                 } else {
                     shift_area_text(v, own)
                 };
+                // a merge cut down to one cell is no merge: Excel unmerges it
+                let one_cell = |n: &str| {
+                    name == "mergeCell" && refs::parse_area(n).is_some_and(|a| {
+                        let (r1, c1, r2, c2) = a.bounds();
+                        r1 == r2 && c1 == c2
+                    })
+                };
                 match new {
-                    Some(Some(n)) if !n.is_empty() => text = set_attr(&text, key, &n),
+                    Some(Some(n)) if !n.is_empty() && !one_cell(&n) => text = set_attr(&text, key, &n),
                     Some(_) => {
                         // gone: drop the element (and nothing of it lives on in what follows)
                         pos = xml::element_span(s, &t).map(|(_, b)| b).unwrap_or(t.end);
