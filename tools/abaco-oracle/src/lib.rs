@@ -114,7 +114,8 @@ pub enum Expected {
     Missing,
     /// A cache whose type and text Excel never pairs (a boolean that is neither 1 nor 0, an error
     /// none a file holds, a number that is none or not finite, a shared string or an inline one on
-    /// a formula, a type Excel writes for no formula): the raw text, equal to nothing.
+    /// a formula, a type Excel writes for no formula), or a `#VALUE!` whose value metadata does not
+    /// resolve to a rich value: the raw text, equal to nothing.
     Unwritten(String),
 }
 
@@ -507,6 +508,34 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
 fn xsd_trim(s: &str) -> &str {
     s.trim_matches([' ', '\t', '\n', '\r'])
 }
+
+/// XSD's `collapse` (an `xsd:token`, an `xsd:anyURI`): the ends trimmed and every inner run of its
+/// whitespace one space.
+fn xsd_collapse(s: &str) -> String {
+    s.split([' ', '\t', '\n', '\r']).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+/// The part a relationship of `xl/workbook.xml` targets, as OPC resolves it: its `Target`
+/// collapsed, against the package's root when it opens with `/`, against the workbook part's
+/// folder (`xl/`) otherwise, its `.` and `..` segments removed.
+fn workbook_target(target: &str) -> String {
+    let target = xsd_collapse(target);
+    let joined = match target.strip_prefix('/') {
+        Some(absolute) => absolute.to_string(),
+        None => format!("xl/{target}"),
+    };
+    let mut segments: Vec<&str> = Vec::new();
+    for segment in joined.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            other => segments.push(other),
+        }
+    }
+    segments.join("/")
+}
 static RE_STR: LazyLock<Regex> = LazyLock::new(|| re(r#""(?:[^"]|"")*""#));
 static RE_FN: LazyLock<Regex> = LazyLock::new(|| re(r"([A-Za-z_][A-Za-z0-9_.]*)\s*\("));
 static RE_EXT: LazyLock<Regex> = LazyLock::new(|| re(r"\[[0-9]+\]"));
@@ -617,13 +646,13 @@ const RICH_ERRORS: [(&str, &str); 2] = [("8", "#SPILL!"), ("13", "#CALC!")];
 /// What each value-metadata index (a cell's `vm`, from 1) says the cell's error is, where Excel
 /// wrote a `#SPILL!` or a `#CALC!` as `#VALUE!`: the metadata part's value metadata, its
 /// `XLRICHVALUE` entry, the rich value it points at, and that value's `errorType`; each part read
-/// by an XML parser.
-fn rich_errors(archive: &mut zip::ZipArchive<fs::File>, rels: &[(String, String)]) -> HashMap<usize, String> {
+/// by an XML parser, found through the workbook's relationships as OPC resolves them. An index
+/// whose chain resolves holds the error (`Some`), or `None` where its rich value is another
+/// (an image in a cell: the file's `#VALUE!` stands); an index that does not resolve is absent, and
+/// a `#VALUE!` pointing at it is not measured ([`expected_of`]).
+fn rich_errors(archive: &mut zip::ZipArchive<fs::File>, rels: &[(String, String)]) -> HashMap<usize, Option<String>> {
     let part = |kind: &str| -> Option<String> {
-        rels.iter().find(|(t, _)| t.ends_with(kind)).map(|(_, target)| match target.strip_prefix('/') {
-            Some(absolute) => absolute.to_string(),
-            None => format!("xl/{target}"),
-        })
+        rels.iter().find(|(t, _)| xsd_collapse(t).ends_with(kind)).map(|(_, target)| workbook_target(target))
     };
     let mut out = HashMap::new();
     let tree = |archive: &mut zip::ZipArchive<fs::File>, kind: &str| part(kind).and_then(|p| read_part(archive, &p)).and_then(|x| parse_tree(&x).ok());
@@ -650,7 +679,8 @@ fn rich_errors(archive: &mut zip::ZipArchive<fs::File>, rels: &[(String, String)
         .map(|bk| {
             bk.kids(&MAIN, "extLst")
                 .flat_map(|l| l.kids(&MAIN, "ext"))
-                .filter(|e| e.attr("uri").is_some_and(|u| u.eq_ignore_ascii_case(RICH_VALUE_EXT)))
+                // `uri` is an `xsd:token`: compared collapsed
+                .filter(|e| e.attr("uri").is_some_and(|u| xsd_collapse(u).eq_ignore_ascii_case(RICH_VALUE_EXT)))
                 .flat_map(|e| e.kids(&RICH_DATA, "rvb"))
                 .next()
                 .and_then(|r| index(r.attr("i")))
@@ -663,18 +693,19 @@ fn rich_errors(archive: &mut zip::ZipArchive<fs::File>, rels: &[(String, String)
     for (i, bk) in meta.kids(&MAIN, "valueMetadata").flat_map(|m| m.kids(&MAIN, "bk")).enumerate() {
         // a block's record of the rich-value type, wherever it stands among its records
         let Some(rc) = bk.kids(&MAIN, "rc").find(|rc| index(rc.attr("t")) == Some(rich_type)) else { continue };
-        let error = index(rc.attr("v"))
+        // the chain to a structure: a broken link anywhere leaves the index unresolved
+        let resolved = index(rc.attr("v"))
             .and_then(|v| future.get(v).copied().flatten())
             .and_then(|rv| rvs.get(rv))
-            .and_then(|(s, vals)| {
-                let (kind, keys) = structs.get((*s)?)?;
-                let at = keys.iter().position(|k| *k == "errorType").filter(|_| *kind == Some("_error"))?;
-                let code = vals.get(at)?;
-                RICH_ERRORS.iter().find(|(c, _)| c == code).map(|(_, e)| e.to_string())
-            });
-        if let Some(e) = error {
-            out.insert(i + 1, e);
-        }
+            .and_then(|(s, vals)| Some((structs.get((*s)?)?, vals)));
+        let Some(((kind, keys), vals)) = resolved else { continue };
+        let error = keys
+            .iter()
+            .position(|k| *k == "errorType")
+            .filter(|_| *kind == Some("_error"))
+            .and_then(|at| vals.get(at))
+            .and_then(|code| RICH_ERRORS.iter().find(|(c, _)| c == code).map(|(_, e)| e.to_string()));
+        out.insert(i + 1, error);
     }
     out
 }
@@ -689,11 +720,35 @@ fn open_zip(path: &Path) -> Result<zip::ZipArchive<fs::File>, OracleError> {
     zip::ZipArchive::new(file).map_err(|source| OracleError::Zip { path: path.to_path_buf(), source })
 }
 
+/// A part's text: found by its name, or in any letter case (OPC compares part names so); in UTF-8,
+/// or in UTF-16 when it opens with that byte-order mark (XML allows both), a UTF-8 one taken off.
 fn read_part(archive: &mut zip::ZipArchive<fs::File>, name: &str) -> Option<String> {
-    let mut entry = archive.by_name(name).ok()?;
-    let mut s = String::new();
-    entry.read_to_string(&mut s).ok()?;
-    Some(s)
+    let actual = if archive.index_for_name(name).is_some() {
+        name.to_string()
+    } else {
+        archive.file_names().filter_map(|n| n.ok().map(|n| n.to_string())).find(|n| n.eq_ignore_ascii_case(name))?
+    };
+    let mut entry = archive.by_name(&actual).ok()?;
+    let mut bytes = Vec::new();
+    entry.read_to_end(&mut bytes).ok()?;
+    decode_part(&bytes)
+}
+
+/// XML's two encodings by their byte-order mark: UTF-16 (little or big end) or UTF-8, the mark taken
+/// off; no mark, UTF-8.
+fn decode_part(bytes: &[u8]) -> Option<String> {
+    let utf16 = |rest: &[u8], unit: fn([u8; 2]) -> u16| -> Option<String> {
+        if rest.len() % 2 != 0 {
+            return None;
+        }
+        String::from_utf16(&rest.chunks_exact(2).map(|c| unit([c[0], c[1]])).collect::<Vec<u16>>()).ok()
+    };
+    match bytes {
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8(rest.to_vec()).ok(),
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        _ => String::from_utf8(bytes.to_vec()).ok(),
+    }
 }
 
 /// The names Microsoft Excel writes as its application, on Windows, on the Mac, online and on
@@ -739,7 +794,7 @@ pub fn corpus(dir: &Path) -> Result<Vec<PathBuf>, OracleError> {
 }
 
 /// The value Excel cached for a formula cell, from its type and its value as the parser read them.
-fn expected_of(c: &CellXml, rich: &HashMap<usize, String>) -> Expected {
+fn expected_of(c: &CellXml, rich: &HashMap<usize, Option<String>>) -> Expected {
     let never = |what: String| Expected::Unwritten(what);
     match (c.t.as_deref(), c.value.clone(), c.inline) {
         // a cell holds one value (CT_Cell): two value tags are no cache Excel writes
@@ -758,12 +813,17 @@ fn expected_of(c: &CellXml, rich: &HashMap<usize, String>) -> Expected {
             _ => never(v),
         },
         // an error a file holds; a `#VALUE!` with value metadata is the error the rich value names
-        // (Excel's `#SPILL!` and `#CALC!`)
+        // (Excel's `#SPILL!` and `#CALC!`), the `#VALUE!` itself where the rich value is another, and
+        // no measure where the metadata does not resolve: never a `#VALUE!` read by default
         (Some("e"), Some(v), false) => match FILE_ERRORS.iter().find(|e| **e == xsd_trim(&v)) {
-            Some(e) => {
-                let vm = c.vm.as_deref().and_then(|m| xsd_trim(m).parse::<usize>().ok());
-                Expected::Error(vm.and_then(|i| rich.get(&i).cloned()).filter(|_| *e == "#VALUE!").unwrap_or_else(|| e.to_string()))
+            Some(e) if *e == "#VALUE!" && c.vm.is_some() => {
+                match c.vm.as_deref().and_then(|m| xsd_trim(m).parse::<usize>().ok()).and_then(|i| rich.get(&i)) {
+                    Some(Some(rich_error)) => Expected::Error(rich_error.clone()),
+                    Some(None) => Expected::Error(e.to_string()),
+                    None => never(format!("a #VALUE! whose value metadata ({}) does not resolve", c.vm.as_deref().unwrap_or_default())),
+                }
             }
+            Some(e) => Expected::Error(e.to_string()),
             None => never(v),
         },
         // a number Excel can cache is finite: `inf`, `NaN`, `1E+999`, a word or nothing is none
@@ -801,20 +861,17 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
     let rels_tree = parse_tree(&rels_xml).map_err(|e| bad_xml("xl/_rels/workbook.xml.rels", e))?;
     let relationships: Vec<&Node> = rels_tree.kids(&PACKAGE_RELATIONSHIPS, "Relationship").collect();
     let rels: HashMap<String, String> =
-        relationships.iter().filter_map(|r| Some((r.attr("Id")?.to_string(), r.attr("Target")?.to_string()))).collect();
+        relationships.iter().filter_map(|r| Some((xsd_trim(r.attr("Id")?).to_string(), r.attr("Target")?.to_string()))).collect();
     // the relationships by their type, for the parts found that way (the metadata, rich data)
     let typed: Vec<(String, String)> =
-        relationships.iter().filter_map(|r| Some((r.attr("Type")?.to_string(), r.attr("Target")?.to_string()))).collect();
+        relationships.iter().filter_map(|r| Some((xsd_collapse(r.attr("Type")?), r.attr("Target")?.to_string()))).collect();
     let rich = rich_errors(&mut archive, &typed);
     let sheets: Vec<(String, String)> = workbook
         .kids(&MAIN, "sheets")
         .flat_map(|s| s.kids(&MAIN, "sheet"))
         .filter_map(|s| {
-            let target = rels.get(s.attr_in(&RELATIONSHIP_ID, "id")?).cloned().unwrap_or_default();
-            let part = match target.strip_prefix('/') {
-                Some(absolute) => absolute.to_string(),
-                None => format!("xl/{target}"),
-            };
+            let target = rels.get(xsd_trim(s.attr_in(&RELATIONSHIP_ID, "id")?)).cloned().unwrap_or_default();
+            let part = workbook_target(&target);
             Some((s.attr("name")?.to_string(), part))
         })
         .collect();

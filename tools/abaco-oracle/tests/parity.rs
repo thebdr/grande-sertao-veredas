@@ -546,6 +546,58 @@ fn the_workbook_its_relationships_and_rich_values_are_read_by_namespace_and_name
         rewrite_part(&isref, &copy, part, |t| edit(t));
         assert_eq!(measure(&copy, &mut probe), whole, "{what}");
     }
+    // the metadata and rich-value parts found as OPC resolves a relationship: `Type` and `Target`
+    // collapsed (`xsd:anyURI`), a relative target against the workbook part's folder with its dot
+    // segments, a part named in another case, a part in UTF-16
+    let meta_target = r#"Target="metadata.xml""#;
+    let meta_type = r#"relationships/sheetMetadata""#;
+    let rv_target = r#"Target="richData/rdrichvalue.xml""#;
+    let spellings: [(&str, &str, &str); 7] = [
+        ("a Type with a trailing space", meta_type, r#"relationships/sheetMetadata ""#),
+        ("a Target padded", meta_target, r#"Target=" metadata.xml ""#),
+        ("a Target with a dot segment", meta_target, r#"Target="./metadata.xml""#),
+        ("a Target up and back", meta_target, r#"Target="../xl/metadata.xml""#),
+        ("a Target absolute", meta_target, r#"Target="/xl/metadata.xml""#),
+        ("a rich value's Target with a dot segment", rv_target, r#"Target="./richData/rdrichvalue.xml""#),
+        ("a Target in another case", meta_target, r#"Target="METADATA.xml""#),
+    ];
+    for (i, (what, from, to)) in spellings.iter().enumerate() {
+        let copy = planted.path().join(format!("opc-{i}.xlsx"));
+        rewrite_part(&isref, &copy, rels, |t| t.replacen(from, to, 1));
+        assert_eq!(measure(&copy, &mut probe), whole, "{what}");
+    }
+    let copy = planted.path().join("utf16.xlsx");
+    rewrite_part_bytes(&isref, &copy, "xl/metadata.xml", |b| {
+        let text = String::from_utf8(b.to_vec()).unwrap().replacen(r#"encoding="UTF-8""#, r#"encoding="UTF-16""#, 1);
+        [0xFF, 0xFE].into_iter().chain(text.encode_utf16().flat_map(u16::to_le_bytes)).collect()
+    });
+    assert_eq!(measure(&copy, &mut probe), whole, "the metadata part in UTF-16");
+    // D2, a `#VALUE!` the engine computes as `#VALUE!`, given D7's value metadata (Excel's `#CALC!`):
+    // one mismatch however the relationship is spelled; with no metadata part to resolve it, D2, D7
+    // and D9 are none Excel wrote, never a `#VALUE!` read by default
+    let sheet = sheet_of(&isref, "D7", |e| *e == abaco_oracle::Expected::Error("#CALC!".into()));
+    let with_vm = |from: &Path, to: &Path| rewrite_cell(from, to, &sheet, "D2", |open, inner| format!(r#"{open} vm="1">{inner}"#));
+    for (i, (what, from, to)) in [spellings[0], spellings[2]].iter().enumerate() {
+        let spelled = planted.path().join(format!("vm-spelled-{i}.xlsx"));
+        rewrite_part(&isref, &spelled, rels, |t| t.replacen(from, to, 1));
+        let copy = planted.path().join(format!("vm-{i}.xlsx"));
+        with_vm(&spelled, &copy);
+        let (wrong, cells, matched) = mismatches(&copy, &mut probe);
+        assert_eq!((cells, matched), (whole.0, whole.1 - 1), "{what}");
+        assert!(wrong.contains(&format!("{sheet}!D2")), "{what}: {wrong:?}");
+    }
+    let unresolved = planted.path().join("no-metadata.xlsx");
+    rewrite_part(&isref, &unresolved, rels, |t| t.replacen(meta_type, r#"relationships/notMetadata""#, 1));
+    let copy = planted.path().join("vm-unresolved.xlsx");
+    with_vm(&unresolved, &copy);
+    let raw = scan_raw(&copy).unwrap();
+    for reference in ["D2", "D7", "D9"] {
+        let expected = &raw.formula_cells.iter().find(|c| c.reference == reference).unwrap().expected;
+        assert!(matches!(expected, abaco_oracle::Expected::Unwritten(why) if why.contains("does not resolve")), "{reference}: {expected:?}");
+    }
+    let (wrong, cells, matched) = mismatches(&copy, &mut probe);
+    assert_eq!((cells, matched), (whole.0, whole.1 - 3));
+    assert!(["D2", "D7", "D9"].iter().all(|r| wrong.contains(&format!("{sheet}!{r}"))), "{wrong:?}");
     // an attribute of another namespace named `id` before the sheet's `r:id`: the part is the one
     // the relationships namespace names
     let mround = dir.join("calc_tests/MATH_AND_TRIGONOMETRY/MROUND_TRUNC_INT.xlsx");
@@ -619,6 +671,22 @@ fn a_cell_and_a_rich_value_are_read_where_the_schema_puts_them() {
         let (wrong, cells_now, matched_now) = mismatches(&copy, &mut probe);
         assert_eq!((cells_now, matched_now), (cells, matched - 1), "{bk}");
         assert!(wrong.contains(&format!("{sheet}!D7")), "{wrong:?}");
+    }
+    // the extension's `uri` is an `xsd:token`: padded with spaces or line feeds it is the same; D2
+    // given D7's metadata is then one mismatch, never a `#VALUE!` read by default
+    for (i, pad) in [" ", "\n  "].into_iter().enumerate() {
+        let copy = planted.path().join(format!("uri-{i}.xlsx"));
+        rewrite_part(&isref, &copy, "xl/metadata.xml", |t| t.replace(&format!(r#"uri="{ext}""#), &format!(r#"uri="{pad}{ext}{pad}""#)));
+        let (_, cells_now, matched_now) = mismatches(&copy, &mut probe);
+        assert_eq!((cells_now, matched_now), (cells, matched), "uri padded {pad:?}");
+        let raw = scan_raw(&copy).unwrap();
+        let at = |r: &str| raw.formula_cells.iter().find(|c| c.reference == r).unwrap().expected.clone();
+        assert_eq!((at("D7"), at("D9")), (abaco_oracle::Expected::Error("#CALC!".into()), abaco_oracle::Expected::Error("#SPILL!".into())));
+        let planted_vm = planted.path().join(format!("uri-vm-{i}.xlsx"));
+        rewrite_cell(&copy, &planted_vm, &sheet, "D2", |open, inner| format!(r#"{open} vm="1">{inner}"#));
+        let (wrong, cells_now, matched_now) = mismatches(&planted_vm, &mut probe);
+        assert_eq!((cells_now, matched_now), (cells, matched - 1), "uri padded {pad:?}, D2 given vm");
+        assert!(wrong.contains(&format!("{sheet}!D2")), "{wrong:?}");
     }
     // a block holding another type's record before the rich value's: the rich value's still read
     let copy = planted.path().join("records.xlsx");
@@ -723,6 +791,28 @@ fn rewrite_part(from: &Path, to: &Path, part: &str, edit: impl Fn(&str) -> Strin
             assert_ne!(replaced, text, "{part} unchanged");
             changed += 1;
             bytes = replaced.into_bytes();
+        }
+        writer.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&bytes).unwrap();
+    }
+    writer.finish().unwrap();
+    assert_eq!(changed, 1);
+}
+
+/// As [`rewrite_part`], the part's bytes passed through `edit`.
+fn rewrite_part_bytes(from: &Path, to: &Path, part: &str, edit: impl Fn(&[u8]) -> Vec<u8>) {
+    let out = std::fs::File::create(to).unwrap();
+    let mut writer = zip::ZipWriter::new(out);
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(from).unwrap()).unwrap();
+    let mut changed = 0;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).unwrap();
+        let name = entry.name().unwrap().to_string();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        if name == part {
+            bytes = edit(&bytes);
+            changed += 1;
         }
         writer.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
         writer.write_all(&bytes).unwrap();
