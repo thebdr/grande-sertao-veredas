@@ -1,0 +1,18 @@
+{
+  "clause": "C-292",
+  "verdict": "holds",
+  "ranAt": "2026-11-23T09:19:09.963Z",
+  "headCommit": "a4b59872664216db626ec9cbc1c39404e0ae4f21",
+  "tests": [
+    {
+      "name": "tools/entrega/tests/prova.rs",
+      "file": "tools/entrega/tests/prova.rs",
+      "symbolSha": "e0539dad1cd16cc11bcae0a39fa4dd553110d02c0b694999563b5f74cacf7693"
+    },
+    {
+      "name": "tools/entrega/tests/maquina.rs",
+      "file": "tools/entrega/tests/maquina.rs",
+      "symbolSha": "6a28d7a18d49da1c2748164c0f8a21db00c19280a6f74d19d61ec4d0410acb6e"
+    }
+  ]
+}
