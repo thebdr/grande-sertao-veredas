@@ -10,15 +10,15 @@
     "envelope"
   ],
   "exitCode": 0,
-  "outputSha": "2cf3639dac1d6034d156c8fe6fd052a623791f8bd1dcae41a03ed957ecef3a5e",
-  "outputTail": "test a_short_frame_is_an_error_that_says_its_length ... ok\ntest a_mac_refuses_every_other_spelling_with_the_text_it_got ... ok\ntest a_tagged_frame_carries_its_priority_drop_bit_and_vlan ... ok\ntest a_mac_reads_its_three_spellings_in_either_case_and_prints_one ... ok\ntest an_untagged_frame_is_built_padded_and_read_back_exactly ... ok\ntest group_addresses_are_never_one_device ... ok\ntest what_the_wire_cannot_carry_is_refused_never_cut ... ok\ntest a_mac_serialises_as_its_printed_form ... ok\ntest the_dissectors_read_the_envelope_as_it_was_written ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s\n     Running tests/envelope.rs (target/debug/build/veredas-aranha/c06cc32498f736bd/out/envelope-c06cc32498f736bd)",
-  "ranAt": "2026-11-22T21:22:30.102Z",
-  "headCommit": "71f3513e2f727624b76ab240ddd1133d26c26923",
+  "outputSha": "e9c7879db55cd615b2c20785e0401fb5323fde754a42f74917e19fe3abbb65a2",
+  "outputTail": "test a_length_field_is_read_as_a_length_never_as_an_ethertype ... ok\ntest a_short_frame_is_an_error_that_says_its_length ... ok\ntest what_the_wire_cannot_carry_is_refused_never_cut ... ok\ntest a_mac_refuses_every_other_spelling_with_the_text_it_got ... ok\ntest a_mac_serialises_as_its_printed_form ... ok\ntest a_tagged_frame_carries_its_priority_drop_bit_and_vlan ... ok\ntest an_untagged_frame_is_built_padded_and_read_back_exactly ... ok\ntest group_addresses_are_never_one_device ... ok\ntest a_mac_reads_its_three_spellings_in_either_case_and_prints_one ... ok\ntest the_dissectors_read_the_envelope_as_it_was_written ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s\n     Running tests/envelope.rs (target/debug/build/veredas-aranha/c06cc32498f736bd/out/envelope-c06cc32498f736bd)",
+  "ranAt": "2026-11-23T00:55:45.232Z",
+  "headCommit": "25e7cb21989fa98c650c25da87c87064c943b233",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/envelope.rs",
       "file": "crates/veredas-aranha/tests/envelope.rs",
-      "fileSha": "e72c1e739844ef104fc2356c56ae610c576cb77fc9b6e109e4354c65da8a4a67"
+      "fileSha": "5bacd8f98444dcbf0a56325bdd96396ff51aae5823e2207cf19bb559ca74d7f5"
     },
     {
       "name": "crates/veredas-aranha/tests/common/mod.rs",
