@@ -890,7 +890,6 @@ fn the_sources_read_as_compiled_hold_only_the_words_the_clause_allows() {
             "env",
             "option_env",
             "unwrap",
-            "expect",
             "todo",
             "unimplemented",
             "unreachable",
@@ -901,6 +900,9 @@ fn the_sources_read_as_compiled_hold_only_the_words_the_clause_allows() {
         ] {
             assert_eq!(count(&all, refused), 0, "{file} holds {refused}");
         }
+        // `expect` only as a lint attribute, never as a call
+        let expect_attributes = code.matches("# [ expect (").count() + code.matches("# ! [ expect (").count();
+        assert_eq!(count(&all, "expect"), expect_attributes, "{file} holds `expect` as no lint attribute");
         // `panic` once, among the root's denied lints, which are compared line by line
         assert_eq!(count(&all, "panic"), usize::from(file == "lib.rs"), "{file} names `panic`");
         for refused in ["assert", "assert_eq", "assert_ne", "assert_matches"] {
@@ -946,6 +948,8 @@ mod tests {
     fn t() { let _ = "impl {"; let _ = '}'; }
 }
 pub fn after() {}
+#[expect(dead_code)]
+fn called() { let _ = Some(1).expect("x"); }
 "####;
     let code = code_of(source);
     let (library, tests_module) = library_and_tests(source);
@@ -957,6 +961,7 @@ pub fn after() {}
         assert!(!library_words.contains(&gone), "{gone} is a comment's or a literal's");
     }
     assert_eq!(code.matches(TESTS_SITE).count(), 1, "cfg(test) found however spaced");
+    assert_eq!((code.matches("# [ expect (").count(), code.matches(". expect (").count()), (1, 1), "an attribute, a call");
     assert!(is_tests_module(&tests_module), "on the module, after another attribute");
     let module_words = words(&tests_module);
     assert!(module_words.contains(&"t") && !module_words.contains(&"after"), "the module ends at its brace");
@@ -1069,7 +1074,9 @@ fn every_timer_is_judged_on_each_scan_against_that_scan_s_preset_time() {
     assert_eq!(ton(50, 40), (true, ms(40)), "pt lowered below the elapsed time: on at once, et at the new pt");
     assert_eq!(ton(60, 100), (false, ms(60)), "pt raised past it: off again");
     assert_eq!(ton(100, 100), (true, ms(100)));
-    assert_eq!(ton(150, 200), (false, ms(150)), "raised after switching on: off");
+    assert_eq!(ton(120, 50), (true, ms(50)), "lowered after switching on: on, et at the new pt");
+    assert_eq!(ton(130, 110), (true, ms(110)), "raised after switching on, below the elapsed time: on, et at it");
+    assert_eq!(ton(150, 200), (false, ms(150)), "raised after switching on past the elapsed time: off");
     assert_eq!(ton(200, 200), (true, ms(200)));
     // an off-delay dropped at 10 ms
     let mut off = Tof::default();
@@ -1079,7 +1086,8 @@ fn every_timer_is_judged_on_each_scan_against_that_scan_s_preset_time() {
     assert_eq!(tof(60, false, 200), (true, ms(50)), "pt raised: still on");
     assert_eq!(tof(120, false, 200), (true, ms(110)), "past the old pt: still on");
     assert_eq!(tof(130, false, 100), (false, ms(100)), "pt lowered below the elapsed time: off at once, et at the new pt");
-    assert_eq!(tof(140, false, 300), (false, ms(100)), "once off, its elapsed time held at the pt it switched off at");
+    assert_eq!(tof(135, false, 50), (false, ms(100)), "once off, lowered: its elapsed time held at the pt it switched off at");
+    assert_eq!(tof(140, false, 300), (false, ms(100)), "once off, raised: held at it all the same");
     // a pulse from an edge at 0, its input held on
     let mut pulse = Tp::default();
     let mut tp = |t: u64, input: bool, pt: u64| (pulse.scan(&at(t), input, ms(pt)), pulse.et());
@@ -1087,6 +1095,8 @@ fn every_timer_is_judged_on_each_scan_against_that_scan_s_preset_time() {
     assert_eq!(tp(50, true, 40), (false, ms(40)), "pt lowered below the elapsed time: over at once");
     assert_eq!(tp(60, true, 100), (true, ms(60)), "raised past it, the input still on: on again (Q229)");
     assert_eq!(tp(100, true, 100), (false, ms(100)));
+    assert_eq!(tp(120, true, 50), (false, ms(50)), "held after the pulse, lowered: over, et at the new pt");
+    assert_eq!(tp(130, true, 110), (false, ms(110)), "raised below the elapsed time: over, et at it");
     assert_eq!(tp(150, true, 200), (true, ms(150)), "raised after the pulse, the input on: on again, no new edge (Q229)");
     assert_eq!(tp(160, false, 200), (true, ms(160)), "its input off: on to the raised pt");
     assert_eq!(tp(200, false, 200), (false, ms(0)), "over, its input off: reset");
