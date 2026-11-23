@@ -8,11 +8,13 @@
 //!   verdict, keep the run under `<folder>/<id>/<nnnn>/` (`runs` beside the test by default).
 //! - `replay <test> --project <project.toml> --from <moment> --to <moment> [--runs <folder>]`: the
 //!   same over the window of the session's store between the two moments (`YYYY-MM-DD HH:MM[:SS[.mmm]]`
-//!   on the plant's clock), the store holding what the project's start reads into it.
+//!   on the plant's clock), once the store holds what the project's start reads into it.
 //!
-//! Exit codes: 0 the file is sound or the run passed; 1 the file has problems or the run failed;
-//! 2 the command line is wrong; 3 the run was aborted; 4 the run was refused before it started, or
-//! the project or its session could not start.
+//! Each option is given once, followed by its value. Exit codes: 0 the file is sound or the run
+//! passed; 1 the file has problems or the run failed; 2 the command line is wrong; 3 the run was
+//! aborted; 4 the run was refused before it started (its folder cannot be made, the project or its
+//! session cannot start, the store is still being read in, the engine refuses it), nothing run and
+//! nothing kept; 5 the run ran, its verdict printed, but could not be kept.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -27,9 +29,14 @@ const USAGE: &str = "usage: veredas-comissionador check <file.test | file.fn>
        veredas-comissionador run <file.test> --project <project.toml> [--runs <folder>]
        veredas-comissionador replay <file.test> --project <project.toml> --from <moment> --to <moment> [--runs <folder>]";
 
-/// How long a run waits for the session's OPC UA sources and channels to read live before it
-/// starts anyway (its waits and its binding say what is missing).
+/// How long a live run waits for the session's OPC UA sources and channels to read live before it
+/// starts anyway (its waits and its binding say what is missing); how long a replay waits for
+/// every log to read its first line (an empty log has none).
 const READY: Duration = Duration::from_secs(30);
+
+/// How long a replay waits for the project's start to finish reading into the store before it is
+/// refused.
+const READ_IN: Duration = Duration::from_secs(600);
 
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
@@ -91,32 +98,35 @@ fn moment(text: &str) -> Option<i64> {
         .map(|t| t.and_utc().timestamp_millis())
 }
 
-/// `run` and `replay`: their options read, the test checked, the session started, the test run
-/// and kept.
+/// `run` and `replay`: their options read, the test checked, its folder made, the session started,
+/// the test run and kept.
 fn go(args: &[String]) -> ExitCode {
     let replay = args[0] == "replay";
-    let Some(test) = args.get(1) else { return usage() };
-    let (mut project, mut runs, mut from, mut to) = (None, None, None, None);
+    let Some(test) = args.get(1).filter(|t| !t.starts_with("--")) else { return usage() };
+    // Each option once, its value the word after it, never another option.
+    const OPTIONS: [&str; 4] = ["--project", "--runs", "--from", "--to"];
+    let mut values: [Option<String>; 4] = Default::default();
     let mut i = 2;
     while i < args.len() {
-        let value = args.get(i + 1).cloned();
-        match (args[i].as_str(), value) {
-            ("--project", Some(v)) => project = Some(PathBuf::from(v)),
-            ("--runs", Some(v)) => runs = Some(PathBuf::from(v)),
-            ("--from", Some(v)) if replay => from = moment(&v).or_else(|| Some(i64::MIN)),
-            ("--to", Some(v)) if replay => to = moment(&v).or_else(|| Some(i64::MIN)),
-            _ => return usage(),
+        let Some(k) = OPTIONS.iter().position(|o| *o == args[i]) else { return usage() };
+        if (k >= 2 && !replay) || values[k].is_some() {
+            return usage();
         }
+        let Some(value) = args.get(i + 1).filter(|v| !v.starts_with("--")) else { return usage() };
+        values[k] = Some(value.clone());
         i += 2;
     }
-    let Some(project) = project else { return usage() };
+    let [project, runs, from, to] = values;
+    let Some(project) = project.map(PathBuf::from) else { return usage() };
     let mode = match (replay, from, to) {
-        (false, None, None) => RunOptions::live(),
-        (true, Some(f), Some(t)) if f != i64::MIN && t != i64::MIN => RunOptions::replay(f, t),
-        (true, Some(_), Some(_)) => {
-            eprintln!("a moment is `YYYY-MM-DD HH:MM[:SS[.mmm]]` on the plant's clock");
-            return ExitCode::from(2);
-        }
+        (false, ..) => RunOptions::live(),
+        (true, Some(f), Some(t)) => match (moment(&f), moment(&t)) {
+            (Some(f), Some(t)) => RunOptions::replay(f, t),
+            _ => {
+                eprintln!("a moment is `YYYY-MM-DD HH:MM[:SS[.mmm]]` on the plant's clock");
+                return ExitCode::from(2);
+            }
+        },
         _ => return usage(),
     };
     let test_path = Path::new(test);
@@ -124,7 +134,16 @@ fn go(args: &[String]) -> ExitCode {
         Ok(c) => c,
         Err(ps) => return problems(ps),
     };
-    let runs = runs.unwrap_or_else(|| test_path.parent().map(Path::to_path_buf).unwrap_or_default().join("runs"));
+    let runs = runs.map(PathBuf::from).unwrap_or_else(|| test_path.parent().map(Path::to_path_buf).unwrap_or_default().join("runs"));
+    // The test's folder made before anything runs: a run that could not be kept is refused, the
+    // plant untouched.
+    let folder = record::test_folder(&runs, &c)
+        .map_err(|e| e.to_string())
+        .and_then(|d| std::fs::create_dir_all(&d).map_err(|e| format!("{}: {e}", d.display())));
+    if let Err(e) = folder {
+        eprintln!("the run cannot be kept: {e}");
+        return ExitCode::from(4);
+    }
 
     // The plant's portal session, started from its project file in this process.
     let loaded = match veredas_portal::project::load_file(&project) {
@@ -142,29 +161,41 @@ fn go(args: &[String]) -> ExitCode {
         }
     };
     let live = session.live();
-    // The OPC UA sources and the channels read live first, or the wait ends; a log reads when its
-    // lines come. A replay waits too for what the project's start reads into the store: until the
-    // ingest's count of lines holds still across two refreshes.
+    let health = |id: &str, ok: &dyn Fn(&HealthState) -> bool| live.health.read().map(|h| h.get(id).is_some_and(|h| ok(&h.state))).unwrap_or(false);
     let started = Instant::now();
-    let mut lines = None;
-    while started.elapsed() < READY {
-        let ready = live
-            .sources
-            .iter()
-            .filter(|s| s.kind != "log")
-            .all(|s| live.health.read().map(|h| h.get(&s.id).is_some_and(|h| h.state == HealthState::Live)).unwrap_or(false));
-        let settled = if replay {
-            let now = live.counters.read().map(|c| c.lines).unwrap_or(0);
-            let still = lines == Some(now);
-            lines = Some(now);
-            still
-        } else {
-            true
-        };
-        if ready && settled {
-            break;
+    if replay {
+        // A replay reads the store: every log has read its first line, or READY has passed (an
+        // empty log reads none); then the ingest's count of lines holds still across two of
+        // portal's refreshes, each known by a new count of the pump's passes.
+        let logs: Vec<&str> = live.sources.iter().filter(|s| s.kind == "log").map(|s| s.id.as_str()).collect();
+        while started.elapsed() < READY && !logs.iter().all(|id| health(id, &|s| *s != HealthState::Waiting)) {
+            std::thread::sleep(Duration::from_millis(100));
         }
-        std::thread::sleep(Duration::from_millis(if replay { 600 } else { 100 }));
+        let (mut last, mut still) = (None::<(u64, u64)>, 0);
+        let begun = Instant::now();
+        while still < 2 {
+            let (lines, passes) = live.counters.read().map(|c| (c.lines, c.passes)).unwrap_or((0, 0));
+            match last {
+                Some((l, p)) if p != passes => {
+                    still = if l == lines { still + 1 } else { 0 };
+                    last = Some((lines, passes));
+                }
+                None => last = Some((lines, passes)),
+                _ => {}
+            }
+            if still < 2 && begun.elapsed() >= READ_IN {
+                eprintln!("the store was still being read in after {} s ({lines} lines): the replay is refused", READ_IN.as_secs());
+                return ExitCode::from(4);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    } else {
+        // A live run: the OPC UA sources and the channels read live first, or READY passes; a log
+        // reads when its lines come.
+        let sources: Vec<&str> = live.sources.iter().filter(|s| s.kind != "log").map(|s| s.id.as_str()).collect();
+        while started.elapsed() < READY && !sources.iter().all(|id| health(id, &|s| *s == HealthState::Live)) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
     let plant = match LivePlant::new(live) {
         Ok(p) => p,
@@ -198,7 +229,7 @@ fn go(args: &[String]) -> ExitCode {
         Ok(folder) => println!("kept: {}", folder.display()),
         Err(e) => {
             eprintln!("the run was not kept: {e}");
-            return ExitCode::from(4);
+            return ExitCode::from(5);
         }
     }
     match r.verdict {

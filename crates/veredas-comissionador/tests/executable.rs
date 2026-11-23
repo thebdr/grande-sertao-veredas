@@ -41,7 +41,24 @@ fn check_reads_a_file_and_names_its_problems() {
     let (code, _, stderr) = out(&exe(dir.path(), &["check", "none.test"]));
     assert_eq!(code, 1);
     assert!(stderr[0].starts_with("none.test:1:1: cannot be read: "), "{stderr:?}");
-    for args in [&[][..], &["check"], &["check", "a", "b"], &["verify", "a"], &["run", "chk-012.test"], &["replay", "chk-012.test", "--project", "p.toml"]] {
+    // A command line that is wrong: no command, an unknown one, a missing file or option, an option
+    // without its value (the next word another option), an option given twice, a replay's option
+    // to a run.
+    let wrong: [&[&str]; 12] = [
+        &[],
+        &["check"],
+        &["check", "a", "b"],
+        &["verify", "a"],
+        &["run", "chk-012.test"],
+        &["replay", "chk-012.test", "--project", "p.toml"],
+        &["run", "--project", "p.toml"],
+        &["run", "chk-012.test", "--project", "--runs"],
+        &["run", "chk-012.test", "--runs", "--from", "--project", "p.toml"],
+        &["run", "chk-012.test", "--project", "p.toml", "--project", "p.toml"],
+        &["replay", "chk-012.test", "--project", "p.toml", "--from", "2026-11-23 10:00", "--from", "2026-11-23 10:01", "--to", "2026-11-23 10:02"],
+        &["run", "chk-012.test", "--project", "p.toml", "--from", "2026-11-23 10:00"],
+    ];
+    for args in wrong {
         let (code, _, stderr) = out(&exe(dir.path(), args));
         assert_eq!(code, 2, "{args:?}");
         assert!(stderr[0].starts_with("usage: veredas-comissionador check"), "{args:?}: {stderr:?}");
@@ -112,7 +129,56 @@ fn replay_reads_the_window_the_project_s_start_fills() {
     let r = record::read(&dir.path().join("runs/t/0001")).unwrap();
     assert_eq!((r.run.mode.as_str(), r.reported[0].text.as_str()), ("replay", "readings.temp = 25"));
     assert_eq!(r.evidence[0].rows, 6, "the lines of the run's window: from its start to the stamp it ended on");
+    // A folder the run cannot be kept in: refused before the session starts, nothing run.
+    std::fs::write(dir.path().join("afile"), "").unwrap();
+    let (code, stdout, stderr) = out(&exe(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &t0, "--to", &t9, "--runs", "afile"]));
+    assert_eq!((code, stdout.len()), (4, 0), "{stderr:?}");
+    assert!(stderr[0].starts_with(&format!("the run cannot be kept: {}: ", Path::new("afile/t").display())), "{stderr:?}");
+    // A run that ran but could not be kept: its verdict printed, 5.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let shut = dir.path().join("shut");
+        std::fs::create_dir_all(shut.join("t")).unwrap();
+        std::fs::set_permissions(shut.join("t"), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let (code, stdout, stderr) = out(&exe(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &t0, "--to", &t9, "--runs", "shut"]));
+        std::fs::set_permissions(shut.join("t"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!((code, stdout.last().map(String::as_str)), (5, Some("passed at r: the run passed its last step")), "{stderr:?}");
+        assert!(stderr[0].starts_with("the run was not kept: "), "{stderr:?}");
+        assert_eq!(std::fs::read_dir(shut.join("t")).unwrap().count(), 0);
+    }
     // A moment that is none: the command line's fault.
     let (code, _, stderr) = out(&exe(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", "yesterday", "--to", &t9]));
     assert_eq!((code, stderr[0].as_str()), (2, "a moment is `YYYY-MM-DD HH:MM[:SS[.mmm]]` on the plant's clock"));
 }
+
+#[test]
+fn a_replay_waits_until_the_store_holds_what_the_start_reads() {
+    // A log of 200 000 lines 20 ms apart, the last an hour old and the only one at 999: read in
+    // over several of portal's refreshes, the window its last five seconds.
+    let dir = tempfile::tempdir().unwrap();
+    let last = veredas_portal::serve::store_now_ms() - 3_600_000;
+    let n = 200_000;
+    let mut log = String::with_capacity(n as usize * 34);
+    for i in 0..n {
+        let at = chrono::DateTime::from_timestamp_millis(last - (n - 1 - i) * 20).unwrap().naive_utc();
+        log.push_str(&format!("{} temp={}\n", at.format("%Y-%m-%d %H:%M:%S%.3f"), if i == n - 1 { "999.0" } else { "20.0" }));
+    }
+    std::fs::write(dir.path().join("plant.log"), log).unwrap();
+    std::fs::write(
+        dir.path().join("project.toml"),
+        "format = \"veredas-project\"\nversion = 1\nname = \"the log\"\n\n[session]\nstart = { last_hours = 2 }\n\n[[log]]\nid = \"plant\"\nfile = \"plant.log\"\ntimestamp = { pattern = \"^(?P<ts>\\\\S+ \\\\S+)\", formats = [\"%Y-%m-%d %H:%M:%S%.3f\"] }\n\n[[rule]]\nname = \"readings\"\npattern = \"temp=(?P<temp>[0-9.]+)\"\nscope = \"plant\"\ntypes = { temp = \"float\" }\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("t.test"), test_of("  step w wait readings.temp >= 999.0 timeout 1min\n  step r report readings.temp\n")).unwrap();
+    let from = veredas_comissionador::eval::time_text(last - 5_000);
+    let to = veredas_comissionador::eval::time_text(last + 1_000);
+    // Twice, the same: the wait met at the last line, its window's 251 lines kept.
+    for k in 1..=2 {
+        let (code, stdout, stderr) = out(&exe(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &from, "--to", &to]));
+        assert_eq!(code, 0, "replay {k}: {stdout:?} {stderr:?}");
+        let r = record::read(&dir.path().join(format!("runs/t/000{k}"))).unwrap();
+        assert_eq!((r.reported[0].text.as_str(), r.evidence[0].rows), ("readings.temp = 999", 251), "replay {k}");
+    }
+}
+
