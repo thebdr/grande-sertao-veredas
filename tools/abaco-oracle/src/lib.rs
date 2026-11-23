@@ -162,6 +162,8 @@ const PACKAGE_RELATIONSHIPS: [&str; 1] = ["http://schemas.openxmlformats.org/pac
 /// Excel's rich data (the rich values, their structures, the metadata's `rvb`).
 const RICH_DATA: [&str; 1] = ["http://schemas.microsoft.com/office/spreadsheetml/2017/richdata"];
 const XML_NAMESPACE: &str = "http://www.w3.org/XML/1998/namespace";
+/// The `uri` of the metadata extension that holds a block's rich-value index.
+const RICH_VALUE_EXT: &str = "{3e2802c4-a4d2-4d8b-9148-e3be6c30e623}";
 
 /// The namespace declarations in scope while a part is read: (depth, prefix, URI), the default
 /// namespace's prefix empty.
@@ -385,22 +387,34 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
         Value,
     }
     let mut into = Into::Nothing;
+    // a cell is `worksheet/sheetData/row/c` exactly, its formula, values and inline string its own
+    // children: one inside an extension (an `ext` Excel does not know) is none
+    let at = |path: &[String], want: &[&str]| path.len() == want.len() && path.iter().zip(want).all(|(p, w)| p == w);
     let start = |name: &str, attrs: &[(String, String, String)], path: &[String], cell: &mut Option<CellXml>, empty: bool, into: &mut Into| {
         let get = |n: &str| attrs.iter().find(|(ns, l, _)| ns.is_empty() && l == n).map(|(_, _, v)| v.clone());
-        let parent = path.last().map(String::as_str);
-        if name == "c" && parent == Some("row") && path.iter().any(|p| p == "sheetData") {
+        if name == "c" && at(path, &["worksheet", "sheetData", "row"]) {
             *cell = Some(CellXml { reference: get("r"), t: get("t"), vm: get("vm"), ..CellXml::default() });
             return;
         }
         let Some(c) = cell.as_mut() else { return };
-        match (name, parent) {
-            ("f", Some("c")) => {
+        let in_cell = at(path, &["worksheet", "sheetData", "row", "c"]);
+        let in_text = path.len() > 4 && at(&path[..4], &["worksheet", "sheetData", "row", "c"]) && matches!(path[4].as_str(), "f" | "v");
+        if in_text {
+            // an element where the schema has text
+            c.broken = true;
+            return;
+        }
+        if !in_cell {
+            return;
+        }
+        match name {
+            "f" => {
                 c.formula = Some((get("t"), get("si"), String::new()));
                 if !empty {
                     *into = Into::Formula;
                 }
             }
-            ("v", Some("c")) => {
+            "v" => {
                 c.values += 1;
                 if c.values == 1 {
                     c.value = Some(String::new());
@@ -409,8 +423,7 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
                     }
                 }
             }
-            ("is", Some("c")) => c.inline = true,
-            (_, Some("f") | Some("v")) => c.broken = true,
+            "is" => c.inline = true,
             _ => {}
         }
     };
@@ -436,7 +449,7 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
                     continue;
                 }
                 start(&name, &attrs, &path, &mut cell, true, &mut into);
-                if name == "c" && let Some(c) = cell.take() {
+                if name == "c" && at(&path, &["worksheet", "sheetData", "row"]) && let Some(c) = cell.take() {
                     cells.push(c);
                 }
             }
@@ -448,10 +461,10 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
                     continue;
                 }
                 let name = path.pop().unwrap_or_default();
-                if name == "f" || name == "v" {
+                if (name == "f" || name == "v") && path.len() == 4 {
                     into = Into::Nothing;
                 }
-                if name == "c" && let Some(c) = cell.take() {
+                if name == "c" && at(&path, &["worksheet", "sheetData", "row"]) && let Some(c) = cell.take() {
                     cells.push(c);
                 }
             }
@@ -632,17 +645,24 @@ fn rich_errors(archive: &mut zip::ZipArchive<fs::File>, rels: &[(String, String)
         .kids(&MAIN, "futureMetadata")
         .filter(|f| f.attr("name") == Some("XLRICHVALUE"))
         .flat_map(|f| f.kids(&MAIN, "bk"))
-        .map(|bk| bk.descendants(&RICH_DATA, "rvb").first().and_then(|r| index(r.attr("i"))))
+        // the block's rich-value extension alone (`extLst/ext` of Excel's rich-data uri, its `rvb`):
+        // an extension of another uri, an element of another namespace, is none Excel reads
+        .map(|bk| {
+            bk.kids(&MAIN, "extLst")
+                .flat_map(|l| l.kids(&MAIN, "ext"))
+                .filter(|e| e.attr("uri").is_some_and(|u| u.eq_ignore_ascii_case(RICH_VALUE_EXT)))
+                .flat_map(|e| e.kids(&RICH_DATA, "rvb"))
+                .next()
+                .and_then(|r| index(r.attr("i")))
+        })
         .collect();
     let structs: Vec<(Option<&str>, Vec<&str>)> =
         structures.kids(&RICH_DATA, "s").map(|s| (s.attr("t"), s.kids(&RICH_DATA, "k").filter_map(|k| k.attr("n")).collect())).collect();
     let rvs: Vec<(Option<usize>, Vec<&str>)> =
         values.kids(&RICH_DATA, "rv").map(|rv| (index(rv.attr("s")), rv.kids(&RICH_DATA, "v").map(|v| xsd_trim(&v.text)).collect())).collect();
     for (i, bk) in meta.kids(&MAIN, "valueMetadata").flat_map(|m| m.kids(&MAIN, "bk")).enumerate() {
-        let Some(rc) = bk.kids(&MAIN, "rc").next() else { continue };
-        if index(rc.attr("t")) != Some(rich_type) {
-            continue;
-        }
+        // a block's record of the rich-value type, wherever it stands among its records
+        let Some(rc) = bk.kids(&MAIN, "rc").find(|rc| index(rc.attr("t")) == Some(rich_type)) else { continue };
         let error = index(rc.attr("v"))
             .and_then(|v| future.get(v).copied().flatten())
             .and_then(|rv| rvs.get(rv))

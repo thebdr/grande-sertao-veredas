@@ -589,6 +589,73 @@ fn a_formula_cell_the_engine_does_not_hold_matches_nothing() {
     assert!(wrong.contains("AND XOR OR!A6"), "{wrong:?}");
 }
 
+#[test]
+fn a_cell_and_a_rich_value_are_read_where_the_schema_puts_them() {
+    let b = baseline();
+    let dir = corpus_dir(&b);
+    let mut probe = Probe::default();
+    let planted = tempfile::tempdir().unwrap();
+    let ext = "{3e2802c4-a4d2-4d8b-9148-e3be6c30e623}";
+    let first = format!(r#"<bk><extLst><ext uri="{ext}"><xlrd:rvb i="0"/></ext></extLst></bk>"#);
+    // ISREF's D7: its rich value made the `#SPILL!` one in Excel's own record, a decoy pointing at
+    // the `#CALC!` one where Excel does not read: D7 is read as `#SPILL!`, one mismatch
+    let isref = dir.join("calc_tests/INFORMATION/ISREF.xlsx");
+    let sheet = sheet_of(&isref, "D7", |e| *e == abaco_oracle::Expected::Error("#CALC!".into()));
+    let (_, cells, matched) = mismatches(&isref, &mut probe);
+    let foo = r#"xmlns:foo="urn:example:foo""#;
+    for (i, bk) in [
+        format!(r#"<bk><extLst><ext uri="{ext}"><xlrd:rvb i="1"/></ext></extLst></bk>"#),
+        format!(r#"<bk><foo:w {foo}><xlrd:rvb i="0"/></foo:w><extLst><ext uri="{ext}"><xlrd:rvb i="1"/></ext></extLst></bk>"#),
+        format!(r#"<bk><extLst><ext uri="{{00000000-0000-0000-0000-000000000000}}"><foo:w {foo}><xlrd:rvb i="0"/></foo:w></ext><ext uri="{ext}"><xlrd:rvb i="1"/></ext></extLst></bk>"#),
+        format!(r#"<bk><extLst><ext uri="{{00000000-0000-0000-0000-000000000000}}"><xlrd:rvb i="0"/></ext><ext uri="{ext}"><xlrd:rvb i="1"/></ext></extLst></bk>"#),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let copy = planted.path().join(format!("rvb-{i}.xlsx"));
+        rewrite_part(&isref, &copy, "xl/metadata.xml", |t| t.replacen(&first, &bk, 1));
+        let d7 = scan_raw(&copy).unwrap().formula_cells.into_iter().find(|c| c.reference == "D7").unwrap().expected;
+        assert_eq!(d7, abaco_oracle::Expected::Error("#SPILL!".into()), "{bk}");
+        let (wrong, cells_now, matched_now) = mismatches(&copy, &mut probe);
+        assert_eq!((cells_now, matched_now), (cells, matched - 1), "{bk}");
+        assert!(wrong.contains(&format!("{sheet}!D7")), "{wrong:?}");
+    }
+    // a block holding another type's record before the rich value's: the rich value's still read
+    let copy = planted.path().join("records.xlsx");
+    rewrite_part(&isref, &copy, "xl/metadata.xml", |t| t.replacen(r#"<valueMetadata count="2"><bk><rc t="2" v="0"/></bk>"#, r#"<valueMetadata count="2"><bk><rc t="1" v="0"/><rc t="2" v="0"/></bk>"#, 1));
+    let (_, cells_now, matched_now) = mismatches(&copy, &mut probe);
+    assert_eq!((cells_now, matched_now), (cells, matched));
+    assert_eq!(scan_raw(&copy).unwrap().formula_cells.into_iter().find(|c| c.reference == "D7").unwrap().expected, abaco_oracle::Expected::Error("#CALC!".into()));
+    // ABS's B2 cached 7 (the engine computes 1) with the true cell inside an extension of the cell,
+    // and a cell inside an extension of the sheet: a cell is `worksheet/sheetData/row/c` alone
+    let abs = dir.join("calc_tests/MATH_AND_TRIGONOMETRY/ABS.xlsx");
+    let (_, cells, matched) = mismatches(&abs, &mut probe);
+    let b2 = r#"<c r="B2" s="2"><f>ABS(A2)</f><v>1</v></c>"#;
+    let sheet1 = "xl/worksheets/sheet1.xml";
+    let copy = planted.path().join("cell-ext.xlsx");
+    rewrite_part(&abs, &copy, sheet1, |t| {
+        t.replacen(b2, &format!(r#"<c r="B2" s="2"><f>ABS(A2)</f><v>7</v><extLst><ext uri="{{00000000-0000-0000-0000-0000000000ab}}"><row r="2"><c r="A2"><v>1</v></c>{b2}</row></ext></extLst></c>"#), 1)
+    });
+    let (wrong, cells_now, matched_now) = mismatches(&copy, &mut probe);
+    assert_eq!((cells_now, matched_now), (cells, matched - 1), "B2's own cache is 7");
+    assert!(wrong.contains("Sheet1!B2"), "{wrong:?}");
+    for (i, extra) in [b2.to_string(), r#"<c r="Z2"><f>1</f><v>1</v></c>"#.to_string()].into_iter().enumerate() {
+        let copy = planted.path().join(format!("sheet-ext-{i}.xlsx"));
+        rewrite_part(&abs, &copy, sheet1, |t| {
+            t.replacen("</worksheet>", &format!(r#"<extLst><ext uri="{{00000000-0000-0000-0000-0000000000ab}}"><sheetData><row r="900">{extra}</row></sheetData></ext></extLst></worksheet>"#), 1)
+        });
+        assert_eq!(mismatches(&copy, &mut probe).1, cells, "no cell from an extension: {extra}");
+    }
+    // the clause's limit: Markup Compatibility is not applied, so a cell inside alternate content
+    // or processed content is not read (Excel writes neither in a sheet's data)
+    let mc = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+    let copy = planted.path().join("alternate.xlsx");
+    rewrite_part(&abs, &copy, sheet1, |t| {
+        t.replacen(b2, &format!(r#"<mc:AlternateContent xmlns:mc="{mc}"><mc:Choice Requires="foo" {foo}><foo:x/></mc:Choice><mc:Fallback><c r="B2" s="2"><f>ABS(A2)</f><v>7</v></c></mc:Fallback></mc:AlternateContent>"#), 1)
+    });
+    assert_eq!(mismatches(&copy, &mut probe).1, cells - 1, "a cell in alternate content is not read, a limit");
+}
+
 /// A cell's attributes without its `t`.
 fn strip_type(attrs: &str) -> String {
     regex::Regex::new(r#"\st="[^"]*""#).unwrap().replace(attrs, "").to_string()
