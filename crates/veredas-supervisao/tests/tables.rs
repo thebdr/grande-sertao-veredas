@@ -801,13 +801,17 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // Every shape of window portal answers: one point (hall's, below), many (the travel's, above),
     // and past portal's 600 (the speed, polled every 50 ms, once it holds more than 650 samples):
     // each drawn as the page's own answer has it, its words, every point placed, the line shown.
+    // The answer read is the one for the series clicked, by its request's own source and series: an
+    // earlier click's answer, which the page drops when it comes late, is recorded too.
     let chart_of = |page: &mut Browser, key: &str| -> Value {
         let quoted = serde_json::to_string(key).unwrap();
+        let (src, ser) = key.split_once('/').unwrap();
+        let (src, ser) = (serde_json::to_string(src).unwrap(), serde_json::to_string(ser).unwrap());
         let head = serde_json::to_string(&key.replacen('/', " · ", 1)).unwrap();
         page.eval("window.__answers = []; true");
         page.eval(&format!("[...document.querySelectorAll('.list button[data-series]')].find((b) => b.dataset.series === {quoted}).click()"));
         page.wait_for(
-            &format!("(() => {{ {SHOWN_FN} const p = document.querySelector('.list-main .pager [data-points]'); const line = document.querySelector('.list-main svg.trend path.line'); const head = document.querySelector('.list-main .pager strong'); const a = window.__answers.filter((x) => x.url.includes('/api/series/data')); return p && line && head && head.textContent === {head} && a.length ? {{ said: p.textContent, d: line.getAttribute('d'), axis: [...document.querySelectorAll('.list-main svg.trend text.axis')].map((t) => [t.textContent, Number(t.getAttribute('x')), Number(t.getAttribute('y'))]), line_shown: shown(line), axis_shown: [...document.querySelectorAll('.list-main svg.trend text.axis')].every(shown), answer: a[a.length - 1] }} : null; }})()"),
+            &format!("(() => {{ {SHOWN_FN} const p = document.querySelector('.list-main .pager [data-points]'); const line = document.querySelector('.list-main svg.trend path.line'); const head = document.querySelector('.list-main .pager strong'); const a = window.__answers.filter((x) => {{ const u = new URL(x.url, location.href); return u.pathname.endsWith('/api/series/data') && u.searchParams.get('source') === {src} && u.searchParams.get('series') === {ser}; }}); return p && line && head && head.textContent === {head} && a.length ? {{ said: p.textContent, d: line.getAttribute('d'), axis: [...document.querySelectorAll('.list-main svg.trend text.axis')].map((t) => [t.textContent, Number(t.getAttribute('x')), Number(t.getAttribute('y'))]), line_shown: shown(line), axis_shown: [...document.querySelectorAll('.list-main svg.trend text.axis')].every(shown), answer: a[a.length - 1] }} : null; }})()"),
             Duration::from_secs(20),
         )
     };
