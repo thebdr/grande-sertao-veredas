@@ -143,6 +143,14 @@ fn without_its_default_features_core_stands_on_serde_toml_and_thiserror_alone() 
     let (whole, direct) = tree(&["--no-default-features"]);
     assert_eq!(direct, set(&["serde", "thiserror", "toml"]));
     let reached: Vec<&&str> = PLANT_STACK.iter().filter(|c| whole.contains(**c)).collect();
+    let opcua: Vec<&String> = whole
+        .iter()
+        .filter(|c| c.starts_with("async-opcua"))
+        .collect();
+    assert!(
+        opcua.is_empty(),
+        "OPC UA crates without the default features: {opcua:?}"
+    );
     assert!(
         reached.is_empty(),
         "a plant's stack without the default features: {reached:?}"
@@ -304,6 +312,15 @@ fn main() {
 /// A Rust source with its comments and the contents of its string and character literals blanked
 /// out, so only code is left to read.
 fn code_only(src: &str) -> String {
+    lexed(src, false)
+}
+
+/// A Rust source with its comments taken out and its literals kept as written.
+fn without_comments(src: &str) -> String {
+    lexed(src, true)
+}
+
+fn lexed(src: &str, keep_literals: bool) -> String {
     let c: Vec<char> = src.chars().collect();
     let mut out = String::with_capacity(src.len());
     let mut i = 0;
@@ -353,8 +370,13 @@ fn code_only(src: &str) -> String {
             {
                 j += 1;
             }
-            i = j + 1 + hashes;
-            out.push_str("\"\"");
+            let end = (j + 1 + hashes).min(c.len());
+            if keep_literals {
+                out.extend(&c[i..end]);
+            } else {
+                out.push_str("\"\"");
+            }
+            i = end;
         } else if c[i] == '"' {
             let mut j = i + 1;
             while j < c.len() && c[j] != '"' {
@@ -363,18 +385,32 @@ fn code_only(src: &str) -> String {
                 }
                 j += 1;
             }
-            i = j + 1;
-            out.push_str("\"\"");
+            let end = (j + 1).min(c.len());
+            if keep_literals {
+                out.extend(&c[i..end]);
+            } else {
+                out.push_str("\"\"");
+            }
+            i = end;
         } else if c[i] == '\'' && c.get(i + 1) == Some(&'\\') {
             let mut j = i + 2;
             while j < c.len() && c[j] != '\'' {
                 j += 1;
             }
-            i = j + 1;
-            out.push_str("' '");
+            let end = (j + 1).min(c.len());
+            if keep_literals {
+                out.extend(&c[i..end]);
+            } else {
+                out.push_str("' '");
+            }
+            i = end;
         } else if c[i] == '\'' && c.get(i + 2) == Some(&'\'') {
+            if keep_literals {
+                out.extend(&c[i..i + 3]);
+            } else {
+                out.push_str("' '");
+            }
             i += 3;
-            out.push_str("' '");
         } else {
             out.push(c[i]);
             i += 1;
@@ -646,7 +682,26 @@ fn every_feature_gate_is_where_it_belongs() {
         if path.extension().and_then(|e| e.to_str()) != Some("rs") {
             continue;
         }
-        let text = std::fs::read_to_string(&path).unwrap();
+        // The code alone, comments taken out, every attribute joined onto one line, so a gate
+        // split by a comment or a line break reads as one.
+        let code = without_comments(&std::fs::read_to_string(&path).unwrap());
+        let mut text = String::with_capacity(code.len());
+        let mut depth = 0usize;
+        let chars: Vec<char> = code.chars().collect();
+        for (k, ch) in chars.iter().enumerate() {
+            let opens = (k > 0 && chars[k - 1] == '#')
+                || (k > 1 && chars[k - 1] == '!' && chars[k - 2] == '#');
+            match ch {
+                '[' if depth > 0 || opens => depth += 1,
+                ']' if depth > 0 => depth -= 1,
+                '\n' if depth > 0 => {
+                    text.push(' ');
+                    continue;
+                }
+                _ => {}
+            }
+            text.push(*ch);
+        }
         let rel = path
             .strip_prefix(&src)
             .unwrap()
@@ -654,9 +709,9 @@ fn every_feature_gate_is_where_it_belongs() {
             .replace('\\', "/");
         let lines: Vec<&str> = text.lines().collect();
         for (n, line) in lines.iter().enumerate() {
-            // A mention of a feature in a cfg, an attribute or the macro, as ordinarily written;
-            // and what would hide an item from rustdoc, the compiler's view below
-            // (`doc(hidden)`, a cfg on `doc`), of which core has none.
+            // A mention of a feature in a cfg, an attribute or the macro; and what would make
+            // rustdoc see an item otherwise than the build (`doc(hidden)`, a cfg on `doc`), of
+            // which core has none.
             let squeezed: String = line.chars().filter(|c| !c.is_whitespace()).collect();
             let hides = squeezed.contains("doc(hidden")
                 || ["cfg(doc", "(doc)", "(doc,", ",doc)", ",doc,"]
@@ -998,7 +1053,12 @@ fn main() {{
             "the probe of {form:?}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
-        printed.push(String::from_utf8(out.stdout).unwrap());
+        // What it writes to stderr is part of what it does.
+        printed.push(format!(
+            "{}\n-- stderr --\n{}",
+            String::from_utf8(out.stdout).unwrap(),
+            String::from_utf8(out.stderr).unwrap()
+        ));
     }
     let merged = printed.last().unwrap();
     assert!(
