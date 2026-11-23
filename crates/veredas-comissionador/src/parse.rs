@@ -55,19 +55,49 @@ pub fn body_start(text: &str) -> usize {
 }
 
 /// Check the header and return where the body begins.
+///
+/// Core's one reader decides the stamp (C-045); TOML's own reader of a document into keys with
+/// their spans, its values kept as text (`toml::de::DeTable`), names any other key at its line.
+/// Core's reader types every value of the header, so a value it cannot hold (an integer past 128
+/// bits, a float past range) fails it whole: when the stamp alone, read by core again, is sound,
+/// that failure is the other key's, named as any other key is. A TOML error is placed where TOML
+/// found it.
 fn header(text: &str, file: &str, noun: &str, format: &str) -> Result<usize, Problem> {
     let body = body_start(text);
     let head = &text[..body];
-    veredas_core::schema::check(head, noun, format, VERSION).map_err(|e| Problem::at(file, text, 0, e.to_string()))?;
-    // The header holds the stamp alone, as TOML itself reads it (its keys decoded, a table, a
-    // dotted key, a quoted one with its escapes, a value of any width left as text): the first
-    // top-level key that is neither `format` nor `version` is named, at its line.
-    let table = toml::de::DeTable::parse(head).map_err(|e| Problem::at(file, text, 0, format!("not {noun}: {e}")))?;
+    let stamp = veredas_core::schema::check(head, noun, format, VERSION);
+    let table = match toml::de::DeTable::parse(head) {
+        Ok(t) => t,
+        Err(te) => {
+            let at = te.span().map(|s| s.start).unwrap_or(0);
+            let message = match stamp {
+                Err(e) => e.to_string(),
+                Ok(()) => format!("not {noun}: {te}"),
+            };
+            return Err(Problem::at(file, text, at, message));
+        }
+    };
     let other = table
         .get_ref()
         .iter()
         .filter(|(k, _)| k.get_ref() != "format" && k.get_ref() != "version")
         .min_by_key(|(k, _)| k.span().start);
+    if let Err(e) = stamp {
+        // The stamp alone, its two values as written: sound, the failure was another key's.
+        let alone: String = table
+            .get_ref()
+            .iter()
+            .filter(|(k, _)| k.get_ref() == "format" || k.get_ref() == "version")
+            .map(|(k, v)| format!("{} = {}\n", k.get_ref(), head.get(v.span()).unwrap_or("")))
+            .collect();
+        match (other.is_some(), veredas_core::schema::check(&alone, noun, format, VERSION)) {
+            (true, Ok(())) => {}
+            (true, Err(e2)) if !matches!(e2, veredas_core::schema::HeaderError::NotToml { .. }) => {
+                return Err(Problem::at(file, text, 0, e2.to_string()));
+            }
+            _ => return Err(Problem::at(file, text, 0, e.to_string())),
+        }
+    }
     if let Some((key, _)) = other {
         let at = key.span().start.min(head.len());
         let line_start = head[..at].rfind('\n').map(|i| i + 1).unwrap_or(0);

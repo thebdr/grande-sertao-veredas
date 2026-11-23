@@ -1214,7 +1214,7 @@ fn a_quoted_header_key_is_read_to_its_closing_quote() {
     assert_eq!(one("stamp.format = 2\n"), "3:1: the header holds `format` and `version` alone, not `stamp`");
     assert_eq!(one("\"version.x\" = 2\n"), "3:1: the header holds `format` and `version` alone, not `version.x`");
     // A dotted key under the stamp's own name is no TOML: core's reader refuses it first.
-    assert!(one("format.x = 2\n").starts_with("1:1: not a test file: TOML parse error"));
+    assert!(one("format.x = 2\n").starts_with("3:1: not a test file: TOML parse error at line 3, column 1"));
     for stamp in ["\"format\" = \"veredas-test\"\n'version' = 1\n", "format=\"veredas-test\"\nversion=1\n", "\"format\"=\"veredas-test\"\nversion =1\n"] {
         assert!(parse_test(&format!("{stamp}{body}"), "t").is_ok(), "{stamp}");
     }
@@ -1325,6 +1325,140 @@ fn problems_sharing_one_line_are_placed_at_once() {
         let last = e.iter().max_by_key(|p| p.column).unwrap();
         assert_eq!((last.line, last.column), (8, 8 + 6 * (n - 1) + 2), "{tail:?}: {}", last.message);
     }
+}
+
+// ---- refute round 6 ------------------------------------------------------------------------
+
+#[test]
+fn another_header_key_is_named_whatever_value_core_s_reader_cannot_hold() {
+    let body = "test \"t\" {\n  id T\n  step a stop pass\n}\n";
+    let one = |head: &str| {
+        let e = parse_test(&format!("{head}{body}"), "t").unwrap_err();
+        format!("{}:{}: {}", e.line, e.column, e.message)
+    };
+    let stamp = "format = \"veredas-test\"\nversion = 1\n";
+    let not = |at: &str, name: &str| format!("{at}: the header holds `format` and `version` alone, not `{name}`");
+    // A value past 128 bits, a float past range, inside an array or a table: the key named.
+    assert_eq!(one(&format!("{stamp}x = 340282366920938463463374607431768211456\n")), not("3:1", "x"));
+    assert_eq!(one(&format!("{stamp}x = 1e400\n")), not("3:1", "x"));
+    assert_eq!(one(&format!("{stamp}x = [1e400]\n")), not("3:1", "x"));
+    assert_eq!(one(&format!("{stamp}[x]\ny = 340282366920938463463374607431768211456\n")), not("3:1", "x"));
+    assert_eq!(one(&format!("\"format\" = \"veredas-test\"\n'version' = 1\n  x = 1e400\n")), not("3:3", "x"));
+    // The stamp decided first all the same: another format, no version, by core's own texts.
+    let wrong = "format = \"veredas-functions\"\nversion = 1\n";
+    let core = |h: &str| veredas_core::schema::check(h, "a test file", "veredas-test", 1).unwrap_err().to_string();
+    assert_eq!(one(&format!("{wrong}x = 1e400\n")), format!("1:1: {}", core(wrong)));
+    assert_eq!(one("format = \"veredas-test\"\nx = 1e400\n"), format!("1:1: {}", core("format = \"veredas-test\"\n")));
+    // The stamp's own value past range is the stamp's fault, by core's text.
+    let bad = "format = \"veredas-test\"\nversion = 340282366920938463463374607431768211456\nx = 1\n";
+    assert_eq!(one(bad), format!("1:1: {}", core(bad)));
+    // A header that is no TOML: named where TOML found it.
+    let e = one(&format!("{stamp}x = \n"));
+    assert!(e.starts_with("3:5: not a test file: TOML parse error at line 3, column 5"), "{e}");
+}
+
+#[test]
+fn a_function_s_inputs_reads_and_calls_are_looked_up_at_once() {
+    let n = 20_000;
+    // Each case timed on the processor and counted, every one run before the times are held to
+    // five seconds.
+    let times = std::cell::RefCell::new(Vec::new());
+    let timed = |what: &str, f: &dyn Fn() -> Vec<String>, expect: usize| {
+        let mut ps = Vec::new();
+        let took = on_cpu(|| ps = f());
+        times.borrow_mut().push((what.to_string(), took));
+        assert_eq!(ps.len(), expect, "{what}: {:?}", ps.first());
+    };
+    // A function of 20 000 inputs, assigning its output and looping 20 000 times.
+    let inputs: Vec<String> = (0..n).map(|i| format!("i{i}: int")).collect();
+    let mut f = format!("{FHEAD}function F({}) -> (x: int) {{\n", inputs.join(", "));
+    for _ in 0..n / 2 {
+        f.push_str("  x = 1\n  for k in 1 .. 2 { x = k }\n");
+    }
+    f.push_str("}\n");
+    timed("20 000 inputs, 20 000 statements", &|| fproblems(&f), 0);
+    // A step calling it with every input, from the last to the first.
+    let args: Vec<String> = (0..n).rev().map(|i| format!("i{i}: 1")).collect();
+    let t = test_of(&format!("  use f.fn\n  step a call F({})\n    -> x\n  step b stop pass\n", args.join(", ")));
+    timed("a call of 20 000 inputs", &|| problems_with(&t, &[("f.fn", &f)]), 0);
+    // A function reading 40 000 tables, one by one.
+    let tables: Vec<String> = (0..2 * n).map(|i| format!("t{i}")).collect();
+    let mut g = format!("{FHEAD}function G() -> (x: int) {{\n  reads {}\n", tables.join(", "));
+    for i in (0..2 * n).rev() {
+        g.push_str(&format!("  x = t{i}.c\n"));
+    }
+    g.push_str("}\n");
+    timed("40 000 tables read", &|| fproblems(&g), 0);
+    // 20 000 constants, each made of the one above it.
+    let mut lets = String::from("  let c0 = 1\n");
+    for i in 1..n {
+        lets.push_str(&format!("  let c{i} = c{} + 1\n", i - 1));
+    }
+    let t = test_of(&format!("{lets}  step a stop pass\n"));
+    timed("20 000 constants", &|| problems(&t), 0);
+    let slow: Vec<_> = times.borrow().iter().filter(|(_, t)| *t >= std::time::Duration::from_secs(5)).cloned().collect();
+    assert!(slow.is_empty(), "past five seconds: {slow:?} (all: {:?})", times.borrow());
+}
+
+/// How long `f` keeps this thread on a processor: its CPU time as Linux's scheduler counts it, so
+/// the machine's other work is left out; the wall clock where that count is not kept.
+fn on_cpu(f: impl FnOnce()) -> std::time::Duration {
+    let read = || std::fs::read_to_string("/proc/thread-self/schedstat").ok().and_then(|s| s.split_whitespace().next()?.parse::<u64>().ok());
+    let wall = std::time::Instant::now();
+    let start = read();
+    f();
+    match (start, read()) {
+        (Some(a), Some(b)) => std::time::Duration::from_nanos(b.saturating_sub(a)),
+        _ => wall.elapsed(),
+    }
+}
+
+/// How a check's time grows: the best of two runs at `n` and at eight times `n`. A check linear
+/// in its file takes about eight times as long at the larger size (up to twelve with its maps'
+/// logarithm and a loaded machine's caches); a quadratic one, up to sixty-four (the checks before
+/// round 6: 36 and 44 at these sizes). Twenty is between.
+fn growth(n: usize, check: &dyn Fn(usize) -> std::time::Duration) -> (std::time::Duration, std::time::Duration) {
+    let best = |n: usize| (0..2).map(|_| check(n)).min().unwrap();
+    (best(n), best(8 * n))
+}
+
+#[test]
+fn many_used_files_and_many_blocks_are_checked_in_linear_time() {
+    // Used files, each read once: 5 000, then 40 000.
+    let uses = |n: usize| {
+        let files: Vec<(String, String)> = (0..n).map(|i| (format!("d/f{i}.fn"), format!("{FHEAD}function G{i}() -> (x: int) {{\n  x = {i}\n}}\n"))).collect();
+        let refs: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+        let lines: String = files.iter().map(|(p, _)| format!("  use {p}\n")).collect();
+        let t = test_of(&format!("{lines}  step a stop pass\n"));
+        let mut ps = Vec::new();
+        let took = on_cpu(|| ps = problems_with(&t, &refs));
+        assert_eq!(ps, Vec::<String>::new());
+        took
+    };
+    let (used_small, used_large) = growth(5_000, &uses);
+    // A file of n functions, one of them of n blocks, each calling a function wrongly: 10 000,
+    // then 80 000.
+    let blocks = |n: usize| {
+        let mut f = String::from(FHEAD);
+        for i in 0..n {
+            f.push_str(&format!("function G{i}() {{\n}}\n"));
+        }
+        f.push_str("function H() {\n");
+        for _ in 0..n {
+            f.push_str("  if G1() { }\n");
+        }
+        f.push_str("}\n");
+        let mut ps = Vec::new();
+        let took = on_cpu(|| ps = fproblems(&f));
+        assert_eq!(ps.len(), n);
+        assert_eq!(ps[0], format!("{}:6: `G1` is a function: a step calls it with `call`, a function by `<outputs> = G1(...)`", 3 + 2 * n + 2));
+        took
+    };
+    let (small, large) = growth(10_000, &blocks);
+    assert!(
+        used_large < 20 * used_small && large < 20 * small,
+        "5 000 used files: {used_small:?}, 40 000: {used_large:?}; 10 000 functions and blocks: {small:?}, 80 000: {large:?}"
+    );
 }
 
 // ---- the reference's text -------------------------------------------------------------------

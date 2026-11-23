@@ -114,8 +114,7 @@ pub fn check_test(text: &str, file: &str, resolve: &dyn Fn(&str) -> Result<Strin
                 }
             }
             SettingKind::Let { name, value } => {
-                let consts = lets.clone();
-                resolve_expr(value, &consts, &Plants::Let, &[], &mut |span, msg| out.push(at(span, msg)));
+                resolve_expr(value, &lets, &Plants::Let, &BTreeSet::new(), &mut |span, msg| out.push(at(span, msg)));
                 if !lets.insert(name.value.clone()) {
                     out.push(at(name.span, format!("`{}` is defined twice", name.value)));
                 }
@@ -129,8 +128,9 @@ pub fn check_test(text: &str, file: &str, resolve: &dyn Fn(&str) -> Result<Strin
 
     // The function files, each checked against itself, then their names across them.
     let mut files: Vec<UsedFile> = Vec::new();
+    let mut read_paths: BTreeSet<String> = BTreeSet::new();
     for u in test.uses() {
-        if files.iter().any(|f| f.path == u.value) {
+        if !read_paths.insert(u.value.clone()) {
             continue;
         }
         let shown = display_path(&dir, &u.value);
@@ -168,7 +168,7 @@ pub fn check_test(text: &str, file: &str, resolve: &dyn Fn(&str) -> Result<Strin
     for f in files.iter().flat_map(|f| f.functions.functions.iter()) {
         functions.entry(f.name.value.clone()).or_insert(f);
     }
-    let fnames: Vec<&str> = functions.keys().map(String::as_str).collect();
+    let fnames: BTreeSet<&str> = functions.keys().map(String::as_str).collect();
 
     // The test's variables: its constants, and every name a step assigns.
     let mut vars = lets.clone();
@@ -373,13 +373,13 @@ enum Plants<'a> {
     /// A `let`: nowhere.
     Let,
     /// A function: the tables of its `reads`.
-    Reads { function: &'a str, tables: &'a [Spanned<String>] },
+    Reads { function: &'a str, tables: &'a BTreeSet<&'a str> },
 }
 
 /// Settle every name of an expression: a variable, a row's column, or plant data checked
 /// against where it is read; every built-in call against its arity. `functions` are the names a
 /// call in an expression may wrongly reach for.
-fn resolve_expr(e: &mut Expr, vars: &BTreeSet<String>, plants: &Plants, functions: &[&str], push: &mut dyn FnMut(Span, String)) {
+fn resolve_expr(e: &mut Expr, vars: &BTreeSet<String>, plants: &Plants, functions: &BTreeSet<&str>, push: &mut dyn FnMut(Span, String)) {
     e.walk_mut(&mut |e: &mut Expr| {
         let span = e.span;
         match &mut e.kind {
@@ -417,7 +417,7 @@ fn resolve_expr(e: &mut Expr, vars: &BTreeSet<String>, plants: &Plants, function
                         push(span, format!("`{b}` takes {takes}, not {n}"));
                     }
                 }
-                None if functions.contains(&name.value.as_str()) => push(
+                None if functions.contains(name.value.as_str()) => push(
                     name.span,
                     format!("`{0}` is a function: a step calls it with `call`, a function by `<outputs> = {0}(...)`", name.value),
                 ),
@@ -442,7 +442,7 @@ fn plant(e: &Expr, plants: &Plants, push: &mut dyn FnMut(Span, String)) {
         Plants::Script => push(e.span, format!("a script box reads no plant data: `{}.{}`", table.value, column.value)),
         Plants::Let => push(e.span, format!("a `let` is made of literals and the constants above it: `{}.{}`", table.value, column.value)),
         Plants::Reads { function, tables } => {
-            if !tables.iter().any(|t| t.value == table.value) {
+            if !tables.contains(table.value.as_str()) {
                 push(table.span, format!("`{}` is not among `{function}`'s `reads`", table.value));
             }
         }
@@ -451,16 +451,17 @@ fn plant(e: &Expr, plants: &Plants, push: &mut dyn FnMut(Span, String)) {
 
 /// A call's inputs and outputs against the function it calls.
 fn check_call(function: &Spanned<String>, args: &[Arg], outputs: &[Spanned<String>], f: &Function, push: &mut dyn FnMut(Span, String)) {
+    let inputs: BTreeSet<&str> = f.inputs.iter().map(|i| i.name.value.as_str()).collect();
     let mut given = BTreeSet::new();
     for a in args {
-        if !f.inputs.iter().any(|i| i.name.value == a.name.value) {
+        if !inputs.contains(a.name.value.as_str()) {
             push(a.name.span, format!("`{}` has no input `{}`", function.value, a.name.value));
         } else if !given.insert(a.name.value.clone()) {
             push(a.name.span, format!("input `{}` is given twice", a.name.value));
         }
     }
     for i in &f.inputs {
-        if !given.contains(&i.name.value) && !args.iter().any(|a| a.name.value == i.name.value) {
+        if !given.contains(&i.name.value) {
             push(function.span, format!("`{}` needs its input `{}`", function.value, i.name.value));
         }
     }
@@ -474,14 +475,21 @@ fn check_call(function: &Spanned<String>, args: &[Arg], outputs: &[Spanned<Strin
 
 /// Where statements stand.
 enum StmtCtx<'a> {
-    Script { consts: &'a BTreeSet<String>, functions: &'a [&'a str] },
-    Function { f: &'a Function, file_functions: &'a BTreeMap<String, Function>, names: &'a [&'a str] },
+    Script { consts: &'a BTreeSet<String>, functions: &'a BTreeSet<&'a str> },
+    /// A function, its inputs and the tables of its `reads` as sets, each looked up at once.
+    Function {
+        f: &'a Function,
+        inputs: &'a BTreeSet<&'a str>,
+        reads: &'a BTreeSet<&'a str>,
+        file_functions: &'a BTreeMap<String, Function>,
+        names: &'a BTreeSet<&'a str>,
+    },
 }
 
 fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: &mut dyn FnMut(Span, String)) {
-    let (plants, fnames): (Plants, Vec<&str>) = match ctx {
-        StmtCtx::Script { functions, .. } => (Plants::Script, functions.to_vec()),
-        StmtCtx::Function { f, names, .. } => (Plants::Reads { function: &f.name.value, tables: &f.reads }, names.to_vec()),
+    let (plants, fnames): (Plants, &BTreeSet<&str>) = match ctx {
+        StmtCtx::Script { functions, .. } => (Plants::Script, functions),
+        StmtCtx::Function { f, reads, names, .. } => (Plants::Reads { function: &f.name.value, tables: reads }, names),
     };
     for s in body {
         let span = s.span;
@@ -489,8 +497,8 @@ fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: 
             StmtKind::Assign { target, value, .. } => {
                 match ctx {
                     StmtCtx::Script { consts, .. } => constant_assigned(target, consts, push),
-                    StmtCtx::Function { f, .. } => {
-                        if f.inputs.iter().any(|i| i.name.value == target.value) {
+                    StmtCtx::Function { f, inputs, .. } => {
+                        if inputs.contains(target.value.as_str()) {
                             push(target.span, format!("`{}` is an input of `{}`, read only", target.value, f.name.value));
                         }
                     }
@@ -507,8 +515,8 @@ fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: 
                 }
             }
             StmtKind::For { var, from, to, body } => {
-                if let StmtCtx::Function { f, .. } = ctx
-                    && f.inputs.iter().any(|i| i.name.value == var.value)
+                if let StmtCtx::Function { f, inputs, .. } = ctx
+                    && inputs.contains(var.value.as_str())
                 {
                     push(var.span, format!("`{}` is an input of `{}`, read only", var.value, f.name.value));
                 }
@@ -535,11 +543,11 @@ fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: 
             }
             StmtKind::Await { table, filter, bind, .. } => match ctx {
                 StmtCtx::Script { .. } => push(span, "a script box does not wait: `await`".to_string()),
-                StmtCtx::Function { f, .. } => {
-                    if f.inputs.iter().any(|i| i.name.value == bind.value) {
+                StmtCtx::Function { f, inputs, reads, .. } => {
+                    if inputs.contains(bind.value.as_str()) {
                         push(bind.span, format!("`{}` is an input of `{}`, read only", bind.value, f.name.value));
                     }
-                    if !f.reads.iter().any(|t| t.value == table.value) {
+                    if !reads.contains(table.value.as_str()) {
                         push(table.span, format!("`{}` is not among `{}`'s `reads`", table.value, f.name.value));
                     }
                     if let Some(c) = filter {
@@ -551,12 +559,12 @@ fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: 
                 StmtCtx::Script { .. } => {
                     push(function.span, format!("a script box calls no function: `{}` is called by a step (`call`)", function.value));
                 }
-                StmtCtx::Function { f, file_functions, .. } => {
+                StmtCtx::Function { f, inputs, file_functions, .. } => {
                     for a in args.iter_mut() {
                         resolve_expr(&mut a.value, vars, &plants, &fnames, push);
                     }
                     for o in outputs.iter() {
-                        if f.inputs.iter().any(|i| i.name.value == o.value) {
+                        if inputs.contains(o.value.as_str()) {
                             push(o.span, format!("`{}` is an input of `{}`, read only", o.value, f.name.value));
                         }
                     }
@@ -588,7 +596,7 @@ fn check_function_file(ff: &mut FunctionFile, file: &str, text: &str, out: &mut 
             by_name.insert(f.name.value.clone(), f.clone());
         }
     }
-    let file_names: Vec<&str> = by_name.keys().map(String::as_str).collect();
+    let file_names: BTreeSet<&str> = by_name.keys().map(String::as_str).collect();
     for f in &mut ff.functions {
         let mut push = |span: Span, msg: String| out.push(lines.problem(file, span.start, msg));
         let mut ports = BTreeSet::new();
@@ -607,7 +615,9 @@ fn check_function_file(ff: &mut FunctionFile, file: &str, text: &str, out: &mut 
             }
         }
         let snapshot = f.clone();
-        let ctx = StmtCtx::Function { f: &snapshot, file_functions: &by_name, names: &file_names };
+        let inputs: BTreeSet<&str> = snapshot.inputs.iter().map(|i| i.name.value.as_str()).collect();
+        let reads: BTreeSet<&str> = snapshot.reads.iter().map(|t| t.value.as_str()).collect();
+        let ctx = StmtCtx::Function { f: &snapshot, inputs: &inputs, reads: &reads, file_functions: &by_name, names: &file_names };
         check_stmts(&mut f.body, &scope, &ctx, &mut push);
     }
     // No function calls itself, directly or through others: the cycles are the strongly
