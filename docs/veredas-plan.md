@@ -124,8 +124,8 @@ The single point of information exchange between Veredas and the outside world.
   architect, 2026-11-15).
 - From Veredas 1: `veredas-core`, `veredas-store`, `veredas-server`, `veredas-desktop`.
 - Decided in the briefing of November 2026 (`docs/portal-plan.md`): Oficina embeds a portal too,
-  and two portals speak portal's own HTTP interface (HTTPS later), commands on the same link (not
-  built); the portal embedded in a controller keeps its store in memory as a fixed window (built,
+  and two portals speak portal's own HTTP interface (HTTPS later), commands on the same link (the
+  reading side built, C-095; the commands wait for Q37); the portal embedded in a controller keeps its store in memory as a fixed window (built,
   C-090), records to the drive when the project says so (built, C-091), writes its store at a
   fault (built, C-093), stores the controller's states and faults like any other data (built,
   C-092), and serves OPC UA and Modbus/TCP to other systems (not built: it waits for core's
