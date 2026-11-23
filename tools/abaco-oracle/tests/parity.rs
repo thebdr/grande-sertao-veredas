@@ -429,3 +429,41 @@ fn parity_under_the_cached_resolution() {
 fn parity_under_the_linked_resolution() {
     parity(LinksMode::Linked);
 }
+
+/// The nine draws of `DynamicArrays.xlsx`'s `RANDARRAY(3,3,0,100,TRUE)` across `A19:C21`, as a
+/// measure reads them (the engine's value of each, from the mismatches its report lists: seeded
+/// with 1, none of the nine equals Excel's cache).
+fn draws(options: &Options) -> BTreeMap<String, String> {
+    let path = corpus_dir(&baseline()).join("DynamicArrays.xlsx");
+    let mut probe = Probe::default();
+    let report = run_file(&path, options, &mut probe);
+    report
+        .examples
+        .values()
+        .flatten()
+        .filter(|e| ["A19", "B19", "C19", "A20", "B20", "C20", "A21", "B21", "C21"].contains(&e.reference.as_str()))
+        .map(|e| (e.reference.clone(), e.actual.clone()))
+        .collect()
+}
+
+#[test]
+fn every_measure_draws_the_same_numbers_and_an_unseeded_one_others() {
+    // the seed-1 draws, under either resolution, on every run
+    let seeded: BTreeMap<String, String> = [
+        ("A19", "80"), ("B19", "40"), ("C19", "61"), ("A20", "45"), ("B20", "53"), ("C20", "44"), ("A21", "16"), ("B21", "65"), ("C21", "82"),
+    ]
+    .iter()
+    .map(|(c, v)| (c.to_string(), v.to_string()))
+    .collect();
+    for links in [LinksMode::Cached, LinksMode::Linked] {
+        let mut o = options(links);
+        o.max_examples = 50;
+        assert_eq!(draws(&o), seeded, "{links:?}: the first measure");
+        assert_eq!(draws(&o), seeded, "{links:?}: the second measure");
+        // a measure left to chance draws otherwise (all nine alike by chance: one in 101^9)
+        let mut unseeded = options(links);
+        unseeded.max_examples = 50;
+        unseeded.random_seed = None;
+        assert_ne!(draws(&unseeded), seeded, "{links:?}: an unseeded measure drew the seeded numbers");
+    }
+}
