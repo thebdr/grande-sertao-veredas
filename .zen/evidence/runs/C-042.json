@@ -10,15 +10,15 @@
     "store_engine"
   ],
   "exitCode": 0,
-  "outputSha": "f0c5391b15c8a75dc625a838f02e121af5bd63b48c43c081905d38cd40a97bf4",
-  "outputTail": "test a_long_row_s_window_is_the_first_2048_lines_whatever_the_sample_size ... ok\ntest the_sniffer_collapses_a_long_row_followed_by_rows_and_refuses_a_file_past_the_window ... ok\ntest the_sniffer_s_kept_row_depends_on_the_long_row_and_the_window_ends_at_the_default_sample ... ok\ntest the_forced_reader_s_quote_its_window_s_rows_and_the_sniffer_s_tab ... ok\ntest the_sniffer_s_outcome_follows_the_long_row_s_line_not_the_file_s_length ... ok\ntest the_sniffer_s_outcomes_on_a_ragged_file ... ok\ntest a_file_database_logs_beside_itself_until_a_checkpoint_folds_the_log_in ... ok\ntest deleted_rows_hand_their_memory_back_in_memory ... ok\n\ntest result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.24s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s\n     Running tests/store_engine.rs (target/debug/build/veredas-portal/2e6dbe5fb4a27bd1/out/store_engine-2e6dbe5fb4a27bd1)",
-  "ranAt": "2026-11-23T02:10:01.298Z",
-  "headCommit": "0444f1839dc2749946f6a701703edd26d12b9bb1",
+  "outputSha": "69c4ad92e8b2a9bc396628943a0f5b71f4fdf56bf36d1c376c0280dcb6b79f5e",
+  "outputTail": "test a_copy_into_a_foreign_database_is_refused_and_detaches_after ... ok\ntest the_forced_reader_s_quote_its_window_s_rows_and_the_sniffer_s_tab ... ok\ntest a_trailing_run_of_long_rows_from_line_2048_or_before_is_kept_whole_past_the_window ... ok\ntest the_one_thread_padded_reader_and_the_sniffer_s_dialect ... ok\ntest a_long_row_s_window_is_the_first_2048_lines_whatever_the_sample_size ... ok\ntest the_sniffer_s_kept_row_depends_on_the_long_row_and_the_window_ends_at_the_default_sample ... ok\ntest the_sniffer_s_outcome_follows_the_long_row_s_line_not_the_file_s_length ... ok\ntest the_sniffer_s_outcomes_on_a_ragged_file ... ok\ntest a_file_database_logs_beside_itself_until_a_checkpoint_folds_the_log_in ... ok\ntest deleted_rows_hand_their_memory_back_in_memory ... ok\n\ntest result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.31s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running tests/store_engine.rs (target/debug/build/veredas-portal/a37963ea419ec559/out/store_engine-a37963ea419ec559)",
+  "ranAt": "2026-11-23T12:03:04.126Z",
+  "headCommit": "d4aa01ace01febe57697baae459747f73be5b30e",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store_engine.rs",
       "file": "crates/veredas-portal/tests/store_engine.rs",
-      "fileSha": "1c405bd7f3357745ff74261f2a1353cb0e0aedbbee766009817c8f8451c48455"
+      "fileSha": "436afefbe468879037f83b4a6a0168e9612f0c8ed925082fed839fa0a7eb8b98"
     }
   ]
 }
