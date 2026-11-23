@@ -970,12 +970,14 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
     let (mut rd, mut wr) = stream.into_split();
     // What the client sent while an answer waited out its delay, read so its close is seen.
     let mut ahead: Vec<u8> = Vec::new();
-    // How many bytes at the front of `ahead` were read during a delay silence touched: the
-    // requests they hold are withheld with the answer that waited (read while silent, or not yet
-    // handed to the socket when silence began).
-    let mut tainted: usize = 0;
+    // Where `ahead` begins in the client's stream, and the stretches of the stream read ahead
+    // during a delay silence touched (in order, from `pos` on): a request beginning in one is
+    // withheld with the answer that waited (read while silent, or not yet handed to the socket when
+    // silence began); one read ahead during an earlier delay silence did not touch is not.
+    let mut pos: u64 = 0;
+    let mut withheld: std::collections::VecDeque<(u64, u64)> = std::collections::VecDeque::new();
     loop {
-        let frame_tainted = tainted > 0;
+        let frame_tainted = withheld.front().is_some_and(|&(from, _)| from <= pos);
         let mut header = [0u8; 7];
         tokio::select! {
             r = fill_exact(&mut rd, &mut ahead, &mut header) => if r.is_err() { return },
@@ -995,7 +997,10 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
             r = fill_exact(&mut rd, &mut ahead, &mut pdu) => if r.is_err() { return },
             _ = ended(&mut gone, generation) => return,
         }
-        tainted = tainted.saturating_sub(usize::from(length) + 6);
+        pos += u64::from(length) + 6;
+        while withheld.front().is_some_and(|&(_, to)| to <= pos) {
+            withheld.pop_front();
+        }
         if protocol != 0 {
             shared.lock().status.dropped += 1;
             continue;
@@ -1034,6 +1039,8 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
         };
         let Some((response, exchange)) = response else { continue };
         let delay = Duration::from_micros(shared.delay_us.load(Ordering::SeqCst));
+        // The first byte this delay reads ahead, in the client's stream.
+        let read_from = pos + ahead.len() as u64;
         if !delay.is_zero() {
             // The delay, raced against a drop and against the client's own end: what the client
             // sends meanwhile is read ahead (up to READ_AHEAD), so a client that closes (a FIN, as
@@ -1041,13 +1048,16 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
             // it is gone, its answer counted as none and its place freed at once.
             let sleep = tokio::time::sleep(delay);
             tokio::pin!(sleep);
+            // Read in chunks no larger than the room left, so what is read ahead is never past it.
+            let mut chunk = [0u8; 8192];
             let gone_early = loop {
+                let room = READ_AHEAD.saturating_sub(ahead.len()).min(chunk.len());
                 tokio::select! {
                     _ = &mut sleep => break false,
                     _ = ended(&mut gone, generation) => break true,
-                    r = rd.read_buf(&mut ahead), if ahead.len() < READ_AHEAD => match r {
+                    r = rd.read(&mut chunk[..room]), if room > 0 => match r {
                         Ok(0) | Err(_) => break true,
-                        Ok(_) => {}
+                        Ok(n) => ahead.extend_from_slice(&chunk[..n]),
                     },
                 }
             };
@@ -1083,7 +1093,10 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
             let mut state = shared.lock();
             if shared.silent.load(Ordering::SeqCst) || shared.silenced.load(Ordering::SeqCst) != epoch {
                 state.status.unanswered += 1;
-                tainted = ahead.len();
+                let read_to = pos + ahead.len() as u64;
+                if read_to > read_from {
+                    withheld.push_back((read_from, read_to));
+                }
                 continue;
             }
             count(&mut state, 1);
@@ -1106,9 +1119,9 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
     }
 }
 
-/// The most a connection reads ahead of its requests while an answer waits out its delay: past it,
-/// the client's close is seen only by a write that fails (up to two delays, the answer counted, the
-/// next request done).
+/// The most a connection reads ahead of its requests while an answer waits out its delay, exactly:
+/// past it, the client's close is seen only by a write that fails (up to two delays, the answer
+/// counted, the next request done), and a request is judged by silence when it is read.
 const READ_AHEAD: usize = 64 * 1024;
 
 /// Fills `out` from what was read ahead first, then from the socket.
