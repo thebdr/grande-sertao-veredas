@@ -2,6 +2,8 @@
 //! asserted: a wait returns at its deadline or after it, never before; a task's scans start at their deadlines or
 //! after them; the clock, read after the wall, is never behind the wall by more than the wall's head start, between
 //! waits as well as at their ends; and a scan that takes its program five milliseconds is measured as at least that.
+//! That the clock only counts forward is read in the source, since no test can step the system's clock without
+//! privileges: it is `std::time::Instant`, never the settable `SystemTime` that NTP or a rewind moves.
 use orcl_runtime::{Clock, Io, MonoClock, RunState, Task, TaskConfig};
 use orcl_std::{Program, Scan};
 use std::time::{Duration, Instant};
@@ -116,4 +118,38 @@ fn on_a_target_clock_a_scan_past_twice_its_period_is_measured_whole_and_faults()
     assert!(report.exec >= Duration::from_millis(5), "a 5 ms scan measured {:?}", report.exec);
     assert!(report.time_error, "a time error");
     assert!(matches!(report.state, RunState::Faulted { .. }), "and a fault: {:?}", report.state);
+}
+
+/// Every file of the crate's `src/`.
+const SOURCES: [(&str, &str); 3] = [
+    ("clock.rs", include_str!("../src/clock.rs")),
+    ("lib.rs", include_str!("../src/lib.rs")),
+    ("task.rs", include_str!("../src/task.rs")),
+];
+
+/// A source with its comment lines taken out and every whitespace character removed.
+fn code_squeezed(text: &str) -> String {
+    let code: Vec<&str> = text.lines().filter(|line| !line.trim_start().starts_with("//")).collect();
+    code.concat().chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+#[test]
+fn the_target_s_clock_reads_the_monotonic_instant_never_the_settable_system_time() {
+    let listed = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src")).unwrap().count();
+    assert_eq!(listed, SOURCES.len(), "every file of src/ is read");
+    for (file, text) in SOURCES {
+        let code = code_squeezed(text);
+        for refused in ["SystemTime", "UNIX_EPOCH"] {
+            assert!(!code.contains(refused), "{file} names {refused}, the clock the system's time setting moves");
+        }
+    }
+    let clock = code_squeezed(SOURCES[0].1);
+    for needed in [
+        "usestd::time::{Duration,Instant};",
+        "pubstructMonoClock{start:Instant,",
+        "start:Instant::now(),",
+        "implClockforMonoClock{fnnow(&self)->Duration{self.start.elapsed()}",
+    ] {
+        assert!(clock.contains(needed), "MonoClock's reading is std's Instant: {needed}");
+    }
 }
