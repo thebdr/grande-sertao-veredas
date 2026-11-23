@@ -223,13 +223,15 @@ const REVIEWED: &[&str] = &[
     "zeroize", "zeroize_derive", "zip", "zlib-rs", "zmij", "zopfli",
 ];
 
-/// The crates of Ábaco's graph that are its own and not the engine's: the `.abaco` file's TOML and
-/// its references' SHA-256 (C-224). The engine uses none of them, so the fork's lock holds none and
-/// the fork's suite tests none.
+/// The crates of Ábaco's graph that are its own and not the engine's (the engine's graph, read from
+/// cargo, holds none of them at the version listed, a bare name at any version): the `.abaco`
+/// file's TOML, its check of keys nothing reads and its references' SHA-256 (C-224). The fork's
+/// suite has nothing of them to test; every other crate of Ábaco's graph is the engine's, in the
+/// fork's lock at the suite's version.
 /// (`name@version` names one version of a crate the engine uses at another: sha2's `cpufeatures`.)
 const ABACO_ONLY: &[&str] = &[
     "block-buffer", "cpufeatures@0.2.", "crypto-common", "digest", "generic-array", "serde_ignored", "serde_spanned",
-    "sha2", "toml", "toml_datetime", "toml_parser", "toml_writer", "winnow",
+    "sha2", "toml", "toml_datetime", "toml_parser", "toml_writer", "typenum", "winnow",
 ];
 
 /// The crates Ábaco's graph gains in the suite's workspace build from features other members turn
@@ -550,9 +552,9 @@ fn locked(path: &Path) -> BTreeMap<String, BTreeSet<String>> {
     out
 }
 
-/// The fork's suite, as upstream's tests and the changes' count them on 2026-11-22: upstream's
-/// 3 192 and their 8 ignored at `15ecfec`, and the changes' 50 (changes 12, 14, 16, 17, 18 and 20
-/// added seven).
+/// The fork's suite, as upstream's tests and the changes' count them: upstream's 3 192 and their 8
+/// ignored at `15ecfec`, and the changes' 57 (seven of them changes 12, 14, 16, 17, 18 and 20's;
+/// four, two and one changes 22, 23 and 24's).
 const FORK_PASSED: usize = 3249;
 const FORK_IGNORED: usize = 8;
 
@@ -683,16 +685,71 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
 }
 
 #[test]
+fn its_sources_are_its_own_and_core_s_header_reader_alone() {
+    // what rustc read to compile Ábaco's library, from its dep-info: Ábaco's own files, and of a
+    // member's source only core's header reader, compiled by path while core carries its network
+    // layers (C-224, docs/questions.md Q345); no other member's code, no other file of core's
+    let json = cargo(&["build", "-p", "veredas-abaco", "--lib", "--message-format=json"]);
+    let rmeta: Vec<PathBuf> = json
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == "veredas_abaco")
+        .flat_map(|m| m["filenames"].as_array().cloned().unwrap_or_default())
+        .filter_map(|f| f.as_str().map(PathBuf::from))
+        .filter(|f| f.extension().is_some_and(|e| e == "rmeta"))
+        .collect();
+    assert_eq!(rmeta.len(), 1, "{rmeta:?}");
+    let stem = rmeta[0].file_stem().unwrap().to_string_lossy().trim_start_matches("lib").to_string();
+    let dep_info = rmeta[0].with_file_name(format!("{stem}.d"));
+    let text = std::fs::read_to_string(&dep_info).unwrap_or_else(|e| panic!("{}: {e}", dep_info.display()));
+    // each file rustc read stands on a line of its own, ending in `:`
+    let read: BTreeSet<PathBuf> = text
+        .lines()
+        .filter_map(|l| l.strip_suffix(':'))
+        .filter(|f| !f.contains(": "))
+        .map(|f| {
+            let p = Path::new(f);
+            let p = if p.is_absolute() { p.to_path_buf() } else { root().join(p) };
+            p.canonicalize().unwrap_or(p)
+        })
+        .collect();
+    let own = root().join("crates/veredas-abaco");
+    assert!(read.iter().any(|f| f.ends_with("crates/veredas-abaco/src/lib.rs")), "{read:?}");
+    let outside: Vec<&PathBuf> = read.iter().filter(|f| !f.starts_with(&own)).collect();
+    assert_eq!(outside, [&root().join("crates/veredas-core/src/schema.rs")], "files outside Ábaco's folder that its library compiles");
+}
+
+#[test]
 fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
     let paths = [
         format!("veredas-abaco v2.0.0-alpha.1 ({})", root().join("crates/veredas-abaco").display()),
         format!("ironcalc_base v0.9.1 ({})", root().join("forks/ironcalc/base").display()),
         format!("ironcalc v0.9.1 ({})", root().join("forks/ironcalc/xlsx").display()),
     ];
-    // the fork's lock pins every crate of Ábaco's graph on every platform at the version and the
-    // source the suite's lock gives it, so the fork's suite tests the versions Ábaco links
+    // the fork's lock pins every crate of the engine's graph (its two crates' own, in the suite's
+    // build, on every platform) at the version and the source the suite's lock gives it, so the
+    // fork's suite tests the versions Ábaco links; a crate of Ábaco's graph outside the engine's is
+    // Ábaco's own, and listed so (`ABACO_ONLY`)
     let fork_lock = locked(&root().join("forks/ironcalc/Cargo.lock"));
     let root_lock = locked(&root().join("Cargo.lock"));
+    let engine: BTreeSet<(String, String)> = cargo(&[
+        "tree", "-e", "normal", "--prefix", "none", "--format", "{p}", "-p", "ironcalc_base", "-p", "ironcalc", "--target", "all",
+    ])
+    .lines()
+    .map(|l| l.trim_end_matches(" (*)").trim_end_matches(" (proc-macro)"))
+    .filter(|l| !l.is_empty() && !paths.iter().any(|p| p == l))
+    .map(|l| {
+        let mut w = l.split_whitespace();
+        (w.next().unwrap().to_string(), w.next().unwrap().trim_start_matches('v').to_string())
+    })
+    .collect();
+    assert!(engine.iter().any(|(n, _)| n == "quick-xml") && engine.iter().any(|(n, _)| n == "zip"), "{engine:?}");
+    let listed = |name: &str, version: &str| {
+        ABACO_ONLY.iter().any(|o| match o.split_once('@') {
+            Some((n, prefix)) => n == name && version.starts_with(prefix),
+            None => *o == name,
+        })
+    };
     for p in normal_graph(true) {
         if paths.contains(&p) {
             continue;
@@ -701,16 +758,27 @@ fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
         let mut words = p.split_whitespace();
         let (name, version) = (words.next().unwrap(), words.next().unwrap().trim_start_matches('v'));
         assert!(root_lock.get(name).is_some_and(|v| v.contains(version)), "{name} {version} not in the suite's lock from crates.io");
-        // Ábaco's own, which the engine never uses: the fork's suite has nothing of them to test
-        if ABACO_ONLY.iter().any(|o| *o == name || format!("{name}@{version}").starts_with(o)) {
-            assert!(!fork_lock.get(name).is_some_and(|v| v.contains(version)), "{name} {version}: listed as Ábaco's own, yet in the fork's lock");
-            continue;
+        if engine.contains(&(name.to_string(), version.to_string())) {
+            assert!(!listed(name, version), "{name} {version}: listed as Ábaco's own, yet in the engine's graph");
+            assert!(
+                fork_lock.get(name).is_some_and(|v| v.contains(version)),
+                "{name} {version} in the engine's graph, {:?} in the fork's lock",
+                fork_lock.get(name)
+            );
+        } else {
+            // Ábaco's own, which the engine never uses: the fork's suite has nothing of them to test
+            assert!(listed(name, version), "{name} {version}: in Ábaco's graph and not the engine's, yet not listed as Ábaco's own");
         }
+    }
+    // each entry names a crate Ábaco has and the engine has not, at any version a bare name says
+    let abaco = normal_graph(true);
+    for o in ABACO_ONLY {
+        let (n, prefix) = o.split_once('@').unwrap_or((o, ""));
         assert!(
-            fork_lock.get(name).is_some_and(|v| v.contains(version)),
-            "{name} {version} in Ábaco's graph, {:?} in the fork's lock",
-            fork_lock.get(name)
+            abaco.iter().any(|p| p.split_whitespace().next() == Some(n) && p.split_whitespace().nth(1).is_some_and(|v| v.trim_start_matches('v').starts_with(prefix))),
+            "{o}: listed, not in Ábaco's graph"
         );
+        assert!(!engine.iter().any(|(en, ev)| en == n && ev.starts_with(prefix)), "{o}: listed as Ábaco's own, yet in the engine's graph");
     }
     // one float path: `num-traits` (the statistical functions' float math) with `std` in Ábaco's
     // own build and in the fork's test build (fork change 13), so neither falls back to `libm`
