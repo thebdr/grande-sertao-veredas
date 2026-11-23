@@ -159,6 +159,10 @@ fn without_its_default_features_core_stands_on_serde_toml_and_thiserror_alone() 
     ] {
         assert!(whole.contains(c), "{c} missing from the default form");
     }
+    assert!(
+        !whole.contains("async-opcua-server"),
+        "the server's crate in the default form"
+    );
     // Each master asked alone brings its own framing and a runtime, and neither the other's
     // framing nor any OPC UA, regex or chrono.
     for (master, own, other) in [
@@ -1141,6 +1145,38 @@ fn page_view(page: &str, html: &str) -> Vec<(String, String)> {
     keys
 }
 
+/// The library name of every crate the workspace's lock holds, core's own left out.
+fn lock_crates() -> BTreeSet<String> {
+    let m = manifest();
+    let meta: serde_json::Value = serde_json::from_str(&cargo(&[
+        "metadata",
+        "--format-version",
+        "1",
+        "--offline",
+        "--manifest-path",
+        m.to_str().unwrap(),
+    ]))
+    .unwrap();
+    let mut names = BTreeSet::new();
+    for package in meta["packages"].as_array().unwrap() {
+        for target in package["targets"].as_array().unwrap() {
+            let kinds = strings(&target["kind"]);
+            if kinds
+                .iter()
+                .any(|k| ["lib", "rlib", "proc-macro"].contains(&k.as_str()))
+            {
+                names.insert(target["name"].as_str().unwrap().replace('-', "_"));
+            }
+        }
+    }
+    names.remove("veredas_core");
+    assert!(
+        names.contains("regex") && names.contains("tokio"),
+        "{names:?}"
+    );
+    names
+}
+
 /// Rustdoc's view of one form of core, with private items or without them: every page and every
 /// key a page shows ([`page_view`]), as `page` and `page#key`, each with what it renders.
 /// `all.html` is kept as a page only: its sections mirror the pages.
@@ -1148,6 +1184,12 @@ fn rustdoc_view(features: &[&str], private: bool) -> BTreeMap<String, String> {
     let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("features-check");
     let docs = target.join("doc").join("veredas_core");
     let _ = std::fs::remove_dir_all(&docs);
+    // Rustdoc links a dependency's type, with its full path as the link's title, only when a
+    // folder of that crate's name stands in the doc folder; without one it writes the bare name,
+    // and two dependencies' `Error`s read the same. A folder for every crate of the lock.
+    for name in lock_crates() {
+        std::fs::create_dir_all(target.join("doc").join(name)).unwrap();
+    }
     let list = features.join(",");
     let m = manifest();
     let mut args = vec![
@@ -1334,6 +1376,30 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
             steps, 20,
             "four steps of net, four of the demo plant, six of each master"
         );
+        // A form holds nothing of a feature it lacks: no page, row or re-export in that
+        // feature's layer (the line in `fieldbus` both masters share aside).
+        let strict = |feature: &str, entry: &str| -> bool {
+            match entry.split_once("#row:") {
+                Some((_, row)) => layer(feature, row),
+                None => layer(feature, entry) || (feature == "net" && NET_ROOT.contains(&entry)),
+            }
+        };
+        for (form, view) in forms.iter().zip(&views) {
+            for feature in ["net", "demo-server", "modbus", "enip"] {
+                if form.contains(&feature) {
+                    continue;
+                }
+                let held: Vec<&String> = view.keys().filter(|k| strict(feature, k)).collect();
+                assert!(
+                    held.is_empty(),
+                    "{form:?} (private items {private}) holds {feature}'s layer: {held:?}"
+                );
+            }
+        }
+        // A dependency's type is named by its full path: the variant `SourceError::Pattern`
+        // carries regex's error, told from any other crate's `Error`.
+        let pattern = &views[4]["source/enum.SourceError.html#variant.Pattern"];
+        assert!(pattern.contains("‹enum regex::error::Error›"), "{pattern}");
         for page in [
             "schema/index.html",
             "rng/index.html",
