@@ -661,25 +661,20 @@ async fn run(
     let mut buf = vec![0u8; 2048];
     let reply = loop {
         let deadline = last_heard + opened.timeout;
+        // In this order: a close first, then the timeout (once it has passed nothing more goes
+        // out), then inputs, then the next output.
         tokio::select! {
+            biased;
             done = close_rx.recv() => break done,
-            _ = tick.tick() => {
-                let (data, run) = {
-                    let io = shared.lock();
-                    (io.outputs.clone(), io.run)
-                };
-                sequence = sequence.wrapping_add(1);
-                count = count.wrapping_add(1);
-                let frame = encode_frame(&Frame {
-                    connection_id: opened.o_to_t_id,
-                    sequence,
-                    cip_sequence: count,
-                    run_idle: (spec.output_header == Header::RunIdle).then_some(run),
-                    data,
-                });
-                if udp.send_to(&frame, opened.sends_to).await.is_ok() {
-                    shared.lock().counters.produced += 1;
+            _ = tokio::time::sleep_until(deadline) => {
+                shared.lock().state = LinkState::Lost { timeout: opened.timeout };
+                // Lost: produce no more, close the session, wait for the handle's close or drop.
+                drop(session);
+                let done = close_rx.recv().await;
+                if let Some(done) = done {
+                    let _ = done.send(Ok(()));
                 }
+                return;
             }
             received = udp.recv_from(&mut buf) => {
                 let Ok((n, from)) = received else { continue };
@@ -705,15 +700,23 @@ async fn run(
                     }
                 }
             }
-            _ = tokio::time::sleep_until(deadline) => {
-                shared.lock().state = LinkState::Lost { timeout: opened.timeout };
-                // Lost: produce no more, close the session, wait for the handle's close or drop.
-                drop(session);
-                let done = close_rx.recv().await;
-                if let Some(done) = done {
-                    let _ = done.send(Ok(()));
+            _ = tick.tick() => {
+                let (data, run) = {
+                    let io = shared.lock();
+                    (io.outputs.clone(), io.run)
+                };
+                sequence = sequence.wrapping_add(1);
+                count = count.wrapping_add(1);
+                let frame = encode_frame(&Frame {
+                    connection_id: opened.o_to_t_id,
+                    sequence,
+                    cip_sequence: count,
+                    run_idle: (spec.output_header == Header::RunIdle).then_some(run),
+                    data,
+                });
+                if udp.send_to(&frame, opened.sends_to).await.is_ok() {
+                    shared.lock().counters.produced += 1;
                 }
-                return;
             }
         }
     };

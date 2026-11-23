@@ -518,6 +518,7 @@ fn every_request_is_the_standards_bytes_and_the_exchange_runs_at_the_interval() 
     );
     assert_eq!(frames[3], encap(0x0066, HANDLE, 0, &[0; 8], &[]));
     assert_eq!(frames.len(), 4);
+    thread::sleep(RPI); // a frame already on its way is recorded before the count
     let produced = a.outputs().len();
     thread::sleep(RPI * 3);
     assert_eq!(
@@ -855,6 +856,12 @@ fn a_silent_adapter_loses_the_connection_at_its_timeout() {
     sp.timeout_multiplier = 1;
     let s = Scanner::open(&sp).unwrap();
     assert_eq!(s.opened().timeout, RPI * 8);
+    let fo = &a.frames()[1];
+    assert_eq!(
+        items(&fo[24..])[1].1[6 + 18],
+        1,
+        "the multiplier the Forward_Open carries"
+    );
     assert!(wait(Duration::from_secs(1), || s.counters().consumed > 2));
     a.producing.store(false, Ordering::SeqCst);
     let t = Instant::now();
@@ -865,10 +872,11 @@ fn a_silent_adapter_loses_the_connection_at_its_timeout() {
         took >= RPI * 7 && took < RPI * 8 + Duration::from_millis(200),
         "{took:?}"
     );
-    let produced = a.outputs().len();
+    // Counted where the frames leave, so none still on its way to the adapter is miscounted.
+    let produced = s.counters().produced;
     thread::sleep(RPI * 4);
     assert_eq!(
-        a.outputs().len(),
+        s.counters().produced,
         produced,
         "a lost connection produces nothing"
     );
@@ -893,6 +901,7 @@ fn a_refused_close_says_so_and_a_drop_closes() {
         }
     );
     assert!(unregistered(&a), "unregistered all the same");
+    thread::sleep(RPI);
     let produced = a.outputs().len();
     thread::sleep(RPI * 3);
     assert_eq!(a.outputs().len(), produced);
@@ -953,6 +962,12 @@ fn inputs_come_from_the_adapters_session_or_io_address_and_no_other() {
     let mut sp = spec(&a);
     sp.timeout_multiplier = 7;
     let s = Scanner::open(&sp).unwrap();
+    let fo = &a.frames()[1];
+    assert_eq!(
+        items(&fo[24..])[1].1[6 + 18],
+        7,
+        "the multiplier the Forward_Open carries"
+    );
     let (id, to) = (s.opened().t_to_o_id, s.opened().receives_on);
     assert_eq!(s.opened().sends_to, io2.local_addr().unwrap());
     // From the session's address (127.0.0.1): taken.
@@ -1019,6 +1034,11 @@ fn stray_frames_never_keep_a_silent_adapters_connection() {
             .unwrap();
         a.io.send_to(&input_frame(id ^ 1, 1, 1, None, &[1; 6]), to)
             .unwrap();
+        // This id at another size, and a datagram that is no Class 1 frame, from the adapter.
+        a.io.send_to(&input_frame(id, 1, 1, None, &[1; 4]), to)
+            .unwrap();
+        a.io.send_to(&[1, 2, 3], to).unwrap();
+
         thread::sleep(Duration::from_millis(5));
     }
     let took = t.elapsed();
