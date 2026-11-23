@@ -99,7 +99,7 @@ fn toml_line(line: &str, mut inside: Option<&'static str>) -> Option<&'static st
                 i += 2;
                 continue;
             }
-            if line[i..].starts_with(q) {
+            if b[i..].starts_with(q.as_bytes()) {
                 // A closing run may hold up to two quotes of the value before the delimiter.
                 let mut j = i + 3;
                 while j < b.len() && b[j] == q.as_bytes()[0] && j < i + 5 {
@@ -116,7 +116,7 @@ fn toml_line(line: &str, mut inside: Option<&'static str>) -> Option<&'static st
             b'#' => return None,
             b'"' | b'\'' => {
                 let q: &'static str = if b[i] == b'"' { "\"\"\"" } else { "'''" };
-                if line[i..].starts_with(q) {
+                if b[i..].starts_with(q.as_bytes()) {
                     inside = Some(q);
                     i += 3;
                     continue;
@@ -145,8 +145,38 @@ fn header_key(line: &str) -> String {
         let end = if line[end..].starts_with(']') { end + 1 } else { end };
         return line[..end].to_string();
     }
-    let key = line.split('=').next().unwrap_or(line).trim();
-    key.trim_matches('"').trim_matches('\'').to_string()
+    // The key as TOML reads it: a quoted one to its closing quote (`=` inside it is the key's), a
+    // bare one to the first blank, `.` or `=`; a dotted key is named whole, never as its first part.
+    let quoted = |q: char, from: &str| -> Option<(String, usize)> {
+        let mut out = String::new();
+        let mut chars = from.char_indices().skip(1);
+        while let Some((i, c)) = chars.next() {
+            match c {
+                '\\' if q == '"' => {
+                    if let Some((_, e)) = chars.next() {
+                        out.push(e);
+                    }
+                }
+                c if c == q => return Some((out, i + c.len_utf8())),
+                c => out.push(c),
+            }
+        }
+        None
+    };
+    let (first, rest) = match line.chars().next() {
+        Some(q @ ('"' | '\'')) => match quoted(q, line) {
+            Some((k, end)) => (k, &line[end..]),
+            None => return line.to_string(),
+        },
+        _ => {
+            let end = line.find(|c: char| c.is_whitespace() || c == '.' || c == '=').unwrap_or(line.len());
+            (line[..end].to_string(), &line[end..])
+        }
+    };
+    if rest.trim_start().starts_with('.') {
+        return line.split('=').next().unwrap_or(line).trim().to_string();
+    }
+    first
 }
 
 /// What a statement may be: a script box's or a function's.

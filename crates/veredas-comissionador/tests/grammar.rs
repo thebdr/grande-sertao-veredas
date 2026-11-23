@@ -1181,6 +1181,92 @@ fn an_unfinished_expression_in_a_string_s_braces_names_its_brace() {
     assert_eq!(one("\"{(1}\""), ["6:27: `}` where `)` was expected"]);
 }
 
+// ---- refute round 4 ------------------------------------------------------------------------
+
+#[test]
+fn a_character_past_ascii_in_the_header_is_read_whole() {
+    let body = "test \"t\" {\n  id T\n  step a stop pass\n}\n";
+    let one = |head: &str| {
+        let e = parse_test(&format!("format = \"veredas-test\"\nversion = 1\n{head}{body}"), "t").unwrap_err();
+        format!("{}:{}: {}", e.line, e.column, e.message)
+    };
+    for v in ["\"\"\"olá\"\"\"", "'''olá'''", "\"\"\"\nolá ç\n\"\"\"", "\"olá\"", "'olá'"] {
+        assert_eq!(one(&format!("note = {v}\n")), "3:1: the header holds `format` and `version` alone, not `note`", "{v}");
+    }
+    assert!(parse_test(&format!("# olá, um comentário\nformat = \"veredas-test\" # ç\nversion = 1\n{body}"), "t").is_ok());
+    // A used function file's header the same, through the test's check.
+    let f = "format = \"veredas-functions\"\nversion = 1\nnote = \"\"\"olá\"\"\"\nfunction F() {\n}\n";
+    assert_eq!(problems_with(&test_of("  use f.fn\n  step a stop pass\n"), &[("f.fn", f)]), ["f.fn:3:1: the header holds `format` and `version` alone, not `note`"]);
+}
+
+#[test]
+fn a_quoted_header_key_is_read_to_its_closing_quote() {
+    let body = "test \"t\" {\n  id T\n  step a stop pass\n}\n";
+    let one = |head: &str| {
+        let e = parse_test(&format!("format = \"veredas-test\"\nversion = 1\n{head}{body}"), "t").unwrap_err();
+        format!("{}:{}: {}", e.line, e.column, e.message)
+    };
+    assert_eq!(one("\"format=x\" = 2\n"), "3:1: the header holds `format` and `version` alone, not `format=x`");
+    assert_eq!(one("'version = 9' = 2\n"), "3:1: the header holds `format` and `version` alone, not `version = 9`");
+    assert_eq!(one("\"a\\\"b\" = 2\n"), "3:1: the header holds `format` and `version` alone, not `a\"b`");
+    // A dotted key is named whole; a quoted key holding a dot is one key.
+    assert_eq!(one("stamp.format = 2\n"), "3:1: the header holds `format` and `version` alone, not `stamp.format`");
+    assert_eq!(one("\"version.x\" = 2\n"), "3:1: the header holds `format` and `version` alone, not `version.x`");
+    // A dotted key under the stamp's own name is no TOML: core's reader refuses it first.
+    assert!(one("format.x = 2\n").starts_with("1:1: not a test file: TOML parse error"));
+    for stamp in ["\"format\" = \"veredas-test\"\n'version' = 1\n", "format=\"veredas-test\"\nversion=1\n", "\"format\"=\"veredas-test\"\nversion =1\n"] {
+        assert!(parse_test(&format!("{stamp}{body}"), "t").is_ok(), "{stamp}");
+    }
+}
+
+#[test]
+fn a_function_named_twice_is_its_first_in_the_cycle_search() {
+    // A real cycle through the first of two `F`s: named, beside the duplicate.
+    let a = fproblems(&format!("{FHEAD}function F() -> (x: int) {{\n  x = G()\n}}\nfunction G() -> (x: int) {{\n  x = F()\n}}\nfunction F() -> (x: int) {{\n  x = 1\n}}\n"));
+    assert_eq!(a, ["10:10: two functions are named `F`: the other is at f.fn:4:10", "4:10: `F` calls itself through `G`", "7:10: `G` calls itself through `F`"]);
+    // No cycle where the second `F` would make one: the call to `F` reaches the first.
+    let b = fproblems(&format!("{FHEAD}function F() -> (x: int) {{\n  x = 1\n}}\nfunction G() -> (x: int) {{\n  x = F()\n}}\nfunction F() -> (x: int) {{\n  x = G()\n}}\n"));
+    assert_eq!(b, ["10:10: two functions are named `F`: the other is at f.fn:4:10"]);
+}
+
+#[test]
+fn a_way_back_of_five_and_six_is_counted_right() {
+    let cycle = |n: usize| {
+        let mut f = String::from(FHEAD);
+        for i in 0..n {
+            f.push_str(&format!("function F{i}() -> (x: int) {{\n  x = F{}()\n}}\n", (i + 1) % n));
+        }
+        fproblems(&f)
+    };
+    assert_eq!(cycle(6)[0], "4:10: `F0` calls itself through `F1`, `F2`, `F3`, `F4`, `F5`");
+    assert_eq!(cycle(7)[0], "4:10: `F0` calls itself through `F1`, `F2`, `F3`, `F4`, `F5` and 1 other");
+    assert_eq!(cycle(8)[0], "4:10: `F0` calls itself through `F1`, `F2`, `F3`, `F4`, `F5` and 2 others");
+    let t0 = std::time::Instant::now();
+    assert_eq!(cycle(2000).len(), 2000);
+    assert!(t0.elapsed() < std::time::Duration::from_secs(5), "a cycle of 2000: {:?}", t0.elapsed());
+}
+
+#[test]
+fn a_test_using_a_large_function_file_is_checked_at_once() {
+    // Twenty thousand functions in a used file, and ten thousand of one name: each check linear.
+    let mut f = String::from(FHEAD);
+    for i in 0..20_000 {
+        f.push_str(&format!("function G{i}() -> (x: int) {{\n  x = {i}\n}}\n"));
+    }
+    let t0 = std::time::Instant::now();
+    assert_eq!(problems_with(&test_of("  use f.fn\n  step a stop pass\n"), &[("f.fn", &f)]), Vec::<String>::new());
+    assert!(t0.elapsed() < std::time::Duration::from_secs(5), "20 000 functions used: {:?}", t0.elapsed());
+    let mut d = String::from(FHEAD);
+    for _ in 0..10_000 {
+        d.push_str("function F() -> (x: int) {\n  x = 1\n}\n");
+    }
+    let t0 = std::time::Instant::now();
+    let p = problems_with(&test_of("  use d.fn\n  step a stop pass\n"), &[("d.fn", &d)]);
+    assert!(t0.elapsed() < std::time::Duration::from_secs(5), "10 000 duplicates: {:?}", t0.elapsed());
+    assert_eq!(p.len(), 9_999);
+    assert_eq!(p[9_998], format!("d.fn:{}:10: two functions are named `F`: the other is at d.fn:4:10", 4 + 3 * 9_999));
+}
+
 // ---- the reference's text -------------------------------------------------------------------
 
 /// A text's paragraphs, each on one line, the blocks the tests load (`test`, `function`) left out.

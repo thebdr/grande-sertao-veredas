@@ -147,12 +147,12 @@ pub fn check_test(text: &str, file: &str, resolve: &dyn Fn(&str) -> Result<Strin
     }
     let mut named: BTreeMap<String, (String, Place)> = BTreeMap::new();
     for f in &files {
+        let flines = Lines::new(&f.text);
         for func in &f.functions.functions {
-            let place = Place::of(&f.text, func.name.span.start);
+            let place = flines.place(func.name.span.start);
             match named.get(&func.name.value) {
-                Some((other, p)) if other != &f.file => out.push(Problem::at(
+                Some((other, p)) if other != &f.file => out.push(flines.problem(
                     &f.file,
-                    &f.text,
                     func.name.span.start,
                     format!("two functions are named `{}`: the other is at {other}:{}:{}", func.name.value, p.line, p.column),
                 )),
@@ -578,10 +578,9 @@ fn check_function_file(ff: &mut FunctionFile, file: &str, text: &str, out: &mut 
     for f in &ff.functions {
         if by_name.contains_key(&f.name.value) {
             let first = &by_name[&f.name.value];
-            let p = Place::of(text, first.name.span.start);
-            out.push(Problem::at(
+            let p = lines.place(first.name.span.start);
+            out.push(lines.problem(
                 file,
-                text,
                 f.name.span.start,
                 format!("two functions are named `{}`: the other is at {file}:{}:{}", f.name.value, p.line, p.column),
             ));
@@ -615,7 +614,10 @@ fn check_function_file(ff: &mut FunctionFile, file: &str, text: &str, out: &mut 
     // connected components of the call graph (one pass), each function in one named with the way
     // back to itself (a search inside its component, parent links, no path copied).
     let names: Vec<String> = ff.functions.iter().map(|f| f.name.value.clone()).collect();
-    let index: BTreeMap<&str, usize> = names.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
+    let mut index: BTreeMap<&str, usize> = BTreeMap::new();
+    for (i, n) in names.iter().enumerate() {
+        index.entry(n.as_str()).or_insert(i);
+    }
     let edges: Vec<Vec<usize>> = ff
         .functions
         .iter()
@@ -626,13 +628,15 @@ fn check_function_file(ff: &mut FunctionFile, file: &str, text: &str, out: &mut 
         })
         .collect();
     let component = components(&edges);
+    let (mut parent, mut seen) = (vec![0; edges.len()], vec![0; edges.len()]);
     for (i, f) in ff.functions.iter().enumerate() {
-        if let Some(path) = way_back(i, &edges, &component) {
+        if let Some(path) = way_back(i, &edges, &component, &mut parent, &mut seen) {
             // A long way back is named by its first five and counted.
             let shown: Vec<String> = path.iter().take(5).map(|&n| format!("`{}`", names[n])).collect();
             let msg = match path.len() {
                 0 => format!("`{}` calls itself", f.name.value),
                 1..=5 => format!("`{}` calls itself through {}", f.name.value, shown.join(", ")),
+                6 => format!("`{}` calls itself through {} and 1 other", f.name.value, shown.join(", ")),
                 n => format!("`{}` calls itself through {} and {} others", f.name.value, shown.join(", "), n - 5),
             };
             out.push(lines.problem(file, f.name.span.start, msg));
@@ -691,16 +695,18 @@ fn components(edges: &[Vec<usize>]) -> Vec<usize> {
 }
 
 /// The functions between `start` and itself on the shortest way back, searched inside its
-/// component alone; none when it is on no cycle.
-fn way_back(start: usize, edges: &[Vec<usize>], comp: &[usize]) -> Option<Vec<usize>> {
+/// component alone; none when it is on no cycle. `parent` and `seen` are the search's arrays,
+/// reused from one start to the next (`seen[v] == start + 1` marks a node met in this search).
+fn way_back(start: usize, edges: &[Vec<usize>], comp: &[usize], parent: &mut [usize], seen: &mut [usize]) -> Option<Vec<usize>> {
     if edges[start].contains(&start) {
         return Some(Vec::new());
     }
-    let mut parent: BTreeMap<usize, usize> = BTreeMap::new();
+    let mark = start + 1;
     let mut queue = std::collections::VecDeque::new();
     for &w in &edges[start] {
-        if comp[w] == comp[start] && !parent.contains_key(&w) {
-            parent.insert(w, start);
+        if comp[w] == comp[start] && seen[w] != mark {
+            seen[w] = mark;
+            parent[w] = start;
             queue.push_back(w);
         }
     }
@@ -708,19 +714,17 @@ fn way_back(start: usize, edges: &[Vec<usize>], comp: &[usize]) -> Option<Vec<us
         if edges[v].contains(&start) {
             let mut path = vec![v];
             let mut at = v;
-            while let Some(&p) = parent.get(&at) {
-                if p == start {
-                    break;
-                }
-                path.push(p);
-                at = p;
+            while parent[at] != start {
+                at = parent[at];
+                path.push(at);
             }
             path.reverse();
             return Some(path);
         }
         for &w in &edges[v] {
-            if w != start && comp[w] == comp[start] && !parent.contains_key(&w) {
-                parent.insert(w, v);
+            if w != start && comp[w] == comp[start] && seen[w] != mark {
+                seen[w] = mark;
+                parent[w] = v;
                 queue.push_back(w);
             }
         }
