@@ -316,6 +316,12 @@ pub enum LldpError {
     Missing(&'static str),
     #[error("TLV {index} is of type {tlv_type}: the first three are the chassis id (1), the port id (2) and the time to live (3), in that order")]
     Order { index: usize, tlv_type: u8 },
+    #[error("TLV {index}, the {what}, does not fit it ({len} bytes): a receiver discards the PDU (802.1AB)")]
+    Unfit { index: usize, what: &'static str, len: usize },
+    #[error("a TLV of type {tlv_type} kept unread ({len} bytes) is read otherwise by Wireshark's dissector, which reads that type with a layout of its own: not written")]
+    ReadOtherwise { tlv_type: u8, len: usize },
+    #[error("a shutdown PDU (time to live 0) holds the chassis id, the port id and the time to live alone (802.1AB); a TLV of type {0} is not written in it")]
+    Shutdown(u8),
     #[error("a TLV value holds at most 511 bytes; type {tlv_type} has {len}")]
     TlvTooLong { tlv_type: u8, len: usize },
     #[error("a PDU's trailing bytes are the one byte after its last TLV when it has no End; {0} cannot be written")]
@@ -351,13 +357,14 @@ pub fn decode(payload: &[u8]) -> Result<LldpPdu, LldpError> {
         let tlv_type = (head >> 9) as u8;
         let len = usize::from(head & 0x1FF);
         off += 2;
+        // TLVs are counted from 1, in every error.
+        index += 1;
         let left = payload.len() - off;
         if len > left {
             return Err(LldpError::Overrun { index, tlv_type, len, left });
         }
         let v = &payload[off..off + len];
         off += len;
-        index += 1;
         // 802.1AB: the first three TLVs are the chassis id, the port id and the time to live, in
         // that order; a receiver discards a PDU where they are not (as the dissector does).
         if (1..=3).contains(&index) && tlv_type != 0 && usize::from(tlv_type) != index {
@@ -365,38 +372,45 @@ pub fn decode(payload: &[u8]) -> Result<LldpPdu, LldpError> {
         }
         // A TLV that says what is already said (a second chassis id, a second system name) or
         // that does not fit its type is kept among the unread, never dropped.
-        let kept = match tlv_type {
-            0 => {
+        // The mandatory three are read in their place only: one there that does not fit is the
+        // PDU's error, never made good from a later one; later, they are repeats, kept unread.
+        let unfit = |what| LldpError::Unfit { index, what, len: v.len() };
+        let kept = match (index, tlv_type) {
+            (_, 0) => {
                 pdu.end = Some(v.to_vec());
                 break;
             }
-            1 if chassis.is_none() && (2..=256).contains(&v.len()) && id_fits(4, 5, v) => {
+            (1, 1) if (2..=256).contains(&v.len()) && id_fits(4, 5, v) => {
                 chassis = Some(ChassisId::decode(v));
                 true
             }
-            2 if port.is_none() && (2..=256).contains(&v.len()) && id_fits(3, 4, v) => {
+            (1, 1) => return Err(unfit("chassis id")),
+            (2, 2) if (2..=256).contains(&v.len()) && id_fits(3, 4, v) => {
                 port = Some(PortId::decode(v));
                 true
             }
-            3 if ttl.is_none() && v.len() == 2 => {
+            (2, 2) => return Err(unfit("port id")),
+            (3, 3) if v.len() == 2 => {
                 ttl = Some(u16::from_be_bytes([v[0], v[1]]));
                 true
             }
-            4 => set_text(&mut pdu.port_desc, v),
-            5 => set_text(&mut pdu.sys_name, v),
-            6 => set_text(&mut pdu.sys_desc, v),
-            7 if pdu.sys_caps.is_none() && v.len() == 4 => {
+            (3, 3) => return Err(unfit("time to live")),
+            (_, 1..=3) => false,
+            (_, 4) => set_text(&mut pdu.port_desc, v),
+            (_, 5) => set_text(&mut pdu.sys_name, v),
+            (_, 6) => set_text(&mut pdu.sys_desc, v),
+            (_, 7) if pdu.sys_caps.is_none() && v.len() == 4 => {
                 pdu.sys_caps = Some((u16::from_be_bytes([v[0], v[1]]), u16::from_be_bytes([v[2], v[3]])));
                 true
             }
-            8 => match decode_mgmt(v) {
+            (_, 8) => match decode_mgmt(v) {
                 Some(m) => {
                     pdu.mgmt_addrs.push(m);
                     true
                 }
                 None => false,
             },
-            127 if v.len() >= 4 => {
+            (_, 127) if v.len() >= 4 => {
                 decode_org(&mut pdu, [v[0], v[1], v[2]], v[3], &v[4..]);
                 true
             }
@@ -503,7 +517,9 @@ fn check_len(what: &'static str, min: usize, max: usize, len: usize) -> Result<(
 /// (none when it had none). What a TLV cannot carry is refused, never cut: a chassis or port id
 /// outside 1 to 255 bytes, or a MAC id not of 6 bytes or a network-address id not of its family's
 /// length; a description or system name past 255; a management address outside 1 to 31 bytes or
-/// not its family's length; an OID past 128; any value past 511; a kept TLV of type 0 or past 127.
+/// not its family's length; an OID past 128; any value past 511; a kept TLV of type 0 or past 127,
+/// a kept capabilities TLV past four bytes or any kept management address (the dissector reads
+/// them its own way); and in a shutdown PDU (time to live 0) any TLV but the mandatory three.
 pub fn encode(pdu: &LldpPdu) -> Result<Vec<u8>, LldpError> {
     let mut out = Vec::new();
     let chassis = pdu.chassis.encode();
@@ -519,6 +535,7 @@ pub fn encode(pdu: &LldpPdu) -> Result<Vec<u8>, LldpError> {
     push_tlv(&mut out, 1, &chassis)?;
     push_tlv(&mut out, 2, &port)?;
     push_tlv(&mut out, 3, &pdu.ttl.to_be_bytes())?;
+    let mandatory = out.len();
     for (t, what, s) in [(4, "a port description", &pdu.port_desc), (5, "a system name", &pdu.sys_name), (6, "a system description", &pdu.sys_desc)] {
         if let Some(s) = s {
             check_len(what, 0, MAX_TEXT, s.len())?;
@@ -568,7 +585,18 @@ pub fn encode(pdu: &LldpPdu) -> Result<Vec<u8>, LldpError> {
         if *t == 0 {
             return Err(LldpError::BadType(0));
         }
+        // The dissector reads a capabilities TLV past four bytes and any management address TLV
+        // with its own layout, whatever their length says, and so reads what follows otherwise
+        // (measured, tshark 4.6.6, every type 1 to 127 at 0 to 50 bytes): kept, never written.
+        if (*t == 7 && v.len() > 4) || *t == 8 {
+            return Err(LldpError::ReadOtherwise { tlv_type: *t, len: v.len() });
+        }
         push_tlv(&mut out, *t, v)?;
+    }
+    // A shutdown PDU holds the mandatory three alone (802.1AB; the dissector calls any other
+    // malformed in it).
+    if pdu.ttl == 0 && out.len() > mandatory {
+        return Err(LldpError::Shutdown(out[mandatory] >> 1));
     }
     match &pdu.end {
         Some(end) if pdu.trailing.is_empty() => push_tlv(&mut out, 0, end)?,
