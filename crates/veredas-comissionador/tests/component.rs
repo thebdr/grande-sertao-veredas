@@ -201,6 +201,11 @@ const REFUSED: &[(&str, &str)] = &[
     ("telegram", "core's telegram layer, past the session"),
     ("fieldbus", "core's fieldbus masters, past the session"),
     ("net", "a socket of its own"),
+    ("tail", "portal's log layer, past the session"),
+    ("FileTailSource", "a log read past the session"),
+    ("FamilyTailSource", "a family of logs read past the session"),
+    ("SourceSet", "portal's sources started past the session"),
+    ("Source", "a source started past the session"),
     ("Command", "a process of its own"),
     ("unsafe", "code past the compiler's guarantees: a socket by the system's own calls, among others"),
     ("from_v1", "Veredas 1's project read in, its own spelling of the switch with it"),
@@ -270,7 +275,37 @@ fn its_sources_reach_the_plant_through_portal_alone_and_never_arm_the_switch() {
     for f in files_under(&crate_dir().join("src")) {
         let text = std::fs::read_to_string(&f).unwrap();
         assert_eq!(breaches_of(&text), Vec::<String>::new(), "{}", f.display());
+        assert!(!fs_outside(&f, &text), "{} reaches files of its own: `fs` is the engine's own files', in {FS_FILES:?} alone", f.display());
     }
+}
+
+/// The files that read and write the engine's own files (a test and its function files, the runs
+/// folder): `fs` is named there alone, so no other file reads a plant's file past the session.
+const FS_FILES: [&str; 3] = ["check.rs", "main.rs", "record.rs"];
+
+/// Whether a source file names `fs` (`std::fs`, `tokio::fs`) and is not one of `FS_FILES`.
+fn fs_outside(file: &Path, text: &str) -> bool {
+    let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    !FS_FILES.contains(&name) && read(text).idents.iter().any(|i| i == "fs")
+}
+
+#[test]
+fn files_are_reached_where_the_engine_keeps_its_own() {
+    let at = |name: &str, text: &str| fs_outside(Path::new("src").join(name).as_path(), text);
+    assert!(at("plant.rs", "fn f(p: &Path) -> String { std::fs::read_to_string(p).unwrap_or_default() }"));
+    assert!(at("run.rs", "use std::fs;"));
+    assert!(at("eval.rs", "async fn f(p: &Path) { let _ = tokio::fs::read(p).await; }"));
+    assert!(at("plant.rs", "use std::{fs as files};"));
+    assert!(!at("plant.rs", "// std::fs, in a comment\nfn f() {}"));
+    assert!(!at("record.rs", "fn f(p: &Path) { std::fs::write(p, \"\").unwrap(); }"));
+    // Where `fs` is named today: those three files.
+    let mut named: Vec<String> = files_under(&crate_dir().join("src"))
+        .into_iter()
+        .filter(|f| read(&std::fs::read_to_string(f).unwrap()).idents.iter().any(|i| i == "fs"))
+        .map(|f| f.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    named.sort();
+    assert_eq!(named, FS_FILES);
 }
 
 /// Its normal dependencies, each reviewed: no OPC UA stack, no socket or HTTP crate of its own.
@@ -303,12 +338,39 @@ fn the_reading_finds_every_refused_form() {
     assert_eq!(one("use veredas_core::telegram::Link;"), ["telegram: core's telegram layer, past the session"]);
     assert_eq!(one("use veredas_core::fieldbus;"), ["fieldbus: core's fieldbus masters, past the session"]);
     assert_eq!(one("use std::net::TcpStream;"), ["net: a socket of its own"]);
+    assert_eq!(one("use veredas_portal::tail::single;"), ["tail: portal's log layer, past the session"]);
+    assert_eq!(
+        one("fn f(p: &Path) { let s = veredas_portal::FileTailSource::new(\"plant\", \"plant\", p, Default::default()); }"),
+        ["FileTailSource: a log read past the session"]
+    );
+    assert_eq!(one("use veredas_portal::FamilyTailSource as F;"), ["FamilyTailSource: a family of logs read past the session"]);
+    assert_eq!(one("fn f() { let s = veredas_portal::SourceSet::default(); }"), ["SourceSet: portal's sources started past the session"]);
+    assert_eq!(one("fn f(s: Box<dyn veredas_portal::Source>) {}"), ["Source: a source started past the session"]);
     assert_eq!(one("fn f() { std::process::Command::new(\"x\"); }"), ["Command: a process of its own"]);
     assert_eq!(one("include!(\"elsewhere.rs\");"), ["include: tokens from a file the reading does not see"]);
     assert_eq!(one("const T: &str = include_str!(\"x\");"), ["include_str: text from a file the reading does not see"]);
     assert_eq!(one("const B: &[u8] = include_bytes!(\"x\");"), ["include_bytes: bytes from a file the reading does not see"]);
     // Every refused name is asserted above, by its own text: none can leave the list unseen.
-    let asserted = ["set_writes_armed", "WriteGate", "spawn", "opc", "telegram", "fieldbus", "net", "Command", "unsafe", "from_v1", "include", "include_str", "include_bytes"];
+    let asserted = [
+        "set_writes_armed",
+        "WriteGate",
+        "spawn",
+        "opc",
+        "telegram",
+        "fieldbus",
+        "net",
+        "tail",
+        "FileTailSource",
+        "FamilyTailSource",
+        "SourceSet",
+        "Source",
+        "Command",
+        "unsafe",
+        "from_v1",
+        "include",
+        "include_str",
+        "include_bytes",
+    ];
     assert_eq!(REFUSED.iter().map(|(n, _)| *n).collect::<Vec<_>>(), asserted);
     assert_eq!(one("#[path = \"gate.txt\"] mod gate;"), ["path: a module read from a file of an attribute's choosing"]);
     assert_eq!(one("#[cfg_attr(unix, path = \"g.rs\")] mod gate;"), ["path: a module read from a file of an attribute's choosing"]);
