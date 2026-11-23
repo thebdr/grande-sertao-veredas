@@ -626,11 +626,16 @@ async fn a_stalled_server_times_a_browse_out_and_a_drop_does_not_wait_for_it() {
 /// on its runtime (a host-name lookup is one). The lookup test below only bites where a failed
 /// lookup is slow (about 1.2 s on Windows; a Linux resolver may answer at once); this one bites
 /// on any machine, with a blocking task that is certainly still running. It is judged by order,
-/// not by a clock a loaded machine can stretch: the call returns while the task still runs.
+/// the call returning while the task still runs, and by the shutdown's own time, from the
+/// future's last await to the call's return, which no build or thread start under load stretches.
 #[test]
 fn a_blocking_task_left_on_the_runtime_does_not_hold_the_thread() {
     let ended = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let task_ended = ended.clone();
+    // The instant the future's work ends, so the bound below times the runtime's shutdown alone,
+    // not its building or the thread's start, where a loaded machine's delays land.
+    let last = std::sync::Arc::new(std::sync::Mutex::new(None::<Instant>));
+    let last_await = last.clone();
     let out = veredas_core::opc::run_on_own_runtime(async move {
         let (started, running) = tokio::sync::oneshot::channel();
         let _lookup = tokio::task::spawn_blocking(move || {
@@ -639,14 +644,20 @@ fn a_blocking_task_left_on_the_runtime_does_not_hold_the_thread() {
             task_ended.store(true, std::sync::atomic::Ordering::SeqCst);
         });
         running.await.expect("the blocking task runs");
+        *last_await.lock().unwrap() = Some(Instant::now());
         "done"
     })
     .expect("a runtime");
+    let returned = Instant::now();
     assert_eq!(out, "done");
     assert!(
         !ended.load(std::sync::atomic::Ordering::SeqCst),
         "the call returned only once the blocking task had ended"
     );
+    // And it waited for no part of it: a shutdown that waited a bounded while (a second, five,
+    // nine) still returns before the task ends.
+    let shutdown = returned - last.lock().unwrap().expect("the future ran to its end");
+    assert!(shutdown < Duration::from_millis(500), "the shutdown took {shutdown:?}");
 }
 
 #[test]
