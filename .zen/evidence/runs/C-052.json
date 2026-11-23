@@ -10,10 +10,10 @@
     "dashboards"
   ],
   "exitCode": 0,
-  "outputSha": "37bdedd38b7b0fe3af1e686f5674cdebcee143d3f740464f07b4b5f6d235e50b",
-  "outputTail": "\nrunning 6 tests\ntest medians_sigmas_and_distributions_are_exact ... ok\ntest a_table_sorts_numbers_as_numbers_with_nulls_last ... ok\ntest buckets_align_on_the_clock_and_mark_the_running_one ... ok\ntest every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says ... ok\ntest the_cells_read_each_row_once_while_rows_arrive ... ok\ntest every_panel_kind_is_computed_exactly_from_the_store ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 56.38s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s\n     Running tests/dashboards.rs (target/debug/build/veredas-supervisao/ef15dfe6141be902/out/dashboards-ef15dfe6141be902)",
-  "ranAt": "2026-11-23T03:34:38.400Z",
-  "headCommit": "9a5a9de2901743675ff365c367ce00c3d204ce45",
+  "outputSha": "4146d649b421175972df451d55219f6a511c00a6d819e04626fe324c05f18c7c",
+  "outputTail": "\nrunning 6 tests\ntest medians_sigmas_and_distributions_are_exact ... ok\ntest a_table_sorts_numbers_as_numbers_with_nulls_last ... ok\ntest buckets_align_on_the_clock_and_mark_the_running_one ... ok\ntest every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says ... ok\ntest the_cells_read_each_row_once_while_rows_arrive ... ok\ntest every_panel_kind_is_computed_exactly_from_the_store has been running for over 60 seconds\ntest every_panel_kind_is_computed_exactly_from_the_store ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 95.37s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s\n     Running tests/dashboards.rs (target/debug/build/veredas-supervisao/ef15dfe6141be902/out/dashboards-ef15dfe6141be902)",
+  "ranAt": "2026-11-23T10:45:49.047Z",
+  "headCommit": "061ee3a63a6482ccc1b18a55f6c6115f761a6e24",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/dashboards.rs",
