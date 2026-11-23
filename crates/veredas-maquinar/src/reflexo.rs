@@ -404,57 +404,88 @@ struct DriveState {
     ramp: Option<Segment>,
 }
 
-/// A stretch of a ramp at one rate toward one goal: the speed at its `k`-th step is `from` plus
-/// `k` steps' change, the goal itself from its `steps`-th on. Taken from a count, not summed, so no
-/// rounding gathers however long the ramp: it lands at the first step at or after its time.
+/// A ramp toward one target: the speed at its `k`-th step is `from` plus `k` steps' change, the
+/// target itself from its `steps`-th on. Taken from a count, not summed, so no rounding gathers
+/// however long the ramp: it lands at the first step at or after its time. A ramp through 0 is one
+/// ramp of two rates: down to 0 at the deceleration in `to_zero` steps (a fraction of a step as
+/// often as not), then away at the acceleration from that moment, so the step that passes 0 carries
+/// what is left of it past 0 and the whole lands at the first step at or after the sum of the two.
 struct Segment {
     from: f64,
-    goal: f64,
+    target: f64,
     per_step: f64,
+    /// Through 0: the steps to 0, and the change a step after it.
+    to_zero: Option<(f64, f64)>,
     steps: u64,
     k: u64,
 }
 
+/// The first step at or after `x` steps. The division's rounding grows with the count (past 2^24
+/// steps it passes any fixed slack), so the slack is relative: sixteen units in the last place of
+/// the count, and a billionth of a step besides. A count too large for 64 bits (an infinite setpoint
+/// a client wrote, a rate of 1e-300) is held at the largest: the ramp goes on at its rate.
+fn first_step_at_or_after(x: f64) -> u64 {
+    (x * (1.0 - 16.0 * f64::EPSILON) - 1e-9).ceil().max(1.0) as u64
+}
+
 /// The steps a change of `distance` takes at `rate` units a second in steps of `dt` seconds: the
-/// first step at or after its time. The division's rounding grows with the count (past 2^24 steps
-/// it passes any fixed slack), so the slack is relative: sixteen units in the last place of the
-/// count, and a billionth of a step besides.
+/// first step at or after its time.
 pub fn ramp_steps(distance: f64, rate: f64, dt: f64) -> u64 {
-    let x = distance / (rate * dt);
-    (x - x * 16.0 * f64::EPSILON - 1e-9).ceil().max(1.0) as u64
+    first_step_at_or_after(distance / (rate * dt))
+}
+
+impl Segment {
+    fn new(from: f64, target: f64, accel: f64, decel: f64, dt: f64) -> Segment {
+        if from != 0.0 && target != 0.0 && from.signum() != target.signum() {
+            let to_zero = from.abs() / (decel * dt);
+            let steps = first_step_at_or_after(to_zero + target.abs() / (accel * dt));
+            let after = target.signum() * accel * dt;
+            return Segment { from, target, per_step: -from.signum() * decel * dt, to_zero: Some((to_zero, after)), steps, k: 0 };
+        }
+        // Away from 0 (from 0, or past `from` on its side) at the acceleration; toward 0 or a
+        // smaller target of the same sign at the deceleration.
+        let rate = if target.abs() > from.abs() { accel } else { decel };
+        let per_step = if target > from { rate * dt } else { -rate * dt };
+        Segment { from, target, per_step, to_zero: None, steps: ramp_steps((target - from).abs(), rate, dt), k: 0 }
+    }
+
+    /// The speed at its `k`-th step.
+    fn speed(&self) -> f64 {
+        if self.k >= self.steps {
+            return self.target;
+        }
+        let k = self.k as f64;
+        let v = match self.to_zero {
+            Some((to_zero, after)) if k >= to_zero => after * (k - to_zero),
+            // Before 0 the speed keeps its sign, whatever the rounding.
+            Some(_) if self.from > 0.0 => (self.from + self.per_step * k).max(0.0),
+            Some(_) => (self.from + self.per_step * k).min(0.0),
+            None => self.from + self.per_step * k,
+        };
+        if v == 0.0 { 0.0 } else { v }
+    }
 }
 
 impl DriveState {
     /// One step from the speed toward `target`: away from 0 at the acceleration, toward 0 (or a
     /// smaller target of the same sign) at the deceleration, through 0 when the sign changes.
     fn ramp(&mut self, target: f64, dt: f64) -> f64 {
-        let speed = self.speed;
-        let away = target != 0.0 && (speed == 0.0 || speed.signum() == target.signum()) && target.abs() > speed.abs();
-        let (goal, rate) = if away {
-            (target, self.accel)
-        } else {
-            // A NaN target lands here too, and so on 0.
-            (if target == 0.0 || target.signum() != speed.signum() || target.is_nan() { 0.0 } else { target }, self.decel)
-        };
-        if speed == goal {
+        // A NaN target ramps to 0; a reversed setpoint of 0 is 0, not -0.
+        let target = if target.is_nan() || target == 0.0 { 0.0 } else { target };
+        if self.speed == target {
             self.ramp = None;
-            return goal;
+            return target;
         }
-        let per_step = if goal > speed { rate * dt } else { -rate * dt };
-        match &mut self.ramp {
-            Some(s) if s.goal == goal && s.per_step == per_step => s.k += 1,
-            _ => {
-                let steps = ramp_steps((goal - speed).abs(), rate, dt);
-                self.ramp = Some(Segment { from: speed, goal, per_step, steps, k: 1 });
-            }
+        let mut s = match self.ramp.take() {
+            Some(s) if s.target == target => s,
+            _ => Segment::new(self.speed, target, self.accel, self.decel, dt),
+        };
+        s.k += 1;
+        let speed = s.speed();
+        if s.k < s.steps {
+            self.ramp = Some(s);
         }
-        match &self.ramp {
-            Some(s) if s.k < s.steps => s.from + s.per_step * s.k as f64,
-            _ => {
-                self.ramp = None;
-                goal
-            }
-        }
+        speed
     }
 
     fn step(&mut self, dt: f64) -> Result<(), String> {

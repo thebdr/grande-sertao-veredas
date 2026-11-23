@@ -16,12 +16,13 @@ use veredas_maquinar::{ethernetip, modbus};
 
 const STEP: Duration = Duration::from_millis(4);
 
-/// A device's points in memory, one of them refusing writes when asked.
+/// A device's points in memory, one of them refusing writes, or reads, when asked.
 #[derive(Default)]
 struct Mem {
     values: Mutex<BTreeMap<String, f64>>,
     kinds: BTreeMap<String, PointKind>,
     refusing: Mutex<Option<String>>,
+    unreadable: Mutex<Option<String>>,
 }
 
 impl Points for Mem {
@@ -29,6 +30,9 @@ impl Points for Mem {
         self.kinds.get(point).copied()
     }
     fn read(&self, point: &str) -> Result<f64, String> {
+        if self.unreadable.lock().unwrap().as_deref() == Some(point) {
+            return Err("unreadable".into());
+        }
         self.values.lock().unwrap().get(point).copied().ok_or_else(|| format!("no point `{point}`"))
     }
     fn write(&self, point: &str, v: f64) -> Result<(), String> {
@@ -116,12 +120,22 @@ fn a_drive_ramps_to_its_setpoint_exactly_and_through_zero_when_it_reverses() {
     m.set("rev", 0.0);
     d.step(None);
     assert!((m.get("speed") + 49.2).abs() < 1e-9, "decelerating toward 0 first");
-    for _ in 0..62 {
+    // 50 / 0.8 is 62.5 steps to 0: -0.4 at the 62nd; the 63rd is half a step past 0 at the
+    // acceleration, 0.2, running all the way; 62.5 + 125 steps land on 50 at the 188th.
+    for _ in 2..=62 {
         d.step(None);
+        assert_eq!(m.get("running"), 1.0);
     }
-    assert_eq!(m.get("speed"), 0.0);
+    assert!((m.get("speed") + 0.4).abs() < 1e-9, "{}", m.get("speed"));
     d.step(None);
-    assert!((m.get("speed") - 0.4).abs() < 1e-12, "then accelerating forward");
+    assert!((m.get("speed") - 0.2).abs() < 1e-12, "then accelerating forward from 0: {}", m.get("speed"));
+    assert_eq!(m.get("running"), 1.0);
+    for k in 64..188 {
+        d.step(None);
+        assert!((m.get("speed") - 0.4 * (f64::from(k) - 62.5)).abs() < 1e-9, "step {k}: {}", m.get("speed"));
+    }
+    d.step(None);
+    assert_eq!(m.get("speed"), 50.0, "on the setpoint at the first step at or after its whole time");
 }
 
 #[test]
@@ -829,5 +843,247 @@ mod round_2 {
         scene.stop();
         assert!(!early, "the stop returned while the scene's step was under way");
         assert_eq!(later, steps, "a step after the stop");
+    }
+}
+
+/// Refute round 3's probes, kept.
+mod round_3 {
+    use super::*;
+
+    #[test]
+    fn an_infinite_setpoint_is_ramped_at_the_acceleration_and_left_at_the_deceleration() {
+        assert_eq!(reflexo::ramp_steps(f64::INFINITY, 100.0, 0.004), u64::MAX);
+        assert_eq!(reflexo::ramp_steps(4e9, 1e-300, 0.004), u64::MAX);
+        // An f32 holding register a client the bench did not write sets to +inf.
+        let server = modbus::start(&toml::from_str("port = 0\npoints = [ { name = \"run\", table = \"coil\", address = 0, value = \"true\" }, { name = \"sp\", table = \"holding-register\", address = 0, type = \"f32\" }, { name = \"speed\", table = \"input-register\", address = 0, type = \"f32\" } ]").unwrap()).unwrap();
+        let addr = server.addr;
+        runtime().block_on(async {
+            let mut ctx = tokio_modbus::client::tcp::connect_slave(addr, Slave(1)).await.unwrap();
+            ctx.write_multiple_registers(0, &[0x7F80, 0x0000]).await.unwrap().unwrap();
+        });
+        assert_eq!(server.get("sp").unwrap(), modbus::Value::F32(f32::INFINITY));
+        let points: Arc<dyn Points> = Arc::new(server.points());
+        let cfg: ReflexoConfig = toml::from_str("drive = [ { name = \"d\", run = \"m.run\", setpoint = \"m.sp\", accel = 100, decel = 100, speed = \"m.speed\" } ]").unwrap();
+        let mut d = Models::new(&cfg, STEP, &|p: &str| (p == "m").then(|| points.clone())).unwrap();
+        for k in 1..=200u32 {
+            d.step(None);
+            assert!((d.speed("d").unwrap() - 0.4 * f64::from(k)).abs() < 1e-9, "step {k}: {:?}", d.speed("d"));
+        }
+        assert_eq!(server.get("speed").unwrap(), modbus::Value::F32(80.0));
+        // Back to 50: down from 80 at 0.4 a step, on 50 at the 75th.
+        server.set_value("sp", modbus::Value::F32(50.0)).unwrap();
+        d.step(None);
+        assert!((d.speed("d").unwrap() - 79.6).abs() < 1e-9, "{:?}", d.speed("d"));
+        for _ in 2..75 {
+            d.step(None);
+            assert!(d.speed("d").unwrap() > 50.0);
+        }
+        d.step(None);
+        assert_eq!(d.speed("d"), Some(50.0));
+        assert_eq!(d.status().errors, 0);
+        server.stop();
+        // A conveyor at an infinite setpoint: its belt at 0.4 units a step times its ratio.
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, f64::INFINITY)]);
+        let mut c = models("conveyor = [ { name = \"c\", belt = \"infeed\", metres_per_unit = 0.01, run = \"m.run\", setpoint = \"m.sp\", accel = 100, decel = 100 } ]", &m);
+        let mut w = World::new(&fisica::load(&cena()).unwrap()).unwrap();
+        c.step(Some(&mut w));
+        assert!((w.speed("infeed").unwrap() - 0.004).abs() < 1e-12, "{:?}", w.speed("infeed"));
+    }
+
+    /// The steps a drive takes from `-sp` (reversed) to `sp`, each step's running point with them.
+    fn reversal(sp: u64, decel: u64, accel: u64, back: bool) -> (u64, Vec<f64>) {
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, sp as f64), ("rev", Bool, if back { 0.0 } else { 1.0 }), ("running", Bool, 9.0)]);
+        let mut d = models(&format!("drive = [ {{ name = \"d\", run = \"m.run\", setpoint = \"m.sp\", reverse = \"m.rev\", accel = {accel}, decel = {decel}, running = \"m.running\" }} ]"), &m);
+        let from = if back { sp as f64 } else { -(sp as f64) };
+        while d.speed("d") != Some(from) {
+            d.step(None);
+        }
+        m.set("rev", if back { 1.0 } else { 0.0 });
+        let (mut k, mut running) = (0u64, Vec::new());
+        while d.speed("d") != Some(-from) {
+            d.step(None);
+            k += 1;
+            running.push(m.get("running"));
+            assert!(k < 1_000_000);
+        }
+        (k, running)
+    }
+
+    #[test]
+    fn a_ramp_through_0_lands_at_the_first_step_at_or_after_its_whole_time() {
+        // -50 to +50 at a deceleration of 160 and an acceleration of 120: 50/160 + 50/120 s is
+        // 182.29 steps of 4 ms, so the 183rd; running at every step, 0 passed within the 79th.
+        let (k, running) = reversal(50, 160, 120, false);
+        assert_eq!(k, 183);
+        assert!(running.iter().all(|r| *r == 1.0), "a step not running during the reversal");
+        // Every pair of rates from 60 to 260 in tens, both ways: 250 sp / decel + 250 sp / accel
+        // steps, rounded up, in integers.
+        let mut off = Vec::new();
+        for decel in (60u64..=260).step_by(10) {
+            for accel in (60u64..=260).step_by(10) {
+                let want = (250 * 50 * accel + 250 * 50 * decel).div_ceil(decel * accel);
+                for back in [false, true] {
+                    let (k, _) = reversal(50, decel, accel, back);
+                    if k != want {
+                        off.push((decel, accel, back, k, want));
+                    }
+                }
+            }
+        }
+        assert!(off.is_empty(), "reversals off their step (decel, accel, back, got, want): {off:?}");
+    }
+
+    /// A bench of two `[[reflexo]]` parts on one scene: a conveyor of `first`, run by the running
+    /// point of a drive of `second`, at the scene step where the drive passes 2.
+    fn two_parts(first_is_the_conveyor: bool) -> (f64, f64) {
+        let dir = scratch(if first_is_the_conveyor { "two-parts-c" } else { "two-parts-d" });
+        let belts = "[[reflexo]]\nname = \"belts\"\nscene = \"sc\"\nconveyor = [ { name = \"c\", belt = \"infeed\", metres_per_unit = 0.01, run = \"m.ra\", setpoint = \"m.sp\", accel = 100, decel = 100 } ]\n";
+        let drives = "[[reflexo]]\nname = \"drives\"\nscene = \"sc\"\ndrive = [ { name = \"a\", run = \"m.run\", setpoint = \"m.sp\", accel = 100, decel = 100, running = \"m.ra\" } ]\n";
+        let (one, two) = if first_is_the_conveyor { (belts, drives) } else { (drives, belts) };
+        let file = format!("format = \"veredas-bench\"\nversion = 1\n[[modbus]]\nname = \"m\"\nport = 0\npoints = [ {{ name = \"run\", table = \"coil\", address = 0, value = \"true\" }}, {{ name = \"sp\", table = \"holding-register\", address = 0, value = \"50\" }}, {{ name = \"ra\", table = \"discrete-input\", address = 0 }} ]\n[[fisica]]\nname = \"sc\"\nscene = \"line.cena.toml\"\n{one}{two}");
+        let plant = Bench::start(bench::load(&file, &dir).unwrap()).unwrap();
+        let scene = plant.fisica("sc").unwrap();
+        let (belts, drives) = (plant.reflexo("belts").unwrap(), plant.reflexo("drives").unwrap());
+        assert!(until(Duration::from_secs(5), || scene.with(|_| drives.speed("a").unwrap()) > 2.0));
+        let speeds = scene.with(|_| (drives.speed("a").unwrap(), belts.speed("c").unwrap()));
+        plant.stop();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(speeds.0 < 40.0, "{speeds:?}");
+        speeds
+    }
+
+    #[test]
+    fn two_parts_on_one_scene_step_one_after_the_other_in_the_file_s_order() {
+        // The conveyor's part first: it reads the drive's running point as the step before left
+        // it, a step behind.
+        let (a, c) = two_parts(true);
+        assert!((a - c - 0.4).abs() < 1e-9, "a {a}, c {c}");
+        // The drive's part first: the conveyor starts in the drive's step.
+        let (a, c) = two_parts(false);
+        assert!((a - c).abs() < 1e-9, "a {a}, c {c}");
+    }
+
+    #[test]
+    fn at_speed_is_the_run_on_and_the_speed_within_its_tolerance_a_setpoint_of_0_included() {
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, 0.0), ("running", Bool, 9.0), ("at", Bool, 9.0)]);
+        let mut d = models("drive = [ { name = \"d\", run = \"m.run\", setpoint = \"m.sp\", accel = 100, decel = 100, running = \"m.running\", at_speed = \"m.at\" } ]", &m);
+        d.step(None);
+        assert_eq!((m.get("running"), m.get("at")), (0.0, 1.0), "run on at a setpoint of 0");
+        m.set("run", 0.0);
+        d.step(None);
+        assert_eq!((m.get("running"), m.get("at")), (0.0, 0.0), "run off");
+        // Reversed at a setpoint of 0: 0, not -0, and at speed.
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, 0.0), ("rev", Bool, 1.0), ("speed", Number, 9.0), ("at", Bool, 9.0)]);
+        let mut d = models("drive = [ { name = \"d\", run = \"m.run\", setpoint = \"m.sp\", reverse = \"m.rev\", accel = 100, decel = 100, speed = \"m.speed\", at_speed = \"m.at\" } ]", &m);
+        d.step(None);
+        assert_eq!((m.get("speed").to_bits(), m.get("at")), (0.0f64.to_bits(), 1.0));
+    }
+
+    #[test]
+    fn every_integer_type_rounds_half_away_from_0_and_holds_to_its_range() {
+        let server = modbus::start(&toml::from_str(
+            "port = 0\npoints = [ { name = \"u16\", table = \"holding-register\", address = 0 }, { name = \"i16\", table = \"holding-register\", address = 1, type = \"i16\" }, { name = \"u32\", table = \"holding-register\", address = 2, type = \"u32\" }, { name = \"i32\", table = \"holding-register\", address = 4, type = \"i32\" } ]",
+        ).unwrap())
+        .unwrap();
+        let adapter = ethernetip::start(&toml::from_str(
+            "bind = \"127.0.0.1\"\nport = 0\nio_port = 0\nassemblies = [ { instance = 100, size = 32 } ]\npoints = [ { name = \"u8\", assembly = 100, byte = 1 }, { name = \"i8\", assembly = 100, byte = 0, type = \"i8\" }, { name = \"u16\", assembly = 100, byte = 2, type = \"u16\" }, { name = \"i16\", assembly = 100, byte = 4, type = \"i16\" }, { name = \"u32\", assembly = 100, byte = 8, type = \"u32\" }, { name = \"i32\", assembly = 100, byte = 12, type = \"i32\" } ]",
+        ).unwrap())
+        .unwrap();
+        let (mp, ep) = (server.points(), adapter.points());
+        let devices: [(&str, &dyn Points, &[&str]); 2] = [("modbus", &mp, &["u16", "i16", "u32", "i32"]), ("adapter", &ep, &["u8", "i8", "u16", "i16", "u32", "i32"])];
+        let mut wrong = Vec::new();
+        for (device, p, types) in devices {
+            for ty in types {
+                let signed = ty.starts_with('i');
+                let cases: &[(f64, f64)] = if signed { &[(-2.6, -3.0), (-2.5, -3.0), (-2.4, -2.0), (2.5, 3.0), (2.6, 3.0)] } else { &[(2.6, 3.0), (2.5, 3.0), (2.4, 2.0), (-0.4, 0.0), (-2.6, 0.0)] };
+                for (v, want) in cases {
+                    p.write(ty, *v).unwrap();
+                    let got = p.read(ty).unwrap();
+                    if got != *want {
+                        wrong.push(format!("{device} {ty}: {v} read {got}, not {want}"));
+                    }
+                }
+            }
+        }
+        server.stop();
+        adapter.stop();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    #[test]
+    fn a_belt_is_held_to_100_m_s_either_way() {
+        for (sp, held) in [(500.0, 100.0), (-500.0, -100.0)] {
+            let m = mem(&[("run", Bool, 1.0), ("sp", Number, sp)]);
+            let mut c = models("conveyor = [ { name = \"c\", belt = \"infeed\", metres_per_unit = 1, run = \"m.run\", setpoint = \"m.sp\", accel = 1000000, decel = 1 } ]", &m);
+            let mut w = World::new(&fisica::load(&cena()).unwrap()).unwrap();
+            c.step(Some(&mut w));
+            assert_eq!((c.speed("c"), w.speed("infeed"), c.status().errors), (Some(sp), Some(held), 0));
+        }
+    }
+
+    #[test]
+    fn a_conveyor_whose_write_fails_leaves_its_belt_for_the_rest_of_its_step() {
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, 50.0), ("speed", Number, 0.0)]);
+        let mut c = models("conveyor = [ { name = \"c\", belt = \"infeed\", metres_per_unit = 0.01, run = \"m.run\", setpoint = \"m.sp\", accel = 100, decel = 100, speed = \"m.speed\" } ]", &m);
+        let mut w = World::new(&fisica::load(&cena()).unwrap()).unwrap();
+        *m.refusing.lock().unwrap() = Some("speed".into());
+        c.step(Some(&mut w));
+        assert_eq!((w.speed("infeed"), c.status().last_error.as_deref()), (Some(0.5), Some("conveyor `c`: m.speed: refused")));
+        *m.refusing.lock().unwrap() = None;
+        c.step(Some(&mut w));
+        assert!((w.speed("infeed").unwrap() - 0.008).abs() < 1e-12, "{:?}", w.speed("infeed"));
+    }
+
+    #[test]
+    fn an_actuator_whose_read_fails_is_skipped_for_the_rest_of_its_step() {
+        let m = mem(&[("ext", Bool, 1.0), ("back", Bool, 7.0), ("out", Bool, 7.0)]);
+        let mut a = models("actuator = [ { name = \"a\", mover = \"pusher\", extend = \"m.ext\", retracted = { at = [0.0, 0.0, 0.0] }, extended = { at = [0.0, 1.0, 0.0] }, stroke_ms = 100, retracted_switch = \"m.back\", extended_switch = \"m.out\" } ]", &m);
+        a.step(None);
+        a.step(None);
+        assert_eq!((a.position("a"), m.get("back"), m.get("out")), (Some(0.08), 0.0, 0.0));
+        *m.unreadable.lock().unwrap() = Some("ext".into());
+        m.set("back", 7.0);
+        m.set("out", 7.0);
+        a.step(None);
+        let s = a.status();
+        assert_eq!((a.position("a"), m.get("back"), m.get("out"), s.errors, s.last_error.as_deref()), (Some(0.08), 7.0, 7.0, 1, Some("actuator `a`: m.ext: unreadable")));
+        *m.unreadable.lock().unwrap() = None;
+        a.step(None);
+        assert_eq!((a.position("a"), m.get("back")), (Some(0.12), 0.0));
+    }
+
+    #[test]
+    fn an_off_delay_counts_the_scene_empty_without_a_break() {
+        let m = mem(&[("no", Bool, 0.0)]);
+        let mut s = models("sensor = [ { name = \"a\", sensor = \"S\", point = \"m.no\", off_delay_ms = 10 } ]", &m);
+        let mut w = sensor_scene();
+        let step = |s: &mut Models, w: &mut World| {
+            s.step(Some(w));
+            w.step();
+        };
+        w.place("m", fisica::Placement::at([0.0, 0.0, 0.0])).unwrap();
+        while m.get("no") == 0.0 {
+            step(&mut s, &mut w);
+            assert!(s.status().steps < 50);
+        }
+        // Three absences of two steps (8 ms) against a 10 ms off delay: the point never drops.
+        for _ in 0..3 {
+            w.place("m", fisica::Placement::at([5.0, 0.0, 0.0])).unwrap();
+            step(&mut s, &mut w);
+            step(&mut s, &mut w);
+            w.place("m", fisica::Placement::at([0.0, 0.0, 0.0])).unwrap();
+            for _ in 0..4 {
+                step(&mut s, &mut w);
+                assert_eq!(m.get("no"), 1.0, "an absence shorter than the off delay seen");
+            }
+        }
+        // One of three steps (12 ms) is seen.
+        w.place("m", fisica::Placement::at([5.0, 0.0, 0.0])).unwrap();
+        let mut k = 0;
+        while m.get("no") == 1.0 {
+            step(&mut s, &mut w);
+            k += 1;
+            assert!(k < 10);
+        }
     }
 }

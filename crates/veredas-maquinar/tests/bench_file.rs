@@ -1634,10 +1634,10 @@ at its step.
 **Its models** (`[[reflexo]]`): ready-made models making a device's points behave as the machine
 behind them. A point is named `<part>.<point>`, a point of a Modbus server or an EtherNet/IP
 adapter of the file; a bool point carries 0 or 1, a number is converted to the point's type (an
-integer rounded and held to its range; NaN written as 0). The models step together before each
-step of their scene from its first, in this order: drives, conveyors, actuators, sensors, each kind
-in the file's order; without a scene (drives alone) every 4 ms. A point is written by one model at
-most. A step in which a model cannot read or write a point is counted once, its last error named.
+integer rounded and held to its range; NaN written as 0). A part's models step together before
+each step of their scene from its first, in this order: drives, conveyors, actuators, sensors, each
+kind in the file's order; two parts moving one scene step one after the other in the file's order;
+without a scene (drives alone) every 4 ms. A point is written by one model at most. A step in which a model cannot read or write a point is counted once, its last error named.
 - `name` (required): the part's name.
 - `scene` (none): the `[[fisica]]` part whose scene the models move; conveyors, sensors and
   actuators need one.
@@ -1651,12 +1651,14 @@ own unit.
 - `setpoint` (required): a number point read, the speed wanted.
 - `reverse` (none): a bool point read, the setpoint negated while 1.
 - `accel` (required), `decel` (required): units a second the speed gains away from 0, and loses
-  toward 0 or a smaller setpoint; finite and over 0. Through 0 when the sign changes; the setpoint
-  landed on exactly, at the first step at or after its time.
+  toward 0 or a smaller setpoint; finite and over 0. Through 0 when the sign changes, in one ramp:
+  the step that passes 0 carries on at the acceleration. The setpoint landed on exactly, at the
+  first step at or after its time; an infinite setpoint ramped toward at the acceleration.
 - `tolerance` (`0`): how near the setpoint the speed counts as at it.
 - `speed` (none): a number point written, the speed.
 - `running` (none): a bool point written, 1 while the speed is not 0.
-- `at_speed` (none): a bool point written, 1 while running within the tolerance of the setpoint.
+- `at_speed` (none): a bool point written, 1 while `run` is 1 and the speed within the tolerance of
+  the setpoint (negated while reversed), a setpoint of 0 included.
 
 **A conveyor** (an entry of `conveyor`): a drive whose speed moves a belt of the scene.
 - `name` (required), `run` (required), `setpoint` (required): as a drive's.
