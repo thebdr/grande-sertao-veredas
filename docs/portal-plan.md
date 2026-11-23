@@ -472,7 +472,8 @@ Recorded as the port meets them.
   sniffer's own dialect (a file regular on `;` loses its header line to the sniffer on `,`). Title
   lines are not detected: one over a table with a short row stays the sniffer's one text column.
   And the header alone can lie (round 9): a `;` file whose units hold as many commas as its
-  decimals fits `,` too, so a fit never replaces a dialect with one typing fewer numbers.
+  decimals fits `,` too, so a fit never replaces a dialect with one typing fewer numbers; and
+  where the rows' counts tie (round 10), the dialects that fit are weighed by their numbers.
 - **A public name of portal is supervisão's business too.** Supervisão's policy test reads portal's
   public functions and fields by name and refuses one its own sources hold that it has not
   reviewed: `CsvOptions.escape` and a session's `window` failed it (supervisão names an HTML

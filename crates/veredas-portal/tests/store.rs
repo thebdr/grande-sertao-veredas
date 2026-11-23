@@ -1263,12 +1263,61 @@ fn a_header_fits_no_fewer_fields_than_most_rows_and_a_fit_never_types_fewer_numb
     assert!(!csv_header_fits(&minority, &delim(",")), "two fields on `,` where most rows split into three");
     assert!(csv_header_fits(&minority, &delim(";")));
     let tied = csv_file(dir.path(), "tied.csv", "time;pressure, bar\n1,5;2,5\n7;6,5\n");
-    assert!(!csv_header_fits(&tied, &delim(",")), "rows of three and of two as many: the header is held to three");
+    assert!(csv_header_fits(&tied, &delim(",")), "rows of three and of two as many: a fit by the tie");
+    assert_eq!(csv_fitting_dialect(&tied, &delim(",")).delim.as_deref(), Some(";"), "weighed: `;` types two numbers, `,` one");
     let unfilled = csv_file(dir.path(), "unfilled.csv", "a;b;c;d\n1;2\n3;4\n5;6;7\n");
     assert!(!csv_header_fits(&unfilled, &delim(";")), "a header naming more columns than any row holds");
     // Two delimiters fit a header the given one leaves whole: the wider.
     let two_fit = csv_file(dir.path(), "two_fit.csv", "a;b|c|d\n1;2|3|4\n5;6|7|8\n");
     assert_eq!(csv_fitting_dialect(&two_fit, &delim(",")).delim.as_deref(), Some("|"), "three fields on `|`, two on `;`");
+}
+
+/// Round 10: rows whose counts tie fit a header of either count, and the dialects that fit are
+/// weighed by the columns they type as numbers, then the dialect itself, then the widest header,
+/// then the order; where none fits, a delimiter splitting a one-field header and typing more
+/// numbers is taken. A text-only file both delimiters fit stays the sniffer's (a limit).
+#[test]
+fn dialects_that_fit_are_weighed_by_their_numbers() {
+    let dir = tempfile::tempdir().unwrap();
+    // An alarm column filled every other row: the rows tie between two and three fields.
+    let alarm = csv_file(dir.path(), "alarm.csv", "Zeit;Wert\n10:00;2,5\n10:01;2,6;Alarm\n");
+    let (opts, page) = read_as_sniffed(&alarm);
+    assert_eq!((opts.delim.as_deref(), opts.decimal_comma), (Some(";"), true), "{opts:?}");
+    assert_eq!((page.total, page.rows[0][1].clone()), (2, serde_json::json!(2.5)));
+    let mut body = String::from("Zeit;Wert\n");
+    for i in 0..40 {
+        body.push_str(&format!("10:{i:02};2,{}{}\n", i % 10, if i % 2 == 1 { ";Alarm" } else { "" }));
+    }
+    let alarms = csv_file(dir.path(), "alarms40.csv", &body);
+    let (opts, page) = read_as_sniffed(&alarms);
+    assert_eq!((opts.delim.as_deref(), opts.decimal_comma, page.total), (Some(";"), true, 40), "{opts:?}");
+    let pairs = csv_file(dir.path(), "pairs.csv", "id|vals\n1|10,20\n2|30,40|x\n3|50,60\n4|70,80|y\n");
+    assert_eq!(read_as_sniffed(&pairs).0.delim.as_deref(), Some("|"));
+    // Two thirds of the rows carry a column the header does not name: none fits, and `;` types the
+    // value where the sniffer's `,` leaves the header one field.
+    let mut body = String::from("Zeit;Wert\n");
+    for i in 0..40 {
+        body.push_str(&format!("10:{i:02};2,{}{}\n", i % 10, if i % 3 != 0 { ";Alarm" } else { "" }));
+    }
+    let unnamed = csv_file(dir.path(), "unnamed.csv", &body);
+    assert!(!csv_header_fits(&unnamed, &delim(";")));
+    assert_eq!(csv_fitting_dialect(&unnamed, &delim(",")).delim.as_deref(), Some(";"));
+    // The weighing's order, each step on its own: the numbers (`;` types the id), the dialect
+    // itself on equal numbers, the order on equal widths.
+    let notes = csv_file(dir.path(), "notes_units.csv", "id;note, a, b\n1;a, b, c\n2\n3;d, e, f\n4;g, h, i\n");
+    assert!(csv_header_fits(&notes, &delim(",")) && csv_header_fits(&notes, &delim(";")));
+    assert_eq!(csv_fitting_dialect(&notes, &delim(",")).delim.as_deref(), Some(";"), "the id a number on `;` alone");
+    let text = csv_file(dir.path(), "text_tie.csv", "a;b, c, d\nx;y, z, w\nx;y, z, w;v\n");
+    assert!(csv_header_fits(&text, &delim(",")) && csv_header_fits(&text, &delim(";")));
+    assert_eq!(csv_fitting_dialect(&text, &delim(";")).delim.as_deref(), Some(";"), "no number either way: the dialect itself, though `,` splits the header wider");
+    let town = csv_file(dir.path(), "towns.csv", "name;city\nAna;Lisboa\nRui;Porto;x\n");
+    assert_eq!(csv_fitting_dialect(&town, &delim(",")).delim.as_deref(), Some(";"), "a fit by the tie, the header left whole on `,`");
+    let order = csv_file(dir.path(), "order.csv", "x;y|z\n1;2|3\n4;5|6\n");
+    assert_eq!(csv_fitting_dialect(&order, &delim(",")).delim.as_deref(), Some(";"), "equal numbers, equal widths: the first in the order");
+    // The limit: a text-only export with as many commas in its header as in its rows fits `,` too;
+    // with no number to weigh, the dialect given stands.
+    let export = csv_file(dir.path(), "export.csv", "name;city, country;note\nAna;Lisboa, PT;x\nRui;Porto, PT;y\n");
+    assert_eq!(csv_fitting_dialect(&export, &delim(",")).delim.as_deref(), Some(","));
 }
 
 /// A headerless `;` file of decimal commas, collapsed by a short row (a logger's last line cut

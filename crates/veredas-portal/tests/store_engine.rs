@@ -208,11 +208,14 @@ fn a_file_database_logs_beside_itself_until_a_checkpoint_folds_the_log_in() {
     app.flush().unwrap();
     drop(app);
     conn.execute_batch("CHECKPOINT").unwrap();
+    assert!(!wal.exists() || std::fs::metadata(&wal).unwrap().len() == 0, "the log folded in by the checkpoint itself");
     let (_, grown, larger) = layout(&conn);
     assert!(grown > blocks, "{grown} blocks after {blocks}");
     assert_eq!(larger, 3 * 4096 + grown * block, "{larger} bytes for {grown} blocks of {block}");
     assert_eq!((larger - size) % block, 0, "grown by whole blocks");
-    // Folded in: the connection gone, no log beside the file, the rows read back from the file.
+    // Folded in: the connection gone (its own checkpoint at the close turned off, so the fold is the
+    // `CHECKPOINT`'s), no log beside the file, the rows read back from the file.
+    conn.execute_batch("PRAGMA disable_checkpoint_on_shutdown").unwrap();
     drop(conn);
     assert!(!wal.exists() || std::fs::metadata(&wal).unwrap().len() == 0, "no log after the checkpoint and the close");
     let back = Connection::open(&db).unwrap();
