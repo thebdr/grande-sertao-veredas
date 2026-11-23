@@ -12,15 +12,15 @@
     "rpc"
   ],
   "exitCode": 0,
-  "outputSha": "99283a724c99a8f9443b894140e1ad2dd060d3ea83ab5eae4679b582271e2ea3",
-  "outputTail": "test a_read_header_is_read_only_from_its_own_block ... ok\ntest a_uuid_is_its_text_and_travels_in_the_header_s_byte_order ... ok\ntest an_implicit_read_is_its_header_its_arguments_and_its_block_to_the_byte ... ok\ntest the_arguments_name_their_damage_and_keep_what_follows ... ok\ntest blocks_are_read_in_order_and_what_is_not_a_whole_block_is_kept ... ok\ntest a_damaged_datagram_is_an_error_that_names_it_and_trailing_bytes_are_kept ... ok\ntest the_dissectors_read_an_answer_s_identity_the_status_s_order_and_every_header_field ... ok\ntest the_dissectors_read_every_datagram_as_it_was_written ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s\n\n    Blocking waiting for file lock on package cache\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.84s\n     Running tests/rpc.rs (target/debug/build/veredas-aranha/5bfac3e49a6df0f4/out/rpc-5bfac3e49a6df0f4)",
-  "ranAt": "2026-11-23T07:38:55.004Z",
-  "headCommit": "b3de4a38fa27144ba5e721a47d0939eb82fc92d2",
+  "outputSha": "d7732b162534d93c54b5cf6a52848bce07d93f5ac9c4e3aeb705a82f195a350a",
+  "outputTail": "test a_uuid_is_its_text_and_travels_in_the_header_s_byte_order ... ok\ntest blocks_are_read_in_order_and_what_is_not_a_whole_block_is_kept ... ok\ntest a_damaged_datagram_is_an_error_that_names_it_and_trailing_bytes_are_kept ... ok\ntest the_dissectors_read_an_answer_s_identity_the_status_s_order_and_every_header_field ... ok\ntest what_the_dissector_takes_for_no_dce_rpc_is_refused_and_a_status_it_does_not_know_draws_its_warning ... ok\ntest the_dissectors_read_every_datagram_as_it_was_written ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.92s\n     Running tests/rpc.rs (target/debug/build/veredas-aranha/d69d534535fe8e49/out/rpc-d69d534535fe8e49)",
+  "ranAt": "2026-11-23T15:35:40.941Z",
+  "headCommit": "7c66605cae32e09153eabb17b7dce9e5e597df09",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/rpc.rs",
       "file": "crates/veredas-aranha/tests/rpc.rs",
-      "fileSha": "7fa9a800cc60ecb71e1e095b3468615ceeb1863a11f08b1517fb440e05d3eaea"
+      "fileSha": "33ba2798e524ebd9d26252c9df526f33bc63426aa4a55dd2626c5d4efb14f42b"
     },
     {
       "name": "crates/veredas-aranha/tests/common/mod.rs",
