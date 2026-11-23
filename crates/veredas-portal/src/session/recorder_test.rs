@@ -62,4 +62,19 @@ fn a_failed_write_lands_nothing_stops_the_recording_and_counts_the_batch_unrecor
     r.take(0, &[row()]);
     r.write();
     assert_eq!((held(&r), r.status.recorded_rows, r.status.unrecorded_rows), (2, 2, 4));
+    // The failed batch's transaction ended, not left open on the writer's connection (which the
+    // reads above, through the store's query connection, cannot see): the stop folds the record's
+    // log as it closes, and the size it measures then is the one the drive keeps once closed.
+    r.store.checkpoint().expect("the stop's fold, no transaction left open");
+    let measured = super::record_bytes(&r.status.file);
+    let file = r.status.file.clone();
+    drop(r);
+    let wal = std::path::PathBuf::from(format!("{}.wal", file.display()));
+    assert!(std::fs::metadata(&wal).map_or(true, |m| m.len() == 0), "the log folded");
+    assert_eq!(super::record_bytes(&file), measured, "the size the stop publishes, the drive's");
+    // Read by a connection of its own, the file holds the good batch alone.
+    let conn = duckdb::Connection::open(&file).unwrap();
+    let mut stmt = conn.prepare("SELECT CAST(seq AS BIGINT), v FROM a ORDER BY seq").unwrap();
+    let on_drive: Vec<(i64, f64)> = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(on_drive, vec![(1, 1.5), (2, 3.0)]);
 }
