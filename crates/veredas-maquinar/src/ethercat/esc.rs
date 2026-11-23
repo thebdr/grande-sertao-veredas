@@ -69,6 +69,8 @@ pub mod al_code {
     pub const NONE: u16 = 0x0000;
     pub const INVALID_STATE_CHANGE: u16 = 0x0011;
     pub const UNKNOWN_STATE: u16 = 0x0012;
+    /// BOOT asked of a device whose EEPROM states no bootstrap mailbox.
+    pub const BOOTSTRAP_NOT_SUPPORTED: u16 = 0x0013;
 }
 
 /// The memory an ESC holds: its registers (to 0x0FFF) and the 8 KB of process RAM register 0x0006
@@ -242,6 +244,12 @@ impl Esc {
                 | (state::BOOT, state::BOOT)
         );
         let known = matches!(requested, state::INIT | state::PRE_OP | state::BOOT | state::SAFE_OP | state::OP);
+        if requested == state::BOOT && current == state::INIT {
+            // The EEPROM states no bootstrap mailbox: BOOT is never taken.
+            self.mem[reg::AL_STATUS as usize] = current | state::ERROR_FLAG;
+            self.put16(reg::AL_STATUS_CODE, al_code::BOOTSTRAP_NOT_SUPPORTED);
+            return;
+        }
         if known && allowed {
             self.mem[reg::AL_STATUS as usize] = requested;
             self.put16(reg::AL_STATUS_CODE, al_code::NONE);
@@ -453,16 +461,20 @@ fn pass(esc: &mut Esc, d: &mut Datagram, now_ns: u64) {
                 physical(esc, d, addressed, now_ns);
             }
         }
+        // A broadcast's position field is not used for addressing, and every device still adds
+        // 1 to it on the way (the ESC datasheet's addressing table).
         BRD => {
             let local = local_read(esc, d.ado(), len, now_ns);
             for (x, y) in d.data.iter_mut().zip(local) {
                 *x |= y;
             }
             d.wkc = d.wkc.wrapping_add(1);
+            d.set_adp(d.adp().wrapping_add(1));
         }
         BWR => {
             esc.write(d.ado(), &d.data, now_ns);
             d.wkc = d.wkc.wrapping_add(1);
+            d.set_adp(d.adp().wrapping_add(1));
         }
         BRW => {
             let local = local_read(esc, d.ado(), len, now_ns);
@@ -471,6 +483,7 @@ fn pass(esc: &mut Esc, d: &mut Datagram, now_ns: u64) {
                 *x |= y;
             }
             d.wkc = d.wkc.wrapping_add(3);
+            d.set_adp(d.adp().wrapping_add(1));
         }
         LRD | LWR | LRW => logical(esc, d, now_ns),
         _ => {}

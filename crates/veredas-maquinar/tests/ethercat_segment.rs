@@ -591,3 +591,216 @@ fn the_eeprom_states_its_port_and_its_size() {
     let kbit = big[0x3E] as usize + 1;
     assert!(kbit.is_power_of_two() && kbit * 128 >= big.len() * 2 && kbit * 64 < big.len() * 2, "{kbit} Kbit for {} bytes", big.len() * 2);
 }
+
+/// C-113's second refute round: the critic's probes, kept as pins (a frame of another type, the
+/// state machine's refusals from every state and BOOT never taken, the physical start bit, the
+/// EEPROM's bytes other masters read, every SyncManager's read-only bytes, the clock's difference
+/// ahead held, a broadcast read of the system time, a broadcast's position field).
+mod round_2 {
+    use std::time::{Duration, Instant};
+
+    use veredas_aranha::netns;
+    use veredas_maquinar::ethercat::esc::{self, Datagram, Esc, Identity, PdoEntry};
+    use veredas_maquinar::ethercat::*;
+
+    const SEGMENT: &str = "interface = \"b0\"\ndevices = [ { name = \"d0\" }, { name = \"d1\" } ]\n";
+
+    fn line() -> Vec<Esc> {
+        (0..3u16)
+            .map(|i| {
+                let id = Identity { vendor_id: 7, product_code: u32::from(i), revision: 1, serial: 0, name: format!("d{i}"), alias: 0 };
+                let mut e = Esc::new(esc::sii_image(&id, &[], &[]), u64::from(i) * 1_000);
+                e.mem[0x10..0x12].copy_from_slice(&(0x1000 + i).to_le_bytes());
+                e.set_link(i < 2);
+                e
+            })
+            .collect()
+    }
+
+    fn pass(line: &mut [Esc], now: u64, dgs: &[(u8, u32, Vec<u8>)]) -> Vec<(Vec<u8>, u16, u32)> {
+        let mut d: Vec<Datagram> = dgs.iter().map(|(cmd, address, data)| Datagram { cmd: *cmd, idx: 0, address: *address, circulating: false, more: false, irq: 0, data: data.clone(), wkc: 0 }).collect();
+        esc::process(line, &mut d, now);
+        d.into_iter().map(|x| (x.data, x.wkc, x.address)).collect()
+    }
+
+    fn fp(station: u16, ado: u16) -> u32 {
+        (u32::from(ado) << 16) | u32::from(station)
+    }
+
+    fn ap(position: u16, ado: u16) -> u32 {
+        (u32::from(ado) << 16) | u32::from(0u16.wrapping_sub(position))
+    }
+
+    fn fmmu(logical: u32, len: u16, bits: (u8, u8), physical: u16, physical_bit: u8, kind: u8) -> Vec<u8> {
+        let mut b = logical.to_le_bytes().to_vec();
+        b.extend_from_slice(&len.to_le_bytes());
+        b.extend_from_slice(&[bits.0, bits.1]);
+        b.extend_from_slice(&physical.to_le_bytes());
+        b.extend_from_slice(&[physical_bit, kind, 1, 0, 0, 0]);
+        b
+    }
+
+    /// P1. "each frame of commands (type 1; any other unanswered, counted unreadable)": a frame of
+    /// type 4 carrying a well-formed APRD goes unanswered and is counted unreadable.
+    #[test]
+    fn a_frame_of_another_type_is_unanswered_and_counted_unreadable() {
+        netns::isolated("round_2::a_frame_of_another_type_is_unanswered_and_counted_unreadable", &[("a0", "b0")], || {
+            use veredas_aranha::wire::raw::{Options, RawLink};
+            let cfg: EthercatConfig = toml::from_str(SEGMENT).unwrap();
+            let segment = start(&cfg).unwrap();
+            let link = RawLink::open_with("a0", Options { ethertype: Some(0x88A4), promiscuous: true, outgoing: false }).unwrap();
+            let me = [0x10u8; 6];
+            let frame = |kind: u16| {
+                let mut body = vec![1u8, 0]; // APRD, idx 0
+                body.extend_from_slice(&ap(0, 0x0000).to_le_bytes());
+                body.extend_from_slice(&1u16.to_le_bytes());
+                body.extend_from_slice(&[0, 0, 0, 0, 0]);
+                let mut f = vec![0xFF; 6];
+                f.extend_from_slice(&me);
+                f.extend_from_slice(&0x88A4u16.to_be_bytes());
+                f.extend_from_slice(&((body.len() as u16) | (kind << 12)).to_le_bytes());
+                f.extend(body);
+                f.resize(60, 0);
+                f
+            };
+            let back = |link: &RawLink| {
+                let started = Instant::now();
+                while started.elapsed() < Duration::from_millis(1500) {
+                    if let Some(r) = link.recv(Duration::from_millis(100)).unwrap()
+                        && r.bytes.len() > 12
+                        && r.bytes[6..12] != me
+                    {
+                        return Some(r.bytes);
+                    }
+                }
+                None
+            };
+            link.send(&frame(4)).unwrap();
+            let got = back(&link);
+            let s = segment.status();
+            assert!(got.is_none(), "a frame of type 4 was answered: {got:02x?}");
+            assert_eq!((s.frames, s.unreadable), (0, 1), "{s:?}");
+            link.send(&frame(1)).unwrap();
+            assert!(back(&link).is_some(), "type 1 answered");
+            // The core itself: a whole payload of type 2 is not read; the same as type 1 is.
+            let mut payload = (12u16 | (2 << 12)).to_le_bytes().to_vec();
+            payload.extend_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            assert!(esc::parse(&payload).is_none());
+            payload[1] = (payload[1] & 0x0F) | 0x10;
+            assert!(esc::parse(&payload).is_some(), "the same, type 1");
+        });
+    }
+
+    /// P2. "a transition it refuses flagged with code 0x0011": ETG.1000.6's state machine refuses
+    /// PRE-OP to OP, and BOOT is reached from INIT alone and left to INIT alone.
+    #[test]
+    fn every_transition_etg_refuses_is_refused() {
+        let state = |l: &[Esc]| (l[1].mem[0x0130], u16::from_le_bytes([l[1].mem[0x0134], l[1].mem[0x0135]]));
+        let ask = |l: &mut [Esc], control: u8| {
+            pass(l, 0, &[(5, fp(0x1001, 0x0120), vec![control, 0])]);
+        };
+        let to = |l: &mut [Esc], path: &[u8]| {
+            for c in path {
+                ask(l, *c);
+            }
+        };
+        // PRE-OP to OP
+        let mut l = line();
+        to(&mut l, &[0x01, 0x02]);
+        ask(&mut l, 0x08);
+        assert_eq!(state(&l), (0x12, 0x0011), "PRE-OP to OP");
+        // PRE-OP, SAFE-OP and OP to BOOT
+        for (path, from) in [(&[0x01u8, 0x02][..], 0x02u8), (&[0x01, 0x02, 0x04][..], 0x04), (&[0x01, 0x02, 0x04, 0x08][..], 0x08)] {
+            let mut l = line();
+            to(&mut l, path);
+            ask(&mut l, 0x03);
+            assert_eq!(state(&l), (from | 0x10, 0x0011), "{from:#x} to BOOT");
+        }
+        // INIT to BOOT refused: the EEPROM states no bootstrap mailbox (0x0013, bootstrap not
+        // supported); INIT clears it.
+        let mut l = line();
+        ask(&mut l, 0x13);
+        assert_eq!(state(&l), (0x11, 0x0013), "INIT to BOOT");
+        ask(&mut l, 0x01);
+        assert_eq!(state(&l), (0x01, 0));
+    }
+
+    /// P3. "logical through its FMMUs bit by bit": the physical start bit (0x060A) moves the mapped
+    /// bit within its physical byte, for a read and for a write.
+    #[test]
+    fn the_physical_start_bit_is_honoured() {
+        let mut l = line();
+        l[0].mem[0x1000] = 0x08;
+        pass(&mut l, 0, &[(5, fp(0x1000, 0x0600), fmmu(0, 1, (0, 0), 0x1000, 3, 1)), (5, fp(0x1000, 0x0610), fmmu(1, 1, (0, 0), 0x1004, 5, 2))]);
+        let r = pass(&mut l, 0, &[(10, 0, vec![0x00])]);
+        assert_eq!((r[0].0.clone(), r[0].1), (vec![0x01], 1), "logical bit 0 read from physical bit 3");
+        pass(&mut l, 0, &[(11, 1, vec![0x01])]);
+        assert_eq!(l[0].mem[0x1004], 0x20, "logical bit 8 written to physical bit 5");
+    }
+
+    /// P4. "its SII EEPROM ... (identity, name, General ..., SyncManager ... categories built from the
+    /// file)": the bytes other masters than ethercrab read. ETG.2010: word 4 the alias; General byte 3
+    /// the NameIdx (IgH's name; ethercrab reads the OrderIdx); a SyncManager's control byte bits 2-3
+    /// the direction (01 written by the master: outputs; 00 read: inputs), which IgH takes a PDO's
+    /// direction from.
+    #[test]
+    fn the_sii_bytes_other_masters_read() {
+        let id = Identity { vendor_id: 1, product_code: 2, revision: 3, serial: 4, name: "x".into(), alias: 0x0102 };
+        let e = |bits| vec![PdoEntry { index: 0x7000, subindex: 1, bits }];
+        let w = esc::sii_image(&id, &e(8), &e(8));
+        let category = |kind: u16| {
+            let mut at = 0x40;
+            while w[at] != kind {
+                assert_ne!(w[at], 0xFFFF, "category {kind}");
+                at += 2 + w[at + 1] as usize;
+            }
+            w[at + 2..at + 2 + w[at + 1] as usize].iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()
+        };
+        assert_eq!(w[4], 0x0102, "the alias in the EEPROM's word 4");
+        let g = category(30);
+        assert_eq!((g[2], g[3]), (1, 1), "OrderIdx and NameIdx both the name");
+        let sm = category(41);
+        assert_eq!((sm[16 + 4] & 0x0C, sm[16 + 7]), (0x04, 3), "SM2: written by the master, outputs");
+        assert_eq!((sm[24 + 4] & 0x0C, sm[24 + 7]), (0x00, 4), "SM3: read by the master, inputs");
+    }
+
+    /// P5. "each SyncManager's status and PDI control" kept: all eight, not three of sixteen.
+    #[test]
+    fn every_syncmanager_s_status_and_pdi_control_is_kept() {
+        let mut l = line();
+        for n in 0..8u16 {
+            for at in [0x0805 + 8 * n, 0x0807 + 8 * n] {
+                pass(&mut l, 0, &[(5, fp(0x1001, at), vec![0xEE])]);
+                assert_eq!(l[1].mem[at as usize], 0, "{at:#06x}");
+            }
+        }
+    }
+
+    /// P6. "held to 31 bits" both ways: a device ahead by more than 2^31 ns reads 0x7FFFFFFF.
+    #[test]
+    fn a_difference_ahead_over_31_bits_is_held_at_its_most() {
+        let mut l = line();
+        pass(&mut l, 0, &[(5, fp(0x1002, 0x0920), (1u64 << 40).to_le_bytes().to_vec())]);
+        pass(&mut l, 0, &[(13, ap(0, 0x0910), vec![0; 8])]);
+        assert_eq!(u32::from_le_bytes(l[2].read(0x092C, 4).try_into().unwrap()), 0x7FFF_FFFF);
+    }
+
+    /// P7. "system time live": read live by a broadcast read as by a configured one.
+    #[test]
+    fn a_brd_reads_the_system_time_live() {
+        let mut l = line();
+        let r = pass(&mut l[..1], 5_000_000, &[(7, 0x0910 << 16, vec![0; 8])]);
+        assert_eq!(u64::from_le_bytes(r[0].0.clone().try_into().unwrap()), 5_000_000);
+    }
+
+    /// P8. Outside the clause's words: the ESC datasheet's addressing table says each device
+    /// increments the position field of a broadcast too ("not used for addressing").
+    #[test]
+    fn a_broadcast_s_position_field_comes_back_incremented() {
+        let mut l = line();
+        let r = pass(&mut l, 0, &[(7, 0, vec![0]), (8, 0x0F80 << 16, vec![0])]);
+        assert_eq!((r[0].2 as u16, r[1].2 as u16), (3, 3));
+        let r = pass(&mut l, 0, &[(9, 0x0F80 << 16, vec![0])]);
+        assert_eq!(r[0].2 as u16, 3, "a BRW's too");
+    }
+}
