@@ -79,20 +79,36 @@ pub fn manifest_text(release: &semver::Version, commit: &str, target: &str, tool
 /// `CARGO_*` but `CARGO_HOME`, `RUSTFLAGS`, `RUSTDOCFLAGS`, `RUSTC*`, `RUSTUP_TOOLCHAIN`): the
 /// whole suite of the default profile, whatever the caller's shell holds.
 pub fn suite_command(root: &Path, tmp: &Path, argv: &[&str], env: impl Iterator<Item = (String, String)>) -> Command {
+    // The child's environment is `env` alone, the steering variables left out: what it runs does not
+    // depend on anything else the calling process holds.
     let mut c = Command::new(argv[0]);
-    c.args(&argv[1..]).current_dir(root).env("TMPDIR", tmp);
-    for (k, _) in env {
+    c.args(&argv[1..]).current_dir(root).env_clear();
+    for (k, v) in env {
         let steers = k.starts_with("NEXTEST_")
             || (k.starts_with("CARGO_") && k != "CARGO_HOME")
             || k == "RUSTFLAGS"
             || k == "RUSTDOCFLAGS"
             || k.starts_with("RUSTC")
-            || k == "RUSTUP_TOOLCHAIN";
-        if steers {
-            c.env_remove(k);
+            || k == "RUSTUP_TOOLCHAIN"
+            || k == "TMPDIR";
+        if !steers {
+            c.env(k, v);
         }
     }
+    c.env("TMPDIR", tmp);
     c
+}
+
+/// What `rustc --version` prints in `root` under the suite's own environment ([`suite_command`]):
+/// the toolchain the suite runs with, which the manifest names and the builder installs.
+pub fn suite_rustc(root: &Path, tmp: &Path, env: impl Iterator<Item = (String, String)>) -> Result<String, VmError> {
+    let out = suite_command(root, tmp, &["rustc", "--version"], env)
+        .output()
+        .map_err(|source| VmError::Spawn { program: "rustc --version".into(), source })?;
+    if !out.status.success() {
+        return Err(VmError::Failed { program: "rustc --version".into(), status: out.status.to_string(), stderr: String::from_utf8_lossy(&out.stderr).into_owned() });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// Why the working tree at `root` is not exactly `commit`, or `None`: HEAD moved, a tracked file
@@ -110,14 +126,19 @@ pub fn differs_from(root: &Path, commit: &str) -> Result<Option<String>, git::Gi
     }
     // An ignored file the commit does not ignore (by `.git/info/exclude`, a global excludes file or
     // a `.gitignore` git does not track) is a file of this tree the commit is not.
-    let ignored = git::text(root, &["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"])?.unwrap_or_default();
+    let ignored = git::run(root, &["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"])?.unwrap_or_default();
     let mut stray = Vec::new();
-    for path in ignored.split('\0').filter(|p| !p.is_empty()) {
-        let rule = git::text(root, &["check-ignore", "-v", "--no-index", path])?.unwrap_or_default();
-        let source = rule.split(':').next().unwrap_or_default().to_string();
-        let tracked = source.ends_with(".gitignore") && git::run(root, &["ls-files", "--error-unmatch", &source])?.is_some();
-        if !tracked {
-            stray.push(format!("{path} (ignored by {})", if source.is_empty() { "no rule git names".to_string() } else { source }));
+    if !ignored.is_empty() {
+        // `--stdin -z`: every path and every rule's source as it is, never quoted, whatever letters or
+        // colons it holds; four fields a path: the source, the line, the pattern, the path.
+        let rules = git::run_with_input(root, &["check-ignore", "--stdin", "-z", "-v", "--non-matching", "--no-index"], &ignored)?.unwrap_or_default();
+        let fields: Vec<String> = rules.split(|b| *b == 0).map(|f| String::from_utf8_lossy(f).into_owned()).collect();
+        for rec in fields.chunks(4).filter(|r| r.len() == 4) {
+            let (source, path) = (&rec[0], &rec[3]);
+            let tracked = source.ends_with(".gitignore") && git::run(root, &["ls-files", "--error-unmatch", "--", source])?.is_some();
+            if !tracked {
+                stray.push(format!("{path} (ignored by {})", if source.is_empty() { "no rule git names" } else { source }));
+            }
         }
     }
     if !stray.is_empty() {
@@ -162,7 +183,10 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     if !refusals.is_empty() {
         return Err(refused(refusals.join("\n")));
     }
-    let rustc = vm::run("rustc", &["--version"], None)?.trim().to_string();
+    let tmp = crate::cache::dir()?.join("tmp");
+    std::fs::create_dir_all(&tmp)?;
+    // The toolchain the suite runs with, read as the suite runs: the manifest's and the builder's.
+    let rustc = suite_rustc(root, &tmp, std::env::vars())?;
     let toolchain = rustc.split_whitespace().nth(1).ok_or_else(|| refused(format!("rustc printed `{rustc}`")))?.to_string();
     let target = "x86_64-unknown-linux-gnu";
     let components: Vec<(String, String, Vec<String>)> =
@@ -188,8 +212,6 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
         eprintln!("entrega: the whole suite at {commit}, behind the machine's lock");
         // Its temporary files on disk, outside any repository: /tmp is a tmpfs of the machine's
         // memory, and the laws' tests need a folder no git repository holds.
-        let tmp = crate::cache::dir()?.join("tmp");
-        std::fs::create_dir_all(&tmp)?;
         // Built first, so the machine's lock is held for the tests alone (CLAUDE.md).
         let built = suite_command(root, &tmp, &["cargo", "nextest", "run", "--workspace", "--profile", "default", "--no-run"], std::env::vars())
             .status()

@@ -48,6 +48,20 @@ pub fn is_commit_id(root: &Path, id: &str) -> Result<bool, GitError> {
     Ok(text(root, &["rev-parse", "--verify", "--quiet", &spec])?.is_some_and(|t| t.trim() == id))
 }
 
+/// Runs git at `root` ([`command`]) with `input` on its standard input: `Some(stdout)` when it
+/// succeeded, `None` when it answered no.
+pub fn run_with_input(root: &Path, args: &[&str], input: &[u8]) -> Result<Option<Vec<u8>>, GitError> {
+    use std::io::Write;
+    let io = |source: std::io::Error| GitError { dir: root.display().to_string(), source };
+    let mut child = command(root).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(io)?;
+    let mut stdin = child.stdin.take().ok_or_else(|| io(std::io::Error::other("no stdin")))?;
+    let data = input.to_vec();
+    let feeder = std::thread::spawn(move || stdin.write_all(&data));
+    let out = child.wait_with_output().map_err(io)?;
+    let _ = feeder.join();
+    Ok(out.status.success().then_some(out.stdout))
+}
+
 /// [`run`], its output read as text.
 pub fn text(root: &Path, args: &[&str]) -> Result<Option<String>, GitError> {
     Ok(run(root, args)?.map(|b| String::from_utf8_lossy(&b).into_owned()))

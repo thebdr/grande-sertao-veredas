@@ -350,13 +350,41 @@ fn the_suite_runs_the_default_profile_whatever_the_shell_holds() {
     let c = cut::suite_command(Path::new("/repo"), Path::new("/tmpdir"), &["cargo", "nextest", "run", "--workspace", "--profile", "default"], env.into_iter());
     let args: Vec<String> = c.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
     assert_eq!(args, ["nextest", "run", "--workspace", "--profile", "default"]);
+    // The child's environment is the given one alone, the steering variables left out.
     let envs: std::collections::BTreeMap<String, Option<String>> =
         c.get_envs().map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()))).collect();
-    let removed: Vec<&String> = envs.iter().filter(|(_, v)| v.is_none()).map(|(k, _)| k).collect();
-    assert_eq!(removed, ["CARGO_BUILD_JOBS", "CARGO_TARGET_DIR", "NEXTEST_PROFILE", "NEXTEST_RETRIES", "RUSTC_WRAPPER", "RUSTFLAGS", "RUSTUP_TOOLCHAIN"]);
-    assert_eq!(envs.get("TMPDIR"), Some(&Some("/tmpdir".to_string())));
-    assert!(!envs.contains_key("CARGO_HOME") && !envs.contains_key("PATH"), "left as they are");
+    let set: Vec<(&str, &str)> = envs.iter().filter_map(|(k, v)| v.as_deref().map(|v| (k.as_str(), v))).collect();
+    assert_eq!(set, [("CARGO_HOME", "/home/x/.cargo"), ("PATH", "/usr/bin"), ("TMPDIR", "/tmpdir")]);
     assert_eq!(c.get_current_dir(), Some(Path::new("/repo")));
+}
+
+#[test]
+fn the_toolchain_named_is_the_one_the_suite_runs_with() {
+    let root = repo_root();
+    let tmp = tempfile::tempdir().unwrap();
+    let env: Vec<(String, String)> = std::env::vars().filter(|(k, _)| k != "RUSTUP_TOOLCHAIN").collect();
+    let plain = cut::suite_rustc(&root, tmp.path(), env.clone().into_iter()).unwrap();
+    assert!(plain.starts_with("rustc "), "{plain}");
+    // A toolchain set in the caller's shell (here one that is not installed, so it would fail)
+    // steers neither the suite nor the version the manifest names.
+    let mut steered = env.clone();
+    steered.push(("RUSTUP_TOOLCHAIN".into(), "no-such-toolchain".into()));
+    assert_eq!(cut::suite_rustc(&root, tmp.path(), steered.clone().into_iter()).unwrap(), plain);
+    // The variable does steer rustc when it reaches it: the cleaning is what keeps it out.
+    let mut raw = Command::new("rustc");
+    raw.arg("--version").env_clear().envs(steered).current_dir(&root);
+    assert!(!raw.output().unwrap().status.success(), "rustup refuses a toolchain that is not installed");
+}
+
+#[test]
+fn a_rule_in_a_tracked_gitignore_under_a_folder_with_letters_outside_ascii_is_the_commits() {
+    let r = Repo { dir: tempfile::tempdir().unwrap() };
+    r.git(&["init", "-q", "-b", "main"]);
+    r.write("docs/design/ábaco/.gitignore", "out/\n");
+    r.write("docs/design/ábaco/README.md", "x\n");
+    let c = r.commit("a tracked .gitignore under an accented folder");
+    r.write("docs/design/ábaco/out/f", "built\n");
+    assert_eq!(cut::differs_from(r.dir.path(), &c).unwrap(), None);
 }
 
 #[test]
