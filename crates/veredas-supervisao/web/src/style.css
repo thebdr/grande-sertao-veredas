@@ -229,7 +229,9 @@ svg.spark.st-line-stale .point { fill: var(--muted); }
 svg.spark.st-line-disabled .point { fill: var(--weak2); }
 .chart { display: block; }
 .chart .grid { stroke: var(--hair); }
-.chart .axis { fill: var(--label); font: 10px var(--mono); }
+/* A chart's labels keep their white space as written (the target's, the binding's own text): the
+   browser draws an SVG text `nowrap`, collapsing spaces. */
+.chart .axis { fill: var(--label); font: 10px var(--mono); white-space: pre; }
 .chart .limit { stroke: var(--warn); stroke-dasharray: 5 4; }
 .chart .breach { fill: var(--danger); }
 .chart .point { fill: var(--accent-tint); }

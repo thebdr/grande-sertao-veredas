@@ -898,7 +898,9 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let probe = probe_dashboard(&dash);
     let v = drawn_as(&mut page, "Probe", "dashboards/0", Some(&probe));
     let kinds: Vec<&str> = v["drawn"].as_array().unwrap().iter().map(|p| p["kind"].as_str().unwrap()).collect();
-    assert_eq!(kinds.len(), every_state().len() + 28, "{kinds:?}");
+    // The probe's panels by state, its 28 cases, and the dashboard's own panels again with every
+    // string spaced (and a normal tile, a normal level's row, a refused panel).
+    assert_eq!(kinds.len(), every_state().len() + 28 + dash["panels"].as_array().unwrap().len() + 3, "{kinds:?}");
     // Every place a dashboard writes a state's class, each state painted otherwise than every other
     // there, none in the accent's family or its band of hue but the neutral series (Q22).
     let painted = page.eval(&format!("{STATE_PAINT}({})", serde_json::to_string(&every_state()).unwrap()));
@@ -1520,6 +1522,38 @@ fn probe_dashboard(d: &Value) -> Value {
     let mut cl = p(10);
     cl["data"]["rows"][0]["key"] = json!(" k  1");
     panels.push(cl);
+    // And every text a panel draws, by the panels' own data rather than a list of fields: each of
+    // the dashboard's panels again, a tile and a level's row also normal with a unit (a tile's id
+    // and a level's value and unit drawn then), every string the host hands it, its title too,
+    // given white space of its own (two spaces, a leading and a trailing one, a tab, a line break),
+    // the two words that name a kind or a state apart (the page's classes); and a refused panel,
+    // its reason so. Each drawn as written and as received.
+    fn spaced(v: &mut Value) {
+        match v {
+            Value::String(s) => *s = format!("  {s}\t+\n+ "),
+            Value::Array(a) => a.iter_mut().for_each(spaced),
+            Value::Object(o) => o.iter_mut().filter(|(k, _)| *k != "kind" && *k != "state").for_each(|(_, x)| spaced(x)),
+            _ => {}
+        }
+    }
+    let mut every: Vec<Value> = d["panels"].as_array().unwrap().clone();
+    let mut tile = p(0);
+    (tile["data"]["state"], tile["data"]["unit"]) = (json!("normal"), json!("%"));
+    every.push(tile);
+    let mut l = p(8);
+    (l["data"]["rows"][0]["state"], l["data"]["rows"][0]["unit"]) = (json!("normal"), json!("%"));
+    every.push(l);
+    let mut refused = p(0);
+    refused["error"] = json!("no column `rate`");
+    every.push(refused);
+    for mut q in every {
+        spaced(&mut q["title"]);
+        spaced(&mut q["data"]);
+        if q.get("error").is_some_and(|e| !e.is_null()) {
+            spaced(&mut q["error"]);
+        }
+        panels.push(q);
+    }
     let at = p(4)["data"]["points"].as_array().unwrap().clone();
     for vals in [[123456.7, 131234.5, 127000.25], [-1234.5, -1500.25, -1100.0]] {
         let mut t = p(4);
