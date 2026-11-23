@@ -2264,3 +2264,46 @@ which none of the runtime's clocks gives. IEC 61131-3's TP gives one pulse per r
 `DECISION PENDING (Q229)`.
 
 **Reversible?** Yes: a few lines of `Tp`, or of all three timers, and the assertions that pin them.
+
+---
+
+## Q47 - How much debug information do development builds carry?
+
+**Raised** 2026-11-23, by the orchestrating session, on the home disk's use with ten sessions.
+
+The workspace manifest compiles the database engine without debug information and seven OPC UA
+crates, eleven Arrow crates and `duckdb` with line tables only (1549cb9, 2026-11-10), and says why
+it stops there: "A backtrace still names file and line; the suite's own crates keep full debug
+info". Since then every test binary still carries a full copy of the debug information of what
+it links, and a session's `target` grew to between 23 and 84 GB in a few hours; the home disk
+(935 GB) fell by up to 100 GB an hour on 2026-11-22.
+
+Measured on 2026-11-23 at 8ce94c9, a full test build (`cargo nextest run --workspace --no-run`)
+into a folder seeded with the same 11 GB of compiled dependencies each time:
+
+| Development profile | Folder after | portal's part | maquinar's | supervisão's | core's |
+|---|---|---|---|---|---|
+| (a) as the manifest stands | 34 GB | 5.6 GB | 3.3 GB | 3.2 GB | 2.1 GB |
+| (b) line tables only for every crate | 25 GB | 3.2 GB | 1.6 GB | 1.9 GB | 1.0 GB |
+| (c) debug information stripped at link | 21 GB | 1.8 GB | 0.9 GB | 1.1 GB | 0.4 GB |
+
+(b) and (c) also recompiled every dependency, which (a) did not, so their folders hold about 5 GB
+that a seed built with the same profile would have spared. Under (c) the whole suite ran green,
+1415 of 1415.
+
+Options:
+- (a) Leave it. Full debug information for the suite's own crates; the disk is kept by resetting
+  build folders.
+- (b) `debug = "line-tables-only"` for the whole development profile. A panic names its place and
+  a backtrace still names file and line, as the manifest's comment asks; a debugger no longer
+  shows variables. About half the size.
+- (c) `strip = "debuginfo"` for the development profile. A panic still names its place; a
+  backtrace names functions without file or line. About a third of the size.
+
+(b) and (c) each cost one full rebuild in every build folder, the database engine included, and
+change no release build.
+
+**Recommended**: (b), which keeps what the earlier commit set out to keep. **Taken meanwhile**:
+(a), nothing changed.
+
+**Reversible?** Yes: one line of the workspace manifest, and one more rebuild.
