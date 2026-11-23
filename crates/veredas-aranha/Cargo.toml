@@ -27,3 +27,6 @@ serde_json = { workspace = true }
 # Unicode's own decomposition (NFKD), so the vendor reader of tests/component.rs reads an accented
 # or full-width letter as its base letter, as supervisão's reader does.
 icu_normalizer = { workspace = true }
+# Unicode's general categories and default-ignorable code points, so the same reader drops marks and
+# invisible letters that would hide a term.
+icu_properties = { workspace = true }

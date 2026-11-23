@@ -4341,6 +4341,7 @@ name = "veredas-aranha"
 version = "2.0.0-alpha.1"
 dependencies = [
  "icu_normalizer",
+ "icu_properties",
  "libc",
  "serde",
  "serde_json",

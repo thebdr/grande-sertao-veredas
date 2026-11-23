@@ -144,6 +144,9 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 # Unicode's own decomposition (NFKD), for supervisão's test that reads every file for names
 # (tests/component.rs): an accented letter read as its base letter, whatever its block.
 icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
+# Unicode's general categories and default-ignorable code points, for aranha's reader of the same
+# kind (crates/veredas-aranha/tests/component.rs): marks and invisible letters dropped.
+icu_properties = { version = "2", default-features = false, features = ["compiled_data"] }
 # HTML's named character references as WHATWG lists them, for the same test: every name of a
 # letter read as that letter, the legacy names a browser reads without their `;` among them.
 entities = "1"
