@@ -1052,16 +1052,80 @@ fn stray_frames_never_keep_a_silent_adapters_connection() {
 fn the_timeout_runs_from_the_open() {
     let a = Adapter::start(Script::default());
     a.producing.store(false, Ordering::SeqCst);
-    let t = Instant::now();
+    let before = Instant::now();
     let s = Scanner::open(&spec(&a)).unwrap();
-    assert!(wait(Duration::from_secs(1), || s.state() != LinkState::Running));
-    let took = t.elapsed();
+    let after = Instant::now();
+    assert!(wait(Duration::from_secs(2), || s.state() != LinkState::Running));
+    // Lost no sooner than the timeout after the open began, and soon after the open returned (a
+    // stall of the machine during the open is not the scanner's).
     assert_eq!(s.state(), LinkState::Lost { timeout: RPI * 4 });
-    assert!(
-        took >= RPI * 4 && took < RPI * 4 + Duration::from_millis(250),
-        "{took:?}"
-    );
+    let (least, most) = (before.elapsed(), after.elapsed());
+    assert!(least >= RPI * 4, "{least:?}");
+    assert!(most < RPI * 4 + Duration::from_millis(250), "{most:?}");
     assert_eq!(s.counters().consumed, 0);
+}
+
+/// A first input is new data whatever its count, 0 included.
+#[test]
+fn the_first_input_is_taken_whatever_its_count() {
+    let a = Adapter::start(Script::default());
+    a.producing.store(false, Ordering::SeqCst);
+    let mut sp = spec(&a);
+    sp.timeout_multiplier = 7;
+    let s = Scanner::open(&sp).unwrap();
+    let (id, to) = (s.opened().t_to_o_id, s.opened().receives_on);
+    a.io.send_to(&input_frame(id, 1, 0, None, &[0x5A; 6]), to)
+        .unwrap();
+    assert!(wait(Duration::from_secs(1), || s.inputs().data == [0x5A; 6]));
+    assert_eq!(s.inputs().updates, 1);
+}
+
+/// A flood of datagrams that are not this connection's holds nothing back: the outputs go at
+/// their interval and the link stays up.
+#[test]
+fn a_flood_of_stray_datagrams_holds_no_output_back() {
+    let a = Adapter::start(Script::default());
+    let mut sp = spec(&a);
+    sp.timeout_multiplier = 7;
+    let s = Scanner::open(&sp).unwrap();
+    assert!(wait(Duration::from_secs(1), || s.counters().consumed > 2));
+    let to = s.opened().receives_on;
+    let stop = Arc::new(AtomicBool::new(false));
+    let flooders: Vec<_> = (0..2)
+        .map(|_| {
+            let stop = stop.clone();
+            thread::spawn(move || {
+                let u = UdpSocket::bind("127.0.0.2:0").unwrap();
+                while !stop.load(Ordering::SeqCst) {
+                    let _ = u.send_to(&[1, 2, 3], to);
+                }
+            })
+        })
+        .collect();
+    thread::sleep(Duration::from_millis(100));
+    let (p0, a0) = (s.counters().produced, a.outputs().len());
+    thread::sleep(Duration::from_secs(1));
+    let (p1, a1) = (s.counters().produced, a.outputs().len());
+    stop.store(true, Ordering::SeqCst);
+    for f in flooders {
+        f.join().unwrap();
+    }
+    assert!(
+        s.counters().stray > 1000,
+        "the flood reached the scanner: {}",
+        s.counters().stray
+    );
+    assert!(
+        (40..=60).contains(&(p1 - p0)),
+        "produced {} during the flood",
+        p1 - p0
+    );
+    assert!(
+        (40..=60).contains(&(a1 - a0)),
+        "the adapter received {} during the flood",
+        a1 - a0
+    );
+    assert_eq!(s.state(), LinkState::Running);
 }
 
 /// Each direction at the interval the adapter granted it: outputs at O→T's, the timeout from
