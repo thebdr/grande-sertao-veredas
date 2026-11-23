@@ -221,6 +221,61 @@ const WORKSPACE_EXTRA: &[&str] = &["adler2", "foldhash", "miniz_oxide"];
 /// The targets the suite is built and tested on: this machine's, the gate, and the Windows VM's.
 const SUITE_TARGETS: [&str; 2] = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"];
 
+/// The features Ábaco's crates carry in the suite's test build beyond Ábaco built alone, per
+/// target, each reviewed (`.zen/evidence/C-220.md`): serde implementations (chrono, indexmap,
+/// serde's and serde_core's `alloc`, which a `std` build has anyway), flate2's second backend and
+/// what it turns on in miniz_oxide, hashbrown's default hasher (indexmap uses its hasher-free
+/// table), num-traits' 128-bit integers, libc's trait implementations, serde_json's `RawValue`
+/// (its parsing of numbers unchanged), syn's `fold` (macros' output unchanged), and on Windows the
+/// API bindings of windows-sys others call. None changes what the engine computes; the engine's
+/// own two crates gain none. A feature joining fails until it is reviewed and added.
+const REVIEWED_FEATURES: [(&str, &[(&str, &[&str])]); 2] = [
+    ("x86_64-unknown-linux-gnu", &[
+        ("chrono", &["serde"]),
+        ("flate2", &["miniz_oxide", "rust_backend"]),
+        ("hashbrown", &["default-hasher"]),
+        ("indexmap", &["serde"]),
+        ("libc", &["extra_traits"]),
+        ("miniz_oxide", &["default", "simd", "simd-adler32", "with-alloc"]),
+        ("num-traits", &["i128"]),
+        ("serde", &["alloc"]),
+        ("serde_core", &["alloc"]),
+        ("serde_json", &["raw_value"]),
+        ("syn", &["fold"]),
+    ]),
+    ("x86_64-pc-windows-msvc", &[
+        ("chrono", &["serde"]),
+        ("flate2", &["miniz_oxide", "rust_backend"]),
+        ("hashbrown", &["default-hasher"]),
+        ("indexmap", &["serde"]),
+        ("miniz_oxide", &["default", "simd", "simd-adler32", "with-alloc"]),
+        ("num-traits", &["i128"]),
+        ("serde", &["alloc"]),
+        ("serde_core", &["alloc"]),
+        ("serde_json", &["raw_value"]),
+        ("syn", &["fold"]),
+        ("windows-sys", &[
+            "Wdk", "Wdk_Foundation", "Wdk_Storage", "Wdk_Storage_FileSystem", "Wdk_System", "Wdk_System_IO",
+            "Win32_Networking", "Win32_Networking_WinSock", "Win32_System", "Win32_System_Console",
+            "Win32_System_Diagnostics", "Win32_System_Diagnostics_Debug", "Win32_System_IO",
+            "Win32_System_LibraryLoader", "Win32_System_Pipes", "Win32_System_SystemInformation",
+            "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming",
+        ]),
+    ]),
+];
+
+/// Crate → features, from `cargo tree --format '{p}|{f}'` lines (tree characters allowed).
+fn features_of<'a>(lines: impl Iterator<Item = &'a str>) -> BTreeMap<String, BTreeSet<String>> {
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for line in lines {
+        let line = line.trim_start_matches(['│', '├', '└', '─', ' ']);
+        let Some((package, features)) = line.rsplit_once('|') else { continue };
+        let name = package.split_whitespace().next().unwrap_or("").to_string();
+        out.entry(name).or_default().extend(features.split(',').filter(|f| !f.is_empty()).map(str::to_string));
+    }
+    out
+}
+
 #[test]
 fn in_the_suites_workspace_build_its_graph_is_the_reviewed_one() {
     // the suite's build is a test build of every member: features unified with dev units on, on
@@ -229,22 +284,62 @@ fn in_the_suites_workspace_build_its_graph_is_the_reviewed_one() {
     // root to its own dev-dependencies (its tests' crates, not its graph)
     for target in SUITE_TARGETS {
         let tree = cargo(&[
-            "tree", "--workspace", "-e", "normal,dev", "--no-dedupe", "--prefix", "indent", "--format", "{p}", "--target", target,
+            "tree", "--workspace", "-e", "normal,dev", "--no-dedupe", "--prefix", "indent", "--format", "{p}|{f}", "--target", target,
         ]);
-        let mut crates = BTreeSet::new();
-        let mut lines = tree.lines().skip_while(|l| !l.starts_with("veredas-abaco "));
-        for line in lines.by_ref() {
-            if line.is_empty() || line.starts_with("[dev-dependencies]") {
-                break;
-            }
-            let name = line.trim_start_matches(['│', '├', '└', '─', ' ']).split_whitespace().next().unwrap_or("");
-            crates.insert(name.to_string());
-        }
-        assert!(crates.contains("veredas-abaco") && crates.contains("ironcalc_base") && crates.contains("zip"), "{target}: {crates:?}");
-        let unreviewed: Vec<&String> =
+        let block: Vec<&str> = tree
+            .lines()
+            .skip_while(|l| !l.starts_with("veredas-abaco "))
+            .take_while(|l| !l.is_empty() && !l.starts_with("[dev-dependencies]"))
+            .collect();
+        let in_suite = features_of(block.iter().copied());
+        let crates: BTreeSet<&String> = in_suite.keys().collect();
+        assert!(["veredas-abaco", "ironcalc_base", "zip"].iter().all(|c| in_suite.contains_key(*c)), "{target}: {crates:?}");
+        let unreviewed: Vec<&&String> =
             crates.iter().filter(|c| !REVIEWED.contains(&c.as_str()) && !WORKSPACE_EXTRA.contains(&c.as_str())).collect();
         assert!(unreviewed.is_empty(), "{target}: in the workspace's test build, not reviewed: {unreviewed:?}");
+        // and the features: beyond Ábaco built alone, only reviewed ones
+        let alone = features_of(
+            cargo(&["tree", "-p", "veredas-abaco", "-e", "normal", "--prefix", "none", "--format", "{p}|{f}", "--target", target]).lines(),
+        );
+        let reviewed = REVIEWED_FEATURES.iter().find(|(t, _)| *t == target).map(|(_, f)| *f).unwrap();
+        for (name, features) in &in_suite {
+            let none = BTreeSet::new();
+            let gained: Vec<&String> = features.difference(alone.get(name).unwrap_or(&none)).collect();
+            let allowed = reviewed.iter().find(|(n, _)| n == name).map(|(_, f)| *f).unwrap_or(&[]);
+            let unreviewed: Vec<&&String> = gained.iter().filter(|f| !allowed.contains(&f.as_str())).collect();
+            assert!(unreviewed.is_empty(), "{target}: in the workspace's test build {name} gains unreviewed features {unreviewed:?}");
+        }
     }
+}
+
+/// The folders of the cargo processes that started this test (cargo reads the configuration of
+/// the folder it is started in), and any `--config` they were given: read on Linux from `/proc`,
+/// up the chain of parent processes while they are cargo's own.
+fn invoking_cargo() -> (Vec<PathBuf>, Vec<String>) {
+    let (mut folders, mut configs) = (Vec::new(), Vec::new());
+    let mut pid = std::process::id();
+    while let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        // the parent is the second field after the command, which is in parentheses
+        let Some(ppid) = stat.rsplit_once(") ").and_then(|(_, rest)| rest.split_whitespace().nth(1)?.parse::<u32>().ok()) else {
+            break;
+        };
+        let comm = std::fs::read_to_string(format!("/proc/{ppid}/comm")).unwrap_or_default();
+        if !matches!(comm.trim(), "cargo" | "cargo-nextest" | "rustup") {
+            break;
+        }
+        if let Ok(cwd) = std::fs::read_link(format!("/proc/{ppid}/cwd")) {
+            folders.push(cwd);
+        }
+        if let Ok(cmd) = std::fs::read(format!("/proc/{ppid}/cmdline")) {
+            for arg in cmd.split(|b| *b == 0).map(String::from_utf8_lossy) {
+                if arg == "--config" || arg.starts_with("--config=") {
+                    configs.push(arg.to_string());
+                }
+            }
+        }
+        pid = ppid;
+    }
+    (folders, configs)
 }
 
 /// The top-level keys a cargo configuration of this machine may hold: none of them names where a
@@ -333,8 +428,10 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".cargo")));
     let mut configs: BTreeSet<PathBuf> = BTreeSet::new();
+    let (invoked_in, given) = invoking_cargo();
+    assert!(given.is_empty(), "the cargo that runs this test was given {given:?}");
     let here = std::env::current_dir().unwrap();
-    for start in [root(), root().join("forks/ironcalc"), PathBuf::from(env!("CARGO_MANIFEST_DIR")), here] {
+    for start in [root(), root().join("forks/ironcalc"), PathBuf::from(env!("CARGO_MANIFEST_DIR")), here].into_iter().chain(invoked_in) {
         for dir in start.ancestors() {
             for file in [".cargo/config", ".cargo/config.toml"] {
                 configs.insert(dir.join(file));
@@ -349,6 +446,14 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
         let t: toml::Table = toml::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
         let foreign: Vec<&String> = t.keys().filter(|k| !CONFIG_KEYS.contains(&k.as_str())).collect();
         assert!(foreign.is_empty(), "{}: {foreign:?} (a key that may patch or replace crates)", config.display());
+        // nothing compiles a crate in rustc's place
+        let build = t.get("build").and_then(|b| b.as_table());
+        for key in ["rustc", "rustc-wrapper", "rustc-workspace-wrapper"] {
+            assert!(build.is_none_or(|b| !b.contains_key(key)), "{}: build.{key} set", config.display());
+        }
+    }
+    for var in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"] {
+        assert!(std::env::var_os(var).is_none_or(|v| v.is_empty()), "{var} is set: something compiles crates in rustc's place");
     }
     // and in what the locks say, whatever route did it: every package from crates.io, or a path
     // package of that workspace (the suite's members and the fork's two crates; the fork's two
