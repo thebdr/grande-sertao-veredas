@@ -11,10 +11,10 @@
     "store_record"
   ],
   "exitCode": 0,
-  "outputSha": "ed8f51482a5d65a388b4d7bb1b211daddc451220f2f8fcbea0eab38e9bd8f8e8",
-  "outputTail": "\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s\n\n\nrunning 4 tests\ntest at_its_size_limit_a_recording_stops_and_nothing_is_deleted ... ok\ntest the_record_keeps_on_the_drive_what_the_window_lets_go ... ok\ntest the_limit_stops_the_recording_at_the_first_write_that_reaches_it ... ok\ntest a_record_is_written_once_a_period_whatever_the_poll_rate ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.39s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/d9a4e690a4a390f9/out/veredas_portal-d9a4e690a4a390f9)\n     Running tests/store_record.rs (target/debug/build/veredas-portal/1ea45f8123fa02db/out/store_record-1ea45f8123fa02db)",
-  "ranAt": "2026-11-23T12:41:03.055Z",
-  "headCommit": "5fc090578a44ea09065a223cbe99e1deb78643a7",
+  "outputSha": "8831caa23cd3dc0f404a2f46753b9633c03a11f9a30d7fee0bb44fa5bacc984c",
+  "outputTail": "\ntest result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n\n\nrunning 4 tests\ntest at_its_size_limit_a_recording_stops_and_nothing_is_deleted ... ok\ntest the_record_keeps_on_the_drive_what_the_window_lets_go ... ok\ntest the_limit_stops_the_recording_at_the_first_write_that_reaches_it ... ok\ntest a_record_is_written_once_a_period_whatever_the_poll_rate ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.46s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/7f0b8c3e2ef39c29/out/veredas_portal-7f0b8c3e2ef39c29)\n     Running tests/store_record.rs (target/debug/build/veredas-portal/205a43e950b56cdd/out/store_record-205a43e950b56cdd)",
+  "ranAt": "2026-11-23T18:20:11.788Z",
+  "headCommit": "d516704165feb97fc17737f4575c354d26102668",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store_record.rs",
