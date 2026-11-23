@@ -2,8 +2,8 @@
 //! cycle statistics.
 use crate::clock::Clock;
 use orcl_std::{Program, Scan};
-use std::fmt;
-use std::time::Duration;
+use core::fmt;
+use core::time::Duration;
 
 /// The task's connection to the plant: a fieldbus, real I/O, or a simulation. `read_inputs` is called once at
 /// the start of every scan, with the scan's time; `write_outputs` once at its end, with the time the scan ended
@@ -36,7 +36,7 @@ impl fmt::Display for TaskError {
     }
 }
 
-impl std::error::Error for TaskError {}
+impl core::error::Error for TaskError {}
 
 /// Why a task faulted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

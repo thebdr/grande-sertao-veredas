@@ -130,23 +130,40 @@ const SOURCES: [(&str, &str); 3] = [
     ("task.rs", include_str!("../src/task.rs")),
 ];
 
-/// The paths at which the engine uses std, as they read with whitespace removed: formatting and the error trait,
-/// shared time for the virtual clock, the monotonic `Instant`, and a sleep and a spin for the target's wait.
-const STD_PATHS: [&str; 8] = [
-    "usestd::fmt;",
-    "usestd::time::Duration;",
-    "implstd::error::ErrorforTaskError{}",
-    "usestd::cell::Cell;",
+/// The paths at which the engine uses std, as they read with whitespace removed: std brought into the `no_std`
+/// root by name, shared time for the virtual clock, the monotonic `Instant`, and the sleep of the target's wait.
+/// Everything else the engine uses comes from `core`, which reaches no operating system.
+const STD_PATHS: [&str; 4] = [
+    "externcratestd;",
     "usestd::rc::Rc;",
-    "usestd::time::{Duration,Instant};",
+    "usestd::time::Instant;",
     "std::thread::sleep(remaining.saturating_sub(self.spin));",
-    "std::hint::spin_loop();",
 ];
 
-/// A source with its comment lines taken out and every whitespace character removed.
+/// A source with its comment lines and block comments taken out and every whitespace character removed.
 fn code_squeezed(text: &str) -> String {
     let code: Vec<&str> = text.lines().filter(|line| !line.trim_start().starts_with("//")).collect();
-    code.concat().chars().filter(|c| !c.is_whitespace()).collect()
+    without_block_comments(&code.join("\n")).chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// A text with its block comments taken out, nested ones included.
+fn without_block_comments(text: &str) -> String {
+    let (mut out, mut depth, mut rest) = (String::new(), 0_usize, text);
+    while let Some(c) = rest.chars().next() {
+        if rest.starts_with("/*") {
+            depth += 1;
+            rest = &rest[2..];
+        } else if depth > 0 && rest.starts_with("*/") {
+            depth -= 1;
+            rest = &rest[2..];
+        } else {
+            if depth == 0 {
+                out.push(c);
+            }
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out
 }
 
 #[test]
@@ -171,12 +188,12 @@ fn the_target_s_clock_reads_the_monotonic_instant_never_the_settable_system_time
     }
     let clock = code_squeezed(SOURCES[0].1);
     for needed in [
-        "usestd::time::{Duration,Instant};",
+        "usestd::time::Instant;",
         "pubstructMonoClock{start:Instant,",
         "start:Instant::now(),",
         "implClockforMonoClock{fnnow(&self)->Duration{self.start.elapsed()}",
         "letremaining=deadline.saturating_sub(self.now());",
-        "whileself.now()<deadline{std::hint::spin_loop();}",
+        "whileself.now()<deadline{core::hint::spin_loop();}",
     ] {
         assert!(clock.contains(needed), "MonoClock's reading is std's Instant: {needed}");
     }
@@ -195,5 +212,11 @@ fn the_engine_depends_on_orcl_std_alone_and_forbids_unsafe_code() {
     let listed = String::from_utf8(out.stdout).unwrap();
     let crates: Vec<&str> = listed.lines().filter_map(|line| line.split_whitespace().next()).collect();
     assert_eq!(crates, ["orcl-runtime", "orcl-std"], "the engine and the one crate it uses");
-    assert!(code_squeezed(SOURCES[1].1).contains("#![forbid(unsafe_code)]"), "lib.rs forbids unsafe code");
+    let root = code_squeezed(SOURCES[1].1);
+    assert!(root.contains("#![forbid(unsafe_code)]"), "lib.rs forbids unsafe code");
+    // no_std, std brought in by name and no macro of it imported: every use of std is written out and counted
+    assert!(root.contains("#![no_std]") && root.contains("externcratestd;"), "lib.rs: no_std, std by name");
+    for (file, text) in SOURCES {
+        assert!(!code_squeezed(text).contains("macro_use"), "{file} imports macros wholesale");
+    }
 }

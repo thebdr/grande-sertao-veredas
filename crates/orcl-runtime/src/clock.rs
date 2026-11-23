@@ -1,9 +1,10 @@
 //! The clocks a task runs on: the time a scan reads and the deadlines a task waits for. The engine reads no
 //! clock of its own; its host hands one in, so the same scan runs on a target's monotonic clock and on virtual
 //! time in a test or a simulation.
-use std::cell::Cell;
+use core::cell::Cell;
+use core::time::Duration;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// The program clock as a task sees it: time since the task started, and a wait until a deadline on it.
 pub trait Clock {
@@ -51,7 +52,7 @@ impl Clock for MonoClock {
             std::thread::sleep(remaining.saturating_sub(self.spin));
         }
         while self.now() < deadline {
-            std::hint::spin_loop();
+            core::hint::spin_loop();
         }
     }
 }
