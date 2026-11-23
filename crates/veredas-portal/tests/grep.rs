@@ -185,6 +185,7 @@ fn literal_case_and_whole_word() {
 /// it and one stray CP1252 byte past the tail's first 64 KiB, the grep's lines the tail's.
 #[test]
 fn a_file_is_decoded_as_the_tail_decodes_it_slice_by_slice() {
+    // (and, below it, a second mark kept where the tail keeps it)
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("mixed.log");
     let mut bytes = "Produção iniciada\n".as_bytes().to_vec();
@@ -305,6 +306,7 @@ fn a_cancel_stops_a_running_search_and_a_bad_query_starts_none() {
     let handle: Arc<GrepHandle> = Arc::clone(&s.handle);
     let mut seen = 0u64;
     let mut done = None;
+    let mut file_done = None;
     for e in s.events.iter() {
         match e {
             GrepEvent::Line(_) => {
@@ -313,6 +315,7 @@ fn a_cancel_stops_a_running_search_and_a_bad_query_starts_none() {
                     handle.cancel();
                 }
             }
+            GrepEvent::FileDone { matches, capped, .. } => file_done = Some((matches, capped)),
             GrepEvent::Done(summary) => {
                 done = Some(summary);
                 break;
@@ -323,6 +326,10 @@ fn a_cancel_stops_a_running_search_and_a_bad_query_starts_none() {
     let done = done.unwrap();
     assert_eq!(done.stopped, GrepStop::Cancelled);
     assert!(done.stats.matches < 2_000_000, "stopped inside the first file: {:?}", done.stats);
+    // The file cancelled mid-scan still ends with its count, the lines it gave, and the totals
+    // count it matched.
+    assert_eq!(file_done, Some((seen, false)), "{:?}", done.stats);
+    assert_eq!((done.stats.matches, done.stats.files_matched), (seen, 1));
     s.worker.join().unwrap();
     // Refused before anything is read.
     let scope = || GrepScope::Files(vec![]);
@@ -400,4 +407,76 @@ fn a_cancel_is_heard_while_a_file_is_read() {
     s.worker.join().unwrap();
     assert_eq!(done.stopped, GrepStop::Cancelled, "{done:?}");
     assert!(took < Duration::from_millis(500), "the cancel heard {took:?} after it was asked, the file still being read");
+}
+
+
+/// The lines a live tail started at the file's beginning gives, the first `count` of them.
+fn tail_lines(path: &Path, count: usize) -> Vec<String> {
+    let (mut set, rx) = veredas_portal::SourceSet::new();
+    let cfg = veredas_portal::TailConfig { poll_interval: Duration::from_millis(25), drain_grace: Duration::from_millis(60), use_notify: None, start: veredas_portal::FileStart::Begin };
+    set.spawn(Box::new(veredas_portal::FileTailSource::new("t", "tail", path, cfg))).unwrap();
+    let lines = (0..count).map(|_| rx.recv_timeout(Duration::from_secs(10)).expect("the tail's lines").line).collect();
+    drop(set);
+    lines
+}
+
+/// A second byte-order mark is text, as the tail reads it: only the first, the mark, is dropped.
+#[test]
+fn a_second_mark_is_kept_as_the_tail_keeps_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("marked.log");
+    let mut bytes = vec![0xEF, 0xBB, 0xBF, 0xEF, 0xBB, 0xBF];
+    bytes.extend_from_slice("Header ação\nsecond\n".as_bytes());
+    std::fs::write(&path, &bytes).unwrap();
+    let tail = tail_lines(&path, 2);
+    assert_eq!(tail[0], "\u{feff}Header ação");
+    let (events, _) = run(GrepScope::Files(vec![path.clone()]), &GrepQuery::single("Header"), GrepOptions::default());
+    assert_eq!(lines(&events), vec![("marked.log".to_string(), 1, true, tail[0].clone())]);
+    let (events, _) = run(GrepScope::Files(vec![path]), &GrepQuery::single("^Header"), GrepOptions::default());
+    assert!(matched(&events).is_empty(), "the line starts with the second mark, as the tail's does");
+}
+
+/// A cancel is heard while the lines are scanned, at every line: a file of few long lines and a
+/// slow pattern, the reading long done, the scan seconds from its end.
+#[test]
+fn a_cancel_is_heard_at_every_line_of_a_slow_scan() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let path = dir.path().join("long_lines.log");
+    {
+        let mut f = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+        let line = format!("{}\n", "ação válvula ".repeat(64 * 1024 / 15));
+        for _ in 0..300 {
+            std::io::Write::write_all(&mut f, line.as_bytes()).unwrap();
+        }
+    }
+    let q = GrepQuery { whole_word: true, ..GrepQuery::single(r"\d{3}") };
+    let s = search(GrepScope::Files(vec![path]), &q, GrepOptions::default()).unwrap();
+    std::thread::sleep(Duration::from_millis(2_500));
+    let cancelled = std::time::Instant::now();
+    s.handle.cancel();
+    let done = s.events.iter().find_map(|e| if let GrepEvent::Done(summary) = e { Some(summary) } else { None }).expect("a done event");
+    let took = cancelled.elapsed();
+    s.worker.join().unwrap();
+    assert_eq!(done.stopped, GrepStop::Cancelled, "{done:?}");
+    assert!(took < Duration::from_millis(500), "the cancel heard {took:?} after it was asked");
+}
+
+/// With no size limit, what a search holds is a slice and a line, whatever the file: a file of
+/// 256 MiB, nearly all of it one endless line of NULs past its text, searched whole with the next
+/// file after it, the process's peak memory far below the file's size.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_search_holds_a_slice_and_a_line_whatever_the_file_s_size() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let huge = dir.path().join("huge.log");
+    std::fs::write(&huge, "hit line\n".repeat(1_000)).unwrap();
+    std::fs::OpenOptions::new().write(true).open(&huge).unwrap().set_len(256 << 20).unwrap();
+    let after = dir.path().join("after.log");
+    write(&after, "hit after\n");
+    let (events, summary) = run(GrepScope::Files(vec![huge, after]), &GrepQuery::single("hit"), GrepOptions::default());
+    assert_eq!((summary.stopped, summary.stats.matches, summary.stats.files_searched, summary.stats.errors), (GrepStop::Completed, 1_001, 2, 0));
+    assert_eq!(matched(&events).last(), Some(&("after.log".to_string(), 1)));
+    let status = std::fs::read_to_string("/proc/self/status").unwrap();
+    let peak_kib: u64 = status.lines().find_map(|l| l.strip_prefix("VmHWM:")).and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok()).unwrap();
+    assert!(peak_kib < 160 * 1024, "the process peaked at {} MiB for a 256 MiB file", peak_kib / 1024);
 }

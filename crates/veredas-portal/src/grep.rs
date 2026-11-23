@@ -413,80 +413,166 @@ fn search_file(path: &Arc<PathBuf>, q: &Compiled, o: &GrepOptions, h: &GrepHandl
         return Ok(FileOutcome::Searched);
     }
     h.files_searched.fetch_add(1, Ordering::Relaxed);
-    let mut text = String::with_capacity(size as usize);
+    // Scanned as it is decoded, slice by slice, the line a slice cuts carried to the next: what is
+    // held is a slice and a line, whatever the file's size. A cancel is heard at every slice, so
+    // within every 64 KiB of the lines scanned.
+    let mut scan = Scan { path, q, o, h, tx, matches: 0, before: VecDeque::with_capacity(o.context_before + 1), after_left: 0, last_emitted: None, capped: false, total_cap: false, number: 0, skipping: false };
     let mut decoder = TextDecoder::new();
-    decoder.feed(&buf[..first], &mut text);
+    let mut pending = String::new();
+    decoder.feed(&buf[..first], &mut pending);
     let mut more = first == buf.len();
-    while more {
+    loop {
+        if let Step::Stop(outcome) = scan.lines(&mut pending, false)? {
+            return scan.finish(outcome);
+        }
+        if !more {
+            break;
+        }
         if h.is_cancelled() {
-            return Ok(FileOutcome::Cancelled);
+            return scan.finish(FileOutcome::Cancelled);
         }
         let n = match read_slice(&mut f, &mut buf) {
             Ok(n) => n,
-            Err(e) => return failed(e),
+            Err(e) => {
+                scan.finish(FileOutcome::Searched)?;
+                return failed(e);
+            }
         };
-        decoder.feed(&buf[..n], &mut text);
+        decoder.feed(&buf[..n], &mut pending);
         more = n == buf.len();
     }
-    decoder.finish(&mut text);
-    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    decoder.finish(&mut pending);
+    if let Step::Stop(outcome) = scan.lines(&mut pending, true)? {
+        return scan.finish(outcome);
+    }
+    let outcome = if scan.total_cap { FileOutcome::TotalCap } else { FileOutcome::Searched };
+    scan.finish(outcome)
+}
 
-    let mut matches = 0u64;
-    let mut before: VecDeque<(u64, &str)> = VecDeque::with_capacity(o.context_before + 1);
-    let mut after_left = 0usize;
-    let mut last_emitted: Option<u64> = None;
-    let mut capped = false;
-    let mut total_cap = false;
-    let mut lines = text.split('\n').peekable();
-    let mut number = 0u64;
-    while let Some(raw) = lines.next() {
-        if lines.peek().is_none() && raw.is_empty() {
-            break; // the text ended on a line feed: no line after it
+/// The longest line searched: a line past it is searched in its first 4 MiB, the rest of it read
+/// past to its line end, so a file of one endless line holds no more than this.
+pub const LINE_LIMIT: usize = 4 * 1024 * 1024;
+
+enum Step {
+    Go,
+    Stop(FileOutcome),
+}
+
+/// One file's scan, the state it keeps between slices.
+struct Scan<'a> {
+    path: &'a Arc<PathBuf>,
+    q: &'a Compiled,
+    o: &'a GrepOptions,
+    h: &'a GrepHandle,
+    tx: &'a Sender<GrepEvent>,
+    matches: u64,
+    before: VecDeque<(u64, String)>,
+    after_left: usize,
+    last_emitted: Option<u64>,
+    capped: bool,
+    total_cap: bool,
+    number: u64,
+    /// The rest of a line past [`LINE_LIMIT`], read past to its line end.
+    skipping: bool,
+}
+
+impl Scan<'_> {
+    /// The complete lines of `pending`, taken out of it; at the end, the last one without its
+    /// line feed too. A line past the limit is searched in its first part, the rest read past.
+    fn lines(&mut self, pending: &mut String, at_end: bool) -> Result<Step, Gone> {
+        loop {
+            if self.skipping {
+                match pending.find('\n') {
+                    Some(i) => {
+                        pending.drain(..=i);
+                        self.skipping = false;
+                    }
+                    None => {
+                        pending.clear();
+                        return Ok(Step::Go);
+                    }
+                }
+            }
+            match pending.find('\n') {
+                Some(i) => {
+                    let line: String = pending.drain(..=i).collect();
+                    if let Step::Stop(outcome) = self.line(line.strip_suffix('\n').unwrap_or(&line))? {
+                        return Ok(Step::Stop(outcome));
+                    }
+                }
+                None if pending.len() > LINE_LIMIT => {
+                    let mut cut = LINE_LIMIT;
+                    while !pending.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    let line: String = pending.drain(..cut).collect();
+                    pending.clear();
+                    self.skipping = true;
+                    if let Step::Stop(outcome) = self.line(&line)? {
+                        return Ok(Step::Stop(outcome));
+                    }
+                }
+                None if at_end && !pending.is_empty() => {
+                    let line = std::mem::take(pending);
+                    return self.line(&line);
+                }
+                None => return Ok(Step::Go),
+            }
         }
-        number += 1;
-        if number.is_multiple_of(4096) && h.is_cancelled() {
-            return Ok(FileOutcome::Cancelled);
-        }
+    }
+
+    /// One line, its CR dropped: a match with its context, or context, or held for one to come.
+    fn line(&mut self, raw: &str) -> Result<Step, Gone> {
+        let (path, o) = (self.path, self.o);
+        self.number += 1;
+        let number = self.number;
         let line = raw.strip_suffix('\r').unwrap_or(raw);
-        let hit = !capped && !total_cap && q.verdict(line);
+        let hit = !self.capped && !self.total_cap && self.q.verdict(line);
         if hit {
-            let first = before.front().map(|(n, _)| *n).unwrap_or(number);
+            let first = self.before.front().map(|(n, _)| *n).unwrap_or(number);
             // A break between two blocks of a file, when context is asked (grep's `--`).
-            if (o.context_before > 0 || o.context_after > 0) && last_emitted.is_some_and(|l| first > l + 1) {
-                send(tx, GrepEvent::Break { path: Arc::clone(path) })?;
+            if (o.context_before > 0 || o.context_after > 0) && self.last_emitted.is_some_and(|l| first > l + 1) {
+                send(self.tx, GrepEvent::Break { path: Arc::clone(path) })?;
             }
-            for (n, t) in before.drain(..) {
-                send(tx, GrepEvent::Line(GrepLine { path: Arc::clone(path), line_number: n, is_match: false, text: t.to_string(), spans: Vec::new() }))?;
+            for (n, t) in self.before.drain(..) {
+                send(self.tx, GrepEvent::Line(GrepLine { path: Arc::clone(path), line_number: n, is_match: false, text: t, spans: Vec::new() }))?;
             }
-            send(tx, GrepEvent::Line(GrepLine { path: Arc::clone(path), line_number: number, is_match: true, text: line.to_string(), spans: q.spans(line) }))?;
-            last_emitted = Some(number);
-            after_left = o.context_after;
-            matches += 1;
-            let total = h.matches.fetch_add(1, Ordering::Relaxed) + 1;
-            if o.max_matches_per_file.is_some_and(|cap| matches >= cap) {
-                capped = true;
+            send(self.tx, GrepEvent::Line(GrepLine { path: Arc::clone(path), line_number: number, is_match: true, text: line.to_string(), spans: self.q.spans(line) }))?;
+            self.last_emitted = Some(number);
+            self.after_left = o.context_after;
+            self.matches += 1;
+            let total = self.h.matches.fetch_add(1, Ordering::Relaxed) + 1;
+            if o.max_matches_per_file.is_some_and(|cap| self.matches >= cap) {
+                self.capped = true;
             }
             if o.max_total_matches.is_some_and(|cap| total >= cap) {
-                total_cap = true;
+                self.total_cap = true;
             }
-        } else if after_left > 0 {
-            send(tx, GrepEvent::Line(GrepLine { path: Arc::clone(path), line_number: number, is_match: false, text: line.to_string(), spans: Vec::new() }))?;
-            last_emitted = Some(number);
-            after_left -= 1;
-        } else if capped || total_cap {
-            break;
+        } else if self.after_left > 0 {
+            send(self.tx, GrepEvent::Line(GrepLine { path: Arc::clone(path), line_number: number, is_match: false, text: line.to_string(), spans: Vec::new() }))?;
+            self.last_emitted = Some(number);
+            self.after_left -= 1;
+        } else if self.capped || self.total_cap {
+            return Ok(Step::Stop(if self.total_cap { FileOutcome::TotalCap } else { FileOutcome::Searched }));
         } else if o.context_before > 0 {
-            if before.len() == o.context_before {
-                before.pop_front();
+            if self.before.len() == o.context_before {
+                self.before.pop_front();
             }
-            before.push_back((number, line));
+            self.before.push_back((number, line.to_string()));
         }
+        Ok(Step::Go)
     }
-    if matches > 0 {
-        h.files_matched.fetch_add(1, Ordering::Relaxed);
-        send(tx, GrepEvent::FileDone { path: Arc::clone(path), matches, capped })?;
+
+    /// The file ended, or its scan was stopped (a cap, a cancel): a file with matches ends with
+    /// its count, whatever stopped it.
+    fn finish(&mut self, outcome: FileOutcome) -> Result<FileOutcome, Gone> {
+        if self.matches > 0 {
+            self.h.files_matched.fetch_add(1, Ordering::Relaxed);
+            send(self.tx, GrepEvent::FileDone { path: Arc::clone(self.path), matches: self.matches, capped: self.capped })?;
+            self.matches = 0;
+        }
+        Ok(outcome)
     }
-    Ok(if total_cap { FileOutcome::TotalCap } else { FileOutcome::Searched })
 }
 
 /// The files of a tree, in name order, each root in turn; a folder that cannot be listed is an
