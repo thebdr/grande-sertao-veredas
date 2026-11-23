@@ -215,6 +215,26 @@ impl RawLink {
             }
         }
 
+        // Frames this host sends left out by the kernel, before anything is heard: left out in this
+        // process only, they would fill the socket's buffer until a frame from the wire found no
+        // room (Linux 4.20 and later; the pass-over in `recv_one` stays for what is queued).
+        if !options.outgoing {
+            let on: libc::c_int = 1;
+            // SAFETY: `on` is a valid int of the size given.
+            let rc = unsafe {
+                libc::setsockopt(
+                    fd.as_raw_fd(),
+                    libc::SOL_PACKET,
+                    libc::PACKET_IGNORE_OUTGOING,
+                    (&raw const on).cast(),
+                    std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                )
+            };
+            if rc < 0 {
+                return Err(io_err("leave out this host's frames"));
+            }
+        }
+
         // SAFETY: an all-zero sockaddr_ll is a valid value, then filled in.
         let mut addr: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
         addr.sll_family = libc::AF_PACKET as u16;

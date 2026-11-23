@@ -469,10 +469,16 @@ fn a_wait_lasts_its_timeout_through_signals_skipped_frames_and_under_a_milliseco
 
         // Under a millisecond, to the microsecond, on a link nothing reaches.
         let idle = RawLink::open_with("a0", Options { ethertype: Some(0x9999), ..Options::default() }).unwrap();
-        let start = Instant::now();
-        assert_eq!(idle.recv(Duration::from_micros(900)).unwrap(), None);
-        let waited = start.elapsed();
-        assert!(waited >= Duration::from_micros(900) && waited < Duration::from_millis(50), "{waited:?}");
+        let mut waits = Vec::new();
+        for _ in 0..3 {
+            let start = Instant::now();
+            assert_eq!(idle.recv(Duration::from_micros(900)).unwrap(), None);
+            waits.push(start.elapsed());
+        }
+        // Each at least its 900 µs; the shortest of three well under 5 ms (a wait rounded up to
+        // the clock's tick would take 10).
+        assert!(waits.iter().all(|w| *w >= Duration::from_micros(900)), "{waits:?}");
+        assert!(waits.iter().min().unwrap() < &Duration::from_millis(5), "{waits:?}");
     });
 }
 
@@ -617,7 +623,165 @@ fn a_pair_that_carries_nothing_fails_the_fixture_by_name() {
         let err = panic::catch_unwind(|| netns::wait_pairs(&[("a0", "b0")])).unwrap_err();
         let m = message(err);
         assert!(m.starts_with("no frame crossed from a0 to b0 in 5 s ("), "{m}");
-        assert!(start.elapsed() >= Duration::from_secs(5), "{:?}", start.elapsed());
+        assert!(start.elapsed() >= Duration::from_secs(5) && start.elapsed() < Duration::from_secs(8), "{:?}", start.elapsed());
         assert_eq!(netns::PROBE, 0x88B6);
+    });
+}
+
+#[test]
+fn a_pair_dead_the_other_way_fails_the_fixture_by_name() {
+    netns::isolated("a_pair_dead_the_other_way_fails_the_fixture_by_name", &[("a0", "b0")], || {
+        let out = Command::new("tc").args(["qdisc", "add", "dev", "b0", "root", "pfifo", "limit", "0"]).output().unwrap();
+        assert!(out.status.success(), "tc: {}", String::from_utf8_lossy(&out.stderr));
+        let start = Instant::now();
+        let m = message(panic::catch_unwind(|| netns::wait_pairs(&[("a0", "b0")])).unwrap_err());
+        assert!(m.starts_with("no frame crossed from b0 to a0 in 5 s ("), "{m}");
+        assert!(start.elapsed() >= Duration::from_secs(5) && start.elapsed() < Duration::from_secs(8), "{:?}", start.elapsed());
+    });
+}
+
+#[test]
+fn a_link_that_leaves_out_this_host_s_frames_hears_the_wire_behind_a_burst_of_them() {
+    netns::isolated("a_link_that_leaves_out_this_host_s_frames_hears_the_wire_behind_a_burst_of_them", &[("a0", "b0")], || {
+        let (_a, b) = pair();
+        let blind = RawLink::open_with("a0", Options { outgoing: false, ..Options::default() }).unwrap();
+        let sender = RawLink::open("a0", false).unwrap();
+        // Three thousand of this host's frames while the link is not read: none fills its buffer.
+        let f = ether::build(B, A, 0x88B5, &[1; 46]).unwrap();
+        for _ in 0..3000 {
+            let _ = sender.send(&f);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        let answer = ether::build(A, B, 0x88B7, &[2; 46]).unwrap();
+        b.send(&answer).unwrap();
+        let mut heard = Vec::new();
+        while let Some(r) = blind.recv(Duration::from_millis(500)).unwrap() {
+            heard.push(r.bytes);
+        }
+        assert_eq!(heard, [answer]);
+    });
+}
+
+#[test]
+fn a_link_opened_in_a_flood_hears_only_its_interface_and_its_type() {
+    netns::isolated("a_link_opened_in_a_flood_hears_only_its_interface_and_its_type", &[("a0", "b0"), ("a1", "b1")], || {
+        let (_a, _b) = pair();
+        let other = Mac([0x02, 0x00, 0x00, 0x00, 0x0A, 0x02]);
+        netns::ip(&["link", "set", "a1", "down"]);
+        netns::ip(&["link", "set", "a1", "address", &other.to_string()]);
+        netns::ip(&["link", "set", "a1", "up"]);
+        netns::wait_pairs(&[("a1", "b1")]);
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let floods: Vec<_> = [("a0", A), ("a1", other)]
+            .into_iter()
+            .map(|(iface, src)| {
+                let stop = stop.clone();
+                let link = RawLink::open(iface, false).unwrap();
+                std::thread::spawn(move || {
+                    let f = ether::build(Mac::BROADCAST, src, 0x88B5, &[3; 46]).unwrap();
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        let _ = link.send(&f);
+                    }
+                })
+            })
+            .collect();
+        let (mut opens, mut wrong_type, mut wrong_interface) = (0, 0, 0);
+        let end = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < end {
+            let filtered = RawLink::open_with("b0", Options { ethertype: Some(0x8892), ..Options::default() }).unwrap();
+            while let Some(r) = filtered.recv(Duration::ZERO).unwrap() {
+                if ether::parse(&r.bytes).unwrap().ethertype != 0x8892 {
+                    wrong_type += 1;
+                }
+            }
+            let plain = RawLink::open("b0", false).unwrap();
+            for _ in 0..3 {
+                if let Some(r) = plain.recv(Duration::ZERO).unwrap()
+                    && ether::parse(&r.bytes).unwrap().src == other
+                {
+                    wrong_interface += 1;
+                }
+            }
+            opens += 1;
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        floods.into_iter().for_each(|t| t.join().unwrap());
+        assert!(opens > 20, "{opens}");
+        assert_eq!((wrong_type, wrong_interface), (0, 0), "in {opens} opens");
+    });
+}
+
+#[test]
+fn short_frames_and_tags_of_nothing_cross_whole() {
+    netns::isolated("short_frames_and_tags_of_nothing_cross_whole", &[("a0", "b0")], || {
+        let (a, b) = pair();
+        let filtered = RawLink::open_with("b0", Options { ethertype: Some(0x8892), ..Options::default() }).unwrap();
+        // The shortest frame a link sends is the header alone; one under 60 crosses as it is.
+        for len in [14, 59] {
+            let mut f = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1, 0x88, 0xB5];
+            f.resize(len, 0x33);
+            a.send(&f).unwrap();
+            assert_eq!(heard(&b, 0x88B5, false, Duration::from_secs(2)).map(|r| r.bytes), Some(f), "{len}");
+        }
+        // Tags of priority 0 and VLAN 0 (a TCI of zero), 802.1Q, 802.1ad and two of them, put back
+        // whole by a plain link and a filtered one.
+        let tagged = |tags: &[u8]| {
+            let mut f = vec![2, 0, 0, 0, 0x0B, 1, 2, 0, 0, 0, 0x0A, 1];
+            f.extend_from_slice(tags);
+            f.extend_from_slice(&[0x88, 0x92, 0x80, 0x00]);
+            f.resize(64, 0x33);
+            f
+        };
+        let frames = [tagged(&[0x81, 0x00, 0x00, 0x00]), tagged(&[0x88, 0xA8, 0x00, 0x00]), tagged(&[0x81, 0x00, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00])];
+        for f in &frames {
+            a.send(f).unwrap();
+        }
+        for link in [&b, &filtered] {
+            let mut got = Vec::new();
+            while let Some(r) = link.recv(Duration::from_millis(300)).unwrap() {
+                if r.bytes.len() == 64 {
+                    got.push(r.bytes);
+                }
+            }
+            assert_eq!(got, frames, "{}", link.iface());
+        }
+    });
+}
+
+#[test]
+fn a_tag_the_kernel_holds_on_the_sending_end_is_put_back() {
+    netns::isolated("a_tag_the_kernel_holds_on_the_sending_end_is_put_back", &[("a0", "b0"), ("c0", "d0")], || {
+        // A bridge that tags on its way out of a0 (VLAN 5) what comes in untagged on c0: the frame
+        // leaves a0 with its tag held by the kernel beside it, not in its bytes.
+        let bridge = |args: &[&str]| {
+            let out = Command::new("bridge").args(args).output().unwrap();
+            assert!(out.status.success(), "bridge {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        netns::ip(&["link", "add", "br0", "type", "bridge", "vlan_filtering", "1"]);
+        netns::ip(&["link", "set", "a0", "master", "br0"]);
+        netns::ip(&["link", "set", "c0", "master", "br0"]);
+        netns::ip(&["link", "set", "br0", "up"]);
+        bridge(&["vlan", "add", "dev", "a0", "vid", "5"]);
+        bridge(&["vlan", "add", "dev", "c0", "vid", "5", "pvid", "untagged"]);
+        netns::wait_up(&["a0", "c0"]);
+        let watcher = RawLink::open("a0", false).unwrap();
+        let filtered = RawLink::open_with("a0", Options { ethertype: Some(0x8892), ..Options::default() }).unwrap();
+        let d = RawLink::open("d0", false).unwrap();
+        let sent = ether::build(Mac::BROADCAST, d.mac(), 0x8892, &[0x80, 0x00]).unwrap();
+        for _ in 0..3 {
+            d.send(&sent).unwrap();
+        }
+        let mut want = sent[..12].to_vec();
+        want.extend_from_slice(&[0x81, 0x00, 0x00, 0x05]);
+        want.extend_from_slice(&sent[12..]);
+        for link in [&watcher, &filtered] {
+            let mut got = Vec::new();
+            while let Some(r) = link.recv(Duration::from_millis(300)).unwrap() {
+                if r.outgoing && ether::parse(&r.bytes).unwrap().src == d.mac() {
+                    got.push(r.bytes);
+                }
+            }
+            assert_eq!(got, vec![want.clone(); 3], "{}", link.iface());
+        }
     });
 }
