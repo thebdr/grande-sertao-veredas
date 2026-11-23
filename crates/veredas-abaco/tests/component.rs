@@ -166,14 +166,14 @@ fn the_fork_is_upstream_at_its_commit_then_each_listed_change_a_commit() {
     // every later commit touching the engine is a change the record lists, one row each: its
     // subject names the change (`(fork change 7)`, a refinement `(fork change 1, refined)` row 1b)
     let later = git(&["log", "--format=%s", &format!("{base}..HEAD"), "--", "forks/ironcalc/base", "forks/ironcalc/xlsx"]);
+    // each commit names one change, never two
+    for subject in later.lines() {
+        assert!(subject.matches("(fork change ").count() <= 1, "a commit names more than one change: {subject}");
+    }
     let named = regex_free_change_ids(&later);
     let record = std::fs::read_to_string(root().join("forks/ironcalc/VEREDAS-FORK.md")).unwrap();
-    let table = record.split("## Local changes").nth(1).unwrap();
-    let rows: Vec<String> = table
-        .lines()
-        .filter(|l| l.starts_with("| ") && !l.starts_with("| # ") && !l.starts_with("|---"))
-        .map(|l| l.trim_start_matches("| ").split(' ').next().unwrap().to_string())
-        .collect();
+    assert_eq!(record.matches("## Local changes").count(), 1);
+    let rows = change_rows(&record);
     assert_eq!(named.len(), later.lines().count(), "a commit changed the engine without naming its change:\n{later}");
     let mut sorted_named = named.clone();
     sorted_named.sort();
@@ -684,19 +684,12 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
     }
 }
 
-#[test]
-fn its_sources_are_its_own_and_core_s_header_reader_alone() {
-    // what rustc read to compile each library of Ábaco's own and the engine's, from its dep-info:
-    // each crate's own files, and of a member's source only core's header reader, compiled into
-    // Ábaco by path while core carries its network layers (C-224, docs/questions.md Q345); no other
-    // member's code, no other file of core's, nothing a build script wrote
+/// Every file rustc read to compile the libraries of Ábaco and the engine, from each one's dep-info,
+/// by its target's name.
+fn compiled_files() -> Vec<(&'static str, BTreeSet<PathBuf>)> {
     let json = cargo(&["build", "-p", "veredas-abaco", "--lib", "--message-format=json"]);
-    let own: [(&str, &str, &[&str]); 3] = [
-        ("veredas_abaco", "crates/veredas-abaco", &["crates/veredas-core/src/schema.rs"]),
-        ("ironcalc_base", "forks/ironcalc/base", &[]),
-        ("ironcalc", "forks/ironcalc/xlsx", &[]),
-    ];
-    for (target, folder, allowed) in own {
+    let mut out = Vec::new();
+    for target in ["veredas_abaco", "ironcalc_base", "ironcalc"] {
         let rmeta: Vec<PathBuf> = json
             .lines()
             .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
@@ -722,6 +715,25 @@ fn its_sources_are_its_own_and_core_s_header_reader_alone() {
                 p.canonicalize().unwrap_or_else(|e| panic!("{target}: {} in its dep-info: {e}", p.display()))
             })
             .collect();
+        out.push((target, read));
+    }
+    out
+}
+
+#[test]
+fn its_sources_are_its_own_and_core_s_header_reader_alone() {
+    // what rustc read to compile each library of Ábaco's own and the engine's, from its dep-info:
+    // each crate's own files, and of a member's source only core's header reader, compiled into
+    // Ábaco by path while core carries its network layers (C-224, docs/questions.md Q345); no other
+    // member's code, no other file of core's, nothing a build script wrote
+    let own: [(&str, &str, &[&str]); 3] = [
+        ("veredas_abaco", "crates/veredas-abaco", &["crates/veredas-core/src/schema.rs"]),
+        ("ironcalc_base", "forks/ironcalc/base", &[]),
+        ("ironcalc", "forks/ironcalc/xlsx", &[]),
+    ];
+    let compiled = compiled_files();
+    for (target, folder, allowed) in own {
+        let read = &compiled.iter().find(|(t, _)| *t == target).unwrap().1;
         let home = root().join(folder);
         assert!(read.iter().any(|f| f.ends_with(format!("{folder}/src/lib.rs"))), "{target}: {read:?}");
         let outside: Vec<PathBuf> = read.iter().filter(|f| !f.starts_with(&home)).cloned().collect();
@@ -758,8 +770,7 @@ fn no_source_reaches_outside_its_crate_by_a_path_or_an_include_on_any_platform()
         }
         for file in files {
             let text = std::fs::read_to_string(&file).unwrap();
-            let named = paths_and_includes(&text);
-            for name in named {
+            for (kind, name) in paths_and_includes(&text) {
                 let name = name.unwrap_or_else(|| panic!("{}: a path or an include not written as a plain string", file.display()));
                 let target = file.parent().unwrap().join(&name);
                 let resolved = target.canonicalize().unwrap_or_else(|e| panic!("{}: {name}: {e}", file.display()));
@@ -768,6 +779,16 @@ fn no_source_reaches_outside_its_crate_by_a_path_or_an_include_on_any_platform()
                     continue;
                 }
                 assert!(resolved.starts_with(&home), "{}: `{name}` reaches outside {folder}", file.display());
+                // a module's code is a `.rs` file under the crate's `src/`, which the socket scan
+                // reads whatever the platform; data (a document's text, a table) may stand anywhere
+                // in the crate
+                if kind == Named::Module {
+                    assert!(
+                        resolved.starts_with(home.join("src")) && resolved.extension().is_some_and(|e| e == "rs"),
+                        "{}: `{name}` is a module's code outside {folder}/src or no `.rs` file",
+                        file.display()
+                    );
+                }
             }
         }
     }
@@ -777,39 +798,294 @@ fn no_source_reaches_outside_its_crate_by_a_path_or_an_include_on_any_platform()
     assert!(links.is_empty(), "links among the sources: {links:?}");
 }
 
-/// Every file a source names by a `path` attribute (`#[path = "…"]`, `#![path = "…"]`, one inside
-/// `cfg_attr`) or an include (`include!`, `include_str!`, `include_bytes!`); `None` for one whose
-/// argument is no plain string (a `concat!`, an `env!`), which no reading can follow.
-fn paths_and_includes(text: &str) -> Vec<Option<String>> {
-    let literal = |rest: &str| -> Option<String> {
-        let rest = rest.trim_start().strip_prefix('"')?;
-        rest.find('"').map(|end| rest[..end].to_string())
-    };
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let code = line.split("//").next().unwrap_or("");
-        if code.contains("#[") || code.contains("#![") {
-            let mut from = 0;
-            while let Some(at) = code[from..].find("path") {
-                let at = from + at;
-                let before = code[..at].chars().next_back();
-                let rest = code[at + 4..].trim_start();
-                if !before.is_some_and(|c| c.is_alphanumeric() || c == '_') && rest.starts_with('=') {
-                    out.push(literal(&rest[1..]));
+/// What a source names a file for: a module's code (`#[path]`, `include!`) or data
+/// (`include_str!`, `include_bytes!`, a document's text among them).
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Named {
+    Module,
+    Data,
+}
+
+/// The end (one past) of the string literal opening at `i` (`"…"` with its escapes, `r"…"`,
+/// `r#"…"#`, a `b` before either), and its text as written; `None` when none opens there.
+fn string_at(code: &str, i: usize) -> Option<(usize, String)> {
+    let b = code.as_bytes();
+    let mut j = i;
+    if b.get(j) == Some(&b'b') {
+        j += 1;
+    }
+    if b.get(j) == Some(&b'r') && matches!(b.get(j + 1), Some(b'"' | b'#')) {
+        let mut k = j + 1;
+        let mut hashes = 0;
+        while b.get(k) == Some(&b'#') {
+            hashes += 1;
+            k += 1;
+        }
+        if b.get(k) != Some(&b'"') {
+            return None;
+        }
+        let close = format!("\"{}", "#".repeat(hashes));
+        let end = code[k + 1..].find(&close)? + k + 1;
+        return Some((end + close.len(), code[k + 1..end].to_string()));
+    }
+    if b.get(j) != Some(&b'"') {
+        return None;
+    }
+    let mut k = j + 1;
+    while k < b.len() {
+        match b[k] {
+            b'\\' => k += 2,
+            b'"' => return Some((k + 1, code[j + 1..k].to_string())),
+            _ => k += 1,
+        }
+    }
+    None
+}
+
+/// The end (one past) of the character literal opening at `i` (`'"'`, `'\''`), so no quote in one
+/// is taken for a string's; a lifetime (`'a`) is none.
+fn char_at(code: &str, i: usize) -> Option<usize> {
+    let b = code.as_bytes();
+    if b.get(i) != Some(&b'\'') {
+        return None;
+    }
+    if b.get(i + 1) == Some(&b'\\') {
+        return code.get(i + 3..)?.find('\'').map(|e| e + i + 4);
+    }
+    let c = code[i + 1..].chars().next()?;
+    (b.get(i + 1 + c.len_utf8()) == Some(&b'\'')).then_some(i + 2 + c.len_utf8())
+}
+
+/// The source with every comment (line, block, nested block) blanked to spaces, its line breaks
+/// kept, and its strings and character literals as written: what the compiler reads as tokens.
+fn without_comments(text: &str) -> String {
+    let b = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    let ident = |at: usize| at > 0 && (b[at - 1].is_ascii_alphanumeric() || b[at - 1] == b'_');
+    while i < b.len() {
+        if !ident(i) && let Some((end, _)) = string_at(text, i) {
+            out.push_str(&text[i..end]);
+            i = end;
+        } else if b[i] == b'/' && b.get(i + 1) == Some(&b'/') {
+            while i < b.len() && b[i] != b'\n' {
+                out.push(' ');
+                i += 1;
+            }
+        } else if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+            let mut depth = 0;
+            while i < b.len() {
+                if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+                    depth += 1;
+                    out.push_str("  ");
+                    i += 2;
+                } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+                    depth -= 1;
+                    out.push_str("  ");
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    out.push(if b[i] == b'\n' { '\n' } else { ' ' });
+                    i += 1;
                 }
-                from = at + 4;
+            }
+        } else if let Some(end) = char_at(text, i) {
+            // a character literal ('"' among them), never a string's start
+            out.push_str(&text[i..end]);
+            i = end;
+        } else {
+            let c = text[i..].chars().next().unwrap();
+            out.push(c);
+            i += c.len_utf8();
+        }
+    }
+    out
+}
+
+/// The identifiers of `code` (comments blanked) outside its strings, each with where it ends.
+fn identifiers(code: &str) -> Vec<(String, usize)> {
+    let b = code.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let after_ident = i > 0 && (b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_');
+        if !after_ident && let Some((end, _)) = string_at(code, i) {
+            i = end;
+        } else if let Some(end) = char_at(code, i) {
+            i = end;
+        } else if b[i].is_ascii_alphabetic() || b[i] == b'_' {
+            let start = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+                i += 1;
+            }
+            out.push((code[start..i].to_string(), i));
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Every file a source names by a `path` attribute (`#[path = "…"]`, `#![path = "…"]`, one inside
+/// `cfg_attr`, written over any lines) or an include (`include!`, `include_str!`,
+/// `include_bytes!`), read from its tokens, comments blanked; `None` for one whose argument is no
+/// plain string (a `concat!`, an `env!`), which no reading can follow.
+fn paths_and_includes(text: &str) -> Vec<(Named, Option<String>)> {
+    let code = without_comments(text);
+    let b = code.as_bytes();
+    let skip_ws = |mut i: usize| {
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        i
+    };
+    let literal = |i: usize| string_at(&code, skip_ws(i)).map(|(_, s)| s);
+    let mut out = Vec::new();
+    // every attribute, `#[` or `#![` to its matching `]`, strings skipped
+    let mut attributes: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if let Some((end, _)) = string_at(&code, i).filter(|_| i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_')) {
+            i = end;
+            continue;
+        }
+        if let Some(end) = char_at(&code, i) {
+            i = end;
+            continue;
+        }
+        if b[i] == b'#' {
+            let mut j = skip_ws(i + 1);
+            if b.get(j) == Some(&b'!') {
+                j = skip_ws(j + 1);
+            }
+            if b.get(j) == Some(&b'[') {
+                let (start, mut k, mut depth) = (j + 1, j, 0);
+                while k < b.len() {
+                    if let Some((end, _)) = string_at(&code, k) {
+                        k = end;
+                        continue;
+                    }
+                    match b[k] {
+                        b'[' => depth += 1,
+                        b']' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    k += 1;
+                }
+                attributes.push((start, k));
+                i = j + 1;
+                continue;
             }
         }
-        for mac in ["include!", "include_str!", "include_bytes!"] {
-            let mut from = 0;
-            while let Some(at) = code[from..].find(mac) {
-                let at = from + at;
-                let before = code[..at].chars().next_back();
-                if !before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
-                    let rest = code[at + mac.len()..].trim_start();
-                    out.push(rest.strip_prefix('(').and_then(literal));
+        i += 1;
+    }
+    for (start, end) in attributes {
+        for (word, at) in identifiers(&code[start..end]) {
+            let after = skip_ws(start + at);
+            if word == "path" && b.get(after) == Some(&b'=') && b.get(after + 1) != Some(&b'=') {
+                out.push((Named::Module, literal(after + 1)));
+            }
+        }
+    }
+    for (word, at) in identifiers(&code) {
+        let kind = match word.as_str() {
+            "include" => Named::Module,
+            "include_str" | "include_bytes" => Named::Data,
+            _ => continue,
+        };
+        let bang = skip_ws(at);
+        if b.get(bang) != Some(&b'!') {
+            continue;
+        }
+        let open = skip_ws(bang + 1);
+        out.push((kind, matches!(b.get(open), Some(b'(' | b'[' | b'{')).then(|| literal(open + 1)).flatten()));
+    }
+    out
+}
+
+#[test]
+fn paths_and_includes_are_read_from_the_tokens_wherever_they_stand() {
+    let text = r##"
+        #[cfg_attr(
+            windows,
+            path = "../far/a.rs"
+        )]
+        mod a;
+        #![path="b.rs"]
+        // #[path = "commented.rs"]
+        /* #[path = "blocked.rs"] */
+        #[doc = "path = \"not.rs\""] fn f() { let _ = '"'; }
+        const T: &str = include_str! ( r#"data.txt"# );
+        include!(concat!(env!("OUT_DIR"), "/x.rs"));
+        #[path = "plant.txt"] pub mod plant;
+    "##;
+    assert_eq!(
+        paths_and_includes(text),
+        [
+            (Named::Module, Some("../far/a.rs".to_string())),
+            (Named::Module, Some("b.rs".to_string())),
+            (Named::Module, Some("plant.txt".to_string())),
+            (Named::Data, Some("data.txt".to_string())),
+            (Named::Module, None),
+        ]
+    );
+}
+
+/// The functions an `extern` block would declare to open a socket or reach a host, POSIX's and
+/// Winsock's.
+const SOCKET_FUNCTIONS: &[&str] = &[
+    "socket", "connect", "bind", "listen", "accept", "accept4", "getaddrinfo", "gethostbyname", "send", "sendto", "sendmsg", "recv", "recvfrom",
+    "recvmsg", "closesocket", "WSAStartup", "WSASocketA", "WSASocketW", "WSAConnect", "WSAIoctl",
+];
+
+/// The functions the `extern` blocks of `code` (comments blanked) declare.
+fn extern_functions(code: &str) -> Vec<String> {
+    let words = identifiers(code);
+    let mut out = Vec::new();
+    for (i, (word, at)) in words.iter().enumerate() {
+        if word != "extern" {
+            continue;
+        }
+        // `extern "C" {`, `extern {`: the block's braces, an ABI string between
+        let rest = &code[*at..];
+        let rest = rest.trim_start();
+        let rest = match string_at(rest, 0) {
+            Some((end, _)) => rest[end..].trim_start(),
+            None => rest,
+        };
+        if !rest.starts_with('{') {
+            continue;
+        }
+        let open = code.len() - rest.len();
+        let mut depth = 0;
+        let mut close = code.len();
+        for (k, c) in code[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = open + k;
+                        break;
+                    }
                 }
-                from = at + mac.len();
+                _ => {}
+            }
+        }
+        for pair in words[i + 1..].windows(2) {
+            let ((fn_kw, fn_at), (name, _)) = (&pair[0], &pair[1]);
+            if *fn_at > close {
+                break;
+            }
+            if fn_kw == "fn" && *fn_at > open {
+                out.push(name.clone());
             }
         }
     }
@@ -818,29 +1094,75 @@ fn paths_and_includes(text: &str) -> Vec<Option<String>> {
 
 #[test]
 fn no_socket_in_its_sources_or_the_engine_s() {
-    // no plant connection: its graph holds no network crate (`REVIEWED`), and no source of its own
-    // or of the engine's opens a socket through the standard library or libc
-    let words = ["std::net", "std::os::unix::net", "TcpStream", "TcpListener", "UdpSocket", "UnixStream", "UnixListener", "UnixDatagram", "libc::socket", "libc::connect"];
-    for folder in ["crates/veredas-abaco/src", "forks/ironcalc/base/src", "forks/ironcalc/xlsx/src"] {
-        let mut stack = vec![root().join(folder)];
+    // no plant connection: its graph holds no network crate (`REVIEWED`), and nothing of its own or
+    // the engine's that is or could be compiled opens a socket: every source under each crate's
+    // `src/` whatever the platform (a module's code is there, the test above), every file the
+    // libraries' dep-info lists whatever its kind, and each build script. Read for the standard
+    // library's sockets, `libc` used at all, Winsock and its library, and an `extern` block
+    // declaring a socket function.
+    let words =
+        ["std::net", "std::os::unix::net", "TcpStream", "TcpListener", "UdpSocket", "UnixStream", "UnixListener", "UnixDatagram", "Win32::Networking", "WinSock", "ws2_32"];
+    let mut files: BTreeSet<PathBuf> = BTreeSet::new();
+    for folder in ["crates/veredas-abaco", "forks/ironcalc/base", "forks/ironcalc/xlsx"] {
+        let home = root().join(folder);
+        let mut stack = vec![home.join("src")];
         while let Some(d) = stack.pop() {
             if d.is_dir() {
                 for e in std::fs::read_dir(&d).unwrap() {
                     stack.push(e.unwrap().path());
                 }
             } else if d.extension().is_some_and(|e| e == "rs") {
-                let text = std::fs::read_to_string(&d).unwrap();
-                let ident = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
-                for w in words {
-                    for (at, _) in text.match_indices(w) {
-                        let before = text[..at].chars().next_back();
-                        let after = text[at + w.len()..].chars().next();
-                        assert!(ident(before) || ident(after), "{}: `{w}`", d.display());
-                    }
-                }
+                files.insert(d);
             }
         }
+        // the build script cargo runs: `build.rs` unless the manifest names another
+        let manifest: toml::Table = toml::from_str(&std::fs::read_to_string(home.join("Cargo.toml")).unwrap()).unwrap();
+        let build = manifest.get("package").and_then(|p| p.get("build"));
+        match build {
+            Some(toml::Value::String(script)) => {
+                files.insert(home.join(script));
+            }
+            Some(toml::Value::Boolean(false)) => {}
+            _ if home.join("build.rs").is_file() => {
+                files.insert(home.join("build.rs"));
+            }
+            _ => {}
+        }
     }
+    let compiled = compiled_files();
+    files.extend(compiled.into_iter().flat_map(|(_, f)| f));
+    assert!(files.iter().any(|f| f.ends_with("forks/ironcalc/base/build.rs")));
+    let ident = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    for file in &files {
+        let text = String::from_utf8_lossy(&std::fs::read(file).unwrap()).to_string();
+        for w in words {
+            for (at, _) in text.match_indices(w) {
+                let before = text[..at].chars().next_back();
+                let after = text[at + w.len()..].chars().next();
+                assert!(ident(before) || ident(after), "{}: `{w}`", file.display());
+            }
+        }
+        let code = without_comments(&text);
+        assert!(!identifiers(&code).iter().any(|(w, _)| w == "libc"), "{}: `libc`", file.display());
+        for f in extern_functions(&code) {
+            assert!(!SOCKET_FUNCTIONS.contains(&f.as_str()), "{}: an extern block declares `{f}`", file.display());
+        }
+    }
+}
+
+#[test]
+fn a_socket_by_any_of_those_routes_is_seen() {
+    let code = without_comments(
+        r#"
+        unsafe extern "C" { fn socket(domain: i32, kind: i32, protocol: i32) -> i32; fn getpid() -> i32; }
+        extern { pub fn WSAStartup(v: u16, d: *mut u8) -> i32; }
+        #[wasm_bindgen] extern "C" { pub fn ic_tz_validate(name: &str) -> bool; }
+        // extern "C" { fn connect(); }
+        use libc::{connect};
+        "#,
+    );
+    assert_eq!(extern_functions(&code), ["socket", "getpid", "WSAStartup", "ic_tz_validate"]);
+    assert!(identifiers(&code).iter().any(|(w, _)| w == "libc"));
 }
 
 /// The edges (parent to child, each `name version`) of the subtrees under the engine's two crates in
@@ -1010,6 +1332,29 @@ fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
     for file in ["tests/column_outline_roundtrip.rs", "tests/missing_styles_part_import.rs", "tests/excel_function_spelling.rs", "tests/package_relationships.rs"] {
         assert!(stderr.contains(file), "{file} did not run:\n{stderr}");
     }
+}
+
+/// The rows of the record's table under `## Local changes` (to the next heading), each by its first
+/// cell, as a Markdown reader reads a table: a line opening with `|` after at most three spaces,
+/// its cells split on `|`, each trimmed; the header (`#`) and the delimiter row (`---`) left out.
+fn change_rows(record: &str) -> Vec<String> {
+    let section = record.split("## Local changes").nth(1).unwrap();
+    let section = section.split("\n## ").next().unwrap();
+    section
+        .lines()
+        .filter(|l| {
+            let indent = l.len() - l.trim_start_matches(' ').len();
+            indent <= 3 && l.trim_start().starts_with('|')
+        })
+        .map(|l| l.trim().trim_matches('|').split('|').next().unwrap_or("").trim().to_string())
+        .filter(|first| first != "#" && !first.chars().all(|c| matches!(c, '-' | ':' | ' ')))
+        .collect()
+}
+
+#[test]
+fn the_record_s_rows_are_read_as_markdown_reads_a_table() {
+    let record = "# Fork\n## Local changes\n| # | Change | Where | Upstream |\n|---|---|---|---|\n| 1 | a | x | none |\n|28| **no space** | x | none |\n   | 29 | indented | x | none |\n    | 30 | code, not a row |\n| :-- | --- |\n## After\n| 31 | another table |\n";
+    assert_eq!(change_rows(record), ["1", "28", "29"]);
 }
 
 /// The change each commit subject names, `(fork change 7)` as `7`, `(fork change 1, refined)` as
