@@ -1202,3 +1202,224 @@ mod round_3 {
         assert_eq!(shown, [(1, Some(vec![0x03, 0x02, 0x11, 0x11])), (2, Some(vec![0x03, 0x02, 0x22, 0x22]))]);
     }
 }
+
+/// C-110's fourth refute round: the critic's probes, kept as pins (a client's own close during the
+/// delay, a reset, an exception, the place under the limit freed at once; silence set under the
+/// lock an answer's count takes).
+mod round_4 {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use veredas_maquinar::modbus::*;
+
+    fn config(text: &str) -> ModbusConfig {
+        toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+    }
+
+    fn wait(within: Duration, mut what: impl FnMut() -> bool) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < within {
+            if what() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        what()
+    }
+
+    struct Raw {
+        stream: TcpStream,
+    }
+
+    impl Raw {
+        fn connect(addr: SocketAddr) -> Raw {
+            let stream = TcpStream::connect(addr).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            stream.set_nodelay(true).unwrap();
+            Raw { stream }
+        }
+        fn frame(transaction: u16, protocol: u16, unit: u8, pdu: &[u8]) -> Vec<u8> {
+            let mut f = Vec::new();
+            f.extend_from_slice(&transaction.to_be_bytes());
+            f.extend_from_slice(&protocol.to_be_bytes());
+            f.extend_from_slice(&(pdu.len() as u16 + 1).to_be_bytes());
+            f.push(unit);
+            f.extend_from_slice(pdu);
+            f
+        }
+        fn send(&mut self, bytes: &[u8]) {
+            self.stream.write_all(bytes).unwrap();
+        }
+    }
+
+    fn total(m: &std::collections::BTreeMap<u8, u64>) -> u64 {
+        m.values().sum()
+    }
+
+    /// P1. A client that closes its connection the ordinary way (FIN, what a client does when its
+    /// timeout runs out) while its answer waits out a delay. The answer is never received; the
+    /// clause's "taken back when the write fails or a drop cuts it (... one whose connection was
+    /// dropped during its delay, counted as none)". The repository pins only the reset (linger 0).
+    #[test]
+    fn an_answer_to_a_client_that_closed_during_its_delay_is_counted_as_none() {
+        let server = start(&config("port = 0\nholding_registers = 1\n")).unwrap();
+        server.set_delay(Duration::from_millis(500));
+        let mut c = Raw::connect(server.addr);
+        c.send(&Raw::frame(1, 0, 1, &[0x03, 0x00, 0x00, 0x00, 0x01]));
+        assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == 1)));
+        let closed = Instant::now();
+        drop(c); // an ordinary close: FIN, no reset
+        // The server notices only once the delay is over and its answer is written.
+        let mut open_for = None;
+        assert!(wait(Duration::from_secs(5), || {
+            let gone = server.status().connections == 0;
+            if gone && open_for.is_none() {
+                open_for = Some(closed.elapsed());
+            }
+            gone
+        }));
+        let s = server.status();
+        // Gone at once, well inside the 500 ms delay, nothing counted.
+        assert!(open_for.unwrap() < Duration::from_millis(300), "the connection held {open_for:?} after the client closed");
+        assert_eq!(s.answered.get(&0x03), None, "an answer written after its client closed is counted as answered");
+        assert_eq!(s.recent.back().unwrap().response, None, "its exchange shows an answer no client received");
+    }
+
+    /// P1b. The same with a reset (the repository's G1a): taken back. Shown beside P1 so the
+    /// difference is only how the client closed.
+    #[test]
+    fn the_same_client_closing_with_a_reset_counts_none_either() {
+        let server = start(&config("port = 0\nholding_registers = 1\n")).unwrap();
+        server.set_delay(Duration::from_millis(500));
+        let mut c = Raw::connect(server.addr);
+        c.send(&Raw::frame(1, 0, 1, &[0x03, 0x00, 0x00, 0x00, 0x01]));
+        assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == 1)));
+        socket2::SockRef::from(&c.stream).set_linger(Some(Duration::ZERO)).unwrap();
+        drop(c);
+        assert!(wait(Duration::from_secs(5), || server.status().connections == 0));
+        let s = server.status();
+        eprintln!("P1b: answered = {:?}; exchange response = {:?}", s.answered, s.recent.back().unwrap().response);
+        assert_eq!(s.answered.get(&0x03), None);
+    }
+
+    /// P3. An exception whose write fails is taken back too ("an answer counted ... taken back when
+    /// the write fails"): the repository's G1a and G1b use a normal answer only.
+    #[test]
+    fn an_exception_whose_client_left_is_counted_as_none() {
+        let server = start(&config("port = 0\nholding_registers = 1\n")).unwrap();
+        server.set_delay(Duration::from_millis(300));
+        let mut c = Raw::connect(server.addr);
+        c.send(&Raw::frame(1, 0, 1, &[0x07]));
+        assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == 1)));
+        socket2::SockRef::from(&c.stream).set_linger(Some(Duration::ZERO)).unwrap();
+        drop(c);
+        assert!(wait(Duration::from_secs(5), || server.status().connections == 0));
+        let s = server.status();
+        eprintln!("P3: exceptions = {:?}; exchange response = {:?}", s.exceptions, s.recent.back().unwrap().response);
+        assert!(s.exceptions.is_empty(), "an exception never sent stays counted: {:?}", s.exceptions);
+        assert_eq!(s.recent.back().unwrap().response, None);
+    }
+
+    /// P2. "withhold every answer not yet handed to its socket": a client pipelining and reading at
+    /// once, no delay; silence switched on while requests are in flight. Any answer counted (its write
+    /// begun) after set_silent(true) returned and a status was taken was not handed to its socket when
+    /// silence began, and goes out.
+    fn silence_window(hammer: bool) -> (u32, u32, u64) {
+        let server = Arc::new(start(&config("port = 0\nholding_registers = 4\n")).unwrap());
+        let stream = TcpStream::connect(server.addr).unwrap();
+        stream.set_nodelay(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let received = Arc::new(AtomicU64::new(0));
+        let mut w = stream.try_clone().unwrap();
+        let stop_w = Arc::clone(&stop);
+        let writer = std::thread::spawn(move || {
+            let burst = Raw::frame(1, 0, 1, &[0x03, 0x00, 0x00, 0x00, 0x01]).repeat(8);
+            while !stop_w.load(Ordering::Relaxed) {
+                if w.write_all(&burst).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut r = stream.try_clone().unwrap();
+        r.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+        let stop_r = Arc::clone(&stop);
+        let rec = Arc::clone(&received);
+        let reader = std::thread::spawn(move || {
+            let mut chunk = vec![0u8; 1 << 16];
+            while !stop_r.load(Ordering::Relaxed) {
+                match r.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        rec.fetch_add(n as u64, Ordering::Relaxed);
+                    }
+                    Err(_) => {}
+                }
+            }
+        });
+        let hammering = if hammer {
+            let srv = Arc::clone(&server);
+            let stop_h = Arc::clone(&stop);
+            Some(std::thread::spawn(move || {
+                while !stop_h.load(Ordering::Relaxed) {
+                    let _ = srv.status();
+                }
+            }))
+        } else {
+            None
+        };
+        let mut violations = 0u32;
+        let mut excess = 0u64;
+        let trials = 100u32;
+        for i in 0..trials {
+            std::thread::sleep(Duration::from_millis(3 + (i % 7) as u64));
+            server.set_silent(true);
+            let before = total(&server.status().answered);
+            std::thread::sleep(Duration::from_millis(30));
+            let after = total(&server.status().answered);
+            if after > before {
+                violations += 1;
+                excess += after - before;
+            }
+            server.set_silent(false);
+        }
+        stop.store(true, Ordering::Relaxed);
+        let _ = stream.shutdown(std::net::Shutdown::Both);
+        let _ = writer.join();
+        let _ = reader.join();
+        if let Some(h) = hammering {
+            let _ = h.join();
+        }
+        (violations, trials, excess)
+    }
+
+    #[test]
+    fn no_answer_is_handed_to_its_socket_once_silence_is_set_whatever_else_holds_the_lock() {
+        let (v, n, excess) = silence_window(true);
+        eprintln!("P2b (a status reader on another thread): {v} of {n} trials counted (and sent) {excess} answer(s) whose write began after set_silent(true) returned");
+        assert_eq!(v, 0);
+    }
+
+    /// P1c. The consequence for the limit: a client that closed (FIN) during a delay still holds its
+    /// place until the delay is over, so the one connection a limit of one allows is refused.
+    #[test]
+    fn a_client_that_closed_during_a_delay_frees_its_place_under_the_limit() {
+        let server = start(&config("port = 0\nmax_connections = 1\nholding_registers = 1\n")).unwrap();
+        server.set_delay(Duration::from_secs(3));
+        let mut a = Raw::connect(server.addr);
+        a.send(&Raw::frame(1, 0, 1, &[0x03, 0x00, 0x00, 0x00, 0x01]));
+        assert!(wait(Duration::from_secs(5), || server.status().recent.len() == 1));
+        drop(a);
+        std::thread::sleep(Duration::from_millis(100));
+        server.set_delay(Duration::ZERO);
+        let mut b = Raw::connect(server.addr);
+        b.send(&Raw::frame(2, 0, 1, &[0x03, 0x00, 0x00, 0x00, 0x01]));
+        let mut h = [0u8; 1];
+        let got = b.stream.read(&mut h);
+        let s = server.status();
+        eprintln!("P1c: second client's read = {got:?}; connections = {}, refused = {}", s.connections, s.refused);
+        assert_eq!(s.refused, 0, "the only open connection's client had closed");
+    }
+}

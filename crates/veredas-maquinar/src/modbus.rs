@@ -548,12 +548,16 @@ pub struct ModbusStatus {
     pub accepted: u64,
     /// Connections closed at once because `max_connections` were open.
     pub refused: u64,
-    /// Requests answered normally, by function code: the answer sent.
+    /// Requests answered normally, by function code: answers handed to the socket, counted as each
+    /// write begins and taken back when the write fails or a drop cuts it. Answers already in the
+    /// socket's buffer when a drop's reset discards them stay counted: the server cannot see what a
+    /// client received.
     pub answered: BTreeMap<u8, u64>,
-    /// Requests answered with an exception, by function code and exception code: the answer sent.
+    /// Requests answered with an exception, by function code and exception code, counted as
+    /// `answered` is.
     pub exceptions: BTreeMap<(u8, u8), u64>,
-    /// Requests whose answer the server withheld: read while it was silent, or waiting out a delay
-    /// when silence began.
+    /// Requests whose answer the server withheld: read while it was silent, or not yet handed to
+    /// the socket when silence began.
     pub unanswered: u64,
     /// Frames dropped without an answer: their protocol identifier was not 0, Modbus's.
     pub dropped: u64,
@@ -746,8 +750,9 @@ impl ModbusHandle {
     /// read meanwhile, and an answer still waiting out a delay, are never sent; false answers the
     /// next request again.
     pub fn set_silent(&self, silent: bool) {
-        // Silence first, then its epoch: a request read between the two sees silence on, never
-        // an epoch moved with silence still off.
+        // Under the lock an answer's count takes: once this returns, no answer's write begins
+        // until silence ends. Silence first, then its epoch.
+        let _state = self.shared.lock();
         self.shared.silent.store(silent, Ordering::SeqCst);
         if silent {
             self.shared.silenced.fetch_add(1, Ordering::SeqCst);
@@ -1007,14 +1012,22 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
         let Some((response, exchange)) = response else { continue };
         let delay = Duration::from_micros(shared.delay_us.load(Ordering::SeqCst));
         if !delay.is_zero() {
-            tokio::select! {
-                _ = tokio::time::sleep(delay) => {}
-                _ = ended(&mut gone, generation) => return,
-            }
-            // Gone dumb while the answer waited, even for a moment: it is never sent.
-            if shared.silent.load(Ordering::SeqCst) || shared.silenced.load(Ordering::SeqCst) != epoch {
-                shared.lock().status.unanswered += 1;
-                continue;
+            // The delay, raced against a drop and against the client's own end: a client that
+            // closes (a FIN, as its timeout does) is gone, its answer counted as none and its place
+            // freed at once. Requests it pipelined behind are read after the delay, as before.
+            let sleep = tokio::time::sleep(delay);
+            tokio::pin!(sleep);
+            let mut waiting_data = false;
+            loop {
+                let mut probe = [0u8; 1];
+                tokio::select! {
+                    _ = &mut sleep => break,
+                    _ = ended(&mut gone, generation) => return,
+                    r = rd.peek(&mut probe), if !waiting_data => match r {
+                        Ok(0) | Err(_) => return,
+                        Ok(_) => waiting_data = true,
+                    },
+                }
             }
         }
         // Counted, and shown in its exchange, as its write begins: a client reading its answer finds
@@ -1034,7 +1047,16 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
                 state.status.recent[i].response = if by > 0 { Some(response.clone()) } else { None };
             }
         };
-        count(&mut shared.lock(), 1);
+        {
+            // Silence is decided under the lock `set_silent` takes: gone dumb since the request was
+            // read, even for a moment, the answer is never handed to the socket.
+            let mut state = shared.lock();
+            if shared.silent.load(Ordering::SeqCst) || shared.silenced.load(Ordering::SeqCst) != epoch {
+                state.status.unanswered += 1;
+                continue;
+            }
+            count(&mut state, 1);
+        }
         let mut frame = Vec::with_capacity(7 + response.len());
         frame.extend_from_slice(&transaction.to_be_bytes());
         frame.extend_from_slice(&0u16.to_be_bytes());
