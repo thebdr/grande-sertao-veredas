@@ -676,7 +676,11 @@ async fn run(
     let mut count: u16 = 0;
     let mut buf = vec![0u8; 2048];
     let reply = loop {
-        let deadline = last_heard + window;
+        // Saturated: a window too long for the clock (a caller waiting "forever") is a deadline
+        // a year away rather than an overflow.
+        let deadline = last_heard
+            .checked_add(window)
+            .unwrap_or_else(|| last_heard + Duration::from_secs(365 * 24 * 3600));
         // In this order: a close first, then the timeout (once it has passed nothing more goes
         // out), then the next output when it is due (so no flood of datagrams, of this
         // connection or not, can hold the outputs back), then inputs.

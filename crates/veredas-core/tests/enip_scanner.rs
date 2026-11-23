@@ -982,6 +982,10 @@ fn inputs_come_from_the_adapters_session_or_io_address_and_no_other() {
     let mut sp = spec(&a);
     sp.timeout_multiplier = 7;
     let s = Scanner::open(&sp).unwrap();
+    // At multiplier 7 the timeout (20 ms × 512, 10.24 s) is longer than the standard's 10 s, and
+    // the first input is awaited the longer.
+    assert_eq!(s.opened().timeout, RPI * 512);
+    assert_eq!(s.opened().first_input, RPI * 512);
     let fo = &a.frames()[1];
     assert_eq!(
         items(&fo[24..])[1].1[6 + 18],
@@ -1149,6 +1153,103 @@ fn the_first_input_is_awaited_its_window_from_the_end_of_the_open() {
     assert!(
         took >= Duration::from_millis(150) && took < Duration::from_millis(450),
         "{took:?}"
+    );
+}
+
+/// The first-input window is the longer of `first_input` and the timeout as the adapter's grant
+/// makes it, and nothing but a first input of this connection ends it.
+#[test]
+fn the_first_input_window_is_the_longer_and_only_an_input_ends_it() {
+    // A slower grant than asked (100 ms in), multiplier 1: the timeout is 800 ms, longer than a
+    // 100 ms first-input window, so the window is 800 ms.
+    let a = Adapter::start(Script {
+        granted: Some((20_000, 100_000)),
+        ..Script::default()
+    });
+    a.producing.store(false, Ordering::SeqCst);
+    let mut sp = spec(&a);
+    (sp.timeout_multiplier, sp.first_input) = (1, Duration::from_millis(100));
+    let s = Scanner::open(&sp).unwrap();
+    let after = Instant::now();
+    assert_eq!(
+        (s.opened().timeout, s.opened().first_input),
+        (Duration::from_millis(800), Duration::from_millis(800))
+    );
+    assert!(wait(Duration::from_secs(3), || s.state() != LinkState::Running));
+    let took = after.elapsed();
+    assert_eq!(
+        s.state(),
+        LinkState::Lost {
+            timeout: Duration::from_millis(800)
+        }
+    );
+    assert!(
+        took >= Duration::from_millis(750) && took < Duration::from_millis(1100),
+        "{took:?}"
+    );
+    drop(s);
+    // A 400 ms window, an 80 ms timeout, the adapter silent: strays of every kind for 200 ms
+    // end nothing; a first input after the timeout but inside the window is taken, and from then
+    // the timeout applies.
+    let a = Adapter::start(Script::default());
+    a.producing.store(false, Ordering::SeqCst);
+    let mut sp = spec(&a);
+    sp.first_input = Duration::from_millis(400);
+    let s = Scanner::open(&sp).unwrap();
+    let (id, to) = (s.opened().t_to_o_id, s.opened().receives_on);
+    let other = UdpSocket::bind("127.0.0.2:0").unwrap();
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_millis(200) {
+        other
+            .send_to(&input_frame(id, 1, 1, None, &[1; 6]), to)
+            .unwrap();
+        a.io.send_to(&input_frame(id ^ 1, 1, 1, None, &[1; 6]), to)
+            .unwrap();
+        a.io.send_to(&input_frame(id, 1, 1, None, &[1; 4]), to)
+            .unwrap();
+        a.io.send_to(&[1, 2, 3], to).unwrap();
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        s.state(),
+        LinkState::Running,
+        "strays end no first-input window"
+    );
+    assert!(s.counters().stray > 20);
+    a.io.send_to(&input_frame(id, 2, 7, None, &[0x77; 6]), to)
+        .unwrap();
+    assert!(wait(Duration::from_secs(1), || s.inputs().data == [0x77; 6]));
+    assert_eq!(s.counters().consumed, 1);
+    assert!(wait(Duration::from_secs(1), || s.state() != LinkState::Running));
+    assert_eq!(
+        s.state(),
+        LinkState::Lost { timeout: RPI * 4 },
+        "the timeout after an input"
+    );
+}
+
+/// A caller waiting "forever" for the first input: the deadline saturates and the connection
+/// runs and closes as any other.
+#[test]
+fn a_first_input_window_without_end_runs_and_closes() {
+    let a = Adapter::start(Script::default());
+    a.producing.store(false, Ordering::SeqCst);
+    let mut sp = spec(&a);
+    sp.first_input = Duration::MAX;
+    let s = Scanner::open(&sp).unwrap();
+    assert_eq!(s.opened().first_input, Duration::MAX);
+    assert!(
+        wait(Duration::from_secs(1), || a.outputs().len() > 3),
+        "it produces"
+    );
+    assert_eq!(s.state(), LinkState::Running);
+    s.close().unwrap();
+    assert!(unregistered(&a));
+    let commands: Vec<u16> = a.frames().iter().map(|f| le16(f, 0)).collect();
+    assert_eq!(
+        commands,
+        [0x0065, 0x006F, 0x006F, 0x0066],
+        "the Forward_Close and the unregister went"
     );
 }
 
