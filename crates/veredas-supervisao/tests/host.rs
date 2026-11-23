@@ -1990,4 +1990,26 @@ fn every_kind_of_store_a_project_keeps_is_the_one_its_session_runs_with() {
     let said = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(out.status.code() == Some(2) && said.contains("session `dir`: its store (a file of each run's own in ") && said.contains("is the database file session `ram` opens for its store"), "the check of two sessions on one file: {:?} {said}", out.status.code());
     assert!(!dir.path().join("shared").exists(), "the check started a session");
+    // And reached through a link (Linux's links; the other drives' alike): a pinned file that is a
+    // link to the other's, neither made yet; a store folder of each run's own not made yet, under a
+    // link to the folder above the other's. Each refused at the check, nothing started.
+    #[cfg(unix)]
+    for (ways, made) in [([("ram", "store = { disk = \"../pinned/a.duckdb\" }"), ("dir", "store = { disk = \"../pinned/b.duckdb\" }")], "pinned/a.duckdb"), ([("ram", "store = { dir = \"../real/runs\" }"), ("dir", "store = { dir = \"../alias/runs\" }")], "real/runs")] {
+        for (name, store) in ways {
+            let p = dir.path().join(name).join("project.toml");
+            let text = std::fs::read_to_string(&p).unwrap();
+            let was = text.lines().find(|l| l.starts_with("store = ")).unwrap().to_string();
+            std::fs::write(&p, text.replacen(&was, store, 1)).unwrap();
+        }
+        std::fs::create_dir_all(dir.path().join("pinned")).unwrap();
+        std::fs::create_dir_all(dir.path().join("real")).unwrap();
+        if !dir.path().join("pinned/b.duckdb").is_symlink() {
+            std::os::unix::fs::symlink("a.duckdb", dir.path().join("pinned/b.duckdb")).unwrap();
+            std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("alias")).unwrap();
+        }
+        let out = Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).args([path.as_os_str(), "--check".as_ref()]).stdin(Stdio::null()).output().unwrap();
+        let said = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(out.status.code() == Some(2) && said.contains("session `dir`: its store (") && said.contains("is the database file session `ram` opens for its store"), "{made}: the check of two sessions on one file through a link: {:?} {said}", out.status.code());
+        assert!(!dir.path().join(made).exists(), "{made}: the check started a session");
+    }
 }

@@ -264,9 +264,13 @@ relative to the file's folder.
 - `binding` (required): the path of the session's binding file.
 
 No two sessions of one file open one database file: a store pinned to one file, or a store of
-each run's own or a record kept in one folder by projects of one name (each named from the
-project's name and the host's start, the same instant for every session), is refused when the file
-loads, naming both sessions; another name or another folder for one of them loads.
+each run's own or a record kept in one folder by projects whose names portal writes as one file
+name (each file named from the project's name, its letters, digits, `-` and `_` kept and every other
+character written `_`, and the host's start, the same instant for every session), is refused when
+the file loads, naming both sessions. A place is one however its path is written: made absolute,
+read through its links as the drive reads them where it stands, its `.` and `..` folded where it
+does not stand yet, and on Windows without case. Another folder, or a name portal writes as another
+file name, for one of them loads.
 
 ## The binding file: keys
 

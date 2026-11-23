@@ -137,8 +137,9 @@ pub fn load(text: &str, base: &Path) -> Result<HostConfig, ConfigError> {
 /// Two sessions of one host never open one database file: the host starts the second, portal
 /// finds the first's database standing there and refuses it, so the check says so first. The files
 /// are the ones portal opens for each project (`session_config`): a store pinned to a file, a store
-/// of each run's own in a folder and a record, the last two named from the project's name and the
-/// start, the host's one instant for every session (read here at one instant alike).
+/// of each run's own in a folder and a record, the last two named from the project's name as portal
+/// writes it in a file name (`session_store_file`: two names may come out as one) and the start,
+/// the host's one instant for every session (read here at one instant alike).
 fn shared_files(sessions: &[SessionSpec]) -> Result<(), ConfigError> {
     use veredas_portal::project::Store;
     use veredas_portal::store::Residency;
@@ -162,7 +163,7 @@ fn shared_files(sessions: &[SessionSpec]) -> Result<(), ConfigError> {
             let at = same_place(&file);
             if let Some((_, other, theirs)) = opened.iter().find(|(k, _, _)| *k == at) {
                 return Err(ConfigError::Invalid(format!(
-                    "session `{}`: {what} is the database file session `{other}` opens for {theirs}: two sessions of one host open no file alike (give one project another name or another folder)",
+                    "session `{}`: {what} is the database file session `{other}` opens for {theirs}: two sessions of one host open no file alike (give one project another folder, or a name portal writes as another file name)",
                     s.name,
                     theirs = theirs.split(" (").next().unwrap_or(theirs),
                 )));
@@ -173,12 +174,31 @@ fn shared_files(sessions: &[SessionSpec]) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// A file's place, read as one place however its path is written: made absolute, `.` and `..`
-/// folded, and its folder read through its links where it exists.
+/// A file's place, read as one place however its path is written: made absolute, a file that is a
+/// link followed to where it leads; the longest part
+/// of it, as written, that stands on the drive read by the drive, through its links (a `..` after a
+/// link is the parent of where the link leads, as the drive takes it); the rest, which does not
+/// stand yet, its `.` and `..` folded; on Windows, without case, as its drives compare names.
 fn same_place(p: &Path) -> PathBuf {
-    let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    let mut abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    // A file that is itself a link, whether or not what it leads to stands yet, read as where it
+    // leads (a link's own target relative to its folder), as portal's open would follow it.
+    for _ in 0..40 {
+        let Ok(to) = std::fs::read_link(&abs) else { break };
+        let next = abs.parent().map(|d| d.join(&to)).unwrap_or(to);
+        abs = std::path::absolute(&next).unwrap_or(next);
+    }
+    let parts: Vec<std::path::Component> = abs.components().collect();
+    let mut stands = parts.len();
     let mut out = PathBuf::new();
-    for c in abs.components() {
+    while stands > 0 {
+        if let Ok(read) = std::fs::canonicalize(parts[..stands].iter().collect::<PathBuf>()) {
+            out = read;
+            break;
+        }
+        stands -= 1;
+    }
+    for c in &parts[stands..] {
         match c {
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
@@ -187,10 +207,10 @@ fn same_place(p: &Path) -> PathBuf {
             other => out.push(other),
         }
     }
-    match (out.parent(), out.file_name()) {
-        (Some(dir), Some(file)) => std::fs::canonicalize(dir).map(|d| d.join(file)).unwrap_or(out),
-        _ => out,
+    if cfg!(windows) {
+        out = PathBuf::from(out.to_string_lossy().to_lowercase());
     }
+    out
 }
 
 /// Read a supervisão file from disk; its folder is where its references live.

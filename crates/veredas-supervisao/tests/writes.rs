@@ -88,8 +88,10 @@ const ALLOWED: &[&str] = &[
     "veredas_portal::session::HealthState::Retrying", "veredas_portal::session::HealthState::Ended", "veredas_portal::session::HealthState::Failed",
     "veredas_portal::session::Session::start", "veredas_portal::serve::lttb::downsample",
     // Of std's and tokio's files, programs, sockets and process: reading files, stdin, its one
-    // listener, an address, an error, its own exit. Nothing that writes, runs or dials.
-    "std::fs::read_to_string", "std::fs::read_dir", "std::fs::read", "std::fs::canonicalize", "std::io", "std::io::Error", "std::io::ErrorKind::Interrupted", "std::io::Result", "std::io::stdin",
+    // listener, an address, an error, its own exit (and, reading where a session's database file
+    // would be, a folder through its links and a link's own target). Nothing that writes, runs or
+    // dials.
+    "std::fs::read_to_string", "std::fs::read_dir", "std::fs::read", "std::fs::canonicalize", "std::fs::read_link", "std::io", "std::io::Error", "std::io::ErrorKind::Interrupted", "std::io::Result", "std::io::stdin",
     "std::io::BufRead", "std::net::SocketAddr", "std::process::exit", "tokio::net::TcpListener::bind",
 ];
 

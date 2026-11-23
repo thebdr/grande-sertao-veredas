@@ -384,8 +384,14 @@ fn the_reference_is_the_text_this_test_holds() {
 /// one name; and each beside a load: another name, another folder.
 #[test]
 fn two_sessions_never_open_one_database_file() {
-    let two = |loop_store: &str, hall_store: &str, hall_name: &str| -> Result<config::HostConfig, ConfigError> {
+    // Two projects, `loop` and `hall`, the second's name given; `prepare` given the folder before
+    // the file loads (to lay links in it); the supervisão file read by its absolute path, or by one
+    // relative to the folder the test runs in.
+    let two_by = |loop_store: &str, hall_store: &str, hall_name: &str, relative: bool, prepare: &dyn Fn(&std::path::Path)| -> Result<config::HostConfig, ConfigError> {
         let dir = tempfile::tempdir().unwrap();
+        let at = dir.path().display().to_string().replace('\\', "/");
+        let (loop_store, hall_store) = (loop_store.replace("{dir}", &at), hall_store.replace("{dir}", &at));
+        let (loop_store, hall_store) = (loop_store.as_str(), hall_store.as_str());
         let mut ex = example();
         ex.host.push_str("\n[[session]]\nname = \"hall\"\nproject = \"hall/project.toml\"\nbinding = \"hall/binding.toml\"\n");
         let path = write_example(dir.path(), &ex);
@@ -396,13 +402,29 @@ fn two_sessions_never_open_one_database_file() {
         for f in ["binding.toml", "layout.svg"] {
             std::fs::copy(dir.path().join("loop").join(f), dir.path().join("hall").join(f)).unwrap();
         }
+        prepare(dir.path());
+        if relative {
+            let normal = |p: &std::path::Path| p.components().filter(|c| matches!(c, std::path::Component::Normal(_))).map(|c| c.as_os_str().to_owned()).collect::<Vec<_>>();
+            let mut rel = std::path::PathBuf::new();
+            for _ in normal(&std::env::current_dir().unwrap()) {
+                rel.push("..");
+            }
+            for c in normal(&path) {
+                rel.push(c);
+            }
+            assert!(rel.is_relative() && std::fs::read_to_string(&rel).is_ok(), "{}", rel.display());
+            return config::load_file(&rel);
+        }
         config::load_file(&path)
     };
+    let none = |_: &std::path::Path| {};
+    let two = |loop_store: &str, hall_store: &str, hall_name: &str| two_by(loop_store, hall_store, hall_name, false, &none);
     let refused = |r: Result<config::HostConfig, ConfigError>| r.err().map(|e| e.to_string()).unwrap_or_else(|| "loaded".into());
-    let tail = |what: &str| format!(" is the database file session `loop` opens for its {what}: two sessions of one host open no file alike (give one project another name or another folder)");
+    let tail = |what: &str| format!(" is the database file session `loop` opens for its {what}: two sessions of one host open no file alike (give one project another folder, or a name portal writes as another file name)");
     // A store of each run's own, in one folder under one name: refused; the folder written as each
-    // project's `../stores`, and once through another folder's `..`.
-    for hall in ["store = { dir = \"../stores\" }", "store = { dir = \"../hall/./../stores/\" }"] {
+    // project's `../stores`, once through another folder's `..`, and once through the `..` of a
+    // folder not made (folded where nothing stands).
+    for hall in ["store = { dir = \"../stores\" }", "store = { dir = \"../hall/./../stores/\" }", "store = { dir = \"../made/../stores\" }"] {
         let got = refused(two("store = { dir = \"../stores\" }", hall, "the loop"));
         assert!(got.starts_with("session `hall`: its store (a file of each run's own in ") && got.contains(", named from the project's name `the loop` and the start)") && got.ends_with(&tail("store")), "{hall}: {got}");
     }
@@ -417,6 +439,50 @@ fn two_sessions_never_open_one_database_file() {
     let got = refused(two(rec, rec, "the loop"));
     assert!(got.starts_with("session `hall`: its record (a file of each run's own in ") && got.contains(", named from the project's name `the loop` and the start)") && got.ends_with(&tail("record")), "{got}");
     assert!(two(rec, rec, "the hall").is_ok(), "another name, one record folder");
+    // Two names portal writes as one file name (`session_store_file`: letters, digits, `-` and `_`
+    // kept, every other character `_`): one file, refused; and a name it writes otherwise loads.
+    for name in ["the_loop", "the-loop"] {
+        let got = refused(two("store = { dir = \"../stores\" }", "store = { dir = \"../stores\" }", name));
+        let one = name == "the_loop";
+        assert_eq!(got.ends_with(&tail("store")), one, "`the loop` beside `{name}`: {got}");
+    }
+    // A place read through its links where it stands (Linux's links; the other drives' alike):
+    // the store folder through a link beside the folder itself, refused; a pinned file written
+    // through a link and its `..` (the drive's parent of where the link leads), beside the file it
+    // is, refused, and beside the file the letters alone would fold it to, loaded; a folder not made
+    // yet, under a link to one that stands, beside the same folder under the real one, refused.
+    #[cfg(unix)]
+    {
+        let link = |dir: &std::path::Path, from: &str, to: &str| {
+            std::fs::create_dir_all(dir.join(to)).unwrap();
+            std::os::unix::fs::symlink(dir.join(to), dir.join(from)).unwrap();
+        };
+        let got = refused(two_by("store = { dir = \"../stores\" }", "store = { dir = \"../alias\" }", "the loop", false, &|d| link(d, "alias", "stores")));
+        assert!(got.ends_with(&tail("store")), "a folder through a link: {got}");
+        let got = refused(two_by("store = { disk = \"../elsewhere/one.duckdb\" }", "store = { disk = \"lnk/../one.duckdb\" }", "the hall", false, &|d| link(d, "hall/lnk", "elsewhere/deep")));
+        assert!(got.ends_with(&tail("store")), "a file through a link's `..`: {got}");
+        assert!(two_by("store = { disk = \"../hall/one.duckdb\" }", "store = { disk = \"lnk/../one.duckdb\" }", "the hall", false, &|d| link(d, "hall/lnk", "elsewhere/deep")).is_ok(), "the file the letters alone would fold it to");
+        let got = refused(two_by("store = { dir = \"../real/new\" }", "store = { dir = \"../lnk/new\" }", "the loop", false, &|d| link(d, "lnk", "real")));
+        assert!(got.ends_with(&tail("store")), "a folder not made yet, under a link: {got}");
+        // A pinned file that is itself a link to the other's, neither made yet (a link to nothing).
+        let got = refused(two_by("store = { disk = \"../stores/a.duckdb\" }", "store = { disk = \"../stores/b.duckdb\" }", "the hall", false, &|d| {
+            std::fs::create_dir_all(d.join("stores")).unwrap();
+            std::os::unix::fs::symlink("a.duckdb", d.join("stores/b.duckdb")).unwrap();
+        }));
+        assert!(got.ends_with(&tail("store")), "a pinned file that is a link to the other's: {got}");
+    }
+    // One file written relative and absolute, the supervisão file read by a path relative to the
+    // folder the test runs in: refused.
+    let got = refused(two_by("store = { disk = \"../one.duckdb\" }", "store = { disk = \"{dir}/one.duckdb\" }", "the hall", true, &none));
+    assert!(got.ends_with(&tail("store")), "relative beside absolute: {got}");
+    // Case: one name on Windows, whose drives compare names without case; Linux's compare it, a
+    // drive that folds case mounted there (vfat, exFAT, a share) read as one that keeps it, a limit.
+    let cased = two("store = { dir = \"../stores\" }", "store = { dir = \"../Stores\" }", "The Loop");
+    if cfg!(windows) {
+        assert!(refused(cased).ends_with(&tail("store")), "case on Windows");
+    } else {
+        assert!(cased.is_ok(), "case on Linux: {}", refused(cased));
+    }
 }
 
 /// The keys a reader takes in a table, from its refusal of a misspelled key there.
@@ -1054,9 +1120,13 @@ relative to the file's folder.
 - `binding` (required): the path of the session's binding file.
 
 No two sessions of one file open one database file: a store pinned to one file, or a store of
-each run's own or a record kept in one folder by projects of one name (each named from the
-project's name and the host's start, the same instant for every session), is refused when the file
-loads, naming both sessions; another name or another folder for one of them loads.
+each run's own or a record kept in one folder by projects whose names portal writes as one file
+name (each file named from the project's name, its letters, digits, `-` and `_` kept and every other
+character written `_`, and the host's start, the same instant for every session), is refused when
+the file loads, naming both sessions. A place is one however its path is written: made absolute,
+read through its links as the drive reads them where it stands, its `.` and `..` folded where it
+does not stand yet, and on Windows without case. Another folder, or a name portal writes as another
+file name, for one of them loads.
 
 ## The binding file: keys
 
