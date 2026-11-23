@@ -126,6 +126,11 @@ fn matching_lines_stream_with_their_context_and_a_break_between_blocks() {
     );
     assert!(matches!(events.last(), Some(GrepEvent::FileDone { matches: 3, capped: false, .. })), "{:?}", events.last());
     assert_eq!((summary.stats.files_matched, summary.stats.matches, summary.stopped), (1, 3, GrepStop::Completed));
+    // Two lines each side, as asked, not one.
+    let ten: String = (1..=10).map(|i| if i == 5 { format!("line {i} ERR\n") } else { format!("line {i} ok\n") }).collect();
+    write(&dir.path().join("c.log"), &ten);
+    let (events, _) = run(GrepScope::Files(vec![dir.path().join("c.log")]), &GrepQuery::single("ERR"), GrepOptions { context_before: 2, context_after: 2, ..GrepOptions::default() });
+    assert_eq!(lines(&events).into_iter().map(|(_, n, _, _)| n).collect::<Vec<_>>(), vec![3, 4, 5, 6, 7]);
     // No context: no break, the matches alone; a file with none says nothing.
     write(&dir.path().join("b.log"), "nothing here\n");
     let (events, _) = run(GrepScope::Files(vec![dir.path().join("a.log"), dir.path().join("b.log")]), &GrepQuery::single("ERR"), GrepOptions::default());
@@ -143,6 +148,10 @@ fn patterns_combine_per_line_and_mark_their_spans() {
     assert_eq!(numbers(&run(scope(), &q(&[("temp", false), ("alarm", true)], Combine::And), GrepOptions::default()).0), vec![1]);
     assert_eq!(numbers(&run(scope(), &q(&[("temp", false), ("alarm", false)], Combine::Or), GrepOptions::default()).0), vec![1, 2, 3]);
     assert_eq!(numbers(&run(scope(), &q(&[("temp", false), ("alarm", false)], Combine::Xor), GrepOptions::default()).0), vec![1, 3]);
+    // An odd number of tests holding, not exactly one: three patterns, three holding on line 1.
+    write(&dir.path().join("abc.log"), "a b c\na b\na\nnone\n");
+    let (events, _) = run(GrepScope::Files(vec![dir.path().join("abc.log")]), &q(&[("a", false), ("b", false), ("c", false)], Combine::Xor), GrepOptions::default());
+    assert_eq!(numbers(&events), vec![1, 3]);
     assert_eq!(numbers(&run(scope(), &q(&[("temp", true), ("alarm", true)], Combine::And), GrepOptions::default()).0), vec![4]);
     // Spans: each pattern's matches tagged by its index; a negated pattern marks nothing; an
     // overlap with an earlier span dropped.
@@ -289,6 +298,9 @@ fn the_size_and_binary_guards_the_caps_and_a_missing_file() {
     assert_eq!((s.stats.matches, s.stopped), (4, GrepStop::Completed));
     let (events, s) = run(files(&["five.log", "big.log"]), &GrepQuery::single("hit"), GrepOptions { max_total_matches: Some(7), ..GrepOptions::default() });
     assert_eq!((matched(&events).len(), s.stats.matches, s.stopped), (7, 7, GrepStop::MatchCap));
+    // Each file with matches ends with its count, the one the total cap stopped among them.
+    let counts: Vec<(String, u64)> = events.iter().filter_map(|e| if let GrepEvent::FileDone { path, matches, .. } = e { Some((path.file_name().unwrap().to_string_lossy().into_owned(), *matches)) } else { None }).collect();
+    assert_eq!((counts, s.stats.files_matched), (vec![("five.log".to_string(), 5), ("big.log".to_string(), 2)], 2));
     // A file that is not there: an error in its place, the next searched.
     let (events, s) = run(files(&["nope.log", "five.log"]), &GrepQuery::single("hit"), GrepOptions::default());
     assert!(matches!(&events[0], GrepEvent::FileError { path, .. } if path.ends_with("nope.log")), "{:?}", events[0]);
@@ -497,10 +509,24 @@ next
     }
 }
 
+/// A line cut at 4 MiB inside a character (`ç`'s two bytes straddling the limit) is cut before
+/// that character, at the last whole one: its first 4 194 303 bytes searched, the next line
+/// read, the search ended as any other.
+#[test]
+fn a_line_cut_inside_a_character_is_cut_before_it() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let path = dir.path().join("straddle.log");
+    write(&path, &format!("{}ç TAIL\nnext\n", "x".repeat((4 << 20) - 1)));
+    let (events, summary) = run(GrepScope::Files(vec![path]), &q(&[("^x", false), ("next", false)], Combine::Or), GrepOptions::default());
+    let got: Vec<(u64, usize)> = lines(&events).into_iter().map(|(_, n, _, t)| (n, t.len())).collect();
+    assert_eq!(got, vec![(1, (4 << 20) - 1), (2, 4)]);
+    assert_eq!(summary.stopped, GrepStop::Completed);
+}
+
 /// A cancel is heard at every slice: a file of lines a little longer than a slice, each
-/// matching under a slow pattern, cancelled as its line `k` arrives, gives at most the line or
-/// two the slices in hand complete (a check every few slices would give more), at two places in
-/// the file so that no period of slices falls on both.
+/// matching under slow patterns (a slice completes one line, scanned in some 100 ms), cancelled as
+/// its line `k` arrives, gives at most the next line, which the slice after line `k` completes;
+/// at three lines in a row, so that a check every second or third slice gives more at one of them.
 #[test]
 fn a_cancel_is_heard_at_every_slice() {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
@@ -512,8 +538,8 @@ fn a_cancel_is_heard_at_every_slice() {
             std::io::Write::write_all(&mut f, line.as_bytes()).unwrap();
         }
     }
-    let query = GrepQuery { whole_word: true, ..q(&[(r"\d{3}", false), ("ação", false)], Combine::Or) };
-    for k in [10u64, 13] {
+    let query = GrepQuery { whole_word: true, ..q(&[(r"\d{3}", false), (r"\d{4}", false), ("ação", false)], Combine::Or) };
+    for k in [10u64, 11, 12] {
         let s = search(GrepScope::Files(vec![path.clone()]), &query, GrepOptions::default()).unwrap();
         let mut matched = 0u64;
         for e in s.events.iter() {
@@ -532,7 +558,7 @@ fn a_cancel_is_heard_at_every_slice() {
             }
         }
         s.worker.join().unwrap();
-        assert!(matched >= k && matched <= k + 3, "cancelled at line {k}, {matched} lines given");
+        assert!(matched >= k && matched <= k + 1, "cancelled at line {k}, {matched} lines given");
     }
 }
 
