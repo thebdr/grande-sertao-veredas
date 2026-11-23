@@ -498,11 +498,20 @@ pub fn start(cfg: &EnipConfig) -> Result<EnipHandle, EnipError> {
             rt.block_on(async move {
                 let bind = server.cfg.bind.trim().to_string();
                 let bound = async {
-                    let tcp = TcpListener::bind((bind.as_str(), server.cfg.port))
-                        .await
-                        .map_err(|source| EnipError::Bind { addr: format!("{bind}:{} (tcp)", server.cfg.port), source })?;
-                    let addr = tcp.local_addr().map_err(EnipError::LocalAddr)?;
-                    let udp = UdpSocket::bind(addr).await.map_err(|source| EnipError::Bind { addr: format!("{addr} (udp)"), source })?;
+                    // Port 0: the machine's choice for TCP may be taken for UDP by another socket;
+                    // choose again till one number is free for both.
+                    let mut tries = 0;
+                    let (tcp, addr, udp) = loop {
+                        let tcp = TcpListener::bind((bind.as_str(), server.cfg.port))
+                            .await
+                            .map_err(|source| EnipError::Bind { addr: format!("{bind}:{} (tcp)", server.cfg.port), source })?;
+                        let addr = tcp.local_addr().map_err(EnipError::LocalAddr)?;
+                        match UdpSocket::bind(addr).await {
+                            Ok(udp) => break (tcp, addr, udp),
+                            Err(e) if server.cfg.port == 0 && e.kind() == std::io::ErrorKind::AddrInUse && tries < 64 => tries += 1,
+                            Err(source) => return Err(EnipError::Bind { addr: format!("{addr} (udp)"), source }),
+                        }
+                    };
                     let io = UdpSocket::bind((bind.as_str(), server.cfg.io_port))
                         .await
                         .map_err(|source| EnipError::Bind { addr: format!("{bind}:{} (udp, class 1)", server.cfg.io_port), source })?;

@@ -1896,3 +1896,26 @@ mod round_4 {
         }
     }
 }
+
+/// Port 0 gives one number free for both TCP and UDP (the reference's "the same port for both"),
+/// whatever already holds UDP ports: 2000 UDP sockets on the adapter's address, then 60 adapters
+/// started on port 0, each its encapsulation UDP socket on its TCP listener's number. Before the
+/// adapter chose again, about one start in fourteen met a UDP port taken and failed.
+#[test]
+fn port_0_finds_a_number_free_for_tcp_and_udp_whatever_holds_udp_ports() {
+    let held: Vec<UdpSocket> = (0..2000).map(|_| UdpSocket::bind("127.0.0.160:0").unwrap()).collect();
+    for _ in 0..60 {
+        let adapter = start(&config("bind = \"127.0.0.160\"\nport = 0\nio_port = 0\n")).unwrap();
+        let probe = UdpSocket::bind("127.0.0.160:0").unwrap();
+        let mut list_identity = vec![0x63, 0x00];
+        list_identity.extend_from_slice(&[0; 22]);
+        probe.send_to(&list_identity, adapter.addr).unwrap();
+        probe.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = [0u8; 600];
+        let (n, from) = probe.recv_from(&mut buf).unwrap();
+        assert_eq!((from, &buf[..2]), (adapter.addr, &[0x63, 0x00][..]), "a ListIdentity over UDP on the TCP port");
+        assert!(n > 24);
+        adapter.stop();
+    }
+    drop(held);
+}
