@@ -310,8 +310,17 @@ is pinned by a test when its phase lands.
   read back keeps the frame's own time, not the time of the read. tshark reads a record's seconds
   as unsigned (to 2106) but writes them signed (to 2038): its rewrite of a capture fails on a later
   stamp, ours does not.
-- **tshark reads a capture more loosely than its header says** (measured, 4.6.6): the snapshot
-  length is not held against a record, a fraction past a second and a length on the wire under the
-  bytes kept draw a complaint and are read, major version 3 is read and 1 is not, and a file cut in
-  its last record gives the frames before it with a note that it was cut short. The reader does
-  the same, naming the damage, so a capture still being written is read up to where it stops.
+- **tshark reads a capture by its version, not only its magic number** (measured, 4.6.6): before
+  2.3 a record's two lengths stand the other way round (on the wire first), at 2.3 the smaller is
+  taken as the bytes kept, and the nanosecond magic counts microseconds before 2.4; version 2.2
+  with the microsecond magic and link type 6 is AIX's Ethernet, stamped in nanoseconds; the
+  modified magic (a1b2cd34) has record headers eight bytes longer; the link type is Ethernet when
+  its low 16 bits are 1 and bits 16 to 25 are clear, whatever bits 26 to 31 say. It holds no
+  snapshot length against a record, reads a fraction past a second or a length on the wire under
+  the bytes kept with a complaint, reads major version 3 and refuses 1, and gives the frames
+  before a record cut short with a note. The reader follows all of it (a file of each kind is
+  compared with tshark's reading in the tests), but for two places where tshark's own arithmetic
+  wraps: a fraction past a second is carried into the next (tshark keeps an invalid fraction and
+  wraps it past 2^31 nanoseconds) and a length on the wire past 2^31 − 1 is kept (tshark shows
+  2^31 − 1). A first reading of the format from its 2.4 header alone was wrong in both lengths'
+  order and the link type's bits (C-139's first refute round).

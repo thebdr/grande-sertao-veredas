@@ -14,7 +14,7 @@ use veredas_aranha::profinet::lldp::{self, ChassisId, LldpPdu, PortId};
 use veredas_aranha::profinet::mac::Mac;
 use veredas_aranha::wire::hub::{self, Hub};
 use veredas_aranha::wire::pcap::{self, Capture, Damage, DamageKind, PcapError, Replay};
-use veredas_aranha::wire::{Frame, Wire, WireError};
+use veredas_aranha::wire::{Frame, Wire, WireError, stamp};
 
 const A: Mac = Mac([0x02, 0x00, 0x00, 0x00, 0x0A, 0x01]);
 const B: Mac = Mac([0x02, 0x00, 0x00, 0x00, 0x0B, 0x01]);
@@ -51,36 +51,92 @@ fn frames() -> Vec<Frame> {
     ]
 }
 
-/// tshark's reading of a capture file: each frame's stamp, length on the wire, bytes kept and the
-/// bytes themselves, and what it says on its error stream.
+/// tshark's reading of a capture file, in one run: each frame's stamp (as it prints it, an ISO
+/// date in UTC), length on the wire, bytes kept and the bytes themselves; what it says on its error
+/// stream; and whether it dissects the first frame as Ethernet.
+struct Reading {
+    rows: Vec<(String, String, String, String)>,
+    err: String,
+    ethernet: bool,
+}
+
+fn tshark_full(file: &std::path::Path) -> Reading {
+    let out = Command::new(common::tshark()).args(["-n", "-r"]).arg(file).args(["-T", "ek", "-x"]).output().unwrap();
+    let packets: Vec<serde_json::Value> =
+        String::from_utf8(out.stdout).unwrap().lines().filter(|l| !l.starts_with("{\"index\"")).map(|l| serde_json::from_str(l).unwrap()).collect();
+    let s = |x: &serde_json::Value| x.as_str().unwrap_or_default().to_string();
+    let rows = packets
+        .iter()
+        .map(|v| {
+            let frame = &v["layers"]["frame"];
+            (s(&frame["frame_frame_time_epoch"]), s(&frame["frame_frame_len"]), s(&frame["frame_frame_cap_len"]), s(&v["layers"]["frame_raw"]))
+        })
+        .collect();
+    let ethernet = packets.first().is_some_and(|v| v["layers"].get("eth").is_some());
+    Reading { rows, err: String::from_utf8_lossy(&out.stderr).to_string(), ethernet }
+}
+
 fn tshark_reads(file: &std::path::Path) -> (Vec<(String, String, String, String)>, String) {
-    let fields = Command::new(common::tshark())
-        .args(["-n", "-r"])
-        .arg(file)
-        .args(["-T", "fields", "-E", "separator=,", "-e", "frame.time_epoch", "-e", "frame.len", "-e", "frame.cap_len"])
-        .output()
-        .unwrap();
-    let raw = Command::new(common::tshark()).args(["-n", "-r"]).arg(file).args(["-T", "ek", "-x"]).output().unwrap();
-    let raws: Vec<String> = String::from_utf8(raw.stdout)
-        .unwrap()
-        .lines()
-        .filter(|l| !l.starts_with("{\"index\""))
-        .map(|l| {
-            let v: serde_json::Value = serde_json::from_str(l).unwrap();
-            v["layers"]["frame_raw"].as_str().unwrap_or_default().to_string()
+    let r = tshark_full(file);
+    (r.rows, r.err)
+}
+
+/// tshark on many files, six at a time (each run starts the dissectors anew).
+fn tshark_all(files: &[PathBuf]) -> Vec<Reading> {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let next = AtomicUsize::new(0);
+    let out: Mutex<Vec<Option<Reading>>> = Mutex::new((0..files.len()).map(|_| None).collect());
+    std::thread::scope(|s| {
+        for _ in 0..6 {
+            s.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= files.len() {
+                        break;
+                    }
+                    let r = tshark_full(&files[i]);
+                    out.lock().unwrap()[i] = Some(r);
+                }
+            });
+        }
+    });
+    out.into_inner().unwrap().into_iter().map(Option::unwrap).collect()
+}
+
+/// Write each `(name, bytes)` under `dir`, and read them all with tshark.
+fn tshark_files(dir: &std::path::Path, files: &[(String, Vec<u8>)]) -> Vec<Reading> {
+    let paths: Vec<PathBuf> = files
+        .iter()
+        .map(|(name, bytes)| {
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
         })
         .collect();
-    let rows: Vec<(String, String, String, String)> = String::from_utf8(fields.stdout)
-        .unwrap()
-        .lines()
-        .zip(&raws)
-        .map(|(l, raw)| {
-            let v: Vec<&str> = l.split(',').collect();
-            (v[0].to_string(), v[1].to_string(), v[2].to_string(), raw.clone())
-        })
-        .collect();
-    assert_eq!(rows.len(), raws.len(), "tshark's two readings differ in count");
-    (rows, String::from_utf8_lossy(&fields.stderr).to_string())
+    tshark_all(&paths)
+}
+
+/// A stamp as tshark's ek output prints it: `1970-01-01T00:00:01.000005000Z`.
+fn iso(at_ns: u64) -> String {
+    let (secs, ns) = (at_ns / 1_000_000_000, at_ns % 1_000_000_000);
+    let (days, rest) = ((secs / 86_400) as i64, secs % 86_400);
+    // Days since the epoch to a civil date (H. Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{ns:09}Z", rest / 3600, rest / 60 % 60, rest % 60)
+}
+
+/// Our reading of a capture in tshark's terms.
+fn as_tshark(frames: &[Frame]) -> Vec<(String, String, String, String)> {
+    frames.iter().map(|f| (iso(f.at_ns), f.length.to_string(), f.bytes.len().to_string(), to_hex(&f.bytes))).collect()
 }
 
 /// tshark rewriting a capture in another format (`pcap`, `nsecpcap`, `pcapng`).
@@ -113,6 +169,7 @@ fn a_capture_is_written_to_the_byte_and_read_back_whole() {
         back,
         Capture {
             big_endian: false,
+            magic: pcap::MAGIC_NANOS,
             nanos: true,
             version: (2, 4),
             snaplen: pcap::SNAPLEN,
@@ -143,12 +200,8 @@ fn tshark_reads_every_capture_written_as_it_was_written() {
     pcap::write_file(&file, &frames).unwrap();
     let (rows, err) = tshark_reads(&file);
     assert_eq!(err, "", "tshark complained of the file");
-    assert_eq!(rows.len(), frames.len());
-    for (f, (time, len, cap, raw)) in frames.iter().zip(&rows) {
-        assert_eq!(time, &format!("{}.{:09}", f.at_ns / 1_000_000_000, f.at_ns % 1_000_000_000));
-        assert_eq!((len, cap), (&f.length.to_string(), &f.bytes.len().to_string()));
-        assert_eq!(raw, &to_hex(&f.bytes));
-    }
+    assert_eq!(rows, as_tshark(&frames));
+    assert_eq!(rows[3].0, "2106-02-07T06:28:15.999999999Z");
 }
 
 #[test]
@@ -183,8 +236,10 @@ fn captures_tshark_writes_are_read_in_either_resolution_and_pcapng_is_refused() 
     assert_eq!(err.to_string(), "this is pcapng, which is not read: write it as classic pcap (`editcap -F pcap`)");
 }
 
-/// A capture written by hand: the header's fields as given, in the byte order given, then records.
-fn by_hand(big: bool, magic: u32, version: (u16, u16), linktype: u32, records: &[(u32, u32, &[u8], u32)]) -> Vec<u8> {
+/// A capture written by hand: the header's fields as given, in the byte order given, then records
+/// of seconds, fraction, the two length fields in the order given, and bytes; the modified
+/// format's records carry eight bytes more of header (an interface index, a protocol, a type).
+fn raw_file(big: bool, magic: u32, version: (u16, u16), linktype: u32, records: &[(u32, u32, u32, u32, &[u8])]) -> Vec<u8> {
     let w32 = |v: u32| if big { v.to_be_bytes() } else { v.to_le_bytes() };
     let w16 = |v: u16| if big { v.to_be_bytes() } else { v.to_le_bytes() };
     let mut out = Vec::new();
@@ -194,14 +249,186 @@ fn by_hand(big: bool, magic: u32, version: (u16, u16), linktype: u32, records: &
     out.extend_from_slice(&[0; 8]);
     out.extend_from_slice(&w32(96));
     out.extend_from_slice(&w32(linktype));
-    for (secs, fraction, bytes, length) in records {
+    for (secs, fraction, first, second, bytes) in records {
         out.extend_from_slice(&w32(*secs));
         out.extend_from_slice(&w32(*fraction));
-        out.extend_from_slice(&w32(bytes.len() as u32));
-        out.extend_from_slice(&w32(*length));
+        out.extend_from_slice(&w32(*first));
+        out.extend_from_slice(&w32(*second));
+        if magic == pcap::MAGIC_MODIFIED {
+            out.extend_from_slice(&[0, 0, 0, 2, 0x08, 0x00, 0x00, 0x00]);
+        }
         out.extend_from_slice(bytes);
     }
     out
+}
+
+/// The same, each record's bytes kept first and its length on the wire second (version 2.4's
+/// order).
+fn by_hand(big: bool, magic: u32, version: (u16, u16), linktype: u32, records: &[(u32, u32, &[u8], u32)]) -> Vec<u8> {
+    let records: Vec<_> = records.iter().map(|(s, f, b, l)| (*s, *f, b.len() as u32, *l, *b)).collect();
+    raw_file(big, magic, version, linktype, &records)
+}
+
+/// Write `bytes` as `name` under `dir` and read it with tshark.
+fn tshark_on(dir: &std::path::Path, name: &str, bytes: &[u8]) -> (Vec<(String, String, String, String)>, String) {
+    let file = dir.join(name);
+    std::fs::write(&file, bytes).unwrap();
+    tshark_reads(&file)
+}
+
+#[test]
+fn every_version_magic_byte_order_and_record_layout_is_read_as_tshark_reads_it() {
+    let dir = folder("matrix");
+    let f = frames();
+    let (a, b) = (&f[0].bytes[..], &f[2].bytes[..]);
+    let mut cases = Vec::new();
+    for version in [(2, 0), (2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (3, 0)] {
+        for magic in [pcap::MAGIC_MICROS, pcap::MAGIC_NANOS, pcap::MAGIC_MODIFIED] {
+            for big in [false, true] {
+                if big && ![(2, 2), (2, 3), (2, 4)].contains(&version) {
+                    continue;
+                }
+                // Two frames cut by their capture and a whole one between, the cut ones written in
+                // version 2.4's order (kept first) or the older one (on the wire first).
+                for old in [false, true] {
+                    let lengths = |kept: usize, wire: u32| if old { (wire, kept as u32) } else { (kept as u32, wire) };
+                    let (l1, l2, l3) = (lengths(a.len(), 1514), lengths(b.len(), b.len() as u32), lengths(a.len(), 1500));
+                    let records = [(1, 1, l1.0, l1.1, a), (2, 999_999, l2.0, l2.1, b), (3, 5, l3.0, l3.1, a)];
+                    cases.push((version, magic, big, old, raw_file(big, magic, version, 1, &records)));
+                }
+            }
+        }
+    }
+    assert_eq!(cases.len(), 60);
+    let files: Vec<(String, Vec<u8>)> = cases.iter().enumerate().map(|(i, c)| (format!("{i}.pcap"), c.4.clone())).collect();
+    let readings = tshark_files(&dir, &files);
+    for ((version, magic, big, old, bytes), tshark) in cases.iter().zip(&readings) {
+        let (version, magic, big, old) = (*version, *magic, *big, *old);
+        let read = pcap::read(bytes, "m").unwrap();
+        let what = format!("{version:?} {magic:#x} big {big} old {old}");
+        assert_eq!(tshark.rows, as_tshark(&read.frames), "{what}");
+        assert_eq!(read.damage.is_some(), !tshark.err.is_empty(), "{what}: {:?} / {}", read.damage, tshark.err);
+        // What each layout is, by version: the old one before 2.3, either at 2.3, the new one
+        // after; stamps in nanoseconds for the nanosecond magic from 2.4.
+        let readable = if version < (2, 3) { old } else if version == (2, 3) { true } else { !old };
+        assert_eq!(read.frames.len() == 3 && read.damage.is_none(), readable, "{what}");
+        if readable {
+            assert_eq!(read.frames.iter().map(|f| (f.bytes.len(), f.length)).collect::<Vec<_>>(), [(a.len(), 1514), (b.len(), b.len()), (a.len(), 1500)], "{what}");
+        }
+        let nanos = magic == pcap::MAGIC_NANOS && version >= (2, 4);
+        assert_eq!((read.magic, read.nanos, read.big_endian), (magic, nanos, big), "{what}");
+        if readable {
+            assert_eq!(read.frames[0].at_ns, 1_000_000_000 + if nanos { 1 } else { 1000 }, "{what}");
+        }
+    }
+}
+
+#[test]
+fn the_link_type_and_the_aix_format_are_read_as_tshark_reads_them() {
+    let dir = folder("link");
+    let a = frames().remove(0).bytes;
+    let fcs = [&a[..], &[0xA8, 0x24, 0x72, 0xD3]].concat();
+    let file = |big: bool, magic: u32, version: (u16, u16), lt: u32, frame: &[u8]| by_hand(big, magic, version, lt, &[(1, 5, frame, frame.len() as u32)]);
+    // Ethernet whatever bits 26 to 31 say (a check sequence's flag and length), the frame kept as
+    // recorded, the field whole: tshark reads each as Ethernet, with no complaint.
+    let ethernet = [0x0000_0001u32, 0x0400_0001, 0x0800_0001, 0x0C00_0001, 0x1000_0001, 0x2400_0001, 0x4400_0001, 0x5000_0001, 0xF000_0001, 0xFC00_0001];
+    // A reserved bit (16 to 25), refused as tshark refuses it; another link type, none of which
+    // tshark reads as Ethernet.
+    let reserved = [0x0001_0001u32, 0x0100_0001, 0x0200_0001, 0x03FF_0001];
+    let other = [0u32, 6, 101, 105, 0x0101, 0x8001];
+    // AIX's format (2.2, the microsecond magic, type 6) in either byte order, and four near it.
+    let not_aix = [(pcap::MAGIC_NANOS, (2, 2), 6), (pcap::MAGIC_MICROS, (2, 4), 6), (pcap::MAGIC_MICROS, (2, 2), 9), (pcap::MAGIC_MODIFIED, (2, 2), 6)];
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    for lt in ethernet {
+        files.push((format!("e{lt:x}.pcap"), file(false, pcap::MAGIC_MICROS, (2, 4), lt, if lt & 0x0400_0000 != 0 { &fcs } else { &a })));
+    }
+    for lt in reserved.iter().chain(&other) {
+        files.push((format!("r{lt:x}.pcap"), file(false, pcap::MAGIC_MICROS, (2, 4), *lt, &a)));
+    }
+    for big in [false, true] {
+        files.push((format!("aix-{big}.pcap"), file(big, pcap::MAGIC_MICROS, (2, 2), 6, &a)));
+    }
+    for (i, (magic, version, lt)) in not_aix.iter().enumerate() {
+        files.push((format!("not-aix-{i}.pcap"), file(false, *magic, *version, *lt, &a)));
+    }
+    let readings = tshark_files(&dir, &files);
+    let mut k = 0;
+    for lt in ethernet {
+        let read = pcap::read(&files[k].1, "l").unwrap();
+        let frame = if lt & 0x0400_0000 != 0 { &fcs } else { &a };
+        assert_eq!((read.linktype, &read.frames[0].bytes), (lt, frame), "{lt:#x}");
+        assert_eq!((&readings[k].rows, readings[k].err.as_str(), readings[k].ethernet), (&as_tshark(&read.frames), "", true), "{lt:#x}");
+        k += 1;
+    }
+    for lt in reserved {
+        let err = pcap::read(&files[k].1, "l").unwrap_err();
+        assert!(matches!(err, PcapError::Reserved(x) if x == lt), "{lt:#x}: {err}");
+        assert!(readings[k].err.contains("reserved field not zero"), "{lt:#x}: {}", readings[k].err);
+        k += 1;
+    }
+    assert_eq!(PcapError::Reserved(0x0100_0001).to_string(), "link type 0x1000001 has reserved bits set (bits 16 to 25)");
+    for lt in other {
+        let err = pcap::read(&files[k].1, "l").unwrap_err();
+        assert!(matches!(err, PcapError::NotEthernet(x) if x == lt), "{lt:#x}: {err}");
+        assert!(!readings[k].ethernet, "{lt:#x}");
+        k += 1;
+    }
+    assert_eq!(pcap::read(&by_hand(true, pcap::MAGIC_MICROS, (2, 4), 101, &[]), "l").unwrap_err().to_string(), "link type 0x65 is not Ethernet (1)");
+    for big in [false, true] {
+        let read = pcap::read(&files[k].1, "l").unwrap();
+        assert_eq!((read.nanos, read.linktype, read.frames[0].at_ns), (true, 6, 1_000_000_005), "{big}");
+        assert_eq!((&readings[k].rows, readings[k].err.as_str(), readings[k].ethernet), (&as_tshark(&read.frames), "", true), "{big}");
+        k += 1;
+    }
+    for (magic, version, lt) in not_aix {
+        assert!(matches!(pcap::read(&files[k].1, "l"), Err(PcapError::NotEthernet(x)) if x == lt), "{magic:#x} {version:?} {lt}");
+        assert!(!readings[k].ethernet, "{magic:#x} {version:?} {lt}");
+        k += 1;
+    }
+    assert_eq!(k, files.len());
+}
+
+#[test]
+fn where_the_reader_departs_from_tshark_it_keeps_what_the_file_states() {
+    let dir = folder("departures");
+    let a = frames().remove(0).bytes;
+    // A fraction past a second is carried into the next, at either resolution; tshark keeps it as
+    // an invalid fraction (printing "1.1500000000") and wraps it past 2^31 nanoseconds. A fraction
+    // under a second reads alike.
+    let fractions = [(pcap::MAGIC_MICROS, 1_000_000u32), (pcap::MAGIC_MICROS, 2_147_484), (pcap::MAGIC_NANOS, 1_500_000_000), (pcap::MAGIC_NANOS, u32::MAX)];
+    let alike = [(pcap::MAGIC_MICROS, 999_999u32), (pcap::MAGIC_NANOS, 999_999_999)];
+    let files: Vec<(String, Vec<u8>)> = fractions.iter().chain(&alike).enumerate().map(|(i, (m, fr))| (format!("f{i}.pcap"), by_hand(false, *m, (2, 4), 1, &[(1, *fr, &a, 60)]))).collect();
+    let readings = tshark_files(&dir, &files);
+    for (i, (magic, fraction)) in fractions.iter().chain(&alike).enumerate() {
+        let read = pcap::read(&files[i].1, "d").unwrap();
+        let per = if *magic == pcap::MAGIC_NANOS { 1 } else { 1000 };
+        assert_eq!(read.frames[0].at_ns, 1_000_000_000 + u64::from(*fraction) * per, "{fraction}");
+        assert_eq!(readings[i].rows == as_tshark(&read.frames), i >= fractions.len(), "{fraction}: {:?}", readings[i].rows);
+    }
+    // A length on the wire past 2 147 483 647 is kept as stated; tshark shows 2 147 483 647.
+    let lengths = [0x7FFF_FFFFu32, 0x8000_0000, u32::MAX];
+    let bytes = by_hand(false, pcap::MAGIC_NANOS, (2, 4), 1, &[(1, 0, &a, lengths[0]), (1, 0, &a, lengths[1]), (1, 0, &a, lengths[2])]);
+    let read = pcap::read(&bytes, "d").unwrap();
+    assert_eq!(read.frames.iter().map(|f| f.length).collect::<Vec<_>>(), lengths.map(|l| l as usize));
+    let (rows, _) = tshark_on(&dir, "lengths.pcap", &bytes);
+    assert_eq!(rows.iter().map(|r| r.1.as_str()).collect::<Vec<_>>(), ["2147483647"; 3]);
+    // The same capture written by us states the same lengths again.
+    assert_eq!(pcap::read(&pcap::write(&read.frames).unwrap(), "d").unwrap().frames, read.frames);
+}
+
+#[test]
+fn a_stamp_is_nanoseconds_since_the_epoch_saturating_at_either_end() {
+    use std::time::SystemTime;
+    let epoch = SystemTime::UNIX_EPOCH;
+    assert_eq!(stamp(epoch), 0);
+    assert_eq!(stamp(epoch + Duration::new(1, 500_000_000)), 1_500_000_000);
+    assert_eq!(stamp(epoch + Duration::new(1_700_000_000, 123_456_789)), 1_700_000_000_123_456_789);
+    assert_eq!(stamp(epoch - Duration::from_nanos(1)), 0);
+    assert_eq!(stamp(epoch - Duration::from_secs(86_400)), 0);
+    assert_eq!(stamp(epoch + Duration::new(18_446_744_073, 709_551_615)), u64::MAX);
+    assert_eq!(stamp(epoch + Duration::new(18_446_744_073, 709_551_614)), u64::MAX - 1);
+    assert_eq!(stamp(epoch + Duration::new(18_446_744_073, 709_551_616)), u64::MAX);
+    assert_eq!(stamp(epoch + Duration::from_secs(20_000_000_000)), u64::MAX);
 }
 
 #[test]
@@ -219,8 +446,7 @@ fn either_byte_order_either_resolution_and_every_header_field_are_read() {
             let file = dir.join(format!("{big}-{nanos}.pcap"));
             std::fs::write(&file, &bytes).unwrap();
             let (rows, _) = tshark_reads(&file);
-            let want: Vec<_> = read.frames.iter().map(|f| (format!("{}.{:09}", f.at_ns / 1_000_000_000, f.at_ns % 1_000_000_000), f.length.to_string(), f.bytes.len().to_string(), to_hex(&f.bytes))).collect();
-            assert_eq!(rows, want, "big {big}, nanos {nanos}");
+            assert_eq!(rows, as_tshark(&read.frames), "big {big}, nanos {nanos}");
         }
     }
     // The snapshot length is not held against the records (tshark reads a 60-byte frame under 20).
@@ -228,8 +454,9 @@ fn either_byte_order_either_resolution_and_every_header_field_are_read() {
     small[16..20].copy_from_slice(&20u32.to_le_bytes());
     let read = pcap::read(&small, "p1").unwrap();
     assert_eq!((read.snaplen, read.frames.len(), read.frames[0].bytes.len()), (20, 1, a.len()));
-    // Versions 2.3 and 3.0 are read, 1.0 and 0.9 refused (tshark: "major version 1 unsupported").
-    for v in [(2, 3), (3, 0), (2, 0xFFFF)] {
+    // Major versions 2 and later are read (every minor), 1 and 0 refused (tshark: "major version 1
+    // unsupported").
+    for v in [(2, 0xFFFF), (3, 3), (0xFFFF, 0)] {
         assert_eq!(pcap::read(&by_hand(true, pcap::MAGIC_MICROS, v, 1, &[(1, 0, a, 60)]), "p1").unwrap().version, v);
     }
     for v in [(1, 0), (0, 9), (1, 0xFFFF)] {
@@ -237,26 +464,14 @@ fn either_byte_order_either_resolution_and_every_header_field_are_read() {
         assert!(matches!(err, PcapError::Version(x, y) if (x, y) == v), "{err}");
     }
     assert_eq!(pcap::read(&by_hand(false, pcap::MAGIC_MICROS, (1, 0), 1, &[]), "p1").unwrap_err().to_string(), "pcap version 1.0 is not read: major version 2 or later");
-    // Ethernet with a check sequence's bits set (four bytes each) is Ethernet; the frames are kept
-    // as recorded, the check sequence with them, and the field whole.
-    let fcs = 0x1000_0001 | (2 << 29);
-    let with_fcs = [a, &[0xAA, 0xBB, 0xCC, 0xDD]].concat();
-    let read = pcap::read(&by_hand(false, pcap::MAGIC_MICROS, (2, 4), fcs, &[(1, 0, &with_fcs, 64)]), "p1").unwrap();
-    assert_eq!((read.linktype, &read.frames[0].bytes), (fcs, &with_fcs));
-    // Another link type, a reserved bit, another magic and a file shorter than its header are
-    // refused by name.
-    for lt in [0, 101, 105, 0x0100_0001, 0x0800_0001] {
-        let err = pcap::read(&by_hand(false, pcap::MAGIC_MICROS, (2, 4), lt, &[]), "p1").unwrap_err();
-        assert!(matches!(err, PcapError::NotEthernet(x) if x == lt), "{lt:#x}: {err}");
-    }
-    assert_eq!(pcap::read(&by_hand(true, pcap::MAGIC_MICROS, (2, 4), 101, &[]), "p1").unwrap_err().to_string(), "link type 0x65 is not Ethernet (1)");
-    for magic in [0xA1B2_CD34, 0xD4C3_B2A0, 0, 0x0A0D_0D0B] {
+    // Another magic number is refused by name.
+    for magic in [0xD4C3_B2A0, 0, 0x0A0D_0D0B, 0xA1B2_3C4E, 0x34CD_B2A0] {
         let err = pcap::read(&by_hand(false, magic, (2, 4), 1, &[]), "p1").unwrap_err();
         assert!(matches!(err, PcapError::Magic(_)), "{magic:#x}: {err}");
     }
     assert_eq!(
-        pcap::read(&by_hand(true, 0xA1B2_CD34, (2, 4), 1, &[]), "p1").unwrap_err().to_string(),
-        "magic number 0xa1b2cd34 is not classic pcap's (a1b2c3d4 or a1b23c4d, in either byte order)"
+        pcap::read(&by_hand(true, 0xA1B2_3C4E, (2, 4), 1, &[]), "p1").unwrap_err().to_string(),
+        "magic number 0xa1b23c4e is not classic pcap's (a1b2c3d4, a1b23c4d or a1b2cd34, in either byte order)"
     );
     for len in [0, 4, 23] {
         let err = pcap::read(&by_hand(false, pcap::MAGIC_MICROS, (2, 4), 1, &[])[..len], "p1").unwrap_err();
@@ -281,8 +496,17 @@ fn a_capture_cut_short_gives_the_frames_before_its_damage_as_tshark_does() {
     let header_cut = &whole[..starts[2] + 9];
     let read = pcap::read(header_cut, "b0").unwrap();
     assert_eq!(read.frames, pcap::read(&whole, "b0").unwrap().frames[..2]);
-    assert_eq!(read.damage, Some(Damage { record: 2, offset: starts[2], kind: DamageKind::HeaderCut { have: 9 } }));
+    assert_eq!(read.damage, Some(Damage { record: 2, offset: starts[2], kind: DamageKind::HeaderCut { have: 9, need: 16 } }));
     assert_eq!(read.damage.unwrap().to_string(), format!("record 2 at byte {} is cut short in its header: 9 of 16 bytes", starts[2]));
+    // A modified capture's record header is 24 bytes: cut at 20 of them.
+    let modified = raw_file(false, pcap::MAGIC_MODIFIED, (2, 4), 1, &[(1, 0, 60, 60, &frames[0].bytes[..60]), (2, 0, 60, 60, &frames[0].bytes[..60])]);
+    let cut_modified = &modified[..24 + 24 + 60 + 20];
+    let read = pcap::read(cut_modified, "b0").unwrap();
+    assert_eq!(read.frames.len(), 1);
+    assert_eq!(read.damage, Some(Damage { record: 1, offset: 108, kind: DamageKind::HeaderCut { have: 20, need: 24 } }));
+    assert_eq!(read.damage.unwrap().to_string(), "record 1 at byte 108 is cut short in its header: 20 of 24 bytes");
+    let (rows, err) = tshark_on(&dir, "modified-cut.pcap", cut_modified);
+    assert_eq!((rows.len(), err.contains("cut short")), (1, true), "{err}");
     let data_cut = &whole[..starts[2] + 16 + 5];
     let read = pcap::read(data_cut, "b0").unwrap();
     assert_eq!(read.frames.len(), 2);
@@ -391,7 +615,7 @@ fn a_replayed_capture_hands_its_frames_in_order_then_ends_and_keeps_what_is_sent
     for f in &frames {
         assert_eq!(replay.recv(Duration::from_secs(60)).unwrap().as_ref(), Some(f));
     }
-    assert!(started.elapsed() < Duration::from_secs(30), "a capture never waits");
+    assert!(started.elapsed() < Duration::from_secs(1), "a capture never waits: {:?}", started.elapsed());
     assert_eq!(replay.remaining(), 0);
     let end = replay.recv(Duration::ZERO).unwrap_err();
     assert!(matches!(&end, WireError::Ended(n) if n == "scan.pcap"));
@@ -460,7 +684,8 @@ fn a_hub_port_waits_for_a_frame_no_longer_than_its_timeout() {
     let mut b = hub.port("b", B);
     let started = Instant::now();
     assert_eq!(b.recv(Duration::from_millis(50)).unwrap(), None);
-    assert!(started.elapsed() >= Duration::from_millis(50));
+    let waited = started.elapsed();
+    assert!(waited >= Duration::from_millis(50) && waited < Duration::from_millis(500), "{waited:?}");
     // A frame sent while it waits ends the wait.
     let sender = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(100));
@@ -486,8 +711,7 @@ fn a_hub_port_waits_for_a_frame_no_longer_than_its_timeout() {
 #[test]
 fn the_raw_link_is_a_wire_and_never_hands_back_a_frame_this_host_sent() {
     use veredas_aranha::netns;
-    use veredas_aranha::wire::raw::{Options, RawLink};
-    use veredas_aranha::wire::stamp;
+    use veredas_aranha::wire::raw::{Options, RawError, RawLink};
     netns::isolated("the_raw_link_is_a_wire_and_never_hands_back_a_frame_this_host_sent", &[("a0", "b0")], || {
         for (iface, mac) in [("a0", A), ("b0", B)] {
             netns::ip(&["link", "set", iface, "down"]);
@@ -515,11 +739,28 @@ fn the_raw_link_is_a_wire_and_never_hands_back_a_frame_this_host_sent() {
         let started = Instant::now();
         assert_eq!(b.recv(Duration::from_millis(300)).unwrap(), None);
         assert!(started.elapsed() >= Duration::from_millis(300));
+        // This host's frames every 20 ms for two seconds: passing them over keeps one deadline,
+        // the wait ending empty at its timeout, not when they stop.
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                let until = Instant::now() + Duration::from_secs(2);
+                while Instant::now() < until {
+                    let _ = other_on_b.send(&mine);
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            });
+            std::thread::sleep(Duration::from_millis(100));
+            let started = Instant::now();
+            assert_eq!(b.recv(Duration::from_millis(300)).unwrap(), None);
+            let waited = started.elapsed();
+            assert!(waited >= Duration::from_millis(300) && waited < Duration::from_millis(1500), "{waited:?}");
+        });
         // Lengths are checked before the socket: the seam's errors, not the link's.
         assert!(matches!(a.send(&[0; 13]), Err(WireError::TooShort(13))));
         assert!(matches!(a.send(&vec![0; 65_537]), Err(WireError::TooLong(65_537))));
         // A frame too long for the link's MTU is the link's own error, carried.
         let err = a.send(&vec![0; 9000]).unwrap_err();
-        assert!(matches!(err, WireError::Raw(_)), "{err}");
+        assert!(matches!(err, WireError::Raw(RawError::TooLong(9000))), "{err}");
+        assert_eq!(err.to_string(), "a frame of 9000 bytes is past what the link sends");
     });
 }
