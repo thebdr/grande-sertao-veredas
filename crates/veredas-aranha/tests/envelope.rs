@@ -188,16 +188,16 @@ fn what_the_wire_cannot_carry_is_refused_never_cut() {
     assert_eq!(ether::build_tagged(dst, src, tag(6, 0), 0x8892, &[0; 1501]), Err(EtherError::TooLong(1501)));
     // A type that is a length, nothing (0x05DD to 0x05FF), or one readers take for a tag, is no
     // EtherType to write.
-    for t in [0x0000u16, 0x0026, 0x05DC, 0x05DD, 0x05FF, 0x8100, 0x88A8, 0x9100] {
+    for t in [0x0000u16, 0x0026, 0x05DC, 0x05DD, 0x05FF, 0x8100, 0x88A8, 0x9100, 0x88E7, 0x893F, 0xF1C1, 0x8926, 0x8874] {
         assert_eq!(ether::build(dst, src, t, &[1, 2, 3]), Err(EtherError::NotEtherType(t)), "{t:#x}");
         assert_eq!(ether::build_tagged(dst, src, tag(0, 1), t, &[1, 2, 3]), Err(EtherError::NotEtherType(t)), "{t:#x}");
     }
     assert!(ether::build(dst, src, 0x0600, &[]).is_ok());
     assert_eq!(
         EtherError::NotEtherType(0x26).to_string(),
-        "0x0026 is not an EtherType this envelope writes (below 0x0600 is an 802.3 length or nothing; 0x8100, 0x88A8 and 0x9100 are read as tags)"
+        "0x0026 is not an EtherType this envelope writes (below 0x0600 is an 802.3 length or nothing; 0x8100, 0x88A8, 0x9100, 0x88E7, 0x893F, 0xF1C1, 0x8926 and 0x8874 are read as tags)"
     );
-    assert_eq!(ether::TAG_TYPES, [0x8100, 0x88A8, 0x9100]);
+    assert_eq!(ether::TAG_TYPES, [0x8100, 0x88A8, 0x9100, 0x88E7, 0x893F, 0xF1C1, 0x8926, 0x8874]);
     assert!(ether::build(dst, src, 0x88A9, &[]).is_ok() && ether::build(dst, src, 0x9101, &[]).is_ok());
     assert_eq!(ether::build_tagged(dst, src, tag(8, 0), 0x8892, &[]), Err(EtherError::BadPriority(8)));
     assert_eq!(EtherError::BadPriority(8).to_string(), "a VLAN priority is 0 to 7, not 8");
@@ -259,6 +259,13 @@ fn a_short_frame_is_an_error_that_says_its_length() {
     assert_eq!(ether::parse(&tagged), Err(EtherError::TooShort(16)));
     tagged.push(0x08);
     assert_eq!(ether::parse(&tagged), Err(EtherError::TooShort(17)));
+    // Every length a tagged frame falls short at, from the untagged header's 14 to 17.
+    for n in 14..18 {
+        let mut f = vec![0; 12];
+        f.extend_from_slice(&[0x81, 0x00, 0x00, 0x05, 0x08, 0x00]);
+        f.truncate(n);
+        assert_eq!(ether::parse(&f), Err(EtherError::TooShort(n)), "{n}");
+    }
     tagged.push(0x00);
     let e = ether::parse(&tagged).unwrap();
     assert_eq!((e.vlan.map(|v| v.id), e.ethertype, e.payload.len()), (Some(5), 0x0800, 0));
@@ -338,5 +345,57 @@ fn a_tag_of_another_type_is_read_as_the_frame_s_type() {
         let e = ether::parse(&f).unwrap();
         assert_eq!((e.vlan, e.ethertype, &e.payload[..4]), (None, tpid, &[0xC0, 0x05, 0x88, 0x92][..]), "{tpid:#06x}");
         assert!(e.is_ethertype());
+    }
+}
+
+#[test]
+fn every_type_is_written_but_a_length_and_a_tag_s_and_every_bound_refuses_all_past_it() {
+    let (dst, src) = (Mac([0x02, 0, 0, 0, 0, 1]), Mac([0x02, 0, 0, 0, 0, 2]));
+    let tag = Some(VlanTag { priority: 5, drop_eligible: false, id: 100 });
+    // Every type field: refused exactly below 0x0600 and for the eight tag types, tagged or not;
+    // every other written and read back as itself.
+    let mut written = 0;
+    for t in 0..=0xFFFFu16 {
+        let refused = t < ether::MIN_ETHERTYPE || ether::TAG_TYPES.contains(&t);
+        for vlan in [None, tag] {
+            match ether::build_tagged(dst, src, vlan, t, &[0xA5, 0x5A]) {
+                Err(e) => assert!(refused && e == EtherError::NotEtherType(t), "{t:#06x}: {e}"),
+                Ok(f) => {
+                    assert!(!refused, "{t:#06x} written");
+                    let e = ether::parse(&f).unwrap();
+                    assert_eq!((e.vlan, e.ethertype, &e.payload[..2]), (vlan, t, &[0xA5, 0x5A][..]), "{t:#06x}");
+                    written += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(written, 2 * (0x10000 - 0x0600 - 8));
+    // The five tag types past VLAN's, heard: tshark reads each as a tag of its own protocol,
+    // taking the payload's first bytes for it.
+    let layers = [(0x88E7u16, "ieee8021ah"), (0x893F, "etag"), (0xF1C1, "rtag"), (0x8926, "vntag"), (0x8874, "brcm-tag")];
+    let frames: Vec<Vec<u8>> = layers
+        .iter()
+        .map(|(t, _)| {
+            let mut f = [&dst.0[..], &src.0[..], &t.to_be_bytes()[..], &[0xA5, 0x5A, 0x11, 0x22]].concat();
+            f.resize(60, 0);
+            f
+        })
+        .collect();
+    let read = common::dissect(&frames);
+    for (p, (t, layer)) in read.iter().zip(layers) {
+        assert!(p.has(layer), "{t:#06x}: no {layer} layer");
+    }
+    // Every priority past 7 and every VLAN id past 4094 refused, never masked into a written tag.
+    for priority in 8..=255u8 {
+        assert_eq!(ether::build_tagged(dst, src, Some(VlanTag { priority, drop_eligible: false, id: 1 }), 0x8892, &[]), Err(EtherError::BadPriority(priority)));
+    }
+    for id in 0x0FFF..=0xFFFFu16 {
+        assert_eq!(ether::build_tagged(dst, src, Some(VlanTag { priority: 0, drop_eligible: false, id }), 0x8892, &[]), Err(EtherError::BadVlanId(id)));
+    }
+    // Payloads past 1500, far past too, refused tagged or not.
+    for n in [1501usize, 65_535, 65_536, 65_537, 70_000] {
+        let payload = vec![0; n];
+        assert_eq!(ether::build(dst, src, 0x8892, &payload), Err(EtherError::TooLong(n)), "{n}");
+        assert_eq!(ether::build_tagged(dst, src, tag, 0x8892, &payload), Err(EtherError::TooLong(n)), "{n}");
     }
 }

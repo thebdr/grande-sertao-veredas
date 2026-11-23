@@ -39,8 +39,11 @@ pub const MAX_PAYLOAD: usize = 1500;
 pub const MIN_ETHERTYPE: u16 = 0x0600;
 /// The highest value that is an 802.3 length.
 pub const MAX_LENGTH: u16 = 0x05DC;
-/// The types readers take for a tag, written as a frame's type by no one here.
-pub const TAG_TYPES: [u16; 3] = [ETHERTYPE_VLAN, 0x88A8, 0x9100];
+/// The types readers take for a tag, written as a frame's type by no one here: the eight Wireshark
+/// 4.6.6 registers as one (802.1Q, 802.1ad, the old 0x9100, 802.1ah's I-TAG, 802.1BR's E-TAG,
+/// 802.1CB's R-TAG, the VN-Tag and Broadcom's tag), each reading the payload's first bytes as its
+/// own.
+pub const TAG_TYPES: [u16; 8] = [ETHERTYPE_VLAN, 0x88A8, 0x9100, 0x88E7, 0x893F, 0xF1C1, 0x8926, 0x8874];
 
 /// An 802.1Q tag: the priority (0 to 7; PROFINET's cyclic frames ride at 6), the drop-eligible
 /// bit, and the VLAN id (0 means "priority only, no VLAN"; 4095 is reserved, read and never
@@ -97,7 +100,7 @@ pub enum EtherError {
     BadVlanId(u16),
     #[error("a frame's source is one station; {0} is a group address (IEEE 802.3, 3.2.3)")]
     GroupSource(Mac),
-    #[error("{0:#06x} is not an EtherType this envelope writes (below 0x0600 is an 802.3 length or nothing; 0x8100, 0x88A8 and 0x9100 are read as tags)")]
+    #[error("{0:#06x} is not an EtherType this envelope writes (below 0x0600 is an 802.3 length or nothing; 0x8100, 0x88A8, 0x9100, 0x88E7, 0x893F, 0xF1C1, 0x8926 and 0x8874 are read as tags)")]
     NotEtherType(u16),
 }
 
@@ -132,8 +135,7 @@ pub fn build(dst: Mac, src: Mac, ethertype: u16, payload: &[u8]) -> Result<Vec<u
 /// A frame with an optional 802.1Q tag, padded to 60 bytes. A source that is a group address, a
 /// payload past 1500 bytes, a
 /// priority past 7, a VLAN id past 4094 (4095 is reserved), or a type that is not an EtherType
-/// (below 0x0600, or a type readers take for a tag: 0x8100, 0x88A8, 0x9100) is refused, never cut
-/// or misread.
+/// (below 0x0600, or a type readers take for a tag: `TAG_TYPES`) is refused, never cut or misread.
 pub fn build_tagged(
     dst: Mac,
     src: Mac,
