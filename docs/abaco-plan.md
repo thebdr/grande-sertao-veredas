@@ -429,14 +429,20 @@ workspace/log.txt             the log, one escaped entry per line
 - **SpreadsheetML under a namespace prefix is refused** (`<x:worksheet xmlns:x="…main">`, the
   .NET Open XML SDK's default; C-223's eighth and ninth rounds): the patcher reads tags by their
   literal, unprefixed names, as Excel writes them, so a part with any element under a prefix bound
-  to the main namespace (the root, or `<x:definedNames>` inside a plain root) refuses the patch,
+  to the main namespace, transitional or strict (the root, or `<x:definedNames>` inside a plain
+  root) refuses the patch,
   whatever its edits, naming the part and the element. A prefix declared and never used is none.
-- **The engine reads `IFNA(…)` and `_xlfn.IFNA(…)` alike; Excel does not** (C-223's ninth round):
-  "already there" and a name's rewrite compare the function spellings of the file's own text too
-  (`refs::function_calls`), a cell's found back in the source through the moves (`backward`).
+- **The engine reads `IFNA(…)` and `_xlfn.IFNA(…)` alike; Excel does not** (C-223's ninth and
+  tenth rounds): "already there" and a name's rewrite compare the function spellings of the file's
+  own text too (`refs::function_calls`: each call's prefix, each LET or LAMBDA parameter's
+  `_xlpm.`, bracketed table columns passed over), a cell's found back in the source through the
+  moves (`backward`).
 - **A function the engine does not compute is refused in an edit** (`AGGREGATE`, `IMAGE`,
   `WEBSERVICE`): it would be cached as `#NAME?` and printed lowercased without its prefix. A LAMBDA
-  name and a parameter a LET or LAMBDA binds are the workbook's own. The engine keeps its
+  name the formula sees (global, or local to its own sheet or scope) and a parameter a LET or
+  LAMBDA binds are the workbook's own.
+- **A new cell takes its row's format, else its column's** (C-223's tenth round): a row formatted
+  whole (`s` with `customFormat`) gives a cell typed into it that format, as Excel does. The engine keeps its
   function list and a LAMBDA parameter's name private; the patcher tells LET and the name by their
   debug text.
 - **A legacy array is the edit's kind only at the edit's size**: `{=A1:A3*2}` over one cell shows

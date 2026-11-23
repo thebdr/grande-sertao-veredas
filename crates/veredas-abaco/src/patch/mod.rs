@@ -1002,10 +1002,21 @@ fn unknown_call(node: &Node, bound: &mut Vec<String>, names: &[String]) -> Optio
     }
 }
 
-/// [`unknown_call`] of a formula an edit writes, parsed at `a` (a name's at the first sheet's A1).
-fn calls_unknown(wb: &Workbook, sheet: u32, a: Addr, formula: &str) -> Option<String> {
+/// [`unknown_call`] of a formula an edit writes, parsed at `a` of `sheet`, where the names it sees
+/// are the workbook's global ones and those local to `scope` (the cell's sheet, a name's own scope):
+/// a LAMBDA name local to another sheet is none it can call.
+fn calls_unknown(wb: &Workbook, sheet: u32, a: Addr, formula: &str, scope: Option<&str>) -> Option<String> {
     let node = parsed_at(wb, sheet, a, formula)?;
-    let names: Vec<String> = wb.names().into_iter().map(|n| n.name).collect();
+    let names: Vec<String> = wb
+        .names()
+        .into_iter()
+        .filter(|n| match (&n.scope, scope) {
+            (None, _) => true,
+            (Some(local), Some(here)) => local.eq_ignore_ascii_case(here),
+            (Some(_), None) => false,
+        })
+        .map(|n| n.name)
+        .collect();
     unknown_call(&node, &mut Vec::new(), &names)
 }
 
@@ -1408,7 +1419,7 @@ pub fn patch(
                     )));
                 }
                 let content = if is_formula {
-                    if let Some(name) = calls_unknown(&wb, s, a, &target) {
+                    if let Some(name) = calls_unknown(&wb, s, a, &target, Some(&canonical)) {
                         return Err(PatchError::Unsupported(format!(
                             "{canonical}!{a}: {name} is a function the engine does not compute (the patcher writes no formula it would cache as #NAME?)"
                         )));
@@ -1536,7 +1547,8 @@ pub fn patch(
                 scope,
             } => {
                 let body = formula.trim().trim_start_matches('=');
-                if let Some(called) = calls_unknown(&wb, 0, Addr::new(1, 1), body) {
+                let at = scope.as_deref().and_then(|sc| wb.sheet_index(sc).ok()).unwrap_or(0);
+                if let Some(called) = calls_unknown(&wb, at, Addr::new(1, 1), body, scope.as_deref()) {
                     return Err(PatchError::Unsupported(format!(
                         "name {name}: {called} is a function the engine does not compute (the patcher writes no formula it cannot read)"
                     )));
@@ -2366,17 +2378,23 @@ fn commit(
     check: impl FnOnce(&Path) -> Result<(), PatchError>,
 ) -> Result<(), PatchError> {
     let dir = dest.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let file_name = dest
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .ok_or_else(|| PatchError::Malformed(format!("{}: not a file path", dest.display())))?;
-    let scratch = dir.join(format!(".{file_name}.abaco-tmp"));
+    // the destination and its `.bak` named as the system gives the name, whatever its encoding; the
+    // scratch copy, which the engine reopens to verify (its loader takes a UTF-8 path), by the
+    // name's readable spelling, its stem the one the workbook was computed as
+    let file_name = dest.file_name().ok_or_else(|| PatchError::Malformed(format!("{}: not a file path", dest.display())))?;
+    let readable = file_name.to_string_lossy().to_string();
+    let beside = |after: &str| {
+        let mut name = file_name.to_os_string();
+        name.push(after);
+        dir.join(name)
+    };
+    let scratch = dir.join(format!(".{readable}.abaco-tmp"));
     if scratch.exists() {
         // a previous run's, cut before it cleaned up
         std::fs::remove_dir_all(&scratch).map_err(|e| io_err(&scratch, e))?;
     }
     std::fs::create_dir(&scratch).map_err(|e| io_err(&scratch, e))?;
-    let written = scratch.join(&file_name);
+    let written = scratch.join(&readable);
     let result = (|| {
         std::fs::write(&written, bytes).map_err(|e| io_err(&written, e))?;
         check(&written)?;
@@ -2387,7 +2405,7 @@ fn commit(
         // or not), the destination's own permissions kept on its new version
         let permissions = dest.exists().then(|| std::fs::metadata(dest).map(|m| m.permissions())).transpose().map_err(|e| io_err(dest, e))?;
         if dest.exists() {
-            let bak = dir.join(format!("{file_name}.bak"));
+            let bak = beside(".bak");
             if bak.exists() {
                 std::fs::remove_file(&bak).map_err(|e| io_err(&bak, e))?;
             }

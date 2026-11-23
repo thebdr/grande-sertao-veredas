@@ -644,7 +644,7 @@ fn new_row(
             break;
         }
         pending.pop();
-        if let Some(c) = cell_for_write(k.0, k.1, None, w, col_styles, styles) {
+        if let Some(c) = cell_for_write(k.0, k.1, None, None, w, col_styles, styles) {
             cells.push_str(&c);
         }
     }
@@ -681,17 +681,20 @@ fn apply_row_op(tag: &str, op: &RowOp) -> String {
     t
 }
 
-/// A cell built for a write where no cell existed (or replacing one whose
-/// style `old_style` it keeps).
+/// A cell built for a write where no cell existed (or replacing one whose style `old_style` it
+/// keeps): a new cell takes its row's format where the row has one (`s` with `customFormat`), else
+/// its column's, as Excel gives a cell typed into a formatted row or column.
 fn cell_for_write(
     row: i32,
     col: i32,
     old_style: Option<&str>,
+    row_style: Option<&str>,
     w: &CellWrite,
     col_styles: &HashMap<i32, String>,
     styles: &mut StyleBook,
 ) -> Option<String> {
     let base = old_style
+        .or(row_style)
         .map(str::to_string)
         .or_else(|| col_styles.get(&col).cloned());
     let style = if w.style.is_empty() {
@@ -723,6 +726,8 @@ fn rewrite_row(
     out: &mut SheetOutcome,
 ) -> Result<Option<String>, PatchError> {
     let bad = |m: String| PatchError::Malformed(format!("sheet {:?} row {orig_r}: {m}", job.name));
+    // the row's own format, which a cell new in it takes (`customFormat` an xsd:boolean)
+    let row_style = attr(row_tag.text, "s").filter(|_| matches!(attr(row_tag.text, "customFormat"), Some("1" | "true")));
     let has_cols = own.iter().any(|s| !s.is_rows());
     let mut changed = new_r != orig_r || attr(row_tag.text, "r").is_none();
     let mut cells_added_or_dropped = false;
@@ -769,7 +774,7 @@ fn rewrite_row(
             .is_some_and(|(k, _)| k.0 == new_r && k.1 < new_c)
         {
             let (k, w) = pending.pop().ok_or_else(|| bad("pending".into()))?;
-            if let Some(c) = cell_for_write(k.0, k.1, None, w, col_styles, styles) {
+            if let Some(c) = cell_for_write(k.0, k.1, None, row_style, w, col_styles, styles) {
                 cells.push_str(&c);
             }
             changed = true;
@@ -811,7 +816,7 @@ fn rewrite_row(
     cells.push_str(&inner[pos..]);
     while pending.last().is_some_and(|(k, _)| k.0 == new_r) {
         let (k, w) = pending.pop().ok_or_else(|| bad("pending".into()))?;
-        if let Some(c) = cell_for_write(k.0, k.1, None, w, col_styles, styles) {
+        if let Some(c) = cell_for_write(k.0, k.1, None, row_style, w, col_styles, styles) {
             cells.push_str(&c);
         }
         changed = true;
@@ -878,7 +883,7 @@ fn rewrite_cell(
             if had_formula {
                 out.formulas_removed += 1;
             }
-            let s = cell_for_write(new.0, new.1, old_style, w, &HashMap::new(), styles);
+            let s = cell_for_write(new.0, new.1, old_style, None, w, &HashMap::new(), styles);
             // keep a style-only cell when the original had a style
             return Ok(match s {
                 Some(s) => CellOut::New(s),

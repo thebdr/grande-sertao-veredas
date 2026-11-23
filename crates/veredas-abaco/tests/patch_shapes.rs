@@ -1871,3 +1871,181 @@ fn a_sheet_s_name_is_read_as_xml_reads_its_attribute() {
     assert_eq!(report.outcomes[0].status, Status::Applied);
     assert_eq!(read_back(&dst, "Data Sheet", "A1"), Value::Number(2.0));
 }
+
+// ---- refute round 10 --------------------------------------------------------------------------
+
+/// Excel 365's metadata part marking `cm="1"` a dynamic array.
+fn dynamic_metadata() -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><metadata xmlns="{MAIN}" xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"><metadataTypes count="1"><metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/></metadataTypes><futureMetadata name="XLDAPR" count="1"><bk><extLst><ext uri="{{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}}"><xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/></ext></extLst></bk></futureMetadata><cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata></metadata>"#
+    )
+}
+
+#[test]
+fn spreadsheetml_under_a_prefix_of_the_strict_namespace_is_refused_too() {
+    // the engine reads the strict namespace under any prefix (fork change 26): so must the refusal
+    let strict = "http://purl.oclc.org/ooxml/spreadsheetml/main";
+    let dir = tempfile::tempdir().unwrap();
+    let dst = dir.path().join("out.xlsx");
+    let data: String = (1..=5).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    let src = dir.path().join("names.xlsx");
+    let book = workbook(&["S"], "").replace(&format!(r#"xmlns="{MAIN}""#), &format!(r#"xmlns="{MAIN}" xmlns:x="{strict}""#)).replace(
+        "<calcPr",
+        r#"<x:definedNames><x:definedName name="Rate">S!$A$3</x:definedName></x:definedNames><calcPr"#,
+    );
+    write_package(
+        &src,
+        &[("xl/workbook.xml", book), ("xl/_rels/workbook.xml.rels", rels(&[rel("rId1", "worksheet", "worksheets/sheet1.xml")])), ("xl/worksheets/sheet1.xml", worksheet(&data, ""))],
+    );
+    let src2 = dir.path().join("merges.xlsx");
+    let sheet = worksheet(&data, r#"<x:mergeCells count="1"><x:mergeCell ref="A3:B3"/></x:mergeCells>"#)
+        .replace(&format!(r#"xmlns="{MAIN}""#), &format!(r#"xmlns="{MAIN}" xmlns:x="{strict}""#));
+    plain_book(&src2, &[("S", sheet)], "", &[]);
+    for (src, part_name, element) in [(&src, "xl/workbook.xml", "x:definedNames"), (&src2, "xl/worksheets/sheet1.xml", "x:mergeCells")] {
+        for edits in [vec![], vec![rows("S", 1, 2), Edit::Formula { sheet: "S".into(), cell: "C1".into(), formula: "=A1*2".into(), expect: None }]] {
+            match patch(src, &dst, &edits, &verified()) {
+                Err(PatchError::Unsupported(m)) => assert!(m.contains(part_name) && m.contains(&format!("<{element}>")), "{m}"),
+                other => panic!("{part_name}: {other:?}"),
+            }
+            assert!(!dst.exists());
+        }
+    }
+}
+
+#[test]
+fn a_let_or_lambda_parameter_spelled_without_its_prefix_is_not_already_there() {
+    // Excel writes a parameter `_xlpm.x`; a file spelling it `x` is read alike by the engine
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("params.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="G1" cm="1"><f t="array" ref="G1">_xlfn.LET(x,1,x+A1)</f><v>2</v></c><c r="H1" cm="1"><f t="array" ref="H1">_xlfn.LET(_xlpm.x,1,_xlpm.x+A1)</f><v>2</v></c></row>"#;
+    let names = r#"<definedName name="Dbl">_xlfn.LAMBDA(x,x*2)</definedName><definedName name="Ok">_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2)</definedName>"#;
+    write_package(
+        &src,
+        &[
+            ("xl/workbook.xml", workbook(&["S"], names)),
+            ("xl/_rels/workbook.xml.rels", rels(&[rel("rId1", "worksheet", "worksheets/sheet1.xml"), rel("rId2", "sheetMetadata", "metadata.xml")])),
+            ("xl/worksheets/sheet1.xml", worksheet(data, "")),
+            ("xl/metadata.xml", dynamic_metadata()),
+        ],
+    );
+    let dst = dir.path().join("out.xlsx");
+    let formula = |cell: &str| Edit::Formula { sheet: "S".into(), cell: cell.into(), formula: "=LET(x,1,x+A1)".into(), expect: None };
+    let set = |name: &str| Edit::SetName { name: name.into(), formula: "=LAMBDA(x,x*2)".into(), scope: None };
+    let report = patch(&src, &dst, &[formula("G1"), formula("H1"), set("Dbl"), set("Ok")], &verified()).unwrap();
+    let statuses: Vec<Status> = report.outcomes.iter().map(|o| o.status).collect();
+    assert_eq!(&statuses[..2], [Status::Applied, Status::AlreadyThere], "{:?}", report.outcomes);
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(element(&sheet, "G1").unwrap().contains("_xlfn.LET(_xlpm.x,1,_xlpm.x+A1)"), "{sheet}");
+    let book = part(&dst, "xl/workbook.xml");
+    assert!(
+        book.contains(r#"<definedName name="Dbl">_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2)</definedName><definedName name="Ok">_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2)</definedName>"#),
+        "{book}"
+    );
+}
+
+#[test]
+fn a_lambda_name_local_to_another_sheet_is_no_function_a_cell_can_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("local.xlsx");
+    let names = r#"<definedName name="Sq" localSheetId="1">_xlfn.LAMBDA(_xlpm.x,_xlpm.x*_xlpm.x)</definedName>"#;
+    plain_book(&src, &[("S", worksheet("", "")), ("T", worksheet("", ""))], names, &[]);
+    let dst = dir.path().join("out.xlsx");
+    let formula = |sheet: &str| Edit::Formula { sheet: sheet.into(), cell: "D1".into(), formula: "=Sq(3)".into(), expect: None };
+    for edit in [formula("S"), Edit::SetName { name: "G".into(), formula: "=Sq(4)".into(), scope: None }] {
+        match patch(&src, &dst, std::slice::from_ref(&edit), &verified()) {
+            Err(PatchError::Unsupported(m)) => assert!(m.contains("SQ is a function the engine does not compute"), "{m}"),
+            other => panic!("{edit:?}: {other:?}"),
+        }
+        assert!(!dst.exists());
+    }
+    // on its own sheet, and in a name of that scope, it is the sheet's own
+    let report = patch(&src, &dst, &[formula("T"), Edit::SetName { name: "L".into(), formula: "=Sq(4)".into(), scope: Some("T".into()) }], &verified()).unwrap();
+    assert!(report.outcomes.iter().all(|o| o.status == Status::Applied), "{:?}", report.outcomes);
+    assert_eq!(read_back(&dst, "T", "D1"), Value::Number(9.0));
+}
+
+#[test]
+fn a_new_cell_in_a_formatted_row_takes_the_row_s_format() {
+    // row 2 formatted whole (`s="1"`, `customFormat="1"`): xf 1 a percentage in bold
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("row.xlsx");
+    let styles = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="{MAIN}"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="10" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>"#
+    );
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c></row><row r="2" s="1" customFormat="1"><c r="A2" s="1"><v>0.5</v></c></row>"#;
+    write_package(
+        &src,
+        &[
+            ("xl/workbook.xml", workbook(&["S"], "")),
+            ("xl/_rels/workbook.xml.rels", rels(&[rel("rId1", "worksheet", "worksheets/sheet1.xml"), rel("rId2", "styles", "styles.xml")])),
+            ("xl/worksheets/sheet1.xml", worksheet(data, "")),
+            ("xl/styles.xml", styles),
+        ],
+    );
+    let dst = dir.path().join("out.xlsx");
+    let edits = [
+        value("S", "B2", serde_json::json!(0.25)),
+        Edit::Formula { sheet: "S".into(), cell: "C2".into(), formula: "=A2/2".into(), expect: None },
+        Edit::Fill { sheet: "S".into(), area: "D2".into(), rgb: Some("FFFF00".into()) },
+    ];
+    patch(&src, &dst, &edits, &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert_eq!(element(&sheet, "B2"), Some(r#"<c r="B2" s="1"><v>0.25</v></c>"#), "{sheet}");
+    assert!(element(&sheet, "C2").unwrap().starts_with(r#"<c r="C2" s="1">"#), "{sheet}");
+    // the fill on a clone of the row's format: its number format and font kept
+    let d2 = element(&sheet, "D2").unwrap();
+    let xf: usize = d2.split(r#"s=""#).nth(1).unwrap().split('"').next().unwrap().parse().unwrap();
+    let styles = part(&dst, "xl/styles.xml");
+    let xfs = styles.split("<cellXfs").nth(1).unwrap();
+    let clone = xfs.split("<xf ").nth(xf + 1).unwrap();
+    assert!(clone.contains(r#"numFmtId="10""#) && clone.contains(r#"fontId="1""#) && !clone.contains(r#"fillId="0""#), "{clone}");
+}
+
+#[test]
+fn a_structured_reference_whose_column_holds_a_bracket_is_already_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("rate.xlsx");
+    let text = |c: &str, t: &str| format!(r#"<c r="{c}" t="inlineStr"><is><t>{t}</t></is></c>"#);
+    let data = format!(
+        r#"<row r="1"><c r="D1"><f>SUM(Table1[Rate(%)])</f><v>7</v></c></row><row r="2">{}{}</row><row r="3">{}<c r="B3"><v>3</v></c></row><row r="4">{}<c r="B4"><v>4</v></c></row>"#,
+        text("A2", "Name"),
+        text("B2", "Rate(%)"),
+        text("A3", "a"),
+        text("A4", "b")
+    );
+    let table = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><table xmlns="{MAIN}" id="1" name="Table1" displayName="Table1" ref="A2:B4" totalsRowShown="0"><autoFilter ref="A2:B4"/><tableColumns count="2"><tableColumn id="1" name="Name"/><tableColumn id="2" name="Rate(%)"/></tableColumns><tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>"#
+    );
+    write_package(
+        &src,
+        &[
+            ("xl/workbook.xml", workbook(&["T"], "")),
+            ("xl/_rels/workbook.xml.rels", rels(&[rel("rId1", "worksheet", "worksheets/sheet1.xml")])),
+            ("xl/worksheets/sheet1.xml", worksheet(&data, r#"<tableParts count="1"><tablePart r:id="rId1"/></tableParts>"#)),
+            ("xl/worksheets/_rels/sheet1.xml.rels", rels(&[rel("rId1", "table", "../tables/table1.xml")])),
+            ("xl/tables/table1.xml", table),
+        ],
+    );
+    let dst = dir.path().join("out.xlsx");
+    let report =
+        patch(&src, &dst, &[Edit::Formula { sheet: "T".into(), cell: "D1".into(), formula: "=SUM(Table1[Rate(%)])".into(), expect: None }], &verified()).unwrap();
+    assert_eq!(report.outcomes[0].status, Status::AlreadyThere, "{:?}", report.outcomes);
+}
+
+#[test]
+#[cfg(unix)]
+fn the_patch_keeps_a_destination_s_name_as_the_system_gives_it() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src.xlsx");
+    plain_book(&src, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row>"#, ""))], "", &[]);
+    let dst = dir.path().join(std::ffi::OsStr::from_bytes(b"caf\xe9.xlsx"));
+    let bak = dir.path().join(std::ffi::OsStr::from_bytes(b"caf\xe9.xlsx.bak"));
+    std::fs::write(&dst, b"previous").unwrap();
+    std::fs::write(&bak, b"older").unwrap();
+    patch(&src, &dst, &[value("S", "A1", serde_json::json!(2))], &verified()).unwrap();
+    assert_eq!(std::fs::read(&bak).unwrap(), b"previous");
+    let names: Vec<Vec<u8>> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().as_bytes().to_vec()).collect();
+    assert!(!names.iter().any(|n| String::from_utf8_lossy(n).contains('\u{FFFD}') && std::str::from_utf8(n).is_ok()), "{names:?}");
+    assert_eq!(names.len(), 3, "{names:?}");
+}

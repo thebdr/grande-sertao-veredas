@@ -693,10 +693,11 @@ pub fn shift_sqref(text: &str, shift: Shift) -> Option<String> {
 }
 
 
-/// Every function call of a formula as the file spells it: its prefix (`_xlfn.`, `_xlfn._xlws.`,
-/// none) and its name in upper case, in order, outside strings and quoted sheet names. Two
-/// formulas the engine reads alike (`IFNA(…)`, `_xlfn.IFNA(…)`) differ here: Excel reads the first
-/// as an unknown function.
+/// Every function call of a formula as the file spells it, its prefix (`_xlfn.`, `_xlfn._xlws.`,
+/// none) and its name in upper case, and every LET or LAMBDA parameter spelled `_xlpm.`, in order,
+/// outside strings, quoted sheet names and bracketed text (a table's column, `Table1[Rate(%)]`).
+/// Two formulas the engine reads alike (`IFNA(…)`, `_xlfn.IFNA(…)`; `LET(x,1,x)`,
+/// `_xlfn.LET(_xlpm.x,1,_xlpm.x)`) differ here: Excel reads the first of each otherwise.
 pub fn function_calls(formula: &str) -> Vec<(String, String)> {
     let chars: Vec<char> = formula.chars().collect();
     let mut out = Vec::new();
@@ -716,13 +717,33 @@ pub fn function_calls(formula: &str) -> Vec<(String, String)> {
                 }
             }
             i += 1;
+        } else if c == '[' {
+            // to the matching `]`, a `'` escaping the next character (`[Rate'[%']]`)
+            let mut depth = 0;
+            while i < chars.len() {
+                match chars[i] {
+                    '\'' => i += 1,
+                    '[' => depth += 1,
+                    ']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            i += 1;
         } else if c.is_alphabetic() || c == '_' || c == '\\' {
             let start = i;
             while i < chars.len() && (chars[i].is_alphanumeric() || matches!(chars[i], '_' | '.' | '\\')) {
                 i += 1;
             }
-            if chars.get(i) == Some(&'(') {
-                let word: String = chars[start..i].iter().collect::<String>().to_uppercase();
+            let word: String = chars[start..i].iter().collect::<String>().to_uppercase();
+            if let Some(parameter) = word.strip_prefix("_XLPM.") {
+                out.push(("_XLPM.".to_string(), parameter.to_string()));
+            } else if chars.get(i) == Some(&'(') {
                 let mut name = word.as_str();
                 let mut prefix = String::new();
                 for p in ["_XLFN.", "_XLWS."] {
@@ -752,6 +773,9 @@ mod tests {
             [pair("_XLFN.", "DAYS"), pair("_XLFN._XLWS.", "FILTER"), pair("", "ISO.CEILING"), pair("", "\\X")]
         );
         assert_ne!(function_calls("IFNA(A1,0)"), function_calls("_xlfn.IFNA(A1,0)"));
+        assert_ne!(function_calls("_xlfn.LET(x,1,x+A1)"), function_calls("_xlfn.LET(_xlpm.x,1,_xlpm.x+A1)"));
+        assert_eq!(function_calls("SUM(Table1[Rate(%)])"), [pair("", "SUM")]);
+        assert_eq!(function_calls("SUM(Table1[[#This Row],[a'[b(]])+MAX(1)"), [pair("", "SUM"), pair("", "MAX")]);
         assert_eq!(function_calls("SUM(A1)"), function_calls("sum(A1)"));
     }
 

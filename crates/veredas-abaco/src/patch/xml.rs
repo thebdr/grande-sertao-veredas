@@ -52,10 +52,12 @@ pub fn next_tag(s: &str, mut from: usize) -> Option<Tag<'_>> {
     }
 }
 
-/// SpreadsheetML's main namespace.
+/// SpreadsheetML's main namespace, transitional and strict.
 pub const MAIN_NS: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+pub const STRICT_MAIN_NS: &str = "http://purl.oclc.org/ooxml/spreadsheetml/main";
 
 /// The first element of a part named under a prefix bound to SpreadsheetML's main namespace
+/// (transitional or strict, both of which the engine reads)
 /// (`x:worksheet`, as the .NET Open XML SDK writes it by default, or `x:definedNames` inside an
 /// unprefixed root): the patcher reads tags by their literal, unprefixed names, as Excel writes
 /// them. A prefix declared and never used is no matter.
@@ -70,8 +72,7 @@ pub fn prefixed_main_element(s: &str) -> Option<String> {
         let rest = s[start + name.len()..].trim_start().strip_prefix('=').map(str::trim_start);
         if let Some(rest) = rest
             && let Some(q) = rest.chars().next().filter(|q| matches!(q, '"' | '\''))
-            && rest[1..].starts_with(MAIN_NS)
-            && rest[1 + MAIN_NS.len()..].starts_with(q)
+            && [MAIN_NS, STRICT_MAIN_NS].iter().any(|ns| rest[1..].starts_with(ns) && rest[1 + ns.len()..].starts_with(q))
             && !prefixes.contains(&name)
         {
             prefixes.push(name);
