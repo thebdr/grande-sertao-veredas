@@ -956,10 +956,13 @@ fn the_sources_read_as_compiled_hold_only_the_words_the_clause_allows() {
         // and that macro takes types alone, in one invocation, so it can re-emit nothing the reading did not see
         if file == "bits.rs" {
             let tokens: Vec<&str> = code.split(' ').collect();
-            // every fragment the macro takes is a type: no token tree, expression or attribute passes through it
+            // every fragment the macro takes is a type: no token tree, expression or attribute passes through it. A
+            // fragment is `$name:kind` with one of Rust's fragment kinds; `$crate::` and a bound `$t: Copy` are none
+            let kinds = ["block", "expr", "expr_2021", "ident", "item", "lifetime", "literal", "meta", "pat"];
+            let kinds = [&kinds[..], &["pat_param", "path", "stmt", "tt", "ty", "vis"]].concat();
             for at in 0..tokens.len().saturating_sub(3) {
-                let fragment = tokens[at] == "$" && tokens[at + 2] == ":" && words(tokens[at + 1]) == [tokens[at + 1]];
-                if fragment {
+                let named = tokens[at] == "$" && tokens[at + 2] == ":" && words(tokens[at + 1]) == [tokens[at + 1]];
+                if named && kinds.contains(&tokens[at + 3]) {
                     assert_eq!(tokens[at + 3], "ty", "bits.rs: impl_bits! takes a `{}` fragment", tokens[at + 3]);
                 }
             }
@@ -1612,4 +1615,20 @@ fn on_delays_and_off_delays_side_by_side_each_keep_their_own_start() {
     assert!(!c.scan(&at(110), false, ms(100)), "c dropped at 10 ms");
     assert!(d.scan(&at(110), false, ms(100)), "d dropped at 60 ms");
     assert!(!d.scan(&at(160), false, ms(100)));
+}
+
+// The twenty-third refute round: a held pulse whose pt is set to zero after its end.
+
+#[test]
+fn a_held_pulse_whose_pt_is_set_to_zero_after_its_end_holds_its_elapsed_time_at_zero() {
+    // a 100 ms pulse from a button held down, over at 100 ms, the button still held; an HMI then sets pt to zero
+    let mut p = Tp::default();
+    let mut tp = |t: u64, input: bool, pt: u64| (p.scan(&at(t), input, ms(pt)), p.q(), p.et());
+    assert_eq!(tp(0, true, 100), (true, true, ms(0)));
+    assert_eq!(tp(100, true, 100), (false, false, ms(100)), "over, held");
+    assert_eq!(tp(150, true, 100), (false, false, ms(100)));
+    assert_eq!(tp(160, true, 0), (false, false, ms(0)), "pt set to zero, held: its elapsed time at that scan's pt");
+    assert_eq!(tp(170, true, 0), (false, false, ms(0)));
+    assert_eq!(tp(180, true, 100), (false, false, ms(100)), "pt restored: at it again");
+    assert_eq!(tp(190, false, 100), (false, false, ms(0)), "released: reset");
 }
