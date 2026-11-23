@@ -456,12 +456,12 @@ pub fn ova_faults(r: &Recipe, ova: &Path, release: &str, opened: &Path) -> Resul
     let name = format!("veredas-{release}");
     let vmdk_name = format!("{name}-disk1.vmdk");
     let mut out = Vec::new();
-    let members = vm::run("tar", &["-tf", &ova.display().to_string()], None)?;
+    let members = vm::run_clean("tar", &["-tf", &ova.display().to_string()], None)?;
     let want = format!("{name}.ovf\n{name}.mf\n{vmdk_name}\n");
     if members != want {
         out.push(format!("the OVA's members are {members:?}, not {want:?}"));
     }
-    let listing = vm::run("tar", &["-tvf", &ova.display().to_string()], None)?;
+    let listing = vm::run_clean("tar", &["-tvf", &ova.display().to_string()], None)?;
     for l in listing.lines() {
         if !l.starts_with("-rw-r--r-- 0/0 ") {
             out.push(format!("an OVA member is not a 0644 file owned by root: {l}"));
@@ -502,62 +502,92 @@ pub fn ova_faults(r: &Recipe, ova: &Path, release: &str, opened: &Path) -> Resul
     Ok(out)
 }
 
-/// The OVF descriptor's faults, each value read inside its own element.
+/// Whether `n` is the element `local` of namespace `ns`.
+fn is(n: &roxmltree::Node, ns: &str, local: &str) -> bool {
+    n.is_element() && n.tag_name().namespace() == Some(ns) && n.tag_name().name() == local
+}
+
+/// The elements `local` of namespace `ns` directly under `n`.
+fn children<'a, 'i>(n: roxmltree::Node<'a, 'i>, ns: &str, local: &str) -> Vec<roxmltree::Node<'a, 'i>> {
+    n.children().filter(|c| is(c, ns, local)).collect()
+}
+
+/// The one node of a list, if it holds exactly one.
+fn one<'a, 'i>(list: Vec<roxmltree::Node<'a, 'i>>) -> Option<roxmltree::Node<'a, 'i>> {
+    if list.len() == 1 { Some(list[0]) } else { None }
+}
+
+/// The trimmed text of the element `local` of namespace `ns` directly under `n`.
+fn text_of(n: roxmltree::Node, ns: &str, local: &str) -> Option<String> {
+    n.children().find(|c| is(c, ns, local)).and_then(|c| c.text()).map(|t| t.trim().to_string())
+}
+
+/// The OVF descriptor's faults, read as VMware reads it: the Envelope in OVF's namespace, its
+/// References, DiskSection and VirtualSystem directly under it, the hardware the Items directly
+/// under the VirtualSystem's VirtualHardwareSection, each value an element of its own namespace
+/// (RASD for an Item's, VSSD for the System's) inside its own element.
 fn descriptor_faults(r: &Recipe, doc: &roxmltree::Document, vmdk_name: &str, size: u64, capacity: u64) -> Vec<String> {
     const OVF: &str = "http://schemas.dmtf.org/ovf/envelope/1";
     const VMW: &str = "http://www.vmware.com/schema/ovf";
+    const RASD: &str = "http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData";
+    const VSSD: &str = "http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_VirtualSystemSettingData";
     let mut out = Vec::new();
-    let named = |n: &roxmltree::Node, local: &str| n.is_element() && n.tag_name().name() == local;
-    let child_text = |n: &roxmltree::Node, local: &str| -> Option<String> {
-        n.children().find(|c| named(c, local)).and_then(|c| c.text()).map(|t| t.trim().to_string())
-    };
-    let all = |local: &str| doc.descendants().filter(|n| named(n, local)).collect::<Vec<_>>();
-    let files = all("File");
-    match files.as_slice() {
-        [f] if f.attribute((OVF, "id")) == Some("file1") && f.attribute((OVF, "href")) == Some(vmdk_name) && f.attribute((OVF, "size")) == Some(&size.to_string()) => {}
-        _ => out.push(format!("the descriptor names no one file `{vmdk_name}` of {size} bytes as file1")),
+    let root = doc.root_element();
+    if !is(&root, OVF, "Envelope") {
+        out.push("the descriptor's root is no OVF Envelope (its namespace or its name)".into());
+        return out;
     }
-    let disks = all("Disk");
+    let file = one(children(root, OVF, "References")).and_then(|refs| one(children(refs, OVF, "File")));
+    match file {
+        Some(f) if f.attribute((OVF, "id")) == Some("file1") && f.attribute((OVF, "href")) == Some(vmdk_name) && f.attribute((OVF, "size")) == Some(&size.to_string()) => {}
+        _ => out.push(format!("the descriptor's References name no one file `{vmdk_name}` of {size} bytes as file1")),
+    }
     let cap = capacity.to_string();
-    match disks.as_slice() {
-        [d] if d.attribute((OVF, "diskId")) == Some("vmdisk1")
-            && d.attribute((OVF, "fileRef")) == Some("file1")
-            && d.attribute((OVF, "capacity")) == Some(cap.as_str())
-            && d.attribute((OVF, "capacityAllocationUnits")) == Some("byte")
-            && d.attribute((OVF, "format")) == Some("http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized") => {}
-        _ => out.push(format!("the descriptor names no one stream-optimized disk vmdisk1 of {capacity} bytes on file1")),
+    let disk = one(children(root, OVF, "DiskSection")).and_then(|ds| one(children(ds, OVF, "Disk")));
+    match disk {
+        Some(d)
+            if d.attribute((OVF, "diskId")) == Some("vmdisk1")
+                && d.attribute((OVF, "fileRef")) == Some("file1")
+                && d.attribute((OVF, "capacity")) == Some(cap.as_str())
+                && d.attribute((OVF, "capacityAllocationUnits")) == Some("byte")
+                && d.attribute((OVF, "format")) == Some("http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized") => {}
+        _ => out.push(format!("the descriptor's DiskSection names no one stream-optimized disk vmdisk1 of {capacity} bytes on file1")),
     }
+    let Some(hardware) = one(children(root, OVF, "VirtualSystem")).and_then(|vs| one(children(vs, OVF, "VirtualHardwareSection"))) else {
+        out.push("the descriptor holds no one VirtualSystem with one VirtualHardwareSection".into());
+        return out;
+    };
     let system = format!("vmx-{:02}", r.machine.hardware_version);
-    if !all("VirtualSystemType").iter().any(|n| n.text().map(str::trim) == Some(system.as_str())) {
+    let found = one(children(hardware, OVF, "System")).and_then(|s| text_of(s, VSSD, "VirtualSystemType"));
+    if found.as_deref() != Some(system.as_str()) {
         out.push(format!("the descriptor's hardware version is not {system}"));
     }
-    let items = all("Item");
-    let of_type = |t: &str| items.iter().filter(|i| child_text(i, "ResourceType").as_deref() == Some(t)).copied().collect::<Vec<_>>();
+    let items = children(hardware, OVF, "Item");
+    let of_type = |t: &str| items.iter().filter(|i| text_of(**i, RASD, "ResourceType").as_deref() == Some(t)).copied().collect::<Vec<_>>();
     match of_type("3").as_slice() {
-        [cpu] if child_text(cpu, "VirtualQuantity") == Some(r.machine.cpus.to_string()) => {}
+        [cpu] if text_of(*cpu, RASD, "VirtualQuantity") == Some(r.machine.cpus.to_string()) => {}
         _ => out.push(format!("the descriptor's processors are not one item of {}", r.machine.cpus)),
     }
     match of_type("4").as_slice() {
-        [mem] if child_text(mem, "VirtualQuantity") == Some(r.machine.memory_mb.to_string()) && child_text(mem, "AllocationUnits").as_deref() == Some("byte * 2^20") => {}
+        [mem] if text_of(*mem, RASD, "VirtualQuantity") == Some(r.machine.memory_mb.to_string()) && text_of(*mem, RASD, "AllocationUnits").as_deref() == Some("byte * 2^20") => {}
         _ => out.push(format!("the descriptor's memory is not one item of {} MB", r.machine.memory_mb)),
     }
-    let scsi = of_type("6");
-    let controller = match scsi.as_slice() {
-        [c] if child_text(c, "ResourceSubType").as_deref() == Some("VirtualSCSI") => child_text(c, "InstanceID"),
+    let controller = match of_type("6").as_slice() {
+        [c] if text_of(*c, RASD, "ResourceSubType").as_deref() == Some("VirtualSCSI") => text_of(*c, RASD, "InstanceID"),
         _ => {
             out.push("the descriptor holds no one paravirtual SCSI controller (VirtualSCSI)".into());
             None
         }
     };
     match of_type("17").as_slice() {
-        [d] if child_text(d, "HostResource").as_deref() == Some("ovf:/disk/vmdisk1") && controller.is_some() && child_text(d, "Parent") == controller => {}
+        [d] if text_of(*d, RASD, "HostResource").as_deref() == Some("ovf:/disk/vmdisk1") && controller.is_some() && text_of(*d, RASD, "Parent") == controller => {}
         _ => out.push("the descriptor's hard disk is not one item on vmdisk1 under the paravirtual SCSI controller".into()),
     }
     match of_type("10").as_slice() {
-        [n] if child_text(n, "ResourceSubType").as_deref() == Some("VmxNet3") => {}
+        [n] if text_of(*n, RASD, "ResourceSubType").as_deref() == Some("VmxNet3") => {}
         _ => out.push("the descriptor holds no one VMXNET3 card".into()),
     }
-    let firmware = doc.descendants().any(|n| named(&n, "Config") && n.attribute((VMW, "key")) == Some("firmware") && n.attribute((VMW, "value")) == Some("bios"));
+    let firmware = hardware.children().any(|n| is(&n, VMW, "Config") && n.attribute((VMW, "key")) == Some("firmware") && n.attribute((VMW, "value")) == Some("bios"));
     if !firmware {
         out.push("the descriptor's firmware is not BIOS".into());
     }
@@ -592,7 +622,7 @@ pub fn prove(r: &Recipe, ova: &Path, release: &str, canvas: (u8, u8, u8), work: 
     let opened = work.join("opened");
     let _ = std::fs::remove_dir_all(&opened);
     std::fs::create_dir_all(&opened)?;
-    vm::run("tar", &["-xf", &ova.display().to_string(), "-C", &opened.display().to_string()], None)?;
+    vm::run_clean("tar", &["-xf", &ova.display().to_string(), "-C", &opened.display().to_string()], None)?;
     let ova_found = ova_faults(r, ova, release, &opened)?;
     let vmdk = opened.join(format!("veredas-{release}-disk1.vmdk"));
     let before = cache::sha256(&vmdk)?;

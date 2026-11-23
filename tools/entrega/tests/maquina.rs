@@ -63,8 +63,7 @@ fn the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vm
     ] {
         assert!(ovf.contains(&needle), "the descriptor holds no {needle}:\n{ovf}");
     }
-    let lint = std::process::Command::new("xmllint").arg("--noout").arg(opened.as_path().join(format!("{name}.ovf"))).output().unwrap();
-    assert!(lint.status.success(), "the descriptor is not well-formed XML: {}", String::from_utf8_lossy(&lint.stderr));
+    // Well-formed and read as VMware reads it: the proof's own `ova_faults`, asserted below (proof.ova).
     let mf = std::fs::read_to_string(opened.as_path().join(format!("{name}.mf"))).unwrap();
     assert_eq!(
         mf,

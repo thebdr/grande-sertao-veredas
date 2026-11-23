@@ -169,4 +169,25 @@ fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
     let broken = |s: String| s.replacen("</Envelope>", "", 1);
     let f = faults("broken", "streamOptimized", r.machine.disk_gb, &broken, right);
     assert!(f.len() == 1 && f[0].starts_with("the descriptor is not well-formed XML"), "{f:?}");
+    // Read as VMware reads it: by namespace and by section, never a bare tag found anywhere.
+    let no_default_ns = |s: String| s.replacen(r#"<Envelope xmlns="http://schemas.dmtf.org/ovf/envelope/1" "#, "<Envelope ", 1);
+    let f = faults("nons", "streamOptimized", r.machine.disk_gb, &no_default_ns, right);
+    assert_eq!(f, ["the descriptor's root is no OVF Envelope (its namespace or its name)"]);
+    let other_ovf = |s: String| s.replacen(r#"xmlns="http://schemas.dmtf.org/ovf/envelope/1""#, r#"xmlns="http://schemas.dmtf.org/ovf/envelope/2""#, 1);
+    let f = faults("ovf2", "streamOptimized", r.machine.disk_gb, &other_ovf, right);
+    assert_eq!(f, ["the descriptor's root is no OVF Envelope (its namespace or its name)"]);
+    let bad_rasd = |s: String| s.replacen("CIM_ResourceAllocationSettingData", "CIM_ResourceAllocationSettingDat", 1);
+    let f = faults("rasd", "streamOptimized", r.machine.disk_gb, &bad_rasd, right);
+    assert_eq!(f.len(), 5, "processors, memory, controller, disk and card all unread: {f:?}");
+    let bad_vssd = |s: String| s.replacen("CIM_VirtualSystemSettingData", "CIM_VirtualSystemSettingDat", 1);
+    let f = faults("vssd", "streamOptimized", r.machine.disk_gb, &bad_vssd, right);
+    assert_eq!(f, [format!("the descriptor's hardware version is not vmx-{:02}", r.machine.hardware_version)]);
+    let moved = |s: String| {
+        let start = s.find("      <Item>").unwrap();
+        let end = s.find(r#"      <vmw:Config ovf:required="false" vmw:key="firmware""#).unwrap();
+        let items = s[start..end].to_string();
+        s.replacen(&items, "", 1).replacen("    </OperatingSystemSection>", &format!("{items}    </OperatingSystemSection>"), 1)
+    };
+    let f = faults("moved", "streamOptimized", r.machine.disk_gb, &moved, right);
+    assert_eq!(f.len(), 5, "items outside VirtualHardwareSection are no hardware: {f:?}");
 }
