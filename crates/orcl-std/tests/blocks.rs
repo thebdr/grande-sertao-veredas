@@ -910,6 +910,7 @@ fn the_sources_read_as_compiled_hold_only_the_words_the_clause_allows() {
         // or debug-only code, anywhere
         for refused in [
             "extern",
+            "debugger_visualizer",
             "path",
             "include",
             "include_str",
@@ -1631,4 +1632,18 @@ fn a_held_pulse_whose_pt_is_set_to_zero_after_its_end_holds_its_elapsed_time_at_
     assert_eq!(tp(170, true, 0), (false, false, ms(0)));
     assert_eq!(tp(180, true, 100), (false, false, ms(100)), "pt restored: at it again");
     assert_eq!(tp(190, false, 100), (false, false, ms(0)), "released: reset");
+}
+
+// The twenty-fourth refute round: an on-delay dropped mid-delay, after a scan that measured time.
+
+#[test]
+fn an_on_delay_dropped_mid_delay_is_off_with_nothing_elapsed_until_its_next_rise() {
+    let mut on = Ton::default();
+    let mut ton = |t: u64, input: bool| (on.scan(&at(t), input, ms(100)), on.q(), on.et());
+    assert_eq!(ton(0, true), (false, false, ms(0)));
+    assert_eq!(ton(50, true), (false, false, ms(50)));
+    assert_eq!(ton(60, false), (false, false, ms(0)), "dropped mid-delay: off, restarted from zero");
+    assert_eq!(ton(70, false), (false, false, ms(0)), "and so while its input stays off");
+    assert_eq!(ton(80, true), (false, false, ms(0)), "a new rise");
+    assert_eq!(ton(180, true), (true, true, ms(100)), "pt after it");
 }
