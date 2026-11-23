@@ -1,13 +1,13 @@
 {
   "clause": "C-022",
   "verdict": "holds",
-  "ranAt": "2026-11-06T09:54:56.175Z",
-  "headCommit": "bebf978217460648776f738cad15181eb1a25207",
+  "ranAt": "2026-11-23T11:22:02.015Z",
+  "headCommit": "ac4b8aa4370445cf4fef8b6f6f8a74983f60e35c",
   "tests": [
     {
       "name": "crates/veredas-core/tests/opc_worker.rs",
       "file": "crates/veredas-core/tests/opc_worker.rs",
-      "symbolSha": "e03d4ded884be6aa8fd957732a0b549d28bd571d299bab878b455259b5bb670b"
+      "symbolSha": "d562c5ce6d780b53a256d0638a559fe458ed85d4a6839bdc89548fab29a6b0a2"
     }
   ]
 }

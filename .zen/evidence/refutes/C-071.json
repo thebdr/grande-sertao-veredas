@@ -1,13 +1,13 @@
 {
   "clause": "C-071",
   "verdict": "holds",
-  "ranAt": "2026-11-22T22:16:54.518Z",
-  "headCommit": "a9f13279bca142b122ba3b07ac62c32ed8b56b94",
+  "ranAt": "2026-11-23T11:22:02.074Z",
+  "headCommit": "ac4b8aa4370445cf4fef8b6f6f8a74983f60e35c",
   "tests": [
     {
       "name": "crates/veredas-core/tests/modbus_client.rs",
       "file": "crates/veredas-core/tests/modbus_client.rs",
-      "symbolSha": "dcc1d289ea334dea85950c44e49dd47cfca914ffe6b97ae2ec922014b715514e"
+      "symbolSha": "34fed75f5517aaa08bae326385f5512c6c7f45fd98264ab102b0f7855727feaf"
     },
     {
       "name": "tools/mestres/tests/modbus.rs",
