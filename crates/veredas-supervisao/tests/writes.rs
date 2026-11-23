@@ -68,6 +68,9 @@ const ALLOWED: &[&str] = &[
     "veredas_portal::session::HealthState", "veredas_portal::session::Live", "veredas_portal::session::Session",
     "veredas_portal::serve::store_now_ms", "veredas_portal::serve::router", "veredas_portal::serve::lttb",
     "veredas_portal::store::MAX_PAGE", "veredas_portal::store::RowsQuery",
+    // The files a session opens, read to compare two sessions' (C-048): a project's kind of store and
+    // the residency portal gives it.
+    "veredas_portal::project::Store", "veredas_portal::project::Store::PerSession", "veredas_portal::store::Residency", "veredas_portal::store::Residency::Disk",
     // An enum's variants and a type's functions, each by name: data read, a value built, a
     // session started, a series thinned.
     "veredas_core::SeriesType::Int", "veredas_core::SeriesType::Float", "veredas_core::SeriesType::Text", "veredas_core::SeriesType::Time",
@@ -77,7 +80,7 @@ const ALLOWED: &[&str] = &[
     "veredas_portal::session::Session::start", "veredas_portal::serve::lttb::downsample",
     // Of std's and tokio's files, programs, sockets and process: reading files, stdin, its one
     // listener, an address, an error, its own exit. Nothing that writes, runs or dials.
-    "std::fs::read_to_string", "std::fs::read_dir", "std::fs::read", "std::io", "std::io::Error", "std::io::ErrorKind::Interrupted", "std::io::Result", "std::io::stdin",
+    "std::fs::read_to_string", "std::fs::read_dir", "std::fs::read", "std::fs::canonicalize", "std::io", "std::io::Error", "std::io::ErrorKind::Interrupted", "std::io::Result", "std::io::stdin",
     "std::io::BufRead", "std::net::SocketAddr", "std::process::exit", "tokio::net::TcpListener::bind",
 ];
 
@@ -407,11 +410,13 @@ fn holds(toks: &[Tok], word: &str) -> bool {
 /// (`send`, `spawn`, `new`, `format`, `list`, `of`, `width`, ...), which this reading cannot tell apart:
 /// portal's search over logs at rest (C-094) named its fields `end`, `errors`, `events` and `matches`,
 /// which supervisão holds as a span's end of its own, tokio's `errors` module, its feed's own
-/// `events` and std's `matches!`, and calls nothing of that search.
+/// `events` and std's `matches!`, and calls nothing of that search; the supervisão file's reader reads
+/// the files a session would open (C-048), a session config's `residency` and a project's or a
+/// session config's `recording`, and calls std's `path::absolute`, a name portal declares too.
 const PORTAL_MEMBERS: &[&str] = &[
-    "as_str", "bytes", "channels", "check", "columns", "compile", "count", "data_type", "dir", "downsample", "end", "error", "errors", "events", "extract", "feed", "file", "file_name", "files", "format", "fresh", "from",
+    "as_str", "bytes", "channels", "check", "columns", "compile", "count", "data_type", "dir", "absolute", "downsample", "end", "error", "errors", "events", "extract", "feed", "file", "file_name", "files", "format", "fresh", "from",
     "from_ms", "get", "health", "id", "idx", "index_ms", "key", "keyed", "keys", "kind", "last_index_ms", "last_value", "len", "limit", "line", "list", "live", "load", "load_file",
-    "logs", "matches", "message", "name", "names", "new", "of", "offset", "opc", "parse_type", "path", "pattern", "points", "query_numeric", "query_rows", "remove", "router", "rows", "rules",
+    "logs", "matches", "message", "name", "names", "new", "of", "offset", "opc", "parse_type", "path", "pattern", "points", "query_numeric", "query_rows", "recording", "remove", "residency", "router", "rows", "rules",
     "samples", "scope", "send", "series", "serve", "server", "session_config", "snapshot", "source", "source_id", "sources", "spawn", "spec", "start", "state", "status", "stop",
     "stopped", "store", "store_now_ms", "subscribe", "table", "table_of", "tables", "tag", "tags", "text", "to", "to_ms", "toml", "total", "ty", "types", "value", "values",
     "width", "writable", "writes_armed", "y",

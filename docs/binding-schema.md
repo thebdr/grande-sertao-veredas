@@ -263,6 +263,11 @@ relative to the file's folder.
   bound: the session's portal surface is served at `/s/<name>/portal/`.
 - `binding` (required): the path of the session's binding file.
 
+No two sessions of one file open one database file: a store pinned to one file, or a store of
+each run's own or a record kept in one folder by projects of one name (each named from the
+project's name and the host's start, the same instant for every session), is refused when the file
+loads, naming both sessions; another name or another folder for one of them loads.
+
 ## The binding file: keys
 
 A path is relative to the binding file's folder.

@@ -1906,3 +1906,88 @@ fn one_session_at_the_root_hands_over_to_its_page_refusing_nothing() {
     drop(page);
     host.stop();
 }
+
+/// Every kind of store a project file names, and a record, is the one its session runs with under
+/// the host: four sessions side by side, each its own project (in memory; kept as a window of a
+/// minute with a record of each run's own; a file of each run's own in a folder; a file pinned),
+/// each read back from its own portal surface (the window's span, the record's file and limit, or
+/// none) and from the drive (the per-session file named from its project's name and the start in
+/// its folder, the pinned file, the record holding rows once stopped, nothing written for the
+/// others). Portal's kinds of store matched in full, so a kind added stops this compiling until it
+/// is driven. And a file whose two sessions would open one database file is refused by the
+/// executable's check as by the run (C-048's reader), nothing started.
+#[test]
+fn every_kind_of_store_a_project_keeps_is_the_one_its_session_runs_with() {
+    use veredas_portal::project::Store;
+    let kind = |s: &Store| match s {
+        Store::Ram => "ram",
+        Store::Window { .. } => "window",
+        Store::PerSession { .. } => "dir",
+        Store::Disk { .. } => "disk",
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(&dir.path().join("bench"));
+    let ex = live_example(&bench, false);
+    let path = write_example(dir.path(), &ex);
+    assert!(ex.project.contains("\nstore = \"ram\"\n") && ex.project.contains("\nname = \"the loop\"\n"));
+    let sessions = [
+        ("ram", "store = \"ram\""),
+        ("window", "store = { window_s = 60 }\nrecord = { dir = \"records\", max_mb = 2, every_s = 1 }"),
+        ("dir", "store = { dir = \"stores\" }"),
+        ("disk", "store = { disk = \"one.duckdb\" }"),
+    ];
+    let mut host_file = ex.host.split("[[session]]").next().unwrap().to_string();
+    for (name, store) in sessions {
+        let d = dir.path().join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("project.toml"), ex.project.replace("\nstore = \"ram\"\n", &format!("\n{store}\n")).replace("\nname = \"the loop\"\n", &format!("\nname = \"the {name}\"\n"))).unwrap();
+        for f in ["binding.toml", "layout.svg"] {
+            std::fs::copy(dir.path().join("loop").join(f), d.join(f)).unwrap();
+        }
+        std::fs::write(d.join("sorts.log"), "").unwrap();
+        host_file.push_str(&format!("[[session]]\nname = \"{name}\"\nproject = \"{name}/project.toml\"\nbinding = \"{name}/binding.toml\"\n\n"));
+    }
+    std::fs::write(&path, &host_file).unwrap();
+    let cfg = config::load_file(&path).unwrap();
+    let kinds: Vec<&str> = cfg.sessions.iter().map(|s| kind(&s.project.store)).collect();
+    assert_eq!(kinds, ["ram", "window", "dir", "disk"], "every kind of store a project names");
+    let host = Host::start(cfg).unwrap();
+    let addr = host.addr();
+    let report = |name: &str| get(addr, &format!("/s/{name}/portal/api/session")).1;
+    for (name, _) in sessions {
+        let r = report(name);
+        assert_eq!(r["session_name"], json!(format!("the {name}")), "{name}: {r}");
+        assert_eq!(r["window_ms"], if name == "window" { json!(60_000) } else { Value::Null }, "{name}: its window");
+        if name == "window" {
+            let file = r["recording"]["file"].as_str().unwrap_or_else(|| panic!("{name}: no record: {r}"));
+            let file = std::path::Path::new(file);
+            assert!(file.parent() == Some(dir.path().join("window/records").as_path()) && file.file_name().unwrap().to_string_lossy().starts_with("the_window-") && file.to_string_lossy().ends_with(".record.duckdb"), "{name}: its record {file:?}");
+            assert_eq!(r["recording"]["limit_bytes"], json!(2 * 1024 * 1024), "{name}: its record's limit");
+        } else {
+            assert_eq!(r["recording"], Value::Null, "{name}: no record");
+        }
+    }
+    // Its database file (its write-ahead log beside it while it runs).
+    let stores: Vec<_> = std::fs::read_dir(dir.path().join("dir/stores")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).filter(|f| f.ends_with(".duckdb")).collect();
+    assert!(stores.len() == 1 && stores[0].starts_with("the_dir-"), "dir: its store of its run's own {stores:?}");
+    assert!(dir.path().join("disk/one.duckdb").exists(), "disk: its pinned file");
+    for name in ["ram", "window"] {
+        let written: Vec<_> = std::fs::read_dir(dir.path().join(name)).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).filter(|f| f.contains(".duckdb")).collect();
+        assert_eq!(written, Vec::<String>::new(), "{name}: no store on the drive");
+    }
+    assert!(wait(Duration::from_secs(20), || report("window")["recording"]["recorded_rows"].as_u64().is_some_and(|n| n > 0)), "window: rows recorded {}", report("window"));
+    let record = std::path::PathBuf::from(report("window")["recording"]["file"].as_str().unwrap());
+    host.stop();
+    assert!(std::fs::metadata(&record).is_ok_and(|m| m.len() > 0), "window: its record on the drive once stopped");
+    // Two sessions whose projects share a name and a store folder: the check refuses the file, as
+    // the run would, and starts nothing.
+    for name in ["ram", "dir"] {
+        let p = dir.path().join(name).join("project.toml");
+        let text = std::fs::read_to_string(&p).unwrap().replace("\nstore = \"ram\"\n", "\nstore = { dir = \"../shared\" }\n").replace("\nstore = { dir = \"stores\" }\n", "\nstore = { dir = \"../shared\" }\n").replace(&format!("\nname = \"the {name}\"\n"), "\nname = \"the twin\"\n");
+        std::fs::write(&p, text).unwrap();
+    }
+    let out = Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).args([path.as_os_str(), "--check".as_ref()]).stdin(Stdio::null()).output().unwrap();
+    let said = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(out.status.code() == Some(2) && said.contains("session `dir`: its store (a file of each run's own in ") && said.contains("is the database file session `ram` opens for its store"), "the check of two sessions on one file: {:?} {said}", out.status.code());
+    assert!(!dir.path().join("shared").exists(), "the check started a session");
+}

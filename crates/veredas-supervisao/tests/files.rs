@@ -376,6 +376,49 @@ fn the_reference_is_the_text_this_test_holds() {
     assert_eq!(actual.len(), expected.len(), "docs/binding-schema.md has {} paragraphs, the copy {}", actual.len(), expected.len());
 }
 
+/// Two sessions of one host never open one database file: the host would start the first, and
+/// portal refuse the second, finding the first's database standing there (C-049's start), so the
+/// reader refuses the file first, naming both sessions, and its check with it. Two projects beside
+/// each other, `loop` and `hall`: one store folder under one project name (both a store of each
+/// run's own in it), the folder written two ways; one file pinned for both; one record folder under
+/// one name; and each beside a load: another name, another folder.
+#[test]
+fn two_sessions_never_open_one_database_file() {
+    let two = |loop_store: &str, hall_store: &str, hall_name: &str| -> Result<config::HostConfig, ConfigError> {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ex = example();
+        ex.host.push_str("\n[[session]]\nname = \"hall\"\nproject = \"hall/project.toml\"\nbinding = \"hall/binding.toml\"\n");
+        let path = write_example(dir.path(), &ex);
+        assert!(ex.project.contains("\nstore = \"ram\"\n") && ex.project.contains("\nname = \"the loop\"\n"));
+        std::fs::write(dir.path().join("loop/project.toml"), ex.project.replace("\nstore = \"ram\"\n", &format!("\n{loop_store}\n"))).unwrap();
+        std::fs::create_dir_all(dir.path().join("hall")).unwrap();
+        std::fs::write(dir.path().join("hall/project.toml"), ex.project.replace("\nstore = \"ram\"\n", &format!("\n{hall_store}\n")).replace("\nname = \"the loop\"\n", &format!("\nname = \"{hall_name}\"\n"))).unwrap();
+        for f in ["binding.toml", "layout.svg"] {
+            std::fs::copy(dir.path().join("loop").join(f), dir.path().join("hall").join(f)).unwrap();
+        }
+        config::load_file(&path)
+    };
+    let refused = |r: Result<config::HostConfig, ConfigError>| r.err().map(|e| e.to_string()).unwrap_or_else(|| "loaded".into());
+    let tail = |what: &str| format!(" is the database file session `loop` opens for its {what}: two sessions of one host open no file alike (give one project another name or another folder)");
+    // A store of each run's own, in one folder under one name: refused; the folder written as each
+    // project's `../stores`, and once through another folder's `..`.
+    for hall in ["store = { dir = \"../stores\" }", "store = { dir = \"../hall/./../stores/\" }"] {
+        let got = refused(two("store = { dir = \"../stores\" }", hall, "the loop"));
+        assert!(got.starts_with("session `hall`: its store (a file of each run's own in ") && got.contains(", named from the project's name `the loop` and the start)") && got.ends_with(&tail("store")), "{hall}: {got}");
+    }
+    assert!(two("store = { dir = \"../stores\" }", "store = { dir = \"../stores\" }", "the hall").is_ok(), "another name, one folder");
+    assert!(two("store = { dir = \"../stores\" }", "store = { dir = \"../other\" }", "the loop").is_ok(), "one name, another folder");
+    // One file pinned for both, whatever the projects' names.
+    let got = refused(two("store = { disk = \"../one.duckdb\" }", "store = { disk = \"../one.duckdb\" }", "the hall"));
+    assert!(got.starts_with("session `hall`: its store (") && got.contains("one.duckdb)") && got.ends_with(&tail("store")), "{got}");
+    assert!(two("store = { disk = \"../one.duckdb\" }", "store = { disk = \"../two.duckdb\" }", "the hall").is_ok(), "two files");
+    // A record of each run's own, in one folder under one name.
+    let rec = "store = \"ram\"\nrecord = { dir = \"../records\", max_mb = 5 }";
+    let got = refused(two(rec, rec, "the loop"));
+    assert!(got.starts_with("session `hall`: its record (a file of each run's own in ") && got.contains(", named from the project's name `the loop` and the start)") && got.ends_with(&tail("record")), "{got}");
+    assert!(two(rec, rec, "the hall").is_ok(), "another name, one record folder");
+}
+
 /// The keys a reader takes in a table, from its refusal of a misspelled key there.
 fn reader_keys(err: &str) -> std::collections::BTreeSet<String> {
     let at = err.find("expected ").unwrap_or_else(|| panic!("{err}"));
@@ -1009,6 +1052,11 @@ relative to the file's folder.
   (its refusals are portal's, named with the session). The project's own `[server]` address is not
   bound: the session's portal surface is served at `/s/<name>/portal/`.
 - `binding` (required): the path of the session's binding file.
+
+No two sessions of one file open one database file: a store pinned to one file, or a store of
+each run's own or a record kept in one folder by projects of one name (each named from the
+project's name and the host's start, the same instant for every session), is refused when the file
+loads, naming both sessions; another name or another folder for one of them loads.
 
 ## The binding file: keys
 

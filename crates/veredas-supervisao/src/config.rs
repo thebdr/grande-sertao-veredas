@@ -130,7 +130,67 @@ pub fn load(text: &str, base: &Path) -> Result<HostConfig, ConfigError> {
         let binding = binding::load(&text, &binding_base, &universe, &project.name).map_err(|reason| ConfigError::Binding { session: s.name.clone(), path: binding_path.clone(), reason })?;
         sessions.push(SessionSpec { name: s.name, project_path, project, binding_path, binding });
     }
+    shared_files(&sessions)?;
     Ok(HostConfig { bind, sessions })
+}
+
+/// Two sessions of one host never open one database file: the host starts the second, portal
+/// finds the first's database standing there and refuses it, so the check says so first. The files
+/// are the ones portal opens for each project (`session_config`): a store pinned to a file, a store
+/// of each run's own in a folder and a record, the last two named from the project's name and the
+/// start, the host's one instant for every session (read here at one instant alike).
+fn shared_files(sessions: &[SessionSpec]) -> Result<(), ConfigError> {
+    use veredas_portal::project::Store;
+    use veredas_portal::store::Residency;
+    let at = chrono::NaiveDateTime::default();
+    let mut opened: Vec<(PathBuf, &str, String)> = Vec::new();
+    for s in sessions {
+        let cfg = s.project.session_config(at);
+        let name = s.project.name.trim();
+        let mut files: Vec<(PathBuf, String)> = Vec::new();
+        if let Residency::Disk { path, .. } = &cfg.residency {
+            let what = match &s.project.store {
+                Store::PerSession { dir, .. } => format!("its store (a file of each run's own in {}, named from the project's name `{name}` and the start)", dir.display()),
+                _ => format!("its store ({})", path.display()),
+            };
+            files.push((path.clone(), what));
+        }
+        if let (Some(r), Some(rec)) = (&cfg.recording, &s.project.recording) {
+            files.push((r.file.clone(), format!("its record (a file of each run's own in {}, named from the project's name `{name}` and the start)", rec.dir.display())));
+        }
+        for (file, what) in files {
+            let at = same_place(&file);
+            if let Some((_, other, theirs)) = opened.iter().find(|(k, _, _)| *k == at) {
+                return Err(ConfigError::Invalid(format!(
+                    "session `{}`: {what} is the database file session `{other}` opens for {theirs}: two sessions of one host open no file alike (give one project another name or another folder)",
+                    s.name,
+                    theirs = theirs.split(" (").next().unwrap_or(theirs),
+                )));
+            }
+            opened.push((at, &s.name, what));
+        }
+    }
+    Ok(())
+}
+
+/// A file's place, read as one place however its path is written: made absolute, `.` and `..`
+/// folded, and its folder read through its links where it exists.
+fn same_place(p: &Path) -> PathBuf {
+    let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    let mut out = PathBuf::new();
+    for c in abs.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    match (out.parent(), out.file_name()) {
+        (Some(dir), Some(file)) => std::fs::canonicalize(dir).map(|d| d.join(file)).unwrap_or(out),
+        _ => out,
+    }
 }
 
 /// Read a supervisão file from disk; its folder is where its references live.
