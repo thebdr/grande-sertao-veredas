@@ -14,6 +14,7 @@ use std::io::BufRead;
 use ironcalc_base::expressions::parser::Parser;
 use ironcalc_base::types::{Cell, Row, SheetData};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
+use quick_xml::name::{Namespace, ResolveResult};
 
 use crate::error::XlsxError;
 
@@ -56,18 +57,42 @@ enum Tag {
     Value,
     Formula,
     InlineString,
+    /// A run of rich text (`<is><r>`), whose `<t>` is the string's.
+    Run,
     Text,
     Other,
 }
 
-fn tag_of(element: &BytesStart) -> Tag {
-    match element.local_name().as_ref() {
-        "row" => Tag::Row,
-        "c" => Tag::Cell,
-        "v" => Tag::Value,
-        "f" => Tag::Formula,
-        "is" => Tag::InlineString,
-        "t" => Tag::Text,
+/// SpreadsheetML's namespace, transitional and strict.
+const MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const STRICT_MAIN: &str = "http://purl.oclc.org/ooxml/spreadsheetml/main";
+
+/// Whether an element is SpreadsheetML's: in its namespace (under any prefix, the .NET SDK's `x:`
+/// among them), or in none, as a writer that declares no namespace leaves it.
+fn is_main(namespace: &ResolveResult) -> bool {
+    match namespace {
+        ResolveResult::Unbound => true,
+        ResolveResult::Bound(Namespace(n)) => *n == MAIN || *n == STRICT_MAIN,
+        ResolveResult::Unknown(_) => false,
+    }
+}
+
+/// What an element of the sheet's data is, by where the schema puts it (Veredas fork change 26): a
+/// `row` in `sheetData`, a `c` in a row, its `v`, `f` and `is`, the string's `t` and its runs'; an
+/// element anywhere else, or of another namespace (an extension's), is none of them, nor is all it
+/// holds.
+fn tag_of(element: &BytesStart, parent: Option<Tag>, main: bool) -> Tag {
+    if !main {
+        return Tag::Other;
+    }
+    match (parent, element.local_name().as_ref()) {
+        (None, "row") => Tag::Row,
+        (Some(Tag::Row), "c") => Tag::Cell,
+        (Some(Tag::Cell), "v") => Tag::Value,
+        (Some(Tag::Cell), "f") => Tag::Formula,
+        (Some(Tag::Cell), "is") => Tag::InlineString,
+        (Some(Tag::InlineString), "r") => Tag::Run,
+        (Some(Tag::InlineString | Tag::Run), "t") => Tag::Text,
         _ => Tag::Other,
     }
 }
@@ -170,15 +195,15 @@ fn cell_type_of(value: &str) -> Cow<'static, str> {
 }
 
 impl SheetDataReader<'_, '_> {
-    fn process(&mut self, event: &Event) -> Result<(), XlsxError> {
+    fn process(&mut self, event: &Event, main: bool) -> Result<(), XlsxError> {
         match event {
             Event::Start(element) => {
-                let tag = tag_of(element);
+                let tag = tag_of(element, self.stack.last().copied(), main);
                 self.open(tag, element)?;
                 self.stack.push(tag);
             }
             Event::Empty(element) => {
-                let tag = tag_of(element);
+                let tag = tag_of(element, self.stack.last().copied(), main);
                 self.open(tag, element)?;
                 self.close(tag)?;
             }
@@ -242,7 +267,7 @@ impl SheetDataReader<'_, '_> {
                     cell.rich_text = Some(String::new());
                 }
             }
-            Tag::Text | Tag::Other => {}
+            Tag::Run | Tag::Text | Tag::Other => {}
         }
         Ok(())
     }
@@ -633,7 +658,7 @@ pub(super) fn read_sheet_data<R: BufRead>(
     shared_strings: &mut SharedStringTable,
     dynamic_cm: &std::collections::HashSet<u32>,
 ) -> Result<SheetDataXml, XlsxError> {
-    let mut reader = quick_xml::Reader::from_reader(reader);
+    let mut reader = quick_xml::NsReader::from_reader(reader);
     let mut tree = XmlTreeBuilder::new();
     let mut buffer = Vec::new();
     let mut in_sheet_data = false;
@@ -655,11 +680,17 @@ pub(super) fn read_sheet_data<R: BufRead>(
         reference_buffer: String::new(),
         value_buffer: String::new(),
     };
+    // the elements open outside the sheet's data: its `sheetData` is the root's own child, never
+    // one inside an extension
+    let mut depth = 0usize;
     loop {
-        let event = reader.read_event_into(&mut buffer)?;
+        let (namespace, event) = reader.read_resolved_event_into(&mut buffer)?;
+        let main = is_main(&namespace);
         match &event {
             Event::Eof => break,
-            Event::Start(element) if !in_sheet_data && is_sheet_data(element) => {
+            Event::Start(element)
+                if !in_sheet_data && depth == 1 && main && is_sheet_data(element) =>
+            {
                 in_sheet_data = true;
             }
             Event::End(element)
@@ -667,9 +698,17 @@ pub(super) fn read_sheet_data<R: BufRead>(
             {
                 in_sheet_data = false;
             }
-            Event::Empty(element) if !in_sheet_data && is_sheet_data(element) => {}
-            _ if in_sheet_data => state.process(&event)?,
-            _ => tree.push(&event)?,
+            Event::Empty(element)
+                if !in_sheet_data && depth == 1 && main && is_sheet_data(element) => {}
+            _ if in_sheet_data => state.process(&event, main)?,
+            _ => {
+                match &event {
+                    Event::Start(_) => depth += 1,
+                    Event::End(_) => depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+                tree.push(&event)?
+            }
         }
         buffer.clear();
     }
@@ -706,6 +745,64 @@ mod tests {
         let mut strings = SharedStringTable::new(Vec::new());
         let dynamic: std::collections::HashSet<u32> = dynamic_cm.iter().copied().collect();
         read_sheet_data(xml.as_bytes(), "Sheet1", &mut parser, &mut strings, &dynamic).unwrap()
+    }
+
+    const NS: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
+    /// The cells of row 1 and 2 as (row, column, formula or value text).
+    fn cells(data: &SheetDataXml, strings: &[String]) -> Vec<String> {
+        let mut out = Vec::new();
+        for row in 1..=900 {
+            for column in 1..=26 {
+                if let Some(cell) = data.sheet_data.cell(row, column).map(|c| c.into_owned()) {
+                    let what = match cell {
+                        Cell::CellFormula { f, .. } => format!("f:{}", data.shared_formulas[f as usize]),
+                        Cell::NumberCell { v, .. } => format!("n:{v}"),
+                        Cell::SharedString { si, .. } => format!("s:{}", strings[si as usize]),
+                        other => format!("{other:?}"),
+                    };
+                    out.push(format!("{row},{column} {what}"));
+                }
+            }
+        }
+        out
+    }
+
+    fn read_with_strings(xml: &str) -> (SheetDataXml, Vec<String>) {
+        let mut parser = new_parser_english(vec!["Sheet1".to_string()], vec![], HashMap::new());
+        let mut strings = SharedStringTable::new(Vec::new());
+        let data = read_sheet_data(xml.as_bytes(), "Sheet1", &mut parser, &mut strings, &std::collections::HashSet::from([1])).unwrap();
+        (data, strings.into_strings())
+    }
+
+    #[test]
+    fn a_cell_is_read_only_where_the_schema_puts_it() {
+        // a sheet extension holding SpreadsheetML cells, and a cell of another namespace in a row:
+        // neither is one of the sheet's (fork change 26)
+        let xml = format!(
+            r#"<worksheet xmlns="{NS}"><sheetData><row r="2"><c r="A2"><v>1</v></c><c r="B2"><f>ABS(A2)</f><v>1</v></c><foo:c xmlns:foo="urn:example:foo" r="C2"><foo:v>9</foo:v></foo:c></row></sheetData><extLst><ext uri="{{00000000-0000-0000-0000-0000000000ab}}"><x:sheetData xmlns:x="{NS}"><x:row r="2"><x:c r="B2"><x:f>1</x:f><x:v>1</x:v></x:c></x:row><x:row r="900"><x:c r="Z900"><x:v>5</x:v></x:c></x:row></x:sheetData></ext></extLst></worksheet>"#
+        );
+        let (data, strings) = read_with_strings(&xml);
+        assert_eq!(cells(&data, &strings), ["2,1 n:1", "2,2 f:ABS(R[0]C[-1])"]);
+    }
+
+    #[test]
+    fn spreadsheetml_under_a_prefix_is_read_as_it_is_without_one() {
+        // the .NET Open XML SDK's default spelling
+        let xml = format!(r#"<x:worksheet xmlns:x="{NS}"><x:sheetData><x:row r="1"><x:c r="A1"><x:v>5</x:v></x:c><x:c r="B1"><x:f>A1*2</x:f><x:v>10</x:v></x:c></x:row></x:sheetData></x:worksheet>"#);
+        let (data, strings) = read_with_strings(&xml);
+        assert_eq!(cells(&data, &strings), ["1,1 n:5", "1,2 f:R[0]C[-1]*2"]);
+    }
+
+    #[test]
+    fn an_inline_string_is_its_runs_text_and_no_other() {
+        // the runs' text is the string's; a phonetic run's, a `t` outside `is`, and an element of
+        // another namespace are not
+        let xml = format!(
+            r#"<worksheet xmlns="{NS}"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><r><t>ab</t></r><r><rPr><b/></rPr><t>cd</t></r><rPh sb="0" eb="1"><t>zz</t></rPh></is></c><c r="B1" t="inlineStr"><is><t>e</t><foo:t xmlns:foo="urn:example:foo">x</foo:t></is><t>y</t></c></row></sheetData></worksheet>"#
+        );
+        let (data, strings) = read_with_strings(&xml);
+        assert_eq!(cells(&data, &strings), ["1,1 s:abcd", "1,2 s:e"]);
     }
 
     #[test]

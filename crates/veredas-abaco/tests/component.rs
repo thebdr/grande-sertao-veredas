@@ -553,9 +553,9 @@ fn locked(path: &Path) -> BTreeMap<String, BTreeSet<String>> {
 }
 
 /// The fork's suite, as upstream's tests and the changes' count them: upstream's 3 192 and their 8
-/// ignored at `15ecfec`, and the changes' 61 (seven of them changes 12, 14, 16, 17, 18 and 20's;
-/// four, two, one and four changes 22, 23, 24 and 25's).
-const FORK_PASSED: usize = 3253;
+/// ignored at `15ecfec`, and the changes' 64 (seven of them changes 12, 14, 16, 17, 18 and 20's;
+/// four, two, one, four and three changes 22, 23, 24, 25 and 26's).
+const FORK_PASSED: usize = 3256;
 const FORK_IGNORED: usize = 8;
 
 /// Upstream's ignored tests at `15ecfec`, by name.
