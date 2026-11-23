@@ -1,24 +1,26 @@
 {
   "clause": "C-133",
-  "command": "cargo test -p veredas-aranha --test lldp",
+  "command": "cargo test -j 4 -p veredas-aranha --test lldp",
   "commandArgv": [
     "cargo",
     "test",
+    "-j",
+    "4",
     "-p",
     "veredas-aranha",
     "--test",
     "lldp"
   ],
   "exitCode": 0,
-  "outputSha": "5cfa9dd8a10b4fca7fc48c1b8bddce13ed0a441bfb9f48b961c09d6405cab0af",
-  "outputTail": "test what_the_writer_takes_at_each_bound_the_reader_reads_back ... ok\ntest what_the_standard_does_not_let_a_tlv_say_is_read_as_unread ... ok\ntest damage_and_missing_tlvs_are_errors_that_name_them ... ok\ntest every_capability_bit_is_named_as_the_dissector_names_it ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\ntest the_dissector_reads_an_oid_as_ber_and_no_end_past_what_it_does_not_read ... ok\ntest the_dissectors_read_text_as_ascii_and_stop_at_a_nul ... ok\ntest ids_of_any_bytes_read_as_their_kind_and_the_dissector_reads_addresses_as_it_does ... ok\ntest any_bytes_decode_without_a_panic_and_rewrite_to_themselves ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.09s\n\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.48s\n     Running tests/lldp.rs (target/debug/build/veredas-aranha/600a647a317d2984/out/lldp-600a647a317d2984)",
-  "ranAt": "2026-11-23T03:42:01.124Z",
-  "headCommit": "ec5c651d3652aae9390673d388a6cf172801d75a",
+  "outputSha": "0548725f50db2f2ea6b5b203ae2e2a6873a6423e0b718ddfd43d4cb8eb72e661",
+  "outputTail": "test damage_and_missing_tlvs_are_errors_that_name_them ... ok\ntest any_bytes_decode_without_a_panic_and_rewrite_to_themselves ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\ntest the_dissectors_read_text_as_ascii_and_stop_at_a_nul ... ok\ntest every_capability_bit_is_named_as_the_dissector_names_it ... ok\ntest the_dissector_reads_an_oid_as_ber_and_no_end_past_what_it_does_not_read ... ok\ntest the_mandatory_three_are_read_in_their_place_only_and_a_repeat_is_kept ... ok\ntest ids_of_any_bytes_read_as_their_kind_and_the_dissector_reads_addresses_as_it_does ... ok\ntest what_tshark_reads_its_own_way_is_kept_and_never_written_and_a_shutdown_holds_the_three ... ok\n\ntest result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.28s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.23s\n     Running tests/lldp.rs (target/debug/build/veredas-aranha/600a647a317d2984/out/lldp-600a647a317d2984)",
+  "ranAt": "2026-11-23T11:24:47.258Z",
+  "headCommit": "94fd82a0b5adc0caaf8061c76e882afa3418ef00",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/lldp.rs",
       "file": "crates/veredas-aranha/tests/lldp.rs",
-      "fileSha": "00e3aa2bd6f33f0f228e34ff8173c19384547a1c24583cc038f552e2b403eb79"
+      "fileSha": "e969aa2c846a3352f465e02514362c5581219ae64a811c4cbfc10fcded57378e"
     },
     {
       "name": "crates/veredas-aranha/tests/common/mod.rs",
