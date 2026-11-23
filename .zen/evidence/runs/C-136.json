@@ -10,15 +10,15 @@
     "alarm"
   ],
   "exitCode": 0,
-  "outputSha": "227ea42c79f7f1b1bbb2195720108e54fc342b49acc2391dfed080fd061d5bfb",
-  "outputTail": "\nrunning 6 tests\ntest the_bits_are_named ... ok\ntest an_alarm_ack_and_the_transport_s_pdus_to_the_byte ... ok\ntest a_notification_is_its_header_and_its_block_to_the_byte ... ok\ntest what_would_read_back_as_another_is_refused ... ok\ntest what_is_not_read_is_kept_with_its_reason ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.90s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s\n     Running tests/alarm.rs (target/debug/build/veredas-aranha/ef9f766a493291cb/out/alarm-ef9f766a493291cb)",
-  "ranAt": "2026-11-23T01:59:56.990Z",
-  "headCommit": "a90c9cbbcae904804dc0443f7f5b65986c245787",
+  "outputSha": "402c683bba82a7a46083cd937182967fcce0b704700e357fc3301d918b5f6ab4",
+  "outputTail": "\nrunning 6 tests\ntest a_notification_is_its_header_and_its_block_to_the_byte ... ok\ntest the_bits_are_named ... ok\ntest an_alarm_ack_and_the_transport_s_pdus_to_the_byte ... ok\ntest what_would_read_back_as_another_is_refused ... ok\ntest what_is_not_read_is_kept_with_its_reason ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.66s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running tests/alarm.rs (target/debug/build/veredas-aranha/ef9f766a493291cb/out/alarm-ef9f766a493291cb)",
+  "ranAt": "2026-11-23T07:15:19.533Z",
+  "headCommit": "a50cdfdf3249e3f42c02de8f01f965b191684122",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/alarm.rs",
       "file": "crates/veredas-aranha/tests/alarm.rs",
-      "fileSha": "8b17947df244bfc0a9c65499502836d707ef90c3e172d20149923c78aee53f4b"
+      "fileSha": "0627d5d36a0da73c706b9781e413e04b0875f5328baa3c305d7a414cd938a748"
     },
     {
       "name": "crates/veredas-aranha/tests/common/mod.rs",
