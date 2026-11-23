@@ -237,21 +237,21 @@ pub fn unescape(s: &str) -> Cow<'_, str> {
 /// String → XML text (element content). Control characters Excel cannot
 /// carry raw are written as `_xHHHH_`, the OOXML escape Excel reads back.
 pub fn escape_text(s: &str) -> String {
+    let b = s.as_bytes();
     let mut out = String::with_capacity(s.len() + 8);
-    for c in s.chars() {
+    for (i, c) in s.char_indices() {
         match c {
+            // a literal "_xHHHH_" would read back as the character it names: its underscore is
+            // escaped itself ("_x005F_")
+            '_' if is_escape_at(b, i) => out.push_str("_x005F_"),
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
             '\t' | '\n' | '\r' => out.push(c),
-            c if (c as u32) < 0x20 => out.push_str(&format!("_x{:04X}_", c as u32)),
+            // what XML cannot carry: control characters, and the two non-characters U+FFFE and U+FFFF
+            c if (c as u32) < 0x20 || c == '\u{FFFE}' || c == '\u{FFFF}' => out.push_str(&format!("_x{:04X}_", c as u32)),
             c => out.push(c),
         }
-    }
-    // A literal "_xHHHH_" in the text would read back as the escaped
-    // character: its underscore is escaped itself ("_x005F_").
-    if out.contains("_x") {
-        out = protect_escapes(&out);
     }
     out
 }
@@ -262,32 +262,6 @@ fn is_escape_at(b: &[u8], i: usize) -> bool {
         && b[i + 1] == b'x'
         && b[i + 2..i + 6].iter().all(u8::is_ascii_hexdigit)
         && b[i + 6] == b'_'
-}
-
-fn protect_escapes(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = String::with_capacity(s.len() + 8);
-    let mut last = 0;
-    let mut i = 0;
-    while i < b.len() {
-        // our own control-character escapes were written just now; a literal
-        // one comes from the input — they cannot be told apart here, so the
-        // caller escapes control characters AFTER protecting (see escape_text).
-        if is_escape_at(b, i) && !is_control_escape(&s[i..i + 7]) {
-            out.push_str(&s[last..i]);
-            out.push_str("_x005F_");
-            last = i + 1;
-            i += 1;
-            continue;
-        }
-        i += 1;
-    }
-    out.push_str(&s[last..]);
-    out
-}
-
-fn is_control_escape(e: &str) -> bool {
-    u32::from_str_radix(&e[2..6], 16).is_ok_and(|v| v < 0x20 && v != 9 && v != 10 && v != 13)
 }
 
 /// Element text as Excel means it: XML entities, then the OOXML
@@ -390,6 +364,9 @@ mod tests {
         assert_eq!(escape_text("_x0041_"), "_x005F_x0041_");
         assert_eq!(decode_text("a_x000D_b"), "a\rb");
         assert_eq!(decode_text(&escape_text("_x0041_ \u{2}")), "_x0041_ \u{2}");
+        // a literal escape of a control character stays literal too
+        assert_eq!(escape_text("_x0001_\u{1}"), "_x005F_x0001__x0001_");
+        assert_eq!(decode_text(&escape_text("_x0001_\u{1}\u{FFFF}")), "_x0001_\u{1}\u{FFFF}");
         assert_eq!(inner("<v xml:space=\"preserve\"> a </v>", "v"), Some(" a "));
     }
 }

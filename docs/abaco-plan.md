@@ -338,6 +338,18 @@ classes, the report, the corpus list, and the parity test.
   entry, added when missing); fork change 21 opens the engine's static analysis for the judgement.
 - **A table's header is its column's name**: editing it without renaming the table column is a
   repair in Excel; such an edit is refused.
+- **A plain formula in the file is not the array an edit writes** (C-223's fifth round): the
+  engine reads both alike, so "already there" and an expectation compare the formula's kind too.
+  A one-value function given a range (`SUM(ABS(A1:A3))`) is lifted like an operator's part.
+- **A form control lives twice**: its `ctrlProp` attributes and the VML shape's `x:FmlaLink`,
+  `x:FmlaRange`, `x:FmlaTxbx` and `x:Anchor`; both copies move.
+- **Several edits of one cell**: only the last computes its content, or an overwritten formula is
+  looked for in a model that no longer holds it.
+- **XML cannot carry U+FFFE and U+FFFF**: written `_xFFFE_`, `_xFFFF_`; a literal `_xHHHH_` in a
+  text gets its underscore escaped (`_x005F_`), whatever character it names.
+- **Part names differ in more than case** (OPC): a new sheet's part takes a name free in any case.
+- **A metadata part may hold rich values only**: the dynamic-array type, its future-metadata list
+  and a cell entry are appended among the root's own children, never inside an entry's `extLst`.
 - **A read-only destination**: its `.bak` is read-only too after the first patch, so the next
   removes it before making a new one, and the destination keeps its own permissions.
 - **Calamine 0.26 does not build with zip 2.6**: the lock holds zip 2.4.2, the version Veredas 1's

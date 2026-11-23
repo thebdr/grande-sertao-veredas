@@ -1499,6 +1499,22 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
                 }
                 continue;
             }
+        // a conditional format's threshold (`<cfvo val>`): a number, or a formula moved as the
+        // format's own are
+        if name == "cfvo"
+            && let Some(val) = attr(t.text, "val")
+        {
+            let decoded = decode_text(val);
+            let shifted = match local.as_deref().or(anchor) {
+                Some(sqref) => shift_anchored(&decoded, sqref, job),
+                None => shift_text(&decoded, job),
+            };
+            match shifted {
+                Some(n) => out.push_str(&set_attr(t.text, "val", &crate::patch::xml::escape_attr(&n))),
+                None => out.push_str(t.text),
+            }
+            continue;
+        }
         if FORMULA_TEXT.contains(&name) && !t.self_closing
             && let Some(close) = xml::find_close(s, &t) {
                 let raw = &s[t.end..close.start];

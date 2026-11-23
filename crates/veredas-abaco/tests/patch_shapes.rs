@@ -1025,3 +1025,189 @@ fn charts_data_label_ranges_user_shapes_and_form_controls_follow_their_cells() {
     let control = part(&dst, "xl/ctrlProps/ctrlProp1.xml");
     assert!(control.contains(r#"fmlaLink="$A$4""#) && control.contains(r#"fmlaRange="$B$2:$B$4""#), "{control}");
 }
+
+// ---- refute round 5 ---------------------------------------------------------------------------
+
+#[test]
+fn a_conditional_formats_thresholds_follow_their_cells() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("scale.xlsx");
+    let data: String = (1..=6).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="D{r}"><v>{r}</v></c></row>"#)).collect();
+    let after = r#"<conditionalFormatting sqref="A3:A6"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="num" val="$D$1"/><cfvo type="formula" val="$D$2*2"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting><conditionalFormatting sqref="B3:B6"><cfRule type="dataBar" priority="2"><dataBar><cfvo type="num" val="$D$4"/><cfvo type="formula" val="MAX($D$1:$D$5)"/><color rgb="FF638EC6"/></dataBar></cfRule><cfRule type="iconSet" priority="3"><iconSet><cfvo type="percent" val="0"/><cfvo type="num" val="$D$5"/><cfvo type="num" val="5"/></iconSet></cfRule></conditionalFormatting>"#;
+    plain_book(&src, &[("S", worksheet(&data, after))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[rows("S", 1, 1)], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(r#"<conditionalFormatting sqref="A4:A7">"#), "{sheet}");
+    assert!(sheet.contains(r#"<cfvo type="num" val="$D$2"/><cfvo type="formula" val="$D$3*2"/><cfvo type="max"/>"#), "{sheet}");
+    assert!(sheet.contains(r#"<dataBar><cfvo type="num" val="$D$5"/><cfvo type="formula" val="MAX($D$2:$D$6)"/>"#), "{sheet}");
+    assert!(sheet.contains(r#"<iconSet><cfvo type="percent" val="0"/><cfvo type="num" val="$D$6"/><cfvo type="num" val="5"/></iconSet>"#), "{sheet}");
+}
+
+#[test]
+fn a_plain_formula_is_not_already_the_array_an_edit_writes() {
+    // D1 holds SUM(A1:A3*B1:B3) plain, as openpyxl or an older Excel write it: Excel reads 10
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("plain.xlsx");
+    let mut data: String =
+        (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="B{r}"><v>{}</v></c></row>"#, r * 10)).collect();
+    data = data.replacen("</row>", r#"<c r="D1"><f>SUM(A1:A3*B1:B3)</f><v>10</v></c></row>"#, 1);
+    plain_book(&src, &[("S", worksheet(&data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let edit = Edit::Formula { sheet: "S".into(), cell: "D1".into(), formula: "=SUM(A1:A3*B1:B3)".into(), expect: None };
+    let report = patch(&src, &dst, &[edit], &verified()).unwrap();
+    assert_eq!(report.outcomes[0].status, Status::Applied);
+    assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "D1"), Some(r#"<c r="D1" cm="1"><f t="array" ref="D1">SUM(A1:A3*B1:B3)</f><v>140</v></c>"#));
+}
+
+#[test]
+fn a_form_controls_vml_copy_follows_its_cells() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("control.xlsx");
+    let data: String = (1..=4).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="B{r}"><v>{r}</v></c></row>"#)).collect();
+    let vml = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><v:shape id="_x0000_s1025" type="#_x0000_t201" style="position:absolute"><x:ClientData ObjectType="Drop"><x:Anchor>3, 0, 2, 0, 5, 0, 3, 0</x:Anchor><x:FmlaLink>$A$3</x:FmlaLink><x:FmlaRange>$B$1:$B$3</x:FmlaRange></x:ClientData></v:shape></xml>"##;
+    let control = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><formControlPr xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" objectType="Drop" fmlaLink="$A$3" fmlaRange="$B$1:$B$3"/>"#;
+    plain_book(
+        &src,
+        &[("S", worksheet(&data, r#"<legacyDrawing r:id="rId1"/>"#))],
+        "",
+        &[
+            (
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                rels(&[rel("rId1", "vmlDrawing", "../drawings/vmlDrawing1.vml"), rel("rId2", "ctrlProp", "../ctrlProps/ctrlProp1.xml")]),
+            ),
+            ("xl/drawings/vmlDrawing1.vml", vml.to_string()),
+            ("xl/ctrlProps/ctrlProp1.xml", control.to_string()),
+        ],
+    );
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[rows("S", 1, 1)], &verified()).unwrap();
+    let vml = part(&dst, "xl/drawings/vmlDrawing1.vml");
+    assert!(vml.contains("<x:FmlaLink>$A$4</x:FmlaLink><x:FmlaRange>$B$2:$B$4</x:FmlaRange>"), "{vml}");
+    assert!(vml.contains("<x:Anchor>3, 0, 3, 0, 5, 0, 4, 0</x:Anchor>"), "{vml}");
+    assert!(part(&dst, "xl/ctrlProps/ctrlProp1.xml").contains(r#"fmlaLink="$A$4""#));
+}
+
+#[test]
+fn a_one_cell_legacy_array_is_overwritten_and_a_member_of_a_larger_one_is_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("legacy.xlsx");
+    let mut data: String =
+        (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="B{r}"><v>{}</v></c></row>"#, r * 10)).collect();
+    data = data.replacen("</row>", r#"<c r="D1"><f t="array" ref="D1">SUM(A1:A3*B1:B3)</f><v>140</v></c><c r="E1"><f t="array" ref="E1:E2">A1:A2*2</f><v>2</v></c></row>"#, 1);
+    data = data.replacen(r#"<c r="B2"><v>20</v></c></row>"#, r#"<c r="B2"><v>20</v></c><c r="E2"><v>4</v></c></row>"#, 1);
+    plain_book(&src, &[("S", worksheet(&data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let report = patch(&src, &dst, &[value("S", "D1", serde_json::json!(7)), value("S", "E2", serde_json::json!(9))], &verified()).unwrap();
+    assert_eq!(report.outcomes[0].status, Status::Applied);
+    assert_eq!(report.outcomes[1].status, Status::Conflict);
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert_eq!(element(&sheet, "D1"), Some(r#"<c r="D1"><v>7</v></c>"#), "{sheet}");
+}
+
+#[test]
+fn several_edits_of_one_cell_leave_the_last() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("twice.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    let formula = |cell: &str, f: &str| Edit::Formula { sheet: "S".into(), cell: cell.into(), formula: f.into(), expect: None };
+    for (edits, cell, want) in [
+        (vec![formula("D1", "=A1+B1"), value("S", "D1", serde_json::json!(4))], "D1", Some(r#"<c r="D1"><v>4</v></c>"#)),
+        (vec![formula("D1", "=A1+B1"), Edit::Clear { sheet: "S".into(), area: "D1".into() }], "D1", None),
+        (vec![formula("D1", "=SUM(A1:B1*2)"), value("S", "D1", serde_json::json!(4))], "D1", Some(r#"<c r="D1"><v>4</v></c>"#)),
+        (vec![formula("D1", "=A1+B1"), rows("S", 1, 1), value("S", "D2", serde_json::json!(4))], "D2", Some(r#"<c r="D2"><v>4</v></c>"#)),
+    ] {
+        let dst = dir.path().join("out.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &edits, &verified()).unwrap_or_else(|e| panic!("{edits:?}: {e}"));
+        assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), cell), want, "{edits:?}");
+    }
+}
+
+#[test]
+fn a_one_value_function_given_a_range_is_written_as_an_array() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("lifted.xlsx");
+    let data: String = (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>-{r}</v></c><c r="B{r}" t="inlineStr"><is><t>ab</t></is></c></row>"#)).collect();
+    plain_book(&src, &[("S", worksheet(&data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    for (f, v) in [
+        ("=SUM(ABS(A1:A3))", "6"),
+        ("=SUM(LEN(B1:B3))", "6"),
+        ("=SUMPRODUCT(ABS(A1:A3))", "6"),
+        ("=MAX(INT(A1:A3))", "-1"),
+        ("=MIN(ABS(A1:A3))", "1"),
+    ] {
+        let _ = std::fs::remove_file(&dst);
+        let edit = Edit::Formula { sheet: "S".into(), cell: "D5".into(), formula: f.into(), expect: None };
+        patch(&src, &dst, &[edit], &verified()).unwrap_or_else(|e| panic!("{f}: {e}"));
+        let d5 = element(&part(&dst, "xl/worksheets/sheet1.xml"), "D5").unwrap().to_string();
+        assert!(d5.contains(r#"cm="1""#) && d5.contains(r#"<f t="array" ref="D5">"#) && d5.ends_with(&format!("<v>{v}</v></c>")), "{f}: {d5}");
+    }
+}
+
+#[test]
+fn a_text_with_a_character_xml_cannot_carry_is_escaped() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("text.xlsx");
+    plain_book(&src, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row>"#, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let edits = vec![value("S", "B1", serde_json::json!("a\u{FFFF}b")), value("S", "B2", serde_json::json!("c\u{FFFE}d"))];
+    patch(&src, &dst, &edits, &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains("<t>a_xFFFF_b</t>") && sheet.contains("<t>c_xFFFE_d</t>"), "{sheet}");
+    assert!(!sheet.contains('\u{FFFF}') && !sheet.contains('\u{FFFE}'));
+    assert_eq!(read_back(&dst, "S", "B1"), Value::Text("a\u{FFFF}b".into()));
+}
+
+#[test]
+fn rows_past_the_last_are_refused_and_a_new_part_takes_a_name_free_in_any_case() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("edges.xlsx");
+    // its one worksheet's part is `Sheet1.xml`, capitalised
+    write_package(
+        &src,
+        &[
+            ("xl/workbook.xml", workbook(&["S"], "")),
+            ("xl/_rels/workbook.xml.rels", rels(&[rel("rId1", "worksheet", "worksheets/Sheet1.xml")])),
+            ("xl/worksheets/Sheet1.xml", worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row>"#, "")),
+        ],
+    );
+    let dst = dir.path().join("out.xlsx");
+    let outline = Edit::OutlineRows { sheet: "S".into(), first: 1_048_575, last: 1_048_578, level: 1, hidden: false };
+    assert!(patch(&src, &dst, &[outline], &verified()).is_err());
+    assert!(!dst.exists());
+    patch(&src, &dst, &[Edit::AddSheet { name: "New".into() }], &verified()).unwrap();
+    let names: Vec<String> = parts(&dst).into_keys().filter(|p| p.to_lowercase().starts_with("xl/worksheets/")).collect();
+    assert_eq!(names, ["xl/worksheets/Sheet1.xml", "xl/worksheets/sheet2.xml"]);
+}
+
+#[test]
+fn a_metadata_part_without_a_dynamic_array_entry_gets_one() {
+    // the workbook's metadata part holds rich values only (pictures in cells)
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("rich.xlsx");
+    let data: String =
+        (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="B{r}"><v>{}</v></c></row>"#, r * 10)).collect();
+    let metadata = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xlrd="http://schemas.microsoft.com/office/spreadsheetml/2017/richdata"><metadataTypes count="1"><metadataType name="XLRICHVALUE" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1"/></metadataTypes><futureMetadata name="XLRICHVALUE" count="1"><bk><extLst><ext uri="{3e2802c4-a4d2-4d8b-9148-e3be6c30e623}"><xlrd:rvb i="0"/></ext></extLst></bk></futureMetadata><valueMetadata count="1"><bk><rc t="1" v="0"/></bk></valueMetadata></metadata>"#;
+    write_package(
+        &src,
+        &[
+            ("xl/workbook.xml", workbook(&["S"], "")),
+            ("xl/_rels/workbook.xml.rels", rels(&[rel("rId1", "worksheet", "worksheets/sheet1.xml"), rel("rId2", "sheetMetadata", "metadata.xml")])),
+            ("xl/worksheets/sheet1.xml", worksheet(&data, "")),
+            ("xl/metadata.xml", metadata.to_string()),
+        ],
+    );
+    let dst = dir.path().join("out.xlsx");
+    let edit = Edit::Formula { sheet: "S".into(), cell: "D1".into(), formula: "=SUM(A1:A3*B1:B3)".into(), expect: None };
+    patch(&src, &dst, &[edit], &verified()).unwrap();
+    let m = part(&dst, "xl/metadata.xml");
+    assert!(m.contains(r#"<metadataTypes count="2">"#) && m.contains(r#"<metadataType name="XLDAPR""#), "{m}");
+    assert!(m.contains(r#"<futureMetadata name="XLDAPR" count="1">"#) && m.contains(r#"fDynamic="1""#), "{m}");
+    assert!(m.contains(r#"<cellMetadata count="1"><bk><rc t="2" v="0"/></bk></cellMetadata><valueMetadata"#), "{m}");
+    // the rich values kept
+    assert!(m.contains(r#"<valueMetadata count="1"><bk><rc t="1" v="0"/></bk></valueMetadata>"#), "{m}");
+    assert!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "D1").unwrap().contains(r#"cm="1""#));
+}

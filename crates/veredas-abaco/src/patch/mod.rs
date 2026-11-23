@@ -857,6 +857,30 @@ fn table_header_at(wb: &Workbook, sheet: &str, row: i32, col: i32) -> Option<Str
     })
 }
 
+/// The formula `formula` parsed as at `a`, `None` when it does not parse.
+fn parsed_at(wb: &Workbook, sheet: u32, a: Addr, formula: &str) -> Option<Node> {
+    let model = wb.model();
+    let names = model.workbook.get_worksheet_names();
+    let mut parser = new_parser_english(names.clone(), model.workbook.get_defined_names_with_scope(), model.workbook.tables.clone());
+    let ctx = CellReferenceRC { sheet: names.get(sheet as usize)?.clone(), row: a.row, column: a.column };
+    let body = formula.trim();
+    let node = parser.parse(body.strip_prefix('=').unwrap_or(body), &ctx);
+    (!matches!(node, Node::ParseErrorKind { .. })).then_some(node)
+}
+
+/// Whether a formula an edit writes at `a` would be written as an array (see `array_under_an_operator`).
+fn writes_as_array(wb: &Workbook, sheet: u32, a: Addr, formula: &str) -> bool {
+    use ironcalc_base::expressions::parser::static_analysis::{run_static_analysis_on_node, StaticResult};
+    parsed_at(wb, sheet, a, formula)
+        .is_some_and(|n| !matches!(run_static_analysis_on_node(&n), StaticResult::Scalar) || array_under_an_operator(&n))
+}
+
+/// Whether the cell holds an array formula (dynamic or legacy), which Excel reads otherwise than
+/// a plain one of the same text.
+fn holds_an_array(wb: &Workbook, sheet: u32, a: Addr) -> bool {
+    matches!(wb.content(sheet, a), Ok(Content::DynamicFormula(_) | Content::ArrayFormula { .. }))
+}
+
 /// A formula in file spelling as `wb` would write it at `a` — `None` when
 /// it does not parse.
 fn file_spelling(wb: &Workbook, sheet: u32, a: Addr, formula: &str) -> Option<String> {
@@ -898,7 +922,12 @@ fn array_under_an_operator(node: &Node) -> bool {
             not_single(left) || not_single(right) || array_under_an_operator(left) || array_under_an_operator(right)
         }
         Node::UnaryKind { right, .. } => not_single(right) || array_under_an_operator(right),
-        Node::FunctionKind { args, .. } | Node::NamedFunctionKind { args, .. } => args.iter().any(array_under_an_operator),
+        // a function inside another whose result may not be single (`ABS(A1:A3)` in `SUM(…)`): a
+        // plain formula intersects its argument, an array formula lifts it
+        Node::FunctionKind { args, .. } | Node::NamedFunctionKind { args, .. } => args.iter().any(|arg| {
+            (matches!(arg, Node::FunctionKind { .. } | Node::NamedFunctionKind { .. } | Node::LambdaCallKind { .. }) && not_single(arg))
+                || array_under_an_operator(arg)
+        }),
         Node::LambdaCallKind { lambda, args } => array_under_an_operator(lambda) || args.iter().any(array_under_an_operator),
         Node::ImplicitIntersection { child, .. } | Node::SpillRangeOperator { child } => array_under_an_operator(child),
         Node::OpRangeKind { left, right } => array_under_an_operator(left) || array_under_an_operator(right),
@@ -964,7 +993,7 @@ fn holds(wb: &Workbook, sheet: u32, a: Addr, expect: &Expect) -> Result<bool, St
         Expect::Formula { formula } => {
             let want = file_spelling(wb, sheet, a, formula)
                 .ok_or_else(|| format!("the expected formula does not parse: {formula}"))?;
-            Ok(current.as_deref() == Some(want.as_str()))
+            Ok(current.as_deref() == Some(want.as_str()) && writes_as_array(wb, sheet, a, formula) == holds_an_array(wb, sheet, a))
         }
         Expect::Value { value } => {
             if current.is_some() {
@@ -1064,9 +1093,14 @@ pub fn patch(
                     .and_then(|w| w.cell(a.row, a.column))
                     .map(|c| c.as_ref().clone())
                 {
-                    // a CSE/dynamic array is one object; a cell of it is not editable alone
-                    if formula_node(&wb, s, a).is_none()
-                        || matches!(wb.content(s, a), Ok(Content::ArrayFormula { .. }))
+                    // a CSE/dynamic array is one object; a cell of it is not editable alone (a
+                    // legacy array of one cell is the cell: Excel overwrites it)
+                    let one_cell = matches!(
+                        wb.model().workbook.worksheet(s).ok().and_then(|w| w.cell(a.row, a.column)).map(|c| c.as_ref().clone()),
+                        Some(Cell::ArrayFormula { r: (1, 1), .. })
+                    );
+                    if !one_cell
+                        && (formula_node(&wb, s, a).is_none() || matches!(wb.content(s, a), Ok(Content::ArrayFormula { .. })))
                     {
                         outcome.status = Status::Conflict;
                         outcome.note = format!("{canonical}!{a} is part of an array formula");
@@ -1080,6 +1114,7 @@ pub fn patch(
                     let want = file_spelling(&wb, s, a, &target)
                         .ok_or_else(|| fail(format!("the formula does not parse: {target}")))?;
                     current_file_formula(&wb, s, a).as_deref() == Some(want.as_str())
+                        && writes_as_array(&wb, s, a, &target) == holds_an_array(&wb, s, a)
                 } else {
                     let v = json_value(match edit {
                         Edit::Value { value, .. } => value,
@@ -1285,7 +1320,7 @@ pub fn patch(
                 hidden,
             } => {
                 let s = sheet_ix(&wb, sheet)?;
-                if *level > 7 || first > last || *first < 1 {
+                if *level > 7 || first > last || *first < 1 || *last > 1_048_576 {
                     return Err(fail("level 0–7 on rows first ≤ last".into()));
                 }
                 rows_ops.push(PendingRows {
@@ -1394,7 +1429,17 @@ pub fn patch(
         Some((row, col))
     };
     let mut final_writes: BTreeMap<String, BTreeMap<(i32, i32), CellWrite>> = BTreeMap::new();
-    for w in &writes {
+    // a cell several edits wrote holds the last one's content: only that one is computed (an
+    // earlier formula's text is gone from the model)
+    let mut last_content: BTreeMap<(String, i32, i32), usize> = BTreeMap::new();
+    for (i, w) in writes.iter().enumerate() {
+        if w.content.is_some()
+            && let Some((row, col)) = map_pos(&w.sheet, w.after, w.row, w.col)
+        {
+            last_content.insert((w.sheet.to_lowercase(), row, col), i);
+        }
+    }
+    for (index, w) in writes.iter().enumerate() {
         let Some((row, col)) = map_pos(&w.sheet, w.after, w.row, w.col) else {
             continue;
         };
@@ -1404,7 +1449,8 @@ pub fn patch(
             .entry((row, col))
             .or_default();
         entry.style.extend(w.style.iter().copied());
-        if let Some(c) = &w.content {
+        let last = last_content.get(&(w.sheet.to_lowercase(), row, col)) == Some(&index);
+        if let Some(c) = w.content.as_ref().filter(|_| last) {
             let s = wb
                 .sheet_index(&w.sheet)
                 .map_err(|e| PatchError::Malformed(e.to_string()))?;
@@ -1660,10 +1706,11 @@ pub fn patch(
     let mut rels_now = wb_rels.clone();
     for name in &new_sheets {
         let mut n = 1;
-        while pkg.has(&format!("xl/worksheets/sheet{n}.xml"))
+        // part names are told apart without case (the package's rule)
+        while pkg.names.iter().any(|p| p.eq_ignore_ascii_case(&format!("xl/worksheets/sheet{n}.xml")))
             || sheet_jobs
                 .iter()
-                .any(|(_, p, _)| *p == format!("xl/worksheets/sheet{n}.xml"))
+                .any(|(_, p, _)| p.eq_ignore_ascii_case(&format!("xl/worksheets/sheet{n}.xml")))
         {
             n += 1;
         }
@@ -1699,11 +1746,20 @@ pub fn patch(
     // ---- the dynamic-array metadata a written array formula points at (`cm`) ----
     if final_writes.values().flat_map(|m| m.values()).any(|w| matches!(w.content, Some(NewContent::Formula { cm: Some(_), .. }))) {
         let cm = match wb_rels.iter().find(|r| r.kind == "sheetMetadata") {
-            Some(r) => dynamic_cell_metadata(&pkg.read_text(&r.target)?).ok_or_else(|| {
-                PatchError::Unsupported(
-                    "the workbook's metadata part holds no dynamic-array entry to mark a written array formula with".into(),
-                )
-            })?,
+            Some(r) => {
+                let part = pkg.read_text(&r.target)?;
+                match dynamic_cell_metadata(&part) {
+                    Some(cm) => cm,
+                    None => {
+                        // its rich values kept; the dynamic-array entry appended
+                        let (grown, cm) = add_dynamic_entry(&part).ok_or_else(|| {
+                            PatchError::Malformed("the workbook's metadata part has no <metadata> to add a dynamic-array entry to".into())
+                        })?;
+                        replaced.insert(r.target.clone(), grown.into_bytes());
+                        cm
+                    }
+                }
+            }
             None => {
                 let mut n = 0;
                 let mut part = "xl/metadata.xml".to_string();
@@ -1832,7 +1888,20 @@ pub fn patch(
                         "threadedComment" if !own.is_empty() => {
                             package::shift_comments(&content, &own, "threadedComment").0
                         }
-                        "vmlDrawing" if !own.is_empty() => package::shift_vml(&content, &own),
+                        "vmlDrawing" => {
+                            // notes and controls follow this sheet's moves; a control's link and
+                            // list range (the VML copy of its ctrlProp) any move
+                            let anchored = if own.is_empty() { None } else { package::shift_vml(&content, &own) };
+                            let mut base = anchored.clone().unwrap_or(content.clone());
+                            let mut linked = false;
+                            for element in ["x:FmlaLink", "x:FmlaRange", "x:FmlaTxbx"] {
+                                if let Some(n) = package::shift_formula_elements(&base, element, &shifts, Some(name), &order) {
+                                    base = n;
+                                    linked = true;
+                                }
+                            }
+                            if linked { Some(base) } else { anchored }
+                        }
                         "drawing" => {
                             // charts hang off the drawing; their series formulas
                             // may point at any moved sheet
@@ -1843,7 +1912,7 @@ pub fn patch(
                             package::shift_textlinks(&base, &shifts, Some(name), &order).or(anchored)
                         }
                         // a form control's linked cell and its list's range
-                        "ctrlProp" => package::shift_link_attributes(&content, &["fmlaLink", "fmlaRange"], &shifts, Some(name), &order),
+                        "ctrlProp" => package::shift_link_attributes(&content, &["fmlaLink", "fmlaRange", "fmlaTxbx"], &shifts, Some(name), &order),
                         "table" => {
                             let t = if own.is_empty() {
                                 None
@@ -2088,6 +2157,74 @@ fn dynamic_cell_metadata(part: &str) -> Option<u32> {
             })
         })
         .map(|i| i as u32 + 1)
+}
+
+/// A metadata part with the dynamic-array entry appended (its type, its future metadata, a cell
+/// entry pointing at them, each list's `count` kept true), and that cell entry's `cm`.
+fn add_dynamic_entry(part: &str) -> Option<(String, u32)> {
+    let count_of = |s: &str, list: &str, item: &str| -> usize {
+        xml::inner(s, list).map(|inner| {
+            let mut n = 0;
+            let mut pos = 0;
+            while let Some(t) = xml::find_open(inner, item, pos) {
+                n += 1;
+                pos = xml::element_span(inner, &t).map(|(_, b)| b).unwrap_or(t.end);
+            }
+            n
+        }).unwrap_or(0)
+    };
+    // append `item` inside `list` (made before `before` when it does not exist), its count set
+    let append = |s: &str, list: &str, attrs: &str, item: &str, before: &[&str]| -> Option<String> {
+        // a new future-metadata list (one per name) holds its one entry
+        let n = if list == "futureMetadata" { 1 } else { count_of(s, list, if list == "metadataTypes" { "metadataType" } else { "bk" }) + 1 };
+        match xml::find_open(s, list, 0).filter(|_| list != "futureMetadata") {
+            Some(open) => {
+                let (_, b) = xml::element_span(s, &open)?;
+                let close = b - format!("</{list}>").len();
+                let tag = xml::set_attr(open.text, "count", &n.to_string());
+                Some(format!("{}{tag}{}{item}{}", &s[..open.start], &s[open.end..close], &s[close..]))
+            }
+            None => {
+                // before the first of the root's own children that must follow it (an `extLst`
+                // nested in a rich value's entry is not one of them)
+                let root = xml::find_open(s, "metadata", 0)?;
+                let mut at = xml::find_close(s, &root)?.start;
+                let mut pos = root.end;
+                while let Some(t) = xml::next_tag(s, pos).filter(|t| !t.closing && t.start < at) {
+                    if before.contains(&t.name) {
+                        at = t.start;
+                        break;
+                    }
+                    pos = xml::element_span(s, &t)?.1;
+                }
+                Some(format!("{}<{list}{attrs} count=\"{n}\">{item}</{list}>{}", &s[..at], &s[at..]))
+            }
+        }
+    };
+    let mut s = part.to_string();
+    if !s.contains("xmlns:xda=") {
+        let root = xml::find_open(&s, "metadata", 0)?;
+        let tag = xml::set_attr(root.text, "xmlns:xda", "http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray");
+        s = format!("{}{tag}{}", &s[..root.start], &s[root.end..]);
+    }
+    s = append(
+        &s,
+        "metadataTypes",
+        "",
+        r#"<metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/>"#,
+        &["metadataStrings", "mdxMetadata", "futureMetadata", "cellMetadata", "valueMetadata", "extLst"],
+    )?;
+    let type_index = count_of(&s, "metadataTypes", "metadataType");
+    s = append(
+        &s,
+        "futureMetadata",
+        r#" name="XLDAPR""#,
+        r#"<bk><extLst><ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"><xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/></ext></extLst></bk>"#,
+        &["cellMetadata", "valueMetadata", "extLst"],
+    )?;
+    s = append(&s, "cellMetadata", "", &format!(r#"<bk><rc t="{type_index}" v="0"/></bk>"#), &["valueMetadata", "extLst"])?;
+    let cm = count_of(&s, "cellMetadata", "bk") as u32;
+    Some((s, cm))
 }
 
 /// The charts a drawing part holds, their series formulas (`<c:f>`) moved with the grid; each

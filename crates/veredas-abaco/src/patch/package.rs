@@ -365,7 +365,17 @@ pub(crate) fn shift_vml(s: &str, own: &[Shift]) -> Option<String> {
                     out.push_str(&sh);
                 }
             }
-            _ => out.push_str(shape),
+            // a control (no cell of its own): its anchor follows the grid
+            _ => match xml::inner(shape, "x:Anchor").map(|a| a.split(',').filter_map(|n| n.trim().parse::<i32>().ok()).collect::<Vec<_>>()) {
+                Some(mut nums) if nums.len() == 8 => {
+                    for (i, rows) in [(0, false), (2, true), (4, false), (6, true)] {
+                        nums[i] = clamp(own, rows, nums[i] + 1) - 1;
+                    }
+                    let text = nums.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
+                    out.push_str(&replace_inner(shape, "x:Anchor", &text));
+                }
+                _ => out.push_str(shape),
+            },
         }
         pos = b;
     }
