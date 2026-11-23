@@ -10,15 +10,15 @@
     "peer"
   ],
   "exitCode": 0,
-  "outputSha": "e21dfa3ae3d3a909d5dba0771cf263f18c8c059974ecb9afe48badda958a2076",
-  "outputTail": "\nrunning 5 tests\ntest the_request_names_the_peer_and_encodes_its_values ... ok\ntest an_answer_is_read_by_its_framing ... ok\ntest a_reader_is_bounded_in_time_size_and_shape ... ok\ntest a_portal_follows_another_s_stream_its_lag_its_end_and_a_fresh_hello ... ok\ntest a_portal_reads_another_s_snapshot_listing_windows_tables_and_tags ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.14s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s\n     Running tests/peer.rs (target/debug/build/veredas-portal/622e4660e52328fc/out/peer-622e4660e52328fc)",
-  "ranAt": "2026-11-22T23:56:13.759Z",
-  "headCommit": "4aff20374202eb711b363a4ed5be8989a1cdc78e",
+  "outputSha": "fe871c61ac415cea31688594665f3ffa8624ca08204db83e004d2701905b406d",
+  "outputTail": "running 8 tests\ntest the_request_names_the_peer_and_encodes_its_values ... ok\ntest an_answer_is_read_by_its_framing ... ok\ntest every_bound_holds_whatever_the_framing ... ok\ntest a_value_that_is_no_finite_number_is_read_as_none_and_the_stream_goes_on ... ok\ntest a_portal_follows_another_s_stream_its_lag_its_end_and_a_fresh_hello ... ok\ntest a_portal_reads_another_s_snapshot_listing_windows_tables_and_tags ... ok\ntest a_reader_is_bounded_in_time_size_and_shape ... ok\ntest the_defaults_hold_a_dead_link_ten_seconds_and_keep_an_idle_stream_open ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.10s\n\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s\n     Running tests/peer.rs (target/debug/build/veredas-portal/622e4660e52328fc/out/peer-622e4660e52328fc)",
+  "ranAt": "2026-11-23T06:54:02.658Z",
+  "headCommit": "1716919b1735e6e379e87bcb4dc51a30e3856a6b",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/peer.rs",
       "file": "crates/veredas-portal/tests/peer.rs",
-      "fileSha": "62adc95392d355ce6291cab96518739982f9c554482ed303e798f2fed31fc2f8"
+      "fileSha": "41d41eabb9c74c6986d3f1f38beb2a3df1158a96d98649c22902591c449d4f59"
     }
   ]
 }
