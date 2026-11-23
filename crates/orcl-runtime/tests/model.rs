@@ -8,7 +8,8 @@
 //! next scan is the first whose deadline is not before the end, the others skipped and counted. The sequences are
 //! drawn so that starts, ends and writes land on deadlines, a nanosecond either side of them, and at one and two
 //! periods, with periods from a microsecond to two seconds; the program's safe outputs depend on its own state. One
-//! step in twenty the host is away for up to a million periods. Three mixes: anything (the watchdog's fault early in
+//! step in twenty the host is away for up to a million periods, and a wait that has to wait wakes past its deadline,
+//! by a nanosecond, part of a period or more, as a target's does under load. Three mixes: anything (the watchdog's fault early in
 //! most sequences), every scan held to twice the period (the task runs the whole way), and held so until a step drawn
 //! late in the run, after a drawn streak of time errors, where the task faults. After every step the model and the
 //! engine must agree on everything the clause states.
@@ -129,10 +130,11 @@ struct Seen {
 }
 
 impl Model {
-    fn step(&mut self, host: u128, read: u128, scan: u128) -> Seen {
+    fn step(&mut self, host: u128, wake: u128, read: u128, scan: u128) -> Seen {
         self.now += host;
         let due = self.cycle * self.period;
-        let start = self.now.max(due);
+        // a wait that has to wait wakes `wake` past the deadline; a deadline passed already runs at once
+        let start = if self.now < due { due + wake } else { self.now };
         self.now = start;
         let input = 100 + self.reads.len() as u64;
         self.reads.push(start);
@@ -229,8 +231,9 @@ fn draw_sequence(seed: u64, mix: Mix) -> (Draw, u128, Option<(usize, usize)>) {
     (draw, period, late_fault)
 }
 
-/// One step's draws: the host's delay before it, the read's and the program's lengths, and the write's.
-fn draw_step(draw: &mut Draw, model: &Model, mix: Mix, late_fault: Option<(usize, usize)>, step: usize) -> [u128; 4] {
+/// One step's draws: the host's delay before it, how late a wait wakes, the read's and the program's lengths, and
+/// the write's.
+fn draw_step(draw: &mut Draw, model: &Model, mix: Mix, late_fault: Option<(usize, usize)>, step: usize) -> [u128; 5] {
     let period = model.period;
     // one step in twenty the host is away for up to a million periods, coming back on a deadline, a nanosecond past
     // one, or anywhere in a period
@@ -246,7 +249,14 @@ fn draw_step(draw: &mut Draw, model: &Model, mix: Mix, late_fault: Option<(usize
     } else {
         0
     };
-    let start = (model.now + host).max(model.cycle * period);
+    let wake = match draw.below(6) {
+        0 => 1,
+        1 => draw.below(period / 3 + 1),
+        2 => draw.below(3 * period + 1),
+        _ => 0,
+    };
+    let (arrival, due) = (model.now + host, model.cycle * period);
+    let start = if arrival < due { due + wake } else { arrival };
     let total = length(draw, period, start, true);
     let total = match (mix, late_fault) {
         (Mix::Free, _) => total,
@@ -258,21 +268,41 @@ fn draw_step(draw: &mut Draw, model: &Model, mix: Mix, late_fault: Option<(usize
     };
     let read = draw.below(total + 1);
     let write = if draw.below(4) == 0 { length(draw, period, start + total, true) } else { 0 };
-    [host, read, total - read, write]
+    [host, wake, read, total - read, write]
+}
+
+/// Virtual time whose wait, when it has to wait, wakes `wake` past its deadline, as a target's does under load.
+struct WakesLate {
+    clock: VirtualClock,
+    wake: Duration,
+}
+
+impl Clock for WakesLate {
+    fn now(&self) -> Duration {
+        self.clock.now()
+    }
+
+    fn sleep_until(&mut self, deadline: Duration) {
+        let now = self.clock.now();
+        if deadline > now {
+            self.clock.advance(deadline + self.wake - now);
+        }
+    }
 }
 
 /// One sequence of `steps` scans, drawn as `mix` says.
 fn run_one(seed: u64, steps: usize, mix: Mix) {
     let (mut draw, period, late_fault) = draw_sequence(seed, mix);
-    let mut clock = VirtualClock::new();
+    let clock = VirtualClock::new();
     let costs = Rc::new(RefCell::new(Costs::default()));
     let program = Program1 { clock: clock.clone(), costs: costs.clone(), scans: 0, last_input: 0, last_scan: None };
     let mut task = Task::new(TaskConfig { name: "model", period: ns(period) }, program).unwrap();
     let mut plant = Plant { clock: clock.clone(), costs: costs.clone(), reads: Vec::new(), writes: Vec::new() };
     let mut model = Model { period, ..Model::default() };
+    let mut target = WakesLate { clock: clock.clone(), wake: Duration::ZERO };
 
     for step in 0..steps {
-        let [host, read, scan, write] = draw_step(&mut draw, &model, mix, late_fault, step);
+        let [host, wake, read, scan, write] = draw_step(&mut draw, &model, mix, late_fault, step);
         {
             let mut c = costs.borrow_mut();
             c.read.push(read);
@@ -281,9 +311,10 @@ fn run_one(seed: u64, steps: usize, mix: Mix) {
             }
             c.write.push(write);
         }
-        let want = model.step(host, read, if model.faulted.is_none() { scan } else { 0 });
+        let want = model.step(host, wake, read, if model.faulted.is_none() { scan } else { 0 });
         clock.advance(ns(host));
-        let report = task.step(&mut plant, &mut clock);
+        target.wake = ns(wake);
+        let report = task.step(&mut plant, &mut target);
         let at = format!("seed {seed}, period {period} ns, step {step}");
 
         assert_eq!(u128::from(report.scan.cycle), want.cycle, "{at}: the scan's cycle");
@@ -408,6 +439,49 @@ fn a_long_absence_counts_every_deadline_it_skipped() {
     assert_eq!(s.skipped, 299 + k - 1);
 }
 
+/// Runs 8 ms every scan, and keeps the time it was handed.
+struct Eight {
+    clock: VirtualClock,
+    handed: Vec<Duration>,
+}
+
+impl Program for Eight {
+    type Inputs = u64;
+    type Outputs = u64;
+
+    fn scan(&mut self, scan: &Scan, _inputs: &u64, outputs: &mut u64) {
+        self.handed.push(scan.now);
+        self.clock.advance(Duration::from_millis(8));
+        *outputs += 1;
+    }
+}
+
+/// The second scan of an 8 ms program on a 10 ms period, on a clock whose wait wakes `wake` past its deadline.
+fn second_scan_waking(wake: Duration) -> (Duration, Duration, bool, RunState, Duration, Vec<Duration>) {
+    let clock = VirtualClock::new();
+    let mut target = WakesLate { clock: clock.clone(), wake };
+    let program = Eight { clock: clock.clone(), handed: Vec::new() };
+    let period = Duration::from_millis(10);
+    let mut task = Task::new(TaskConfig { name: "late", period }, program).unwrap();
+    task.step(&mut Quiet, &mut target);
+    let r = task.step(&mut Quiet, &mut target);
+    let seen = (r.scan.now, r.exec, r.time_error, r.state, r.stats.max_lateness);
+    (seen.0, seen.1, seen.2, seen.3, seen.4, task.program().handed.clone())
+}
+
+#[test]
+fn a_wait_that_wakes_late_starts_the_scan_then_its_length_alone_judged() {
+    // the scan starts when the wait wakes, its lateness counted against its deadline, its length from its start, and
+    // the rule measures the length alone: 3 ms late is no time error, and 13 ms late no fault
+    let ms = Duration::from_millis;
+    let (now, exec, time_error, state, lateness, handed) = second_scan_waking(ms(3));
+    assert_eq!((now, exec, time_error, state, lateness), (ms(13), ms(8), false, RunState::Running, ms(3)));
+    assert_eq!(handed, [ms(0), ms(13)], "the program is handed the scan's start");
+    let (now, exec, time_error, state, lateness, handed) = second_scan_waking(ms(13));
+    assert_eq!((now, exec, time_error, state, lateness), (ms(23), ms(8), false, RunState::Running, ms(13)));
+    assert_eq!(handed, [ms(0), ms(23)], "the program is handed the scan's start");
+}
+
 /// Runs one and a half periods every scan: a time error each time, never a fault.
 struct Slow {
     clock: VirtualClock,
@@ -445,6 +519,7 @@ fn the_draws_reach_every_case_the_clause_names() {
     let (mut skips_after_a_fault, mut long_periods, mut slow_writes_across_a_deadline) = (0, 0, 0);
     let (mut faults_past_scan_1000, mut faults_after_20_time_errors, mut faults_after_10_in_a_row) = (0, 0, 0);
     let (mut faults_after_100_skips, mut late_by_1000_periods_running, mut late_by_1000_periods_faulted) = (0, 0, 0);
+    let mut woke_late = 0;
     let runs = [(Mix::Free, 0..4_000, 50), (Mix::Free, 10_000..10_040, 2_000), (Mix::NeverFaults, 20_000..20_040, 2_000)];
     let runs = runs.into_iter().chain([(Mix::FaultsLate, 30_000..30_100, 2_000)]);
     for (mix, seeds, steps) in runs {
@@ -456,10 +531,13 @@ fn the_draws_reach_every_case_the_clause_names() {
             let mut model = Model { period, ..Model::default() };
             let mut in_a_row = 0;
             for step in 0..steps {
-                let [host, read, scan, write] = draw_step(&mut draw, &model, mix, late_fault, step);
+                let [host, wake, read, scan, write] = draw_step(&mut draw, &model, mix, late_fault, step);
                 let was_faulted = model.faulted.is_some();
                 let skipped = model.skipped;
-                let seen = model.step(host, read, if was_faulted { 0 } else { scan });
+                if wake > 0 && model.now + host < model.cycle * period {
+                    woke_late += 1;
+                }
+                let seen = model.step(host, wake, read, if was_faulted { 0 } else { scan });
                 in_a_row = if seen.time_error { in_a_row + 1 } else { 0 };
                 let late = seen.start - seen.cycle * period;
                 if late > 0 && late < 1_000_000 && !late.is_multiple_of(1_000) {
@@ -512,6 +590,7 @@ fn the_draws_reach_every_case_the_clause_names() {
         ("a fault after 100 skipped deadlines", faults_after_100_skips),
         ("a running scan late by 1000 periods or more", late_by_1000_periods_running),
         ("a faulted scan late by 1000 periods or more", late_by_1000_periods_faulted),
+        ("a scan started by a wait that woke past its deadline", woke_late),
     ] {
         assert!(count >= 20, "{case}: reached {count} times only");
     }

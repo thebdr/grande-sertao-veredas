@@ -5,8 +5,8 @@
 //! That the clock only counts forward is read in the source, since no test can step the system's clock without
 //! privileges: it is `std::time::Instant`, never the settable `SystemTime` that NTP or a rewind moves, and its wait
 //! judges the deadline on that reading. Since another crate or unsafe code would reach the system's clock, or the
-//! operating system, without naming either, cargo's own report pins the engine to orcl-std alone, and its root to
-//! `forbid(unsafe_code)`.
+//! operating system, without naming either, cargo's own report pins the engine to orcl-std alone, with every
+//! feature on, and its root to `forbid(unsafe_code)`; and std is used only at the paths the engine needs.
 use orcl_runtime::{Clock, Io, MonoClock, RunState, Task, TaskConfig};
 use orcl_std::{Program, Scan};
 use std::time::{Duration, Instant};
@@ -130,6 +130,19 @@ const SOURCES: [(&str, &str); 3] = [
     ("task.rs", include_str!("../src/task.rs")),
 ];
 
+/// The paths at which the engine uses std, as they read with whitespace removed: formatting and the error trait,
+/// shared time for the virtual clock, the monotonic `Instant`, and a sleep and a spin for the target's wait.
+const STD_PATHS: [&str; 8] = [
+    "usestd::fmt;",
+    "usestd::time::Duration;",
+    "implstd::error::ErrorforTaskError{}",
+    "usestd::cell::Cell;",
+    "usestd::rc::Rc;",
+    "usestd::time::{Duration,Instant};",
+    "std::thread::sleep(remaining.saturating_sub(self.spin));",
+    "std::hint::spin_loop();",
+];
+
 /// A source with its comment lines taken out and every whitespace character removed.
 fn code_squeezed(text: &str) -> String {
     let code: Vec<&str> = text.lines().filter(|line| !line.trim_start().starts_with("//")).collect();
@@ -145,9 +158,16 @@ fn the_target_s_clock_reads_the_monotonic_instant_never_the_settable_system_time
         for refused in ["SystemTime", "UNIX_EPOCH"] {
             assert!(!code.contains(refused), "{file} names {refused}, the clock the system's time setting moves");
         }
-        for refused in ["thread::spawn", "process::"] {
-            assert!(!code.contains(refused), "{file} reaches the operating system with {refused}");
+        // and no file outside src/ is taken in, where none of this would be read
+        for refused in ["#[path", "include!(", "include_str!(", "include_bytes!("] {
+            assert!(!code.contains(refused), "{file} takes a file in with {refused}");
         }
+        // std only at the paths the engine needs: no thread started, no file, socket, environment or process
+        let lines: Vec<&str> = text.lines().filter(|line| !line.trim_start().starts_with("//")).collect();
+        let words = lines.join("\n");
+        let std_words = words.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| *w == "std").count();
+        let allowed = STD_PATHS.iter().map(|path| code.matches(path).count()).sum::<usize>();
+        assert_eq!(std_words, allowed, "{file} reaches std at a path the engine does not need");
     }
     let clock = code_squeezed(SOURCES[0].1);
     for needed in [
@@ -167,7 +187,7 @@ fn the_engine_depends_on_orcl_std_alone_and_forbids_unsafe_code() {
     // cargo's own report of the crate's normal and build dependencies, on every target
     let manifest = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
     let out = std::process::Command::new(env!("CARGO"))
-        .args(["tree", "-p", "orcl-runtime", "-e", "normal,build", "--depth", "1", "--prefix", "none"])
+        .args(["tree", "-p", "orcl-runtime", "-e", "normal,build", "--depth", "1", "--prefix", "none", "--all-features"])
         .args(["--target", "all", "--offline", "--manifest-path", manifest])
         .output()
         .unwrap();
