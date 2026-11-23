@@ -83,7 +83,8 @@ fn proof(console: &str, share: f64, after: &str) -> Proof {
 #[test]
 fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
     let card = format!("VEREDAS-CARD ens4 {}", maquina::PROOF_MAC);
-    let good = format!("vmw_pvscsi\nvmxnet3\nVEREDAS-SUMS-OK 2.0.0\n{card}\n");
+    let promised = "VEREDAS-SSH absent\nVEREDAS-CLOUD-INIT disabled\nVEREDAS-ON-PATH ok\n[    7.123998] systemd[1]: Initializing machine ID from random generator.\n";
+    let good = format!("vmw_pvscsi\nvmxnet3\nVEREDAS-SUMS-OK 2.0.0\n{card}\n{promised}");
     assert_eq!(maquina::proof_faults(&proof(&good, 0.3, "a"), "2.0.0"), Vec::<String>::new());
     let no_card = good.replace(&card, "VEREDAS-CARD ens4 52:54:00:12:34:56");
     assert_eq!(
@@ -99,6 +100,78 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
         maquina::proof_faults(&proof(&good.replace("VEREDAS-SUMS-OK 2.0.0", "VEREDAS-SUMS-FAILED 2.0.0"), 0.3, "a"), "2.0.0"),
         vec!["the boot did not check the release's sums (VEREDAS-SUMS-OK 2.0.0)".to_string()]
     );
+    // What the provisioning promised, each named when the boot does not say it.
+    for (said, instead, fault) in [
+        ("VEREDAS-SSH absent", "VEREDAS-SSH present", "the machine holds an SSH server (no `VEREDAS-SSH absent` on the console)"),
+        ("VEREDAS-CLOUD-INIT disabled", "VEREDAS-CLOUD-INIT enabled", "cloud-init is not disabled (no `VEREDAS-CLOUD-INIT disabled` on the console)"),
+        ("VEREDAS-ON-PATH ok", "VEREDAS-ON-PATH missing veredas-portal", "the release's executables are not all on the PATH (no `VEREDAS-ON-PATH ok` on the console)"),
+        (
+            "systemd[1]: Initializing machine ID from random generator.",
+            "systemd[1]: Detected first boot.",
+            "the shipped disk carries a machine identity (no `Initializing machine ID from random generator` on the console)",
+        ),
+    ] {
+        assert_eq!(maquina::proof_faults(&proof(&good.replace(said, instead), 0.3, "a"), "2.0.0"), vec![fault.to_string()], "{said}");
+    }
+    // The OVA's own faults are the proof's: `entrega prova` fails on an OVA VMware would refuse.
+    let mut bad_ova = proof(&good, 0.3, "a");
+    bad_ova.ova = vec!["the descriptor's processors are not one item of 2".to_string()];
+    assert_eq!(maquina::proof_faults(&bad_ova, "2.0.0"), vec!["the descriptor's processors are not one item of 2".to_string()]);
+}
+
+#[test]
+fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_before_any_login() {
+    let ok = "ENTREGA-STEP cleanup\n/boot/efi: 114.8 MiB (120395776 bytes) trimmed on /dev/vda15\n/: 12.9 GiB (13857087488 bytes) trimmed on /dev/vda1\nENTREGA-PROVISION-OK\nENTREGA-PROVISION-EXIT 0\n";
+    assert_eq!(maquina::provision_faults(ok), Vec::<String>::new());
+    assert_eq!(maquina::provision_faults(&ok.replace("ENTREGA-PROVISION-EXIT 0", "ENTREGA-PROVISION-EXIT 1")), ["no ENTREGA-PROVISION-EXIT 0"]);
+    assert_eq!(maquina::provision_faults(&ok.replace("ENTREGA-PROVISION-OK\n", "")), ["no ENTREGA-PROVISION-OK"]);
+    assert_eq!(
+        maquina::provision_faults(&ok.replace("/: 12.9 GiB (13857087488 bytes) trimmed on /dev/vda1\n", "")),
+        ["the root's free space was not trimmed (no `/: ... trimmed on` line)"]
+    );
+    // The script the machine is provisioned by: the SSH server purged, the executables linked onto
+    // the PATH, cloud-init off, the identity blanked, the space trimmed, and the boot's check said
+    // before a login starts on the serial console (whose agetty hangs the line up).
+    let r = Recipe::load_file(&repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    assert_eq!(r.machine.remove, ["openssh-server"]);
+    let s = maquina::provision_script(&r, "veredas-9.9.9-x86_64-unknown-linux-gnu", "9.9.9");
+    for line in [
+        "if [ -n \"openssh-server\" ]; then apt-get purge -y openssh-server; fi",
+        "for b in /opt/veredas/current/bin/*; do ln -sf \"$b\" /usr/local/bin/; done",
+        "touch /etc/cloud/cloud-init.disabled",
+        "truncate -s 0 /etc/machine-id",
+        "fstrim -av || true",
+    ] {
+        assert!(s.lines().any(|l| l == line), "{line}");
+    }
+    let unit = &s[s.find("cat > /etc/systemd/system/veredas-verifica.service").unwrap()..];
+    let unit = &unit[..unit.find("\nUNIT\n").unwrap()];
+    assert!(unit.lines().any(|l| l == "Before=serial-getty@ttyS0.service getty@tty1.service"), "{unit}");
+    assert!(unit.lines().any(|l| l == "StandardOutput=journal+console"), "{unit}");
+    // A recipe that leaves out what it removes is refused: removal is stated, never assumed.
+    let text = std::fs::read_to_string(repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    let without: String = text.lines().filter(|l| !l.starts_with("remove = ")).map(|l| format!("{l}\n")).collect();
+    assert_eq!(text.lines().count(), without.lines().count() + 1);
+    match Recipe::load(&without) {
+        Err(e) => assert!(e.to_string().contains("missing field `remove`"), "{e}"),
+        Ok(_) => panic!("a recipe without `remove` was read"),
+    }
+}
+
+#[test]
+fn the_base_image_is_refused_unless_it_matches_its_pinned_digest() {
+    let r = Recipe::load_file(&repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let image = cache.path().join(r.base_name());
+    std::fs::write(&image, "not the distribution's image\n").unwrap();
+    let got = entrega::cache::sha512(&image).unwrap();
+    match entrega::cache::base_image_in(cache.path(), &r) {
+        Err(entrega::vm::VmError::Failed { program, status, stderr }) => {
+            assert_eq!((program.as_str(), status.as_str()), ("the base image's check", "refused"));
+            assert_eq!(stderr, format!("{} has SHA-512 {got}, the recipe pins {}", image.display(), r.base.sha512));
+        }
+        other => panic!("not refused: {other:?}"),
+    }
 }
 
 #[test]
@@ -142,6 +215,15 @@ fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
         maquina::ova_faults(&r, &ova, "9.9.9", &opened).unwrap()
     };
     assert_eq!(faults("good", "streamOptimized", r.machine.disk_gb, &same, right), Vec::<String>::new());
+    // Another tar format than ustar (GNU's): its listing reads the same, its headers do not.
+    let (_, opened) = make("gnu", "streamOptimized", r.machine.disk_gb, &same, right);
+    let gnu = work.path().join("gnu-format.ova");
+    let names: Vec<String> = right.iter().map(|n| format!("{name}{n}")).collect();
+    let (o, d) = (gnu.display().to_string(), opened.display().to_string());
+    let mut args = vec!["--format=gnu", "--owner=0", "--group=0", "--numeric-owner", "--mode=a+r,u+w,go-w,a-x,ug-s", "-cf", &o, "-C", &d];
+    args.extend(names.iter().map(String::as_str));
+    entrega::vm::run("tar", &args, None).unwrap();
+    assert_eq!(maquina::ova_faults(&r, &gnu, "9.9.9", &opened).unwrap(), [r#"the OVA is no POSIX ustar archive: its first header's magic is "ustar  \0""#]);
     let f = faults("disordered", "streamOptimized", r.machine.disk_gb, &same, ["-disk1.vmdk", ".ovf", ".mf"]);
     assert!(f.len() == 1 && f[0].starts_with("the OVA's members are"), "{f:?}");
     // The disk itself: another subformat, another size than the descriptor states.
@@ -255,8 +337,10 @@ fn a_machine_is_built_only_from_a_cut_that_ran_to_its_end() {
         assert_eq!(refusal(maquina::from_release(root, release, target)), format!("{} is not the bundle's own release.toml: the bundle is not that cut's", at.display()));
         std::fs::remove_file(at).unwrap();
     }
-    // The cut's own manifest, a trial's or a real cut's: the machine goes on to the commit's recipe
-    // and guide (none here).
+    // The cut's own manifest, a trial's or a real cut's: the machine goes on to the recipe and guide
+    // at the commit the manifest names (no guide there), whatever the working tree holds (a recipe
+    // that would not read).
+    std::fs::write(root.join("tools/entrega/maquina/maquina.toml"), "format = \"veredas-machine\"\nversion = 9\n").unwrap();
     for at in [&trial, &real] {
         std::fs::write(at, &text).unwrap();
         assert_eq!(refusal(maquina::from_release(root, release, target)), format!("commit {commit} holds no tools/entrega/maquina/guide.md"));

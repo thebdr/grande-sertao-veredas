@@ -63,7 +63,6 @@ pub struct Machine {
     pub user: String,
     pub password: String,
     pub packages: Vec<String>,
-    #[serde(default)]
     pub remove: Vec<String>,
     pub supervisao_port: u16,
 }

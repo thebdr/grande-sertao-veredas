@@ -63,7 +63,13 @@ pub fn sha256_text(t: &str) -> String {
 /// The base image, downloaded once from its pinned address and checked against its pinned SHA-512
 /// every time it is handed out; a file that does not match is refused, never used.
 pub fn base_image(r: &Recipe) -> Result<PathBuf, VmError> {
-    let path = dir()?.join(r.base_name());
+    base_image_in(&dir()?, r)
+}
+
+/// [`base_image`] with its cache at `cache`: the base downloaded there once, and refused, both
+/// digests named, unless it matches the recipe's pinned SHA-512.
+pub fn base_image_in(cache: &Path, r: &Recipe) -> Result<PathBuf, VmError> {
+    let path = cache.join(r.base_name());
     if !path.exists() {
         let part = path.with_extension("part");
         eprintln!("entrega: downloading {} once into {}", r.base.url, path.display());

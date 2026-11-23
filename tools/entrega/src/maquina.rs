@@ -82,10 +82,16 @@ UNIT
 mkdir -p /usr/local/libexec
 cat > /usr/local/libexec/veredas-verifica <<'SCRIPT'
 #!/bin/sh
-# The release's files checked against its SHA256SUMS, and the network cards the machine sees.
+# The release's files checked against its SHA256SUMS, the network cards the machine sees, and
+# what the provisioning promised: no SSH server, cloud-init off, every executable on the PATH.
 cd /opt/veredas/current
 if sha256sum --quiet -c SHA256SUMS; then echo "VEREDAS-SUMS-OK {release}"; else echo "VEREDAS-SUMS-FAILED {release}"; fi
 for c in /sys/class/net/*; do n=$(basename "$c"); [ "$n" = lo ] || echo "VEREDAS-CARD $n $(cat "$c/address")"; done
+if [ -e /usr/sbin/sshd ] || [ -e /lib/systemd/system/ssh.service ] || [ -e /usr/lib/systemd/system/ssh.service ]; then echo "VEREDAS-SSH present"; else echo "VEREDAS-SSH absent"; fi
+if [ -e /etc/cloud/cloud-init.disabled ]; then echo "VEREDAS-CLOUD-INIT disabled"; else echo "VEREDAS-CLOUD-INIT enabled"; fi
+missing=
+for b in /opt/veredas/current/bin/*; do n=$(basename "$b"); [ "$(command -v "$n")" = "/usr/local/bin/$n" ] || missing="$missing $n"; done
+if [ -z "$missing" ]; then echo "VEREDAS-ON-PATH ok"; else echo "VEREDAS-ON-PATH missing$missing"; fi
 SCRIPT
 chmod 755 /usr/local/libexec/veredas-verifica
 cat > /etc/systemd/system/veredas-verifica.service <<'UNIT'
@@ -284,8 +290,9 @@ pub fn build(r: &Recipe, bundle: &Path, bundle_dir: &str, release: &str, guide: 
     })?;
     m.wait_off(Duration::from_secs(90 * 60))?;
     let text = vm::read_console(&console);
-    if !text.contains("ENTREGA-PROVISION-OK") || !text.contains("ENTREGA-PROVISION-EXIT 0") {
-        return Err(VmError::Failed { program: "the tester machine's provisioning".into(), status: "no ENTREGA-PROVISION-OK".into(), stderr: vm::tail(&text, 60) });
+    let faults = provision_faults(&text);
+    if !faults.is_empty() {
+        return Err(VmError::Failed { program: "the tester machine's provisioning".into(), status: faults.join("; "), stderr: vm::tail(&text, 60) });
     }
     let name = format!("veredas-{release}");
     let vmdk_name = format!("{name}-disk1.vmdk");
@@ -371,6 +378,23 @@ pub fn boot(r: &Recipe, vmdk: &Path, port: u16, qmp: Option<u16>, console: &Path
 /// (`releases/<release>.toml` for a real cut, `<work>/<release>.toml` for a trial) and, wherever it
 /// is, the bundle's own `release.toml` byte for byte. A cut refused after packing (its run together
 /// failed) leaves a bundle and no manifest; a machine is never built from such a bundle.
+/// Why the provisioning's console (its log's tail, then its exit) does not show it finished: no
+/// `ENTREGA-PROVISION-OK`, another exit than 0, or the root's free space not trimmed (`fstrim`'s
+/// line for `/`). Empty when it does.
+pub fn provision_faults(console: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if !console.contains("ENTREGA-PROVISION-OK") {
+        out.push("no ENTREGA-PROVISION-OK".to_string());
+    }
+    if !console.contains("ENTREGA-PROVISION-EXIT 0") {
+        out.push("no ENTREGA-PROVISION-EXIT 0".to_string());
+    }
+    if !console.lines().any(|l| l.contains("/: ") && l.contains(" trimmed on ")) {
+        out.push("the root's free space was not trimmed (no `/: ... trimmed on` line)".to_string());
+    }
+    out
+}
+
 pub fn cut_finished(root: &Path, release: &str, work: &Path, bundle_manifest: &str) -> Result<(), VmError> {
     let refused = |stderr: String| VmError::Failed { program: "the tester machine".into(), status: "refused".into(), stderr };
     let places = [root.join("releases").join(format!("{release}.toml")), work.join(format!("{release}.toml"))];
@@ -487,6 +511,13 @@ pub fn ova_faults(r: &Recipe, ova: &Path, release: &str, opened: &Path) -> Resul
     let want = format!("{name}.ovf\n{name}.mf\n{vmdk_name}\n");
     if members != want {
         out.push(format!("the OVA's members are {members:?}, not {want:?}"));
+    }
+    // A POSIX ustar archive, as VMware's OVF tools write and read one: its first header's magic.
+    let mut head = vec![0u8; 512];
+    let read = std::fs::File::open(ova).and_then(|mut f| std::io::Read::read(&mut f, &mut head))?;
+    let magic: &[u8] = head.get(257..265).filter(|_| read == 512).unwrap_or_default();
+    if magic != b"ustar\x0000" {
+        out.push(format!("the OVA is no POSIX ustar archive: its first header's magic is {:?}", String::from_utf8_lossy(magic)));
     }
     let listing = vm::run_clean("tar", &["-tvf", &ova.display().to_string()], None)?;
     for l in listing.lines() {
@@ -689,6 +720,17 @@ pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
     let mut out = p.ova.clone();
     if !p.console.contains(&format!("VEREDAS-SUMS-OK {release}")) {
         out.push(format!("the boot did not check the release's sums (VEREDAS-SUMS-OK {release})"));
+    }
+    // What the provisioning promised, as the boot's check says it and systemd at a first boot.
+    for (line, what) in [
+        ("VEREDAS-SSH absent", "the machine holds an SSH server"),
+        ("VEREDAS-CLOUD-INIT disabled", "cloud-init is not disabled"),
+        ("VEREDAS-ON-PATH ok", "the release's executables are not all on the PATH"),
+        ("Initializing machine ID from random generator", "the shipped disk carries a machine identity"),
+    ] {
+        if !p.console.contains(line) {
+            out.push(format!("{what} (no `{line}` on the console)"));
+        }
     }
     for driver in ["vmw_pvscsi", "vmxnet3"] {
         if !p.console.contains(driver) {

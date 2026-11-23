@@ -222,6 +222,10 @@ and the bundle's own `release.toml` byte for byte; a bundle a refused cut left b
   prove; the proof boot draws on QEMU's standard VGA.
 - **The network takes VMware's card**: the proof boot gives the card an address of VMware's
   prefix that the provisioning never saw, and the boot's check names the cards it sees.
+- **The machine is what the provisioning promised**: the boot's check says there is no SSH server,
+  cloud-init is disabled and every executable of the release is on the `PATH`, and systemd says it
+  initializes a machine identity (the shipped disk's is blank); the build itself refuses a
+  provisioning whose log does not end finished with the root's free space trimmed.
 - **The plant runs from the first boot**: from the host, through a port QEMU forwards to the
   machine's 8902, the test reads supervisão's page and the plant's object feed and sees every
   object live, the parcels move and the sorter's lines arrive; a write the binding offers is
