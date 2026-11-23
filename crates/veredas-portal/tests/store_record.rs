@@ -154,23 +154,51 @@ fn a_record_is_written_once_a_period_whatever_the_poll_rate() {
     let log = dir.path().join("plant.log");
     std::fs::write(&log, "").unwrap();
     let mut cfg = session_config("seldom", &log, &bench, port);
-    cfg.recording = Some(RecordingConfig { file: dir.path().join("seldom.record.duckdb"), limit_bytes: 64 << 20, write_every: Duration::from_secs(2) });
+    let record = dir.path().join("seldom.record.duckdb");
+    cfg.recording = Some(RecordingConfig { file: record.clone(), limit_bytes: 64 << 20, write_every: Duration::from_secs(2) });
     let session = Session::start(cfg).unwrap();
     let live = session.live();
     assert!(wait(Duration::from_secs(20), || live.counters.read().unwrap().polls >= 20));
     // Looks every 20 ms until four writes are seen: the rows recorded change at writes alone (the
     // status is published at each), every write two seconds after the one before, a pass's
-    // lateness and a margin for a loaded machine aside, never sooner.
+    // lateness and a margin for a loaded machine aside, never sooner. And the drive itself, the
+    // record's file and its log (their sizes and times), changes at those writes alone: as often,
+    // as far apart, never between two.
+    let on_drive = |f: &Path| -> Vec<(u64, Option<std::time::SystemTime>)> {
+        [f.to_path_buf(), std::path::PathBuf::from(format!("{}.wal", f.display()))]
+            .iter()
+            .map(|p| std::fs::metadata(p).map(|m| (m.len(), m.modified().ok())).unwrap_or((0, None)))
+            .collect()
+    };
     let started = std::time::Instant::now();
     let mut last = status(&live).recorded_rows;
+    let mut drive = on_drive(&record);
     let mut changes: Vec<std::time::Duration> = Vec::new();
+    let mut drive_changes: Vec<std::time::Duration> = Vec::new();
     while changes.len() < 4 && started.elapsed() < Duration::from_secs(12) {
+        let held = on_drive(&record);
+        if held != drive {
+            drive_changes.push(started.elapsed());
+            drive = held;
+        }
         let now = status(&live).recorded_rows;
         if now != last {
             changes.push(started.elapsed());
             last = now;
         }
         std::thread::sleep(Duration::from_millis(20));
+    }
+    // A write the first look missed the start of (its bytes down, its status not yet published)
+    // counts on the status alone.
+    assert!(
+        drive_changes.len() == changes.len() || drive_changes.len() + 1 == changes.len(),
+        "the drive changed {} times for {} writes: {drive_changes:?} against {changes:?}",
+        drive_changes.len(),
+        changes.len()
+    );
+    for pair in drive_changes.windows(2) {
+        let gap = pair[1] - pair[0];
+        assert!(gap >= Duration::from_millis(1_800) && gap <= Duration::from_millis(2_600), "the drive written twice {gap:?} apart: {drive_changes:?}");
     }
     assert_eq!(changes.len(), 4, "four writes at one every two seconds: {changes:?}");
     for pair in changes.windows(2) {
