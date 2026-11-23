@@ -27,6 +27,8 @@ serde_json = { workspace = true }
 # its SHA-256.
 toml = { workspace = true }
 sha2 = { workspace = true }
+# A key no structure of the engine takes, at any depth of a part, is refused by its path.
+serde_ignored = { workspace = true }
 
 [dev-dependencies]
 # tests/component.rs reads cargo's metadata and the root manifest.

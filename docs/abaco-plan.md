@@ -60,7 +60,9 @@ so through portal, the row L5's map already holds); Excel as a renderer (Q342).
   row or file; the log is text a sheet can show.
 - **Plain text is TOML and states its schema** (the plan, "Versioning"; law L7): the `.abaco`
   file's parts, the preferences, an edit file. Read through core's header reader
-  (`veredas_core::schema`), a newer version refused, never guessed.
+  (`veredas_core::schema`), a newer version refused, never guessed; while core carries its
+  network layers, Ábaco compiles that reader's own source by path (Q345). A key nothing reads is
+  refused at any depth.
 - **The engine's changes live in the fork**, one upstream-shaped commit each, listed in
   `forks/ironcalc/VEREDAS-FORK.md`; Ábaco's own crate adds policy, never engine
   behaviour, so each change can go upstream on its own.
@@ -91,9 +93,10 @@ so through portal, the row L5's map already holds); Excel as a renderer (Q342).
 - **L3, versions.** `veredas-abaco` starts at `2.0.0-alpha.1`, core's MAJOR. The tool and the fork
   version as they like; the fork keeps upstream's numbers (`0.9.1`), so a diff against upstream
   shows only the changes.
-- **L5, direction.** The map already lets Ábaco use core and portal. It depends on no member yet;
-  core arrives with the first stamped file it reads (its header reader), portal only with a sheet
-  that reads plant data. The oracle, a tool, may depend on anything, and reads its baseline through
+- **L5, direction.** The map already lets Ábaco use core and portal. It depends on no member yet:
+  core arrives once its header reader can be had without its network layers (asked of core,
+  2026-11-23, Q345); until then the `.abaco` file compiles that reader's source by path. Portal
+  arrives only with a sheet that reads plant data. The oracle, a tool, may depend on anything, and reads its baseline through
   core's header reader.
 - **L6, plan first.** This file, committed before the crate.
 - **L7, stamps.** Every TOML part Ábaco writes states `format` (`veredas-abaco` and its parts'
@@ -273,12 +276,11 @@ workspace/log.txt             the log, one escaped entry per line
    pivot tables, writing a formula that spills; a structured reference in a formula an edit writes
    is written as the cells it reads (the engine parses it to them). Its edits come
    through the API; an edit file, stamped TOML, comes with the command line, once core's header
-   reader can be had without core's network layers (asked of core).
+   reader can be had without core's network layers (asked of core, Q345).
 3. **The `.abaco` file** (above; C-224). Lossless round trip of every workbook of the corpus through the
-   zip and back; the workspace's parts; the `.xlsx` export. Its stamps are read through core's
-   header reader, which Ábaco takes once core's network layers sit behind a feature (asked of
-   core, 2026-11-23); until then `abacofile::stamp` reads the two keys itself
-   (`// DECISION PENDING`), and the clause waits on it to be verified.
+   zip and back; the workspace's parts; the `.xlsx` export. Its stamps are read by core's header
+   reader, its own source compiled by path until core's network layers sit behind a feature and
+   Ábaco can depend on core (asked of core, 2026-11-23; Q345, `// DECISION PENDING`).
 4. **Python.** CPython embedded (python-build-standalone, pinned, as Veredas 1 did: a release
    carries the runtime beside the executable); the `abaco` module; custom functions; the macro
    homes; the worker, one per workspace, and its command line; stop at the failing line with the

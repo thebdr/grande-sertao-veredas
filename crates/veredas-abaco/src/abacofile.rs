@@ -541,35 +541,32 @@ impl Parts<'_> {
         stamp(&text, name, format).map_err(|e| self.bad(format!("{name}: {e}")))?;
         let table: toml::Table = toml::from_str(&text).map_err(|e| self.bad(format!("{name}: {e}")))?;
         let json = toml_to_json(toml::Value::Table(table)).map_err(|e| self.bad(format!("{name}: {e}")))?;
-        serde_json::from_value(json).map_err(|e| self.bad(format!("{name}: {e}")))
+        // the engine's structures take a key they do not know without a word: a key nothing
+        // reads, at any depth, is refused by its path, as every file of the suite refuses one
+        let mut unread = Vec::new();
+        let value = serde_ignored::deserialize(json, |path| unread.push(path.to_string()))
+            .map_err(|e| self.bad(format!("{name}: {e}")))?;
+        match unread.first() {
+            Some(path) => Err(self.bad(format!("{name}: `{path}` is a key nothing reads"))),
+            None => Ok(value),
+        }
     }
 }
 
-/// The stamp of a part: `format` as `format` says and a `version` this Ábaco reads.
-// DECISION PENDING: core's header reader (`veredas_core::schema::check`, C-045) replaces this
-// once core's network layers sit behind a feature (asked of core, 2026-11-23); until then the
-// part's own keys are read, before its body, with the texts of core's reader.
+/// The suite's one header reader (C-045): core's own source, compiled here by path, so the stamp
+/// is read by the very code every other file of the suite is read by, its order and its texts.
+/// Ábaco cannot take `veredas-core` as a dependency while core carries its network layers
+/// unconditionally (C-220 holds no plant connection); the day core puts them behind a feature this
+/// becomes `use veredas_core::schema` (docs/questions.md Q345).
+// DECISION PENDING (Q345)
+#[allow(dead_code)]
+#[path = "../../veredas-core/src/schema.rs"]
+mod schema;
+
+/// The stamp of a part: `format` as `format` says and the `version` this Ábaco reads, through
+/// core's reader, the part named by its path.
 fn stamp(text: &str, part: &str, format: &str) -> Result<(), String> {
-    #[derive(Deserialize)]
-    struct Head {
-        format: Option<toml::Value>,
-        version: Option<toml::Value>,
-    }
-    let head: Head = toml::from_str(text).map_err(|e| format!("not {part}: {e}"))?;
-    match head.format {
-        None => return Err(format!("no `format`: {part} states `format` and `version`")),
-        Some(toml::Value::String(f)) if f == format => {}
-        Some(toml::Value::String(f)) => return Err(format!("`format` is `{f}`, not `{format}`")),
-        Some(_) => return Err(format!("not {part}: `format` is no string")),
-    }
-    match head.version {
-        None => Err(format!("no `version`: {part} states `format` and `version`")),
-        Some(toml::Value::Integer(v)) if v == i64::from(VERSION) => Ok(()),
-        Some(toml::Value::Integer(v)) => {
-            Err(format!("version {v} of `{format}` is not known here (this reader knows {VERSION})"))
-        }
-        Some(_) => Err(format!("not {part}: `version` is no whole number")),
-    }
+    schema::check(text, part, format, VERSION).map_err(|e| e.to_string())
 }
 
 /// One cell of a sheet as the file states it, checked.
@@ -824,13 +821,9 @@ mod tests {
     }
 
     #[test]
-    fn a_stamp_is_read_before_the_body() {
+    fn a_stamp_is_read_by_core_s_reader_format_first() {
         let ok = "format = \"veredas-abaco\"\nversion = 1\n";
         assert_eq!(stamp(ok, "manifest.toml", FORMAT), Ok(()));
-        assert_eq!(
-            stamp("format = \"veredas-abaco\"\nversion = 2\nnew = {", "manifest.toml", FORMAT).unwrap_err().split(':').next(),
-            Some("not manifest.toml"),
-        );
         assert_eq!(
             stamp("format = \"veredas-abaco\"\nversion = 2\n", "manifest.toml", FORMAT).unwrap_err(),
             "version 2 of `veredas-abaco` is not known here (this reader knows 1)"
@@ -839,6 +832,19 @@ mod tests {
             stamp("format = \"veredas-abaco-sheet\"\nversion = 1\n", "manifest.toml", FORMAT).unwrap_err(),
             "`format` is `veredas-abaco-sheet`, not `veredas-abaco`"
         );
+        // the format decided whole before the version: one past any integer type is no matter
+        for version in ["18446744073709551615", "18446744073709551616", "-1"] {
+            assert_eq!(
+                stamp(&format!("format = \"veredas-other\"\nversion = {version}\n"), "manifest.toml", FORMAT).unwrap_err(),
+                "`format` is `veredas-other`, not `veredas-abaco`",
+                "{version}"
+            );
+        }
+        assert_eq!(
+            stamp("format = \"veredas-abaco\"\nversion = -1\n", "manifest.toml", FORMAT).unwrap_err(),
+            "not manifest.toml: `version` is not a whole number from 0 to 4294967295"
+        );
+        assert_eq!(stamp("format = 1\nversion = 1\n", "manifest.toml", FORMAT).unwrap_err(), "not manifest.toml: `format` is not a string");
         assert_eq!(stamp("version = 1\n", "manifest.toml", FORMAT).unwrap_err(), "no `format`: manifest.toml states `format` and `version`");
         assert_eq!(stamp("format = \"veredas-abaco\"\n", "manifest.toml", FORMAT).unwrap_err(), "no `version`: manifest.toml states `format` and `version`");
     }

@@ -128,8 +128,9 @@ fn the_engine_is_the_fork_at_its_folder_and_no_member() {
     let exclude = manifest["workspace"]["exclude"].as_array().unwrap();
     assert!(exclude.iter().any(|e| e.as_str() == Some("forks/ironcalc")), "{exclude:?}");
     // its direct normal dependencies: the engine, its file layer, the zip the patcher reads and
-    // writes packages with, serialisation and the error derive, the `.abaco` file's TOML and its
-    // references' SHA-256, the engine's two by path under the fork's folder
+    // writes packages with, serialisation and the error derive, the `.abaco` file's TOML, its
+    // references' SHA-256 and its check of keys nothing reads, the engine's two by path under the
+    // fork's folder
     let abaco = package(&meta, "veredas-abaco");
     let normal: BTreeSet<String> = abaco["dependencies"]
         .as_array()
@@ -140,7 +141,7 @@ fn the_engine_is_the_fork_at_its_folder_and_no_member() {
         .collect();
     assert_eq!(
         normal,
-        ["ironcalc", "ironcalc_base", "serde", "serde_json", "sha2", "thiserror", "toml", "zip"].iter().map(|s| s.to_string()).collect()
+        ["ironcalc", "ironcalc_base", "serde", "serde_ignored", "serde_json", "sha2", "thiserror", "toml", "zip"].iter().map(|s| s.to_string()).collect()
     );
     for d in abaco["dependencies"].as_array().unwrap() {
         if d["name"] == "ironcalc" || d["name"] == "ironcalc_base" {
@@ -202,7 +203,7 @@ fn the_fork_is_upstream_at_its_commit_then_each_listed_change_a_commit() {
 /// expressions, serialisation), the platform crates they pull in, and no plant stack (no OPC UA,
 /// database, socket, HTTP, file-watching or async runtime crate). Added 2026-11-23 with the `.abaco`
 /// file (C-224): TOML (`toml` and its `toml_datetime`, `toml_parser`, `toml_writer`,
-/// `serde_spanned`, `winnow`) and SHA-256 (`sha2` and RustCrypto's `digest`, `block-buffer`,
+/// `serde_spanned`, `winnow`), `serde_ignored` (the keys nothing reads) and SHA-256 (`sha2` and RustCrypto's `digest`, `block-buffer`,
 /// `crypto-common`, `generic-array`, `typenum`), each pure Rust, none of the plant stack. A crate
 /// joining the graph fails this test until it is reviewed and added.
 const REVIEWED: &[&str] = &[
@@ -214,12 +215,12 @@ const REVIEWED: &[&str] = &[
     "itertools", "itoa", "js-sys", "libc", "libm", "log", "memchr", "nix", "num-traits", "phf", "phf_shared",
     "pin-project-lite", "proc-macro2", "quick-xml", "quote", "r-efi", "rand", "rand_core", "regex",
     "regex-automata", "regex-lite", "regex-syntax", "ryu", "serde", "serde_core", "serde_derive",
-    "serde_json", "serde_spanned", "sha2", "simd-adler32", "siphasher", "slab", "statrs", "syn", "thiserror",
-    "thiserror-impl", "toml", "toml_datetime", "toml_parser", "toml_writer", "typed-path", "typenum",
-    "unicode-ident", "veredas-abaco", "wasm-bindgen", "wasm-bindgen-macro", "wasm-bindgen-macro-support",
-    "wasm-bindgen-shared", "windows-core", "windows-implement", "windows-interface", "windows-link",
-    "windows-result", "windows-strings", "windows-sys", "winnow", "zeroize", "zeroize_derive", "zip",
-    "zlib-rs", "zmij", "zopfli",
+    "serde_ignored", "serde_json", "serde_spanned", "sha2", "simd-adler32", "siphasher", "slab", "statrs",
+    "syn", "thiserror", "thiserror-impl", "toml", "toml_datetime", "toml_parser", "toml_writer", "typed-path",
+    "typenum", "unicode-ident", "veredas-abaco", "wasm-bindgen", "wasm-bindgen-macro",
+    "wasm-bindgen-macro-support", "wasm-bindgen-shared", "windows-core", "windows-implement",
+    "windows-interface", "windows-link", "windows-result", "windows-strings", "windows-sys", "winnow",
+    "zeroize", "zeroize_derive", "zip", "zlib-rs", "zmij", "zopfli",
 ];
 
 /// The crates of Ábaco's graph that are its own and not the engine's: the `.abaco` file's TOML and
@@ -227,8 +228,8 @@ const REVIEWED: &[&str] = &[
 /// the fork's suite tests none.
 /// (`name@version` names one version of a crate the engine uses at another: sha2's `cpufeatures`.)
 const ABACO_ONLY: &[&str] = &[
-    "block-buffer", "cpufeatures@0.2.", "crypto-common", "digest", "generic-array", "serde_spanned", "sha2", "toml",
-    "toml_datetime", "toml_parser", "toml_writer", "winnow",
+    "block-buffer", "cpufeatures@0.2.", "crypto-common", "digest", "generic-array", "serde_ignored", "serde_spanned",
+    "sha2", "toml", "toml_datetime", "toml_parser", "toml_writer", "winnow",
 ];
 
 /// The crates Ábaco's graph gains in the suite's workspace build from features other members turn

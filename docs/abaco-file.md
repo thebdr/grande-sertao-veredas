@@ -8,9 +8,11 @@ destination renamed into place, the file it replaces kept as `<name>.bak`) and r
 (`Workbook::export`).
 
 Every plain-text file of Veredas 2 states its schema (`docs/questions.md` Q10): each TOML part
-opens with `format` and `version`, read before its body, so a part of another format, or of a
-version this Ábaco does not know, is refused by name, never guessed. A key a part does not know
-is refused too, in every part Ábaco defines here.
+opens with `format` and `version`, read before its body by the suite's one header reader (core's
+`veredas_core::schema`, C-045), so a part of another format, or of a version this Ábaco does not
+know, is refused by name, never guessed. A key nothing reads is refused too, at any depth of a
+part, by its path (`styles.fonts.0.szz`); a tool's own records and state are tables whose keys
+the tool chooses.
 
 ## The parts
 

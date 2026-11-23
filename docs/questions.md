@@ -1582,6 +1582,31 @@ Options:
 
 ---
 
+## Q345 - How does ábaco read its stamps while core carries its network layers?
+
+**Raised** 2026-11-23, building ábaco's `.abaco` file (C-224; `docs/abaco-plan.md` phase 3).
+
+Every stamp of the suite is read by core's one header reader (C-045, `veredas_core::schema`), and
+the `.abaco` file's TOML parts are stamped. `veredas-core` pulls its OPC UA client, tokio, socket2,
+regex and chrono whatever features are asked, while its `schema` needs only serde, toml and
+thiserror; Ábaco's component clause (C-220) holds no plant connection in its graph. Asked of core
+through the orchestrator on 2026-11-23 (the shared notes' `abaco-asks-core-for-the-header-reader-alone.md`).
+
+Options:
+- (a) Core puts its network layers behind a default feature, so `default-features = false` gives
+  `schema` alone; Ábaco depends on core then, as L5's map lets it.
+- (b) Ábaco depends on core whole: its graph gains the plant stack C-220 refuses.
+- (c) Ábaco compiles core's own `src/schema.rs` by path (`#[path]`): the one reader's very code,
+  its order and texts, no copy to drift; the day (a) lands it becomes `use veredas_core::schema`.
+- (d) Ábaco writes a reader of its own: a second source of truth, which drifted at once (C-224's
+  confrontation, 2026-11-23: a version past 2^63 refused before the format was judged).
+
+**Recommended**: (a). **Taken meanwhile**: (c), marked `// DECISION PENDING (Q345)` in
+`crates/veredas-abaco/src/abacofile.rs`.
+
+**Reversible?** Yes: one line, once core's feature lands.
+---
+
 ## Q310 - The test file's syntax
 
 **Raised** 2026-11-22, planning comissionador (P-006; `docs/comissionador-plan.md`).

@@ -298,6 +298,11 @@ fn a_file_that_is_not_what_it_should_be_is_refused_by_its_part_and_place() {
         ("manifest.toml", Box::new(|t| Some(t.replace("written_by", "writen_by"))), "line 3, column 1"), ("manifest.toml", Box::new(|t| Some(t.replace("written_by", "writen_by"))), "unknown field `writen_by`"),
         ("manifest.toml", Box::new(|t| Some(t.replace("name = \"Loads\"", "name = \"Other\""))), "sheets/01-Loads.toml: the sheet `Loads`, where the manifest says `Other`"),
         ("workbook.toml", Box::new(|t| Some(t.replace("veredas-abaco-workbook", "veredas-abaco-sheet"))), "workbook.toml: `format` is `veredas-abaco-sheet`, not `veredas-abaco-workbook`"),
+        // the format decided whole before the version, whatever the version holds (C-045)
+        ("manifest.toml", Box::new(|t| Some(t.replace("\"veredas-abaco\"", "\"veredas-other\"").replace("version = 1", "version = 18446744073709551616"))), "manifest.toml: `format` is `veredas-other`, not `veredas-abaco`"),
+        // a key the engine's structures do not read, at any depth, by its path
+        ("workbook.toml", Box::new(|t| Some(t.replacen("tz = \"UTC\"", "tz = \"UTC\"\ntzz = \"UTC\"", 1))), "workbook.toml: `settings.tzz` is a key nothing reads"),
+        ("workbook.toml", Box::new(|t| Some(t.replacen("sz = 12", "sz = 12\nszz = 12", 1))), "workbook.toml: `styles.fonts.0.szz` is a key nothing reads"),
         ("sheets/01-Loads.toml", Box::new(|_| None), "no part `sheets/01-Loads.toml`"),
         ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B1 = { n = 6.5 }", "B1 = { n = 6.5, s = \"x\" }"))), "sheets/01-Loads.toml B1: more than one of `n`, `s`, `b`, `e`, `f`, `array`, `dynamic`"),
         ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { b = true, v = 1 }"))), "sheets/01-Loads.toml B4: `v` without `f`"),
