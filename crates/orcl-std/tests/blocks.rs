@@ -921,6 +921,15 @@ fn the_sources_read_as_compiled_hold_only_the_words_the_clause_allows() {
         // the library's one macro is `impl_bits!`; the unit tests' modules hold no item that could make the test
         // build differ from the one programs link
         assert_eq!(count(&all, "macro_rules"), usize::from(file == "bits.rs"), "{file}: macro_rules");
+        // and that macro takes types alone, in one invocation, so it can re-emit nothing the reading did not see
+        if file == "bits.rs" {
+            let matcher = "macro_rules ! impl_bits { ( $ ( $ t : ty ) , * ) = > {";
+            let invocation = "impl_bits ! ( u8 , u16 , u32 , u64 ) ;";
+            assert_eq!(code.matches(matcher).count(), 1, "bits.rs: impl_bits! takes types alone: {code}");
+            assert_eq!(code.matches(invocation).count(), 1, "bits.rs: impl_bits! invoked once, on the four widths");
+            assert_eq!(count(&all, "impl_bits"), 2, "bits.rs: impl_bits! defined and invoked, nothing more");
+            assert_eq!(code.matches("= > {").count(), 1, "bits.rs: impl_bits! has one arm");
+        }
         for refused in ["impl", "trait", "macro_rules", "macro_use"] {
             assert_eq!(count(&module_words, refused), 0, "{file}: the unit tests' module holds {refused}");
         }
@@ -1332,4 +1341,53 @@ fn a_rising_edge_s_signal_off_at_its_first_scan_is_no_edge() {
     let mut rise = RTrig::default();
     assert_eq!((rise.scan(false), rise.q()), (false, false));
     assert_eq!((rise.scan(true), rise.q()), (true, true));
+}
+
+// The twentieth refute round: a counter judged on its preset and its reset while its count input is held high, a
+// pulse's edge on an end scan that comes after pt, a read at bit 1999.
+
+#[test]
+fn the_counter_judges_its_preset_and_its_reset_while_its_count_input_is_held_high() {
+    // counted to 3 at a preset of 3, the count input then held high while the preset changes, as a recipe may
+    let mut c = Ctu::default();
+    for _ in 0..2 {
+        c.scan(true, false, 3);
+        c.scan(false, false, 3);
+    }
+    assert!(c.scan(true, false, 3), "the third edge reaches the preset");
+    assert_eq!((c.scan(true, false, 5), c.q(), c.cv()), (false, false, 3), "raised above the count, held high: off");
+    assert_eq!((c.scan(true, false, 3), c.q()), (true, true), "back to the count: on");
+    assert_eq!((c.scan(true, true, 3), c.q(), c.cv()), (false, false, 0), "a reset while held high clears the count");
+    assert_eq!((c.scan(true, false, 0), c.q(), c.cv()), (true, true, 0), "released, still held, at a preset of zero");
+    let mut c = Ctu::default();
+    c.scan(true, false, 3);
+    assert_eq!((c.scan(true, false, 0), c.q(), c.cv()), (true, true, 1), "a preset of zero, held high: on at once");
+}
+
+#[test]
+fn an_edge_on_a_pulse_s_end_scan_after_pt_starts_nothing() {
+    // pt 100 ms on a 30 ms scan: the pulse ends on the scan at 120 ms, past pt; an edge there starts nothing
+    let scan = |t: u64| Scan { now: ms(t), period: ms(30), cycle: t / 30 };
+    let mut pulse = Tp::default();
+    assert!(pulse.scan(&scan(0), true, ms(100)));
+    assert!(pulse.scan(&scan(30), false, ms(100)));
+    assert!(pulse.scan(&scan(90), false, ms(100)));
+    assert_eq!((pulse.scan(&scan(120), true, ms(100)), pulse.q(), pulse.et()), (false, false, ms(100)), "an edge there");
+    assert_eq!((pulse.scan(&scan(150), true, ms(100)), pulse.q(), pulse.et()), (false, false, ms(100)), "held: off");
+    assert!(!u16::MAX.get_bit(1_999), "and a read at bit 1999 is false");
+}
+
+#[test]
+fn edge_blocks_side_by_side_each_keep_their_own_memory() {
+    // two edges of one kind scanned in turn on different signals, as two inputs of one program are: neither sees the
+    // other's last scan (an edge's memory shared between blocks was seen only when other tests happened to run beside)
+    let (mut a, mut b) = (RTrig::default(), RTrig::default());
+    assert!(a.scan(true), "a rises");
+    assert!(b.scan(true), "and b rises too, on its own first scan");
+    assert!(!a.scan(true) && !b.scan(true), "both held");
+    let (mut c, mut d) = (FTrig::default(), FTrig::default());
+    assert!(!c.scan(true));
+    assert!(!d.scan(false), "d low from its first scan: no fall, whatever c last saw");
+    assert!(c.scan(false), "c falls");
+    assert!(!d.scan(false), "d still low: no fall");
 }
