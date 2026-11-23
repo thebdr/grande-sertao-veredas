@@ -1,0 +1,31 @@
+{
+  "clause": "C-139",
+  "command": "cargo test -j 4 -p veredas-aranha --test wire",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-j",
+    "4",
+    "-p",
+    "veredas-aranha",
+    "--test",
+    "wire"
+  ],
+  "exitCode": 0,
+  "outputSha": "46853a891f9f4d4d859c933d674c4a77984ce6120447c0a1581cb9f37ab44c13",
+  "outputTail": "test tshark_reads_every_capture_written_as_it_was_written ... ok\ntest captures_tshark_writes_are_read_in_either_resolution_and_pcapng_is_refused ... ok\ntest what_a_capture_holds_as_heard_is_kept_as_tshark_keeps_it ... ok\ntest a_capture_cut_short_gives_the_frames_before_its_damage_as_tshark_does ... ok\ntest either_byte_order_either_resolution_and_every_header_field_are_read ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.13s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.94s\n     Running tests/wire.rs (target/debug/build/veredas-aranha/008d048959e43f43/out/wire-008d048959e43f43)",
+  "ranAt": "2026-11-23T08:24:34.843Z",
+  "headCommit": "0bd4b43e1ae55341f719abb1e0d5b8eef9404881",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/wire.rs",
+      "file": "crates/veredas-aranha/tests/wire.rs",
+      "fileSha": "bd511ba683600da2f7b52558ba33a35c18f448553c247b1e2b445a317c541a75"
+    },
+    {
+      "name": "crates/veredas-aranha/tests/common/mod.rs",
+      "file": "crates/veredas-aranha/tests/common/mod.rs",
+      "fileSha": "e3f228cd2b4bbd09bda4196228ab527e6f28dba06ee02306b362990c19b7edb6"
+    }
+  ]
+}
