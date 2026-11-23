@@ -1,19 +1,20 @@
 {
   "clause": "C-091",
-  "command": "cargo test -p veredas-portal --test store_record",
+  "command": "cargo test -p veredas-portal --lib --test store_record",
   "commandArgv": [
     "cargo",
     "test",
     "-p",
     "veredas-portal",
+    "--lib",
     "--test",
     "store_record"
   ],
   "exitCode": 0,
-  "outputSha": "4da021902b2d042e3399ca09e839909b3162f2148e301f9db71bf7ff931df95a",
-  "outputTail": "\nrunning 4 tests\ntest at_its_size_limit_a_recording_stops_and_nothing_is_deleted ... ok\ntest the_record_keeps_on_the_drive_what_the_window_lets_go ... ok\ntest the_limit_stops_the_recording_at_the_first_write_that_reaches_it ... ok\ntest a_record_is_written_once_a_period_whatever_the_poll_rate ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.43s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s\n     Running tests/store_record.rs (target/debug/build/veredas-portal/d7eef14a2ce56138/out/store_record-d7eef14a2ce56138)",
-  "ranAt": "2026-11-23T02:58:38.166Z",
-  "headCommit": "137357710d80a6e2ba9141c47f7eccb0700877d5",
+  "outputSha": "9d9a1abf353369820ba54fb6c4fbbab5cc360cf972e99c6cdd178e8a6e30eddc",
+  "outputTail": "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s\n\n\nrunning 4 tests\ntest at_its_size_limit_a_recording_stops_and_nothing_is_deleted ... ok\ntest the_record_keeps_on_the_drive_what_the_window_lets_go ... ok\ntest the_limit_stops_the_recording_at_the_first_write_that_reaches_it ... ok\ntest a_record_is_written_once_a_period_whatever_the_poll_rate ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.51s\n\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/a1a7044bb47acec9/out/veredas_portal-a1a7044bb47acec9)\n     Running tests/store_record.rs (target/debug/build/veredas-portal/d7eef14a2ce56138/out/store_record-d7eef14a2ce56138)",
+  "ranAt": "2026-11-23T08:11:18.475Z",
+  "headCommit": "99e153eacefbf7e9ffca44a3099273a4e145846b",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store_record.rs",
