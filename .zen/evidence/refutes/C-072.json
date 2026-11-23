@@ -1,0 +1,18 @@
+{
+  "clause": "C-072",
+  "verdict": "holds",
+  "ranAt": "2026-11-23T09:48:43.985Z",
+  "headCommit": "d86d2f24710635bfbda9290783ca5d313fbff3ff",
+  "tests": [
+    {
+      "name": "crates/veredas-core/tests/enip_scanner.rs",
+      "file": "crates/veredas-core/tests/enip_scanner.rs",
+      "symbolSha": "f75e23fea83e3192e42d27e5f780eeb0ec51878345e4ed61eee98ff92ba9ebf2"
+    },
+    {
+      "name": "tools/mestres/tests/enip.rs",
+      "file": "tools/mestres/tests/enip.rs",
+      "symbolSha": "52ff93e652cd59aecbb1f90c11381fd87c435a4f6d3d1f3d7a8c7aea15837884"
+    }
+  ]
+}

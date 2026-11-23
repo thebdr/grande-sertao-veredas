@@ -1,0 +1,33 @@
+{
+  "clause": "C-072",
+  "command": "cargo test -p veredas-core --test enip_scanner -p mestres --test enip",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-p",
+    "veredas-core",
+    "--test",
+    "enip_scanner",
+    "-p",
+    "mestres",
+    "--test",
+    "enip"
+  ],
+  "exitCode": 0,
+  "outputSha": "c4a514d801ec33c197233065e1524bc16fa2aa1251991e1d79775f4101648583",
+  "outputTail": "test the_first_input_window_is_the_longer_and_only_an_input_ends_it ... ok\ntest a_flood_of_stray_datagrams_holds_no_output_back ... ok\ntest the_first_input_is_awaited_its_window_from_the_end_of_the_open ... ok\ntest every_request_is_the_standards_bytes_and_the_exchange_runs_at_the_interval ... ok\ntest the_adapters_refusals_and_wrong_answers_end_the_open_by_name ... ok\ntest a_first_input_window_without_end_runs_and_closes ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.51s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n   Compiling veredas-maquinar v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-maquinar)\n   Compiling mestres v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/tools/mestres)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 47.74s\n     Running tests/enip.rs (target/debug/build/mestres/f280b2eb99b03f56/out/enip-f280b2eb99b03f56)\n     Running tests/enip_scanner.rs (target/debug/build/veredas-core/9cffd9403ac43016/out/enip_scanner-9cffd9403ac43016)",
+  "ranAt": "2026-11-23T09:28:05.457Z",
+  "headCommit": "d86d2f24710635bfbda9290783ca5d313fbff3ff",
+  "tests": [
+    {
+      "name": "crates/veredas-core/tests/enip_scanner.rs",
+      "file": "crates/veredas-core/tests/enip_scanner.rs",
+      "fileSha": "f75e23fea83e3192e42d27e5f780eeb0ec51878345e4ed61eee98ff92ba9ebf2"
+    },
+    {
+      "name": "tools/mestres/tests/enip.rs",
+      "file": "tools/mestres/tests/enip.rs",
+      "fileSha": "52ff93e652cd59aecbb1f90c11381fd87c435a4f6d3d1f3d7a8c7aea15837884"
+    }
+  ]
+}
