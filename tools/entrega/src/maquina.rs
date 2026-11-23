@@ -91,6 +91,9 @@ chmod 755 /usr/local/libexec/veredas-verifica
 cat > /etc/systemd/system/veredas-verifica.service <<'UNIT'
 [Unit]
 Description=Veredas: the release's files checked against its SHA256SUMS
+# Done before a login starts on the serial console: agetty hangs the line up when it starts, and a
+# line written to the console meanwhile is lost (docs/entrega-plan.md, "Traps").
+Before=serial-getty@ttyS0.service getty@tty1.service
 
 [Service]
 Type=oneshot

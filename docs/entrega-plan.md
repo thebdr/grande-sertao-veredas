@@ -356,7 +356,10 @@ Recorded as the work meets them.
 - **agetty hangs up the serial line when it starts**: a build whose output went to `/dev/ttyS0`
   from cloud-init's first stage lost every line once the login prompt came up, and only the exit
   code, written by a later `echo`, arrived. A guest's long job logs to a file, which comes back on
-  a disk, and its tail is echoed to the console after.
+  a disk, and its tail is echoed to the console after. The same race lost the tester machine's
+  boot check (`veredas-verifica`, output to journal and console) on 2026-11-23, after five proofs
+  that won it: a unit that speaks on the console at boot is ordered before
+  `serial-getty@ttyS0.service`.
 - **`/tmp` is a tmpfs of the machine's memory, shared by every session**, and its quota for the
   user ran out at 20 GB ("Disk quota exceeded"). Disks, bundles and OVAs go under `target/entrega/`
   or the cache, never in `/tmp`. A `TMPDIR` moved elsewhere must lie outside every git repository:
