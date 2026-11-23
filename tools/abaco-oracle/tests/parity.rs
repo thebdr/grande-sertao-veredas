@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use abaco_oracle::{Baseline, BaselineError, Class, LinksMode, Options, Probe, corpus, excel_application, run_file, scan_raw};
+use abaco_oracle::{Baseline, BaselineError, Class, LinksMode, Options, Probe, corpus, excel_application, run_file, scan_raw, xml_text};
 use sha2::{Digest, Sha256};
 use veredas_abaco::links::LinkOutcome;
 
@@ -166,6 +166,156 @@ fn a_boolean_cache_excel_never_wrote_is_counted_as_a_mismatch() {
     rewrite_cell_value(&source, &dir.path().join("true.xlsx"), "AND XOR OR", "C2", "1");
     assert_eq!(run_file(&dir.path().join("true.xlsx"), &options(LinksMode::Cached), &mut probe).measure().unwrap().matched, base.matched - 1);
     assert_eq!(run_file(&source, &options(LinksMode::Cached), &mut probe).measure().unwrap().matched, base.matched);
+}
+
+/// Every mismatch a measure of `path` finds, as `sheet!reference`, with the measure's totals.
+fn mismatches(path: &Path, probe: &mut Probe) -> (BTreeSet<String>, usize, usize) {
+    let mut opts = options(LinksMode::Cached);
+    opts.max_examples = 1_000;
+    let report = run_file(path, &opts, probe);
+    let m = report.measure().unwrap();
+    let at = report.examples.values().flatten().map(|e| format!("{}!{}", e.sheet, e.reference)).collect();
+    (at, m.formula_cells, m.matched)
+}
+
+/// The sheet of `path` whose formula cell at `reference` caches what `is` says.
+fn sheet_of(path: &Path, reference: &str, is: impl Fn(&abaco_oracle::Expected) -> bool) -> String {
+    scan_raw(path).unwrap().formula_cells.into_iter().find(|c| c.reference == reference && is(&c.expected)).unwrap().sheet
+}
+
+#[test]
+fn a_text_cache_is_read_as_xml_and_excel_write_it() {
+    // XML's line ends and references, then Excel's `_xHHHH_` (`_x005F_` its literal underscore)
+    assert_eq!(xml_text("a\r\nb\rc&#13;d &amp;&#x41; _x0001_ _x005F_x0041_ _xD83D__xDE00_"), "a\nb\nc\rd &A \u{1} _x0041_ \u{1F600}");
+    // the corpus's texts Excel escaped (CHAR's control characters, a line ending's CR LF, a literal
+    // underscore escape) read as the engine computes them: every one a match
+    let b = baseline();
+    let dir = corpus_dir(&b);
+    let mut probe = Probe::default();
+    for (path, matched, at) in [
+        ("calc_tests/TEXT/CHAR.xlsx", 257, &["B1", "B8", "B10", "B11", "B31"][..]),
+        ("calc_tests/LOGICAL/NOT.xlsx", 87, &["A17"][..]),
+        ("calc_tests/TEXT/PROPER.xlsx", 11, &["B2"][..]),
+        ("calc_tests/TEXT/ENCODEURL.xlsx", 65, &["A14", "A15", "A16"][..]),
+    ] {
+        let (wrong, _, m) = mismatches(&dir.join(path), &mut probe);
+        assert_eq!(m, matched, "{path}: {wrong:?}");
+        for r in at {
+            assert!(!wrong.iter().any(|w| w.ends_with(&format!("!{r}"))), "{path}: {r} counted a mismatch");
+        }
+    }
+    // a copy whose `_x0001_` is written with its underscore escaped: the literal text, a mismatch
+    let source = dir.join("calc_tests/TEXT/CHAR.xlsx");
+    let sheet = sheet_of(&source, "B1", |e| *e == abaco_oracle::Expected::Text("\u{1}".into()));
+    let planted = tempfile::tempdir().unwrap();
+    let copy = planted.path().join("char.xlsx");
+    rewrite_cell_value(&source, &copy, &sheet, "B1", "_x005F_x0001_");
+    let (wrong, _, m) = mismatches(&copy, &mut probe);
+    assert_eq!(m, 256);
+    assert!(wrong.contains(&format!("{sheet}!B1")), "{wrong:?}");
+}
+
+#[test]
+fn a_text_that_reads_like_an_error_is_a_text_on_either_side() {
+    // the engine's texts `#div/0!` and the like, which Excel cached as texts: matches
+    let b = baseline();
+    let dir = corpus_dir(&b);
+    let mut probe = Probe::default();
+    for (path, at) in [
+        ("calc_tests/TEXT/STRING_HANDLING.xlsx", &["C8", "D8", "G8", "L8", "O8"][..]),
+        ("calc_tests/TEXT/T_VALUE_VALUETOTEXT.xlsx", &["D7"][..]),
+        ("calc_tests/MATH_AND_TRIGONOMETRY/MROUND_TRUNC_INT.xlsx", &["MROUND!A28", "TRUNC!A28", "INT!A25"][..]),
+    ] {
+        let (wrong, _, _) = mismatches(&dir.join(path), &mut probe);
+        for r in at {
+            let hit = if r.contains('!') { wrong.contains(*r) } else { wrong.iter().any(|w| w.ends_with(&format!("!{r}"))) };
+            assert!(!hit, "{path}: {r} counted a mismatch ({wrong:?})");
+        }
+    }
+    // the copy whose D8 caches the error `#DIV/0!` where the engine computes the text: one mismatch
+    let source = dir.join("calc_tests/TEXT/STRING_HANDLING.xlsx");
+    let sheet = sheet_of(&source, "D8", |e| matches!(e, abaco_oracle::Expected::Text(t) if t.starts_with('#')));
+    let (_, cells, matched) = mismatches(&source, &mut probe);
+    let planted = tempfile::tempdir().unwrap();
+    let copy = planted.path().join("strings.xlsx");
+    rewrite_cell(&source, &copy, &sheet, "D8", |attrs, inner| {
+        let f = regex::Regex::new(r"(?s)<f[^>]*?(/>|>.*?</f>)").unwrap().find(inner).unwrap().as_str().to_string();
+        format!(r#"{} t="e">{f}<v>#DIV/0!</v>"#, strip_type(attrs))
+    });
+    let (wrong, cells_now, matched_now) = mismatches(&copy, &mut probe);
+    assert_eq!((cells_now, matched_now), (cells, matched - 1));
+    assert!(wrong.contains(&format!("{sheet}!D8")), "{wrong:?}");
+}
+
+#[test]
+fn an_error_or_a_text_excel_never_wrote_is_a_mismatch_and_never_stops_a_measure() {
+    let b = baseline();
+    let dir = corpus_dir(&b);
+    let mut probe = Probe::default();
+    let planted = tempfile::tempdir().unwrap();
+    // ABS.xlsx, matched whole: a cell made to compute an error only the engine has, cached with that
+    // error's name, is no error Excel writes
+    let source = dir.join("calc_tests/MATH_AND_TRIGONOMETRY/ABS.xlsx");
+    let (_, cells, matched) = mismatches(&source, &mut probe);
+    assert_eq!(cells, matched);
+    let target = scan_raw(&source)
+        .unwrap()
+        .formula_cells
+        .into_iter()
+        .find(|c| matches!(c.expected, abaco_oracle::Expected::Number(_)) && !c.shared_copy)
+        .unwrap();
+    // each cached as the engine spells it on its value side (`#N/IMPL!` there)
+    for (i, (formula, error)) in
+        [(target.reference.as_str(), "#CIRC!"), (r#"SUM(VALUE(A1:A3&amp;""))"#, "#N/IMPL!"), (r#"FORMULATEXT("x")"#, "#ERROR!")]
+            .into_iter()
+            .enumerate()
+    {
+        let copy = planted.path().join(format!("abs{i}.xlsx"));
+        rewrite_cell(&source, &copy, &target.sheet, &target.reference, |attrs, _| {
+            format!(r#"{} t="e"><f>{formula}</f><v>{error}</v>"#, strip_type(attrs))
+        });
+        let mut opts = options(LinksMode::Cached);
+        opts.max_examples = 1_000;
+        let report = run_file(&copy, &opts, &mut probe);
+        let m = report.measure().unwrap();
+        assert_eq!((m.formula_cells, m.matched), (cells, matched - 1), "{error}");
+        let e = report.examples.values().flatten().find(|e| e.reference == target.reference).unwrap();
+        // the engine computes that very error: the old reading counted it a match
+        assert_eq!((e.expected.as_str(), e.actual.as_str()), (format!("{error:?}").as_str(), error), "{error}");
+    }
+    // ISREF.xlsx's D1, where the engine computes "": a shared-string cache that is no index, one past
+    // the table, and no cached value at all, each one mismatch, none stopping the measure
+    let source = dir.join("calc_tests/INFORMATION/ISREF.xlsx");
+    let sheet = sheet_of(&source, "D1", |e| *e == abaco_oracle::Expected::Text(String::new()));
+    let (_, cells, matched) = mismatches(&source, &mut probe);
+    for (i, (t, v)) in [(Some("s"), Some("abc")), (Some("s"), Some("99999")), (None, None)].into_iter().enumerate() {
+        let copy = planted.path().join(format!("isref{i}.xlsx"));
+        rewrite_cell(&source, &copy, &sheet, "D1", |attrs, inner| {
+            let f = regex::Regex::new(r"(?s)<f[^>]*?(/>|>.*?</f>)").unwrap().find(inner).unwrap().as_str().to_string();
+            let t = t.map(|t| format!(r#" t="{t}""#)).unwrap_or_default();
+            let v = v.map(|v| format!("<v>{v}</v>")).unwrap_or_default();
+            format!("{}{t}>{f}{v}", strip_type(attrs))
+        });
+        let (wrong, cells_now, matched_now) = mismatches(&copy, &mut probe);
+        assert_eq!((cells_now, matched_now), (cells, matched - 1), "{t:?} {v:?}");
+        assert!(wrong.contains(&format!("{sheet}!D1")), "{t:?} {v:?}: {wrong:?}");
+    }
+}
+
+/// A cell's attributes without its `t`.
+fn strip_type(attrs: &str) -> String {
+    regex::Regex::new(r#"\st="[^"]*""#).unwrap().replace(attrs, "").to_string()
+}
+
+/// Copies the workbook at `from` to `to`, the cell `sheet!reference` rewritten: `cell` gets the
+/// open tag up to its `>` (`<c r="D8" s="3"`, attributes kept) and the cell's inner XML, and
+/// returns the new cell up to its `</c>`.
+fn rewrite_cell(from: &Path, to: &Path, sheet: &str, reference: &str, cell: impl Fn(&str, &str) -> String) {
+    let part = sheet_part(from, sheet);
+    let re = regex::Regex::new(&format!(r#"(?s)(<c r="{reference}"(?:\s[^>]*?)?)(?:/>|>(.*?)</c>)"#)).unwrap();
+    rewrite_part(from, to, &part, |text| {
+        re.replace(text, |c: &regex::Captures| format!("{}</c>", cell(&c[1], c.get(2).map(|m| m.as_str()).unwrap_or("")))).to_string()
+    });
 }
 
 /// Copies the workbook at `from` to `to`, the cached `<v>` of `sheet!reference` replaced by `value`.
@@ -434,8 +584,10 @@ fn parity(links_mode: LinksMode) {
     }
     assert!(short.is_empty(), "below Veredas 1's numbers:\n{}", short.join("\n"));
     assert!(matched >= base_matched);
-    // Veredas 2's own totals as measured on 2026-11-22: a change is a decision, made here
-    assert_eq!((matched, formulas, base_matched), (75_857, 76_359, 75_743));
+    // Veredas 2's own totals, a change a decision made here: 75 857 measured on 2026-11-22; 75 901
+    // on 2026-11-23, the expected side reading Excel's escaped texts and the engine's side its
+    // texts that read like errors as they are (C-222's third confirmation round, 44 cells)
+    assert_eq!((matched, formulas, base_matched), (75_901, 76_359, 75_743));
     // the corpus's workbooks with links: three, none of whose linked workbooks is here, so the
     // linked resolution reports each unavailable and answers from its cache (C-221's tests open
     // present ones; a plant's real linked workbooks are owed, Q344)

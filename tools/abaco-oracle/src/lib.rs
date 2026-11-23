@@ -107,9 +107,9 @@ pub enum Expected {
     Text(String),
     Bool(bool),
     Error(String),
-    /// A formula cell with no `<v>` at all (never calculated, or a dynamic-array cell whose value
-    /// lives elsewhere).
-    Empty,
+    /// A formula cell with no `<v>` at all: Excel writes the value every formula computed, so this
+    /// is a cache it never wrote, and equals nothing the engine computes.
+    Missing,
 }
 
 /// One formula cell of the file, with what Excel cached.
@@ -163,19 +163,101 @@ static RE_APP: LazyLock<Regex> = LazyLock::new(|| re(r"<Application>([^<]*)</App
 static RE_APP_VERSION: LazyLock<Regex> = LazyLock::new(|| re(r"<AppVersion>([0-9]+)\.[0-9]+</AppVersion>"));
 static RE_FILE_VERSION: LazyLock<Regex> = LazyLock::new(|| re(r#"<fileVersion\s[^>]*?appName="xl"[^>]*?lastEdited="([0-9]+)""#));
 
+/// XML's references resolved: the five named entities and every character reference
+/// (`&#13;`, `&#x1F600;`); an unknown or broken one is left as written.
 fn unescape(s: &str) -> String {
     if !s.contains('&') {
         return s.to_string();
     }
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&#10;", "\n")
-        .replace("&#13;", "\r")
-        .replace("&#9;", "\t")
-        .replace("&amp;", "&")
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        let Some(end) = rest.find(';').filter(|e| *e <= 12) else {
+            out.push('&');
+            rest = &rest[1..];
+            continue;
+        };
+        let name = &rest[1..end];
+        let ch = match name {
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            "amp" => Some('&'),
+            _ => name
+                .strip_prefix("#x")
+                .or_else(|| name.strip_prefix("#X"))
+                .map(|h| u32::from_str_radix(h, 16))
+                .or_else(|| name.strip_prefix('#').map(str::parse::<u32>))
+                .and_then(Result::ok)
+                .and_then(char::from_u32),
+        };
+        match ch {
+            Some(c) => {
+                out.push(c);
+                rest = &rest[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
+
+/// Element text as an XML parser and then OOXML read it: a raw carriage return, alone or before a
+/// line feed, is a line feed (XML 1.0 normalises line ends; `&#13;` stays a carriage return), the
+/// references resolved, then Excel's `_xHHHH_` escapes decoded (`_x005F_` the underscore of a
+/// literal one; a surrogate pair written as two escapes is the one character).
+pub fn xml_text(raw: &str) -> String {
+    let normalized = if raw.contains('\r') { raw.replace("\r\n", "\n").replace('\r', "\n") } else { raw.to_string() };
+    decode_escapes(&unescape(&normalized))
+}
+
+fn decode_escapes(s: &str) -> String {
+    if !s.contains("_x") {
+        return s.to_string();
+    }
+    let unit = |b: &[u8], i: usize| -> Option<u32> {
+        (b.len() >= i + 7 && b[i] == b'_' && b[i + 1] == b'x' && b[i + 6] == b'_')
+            .then(|| std::str::from_utf8(&b[i + 2..i + 6]).ok().and_then(|h| u32::from_str_radix(h, 16).ok()))
+            .flatten()
+    };
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < b.len() {
+        if let Some(u) = unit(b, i) {
+            if (0xD800..0xDC00).contains(&u)
+                && let Some(low) = unit(b, i + 7).filter(|l| (0xDC00..0xE000).contains(l))
+                && let Some(c) = char::from_u32(0x10000 + ((u - 0xD800) << 10) + (low - 0xDC00))
+            {
+                out.push(c);
+                i += 14;
+                continue;
+            }
+            if let Some(c) = char::from_u32(u) {
+                out.push(c);
+                i += 7;
+                continue;
+            }
+        }
+        let c = s[i..].chars().next().unwrap_or('\u{FFFD}');
+        out.push(c);
+        i += c.len_utf8().max(1);
+    }
+    out
+}
+
+/// The errors a workbook file holds (ECMA-376 `ST_CellType` `e`): Excel writes its newer ones
+/// (`#SPILL!`, `#CALC!`, …) as `#VALUE!` with value metadata.
+pub const FILE_ERRORS: [&str; 8] = ["#NULL!", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#GETTING_DATA"];
+
+static RE_RPH: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)<rPh\b.*?</rPh>"));
 
 /// `A` is 1, `Z` 26, `AA` 27.
 pub fn column_index(letters: &str) -> u32 {
@@ -250,7 +332,11 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
     let shared: Vec<String> = match read_part(&mut archive, "xl/sharedStrings.xml") {
         Some(xml) => RE_SI
             .captures_iter(&xml)
-            .map(|c| RE_T.captures_iter(&c[1]).map(|t| unescape(&t[1])).collect::<String>())
+            .map(|c| {
+                // a phonetic run (`<rPh>`) is a reading aid, not the string's text
+                let text = RE_RPH.replace_all(&c[1], "");
+                RE_T.captures_iter(&text).map(|t| xml_text(&t[1])).collect::<String>()
+            })
             .collect(),
         None => Vec::new(),
     };
@@ -312,7 +398,7 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
                 continue;
             };
             let fattrs = fc.get(1).map(|m| m.as_str()).unwrap_or("");
-            let text = fc.get(2).map(|m| unescape(m.as_str())).unwrap_or_default();
+            let text = fc.get(2).map(|m| xml_text(m.as_str())).unwrap_or_default();
             let ftype = RE_ATTR_T.captures(fattrs).map(|m| m[1].to_string());
             let si = RE_F_SI.captures(fattrs).and_then(|m| m[1].parse::<u32>().ok());
             let array = ftype.as_deref() == Some("array");
@@ -325,16 +411,25 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
                 _ => (text, false),
             };
 
-            let v = RE_V.captures(inner).map(|m| unescape(&m[1])).or_else(|| inner.contains("<v/>").then(String::new));
+            // the value's raw text: decoded as a text where the cell's type says text
+            let v_raw = RE_V.captures(inner).map(|m| m[1].to_string()).or_else(|| inner.contains("<v/>").then(String::new));
+            let v = v_raw.as_deref().map(unescape);
             let expected = match (t.as_deref(), v) {
                 (_, None) => match RE_IS.captures(inner) {
-                    Some(is) => Expected::Text(RE_T.captures_iter(&is[1]).map(|t| unescape(&t[1])).collect()),
-                    None => Expected::Empty,
+                    Some(is) => {
+                        let text = RE_RPH.replace_all(&is[1], "");
+                        Expected::Text(RE_T.captures_iter(&text).map(|t| xml_text(&t[1])).collect())
+                    }
+                    // Excel writes the value every formula computed: no `<v>` is a cache it never
+                    // wrote
+                    None => Expected::Missing,
                 },
+                // an index into the shared strings; anything else is the text it is (a mismatch
+                // unless the engine computed that very text)
                 (Some("s"), Some(v)) => {
-                    Expected::Text(v.trim().parse::<usize>().ok().and_then(|i| shared.get(i).cloned()).unwrap_or_default())
+                    Expected::Text(v.trim().parse::<usize>().ok().and_then(|i| shared.get(i).cloned()).unwrap_or(v))
                 }
-                (Some("str"), Some(v)) | (Some("inlineStr"), Some(v)) => Expected::Text(v),
+                (Some("str"), Some(_)) | (Some("inlineStr"), Some(_)) => Expected::Text(xml_text(v_raw.as_deref().unwrap_or_default())),
                 // a boolean Excel writes as 1 or 0; any other text is a cache Excel never wrote,
                 // read as the text it is (a mismatch)
                 (Some("b"), Some(v)) => match v.trim() {
@@ -342,7 +437,12 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
                     "0" => Expected::Bool(false),
                     other => Expected::Text(other.to_string()),
                 },
-                (Some("e"), Some(v)) => Expected::Error(v),
+                // an error a file holds; any other text is no error Excel writes, read as the text
+                // it is (a mismatch)
+                (Some("e"), Some(v)) => match FILE_ERRORS.iter().find(|e| **e == v.trim()) {
+                    Some(e) => Expected::Error(e.to_string()),
+                    None => Expected::Text(v),
+                },
                 // a number Excel can cache is finite: `inf`, `NaN` or `1E+999` in a `<v>` is
                 // read as the text it is, never as a number every engine value would equal
                 (_, Some(v)) => match v.trim().parse::<f64>() {
@@ -454,7 +554,7 @@ pub fn calamine_check(path: &Path, raw: &RawWorkbook) -> CalamineCheck {
         let got = by_sheet.get(cell.sheet.as_str()).and_then(|m| m.get(&(cell.row - 1, cell.col - 1))).cloned().flatten();
         out.compared += 1;
         let agree = match (&got, &cell.expected) {
-            (None | Some(Seen::Empty), Expected::Empty) => true,
+            (None | Some(Seen::Empty), Expected::Missing) => true,
             (None | Some(Seen::Empty), Expected::Text(t)) => t.is_empty(),
             (Some(Seen::Number(a)), Expected::Number(b)) => (a - b).abs() <= 1e-9 * a.abs().max(1.0),
             (Some(Seen::Text(a)), Expected::Text(b)) => a == b,
@@ -545,7 +645,7 @@ fn fmt_expected(e: &Expected) -> String {
         Expected::Text(t) => format!("{t:?}"),
         Expected::Bool(b) => (if *b { "TRUE" } else { "FALSE" }).to_string(),
         Expected::Error(e) => e.clone(),
-        Expected::Empty => "(empty)".into(),
+        Expected::Missing => "(no cached value)".into(),
     }
 }
 
@@ -664,10 +764,8 @@ pub fn classify(cell: &FormulaCell, actual: &Actual, unsupported_in_formula: boo
         (E::Number(a), A::Number(b)) => a.is_finite() && b.is_finite() && (a - b).abs() <= 1e-9 * a.abs().max(1.0),
         (E::Text(a), A::Text(b)) => a == b,
         (E::Text(a), A::Empty) => a.is_empty(),
-        (E::Empty, A::Text(b)) => b.is_empty(),
         (E::Bool(a), A::Bool(b)) => a == b,
         (E::Error(a), A::Error(b)) => a == b,
-        (E::Empty, A::Empty) => true,
         _ => false,
     };
     if matched {
@@ -703,7 +801,7 @@ pub fn classify(cell: &FormulaCell, actual: &Actual, unsupported_in_formula: boo
         }
         (E::Text(_), A::Text(_)) => Class::Text,
         (E::Bool(_), _) | (_, A::Bool(_)) => Class::Bool,
-        (E::Empty, _) | (_, A::Empty) => Class::EmptyVsValue,
+        (E::Missing, _) | (_, A::Empty) => Class::EmptyVsValue,
         (E::Number(_), A::Text(_)) | (E::Text(_), A::Number(_)) => Class::TypeNumberText,
         _ => Class::Text,
     }
@@ -741,13 +839,9 @@ fn read_actual(model: &ironcalc_base::Model, si: u32, cell: &FormulaCell) -> Act
         Ok(CellValue::None) => Actual::Empty,
         Ok(CellValue::Number(n)) => Actual::Number(n),
         Ok(CellValue::Boolean(b)) => Actual::Bool(b),
-        Ok(CellValue::String(s)) => {
-            if ty == CellType::ErrorValue || (s.starts_with('#') && s.ends_with(['?', '!'])) {
-                Actual::Error(s)
-            } else {
-                Actual::Text(s)
-            }
-        }
+        // the cell's type says error or text: a text that reads like an error (`#div/0!`) is text
+        Ok(CellValue::String(s)) if ty == CellType::ErrorValue => Actual::Error(s),
+        Ok(CellValue::String(s)) => Actual::Text(s),
         Err(e) => Actual::Error(format!("(api error: {e})")),
     }
 }
@@ -938,7 +1032,16 @@ pub fn run_file(path: &Path, options: &Options, probe: &mut Probe) -> FileReport
         }
     };
     say(format!("{} formula cells, {} value cells; calamine cross-check", raw.formula_cells.len(), raw.value_cells));
-    rep.calamine = Some(calamine_check(path, &raw));
+    // calamine panics on some files Excel never wrote (a shared-string index past the table): the
+    // cross-check reports it rather than abort the measure
+    rep.calamine = Some(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| calamine_check(path, &raw))).unwrap_or_else(|_| CalamineCheck {
+            compared: 0,
+            disagreements: 0,
+            examples: Vec::new(),
+            error: Some("calamine panicked reading the file".into()),
+        }),
+    );
 
     let links = options.links;
     let t0 = Instant::now();
