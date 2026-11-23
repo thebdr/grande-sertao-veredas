@@ -801,8 +801,11 @@ impl DuckStore {
         let info = tables.iter().find(|t| t.name == table).ok_or_else(|| StoreError::UnknownTable(table.to_string()))?;
         let columns = info.columns.clone();
         conn.execute_batch("BEGIN TRANSACTION")?;
+        // A read: the transaction ends with nothing to keep, whatever the page's outcome, a panic
+        // inside it included, so the server's connection is never left in a transaction.
+        let mut open = ReadTransaction { conn: &conn, open: true };
         let page = Self::page_on(&conn, table, columns, q, between);
-        // A read: the transaction ends with nothing to keep, whatever the page's outcome.
+        open.open = false;
         let ended = conn.execute_batch("ROLLBACK");
         let page = page?;
         ended?;
@@ -863,6 +866,11 @@ impl DuckStore {
         while let Some(row) = rows.next()? {
             let mut cells = Vec::with_capacity(ncols);
             for i in 0..ncols {
+                // A value of a type the wrapper does not know (a time of day in nanoseconds) panics
+                // in it, as it did before the page was a transaction: the caller's to catch (C-052's
+                // panel says so in its place), the transaction ended by the guard on the way out.
+                // DECISION PENDING (docs/questions.md Q130): refused by name instead, once the
+                // panel that pins the panic asks for the refusal.
                 let v: DuckValue = row.get(i).unwrap_or(DuckValue::Null);
                 cells.push(duck_to_json(&v));
             }
@@ -1436,6 +1444,21 @@ fn csv_field_counts(path: &str, opts: &CsvOptions) -> Option<Vec<usize>> {
         counts.push(fields);
     }
     Some(counts)
+}
+
+/// A page's read transaction, rolled back when it goes out of scope still open (a panic between
+/// its start and its end), so the connection it holds is never left inside a transaction.
+struct ReadTransaction<'a> {
+    conn: &'a Connection,
+    open: bool,
+}
+
+impl Drop for ReadTransaction<'_> {
+    fn drop(&mut self) {
+        if self.open {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+    }
 }
 
 /// A store on the drive is fresh: a database already at its path is refused by name, never a

@@ -2369,3 +2369,31 @@ change no release build.
 (a), nothing changed.
 
 **Reversible?** Yes: one line of the workspace manifest, and one more rebuild.
+
+## Q130 - A time of day in nanoseconds on a page: a panic, a refusal by name, or read?
+
+**Raised** 2026-11-23, by portal, answering the orchestrator after 98acf3b1 turned supervisão's
+`dashboards` red.
+
+The engine's driver cannot read a `TIME_NS` value: `row.get` panics on it ("internal error:
+entered unreachable code: invalid value: 1, Time64(ns)"). A page of rows (`DuckStore::query_rows`,
+C-041) over a view holding one has always panicked there. Supervisão catches the panic and says
+in the panel's place "the panel could not be computed: …", and its test pins that text
+(`crates/veredas-supervisao/tests/dashboards.rs`, panel 22 of the reference). 98acf3b1 made the
+page one transaction; the panic skipped its `ROLLBACK` and left the server's connection inside
+it, which turned the test red. The guard that ends the transaction on the way out, a panic
+included, is the fix. The value itself can go three ways:
+- (a) The panic, as before: the caller's to catch. Supervisão's test holds as written.
+- (b) Refused by name: the page fails with "table `nanos`: the column `at` of type TIME_NS
+  cannot be read", and the panel shows that text. Supervisão's assertion at panel 22 changes to
+  that text.
+- (c) Read: portal casts the column to `TIME` (microseconds, the nanoseconds' last three digits
+  dropped), and the value is written as a time of day like the others. Supervisão's panel 22
+  reads, and the limit C-052 states for it goes.
+
+**Recommended**: (b): no panic crosses a library's surface, and the panel still says why. Or (c),
+if the panel should show the time. **Taken meanwhile**: (a), the one that keeps `main` green
+without editing another member's test; (b) and (c) are each a few lines in `store.rs`, both tried
+and green in portal's own tests.
+
+**Reversible?** Yes: portal's change and supervisão's assertion, in one push each.
