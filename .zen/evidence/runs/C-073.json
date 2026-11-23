@@ -10,15 +10,15 @@
     "features"
   ],
   "exitCode": 0,
-  "outputSha": "9c38f21010bcb179474817215075265ba98338179bca307d39b19943809d1aff",
-  "outputTail": "\nrunning 3 tests\ntest the_default_holds_the_plant_facing_layers_and_each_master_is_its_own ... ok\ntest the_library_compiles_without_its_default_features_and_with_the_masters_alone ... ok\ntest without_its_default_features_core_stands_on_serde_toml_and_thiserror_alone ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s\n     Running tests/features.rs (target/debug/build/veredas-core/4891c90d9cbd1ef2/out/features-4891c90d9cbd1ef2)",
-  "ranAt": "2026-11-23T11:01:05.633Z",
-  "headCommit": "dcd6f954ab2c7030f84291f34e197e6d67943899",
+  "outputSha": "bdf25d0dfb374eadfeb1c88a4933e231651ba2cbad324956cb6763531e30f450",
+  "outputTail": "\nrunning 7 tests\ntest the_default_holds_the_plant_facing_layers_and_each_master_is_its_own ... ok\ntest every_feature_gate_is_where_it_belongs ... ok\ntest a_consumer_without_the_default_features_reads_stamps_states_and_draws ... ok\ntest without_its_default_features_core_stands_on_serde_toml_and_thiserror_alone ... ok\ntest the_library_compiles_without_its_default_features_and_with_the_masters_alone ... ok\ntest each_form_holds_the_layers_it_promises ... ok\ntest the_compiler_sees_each_layer_where_its_feature_puts_it ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 57.50s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s\n     Running tests/features.rs (target/debug/build/veredas-core/9288ce4e0a3923ad/out/features-9288ce4e0a3923ad)",
+  "ranAt": "2026-11-23T13:22:11.361Z",
+  "headCommit": "ba84bc58d641ea551b1808a148fde3f405a428ab",
   "tests": [
     {
       "name": "crates/veredas-core/tests/features.rs",
       "file": "crates/veredas-core/tests/features.rs",
-      "fileSha": "d7a315467130defc1ada14a9ab2615bfb037d020e03665447d49779c88243021"
+      "fileSha": "ec8d0deb4d64987c12416f901da66f6d2f6a195e5a5be67be88cca8d7114a4a0"
     }
   ]
 }
