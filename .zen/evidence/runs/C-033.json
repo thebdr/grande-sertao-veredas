@@ -10,15 +10,15 @@
     "bench_file"
   ],
   "exitCode": 0,
-  "outputSha": "0a53879c5668246ab4afbe4fe98ec44daca5c5f4d09933fe6dbf5e92a86343b6",
-  "outputTail": "test the_executable_prints_every_part_s_line_at_the_start_with_the_address_it_got ... ok\ntest the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order ... ok\ntest the_executable_checks_and_runs_a_bench_file ... ok\ntest every_invalid_bench_is_refused_with_its_place_named_before_anything_starts ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest the_documented_bench_loads_starts_and_every_part_does_its_work ... ok\ntest the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.43s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s\n     Running tests/bench_file.rs (target/debug/build/veredas-maquinar/f48dd7e676c9e416/out/bench_file-f48dd7e676c9e416)",
-  "ranAt": "2026-11-23T02:26:58.445Z",
-  "headCommit": "ab334d78796f9484062be445dba2923c9401db76",
+  "outputSha": "959f9ad3b54ff880ae64302a766dcb2154c3fddc6e8564744f500bf6f8e4e0b2",
+  "outputTail": "test the_reference_is_the_text_this_test_holds ... ok\ntest the_header_is_refused_four_ways_and_a_misspelled_key_in_any_table ... ok\ntest the_executable_says_its_version_and_stops_on_a_termination_signal ... ok\ntest the_executable_prints_every_part_s_line_at_the_start_with_the_address_it_got ... ok\ntest the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order ... ok\ntest the_executable_checks_and_runs_a_bench_file ... ok\ntest every_invalid_bench_is_refused_with_its_place_named_before_anything_starts ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest the_documented_bench_loads_starts_and_every_part_does_its_work ... ok\ntest the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.93s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s\n     Running tests/bench_file.rs (target/debug/build/veredas-maquinar/f48dd7e676c9e416/out/bench_file-f48dd7e676c9e416)",
+  "ranAt": "2026-11-23T06:22:44.195Z",
+  "headCommit": "55df876d3c24ca95d6538cb84e78ba5cc8023b4c",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/bench_file.rs",
       "file": "crates/veredas-maquinar/tests/bench_file.rs",
-      "fileSha": "984d48dd0eecc1ef3c0dd5220f4d3e60d2be238b22fbeb5923569977da411bb5"
+      "fileSha": "e06c0badd7b8dee51e7c1718ebba20ae9a28c47ee66b36990d80f5ff300945a5"
     }
   ]
 }

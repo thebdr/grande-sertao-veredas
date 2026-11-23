@@ -1,0 +1,13 @@
+{
+  "clause": "C-115",
+  "verdict": "refuted",
+  "ranAt": "2026-11-23T06:22:10.373Z",
+  "headCommit": "55df876d3c24ca95d6538cb84e78ba5cc8023b4c",
+  "tests": [
+    {
+      "name": "crates/veredas-maquinar/tests/reflexo.rs",
+      "file": "crates/veredas-maquinar/tests/reflexo.rs",
+      "symbolSha": "56cd151147bc981de27d08d7cc49ffeb4b91d1078185df6b49545a2affb9c0ba"
+    }
+  ]
+}
