@@ -327,7 +327,7 @@ impl PeerClient {
         if !answer.content_type.as_deref().is_some_and(|t| t.starts_with("text/event-stream")) {
             return Err(PeerError::Shape("the event stream is not `text/event-stream`".into()));
         }
-        Ok(PeerEvents { body: answer.body, parser: SseParser::default(), ready: VecDeque::new(), silence: STREAM_SILENCE, done: false })
+        Ok(PeerEvents { body: answer.body, parser: SseParser::default(), ready: VecDeque::new(), silence: STREAM_SILENCE, done: false, heard: tokio::time::Instant::now() })
     }
 
     async fn get_json(&self, path: &str) -> Result<Value, PeerError> {
@@ -596,6 +596,9 @@ pub struct PeerEvents {
     ready: VecDeque<(String, String)>,
     silence: Duration,
     done: bool,
+    /// When the stream last gave a byte: the silence runs from here, across every call, so a
+    /// caller dropping its calls more often than the silence still learns the link is gone.
+    heard: tokio::time::Instant,
 }
 
 impl PeerEvents {
@@ -616,11 +619,14 @@ impl PeerEvents {
                     Err(e) => return self.end(e),
                 }
             }
-            let data = match tokio::time::timeout(self.silence, self.body.piece()).await {
+            let data = match tokio::time::timeout_at(self.heard + self.silence, self.body.piece()).await {
                 Err(_) => return self.end(PeerError::Silent { ms: self.silence.as_millis() }),
                 Ok(Ok(None)) => return self.end(PeerError::Closed),
                 Ok(Err(e)) => return self.end(e),
-                Ok(Ok(Some(data))) => data,
+                Ok(Ok(Some(data))) => {
+                    self.heard = tokio::time::Instant::now();
+                    data
+                }
             };
             if let Err(e) = self.parser.push(&data, &mut self.ready) {
                 return self.end(e);

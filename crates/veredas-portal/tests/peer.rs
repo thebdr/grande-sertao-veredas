@@ -611,3 +611,58 @@ fn the_stream_s_opening_is_bounded_and_every_key_is_required() {
     let tag = answer(r#"{"source":"plc","tag":"x","ok":true,"status":"Good"}"#);
     shape(rt.block_on(PeerClient::new(tag).tag_read("plc", "x")).map(drop), "value");
 }
+
+/// A stream's silence runs from the last byte it gave, across every call: read through 300 ms
+/// timeouts, a peer that goes quiet is `Silent` about its silence after its last byte, then
+/// closed; and a chunked stream's trailers held back across dropped calls still end it cleanly.
+#[test]
+fn a_silence_and_the_trailers_hold_across_dropped_calls() {
+    let rt = reader();
+    let read_through = |events: &mut PeerEvents| -> (Vec<i64>, Result<PeerEvent, PeerError>, usize) {
+        let (mut got, mut dropped) = (Vec::new(), 0);
+        let end = loop {
+            match rt.block_on(async { tokio::time::timeout(Duration::from_millis(300), events.next_event()).await }) {
+                Err(_) => dropped += 1,
+                Ok(Ok(PeerEvent::Data(samples))) => got.extend(samples.iter().map(|s| s.index_ms)),
+                Ok(other) => break other,
+            }
+            assert!(dropped < 60, "no end after {dropped} dropped calls: {got:?}");
+        };
+        (got, end, dropped)
+    };
+    // A peer that says one thing and goes quiet, the link left open.
+    let (quiet, _) = fake_peer(|s| {
+        let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n5\r\n: hi\n\r\n");
+        std::thread::sleep(Duration::from_secs(20));
+    });
+    let mut events = rt.block_on(PeerClient::new(quiet.to_string()).event_stream()).unwrap().with_silence(Duration::from_millis(800));
+    let started = Instant::now();
+    let (got, end, dropped) = read_through(&mut events);
+    let took = started.elapsed();
+    assert!(matches!(end, Err(PeerError::Silent { ms: 800 })), "{end:?}");
+    assert!(got.is_empty() && dropped >= 2, "{got:?} {dropped}");
+    assert!(took >= Duration::from_millis(700) && took < Duration::from_millis(1_600), "silent after {took:?}");
+    assert!(matches!(rt.block_on(events.next_event()), Err(PeerError::Closed)));
+    // The last chunk's trailers, their blank line held back 700 ms.
+    let event = "event: data\ndata: {\"samples\":[{\"src\":\"s\",\"ser\":\"t\",\"k\":null,\"ms\":1,\"v\":1.5,\"n\":1}]}\n\n";
+    let (trailing, _) = fake_peer(move |s| {
+        let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{event}\r\n0\r\nX-Trailer: 1\r\n", event.len());
+        let _ = s.flush();
+        std::thread::sleep(Duration::from_millis(700));
+        let _ = s.write_all(b"\r\n");
+    });
+    let mut events = rt.block_on(PeerClient::new(trailing.to_string()).event_stream()).unwrap();
+    let (got, end, dropped) = read_through(&mut events);
+    assert_eq!(got, vec![1]);
+    assert!(dropped >= 1, "a call dropped while the trailers were read");
+    assert!(matches!(end, Err(PeerError::Closed)), "{end:?}");
+    // A snapshot without `start_ms`, a key the interface always writes: refused by its name.
+    let (addr, _) = fake_peer(|s| {
+        let body = r#"{"session_name":"x","running":true,"started_ms":1,"window_ms":null,"now_ms":2,"arrival_now_ms":3,"writes_armed":false,"sources":[]}"#;
+        let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+    });
+    match rt.block_on(PeerClient::new(addr.to_string()).snapshot()) {
+        Err(PeerError::Shape(text)) => assert!(text.contains("missing field `start_ms`"), "{text}"),
+        other => panic!("{other:?}"),
+    }
+}
