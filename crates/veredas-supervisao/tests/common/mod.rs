@@ -321,7 +321,9 @@ pub fn object<'a>(snapshot: &'a Value, id: &str) -> &'a Value {
 /// list item's marker); and of an element with words of its own, none drawn otherwise than
 /// written: its case changed (by `text-transform` on it, on its first letter or on its first line),
 /// its glyphs chosen otherwise (every `font-variant…` property the browser lists, and
-/// `font-feature-settings`, on it and on its first letter and line, each `normal`), its letters
+/// `font-feature-settings`, on it and on its first letter and line, each `normal`), its white space
+/// collapsed (two spaces or a tab in its text, a space it begins or ends with, under a `white-space`
+/// that collapses spaces; a line break under one that collapses breaks), its letters
 /// masked, set vertically (`writing-mode`), or reordered (a direction other than left to right, an
 /// override of the text's own order, or any letter drawn left of the one before it on its line, read
 /// by a range per letter), any letter drawn at no width, narrower than half its glyph's own advance
@@ -358,6 +360,14 @@ pub const AS_WRITTEN_FN: &str = r#"const asWritten = (el) => {
   if ((c.webkitTextSecurity ?? "none") !== "none") out.push(`its letters masked, ${c.webkitTextSecurity}`);
   if (c.writingMode !== "horizontal-tb") out.push(`its letters set ${c.writingMode}`);
   if (c.direction !== "ltr" || ["bidi-override", "isolate-override"].includes(c.unicodeBidi)) out.push(`its letters reordered, ${c.direction} ${c.unicodeBidi}`);
+  // Its white space as written: spaces two in a row or a tab in a text of its own, a space or a tab
+  // that text begins or ends the element with, under a `white-space` that collapses spaces; a line
+  // break under one that collapses breaks (its `white-space-collapse`, or the shorthand's reading).
+  const collapse = c.getPropertyValue("white-space-collapse") || ({ pre: "preserve", "pre-wrap": "preserve", "break-spaces": "break-spaces", "pre-line": "preserve-breaks" }[c.whiteSpace] ?? "collapse");
+  const kids = [...el.childNodes];
+  const spaced = texts.some((n) => /[ \t]{2}|\t/.test(n.data)) || (kids[0]?.nodeType === 3 && /^[ \t]/.test(kids[0].data)) || (kids[kids.length - 1]?.nodeType === 3 && /[ \t]$/.test(kids[kids.length - 1].data));
+  if (spaced && !["preserve", "break-spaces", "preserve-spaces"].includes(collapse)) out.push(`its spaces collapsed (white-space ${c.whiteSpace}): ${JSON.stringify(texts.map((n) => n.data).join("").slice(0, 30))}`);
+  if (texts.some((n) => /[\n\r]/.test(n.data)) && !["preserve", "break-spaces", "preserve-breaks"].includes(collapse)) out.push(`its line breaks collapsed (white-space ${c.whiteSpace}): ${JSON.stringify(texts.map((n) => n.data).join("").slice(0, 30))}`);
   // Its letters read where they are drawn: an element the browser renders no box for (an SVG
   // `title`, a hover text) draws none (whether a mark is shown at all is the shown census's).
   if (!el.getClientRects().length) return out;

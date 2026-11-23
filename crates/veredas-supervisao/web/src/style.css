@@ -192,8 +192,12 @@ button.gated:disabled { color: var(--weak2); border-color: var(--border); backgr
 .strip { display: flex; justify-content: space-between; gap: 16px; height: 26px; align-items: center; padding: 0 14px; background: var(--chrome); border-top: 1px solid var(--hair); font: 11px var(--mono); white-space: nowrap; overflow: hidden; }
 .strip-items { display: flex; gap: 18px; }
 
-/* ---- dashboards ---- */
-.dashboards { padding: 12px 16px; }
+/* ---- dashboards ----
+   Every text a panel draws with its white space as written (a label's two spaces, a value's leading
+   ones, a tab, a line break are the binding's or the store's, never collapsed); a badge kept on one
+   line, its spaces kept too. */
+.dashboards { padding: 12px 16px; white-space: pre-wrap; }
+.dashboards .badge { white-space: pre; }
 .subtabs { display: flex; gap: 4px; margin-bottom: 12px; }
 .subtabs button.on { background: var(--accent-soft); border-color: var(--accent-outline); }
 .dash-grid { display: grid; gap: 12px; }
@@ -203,20 +207,26 @@ button.gated:disabled { color: var(--weak2); border-color: var(--border); backgr
 .panel-bind { font: 11px var(--mono); color: var(--weak2); }
 .tile .big { font-size: 26px; line-height: 1.2; }
 .tile .sub { font-size: 11.5px; min-height: 16px; }
-.st-box-near { border-color: rgba(184,143,62,.5); }
-.st-box-warn { border-color: rgba(255,200,100,.45); }
-.st-box-alarm { border-color: rgba(255,107,107,.5); background: #1f1719; }
-.st-box-stale { border-style: dashed; border-color: var(--outline); }
+/* A tile's box and a grid cell's in their state (over the cell's own border, written below). */
+:is(.panel, .cell).st-box-near { border-color: rgba(184,143,62,.5); }
+:is(.panel, .cell).st-box-warn { border-color: rgba(255,200,100,.45); }
+:is(.panel, .cell).st-box-alarm { border-color: rgba(255,107,107,.5); background: #1f1719; }
+:is(.panel, .cell).st-box-stale { border-style: dashed; border-color: var(--outline); }
 .st-box-stale .big { color: var(--muted); }
-.st-box-disabled { background-image: repeating-linear-gradient(45deg, transparent 0 4px, rgba(255,255,255,.035) 4px 6px); }
+:is(.panel, .cell).st-box-disabled { background-image: repeating-linear-gradient(45deg, transparent 0 4px, rgba(255,255,255,.035) 4px 6px); }
 svg.spark .line, .chart .line, .dist .line { fill: none; stroke: var(--accent-tint); stroke-width: 1.5; }
+/* A tile's sparkline: the neutral series in the accent's tint while normal, every other state its own. */
+svg.spark.st-line-near .line { stroke: var(--near); }
 svg.spark.st-line-warn .line { stroke: var(--warn); }
 svg.spark.st-line-alarm .line { stroke: var(--danger); }
 svg.spark.st-line-stale .line { stroke: var(--muted); }
+svg.spark.st-line-disabled .line { stroke: var(--weak2); }
 svg.spark .point { fill: var(--accent-tint); }
+svg.spark.st-line-near .point { fill: var(--near); }
 svg.spark.st-line-warn .point { fill: var(--warn); }
 svg.spark.st-line-alarm .point { fill: var(--danger); }
 svg.spark.st-line-stale .point { fill: var(--muted); }
+svg.spark.st-line-disabled .point { fill: var(--weak2); }
 .chart { display: block; }
 .chart .grid { stroke: var(--hair); }
 .chart .axis { fill: var(--label); font: 10px var(--mono); }
@@ -237,6 +247,7 @@ svg.spark.st-line-stale .point { fill: var(--muted); }
 .statebar .st-warn { fill: var(--warn); }
 .statebar .st-alarm { fill: var(--danger); }
 .statebar .st-disabled { fill: var(--muted); }
+.statebar .st-stale { fill: #2a2a30; }
 .grid-cells { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 4px; }
 .cell { border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; display: flex; flex-direction: column; background: var(--rail); }
 .cell-id { color: var(--label); font-size: 10.5px; }
@@ -249,6 +260,7 @@ svg.spark.st-line-stale .point { fill: var(--muted); }
 .lv-fill.st-fill-warn { background: var(--warn); }
 .lv-fill.st-fill-alarm { background: var(--danger); }
 .lv-fill.st-fill-stale { background: #2a2a30; }
+.lv-fill.st-fill-disabled { background: repeating-linear-gradient(45deg, var(--muted) 0 3px, var(--raised) 3px 6px); }
 .lv-tick { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--weak2); }
 .lv-v { text-align: right; }
 table.dt { width: 100%; border-collapse: collapse; }

@@ -898,7 +898,19 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let probe = probe_dashboard(&dash);
     let v = drawn_as(&mut page, "Probe", "dashboards/0", Some(&probe));
     let kinds: Vec<&str> = v["drawn"].as_array().unwrap().iter().map(|p| p["kind"].as_str().unwrap()).collect();
-    assert_eq!(kinds.len(), every_state().len() + 21, "{kinds:?}");
+    assert_eq!(kinds.len(), every_state().len() + 28, "{kinds:?}");
+    // Every place a dashboard writes a state's class, each state painted otherwise than every other
+    // there, none in the accent's family or its band of hue but the neutral series (Q22).
+    let painted = page.eval(&format!("{STATE_PAINT}({})", serde_json::to_string(&every_state()).unwrap()));
+    assert_eq!(painted[1], json!([]), "a state painted as another, or in the accent: {}", painted[0]);
+    // The places, each object kind that draws a state: a table's cell, a tile (its badge, figure,
+    // sub-line and sparkline inside it), a grid cell (its value inside it), a level's figure and its
+    // fill, a timeline's run and its word now.
+    assert_eq!(
+        painted[0],
+        json!(["TR > mono st-text-*", "dash-grid > panel tile st-box-*", "grid-cells > cell st-box-*", "lv-row > lv-v mono st-text-*", "lv-track > lv-fill st-fill-*", "statebar > st-*", "tl-row > tl-now st-text-*"]),
+        "the places a dashboard draws a state on"
+    );
     // Bars of every sign drawn from 0: a bucket below it among the others, and every bucket and
     // the target below it, each bar inside the chart, the axis labelled at both ends and at 0.
     let n = kinds.len();
@@ -923,6 +935,82 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     drop(page);
     host.stop();
 }
+
+/// Every place under the dashboards a state's class is written (`st-<state>`, `st-<part>-<state>`),
+/// read from the document as it stands, by its parent and its class's family: an object's outermost
+/// element carrying one (its parts' state classes swapped with it, so it stands in one state whole),
+/// a probe per state put beside the first found there, read by what paints it and every part inside
+/// it (an SVG shape's fill and stroke; an HTML box's background, shadow and border, and its text's
+/// colour where it holds one: a tile's badge, figure, sub-line and sparkline, a cell's text); every state painted
+/// otherwise than every other, and none in the accent's four colours (by red, green and blue) or any
+/// colour of its band of hue (220° to 290°, saturation above 0.2), but the neutral series the
+/// accent draws (Q22): a sparkline's normal and a table's inline bar.
+const STATE_PAINT: &str = r##"((STATES) => {
+  const STATE = new RegExp(`^(st-(?:[a-z]+-)?)(${STATES.join("|")})$`);
+  const family = (cls) => cls.split(/\s+/).map((c) => c.replace(STATE, "$1*")).join(" ");
+  // What paints a part, read alone: an SVG shape or text its fill and stroke (a colour set on it
+  // paints nothing); an HTML box its background, its shadow and its border where it has one, and its
+  // text's colour where it holds a text of its own.
+  const DRAWS = new Set(["rect", "circle", "ellipse", "path", "line", "polyline", "polygon", "text", "tspan"]);
+  const paint = (e) => {
+    const c = getComputedStyle(e);
+    if (e instanceof SVGElement) return DRAWS.has(e.tagName.toLowerCase()) ? [["fill", c.fill], ["stroke", c.stroke]] : [];
+    const own = [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim() !== "");
+    return [...(own ? [["color", c.color]] : []), ["background-color", c.backgroundColor], ["background-image", c.backgroundImage], ["box-shadow", c.boxShadow], ...(parseFloat(c.borderTopWidth) > 0 ? [["border-top-color", c.borderTopColor], ["border-top-style", c.borderTopStyle]] : [])];
+  };
+  const parts = (el) => [el, ...el.querySelectorAll("*")];
+  const sig = (el) => parts(el).map((e) => paint(e).map(([, v]) => v).join(" | ")).join(" // ");
+  const root = getComputedStyle(document.documentElement);
+  const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true });
+  const rgb = (c) => { ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillStyle = c; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data]; };
+  const familyRgb = ["--accent", "--accent-tint", "--accent-soft", "--accent-outline"].map((v) => rgb(root.getPropertyValue(v).trim()).slice(0, 3).join(","));
+  const ofAccent = (tok) => {
+    const p = rgb(tok);
+    if (p[3] === 0) return false;
+    if (familyRgb.includes(p.slice(0, 3).join(","))) return true;
+    const [r, g, b] = p.slice(0, 3).map((x) => x / 255), mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn, l = (mx + mn) / 2;
+    if (d === 0) return false;
+    const s = d / (1 - Math.abs(2 * l - 1)), h = mx === r ? 60 * (((g - b) / d) % 6) : mx === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
+    const hue = (h + 360) % 360;
+    return hue >= 220 && hue <= 290 && s > 0.2;
+  };
+  const TOKENS = /(rgba?\([^)]*\)|hsla?\([^)]*\)|#[0-9a-f]{3,8}\b)/gi;
+  // A place: an object's outermost element whose class names a state (a tile, a grid cell, a
+  // timeline's run, a level's fill and its figure, a table's cell), its parts inside it swapped with
+  // it, every state class they carry, so the object stands in one state whole.
+  const stateful = (e) => (e.getAttribute("class") || "").split(/\s+/).some((c) => STATE.test(c));
+  const swap = (root, s) => { for (const e of [root, ...root.querySelectorAll("[class]")]) if (stateful(e)) e.setAttribute("class", family(e.getAttribute("class")).replaceAll("*", s)); };
+  const places = new Map();
+  for (const el of document.querySelectorAll(".dashboards [class]")) {
+    if (!stateful(el)) continue;
+    let up = el.parentElement;
+    while (up && !up.matches(".dashboards") && !stateful(up)) up = up.parentElement;
+    if (up && !up.matches(".dashboards")) continue;
+    const where = `${el.parentElement?.getAttribute("class") ?? el.parentElement?.tagName} > ${family(el.getAttribute("class"))}`;
+    if (!places.has(where)) places.set(where, el);
+  }
+  const out = [];
+  for (const [where, el] of places) {
+    const seen = new Map();
+    for (const s of STATES) {
+      const p = el.cloneNode(true);
+      swap(p, s);
+      el.after(p);
+      const v = sig(p);
+      // The neutral series are the accent's (Q22): a normal sparkline's line, a table's inline bar,
+      // whose fill shows a value's share in every state, its cell's text the state.
+      for (const e of parts(p)) {
+        if (s === "normal" && e.closest(".st-line-normal") && p.contains(e.closest(".st-line-normal"))) continue;
+        if (e.matches(".inbar-fill")) continue;
+        for (const [q, v] of paint(e)) for (const tok of v.match(TOKENS) || []) if (ofAccent(tok)) out.push(`${where} in ${s}: its ${e.tagName.toLowerCase()}.${e.getAttribute("class") ?? ""}'s ${q} ${tok}, of the accent`);
+      }
+      p.remove();
+      if (seen.has(v)) out.push(`${where} in ${s} painted as in ${seen.get(v)}: ${v.slice(0, 160)}`);
+      else seen.set(v, s);
+    }
+  }
+  return [[...places.keys()].sort(), out];
+})"##;
 
 /// Kept in the page: the dashboard JSON as the page's own fetch receives it, then the view opened.
 /// The cells panel is handed over as a read past its cap (five of its nine rows), so the page's
@@ -1398,6 +1486,40 @@ fn probe_dashboard(d: &Value) -> Value {
     let mut worded = p(0);
     (worded["data"]["state"], worded["data"]["word"], worded["data"]["mark"]) = (json!("warn"), json!("over 3σ in mA"), json!("■"));
     panels.push(worded);
+    // Texts whose white space is their own (two spaces, a leading and a trailing one, a tab, a line
+    // break), on every kind that draws a text of the binding's or the store's: a tile's title, value,
+    // badge word and sub-line; a trend's title; a timeline row's label and word; a grid cell's label
+    // and value; a level's label and value; a table's heading and cell; a cells key. Each drawn as written.
+    let mut tile = p(0);
+    tile["title"] = json!("Fill  A ");
+    (tile["data"]["state"], tile["data"]["word"], tile["data"]["mark"], tile["data"]["text"], tile["data"]["sub"]) = (json!("warn"), json!("  over  limit"), json!("!"), json!(" E01\t2"), json!("first\nsecond"));
+    panels.push(tile);
+    let mut tr = p(4);
+    tr["title"] = json!("Trend\ttwo");
+    panels.push(tr);
+    let mut tl = p(6);
+    let mut row = tl["data"]["rows"][0].clone();
+    (row["label"], row["now"]["state"], row["now"]["mark"], row["now"]["word"]) = (json!("Line  one"), json!("warn"), json!("!"), json!("  over  it"));
+    tl["data"]["rows"] = json!([row]);
+    panels.push(tl);
+    let mut g = p(7);
+    let mut c = g["data"]["cells"][0].clone();
+    (c["label"], c["text"]) = (json!("Cell  two\t"), json!(" 5  6"));
+    g["data"]["not_normal"] = json!(if c["state"] == "normal" { 0 } else { 1 });
+    g["data"]["cells"] = json!([c]);
+    panels.push(g);
+    let mut l = p(8);
+    let mut r = l["data"]["rows"][0].clone();
+    (r["label"], r["text"]) = (json!("Level\tthree"), json!("  7"));
+    l["data"]["rows"] = json!([r]);
+    panels.push(l);
+    let mut tb = p(9);
+    tb["data"]["rows"][0][0]["text"] = json!("  a  b");
+    tb["data"]["columns"][0]["label"] = json!("Out  let");
+    panels.push(tb);
+    let mut cl = p(10);
+    cl["data"]["rows"][0]["key"] = json!(" k  1");
+    panels.push(cl);
     let at = p(4)["data"]["points"].as_array().unwrap().clone();
     for vals in [[123456.7, 131234.5, 127000.25], [-1234.5, -1500.25, -1100.0]] {
         let mut t = p(4);
