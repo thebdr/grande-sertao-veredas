@@ -20,15 +20,15 @@ fn hex(s: &str) -> Vec<u8> {
 fn im0() -> Im0 {
     Im0 {
         vendor_id: 0x1234,
-        order_id: "6ES7 123-4AB56-7CD8~".into(),
-        serial_number: "S C-ABCD1234567~".into(),
+        order_id: "6ES7 151-3BA23-0AB0 ".into(),
+        serial_number: "  S C-ABCD12    ".into(),
         hardware_revision: 0x0103,
-        software_revision: SoftwareRevision { prefix: b'V', functional: 2, bugfix: 1, internal: 9 },
-        revision_counter: 5,
+        software_revision: SoftwareRevision { prefix: b'V', functional: 2, bugfix: 4, internal: 9 },
+        revision_counter: 0x0205,
         profile_id: 0xF600,
-        profile_specific_type: 3,
-        version: (1, 1),
-        supported: 0x001E,
+        profile_specific_type: 0x0304,
+        version: (1, 3),
+        supported: 0xF01E,
     }
 }
 
@@ -38,7 +38,7 @@ fn peer(port_id: &str, chassis_id: &str, line_delay: u32, last: u8) -> Peer {
 
 fn port(peers: Vec<Peer>) -> PortDataReal {
     PortDataReal {
-        slot: 7,
+        slot: 0x0102,
         subslot: 0x8001,
         own_port_id: "port-001".into(),
         peers,
@@ -56,8 +56,8 @@ fn i_m0_is_its_fields_to_the_byte() {
     let b = im0().block().unwrap();
     let want = hex("0020 0038 0100 1234")
         .into_iter()
-        .chain(b"6ES7 123-4AB56-7CD8~S C-ABCD1234567~".iter().copied())
-        .chain(hex("0103 56020109 0005 F600 0003 0101 001E"))
+        .chain(b"6ES7 151-3BA23-0AB0   S C-ABCD12    ".iter().copied())
+        .chain(hex("0103 56020409 0205 F600 0304 0103 F01E"))
         .collect::<Vec<u8>>();
     assert_eq!(b.encode().unwrap(), want);
     assert_eq!(Im0::from_block(&b).unwrap(), im0());
@@ -71,7 +71,14 @@ fn i_m0_is_its_fields_to_the_byte() {
     assert_eq!(Im0::from_block(&rpc::read_blocks(&bytes).0[0]).unwrap().version, (2, 1));
     // I&M1 to I&M4 supported (bits 1 to 4); bit 0 and past 15 name nothing.
     let i = im0();
-    assert_eq!((1..=15).filter(|&n| i.supports(n)).collect::<Vec<u8>>(), [1, 2, 3, 4]);
+    assert_eq!((1..=15).filter(|&n| i.supports(n)).collect::<Vec<u8>>(), [1, 2, 3, 4, 12, 13, 14, 15]);
+    let read = Im0::from_block(&rpc::read_blocks(&want).0[0]).unwrap();
+    assert!(read.supports(12) && !read.supports(5));
+    // The texts kept as sent, their spaces at either end with them.
+    assert_eq!((read.order_id.as_str(), read.serial_number.as_str()), ("6ES7 151-3BA23-0AB0 ", "  S C-ABCD12    "));
+    // A tilde, the last visible character, in each text, read and written.
+    let tildes = Im0 { order_id: "~ES7 151-3BA23-0AB0~".into(), serial_number: "~ C-ABCD12     ~".into(), ..im0() };
+    assert_eq!(Im0::from_block(&rpc::read_blocks(&tildes.block().unwrap().encode().unwrap()).0[0]).unwrap(), tildes);
     let all = Im0 { supported: 0xFFFF, ..im0() };
     assert_eq!((all.supports(0), all.supports(15), all.supports(16)), (false, true, false));
     assert_eq!((record::INDEX_IM0, record::IM0, record::ORDER_ID, record::SERIAL_NUMBER), (0xAFF0, 0x0020, 20, 16));
@@ -88,15 +95,30 @@ fn i_m0_is_its_fields_to_the_byte() {
     let mut bad = want.clone();
     bad[8] = 0x7F;
     let (blocks, _) = rpc::read_blocks(&bad);
-    assert_eq!(Im0::from_block(&blocks[0]), Err(RecordError::Text { field: "order id", want: "20".into(), got: "\u{7f}ES7 123-4AB56-7CD8~".into() }));
+    assert_eq!(Im0::from_block(&blocks[0]), Err(RecordError::Text { field: "order id", want: "20".into(), got: "\u{7f}ES7 151-3BA23-0AB0 ".into() }));
     let mut bad = want.clone();
     bad[30] = 0x00;
-    assert_eq!(Im0::from_block(&rpc::read_blocks(&bad).0[0]), Err(RecordError::Text { field: "serial number", want: "16".into(), got: "S \u{0}-ABCD1234567~".into() }));
+    assert_eq!(Im0::from_block(&rpc::read_blocks(&bad).0[0]), Err(RecordError::Text { field: "serial number", want: "16".into(), got: "  \u{0} C-ABCD12    ".into() }));
     let mut bad = want.clone();
     bad[46] = 0x19;
     let err = Im0::from_block(&rpc::read_blocks(&bad).0[0]).unwrap_err();
     assert_eq!(err, RecordError::Text { field: "software revision's prefix", want: "1".into(), got: "\u{19}".into() });
     assert_eq!(err.to_string(), "the software revision's prefix is 1 visible characters (space to tilde); \"\\u{19}\" is not");
+    // The prefix's bounds both ways: space taken, under it and past tilde refused, read or written;
+    // and a text byte just under space refused both ways.
+    let space = Im0 { software_revision: SoftwareRevision { prefix: b' ', ..im0().software_revision }, ..im0() };
+    assert_eq!(Im0::from_block(&rpc::read_blocks(&space.block().unwrap().encode().unwrap()).0[0]).unwrap(), space);
+    for p in [0x1F, 0x7F] {
+        let r = SoftwareRevision { prefix: p, ..im0().software_revision };
+        assert!(matches!(Im0 { software_revision: r, ..im0() }.block(), Err(RecordError::Text { field: "software revision's prefix", .. })), "{p:#x}");
+        let mut bad = want.clone();
+        bad[46] = p;
+        assert!(matches!(Im0::from_block(&rpc::read_blocks(&bad).0[0]), Err(RecordError::Text { field: "software revision's prefix", .. })), "{p:#x}");
+    }
+    let mut bad = want.clone();
+    bad[10] = 0x1F;
+    assert!(matches!(Im0::from_block(&rpc::read_blocks(&bad).0[0]), Err(RecordError::Text { field: "order id", .. })));
+    assert!(matches!(Im0 { serial_number: "\u{1f} C-ABCD12      ".into(), ..im0() }.block(), Err(RecordError::Text { field: "serial number", .. })));
     // Tilde is the last visible character: read and written, in every text and the prefix.
     let tilde = Im0 { software_revision: SoftwareRevision { prefix: b'~', ..im0().software_revision }, ..im0() };
     assert_eq!(Im0::from_block(&rpc::read_blocks(&tilde.block().unwrap().encode().unwrap()).0[0]).unwrap(), tilde);
@@ -130,7 +152,7 @@ fn i_m0_is_its_fields_to_the_byte() {
 fn the_port_s_data_is_its_fields_aligned_to_the_byte() {
     let one = port(vec![peer("port-002", "switch-a", 10, 0x99)]);
     let want = hex(
-        "020F 0048 0100 0000 0007 8001 08 706f72742d303031 01 0000 \
+        "020F 0048 0100 0000 0102 8001 08 706f72742d303031 01 0000 \
          08 706f72742d303032 08 7377697463682d61 0000 0000000a 021a2b3c4d99 0000 \
          0010 0000 00000000 00000000 0501 0000 00000001",
     );
@@ -139,7 +161,7 @@ fn the_port_s_data_is_its_fields_aligned_to_the_byte() {
     assert_eq!(PortDataReal::from_block(&b).unwrap(), one);
     // No peer: the medium 44 bytes into the block.
     let none = port(vec![]);
-    let want = hex("020F 0028 0100 0000 0007 8001 08 706f72742d303031 00 0000 0010 0000 00000000 00000000 0501 0000 00000001");
+    let want = hex("020F 0028 0100 0000 0102 8001 08 706f72742d303031 00 0000 0010 0000 00000000 00000000 0501 0000 00000001");
     assert_eq!(none.block().unwrap().encode().unwrap(), want);
     assert_eq!(PortDataReal::from_block(&rpc::read_blocks(&want).0[0]).unwrap(), none);
     // Two peers of odd lengths, one with a cable delay; boundaries, link down, fibre; bytes after
@@ -147,7 +169,7 @@ fn the_port_s_data_is_its_fields_aligned_to_the_byte() {
     let two = PortDataReal {
         subslot: 0x8002,
         own_port_id: "port-002".into(),
-        peers: vec![peer("port-001", "dev~b", 0x8000_0005, 0x11), peer("port-003.x", "s~", 7, 0x22)],
+        peers: vec![peer("port-001", "dev~b", 0x8001_2345, 0x11), peer("port-003.x", "s~", 0x0001_0007, 0x22)],
         mau_type: 0x011E,
         domain_boundary: 0x0100_0003,
         multicast_boundary: 0x8000_0010,
@@ -159,13 +181,13 @@ fn the_port_s_data_is_its_fields_aligned_to_the_byte() {
     let bytes = two.block().unwrap().encode().unwrap();
     assert_eq!(bytes.len() % 4, 0);
     assert_eq!(&bytes[24..37], &hex("08 706f72742d303031 05 646576")[..]);
-    assert_eq!(&bytes[37..52], &hex("7e62 00 80000005 021a2b3c4d11 0000")[..]);
-    assert_eq!(&bytes[52..80], &hex("0a 706f72742d3030332e78 02 737e 0000 00000007 021a2b3c4d22 0000")[..]);
+    assert_eq!(&bytes[37..52], &hex("7e62 00 80012345 021a2b3c4d11 0000")[..]);
+    assert_eq!(&bytes[52..80], &hex("0a 706f72742d3030332e78 02 737e 0000 00010007 021a2b3c4d22 0000")[..]);
     assert_eq!(&bytes[80..], &hex("011E 0000 01000003 80000010 0202 0000 01000002 00010000")[..]);
-    assert_eq!(&bytes[8..12], &hex("0007 8002")[..]);
+    assert_eq!(&bytes[8..12], &hex("0102 8002")[..]);
     assert_eq!(PortDataReal::from_block(&rpc::read_blocks(&bytes).0[0]).unwrap(), two);
     let (cable, line) = (&two.peers[0], &two.peers[1]);
-    assert_eq!((cable.cable_delay(), cable.delay_ns(), line.cable_delay(), line.delay_ns()), (true, 5, false, 7));
+    assert_eq!((cable.cable_delay(), cable.delay_ns(), line.cable_delay(), line.delay_ns()), (true, 0x0001_2345, false, 0x0001_0007));
     assert_eq!((LinkState { port: 5, link: 1 }.up(), LinkState { port: 5, link: 2 }.up()), (true, false));
     assert_eq!((0..=8).filter(|&link| LinkState { port: 5, link }.up()).collect::<Vec<u8>>(), [1]);
     assert_eq!((record::INDEX_PORT_DATA_REAL, record::PORT_DATA_REAL), (0x802A, 0x020F));
@@ -192,6 +214,14 @@ fn what_does_not_fit_the_port_s_data_is_refused_by_name() {
     // Tilde, the last visible character, in each text, read and written.
     let tilde = PortDataReal { own_port_id: "port~1".into(), peers: vec![peer("~", "a~b", 1, 1)], ..port(vec![]) };
     assert_eq!(PortDataReal::from_block(&tilde.block().unwrap()).unwrap(), tilde);
+    // Texts read as sent, a chassis id's spaces at either end with it; a byte just under space
+    // refused both ways.
+    let spaced = port(vec![peer("port-002", " switch a ", 1, 1)]);
+    assert_eq!(PortDataReal::from_block(&spaced.block().unwrap()).unwrap().peers[0].chassis_id, " switch a ");
+    assert!(matches!(port(vec![peer("p", "c\u{1f}", 0, 0)]).block(), Err(RecordError::Text { field: "peer's chassis id", .. })));
+    let mut body = one.block().unwrap().body;
+    body[7] = 0x1F;
+    assert!(matches!(PortDataReal::from_block(&Block::new(record::PORT_DATA_REAL, body)), Err(RecordError::Text { field: "own port id", .. })));
     // A peer's MAC, six different bytes in their order.
     let mac = PortDataReal::from_block(&one.block().unwrap()).unwrap().peers[0].mac;
     assert_eq!(mac, Mac([0x02, 0x1A, 0x2B, 0x3C, 0x4D, 0x99]));
@@ -314,7 +344,7 @@ fn the_dissectors_read_both_records_in_a_read_answer() {
     let two = PortDataReal {
         subslot: 0x8002,
         own_port_id: "port-002".into(),
-        peers: vec![peer("port-001", "dev~b", 0x8000_0005, 0x11), peer("port-003.x", "s~", 7, 0x22)],
+        peers: vec![peer("port-001", "dev~b", 0x8001_2345, 0x11), peer("port-003.x", "s~", 0x0001_0007, 0x22)],
         mau_type: 0x011E,
         domain_boundary: 0x0100_0003,
         multicast_boundary: 0x8000_0010,
@@ -354,19 +384,20 @@ fn the_dissectors_read_both_records_in_a_read_answer() {
     assert_eq!(one(im, "im_hardware_revision"), "259");
     assert_eq!(one(im, "im_revision_prefix"), "'V'");
     assert_eq!(one(im, "im_sw_revision_functional_enhancement"), "2");
-    assert_eq!(one(im, "im_revision_bugfix"), "1");
+    assert_eq!(one(im, "im_revision_bugfix"), "4");
     assert_eq!(one(im, "im_sw_revision_internal_change"), "9");
-    assert_eq!(one(im, "im_revision_counter"), "5");
-    assert_eq!((one(im, "im_profile_id"), one(im, "im_profile_specific_type")), ("62976".into(), "3".into()));
-    assert_eq!((one(im, "im_version_major"), one(im, "im_version_minor")), ("1".into(), "1".into()));
-    assert_eq!(one(im, "im_supported"), "30");
+    assert_eq!(one(im, "im_revision_counter"), "517");
+    assert_eq!((one(im, "im_profile_id"), one(im, "im_profile_specific_type")), ("62976".into(), "772".into()));
+    assert_eq!((one(im, "im_version_major"), one(im, "im_version_minor")), ("1".into(), "3".into()));
+    assert_eq!(one(im, "im_supported"), "61470");
 
     let ports = [port(vec![]), port(vec![peer("port-002", "switch-a", 10, 0x99)]), two];
     for (k, pd) in ports.iter().enumerate() {
         let p = &d[3 + 2 * k];
         assert_eq!(field(p, "block_type"), ["32777", "527"], "port {k}");
         assert_eq!(field(p, "subslot_nr"), [pd.subslot.to_string(), pd.subslot.to_string()], "port {k}");
-        assert_eq!(field(p, "slot_nr"), [pd.slot.to_string(), pd.slot.to_string()], "port {k}");
+        // The read header's slot is the request's (7), the record's its own (258).
+        assert_eq!(field(p, "slot_nr"), ["7".to_string(), pd.slot.to_string()], "port {k}");
         assert_eq!(one(p, "own_port_id"), pd.own_port_id, "port {k}");
         assert_eq!(one(p, "length_own_port_id"), pd.own_port_id.len().to_string(), "port {k}");
         assert_eq!(one(p, "number_of_peers"), pd.peers.len().to_string(), "port {k}");
