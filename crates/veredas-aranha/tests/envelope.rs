@@ -128,10 +128,16 @@ fn a_tagged_frame_carries_its_priority_drop_bit_and_vlan() {
     let e = ether::parse(&f).unwrap();
     assert_eq!((e.vlan, e.ethertype, &e.payload[..2]), (Some(tag), 0x8892, &[0x80, 0x00][..]));
 
-    let every = VlanTag { priority: 7, drop_eligible: true, id: 4095 };
+    // Every bit set but the reserved VLAN id's last: 4094 written; 4095 read, never written.
+    let every = VlanTag { priority: 7, drop_eligible: true, id: 4094 };
     let f = ether::build_tagged(dst, src, Some(every), 0x0800, &[]).unwrap();
-    assert_eq!(&f[14..16], &[0xFF, 0xFF]);
+    assert_eq!(&f[14..16], &[0xFF, 0xFE]);
     assert_eq!(ether::parse(&f).unwrap().vlan, Some(every));
+    let reserved = VlanTag { id: 4095, ..every };
+    assert_eq!(ether::build_tagged(dst, src, Some(reserved), 0x0800, &[]), Err(EtherError::BadVlanId(4095)));
+    let mut heard = f.clone();
+    heard[15] = 0xFF;
+    assert_eq!(ether::parse(&heard).unwrap().vlan, Some(reserved));
     // The drop bit alone, and the priority's low bit alone, read back apart.
     let drop_only = VlanTag { priority: 0, drop_eligible: true, id: 5 };
     let f = ether::build_tagged(dst, src, Some(drop_only), 0x0800, &[]).unwrap();
@@ -146,39 +152,60 @@ fn a_tagged_frame_carries_its_priority_drop_bit_and_vlan() {
 #[test]
 fn what_the_wire_cannot_carry_is_refused_never_cut() {
     let (dst, src) = (mac("02:00:00:00:00:01"), mac("02:00:00:00:00:02"));
-    assert_eq!(ether::build(dst, src, 0x88CC, &[0; 1500]).unwrap().len(), 1514);
+    let f = ether::build(dst, src, 0x88CC, &[0; 1500]).unwrap();
+    assert_eq!(f.len(), 1514);
+    assert_eq!(ether::parse(&f).unwrap().payload, &[0; 1500][..]);
     assert_eq!(ether::build(dst, src, 0x88CC, &[0; 1501]), Err(EtherError::TooLong(1501)));
     let tag = |priority, id| Some(VlanTag { priority, drop_eligible: false, id });
     // Tagged, the payload's limit is the same: the frame grows by the tag.
-    assert_eq!(ether::build_tagged(dst, src, tag(6, 0), 0x8892, &[0; 1500]).unwrap().len(), 1518);
+    let f = ether::build_tagged(dst, src, tag(6, 0), 0x8892, &[0x5A; 1500]).unwrap();
+    assert_eq!(f.len(), 1518);
+    assert_eq!(ether::parse(&f).unwrap().payload, &[0x5A; 1500][..]);
+    // What is heard past 1500 is read whole, never refused: two tags, the inner one read as the
+    // payload's first bytes (this envelope reads one tag), 1522 bytes in all.
+    let mut double = vec![2, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 2, 0x81, 0x00, 0xC0, 0x05, 0x81, 0x00, 0x00, 0x07, 0x88, 0x92];
+    double.resize(1522, 0x33);
+    let e = ether::parse(&double).unwrap();
+    assert_eq!((e.vlan, e.ethertype, e.payload.len()), (tag(6, 5), 0x8100, 1504));
+    assert_eq!(e.payload, &double[18..]);
+    let big = vec![0x44; 9000];
+    let e = ether::parse(&big).unwrap();
+    assert_eq!((e.payload.len(), e.payload), (8986, &big[14..]));
     assert_eq!(ether::build_tagged(dst, src, tag(6, 0), 0x8892, &[0; 1501]), Err(EtherError::TooLong(1501)));
-    // A type that is a length, or the tag's own, is no EtherType to write.
-    for t in [0x0000u16, 0x0026, 0x05DC, 0x05FF, 0x8100] {
+    // A type that is a length, nothing (0x05DD to 0x05FF), or one readers take for a tag, is no
+    // EtherType to write.
+    for t in [0x0000u16, 0x0026, 0x05DC, 0x05DD, 0x05FF, 0x8100, 0x88A8, 0x9100] {
         assert_eq!(ether::build(dst, src, t, &[1, 2, 3]), Err(EtherError::NotEtherType(t)), "{t:#x}");
         assert_eq!(ether::build_tagged(dst, src, tag(0, 1), t, &[1, 2, 3]), Err(EtherError::NotEtherType(t)), "{t:#x}");
     }
     assert!(ether::build(dst, src, 0x0600, &[]).is_ok());
     assert_eq!(
         EtherError::NotEtherType(0x26).to_string(),
-        "0x0026 is not an EtherType this envelope writes (below 0x0600 is an 802.3 length; 0x8100 is the tag's own)"
+        "0x0026 is not an EtherType this envelope writes (below 0x0600 is an 802.3 length or nothing; 0x8100, 0x88A8 and 0x9100 are read as tags)"
     );
+    assert_eq!(ether::TAG_TYPES, [0x8100, 0x88A8, 0x9100]);
+    assert!(ether::build(dst, src, 0x88A9, &[]).is_ok() && ether::build(dst, src, 0x9101, &[]).is_ok());
     assert_eq!(ether::build_tagged(dst, src, tag(8, 0), 0x8892, &[]), Err(EtherError::BadPriority(8)));
     assert_eq!(ether::build_tagged(dst, src, tag(0, 4096), 0x8892, &[]), Err(EtherError::BadVlanId(4096)));
+    assert_eq!(EtherError::BadVlanId(4095).to_string(), "a VLAN id written is 0 to 4094 (4095 is reserved), not 4095");
     assert_eq!(EtherError::TooLong(1501).to_string(), "a payload of 1501 bytes is past Ethernet's 1500");
 }
 
 #[test]
 fn a_length_field_is_read_as_a_length_never_as_an_ethertype() {
+    assert_eq!((ether::MAX_LENGTH, ether::MIN_ETHERTYPE), (0x05DC, 0x0600));
     // A spanning-tree frame: 802.3, its length 0x0026, an LLC header (42 42 03) following.
     let mut stp = vec![0x01, 0x80, 0xC2, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0x00, 0x26, 0x42, 0x42, 0x03];
     stp.resize(60, 0);
     let e = ether::parse(&stp).unwrap();
     assert!(e.is_length());
-    assert_eq!((e.ethertype, &e.payload[..3]), (0x0026, &[0x42, 0x42, 0x03][..]));
+    assert_eq!((e.ethertype, e.payload), (0x0026, &stp[14..]));
+    assert_eq!(e.payload.len(), 46, "the payload runs to the end, its pad included");
     let lldp = ether::build(Mac::LLDP_MULTICAST, mac("02:00:00:00:00:02"), 0x88CC, &[0, 0]).unwrap();
     assert!(!ether::parse(&lldp).unwrap().is_length());
-    // At the boundary, tagged and not: below 0x0600 a length, from it an EtherType.
-    for (t, length) in [(0x05FFu16, true), (0x05DC, true), (0x0000, true), (0x0600, false), (0x0800, false), (0x86DD, false)] {
+    // At the boundaries, tagged and not: up to 0x05DC a length, from 0x0600 an EtherType, between
+    // them neither; the payload whole, to the end.
+    for (t, length) in [(0x05FFu16, false), (0x05DD, false), (0x05DC, true), (0x0000, true), (0x0600, false), (0x0800, false), (0x86DD, false)] {
         let mut untagged = vec![2, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 2];
         untagged.extend_from_slice(&t.to_be_bytes());
         untagged.resize(60, 0);
@@ -188,6 +215,7 @@ fn a_length_field_is_read_as_a_length_never_as_an_ethertype() {
         for f in [&untagged, &tagged] {
             let e = ether::parse(f).unwrap();
             assert_eq!((e.ethertype, e.is_length()), (t, length), "{t:#06x} {:?}", e.vlan);
+            assert_eq!(e.payload, &f[if e.vlan.is_some() { 18 } else { 14 }..], "{t:#06x}");
         }
     }
 }
