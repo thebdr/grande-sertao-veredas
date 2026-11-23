@@ -117,6 +117,8 @@ pub enum RecordError {
     Padding(&'static str),
     #[error("the port's data holds at most 255 peers; this one has {0}")]
     Peers(usize),
+    #[error("the port's data of {0} bytes is past what a block's length counts (65533)")]
+    TooLong(usize),
     #[error("the {field} is {want} visible characters (space to tilde); {got:?} is not")]
     Text { field: &'static str, want: String, got: String },
 }
@@ -273,16 +275,17 @@ impl PortDataReal {
         let subslot = r.u16("subslot")?;
         let own_port_id = r.text("own port id")?;
         let n = r.u8("number of peers")?;
-        r.align("first peer")?;
+        // Padding is named by the field it comes before: with no peer, the MAU type.
+        r.align(if n == 0 { "MAU type" } else { "first peer" })?;
         let mut peers = Vec::with_capacity(n as usize);
-        for _ in 0..n {
+        for k in 0..n {
             let port_id = r.text("peer's port id")?;
             let chassis_id = r.text("peer's chassis id")?;
             r.align("peer's line delay")?;
             let line_delay = r.u32("peer's line delay")?;
             let m = r.take(6, "peer's MAC")?;
             let mac = Mac([m[0], m[1], m[2], m[3], m[4], m[5]]);
-            r.align("next peer")?;
+            r.align(if k + 1 == n { "MAU type" } else { "next peer" })?;
             peers.push(Peer { port_id, chassis_id, line_delay, mac });
         }
         let mau_type = r.u16("MAU type")?;
@@ -307,8 +310,9 @@ impl PortDataReal {
         })
     }
 
-    /// The block, its padding zero. A text past 255 bytes or not visible characters, or more than
-    /// 255 peers, is refused.
+    /// The block, its padding zero. A text past 255 bytes or not visible characters, more than 255
+    /// peers, or a record longer than a block's length counts (255 peers with long texts), is
+    /// refused.
     pub fn block(&self) -> Result<Block, RecordError> {
         let mut x = vec![0, 0];
         x.extend_from_slice(&self.slot.to_be_bytes());
@@ -333,6 +337,9 @@ impl PortDataReal {
         align(&mut x);
         x.extend_from_slice(&self.media_type.to_be_bytes());
         x.extend_from_slice(&self.extra);
+        if x.len() > u16::MAX as usize - 2 {
+            return Err(RecordError::TooLong(x.len()));
+        }
         Ok(Block::new(PORT_DATA_REAL, x))
     }
 }

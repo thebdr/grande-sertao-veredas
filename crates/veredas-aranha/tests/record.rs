@@ -22,8 +22,8 @@ fn im0() -> Im0 {
         vendor_id: 0x1234,
         order_id: "6ES7 151-3BA23-0AB0 ".into(),
         serial_number: "  S C-ABCD12    ".into(),
-        hardware_revision: 0x0103,
-        software_revision: SoftwareRevision { prefix: b'V', functional: 2, bugfix: 4, internal: 9 },
+        hardware_revision: 0x0A0B,
+        software_revision: SoftwareRevision { prefix: b'V', functional: 0x11, bugfix: 0x0E, internal: 9 },
         revision_counter: 0x0205,
         profile_id: 0xF600,
         profile_specific_type: 0x0304,
@@ -57,7 +57,7 @@ fn i_m0_is_its_fields_to_the_byte() {
     let want = hex("0020 0038 0100 1234")
         .into_iter()
         .chain(b"6ES7 151-3BA23-0AB0   S C-ABCD12    ".iter().copied())
-        .chain(hex("0103 56020409 0205 F600 0304 0103 F01E"))
+        .chain(hex("0A0B 56110E09 0205 F600 0304 0103 F01E"))
         .collect::<Vec<u8>>();
     assert_eq!(b.encode().unwrap(), want);
     assert_eq!(Im0::from_block(&b).unwrap(), im0());
@@ -68,7 +68,16 @@ fn i_m0_is_its_fields_to_the_byte() {
     let v = Im0 { version: (2, 1), ..im0() };
     let bytes = v.block().unwrap().encode().unwrap();
     assert_eq!(&bytes[56..58], &[2, 1]);
-    assert_eq!(Im0::from_block(&rpc::read_blocks(&bytes).0[0]).unwrap().version, (2, 1));
+    assert_eq!(Im0::from_block(&rpc::read_blocks(&bytes).0[0]).unwrap(), v);
+    // Every number's bytes appear once in the body, so a field read from another's place is seen.
+    let body = &want[6..];
+    // (Vendor, hardware revision, prefix, functional, bugfix, internal, revision counter, profile,
+    // its type, version, supported.)
+    for (at, n) in [(0usize, 2usize), (38, 2), (40, 1), (41, 1), (42, 1), (43, 1), (44, 2), (46, 2), (48, 2), (50, 2), (52, 2)] {
+        let piece = &body[at..at + n];
+        let found = body.windows(n).filter(|w| *w == piece).count();
+        assert_eq!(found, 1, "the bytes {piece:02x?} at {at} appear {found} times");
+    }
     // I&M1 to I&M4 supported (bits 1 to 4); bit 0 and past 15 name nothing.
     let i = im0();
     assert_eq!((1..=15).filter(|&n| i.supports(n)).collect::<Vec<u8>>(), [1, 2, 3, 4, 12, 13, 14, 15]);
@@ -110,15 +119,20 @@ fn i_m0_is_its_fields_to_the_byte() {
     assert_eq!(Im0::from_block(&rpc::read_blocks(&space.block().unwrap().encode().unwrap()).0[0]).unwrap(), space);
     for p in [0x1F, 0x7F] {
         let r = SoftwareRevision { prefix: p, ..im0().software_revision };
-        assert!(matches!(Im0 { software_revision: r, ..im0() }.block(), Err(RecordError::Text { field: "software revision's prefix", .. })), "{p:#x}");
+        let refused = RecordError::Text { field: "software revision's prefix", want: "1".into(), got: char::from(p).to_string() };
+        assert_eq!(Im0 { software_revision: r, ..im0() }.block(), Err(refused.clone()), "{p:#x}");
         let mut bad = want.clone();
         bad[46] = p;
-        assert!(matches!(Im0::from_block(&rpc::read_blocks(&bad).0[0]), Err(RecordError::Text { field: "software revision's prefix", .. })), "{p:#x}");
+        assert_eq!(Im0::from_block(&rpc::read_blocks(&bad).0[0]), Err(refused), "{p:#x}");
     }
     let mut bad = want.clone();
     bad[10] = 0x1F;
-    assert!(matches!(Im0::from_block(&rpc::read_blocks(&bad).0[0]), Err(RecordError::Text { field: "order id", .. })));
-    assert!(matches!(Im0 { serial_number: "\u{1f} C-ABCD12      ".into(), ..im0() }.block(), Err(RecordError::Text { field: "serial number", .. })));
+    let err = Im0::from_block(&rpc::read_blocks(&bad).0[0]).unwrap_err();
+    assert_eq!(err, RecordError::Text { field: "order id", want: "20".into(), got: "6E\u{1f}7 151-3BA23-0AB0 ".into() });
+    assert_eq!(err.to_string(), "the order id is 20 visible characters (space to tilde); \"6E\\u{1f}7 151-3BA23-0AB0 \" is not");
+    let err = Im0 { serial_number: "\u{1f} C-ABCD12      ".into(), ..im0() }.block().unwrap_err();
+    assert_eq!(err, RecordError::Text { field: "serial number", want: "16".into(), got: "\u{1f} C-ABCD12      ".into() });
+    assert_eq!(err.to_string(), "the serial number is 16 visible characters (space to tilde); \"\\u{1f} C-ABCD12      \" is not");
     // Tilde is the last visible character: read and written, in every text and the prefix.
     let tilde = Im0 { software_revision: SoftwareRevision { prefix: b'~', ..im0().software_revision }, ..im0() };
     assert_eq!(Im0::from_block(&rpc::read_blocks(&tilde.block().unwrap().encode().unwrap()).0[0]).unwrap(), tilde);
@@ -188,6 +202,14 @@ fn the_port_s_data_is_its_fields_aligned_to_the_byte() {
     assert_eq!(PortDataReal::from_block(&rpc::read_blocks(&bytes).0[0]).unwrap(), two);
     let (cable, line) = (&two.peers[0], &two.peers[1]);
     assert_eq!((cable.cable_delay(), cable.delay_ns(), line.cable_delay(), line.delay_ns()), (true, 0x0001_2345, false, 0x0001_0007));
+    // Bits 0 to 30 are the delay and bit 31 alone its format: the edges of both, written and read.
+    let words = [(0x7FFF_FFFF, false, 0x7FFF_FFFF), (0x8000_0000, true, 0), (0xC000_0001, true, 0x4000_0001), (0x4000_0000, false, 0x4000_0000), (0xFFFF_FFFF, true, 0x7FFF_FFFF)];
+    for (word, is_cable, ns) in words {
+        let p = peer("p", "c", word, 0);
+        assert_eq!((p.cable_delay(), p.delay_ns()), (is_cable, ns), "{word:#x}");
+    }
+    let edges = port(words.iter().enumerate().map(|(i, w)| peer("p", "c", w.0, i as u8)).collect());
+    assert_eq!(PortDataReal::from_block(&rpc::read_blocks(&edges.block().unwrap().encode().unwrap()).0[0]).unwrap(), edges);
     assert_eq!((LinkState { port: 5, link: 1 }.up(), LinkState { port: 5, link: 2 }.up()), (true, false));
     assert_eq!((0..=8).filter(|&link| LinkState { port: 5, link }.up()).collect::<Vec<u8>>(), [1]);
     assert_eq!((record::INDEX_PORT_DATA_REAL, record::PORT_DATA_REAL), (0x802A, 0x020F));
@@ -211,6 +233,17 @@ fn what_does_not_fit_the_port_s_data_is_refused_by_name() {
     assert_eq!(port(vec![peer("pórt", "c", 0, 0)]).block(), text("peer's port id", "pórt"));
     assert_eq!(port((0..256).map(|i| peer("p", "c", i, 0)).collect()).block(), Err(RecordError::Peers(256)));
     assert_eq!(RecordError::Peers(256).to_string(), "the port's data holds at most 255 peers; this one has 256");
+    // A record no block can carry is refused by its own writer: 255 peers with texts of 255 bytes,
+    // and a record one byte past 65 533 (the largest written and carried).
+    let p255 = "p".repeat(255);
+    let huge = PortDataReal { own_port_id: p255.clone(), peers: (0..255).map(|i| peer(&p255, &p255, i, i as u8)).collect(), ..port(vec![]) };
+    assert_eq!(huge.block(), Err(RecordError::TooLong(133_906)));
+    assert_eq!(RecordError::TooLong(133_906).to_string(), "the port's data of 133906 bytes is past what a block's length counts (65533)");
+    let at_limit = PortDataReal { extra: vec![0x5A; 65_533 - 38], ..port(vec![]) };
+    let b = at_limit.block().unwrap();
+    assert_eq!(b.body.len(), 65_533);
+    assert_eq!(PortDataReal::from_block(&rpc::read_blocks(&b.encode().unwrap()).0[0]).unwrap(), at_limit);
+    assert_eq!(PortDataReal { extra: vec![0x5A; 65_533 - 37], ..port(vec![]) }.block(), Err(RecordError::TooLong(65_534)));
     // Tilde, the last visible character, in each text, read and written.
     let tilde = PortDataReal { own_port_id: "port~1".into(), peers: vec![peer("~", "a~b", 1, 1)], ..port(vec![]) };
     assert_eq!(PortDataReal::from_block(&tilde.block().unwrap()).unwrap(), tilde);
@@ -218,10 +251,14 @@ fn what_does_not_fit_the_port_s_data_is_refused_by_name() {
     // refused both ways.
     let spaced = port(vec![peer("port-002", " switch a ", 1, 1)]);
     assert_eq!(PortDataReal::from_block(&spaced.block().unwrap()).unwrap().peers[0].chassis_id, " switch a ");
-    assert!(matches!(port(vec![peer("p", "c\u{1f}", 0, 0)]).block(), Err(RecordError::Text { field: "peer's chassis id", .. })));
+    let err = port(vec![peer("p", "c\u{1f}", 0, 0)]).block().unwrap_err();
+    assert_eq!(err, RecordError::Text { field: "peer's chassis id", want: "0 to 255".into(), got: "c\u{1f}".into() });
+    assert_eq!(err.to_string(), "the peer's chassis id is 0 to 255 visible characters (space to tilde); \"c\\u{1f}\" is not");
     let mut body = one.block().unwrap().body;
     body[7] = 0x1F;
-    assert!(matches!(PortDataReal::from_block(&Block::new(record::PORT_DATA_REAL, body)), Err(RecordError::Text { field: "own port id", .. })));
+    let err = PortDataReal::from_block(&Block::new(record::PORT_DATA_REAL, body)).unwrap_err();
+    assert_eq!(err, RecordError::Text { field: "own port id", want: "0 to 255".into(), got: "\u{1f}ort-001".into() });
+    assert_eq!(err.to_string(), "the own port id is 0 to 255 visible characters (space to tilde); \"\\u{1f}ort-001\" is not");
     // A peer's MAC, six different bytes in their order.
     let mac = PortDataReal::from_block(&one.block().unwrap()).unwrap().peers[0].mac;
     assert_eq!(mac, Mac([0x02, 0x1A, 0x2B, 0x3C, 0x4D, 0x99]));
@@ -260,7 +297,6 @@ fn what_does_not_fit_the_port_s_data_is_refused_by_name() {
             "peer's chassis id",
             "peer's line delay",
             "peer's MAC",
-            "next peer",
             "MAU type",
             "domain boundary",
             "multicast boundary",
@@ -269,13 +305,45 @@ fn what_does_not_fit_the_port_s_data_is_refused_by_name() {
         ]
     );
     // Padding that is not zero, each place.
-    let pads = [(0, "slot"), (1, "slot"), (16, "first peer"), (17, "first peer"), (36, "peer's line delay"), (48, "next peer"), (52, "domain boundary"), (64, "media type")];
+    let pads = [(0, "slot"), (1, "slot"), (16, "first peer"), (17, "first peer"), (36, "peer's line delay"), (48, "MAU type"), (52, "domain boundary"), (64, "media type")];
     for (at, what) in pads {
         let mut body = b.body.clone();
         assert_eq!(body[at], 0, "{at}");
         body[at] = 1;
         assert_eq!(PortDataReal::from_block(&Block { body, ..b.clone() }), Err(RecordError::Padding(what)), "{at}");
     }
+    // A pad of one byte (after a chassis id of five) and of three (after an own port id of seven),
+    // each of their bytes; with no peer, the pad after the count comes before the MAU type.
+    let odd = port(vec![peer("port-001", "dev~b", 1, 1)]).block().unwrap();
+    let seven = PortDataReal { own_port_id: "port-01".into(), ..port(vec![peer("p", "c", 1, 1)]) }.block().unwrap();
+    let seven_none = PortDataReal { own_port_id: "port-01".into(), ..port(vec![]) }.block().unwrap();
+    let none = port(vec![]).block().unwrap();
+    for (block, at, what) in [(&odd, 33, "peer's line delay"), (&seven, 15, "first peer"), (&seven, 16, "first peer"), (&seven, 17, "first peer"), (&seven_none, 17, "MAU type"), (&none, 16, "MAU type"), (&none, 17, "MAU type")] {
+        let mut body = block.body.clone();
+        assert_eq!(body[at], 0, "{at}");
+        body[at] = 0x80;
+        assert_eq!(PortDataReal::from_block(&Block { body, ..block.clone() }), Err(RecordError::Padding(what)), "{at} {what}");
+    }
+    assert_eq!(RecordError::Padding("MAU type").to_string(), "the port's data has padding that is not zero before its MAU type");
+    // With two peers, the pad after the first comes before the next; with none, before the MAU type.
+    let cuts = |b: &Block| {
+        let mut names = Vec::new();
+        for cut in 0..b.body.len() {
+            match PortDataReal::from_block(&Block { body: b.body[..cut].to_vec(), ..b.clone() }) {
+                Err(RecordError::CutShort(what)) => names.push(what),
+                other => panic!("cut at {cut}: {other:?}"),
+            }
+        }
+        names.dedup();
+        names
+    };
+    let two = port(vec![peer("port-001", "dev~b", 1, 1), peer("port-003.x", "s~", 2, 2)]).block().unwrap();
+    let peer_fields = ["peer's port id", "peer's chassis id", "peer's line delay", "peer's MAC"];
+    let tail = ["MAU type", "domain boundary", "multicast boundary", "link state", "media type"];
+    let head = ["slot", "subslot", "own port id", "number of peers"];
+    let want: Vec<&str> = head.iter().chain(&["first peer"]).chain(&peer_fields).chain(&["next peer"]).chain(&peer_fields).chain(&tail).copied().collect();
+    assert_eq!(cuts(&two), want);
+    assert_eq!(cuts(&none), head.iter().chain(&tail).copied().collect::<Vec<&str>>());
     // Text that is not visible characters.
     let mut body = b.body.clone();
     body[7] = 0x80;
@@ -353,11 +421,14 @@ fn the_dissectors_read_both_records_in_a_read_answer() {
         extra: vec![],
         ..port(vec![])
     };
+    // The delay word's edges: the largest line delay, a cable delay of 0, one with bit 30 set.
+    let edges = port(vec![peer("p-1", "c-1", 0x7FFF_FFFF, 1), peer("p-2", "c-2", 0x8000_0000, 2), peer("p-3", "c-3", 0xC000_0001, 3)]);
     let records: Vec<(ReadRequest, Vec<u8>)> = vec![
         (ReadRequest::implicit(1, 0, 1, record::INDEX_IM0, 4032), im0().block().unwrap().encode().unwrap()),
         (ReadRequest::implicit(2, 7, 0x8001, record::INDEX_PORT_DATA_REAL, 4032), port(vec![]).block().unwrap().encode().unwrap()),
         (ReadRequest::implicit(3, 7, 0x8001, record::INDEX_PORT_DATA_REAL, 4032), port(vec![peer("port-002", "switch-a", 10, 0x99)]).block().unwrap().encode().unwrap()),
         (ReadRequest::implicit(4, 7, 0x8002, record::INDEX_PORT_DATA_REAL, 4032), two.block().unwrap().encode().unwrap()),
+        (ReadRequest::implicit(5, 7, 0x8001, record::INDEX_PORT_DATA_REAL, 4032), edges.block().unwrap().encode().unwrap()),
     ];
     let mut frames = Vec::new();
     for (i, (read, rec)) in records.iter().enumerate() {
@@ -381,17 +452,17 @@ fn the_dissectors_read_both_records_in_a_read_answer() {
     assert_eq!((one(im, "vendor_id_high"), one(im, "vendor_id_low")), ("18".into(), "52".into()));
     assert_eq!(one(im, "order_id"), i.order_id);
     assert_eq!(one(im, "im_serial_number"), i.serial_number);
-    assert_eq!(one(im, "im_hardware_revision"), "259");
+    assert_eq!(one(im, "im_hardware_revision"), "2571");
     assert_eq!(one(im, "im_revision_prefix"), "'V'");
-    assert_eq!(one(im, "im_sw_revision_functional_enhancement"), "2");
-    assert_eq!(one(im, "im_revision_bugfix"), "4");
+    assert_eq!(one(im, "im_sw_revision_functional_enhancement"), "17");
+    assert_eq!(one(im, "im_revision_bugfix"), "14");
     assert_eq!(one(im, "im_sw_revision_internal_change"), "9");
     assert_eq!(one(im, "im_revision_counter"), "517");
     assert_eq!((one(im, "im_profile_id"), one(im, "im_profile_specific_type")), ("62976".into(), "772".into()));
     assert_eq!((one(im, "im_version_major"), one(im, "im_version_minor")), ("1".into(), "3".into()));
     assert_eq!(one(im, "im_supported"), "61470");
 
-    let ports = [port(vec![]), port(vec![peer("port-002", "switch-a", 10, 0x99)]), two];
+    let ports = [port(vec![]), port(vec![peer("port-002", "switch-a", 10, 0x99)]), two, edges];
     for (k, pd) in ports.iter().enumerate() {
         let p = &d[3 + 2 * k];
         assert_eq!(field(p, "block_type"), ["32777", "527"], "port {k}");
