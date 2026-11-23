@@ -339,7 +339,12 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
   Landed as C-115 the same day, without a `step_ms` key (models without a scene step every 4 ms:
   a key that would be refused beside `scene` waits for a consumer that needs another step). Its
   test found a ramp summed in floating point landing a step late (0.4 added 125 times is
-  49.9999999999999): a ramp within a billionth of a step's change of its goal lands on it.
+  49.9999999999999). Its first refute round (2026-11-23) found the same drift in long ramps and in
+  the actuator's stroke: a ramp is now worked out from a count of steps per stretch, an actuator's
+  travel and a sensor's delay counted in whole nanoseconds, so each lands at the first step at or
+  after its time. It also found a scene running before its models were hooked in while another
+  scene was built: the bench builds every scene paused (`fisica::paused`), hooks the models in,
+  then runs them.
 
 ## Decided in the briefing of November 2026, not built
 The architect's decisions of 13 to 16 November 2026 that touch the bench

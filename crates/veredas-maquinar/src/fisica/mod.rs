@@ -5,7 +5,8 @@
 //! A [`World`] is pure: its caller steps it, so a test pins the physics without sleeping. [`start`]
 //! runs one on a thread of its own in real time, behind a [`FisicaHandle`] that reads every pose
 //! and sensor and moves what the plant side moves (a belt's speed, a mover's pose, a body added
-//! or taken away). The same scene and the same inputs give the same run, bit for bit.
+//! or taken away); [`paused`] builds one to run later, so its hooks are in before its first step.
+//! The same scene and the same inputs give the same run, bit for bit.
 
 pub mod scene;
 mod world;
@@ -69,42 +70,67 @@ impl Shared {
 pub struct FisicaHandle {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
+    /// Run once already, or stopped: never run again.
+    ran: bool,
 }
 
 /// Starts a scene on a thread of its own, one step per step of real time: a step late is taken at
 /// once, never skipped, so the scene's time is the steps taken times the step.
 pub fn start(scene: &Scene) -> Result<FisicaHandle, FisicaError> {
+    let mut handle = paused(scene)?;
+    handle.run()?;
+    Ok(handle)
+}
+
+/// Builds a scene's world without running it: what is added to it now (hooks, bodies, a belt's
+/// speed) is there before its first step, and [`FisicaHandle::run`] starts it.
+pub fn paused(scene: &Scene) -> Result<FisicaHandle, FisicaError> {
     let world = World::new(scene)?;
-    let step = world.step_length();
     let shared = Arc::new(Shared { world: Mutex::new(world), hooks: Mutex::new(Vec::new()), stop: AtomicBool::new(false), late: AtomicU64::new(0) });
-    let run = Arc::clone(&shared);
-    let thread = std::thread::Builder::new()
-        .name("fisica".into())
-        .spawn(move || {
-            let _timer = crate::timer::FineTimer::hold();
-            let begun = Instant::now();
-            let mut k: u64 = 0;
-            while !run.stop.load(Ordering::SeqCst) {
-                k += 1;
-                let due = begun + Duration::from_nanos((step.as_nanos() as u64).saturating_mul(k));
-                let now = Instant::now();
-                if due > now {
-                    std::thread::sleep(due - now);
-                } else if now - due > step {
-                    run.late.fetch_add(1, Ordering::Relaxed);
-                }
-                if run.stop.load(Ordering::SeqCst) {
-                    break;
-                }
-                let mut world = run.world();
-                for hook in run.hooks.lock().unwrap_or_else(|e| e.into_inner()).iter_mut() {
-                    hook(&mut world);
-                }
-                world.step();
-            }
-        })
-        .map_err(|e| FisicaError::Thread(e.to_string()))?;
-    Ok(FisicaHandle { shared, thread: Some(thread) })
+    Ok(FisicaHandle { shared, thread: None, ran: false })
+}
+
+impl FisicaHandle {
+    /// Runs a paused scene from now, one step per step of real time; a scene already run, or
+    /// stopped, is left as it is.
+    pub fn run(&mut self) -> Result<(), FisicaError> {
+        if self.ran {
+            return Ok(());
+        }
+        self.ran = true;
+        let step = self.shared.world().step_length();
+        let run = Arc::clone(&self.shared);
+        let thread = std::thread::Builder::new()
+            .name("fisica".into())
+            .spawn(move || run_scene(&run, step))
+            .map_err(|e| FisicaError::Thread(e.to_string()))?;
+        self.thread = Some(thread);
+        Ok(())
+    }
+}
+
+fn run_scene(run: &Shared, step: Duration) {
+    let _timer = crate::timer::FineTimer::hold();
+    let begun = Instant::now();
+    let mut k: u64 = 0;
+    while !run.stop.load(Ordering::SeqCst) {
+        k += 1;
+        let due = begun + Duration::from_nanos((step.as_nanos() as u64).saturating_mul(k));
+        let now = Instant::now();
+        if due > now {
+            std::thread::sleep(due - now);
+        } else if now - due > step {
+            run.late.fetch_add(1, Ordering::Relaxed);
+        }
+        if run.stop.load(Ordering::SeqCst) {
+            break;
+        }
+        let mut world = run.world();
+        for hook in run.hooks.lock().unwrap_or_else(|e| e.into_inner()).iter_mut() {
+            hook(&mut world);
+        }
+        world.step();
+    }
 }
 
 impl FisicaHandle {
@@ -168,20 +194,23 @@ impl FisicaHandle {
         FisicaStatus { steps: w.steps(), late: self.shared.late.load(Ordering::Relaxed), bodies, sensors: w.sensors().len() }
     }
 
-    /// Runs `hook` on the scene's thread before every step from the next on, the world in hand.
+    /// Runs `hook` on the scene's thread before every step from the next on (a paused scene's
+    /// first included), the world in hand.
     pub fn add_hook(&self, hook: Hook) {
         self.shared.hooks.lock().unwrap_or_else(|e| e.into_inner()).push(hook);
     }
 
-    /// Stops the scene and waits for its thread; the world keeps the state of its last step.
+    /// Stops the scene and waits for its thread; the world keeps the state of its last step. A
+    /// paused scene stopped never runs.
     pub fn stop(&mut self) {
+        self.ran = true;
         self.shared.stop.store(true, Ordering::SeqCst);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
     }
 
-    /// The thread has ended.
+    /// No thread steps the scene: paused, or its thread ended.
     pub fn stopped(&self) -> bool {
         self.thread.as_ref().is_none_or(|t| t.is_finished())
     }

@@ -454,6 +454,42 @@ fn the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene() {
     assert!(fisica::start(&Scene { gravity: -1.0, ..Scene::default() }).is_err());
 }
 
+#[test]
+fn a_paused_scene_takes_no_step_till_it_runs_and_its_hooks_run_from_its_first() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    let scene = fisica::load(&reference()).unwrap();
+    let mut h = fisica::paused(&scene).unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!((h.steps(), h.stopped()), (0, true), "paused: no step, no thread");
+    // A hook added while paused sees every step from the first: its calls before a step are the
+    // steps taken.
+    let (calls, off) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicBool::new(false)));
+    let (c, o) = (Arc::clone(&calls), Arc::clone(&off));
+    h.add_hook(Box::new(move |w: &mut World| {
+        if c.fetch_add(1, Ordering::SeqCst) != w.steps() {
+            o.store(true, Ordering::SeqCst);
+        }
+    }));
+    h.run().unwrap();
+    h.run().unwrap();
+    let begun = Instant::now();
+    while h.steps() < 10 {
+        assert!(begun.elapsed() < Duration::from_secs(5), "running");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    h.stop();
+    assert!(!off.load(Ordering::SeqCst));
+    assert_eq!(calls.load(Ordering::SeqCst), h.steps(), "one call before each step, a second run nothing");
+    // Stopped, it never runs again; a paused scene stopped never runs.
+    h.run().unwrap();
+    let mut p = fisica::paused(&scene).unwrap();
+    p.stop();
+    p.run().unwrap();
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!((calls.load(Ordering::SeqCst), h.steps(), p.steps()), (h.steps(), h.steps(), 0));
+}
+
 /// C-114's first refute round: the critic's probes, kept as pins (the event cap and its order, the
 /// runner's late steps, drop, hooks, friction's mean, mass, a belt's side and underside, slow
 /// belts, movers and lifts, the angle order and ranges, any finite angle, removals' order, sleep).

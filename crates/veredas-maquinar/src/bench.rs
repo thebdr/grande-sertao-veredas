@@ -723,8 +723,10 @@ impl Bench {
             let handle = ethercat::start(&cfg).map_err(|source| BenchError::Ethercat { name: name.clone(), source })?;
             bench.ethercat.push((name, handle));
         }
+        // Every scene built before any runs, and run once its models' hooks are in: no scene steps
+        // without its models, however long another scene takes to build.
         for f in spec.fisica {
-            let handle = fisica::start(&f.scene).map_err(|source| BenchError::Fisica { name: f.name.clone(), source })?;
+            let handle = fisica::paused(&f.scene).map_err(|source| BenchError::Fisica { name: f.name.clone(), source })?;
             bench.fisica.push((f.name, handle));
         }
         for (name, cfg) in spec.reflexo {
@@ -742,6 +744,9 @@ impl Bench {
             let models = reflexo::Models::new(&cfg, step, &part).map_err(|source| BenchError::Reflexo { name: name.clone(), source })?;
             let handle = reflexo::start(models, scene).map_err(|source| BenchError::Reflexo { name: name.clone(), source })?;
             bench.reflexo.push((name, handle));
+        }
+        for (name, f) in &mut bench.fisica {
+            f.run().map_err(|source| BenchError::Fisica { name: name.clone(), source })?;
         }
         for c in spec.channels {
             let name = c.name.clone();

@@ -34,7 +34,7 @@ impl PointKind {
 }
 
 /// A device's points as the models read and write them: a bool as 0 or 1, a number converted to
-/// the point's type (an integer rounded and held to its range, NaN as 0).
+/// the point's type (an integer rounded and held to its range; NaN written as 0 whatever the type).
 pub trait Points: Send + Sync {
     fn kind(&self, point: &str) -> Option<PointKind>;
     fn read(&self, point: &str) -> Result<f64, String>;
@@ -71,7 +71,7 @@ impl Points for modbus::ModbusPoints {
             T::I16 => Value::I16(held(v, f64::from(i16::MIN), f64::from(i16::MAX)) as i16),
             T::U32 => Value::U32(held(v, 0.0, f64::from(u32::MAX)) as u32),
             T::I32 => Value::I32(held(v, f64::from(i32::MIN), f64::from(i32::MAX)) as i32),
-            T::F32 => Value::F32(v as f32),
+            T::F32 => Value::F32(if v.is_nan() { 0.0 } else { v as f32 }),
         };
         self.set_value(point, value).map_err(|e| e.to_string())
     }
@@ -106,7 +106,7 @@ impl Points for ethernetip::EnipPoints {
             T::I16 => Value::I16(held(v, f64::from(i16::MIN), f64::from(i16::MAX)) as i16),
             T::U32 => Value::U32(held(v, 0.0, f64::from(u32::MAX)) as u32),
             T::I32 => Value::I32(held(v, f64::from(i32::MIN), f64::from(i32::MAX)) as i32),
-            T::F32 => Value::F32(v as f32),
+            T::F32 => Value::F32(if v.is_nan() { 0.0 } else { v as f32 }),
         };
         self.set_value(point, value).map_err(|e| e.to_string())
     }
@@ -394,29 +394,54 @@ struct DriveState {
     running_out: Option<Bound>,
     at_speed_out: Option<Bound>,
     speed: f64,
+    ramp: Option<Segment>,
 }
 
-/// One step of a ramp from `speed` toward `target`: away from 0 at `accel`, toward 0 (or a smaller
-/// target of the same sign) at `decel`, through 0 when the sign changes; landing on the target
-/// exactly.
-pub fn ramp(speed: f64, target: f64, accel: f64, decel: f64, dt: f64) -> f64 {
-    if speed == target {
-        return speed;
-    }
-    let away = target != 0.0 && (speed == 0.0 || speed.signum() == target.signum()) && target.abs() > speed.abs();
-    // A step's change summed in floating point drifts by a few units in the last place: within a
-    // billionth of a step's change of the goal is the goal, so a ramp lands when its time is up.
-    if away {
-        let next = speed + target.signum() * accel * dt;
-        if (target - next) * target.signum() <= accel * dt * 1e-9 { target } else { next }
-    } else {
-        let goal = if target == 0.0 || target.signum() != speed.signum() { 0.0 } else { target };
-        let next = speed - speed.signum() * decel * dt;
-        if (next - goal) * speed.signum() <= decel * dt * 1e-9 { goal } else { next }
-    }
+/// A stretch of a ramp at one rate toward one goal: the speed at its `k`-th step is `from` plus
+/// `k` steps' change, the goal itself from its `steps`-th on. Taken from a count, not summed, so no
+/// rounding gathers however long the ramp: it lands at the first step at or after its time.
+struct Segment {
+    from: f64,
+    goal: f64,
+    per_step: f64,
+    steps: u64,
+    k: u64,
 }
 
 impl DriveState {
+    /// One step from the speed toward `target`: away from 0 at the acceleration, toward 0 (or a
+    /// smaller target of the same sign) at the deceleration, through 0 when the sign changes.
+    fn ramp(&mut self, target: f64, dt: f64) -> f64 {
+        let speed = self.speed;
+        let away = target != 0.0 && (speed == 0.0 || speed.signum() == target.signum()) && target.abs() > speed.abs();
+        let (goal, rate) = if away {
+            (target, self.accel)
+        } else {
+            // A NaN target lands here too, and so on 0.
+            (if target == 0.0 || target.signum() != speed.signum() || target.is_nan() { 0.0 } else { target }, self.decel)
+        };
+        if speed == goal {
+            self.ramp = None;
+            return goal;
+        }
+        let per_step = if goal > speed { rate * dt } else { -rate * dt };
+        match &mut self.ramp {
+            Some(s) if s.goal == goal && s.per_step == per_step => s.k += 1,
+            _ => {
+                // The steps the change takes, a billionth of a step's slack for the division's last place.
+                let steps = ((goal - speed).abs() / (rate * dt) - 1e-9).ceil().max(1.0) as u64;
+                self.ramp = Some(Segment { from: speed, goal, per_step, steps, k: 1 });
+            }
+        }
+        match &self.ramp {
+            Some(s) if s.k < s.steps => s.from + s.per_step * s.k as f64,
+            _ => {
+                self.ramp = None;
+                goal
+            }
+        }
+    }
+
     fn step(&mut self, dt: f64) -> Result<(), String> {
         let run = self.run.read()? != 0.0;
         let reverse = match &self.reverse {
@@ -425,7 +450,7 @@ impl DriveState {
         };
         let setpoint = self.setpoint.read()?;
         let target = if run { if reverse { -setpoint } else { setpoint } } else { 0.0 };
-        self.speed = ramp(self.speed, target, self.accel, self.decel, dt);
+        self.speed = self.ramp(target, dt);
         if let Some(o) = &self.speed_out {
             o.write(self.speed)?;
         }
@@ -450,12 +475,12 @@ struct SensorState {
     sensor: String,
     out: Bound,
     normally_closed: bool,
-    on_delay: f64,
-    off_delay: f64,
+    on_delay: u64,
+    off_delay: u64,
     /// What the point says: something inside.
     occupied: bool,
-    /// How long the scene has disagreed with the point.
-    pending: f64,
+    /// How long the scene has disagreed with the point, in nanoseconds: counted, never rounded.
+    pending: u64,
 }
 
 struct ActuatorState {
@@ -464,11 +489,20 @@ struct ActuatorState {
     extend: Bound,
     retracted: Placement,
     extended: Placement,
-    stroke: f64,
+    /// The stroke's time, in nanoseconds.
+    stroke: u64,
     retracted_switch: Option<Bound>,
     extended_switch: Option<Bound>,
+    /// How far out, as the time from the retracted end in nanoseconds, 0 to `stroke`: counted in
+    /// whole steps, so an end is reached at the first step at or after its time.
+    out: u64,
+}
+
+impl ActuatorState {
     /// 0 retracted, 1 extended.
-    position: f64,
+    fn position(&self) -> f64 {
+        self.out as f64 / self.stroke as f64
+    }
 }
 
 fn lerp(a: Placement, b: Placement, p: f64) -> Placement {
@@ -480,7 +514,7 @@ fn lerp(a: Placement, b: Placement, p: f64) -> Placement {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReflexoStatus {
     pub steps: u64,
-    /// Steps in which a model could not read or write a point or move its part.
+    /// Steps in which a model could not read or write a point or move its part, each counted once.
     pub errors: u64,
     pub last_error: Option<String>,
 }
@@ -488,6 +522,8 @@ pub struct ReflexoStatus {
 /// A part's models, bound to their points, stepped by their caller.
 pub struct Models {
     dt: f64,
+    /// The step in nanoseconds, what the actuators and the sensors' delays count.
+    dt_ns: u64,
     drives: Vec<DriveState>,
     conveyors: Vec<ConveyorState>,
     actuators: Vec<ActuatorState>,
@@ -518,10 +554,13 @@ impl Models {
                 running_out: bind_opt(&d.running)?,
                 at_speed_out: bind_opt(&d.at_speed)?,
                 speed: 0.0,
+                ramp: None,
             })
         };
+        let ms = |v: u32| u64::from(v) * 1_000_000;
         Ok(Models {
             dt: step.as_secs_f64(),
+            dt_ns: u64::try_from(step.as_nanos()).unwrap_or(u64::MAX),
             drives: cfg.drive.iter().map(drive).collect::<Result<_, _>>()?,
             conveyors: cfg.conveyor.iter().map(|c| Ok(ConveyorState { drive: drive(&c.drive())?, belt: c.belt.clone(), metres_per_unit: c.metres_per_unit })).collect::<Result<_, ReflexoError>>()?,
             actuators: cfg
@@ -534,10 +573,10 @@ impl Models {
                         extend: bind(&a.extend)?,
                         retracted: a.retracted,
                         extended: a.extended,
-                        stroke: f64::from(a.stroke_ms) / 1000.0,
+                        stroke: ms(a.stroke_ms),
                         retracted_switch: bind_opt(&a.retracted_switch)?,
                         extended_switch: bind_opt(&a.extended_switch)?,
-                        position: 0.0,
+                        out: 0,
                     })
                 })
                 .collect::<Result<_, ReflexoError>>()?,
@@ -550,10 +589,10 @@ impl Models {
                         sensor: m.sensor.clone(),
                         out: bind(&m.point)?,
                         normally_closed: m.normally_closed,
-                        on_delay: f64::from(m.on_delay_ms) / 1000.0,
-                        off_delay: f64::from(m.off_delay_ms) / 1000.0,
+                        on_delay: ms(m.on_delay_ms),
+                        off_delay: ms(m.off_delay_ms),
                         occupied: false,
-                        pending: 0.0,
+                        pending: 0,
                     })
                 })
                 .collect::<Result<_, ReflexoError>>()?,
@@ -562,10 +601,10 @@ impl Models {
     }
 
     /// One step of every model, in this order: drives, conveyors, actuators, sensors, each kind
-    /// in the file's order. A model that cannot read or write a point is skipped for the step, and
-    /// counted.
+    /// in the file's order. A model that cannot read or write a point is skipped for the rest of
+    /// the step; a step in which any model failed is counted once, its last error named.
     pub fn step(&mut self, mut world: Option<&mut World>) {
-        let dt = self.dt;
+        let (dt, dt_ns) = (self.dt, self.dt_ns);
         let mut errors: Vec<String> = Vec::new();
         for d in &mut self.drives {
             if let Err(e) = d.step(dt) {
@@ -594,14 +633,13 @@ impl Models {
                     continue;
                 }
             };
-            let delta = dt / a.stroke;
-            a.position = if extend { (a.position + delta).min(1.0) } else { (a.position - delta).max(0.0) };
+            a.out = if extend { a.out.saturating_add(dt_ns).min(a.stroke) } else { a.out.saturating_sub(dt_ns) };
             if let Some(w) = world.as_deref_mut()
-                && let Err(e) = w.place(&a.mover, lerp(a.retracted, a.extended, a.position))
+                && let Err(e) = w.place(&a.mover, lerp(a.retracted, a.extended, a.position()))
             {
                 errors.push(format!("actuator `{}`: {e}", a.name));
             }
-            for (switch, at) in [(&a.retracted_switch, a.position == 0.0), (&a.extended_switch, a.position == 1.0)] {
+            for (switch, at) in [(&a.retracted_switch, a.out == 0), (&a.extended_switch, a.out == a.stroke)] {
                 if let Some(s) = switch
                     && let Err(e) = s.write(f64::from(u8::from(at)))
                 {
@@ -612,14 +650,14 @@ impl Models {
         for s in &mut self.sensors {
             let inside = world.as_deref().and_then(|w| w.sensor(&s.sensor)).is_some_and(|x| x.occupied());
             if inside == s.occupied {
-                s.pending = 0.0;
+                s.pending = 0;
             } else {
-                s.pending += dt;
-                let delay = if inside { s.on_delay } else { s.off_delay };
-                // The first step at or after the delay (a millionth of a step's slack for the sum).
-                if s.pending + dt * 1e-6 >= delay {
+                s.pending = s.pending.saturating_add(dt_ns);
+                // The first step at or after the delay, the scene disagreeing with the point at
+                // every step till then.
+                if s.pending >= if inside { s.on_delay } else { s.off_delay } {
                     s.occupied = inside;
-                    s.pending = 0.0;
+                    s.pending = 0;
                 }
             }
             if let Err(e) = s.out.write(f64::from(u8::from(s.occupied != s.normally_closed))) {
@@ -644,7 +682,7 @@ impl Models {
 
     /// An actuator's position, 0 retracted to 1 extended.
     pub fn position(&self, name: &str) -> Option<f64> {
-        self.actuators.iter().find(|a| a.name == name).map(|a| a.position)
+        self.actuators.iter().find(|a| a.name == name).map(ActuatorState::position)
     }
 
     /// What a sensor model's point says: something inside (before `normally_closed`).
@@ -690,8 +728,10 @@ pub fn start(models: Models, scene: Option<&FisicaHandle>) -> Result<ReflexoHand
     let run = Arc::clone(&shared);
     if let Some(scene) = scene {
         scene.add_hook(Box::new(move |world: &mut World| {
+            // The flag read under the models' lock, so a stop that took the lock after it is kept.
+            let mut models = run.models();
             if !run.stop.load(Ordering::SeqCst) {
-                run.models().step(Some(world));
+                models.step(Some(world));
             }
         }));
         return Ok(ReflexoHandle { shared, thread: None });
@@ -709,10 +749,11 @@ pub fn start(models: Models, scene: Option<&FisicaHandle>) -> Result<ReflexoHand
                 if due > now {
                     std::thread::sleep(due - now);
                 }
+                let mut models = run.models();
                 if run.stop.load(Ordering::SeqCst) {
                     break;
                 }
-                run.models().step(None);
+                models.step(None);
             }
         })
         .map_err(|e| ReflexoError::Thread(e.to_string()))?;
@@ -740,9 +781,10 @@ impl ReflexoHandle {
         self.shared.models().len()
     }
 
-    /// Stops the models: no step begins after this returns.
+    /// Stops the models: a step under way ends first, and none begins after this returns.
     pub fn stop(&mut self) {
         self.shared.stop.store(true, Ordering::SeqCst);
+        drop(self.shared.models());
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }

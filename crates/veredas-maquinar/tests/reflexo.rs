@@ -122,7 +122,6 @@ fn a_drive_ramps_to_its_setpoint_exactly_and_through_zero_when_it_reverses() {
     assert_eq!(m.get("speed"), 0.0);
     d.step(None);
     assert!((m.get("speed") - 0.4).abs() < 1e-12, "then accelerating forward");
-    assert_eq!(reflexo::ramp(1.0, 1.0, 5.0, 5.0, 0.1), 1.0);
 }
 
 #[test]
@@ -261,6 +260,7 @@ fn points_are_converted_to_each_type_of_a_modbus_server_and_an_adapter() {
         ("d", 5e9, 4_294_967_295.0),
         ("n", -2.4, -2.0),
         ("f", 1.25, 1.25),
+        ("f", f64::NAN, 0.0),
     ] {
         p.write(point, v).unwrap();
         assert_eq!(p.read(point).unwrap(), read, "{point} {v}");
@@ -345,6 +345,12 @@ fn every_refusal_is_named_by_its_place_through_the_bench_file() {
         ("scene = \"sc\"\nactuator = [ { name = \"a\", mover = \"pusher\", extend = \"m.run\", retracted = { at = [0.0, 0.0, 0.0] }, extended = { at = [0.0, 0.0, 0.0] }, stroke_ms = 0 } ]\n".into(), "reflexo[0] (`r`).actuator[0] (`a`).stroke_ms: 0, not 1 to 600000"),
         ("scene = \"sc\"\nactuator = [ { name = \"a\", mover = \"pusher\", extend = \"m.run\", retracted = { at = [0.0, 0.0, 0.0] }, extended = { at = [0.0, 0.0, 0.0], yaw = inf }, stroke_ms = 1 } ]\n".into(), "reflexo[0] (`r`).actuator[0] (`a`).extended.yaw: inf, not a finite angle"),
         ("actuator = [ { name = \"a\", mover = \"pusher\", extend = \"m.run\", retracted = { at = [0.0, 0.0, 0.0] }, extended = { at = [0.0, 0.0, 0.0] }, stroke_ms = 1 } ]\n".into(), "reflexo[0] (`r`).actuator[0] (`a`): an actuator moves a mover of a scene; this part names no `scene`"),
+        // Refute round 1: a name empty, a ramp not finite, a stroke past its range, a ratio NaN.
+        (drive("").replace("name = \"d\"", "name = \"\""), "reflexo[0] (`r`).drive[0]: the drive has no name"),
+        (drive("").replace("accel = 1", "accel = nan"), "reflexo[0] (`r`).drive[0] (`d`).accel: NaN, not a finite number over 0"),
+        (drive("").replace("decel = 1", "decel = inf"), "reflexo[0] (`r`).drive[0] (`d`).decel: inf, not a finite number over 0"),
+        ("scene = \"sc\"\nactuator = [ { name = \"a\", mover = \"pusher\", extend = \"m.run\", retracted = { at = [0.0, 0.0, 0.0] }, extended = { at = [0.0, 0.0, 0.0] }, stroke_ms = 600001 } ]\n".into(), "reflexo[0] (`r`).actuator[0] (`a`).stroke_ms: 600001, not 1 to 600000"),
+        ("scene = \"sc\"\nconveyor = [ { name = \"c\", belt = \"infeed\", metres_per_unit = nan, run = \"m.run\", setpoint = \"m.sp\", accel = 1, decel = 1 } ]\n".into(), "reflexo[0] (`r`).conveyor[0] (`c`).metres_per_unit: NaN, not a finite number other than 0"),
     ];
     for (models, message) in cases {
         assert_eq!(refused(&models), message, "{models}");
@@ -354,7 +360,8 @@ fn every_refusal_is_named_by_its_place_through_the_bench_file() {
     let err = bench::load(&base.replace("line.cena.toml", "bad.cena.toml"), &dir).err().unwrap().to_string();
     assert_eq!(err, format!("fisica[0] (`sc`).scene ({}): step_ms: 0, not 1 to 100", dir.join("bad.cena.toml").display()));
     let err = bench::load(&base.replace("line.cena.toml", "missing.toml"), &dir).err().unwrap().to_string();
-    assert!(err.starts_with("fisica[0] (`sc`).scene: read "), "{err}");
+    let read = format!("fisica[0] (`sc`).scene: read {}: ", dir.join("missing.toml").display());
+    assert!(err.starts_with(&read) && err.len() > read.len(), "{err}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -456,4 +463,202 @@ fn drives_without_a_scene_step_on_a_thread_of_their_own() {
     let steps = handle.status().steps;
     std::thread::sleep(Duration::from_millis(30));
     assert_eq!(handle.status().steps, steps, "no step after the stop");
+}
+
+/// Refute round 1's probes (the critic's, `~/.cache/veredas/critic-c115/probes`), kept as pins.
+mod round_1 {
+    use super::*;
+
+    /// An actuator's steps to its extended switch from the retracted end, then back.
+    fn stroke_steps(stroke_ms: u32, world: Option<&mut World>) -> (u32, u32) {
+        let m = mem(&[("ext", Bool, 0.0), ("back", Bool, 0.0), ("out", Bool, 0.0)]);
+        let mut a = models(&format!("actuator = [ {{ name = \"a\", mover = \"pusher\", extend = \"m.ext\", retracted = {{ at = [3.5, -0.4, 0.95] }}, extended = {{ at = [3.5, 0.25, 0.95] }}, stroke_ms = {stroke_ms}, retracted_switch = \"m.back\", extended_switch = \"m.out\" }} ]"), &m);
+        let mut world = world;
+        let mut step = |a: &mut Models| {
+            a.step(world.as_deref_mut());
+            if let Some(w) = world.as_deref_mut() {
+                w.step();
+            }
+        };
+        step(&mut a);
+        assert_eq!((m.get("back"), m.get("out")), (1.0, 0.0));
+        m.set("ext", 1.0);
+        let (mut up, mut down) = (0, 0);
+        while m.get("out") != 1.0 {
+            step(&mut a);
+            up += 1;
+            assert_eq!(m.get("back"), 0.0);
+        }
+        m.set("ext", 0.0);
+        while m.get("back") != 1.0 {
+            step(&mut a);
+            down += 1;
+            assert_eq!(m.get("out"), 0.0);
+        }
+        (up, down)
+    }
+
+    #[test]
+    fn an_actuator_reaches_each_end_at_the_first_step_at_or_after_its_stroke() {
+        // A 300 ms stroke at 4 ms out in 75 steps and back in 75, the mover with it; 40 ms in 10.
+        let mut w = World::new(&fisica::load(&cena()).unwrap()).unwrap();
+        assert_eq!(stroke_steps(300, Some(&mut w)), (75, 75));
+        assert!((f64::from(w.body("pusher").unwrap().at[1]) + 0.4).abs() < 1e-5);
+        assert_eq!(stroke_steps(40, None), (10, 10));
+        // Every stroke from 1 ms to 1 s: summed in floats, one in eight came a step late.
+        let late: Vec<(u32, (u32, u32))> = (1..=1000).map(|ms| (ms, stroke_steps(ms, None))).filter(|(ms, got)| *got != (ms.div_ceil(4), ms.div_ceil(4))).collect();
+        assert!(late.is_empty(), "strokes off their step (ms, (out, back)): {late:?}");
+    }
+
+    #[test]
+    fn a_ramp_lands_on_its_setpoint_at_the_first_step_at_or_after_its_time_however_long() {
+        // (setpoint, accel, decel): the steps of 4 ms each way are setpoint x 250 / rate, rounded up.
+        for (sp, accel, decel) in [(1200u64, 30u64, 30u64), (3000, 7, 11), (1000, 3, 1000), (50, 100, 200), (999, 1000, 9)] {
+            let m = mem(&[("run", Bool, 1.0), ("sp", Number, sp as f64)]);
+            let mut d = models(&format!("drive = [ {{ name = \"d\", run = \"m.run\", setpoint = \"m.sp\", accel = {accel}, decel = {decel} }} ]"), &m);
+            for (rate, goal) in [(accel, sp as f64), (decel, 0.0)] {
+                let steps = (sp * 250).div_ceil(rate);
+                for _ in 1..steps {
+                    d.step(None);
+                }
+                assert_ne!(d.speed("d"), Some(goal), "{sp} at {rate}: early, before step {steps}");
+                d.step(None);
+                assert_eq!(d.speed("d"), Some(goal), "{sp} at {rate}: at step {steps}");
+                m.set("run", 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn the_models_step_drives_conveyors_actuators_then_sensors_each_kind_in_the_file_s_order() {
+        // A drive run by a sensor model's point reads it as the last step left it: still 0 on the
+        // step the point turns on, 0.4 on the next.
+        let m = mem(&[("s", Bool, 0.0), ("sp", Number, 10.0)]);
+        let mut x = models("drive = [ { name = \"d\", run = \"m.s\", setpoint = \"m.sp\", accel = 100, decel = 100 } ]\nsensor = [ { name = \"b\", sensor = \"S\", point = \"m.s\" } ]", &m);
+        let mut w = sensor_scene();
+        x.step(Some(&mut w));
+        w.step();
+        w.place("m", fisica::Placement::at([0.0, 0.0, 0.0])).unwrap();
+        while m.get("s") == 0.0 {
+            x.step(Some(&mut w));
+            w.step();
+            assert!(x.status().steps < 50);
+        }
+        assert_eq!(x.speed("d"), Some(0.0), "the drive stepped before the sensor");
+        x.step(Some(&mut w));
+        assert!((x.speed("d").unwrap() - 0.4).abs() < 1e-12);
+        // Drive `b` runs on drive `a`'s running point: `a` first, so `b` starts in the same step.
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, 10.0), ("ra", Bool, 0.0)]);
+        let mut x = models("drive = [ { name = \"a\", run = \"m.run\", setpoint = \"m.sp\", accel = 100, decel = 100, running = \"m.ra\" }, { name = \"b\", run = \"m.ra\", setpoint = \"m.sp\", accel = 100, decel = 100 } ]", &m);
+        x.step(None);
+        assert_eq!((x.speed("a"), m.get("ra")), (Some(0.4), 1.0));
+        assert!((x.speed("b").unwrap() - 0.4).abs() < 1e-12, "b read a's running of this step: {:?}", x.speed("b"));
+    }
+
+    #[test]
+    fn a_reversed_drive_is_at_speed_at_its_negated_setpoint() {
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, 50.0), ("rev", Bool, 1.0), ("at", Bool, 0.0)]);
+        let mut d = models("drive = [ { name = \"d\", run = \"m.run\", setpoint = \"m.sp\", reverse = \"m.rev\", accel = 1000, decel = 1000, at_speed = \"m.at\" } ]", &m);
+        for _ in 0..20 {
+            d.step(None);
+        }
+        assert_eq!((d.speed("d"), m.get("at")), (Some(-50.0), 1.0));
+    }
+
+    #[test]
+    fn a_delay_counts_the_scene_disagreeing_without_a_break() {
+        // Three visits of 8 ms each against a 10 ms on delay: never seen, 24 ms in all.
+        let m = mem(&[("no", Bool, 0.0)]);
+        let mut s = models("sensor = [ { name = \"a\", sensor = \"S\", point = \"m.no\", on_delay_ms = 10 } ]", &m);
+        let mut w = sensor_scene();
+        let step = |s: &mut Models, w: &mut World| {
+            s.step(Some(w));
+            w.step();
+        };
+        step(&mut s, &mut w);
+        for _ in 0..3 {
+            w.place("m", fisica::Placement::at([0.0, 0.0, 0.0])).unwrap();
+            step(&mut s, &mut w);
+            step(&mut s, &mut w);
+            w.place("m", fisica::Placement::at([5.0, 0.0, 0.0])).unwrap();
+            for _ in 0..5 {
+                step(&mut s, &mut w);
+                assert_eq!(m.get("no"), 0.0, "each visit shorter than 10 ms");
+            }
+        }
+    }
+
+    #[test]
+    fn a_step_in_which_two_models_fail_is_counted_once_with_the_last_error() {
+        // `a` reads a point that is not there, `b` writes one refused: two errors, one step.
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, 10.0), ("sb", Number, 0.0)]);
+        *m.refusing.lock().unwrap() = Some("sb".into());
+        let mut d = models("drive = [ { name = \"a\", run = \"m.run\", setpoint = \"m.nope\", accel = 1, decel = 1 }, { name = \"b\", run = \"m.run\", setpoint = \"m.sp\", accel = 1, decel = 1, speed = \"m.sb\" } ]", &m);
+        d.step(None);
+        let s = d.status();
+        assert_eq!((s.steps, s.errors, s.last_error.as_deref()), (1, 1, Some("drive `b`: m.sb: refused")));
+    }
+
+    #[test]
+    fn models_on_a_scene_step_at_the_scene_s_step() {
+        // A scene of 10 ms steps: 100 units a second is 1 a step, read with the scene's count under
+        // its lock (the models' own 4 ms would make it 0.4).
+        let dir = scratch("slow");
+        std::fs::write(dir.join("slow.cena.toml"), cena().replace("step_ms = 4", "step_ms = 10")).unwrap();
+        let file = "format = \"veredas-bench\"\nversion = 1\n[[modbus]]\nname = \"m\"\nport = 0\npoints = [ { name = \"run\", table = \"coil\", address = 0 }, { name = \"sp\", table = \"holding-register\", address = 0, value = \"50\" } ]\n[[fisica]]\nname = \"sc\"\nscene = \"slow.cena.toml\"\n[[reflexo]]\nname = \"r\"\nscene = \"sc\"\ndrive = [ { name = \"d\", run = \"m.run\", setpoint = \"m.sp\", accel = 100, decel = 100 } ]\n";
+        let spec = bench::load(file, &dir).unwrap();
+        assert_eq!(spec.plan()[2], "reflexo `r`: 1 model(s) on the scene `sc`");
+        let plant = Bench::start(spec).unwrap();
+        let scene = plant.fisica("sc").unwrap();
+        let models = plant.reflexo("r").unwrap();
+        plant.modbus("m").unwrap().set_value("run", modbus::Value::Bool(true)).unwrap();
+        let read = || scene.with(|w| (w.steps(), models.speed("d").unwrap()));
+        assert!(until(Duration::from_secs(2), || read().1 > 0.0));
+        let a = read();
+        std::thread::sleep(Duration::from_millis(200));
+        let b = read();
+        plant.stop();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(b.0 > a.0 && b.1 < 50.0, "{a:?} {b:?}");
+        assert!(((b.1 - a.1) / (b.0 - a.0) as f64 - 1.0).abs() < 1e-9, "{a:?} {b:?}");
+    }
+
+    #[test]
+    fn no_scene_steps_without_its_models_however_long_another_scene_takes_to_build() {
+        // A second scene of 10 000 fixed parts, built after the line's: the line waits for it, so
+        // its models step before each of its steps from the first, and the carton stays put.
+        let dir = scratch("two");
+        let mut big = String::from("format = \"veredas-cena\"\nversion = 1\ngravity = 0\n");
+        for i in 0..10_000 {
+            big.push_str(&format!("[[fixed]]\nname = \"f{i}\"\nsize = [0.1, 0.1, 0.1]\nat = [{}.0, {}.0, 50.0]\n", i % 100 - 50, i / 100 - 50));
+        }
+        std::fs::write(dir.join("big.cena.toml"), big).unwrap();
+        let file = sixth().replace("[[reflexo]]", "[[fisica]]\nname = \"big\"\nscene = \"big.cena.toml\"\n\n[[reflexo]]");
+        let plant = Bench::start(bench::load(&file, &dir).unwrap()).unwrap();
+        let scene = plant.fisica("line").unwrap();
+        let models = plant.reflexo("line-models").unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        let (scene_steps, model_steps, x) = scene.with(|w| (w.steps(), models.status().steps, w.body("carton-1").unwrap().at[0]));
+        plant.stop();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(scene_steps > 0 && scene_steps == model_steps, "scene {scene_steps}, models {model_steps}");
+        assert!((x - 0.3).abs() < 1e-3, "the carton at {x}, its conveyor never run");
+    }
+
+    #[test]
+    fn drives_without_a_scene_step_every_4_ms() {
+        let server = modbus::start(&toml::from_str("port = 0\npoints = [ { name = \"run\", table = \"coil\", address = 0, value = \"true\" }, { name = \"sp\", table = \"holding-register\", address = 0, value = \"20\" } ]").unwrap()).unwrap();
+        let points: Arc<dyn Points> = Arc::new(server.points());
+        let cfg: ReflexoConfig = toml::from_str("drive = [ { name = \"d\", run = \"m.run\", setpoint = \"m.sp\", accel = 40, decel = 40 } ]").unwrap();
+        let models = Models::new(&cfg, reflexo::STEP_WITHOUT_SCENE, &|p: &str| (p == "m").then(|| points.clone())).unwrap();
+        let begun = Instant::now();
+        let mut handle = reflexo::start(models, None).unwrap();
+        std::thread::sleep(Duration::from_secs(1));
+        // A step is never taken before its time; one late is taken at once, so a second holds 250
+        // less what a stall of the host still owes (200 ms allowed).
+        let steps = u128::from(handle.status().steps);
+        let due = begun.elapsed().as_nanos() / 4_000_000;
+        handle.stop();
+        assert!(steps <= due && steps + 50 >= due, "{steps} steps, {due} due");
+    }
 }
