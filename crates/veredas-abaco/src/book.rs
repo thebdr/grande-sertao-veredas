@@ -108,10 +108,35 @@ pub enum ModelError {
     Address(#[from] BadAddress),
     #[error("{0}")]
     Engine(String),
+    #[error("{0:?} reads as a cell (A1 or R1C1), which Excel does not take as a name")]
+    NameLikeACell(String),
     #[error(transparent)]
     Open(#[from] links::OpenError),
     #[error("{path}: {message}")]
     File { path: PathBuf, message: String },
+}
+
+/// Whether a name reads as a cell, in any case: A1 (`q1`, `Tax2023`, up to column XFD and row
+/// 1 048 576), R1C1 (`r1c1`, `R2`, `C3`), or `R`/`C` alone. Excel takes none of them as a name; the
+/// engine's own check sees only capitals.
+pub fn name_reads_as_a_cell(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    let letters: String = upper.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    let digits = &upper[letters.len()..];
+    let a1 = !letters.is_empty()
+        && letters.len() <= 3
+        && !digits.is_empty()
+        && digits.chars().all(|c| c.is_ascii_digit())
+        && crate::a1::column_number(&letters).is_some_and(|c| c <= 16_384)
+        && digits.parse::<u32>().is_ok_and(|r| (1..=1_048_576).contains(&r));
+    let rc = |s: &str| -> bool {
+        // R, R<n>, C, C<n>, R<n>C<n> and the like
+        let Some(rest) = s.strip_prefix('R') else { return false };
+        let (row, after) = rest.split_at(rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len()));
+        after.is_empty() || (after.starts_with('C') && after[1..].chars().all(|c| c.is_ascii_digit())) || row.is_empty() && after.is_empty()
+    };
+    let c_alone = upper.strip_prefix('C').is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()));
+    a1 || rc(&upper) || c_alone
 }
 
 impl ModelError {
@@ -581,6 +606,9 @@ impl Workbook {
     /// Creates or replaces a name. `formula` as Excel writes it
     /// (`Sheet1!$A$1`, `=0.21`; a leading `=` is accepted).
     pub fn set_name(&mut self, name: &str, formula: &str, scope: Option<&str>) -> Result<(), ModelError> {
+        if name_reads_as_a_cell(name) {
+            return Err(ModelError::NameLikeACell(name.to_string()));
+        }
         let scope = scope.map(|s| self.sheet_index(s)).transpose()?;
         let mut entry = DefinedNameEntry::new(name, formula.trim_start_matches('='));
         if let Some(s) = scope {

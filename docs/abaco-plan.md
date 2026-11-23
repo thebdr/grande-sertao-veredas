@@ -155,7 +155,8 @@ every build (13) and the chi-squared and gamma inverses to full precision (14), 
 can pin at run time (15), random functions a host can seed (16); and four found by the patcher's
 refute round, where the engine's model disagreed with what Excel makes of a move: a range a
 deletion cuts into shrinks (17), a table a host moves is read where it is (18), an external
-reference keeps its address when its cell moves (19), a moved formula keeps its kind (20). The
+reference keeps its address when its cell moves (19), a moved formula keeps its kind (20), and
+the engine's static analysis open to a host (21). The
 record lists each, with its upstream column. Upstream's own tests and the changes' (in the fork's folder, with
 upstream's workbooks) run in the fork's own workspace,
 `cargo test --locked --manifest-path forks/ironcalc/Cargo.toml`, and Ábaco's component test runs
@@ -329,6 +330,15 @@ classes, the report, the corpus list, and the parity test.
 - **Excel writes `#SPILL!` and `#CALC!` as `#VALUE!`** with value metadata in rich-data parts;
   the patcher writes `#VALUE!` alone.
 - **The engine names a workbook after its file** (`CELL("filename")`): the model is named after
-  the destination before the first evaluation the patch compares.
+  the destination before the first evaluation the patch compares; it spells every file `.xlsx`.
+- **The engine's reading of a plain formula is not Excel's** (C-223's fourth round): it computes
+  `SUM(A1:A3*B1:B3)` as an array (140) where Excel reads a plain `<f>` with implicit intersection
+  (10). A formula an edit writes with a part that may not be single under an operator is written
+  as Excel 365's dynamic array of one cell (`t="array"`, `cm`, the metadata part's dynamic-array
+  entry, added when missing); fork change 21 opens the engine's static analysis for the judgement.
+- **A table's header is its column's name**: editing it without renaming the table column is a
+  repair in Excel; such an edit is refused.
+- **A read-only destination**: its `.bak` is read-only too after the first patch, so the next
+  removes it before making a new one, and the destination keeps its own permissions.
 - **Calamine 0.26 does not build with zip 2.6**: the lock holds zip 2.4.2, the version Veredas 1's
   lock had.

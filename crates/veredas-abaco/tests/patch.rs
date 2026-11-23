@@ -309,14 +309,20 @@ fn formulas_are_spelled_for_the_file_whatever_spelling_they_come_in() {
     ]);
     fates(&src, &dst, &report);
     let s = part(&dst, "xl/worksheets/sheet2.xml");
+    // a LET the engine cannot show a single value for is written as Excel 365 writes a dynamic
+    // array of one cell, marked by the metadata part added for it (Excel 365 computes it as the
+    // engine does)
     assert!(
-        s.contains(r#"<c r="B1"><f>_xlfn.LET(_xlpm.x,Data!E2,_xlpm.x*2)</f><v>384</v></c>"#),
+        s.contains(r#"<c r="B1" cm="1"><f t="array" ref="B1">_xlfn.LET(_xlpm.x,Data!E2,_xlpm.x*2)</f><v>384</v></c>"#),
         "{s}"
     );
     assert!(
-        s.contains(r#"<c r="B2"><f>_xlfn.LET(_xlpm.t,A2,_xlpm.t+1)</f><v>123</v></c>"#),
+        s.contains(r#"<c r="B2" cm="1"><f t="array" ref="B2">_xlfn.LET(_xlpm.t,A2,_xlpm.t+1)</f><v>123</v></c>"#),
         "{s}"
     );
+    assert!(part(&dst, "xl/metadata.xml").contains(r#"<xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/>"#));
+    assert!(part(&dst, "[Content_Types].xml").contains(r#"PartName="/xl/metadata.xml""#));
+    assert!(part(&dst, "xl/_rels/workbook.xml.rels").contains(r#"relationships/sheetMetadata" Target="metadata.xml""#));
     assert!(
         s.contains(
             r#"<c r="B3" t="str"><f>_xlfn.CONCAT("a","b")&amp;_xlfn.IFNA(1,2)</f><v>ab1</v></c>"#
@@ -570,7 +576,8 @@ fn a_new_sheet_names_widths_outlines_and_formats() {
         },
     ]);
     let (rewritten, _, added) = fates(&src, &dst, &report);
-    assert_eq!(added, vec!["xl/worksheets/sheet3.xml"]);
+    // the new sheet, and the metadata part its `=Total+1` (a name: an array to the engine) needs
+    assert_eq!(added, vec!["xl/metadata.xml", "xl/worksheets/sheet3.xml"]);
     assert!(rewritten.contains(&"xl/styles.xml".to_string()));
     let wb = part(&dst, "xl/workbook.xml");
     assert!(
@@ -584,7 +591,7 @@ fn a_new_sheet_names_widths_outlines_and_formats() {
     assert!(part(&dst, "[Content_Types].xml")
         .contains(r#"<Override PartName="/xl/worksheets/sheet3.xml""#));
     let log = part(&dst, "xl/worksheets/sheet3.xml");
-    assert!(log.contains(r#"<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>patched</t></is></c></row><row r="2"><c r="B2"><f>Total+1</f><v>193</v></c></row></sheetData>"#), "{log}");
+    assert!(log.contains(r#"<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>patched</t></is></c></row><row r="2"><c r="B2" cm="1"><f t="array" ref="B2">Total+1</f><v>193</v></c></row></sheetData>"#), "{log}");
     assert!(log.contains(r#"<dimension ref="A1:B2"/>"#));
     let s = part(&dst, "xl/worksheets/sheet1.xml");
     assert!(

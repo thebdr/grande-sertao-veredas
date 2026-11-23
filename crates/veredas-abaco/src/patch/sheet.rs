@@ -28,10 +28,12 @@ pub(crate) enum NewContent {
     /// writes a spilled cell.
     Spilled(Value),
     /// File spelling (`_xlfn.`/`_xlpm.`), unescaped; `cached` is the engine's
-    /// value for it.
+    /// value for it; `cm`, a dynamic array of one cell, written as an array formula marked by
+    /// that cell metadata entry.
     Formula {
         text: String,
         cached: Value,
+        cm: Option<u32>,
     },
 }
 
@@ -89,6 +91,9 @@ pub(crate) struct SheetJob<'a> {
     /// array spilled into), is at a final one the engine computes nothing at now: an array no
     /// longer reaches it, volatile or not.
     pub left: &'a dyn Fn((i32, i32), (i32, i32)) -> bool,
+    /// Whether the cell that was at an ORIGINAL position, the engine computing nothing there then
+    /// (a cell the file holds empty), is at a final one an array spills into now.
+    pub reached: &'a dyn Fn((i32, i32), (i32, i32)) -> bool,
 }
 
 #[derive(Debug, Default)]
@@ -241,10 +246,15 @@ fn fresh_cell(row: i32, col: i32, style: Option<&str>, content: &NewContent) -> 
         NewContent::Value(Value::Error(e)) => {
             format!("<c r=\"{r}\"{s} t=\"e\"><v>{}</v></c>", escape_text(e))
         }
-        NewContent::Formula { text, cached } => {
+        NewContent::Formula { text, cached, cm: None } => {
             let (t, v) = cached_xml(cached);
             let t = t.map(|t| format!(" t=\"{t}\"")).unwrap_or_default();
             format!("<c r=\"{r}\"{s}{t}><f>{}</f>{v}</c>", escape_text(text))
+        }
+        NewContent::Formula { text, cached, cm: Some(cm) } => {
+            let (t, v) = cached_xml(cached);
+            let t = t.map(|t| format!(" t=\"{t}\"")).unwrap_or_default();
+            format!("<c r=\"{r}\"{s}{t} cm=\"{cm}\"><f t=\"array\" ref=\"{r}\">{}</f>{v}</c>", escape_text(text))
         }
         NewContent::Spilled(v) => return spilled_cell(row, col, style, v),
     })
@@ -989,7 +999,10 @@ fn rewrite_cell(
                 }
             });
             let cached = cached_value(attr(&new_tag, "t"), v_raw.and_then(|v| v.2));
-            if moved && !same_value(&cached, &live) {
+            // a cell whose value moved and whose cache carries value metadata (a `#VALUE!` standing
+            // for a `#SPILL!` or `#CALC!`) is rewritten whatever its cache says: the error may be
+            // another now, or none
+            if moved && (!same_value(&cached, &live) || attr(&new_tag, "vm").is_some()) {
                 let (t, v) = cached_xml(&live);
                 new_tag = set_or_remove(&new_tag, "t", t);
                 // value metadata marks what a cached `#VALUE!` stands for (`#SPILL!`, `#CALC!`): a
@@ -1022,7 +1035,7 @@ fn rewrite_cell(
         // value, Excel would read it as a constant); a plain value is never the engine's to move
         // (`moved` is false for a cell the engine did not compute)
         let live = (job.value_at)(new.0, new.1);
-        if (job.moved)(orig, new, &live) || (job.left)(orig, new) {
+        if (job.moved)(orig, new, &live) || (job.left)(orig, new) || (job.reached)(orig, new) {
             out.refreshed += 1;
             return Ok(match spilled_cell(new.0, new.1, attr(&new_tag, "s"), &live) {
                 Some(s) => CellOut::New(s),

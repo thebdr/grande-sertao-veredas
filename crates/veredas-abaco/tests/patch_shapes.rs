@@ -188,7 +188,7 @@ fn a_chart_on_a_chart_sheet_follows_the_rows_it_reads_and_the_chart_sheet_counts
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><chartsheet xmlns="{MAIN}" xmlns:r="{R}"><sheetViews><sheetView workbookViewId="0"/></sheetViews><drawing r:id="rId1"/></chartsheet>"#
     );
     let drawing = format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="100" cy="100"/><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="{R}" r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:absoluteAnchor></xdr:wsDr>"#
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="100" cy="100"/><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="{R}" r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:absoluteAnchor><xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="10" cy="10"/><xdr:sp macro="" textlink="Data!$A$3"><xdr:nvSpPr><xdr:cNvPr id="3" name="Note"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr/></xdr:sp><xdr:clientData/></xdr:absoluteAnchor></xdr:wsDr>"#
     );
     let chart = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart><c:ser><c:idx val="0"/><c:val><c:numRef><c:f>Data!$A$1:$A$3</c:f></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#;
     let wb_rels = rels(&[
@@ -215,9 +215,11 @@ fn a_chart_on_a_chart_sheet_follows_the_rows_it_reads_and_the_chart_sheet_counts
     patch(&src, &dst, &[rows("Data", 1, 2), local], &verified()).unwrap();
     assert!(part(&dst, "xl/charts/chart1.xml").contains("<c:f>Data!$A$3:$A$5</c:f>"));
     let (before, after) = (parts(&src), parts(&dst));
-    for p in ["xl/chartsheets/sheet1.xml", "xl/drawings/drawing1.xml", "xl/chartsheets/_rels/sheet1.xml.rels"] {
+    for p in ["xl/chartsheets/sheet1.xml", "xl/chartsheets/_rels/sheet1.xml.rels"] {
         assert_eq!(before[p], after[p], "{p}");
     }
+    // the chart sheet's drawing: only its shape's text link moved
+    assert!(part(&dst, "xl/drawings/drawing1.xml").contains(r#"textlink="Data!$A$5""#));
     // the third `<sheet>` of the file, the chart sheet counted
     assert!(part(&dst, "xl/workbook.xml").contains(r#"<definedName name="Local" localSheetId="2">Second!$A$1</definedName>"#));
 }
@@ -836,4 +838,190 @@ fn a_workbook_is_computed_as_the_destination_it_is_written_to() {
     let dst = dir.path().join("out.xlsx");
     let report = patch(&src, &dst, &[value("S", "A1", serde_json::json!(2))], &verified()).unwrap();
     assert_eq!(report.outcomes[0].status, Status::Applied);
+}
+
+// ---- refute round 4 ---------------------------------------------------------------------------
+
+#[test]
+fn an_array_that_grows_fills_the_empty_cells_the_file_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("seq.xlsx");
+    let data = r#"<row r="1"><c r="A1" cm="1"><f t="array" ref="A1:A3">_xlfn.SEQUENCE(B1,1,B1-1,-1)</f><v>2</v></c><c r="B1"><v>3</v></c></row><row r="2"><c r="A2"><v>1</v></c></row><row r="3"><c r="A3"><v>0</v></c></row><row r="4"><c r="A4"/></row><row r="5"><c r="A5"/></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[value("S", "B1", serde_json::json!(6))], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(element(&sheet, "A1").unwrap().contains(r#"ref="A1:A6""#), "{sheet}");
+    for (cell, v) in [("A4", "2"), ("A5", "1"), ("A6", "0")] {
+        assert_eq!(element(&sheet, cell), Some(format!(r#"<c r="{cell}"><v>{v}</v></c>"#).as_str()), "{sheet}");
+    }
+}
+
+#[test]
+fn a_formula_the_engine_evaluates_as_an_array_is_written_as_one() {
+    // SUM(A1:A3*B1:B3) is 140 as an array, 10 read with Excel's implicit intersection
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("arrays.xlsx");
+    let data: String =
+        (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="B{r}"><v>{}</v></c></row>"#, r * 10)).collect();
+    plain_book(&src, &[("S", worksheet(&data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let formula = |cell: &str, f: &str| Edit::Formula { sheet: "S".into(), cell: cell.into(), formula: f.into(), expect: None };
+    patch(&src, &dst, &[formula("D1", "=SUM(A1:A3*B1:B3)"), formula("D2", "=A1+B1")], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert_eq!(element(&sheet, "D1"), Some(r#"<c r="D1" cm="1"><f t="array" ref="D1">SUM(A1:A3*B1:B3)</f><v>140</v></c>"#), "{sheet}");
+    // a plain one stays plain
+    assert_eq!(element(&sheet, "D2"), Some(r#"<c r="D2"><f>A1+B1</f><v>11</v></c>"#), "{sheet}");
+    assert!(part(&dst, "xl/metadata.xml").contains("fDynamic=\"1\""));
+    // a workbook with its own dynamic-array metadata: its entry used, its part as it was
+    let src = fork_file("calc_tests/LOOKUP_AND_REFERENCE/FILTER_ERRORS.xlsx");
+    std::fs::remove_file(&dst).unwrap();
+    let z = Edit::Formula { sheet: "Sheet1".into(), cell: "Z1".into(), formula: "=SUM(A1:A4*2)".into(), expect: None };
+    patch(&src, &dst, &[z], &verified()).unwrap();
+    let z1 = element(&part(&dst, "xl/worksheets/sheet1.xml"), "Z1").unwrap().to_string();
+    assert!(z1.contains(r#"cm="1""#) && z1.contains(r#"<f t="array" ref="Z1">"#), "{z1}");
+    assert_eq!(parts(&src)["xl/metadata.xml"], parts(&dst)["xl/metadata.xml"]);
+}
+
+#[test]
+fn a_width_or_an_outline_keeps_what_survives_of_its_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("widths.xlsx");
+    plain_book(&src, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row>"#, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let width = Edit::ColumnWidth { sheet: "S".into(), columns: "B:D".into(), width: 30.0 };
+    let outline = Edit::OutlineColumns { sheet: "S".into(), columns: "B:D".into(), level: 1, hidden: false };
+    for gone in ["B", "D"] {
+        for edit in [width.clone(), outline.clone()] {
+            let _ = std::fs::remove_file(&dst);
+            let delete = Edit::DeleteColumns { sheet: "S".into(), at: gone.into(), count: 1 };
+            patch(&src, &dst, &[edit.clone(), delete], &verified()).unwrap();
+            let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+            assert!(sheet.contains(r#"<col min="2" max="3""#), "{edit:?}, {gone} deleted: {sheet}");
+        }
+    }
+}
+
+#[test]
+fn an_edit_of_a_table_header_is_refused_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("table.xlsx");
+    table_book(&src);
+    for edit in [value("T", "B2", serde_json::json!("Amount")), Edit::Clear { sheet: "T".into(), area: "A2:B2".into() }] {
+        let dst = dir.path().join("out.xlsx");
+        let e = patch(&src, &dst, &[edit.clone()], &verified()).unwrap_err();
+        assert!(e.to_string().contains("is a header of table Table1"), "{edit:?}: {e}");
+        assert!(!dst.exists());
+    }
+    // a cell of its data: written
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[value("T", "B3", serde_json::json!(5))], &verified()).unwrap();
+}
+
+#[test]
+fn a_new_sheet_takes_no_name_a_sheet_has_nor_one_excel_reserves() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["Chart1", "chart1", "Second", "History"] {
+        let dst = dir.path().join("out.xlsx");
+        let e = patch(&fork_file("example.xlsx"), &dst, &[Edit::AddSheet { name: name.into() }], &verified()).unwrap_err();
+        assert!(e.to_string().contains("a sheet named") || e.to_string().contains("reserves"), "{name}: {e}");
+    }
+}
+
+#[test]
+fn an_error_marked_by_value_metadata_loses_the_mark_when_it_moves() {
+    // A1's array blocked by A3 (#SPILL!, cached #VALUE! with its mark); B1 set to text: a real #VALUE!
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("marked.xlsx");
+    let data = r#"<row r="1"><c r="A1" t="e" cm="1" vm="1"><f t="array" ref="A1">_xlfn.SEQUENCE(B1)</f><v>#VALUE!</v></c><c r="B1"><v>3</v></c></row><row r="3"><c r="A3"><v>7</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    assert_eq!(read_back(&src, "S", "A1"), Value::Error("#SPILL!".into()));
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[value("S", "B1", serde_json::json!("x"))], &verified()).unwrap();
+    let a1 = element(&part(&dst, "xl/worksheets/sheet1.xml"), "A1").unwrap().to_string();
+    assert!(!a1.contains("vm=") && a1.ends_with("<v>#VALUE!</v></c>"), "{a1}");
+}
+
+#[test]
+fn clearing_what_blocks_an_array_lets_it_spill() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("blocked.xlsx");
+    let data = r#"<row r="1"><c r="A1" t="e" cm="1" vm="1"><f t="array" ref="A1">_xlfn.SEQUENCE(3)</f><v>#VALUE!</v></c></row><row r="3"><c r="A3"><v>7</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let report = patch(&src, &dst, &[Edit::Clear { sheet: "S".into(), area: "A3".into() }], &verified()).unwrap();
+    assert_eq!(report.outcomes[0].status, Status::Applied);
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert_eq!(element(&sheet, "A2"), Some(r#"<c r="A2"><v>2</v></c>"#), "{sheet}");
+    assert_eq!(element(&sheet, "A3"), Some(r#"<c r="A3"><v>3</v></c>"#), "{sheet}");
+    let a1 = element(&sheet, "A1").unwrap();
+    assert!(a1.contains(r#"ref="A1:A3""#) && a1.ends_with("<v>1</v></c>") && !a1.contains("vm=") && !a1.contains(r#"t="e""#), "{a1}");
+}
+
+#[test]
+fn a_name_that_reads_as_a_cell_is_refused_in_any_case() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("names.xlsx");
+    plain_book(&src, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row>"#, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let set = |name: &str| Edit::SetName { name: name.into(), formula: "=S!$A$1".into(), scope: None };
+    for name in ["q1", "Tax2023", "fy2024", "r1c1", "RC", "c3", "R"] {
+        let e = patch(&src, &dst, &[set(name)], &verified()).unwrap_err();
+        assert!(e.to_string().contains("reads as a cell"), "{name}: {e}");
+        assert!(!dst.exists());
+    }
+    for name in ["Rate", "Coin", "Total2"] {
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[set(name)], &verified()).unwrap_or_else(|e| panic!("{name}: {e}"));
+    }
+}
+
+#[test]
+fn a_value_edit_takes_only_the_errors_a_cell_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("errors.xlsx");
+    plain_book(&src, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row>"#, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    for e in ["#SPILL!", "#CALC!", "#WHAT?"] {
+        let err = patch(&src, &dst, &[value("S", "B1", serde_json::json!({"error": e}))], &verified()).unwrap_err();
+        assert!(err.to_string().contains("not an error a cell holds"), "{e}: {err}");
+    }
+    patch(&src, &dst, &[value("S", "B1", serde_json::json!({"error": "#N/A"}))], &verified()).unwrap();
+    assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "B1"), Some(r#"<c r="B1" t="e"><v>#N/A</v></c>"#));
+}
+
+#[test]
+fn charts_data_label_ranges_user_shapes_and_form_controls_follow_their_cells() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("links.xlsx");
+    let data: String = (1..=4).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="B{r}"><v>{r}</v></c></row>"#)).collect();
+    let drawing = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"/>"#;
+    let chart = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart"><c:chart><c:plotArea><c:barChart><c:ser><c:val><c:numRef><c:f>Data!$A$1:$A$3</c:f></c:numRef></c:val><c:extLst><c:ext uri="{02D57815-91ED-43cb-92C2-25804820EDAC}"><c15:datalabelsRange><c15:f>Data!$B$1:$B$3</c15:f></c15:datalabelsRange><c15:formulaRef><c15:sqref>Data!$A$1:$A$3</c15:sqref></c15:formulaRef></c:ext></c:extLst></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#;
+    let shapes = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><c:userShapes xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:cdr="http://schemas.openxmlformats.org/drawingml/2006/chartDrawing"><cdr:relSizeAnchor><cdr:sp macro="" textlink="Data!$A$3"><cdr:nvSpPr><cdr:cNvPr id="2" name="Note"/><cdr:cNvSpPr/></cdr:nvSpPr><cdr:spPr/></cdr:sp></cdr:relSizeAnchor></c:userShapes>"#;
+    let control = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><formControlPr xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" objectType="Drop" fmlaLink="$A$3" fmlaRange="$B$1:$B$3"/>"#;
+    plain_book(
+        &src,
+        &[("Data", worksheet(&data, r#"<drawing r:id="rId1"/>"#))],
+        "",
+        &[
+            (
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                rels(&[rel("rId1", "drawing", "../drawings/drawing1.xml"), rel("rId2", "ctrlProp", "../ctrlProps/ctrlProp1.xml")]),
+            ),
+            ("xl/drawings/drawing1.xml", drawing.to_string()),
+            ("xl/drawings/_rels/drawing1.xml.rels", rels(&[rel("rId1", "chart", "../charts/chart1.xml")])),
+            ("xl/charts/chart1.xml", chart.to_string()),
+            ("xl/charts/_rels/chart1.xml.rels", rels(&[rel("rId1", "chartUserShapes", "../drawings/drawing2.xml")])),
+            ("xl/drawings/drawing2.xml", shapes.to_string()),
+            ("xl/ctrlProps/ctrlProp1.xml", control.to_string()),
+        ],
+    );
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[rows("Data", 1, 1)], &verified()).unwrap();
+    let chart = part(&dst, "xl/charts/chart1.xml");
+    assert!(chart.contains("<c:f>Data!$A$2:$A$4</c:f>") && chart.contains("<c15:f>Data!$B$2:$B$4</c15:f>"), "{chart}");
+    assert!(chart.contains("<c15:sqref>Data!$A$2:$A$4</c15:sqref>"), "{chart}");
+    assert!(part(&dst, "xl/drawings/drawing2.xml").contains(r#"textlink="Data!$A$4""#));
+    let control = part(&dst, "xl/ctrlProps/ctrlProp1.xml");
+    assert!(control.contains(r#"fmlaLink="$A$4""#) && control.contains(r#"fmlaRange="$B$2:$B$4""#), "{control}");
 }

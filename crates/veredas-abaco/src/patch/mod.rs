@@ -77,6 +77,12 @@ const CT_WORKSHEET: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
 const NS_STYLES: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
 const CT_STYLES: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
+const NS_METADATA: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata";
+const CT_METADATA: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml";
+/// The metadata part Excel 365 writes for a workbook with dynamic arrays: one cell metadata
+/// entry (`cm="1"`) pointing at the dynamic-array property.
+const METADATA: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"><metadataTypes count="1"><metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/></metadataTypes><futureMetadata name="XLDAPR" count="1"><bk><extLst><ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"><xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/></ext></extLst></bk></futureMetadata><cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata></metadata>"#;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PatchError {
@@ -792,7 +798,12 @@ fn json_value(v: &serde_json::Value) -> Result<Value, String> {
         serde_json::Value::Number(n) => Value::Number(n.as_f64().ok_or("not a number")?),
         serde_json::Value::String(s) => Value::Text(s.clone()),
         serde_json::Value::Object(o) => match o.get("error").and_then(|e| e.as_str()) {
-            Some(e) => Value::Error(e.to_string()),
+            // the errors a file holds as a cell's value (`#SPILL!` and `#CALC!` are a formula's
+            // only, spelled `#VALUE!` with metadata)
+            Some(e) if ["#NULL!", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#GETTING_DATA"].contains(&e) => {
+                Value::Error(e.to_string())
+            }
+            Some(e) => return Err(format!("not an error a cell holds as a value: {e}")),
             None => return Err(format!("not a value: {v}")),
         },
         serde_json::Value::Array(_) => return Err(format!("not a value: {v}")),
@@ -834,6 +845,18 @@ fn formula_node(wb: &Workbook, sheet: u32, a: Addr) -> Option<Node> {
     )
 }
 
+/// The table whose header row holds the cell (`sheet`, `row`, `col`), if one does: a header names
+/// its table's column in the table's part, which the patcher does not rename.
+fn table_header_at(wb: &Workbook, sheet: &str, row: i32, col: i32) -> Option<String> {
+    wb.model().workbook.tables.values().find_map(|t| {
+        if !t.sheet_name.eq_ignore_ascii_case(sheet) || t.header_row_count == 0 {
+            return None;
+        }
+        let (r1, c1, _, c2) = refs::parse_area(&t.reference)?.bounds();
+        (row == r1 && (c1..=c2).contains(&col)).then(|| format!("{} at {}!{}", t.name, t.sheet_name, t.reference))
+    })
+}
+
 /// A formula in file spelling as `wb` would write it at `a` — `None` when
 /// it does not parse.
 fn file_spelling(wb: &Workbook, sheet: u32, a: Addr, formula: &str) -> Option<String> {
@@ -856,6 +879,42 @@ fn file_spelling(wb: &Workbook, sheet: u32, a: Addr, formula: &str) -> Option<St
         return None;
     }
     Some(to_excel_string(&node, &ctx))
+}
+
+/// Whether legacy Excel would read a formula otherwise than a dynamic array does: a part that may
+/// not be a single value (a range, a name, a table, a function that may return an array, as the
+/// engine's static analysis judges it) where an operator, a comparison, `&` or a unary sign
+/// expects one. A plain formula intersects it implicitly (`SUM(A1:A3*B1:B3)` reads one row), an
+/// array formula takes it whole; a range given to a function as such (`SUM(A1:A3)`) reads alike.
+fn array_under_an_operator(node: &Node) -> bool {
+    use ironcalc_base::expressions::parser::static_analysis::{run_static_analysis_on_node, StaticResult};
+    let not_single = |n: &Node| !matches!(run_static_analysis_on_node(n), StaticResult::Scalar);
+    match node {
+        Node::OpSumKind { left, right, .. }
+        | Node::OpProductKind { left, right, .. }
+        | Node::OpPowerKind { left, right }
+        | Node::OpConcatenateKind { left, right }
+        | Node::CompareKind { left, right, .. } => {
+            not_single(left) || not_single(right) || array_under_an_operator(left) || array_under_an_operator(right)
+        }
+        Node::UnaryKind { right, .. } => not_single(right) || array_under_an_operator(right),
+        Node::FunctionKind { args, .. } | Node::NamedFunctionKind { args, .. } => args.iter().any(array_under_an_operator),
+        Node::LambdaCallKind { lambda, args } => array_under_an_operator(lambda) || args.iter().any(array_under_an_operator),
+        Node::ImplicitIntersection { child, .. } | Node::SpillRangeOperator { child } => array_under_an_operator(child),
+        Node::OpRangeKind { left, right } => array_under_an_operator(left) || array_under_an_operator(right),
+        _ => false,
+    }
+}
+
+/// The cell's formula as the file spells it, `dynamic` for an array formula (no `@` of its implied:
+/// every one written, as `_xlfn.SINGLE`).
+fn file_formula(wb: &Workbook, sheet: u32, a: Addr, dynamic: bool) -> Option<String> {
+    if !dynamic {
+        return current_file_formula(wb, sheet, a);
+    }
+    let node = formula_node(wb, sheet, a)?;
+    let ctx = CellReferenceRC { sheet: wb.sheet_name(sheet).ok()?, row: a.row, column: a.column };
+    Some(ironcalc_base::expressions::parser::stringify::to_excel_array_formula_string(&node, &ctx))
 }
 
 /// The cell's formula in file spelling, `None` for a value cell.
@@ -930,6 +989,13 @@ pub fn patch(
     // what the source held when it was read: it must hold the same before the rename
     let fingerprint = bytes.clone();
     let mut pkg = package::Package::open(bytes)?;
+    // every sheet the file names, chart sheets included (the engine knows worksheets only)
+    let file_sheets: Vec<String> = {
+        let xml = pkg.read_text("xl/workbook.xml")?;
+        let rels_part = package::rels_of("xl/workbook.xml");
+        let rels = package::rels("xl/workbook.xml", &pkg.read_text(&rels_part)?);
+        package::sheets(&xml, &rels)?.into_iter().map(|e| e.name).collect()
+    };
 
     // ---- the engine's model, links from the cache (Excel's closed-book view)
     let fixed = Fixed::new();
@@ -1036,6 +1102,11 @@ pub fn patch(
                         report.outcomes.push(outcome);
                         continue;
                     }
+                if let Some(table) = table_header_at(&wb, &canonical, a.row, a.column) {
+                    return Err(PatchError::Unsupported(format!(
+                        "{canonical}!{a} is a header of table {table} (a header names its column, and the patcher does not rename table columns yet)"
+                    )));
+                }
                 let content = if is_formula {
                     wb.set_formula(s, a, &target)
                         .map_err(|e| fail(e.to_string()))?;
@@ -1081,6 +1152,12 @@ pub fn patch(
                     .partition(|a| spilled_from_outside(a));
                 if !left.is_empty() {
                     outcome.note = format!("{canonical}!{area}: {} cell(s) an array spills into left to it", left.len());
+                }
+                if let Some(a) = existing.iter().find(|a| table_header_at(&wb, &canonical, a.row, a.column).is_some()) {
+                    let table = table_header_at(&wb, &canonical, a.row, a.column).unwrap_or_default();
+                    return Err(PatchError::Unsupported(format!(
+                        "{canonical}!{a} is a header of table {table} (a header names its column, and the patcher does not rename table columns yet)"
+                    )));
                 }
                 wb.clear(s, ar).map_err(|e| fail(e.to_string()))?;
                 for a in existing {
@@ -1136,8 +1213,14 @@ pub fn patch(
                 shifts.push((canonical, sh));
             }
             Edit::AddSheet { name } => {
-                if wb.sheet_index(name).is_ok() {
+                let taken = wb.sheet_index(name).is_ok()
+                    || file_sheets.iter().chain(new_sheets.iter()).any(|n| n.to_lowercase() == name.to_lowercase());
+                if taken {
                     return Err(fail(format!("a sheet named {name:?} exists")));
+                }
+                // Excel keeps the name for its change history
+                if name.eq_ignore_ascii_case("History") {
+                    return Err(fail(format!("{name:?} is a name Excel reserves")));
                 }
                 wb.add_sheet(name).map_err(|e| fail(e.to_string()))?;
                 new_sheets.push(name.clone());
@@ -1326,7 +1409,13 @@ pub fn patch(
                 .sheet_index(&w.sheet)
                 .map_err(|e| PatchError::Malformed(e.to_string()))?;
             let a = Addr::new(row, col);
+            let computes_now = wb.model().workbook.worksheet(s).is_ok_and(|ws| computed_at(ws, (row, col)));
             entry.content = Some(match c {
+                // a cell an edit wrote that an array spills into now (the edit cleared what
+                // blocked it): the array's value, as a spilled cell
+                ContentKind::Value(_) if computes_now => {
+                    NewContent::Spilled(wb.value_now(s, a).map_err(|e| PatchError::Malformed(e.to_string()))?)
+                }
                 ContentKind::Value(v) => NewContent::Value(v.clone()),
                 ContentKind::Formula => {
                     if let Ok(Content::DynamicFormula(_) | Content::ArrayFormula { .. }) =
@@ -1349,7 +1438,13 @@ pub fn patch(
                             )));
                         }
                     }
-                    let text = current_file_formula(&wb, s, a).ok_or_else(|| {
+                    // a formula the engine evaluates as an array is written as Excel 365 writes
+                    // one: an array formula of its one cell, marked dynamic (its `cm` set once the
+                    // metadata part is known); a plain `<f>` would be read with an implicit
+                    // intersection (`SUM(A1:A3*B1:B3)` reading 10, not 140)
+                    let dynamic = matches!(wb.content(s, a), Ok(Content::DynamicFormula(_)))
+                        || formula_node(&wb, s, a).is_some_and(|n| array_under_an_operator(&n));
+                    let text = file_formula(&wb, s, a, dynamic).ok_or_else(|| {
                         PatchError::Malformed(format!(
                             "{}!{a}: the formula vanished from the model",
                             w.sheet
@@ -1358,7 +1453,7 @@ pub fn patch(
                     let cached = wb
                         .value_now(s, a)
                         .map_err(|e| PatchError::Malformed(e.to_string()))?;
-                    NewContent::Formula { text, cached }
+                    NewContent::Formula { text, cached, cm: dynamic.then_some(0) }
                 }
             });
         }
@@ -1407,15 +1502,23 @@ pub fn patch(
                 .get(i)
                 .map(|m| m.iter().filter_map(|(o, v)| map_pos(&name, 0, o.0, o.1).map(|p| (p, (*o, v.clone())))).collect())
                 .unwrap_or_default();
-            let spilled: Vec<(i32, i32)> = ws
+            let covered: Vec<(i32, i32)> = ws
                 .sheet_data
                 .cells()
                 .filter(|(_, _, c)| matches!(&**c, Cell::SpillCell { .. }))
                 .map(|(r, c, _)| (r, c))
-                .filter(|p| computed_at(ws, *p) && !holds_cell(&name, *p))
+                .filter(|p| computed_at(ws, *p))
                 .collect();
-            for (row, col) in spilled {
+            for (row, col) in covered {
                 let v = wb.value_now(i as u32, Addr::new(row, col)).map_err(|e| PatchError::Malformed(e.to_string()))?;
+                if holds_cell(&name, (row, col)) {
+                    // a cell the file holds that the engine did not compute before (an empty
+                    // element the array grew into): the rewrite writes it, verification expects it
+                    if !was.contains_key(&(row, col)) {
+                        expected.push((name.clone(), row, col, v));
+                    }
+                    continue;
+                }
                 if let Some((orig, then)) = was.get(&(row, col))
                     && (same(then, &v) || unstable(i, orig, (row, col)))
                 {
@@ -1473,10 +1576,14 @@ pub fn patch(
     }
     let mut final_cols: BTreeMap<String, Vec<ColOp>> = BTreeMap::new();
     for c in &cols_ops {
-        let (Some((_, a)), Some((_, b))) = (
-            map_pos(&c.sheet, c.after, 1, c.first),
-            map_pos(&c.sheet, c.after, 1, c.last),
-        ) else {
+        // the range as Excel moves one: what survives of it, grown by an insertion inside
+        let mut span = Some((c.first, c.last));
+        for (sheet, sh) in &shifts[c.after..] {
+            if sheet.eq_ignore_ascii_case(&c.sheet) && !sh.is_rows() {
+                span = span.and_then(|(a, b)| sh.span(a, b));
+            }
+        }
+        let Some((a, b)) = span else {
             continue;
         };
         let op = match c.op {
@@ -1589,6 +1696,37 @@ pub fn patch(
         sheet_jobs.push((name.clone(), part, Some(blank.to_string())));
     }
 
+    // ---- the dynamic-array metadata a written array formula points at (`cm`) ----
+    if final_writes.values().flat_map(|m| m.values()).any(|w| matches!(w.content, Some(NewContent::Formula { cm: Some(_), .. }))) {
+        let cm = match wb_rels.iter().find(|r| r.kind == "sheetMetadata") {
+            Some(r) => dynamic_cell_metadata(&pkg.read_text(&r.target)?).ok_or_else(|| {
+                PatchError::Unsupported(
+                    "the workbook's metadata part holds no dynamic-array entry to mark a written array formula with".into(),
+                )
+            })?,
+            None => {
+                let mut n = 0;
+                let mut part = "xl/metadata.xml".to_string();
+                while pkg.has(&part) {
+                    n += 1;
+                    part = format!("xl/metadata{n}.xml");
+                }
+                let rid = package::free_rid(&rels_now);
+                let target = part.trim_start_matches("xl/").to_string();
+                rels_now.push(package::Rel { id: rid.clone(), kind: "sheetMetadata".into(), target: part.clone(), external: false });
+                wb_rels_xml = package::add_rel(&wb_rels_xml, &rid, NS_METADATA, &target);
+                ct_xml = package::add_override(&ct_xml, &part, CT_METADATA);
+                added.push((part, METADATA.as_bytes().to_vec()));
+                1
+            }
+        };
+        for w in final_writes.values_mut().flat_map(|m| m.values_mut()) {
+            if let Some(NewContent::Formula { cm: Some(c), .. }) = &mut w.content {
+                *c = cm;
+            }
+        }
+    }
+
     for (name, part, fresh) in &sheet_jobs {
         let sheet_index = wb
             .sheet_index(name)
@@ -1630,6 +1768,13 @@ pub fn patch(
                 && before.values.get(sheet_index as usize).is_some_and(|v| v.contains_key(&orig))
                 && !wb.model().workbook.worksheet(sheet_index).is_ok_and(|ws| computed_at(ws, new))
         };
+        let reached = |orig: (i32, i32), new: (i32, i32)| -> bool {
+            fresh.is_none()
+                && !before.values.get(sheet_index as usize).is_some_and(|v| v.contains_key(&orig))
+                && wb.model().workbook.worksheet(sheet_index).is_ok_and(|ws| {
+                    computed_at(ws, new) && matches!(ws.cell(new.0, new.1).map(|c| c.as_ref().clone()), Some(Cell::SpillCell { .. }))
+                })
+        };
         let job = SheetJob {
             name: &key,
             order: &order,
@@ -1641,6 +1786,7 @@ pub fn patch(
             moved: &moved,
             array_extent: &array_extent,
             left: &left,
+            reached: &reached,
         };
         let out = sheet::rewrite(&text, &job, &mut styles)?;
         report.refreshed += out.refreshed;
@@ -1673,6 +1819,7 @@ pub fn patch(
                         "vmlDrawing",
                         "drawing",
                         "table",
+                        "ctrlProp",
                     ];
                     if r.external || !pkg.has(&r.target) || !handled.contains(&r.kind.as_str()) {
                         continue;
@@ -1695,6 +1842,8 @@ pub fn patch(
                             let base = anchored.clone().unwrap_or(content.clone());
                             package::shift_textlinks(&base, &shifts, Some(name), &order).or(anchored)
                         }
+                        // a form control's linked cell and its list's range
+                        "ctrlProp" => package::shift_link_attributes(&content, &["fmlaLink", "fmlaRange"], &shifts, Some(name), &order),
                         "table" => {
                             let t = if own.is_empty() {
                                 None
@@ -1737,6 +1886,11 @@ pub fn patch(
             for r in package::rels(&e.part, &rels_xml) {
                 if r.kind == "drawing" && !r.external && pkg.has(&r.target) {
                     shift_charts(&mut pkg, &r.target, &shifts, &order, &mut replaced)?;
+                    // a shape's text link on the chart sheet (its references name their sheet)
+                    let drawing = pkg.read_text(&r.target)?;
+                    if let Some(n) = package::shift_textlinks(&drawing, &shifts, None, &order) {
+                        replaced.insert(r.target.clone(), n.into_bytes());
+                    }
                 }
             }
         }
@@ -1869,14 +2023,71 @@ fn commit(
         if crate::files::contents(source).map_err(|e| io_err(source, e))? != fingerprint {
             return Err(PatchError::SourceMoved(source.to_path_buf()));
         }
+        // the destination's previous version kept as `.bak` (a previous `.bak` replaced, read-only
+        // or not), the destination's own permissions kept on its new version
+        let permissions = dest.exists().then(|| std::fs::metadata(dest).map(|m| m.permissions())).transpose().map_err(|e| io_err(dest, e))?;
         if dest.exists() {
             let bak = dir.join(format!("{file_name}.bak"));
+            if bak.exists() {
+                std::fs::remove_file(&bak).map_err(|e| io_err(&bak, e))?;
+            }
             std::fs::copy(dest, &bak).map_err(|e| io_err(&bak, e))?;
         }
-        std::fs::rename(&written, dest).map_err(|e| io_err(dest, e))
+        std::fs::rename(&written, dest).map_err(|e| io_err(dest, e))?;
+        if let Some(p) = permissions {
+            std::fs::set_permissions(dest, p).map_err(|e| io_err(dest, e))?;
+        }
+        Ok(())
     })();
     let _ = std::fs::remove_dir_all(&scratch);
     result
+}
+
+/// The cell metadata entry (its 1-based index, a cell's `cm`) of a metadata part that marks a
+/// formula a dynamic array: the entry whose record points at the `XLDAPR` type's future metadata
+/// with `fDynamic="1"`.
+fn dynamic_cell_metadata(part: &str) -> Option<u32> {
+    let bks = |s: &str| -> Vec<String> {
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while let Some(t) = xml::find_open(s, "bk", pos) {
+            let Some((a, b)) = xml::element_span(s, &t) else { break };
+            out.push(s[a..b].to_string());
+            pos = b;
+        }
+        out
+    };
+    let types = xml::inner(part, "metadataTypes")?;
+    let mut pos = 0;
+    let mut index = 0;
+    let mut type_index = None;
+    while let Some(t) = xml::find_open(types, "metadataType", pos) {
+        index += 1;
+        if xml::attr(t.text, "name") == Some("XLDAPR") {
+            type_index = Some(index);
+        }
+        pos = t.end;
+    }
+    let type_index = type_index?;
+    let mut pos = 0;
+    let mut value_index = None;
+    while let Some(t) = xml::find_open(part, "futureMetadata", pos) {
+        let (a, b) = xml::element_span(part, &t)?;
+        if xml::attr(t.text, "name") == Some("XLDAPR") {
+            value_index = bks(&part[a..b]).iter().position(|bk| bk.contains("fDynamic=\"1\""));
+        }
+        pos = b;
+    }
+    let value_index = value_index?;
+    let cells = xml::inner(part, "cellMetadata")?;
+    bks(cells)
+        .iter()
+        .position(|bk| {
+            xml::find_open(bk, "rc", 0).is_some_and(|rc| {
+                xml::attr(rc.text, "t") == Some(&type_index.to_string()) && xml::attr(rc.text, "v") == Some(&value_index.to_string())
+            })
+        })
+        .map(|i| i as u32 + 1)
 }
 
 /// The charts a drawing part holds, their series formulas (`<c:f>`) moved with the grid; each
@@ -1901,9 +2112,30 @@ fn shift_charts(
             _ => continue,
         };
         if !c.external && pkg.has(&c.target) && !replaced.contains_key(&c.target) {
-            let cx = pkg.read_text(&c.target)?;
-            if let Some(n) = package::shift_formula_elements(&cx, element, shifts, None, order) {
-                replaced.insert(c.target.clone(), n.into_bytes());
+            let original = pkg.read_text(&c.target)?;
+            // its series formulas, and Excel 2013's references beside them: a data label's range
+            // (`c15:f`) and a series' cells (`c15:sqref`)
+            let mut cx = original.clone();
+            for name in [element, "c15:f", "c15:sqref"] {
+                if let Some(n) = package::shift_formula_elements(&cx, name, shifts, None, order) {
+                    cx = n;
+                }
+            }
+            if cx != original {
+                replaced.insert(c.target.clone(), cx.into_bytes());
+            }
+            // shapes drawn on the chart: their text links
+            let crels = package::rels_of(&c.target);
+            if pkg.has(&crels) {
+                let cr = pkg.read_text(&crels)?;
+                for u in package::rels(&c.target, &cr) {
+                    if u.kind == "chartUserShapes" && !u.external && pkg.has(&u.target) && !replaced.contains_key(&u.target) {
+                        let shapes = pkg.read_text(&u.target)?;
+                        if let Some(n) = package::shift_textlinks(&shapes, shifts, None, order) {
+                            replaced.insert(u.target.clone(), n.into_bytes());
+                        }
+                    }
+                }
             }
         }
     }
@@ -2365,6 +2597,23 @@ mod tests {
         assert_eq!(std::fs::read(&dest).unwrap(), b"after");
         assert_eq!(std::fs::read(dir.path().join("out.xlsx.bak")).unwrap(), b"before");
         assert_eq!(listing(dir.path()), ["in.xlsx", "out.xlsx", "out.xlsx.bak"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_destination_is_patched_again_and_again_and_stays_read_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("ro.xlsx");
+        std::fs::write(&dest, b"first").unwrap();
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o444)).unwrap();
+        for (n, bytes) in [b"second", b"third_"].iter().enumerate() {
+            let before = std::fs::read(&dest).unwrap();
+            commit(&dest, &before, &dest, &bytes[..], |_| Ok(())).unwrap_or_else(|e| panic!("patch {n}: {e}"));
+            assert_eq!(std::fs::read(&dest).unwrap(), bytes.to_vec());
+            assert_eq!(std::fs::read(dir.path().join("ro.xlsx.bak")).unwrap(), before);
+            assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, 0o444);
+        }
     }
 
     fn name(name: &str, scope: Option<&str>, formula: &str) -> Name {

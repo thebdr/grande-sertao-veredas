@@ -468,16 +468,27 @@ pub(crate) fn shift_textlinks(
     home: Option<&str>,
     order: &[String],
 ) -> Option<String> {
+    shift_link_attributes(s, &["textlink"], shifts, home, order)
+}
+
+/// Attributes that hold a reference (a shape's `textlink`, a form control's `fmlaLink` and
+/// `fmlaRange`), moved with the cells they read. `None` when unchanged.
+pub(crate) fn shift_link_attributes(
+    s: &str,
+    names: &[&str],
+    shifts: &[(String, Shift)],
+    home: Option<&str>,
+    order: &[String],
+) -> Option<String> {
     let mut out = String::with_capacity(s.len());
     let mut pos = 0;
     while let Some(t) = next_tag(s, pos) {
         out.push_str(&s[pos..t.start]);
         pos = t.end;
         let mut text = t.text.to_string();
-        if !t.closing
-            && let Some(link) = attr(t.text, "textlink").filter(|l| !l.is_empty())
-        {
-            let mut cur = decode_text(link);
+        for name in names.iter().filter(|_| !t.closing) {
+            let Some(link) = attr(&text, name).filter(|l| !l.is_empty()).map(str::to_string) else { continue };
+            let mut cur = decode_text(&link);
             let mut changed = false;
             for (sheet, sh) in shifts {
                 if let Some(n) = refs::shift_formula(&cur, sheet, *sh, home, order) {
@@ -486,7 +497,7 @@ pub(crate) fn shift_textlinks(
                 }
             }
             if changed {
-                text = set_attr(&text, "textlink", &xml::escape_attr(&cur));
+                text = set_attr(&text, name, &xml::escape_attr(&cur));
             }
         }
         out.push_str(&text);
