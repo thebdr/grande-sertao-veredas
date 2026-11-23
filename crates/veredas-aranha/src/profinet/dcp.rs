@@ -255,6 +255,8 @@ pub enum DcpError {
     NeedsTarget(&'static str),
     #[error("this PDU would be read back as another: {0}")]
     NotItself(String),
+    #[error("block {option}/{suboption} is damaged ({damage:?}): a damaged block is kept to be seen, never written")]
+    Damaged { option: u8, suboption: u8, damage: Damage },
     #[error("a Set request holds whole blocks; {0} trailing bytes are not written")]
     SetTrailing(usize),
     #[error("the identification signal is 0x0100; {0:#06x} is not written")]
@@ -582,13 +584,11 @@ fn push_block(out: &mut Vec<u8>, block: &Block) -> Result<(), DcpError> {
 impl DcpPdu {
     /// The PROFINET payload (frame id onward) of any PDU but a Set request and a Hello, which are
     /// written only by `frame`, with where they go. A Get request is written as its pairs; every
-    /// other PDU as its blocks, each with its info word exactly where this PDU carries one (a
-    /// damaged block as it was heard); a typed block only under its own option and suboption, and
-    /// bytes as given only where no typed body is read. A block's declared length is that of what
-    /// it holds: a `Damaged` overrun is written as the bytes it kept, so it decodes as a whole
-    /// block. What would be read back as another PDU (a damaged block or trailing bytes as the
-    /// decoder would not have kept them), a frame id that is not DCP's, or a PDU past 1500 bytes,
-    /// is refused.
+    /// other PDU as its blocks, each with its info word exactly where this PDU carries one; a typed
+    /// block only under its own option and suboption, and bytes as given only where no typed body
+    /// is read. A damaged block (kept by the decoder to be seen) is refused, as are what would be
+    /// read back as another PDU (trailing bytes that make a block or a pair), a frame id that is
+    /// not DCP's, and a PDU past 1500 bytes.
     pub fn encode(&self) -> Result<Vec<u8>, DcpError> {
         if self.is_set_request() {
             return Err(DcpError::NeedsTarget("Set request"));
@@ -615,6 +615,12 @@ impl DcpPdu {
             }
         } else {
             for b in &self.blocks {
+                // A damaged block is kept to be seen, never written: each reader recovers from it
+                // its own way (the dissector reads a too-long block's extra bytes as blocks of
+                // their own, and a too-short one swallows the next).
+                if let BlockBody::Damaged { damage, .. } = &b.body {
+                    return Err(DcpError::Damaged { option: b.option, suboption: b.suboption, damage: damage.clone() });
+                }
                 if b.body == BlockBody::Requested || b.body.code().is_some_and(|c| c != (b.option, b.suboption)) {
                     return Err(DcpError::Misplaced { option: b.option, suboption: b.suboption, body: b.body.kind() });
                 }
@@ -623,13 +629,8 @@ impl DcpPdu {
                 if matches!(b.body, BlockBody::Unknown { .. }) && TYPED.contains(&(b.option, b.suboption)) {
                     return Err(DcpError::Misplaced { option: b.option, suboption: b.suboption, body: b.body.kind() });
                 }
-                // The info word exactly where this PDU carries one; a damaged block with it only as
-                // the decoder would have kept it (none when the damage is a missing word or an
-                // overrun).
-                let due = match &b.body {
-                    BlockBody::Damaged { damage: Damage::NoInfo | Damage::Overrun { .. }, .. } => false,
-                    _ => carries_info(service, service_type, b.option, b.suboption),
-                };
+                // The info word exactly where this PDU carries one.
+                let due = carries_info(service, service_type, b.option, b.suboption);
                 if b.info.is_some() != due {
                     return Err(DcpError::InfoWord { option: b.option, suboption: b.suboption, carried: b.info.is_some() });
                 }
@@ -653,24 +654,15 @@ impl DcpPdu {
         Ok(out)
     }
 
-    /// What is written is read back as this PDU (its service and type as they travel): a damaged
-    /// block or trailing bytes the decoder would not have kept so (a missing word over more than
-    /// one byte, an overrun before the last block, bytes that make a block) are refused. The one
-    /// difference allowed is the decoder's own: a last block that ran past the data, with nothing
-    /// after it, is read back as the whole block it kept.
+    /// What is written is read back as this PDU (its service and type as they travel): trailing
+    /// bytes the decoder would not have kept so (bytes that make a block or a pair) are refused.
     fn reads_back_as_itself(&self, out: &[u8]) -> Result<(), DcpError> {
-        let back = decode(out)?;
-        let mut want = DcpPdu {
+        let got = decode(out)?;
+        let want = DcpPdu {
             service: Service::from_u8(self.service.to_u8()),
             service_type: ServiceType::from_u8(self.service_type.to_u8()),
             ..self.clone()
         };
-        let overrun = matches!(want.blocks.last(), Some(Block { body: BlockBody::Damaged { damage: Damage::Overrun { .. }, .. }, .. }));
-        let mut got = back;
-        if overrun && want.trailing.is_empty() && got.blocks.len() == want.blocks.len() {
-            want.blocks.pop();
-            got.blocks.pop();
-        }
         if got != want {
             return Err(DcpError::NotItself(format!("{got:?}")));
         }
