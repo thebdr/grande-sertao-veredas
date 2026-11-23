@@ -410,13 +410,15 @@ fn every_refusal_is_named_by_its_place() {
 #[test]
 fn the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene() {
     let scene = fisica::load(&reference()).unwrap();
-    let begun = Instant::now();
     let mut h = fisica::start(&scene).unwrap();
+    // One step per 4 ms of real time, a late step taken at once, never skipped: measured between
+    // two readings while it runs, so the world's making and the thread's start count for nothing.
+    std::thread::sleep(Duration::from_millis(100));
+    let (first, begun) = (h.steps(), Instant::now());
     std::thread::sleep(Duration::from_millis(1000));
-    let (steps, elapsed) = (h.steps(), begun.elapsed());
-    // One step per 4 ms of real time: a late step is taken at once, never skipped.
+    let (steps, elapsed) = (h.steps() - first, begun.elapsed());
     let due = (elapsed.as_millis() / 4) as u64;
-    assert!(steps + 3 >= due && steps <= due + 1, "{steps} steps in {elapsed:?}");
+    assert!(steps + 3 >= due && steps <= due + 2, "{steps} steps in {elapsed:?}");
     assert_eq!(h.time(), Duration::from_millis(4 * h.steps()));
     let s = h.status();
     assert_eq!((s.bodies, s.sensors), (1, 2));
