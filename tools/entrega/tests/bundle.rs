@@ -2,8 +2,9 @@
 //! and held to the tester machine's libraries; `SHA256SUMS` written and every disagreement named;
 //! the manifest the cut writes read back by the reader; the recipe file read and refused by key;
 //! the cut refusing a tree that differs from HEAD and a release already cut; the run together
-//! refused for every way the plant is not running, each named. The run of a real bundle is
-//! `tests/cut.rs` (feature `corte`).
+//! refused for every way the plant is not running, each named; a real cut's suite run seen through
+//! stand-ins for `cargo nextest` and `flock`. The run of a real bundle is `tests/cut.rs` (feature
+//! `corte`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -567,4 +568,111 @@ fn the_run_together_is_refused_for_every_way_the_plant_is_not_running_each_named
         supervisao_out: String::new(),
     };
     assert_eq!(together::faults(&silent).len(), 16, "{:#?}", together::faults(&silent));
+}
+
+/// A real cut (`entrega cut 2.0.1`) of the repository `r`, its cache `cache`, seen through
+/// stand-ins for `cargo nextest` and `flock` first on its `PATH` (every other cargo command goes to
+/// the real one): the stand-in's build exits `build_exit`, its suite runs `run`. The caller's shell
+/// holds `NEXTEST_PROFILE` and `CARGO_TARGET_DIR`. Hands back the cut's output and the stand-ins'
+/// log, a line a call: its arguments, and what the suite's environment held.
+fn cut_with_suite(r: &Repo, cache: &Path, build_exit: u8, run: &str) -> (std::process::Output, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt;
+    let stub = tempfile::tempdir().unwrap();
+    let log = stub.path().join("log");
+    let cargo = format!(
+        "#!/bin/sh\nif [ \"$1\" = nextest ]; then\n  printf 'cargo %s | TMPDIR=%s NEXTEST_PROFILE=%s CARGO_TARGET_DIR=%s\\n' \"$*\" \"$TMPDIR\" \"${{NEXTEST_PROFILE-unset}}\" \"${{CARGO_TARGET_DIR-unset}}\" >> '{log}'\n  case \" $* \" in *' --no-run '*) exit {build_exit};; esac\n  {run}\nfi\nexec '{real}' \"$@\"\n",
+        log = log.display(),
+        real = env!("CARGO"),
+    );
+    let flock = format!("#!/bin/sh\nprintf 'flock %s\\n' \"$*\" >> '{}'\nshift\nexec \"$@\"\n", log.display());
+    for (name, text) in [("cargo", cargo), ("flock", flock)] {
+        let p = stub.path().join(name);
+        std::fs::write(&p, text).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = std::env::join_paths(std::iter::once(stub.path().to_path_buf()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap()))).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_entrega"))
+        .args(["cut", "2.0.1"])
+        .current_dir(r.dir.path())
+        .env("PATH", path)
+        .env("ENTREGA_CACHE", cache)
+        .env("NEXTEST_PROFILE", "no-browser")
+        .env("CARGO_TARGET_DIR", stub.path().join("elsewhere"))
+        .output()
+        .unwrap();
+    let lines = std::fs::read_to_string(&log).unwrap_or_default().lines().map(String::from).collect();
+    (out, lines)
+}
+
+#[test]
+fn a_real_cuts_suite_is_the_whole_default_profile_behind_the_lock_and_the_tree_judged_after_it() {
+    let r = Repo { dir: tempfile::tempdir().unwrap() };
+    r.git(&["init", "-q", "-b", "main"]);
+    r.write(".gitignore", "/target/\n");
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-core\"]\n");
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    // The recipe's base at an address nothing answers: a cut whose suite passes stops at the
+    // builder's first download, so nothing is built here.
+    let recipe = std::fs::read_to_string(repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    assert_eq!(recipe.lines().filter(|l| l.starts_with("url = ")).count(), 1);
+    let base = "https://127.0.0.1:9/entrega-stub.qcow2";
+    let recipe: String = recipe.lines().map(|l| if l.starts_with("url = ") { format!("url = \"{base}\"\n") } else { format!("{l}\n") }).collect();
+    r.write("tools/entrega/maquina/maquina.toml", &recipe);
+    let commit = r.commit("core 2.0.0");
+    let cache = tempfile::tempdir().unwrap();
+    let work = r.dir.path().join("target/entrega/2.0.1");
+    let manifest = r.dir.path().join("releases/2.0.1.toml");
+    // The suite the manifest names is the one run: built first, then run behind the machine's lock,
+    // the default profile both times, none of the shell's steering, its temporary files in the cache.
+    let env = format!(" | TMPDIR={} NEXTEST_PROFILE=unset CARGO_TARGET_DIR=unset", cache.path().join("tmp").display());
+    let built = format!("{} --profile default --no-run{env}", cut::SUITE);
+    let locked = format!("flock /tmp/veredas-suite.lock {} --profile default", cut::SUITE);
+    let ran = format!("{} --profile default{env}", cut::SUITE);
+    let stderr = |o: &std::process::Output| String::from_utf8_lossy(&o.stderr).into_owned();
+    let start = |at: &str| format!("entrega: the whole suite at {at}, behind the machine's lock\n");
+
+    // A suite that does not build: refused, the lock never taken, nothing built, no manifest.
+    let (out, log) = cut_with_suite(&r, cache.path(), 1, "exit 0");
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(stderr(&out), format!("{}the suite does not build at {commit} (exit status: 1): no release is cut from it\n", start(&commit)));
+    assert_eq!(log, [built.clone()]);
+    assert!(!work.exists() && !manifest.exists());
+
+    // A red suite.
+    let (out, log) = cut_with_suite(&r, cache.path(), 0, "exit 1");
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(stderr(&out), format!("{}the suite is not green at {commit} (exit status: 1): no release is cut from it\n", start(&commit)));
+    assert_eq!(log, [built.clone(), locked.clone(), ran.clone()]);
+    assert!(!work.exists() && !manifest.exists());
+
+    // A green suite while a file was added: the tree it tested is not the commit's.
+    let (out, log) = cut_with_suite(&r, cache.path(), 0, "echo x > stray; exit 0");
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        stderr(&out),
+        format!("{}while the suite ran, the tree differs from HEAD ({commit}); a release is cut from a commit:\n?? stray\n\n", start(&commit))
+    );
+    assert_eq!(log, [built.clone(), locked.clone(), ran.clone()]);
+    assert!(!work.exists() && !manifest.exists());
+    std::fs::remove_file(r.dir.path().join("stray")).unwrap();
+
+    // A green suite while a commit was made.
+    let (out, log) = cut_with_suite(&r, cache.path(), 0, "git -c user.name=e -c user.email=e@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m moved; exit 0");
+    let moved = r.git(&["rev-parse", "HEAD"]);
+    assert_ne!(moved, commit);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(stderr(&out), format!("{}while the suite ran, HEAD is {moved}, not {commit}: a release is cut from one commit\n", start(&commit)));
+    assert_eq!(log, [built.clone(), locked.clone(), ran.clone()]);
+    assert!(!work.exists() && !manifest.exists());
+
+    // A green suite, the tree untouched: the cut goes on to the builder (whose first download, from
+    // an address nothing answers, fails here), still without a manifest.
+    let (out, log) = cut_with_suite(&r, cache.path(), 0, "exit 0");
+    assert_eq!(log, [built, locked, ran]);
+    assert_eq!(out.status.code(), Some(2));
+    let text = stderr(&out);
+    assert!(text.starts_with(&start(&moved)), "{text}");
+    assert!(text.contains(&format!("entrega: downloading {base} once into {}\n", cache.path().join("entrega-stub.qcow2").display())), "{text}");
+    assert!(work.exists() && !manifest.exists());
 }
