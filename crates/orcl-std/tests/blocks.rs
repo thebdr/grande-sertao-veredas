@@ -517,22 +517,11 @@ fn a_rising_edge_is_seen_every_time() {
 }
 
 #[test]
-fn the_manifest_names_no_other_root_and_no_file_brings_in_another_crate() {
-    let manifest = include_str!("../Cargo.toml");
-    assert!(!manifest.contains("[lib]"), "the crate's root is src/lib.rs, the file the root's test reads");
-    for (file, text) in [
-        ("lib.rs", include_str!("../src/lib.rs")),
-        ("bits.rs", include_str!("../src/bits.rs")),
-        ("counters.rs", include_str!("../src/counters.rs")),
-        ("edges.rs", include_str!("../src/edges.rs")),
-        ("o14.rs", include_str!("../src/o14.rs")),
-        ("scan.rs", include_str!("../src/scan.rs")),
-        ("timers.rs", include_str!("../src/timers.rs")),
-    ] {
-        assert!(!text.contains("extern crate"), "{file} brings in a crate of its own");
-    }
+fn every_file_of_src_is_read() {
+    // the library's root is checked by cargo itself (below, and in the recorded command), and what a source brings
+    // in by the single reading of the sources; this pins that the reading reads every file there is
     let listed = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src")).unwrap().count();
-    assert_eq!(listed, 7, "every source file is read above");
+    assert_eq!(listed, SOURCES.len(), "every source file is read");
 }
 
 // The sixth refute round: what cargo itself says of the crate, a reset at a preset of zero or below, and no file
@@ -1130,6 +1119,25 @@ fn every_timer_is_judged_on_each_scan_against_that_scan_s_preset_time() {
     off.scan(&at(0), true, ms(100));
     assert_eq!((off.scan(&at(10), false, ms(0)), off.q(), off.et()), (false, false, ms(0)));
     assert_eq!((off.scan(&at(20), false, ms(100)), off.q(), off.et()), (false, false, ms(0)), "off it stays");
+    // an off-delay lowered to zero mid-delay: off at once, and off still when its pt is raised again
+    let mut off = Tof::default();
+    off.scan(&at(0), true, ms(100));
+    off.scan(&at(10), false, ms(100));
+    assert_eq!((off.scan(&at(50), false, ms(0)), off.q(), off.et()), (false, false, ms(0)));
+    assert_eq!((off.scan(&at(60), false, ms(100)), off.q(), off.et()), (false, false, ms(0)), "off it stays");
+    // a pt raised while the timer still measures: an on-delay waits for the raised pt, a pulse lasts to it
+    let mut on = Ton::default();
+    on.scan(&at(0), true, ms(100));
+    assert_eq!((on.scan(&at(50), true, ms(200)), on.q(), on.et()), (false, false, ms(50)));
+    assert_eq!((on.scan(&at(100), true, ms(200)), on.q(), on.et()), (false, false, ms(100)), "not at the old pt");
+    assert_eq!((on.scan(&at(150), true, ms(200)), on.q(), on.et()), (false, false, ms(150)));
+    assert_eq!((on.scan(&at(200), true, ms(200)), on.q(), on.et()), (true, true, ms(200)), "on at the raised pt");
+    let mut pulse = Tp::default();
+    pulse.scan(&at(0), true, ms(100));
+    assert_eq!((pulse.scan(&at(50), true, ms(200)), pulse.q(), pulse.et()), (true, true, ms(50)));
+    assert_eq!((pulse.scan(&at(150), true, ms(200)), pulse.q(), pulse.et()), (true, true, ms(150)), "past the old pt");
+    assert_eq!((pulse.scan(&at(160), false, ms(200)), pulse.q(), pulse.et()), (true, true, ms(160)), "its input off");
+    assert_eq!((pulse.scan(&at(200), false, ms(200)), pulse.q(), pulse.et()), (false, false, ms(0)), "over at it");
 }
 
 #[test]
@@ -1156,6 +1164,11 @@ fn every_timer_started_after_zero_at_the_longest_preset_time_panics_none_at_the_
 #[test]
 #[ignore = "2^31 rising edges: run in release by C-150's command"]
 fn the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link() {
+    let mut c = Ctu::default();
+    for edge in 1..=3 {
+        c.scan(false, false, i32::MAX);
+        assert_eq!((c.scan(true, false, i32::MAX), c.cv()), (false, edge), "one edge, one count, at a preset of the top");
+    }
     let mut c = Ctu::default();
     let mut q = false;
     for _ in 0..i32::MAX {
