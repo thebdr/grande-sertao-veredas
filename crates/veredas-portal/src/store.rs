@@ -240,6 +240,8 @@ fn recover<'a, T>(r: Result<MutexGuard<'a, T>, std::sync::PoisonError<MutexGuard
 
 #[cfg(test)]
 mod connections_test;
+#[cfg(test)]
+mod together_test;
 
 impl DuckStore {
     /// Open a fresh session database, create the `samples` and base tables, then apply the view
@@ -415,7 +417,43 @@ impl DuckStore {
             return Err(StoreError::UnknownTable(format!("#{table_index}")));
         };
         let conn = recover(self.ingest.lock());
-        let mut app = conn.appender(&base.name)?;
+        let stored = Self::append_on(&conn, &base.name, rows)?;
+        self.total.fetch_add(stored, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Append several base tables' rows in one transaction, so a file database takes them in one
+    /// commit, whole or not at all (a record's batch, C-091); a failure rolls the whole back.
+    pub(crate) fn append_wide_together(&self, batches: &[(usize, &[WideRow])]) -> Result<(), StoreError> {
+        if batches.iter().all(|(_, rows)| rows.is_empty()) {
+            return Ok(());
+        }
+        let conn = recover(self.ingest.lock());
+        conn.execute_batch("BEGIN TRANSACTION")?;
+        let appended = (|| -> Result<u64, StoreError> {
+            let mut stored = 0u64;
+            for (index, rows) in batches.iter().filter(|(_, rows)| !rows.is_empty()) {
+                let base = self.bases.get(*index).ok_or_else(|| StoreError::UnknownTable(format!("#{index}")))?;
+                stored += Self::append_on(&conn, &base.name, rows)?;
+            }
+            conn.execute_batch("COMMIT")?;
+            Ok(stored)
+        })();
+        match appended {
+            Ok(stored) => {
+                self.total.fetch_add(stored, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+
+    /// The rows appended to one base table through `conn`, flushed; the values stored counted.
+    fn append_on(conn: &Connection, table: &str, rows: &[WideRow]) -> Result<u64, StoreError> {
+        let mut app = conn.appender(table)?;
         let mut stored = 0u64;
         for row in rows {
             let ts_us = row.index_ms.saturating_mul(1_000);
@@ -442,9 +480,7 @@ impl DuckStore {
             app.append_row(refs.as_slice())?;
         }
         app.flush()?;
-        drop(app);
-        self.total.fetch_add(stored, Ordering::Relaxed);
-        Ok(())
+        Ok(stored)
     }
 
     /// Append bare samples to the narrow `samples` table.

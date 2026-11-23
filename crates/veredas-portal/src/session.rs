@@ -501,19 +501,16 @@ impl Recorder {
         if self.status.stopped_why.is_some() {
             return;
         }
-        for (i, rows) in self.pending.iter_mut().enumerate() {
-            if rows.is_empty() {
-                continue;
-            }
-            let batch = std::mem::take(rows);
-            match self.store.append_wide(i, &batch) {
-                Ok(()) => self.status.recorded_rows += batch.len() as u64,
-                Err(e) => {
-                    // Stopped at the first failure: nothing after it is written.
-                    self.status.unrecorded_rows += batch.len() as u64;
-                    self.status.stopped_why = Some(format!("a write to the record failed: {e}"));
-                    break;
-                }
+        // Every table's rows in one transaction: the batch reaches the drive in one commit, whole
+        // or not at all; a failure stops the recording, the batch counted unrecorded.
+        let batch: Vec<(usize, Vec<WideRow>)> = self.pending.iter_mut().enumerate().filter(|(_, rows)| !rows.is_empty()).map(|(i, rows)| (i, std::mem::take(rows))).collect();
+        let rows: u64 = batch.iter().map(|(_, r)| r.len() as u64).sum();
+        let tables: Vec<(usize, &[WideRow])> = batch.iter().map(|(i, r)| (*i, r.as_slice())).collect();
+        match self.store.append_wide_together(&tables) {
+            Ok(()) => self.status.recorded_rows += rows,
+            Err(e) => {
+                self.status.unrecorded_rows += rows;
+                self.status.stopped_why = Some(format!("a write to the record failed: {e}"));
             }
         }
         self.status.written_bytes = record_bytes(&self.status.file);

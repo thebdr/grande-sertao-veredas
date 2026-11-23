@@ -188,16 +188,28 @@ fn a_record_is_written_once_a_period_whatever_the_poll_rate() {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    // A write the first look missed the start of (its bytes down, its status not yet published)
+    // A batch is one commit, which the drive may show in more than one step under load (its
+    // bytes, then its time): steps closer than 300 ms are one write, and a write is done within
+    // 500 ms. A write the first look met midway (its bytes down, its status not yet published)
     // counts on the status alone.
+    let mut writes: Vec<(std::time::Duration, std::time::Duration)> = Vec::new();
+    for t in &drive_changes {
+        match writes.last_mut() {
+            Some((_, end)) if *t - *end < Duration::from_millis(300) => *end = *t,
+            _ => writes.push((*t, *t)),
+        }
+    }
     assert!(
-        drive_changes.len() == changes.len() || drive_changes.len() + 1 == changes.len(),
-        "the drive changed {} times for {} writes: {drive_changes:?} against {changes:?}",
-        drive_changes.len(),
+        writes.len() == changes.len() || writes.len() + 1 == changes.len(),
+        "the drive written {} times for {} published writes: {drive_changes:?} against {changes:?}",
+        writes.len(),
         changes.len()
     );
-    for pair in drive_changes.windows(2) {
-        let gap = pair[1] - pair[0];
+    for (start, end) in &writes {
+        assert!(*end - *start <= Duration::from_millis(500), "a write on the drive from {start:?} to {end:?}: {drive_changes:?}");
+    }
+    for pair in writes.windows(2) {
+        let gap = pair[1].0 - pair[0].0;
         assert!(gap >= Duration::from_millis(1_800) && gap <= Duration::from_millis(2_600), "the drive written twice {gap:?} apart: {drive_changes:?}");
     }
     assert_eq!(changes.len(), 4, "four writes at one every two seconds: {changes:?}");
