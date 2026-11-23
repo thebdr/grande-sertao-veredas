@@ -10,15 +10,15 @@
     "record"
   ],
   "exitCode": 0,
-  "outputSha": "3d445ae8d3709a1fd5ff0b181b23b1a1aec39d50becebdee79de17e285dfdce6",
-  "outputTail": "\nrunning 4 tests\ntest i_m0_is_its_fields_to_the_byte ... ok\ntest what_does_not_fit_the_port_s_data_is_refused_by_name ... ok\ntest the_port_s_data_is_its_fields_aligned_to_the_byte ... ok\ntest the_dissectors_read_both_records_in_a_read_answer ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s\n     Running tests/record.rs (target/debug/build/veredas-aranha/fc588619e0557ba8/out/record-fc588619e0557ba8)",
-  "ranAt": "2026-11-22T23:05:06.293Z",
-  "headCommit": "f0b1eb7612cc57f2c605839bbb33ac5369ccde0a",
+  "outputSha": "7bcab6f2501e4b3001a9352cc528ddef4ce2914bca8453fc5347ffe32208b613",
+  "outputTail": "\nrunning 4 tests\ntest i_m0_is_its_fields_to_the_byte ... ok\ntest what_does_not_fit_the_port_s_data_is_refused_by_name ... ok\ntest the_port_s_data_is_its_fields_aligned_to_the_byte ... ok\ntest the_dissectors_read_both_records_in_a_read_answer ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running tests/record.rs (target/debug/build/veredas-aranha/914a4f1fad813a92/out/record-914a4f1fad813a92)",
+  "ranAt": "2026-11-23T02:28:51.471Z",
+  "headCommit": "75f52b4f2db665f24a42b65bad3cb44f31584f64",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/record.rs",
       "file": "crates/veredas-aranha/tests/record.rs",
-      "fileSha": "86a00756dd6cef4459a43cdbf1e68c1857a8c7496fb8446bfd999058a444bdce"
+      "fileSha": "0f78ed8352a343e7e6057fbfd8f0872907690d8de9c4dc0ab0a77dff45ab60cf"
     },
     {
       "name": "crates/veredas-aranha/tests/common/mod.rs",
