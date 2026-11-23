@@ -295,6 +295,12 @@ Recorded as the port meets them.
 - **A rule about what cargo builds is checked by asking cargo.** Re-implementing its target rules
   missed edition 2021's `crate_type` and `autolib = false` (C-007's first refute round);
   `cargo metadata --no-deps` sees them all and builds nothing.
+- **Where a feature puts an item is asked of rustdoc, not read in the text.** A reading of the
+  source misses a gate with a comment inside, a line break, a macro, an `include!`d file or a
+  `#[path]` module (C-073, round 5). rustdoc's pages and their `id` anchors, built per form with
+  `--document-private-items`, show every item wherever its gate is written. Two things on a page
+  are not core's: the blanket impls (a master's framing brings tracing's `Instrument` onto every
+  type) and the `notable-traits-data` tooltip script; leave both out of the comparison.
 - **LNK1140 ("limit exceeded for program database") on one test binary** after a link was cut
   short: the half-written PDB is reused. Delete that test's `.pdb` under `target/debug/deps` and
   link again. Each OPC test binary carries a PDB of about 200 MB, and `-p veredas-core` and

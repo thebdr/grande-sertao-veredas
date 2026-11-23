@@ -374,11 +374,11 @@ fn each_form_holds_the_layers_it_promises() {
     }
 }
 
-/// Every feature gate in core's source is one of the expected set, so no item of a layer can be
-/// put behind a feature other than its own (an item the suite's builds would still see, every
-/// build of core inside the suite merging the forms). The set: `net` on the four plant-facing
-/// modules and the crate root's two re-exports, `demo-server` on the demo plant, each master on
-/// its own module.
+/// Every feature gate in core's source, as it is ordinarily written, is one of the expected set:
+/// `net` on the four plant-facing modules and the crate root's two re-exports, `demo-server` on the
+/// demo plant, each master on its own module. A gate written another way (a comment inside it, a
+/// macro building it, a file pulled in by `include!` or `#[path]`) escapes a reading of the text;
+/// the compiler's own view, the next test, is what closes the class.
 #[test]
 fn every_feature_gate_is_where_it_belongs() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -400,7 +400,7 @@ fn every_feature_gate_is_where_it_belongs() {
             .replace('\\', "/");
         let lines: Vec<&str> = text.lines().collect();
         for (n, line) in lines.iter().enumerate() {
-            // Any mention of a feature in a cfg, an attribute or the macro, whatever its form.
+            // A mention of a feature in a cfg, an attribute or the macro, as ordinarily written.
             let squeezed: String = line.chars().filter(|c| !c.is_whitespace()).collect();
             if squeezed.contains("feature=") || squeezed.contains("cfg!(") {
                 let gated = lines[n + 1..]
@@ -433,4 +433,181 @@ fn every_feature_gate_is_where_it_belongs() {
     .map(|s| s.to_string())
     .collect();
     assert_eq!(gates, want);
+}
+
+/// Rustdoc's view of one form of core, private items included: every page, and every anchor on
+/// a page (a method, a field, a variant, an impl, a re-export), as `page` and `page#anchor`.
+/// `all.html` is kept as a page only: its sections mirror the pages. A page's blanket impls are
+/// left out (below).
+fn rustdoc_view(features: &[&str]) -> BTreeSet<String> {
+    let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("features-check");
+    let docs = target.join("doc").join("veredas_core");
+    let _ = std::fs::remove_dir_all(&docs);
+    let list = features.join(",");
+    let m = manifest();
+    let mut args = vec![
+        "doc",
+        "-p",
+        "veredas-core",
+        "--no-deps",
+        "--lib",
+        "--document-private-items",
+        "--offline",
+        "--quiet",
+        "--no-default-features",
+        "--manifest-path",
+        m.to_str().unwrap(),
+    ];
+    if !features.is_empty() {
+        args.extend(["--features", list.as_str()]);
+    }
+    let out = Command::new(env!("CARGO"))
+        .args(&args)
+        .env("CARGO_TARGET_DIR", &target)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "cargo {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut found = BTreeSet::new();
+    let mut dirs = vec![docs.clone()];
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                dirs.push(p);
+                continue;
+            }
+            if p.extension().and_then(|x| x.to_str()) != Some("html") {
+                continue;
+            }
+            let rel = p
+                .strip_prefix(&docs)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            if rel != "all.html" {
+                let html = std::fs::read_to_string(&p).unwrap();
+                // The blanket impls, the page's last section, are every crate's impls for every
+                // type, not core's: which of them show depends on the crates in the graph.
+                let html = match html.find("id=\"blanket-implementations\"") {
+                    Some(i) => &html[..i],
+                    None => &html[..],
+                };
+                for part in html.split(" id=\"").skip(1) {
+                    let id = part.split('"').next().unwrap();
+                    // The tooltips of notable traits: rustdoc's data, not an item.
+                    if id != "notable-traits-data" {
+                        found.insert(format!("{rel}#{id}"));
+                    }
+                }
+            }
+            found.insert(rel);
+        }
+    }
+    found
+}
+
+/// The compiler's own view of every form core can be asked for: rustdoc's pages of core and the
+/// anchors on them, private items included, built once for each of the twelve forms (the slim
+/// form, `net`, `net` with the demo plant, each with or without each master). Adding a feature to
+/// any form only adds, and only where that feature's layer lies: `net` under its four modules and
+/// the crate root's re-exports of them, the demo plant under `opc::demo`, each master under its own
+/// module and its line in `fieldbus`. However a gate is written (a comment inside it, a line break,
+/// a macro, an `include!`d file, a `#[path]` module, a cfg a build script sets), an item behind a
+/// feature other than its own's shows here as an anchor on the wrong side of some step.
+#[test]
+fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
+    const NET_ROOT: &[&str] = &[
+        "index.html#reexports",
+        "index.html#reexport.Quality",
+        "index.html#reexport.Sample",
+        "index.html#reexport.SeriesRef",
+        "index.html#reexport.SeriesType",
+        "index.html#reexport.SourceId",
+        "index.html#reexport.Value",
+        "index.html#reexport.now_unix_ms",
+        "index.html#reexport.SourceError",
+        "index.html#reexport.SourceHandle",
+        "index.html#reexport.stop_flag",
+    ];
+    // A master's line in `fieldbus`: the modules section and its entry in the page's contents,
+    // there once one master is.
+    const FIELDBUS_LINE: &[&str] = &[
+        "fieldbus/index.html#modules",
+        "fieldbus/index.html#rustdoc-toc",
+    ];
+    let belongs = |feature: &str, entry: &str| -> bool {
+        match feature {
+            "net" => {
+                (["types/", "source/", "telegram/", "opc/"]
+                    .iter()
+                    .any(|d| entry.starts_with(d))
+                    && !entry.starts_with("opc/demo/"))
+                    || NET_ROOT.contains(&entry)
+            }
+            "demo-server" => entry.starts_with("opc/demo/"),
+            "modbus" => entry.starts_with("fieldbus/modbus/") || FIELDBUS_LINE.contains(&entry),
+            "enip" => entry.starts_with("fieldbus/enip/") || FIELDBUS_LINE.contains(&entry),
+            other => panic!("{other}"),
+        }
+    };
+    // The twelve forms: the plant-facing layer off, on, or on with the demo plant; each master
+    // off or on.
+    let mut forms: Vec<Vec<&str>> = Vec::new();
+    for net in [&[][..], &["net"][..], &["net", "demo-server"][..]] {
+        for modbus in [&[][..], &["modbus"][..]] {
+            for enip in [&[][..], &["enip"][..]] {
+                forms.push([net, modbus, enip].concat());
+            }
+        }
+    }
+    let views: Vec<BTreeSet<String>> = forms.iter().map(|f| rustdoc_view(f)).collect();
+    // Every step from one form to the same form with one feature more.
+    let mut steps = 0;
+    for (a, base) in forms.iter().enumerate() {
+        for (b, more) in forms.iter().enumerate() {
+            let added: Vec<&&str> = more.iter().filter(|f| !base.contains(f)).collect();
+            let step = match added.as_slice() {
+                [f] if base.iter().all(|x| more.contains(x)) => **f,
+                _ => continue,
+            };
+            steps += 1;
+            let lost: Vec<&String> = views[a].difference(&views[b]).collect();
+            assert!(lost.is_empty(), "{base:?} + {step} loses {lost:?}");
+            let gained: Vec<&String> = views[b].difference(&views[a]).collect();
+            assert!(!gained.is_empty(), "{base:?} + {step} adds nothing");
+            let astray: Vec<&&String> = gained.iter().filter(|e| !belongs(step, e)).collect();
+            assert!(
+                astray.is_empty(),
+                "{base:?} + {step} adds outside its layer: {astray:?}"
+            );
+        }
+    }
+    assert_eq!(
+        steps, 20,
+        "four steps of net, four of the demo plant, six of each master"
+    );
+    // The slim form is the header reader, the PCG32, the state text and the fieldbus module; the
+    // plant-facing layer brings the OPC UA client and the telegram.
+    for page in [
+        "schema/index.html",
+        "rng/index.html",
+        "state/index.html",
+        "fieldbus/index.html",
+    ] {
+        assert!(views[0].contains(page), "{page} missing from the slim form");
+    }
+    for page in [
+        "opc/index.html",
+        "telegram/index.html",
+        "opc/struct.StatusCode.html",
+    ] {
+        assert!(
+            !views[0].contains(page) && views[4].contains(page),
+            "{page}: the plant-facing layer's"
+        );
+    }
 }
