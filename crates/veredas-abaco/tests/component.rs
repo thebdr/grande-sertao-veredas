@@ -168,7 +168,7 @@ fn the_fork_is_upstream_at_its_commit_then_each_listed_change_a_commit() {
     let later = git(&["log", "--format=%s", &format!("{base}..HEAD"), "--", "forks/ironcalc/base", "forks/ironcalc/xlsx"]);
     // each commit names one change, never two
     for subject in later.lines() {
-        assert!(subject.matches("(fork change ").count() <= 1, "a commit names more than one change: {subject}");
+        assert!(subject.to_lowercase().matches("(fork change ").count() <= 1, "a commit names more than one change: {subject}");
     }
     let named = regex_free_change_ids(&later);
     let record = std::fs::read_to_string(root().join("forks/ironcalc/VEREDAS-FORK.md")).unwrap();
@@ -684,15 +684,52 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
     }
 }
 
-/// Every file rustc read to compile the libraries of Ábaco and the engine, from each one's dep-info,
-/// by its target's name.
-fn compiled_files() -> Vec<(&'static str, BTreeSet<PathBuf>)> {
+/// The files a dep-info record lists, each on a line of its own ending in `:`, a space in its path
+/// written `\ `; every one resolves to a file, or the record is not read as it is.
+fn dep_info_files(dep_info: &Path, whose: &str) -> BTreeSet<PathBuf> {
+    let text = std::fs::read_to_string(dep_info).unwrap_or_else(|e| panic!("{}: {e}", dep_info.display()));
+    text.lines()
+        .filter_map(|l| l.strip_suffix(':'))
+        .filter(|f| !f.replace("\\ ", "").contains(' '))
+        .map(|f| {
+            let f = f.replace("\\ ", " ");
+            let p = Path::new(&f);
+            let p = if p.is_absolute() { p.to_path_buf() } else { root().join(p) };
+            p.canonicalize().unwrap_or_else(|e| panic!("{whose}: {} in its dep-info: {e}", p.display()))
+        })
+        .collect()
+}
+
+/// The three packages whose code ships in Ábaco's library, each with its folder.
+const SHIPPED: [(&str, &str); 3] = [("veredas-abaco", "crates/veredas-abaco"), ("ironcalc_base", "forks/ironcalc/base"), ("ironcalc", "forks/ironcalc/xlsx")];
+
+/// A package's name from cargo's id (`path+file:///…/base#ironcalc_base@0.9.1`, or `…/veredas-abaco#2.0.0`
+/// when the folder is named as the package).
+fn package_of(id: &str) -> String {
+    let (url, fragment) = id.rsplit_once('#').unwrap_or((id, ""));
+    match fragment.split_once('@') {
+        Some((name, _)) => name.to_string(),
+        None => url.rsplit('/').next().unwrap_or("").to_string(),
+    }
+}
+
+/// What one build of Ábaco's library shows of the three packages: every file rustc read to compile
+/// each library and each build script (from their dep-info), and what each build script told cargo
+/// (the `cfg`s it set, the native libraries it linked).
+struct Built {
+    libraries: Vec<(&'static str, BTreeSet<PathBuf>)>,
+    scripts: Vec<(String, BTreeSet<PathBuf>)>,
+    executed: Vec<(String, Vec<String>, Vec<String>)>,
+}
+
+fn built() -> Built {
     let json = cargo(&["build", "-p", "veredas-abaco", "--lib", "--message-format=json"]);
-    let mut out = Vec::new();
+    let messages: Vec<serde_json::Value> = json.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()).collect();
+    let shipped = |id: &serde_json::Value| SHIPPED.iter().any(|(name, _)| id.as_str().is_some_and(|i| package_of(i) == *name));
+    let mut libraries = Vec::new();
     for target in ["veredas_abaco", "ironcalc_base", "ironcalc"] {
-        let rmeta: Vec<PathBuf> = json
-            .lines()
-            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        let rmeta: Vec<PathBuf> = messages
+            .iter()
             .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == target)
             .flat_map(|m| m["filenames"].as_array().cloned().unwrap_or_default())
             .filter_map(|f| f.as_str().map(PathBuf::from))
@@ -700,24 +737,74 @@ fn compiled_files() -> Vec<(&'static str, BTreeSet<PathBuf>)> {
             .collect();
         assert_eq!(rmeta.len(), 1, "{target}: {rmeta:?}");
         let stem = rmeta[0].file_stem().unwrap().to_string_lossy().trim_start_matches("lib").to_string();
-        let dep_info = rmeta[0].with_file_name(format!("{stem}.d"));
-        let text = std::fs::read_to_string(&dep_info).unwrap_or_else(|e| panic!("{}: {e}", dep_info.display()));
-        // each file rustc read stands on a line of its own, ending in `:`, a space in its path
-        // written `\ `; every one resolves to a file, or the record is not read as it is
-        let read: BTreeSet<PathBuf> = text
-            .lines()
-            .filter_map(|l| l.strip_suffix(':'))
-            .filter(|f| !f.replace("\\ ", "").contains(' '))
-            .map(|f| {
-                let f = f.replace("\\ ", " ");
-                let p = Path::new(&f);
-                let p = if p.is_absolute() { p.to_path_buf() } else { root().join(p) };
-                p.canonicalize().unwrap_or_else(|e| panic!("{target}: {} in its dep-info: {e}", p.display()))
-            })
-            .collect();
-        out.push((target, read));
+        libraries.push((target, dep_info_files(&rmeta[0].with_file_name(format!("{stem}.d")), target)));
     }
-    out
+    // each build script compiled for the three packages, its dep-info beside its executable
+    let mut scripts = Vec::new();
+    for m in messages.iter().filter(|m| {
+        m["reason"] == "compiler-artifact" && shipped(&m["package_id"]) && m["target"]["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "custom-build"))
+    }) {
+        let package = package_of(m["package_id"].as_str().unwrap());
+        let executable = PathBuf::from(m["filenames"][0].as_str().unwrap());
+        let folder = executable.parent().unwrap();
+        let dep_info = std::fs::read_dir(folder)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|e| e == "d") && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("build_script_")))
+            .unwrap_or_else(|| panic!("{package}: no dep-info beside its build script {}", executable.display()));
+        scripts.push((package.clone(), dep_info_files(&dep_info, &package)));
+    }
+    let executed = messages
+        .iter()
+        .filter(|m| m["reason"] == "build-script-executed" && shipped(&m["package_id"]))
+        .map(|m| {
+            let list = |k: &str| m[k].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+            (package_of(m["package_id"].as_str().unwrap()), list("cfgs"), list("linked_libs"))
+        })
+        .collect();
+    Built { libraries, scripts, executed }
+}
+
+/// Every file rustc read to compile the libraries of Ábaco and the engine, by its target's name.
+fn compiled_files() -> Vec<(&'static str, BTreeSet<PathBuf>)> {
+    built().libraries
+}
+
+#[test]
+fn a_build_script_sets_no_cfg_links_no_library_and_compiles_its_crate_s_files_alone() {
+    // a build script's `cargo::rustc-cfg` is a flag no feature shows (`feature="mock_time"` would
+    // compile the fixed clock into the engine), and its `rustc-link-lib` a native library (Winsock's)
+    // the graph does not show: the three packages' scripts set and link none; and each script compiles
+    // files of its own crate alone, every library and binary of the three having its root under `src/`
+    let built = built();
+    assert!(built.scripts.iter().any(|(p, _)| p == "ironcalc_base"), "{:?}", built.scripts.iter().map(|(p, _)| p).collect::<Vec<_>>());
+    for (package, cfgs, libs) in &built.executed {
+        assert!(cfgs.is_empty(), "{package}'s build script sets {cfgs:?}");
+        assert!(libs.is_empty(), "{package}'s build script links {libs:?}");
+    }
+    for (package, files) in &built.scripts {
+        let home = root().join(SHIPPED.iter().find(|(n, _)| n == package).unwrap().1);
+        for f in files {
+            assert!(f.starts_with(&home), "{package}'s build script compiles {}", f.display());
+        }
+    }
+    let full: serde_json::Value = serde_json::from_str(&cargo(&["metadata", "--format-version", "1", "--offline"])).unwrap();
+    for (name, folder) in SHIPPED {
+        let p = package(&full, name);
+        for t in p["targets"].as_array().unwrap() {
+            let kinds = strings(&t["kind"]);
+            if kinds.iter().any(|k| matches!(k.as_str(), "lib" | "rlib" | "bin" | "cdylib" | "dylib" | "staticlib" | "proc-macro")) {
+                let src = PathBuf::from(t["src_path"].as_str().unwrap());
+                assert!(src.starts_with(root().join(folder).join("src")), "{name}: {kinds:?} rooted at {}", src.display());
+            }
+        }
+    }
+}
+
+#[test]
+fn a_package_s_id_names_it() {
+    assert_eq!(package_of("path+file:///w/forks/ironcalc/base#ironcalc_base@0.9.1"), "ironcalc_base");
+    assert_eq!(package_of("path+file:///w/crates/veredas-abaco#2.0.0-alpha.1"), "veredas-abaco");
 }
 
 #[test]
@@ -755,9 +842,7 @@ fn no_source_reaches_outside_its_crate_by_a_path_or_an_include_on_any_platform()
     ] {
         let home = root().join(folder);
         let mut stack = vec![home.join("src")];
-        if home.join("build.rs").is_file() {
-            stack.push(home.join("build.rs"));
-        }
+        stack.extend(build_script(&home));
         let mut files = Vec::new();
         while let Some(d) = stack.pop() {
             if d.is_dir() {
@@ -807,11 +892,12 @@ enum Named {
 }
 
 /// The end (one past) of the string literal opening at `i` (`"…"` with its escapes, `r"…"`,
-/// `r#"…"#`, a `b` before either), and its text as written; `None` when none opens there.
+/// `r#"…"#`, a `b` or a `c` before either: byte and C strings), and its text as written; `None` when
+/// none opens there.
 fn string_at(code: &str, i: usize) -> Option<(usize, String)> {
     let b = code.as_bytes();
     let mut j = i;
-    if b.get(j) == Some(&b'b') {
+    if matches!(b.get(j), Some(b'b' | b'c')) {
         j += 1;
     }
     if b.get(j) == Some(&b'r') && matches!(b.get(j + 1), Some(b'"' | b'#')) {
@@ -967,6 +1053,10 @@ fn paths_and_includes(text: &str) -> Vec<(Named, Option<String>)> {
                         k = end;
                         continue;
                     }
+                    if let Some(end) = char_at(&code, k) {
+                        k = end;
+                        continue;
+                    }
                     match b[k] {
                         b'[' => depth += 1,
                         b']' => {
@@ -987,11 +1077,23 @@ fn paths_and_includes(text: &str) -> Vec<(Named, Option<String>)> {
         i += 1;
     }
     for (start, end) in attributes {
+        // an attribute a macro builds from its input (`#[$m]`): no reading can follow it
+        if code[start..end].trim_start().starts_with('$') {
+            out.push((Named::Module, None));
+        }
         for (word, at) in identifiers(&code[start..end]) {
             let after = skip_ws(start + at);
             if word == "path" && b.get(after) == Some(&b'=') && b.get(after + 1) != Some(&b'=') {
                 out.push((Named::Module, literal(after + 1)));
             }
+        }
+    }
+    // a macro calling a macro its input names (`$m!(…)`): it can call `include!` or build `#[path]`
+    // out of any reading's sight, so the reading fails closed
+    for (i, _) in code.match_indices('$') {
+        let after: String = code[i + 1..].chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        if !after.is_empty() && code[i + 1 + after.len()..].trim_start().starts_with('!') {
+            out.push((Named::Module, None));
         }
     }
     for (word, at) in identifiers(&code) {
@@ -1002,6 +1104,12 @@ fn paths_and_includes(text: &str) -> Vec<(Named, Option<String>)> {
         };
         let bang = skip_ws(at);
         if b.get(bang) != Some(&b'!') {
+            // the builtin reached by its path, not called (`use std::include as grab`): its call is
+            // out of reach under another name, so the reading fails closed
+            let before = code[..at - word.len()].trim_end();
+            if kind == Named::Module && before.ends_with("::") {
+                out.push((Named::Module, None));
+            }
             continue;
         }
         let open = skip_ws(bang + 1);
@@ -1025,6 +1133,13 @@ fn paths_and_includes_are_read_from_the_tokens_wherever_they_stand() {
         const T: &str = include_str! ( r#"data.txt"# );
         include!(concat!(env!("OUT_DIR"), "/x.rs"));
         #[path = "plant.txt"] pub mod plant;
+        const _: &CStr = c"/*";
+        #[cfg_attr(windows, diagnostic::nothing(']'), path = "../c.rs")] mod c;
+        // */
+        use std::include as grab;
+        macro_rules! module_at { ($m:meta) => { #[$m] mod plant; } }
+        macro_rules! call { ($m:ident, $f:literal) => { $m!($f); } }
+        fn filter(include: bool) -> bool { include }
     "##;
     assert_eq!(
         paths_and_includes(text),
@@ -1032,10 +1147,25 @@ fn paths_and_includes_are_read_from_the_tokens_wherever_they_stand() {
             (Named::Module, Some("../far/a.rs".to_string())),
             (Named::Module, Some("b.rs".to_string())),
             (Named::Module, Some("plant.txt".to_string())),
+            (Named::Module, Some("../c.rs".to_string())),
+            (Named::Module, None),
+            (Named::Module, None),
             (Named::Data, Some("data.txt".to_string())),
+            (Named::Module, None),
             (Named::Module, None),
         ]
     );
+}
+
+/// The build script cargo runs for the crate at `home`: `build.rs` unless the manifest names another
+/// (or none, `build = false`).
+fn build_script(home: &Path) -> Option<PathBuf> {
+    let manifest: toml::Table = toml::from_str(&std::fs::read_to_string(home.join("Cargo.toml")).unwrap()).unwrap();
+    match manifest.get("package").and_then(|p| p.get("build")) {
+        Some(toml::Value::String(script)) => Some(home.join(script)),
+        Some(toml::Value::Boolean(false)) => None,
+        _ => home.join("build.rs").is_file().then(|| home.join("build.rs")),
+    }
 }
 
 /// The functions an `extern` block would declare to open a socket or reach a host, POSIX's and
@@ -1064,20 +1194,36 @@ fn extern_functions(code: &str) -> Vec<String> {
             continue;
         }
         let open = code.len() - rest.len();
+        // the block's closing brace, strings and character literals skipped (`#[doc = "}"]`)
         let mut depth = 0;
         let mut close = code.len();
-        for (k, c) in code[open..].char_indices() {
-            match c {
-                '{' => depth += 1,
-                '}' => {
+        let mut k = open;
+        while k < code.len() {
+            if let Some((end, _)) = string_at(code, k) {
+                k = end;
+                continue;
+            }
+            if let Some(end) = char_at(code, k) {
+                k = end;
+                continue;
+            }
+            match code.as_bytes()[k] {
+                b'{' => depth += 1,
+                b'}' => {
                     depth -= 1;
                     if depth == 0 {
-                        close = open + k;
+                        close = k;
                         break;
                     }
                 }
                 _ => {}
             }
+            k += 1;
+        }
+        // a block a macro fills from its input (`extern "C" { $($i)* }`): what it declares is out of
+        // any reading's sight, so it reads as a socket function
+        if code[open..close].contains('$') {
+            out.push("$".to_string());
         }
         for pair in words[i + 1..].windows(2) {
             let ((fn_kw, fn_at), (name, _)) = (&pair[0], &pair[1]);
@@ -1115,22 +1261,11 @@ fn no_socket_in_its_sources_or_the_engine_s() {
                 files.insert(d);
             }
         }
-        // the build script cargo runs: `build.rs` unless the manifest names another
-        let manifest: toml::Table = toml::from_str(&std::fs::read_to_string(home.join("Cargo.toml")).unwrap()).unwrap();
-        let build = manifest.get("package").and_then(|p| p.get("build"));
-        match build {
-            Some(toml::Value::String(script)) => {
-                files.insert(home.join(script));
-            }
-            Some(toml::Value::Boolean(false)) => {}
-            _ if home.join("build.rs").is_file() => {
-                files.insert(home.join("build.rs"));
-            }
-            _ => {}
-        }
+        files.extend(build_script(&home));
     }
-    let compiled = compiled_files();
-    files.extend(compiled.into_iter().flat_map(|(_, f)| f));
+    let built = built();
+    files.extend(built.libraries.into_iter().flat_map(|(_, f)| f));
+    files.extend(built.scripts.into_iter().flat_map(|(_, f)| f));
     assert!(files.iter().any(|f| f.ends_with("forks/ironcalc/base/build.rs")));
     let ident = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
     for file in &files {
@@ -1142,10 +1277,42 @@ fn no_socket_in_its_sources_or_the_engine_s() {
                 assert!(ident(before) || ident(after), "{}: `{w}`", file.display());
             }
         }
+        assert!(!text.to_ascii_lowercase().contains("ws2_32"), "{}: `ws2_32`", file.display());
         let code = without_comments(&text);
-        assert!(!identifiers(&code).iter().any(|(w, _)| w == "libc"), "{}: `libc`", file.display());
+        let words = identifiers(&code);
+        assert!(!words.iter().any(|(w, _)| w == "libc"), "{}: `libc`", file.display());
         for f in extern_functions(&code) {
-            assert!(!SOCKET_FUNCTIONS.contains(&f.as_str()), "{}: an extern block declares `{f}`", file.display());
+            assert!(!SOCKET_FUNCTIONS.contains(&f.as_str()) && f != "$", "{}: an extern block declares `{f}`", file.display());
+        }
+        // a function named as a socket function anywhere (one an `extern` block a macro builds would
+        // declare), and a symbol linked under such a name (`#[link_name = "socket"]`)
+        for pair in words.windows(2) {
+            assert!(!(pair[0].0 == "fn" && SOCKET_FUNCTIONS.contains(&pair[1].0.as_str())), "{}: `fn {}`", file.display(), pair[1].0);
+        }
+        for (w, at) in &words {
+            if w == "link_name" {
+                let rest = code[*at..].trim_start().strip_prefix('=').map(str::trim_start).unwrap_or("");
+                let linked = string_at(rest, 0).map(|(_, s)| s).unwrap_or_default();
+                assert!(!SOCKET_FUNCTIONS.contains(&linked.as_str()), "{}: `link_name = \"{linked}\"`", file.display());
+            }
+        }
+    }
+}
+
+#[test]
+fn the_shipped_packages_rename_no_dependency_and_take_no_system_or_socket_crate() {
+    // `sys = { package = "libc" }` would call `sys::socket` past every spelling: the three packages'
+    // own dependencies (normal and build) carry their own names, and none is a crate that reaches
+    // the system's sockets
+    const SYSTEM: &[&str] = &["libc", "nix", "rustix", "windows-sys", "windows", "winapi", "socket2", "mio", "tokio", "async-std", "smol"];
+    let full: serde_json::Value = serde_json::from_str(&cargo(&["metadata", "--format-version", "1", "--offline"])).unwrap();
+    for (name, _) in SHIPPED {
+        for d in package(&full, name)["dependencies"].as_array().unwrap() {
+            if d["kind"] == "dev" {
+                continue;
+            }
+            assert!(d["rename"].is_null(), "{name} takes `{}` as `{}`", d["name"], d["rename"]);
+            assert!(!SYSTEM.contains(&d["name"].as_str().unwrap()), "{name} takes `{}`", d["name"]);
         }
     }
 }
@@ -1159,9 +1326,11 @@ fn a_socket_by_any_of_those_routes_is_seen() {
         #[wasm_bindgen] extern "C" { pub fn ic_tz_validate(name: &str) -> bool; }
         // extern "C" { fn connect(); }
         use libc::{connect};
+        extern "C" { #[doc = "}"] fn accept(fd: i32) -> i32; }
+        macro_rules! ffi { ($($i:tt)*) => { unsafe extern "C" { $($i)* } } }
         "#,
     );
-    assert_eq!(extern_functions(&code), ["socket", "getpid", "WSAStartup", "ic_tz_validate"]);
+    assert_eq!(extern_functions(&code), ["socket", "getpid", "WSAStartup", "ic_tz_validate", "accept", "$"]);
     assert!(identifiers(&code).iter().any(|(w, _)| w == "libc"));
 }
 
@@ -1334,27 +1503,55 @@ fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
     }
 }
 
-/// The rows of the record's table under `## Local changes` (to the next heading), each by its first
-/// cell, as a Markdown reader reads a table: a line opening with `|` after at most three spaces,
-/// its cells split on `|`, each trimmed; the header (`#`) and the delimiter row (`---`) left out.
+/// The rows of the record's table under `## Local changes`, each by its first cell, as a GFM
+/// Markdown reader reads a table: a header row and a delimiter row (cells of `-` and `:`) open it,
+/// each opening with `|` after at most three spaces; every line after them is a row, its leading
+/// `|` or not, until a blank line, a line indented four spaces or more, or one that opens another
+/// block (a heading, an HTML block such as a comment, a code fence, a quote). Lines inside an HTML
+/// comment before the table are none of it.
 fn change_rows(record: &str) -> Vec<String> {
     let section = record.split("## Local changes").nth(1).unwrap();
-    let section = section.split("\n## ").next().unwrap();
-    section
-        .lines()
-        .filter(|l| {
-            let indent = l.len() - l.trim_start_matches(' ').len();
-            indent <= 3 && l.trim_start().starts_with('|')
-        })
-        .map(|l| l.trim().trim_matches('|').split('|').next().unwrap_or("").trim().to_string())
-        .filter(|first| first != "#" && !first.chars().all(|c| matches!(c, '-' | ':' | ' ')))
-        .collect()
+    let lines: Vec<&str> = section.lines().collect();
+    let indent = |l: &str| l.len() - l.trim_start_matches(' ').len();
+    let cells = |l: &str| -> Vec<String> { l.trim().trim_start_matches('|').trim_end_matches('|').split('|').map(|c| c.trim().to_string()).collect() };
+    let delimiter = |l: &str| indent(l) <= 3 && l.contains('-') && cells(l).iter().all(|c| !c.is_empty() && c.chars().all(|ch| matches!(ch, '-' | ':')));
+    let mut in_comment = false;
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 1 < lines.len() {
+        let l = lines[i];
+        if in_comment {
+            in_comment = !l.contains("-->");
+            i += 1;
+            continue;
+        }
+        if l.trim_start().starts_with("<!--") && !l.contains("-->") {
+            in_comment = true;
+            i += 1;
+            continue;
+        }
+        if indent(l) <= 3 && l.contains('|') && delimiter(lines[i + 1]) {
+            for row in &lines[i + 2..] {
+                let t = row.trim_start();
+                if row.trim().is_empty() || indent(row) >= 4 || ["#", "<", "```", "~~~", ">"].iter().any(|b| t.starts_with(b)) {
+                    break;
+                }
+                out.push(cells(row).into_iter().next().unwrap_or_default());
+            }
+            break;
+        }
+        i += 1;
+    }
+    out
 }
 
 #[test]
 fn the_record_s_rows_are_read_as_markdown_reads_a_table() {
     let record = "# Fork\n## Local changes\n| # | Change | Where | Upstream |\n|---|---|---|---|\n| 1 | a | x | none |\n|28| **no space** | x | none |\n   | 29 | indented | x | none |\n    | 30 | code, not a row |\n| :-- | --- |\n## After\n| 31 | another table |\n";
     assert_eq!(change_rows(record), ["1", "28", "29"]);
+    // a row with no leading pipe is one; a row in an HTML comment after the table is none
+    let record = "## Local changes\n<!--\n| 0 | commented |\n-->\n| # | Change |\n|---|---|\n| 29 | a |\n32 | no leading pipe | base | none\n\n<!--\n| 30 | hidden |\n-->\n";
+    assert_eq!(change_rows(record), ["29", "32"]);
 }
 
 /// The change each commit subject names, `(fork change 7)` as `7`, `(fork change 1, refined)` as
