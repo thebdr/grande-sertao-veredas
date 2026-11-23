@@ -141,8 +141,8 @@ fn every_workbook_of_the_corpus_round_trips() {
             let text = String::from_utf8(bytes).unwrap();
             let cells = text.split_once("\n[cells]\n").map(|(_, c)| c).unwrap_or("");
             let keys = toml::from_str::<toml::Table>(cells).unwrap().len();
-            if cells.lines().count() != keys {
-                failed.push(format!("{rel}: {name} holds {keys} cells on {} lines", cells.lines().count()));
+            if unicode_lines(cells) != keys {
+                failed.push(format!("{rel}: {name} holds {keys} cells on {} lines", unicode_lines(cells)));
             }
         }
         let mut back = match std::panic::catch_unwind(|| read(&first)) {
@@ -188,6 +188,16 @@ fn every_workbook_of_the_corpus_round_trips() {
     assert!(failed.is_empty(), "{} workbook(s) did not round trip:\n{}", failed.len(), failed.join("\n"));
     assert_eq!(done + refused.len(), corpus().len());
     assert!(done >= 260, "only {done} round trips");
+}
+
+/// How many lines a text holds to a reader that knows Unicode's line breaks (Python's
+/// `splitlines`: line feed, carriage return and the pair, U+000B, U+000C, U+001C to U+001E,
+/// U+0085, U+2028, U+2029), a last line with no break counted.
+fn unicode_lines(text: &str) -> usize {
+    let breaks = ['\n', '\r', '\u{b}', '\u{c}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}', '\u{2028}', '\u{2029}'];
+    let text = text.replace("\r\n", "\n");
+    let n = text.chars().filter(|c| breaks.contains(c)).count();
+    if text.ends_with(breaks) || text.is_empty() { n } else { n + 1 }
 }
 
 /// The reference's worked example (`docs/abaco-file.md`): a beam check and the session around it.
@@ -490,7 +500,17 @@ fn every_error_the_engine_holds_reads_back_and_a_format_s_rule_refuses_a_key_not
 fn a_text_with_a_line_break_keeps_its_cell_on_one_line_and_reads_back() {
     let mut book = Workbook::new("Lines").unwrap();
     let at = |a: &str| Addr::parse(a).unwrap();
-    let texts = ["line one\nline two", "a\r\nb", "tab\there", "quote \" and back\\slash", "bell \u{7} del \u{7f} nul-free", "\u{1}\u{1f}"];
+    let texts = [
+        "line one\nline two",
+        "a\r\nb",
+        "tab\there",
+        "quote \" and back\\slash",
+        "bell \u{7} del \u{7f} nul-free",
+        "\u{1}\u{1f}",
+        "next \u{85} line",
+        "line \u{2028} and \u{2029} paragraph",
+        "csi \u{9b} c1",
+    ];
     for (i, t) in texts.iter().enumerate() {
         book.set_value(0, Addr::new(i as i32 + 1, 1), &Value::Text(t.to_string())).unwrap();
     }
@@ -503,6 +523,7 @@ fn a_text_with_a_line_break_keeps_its_cell_on_one_line_and_reads_back() {
     let sheet = String::from_utf8(abacofile::parts(&file).unwrap()[2].1.clone()).unwrap();
     let cells = sheet.split_once("\n[cells]\n").unwrap().1;
     assert_eq!(cells.lines().count(), texts.len() + 2, "{cells}");
+    assert_eq!(unicode_lines(cells), texts.len() + 2, "{cells}");
     assert!(cells.contains(r#"A1 = { s = "line one\nline two" }"#), "{cells}");
     assert!(cells.contains(r#"B1 = { f = "CHAR(10)&\"x\"", v = "\nx" }"#), "{cells}");
     assert!(cells.contains(r#"A5 = { s = "bell \u0007 del \u007F nul-free" }"#), "{cells}");
@@ -535,6 +556,10 @@ fn names_the_engine_refuses_are_refused_by_the_writer_and_the_reader() {
         (Box::new(|w| w.worksheets[0].name = String::new()), "manifest.toml", "name = \"Loads\"", "name = \"\"", "manifest.toml: sheet 1 `` is no sheet name"),
         (Box::new(|w| w.worksheets[1].sheet_id = w.worksheets[0].sheet_id), "sheets/02-Other.toml", "sheet_id = 2", "sheet_id = 1", "sheets/02-Other.toml: `sheet_id` 1 is sheet 1's too"),
         (Box::new(|w| w.defined_names[0].name = "B1".into()), "workbook.toml", "name = \"Spam\"", "name = \"B1\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "$B$1".into()), "workbook.toml", "name = \"Spam\"", "name = \"$B$1\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "B$1".into()), "workbook.toml", "name = \"Spam\"", "name = \"B$1\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "R[1]C[1]".into()), "workbook.toml", "name = \"Spam\"", "name = \"R[1]C[1]\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "RC[2]".into()), "workbook.toml", "name = \"Spam\"", "name = \"RC[2]\"", "is no name (it reads as a cell)"),
         (Box::new(|w| w.defined_names[1].name = "SPAN".into()), "workbook.toml", "name = \"Spam\"", "name = \"SPAN\"", "is stated in its scope already, as `defined_names."),
     ];
     for (in_model, part, from, to, want) in &cases {
@@ -564,7 +589,9 @@ fn names_the_engine_refuses_are_refused_by_the_writer_and_the_reader() {
 fn a_number_no_file_holds_refuses_the_write_by_its_path() {
     // a NaN or an infinity a malformed workbook gives the engine (a column's width, a colour's
     // tint, a row's height): JSON would write it as the engine's none, which the reader refuses
+    use ironcalc_base::cf_types::{CfRule, Cfvo, ColorScaleThreshold, ConditionalFormatting, Icon};
     use ironcalc_base::types::{Col, Color, Row};
+    let format = |cf_rule: CfRule| ConditionalFormatting { range: "A1:A3".into(), cf_rule, priority: 1 };
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("nan.abaco");
     let cases: Vec<(Box<dyn Fn(&mut ironcalc_base::types::Worksheet)>, &str)> = vec![
@@ -579,6 +606,55 @@ fn a_number_no_file_holds_refuses_the_write_by_its_path() {
             Box::new(|w| w.rows.push(Row { r: 1, height: f64::INFINITY, custom_format: false, custom_height: true, s: 0, hidden: false })),
             "sheets/01-Sheet1.toml: `rows.0.height` is a number that is no finite number",
         ),
+        // inside a conditional format's rule (an internally tagged enum), beside nones of its own
+        (
+            Box::new(|w| {
+                w.conditional_formatting.push(format(CfRule::DataBar {
+                    min: Some(Cfvo::Number(f64::NAN)),
+                    max: None,
+                    positive_color: Color::None,
+                    negative_color: Color::None,
+                    is_gradient: true,
+                    show_value: true,
+                }))
+            }),
+            "sheets/01-Sheet1.toml: `conditional_formatting.0.cf_rule.min.Number` is a number",
+        ),
+        (
+            Box::new(|w| {
+                w.conditional_formatting.push(format(CfRule::DataBar {
+                    min: None,
+                    max: None,
+                    positive_color: Color::Theme(1, f64::NAN),
+                    negative_color: Color::None,
+                    is_gradient: true,
+                    show_value: true,
+                }))
+            }),
+            "sheets/01-Sheet1.toml: `conditional_formatting.0.cf_rule.positive_color.1` is a number",
+        ),
+        (
+            Box::new(|w| {
+                w.conditional_formatting.push(format(CfRule::ColorScale {
+                    thresholds: vec![
+                        ColorScaleThreshold { cfvo: Cfvo::Min, color: Color::None },
+                        ColorScaleThreshold { cfvo: Cfvo::Number(f64::INFINITY), color: Color::Rgb("FF0000".into()) },
+                    ],
+                }))
+            }),
+            "sheets/01-Sheet1.toml: `conditional_formatting.0.cf_rule.thresholds.1.cfvo.Number` is a number",
+        ),
+        (
+            Box::new(|w| {
+                w.conditional_formatting.push(format(CfRule::IconRating {
+                    icon: Icon::Star,
+                    color: Color::None,
+                    thresholds: vec![(Cfvo::Percent(f64::NAN), false)],
+                    show_value: true,
+                }))
+            }),
+            "sheets/01-Sheet1.toml: `conditional_formatting.0.cf_rule.thresholds.0.0.Percent` is a number",
+        ),
     ];
     for (bad, want) in &cases {
         let mut file = AbacoFile::new(Workbook::new("Nan").unwrap());
@@ -587,6 +663,98 @@ fn a_number_no_file_holds_refuses_the_write_by_its_path() {
         assert!(got.contains(want), "got: {got}\n  wanted: {want}");
         assert!(!path.exists());
     }
+}
+
+#[test]
+fn what_the_reader_refuses_the_writer_refuses_by_its_place() {
+    use ironcalc_base::expressions::types::Area;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("refused.abaco");
+    let refused = |file: &mut AbacoFile| abacofile::write(file, &path).err().map(|e| e.to_string()).unwrap_or_default();
+    // a one-cell legacy array over merged cells, which the engine's own merge lets stand
+    let mut book = Workbook::new("Arrays").unwrap();
+    book.model_mut().set_user_array_formula(0, 1, 1, 1, 1, "=SUM(C1:C2*D1:D2)").unwrap();
+    book.model_mut().merge_cells(&Area { sheet: 0, row: 1, column: 1, width: 2, height: 1 }).unwrap();
+    let got = refused(&mut AbacoFile::new(book));
+    assert!(got.contains("sheets/01-Sheet1.toml A1: an array formula over merged cells"), "{got}");
+    // a cell's style the workbook does not hold
+    for (style, want) in [(99, "style 99 is none of the workbook's"), (-1, "style -1 is no style")] {
+        let mut book = Workbook::new("Styles").unwrap();
+        book.model_mut().workbook.worksheet_mut(0).unwrap().set_cell_with_number(1, 1, 5.0, style).unwrap();
+        let got = refused(&mut AbacoFile::new(book));
+        assert!(got.contains(&format!("sheets/01-Sheet1.toml A1: {want}")), "{got}");
+    }
+    // a reference not in its form
+    for (bad, want) in [
+        (Reference { role: "r".into(), path: "r.csv".into(), size: None, modified: None, sha256: Some("XYZ".into()) }, "`sha256` is 64 lowercase hex digits"),
+        (Reference { role: "r".into(), path: "r.csv".into(), size: None, modified: Some("2026-11-23T10:04:05+00:00".into()), sha256: None }, "`modified` is RFC 3339"),
+    ] {
+        let mut file = worked_example();
+        file.workspace.references = vec![bad];
+        let got = refused(&mut file);
+        assert!(got.contains(&format!("workspace/references.toml reference 1: {want}")), "{got}");
+    }
+    assert!(!path.exists());
+}
+
+#[test]
+fn a_link_or_a_linked_cell_stated_twice_is_refused_by_its_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("twice.abaco");
+    let read_with = |parts: &[(String, Vec<u8>)], name: &str, edit: &dyn Fn(&str) -> String| {
+        let edited: Vec<(String, Vec<u8>)> =
+            parts.iter().map(|(n, b)| if n == name { (n.clone(), edit(std::str::from_utf8(b).unwrap()).into_bytes()) } else { (n.clone(), b.clone()) }).collect();
+        std::fs::write(&path, abacofile::zip_of(&edited).unwrap()).unwrap();
+        abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_default()
+    };
+    let parts = abacofile::parts(&worked_example()).unwrap();
+    let link = |t: &str| format!(r#"[1, 1, {{ type = "External", target = "https://example.org/{t}", tooltip = nan }}]"#);
+    let got = read_with(&parts, "sheets/01-Loads.toml", &|t| t.replace("links = []", &format!("links = [{}, {}]", link("a"), link("b"))));
+    assert!(got.contains("sheets/01-Loads.toml: `links.1` states the link of a cell `links.0` states already"), "{got}");
+    // a linked workbook's cached cell, in the workbook part
+    let linked = AbacoFile::new(open(&corpus_dir().join("link_test.xlsx")));
+    let parts = abacofile::parts(&linked).unwrap();
+    let got = read_with(&parts, "workbook.toml", &|t| {
+        assert!(t.contains("cells = []"), "{t}");
+        t.replacen("cells = []", "cells = [[1, 1, { Number = 1.0 }], [1, 1, { Number = 2.0 }]]", 1)
+    });
+    assert!(got.contains("workbook.toml: `external_books.0.sheets.0.cells.1` states a cell its sheet states already"), "{got}");
+}
+
+#[test]
+#[cfg(unix)]
+fn a_file_name_is_the_system_s_whatever_its_encoding_and_no_link_beside_it_is_followed() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    // two names that one lossy spelling would make one: each keeps its own `.bak`
+    let mut file = worked_example();
+    let names: Vec<std::path::PathBuf> = [b"caf\xe9.abaco".as_slice(), b"caf\xe8.abaco".as_slice()]
+        .iter()
+        .map(|n| dir.path().join(std::ffi::OsStr::from_bytes(n)))
+        .collect();
+    for (i, name) in names.iter().enumerate() {
+        file.book.set_value(0, Addr::parse("B2").unwrap(), &Value::Number(i as f64)).unwrap();
+        abacofile::write(&mut file, name).unwrap();
+        file.book.set_value(0, Addr::parse("B2").unwrap(), &Value::Number(10.0 + i as f64)).unwrap();
+        abacofile::write(&mut file, name).unwrap();
+    }
+    for (i, name) in names.iter().enumerate() {
+        let mut bak = name.as_os_str().to_os_string();
+        bak.push(".bak");
+        let first = abacofile::read(std::path::Path::new(&bak)).unwrap();
+        assert_eq!(first.book.value_now(0, Addr::parse("B2").unwrap()).unwrap(), Value::Number(i as f64));
+    }
+    // a link where a temporary file of the old fixed name stood: never followed
+    let victim = dir.path().join("victim.txt");
+    std::fs::write(&victim, "untouched").unwrap();
+    let dest = dir.path().join("b.abaco");
+    std::os::unix::fs::symlink(&victim, dir.path().join("b.abaco.tmp")).unwrap();
+    abacofile::write(&mut file, &dest).unwrap();
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "untouched");
+    assert!(std::fs::symlink_metadata(&dest).unwrap().file_type().is_file());
+    let left: BTreeMap<String, ()> =
+        std::fs::read_dir(dir.path()).unwrap().map(|e| (e.unwrap().file_name().to_string_lossy().to_string(), ())).collect();
+    assert!(!left.keys().any(|n| n.ends_with(".tmp") && n != "b.abaco.tmp"), "{left:?}");
 }
 
 #[test]

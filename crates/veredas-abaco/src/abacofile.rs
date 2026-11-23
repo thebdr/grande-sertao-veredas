@@ -224,8 +224,9 @@ pub fn number_text(n: f64) -> String {
 }
 
 /// A TOML basic string holding `s` exactly, on one line: `"` and `\` escaped, and every control
-/// character a basic string cannot hold raw (U+0000 to U+001F, U+007F) written as its escape, a
-/// tab too, so a text with a line break keeps its cell on one line.
+/// character (U+0000 to U+001F, U+007F to U+009F, a tab too) and every other line break Unicode
+/// names (U+2028, U+2029) written as its escape, so a text with a line break keeps its cell on one
+/// line for any reader, Python's `splitlines` among them.
 fn quoted(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -238,7 +239,7 @@ fn quoted(s: &str) -> String {
             '\t' => out.push_str("\\t"),
             '\u{8}' => out.push_str("\\b"),
             '\u{c}' => out.push_str("\\f"),
-            c if c < ' ' || c == '\u{7f}' => {
+            c if c < ' ' || ('\u{7f}'..='\u{9f}').contains(&c) || c == '\u{2028}' || c == '\u{2029}' => {
                 let _ = write!(out, "\\u{:04X}", c as u32);
             }
             c => out.push(c),
@@ -294,17 +295,16 @@ fn toml_text<T: Serialize>(part: &str, value: &T) -> Result<String, ModelError> 
 /// (the engine's `None`, a colour that is none) TOML cannot hold, so a null is written `nan`,
 /// which no JSON value holds. JSON writes a number that is no finite number (a NaN or an infinity,
 /// which a malformed workbook can give the engine) as null too, where the engine's structure takes
-/// no none: such a number refuses the write by its path ([`non_finite_at`]), so every file written
-/// reads back.
+/// no none: such a number refuses the write by its path ([`non_finite_at`], found in the value
+/// itself), so every file written reads back.
 fn engine_text<T: Serialize + DeserializeOwned>(part: &str, value: &T) -> Result<String, ModelError> {
     let bad = |e: String| ModelError::Engine(format!("{part}: {e}"));
-    let json = serde_json::to_value(value).map_err(|e| bad(e.to_string()))?;
-    if let Err(e) = serde_json::from_value::<T>(json.clone()) {
-        return Err(bad(match non_finite_at::<T>(&json) {
-            Some(path) => format!("`{path}` is a number that is no finite number (a NaN or an infinity), which the file cannot hold"),
-            None => e.to_string(),
-        }));
+    if let Some(path) = non_finite_at(value) {
+        return Err(bad(format!("`{path}` is a number that is no finite number (a NaN or an infinity), which the file cannot hold")));
     }
+    let json = serde_json::to_value(value).map_err(|e| bad(e.to_string()))?;
+    // and the JSON read back as the engine's type, whatever else could keep it from reading back
+    serde_json::from_value::<T>(json.clone()).map_err(|e| bad(e.to_string()))?;
     let toml::Value::Table(mut table) = json_to_toml(json).map_err(bad)? else {
         return Err(bad("not a table".into()));
     };
@@ -317,56 +317,262 @@ fn engine_text<T: Serialize + DeserializeOwned>(part: &str, value: &T) -> Result
     Ok(format!("format = {}\nversion = {version}\n{body}", quoted(&format)))
 }
 
-/// The path of the null in `json` where `T` takes no none (a number that was no finite number):
-/// JSON's text, pretty-printed, read as `T`, the line its refusal names mapped back to its key; an
-/// untagged enum (a colour) is refused where its value ends, so the null inside the innermost
-/// value spanning that line is the one.
-fn non_finite_at<T: DeserializeOwned>(json: &serde_json::Value) -> Option<String> {
-    use serde_json::Value as J;
-    fn first_null(v: &J, path: &mut Vec<String>) -> Option<String> {
-        match v {
-            J::Null => Some(path.join(".")),
-            J::Array(a) => a.iter().enumerate().find_map(|(i, x)| {
-                path.push(i.to_string());
-                let found = first_null(x, path);
-                path.pop();
-                found
-            }),
-            J::Object(o) => o.iter().find_map(|(k, x)| {
-                path.push(k.clone());
-                let found = first_null(x, path);
-                path.pop();
-                found
-            }),
-            _ => None,
-        }
+/// The path of the first number in `value` that is no finite number, as its JSON would spell the
+/// path (`cols.0.width`, `color.1`, `conditional_formatting.0.cf_rule.min.Number`): `value`
+/// serialised into [`FiniteProbe`], which keeps no output, only where it is.
+fn non_finite_at<T: Serialize>(value: &T) -> Option<String> {
+    let mut probe = FiniteProbe::default();
+    let _ = value.serialize(&mut probe);
+    probe.found
+}
+
+/// A serde serializer that follows a value's structure to its first non-finite float: a struct's
+/// field, a map's key, a list's index and an externally tagged variant's name each a step of the
+/// path, as JSON nests them (an internally tagged or untagged enum adds no step of its own).
+#[derive(Default)]
+struct FiniteProbe {
+    path: Vec<String>,
+    found: Option<String>,
+}
+
+#[derive(Debug)]
+struct Stopped;
+
+impl std::fmt::Display for Stopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("stopped")
     }
-    // each member and element of a non-empty container on a line of its own, its closing bracket on
-    // the line after the last, as `to_string_pretty` writes them
-    fn walk(v: &J, path: &mut Vec<String>, line: &mut usize, target: usize) -> Option<String> {
-        let start = *line;
-        let children: Vec<(String, &J)> = match v {
-            J::Array(a) => a.iter().enumerate().map(|(i, x)| (i.to_string(), x)).collect(),
-            J::Object(o) => o.iter().map(|(k, x)| (k.clone(), x)).collect(),
-            _ => return (*line == target && v.is_null()).then(|| path.join(".")),
-        };
-        let any = !children.is_empty();
-        for (key, child) in children {
-            *line += 1;
-            path.push(key);
-            if let Some(found) = walk(child, path, line, target) {
-                return Some(found);
-            }
-            path.pop();
-        }
-        if any {
-            *line += 1;
-        }
-        if (start..=*line).contains(&target) { first_null(v, path) } else { None }
+}
+
+impl std::error::Error for Stopped {}
+
+impl serde::ser::Error for Stopped {
+    fn custom<M: std::fmt::Display>(_: M) -> Self {
+        Stopped
     }
-    let text = serde_json::to_string_pretty(json).ok()?;
-    let target = serde_json::from_str::<T>(&text).err()?.line();
-    walk(json, &mut Vec::new(), &mut 1, target)
+}
+
+impl FiniteProbe {
+    fn float(&mut self, finite: bool) -> Result<(), Stopped> {
+        if !finite && self.found.is_none() {
+            self.found = Some(self.path.join("."));
+        }
+        if self.found.is_some() { Err(Stopped) } else { Ok(()) }
+    }
+
+    fn at<T: Serialize + ?Sized>(&mut self, step: String, value: &T) -> Result<(), Stopped> {
+        self.path.push(step);
+        let outcome = value.serialize(&mut *self);
+        self.path.pop();
+        outcome
+    }
+}
+
+/// A list, a tuple, a map or a struct being followed, with the next index and whether it opened a
+/// variant's step.
+struct ProbeCompound<'p> {
+    probe: &'p mut FiniteProbe,
+    index: usize,
+    variant: bool,
+    key: Option<String>,
+}
+
+impl ProbeCompound<'_> {
+    fn element<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Stopped> {
+        let step = self.index.to_string();
+        self.index += 1;
+        self.probe.at(step, value)
+    }
+
+    fn close(self) -> Result<(), Stopped> {
+        if self.variant {
+            self.probe.path.pop();
+        }
+        Ok(())
+    }
+}
+
+impl<'p> serde::Serializer for &'p mut FiniteProbe {
+    type Ok = ();
+    type Error = Stopped;
+    type SerializeSeq = ProbeCompound<'p>;
+    type SerializeTuple = ProbeCompound<'p>;
+    type SerializeTupleStruct = ProbeCompound<'p>;
+    type SerializeTupleVariant = ProbeCompound<'p>;
+    type SerializeMap = ProbeCompound<'p>;
+    type SerializeStruct = ProbeCompound<'p>;
+    type SerializeStructVariant = ProbeCompound<'p>;
+
+    fn serialize_f64(self, v: f64) -> Result<(), Stopped> {
+        self.float(v.is_finite())
+    }
+    fn serialize_f32(self, v: f32) -> Result<(), Stopped> {
+        self.float(v.is_finite())
+    }
+    fn serialize_bool(self, _: bool) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_i8(self, _: i8) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_i16(self, _: i16) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_i32(self, _: i32) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_i64(self, _: i64) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_u8(self, _: u8) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_u16(self, _: u16) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_u32(self, _: u32) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_u64(self, _: u64) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_char(self, _: char) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_str(self, _: &str) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_bytes(self, _: &[u8]) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_none(self) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_some<T: Serialize + ?Sized>(self, value: &T) -> Result<(), Stopped> {
+        value.serialize(self)
+    }
+    fn serialize_unit(self) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_unit_struct(self, _: &'static str) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_unit_variant(self, _: &'static str, _: u32, _: &'static str) -> Result<(), Stopped> {
+        Ok(())
+    }
+    fn serialize_newtype_struct<T: Serialize + ?Sized>(self, _: &'static str, value: &T) -> Result<(), Stopped> {
+        value.serialize(self)
+    }
+    fn serialize_newtype_variant<T: Serialize + ?Sized>(self, _: &'static str, _: u32, variant: &'static str, value: &T) -> Result<(), Stopped> {
+        self.at(variant.to_string(), value)
+    }
+    fn serialize_seq(self, _: Option<usize>) -> Result<ProbeCompound<'p>, Stopped> {
+        Ok(ProbeCompound { probe: self, index: 0, variant: false, key: None })
+    }
+    fn serialize_tuple(self, _: usize) -> Result<ProbeCompound<'p>, Stopped> {
+        Ok(ProbeCompound { probe: self, index: 0, variant: false, key: None })
+    }
+    fn serialize_tuple_struct(self, _: &'static str, _: usize) -> Result<ProbeCompound<'p>, Stopped> {
+        Ok(ProbeCompound { probe: self, index: 0, variant: false, key: None })
+    }
+    fn serialize_tuple_variant(self, _: &'static str, _: u32, variant: &'static str, _: usize) -> Result<ProbeCompound<'p>, Stopped> {
+        self.path.push(variant.to_string());
+        Ok(ProbeCompound { probe: self, index: 0, variant: true, key: None })
+    }
+    fn serialize_map(self, _: Option<usize>) -> Result<ProbeCompound<'p>, Stopped> {
+        Ok(ProbeCompound { probe: self, index: 0, variant: false, key: None })
+    }
+    fn serialize_struct(self, _: &'static str, _: usize) -> Result<ProbeCompound<'p>, Stopped> {
+        Ok(ProbeCompound { probe: self, index: 0, variant: false, key: None })
+    }
+    fn serialize_struct_variant(self, _: &'static str, _: u32, variant: &'static str, _: usize) -> Result<ProbeCompound<'p>, Stopped> {
+        self.path.push(variant.to_string());
+        Ok(ProbeCompound { probe: self, index: 0, variant: true, key: None })
+    }
+}
+
+impl serde::ser::SerializeSeq for ProbeCompound<'_> {
+    type Ok = ();
+    type Error = Stopped;
+    fn serialize_element<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Stopped> {
+        self.element(value)
+    }
+    fn end(self) -> Result<(), Stopped> {
+        self.close()
+    }
+}
+
+impl serde::ser::SerializeTuple for ProbeCompound<'_> {
+    type Ok = ();
+    type Error = Stopped;
+    fn serialize_element<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Stopped> {
+        self.element(value)
+    }
+    fn end(self) -> Result<(), Stopped> {
+        self.close()
+    }
+}
+
+impl serde::ser::SerializeTupleStruct for ProbeCompound<'_> {
+    type Ok = ();
+    type Error = Stopped;
+    fn serialize_field<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Stopped> {
+        self.element(value)
+    }
+    fn end(self) -> Result<(), Stopped> {
+        self.close()
+    }
+}
+
+impl serde::ser::SerializeTupleVariant for ProbeCompound<'_> {
+    type Ok = ();
+    type Error = Stopped;
+    fn serialize_field<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Stopped> {
+        self.element(value)
+    }
+    fn end(self) -> Result<(), Stopped> {
+        self.close()
+    }
+}
+
+impl serde::ser::SerializeMap for ProbeCompound<'_> {
+    type Ok = ();
+    type Error = Stopped;
+    fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<(), Stopped> {
+        // the key as JSON writes it: a text as it is, anything else as its JSON
+        self.key = serde_json::to_value(key).ok().map(|k| k.as_str().map(str::to_string).unwrap_or_else(|| k.to_string()));
+        Ok(())
+    }
+    fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Stopped> {
+        let step = self.key.take().unwrap_or_else(|| self.index.to_string());
+        self.index += 1;
+        self.probe.at(step, value)
+    }
+    fn end(self) -> Result<(), Stopped> {
+        self.close()
+    }
+}
+
+impl serde::ser::SerializeStruct for ProbeCompound<'_> {
+    type Ok = ();
+    type Error = Stopped;
+    fn serialize_field<T: Serialize + ?Sized>(&mut self, key: &'static str, value: &T) -> Result<(), Stopped> {
+        self.probe.at(key.to_string(), value)
+    }
+    fn end(self) -> Result<(), Stopped> {
+        self.close()
+    }
+}
+
+impl serde::ser::SerializeStructVariant for ProbeCompound<'_> {
+    type Ok = ();
+    type Error = Stopped;
+    fn serialize_field<T: Serialize + ?Sized>(&mut self, key: &'static str, value: &T) -> Result<(), Stopped> {
+        self.probe.at(key.to_string(), value)
+    }
+    fn end(self) -> Result<(), Stopped> {
+        self.close()
+    }
 }
 
 fn json_to_toml(j: serde_json::Value) -> Result<toml::Value, String> {
@@ -411,10 +617,27 @@ fn bare(formula: &str) -> &str {
     formula.strip_prefix('=').unwrap_or(formula)
 }
 
-/// The `[cells]` table of one sheet, one line per cell, row-major.
-fn cells_text(book: &Workbook, sheet: u32) -> Result<String, ModelError> {
+/// The `[cells]` table of one sheet, one line per cell, row-major. A cell the reader would refuse is
+/// refused here by its address, so every file written reads back: a style the workbook does not
+/// hold, a legacy array formula over merged cells (the engine enters none such on reading).
+fn cells_text(book: &Workbook, sheet: u32, part: &str) -> Result<String, ModelError> {
+    let styles = book.model().workbook.styles.cell_xfs.len();
+    let merged = &book.model().workbook.worksheet(sheet).map_err(|e| ModelError::Engine(e.to_string()))?.merged_cells;
     let mut out = String::from("\n[cells]\n");
     for (addr, style) in book.cells(sheet)? {
+        let bad = |what: String| ModelError::Engine(format!("{part} {addr}: {what}"));
+        if style < 0 {
+            return Err(bad(format!("style {style} is no style")));
+        }
+        if style as usize >= styles {
+            return Err(bad(format!("style {style} is none of the workbook's {styles}")));
+        }
+        if let Content::ArrayFormula { columns, rows, .. } = book.content(sheet, addr)? {
+            let (r2, c2) = (addr.row + rows - 1, addr.column + columns - 1);
+            if merged.iter().any(|m| m.row <= r2 && addr.row < m.row + m.height && m.column <= c2 && addr.column < m.column + m.width) {
+                return Err(bad("an array formula over merged cells, which the engine enters none of".into()));
+            }
+        }
         let styled = |out: &mut String| {
             if style != 0 {
                 let _ = write!(out, ", style = {style}");
@@ -492,7 +715,7 @@ fn sheet_text(book: &Workbook, sheet: u32, ws: &Worksheet, part_name: &str) -> R
         conditional_formatting: ws.conditional_formatting.clone(),
         links,
     };
-    Ok(engine_text(part_name, &part)? + &cells_text(book, sheet)?)
+    Ok(engine_text(part_name, &part)? + &cells_text(book, sheet, part_name)?)
 }
 
 /// Every part of the file, by name, in the order they are written.
@@ -541,6 +764,9 @@ pub fn parts(file: &AbacoFile) -> Result<Vec<(String, Vec<u8>)>, ModelError> {
         out.push((format!("macros/{name}.py"), source.clone().into_bytes()));
     }
     let ws = &file.workspace;
+    for (i, r) in ws.references.iter().enumerate() {
+        check_reference(r).map_err(|what| ModelError::Engine(format!("{REFERENCES} reference {}: {what}", i + 1)))?;
+    }
     if !ws.references.is_empty() {
         let part = ReferencesPart { format: REFERENCES_FORMAT.into(), version: VERSION, reference: ws.references.clone() };
         out.push((REFERENCES.into(), toml_text(REFERENCES, &part)?.into_bytes()));
@@ -622,13 +848,6 @@ impl Parts<'_> {
         toml::from_str(&text).map_err(|e| self.bad(format!("{name}: {e}")))
     }
 
-    /// A part holding the engine's structures ([`engine_text`]): its stamp, then its body read as
-    /// TOML, `nan` as the engine's none.
-    fn engine<T: DeserializeOwned + Serialize>(&mut self, name: &str, format: &str) -> Result<T, ModelError> {
-        let table = self.stamped(name, format)?;
-        self.engine_table(name, table)
-    }
-
     /// A TOML part's table, its stamp checked first.
     fn stamped(&mut self, name: &str, format: &str) -> Result<toml::Table, ModelError> {
         let text = self.text(name)?;
@@ -658,6 +877,26 @@ impl Parts<'_> {
     }
 }
 
+/// The path of the first cached cell of a linked workbook (`external_books.N.sheets.M.cells.K`, a
+/// `[row, column, value]`) whose row and column an earlier one of its sheet states.
+fn twice_stated_external_cell(book: &toml::Table) -> Option<String> {
+    let list = |v: Option<&toml::Value>| v.and_then(toml::Value::as_array).cloned().unwrap_or_default();
+    for (n, b) in list(book.get("external_books")).iter().enumerate() {
+        for (m, sheet) in list(b.get("sheets")).iter().enumerate() {
+            let mut seen = std::collections::HashSet::new();
+            for (k, cell) in list(sheet.get("cells")).iter().enumerate() {
+                let at = cell.as_array().map(|c| (c.first().cloned(), c.get(1).cloned()));
+                if let Some((Some(row), Some(column))) = at
+                    && !seen.insert((row.to_string(), column.to_string()))
+                {
+                    return Some(format!("external_books.{n}.sheets.{m}.cells.{k}"));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// The first key, in an object holding a `type` (an internally tagged enum) or in any object below
 /// one (all of it read from serde's buffer: a threshold of a format's rule), that `back`, the value
 /// read written out again, lacks, by its path.
@@ -681,6 +920,18 @@ fn unread_below(read: &serde_json::Value, back: &serde_json::Value, path: String
         }
         _ => None,
     }
+}
+
+/// What a reference must be for the file to hold it: its `sha256` 64 lowercase hex digits, its
+/// `modified` RFC 3339 in UTC to the second. The writer and the reader both hold one to it.
+fn check_reference(r: &Reference) -> Result<(), &'static str> {
+    if r.sha256.as_deref().is_some_and(|h| h.len() != 64 || !h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))) {
+        return Err("`sha256` is 64 lowercase hex digits");
+    }
+    if r.modified.as_deref().is_some_and(|m| !crate::workspace::is_rfc3339_utc(m)) {
+        return Err("`modified` is RFC 3339 in UTC to the second (`2026-11-23T10:04:05Z`)");
+    }
+    Ok(())
 }
 
 /// What the engine's workbook must be for the file to hold it and the engine to work on it, by part
@@ -855,7 +1106,12 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
     }
     let mut parts = Parts { path, all };
     let manifest: Manifest = parts.toml(MANIFEST, FORMAT)?;
-    let book: WorkbookPart = parts.engine(WORKBOOK, WORKBOOK_FORMAT)?;
+    let book_table = parts.stamped(WORKBOOK, WORKBOOK_FORMAT)?;
+    // a cached cell of a linked workbook stated twice: the engine's map would keep one without a word
+    if let Some(path) = twice_stated_external_cell(&book_table) {
+        return Err(parts.bad(format!("{WORKBOOK}: `{path}` states a cell its sheet states already")));
+    }
+    let book: WorkbookPart = parts.engine_table(WORKBOOK, book_table)?;
 
     // The engine's workbook, values and styles placed as they are (text never parsed again, styles
     // keeping their indices); formulas entered once the model exists.
@@ -876,6 +1132,13 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
             Some(_) => return Err(parts.bad(format!("{}: `cells` is no table", sheet.part))),
         };
         let part: SheetPart = parts.engine_table(&sheet.part, table)?;
+        // a cell's link stated twice: the sheet's map of links would keep one without a word
+        let mut linked: HashMap<(i32, i32), usize> = HashMap::new();
+        for (i, (r, c, _)) in part.links.iter().enumerate() {
+            if let Some(j) = linked.insert((*r, *c), i) {
+                return Err(parts.bad(format!("{}: `links.{i}` states the link of a cell `links.{j}` states already", sheet.part)));
+            }
+        }
         if part.name != sheet.name {
             return Err(parts.bad(format!("{}: the sheet `{}`, where the manifest says `{}`", sheet.part, part.name, sheet.name)));
         }
@@ -998,13 +1261,7 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
     if parts.all.contains_key(REFERENCES) {
         workspace.references = parts.toml::<ReferencesPart>(REFERENCES, REFERENCES_FORMAT)?.reference;
         for (i, r) in workspace.references.iter().enumerate() {
-            let place = |what: &str| parts.bad(format!("{REFERENCES} reference {}: {what}", i + 1));
-            if r.sha256.as_deref().is_some_and(|h| h.len() != 64 || !h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))) {
-                return Err(place("`sha256` is 64 lowercase hex digits"));
-            }
-            if r.modified.as_deref().is_some_and(|m| !crate::workspace::is_rfc3339_utc(m)) {
-                return Err(place("`modified` is RFC 3339 in UTC to the second (`2026-11-23T10:04:05Z`)"));
-            }
+            check_reference(r).map_err(|what| parts.bad(format!("{REFERENCES} reference {}: {what}", i + 1)))?;
         }
     }
     if parts.all.contains_key(DECISIONS) {
@@ -1071,6 +1328,13 @@ mod tests {
             assert_eq!(back["x"].as_str(), Some(s), "{q}");
         }
         assert_eq!(quoted("a\nb\t\"c\"\\\u{1}\u{7f}"), r#""a\nb\t\"c\"\\\u0001\u007F""#);
+        // the C1 controls and Unicode's other line breaks escaped: no reader splits the line
+        for c in ('\u{80}'..='\u{9f}').chain(['\u{2028}', '\u{2029}']) {
+            let q = quoted(&format!("a{c}b"));
+            assert_eq!(q, format!("\"a\\u{:04X}b\"", c as u32));
+            let back: toml::Table = toml::from_str(&format!("x = {q}")).unwrap();
+            assert_eq!(back["x"].as_str(), Some(format!("a{c}b").as_str()));
+        }
     }
 
     #[test]

@@ -6,17 +6,31 @@
 
 use std::path::Path;
 
-/// Writes `path` through `write`, into `<name>.tmp` beside it, then renames it into place; an
-/// existing `path` becomes `<name>.bak` (a previous `.bak` replaced). Any failure (the write, the
-/// `.bak` that cannot be replaced, a rename) leaves `path` as it was and removes the temporary
-/// file.
+/// Writes `path` through `write`, into a temporary file of its own beside it
+/// (`<name>.<process>-<n>.tmp`, made new, so no file or link already there is followed or
+/// overwritten), then renames it into place; an existing `path` becomes `<name>.bak` (a previous
+/// `.bak` replaced). The names are the file name as the system gives it, whatever its encoding. Any
+/// failure (the write, the `.bak` that cannot be replaced, a rename) leaves `path` as it was and
+/// removes the temporary file. Two writes of one destination at once are not serialised (a limit).
 pub fn atomic_write(path: &Path, write: impl FnOnce(std::fs::File) -> Result<(), String>) -> Result<(), String> {
-    let file_name =
-        path.file_name().ok_or_else(|| format!("{}: not a file path", path.display()))?.to_string_lossy().to_string();
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let file_name = path.file_name().ok_or_else(|| format!("{}: not a file path", path.display()))?;
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let tmp = dir.join(format!("{file_name}.tmp"));
-    let bak = dir.join(format!("{file_name}.bak"));
-    let file = std::fs::File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    let beside = |suffix: &str| {
+        let mut name = file_name.to_os_string();
+        name.push(suffix);
+        dir.join(name)
+    };
+    let bak = beside(".bak");
+    let (tmp, file) = loop {
+        let tmp = beside(&format!(".{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => break (tmp, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("{}: {e}", tmp.display())),
+        }
+    };
     let placed = write(file).and_then(|()| {
         let existed = path.exists();
         if existed {

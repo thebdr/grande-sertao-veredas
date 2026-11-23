@@ -4,7 +4,9 @@ A workbook born in Ábaco, and at the same time the session that works on other 
 (`docs/abaco-plan.md`, "The `.abaco` file"): one zip of plain-text parts, readable with `unzip`
 and an editor. `veredas_abaco::abacofile` writes it (`write`, through a file beside the
 destination renamed into place, the file it replaces kept as `<name>.bak`; a write that fails
-leaves the destination as it was and nothing beside it) and reads it back
+leaves the destination as it was and nothing beside it; the temporary file is one of its own, made
+new, and the names are the system's whatever their encoding; two writes of one destination at once
+are not serialised, a limit) and reads it back
 (`read`, evaluated; nothing it carries runs). Its export to `.xlsx` is the fork's writer
 (`Workbook::export`).
 
@@ -61,8 +63,11 @@ engine's, refused by its path. A sheet part's structure is written the same way.
 
 Both ends hold the workbook to what the engine takes: sheet names of 1 to 31 characters with none
 of `\ / * ? : [ ]`, told apart in any case, each sheet's id its own; a row's `s` and a column's
-`style` one of the workbook's styles; a defined name that does not read as a cell (`B1`, `R1C1`),
-stated once in its scope. A name local to a sheet the workbook does not hold is kept: the engine
+`style` one of the workbook's styles; a defined name that does not read as a cell (`B1`, `$B$1`,
+`R1C1`, `R[1]C[-1]`), stated once in its scope. The writer refuses, by the cell's address, what the
+reader would refuse of a cell (a style the workbook does not hold, a legacy array formula over
+merged cells, which the engine lets a merge leave but never enters), and a reference not in its
+form, so every file it writes reads back. A name local to a sheet the workbook does not hold is kept: the engine
 holds one for a chart sheet of the `.xlsx` the workbook came from, which no formula reads.
 
 ## A sheet part
@@ -75,7 +80,7 @@ table, each keyed by its address:
 | A cell | Holds |
 |---|---|
 | `{ n = 6.5 }` | a number: a whole number under 10^15 as an integer, any other in the shortest text that reads back as the same double |
-| `{ s = "Span (m)" }` | a text, in a TOML basic string on its line: `"`, `\`, a tab, a line break and every other control character escaped (`"a\nb"`, `"\u0007"`) |
+| `{ s = "Span (m)" }` | a text, in a TOML basic string on its line: `"`, `\`, a tab, a line break and every other control character escaped (`"a\nb"`, `"\u0007"`), the C1 controls (U+0080 to U+009F) and Unicode's line and paragraph separators (U+2028, U+2029) too, so no reader splits the line |
 | `{ b = true }` | a boolean |
 | `{ e = "#N/A" }` | an error |
 | `{ f = "B2*B1^2/8", v = 63.375 }` | a formula, without its `=`; `v` (or `e`, an error) is the value it last computed, for the reader: it is computed again when the file is opened |
@@ -220,6 +225,7 @@ an error code that is none, an address that is none or not written as here, a st
 does not hold (a cell's, a row's, a column's), a number that is no finite number (`nan`, `inf`)
 or an integer no double holds, a value of the wrong type (a date-time among them, a formula's `v`
 that is a table), a formula's `v` beside its `e`, a manifest with no sheet, a sheet whose part
-names another sheet than the manifest, a sheet name or a defined name the engine refuses, settings
+names another sheet than the manifest, a sheet name or a defined name the engine refuses, a cell's
+link stated twice (`links.1`), a linked workbook's cached cell stated twice, settings
 the engine refuses (a time zone, a locale: the workbook part named), a reference's hash or date
 not in its form, a log line with a bad escape.

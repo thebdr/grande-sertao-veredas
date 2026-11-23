@@ -119,8 +119,8 @@ pub enum ModelError {
 }
 
 /// Whether a name reads as a cell, in any case: A1 (`q1`, `Tax2023`, up to column XFD and row
-/// 1 048 576), R1C1 (`r1c1`, `R2`, `C3`), or `R`/`C` alone. Excel takes none of them as a name; the
-/// engine's own check sees only capitals.
+/// 1 048 576, `$B$1` and its mixed forms), R1C1 (`r1c1`, `R2`, `C3`, relative `R[1]C[-1]`), or
+/// `R`/`C` alone. Excel takes none of them as a name; the engine's own check sees only capitals.
 pub fn name_reads_as_a_cell(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     let letters: String = upper.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
@@ -138,7 +138,9 @@ pub fn name_reads_as_a_cell(name: &str) -> bool {
         after.is_empty() || (after.starts_with('C') && after[1..].chars().all(|c| c.is_ascii_digit())) || row.is_empty() && after.is_empty()
     };
     let c_alone = upper.strip_prefix('C').is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()));
-    a1 || rc(&upper) || c_alone
+    // and whatever the engine's own parsers read as a cell: `$B$1`, `B$1`, `R[1]C[-1]`, `RC[2]`
+    use ironcalc_base::expressions::utils::{parse_reference_a1, parse_reference_r1c1};
+    a1 || rc(&upper) || c_alone || parse_reference_a1(name).is_some() || parse_reference_r1c1(name).is_some()
 }
 
 impl ModelError {
