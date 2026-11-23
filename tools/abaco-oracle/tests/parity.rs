@@ -375,7 +375,7 @@ fn a_cache_whose_type_and_text_excel_never_pairs_matches_nothing_the_engine_comp
         .into_iter()
         .find(|c| matches!(c.expected, abaco_oracle::Expected::Number(_)) && !c.shared_copy)
         .unwrap();
-    let cases: [(&str, &str); 33] = [
+    let cases: [(&str, &str); 38] = [
         (r##"<f>"#CIRC!"</f>"##, r##" t="e"><f>"#CIRC!"</f><v>#CIRC!</v>"##),
         (r##"<f>"TRUE"</f>"##, r##" t="b"><f>"TRUE"</f><v>TRUE</v>"##),
         (r##"<f>"abc"</f>"##, r##" t="b"><f>"abc"</f><v>abc</v>"##),
@@ -414,6 +414,13 @@ fn a_cache_whose_type_and_text_excel_never_pairs_matches_nothing_the_engine_comp
         ("", r##" t="b"><f>TRUE</f><v>1&#xA0;</v>"##),
         ("", r##" t="b"><f>TRUE</f><v>&#x3000;1</v>"##),
         ("", r##" t="e"><f>NA()</f><v>#N/A&#xA0;</v>"##),
+        // the value as an XML parser reads it, whatever markup spells it: the engine's text is the
+        // markup, Excel's cache the text
+        ("", r##" t="str"><f>""</f><v>abc</v >"##),
+        ("", " t=\"str\"><f>\"\"</f><v>abc</v\n>"),
+        ("", r##" t="str"><f>"&lt;![CDATA[abc]]&gt;"</f><v><![CDATA[abc]]></v>"##),
+        ("", r##" t="str"><f>"ab&lt;!--x--&gt;c"</f><v>ab<!--x-->c</v>"##),
+        ("", r##" t="str"><f>"&amp;#00000000065;"</f><v>&#00000000065;</v>"##),
         (r##"<f>"abc"</f>"##, r##" t="e"><f>"abc"</f><is><t>abc</t></is>"##),
         (r##"<f>"abc"</f>"##, r##"><f>"abc"</f><is><t>abc</t></is>"##),
     ];
@@ -425,7 +432,18 @@ fn a_cache_whose_type_and_text_excel_never_pairs_matches_nothing_the_engine_comp
         assert!(wrong.contains(&format!("{}!{}", target.sheet, target.reference)), "{cell}: {wrong:?}");
     }
     // and the same text cached as Excel writes it: a match (`_x+041_` is no escape)
-    for (i, cell) in [r#" t="str"><f>"abc"</f><v>abc</v>"#, r#" t="str"><f>"_x+041_"</f><v>_x+041_</v>"#].into_iter().enumerate() {
+    for (i, cell) in [
+        r#" t="str"><f>"abc"</f><v>abc</v>"#,
+        r#" t="str"><f>"_x+041_"</f><v>_x+041_</v>"#,
+        // the same text in other markup an XML parser reads alike
+        r#" t="str"><f>"abc"</f><v>abc</v >"#,
+        r#" t="str"><f>"abc"</f><v><![CDATA[abc]]></v>"#,
+        r#" t="str"><f>"abc"</f><v>ab<!--x-->c</v>"#,
+        r#" t="str"><f>"A"</f><v>&#00000000065;</v>"#,
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let copy = planted.path().join(format!("abs-str-{i}.xlsx"));
         rewrite_cell(&source, &copy, &target.sheet, &target.reference, |attrs, _| format!("{}{cell}", strip_type(attrs)));
         let (wrong, _, matched_now) = mismatches(&copy, &mut probe);

@@ -159,11 +159,105 @@ static RE_CELL: LazyLock<Regex> =
 static RE_ATTR_T: LazyLock<Regex> = LazyLock::new(|| re(r#"\st="([^"]*)""#));
 static RE_F: LazyLock<Regex> = LazyLock::new(|| re(r#"(?s)<f(\s[^>]*)?(?:/>|>(.*?)</f>)"#));
 static RE_F_SI: LazyLock<Regex> = LazyLock::new(|| re(r#"\ssi="([0-9]+)""#));
-/// A cell's value tag, open (`<v>`, `<v xml:space="preserve">`) or self-closing (`<v/>`,
-/// `<v />`): its attributes, then `/` when it closes itself.
-static RE_V_TAG: LazyLock<Regex> = LazyLock::new(|| re(r#"<v(\s[^>]*?)?(/?)>"#));
-/// An inline string's tag in any form (`<is>`, `<is/>`, `<is xml:space="preserve">`).
-static RE_IS_TAG: LazyLock<Regex> = LazyLock::new(|| re(r#"<is[\s/>]"#));
+
+/// What a cell's children hold, read by an XML parser (quick-xml, the version the engine's reader
+/// uses): every value tag counted, open or self-closing; the first one's text with its line ends
+/// normalised, every reference resolved, CDATA read as the text it is and comments left out (the
+/// document an XML parser reads, whatever markup spells it); whether an inline string is there;
+/// whether the content is no well-formed XML.
+#[derive(Default)]
+struct CellChildren {
+    values: usize,
+    value: Option<String>,
+    inline: bool,
+    broken: bool,
+}
+
+fn cell_children(inner: &str) -> CellChildren {
+    use quick_xml::events::Event;
+    use quick_xml::XmlVersion;
+    let mut out = CellChildren::default();
+    let mut reader = quick_xml::Reader::from_str(inner);
+    let mut depth = 0usize;
+    // inside the first value tag
+    let mut in_value = false;
+    loop {
+        match reader.read_event() {
+            Err(_) => {
+                out.broken = true;
+                break;
+            }
+            Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) => {
+                if depth == 0 {
+                    match e.local_name().as_ref() {
+                        "v" => {
+                            out.values += 1;
+                            if out.values == 1 {
+                                in_value = true;
+                                out.value = Some(String::new());
+                            }
+                        }
+                        "is" => out.inline = true,
+                        _ => {}
+                    }
+                } else if in_value {
+                    // an element inside a value: no text Excel writes
+                    out.broken = true;
+                }
+                depth += 1;
+            }
+            Ok(Event::Empty(e)) => {
+                if depth == 0 {
+                    match e.local_name().as_ref() {
+                        "v" => {
+                            out.values += 1;
+                            if out.values == 1 {
+                                out.value = Some(String::new());
+                            }
+                        }
+                        "is" => out.inline = true,
+                        _ => {}
+                    }
+                } else if in_value {
+                    out.broken = true;
+                }
+            }
+            Ok(Event::End(_)) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    in_value = false;
+                }
+            }
+            Ok(Event::Text(t)) if in_value && depth == 1 => {
+                if let Some(v) = out.value.as_mut() {
+                    v.push_str(&t.xml_content(XmlVersion::Implicit1_0));
+                }
+            }
+            Ok(Event::CData(d)) if in_value && depth == 1 => {
+                if let Some(v) = out.value.as_mut() {
+                    v.push_str(&d.xml_content(XmlVersion::Implicit1_0));
+                }
+            }
+            Ok(Event::GeneralRef(r)) if in_value && depth == 1 => {
+                let resolved = match r.resolve_char_ref() {
+                    Ok(Some(c)) => Some(c.to_string()),
+                    Ok(None) => quick_xml::escape::resolve_predefined_entity(&r).map(str::to_string),
+                    Err(_) => None,
+                };
+                match (resolved, out.value.as_mut()) {
+                    (Some(text), Some(v)) => v.push_str(&text),
+                    _ => out.broken = true,
+                }
+            }
+            Ok(_) => {}
+        }
+    }
+    if depth != 0 {
+        out.broken = true;
+    }
+    out
+}
 
 /// XSD's whitespace (space, tab, line feed, carriage return) taken off both ends, and no other
 /// character: a no-break space is part of the value.
@@ -493,22 +587,26 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
                 _ => (text, false),
             };
 
-            // the value's raw text: decoded as a text where the cell's type says text; a cell holds
-            // one value (CT_Cell), so two value tags, in any form, are no cache Excel writes
-            let tags: Vec<regex::Captures> = RE_V_TAG.captures_iter(inner).collect();
-            let values = tags.len();
-            let v_raw = match tags.first() {
-                None => None,
-                Some(tag) if &tag[2] == "/" => Some(String::new()),
-                Some(tag) => {
-                    let start = tag.get(0).map(|m| m.end()).unwrap_or(0);
-                    Some(inner[start..].find("</v>").map(|end| inner[start..start + end].to_string()).unwrap_or_default())
-                }
-            };
-            let v = v_raw.as_deref().map(unescape);
-            // an inline string in any form (`<is>`, `<is/>`, `<is …>`)
-            let is = RE_IS_TAG.find(inner).map(|m| inner[m.start()..].chars().take(80).collect::<String>());
+            // the cell's children as an XML parser reads them; a cell holds one value (CT_Cell), so
+            // two value tags, in any form, are no cache Excel writes
+            let children = cell_children(inner);
+            let values = children.values;
+            let v = children.value.clone();
+            let is = children.inline.then(|| "an inline string".to_string());
             let never = |what: String| Expected::Unwritten(what);
+            if children.broken {
+                formula_cells.push(FormulaCell {
+                    sheet: sheet_name.clone(),
+                    reference: format!("{col_letters}{row}"),
+                    row,
+                    col: column_index(col_letters),
+                    formula,
+                    shared_copy,
+                    array,
+                    expected: never("content no XML parser reads as a cell".into()),
+                });
+                continue;
+            }
             let expected = match (t.as_deref(), v, is) {
                 (_, Some(v), _) if values > 1 => never(v),
                 // an inline string (`<is>`, whatever the cell's type) is a constant's: Excel writes
@@ -517,7 +615,7 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
                 // Excel writes the value every formula computed: no `<v>` is a cache it never wrote
                 (_, None, None) => Expected::Missing,
                 // a formula's text Excel writes `str`
-                (Some("str"), Some(_), None) => Expected::Text(xml_text(v_raw.as_deref().unwrap_or_default())),
+                (Some("str"), Some(v), None) => Expected::Text(decode_escapes(&v)),
                 // a boolean Excel writes as 1 or 0
                 (Some("b"), Some(v), None) => match xsd_trim(&v) {
                     "1" => Expected::Bool(true),

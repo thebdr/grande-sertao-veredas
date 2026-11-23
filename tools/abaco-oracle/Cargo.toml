@@ -14,6 +14,8 @@ ironcalc = { path = "../../forks/ironcalc/xlsx" }
 # The expected side is read from the sheet XML itself (the zip and patterns), never through the
 # engine's reader, and cross-checked against an independent reader (calamine).
 calamine = { workspace = true }
+# A cell's content is read by an XML parser, the engine's own (quick-xml, the fork's version).
+quick-xml = { workspace = true }
 regex = { workspace = true }
 zip = { workspace = true }
 # The baseline is stamped TOML (law L7), its stamp read by core's header reader.

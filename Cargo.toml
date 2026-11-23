@@ -86,6 +86,7 @@ encoding_rs = "0.8"
 memchr = "2"
 # The filesystem watcher that wakes a tail's poll loop early on a local path (portal).
 notify = "8"
+quick-xml = "0.42"
 regex = "1"
 # A file's identity (volume and index), so a renamed file is still the one being read (portal).
 same-file = "1"

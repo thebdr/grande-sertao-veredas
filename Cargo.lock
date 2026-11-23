@@ -9,6 +9,7 @@ dependencies = [
  "calamine",
  "ironcalc",
  "ironcalc_base",
+ "quick-xml 0.42.0",
  "regex",
  "serde",
  "sha2",
