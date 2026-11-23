@@ -490,3 +490,156 @@ fn the_dissectors_read_both_records_in_a_read_answer() {
         assert_eq!(one(p, "media_type"), pd.media_type.to_string(), "port {k}");
     }
 }
+
+#[test]
+fn every_text_byte_every_number_bit_and_every_trailing_run_is_held() {
+    // Every byte 0 to 255 at one place of each text, written and read: taken exactly when it is a
+    // visible character (space to tilde), refused naming its field otherwise.
+    let visible = |b: u8| (0x20..=0x7E).contains(&b);
+    let base = im0();
+    let good = base.block().unwrap();
+    for b in 0..=255u8 {
+        let c = char::from(b);
+        let mut order: Vec<char> = base.order_id.chars().collect();
+        order[5] = c;
+        let mut serial: Vec<char> = base.serial_number.chars().collect();
+        serial[3] = c;
+        let written = [
+            Im0 { order_id: order.iter().collect(), ..base.clone() }.block(),
+            Im0 { serial_number: serial.iter().collect(), ..base.clone() }.block(),
+            Im0 { software_revision: SoftwareRevision { prefix: b, ..base.software_revision }, ..base.clone() }.block(),
+        ];
+        for (w, field) in written.iter().zip(["order id", "serial number", "software revision's prefix"]) {
+            match w {
+                Ok(block) => assert!(visible(b) && Im0::from_block(block).is_ok(), "{field} {b:#04x}"),
+                Err(RecordError::Text { field: f, .. }) => assert!(!visible(b) && *f == field, "{field} {b:#04x}"),
+                Err(e) => panic!("{field} {b:#04x}: {e}"),
+            }
+        }
+        for (at, field) in [(2 + 5, "order id"), (22 + 3, "serial number"), (40, "software revision's prefix")] {
+            let mut body = good.body.clone();
+            body[at] = b;
+            match Im0::from_block(&Block { body, ..good.clone() }) {
+                Ok(read) => assert!(visible(b), "{field} {b:#04x} read as {read:?}"),
+                Err(RecordError::Text { field: f, .. }) => assert!(!visible(b) && f == field, "{field} {b:#04x}"),
+                Err(e) => panic!("{field} {b:#04x}: {e}"),
+            }
+        }
+        // The port's three texts: own port id, a peer's port id and chassis id.
+        let one = |own: &str, port_id: &str, chassis: &str| PortDataReal { own_port_id: own.into(), ..port(vec![peer(port_id, chassis, 10, 0x99)]) };
+        // The byte at each text's second place.
+        let s = |t: &str| -> String {
+            let mut v: Vec<char> = t.chars().collect();
+            v[1] = c;
+            v.into_iter().collect()
+        };
+        for (pd, field) in [(one(&s("port-001"), "port-002", "switch-a"), "own port id"), (one("port-001", &s("port-002"), "switch-a"), "peer's port id"), (one("port-001", "port-002", &s("switch-a")), "peer's chassis id")] {
+            match pd.block() {
+                Ok(block) => assert!(visible(b) && PortDataReal::from_block(&block).unwrap() == pd, "{field} {b:#04x}"),
+                Err(RecordError::Text { field: f, .. }) => assert!(!visible(b) && f == field, "{field} {b:#04x}"),
+                Err(e) => panic!("{field} {b:#04x}: {e}"),
+            }
+        }
+        let good = one("port-001", "port-002", "switch-a").block().unwrap();
+        for (at, field) in [(8, "own port id"), (20, "peer's port id"), (29, "peer's chassis id")] {
+            let mut body = good.body.clone();
+            body[at] = b;
+            match PortDataReal::from_block(&Block { body, ..good.clone() }) {
+                Ok(_) => assert!(visible(b), "{field} {b:#04x}"),
+                Err(RecordError::Text { field: f, .. }) => assert!(!visible(b) && f == field, "{field} {b:#04x}"),
+                Err(e) => panic!("{field} {b:#04x}: {e}"),
+            }
+        }
+    }
+
+    // Bytes after the medium of every length from 1 to 8, zero runs among them, kept as heard: to
+    // the byte at the block's end, and read back.
+    for n in 1..=8usize {
+        for fill in [0x00u8, 0x5A] {
+            let pd = PortDataReal { extra: (0..n).map(|i| if fill == 0 { 0 } else { fill ^ (i as u8 * 0x11) }).collect(), ..port(vec![peer("port-002", "switch-a", 10, 0x99)]) };
+            let block = pd.block().unwrap();
+            assert!(block.body.ends_with(&pd.extra), "{n} {fill:#04x}");
+            assert_eq!(block.body.len(), port(vec![peer("port-002", "switch-a", 10, 0x99)]).block().unwrap().body.len() + n);
+            assert_eq!(PortDataReal::from_block(&block).unwrap(), pd, "{n} {fill:#04x}");
+        }
+    }
+
+    // Every number's every bit, by a seeded round trip of records whose numbers range over their
+    // whole width (and records of all ones and all zeros): written and read back as they were.
+    let mut noise = common::Noise(0x1A30);
+    let text = |n: &mut common::Noise, len: usize| -> String { (0..len).map(|_| char::from(0x20 + n.next() % 95)).collect() };
+    let u16r = |n: &mut common::Noise| u16::from(n.next()) << 8 | u16::from(n.next());
+    let u32r = |n: &mut common::Noise| u32::from(u16r(n)) << 16 | u32::from(u16r(n));
+    let mut ims = vec![
+        Im0 { vendor_id: 0xFFFF, hardware_revision: 0xFFFF, software_revision: SoftwareRevision { prefix: b'~', functional: 0xFF, bugfix: 0xFF, internal: 0xFF }, revision_counter: 0xFFFF, profile_id: 0xFFFF, profile_specific_type: 0xFFFF, version: (0xFF, 0xFF), supported: 0xFFFF, ..im0() },
+        Im0 { vendor_id: 0, hardware_revision: 0, software_revision: SoftwareRevision { prefix: b' ', functional: 0, bugfix: 0, internal: 0 }, revision_counter: 0, profile_id: 0, profile_specific_type: 0, version: (0, 0), supported: 0, ..im0() },
+    ];
+    let mut ports = vec![
+        PortDataReal { slot: 0xFFFF, subslot: 0xFFFF, mau_type: 0xFFFF, domain_boundary: 0xFFFF_FFFF, multicast_boundary: 0xFFFF_FFFF, link_state: LinkState { port: 0xFF, link: 0xFF }, media_type: 0xFFFF_FFFF, ..port(vec![peer("p", "c", 0xFFFF_FFFF, 0xFF)]) },
+        PortDataReal { slot: 0, subslot: 0, mau_type: 0, domain_boundary: 0, multicast_boundary: 0, link_state: LinkState { port: 0, link: 0 }, media_type: 0, ..port(vec![peer("p", "c", 0, 0)]) },
+    ];
+    for _ in 0..2000 {
+        let n = &mut noise;
+        ims.push(Im0 {
+            vendor_id: u16r(n),
+            order_id: text(n, 20),
+            serial_number: text(n, 16),
+            hardware_revision: u16r(n),
+            software_revision: SoftwareRevision { prefix: 0x20 + n.next() % 95, functional: n.next(), bugfix: n.next(), internal: n.next() },
+            revision_counter: u16r(n),
+            profile_id: u16r(n),
+            profile_specific_type: u16r(n),
+            version: (n.next(), n.next()),
+            supported: u16r(n),
+        });
+        let peers = (0..n.next() % 4)
+            .map(|_| {
+                let (pl, cl) = (usize::from(n.next() % 12), usize::from(n.next() % 12));
+                Peer { port_id: text(n, pl), chassis_id: text(n, cl), line_delay: u32r(n), mac: Mac([n.next(), n.next(), n.next(), n.next(), n.next(), n.next()]) }
+            })
+            .collect();
+        let own = usize::from(n.next() % 12);
+        let extra_len = usize::from(n.next() % 9);
+        ports.push(PortDataReal {
+            slot: u16r(n),
+            subslot: u16r(n),
+            own_port_id: text(n, own),
+            peers,
+            mau_type: u16r(n),
+            domain_boundary: u32r(n),
+            multicast_boundary: u32r(n),
+            link_state: LinkState { port: n.next(), link: n.next() },
+            media_type: u32r(n),
+            extra: n.bytes(extra_len),
+        });
+    }
+    for im in &ims {
+        let bytes = im.block().unwrap().encode().unwrap();
+        assert_eq!(Im0::from_block(&rpc::read_blocks(&bytes).0[0]).unwrap(), *im);
+    }
+    for pd in &ports {
+        let bytes = pd.block().unwrap().encode().unwrap();
+        assert_eq!(PortDataReal::from_block(&rpc::read_blocks(&bytes).0[0]).unwrap(), *pd);
+    }
+
+    // tshark reads two of the runs after the medium (all zeros, of one and of four) with no
+    // complaint, the medium where it was.
+    let me = (CONTROLLER, [10, 0, 0, 1], 50_000);
+    let dev = (DEVICE, [10, 0, 0, 2], rpc::PNIO_PORT);
+    let object = Uuid::pnio_object(1, 0x0203, 0x002A);
+    let activity: Uuid = "12345678-1234-5678-9abc-def012345678".parse().unwrap();
+    let mut frames = Vec::new();
+    for (i, n) in [1usize, 4].iter().enumerate() {
+        let pd = PortDataReal { extra: vec![0; *n], media_type: 0x0100_0002, ..port(vec![peer("port-002", "switch-a", 10, 0x99)]) };
+        let read = ReadRequest::implicit(i as u16 + 1, 7, 0x8001, record::INDEX_PORT_DATA_REAL, 4032);
+        let request = rpc::read_implicit(ByteOrder::Little, object, activity, i as u32, &read, 4096).unwrap();
+        let answer = rpc::read_answer(&request, &read, PnioStatus::OK, &pd.block().unwrap().encode().unwrap(), 0).unwrap();
+        frames.push(udp(dev, me, &request.encode().unwrap()));
+        frames.push(udp(me, dev, &answer.encode().unwrap()));
+    }
+    let d = common::dissect(&frames);
+    for i in [1, 3] {
+        assert!(d[i].complaints().is_empty(), "{:?}", d[i].complaints());
+        assert_eq!(field(&d[i], "media_type"), [0x0100_0002u32.to_string()]);
+    }
+}
