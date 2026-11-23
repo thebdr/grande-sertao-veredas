@@ -637,7 +637,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
     }
     // The names the reference lists are the reader's.
     let prose = doc_prose();
-    assert!(prose.contains("Each key states in parentheses that it is required, or the value it takes when left out. Every part has a name, exact, with no surrounding whitespace, and no two parts share one. A path is relative to the bench file's folder."));
+    assert!(prose.contains("Each key states in parentheses that it is required, or the value it takes when left out. Every part has a name, exact, with no surrounding whitespace and no dot (a model names a point `<part>.<point>`), and no two parts share one. A path is relative to the bench file's folder."));
     assert!(prose.contains("`format` (required): always `\"veredas-bench\"`."));
     assert_eq!(FORMAT, "veredas-bench");
     assert!(prose.contains("`version` (required): this reader knows `1`."));
@@ -880,7 +880,7 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     let prose = doc_prose();
     assert!(prose.contains("A misspelled key in any table, a part without a name or with a name another part has, an emitter's file name or timestamp format that is bad, a value's range that is empty or not finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP adapter's (an IPv6 bind, an assembly declared twice, a connection naming an assembly there is not, a point past its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name the standard refuses, a port not named `port-xyz` or `port-xyz-abcde`, an alias not a port and a station, an order id or a serial number I&M0 cannot carry) or the EtherCAT segment's (an empty interface, no device, a device's name empty, padded or twice, a product name not 1 to 255 ASCII characters, an entry of 0 or over 64 bits, more than 255 entries or 1024 bytes a way), a scene file that cannot be read or does not load, a model whose scene, belt, sensor, mover or point is not there, a point of the other kind or written by two models, a ramp, a ratio, a stroke or a delay out of its range, a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that does not load against the catalog, a message the catalog lacks or whose fields leave a name unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the place named, before anything binds, opens or spawns."));
     // A part that cannot start: a server on a taken port, named; the emitter before it stopped.
-    assert!(prose.contains("A part that cannot start (a port taken, a folder that cannot be created, an interface that is not there) stops the parts started before it and is named."));
+    assert!(prose.contains("A part that cannot start (a port taken, a listening channel's included, a folder that cannot be created, an interface that is not there) stops the parts started before it and is named."));
     let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let taken = squatter.local_addr().unwrap().port();
     let spec = load(&format!("{}[[opc]]\nname = \"s\"\nport = {taken}\n", emitter("")), &dir).unwrap();
@@ -1211,7 +1211,7 @@ fn the_executable_checks_and_runs_a_bench_file() {
     let out = Command::new(exe).output().unwrap();
     assert_eq!((out.status.code(), String::from_utf8_lossy(&out.stderr).trim()), (Some(1), "usage: veredas-maquinar <bench.toml> [--check] | --version"));
     let out = Command::new(exe).arg(&path).arg("--nope").output().unwrap();
-    assert_eq!(out.status.code(), Some(1));
+    assert_eq!((out.status.code(), String::from_utf8_lossy(&out.stderr).trim()), (Some(1), "unknown option `--nope`\nusage: veredas-maquinar <bench.toml> [--check] | --version"));
     // A run: every part's status line once a second, until stdin says stop.
     let mut child = Command::new(exe).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let stdout = child.stdout.take().unwrap();
@@ -1400,16 +1400,17 @@ actuator = [ { name = "pusher", mover = "pusher", extend = "plc-io.pusher_extend
 ## Keys
 
 Each key states in parentheses that it is required, or the value it takes when left out. Every
-part has a name, exact, with no surrounding whitespace, and no two parts share one. A path is
-relative to the bench file's folder.
+part has a name, exact, with no surrounding whitespace and no dot (a model names a point
+`<part>.<point>`), and no two parts share one. A path is relative to the bench file's folder.
 
 **The top level**.
 - `format` (required): always `"veredas-bench"`.
 - `version` (required): this reader knows `1`. A file of another format or an unknown version is
   refused, never guessed.
-- `seed` (none): the seed of every part's draws, for a run that repeats: each emitter without a
-  seed of its own draws from this seed plus its index, each channel and its controller from
-  this seed; the clock when absent.
+- `seed` (none): the seed of the emitters' and the channels' draws, for a run that repeats:
+  each emitter without a seed of its own draws from this seed plus its index, each channel and
+  its controller from this seed; the clock when absent. An OPC UA server's draws, and a PROFINET
+  device's without a `seed` of its own, take the clock.
 - `out_dir` (`"."`): where the emitters write, created when there is an emitter.
 - `emitter` (none): `[[emitter]]` tables.
 - `opc` (none): `[[opc]]` tables.
@@ -1719,6 +1720,237 @@ bits, more than 255 entries or 1024 bytes a way), a scene file that cannot be re
 does not load against the catalog, a message the catalog lacks or whose fields leave a name
 unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the
 place named, before anything binds, opens or spawns. A part that cannot start (a port taken, a
-folder that cannot be created, an interface that is not there) stops the parts started before it and
-is named.
+listening channel's included, a folder that cannot be created, an interface that is not there)
+stops the parts started before it and is named.
 "#;
+
+/// C-033's third refute round: the critic's probes (`~/.cache/veredas/critic-c033-r3/probes`), kept
+/// as pins: names of every kind and a dotted one, the start, plan and status order of the kinds
+/// added since, emitters first, the plan's emitter line whole, a catalog or controller file that
+/// does not load, a listening channel on a taken port, the executable's exit 2 and its second
+/// file, a Modbus server joined, and the status lines once a second.
+mod round_3 {
+    use super::*;
+
+    /// A folder with the channel file, the catalog and the scene of the references beside it.
+    fn folder(tag: &str) -> PathBuf {
+        let dir = scratch(tag);
+        std::fs::write(dir.join("channel.toml"), &blocks("channel-schema.md")[0]).unwrap();
+        std::fs::write(dir.join("catalog.toml"), &blocks("controller-schema.md")[0]).unwrap();
+        std::fs::write(dir.join("scene.toml"), &blocks("cena-schema.md")[0]).unwrap();
+        dir
+    }
+
+    const MODBUS: &str = "[[modbus]]\nname = \"m\"\nport = 0\npoints = [ { name = \"run\", table = \"coil\", address = 0 }, { name = \"sp\", table = \"holding-register\", address = 0 } ]\n";
+
+    fn listening(name: &str, port: u16) -> String {
+        format!("[[channel]]\nname = \"{name}\"\nrole = \"listen\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n")
+    }
+
+    #[test]
+    fn names_of_channels_scenes_and_models_are_the_file_s_and_none_holds_a_dot() {
+        let dir = folder("names");
+        let port = free_port();
+        let emitter = "[[emitter]]\nname = \"e\"\ntemplate = \"{ts}\"\nts_format = \"%H\"\ninterval_ms = 1\nfile = \"e.log\"\n";
+        for (text, want) in [
+            (format!("{}{emitter}{}", header(), listening("e", port)), "channel[0]: `e` is already the name of the emitter `e`".to_string()),
+            (format!("{}{}", header(), listening(" ", port)), "channel[0]: the channel has no name".to_string()),
+            (format!("{}{MODBUS}[[fisica]]\nname = \"m\"\nscene = \"scene.toml\"\n", header()), "fisica[0]: `m` is already the name of the modbus `m`".to_string()),
+            (format!("{}{MODBUS}[[reflexo]]\nname = \"m\"\n", header()), "reflexo[0]: `m` is already the name of the modbus `m`".to_string()),
+            (format!("{}[[fisica]]\nname = \"sc\"\nscene = \"scene.toml\"\n[[fisica]]\nname = \"sc\"\nscene = \"scene.toml\"\n", header()), "fisica[1]: `sc` is already the name of the fisica `sc`".to_string()),
+            (format!("{}{}", header(), MODBUS.replace("name = \"m\"", "name = \"plc.io\"")), "modbus[0]: the name `plc.io` holds a dot (a model names a point `<part>.<point>`)".to_string()),
+        ] {
+            assert_eq!(refused(&text, &dir), want, "{text}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn adapters_start_before_devices_devices_before_segments_and_channels_after_them() {
+        let dir = folder("order");
+        let squat = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let taken = squat.local_addr().unwrap().port();
+        // An adapter on a taken port and a device on no interface: the adapter is the one named.
+        let spec = load(&format!("{}[[profinet]]\nname = \"d\"\ninterface = \"nowhere0\"\n\n[[ethernetip]]\nname = \"x\"\nport = {taken}\nio_port = 0\n", header()), &dir).unwrap();
+        let err = start_err(spec);
+        assert!(err.starts_with("ethernetip `x`: bind "), "{err}");
+        // A device and a segment, both on no interface: the device is the one named.
+        let spec = load(&format!("{}[[ethercat]]\nname = \"s\"\ninterface = \"nowhere1\"\ndevices = [ {{ name = \"t\" }} ]\n\n[[profinet]]\nname = \"d\"\ninterface = \"nowhere0\"\n", header()), &dir).unwrap();
+        let err = start_err(spec);
+        assert!(err.starts_with("profinet `d`: "), "{err}");
+        // A channel after a failing adapter never dials.
+        let ear = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        ear.set_nonblocking(true).unwrap();
+        let text = format!("{}[[ethernetip]]\nname = \"x\"\nport = {taken}\nio_port = 0\n\n[[channel]]\nname = \"c\"\nrole = \"connect\"\nport = {}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n", header(), ear.local_addr().unwrap().port());
+        assert!(start_err(load(&text, &dir).unwrap()).starts_with("ethernetip `x`: bind "));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(matches!(ear.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock), "a channel dialled before the adapter failed");
+        drop(squat);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn emitters_start_before_a_server_that_cannot() {
+        // An emitter writing as fast as it can, before an OPC UA server on a taken port: started
+        // first, it has written in some of 20 runs; after the server, never.
+        let dir = folder("emitfirst");
+        let squat = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let taken = squat.local_addr().unwrap().port();
+        let mut wrote = 0;
+        for i in 0..20 {
+            let file = format!("e{i}.log");
+            let text = format!("{}[[opc]]\nname = \"s\"\nport = {taken}\n\n[[emitter]]\nname = \"e\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 0\nfile = \"{file}\"\n", header());
+            assert!(start_err(load(&text, &dir).unwrap()).starts_with("opc `s`: bind "));
+            if dir.join(&file).exists() {
+                wrote += 1;
+            }
+        }
+        assert!(wrote > 0, "the emitter never ran before the server failed");
+        drop(squat);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_plan_lists_every_kind_in_the_start_order_and_the_emitter_s_line_whole() {
+        let dir = folder("plan");
+        let port = free_port();
+        let text = format!(
+            "{}{}\n[[reflexo]]\nname = \"rx\"\nscene = \"sc\"\n\n[[fisica]]\nname = \"sc\"\nscene = \"scene.toml\"\n\n[[ethercat]]\nname = \"seg\"\ninterface = \"ec0\"\ndevices = [ {{ name = \"t\" }} ]\n\n[[profinet]]\nname = \"d\"\ninterface = \"pn0\"\n\n[[ethernetip]]\nname = \"x\"\nport = 0\nio_port = 0\n\n{MODBUS}\n[[opc]]\nname = \"o\"\nport = 0\n\n[[emitter]]\nname = \"e\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 1\nfile = \"e.log\"\n",
+            header(),
+            listening("c", port)
+        );
+        let spec = load(&text, &dir).unwrap();
+        let kinds: Vec<String> = spec.plan().iter().map(|l| l.split(' ').next().unwrap().to_string()).collect();
+        assert_eq!(kinds, ["emitter", "opc", "modbus", "ethernetip", "profinet", "ethercat", "fisica", "reflexo", "channel"], "{:?}", spec.plan());
+        let text = format!("{}out_dir = \"logs\"\n[[emitter]]\nname = \"e\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 200\nfile = \"e.log\"\n", header());
+        assert_eq!(load(&text, &dir).unwrap().plan(), [format!("emitter `e`: `e.log` every 200 ms into {}", dir.join("logs").display())]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn scenes_and_models_show_after_the_devices_and_before_the_channels() {
+        let dir = folder("status");
+        let port = free_port();
+        let text = format!("{}{}\n[[reflexo]]\nname = \"rx\"\nscene = \"sc\"\nsensor = [ {{ name = \"s\", sensor = \"B1\", point = \"m.run\" }} ]\n\n[[fisica]]\nname = \"sc\"\nscene = \"scene.toml\"\n\n{MODBUS}", header(), listening("c", port));
+        let bench = Bench::start(load(&text, &dir).unwrap()).unwrap();
+        let names: Vec<String> = bench.status().into_iter().map(|(n, _)| n).collect();
+        let lines: Vec<String> = bench.lines().iter().map(|l| l.split(' ').take(2).collect::<Vec<_>>().join(" ")).collect();
+        bench.stop();
+        assert_eq!((names, lines), (vec!["m".to_string(), "sc".into(), "rx".into(), "c".into()], vec!["modbus m:".to_string(), "fisica sc:".into(), "reflexo rx:".into(), "channel c:".into()]));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn profinet_devices_and_ethercat_segments_show_between_the_adapters_and_the_scenes() {
+        veredas_aranha::netns::isolated("round_3::profinet_devices_and_ethercat_segments_show_between_the_adapters_and_the_scenes", &[("a0", "b0"), ("a1", "b1")], || {
+            let dir = folder("status-raw");
+            let text = format!(
+                "{}[[fisica]]\nname = \"sc\"\nscene = \"scene.toml\"\n\n[[ethercat]]\nname = \"seg\"\ninterface = \"b1\"\ndevices = [ {{ name = \"t\" }} ]\n\n[[profinet]]\nname = \"d\"\ninterface = \"b0\"\nhello = false\nlldp_interval_ms = 0\n\n[[ethernetip]]\nname = \"x\"\nport = 0\nio_port = 0\n",
+                header()
+            );
+            let bench = Bench::start(load(&text, &dir).unwrap()).unwrap();
+            let names: Vec<String> = bench.status().into_iter().map(|(n, _)| n).collect();
+            let kinds: Vec<String> = bench.lines().iter().map(|l| l.split(' ').next().unwrap().to_string()).collect();
+            bench.stop();
+            assert_eq!(names, ["x", "d", "seg", "sc"]);
+            assert_eq!(kinds, ["ethernetip", "profinet", "ethercat", "fisica"]);
+            std::fs::remove_dir_all(&dir).unwrap();
+        });
+    }
+
+    #[test]
+    fn a_catalog_or_a_controller_file_that_cannot_be_read_or_does_not_load_is_named() {
+        let dir = folder("files");
+        let port = free_port();
+        let channel = |body: &str| format!("{}{}{body}", header(), listening("c", port));
+        let err = refused(&channel("").replace("catalog = \"catalog.toml\"", "catalog = \"nope.toml\""), &dir);
+        assert!(err.starts_with(&format!("channel[0] (`c`).catalog: read {}: ", dir.join("nope.toml").display())), "{err}");
+        std::fs::write(dir.join("not-a-catalog.toml"), "format = \"veredas-channel\"\nversion = 1\n").unwrap();
+        let err = refused(&channel("").replace("catalog = \"catalog.toml\"", "catalog = \"not-a-catalog.toml\""), &dir);
+        assert!(err.starts_with(&format!("channel[0] (`c`).catalog ({}): ", dir.join("not-a-catalog.toml").display())), "{err}");
+        let err = refused(&channel("controller = \"nope.toml\"\n"), &dir);
+        assert!(err.starts_with(&format!("channel[0] (`c`).controller: read {}: ", dir.join("nope.toml").display())), "{err}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_listening_channel_on_a_taken_port_cannot_start_and_the_parts_before_it_stop() {
+        let dir = folder("chport");
+        let squat = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let taken = squat.local_addr().unwrap().port();
+        let q = free_port();
+        let text = format!("{}[[opc]]\nname = \"s\"\nport = {q}\n\n{}", header(), listening("c", taken));
+        let err = start_err(load(&text, &dir).unwrap());
+        assert!(err.starts_with(&format!("channel `c`: binding 127.0.0.1:{taken}: ")), "{err}");
+        assert!(std::net::TcpListener::bind(("127.0.0.1", q)).is_ok(), "the server before it stopped, its port free");
+        // The executable: exit 2, the reason on stderr.
+        let path = dir.join("bench.toml");
+        std::fs::write(&path, &text).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_veredas-maquinar")).arg(&path).stdin(Stdio::null()).output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        assert_eq!(out.status.code(), Some(2), "{stderr}");
+        assert!(stderr.starts_with(&format!("{}: channel `c`: binding 127.0.0.1:{taken}: ", path.display())), "{stderr}");
+        drop(squat);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_executable_exits_2_when_a_part_cannot_start_and_1_for_a_second_file() {
+        let exe = env!("CARGO_BIN_EXE_veredas-maquinar");
+        let dir = folder("exit");
+        let squat = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let taken = squat.local_addr().unwrap().port();
+        let path = dir.join("bench.toml");
+        std::fs::write(&path, format!("{}[[opc]]\nname = \"s\"\nport = {taken}\n", header())).unwrap();
+        let out = Command::new(exe).arg(&path).stdin(Stdio::null()).output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        assert_eq!(out.status.code(), Some(2), "{stderr}");
+        assert!(stderr.starts_with(&format!("{}: opc `s`: bind 127.0.0.1:{taken}: ", path.display())), "{stderr}");
+        // Two bench files named: a usage error, neither read.
+        let out = Command::new(exe).arg(dir.join("first.toml")).arg(&path).arg("--check").output().unwrap();
+        assert_eq!(
+            (out.status.code(), String::from_utf8_lossy(&out.stderr).trim().to_string()),
+            (Some(1), format!("a second bench file `{}`\nusage: veredas-maquinar <bench.toml> [--check] | --version", path.display()))
+        );
+        drop(squat);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_modbus_server_before_a_failing_part_is_joined_its_port_free_at_once() {
+        let dir = folder("mbjoin");
+        let squat = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let taken = squat.local_addr().unwrap().port();
+        let q = free_port();
+        let spec = load(&format!("{}[[ethernetip]]\nname = \"x\"\nport = {taken}\nio_port = 0\n\n[[modbus]]\nname = \"m\"\nport = {q}\n", header()), &dir).unwrap();
+        assert!(start_err(spec).starts_with("ethernetip `x`: bind "));
+        assert!(std::net::TcpListener::bind(("127.0.0.1", q)).is_ok());
+        drop(squat);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_executable_prints_the_status_lines_once_a_second() {
+        let dir = folder("tick");
+        let path = dir.join("bench.toml");
+        std::fs::write(&path, format!("{}[[opc]]\nname = \"s\"\nport = 0\n", header())).unwrap();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_veredas-maquinar")).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut reader = std::io::BufReader::new(child.stdout.take().unwrap());
+        let mut at = Vec::new();
+        let mut line = String::new();
+        while at.len() < 3 {
+            line.clear();
+            assert_ne!(reader.read_line(&mut line).unwrap(), 0, "the executable ended");
+            if line.starts_with("opc s: ") {
+                at.push(Instant::now());
+            }
+        }
+        let _ = child.stdin.take().unwrap().write_all(b"stop\n");
+        child.wait().unwrap();
+        // The first at the start, then once a second.
+        let gap = at[2] - at[1];
+        assert!(gap >= Duration::from_millis(500) && gap <= Duration::from_millis(2500), "{gap:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

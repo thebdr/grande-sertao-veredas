@@ -32,6 +32,10 @@ fn main() {
                 eprintln!("unknown option `{other}`\nusage: veredas-maquinar <bench.toml> [--check] | --version");
                 std::process::exit(1);
             }
+            other if file.is_some() => {
+                eprintln!("a second bench file `{other}`\nusage: veredas-maquinar <bench.toml> [--check] | --version");
+                std::process::exit(1);
+            }
             other => file = Some(PathBuf::from(other)),
         }
     }

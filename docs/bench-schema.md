@@ -213,16 +213,17 @@ actuator = [ { name = "pusher", mover = "pusher", extend = "plc-io.pusher_extend
 ## Keys
 
 Each key states in parentheses that it is required, or the value it takes when left out. Every
-part has a name, exact, with no surrounding whitespace, and no two parts share one. A path is
-relative to the bench file's folder.
+part has a name, exact, with no surrounding whitespace and no dot (a model names a point
+`<part>.<point>`), and no two parts share one. A path is relative to the bench file's folder.
 
 **The top level**.
 - `format` (required): always `"veredas-bench"`.
 - `version` (required): this reader knows `1`. A file of another format or an unknown version is
   refused, never guessed.
-- `seed` (none): the seed of every part's draws, for a run that repeats: each emitter without a
-  seed of its own draws from this seed plus its index, each channel and its controller from
-  this seed; the clock when absent.
+- `seed` (none): the seed of the emitters' and the channels' draws, for a run that repeats:
+  each emitter without a seed of its own draws from this seed plus its index, each channel and
+  its controller from this seed; the clock when absent. An OPC UA server's draws, and a PROFINET
+  device's without a `seed` of its own, take the clock.
 - `out_dir` (`"."`): where the emitters write, created when there is an emitter.
 - `emitter` (none): `[[emitter]]` tables.
 - `opc` (none): `[[opc]]` tables.
@@ -532,5 +533,5 @@ bits, more than 255 entries or 1024 bytes a way), a scene file that cannot be re
 does not load against the catalog, a message the catalog lacks or whose fields leave a name
 unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the
 place named, before anything binds, opens or spawns. A part that cannot start (a port taken, a
-folder that cannot be created, an interface that is not there) stops the parts started before it and
-is named.
+listening channel's included, a folder that cannot be created, an interface that is not there)
+stops the parts started before it and is named.

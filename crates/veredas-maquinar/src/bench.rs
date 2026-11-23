@@ -498,6 +498,10 @@ pub fn load(text: &str, base: &Path) -> Result<BenchSpec, BenchError> {
         if n != n.trim() {
             return Err(invalid(format!("{place}: the name `{n}` has surrounding whitespace")));
         }
+        // A model names a point `<part>.<point>`: a part's name holding a dot could not be named.
+        if n.contains('.') {
+            return Err(invalid(format!("{place}: the name `{n}` holds a dot (a model names a point `<part>.<point>`)")));
+        }
         if let Some(other) = names.insert(n.to_string(), format!("{kind} `{n}`")) {
             return Err(invalid(format!("{place}: `{n}` is already the name of the {other}")));
         }
@@ -753,8 +757,23 @@ impl Bench {
         }
         for c in spec.channels {
             let name = c.name.clone();
+            let listens = matches!(c.role, Role::Listen { .. });
             let handle = channel::start(ChannelConfig { name: c.name, role: c.role, spec: c.spec, catalog: c.catalog, messages: c.messages, controller: c.controller, seed: spec.seed })
                 .map_err(|source| BenchError::Channel { name: name.clone(), source })?;
+            // A listening channel either listens or cannot start, as a server's port taken: its
+            // wire says which within moments (a dialling one retries, so it has no such moment).
+            if listens {
+                let begun = std::time::Instant::now();
+                let mut wire = handle.status().wire;
+                while wire.state == "starting" && begun.elapsed() < std::time::Duration::from_secs(5) {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    wire = handle.status().wire;
+                }
+                if wire.state == "failed" {
+                    let why = wire.last_error.unwrap_or_else(|| "cannot listen".into());
+                    return Err(BenchError::Channel { name, source: ChannelError::Listen(why) });
+                }
+            }
             bench.channels.push((name, handle));
         }
         Ok(bench)

@@ -65,6 +65,9 @@ pub enum ChannelError {
     UnknownMessage { index: usize, message: String },
     #[error("spawn the channel thread: {0}")]
     Thread(std::io::Error),
+    /// A listening channel that could not listen (its port taken): what its wire said.
+    #[error("{0}")]
+    Listen(String),
 }
 
 /// Which way a monitor line went.
