@@ -52,9 +52,17 @@ impl Package {
         Ok(out)
     }
 
+    /// A part as text. SpreadsheetML written under a namespace prefix is refused, whatever the
+    /// edits: the patcher reads and writes its tags by their unprefixed names, as Excel writes them.
     pub fn read_text(&mut self, name: &str) -> Result<String, PatchError> {
-        String::from_utf8(self.read(name)?)
-            .map_err(|_| PatchError::Malformed(format!("{name}: not UTF-8")))
+        let text = String::from_utf8(self.read(name)?)
+            .map_err(|_| PatchError::Malformed(format!("{name}: not UTF-8")))?;
+        if let Some(root) = xml::prefixed_main_root(&text) {
+            return Err(PatchError::Unsupported(format!(
+                "{name} writes SpreadsheetML under a namespace prefix (<{root}>); the patcher reads it unprefixed, as Excel writes it"
+            )));
+        }
+        Ok(text)
     }
 
     /// Writes the package: entries in their original order (replaced ones

@@ -1106,6 +1106,38 @@ fn a_raw_tab_or_line_feed_in_a_moved_attribute_is_the_space_xml_reads_it_as() {
 }
 
 #[test]
+fn spreadsheetml_under_a_namespace_prefix_is_refused_with_its_reason() {
+    // the .NET Open XML SDK's default spelling, which the engine reads: the patcher reads tags by
+    // their unprefixed names and refuses it, with nothing to do or something
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("prefixed.xlsx");
+    let sheet = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><x:worksheet xmlns:x="{MAIN}"><x:sheetData><x:row r="1"><x:c r="A1"><x:v>1</x:v></x:c></x:row></x:sheetData></x:worksheet>"#
+    );
+    let book = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><x:workbook xmlns:x="{MAIN}" xmlns:r="{R}"><x:sheets><x:sheet name="S" sheetId="1" r:id="rId1"/></x:sheets></x:workbook>"#
+    );
+    write_package(
+        &src,
+        &[
+            ("xl/workbook.xml", book),
+            ("xl/_rels/workbook.xml.rels", rels(&[rel("rId1", "worksheet", "worksheets/sheet1.xml")])),
+            ("xl/worksheets/sheet1.xml", sheet),
+        ],
+    );
+    let dst = dir.path().join("out.xlsx");
+    for edits in [vec![], vec![value("S", "A1", serde_json::json!(2))]] {
+        match patch(&src, &dst, &edits, &verified()) {
+            Err(PatchError::Unsupported(m)) => {
+                assert!(m.contains("xl/workbook.xml") && m.contains("<x:workbook>") && m.contains("namespace prefix"), "{m}")
+            }
+            other => panic!("{edits:?}: {other:?}"),
+        }
+        assert!(!dst.exists());
+    }
+}
+
+#[test]
 fn a_plain_formula_is_not_already_the_array_an_edit_writes() {
     // D1 holds SUM(A1:A3*B1:B3) plain, as openpyxl or an older Excel write it: Excel reads 10
     let dir = tempfile::tempdir().unwrap();

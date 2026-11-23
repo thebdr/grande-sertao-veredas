@@ -52,6 +52,18 @@ pub fn next_tag(s: &str, mut from: usize) -> Option<Tag<'_>> {
     }
 }
 
+/// SpreadsheetML's main namespace.
+pub const MAIN_NS: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
+/// The root element's name when it is SpreadsheetML's main namespace under a prefix
+/// (`x:worksheet`, as the .NET Open XML SDK writes it by default): the patcher reads tags by their
+/// literal, unprefixed names, as Excel writes them.
+pub fn prefixed_main_root(s: &str) -> Option<String> {
+    let root = next_tag(s, 0)?;
+    let (prefix, _) = root.name.split_once(':')?;
+    (attr(root.text, &format!("xmlns:{prefix}")) == Some(MAIN_NS)).then(|| root.name.to_string())
+}
+
 /// The `>` that ends the tag starting at `lt` (quoted values may hold `>`).
 fn tag_end(b: &[u8], lt: usize) -> Option<usize> {
     let mut i = lt + 1;

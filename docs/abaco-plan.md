@@ -426,6 +426,10 @@ workspace/log.txt             the log, one escaped entry per line
   as text, and refuses an edit of it.
 - **A one-cell merge is no merge**; an empty list (`<hyperlinks/>`, `<mergeCells/>`) is no list.
 - **A carriage return is `_x000D_` in text and `&#13;` in an attribute**, written in one pass.
+- **SpreadsheetML under a namespace prefix is refused** (`<x:worksheet xmlns:x="…main">`, the
+  .NET Open XML SDK's default; C-223's eighth round): the patcher reads tags by their literal,
+  unprefixed names, as Excel writes them, so a part whose root is the main namespace under a
+  prefix refuses the patch, whatever its edits, naming the part.
 - **An attribute's raw whitespace is a space** (XML's attribute-value normalization; C-223's
   eighth round): a moved `cfvo` formula or text link is read as any reader reads it, a raw tab,
   line feed or CR LF one space, `&#9;` a tab.
