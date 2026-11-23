@@ -176,6 +176,46 @@ pub fn differs_from(root: &Path, commit: &str) -> Result<Option<String>, git::Gi
     Ok(None)
 }
 
+/// The cut once the builder handed its executables back (`built`): the builder's toolchain held to
+/// the one the suite ran with (`rustc`), the bundle `name` assembled from the executables (each held
+/// to the tester machine's libraries, [`bundle::assemble`]) and packed in `work`, then extracted again
+/// and checked against its sums ([`unpack_checked`]). Hands back the archive and the extracted bundle.
+#[allow(clippy::too_many_arguments)]
+pub fn after_build(
+    recipe: &Recipe,
+    root: &Path,
+    commit: &str,
+    rustc: &str,
+    built: &builder::Built,
+    name: &str,
+    bins: &[String],
+    components: &[String],
+    text: &str,
+    work: &Path,
+) -> Result<(PathBuf, PathBuf), CutError> {
+    if built.toolchain != rustc {
+        return Err(refused(format!("the builder ran `{}`, the suite was tested with `{rustc}`", built.toolchain)));
+    }
+    let packed = bundle::assemble(recipe, root, commit, name, &built.out.join("bin"), bins, components, text, work)?;
+    let extracted = unpack_checked(&packed, &work.join("check"), name)?;
+    Ok((packed, extracted))
+}
+
+/// The archive `packed` extracted into `check` (emptied first) and its bundle `name` there checked
+/// against its own `SHA256SUMS`: every file that does not match, is missing or is not listed refused
+/// by name. Hands back the extracted bundle.
+pub fn unpack_checked(packed: &Path, check: &Path, name: &str) -> Result<PathBuf, CutError> {
+    let _ = std::fs::remove_dir_all(check);
+    std::fs::create_dir_all(check)?;
+    vm::run("tar", &["-xzf", &packed.display().to_string(), "-C", &check.display().to_string()], None)?;
+    let extracted = check.join(name);
+    let wrong = bundle::verify_sums(&extracted)?;
+    if !wrong.is_empty() {
+        return Err(refused(format!("the packed bundle does not match its sums:\n{}", wrong.join("\n"))));
+    }
+    Ok(extracted)
+}
+
 pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     let git_text = |args: &[&str]| -> Result<String, CutError> {
         git::text(root, args).map_err(|e| refused(e.to_string()))?.ok_or_else(|| refused(format!("git {} answered no", args.join(" "))))
@@ -255,21 +295,9 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     std::fs::create_dir_all(&o.work)?;
     let built = builder::build(&recipe, root, &commit, &toolchain, &packages, &bins, &o.work)?;
     eprintln!("entrega: built under {} on {}", built.toolchain, built.libc);
-    if built.toolchain != rustc {
-        return Err(refused(format!("the builder ran `{}`, the suite was tested with `{rustc}`", built.toolchain)));
-    }
     let name = format!("veredas-{}-{target}", o.release);
     let names: Vec<String> = held.keys().cloned().collect();
-    let packed = bundle::assemble(&recipe, root, &commit, &name, &built.out.join("bin"), &bins, &names, &text, &o.work)?;
-    let check = o.work.join("check");
-    let _ = std::fs::remove_dir_all(&check);
-    std::fs::create_dir_all(&check)?;
-    vm::run("tar", &["-xzf", &packed.display().to_string(), "-C", &check.display().to_string()], None)?;
-    let extracted = check.join(&name);
-    let wrong = bundle::verify_sums(&extracted)?;
-    if !wrong.is_empty() {
-        return Err(refused(format!("the packed bundle does not match its sums:\n{}", wrong.join("\n"))));
-    }
+    let (packed, extracted) = after_build(&recipe, root, &commit, &rustc, &built, &name, &bins, &names, &text, &o.work)?;
     eprintln!("entrega: running the bundle's bench and supervisão together");
     let report = together::run(&extracted, &o.work.join("together"))?;
     let faults = together::faults(&report);

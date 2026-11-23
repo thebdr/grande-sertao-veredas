@@ -10,11 +10,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use entrega::builder;
 use entrega::bundle;
 use entrega::cut::{self, CutError, Options};
 use entrega::machine::Recipe;
 use entrega::manifest;
 use entrega::together::{self, Answer, Report};
+use entrega::vm::{self, VmError};
 use serde_json::{Value, json};
 
 fn repo_root() -> PathBuf {
@@ -636,7 +638,7 @@ fn a_real_cuts_suite_is_the_whole_default_profile_behind_the_lock_and_the_tree_j
     let (out, log) = cut_with_suite(&r, cache.path(), 1, "exit 0");
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(stderr(&out), format!("{}the suite does not build at {commit} (exit status: 1): no release is cut from it\n", start(&commit)));
-    assert_eq!(log, [built.clone()]);
+    assert_eq!(log, std::slice::from_ref(&built));
     assert!(!work.exists() && !manifest.exists());
 
     // A red suite.
@@ -675,4 +677,195 @@ fn a_real_cuts_suite_is_the_whole_default_profile_behind_the_lock_and_the_tree_j
     assert!(text.starts_with(&start(&moved)), "{text}");
     assert!(text.contains(&format!("entrega: downloading {base} once into {}\n", cache.path().join("entrega-stub.qcow2").display())), "{text}");
     assert!(work.exists() && !manifest.exists());
+}
+
+/// A dynamic executable compiled here with the C compiler, standing in for one the builder made:
+/// it needs the host's C library at the versions the host's compiler links against.
+fn stand_in(dir: &Path, name: &str) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let c = src.path().join("main.c");
+    std::fs::write(&c, "int main(void) { return 0; }\n").unwrap();
+    let exe = dir.join(name);
+    let out = Command::new("cc").arg("-o").arg(&exe).arg(&c).output().unwrap();
+    assert!(out.status.success(), "cc: {}", String::from_utf8_lossy(&out.stderr));
+    exe
+}
+
+#[test]
+fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_a_bundle_off_its_sums() {
+    let c = clone();
+    let commit = String::from_utf8(Command::new("git").arg("-C").arg(c.path()).args(["rev-parse", "HEAD"]).output().unwrap().stdout).unwrap().trim().to_string();
+    let built_dir = tempfile::tempdir().unwrap();
+    let bin = built_dir.path().join("bin");
+    stand_in(&bin, "primeiro");
+    stand_in(&bin, "segundo");
+    let built = |toolchain: &str| builder::Built { out: built_dir.path().to_path_buf(), toolchain: toolchain.into(), libc: "ldd (Debian GLIBC 2.41-12) 2.41".into() };
+    let bins = vec!["primeiro".to_string(), "segundo".to_string()];
+    let components = vec!["veredas-core".to_string()];
+    let name = "veredas-9.9.9-x86_64-unknown-linux-gnu";
+    let rustc = "rustc 1.100.0 (0ef1bc386 2026-11-09)";
+    let text = "# the manifest's text\n";
+    let work = tempfile::tempdir().unwrap();
+    let packed = work.path().join(format!("{name}.tar.gz"));
+
+    // The builder ran another toolchain than the suite: refused before anything is assembled.
+    match cut::after_build(&recipe(), c.path(), &commit, rustc, &built("rustc 1.99.0 (5a1b2c3d4 2026-10-01)"), name, &bins, &components, text, work.path()) {
+        Err(CutError::Refused(e)) => assert_eq!(e, format!("the builder ran `rustc 1.99.0 (5a1b2c3d4 2026-10-01)`, the suite was tested with `{rustc}`")),
+        other => panic!("not refused: {other:?}"),
+    }
+    assert!(!work.path().join(name).exists() && !packed.exists());
+
+    // Executables needing more of the C library than the tester machine offers: each refused by
+    // name, nothing packed.
+    let glibc = bundle::needs(&vm::run("objdump", &["-p", &bin.join("primeiro").display().to_string()], None).unwrap())["GLIBC"].clone();
+    let mut old = recipe();
+    old.base.glibc = "2.2".into();
+    match cut::after_build(&old, c.path(), &commit, rustc, &built(rustc), name, &bins, &components, text, work.path()) {
+        Err(CutError::Vm(VmError::Failed { program, status, stderr })) => {
+            assert_eq!((program.as_str(), status.as_str()), ("the executables' check", "refused"));
+            assert_eq!(
+                stderr,
+                format!(
+                    "primeiro needs GLIBC_{glibc}, the tester machine offers GLIBC_2.2: it would not start there\nsegundo needs GLIBC_{glibc}, the tester machine offers GLIBC_2.2: it would not start there"
+                )
+            );
+        }
+        other => panic!("not refused: {other:?}"),
+    }
+    assert!(!packed.exists());
+
+    // Right: packed, extracted again into `check`, matching its sums, the executables as built.
+    let (p, extracted) = cut::after_build(&recipe(), c.path(), &commit, rustc, &built(rustc), name, &bins, &components, text, work.path()).unwrap();
+    assert_eq!((p, extracted.clone()), (packed.clone(), work.path().join("check").join(name)));
+    assert_eq!(bundle::verify_sums(&extracted).unwrap(), Vec::<String>::new());
+    for b in &bins {
+        assert_eq!(std::fs::read(extracted.join("bin").join(b)).unwrap(), std::fs::read(bin.join(b)).unwrap());
+    }
+    assert_eq!(std::fs::read_to_string(extracted.join("release.toml")).unwrap(), text);
+    assert!(extracted.join("planta/bench.toml").is_file());
+
+    // The archive changed after it was packed (a file changed, one added, one taken out): its
+    // extraction is refused, each file named.
+    let again = tempfile::tempdir().unwrap();
+    vm::run("tar", &["-xzf", &packed.display().to_string(), "-C", &again.path().display().to_string()], None).unwrap();
+    let inner = again.path().join(name);
+    std::fs::write(inner.join("release.toml"), "# another text\n").unwrap();
+    std::fs::write(inner.join("extra.txt"), "not packed by the cut\n").unwrap();
+    std::fs::remove_file(inner.join("bin/segundo")).unwrap();
+    let tampered = again.path().join("tampered.tar.gz");
+    bundle::pack(again.path(), name, "1", &tampered).unwrap();
+    match cut::unpack_checked(&tampered, &work.path().join("check"), name) {
+        Err(CutError::Refused(e)) => assert_eq!(
+            e,
+            "the packed bundle does not match its sums:\nextra.txt is not in SHA256SUMS\nrelease.toml does not match its sum\nbin/segundo is in SHA256SUMS and not in the bundle"
+        ),
+        other => panic!("not refused: {other:?}"),
+    }
+    assert!(!work.path().join("check").join(name).join("bin/primeiro").exists() || work.path().join("check").join(name).join("extra.txt").exists(), "the check folder holds the tampered archive alone");
+}
+
+#[test]
+fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_did_not_build() {
+    let r = recipe();
+    assert_eq!(r.builder.cpus, 4);
+    let packages = vec!["veredas-maquinar".to_string(), "veredas-portal".to_string()];
+    let bins = vec!["veredas-bancada".to_string(), "veredas-portal".to_string()];
+    let script = builder::script(&r, &packages, &bins);
+    assert_eq!(
+        script,
+        "set -eu\nexport RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
+         cd /build/src\nmkdir -p /build/out/bin\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
+         cargo build --release --locked --offline --jobs 4 -p veredas-maquinar -p veredas-portal --bins\nmissing=\n\
+         if [ -f target/release/veredas-bancada ]; then cp target/release/veredas-bancada /build/out/bin/; else echo \"ENTREGA-MISSING veredas-bancada\"; missing=1; fi\n\
+         if [ -f target/release/veredas-portal ]; then cp target/release/veredas-portal /build/out/bin/; else echo \"ENTREGA-MISSING veredas-portal\"; missing=1; fi\n\
+         [ -z \"$missing\" ]\necho ENTREGA-BUILD-OK\n"
+    );
+    // The script run here as the builder runs it (its `/build` a folder of the test's, stand-ins
+    // for `cargo` and `rustc` first on its PATH), once with every bin built and once with one not.
+    use std::os::unix::fs::PermissionsExt;
+    for built in [vec!["veredas-bancada", "veredas-portal"], vec!["veredas-bancada"]] {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("build");
+        let stub = d.path().join("stub");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("out")).unwrap();
+        std::fs::create_dir_all(&stub).unwrap();
+        let touch: String = built.iter().map(|b| format!(" target/release/{b}")).collect();
+        for (name, text) in [
+            ("cargo", format!("#!/bin/sh\necho \"cargo $*\" >> '{}'\nmkdir -p target/release\ntouch{touch}\n", d.path().join("calls").display())),
+            ("rustc", "#!/bin/sh\necho 'rustc 1.100.0 (0ef1bc386 2026-11-09)'\n".to_string()),
+        ] {
+            std::fs::write(stub.join(name), text).unwrap();
+            std::fs::set_permissions(stub.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let here = script.replace("/build", &root.display().to_string()).replace("PATH=/opt/cargo/bin:", &format!("PATH={}:", stub.display()));
+        let log_path = root.join("out/build.log");
+        let status = Command::new("sh").arg("-c").arg(format!("sh -c \"$1\" > '{}' 2>&1", log_path.display())).arg("sh").arg(&here).status().unwrap();
+        let log = std::fs::read_to_string(&log_path).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("calls")).unwrap(),
+            "cargo build --release --locked --offline --jobs 4 -p veredas-maquinar -p veredas-portal --bins\n"
+        );
+        assert_eq!(std::fs::read_to_string(root.join("out/toolchain")).unwrap(), "rustc 1.100.0 (0ef1bc386 2026-11-09)\n");
+        let mut shipped: Vec<String> = std::fs::read_dir(root.join("out/bin")).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        shipped.sort();
+        assert_eq!(shipped, built);
+        let console = format!("ENTREGA-BUILD-EXIT {}", status.code().unwrap());
+        let judged = builder::outcome(&log, &console, true, &log_path);
+        if built.len() == 2 {
+            assert!(status.success() && log.ends_with("ENTREGA-BUILD-OK\n"), "{log}");
+            assert!(judged.is_ok(), "{judged:?}");
+        } else {
+            assert_eq!(status.code(), Some(1), "{log}");
+            assert_eq!(log, "ENTREGA-MISSING veredas-portal\n");
+            match judged {
+                Err(VmError::Failed { program, status, stderr }) => assert_eq!(
+                    (program.as_str(), status.as_str(), stderr.as_str()),
+                    (
+                        "the build in the builder machine",
+                        "refused",
+                        "cargo built no `veredas-portal` with the default features (a required feature they do not turn on): the release would not ship it"
+                    )
+                ),
+                other => panic!("not refused: {other:?}"),
+            }
+        }
+    }
+    // A build that did not finish: no OK in its log, another exit on the console, its disk unread.
+    let log_path = Path::new("/build/out/build.log");
+    for (log, console, unpacked) in [("cargo: error\n", "ENTREGA-BUILD-EXIT 0", true), ("ENTREGA-BUILD-OK\n", "ENTREGA-BUILD-EXIT 101", true), ("ENTREGA-BUILD-OK\n", "ENTREGA-BUILD-EXIT 0", false)] {
+        match builder::outcome(log, console, unpacked, log_path) {
+            Err(VmError::Failed { program, status, .. }) => {
+                assert_eq!((program.as_str(), status.as_str()), ("the build in the builder machine", "no ENTREGA-BUILD-OK (its log: /build/out/build.log)"))
+            }
+            other => panic!("not refused: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_machine_starts_with_12_gb_available_and_the_engines_lock_is_the_one_flock_takes() {
+    assert_eq!(vm::AVAILABLE_BEFORE_A_MACHINE, 12 * 1024 * 1024 * 1024);
+    assert_eq!(vm::memory_available_in("MemTotal:       65000000 kB\nMemFree:         9000000 kB\nMemAvailable:   12582912 kB\n"), Some(12 << 30));
+    assert_eq!(vm::memory_available_in("MemTotal:       65000000 kB\n"), None);
+    // Under the rule a machine is refused once the wait is over, the two amounts named.
+    let now = vm::available_memory().unwrap();
+    assert!(vm::wait_for_memory(now / 2, std::time::Duration::ZERO).is_ok());
+    match vm::wait_for_memory(u64::MAX, std::time::Duration::ZERO) {
+        Err(VmError::Failed { program, status, stderr }) => {
+            assert_eq!((program.as_str(), status.as_str()), ("the machine's start", "refused"));
+            assert!(stderr.starts_with("the host has ") && stderr.ends_with(&format!(" MB available, a machine waits for {} MB", u64::MAX >> 20)), "{stderr}");
+        }
+        other => panic!("not refused: {other:?}"),
+    }
+    // The engine's lock is the file `flock` locks, held exclusively until it is dropped.
+    assert_eq!(vm::ENGINE_LOCK, "/tmp/veredas-engine.lock");
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join("engine.lock");
+    let free = || Command::new("flock").arg("-n").arg(&f).arg("true").status().unwrap().success();
+    let held = vm::lock(&f).unwrap();
+    assert!(!free(), "flock took the lock while entrega held it");
+    drop(held);
+    assert!(free(), "the lock outlived its holder");
 }

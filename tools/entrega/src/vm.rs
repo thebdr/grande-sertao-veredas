@@ -250,12 +250,17 @@ pub const AVAILABLE_BEFORE_A_MACHINE: u64 = 12 << 30;
 /// The host's available memory in bytes, `MemAvailable` of `/proc/meminfo`.
 pub fn available_memory() -> Result<u64, VmError> {
     let text = std::fs::read_to_string("/proc/meminfo")?;
-    text.lines()
+    memory_available_in(&text).ok_or_else(|| VmError::Io(std::io::Error::other("/proc/meminfo holds no MemAvailable")))
+}
+
+/// `MemAvailable` of a `/proc/meminfo` text, in bytes; `None` when it holds none.
+pub fn memory_available_in(meminfo: &str) -> Option<u64> {
+    meminfo
+        .lines()
         .find_map(|l| l.strip_prefix("MemAvailable:"))
         .and_then(|v| v.split_whitespace().next())
         .and_then(|kb| kb.parse::<u64>().ok())
         .map(|kb| kb * 1024)
-        .ok_or_else(|| VmError::Io(std::io::Error::other("/proc/meminfo holds no MemAvailable")))
 }
 
 /// Waits until the host has `bytes` available, checking every 30 s, and refuses after `within`.
@@ -281,8 +286,17 @@ pub fn wait_for_memory(bytes: u64, within: Duration) -> Result<(), VmError> {
 /// Holds the machine's lock for compiling the database engine (`/tmp/veredas-engine.lock`, the
 /// one `flock` takes): one build of the engine at a time on the host, a builder machine's included.
 pub fn engine_lock() -> Result<std::fs::File, VmError> {
-    let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open("/tmp/veredas-engine.lock")?;
-    eprintln!("entrega: waiting for the engine's lock (/tmp/veredas-engine.lock)");
+    eprintln!("entrega: waiting for the engine's lock ({ENGINE_LOCK})");
+    lock(Path::new(ENGINE_LOCK))
+}
+
+/// The host's lock for compiling the database engine, which `flock` takes too (CLAUDE.md).
+pub const ENGINE_LOCK: &str = "/tmp/veredas-engine.lock";
+
+/// The exclusive lock on the file at `path`, the one `flock` takes, waited for and held until the
+/// file handed back is dropped.
+pub fn lock(path: &Path) -> Result<std::fs::File, VmError> {
+    let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path)?;
     f.lock()?;
     Ok(f)
 }
