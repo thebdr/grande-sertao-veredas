@@ -96,8 +96,9 @@ so through portal, the row L5's map already holds); Excel as a renderer (Q342).
   that reads plant data. The oracle, a tool, may depend on anything, and reads its baseline through
   core's header reader.
 - **L6, plan first.** This file, committed before the crate.
-- **L7, stamps.** Every TOML part Ábaco writes states `format` (`veredas-abaco`,
-  `veredas-abaco-prefs`, `veredas-abaco-edits`) and `version` from 1. The fork's two crates hold no
+- **L7, stamps.** Every TOML part Ábaco writes states `format` (`veredas-abaco` and its parts'
+  `veredas-abaco-<part>`, `docs/abaco-file.md`; `veredas-abaco-prefs`, `veredas-abaco-edits`)
+  and `version` from 1. The fork's two crates hold no
   TOML file but their manifests; upstream's bindings, which do, are not carried.
 
 ## What it absorbs from Veredas 1
@@ -240,7 +241,9 @@ workspace/log.txt             the log, one escaped entry per line
 - **Numbers read back exactly**: a whole number under 10^15 written as an integer, any other as
   the shortest text that reads back as the same double.
 - **Tools' records are TOML tables**: a decision, a queue entry or a state holds no null (TOML has
-  none); one is refused when written, by its tool and place.
+  none).
+- **The engine's structures pass through JSON** (styles, theme, names, a sheet's structure): their
+  none is JSON's null, written `nan`, which no JSON value holds; their keys come sorted.
 - **What it does not know it keeps**: a part this Ábaco does not read is written back as it came,
   so a newer Ábaco's additions survive an older one's save.
 - **Written through a file beside the destination**, then renamed over it, the previous file kept
@@ -249,7 +252,8 @@ workspace/log.txt             the log, one escaped entry per line
 - **Proof:** every workbook of the corpus opened, written as `.abaco`, read back: every cell's
   content, style and value after recalculation, and every part the engine holds (styles, names,
   metadata, settings, theme, tables, links, each sheet's structure) equal; written again to the
-  same bytes; exported to `.xlsx` through the fork's writer and opened again to the same values.
+  same bytes; exported to `.xlsx` through the fork's writer and opened again to the same values
+  (but a workbook with tables: the fork's writer writes none).
   The workspace's parts round trip on their own tests; a wrong format, a newer version, a missing
   part and a broken line are each refused by name.
 
@@ -270,10 +274,11 @@ workspace/log.txt             the log, one escaped entry per line
    is written as the cells it reads (the engine parses it to them). Its edits come
    through the API; an edit file, stamped TOML, comes with the command line, once core's header
    reader can be had without core's network layers (asked of core).
-3. **The `.abaco` file** (above). Lossless round trip of every workbook of the corpus through the
+3. **The `.abaco` file** (above; C-224). Lossless round trip of every workbook of the corpus through the
    zip and back; the workspace's parts; the `.xlsx` export. Its stamps are read through core's
    header reader, which Ábaco takes once core's network layers sit behind a feature (asked of
-   core, 2026-11-23); everything else of the phase is written first.
+   core, 2026-11-23); until then `abacofile::stamp` reads the two keys itself
+   (`// DECISION PENDING`), and the clause waits on it to be verified.
 4. **Python.** CPython embedded (python-build-standalone, pinned, as Veredas 1 did: a release
    carries the runtime beside the executable); the `abaco` module; custom functions; the macro
    homes; the worker, one per workspace, and its command line; stop at the failing line with the
@@ -405,6 +410,11 @@ workspace/log.txt             the log, one escaped entry per line
 - **A formula's text is escaped as a cell's** (`_x005F_`; fork change 23).
 - **A shared group is expanded only where a move changes what a member derives to**; moved whole,
   it keeps its sharing and its master's `ref` moves.
+- **TOML has no null, and the engine's `Color::None` serialises as one** (an untagged enum's unit
+  variant): the `.abaco` file writes the engine's structures through JSON, null as `nan`.
+- **The zip reader keeps one entry of a name**: a file holding two cannot be told apart from one.
+- **The fork's writer writes no tables**: an `.xlsx` export of a workbook with tables reads its
+  structured references otherwise.
 - **A read-only destination**: its `.bak` is read-only too after the first patch, so the next
   removes it before making a new one, and the destination keeps its own permissions.
 - **Calamine 0.26 does not build with zip 2.6**: the lock holds zip 2.4.2, the version Veredas 1's

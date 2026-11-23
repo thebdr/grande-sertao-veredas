@@ -23,6 +23,10 @@ zip = { workspace = true }
 # edits and the patch report serialise.
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The `.abaco` file's parts are stamped TOML (docs/abaco-file.md); a reference's fingerprint is
+# its SHA-256.
+toml = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # tests/component.rs reads cargo's metadata and the root manifest.

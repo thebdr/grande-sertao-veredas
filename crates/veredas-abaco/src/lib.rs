@@ -10,13 +10,18 @@
 //! - [`book`]: a workbook's cells, sheets and names in A1 terms ([`a1`]), over the engine's model.
 //! - [`patch`]: byte-faithful edits of a workbook Ábaco did not write, every part no edit touched
 //!   copied as it was; [`files`]: the atomic write it and the export share.
+//! - [`abacofile`]: the `.abaco` file, a zip of stamped TOML parts, a workbook born in Ábaco and
+//!   the session around it ([`workspace`]: the foreign files it works on, its tools' records, the
+//!   log).
 
 pub mod a1;
+pub mod abacofile;
 pub mod book;
 pub mod files;
 pub mod linkdiff;
 pub mod links;
 pub mod patch;
+pub mod workspace;
 
 pub use a1::{Addr, Area};
 pub use book::{Content, ModelError, Name, Origin, Value, Workbook};

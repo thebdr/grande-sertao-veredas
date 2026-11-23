@@ -78,7 +78,13 @@ fn a_library_and_tests_nothing_else() {
         .filter(|t| strings(&t["kind"]) == ["test"])
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(tests, ["component", "links", "patch", "patch_corpus", "patch_no_styles", "patch_shapes", "patch_untouched"].iter().map(|s| s.to_string()).collect());
+    assert_eq!(
+        tests,
+        ["abacofile", "component", "links", "patch", "patch_corpus", "patch_no_styles", "patch_shapes", "patch_untouched"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    );
 }
 
 /// Ábaco's normal dependency graph as cargo prints it (`name vX.Y.Z`, a path package followed by its
@@ -122,8 +128,8 @@ fn the_engine_is_the_fork_at_its_folder_and_no_member() {
     let exclude = manifest["workspace"]["exclude"].as_array().unwrap();
     assert!(exclude.iter().any(|e| e.as_str() == Some("forks/ironcalc")), "{exclude:?}");
     // its direct normal dependencies: the engine, its file layer, the zip the patcher reads and
-    // writes packages with, serialisation and the error derive, the engine's two by path under the
-    // fork's folder
+    // writes packages with, serialisation and the error derive, the `.abaco` file's TOML and its
+    // references' SHA-256, the engine's two by path under the fork's folder
     let abaco = package(&meta, "veredas-abaco");
     let normal: BTreeSet<String> = abaco["dependencies"]
         .as_array()
@@ -134,7 +140,7 @@ fn the_engine_is_the_fork_at_its_folder_and_no_member() {
         .collect();
     assert_eq!(
         normal,
-        ["ironcalc", "ironcalc_base", "serde", "serde_json", "thiserror", "zip"].iter().map(|s| s.to_string()).collect()
+        ["ironcalc", "ironcalc_base", "serde", "serde_json", "sha2", "thiserror", "toml", "zip"].iter().map(|s| s.to_string()).collect()
     );
     for d in abaco["dependencies"].as_array().unwrap() {
         if d["name"] == "ironcalc" || d["name"] == "ironcalc_base" {
@@ -194,29 +200,44 @@ fn the_fork_is_upstream_at_its_commit_then_each_listed_change_a_commit() {
 /// Ábaco's normal graph on every platform, by crate name, as reviewed on 2026-11-22: the engine,
 /// its file layer and what they need (numbers, dates, zip and XML, statistics, regular
 /// expressions, serialisation), the platform crates they pull in, and no plant stack (no OPC UA,
-/// database, socket, HTTP, file-watching or async runtime crate). A crate joining the graph fails
-/// this test until it is reviewed and added.
+/// database, socket, HTTP, file-watching or async runtime crate). Added 2026-11-23 with the `.abaco`
+/// file (C-224): TOML (`toml` and its `toml_datetime`, `toml_parser`, `toml_writer`,
+/// `serde_spanned`, `winnow`) and SHA-256 (`sha2` and RustCrypto's `digest`, `block-buffer`,
+/// `crypto-common`, `generic-array`, `typenum`), each pure Rust, none of the plant stack. A crate
+/// joining the graph fails this test until it is reviewed and added.
 const REVIEWED: &[&str] = &[
-    "aho-corasick", "android_system_properties", "approx", "bitcode", "bitcode_derive", "bitflags", "bumpalo",
-    "bytemuck", "cfg-if", "chacha20", "chrono", "chrono-tz", "constant_time_eq", "core-foundation-sys",
-    "cpufeatures", "crc32fast", "csv", "csv-core", "either", "equivalent", "flate2", "futures-core",
-    "futures-task", "futures-util", "getrandom", "hashbrown", "iana-time-zone", "iana-time-zone-haiku",
-    "indexmap", "ironcalc", "ironcalc_base", "itertools", "itoa", "js-sys", "libc", "libm", "log", "memchr",
-    "nix", "num-traits", "phf", "phf_shared", "pin-project-lite", "proc-macro2", "quick-xml", "quote", "r-efi",
-    "rand", "rand_core", "regex", "regex-automata", "regex-lite", "regex-syntax", "ryu", "serde", "serde_core",
-    "serde_derive", "serde_json", "simd-adler32", "siphasher", "slab", "statrs", "syn", "thiserror",
-    "thiserror-impl", "typed-path", "unicode-ident", "veredas-abaco", "wasm-bindgen", "wasm-bindgen-macro",
-    "wasm-bindgen-macro-support", "wasm-bindgen-shared", "windows-core", "windows-implement",
-    "windows-interface", "windows-link", "windows-result", "windows-strings", "windows-sys", "zeroize",
-    "zeroize_derive", "zip", "zlib-rs", "zmij", "zopfli",
+    "aho-corasick", "android_system_properties", "approx", "bitcode", "bitcode_derive", "bitflags",
+    "block-buffer", "bumpalo", "bytemuck", "cfg-if", "chacha20", "chrono", "chrono-tz", "constant_time_eq",
+    "core-foundation-sys", "cpufeatures", "crc32fast", "crypto-common", "csv", "csv-core", "digest", "either",
+    "equivalent", "flate2", "futures-core", "futures-task", "futures-util", "generic-array", "getrandom",
+    "hashbrown", "iana-time-zone", "iana-time-zone-haiku", "indexmap", "ironcalc", "ironcalc_base",
+    "itertools", "itoa", "js-sys", "libc", "libm", "log", "memchr", "nix", "num-traits", "phf", "phf_shared",
+    "pin-project-lite", "proc-macro2", "quick-xml", "quote", "r-efi", "rand", "rand_core", "regex",
+    "regex-automata", "regex-lite", "regex-syntax", "ryu", "serde", "serde_core", "serde_derive",
+    "serde_json", "serde_spanned", "sha2", "simd-adler32", "siphasher", "slab", "statrs", "syn", "thiserror",
+    "thiserror-impl", "toml", "toml_datetime", "toml_parser", "toml_writer", "typed-path", "typenum",
+    "unicode-ident", "veredas-abaco", "wasm-bindgen", "wasm-bindgen-macro", "wasm-bindgen-macro-support",
+    "wasm-bindgen-shared", "windows-core", "windows-implement", "windows-interface", "windows-link",
+    "windows-result", "windows-strings", "windows-sys", "winnow", "zeroize", "zeroize_derive", "zip",
+    "zlib-rs", "zmij", "zopfli",
+];
+
+/// The crates of Ábaco's graph that are its own and not the engine's: the `.abaco` file's TOML and
+/// its references' SHA-256 (C-224). The engine uses none of them, so the fork's lock holds none and
+/// the fork's suite tests none.
+/// (`name@version` names one version of a crate the engine uses at another: sha2's `cpufeatures`.)
+const ABACO_ONLY: &[&str] = &[
+    "block-buffer", "cpufeatures@0.2.", "crypto-common", "digest", "generic-array", "serde_spanned", "sha2", "toml",
+    "toml_datetime", "toml_parser", "toml_writer", "winnow",
 ];
 
 /// The crates Ábaco's graph gains in the suite's workspace build from features other members turn
 /// on (cargo unifies a crate's features across the build), each reviewed: `miniz_oxide` and
 /// `adler2`, flate2's second backend; `foldhash`, hashbrown's default hasher, which maquinar's
 /// physics (`parry3d`) turns on, the hasher-free table indexmap uses unchanged. A crate joining
-/// this way fails until it is reviewed and added.
-const WORKSPACE_EXTRA: &[&str] = &["adler2", "foldhash", "miniz_oxide"];
+/// this way fails until it is reviewed and added. `const-oid` and `subtle` (2026-11-23): digest's
+/// `oid` and `mac` features, which other members' cryptography turns on; SHA-256's output unchanged.
+const WORKSPACE_EXTRA: &[&str] = &["adler2", "const-oid", "foldhash", "miniz_oxide", "subtle"];
 
 /// The targets the suite is built and tested on: this machine's, the gate, and the Windows VM's.
 const SUITE_TARGETS: [&str; 2] = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"];
@@ -228,32 +249,48 @@ const SUITE_TARGETS: [&str; 2] = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows
 /// table), num-traits' 128-bit integers, libc's trait implementations, serde_json's `RawValue`
 /// (its parsing of numbers unchanged), syn's parsing and traversal features for the macros that use
 /// syn 3 (`full`, `extra-traits`, `fold`, `visit`, `visit-mut`: the macros' output unchanged), and on Windows the
-/// API bindings of windows-sys others call. None changes what the engine computes; the engine's
+/// API bindings of windows-sys others call; and, with the `.abaco` file's SHA-256 (2026-11-23),
+/// digest's `oid` and `mac` (object identifiers, `const-oid` with its database, and `subtle`'s
+/// constant-time comparison) and crypto-common's random keys (`getrandom`, `rand_core` 0.6 and
+/// their `std`), which others' cryptography turns on. None changes what the engine computes or a
+/// digest; the engine's
 /// own two crates gain none. A feature joining fails until it is reviewed and added.
 const REVIEWED_FEATURES: [(&str, &[(&str, &[&str])]); 2] = [
     ("x86_64-unknown-linux-gnu", &[
         ("chrono", &["serde"]),
+        ("const-oid", &["db", "std"]),
+        ("crypto-common", &["getrandom", "rand_core"]),
+        ("digest", &["const-oid", "mac", "oid", "subtle"]),
         ("flate2", &["miniz_oxide", "rust_backend"]),
+        ("getrandom", &["std"]),
         ("hashbrown", &["default-hasher"]),
         ("indexmap", &["serde"]),
         ("libc", &["extra_traits"]),
         ("miniz_oxide", &["default", "simd", "simd-adler32", "with-alloc"]),
         ("num-traits", &["i128"]),
+        ("rand_core", &["alloc", "getrandom", "std"]),
         ("serde", &["alloc"]),
         ("serde_core", &["alloc"]),
         ("serde_json", &["raw_value"]),
+        ("sha2", &["oid"]),
         ("syn", &["extra-traits", "fold", "full", "visit", "visit-mut"]),
     ]),
     ("x86_64-pc-windows-msvc", &[
         ("chrono", &["serde"]),
+        ("const-oid", &["db", "std"]),
+        ("crypto-common", &["getrandom", "rand_core"]),
+        ("digest", &["const-oid", "mac", "oid", "subtle"]),
         ("flate2", &["miniz_oxide", "rust_backend"]),
+        ("getrandom", &["std"]),
         ("hashbrown", &["default-hasher"]),
         ("indexmap", &["serde"]),
         ("miniz_oxide", &["default", "simd", "simd-adler32", "with-alloc"]),
         ("num-traits", &["i128"]),
+        ("rand_core", &["alloc", "getrandom", "std"]),
         ("serde", &["alloc"]),
         ("serde_core", &["alloc"]),
         ("serde_json", &["raw_value"]),
+        ("sha2", &["oid"]),
         ("syn", &["extra-traits", "fold", "full", "visit", "visit-mut"]),
         ("windows-sys", &[
             "Wdk", "Wdk_Foundation", "Wdk_Storage", "Wdk_Storage_FileSystem", "Wdk_System", "Wdk_System_IO",
@@ -663,6 +700,11 @@ fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
         let mut words = p.split_whitespace();
         let (name, version) = (words.next().unwrap(), words.next().unwrap().trim_start_matches('v'));
         assert!(root_lock.get(name).is_some_and(|v| v.contains(version)), "{name} {version} not in the suite's lock from crates.io");
+        // Ábaco's own, which the engine never uses: the fork's suite has nothing of them to test
+        if ABACO_ONLY.iter().any(|o| *o == name || format!("{name}@{version}").starts_with(o)) {
+            assert!(!fork_lock.get(name).is_some_and(|v| v.contains(version)), "{name} {version}: listed as Ábaco's own, yet in the fork's lock");
+            continue;
+        }
         assert!(
             fork_lock.get(name).is_some_and(|v| v.contains(version)),
             "{name} {version} in Ábaco's graph, {:?} in the fork's lock",

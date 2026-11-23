@@ -82,6 +82,8 @@ pub enum Content {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Origin {
     New,
+    /// Read from a `.abaco` file ([`crate::abacofile`]).
+    Abaco { path: PathBuf },
     Xlsx {
         path: PathBuf,
         /// `None` when the file links to no other workbook.
