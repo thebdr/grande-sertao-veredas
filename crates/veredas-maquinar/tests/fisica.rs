@@ -453,3 +453,488 @@ fn the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene() {
     // A scene refused does not start.
     assert!(fisica::start(&Scene { gravity: -1.0, ..Scene::default() }).is_err());
 }
+
+/// C-114's first refute round: the critic's probes, kept as pins (the event cap and its order, the
+/// runner's late steps, drop, hooks, friction's mean, mass, a belt's side and underside, slow
+/// belts, movers and lifts, the angle order and ranges, any finite angle, removals' order, sleep).
+mod round_1 {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
+
+    use veredas_maquinar::fisica::{self, Placement, World};
+
+    fn scene(body: &str) -> fisica::Scene {
+        fisica::load(&format!("format = \"veredas-cena\"\nversion = 1\n{body}")).unwrap()
+    }
+    fn world(body: &str) -> World {
+        World::new(&scene(body)).unwrap()
+    }
+    fn steps(w: &mut World, n: u64) {
+        for _ in 0..n {
+            w.step();
+        }
+    }
+
+    /// P1: more than 65 536 unread events: exactly the newest 65 536 kept, the oldest dropped, counted.
+    #[test]
+    fn the_event_cap_drops_the_oldest_and_counts_them() {
+        let mut text = String::from("gravity = 0\n");
+        let n = 260;
+        for i in 0..n {
+            text += &format!("[[sensor]]\nname = \"s{i:03}\"\nsize = [100.0, 100.0, 100.0]\nat = [0.0, 0.0, 0.0]\n");
+        }
+        for i in 0..n {
+            text += &format!("[[body]]\nname = \"b{i:03}\"\nsize = [0.1, 0.1, 0.1]\nat = [{}, {}, 0.0]\n", (i % 16) as f64, (i / 16) as f64);
+        }
+        let mut w = world(&text);
+        w.step();
+        let total = n * n;
+        let ev = w.take_events();
+        println!("P1 events kept {} dropped {} of {total}", ev.len(), w.dropped_events());
+        assert_eq!(ev.len(), fisica::MAX_EVENTS);
+        assert_eq!(w.dropped_events() as usize, total - fisica::MAX_EVENTS);
+        // The oldest dropped: by sensor then body, the first kept is the (total - cap)-th.
+        let first = total - fisica::MAX_EVENTS;
+        assert_eq!((ev[0].sensor.clone(), ev[0].body.clone()), (format!("s{:03}", first / n), format!("b{:03}", first % n)));
+        assert_eq!((ev.last().unwrap().sensor.as_str(), ev.last().unwrap().body.as_str()), ("s259", "b259"));
+    }
+
+    /// P2: a late step taken at once and counted, never skipped: a hook stalls the scene's thread
+    /// 200 ms once; after it the runner catches up to the clock and counts the late steps.
+    #[test]
+    fn a_stalled_runner_catches_up_and_counts_its_late_steps() {
+        let s = scene("[[body]]\nname = \"b\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 1000.0]\n");
+        let h = fisica::start(&s).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        let (first, begun) = (h.steps(), Instant::now());
+        let mut once = false;
+        h.add_hook(Box::new(move |_w| {
+            if !once {
+                once = true;
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }));
+        std::thread::sleep(Duration::from_millis(1000));
+        let (n, elapsed) = (h.steps() - first, begun.elapsed());
+        let due = (elapsed.as_millis() / 4) as u64;
+        let late = h.status().late;
+        println!("P2 steps {n} due {due} late {late} in {elapsed:?}");
+        assert!(n + 3 >= due && n <= due + 2, "caught up: {n} steps against {due}");
+        assert!(late >= 40, "the steps after the stall counted late: {late}");
+    }
+
+    /// P3: dropped while running, its thread ends: the hooks it ran stop being called and are dropped.
+    #[test]
+    fn drop_ends_the_thread() {
+        let s = scene("");
+        let h = fisica::start(&s).unwrap();
+        let calls = Arc::new(AtomicU64::new(0));
+        let c = Arc::clone(&calls);
+        h.add_hook(Box::new(move |_w| {
+            c.fetch_add(1, Ordering::SeqCst);
+        }));
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(calls.load(Ordering::SeqCst) > 0);
+        drop(h);
+        let a = calls.load(Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(100));
+        let b = calls.load(Ordering::SeqCst);
+        println!("P3 calls at drop {a}, 100 ms later {b}, strong count {}", Arc::strong_count(&calls));
+        assert_eq!(a, b, "the hook still runs after drop");
+        assert_eq!(Arc::strong_count(&calls), 1, "the thread still holds the hook");
+    }
+
+    /// P4: a hook runs before each step from the next on: its first call sees the steps taken when it
+    /// was added (taken under the world's lock, so no step can come between).
+    #[test]
+    fn a_hook_runs_before_the_step() {
+        let s = scene("");
+        let h = fisica::start(&s).unwrap();
+        std::thread::sleep(Duration::from_millis(40));
+        let seen = Arc::new(AtomicU64::new(u64::MAX));
+        let sn = Arc::clone(&seen);
+        let added_at = h.with(|w| {
+            let n = w.steps();
+            h.add_hook(Box::new(move |w: &mut World| {
+                let _ = sn.compare_exchange(u64::MAX, w.steps(), Ordering::SeqCst, Ordering::SeqCst);
+            }));
+            n
+        });
+        std::thread::sleep(Duration::from_millis(40));
+        let first = seen.load(Ordering::SeqCst);
+        println!("P4 added at {added_at}, first call saw {first}");
+        assert_eq!(first, added_at, "the hook ran after a step, not before it");
+    }
+
+    /// The slab-and-part slide of the repository's test, with frictions of the critic's choosing.
+    fn slide(angle: f64, slab_friction: f64, part_friction: f64) -> f32 {
+        let p = angle.to_radians();
+        let (nx, nz) = (p.sin(), p.cos());
+        let d = 0.05 + 0.1 + 0.0005;
+        let mut w = world(&format!(
+            "[[fixed]]\nname = \"slab\"\nsize = [4.0, 1.0, 0.1]\nat = [0.0, 0.0, 0.0]\npitch = {angle}\nfriction = {slab_friction}\n\
+             [[body]]\nname = \"part\"\nsize = [0.2, 0.2, 0.2]\nat = [{}, 0.0, {}]\npitch = {angle}\nfriction = {part_friction}\n",
+            nx * d,
+            nz * d
+        ));
+        steps(&mut w, 25);
+        let a = w.body("part").unwrap().at;
+        steps(&mut w, 250);
+        let b = w.body("part").unwrap().at;
+        ((b[0] - a[0]).powi(2) + (b[2] - a[2]).powi(2)).sqrt()
+    }
+
+    /// P5: a contact's friction is the mean of its two: 0.2 on 1.0 is 0.6, which holds on 20°.
+    #[test]
+    fn friction_is_the_mean_of_the_two() {
+        let held = slide(20.0, 1.0, 0.2);
+        let held2 = slide(20.0, 0.2, 1.0);
+        let slid = slide(40.0, 1.0, 0.2);
+        let g = 9.81f32;
+        let a = g * (40f32.to_radians().sin() - 0.6 * 40f32.to_radians().cos());
+        let expected = a * (0.1 + 0.5);
+        println!("P5 held {held} {held2} slid {slid} expected {expected}");
+        assert!(held < 0.002 && held2 < 0.002, "{held} {held2}");
+        assert!((slid - expected).abs() < 0.03 * expected, "{slid} against {expected}");
+    }
+
+    /// P6: a body's mass: a 1 kg body thrown at 1 m/s into a 99 kg one at rest, no gravity and no
+    /// friction, nothing bounces: they go on together at 1/100 m/s.
+    #[test]
+    fn a_body_moves_with_its_mass() {
+        let mut w = world(
+            "gravity = 0\n\
+             [[mover]]\nname = \"bat\"\nsize = [0.05, 0.5, 0.5]\nat = [-0.2, 0.0, 0.0]\nfriction = 0\n\
+             [[body]]\nname = \"light\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.0]\nmass = 1\nfriction = 0\n\
+             [[body]]\nname = \"heavy\"\nsize = [0.2, 0.2, 0.2]\nat = [1.0, 0.0, 0.0]\nmass = 99\nfriction = 0\n",
+        );
+        // The bat hits the light body at 1 m/s and stops after 0.2 s.
+        for i in 1..=50 {
+            w.place("bat", Placement::at([-0.2 + 0.004 * i as f64, 0.0, 0.0])).unwrap();
+            w.step();
+            if i % 10 == 0 {
+                println!("P6 step {i}: bat {:?} light {:?}", w.body("bat").unwrap().at, w.body("light").unwrap());
+            }
+        }
+        w.place("bat", Placement::at([-0.2, 0.0, 2.0])).unwrap();
+        // The light body reaches the heavy one about 0.7 s on; read both 0.3 s after, before either
+        // slows under Rapier's sleep threshold.
+        steps(&mut w, 250);
+        let (l, h) = (w.body("light").unwrap(), w.body("heavy").unwrap());
+        println!("P6 light {:?} heavy {:?}", l.velocity, h.velocity);
+        assert!(h.at[0] > 1.0005 && (h.velocity[0] - 0.0105).abs() < 0.003, "{h:?}");
+    }
+
+    /// P7: a part pressed against a belt's side is not carried: a frictionless floor slopes 20° down
+    /// toward the belt, so the part leans on the belt's side with a share of its weight.
+    #[test]
+    fn a_part_pressed_on_a_belt_side_is_not_carried() {
+        // The slab rolled 20° about x: its top rises along +y. Its top passes z = 0.05 at y = 0.3.
+        let r = 20f64.to_radians();
+        let (ny, nz) = (-r.sin(), r.cos());
+        // A point on the top face at y = 0.3, z = 0.05; the slab's centre 0.05 below it along -n.
+        let (cy, cz) = (0.3 - 0.05 * ny + 0.7 * r.cos(), 0.05 - 0.05 * nz + 0.7 * r.sin());
+        // The part's centre 0.1 above the top along n, at y = 0.6 up the slope.
+        let (py, pz) = (0.3 + 0.35 * r.cos() + 0.1005 * ny, 0.05 + 0.35 * r.sin() + 0.1005 * nz);
+        let text = format!(
+            "[[fixed]]\nname = \"slope\"\nsize = [8.0, 1.4, 0.1]\nat = [0.0, {cy}, {cz}]\nroll = 20\nfriction = 0\n\
+             [[belt]]\nname = \"belt\"\nsize = [6.0, 0.6, 0.5]\nat = [0.0, 0.0, 0.25]\nspeed = 0.5\nfriction = 1.2\n\
+             [[body]]\nname = \"part\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, {py}, {pz}]\nroll = 20\nfriction = 0\n"
+        );
+        let mut w = world(&text);
+        steps(&mut w, 250);
+        let a = w.body("part").unwrap();
+        steps(&mut w, 250);
+        let b = w.body("part").unwrap();
+        println!("P7 after 1 s {a:?}\nP7 after 2 s {b:?}");
+        assert!(a.at[1] < 0.45, "the part reached the belt's side: {a:?}");
+        assert!(b.at[0].abs() < 0.01 && b.velocity[0].abs() < 0.01, "carried by the belt's side: {b:?}");
+    }
+
+    /// P9: the belt's own +z is its top: a belt rolled 180° has its top face down, so a part lying on
+    /// its upward face lies on its bottom and is not carried.
+    #[test]
+    fn a_belt_carries_on_its_top_face_only() {
+        let mut w = world(
+            "[[belt]]\nname = \"belt\"\nsize = [6.0, 0.6, 0.5]\nat = [0.0, 0.0, 0.25]\nroll = 180\nspeed = 0.5\n\
+             [[body]]\nname = \"part\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.6]\n",
+        );
+        steps(&mut w, 250);
+        let b = w.body("part").unwrap();
+        println!("P9 rolled-over belt: {b:?}");
+        assert!(b.velocity[0].abs() < 0.01, "carried by the belt's bottom face: {b:?}");
+    }
+
+    /// P9b: a part lifted against a belt's underside by a table (a mover) is not carried by it.
+    #[test]
+    fn a_part_pressed_up_against_a_belt_underside_is_not_carried() {
+        let mut w = world(
+            "[[belt]]\nname = \"belt\"\nsize = [6.0, 0.6, 0.1]\nat = [0.0, 0.0, 1.05]\nspeed = 0.5\nfriction = 1.2\n\
+             [[mover]]\nname = \"table\"\nsize = [0.6, 0.6, 0.05]\nat = [0.0, 0.0, 0.5]\nfriction = 0\n\
+             [[body]]\nname = \"part\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.626]\nfriction = 0\n",
+        );
+        steps(&mut w, 50);
+        // The table rises until the part's top meets the belt's underside (z = 1.0), then 3 mm more (past the allowed millimetre).
+        // Part top = table centre + 0.025 + 0.2.
+        let top: f64 = 1.0 - 0.2 - 0.025 + 0.003;
+        let mut z: f64 = 0.5;
+        while z < top {
+            z = (z + 0.002).min(top);
+            w.place("table", Placement::at([0.0, 0.0, z])).unwrap();
+            w.step();
+        }
+        let a = w.body("part").unwrap();
+        steps(&mut w, 250);
+        let b = w.body("part").unwrap();
+        println!("P9b pressed: {a:?}\nP9b one second on: {b:?}");
+        assert!((b.at[0] - a.at[0]).abs() < 0.01, "carried by the belt's underside: {a:?} -> {b:?}");
+    }
+
+    /// P10: a carton held by a gate on a running belt falls asleep; the gate opens and the belt,
+    /// still running, carries it on.
+    #[test]
+    fn a_carton_held_at_a_gate_goes_on_when_the_gate_opens() {
+        let mut w = world(
+            "[[belt]]\nname = \"belt\"\nsize = [6.0, 0.6, 0.1]\nat = [0.0, 0.0, 0.75]\nspeed = 0.5\n\
+             [[mover]]\nname = \"gate\"\nsize = [0.02, 0.8, 0.3]\nat = [0.5, 0.0, 0.95]\n\
+             [[body]]\nname = \"carton\"\nsize = [0.3, 0.3, 0.3]\nat = [0.0, 0.0, 0.95]\nmass = 2.5\n",
+        );
+        steps(&mut w, 1000);
+        let held = w.body("carton").unwrap();
+        // The gate goes up out of the way.
+        w.place("gate", Placement::at([0.5, 0.0, 2.0])).unwrap();
+        steps(&mut w, 250);
+        let after = w.body("carton").unwrap();
+        println!("P10 held {held:?}\nP10 a second after the gate opened {after:?}");
+        assert!(held.velocity[0].abs() < 0.01, "held: {held:?}");
+        assert!((after.velocity[0] - 0.5).abs() < 0.01, "not carried after the gate opened: {after:?}");
+    }
+
+    /// P10b: the same with the gate moved aside along y in many small steps.
+    #[test]
+    fn a_carton_held_at_a_gate_goes_on_when_the_gate_slides_away() {
+        let mut w = world(
+            "[[belt]]\nname = \"belt\"\nsize = [6.0, 0.6, 0.1]\nat = [0.0, 0.0, 0.75]\nspeed = 0.5\n\
+             [[mover]]\nname = \"gate\"\nsize = [0.02, 0.8, 0.3]\nat = [0.5, 0.0, 0.95]\n\
+             [[body]]\nname = \"carton\"\nsize = [0.3, 0.3, 0.3]\nat = [0.0, 0.0, 0.95]\nmass = 2.5\n",
+        );
+        steps(&mut w, 1000);
+        for i in 1..=100 {
+            w.place("gate", Placement::at([0.5, 0.01 * i as f64, 0.95])).unwrap();
+            w.step();
+        }
+        steps(&mut w, 250);
+        let after = w.body("carton").unwrap();
+        println!("P10b {after:?}");
+        assert!((after.velocity[0] - 0.5).abs() < 0.01, "not carried after the gate slid away: {after:?}");
+    }
+
+    /// P13: a body asleep on another falls when the one under it is taken away.
+    #[test]
+    fn a_body_left_in_the_air_falls() {
+        let mut w = world(
+            "[[fixed]]\nname = \"floor\"\nsize = [4.0, 4.0, 0.2]\nat = [0.0, 0.0, -0.1]\n\
+             [[body]]\nname = \"under\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.1]\n\
+             [[body]]\nname = \"over\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.3]\n",
+        );
+        steps(&mut w, 750);
+        w.remove_body("under").unwrap();
+        steps(&mut w, 250);
+        let o = w.body("over").unwrap();
+        println!("P13 {o:?}");
+        assert!((o.at[2] - 0.1).abs() < 0.002, "left in the air: {o:?}");
+    }
+
+    /// P11: the pose's angles are intrinsic z-y-x: yaw 90 then pitch 30 about the new y puts the
+    /// part's own x along (0, cos 30°, -sin 30°).
+    #[test]
+    fn the_angles_are_yaw_then_pitch_about_the_new_y_then_roll() {
+        let mut w = world("gravity = 0\n[[body]]\nname = \"b\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 0.0]\nyaw = 90\npitch = 30\n");
+        w.step();
+        let s = w.body("b").unwrap();
+        let [x, y, z, ww] = s.rotation.map(|v| v as f64);
+        // The quaternion's rotation of (1, 0, 0): the first column of its matrix.
+        let col = [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + ww * z), 2.0 * (x * z - ww * y)];
+        let c = 30f64.to_radians();
+        println!("P11 own x {col:?} angles {:?}", s.angles());
+        assert!((col[0]).abs() < 1e-5 && (col[1] - c.cos()).abs() < 1e-5 && (col[2] + c.sin()).abs() < 1e-5, "{col:?}");
+        // And a belt yawed 90 and pitched -10 runs up along +y.
+        let mut w = world(
+            "[[belt]]\nname = \"ramp\"\nsize = [6.0, 0.6, 0.1]\nat = [0.0, 0.0, 0.0]\nyaw = 90\npitch = -10\nspeed = 0.5\n\
+             [[body]]\nname = \"p\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.151]\nyaw = 90\npitch = -10\n",
+        );
+        steps(&mut w, 250);
+        let p = w.body("p").unwrap();
+        let t = 10f32.to_radians();
+        println!("P11 ramp {p:?}");
+        assert!(p.velocity[0].abs() < 0.01 && (p.velocity[1] - 0.5 * t.cos()).abs() < 0.01 && (p.velocity[2] - 0.5 * t.sin()).abs() < 0.01, "{p:?}");
+    }
+
+    /// P11b: the angles come back as placed, combined, and past 180°.
+    #[test]
+    fn the_angles_come_back_as_placed_within_their_ranges() {
+        let mut w = world("[[mover]]\nname = \"m\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 0.0]\n");
+        w.place("m", Placement { at: [0.0; 3], yaw: 30.0, pitch: 20.0, roll: 10.0 }).unwrap();
+        w.step();
+        let a = w.body("m").unwrap().angles();
+        println!("P11b combined {a:?}");
+        assert!((a[0] - 30.0).abs() < 1e-3 && (a[1] - 20.0).abs() < 1e-3 && (a[2] - 10.0).abs() < 1e-3, "{a:?}");
+        w.place("m", Placement { at: [0.0; 3], yaw: 200.0, pitch: 0.0, roll: 0.0 }).unwrap();
+        w.step();
+        // Read back within ±180° for yaw and roll and ±90° for pitch: 200 is -160.
+        let a = w.body("m").unwrap().angles();
+        assert!((a[0] + 160.0).abs() < 1e-3 && a[1].abs() < 1e-3 && a[2].abs() < 1e-3, "{a:?}");
+    }
+
+    /// P12: events within a step by sensor then body, removals between steps included.
+    #[test]
+    fn a_removal_s_leavings_follow_the_step_s_events() {
+        let mut w = world(
+            "gravity = 0\n\
+             [[sensor]]\nname = \"a\"\nradius = 1.0\nat = [0.0, 0.0, 0.0]\n\
+             [[sensor]]\nname = \"b\"\nradius = 1.0\nat = [0.0, 0.0, 0.0]\n\
+             [[body]]\nname = \"x\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 0.0]\n\
+             [[body]]\nname = \"y\"\nsize = [0.1, 0.1, 0.1]\nat = [0.3, 0.0, 0.0]\n",
+        );
+        w.step();
+        w.remove_body("y").unwrap();
+        w.remove_body("x").unwrap();
+        let ev: Vec<(u64, String, String, bool)> = w.take_events().into_iter().map(|e| (e.step, e.sensor, e.body, e.entered)).collect();
+        println!("P12 {ev:?}");
+        // A step's events by sensor then body; a removal's leavings follow them, in the order of
+        // removal (y, then x), each by sensor.
+        let e = |s: &str, b: &str, entered: bool| (1, s.to_string(), b.to_string(), entered);
+        assert_eq!(ev, [e("a", "x", true), e("a", "y", true), e("b", "x", true), e("b", "y", true), e("a", "y", false), e("b", "y", false), e("a", "x", false), e("b", "x", false)]);
+    }
+
+    /// P17: a slow belt carries what lies on it toward its speed, however slow.
+    #[test]
+    fn a_slow_belt_carries_what_lies_on_it() {
+        let mut bad = Vec::new();
+        for speed in [0.01f64, 0.03, 0.06, 0.1, 0.15, 0.2, 0.3, -0.3, 0.5] {
+            let mut w = world(&format!(
+                "[[belt]]\nname = \"belt\"\nsize = [6.0, 0.6, 0.1]\nat = [0.0, 0.0, 0.75]\nspeed = {speed}\n\
+                 [[body]]\nname = \"carton\"\nsize = [0.3, 0.3, 0.3]\nat = [0.0, 0.0, 0.95]\nmass = 2.5\n"
+            ));
+            steps(&mut w, 50);
+            let a = w.body("carton").unwrap();
+            steps(&mut w, 1250);
+            let b = w.body("carton").unwrap();
+            let moved = b.at[0] - a.at[0];
+            println!("P17 belt at {speed} m/s: moved {moved} m in 5 s (expected {}), velocity {:?}", speed * 5.0, b.velocity);
+            if (moved as f64 - speed * 5.0).abs() >= 0.02 * speed.abs() * 5.0 + 0.002 {
+                bad.push((speed, moved));
+            }
+        }
+        assert!(bad.is_empty(), "belts that stopped carrying (speed, metres moved in 5 s): {bad:?}");
+    }
+
+    /// P18: a slow mover pushes, and is not passed through: a blade at 2 cm/s against a carton.
+    #[test]
+    fn a_slow_mover_pushes() {
+        let mut w = world(
+            "[[fixed]]\nname = \"floor\"\nsize = [10.0, 10.0, 0.2]\nat = [0.0, 0.0, -0.1]\n\
+             [[mover]]\nname = \"blade\"\nsize = [0.05, 1.0, 0.4]\nat = [-0.25, 0.0, 0.2]\n\
+             [[body]]\nname = \"carton\"\nsize = [0.4, 0.4, 0.4]\nat = [0.0, 0.0, 0.2]\nmass = 5\n",
+        );
+        steps(&mut w, 250);
+        for i in 1..=1250 {
+            w.place("blade", Placement::at([-0.25 + 0.02 * 0.004 * i as f64, 0.0, 0.2])).unwrap();
+            w.step();
+        }
+        let (b, c) = (w.body("blade").unwrap(), w.body("carton").unwrap());
+        println!("P18 blade {:?} carton {:?}", b.at, c);
+        // The blade's face at blade + 0.025; the carton's back at carton - 0.2.
+        assert!(c.at[0] - 0.2 >= b.at[0] + 0.025 - 0.002, "the blade went into the carton: {b:?} {c:?}");
+    }
+
+    /// P19: a lift's table rising at 2 cm/s carries the carton on it up.
+    #[test]
+    fn a_slow_lift_carries_up() {
+        let mut w = world(
+            "[[fixed]]\nname = \"floor\"\nsize = [10.0, 10.0, 0.2]\nat = [0.0, 0.0, -0.1]\n\
+             [[mover]]\nname = \"table\"\nsize = [0.6, 0.6, 0.05]\nat = [0.0, 0.0, 0.025]\n\
+             [[body]]\nname = \"carton\"\nsize = [0.3, 0.3, 0.3]\nat = [0.0, 0.0, 0.2]\nmass = 5\n",
+        );
+        steps(&mut w, 250);
+        for i in 1..=1250 {
+            w.place("table", Placement::at([0.0, 0.0, 0.025 + 0.02 * 0.004 * i as f64])).unwrap();
+            w.step();
+        }
+        let (t, c) = (w.body("table").unwrap(), w.body("carton").unwrap());
+        println!("P19 table {:?} carton {:?}", t.at, c);
+        assert!(c.at[2] - 0.15 >= t.at[2] + 0.025 - 0.002, "the table went into the carton: {t:?} {c:?}");
+    }
+
+    /// P22: a body yawed 1e300 degrees (finite, accepted by the reader) and one yawed 1e10 degrees,
+    /// which is 280 degrees.
+    #[test]
+    fn any_finite_angle_is_the_angle_it_names() {
+        let mut w = world(
+            "[[fixed]]\nname = \"floor\"\nsize = [4.0, 4.0, 0.2]\nat = [0.0, 0.0, -0.1]\n\
+             [[body]]\nname = \"huge\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.3]\nyaw = 1e300\n\
+             [[body]]\nname = \"big\"\nsize = [0.2, 0.2, 0.2]\nat = [1.0, 0.0, 0.3]\nyaw = 1e10\n\
+             [[body]]\nname = \"plain\"\nsize = [0.2, 0.2, 0.2]\nat = [-1.0, 0.0, 0.3]\nyaw = 280\n",
+        );
+        w.step();
+        println!("P22 after one step: huge {:?}", w.body("huge").unwrap());
+        let (big, plain) = (w.body("big").unwrap().angles(), w.body("plain").unwrap().angles());
+        assert!((big[0] - plain[0]).abs() < 1e-3, "1e10 degrees is 280: {big:?} against {plain:?}");
+        for _ in 0..250 {
+            w.step();
+        }
+        let huge = w.body("huge").unwrap();
+        assert!(huge.rotation.iter().all(|v| v.is_finite()) && (huge.at[2] - 0.1).abs() < 0.002, "on the floor, its pose finite: {huge:?}");
+        let mut w = world("[[mover]]\nname = \"m\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 0.0]\n");
+        w.place("m", Placement { at: [0.0; 3], yaw: 1e300, pitch: 0.0, roll: 0.0 }).unwrap();
+        w.step();
+        println!("P22 the mover after it: {:?}", w.body("m").unwrap());
+        assert!(w.body("m").unwrap().rotation.iter().all(|v| v.is_finite()), "a finite angle made a NaN pose");
+    }
+
+    /// P21: a body that falls asleep inside a sensor stays inside it, with no event of its sleep; woken
+    /// by its belt starting again, it leaves the sensor once, when it is carried out of it.
+    #[test]
+    fn a_body_asleep_inside_a_sensor_stays_inside() {
+        let mut w = World::new(&fisica::load(
+            "format = \"veredas-cena\"\nversion = 1\n\
+             [[belt]]\nname = \"belt\"\nsize = [6.0, 0.6, 0.1]\nat = [0.0, 0.0, 0.75]\n\
+             [[body]]\nname = \"carton\"\nsize = [0.3, 0.3, 0.3]\nat = [0.0, 0.0, 0.95]\n\
+             [[sensor]]\nname = \"zone\"\nsize = [0.5, 0.5, 0.5]\nat = [0.0, 0.0, 0.95]\n",
+        ).unwrap()).unwrap();
+        for _ in 0..1000 {
+            w.step();
+        }
+        let ev = w.take_events();
+        println!("P21 after 4 s at rest: {ev:?} inside {:?} v {:?}", w.sensor("zone").unwrap().inside, w.body("carton").unwrap().velocity);
+        assert_eq!(ev.len(), 1);
+        assert_eq!(w.sensor("zone").unwrap().inside, ["carton"]);
+        w.set_speed("belt", 0.5).unwrap();
+        for _ in 0..500 {
+            w.step();
+        }
+        let ev = w.take_events();
+        println!("P21 after the belt ran 2 s: {ev:?} at {:?}", w.body("carton").unwrap().at);
+        assert_eq!(ev.iter().filter(|e| !e.entered).count(), 1);
+        assert_eq!(ev.len(), 1);
+    }
+
+
+    /// A refused change touches nothing: the pusher stays where it was after a step.
+    #[test]
+    fn a_refused_place_changes_nothing() {
+        let mut w = world("[[mover]]\nname = \"pusher\"\nsize = [0.4, 0.05, 0.3]\nat = [3.5, -0.4, 0.95]\n");
+        assert!(w.place("pusher", Placement::at([f64::NAN, 0.0, 0.0])).is_err());
+        assert!(w.place("pusher", Placement { at: [0.0; 3], yaw: f64::INFINITY, pitch: 0.0, roll: 0.0 }).is_err());
+        w.step();
+        assert_eq!(w.body("pusher").unwrap().at, [3.5, -0.4, 0.95]);
+    }
+
+    /// The two defaults a part's file states: a body's mass 1 kg, a belt's speed 0.
+    #[test]
+    fn a_body_s_mass_and_a_belt_s_speed_default_as_the_reference_says() {
+        let s = scene("[[belt]]\nname = \"b\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\n[[body]]\nname = \"c\"\nsize = [1.0, 1.0, 1.0]\nat = [5.0, 0.0, 0.0]\n");
+        assert_eq!((s.bodies[0].mass, s.belts[0].speed, s.bodies[0].friction, s.belts[0].friction), (1.0, 0.0, 0.6, 0.6));
+    }
+}

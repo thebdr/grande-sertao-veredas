@@ -83,10 +83,10 @@ pub fn start(scene: &Scene) -> Result<FisicaHandle, FisicaError> {
         .spawn(move || {
             let _timer = crate::timer::FineTimer::hold();
             let begun = Instant::now();
-            let mut k: u32 = 0;
+            let mut k: u64 = 0;
             while !run.stop.load(Ordering::SeqCst) {
-                k = k.saturating_add(1);
-                let due = begun + step * k;
+                k += 1;
+                let due = begun + Duration::from_nanos((step.as_nanos() as u64).saturating_mul(k));
                 let now = Instant::now();
                 if due > now {
                     std::thread::sleep(due - now);

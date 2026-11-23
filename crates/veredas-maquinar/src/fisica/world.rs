@@ -114,9 +114,10 @@ impl PhysicsHooks for BeltHooks {
         };
         let (velocity, up) = belt;
         let Some(m) = ctx.rigid_mut() else { return };
-        // The normal points from the pair's first collider to its second: on the top face it is
-        // the belt's up either way round, on a side it is level.
-        if m.normal.dot(up).abs() < 0.7 {
+        // The normal points from the pair's first collider to its second: turned to point out of
+        // the belt, it is the belt's up on its top face alone (level on a side, down underneath).
+        let out = if first { *m.normal } else { -*m.normal };
+        if out.dot(up) < 0.7 {
             return;
         }
         // The tangent velocity is the second collider's, relative to the first: the belt's speed
@@ -147,8 +148,14 @@ pub struct World {
     _tears: Receiver<SoftBodyTearEvent>,
 }
 
+/// An angle in degrees as the engine takes it: reduced to a turn in double precision first, so a
+/// huge finite angle is the angle it names, never NaN.
+fn radians(deg: f64) -> f32 {
+    deg.rem_euclid(360.0).to_radians() as f32
+}
+
 fn rotation(yaw: f64, pitch: f64, roll: f64) -> Quat {
-    Quat::from_euler(EulerRot::ZYX, yaw.to_radians() as f32, pitch.to_radians() as f32, roll.to_radians() as f32)
+    Quat::from_euler(EulerRot::ZYX, radians(yaw), radians(pitch), radians(roll))
 }
 
 fn pose(at: [f64; 3], yaw: f64, pitch: f64, roll: f64) -> Pose {
@@ -256,6 +263,24 @@ impl World {
     /// One fixed step: the bodies move, the movers reach the poses they were given, and every
     /// sensor's change is kept as an event of this step.
     pub fn step(&mut self) {
+        // A body asleep never meets its contacts' solver: one resting on a belt that runs slowly
+        // (under about 0.1 m/s the engine puts it to sleep) would stop. Every body touching a
+        // running belt is woken first.
+        let mut wake = Vec::new();
+        for b in self.belts.values().filter(|b| b.speed != 0.0) {
+            for pair in self.w.contact_pairs_with(b.collider) {
+                if !pair.has_any_active_contact() {
+                    continue;
+                }
+                let other = if pair.collider1 == b.collider { pair.collider2 } else { pair.collider1 };
+                if let Some(body) = self.w.colliders.get(other).and_then(|c| c.parent()) {
+                    wake.push(body);
+                }
+            }
+        }
+        for body in wake {
+            self.w.wake_up(body, true);
+        }
         let hooks = BeltHooks { belts: self.belts.values().map(|b| (b.collider, (b.axis * b.speed as f32, b.up))).collect() };
         self.w.step_with_events(&hooks, &self.collector);
         self.steps += 1;
@@ -302,7 +327,7 @@ impl World {
 
     /// The scene's time: the steps taken times the step.
     pub fn time(&self) -> Duration {
-        self.step_length() * self.steps as u32
+        Duration::from_millis(u64::from(self.step_ms).saturating_mul(self.steps))
     }
 
     /// What a name is in this scene.

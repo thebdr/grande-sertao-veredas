@@ -106,4 +106,5 @@ the header (not TOML, another format, another version, a key missing) as core's 
 a key the reader does not know, in any table; `step_ms` outside 1 to 100; `gravity` outside 0 to
 100 or not finite; a name empty, padded or already taken; a size, a centre, an angle, a mass, a
 friction, a speed or a radius outside its range or not finite; a sensor with both `size` and
-`radius`, or neither.
+`radius`, or neither. A value of another kind than its key's (a negative or a text `step_ms`, a text for a
+number) is refused as not TOML, the parser naming its key.
