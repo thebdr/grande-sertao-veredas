@@ -2518,10 +2518,17 @@ fn rewrite_defined_names(
                 .map(xml::decode_text)
                 .unwrap_or_default();
             let scope = scope_of(xml::attr(t.text, "localSheetId"));
+            // a name local to a chart sheet, which the engine cannot scope: the file's alone, its
+            // references moved as text and nothing else
+            let on_a_chart_sheet = xml::attr(t.text, "localSheetId")
+                .and_then(|i| i.parse::<usize>().ok())
+                .and_then(|i| entries.get(i))
+                .is_some_and(|e| !e.is_worksheet());
             // still in the model? (a deleted name goes; a built-in one the engine may not hold,
             // `_xlnm._FilterDatabase`, stays unless an edit deleted it)
             let key = (name.to_lowercase(), scope.as_ref().map(|s| s.to_lowercase()));
-            let in_model = (model_names.iter().any(|n| {
+            let in_model = (on_a_chart_sheet
+                || model_names.iter().any(|n| {
                 n.name.eq_ignore_ascii_case(&name)
                     && n.scope.as_deref().map(str::to_lowercase)
                         == scope.as_deref().map(str::to_lowercase)

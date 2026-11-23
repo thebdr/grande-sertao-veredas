@@ -179,10 +179,9 @@ fn a_shared_group_reading_another_sheet_follows_an_insertion_there() {
     }
 }
 
-#[test]
-fn a_chart_on_a_chart_sheet_follows_the_rows_it_reads_and_the_chart_sheet_counts_for_local_names() {
-    let dir = tempfile::tempdir().unwrap();
-    let src = dir.path().join("chart.xlsx");
+/// Sheets Data (1, 2, 3 in A1:A3), Chart1 (a chart sheet: a chart of Data!$A$1:$A$3 and a shape
+/// linked to Data!$A$3) and Second (empty), the defined names `names`.
+fn chart_sheet_book(src: &Path, names: &str) {
     let data: String = (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
     let chartsheet = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><chartsheet xmlns="{MAIN}" xmlns:r="{R}"><sheetViews><sheetView workbookViewId="0"/></sheetViews><drawing r:id="rId1"/></chartsheet>"#
@@ -197,9 +196,9 @@ fn a_chart_on_a_chart_sheet_follows_the_rows_it_reads_and_the_chart_sheet_counts
         rel("rId3", "worksheet", "worksheets/sheet2.xml"),
     ]);
     write_package(
-        &src,
+        src,
         &[
-            ("xl/workbook.xml", workbook(&["Data", "Chart1", "Second"], "")),
+            ("xl/workbook.xml", workbook(&["Data", "Chart1", "Second"], names)),
             ("xl/_rels/workbook.xml.rels", wb_rels),
             ("xl/worksheets/sheet1.xml", worksheet(&data, "")),
             ("xl/chartsheets/sheet1.xml", chartsheet),
@@ -210,6 +209,13 @@ fn a_chart_on_a_chart_sheet_follows_the_rows_it_reads_and_the_chart_sheet_counts
             ("xl/worksheets/sheet2.xml", worksheet("", "")),
         ],
     );
+}
+
+#[test]
+fn a_chart_on_a_chart_sheet_follows_the_rows_it_reads_and_the_chart_sheet_counts_for_local_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("chart.xlsx");
+    chart_sheet_book(&src, "");
     let dst = dir.path().join("out.xlsx");
     let local = Edit::SetName { name: "Local".into(), formula: "=Second!$A$1".into(), scope: Some("Second".into()) };
     patch(&src, &dst, &[rows("Data", 1, 2), local], &verified()).unwrap();
@@ -222,6 +228,45 @@ fn a_chart_on_a_chart_sheet_follows_the_rows_it_reads_and_the_chart_sheet_counts
     assert!(part(&dst, "xl/drawings/drawing1.xml").contains(r#"textlink="Data!$A$5""#));
     // the third `<sheet>` of the file, the chart sheet counted
     assert!(part(&dst, "xl/workbook.xml").contains(r#"<definedName name="Local" localSheetId="2">Second!$A$1</definedName>"#));
+}
+
+#[test]
+fn a_name_local_to_a_chart_sheet_keeps_its_scope_and_moves_with_its_cells() {
+    // the engine holds no chart sheet, so it cannot scope `OnChart`: the name is the file's alone
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("chart.xlsx");
+    let on_chart = r#"<definedName name="OnChart" localSheetId="1">Data!$A$2</definedName>"#;
+    chart_sheet_book(&src, &format!(r#"{on_chart}<definedName name="Rate">Data!$A$1</definedName>"#));
+    let dst = dir.path().join("out.xlsx");
+    let book = |p: &Path| part(p, "xl/workbook.xml");
+    // another name set, then deleted: OnChart byte for byte, where it was
+    let set = Edit::SetName { name: "Other".into(), formula: "=Second!$A$1".into(), scope: None };
+    patch(&src, &dst, &[set], &verified()).unwrap();
+    assert!(
+        book(&dst).contains(&format!(r#"<definedNames>{on_chart}<definedName name="Rate">Data!$A$1</definedName><definedName name="Other">Second!$A$1</definedName></definedNames>"#)),
+        "{}",
+        book(&dst)
+    );
+    let _ = std::fs::remove_file(&dst);
+    patch(&src, &dst, &[Edit::DeleteName { name: "Rate".into(), scope: None }], &verified()).unwrap();
+    assert!(book(&dst).contains(&format!("<definedNames>{on_chart}</definedNames>")), "{}", book(&dst));
+    // a row inserted above its cell: applied, the name moved, its scope kept
+    let _ = std::fs::remove_file(&dst);
+    patch(&src, &dst, &[rows("Data", 1, 1)], &verified()).unwrap();
+    assert!(
+        book(&dst).contains(r#"<definedNames><definedName name="OnChart" localSheetId="1">Data!$A$3</definedName><definedName name="Rate">Data!$A$2</definedName></definedNames>"#),
+        "{}",
+        book(&dst)
+    );
+    // a name of that scope is one an edit cannot reach
+    let _ = std::fs::remove_file(&dst);
+    for edit in [
+        Edit::SetName { name: "OnChart".into(), formula: "=Data!$A$1".into(), scope: Some("Chart1".into()) },
+        Edit::DeleteName { name: "OnChart".into(), scope: Some("Chart1".into()) },
+    ] {
+        assert!(patch(&src, &dst, &[edit.clone()], &verified()).is_err(), "{edit:?}");
+        assert!(!dst.exists());
+    }
 }
 
 #[test]

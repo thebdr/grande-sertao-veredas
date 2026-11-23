@@ -420,6 +420,10 @@ workspace/log.txt             the log, one escaped entry per line
 - **The kind is judged on the formula as the edits left it** (C-223's seventh and eighth rounds):
   a deletion that shrinks `SUM(A1:A3*B1:B3)` to `SUM(A1:A1*B1:B1)` leaves a formula Excel reads
   as written, and one an earlier edit of the list wrote is the patcher's own, whatever its text.
+- **A name local to a chart sheet is the file's alone** (C-223's eighth round): the engine holds
+  no chart sheet, so it keeps such a name with a sheet id no worksheet has and lists it as global.
+  Ábaco's name list leaves it out; the patcher keeps its element where it is, moves its references
+  as text, and refuses an edit of it.
 - **A one-cell merge is no merge**; an empty list (`<hyperlinks/>`, `<mergeCells/>`) is no list.
 - **A carriage return is `_x000D_` in text and `&#13;` in an attribute**, written in one pass.
 - **TOML has no null, and the engine's `Color::None` serialises as one** (an untagged enum's unit

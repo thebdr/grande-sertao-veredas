@@ -607,11 +607,19 @@ impl Workbook {
 
     // ---- defined names --------------------------------------------------
 
+    /// The names the engine can scope: a name local to a chart sheet (the engine holds no chart
+    /// sheet, so its sheet id names no worksheet) is left out; the file keeps it as it is.
     pub fn names(&self) -> Vec<Name> {
         let sheets = self.sheet_names();
+        let workbook = &self.model.workbook;
+        let scoped = |id: Option<u32>| id.is_none_or(|id| workbook.worksheets.iter().any(|w| w.sheet_id == id));
+        // the engine lists its names in the order it holds them
         self.model
             .get_defined_name_list()
             .into_iter()
+            .zip(workbook.defined_names.iter().map(|d| d.sheet_id))
+            .filter(|(_, id)| scoped(*id))
+            .map(|(e, _)| e)
             .map(|e| Name {
                 name: e.name,
                 scope: e.scope.and_then(|s| sheets.get(s as usize).cloned()),
