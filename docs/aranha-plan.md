@@ -327,5 +327,9 @@ is pinned by a test when its phase lands.
   compared with tshark's reading in the tests), but for two places where tshark's own arithmetic
   wraps: a fraction past a second is carried into the next (tshark keeps an invalid fraction and
   wraps it past 2^31 nanoseconds) and a length on the wire past 2^31 − 1 is kept (tshark shows
-  2^31 − 1). A first reading of the format from its 2.4 header alone was wrong in both lengths'
-  order and the link type's bits (C-139's first refute round).
+  2^31 − 1), and one place where tshark guesses: under the microsecond and modified magic numbers
+  it tries the record layouts of 1999's patched tcpdumps (RedHat 6.1, Nokia, SuSE 6.3) on the first
+  records, where the reader reads the magic's own layout; such a capture is read otherwise here,
+  named in C-139 (following tshark's guess waits for a site's capture that needs it). A first
+  reading of the format from its 2.4 header alone was wrong in both lengths' order and the link
+  type's bits (C-139's first refute round).

@@ -337,7 +337,18 @@ fn the_link_type_and_the_aix_format_are_read_as_tshark_reads_them() {
     let reserved = [0x0001_0001u32, 0x0100_0001, 0x0200_0001, 0x03FF_0001];
     let other = [0u32, 6, 101, 105, 0x0101, 0x8001];
     // AIX's format (2.2, the microsecond magic, type 6) in either byte order, and four near it.
-    let not_aix = [(pcap::MAGIC_NANOS, (2, 2), 6), (pcap::MAGIC_MICROS, (2, 4), 6), (pcap::MAGIC_MICROS, (2, 2), 9), (pcap::MAGIC_MODIFIED, (2, 2), 6)];
+    // (AIX's is version 2.2 alone, and link type 6 with no bit above it: versions 3.2 and 4.2, and
+    // type 6 with a check sequence's bits set, tshark reads as Token Ring.)
+    let not_aix = [
+        (pcap::MAGIC_NANOS, (2, 2), 6),
+        (pcap::MAGIC_MICROS, (2, 4), 6),
+        (pcap::MAGIC_MICROS, (2, 2), 9),
+        (pcap::MAGIC_MODIFIED, (2, 2), 6),
+        (pcap::MAGIC_MICROS, (3, 2), 6),
+        (pcap::MAGIC_MICROS, (4, 2), 6),
+        (pcap::MAGIC_MICROS, (2, 2), 0x0400_0006),
+        (pcap::MAGIC_MICROS, (2, 2), 0x2400_0006),
+    ];
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     for lt in ethernet {
         files.push((format!("e{lt:x}.pcap"), file(false, pcap::MAGIC_MICROS, (2, 4), lt, if lt & 0x0400_0000 != 0 { &fcs } else { &a })));
@@ -505,6 +516,9 @@ fn a_capture_cut_short_gives_the_frames_before_its_damage_as_tshark_does() {
     assert_eq!(read.frames.len(), 1);
     assert_eq!(read.damage, Some(Damage { record: 1, offset: 108, kind: DamageKind::HeaderCut { have: 20, need: 24 } }));
     assert_eq!(read.damage.unwrap().to_string(), "record 1 at byte 108 is cut short in its header: 20 of 24 bytes");
+    assert_eq!(read.frames[0].bytes, &frames[0].bytes[..60]);
+    // tshark says the file is cut short too, though it reads its one frame in SuSE 6.3's 28-byte
+    // layout, which it tries on a cut file (the departure named in the clause).
     let (rows, err) = tshark_on(&dir, "modified-cut.pcap", cut_modified);
     assert_eq!((rows.len(), err.contains("cut short")), (1, true), "{err}");
     let data_cut = &whole[..starts[2] + 16 + 5];
@@ -755,6 +769,28 @@ fn the_raw_link_is_a_wire_and_never_hands_back_a_frame_this_host_sent() {
             let waited = started.elapsed();
             assert!(waited >= Duration::from_millis(300) && waited < Duration::from_millis(1500), "{waited:?}");
         });
+        // A flood of them, three senders in a tight loop faster than the wait reads: the wait still
+        // ends at its deadline (a wait of none left reads a frame queued, so the deadline is looked
+        // at after each one passed over), not when the flood stops.
+        let senders: Vec<RawLink> = (0..3).map(|_| RawLink::open("b0", false).unwrap()).collect();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|s| {
+            for sender in &senders {
+                let (stop, mine) = (&stop, &mine);
+                s.spawn(move || {
+                    let until = Instant::now() + Duration::from_secs(4);
+                    while Instant::now() < until && !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        let _ = sender.send(mine);
+                    }
+                });
+            }
+            std::thread::sleep(Duration::from_millis(500));
+            let started = Instant::now();
+            assert_eq!(b.recv(Duration::from_millis(300)).unwrap(), None);
+            let waited = started.elapsed();
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            assert!(waited >= Duration::from_millis(300) && waited < Duration::from_millis(1500), "under a flood: {waited:?}");
+        });
         // Lengths are checked before the socket: the seam's errors, not the link's.
         assert!(matches!(a.send(&[0; 13]), Err(WireError::TooShort(13))));
         assert!(matches!(a.send(&vec![0; 65_537]), Err(WireError::TooLong(65_537))));
@@ -763,4 +799,25 @@ fn the_raw_link_is_a_wire_and_never_hands_back_a_frame_this_host_sent() {
         assert!(matches!(err, WireError::Raw(RawError::TooLong(9000))), "{err}");
         assert_eq!(err.to_string(), "a frame of 9000 bytes is past what the link sends");
     });
+}
+
+#[test]
+fn the_layouts_of_old_patched_tcpdumps_tshark_guesses_are_read_in_the_magic_s_own() {
+    // tshark writes a capture in RedHat 6.1's layout (the microsecond magic, 24-byte record
+    // headers) and SuSE 6.3's (the modified magic, 28-byte ones), and reads each back whole by
+    // trying the layouts on its first records. This reader takes the magic's own layout (16 and
+    // 24 bytes), so it reads them otherwise: the departure the clause names.
+    let dir = folder("legacy");
+    let frames: Vec<Frame> = (0..3u8).map(|i| Frame::new(1_000_000_000 * u64::from(i + 1) + 5_000_000 * u64::from(i + 1), "x", [&hex("010ecf000000020000000a018892fefe")[..], &[i; 44]].concat())).collect();
+    let ours = dir.join("ours.pcap");
+    pcap::write_file(&ours, &frames).unwrap();
+    for (format, magic) in [("rh6_1pcap", pcap::MAGIC_MICROS), ("suse6_3pcap", pcap::MAGIC_MODIFIED)] {
+        let file = dir.join(format!("{format}.pcap"));
+        tshark_writes(&ours, &file, format);
+        let (rows, err) = tshark_reads(&file);
+        assert_eq!((rows, err), (as_tshark(&frames.iter().map(|f| Frame { iface: "x".into(), ..f.clone() }).collect::<Vec<_>>()), String::new()), "{format}");
+        let read = pcap::read_file(&file, "x").unwrap();
+        assert_eq!(read.magic, magic, "{format}");
+        assert_ne!(read.frames, frames, "{format}: read as tshark reads it, where the clause names a departure");
+    }
 }

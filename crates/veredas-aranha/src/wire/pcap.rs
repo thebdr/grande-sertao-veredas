@@ -15,9 +15,15 @@
 //! and a capture whose last record is cut short (one still being written) gives the frames before
 //! it with the damage named. pcapng is not read.
 //!
-//! Where it departs from tshark, on purpose: a microsecond fraction past 4 294 967 is carried
-//! whole (tshark's product wraps at 32 bits), and a length on the wire past 2 147 483 647 is kept
-//! as stated (tshark shows 2 147 483 647).
+//! Where it departs from tshark, on purpose: a fraction past a second is carried into the next
+//! (tshark keeps it as an invalid fraction and wraps it past 2^31 nanoseconds); a length on the
+//! wire past 2 147 483 647 is kept as stated (tshark shows 2 147 483 647); and under the
+//! microsecond and modified magic numbers it reads the one layout each names (16-byte record
+//! headers, 24 for the modified), where tshark also tries the layouts of 1999's patched tcpdumps
+//! (RedHat 6.1's 24-byte headers and Nokia's 20 under the microsecond magic, SuSE 6.3's 28 under
+//! the modified) on the first records and keeps the one that reads best: a capture in such a
+//! layout is read otherwise here. The nanosecond magic, which this writer writes, has one layout,
+//! for both.
 //!
 //! Written: nanosecond stamps, little-endian, version 2.4, link type Ethernet, snapshot length
 //! `SNAPLEN`, each frame's bytes and its length on the wire as it holds them.

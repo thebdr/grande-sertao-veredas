@@ -108,8 +108,14 @@ impl Wire for raw::RawLink {
             let left = deadline.map_or(Duration::MAX, |d| d.saturating_duration_since(std::time::Instant::now()));
             match raw::RawLink::recv(self, left)? {
                 None => return Ok(None),
-                // Passed over: the wait goes on to the same deadline (none left, a last look).
-                Some(r) if r.outgoing => {}
+                // Passed over: the wait goes on to the same deadline, and ends there even while
+                // this host's frames keep coming faster than they are read (a wait of none left
+                // still reads a frame queued, so the deadline is looked at after each).
+                Some(r) if r.outgoing => {
+                    if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+                        return Ok(None);
+                    }
+                }
                 Some(r) => {
                     let length = r.bytes.len();
                     return Ok(Some(Frame { at_ns: stamp(r.at), iface: self.iface().to_string(), bytes: r.bytes, length }));
