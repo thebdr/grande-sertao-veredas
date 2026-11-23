@@ -482,6 +482,9 @@ struct ControllerRuntime {
 }
 
 /// A recording in progress: its own store on the drive, the rows waiting for the next write.
+#[cfg(test)]
+mod recorder_test;
+
 struct Recorder {
     store: DuckStore,
     pending: Vec<Vec<WideRow>>,
