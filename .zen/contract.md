@@ -774,6 +774,14 @@ It is P-022's image (P-022 stays pending until this clause is verified and the a
 - **Evidence:** .zen/evidence/C-116.md
 - **Status:** pending verification
 
+## C-073: Core's layers by feature: the plant-facing ones by default, the header reader alone without them
+- **Date:** 2026-11-23
+- **Source:** ábaco's ask through the orchestrator (2026-11-23: the `.abaco` file read through core's one header reader, C-045, without the OPC UA client and a runtime); docs/core-plan.md "Features"
+- **Description:** `veredas-core`'s feature `net`, on by default, holds the value model, the worker plumbing, the telegram layer and the OPC UA client layer and every crate they stand on, so every component keeping the default sees no change; without its default features core is the header reader (`schema`), the PCG32 (`rng`) and the state text (`state`), its normal dependencies serde, toml and thiserror alone and no crate of a plant's stack in its graph. The demo plant needs `net`; each fieldbus master (`modbus`, `enip`) stands alone on its framing and a runtime. Off by default all three, as C-071 and C-072 state.
+- **Verification:** automated → crates/veredas-core/tests/features.rs | asked of cargo: the manifest's features as cargo reads them (`default` is `net`, `net`'s six crates, the demo plant on `net`, each master on its framing and tokio) and every normal dependency optional but serde, thiserror and toml; the graph cargo resolves without the default features, its direct dependencies exactly those three and none of the OPC UA crates, tokio, mio, socket2, regex or chrono anywhere in it; the default graph holding them all; the masters alone bringing their framing and tokio and no OPC UA, regex or chrono; the library compiling without the default features and with the two masters alone, each in a build folder of the test's own
+- **Evidence:** .zen/evidence/C-073.md
+- **Status:** pending verification
+
 ## Pending Contract Deltas
 
 ### P-003: veredas-controlador — the softPLC

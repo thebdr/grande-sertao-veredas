@@ -141,6 +141,17 @@ The OPC layer, on the way in (phase 3; each is pinned by the clause's test):
 - comments that named callers, vendors, products or field sites now say what the code means on
   the wire or in the plant.
 
+## Features
+Core's layers come by cargo feature, so a component carries what it uses (C-073):
+- `net`, on by default: `types` (chrono), `source` (regex), `telegram` (tokio, socket2, regex) and
+  `opc` (the OPC UA client). Every component that reads a plant keeps the default and sees no
+  change.
+- Without the default features (`default-features = false`): `schema`, `rng` and `state`, on
+  serde, toml and thiserror alone, for a component that reads the suite's stamped files and never a
+  plant (ábaco's `.abaco` workspace file, 2026-11-23).
+- `demo-server` (the OPC UA demo plant, with `net`), `modbus` and `enip` (the fieldbus masters,
+  each standing alone on its framing and a runtime), all off by default.
+
 ## Module map
 ```
 veredas_core
@@ -274,7 +285,8 @@ Recorded as the port meets them.
 - **The crate is not formatted by rustfmt as a whole.** `cargo fmt -p veredas-core --check`
   differs on files written before the Linux machine; format a new file alone
   (`rustfmt --edition 2024 <file>`), so a commit carries no reformatting of files it did not
-  change.
+  change. `rustfmt` on a file that declares modules (`lib.rs`, a `mod.rs`) formats every module
+  it declares too: edit those by hand, or restore the others after.
 
 - **A full disk corrupts the incremental cache.** On 2026-11-05 the C: drive filled mid-build
   ("no space on device"); the next build failed with "cached cgu ... should have an object file".

@@ -10,34 +10,50 @@ description = "The foundation of Veredas 2: the shared types and content-agnosti
 # [[example]]. Depends on no other member, in any table (law L4).
 
 [features]
+# What every component gets unless it asks otherwise: the plant-facing layers and what they stand
+# on. Without them (`default-features = false`) core is the header reader every file of the suite
+# shares (schema), the PCG32 (rng) and the controller's state text (state), on serde, toml and
+# thiserror alone, for a component that reads the suite's files and never a plant
+# (docs/core-plan.md, "Features").
+default = ["net"]
+# The value model and its samples (types: chrono), the worker plumbing (source: regex), the TCP
+# telegram layer (telegram: tokio, socket2, regex) and the OPC UA client layer (opc).
+net = [
+    "dep:async-opcua-client",
+    "dep:async-opcua-types",
+    "dep:chrono",
+    "dep:regex",
+    "dep:socket2",
+    "dep:tokio",
+]
 # The in-process OPC UA demo plant (opc::demo): test-fixture plumbing, off by default so a component
 # that only polls carries the client half alone. Core's own tests switch it on through the self
 # dev-dependency below (dev-dependencies resolve apart from the library's own: not a cycle).
-demo-server = ["dep:async-opcua-server"]
+demo-server = ["net", "dep:async-opcua-server"]
 # The Modbus/TCP client (fieldbus::modbus): a function that drives hardware, off by default so a
 # component that only polls carries no fieldbus code; the controller switches it on, and so do the
 # crates that test it (docs/core-plan.md, "The fieldbus masters").
-modbus = ["dep:tokio-modbus"]
+modbus = ["dep:tokio-modbus", "dep:tokio"]
 # The EtherNet/IP scanner (fieldbus::enip), off by default for the same reason.
-enip = ["dep:ethernetip-core", "dep:ethernetip-connections"]
+enip = ["dep:ethernetip-core", "dep:ethernetip-connections", "dep:tokio"]
 
 [dependencies]
 # The OPC UA client layer (opc): the client, its types, and the server behind demo-server.
-async-opcua-client = { workspace = true }
+async-opcua-client = { workspace = true, optional = true }
 async-opcua-server = { workspace = true, optional = true }
-async-opcua-types = { workspace = true }
-chrono = { workspace = true }
+async-opcua-types = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
 # SourceError's pattern variant; the capture rules' patterns.
-regex = { workspace = true }
+regex = { workspace = true, optional = true }
 # Capture specs and the byte order are configuration, read from plain text.
 serde = { workspace = true }
 thiserror = { workspace = true }
 # Writes go to the socket itself, so the OS (not a readiness cache) says when it is full.
-socket2 = { workspace = true }
+socket2 = { workspace = true, optional = true }
 # Channel files are TOML (docs/channel-schema.md).
 toml = { workspace = true }
-# The telegram channel runs on its own current-thread runtime.
-tokio = { workspace = true }
+# The telegram channel runs on its own current-thread runtime, and so do the fieldbus masters.
+tokio = { workspace = true, optional = true }
 # The Modbus/TCP client's framing (fieldbus::modbus, feature "modbus"): the standard's frames,
 # checked here.
 tokio-modbus = { workspace = true, optional = true }

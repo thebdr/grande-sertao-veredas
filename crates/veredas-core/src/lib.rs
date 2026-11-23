@@ -15,6 +15,12 @@
 //!   drive (feature `demo-server`).
 //! - [`state`]: a controller's state as structured data, and its one line of text with one
 //!   writer and one reader, the table of reason numbers and words beside it.
+//! - [`schema`]: the one header reader every plain-text file of the suite opens with.
+//!
+//! Features: `net`, on by default, holds `types`, `source`, `telegram` and `opc` and what they
+//! stand on; without it (`default-features = false`) core is `schema`, `rng` and `state`, on
+//! serde, toml and thiserror alone. `demo-server` adds the OPC UA demo plant, `modbus` and `enip`
+//! the fieldbus masters; none of the three is on by default.
 //!
 //! Nothing here names its first caller: each type says what it means on the wire or in the
 //! plant, as if a second consumer already existed. Nothing here names a device or a vendor
@@ -22,13 +28,19 @@
 //! of 2026-11-05).
 
 pub mod fieldbus;
+#[cfg(feature = "net")]
 pub mod opc;
 pub mod rng;
 pub mod schema;
+#[cfg(feature = "net")]
 pub mod source;
 pub mod state;
+#[cfg(feature = "net")]
 pub mod telegram;
+#[cfg(feature = "net")]
 pub mod types;
 
+#[cfg(feature = "net")]
 pub use source::{SourceError, SourceHandle, stop_flag};
+#[cfg(feature = "net")]
 pub use types::{Quality, Sample, SeriesRef, SeriesType, SourceId, Value, now_unix_ms};

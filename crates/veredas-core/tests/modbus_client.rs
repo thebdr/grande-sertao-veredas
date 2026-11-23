@@ -456,13 +456,38 @@ fn the_client_is_a_feature_off_by_default() {
         .find(|p| p["name"] == "veredas-core")
         .unwrap();
     let features = core["features"].as_object().unwrap();
+    // Off by default: neither the default features nor anything they switch on name it.
+    let mut on: Vec<String> = features
+        .get("default")
+        .map(|d| {
+            d.as_array()
+                .unwrap()
+                .iter()
+                .map(|f| f.as_str().unwrap().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(f) = on.pop() {
+        if seen.insert(f.clone())
+            && let Some(more) = features.get(&f)
+        {
+            on.extend(
+                more.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.as_str().unwrap().to_string()),
+            );
+        }
+    }
     assert!(
-        features
-            .get("default")
-            .is_none_or(|d| d.as_array().unwrap().is_empty()),
-        "{features:?}"
+        !seen.contains("modbus") && !seen.contains("dep:tokio-modbus"),
+        "{seen:?}"
     );
-    assert_eq!(features["modbus"], serde_json::json!(["dep:tokio-modbus"]));
+    assert_eq!(
+        features["modbus"],
+        serde_json::json!(["dep:tokio-modbus", "dep:tokio"])
+    );
     let framing = core["dependencies"]
         .as_array()
         .unwrap()
