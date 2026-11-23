@@ -1,16 +1,16 @@
 {
   "clause": "C-150",
-  "command": "sh -c cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | python3 -I -c 'import json, os, sys; m = json.load(sys.stdin); found = sorted((p[\"name\"], t[\"name\"], t[\"kind\"], os.path.relpath(t[\"src_path\"], os.path.dirname(p[\"manifest_path\"]))) for p in m[\"packages\"] for t in p[\"targets\"] if t[\"name\"] in (\"orcl_std\", \"orcl-std\", \"blocks\")); sys.exit(found != [(\"orcl-std\", \"blocks\", [\"test\"], \"tests/blocks.rs\"), (\"orcl-std\", \"orcl_std\", [\"lib\"], \"src/lib.rs\")])' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none",
+  "command": "sh -c cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | python3 -I -c 'import json, os, sys; m = json.load(sys.stdin); found = sorted((p[\"name\"], t[\"name\"], t[\"kind\"], os.path.relpath(t[\"src_path\"], os.path.dirname(p[\"manifest_path\"]))) for p in m[\"packages\"] for t in p[\"targets\"] if t[\"name\"] in (\"orcl_std\", \"orcl-std\", \"blocks\")); sys.exit(found != [(\"orcl-std\", \"blocks\", [\"test\"], \"tests/blocks.rs\"), (\"orcl-std\", \"orcl_std\", [\"lib\"], \"src/lib.rs\")])' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && cargo nextest run -p orcl-std --release --test blocks --run-ignored only --no-tests fail -E 'test(=the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link)' && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none",
   "commandArgv": [
     "sh",
     "-c",
-    "cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | python3 -I -c 'import json, os, sys; m = json.load(sys.stdin); found = sorted((p[\"name\"], t[\"name\"], t[\"kind\"], os.path.relpath(t[\"src_path\"], os.path.dirname(p[\"manifest_path\"]))) for p in m[\"packages\"] for t in p[\"targets\"] if t[\"name\"] in (\"orcl_std\", \"orcl-std\", \"blocks\")); sys.exit(found != [(\"orcl-std\", \"blocks\", [\"test\"], \"tests/blocks.rs\"), (\"orcl-std\", \"orcl_std\", [\"lib\"], \"src/lib.rs\")])' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none"
+    "cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | python3 -I -c 'import json, os, sys; m = json.load(sys.stdin); found = sorted((p[\"name\"], t[\"name\"], t[\"kind\"], os.path.relpath(t[\"src_path\"], os.path.dirname(p[\"manifest_path\"]))) for p in m[\"packages\"] for t in p[\"targets\"] if t[\"name\"] in (\"orcl_std\", \"orcl-std\", \"blocks\")); sys.exit(found != [(\"orcl-std\", \"blocks\", [\"test\"], \"tests/blocks.rs\"), (\"orcl-std\", \"orcl_std\", [\"lib\"], \"src/lib.rs\")])' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && cargo nextest run -p orcl-std --release --test blocks --run-ignored only --no-tests fail -E 'test(=the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link)' && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none"
   ],
   "exitCode": 0,
-  "outputSha": "1398781569c5c5905a0325b08a410ea1224283c71712473112601735837da28a",
-  "outputTail": "test crates/orcl-std/src/o14.rs - o14 (line 120) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 180) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 150) - compile fail ... ok\ntest crates/orcl-std/src/o14.rs - o14 (line 30) - compile fail ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s\n\nall doctests ran in 0.41s; merged doctests compilation took 0.31s\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s\n     Running unittests src/lib.rs (target/debug/build/orcl-std/6f4af301044bd167/out/orcl_std-6f4af301044bd167)\n     Running tests/blocks.rs (target/debug/build/orcl-std/04ccbbb91e41921e/out/blocks-04ccbbb91e41921e)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s\n   Doc-tests orcl_std\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.23s\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.30s",
-  "ranAt": "2026-11-23T00:45:05.103Z",
-  "headCommit": "c4c8d67c91e934d37aa6f69d6c2abd31ba329ea6",
+  "outputSha": "de809b1680eacd7baaa7b8ded35fb95b421f1d39b0d49d3e7d674558105028da",
+  "outputTail": "all doctests ran in 0.26s; merged doctests compilation took 0.20s\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running unittests src/lib.rs (target/debug/build/orcl-std/6f4af301044bd167/out/orcl_std-6f4af301044bd167)\n     Running tests/blocks.rs (target/debug/build/orcl-std/04ccbbb91e41921e/out/blocks-04ccbbb91e41921e)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n   Doc-tests orcl_std\n    Finished `release` profile [optimized] target(s) in 0.08s\n────────────\n Nextest run ID a3e6c7bb-6400-470f-8301-cbf654518119 with nextest profile: default\n    Starting 1 test across 1 binary (47 tests skipped)\n        PASS [   0.666s] (1/1) orcl-std::blocks the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link\n────────────\n     Summary [   0.667s] 1 test run: 1 passed, 47 skipped\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.14s\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s",
+  "ranAt": "2026-11-23T01:36:03.524Z",
+  "headCommit": "3787d1660db29397b24480639c9290e1b0e91960",
   "tests": [
     {
       "name": "crates/orcl-std/src/timers.rs",
@@ -50,7 +50,7 @@
     {
       "name": "crates/orcl-std/tests/blocks.rs",
       "file": "crates/orcl-std/tests/blocks.rs",
-      "fileSha": "682171018956ac3092fd674b4133b15283368835f34b6ce2fdc0f176afc083ff"
+      "fileSha": "f1331b262461dc218842b7a7b6bd2610d89d8ec400f93c4e160252fb7cc7b22f"
     }
   ]
 }
