@@ -300,6 +300,25 @@ classes, the report, the corpus list, and the parity test.
 - **A text test of volatility reads names where there are none**: the engine stores formulas in
   R1C1, where `R[0]C[-2]` is a name `R`, and `RAND` is a substring of `GRANDTOTAL(`; a false
   positive keeps a stale cache. Volatile calls and names are read as whole tokens of each formula's
-  A1 spelling, outside strings and quoted names.
+  A1 spelling, outside strings and quoted names, and a name is resolved as Excel does (the sheet
+  that qualifies it or the formula's own, its local name before the workbook's; a LAMBDA name is
+  read when called).
+- **A random draw moves what reads it, by chance** (C-223's second round): a measure over a few
+  evaluations lets a two-valued draw repeat. Every evaluation the patcher compares is made with
+  one seed and one pinned time, so a draw is the same before, after and in verification; the
+  measure compares with other seeds on other days.
+- **Empty is neither 0 nor `""`**: a comparison that let them meet skipped a 0 written into an
+  empty cell and hid an array's cell left as a constant. Values are compared as Excel tells them
+  apart, numbers to 15 significant digits; only a formula's cache may hold an empty value as
+  `<v></v>`.
+- **An array grows and shrinks with what it reads**: its anchor's `ref` and its spilled cells
+  must follow, and the engine keeps a spill's size as (width, height). Verification recomputes
+  the array from the file, so a stale cache does not show there: it reads back the written cache
+  of every value the edits moved.
+- **A format's or a validation's formula is relative to its range's top-left cell**: a move that
+  deletes that cell re-anchors the formula on the new one before shifting it, or it turns `#REF!`.
+- **XML reads a carriage return as a line feed**: a text holding one is written `_x000D_`.
+- **Excel writes a volatile array's spilled cells with an empty `<f ca="1"/>`**: a placeholder,
+  not a formula; and a move can leave the engine a spilled cell outside its array, read empty.
 - **Calamine 0.26 does not build with zip 2.6**: the lock holds zip 2.4.2, the version Veredas 1's
   lock had.

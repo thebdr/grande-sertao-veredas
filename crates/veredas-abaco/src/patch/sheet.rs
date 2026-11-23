@@ -24,6 +24,9 @@ use super::PatchError;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum NewContent {
     Value(Value),
+    /// A cell an array spills into that the file has no cell for: its value, written as Excel
+    /// writes a spilled cell.
+    Spilled(Value),
     /// File spelling (`_xlfn.`/`_xlpm.`), unescaped; `cached` is the engine's
     /// value for it.
     Formula {
@@ -76,6 +79,15 @@ pub(crate) struct SheetJob<'a> {
     /// an ORIGINAL position and evaluates to the given value now — the only
     /// formulas whose cache the rewrite may touch.
     pub moved: &'a dyn Fn((i32, i32), &Value) -> bool,
+    /// The dynamic array that was anchored at an ORIGINAL position and is at a final one: how many
+    /// rows and columns it spilled over before the edits (`None` for one they made) and spills
+    /// over now; `None` where the engine holds no dynamic array (a CSE array's `ref` moves with
+    /// its cells).
+    pub array_extent: &'a dyn Fn((i32, i32), (i32, i32)) -> Option<(Option<(i32, i32)>, (i32, i32))>,
+    /// Whether the cell that was at an ORIGINAL position, the engine computing it then (a cell an
+    /// array spilled into), is at a final one the engine computes nothing at now: an array no
+    /// longer reaches it, volatile or not.
+    pub left: &'a dyn Fn((i32, i32), (i32, i32)) -> bool,
 }
 
 #[derive(Debug, Default)]
@@ -125,16 +137,13 @@ fn cached_value(t: Option<&str>, v: Option<&str>) -> Value {
     }
 }
 
-/// Whether the cache already says what the engine computed (numbers to the
-/// oracle's tolerance, 1e-9 relative).
+/// Whether the cache already says what the engine computed: values told apart as Excel tells
+/// them (numbers to 15 significant digits, an empty cell neither 0 nor a text), save that an empty
+/// value and the empty text a formula caches as `<v></v>` are one.
 pub(crate) fn same_value(cached: &Value, live: &Value) -> bool {
     match (cached, live) {
-        (Value::Number(a), Value::Number(b)) => {
-            a == b || (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
-        }
-        (Value::Text(a), Value::Text(b)) => a == b,
+        (Value::Number(a), Value::Number(b)) => a == b || format!("{a:.14e}") == format!("{b:.14e}"),
         (Value::Empty, Value::Text(t)) | (Value::Text(t), Value::Empty) => t.is_empty(),
-        (Value::Empty, Value::Number(n)) | (Value::Number(n), Value::Empty) => *n == 0.0,
         (a, b) => a == b,
     }
 }
@@ -162,6 +171,9 @@ fn cached_xml(v: &Value) -> (Option<&'static str>, String) {
     }
 }
 
+/// A text as a cell's `<t>` or `<v>` carries it ([`escape_text`] writes a control character and
+/// protects a literal `_xHHHH_` as Excel does), a carriage return too written `_x000D_`: XML reads
+/// a bare one as a line feed.
 fn text_element(name: &str, s: &str) -> String {
     let preserve =
         s.starts_with(char::is_whitespace) || s.ends_with(char::is_whitespace) || s.contains('\n');
@@ -172,7 +184,7 @@ fn text_element(name: &str, s: &str) -> String {
         } else {
             ""
         },
-        escape_text(s)
+        escape_text(s).replace('\r', "_x000D_")
     )
 }
 
@@ -227,6 +239,7 @@ fn fresh_cell(row: i32, col: i32, style: Option<&str>, content: &NewContent) -> 
             let t = t.map(|t| format!(" t=\"{t}\"")).unwrap_or_default();
             format!("<c r=\"{r}\"{s}{t}><f>{}</f>{v}</c>", escape_text(text))
         }
+        NewContent::Spilled(v) => return spilled_cell(row, col, style, v),
     })
 }
 
@@ -815,7 +828,11 @@ fn rewrite_cell(
     styles: &mut StyleBook,
     out: &mut SheetOutcome,
 ) -> Result<CellOut, PatchError> {
-    let had_formula = cell_xml.contains("<f");
+    // Excel writes the cells a volatile array spills into with an empty `<f ca="1"/>`: a
+    // placeholder, no formula of the cell's own (a shared child's `<f t="shared" …/>` is one)
+    let placeholder = xml::find_open(cell_xml, "f", 0)
+        .is_some_and(|f| f.self_closing && attr(f.text, "t") != Some("shared"));
+    let had_formula = cell_xml.contains("<f") && !placeholder;
     let old_style = attr(tag.text, "s");
     if let Some(w) = write
         && w.content.is_some() {
@@ -899,7 +916,29 @@ fn rewrite_cell(
                                 .filter(|(s, _)| s.eq_ignore_ascii_case(job.name))
                                 .map(|(_, s)| *s)
                                 .collect();
-                            if let Some(Some(nr)) = shift_area_text(r, &own)
+                            // a dynamic array covers what it spills over now: it grows and shrinks
+                            // with what it reads, and stays whole when rows or columns of it go
+                            // (Excel spills it again). Where the engine sized it otherwise than
+                            // the file before the edits, the file's size stands unless the edits
+                            // changed the engine's; a CSE array covers what it covered, moved
+                            let size = refs::parse_area(r).map(|a| {
+                                let (r1, c1, r2, c2) = a.bounds();
+                                (r2 - r1 + 1, c2 - c1 + 1)
+                            });
+                            let spell = |(rows, cols): (i32, i32)| {
+                                if (rows, cols) == (1, 1) {
+                                    addr(new.0, new.1)
+                                } else {
+                                    format!("{}:{}", addr(new.0, new.1), addr(new.0 + rows - 1, new.1 + cols - 1))
+                                }
+                            };
+                            let wanted = match (job.array_extent)(orig, new) {
+                                Some((then, now)) if then.is_none() || then == size || then != Some(now) => {
+                                    Some(spell(now))
+                                }
+                                _ => shift_area_text(r, &own).flatten(),
+                            };
+                            if let Some(nr) = wanted
                                 && nr != r {
                                     f_tag = set_attr(&f_tag, "ref", &nr);
                                     if text.is_none() {
@@ -946,6 +985,10 @@ fn rewrite_cell(
             if moved && !same_value(&cached, &live) {
                 let (t, v) = cached_xml(&live);
                 new_tag = set_or_remove(&new_tag, "t", t);
+                // value metadata marks a cached `#SPILL!` or `#CALC!`: another value drops it
+                if !matches!(&live, Value::Error(e) if e == "#SPILL!" || e == "#CALC!") {
+                    new_tag = remove_attr(&new_tag, "vm");
+                }
                 new_inner = match v_raw {
                     Some((a, b, _)) => format!("{}{}{}", &new_inner[..a], v, &new_inner[b..]),
                     None => {
@@ -973,7 +1016,7 @@ fn rewrite_cell(
         // value, Excel would read it as a constant); a plain value is never the engine's to move
         // (`moved` is false for a cell the engine did not compute)
         let live = (job.value_at)(new.0, new.1);
-        if (job.moved)(orig, &live) {
+        if (job.moved)(orig, &live) || (job.left)(orig, new) {
             out.refreshed += 1;
             return Ok(match spilled_cell(new.0, new.1, attr(&new_tag, "s"), &live) {
                 Some(s) => CellOut::New(s),
@@ -1258,7 +1301,7 @@ fn col_op(tag: &str, op: &ColOp) -> String {
 /// Everything after `</sheetData>`: merges, conditional formats, validations,
 /// hyperlinks, auto filter, breaks, and the x14 extensions.
 fn rewrite_tail(tail: &str, job: &SheetJob, own: &[Shift]) -> Option<String> {
-    let out = walk_tail(tail, job, own);
+    let out = walk_tail(tail, job, own, None);
     if out == tail {
         return None;
     }
@@ -1270,9 +1313,61 @@ const DROP_IF_GONE_ELEMENT: &[&str] = &["conditionalFormatting", "dataValidation
 const FORMULA_TEXT: &[&str] = &["formula", "formula1", "formula2", "xm:f"];
 const X14_ELEMENTS: &[&str] = &["x14:conditionalFormatting", "x14:dataValidation"];
 
-fn walk_tail(s: &str, job: &SheetJob, own: &[Shift]) -> String {
+/// Where a cell that is at `at` after `shift` was before it.
+fn before_shift(shift: Shift, at: (i32, i32)) -> (i32, i32) {
+    let back = |v: i32, from: i32, n: i32, delete: bool| match (v < from, delete) {
+        (true, _) => v,
+        (false, true) => v + n,
+        (false, false) => v - n,
+    };
+    match shift {
+        Shift::InsertRows { at: a, n } => (back(at.0, a, n, false), at.1),
+        Shift::DeleteRows { at: a, n } => (back(at.0, a, n, true), at.1),
+        Shift::InsertCols { at: a, n } => (at.0, back(at.1, a, n, false)),
+        Shift::DeleteCols { at: a, n } => (at.0, back(at.1, a, n, true)),
+    }
+}
+
+/// A conditional format's or a validation's formula, shifted by every move of the patch. Excel
+/// keeps it relative to the top-left cell of its range (`sqref`'s first area): where a move
+/// deletes that cell and the range survives, the formula is first re-anchored on the cell that
+/// is the range's top-left after the move (`A2>5` on A2:A10, row 2 deleted, reads the old A3 as
+/// `A3>5`), then shifted (`A2>5` again, on A2:A9). `None` when unchanged.
+fn shift_anchored(text: &str, sqref: &str, job: &SheetJob) -> Option<String> {
+    let mut areas: Vec<refs::RefArea> = sqref.split_whitespace().filter_map(refs::parse_area).collect();
+    let mut cur = text.to_string();
+    let mut changed = false;
+    for (sheet, shift) in job.shifts {
+        if sheet.eq_ignore_ascii_case(job.name) {
+            let anchor = areas.first().map(|a| {
+                let (r1, c1, _, _) = a.bounds();
+                (r1, c1)
+            });
+            let after: Vec<refs::RefArea> = areas.iter().filter_map(|a| shift.area(*a)).collect();
+            if let (Some(old), Some(first)) = (anchor, after.first()) {
+                let (r1, c1, _, _) = first.bounds();
+                let new = before_shift(*shift, (r1, c1));
+                if new != old {
+                    cur = refs::translate(&cur, new.0 - old.0, new.1 - old.1);
+                    changed = true;
+                }
+            }
+            areas = after;
+        }
+        if let Some(n) = refs::shift_formula(&cur, sheet, *shift, Some(job.name), job.order) {
+            cur = n;
+            changed = true;
+        }
+    }
+    (changed && cur != text).then_some(cur)
+}
+
+fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> String {
     let mut out = String::with_capacity(s.len());
     let mut pos = 0;
+    // the original `sqref` of the conditional format or validation being walked: its formulas are
+    // relative to its top-left cell
+    let mut local: Option<String> = None;
     let row_shifts: Vec<Shift> = own.iter().copied().filter(|x| x.is_rows()).collect();
     let col_shifts: Vec<Shift> = own.iter().copied().filter(|x| !x.is_rows()).collect();
     let mut in_breaks: Option<bool> = None; // Some(true) = rowBreaks
@@ -1282,6 +1377,9 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift]) -> String {
         if t.closing {
             if t.name == "rowBreaks" || t.name == "colBreaks" {
                 in_breaks = None;
+            }
+            if t.name == "conditionalFormatting" || t.name == "dataValidation" {
+                local = None;
             }
             out.push_str(t.text);
             continue;
@@ -1304,7 +1402,7 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift]) -> String {
             let inner_start = t.end - a;
             let inner = &el[inner_start..el.len() - format!("</{name}>").len()];
             out.push_str(t.text);
-            out.push_str(&walk_tail(inner, job, own));
+            out.push_str(&walk_tail(inner, job, own, sq.map(str::trim)));
             out.push_str(&format!("</{name}>"));
             pos = b;
             continue;
@@ -1316,6 +1414,9 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift]) -> String {
                 "ref"
             };
             let mut text = t.text.to_string();
+            if (name == "conditionalFormatting" || name == "dataValidation") && !t.self_closing {
+                local = attr(t.text, "sqref").map(str::to_string);
+            }
             if let Some(v) = attr(t.text, key) {
                 let new = if key == "sqref" {
                     shift_sqref_text(v, own).map(Some)
@@ -1356,9 +1457,11 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift]) -> String {
             && let Some(close) = xml::find_close(s, &t) {
                 let raw = &s[t.end..close.start];
                 let decoded = decode_text(raw);
-                let new = shift_text(&decoded, job)
-                    .map(|n| escape_text(&n))
-                    .unwrap_or_else(|| raw.to_string());
+                let shifted = match local.as_deref().or(anchor) {
+                    Some(sqref) => shift_anchored(&decoded, sqref, job),
+                    None => shift_text(&decoded, job),
+                };
+                let new = shifted.map(|n| escape_text(&n)).unwrap_or_else(|| raw.to_string());
                 out.push_str(t.text);
                 out.push_str(&new);
                 out.push_str(close.text);

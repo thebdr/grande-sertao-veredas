@@ -373,3 +373,265 @@ fn drawings_and_threaded_comments_follow_their_cells() {
     assert!(d.contains("<xdr:row>6</xdr:row>") && d.contains("<xdr:row>7</xdr:row>"), "{d}");
     assert!(part(&dst, "xl/threadedComments/threadedComment1.xml").contains(r#"<threadedComment ref="A7""#));
 }
+
+// ---- refute round 2 ---------------------------------------------------------------------------
+
+fn value(sheet: &str, cell: &str, v: serde_json::Value) -> Edit {
+    Edit::Value { sheet: sheet.into(), cell: cell.into(), value: v, expect: None }
+}
+
+/// The `<c>` element of a cell of a written sheet part, as it stands.
+fn element<'a>(sheet: &'a str, cell: &str) -> Option<&'a str> {
+    let at = sheet.find(&format!(r#"<c r="{cell}""#))?;
+    let end = sheet[at..].find("</c>").map(|e| at + e + 4);
+    let short = sheet[at..].find("/>").map(|e| at + e + 2);
+    let close = sheet[at..].find('>').map(|e| at + e + 1)?;
+    // a self-closing `<c …/>` ends at its first `>`
+    if short == Some(close) { Some(&sheet[at..close]) } else { end.map(|e| &sheet[at..e]) }
+}
+
+#[test]
+fn zero_and_empty_are_different_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("zero.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>0</v></c><c r="B1"><f>COUNT(A1)</f><v>1</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    // a 0 into an empty cell is written
+    let report = patch(&src, &dst, &[value("S", "A2", serde_json::json!(0))], &verified()).unwrap();
+    assert_eq!(report.outcomes[0].status, Status::Applied);
+    assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "A2"), Some(r#"<c r="A2"><v>0</v></c>"#));
+    // a 0 cleared is gone, and what counted it follows
+    std::fs::remove_file(&dst).unwrap();
+    let report = patch(&src, &dst, &[value("S", "A1", serde_json::Value::Null)], &verified()).unwrap();
+    assert_eq!(report.outcomes[0].status, Status::Applied);
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert_eq!(element(&sheet, "A1"), None, "{sheet}");
+    assert_eq!(element(&sheet, "B1"), Some(r#"<c r="B1"><f>COUNT(A1)</f><v>0</v></c>"#));
+    // expecting an empty cell where a 0 is: a conflict
+    std::fs::remove_file(&dst).unwrap();
+    let expecting = Edit::Value {
+        sheet: "S".into(),
+        cell: "A1".into(),
+        value: serde_json::json!(5),
+        expect: Some(veredas_abaco::patch::Expect::Value { value: serde_json::Value::Null }),
+    };
+    let report = patch(&src, &dst, &[expecting], &verified()).unwrap();
+    assert_eq!(report.outcomes[0].status, Status::Conflict);
+    assert_eq!(report.outcomes[0].note, "S!A1 now holds 0");
+}
+
+#[test]
+fn a_volatile_name_of_one_sheet_does_not_freeze_a_formula_of_another() {
+    // the workbook's R reads Data!A1; Other's own R is RAND(); Data!B1 reads the workbook's R
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("scoped.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>R*2</f><v>2</v></c></row>"#;
+    let other = r#"<row r="1"><c r="A1"><f>R</f><v>0.5</v></c></row>"#;
+    let names = r#"<definedName name="R">Data!$A$1</definedName><definedName name="R" localSheetId="1">RAND()</definedName>"#;
+    plain_book(&src, &[("Data", worksheet(data, "")), ("Other", worksheet(other, ""))], names, &[]);
+    let dst = dir.path().join("out.xlsx");
+    let report = patch(&src, &dst, &[value("Data", "A1", serde_json::json!(5))], &verified()).unwrap();
+    assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "B1"), Some(r#"<c r="B1"><f>R*2</f><v>10</v></c>"#));
+    assert_eq!(report.refreshed, 1);
+    // Other's own R stays as the file has it
+    assert_eq!(parts(&src)["xl/worksheets/sheet2.xml"], parts(&dst)["xl/worksheets/sheet2.xml"]);
+}
+
+/// Sheet `S`: B1 a count, A1 a dynamic array of that many numbers counting down to 0.
+fn sequence_book(path: &Path) {
+    let data = r#"<row r="1"><c r="A1" cm="1"><f t="array" ref="A1:A3">_xlfn.SEQUENCE(B1,1,B1-1,-1)</f><v>2</v></c><c r="B1"><v>3</v></c></row><row r="2"><c r="A2"><v>1</v></c></row><row r="3"><c r="A3"><v>0</v></c></row>"#;
+    plain_book(path, &[("S", worksheet(data, ""))], "", &[]);
+}
+
+#[test]
+fn an_array_that_shrinks_leaves_no_constant_behind_and_its_ref_follows() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("seq.xlsx");
+    sequence_book(&src);
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[value("S", "B1", serde_json::json!(2))], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert_eq!(element(&sheet, "A1"), Some(r#"<c r="A1" cm="1"><f t="array" ref="A1:A2">_xlfn.SEQUENCE(B1,1,B1-1,-1)</f><v>1</v></c>"#), "{sheet}");
+    assert_eq!(element(&sheet, "A2"), Some(r#"<c r="A2"><v>0</v></c>"#));
+    assert_eq!(element(&sheet, "A3"), None, "{sheet}");
+    assert_eq!(read_back(&dst, "S", "A3"), Value::Empty);
+}
+
+#[test]
+fn an_array_that_grows_is_written_where_it_now_spills() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("seq.xlsx");
+    sequence_book(&src);
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[value("S", "B1", serde_json::json!(5))], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert_eq!(element(&sheet, "A1"), Some(r#"<c r="A1" cm="1"><f t="array" ref="A1:A5">_xlfn.SEQUENCE(B1,1,B1-1,-1)</f><v>4</v></c>"#), "{sheet}");
+    for (cell, v) in [("A2", "3"), ("A3", "2"), ("A4", "1"), ("A5", "0")] {
+        assert_eq!(element(&sheet, cell), Some(format!(r#"<c r="{cell}"><v>{v}</v></c>"#).as_str()), "{sheet}");
+    }
+}
+
+#[test]
+fn an_array_whose_anchor_row_is_deleted_leaves_no_constant_behind() {
+    // SEQUENCE(3,1,1,-1) spills 1, 0, -1 down A1:A3; row 1 deleted takes the anchor
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("anchor.xlsx");
+    let data = r#"<row r="1"><c r="A1" cm="1"><f t="array" ref="A1:A3">_xlfn.SEQUENCE(3,1,1,-1)</f><v>1</v></c></row><row r="2"><c r="A2"><v>0</v></c></row><row r="3"><c r="A3"><v>-1</v></c></row><row r="4"><c r="A4"><v>7</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[Edit::DeleteRows { sheet: "S".into(), at: 1, count: 1 }], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert_eq!(element(&sheet, "A1"), None, "{sheet}");
+    assert_eq!(element(&sheet, "A2"), None, "{sheet}");
+    assert_eq!(element(&sheet, "A3"), Some(r#"<c r="A3"><v>7</v></c>"#), "{sheet}");
+    assert_eq!(read_back(&dst, "S", "A1"), Value::Empty);
+}
+
+#[test]
+fn a_filter_that_grows_gets_its_new_cell_and_a_value_that_is_no_error_loses_its_error_mark() {
+    // FILTER_ERRORS.xlsx: C1 filters A1:A4 above 3 (4 alone), E1 above 10 (none: #CALC!, marked
+    // by `vm`); A1 set to 20 makes C1 spill 20 and 4, E1 return 20
+    let dir = tempfile::tempdir().unwrap();
+    let dst = dir.path().join("out.xlsx");
+    let src = fork_file("calc_tests/LOOKUP_AND_REFERENCE/FILTER_ERRORS.xlsx");
+    patch(&src, &dst, &[value("Sheet1", "A1", serde_json::json!(20))], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    let c1 = element(&sheet, "C1").unwrap();
+    assert!(c1.contains(r#"ref="C1:C2""#) && c1.ends_with("<v>20</v></c>"), "{c1}");
+    assert_eq!(element(&sheet, "C2"), Some(r#"<c r="C2"><v>4</v></c>"#), "{sheet}");
+    let e1 = element(&sheet, "E1").unwrap();
+    assert!(!e1.contains("vm=") && !e1.contains(r#"t="e""#) && e1.ends_with("<v>20</v></c>"), "{e1}");
+}
+
+#[test]
+fn a_format_or_a_validation_that_loses_its_first_row_keeps_reading_its_own_cells() {
+    // A2:A10: a format `A2>5` and a validation `COUNTIF($A$2:$A$10,A2)=1`, both relative to A2
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("formats.xlsx");
+    let data: String = (1..=10).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    let after = r#"<conditionalFormatting sqref="A2:A10"><cfRule type="expression" dxfId="0" priority="1"><formula>A2&gt;5</formula></cfRule></conditionalFormatting><dataValidations count="1"><dataValidation type="custom" allowBlank="1" showErrorMessage="1" sqref="A2:A10"><formula1>COUNTIF($A$2:$A$10,A2)=1</formula1></dataValidation></dataValidations>"#;
+    let styles = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="{MAIN}"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles><dxfs count="1"><dxf><font><b/></font></dxf></dxfs></styleSheet>"#
+    );
+    write_package(
+        &src,
+        &[
+            ("xl/workbook.xml", workbook(&["S"], "")),
+            ("xl/_rels/workbook.xml.rels", rels(&[rel("rId1", "worksheet", "worksheets/sheet1.xml"), rel("rId2", "styles", "styles.xml")])),
+            ("xl/worksheets/sheet1.xml", worksheet(&data, after)),
+            ("xl/styles.xml", styles),
+        ],
+    );
+    // the first row deleted: re-anchored on the old A3, now A2
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[Edit::DeleteRows { sheet: "S".into(), at: 2, count: 1 }], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(r#"<conditionalFormatting sqref="A2:A9"><cfRule type="expression" dxfId="0" priority="1"><formula>A2&gt;5</formula>"#), "{sheet}");
+    assert!(sheet.contains(r#"sqref="A2:A9"><formula1>COUNTIF($A$2:$A$9,A2)=1</formula1>"#), "{sheet}");
+    // rows inserted above: the range and its formulas move together
+    std::fs::remove_file(&dst).unwrap();
+    patch(&src, &dst, &[rows("S", 1, 2)], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(r#"<conditionalFormatting sqref="A4:A12"><cfRule type="expression" dxfId="0" priority="1"><formula>A4&gt;5</formula>"#), "{sheet}");
+    assert!(sheet.contains(r#"sqref="A4:A12"><formula1>COUNTIF($A$4:$A$12,A4)=1</formula1>"#), "{sheet}");
+}
+
+#[test]
+fn random_values_and_what_reads_them_keep_their_caches_on_every_run() {
+    // Coin is a LAMBDA drawing 1 or 2, called by name; C1 draws itself; D1 reads C1. An edit
+    // elsewhere leaves all three as the file has them, every time, and is never refused
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("coin.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>Coin()</f><v>1</v></c><c r="C1"><f>_xlfn.RANDBETWEEN(1,2)</f><v>2</v></c><c r="D1"><f>C1*10</f><v>20</v></c><c r="E1"><f>A1*2</f><v>2</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], r#"<definedName name="Coin">_xlfn.LAMBDA(_xlfn.RANDBETWEEN(1,2))</definedName>"#, &[]);
+    let before = read_elements(&std::fs::read(&src).unwrap()).unwrap();
+    for run in 0..20 {
+        let dst = dir.path().join(format!("out{run}.xlsx"));
+        let report = patch(&src, &dst, &[value("S", "A1", serde_json::json!(5))], &verified()).unwrap_or_else(|e| panic!("run {run}: {e}"));
+        let after = read_elements(&std::fs::read(&dst).unwrap()).unwrap();
+        for col in [2, 3, 4] {
+            assert_eq!(before[0].2[&(1, col)], after[0].2[&(1, col)], "run {run}, column {col}");
+        }
+        assert_eq!(after[0].2[&(1, 5)], r#"<c r="E1"><f>A1*2</f><v>10</v></c>"#);
+        assert_eq!(report.refreshed, 1, "run {run}");
+    }
+    // and the random functions are back to chance once the patch is done
+    assert!(!ironcalc_base::random_is_seeded());
+    assert_eq!(ironcalc_base::pinned_clock(), None);
+}
+
+#[test]
+fn verification_is_on_by_default() {
+    assert!(PatchOptions::default().verify);
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("zero.xlsx");
+    plain_book(&src, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row>"#, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let report = patch(&src, &dst, &[value("S", "A1", serde_json::json!(2))], &PatchOptions::default()).unwrap();
+    assert!(report.verified_cells > 0);
+}
+
+#[test]
+fn a_text_reads_back_as_it_was_written_carriage_returns_and_control_characters_included() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("text.xlsx");
+    plain_book(&src, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row>"#, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let texts = ["line1\r\nline2\rend", "a\u{1}b", "_x0041_ stays", "tab\there"];
+    let edits: Vec<Edit> =
+        texts.iter().enumerate().map(|(i, t)| value("S", &format!("B{}", i + 1), serde_json::json!(t))).collect();
+    patch(&src, &dst, &edits, &verified()).unwrap();
+    for (i, t) in texts.iter().enumerate() {
+        assert_eq!(read_back(&dst, "S", &format!("B{}", i + 1)), Value::Text(t.to_string()), "{t:?}");
+    }
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains("<t xml:space=\"preserve\">line1_x000D_\nline2_x000D_end</t>"), "{sheet}");
+    assert!(sheet.contains("<t>_x005F_x0041_ stays</t>") && sheet.contains("<t>a_x0001_b</t>"), "{sheet}");
+}
+
+#[test]
+fn a_row_deleted_inside_an_array_leaves_the_array_whole() {
+    // SEQUENCE(5) down A1:A5; row 3 deleted: Excel spills it again over A1:A5
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("seq5.xlsx");
+    let mut data = String::from(r#"<row r="1"><c r="A1" cm="1"><f t="array" ref="A1:A5">_xlfn.SEQUENCE(5)</f><v>1</v></c></row>"#);
+    for r in 2..=5 {
+        data.push_str(&format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#));
+    }
+    plain_book(&src, &[("S", worksheet(&data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[Edit::DeleteRows { sheet: "S".into(), at: 3, count: 1 }], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert_eq!(element(&sheet, "A1"), Some(r#"<c r="A1" cm="1"><f t="array" ref="A1:A5">_xlfn.SEQUENCE(5)</f><v>1</v></c>"#), "{sheet}");
+    for r in 2..=5 {
+        assert_eq!(element(&sheet, &format!("A{r}")), Some(format!(r#"<c r="A{r}"><v>{r}</v></c>"#).as_str()), "{sheet}");
+        assert_eq!(read_back(&dst, "S", &format!("A{r}")), Value::Number(r as f64));
+    }
+}
+
+#[test]
+fn a_cell_a_random_array_no_longer_reaches_goes() {
+    // RANDARRAY(1,3) across A1:C1; a column inserted at B: the array spills over A1:C1 again, the
+    // old C1, now at D1, is no part of it and must not stay behind as a constant
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("rand.xlsx");
+    let data = r#"<row r="1"><c r="A1" cm="1"><f t="array" ref="A1:C1">_xlfn.RANDARRAY(1,3)</f><v>0.1</v></c><c r="B1"><v>0.2</v></c><c r="C1"><v>0.3</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[Edit::InsertColumns { sheet: "S".into(), at: "B".into(), count: 1 }], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(element(&sheet, "A1").unwrap().contains(r#"ref="A1:C1""#), "{sheet}");
+    assert!(element(&sheet, "B1").is_some_and(|c| c.contains("<v>")), "{sheet}");
+    assert_eq!(element(&sheet, "C1"), Some(r#"<c r="C1"><v>0.2</v></c>"#), "{sheet}");
+    assert_eq!(element(&sheet, "D1"), None, "{sheet}");
+    // as Excel writes a volatile array: its spilled cells hold an empty `<f ca="1"/>`, a
+    // placeholder and no formula of their own
+    let data = r#"<row r="1"><c r="A1" cm="1"><f t="array" aca="1" ref="A1:C1" ca="1">_xlfn.RANDARRAY(1,3)</f><v>0.1</v></c><c r="B1"><f ca="1"/><v>0.2</v></c><c r="C1"><f ca="1"/><v>0.3</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    std::fs::remove_file(&dst).unwrap();
+    patch(&src, &dst, &[Edit::InsertColumns { sheet: "S".into(), at: "B".into(), count: 1 }], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert_eq!(element(&sheet, "C1"), Some(r#"<c r="C1"><f ca="1"/><v>0.2</v></c>"#), "{sheet}");
+    assert_eq!(element(&sheet, "D1"), None, "{sheet}");
+}

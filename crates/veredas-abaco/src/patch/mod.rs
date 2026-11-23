@@ -38,12 +38,13 @@
 //!   "already there", holding something else is a conflict and the edit is
 //!   skipped;
 //! - the write is atomic: the new file is written beside the destination,
-//!   [`PatchOptions::verify`] re-opens THAT file through the engine and
-//!   compares every cell (content and value) with the model the edits
-//!   produced, the source is re-read (it must not have moved since it was
-//!   read), and only then is the file renamed over the destination, its
-//!   previous version kept as `.bak`; a failed verification or a moved
-//!   source leaves the destination as it was.
+//!   [`PatchOptions::verify`] (on by default) re-opens THAT file through the
+//!   engine and compares every cell (content and value) with the model the
+//!   edits produced, and every cache the edits moved with the value written,
+//!   the source is re-read (it must not have moved since it was read), and
+//!   only then is the file renamed over the destination, its previous version
+//!   kept as `.bak`; a failed verification or a moved source leaves the
+//!   destination as it was.
 
 pub mod cached;
 pub mod package;
@@ -63,7 +64,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::a1::{column_number, Addr, Area};
 use crate::links::{self, LinkChoice, LinkPolicy};
-use crate::book::{Content, Value, Workbook};
+use crate::book::{Content, Name, Value, Workbook};
 
 pub use refs::Shift;
 pub use styles::{LineStyle, StyleOp};
@@ -350,40 +351,88 @@ impl PatchReport {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PatchOptions {
-    /// Re-open the written file and compare every cell with the model.
+    /// Re-open the written file, before it replaces the destination, and compare every cell with
+    /// the model and every moved value with its written cache. On by default; off, a patch writes
+    /// what it computed unchecked.
     pub verify: bool,
     /// Set `fullCalcOnLoad` (Excel recalculates everything on open). Off by
     /// default: the patcher writes the engine's values.
     pub full_calc_on_load: bool,
 }
 
-/// The identifiers of a formula in A1 spelling, outside string literals and quoted sheet names,
-/// each with the first character after it that is not a space (`None` at the end).
-fn tokens(formula: &str) -> Vec<(&str, Option<char>)> {
+impl Default for PatchOptions {
+    fn default() -> PatchOptions {
+        PatchOptions { verify: true, full_calc_on_load: false }
+    }
+}
+
+/// An identifier of a formula in A1 spelling: its text, the first character after it that is not
+/// a space (`None` at the end), and the sheet that qualifies it (`Data!R`, `'My data'!R`).
+#[derive(Debug, PartialEq)]
+struct Token<'a> {
+    text: &'a str,
+    next: Option<char>,
+    sheet: Option<String>,
+}
+
+/// The identifiers of a formula in A1 spelling, outside string literals and quoted sheet names.
+fn tokens(formula: &str) -> Vec<Token<'_>> {
     let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '.' || c == '\\';
+    let chars: Vec<(usize, char)> = formula.char_indices().collect();
+    let next_after = |i: usize| formula[i..].chars().find(|c| !c.is_whitespace());
     let mut out = Vec::new();
-    let mut quote: Option<char> = None;
-    let mut start: Option<usize> = None;
-    for (i, c) in formula.char_indices().chain(std::iter::once((formula.len(), ' '))) {
-        if let Some(q) = quote {
-            if c == q {
-                quote = None;
-            }
-            continue;
-        }
-        if i < formula.len() && ident(c) {
-            start.get_or_insert(i);
-            continue;
-        }
-        if let Some(a) = start.take() {
-            let next = formula[i..].chars().find(|c| !c.is_whitespace());
-            out.push((&formula[a..i], next));
-        }
+    // the name a `!` qualifies with (the identifier or quoted name just before it) and where the `!` is
+    let mut qualifier: Option<(String, usize)> = None;
+    // the last name read and the index just past it
+    let mut last: Option<(String, usize)> = None;
+    let mut k = 0;
+    while k < chars.len() {
+        let (i, c) = chars[k];
         if c == '"' || c == '\'' {
-            quote = Some(c);
+            // a literal, `""` / `''` inside it standing for the quote itself
+            let mut text = String::new();
+            k += 1;
+            while k < chars.len() {
+                let (_, d) = chars[k];
+                if d == c {
+                    if chars.get(k + 1).is_some_and(|(_, e)| *e == c) {
+                        text.push(c);
+                        k += 2;
+                        continue;
+                    }
+                    break;
+                }
+                text.push(d);
+                k += 1;
+            }
+            let end = chars.get(k).map(|(j, _)| j + 1).unwrap_or(formula.len());
+            last = (c == '\'').then_some((text, end));
+            k += 1;
+            continue;
         }
+        if c == '!' {
+            qualifier = last.take().filter(|(_, end)| *end == i).map(|(name, _)| (name, i));
+            k += 1;
+            continue;
+        }
+        if ident(c) {
+            let start = i;
+            while k < chars.len() && ident(chars[k].1) {
+                k += 1;
+            }
+            let end = chars.get(k).map(|(j, _)| *j).unwrap_or(formula.len());
+            let sheet = qualifier.take().filter(|(_, bang)| bang + 1 == start).map(|(name, _)| name);
+            let text = &formula[start..end];
+            out.push(Token { text, next: next_after(end), sheet });
+            last = Some((text.to_string(), end));
+            continue;
+        }
+        if !c.is_whitespace() {
+            last = None;
+        }
+        k += 1;
     }
     out
 }
@@ -391,19 +440,56 @@ fn tokens(formula: &str) -> Vec<(&str, Option<char>)> {
 /// Whether a formula (A1 spelling) calls a function whose value changes from one evaluation to the
 /// next, by name (`_xlfn.` allowed): `GRANDTOTAL(` or a text `"RAND()"` is no call.
 fn calls_volatile(formula: &str) -> bool {
-    tokens(formula).iter().any(|(t, next)| {
-        let name = t.trim_start_matches("_xlfn.").trim_start_matches("_xlws.");
-        *next == Some('(')
+    tokens(formula).iter().any(|t| {
+        let name = t.text.trim_start_matches("_xlfn.").trim_start_matches("_xlws.");
+        t.next == Some('(')
             && ["RAND", "RANDBETWEEN", "RANDARRAY", "NOW", "TODAY"].iter().any(|v| name.eq_ignore_ascii_case(v))
     })
 }
 
-/// Whether a formula (A1 spelling) reads the defined name `name`: the name as a whole token, not a
-/// function's (`(`), a sheet's (`!`) or a table's (`[`).
-fn mentions(formula: &str, name: &str) -> bool {
-    tokens(formula)
-        .iter()
-        .any(|(t, next)| t.eq_ignore_ascii_case(name) && !matches!(next, Some('(' | '!' | '[')))
+/// The defined name (its place in `names`) a token of a formula on `sheet` reads (`None` for a
+/// name's formula with no sheet of its own), as Excel resolves it: `S!N` is S's local N, or the
+/// workbook's N; `N` is the formula's sheet's local N, or the workbook's N. A sheet (`N!`) or a
+/// table (`N[`) is no name; a name called (`N(`) is one (a LAMBDA).
+fn resolve(names: &[Name], token: &Token, sheet: Option<&str>) -> Option<usize> {
+    if matches!(token.next, Some('!' | '[')) {
+        return None;
+    }
+    let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
+    let scope = token.sheet.as_deref().or(sheet);
+    scope
+        .and_then(|sc| {
+            names.iter().position(|n| same(&n.name, token.text) && n.scope.as_deref().is_some_and(|ns| same(ns, sc)))
+        })
+        .or_else(|| names.iter().position(|n| same(&n.name, token.text) && n.scope.is_none()))
+}
+
+/// Which defined names (by their place in `names`) call a volatile function, directly or through
+/// other names, each name's formula read on its own sheet.
+fn volatile_names(names: &[Name]) -> Vec<bool> {
+    let mut volatile: Vec<bool> = names.iter().map(|n| calls_volatile(&n.formula)).collect();
+    loop {
+        let more: Vec<usize> = (0..names.len())
+            .filter(|&i| !volatile[i])
+            .filter(|&i| {
+                tokens(&names[i].formula)
+                    .iter()
+                    .any(|t| resolve(names, t, names[i].scope.as_deref()).is_some_and(|j| volatile[j]))
+            })
+            .collect();
+        if more.is_empty() {
+            return volatile;
+        }
+        for i in more {
+            volatile[i] = true;
+        }
+    }
+}
+
+/// Whether a formula of `sheet` (A1 spelling) calls a volatile function or reads a volatile name.
+fn formula_volatile(formula: &str, sheet: &str, names: &[Name], volatile: &[bool]) -> bool {
+    calls_volatile(formula)
+        || tokens(formula).iter().any(|t| resolve(names, t, Some(sheet)).is_some_and(|j| volatile[j]))
 }
 
 /// Every formula of every sheet in A1 spelling, by sheet and by the engine's formula index (the
@@ -426,21 +512,89 @@ fn a1_formulas(wb: &Workbook) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// The defined names whose formula calls a volatile function, directly or through another such
-/// name.
-fn volatile_names(wb: &Workbook) -> Vec<String> {
-    let names = wb.names();
-    let mut out: Vec<String> = names.iter().filter(|n| calls_volatile(&n.formula)).map(|n| n.name.clone()).collect();
-    loop {
-        let more: Vec<String> = names
-            .iter()
-            .filter(|n| !out.contains(&n.name) && out.iter().any(|v| mentions(&n.formula, v)))
-            .map(|n| n.name.clone())
-            .collect();
-        if more.is_empty() {
-            return out;
+/// Every dynamic array of a sheet: its anchor and how many rows and columns it spills over (the
+/// engine keeps the size as width by height).
+fn array_extents(ws: &ironcalc_base::types::Worksheet) -> std::collections::HashMap<(i32, i32), (i32, i32)> {
+    ws.sheet_data
+        .cells()
+        .filter_map(|(row, col, c)| match &*c {
+            Cell::ArrayFormula { r: (width, height), kind: ironcalc_base::types::ArrayKind::Dynamic, .. } => {
+                Some(((row, col), (*height, *width)))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether the engine computes the cell at `at` of `ws`: a formula, or a cell an array spills
+/// into that its anchor's array covers now (a move can leave a spilled cell behind that its array
+/// no longer reaches: the engine reads it empty).
+fn computed_at(ws: &ironcalc_base::types::Worksheet, at: (i32, i32)) -> bool {
+    match ws.cell(at.0, at.1).map(|c| c.as_ref().clone()) {
+        Some(Cell::SpillCell { a, .. }) => match ws.cell(a.0, a.1).map(|c| c.as_ref().clone()) {
+            Some(Cell::ArrayFormula { r: (width, height), .. }) => {
+                (a.0..a.0 + height).contains(&at.0) && (a.1..a.1 + width).contains(&at.1)
+            }
+            _ => false,
+        },
+        Some(c) => c.get_formula().is_some(),
+        None => false,
+    }
+}
+
+/// How many evaluations, each with its own seed and day, the measure of what moves with a volatile
+/// function compares with the reference one.
+const OTHER_EVALUATIONS: u64 = 4;
+
+/// The random functions' seed of the reference evaluation.
+const REFERENCE_SEED: u64 = 1;
+
+/// While the patcher evaluates: the engine's random functions seeded and its clock pinned, so the
+/// evaluation before the edits, the one after them and verification's all draw the same numbers
+/// and read the same time (the engine evaluates in a fixed order), and a cell that only reads a
+/// random one is moved by an edit or by nothing. The measure of what moves with a volatile
+/// function evaluates with other seeds, on other days. When it drops, the thread's own clock pin
+/// comes back, and the random functions go back to chance unless the host had seeded them.
+struct Fixed {
+    host_clock: Option<i64>,
+    host_seeded: bool,
+    now: i64,
+}
+
+impl Fixed {
+    fn new() -> Fixed {
+        let host_clock = ironcalc_base::pinned_clock();
+        let host_seeded = ironcalc_base::random_is_seeded();
+        let now = host_clock.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0)
+        });
+        let fixed = Fixed { host_clock, host_seeded, now };
+        fixed.reference();
+        fixed
+    }
+
+    /// The reference evaluation, everything is compared at.
+    fn reference(&self) {
+        ironcalc_base::seed_random(Some(REFERENCE_SEED));
+        ironcalc_base::pin_clock(Some(self.now));
+    }
+
+    /// The `k`-th other evaluation: another seed, `k` days later.
+    fn other(&self, k: u64) {
+        ironcalc_base::seed_random(Some(REFERENCE_SEED + k));
+        ironcalc_base::pin_clock(Some(self.now + k as i64 * 86_400_000));
+    }
+}
+
+impl Drop for Fixed {
+    fn drop(&mut self) {
+        ironcalc_base::pin_clock(self.host_clock);
+        if !self.host_seeded {
+            ironcalc_base::seed_random(None);
         }
-        out.extend(more);
     }
 }
 
@@ -459,14 +613,21 @@ fn volatile_names(wb: &Workbook) -> Vec<String> {
 /// master) evaluates the same both times, so its cache is kept, byte for byte.
 ///
 /// Volatile functions (`RAND`, `RANDBETWEEN`, `RANDARRAY`, `NOW`, `TODAY`)
-/// would read as "moved" on every evaluation: when the workbook holds one,
-/// the unedited model is evaluated a second time and every cell whose value
-/// differs between those two passes (the volatile cells and whatever reads
-/// them) is `unstable` — its cache is kept unless an edit wrote the cell
+/// would read as "moved" on every evaluation. Every evaluation the patcher
+/// compares is made alike ([`Fixed`]: one seed, one time), so a draw and the
+/// cells that read it are the same before and after unless an edit moved
+/// them; and when the workbook calls one, a cell whose formula calls it,
+/// directly or through defined names (resolved by scope), the cells it spills
+/// into, and every cell whose value differs in evaluations with other seeds on
+/// other days are `unstable`: its cache is kept unless an edit wrote the cell
 /// itself. Excel recalculates volatile cells on every recalculation anyway.
 struct Before {
     values: Vec<std::collections::HashMap<(i32, i32), Value>>,
     unstable: Vec<std::collections::HashSet<(i32, i32)>>,
+    /// Each dynamic array's spill (rows, columns), by its anchor's original position: an anchor's
+    /// `ref` follows the engine only where the edits changed its spill (the engine and Excel may
+    /// size one differently, and the file keeps Excel's then).
+    extents: Vec<std::collections::HashMap<(i32, i32), (i32, i32)>>,
 }
 
 impl Before {
@@ -497,14 +658,15 @@ impl Before {
     /// Whether any formula of `wb`, a cell's or a defined name's, calls a volatile function (a
     /// text test: a false positive costs one more evaluation, nothing else).
     fn volatile(wb: &Workbook) -> bool {
-        a1_formulas(wb).iter().flatten().any(|f| calls_volatile(f)) || !volatile_names(wb).is_empty()
+        a1_formulas(wb).iter().flatten().any(|f| calls_volatile(f)) || volatile_names(&wb.names()).contains(&true)
     }
 
     /// The cells whose own formula calls a volatile function, directly or through a defined name
     /// that does, and the cells such a formula spills into: unstable whatever two evaluations
     /// happen to give (a random draw can repeat).
     fn volatile_cells(wb: &Workbook) -> Vec<std::collections::HashSet<(i32, i32)>> {
-        let names = volatile_names(wb);
+        let names = wb.names();
+        let volatile_name = volatile_names(&names);
         let formulas = a1_formulas(wb);
         wb.model()
             .workbook
@@ -512,8 +674,9 @@ impl Before {
             .iter()
             .zip(formulas.iter())
             .map(|(ws, texts)| {
+                let sheet = ws.get_name();
                 let volatile: Vec<bool> =
-                    texts.iter().map(|f| calls_volatile(f) || names.iter().any(|n| mentions(f, n))).collect();
+                    texts.iter().map(|f| formula_volatile(f, &sheet, &names, &volatile_name)).collect();
                 let mut cells: std::collections::HashSet<(i32, i32)> = ws
                     .sheet_data
                     .cells()
@@ -539,29 +702,35 @@ impl Before {
     fn unstable(
         wb: &mut Workbook,
         values: &[std::collections::HashMap<(i32, i32), Value>],
+        fixed: &Fixed,
     ) -> Vec<std::collections::HashSet<(i32, i32)>> {
         if !Before::volatile(wb) {
             return vec![std::collections::HashSet::new(); values.len()];
         }
         // by text: the volatile formulas and what they spill into; measured: what moves with them,
-        // over three more evaluations (a value that repeats once by chance seldom repeats thrice)
+        // over evaluations with other seeds and on other days than the reference one
         let mut out = Before::volatile_cells(wb);
         out.resize(values.len(), std::collections::HashSet::new());
-        for _ in 0..3 {
+        for k in 1..=OTHER_EVALUATIONS {
+            fixed.other(k);
             wb.recalc();
             let again = Before::snapshot(wb);
             for ((a, b), u) in values.iter().zip(again.iter()).zip(out.iter_mut()) {
                 u.extend(a.iter().filter(|(k, v)| !b.get(*k).is_some_and(|w| same(v, w))).map(|(k, _)| *k));
             }
         }
+        // back to the reference evaluation the values were taken at
+        fixed.reference();
+        wb.recalc();
         out
     }
 
-    /// `wb` as `links::open` left it: evaluated, unedited.
-    fn take(wb: &mut Workbook) -> Before {
+    /// `wb` as `links::open` left it under `fixed`'s reference: evaluated, unedited.
+    fn take(wb: &mut Workbook, fixed: &Fixed) -> Before {
         let values = Before::snapshot(wb);
-        let unstable = Before::unstable(wb, &values);
-        Before { values, unstable }
+        let extents = wb.model().workbook.worksheets.iter().map(array_extents).collect();
+        let unstable = Before::unstable(wb, &values, fixed);
+        Before { values, unstable, extents }
     }
 
     /// Whether the edits moved the engine's value of the formula that was at
@@ -697,8 +866,20 @@ fn current_file_formula(wb: &Workbook, sheet: u32, a: Addr) -> Option<String> {
     Some(to_excel_string(&node, &ctx))
 }
 
+/// Two values as Excel tells them apart: of one kind, numbers equal to 15 significant digits
+/// (Excel's precision), texts, booleans and errors exactly; an empty cell is neither 0 nor `""`.
 fn same(a: &Value, b: &Value) -> bool {
-    sheet::same_value(a, b) && sheet::same_value(b, a)
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x == y || format!("{x:.14e}") == format!("{y:.14e}"),
+        _ => a == b,
+    }
+}
+
+/// Whether a cache read from the file holds `want`: as [`same`], save that an empty value and the
+/// empty text a formula caches as `<v></v>` are one ([`sheet::same_value`], the rule the rewrite
+/// refreshes a cache by).
+fn cache_holds(cached: &Value, want: &Value) -> bool {
+    sheet::same_value(cached, want)
 }
 
 fn describe(wb: &Workbook, sheet: u32, a: Addr) -> String {
@@ -748,6 +929,7 @@ pub fn patch(
     let mut pkg = package::Package::open(bytes)?;
 
     // ---- the engine's model, links from the cache (Excel's closed-book view)
+    let fixed = Fixed::new();
     let opened = links::open(source, LinkPolicy::AlwaysUseCached, |_| {
         LinkChoice::UseCached
     })?;
@@ -757,7 +939,7 @@ pub fn patch(
     }
     // the engine's value of every formula BEFORE the edits: a cache is
     // re-written only where the edits moved it (see `Before`)
-    let before = Before::take(&mut wb);
+    let before = Before::take(&mut wb, &fixed);
 
     let mut report = PatchReport::default();
     let mut shifts: Vec<(String, Shift)> = Vec::new();
@@ -1087,6 +1269,7 @@ pub fn patch(
         ));
     }
 
+    fixed.reference();
     wb.recalc();
 
     // ---- the plan at final positions -------------------------------------
@@ -1156,6 +1339,89 @@ pub fn patch(
             });
         }
     }
+    // the cells an array spills into that the file has no cell for: written as Excel writes a
+    // spilled cell where the array reaches them because of the edits (grown, moved into empty
+    // cells), left out where it reached them already and their value did not move; and every cell
+    // the engine computes whose value the edits moved, with that value, where the file holds it:
+    // what verification must read back from the written caches
+    let mut expected: Vec<(String, i32, i32, Value)> = Vec::new();
+    let spills_now = wb.model().workbook.worksheets.iter().any(|ws| {
+        ws.sheet_data.cells().any(|(_, _, c)| matches!(&*c, Cell::SpillCell { .. }))
+    });
+    // before the edits, a computed cell that is no formula is a spilled one
+    let spills_before = before
+        .values
+        .iter()
+        .zip(wb.model().workbook.worksheets.iter())
+        .any(|(v, ws)| v.len() > ws.sheet_data.cells().filter(|(_, _, c)| c.get_formula().is_some()).count());
+    let in_file: Option<BTreeMap<String, std::collections::HashSet<(i32, i32)>>> = if spills_now || spills_before {
+        Some(
+            cached::read_elements(&fingerprint)?
+                .into_iter()
+                .map(|(name, _, cells)| {
+                    let at = cells.keys().filter_map(|&(r, c)| map_pos(&name, 0, r, c)).collect();
+                    (name.to_lowercase(), at)
+                })
+                .collect(),
+        )
+    } else {
+        None
+    };
+    let holds_cell = |name: &str, at: (i32, i32)| {
+        in_file.as_ref().is_none_or(|f| f.get(&name.to_lowercase()).is_some_and(|s| s.contains(&at)))
+    };
+    let unstable = |i: usize, orig: &(i32, i32)| before.unstable.get(i).is_some_and(|u| u.contains(orig));
+    if spills_now {
+        for (i, ws) in wb.model().workbook.worksheets.iter().enumerate() {
+            let name = order.get(i).cloned().unwrap_or_default();
+            // what the engine computed before the edits, by where it is now
+            let was: std::collections::HashMap<(i32, i32), ((i32, i32), Value)> = before
+                .values
+                .get(i)
+                .map(|m| m.iter().filter_map(|(o, v)| map_pos(&name, 0, o.0, o.1).map(|p| (p, (*o, v.clone())))).collect())
+                .unwrap_or_default();
+            let spilled: Vec<(i32, i32)> = ws
+                .sheet_data
+                .cells()
+                .filter(|(_, _, c)| matches!(&**c, Cell::SpillCell { .. }))
+                .map(|(r, c, _)| (r, c))
+                .filter(|p| computed_at(ws, *p) && !holds_cell(&name, *p))
+                .collect();
+            for (row, col) in spilled {
+                let v = wb.value_now(i as u32, Addr::new(row, col)).map_err(|e| PatchError::Malformed(e.to_string()))?;
+                if let Some((orig, then)) = was.get(&(row, col))
+                    && (same(then, &v) || unstable(i, orig))
+                {
+                    continue;
+                }
+                let entry = final_writes.entry(name.clone()).or_default().entry((row, col)).or_default();
+                if entry.content.is_none() {
+                    entry.content = Some(NewContent::Spilled(v.clone()));
+                    expected.push((name.clone(), row, col, v));
+                }
+            }
+        }
+    }
+    let computes = |i: usize, at: (i32, i32)| wb.model().workbook.worksheet(i as u32).is_ok_and(|ws| computed_at(ws, at));
+    for (i, values) in before.values.iter().enumerate() {
+        let Some(name) = order.get(i) else { continue };
+        for (orig, was) in values {
+            if unstable(i, orig) && map_pos(name, 0, orig.0, orig.1).is_some_and(|p| computes(i, p)) {
+                continue;
+            }
+            let Some((row, col)) = map_pos(name, 0, orig.0, orig.1) else { continue };
+            if !holds_cell(name, (row, col))
+                || final_writes.get(name).is_some_and(|w| w.get(&(row, col)).is_some_and(|w| w.content.is_some()))
+            {
+                continue;
+            }
+            let live = wb.value_now(i as u32, Addr::new(row, col)).unwrap_or(Value::Empty);
+            if !same(was, &live) {
+                expected.push((name.clone(), row, col, live));
+            }
+        }
+    }
+
     let mut final_rows: BTreeMap<String, BTreeMap<i32, RowOp>> = BTreeMap::new();
     for r in &rows_ops {
         for row in r.first..=r.last {
@@ -1300,11 +1566,31 @@ pub fn patch(
         let moved = |orig: (i32, i32), live: &Value| -> bool {
             fresh.is_none() && before.moved(sheet_index, orig, live)
         };
+        let extents_now = wb
+            .model()
+            .workbook
+            .worksheet(sheet_index)
+            .map(array_extents)
+            .unwrap_or_default();
+        let array_extent = |orig: (i32, i32), new: (i32, i32)| -> Option<(Option<(i32, i32)>, (i32, i32))> {
+            let now = *extents_now.get(&new)?;
+            let then = if fresh.is_some() {
+                None
+            } else {
+                before.extents.get(sheet_index as usize).and_then(|e| e.get(&orig)).copied()
+            };
+            Some((then, now))
+        };
         let key = order
             .iter()
             .find(|n| n.eq_ignore_ascii_case(name))
             .cloned()
             .unwrap_or_else(|| name.clone());
+        let left = |orig: (i32, i32), new: (i32, i32)| -> bool {
+            fresh.is_none()
+                && before.values.get(sheet_index as usize).is_some_and(|v| v.contains_key(&orig))
+                && !wb.model().workbook.worksheet(sheet_index).is_ok_and(|ws| computed_at(ws, new))
+        };
         let job = SheetJob {
             name: &key,
             order: &order,
@@ -1314,6 +1600,8 @@ pub fn patch(
             col_ops: final_cols.get(&key).map(|v| v.as_slice()).unwrap_or(&[]),
             value_at: &value_at,
             moved: &moved,
+            array_extent: &array_extent,
+            left: &left,
         };
         let out = sheet::rewrite(&text, &job, &mut styles)?;
         report.refreshed += out.refreshed;
@@ -1502,7 +1790,7 @@ pub fn patch(
     // ---- written beside the destination, verified there, then renamed ---------
     commit(source, &fingerprint, dest, &out, |written| {
         if options.verify {
-            report.verified_cells = verify(written, &mut wb)?;
+            report.verified_cells = verify(written, &mut wb, &fixed, &expected)?;
         }
         Ok(())
     })?;
@@ -1879,14 +2167,38 @@ fn formula_text(c: &Content) -> Option<&str> {
 
 /// Re-opens `dest` through the engine and compares every cell with the
 /// model the edits produced; the number of cells compared.
-fn verify(dest: &Path, wb: &mut Workbook) -> Result<usize, PatchError> {
+fn verify(
+    dest: &Path,
+    wb: &mut Workbook,
+    fixed: &Fixed,
+    expected: &[(String, i32, i32, Value)],
+) -> Result<usize, PatchError> {
+    // the caches: every cell whose value the edits moved holds the engine's value in the file (the
+    // engine recomputes the rest, so its reading of the file cannot show a stale cache)
+    let caches: std::collections::HashMap<(String, i32, i32), Value> = cached::read(dest)?
+        .into_iter()
+        .map(|((s, r, c), cell)| ((s.to_lowercase(), r, c), cell.value))
+        .collect();
+    let mut stale: Vec<String> = Vec::new();
+    for (sheet, row, col, want) in expected {
+        let cached = caches.get(&(sheet.to_lowercase(), *row, *col)).cloned().unwrap_or(Value::Empty);
+        if !cache_holds(&cached, want) {
+            stale.push(format!("{sheet}!{}: cached {cached:?}, the engine {want:?}", Addr::new(*row, *col)));
+        }
+    }
+    if !stale.is_empty() {
+        let n = stale.len();
+        stale.truncate(20);
+        return Err(PatchError::Verify(format!("{n} cache(s) not the engine's value; first: {}", stale.join(" | "))));
+    }
+    fixed.reference();
     let opened = links::open(dest, LinkPolicy::AlwaysUseCached, |_| LinkChoice::UseCached)?;
     let mut back = Workbook::from_model(opened.model, crate::book::Origin::New);
     // a volatile cell (and what reads it) has a new value on every
     // evaluation: its CONTENT is compared, not its value
     let unstable = {
         let values = Before::snapshot(&back);
-        Before::unstable(&mut back, &values)
+        Before::unstable(&mut back, &values, fixed)
     };
     let names = wb.sheet_names();
     if back.sheet_names() != names {
@@ -2007,21 +2319,55 @@ mod tests {
         assert_eq!(listing(dir.path()), ["in.xlsx", "out.xlsx", "out.xlsx.bak"]);
     }
 
+    fn name(name: &str, scope: Option<&str>, formula: &str) -> Name {
+        Name { name: name.into(), scope: scope.map(str::to_string), formula: formula.into() }
+    }
+
     #[test]
-    fn a_name_is_read_as_a_whole_token_and_a_volatile_function_as_a_call() {
-        assert!(mentions("R*2", "R"));
-        assert!(mentions("SUM(rate,1)", "Rate"));
-        assert!(mentions("1+Sheet1!R", "R"));
-        assert!(!mentions("RAND()", "R"));
-        assert!(!mentions("R1*2", "R"));
-        assert!(!mentions("My.R", "R"));
-        assert!(!mentions("R!A1", "R"));
-        assert!(!mentions("R[Qty]", "R"));
-        assert!(!mentions("R (1)", "R"));
-        assert!(!mentions("\"R\"&'R'!A1", "R"));
+    fn tokens_carry_the_sheet_that_qualifies_them() {
+        let t = tokens("1+Data!R+'My ''data'''!S*T(2)+\"U!V\"");
+        let got: Vec<(&str, Option<char>, Option<&str>)> =
+            t.iter().map(|t| (t.text, t.next, t.sheet.as_deref())).collect();
+        assert_eq!(
+            got,
+            [
+                ("1", Some('+'), None),
+                ("Data", Some('!'), None),
+                ("R", Some('+'), Some("Data")),
+                ("S", Some('*'), Some("My 'data'")),
+                ("T", Some('('), None),
+                ("2", Some(')'), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_resolves_as_excel_resolves_it_and_a_volatile_function_is_a_call() {
+        let names = vec![
+            name("R", None, "Data!$A$1"),
+            name("R", Some("Other"), "RAND()"),
+            name("Coin", None, "_xlfn.LAMBDA(_xlfn.RANDBETWEEN(1,2))"),
+            name("Twice", Some("Other"), "R*2"),
+            name("Plain", None, "R*2"),
+        ];
+        let volatile = volatile_names(&names);
+        // the local R is volatile, the workbook's is not; Twice reads Other's R, Plain the workbook's
+        assert_eq!(volatile, [false, true, true, true, false]);
+        let v = |f: &str, sheet: &str| formula_volatile(f, sheet, &names, &volatile);
+        assert!(!v("R*2", "Data"), "Data reads the workbook's R");
+        assert!(v("R*2", "Other"), "Other reads its own R");
+        assert!(v("Other!R*2", "Data"), "qualified, Other's R from anywhere");
+        assert!(!v("Data!R*2", "Other"), "Data has no local R: the workbook's");
+        assert!(v("Coin()+1", "Data"), "a LAMBDA name called");
+        assert!(v("LET(x,Twice,x)", "Other"));
+        assert!(!v("R[Qty]+R!A1", "Other"), "a table and a sheet named R");
+        assert!(!v("\"R\"&'R'!A1", "Other"));
+        assert!(!v("R1*2", "Other"));
+        assert!(!v("My.R", "Other"));
         assert!(calls_volatile("1+RAND()"));
         assert!(calls_volatile("_xlfn.RANDARRAY(3)"));
         assert!(calls_volatile("today ()+1"));
+        assert!(calls_volatile("LET(x,RAND(),x)"));
         assert!(!calls_volatile("GRANDTOTAL(1)"));
         assert!(!calls_volatile("\"RAND()\""));
         assert!(!calls_volatile("NOW"));

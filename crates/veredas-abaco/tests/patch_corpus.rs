@@ -117,6 +117,8 @@ fn one_number_changed_changes_its_sheet_alone() {
         // the first number of the first sheet holding one: a number the file states with no
         // formula and the engine holds as a plain value too (not a cell an array spilled into)
         let sheets = read_sheets(&src, |_| true).unwrap();
+        // the engine's values before and after, evaluated alike: one seed, one day
+        fixed_evaluation();
         let wb = Workbook::open(&src, LinkPolicy::AlwaysUseCached, |_| LinkChoice::UseCached).unwrap();
         let target = sheets.iter().find_map(|(name, cells)| {
             let index = wb.sheet_index(name).ok()?;
@@ -162,6 +164,7 @@ fn one_number_changed_changes_its_sheet_alone() {
         // computes (a formula, or a cell an array spilled into) whose value the edit moved, its
         // formula text as it was; every other cell as it was
         let after_elements = read_elements(&std::fs::read(&dst).unwrap()).unwrap();
+        fixed_evaluation();
         let wb_after = Workbook::open(&dst, LinkPolicy::AlwaysUseCached, |_| LinkChoice::UseCached).unwrap();
         for ((name, _, cells), (_, _, cells_after)) in elements.iter().zip(after_elements.iter()) {
             for (at, el) in cells {
@@ -184,7 +187,33 @@ fn one_number_changed_changes_its_sheet_alone() {
                     }
                 }
             }
-            assert!(cells_after.keys().all(|k| cells.contains_key(k)), "{rel}: a cell added in {name}");
+            // a cell added: one an array now spills into because of the edit, its value moved
+            for k in cells_after.keys().filter(|k| !cells.contains_key(k)) {
+                let i = wb.sheet_index(name).unwrap();
+                let a = Addr::new(k.0, k.1);
+                assert!(computed(&wb_after, i, a), "{rel}: {name}!{a} added and no array spills into it");
+                assert!(!same(&wb.value_now(i, a).unwrap(), &wb_after.value_now(i, a).unwrap()), "{rel}: {name}!{a} added, its value unmoved");
+            }
+        }
+        // and the converse: every cell the engine computes whose value the edit moved holds the
+        // new value in the written file (the engine's reading of the file recomputes, so a stale
+        // cache would not show there)
+        let caches = veredas_abaco::patch::cached::read(&dst).unwrap();
+        for (i, name) in wb.sheet_names().iter().enumerate() {
+            let i = i as u32;
+            let mut at: BTreeSet<(i32, i32)> = computed_cells(&wb, i);
+            at.extend(computed_cells(&wb_after, i));
+            for (r, c) in at {
+                let a = Addr::new(r, c);
+                let (was, is) = (wb.value_now(i, a).unwrap(), wb_after.value_now(i, a).unwrap());
+                if !same(&was, &is) {
+                    let cached = caches.get(&(name.clone(), r, c)).map(|c| c.value.clone()).unwrap_or(Value::Empty);
+                    let holds = matches!((&cached, &is), (Value::Empty, Value::Empty))
+                        || matches!((&cached, &is), (Value::Text(t), Value::Empty) if t.is_empty())
+                        || same(&cached, &is);
+                    assert!(holds, "{rel}: {name}!{a} moved from {was:?} to {is:?} and the file caches {cached:?}");
+                }
+            }
         }
         // the patcher's own verification read every cell back
         assert!(report.verified_cells > 0, "{rel}");
@@ -284,6 +313,36 @@ fn formula_of(el: &str) -> Option<&str> {
     }
     let close = el[open_end..].find("</f>")? + open_end;
     Some(&el[open_end + 1..close])
+}
+
+/// The random functions seeded and the clock pinned on this thread, the same every time: the
+/// evaluations a test compares see the same draws and the same day.
+fn fixed_evaluation() {
+    ironcalc_base::seed_random(Some(1));
+    ironcalc_base::pin_clock(Some(1_795_348_800_000)); // 2026-11-22, noon UTC
+}
+
+/// Two values as Excel tells them apart (numbers to 15 significant digits).
+fn same(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x == y || format!("{x:.14e}") == format!("{y:.14e}"),
+        _ => a == b,
+    }
+}
+
+/// The cells of a sheet the engine computes: formulas and the cells arrays spilled into.
+fn computed_cells(wb: &Workbook, sheet: u32) -> BTreeSet<(i32, i32)> {
+    wb.model()
+        .workbook
+        .worksheet(sheet)
+        .map(|ws| {
+            ws.sheet_data
+                .cells()
+                .filter(|(_, _, c)| c.get_formula().is_some() || matches!(&**c, ironcalc_base::types::Cell::SpillCell { .. }))
+                .map(|(r, c, _)| (r, c))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Whether the engine computes the cell's value though the file holds no formula there: a cell
