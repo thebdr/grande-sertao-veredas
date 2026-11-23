@@ -97,6 +97,65 @@ fn the_record_keeps_on_the_drive_what_the_window_lets_go() {
     assert_eq!(veredas_portal::serve::snapshot(&live)["recording"]["recorded_rows"], json!(c.rows));
 }
 
+/// The record opened by another process: this test binary run again with the record's path, its
+/// rows counted, or the refusal (in-process opens prove nothing here, the file's lock being the
+/// process's own).
+fn opened_elsewhere(file: &Path) -> Result<i64, String> {
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["another_process_opens_the_record", "--exact", "--nocapture", "--test-threads=1"])
+        .env("VEREDAS_RECORD_TO_OPEN", file)
+        .output()
+        .unwrap();
+    // The answer follows the runner's own `test ... ` on its line.
+    let text = String::from_utf8_lossy(&out.stdout);
+    if let Some(at) = text.find("rows=") {
+        return Ok(text[at + 5..].chars().take_while(char::is_ascii_digit).collect::<String>().parse().unwrap());
+    }
+    Err(text.find("refused=").and_then(|at| text[at..].lines().next()).map(str::to_string).unwrap_or_else(|| format!("no answer: {text} {}", String::from_utf8_lossy(&out.stderr))))
+}
+
+/// The other process of [`opened_elsewhere`]; with no record named, nothing.
+#[test]
+fn another_process_opens_the_record() {
+    let Some(path) = std::env::var_os("VEREDAS_RECORD_TO_OPEN") else { return };
+    match duckdb::Connection::open(&path).and_then(|c| c.query_row("SELECT count(*) FROM readings", [], |r| r.get::<_, i64>(0))) {
+        Ok(n) => println!("rows={n}"),
+        Err(e) => println!("refused={e}"),
+    }
+}
+
+/// A normal stop writes the batch left, folds the record's log, publishes the size the drive holds
+/// and lets the record go: another process, refused it while the session runs, opens it after the
+/// stop and reads every row. A record written every minute, so the stop's batch is the only one.
+#[test]
+fn a_normal_stop_writes_the_last_batch_folds_the_log_and_lets_the_record_go() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("plant.log");
+    write_lines(&log, 0..3_000);
+    let file = dir.path().join("stop.record.duckdb");
+    let mut cfg = SessionConfig::new("stop");
+    cfg.start = Some(midnight());
+    cfg.logs.push(log_source("log", &log));
+    cfg.rules.push(readings_rule(None));
+    cfg.recording = Some(RecordingConfig { file: file.clone(), limit_bytes: 64 << 20, write_every: Duration::from_secs(60) });
+    let session = Session::start(cfg).unwrap();
+    let live = session.live();
+    assert!(wait(Duration::from_secs(30), || rows_of(&live, "readings") == 3_000), "{}", rows_of(&live, "readings"));
+    assert_eq!(status(&live).recorded_rows, 0, "nothing written before the stop");
+    let held = opened_elsewhere(&file);
+    assert!(held.as_ref().is_err_and(|e| e.starts_with("refused=")), "the record the session's while it runs: {held:?}");
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    let end = status(&live);
+    assert_eq!((end.recorded_rows, end.unrecorded_rows, end.stopped_why.clone()), (3_000, 0, None), "{end:?}");
+    let wal = std::path::PathBuf::from(format!("{}.wal", file.display()));
+    let on_drive = std::fs::metadata(&file).unwrap().len() + std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+    assert_eq!(end.written_bytes, on_drive, "the size published is the drive's");
+    assert!(!wal.exists() || std::fs::metadata(&wal).unwrap().len() == 0, "the log folded into the file");
+    assert_eq!(opened_elsewhere(&file), Ok(3_000), "the record any tool's once the session stopped");
+}
+
 /// At its size limit a recording stops: what it wrote stays, nothing is deleted, the rows after
 /// are counted and never written, the store goes on taking them, and the session says why. A
 /// record already standing at its file refuses the session by name, as a store does.
