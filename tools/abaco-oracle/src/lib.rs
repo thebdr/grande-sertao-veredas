@@ -335,7 +335,13 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
                     Expected::Text(v.trim().parse::<usize>().ok().and_then(|i| shared.get(i).cloned()).unwrap_or_default())
                 }
                 (Some("str"), Some(v)) | (Some("inlineStr"), Some(v)) => Expected::Text(v),
-                (Some("b"), Some(v)) => Expected::Bool(v.trim() == "1"),
+                // a boolean Excel writes as 1 or 0; any other text is a cache Excel never wrote,
+                // read as the text it is (a mismatch)
+                (Some("b"), Some(v)) => match v.trim() {
+                    "1" => Expected::Bool(true),
+                    "0" => Expected::Bool(false),
+                    other => Expected::Text(other.to_string()),
+                },
                 (Some("e"), Some(v)) => Expected::Error(v),
                 // a number Excel can cache is finite: `inf`, `NaN` or `1E+999` in a `<v>` is
                 // read as the text it is, never as a number every engine value would equal

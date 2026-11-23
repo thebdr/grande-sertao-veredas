@@ -143,6 +143,31 @@ fn a_cached_value_excel_never_wrote_is_counted_as_a_mismatch() {
     assert_eq!(report.measure().unwrap().matched, base.matched);
 }
 
+#[test]
+fn a_boolean_cache_excel_never_wrote_is_counted_as_a_mismatch() {
+    // AND_OR_XOR.xlsx: C2 is `=OR(0)`, cached FALSE as Excel writes it, `<v>0</v>`
+    let b = baseline();
+    let path = "calc_tests/LOGICAL/AND_OR_XOR.xlsx";
+    let source = corpus_dir(&b).join(path);
+    let base = b.file.iter().find(|f| f.path == path).unwrap().cached.as_ref().unwrap();
+    assert_eq!(base.matched, base.formula_cells);
+    let dir = tempfile::tempdir().unwrap();
+    let mut probe = Probe::default();
+    for (i, value) in ["abc", "2", "", "TRUE"].into_iter().enumerate() {
+        let planted = dir.path().join(format!("planted{i}.xlsx"));
+        rewrite_cell_value(&source, &planted, "AND XOR OR", "C2", value);
+        let report = run_file(&planted, &options(LinksMode::Cached), &mut probe);
+        let m = report.measure().unwrap();
+        assert_eq!((m.formula_cells, m.matched), (base.formula_cells, base.matched - 1), "{value:?}");
+        let mismatch = report.examples.values().flatten().find(|e| e.sheet == "AND XOR OR" && e.reference == "C2");
+        assert!(mismatch.is_some(), "{value:?}: the mismatch is not at AND XOR OR!C2");
+    }
+    // the one value Excel writes for TRUE: a mismatch too (the engine says FALSE); the original whole
+    rewrite_cell_value(&source, &dir.path().join("true.xlsx"), "AND XOR OR", "C2", "1");
+    assert_eq!(run_file(&dir.path().join("true.xlsx"), &options(LinksMode::Cached), &mut probe).measure().unwrap().matched, base.matched - 1);
+    assert_eq!(run_file(&source, &options(LinksMode::Cached), &mut probe).measure().unwrap().matched, base.matched);
+}
+
 /// Copies the workbook at `from` to `to`, the cached `<v>` of `sheet!reference` replaced by `value`.
 fn rewrite_cell_value(from: &Path, to: &Path, sheet: &str, reference: &str, value: &str) {
     let part = sheet_part(from, sheet);
@@ -529,6 +554,42 @@ fn the_binary_seeds_its_measures_and_measures_a_baseline_on_its_day() {
     assert_eq!(written.measured_on, "2026-11-22");
     let file = written.file.iter().find(|f| f.path == "DynamicArrays.xlsx").unwrap();
     assert_eq!((file.cached.as_ref().unwrap().matched, file.linked.as_ref().unwrap().matched), (5, 5));
+    // a baseline's measures seeded: a copy whose cache holds the nine seeded draws matches them
+    // all (14 of 23; an unseeded measure would match all nine about once in 101^9 runs), under
+    // either resolution, and with `--links linked`, whose cached measure is the baseline's own
+    let planted_dir = dir.path().join("planted");
+    std::fs::create_dir(&planted_dir).unwrap();
+    let mut from = source.clone();
+    for (i, (cell, v)) in seeded_draws().into_iter().enumerate() {
+        let to = dir.path().join(format!("draw{i}.xlsx"));
+        rewrite_cell_value(&from, &to, "DynamicArrays", &cell, &v);
+        from = to;
+    }
+    std::fs::copy(&from, planted_dir.join("DynamicArrays.xlsx")).unwrap();
+    for links in ["cached", "linked"] {
+        let (code, _) = oracle(&[
+            "--no-roundtrip", "--links", links, "--baseline-out", out.to_str().unwrap(), "--measured-by", "parity test", "--measured-on",
+            "2026-11-22", "--corpus", planted_dir.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0);
+        let written = Baseline::read(&out).unwrap();
+        let file = &written.file[0];
+        assert_eq!((file.cached.as_ref().unwrap().matched, file.linked.as_ref().unwrap().matched), (14, 14), "--links {links}");
+    }
+    // and measured on its day: the yearly calendar builds its year from TODAY()
+    let calendar_dir = dir.path().join("calendar");
+    std::fs::create_dir(&calendar_dir).unwrap();
+    std::fs::copy(corpus_dir(&baseline()).join("templates/yearly_calendar.xlsx"), calendar_dir.join("yearly_calendar.xlsx")).unwrap();
+    for (day, matched) in [("2026-11-22", 529), ("2027-03-01", 136)] {
+        let (code, _) = oracle(&[
+            "--no-roundtrip", "--baseline-out", out.to_str().unwrap(), "--measured-by", "parity test", "--measured-on", day, "--corpus",
+            calendar_dir.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0);
+        let written = Baseline::read(&out).unwrap();
+        let file = &written.file[0];
+        assert_eq!((file.cached.as_ref().unwrap().matched, file.linked.as_ref().unwrap().matched), (matched, matched), "{day}");
+    }
     // a baseline said to be measured on one day and clocked on another is refused
     let (code, _) = oracle(&[
         "--no-roundtrip", "--baseline-out", out.to_str().unwrap(), "--measured-on", "2026-11-22", "--today", "2026-11-23",
