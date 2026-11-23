@@ -7,10 +7,10 @@
     "cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | python3 -I -c 'import json, os, sys; m = json.load(sys.stdin); seen = lambda keep: sorted((p[\"name\"], t[\"name\"], t[\"kind\"], os.path.relpath(t[\"src_path\"], os.path.dirname(p[\"manifest_path\"]))) for p in m[\"packages\"] for t in p[\"targets\"] if keep(p, t)); want = [(\"orcl-std\", \"blocks\", [\"test\"], \"tests/blocks.rs\"), (\"orcl-std\", \"orcl_std\", [\"lib\"], \"src/lib.rs\")]; sys.exit(seen(lambda p, t: t[\"name\"] in (\"orcl_std\", \"orcl-std\", \"blocks\")) != want or seen(lambda p, t: p[\"name\"] == \"orcl-std\") != want)' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS=true cargo nextest run -p orcl-std --release --test blocks --run-ignored only --no-tests fail -E 'test(=the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link)' && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none"
   ],
   "exitCode": 0,
-  "outputSha": "c3ef8518812f05186dedfe53b0111ae01d6c7393053c649673e63b096b052c37",
-  "outputTail": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running unittests src/lib.rs (target/debug/build/orcl-std/6f4af301044bd167/out/orcl_std-6f4af301044bd167)\n     Running tests/blocks.rs (target/debug/build/orcl-std/04ccbbb91e41921e/out/blocks-04ccbbb91e41921e)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n   Doc-tests orcl_std\n    Finished `release` profile [optimized] target(s) in 0.18s\n────────────\n Nextest run ID 513ccc54-55c8-47c9-9e54-4e5a0353f690 with nextest profile: default\n    Starting 1 test across 1 binary (47 tests skipped)\n        PASS [   0.805s] (1/1) orcl-std::blocks the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link\n────────────\n     Summary [   0.805s] 1 test run: 1 passed, 47 skipped\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s\n    Blocking waiting for file lock on package cache\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.25s",
-  "ranAt": "2026-11-23T02:34:53.677Z",
-  "headCommit": "14b8eb4c13f6813291ff40c08081952be4fcdd14",
+  "outputSha": "c0978337b0372e081af8f0de7657e0a8c725a312d888fc99d1c868b92e774838",
+  "outputTail": "all doctests ran in 0.30s; merged doctests compilation took 0.22s\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running unittests src/lib.rs (target/debug/build/orcl-std/6f4af301044bd167/out/orcl_std-6f4af301044bd167)\n     Running tests/blocks.rs (target/debug/build/orcl-std/04ccbbb91e41921e/out/blocks-04ccbbb91e41921e)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n   Doc-tests orcl_std\n    Finished `release` profile [optimized] target(s) in 0.07s\n────────────\n Nextest run ID e485605a-6a0e-4814-be3a-4f9d8ade1bd7 with nextest profile: default\n    Starting 1 test across 1 binary (48 tests skipped)\n        PASS [   1.149s] (1/1) orcl-std::blocks the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link\n────────────\n     Summary [   1.150s] 1 test run: 1 passed, 48 skipped\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.51s",
+  "ranAt": "2026-11-23T03:24:43.567Z",
+  "headCommit": "c246ff4fecd86b19bbb731bdf06242d570bb3e44",
   "tests": [
     {
       "name": "crates/orcl-std/src/timers.rs",
@@ -45,12 +45,12 @@
     {
       "name": "crates/orcl-std/src/o14.rs",
       "file": "crates/orcl-std/src/o14.rs",
-      "fileSha": "1b405cec96a1b5efcf06df32d5a4c9206ea73987e62ed353957bea8e360e7d92"
+      "fileSha": "bfa398dc378807132146e43dff54adf93134c0b278e3d551262f83ce569558c8"
     },
     {
       "name": "crates/orcl-std/tests/blocks.rs",
       "file": "crates/orcl-std/tests/blocks.rs",
-      "fileSha": "4df0b117695e5296949624ee66a573e3633557aa5ed00206006b3e3011476cb9"
+      "fileSha": "0e97ac773b2f2e511a65fc85137fede99a903b1b60a13efa60c6573124ffca8d"
     }
   ]
 }
