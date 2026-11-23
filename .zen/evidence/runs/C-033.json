@@ -1,24 +1,25 @@
 {
   "clause": "C-033",
-  "command": "cargo test -p veredas-maquinar --test bench_file",
+  "command": "cargo nextest run -p veredas-maquinar --test bench_file",
   "commandArgv": [
     "cargo",
-    "test",
+    "nextest",
+    "run",
     "-p",
     "veredas-maquinar",
     "--test",
     "bench_file"
   ],
   "exitCode": 0,
-  "outputSha": "9c6409e7129d4e3ed60c94ef462c1c551668c63b049e2cd25689ef89ebded213",
-  "outputTail": "test the_header_is_refused_four_ways_and_a_misspelled_key_in_any_table ... ok\ntest the_reference_is_the_text_this_test_holds ... ok\ntest the_executable_says_its_version_and_stops_on_a_termination_signal ... ok\ntest the_executable_prints_every_part_s_line_at_the_start_with_the_address_it_got ... ok\ntest the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order ... ok\ntest every_invalid_bench_is_refused_with_its_place_named_before_anything_starts ... ok\ntest the_documented_bench_loads_starts_and_every_part_does_its_work ... ok\ntest the_executable_checks_and_runs_a_bench_file ... ok\ntest every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does ... ok\ntest the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.80s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s\n     Running tests/bench_file.rs (target/debug/build/veredas-maquinar/f48dd7e676c9e416/out/bench_file-f48dd7e676c9e416)",
-  "ranAt": "2026-11-23T09:38:59.248Z",
-  "headCommit": "a8f39a3175efe04c4e7b9cc2dee17d4b8054b770",
+  "outputSha": "f77ba53aaf28d939cb374566f6690f41171abda90b16968272c5569837eb3457",
+  "outputTail": "        PASS [   0.381s] ( 9/21) veredas-maquinar::bench_file round_3::adapters_start_before_devices_devices_before_segments_and_channels_after_them\n        PASS [   1.253s] (10/21) veredas-maquinar::bench_file every_invalid_bench_is_refused_with_its_place_named_before_anything_starts\n        PASS [   1.820s] (11/21) veredas-maquinar::bench_file every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does\n        PASS [   2.120s] (12/21) veredas-maquinar::bench_file round_3::the_executable_prints_the_status_lines_once_a_second\n        PASS [   0.015s] (13/21) veredas-maquinar::bench_file the_header_is_refused_four_ways_and_a_misspelled_key_in_any_table\n        PASS [   0.017s] (14/21) veredas-maquinar::bench_file the_reference_is_the_text_this_test_holds\n        PASS [   0.046s] (15/21) veredas-maquinar::bench_file round_3::the_plan_lists_every_kind_in_the_start_order_and_the_emitter_s_line_whole\n        PASS [   0.068s] (16/21) veredas-maquinar::bench_file the_executable_says_its_version_and_stops_on_a_termination_signal\n        PASS [   0.297s] (17/21) veredas-maquinar::bench_file the_executable_prints_every_part_s_line_at_the_start_with_the_address_it_got\n        PASS [   0.364s] (18/21) veredas-maquinar::bench_file the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_the_file_s_order\n        PASS [   0.581s] (19/21) veredas-maquinar::bench_file the_executable_checks_and_runs_a_bench_file\n        PASS [   1.317s] (20/21) veredas-maquinar::bench_file the_documented_bench_loads_starts_and_every_part_does_its_work\n        PASS [   6.412s] (21/21) veredas-maquinar::bench_file the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own\n────────────\n     Summary [  10.353s] 21 tests run: 21 passed, 0 skipped",
+  "ranAt": "2026-11-23T14:57:18.558Z",
+  "headCommit": "6b60cfa07cdfb95d6712d9367f7b561db9bbdc6f",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/bench_file.rs",
       "file": "crates/veredas-maquinar/tests/bench_file.rs",
-      "fileSha": "e358ad5d4f53dc4734da75077e80573a7191566d31778e1a61b9b984244b11f2"
+      "fileSha": "8f81165c1083b6e93aed9bd0c444f8cc2e93bf2662f264851172b2c4f9e2b1c1"
     }
   ]
 }
