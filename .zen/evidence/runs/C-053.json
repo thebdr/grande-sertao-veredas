@@ -10,15 +10,15 @@
     "tables"
   ],
   "exitCode": 0,
-  "outputSha": "f55fac4a68cddba93b842ca66e58b8164b8c39c0589d5fb9329301aa0848a6e1",
-  "outputTail": "\nrunning 1 test\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal has been running for over 60 seconds\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 152.99s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s\n     Running tests/tables.rs (target/debug/build/veredas-supervisao/66cc48fa237d7bbe/out/tables-66cc48fa237d7bbe)",
-  "ranAt": "2026-11-23T10:36:15.620Z",
-  "headCommit": "061ee3a63a6482ccc1b18a55f6c6115f761a6e24",
+  "outputSha": "2a87fabafd22c53f8b26e5969d37e5757bc4d4afd8575059a1de650a66a913e8",
+  "outputTail": "\nrunning 1 test\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal has been running for over 60 seconds\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 139.16s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s\n     Running tests/tables.rs (target/debug/build/veredas-supervisao/f46b5a2649dbdbbe/out/tables-f46b5a2649dbdbbe)",
+  "ranAt": "2026-11-23T17:10:25.684Z",
+  "headCommit": "bc9d71a4914f46ac437a558a93245601ffbded89",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/tables.rs",
       "file": "crates/veredas-supervisao/tests/tables.rs",
-      "fileSha": "4fe7e85a459003b6b132bc117c13d2b56ea5b689d9300057e4bce80d519a2337"
+      "fileSha": "48d95f4f35c0ffe06f4adb1b0f696e811dcbc5967c281fe59a8f05f9ef627236"
     }
   ]
 }
