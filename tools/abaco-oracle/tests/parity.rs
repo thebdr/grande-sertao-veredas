@@ -512,6 +512,83 @@ fn the_sheet_and_its_parts_are_read_as_an_xml_parser_reads_them() {
     }
 }
 
+#[test]
+fn the_workbook_its_relationships_and_rich_values_are_read_by_namespace_and_name() {
+    let b = baseline();
+    let dir = corpus_dir(&b);
+    let mut probe = Probe::default();
+    let planted = tempfile::tempdir().unwrap();
+    let measure = |path: &Path, probe: &mut Probe| {
+        let (_, cells, matched) = mismatches(path, probe);
+        (cells, matched)
+    };
+    let isref = dir.join("calc_tests/INFORMATION/ISREF.xlsx");
+    let whole = measure(&isref, &mut probe);
+    let sheet = r#"<sheet name="Sheet1" sheetId="1" r:id="rId1"/>"#;
+    let rel = r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>"#;
+    let rels = "xl/_rels/workbook.xml.rels";
+    let package = "http://schemas.openxmlformats.org/package/2006/relationships";
+    // each copy reads as the original: the sheet found, named and read as before, D7 `#CALC!` and
+    // D9 `#SPILL!` read from the rich values as before
+    let copies: [(&str, &str, Box<dyn Fn(&str) -> String>); 9] = [
+        ("a commented duplicate sheet", "xl/workbook.xml", Box::new(move |t: &str| t.replacen(sheet, &format!(r#"<!--<sheet name="Sheet1" sheetId="1" r:id="rId9"/>-->{sheet}"#), 1))),
+        ("attributes reordered and single-quoted", "xl/workbook.xml", Box::new(move |t: &str| t.replacen(sheet, "<sheet r:id='rId1' sheetId='1' name='Sheet1'/>", 1))),
+        ("`r:id` under another prefix", "xl/workbook.xml", Box::new(move |t: &str| t.replacen(sheet, r#"<sheet xmlns:rel="http://schemas.openxmlformats.org/officeDocument/2006/relationships" name="Sheet1" sheetId="1" rel:id="rId1"/>"#, 1))),
+        ("a name spelled with a reference", "xl/workbook.xml", Box::new(move |t: &str| t.replacen(sheet, r#"<sheet name="&#83;heet1" sheetId="1" r:id="rId1"/>"#, 1))),
+        ("a commented relationship reusing the sheet's Id", rels, Box::new(move |t: &str| t.replacen(rel, &format!(r#"{rel}<!--<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet9.xml"/>-->"#), 1))),
+        ("the relationships prefixed", rels, Box::new(move |t: &str| t.replacen(&format!(r#"<Relationships xmlns="{package}">"#), &format!(r#"<p:Relationships xmlns:p="{package}">"#), 1).replace("<Relationship ", "<p:Relationship ").replace("</Relationships>", "</p:Relationships>"))),
+        ("Target before Id", rels, Box::new(move |t: &str| t.replacen(rel, r#"<Relationship Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Id="rId1"/>"#, 1))),
+        ("a commented rich value first", "xl/richData/rdrichvalue.xml", Box::new(|t: &str| t.replacen(r#"<rv s="0">"#, r#"<!--<rv s="1"><v>2</v><v>8</v><v>0</v><v>1</v></rv>--><rv s="0">"#, 1))),
+        ("a commented structure first", "xl/richData/rdrichvaluestructure.xml", Box::new(|t: &str| t.replacen(r#"<s t="_error">"#, r#"<!--<s t="_error"><k n="colOffset" t="i"/></s>--><s t="_error">"#, 1))),
+    ];
+    for (i, (what, part, edit)) in copies.iter().enumerate() {
+        let copy = planted.path().join(format!("isref-{i}.xlsx"));
+        rewrite_part(&isref, &copy, part, |t| edit(t));
+        assert_eq!(measure(&copy, &mut probe), whole, "{what}");
+    }
+    // an attribute of another namespace named `id` before the sheet's `r:id`: the part is the one
+    // the relationships namespace names
+    let mround = dir.join("calc_tests/MATH_AND_TRIGONOMETRY/MROUND_TRUNC_INT.xlsx");
+    let whole = measure(&mround, &mut probe);
+    let copy = planted.path().join("mround.xlsx");
+    rewrite_part(&mround, &copy, "xl/workbook.xml", |t| {
+        t.replacen(r#"<sheet name="MROUND" sheetId="4" r:id="rId1"/>"#, r#"<sheet name="MROUND" sheetId="4" xr:id="rId2" r:id="rId1"/>"#, 1)
+    });
+    assert_eq!(measure(&copy, &mut probe), whole);
+    // a value or a cell in another namespace (what Markup Compatibility has Excel ignore): no
+    // value, no cell
+    let abs = dir.join("calc_tests/MATH_AND_TRIGONOMETRY/ABS.xlsx");
+    let (cells, matched) = measure(&abs, &mut probe);
+    let b2 = r#"<c r="B2" s="2"><f>ABS(A2)</f><v>1</v></c>"#;
+    let copy = planted.path().join("foreign-v.xlsx");
+    rewrite_part(&abs, &copy, "xl/worksheets/sheet1.xml", |t| t.replacen(b2, r#"<c r="B2" s="2"><f>ABS(A2)</f><foo:v xmlns:foo="urn:example:foo">1</foo:v></c>"#, 1));
+    assert_eq!(measure(&copy, &mut probe), (cells, matched - 1), "a value in another namespace is none");
+    let copy = planted.path().join("foreign-c.xlsx");
+    rewrite_part(&abs, &copy, "xl/worksheets/sheet1.xml", |t| {
+        t.replacen(b2, &format!(r#"{b2}<foo:c xmlns:foo="urn:example:foo" r="Z2"><foo:f>1+1</foo:f><foo:v>2</foo:v></foo:c>"#), 1)
+    });
+    assert_eq!(measure(&copy, &mut probe), (cells, matched), "a cell in another namespace is none");
+}
+
+#[test]
+fn a_formula_cell_the_engine_does_not_hold_matches_nothing() {
+    // AND_OR_XOR's row 6 renumbered 600: the engine places its cells by the row, the file names them
+    // by their own reference, so the engine holds nothing where the cells say they are
+    let b = baseline();
+    let dir = corpus_dir(&b);
+    let mut probe = Probe::default();
+    let source = dir.join("calc_tests/LOGICAL/AND_OR_XOR.xlsx");
+    let (_, cells, matched) = mismatches(&source, &mut probe);
+    let in_row: usize = scan_raw(&source).unwrap().formula_cells.iter().filter(|c| c.row == 6).count();
+    assert!(in_row > 0);
+    let planted = tempfile::tempdir().unwrap();
+    let copy = planted.path().join("row.xlsx");
+    rewrite_part(&source, &copy, "xl/worksheets/sheet1.xml", |t| t.replacen(r#"<row r="6" "#, r#"<row r="600" "#, 1));
+    let (wrong, cells_now, matched_now) = mismatches(&copy, &mut probe);
+    assert_eq!((cells_now, matched_now), (cells, matched - in_row));
+    assert!(wrong.contains("AND XOR OR!A6"), "{wrong:?}");
+}
+
 /// A cell's attributes without its `t`.
 fn strip_type(attrs: &str) -> String {
     regex::Regex::new(r#"\st="[^"]*""#).unwrap().replace(attrs, "").to_string()

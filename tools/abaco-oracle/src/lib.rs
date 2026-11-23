@@ -151,12 +151,72 @@ fn re(pattern: &str) -> Regex {
 }
 
 
+/// SpreadsheetML's main namespace, transitional and strict: a sheet's, a workbook's, the
+/// metadata's elements.
+const MAIN: [&str; 2] = ["http://schemas.openxmlformats.org/spreadsheetml/2006/main", "http://purl.oclc.org/ooxml/spreadsheetml/main"];
+/// The namespace of a part's `r:id`, transitional and strict.
+const RELATIONSHIP_ID: [&str; 2] =
+    ["http://schemas.openxmlformats.org/officeDocument/2006/relationships", "http://purl.oclc.org/ooxml/officeDocument/relationships"];
+/// A package's relationships.
+const PACKAGE_RELATIONSHIPS: [&str; 1] = ["http://schemas.openxmlformats.org/package/2006/relationships"];
+/// Excel's rich data (the rich values, their structures, the metadata's `rvb`).
+const RICH_DATA: [&str; 1] = ["http://schemas.microsoft.com/office/spreadsheetml/2017/richdata"];
+const XML_NAMESPACE: &str = "http://www.w3.org/XML/1998/namespace";
+
+/// The namespace declarations in scope while a part is read: (depth, prefix, URI), the default
+/// namespace's prefix empty.
+#[derive(Default)]
+struct Scopes(Vec<(usize, String, String)>);
+
+impl Scopes {
+    /// The declarations an element at `depth` makes, in force for it and below.
+    fn declare(&mut self, depth: usize, attrs: &[(String, String)]) {
+        for (q, v) in attrs {
+            if q == "xmlns" {
+                self.0.push((depth, String::new(), v.clone()));
+            } else if let Some(prefix) = q.strip_prefix("xmlns:") {
+                self.0.push((depth, prefix.to_string(), v.clone()));
+            }
+        }
+    }
+
+    fn leave(&mut self, depth: usize) {
+        self.0.retain(|(d, _, _)| *d < depth);
+    }
+
+    fn uri(&self, prefix: &str) -> String {
+        if prefix == "xml" {
+            return XML_NAMESPACE.to_string();
+        }
+        self.0.iter().rev().find(|(_, p, _)| p == prefix).map(|(_, _, u)| u.clone()).unwrap_or_default()
+    }
+
+    /// An element's (namespace, local name): unprefixed, the default namespace's.
+    fn element(&self, qualified: &str) -> (String, String) {
+        match qualified.split_once(':') {
+            Some((p, l)) => (self.uri(p), l.to_string()),
+            None => (self.uri(""), qualified.to_string()),
+        }
+    }
+
+    /// An attribute's (namespace, local name): unprefixed, no namespace.
+    fn attribute(&self, qualified: &str) -> (String, String) {
+        match qualified.split_once(':') {
+            Some((p, l)) => (self.uri(p), l.to_string()),
+            None => (String::new(), qualified.to_string()),
+        }
+    }
+}
+
 /// An element as an XML parser reads it (quick-xml, the version the engine's reader uses): its
-/// local name, its attributes (the qualified name, the local one, the value normalised as XML 1.0
-/// says), its children, and its text (references resolved, CDATA as the text it is, comments and
-/// processing instructions left out, line ends normalised).
+/// namespace and local name, its attributes (namespace, local name, value normalised as XML 1.0
+/// says; namespace declarations apart), its children, and its text (references resolved, CDATA as
+/// the text it is, comments and processing instructions left out, line ends normalised). An
+/// element is known by its namespace and its local name, as the engine's reader knows it, never by
+/// its prefix.
 #[derive(Default, Debug, Clone)]
 struct Node {
+    ns: String,
     name: String,
     attrs: Vec<(String, String, String)>,
     children: Vec<Node>,
@@ -164,28 +224,25 @@ struct Node {
 }
 
 impl Node {
-    /// An attribute by its qualified name (`r:id`), or by its local name when unprefixed.
+    /// An attribute in no namespace, by its name.
     fn attr(&self, name: &str) -> Option<&str> {
-        self.attrs
-            .iter()
-            .find(|(q, l, _)| q == name || (!name.contains(':') && q == l && l == name))
-            .map(|(_, _, v)| v.as_str())
+        self.attrs.iter().find(|(ns, l, _)| ns.is_empty() && l == name).map(|(_, _, v)| v.as_str())
     }
 
-    /// A prefixed attribute by its local name (`id` of `r:id`, whatever the prefix).
-    fn prefixed(&self, local: &str) -> Option<&str> {
-        self.attrs.iter().find(|(q, l, _)| l == local && q != l).map(|(_, _, v)| v.as_str())
+    /// An attribute in one of `nss`, by its local name (`r:id` whatever its prefix).
+    fn attr_in(&self, nss: &[&str], local: &str) -> Option<&str> {
+        self.attrs.iter().find(|(ns, l, _)| l == local && nss.contains(&ns.as_str())).map(|(_, _, v)| v.as_str())
     }
 
-    fn kids<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Node> + 'a {
-        self.children.iter().filter(move |c| c.name == name)
+    fn kids<'a>(&'a self, nss: &'a [&'a str], name: &'a str) -> impl Iterator<Item = &'a Node> + 'a {
+        self.children.iter().filter(move |c| c.name == name && nss.contains(&c.ns.as_str()))
     }
 
-    fn descendants<'a>(&'a self, name: &'a str) -> Vec<&'a Node> {
+    fn descendants<'a>(&'a self, nss: &[&str], name: &str) -> Vec<&'a Node> {
         let mut out = Vec::new();
         let mut stack: Vec<&Node> = vec![self];
         while let Some(n) = stack.pop() {
-            if n.name == name {
+            if n.name == name && nss.contains(&n.ns.as_str()) {
                 out.push(n);
             }
             stack.extend(n.children.iter().rev());
@@ -194,16 +251,32 @@ impl Node {
     }
 }
 
-/// An element's local name and its attributes, as [`Node`] keeps them.
-fn element_of(e: &quick_xml::events::BytesStart) -> Result<(String, Vec<(String, String, String)>), String> {
-    let name = e.local_name().as_ref().to_string();
+/// An element's qualified name and its attributes (qualified name, value normalised as XML 1.0 says).
+fn element_of(e: &quick_xml::events::BytesStart) -> Result<(String, Vec<(String, String)>), String> {
+    let name = e.name().as_ref().to_string();
     let mut attrs = Vec::new();
     for a in e.attributes() {
         let a = a.map_err(|e| e.to_string())?;
         let value = a.normalized_value(quick_xml::XmlVersion::Implicit1_0).map_err(|e| e.to_string())?;
-        attrs.push((a.key.as_ref().to_string(), a.key.local_name().as_ref().to_string(), value.to_string()));
+        attrs.push((a.key.as_ref().to_string(), value.to_string()));
     }
     Ok((name, attrs))
+}
+
+/// An element's namespace, local name and attributes resolved in `scopes`, its declarations made
+/// at `depth`.
+fn resolved(scopes: &mut Scopes, depth: usize, qualified: &str, attrs: &[(String, String)]) -> (String, String, Vec<(String, String, String)>) {
+    scopes.declare(depth, attrs);
+    let (ns, name) = scopes.element(qualified);
+    let attrs = attrs
+        .iter()
+        .filter(|(q, _)| q != "xmlns" && !q.starts_with("xmlns:"))
+        .map(|(q, v)| {
+            let (ns, l) = scopes.attribute(q);
+            (ns, l, v.clone())
+        })
+        .collect();
+    (ns, name, attrs)
 }
 
 /// The text a reference stands for: a character reference or one of the five predefined entities.
@@ -220,17 +293,21 @@ fn parse_tree(xml: &str) -> Result<Node, String> {
     use quick_xml::events::Event;
     let mut reader = quick_xml::Reader::from_str(xml);
     let mut stack: Vec<Node> = Vec::new();
+    let mut scopes = Scopes::default();
     let mut root = None;
     loop {
         match reader.read_event().map_err(|e| e.to_string())? {
             Event::Eof => break,
             Event::Start(e) => {
-                let (name, attrs) = element_of(&e)?;
-                stack.push(Node { name, attrs, ..Node::default() });
+                let (q, attrs) = element_of(&e)?;
+                let (ns, name, attrs) = resolved(&mut scopes, stack.len(), &q, &attrs);
+                stack.push(Node { ns, name, attrs, ..Node::default() });
             }
             Event::Empty(e) => {
-                let (name, attrs) = element_of(&e)?;
-                let node = Node { name, attrs, ..Node::default() };
+                let (q, attrs) = element_of(&e)?;
+                let (ns, name, attrs) = resolved(&mut scopes, stack.len(), &q, &attrs);
+                scopes.leave(stack.len());
+                let node = Node { ns, name, attrs, ..Node::default() };
                 match stack.last_mut() {
                     Some(parent) => parent.children.push(node),
                     None => root = Some(node),
@@ -238,6 +315,7 @@ fn parse_tree(xml: &str) -> Result<Node, String> {
             }
             Event::End(_) => {
                 let node = stack.pop().ok_or("an end tag that closes nothing")?;
+                scopes.leave(stack.len());
                 match stack.last_mut() {
                     Some(parent) => parent.children.push(node),
                     None => root = Some(node),
@@ -285,11 +363,18 @@ struct CellXml {
 }
 
 /// Every cell of a worksheet part, streamed (a sheet may be large), read by an XML parser: the
-/// cells of `sheetData` alone, comments and CDATA elsewhere read as XML reads them.
+/// cells of `sheetData` alone, each element known by its namespace and local name; an element in
+/// another namespace (one an Excel reading by Markup Compatibility ignores) is passed over with all
+/// it holds.
 fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
     use quick_xml::events::Event;
     let mut reader = quick_xml::Reader::from_str(xml);
+    let mut scopes = Scopes::default();
+    // the open elements in the main namespace, by local name; `foreign` counts the open elements
+    // of another namespace, everything inside them passed over
     let mut path: Vec<String> = Vec::new();
+    let mut depth = 0usize;
+    let mut foreign = 0usize;
     let mut cells = Vec::new();
     let mut cell: Option<CellXml> = None;
     // where text goes: the formula's, or the first value's
@@ -301,7 +386,7 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
     }
     let mut into = Into::Nothing;
     let start = |name: &str, attrs: &[(String, String, String)], path: &[String], cell: &mut Option<CellXml>, empty: bool, into: &mut Into| {
-        let get = |n: &str| attrs.iter().find(|(q, l, _)| q == l && l == n).map(|(_, _, v)| v.clone());
+        let get = |n: &str| attrs.iter().find(|(ns, l, _)| ns.is_empty() && l == n).map(|(_, _, v)| v.clone());
         let parent = path.last().map(String::as_str);
         if name == "c" && parent == Some("row") && path.iter().any(|p| p == "sheetData") {
             *cell = Some(CellXml { reference: get("r"), t: get("t"), vm: get("vm"), ..CellXml::default() });
@@ -333,18 +418,35 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
         match reader.read_event().map_err(|e| e.to_string())? {
             Event::Eof => break,
             Event::Start(e) => {
-                let (name, attrs) = element_of(&e)?;
+                let (q, attrs) = element_of(&e)?;
+                let (ns, name, attrs) = resolved(&mut scopes, depth, &q, &attrs);
+                depth += 1;
+                if foreign > 0 || !MAIN.contains(&ns.as_str()) {
+                    foreign += 1;
+                    continue;
+                }
                 start(&name, &attrs, &path, &mut cell, false, &mut into);
                 path.push(name);
             }
             Event::Empty(e) => {
-                let (name, attrs) = element_of(&e)?;
+                let (q, attrs) = element_of(&e)?;
+                let (ns, name, attrs) = resolved(&mut scopes, depth, &q, &attrs);
+                scopes.leave(depth);
+                if foreign > 0 || !MAIN.contains(&ns.as_str()) {
+                    continue;
+                }
                 start(&name, &attrs, &path, &mut cell, true, &mut into);
                 if name == "c" && let Some(c) = cell.take() {
                     cells.push(c);
                 }
             }
             Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                scopes.leave(depth);
+                if foreign > 0 {
+                    foreign -= 1;
+                    continue;
+                }
                 let name = path.pop().unwrap_or_default();
                 if name == "f" || name == "v" {
                     into = Into::Nothing;
@@ -354,6 +456,9 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
                 }
             }
             event @ (Event::Text(_) | Event::CData(_) | Event::GeneralRef(_)) => {
+                if foreign > 0 {
+                    continue;
+                }
                 let Some(c) = cell.as_mut() else { continue };
                 let text = match &event {
                     Event::Text(t) => t.xml_content(quick_xml::XmlVersion::Implicit1_0).to_string(),
@@ -378,7 +483,7 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
             _ => {}
         }
     }
-    if !path.is_empty() {
+    if depth != 0 {
         return Err("an element not closed".into());
     }
     Ok(cells)
@@ -515,8 +620,8 @@ fn rich_errors(archive: &mut zip::ZipArchive<fs::File>, rels: &[(String, String)
         return out;
     };
     let Some(rich_type) = meta
-        .kids("metadataTypes")
-        .flat_map(|t| t.kids("metadataType"))
+        .kids(&MAIN, "metadataTypes")
+        .flat_map(|t| t.kids(&MAIN, "metadataType"))
         .position(|t| t.attr("name") == Some("XLRICHVALUE"))
         .map(|i| i + 1)
     else {
@@ -524,16 +629,17 @@ fn rich_errors(archive: &mut zip::ZipArchive<fs::File>, rels: &[(String, String)
     };
     let index = |s: Option<&str>| s.and_then(|v| xsd_trim(v).parse::<usize>().ok());
     let future: Vec<Option<usize>> = meta
-        .kids("futureMetadata")
+        .kids(&MAIN, "futureMetadata")
         .filter(|f| f.attr("name") == Some("XLRICHVALUE"))
-        .flat_map(|f| f.kids("bk"))
-        .map(|bk| bk.descendants("rvb").first().and_then(|r| index(r.attr("i"))))
+        .flat_map(|f| f.kids(&MAIN, "bk"))
+        .map(|bk| bk.descendants(&RICH_DATA, "rvb").first().and_then(|r| index(r.attr("i"))))
         .collect();
     let structs: Vec<(Option<&str>, Vec<&str>)> =
-        structures.kids("s").map(|s| (s.attr("t"), s.kids("k").filter_map(|k| k.attr("n")).collect())).collect();
-    let rvs: Vec<(Option<usize>, Vec<&str>)> = values.kids("rv").map(|rv| (index(rv.attr("s")), rv.kids("v").map(|v| xsd_trim(&v.text)).collect())).collect();
-    for (i, bk) in meta.kids("valueMetadata").flat_map(|m| m.kids("bk")).enumerate() {
-        let Some(rc) = bk.kids("rc").next() else { continue };
+        structures.kids(&RICH_DATA, "s").map(|s| (s.attr("t"), s.kids(&RICH_DATA, "k").filter_map(|k| k.attr("n")).collect())).collect();
+    let rvs: Vec<(Option<usize>, Vec<&str>)> =
+        values.kids(&RICH_DATA, "rv").map(|rv| (index(rv.attr("s")), rv.kids(&RICH_DATA, "v").map(|v| xsd_trim(&v.text)).collect())).collect();
+    for (i, bk) in meta.kids(&MAIN, "valueMetadata").flat_map(|m| m.kids(&MAIN, "bk")).enumerate() {
+        let Some(rc) = bk.kids(&MAIN, "rc").next() else { continue };
         if index(rc.attr("t")) != Some(rich_type) {
             continue;
         }
@@ -673,7 +779,7 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
         .ok_or(OracleError::MissingPart { path: path.to_path_buf(), part: "xl/_rels/workbook.xml.rels" })?;
     let workbook = parse_tree(&workbook_xml).map_err(|e| bad_xml("xl/workbook.xml", e))?;
     let rels_tree = parse_tree(&rels_xml).map_err(|e| bad_xml("xl/_rels/workbook.xml.rels", e))?;
-    let relationships: Vec<&Node> = rels_tree.kids("Relationship").collect();
+    let relationships: Vec<&Node> = rels_tree.kids(&PACKAGE_RELATIONSHIPS, "Relationship").collect();
     let rels: HashMap<String, String> =
         relationships.iter().filter_map(|r| Some((r.attr("Id")?.to_string(), r.attr("Target")?.to_string()))).collect();
     // the relationships by their type, for the parts found that way (the metadata, rich data)
@@ -681,10 +787,10 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
         relationships.iter().filter_map(|r| Some((r.attr("Type")?.to_string(), r.attr("Target")?.to_string()))).collect();
     let rich = rich_errors(&mut archive, &typed);
     let sheets: Vec<(String, String)> = workbook
-        .kids("sheets")
-        .flat_map(|s| s.kids("sheet"))
+        .kids(&MAIN, "sheets")
+        .flat_map(|s| s.kids(&MAIN, "sheet"))
         .filter_map(|s| {
-            let target = rels.get(s.prefixed("id")?).cloned().unwrap_or_default();
+            let target = rels.get(s.attr_in(&RELATIONSHIP_ID, "id")?).cloned().unwrap_or_default();
             let part = match target.strip_prefix('/') {
                 Some(absolute) => absolute.to_string(),
                 None => format!("xl/{target}"),
@@ -692,8 +798,8 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
             Some((s.attr("name")?.to_string(), part))
         })
         .collect();
-    let defined_names = workbook.descendants("definedName").len();
-    let external_links = workbook.descendants("externalReference").len();
+    let defined_names = workbook.descendants(&MAIN, "definedName").len();
+    let external_links = workbook.descendants(&MAIN, "externalReference").len();
 
     let mut external_cached_cells = 0;
     for name in parts.keys().cloned().collect::<Vec<_>>() {
@@ -701,7 +807,7 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
             && name.ends_with(".xml")
             && let Some(xml) = read_part(&mut archive, &name)
         {
-            external_cached_cells += parse_tree(&xml).map(|t| t.descendants("cell").len()).unwrap_or(0);
+            external_cached_cells += parse_tree(&xml).map(|t| t.descendants(&MAIN, "cell").len()).unwrap_or(0);
         }
     }
 
