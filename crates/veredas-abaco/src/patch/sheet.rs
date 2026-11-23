@@ -169,6 +169,24 @@ pub(crate) fn number(n: f64) -> String {
 }
 
 /// `<v>`/`t` for a formula's cached value: (t attribute or none, v element).
+/// Why a value cannot be a file's cache: the errors only the engine has (a circular reference, a
+/// function it does not implement, a formula it could not read), which no workbook file holds and
+/// no reader takes. Excel would compute these cells; the patch is refused rather than write a
+/// guess.
+pub(crate) fn engine_only(v: &Value) -> Option<&'static str> {
+    match v {
+        Value::Error(e) if e == "#CIRC!" => Some("#CIRC! (a circular reference)"),
+        Value::Error(e) if e == "#N/IMPL" => Some("#N/IMPL (a function the engine does not implement)"),
+        Value::Error(e) if e == "#ERROR!" => Some("#ERROR! (a formula the engine could not read)"),
+        _ => None,
+    }
+}
+
+/// The refusal of a cache [`engine_only`] names, at `sheet!cell`.
+pub(crate) fn engine_only_refusal(sheet: &str, cell: &str, what: &str) -> PatchError {
+    PatchError::Unsupported(format!("{sheet}!{cell}: the engine computes {what}, an error no workbook file holds"))
+}
+
 fn cached_xml(v: &Value) -> (Option<&'static str>, String) {
     match v {
         Value::Number(n) => (None, format!("<v>{}</v>", number(*n))),
@@ -358,16 +376,20 @@ pub(crate) fn rewrite(
             (Some(r), Some(c)) => job.writes.get(&(r, c)).is_some_and(|w| w.content.is_some()),
             _ => true,
         };
-        let moved = g.bounds.is_some_and(|(r1, c1, r2, c2)| {
-            own.iter().any(|s| match *s {
-                Shift::InsertRows { at, .. } | Shift::DeleteRows { at, .. } => {
-                    r2 >= at && r1 <= LAST_ROW
-                }
-                Shift::InsertCols { at, .. } | Shift::DeleteCols { at, .. } => {
-                    c2 >= at && c1 <= LAST_COLUMN
-                }
-            })
-        }) || (g.bounds.is_none() && !own.is_empty());
+        // a move that changes a member's place against the master's changes what its formula
+        // derives to (`=A1` shared down B1:B3 reads A3 in B3, A4 once B3 sits a row further from
+        // the master): expanded, unless the derived text is the same (an absolute `$Z$1`). A
+        // group moved whole keeps its sharing, its `ref` moved (see `rewrite_cell`)
+        let moved = match master_final {
+            (Some(mr), Some(mc)) => g.members.iter().any(|&(r, c)| {
+                let (Some(nr), Some(nc)) = (map_index(&own, true, r), map_index(&own, false, c)) else {
+                    return false; // a member deleted goes with its row or column
+                };
+                let (was, now) = ((r - g.master.0, c - g.master.1), (nr - mr, nc - mc));
+                was != now && refs::translate(&g.text, now.0, now.1) != refs::translate(&g.text, was.0, was.1)
+            }),
+            _ => false, // the master deleted: `overwritten` expands it
+        } || (g.bounds.is_none() && !own.is_empty());
         // a move that reaches the formula of any member, the master's or a child's as it derives
         // from the master's (`=A10` shared down B1:B3 reads A12 in B3: an insert at row 11 moves
         // B3's reference and not the master's)
@@ -915,8 +937,21 @@ fn rewrite_cell(
                     }
                     text = Some(shifted);
                 }
-                Some(_) => {
-                    // a kept group: the master's text is unchanged by construction
+                Some(si) => {
+                    // a kept group: the master's text is unchanged by construction; its `ref`
+                    // follows the moves (grown by an insertion inside it, cut by a deletion)
+                    if groups.get(si).is_some_and(|g| g.master == orig)
+                        && let Some(r) = attr(f.text, "ref")
+                    {
+                        let own: Vec<Shift> =
+                            job.shifts.iter().filter(|(s, _)| s.eq_ignore_ascii_case(job.name)).map(|(_, s)| *s).collect();
+                        if let Some(Some(nr)) = shift_area_text(r, &own)
+                            && nr != r
+                        {
+                            f_tag = set_attr(&f_tag, "ref", &nr);
+                            text = f_text_raw.map(decode_text);
+                        }
+                    }
                 }
                 None => {
                     if let Some(raw) = f_text_raw {
@@ -1003,6 +1038,9 @@ fn rewrite_cell(
             // for a `#SPILL!` or `#CALC!`) is rewritten whatever its cache says: the error may be
             // another now, or none
             if moved && (!same_value(&cached, &live) || attr(&new_tag, "vm").is_some()) {
+                if let Some(what) = engine_only(&live) {
+                    return Err(engine_only_refusal(job.name, &addr(new.0, new.1), what));
+                }
                 let (t, v) = cached_xml(&live);
                 new_tag = set_or_remove(&new_tag, "t", t);
                 // value metadata marks what a cached `#VALUE!` stands for (`#SPILL!`, `#CALC!`): a
@@ -1036,6 +1074,9 @@ fn rewrite_cell(
         // (`moved` is false for a cell the engine did not compute)
         let live = (job.value_at)(new.0, new.1);
         if (job.moved)(orig, new, &live) || (job.left)(orig, new) || (job.reached)(orig, new) {
+            if let Some(what) = engine_only(&live) {
+                return Err(engine_only_refusal(job.name, &addr(new.0, new.1), what));
+            }
             out.refreshed += 1;
             return Ok(match spilled_cell(new.0, new.1, attr(&new_tag, "s"), &live) {
                 Some(s) => CellOut::New(s),
@@ -1331,6 +1372,15 @@ const DROP_IF_GONE_TAG: &[&str] = &["mergeCell", "hyperlink", "ignoredError", "p
 const DROP_IF_GONE_ELEMENT: &[&str] = &["conditionalFormatting", "dataValidation", "autoFilter", "sortState"];
 const FORMULA_TEXT: &[&str] = &["formula", "formula1", "formula2", "xm:f"];
 const X14_ELEMENTS: &[&str] = &["x14:conditionalFormatting", "x14:dataValidation"];
+/// A list and what it lists (`""`: any element): dropped when the moves leave it none.
+const CONTAINERS: &[(&str, &str)] = &[
+    ("x14:sparklineGroup", "x14:sparkline"),
+    ("x14:sparklineGroups", "x14:sparklineGroup"),
+    ("x14:conditionalFormattings", "x14:conditionalFormatting"),
+    ("x14:dataValidations", "x14:dataValidation"),
+    ("ext", ""),
+    ("extLst", "ext"),
+];
 
 /// Where a cell that is at `at` after `shift` was before it.
 fn before_shift(shift: Shift, at: (i32, i32)) -> (i32, i32) {
@@ -1410,6 +1460,35 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
             continue;
         }
         let name = t.name;
+        // a sparkline goes with its cell, as in Excel (its location deleted)
+        if name == "x14:sparkline"
+            && let Some((a, b)) = xml::element_span(s, &t)
+            && xml::inner(&s[a..b], "xm:sqref").is_some_and(|sq| shift_sqref_text(sq.trim(), own).is_some_and(|n| n.is_empty()))
+        {
+            pos = b;
+            continue;
+        }
+        // a container whose last member went goes too (an empty list is no list the schema
+        // takes): a sparkline group, the groups, an x14 list of formats or validations, an
+        // extension left with nothing, the extension list
+        if let Some((_, member)) = CONTAINERS.iter().find(|(c, _)| *c == name)
+            && !t.self_closing
+            && let Some((a, b)) = xml::element_span(s, &t)
+        {
+            let inner = &s[t.end..b - format!("</{name}>").len()];
+            let walked = walk_tail(inner, job, own, anchor);
+            let holds = |x: &str| if member.is_empty() { next_tag(x, 0).is_some() } else { xml::find_open(x, member, 0).is_some() };
+            if holds(inner) && !holds(&walked) {
+                pos = b;
+                continue;
+            }
+            out.push_str(t.text);
+            out.push_str(&walked);
+            out.push_str(&s[b - format!("</{name}>").len()..b]);
+            pos = b;
+            let _ = a;
+            continue;
+        }
         if X14_ELEMENTS.contains(&name) {
             let Some((a, b)) = xml::element_span(s, &t) else {
                 out.push_str(t.text);

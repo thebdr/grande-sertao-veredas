@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use veredas_abaco::links::{LinkChoice, LinkPolicy};
 use veredas_abaco::patch::cached::{self, read_elements};
-use veredas_abaco::patch::{Edit, PatchError, PatchOptions, Status, patch};
+use veredas_abaco::patch::{Edit, Expect, PatchError, PatchOptions, Status, patch};
 use veredas_abaco::{Addr, Value, Workbook};
 
 const MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
@@ -1210,4 +1210,232 @@ fn a_metadata_part_without_a_dynamic_array_entry_gets_one() {
     // the rich values kept
     assert!(m.contains(r#"<valueMetadata count="1"><bk><rc t="1" v="0"/></bk></valueMetadata>"#), "{m}");
     assert!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "D1").unwrap().contains(r#"cm="1""#));
+}
+
+// ---- refute round 6 ---------------------------------------------------------------------------
+
+#[test]
+fn a_value_over_a_dynamic_arrays_anchor_takes_its_spill_with_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("spill.xlsx");
+    let data = r#"<row r="1"><c r="H1" cm="1"><f t="array" ref="H1:H3">_xlfn.SEQUENCE(3)</f><v>1</v></c></row><row r="2"><c r="H2"><v>2</v></c></row><row r="3"><c r="C3" cm="1"><f t="array" ref="C3:C5">_xlfn.RANDARRAY(3)</f><v>0.1</v></c><c r="H3"><v>3</v></c></row><row r="4"><c r="C4"><v>0.2</v></c></row><row r="5"><c r="C5"><v>0.3</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    for v in [serde_json::json!(7), serde_json::json!("x"), serde_json::json!(true)] {
+        let _ = std::fs::remove_file(&dst);
+        let report = patch(&src, &dst, &[value("S", "H1", v.clone()), value("S", "C3", v.clone())], &verified()).unwrap();
+        assert!(report.outcomes.iter().all(|o| o.status == Status::Applied), "{v}: {:?}", report.outcomes);
+        let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+        for gone in ["H2", "H3", "C4", "C5"] {
+            assert_eq!(element(&sheet, gone), None, "{v}: {gone} left behind in {sheet}");
+        }
+        assert!(!element(&sheet, "H1").unwrap().contains("<f"), "{sheet}");
+    }
+    // Excel's own file: SEQUENCE's anchor overwritten
+    let src = fork_file("calc_tests/MATH_AND_TRIGONOMETRY/SEQUENCE.xlsx");
+    let before = cached::read(&src).unwrap();
+    let spilled: Vec<(i32, i32)> = before
+        .iter()
+        .filter(|((s, _, c), cell)| s == "Sheet1" && *c == 1 && cell.formula.is_none() && !cell.shared)
+        .map(|((_, r, c), _)| (*r, *c))
+        .filter(|(r, _)| *r > 1)
+        .collect();
+    let _ = std::fs::remove_file(&dst);
+    patch(&src, &dst, &[value("Sheet1", "A1", serde_json::json!(7))], &verified()).unwrap();
+    let after = cached::read(&dst).unwrap();
+    assert_eq!(after.get(&("Sheet1".to_string(), 1, 1)).map(|c| c.value.clone()), Some(Value::Number(7.0)));
+    let mut left = Vec::new();
+    for (r, c) in spilled.iter().filter(|(r, _)| *r <= 4) {
+        if let Some(cell) = after.get(&("Sheet1".to_string(), *r, *c)) {
+            left.push((*r, cell.value.clone()));
+        }
+    }
+    assert!(left.iter().all(|(_, v)| *v == Value::Empty), "A2:A4 left as constants: {left:?}");
+}
+
+#[test]
+fn a_plain_formula_holds_where_excel_computed_what_the_array_computes() {
+    // `Rate` one cell, `Flag` one cell: Excel computes these plain formulas as their arrays
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("names.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>5</v></c><c r="D1"><f>Rate*2</f><v>10</v></c><c r="E1"><f>INDEX(A1:A3,2)</f><v>6</v></c><c r="F1"><f>IF(Flag,1,0)</f><v>1</v></c><c r="G1"><f>SUM(A1:A3*B1:B3)</f><v>50</v></c></row><row r="2"><c r="A2"><v>6</v></c><c r="B2"><v>1</v></c></row><row r="3"><c r="A3"><v>7</v></c><c r="B3"><v>1</v></c></row><row r="4"><c r="A4" t="b"><v>1</v></c></row>"#;
+    let names = r#"<definedName name="Flag">S!$A$4</definedName><definedName name="Rate">S!$A$1</definedName>"#;
+    let data = data.replace(r#"<c r="A1"><v>5</v></c>"#, r#"<c r="A1"><v>5</v></c><c r="B1"><v>10</v></c>"#);
+    plain_book(&src, &[("S", worksheet(&data, ""))], names, &[]);
+    let dst = dir.path().join("out.xlsx");
+    // an expectation each formula meets: the edits applied
+    let expecting = |cell: &str, f: &str| Edit::Value {
+        sheet: "S".into(),
+        cell: cell.into(),
+        value: serde_json::json!(3),
+        expect: Some(Expect::Formula { formula: f.into() }),
+    };
+    let report =
+        patch(&src, &dst, &[expecting("D1", "=Rate*2"), expecting("E1", "=INDEX(A1:A3,2)"), expecting("F1", "=IF(Flag,1,0)")], &verified())
+            .unwrap();
+    assert!(report.outcomes.iter().all(|o| o.status == Status::Applied), "{:?}", report.outcomes);
+    // the same formulas written: already there, the file as it was
+    let _ = std::fs::remove_file(&dst);
+    let formula = |cell: &str, f: &str| Edit::Formula { sheet: "S".into(), cell: cell.into(), formula: f.into(), expect: None };
+    let report = patch(&src, &dst, &[formula("D1", "=Rate*2"), formula("E1", "=INDEX(A1:A3,2)"), formula("F1", "=IF(Flag,1,0)")], &verified())
+        .unwrap();
+    assert!(report.outcomes.iter().all(|o| o.status == Status::AlreadyThere), "{:?}", report.outcomes);
+    assert_eq!(parts(&dst), parts(&src));
+    // where Excel's cache says implicit intersection changed the value (50, A1*B1 alone), the edit
+    // writes the array (63, A1*B1+A2*B2+A3*B3) and an expectation of the formula does not hold
+    let _ = std::fs::remove_file(&dst);
+    let report = patch(&src, &dst, &[formula("G1", "=SUM(A1:A3*B1:B3)"), expecting("G1", "=SUM(A1:A3*B1:B3)")], &verified()).unwrap();
+    assert_eq!(report.outcomes[0].status, Status::Applied);
+    // the second edit's expectation holds against what the first wrote, and its value lands
+    assert_eq!(report.outcomes[1].status, Status::Applied, "{:?}", report.outcomes);
+    assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "G1"), Some(r#"<c r="G1"><v>3</v></c>"#));
+    let _ = std::fs::remove_file(&dst);
+    patch(&src, &dst, &[formula("G1", "=SUM(A1:A3*B1:B3)")], &verified()).unwrap();
+    assert!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "G1").unwrap().contains(r#"<f t="array" ref="G1">"#));
+    let _ = std::fs::remove_file(&dst);
+    let report = patch(&src, &dst, &[expecting("G1", "=SUM(A1:A3*B1:B3)")], &verified()).unwrap();
+    assert_eq!(report.outcomes[0].status, Status::Conflict, "{:?}", report.outcomes);
+}
+
+#[test]
+fn an_error_only_the_engine_has_is_never_written_as_a_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("errors.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>IF(A1=1,0,B1+1)</f><v>0</v></c></row><row r="2"><c r="A2"><v>2</v></c></row><row r="3"><c r="A3"><v>3</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let formula = |cell: &str, f: &str| Edit::Formula { sheet: "S".into(), cell: cell.into(), formula: f.into(), expect: None };
+    for (edits, error) in [
+        (vec![formula("E5", "=E5+1")], "#CIRC!"),
+        (vec![value("S", "A1", serde_json::json!(2))], "#CIRC!"),
+        (vec![formula("D1", r#"=SUM(VALUE(A1:A3&""))"#)], "#N/IMPL"),
+    ] {
+        match patch(&src, &dst, &edits, &verified()) {
+            Err(PatchError::Unsupported(m)) => {
+                assert!(m.contains(error) && m.contains("an error no workbook file holds"), "{edits:?}: {m}")
+            }
+            other => panic!("{edits:?}: {other:?}"),
+        }
+        assert!(!dst.exists(), "{edits:?}");
+    }
+}
+
+/// A metadata part holding an OLAP formula's cell metadata before any dynamic array's.
+fn olap_metadata(dynamic: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><metadata xmlns="{MAIN}" xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"><metadataTypes count="1"><metadataType name="XLMDX" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/>{dynamic}</metadataTypes><metadataStrings count="1"><s v="[Measures].[x]"/></metadataStrings><mdxMetadata count="1"><mdx n="0" f="m"><t c="1"><n x="0" s="1"/></t></mdx></mdxMetadata><cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata><extLst><ext uri="{{x}}"/></extLst></metadata>"#
+    )
+}
+
+#[test]
+fn a_dynamic_formula_takes_the_entry_the_metadata_part_gives_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("olap.xlsx");
+    let data: String =
+        (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="B{r}"><v>{}</v></c></row>"#, r * 10)).collect();
+    let book = |path: &Path, metadata: String| {
+        write_package(
+            path,
+            &[
+                ("xl/workbook.xml", workbook(&["S"], "")),
+                ("xl/_rels/workbook.xml.rels", rels(&[rel("rId1", "worksheet", "worksheets/sheet1.xml"), rel("rId2", "sheetMetadata", "metadata.xml")])),
+                ("xl/worksheets/sheet1.xml", worksheet(&data, "")),
+                ("xl/metadata.xml", metadata),
+            ],
+        )
+    };
+    book(&src, olap_metadata(""));
+    let dst = dir.path().join("out.xlsx");
+    let edit = Edit::Formula { sheet: "S".into(), cell: "D1".into(), formula: "=SUM(A1:A3*B1:B3)".into(), expect: None };
+    patch(&src, &dst, std::slice::from_ref(&edit), &verified()).unwrap();
+    let d1 = element(&part(&dst, "xl/worksheets/sheet1.xml"), "D1").unwrap().to_string();
+    assert!(d1.contains(r#"cm="2""#) && d1.contains(r#"<f t="array" ref="D1">"#) && d1.ends_with("<v>140</v></c>"), "{d1}");
+    assert_eq!(read_back(&dst, "S", "D1"), Value::Number(140.0));
+    // a dynamic-array entry already there, its flag spelled `true`: taken, none added
+    let entry = r#"<metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/>"#;
+    let with = olap_metadata(entry)
+        .replace(r#"<metadataTypes count="1">"#, r#"<metadataTypes count="2">"#)
+        .replace(
+            "<cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata>",
+            r#"<futureMetadata name="XLDAPR" count="1"><bk><extLst><ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"><xda:dynamicArrayProperties fDynamic="true" fCollapsed="0"/></ext></extLst></bk></futureMetadata><cellMetadata count="2"><bk><rc t="1" v="0"/></bk><bk><rc t="2" v="0"/></bk></cellMetadata>"#,
+        );
+    book(&src, with.clone());
+    let _ = std::fs::remove_file(&dst);
+    patch(&src, &dst, &[edit], &verified()).unwrap();
+    assert!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "D1").unwrap().contains(r#"cm="2""#));
+    assert_eq!(part(&dst, "xl/metadata.xml"), with);
+}
+
+#[test]
+fn a_sparkline_goes_with_its_cell_and_a_group_with_its_last_sparkline() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("sparklines.xlsx");
+    let data: String = (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="B{r}"><v>{r}</v></c></row>"#)).collect();
+    let group = |lines: &str| {
+        format!(
+            r#"<x14:sparklineGroup displayEmptyCellsAs="gap"><x14:colorSeries rgb="FF376092"/><x14:sparklines>{lines}</x14:sparklines></x14:sparklineGroup>"#
+        )
+    };
+    let line = |r: i32| format!("<x14:sparkline><xm:f>S!A{r}:B{r}</xm:f><xm:sqref>C{r}</xm:sqref></x14:sparkline>");
+    let ext = |groups: &str| {
+        format!(
+            r#"<extLst><ext uri="{{05C60535-1F16-4fd2-B633-F4F36F0B64E0}}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:sparklineGroups xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">{groups}</x14:sparklineGroups></ext></extLst>"#
+        )
+    };
+    plain_book(&src, &[("S", worksheet(&data, &ext(&group(&(line(2) + &line(3))))))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let delete = |at: i32| Edit::DeleteRows { sheet: "S".into(), at, count: 1 };
+    patch(&src, &dst, &[delete(2)], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(sheet.ends_with(&format!("{}</worksheet>", ext(&group("<x14:sparkline><xm:f>S!A2:B2</xm:f><xm:sqref>C2</xm:sqref></x14:sparkline>")))), "{sheet}");
+    // its one sparkline gone, the group, the groups, the extension and its list go too
+    plain_book(&src, &[("S", worksheet(&data, &ext(&group(&line(2)))))], "", &[]);
+    let _ = std::fs::remove_file(&dst);
+    patch(&src, &dst, &[delete(2)], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(sheet.ends_with("</sheetData></worksheet>"), "{sheet}");
+}
+
+#[test]
+fn a_formula_or_a_name_holding_a_literal_escape_reads_back_as_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("literal.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1" t="str"><f>"_x005F_x0041_"&amp;A1</f><v>_x005F_x0041_1</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let edits = vec![
+        Edit::Formula { sheet: "S".into(), cell: "C1".into(), formula: r#"="_x0041_"&"x""#.into(), expect: None },
+        Edit::SetName { name: "Lit".into(), formula: r#""_x0041_""#.into(), scope: None },
+        rows("S", 1, 1),
+    ];
+    patch(&src, &dst, &edits, &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(r#"<f>"_x005F_x0041_"&amp;"x"</f>"#), "{sheet}");
+    assert!(sheet.contains(r#"<f>"_x005F_x0041_"&amp;A2</f>"#), "{sheet}");
+    assert!(part(&dst, "xl/workbook.xml").contains(r#"<definedName name="Lit">"_x005F_x0041_"</definedName>"#));
+    assert_eq!(read_back(&dst, "S", "C2"), Value::Text("_x0041_x".into()));
+    assert_eq!(read_back(&dst, "S", "B2"), Value::Text("_x0041_1".into()));
+}
+
+#[test]
+fn a_shared_group_moved_without_changing_what_its_members_read_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("shared.xlsx");
+    let data = r#"<row r="1"><c r="B1"><f t="shared" ref="B1:B3" si="0">$Z$1</f><v>9</v></c></row><row r="2"><c r="B2"><f t="shared" si="0"/><v>9</v></c></row><row r="3"><c r="B3"><f t="shared" si="0"/><v>9</v></c></row><row r="4"><c r="Z1"><v>0</v></c></row>"#
+        .replace(r#"<row r="4"><c r="Z1"><v>0</v></c></row>"#, "")
+        .replace(r#"<row r="1"><c r="B1">"#, r#"<row r="1"><c r="B1">"#);
+    let data = data.replace(r#"<v>9</v></c></row><row r="2">"#, r#"<v>9</v></c><c r="Z1"><v>9</v></c></row><row r="2">"#);
+    plain_book(&src, &[("S", worksheet(&data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    // a row inserted inside the group: B3 moves to B4, the derived `$Z$1` is the same
+    let report = patch(&src, &dst, &[rows("S", 3, 1)], &verified()).unwrap();
+    assert_eq!(report.expanded, 0);
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert_eq!(element(&sheet, "B1"), Some(r#"<c r="B1"><f t="shared" ref="B1:B4" si="0">$Z$1</f><v>9</v></c>"#));
+    assert_eq!(element(&sheet, "B2"), Some(r#"<c r="B2"><f t="shared" si="0"/><v>9</v></c>"#));
+    assert_eq!(element(&sheet, "B4"), Some(r#"<c r="B4"><f t="shared" si="0"/><v>9</v></c>"#));
+    // a row inserted above it: the group moved whole
+    let _ = std::fs::remove_file(&dst);
+    let report = patch(&src, &dst, &[Edit::InsertRows { sheet: "S".into(), at: 1, count: 1 }], &verified()).unwrap();
+    assert_eq!(report.expanded, 1, "Z1 moved too: the members' formula reads $Z$2 now");
 }

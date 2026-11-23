@@ -881,6 +881,82 @@ fn holds_an_array(wb: &Workbook, sheet: u32, a: Addr) -> bool {
     matches!(wb.content(sheet, a), Ok(Content::DynamicFormula(_) | Content::ArrayFormula { .. }))
 }
 
+/// Where a cell at `(row, col)` of `sheet` lands through the shifts from the `from`-th on; `None`
+/// when one deletes it.
+fn forward(shifts: &[(String, Shift)], from: usize, sheet: &str, mut row: i32, mut col: i32) -> Option<(i32, i32)> {
+    for (s, sh) in shifts.get(from..).unwrap_or_default() {
+        if s.eq_ignore_ascii_case(sheet) {
+            if sh.is_rows() {
+                row = sh.index(row)?;
+            } else {
+                col = sh.index(col)?;
+            }
+        }
+    }
+    Some((row, col))
+}
+
+/// Who wrote the formula a cell holds, as far as its kind goes.
+enum Writer {
+    /// An earlier edit of the list: the file will hold it as the patcher writes that text.
+    Edit,
+    /// The source, plain, with the value Excel cached for it.
+    Source(Value),
+    /// Neither found (no formula of the source lands here).
+    Unknown,
+}
+
+/// Who wrote the formula now at `a` of `sheet` (through the moves so far). The source's cells are
+/// read once, the first time one is asked for.
+fn writer_of(
+    source: &Path,
+    cells: &mut Option<cached::Cells>,
+    shifts: &[(String, Shift)],
+    writes: &[PendingWrite],
+    sheet: &str,
+    a: Addr,
+) -> Result<Writer, PatchError> {
+    let here = (a.row, a.column);
+    if writes
+        .iter()
+        .any(|w| w.content.is_some() && w.sheet.eq_ignore_ascii_case(sheet) && forward(shifts, w.after, sheet, w.row, w.col) == Some(here))
+    {
+        return Ok(Writer::Edit);
+    }
+    if cells.is_none() {
+        *cells = Some(cached::read(source)?);
+    }
+    Ok(cells
+        .as_ref()
+        .and_then(|cells| {
+            cells.iter().find(|((name, r, c), cell)| {
+                name.eq_ignore_ascii_case(sheet) && (cell.formula.is_some() || cell.shared) && forward(shifts, 0, sheet, *r, *c) == Some(here)
+            })
+        })
+        .map_or(Writer::Unknown, |(_, cell)| Writer::Source(cell.value.clone())))
+}
+
+/// Whether the formula the cell holds (its text already found equal to `formula`'s) is, to
+/// Excel, the formula an edit writes as `formula`: both arrays, a formula the engine reads as one
+/// value (written plain, and plain or an array alike to Excel), one an earlier edit wrote (the
+/// patcher writes one text one way), or a plain one of the source that Excel computed to what the
+/// engine computes for the array the edit writes (its cache says implicit intersection changed
+/// nothing there: `Rate*2` with `Rate` one cell). A plain one with no cache to judge by is not.
+fn same_kind(wb: &mut Workbook, fixed: &Fixed, sheet: u32, a: Addr, formula: &str, writer: &Writer) -> bool {
+    if holds_an_array(wb, sheet, a) || !writes_as_array(wb, sheet, a, formula) {
+        return true;
+    }
+    match writer {
+        Writer::Edit => true,
+        Writer::Unknown => false,
+        Writer::Source(cache) => {
+            fixed.reference();
+            wb.ensure_calculated();
+            wb.value_now(sheet, a).is_ok_and(|v| cache_holds(cache, &v))
+        }
+    }
+}
+
 /// A formula in file spelling as `wb` would write it at `a` — `None` when
 /// it does not parse.
 fn file_spelling(wb: &Workbook, sheet: u32, a: Addr, formula: &str) -> Option<String> {
@@ -986,14 +1062,25 @@ fn describe(wb: &Workbook, sheet: u32, a: Addr) -> String {
     }
 }
 
-/// Whether the cell holds what `expect` says.
-fn holds(wb: &Workbook, sheet: u32, a: Addr, expect: &Expect) -> Result<bool, String> {
+/// Whether the cell holds what `expect` says; a formula of the same text judged by [`same_kind`].
+fn holds(
+    wb: &mut Workbook,
+    fixed: &Fixed,
+    sheet: u32,
+    a: Addr,
+    expect: &Expect,
+    writer: impl FnOnce() -> Result<Writer, String>,
+) -> Result<bool, String> {
     let current = current_file_formula(wb, sheet, a);
     match expect {
         Expect::Formula { formula } => {
             let want = file_spelling(wb, sheet, a, formula)
                 .ok_or_else(|| format!("the expected formula does not parse: {formula}"))?;
-            Ok(current.as_deref() == Some(want.as_str()) && writes_as_array(wb, sheet, a, formula) == holds_an_array(wb, sheet, a))
+            if current.as_deref() != Some(want.as_str()) {
+                return Ok(false);
+            }
+            let writer = writer()?;
+            Ok(same_kind(wb, fixed, sheet, a, formula, &writer))
         }
         Expect::Value { value } => {
             if current.is_some() {
@@ -1055,6 +1142,8 @@ pub fn patch(
     let mut new_sheets: Vec<String> = Vec::new();
     let mut names_touched = false;
     let mut set_names: Vec<(String, Option<String>)> = Vec::new();
+    // the source's cells as the file states them, read the first time a cache is asked for
+    let mut source_cells: Option<cached::Cells> = None;
 
     for (index, edit) in edits.iter().enumerate() {
         let fail = |message: String| PatchError::Edit {
@@ -1113,8 +1202,10 @@ pub fn patch(
                 let already = if is_formula {
                     let want = file_spelling(&wb, s, a, &target)
                         .ok_or_else(|| fail(format!("the formula does not parse: {target}")))?;
-                    current_file_formula(&wb, s, a).as_deref() == Some(want.as_str())
-                        && writes_as_array(&wb, s, a, &target) == holds_an_array(&wb, s, a)
+                    current_file_formula(&wb, s, a).as_deref() == Some(want.as_str()) && {
+                        let writer = writer_of(source, &mut source_cells, &shifts, &writes, &canonical, a)?;
+                        same_kind(&mut wb, &fixed, s, a, &target, &writer)
+                    }
                 } else {
                     let v = json_value(match edit {
                         Edit::Value { value, .. } => value,
@@ -1131,7 +1222,11 @@ pub fn patch(
                     continue;
                 }
                 if let Some(expect) = expect
-                    && !holds(&wb, s, a, expect).map_err(fail)? {
+                    && !holds(&mut wb, &fixed, s, a, expect, || {
+                        writer_of(source, &mut source_cells, &shifts, &writes, &canonical, a).map_err(|e| e.to_string())
+                    })
+                    .map_err(fail)?
+                {
                         outcome.status = Status::Conflict;
                         outcome.note = format!("{canonical}!{a} now holds {}", describe(&wb, s, a));
                         report.outcomes.push(outcome);
@@ -1504,6 +1599,17 @@ pub fn patch(
             });
         }
     }
+    // a cache the writes would hold that no workbook file holds refuses the patch (see
+    // `sheet::engine_only`); the refresh of a moved cache refuses it the same way
+    for (name, cells) in &final_writes {
+        for (&(row, col), w) in cells {
+            if let Some(NewContent::Formula { cached: v, .. } | NewContent::Spilled(v)) = &w.content
+                && let Some(what) = sheet::engine_only(v)
+            {
+                return Err(sheet::engine_only_refusal(name, &Addr::new(row, col).to_string(), what));
+            }
+        }
+    }
     // the cells an array spills into that the file has no cell for: written as Excel writes a
     // spilled cell where the array reaches them because of the edits (grown, moved into empty
     // cells), left out where it reached them already and their value did not move; and every cell
@@ -1572,6 +1678,9 @@ pub fn patch(
                 }
                 let entry = final_writes.entry(name.clone()).or_default().entry((row, col)).or_default();
                 if entry.content.is_none() {
+                    if let Some(what) = sheet::engine_only(&v) {
+                        return Err(sheet::engine_only_refusal(&name, &Addr::new(row, col).to_string(), what));
+                    }
                     entry.content = Some(NewContent::Spilled(v.clone()));
                     expected.push((name.clone(), row, col, v));
                 }
@@ -2143,7 +2252,10 @@ fn dynamic_cell_metadata(part: &str) -> Option<u32> {
     while let Some(t) = xml::find_open(part, "futureMetadata", pos) {
         let (a, b) = xml::element_span(part, &t)?;
         if xml::attr(t.text, "name") == Some("XLDAPR") {
-            value_index = bks(&part[a..b]).iter().position(|bk| bk.contains("fDynamic=\"1\""));
+            // `fDynamic` is an xsd:boolean: "1" or "true"
+            value_index = bks(&part[a..b])
+                .iter()
+                .position(|bk| bk.contains("fDynamic=\"1\"") || bk.contains("fDynamic=\"true\""));
         }
         pos = b;
     }

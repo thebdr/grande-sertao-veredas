@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use ironcalc_base::expressions::token::get_error_by_english_name;
 use ironcalc_base::expressions::types::Area as EngineArea;
-use ironcalc_base::types::{Cell, FormulaValue, SpillValue, Style};
+use ironcalc_base::types::{ArrayKind, Cell, FormulaValue, SpillValue, Style};
 use ironcalc_base::{DefinedNameEntry, Model};
 
 use crate::a1::{Addr, Area, BadAddress};
@@ -484,6 +484,21 @@ impl Workbook {
     /// a quote prefix, as Excel does when one types `'0025`.
     pub fn set_value(&mut self, sheet: u32, addr: Addr, value: &Value) -> Result<(), ModelError> {
         let (row, column) = (addr.row, addr.column);
+        if !matches!(value, Value::Empty) {
+            // a value typed over a dynamic array's anchor takes the array's spill with it, as in
+            // Excel; the engine's value setters leave the spilled cells behind, holding their old
+            // values as constants
+            let anchor = self
+                .model
+                .workbook
+                .worksheet(sheet)
+                .ok()
+                .and_then(|w| w.cell(row, column))
+                .is_some_and(|c| matches!(c.as_ref(), Cell::ArrayFormula { kind: ArrayKind::Dynamic, .. }));
+            if anchor {
+                self.clear(sheet, Area { first: addr, last: addr })?;
+            }
+        }
         match value {
             Value::Empty => return self.clear(sheet, Area { first: addr, last: addr }),
             Value::Number(n) => {

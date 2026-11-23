@@ -394,6 +394,17 @@ workspace/log.txt             the log, one escaped entry per line
 - **Part names differ in more than case** (OPC): a new sheet's part takes a name free in any case.
 - **A metadata part may hold rich values only**: the dynamic-array type, its future-metadata list
   and a cell entry are appended among the root's own children, never inside an entry's `extLst`.
+- **The engine's value setters leave a dynamic array's spill** (C-223's sixth round): a value over
+  an anchor clears the array first (`Workbook::set_value`), or its cells stay as constants.
+- **Excel's cache is the judge of implicit intersection**: a plain formula of the file is the
+  array an edit writes where its cache equals the array's value; the engine computes both alike.
+- **The engine has errors no file holds** (`#CIRC!`, `#N/IMPL`, `#ERROR!`): a cache that would
+  hold one refuses the patch.
+- **`cm` is an index**, into the metadata part's cell metadata (fork change 22); `1` is Excel 365's
+  usual, not the rule.
+- **A formula's text is escaped as a cell's** (`_x005F_`; fork change 23).
+- **A shared group is expanded only where a move changes what a member derives to**; moved whole,
+  it keeps its sharing and its master's `ref` moves.
 - **A read-only destination**: its `.bak` is read-only too after the first patch, so the next
   removes it before making a new one, and the destination keeps its own permissions.
 - **Calamine 0.26 does not build with zip 2.6**: the lock holds zip 2.4.2, the version Veredas 1's
