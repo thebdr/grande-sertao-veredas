@@ -2,9 +2,11 @@
 # A test that measures the host's timer (the draws' and the ramps' counts, a stall's phase) runs
 # with the machine to itself: under the whole suite's parallel processes a 20 ms tick landed every
 # 31 ms, which is the load's doing, not the code's (docs/maquinar-plan.md, "Traps"; questions Q13).
-# fisica's runner counts its steps against the clock the same way (C-114).
+# fisica's runner counts its steps against the clock the same way (C-114), and so does every test
+# the bench's plan lists as timed ("Which of the bench's tests go behind the machine's lock"): an
+# adapter's timeout under the whole suite's load fell 10 ms short (2026-11-23).
 [[profile.default.overrides]]
-filter = 'test(draws_come_at_their_interval) | test(ramps_come_at_their_interval_counted_apart_from_draws) | test(a_stall_skips_the_draws_and_steps_it_missed) | test(the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene)'
+filter = 'package(veredas-maquinar) & (test(draws_come_at_their_interval) | test(ramps_come_at_their_interval_counted_apart_from_draws) | test(a_stall_skips_the_draws_and_steps_it_missed) | test(a_draw_or_a_step_is_next_due_an_interval_after_it_was_due) | test(a_reaction_answers_a_write_with_a_timed_sequence) | test(a_stop_is_prompt_whatever_the_interval) | test(the_machine_announces_awaits_the_answer_and_reports_the_outcome_tick_by_tick) | test(a_destination_s_state_forces_the_outcome_and_the_bench_s_knobs_set_it) | test(faults_mark_their_share_of_items_and_the_rate_is_the_interval_s_whatever_the_tick) | test(the_machine_and_the_unit_converse_over_a_real_socket_and_the_knobs_turn_live) | binary(pressure) | test(the_knobs_delay_silence_and_drop_every_connection) | test(a_class_1_connection_produces_at_its_rpi_and_consumes_what_its_originator_runs) | test(a_connection_whose_originator_falls_silent_is_closed_at_its_timeout) | test(the_timeout_counts_the_consumed_rpi_and_the_multiplier_and_the_first_frame_waits_ten_seconds) | test(a_connection_s_first_frame_comes_at_once_whatever_the_others_wait_for) | test(the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene) | test(an_identify_is_answered_within_its_response_delay) | test(lldp_names_the_station_and_the_port_and_says_when_it_leaves) | test(round_1::the_delay_follows_the_factor) | test(round_1::lldp_comes_on_its_interval) | binary(reflexo))'
 threads-required = 'num-cpus'
 
 # A test that keeps the machine's cores busy for seconds (a slow view read through a dashboard, so
