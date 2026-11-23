@@ -39,6 +39,8 @@ interface Bound {
   /// shapes the level is drawn on, clipped to the level's rect (`fill`, then held in a clip), carrying
   /// the state.
   along?: SVGGElement;
+  /// Its copy's lines' widths when its box was last read.
+  alongWidths?: string;
   tag: SVGTextElement;
   label: SVGTextElement;
   fill?: SVGRectElement;
@@ -82,6 +84,77 @@ const PAINT = ["fill", "stroke", "stroke-width", "stroke-dasharray", "fill-opaci
 
 /// The shapes the page draws on (the reader's `DRAWN`, its group and text apart).
 const GEOMETRY = "path, rect, circle, ellipse, line, polyline, polygon";
+
+/// What a level's copy carries from its original as the browser computes it: the inherited
+/// properties that shape what a stroke or a fill covers.
+const CARRIED = ["stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-dashoffset", "fill-rule"];
+
+/// An open run's two ends, each with the way out of the run there, in the shape's own coordinates:
+/// a line's, a polyline's, and each subpath of a path not closed back on its start (a path with an
+/// arc read as one run, from its first point to its last unless it closes); none for a closed shape.
+function openEnds(g: SVGGeometryElement): [Pt, Pt][] {
+  const ends = (pts: Pt[]): [Pt, Pt][] => {
+    if (pts.length < 2) return [];
+    const [a, b, y, z] = [pts[0], pts[1], pts[pts.length - 2], pts[pts.length - 1]];
+    return a.x === z.x && a.y === z.y ? [] : [[a, { x: a.x - b.x, y: a.y - b.y }], [z, { x: z.x - y.x, y: z.y - y.y }]];
+  };
+  if (g instanceof SVGLineElement) return ends([{ x: g.x1.baseVal.value, y: g.y1.baseVal.value }, { x: g.x2.baseVal.value, y: g.y2.baseVal.value }]);
+  if (g instanceof SVGPolylineElement) {
+    const pts: Pt[] = [];
+    for (let i = 0; i < g.points.numberOfItems; i++) pts.push(g.points.getItem(i));
+    return ends(pts);
+  }
+  if (g instanceof SVGPathElement) {
+    const d = g.getAttribute("d") ?? "";
+    const subs = subpaths(d);
+    if (subs) return subs.flatMap(ends);
+    if (/[zZ]/.test(d)) return [];
+    const len = g.getTotalLength();
+    const step = Math.min(1, len / 2);
+    return ends([g.getPointAtLength(0), g.getPointAtLength(step), g.getPointAtLength(len - step), g.getPointAtLength(len)]);
+  }
+  return [];
+}
+
+/// What a shape paints, as points in the frame `m` carries it to: a point every quarter unit of that
+/// frame or so along its outline (`getPointAtLength`), each spread by half the stroke's width `w`
+/// across the way the outline runs there (none for a body, `w` 0), and an open run's ends grown by
+/// its cap (a square's half width out of the run, a round's all round). A mitre join's tip past half
+/// the width is not followed.
+function painted(g: SVGGeometryElement, m: DOMMatrix, w: number, cap: string): Pt[] {
+  const len = g.getTotalLength();
+  const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1;
+  const n = Math.min(4096, Math.max(64, Math.ceil((len * scale) / 0.25)));
+  const at = (i: number) => g.getPointAtLength(Math.min(len, Math.max(0, (len * i) / n)));
+  const h = w / 2;
+  const out: Pt[] = [];
+  const put = (x: number, y: number) => {
+    const q = new DOMPoint(x, y).matrixTransform(m);
+    out.push({ x: q.x, y: q.y });
+  };
+  for (let i = 0; i <= n; i++) {
+    const p = at(i), a = at(i - 1), b = at(i + 1);
+    const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy);
+    if (!h || !l) {
+      put(p.x, p.y);
+      continue;
+    }
+    put(p.x - (dy / l) * h, p.y + (dx / l) * h);
+    put(p.x + (dy / l) * h, p.y - (dx / l) * h);
+  }
+  if (h && cap !== "butt") {
+    for (const [e, out_] of openEnds(g)) {
+      const l = Math.hypot(out_.x, out_.y);
+      if (!l) continue;
+      const [ux, uy] = [out_.x / l, out_.y / l];
+      if (cap === "square") {
+        put(e.x + ux * h - uy * h, e.y + uy * h + ux * h);
+        put(e.x + ux * h + uy * h, e.y + uy * h - ux * h);
+      } else for (let k = 0; k < 32; k++) put(e.x + h * Math.cos((k * Math.PI) / 16), e.y + h * Math.sin((k * Math.PI) / 16));
+    }
+  }
+  return out;
+}
 
 type Pt = { x: number; y: number };
 type Run = { box: Box; dir: Pt | null };
@@ -190,8 +263,9 @@ function linesOf(el: SVGGraphicsElement): SVGGeometryElement[] {
 /// stands, carried by `m` from its own coordinates (its own transform among them) to the frame it is
 /// drawn in; its texts, titles and descriptions dropped; no id, class or `data-` attribute kept but a
 /// line's mark (`sv-line`, its drawn width in its `style`), every other shape marked a body
-/// (`sv-body`); each shape's caps, joins and mitre limit as the browser computes them on the
-/// original, so the level covers the track's line exactly.
+/// (`sv-body`); each shape's caps, joins, mitre limit, dash offset and fill rule as the browser
+/// computes them on the original (written on it or inherited from a group above, which the copy
+/// does not stand under), so the level covers the track's line and body exactly.
 function copyOf(el: SVGGraphicsElement, m: DOMMatrix): SVGGraphicsElement {
   const copy = el.cloneNode(true) as SVGGraphicsElement;
   copy.querySelectorAll("text, title, desc").forEach((n) => n.remove());
@@ -207,7 +281,7 @@ function copyOf(el: SVGGraphicsElement, m: DOMMatrix): SVGGraphicsElement {
   to.forEach((g, i) => {
     if (!g.classList.contains("sv-line")) g.classList.add("sv-body");
     const c = getComputedStyle(from[i]);
-    for (const p of ["stroke-linecap", "stroke-linejoin", "stroke-miterlimit"]) g.style.setProperty(p, c.getPropertyValue(p));
+    for (const p of CARRIED) g.style.setProperty(p, c.getPropertyValue(p));
   });
   copy.setAttribute("transform", `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})`);
   return copy;
@@ -294,21 +368,32 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
   const overlay = s("g", { class: "sv-overlay" }) as SVGGElement;
   svg.append(overlay);
 
-  /// The box a level along lines rises over, in the overlay's frame: each shape of its copy shown,
-  /// carried there through its own matrix, a line's box grown by half its stroke's width as it is
-  /// painted now (in the state the copy carries), a body's as it is; none for no shape shown.
+  /// The box a level along lines rises over, in the overlay's frame: up and down, the reach of its
+  /// copy's shapes as they are painted now (`painted`: a line's outline spread by its stroke's width
+  /// in the state the copy carries, with its caps; a body's outline), whatever turns, skews or
+  /// squashes them; across, past every line (the level is a height, and a join reaches out
+  /// sideways). None for no shape shown.
   function alongBox(along: SVGGElement): Box | null {
     const oc = overlay.getCTM();
     if (!oc) return null;
-    const boxes = Array.from(along.querySelectorAll<SVGGeometryElement>(GEOMETRY)).filter((g) => g.checkVisibility()).map((g) => {
-      const ob = boxIn(overlay, g, g.getBBox());
+    const o = oc.inverse();
+    let [lo, hi] = [Infinity, -Infinity];
+    for (const g of Array.from(along.querySelectorAll<SVGGeometryElement>(GEOMETRY)).filter((g) => g.checkVisibility())) {
       const gc = g.getCTM();
-      if (!g.classList.contains("sv-line") || !gc) return ob;
-      const h = across(oc.inverse().multiply(gc), parseFloat(getComputedStyle(g).strokeWidth) || 0, null) / 2;
-      return { x: ob.x - h, y: ob.y - h, width: ob.width + 2 * h, height: ob.height + 2 * h };
-    });
-    return union(boxes);
+      if (!gc) continue;
+      const c = getComputedStyle(g);
+      const line = g.classList.contains("sv-line");
+      for (const p of painted(g, o.multiply(gc), line ? parseFloat(c.strokeWidth) || 0 : 0, line ? c.strokeLinecap : "butt")) {
+        lo = Math.min(lo, p.y);
+        hi = Math.max(hi, p.y);
+      }
+    }
+    return lo <= hi ? { x: -1e6, y: lo, width: 2e6, height: hi - lo } : null;
   }
+
+  /// The widths its copy's lines are painted at now: its box read again when they change (the
+  /// alarm's), never on every paint.
+  const alongWidths = (along: SVGGElement) => Array.from(along.querySelectorAll(".sv-line")).map((g) => getComputedStyle(g).strokeWidth).join(" ");
 
   /// Where the page draws what it adds for an object, from the element's box as it stands now: the
   /// box (a text's moves with the view's scale: Chromium lays a text out at the size it is drawn,
@@ -344,7 +429,10 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       b.fillBox = union(bs) ?? b.ob;
       b.runsClip?.replaceChildren(...bs.map((r) => s("rect", { x: r.x, y: r.y, width: r.width, height: r.height })));
       if (sel) el.classList.add("sv-selected");
-    } else if (b.along) b.fillBox = alongBox(b.along) ?? { ...b.ob };
+    } else if (b.along) {
+      b.fillBox = alongBox(b.along) ?? { ...b.ob };
+      b.alongWidths = alongWidths(b.along);
+    }
     else b.fillBox = { ...b.ob };
     if (b.fill) {
       const f = b.filled ? b.last?.level ?? 0 : 0;
@@ -599,8 +687,9 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       carrier.classList.add(cls);
       // Along lines, the box read again in the state just set (the alarm's width), while the drawing
       // is on screen (off it nothing is measured; the layout paints again when shown).
-      if (b.along && svg.isConnected) {
+      if (b.along && svg.isConnected && alongWidths(b.along) !== b.alongWidths) {
         b.fillBox = alongBox(b.along) ?? b.fillBox;
+        b.alongWidths = alongWidths(b.along);
         b.fill.setAttribute("x", String(b.fillBox.x));
         b.fill.setAttribute("width", String(b.fillBox.width));
       }

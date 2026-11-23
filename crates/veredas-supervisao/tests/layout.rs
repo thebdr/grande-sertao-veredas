@@ -1980,7 +1980,10 @@ fn a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_th
 /// from a group above: the level covers its line's round end), a ring drawn at a low stroke opacity
 /// and a hollow rect drawn dashed (the page outranks both, on the track and on its level), a
 /// group of a filled rect and a ring, a thin ring in alarm, and a ring inside a turned and scaled
-/// group.
+/// group; a ring turned 45°, one squashed by a matrix, a holed body beside a ring under a group
+/// writing `evenodd`, a bent pipe under a group writing every property a level's copy carries
+/// (round joins and square caps among them); and a bound group of one shape of every kind the page
+/// draws on, each drawn with no fill.
 const LINES_SVG: &str = r##"  <line id="ln-normal" x1="15" y1="240" x2="15" y2="280" stroke="#2c2c33" stroke-width="10"/>
   <line id="ln-near" x1="40" y1="240" x2="40" y2="280" stroke="#2c2c33" stroke-width="10"/>
   <line id="ln-warn" x1="65" y1="240" x2="65" y2="280" stroke="#2c2c33" stroke-width="10"/>
@@ -2008,6 +2011,12 @@ const LINES_SVG: &str = r##"  <line id="ln-normal" x1="15" y1="240" x2="15" y2="
   <g id="la-mixed"><rect x="200" y="350" width="20" height="40"/><circle cx="250" cy="370" r="16" fill="none" stroke="#3a3a40" stroke-width="6"/></g>
   <circle id="la-alarm" cx="300" cy="370" r="16" fill="none" stroke="#3a3a40" stroke-width="1"/>
   <g transform="translate(330 350) rotate(20) scale(1.2)"><circle id="la-turned" cx="16" cy="16" r="12" fill="none" stroke="#3a3a40" stroke-width="5"/></g>
+  <g transform="rotate(45 40 430)"><circle id="la-turn45" cx="40" cy="430" r="14" fill="none" stroke="#3a3a40" stroke-width="5"/></g>
+  <g transform="matrix(1 0 0 1.5 0 0)"><circle id="la-squash" cx="100" cy="287" r="12" fill="none" stroke="#3a3a40" stroke-width="4"/></g>
+  <g style="fill-rule:evenodd"><g id="la-hole"><path d="M 140 410 h 30 v 40 h -30 z M 148 420 h 14 v 20 h -14 z"/><circle cx="200" cy="430" r="14" fill="none" stroke="#3a3a40" stroke-width="5"/></g></g>
+  <g style="stroke-linejoin:round;stroke-miterlimit:2;stroke-dashoffset:3;fill-rule:evenodd;stroke-linecap:square"><path id="la-join" d="M 240 410 V 450 H 280" fill="none" stroke="#3a3a40" stroke-width="8"/></g>
+  <g id="nf-kinds"><path d="M 300 410 H 316 V 424" fill="none" stroke="#3a3a40" stroke-width="3"/><rect x="322" y="410" width="12" height="12" fill="none" stroke="#3a3a40" stroke-width="3"/><circle cx="346" cy="416" r="6" fill="none" stroke="#3a3a40" stroke-width="3"/><ellipse cx="366" cy="416" rx="7" ry="5" fill="none" stroke="#3a3a40" stroke-width="3"/><line x1="384" y1="410" x2="384" y2="424" stroke="#3a3a40" stroke-width="3"/><polyline points="300,432 312,444 324,432" fill="none" stroke="#3a3a40" stroke-width="3"/><polygon points="332,432 346,432 339,446" fill="none" stroke="#3a3a40" stroke-width="3"/></g>
+  <g transform="matrix(3 0 0 3 0 0)"><circle id="la-grows" cx="20" cy="163" r="5" fill="none" stroke="#3a3a40" stroke-width="1"/></g>
 </svg>"##;
 
 /// Each shape drawn as a line and bound to show its state: its id, its state, the width it was drawn
@@ -2044,13 +2053,17 @@ const BODY_CASES: [(&str, (f64, f64)); 3] = [("nf-zero", (205.0, 320.0)), ("nf-b
 /// on its lines below its level, on them above it, and inside what they close (off every line), in
 /// its own coordinates.
 #[allow(clippy::type_complexity)]
-const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 6] = [
+const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 10] = [
     ("la-ring", 0.35, "normal", 6.0, &[(40.0, 386.0)], &[(40.0, 354.0), (24.0, 370.0)], &[(40.0, 370.0), (40.0, 380.0)]),
     ("la-bent", 0.35, "normal", 8.0, &[(100.0, 390.0), (80.0, 385.0), (122.5, 390.0)], &[(80.0, 360.0)], &[(95.0, 380.0)]),
     ("la-hollow", 1.0, "normal", 4.0, &[(160.0, 350.0), (140.0, 370.0), (180.0, 370.0), (160.0, 390.0)], &[], &[(160.0, 370.0)]),
     ("la-mixed", 0.35, "normal", 6.0, &[(210.0, 385.0), (250.0, 386.0)], &[(210.0, 360.0), (250.0, 354.0)], &[(250.0, 380.0), (250.0, 370.0)]),
     ("la-alarm", 0.85, "alarm", 1.0, &[(300.0, 386.0)], &[(300.0, 354.0)], &[(300.0, 375.0)]),
     ("la-turned", 0.35, "normal", 5.0, &[(20.10, 27.28)], &[(11.90, 4.72)], &[(16.0, 16.0)]),
+    ("la-turn45", 0.35, "normal", 5.0, &[(49.9, 439.9)], &[(30.1, 420.1)], &[(40.0, 430.0)]),
+    ("la-squash", 0.35, "normal", 4.0, &[(100.0, 299.0)], &[(100.0, 275.0)], &[(100.0, 287.0)]),
+    ("la-hole", 0.35, "normal", 5.0, &[(155.0, 447.0), (200.0, 444.0)], &[(155.0, 413.0), (200.0, 416.0)], &[(155.0, 438.0), (200.0, 430.0)]),
+    ("la-join", 1.0, "normal", 8.0, &[(240.0, 430.0), (260.0, 450.0), (283.0, 450.0), (240.0, 407.0)], &[], &[(236.7, 453.3)]),
 ];
 
 /// The state's colours on a line, read from the page's own tokens as the browser computes a stroke:
@@ -2107,10 +2120,12 @@ const LINE_PAINT: &str = r##"((cases, bodies) => {
 /// Every level along lines (`ALONG_CASES`): its copy (`sv-along`) in the object's state, its lines
 /// stroked in the state's colour at the track's width, solid and opaque, and unfilled, its bodies
 /// filled in it, opaque; the element itself the track (its lines raised, solid and opaque); hit on its lines below its level as the level, above
-/// it as the element, and inside what they close as neither; its clip's rect over its shapes' box as
-/// painted on the screen (each shown shape's box, a line's grown by half its stroke), from that box's
-/// foot to its level, within half a pixel.
-const ALONG_PAINT: &str = r##"((cases) => {
+/// it as the element, and inside what they close as neither; each property the copy carries (the
+/// page's `CARRIED`) as the original computes it; its clip's rect over what its lines and bodies
+/// paint as the browser itself reads it (each line's stroke and each body's fill hit-tested over its
+/// box, every quarter pixel down and half across): from that reach's foot to its level within half a
+/// pixel, and across past all of it.
+const ALONG_PAINT: &str = r##"((cases, carried) => {
   /*COLOURS*/
   const out = [];
   for (const [id, level, state, drawn, below, above, inside] of cases) {
@@ -2133,20 +2148,51 @@ const ALONG_PAINT: &str = r##"((cases) => {
     for (const p of above) { const e = hitAt(el, p); if (!within(el, e)) out.push(`${id}: its track not hit at ${p}, above its level (${e?.tagName} ${within(along, e) ? "of its level" : ""})`); }
     for (const p of inside) { const e = hitAt(el, p); if (within(el, e) || within(along, e)) out.push(`${id}: painted inside its lines at ${p} (${e?.tagName})`); }
     along.style.pointerEvents = prev;
+    // Each property the copy carries (the page's own list) as the original computes it, written on
+    // it or inherited from a group above.
+    for (const [g, o] of copies.map((g, i) => [g, (el.matches(GEOM) ? [el] : [...el.querySelectorAll(GEOM)].filter((s) => !s.closest("text")))[i]])) {
+      for (const q of carried) if (!o || getComputedStyle(g).getPropertyValue(q) !== getComputedStyle(o).getPropertyValue(q)) out.push(`${id}: its level's ${g.tagName} ${q} ${getComputedStyle(g).getPropertyValue(q)}, the drawing's ${o ? getComputedStyle(o).getPropertyValue(q) : "none"}`);
+    }
+    // The level's rect against what its lines and bodies paint, read by the browser itself: every
+    // point the browser takes for a line's stroke or a body's fill, over each shape's box with room
+    // for its stroke, every quarter pixel down and every half across; up and down, from that reach's
+    // foot to its level within half a pixel; across, past all of it.
     const shapes = (el.matches(GEOM) ? [el] : [...el.querySelectorAll(GEOM)]).filter((g) => g.checkVisibility());
-    const boxes = shapes.map((g) => {
-      const b = g.getBBox(), m = g.getScreenCTM();
-      const pts = [[b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]].map(([x, y]) => new DOMPoint(x, y).matrixTransform(m));
-      const h = g.classList.contains("sv-line") ? (parseFloat(getComputedStyle(g).strokeWidth) * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c))) / 2 : 0;
-      return [Math.min(...pts.map((p) => p.x)) - h, Math.min(...pts.map((p) => p.y)) - h, Math.max(...pts.map((p) => p.x)) + h, Math.max(...pts.map((p) => p.y)) + h];
-    });
-    const B = [Math.min(...boxes.map((b) => b[0])), Math.min(...boxes.map((b) => b[1])), Math.max(...boxes.map((b) => b[2])), Math.max(...boxes.map((b) => b[3]))];
+    let [top, foot, left, right] = [Infinity, -Infinity, Infinity, -Infinity];
+    for (const g of shapes) {
+      const sm = g.getScreenCTM(), inv = sm.inverse(), r = g.getBoundingClientRect();
+      const line = g.classList.contains("sv-line");
+      const pad = (line ? parseFloat(getComputedStyle(g).strokeWidth) * Math.sqrt(Math.abs(sm.a * sm.d - sm.b * sm.c)) : 0) + 4;
+      for (let py = r.top - pad; py <= r.bottom + pad; py += 0.25) for (let px = r.left - pad; px <= r.right + pad; px += 0.5) {
+        const q = new DOMPoint(px, py).matrixTransform(inv);
+        if (line ? g.isPointInStroke(q) : g.isPointInFill(q)) { top = Math.min(top, py); foot = Math.max(foot, py); left = Math.min(left, px); right = Math.max(right, px); }
+      }
+    }
     const m = along.getScreenCTM();
     const [x, y, rw, rh] = ["x", "y", "width", "height"].map((k) => Number(rect.getAttribute(k)));
     const rp = [[x, y], [x + rw, y + rh]].map(([px, py]) => new DOMPoint(px, py).matrixTransform(m));
     const [l, t, r, b] = [Math.min(rp[0].x, rp[1].x), Math.min(rp[0].y, rp[1].y), Math.max(rp[0].x, rp[1].x), Math.max(rp[0].y, rp[1].y)];
-    if (Math.abs(l - B[0]) > 0.5 || Math.abs(r - B[2]) > 0.5 || Math.abs(b - B[3]) > 0.5 || Math.abs(b - t - level * (B[3] - B[1])) > 0.5) out.push(`${id}: its level over [${[l, t, r, b].map((v) => v.toFixed(2))}], its lines' box [${B.map((v) => v.toFixed(2))}] at ${level}`);
+    if (l > left || r < right || Math.abs(b - foot) > 0.5 || Math.abs(b - t - level * (foot - top)) > 0.5) out.push(`${id}: its level over [${[l, t, r, b].map((v) => v.toFixed(2))}], its lines painted over [${[left, top, right, foot].map((v) => v.toFixed(2))}] at ${level}`);
   }
+  return out;
+})"##;
+
+/// A bound group holding one shape of every kind the page draws on, each drawn with no fill (`nf-kinds`,
+/// warn): its kinds every one given (`kinds`), each a line, unfilled, stroked in the state's colour at
+/// its drawn width (3); nothing of the group hit at a point inside what a shape closes.
+const KINDS_PAINT: &str = r##"((kinds, inside) => {
+  /*COLOURS*/
+  const out = [];
+  const el = document.getElementById("nf-kinds");
+  const shapes = [...el.querySelectorAll(GEOM)];
+  const tags = [...new Set(shapes.map((s) => s.tagName.toLowerCase()))].sort();
+  if (JSON.stringify(tags) !== JSON.stringify([...kinds].sort())) out.push(`nf-kinds holds ${tags}, every kind is ${kinds}`);
+  if (!el.classList.contains("sv-state-warn")) out.push(`nf-kinds: ${el.getAttribute("class")}`);
+  for (const s of shapes) {
+    const c = getComputedStyle(s);
+    if (!s.classList.contains("sv-line") || c.fill !== "none" || c.stroke !== LINE.warn || c.strokeWidth !== "3px") out.push(`nf-kinds: its ${s.tagName} ${s.getAttribute("class")}, filled ${c.fill}, stroked ${c.stroke} ${c.strokeWidth}`);
+  }
+  for (const p of inside) if (within(el, hitAt(el, p))) out.push(`nf-kinds: hit inside at ${p} (${hitAt(el, p)?.tagName})`);
   return out;
 })"##;
 
@@ -2192,7 +2238,7 @@ fn a_shape_drawn_with_no_fill_shows_its_state_on_its_line() {
     let bench = plant(&dir.path().join("bench"));
     let mut ex = live_example(&bench, false);
     assert!(ex.svg.contains("viewBox=\"0 0 400 220\"") && ex.svg.ends_with("</svg>\n"));
-    ex.svg = ex.svg.replace("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 400 400\"").replace("</svg>\n", LINES_SVG) + "\n";
+    ex.svg = ex.svg.replace("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 400 520\"").replace("</svg>\n", LINES_SVG) + "\n";
     // Each object in its state: a rule over `fill2` (85) naming it, normal with none, stale on the
     // sorter's rate (its log empty: no value yet).
     let value_in = |state: &str| match state {
@@ -2211,23 +2257,27 @@ fn a_shape_drawn_with_no_fill_shows_its_state_on_its_line() {
     for (id, _) in BODY_CASES.iter().filter(|(id, _)| *id != "nf-mixed") {
         objects.push_str(&format!("\n[[object]]\nid = \"{id}\"\n{}", value_in("warn")));
     }
+    objects.push_str(&format!("\n[[object]]\nid = \"nf-kinds\"\n{}", value_in("warn")));
     for (id, level, state, _, _, _, _) in ALONG_CASES {
         let series = if level == 1.0 { "fill3" } else if level == 0.85 { "fill2" } else { "fill1" };
         let rule = if state == "normal" { String::new() } else { format!("states = [ {{ above = 50, state = \"{state}\" }} ]\n") };
         objects.push_str(&format!("\n[[object]]\nid = \"{id}\"\nvalue = {{ source = \"plc\", series = \"{series}\" }}\nshow = \"level\"\n{rule}"));
     }
+    // A thin ring under a scale of 3, its level on `p2` (75, normal), in alarm above 80: its copy's
+    // lines 1.4 wide, then 2 when the feed moves it into alarm.
+    objects.push_str("\n[[object]]\nid = \"la-grows\"\nvalue = { source = \"plc\", series = \"p2\" }\nshow = \"level\"\nstates = [ { above = 80, state = \"alarm\" } ]\n");
     ex.binding = ex.binding.replacen("\n[[dashboard]]", &format!("{objects}\n[[dashboard]]"), 1);
     let path = write_example(dir.path(), &ex);
     std::fs::write(dir.path().join("loop/sorts.log"), "").unwrap();
     let host = Host::start(config::load_file(&path).unwrap()).unwrap();
     let addr = host.addr();
     let mut page = Browser::open(&format!("http://{addr}/s/loop/"));
-    let states: Vec<(&str, &str)> = LINE_CASES.iter().map(|c| (c.0, c.1)).chain(ALONG_CASES.iter().map(|c| (c.0, c.2))).chain(BODY_CASES.iter().map(|c| (c.0, "warn"))).collect();
+    let states: Vec<(&str, &str)> = LINE_CASES.iter().map(|c| (c.0, c.1)).chain(ALONG_CASES.iter().map(|c| (c.0, c.2))).chain(BODY_CASES.iter().map(|c| (c.0, "warn"))).chain([("nf-kinds", "warn"), ("la-grows", "normal")]).collect();
     page.wait_for(
         &format!(
             r#"(() => {{ const want = {}; return want.every(([id, s]) => document.getElementById(id)?.classList.contains(`sv-state-${{s}}`)) && {}.every((id) => parseFloat(document.querySelector(`[id="sv-along-${{id}}"] rect`)?.getAttribute("height")) > 0) && !document.getElementById("nm-ring").classList.contains("sv-hidden") || null; }})()"#,
             serde_json::to_string(&states).unwrap(),
-            serde_json::to_string(&ALONG_CASES.iter().map(|c| c.0).collect::<Vec<_>>()).unwrap()
+            serde_json::to_string(&ALONG_CASES.iter().map(|c| c.0).chain(["la-grows"]).collect::<Vec<_>>()).unwrap()
         ),
         Duration::from_secs(20),
     );
@@ -2238,7 +2288,20 @@ fn a_shape_drawn_with_no_fill_shows_its_state_on_its_line() {
     let script = |s: &str| s.replacen("/*COLOURS*/", LINE_COLOURS, 1);
     assert_eq!(page.eval(&format!("{}({}, {})", script(LINE_PAINT), json!(cases), json!(bodies))), json!([]), "a shape drawn as a line painted otherwise than its state on its line, at its width");
     let along: Vec<Value> = ALONG_CASES.iter().map(|(id, l, s, w, below, above, inside)| json!([id, l, s, w, below.iter().map(|p| xy(*p)).collect::<Vec<_>>(), above.iter().map(|p| xy(*p)).collect::<Vec<_>>(), inside.iter().map(|p| xy(*p)).collect::<Vec<_>>()])).collect();
-    assert_eq!(page.eval(&format!("{}({})", script(ALONG_PAINT), json!(along))), json!([]), "a level along lines not drawn along them, over its track, to its level");
+    // What a level's copy carries, the page's own list, held to the inherited properties that shape
+    // what a stroke or a fill covers.
+    let ts = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/src/layout.ts")).unwrap();
+    let carried: Vec<String> = ts.split_once("const CARRIED = [").and_then(|(_, r)| r.split_once(']')).map(|(l, _)| l.split(',').map(|s| s.trim().trim_matches('"').to_string()).collect()).unwrap();
+    assert_eq!(carried.iter().map(String::as_str).collect::<std::collections::BTreeSet<_>>(), ["fill-rule", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit"].into_iter().collect(), "what a level's copy carries");
+    assert_eq!(page.eval(&format!("{}({}, {})", script(ALONG_PAINT), json!(along), json!(carried))), json!([]), "a level along lines not drawn along them, over its track, to its level");
+    let grows = |level: f64, state: &str, below: Value, above: Value| json!([["la-grows", level, state, 1.0, below, above, [[20.0, 163.0]]]]);
+    assert_eq!(page.eval(&format!("{}({}, {})", script(ALONG_PAINT), grows(0.75, "normal", json!([[20.0, 168.2], [15.0, 163.0]]), json!([[20.0, 157.8]])), json!(carried))), json!([]), "a thin level along a ring under a scale");
+    // A bound group of one shape of every kind the page draws on (the reader's `DRAWN`, a group and a
+    // text apart), each drawn with no fill: every one a line in the group's state at its width,
+    // nothing of it hit inside what it closes.
+    let kinds: Vec<&str> = veredas_supervisao::svg::DRAWN.into_iter().filter(|k| *k != "g" && *k != "text").collect();
+    let inside = json!([[310.0, 416.0], [328.0, 416.0], [346.0, 416.0], [366.0, 416.0], [312.0, 437.0], [339.0, 436.0]]);
+    assert_eq!(page.eval(&format!("{}({}, {})", script(KINDS_PAINT), json!(kinds), inside)), json!([]), "a group's shapes of every kind drawn with no fill");
     // What the page adds, the level's copies among it, inherits nothing the drawing writes on its root
     // or on a group a level stands in.
     let root = page.eval(ROOT_PAINT);
@@ -2263,6 +2326,13 @@ fn a_shape_drawn_with_no_fill_shows_its_state_on_its_line() {
     click_at(&mut page, &r);
     page.wait_for(r#"document.querySelector(".side .sel-title") === null || null"#, Duration::from_secs(10));
     assert_eq!(page.eval(SELECTED), json!([]), "a click inside a ring with no fill picks nothing of it");
+    // The thin ring moved into alarm by the feed: its copy's lines 2 wide, its level's rect over them
+    // as painted now, read again when their width changed.
+    bench.server("plc").unwrap().set("p2", 90.0);
+    page.wait_for(r#"document.getElementById("la-grows")?.classList.contains("sv-state-alarm") ? true : null"#, Duration::from_secs(20));
+    page.wait_for(r#"document.getAnimations().every((a) => a.playState !== "running") || null"#, Duration::from_secs(5));
+    page.eval(r#"new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))"#);
+    assert_eq!(page.eval(&format!("{}({}, {})", script(ALONG_PAINT), grows(0.9, "alarm", json!([[20.0, 168.5], [15.0, 163.0]]), json!([[20.0, 157.5]])), json!(carried))), json!([]), "a thin level along a ring under a scale, moved into alarm");
     drop(page);
     host.stop();
 }
