@@ -122,10 +122,13 @@ const MAY_HAVE_LANDED = "the write may have reached the plant";
 export async function postWrite(name: string, a: Action): Promise<{ said: WriteSaid; text: string }> {
   let r: Response;
   try {
+    // A redirect is never followed (a 307 or 308 would post the write again, a 301, 302 or 303 turn
+    // it into a read whose answer would be taken for the write's): the request fails, no answer.
     r = await fetch(`${base(name)}/portal/api/opc/write`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ source: a.source, tag: a.tag, value: a.value }),
+      redirect: "error",
     });
   } catch (e) {
     return { said: "no answer", text: `${MAY_HAVE_LANDED} (${String(e)})` };
