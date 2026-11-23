@@ -1696,3 +1696,178 @@ fn a_carriage_return_in_a_formula_or_a_name_reads_back_as_written() {
         assert_eq!(read_back(&dst, "S", "C2"), Value::Text("x\ry1".into()));
     }
 }
+
+// ---- refute round 9 ---------------------------------------------------------------------------
+
+#[test]
+fn a_formula_or_a_name_spelled_otherwise_than_excel_spells_it_is_not_already_there() {
+    // `IFNA`, `DAYS`, `CONCAT` unprefixed, as some writers leave them: the engine reads them as the
+    // functions, Excel as unknown names (`#NAME?`)
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("unprefixed.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="C1"><f>IFNA(A1,0)</f><v>1</v></c><c r="D1"><f>DAYS(A2,A1)</f><v>1</v></c><c r="E1" t="str"><f>CONCAT(A1,A2)</f><v>12</v></c><c r="F1"><f>_xlfn.IFNA(A1,0)</f><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row>"#;
+    let names = r#"<definedName name="D">DAYS(S!$A$2,S!$A$1)</definedName><definedName name="Ok">_xlfn.DAYS(S!$A$2,S!$A$1)</definedName>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], names, &[]);
+    let dst = dir.path().join("out.xlsx");
+    let formula = |cell: &str, f: &str| Edit::Formula { sheet: "S".into(), cell: cell.into(), formula: f.into(), expect: None };
+    let set = |name: &str, f: &str| Edit::SetName { name: name.into(), formula: f.into(), scope: None };
+    let report = patch(
+        &src,
+        &dst,
+        &[
+            formula("C1", "=IFNA(A1,0)"),
+            formula("D1", "=_xlfn.DAYS(A2,A1)"),
+            formula("E1", "=CONCAT(A1,A2)"),
+            formula("F1", "=IFNA(A1,0)"),
+            set("D", "=_xlfn.DAYS(S!$A$2,S!$A$1)"),
+            set("Ok", "=DAYS(S!$A$2,S!$A$1)"),
+        ],
+        &verified(),
+    )
+    .unwrap();
+    let statuses: Vec<Status> = report.outcomes.iter().map(|o| o.status).collect();
+    assert_eq!(&statuses[..4], [Status::Applied, Status::Applied, Status::Applied, Status::AlreadyThere], "{:?}", report.outcomes);
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert_eq!(element(&sheet, "C1"), Some(r#"<c r="C1"><f>_xlfn.IFNA(A1,0)</f><v>1</v></c>"#), "{sheet}");
+    assert_eq!(element(&sheet, "D1"), Some(r#"<c r="D1"><f>_xlfn.DAYS(A2,A1)</f><v>1</v></c>"#), "{sheet}");
+    assert_eq!(element(&sheet, "E1"), Some(r#"<c r="E1" t="str"><f>_xlfn.CONCAT(A1,A2)</f><v>12</v></c>"#), "{sheet}");
+    assert_eq!(element(&sheet, "F1"), Some(r#"<c r="F1"><f>_xlfn.IFNA(A1,0)</f><v>1</v></c>"#), "{sheet}");
+    let book = part(&dst, "xl/workbook.xml");
+    assert!(
+        book.contains(r#"<definedName name="D">_xlfn.DAYS(S!$A$2,S!$A$1)</definedName><definedName name="Ok">_xlfn.DAYS(S!$A$2,S!$A$1)</definedName>"#),
+        "{book}"
+    );
+    // after a move, the cell is found where it came from
+    let _ = std::fs::remove_file(&dst);
+    let report = patch(&src, &dst, &[rows("S", 1, 2), formula("C3", "=IFNA(A3,0)"), formula("F3", "=IFNA(A3,0)")], &verified()).unwrap();
+    assert_eq!(report.outcomes[1].status, Status::Applied, "{:?}", report.outcomes);
+    assert_eq!(report.outcomes[2].status, Status::AlreadyThere, "{:?}", report.outcomes);
+    assert!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "C3").unwrap().contains("<f>_xlfn.IFNA(A3,0)</f>"));
+}
+
+#[test]
+fn a_function_the_engine_does_not_compute_is_refused_in_a_formula_and_a_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("unknown.xlsx");
+    let data: String = (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    plain_book(&src, &[("S", worksheet(&data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let formula = |f: &str| Edit::Formula { sheet: "S".into(), cell: "D1".into(), formula: f.into(), expect: None };
+    let set = |f: &str| Edit::SetName { name: "Tot".into(), formula: f.into(), scope: None };
+    for (edit, called) in [
+        (formula("=AGGREGATE(9,6,A1:A3)"), "AGGREGATE"),
+        (formula("=_xlfn.AGGREGATE(9,6,A1:A3)"), "AGGREGATE"),
+        (formula("=Image(A1)+1"), "IMAGE"),
+        (formula("=LET(x,1,WEBSERVICE(x))"), "WEBSERVICE"),
+        (set("=_xlfn.AGGREGATE(9,6,S!$A$1:$A$3)"), "AGGREGATE"),
+        (set("=_xlfn.WEBSERVICE(\"http://x\")"), "WEBSERVICE"),
+    ] {
+        match patch(&src, &dst, std::slice::from_ref(&edit), &verified()) {
+            Err(PatchError::Unsupported(m)) => assert!(m.contains(&format!("{called} is a function the engine does not compute")), "{m}"),
+            other => panic!("{edit:?}: {other:?}"),
+        }
+        assert!(!dst.exists());
+    }
+    // a LAMBDA name and a function a LET binds are the workbook's own
+    let report = patch(
+        &src,
+        &dst,
+        &[
+            set("=LAMBDA(x,x*x)"),
+            Edit::Formula { sheet: "S".into(), cell: "D1".into(), formula: "=Tot(3)".into(), expect: None },
+            Edit::Formula { sheet: "S".into(), cell: "D2".into(), formula: "=LET(f,LAMBDA(a,a*a),f(2))".into(), expect: None },
+        ],
+        &verified(),
+    )
+    .unwrap();
+    assert!(report.outcomes.iter().all(|o| o.status == Status::Applied), "{:?}", report.outcomes);
+    assert_eq!(read_back(&dst, "S", "D1"), Value::Number(9.0));
+    assert_eq!(read_back(&dst, "S", "D2"), Value::Number(4.0));
+}
+
+#[test]
+fn spreadsheetml_prefixed_on_an_inner_element_is_refused_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let dst = dir.path().join("out.xlsx");
+    let data: String = (1..=5).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    // a name list under a prefix inside an unprefixed workbook
+    let src = dir.path().join("names.xlsx");
+    let book = workbook(&["S"], "").replace(&format!(r#"xmlns="{MAIN}""#), &format!(r#"xmlns="{MAIN}" xmlns:x="{MAIN}""#)).replace(
+        "<calcPr",
+        r#"<x:definedNames><x:definedName name="Rate">S!$A$3</x:definedName></x:definedNames><calcPr"#,
+    );
+    write_package(
+        &src,
+        &[("xl/workbook.xml", book), ("xl/_rels/workbook.xml.rels", rels(&[rel("rId1", "worksheet", "worksheets/sheet1.xml")])), ("xl/worksheets/sheet1.xml", worksheet(&data, ""))],
+    );
+    // a sheet whose `<sheetData>` is plain and its merges prefixed
+    let src2 = dir.path().join("merges.xlsx");
+    let sheet = worksheet(&data, r#"<x:mergeCells count="1"><x:mergeCell ref="A3:B3"/></x:mergeCells>"#)
+        .replace(&format!(r#"xmlns="{MAIN}""#), &format!(r#"xmlns="{MAIN}" xmlns:x="{MAIN}""#));
+    plain_book(&src2, &[("S", sheet)], "", &[]);
+    for (src, part_name, element) in [(&src, "xl/workbook.xml", "x:definedNames"), (&src2, "xl/worksheets/sheet1.xml", "x:mergeCells")] {
+        for edits in [vec![], vec![rows("S", 1, 2)]] {
+            match patch(src, &dst, &edits, &verified()) {
+                Err(PatchError::Unsupported(m)) => assert!(m.contains(part_name) && m.contains(&format!("<{element}>")), "{m}"),
+                other => panic!("{part_name}: {other:?}"),
+            }
+            assert!(!dst.exists());
+        }
+    }
+}
+
+#[test]
+fn an_attribute_in_single_quotes_is_rewritten_in_double_quotes() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("quoted.xlsx");
+    let data: String = (1..=6).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    let drawing = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="10" cy="10"/><xdr:sp macro="" textlink='&apos;My Data&apos;!$A$5'><xdr:nvSpPr><xdr:cNvPr id="2" name="Box"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr/></xdr:sp><xdr:clientData/></xdr:absoluteAnchor></xdr:wsDr>"#;
+    plain_book(
+        &src,
+        &[("My Data", worksheet(&data, r#"<drawing r:id="rId1"/>"#))],
+        "",
+        &[
+            ("xl/worksheets/_rels/sheet1.xml.rels", rels(&[rel("rId1", "drawing", "../drawings/drawing1.xml")])),
+            ("xl/drawings/drawing1.xml", drawing.to_string()),
+        ],
+    );
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[rows("My Data", 1, 1)], &verified()).unwrap();
+    let d = part(&dst, "xl/drawings/drawing1.xml");
+    assert!(d.contains(r#"<xdr:sp macro="" textlink="'My Data'!$A$6">"#), "{d}");
+}
+
+#[test]
+fn a_one_cell_legacy_array_is_not_already_the_array_an_edit_spills() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("legacy.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="E1"><f t="array" ref="E1">A1:A3*2</f><v>2</v></c><c r="F1"><f t="array" ref="F1">SUM(A1:A3*2)</f><v>12</v></c></row><row r="2"><c r="A2"><v>2</v></c></row><row r="3"><c r="A3"><v>3</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let expecting = |cell: &str, f: &str| Edit::Value { sheet: "S".into(), cell: cell.into(), value: serde_json::json!(7), expect: Some(Expect::Formula { formula: f.into() }) };
+    let report = patch(&src, &dst, &[expecting("E1", "=A1:A3*2"), expecting("F1", "=SUM(A1:A3*2)")], &verified()).unwrap();
+    let statuses: Vec<Status> = report.outcomes.iter().map(|o| o.status).collect();
+    // `{=A1:A3*2}` over one cell shows one value, the edit's formula three; `{=SUM(…)}` one
+    assert_eq!(statuses, [Status::Conflict, Status::Applied], "{:?}", report.outcomes);
+    let _ = std::fs::remove_file(&dst);
+    let formula = |cell: &str, f: &str| Edit::Formula { sheet: "S".into(), cell: cell.into(), formula: f.into(), expect: None };
+    let report = patch(&src, &dst, &[formula("F1", "=SUM(A1:A3*2)")], &verified()).unwrap();
+    assert_eq!(report.outcomes[0].status, Status::AlreadyThere);
+    match patch(&src, &dst, &[formula("E1", "=A1:A3*2")], &verified()) {
+        Err(PatchError::Unsupported(m)) => assert!(m.contains("spills over several cells"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_sheet_s_name_is_read_as_xml_reads_its_attribute() {
+    // a raw tab in `<sheet name>` is a space to every reader, the engine's too
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("tab.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c></row>"#;
+    plain_book(&src, &[("Data\tSheet", worksheet(data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let report = patch(&src, &dst, &[value("Data Sheet", "A1", serde_json::json!(2))], &verified()).unwrap();
+    assert_eq!(report.outcomes[0].status, Status::Applied);
+    assert_eq!(read_back(&dst, "Data Sheet", "A1"), Value::Number(2.0));
+}

@@ -55,13 +55,41 @@ pub fn next_tag(s: &str, mut from: usize) -> Option<Tag<'_>> {
 /// SpreadsheetML's main namespace.
 pub const MAIN_NS: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 
-/// The root element's name when it is SpreadsheetML's main namespace under a prefix
-/// (`x:worksheet`, as the .NET Open XML SDK writes it by default): the patcher reads tags by their
-/// literal, unprefixed names, as Excel writes them.
-pub fn prefixed_main_root(s: &str) -> Option<String> {
-    let root = next_tag(s, 0)?;
-    let (prefix, _) = root.name.split_once(':')?;
-    (attr(root.text, &format!("xmlns:{prefix}")) == Some(MAIN_NS)).then(|| root.name.to_string())
+/// The first element of a part named under a prefix bound to SpreadsheetML's main namespace
+/// (`x:worksheet`, as the .NET Open XML SDK writes it by default, or `x:definedNames` inside an
+/// unprefixed root): the patcher reads tags by their literal, unprefixed names, as Excel writes
+/// them. A prefix declared and never used is no matter.
+pub fn prefixed_main_element(s: &str) -> Option<String> {
+    // the prefixes any tag binds to the main namespace
+    let mut prefixes: Vec<String> = Vec::new();
+    let mut at = 0;
+    while let Some(i) = s[at..].find("xmlns:") {
+        let start = at + i + "xmlns:".len();
+        at = start;
+        let name: String = s[start..].chars().take_while(|c| !matches!(c, '=' | ' ' | '\t' | '\n' | '\r')).collect();
+        let rest = s[start + name.len()..].trim_start().strip_prefix('=').map(str::trim_start);
+        if let Some(rest) = rest
+            && let Some(q) = rest.chars().next().filter(|q| matches!(q, '"' | '\''))
+            && rest[1..].starts_with(MAIN_NS)
+            && rest[1 + MAIN_NS.len()..].starts_with(q)
+            && !prefixes.contains(&name)
+        {
+            prefixes.push(name);
+        }
+    }
+    if prefixes.is_empty() {
+        return None;
+    }
+    let mut pos = 0;
+    while let Some(t) = next_tag(s, pos) {
+        pos = t.end;
+        if let Some((prefix, _)) = t.name.split_once(':')
+            && prefixes.iter().any(|p| p == prefix)
+        {
+            return Some(t.name.to_string());
+        }
+    }
+    None
 }
 
 /// The `>` that ends the tag starting at `lt` (quoted values may hold `>`).
@@ -168,11 +196,12 @@ fn attr_span(tag: &str, name: &str) -> Option<(usize, usize)> {
     }
 }
 
-/// The tag with attribute `name` set to `value` (already escaped): replaced
-/// in place when present, appended before the end otherwise.
+/// The tag with attribute `name` set to `value` (already escaped for double quotes): replaced in
+/// place when present, between double quotes whatever quotes it had (a value escaped for `"` may
+/// hold a raw `'`), appended before the end otherwise.
 pub fn set_attr(tag: &str, name: &str, value: &str) -> String {
     if let Some((vs, ve)) = attr_span(tag, name) {
-        return format!("{}{}{}", &tag[..vs], value, &tag[ve..]);
+        return format!("{}\"{}\"{}", &tag[..vs - 1], value, &tag[ve + 1..]);
     }
     let cut = if tag.ends_with("/>") {
         tag.len() - 2

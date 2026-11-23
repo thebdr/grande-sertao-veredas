@@ -896,6 +896,119 @@ fn forward(shifts: &[(String, Shift)], from: usize, sheet: &str, mut row: i32, m
     Some((row, col))
 }
 
+/// Where the cell now at `(row, col)` of `sheet` was in the source, back through every shift so
+/// far; `None` for a cell an insertion made.
+fn backward(shifts: &[(String, Shift)], sheet: &str, mut row: i32, mut col: i32) -> Option<(i32, i32)> {
+    for (s, sh) in shifts.iter().rev() {
+        if !s.eq_ignore_ascii_case(sheet) {
+            continue;
+        }
+        let v = if sh.is_rows() { &mut row } else { &mut col };
+        *v = match *sh {
+            Shift::InsertRows { at, n } | Shift::InsertCols { at, n } => {
+                if *v < at {
+                    *v
+                } else if *v < at + n {
+                    return None;
+                } else {
+                    *v - n
+                }
+            }
+            Shift::DeleteRows { at, n } | Shift::DeleteCols { at, n } => {
+                if *v < at { *v } else { *v + n }
+            }
+        };
+    }
+    Some((row, col))
+}
+
+/// Whether the source's own text of the formula now at `a` calls its functions as `want` spells
+/// them (`_xlfn.IFNA`, never `IFNA`): the engine reads both alike, Excel does not. A cell an earlier
+/// edit wrote, or one the source holds no formula text for, has no other spelling.
+fn spelled_as_in_the_source(
+    source: &cached::Cells,
+    shifts: &[(String, Shift)],
+    sheet: &str,
+    a: Addr,
+    want: &str,
+) -> bool {
+    let Some((row, col)) = backward(shifts, sheet, a.row, a.column) else { return true };
+    let Some(cell) = source.iter().find(|((s, r, c), _)| s.eq_ignore_ascii_case(sheet) && *r == row && *c == col).map(|(_, c)| c)
+    else {
+        return true;
+    };
+    match cell.formula.as_deref().filter(|f| !f.is_empty()).or(cell.resolved.as_deref()) {
+        Some(text) => refs::function_calls(text) == refs::function_calls(want),
+        None => true,
+    }
+}
+
+/// The first function a formula calls that the engine does not compute: not one of its own, nor a
+/// name of the workbook (a LAMBDA) nor a parameter a LET or a LAMBDA around it binds. Such a call
+/// would be cached as `#NAME?` and spelled as the engine prints an unknown name, so an edit
+/// writing one is refused.
+fn unknown_call(node: &Node, bound: &mut Vec<String>, names: &[String]) -> Option<String> {
+    fn any<'n>(nodes: impl IntoIterator<Item = &'n Node>, bound: &mut Vec<String>, names: &[String]) -> Option<String> {
+        nodes.into_iter().find_map(|n| unknown_call(n, bound, names))
+    }
+    // a LAMBDA parameter's name, which the engine keeps private but prints: `NamedVariable { name: "x", … }`
+    fn parameter_name(p: &impl std::fmt::Debug) -> Option<String> {
+        let text = format!("{p:?}");
+        let start = text.find("name: \"")? + "name: \"".len();
+        Some(text[start..start + text[start..].find('"')?].to_string())
+    }
+    match node {
+        Node::NamedFunctionKind { name, args, .. } => {
+            let bare = name.trim_start_matches("_xlfn.").trim_start_matches("_xlpm.");
+            let known = bound.iter().any(|b| b.eq_ignore_ascii_case(bare)) || names.iter().any(|n| n.eq_ignore_ascii_case(bare));
+            if !known {
+                return Some(bare.to_uppercase());
+            }
+            any(args, bound, names)
+        }
+        Node::LambdaDefKind { parameters, body } => {
+            let depth = bound.len();
+            bound.extend(parameters.iter().filter_map(parameter_name));
+            let found = unknown_call(body, bound, names);
+            bound.truncate(depth);
+            found
+        }
+        // the engine keeps its function list private: LET is told by its name
+        Node::FunctionKind { kind, args } if format!("{kind:?}") == "Let" && args.len() >= 3 && args.len() % 2 == 1 => {
+            let depth = bound.len();
+            let pairs = (args.len() - 1) / 2;
+            let mut found = None;
+            for i in 0..pairs {
+                if let Node::NamedVariableKind { name, .. } = &args[2 * i] {
+                    bound.push(name.clone());
+                }
+                found = found.or_else(|| unknown_call(&args[2 * i + 1], bound, names));
+            }
+            let found = found.or_else(|| unknown_call(&args[2 * pairs], bound, names));
+            bound.truncate(depth);
+            found
+        }
+        Node::FunctionKind { args, .. } => any(args, bound, names),
+        Node::LambdaCallKind { lambda, args } => any(std::iter::once(lambda.as_ref()).chain(args.iter()), bound, names),
+        Node::OpRangeKind { left, right }
+        | Node::OpConcatenateKind { left, right }
+        | Node::OpSumKind { left, right, .. }
+        | Node::OpProductKind { left, right, .. }
+        | Node::OpPowerKind { left, right }
+        | Node::CompareKind { left, right, .. } => any([left.as_ref(), right.as_ref()], bound, names),
+        Node::UnaryKind { right, .. } => unknown_call(right, bound, names),
+        Node::ImplicitIntersection { child, .. } | Node::SpillRangeOperator { child } => unknown_call(child, bound, names),
+        _ => None,
+    }
+}
+
+/// [`unknown_call`] of a formula an edit writes, parsed at `a` (a name's at the first sheet's A1).
+fn calls_unknown(wb: &Workbook, sheet: u32, a: Addr, formula: &str) -> Option<String> {
+    let node = parsed_at(wb, sheet, a, formula)?;
+    let names: Vec<String> = wb.names().into_iter().map(|n| n.name).collect();
+    unknown_call(&node, &mut Vec::new(), &names)
+}
+
 /// Whether an earlier edit of the list wrote the cell now at `a` of `sheet` (through the moves so
 /// far): the file will hold it as the patcher writes its text.
 fn written_by_an_edit(shifts: &[(String, Shift)], writes: &[PendingWrite], sheet: &str, a: Addr) -> bool {
@@ -908,6 +1021,10 @@ fn written_by_an_edit(shifts: &[(String, Shift)], writes: &[PendingWrite], sheet
 /// Whether a name's definition is one cell (`S!$A$1`) or a constant: no range to intersect.
 fn names_one_value(formula: &str) -> bool {
     let body = formula.trim().trim_start_matches('=');
+    // an array constant of more than one element (`{1,2,3}`) is several values
+    if body.starts_with('{') {
+        return !body.contains([',', ';']);
+    }
     let cell = body.rsplit('!').next().unwrap_or(body).replace('$', "");
     let letters = cell.chars().take_while(char::is_ascii_alphabetic).count();
     let reference = letters > 0 && letters < cell.len() && cell[letters..].chars().all(|c| c.is_ascii_digit());
@@ -995,6 +1112,18 @@ fn reads_without_intersection(node: &Node) -> bool {
 /// The text is parsed afresh: the engine stores a plain formula with the intersections its own
 /// import added, where it cannot see a name's extent (`IF(Flag,1,0)` as `@IF(Flag,1,0)`).
 fn same_kind(wb: &Workbook, sheet: u32, a: Addr, formula: &str, edited: bool) -> bool {
+    // a legacy array (`t="array"`, its size fixed) is the dynamic array an edit writes only where
+    // the formula's result is that size: `{=A1:A3*2}` over one cell shows one value, the edit spills
+    if let Ok(Content::ArrayFormula { columns, rows, .. }) = wb.content(sheet, a)
+        && !edited
+    {
+        use ironcalc_base::expressions::parser::static_analysis::{run_static_analysis_on_node, StaticResult};
+        return match parsed_at(wb, sheet, a, formula).map(|n| run_static_analysis_on_node(&n)) {
+            Some(StaticResult::Scalar) => columns == 1 && rows == 1,
+            Some(StaticResult::Array(r, c) | StaticResult::Range(r, c)) => (r, c) == (rows, columns),
+            _ => false,
+        };
+    }
     if holds_an_array(wb, sheet, a) || !writes_as_array(wb, sheet, a, formula) || edited {
         return true;
     }
@@ -1177,6 +1306,8 @@ pub fn patch(
     let mut cols_ops: Vec<PendingCols> = Vec::new();
     let mut new_sheets: Vec<String> = Vec::new();
     let mut names_touched = false;
+    // the source's cells as its file spells them, read when a formula edit needs them
+    let mut source_cells: Option<cached::Cells> = None;
     let mut set_names: Vec<(String, Option<String>)> = Vec::new();
     // the names an edit deleted and none set again since: gone from the file, a built-in one too
     let mut deleted_names: Vec<(String, Option<String>)> = Vec::new();
@@ -1238,9 +1369,15 @@ pub fn patch(
                 let already = if is_formula {
                     let want = file_spelling(&wb, s, a, &target)
                         .ok_or_else(|| fail(format!("the formula does not parse: {target}")))?;
-                    current_file_formula(&wb, s, a).as_deref() == Some(want.as_str()) && {
-                        same_kind(&wb, s, a, &target, written_by_an_edit(&shifts, &writes, &canonical, a))
-                    }
+                    let edited = written_by_an_edit(&shifts, &writes, &canonical, a);
+                    current_file_formula(&wb, s, a).as_deref() == Some(want.as_str())
+                        && same_kind(&wb, s, a, &target, edited)
+                        && (edited || {
+                            if source_cells.is_none() {
+                                source_cells = Some(cached::read(source)?);
+                            }
+                            source_cells.as_ref().is_some_and(|c| spelled_as_in_the_source(c, &shifts, &canonical, a, &want))
+                        })
                 } else {
                     let v = json_value(match edit {
                         Edit::Value { value, .. } => value,
@@ -1271,6 +1408,11 @@ pub fn patch(
                     )));
                 }
                 let content = if is_formula {
+                    if let Some(name) = calls_unknown(&wb, s, a, &target) {
+                        return Err(PatchError::Unsupported(format!(
+                            "{canonical}!{a}: {name} is a function the engine does not compute (the patcher writes no formula it would cache as #NAME?)"
+                        )));
+                    }
                     wb.set_formula(s, a, &target)
                         .map_err(|e| fail(e.to_string()))?;
                     ContentKind::Formula
@@ -1394,6 +1536,11 @@ pub fn patch(
                 scope,
             } => {
                 let body = formula.trim().trim_start_matches('=');
+                if let Some(called) = calls_unknown(&wb, 0, Addr::new(1, 1), body) {
+                    return Err(PatchError::Unsupported(format!(
+                        "name {name}: {called} is a function the engine does not compute (the patcher writes no formula it cannot read)"
+                    )));
+                }
                 // the engine stores user spelling; give it that
                 let user = strip_file_prefixes(body);
                 let exists = wb.names().iter().any(|n| {
@@ -2566,7 +2713,9 @@ fn rewrite_defined_names(
                         && n.scope.as_deref().map(str::to_lowercase) == key.1
                 }) {
                     let user = strip_file_prefixes(&text);
-                    if !formulas_equal(wb, &user, &m.formula) {
+                    // the engine reads `DAYS(…)` and `_xlfn.DAYS(…)` alike; Excel does not
+                    let spelled = name_file_spelling(wb, &m.formula);
+                    if !formulas_equal(wb, &user, &m.formula) || refs::function_calls(&text) != refs::function_calls(&spelled) {
                         text = name_file_spelling(wb, &m.formula);
                         changed = true;
                     }
@@ -2856,6 +3005,30 @@ fn verify(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_is_one_value_when_it_is_one_cell_or_one_constant() {
+        for one in ["S!$A$1", "=S!$A$1", "'My S'!$B$2", "0.21", "\"x\"", "{1}"] {
+            assert!(names_one_value(one), "{one}");
+        }
+        for several in ["S!$A$1:$A$3", "{1,2,3}", "{\"Jan\";\"Feb\"}", "OFFSET(S!$A$1,0,0,3)", "S!A:A"] {
+            assert!(!names_one_value(several), "{several}");
+        }
+    }
+
+    #[test]
+    fn a_cell_maps_back_through_the_moves() {
+        let s = |sh: Shift| ("S".to_string(), sh);
+        let shifts = [s(Shift::InsertRows { at: 2, n: 2 }), ("T".into(), Shift::DeleteRows { at: 1, n: 5 }), s(Shift::DeleteCols { at: 1, n: 1 })];
+        assert_eq!(backward(&shifts, "S", 1, 1), Some((1, 2)));
+        assert_eq!(backward(&shifts, "S", 4, 3), Some((2, 4)));
+        assert_eq!(backward(&shifts, "S", 2, 1), None);
+        assert_eq!(backward(&shifts, "s", 5, 1), Some((3, 2)));
+        for (r, c) in [(1, 2), (2, 3), (9, 9)] {
+            let there = forward(&shifts, 0, "S", r, c).unwrap();
+            assert_eq!(backward(&shifts, "S", there.0, there.1), Some((r, c)));
+        }
+    }
 
     fn listing(dir: &Path) -> Vec<String> {
         let mut names: Vec<String> =

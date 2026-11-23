@@ -57,9 +57,9 @@ impl Package {
     pub fn read_text(&mut self, name: &str) -> Result<String, PatchError> {
         let text = String::from_utf8(self.read(name)?)
             .map_err(|_| PatchError::Malformed(format!("{name}: not UTF-8")))?;
-        if let Some(root) = xml::prefixed_main_root(&text) {
+        if let Some(element) = xml::prefixed_main_element(&text) {
             return Err(PatchError::Unsupported(format!(
-                "{name} writes SpreadsheetML under a namespace prefix (<{root}>); the patcher reads it unprefixed, as Excel writes it"
+                "{name} writes SpreadsheetML under a namespace prefix (<{element}>); the patcher reads it unprefixed, as Excel writes it"
             )));
         }
         Ok(text)
@@ -195,7 +195,7 @@ pub(crate) fn sheets(workbook_xml: &str, wb_rels: &[Rel]) -> Result<Vec<SheetEnt
     let mut pos = sheets.end;
     while let Some(t) = xml::find_open(&workbook_xml[..end], "sheet", pos) {
         pos = t.end;
-        let name = attr(t.text, "name").map(decode_text).unwrap_or_default();
+        let name = attr(t.text, "name").map(xml::decode_attr).unwrap_or_default();
         let sheet_id = attr(t.text, "sheetId")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);

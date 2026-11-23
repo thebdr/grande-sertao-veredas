@@ -692,9 +692,68 @@ pub fn shift_sqref(text: &str, shift: Shift) -> Option<String> {
     Some(parts.join(" "))
 }
 
+
+/// Every function call of a formula as the file spells it: its prefix (`_xlfn.`, `_xlfn._xlws.`,
+/// none) and its name in upper case, in order, outside strings and quoted sheet names. Two
+/// formulas the engine reads alike (`IFNA(…)`, `_xlfn.IFNA(…)`) differ here: Excel reads the first
+/// as an unknown function.
+pub fn function_calls(formula: &str) -> Vec<(String, String)> {
+    let chars: Vec<char> = formula.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '"' || c == '\'' {
+            // to the closing quote, a doubled one kept inside
+            i += 1;
+            while i < chars.len() {
+                if chars[i] == c && chars.get(i + 1) == Some(&c) {
+                    i += 2;
+                } else if chars[i] == c {
+                    break;
+                } else {
+                    i += 1;
+                }
+            }
+            i += 1;
+        } else if c.is_alphabetic() || c == '_' || c == '\\' {
+            let start = i;
+            while i < chars.len() && (chars[i].is_alphanumeric() || matches!(chars[i], '_' | '.' | '\\')) {
+                i += 1;
+            }
+            if chars.get(i) == Some(&'(') {
+                let word: String = chars[start..i].iter().collect::<String>().to_uppercase();
+                let mut name = word.as_str();
+                let mut prefix = String::new();
+                for p in ["_XLFN.", "_XLWS."] {
+                    if let Some(rest) = name.strip_prefix(p) {
+                        prefix.push_str(p);
+                        name = rest;
+                    }
+                }
+                out.push((prefix, name.to_string()));
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn calls_are_read_with_their_prefix_outside_strings_and_sheet_names() {
+        let pair = |p: &str, n: &str| (p.to_string(), n.to_string());
+        assert_eq!(
+            function_calls(r#"_xlfn.DAYS(A1,B1)+'My SUM(x'!A1&"CEILING(""x"")"&_xlfn._xlws.filter(A:A,B:B)+iso.ceiling(1)+\x(2)"#),
+            [pair("_XLFN.", "DAYS"), pair("_XLFN._XLWS.", "FILTER"), pair("", "ISO.CEILING"), pair("", "\\X")]
+        );
+        assert_ne!(function_calls("IFNA(A1,0)"), function_calls("_xlfn.IFNA(A1,0)"));
+        assert_eq!(function_calls("SUM(A1)"), function_calls("sum(A1)"));
+    }
 
     fn order() -> Vec<String> {
         ["Cover", "CABINET", "S 2", "Last"]

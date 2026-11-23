@@ -427,9 +427,22 @@ workspace/log.txt             the log, one escaped entry per line
 - **A one-cell merge is no merge**; an empty list (`<hyperlinks/>`, `<mergeCells/>`) is no list.
 - **A carriage return is `_x000D_` in text and `&#13;` in an attribute**, written in one pass.
 - **SpreadsheetML under a namespace prefix is refused** (`<x:worksheet xmlns:x="…main">`, the
-  .NET Open XML SDK's default; C-223's eighth round): the patcher reads tags by their literal,
-  unprefixed names, as Excel writes them, so a part whose root is the main namespace under a
-  prefix refuses the patch, whatever its edits, naming the part.
+  .NET Open XML SDK's default; C-223's eighth and ninth rounds): the patcher reads tags by their
+  literal, unprefixed names, as Excel writes them, so a part with any element under a prefix bound
+  to the main namespace (the root, or `<x:definedNames>` inside a plain root) refuses the patch,
+  whatever its edits, naming the part and the element. A prefix declared and never used is none.
+- **The engine reads `IFNA(…)` and `_xlfn.IFNA(…)` alike; Excel does not** (C-223's ninth round):
+  "already there" and a name's rewrite compare the function spellings of the file's own text too
+  (`refs::function_calls`), a cell's found back in the source through the moves (`backward`).
+- **A function the engine does not compute is refused in an edit** (`AGGREGATE`, `IMAGE`,
+  `WEBSERVICE`): it would be cached as `#NAME?` and printed lowercased without its prefix. A LAMBDA
+  name and a parameter a LET or LAMBDA binds are the workbook's own. The engine keeps its
+  function list and a LAMBDA parameter's name private; the patcher tells LET and the name by their
+  debug text.
+- **A legacy array is the edit's kind only at the edit's size**: `{=A1:A3*2}` over one cell shows
+  one value where the edit's formula spills three; `{=SUM(…)}` over one cell is the same.
+- **An attribute is rewritten between double quotes**, whatever quotes it had: a value escaped for
+  `"` may hold a raw `'`.
 - **An attribute's raw whitespace is a space** (XML's attribute-value normalization; C-223's
   eighth round): a moved `cfvo` formula or text link is read as any reader reads it, a raw tab,
   line feed or CR LF one space, `&#9;` a tab.
