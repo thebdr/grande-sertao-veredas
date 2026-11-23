@@ -62,6 +62,24 @@ fn the_worked_example_passes_live_against_the_machine() {
     let ended = events.iter().filter(|e| matches!(e, veredas_comissionador::run::Event::StepEnded(_))).count();
     assert_eq!((started, ended), (7, 7));
     assert!(matches!(events.last(), Some(veredas_comissionador::run::Event::Ended { verdict: RunVerdict::Passed, .. })));
+    // Every criterion, value reported and write went to the listener too, each inside its step.
+    use veredas_comissionador::run::Event;
+    let kinds: String = events
+        .iter()
+        .map(|e| match e {
+            Event::StepStarted { .. } => '(',
+            Event::StepEnded(_) => ')',
+            Event::Criterion(_) => 'c',
+            Event::Reported(_) => 'r',
+            Event::Write(_) => 'w',
+            Event::Ended { .. } => '.',
+        })
+        .collect();
+    assert_eq!(kinds, "(w)()()()(c)(w)(rrr).");
+    let crit: Vec<_> = events.iter().filter_map(|e| if let Event::Criterion(x) = e { Some(x.clone()) } else { None }).collect();
+    let rep: Vec<_> = events.iter().filter_map(|e| if let Event::Reported(x) = e { Some(x.clone()) } else { None }).collect();
+    let wr: Vec<_> = events.iter().filter_map(|e| if let Event::Write(x) = e { Some(x.clone()) } else { None }).collect();
+    assert_eq!((crit, rep, wr), (r.criteria.clone(), r.reported.clone(), r.writes.clone()));
 }
 
 #[test]
@@ -142,6 +160,33 @@ fn the_binding_refuses_before_anything_runs() {
     // A test that only reads runs with the switch off.
     let c = checked(&test_of("  step a check plc_main.level == 0.9\n"));
     assert_eq!(run_with(&c, s.live(), &RunOptions::live()).unwrap().0.verdict, RunVerdict::Passed);
+    // A column read through a row an `await` binds, in a step, a script box and a function, against
+    // its table; the fields every row has, and a column it has, bound.
+    let c = checked(&test_of(concat!(
+        "  step e await announce where a.nosuch == 2 timeout 2s -> a\n",
+        "  step r report a.item, a.time, a.seq, a.other\n",
+        "  step s script { b = a\n y = b.third }\n",
+    )));
+    assert_eq!(run_with(&c, s.live(), &RunOptions::live()).unwrap_err().0, [
+        "`announce` has no column `nosuch`, read as `a.nosuch`",
+        "`announce` has no column `other`, read as `a.other`",
+        "`announce` has no column `third`, read as `b.third`",
+    ]);
+    let f = "format = \"veredas-functions\"\nversion = 1\n\nfunction Rows() -> (o: int) {\n  reads outcome\n  r = await outcome where r.nosuch == 1\n  o = r.dest\n}\n";
+    let c = checked_with(&test_of("  use f.fn\n  step a call Rows() -> o\n"), f);
+    assert_eq!(run_with(&c, s.live(), &RunOptions::live()).unwrap_err().0, ["`outcome` has no column `nosuch`, read as `r.nosuch`"]);
+}
+
+#[test]
+fn a_test_refused_for_a_row_s_column_writes_nothing() {
+    // Armed: the write before the await would land, were the run not refused whole.
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, true, 4));
+    let c = checked(&test_of("  step go write plc_main.run := 1\n  step e await announce where a.nosuch == 2 timeout 2s -> a\n"));
+    assert_eq!(run_with(&c, s.live(), &RunOptions::live()).unwrap_err().0, ["`announce` has no column `nosuch`, read as `a.nosuch`"]);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(tag(&bench, "run"), "Int32(0)");
 }
 
 #[test]
@@ -225,6 +270,24 @@ fn timeouts_the_run_s_bound_and_the_tester_s_stop() {
     });
     assert_eq!((r.verdict, r.decided_at.as_deref(), r.reason.as_str()), (RunVerdict::Aborted, Some("w"), "stopped by the tester"));
     assert_eq!(steps(&r), ["a #1 pass: 1 reported", "w #1 cut short: "]);
+    // A loop of no statement, past any bound: the tester's stop and the run's bound end it.
+    let spin = format!("{HEAD}test \"t\" {{\n  id T\n  timeout 1s\n  step s script {{ for i in 1 .. 100000000000 {{ }} }}\n}}\n");
+    let opts = RunOptions::live();
+    let stop = opts.stop.clone();
+    let t0 = std::time::Instant::now();
+    let r = std::thread::scope(|sc| {
+        sc.spawn(|| {
+            std::thread::sleep(Duration::from_millis(200));
+            stop.store(true, Ordering::SeqCst);
+        });
+        go(&spin, &opts)
+    });
+    assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
+    assert_eq!((r.verdict, r.reason.as_str(), steps(&r)), (RunVerdict::Aborted, "stopped by the tester", vec!["s #1 cut short: ".to_string()]));
+    let t0 = std::time::Instant::now();
+    let r = go(&spin, &RunOptions::live());
+    assert!(t0.elapsed() < Duration::from_secs(3), "{:?}", t0.elapsed());
+    assert_eq!((r.verdict, r.reason.as_str()), (RunVerdict::Aborted, "the run's bound of 1s passed"));
     // A wait for a duration.
     let t0 = std::time::Instant::now();
     let r = go(&test_of("  step d wait 300ms\n"), &RunOptions::live());
@@ -299,6 +362,8 @@ fn functions_take_typed_inputs_give_their_outputs_and_keep_their_bound() {
         "function Wait() {\n  reads plc_main\n  wait plc_main.speed >= 9.0 timeout 200ms\n}\n",
         "function Sum(n: int) -> (s: int, t: int) {\n  s = 0\n  for i in 1 .. n { s += i }\n  t, u = Pair()\n  for j in 3 .. 1 { s = 1000 }\n}\n",
         "function Pair() -> (a: int, b: int) {\n  a = 7\n  b = 8\n}\n",
+        "function Outer() -> (o: int) {\n  timeout 300ms\n  o = Inner()\n}\n",
+        "function Inner() -> (o: int) {\n  reads outcome\n  r = await outcome where r.dest == 99\n  o = 1\n}\n",
     );
     let go = |body: &str| run_with(&checked_with(&test_of(&format!("  use f.fn\n{body}")), f), s.live(), &RunOptions::live()).unwrap().0;
     let r = go("  step a call Twice(x: 2) -> y\n  step b call Sum(n: 4) -> s, t\n  step c report y, s, t\n");
@@ -315,6 +380,61 @@ fn functions_take_typed_inputs_give_their_outputs_and_keep_their_bound() {
     assert_eq!((r.verdict, r.end_ms - r.start_ms), (RunVerdict::Aborted, 300));
     let r = go("  step a call Wait()\n");
     assert_eq!(steps(&r), ["a #1 timeout: Wait: plc_main.speed >= 9.0 did not hold in time"]);
+    // A call inside a call keeps its caller's bound: 300 ms, not the run's ten minutes.
+    let t0 = std::time::Instant::now();
+    let r = go("  step a call Outer() -> o\n");
+    assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
+    assert_eq!(steps(&r), ["a #1 timeout: Outer: Inner: no row of `outcome` in time"]);
+    assert_eq!((r.verdict, r.end_ms - r.start_ms), (RunVerdict::Aborted, 300));
+}
+
+#[test]
+fn rows_sharing_a_stamp_are_judged_together_and_each_awaited() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &with_rules(project_text(&bench, false, 4)));
+    log_together(dir.path(), 100, &["x=0", "y=1"]);
+    std::thread::sleep(Duration::from_millis(400));
+    // `x` turns 1 as `y` turns 0, at one stamp: never both 1, so the wait times out.
+    let c = checked(&test_of("  step w wait a.x == 1 and b.y == 1 timeout 1500ms\n"));
+    let r = std::thread::scope(|sc| {
+        sc.spawn(|| {
+            std::thread::sleep(Duration::from_millis(100));
+            log_together(dir.path(), -500, &["x=1", "y=0"]);
+        });
+        run_with(&c, s.live(), &RunOptions::live()).unwrap().0
+    });
+    assert_eq!(steps(&r), ["w #1 timeout: a.x == 1 and b.y == 1 did not hold within 1500ms"]);
+    // Two rows of one stamp and one after: three awaits take all three, in order.
+    let c = checked(&test_of(concat!(
+        "  step e1 await ev timeout 3s -> r1\n",
+        "  step e2 await ev timeout 3s -> r2\n",
+        "  step e3 await ev timeout 3s -> r3\n",
+        "  step r  report r1.n, r2.n, r3.n\n",
+    )));
+    let r = std::thread::scope(|sc| {
+        sc.spawn(|| {
+            std::thread::sleep(Duration::from_millis(100));
+            log_together(dir.path(), -500, &["n=1", "n=2"]);
+            log_text(dir.path(), -600, "n=3");
+        });
+        run_with(&c, s.live(), &RunOptions::live()).unwrap().0
+    });
+    assert_eq!(texts(&r), ["r1.n = 1", "r2.n = 2", "r3.n = 3"], "{:?}", steps(&r));
+    assert_eq!(r.steps[0].end_ms, r.steps[1].end_ms, "the second row at the first's stamp");
+    // A function's loop of awaits, as the worked example's counts: every row, however many share a
+    // stamp.
+    let f = "format = \"veredas-functions\"\nversion = 1\n\nfunction Count(k: int) -> (s: int) {\n  reads ev\n  timeout 3s\n  s = 0\n  for i in 1 .. k {\n    e = await ev where e.n > 0\n    s += e.n\n  }\n}\n";
+    let c = checked_with(&test_of("  use f.fn\n  step c call Count(k: 4) -> s\n  step r report s\n"), f);
+    let r = std::thread::scope(|sc| {
+        sc.spawn(|| {
+            std::thread::sleep(Duration::from_millis(100));
+            log_together(dir.path(), -500, &["n=1", "n=2", "n=3"]);
+            log_text(dir.path(), -600, "n=4");
+        });
+        run_with(&c, s.live(), &RunOptions::live()).unwrap().0
+    });
+    assert_eq!(texts(&r), ["s = 10"], "{:?}", steps(&r));
 }
 
 #[test]
@@ -342,6 +462,23 @@ fn values_compute_and_compare_as_the_reference_says() {
     assert_eq!(one("true and 1"), "e #1 error: `and` takes truth values, not a whole number");
     assert_eq!(one("1s == 1"), "e #1 error: a duration and a whole number do not compare");
     assert_eq!(one("9223372036854775807 + 1"), "e #1 error: a whole number past its range");
+    // Durations and moments past their range refused, never wrapped, saturated or a panic.
+    let past = "e #1 error: a duration or a moment past its range";
+    assert_eq!(one("9223372036854775807 * 1ms + 1ms"), past);
+    assert_eq!(one("-9223372036854775807 * 1ms - 2ms"), past);
+    assert_eq!(one("now() + 9223372036854775807 * 1ms"), past);
+    assert_eq!(one("now() - (-9223372036854775807 * 1ms)"), past);
+    assert_eq!(one("1s * 1e300"), past);
+    assert_eq!(one("1s * 9223372036854775807"), past);
+    assert_eq!(one("-(-9223372036854775807 * 1ms - 1ms)"), "e #1 error: a duration past its range");
+    assert_eq!(one("abs(-9223372036854775807 * 1ms - 1ms)"), "e #1 error: a duration past its range");
+    assert_eq!(one("round(1e300)"), "e #1 error: `round` gives a whole number past its range");
+    assert_eq!(one("round(-1e19)"), "e #1 error: `round` gives a whole number past its range");
+    assert_eq!(one("round(9.2e18)"), "e #1 pass: x = 9200000000000000000");
+    assert_eq!(one("2s * 1.5"), "e #1 pass: x = 3s");
+    // A loop to the largest whole number ends there.
+    let r = go("  step f script { for i in 9223372036854775806 .. 9223372036854775807 { x = i } }\n");
+    assert_eq!(steps(&r), ["f #1 pass: i = 9223372036854775807, x = 9223372036854775807"]);
     assert_eq!(one("int(\"x\")"), "e #1 error: \"x\" is no whole number");
     // Plant data has its type as portal stores it, a text read as a number where compared with one.
     let r = go("  step c check plc_main.level > 0.5 and plc_main.run == 0 and plc_main.run == false\n");

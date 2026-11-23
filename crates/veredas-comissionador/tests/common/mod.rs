@@ -175,3 +175,29 @@ pub fn log_line(dir: &Path, ago_ms: i64, temp: &str) {
     let mut f = std::fs::OpenOptions::new().append(true).open(dir.join("plant.log")).unwrap();
     writeln!(f, "{} temp={temp}", at.format("%Y-%m-%d %H:%M:%S%.3f")).unwrap();
 }
+
+/// A line of `plant.log` holding `text`, stamped `ago_ms` before now on the store's axis (after it
+/// when negative).
+pub fn log_text(dir: &Path, ago_ms: i64, text: &str) {
+    use std::io::Write;
+    let at = chrono::DateTime::from_timestamp_millis(veredas_portal::serve::store_now_ms() - ago_ms).unwrap().naive_utc();
+    let mut f = std::fs::OpenOptions::new().append(true).open(dir.join("plant.log")).unwrap();
+    writeln!(f, "{} {text}", at.format("%Y-%m-%d %H:%M:%S%.3f")).unwrap();
+}
+
+/// Lines of `plant.log`, every one at the same stamp, `ago_ms` before now: written at once.
+pub fn log_together(dir: &Path, ago_ms: i64, texts: &[&str]) {
+    use std::io::Write;
+    let at = chrono::DateTime::from_timestamp_millis(veredas_portal::serve::store_now_ms() - ago_ms).unwrap().naive_utc();
+    let stamp = at.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+    let lines: String = texts.iter().map(|t| format!("{stamp} {t}\n")).collect();
+    std::fs::OpenOptions::new().append(true).open(dir.join("plant.log")).unwrap().write_all(lines.as_bytes()).unwrap();
+}
+
+/// A project with three more rules over `plant.log`: `a` (`x=`), `b` (`y=`) and `ev` (`n=`), each
+/// a whole number.
+pub fn with_rules(project: String) -> String {
+    let rule = |name: &str, key: &str| format!("\n[[rule]]\nname = \"{name}\"\npattern = \" {key}=(?P<{key}>[0-9]+)\"\nscope = \"plant\"\ntypes = {{ {key} = \"int\" }}\n");
+    format!("{project}{}{}{}", rule("a", "x"), rule("b", "y"), rule("ev", "n"))
+}
+

@@ -114,6 +114,15 @@ fn a_replay_ends_where_its_window_ends_and_times_out_on_its_own_clock() {
     assert_eq!((r.verdict, r.end_ms), (RunVerdict::Passed, from + 600));
     let (r, _) = go(&test_of("  step d wait 2s\n"), from, to).unwrap();
     assert_eq!((r.verdict, r.end_ms, r.steps[0].outcome), (RunVerdict::Aborted, to, None));
+    // The window ends before the run's bound and before the wait: the window's end named, the
+    // clock at it, never past; a function's wait under a call bound past the window the same.
+    let window = format!("the window ended at {}, before the step decided", veredas_comissionador::eval::time_text(to));
+    let (r, _) = go(&format!("{HEAD}test \"t\" {{\n  id T\n  timeout 2s\n  step d wait 5s\n}}\n"), from, to).unwrap();
+    assert_eq!((r.verdict, r.reason.as_str(), r.end_ms, r.steps[0].outcome), (RunVerdict::Aborted, window.as_str(), to, None));
+    let f = "format = \"veredas-functions\"\nversion = 1\n\nfunction Pause() {\n  timeout 2s\n  wait 5s\n}\n";
+    let c = checked_with(&test_of("  use f.fn\n  step c call Pause()\n"), f);
+    let (r, _) = run_with(&c, s.live(), &RunOptions::replay(from, to)).unwrap();
+    assert_eq!((r.verdict, r.reason.as_str(), r.end_ms, r.steps[0].outcome), (RunVerdict::Aborted, window.as_str(), to, None));
     // An event the window holds, at its own stamp.
     let (r, _) = go(&test_of("  step e await plc_main -> p\n  step c check p.time <= now()\n"), from, to).unwrap();
     assert_eq!(r.verdict, RunVerdict::Passed);
@@ -123,3 +132,28 @@ fn a_replay_ends_where_its_window_ends_and_times_out_on_its_own_clock() {
     assert_eq!(go(&format!("{HEAD}test \"t\" {{\n  id T\n  modes live\n  step a stop pass\n}}\n"), from, to).unwrap_err().0, ["the test runs live, not replay"]);
     assert_eq!(go(&test_of("  step a stop pass\n"), to, from).unwrap_err().0, ["the window ends before it starts"]);
 }
+
+#[test]
+fn a_replay_s_write_moves_no_clock_where_the_live_one_moved_to_the_plant_s_answer() {
+    // After a step that read the plant, the live clock sits the read's settle (250 ms) behind the
+    // machine; a write moves it to the plant's answer. A replay's write moves nothing, so a wait
+    // after it whose bound is tighter than that lag and the reaction together times out in the
+    // replay where it held live (docs/questions.md Q318, the claim narrowed meanwhile).
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, true, 4));
+    let c = checked(&test_of(concat!(
+        "  step a    wait plc_main.level == 0.9 timeout 1s\n",
+        "  step go   write plc_main.run := 1\n",
+        "  step fast wait plc_main.speed >= 2.0 timeout 300ms\n",
+    )));
+    let (live, _) = run_with(&c, s.live(), &RunOptions::live()).unwrap();
+    assert_eq!((live.verdict, live.decided_at.as_deref()), (RunVerdict::Passed, Some("fast")), "{:?}", steps(&live));
+    let go = &live.steps[1];
+    assert!(go.end_ms - go.start_ms >= veredas_comissionador::run::SETTLE_MS, "the live write moved the clock: {go:?}");
+    let (r, _) = run_with(&c, s.live(), &RunOptions::replay(live.start_ms, live.end_ms)).unwrap();
+    assert_eq!(r.steps[1].end_ms, r.steps[1].start_ms, "the replay's write moved nothing");
+    assert_eq!(steps(&r)[2], "fast #1 timeout: plc_main.speed >= 2.0 did not hold within 300ms");
+    assert_eq!(r.verdict, RunVerdict::Aborted);
+}
+

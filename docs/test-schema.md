@@ -200,11 +200,14 @@ that does not pass ends the step with its outcome; a step whose actions all pass
   `error` with portal's words as a write's.
 - `wait <condition> [timeout <duration>]`, a **wait**: passes at the first moment the condition
   holds over the plant's values, at once when it holds as the step starts; `timeout` when the
-  bound passes first. `wait <duration>` waits that long and passes.
+  bound passes first. A moment is a stamp with every row of it applied, so rows that share a stamp
+  are judged together. `wait <duration>` waits that long and passes.
 - `await <table> [where <condition>] [timeout <duration>] -> <name>`, a **wait** for an event:
   the first row of the table stamped after the step starts for which the condition holds,
   bound to the name, which the condition uses to read the row (`await outcome where o.dest == 4
-  -> o`). Passes on that row; `timeout` when the bound passes first.
+  -> o`); when the clock stands at the stamp of the row the last `await` of that table took, the
+  rows of that stamp after it too, so a loop of awaits takes every row however many share a
+  stamp. Passes on that row; `timeout` when the bound passes first.
 - `read <reference>, ... -> <name>, ...`, a **read**: each reference's value as the step starts,
   into the names in order. `error` for a reference with no value yet.
 - `check <condition> [as "<label>"]`, a **check**: a criterion of the acceptance report, under
@@ -271,7 +274,8 @@ above `function` are its description, shown on its block.
   is checked against the input's type as the call starts; an `int` is taken where a `float` is
   asked for.
 - `reads` (none): the tables the function reads. A reference to another table is refused.
-- `timeout` (none, the run's bound): the bound of one call.
+- `timeout` (none, the run's bound): the bound of one call, never past its caller's (the calling
+  function's bound, or the run's).
 - **The body**: statements over the inputs, which are read only, and names of its own; a name of
   the test is not one of them. Every output is assigned somewhere in the body, or the check
   refuses the function; one that the path a call takes leaves unassigned ends the call in
@@ -288,7 +292,9 @@ The body of a script box, of a function, and of an `if` or a `for`:
 - `if <condition> { ... } else if <condition> { ... } else { ... }`: the first branch whose
   condition holds.
 - `for <name> in <expression> .. <expression> { ... }`: whole numbers, both ends included; a
-  range whose end is below its start runs nothing.
+  range whose end is below its start runs nothing. A script box or a step's call runs at most
+  10 000 000 statements, each turn of a loop counted as one, and then ends in `error`; the
+  tester's stop and the run's bound end it as they end a wait.
 - `fail ["<reason>"]`: ends the script or the call in `fail`.
 - In a function only: `wait <condition> [timeout <duration>]` and `wait <duration>`;
   `<name> = await <table> [where <condition>] [timeout <duration>]`, the row the condition reads
@@ -321,7 +327,9 @@ group.
 - Arithmetic: whole numbers give a whole number, except `/`, which gives a number; a number on
   either side gives a number; `%` takes whole numbers. A moment less a moment is a duration; a
   moment and a duration added or taken away give a moment; durations add, a duration times a
-  number is a duration, and a duration divided by a duration is a number.
+  number is a duration, and a duration divided by a duration is a number. A whole number, a
+  duration or a moment past its 64 bits is an error, never wrapped or held at its end; so is a
+  number `round` or `int` would make one.
 - Comparisons: numbers with numbers, whatever their kind; a truth value with a truth value, or
   with a whole number, `true` being 1 and `false` 0; a text with a text; a text with a number,
   the text trimmed and read as a number (a text that is no number is unequal to every number,
@@ -351,7 +359,13 @@ run a write or a send moves it to the moment the plant answered, so whatever the
 after a write is after the write; in a replay a write and a send are not sent and the clock does
 not move. Every step reads the plant as of the clock. A live run reads a moment only once it is
 250 ms past, so the rows stamped at or before it have reached the store; a replay of a live
-run's own window therefore reads the rows the live run read.
+run's own window therefore reads the rows the live run read. A wait or an await right after a
+write starts earlier in such a replay than it did live, by the time the live run took to send
+the write and have it answered (at least those 250 ms after a step that read the plant): a bound
+tighter than that and the plant's reaction together can time out in the replay where it held
+live (`docs/questions.md` Q318). A replay's clock never passes its window: a step the window
+ends inside is cut short and the run aborted with the window's end named, before the run's bound
+or a call's.
 
 ## What a check refuses
 

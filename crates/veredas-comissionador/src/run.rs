@@ -23,8 +23,10 @@ pub const SETTLE_MS: i64 = 250;
 pub const POLL: Duration = Duration::from_millis(50);
 /// The steps a run takes at most: a test that routes round without end is aborted, not hung.
 pub const MAX_STEPS: u64 = 100_000;
-/// The statements a script box or a call runs at most.
+/// The statements a script box or a step's call runs at most, a turn of a `for` counted as one.
 pub const MAX_STATEMENTS: u64 = 10_000_000;
+/// How many statements run between two looks at the run's bound.
+const BOUND_EVERY: u64 = 1024;
 
 /// How a run reads the plant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,6 +209,114 @@ fn stmt_refs(body: &[Stmt], refs: &mut Vec<(String, String, Span)>, tables: &mut
     }
 }
 
+/// Every expression of a block of statements, its blocks' included.
+fn stmt_exprs<'a>(body: &'a [Stmt], f: &mut dyn FnMut(&'a Expr)) {
+    for s in body {
+        match &s.kind {
+            StmtKind::Assign { value, .. } => f(value),
+            StmtKind::If { arms, otherwise } => {
+                for (c, b) in arms {
+                    f(c);
+                    stmt_exprs(b, f);
+                }
+                if let Some(b) = otherwise {
+                    stmt_exprs(b, f);
+                }
+            }
+            StmtKind::For { from, to, body, .. } => {
+                f(from);
+                f(to);
+                stmt_exprs(body, f);
+            }
+            StmtKind::Fail { reason } => reason.iter().for_each(|r| f(r)),
+            StmtKind::Wait { condition, .. } => f(condition),
+            StmtKind::Delay { .. } => {}
+            StmtKind::Await { filter, .. } => filter.iter().for_each(|x| f(x)),
+            StmtKind::Call { args, .. } => args.iter().for_each(|a| f(&a.value)),
+        }
+    }
+}
+
+/// Every expression of a step's action, a script box's statements included.
+fn action_exprs<'a>(a: &'a Action, f: &mut dyn FnMut(&'a Expr)) {
+    match &a.kind {
+        ActionKind::Write { value, .. } => f(value),
+        ActionKind::Send { fields, .. } => fields.iter().for_each(|x| f(&x.value)),
+        ActionKind::Wait { condition, .. } | ActionKind::Check { condition, .. } => f(condition),
+        ActionKind::Await { filter, .. } => filter.iter().for_each(|x| f(x)),
+        ActionKind::Call { args, .. } => args.iter().for_each(|x| f(&x.value)),
+        ActionKind::Branch { value, arms, .. } => {
+            f(value);
+            for arm in arms {
+                for p in &arm.patterns {
+                    match p {
+                        Pattern::Compare { value, .. } | Pattern::Value(value) => f(value),
+                        Pattern::Range { low, high } => {
+                            f(low);
+                            f(high);
+                        }
+                    }
+                }
+            }
+        }
+        ActionKind::Report { items } => items.iter().for_each(|x| f(x)),
+        ActionKind::Stop { reason, .. } => reason.iter().for_each(|x| f(x)),
+        ActionKind::Script { body } => stmt_exprs(body, f),
+        ActionKind::Read { .. } | ActionKind::Delay { .. } => {}
+    }
+}
+
+/// The rows a block binds: every `await`'s name with its table, and a name a bare name of one is
+/// assigned to, in order.
+fn stmt_rows(body: &[Stmt], rows: &mut HashMap<String, BTreeSet<String>>) {
+    for s in body {
+        match &s.kind {
+            StmtKind::Await { bind, table, .. } => {
+                rows.entry(bind.value.clone()).or_default().insert(table.value.clone());
+            }
+            StmtKind::Assign { target, value, .. } => {
+                if let ExprKind::Name(n) = &value.kind
+                    && let Some(ts) = rows.get(n.as_str()).cloned()
+                {
+                    rows.entry(target.value.clone()).or_default().extend(ts);
+                }
+            }
+            StmtKind::If { arms, otherwise } => {
+                arms.iter().for_each(|(_, b)| stmt_rows(b, rows));
+                if let Some(b) = otherwise {
+                    stmt_rows(b, rows);
+                }
+            }
+            StmtKind::For { body, .. } => stmt_rows(body, rows),
+            _ => {}
+        }
+    }
+}
+
+/// The fields every row has, whatever its table.
+const ROW_FIELDS: [&str; 5] = ["time", "arrival", "source", "key", "seq"];
+
+/// Every column read through a row an `await` binds (`a.x`), against the table it is a row of:
+/// `(table, column, base)` for each one that table lacks.
+fn row_columns<'a>(exprs: &[&'a Expr], rows: &HashMap<String, BTreeSet<String>>, tables: &HashMap<String, Table>, out: &mut Vec<(String, String, String)>) {
+    for e in exprs {
+        e.walk(&mut |x: &Expr| {
+            if let ExprKind::Field { base, field } = &x.kind
+                && let Some(ts) = rows.get(&base.value)
+                && !ROW_FIELDS.contains(&field.value.as_str())
+            {
+                for t in ts {
+                    if let Some(table) = tables.get(t)
+                        && !table.columns.iter().any(|c| c.name == field.value)
+                    {
+                        out.push((t.clone(), field.value.clone(), base.value.clone()));
+                    }
+                }
+            }
+        });
+    }
+}
+
 /// Check a test against the plant before its first step: everything the reference's binding
 /// paragraph lists, every problem named.
 /// A test bound to a plant: the session's tables by name, and the ones the test reads.
@@ -311,6 +421,36 @@ pub fn bind(c: &Checked, plant: &dyn Plant, mode: &RunMode) -> Result<Bound, Ref
                 }
             }
             Some(_) => {}
+        }
+    }
+    // A column read through a row an `await` binds: the steps' rows across the test (a script box's
+    // names are the test's), a function's within it.
+    let mut lacking = Vec::new();
+    let mut rows: HashMap<String, BTreeSet<String>> = HashMap::new();
+    for a in t.steps.iter().flat_map(|s| s.actions.iter()) {
+        match &a.kind {
+            ActionKind::Await { bind, table, .. } => {
+                rows.entry(bind.value.clone()).or_default().insert(table.value.clone());
+            }
+            ActionKind::Script { body } => stmt_rows(body, &mut rows),
+            _ => {}
+        }
+    }
+    let mut exprs = Vec::new();
+    for a in t.steps.iter().flat_map(|s| s.actions.iter()) {
+        action_exprs(a, &mut |e| exprs.push(e));
+    }
+    row_columns(&exprs, &rows, &tables, &mut lacking);
+    for f in c.files.iter().flat_map(|f| f.functions.functions.iter()) {
+        let mut rows = HashMap::new();
+        stmt_rows(&f.body, &mut rows);
+        let mut exprs = Vec::new();
+        stmt_exprs(&f.body, &mut |e| exprs.push(e));
+        row_columns(&exprs, &rows, &tables, &mut lacking);
+    }
+    for (table, column, base) in lacking {
+        if seen.insert(format!("{table}.{column}")) {
+            problems.push(format!("`{table}` has no column `{column}`, read as `{base}.{column}`"));
         }
     }
     if mode == &RunMode::Live && writes > 0 && !plant.armed() {
@@ -451,6 +591,9 @@ struct Runner<'a> {
     attempts: HashMap<String, u32>,
     retries: HashMap<(String, usize), u32>,
     statements: u64,
+    /// The last row an `await` of each table took: its stamp and who it is (source, sequence,
+    /// arrival), so the next `await` at that stamp takes the row after it.
+    taken: HashMap<String, (i64, String, i64, i64)>,
     result: RunResult,
     listener: &'a mut dyn FnMut(&Event),
 }
@@ -486,6 +629,7 @@ pub fn run(c: &Checked, plant: &dyn Plant, opts: &RunOptions, listener: &mut dyn
         attempts: HashMap::new(),
         retries: HashMap::new(),
         statements: 0,
+        taken: HashMap::new(),
         result: RunResult {
             verdict: RunVerdict::Aborted,
             decided_at: None,
@@ -753,13 +897,18 @@ impl Runner<'_> {
             let upto = self.reach(until, first)?;
             first = false;
             if upto > cursor {
-                for row in self.rows(&names, cursor, upto)? {
+                let rows = self.rows(&names, cursor, upto)?;
+                for (i, row) in rows.iter().enumerate() {
                     for ((t, c), slot) in cache.iter_mut() {
                         if *t == row.table
                             && let Some(Some(v)) = row.field(c)
                         {
                             *slot = Some(v);
                         }
+                    }
+                    // Judged at a stamp once every row of that stamp is applied: never half of one.
+                    if rows.get(i + 1).is_some_and(|next| next.time_ms == row.time_ms) {
+                        continue;
                     }
                     match holds(self.plant, &self.tables, &cache, row.time_ms) {
                         Ok(true) => return Ok(Waited::At(row.time_ms)),
@@ -781,10 +930,13 @@ impl Runner<'_> {
     }
 
     /// Wait for the first row of `table` stamped after the clock for which `filter` holds, the
-    /// row bound to `bind` in `scope`.
+    /// row bound to `bind` in `scope`; at the stamp of the row the last `await` of `table` took,
+    /// when the clock stands there, the rows after that one too, so a loop of awaits takes every
+    /// row however many share a stamp.
     fn wait_event(&mut self, table: &str, bind: &str, filter: Option<&Expr>, until: i64, scope: &mut Scope) -> R<Waited> {
         let before = scope.get(bind).cloned();
-        let mut cursor = self.clock;
+        let mut skip = self.taken.get(table).filter(|t| t.0 == self.clock).cloned();
+        let mut cursor = if skip.is_some() { self.clock - 1 } else { self.clock };
         let mut first = true;
         loop {
             let upto = self.reach(until, first)?;
@@ -792,6 +944,17 @@ impl Runner<'_> {
             if upto > cursor {
                 for row in self.rows(&[table.to_string()], cursor, upto)? {
                     let at = row.time_ms;
+                    let id = (row.time_ms, row.source.clone(), row.seq, row.arrival_ms);
+                    if let Some(last) = &skip {
+                        if row.time_ms == last.0 {
+                            // The rows of that stamp up to the one already taken are passed over.
+                            if id == *last {
+                                skip = None;
+                            }
+                            continue;
+                        }
+                        skip = None;
+                    }
                     scope.insert(bind.to_string(), Value::Row(Arc::new(row)));
                     let ok = match filter {
                         None => Ok(true),
@@ -806,7 +969,10 @@ impl Runner<'_> {
                         }
                     };
                     match ok {
-                        Ok(true) => return Ok(Waited::At(at)),
+                        Ok(true) => {
+                            self.taken.insert(table.to_string(), id);
+                            return Ok(Waited::At(at));
+                        }
                         Ok(false) => {}
                         Err(f) => {
                             restore(scope, bind, before);
@@ -829,19 +995,21 @@ impl Runner<'_> {
         }
     }
 
-    /// Wait a duration, from the clock.
+    /// Wait a duration, from the clock. A replay's window ends first when it ends before both the
+    /// duration and the bound: the clock never passes it.
     fn delay(&mut self, d: i64, until: i64) -> R<bool> {
         let target = self.clock.saturating_add(d.max(0));
+        if let RunMode::Replay { .. } = self.mode
+            && target.min(until) > self.horizon
+        {
+            return Err(Halt::WindowEnded(self.horizon));
+        }
         if target > until {
             self.clock = until;
             return Ok(false);
         }
         match self.mode {
-            RunMode::Replay { .. } => {
-                if target > self.horizon {
-                    return Err(Halt::WindowEnded(self.horizon));
-                }
-            }
+            RunMode::Replay { .. } => {}
             RunMode::Live => loop {
                 self.check_stop()?;
                 let left = target - self.plant.now_ms();
@@ -1034,7 +1202,8 @@ impl Runner<'_> {
                 let Some((f, file)) = self.function(&function.value) else {
                     return Ok(Flow::Out(Outcome::Error, format!("`{}` is no function", function.value)));
                 };
-                let (o, why, values) = self.call(&f, file, args, &vars)?;
+                self.statements = 0;
+                let (o, why, values) = self.call(&f, file, args, &vars, self.deadline)?;
                 if o != Outcome::Pass {
                     return Ok(Flow::Out(o, format!("{}: {why}", function.value)));
                 }
@@ -1047,6 +1216,7 @@ impl Runner<'_> {
             }
             ActionKind::Script { body } => {
                 let mut scope = vars.clone();
+                self.statements = 0;
                 let flow = self.exec(body, &mut scope, &Ctx { until: self.deadline, file: None })?;
                 // A script's names are the test's; its detail is what it set, in name order.
                 let mut set: Vec<String> =
@@ -1089,6 +1259,8 @@ impl Runner<'_> {
     /// A write or a send: sent live and its answer kept; noted, not sent, in a replay.
     fn gated(&mut self, step: &str, attempt: u32, text: String, send: impl Fn(&dyn Plant) -> Result<String, PlantError>) -> R<Flow> {
         let (flow, record) = match self.mode {
+            // DECISION PENDING (Q318): a replay's write leaves the clock where it stands, where the
+            // live one moved it to the plant's answer.
             RunMode::Replay { .. } => (
                 Flow::Pass(format!("{text}: not sent: replay")),
                 WriteRecord { step: step.to_string(), attempt, text, sent: false, answer: "not sent: replay".to_string(), ok: true },
@@ -1185,13 +1357,25 @@ struct Ctx {
 }
 
 impl Runner<'_> {
+    /// One statement, or one turn of a `for`, counted: past the budget, the box or the call ends in
+    /// an error; the tester's stop looked at every time, the run's bound every `BOUND_EVERY`.
+    fn tick(&mut self) -> R<Option<StmtFlow>> {
+        self.statements += 1;
+        if self.statements > MAX_STATEMENTS {
+            return Ok(Some(StmtFlow::Out(Outcome::Error, format!("more than {MAX_STATEMENTS} statements"))));
+        }
+        self.check_stop()?;
+        if self.statements % BOUND_EVERY == 0 && self.past_bound() {
+            return Err(Halt::Bound);
+        }
+        Ok(None)
+    }
+
     fn exec(&mut self, body: &[Stmt], scope: &mut Scope, ctx: &Ctx) -> R<StmtFlow> {
         for s in body {
-            self.statements += 1;
-            if self.statements > MAX_STATEMENTS {
-                return Ok(StmtFlow::Out(Outcome::Error, format!("more than {MAX_STATEMENTS} statements")));
+            if let Some(out) = self.tick()? {
+                return Ok(out);
             }
-            self.check_stop()?;
             let flow = self.stmt(s, scope, ctx)?;
             if !matches!(flow, StmtFlow::Next) {
                 return Ok(flow);
@@ -1251,12 +1435,17 @@ impl Runner<'_> {
                 };
                 let mut i = a;
                 while i <= b {
+                    if let Some(out) = self.tick()? {
+                        return Ok(out);
+                    }
                     scope.insert(var.value.clone(), Value::Int(i));
                     let f = self.exec(body, scope, ctx)?;
                     if !matches!(f, StmtFlow::Next) {
                         return Ok(f);
                     }
-                    i += 1;
+                    // The last turn at the largest whole number ends the loop, past nothing.
+                    let Some(next) = i.checked_add(1) else { break };
+                    i = next;
                 }
                 StmtFlow::Next
             }
@@ -1320,7 +1509,7 @@ impl Runner<'_> {
                 let Some(f) = self.c.files[file].functions.functions.iter().find(|x| x.name.value == function.value).cloned() else {
                     return Ok(StmtFlow::Out(Outcome::Error, format!("`{}` is no function of this file", function.value)));
                 };
-                let (o, why, values) = self.call(&f, file, args, scope)?;
+                let (o, why, values) = self.call(&f, file, args, scope, ctx.until)?;
                 if o != Outcome::Pass {
                     return Ok(StmtFlow::Out(o, format!("{}: {why}", function.value)));
                 }
@@ -1341,8 +1530,10 @@ impl Runner<'_> {
         squash(text.get(span.start..span.end).unwrap_or(""))
     }
 
-    /// Call a function: its inputs from the caller's scope, its body under its bound, its outputs.
-    fn call(&mut self, f: &Function, file: usize, args: &[Arg], caller: &Scope) -> R<(Outcome, String, Vec<Value>)> {
+    /// Call a function: its inputs from the caller's scope, its body under its own bound and its
+    /// caller's (`within`: the run's for a step, the calling function's for a call inside one),
+    /// its outputs.
+    fn call(&mut self, f: &Function, file: usize, args: &[Arg], caller: &Scope, within: i64) -> R<(Outcome, String, Vec<Value>)> {
         let mut local = Scope::new();
         for input in &f.inputs {
             let Some(arg) = args.iter().find(|a| a.name.value == input.name.value) else {
@@ -1361,8 +1552,8 @@ impl Runner<'_> {
             }
         }
         let until = match &f.timeout {
-            Some(t) => self.clock.saturating_add(t.value).min(self.deadline),
-            None => self.deadline,
+            Some(t) => self.clock.saturating_add(t.value).min(within),
+            None => within,
         };
         let flow = self.exec(&f.body, &mut local, &Ctx { until, file: Some(file) })?;
         if let StmtFlow::Out(o, why) = flow {

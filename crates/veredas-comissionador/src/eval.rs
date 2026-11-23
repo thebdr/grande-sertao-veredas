@@ -180,7 +180,7 @@ pub fn eval(e: &Expr, env: &mut dyn Env) -> E {
         ExprKind::Unary { op: UnOp::Neg, expr } => match eval(expr, env)? {
             Value::Int(i) => i.checked_neg().map(Value::Int).ok_or_else(|| fault("a whole number past its range")),
             Value::Float(x) => Ok(Value::Float(-x)),
-            Value::Duration(d) => Ok(Value::Duration(-d)),
+            Value::Duration(d) => d.checked_neg().map(Value::Duration).ok_or_else(|| fault("a duration past its range")),
             v => Err(fault(format!("`-` takes a number or a duration, not {}", v.kind()))),
         },
         ExprKind::Binary { op: BinOp::And, left, right } => {
@@ -234,6 +234,7 @@ pub fn arith(op: BinOp, l: &Value, r: &Value) -> E {
     };
     let bad = || fault(format!("`{sym}` does not take {} and {}", l.kind(), r.kind()));
     let range = || fault("a whole number past its range");
+    let span = || fault("a duration or a moment past its range");
     match (op, l, r) {
         (BinOp::Div, _, _) if num(r) == Some(0.0) && num(l).is_some() => Err(fault("a division by zero")),
         (BinOp::Rem, Int(_), Int(0)) => Err(fault("a division by zero")),
@@ -250,18 +251,24 @@ pub fn arith(op: BinOp, l: &Value, r: &Value) -> E {
                 _ => a * b,
             }))
         }
-        (BinOp::Sub, Time(a), Time(b)) => Ok(Duration(a - b)),
-        (BinOp::Add, Time(a), Duration(d)) | (BinOp::Add, Duration(d), Time(a)) => Ok(Time(a + d)),
-        (BinOp::Sub, Time(a), Duration(d)) => Ok(Time(a - d)),
-        (BinOp::Add, Duration(a), Duration(b)) => Ok(Duration(a + b)),
-        (BinOp::Sub, Duration(a), Duration(b)) => Ok(Duration(a - b)),
-        (BinOp::Mul, Duration(d), n @ (Int(_) | Float(_))) | (BinOp::Mul, n @ (Int(_) | Float(_)), Duration(d)) => {
-            Ok(Duration((*d as f64 * num(n).unwrap_or(0.0)).round() as i64))
-        }
+        (BinOp::Sub, Time(a), Time(b)) => a.checked_sub(*b).map(Duration).ok_or_else(span),
+        (BinOp::Add, Time(a), Duration(d)) | (BinOp::Add, Duration(d), Time(a)) => a.checked_add(*d).map(Time).ok_or_else(span),
+        (BinOp::Sub, Time(a), Duration(d)) => a.checked_sub(*d).map(Time).ok_or_else(span),
+        (BinOp::Add, Duration(a), Duration(b)) => a.checked_add(*b).map(Duration).ok_or_else(span),
+        (BinOp::Sub, Duration(a), Duration(b)) => a.checked_sub(*b).map(Duration).ok_or_else(span),
+        (BinOp::Mul, Duration(d), Int(n)) | (BinOp::Mul, Int(n), Duration(d)) => d.checked_mul(*n).map(Duration).ok_or_else(span),
+        (BinOp::Mul, Duration(d), Float(x)) | (BinOp::Mul, Float(x), Duration(d)) => whole(*d as f64 * x).map(Duration).ok_or_else(span),
         (BinOp::Div, Duration(_), Duration(0)) => Err(fault("a division by zero")),
         (BinOp::Div, Duration(a), Duration(b)) => Ok(Float(*a as f64 / *b as f64)),
         _ => Err(bad()),
     }
+}
+
+/// A float rounded to the whole number nearest it, when one holds it: never saturated.
+fn whole(x: f64) -> Option<i64> {
+    let r = x.round();
+    // 2^63 is the first float past the range; every float below it in magnitude fits.
+    (r.is_finite() && r >= -9_223_372_036_854_775_808.0 && r < 9_223_372_036_854_775_808.0).then_some(r as i64)
 }
 
 /// A text read as a number, trimmed.
@@ -316,7 +323,7 @@ fn builtin(name: &str, v: &[Value], now: i64) -> E {
     match (name, v) {
         ("abs", [Int(i)]) => i.checked_abs().map(Int).ok_or_else(|| fault("a whole number past its range")),
         ("abs", [Float(x)]) => Ok(Float(x.abs())),
-        ("abs", [Duration(d)]) => Ok(Duration(d.abs())),
+        ("abs", [Duration(d)]) => d.checked_abs().map(Duration).ok_or_else(|| fault("a duration past its range")),
         ("abs", _) => Err(want("a number or a duration")),
         ("min" | "max", vals) if !vals.is_empty() => {
             let mut best = vals[0].clone();
@@ -329,7 +336,7 @@ fn builtin(name: &str, v: &[Value], now: i64) -> E {
             Ok(best)
         }
         ("round", [x]) => match num(x) {
-            Some(f) => Ok(Int(f.round() as i64)),
+            Some(f) => whole(f).map(Int).ok_or_else(|| fault("`round` gives a whole number past its range")),
             None => Err(want("a number")),
         },
         ("round", [x, Int(p)]) => match num(x) {
