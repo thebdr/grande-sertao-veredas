@@ -7,10 +7,10 @@
     "cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | python3 -I -c 'import json, os, sys; m = json.load(sys.stdin); seen = lambda keep: sorted((p[\"name\"], t[\"name\"], t[\"kind\"], os.path.relpath(t[\"src_path\"], os.path.dirname(p[\"manifest_path\"]))) for p in m[\"packages\"] for t in p[\"targets\"] if keep(p, t)); want = [(\"orcl-std\", \"blocks\", [\"test\"], \"tests/blocks.rs\"), (\"orcl-std\", \"orcl_std\", [\"lib\"], \"src/lib.rs\")]; sys.exit(seen(lambda p, t: t[\"name\"] in (\"orcl_std\", \"orcl-std\", \"blocks\")) != want or seen(lambda p, t: p[\"name\"] == \"orcl-std\") != want)' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS=true cargo nextest run -p orcl-std --release --test blocks --run-ignored only --no-tests fail -E 'test(=the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link)' && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none"
   ],
   "exitCode": 0,
-  "outputSha": "992dcd5872b44662fbf4126987d8b360516db1fb3189841a73480702fc8854de",
-  "outputTail": "all doctests ran in 0.22s; merged doctests compilation took 0.17s\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s\n     Running unittests src/lib.rs (target/debug/build/orcl-std/6f4af301044bd167/out/orcl_std-6f4af301044bd167)\n     Running tests/blocks.rs (target/debug/build/orcl-std/04ccbbb91e41921e/out/blocks-04ccbbb91e41921e)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s\n   Doc-tests orcl_std\n    Finished `release` profile [optimized] target(s) in 0.13s\n────────────\n Nextest run ID 7c6d93e4-9ced-4134-8c4c-9ca6bc2ff25d with nextest profile: default\n    Starting 1 test across 1 binary (51 tests skipped)\n        PASS [   0.915s] (1/1) orcl-std::blocks the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link\n────────────\n     Summary [   0.916s] 1 test run: 1 passed, 51 skipped\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s",
-  "ranAt": "2026-11-23T05:14:24.675Z",
-  "headCommit": "9518f7abd12c23ec6cd824f28adc8eae27f5c599",
+  "outputSha": "3baa89f14fbe703104b0fcb7d89f2032aababf71101e110b5df09163520de2da",
+  "outputTail": "all doctests ran in 0.22s; merged doctests compilation took 0.17s\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s\n     Running unittests src/lib.rs (target/debug/build/orcl-std/6f4af301044bd167/out/orcl_std-6f4af301044bd167)\n     Running tests/blocks.rs (target/debug/build/orcl-std/04ccbbb91e41921e/out/blocks-04ccbbb91e41921e)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s\n   Doc-tests orcl_std\n    Finished `release` profile [optimized] target(s) in 0.15s\n────────────\n Nextest run ID 9da00d46-2224-4555-a853-0b916ae1d3ac with nextest profile: default\n    Starting 1 test across 1 binary (57 tests skipped)\n        PASS [   0.748s] (1/1) orcl-std::blocks the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link\n────────────\n     Summary [   0.749s] 1 test run: 1 passed, 57 skipped\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s",
+  "ranAt": "2026-11-23T06:05:31.905Z",
+  "headCommit": "2648e9db38f73c775e4fd9c28946262f377d9802",
   "tests": [
     {
       "name": "crates/orcl-std/src/timers.rs",
@@ -50,7 +50,7 @@
     {
       "name": "crates/orcl-std/tests/blocks.rs",
       "file": "crates/orcl-std/tests/blocks.rs",
-      "fileSha": "9be6a34c2a884ff1be99ab658bc4208ab94ef8ab7d60c57f32d2b1a83ffa9e95"
+      "fileSha": "a5672976194de65674e2d4723c35199a58ec9609858ee4bd6f433cdfaa658363"
     }
   ]
 }
