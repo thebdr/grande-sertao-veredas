@@ -1128,7 +1128,7 @@ pub fn sniff_csv_options(path: &str) -> Result<CsvOptions, StoreError> {
     match describe_types(&conn, &csv_scan_sql(path, &opts)) {
         Ok(auto) if looks_unsplit(&auto) => {
             if let Some(o) = padded(&conn) {
-                opts = fitting(path, o);
+                opts = fitting(&conn, path, o);
             }
         }
         Ok(_) => {
@@ -1144,14 +1144,14 @@ pub fn sniff_csv_options(path: &str) -> Result<CsvOptions, StoreError> {
             if let Some(sniffed) = sniffed_dialect(&conn, path, false).map(|d| with_quote_seen(d, sniffed_dialect(&conn, path, true)))
                 && csv_is_ragged(path, &sniffed)
             {
-                opts = fitting(path, sniffed);
+                opts = fitting(&conn, path, sniffed);
             }
         }
         // The sniffer refused the file: the padded reader takes it when a delimiter splits it,
         // and the sniffer's own refusal stands when none does (a missing file, a file of one
         // column, a file that is no CSV).
         Err(e) => match padded(&conn) {
-            Some(o) => opts = fitting(path, o),
+            Some(o) => opts = fitting(&conn, path, o),
             None => return Err(e),
         },
     }
@@ -1225,9 +1225,11 @@ pub fn csv_is_ragged(path: &str, opts: &CsvOptions) -> bool {
     csv_field_counts(path, opts).is_some_and(|counts| counts.windows(2).any(|w| w[0] != w[1]))
 }
 
-/// Whether a dialect fits a file: its header splits into at least two fields, and into as many
-/// as most of its rows do (a `;` file with decimal commas read on `,` splits its header into one
-/// field and its rows into several; a long or a short row here and there changes nothing).
+/// Whether a dialect fits a file: its header splits into at least two fields, into no fewer than
+/// most of its rows do (the larger count on a tie), and into as many as one row at least (a `;`
+/// file with decimal commas read on `,` splits its header into one field and its rows into
+/// several; a header may name a column most rows leave short, never more columns than every row
+/// holds, nor fewer than most).
 pub fn csv_header_fits(path: &str, opts: &CsvOptions) -> bool {
     let Some(counts) = csv_field_counts(path, opts) else { return false };
     let Some((&header, rows)) = counts.split_first() else { return false };
@@ -1242,22 +1244,40 @@ pub fn csv_header_fits(path: &str, opts: &CsvOptions) -> bool {
         *tally.entry(*r).or_default() += 1;
     }
     let most = tally.values().max().copied().unwrap_or(0);
-    tally.get(&header) == Some(&most)
+    let usual = tally.iter().filter(|(_, n)| **n == most).map(|(count, _)| *count).max().unwrap_or(0);
+    header >= usual && tally.contains_key(&header)
 }
 
-/// The dialect a file is read in: `opts` when it fits the file (above), else the delimiter with
-/// the same quote and escape that fits and splits the header widest, the first in
-/// `CSV_DELIMS`'s order on a tie; `opts` again when none fits.
-fn fitting(path: &str, opts: CsvOptions) -> CsvOptions {
+/// The dialect a file is read in (C-041): `opts` when it fits the file (above), else the delimiter
+/// with the same quote and escape that fits and splits the header widest (the first in
+/// `CSV_DELIMS`'s order on a tie), but never one that types fewer columns as numbers than `opts`
+/// does, by the decimal comma or not, unless `opts` leaves the header one field (a `;` file whose
+/// header's units hold as many commas as its rows' decimals splits on `,` as it splits on `;`,
+/// and on `,` every number is cut in two); `opts` again when none does.
+pub fn csv_fitting_dialect(path: &str, opts: &CsvOptions) -> CsvOptions {
+    match Connection::open_in_memory() {
+        Ok(conn) => fitting(&conn, path.trim(), opts.clone()),
+        Err(_) => opts.clone(),
+    }
+}
+
+fn fitting(conn: &Connection, path: &str, opts: CsvOptions) -> CsvOptions {
     if csv_header_fits(path, &opts) {
         return opts;
     }
+    let numbers = |o: &CsvOptions| -> usize {
+        let typed = |o: &CsvOptions| describe_types(conn, &csv_scan_sql(path, o)).map(|cols| cols.iter().filter(|(_, t)| is_numeric_type(t)).count()).unwrap_or(0);
+        typed(o).max(typed(&CsvOptions { decimal_comma: true, ..o.clone() }))
+    };
+    let split = csv_field_counts(path, &opts).and_then(|v| v.first().copied()).is_some_and(|h| h >= 2);
+    let floor = split.then(|| numbers(&opts));
     let mut best: Option<(usize, CsvOptions)> = None;
     for d in CSV_DELIMS {
         let c = CsvOptions { delim: Some(d.to_string()), ..opts.clone() };
         if csv_header_fits(path, &c)
             && let Some(header) = csv_field_counts(path, &c).and_then(|v| v.first().copied())
             && best.as_ref().is_none_or(|(b, _)| header > *b)
+            && floor.is_none_or(|f| numbers(&c) >= f)
         {
             best = Some((header, c));
         }

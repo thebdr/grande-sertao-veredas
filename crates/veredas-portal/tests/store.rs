@@ -1236,6 +1236,41 @@ fn a_dialect_fits_the_header_as_it_fits_the_rows() {
     }
 }
 
+/// A `;` file whose header's units hold as many commas as its rows' decimals, most rows short or
+/// every one ending on `;`: read on `;` with the comma, never on `,`, where every number is cut in
+/// two. A header fits no fewer fields than most rows split into and as many as one row at least;
+/// among the delimiters that fit, the widest header is taken, and never one typing fewer numbers
+/// than the dialect it replaces, unless that one leaves the header a single field.
+#[test]
+fn a_header_fits_no_fewer_fields_than_most_rows_and_a_fit_never_types_fewer_numbers() {
+    let dir = tempfile::tempdir().unwrap();
+    // A logger whose note is written only at an alarm.
+    let alarms = csv_file(dir.path(), "alarms.csv", "Zeit;Druck, bar;Bemerkung\n10:00;2,5\n10:01;2,6\n10:02;2,7;Alarm, kurz\n10:03;2,8\n10:04;2,9\n");
+    assert!(csv_header_fits(&alarms, &delim(";")), "a column most rows leave short");
+    let (opts, page) = read_as_sniffed(&alarms);
+    assert_eq!((opts.delim.as_deref(), opts.decimal_comma), (Some(";"), true), "{opts:?}");
+    assert_eq!((page.total, names(&page)), (5, vec!["Zeit", "Druck, bar", "Bemerkung"]));
+    assert_eq!((page.rows[0][1].clone(), page.rows[2][2].clone()), (serde_json::json!(2.5), serde_json::json!("Alarm, kurz")));
+    // An export ending every data row on `;`, with a short row.
+    let trailing = csv_file(dir.path(), "trailing.csv", "time;pressure, bar;temp, C\n10:00;2,5;3,5;\n10:01;2,6;3,6;\n10:02;2,7\n10:03;2,8;3,8;\n");
+    assert!(csv_header_fits(&trailing, &delim(",")) && !csv_header_fits(&trailing, &delim(";")), "on `,` the units split as the decimals do");
+    let (opts, page) = read_as_sniffed(&trailing);
+    assert_eq!((opts.delim.as_deref(), opts.decimal_comma), (Some(";"), true), "{opts:?}");
+    assert_eq!((page.total, page.rows[0][1].clone(), page.rows[0][2].clone()), (4, serde_json::json!(2.5), serde_json::json!(3.5)));
+    assert_eq!(csv_fitting_dialect(&trailing, &delim(";")).delim.as_deref(), Some(";"), "`,` fits, and types no number");
+    // The header against most rows, and against every row.
+    let minority = csv_file(dir.path(), "minority.csv", "time;pressure, bar\n1,5;2,5\n3,5;4,5\n7;6,5\n");
+    assert!(!csv_header_fits(&minority, &delim(",")), "two fields on `,` where most rows split into three");
+    assert!(csv_header_fits(&minority, &delim(";")));
+    let tied = csv_file(dir.path(), "tied.csv", "time;pressure, bar\n1,5;2,5\n7;6,5\n");
+    assert!(!csv_header_fits(&tied, &delim(",")), "rows of three and of two as many: the header is held to three");
+    let unfilled = csv_file(dir.path(), "unfilled.csv", "a;b;c;d\n1;2\n3;4\n5;6;7\n");
+    assert!(!csv_header_fits(&unfilled, &delim(";")), "a header naming more columns than any row holds");
+    // Two delimiters fit a header the given one leaves whole: the wider.
+    let two_fit = csv_file(dir.path(), "two_fit.csv", "a;b|c|d\n1;2|3|4\n5;6|7|8\n");
+    assert_eq!(csv_fitting_dialect(&two_fit, &delim(",")).delim.as_deref(), Some("|"), "three fields on `|`, two on `;`");
+}
+
 /// A headerless `;` file of decimal commas, collapsed by a short row (a logger's last line cut
 /// off as it writes): on `,` it types as many numbers as on `;` with the comma (the integers and
 /// the fractions, text between them), so the fewer columns left as text decide it; a full tie

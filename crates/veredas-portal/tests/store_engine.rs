@@ -192,13 +192,32 @@ fn a_file_database_logs_beside_itself_until_a_checkpoint_folds_the_log_in() {
     assert!(logged > 0, "committed rows logged beside the file, in {}", wal.display());
     conn.execute_batch("CHECKPOINT").unwrap();
     assert!(!wal.exists() || std::fs::metadata(&wal).unwrap().len() == 0, "the log folded in");
-    let block: i64 = conn.query_row("SELECT block_size FROM pragma_database_size()", [], |r| r.get(0)).unwrap();
-    let blocks: i64 = conn.query_row("SELECT total_blocks FROM pragma_database_size()", [], |r| r.get(0)).unwrap();
-    let size = std::fs::metadata(&db).unwrap().len() as i64;
-    assert!(blocks > 0 && size >= blocks * block, "{size} bytes for {blocks} blocks of {block}");
-    assert_eq!((size - blocks * block) % 4096, 0, "a header of whole pages beside the blocks: {size} bytes, {blocks} blocks of {block}");
-    let n: i64 = conn.query_row("SELECT count(*) FROM t", [], |r| r.get(0)).unwrap();
-    assert_eq!(n, 10_000);
+    // The file is its three 4 KiB headers and its blocks, whole: at this size and again after it
+    // grew, the growth a whole number of blocks.
+    let layout = |conn: &Connection| -> (i64, i64, i64) {
+        let (block, blocks): (i64, i64) = conn.query_row("SELECT block_size, total_blocks FROM pragma_database_size()", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        (block, blocks, std::fs::metadata(&db).unwrap().len() as i64)
+    };
+    let (block, blocks, size) = layout(&conn);
+    assert!(blocks > 0, "{blocks} blocks");
+    assert_eq!(size, 3 * 4096 + blocks * block, "{size} bytes for {blocks} blocks of {block}");
+    let mut app = conn.appender("t").unwrap();
+    for i in 10_000..210_000i64 {
+        app.append_row(params![i, format!("row {i}")]).unwrap();
+    }
+    app.flush().unwrap();
+    drop(app);
+    conn.execute_batch("CHECKPOINT").unwrap();
+    let (_, grown, larger) = layout(&conn);
+    assert!(grown > blocks, "{grown} blocks after {blocks}");
+    assert_eq!(larger, 3 * 4096 + grown * block, "{larger} bytes for {grown} blocks of {block}");
+    assert_eq!((larger - size) % block, 0, "grown by whole blocks");
+    // Folded in: the connection gone, no log beside the file, the rows read back from the file.
+    drop(conn);
+    assert!(!wal.exists() || std::fs::metadata(&wal).unwrap().len() == 0, "no log after the checkpoint and the close");
+    let back = Connection::open(&db).unwrap();
+    let n: i64 = back.query_row("SELECT count(*) FROM t", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 210_000);
 }
 
 /// A connection behind a mutex is shared across threads: the store's layout.
