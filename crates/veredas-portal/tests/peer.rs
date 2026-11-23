@@ -221,11 +221,12 @@ fn a_portal_follows_another_s_stream_its_lag_its_end_and_a_fresh_hello() {
     let mut got = Vec::new();
     while got.len() < 5 {
         match rt.block_on(events.next_event()).unwrap() {
-            PeerEvent::Data(samples) => got.extend(samples.into_iter().filter(|s| s.source == "log" && s.series == "temp").map(|s| (s.index_ms, s.value, s.count))),
+            PeerEvent::Data(samples) => got.extend(samples.into_iter().filter(|s| s.source == "log" && s.series == "temp").map(|s| (s.index_ms, s.value, s.count, s.key))),
             other => panic!("{other:?}"),
         }
     }
-    assert_eq!(got, (0..5).map(|i| (stamp_ms(i), Some(temp(i)), i as u64 + 1)).collect::<Vec<_>>());
+    // Each sample keyed by the line's item, as the rule keys it.
+    assert_eq!(got, (0..5).map(|i| (stamp_ms(i), Some(temp(i)), i as u64 + 1, Some(format!("A{}", i % 3)))).collect::<Vec<_>>());
 
     // A reader that does not read lags: more frames than the peer's channel holds, each larger
     // than the socket buffers absorb, pushed before it reads one. The frames it then reads and
@@ -737,4 +738,40 @@ fn a_chunk_split_across_calls_a_cut_answer_a_stalled_body_and_every_snapshot_fie
     });
     let s = rt.block_on(PeerClient::new(full.to_string()).snapshot()).unwrap();
     assert_eq!((s.started_ms, s.start_ms, s.window_ms, s.store_now_ms, s.arrival_now_ms, s.writes_armed), (111, Some(222), Some(60_000), 333, 444, true));
+}
+
+/// Round 5's three: an event of another kind, and an unnamed one, skipped on a stream that goes
+/// on; a sample's key read as served; and a chunk longer than its size line says refused by its
+/// shape, never read as an answer.
+#[test]
+fn an_unknown_event_is_skipped_a_key_read_and_a_chunk_overrun_refused() {
+    let rt = reader();
+    let sample = |ms: i64, key: &str| format!("{{\"samples\":[{{\"src\":\"s\",\"ser\":\"t\",\"k\":{key},\"ms\":{ms},\"v\":1.5,\"n\":{ms}}}]}}");
+    let body = format!(
+        "event: data\ndata: {}\n\nevent: fault\ndata: {{\"why\":\"a newer peer's kind\"}}\n\ndata: unnamed\n\nevent: data\ndata: {}\n\n",
+        sample(1, "\"A1\""),
+        sample(2, "null")
+    );
+    let (addr, _) = fake_peer(move |s| {
+        let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+    });
+    let mut events = rt.block_on(PeerClient::new(addr.to_string()).event_stream()).unwrap();
+    let mut got = Vec::new();
+    let end = loop {
+        match rt.block_on(events.next_event()) {
+            Ok(PeerEvent::Data(samples)) => got.extend(samples.into_iter().map(|s| (s.index_ms, s.key))),
+            other => break other,
+        }
+    };
+    assert_eq!(got, vec![(1, Some("A1".to_string())), (2, None)]);
+    assert!(matches!(end, Err(PeerError::Closed)), "{end:?}");
+    // The size line the window's own length: the bytes after it overrun the chunk.
+    let window = r#"{"points":[[1,2.5]],"total":1,"downsampled":false}"#;
+    let (addr, _) = fake_peer(move |s| {
+        let _ = write!(s, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{window}junk\r\n0\r\n\r\n", window.len());
+    });
+    match rt.block_on(PeerClient::new(addr.to_string()).series_window(&SeriesWindow { source: "s", series: "t", ..Default::default() })) {
+        Err(PeerError::Shape(text)) => assert_eq!(text, "a chunk not ended by its line end"),
+        other => panic!("{other:?}"),
+    }
 }
