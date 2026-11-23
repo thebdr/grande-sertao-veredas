@@ -1080,6 +1080,43 @@ fn an_adapter_named_by_the_unspecified_address_is_judged_by_its_sessions_peer() 
     assert!(wait(Duration::from_secs(1), || s.counters().consumed > 3));
     assert_eq!(s.counters().stray, 0);
     assert_eq!(s.state(), LinkState::Running);
+    drop(s);
+    // The same name with the reply naming an I/O address of its own (127.0.0.2): an input from
+    // the session's peer (127.0.0.1) is taken by the peer alone, one from the named address too,
+    // one from a third host is stray.
+    let io2 = UdpSocket::bind("127.0.0.2:0").unwrap();
+    let a = Adapter::start(Script {
+        io_named: Some(io2.local_addr().unwrap()),
+        ..Script::default()
+    });
+    a.producing.store(false, Ordering::SeqCst);
+    let mut sp = spec(&a);
+    (sp.adapter, sp.timeout_multiplier) = (
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), a.addr.port()),
+        7,
+    );
+    let s = Scanner::open(&sp).unwrap();
+    let (id, to) = (s.opened().t_to_o_id, s.opened().receives_on);
+    assert_eq!(s.opened().sends_to, io2.local_addr().unwrap());
+    a.io.send_to(&input_frame(id, 1, 1, None, &[0xAA; 6]), to)
+        .unwrap();
+    assert!(
+        wait(Duration::from_secs(1), || s.inputs().data == [0xAA; 6]),
+        "from the session's peer"
+    );
+    assert_eq!((s.counters().consumed, s.counters().stray), (1, 0));
+    io2.send_to(&input_frame(id, 2, 2, None, &[0xBB; 6]), to)
+        .unwrap();
+    assert!(
+        wait(Duration::from_secs(1), || s.inputs().data == [0xBB; 6]),
+        "from the named address"
+    );
+    let third = UdpSocket::bind("127.0.0.3:0").unwrap();
+    third
+        .send_to(&input_frame(id, 3, 3, None, &[0xCC; 6]), to)
+        .unwrap();
+    assert!(wait(Duration::from_secs(1), || s.counters().stray == 1));
+    assert_eq!(s.inputs().data, [0xBB; 6]);
 }
 
 /// Only this connection's inputs from the adapter keep it alive.
