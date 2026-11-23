@@ -75,7 +75,9 @@ export interface SessionEntry {
 }
 
 export async function getJson<T>(url: string): Promise<T> {
-  const r = await fetch(url, { cache: "no-store" });
+  // A redirect is never followed, as a write's is not: a read answered by one fails, said as the
+  // view's refusal, never as another address's answer.
+  const r = await fetch(url, { cache: "no-store", redirect: "error" });
   const body = await r.json().catch(() => ({ error: `${r.status} ${r.statusText}` }));
   if (!r.ok) throw new Error((body as { error?: string }).error ?? `${r.status}`);
   return body as T;

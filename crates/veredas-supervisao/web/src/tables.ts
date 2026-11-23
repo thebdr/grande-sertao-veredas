@@ -114,16 +114,20 @@ export class Tables {
       const time = at >= 0 ? at : p.schema.findIndex((c) => c.name === "ts");
       if (to === null && this.to === null && this.table === table && time >= 0 && typeof p.rows[0]?.[time] === "number") this.to = Math.floor(p.rows[0][time] as number) + 1;
       const prev = h("button", { disabled: offset === 0 }, "‹ Newer") as HTMLButtonElement;
-      const next = h("button", { disabled: offset + PAGE >= p.total }, "Older ›") as HTMLButtonElement;
-      prev.onclick = () => { if (this.table === table) { this.offset = Math.max(0, offset - PAGE); void this.page(); } };
-      next.onclick = () => { if (this.table === table && offset + PAGE < p.total) { this.offset = offset + PAGE; void this.page(); } };
       // A page with no rows (a table with none, or one whose rows went out of a store kept as a
       // window while it was paged: portal drops them by their arrival) says none, never a range
       // past its end.
       const [from, last] = p.rows.length === 0 ? [0, 0] : [offset + 1, offset + p.rows.length];
+      // Portal reads a page's count and its rows as one moment of the store (C-041); a count short
+      // of the rows it came with all the same, the total said is at least the rows shown, never a
+      // range past it.
+      const total = Math.max(p.total, last);
+      const next = h("button", { disabled: offset + PAGE >= total }, "Older ›") as HTMLButtonElement;
+      prev.onclick = () => { if (this.table === table) { this.offset = Math.max(0, offset - PAGE); void this.page(); } };
+      next.onclick = () => { if (this.table === table && offset + PAGE < total) { this.offset = offset + PAGE; void this.page(); } };
       this.draw(
         "page",
-        h("div", { class: "pager" }, h("strong", {}, table), h("span", { class: "mono muted", "data-rows": `${from}-${last}/${p.total}` }, `rows ${from}–${last} of ${p.total}${ordered ? ", newest first" : ", unordered"}`), prev, next),
+        h("div", { class: "pager" }, h("strong", {}, table), h("span", { class: "mono muted", "data-rows": `${from}-${last}/${total}` }, `rows ${from}–${last} of ${total}${ordered ? ", newest first" : ", unordered"}`), prev, next),
         h("div", { class: "scroll" }, h("table", { class: "dt" },
           h("thead", {}, h("tr", {}, ...p.schema.map((c) => h("th", {}, c.name, h("span", { class: "muted" }, ` ${c.type}`))))),
           h("tbody", {}, ...p.rows.map((r) => h("tr", {}, ...r.map((v) => h("td", { class: "mono" }, cell(v)))))))),

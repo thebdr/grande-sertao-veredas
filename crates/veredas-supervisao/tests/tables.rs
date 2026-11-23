@@ -257,7 +257,9 @@ fn every_mark_shown(page: &mut Browser, when: &str) {
 /// any order of arrival, of an answer or a refusal, can be driven. And while `__gone` is set, the
 /// next page of rows answered as portal answers once that many of a table's oldest rows have gone
 /// out of a store kept as a window (C-090: portal drops them by their arrival): its total less
-/// them, its rows cut where the table now ends.
+/// them, its rows cut where the table now ends. And while `__ahead` is set, the next page of rows
+/// answered with its count that many short of its rows (portal's reads of both one moment of the
+/// store, C-041: a page's words held to what it shows all the same).
 /// `KEEP_ANSWERS`, and the views' shared census of what hides a mark kept in the page beside it
 /// (`window.__hidden`, read by `SHOWN_FN`).
 fn keep_answers() -> String {
@@ -296,6 +298,12 @@ const KEEP_ANSWERS: &str = r#"(() => {
       j.total -= window.__gone;
       j.rows = j.rows.slice(0, Math.max(0, j.total - offset));
       window.__gone = 0;
+      window.__answers.push({ url, body: j });
+      return new Response(JSON.stringify(j), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (window.__ahead && url.includes("/api/table/data") && r.ok) {
+      j.total -= window.__ahead;
+      window.__ahead = 0;
       window.__answers.push({ url, body: j });
       return new Response(JSON.stringify(j), { status: 200, headers: { "content-type": "application/json" } });
     }
@@ -1016,6 +1024,21 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
         click(&mut page, "‹ Newer");
         shown_at(&mut page, "51-100/110");
     }
+    // A count short of the rows it came with (portal reads both as one moment, C-041; its answer so
+    // changed here): the total said is at least the rows shown, the page the last one, never a
+    // range past its end.
+    page.eval("(() => { window.__ahead = 70; return true; })()");
+    click(&mut page, "Older ›");
+    page.wait_for(r#"document.querySelector(".list-main .pager [data-rows]")?.dataset.rows === "101-110/110" || null"#, Duration::from_secs(20));
+    page.eval("(() => { window.__ahead = 70; return true; })()");
+    click(&mut page, "‹ Newer");
+    page.wait_for(r#"document.querySelector(".list-main .pager [data-rows]")?.dataset.rows === "51-100/100" || null"#, Duration::from_secs(20));
+    let short = page.eval(shown_js);
+    assert_eq!((short["said"].clone(), short["body"].as_array().unwrap().len(), short["newer"].clone(), short["older"].clone(), short["all_shown"].clone()), (json!("rows 51–100 of 100, newest first"), 50, json!(false), json!(true), json!(true)), "a count short of its rows");
+    click(&mut page, "‹ Newer");
+    shown_at(&mut page, "1-50/110");
+    click(&mut page, "Older ›");
+    shown_at(&mut page, "51-100/110");
     // Every ordered pair of the view's own controls (a pick, Newer, Older) from that middle page,
     // the first one's answer held back so the second comes while it is out: the page shown is the
     // later pick's, else the first action's, never a page past the end nor another table's offset.
@@ -1155,6 +1178,26 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     pick(&mut page, "sorts");
     let repicked = shown_at(&mut page, "1-50/112");
     assert_eq!(repicked["body"][0][travel], json!("3"), "the sort stored since, newest, on the sorts picked again");
+    // A read answered by a redirect in place of portal's (as something between the page and portal
+    // might give: the sorts' rows for the outlets' asked), through the browser's own handling of
+    // one: never followed, the view saying its refusal, no page of another table under the pick.
+    page.call("Fetch.enable", json!({ "patterns": [{ "urlPattern": "*/api/table/data*", "requestStage": "Response" }] }));
+    let seen = page.events_of("Fetch.requestPaused").len();
+    page.eval(r#"document.querySelector('.list button[data-table="outlets"]').click()"#);
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let moved = loop {
+        let all = page.events_of("Fetch.requestPaused");
+        if all.len() > seen {
+            break all[seen].clone();
+        }
+        assert!(std::time::Instant::now() < deadline, "no read paused");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let to = moved["params"]["request"]["url"].as_str().unwrap().replace("name=outlets", "name=sorts");
+    page.call("Fetch.fulfillRequest", json!({ "requestId": moved["params"]["requestId"], "responseCode": 302, "responseHeaders": [{ "name": "location", "value": to }], "body": "" }));
+    let said = page.wait_for(r#"document.querySelector(".list-main > p.error")?.textContent ?? null"#, Duration::from_secs(20));
+    assert_eq!((said, page.eval(shown_js)), (json!("TypeError: Failed to fetch"), Value::Null), "a read redirected: refused, nothing of another address drawn");
+    page.call("Fetch.disable", json!({}));
 
     // Every request the page made went to this host and this session's own paths, its portal
     // reads the four routes under `/s/loop/portal/api/`, its stream the session's objects.
