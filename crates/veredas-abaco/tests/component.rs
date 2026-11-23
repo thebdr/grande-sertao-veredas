@@ -208,6 +208,37 @@ const REVIEWED: &[&str] = &[
     "zeroize_derive", "zip", "zlib-rs", "zmij", "zopfli",
 ];
 
+/// The crates Ábaco's graph gains in the suite's workspace build from features other members turn
+/// on (cargo unifies a crate's features across the build), each reviewed: `miniz_oxide` and
+/// `adler2`, flate2's second backend; `foldhash`, hashbrown's default hasher, which maquinar's
+/// physics (`parry3d`) turns on, the hasher-free table indexmap uses unchanged. A crate joining
+/// this way fails until it is reviewed and added.
+const WORKSPACE_EXTRA: &[&str] = &["adler2", "foldhash", "miniz_oxide"];
+
+#[test]
+fn in_the_suites_workspace_build_its_graph_is_the_reviewed_one() {
+    // every member's tree, each crate's dependencies repeated wherever it stands; Ábaco's is the
+    // block from its root to the next member's
+    let tree = cargo(&["tree", "--workspace", "-e", "normal", "--no-dedupe", "--prefix", "depth", "--format", "{p}"]);
+    let mut in_abaco = false;
+    let mut crates = BTreeSet::new();
+    for line in tree.lines() {
+        let depth_end = line.find(|c: char| !c.is_ascii_digit()).unwrap_or(line.len());
+        let (depth, rest) = line.split_at(depth_end);
+        let name = rest.split_whitespace().next().unwrap_or("").to_string();
+        if depth == "0" {
+            in_abaco = name == "veredas-abaco";
+        }
+        if in_abaco && !name.is_empty() {
+            crates.insert(name);
+        }
+    }
+    assert!(crates.contains("veredas-abaco") && crates.contains("ironcalc_base"), "{crates:?}");
+    let unreviewed: Vec<&String> =
+        crates.iter().filter(|c| !REVIEWED.contains(&c.as_str()) && !WORKSPACE_EXTRA.contains(&c.as_str())).collect();
+    assert!(unreviewed.is_empty(), "in the workspace build, not reviewed: {unreviewed:?}");
+}
+
 /// Names that would be a plant connection, for a clearer message when one joins.
 const PLANT_STACK: &[&str] =
     &["async-opcua", "opcua", "duckdb", "libduckdb", "rusqlite", "socket2", "tokio", "mio", "axum", "hyper", "http", "reqwest", "notify", "inotify", "async-std", "smol"];
@@ -273,15 +304,57 @@ const UPSTREAM_IGNORED: [&str; 8] = [
 ];
 
 #[test]
+fn no_crate_is_patched_or_replaced_by_any_route() {
+    // not in the manifests: the suite's, nor the fork's own, whose suite would then build other
+    // crates than Ábaco links
+    for manifest in ["Cargo.toml", "forks/ironcalc/Cargo.toml"] {
+        let m: toml::Table = toml::from_str(&std::fs::read_to_string(root().join(manifest)).unwrap()).unwrap();
+        assert!(m.get("patch").is_none() && m.get("replace").is_none(), "{manifest} patches crates");
+    }
+    // nor in a cargo configuration cargo would read for either workspace or for this test: from
+    // each folder up to the root of the drive, and cargo's home
+    let home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".cargo")));
+    let mut configs: BTreeSet<PathBuf> = BTreeSet::new();
+    for start in [root(), root().join("forks/ironcalc"), PathBuf::from(env!("CARGO_MANIFEST_DIR"))] {
+        for dir in start.ancestors() {
+            for file in [".cargo/config", ".cargo/config.toml"] {
+                configs.insert(dir.join(file));
+            }
+        }
+    }
+    if let Some(home) = home {
+        configs.insert(home.join("config"));
+        configs.insert(home.join("config.toml"));
+    }
+    for config in configs.iter().filter(|c| c.is_file()) {
+        let t: toml::Table = toml::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
+        assert!(t.get("patch").is_none() && t.get("source").is_none(), "{}: patches or replaces crates", config.display());
+    }
+    // and in what the locks say, whatever route did it: every package from crates.io, or a path
+    // package of that workspace (the suite's members and the fork's two crates; the fork's two
+    // alone), no patch left unused
+    let members: BTreeSet<String> = metadata()["packages"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap().to_string()).collect();
+    for (lock, own) in [
+        ("Cargo.lock", members.iter().map(String::as_str).chain(["ironcalc", "ironcalc_base"]).collect::<BTreeSet<&str>>()),
+        ("forks/ironcalc/Cargo.lock", ["ironcalc", "ironcalc_base"].into_iter().collect()),
+    ] {
+        let l: toml::Table = toml::from_str(&std::fs::read_to_string(root().join(lock)).unwrap()).unwrap();
+        assert!(l.get("patch").is_none(), "{lock} records a patch");
+        for p in l["package"].as_array().unwrap() {
+            let name = p["name"].as_str().unwrap();
+            match p.get("source").and_then(|s| s.as_str()) {
+                Some(CRATES_IO) => {}
+                None => assert!(own.contains(name), "{lock}: {name} is a path package of no member"),
+                Some(other) => panic!("{lock}: {name} from {other}"),
+            }
+        }
+    }
+}
+
+#[test]
 fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
-    // no crate of the workspace is patched or replaced: every crate but the three path packages
-    // comes from crates.io as the lock says
-    let manifest: toml::Table = toml::from_str(&std::fs::read_to_string(root().join("Cargo.toml")).unwrap()).unwrap();
-    assert!(manifest.get("patch").is_none() && manifest.get("replace").is_none(), "the root manifest patches crates");
-    // nor the fork's own, whose suite would then build other crates than Ábaco links
-    let fork_manifest: toml::Table =
-        toml::from_str(&std::fs::read_to_string(root().join("forks/ironcalc/Cargo.toml")).unwrap()).unwrap();
-    assert!(fork_manifest.get("patch").is_none() && fork_manifest.get("replace").is_none(), "the fork's manifest patches crates");
     let paths = [
         format!("veredas-abaco v2.0.0-alpha.1 ({})", root().join("crates/veredas-abaco").display()),
         format!("ironcalc_base v0.9.1 ({})", root().join("forks/ironcalc/base").display()),
