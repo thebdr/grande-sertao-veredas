@@ -10,15 +10,15 @@
     "rt"
   ],
   "exitCode": 0,
-  "outputSha": "9314e99c10e677c3c09fd54eb15eb7532de64ddc568df45703a90f37059723fe",
-  "outputTail": "\nrunning 5 tests\ntest a_cyclic_frame_is_its_id_its_data_and_its_status_to_the_byte ... ok\ntest a_frame_id_is_read_by_its_range ... ok\ntest the_status_bits_are_named ... ok\ntest what_is_not_a_cyclic_frame_is_refused_both_ways ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running tests/rt.rs (target/debug/build/veredas-aranha/e752af01c38ebc1c/out/rt-e752af01c38ebc1c)",
-  "ranAt": "2026-11-23T00:27:00.024Z",
-  "headCommit": "6e7aaf44c2647a9e39d44d90fce37ec411e4302b",
+  "outputSha": "fae22c4e64c99ffd2491c0eacb8bb901931b13e553acd648c1c78bb2e7de1d14",
+  "outputTail": "\nrunning 5 tests\ntest a_cyclic_frame_is_its_id_its_data_and_its_status_to_the_byte ... ok\ntest a_frame_id_is_read_by_its_range ... ok\ntest the_status_bits_are_named ... ok\ntest what_is_not_a_cyclic_frame_is_refused_both_ways ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s\n     Running tests/rt.rs (target/debug/build/veredas-aranha/97016a65fd22681b/out/rt-97016a65fd22681b)",
+  "ranAt": "2026-11-23T05:45:47.397Z",
+  "headCommit": "6e53ec868f39eccd9cb1b05103444e7a207d2dc5",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/rt.rs",
       "file": "crates/veredas-aranha/tests/rt.rs",
-      "fileSha": "541e622f2a9f7e9469143fdea7f96245c0546cba681d8d6e0d33d5ef1687086d"
+      "fileSha": "0ac945876a055384dcaaa01c2a62d36fc85568237cd44b72a5d2db4efcad8140"
     },
     {
       "name": "crates/veredas-aranha/tests/common/mod.rs",
