@@ -83,12 +83,16 @@ mkdir -p /usr/local/libexec
 cat > /usr/local/libexec/veredas-verifica <<'SCRIPT'
 #!/bin/sh
 # The release's files checked against its SHA256SUMS, the network cards the machine sees, and
-# what the provisioning promised: no SSH server, cloud-init off, every executable on the PATH.
+# what the provisioning promised: the recipe's packages installed, no SSH server, cloud-init off,
+# every executable on the PATH.
 cd /opt/veredas/current
 if sha256sum --quiet -c SHA256SUMS; then echo "VEREDAS-SUMS-OK {release}"; else echo "VEREDAS-SUMS-FAILED {release}"; fi
 for c in /sys/class/net/*; do n=$(basename "$c"); [ "$n" = lo ] || echo "VEREDAS-CARD $n $(cat "$c/address")"; done
 if [ -e /usr/sbin/sshd ] || [ -e /lib/systemd/system/ssh.service ] || [ -e /usr/lib/systemd/system/ssh.service ]; then echo "VEREDAS-SSH present"; else echo "VEREDAS-SSH absent"; fi
 if [ -e /etc/cloud/cloud-init.disabled ]; then echo "VEREDAS-CLOUD-INIT disabled"; else echo "VEREDAS-CLOUD-INIT enabled"; fi
+missing=
+for p in {packages}; do dpkg-query -W -f='${{Status}}' "$p" 2>/dev/null | grep -q 'install ok installed' || missing="$missing $p"; done
+if [ -z "$missing" ]; then echo "VEREDAS-PACKAGES ok"; else echo "VEREDAS-PACKAGES missing$missing"; fi
 missing=
 for b in /opt/veredas/current/bin/*; do n=$(basename "$b"); [ "$(command -v "$n")" = "/usr/local/bin/$n" ] || missing="$missing $n"; done
 if [ -z "$missing" ]; then echo "VEREDAS-ON-PATH ok"; else echo "VEREDAS-ON-PATH missing$missing"; fi
@@ -375,9 +379,11 @@ pub fn boot(r: &Recipe, vmdk: &Path, port: u16, qmp: Option<u16>, console: &Path
 /// Builds the tester machine of a release already cut: its bundle under
 /// `target/entrega/<release>/`, the recipe and the guide read at the commit its manifest names.
 /// Whether release `release`'s cut ran to its end: its manifest written where a cut writes it
-/// (`releases/<release>.toml` for a real cut, `<work>/<release>.toml` for a trial) and, wherever it
-/// is, the bundle's own `release.toml` byte for byte. A cut refused after packing (its run together
-/// failed) leaves a bundle and no manifest; a machine is never built from such a bundle.
+/// (`releases/<release>.toml` for a real cut, `<work>/<release>.toml` for a trial; a real cut's
+/// decides over a trial's of the same release left beside the bundle, which the real cut's work
+/// replaced) and the bundle's own `release.toml` byte for byte. A cut refused after packing (its
+/// run together failed) leaves a bundle and no manifest; a machine is never built from such a
+/// bundle.
 /// Why the provisioning's console (its log's tail, then its exit) does not show it finished: no
 /// `ENTREGA-PROVISION-OK`, another exit than 0, or the root's free space not trimmed (`fstrim`'s
 /// line for `/`). Empty when it does.
@@ -398,7 +404,7 @@ pub fn provision_faults(console: &str) -> Vec<String> {
 pub fn cut_finished(root: &Path, release: &str, work: &Path, bundle_manifest: &str) -> Result<(), VmError> {
     let refused = |stderr: String| VmError::Failed { program: "the tester machine".into(), status: "refused".into(), stderr };
     let places = [root.join("releases").join(format!("{release}.toml")), work.join(format!("{release}.toml"))];
-    let found: Vec<&PathBuf> = places.iter().filter(|p| p.exists()).collect();
+    let found: Vec<&PathBuf> = places.iter().filter(|p| p.exists()).take(1).collect();
     if found.is_empty() {
         return Err(refused(format!(
             "release {release} was not cut to its end: no manifest at {} or {}, and a bundle without one is what a refused cut leaves",
@@ -723,6 +729,7 @@ pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
     }
     // What the provisioning promised, as the boot's check says it and systemd at a first boot.
     for (line, what) in [
+        ("VEREDAS-PACKAGES ok", "the recipe's packages are not all installed"),
         ("VEREDAS-SSH absent", "the machine holds an SSH server"),
         ("VEREDAS-CLOUD-INIT disabled", "cloud-init is not disabled"),
         ("VEREDAS-ON-PATH ok", "the release's executables are not all on the PATH"),

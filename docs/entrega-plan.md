@@ -190,7 +190,8 @@ machine was found able to do is the next section). The recipe's choices that are
 `tools/entrega/maquina/maquina.toml` (`veredas-machine`, version 1), never code, so a ruling is an
 edit of that file. A machine is built only from a cut that ran to its end: the release's manifest
 written where the cut writes it (`releases/` for a real cut, the trial's folder beside its bundle)
-and the bundle's own `release.toml` byte for byte; a bundle a refused cut left behind is refused.
+and the bundle's own `release.toml` byte for byte (a real cut's decides over a trial's of the same
+release left beside the bundle); a bundle a refused cut left behind is refused.
 1. **The base**: the distribution's official cloud image (Debian 13, Q433), at a dated build
    named by URL in `maquina.toml` with its SHA-512 copied from the build's own list (served
    over HTTPS, not signed: the pin in the repository is what the recipe trusts),
@@ -222,7 +223,8 @@ and the bundle's own `release.toml` byte for byte; a bundle a refused cut left b
   prove; the proof boot draws on QEMU's standard VGA.
 - **The network takes VMware's card**: the proof boot gives the card an address of VMware's
   prefix that the provisioning never saw, and the boot's check names the cards it sees.
-- **The machine is what the provisioning promised**: the boot's check says there is no SSH server,
+- **The machine is what the provisioning promised**: the boot's check says the recipe's packages are
+  installed (the guest tools among them: their working is VMware's to show), there is no SSH server,
   cloud-init is disabled and every executable of the release is on the `PATH`, and systemd says it
   initializes a machine identity (the shipped disk's is blank); the build itself refuses a
   provisioning whose log does not end finished with the root's free space trimmed.

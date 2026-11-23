@@ -83,7 +83,7 @@ fn proof(console: &str, share: f64, after: &str) -> Proof {
 #[test]
 fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
     let card = format!("VEREDAS-CARD ens4 {}", maquina::PROOF_MAC);
-    let promised = "VEREDAS-SSH absent\nVEREDAS-CLOUD-INIT disabled\nVEREDAS-ON-PATH ok\n[    7.123998] systemd[1]: Initializing machine ID from random generator.\n";
+    let promised = "VEREDAS-PACKAGES ok\nVEREDAS-SSH absent\nVEREDAS-CLOUD-INIT disabled\nVEREDAS-ON-PATH ok\n[    7.123998] systemd[1]: Initializing machine ID from random generator.\n";
     let good = format!("vmw_pvscsi\nvmxnet3\nVEREDAS-SUMS-OK 2.0.0\n{card}\n{promised}");
     assert_eq!(maquina::proof_faults(&proof(&good, 0.3, "a"), "2.0.0"), Vec::<String>::new());
     let no_card = good.replace(&card, "VEREDAS-CARD ens4 52:54:00:12:34:56");
@@ -102,6 +102,13 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
     );
     // What the provisioning promised, each named when the boot does not say it.
     for (said, instead, fault) in [
+        (
+            "VEREDAS-PACKAGES ok",
+            "VEREDAS-PACKAGES missing open-vm-tools open-vm-tools-desktop",
+            "the recipe's packages are not all installed (no `VEREDAS-PACKAGES ok` on the console)",
+        ),
+        ("vmw_pvscsi\n", "", "the guest did not name vmw_pvscsi"),
+        ("vmxnet3\n", "", "the guest did not name vmxnet3"),
         ("VEREDAS-SSH absent", "VEREDAS-SSH present", "the machine holds an SSH server (no `VEREDAS-SSH absent` on the console)"),
         ("VEREDAS-CLOUD-INIT disabled", "VEREDAS-CLOUD-INIT enabled", "cloud-init is not disabled (no `VEREDAS-CLOUD-INIT disabled` on the console)"),
         ("VEREDAS-ON-PATH ok", "VEREDAS-ON-PATH missing veredas-portal", "the release's executables are not all on the PATH (no `VEREDAS-ON-PATH ok` on the console)"),
@@ -144,6 +151,11 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
     ] {
         assert!(s.lines().any(|l| l == line), "{line}");
     }
+    // The boot's check asks the package database for every package the recipe installs, the guest
+    // tools among them (their working is VMware's to show; their presence is not).
+    assert!(r.machine.packages.iter().any(|p| p == "open-vm-tools"), "{:?}", r.machine.packages);
+    let asked = format!("for p in {}; do dpkg-query -W -f='${{Status}}' \"$p\" 2>/dev/null | grep -q 'install ok installed' || missing=\"$missing $p\"; done", r.machine.packages.join(" "));
+    assert!(s.lines().any(|l| l == asked), "{asked}");
     let unit = &s[s.find("cat > /etc/systemd/system/veredas-verifica.service").unwrap()..];
     let unit = &unit[..unit.find("\nUNIT\n").unwrap()];
     assert!(unit.lines().any(|l| l == "Before=serial-getty@ttyS0.service getty@tty1.service"), "{unit}");
@@ -215,6 +227,44 @@ fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
         maquina::ova_faults(&r, &ova, "9.9.9", &opened).unwrap()
     };
     assert_eq!(faults("good", "streamOptimized", r.machine.disk_gb, &same, right), Vec::<String>::new());
+    // The members as packed: owned by another, read as 0600, their sums off; each named.
+    let (_, members) = make("members", "streamOptimized", r.machine.disk_gb, &same, right);
+    let names: Vec<String> = right.iter().map(|n| format!("{name}{n}")).collect();
+    let repack = |label: &str, flags: &[&str]| -> PathBuf {
+        let ova = work.path().join(format!("{label}.ova"));
+        let (o, d) = (ova.display().to_string(), members.display().to_string());
+        let mut args: Vec<&str> = flags.to_vec();
+        args.extend(["-cf", o.as_str(), "-C", d.as_str()]);
+        args.extend(names.iter().map(String::as_str));
+        entrega::vm::run("tar", &args, None).unwrap();
+        ova
+    };
+    for (label, flags, listed) in [
+        ("owner", ["--format=ustar", "--owner=1000", "--group=0", "--numeric-owner", "--mode=a+r,u+w,go-w,a-x,ug-s"], "-rw-r--r-- 1000/0 "),
+        ("mode", ["--format=ustar", "--owner=0", "--group=0", "--numeric-owner", "--mode=u=rw,go="], "-rw------- 0/0 "),
+    ] {
+        let f = maquina::ova_faults(&r, &repack(label, &flags), "9.9.9", &members).unwrap();
+        assert_eq!(f.len(), 3, "{f:?}");
+        assert!(f.iter().all(|x| x.starts_with(&format!("an OVA member is not a 0644 file owned by root: {listed}"))), "{f:?}");
+    }
+    std::fs::write(members.join(format!("{name}.mf")), format!("SHA256({name}.ovf)= {}\nSHA256({vmdk_name})= {}\n", "0".repeat(64), "0".repeat(64))).unwrap();
+    let f = maquina::ova_faults(&r, &repack("sums", &["--format=ustar", "--owner=0", "--group=0", "--numeric-owner", "--mode=a+r,u+w,go-w,a-x,ug-s"]), "9.9.9", &members).unwrap();
+    assert!(f.len() == 1 && f[0].starts_with("the manifest's sums are not the members': "), "{f:?}");
+    // The descriptor's file reference, the disk's capacity and the firmware, each read in its place.
+    let longer = |s: String| s.replacen(&format!(r#"ovf:href="{vmdk_name}" ovf:size=""#), &format!(r#"ovf:href="{vmdk_name}" ovf:size="7"#), 1);
+    let (ova, opened) = make("size", "streamOptimized", r.machine.disk_gb, &longer, right);
+    let size = std::fs::metadata(opened.join(&vmdk_name)).unwrap().len();
+    assert_eq!(
+        maquina::ova_faults(&r, &ova, "9.9.9", &opened).unwrap(),
+        [format!("the descriptor's References name no one file `{vmdk_name}` of {size} bytes as file1")]
+    );
+    let bigger = |s: String| s.replacen(&format!(r#"ovf:capacity="{capacity}""#), &format!(r#"ovf:capacity="1{capacity}""#), 1);
+    assert_eq!(
+        faults("capacity", "streamOptimized", r.machine.disk_gb, &bigger, right),
+        [format!("the descriptor's DiskSection names no one stream-optimized disk vmdisk1 of {capacity} bytes on file1")]
+    );
+    let efi = |s: String| s.replacen(r#"vmw:key="firmware" vmw:value="bios""#, r#"vmw:key="firmware" vmw:value="efi""#, 1);
+    assert_eq!(faults("efi", "streamOptimized", r.machine.disk_gb, &efi, right), ["the descriptor's firmware is not BIOS"]);
     // Another tar format than ustar (GNU's): its listing reads the same, its headers do not.
     let (_, opened) = make("gnu", "streamOptimized", r.machine.disk_gb, &same, right);
     let gnu = work.path().join("gnu-format.ova");
@@ -346,5 +396,13 @@ fn a_machine_is_built_only_from_a_cut_that_ran_to_its_end() {
         assert_eq!(refusal(maquina::from_release(root, release, target)), format!("commit {commit} holds no tools/entrega/maquina/guide.md"));
         std::fs::remove_file(at).unwrap();
     }
+    // A real cut of the release after a trial of it: the trial's manifest left beside the bundle is
+    // superseded, the real cut's decides, whichever the bundle is.
+    std::fs::write(&real, &text).unwrap();
+    std::fs::write(&trial, text.replace(entrega::cut::NOT_RUN, "an older trial")).unwrap();
+    assert_eq!(refusal(maquina::from_release(root, release, target)), format!("commit {commit} holds no tools/entrega/maquina/guide.md"));
+    std::fs::write(&real, text.replace(entrega::cut::NOT_RUN, "cargo nextest run --workspace")).unwrap();
+    std::fs::write(&trial, &text).unwrap();
+    assert_eq!(refusal(maquina::from_release(root, release, target)), format!("{} is not the bundle's own release.toml: the bundle is not that cut's", real.display()));
     assert!(!work.join("maquina").exists(), "no machine was started");
 }
