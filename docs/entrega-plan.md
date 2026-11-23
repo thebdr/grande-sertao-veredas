@@ -224,7 +224,8 @@ release left beside the bundle); a bundle a refused cut left behind is refused.
 - **The network takes VMware's card**: the proof boot gives the card an address of VMware's
   prefix that the provisioning never saw, and the boot's check names the cards it sees.
 - **The machine is what the provisioning promised**: the boot's check says the recipe's packages are
-  installed (the guest tools among them: their working is VMware's to show), there is no SSH server,
+  installed (the guest tools among them: their working is VMware's to show), the bench and supervisão
+  are services of the recipe's user, there is no SSH server,
   cloud-init is disabled and every executable of the release is on the `PATH`, and systemd says it
   initializes a machine identity (the shipped disk's is blank); the build itself refuses a
   provisioning whose log does not end finished with the root's free space trimmed.
@@ -237,7 +238,8 @@ release left beside the bundle); a bundle a refused cut left behind is refused.
   colour (read from the release's page) covers 15 % of the screen; a desktop without the page, its
   wallpaper and panel, holds none of it, however many colours it has.
 - **The OVA is what VMware reads**: `entrega prova` checks the OVA's members, descriptor and sums
-  before it boots the disk, as the machine's test does.
+  before it boots the disk, as the machine's test does, with the recipe and supervisão's page canvas
+  at the release's own commit, so an older release is proven by its own.
 - **The package is what it says**: the OVA's members in order, the descriptor naming the disk with
   its size and capacity, the `.mf` sums matching the members.
 - What only VMware proves is listed below, and stays the architect's to try.

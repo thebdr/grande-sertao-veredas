@@ -83,7 +83,7 @@ fn proof(console: &str, share: f64, after: &str) -> Proof {
 #[test]
 fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
     let card = format!("VEREDAS-CARD ens4 {}", maquina::PROOF_MAC);
-    let promised = "VEREDAS-PACKAGES ok\nVEREDAS-SSH absent\nVEREDAS-CLOUD-INIT disabled\nVEREDAS-ON-PATH ok\n[    7.123998] systemd[1]: Initializing machine ID from random generator.\n";
+    let promised = "VEREDAS-PACKAGES ok\nVEREDAS-SERVICES-USER ok\nVEREDAS-SSH absent\nVEREDAS-CLOUD-INIT disabled\nVEREDAS-ON-PATH ok\n[    7.123998] systemd[1]: Initializing machine ID from random generator.\n";
     let good = format!("vmw_pvscsi\nvmxnet3\nVEREDAS-SUMS-OK 2.0.0\n{card}\n{promised}");
     assert_eq!(maquina::proof_faults(&proof(&good, 0.3, "a"), "2.0.0"), Vec::<String>::new());
     let no_card = good.replace(&card, "VEREDAS-CARD ens4 52:54:00:12:34:56");
@@ -106,6 +106,11 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
             "VEREDAS-PACKAGES ok",
             "VEREDAS-PACKAGES missing open-vm-tools open-vm-tools-desktop",
             "the recipe's packages are not all installed (no `VEREDAS-PACKAGES ok` on the console)",
+        ),
+        (
+            "VEREDAS-SERVICES-USER ok",
+            "VEREDAS-SERVICES-USER other: veredas-bancada veredas-supervisao",
+            "the bench and supervisão are not services of the recipe's user (no `VEREDAS-SERVICES-USER ok` on the console)",
         ),
         ("vmw_pvscsi\n", "", "the guest did not name vmw_pvscsi"),
         ("vmxnet3\n", "", "the guest did not name vmxnet3"),
@@ -156,6 +161,13 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
     assert!(r.machine.packages.iter().any(|p| p == "open-vm-tools"), "{:?}", r.machine.packages);
     let asked = format!("for p in {}; do dpkg-query -W -f='${{Status}}' \"$p\" 2>/dev/null | grep -q 'install ok installed' || missing=\"$missing $p\"; done", r.machine.packages.join(" "));
     assert!(s.lines().any(|l| l == asked), "{asked}");
+    // The bench and supervisão, services of the recipe's user, and the boot's check asking systemd so.
+    for service in ["veredas-bancada", "veredas-supervisao"] {
+        let unit = &s[s.find(&format!("cat > /etc/systemd/system/{service}.service")).unwrap()..];
+        let unit = &unit[..unit.find("\nUNIT\n").unwrap()];
+        assert!(unit.lines().any(|l| l == format!("User={}", r.machine.user)), "{unit}");
+    }
+    assert!(s.contains(&format!("[ \"$(systemctl show -p User --value \"$s.service\")\" = \"{}\" ]", r.machine.user)));
     let unit = &s[s.find("cat > /etc/systemd/system/veredas-verifica.service").unwrap()..];
     let unit = &unit[..unit.find("\nUNIT\n").unwrap()];
     assert!(unit.lines().any(|l| l == "Before=serial-getty@ttyS0.service getty@tty1.service"), "{unit}");
@@ -265,6 +277,43 @@ fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
     );
     let efi = |s: String| s.replacen(r#"vmw:key="firmware" vmw:value="bios""#, r#"vmw:key="firmware" vmw:value="efi""#, 1);
     assert_eq!(faults("efi", "streamOptimized", r.machine.disk_gb, &efi, right), ["the descriptor's firmware is not BIOS"]);
+    // Each value VMware reads, offered wrong in its own place: another card, another controller,
+    // another hardware version, another disk format, another file, memory in other units.
+    let hw = format!("vmx-{:02}", r.machine.hardware_version);
+    let hw_type = format!("<vssd:VirtualSystemType>{hw}</vssd:VirtualSystemType>");
+    for (label, from, to, want) in [
+        ("e1000", "<rasd:ResourceSubType>VmxNet3</rasd:ResourceSubType>", "<rasd:ResourceSubType>E1000</rasd:ResourceSubType>", vec!["the descriptor holds no one VMXNET3 card".to_string()]),
+        (
+            "lsilogic",
+            "<rasd:ResourceSubType>VirtualSCSI</rasd:ResourceSubType>",
+            "<rasd:ResourceSubType>lsilogic</rasd:ResourceSubType>",
+            vec![
+                "the descriptor holds no one paravirtual SCSI controller (VirtualSCSI)".to_string(),
+                "the descriptor's hard disk is not one item on vmdisk1 under the paravirtual SCSI controller".to_string(),
+            ],
+        ),
+        ("vmx13", hw_type.as_str(), "<vssd:VirtualSystemType>vmx-13</vssd:VirtualSystemType>", vec![format!("the descriptor's hardware version is not {hw}")]),
+        (
+            "sparse",
+            "vmdk.html#streamOptimized",
+            "vmdk.html#sparse",
+            vec![format!("the descriptor's DiskSection names no one stream-optimized disk vmdisk1 of {capacity} bytes on file1")],
+        ),
+        ("units", "<rasd:AllocationUnits>byte * 2^20</rasd:AllocationUnits>", "<rasd:AllocationUnits>byte * 2^10</rasd:AllocationUnits>", vec![format!("the descriptor's memory is not one item of {} MB", r.machine.memory_mb)]),
+    ] {
+        let edit = |s: String| {
+            assert_eq!(s.matches(from).count(), 1, "{from}");
+            s.replacen(from, to, 1)
+        };
+        assert_eq!(faults(label, "streamOptimized", r.machine.disk_gb, &edit, right), want, "{label}");
+    }
+    let other_file = |s: String| s.replacen(&format!(r#"ovf:href="{vmdk_name}""#), r#"ovf:href="another-disk1.vmdk""#, 1);
+    let (ova, opened) = make("href", "streamOptimized", r.machine.disk_gb, &other_file, right);
+    let size = std::fs::metadata(opened.join(&vmdk_name)).unwrap().len();
+    assert_eq!(
+        maquina::ova_faults(&r, &ova, "9.9.9", &opened).unwrap(),
+        [format!("the descriptor's References name no one file `{vmdk_name}` of {size} bytes as file1")]
+    );
     // Another tar format than ustar (GNU's): its listing reads the same, its headers do not.
     let (_, opened) = make("gnu", "streamOptimized", r.machine.disk_gb, &same, right);
     let gnu = work.path().join("gnu-format.ova");
@@ -405,4 +454,66 @@ fn a_machine_is_built_only_from_a_cut_that_ran_to_its_end() {
     std::fs::write(&trial, &text).unwrap();
     assert_eq!(refusal(maquina::from_release(root, release, target)), format!("{} is not the bundle's own release.toml: the bundle is not that cut's", real.display()));
     assert!(!work.join("maquina").exists(), "no machine was started");
+}
+
+#[test]
+fn a_release_is_proven_by_its_own_recipe_and_page_at_its_commit() {
+    use std::process::Command;
+    // A throwaway repository: the release's commit holds a recipe of 3072 MB and a page canvas of
+    // #102030; a later commit, HEAD, holds 2048 MB and #405060; the working tree holds 1024 MB and
+    // #708090. The proof's setup reads the release's own.
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    let git = |args: &[&str]| {
+        let out = Command::new("git").arg("-C").arg(root).args(["-c", "user.name=entrega", "-c", "user.email=entrega@example.invalid", "-c", "commit.gpgsign=false"]).args(args).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    let recipe = std::fs::read_to_string(repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    let machine_memory = |mb: u32| {
+        let at = recipe.find("[machine]").unwrap();
+        let (head, tail) = recipe.split_at(at);
+        let line = tail.lines().find(|l| l.starts_with("memory_mb = ")).unwrap();
+        format!("{head}{}", tail.replacen(line, &format!("memory_mb = {mb}"), 1))
+    };
+    let state = |mb: u32, canvas: &str| {
+        std::fs::create_dir_all(root.join("tools/entrega/maquina")).unwrap();
+        std::fs::write(root.join("tools/entrega/maquina/maquina.toml"), machine_memory(mb)).unwrap();
+        std::fs::create_dir_all(root.join("crates/veredas-supervisao/web/dist/assets")).unwrap();
+        std::fs::write(root.join("crates/veredas-supervisao/web/dist/assets/app.css"), format!(":root{{--canvas: #{canvas};--ink:#eeeeee}}\n")).unwrap();
+    };
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(root.join(".gitignore"), "/target/\n").unwrap();
+    state(3072, "102030");
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "the release's commit"]);
+    let commit = git(&["rev-parse", "HEAD"]);
+    state(2048, "405060");
+    git(&["commit", "-q", "-am", "a later commit"]);
+    state(1024, "708090");
+    let release = "0.0.0-trial.7";
+    let target = "x86_64-unknown-linux-gnu";
+    let work = root.join("target/entrega").join(release);
+    let name = format!("veredas-{release}-{target}");
+    std::fs::create_dir_all(work.join(&name)).unwrap();
+    let text = entrega::cut::manifest_text(
+        &semver::Version::parse(release).unwrap(),
+        &commit,
+        target,
+        "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+        &[("veredas-core".to_string(), "2.0.0".to_string(), vec![])],
+        entrega::cut::NOT_RUN,
+    );
+    std::fs::write(work.join(&name).join("release.toml"), &text).unwrap();
+    entrega::bundle::pack(&work, &name, "1", &work.join(format!("{name}.tar.gz"))).unwrap();
+    // No OVA yet: refused, naming where `entrega maquina` builds it.
+    let ova = work.join("maquina").join(format!("veredas-{release}.ova"));
+    match maquina::proof_setup(root, release, target) {
+        Err(entrega::vm::VmError::Failed { stderr, .. }) => assert_eq!(stderr, format!("{} is not there: build the machine first", ova.display())),
+        other => panic!("not refused: {:?}", other.map(|s| (s.recipe.machine.memory_mb, s.ova, s.canvas))),
+    }
+    std::fs::create_dir_all(ova.parent().unwrap()).unwrap();
+    std::fs::write(&ova, "").unwrap();
+    let s = maquina::proof_setup(root, release, target).unwrap();
+    assert_eq!((s.recipe.machine.memory_mb, s.ova, s.canvas), (3072, ova, (0x10, 0x20, 0x30)));
 }

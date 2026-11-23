@@ -83,8 +83,8 @@ mkdir -p /usr/local/libexec
 cat > /usr/local/libexec/veredas-verifica <<'SCRIPT'
 #!/bin/sh
 # The release's files checked against its SHA256SUMS, the network cards the machine sees, and
-# what the provisioning promised: the recipe's packages installed, no SSH server, cloud-init off,
-# every executable on the PATH.
+# what the provisioning promised: the recipe's packages installed, the bench and supervisão services
+# of the recipe's user, no SSH server, cloud-init off, every executable on the PATH.
 cd /opt/veredas/current
 if sha256sum --quiet -c SHA256SUMS; then echo "VEREDAS-SUMS-OK {release}"; else echo "VEREDAS-SUMS-FAILED {release}"; fi
 for c in /sys/class/net/*; do n=$(basename "$c"); [ "$n" = lo ] || echo "VEREDAS-CARD $n $(cat "$c/address")"; done
@@ -93,6 +93,9 @@ if [ -e /etc/cloud/cloud-init.disabled ]; then echo "VEREDAS-CLOUD-INIT disabled
 missing=
 for p in {packages}; do dpkg-query -W -f='${{Status}}' "$p" 2>/dev/null | grep -q 'install ok installed' || missing="$missing $p"; done
 if [ -z "$missing" ]; then echo "VEREDAS-PACKAGES ok"; else echo "VEREDAS-PACKAGES missing$missing"; fi
+others=
+for s in veredas-bancada veredas-supervisao; do [ "$(systemctl show -p User --value "$s.service")" = "{u}" ] || others="$others $s"; done
+if [ -z "$others" ]; then echo "VEREDAS-SERVICES-USER ok"; else echo "VEREDAS-SERVICES-USER other:$others"; fi
 missing=
 for b in /opt/veredas/current/bin/*; do n=$(basename "$b"); [ "$(command -v "$n")" = "/usr/local/bin/$n" ] || missing="$missing $n"; done
 if [ -z "$missing" ]; then echo "VEREDAS-ON-PATH ok"; else echo "VEREDAS-ON-PATH missing$missing"; fi
@@ -730,6 +733,7 @@ pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
     // What the provisioning promised, as the boot's check says it and systemd at a first boot.
     for (line, what) in [
         ("VEREDAS-PACKAGES ok", "the recipe's packages are not all installed"),
+        ("VEREDAS-SERVICES-USER ok", "the bench and supervisão are not services of the recipe's user"),
         ("VEREDAS-SSH absent", "the machine holds an SSH server"),
         ("VEREDAS-CLOUD-INIT disabled", "cloud-init is not disabled"),
         ("VEREDAS-ON-PATH ok", "the release's executables are not all on the PATH"),
@@ -765,6 +769,26 @@ pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
 /// Proves the tester machine already built for a release (`entrega maquina`), the recipe read at
 /// the commit its manifest names; the proof and its faults.
 pub fn prove_release(root: &Path, release: &str, target: &str) -> Result<(Proof, Vec<String>), VmError> {
+    let s = proof_setup(root, release, target)?;
+    let proof = prove(&s.recipe, &s.ova, release, s.canvas, &root.join("target/entrega").join(release).join("prova"))?;
+    let faults = proof_faults(&proof, release);
+    Ok((proof, faults))
+}
+
+/// What `entrega prova <release>` proves with ([`proof_setup`]).
+pub struct Setup {
+    /// The recipe at the release's commit.
+    pub recipe: Recipe,
+    /// The release's OVA, where `entrega maquina` builds it.
+    pub ova: PathBuf,
+    /// Supervisão's page canvas at the release's commit.
+    pub canvas: (u8, u8, u8),
+}
+
+/// What `entrega prova <release>` proves with: the release's OVA where `entrega maquina` builds it,
+/// and the recipe and supervisão's page canvas at the commit the release's manifest names (never
+/// HEAD's, never the working tree's), so an older release is proven by its own.
+pub fn proof_setup(root: &Path, release: &str, target: &str) -> Result<Setup, VmError> {
     let work = root.join("target/entrega").join(release);
     let bundle_dir = format!("veredas-{release}-{target}");
     let bundle = work.join(format!("{bundle_dir}.tar.gz"));
@@ -779,7 +803,5 @@ pub fn prove_release(root: &Path, release: &str, target: &str) -> Result<(Proof,
         .ok_or_else(|| VmError::Failed { program: "the proof".into(), status: "refused".into(), stderr: format!("commit {} holds no recipe", m.commit) })?;
     let recipe = Recipe::load(&recipe_text).map_err(|e| VmError::Failed { program: "the recipe".into(), status: "refused".into(), stderr: e.to_string() })?;
     let canvas = page_canvas(root, &m.commit)?;
-    let proof = prove(&recipe, &ova, release, canvas, &work.join("prova"))?;
-    let faults = proof_faults(&proof, release);
-    Ok((proof, faults))
+    Ok(Setup { recipe, ova, canvas })
 }
