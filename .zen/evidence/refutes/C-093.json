@@ -1,0 +1,13 @@
+{
+  "clause": "C-093",
+  "verdict": "holds",
+  "ranAt": "2026-11-23T00:44:29.846Z",
+  "headCommit": "e487a86b97b80fa42541f993f9fe582927cc23b6",
+  "tests": [
+    {
+      "name": "crates/veredas-portal/tests/fault_copy.rs",
+      "file": "crates/veredas-portal/tests/fault_copy.rs",
+      "symbolSha": "fcea434d18a5d8ee2238a8dca96f2048e0298b85a8c5fad914cc417ca61cfbdb"
+    }
+  ]
+}
