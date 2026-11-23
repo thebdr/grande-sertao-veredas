@@ -688,6 +688,34 @@ fn a_cell_and_a_rich_value_are_read_where_the_schema_puts_them() {
         assert_eq!((cells_now, matched_now), (cells, matched - 1), "uri padded {pad:?}, D2 given vm");
         assert!(wrong.contains(&format!("{sheet}!D2")), "{wrong:?}");
     }
+    // a rich value naming no error the oracle reads (Excel's error 10, a picture in a cell) is no
+    // value the engine computes: D2, the engine's `#VALUE!`, pointed at either, is one mismatch,
+    // never a `#VALUE!` read by default
+    let ext_bk = |i: usize| format!(r#"<bk><extLst><ext uri="{ext}"><xlrd:rvb i="{i}"/></ext></extLst></bk>"#);
+    let step1 = planted.path().join("rich-1.xlsx");
+    rewrite_part(&isref, &step1, "xl/richData/rdrichvalue.xml", |t| {
+        t.replacen("</rvData>", r#"<rv s="0"><v>10</v><v>0</v></rv><rv s="2"><v>0</v><v>5</v></rv></rvData>"#, 1)
+    });
+    let step2 = planted.path().join("rich-2.xlsx");
+    rewrite_part(&step1, &step2, "xl/richData/rdrichvaluestructure.xml", |t| {
+        t.replacen("</rvStructures>", r#"<s t="_localImage"><k n="_rvRel:LocalImageIdentifier" t="i"/><k n="CalcOrigin" t="i"/></s></rvStructures>"#, 1)
+    });
+    let step3 = planted.path().join("rich-3.xlsx");
+    rewrite_part(&step2, &step3, "xl/metadata.xml", |t| {
+        t.replacen("</futureMetadata><cellMetadata", &format!("{}{}</futureMetadata><cellMetadata", ext_bk(2), ext_bk(3)), 1)
+            .replacen("</valueMetadata>", r#"<bk><rc t="2" v="2"/></bk><bk><rc t="2" v="3"/></bk></valueMetadata>"#, 1)
+    });
+    let (_, cells_planted, matched_planted) = mismatches(&step3, &mut probe);
+    assert_eq!((cells_planted, matched_planted), (cells, matched), "the plant alone moves nothing");
+    for (vm, what) in [("3", "Excel's error 10"), ("4", "a picture in a cell")] {
+        let copy = planted.path().join(format!("rich-vm{vm}.xlsx"));
+        rewrite_cell(&step3, &copy, &sheet, "D2", |open, inner| format!(r#"{open} vm="{vm}">{inner}"#));
+        let d2 = scan_raw(&copy).unwrap().formula_cells.into_iter().find(|c| c.reference == "D2").unwrap().expected;
+        assert!(matches!(&d2, abaco_oracle::Expected::Unwritten(why) if why.contains("names no error the oracle reads")), "{what}: {d2:?}");
+        let (wrong, cells_now, matched_now) = mismatches(&copy, &mut probe);
+        assert_eq!((cells_now, matched_now), (cells, matched - 1), "{what}");
+        assert!(wrong.contains(&format!("{sheet}!D2")), "{what}: {wrong:?}");
+    }
     // a block holding another type's record before the rich value's: the rich value's still read
     let copy = planted.path().join("records.xlsx");
     rewrite_part(&isref, &copy, "xl/metadata.xml", |t| t.replacen(r#"<valueMetadata count="2"><bk><rc t="2" v="0"/></bk>"#, r#"<valueMetadata count="2"><bk><rc t="1" v="0"/><rc t="2" v="0"/></bk>"#, 1));
@@ -819,6 +847,62 @@ fn rewrite_part_bytes(from: &Path, to: &Path, part: &str, edit: impl Fn(&[u8]) -
     }
     writer.finish().unwrap();
     assert_eq!(changed, 1);
+}
+
+#[test]
+fn the_engine_s_sheets_are_the_workbook_s_each_held_once() {
+    let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let check = abaco_oracle::engine_sheets_are_the_workbook_s;
+    assert_eq!(check(&names(&["Sheet1"]), &names(&["Sheet1", "Chart1"])), Ok(()));
+    assert!(check(&names(&["Sheet1", "Sheet1"]), &names(&["Sheet1"])).unwrap_err().contains("twice"));
+    assert!(check(&names(&["Sheet1", "Decoy"]), &names(&["Sheet1"])).unwrap_err().contains("does not list"));
+    // the critic's ABS: a sheet planted in the workbook's extension, pointing at a copy whose B2 is
+    // 7, the real B2 caching 7 (the engine computes 1): the engine reads the listed sheet alone
+    // (fork change 28), and B2 is one mismatch
+    let b = baseline();
+    let dir = corpus_dir(&b);
+    let mut probe = Probe::default();
+    let planted = tempfile::tempdir().unwrap();
+    let abs = dir.join("calc_tests/MATH_AND_TRIGONOMETRY/ABS.xlsx");
+    let (_, cells, matched) = mismatches(&abs, &mut probe);
+    let step1 = planted.path().join("decoy-1.xlsx");
+    rewrite_part(&abs, &step1, "xl/workbook.xml", |t| {
+        t.replacen(
+            "</workbook>",
+            r#"<extLst><ext uri="{00000000-0000-0000-0000-0000000000ab}" xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><x:sheets><x:sheet name="Sheet1" sheetId="2" r:id="rId9"/></x:sheets></ext></extLst></workbook>"#,
+            1,
+        )
+    });
+    let step2 = planted.path().join("decoy-2.xlsx");
+    rewrite_part(&step1, &step2, "xl/_rels/workbook.xml.rels", |t| {
+        t.replacen("</Relationships>", r#"<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet9.xml"/></Relationships>"#, 1)
+    });
+    let step3 = planted.path().join("decoy-3.xlsx");
+    let sheet1 = read_part(&step2, "xl/worksheets/sheet1.xml");
+    add_part(&step2, &step3, "xl/worksheets/sheet9.xml", &sheet1.replacen(r#"<f>ABS(A2)</f><v>1</v>"#, "<f>7</f><v>7</v>", 1));
+    let copy = planted.path().join("decoy.xlsx");
+    rewrite_cell_value(&step3, &copy, "Sheet1", "B2", "7");
+    let (wrong, cells_now, matched_now) = mismatches(&copy, &mut probe);
+    assert_eq!((cells_now, matched_now), (cells, matched - 1));
+    assert!(wrong.contains("Sheet1!B2"), "{wrong:?}");
+}
+
+/// Copies the package at `from` to `to` with one part more.
+fn add_part(from: &Path, to: &Path, part: &str, text: &str) {
+    let out = std::fs::File::create(to).unwrap();
+    let mut writer = zip::ZipWriter::new(out);
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(from).unwrap()).unwrap();
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).unwrap();
+        let name = entry.name().unwrap().to_string();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        writer.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&bytes).unwrap();
+    }
+    writer.start_file(part, zip::write::SimpleFileOptions::default()).unwrap();
+    writer.write_all(text.as_bytes()).unwrap();
+    writer.finish().unwrap();
 }
 
 #[test]

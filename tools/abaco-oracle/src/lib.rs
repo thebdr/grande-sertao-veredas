@@ -647,9 +647,10 @@ const RICH_ERRORS: [(&str, &str); 2] = [("8", "#SPILL!"), ("13", "#CALC!")];
 /// wrote a `#SPILL!` or a `#CALC!` as `#VALUE!`: the metadata part's value metadata, its
 /// `XLRICHVALUE` entry, the rich value it points at, and that value's `errorType`; each part read
 /// by an XML parser, found through the workbook's relationships as OPC resolves them. An index
-/// whose chain resolves holds the error (`Some`), or `None` where its rich value is another
-/// (an image in a cell: the file's `#VALUE!` stands); an index that does not resolve is absent, and
-/// a `#VALUE!` pointing at it is not measured ([`expected_of`]).
+/// whose chain resolves holds the error (`Some`), or `None` where its rich value names no error the
+/// oracle reads (a picture in a cell, a data type, an error Excel has and the engine has not); an
+/// index that does not resolve is absent. A `#VALUE!` pointing at either of the last two is no
+/// value Excel wrote that the engine could compute, and equals nothing ([`expected_of`]).
 fn rich_errors(archive: &mut zip::ZipArchive<fs::File>, rels: &[(String, String)]) -> HashMap<usize, Option<String>> {
     let part = |kind: &str| -> Option<String> {
         rels.iter().find(|(t, _)| xsd_collapse(t).ends_with(kind)).map(|(_, target)| workbook_target(target))
@@ -813,13 +814,14 @@ fn expected_of(c: &CellXml, rich: &HashMap<usize, Option<String>>) -> Expected {
             _ => never(v),
         },
         // an error a file holds; a `#VALUE!` with value metadata is the error the rich value names
-        // (Excel's `#SPILL!` and `#CALC!`), the `#VALUE!` itself where the rich value is another, and
-        // no measure where the metadata does not resolve: never a `#VALUE!` read by default
+        // (Excel's `#SPILL!` and `#CALC!`); where the rich value names none the oracle reads (a
+        // picture, a data type, another of Excel's newer errors) or the metadata does not resolve,
+        // Excel's value is none the engine computes: never a `#VALUE!` read by default
         (Some("e"), Some(v), false) => match FILE_ERRORS.iter().find(|e| **e == xsd_trim(&v)) {
             Some(e) if *e == "#VALUE!" && c.vm.is_some() => {
                 match c.vm.as_deref().and_then(|m| xsd_trim(m).parse::<usize>().ok()).and_then(|i| rich.get(&i)) {
                     Some(Some(rich_error)) => Expected::Error(rich_error.clone()),
-                    Some(None) => Expected::Error(e.to_string()),
+                    Some(None) => never(format!("a #VALUE! whose rich value (vm {}) names no error the oracle reads", c.vm.as_deref().unwrap_or_default())),
                     None => never(format!("a #VALUE! whose value metadata ({}) does not resolve", c.vm.as_deref().unwrap_or_default())),
                 }
             }
@@ -1507,6 +1509,21 @@ impl Drop for ClockPin {
 }
 
 /// Measures one workbook.
+/// Whether every sheet the engine holds is one the workbook lists (its `sheets`, chart sheets among
+/// them, which the engine does not hold), and each is held once, in any letter case.
+pub fn engine_sheets_are_the_workbook_s(engine: &[String], workbook: &[String]) -> Result<(), String> {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for name in engine {
+        if !workbook.iter().any(|w| w == name) {
+            return Err(format!("the engine holds a sheet `{name}` the workbook does not list ({workbook:?})"));
+        }
+        if !seen.insert(name.to_uppercase()) {
+            return Err(format!("the engine holds the sheet `{name}` twice ({engine:?})"));
+        }
+    }
+    Ok(())
+}
+
 pub fn run_file(path: &Path, options: &Options, probe: &mut Probe) -> FileReport {
     let _clock = ClockPin::new(options.clock);
     let _seed = SeedPin::new(options.random_seed);
@@ -1577,6 +1594,13 @@ pub fn run_file(path: &Path, options: &Options, probe: &mut Probe) -> FileReport
     let sheet_index: HashMap<String, u32> =
         model.get_worksheets_properties().iter().enumerate().map(|(i, p)| (p.name.clone(), i as u32)).collect();
     rep.engine_sheets = model.get_worksheets_properties().iter().map(|p| p.name.clone()).collect();
+    // the engine's cells are compared sheet by sheet by name: each sheet it holds must be one the
+    // workbook lists, held once, or a cell could be compared with another sheet's
+    if let Err(why) = engine_sheets_are_the_workbook_s(&rep.engine_sheets, &raw.sheets) {
+        rep.load_error = Some(why);
+        rep.raw = Some(raw);
+        return rep;
+    }
 
     for cell in &raw.formula_cells {
         let names = function_names(&cell.formula);
