@@ -429,13 +429,25 @@ Recorded as the port meets them.
   | test(round_1::the_delay_follows_the_factor) | test(round_1::lldp_comes_on_its_interval)
   | test(round_2::a_multiplier_of_two_is_sixteen_rpis) | test(round_2::the_first_frame_comes_at_once_at_a_long_rpi)
   | test(round_2::stale_frames_do_not_feed_the_watchdog)
-  | test(round_1::a_stalled_runner_catches_up_and_counts_its_late_steps) | binary(reflexo)`.
+  | test(round_1::a_stalled_runner_catches_up_and_counts_its_late_steps) | binary(reflexo)
+  | test(round_4::an_answer_to_a_client_that_closed_during_its_delay_is_counted_as_none)
+  | test(round_4::the_same_client_closing_with_a_reset_counts_none_either)
+  | test(round_5::a_client_that_closes_or_resets_during_the_delay_is_gone_at_once_whatever_it_pipelined)`
+  (the Modbus server's "gone at once" bounds, the first two added late: 2026-11-23).
   Free, by that rule: the bench file, the channels, the controller's rules, the component, the
   EtherCAT segment (ethercrab's own timeouts are deadlines), `fisica` but its runner, and every
   other test of the files above. A new test that measures time joins this list in its commit, and
   `.config/nextest.toml`'s exclusive block with it. A run record of a file that holds one goes
   through `cargo nextest run`, which honours that block; `cargo test` runs a file's tests as threads
   of one process, the timed ones beside the rest (C-111's record failed so on 2026-11-23).
+- **A peek sees only the first byte.** The Modbus server watched a delayed answer's client with a
+  one-byte peek; a request pipelined behind made the peek ready for good, and a close behind it went
+  unseen till the delay ended. Read ahead into the connection's own buffer instead: the end of the
+  stream comes after whatever was sent (C-110, round 5).
+- **The accept loop runs before what woke with it.** On a current-thread runtime the `block_on`
+  future is polled before the tasks woken in the same tick, so a client that closes and connects
+  again at once finds its old connection still counted against the limit. Yield once at the limit
+  before refusing (C-110, round 5).
 - **A thread spawned is not a line written.** The emitter's loop reads its stop flag before its
   first line, so a part that fails right after it (a server on a taken port) can stop and join
   it before its thread's first tick, and its file is not there: CI on Linux did exactly that

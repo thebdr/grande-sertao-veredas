@@ -1298,8 +1298,11 @@ mod round_4 {
         c.send(&Raw::frame(1, 0, 1, &[0x03, 0x00, 0x00, 0x00, 0x01]));
         assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == 1)));
         socket2::SockRef::from(&c.stream).set_linger(Some(Duration::ZERO)).unwrap();
+        let closed = Instant::now();
         drop(c);
         assert!(wait(Duration::from_secs(5), || server.status().connections == 0));
+        // Gone at once as well (refute round 5: a mutant ignoring the reset held it to the delay's end).
+        assert!(closed.elapsed() < Duration::from_millis(300), "held {:?} after the reset", closed.elapsed());
         let s = server.status();
         eprintln!("P1b: answered = {:?}; exchange response = {:?}", s.answered, s.recent.back().unwrap().response);
         assert_eq!(s.answered.get(&0x03), None);
@@ -1421,5 +1424,241 @@ mod round_4 {
         let s = server.status();
         eprintln!("P1c: second client's read = {got:?}; connections = {}, refused = {}", s.connections, s.refused);
         assert_eq!(s.refused, 0, "the only open connection's client had closed");
+    }
+}
+
+/// C-110's fifth refute round: the critic's probes (`~/.cache/veredas/critic-c110-r5/probes`), kept
+/// as pins: a close or a reset seen during the delay whatever was pipelined behind, a half-close
+/// taken as gone, a place freed for a client connecting again at once, a silenced answer counted
+/// unanswered however its delay ends, a failed write's take-back.
+mod round_5 {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::{Duration, Instant};
+
+    use veredas_maquinar::modbus::*;
+
+    fn config(text: &str) -> ModbusConfig {
+        toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+    }
+
+    fn wait(within: Duration, mut what: impl FnMut() -> bool) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < within {
+            if what() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        what()
+    }
+
+    fn connect(addr: SocketAddr) -> TcpStream {
+        let s = TcpStream::connect(addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s.set_nodelay(true).unwrap();
+        s
+    }
+
+    fn frame(transaction: u16, pdu: &[u8]) -> Vec<u8> {
+        let mut f = Vec::new();
+        f.extend_from_slice(&transaction.to_be_bytes());
+        f.extend_from_slice(&0u16.to_be_bytes());
+        f.extend_from_slice(&(pdu.len() as u16 + 1).to_be_bytes());
+        f.push(1);
+        f.extend_from_slice(pdu);
+        f
+    }
+
+    const READ: [u8; 5] = [0x03, 0x00, 0x00, 0x00, 0x01];
+
+    fn answered(s: &ModbusStatus) -> u64 {
+        s.answered.values().sum()
+    }
+
+    /// How long the server kept the connection after `closed`, and the status once it was gone.
+    fn gone_after(server: &ModbusHandle, closed: Instant) -> (Duration, ModbusStatus) {
+        let mut open_for = None;
+        assert!(wait(Duration::from_secs(10), || {
+            let gone = server.status().connections == 0;
+            if gone && open_for.is_none() {
+                open_for = Some(closed.elapsed());
+            }
+            gone
+        }));
+        (open_for.unwrap(), server.status())
+    }
+
+    #[test]
+    fn a_client_that_closes_or_resets_during_the_delay_is_gone_at_once_whatever_it_pipelined() {
+        // (a second request pipelined behind the delayed one, a reset rather than a FIN)
+        for (pipelined, reset) in [(true, false), (true, true), (false, true)] {
+            let server = start(&config("port = 0\nholding_registers = 1\n")).unwrap();
+            server.set_delay(Duration::from_millis(800));
+            let mut c = connect(server.addr);
+            let sent = if pipelined { [frame(1, &READ), frame(2, &READ)].concat() } else { frame(1, &READ) };
+            c.write_all(&sent).unwrap();
+            assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == 1)));
+            std::thread::sleep(Duration::from_millis(50));
+            if reset {
+                socket2::SockRef::from(&c).set_linger(Some(Duration::ZERO)).unwrap();
+            }
+            let closed = Instant::now();
+            drop(c);
+            let (open_for, s) = gone_after(&server, closed);
+            let case = format!("pipelined {pipelined}, reset {reset}");
+            assert!(open_for < Duration::from_millis(300), "{case}: held {open_for:?} after the client left");
+            assert_eq!(answered(&s), 0, "{case}: {:?}", s.answered);
+            assert!(s.recent.iter().all(|x| x.response.is_none()), "{case}: {:?}", s.recent);
+        }
+    }
+
+    #[test]
+    fn a_client_that_pipelined_and_closed_during_a_delay_frees_its_place_under_a_limit_of_one() {
+        let server = start(&config("port = 0\nmax_connections = 1\nholding_registers = 1\n")).unwrap();
+        server.set_delay(Duration::from_secs(3));
+        let mut a = connect(server.addr);
+        a.write_all(&[frame(1, &READ), frame(2, &READ)].concat()).unwrap();
+        assert!(wait(Duration::from_secs(5), || server.status().recent.len() == 1));
+        drop(a);
+        assert!(wait(Duration::from_secs(2), || server.status().connections == 0), "the place still held");
+        server.set_delay(Duration::ZERO);
+        let mut b = connect(server.addr);
+        b.write_all(&frame(3, &READ)).unwrap();
+        let mut h = [0u8; 11];
+        b.read_exact(&mut h).unwrap();
+        assert_eq!((&h[..2], server.status().refused), (&[0u8, 3][..], 0));
+    }
+
+    #[test]
+    fn a_half_closing_client_is_answered_without_a_delay_and_taken_as_gone_with_one() {
+        // A client that sends and shuts its sending side cannot be told from one that closed: under
+        // a delay its FIN is read as the client gone, and its answer never sent.
+        let server = start(&config("port = 0\nholding_registers = 1\n")).unwrap();
+        let ask = |delay_ms: u64| -> Vec<u8> {
+            server.set_delay(Duration::from_millis(delay_ms));
+            let mut c = connect(server.addr);
+            c.write_all(&frame(7, &READ)).unwrap();
+            c.shutdown(std::net::Shutdown::Write).unwrap();
+            let mut got = Vec::new();
+            c.read_to_end(&mut got).unwrap();
+            got
+        };
+        assert_eq!(ask(0).len(), 11);
+        assert_eq!(ask(300), Vec::<u8>::new());
+        let s = server.status();
+        assert_eq!((answered(&s), s.unanswered), (1, 0));
+    }
+
+    #[test]
+    fn an_answer_silence_withheld_is_counted_unanswered_whether_a_drop_or_the_client_ends_its_delay() {
+        for how in ["drop", "close"] {
+            let server = start(&config("port = 0\nholding_registers = 1\n")).unwrap();
+            server.set_delay(Duration::from_millis(800));
+            let mut c = connect(server.addr);
+            c.write_all(&frame(1, &READ)).unwrap();
+            assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == 1)));
+            server.set_silent(true);
+            std::thread::sleep(Duration::from_millis(50));
+            if how == "drop" {
+                server.drop_connections();
+            } else {
+                drop(c);
+            }
+            assert!(wait(Duration::from_secs(5), || server.status().connections == 0));
+            let s = server.status();
+            assert_eq!((answered(&s), s.unanswered), (0, 1), "{how}");
+        }
+        // Without silence, a client gone during the delay counts as neither.
+        let server = start(&config("port = 0\nholding_registers = 1\n")).unwrap();
+        server.set_delay(Duration::from_millis(800));
+        let mut c = connect(server.addr);
+        c.write_all(&frame(1, &READ)).unwrap();
+        assert!(wait(Duration::from_secs(5), || server.status().recent.len() == 1));
+        drop(c);
+        assert!(wait(Duration::from_secs(5), || server.status().connections == 0));
+        let s = server.status();
+        assert_eq!((answered(&s), s.unanswered), (0, 0));
+    }
+
+    #[test]
+    fn an_answer_whose_waiting_write_fails_on_the_client_s_reset_is_taken_back() {
+        // The client sends without reading till the server's write waits on it, then resets: the
+        // write fails (no drop), and the answer it carried is taken back.
+        let server = start(&config("port = 0\nholding_registers = 125\n")).unwrap();
+        let mut c = connect(server.addr);
+        c.set_nonblocking(true).unwrap();
+        let mut next: u16 = 0;
+        let mut pending: Vec<u8> = Vec::new();
+        let started = Instant::now();
+        let mut blocked = 0;
+        while blocked < 200 && started.elapsed() < Duration::from_secs(60) {
+            if pending.is_empty() {
+                for _ in 0..100 {
+                    pending.extend(frame(next, &[0x03, 0x00, 0x00, 0x00, 0x7D]));
+                    next = next.wrapping_add(1);
+                }
+            }
+            match c.write(&pending) {
+                Ok(n) => {
+                    pending.drain(..n);
+                    blocked = 0;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    blocked += 1;
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(e) => panic!("{e}"),
+            }
+        }
+        assert_eq!(blocked, 200, "the server stopped reading");
+        // Settled: the last exchange and the counts unchanged across 300 ms.
+        let mut s = server.status();
+        assert!(wait(Duration::from_secs(10), || {
+            std::thread::sleep(Duration::from_millis(300));
+            let now = server.status();
+            let same = now.recent.back().map(|x| x.transaction) == s.recent.back().map(|x| x.transaction) && now.answered == s.answered;
+            s = now;
+            same
+        }));
+        let before = answered(&s);
+        assert!(s.recent.back().unwrap().response.is_some(), "the waiting write counted and shown");
+        socket2::SockRef::from(&c).set_linger(Some(Duration::ZERO)).unwrap();
+        drop(c);
+        assert!(wait(Duration::from_secs(5), || server.status().connections == 0));
+        let after = server.status();
+        assert_eq!(answered(&after), before - 1, "the answer whose write failed taken back");
+        assert_eq!(after.recent.back().unwrap().response, None);
+    }
+
+    #[test]
+    fn a_client_closing_and_connecting_again_at_once_under_a_limit_of_one_is_never_refused() {
+        let server = start(&config("port = 0\nmax_connections = 1\nholding_registers = 1\n")).unwrap();
+        // Between answers: 500 times.
+        let mut c = connect(server.addr);
+        for i in 0..500u16 {
+            c.write_all(&frame(i, &READ)).unwrap();
+            let mut h = [0u8; 11];
+            c.read_exact(&mut h).unwrap_or_else(|e| panic!("trial {i}: refused ({e})"));
+            drop(c);
+            c = connect(server.addr);
+        }
+        drop(c);
+        // During a delay: 300 times.
+        for i in 0..300u16 {
+            assert!(wait(Duration::from_secs(5), || server.status().connections == 0));
+            server.set_delay(Duration::from_secs(3));
+            let mut a = connect(server.addr);
+            a.write_all(&frame(i, &READ)).unwrap();
+            let me = a.local_addr().unwrap();
+            assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == i && x.peer == me)));
+            server.set_delay(Duration::ZERO);
+            drop(a);
+            let mut b = connect(server.addr);
+            b.write_all(&frame(i, &READ)).unwrap();
+            let mut h = [0u8; 11];
+            b.read_exact(&mut h).unwrap_or_else(|e| panic!("delayed trial {i}: refused ({e})"));
+        }
+        assert_eq!(server.status().refused, 0);
     }
 }

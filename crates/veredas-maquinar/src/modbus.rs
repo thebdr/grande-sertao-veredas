@@ -557,7 +557,7 @@ pub struct ModbusStatus {
     /// `answered` is.
     pub exceptions: BTreeMap<(u8, u8), u64>,
     /// Requests whose answer the server withheld: read while it was silent, or not yet handed to
-    /// the socket when silence began.
+    /// the socket when silence began (whatever then ended its delay: the delay, a drop, the client).
     pub unanswered: u64,
     /// Frames dropped without an answer: their protocol identifier was not 0, Modbus's.
     pub dropped: u64,
@@ -741,7 +741,8 @@ impl ModbusHandle {
     }
 
     /// Every answer from now on held for `d` before it is sent, as a slow device answers; zero
-    /// answers at once again.
+    /// answers at once again. A client that closes meanwhile (a FIN, a half-close included, or a
+    /// reset) is gone: its answer is never sent, and its place is freed at once.
     pub fn set_delay(&self, d: Duration) {
         self.shared.delay_us.store(d.as_micros().min(u64::MAX as u128) as u64, Ordering::SeqCst);
     }
@@ -903,6 +904,12 @@ async fn accept_loop(
             }
             accepted = listener.accept() => {
                 let Ok((stream, peer)) = accepted else { continue };
+                if shared.max_connections.is_some_and(|m| shared.lock().status.connections >= m) {
+                    // A client that closed and connects again at once: its close and this accept
+                    // wake together, and this loop runs first. Let the woken connections end before
+                    // the place is judged taken.
+                    tokio::task::yield_now().await;
+                }
                 let generation = {
                     let mut state = shared.lock();
                     state.status.accepted += 1;
@@ -953,10 +960,12 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
     // Each answer goes out whole the moment it is ready.
     let _ = stream.set_nodelay(true);
     let (mut rd, mut wr) = stream.into_split();
+    // What the client sent while an answer waited out its delay, read so its close is seen.
+    let mut ahead: Vec<u8> = Vec::new();
     loop {
         let mut header = [0u8; 7];
         tokio::select! {
-            r = rd.read_exact(&mut header) => if r.is_err() { return },
+            r = fill_exact(&mut rd, &mut ahead, &mut header) => if r.is_err() { return },
             _ = ended(&mut gone, generation) => return,
         }
         let transaction = u16::from_be_bytes([header[0], header[1]]);
@@ -970,7 +979,7 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
         }
         let mut pdu = vec![0u8; length as usize - 1];
         tokio::select! {
-            r = rd.read_exact(&mut pdu) => if r.is_err() { return },
+            r = fill_exact(&mut rd, &mut ahead, &mut pdu) => if r.is_err() { return },
             _ = ended(&mut gone, generation) => return,
         }
         if protocol != 0 {
@@ -1012,22 +1021,29 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
         let Some((response, exchange)) = response else { continue };
         let delay = Duration::from_micros(shared.delay_us.load(Ordering::SeqCst));
         if !delay.is_zero() {
-            // The delay, raced against a drop and against the client's own end: a client that
-            // closes (a FIN, as its timeout does) is gone, its answer counted as none and its place
-            // freed at once. Requests it pipelined behind are read after the delay, as before.
+            // The delay, raced against a drop and against the client's own end: what the client
+            // sends meanwhile is read ahead (up to READ_AHEAD), so a client that closes (a FIN, as
+            // its timeout does, a half-close included, or a reset) is seen whatever it pipelined:
+            // it is gone, its answer counted as none and its place freed at once.
             let sleep = tokio::time::sleep(delay);
             tokio::pin!(sleep);
-            let mut waiting_data = false;
-            loop {
-                let mut probe = [0u8; 1];
+            let gone_early = loop {
                 tokio::select! {
-                    _ = &mut sleep => break,
-                    _ = ended(&mut gone, generation) => return,
-                    r = rd.peek(&mut probe), if !waiting_data => match r {
-                        Ok(0) | Err(_) => return,
-                        Ok(_) => waiting_data = true,
+                    _ = &mut sleep => break false,
+                    _ = ended(&mut gone, generation) => break true,
+                    r = rd.read_buf(&mut ahead), if ahead.len() < READ_AHEAD => match r {
+                        Ok(0) | Err(_) => break true,
+                        Ok(_) => {}
                     },
                 }
+            };
+            if gone_early {
+                // An answer silence had already withheld stays counted as withheld.
+                let mut state = shared.lock();
+                if shared.silent.load(Ordering::SeqCst) || shared.silenced.load(Ordering::SeqCst) != epoch {
+                    state.status.unanswered += 1;
+                }
+                return;
             }
         }
         // Counted, and shown in its exchange, as its write begins: a client reading its answer finds
@@ -1073,6 +1089,21 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
             return;
         }
     }
+}
+
+/// The most a connection reads ahead of its requests while an answer waits out its delay: past it,
+/// the client's close is seen once the delay ends.
+const READ_AHEAD: usize = 64 * 1024;
+
+/// Fills `out` from what was read ahead first, then from the socket.
+async fn fill_exact(rd: &mut tokio::net::tcp::OwnedReadHalf, ahead: &mut Vec<u8>, out: &mut [u8]) -> std::io::Result<()> {
+    let n = ahead.len().min(out.len());
+    out[..n].copy_from_slice(&ahead[..n]);
+    ahead.drain(..n);
+    if n < out.len() {
+        rd.read_exact(&mut out[n..]).await?;
+    }
+    Ok(())
 }
 
 /// Resolves when a `drop_connections` call has ended `generation`, or the handle is gone.
