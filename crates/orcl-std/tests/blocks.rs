@@ -1269,3 +1269,67 @@ fn a_bit_is_read_and_written_beside_other_set_bits_on_every_width() {
     check(0b1010_u32, 0x8000_0001_u32, 0x8000_0009_u32);
     check(0b1010_u64, 0x8000_0000_0000_0001_u64, 0x8000_0000_0000_0009_u64);
 }
+
+// The nineteenth refute round, from transitions the tests had never driven (its critic logged every scan's
+// transition under the tests and under a random explorer, and compared): an off-delay's input held on, a reset with
+// the count input low, an on-delay that switched on stepped back before its start, two scans at one instant, an
+// edge on the scan a pulse ends then held, and an edge's signal off at its first scan.
+
+#[test]
+fn an_off_delay_with_its_input_held_on_stays_on_and_holds_pt_after_the_drop() {
+    // a run signal held on for 500 ms at a pt of 100 ms: on throughout, nothing elapsed; then on for pt after the drop
+    let mut off = Tof::default();
+    for t in (0..=500).step_by(10) {
+        assert_eq!((off.scan(&at(t), true, ms(100)), off.q(), off.et()), (true, true, ms(0)), "its input on at {t} ms");
+    }
+    assert_eq!((off.scan(&at(510), false, ms(100)), off.et()), (true, ms(0)), "the drop starts the delay");
+    assert_eq!((off.scan(&at(600), false, ms(100)), off.et()), (true, ms(90)));
+    assert_eq!((off.scan(&at(610), false, ms(100)), off.q(), off.et()), (false, false, ms(100)), "off pt after the drop");
+}
+
+#[test]
+fn a_reset_with_the_count_input_low_clears_a_count() {
+    let mut c = Ctu::default();
+    for _ in 0..3 {
+        c.scan(true, false, 3);
+        c.scan(false, false, 3);
+    }
+    assert_eq!((c.cv(), c.q()), (3, true));
+    assert_eq!((c.scan(false, true, 3), c.q(), c.cv()), (false, false, 0), "the reset wins, its input low");
+}
+
+#[test]
+fn an_on_delay_that_switched_on_stepped_back_before_its_start_is_off() {
+    let mut on = Ton::default();
+    on.scan(&at(100), true, ms(100));
+    assert!(on.scan(&at(200), true, ms(100)));
+    assert_eq!((on.scan(&at(50), true, ms(100)), on.q(), on.et()), (false, false, ms(0)), "nothing elapsed: off");
+}
+
+#[test]
+fn two_scans_at_one_instant_are_each_judged() {
+    let mut on = Ton::default();
+    on.scan(&at(0), true, ms(100));
+    assert!(on.scan(&at(100), true, ms(100)));
+    assert_eq!((on.scan(&at(100), false, ms(100)), on.q(), on.et()), (false, false, ms(0)), "its input off on the second");
+    let mut pulse = Tp::default();
+    assert!(!pulse.scan(&at(0), false, ms(100)));
+    assert_eq!((pulse.scan(&at(0), true, ms(100)), pulse.q()), (true, true), "an edge on the second");
+}
+
+#[test]
+fn an_edge_on_the_scan_a_pulse_ends_then_held_starts_nothing() {
+    let mut pulse = Tp::default();
+    assert!(pulse.scan(&at(0), true, ms(100)));
+    assert!(pulse.scan(&at(50), false, ms(100)));
+    assert!(!pulse.scan(&at(100), true, ms(100)), "an edge on the scan the pulse ends");
+    assert_eq!((pulse.scan(&at(110), true, ms(100)), pulse.q(), pulse.et()), (false, false, ms(100)), "held: still off");
+    assert!(!pulse.scan(&at(150), true, ms(100)));
+}
+
+#[test]
+fn a_rising_edge_s_signal_off_at_its_first_scan_is_no_edge() {
+    let mut rise = RTrig::default();
+    assert_eq!((rise.scan(false), rise.q()), (false, false));
+    assert_eq!((rise.scan(true), rise.q()), (true, true));
+}
