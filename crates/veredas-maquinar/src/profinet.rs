@@ -296,8 +296,11 @@ impl ProfinetHandle {
     }
 
     /// Its DCP answers nothing (true), as a device whose DCP is off; LLDP, ARP and the record read
-    /// go on. An Identify answer waiting out its delay is dropped.
+    /// go on. An Identify answer waiting out its delay is dropped. Once this returns no DCP frame
+    /// leaves the device: the flag is set under the lock every DCP answer is decided and sent
+    /// under, so an answer either went out before the call took the lock or never does.
     pub fn set_muted(&self, muted: bool) {
+        let _state = self.shared.lock();
         self.shared.muted.store(muted, Ordering::SeqCst);
     }
 
@@ -442,17 +445,20 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
             pending.clear();
         }
         pending.retain(|(due, frame)| {
-            if *due <= now {
-                // Counted as it goes out, so whoever reads the answer finds it counted; a send that
-                // fails takes it back.
-                shared.lock().status.identify_answered += 1;
-                if link.send(frame).is_err() {
-                    shared.lock().status.identify_answered -= 1;
-                }
-                false
-            } else {
-                true
+            if *due > now {
+                return true;
             }
+            // Decided and sent under the lock `set_muted` takes: an answer whose time comes once a
+            // mute has returned is never sent. Counted as it goes out, so whoever reads the answer
+            // finds it counted; a send that fails takes it back.
+            let mut state = shared.lock();
+            if !shared.muted.load(Ordering::SeqCst) {
+                state.status.identify_answered += 1;
+                if link.send(frame).is_err() {
+                    state.status.identify_answered -= 1;
+                }
+            }
+            false
         });
         let Ok(Some(received)) = link.recv(Duration::from_millis(5)) else { continue };
         let Ok(frame) = ether::parse(&received.bytes) else { continue };
@@ -530,17 +536,25 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
                 let spread = if pdu.response_delay > 1 { (rng.next_u32() as u64) % (u64::from(pdu.response_delay - 1) * 10_000 + 1) } else { 0 };
                 pending.push((Instant::now() + Duration::from_micros(spread), answer));
             }
+            // A Set and a Get are taken and answered under the lock `set_muted` takes, as an
+            // Identify answer is sent: a mute that returned first leaves the request untaken.
             Service::Set if frame.dst == mac => {
-                let answers = set(&shared, &pdu);
+                let mut state = shared.lock();
+                if shared.muted.load(Ordering::SeqCst) {
+                    continue;
+                }
+                let answers = set(&mut state, &pdu);
                 if let Ok(answer) = dcp::set_response(frame.src, mac, pdu.xid, &answers) {
                     let _ = link.send(&answer);
                 }
             }
             Service::Get if frame.dst == mac => {
                 let mut state = shared.lock();
+                if shared.muted.load(Ordering::SeqCst) {
+                    continue;
+                }
                 state.status.gets += 1;
                 let held = state.identity.blocks();
-                drop(state);
                 // Each pair asked, in the order asked: the block, or a control response saying the
                 // suboption is not there (0x02, "suboption not supported or no DataSet available").
                 let blocks: Vec<Block> = pdu
@@ -714,8 +728,7 @@ fn matches(id: &DeviceIdentity, filters: &[Block]) -> bool {
 
 /// Apply a Set's blocks; each answered (option, suboption, error).
 #[cfg(target_os = "linux")]
-fn set(shared: &Shared, pdu: &DcpPdu) -> Vec<(u8, u8, u8)> {
-    let mut state = shared.lock();
+fn set(state: &mut State, pdu: &DcpPdu) -> Vec<(u8, u8, u8)> {
     state.status.sets += 1;
     let mut answers = Vec::new();
     for b in &pdu.blocks {

@@ -833,7 +833,7 @@ mod round_2 {
     use std::time::{Duration, Instant};
 
     use veredas_aranha::netns;
-    use veredas_aranha::profinet::dcp::{self, DcpPdu, Filter};
+    use veredas_aranha::profinet::dcp::{self, DcpPdu, Filter, Service, ServiceType};
     use veredas_aranha::profinet::ether;
     use veredas_aranha::profinet::lldp::{self, ChassisId, LldpPdu, PortId};
     use veredas_aranha::profinet::mac::Mac;
@@ -1036,6 +1036,48 @@ mod round_2 {
             assert_eq!(next_dcp(&ctl, Duration::from_millis(300)).map(|p| p.xid), None);
             let l = fresh_lldp(&lctl, Duration::from_millis(250));
             assert_eq!((l.chassis, l.port), (ChassisId::Mac { mac: dev.mac }, PortId::Local { id: "port-001".into() }));
+        });
+    }
+
+    #[test]
+    fn once_a_mute_returns_no_answer_leaves_and_every_answer_counted_was_sent() {
+        // Answers falling due all around the mute (two hundred Identify requests at a factor of 2,
+        // so one pass of the device's loop sends many; the mute at a different moment each round):
+        // the count read when the mute returns is every answer the controller ever receives, so
+        // none left once it had returned (the orchestrator's run at 081ffa70 saw one leave 94 µs
+        // after the call began; the bare flag let answers out here within ten rounds, three runs
+        // of three).
+        const N: u32 = 200;
+        const F: u16 = 2;
+        const W: u32 = 12;
+        netns::isolated("round_2::once_a_mute_returns_no_answer_leaves_and_every_answer_counted_was_sent", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (mut received, mut before) = (0u64, 0u64);
+            let mut cut = 0;
+            for round in 0..100u32 {
+                dev.set_muted(false);
+                for i in 0..N {
+                    ctl.send(&dcp::identify_request(me, round * 1000 + i, F, &Filter::All).unwrap()).unwrap();
+                }
+                std::thread::sleep(Duration::from_micros(u64::from(round % W) * 1_000));
+                dev.set_muted(true);
+                let counted = dev.status().identify_answered;
+                while let Some(p) = next_dcp(&ctl, Duration::from_millis(60)) {
+                    if p.service == Service::Identify && p.service_type == ServiceType::Success {
+                        received += 1;
+                    }
+                }
+                assert_eq!(received, counted, "round {round}: answers received against those counted when the mute returned");
+                if counted - before < u64::from(N) {
+                    cut += 1;
+                }
+                before = counted;
+            }
+            // The mute fell inside a burst in most rounds: it dropped answers due after it.
+            assert!(cut >= 40, "the mute fell inside a burst in {cut} round(s) of 100");
+            assert_eq!(dev.status().identify_answered, received);
         });
     }
 
