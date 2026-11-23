@@ -473,6 +473,7 @@ fn the_counter_s_q_says_what_its_last_scan_returned_below_the_preset_too() {
 fn a_read_far_past_the_width_is_false() {
     assert!(!0xFF_u8.get_bit(9));
     assert!(!u16::MAX.get_bit(100));
+    assert!(!u16::MAX.get_bit(2_000));
     assert!(!u32::MAX.get_bit(33));
     assert!(!u64::MAX.get_bit(u32::MAX));
 }
@@ -884,6 +885,10 @@ fn the_sources_read_as_compiled_hold_only_the_words_the_clause_allows() {
             "env",
             "option_env",
             "unwrap",
+            "unwrap_err",
+            "unwrap_unchecked",
+            "expect_err",
+            "debug_assertions",
             "todo",
             "unimplemented",
             "unreachable",
@@ -906,6 +911,8 @@ fn the_sources_read_as_compiled_hold_only_the_words_the_clause_allows() {
         // `test` nowhere else, so no test attribute by any path, name or macro
         let unit_tested = matches!(file, "bits.rs" | "counters.rs" | "edges.rs" | "timers.rs");
         assert_eq!(count(&all, "cfg_attr"), usize::from(file == "lib.rs"), "{file}: cfg_attr");
+        let cfg_words = all.iter().filter(|w| w.starts_with("cfg")).count();
+        assert_eq!(cfg_words, usize::from(file == "lib.rs") + usize::from(unit_tested), "{file}: a `cfg` word elsewhere");
         assert_eq!(code.matches(NO_STD_SWITCH).count(), usize::from(file == "lib.rs"), "{file}: the no_std switch");
         assert_eq!(count(&all, "cfg"), usize::from(unit_tested), "{file}: cfg");
         assert_eq!(code.matches(TESTS_SITE).count(), usize::from(unit_tested), "{file}: cfg(test)");
@@ -943,12 +950,13 @@ mod tests {
 }
 pub fn after() {}
 #[expect(dead_code)]
-fn called() { let _ = Some(1).expect("x"); }
+fn called() { let _ = Some(1).expect("x"); let _ = Err::<(), u8>(1).unwrap_err(); }
+core::cfg_select! { debug_assertions => { fn d() {} } _ => { fn d() {} } }
 "####;
     let code = code_of(source);
     let (library, tests_module) = library_and_tests(source);
     let library_words = words(&library);
-    for kept in ["asserted", "CR", "BR", "BC", "life", "a", "outer", "shown_after_a_lifetime", "hidden", "after"] {
+    for kept in ["asserted", "CR", "BR", "BC", "life", "a", "outer", "shown_after_a_lifetime", "hidden", "after", "unwrap_err", "cfg_select", "debug_assertions"] {
         assert!(library_words.contains(&kept), "{kept} is the library's code");
     }
     for gone in ["assert", "example", "impl", "trait", "string", "raw", "nested", "open", "valve", "half", "includes"] {
@@ -1179,4 +1187,18 @@ fn the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link(
     c.scan(false, false, i32::MAX);
     assert!(c.scan(true, false, i32::MAX), "one edge more at the top");
     assert_eq!(c.cv(), i32::MAX, "saturating, never overflowing");
+}
+
+// The sixteenth refute round: a fresh timer scanned with its input off, on the build programs link (only Veredas 1's
+// unit tests did, on theirs).
+
+#[test]
+fn a_fresh_timer_scanned_with_its_input_off_stays_off() {
+    let mut on = Ton::default();
+    assert_eq!((on.scan(&at(0), false, ms(100)), on.q(), on.et()), (false, false, ms(0)));
+    let mut off = Tof::default();
+    assert_eq!((off.scan(&at(0), false, ms(100)), off.q(), off.et()), (false, false, ms(0)), "an off-delay with no drop");
+    assert_eq!((off.scan(&at(200), false, ms(100)), off.q(), off.et()), (false, false, ms(0)));
+    let mut pulse = Tp::default();
+    assert_eq!((pulse.scan(&at(0), false, ms(100)), pulse.q(), pulse.et()), (false, false, ms(0)));
 }

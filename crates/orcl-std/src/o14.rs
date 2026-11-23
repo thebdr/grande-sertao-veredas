@@ -2,8 +2,9 @@
 //! (`docs/orcl/language/ownership.md`). Each block is tried three ways: scanned in place through `&mut`, which
 //! compiles, then through a copy (E0507) and through a clone (E0599), which must not. The twin that compiles is
 //! what keeps the other two honest: stable rustdoc does not check the error code a `compile_fail` names, so
-//! without it an unrelated error (an import that no longer resolves) would keep the pin green. This module holds
-//! no code; `cargo test -p orcl-std` runs its examples.
+//! without it an unrelated error (an import that no longer resolves) would keep the pin green. Each block is also
+//! asked for through a bound, which no method of the block's own can stand in for: `Default` compiles, `Clone`
+//! must not (E0277). This module holds no code; `cargo test -p orcl-std` runs its examples.
 //!
 //! `Ton`, scanned in place:
 //!
@@ -183,4 +184,88 @@
 //! impl Guard {
 //!     fn scan(&mut self, scan: &Scan) -> bool { let _ = (scan, ms(0)); let mut copy = self.block.clone(); copy.scan(true, false, 3) }
 //! }
+//! ```
+//!
+//! `Ton`, asked for through a `Default` bound, and through a `Clone` bound:
+//!
+//! ```
+//! use orcl_std::Ton;
+//! fn bound<T: Default>(_: &T) {}
+//! bound(&Ton::default());
+//! ```
+//!
+//! ```compile_fail,E0277
+//! use orcl_std::Ton;
+//! fn bound<T: Clone>(_: &T) {}
+//! bound(&Ton::default());
+//! ```
+//!
+//! `Tof`, asked for through a `Default` bound, and through a `Clone` bound:
+//!
+//! ```
+//! use orcl_std::Tof;
+//! fn bound<T: Default>(_: &T) {}
+//! bound(&Tof::default());
+//! ```
+//!
+//! ```compile_fail,E0277
+//! use orcl_std::Tof;
+//! fn bound<T: Clone>(_: &T) {}
+//! bound(&Tof::default());
+//! ```
+//!
+//! `Tp`, asked for through a `Default` bound, and through a `Clone` bound:
+//!
+//! ```
+//! use orcl_std::Tp;
+//! fn bound<T: Default>(_: &T) {}
+//! bound(&Tp::default());
+//! ```
+//!
+//! ```compile_fail,E0277
+//! use orcl_std::Tp;
+//! fn bound<T: Clone>(_: &T) {}
+//! bound(&Tp::default());
+//! ```
+//!
+//! `RTrig`, asked for through a `Default` bound, and through a `Clone` bound:
+//!
+//! ```
+//! use orcl_std::RTrig;
+//! fn bound<T: Default>(_: &T) {}
+//! bound(&RTrig::default());
+//! ```
+//!
+//! ```compile_fail,E0277
+//! use orcl_std::RTrig;
+//! fn bound<T: Clone>(_: &T) {}
+//! bound(&RTrig::default());
+//! ```
+//!
+//! `FTrig`, asked for through a `Default` bound, and through a `Clone` bound:
+//!
+//! ```
+//! use orcl_std::FTrig;
+//! fn bound<T: Default>(_: &T) {}
+//! bound(&FTrig::default());
+//! ```
+//!
+//! ```compile_fail,E0277
+//! use orcl_std::FTrig;
+//! fn bound<T: Clone>(_: &T) {}
+//! bound(&FTrig::default());
+//! ```
+//!
+//! `Ctu`, asked for through a `Default` bound, and through a `Clone` bound:
+//!
+//! ```
+//! use orcl_std::Ctu;
+//! fn bound<T: Default>(_: &T) {}
+//! bound(&Ctu::default());
+//! ```
+//!
+//! ```compile_fail,E0277
+//! use orcl_std::Ctu;
+//! fn bound<T: Clone>(_: &T) {}
+//! bound(&Ctu::default());
 //! ```
