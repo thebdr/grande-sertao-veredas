@@ -10,15 +10,15 @@
     "modbus_server"
   ],
   "exitCode": 0,
-  "outputSha": "d7e10837f32b3e54e082e72ebca4f980965e5f1a14f5b17ccda6dee94de6e28a",
-  "outputTail": "test a_connection_the_server_has_not_yet_taken_is_dropped_with_the_rest ... ok\ntest pipelined_and_split_requests_are_answered_in_order_and_whole ... ok\ntest a_frame_of_another_protocol_is_dropped_and_a_length_no_frame_has_closes_the_connection ... ok\ntest round_3::an_answer_whose_write_fails_is_taken_back ... ok\ntest round_3::each_exchange_shows_its_own_answer_when_two_delayed_ones_interleave ... ok\ntest round_3::the_delay_holds_an_exception_too ... ok\ntest a_client_that_reads_nothing_is_dropped_at_once ... ok\ntest round_3::an_answer_is_counted_as_its_write_begins_and_taken_back_when_a_drop_cuts_it ... ok\ntest round_3::an_answer_already_handed_to_its_socket_goes_out_after_silence_begins ... ok\ntest the_knobs_delay_silence_and_drop_every_connection ... ok\n\ntest result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.15s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s\n     Running tests/modbus_server.rs (target/debug/build/veredas-maquinar/d6d96c695d25da40/out/modbus_server-d6d96c695d25da40)",
-  "ranAt": "2026-11-22T22:28:06.185Z",
-  "headCommit": "c5ce5cf729d93b014a7295e30670ed8e6d11c9ee",
+  "outputSha": "fa310987adb04d2c5503ea48f355c8c2c8e413cc5d308e175ee5152bc1fb829c",
+  "outputTail": "test round_4::a_client_that_closed_during_a_delay_frees_its_place_under_the_limit ... ok\ntest pipelined_and_split_requests_are_answered_in_order_and_whole ... ok\ntest a_frame_of_another_protocol_is_dropped_and_a_length_no_frame_has_closes_the_connection ... ok\ntest round_3::each_exchange_shows_its_own_answer_when_two_delayed_ones_interleave ... ok\ntest round_3::the_delay_holds_an_exception_too ... ok\ntest a_client_that_reads_nothing_is_dropped_at_once ... ok\ntest round_3::an_answer_is_counted_as_its_write_begins_and_taken_back_when_a_drop_cuts_it ... ok\ntest round_3::an_answer_already_handed_to_its_socket_goes_out_after_silence_begins ... ok\ntest round_4::no_answer_is_handed_to_its_socket_once_silence_is_set_whatever_else_holds_the_lock ... ok\ntest the_knobs_delay_silence_and_drop_every_connection ... ok\n\ntest result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.16s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s\n     Running tests/modbus_server.rs (target/debug/build/veredas-maquinar/d6d96c695d25da40/out/modbus_server-d6d96c695d25da40)",
+  "ranAt": "2026-11-23T01:11:55.755Z",
+  "headCommit": "ec90b3afa581da9c3668772b7a7e378ebd836106",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/modbus_server.rs",
       "file": "crates/veredas-maquinar/tests/modbus_server.rs",
-      "fileSha": "605ee3a6d2647aa11d3e6742051cf155981b9688ddc8166c7ff8412f4874f0ae"
+      "fileSha": "c2dfef07766c5b10dfd088827e720a4c88b9253cda40d9c32b3a163632b93ceb"
     }
   ]
 }
