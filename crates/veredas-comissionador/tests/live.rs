@@ -8,8 +8,10 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use common::*;
+use veredas_comissionador::eval::{Value, duration_text};
 use veredas_comissionador::model::Outcome;
-use veredas_comissionador::run::{RunOptions, RunResult, RunVerdict};
+use veredas_comissionador::plant::{LivePlant, Plant};
+use veredas_comissionador::run::{RunOptions, RunResult, RunVerdict, SETTLE_MS};
 
 fn texts(r: &RunResult) -> Vec<String> {
     r.reported.iter().map(|x| x.text.clone()).collect()
@@ -117,8 +119,24 @@ fn a_gated_write_lands_and_a_wait_meets_what_it_caused() {
     let st = steps(&r);
     assert_eq!(st[0], "now #1 pass: plc_main.level == 0.9 held after 0s", "a condition that holds as the step starts");
     assert_eq!(st[1], "go #1 pass: plc_main.run := 1: Good");
-    let after: i64 = st[2].strip_prefix("fast #1 pass: plc_main.speed >= 2.0 held after ").unwrap().strip_suffix("ms").unwrap().parse().unwrap();
-    assert!((100..2000).contains(&after), "the reaction sets the speed 100 ms after the write: {after}");
+    // Every moment here is a stamp on the store's axis, the clock the rows carry and the plant's
+    // `now` reads. The write's step ends at the plant's answer: the step before it read the plant,
+    // so the write went out once that read's moment was 250 ms past.
+    let (now, go, fast) = (&r.steps[0], &r.steps[1], &r.steps[2]);
+    assert_eq!((now.end_ms, go.start_ms), (now.start_ms, now.start_ms), "a condition holding at once moves no clock");
+    assert!(go.end_ms - go.start_ms >= SETTLE_MS, "the clock moved to the answer: {} ms", go.end_ms - go.start_ms);
+    // The wait starts there and holds at the stamp of the first row of the store the reaction
+    // set, the speed 1.5 before it: the bench's 100 ms is counted from the moment it took the
+    // write, which the engine never sees, the answer coming back after it.
+    let plant = LivePlant::new(s.live()).unwrap();
+    let table = plant.tables().unwrap().into_iter().find(|t| t.name == "plc_main").unwrap();
+    let rows = plant.rows(&table, 0, plant.now_ms()).unwrap();
+    let reacted = rows.iter().position(|row| row.field("speed") == Some(Some(Value::Float(2.0)))).expect("the reaction stored");
+    assert!(reacted > 0 && rows[..reacted].iter().all(|row| row.field("speed") == Some(Some(Value::Float(1.5)))), "{rows:?}");
+    let reacted = rows[reacted].time_ms;
+    assert!(reacted > go.start_ms, "the speed changed after the write went out");
+    assert_eq!((fast.start_ms, fast.end_ms), (go.end_ms, reacted.max(go.end_ms)), "the wait holds at the reaction's row, or at once had it been stored before the answer");
+    assert_eq!(st[2], format!("fast #1 pass: plc_main.speed >= 2.0 held after {}", duration_text(fast.end_ms - fast.start_ms)));
     assert_eq!(st[3..], ["look #1 pass: s = 2, l = 0.9", "ok #1 pass: speed reached: pass", "low #1 fail: s < 1: fail (s = 2)"]);
     assert_eq!(tag(&bench, "run"), "Int32(1)", "the write reached the plant");
     assert_eq!((r.verdict, r.decided_at.as_deref(), r.reason.as_str()), (RunVerdict::Failed, Some("low"), "`low` failed: s < 1: fail (s = 2)"));
