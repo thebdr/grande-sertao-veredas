@@ -10,15 +10,15 @@
     "store_record"
   ],
   "exitCode": 0,
-  "outputSha": "e8b69ed6d8d166e0beedf7bcbcee4b6c161715ec2a070da472420fa8517fd8b6",
-  "outputTail": "\nrunning 4 tests\ntest at_its_size_limit_a_recording_stops_and_nothing_is_deleted ... ok\ntest the_record_keeps_on_the_drive_what_the_window_lets_go ... ok\ntest the_limit_stops_the_recording_at_the_first_write_that_reaches_it ... ok\ntest a_record_is_written_once_a_period_whatever_the_poll_rate ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.49s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/portal-bf6010/crates/veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.99s\n     Running tests/store_record.rs (target/debug/build/veredas-portal/d7eef14a2ce56138/out/store_record-d7eef14a2ce56138)",
-  "ranAt": "2026-11-23T01:08:54.342Z",
-  "headCommit": "ad4302537cd29e9b07a96b3a79d4a70db00edccc",
+  "outputSha": "4da021902b2d042e3399ca09e839909b3162f2148e301f9db71bf7ff931df95a",
+  "outputTail": "\nrunning 4 tests\ntest at_its_size_limit_a_recording_stops_and_nothing_is_deleted ... ok\ntest the_record_keeps_on_the_drive_what_the_window_lets_go ... ok\ntest the_limit_stops_the_recording_at_the_first_write_that_reaches_it ... ok\ntest a_record_is_written_once_a_period_whatever_the_poll_rate ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.43s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s\n     Running tests/store_record.rs (target/debug/build/veredas-portal/d7eef14a2ce56138/out/store_record-d7eef14a2ce56138)",
+  "ranAt": "2026-11-23T02:58:38.166Z",
+  "headCommit": "137357710d80a6e2ba9141c47f7eccb0700877d5",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store_record.rs",
       "file": "crates/veredas-portal/tests/store_record.rs",
-      "fileSha": "5719541be8caa507d7a7ffba0adede13a5af4e4e7f9b15600752b8f829096eaf"
+      "fileSha": "3fe0feb7af6b8335d4bbfc2fccc4dca9bc74262ded6e5a8fa9155d05d22ce4a1"
     }
   ]
 }
