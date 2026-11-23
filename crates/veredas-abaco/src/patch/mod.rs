@@ -2515,7 +2515,7 @@ fn rewrite_defined_names(
                 .ok_or_else(|| PatchError::Malformed("<definedName> not closed".into()))?;
             pos = b;
             let name = xml::attr(t.text, "name")
-                .map(xml::decode_text)
+                .map(xml::decode_attr)
                 .unwrap_or_default();
             let scope = scope_of(xml::attr(t.text, "localSheetId"));
             // a name local to a chart sheet, which the engine cannot scope: the file's alone, its

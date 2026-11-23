@@ -498,7 +498,7 @@ pub(crate) fn shift_link_attributes(
         let mut text = t.text.to_string();
         for name in names.iter().filter(|_| !t.closing) {
             let Some(link) = attr(&text, name).filter(|l| !l.is_empty()).map(str::to_string) else { continue };
-            let mut cur = decode_text(&link);
+            let mut cur = xml::decode_attr(&link);
             let mut changed = false;
             for (sheet, sh) in shifts {
                 if let Some(n) = refs::shift_formula(&cur, sheet, *sh, home, order) {

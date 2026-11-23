@@ -1597,7 +1597,7 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
         if name == "cfvo"
             && let Some(val) = attr(t.text, "val")
         {
-            let decoded = decode_text(val);
+            let decoded = xml::decode_attr(val);
             let shifted = match local.as_deref().or(anchor) {
                 Some(sqref) => shift_anchored(&decoded, sqref, job),
                 None => shift_text(&decoded, job),

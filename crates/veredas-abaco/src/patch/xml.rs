@@ -307,6 +307,16 @@ pub fn decode_text(s: &str) -> String {
     out
 }
 
+/// An attribute's value → string: XML's attribute-value normalization first (a raw tab, line
+/// feed or carriage return is a space, a CR LF pair one space; a character reference keeps its
+/// character, `&#9;` a tab), then as [`decode_text`].
+pub fn decode_attr(s: &str) -> String {
+    if !s.contains(['\t', '\n', '\r']) {
+        return decode_text(s);
+    }
+    decode_text(&s.replace("\r\n", " ").replace(['\t', '\n', '\r'], " "))
+}
+
 /// String → attribute value (double-quoted).
 pub fn escape_attr(s: &str) -> String {
     escape(s, true)
@@ -384,6 +394,12 @@ mod tests {
         assert_eq!(decode_text(&escape_text("a\rb _x000D_")), "a\rb _x000D_");
         assert_eq!(escape_attr("a\r\n\tb\" _x000D_"), "a&#13;&#10;&#9;b&quot; _x005F_x000D_");
         assert_eq!(unescape(&escape_attr("a\r\n\tb\"")), "a\r\n\tb\"");
+        // what an XML reader takes of an attribute: raw whitespace a space, references their
+        // characters
+        assert_eq!(decode_attr("a\tb\nc\r\nd\re"), "a b c d e");
+        assert_eq!(decode_attr("a&#9;b&#10;c&#13;d"), "a\tb\nc\rd");
+        assert_eq!(decode_attr(&escape_attr("a\r\n\tb\"")), "a\r\n\tb\"");
+        assert_eq!(decode_attr("x &amp; _x0041_"), "x & A");
         // a literal escape of a control character stays literal too
         assert_eq!(escape_text("_x0001_\u{1}"), "_x005F_x0001__x0001_");
         assert_eq!(decode_text(&escape_text("_x0001_\u{1}\u{FFFF}")), "_x0001_\u{1}\u{FFFF}");

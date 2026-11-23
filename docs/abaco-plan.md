@@ -426,6 +426,9 @@ workspace/log.txt             the log, one escaped entry per line
   as text, and refuses an edit of it.
 - **A one-cell merge is no merge**; an empty list (`<hyperlinks/>`, `<mergeCells/>`) is no list.
 - **A carriage return is `_x000D_` in text and `&#13;` in an attribute**, written in one pass.
+- **An attribute's raw whitespace is a space** (XML's attribute-value normalization; C-223's
+  eighth round): a moved `cfvo` formula or text link is read as any reader reads it, a raw tab,
+  line feed or CR LF one space, `&#9;` a tab.
 - **TOML has no null, and the engine's `Color::None` serialises as one** (an untagged enum's unit
   variant): the `.abaco` file writes the engine's structures through JSON, null as `nan`.
 - **The zip reader keeps one entry of a name**: a file holding two cannot be told apart from one.

@@ -1090,6 +1090,22 @@ fn a_conditional_formats_thresholds_follow_their_cells() {
 }
 
 #[test]
+fn a_raw_tab_or_line_feed_in_a_moved_attribute_is_the_space_xml_reads_it_as() {
+    // every XML reader takes a raw tab, line feed or carriage return in an attribute as a space;
+    // `&#9;` is a tab
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("attr.xlsx");
+    let data: String = (1..=5).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    let after = "<conditionalFormatting sqref=\"A1:A5\"><cfRule type=\"colorScale\" priority=\"1\"><colorScale><cfvo type=\"formula\" val=\"LEN(&quot;a\tb&quot;)+$A$5\"/><cfvo type=\"formula\" val=\"LEN(&quot;a&#9;b\r\nc&quot;)+$A$4\"/><color rgb=\"FFF8696B\"/><color rgb=\"FF63BE7B\"/></colorScale></cfRule></conditionalFormatting>";
+    plain_book(&src, &[("S", worksheet(&data, after))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[rows("S", 1, 1)], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(r#"<cfvo type="formula" val="LEN(&quot;a b&quot;)+$A$6"/>"#), "{sheet}");
+    assert!(sheet.contains(r#"<cfvo type="formula" val="LEN(&quot;a&#9;b c&quot;)+$A$5"/>"#), "{sheet}");
+}
+
+#[test]
 fn a_plain_formula_is_not_already_the_array_an_edit_writes() {
     // D1 holds SUM(A1:A3*B1:B3) plain, as openpyxl or an older Excel write it: Excel reads 10
     let dir = tempfile::tempdir().unwrap();
