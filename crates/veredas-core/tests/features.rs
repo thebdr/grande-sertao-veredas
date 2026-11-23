@@ -296,3 +296,78 @@ fn main() {
         "slim core works"
     );
 }
+
+/// Each form a member asks for holds the layers its form promises, named by a consumer crate of
+/// the test's own and checked by cargo: the default (every plant-facing layer), the default with
+/// the demo plant (maquinar's form), each master alone. Every build of core inside the suite merges
+/// these forms (core's own tests and the workspace ask for all of them at once), so only a crate
+/// apart sees one form as a member that asks for it alone does.
+#[test]
+fn each_form_holds_the_layers_it_promises() {
+    let core = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("form-consumers");
+    let forms: [(&str, &str, &str); 4] = [
+        (
+            "default-form",
+            "",
+            "veredas_core::types::Value, veredas_core::types::Sample, veredas_core::source::SourceHandle, \
+             veredas_core::telegram::Channel, veredas_core::telegram::Catalog, veredas_core::opc::Browser, \
+             veredas_core::opc::OpcWorker, veredas_core::schema::Stamp, veredas_core::state::ControllerState, \
+             veredas_core::rng::Pcg32",
+        ),
+        (
+            "demo-form",
+            ", features = [\"demo-server\"]",
+            "veredas_core::opc::demo::DemoPlant, veredas_core::opc::demo::Relay, veredas_core::opc::Browser",
+        ),
+        (
+            "modbus-form",
+            ", default-features = false, features = [\"modbus\"]",
+            "veredas_core::fieldbus::modbus::Client, veredas_core::schema::Stamp",
+        ),
+        (
+            "enip-form",
+            ", default-features = false, features = [\"enip\"]",
+            "veredas_core::fieldbus::enip::Scanner, veredas_core::schema::Stamp",
+        ),
+    ];
+    for (name, spec, items) in forms {
+        let root = base.join(name);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n\
+                 [workspace]\n\n[dependencies]\nveredas-core = {{ path = {:?}{spec} }}\n",
+                core.to_str().unwrap()
+            ),
+        )
+        .unwrap();
+        std::fs::copy(core.join("../../Cargo.lock"), root.join("Cargo.lock")).unwrap();
+        let names: Vec<String> = items
+            .split(", ")
+            .map(|t| format!("    let _ = std::any::type_name::<{}>();", t.trim()))
+            .collect();
+        std::fs::write(
+            root.join("src/main.rs"),
+            format!("fn main() {{\n{}\n}}\n", names.join("\n")),
+        )
+        .unwrap();
+        // One build folder for every consumer, the one the compile check above uses, so the
+        // dependencies each form shares are compiled once.
+        let out = Command::new(env!("CARGO"))
+            .args(["check", "--offline", "--quiet", "--manifest-path"])
+            .arg(root.join("Cargo.toml"))
+            .env(
+                "CARGO_TARGET_DIR",
+                Path::new(env!("CARGO_TARGET_TMPDIR")).join("features-check"),
+            )
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{name} ({spec}): {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
