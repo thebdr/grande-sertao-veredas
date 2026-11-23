@@ -898,9 +898,9 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let probe = probe_dashboard(&dash);
     let v = drawn_as(&mut page, "Probe", "dashboards/0", Some(&probe));
     let kinds: Vec<&str> = v["drawn"].as_array().unwrap().iter().map(|p| p["kind"].as_str().unwrap()).collect();
-    // The probe's panels by state, its 28 cases, and the dashboard's own panels again with every
+    // The probe's panels by state, its 30 cases, and the dashboard's own panels again with every
     // string spaced (and a normal tile, a normal level's row, a refused panel).
-    assert_eq!(kinds.len(), every_state().len() + 28 + dash["panels"].as_array().unwrap().len() + 3, "{kinds:?}");
+    assert_eq!(kinds.len(), every_state().len() + 30 + dash["panels"].as_array().unwrap().len() + 3, "{kinds:?}");
     // Every place a dashboard writes a state's class, each state painted otherwise than every other
     // there, none in the accent's family or its band of hue but the neutral series (Q22).
     let painted = page.eval(&format!("{STATE_PAINT}({})", serde_json::to_string(&every_state()).unwrap()));
@@ -1418,6 +1418,8 @@ fn probe_dashboard(d: &Value) -> Value {
         t["data"]["mark"] = json!("!");
         t["data"]["sub"] = json!(format!("  {s}\tsub\n+ "));
         t["data"]["text"] = json!(format!("  {s}\t1\n+ "));
+        spaced(&mut t["title"]);
+        spaced(&mut t["data"]);
         panels.push(t);
     }
     let mut one = p(0);
@@ -1454,6 +1456,8 @@ fn probe_dashboard(d: &Value) -> Value {
     }
     g["data"]["not_normal"] = json!(cells.iter().filter(|c| c["state"] != "normal").count());
     g["data"]["cells"] = json!(cells);
+    spaced(&mut g["title"]);
+    spaced(&mut g["data"]);
     panels.push(g);
     let mut l = p(8);
     let r0 = l["data"]["rows"][0].clone();
@@ -1464,6 +1468,8 @@ fn probe_dashboard(d: &Value) -> Value {
         rows.push(r);
     }
     l["data"]["rows"] = json!(rows);
+    spaced(&mut l["title"]);
+    spaced(&mut l["data"]);
     panels.push(l);
     let mut tl = p(6);
     let (from, to) = (tl["data"]["from"].as_i64().unwrap(), tl["data"]["to"].as_i64().unwrap());
@@ -1471,12 +1477,33 @@ fn probe_dashboard(d: &Value) -> Value {
     let mut row = tl["data"]["rows"][0].clone();
     row["segments"] = json!(states.iter().enumerate().map(|(i, s)| json!({ "from": from + i as i64 * step, "to": from + (i as i64 + 1) * step, "state": s, "mark": "!", "word": word(s) })).collect::<Vec<_>>());
     tl["data"]["rows"] = json!(states.iter().map(|s| { let mut r = row.clone(); r["label"] = json!(format!("  Line {s}\t+\n+ ")); r["now"]["state"] = json!(s); r["now"]["word"] = word(s); r["now"]["mark"] = json!("!"); r }).collect::<Vec<_>>());
+    spaced(&mut tl["title"]);
+    spaced(&mut tl["data"]);
     panels.push(tl);
     let mut tb = p(9);
     let row0 = tb["data"]["rows"][0].clone();
     // Every state on every cell that draws one: the rules' column and the bar's with rules.
     tb["data"]["rows"] = json!(states.iter().map(|s| { let mut r = row0.clone(); for k in [1, 2] { r[k]["state"] = json!(s); r[k]["word"] = word(s); r[k]["mark"] = json!("!"); } r }).collect::<Vec<_>>());
+    spaced(&mut tb["title"]);
+    spaced(&mut tb["data"]);
     panels.push(tb);
+    // Where no word holds, the page draws a text alone: a cell of a column with rules none of which
+    // holds (plain and with a bar: the host's word and mark empty), and a level's value with no unit;
+    // each text spaced, its empty word, mark and unit left empty.
+    let mut none = p(9);
+    let mut row = none["data"]["rows"][0].clone();
+    for k in [1, 2] {
+        (row[k]["state"], row[k]["word"], row[k]["mark"], row[k]["text"]) = (json!("normal"), json!(""), json!(""), json!(format!("cell {k}")));
+    }
+    none["data"]["rows"] = json!([row]);
+    spaced(&mut none["data"]);
+    panels.push(none);
+    let mut bare = p(8);
+    let mut r = bare["data"]["rows"][0].clone();
+    (r["state"], r["unit"], r["text"]) = (json!("normal"), json!(""), json!("7"));
+    bare["data"]["rows"] = json!([r]);
+    spaced(&mut bare["data"]);
+    panels.push(bare);
     let mut cl = p(10);
     cl["data"]["rows"][0]["spark"] = json!([cl["data"]["rows"][0]["spark"][0].clone()]);
     // A spread of four places, drawn as the host writes it, never rounded by the page; and rows left
@@ -1533,7 +1560,8 @@ fn probe_dashboard(d: &Value) -> Value {
     // its reason so. Each drawn as written and as received.
     fn spaced(v: &mut Value) {
         match v {
-            Value::String(s) => *s = format!("  {s}\t+\n+ "),
+            // An empty string left empty: the page's own branch for none taken as the host sends it.
+            Value::String(s) if !s.is_empty() => *s = format!("  {s}\t+\n+ "),
             Value::Array(a) => a.iter_mut().for_each(spaced),
             Value::Object(o) => o.iter_mut().filter(|(k, _)| *k != "kind" && *k != "state").for_each(|(_, x)| spaced(x)),
             _ => {}
