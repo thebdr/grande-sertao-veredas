@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(live)"
   ],
   "exitCode": 0,
-  "outputSha": "7c1ccce036f9a75b67ef0b33c7d224e8efd01f95e8261ad89851a757d9ef03f2",
-  "outputTail": "        PASS [   1.226s] ( 1/13) veredas-comissionador::live a_test_refused_for_a_row_s_column_writes_nothing\n        PASS [   1.376s] ( 2/13) veredas-comissionador::live values_compute_and_compare_as_the_reference_says\n        PASS [   1.446s] ( 3/13) veredas-comissionador::live a_live_read_waits_until_its_moment_is_stored\n        PASS [   1.469s] ( 4/13) veredas-comissionador::live routes_retries_and_ends_take_the_run_where_the_file_says\n        PASS [   1.486s] ( 5/13) veredas-comissionador::live the_binding_refuses_before_anything_runs\n        PASS [   1.557s] ( 6/13) veredas-comissionador::live a_gated_write_lands_and_a_wait_meets_what_it_caused\n        PASS [   1.691s] ( 7/13) veredas-comissionador::live an_event_moves_the_clock_to_its_row_and_a_read_without_a_value_is_an_error\n        PASS [   2.559s] ( 8/13) veredas-comissionador::live a_write_the_switch_or_the_plant_refuses_mid_run_ends_its_step_in_error\n        PASS [   2.630s] ( 9/13) veredas-comissionador::live functions_take_typed_inputs_give_their_outputs_and_keep_their_bound\n        PASS [   4.787s] (10/13) veredas-comissionador::live timeouts_the_run_s_bound_and_the_tester_s_stop\n        PASS [   5.026s] (11/13) veredas-comissionador::live rows_sharing_a_stamp_are_judged_together_and_each_awaited\n        PASS [   6.370s] (12/13) veredas-comissionador::live the_worked_example_passes_live_against_the_machine\n        PASS [   7.433s] (13/13) veredas-comissionador::live the_worked_example_fails_where_the_destination_is_free\n────────────\n     Summary [   7.433s] 13 tests run: 13 passed, 0 skipped",
-  "ranAt": "2026-11-23T03:48:50.103Z",
-  "headCommit": "8fe024b3a69a2f2032933ce32d41fc735bf1d2e4",
+  "outputSha": "5f020d51c81381c3f843327f756f0be4d32ffc87ed000950bb6058dd9b8cbc78",
+  "outputTail": "        PASS [   1.545s] ( 1/13) veredas-comissionador::live a_test_refused_for_a_row_s_column_writes_nothing\n        PASS [   2.269s] ( 2/13) veredas-comissionador::live a_live_read_waits_until_its_moment_is_stored\n        PASS [   2.294s] ( 3/13) veredas-comissionador::live the_binding_refuses_before_anything_runs\n        PASS [   2.415s] ( 4/13) veredas-comissionador::live a_gated_write_lands_and_a_wait_meets_what_it_caused\n        PASS [   2.440s] ( 5/13) veredas-comissionador::live an_event_moves_the_clock_to_its_row_and_a_read_without_a_value_is_an_error\n        PASS [   2.759s] ( 6/13) veredas-comissionador::live routes_retries_and_ends_take_the_run_where_the_file_says\n        PASS [   2.869s] ( 7/13) veredas-comissionador::live values_compute_and_compare_as_the_reference_says\n        PASS [   3.050s] ( 8/13) veredas-comissionador::live a_write_the_switch_or_the_plant_refuses_mid_run_ends_its_step_in_error\n        PASS [   3.668s] ( 9/13) veredas-comissionador::live functions_take_typed_inputs_give_their_outputs_and_keep_their_bound\n        PASS [   5.525s] (10/13) veredas-comissionador::live timeouts_the_run_s_bound_and_the_tester_s_stop\n        PASS [   5.763s] (11/13) veredas-comissionador::live rows_sharing_a_stamp_are_judged_together_and_each_awaited\n        PASS [   6.839s] (12/13) veredas-comissionador::live the_worked_example_passes_live_against_the_machine\n        PASS [   7.743s] (13/13) veredas-comissionador::live the_worked_example_fails_where_the_destination_is_free\n────────────\n     Summary [   7.747s] 13 tests run: 13 passed, 0 skipped",
+  "ranAt": "2026-11-23T09:10:42.114Z",
+  "headCommit": "fa3e5eeed679da3a4fbf560c5a41dfb3b512d2fa",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/live.rs",
       "file": "crates/veredas-comissionador/tests/live.rs",
-      "fileSha": "d8b0d311ca7703475e8eca94d07ee1122e84244fe9bf10aa3c6768d6041e5bcd"
+      "fileSha": "23512bbd0317b0ba09581b6051978237a3bde5ee0ce5d807dcbc87bfea4e2483"
     }
   ]
 }
