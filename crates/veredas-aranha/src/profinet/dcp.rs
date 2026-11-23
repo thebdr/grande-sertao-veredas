@@ -158,7 +158,7 @@ pub enum Damage {
     Overrun { declared: usize, left: usize },
     /// It should carry a BlockInfo or BlockQualifier word and holds fewer than its two bytes.
     NoInfo,
-    /// Its kind is text, and its bytes are not UTF-8.
+    /// Its kind is text, and its bytes are not ASCII.
     Text,
 }
 
@@ -255,6 +255,10 @@ pub enum DcpError {
     NeedsTarget(&'static str),
     #[error("this PDU would be read back as another: {0}")]
     NotItself(String),
+    #[error("bytes as given under option {option} suboption {suboption} ({len} bytes) are read otherwise by Wireshark's dissector, which reads that code with a layout of its own: not written")]
+    ReadOtherwise { option: u8, suboption: u8, len: usize },
+    #[error("block {option}/{suboption}'s text travels as ASCII (Wireshark reads no other); {text:?} is not written")]
+    NotAscii { option: u8, suboption: u8, text: String },
     #[error("block {option}/{suboption} is damaged ({damage:?}): a damaged block is kept to be seen, never written")]
     Damaged { option: u8, suboption: u8, damage: Damage },
     #[error("a Set request holds whole blocks; {0} trailing bytes are not written")]
@@ -298,6 +302,16 @@ fn carries_info(service: u8, service_type: u8, option: u8, suboption: u8) -> boo
             matches!((service, response), (5, true) | (3, true) | (6, false) | (4, false))
         }
     }
+}
+
+/// Whether bytes as given under this code would be read otherwise by Wireshark's dissector
+/// (measured, tshark 4.6.6, over every untyped code of seventeen options in six kinds of PDU, 0 to
+/// 12 bytes): the device initiative's option (6) and option 7, which it reads with a layout of its
+/// own whatever the block's length says; DHCP's suboptions 61 and 255 under three bytes, likewise;
+/// and the options it cannot parse (0, 4 and 8 to 0x7F), read otherwise from three bytes and
+/// refused at every length, no place for bytes no reader types.
+fn read_otherwise(option: u8, suboption: u8, len: usize) -> bool {
+    matches!(option, 0 | 4 | 6..=0x7F) || (option == 3 && matches!(suboption, 61 | 255) && len < 3)
 }
 
 /// The codes a typed body is read and written under.
@@ -404,9 +418,11 @@ fn u16_at(b: &[u8], i: usize) -> u16 {
 fn decode_body(option: u8, suboption: u8, b: &[u8]) -> BlockBody {
     let exact = |n: usize| (b.len() != n).then(|| BlockBody::Damaged { data: b.to_vec(), damage: Damage::Length { expected: n, got: b.len() } });
     let suite = |b: &[u8]| IpSuite { ip: ipv4(&b[0..4]), mask: ipv4(&b[4..8]), gateway: ipv4(&b[8..12]) };
+    // Text is ASCII on the wire: other bytes are kept damaged (Wireshark reads them as no text
+    // this codec could write back).
     let text = |make: fn(String) -> BlockBody| match std::str::from_utf8(b) {
-        Ok(t) => make(t.to_string()),
-        Err(_) => BlockBody::Damaged { data: b.to_vec(), damage: Damage::Text },
+        Ok(t) if t.is_ascii() => make(t.to_string()),
+        _ => BlockBody::Damaged { data: b.to_vec(), damage: Damage::Text },
     };
     match (option, suboption) {
         (1, 1) => exact(6).unwrap_or_else(|| BlockBody::MacAddress { mac: Mac([b[0], b[1], b[2], b[3], b[4], b[5]]) }),
@@ -628,6 +644,18 @@ impl DcpPdu {
                 // its typed body, or the damage it was heard with.
                 if matches!(b.body, BlockBody::Unknown { .. }) && TYPED.contains(&(b.option, b.suboption)) {
                     return Err(DcpError::Misplaced { option: b.option, suboption: b.suboption, body: b.body.kind() });
+                }
+                // Nor where the dissector would read them otherwise.
+                if let BlockBody::Unknown { data } = &b.body
+                    && read_otherwise(b.option, b.suboption, data.len())
+                {
+                    return Err(DcpError::ReadOtherwise { option: b.option, suboption: b.suboption, len: data.len() });
+                }
+                // Text as ASCII, which the dissector reads as written.
+                if let BlockBody::DeviceVendor { value: text } | BlockBody::NameOfStation { name: text } | BlockBody::AliasName { name: text } = &b.body
+                    && !text.is_ascii()
+                {
+                    return Err(DcpError::NotAscii { option: b.option, suboption: b.suboption, text: text.clone() });
                 }
                 // The info word exactly where this PDU carries one.
                 let due = carries_info(service, service_type, b.option, b.suboption);

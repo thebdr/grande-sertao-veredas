@@ -464,6 +464,8 @@ fn a_damaged_block_is_kept_with_its_reason_and_the_next_still_decodes() {
         pdu.blocks[1],
         Block { option: 2, suboption: 1, info: None, body: BlockBody::Damaged { data: vec![0, 0, b'x'], damage: Damage::Overrun { declared: 40, left: 3 } } }
     );
+    // Its bytes are the damaged block's alone, not trailing ones too.
+    assert_eq!((pdu.blocks.len(), pdu.trailing.clone()), (2, vec![]));
     // Fewer than a block header's four bytes at the end are kept as trailing bytes.
     let mut blocks = name.to_vec();
     blocks.extend_from_slice(&[2, 2, 0]);
@@ -587,6 +589,10 @@ fn any_bytes_decode_without_a_panic_and_rewrite_to_themselves() {
         payload(&dcp::identify_request(ME, 1, 1, &Filter::Name("station-a".into())).unwrap(), Mac::DCP_MULTICAST, ME),
         payload(&dcp::set_response(ME, DEV, 1, &[(2, 2, 0)]).unwrap(), ME, DEV),
         payload(&dcp::get_request(DEV, ME, 1, &[(2, 2)]).unwrap(), DEV, ME),
+        // Bytes under codes the dissector reads its own way, with a name after them; and text
+        // that is not ASCII.
+        answer_with(&[6, 2, 0, 4, 0, 0, 1, 2, 7, 1, 0, 2, 0, 0, 3, 61, 0, 3, 0, 0, 9, 0, 2, 2, 0, 6, 0, 0, b'o', b'k', b'o', b'k']),
+        answer_with(&[3, 255, 0, 2, 0, 0, 2, 1, 0, 6, 0, 0, b'a', 0xC3, 0xA7, b'o']),
     ];
     let mut noise = common::Noise(0x5EED);
     for _ in 0..20_000 {
@@ -604,7 +610,8 @@ fn any_bytes_decode_without_a_panic_and_rewrite_to_themselves() {
         }
         seeds.push(p);
     }
-    let (mut decoded, mut overruns, mut gated) = (0, 0, 0);
+    let (mut decoded, mut overruns, mut gated, mut otherwise) = (0, 0, 0, 0);
+    let read_otherwise = |b: &Block| matches!(b.body, BlockBody::Unknown { ref data } if matches!(b.option, 0 | 4 | 6..=0x7F) || (b.option == 3 && matches!(b.suboption, 61 | 255) && data.len() < 3));
     for s in &seeds {
         for cut in 0..=s.len() {
             // The data length restated for the cut, so every cut reaches the block decoder.
@@ -627,9 +634,17 @@ fn any_bytes_decode_without_a_panic_and_rewrite_to_themselves() {
                                 "{e:?}"
                             );
                             gated += 1;
-                        } else {
-                            assert!(damaged && matches!(e, DcpError::Damaged { .. }), "{e:?} {c:?}");
+                        } else if damaged {
+                            // Refused for the first block that may not be written: the damaged
+                            // one, or bytes before it that the dissector reads its own way.
+                            let first_otherwise = matches!(e, DcpError::ReadOtherwise { .. }) && p0.blocks.iter().any(read_otherwise);
+                            assert!(matches!(e, DcpError::Damaged { .. }) || first_otherwise, "{e:?} {c:?}");
                             overruns += 1;
+                        } else {
+                            // Bytes kept under a code the dissector reads its own way: kept, never
+                            // written again.
+                            assert!(p0.blocks.iter().any(read_otherwise) && matches!(e, DcpError::ReadOtherwise { .. }), "{e:?} {c:?}");
+                            otherwise += 1;
                         }
                         continue;
                     }
@@ -639,7 +654,7 @@ fn any_bytes_decode_without_a_panic_and_rewrite_to_themselves() {
             }
         }
     }
-    assert!(decoded > 100_000 && overruns > 1_000 && gated > 1_000, "{decoded} decoded, {overruns} damaged and refused, {gated} Sets gated");
+    assert!(decoded > 100_000 && overruns > 1_000 && gated > 1_000 && otherwise >= 10, "{decoded} decoded, {overruns} damaged and refused, {gated} Sets gated, {otherwise} read otherwise and refused");
 }
 
 #[test]
@@ -1212,4 +1227,186 @@ fn the_device_options_and_the_full_ip_suite_are_written_and_read_in_their_order(
     // The options' BlockInfo, then the full suite's (set, under the general field for this one).
     assert_eq!(read[0].values(d, "pn_dcp.block_info"), ["0", "1"]);
     assert_eq!(read[0].complaints(), Vec::<String>::new());
+}
+
+/// tshark's reading of many frames: for each, the station names it reads, in order.
+fn tshark_names(frames: &[Vec<u8>]) -> Vec<Vec<String>> {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("dcp-sweep");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("sweep.pcap");
+    std::fs::write(&file, common::pcap(frames)).unwrap();
+    let out = std::process::Command::new(common::tshark())
+        .args(["-n", "-r"])
+        .arg(&file)
+        .args(["-T", "fields", "-E", "occurrence=a", "-E", "aggregator=|", "-e", "frame.number", "-e", "pn_dcp.suboption_device_nameofstation"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let names: Vec<Vec<String>> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| {
+            let names = l.split('\t').nth(1).unwrap_or_default();
+            if names.is_empty() { vec![] } else { names.split('|').map(str::to_string).collect() }
+        })
+        .collect();
+    assert_eq!(names.len(), frames.len());
+    names
+}
+
+#[test]
+fn bytes_as_given_are_written_only_where_the_dissector_reads_them_as_given() {
+    // Every code no typed body is read under, of ten options, in six kinds of PDU, holding 0, 1, 2
+    // or 12 bytes (the twelve a name block inside a word), and a name after it: where the codec
+    // writes the frame, tshark reads the names the codec reads.
+    let kinds = [
+        (dcp::FRAME_ID_IDENTIFY_RES, Service::Identify, ServiceType::Success, ME),
+        (dcp::FRAME_ID_IDENTIFY_RES, Service::Identify, ServiceType::Unsupported, ME),
+        (dcp::FRAME_ID_HELLO, Service::Hello, ServiceType::Request, Mac::DCP_HELLO_MULTICAST),
+        (dcp::FRAME_ID_GET_SET, Service::Get, ServiceType::Success, ME),
+        (dcp::FRAME_ID_GET_SET, Service::Set, ServiceType::Success, ME),
+        (dcp::FRAME_ID_IDENTIFY_REQ, Service::Identify, ServiceType::Request, Mac::DCP_MULTICAST),
+    ];
+    let inner = [0x00, 0x01, 0x02, 0x02, 0x00, 0x06, 0x00, 0x00, b'e', b'v', b'i', b'l'];
+    let with_word = |pdu: &DcpPdu, dst: Mac, option: u8, suboption: u8, body: BlockBody| -> Option<Block> {
+        // The word where this PDU carries one: tried without, then with.
+        for info in [None, Some(0)] {
+            let b = Block { option, suboption, info, body: body.clone() };
+            let probe = DcpPdu { blocks: vec![b.clone()], ..pdu.clone() };
+            match probe.frame(dst, DEV) {
+                Err(DcpError::InfoWord { .. }) => continue,
+                _ => return Some(b),
+            }
+        }
+        None
+    };
+    let mut frames = Vec::new();
+    let mut what = Vec::new();
+    let mut refused = Vec::new();
+    for (frame_id, service, service_type, dst) in kinds {
+        let base = DcpPdu { frame_id, service, service_type, xid: 1, response_delay: 0, blocks: vec![], trailing: vec![] };
+        let name = with_word(&base, dst, 2, 2, BlockBody::NameOfStation { name: "okok".into() }).unwrap();
+        for option in [0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0x10, 0x40, 0x7F, 0x80, 0xC0, 0xFE, 0xFF] {
+            for suboption in 0..=255u8 {
+                if dcp::TYPED.contains(&(option, suboption)) {
+                    continue;
+                }
+                for len in [0usize, 1, 2, 3, 12] {
+                    let Some(raw) = with_word(&base, dst, option, suboption, BlockBody::Unknown { data: inner[..len].to_vec() }) else { continue };
+                    let pdu = DcpPdu { blocks: vec![raw, name.clone()], ..base.clone() };
+                    match pdu.frame(dst, DEV) {
+                        Ok(f) => {
+                            let read = dcp::decode(ether::parse(&f).unwrap().payload).unwrap();
+                            let ours: Vec<String> = read.blocks.iter().filter_map(|b| match &b.body { BlockBody::NameOfStation { name } => Some(name.clone()), _ => None }).collect();
+                            assert_eq!(ours, ["okok"]);
+                            frames.push(f);
+                            what.push((option, suboption, service_type, service, len));
+                        }
+                        Err(e) => refused.push((option, suboption, len, e)),
+                    }
+                }
+            }
+        }
+    }
+    let names = tshark_names(&frames);
+    let mut otherwise = std::collections::BTreeMap::<(u8, u8), Vec<String>>::new();
+    for (w, n) in what.iter().zip(&names) {
+        if n != &["okok"] {
+            otherwise.entry((w.0, w.1)).or_default().push(format!("{:?}/{:?} len {}: {n:?}", w.3, w.2, w.4));
+        }
+    }
+    let summary: Vec<String> = otherwise.iter().map(|(k, v)| format!("{}/{} x{}: {}", k.0, k.1, v.len(), v.join(" ; "))).collect();
+    assert!(otherwise.is_empty(), "{} codes read otherwise by tshark:\n{}", otherwise.len(), summary.join("\n"));
+    // What is refused is exactly the codes the dissector reads its own way: options 6 and 7, and
+    // the options it cannot parse (0, 4, 8 to 0x7F), at every length, DHCP's 61 and 255 under
+    // three bytes, in every kind of PDU.
+    let expected: std::collections::BTreeSet<(u8, u8, usize)> = [0u8, 4, 6, 7, 8, 9, 0x10, 0x40, 0x7F]
+        .iter()
+        .flat_map(|&o| (0..=255u8).filter(move |&s| !dcp::TYPED.contains(&(o, s))).flat_map(move |s| [0, 1, 2, 3, 12].map(|l| (o, s, l))))
+        .chain([61u8, 255].iter().flat_map(|&s| [0, 1, 2].map(|l| (3, s, l))))
+        .collect();
+    let got: std::collections::BTreeSet<(u8, u8, usize)> = refused.iter().map(|(o, s, l, _)| (*o, *s, *l)).collect();
+    assert_eq!(got, expected);
+    assert!(refused.iter().all(|(o, s, l, e)| *e == DcpError::ReadOtherwise { option: *o, suboption: *s, len: *l }));
+    assert_eq!(refused.len(), expected.len() * kinds.len());
+    assert_eq!(frames.len() + refused.len(), (17 * 256 - 20) * 5 * kinds.len());
+    assert_eq!(
+        DcpError::ReadOtherwise { option: 6, suboption: 2, len: 12 }.to_string(),
+        "bytes as given under option 6 suboption 2 (12 bytes) are read otherwise by Wireshark's dissector, which reads that code with a layout of its own: not written"
+    );
+    // A block of 3/61 or 3/255 of three bytes and more is written, and read alike (in the sweep).
+    for (s, l) in [(61, 3), (61, 12), (255, 3), (255, 12)] {
+        assert!(what.iter().any(|w| (w.0, w.1, w.4) == (3, s, l)), "3/{s} {l}");
+    }
+}
+
+#[test]
+fn the_remote_service_properties_the_role_s_reserved_byte_and_a_hello_s_header_are_as_the_standard_has_them() {
+    // RSI properties (2/10) in an answer, to the byte both ways, and read by tshark.
+    let name = Block { option: 2, suboption: 2, info: Some(0), body: BlockBody::NameOfStation { name: "abcd".into() } };
+    let rsi = Block { option: 2, suboption: 10, info: Some(0), body: BlockBody::RsiProperties { value: 0x0105 } };
+    let answer = DcpPdu { frame_id: dcp::FRAME_ID_IDENTIFY_RES, service: Service::Identify, service_type: ServiceType::Success, xid: 7, response_delay: 0, blocks: vec![name, rsi], trailing: vec![] };
+    let bytes = answer.encode().unwrap();
+    assert_eq!(&bytes[12..], &[2, 2, 0, 6, 0, 0, b'a', b'b', b'c', b'd', 2, 10, 0, 4, 0, 0, 0x01, 0x05]);
+    assert_eq!(dcp::decode(&bytes).unwrap(), answer);
+    let read = common::dissect(&[wire(&bytes)]);
+    // (The value, and the bit field holding it: 0x0105.)
+    assert_eq!(read[0].values("pn_dcp", "pn_dcp.suboption_device_rsi_properties_value"), ["261", "261"]);
+    assert!(read[0].complaints().is_empty(), "{:?}", read[0].complaints());
+
+    // The role's reserved byte is written 0, and a role read with it set is the role alone.
+    let id = full_identity();
+    let pdu = dcp::decode(&payload(&dcp::identify_response(ME, DEV, 1, &id).unwrap(), ME, DEV)).unwrap();
+    let role = pdu.blocks.iter().find(|b| (b.option, b.suboption) == (2, 4)).unwrap();
+    assert_eq!(role.body, BlockBody::DeviceRole { role: id.role.unwrap(), reserved: 0 });
+    let heard = [Block { option: 2, suboption: 4, info: Some(0), body: BlockBody::DeviceRole { role: 1, reserved: 0xFF } }];
+    assert_eq!(DeviceIdentity::from_blocks(&heard).role, Some(1));
+
+    // A Hello's header: frame id, service 6, type 0, its transaction id, 0 where a request's delay
+    // would be, and its data length.
+    let hello = payload(&dcp::hello(DEV, 0x0102_0304, &id).unwrap(), Mac::DCP_HELLO_MULTICAST, DEV);
+    assert_eq!(&hello[..10], &[0xFE, 0xFC, 6, 0, 1, 2, 3, 4, 0, 0]);
+    let back = dcp::decode(&hello).unwrap();
+    assert_eq!((back.xid, back.response_delay, back.trailing.len()), (0x0102_0304, 0, 0));
+}
+
+#[test]
+fn tails_kept_as_heard_are_flagged_by_the_dissector_and_text_travels_as_ascii() {
+    // Tails written back as heard: the dissector reads each as the start of a block, and flags it.
+    let name = [2u8, 2, 0, 6, 0, 0, b'a', b'b', b'c', b'd'];
+    let mut frames = Vec::new();
+    for tail in [&[2u8, 2, 0][..], &[5, 6], &[5]] {
+        let pdu = dcp::decode(&answer_with(&[&name[..], tail].concat())).unwrap();
+        assert_eq!(pdu.trailing, tail);
+        frames.push(pdu.frame(ME, DEV).unwrap());
+    }
+    let get = dcp::decode(&[0xFE, 0xFD, 3, 0, 0, 0, 0, 1, 0, 0, 0, 3, 2, 2, 2]).unwrap();
+    assert_eq!(get.trailing, [2]);
+    frames.push(get.frame(DEV, ME).unwrap());
+    let read = common::dissect(&frames);
+    let complaints: Vec<Vec<String>> = read.iter().map(|p| p.complaints()).collect();
+    // A three-byte tail is malformed to it; one or two bytes after a block, or a Get request's odd
+    // byte, a parse error.
+    for (i, (c, said)) in complaints.iter().zip(["Malformed Packet", "parse error", "parse error", "parse error"]).enumerate() {
+        assert!(c.iter().any(|x| x.contains(said)), "frame {i}: {c:?}");
+    }
+
+    // Text is ASCII: written otherwise it is refused, heard otherwise it is kept damaged.
+    for (field, id) in [
+        ((2, 1), DeviceIdentity { vendor: Some("ação".into()), ..full_identity() }),
+        ((2, 2), DeviceIdentity { name: Some("estação".into()), ..full_identity() }),
+        ((2, 6), DeviceIdentity { alias: Some("port-001.é".into()), ..full_identity() }),
+    ] {
+        let err = dcp::identify_response(ME, DEV, 1, &id).unwrap_err();
+        assert!(matches!(err, DcpError::NotAscii { option, suboption, .. } if (option, suboption) == field), "{err}");
+    }
+    assert_eq!(
+        DcpError::NotAscii { option: 2, suboption: 1, text: "ação".into() }.to_string(),
+        "block 2/1's text travels as ASCII (Wireshark reads no other); \"ação\" is not written"
+    );
+    let heard = dcp::decode(&answer_with(&[2, 1, 0, 8, 0, 0, b'a', 0xC3, 0xA7, 0xC3, 0xA3, b'o'])).unwrap();
+    assert_eq!(heard.blocks[0].body, BlockBody::Damaged { data: vec![b'a', 0xC3, 0xA7, 0xC3, 0xA3, b'o'], damage: Damage::Text });
+    // Every byte under 0x80 is text, a control byte among them.
+    let tab = dcp::decode(&answer_with(&[2, 1, 0, 4, 0, 0, b'a', 0x09])).unwrap();
+    assert_eq!(tab.blocks[0].body, BlockBody::DeviceVendor { value: "a\t".into() });
 }
