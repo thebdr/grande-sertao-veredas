@@ -322,6 +322,33 @@ pub fn run(program: &str, args: &[&str], dir: Option<&Path>) -> Result<String, V
     }
 }
 
+/// `program` with the variables that change what tar and gzip write removed.
+pub fn clean_command(program: &str) -> Command {
+    let mut c = Command::new(program);
+    c.env_remove("TAR_OPTIONS").env_remove("GZIP").env_remove("GZIP_OPT");
+    c
+}
+
+/// [`run`], without the variables that change what tar and gzip write (`TAR_OPTIONS`, `GZIP`,
+/// `GZIP_OPT`): an archive packed twice from the same files is the same bytes whatever the shell holds.
+pub fn run_clean(program: &str, args: &[&str], dir: Option<&Path>) -> Result<String, VmError> {
+    let mut c = clean_command(program);
+    c.args(args).stdin(Stdio::null());
+    if let Some(d) = dir {
+        c.current_dir(d);
+    }
+    let out = c.output().map_err(|source| VmError::Spawn { program: program.into(), source })?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(VmError::Failed {
+            program: format!("{program} {}", args.join(" ")),
+            status: out.status.to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        })
+    }
+}
+
 /// A copy-on-write disk over `base`, of `size_gb` gigabytes.
 pub fn overlay(base: &Path, disk: &Path, size_gb: u32) -> Result<(), VmError> {
     let _ = std::fs::remove_file(disk);

@@ -61,7 +61,12 @@ pub fn doc_paths(root: &Path, commit: &str, components: &[String]) -> Result<Vec
     let all = git::text(root, &["ls-tree", "-r", "-z", "--name-only", commit])
         .map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?
         .unwrap_or_default();
-    let plans: Vec<String> = components.iter().filter_map(|c| c.strip_prefix("veredas-")).map(|n| format!("docs/{n}-plan.md")).collect();
+    // A component's plan: `docs/<nome>-plan.md`; the language's crates share `docs/orcl/README.md`
+    // (law L6's LANGUAGE_PLAN).
+    let mut plans: Vec<String> = components.iter().filter_map(|c| c.strip_prefix("veredas-")).map(|n| format!("docs/{n}-plan.md")).collect();
+    if components.iter().any(|c| c.starts_with("orcl-")) {
+        plans.push("docs/orcl/README.md".into());
+    }
     Ok(all
         .split('\0')
         .filter(|p| !p.is_empty())
@@ -187,7 +192,7 @@ pub fn assemble(
 /// entries in name order, owned by root, dated at `epoch` (seconds), every mode read as `0644`
 /// or, for a folder or an executable, `0755` (the umask that made the files plays no part).
 pub fn pack(work: &Path, name: &str, epoch: &str, out: &Path) -> Result<(), VmError> {
-    vm::run(
+    vm::run_clean(
         "tar",
         &[
             "--sort=name",

@@ -78,12 +78,15 @@ pub fn manifest_text(release: &semver::Version, commit: &str, target: &str, tool
 /// variable of `env` that would steer what cargo builds or nextest runs removed (`NEXTEST_*`,
 /// `CARGO_*` but `CARGO_HOME`, `RUSTFLAGS`, `RUSTDOCFLAGS`, `RUSTC*`, `RUSTUP_TOOLCHAIN`): the
 /// whole suite of the default profile, whatever the caller's shell holds.
-pub fn suite_command(root: &Path, tmp: &Path, argv: &[&str], env: impl Iterator<Item = (String, String)>) -> Command {
+pub fn suite_command(root: &Path, tmp: &Path, argv: &[&str], env: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>) -> Command {
     // The child's environment is `env` alone, the steering variables left out: what it runs does not
     // depend on anything else the calling process holds.
     let mut c = Command::new(argv[0]);
     c.args(&argv[1..]).current_dir(root).env_clear();
     for (k, v) in env {
+        // A name that is not UTF-8 steers nothing of cargo's: it is passed on as it is.
+        let k_text = k.to_string_lossy().into_owned();
+        let k = k_text.as_str();
         let steers = k.starts_with("NEXTEST_")
             || (k.starts_with("CARGO_") && k != "CARGO_HOME")
             || k == "RUSTFLAGS"
@@ -101,7 +104,7 @@ pub fn suite_command(root: &Path, tmp: &Path, argv: &[&str], env: impl Iterator<
 
 /// What `rustc --version` prints in `root` under the suite's own environment ([`suite_command`]):
 /// the toolchain the suite runs with, which the manifest names and the builder installs.
-pub fn suite_rustc(root: &Path, tmp: &Path, env: impl Iterator<Item = (String, String)>) -> Result<String, VmError> {
+pub fn suite_rustc(root: &Path, tmp: &Path, env: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>) -> Result<String, VmError> {
     let out = suite_command(root, tmp, &["rustc", "--version"], env)
         .output()
         .map_err(|source| VmError::Spawn { program: "rustc --version".into(), source })?;
@@ -120,7 +123,8 @@ pub fn differs_from(root: &Path, commit: &str) -> Result<Option<String>, git::Gi
     if head.as_deref() != Some(commit) {
         return Ok(Some(format!("HEAD is {}, not {commit}: a release is cut from one commit", head.unwrap_or_default())));
     }
-    let dirty = git::text(root, &["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"])?.unwrap_or_default();
+    // `core.fileMode=true`: a mode the commit does not hold counts, whatever the repository says.
+    let dirty = git::text(root, &["-c", "core.fileMode=true", "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"])?.unwrap_or_default();
     if !dirty.trim().is_empty() {
         return Ok(Some(format!("the tree differs from HEAD ({commit}); a release is cut from a commit:\n{dirty}")));
     }
@@ -133,8 +137,24 @@ pub fn differs_from(root: &Path, commit: &str) -> Result<Option<String>, git::Gi
         // colons it holds; four fields a path: the source, the line, the pattern, the path.
         let rules = git::run_with_input(root, &["check-ignore", "--stdin", "-z", "-v", "--non-matching", "--no-index"], &ignored)?.unwrap_or_default();
         let fields: Vec<String> = rules.split(|b| *b == 0).map(|f| String::from_utf8_lossy(f).into_owned()).collect();
+        let mut records: Vec<(String, String)> = Vec::new();
         for rec in fields.chunks(4).filter(|r| r.len() == 4) {
-            let (source, path) = (&rec[0], &rec[3]);
+            let (source, path) = (rec[0].clone(), rec[3].clone());
+            // A folder no rule names as a folder holds files the rules ignore one by one (`*.user`):
+            // each of them is judged instead.
+            if source.is_empty() && path.ends_with('/') {
+                let inner = git::run(root, &["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--", &path])?.unwrap_or_default();
+                if !inner.is_empty() {
+                    let more = git::run_with_input(root, &["check-ignore", "--stdin", "-z", "-v", "--non-matching", "--no-index"], &inner)?.unwrap_or_default();
+                    let f: Vec<String> = more.split(|b| *b == 0).map(|x| String::from_utf8_lossy(x).into_owned()).collect();
+                    records.extend(f.chunks(4).filter(|r| r.len() == 4).map(|r| (r[0].clone(), r[3].clone())));
+                    continue;
+                }
+            }
+            records.push((source, path));
+        }
+        for (source, path) in &records {
+            let (source, path) = (source, path);
             let tracked = source.ends_with(".gitignore") && git::run(root, &["ls-files", "--error-unmatch", "--", source])?.is_some();
             if !tracked {
                 stray.push(format!("{path} (ignored by {})", if source.is_empty() { "no rule git names" } else { source }));
@@ -186,7 +206,7 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     let tmp = crate::cache::dir()?.join("tmp");
     std::fs::create_dir_all(&tmp)?;
     // The toolchain the suite runs with, read as the suite runs: the manifest's and the builder's.
-    let rustc = suite_rustc(root, &tmp, std::env::vars())?;
+    let rustc = suite_rustc(root, &tmp, std::env::vars_os())?;
     let toolchain = rustc.split_whitespace().nth(1).ok_or_else(|| refused(format!("rustc printed `{rustc}`")))?.to_string();
     let target = "x86_64-unknown-linux-gnu";
     let components: Vec<(String, String, Vec<String>)> =
@@ -213,13 +233,13 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
         // Its temporary files on disk, outside any repository: /tmp is a tmpfs of the machine's
         // memory, and the laws' tests need a folder no git repository holds.
         // Built first, so the machine's lock is held for the tests alone (CLAUDE.md).
-        let built = suite_command(root, &tmp, &["cargo", "nextest", "run", "--workspace", "--profile", "default", "--no-run"], std::env::vars())
+        let built = suite_command(root, &tmp, &["cargo", "nextest", "run", "--workspace", "--profile", "default", "--no-run"], std::env::vars_os())
             .status()
             .map_err(|source| VmError::Spawn { program: "cargo nextest --no-run".into(), source })?;
         if !built.success() {
             return Err(refused(format!("the suite does not build at {commit} ({built}): no release is cut from it")));
         }
-        let status = suite_command(root, &tmp, &["flock", "/tmp/veredas-suite.lock", "cargo", "nextest", "run", "--workspace", "--profile", "default"], std::env::vars())
+        let status = suite_command(root, &tmp, &["flock", "/tmp/veredas-suite.lock", "cargo", "nextest", "run", "--workspace", "--profile", "default"], std::env::vars_os())
             .status()
             .map_err(|source| VmError::Spawn { program: "flock cargo nextest".into(), source })?;
         if !status.success() {

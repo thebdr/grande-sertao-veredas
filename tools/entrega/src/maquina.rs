@@ -315,7 +315,7 @@ pub fn build(r: &Recipe, bundle: &Path, bundle_dir: &str, release: &str, guide: 
     std::fs::write(work.join(&mf_name), mf)?;
     let ova = work.join(format!("{name}.ova"));
     let _ = std::fs::remove_file(&ova);
-    vm::run(
+    vm::run_clean(
         "tar",
         &[
             "--format=ustar",

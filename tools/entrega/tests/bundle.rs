@@ -346,7 +346,7 @@ fn the_suite_runs_the_default_profile_whatever_the_shell_holds() {
         ("CARGO_HOME", "/home/x/.cargo"),
         ("PATH", "/usr/bin"),
     ]
-    .map(|(k, v)| (k.to_string(), v.to_string()));
+    .map(|(k, v)| (std::ffi::OsString::from(k), std::ffi::OsString::from(v)));
     let c = cut::suite_command(Path::new("/repo"), Path::new("/tmpdir"), &["cargo", "nextest", "run", "--workspace", "--profile", "default"], env.into_iter());
     let args: Vec<String> = c.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
     assert_eq!(args, ["nextest", "run", "--workspace", "--profile", "default"]);
@@ -362,7 +362,7 @@ fn the_suite_runs_the_default_profile_whatever_the_shell_holds() {
 fn the_toolchain_named_is_the_one_the_suite_runs_with() {
     let root = repo_root();
     let tmp = tempfile::tempdir().unwrap();
-    let env: Vec<(String, String)> = std::env::vars().filter(|(k, _)| k != "RUSTUP_TOOLCHAIN").collect();
+    let env: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().filter(|(k, _)| k != "RUSTUP_TOOLCHAIN").collect();
     let plain = cut::suite_rustc(&root, tmp.path(), env.clone().into_iter()).unwrap();
     assert!(plain.starts_with("rustc "), "{plain}");
     // A toolchain set in the caller's shell (here one that is not installed, so it would fail)
@@ -397,4 +397,39 @@ fn the_bundles_docs_hold_names_with_letters_outside_ascii() {
     let c = r.commit("docs in Portuguese");
     let paths = bundle::doc_paths(r.dir.path(), &c, &["veredas-ábaco".to_string()]).unwrap();
     assert_eq!(paths, ["README.md", "docs/design/README.md", "docs/design/ábaco/README.md", "docs/veredas-plan.md", "docs/visão-schema.md", "docs/ábaco-plan.md"]);
+}
+
+#[test]
+fn round_five_the_orcl_plan_a_mode_change_ignored_folders_and_the_packers_environment() {
+    // The language's crates' plan travels with them.
+    let r = Repo { dir: tempfile::tempdir().unwrap() };
+    r.git(&["init", "-q", "-b", "main"]);
+    for f in ["README.md", "docs/orcl/README.md", "docs/core-plan.md"] {
+        r.write(f, "x\n");
+    }
+    let c = r.commit("plans");
+    let paths = bundle::doc_paths(r.dir.path(), &c, &["orcl-std".to_string(), "veredas-core".to_string()]).unwrap();
+    assert_eq!(paths, ["README.md", "docs/core-plan.md", "docs/orcl/README.md"]);
+    // A mode the commit does not hold counts, whatever `core.fileMode` says.
+    let cl = clone();
+    let commit = String::from_utf8(Command::new("git").arg("-C").arg(cl.path()).args(["rev-parse", "HEAD"]).output().unwrap().stdout).unwrap().trim().to_string();
+    assert!(Command::new("git").arg("-C").arg(cl.path()).args(["config", "core.fileMode", "false"]).status().unwrap().success());
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(cl.path().join("README.md"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let why = cut::differs_from(cl.path(), &commit).unwrap().unwrap();
+    assert!(why.contains(" M README.md"), "{why}");
+    std::fs::set_permissions(cl.path().join("README.md"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    // A folder of files the commit's own rules ignore one by one (`*.user`) is no difference.
+    std::fs::create_dir_all(cl.path().join("ide")).unwrap();
+    std::fs::write(cl.path().join("ide/proj.user"), "x\n").unwrap();
+    assert_eq!(cut::differs_from(cl.path(), &commit).unwrap(), None);
+    // tar and gzip run without the variables that change what they write.
+    let tar = entrega::vm::clean_command("tar");
+    let removed: Vec<String> = tar.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_string_lossy().into_owned()).collect();
+    assert_eq!(removed, ["GZIP", "GZIP_OPT", "TAR_OPTIONS"]);
+    // A variable that is not UTF-8 is passed on as it is, never a panic.
+    use std::os::unix::ffi::OsStringExt;
+    let odd = (std::ffi::OsString::from("LANG_X"), std::ffi::OsString::from_vec(b"caf\xe9".to_vec()));
+    let cmd = cut::suite_command(Path::new("/repo"), Path::new("/tmpdir"), &["true"], vec![odd.clone()].into_iter());
+    assert!(cmd.get_envs().any(|(k, v)| k == odd.0.as_os_str() && v == Some(odd.1.as_os_str())));
 }
