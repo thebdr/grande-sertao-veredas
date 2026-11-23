@@ -666,3 +666,75 @@ fn a_silence_and_the_trailers_hold_across_dropped_calls() {
         other => panic!("{other:?}"),
     }
 }
+
+/// Round 4's four: a call dropped inside a chunk's data loses none of it; a chunked answer cut
+/// short is a broken link, before its last chunk, inside a chunk and between a stream's chunks; a
+/// body that stalls after its head is a timeout naming the address; and the snapshot's clocks,
+/// window and switch read as served, each a value of its own.
+#[test]
+fn a_chunk_split_across_calls_a_cut_answer_a_stalled_body_and_every_snapshot_field() {
+    let rt = reader();
+    let event = "event: data\ndata: {\"samples\":[{\"src\":\"s\",\"ser\":\"t\",\"k\":null,\"ms\":1,\"v\":1.5,\"n\":1}]}\n\n";
+    // A data event cut inside its chunk, its second half 700 ms later, read through 300 ms timeouts.
+    let (split, _) = fake_peer(move |s| {
+        let half = event.len() / 2;
+        let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{}", event.len(), &event[..half]);
+        let _ = s.flush();
+        std::thread::sleep(Duration::from_millis(700));
+        let _ = write!(s, "{}\r\n0\r\n\r\n", &event[half..]);
+    });
+    let mut events = rt.block_on(PeerClient::new(split.to_string()).event_stream()).unwrap();
+    let (mut got, mut dropped) = (Vec::new(), 0);
+    let end = loop {
+        match rt.block_on(async { tokio::time::timeout(Duration::from_millis(300), events.next_event()).await }) {
+            Err(_) => dropped += 1,
+            Ok(Ok(PeerEvent::Data(samples))) => got.extend(samples.iter().map(|s| s.index_ms)),
+            Ok(other) => break other,
+        }
+        assert!(dropped < 40, "the stream never came: {got:?}");
+    };
+    assert_eq!(got, vec![1]);
+    assert!(dropped >= 1, "a call dropped inside the chunk's data: {dropped}");
+    assert!(matches!(end, Err(PeerError::Closed)), "{end:?}");
+    // A chunked answer cut short: without its last chunk, and inside a chunk.
+    let window = r#"{"points":[[1,2.5]],"total":1,"downsampled":false}"#;
+    let cut = |tail: String| {
+        fake_peer(move |s| {
+            let _ = write!(s, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{tail}");
+        })
+        .0
+        .to_string()
+    };
+    let w = SeriesWindow { source: "s", series: "t", ..Default::default() };
+    for (tail, said) in [(format!("{:x}\r\n{window}\r\n", window.len()), "closed before the answer's end"), (format!("40\r\n{}", &window[..9]), "closed 55 bytes short")] {
+        match rt.block_on(PeerClient::new(cut(tail.clone())).series_window(&w)) {
+            Err(PeerError::Link { text, .. }) => assert!(text.contains(said), "{tail:?}: {text}"),
+            other => panic!("{tail:?}: {other:?}"),
+        }
+    }
+    // A stream cut between its chunks: its event, then a broken link, not a clean end.
+    let (cut_stream, _) = fake_peer(move |s| {
+        let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{event}\r\n", event.len());
+    });
+    let mut events = rt.block_on(PeerClient::new(cut_stream.to_string()).event_stream()).unwrap();
+    assert!(matches!(rt.block_on(events.next_event()), Ok(PeerEvent::Data(_))));
+    let end = rt.block_on(events.next_event());
+    assert!(matches!(end, Err(PeerError::Link { .. })), "{end:?}");
+    // A body that stalls after its head, the link left open.
+    let (stalled, _) = fake_peer(|s| {
+        let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"series\"");
+        let _ = s.flush();
+        std::thread::sleep(Duration::from_secs(20));
+    });
+    let started = Instant::now();
+    let r = rt.block_on(PeerClient::new(stalled.to_string()).with_timeout(Duration::from_millis(500)).series());
+    assert!(matches!(&r, Err(e @ PeerError::Timeout { ms: 500, .. }) if e.to_string().contains(&stalled.to_string())), "{:?}", r.as_ref().err());
+    assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+    // Every clock, the window and the switch as served, none a default.
+    let (full, _) = fake_peer(|s| {
+        let body = r#"{"session_name":"x","running":true,"started_ms":111,"start_ms":222,"window_ms":60000,"now_ms":333,"arrival_now_ms":444,"writes_armed":true,"sources":[]}"#;
+        let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+    });
+    let s = rt.block_on(PeerClient::new(full.to_string()).snapshot()).unwrap();
+    assert_eq!((s.started_ms, s.start_ms, s.window_ms, s.store_now_ms, s.arrival_now_ms, s.writes_armed), (111, Some(222), Some(60_000), 333, 444, true));
+}
