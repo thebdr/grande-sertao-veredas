@@ -408,13 +408,43 @@ fn a_long_absence_counts_every_deadline_it_skipped() {
     assert_eq!(s.skipped, 299 + k - 1);
 }
 
+/// Runs one and a half periods every scan: a time error each time, never a fault.
+struct Slow {
+    clock: VirtualClock,
+}
+
+impl Program for Slow {
+    type Inputs = u64;
+    type Outputs = u64;
+
+    fn scan(&mut self, scan: &Scan, inputs: &u64, outputs: &mut u64) {
+        self.clock.advance(scan.period * 3 / 2);
+        *outputs = *inputs;
+    }
+}
+
+#[test]
+fn seventy_thousand_late_scans_are_each_counted_past_sixteen_bits() {
+    // scans, time errors and skips counted past 65 535, the mean length exact, the task still running
+    let period = Duration::from_millis(1);
+    let mut clock = VirtualClock::new();
+    let mut task = Task::new(TaskConfig { name: "long", period }, Slow { clock: clock.clone() }).unwrap();
+    let n: u64 = 70_000;
+    for _ in 0..n {
+        task.step(&mut Quiet, &mut clock);
+    }
+    let s = *task.stats();
+    assert_eq!((s.cycles, s.overruns, s.skipped), (n, n, n));
+    assert_eq!((s.mean_exec(), s.max_exec, task.state()), (period * 3 / 2, period * 3 / 2, RunState::Running));
+}
+
 #[test]
 fn the_draws_reach_every_case_the_clause_names() {
     // the sequences are only as good as what they reach: count, over the same seeds and draws, the cases that matter
     let (mut late_below_a_ms, mut faulted_late, mut ends_on_a_deadline, mut faulting_ends_on_a_deadline) = (0, 0, 0, 0);
     let (mut skips_after_a_fault, mut long_periods, mut slow_writes_across_a_deadline) = (0, 0, 0);
     let (mut faults_past_scan_1000, mut faults_after_20_time_errors, mut faults_after_10_in_a_row) = (0, 0, 0);
-    let (mut faults_after_100_skips, mut late_by_1000_periods, mut late_by_1000_periods_faulted) = (0, 0, 0);
+    let (mut faults_after_100_skips, mut late_by_1000_periods_running, mut late_by_1000_periods_faulted) = (0, 0, 0);
     let runs = [(Mix::Free, 0..4_000, 50), (Mix::Free, 10_000..10_040, 2_000), (Mix::NeverFaults, 20_000..20_040, 2_000)];
     let runs = runs.into_iter().chain([(Mix::FaultsLate, 30_000..30_100, 2_000)]);
     for (mix, seeds, steps) in runs {
@@ -439,9 +469,10 @@ fn the_draws_reach_every_case_the_clause_names() {
                     faulted_late += 1;
                 }
                 if late >= 1_000 * period {
-                    late_by_1000_periods += 1;
                     if was_faulted {
                         late_by_1000_periods_faulted += 1;
+                    } else {
+                        late_by_1000_periods_running += 1;
                     }
                 }
                 if (seen.start + seen.exec).is_multiple_of(period) && seen.exec > 0 {
@@ -479,7 +510,7 @@ fn the_draws_reach_every_case_the_clause_names() {
         ("a fault after more than 20 time errors", faults_after_20_time_errors),
         ("a fault after more than 10 time errors in a row", faults_after_10_in_a_row),
         ("a fault after 100 skipped deadlines", faults_after_100_skips),
-        ("a scan late by 1000 periods or more", late_by_1000_periods),
+        ("a running scan late by 1000 periods or more", late_by_1000_periods_running),
         ("a faulted scan late by 1000 periods or more", late_by_1000_periods_faulted),
     ] {
         assert!(count >= 20, "{case}: reached {count} times only");
