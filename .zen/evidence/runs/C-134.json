@@ -10,15 +10,15 @@
     "raw_link"
   ],
   "exitCode": 0,
-  "outputSha": "051071a0ff29550afc7c36b40d6ebd8ee7df50f383a6d7ba19ecdf9b76bf25f2",
-  "outputTail": "test the_private_network_holds_only_what_the_test_made ... ok\ntest a_wait_of_no_end_hands_back_the_next_frame ... ok\ntest the_first_frame_after_the_fixture_crosses ... ok\ntest a_frame_past_the_buffer_is_refused_never_handed_back_cut ... ok\ntest a_link_hears_one_ethertype_and_can_leave_out_what_this_host_sends ... ok\ntest a_filtered_link_on_the_sending_end_hears_its_type_behind_any_tag ... ok\ntest frames_cross_a_veth_pair_whole_both_ways ... ok\ntest a_wait_lasts_its_timeout_through_signals_skipped_frames_and_under_a_millisecond ... ok\ntest the_first_frame_after_the_fixture_crosses_in_every_run ... ok\ntest a_pair_that_carries_nothing_fails_the_fixture_by_name ... ok\n\ntest result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.11s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running tests/raw_link.rs (target/debug/build/veredas-aranha/e66552a4aaf043c1/out/raw_link-e66552a4aaf043c1)",
-  "ranAt": "2026-11-22T23:58:50.086Z",
-  "headCommit": "4ba21f248b0c7cdfd9cdb3246f2b4793d07ddc08",
+  "outputSha": "910b03814f1375c9182ada6433c2d1976526cd0fcffee82b2454e1120edaa76e",
+  "outputTail": "test short_frames_and_tags_of_nothing_cross_whole ... ok\ntest a_tag_the_kernel_holds_on_the_sending_end_is_put_back ... ok\ntest a_filtered_link_on_the_sending_end_hears_its_type_behind_any_tag ... ok\ntest a_link_hears_one_ethertype_and_can_leave_out_what_this_host_sends ... ok\ntest frames_cross_a_veth_pair_whole_both_ways ... ok\ntest a_wait_lasts_its_timeout_through_signals_skipped_frames_and_under_a_millisecond ... ok\ntest a_link_opened_in_a_flood_hears_only_its_interface_and_its_type ... ok\ntest the_first_frame_after_the_fixture_crosses_in_every_run ... ok\ntest a_pair_that_carries_nothing_fails_the_fixture_by_name ... ok\ntest a_pair_dead_the_other_way_fails_the_fixture_by_name ... ok\n\ntest result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.14s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running tests/raw_link.rs (target/debug/build/veredas-aranha/f2ba09f76a4605c5/out/raw_link-f2ba09f76a4605c5)",
+  "ranAt": "2026-11-23T05:16:09.755Z",
+  "headCommit": "513902de45ec0a3eedfc319920a0924647040dd7",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/raw_link.rs",
       "file": "crates/veredas-aranha/tests/raw_link.rs",
-      "fileSha": "da02c3e64a7b0dd9f1afb5a382883c6e8ef47be4b7b0ba79ab23c68f004212d7"
+      "fileSha": "2d4a97480fb3a6931ec3e4e9f8bf2f8c3f13120810becaf475cc8987c3e499dc"
     }
   ]
 }
