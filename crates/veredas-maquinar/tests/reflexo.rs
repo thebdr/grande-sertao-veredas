@@ -351,6 +351,17 @@ fn every_refusal_is_named_by_its_place_through_the_bench_file() {
         (drive("").replace("decel = 1", "decel = inf"), "reflexo[0] (`r`).drive[0] (`d`).decel: inf, not a finite number over 0"),
         ("scene = \"sc\"\nactuator = [ { name = \"a\", mover = \"pusher\", extend = \"m.run\", retracted = { at = [0.0, 0.0, 0.0] }, extended = { at = [0.0, 0.0, 0.0] }, stroke_ms = 600001 } ]\n".into(), "reflexo[0] (`r`).actuator[0] (`a`).stroke_ms: 600001, not 1 to 600000"),
         ("scene = \"sc\"\nconveyor = [ { name = \"c\", belt = \"infeed\", metres_per_unit = nan, run = \"m.run\", setpoint = \"m.sp\", accel = 1, decel = 1 } ]\n".into(), "reflexo[0] (`r`).conveyor[0] (`c`).metres_per_unit: NaN, not a finite number other than 0"),
+        // Refute round 2: a tolerance not finite, a ratio infinite, an off delay past its range, the
+        // retracted pose, a switch another model writes or of the other kind, and a point two
+        // parts' models would write.
+        (drive(", tolerance = nan"), "reflexo[0] (`r`).drive[0] (`d`).tolerance: NaN, not a finite number from 0"),
+        (drive(", tolerance = inf"), "reflexo[0] (`r`).drive[0] (`d`).tolerance: inf, not a finite number from 0"),
+        ("scene = \"sc\"\nconveyor = [ { name = \"c\", belt = \"infeed\", metres_per_unit = -inf, run = \"m.run\", setpoint = \"m.sp\", accel = 1, decel = 1 } ]\n".into(), "reflexo[0] (`r`).conveyor[0] (`c`).metres_per_unit: -inf, not a finite number other than 0"),
+        ("scene = \"sc\"\nsensor = [ { name = \"s\", sensor = \"B1\", point = \"m.b\", off_delay_ms = 600001 } ]\n".into(), "reflexo[0] (`r`).sensor[0] (`s`).off_delay_ms: 600001, over 600000"),
+        ("scene = \"sc\"\nactuator = [ { name = \"a\", mover = \"pusher\", extend = \"m.run\", retracted = { at = [0.0, 0.0, 0.0], pitch = nan }, extended = { at = [0.0, 0.0, 0.0] }, stroke_ms = 1 } ]\n".into(), "reflexo[0] (`r`).actuator[0] (`a`).retracted.pitch: NaN, not a finite angle"),
+        ("scene = \"sc\"\nactuator = [ { name = \"a\", mover = \"pusher\", extend = \"m.run\", retracted = { at = [0.0, 0.0, 0.0] }, extended = { at = [0.0, 0.0, 0.0] }, stroke_ms = 1, retracted_switch = \"m.b\" } ]\nsensor = [ { name = \"s\", sensor = \"B1\", point = \"m.b\" } ]\n".into(), "reflexo[0] (`r`).sensor[0] (`s`).point: `m.b` is written by actuator[0] (`a`) already"),
+        ("scene = \"sc\"\nactuator = [ { name = \"a\", mover = \"pusher\", extend = \"m.run\", retracted = { at = [0.0, 0.0, 0.0] }, extended = { at = [0.0, 0.0, 0.0] }, stroke_ms = 1, extended_switch = \"m.sp\" } ]\n".into(), "reflexo[0] (`r`).actuator[0] (`a`).extended_switch: `m.sp` is a number, a bool point is wanted"),
+        (format!("{}[[reflexo]]\nname = \"r2\"\n{}", drive(", running = \"m.b\""), drive(", running = \"m.b\"")), "reflexo[1] (`r2`).drive[0] (`d`).running: `m.b` is written by reflexo[0] (`r`).drive[0] (`d`) already"),
     ];
     for (models, message) in cases {
         assert_eq!(refused(&models), message, "{models}");
@@ -660,5 +671,163 @@ mod round_1 {
         let due = begun.elapsed().as_nanos() / 4_000_000;
         handle.stop();
         assert!(steps <= due && steps + 50 >= due, "{steps} steps, {due} due");
+    }
+}
+
+/// Refute round 2's probes (the critic's, `~/.cache/veredas/critic-c115-r2/probes`), kept as pins:
+/// the stepping order of every kind and within each, every adapter point type converted, an
+/// actuator skipped at a failed switch write, the ramp's count however long, and a stop waiting
+/// for a scene's step under way.
+mod round_2 {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+    use std::sync::Condvar;
+
+    #[test]
+    fn conveyors_step_after_drives_and_actuators_after_conveyors() {
+        // A conveyor run by a drive's running point starts in the same step.
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, 10.0), ("ra", Bool, 0.0)]);
+        let mut x = models("drive = [ { name = \"a\", run = \"m.run\", setpoint = \"m.sp\", accel = 100, decel = 100, running = \"m.ra\" } ]\nconveyor = [ { name = \"c\", belt = \"infeed\", metres_per_unit = 0.01, run = \"m.ra\", setpoint = \"m.sp\", accel = 100, decel = 100 } ]", &m);
+        let mut w = World::new(&fisica::load(&cena()).unwrap()).unwrap();
+        x.step(Some(&mut w));
+        assert!((x.speed("c").unwrap() - 0.4).abs() < 1e-12, "{:?}", x.speed("c"));
+        // An actuator extended by a conveyor's running point moves in the same step.
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, 10.0), ("rc", Bool, 0.0)]);
+        let mut x = models("conveyor = [ { name = \"c\", belt = \"infeed\", metres_per_unit = 0.01, run = \"m.run\", setpoint = \"m.sp\", accel = 100, decel = 100, running = \"m.rc\" } ]\nactuator = [ { name = \"p\", mover = \"pusher\", extend = \"m.rc\", retracted = { at = [3.5, -0.4, 0.95] }, extended = { at = [3.5, 0.25, 0.95] }, stroke_ms = 100 } ]", &m);
+        let mut w = World::new(&fisica::load(&cena()).unwrap()).unwrap();
+        x.step(Some(&mut w));
+        assert!((x.position("p").unwrap() - 0.04).abs() < 1e-12, "{:?}", x.position("p"));
+    }
+
+    #[test]
+    fn sensors_step_after_actuators() {
+        // An actuator extended by a sensor model's point reads it as the last step left it.
+        let m = mem(&[("s", Bool, 0.0)]);
+        let mut x = models("actuator = [ { name = \"p\", mover = \"m\", extend = \"m.s\", retracted = { at = [0.0, 0.0, 0.0] }, extended = { at = [0.0, 0.01, 0.0] }, stroke_ms = 100 } ]\nsensor = [ { name = \"b\", sensor = \"S\", point = \"m.s\" } ]", &m);
+        let mut w = sensor_scene();
+        w.place("m", fisica::Placement::at([0.0, 0.0, 0.0])).unwrap();
+        while m.get("s") == 0.0 {
+            x.step(Some(&mut w));
+            w.step();
+            assert!(x.status().steps < 50);
+        }
+        assert_eq!(x.position("p"), Some(0.0), "the actuator stepped before the sensor");
+        x.step(Some(&mut w));
+        assert!((x.position("p").unwrap() - 0.04).abs() < 1e-12);
+    }
+
+    #[test]
+    fn conveyors_actuators_and_sensors_each_step_in_the_file_s_order() {
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, 10.0), ("r1", Bool, 0.0)]);
+        let mut x = models("conveyor = [ { name = \"c1\", belt = \"infeed\", metres_per_unit = 0.01, run = \"m.run\", setpoint = \"m.sp\", accel = 100, decel = 100, running = \"m.r1\" }, { name = \"c2\", belt = \"infeed\", metres_per_unit = 0.01, run = \"m.r1\", setpoint = \"m.sp\", accel = 100, decel = 100 } ]", &m);
+        let mut w = World::new(&fisica::load(&cena()).unwrap()).unwrap();
+        x.step(Some(&mut w));
+        assert!((x.speed("c2").unwrap() - 0.4).abs() < 1e-12, "{:?}", x.speed("c2"));
+        let m = mem(&[("ext", Bool, 1.0), ("x1", Bool, 0.0)]);
+        let mut x = models("actuator = [ { name = \"a1\", mover = \"pusher\", extend = \"m.ext\", retracted = { at = [0.0, 0.0, 0.0] }, extended = { at = [0.0, 1.0, 0.0] }, stroke_ms = 1, extended_switch = \"m.x1\" }, { name = \"a2\", mover = \"pusher\", extend = \"m.x1\", retracted = { at = [0.0, 0.0, 0.0] }, extended = { at = [0.0, 1.0, 0.0] }, stroke_ms = 100 } ]", &m);
+        x.step(None);
+        assert!((x.position("a2").unwrap() - 0.04).abs() < 1e-12, "{:?}", x.position("a2"));
+        // Two sensor models refused in one step: the last named is the file's last.
+        let m = mem(&[]);
+        *m.refusing.lock().unwrap() = Some("z".into());
+        let mut x = models("sensor = [ { name = \"a\", sensor = \"S\", point = \"m.z\" }, { name = \"b\", sensor = \"S\", point = \"m.z\" } ]", &m);
+        x.step(None);
+        assert_eq!(x.status().last_error.as_deref(), Some("sensor `b`: m.z: refused"));
+    }
+
+    #[test]
+    fn every_adapter_point_type_is_converted() {
+        let adapter = ethernetip::start(&toml::from_str(
+            "bind = \"127.0.0.1\"\nport = 0\nio_port = 0\nassemblies = [ { instance = 100, size = 32 } ]\npoints = [ { name = \"q\", assembly = 100, byte = 0, bit = 1 }, { name = \"u16\", assembly = 100, byte = 2, type = \"u16\" }, { name = \"i16\", assembly = 100, byte = 4, type = \"i16\" }, { name = \"u32\", assembly = 100, byte = 8, type = \"u32\" }, { name = \"i32\", assembly = 100, byte = 12, type = \"i32\" }, { name = \"f32\", assembly = 100, byte = 16, type = \"f32\" } ]",
+        ).unwrap())
+        .unwrap();
+        let e = adapter.points();
+        for (point, v, read) in [("q", f64::NAN, 0.0f64), ("u16", 300.0, 300.0), ("u16", 70_000.0, 65_535.0), ("i16", -5.0, -5.0), ("u32", 2.6, 3.0), ("i32", -7.0, -7.0), ("f32", f64::NAN, 0.0), ("f32", 1.25, 1.25)] {
+            e.write(point, v).unwrap();
+            assert_eq!(e.read(point).unwrap().to_bits(), read.to_bits(), "{point} {v}");
+        }
+    }
+
+    #[test]
+    fn an_actuator_whose_switch_write_fails_is_skipped_for_the_rest_of_its_step() {
+        let m = mem(&[("ext", Bool, 0.0), ("back", Bool, 0.0), ("out", Bool, 7.0)]);
+        let mut a = models("actuator = [ { name = \"a\", mover = \"pusher\", extend = \"m.ext\", retracted = { at = [0.0, 0.0, 0.0] }, extended = { at = [0.0, 1.0, 0.0] }, stroke_ms = 100, retracted_switch = \"m.back\", extended_switch = \"m.out\" } ]", &m);
+        *m.refusing.lock().unwrap() = Some("back".into());
+        a.step(None);
+        let s = a.status();
+        assert_eq!((s.errors, s.last_error.as_deref(), m.get("out")), (1, Some("actuator `a`: m.back: refused"), 7.0));
+    }
+
+    #[test]
+    fn a_ramp_s_steps_are_its_time_s_however_many() {
+        // 25515 at 0.3 a second is 85 050 s, exactly 21 262 500 steps of 4 ms: a slack of a
+        // billionth of a step counted one more (the division's rounding past 2^24 steps).
+        for (distance, rate, steps) in [(25515.0, 0.3, 21_262_500u64), (25518.0, 0.3, 21_265_000), (51030.0, 0.6, 21_262_500), (51033.0, 0.6, 21_263_750), (25516.0, 0.3, 21_263_334), (1.0, 0.3, 834), (50.0, 100.0, 125), (49.0, 200.0, 62), (1.0, 200.0, 2)] {
+            assert_eq!(reflexo::ramp_steps(distance, rate, 0.004), steps, "{distance} at {rate}");
+        }
+    }
+
+    /// Points whose `run` read, once armed, holds the step inside it until opened.
+    #[derive(Default)]
+    struct Gate {
+        armed: AtomicBool,
+        entered: AtomicBool,
+        open: Mutex<bool>,
+        cv: Condvar,
+    }
+
+    impl Points for Gate {
+        fn kind(&self, _: &str) -> Option<PointKind> {
+            None
+        }
+        fn read(&self, point: &str) -> Result<f64, String> {
+            if point == "run" && self.armed.load(SeqCst) {
+                self.entered.store(true, SeqCst);
+                let mut open = self.open.lock().unwrap();
+                while !*open {
+                    open = self.cv.wait(open).unwrap();
+                }
+            }
+            Ok(if point == "run" { 1.0 } else { 10.0 })
+        }
+        fn write(&self, _: &str, _: f64) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_stop_waits_for_a_scene_s_step_under_way() {
+        let gate = Arc::new(Gate::default());
+        let points: Arc<dyn Points> = gate.clone();
+        let cfg: ReflexoConfig = toml::from_str("drive = [ { name = \"d\", run = \"g.run\", setpoint = \"g.sp\", accel = 100, decel = 100 } ]").unwrap();
+        let models = Models::new(&cfg, STEP, &|p: &str| (p == "g").then(|| points.clone())).unwrap();
+        let s = "format = \"veredas-cena\"\nversion = 1\ngravity = 0\n[[sensor]]\nname = \"S\"\nradius = 0.1\nat = [0.0, 0.0, 0.0]\n";
+        let mut scene = fisica::paused(&fisica::load(s).unwrap()).unwrap();
+        let handle = reflexo::start(models, Some(&scene)).unwrap();
+        scene.run().unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        gate.armed.store(true, SeqCst);
+        assert!(until(Duration::from_secs(2), || gate.entered.load(SeqCst)), "no step entered the gate");
+        // A stop while the step is held inside its read does not return till the step ends.
+        let returned = Arc::new(AtomicBool::new(false));
+        let r = Arc::clone(&returned);
+        let t = std::thread::spawn(move || {
+            let mut handle = handle;
+            handle.stop();
+            r.store(true, SeqCst);
+            handle
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        let early = returned.load(SeqCst);
+        gate.armed.store(false, SeqCst);
+        *gate.open.lock().unwrap() = true;
+        gate.cv.notify_all();
+        let handle = t.join().unwrap();
+        let steps = handle.status().steps;
+        std::thread::sleep(Duration::from_millis(50));
+        let later = handle.status().steps;
+        scene.stop();
+        assert!(!early, "the stop returned while the scene's step was under way");
+        assert_eq!(later, steps, "a step after the stop");
     }
 }

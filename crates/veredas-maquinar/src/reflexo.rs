@@ -256,6 +256,13 @@ pub enum ReflexoError {
 /// its `scene` key names, already read; `point` says what a `<part>.<point>` carries, or why it
 /// names nothing.
 pub fn validate(cfg: &ReflexoConfig, scene: Option<&fisica::Scene>, point: &dyn Fn(&str, &str) -> Result<PointKind, String>) -> Result<(), String> {
+    validate_beside(cfg, scene, point, &[]).map(|_| ())
+}
+
+/// [`validate`], beside the points other parts' models already write (each with the place that
+/// writes it, named in full): a point is written by one model of the whole bench at most. Returns
+/// the points this part's models write, each with its place in the part.
+pub fn validate_beside(cfg: &ReflexoConfig, scene: Option<&fisica::Scene>, point: &dyn Fn(&str, &str) -> Result<PointKind, String>, others: &[(String, String)]) -> Result<Vec<(String, String)>, String> {
     let mut names: Vec<(String, &'static str)> = Vec::new();
     let mut written: Vec<(String, String)> = Vec::new();
     let mut check_name = |kind: &'static str, i: usize, name: &str| -> Result<String, String> {
@@ -283,7 +290,7 @@ pub fn validate(cfg: &ReflexoConfig, scene: Option<&fisica::Scene>, point: &dyn 
         Ok(())
     };
     let mut write = |place: &str, key: &str, reference: &str| -> Result<(), String> {
-        if let Some((_, by)) = written.iter().find(|(r, _)| r == reference) {
+        if let Some((_, by)) = written.iter().chain(others).find(|(r, _)| r == reference) {
             return Err(format!("{place}.{key}: `{reference}` is written by {by} already"));
         }
         written.push((reference.to_string(), place.to_string()));
@@ -362,7 +369,7 @@ pub fn validate(cfg: &ReflexoConfig, scene: Option<&fisica::Scene>, point: &dyn 
             }
         }
     }
-    Ok(())
+    Ok(written)
 }
 
 /// A point bound to the device that holds it.
@@ -408,6 +415,15 @@ struct Segment {
     k: u64,
 }
 
+/// The steps a change of `distance` takes at `rate` units a second in steps of `dt` seconds: the
+/// first step at or after its time. The division's rounding grows with the count (past 2^24 steps
+/// it passes any fixed slack), so the slack is relative: sixteen units in the last place of the
+/// count, and a billionth of a step besides.
+pub fn ramp_steps(distance: f64, rate: f64, dt: f64) -> u64 {
+    let x = distance / (rate * dt);
+    (x - x * 16.0 * f64::EPSILON - 1e-9).ceil().max(1.0) as u64
+}
+
 impl DriveState {
     /// One step from the speed toward `target`: away from 0 at the acceleration, toward 0 (or a
     /// smaller target of the same sign) at the deceleration, through 0 when the sign changes.
@@ -428,8 +444,7 @@ impl DriveState {
         match &mut self.ramp {
             Some(s) if s.goal == goal && s.per_step == per_step => s.k += 1,
             _ => {
-                // The steps the change takes, a billionth of a step's slack for the division's last place.
-                let steps = ((goal - speed).abs() / (rate * dt) - 1e-9).ceil().max(1.0) as u64;
+                let steps = ramp_steps((goal - speed).abs(), rate, dt);
                 self.ramp = Some(Segment { from: speed, goal, per_step, steps, k: 1 });
             }
         }
@@ -625,7 +640,7 @@ impl Models {
                 }
             }
         }
-        for a in &mut self.actuators {
+        'actuators: for a in &mut self.actuators {
             let extend = match a.extend.read() {
                 Ok(v) => v != 0.0,
                 Err(e) => {
@@ -643,7 +658,9 @@ impl Models {
                 if let Some(s) = switch
                     && let Err(e) = s.write(f64::from(u8::from(at)))
                 {
+                    // Skipped for the rest of its step, as a drive is at its first failed write.
                     errors.push(format!("actuator `{}`: {e}", a.name));
+                    continue 'actuators;
                 }
             }
         }

@@ -576,6 +576,8 @@ pub fn load(text: &str, base: &Path) -> Result<BenchSpec, BenchError> {
         scenes.push(FisicaPart { name: f.name, path, scene });
     }
     let mut models = Vec::new();
+    // Every point a model writes, across the file's parts, with the place that writes it.
+    let mut written: Vec<(String, String)> = Vec::new();
     for (i, r) in file.reflexo.into_iter().enumerate() {
         let place = format!("reflexo[{i}]");
         name("reflexo", &place, &r.name)?;
@@ -598,7 +600,8 @@ pub fn load(text: &str, base: &Path) -> Result<BenchSpec, BenchError> {
             }
             Err(format!("no Modbus server or EtherNet/IP adapter is named `{part}`"))
         };
-        reflexo::validate(&cfg, scene, &point).map_err(|e| invalid(format!("{place}.{e}")))?;
+        let mine = reflexo::validate_beside(&cfg, scene, &point, &written).map_err(|e| invalid(format!("{place}.{e}")))?;
+        written.extend(mine.into_iter().map(|(reference, by)| (reference, format!("{place}.{by}"))));
         models.push((r.name, cfg));
     }
     let mut channels = Vec::new();
