@@ -90,7 +90,10 @@ fn the_manifest_a_cut_writes_reads_back_as_written() {
     let commit = "0123456789abcdef0123456789abcdef01234567";
     let text = cut::manifest_text(&release, commit, "x86_64-unknown-linux-gnu", "rustc 1.100.0 (0ef1bc386 2026-11-09)", &components, cut::SUITE);
     let m = manifest::load(&text).unwrap();
-    assert_eq!((m.release.to_string(), m.commit.as_str(), m.toolchain.as_str()), ("2.0.0-alpha.1".to_string(), commit, "rustc 1.100.0 (0ef1bc386 2026-11-09)"));
+    assert_eq!(
+        (m.release.to_string(), m.commit.as_str(), m.target.as_str(), m.toolchain.as_str()),
+        ("2.0.0-alpha.1".to_string(), commit, "x86_64-unknown-linux-gnu", "rustc 1.100.0 (0ef1bc386 2026-11-09)")
+    );
     let got: Vec<(String, String, Vec<String>)> = m.components.iter().map(|c| (c.name.clone(), c.version.to_string(), c.bins.clone())).collect();
     assert_eq!(got, components);
     assert_eq!((m.tested.suite.as_str(), m.tested.together.as_str()), ("cargo nextest run --workspace", "the bundle's bench and supervisão on its plant"));
@@ -738,6 +741,14 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
     // Right: packed, extracted again into `check`, matching its sums, the executables as built.
     let (p, extracted) = cut::after_build(&recipe(), c.path(), &commit, rustc, &built(rustc), name, &bins, &components, text, work.path()).unwrap();
     assert_eq!((p, extracted.clone()), (packed.clone(), work.path().join("check").join(name)));
+    let epoch = String::from_utf8(Command::new("git").arg("-C").arg(c.path()).args(["show", "-s", "--format=%ct", &commit]).output().unwrap().stdout).unwrap();
+    let entries = listing(&packed);
+    assert!(entries.len() > 10, "{entries:?}");
+    let want_date = utc(epoch.trim().parse().unwrap());
+    for e in &entries {
+        assert_eq!((e.owner.as_str(), &e.date), ("0/0", &want_date), "{}", e.name);
+    }
+    assert_in_name_order(&entries);
     assert_eq!(bundle::verify_sums(&extracted).unwrap(), Vec::<String>::new());
     for b in &bins {
         assert_eq!(std::fs::read(extracted.join("bin").join(b)).unwrap(), std::fs::read(bin.join(b)).unwrap());
@@ -953,4 +964,72 @@ fn every_refusal_before_the_build_stops_the_cut_with_nothing_built() {
     let (got, left) = trial_cut(shallow.path());
     assert_eq!(message(got), "release 9.9.9 would not check:\nthe repository is a shallow clone: its history is cut, and a release is checked against the whole of it");
     assert!(!left);
+}
+
+/// One entry of an archive's listing (`tar --numeric-owner --utc --full-time -tv`).
+#[derive(Debug)]
+struct Entry {
+    mode: String,
+    owner: String,
+    date: (String, String),
+    name: String,
+}
+
+/// The entries of a gzipped archive as GNU tar lists them, its owners by number and its dates in
+/// UTC, whatever the shell's `TAR_OPTIONS`.
+fn listing(archive: &Path) -> Vec<Entry> {
+    let out = Command::new("tar").args(["--numeric-owner", "--utc", "--full-time", "--quoting-style=literal", "-tvzf"]).arg(archive).env_remove("TAR_OPTIONS").output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| {
+            // The mode, the owner, the size, the date, the time, the name (none holds a space).
+            let f: Vec<&str> = l.split_whitespace().collect();
+            assert_eq!(f.len(), 6, "{l}");
+            Entry { mode: f[0].into(), owner: f[1].into(), date: (f[3].into(), f[4].into()), name: f[5].into() }
+        })
+        .collect()
+}
+
+/// `seconds` since the epoch as tar's `--utc --full-time` prints them: the date, the time.
+fn utc(seconds: i64) -> (String, String) {
+    let out = Command::new("date").args(["-u", "-d"]).arg(format!("@{seconds}")).arg("+%Y-%m-%d %H:%M:%S").output().unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    let (d, t) = text.trim().split_once(' ').unwrap();
+    (d.into(), t.into())
+}
+
+/// The entries depth first, every folder's children in the byte order of their names (what
+/// `--sort=name` gives): each entry's path, read part by part, after the one before it.
+fn assert_in_name_order(entries: &[Entry]) {
+    let parts = |e: &Entry| e.name.trim_end_matches('/').split('/').map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>();
+    for w in entries.windows(2) {
+        assert!(parts(&w[0]) < parts(&w[1]), "{} before {}", w[0].name, w[1].name);
+    }
+}
+
+#[test]
+fn a_bundles_entries_are_in_name_order_owned_by_root_by_number_and_dated_at_its_epoch() {
+    // Files made out of name order (twenty in a shuffled order, then `b` before `a`), so the order
+    // the folder hands them back in is not their names'.
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().join("veredas-y");
+    std::fs::create_dir_all(dir.join("many")).unwrap();
+    for i in 0..20 {
+        std::fs::write(dir.join("many").join(format!("f{:02}", (i * 7) % 20)), format!("{i}\n")).unwrap();
+    }
+    std::fs::write(dir.join("b"), "b\n").unwrap();
+    std::fs::write(dir.join("a"), "a\n").unwrap();
+    let out = work.path().join("y.tar.gz");
+    bundle::pack(work.path(), "veredas-y", "1795300000", &out).unwrap();
+    let entries = listing(&out);
+    let mut want = vec!["veredas-y/".to_string(), "veredas-y/a".into(), "veredas-y/b".into(), "veredas-y/many/".into()];
+    want.extend((0..20).map(|n| format!("veredas-y/many/f{n:02}")));
+    assert_eq!(entries.iter().map(|e| e.name.clone()).collect::<Vec<_>>(), want);
+    assert_in_name_order(&entries);
+    for e in &entries {
+        assert_eq!((e.owner.as_str(), &e.date.0, &e.date.1), ("0/0", &"2026-11-21".to_string(), &"22:26:40".to_string()), "{}", e.name);
+        assert!(e.mode == "drwxr-xr-x" || e.mode == "-rw-r--r--", "{e:?}");
+    }
 }
