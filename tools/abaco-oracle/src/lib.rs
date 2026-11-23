@@ -56,6 +56,8 @@ pub enum OracleError {
     MissingPart { path: PathBuf, part: &'static str },
     #[error("{path}: a cell reference `{reference}` that is not one")]
     BadReference { path: PathBuf, reference: String },
+    #[error("{path}: {part} is no well-formed XML: {reason}")]
+    Xml { path: PathBuf, part: String, reason: String },
 }
 
 /// How a workbook that links to others is opened.
@@ -148,115 +150,238 @@ fn re(pattern: &str) -> Regex {
     Regex::new(pattern).expect("a constant pattern")
 }
 
-static RE_REL: LazyLock<Regex> = LazyLock::new(|| re(r#"<Relationship\s[^>]*?Id="([^"]+)"[^>]*?Target="([^"]+)""#));
-static RE_TYPED_REL: LazyLock<Regex> = LazyLock::new(|| re(r#"<Relationship\s[^>]*?Type="([^"]+)"[^>]*?Target="([^"]+)""#));
-static RE_TYPED_REL2: LazyLock<Regex> = LazyLock::new(|| re(r#"<Relationship\s[^>]*?Target="([^"]+)"[^>]*?Type="([^"]+)""#));
-static RE_ATTR_VM: LazyLock<Regex> = LazyLock::new(|| re(r#"\svm="([0-9]+)""#));
-static RE_REL2: LazyLock<Regex> = LazyLock::new(|| re(r#"<Relationship\s[^>]*?Target="([^"]+)"[^>]*?Id="([^"]+)""#));
-static RE_SHEET: LazyLock<Regex> = LazyLock::new(|| re(r#"<sheet\s[^>]*?name="([^"]+)"[^>]*?r:id="([^"]+)""#));
-static RE_CELL: LazyLock<Regex> =
-    LazyLock::new(|| re(r#"(?s)<c r="([A-Z]+)([0-9]+)"((?:\s+[a-zA-Z0-9:]+="[^"]*")*)\s*(?:/>|>(.*?)</c>)"#));
-static RE_ATTR_T: LazyLock<Regex> = LazyLock::new(|| re(r#"\st="([^"]*)""#));
-static RE_F: LazyLock<Regex> = LazyLock::new(|| re(r#"(?s)<f(\s[^>]*)?(?:/>|>(.*?)</f>)"#));
-static RE_F_SI: LazyLock<Regex> = LazyLock::new(|| re(r#"\ssi="([0-9]+)""#));
 
-/// What a cell's children hold, read by an XML parser (quick-xml, the version the engine's reader
-/// uses): every value tag counted, open or self-closing; the first one's text with its line ends
-/// normalised, every reference resolved, CDATA read as the text it is and comments left out (the
-/// document an XML parser reads, whatever markup spells it); whether an inline string is there;
-/// whether the content is no well-formed XML.
+/// An element as an XML parser reads it (quick-xml, the version the engine's reader uses): its
+/// local name, its attributes (the qualified name, the local one, the value normalised as XML 1.0
+/// says), its children, and its text (references resolved, CDATA as the text it is, comments and
+/// processing instructions left out, line ends normalised).
+#[derive(Default, Debug, Clone)]
+struct Node {
+    name: String,
+    attrs: Vec<(String, String, String)>,
+    children: Vec<Node>,
+    text: String,
+}
+
+impl Node {
+    /// An attribute by its qualified name (`r:id`), or by its local name when unprefixed.
+    fn attr(&self, name: &str) -> Option<&str> {
+        self.attrs
+            .iter()
+            .find(|(q, l, _)| q == name || (!name.contains(':') && q == l && l == name))
+            .map(|(_, _, v)| v.as_str())
+    }
+
+    /// A prefixed attribute by its local name (`id` of `r:id`, whatever the prefix).
+    fn prefixed(&self, local: &str) -> Option<&str> {
+        self.attrs.iter().find(|(q, l, _)| l == local && q != l).map(|(_, _, v)| v.as_str())
+    }
+
+    fn kids<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Node> + 'a {
+        self.children.iter().filter(move |c| c.name == name)
+    }
+
+    fn descendants<'a>(&'a self, name: &'a str) -> Vec<&'a Node> {
+        let mut out = Vec::new();
+        let mut stack: Vec<&Node> = vec![self];
+        while let Some(n) = stack.pop() {
+            if n.name == name {
+                out.push(n);
+            }
+            stack.extend(n.children.iter().rev());
+        }
+        out
+    }
+}
+
+/// An element's local name and its attributes, as [`Node`] keeps them.
+fn element_of(e: &quick_xml::events::BytesStart) -> Result<(String, Vec<(String, String, String)>), String> {
+    let name = e.local_name().as_ref().to_string();
+    let mut attrs = Vec::new();
+    for a in e.attributes() {
+        let a = a.map_err(|e| e.to_string())?;
+        let value = a.normalized_value(quick_xml::XmlVersion::Implicit1_0).map_err(|e| e.to_string())?;
+        attrs.push((a.key.as_ref().to_string(), a.key.local_name().as_ref().to_string(), value.to_string()));
+    }
+    Ok((name, attrs))
+}
+
+/// The text a reference stands for: a character reference or one of the five predefined entities.
+fn reference_text(r: &quick_xml::events::BytesRef) -> Option<String> {
+    match r.resolve_char_ref() {
+        Ok(Some(c)) => Some(c.to_string()),
+        Ok(None) => quick_xml::escape::resolve_predefined_entity(r).map(str::to_string),
+        Err(_) => None,
+    }
+}
+
+/// A small part (the workbook, its relationships, the metadata, the rich values) as a tree.
+fn parse_tree(xml: &str) -> Result<Node, String> {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_str(xml);
+    let mut stack: Vec<Node> = Vec::new();
+    let mut root = None;
+    loop {
+        match reader.read_event().map_err(|e| e.to_string())? {
+            Event::Eof => break,
+            Event::Start(e) => {
+                let (name, attrs) = element_of(&e)?;
+                stack.push(Node { name, attrs, ..Node::default() });
+            }
+            Event::Empty(e) => {
+                let (name, attrs) = element_of(&e)?;
+                let node = Node { name, attrs, ..Node::default() };
+                match stack.last_mut() {
+                    Some(parent) => parent.children.push(node),
+                    None => root = Some(node),
+                }
+            }
+            Event::End(_) => {
+                let node = stack.pop().ok_or("an end tag that closes nothing")?;
+                match stack.last_mut() {
+                    Some(parent) => parent.children.push(node),
+                    None => root = Some(node),
+                }
+            }
+            Event::Text(t) => {
+                if let Some(n) = stack.last_mut() {
+                    n.text.push_str(&t.xml_content(quick_xml::XmlVersion::Implicit1_0));
+                }
+            }
+            Event::CData(d) => {
+                if let Some(n) = stack.last_mut() {
+                    n.text.push_str(&d.xml_content(quick_xml::XmlVersion::Implicit1_0));
+                }
+            }
+            Event::GeneralRef(r) => {
+                let text = reference_text(&r).ok_or("an entity the part does not declare")?;
+                if let Some(n) = stack.last_mut() {
+                    n.text.push_str(&text);
+                }
+            }
+            _ => {}
+        }
+    }
+    if !stack.is_empty() {
+        return Err("an element not closed".into());
+    }
+    root.ok_or_else(|| "no element".into())
+}
+
+/// One cell of a sheet as an XML parser reads it: its reference, its type and value metadata, its
+/// formula (the `f` element's type, shared index and text), every value tag counted with the first
+/// one's text, whether an inline string is there, and whether an element sits where the schema has
+/// text (inside a formula or a value).
 #[derive(Default)]
-struct CellChildren {
+struct CellXml {
+    reference: Option<String>,
+    t: Option<String>,
+    vm: Option<String>,
+    formula: Option<(Option<String>, Option<String>, String)>,
     values: usize,
     value: Option<String>,
     inline: bool,
     broken: bool,
 }
 
-fn cell_children(inner: &str) -> CellChildren {
+/// Every cell of a worksheet part, streamed (a sheet may be large), read by an XML parser: the
+/// cells of `sheetData` alone, comments and CDATA elsewhere read as XML reads them.
+fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
     use quick_xml::events::Event;
-    use quick_xml::XmlVersion;
-    let mut out = CellChildren::default();
-    let mut reader = quick_xml::Reader::from_str(inner);
-    let mut depth = 0usize;
-    // inside the first value tag
-    let mut in_value = false;
+    let mut reader = quick_xml::Reader::from_str(xml);
+    let mut path: Vec<String> = Vec::new();
+    let mut cells = Vec::new();
+    let mut cell: Option<CellXml> = None;
+    // where text goes: the formula's, or the first value's
+    #[derive(PartialEq)]
+    enum Into {
+        Nothing,
+        Formula,
+        Value,
+    }
+    let mut into = Into::Nothing;
+    let start = |name: &str, attrs: &[(String, String, String)], path: &[String], cell: &mut Option<CellXml>, empty: bool, into: &mut Into| {
+        let get = |n: &str| attrs.iter().find(|(q, l, _)| q == l && l == n).map(|(_, _, v)| v.clone());
+        let parent = path.last().map(String::as_str);
+        if name == "c" && parent == Some("row") && path.iter().any(|p| p == "sheetData") {
+            *cell = Some(CellXml { reference: get("r"), t: get("t"), vm: get("vm"), ..CellXml::default() });
+            return;
+        }
+        let Some(c) = cell.as_mut() else { return };
+        match (name, parent) {
+            ("f", Some("c")) => {
+                c.formula = Some((get("t"), get("si"), String::new()));
+                if !empty {
+                    *into = Into::Formula;
+                }
+            }
+            ("v", Some("c")) => {
+                c.values += 1;
+                if c.values == 1 {
+                    c.value = Some(String::new());
+                    if !empty {
+                        *into = Into::Value;
+                    }
+                }
+            }
+            ("is", Some("c")) => c.inline = true,
+            (_, Some("f") | Some("v")) => c.broken = true,
+            _ => {}
+        }
+    };
     loop {
-        match reader.read_event() {
-            Err(_) => {
-                out.broken = true;
-                break;
+        match reader.read_event().map_err(|e| e.to_string())? {
+            Event::Eof => break,
+            Event::Start(e) => {
+                let (name, attrs) = element_of(&e)?;
+                start(&name, &attrs, &path, &mut cell, false, &mut into);
+                path.push(name);
             }
-            Ok(Event::Eof) => break,
-            Ok(Event::Start(e)) => {
-                if depth == 0 {
-                    match e.local_name().as_ref() {
-                        "v" => {
-                            out.values += 1;
-                            if out.values == 1 {
-                                in_value = true;
-                                out.value = Some(String::new());
-                            }
-                        }
-                        "is" => out.inline = true,
-                        _ => {}
-                    }
-                } else if in_value {
-                    // an element inside a value: no text Excel writes
-                    out.broken = true;
-                }
-                depth += 1;
-            }
-            Ok(Event::Empty(e)) => {
-                if depth == 0 {
-                    match e.local_name().as_ref() {
-                        "v" => {
-                            out.values += 1;
-                            if out.values == 1 {
-                                out.value = Some(String::new());
-                            }
-                        }
-                        "is" => out.inline = true,
-                        _ => {}
-                    }
-                } else if in_value {
-                    out.broken = true;
+            Event::Empty(e) => {
+                let (name, attrs) = element_of(&e)?;
+                start(&name, &attrs, &path, &mut cell, true, &mut into);
+                if name == "c" && let Some(c) = cell.take() {
+                    cells.push(c);
                 }
             }
-            Ok(Event::End(_)) => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    in_value = false;
+            Event::End(_) => {
+                let name = path.pop().unwrap_or_default();
+                if name == "f" || name == "v" {
+                    into = Into::Nothing;
+                }
+                if name == "c" && let Some(c) = cell.take() {
+                    cells.push(c);
                 }
             }
-            Ok(Event::Text(t)) if in_value && depth == 1 => {
-                if let Some(v) = out.value.as_mut() {
-                    v.push_str(&t.xml_content(XmlVersion::Implicit1_0));
-                }
-            }
-            Ok(Event::CData(d)) if in_value && depth == 1 => {
-                if let Some(v) = out.value.as_mut() {
-                    v.push_str(&d.xml_content(XmlVersion::Implicit1_0));
-                }
-            }
-            Ok(Event::GeneralRef(r)) if in_value && depth == 1 => {
-                let resolved = match r.resolve_char_ref() {
-                    Ok(Some(c)) => Some(c.to_string()),
-                    Ok(None) => quick_xml::escape::resolve_predefined_entity(&r).map(str::to_string),
-                    Err(_) => None,
+            event @ (Event::Text(_) | Event::CData(_) | Event::GeneralRef(_)) => {
+                let Some(c) = cell.as_mut() else { continue };
+                let text = match &event {
+                    Event::Text(t) => t.xml_content(quick_xml::XmlVersion::Implicit1_0).to_string(),
+                    Event::CData(d) => d.xml_content(quick_xml::XmlVersion::Implicit1_0).to_string(),
+                    Event::GeneralRef(r) => reference_text(r).ok_or("an entity the part does not declare")?,
+                    _ => String::new(),
                 };
-                match (resolved, out.value.as_mut()) {
-                    (Some(text), Some(v)) => v.push_str(&text),
-                    _ => out.broken = true,
+                match into {
+                    Into::Formula => {
+                        if let Some(f) = c.formula.as_mut() {
+                            f.2.push_str(&text);
+                        }
+                    }
+                    Into::Value => {
+                        if let Some(v) = c.value.as_mut() {
+                            v.push_str(&text);
+                        }
+                    }
+                    Into::Nothing => {}
                 }
             }
-            Ok(_) => {}
+            _ => {}
         }
     }
-    if depth != 0 {
-        out.broken = true;
+    if !path.is_empty() {
+        return Err("an element not closed".into());
     }
-    out
+    Ok(cells)
 }
 
 /// XSD's whitespace (space, tab, line feed, carriage return) taken off both ends, and no other
@@ -366,14 +491,6 @@ fn decode_escapes(s: &str) -> String {
 /// (`#SPILL!`, `#CALC!`, …) as `#VALUE!` with value metadata.
 pub const FILE_ERRORS: [&str; 8] = ["#NULL!", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#GETTING_DATA"];
 
-static RE_BK: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)<bk>(.*?)</bk>"));
-static RE_RC: LazyLock<Regex> = LazyLock::new(|| re(r#"<rc\s+t="([0-9]+)"\s+v="([0-9]+)""#));
-static RE_RVB: LazyLock<Regex> = LazyLock::new(|| re(r#"<xlrd:rvb\s+i="([0-9]+)""#));
-static RE_RV: LazyLock<Regex> = LazyLock::new(|| re(r#"(?s)<rv\s+s="([0-9]+)"\s*>(.*?)</rv>"#));
-static RE_RV_V: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)<v(?:\s[^>]*)?>(.*?)</v>"));
-static RE_STRUCT: LazyLock<Regex> = LazyLock::new(|| re(r#"(?s)<s\s+t="([^"]+)"\s*>(.*?)</s>"#));
-static RE_KEY: LazyLock<Regex> = LazyLock::new(|| re(r#"<k\s+n="([^"]+)""#));
-static RE_META_TYPE: LazyLock<Regex> = LazyLock::new(|| re(r#"<metadataType\s+name="([^"]+)""#));
 
 /// The errors Excel writes as `#VALUE!` with value metadata, by the `errorType` of the rich
 /// value the metadata points at (the corpus's two; another stays the `#VALUE!` the file says).
@@ -381,7 +498,8 @@ const RICH_ERRORS: [(&str, &str); 2] = [("8", "#SPILL!"), ("13", "#CALC!")];
 
 /// What each value-metadata index (a cell's `vm`, from 1) says the cell's error is, where Excel
 /// wrote a `#SPILL!` or a `#CALC!` as `#VALUE!`: the metadata part's value metadata, its
-/// `XLRICHVALUE` entry, the rich value it points at, and that value's `errorType`.
+/// `XLRICHVALUE` entry, the rich value it points at, and that value's `errorType`; each part read
+/// by an XML parser.
 fn rich_errors(archive: &mut zip::ZipArchive<fs::File>, rels: &[(String, String)]) -> HashMap<usize, String> {
     let part = |kind: &str| -> Option<String> {
         rels.iter().find(|(t, _)| t.ends_with(kind)).map(|(_, target)| match target.strip_prefix('/') {
@@ -390,47 +508,41 @@ fn rich_errors(archive: &mut zip::ZipArchive<fs::File>, rels: &[(String, String)
         })
     };
     let mut out = HashMap::new();
-    let (Some(meta), Some(values), Some(structures)) = (
-        part("/sheetMetadata").and_then(|p| read_part(archive, &p)),
-        part("/rdRichValue").and_then(|p| read_part(archive, &p)),
-        part("/rdRichValueStructure").and_then(|p| read_part(archive, &p)),
-    ) else {
+    let tree = |archive: &mut zip::ZipArchive<fs::File>, kind: &str| part(kind).and_then(|p| read_part(archive, &p)).and_then(|x| parse_tree(&x).ok());
+    let (Some(meta), Some(values), Some(structures)) =
+        (tree(archive, "/sheetMetadata"), tree(archive, "/rdRichValue"), tree(archive, "/rdRichValueStructure"))
+    else {
         return out;
     };
-    let Some(rich_type) = RE_META_TYPE.captures_iter(&meta).position(|c| &c[1] == "XLRICHVALUE").map(|i| i + 1) else {
+    let Some(rich_type) = meta
+        .kids("metadataTypes")
+        .flat_map(|t| t.kids("metadataType"))
+        .position(|t| t.attr("name") == Some("XLRICHVALUE"))
+        .map(|i| i + 1)
+    else {
         return out;
     };
-    let section = |name: &str| -> String {
-        let open = meta.find(&format!("<{name}")).unwrap_or(meta.len());
-        let close = meta[open..].find(&format!("</{name}>")).map(|c| open + c).unwrap_or(meta.len());
-        meta[open..close].to_string()
-    };
-    let future = meta
-        .find(r#"<futureMetadata name="XLRICHVALUE""#)
-        .map(|open| {
-            let close = meta[open..].find("</futureMetadata>").map(|c| open + c).unwrap_or(meta.len());
-            RE_BK.captures_iter(&meta[open..close]).map(|bk| RE_RVB.captures(&bk[1]).and_then(|c| c[1].parse::<usize>().ok())).collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let structs: Vec<(String, Vec<String>)> =
-        RE_STRUCT.captures_iter(&structures).map(|c| (c[1].to_string(), RE_KEY.captures_iter(&c[2]).map(|k| k[1].to_string()).collect())).collect();
-    let rvs: Vec<(usize, Vec<String>)> = RE_RV
-        .captures_iter(&values)
-        .map(|c| (c[1].parse().unwrap_or(usize::MAX), RE_RV_V.captures_iter(&c[2]).map(|v| xsd_trim(&v[1]).to_string()).collect()))
+    let index = |s: Option<&str>| s.and_then(|v| xsd_trim(v).parse::<usize>().ok());
+    let future: Vec<Option<usize>> = meta
+        .kids("futureMetadata")
+        .filter(|f| f.attr("name") == Some("XLRICHVALUE"))
+        .flat_map(|f| f.kids("bk"))
+        .map(|bk| bk.descendants("rvb").first().and_then(|r| index(r.attr("i"))))
         .collect();
-    for (i, bk) in RE_BK.captures_iter(&section("valueMetadata")).enumerate() {
-        let Some(rc) = RE_RC.captures(&bk[1]) else { continue };
-        if rc[1].parse::<usize>().ok() != Some(rich_type) {
+    let structs: Vec<(Option<&str>, Vec<&str>)> =
+        structures.kids("s").map(|s| (s.attr("t"), s.kids("k").filter_map(|k| k.attr("n")).collect())).collect();
+    let rvs: Vec<(Option<usize>, Vec<&str>)> = values.kids("rv").map(|rv| (index(rv.attr("s")), rv.kids("v").map(|v| xsd_trim(&v.text)).collect())).collect();
+    for (i, bk) in meta.kids("valueMetadata").flat_map(|m| m.kids("bk")).enumerate() {
+        let Some(rc) = bk.kids("rc").next() else { continue };
+        if index(rc.attr("t")) != Some(rich_type) {
             continue;
         }
-        let error = rc[2]
-            .parse::<usize>()
-            .ok()
+        let error = index(rc.attr("v"))
             .and_then(|v| future.get(v).copied().flatten())
             .and_then(|rv| rvs.get(rv))
             .and_then(|(s, vals)| {
-                let (kind, keys) = structs.get(*s)?;
-                let at = keys.iter().position(|k| k == "errorType").filter(|_| kind == "_error")?;
+                let (kind, keys) = structs.get((*s)?)?;
+                let at = keys.iter().position(|k| *k == "errorType").filter(|_| *kind == Some("_error"))?;
                 let code = vals.get(at)?;
                 RICH_ERRORS.iter().find(|(c, _)| c == code).map(|(_, e)| e.to_string())
             });
@@ -500,6 +612,45 @@ pub fn corpus(dir: &Path) -> Result<Vec<PathBuf>, OracleError> {
     Ok(out)
 }
 
+/// The value Excel cached for a formula cell, from its type and its value as the parser read them.
+fn expected_of(c: &CellXml, rich: &HashMap<usize, String>) -> Expected {
+    let never = |what: String| Expected::Unwritten(what);
+    match (c.t.as_deref(), c.value.clone(), c.inline) {
+        // a cell holds one value (CT_Cell): two value tags are no cache Excel writes
+        (_, Some(v), _) if c.values > 1 => never(v),
+        // an inline string (`<is>`, whatever the cell's type) is a constant's: Excel writes a
+        // formula's text as `str`, never inline
+        (_, _, true) => never("an inline string".into()),
+        // Excel writes the value every formula computed: no `<v>` is a cache it never wrote
+        (_, None, false) => Expected::Missing,
+        // a formula's text Excel writes `str`
+        (Some("str"), Some(v), false) => Expected::Text(decode_escapes(&v)),
+        // a boolean Excel writes as 1 or 0
+        (Some("b"), Some(v), false) => match xsd_trim(&v) {
+            "1" => Expected::Bool(true),
+            "0" => Expected::Bool(false),
+            _ => never(v),
+        },
+        // an error a file holds; a `#VALUE!` with value metadata is the error the rich value names
+        // (Excel's `#SPILL!` and `#CALC!`)
+        (Some("e"), Some(v), false) => match FILE_ERRORS.iter().find(|e| **e == xsd_trim(&v)) {
+            Some(e) => {
+                let vm = c.vm.as_deref().and_then(|m| xsd_trim(m).parse::<usize>().ok());
+                Expected::Error(vm.and_then(|i| rich.get(&i).cloned()).filter(|_| *e == "#VALUE!").unwrap_or_else(|| e.to_string()))
+            }
+            None => never(v),
+        },
+        // a number Excel can cache is finite: `inf`, `NaN`, `1E+999`, a word or nothing is none
+        (None | Some("n"), Some(v), false) => match xsd_trim(&v).parse::<f64>() {
+            Ok(n) if n.is_finite() && !xsd_trim(&v).is_empty() => Expected::Number(n),
+            _ => never(v),
+        },
+        // a shared string (`s`), a date (`d`), an empty type, any other: none Excel writes for a
+        // formula's value
+        (Some(_), Some(v), false) => never(v),
+    }
+}
+
 /// Reads the expected side of a workbook from its parts.
 pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
     let mut archive = open_zip(path)?;
@@ -513,35 +664,36 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
     // Excel writes a formula's text as `t="str"`, never as a shared string: the shared strings are
     // no formula's cache, and are not read
 
-    // Sheet order and names, to part names, through workbook.xml and its relationships.
+    // Sheet order and names, to part names, through workbook.xml and its relationships, each read
+    // by an XML parser.
+    let bad_xml = |part: &str, reason: String| OracleError::Xml { path: path.to_path_buf(), part: part.to_string(), reason };
     let workbook_xml = read_part(&mut archive, "xl/workbook.xml")
         .ok_or(OracleError::MissingPart { path: path.to_path_buf(), part: "xl/workbook.xml" })?;
     let rels_xml = read_part(&mut archive, "xl/_rels/workbook.xml.rels")
         .ok_or(OracleError::MissingPart { path: path.to_path_buf(), part: "xl/_rels/workbook.xml.rels" })?;
-    let mut rels: HashMap<String, String> = HashMap::new();
-    for c in RE_REL.captures_iter(&rels_xml) {
-        rels.insert(c[1].to_string(), c[2].to_string());
-    }
+    let workbook = parse_tree(&workbook_xml).map_err(|e| bad_xml("xl/workbook.xml", e))?;
+    let rels_tree = parse_tree(&rels_xml).map_err(|e| bad_xml("xl/_rels/workbook.xml.rels", e))?;
+    let relationships: Vec<&Node> = rels_tree.kids("Relationship").collect();
+    let rels: HashMap<String, String> =
+        relationships.iter().filter_map(|r| Some((r.attr("Id")?.to_string(), r.attr("Target")?.to_string()))).collect();
     // the relationships by their type, for the parts found that way (the metadata, rich data)
-    let mut typed: Vec<(String, String)> = RE_TYPED_REL.captures_iter(&rels_xml).map(|c| (c[1].to_string(), c[2].to_string())).collect();
-    typed.extend(RE_TYPED_REL2.captures_iter(&rels_xml).map(|c| (c[2].to_string(), c[1].to_string())));
+    let typed: Vec<(String, String)> =
+        relationships.iter().filter_map(|r| Some((r.attr("Type")?.to_string(), r.attr("Target")?.to_string()))).collect();
     let rich = rich_errors(&mut archive, &typed);
-    for c in RE_REL2.captures_iter(&rels_xml) {
-        rels.entry(c[2].to_string()).or_insert_with(|| c[1].to_string());
-    }
-    let sheets: Vec<(String, String)> = RE_SHEET
-        .captures_iter(&workbook_xml)
-        .map(|c| {
-            let target = rels.get(&c[2]).cloned().unwrap_or_default();
+    let sheets: Vec<(String, String)> = workbook
+        .kids("sheets")
+        .flat_map(|s| s.kids("sheet"))
+        .filter_map(|s| {
+            let target = rels.get(s.prefixed("id")?).cloned().unwrap_or_default();
             let part = match target.strip_prefix('/') {
                 Some(absolute) => absolute.to_string(),
                 None => format!("xl/{target}"),
             };
-            (unescape(&c[1]), part)
+            Some((s.attr("name")?.to_string(), part))
         })
         .collect();
-    let defined_names = workbook_xml.matches("<definedName ").count();
-    let external_links = workbook_xml.matches("<externalReference ").count();
+    let defined_names = workbook.descendants("definedName").len();
+    let external_links = workbook.descendants("externalReference").len();
 
     let mut external_cached_cells = 0;
     for name in parts.keys().cloned().collect::<Vec<_>>() {
@@ -549,7 +701,7 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
             && name.ends_with(".xml")
             && let Some(xml) = read_part(&mut archive, &name)
         {
-            external_cached_cells += xml.matches("<cell ").count();
+            external_cached_cells += parse_tree(&xml).map(|t| t.descendants("cell").len()).unwrap_or(0);
         }
     }
 
@@ -558,25 +710,22 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
     for (sheet_name, part) in &sheets {
         let Some(xml) = read_part(&mut archive, part) else { continue };
         let mut shared_masters: HashMap<u32, String> = HashMap::new();
-        for c in RE_CELL.captures_iter(&xml) {
-            let col_letters = &c[1];
-            let row: u32 = c[2]
-                .parse()
-                .map_err(|_| OracleError::BadReference { path: path.to_path_buf(), reference: c[0].chars().take(40).collect() })?;
-            let attrs = c.get(3).map(|m| m.as_str()).unwrap_or("");
-            let inner = c.get(4).map(|m| m.as_str()).unwrap_or("");
-            let t = RE_ATTR_T.captures(attrs).map(|m| m[1].to_string());
-
-            let Some(fc) = RE_F.captures(inner) else {
-                if inner.contains("<v>") || inner.contains("<is>") {
+        for c in sheet_cells(&xml).map_err(|e| bad_xml(part, e))? {
+            let reference = c.reference.clone().unwrap_or_default();
+            let split = reference.find(|ch: char| ch.is_ascii_digit()).unwrap_or(reference.len());
+            let (col_letters, digits) = reference.split_at(split);
+            let row: u32 = digits.parse().map_err(|_| OracleError::BadReference { path: path.to_path_buf(), reference: reference.clone() })?;
+            if col_letters.is_empty() || !col_letters.bytes().all(|b| b.is_ascii_uppercase()) {
+                return Err(OracleError::BadReference { path: path.to_path_buf(), reference });
+            }
+            let Some((ftype, si, ftext)) = c.formula.clone() else {
+                if c.values > 0 || c.inline {
                     value_cells += 1;
                 }
                 continue;
             };
-            let fattrs = fc.get(1).map(|m| m.as_str()).unwrap_or("");
-            let text = fc.get(2).map(|m| xml_text(m.as_str())).unwrap_or_default();
-            let ftype = RE_ATTR_T.captures(fattrs).map(|m| m[1].to_string());
-            let si = RE_F_SI.captures(fattrs).and_then(|m| m[1].parse::<u32>().ok());
+            let text = decode_escapes(&ftext);
+            let si = si.as_deref().and_then(|v| xsd_trim(v).parse::<u32>().ok());
             let array = ftype.as_deref() == Some("array");
             let (formula, shared_copy) = match (ftype.as_deref(), si) {
                 (Some("shared"), Some(si)) if !text.is_empty() => {
@@ -586,60 +735,11 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
                 (Some("shared"), Some(si)) => (shared_masters.get(&si).cloned().unwrap_or_default(), true),
                 _ => (text, false),
             };
-
-            // the cell's children as an XML parser reads them; a cell holds one value (CT_Cell), so
-            // two value tags, in any form, are no cache Excel writes
-            let children = cell_children(inner);
-            let values = children.values;
-            let v = children.value.clone();
-            let is = children.inline.then(|| "an inline string".to_string());
             let never = |what: String| Expected::Unwritten(what);
-            if children.broken {
-                formula_cells.push(FormulaCell {
-                    sheet: sheet_name.clone(),
-                    reference: format!("{col_letters}{row}"),
-                    row,
-                    col: column_index(col_letters),
-                    formula,
-                    shared_copy,
-                    array,
-                    expected: never("content no XML parser reads as a cell".into()),
-                });
-                continue;
-            }
-            let expected = match (t.as_deref(), v, is) {
-                (_, Some(v), _) if values > 1 => never(v),
-                // an inline string (`<is>`, whatever the cell's type) is a constant's: Excel writes
-                // a formula's text as `str`, never inline
-                (_, _, Some(is)) => never(is),
-                // Excel writes the value every formula computed: no `<v>` is a cache it never wrote
-                (_, None, None) => Expected::Missing,
-                // a formula's text Excel writes `str`
-                (Some("str"), Some(v), None) => Expected::Text(decode_escapes(&v)),
-                // a boolean Excel writes as 1 or 0
-                (Some("b"), Some(v), None) => match xsd_trim(&v) {
-                    "1" => Expected::Bool(true),
-                    "0" => Expected::Bool(false),
-                    _ => never(v),
-                },
-                // an error a file holds; a `#VALUE!` with value metadata is the error the rich value
-                // names (Excel's `#SPILL!` and `#CALC!`)
-                (Some("e"), Some(v), None) => match FILE_ERRORS.iter().find(|e| **e == xsd_trim(&v)) {
-                    Some(e) => {
-                        let vm = RE_ATTR_VM.captures(attrs).and_then(|m| m[1].parse::<usize>().ok());
-                        Expected::Error(vm.and_then(|i| rich.get(&i).cloned()).filter(|_| *e == "#VALUE!").unwrap_or_else(|| e.to_string()))
-                    }
-                    None => never(v),
-                },
-                // a number Excel can cache is finite: `inf`, `NaN`, `1E+999`, a word or nothing is
-                // none
-                (None | Some("n"), Some(v), None) => match xsd_trim(&v).parse::<f64>() {
-                    Ok(n) if n.is_finite() && !xsd_trim(&v).is_empty() => Expected::Number(n),
-                    _ => never(v),
-                },
-                // a shared string (`s`), a date (`d`), an inline string holding `<v>`, any other
-                // type: none Excel writes for a formula's value
-                (Some(_), Some(v), None) => never(v),
+            let expected = if c.broken {
+                never("an element where the schema has text".into())
+            } else {
+                expected_of(&c, &rich)
             };
             formula_cells.push(FormulaCell {
                 sheet: sheet_name.clone(),
@@ -1037,8 +1137,9 @@ fn read_actual(model: &ironcalc_base::Model, si: u32, cell: &FormulaCell) -> Act
     let (row, col) = (cell.row as i32, cell.col as i32);
     // a cell the file says is a formula that the engine holds as neither a formula nor an array's
     // spilled cell (an empty `<f ca="1"/>` outside every array, which the importer reads as no
-    // formula): its value is the file's cache, not anything the engine computed
-    let computed = model.workbook.worksheet(si).ok().and_then(|ws| ws.cell(row, col)).is_none_or(|c| {
+    // formula), or does not hold at all: its value is the file's cache, or nothing, not anything
+    // the engine computed
+    let computed = model.workbook.worksheet(si).ok().and_then(|ws| ws.cell(row, col)).is_some_and(|c| {
         c.get_formula().is_some() || matches!(c.as_ref(), ironcalc_base::types::Cell::SpillCell { .. })
     });
     if !computed {

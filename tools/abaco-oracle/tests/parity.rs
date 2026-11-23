@@ -451,6 +451,67 @@ fn a_cache_whose_type_and_text_excel_never_pairs_matches_nothing_the_engine_comp
     }
 }
 
+#[test]
+fn the_sheet_and_its_parts_are_read_as_an_xml_parser_reads_them() {
+    // comments, CDATA, tags in any spelling the schema allows, anywhere in a sheet or the metadata:
+    // the cells, their formulas and their errors as an XML parser reads them
+    let b = baseline();
+    let dir = corpus_dir(&b);
+    let mut probe = Probe::default();
+    let planted = tempfile::tempdir().unwrap();
+    let measure = |path: &Path, probe: &mut Probe| {
+        let (_, cells, matched) = mismatches(path, probe);
+        (cells, matched)
+    };
+    let sheet1 = "xl/worksheets/sheet1.xml";
+    let abs = dir.join("calc_tests/MATH_AND_TRIGONOMETRY/ABS.xlsx");
+    let b2 = r#"<c r="B2" s="2"><f>ABS(A2)</f><v>1</v></c>"#;
+    assert!(read_part(&abs, sheet1).contains(b2));
+    let whole = measure(&abs, &mut probe);
+    // each copy reads as the original: no cell made, none lost, none read otherwise
+    let same: [(&str, String); 12] = [
+        ("a comment holding a formula cell", read_part(&abs, sheet1).replacen("<sheetData>", r#"<sheetData><!--<c r="Z99" t="str"><f>""</f><v/></c>-->"#, 1)),
+        ("a comment holding B2's own cell", read_part(&abs, sheet1).replacen(b2, &format!("<!--{b2}-->{b2}"), 1)),
+        ("`</c>` in CDATA", read_part(&abs, sheet1).replacen(b2, r#"<c r="B2" s="2" t="str"><f>"a&lt;/c&gt;b"</f><v><![CDATA[a</c>b]]></v></c>"#, 1)),
+        ("`</c>` in a comment between the formula and the value", read_part(&abs, sheet1).replacen(b2, r#"<c r="B2" s="2"><f>ABS(A2)</f><!--</c>--><v>1</v></c>"#, 1)),
+        ("`</c>` in a comment in the value", read_part(&abs, sheet1).replacen(b2, r#"<c r="B2" s="2"><f>ABS(A2)</f><v>1<!--</c>--></v></c>"#, 1)),
+        ("a cell's text in CDATA", read_part(&abs, sheet1).replacen(b2, r#"<c r="B2" s="2" t="str"><f>"x"</f><v><![CDATA[<c r="Z98"><f>1</f><v>1</v></c>]]></v></c>"#, 1).replace(r#"t="str"><f>"x"</f>"#, r#"t="str"><f>"&lt;c r=""Z98""&gt;&lt;f&gt;1&lt;/f&gt;&lt;v&gt;1&lt;/v&gt;&lt;/c&gt;"</f>"#)),
+        ("end tags with a space", read_part(&abs, sheet1).replacen(b2, r#"<c r="B2" s="2"><f>ABS(A2)</f ><v>1</v ></c >"#, 1)),
+        ("a start tag with two spaces", read_part(&abs, sheet1).replacen(b2, r#"<c  r="B2"  s="2"><f>ABS(A2)</f><v>1</v></c>"#, 1)),
+        ("a start tag across lines", read_part(&abs, sheet1).replacen(b2, "<c\nr=\"B2\"\ns=\"2\"><f>ABS(A2)</f><v>1</v></c>", 1)),
+        ("`r` not first, single quotes", read_part(&abs, sheet1).replacen(b2, "<c s='2' r='B2'><f>ABS(A2)</f><v>1</v></c>", 1)),
+        ("a prefix bound to the main namespace", read_part(&abs, sheet1).replacen(b2, r#"<c r="B2" s="2"><m:f xmlns:m="http://schemas.openxmlformats.org/spreadsheetml/2006/main">ABS(A2)</m:f><m:v xmlns:m="http://schemas.openxmlformats.org/spreadsheetml/2006/main">1</m:v></c>"#, 1)),
+        ("a type spelled with a reference", read_part(&abs, sheet1).replacen(b2, r#"<c r="B2" s="2" t="&#115;tr"><f>"x"</f><v>x</v></c>"#, 1)),
+    ];
+    for (i, (what, text)) in same.iter().enumerate() {
+        let copy = planted.path().join(format!("abs-{i}.xlsx"));
+        rewrite_part(&abs, &copy, sheet1, |_| text.clone());
+        assert_eq!(measure(&copy, &mut probe), whole, "{what}");
+    }
+    // a spilled value holding a comment with a formula in it: no formula cell made
+    let sequence = dir.join("calc_tests/MATH_AND_TRIGONOMETRY/SEQUENCE.xlsx");
+    let whole = measure(&sequence, &mut probe);
+    let copy = planted.path().join("sequence.xlsx");
+    rewrite_part(&sequence, &copy, sheet1, |t| t.replacen(r#"<c r="A2"><v>2</v></c>"#, r#"<c r="A2"><!--<f/>--><v>2</v></c>"#, 1));
+    assert_eq!(measure(&copy, &mut probe), whole);
+    // ISREF's D7 (`#CALC!`) and D9 (`#SPILL!`) with their `vm` swapped: two mismatches, a comment in
+    // the value metadata changing nothing; a `vm` with spaces or spelled with a reference read as
+    // the number it is
+    let isref = dir.join("calc_tests/INFORMATION/ISREF.xlsx");
+    let (cells, matched) = measure(&isref, &mut probe);
+    let swapped = planted.path().join("swapped.xlsx");
+    rewrite_part(&isref, &swapped, sheet1, |t| t.replacen(r#"<c r="D7" t="e" cm="1" vm="1">"#, r#"<c r="D7" t="e" cm="1" vm="2">"#, 1).replacen(r#"<c r="D9" t="e" cm="1" vm="2">"#, r#"<c r="D9" t="e" cm="1" vm="1">"#, 1));
+    assert_eq!(measure(&swapped, &mut probe), (cells, matched - 2));
+    let commented = planted.path().join("commented.xlsx");
+    rewrite_part(&swapped, &commented, "xl/metadata.xml", |t| t.replacen("<valueMetadata count=\"2\">", r#"<valueMetadata count="2"><!--<bk><rc t="2" v="1"/></bk>-->"#, 1));
+    assert_eq!(measure(&commented, &mut probe), (cells, matched - 2));
+    for vm in [r#"vm=" 1 ""#, r#"vm="&#49;""#] {
+        let copy = planted.path().join("vm.xlsx");
+        rewrite_part(&isref, &copy, sheet1, |t| t.replacen(r#"<c r="D7" t="e" cm="1" vm="1">"#, &format!(r#"<c r="D7" t="e" cm="1" {vm}>"#), 1));
+        assert_eq!(measure(&copy, &mut probe), (cells, matched), "{vm}");
+    }
+}
+
 /// A cell's attributes without its `t`.
 fn strip_type(attrs: &str) -> String {
     regex::Regex::new(r#"\st="[^"]*""#).unwrap().replace(attrs, "").to_string()
