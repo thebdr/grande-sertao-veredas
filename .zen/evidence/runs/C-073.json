@@ -10,15 +10,15 @@
     "features"
   ],
   "exitCode": 0,
-  "outputSha": "c55a4d3d9a8c6eb13c641a1308648852d2c4c7f12bbd5a147d050aaabfb24e7e",
-  "outputTail": "\nrunning 7 tests\ntest the_default_holds_the_plant_facing_layers_and_each_master_is_its_own ... ok\ntest every_feature_gate_is_where_it_belongs ... ok\ntest a_consumer_without_the_default_features_reads_stamps_states_and_draws ... ok\ntest without_its_default_features_core_stands_on_serde_toml_and_thiserror_alone ... ok\ntest each_form_holds_the_layers_it_promises ... ok\ntest the_library_compiles_without_its_default_features_and_with_the_masters_alone ... ok\ntest the_compiler_sees_each_layer_where_its_feature_puts_it ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 40.32s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.88s\n     Running tests/features.rs (target/debug/build/veredas-core/9288ce4e0a3923ad/out/features-9288ce4e0a3923ad)",
-  "ranAt": "2026-11-23T14:37:53.301Z",
-  "headCommit": "0c4fcd62650590647b3202fee61e76bd514c57e2",
+  "outputSha": "79fc779940e3c932e7a439af7e7431ddcbbb97843aa9928dff0ace65eaf34eb9",
+  "outputTail": "test every_feature_gate_is_where_it_belongs ... ok\ntest the_default_holds_the_plant_facing_layers_and_each_master_is_its_own ... ok\ntest a_consumer_without_the_default_features_reads_stamps_states_and_draws ... ok\ntest without_its_default_features_core_stands_on_serde_toml_and_thiserror_alone ... ok\ntest each_form_holds_the_layers_it_promises ... ok\ntest the_library_compiles_without_its_default_features_and_with_the_masters_alone ... ok\ntest the_slim_layer_behaves_the_same_in_every_form ... ok\ntest the_compiler_sees_each_layer_where_its_feature_puts_it has been running for over 60 seconds\ntest the_compiler_sees_each_layer_where_its_feature_puts_it ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 98.42s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.74s\n     Running tests/features.rs (target/debug/build/veredas-core/9288ce4e0a3923ad/out/features-9288ce4e0a3923ad)",
+  "ranAt": "2026-11-23T15:45:29.981Z",
+  "headCommit": "47006fe4ac4fe650f9b883d16861ccc44ac58d04",
   "tests": [
     {
       "name": "crates/veredas-core/tests/features.rs",
       "file": "crates/veredas-core/tests/features.rs",
-      "fileSha": "4ba7eb84d084171a3268225344d6a10dbc8c9437d7305ed77603002e9085dec7"
+      "fileSha": "1acd91a38e79b5e4851a7bb349f2724932475f0e5982d10046cab76c9b8b007f"
     }
   ]
 }
