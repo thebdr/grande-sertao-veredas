@@ -132,6 +132,10 @@ pub struct FormulaCell {
     pub shared_copy: bool,
     pub array: bool,
     pub expected: Expected,
+    /// Why the engine holds no cell where this one says it is, if it does not: its own `r` names
+    /// another row than its row's `r` (the engine places a cell by its row), or a cell later in the
+    /// sheet states the same reference (the engine keeps the last). Compared with nothing.
+    pub not_held: Option<String>,
 }
 
 /// What the expected side read of one workbook.
@@ -356,6 +360,8 @@ fn parse_tree(xml: &str) -> Result<Node, String> {
 #[derive(Default)]
 struct CellXml {
     reference: Option<String>,
+    /// The `r` of the row the cell stands in.
+    row_r: Option<String>,
     t: Option<String>,
     vm: Option<String>,
     formula: Option<(Option<String>, Option<String>, String)>,
@@ -388,6 +394,8 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
         Value,
     }
     let mut into = Into::Nothing;
+    // the `r` of the row being read
+    let mut row_r: Option<String> = None;
     // a cell is `worksheet/sheetData/row/c` exactly, its formula, values and inline string its own
     // children: one inside an extension (an `ext` Excel does not know) is none
     let at = |path: &[String], want: &[&str]| path.len() == want.len() && path.iter().zip(want).all(|(p, w)| p == w);
@@ -439,7 +447,13 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
                     foreign += 1;
                     continue;
                 }
+                if name == "row" && at(&path, &["worksheet", "sheetData"]) {
+                    row_r = attrs.iter().find(|(ns, l, _)| ns.is_empty() && l == "r").map(|(_, _, v)| v.clone());
+                }
                 start(&name, &attrs, &path, &mut cell, false, &mut into);
+                if name == "c" && at(&path, &["worksheet", "sheetData", "row"]) && let Some(c) = cell.as_mut() {
+                    c.row_r = row_r.clone();
+                }
                 path.push(name);
             }
             Event::Empty(e) => {
@@ -450,7 +464,8 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
                     continue;
                 }
                 start(&name, &attrs, &path, &mut cell, true, &mut into);
-                if name == "c" && at(&path, &["worksheet", "sheetData", "row"]) && let Some(c) = cell.take() {
+                if name == "c" && at(&path, &["worksheet", "sheetData", "row"]) && let Some(mut c) = cell.take() {
+                    c.row_r = row_r.clone();
                     cells.push(c);
                 }
             }
@@ -895,7 +910,10 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
     for (sheet_name, part) in &sheets {
         let Some(xml) = read_part(&mut archive, part) else { continue };
         let mut shared_masters: HashMap<u32, String> = HashMap::new();
-        for c in sheet_cells(&xml).map_err(|e| bad_xml(part, e))? {
+        let cells = sheet_cells(&xml).map_err(|e| bad_xml(part, e))?;
+        // where each reference is stated last in the sheet, which the engine keeps
+        let last: HashMap<String, usize> = cells.iter().enumerate().map(|(i, c)| (c.reference.clone().unwrap_or_default(), i)).collect();
+        for (i, c) in cells.iter().enumerate() {
             let reference = c.reference.clone().unwrap_or_default();
             let split = reference.find(|ch: char| ch.is_ascii_digit()).unwrap_or(reference.len());
             let (col_letters, digits) = reference.split_at(split);
@@ -926,6 +944,14 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
             } else {
                 expected_of(&c, &rich)
             };
+            let in_row = c.row_r.as_deref().and_then(|r| xsd_trim(r).parse::<u32>().ok());
+            let not_held = if in_row.is_some_and(|r| r != row) {
+                Some(format!("a cell `{reference}` in row {}, which the engine places by its row", in_row.unwrap_or_default()))
+            } else if last.get(&reference) != Some(&i) {
+                Some(format!("a cell `{reference}` the sheet states again later, which the engine keeps"))
+            } else {
+                None
+            };
             formula_cells.push(FormulaCell {
                 sheet: sheet_name.clone(),
                 reference: format!("{col_letters}{row}"),
@@ -935,6 +961,7 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
                 shared_copy,
                 array,
                 expected,
+                not_held,
             });
         }
     }
@@ -1610,6 +1637,8 @@ pub fn run_file(path: &Path, options: &Options, probe: &mut Probe) -> FileReport
             rep.external_formulas += 1;
         }
         let actual = match sheet_index.get(&cell.sheet) {
+            // a cell the engine holds elsewhere, or not at all: equal to nothing
+            Some(_) if cell.not_held.is_some() => Actual::NotComputed,
             Some(&si) => read_actual(&model, si, cell),
             None => Actual::NoSheet,
         };

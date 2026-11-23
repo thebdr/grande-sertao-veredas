@@ -887,6 +887,70 @@ fn the_engine_s_sheets_are_the_workbook_s_each_held_once() {
     assert!(wrong.contains("Sheet1!B2"), "{wrong:?}");
 }
 
+#[test]
+fn a_workbook_whose_sheets_the_engine_reads_otherwise_is_unmeasured() {
+    // the check in `run_file` itself: range_operator's second sheet named as the first (in either
+    // case), or listed in no namespace (the engine reads it, the oracle does not list it)
+    let b = baseline();
+    let dir = corpus_dir(&b);
+    let mut probe = Probe::default();
+    let planted = tempfile::tempdir().unwrap();
+    let original = dir.join("calc_tests/range_operator.xlsx");
+    assert!(run_file(&original, &options(LinksMode::Cached), &mut probe).measure().is_some());
+    let second = r#"<sheet name="Sheet2" sheetId="2" r:id="rId2"/>"#;
+    for (i, (to, why)) in [
+        (r#"<sheet name="Sheet1" sheetId="2" r:id="rId2"/>"#, "twice"),
+        (r#"<sheet name="SHEET1" sheetId="2" r:id="rId2"/>"#, "twice"),
+        (r#"<sheet xmlns="" name="Sheet2" sheetId="2" r:id="rId2"/>"#, "does not list"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let copy = planted.path().join(format!("sheets-{i}.xlsx"));
+        rewrite_part(&original, &copy, "xl/workbook.xml", |t| t.replacen(second, to, 1));
+        let report = run_file(&copy, &options(LinksMode::Cached), &mut probe);
+        assert!(report.measure().is_none(), "{to}");
+        let error = report.load_error.clone().unwrap_or_default();
+        assert!(error.contains(why), "{to}: {error}");
+    }
+}
+
+#[test]
+fn a_cell_the_engine_places_elsewhere_or_keeps_another_of_matches_nothing() {
+    // the engine places a cell by its row's `r` and keeps the last of a reference stated twice: a
+    // cell whose own `r` names another row, and an earlier one of a doubled reference, are cells it
+    // does not hold
+    let b = baseline();
+    let dir = corpus_dir(&b);
+    let mut probe = Probe::default();
+    let planted = tempfile::tempdir().unwrap();
+    let abs = dir.join("calc_tests/MATH_AND_TRIGONOMETRY/ABS.xlsx");
+    let (_, cells, matched) = mismatches(&abs, &mut probe);
+    let b2 = r#"<c r="B2" s="2"><f>ABS(A2)</f><v>1</v></c>"#;
+    // B2 stated twice, the first a formula the engine never holds, caching what B2 computes
+    let doubled = planted.path().join("doubled.xlsx");
+    rewrite_part(&abs, &doubled, "xl/worksheets/sheet1.xml", |t| t.replacen(b2, &format!(r#"<c r="B2"><f>A2+41</f><v>1</v></c>{b2}"#), 1));
+    let raw = scan_raw(&doubled).unwrap();
+    assert!(raw.formula_cells.iter().filter(|c| c.reference == "B2").next().unwrap().not_held.as_deref().is_some_and(|w| w.contains("states again later")));
+    let (wrong, cells_now, matched_now) = mismatches(&doubled, &mut probe);
+    assert_eq!((cells_now, matched_now), (cells + 1, matched), "{wrong:?}");
+    // two cells naming each other's rows, each caching what the other computes: each one the engine
+    // places elsewhere, one mismatch each (the same caches at their own addresses are too)
+    let swapped = planted.path().join("swapped.xlsx");
+    rewrite_part(&abs, &swapped, "xl/worksheets/sheet1.xml", |t| {
+        t.replacen(r#"<c r="A9" t="e"><f>1/0</f><v>#DIV/0!</v></c>"#, r#"<c r="A10" t="e"><f>1/0</f><v>#N/A</v></c>"#, 1)
+            .replacen(r#"<c r="A10" t="e"><f>NA()</f><v>#N/A</v></c>"#, r#"<c r="A9" t="e"><f>NA()</f><v>#DIV/0!</v></c>"#, 1)
+    });
+    let raw = scan_raw(&swapped).unwrap();
+    for r in ["A9", "A10"] {
+        let c = raw.formula_cells.iter().find(|c| c.reference == r).unwrap();
+        assert!(c.not_held.as_deref().is_some_and(|w| w.contains("places by its row")), "{r}: {:?}", c.not_held);
+    }
+    let (wrong, cells_now, matched_now) = mismatches(&swapped, &mut probe);
+    assert_eq!((cells_now, matched_now), (cells, matched - 2), "{wrong:?}");
+    assert!(wrong.contains("Sheet1!A9") && wrong.contains("Sheet1!A10"), "{wrong:?}");
+}
+
 /// Copies the package at `from` to `to` with one part more.
 fn add_part(from: &Path, to: &Path, part: &str, text: &str) {
     let out = std::fs::File::create(to).unwrap();
