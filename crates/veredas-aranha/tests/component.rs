@@ -23,8 +23,21 @@ fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// The workspace's root, which every cargo here runs from, as the real build does: cargo reads its
+/// configuration from the folder it runs in upward, so one in aranha's folder (which a build from
+/// the root never reads) steers nothing checked here, and the check below refuses one.
+fn repo_root() -> PathBuf {
+    manifest_dir().join("../..").canonicalize().unwrap()
+}
+
+fn cargo() -> Command {
+    let mut c = Command::new(env!("CARGO"));
+    c.current_dir(repo_root());
+    c
+}
+
 fn metadata(manifest: &Path, extra: &[&str]) -> Value {
-    let out = Command::new(env!("CARGO"))
+    let out = cargo()
         .args(["metadata", "--format-version", "1", "--manifest-path"])
         .arg(manifest)
         .args(extra)
@@ -127,8 +140,8 @@ const BUILDS: [&[&str]; 3] = [&["--all-features"], &["--all-features", "--releas
 
 /// Every file rustc read to compile the targets of the package at `manifest`, by the dep-info it
 /// wrote for each, in a check of every target with `args`, into `target_dir`.
-fn files_rustc_read(manifest: &Path, target_dir: &Path, args: &[&str]) -> (BTreeSet<PathBuf>, BTreeSet<String>) {
-    let out = Command::new(env!("CARGO"))
+fn files_rustc_read(manifest: &Path, target_dir: &Path, args: &[&str]) -> (BTreeSet<PathBuf>, BTreeSet<(String, String)>) {
+    let out = cargo()
         .args(["check", "--offline", "--all-targets", "--message-format=json", "--manifest-path"])
         .arg(manifest)
         .args(args)
@@ -158,15 +171,19 @@ fn files_rustc_read(manifest: &Path, target_dir: &Path, args: &[&str]) -> (BTree
         // Spaces in a path are written `\ `.
         let inputs = inputs.replace("\\ ", "\u{0}");
         files.extend(inputs.split_whitespace().map(|p| root.join(p.replace('\u{0}', " "))));
-        names.insert(msg["target"]["name"].as_str().unwrap().to_string());
+        names.insert((msg["target"]["kind"][0].as_str().unwrap().to_string(), msg["target"]["name"].as_str().unwrap().to_string()));
         units += 1;
     }
     assert!(units > 0, "no unit of the package was checked");
+    // Every file the line names is there: a name that breaks the line (a line break in it) leaves a
+    // piece that is no file, and the files after it unread.
+    let missing: Vec<&PathBuf> = files.iter().filter(|f| !f.exists()).collect();
+    assert!(missing.is_empty(), "dep-info names files that are not there (a name breaking its line?): {missing:?}");
     (files, names)
 }
 
-/// The names of the package's targets, as cargo's metadata names them.
-fn target_names(dir: &Path) -> BTreeSet<String> {
+/// The package's targets by kind and name, as cargo's metadata names them.
+fn target_names(dir: &Path) -> BTreeSet<(String, String)> {
     let meta = metadata(&dir.join("Cargo.toml"), &["--no-deps", "--offline"]);
     let manifest = dir.join("Cargo.toml").canonicalize().unwrap();
     let package = meta["packages"]
@@ -176,7 +193,68 @@ fn target_names(dir: &Path) -> BTreeSet<String> {
         .find(|p| Path::new(p["manifest_path"].as_str().unwrap()).canonicalize().unwrap() == manifest)
         .unwrap()
         .clone();
-    package["targets"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect()
+    package["targets"].as_array().unwrap().iter().map(|t| (t["kind"][0].as_str().unwrap().to_string(), t["name"].as_str().unwrap().to_string())).collect()
+}
+
+/// Every cargo configuration in `dir`, in any folder under it, and in each folder from it up to
+/// `root` (not the root's own, which a build from the root reads as this check does).
+fn configs_between(dir: &Path, root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let found = |d: &Path, out: &mut Vec<PathBuf>| {
+        for name in ["config", "config.toml"] {
+            let c = d.join(".cargo").join(name);
+            if c.symlink_metadata().is_ok() {
+                out.push(c);
+            }
+        }
+    };
+    let mut walk = vec![dir.to_path_buf()];
+    while let Some(d) = walk.pop() {
+        found(&d, &mut out);
+        for entry in std::fs::read_dir(&d).unwrap() {
+            let path = entry.unwrap().path();
+            if path.symlink_metadata().unwrap().is_dir() {
+                walk.push(path);
+            }
+        }
+    }
+    let mut up = dir.parent();
+    while let Some(d) = up.filter(|d| *d != root && d.starts_with(root)) {
+        found(d, &mut out);
+        up = d.parent();
+    }
+    out.sort();
+    out
+}
+
+/// Every path under `dir` (folders and files, links not followed) for which `bad` holds.
+fn paths_under(dir: &Path, bad: &dyn Fn(&Path) -> bool) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut walk = vec![dir.to_path_buf()];
+    while let Some(d) = walk.pop() {
+        for entry in std::fs::read_dir(&d).unwrap() {
+            let path = entry.unwrap().path();
+            if bad(&path) {
+                out.push(path.clone());
+            }
+            if path.symlink_metadata().unwrap().is_dir() {
+                walk.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// A path's name holds a control character (a line break ends dep-info's line, and with it what
+/// rustc's list says of the files after it).
+fn control_in_name(p: &Path) -> bool {
+    p.file_name().is_some_and(|n| n.to_string_lossy().chars().any(char::is_control))
+}
+
+/// A path is a link (a copy, or a move, carries the link and not its file).
+fn is_link(p: &Path) -> bool {
+    p.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())
 }
 
 /// The assembly in the text files of `files` that lie in `dir`, by file name and line.
@@ -184,7 +262,8 @@ fn assembly_in(files: &BTreeSet<PathBuf>, dir: &Path) -> Vec<String> {
     files
         .iter()
         .filter(|f| f.canonicalize().is_ok_and(|c| c.starts_with(dir)))
-        .filter_map(|f| std::fs::read_to_string(f).ok().map(|t| (f, t)))
+        // Every file read, text or not: none is passed over for being unreadable.
+        .map(|f| (f, String::from_utf8_lossy(&std::fs::read(f).unwrap()).to_string()))
         .flat_map(|(f, t)| assembly(&t).into_iter().map(move |l| format!("{}: {l}", f.file_name().unwrap().to_string_lossy())))
         .collect()
 }
@@ -197,6 +276,11 @@ fn outside(files: &BTreeSet<PathBuf>, dir: &Path) -> Vec<PathBuf> {
 #[test]
 fn aranha_compiles_in_no_file_from_outside_its_folder() {
     let dir = manifest_dir().canonicalize().unwrap();
+    // No cargo configuration in its folder or between it and the root; no name under it with a
+    // control character; no link under it.
+    assert_eq!(configs_between(&dir, &repo_root()), Vec::<PathBuf>::new());
+    assert_eq!(paths_under(&dir, &control_in_name), Vec::<PathBuf>::new());
+    assert_eq!(paths_under(&dir, &is_link), Vec::<PathBuf>::new());
     // Every target is one cargo finds by itself: the split of the test below, which copies the
     // folders, holds every one, and builds it.
     for (kind, src) in target_sources(&dir) {
@@ -227,7 +311,7 @@ fn aranha_compiles_in_no_file_from_outside_its_folder() {
         all_read.extend(read);
         checked.extend(names);
     }
-    assert_eq!(target_names(&dir).difference(&checked).cloned().collect::<Vec<_>>(), Vec::<String>::new());
+    assert_eq!(target_names(&dir).difference(&checked).cloned().collect::<Vec<_>>(), Vec::<(String, String)>::new());
     assert_eq!(assembly_in(&all_read, &dir), Vec::<String>::new());
     // The checks can fail, in each build: a crate that pulls in a file by an include in braces
     // behind a comment, a module that is a link to a file outside, an include only a Windows build
@@ -241,15 +325,26 @@ fn aranha_compiles_in_no_file_from_outside_its_folder() {
     std::fs::write(base.join("outside_mod.rs"), "pub const M: u8 = 1;\n").unwrap();
     std::fs::write(base.join("win.txt"), "w").unwrap();
     std::fs::write(base.join("rel.txt"), "r").unwrap();
+    std::fs::write(base.join("cfg.txt"), "c").unwrap();
     let inc = format!("{}{}", "inclu", "de_str!");
-    std::fs::write(krate.join("Cargo.toml"), manifest("[[test]]\nname = \"hidden\"\ntest = false\n")).unwrap();
+    std::fs::write(
+        krate.join("Cargo.toml"),
+        manifest("[[test]]\nname = \"hidden\"\ntest = false\n[[test]]\nname = \"veredas_aranha\"\npath = \"tests/veredas_aranha.rs\"\ntest = false\n"),
+    )
+    .unwrap();
     std::fs::create_dir_all(krate.join("tests")).unwrap();
     std::fs::write(krate.join("tests/hidden.rs"), "#[test]\nfn h() {}\n").unwrap();
+    // A test target named as the library is told from it.
+    std::fs::write(krate.join("tests/veredas_aranha.rs"), "#[test]\nfn h() {}\n").unwrap();
+    // A configuration in the crate's folder setting a cfg that leaves an include out, read by a
+    // cargo run from inside the folder and by no build from the root.
+    std::fs::create_dir_all(krate.join(".cargo")).unwrap();
+    std::fs::write(krate.join(".cargo/config.toml"), "[build]\nrustflags = [\"--cfg\", \"checked\"]\n").unwrap();
     std::fs::write(krate.join("src/carrier.in"), format!("core::arch::global_{}{}!(\"nop\");\n", "as", "m")).unwrap();
     std::fs::write(
         krate.join("src/lib.rs"),
         format!(
-            "pub const N: &str = {inc} /* c */ {{\"../../note.txt\"}};\npub mod borrowed;\n#[path = \"carrier.in\"]\nmod carrier;\n#[cfg(windows)]\npub const W: &str = {inc}(\"../../win.txt\");\n#[cfg(not(debug_assertions))]\npub const R: &str = {inc}(\"../../rel.txt\");\n"
+            "pub const N: &str = {inc} /* c */ {{\"../../note.txt\"}};\npub mod borrowed;\n#[path = \"carrier.in\"]\nmod carrier;\n#[cfg(windows)]\npub const W: &str = {inc}(\"../../win.txt\");\n#[cfg(not(debug_assertions))]\npub const R: &str = {inc}(\"../../rel.txt\");\n#[cfg(not(checked))]\npub const C: &str = {inc}(\"../../cfg.txt\");\n"
         ),
     )
     .unwrap();
@@ -263,9 +358,23 @@ fn aranha_compiles_in_no_file_from_outside_its_folder() {
         all_read.extend(read);
         checked.extend(names);
     }
-    assert_eq!(out.into_iter().collect::<Vec<_>>(), ["borrowed.rs", "note.txt", "rel.txt", "win.txt"]);
-    assert_eq!(target_names(&krate).difference(&checked).cloned().collect::<Vec<_>>(), ["hidden"]);
+    assert_eq!(out.into_iter().collect::<Vec<_>>(), ["borrowed.rs", "cfg.txt", "note.txt", "rel.txt", "win.txt"]);
+    let unchecked: Vec<(String, String)> = target_names(&krate).difference(&checked).cloned().collect();
+    assert_eq!(unchecked, [("test".to_string(), "hidden".to_string()), ("test".to_string(), "veredas_aranha".to_string())]);
     assert_eq!(assembly_in(&all_read, &here), ["carrier.in: line 1"]);
+    assert_eq!(configs_between(&here, &base.canonicalize().unwrap()), [here.join(".cargo/config.toml")]);
+    assert_eq!(paths_under(&here, &is_link), [here.join("src/borrowed.rs")]);
+    // A module whose name holds a line break: the dep-info line it breaks names a piece that is no
+    // file, and the check fails; the name itself is refused.
+    let broken = base.join("broken");
+    std::fs::create_dir_all(broken.join("src")).unwrap();
+    std::fs::write(broken.join("Cargo.toml"), manifest("")).unwrap();
+    std::fs::write(broken.join("src/lib.rs"), "#[path = \"notes\n.in\"]\nmod notes;\n").unwrap();
+    std::fs::write(broken.join("src/notes\n.in"), format!("pub const X: &str = {inc}(\"../../note.txt\");\n")).unwrap();
+    let read = std::panic::catch_unwind(|| files_rustc_read(&broken.join("Cargo.toml"), &base.join("target"), BUILDS[0]));
+    assert!(read.is_err(), "a line broken in dep-info went unseen");
+    let b = broken.canonicalize().unwrap();
+    assert_eq!(paths_under(&b, &control_in_name), [b.join("src/notes\n.in")]);
     std::fs::remove_dir_all(&base).unwrap();
 }
 
@@ -279,7 +388,7 @@ fn aranha_is_one_library_and_at_most_its_one_executable() {
 
 /// A throwaway package outside the workspace, with the files given.
 fn planted(case: &str, files: &[(&str, String)]) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("veredas-aranha-component-{}-{case}", std::process::id()));
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("component-planted-{case}"));
     let _ = std::fs::remove_dir_all(&dir);
     for (path, text) in files {
         let p = dir.join(path);
@@ -539,6 +648,26 @@ fn manifest_deps(manifest: &Path) -> (BTreeSet<(String, String, String)>, String
     (deps, package["features"].to_string())
 }
 
+/// What keeps a folder of codecs from moving as it is: an entry that is not a plain file (a folder,
+/// a link), and a file with a `cfg` of anything but `cfg(test)`, each by its name.
+fn codec_folder_breaches(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        if !path.symlink_metadata().unwrap().file_type().is_file() {
+            out.push(format!("{name}: not a flat file"));
+            continue;
+        }
+        let flat: String = std::fs::read_to_string(&path).unwrap().chars().filter(|c| !c.is_whitespace()).collect();
+        if flat.matches("cfg").count() != flat.matches("cfg(test)").count() {
+            out.push(format!("{name}: cfg"));
+        }
+    }
+    out.sort();
+    out
+}
+
 /// Copy the tree at `from` into `to`, leaving out `skip` (a folder under `from`).
 fn copy_tree(from: &Path, to: &Path, skip: Option<&Path>) {
     std::fs::create_dir_all(to).unwrap();
@@ -548,6 +677,7 @@ fn copy_tree(from: &Path, to: &Path, skip: Option<&Path>) {
             continue;
         }
         let target = to.join(path.file_name().unwrap());
+        assert!(!is_link(&path), "a link would be carried, not its file: {}", path.display());
         if path.is_dir() {
             copy_tree(&path, &target, skip);
         } else {
@@ -602,7 +732,7 @@ impl Split {
     /// `cargo <args>` on the planted workspace, offline, into a target folder kept between runs (its
     /// crates are named apart from the real one's tests, so nothing built there is taken for them).
     fn cargo(&self, args: &[&str]) -> std::process::Output {
-        Command::new(env!("CARGO"))
+        cargo()
             .args(args)
             .args(["--offline", "--quiet", "--manifest-path"])
             .arg(self.base.join("ws/Cargo.toml"))
@@ -614,16 +744,26 @@ impl Split {
 
 #[test]
 fn the_codecs_build_alone_and_the_rest_of_aranha_builds_on_them_as_another_crate() {
-    // src/profinet/ holds flat files, and no `cfg` but `cfg(test)`; code bound to a platform
-    // without a `cfg` (an architecture's module, a pointer width) is what the 32-bit build of
-    // another architecture below finds.
-    for entry in std::fs::read_dir(manifest_dir().join("src/profinet")).unwrap() {
-        let path = entry.unwrap().path();
-        assert!(path.is_file(), "the codecs are flat files: {}", path.display());
-        let text = std::fs::read_to_string(&path).unwrap();
-        let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-        assert_eq!(flat.matches("cfg").count(), flat.matches("cfg(test)").count(), "{}", path.display());
-    }
+    // src/profinet/ holds flat files (no folder, no link), and no `cfg` but `cfg(test)`; code
+    // bound to a platform without a `cfg` (an architecture's module, a pointer width, an
+    // alignment) is what the builds of other architectures below find.
+    assert_eq!(codec_folder_breaches(&manifest_dir().join("src/profinet")), Vec::<String>::new());
+    // The check can fail: a cfg of a platform, a cfg_attr, a cfg! macro, a folder, a link.
+    let poisoned = planted(
+        "codec-folder",
+        &[
+            ("a.rs", "#[cfg(windows)]\npub fn a() {}\n".to_string()),
+            ("b.rs", "#[cfg_attr(test, derive(Debug))]\npub struct B;\n".to_string()),
+            ("c.rs", "pub fn c() -> bool {\n    cfg!(windows)\n}\n".to_string()),
+            ("d.rs", "#[cfg(test)]\nmod t {}\n".to_string()),
+            ("sub/e.rs", String::new()),
+        ],
+    );
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(poisoned.join("d.rs"), poisoned.join("f.rs")).unwrap();
+    let found = codec_folder_breaches(&poisoned);
+    std::fs::remove_dir_all(&poisoned).unwrap();
+    assert_eq!(found, ["a.rs: cfg", "b.rs: cfg", "c.rs: cfg", "f.rs: not a flat file", "sub: not a flat file"]);
     // Every target of both crates (libraries, unit tests, aranha's integration tests) checks, and
     // the codecs' doctests run.
     let split = Split::plant(&[]);
@@ -664,7 +804,9 @@ fn the_codecs_build_alone_and_the_rest_of_aranha_builds_on_them_as_another_crate
     // platform hides in them without a `cfg`.
     let wasm: &[&str] = &["check", "-p", "codecs-alone", "--lib", "--tests", "--target", "wasm32-unknown-unknown"];
     let ppc: &[&str] = &["check", "-p", "codecs-alone", "--lib", "--tests", "--target", "powerpc-unknown-linux-gnu"];
-    for target in [wasm, ppc] {
+    // And a 32-bit x86 one, where a 64-bit integer aligns to four bytes.
+    let i686: &[&str] = &["check", "-p", "codecs-alone", "--lib", "--tests", "--target", "i686-unknown-linux-gnu"];
+    for target in [wasm, ppc, i686] {
         let out = split.cargo(target);
         assert!(out.status.success(), "the codecs with {target:?}:\n{}", String::from_utf8_lossy(&out.stderr));
     }
@@ -674,6 +816,7 @@ fn the_codecs_build_alone_and_the_rest_of_aranha_builds_on_them_as_another_crate
         ("#[cfg(test)]\nmod lane {\n    #[test]\n    fn width() {\n        assert_eq!(core::mem::size_of::<core::arch::x86_64::__m128i>(), 16);\n    }\n}", wasm, "x86_64"),
         ("const _: () = assert!(u16::from_ne_bytes([1, 0]) == 1);", ppc, "E0080"),
         ("pub static COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);", ppc, "AtomicU64"),
+        ("const _: () = assert!(core::mem::align_of::<u64>() == 8);", i686, "E0080"),
     ] {
         let bound = Split::plant(&[("codecs/src/profinet/mod.rs", poison)]);
         let native = bound.cargo(checks[0]);
@@ -887,15 +1030,16 @@ fn assembly(text: &str) -> Vec<String> {
 /// The doctests rustdoc finds in the package at `manifest` (whose files neither the dep-info check
 /// nor the split builds), by rustdoc's own list: however a doc comment, a doc attribute or a macro
 /// writes one, and in whatever file.
-fn doctests_listed(manifest: &Path, target_dir: &Path) -> Vec<String> {
-    let out = Command::new(env!("CARGO"))
+fn doctests_listed(manifest: &Path, target_dir: &Path, args: &[&str]) -> Vec<String> {
+    let out = cargo()
         .args(["test", "--doc", "--offline", "--quiet", "--manifest-path"])
         .arg(manifest)
+        .args(args)
         .args(["--", "--list"])
         .env("CARGO_TARGET_DIR", target_dir)
         .output()
         .unwrap();
-    assert!(out.status.success(), "rustdoc's list: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "rustdoc's list {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8(out.stdout).unwrap().lines().filter(|l| l.ends_with(": test")).map(str::to_string).collect()
 }
 
@@ -903,18 +1047,20 @@ fn doctests_listed(manifest: &Path, target_dir: &Path) -> Vec<String> {
 fn aranha_holds_no_assembly_and_no_doctest() {
     let mut files = Vec::new();
     crate_files(&manifest_dir(), &mut files);
+    // Every file under it, whatever its name (a module may be any file), read as text.
     let found: Vec<String> = files
         .iter()
-        .filter(|f| f.extension().is_some_and(|e| e == "rs"))
         .flat_map(|f| {
-            let text = std::fs::read_to_string(f).unwrap();
+            let text = String::from_utf8_lossy(&std::fs::read(f).unwrap()).to_string();
             assembly(&text).into_iter().map(move |l| format!("{}: {l}", f.display())).collect::<Vec<_>>()
         })
         .collect();
     assert_eq!(found, Vec::<String>::new());
-    // rustdoc finds no doctest in it.
+    // rustdoc finds no doctest in it, in every build checked.
     let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("doclist");
-    assert_eq!(doctests_listed(&manifest_dir().join("Cargo.toml"), &target), Vec::<String>::new());
+    for args in BUILDS {
+        assert_eq!(doctests_listed(&manifest_dir().join("Cargo.toml"), &target, args), Vec::<String>::new(), "{args:?}");
+    }
     // And finds each of five a text check would miss: an indented block, a doc attribute after
     // another on its line, a doc block comment mid-line, a fence opened in the comment after one
     // left open, and a doctest in a module file not named `.rs`.
@@ -924,15 +1070,26 @@ fn aranha_holds_no_assembly_and_no_doctest() {
          #[inline] #[doc = \"{fence}\\nlet b = 2;\\n{fence}\"]\npub fn v3() {{}}\n\
          pub const BEFORE: u8 = 0; /** {fence}\nlet c = 3;\n{fence} */ pub const V6: u8 = 0;\n\
          /// {fence}{txt}\n/// open\npub fn v8a() {{}}\n/// {fence}\n/// let d = 4;\npub fn v8b() {{}}\n\
-         #[path = \"carrier.in\"]\npub mod carrier;\n"
+         #[path = \"carrier.in\"]\npub mod carrier;\n\
+         #[cfg(windows)]\n/// {fence}\n/// let w = 6;\n/// {fence}\npub fn vw() {{}}\n\
+         #[cfg(feature = \"extra\")]\n/// {fence}\n/// let x = 7;\n/// {fence}\npub fn vx() {{}}\n"
     );
-    let dir = planted("doctests", &[("Cargo.toml", manifest("")), ("src/lib.rs", lib), ("src/carrier.in", format!("/// {fence}\n/// let e = 5;\n/// {fence}\npub fn v9() {{}}\n"))]);
-    let listed = doctests_listed(&dir.join("Cargo.toml"), &Path::new(env!("CARGO_TARGET_TMPDIR")).join("doclist-planted"));
+    let dir = planted(
+        "doctests",
+        &[("Cargo.toml", manifest("[features]\nextra = []\n")), ("src/lib.rs", lib), ("src/carrier.in", format!("/// {fence}\n/// let e = 5;\n/// {fence}\npub fn v9() {{}}\n"))],
+    );
+    // Each build's own list: one behind Windows, one behind a feature, listed only where built.
+    let mut listed = BTreeSet::new();
+    for args in BUILDS {
+        listed.extend(doctests_listed(&dir.join("Cargo.toml"), &Path::new(env!("CARGO_TARGET_TMPDIR")).join("doclist-planted"), args));
+    }
+    let host = doctests_listed(&dir.join("Cargo.toml"), &Path::new(env!("CARGO_TARGET_TMPDIR")).join("doclist-planted"), &[]);
     std::fs::remove_dir_all(&dir).unwrap();
-    for item in ["v1", "v3", "V6", "v8b", "v9"] {
+    for item in ["v1", "v3", "V6", "v8b", "v9", "vw", "vx"] {
         assert!(listed.iter().any(|l| l.contains(&format!(" {item} ")) || l.contains(&format!("::{item} "))), "{item} not listed: {listed:?}");
     }
-    assert_eq!(listed.len(), 5, "{listed:?}");
+    assert_eq!(listed.len(), 7, "{listed:?}");
+    assert_eq!(host.len(), 5, "the host's default build alone misses two: {host:?}");
     // The checks can fail: assembly however reached, and each way a doctest is written.
     let a = format!("{}{}", "as", "m");
     for text in [
@@ -1041,6 +1198,8 @@ fn aranha_names_no_vendor_and_cites_no_vendor_document() {
         (format!("// {}", rev("tlebineg").replacen('e', "e\u{115f}", 1)), 1),
         (format!("// {}", rev("tlebineg").replacen('e', "e\u{ffa0}", 1)), 1),
         (format!("// {}", rev("tlebineg").replacen('n', "n\u{e34}", 1)), 1),
+        // A spacing mark (Devanagari's vowel sign aa, general category Mc) inside a term.
+        (format!("// {}", rev("tlebineg").replacen('e', "e\u{93e}", 1)), 1),
     ];
     for (s, line) in &samples {
         let hits = vendor_mentions(s);
