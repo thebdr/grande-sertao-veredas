@@ -1,13 +1,13 @@
 {
   "clause": "C-150",
-  "verdict": "refuted",
-  "ranAt": "2026-11-22T21:18:48.338Z",
-  "headCommit": "839beb40c8a0ccaeb84ab136515d072f9a2eedf2",
+  "verdict": "holds",
+  "ranAt": "2026-11-23T10:09:06.366Z",
+  "headCommit": "833c0adf33bbe0736799e3eaee1acea331fa80b8",
   "tests": [
     {
       "name": "crates/orcl-std/src/timers.rs",
       "file": "crates/orcl-std/src/timers.rs",
-      "symbolSha": "db9c86e54b607abfedcf3bd621eab174c027322f93c6ee3284a2552dfc20f9d7"
+      "symbolSha": "3f140333687c059a5e34d5725b6cd5016a7615ba95bde77f09ca27fc88be9390"
     },
     {
       "name": "crates/orcl-std/src/edges.rs",
@@ -32,17 +32,17 @@
     {
       "name": "crates/orcl-std/src/scan.rs",
       "file": "crates/orcl-std/src/scan.rs",
-      "symbolSha": "ab05af121ee9d5328951870bf987c16fd1741f094e52a26ba2d611bff0f3add8"
+      "symbolSha": "09a3e414b2b30dcce033d5d9b79c15e09caf07c45aa7d267c8db3b0d30733257"
     },
     {
       "name": "crates/orcl-std/src/o14.rs",
       "file": "crates/orcl-std/src/o14.rs",
-      "symbolSha": "1b405cec96a1b5efcf06df32d5a4c9206ea73987e62ed353957bea8e360e7d92"
+      "symbolSha": "bfa398dc378807132146e43dff54adf93134c0b278e3d551262f83ce569558c8"
     },
     {
       "name": "crates/orcl-std/tests/blocks.rs",
       "file": "crates/orcl-std/tests/blocks.rs",
-      "symbolSha": "1bfb95be33cc307960494a7d986547ad8d2ec4bec27776b5c0bfbacb357c8c3f"
+      "symbolSha": "5157d40c10fd2d7b00980f99e5acc2c27526115e3980fb57b864f2035d8685d2"
     }
   ]
 }
