@@ -363,3 +363,9 @@ Recorded as the work meets them.
   `~/.cache/veredas/entrega/tmp`.
 - **Debian's image has no `strings`** (binutils is not installed): what the guest is asked is
   answered with its own tools, or read on the host.
+- **A clone never builds into the worktree's `target/`.** Cargo names a member's artifacts by its
+  path inside the workspace, so a mutant built in a clone with `CARGO_TARGET_DIR` set to the
+  worktree's folder leaves its library and executable there under the worktree's own names, and
+  the worktree's next run tests the mutant (2026-11-23: two of `tests/bundle.rs` red on correct
+  code until `cargo clean -p entrega`). A clone or a critic gets a target folder of its own, seeded
+  from `~/.cache/veredas/target-seed`.
