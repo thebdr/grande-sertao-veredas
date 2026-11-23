@@ -11,15 +11,15 @@
     "store_record"
   ],
   "exitCode": 0,
-  "outputSha": "8831caa23cd3dc0f404a2f46753b9633c03a11f9a30d7fee0bb44fa5bacc984c",
-  "outputTail": "\ntest result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n\n\nrunning 4 tests\ntest at_its_size_limit_a_recording_stops_and_nothing_is_deleted ... ok\ntest the_record_keeps_on_the_drive_what_the_window_lets_go ... ok\ntest the_limit_stops_the_recording_at_the_first_write_that_reaches_it ... ok\ntest a_record_is_written_once_a_period_whatever_the_poll_rate ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.46s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/7f0b8c3e2ef39c29/out/veredas_portal-7f0b8c3e2ef39c29)\n     Running tests/store_record.rs (target/debug/build/veredas-portal/205a43e950b56cdd/out/store_record-205a43e950b56cdd)",
-  "ranAt": "2026-11-23T18:20:11.788Z",
-  "headCommit": "d516704165feb97fc17737f4575c354d26102668",
+  "outputSha": "8e77752f5471010f2d1d88dc5c9ba6c953fd97191fe8641e20b4ae7901d027e6",
+  "outputTail": "\n\nrunning 6 tests\ntest another_process_opens_the_record ... ok\ntest a_normal_stop_writes_the_last_batch_folds_the_log_and_lets_the_record_go ... ok\ntest at_its_size_limit_a_recording_stops_and_nothing_is_deleted ... ok\ntest the_record_keeps_on_the_drive_what_the_window_lets_go ... ok\ntest the_limit_stops_the_recording_at_the_first_write_that_reaches_it ... ok\ntest a_record_is_written_once_a_period_whatever_the_poll_rate ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.56s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/7f0b8c3e2ef39c29/out/veredas_portal-7f0b8c3e2ef39c29)\n     Running tests/store_record.rs (target/debug/build/veredas-portal/205a43e950b56cdd/out/store_record-205a43e950b56cdd)",
+  "ranAt": "2026-11-23T20:38:29.048Z",
+  "headCommit": "f56f40eb33461610f5459deb13f0c6fdc2f03dcd",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store_record.rs",
       "file": "crates/veredas-portal/tests/store_record.rs",
-      "fileSha": "7e17462e71005cc70f04f0debc408e5fa6865865a6868c380584155b47d22a13"
+      "fileSha": "1db5b8e0c8be3ded2d994fd381b6d2ee3faa5f7ac0f8b6e6c39e6ee884437045"
     }
   ]
 }
