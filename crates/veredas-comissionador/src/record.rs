@@ -25,6 +25,11 @@ const REPORT_NOUN: &str = "a report";
 pub const REPORT_FILE: &str = "report.toml";
 /// The copy of the test that ran.
 pub const TEST_FILE: &str = "test.test";
+/// The file a run's folder holds once its report has been changed, locked while it is: a note or a
+/// signature reads the report, judges it and writes it under that lock, one change at a time.
+pub const LOCK_FILE: &str = "report.lock";
+/// The roles a signer signs as.
+pub const ROLES: [&str; 2] = ["tester", "witness"];
 
 /// Why a run was not kept, or a report not read or changed.
 #[derive(Debug, Error)]
@@ -39,8 +44,8 @@ pub enum RecordError {
     Evidence { table: String, reason: String },
     #[error("{path}: the report is signed, so it is frozen: a correction is a new run")]
     Signed { path: String },
-    #[error("a signature names its role and its signer, neither blank")]
-    BlankSignature,
+    #[error("{0}")]
+    BadSignature(String),
 }
 
 fn io(path: &Path) -> impl Fn(std::io::Error) -> RecordError + '_ {
@@ -199,14 +204,21 @@ pub fn test_folder(runs: &Path, c: &Checked) -> Result<PathBuf, RecordError> {
     Ok(runs.join(id.to_ascii_lowercase()))
 }
 
-/// The run numbers kept in a test's folder, as written (`0001`), in order.
+/// A run's folder name: its number in four digits at least (`0001`, `10000`).
+fn run_name(n: u32) -> String {
+    format!("{n:04}")
+}
+
+/// The run numbers kept in a test's folder, as written (`0001`, and past `9999` without a leading
+/// zero), in order.
 fn numbers(dir: &Path) -> Vec<u32> {
     let mut out: Vec<u32> = match std::fs::read_dir(dir) {
         Ok(entries) => entries
             .flatten()
             .filter_map(|e| {
                 let name = e.file_name().into_string().ok()?;
-                (name.len() == 4 && name.bytes().all(|b| b.is_ascii_digit())).then(|| name.parse().ok())?
+                let n: u32 = name.parse().ok().filter(|_| name.bytes().all(|b| b.is_ascii_digit()))?;
+                (run_name(n) == name).then_some(n)
             })
             .collect(),
         Err(_) => Vec::new(),
@@ -224,7 +236,7 @@ pub fn keep(runs: &Path, c: &Checked, r: &RunResult, mode: &RunMode, plant: &dyn
     // The next free number: a folder created, never one another keeper made meanwhile.
     let mut number = numbers(&dir).last().copied().unwrap_or(0) + 1;
     let folder = loop {
-        let f = dir.join(format!("{number:04}"));
+        let f = dir.join(run_name(number));
         match std::fs::create_dir(&f) {
             Ok(()) => break f,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => number += 1,
@@ -267,8 +279,15 @@ pub fn keep(runs: &Path, c: &Checked, r: &RunResult, mode: &RunMode, plant: &dyn
         }
         csv.push('\n');
         for row in &rows {
-            let mut line =
-                vec![time_text(row.time_ms), time_text(row.arrival_ms), csv_cell(&row.source), csv_cell(row.key.as_deref().unwrap_or("")), row.seq.to_string()];
+            // The row's stamp is on the store's axis already; its arrival, on the Unix clock, is put
+            // there too, so the two read side by side.
+            let mut line = vec![
+                time_text(row.time_ms),
+                time_text(on_store_axis(row.arrival_ms)),
+                csv_cell(&row.source),
+                csv_cell(row.key.as_deref().unwrap_or("")),
+                row.seq.to_string(),
+            ];
             for (_, v) in &row.columns {
                 line.push(v.as_ref().map(|v: &Value| csv_cell(&v.to_string())).unwrap_or_default());
             }
@@ -339,8 +358,100 @@ fn store(folder: &Path, report: &Report) -> Result<(), RecordError> {
     std::fs::rename(&tmp, &path).map_err(io(&path))
 }
 
+/// A moment of the Unix clock on the store's axis: the plant's local wall clock at that moment, as
+/// portal stamps its rows (`veredas_portal::serve::store_now_ms`).
+fn on_store_axis(unix_ms: i64) -> i64 {
+    chrono::DateTime::from_timestamp_millis(unix_ms)
+        .map(|t| t.with_timezone(&chrono::Local).naive_local().and_utc().timestamp_millis())
+        .unwrap_or(unix_ms)
+}
+
+/// Change a report under its folder's lock: read, judged by `change`, written; a second change
+/// waits for the first to be written.
+fn changed(folder: &Path, change: impl FnOnce(&mut Report) -> Result<(), RecordError>) -> Result<Report, RecordError> {
+    let path = folder.join(LOCK_FILE);
+    let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path).map_err(io(&path))?;
+    lock.lock().map_err(io(&path))?;
+    let mut r = read(folder)?;
+    change(&mut r)?;
+    store(folder, &r)?;
+    Ok(r)
+}
+
+/// Whether a text is a moment in the reference's form, `YYYY-MM-DD HH:MM:SS.mmm`.
+fn is_moment(text: &str) -> bool {
+    text.len() == 23 && chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S%.3f").is_ok()
+}
+
+/// Every value of a report the reference gives a set or a form: the mode, the verdict, the
+/// outcomes, the roles, the moments, the attempts and the number from 1, the files where the run's
+/// folder keeps them.
+fn judge(r: &Report) -> Result<(), String> {
+    let one_of = |key: &str, value: &str, set: &[&str]| -> Result<(), String> {
+        if set.contains(&value) {
+            Ok(())
+        } else {
+            Err(format!("`{key}` is `{value}`: {}", set.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ")))
+        }
+    };
+    let moment = |key: &str, value: &str| -> Result<(), String> {
+        if is_moment(value) { Ok(()) } else { Err(format!("`{key}` is `{value}`: a moment is `YYYY-MM-DD HH:MM:SS.mmm`")) }
+    };
+    let from_one = |key: &str, n: u32| -> Result<(), String> { if n >= 1 { Ok(()) } else { Err(format!("`{key}` is 0: it counts from 1")) } };
+    one_of("run.mode", &r.run.mode, &["live", "replay"])?;
+    one_of("run.verdict", &r.run.verdict, &["passed", "failed", "aborted"])?;
+    from_one("run.number", r.run.number)?;
+    moment("run.from", &r.run.from)?;
+    moment("run.to", &r.run.to)?;
+    one_of("test.file", &r.test.file, &[TEST_FILE])?;
+    for (i, f) in r.test.functions.iter().enumerate() {
+        one_of("test.functions.file", &f.file, &[&format!("functions/{}.fn", i + 1)])?;
+    }
+    for s in &r.steps {
+        from_one("step.attempt", s.attempt)?;
+        if let Some(o) = &s.outcome {
+            one_of("step.outcome", o, &["pass", "fail", "timeout", "error"])?;
+        }
+        moment("step.from", &s.from)?;
+        moment("step.to", &s.to)?;
+    }
+    for c in &r.criteria {
+        from_one("criterion.attempt", c.attempt)?;
+    }
+    for x in &r.reported {
+        from_one("reported.attempt", x.attempt)?;
+    }
+    for w in &r.writes {
+        from_one("write.attempt", w.attempt)?;
+    }
+    for e in &r.evidence {
+        let plain = format!("evidence/{}.csv", e.table);
+        let placed = e.file.strip_prefix("evidence/table-").and_then(|n| n.strip_suffix(".csv")).is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        if e.file != plain && !placed {
+            return Err(format!("`evidence.file` is `{}`: `{plain}`, or `evidence/table-<n>.csv` for a name that is not plain", e.file));
+        }
+    }
+    for g in &r.signatures {
+        signer(&g.role, &g.name)?;
+        moment("signature.at", &g.at)?;
+    }
+    Ok(())
+}
+
+/// A signature's role and name as the reference states them: the role `tester` or `witness`, the
+/// name holding a letter or a digit.
+fn signer(role: &str, name: &str) -> Result<(), String> {
+    if !ROLES.contains(&role) {
+        return Err(format!("a signature's role is `tester` or `witness`, not `{role}`"));
+    }
+    if !name.chars().any(char::is_alphanumeric) {
+        return Err(format!("a signature names its signer, a name with a letter or a digit, not `{name}`"));
+    }
+    Ok(())
+}
+
 /// Read a run's report: its stamp by core's one header reader, then the whole file, a key the
-/// format does not know refused.
+/// format does not know refused, every value judged.
 pub fn read(folder: &Path) -> Result<Report, RecordError> {
     let path = folder.join(REPORT_FILE);
     let text = std::fs::read_to_string(&path).map_err(io(&path))?;
@@ -350,18 +461,21 @@ pub fn read(folder: &Path) -> Result<Report, RecordError> {
 /// Read a report's text.
 pub fn parse(text: &str) -> Result<Report, String> {
     veredas_core::schema::check(text, REPORT_NOUN, REPORT_FORMAT, REPORT_VERSION).map_err(|e| e.to_string())?;
-    toml::from_str::<Report>(text).map_err(|e| e.to_string().trim_end().to_string())
+    let r = toml::from_str::<Report>(text).map_err(|e| e.to_string().trim_end().to_string())?;
+    judge(&r)?;
+    Ok(r)
 }
 
-/// The runs of a test, newest first: each folder with its report (a folder without one, a run
-/// being kept or cut short, is passed over).
-pub fn list(runs: &Path, c: &Checked) -> Result<Vec<(PathBuf, Report)>, RecordError> {
+/// The runs of a test, newest first: each folder with its report, or why it cannot be read (a
+/// folder without one, a run being kept or cut short, is passed over).
+pub fn list(runs: &Path, c: &Checked) -> Result<Vec<(PathBuf, Result<Report, RecordError>)>, RecordError> {
     let dir = test_folder(runs, c)?;
     let mut out = Vec::new();
     for n in numbers(&dir).into_iter().rev() {
-        let folder = dir.join(format!("{n:04}"));
+        let folder = dir.join(run_name(n));
         if folder.join(REPORT_FILE).exists() {
-            out.push((folder.clone(), read(&folder)?));
+            let report = read(&folder);
+            out.push((folder, report));
         }
     }
     Ok(out)
@@ -369,26 +483,25 @@ pub fn list(runs: &Path, c: &Checked) -> Result<Vec<(PathBuf, Report)>, RecordEr
 
 /// Set the tester's note; refused once the report is signed.
 pub fn note(folder: &Path, text: &str) -> Result<Report, RecordError> {
-    let mut r = read(folder)?;
-    if r.is_signed() {
-        return Err(RecordError::Signed { path: folder.display().to_string() });
-    }
-    r.note = text.to_string();
-    store(folder, &r)?;
-    Ok(r)
+    changed(folder, |r| {
+        if r.is_signed() {
+            return Err(RecordError::Signed { path: folder.display().to_string() });
+        }
+        r.note = text.to_string();
+        Ok(())
+    })
 }
 
 /// Sign the report as `role`, by `name`, now on the plant's clock; refused once anyone has signed
 /// (Q312 (d), taken: a second signature, like a note, waits for a new run).
 pub fn sign(folder: &Path, role: &str, name: &str) -> Result<Report, RecordError> {
-    if role.trim().is_empty() || name.trim().is_empty() {
-        return Err(RecordError::BlankSignature);
-    }
-    let mut r = read(folder)?;
-    if r.is_signed() {
-        return Err(RecordError::Signed { path: folder.display().to_string() });
-    }
-    r.signatures.push(Signature { role: role.trim().to_string(), name: name.trim().to_string(), at: time_text(veredas_portal::serve::store_now_ms()) });
-    store(folder, &r)?;
-    Ok(r)
+    let (role, name) = (role.trim(), name.trim());
+    signer(role, name).map_err(RecordError::BadSignature)?;
+    changed(folder, |r| {
+        if r.is_signed() {
+            return Err(RecordError::Signed { path: folder.display().to_string() });
+        }
+        r.signatures.push(Signature { role: role.to_string(), name: name.to_string(), at: time_text(veredas_portal::serve::store_now_ms()) });
+        Ok(())
+    })
 }

@@ -2,12 +2,14 @@
 
 Every run of a test (`docs/test-schema.md`) ends in an acceptance report, whatever its verdict
 (`docs/comissionador-plan.md`, "Rules"). The engine keeps each run in a folder of its own,
-`runs/<id, lowercased>/<nnnn>/`, numbered from `0001` in the order the runs were kept: the exact
-text of the test that ran (`test.test`), every function file it used (`functions/<n>.fn`), the
-rows of every table it read over its window (`evidence/<table>.csv`), and `report.toml`, written
-last, so a folder that holds a report holds a whole run. `veredas_comissionador::record` keeps a
-run (`keep`), reads a report back (`read`), lists a test's runs newest first (`list`), sets the
-tester's note (`note`) and signs a report (`sign`). The report is the record; a PDF or a page is a
+`runs/<id, lowercased>/<nnnn>/`, numbered from `0001` in the order the runs were kept (`10000`
+after `9999`): the exact text of the test that ran (`test.test`), every function file it used
+(`functions/<n>.fn`), the rows of every table it read over its window (`evidence/<table>.csv`),
+and `report.toml`, written last, so a folder that holds a report holds a whole run; once the
+report has been changed, `report.lock` too, an empty file the engine locks while it reads, judges
+and writes the report, so two changes never cross. `veredas_comissionador::record` keeps a run
+(`keep`), reads a report back (`read`), lists a test's runs newest first, each with its report or
+why it cannot be read (`list`), sets the tester's note (`note`) and signs a report (`sign`). The report is the record; a PDF or a page is a
 drawing of it, Oficina's run-and-report screen among them (`docs/questions.md` Q312, taken
 meanwhile: the record in TOML, anyone signing by a name typed).
 
@@ -221,17 +223,22 @@ is the plant's clock on the store's axis, `YYYY-MM-DD HH:MM:SS.mmm`.
 - `file` (required): its CSV in the run's folder, `evidence/<table>.csv` (`evidence/table-<n>.csv`
   for a name that is not plain): a header of `time`, `arrival`, `source`, `key`, `seq` and the
   table's columns, then every row stamped in the run's window, oldest first, each cell as the
-  suite shows its value and a hole empty.
+  suite shows its value and a hole empty. `time` is the row's stamp and `arrival` when it reached
+  portal, both moments on the store's axis.
 - `rows` (required): how many.
 
 **A signature** (`[[signature]]`).
 - `role` (required): what the signer signs as, `tester` or `witness`.
-- `name` (required): the signer's name, as typed (no accounts, Q20).
+- `name` (required): the signer's name, as typed (no accounts, Q20), holding a letter or a digit.
 - `at` (required): when.
 
 ## What the engine refuses
 
 A report with another stamp, a key the format does not know, a key missing or of another type. A
-note or a signature on a report already signed: a signed report is frozen, a correction being a new
-run (Q312, (d) taken meanwhile). This is the engine's refusal, nothing sealed in the file. A
-signature with a blank role or name. A run of a test with no `id`, which has no folder.
+value outside the ones its key names (a mode, a verdict, an outcome, a role), a moment not in its
+form, an attempt or a run's number below 1, a file named otherwise than the run's folder keeps it
+(`test.test`, `functions/<n>.fn` in the order of the uses, the evidence's names). A note or a
+signature on a report already signed: a signed report is frozen, a correction being a new run
+(Q312, (d) taken meanwhile). This is the engine's refusal, nothing sealed in the file. A signature
+whose role is neither `tester` nor `witness`, or whose name holds no letter or digit. A run of a
+test with no `id`, which has no folder.
