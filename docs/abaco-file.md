@@ -3,7 +3,8 @@
 A workbook born in Ábaco, and at the same time the session that works on other files
 (`docs/abaco-plan.md`, "The `.abaco` file"): one zip of plain-text parts, readable with `unzip`
 and an editor. `veredas_abaco::abacofile` writes it (`write`, through a file beside the
-destination renamed into place, the file it replaces kept as `<name>.bak`) and reads it back
+destination renamed into place, the file it replaces kept as `<name>.bak`; a write that fails
+leaves the destination as it was and nothing beside it) and reads it back
 (`read`, evaluated; nothing it carries runs). Its export to `.xlsx` is the fork's writer
 (`Workbook::export`).
 
@@ -52,8 +53,17 @@ The engine's own structures, as the engine names them (`ironcalc_base::types`): 
 `[metadata]`, `[[defined_names]]`, `[styles]`, `[theme]`, `[tables.<name>]`,
 `[[external_books]]`. It is the part least meant for an editor's hand; Ábaco reads it back whole.
 These structures pass through JSON on their way, so their keys come in TOML's sorted order, and
-the engine's none (an unset alignment, a colour that is none) is written `nan`: TOML has no null,
-and no number the engine keeps there is a NaN. A sheet part's structure is written the same way.
+the engine's none (an unset alignment, a colour that is none) is written `nan`: TOML has no null.
+JSON writes a number that is no finite number as its null too; the engine keeps one only from a
+malformed workbook (a column's width of `NaN`), and the writer refuses it by its path
+(`cols.0.width`) rather than write a file its reader refuses. A TOML date-time is no value of the
+engine's, refused by its path. A sheet part's structure is written the same way.
+
+Both ends hold the workbook to what the engine takes: sheet names of 1 to 31 characters with none
+of `\ / * ? : [ ]`, told apart in any case, each sheet's id its own; a row's `s` and a column's
+`style` one of the workbook's styles; a defined name that does not read as a cell (`B1`, `R1C1`),
+stated once in its scope. A name local to a sheet the workbook does not hold is kept: the engine
+holds one for a chart sheet of the `.xlsx` the workbook came from, which no formula reads.
 
 ## A sheet part
 The sheet's structure first, as the engine names it: `name`, `sheet_id`, `state`, `color`,
@@ -65,7 +75,7 @@ table, each keyed by its address:
 | A cell | Holds |
 |---|---|
 | `{ n = 6.5 }` | a number: a whole number under 10^15 as an integer, any other in the shortest text that reads back as the same double |
-| `{ s = "Span (m)" }` | a text, in TOML's own string |
+| `{ s = "Span (m)" }` | a text, in a TOML basic string on its line: `"`, `\`, a tab, a line break and every other control character escaped (`"a\nb"`, `"\u0007"`) |
 | `{ b = true }` | a boolean |
 | `{ e = "#N/A" }` | an error |
 | `{ f = "B2*B1^2/8", v = 63.375 }` | a formula, without its `=`; `v` (or `e`, an error) is the value it last computed, for the reader: it is computed again when the file is opened |
@@ -75,7 +85,9 @@ table, each keyed by its address:
 
 `style` is an index into the workbook part's `styles.cell_xfs`, written when it is not 0. A cell
 states exactly one of `n`, `s`, `b`, `e`, `f`, `array` and `dynamic`, or none (a style alone); `v`
-goes only with `f`, `size` only with `array`. Its key is the address as written here (`B1`, never
+goes only with `f`, `size` only with `array`. A formula's `v` is a finite number, a text or a
+boolean, and never stands beside its `e`. An integer `n` or `v` is one a double holds exactly
+(`9007199254740993` is refused, not rounded). Its key is the address as written here (`B1`, never
 `b1` or `$B$1`); its `style` one the workbook part holds. An error is written as the engine shows
 it (`#N/IMPL` among them) and read in that spelling or the engine's English name.
 
@@ -205,6 +217,9 @@ there, keeps every other part, and evaluates the workbook. A refusal names the f
 for a cell, its address: a part that is missing or not UTF-8, a stamp of another format or of
 another version, a misspelled key, a cell stating two kinds, `v` without `f`, an array of no size,
 an error code that is none, an address that is none or not written as here, a style the workbook
-does not hold, a number that is no finite number (`nan`, `inf`), a value of the wrong type, a
-manifest with no sheet, a sheet whose part names another sheet than the manifest, a reference's
-hash or date not in its form, a log line with a bad escape.
+does not hold (a cell's, a row's, a column's), a number that is no finite number (`nan`, `inf`)
+or an integer no double holds, a value of the wrong type (a date-time among them, a formula's `v`
+that is a table), a formula's `v` beside its `e`, a manifest with no sheet, a sheet whose part
+names another sheet than the manifest, a sheet name or a defined name the engine refuses, settings
+the engine refuses (a time zone, a locale: the workbook part named), a reference's hash or date
+not in its form, a log line with a bad escape.

@@ -223,9 +223,29 @@ pub fn number_text(n: f64) -> String {
     }
 }
 
-/// A TOML basic string holding `s` exactly.
+/// A TOML basic string holding `s` exactly, on one line: `"` and `\` escaped, and every control
+/// character a basic string cannot hold raw (U+0000 to U+001F, U+007F) written as its escape, a
+/// tab too, so a text with a line break keeps its cell on one line.
 fn quoted(s: &str) -> String {
-    toml::Value::String(s.to_string()).to_string()
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            c if c < ' ' || c == '\u{7f}' => {
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// A log entry on one line: `\`, tab, line feed and carriage return escaped.
@@ -272,10 +292,19 @@ fn toml_text<T: Serialize>(part: &str, value: &T) -> Result<String, ModelError> 
 
 /// A part holding the engine's own structures, as TOML: they serialise through JSON, whose null
 /// (the engine's `None`, a colour that is none) TOML cannot hold, so a null is written `nan`,
-/// which no JSON value holds and no structure of the engine keeps.
-fn engine_text<T: Serialize>(part: &str, value: &T) -> Result<String, ModelError> {
+/// which no JSON value holds. JSON writes a number that is no finite number (a NaN or an infinity,
+/// which a malformed workbook can give the engine) as null too, where the engine's structure takes
+/// no none: such a number refuses the write by its path ([`non_finite_at`]), so every file written
+/// reads back.
+fn engine_text<T: Serialize + DeserializeOwned>(part: &str, value: &T) -> Result<String, ModelError> {
     let bad = |e: String| ModelError::Engine(format!("{part}: {e}"));
     let json = serde_json::to_value(value).map_err(|e| bad(e.to_string()))?;
+    if let Err(e) = serde_json::from_value::<T>(json.clone()) {
+        return Err(bad(match non_finite_at::<T>(&json) {
+            Some(path) => format!("`{path}` is a number that is no finite number (a NaN or an infinity), which the file cannot hold"),
+            None => e.to_string(),
+        }));
+    }
     let toml::Value::Table(mut table) = json_to_toml(json).map_err(bad)? else {
         return Err(bad("not a table".into()));
     };
@@ -286,6 +315,58 @@ fn engine_text<T: Serialize>(part: &str, value: &T) -> Result<String, ModelError
     };
     let body = toml::to_string(&table).map_err(|e| bad(e.to_string()))?;
     Ok(format!("format = {}\nversion = {version}\n{body}", quoted(&format)))
+}
+
+/// The path of the null in `json` where `T` takes no none (a number that was no finite number):
+/// JSON's text, pretty-printed, read as `T`, the line its refusal names mapped back to its key; an
+/// untagged enum (a colour) is refused where its value ends, so the null inside the innermost
+/// value spanning that line is the one.
+fn non_finite_at<T: DeserializeOwned>(json: &serde_json::Value) -> Option<String> {
+    use serde_json::Value as J;
+    fn first_null(v: &J, path: &mut Vec<String>) -> Option<String> {
+        match v {
+            J::Null => Some(path.join(".")),
+            J::Array(a) => a.iter().enumerate().find_map(|(i, x)| {
+                path.push(i.to_string());
+                let found = first_null(x, path);
+                path.pop();
+                found
+            }),
+            J::Object(o) => o.iter().find_map(|(k, x)| {
+                path.push(k.clone());
+                let found = first_null(x, path);
+                path.pop();
+                found
+            }),
+            _ => None,
+        }
+    }
+    // each member and element of a non-empty container on a line of its own, its closing bracket on
+    // the line after the last, as `to_string_pretty` writes them
+    fn walk(v: &J, path: &mut Vec<String>, line: &mut usize, target: usize) -> Option<String> {
+        let start = *line;
+        let children: Vec<(String, &J)> = match v {
+            J::Array(a) => a.iter().enumerate().map(|(i, x)| (i.to_string(), x)).collect(),
+            J::Object(o) => o.iter().map(|(k, x)| (k.clone(), x)).collect(),
+            _ => return (*line == target && v.is_null()).then(|| path.join(".")),
+        };
+        let any = !children.is_empty();
+        for (key, child) in children {
+            *line += 1;
+            path.push(key);
+            if let Some(found) = walk(child, path, line, target) {
+                return Some(found);
+            }
+            path.pop();
+        }
+        if any {
+            *line += 1;
+        }
+        if (start..=*line).contains(&target) { first_null(v, path) } else { None }
+    }
+    let text = serde_json::to_string_pretty(json).ok()?;
+    let target = serde_json::from_str::<T>(&text).err()?.line();
+    walk(json, &mut Vec::new(), &mut 1, target)
 }
 
 fn json_to_toml(j: serde_json::Value) -> Result<toml::Value, String> {
@@ -304,17 +385,24 @@ fn json_to_toml(j: serde_json::Value) -> Result<toml::Value, String> {
     })
 }
 
-fn toml_to_json(t: toml::Value) -> Result<serde_json::Value, String> {
+/// The engine's structures from TOML, `nan` as their none; an infinity, and a date-time (which no
+/// structure of the engine holds), refused by their path.
+fn toml_to_json(t: toml::Value, path: &str) -> Result<serde_json::Value, String> {
     use serde_json::Value as J;
+    let at = |k: &str| if path.is_empty() { k.to_string() } else { format!("{path}.{k}") };
     Ok(match t {
         toml::Value::Float(f) if f.is_nan() => J::Null,
-        toml::Value::Float(f) => J::Number(serde_json::Number::from_f64(f).ok_or_else(|| format!("{f} is no finite number"))?),
+        toml::Value::Float(f) => J::Number(serde_json::Number::from_f64(f).ok_or_else(|| format!("`{path}` is {f}, no finite number"))?),
         toml::Value::Integer(i) => J::from(i),
         toml::Value::Boolean(b) => J::Bool(b),
         toml::Value::String(s) => J::String(s),
-        toml::Value::Datetime(d) => J::String(d.to_string()),
-        toml::Value::Array(a) => J::Array(a.into_iter().map(toml_to_json).collect::<Result<_, _>>()?),
-        toml::Value::Table(o) => J::Object(o.into_iter().map(|(k, v)| Ok((k, toml_to_json(v)?))).collect::<Result<_, String>>()?),
+        toml::Value::Datetime(d) => return Err(format!("`{path}` is the date-time {d}, which nothing of the engine holds")),
+        toml::Value::Array(a) => {
+            J::Array(a.into_iter().enumerate().map(|(i, v)| toml_to_json(v, &at(&i.to_string()))).collect::<Result<_, _>>()?)
+        }
+        toml::Value::Table(o) => {
+            J::Object(o.into_iter().map(|(k, v)| Ok((k.clone(), toml_to_json(v, &at(&k))?))).collect::<Result<_, String>>()?)
+        }
     })
 }
 
@@ -383,7 +471,7 @@ fn cells_text(book: &Workbook, sheet: u32) -> Result<String, ModelError> {
     Ok(out)
 }
 
-fn sheet_text(book: &Workbook, sheet: u32, ws: &Worksheet) -> Result<String, ModelError> {
+fn sheet_text(book: &Workbook, sheet: u32, ws: &Worksheet, part_name: &str) -> Result<String, ModelError> {
     let mut links: Vec<(i32, i32, Link)> = ws.links.iter().map(|(&(r, c), l)| (r, c, l.clone())).collect();
     links.sort_by_key(|&(r, c, _)| (r, c));
     let part = SheetPart {
@@ -404,19 +492,22 @@ fn sheet_text(book: &Workbook, sheet: u32, ws: &Worksheet) -> Result<String, Mod
         conditional_formatting: ws.conditional_formatting.clone(),
         links,
     };
-    Ok(engine_text(&ws.name, &part)? + &cells_text(book, sheet)?)
+    Ok(engine_text(part_name, &part)? + &cells_text(book, sheet)?)
 }
 
 /// Every part of the file, by name, in the order they are written.
 pub fn parts(file: &AbacoFile) -> Result<Vec<(String, Vec<u8>)>, ModelError> {
     let model = file.book.model();
     let ewb = &model.workbook;
+    let names: Vec<String> =
+        ewb.worksheets.iter().enumerate().map(|(i, ws)| format!("sheets/{}.toml", sheet_stem(i, &ws.name))).collect();
+    check_book(ewb, &names).map_err(ModelError::Engine)?;
     let mut out: Vec<(String, Vec<u8>)> = Vec::new();
     let mut entries = Vec::new();
     let mut sheets = Vec::new();
     for (i, ws) in ewb.worksheets.iter().enumerate() {
-        let part = format!("sheets/{}.toml", sheet_stem(i, &ws.name));
-        sheets.push((part.clone(), sheet_text(&file.book, i as u32, ws)?.into_bytes()));
+        let part = names[i].clone();
+        sheets.push((part.clone(), sheet_text(&file.book, i as u32, ws, &part)?.into_bytes()));
         entries.push(SheetEntry { name: ws.name.clone(), part });
     }
     for name in file.macros.keys() {
@@ -547,7 +638,7 @@ impl Parts<'_> {
 
     /// The engine's structures from a part's table ([`engine_text`]), `nan` as the engine's none.
     fn engine_table<T: DeserializeOwned + Serialize>(&self, name: &str, table: toml::Table) -> Result<T, ModelError> {
-        let json = toml_to_json(toml::Value::Table(table)).map_err(|e| self.bad(format!("{name}: {e}")))?;
+        let json = toml_to_json(toml::Value::Table(table), "").map_err(|e| self.bad(format!("{name}: {e}")))?;
         // the engine's structures take a key they do not know without a word: a key nothing
         // reads, at any depth, is refused by its path, as every file of the suite refuses one
         let mut unread = Vec::new();
@@ -567,23 +658,83 @@ impl Parts<'_> {
     }
 }
 
-/// The first key of an object holding a `type` (an internally tagged enum) in `read` that `back`,
-/// the value read written out again, lacks, by its path.
+/// The first key, in an object holding a `type` (an internally tagged enum) or in any object below
+/// one (all of it read from serde's buffer: a threshold of a format's rule), that `back`, the value
+/// read written out again, lacks, by its path.
 fn unread_in_tagged(read: &serde_json::Value, back: &serde_json::Value, path: String) -> Option<String> {
+    unread_below(read, back, path, false)
+}
+
+fn unread_below(read: &serde_json::Value, back: &serde_json::Value, path: String, inside: bool) -> Option<String> {
     use serde_json::Value as J;
     let at = |k: &str| if path.is_empty() { k.to_string() } else { format!("{path}.{k}") };
     match (read, back) {
         (J::Object(r), J::Object(b)) => {
-            if r.get("type").is_some_and(J::is_string)
-                && let Some(k) = r.keys().find(|k| !b.contains_key(*k))
-            {
+            let inside = inside || r.get("type").is_some_and(J::is_string);
+            if inside && let Some(k) = r.keys().find(|k| !b.contains_key(*k)) {
                 return Some(at(k));
             }
-            r.iter().find_map(|(k, v)| b.get(k).and_then(|bv| unread_in_tagged(v, bv, at(k))))
+            r.iter().find_map(|(k, v)| b.get(k).and_then(|bv| unread_below(v, bv, at(k), inside)))
         }
-        (J::Array(r), J::Array(b)) => r.iter().zip(b).enumerate().find_map(|(i, (v, bv))| unread_in_tagged(v, bv, at(&i.to_string()))),
+        (J::Array(r), J::Array(b)) => {
+            r.iter().zip(b).enumerate().find_map(|(i, (v, bv))| unread_below(v, bv, at(&i.to_string()), inside))
+        }
         _ => None,
     }
+}
+
+/// What the engine's workbook must be for the file to hold it and the engine to work on it, by part
+/// and place: sheet names as the engine takes them (1 to 31 characters, none of `\ / * ? : [ ]`),
+/// told apart in any case, each sheet's id its own; a row's and a column's style one of the
+/// workbook's; a defined name that does not read as a cell, stated once in its scope (a name local
+/// to a sheet the workbook does not hold, one of a chart sheet of the workbook it came from, kept).
+/// The writer and the reader both hold a workbook to it.
+fn check_book(ewb: &EngineWorkbook, parts: &[String]) -> Result<(), String> {
+    let styles = ewb.styles.cell_xfs.len();
+    let style_of = |s: i32| -> Option<String> {
+        if s < 0 {
+            Some(format!("{s} is no style"))
+        } else if s as usize >= styles {
+            Some(format!("{s} is none of the workbook's {styles} styles"))
+        } else {
+            None
+        }
+    };
+    for (i, ws) in ewb.worksheets.iter().enumerate() {
+        let part = parts.get(i).map(String::as_str).unwrap_or(MANIFEST);
+        let name = &ws.name;
+        let invalid = ['\\', '/', '*', '?', ':', '[', ']'];
+        if name.is_empty() || name.chars().count() > 31 || name.contains(&invalid[..]) {
+            return Err(format!("{MANIFEST}: sheet {} `{name}` is no sheet name (1 to 31 characters, none of \\ / * ? : [ ])", i + 1));
+        }
+        if let Some(j) = ewb.worksheets[..i].iter().position(|w| w.name.to_uppercase() == name.to_uppercase()) {
+            return Err(format!("{MANIFEST}: sheet {} is named `{name}` as sheet {} is", i + 1, j + 1));
+        }
+        if let Some(j) = ewb.worksheets[..i].iter().position(|w| w.sheet_id == ws.sheet_id) {
+            return Err(format!("{part}: `sheet_id` {} is sheet {}'s too", ws.sheet_id, j + 1));
+        }
+        for (k, c) in ws.cols.iter().enumerate() {
+            if let Some(why) = c.style.and_then(style_of) {
+                return Err(format!("{part}: `cols.{k}.style` {why}"));
+            }
+        }
+        for (k, r) in ws.rows.iter().enumerate() {
+            if let Some(why) = style_of(r.s) {
+                return Err(format!("{part}: `rows.{k}.s` {why}"));
+            }
+        }
+    }
+    for (i, d) in ewb.defined_names.iter().enumerate() {
+        if d.name.is_empty() || crate::book::name_reads_as_a_cell(&d.name) {
+            return Err(format!("{WORKBOOK}: `defined_names.{i}` `{}` is no name (it reads as a cell)", d.name));
+        }
+        if let Some(j) =
+            ewb.defined_names[..i].iter().position(|e| e.sheet_id == d.sheet_id && e.name.to_uppercase() == d.name.to_uppercase())
+        {
+            return Err(format!("{WORKBOOK}: `defined_names.{i}` `{}` is stated in its scope already, as `defined_names.{j}`", d.name));
+        }
+    }
+    Ok(())
 }
 
 /// The suite's one header reader (C-045): core's own source, compiled here by path, so the stamp
@@ -637,6 +788,13 @@ fn entry(e: CellEntry) -> Result<Entry, String> {
     }
     if e.v.is_some() && e.f.is_none() {
         return Err("`v` without `f`".into());
+    }
+    // a formula's last value: one number, text or boolean, or its error as `e`, never both
+    match &e.v {
+        Some(_) if e.e.is_some() => return Err("both `v` and `e`: a formula's last value is one".into()),
+        Some(toml::Value::Float(f)) if !f.is_finite() => return Err(format!("`v` is {f}, no finite number")),
+        Some(toml::Value::Float(_) | toml::Value::Integer(_) | toml::Value::String(_) | toml::Value::Boolean(_)) | None => {}
+        Some(other) => return Err(format!("`v` is a {}, where a formula's last value is a number, a text or a boolean", other.type_str())),
     }
     if e.size.is_some() != e.array.is_some() {
         return Err("`size` goes with `array`, and only with it".into());
@@ -747,6 +905,18 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
             if addr.to_string() != key {
                 return Err(bad(format!("an address is written `{addr}`")));
             }
+            // a date-time is no value a cell holds (serde would read it as its text)
+            if let Some((k, d)) = cell.as_table().and_then(|t| t.iter().find_map(|(k, v)| v.as_datetime().map(|d| (k, d)))) {
+                return Err(bad(format!("`{k}` is the date-time {d}, which no cell holds")));
+            }
+            // an integer is read as a double: one no double holds exactly is refused, not rounded
+            for key in ["n", "v"] {
+                if let Some(toml::Value::Integer(i)) = cell.get(key)
+                    && (*i as f64) as i128 != i128::from(*i)
+                {
+                    return Err(bad(format!("`{key} = {i}` is an integer no number of the file holds exactly")));
+                }
+            }
             let cell: CellEntry = cell.try_into().map_err(|e: toml::de::Error| bad(e.message().to_string()))?;
             let s = cell.style;
             if usize::try_from(s).is_ok_and(|s| s >= styles) {
@@ -785,7 +955,10 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
         theme: book.theme,
         external_books: book.external_books,
     };
-    let mut model = Model::from_workbook(engine, LANGUAGE).map_err(|e| parts.bad(e))?;
+    let sheet_parts: Vec<String> = manifest.sheets.iter().map(|s| s.part.clone()).collect();
+    check_book(&engine, &sheet_parts).map_err(|e| parts.bad(e))?;
+    // the engine refuses a workbook only for its settings (its locale, its time zone)
+    let mut model = Model::from_workbook(engine, LANGUAGE).map_err(|e| parts.bad(format!("{WORKBOOK}: `settings`: {e}")))?;
     // Entering a formula in a quote-prefixed cell derives a new style; every formula cell gets its
     // own style back below, so the derived ones are orphans, cut back to what the file holds.
     let styles_in_file = model.workbook.styles.cell_xfs.len();
@@ -886,6 +1059,18 @@ mod tests {
         assert_eq!(number_text(42.0), "42");
         assert_eq!(number_text(0.1), "0.1");
         assert_eq!(number_text(-0.0), "-0.0");
+    }
+
+    #[test]
+    fn a_string_is_written_on_one_line_and_reads_back_exactly() {
+        let every: String = (0u8..=0x7f).map(char::from).chain("ação \u{2028} 😀".chars()).collect();
+        for s in [every.as_str(), "", "\"", "\\", "a\r\nb", "'''", "\"\"\""] {
+            let q = quoted(s);
+            assert_eq!(q.lines().count(), 1, "{q}");
+            let back: toml::Table = toml::from_str(&format!("x = {q}")).unwrap();
+            assert_eq!(back["x"].as_str(), Some(s), "{q}");
+        }
+        assert_eq!(quoted("a\nb\t\"c\"\\\u{1}\u{7f}"), r#""a\nb\t\"c\"\\\u0001\u007F""#);
     }
 
     #[test]

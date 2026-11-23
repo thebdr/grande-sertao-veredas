@@ -136,6 +136,15 @@ fn every_workbook_of_the_corpus_round_trips() {
             refused.push((rel, e.to_string()));
             continue;
         }
+        // one line per cell in every sheet's `[cells]`
+        for (name, bytes) in abacofile::parts(&file).unwrap().into_iter().filter(|(n, _)| n.starts_with("sheets/")) {
+            let text = String::from_utf8(bytes).unwrap();
+            let cells = text.split_once("\n[cells]\n").map(|(_, c)| c).unwrap_or("");
+            let keys = toml::from_str::<toml::Table>(cells).unwrap().len();
+            if cells.lines().count() != keys {
+                failed.push(format!("{rel}: {name} holds {keys} cells on {} lines", cells.lines().count()));
+            }
+        }
         let mut back = match std::panic::catch_unwind(|| read(&first)) {
             Ok(back) => back,
             Err(_) => {
@@ -267,9 +276,17 @@ fn the_reference_s_worked_example_is_what_is_written_and_reads_back() {
     assert_eq!(back.book.origin, veredas_abaco::Origin::Abaco { path: path.clone() });
 }
 
+/// `text` with its first line opening with `start` replaced by `line`.
+fn replace_line(text: &str, start: &str, line: &str) -> String {
+    let at = text.lines().position(|l| l.starts_with(start)).unwrap_or_else(|| panic!("no line {start}"));
+    text.lines().enumerate().map(|(i, l)| if i == at { line.to_string() } else { l.to_string() } + "\n").collect()
+}
+
 #[test]
 fn a_file_that_is_not_what_it_should_be_is_refused_by_its_part_and_place() {
-    let file = worked_example();
+    let mut file = worked_example();
+    // evaluated, as the writer writes it: each formula with its last value
+    file.book.ensure_calculated();
     let good = abacofile::parts(&file).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("bad.abaco");
@@ -287,7 +304,7 @@ fn a_file_that_is_not_what_it_should_be_is_refused_by_its_part_and_place() {
         std::fs::write(&path, abacofile::zip_of(&parts).unwrap()).unwrap();
         match abacofile::read(&path) {
             Err(e) => e.to_string(),
-            Ok(_) => panic!("{name}: read"),
+            Ok(_) => format!("{name}: read, not refused"),
         }
     };
     let cases: Vec<(&str, Box<dyn Fn(&str) -> Option<String>>, &str)> = vec![
@@ -326,6 +343,27 @@ fn a_file_that_is_not_what_it_should_be_is_refused_by_its_part_and_place() {
         // a key nothing reads inside a link (an internally tagged enum, read from serde's buffer)
         ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("links = []", "links = [[1, 1, { type = \"External\", target = \"https://example.org\", tooltip = nan, targett = \"x\" }]]"))), "sheets/01-Loads.toml: `links.0.2.targett` is a key nothing reads"),
         ("manifest.toml", Box::new(|t| Some(t[..t.find("[[sheets]]").unwrap()].replace("macros = [\"beam_report\"]", "macros = [\"beam_report\"]\nsheets = []"))), "manifest.toml: a workbook holds a sheet at least"),
+        // a formula's last value: one number, text or boolean, finite, never beside its error
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("v = 63.375", "v = nan"))), "sheets/01-Loads.toml B3: `v` is NaN, no finite number"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("v = 63.375", "v = inf"))), "sheets/01-Loads.toml B3: `v` is inf, no finite number"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("v = 63.375", "v = { zz = 1 }"))), "sheets/01-Loads.toml B3: `v` is a table, where a formula's last value is a number, a text or a boolean"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("v = 63.375", "v = [1, 2]"))), "sheets/01-Loads.toml B3: `v` is a array, where"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("v = 63.375", "v = 1979-05-27"))), "sheets/01-Loads.toml B3: `v` is the date-time 1979-05-27, which no cell holds"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("v = 63.375", "v = 2, e = \"#N/A\""))), "sheets/01-Loads.toml B3: both `v` and `e`: a formula's last value is one"),
+        // an integer no double holds exactly, in a value and a formula's last value
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B1 = { n = 6.5 }", "B1 = { n = 9007199254740993 }"))), "sheets/01-Loads.toml B1: `n = 9007199254740993` is an integer no number of the file holds exactly"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("v = 63.375", "v = 123456789012345678"))), "sheets/01-Loads.toml B3: `v = 123456789012345678` is an integer no number of the file holds exactly"),
+        // a row's and a column's style one of the workbook's
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("cols = []", "cols = [{ min = 1, max = 1, width = 10.0, custom_width = true, hidden = false, style = 999 }]"))), "sheets/01-Loads.toml: `cols.0.style` 999 is none of the workbook's 2 styles"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("cols = []", "cols = [{ min = 1, max = 1, width = 10.0, custom_width = true, hidden = false, style = -1 }]"))), "sheets/01-Loads.toml: `cols.0.style` -1 is no style"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("rows = []", "rows = [{ r = 1, height = 15.0, custom_format = true, custom_height = false, s = 999, hidden = false }]"))), "sheets/01-Loads.toml: `rows.0.s` 999 is none of the workbook's 2 styles"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("rows = []", "rows = [{ r = 1, height = 15.0, custom_format = true, custom_height = false, s = -2, hidden = false }]"))), "sheets/01-Loads.toml: `rows.0.s` -2 is no style"),
+        // a date-time where the engine holds a text, by its path
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("dimension = \"A1\"", "dimension = 1979-05-27"))), "sheets/01-Loads.toml: `dimension` is the date-time 1979-05-27, which nothing of the engine holds"),
+        ("workbook.toml", Box::new(|t| Some(replace_line(t, "created = ", "created = 1979-05-27T07:32:00Z"))), "workbook.toml: `metadata.created` is the date-time 1979-05-27T07:32:00Z, which nothing of the engine holds"),
+        // what the engine refuses of the settings, by the part
+        ("workbook.toml", Box::new(|t| Some(t.replacen("tz = \"UTC\"", "tz = \"Mars/Olympus\"", 1))), "workbook.toml: `settings`: "),
+        ("workbook.toml", Box::new(|t| Some(replace_line(t, "locale = ", "locale = \"xx-nowhere\""))), "workbook.toml: `settings`: Invalid locale"),
         ("workspace/references.toml", Box::new(|t| Some(t.replace("ba7816bf8f01cfea", "BA7816BF8F01CFEA"))), "workspace/references.toml reference 1: `sha256` is 64 lowercase hex digits"),
         ("workspace/references.toml", Box::new(|t| Some(t.replace("2026-11-23T10:04:05Z", "2026-11-23 10:04"))), "workspace/references.toml reference 1: `modified` is RFC 3339"),
         ("workspace/decisions.toml", Box::new(|t| Some(t.replace("veredas-abaco-records", "veredas-abaco-state"))), "workspace/decisions.toml: `format` is `veredas-abaco-state`, not `veredas-abaco-records`"),
@@ -427,4 +465,144 @@ fn every_error_the_engine_holds_reads_back_and_a_format_s_rule_refuses_a_key_not
     std::fs::write(&path, abacofile::zip_of(&parts).unwrap()).unwrap();
     let got = abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_default();
     assert!(got.contains("sheets/01-Sheet1.toml: `conditional_formatting.0.cf_rule.stop_if_ture` is a key nothing reads"), "{got}");
+    // and in a struct below one (a colour scale's and an icon set's thresholds)
+    let good = abacofile::parts(&file).unwrap();
+    let mut probed = 0;
+    for (name, bytes) in &good {
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        let header = "[[conditional_formatting.cf_rule.thresholds]]\n";
+        if !text.contains(header) {
+            continue;
+        }
+        probed += 1;
+        let parts: Vec<(String, Vec<u8>)> = good
+            .iter()
+            .map(|(n, b)| if n == name { (n.clone(), text.replacen(header, &format!("{header}colr = \"#FF0000\"\n"), 1).into_bytes()) } else { (n.clone(), b.clone()) })
+            .collect();
+        std::fs::write(&path, abacofile::zip_of(&parts).unwrap()).unwrap();
+        let got = abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(got.contains(&format!("{name}: `conditional_formatting.")) && got.contains(".cf_rule.thresholds.0.colr` is a key nothing reads"), "{name}: {got}");
+    }
+    assert!(probed >= 2, "{probed} sheets with thresholds");
+}
+
+#[test]
+fn a_text_with_a_line_break_keeps_its_cell_on_one_line_and_reads_back() {
+    let mut book = Workbook::new("Lines").unwrap();
+    let at = |a: &str| Addr::parse(a).unwrap();
+    let texts = ["line one\nline two", "a\r\nb", "tab\there", "quote \" and back\\slash", "bell \u{7} del \u{7f} nul-free", "\u{1}\u{1f}"];
+    for (i, t) in texts.iter().enumerate() {
+        book.set_value(0, Addr::new(i as i32 + 1, 1), &Value::Text(t.to_string())).unwrap();
+    }
+    book.set_formula(0, at("B1"), "=CHAR(10)&\"x\"").unwrap();
+    book.set_formula(0, at("B2"), "=\"a\"&CHAR(10)").unwrap();
+    let mut file = AbacoFile::new(book);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lines.abaco");
+    abacofile::write(&mut file, &path).unwrap();
+    let sheet = String::from_utf8(abacofile::parts(&file).unwrap()[2].1.clone()).unwrap();
+    let cells = sheet.split_once("\n[cells]\n").unwrap().1;
+    assert_eq!(cells.lines().count(), texts.len() + 2, "{cells}");
+    assert!(cells.contains(r#"A1 = { s = "line one\nline two" }"#), "{cells}");
+    assert!(cells.contains(r#"B1 = { f = "CHAR(10)&\"x\"", v = "\nx" }"#), "{cells}");
+    assert!(cells.contains(r#"A5 = { s = "bell \u0007 del \u007F nul-free" }"#), "{cells}");
+    let back = abacofile::read(&path).unwrap();
+    assert!(differences(&file.book, &back.book).is_empty(), "{:?}", differences(&file.book, &back.book));
+    for (i, t) in texts.iter().enumerate() {
+        assert_eq!(back.book.value_now(0, Addr::new(i as i32 + 1, 1)).unwrap(), Value::Text(t.to_string()));
+    }
+    assert_eq!(back.book.value_now(0, at("B1")).unwrap(), Value::Text("\nx".into()));
+}
+
+#[test]
+fn names_the_engine_refuses_are_refused_by_the_writer_and_the_reader() {
+    // two sheets and two names, written; then each state the engine refuses, made in the model
+    // (the writer refuses it) and in the file's text (the reader refuses it)
+    let make = || {
+        let mut book = Workbook::new("Names").unwrap();
+        book.rename_sheet("Sheet1", "Loads").unwrap();
+        book.add_sheet("Other").unwrap();
+        book.set_name("Span", "=Loads!$B$1", None).unwrap();
+        book.set_name("Spam", "=Loads!$B$2", None).unwrap();
+        AbacoFile::new(book)
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("names.abaco");
+    let good = abacofile::parts(&make()).unwrap();
+    let cases: Vec<(Box<dyn Fn(&mut ironcalc_base::types::Workbook)>, &str, &str, &str, &str)> = vec![
+        (Box::new(|w| w.worksheets[1].name = "LOADS".into()), "manifest.toml", "name = \"Other\"", "name = \"LOADS\"", "manifest.toml: sheet 2 is named `LOADS` as sheet 1 is"),
+        (Box::new(|w| w.worksheets[1].name = "a/b:[c]".into()), "manifest.toml", "name = \"Other\"", "name = \"a/b:[c]\"", "manifest.toml: sheet 2 `a/b:[c]` is no sheet name"),
+        (Box::new(|w| w.worksheets[0].name = String::new()), "manifest.toml", "name = \"Loads\"", "name = \"\"", "manifest.toml: sheet 1 `` is no sheet name"),
+        (Box::new(|w| w.worksheets[1].sheet_id = w.worksheets[0].sheet_id), "sheets/02-Other.toml", "sheet_id = 2", "sheet_id = 1", "sheets/02-Other.toml: `sheet_id` 1 is sheet 1's too"),
+        (Box::new(|w| w.defined_names[0].name = "B1".into()), "workbook.toml", "name = \"Spam\"", "name = \"B1\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[1].name = "SPAN".into()), "workbook.toml", "name = \"Spam\"", "name = \"SPAN\"", "is stated in its scope already, as `defined_names."),
+    ];
+    for (in_model, part, from, to, want) in &cases {
+        // the writer
+        let mut file = make();
+        in_model(&mut file.book.model_mut().workbook);
+        let got = abacofile::write(&mut file, &path).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(got.contains(want), "writing: {got}\n  wanted: {want}");
+        assert!(!path.exists());
+        // the reader (a sheet's name stands in the manifest and in its part)
+        let parts: Vec<(String, Vec<u8>)> = good
+            .iter()
+            .map(|(n, b)| {
+                let t = String::from_utf8(b.clone()).unwrap();
+                let edited = n == part || (*part == "manifest.toml" && n.starts_with("sheets/") && t.contains(from));
+                (n.clone(), if edited { t.replacen(from, to, 1).into_bytes() } else { b.clone() })
+            })
+            .collect();
+        std::fs::write(&path, abacofile::zip_of(&parts).unwrap()).unwrap();
+        let got = abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(got.contains(want), "reading: {got}\n  wanted: {want}");
+        std::fs::remove_file(&path).unwrap();
+    }
+}
+
+#[test]
+fn a_number_no_file_holds_refuses_the_write_by_its_path() {
+    // a NaN or an infinity a malformed workbook gives the engine (a column's width, a colour's
+    // tint, a row's height): JSON would write it as the engine's none, which the reader refuses
+    use ironcalc_base::types::{Col, Color, Row};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nan.abaco");
+    let cases: Vec<(Box<dyn Fn(&mut ironcalc_base::types::Worksheet)>, &str)> = vec![
+        (
+            Box::new(|w| {
+                w.cols.push(Col { min: 1, max: 1, width: f64::NAN, custom_width: true, hidden: false, style: None, outline_level: 0, collapsed: false })
+            }),
+            "sheets/01-Sheet1.toml: `cols.0.width` is a number that is no finite number",
+        ),
+        (Box::new(|w| w.color = Color::Theme(1, f64::NAN)), "sheets/01-Sheet1.toml: `color.1` is a number that is no finite number"),
+        (
+            Box::new(|w| w.rows.push(Row { r: 1, height: f64::INFINITY, custom_format: false, custom_height: true, s: 0, hidden: false })),
+            "sheets/01-Sheet1.toml: `rows.0.height` is a number that is no finite number",
+        ),
+    ];
+    for (bad, want) in &cases {
+        let mut file = AbacoFile::new(Workbook::new("Nan").unwrap());
+        bad(&mut file.book.model_mut().workbook.worksheets[0]);
+        let got = abacofile::write(&mut file, &path).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(got.contains(want), "got: {got}\n  wanted: {want}");
+        assert!(!path.exists());
+    }
+}
+
+#[test]
+fn a_write_that_fails_leaves_the_destination_and_nothing_beside_it() {
+    let mut file = worked_example();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("b.abaco");
+    abacofile::write(&mut file, &path).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    // a `.bak` that cannot be replaced (a folder)
+    std::fs::create_dir(dir.path().join("b.abaco.bak")).unwrap();
+    std::fs::write(dir.path().join("b.abaco.bak/inside"), "x").unwrap();
+    file.book.set_value(0, Addr::parse("B2").unwrap(), &Value::Number(13.0)).unwrap();
+    assert!(abacofile::write(&mut file, &path).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let mut left: Vec<String> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+    left.sort();
+    assert_eq!(left, ["b.abaco", "b.abaco.bak"]);
 }
