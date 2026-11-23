@@ -469,16 +469,19 @@ fn a_wait_lasts_its_timeout_through_signals_skipped_frames_and_under_a_milliseco
 
         // Under a millisecond, to the microsecond, on a link nothing reaches.
         let idle = RawLink::open_with("a0", Options { ethertype: Some(0x9999), ..Options::default() }).unwrap();
-        let mut waits = Vec::new();
-        for _ in 0..3 {
-            let start = Instant::now();
-            assert_eq!(idle.recv(Duration::from_micros(900)).unwrap(), None);
-            waits.push(start.elapsed());
+        // Each wait at least what it asks; the shortest of twenty under what a wait rounded up to
+        // the millisecond would take (measured: 100 µs takes about 110 µs, rounded about 1030; 1500
+        // µs about 1530, rounded about 2070).
+        for (asked, under) in [(Duration::from_micros(100), Duration::from_micros(900)), (Duration::from_micros(1500), Duration::from_micros(1900))] {
+            let mut waits = Vec::new();
+            for _ in 0..20 {
+                let start = Instant::now();
+                assert_eq!(idle.recv(asked).unwrap(), None);
+                waits.push(start.elapsed());
+            }
+            assert!(waits.iter().all(|w| *w >= asked), "{asked:?}: {waits:?}");
+            assert!(waits.iter().min().unwrap() < &under, "{asked:?}: {waits:?}");
         }
-        // Each at least its 900 µs; the shortest of three well under 5 ms (a wait rounded up to
-        // the clock's tick would take 10).
-        assert!(waits.iter().all(|w| *w >= Duration::from_micros(900)), "{waits:?}");
-        assert!(waits.iter().min().unwrap() < &Duration::from_millis(5), "{waits:?}");
     });
 }
 
@@ -566,7 +569,17 @@ fn a_wait_of_no_end_hands_back_the_next_frame() {
         let (a, b) = pair();
         let f = ether::build(B, A, 0x88B5, &[7; 46]).unwrap();
         a.send(&f).unwrap();
-        assert_eq!(b.recv(Duration::MAX).unwrap().map(|r| r.bytes), Some(f));
+        assert_eq!(b.recv(Duration::MAX).unwrap().map(|r| r.bytes), Some(f.clone()));
+        // Nothing there yet: it waits, for the frame sent 300 ms into the wait.
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(Duration::from_millis(300));
+                a.send(&f).unwrap();
+            });
+            let start = Instant::now();
+            assert_eq!(b.recv(Duration::MAX).unwrap().map(|r| r.bytes), Some(f.clone()));
+            assert!(start.elapsed() >= Duration::from_millis(290), "{:?}", start.elapsed());
+        });
     });
 }
 
@@ -783,5 +796,53 @@ fn a_tag_the_kernel_holds_on_the_sending_end_is_put_back() {
             }
             assert_eq!(got, vec![want.clone(); 3], "{}", link.iface());
         }
+    });
+}
+
+#[test]
+fn the_lookup_names_what_failed_and_an_alternative_name_follows_the_primary_rule() {
+    netns::isolated("the_lookup_names_what_failed_and_an_alternative_name_follows_the_primary_rule", &[("a0", "b0")], || {
+        netns::wait_pairs(&[("a0", "b0")]);
+        let a0 = RawLink::open("a0", false).unwrap().index();
+        // An alternative name that keeps the primary names' rule opens its interface; one the
+        // kernel gives that does not (a space, a colon, past 15 bytes) is refused by that rule.
+        for alt in ["alt7", "a b", "a:b", "a-very-long-alternative-name"] {
+            netns::ip(&["link", "property", "add", "dev", "a0", "altname", alt]);
+        }
+        assert_eq!(RawLink::open("alt7", false).unwrap().index(), a0);
+        for alt in ["a b", "a:b", "a-very-long-alternative-name"] {
+            assert!(matches!(RawLink::open(alt, false), Err(RawError::BadName(n)) if n == alt), "{alt:?}");
+        }
+
+        // With no descriptor left for the lookup's own socket, an interface that is there is not
+        // said to be missing: the lookup's failure is named.
+        let mut lim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        // SAFETY: a valid rlimit to fill and then set.
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut lim) };
+        let low = libc::rlimit { rlim_cur: 64, rlim_max: lim.rlim_max };
+        // SAFETY: as above.
+        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const low) }, 0);
+        let mut held = Vec::new();
+        loop {
+            // SAFETY: duplicating standard input; each kept to be closed below.
+            let fd = unsafe { libc::dup(0) };
+            if fd < 0 {
+                break;
+            }
+            held.push(fd);
+        }
+        let err = RawLink::open("a0", false).unwrap_err();
+        for fd in held {
+            // SAFETY: each fd was opened above and is closed once.
+            unsafe { libc::close(fd) };
+        }
+        // SAFETY: as above.
+        unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const lim) };
+        // (glibc's lookup reports its own socket failing as ENOENT, measured; never ENODEV.)
+        assert!(matches!(&err, RawError::Io { op: "look up the interface", iface, source } if iface == "a0" && source.raw_os_error() != Some(libc::ENODEV)), "{err}");
+        assert!(err.to_string().starts_with("look up the interface on \"a0\": "), "{err}");
+        // With descriptors again, a name no interface has is said to be missing.
+        assert!(matches!(RawLink::open("zz9", false), Err(RawError::NoSuchInterface(n)) if n == "zz9"));
+        assert!(RawLink::open("a0", false).is_ok());
     });
 }

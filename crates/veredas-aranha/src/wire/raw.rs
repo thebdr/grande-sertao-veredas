@@ -163,7 +163,13 @@ fn interface_index(name: &str) -> Result<(CString, i32), RawError> {
     // SAFETY: `c` is a valid NUL-terminated string for the duration of the call.
     let index = unsafe { libc::if_nametoindex(c.as_ptr()) };
     if index == 0 {
-        return Err(RawError::NoSuchInterface(name.to_string()));
+        // No such device is the kernel's ENODEV; anything else (no descriptor left for the lookup's
+        // own socket among it) is the lookup failing, not the interface missing.
+        let source = last_error();
+        if source.raw_os_error() == Some(libc::ENODEV) {
+            return Err(RawError::NoSuchInterface(name.to_string()));
+        }
+        return Err(RawError::Io { op: "look up the interface", iface: name.to_string(), source });
     }
     let index = i32::try_from(index).map_err(|_| RawError::NoSuchInterface(name.to_string()))?;
     Ok((c, index))
