@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(grammar)"
   ],
   "exitCode": 0,
-  "outputSha": "eef084aca475566373ae119b3304e0109b9ec8c5fc1fe4b3d219b6dc94afbd12",
-  "outputTail": "        PASS [   0.029s] (26/38) veredas-comissionador::grammar literals_read_as_the_reference_says\n        PASS [   0.016s] (27/38) veredas-comissionador::grammar the_layout_places_steps_on_the_grid\n        PASS [   0.018s] (28/38) veredas-comissionador::grammar the_worked_example_loads_from_disk_beside_its_function_folder\n        PASS [   0.019s] (29/38) veredas-comissionador::grammar the_worked_example_reads_as_the_reference_says\n        PASS [   0.021s] (30/38) veredas-comissionador::grammar settings_come_first_with_their_defaults\n        PASS [   0.020s] (31/38) veredas-comissionador::grammar the_reference_is_the_text_this_test_holds\n        PASS [   0.022s] (32/38) veredas-comissionador::grammar the_header_is_the_suite_s_stamp_read_before_the_body\n        PASS [   0.024s] (33/38) veredas-comissionador::grammar statements_assign_branch_loop_and_fail\n        PASS [   0.026s] (34/38) veredas-comissionador::grammar the_language_s_own_words_name_nothing_else\n        PASS [   0.207s] (35/38) veredas-comissionador::grammar a_duration_is_read_exactly\n        PASS [   0.204s] (36/38) veredas-comissionador::grammar nesting_past_its_limits_is_named_not_a_crash\n        PASS [   0.262s] (37/38) veredas-comissionador::grammar the_operator_limit_holds_in_patterns_ranges_parentheses_and_strings\n        PASS [   2.103s] (38/38) veredas-comissionador::grammar a_long_call_chain_and_a_long_cycle_are_checked_at_once\n────────────\n     Summary [   2.104s] 38 tests run: 38 passed, 0 skipped",
-  "ranAt": "2026-11-22T21:59:49.408Z",
-  "headCommit": "d7f9c896c9e0a0b086904402441c8acc41ee44cc",
+  "outputSha": "bd9d9696e7a247dce172a364047613b53e12aeb3107c2061dffbd207ebaba303",
+  "outputTail": "        PASS [   0.023s] (31/43) veredas-comissionador::grammar operators_bind_loosest_first_and_names_settle\n        PASS [   0.037s] (32/43) veredas-comissionador::grammar blocks_and_expressions_share_one_depth_on_a_small_stack\n        PASS [   0.020s] (33/43) veredas-comissionador::grammar the_language_s_own_words_name_nothing_else\n        PASS [   0.023s] (34/43) veredas-comissionador::grammar routes_name_a_step_a_retry_or_an_end\n        PASS [   0.028s] (35/43) veredas-comissionador::grammar the_worked_example_loads_from_disk_beside_its_function_folder\n        PASS [   0.026s] (36/43) veredas-comissionador::grammar the_worked_example_reads_as_the_reference_says\n        PASS [   0.029s] (37/43) veredas-comissionador::grammar the_reference_is_the_text_this_test_holds\n        PASS [   0.204s] (38/43) veredas-comissionador::grammar the_operator_limit_holds_in_patterns_ranges_parentheses_and_strings\n        PASS [   0.219s] (39/43) veredas-comissionador::grammar nesting_past_its_limits_is_named_not_a_crash\n        PASS [   0.325s] (40/43) veredas-comissionador::grammar a_duration_is_read_exactly\n        PASS [   0.633s] (41/43) veredas-comissionador::grammar a_long_call_chain_and_a_long_cycle_are_checked_at_once\n        PASS [   0.675s] (42/43) veredas-comissionador::grammar a_way_back_of_five_and_six_is_counted_right\n        PASS [   0.948s] (43/43) veredas-comissionador::grammar a_test_using_a_large_function_file_is_checked_at_once\n────────────\n     Summary [   0.950s] 43 tests run: 43 passed, 0 skipped",
+  "ranAt": "2026-11-23T00:20:37.635Z",
+  "headCommit": "e4361c695031d7dffc89d71100a08f60b318d3df",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/grammar.rs",
       "file": "crates/veredas-comissionador/tests/grammar.rs",
-      "fileSha": "908f80aa0d458901c3c201f7351c014733b40412850b5e85ef45b975255ec78b"
+      "fileSha": "69156a3f83aed0f555c54d7cef971598746ea018523116d05be03f94ede7429b"
     }
   ]
 }

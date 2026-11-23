@@ -1,0 +1,24 @@
+{
+  "clause": "C-204",
+  "command": "cargo nextest run --workspace -E package(veredas-comissionador) & binary(record)",
+  "commandArgv": [
+    "cargo",
+    "nextest",
+    "run",
+    "--workspace",
+    "-E",
+    "package(veredas-comissionador) & binary(record)"
+  ],
+  "exitCode": 0,
+  "outputSha": "d566acd9211989b054d9f27f1d6a769682220739a171e0ce062db52b6408b031",
+  "outputTail": "    Blocking waiting for file lock on package cache\n   Compiling ironcalc_base v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/forks/ironcalc/base)\n   Compiling ironcalc v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/forks/ironcalc/xlsx)\n   Compiling veredas-abaco v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/crates/veredas-abaco)\n   Compiling abaco-oracle v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/tools/abaco-oracle)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.21s\n────────────\n Nextest run ID d831e487-0fd3-483d-8a1e-2d5e56e54707 with nextest profile: default\n    Starting 4 tests across 1 binary (120 binaries skipped)\n        PASS [   0.010s] (1/4) veredas-comissionador::record a_csv_cell_is_quoted_when_it_must_be\n        PASS [   0.011s] (2/4) veredas-comissionador::record the_reference_is_the_text_this_test_holds\n        PASS [   0.015s] (3/4) veredas-comissionador::record the_reference_s_worked_example_reads_as_a_report\n        PASS [   8.194s] (4/4) veredas-comissionador::record a_run_is_kept_whole_read_back_listed_noted_and_signed\n────────────\n     Summary [   8.195s] 4 tests run: 4 passed, 0 skipped",
+  "ranAt": "2026-11-23T00:20:51.626Z",
+  "headCommit": "e4361c695031d7dffc89d71100a08f60b318d3df",
+  "tests": [
+    {
+      "name": "crates/veredas-comissionador/tests/record.rs",
+      "file": "crates/veredas-comissionador/tests/record.rs",
+      "fileSha": "395e1f014ef55d81bc63c9e57d528b5dd221734645df5988aeb52e1a5a5b52c5"
+    }
+  ]
+}
