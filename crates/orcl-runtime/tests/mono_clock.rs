@@ -1,5 +1,6 @@
-//! A target's clock: monotonic, never early. Only what holds whatever the machine's load is asserted: a wait
-//! returns at its deadline or after it, never before, and a task's scans start at their deadlines or after them.
+//! A target's clock: monotonic, never early, keeping the wall's pace. Only what holds whatever the machine's load is
+//! asserted: a wait returns at its deadline or after it, never before; a task's scans start at their deadlines or
+//! after them; and the clock, read after the wall, is never behind the wall by more than the wall's head start.
 use orcl_runtime::{Clock, Io, MonoClock, Task, TaskConfig};
 use orcl_std::{Program, Scan};
 use std::time::Duration;
@@ -22,6 +23,22 @@ fn a_wait_never_returns_before_its_deadline_and_the_clock_never_goes_back() {
     let past = clock.now();
     clock.sleep_until(Duration::ZERO);
     assert!(clock.now() >= past, "a deadline in the past returns at once");
+}
+
+#[test]
+fn the_clock_keeps_the_wall_s_pace_never_falling_behind_it() {
+    // the wall starts first; its head start is measured once the clock has started, so it is at least the true one.
+    // Read the wall, then the clock: whatever happens between the two readings only puts the clock further ahead.
+    let wall = std::time::Instant::now();
+    let mut clock = MonoClock::new();
+    let head_start = wall.elapsed();
+    for step in [0_u64, 50, 1_000, 5_000, 20_000] {
+        let deadline = clock.now() + Duration::from_micros(step);
+        clock.sleep_until(deadline);
+        let on_the_wall = wall.elapsed();
+        let now = clock.now();
+        assert!(now + head_start >= on_the_wall, "the clock reads {now:?} where the wall says {on_the_wall:?}");
+    }
 }
 
 struct Echo;

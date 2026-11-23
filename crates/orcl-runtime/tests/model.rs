@@ -7,8 +7,11 @@
 //! never written but the program's safe outputs, which every later scan writes without scanning the program; the
 //! next scan is the first whose deadline is not before the end, the others skipped and counted. The sequences are
 //! drawn so that starts, ends and writes land on deadlines, a nanosecond either side of them, and at one and two
-//! periods, with periods from a microsecond to two seconds; the program's safe outputs depend on its own state.
-//! After every step the model and the engine must agree on everything the clause states.
+//! periods, with periods from a microsecond to two seconds; the program's safe outputs depend on its own state. One
+//! step in twenty the host is away for up to a million periods. Three mixes: anything (the watchdog's fault early in
+//! most sequences), every scan held to twice the period (the task runs the whole way), and held so until a step drawn
+//! late in the run, after a drawn streak of time errors, where the task faults. After every step the model and the
+//! engine must agree on everything the clause states.
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -195,9 +198,21 @@ fn length(draw: &mut Draw, period: u128, from: u128, rarely_long: bool) -> u128 
     }
 }
 
-/// One sequence of `steps` scans; with `never_fault`, every scan's length is held to twice the period, so the task
-/// runs the whole sequence with its time errors, skips, late starts and output image.
-fn run_one(seed: u64, steps: usize, never_fault: bool) {
+/// How a sequence's scans are drawn.
+#[derive(Clone, Copy)]
+enum Mix {
+    /// Anything: most sequences fault early.
+    Free,
+    /// Every scan held to twice the period, so the task runs the whole sequence with its time errors, skips, late
+    /// starts and output image.
+    NeverFaults,
+    /// Held to twice the period up to a step drawn between the 60th and the 1960th, the scans before it a drawn streak
+    /// of up to 40 time errors, then a scan past twice the period, so the watchdog meets a task far into its run.
+    FaultsLate,
+}
+
+/// What a sequence draws once: its period, and for `FaultsLate` the step of its fault and the streak before it.
+fn draw_sequence(seed: u64, mix: Mix) -> (Draw, u128, Option<(usize, usize)>) {
     let mut draw = Draw(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
     let periods: [u128; 7] = [1_000, 333_333, 500_000, 2_500_000, 10_000_000, 1_000_000_000, 1_500_000_000];
     let period = if draw.below(3) == 0 {
@@ -205,6 +220,50 @@ fn run_one(seed: u64, steps: usize, never_fault: bool) {
     } else {
         periods[usize::try_from(draw.below(7)).unwrap()]
     };
+    let late_fault = match mix {
+        Mix::FaultsLate => {
+            Some((60 + usize::try_from(draw.below(1_900)).unwrap(), usize::try_from(draw.below(41)).unwrap()))
+        }
+        Mix::Free | Mix::NeverFaults => None,
+    };
+    (draw, period, late_fault)
+}
+
+/// One step's draws: the host's delay before it, the read's and the program's lengths, and the write's.
+fn draw_step(draw: &mut Draw, model: &Model, mix: Mix, late_fault: Option<(usize, usize)>, step: usize) -> [u128; 4] {
+    let period = model.period;
+    // one step in twenty the host is away for up to a million periods, coming back on a deadline, a nanosecond past
+    // one, or anywhere in a period
+    let host = if draw.below(20) == 0 {
+        let away = model.now.div_ceil(period).max(1) * period + draw.below(1_000_000) * period - model.now;
+        match draw.below(3) {
+            0 => away,
+            1 => away + 1,
+            _ => away + draw.below(period),
+        }
+    } else if draw.below(3) == 0 {
+        length(draw, period, model.now, true)
+    } else {
+        0
+    };
+    let start = (model.now + host).max(model.cycle * period);
+    let total = length(draw, period, start, true);
+    let total = match (mix, late_fault) {
+        (Mix::Free, _) => total,
+        (Mix::NeverFaults, _) | (Mix::FaultsLate, None) => total.min(2 * period),
+        (Mix::FaultsLate, Some((at, _))) if step == at => 2 * period + 1 + draw.below(period),
+        (Mix::FaultsLate, Some((at, streak))) if step < at && step + streak >= at => period + 1 + draw.below(period),
+        (Mix::FaultsLate, Some((at, _))) if step < at => total.min(2 * period),
+        (Mix::FaultsLate, Some(_)) => total,
+    };
+    let read = draw.below(total + 1);
+    let write = if draw.below(4) == 0 { length(draw, period, start + total, true) } else { 0 };
+    [host, read, total - read, write]
+}
+
+/// One sequence of `steps` scans, drawn as `mix` says.
+fn run_one(seed: u64, steps: usize, mix: Mix) {
+    let (mut draw, period, late_fault) = draw_sequence(seed, mix);
     let mut clock = VirtualClock::new();
     let costs = Rc::new(RefCell::new(Costs::default()));
     let program = Program1 { clock: clock.clone(), costs: costs.clone(), scans: 0, last_input: 0, last_scan: None };
@@ -213,14 +272,7 @@ fn run_one(seed: u64, steps: usize, never_fault: bool) {
     let mut model = Model { period, ..Model::default() };
 
     for step in 0..steps {
-        // the host's delay before this step, drawn from the model's own time
-        let host = if draw.below(3) == 0 { length(&mut draw, period, model.now, true) } else { 0 };
-        let start = (model.now + host).max(model.cycle * period);
-        let total = length(&mut draw, period, start, true);
-        let total = if never_fault { total.min(2 * period) } else { total };
-        let read = draw.below(total + 1);
-        let scan = total - read;
-        let write = if draw.below(4) == 0 { length(&mut draw, period, start + total, true) } else { 0 };
+        let [host, read, scan, write] = draw_step(&mut draw, &model, mix, late_fault, step);
         {
             let mut c = costs.borrow_mut();
             c.read.push(read);
@@ -278,7 +330,7 @@ fn run_one(seed: u64, steps: usize, never_fault: bool) {
 #[test]
 fn the_engine_agrees_with_the_clause_s_model_over_four_thousand_random_sequences() {
     for seed in 0..4_000 {
-        run_one(seed, 50, false);
+        run_one(seed, 50, Mix::Free);
     }
 }
 
@@ -286,7 +338,7 @@ fn the_engine_agrees_with_the_clause_s_model_over_four_thousand_random_sequences
 fn the_engine_agrees_with_the_model_over_forty_runs_of_two_thousand_scans() {
     // long enough that a statistic kept over a window, or reset every so many scans, shows
     for seed in 10_000..10_040 {
-        run_one(seed, 2_000, false);
+        run_one(seed, 2_000, Mix::Free);
     }
 }
 
@@ -294,7 +346,16 @@ fn the_engine_agrees_with_the_model_over_forty_runs_of_two_thousand_scans() {
 fn a_task_that_never_faults_agrees_with_the_model_over_forty_runs_of_two_thousand_scans() {
     // the faulting runs fault early; these run the whole way, with hundreds of time errors, late starts and skips each
     for seed in 20_000..20_040 {
-        run_one(seed, 2_000, true);
+        run_one(seed, 2_000, Mix::NeverFaults);
+    }
+}
+
+#[test]
+fn a_task_that_faults_late_in_its_run_agrees_with_the_model_over_a_hundred_runs_of_two_thousand_scans() {
+    // the watchdog met far into a run: after hundreds of scans, time errors, skips and long absences, and after a
+    // streak of time errors in a row
+    for seed in 30_000..30_100 {
+        run_one(seed, 2_000, Mix::FaultsLate);
     }
 }
 
@@ -328,65 +389,82 @@ fn a_long_absence_counts_every_deadline_it_skipped() {
     let mut task = Task::new(TaskConfig { name: "absent", period }, Idle).unwrap();
     task.step(&mut Quiet, &mut clock);
     clock.advance(period * 300 + Duration::from_nanos(1));
-    task.step(&mut Quiet, &mut clock);
+    // the deadline found passed runs late, as it is, its lateness counted; its length alone judged
+    let report = task.step(&mut Quiet, &mut clock);
+    let late = (report.scan.cycle, report.scan.now, report.time_error, report.state);
+    assert_eq!(late, (1, period * 300 + Duration::from_nanos(1), false, RunState::Running), "the late scan");
     let s = *task.stats();
+    assert_eq!(s.max_lateness, period * 299 + Duration::from_nanos(1), "its lateness");
     assert_eq!((s.skipped, s.cycles + s.skipped, task.next_cycle()), (299, 301, 301));
     let k: u64 = 1 << 33;
     clock.advance(Duration::from_nanos(1_000_000 * k));
-    task.step(&mut Quiet, &mut clock);
+    let report = task.step(&mut Quiet, &mut clock);
+    let late = (report.scan.cycle, report.scan.now, report.time_error, report.state);
+    let back = period * 300 + Duration::from_nanos(1 + 1_000_000 * k);
+    assert_eq!(late, (301, back, false, RunState::Running), "the scan after 2^33 periods away");
     let s = *task.stats();
+    assert_eq!(s.max_lateness, back - period * 301, "its lateness");
     assert_eq!(s.cycles + s.skipped, task.next_cycle(), "every cycle run or counted");
     assert_eq!(s.skipped, 299 + k - 1);
 }
 
 #[test]
 fn the_draws_reach_every_case_the_clause_names() {
-    // the sequences are only as good as what they reach: count, over the same seeds, the cases that matter
+    // the sequences are only as good as what they reach: count, over the same seeds and draws, the cases that matter
     let (mut late_below_a_ms, mut faulted_late, mut ends_on_a_deadline, mut faulting_ends_on_a_deadline) = (0, 0, 0, 0);
     let (mut skips_after_a_fault, mut long_periods, mut slow_writes_across_a_deadline) = (0, 0, 0);
-    for seed in 0..4_000_u64 {
-        let mut draw = Draw(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
-        let periods: [u128; 7] = [1_000, 333_333, 500_000, 2_500_000, 10_000_000, 1_000_000_000, 1_500_000_000];
-        let period = if draw.below(3) == 0 {
-            1_000 + draw.below(2_000_000_000)
-        } else {
-            periods[usize::try_from(draw.below(7)).unwrap()]
-        };
-        if period >= 1_000_000_000 {
-            long_periods += 1;
-        }
-        let mut model = Model { period, ..Model::default() };
-        for _ in 0..50 {
-            let host = if draw.below(3) == 0 { length(&mut draw, period, model.now, true) } else { 0 };
-            let start = (model.now + host).max(model.cycle * period);
-            let total = length(&mut draw, period, start, true);
-            let read = draw.below(total + 1);
-            let scan = total - read;
-            let write = if draw.below(4) == 0 { length(&mut draw, period, start + total, true) } else { 0 };
-            let was_faulted = model.faulted.is_some();
-            let skipped = model.skipped;
-            let seen = model.step(host, read, if was_faulted { 0 } else { scan });
-            let late = seen.start - seen.cycle * period;
-            if late > 0 && late < 1_000_000 && !late.is_multiple_of(1_000) {
-                late_below_a_ms += 1;
+    let (mut faults_past_scan_1000, mut faults_after_20_time_errors, mut faults_after_10_in_a_row) = (0, 0, 0);
+    let (mut faults_after_100_skips, mut late_by_1000_periods, mut late_by_1000_periods_faulted) = (0, 0, 0);
+    let runs = [(Mix::Free, 0..4_000, 50), (Mix::Free, 10_000..10_040, 2_000), (Mix::NeverFaults, 20_000..20_040, 2_000)];
+    let runs = runs.into_iter().chain([(Mix::FaultsLate, 30_000..30_100, 2_000)]);
+    for (mix, seeds, steps) in runs {
+        for seed in seeds {
+            let (mut draw, period, late_fault) = draw_sequence(seed, mix);
+            if period >= 1_000_000_000 && steps == 50 {
+                long_periods += 1;
             }
-            if was_faulted && late > 0 {
-                faulted_late += 1;
-            }
-            if (seen.start + seen.exec).is_multiple_of(period) && seen.exec > 0 {
-                ends_on_a_deadline += 1;
-                if !was_faulted && model.faulted.is_some() {
-                    faulting_ends_on_a_deadline += 1;
+            let mut model = Model { period, ..Model::default() };
+            let mut in_a_row = 0;
+            for step in 0..steps {
+                let [host, read, scan, write] = draw_step(&mut draw, &model, mix, late_fault, step);
+                let was_faulted = model.faulted.is_some();
+                let skipped = model.skipped;
+                let seen = model.step(host, read, if was_faulted { 0 } else { scan });
+                in_a_row = if seen.time_error { in_a_row + 1 } else { 0 };
+                let late = seen.start - seen.cycle * period;
+                if late > 0 && late < 1_000_000 && !late.is_multiple_of(1_000) {
+                    late_below_a_ms += 1;
                 }
+                if was_faulted && late > 0 {
+                    faulted_late += 1;
+                }
+                if late >= 1_000 * period {
+                    late_by_1000_periods += 1;
+                    if was_faulted {
+                        late_by_1000_periods_faulted += 1;
+                    }
+                }
+                if (seen.start + seen.exec).is_multiple_of(period) && seen.exec > 0 {
+                    ends_on_a_deadline += 1;
+                    if !was_faulted && model.faulted.is_some() {
+                        faulting_ends_on_a_deadline += 1;
+                    }
+                }
+                if !was_faulted && model.faulted.is_some() {
+                    faults_past_scan_1000 += usize::from(step >= 1_000);
+                    faults_after_20_time_errors += usize::from(model.overruns > 20);
+                    faults_after_10_in_a_row += usize::from(in_a_row > 10);
+                    faults_after_100_skips += usize::from(model.skipped >= 100);
+                }
+                if was_faulted && model.skipped > skipped {
+                    skips_after_a_fault += 1;
+                }
+                let end = seen.start + seen.exec;
+                if write > 0 && (end + write) / period > end / period {
+                    slow_writes_across_a_deadline += 1;
+                }
+                model.write(write);
             }
-            if was_faulted && model.skipped > skipped {
-                skips_after_a_fault += 1;
-            }
-            let end = seen.start + seen.exec;
-            if write > 0 && (end + write) / period > end / period {
-                slow_writes_across_a_deadline += 1;
-            }
-            model.write(write);
         }
     }
     for (case, count) in [
@@ -397,6 +475,12 @@ fn the_draws_reach_every_case_the_clause_names() {
         ("a faulted scan skipping deadlines", skips_after_a_fault),
         ("a period of a second or more", long_periods),
         ("a slow write across a deadline", slow_writes_across_a_deadline),
+        ("a fault past the 1000th scan", faults_past_scan_1000),
+        ("a fault after more than 20 time errors", faults_after_20_time_errors),
+        ("a fault after more than 10 time errors in a row", faults_after_10_in_a_row),
+        ("a fault after 100 skipped deadlines", faults_after_100_skips),
+        ("a scan late by 1000 periods or more", late_by_1000_periods),
+        ("a faulted scan late by 1000 periods or more", late_by_1000_periods_faulted),
     ] {
         assert!(count >= 20, "{case}: reached {count} times only");
     }
