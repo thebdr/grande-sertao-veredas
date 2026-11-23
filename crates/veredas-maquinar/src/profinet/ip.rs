@@ -15,6 +15,13 @@ pub const ETHERTYPE_IPV4: u16 = 0x0800;
 pub const INVALID_INDEX: PnioStatus = PnioStatus { code: 0xDE, decode: 0x80, code1: 0xB0, code2: 0x00 };
 /// A slot or subslot the device does not have.
 pub const INVALID_SLOT: PnioStatus = PnioStatus { code: 0xDE, decode: 0x80, code1: 0xB2, code2: 0x00 };
+/// An API the device does not have ("invalid area/API").
+pub const INVALID_API: PnioStatus = PnioStatus { code: 0xDE, decode: 0x80, code1: 0xB4, code2: 0x00 };
+/// A record the device holds but could not write out (an application's read error).
+pub const READ_ERROR: PnioStatus = PnioStatus { code: 0xDE, decode: 0x80, code1: 0xA0, code2: 0x00 };
+
+/// The read response header's block, before its record: what ArgsMaximum must leave room for.
+const READ_HEADER: u32 = 64;
 
 fn mac_at(f: &[u8], at: usize) -> Mac {
     let mut m = [0u8; 6];
@@ -153,8 +160,11 @@ pub fn answer(datagram: &[u8], records: Records, server_boot: u32) -> Option<(Re
     let args = rpc::RequestArgs::decode(&request.body, request.byte_order()).ok()?;
     let (blocks, _) = rpc::read_blocks(&args.data);
     let read = ReadRequest::from_block(blocks.first()?).ok()?;
+    // The record cut to the length asked, and to what the request's ArgsMaximum leaves after the
+    // answer's header.
+    let room = read.length.min(args.args_maximum.saturating_sub(READ_HEADER)) as usize;
     let (status, record) = match records(&read) {
-        Ok(r) => (PnioStatus::OK, r.into_iter().take(read.length as usize).collect::<Vec<u8>>()),
+        Ok(r) => (PnioStatus::OK, r.into_iter().take(room).collect::<Vec<u8>>()),
         Err(s) => (s, Vec::new()),
     };
     let pdu = rpc::read_answer(&request, &read, status, &record, server_boot).ok()?;

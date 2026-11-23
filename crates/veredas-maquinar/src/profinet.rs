@@ -289,8 +289,8 @@ impl ProfinetHandle {
         state.identity.ip_status = Some(IpStatus { set, conflict });
     }
 
-    /// Answer nothing (true), as a device whose DCP is off; LLDP goes on. An Identify answer
-    /// waiting out its delay is dropped.
+    /// Its DCP answers nothing (true), as a device whose DCP is off; LLDP, ARP and the record read
+    /// go on. An Identify answer waiting out its delay is dropped.
     pub fn set_muted(&self, muted: bool) {
         self.shared.muted.store(muted, Ordering::SeqCst);
     }
@@ -453,7 +453,15 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
         match frame.ethertype {
             ether::ETHERTYPE_LLDP => {
                 if let Ok(pdu) = lldp::decode(frame.payload) {
-                    shared.lock().neighbour = (pdu.ttl > 0).then(|| neighbour_of(&pdu, frame.src));
+                    let heard = neighbour_of(&pdu, frame.src);
+                    let mut state = shared.lock();
+                    if pdu.ttl > 0 {
+                        state.neighbour = Some(heard);
+                    } else if state.neighbour.as_ref().is_some_and(|n| (&n.chassis_id, &n.port_id) == (&heard.chassis_id, &heard.port_id)) {
+                        // Its own shutdown frame (802.1AB names a neighbour by chassis and port):
+                        // another station's leaves it.
+                        state.neighbour = None;
+                    }
                 }
                 continue;
             }
@@ -563,14 +571,17 @@ pub const SUBSLOT_PORT: u16 = 0x8001;
 #[cfg(target_os = "linux")]
 fn record(state: &State, cfg: &ProfinetConfig, mac: Mac, read: &ReadRequest) -> Result<Vec<u8>, PnioStatus> {
     use veredas_aranha::profinet::record::{INDEX_IM0, INDEX_PORT_DATA_REAL};
-    let at = (read.api, read.slot, read.subslot);
+    let at = (read.slot, read.subslot);
     let block = match read.index {
-        INDEX_IM0 if at == (0, 0, SUBSLOT_DAP) => im0(state, cfg, mac).block(),
-        INDEX_PORT_DATA_REAL if at == (0, 0, SUBSLOT_PORT) => port_data(state, cfg).block(),
+        INDEX_IM0 | INDEX_PORT_DATA_REAL if read.api != 0 => return Err(ip::INVALID_API),
+        INDEX_IM0 if at == (0, SUBSLOT_DAP) => im0(state, cfg, mac).block(),
+        INDEX_PORT_DATA_REAL if at == (0, SUBSLOT_PORT) => port_data(state, cfg).block(),
         INDEX_IM0 | INDEX_PORT_DATA_REAL => return Err(ip::INVALID_SLOT),
         _ => return Err(ip::INVALID_INDEX),
     };
-    block.ok().and_then(|b| b.encode().ok()).ok_or(ip::INVALID_INDEX)
+    // The texts are made to fit (`text_of`): a block that still will not encode is a read error,
+    // never an index the device lacks.
+    block.ok().and_then(|b| b.encode().ok()).ok_or(ip::READ_ERROR)
 }
 
 /// I&M0 as the file states it: the vendor id, the order id and serial number padded with spaces
@@ -611,19 +622,69 @@ fn port_data(state: &State, cfg: &ProfinetConfig) -> PortDataReal {
     }
 }
 
-/// A neighbour as its LLDP frame names it: the port id and the chassis id as text (a MAC
-/// chassis as its address), its source MAC, no measured delay.
+/// The most a port data's id holds, in visible characters.
+#[cfg(target_os = "linux")]
+const MAX_ID: usize = 255;
+
+/// A text as the port data carries it: visible ASCII kept, every other byte written `\xHH`, cut
+/// to 255 characters.
+#[cfg(target_os = "linux")]
+fn text_of(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if (0x20..=0x7E).contains(&b) && b != b'\\' {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("\\x{b:02x}"));
+        }
+    }
+    out.chars().take(MAX_ID).collect()
+}
+
+/// Bytes as hex, cut to 255 characters.
+#[cfg(target_os = "linux")]
+fn hex_of(data: &[u8]) -> String {
+    data.iter().map(|b| format!("{b:02x}")).collect::<String>().chars().take(MAX_ID).collect()
+}
+
+/// A network address as LLDP carries one (its family byte, then the address): IPv4 and IPv6 as
+/// their text, any other as hex.
+#[cfg(target_os = "linux")]
+fn address_of(data: &[u8]) -> String {
+    match data {
+        [1, a, b, c, d] => Ipv4Addr::new(*a, *b, *c, *d).to_string(),
+        [2, rest @ ..] if rest.len() == 16 => std::net::Ipv6Addr::from(<[u8; 16]>::try_from(rest).unwrap_or([0; 16])).to_string(),
+        _ => hex_of(data),
+    }
+}
+
+/// Bytes of a subtype no text names: as text when they are visible ASCII, else as hex.
+#[cfg(target_os = "linux")]
+fn other_of(data: &[u8]) -> String {
+    match std::str::from_utf8(data) {
+        Ok(t) if !t.is_empty() && t.bytes().all(|b| (0x20..=0x7E).contains(&b)) => text_of(t),
+        _ => hex_of(data),
+    }
+}
+
+/// A neighbour as its LLDP frame names it: the port id and the chassis id as text by their
+/// subtype (a MAC as its address, a network address as its text, a name as itself), each at most
+/// 255 visible characters; its source MAC; no measured delay.
 #[cfg(target_os = "linux")]
 fn neighbour_of(pdu: &LldpPdu, src: Mac) -> Peer {
     let chassis = match &pdu.chassis {
-        ChassisId::Local { id } => id.clone(),
+        ChassisId::Local { id } => text_of(id),
         ChassisId::Mac { mac } => mac.to_string(),
-        ChassisId::IfName { name } => name.clone(),
-        other => format!("{other:?}"),
+        ChassisId::IfName { name } => text_of(name),
+        ChassisId::Network { data } => address_of(data),
+        ChassisId::Other { data, .. } => other_of(data),
     };
     let port = match &pdu.port {
-        PortId::Local { id } => id.clone(),
-        other => format!("{other:?}"),
+        PortId::Local { id } => text_of(id),
+        PortId::IfName { name } | PortId::IfAlias { name } => text_of(name),
+        PortId::Mac { mac } => mac.to_string(),
+        PortId::Other { subtype: 4, data } => address_of(data),
+        PortId::Other { data, .. } => other_of(data),
     };
     Peer { port_id: port, chassis_id: chassis, line_delay: 0, mac: src }
 }

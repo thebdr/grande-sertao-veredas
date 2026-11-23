@@ -108,7 +108,7 @@ fn the_kernel_finds_the_device_by_arp_and_reads_its_i_m0() {
         let neigh = String::from_utf8_lossy(&neigh.stdout).to_string();
         assert!(neigh.contains(&dev.mac.to_string()), "{neigh} against {}", dev.mac);
         let st = dev.status();
-        assert!(st.arp_answered >= 1 && (st.reads, st.reads_refused) == (1, 0), "{st:?}");
+        assert!(st.arp_answered == 1 && (st.reads, st.reads_refused) == (1, 0), "{st:?}");
         // Without a serial number in the file, the MAC's twelve hex digits.
         drop(dev);
         let dev = start(&config(&DEVICE.replace("serial_number = \"SN-0001\"\n", ""))).unwrap();
@@ -240,9 +240,9 @@ fn a_frame_it_must_not_take_is_not_answered() {
     ask.extend_from_slice(&[0; 6]);
     ask.extend_from_slice(&me.octets());
     let reply = ip::arp_reply(&ask, mac, me).unwrap();
-    assert_eq!(&reply[..12], [peer.0.0, mac.0].concat().as_slice());
-    assert_eq!(&reply[20..42], [&[0u8, 2][..], &mac.0, &me.octets(), &peer.0.0, &peer.1.octets()].concat().as_slice());
-    assert_eq!(reply.len(), 60);
+    let mut expected = [&peer.0.0[..], &mac.0, &[0x08, 0x06, 0, 1, 0x08, 0, 6, 4, 0, 2], &mac.0, &me.octets(), &peer.0.0, &peer.1.octets()].concat();
+    expected.resize(60, 0);
+    assert_eq!(reply, expected, "the whole reply, byte for byte");
     assert_eq!(ip::arp_reply(&ask, mac, Ipv4Addr::new(192, 168, 0, 11)), None);
     let mut answer_op = ask.clone();
     answer_op[21] = 2;
@@ -320,4 +320,340 @@ fn an_order_id_or_a_serial_number_i_m0_cannot_carry_is_refused_before_anything_o
     assert_eq!(refused("serial_number", &"1".repeat(17)), Some(format!("profinet.serial_number `{}`: up to 16 visible characters", "1".repeat(17))));
     assert_eq!(refused("serial_number", "a\tb"), Some("profinet.serial_number `a\tb`: up to 16 visible characters".into()));
     assert_eq!((refused("order_id", &"o".repeat(20)), refused("serial_number", &"1".repeat(16)), refused("serial_number", "")), (None, None, None));
+}
+
+/// C-116's first refute round: the critic's probes, kept as pins (ids of every subtype as text,
+/// past ASCII and long; another station's shutdown; the cut; another slot and API; another
+/// operation, interface and packet type; the mute; the activity; ArgsMaximum; the last fragment,
+/// the unspecified address and a computed-zero checksum).
+mod round_1 {
+    use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+    use std::time::{Duration, Instant};
+
+    use veredas_aranha::netns;
+    use veredas_aranha::profinet::ether;
+    use veredas_aranha::profinet::lldp::{self, ChassisId, LldpPdu, PortId};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::profinet::record::{INDEX_IM0, INDEX_PORT_DATA_REAL, PortDataReal};
+    use veredas_aranha::profinet::rpc::{self, ByteOrder, PNIO_PORT, PnioStatus, ReadRequest, ReadResponse, ResponseArgs, RpcPdu, Uuid};
+    use veredas_aranha::wire::raw::{Options, RawLink};
+    use veredas_maquinar::profinet::ip;
+    use veredas_maquinar::profinet::*;
+
+    macro_rules! note {
+        ($($t:tt)*) => {{
+            eprintln!($($t)*);
+        }};
+    }
+
+    const DEVICE: &str = "interface = \"b0\"\nstation = \"io-device-1\"\nvendor_id = 7\ndevice_id = 9\nip = { address = \"192.168.0.10\", mask = \"255.255.255.0\" }\nport = \"port-002\"\norder_id = \"6ES7 bench\"\nserial_number = \"SN-0001\"\nhello = false\nlldp_interval_ms = 0\n";
+
+    fn config(text: &str) -> ProfinetConfig {
+        toml::from_str(text).unwrap()
+    }
+
+    fn host_address() {
+        for args in [&["ip", "addr", "add", "192.168.0.1/24", "dev", "a0"][..], &["ethtool", "-K", "a0", "tx", "off"][..]] {
+            let out = std::process::Command::new(args[0]).args(&args[1..]).output().unwrap();
+            assert!(out.status.success());
+        }
+    }
+
+    fn socket() -> UdpSocket {
+        let s = UdpSocket::bind("192.168.0.1:0").unwrap();
+        s.set_read_timeout(Some(Duration::from_millis(700))).unwrap();
+        s
+    }
+
+    fn send_pdu(s: &UdpSocket, pdu: &RpcPdu) -> Option<(RpcPdu, ResponseArgs)> {
+        s.send_to(&pdu.encode().unwrap(), ("192.168.0.10", PNIO_PORT)).unwrap();
+        let mut buf = [0u8; 4096];
+        let (n, from) = s.recv_from(&mut buf).ok()?;
+        assert_eq!(from, SocketAddr::from((Ipv4Addr::new(192, 168, 0, 10), PNIO_PORT)));
+        let answer = RpcPdu::decode(&buf[..n]).unwrap();
+        let args = ResponseArgs::decode(&answer.body, answer.byte_order()).unwrap();
+        Some((answer, args))
+    }
+
+    fn read_req(s: &UdpSocket, req: &ReadRequest, args_max: u32, activity: Uuid) -> Option<(RpcPdu, ResponseArgs)> {
+        let pdu = rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), activity, u32::from(req.seq), req, args_max).unwrap();
+        send_pdu(s, &pdu)
+    }
+
+    fn wait(within: Duration, mut done: impl FnMut() -> bool) -> bool {
+        let begun = Instant::now();
+        while begun.elapsed() < within {
+            if done() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        done()
+    }
+
+    fn port_data(s: &UdpSocket, seq: u16) -> (PnioStatus, Vec<u8>) {
+        let (_, args) = read_req(s, &ReadRequest::implicit(seq, 0, SUBSLOT_PORT, INDEX_PORT_DATA_REAL, 4096), 4160, Uuid([seq as u8; 16])).expect("an answer");
+        if args.data.is_empty() {
+            return (args.status, vec![]);
+        }
+        let (_, record) = ReadResponse::split(&args.data).unwrap();
+        (args.status, record)
+    }
+
+    /// P1: a switch whose LLDP port id is an interface name (subtype 5, what most managed switches send).
+    #[test]
+    fn port_and_chassis_ids_of_every_subtype_read_as_text() {
+        netns::isolated("round_1::port_and_chassis_ids_of_every_subtype_read_as_text", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = RawLink::open_with("a0", Options { ethertype: Some(ether::ETHERTYPE_LLDP), promiscuous: false, outgoing: false }).unwrap();
+            let s = socket();
+            let sw = raw.mac();
+            raw.send(&lldp::frame(sw, &LldpPdu::new(ChassisId::Mac { mac: sw }, PortId::IfName { name: "Gi1/0/3".into() }, 120)).unwrap()).unwrap();
+            assert!(wait(Duration::from_secs(2), || dev.neighbour().is_some()));
+            let (st, rec) = port_data(&s, 1);
+            let pd = PortDataReal::from_block(&rpc::read_blocks(&rec).0[0]).unwrap();
+            note!("PROBE p1: status {:?} peer port id {:?}", st.to_bytes(), pd.peers[0].port_id);
+            assert_eq!(pd.peers[0].port_id, "Gi1/0/3", "the port id as text");
+            // A port named by its MAC, then a chassis by its interface name.
+            raw.send(&lldp::frame(sw, &LldpPdu::new(ChassisId::IfName { name: "sw-core".into() }, PortId::Mac { mac: sw }, 120)).unwrap()).unwrap();
+            assert!(wait(Duration::from_secs(2), || dev.neighbour().is_some_and(|p| p.chassis_id == "sw-core")));
+            let (_, rec) = port_data(&s, 2);
+            let pd = PortDataReal::from_block(&rpc::read_blocks(&rec).0[0]).unwrap();
+            assert_eq!((pd.peers[0].chassis_id.as_str(), pd.peers[0].port_id.clone()), ("sw-core", sw.to_string()));
+        });
+    }
+
+    /// P2: a neighbour whose local chassis id is UTF-8 text outside ASCII (LLDP allows it).
+    #[test]
+    fn a_chassis_past_ascii_is_written_and_the_port_data_answered() {
+        netns::isolated("round_1::a_chassis_past_ascii_is_written_and_the_port_data_answered", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = RawLink::open_with("a0", Options { ethertype: Some(ether::ETHERTYPE_LLDP), promiscuous: false, outgoing: false }).unwrap();
+            let s = socket();
+            let sw = raw.mac();
+            raw.send(&lldp::frame(sw, &LldpPdu::new(ChassisId::Local { id: "schalter-ü".into() }, PortId::Local { id: "port-003".into() }, 120)).unwrap()).unwrap();
+            assert!(wait(Duration::from_secs(2), || dev.neighbour().is_some()));
+            let (st, rec) = port_data(&s, 1);
+            let status = dev.status();
+            note!("PROBE p2: status {:02X?} record {} bytes; reads {} refused {}", st.to_bytes(), rec.len(), status.reads, status.reads_refused);
+            assert_eq!(st, PnioStatus::OK, "the port's data is a record the device holds");
+            let pd = PortDataReal::from_block(&rpc::read_blocks(&rec).0[0]).unwrap();
+            assert_eq!(pd.peers[0].chassis_id, "schalter-\\xc3\\xbc", "the bytes past ASCII written as hex");
+            assert_eq!((status.reads, status.reads_refused), (1, 0));
+        });
+    }
+
+    /// P3: neighbour A heard; then another station's (B's) shutdown frame.
+    #[test]
+    fn another_station_s_shutdown_leaves_the_neighbour() {
+        netns::isolated("round_1::another_station_s_shutdown_leaves_the_neighbour", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = RawLink::open_with("a0", Options { ethertype: Some(ether::ETHERTYPE_LLDP), promiscuous: false, outgoing: false }).unwrap();
+            let a = raw.mac();
+            raw.send(&lldp::frame(a, &LldpPdu::new(ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-003".into() }, 120)).unwrap()).unwrap();
+            assert!(wait(Duration::from_secs(2), || dev.neighbour().is_some()));
+            let b = Mac([0x02, 0xBB, 0, 0, 0, 0x01]);
+            raw.send(&lldp::frame(b, &LldpPdu::new(ChassisId::Local { id: "switch-2".into() }, PortId::Local { id: "port-009".into() }, 0)).unwrap()).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            note!("PROBE p3: neighbour after B's TTL-0: {:?}", dev.neighbour());
+            assert!(dev.neighbour().is_some_and(|p| p.chassis_id == "switch-1"), "A stays until A's own TTL-0 frame");
+        });
+    }
+
+    /// P4: the record cut to the length asked (a passing probe the official test lacks).
+    #[test]
+    fn the_record_is_cut_to_the_length_asked() {
+        netns::isolated("round_1::the_record_is_cut_to_the_length_asked", &[("a0", "b0")], || {
+            host_address();
+            let _dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            let (_, full) = read_req(&s, &ReadRequest::implicit(1, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160, Uuid([1; 16])).unwrap();
+            let (_, full_rec) = ReadResponse::split(&full.data).unwrap();
+            let (_, cut) = read_req(&s, &ReadRequest::implicit(2, 0, SUBSLOT_DAP, INDEX_IM0, 10), 4160, Uuid([2; 16])).unwrap();
+            let (h, rec) = ReadResponse::split(&cut.data).unwrap();
+            note!("PROBE p4: full {} bytes; cut header length {} record {} bytes", full_rec.len(), h.length, rec.len());
+            assert_eq!((h.length, rec.as_slice()), (10, &full_rec[..10]));
+            let (_, zero) = read_req(&s, &ReadRequest::implicit(3, 0, SUBSLOT_DAP, INDEX_IM0, 0), 4160, Uuid([3; 16])).unwrap();
+            let (h, rec) = ReadResponse::split(&zero.data).unwrap();
+            assert_eq!((h.length, rec.len()), (0, 0));
+        });
+    }
+
+    /// P5: I&M0 at slot 1 (the clause: "at slot 0 subslot 1"); P6: at API 1.
+    #[test]
+    fn another_slot_or_api_is_refused() {
+        netns::isolated("round_1::another_slot_or_api_is_refused", &[("a0", "b0")], || {
+            host_address();
+            let _dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            let (_, at_slot1) = read_req(&s, &ReadRequest::implicit(1, 1, SUBSLOT_DAP, INDEX_IM0, 4096), 4160, Uuid([1; 16])).unwrap();
+            let mut api1 = ReadRequest::implicit(2, 0, SUBSLOT_DAP, INDEX_IM0, 4096);
+            api1.api = 1;
+            let (_, at_api1) = read_req(&s, &api1, 4160, Uuid([2; 16])).unwrap();
+            note!("PROBE p5: slot 1 {:02X?} ({} data bytes); api 1 {:02X?} ({} data bytes)", at_slot1.status.to_bytes(), at_slot1.data.len(), at_api1.status.to_bytes(), at_api1.data.len());
+            assert_eq!(at_slot1.status.to_bytes(), [0xDE, 0x80, 0xB2, 0x00], "I&M0 at slot 1 refused");
+            assert_eq!(at_api1.status.to_bytes(), [0xDE, 0x80, 0xB4, 0x00], "I&M0 at API 1 refused: invalid area/API");
+        });
+    }
+
+    /// P7: a Read (opnum 2, under an AR the device does not have) carrying a read request block.
+    #[test]
+    fn another_operation_interface_or_packet_type_is_not_answered() {
+        netns::isolated("round_1::another_operation_interface_or_packet_type_is_not_answered", &[("a0", "b0")], || {
+            host_address();
+            let _dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            let mut req = ReadRequest::implicit(1, 0, SUBSLOT_DAP, INDEX_IM0, 4096);
+            req.ar = Uuid([0x11; 16]);
+            let data = req.block().unwrap().encode().unwrap();
+            let pdu = RpcPdu::pnio_request(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([7; 16]), 1, rpc::opnum::READ, &rpc::RequestArgs::new(4160, data.clone()));
+            let a = send_pdu(&s, &pdu);
+            note!("PROBE p7: opnum 2 answered: {:?}", a.as_ref().map(|(_, x)| x.status.to_bytes()));
+            assert!(a.is_none(), "another operation is not answered");
+            // The same read block under the controller interface.
+            let mut pdu = rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([8; 16]), 2, &ReadRequest::implicit(2, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160).unwrap();
+            pdu.interface = Uuid::PNIO_CONTROLLER;
+            let b = send_pdu(&s, &pdu);
+            note!("PROBE p7: controller interface answered: {:?}", b.as_ref().map(|(_, x)| x.status.to_bytes()));
+            assert!(b.is_none(), "another interface is not answered");
+            // A packet of another type (a Response) carrying the read.
+            let mut pdu = rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([9; 16]), 3, &ReadRequest::implicit(3, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160).unwrap();
+            pdu.packet_type = rpc::PacketType::Response;
+            let c = send_pdu(&s, &pdu);
+            note!("PROBE p7: a Response answered: {:?}", c.as_ref().map(|(_, x)| x.status.to_bytes()));
+            assert!(c.is_none(), "a packet that is not a request is not answered");
+        });
+    }
+
+    /// P8: a muted device (C-112: "a muted device silent"; the handle: "Answer nothing").
+    #[test]
+    fn a_muted_device_still_answers_its_record_read() {
+        netns::isolated("round_1::a_muted_device_still_answers_its_record_read", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            dev.set_muted(true);
+            let s = socket();
+            let a = read_req(&s, &ReadRequest::implicit(1, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160, Uuid([1; 16]));
+            // Its DCP alone is muted: ARP and the record read go on.
+            assert_eq!(a.map(|(_, x)| x.status), Some(PnioStatus::OK), "{:?}", dev.status());
+        });
+    }
+
+    /// P9: an activity UUID whose first three fields are not palindromes, as a tool makes one.
+    #[test]
+    fn an_asymmetric_activity_comes_back_in_either_byte_order() {
+        netns::isolated("round_1::an_asymmetric_activity_comes_back_in_either_byte_order", &[("a0", "b0")], || {
+            host_address();
+            let _dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            let act = Uuid([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10]);
+            let (answer, _) = read_req(&s, &ReadRequest::implicit(1, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160, act).unwrap();
+            note!("PROBE p9: activity {} answered {}; server boot {}", act, answer.activity, answer.server_boot);
+            assert_eq!(answer.activity, act);
+            // Big-endian too.
+            let pdu = rpc::read_implicit(ByteOrder::Big, Uuid::pnio_object(1, 9, 7), act, 2, &ReadRequest::implicit(2, 0, SUBSLOT_DAP, 0x1234, 4096), 4160).unwrap();
+            let (answer, args) = send_pdu(&s, &pdu).unwrap();
+            note!("PROBE p9: big-endian: drep {:?} activity {} status {:02X?}", answer.drep, answer.activity, args.status.to_bytes());
+            assert_eq!((answer.activity, answer.sequence, args.status.to_bytes()), (act, 2, [0xDE, 0x80, 0xB0, 0x00]));
+        });
+    }
+
+    /// P10: args_maximum below the answer (64), the record length 4096.
+    #[test]
+    fn a_small_args_maximum_cuts_the_record() {
+        netns::isolated("round_1::a_small_args_maximum_cuts_the_record", &[("a0", "b0")], || {
+            host_address();
+            let _dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            let (_, args) = read_req(&s, &ReadRequest::implicit(1, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 64, Uuid([1; 16])).unwrap();
+            // 64 bytes of arguments hold the answer's header and nothing more: the record cut to 0.
+            let (header, record) = ReadResponse::split(&args.data).unwrap();
+            assert_eq!((args.status, args.max_count, args.data.len(), header.length, record.len()), (PnioStatus::OK, 64, 64, 0, 0));
+        });
+    }
+
+    /// P11..P13: frames built by hand, the parser alone.
+    #[test]
+    fn a_last_fragment_the_unspecified_address_and_a_zero_checksum() {
+        let mac = Mac([0x02, 0, 0, 0, 0, 0x10]);
+        let me = Ipv4Addr::new(192, 168, 0, 10);
+        let peer = (Mac([0x02, 0, 0, 0, 0, 0x01]), Ipv4Addr::new(192, 168, 0, 1), 50000);
+        let good = ip::udp_frame((mac, me, PNIO_PORT), peer, 7, b"hello");
+        // The last fragment of a datagram: MF clear, offset 1 (8 bytes); its header checksum rewritten.
+        let mut last = good.clone();
+        last[14 + 6] = 0x00;
+        last[14 + 7] = 0x01;
+        refix_ip(&mut last);
+        let r_last = ip::udp_to(&last, me, PNIO_PORT);
+        // A datagram addressed to 0.0.0.0, to a device that holds no address.
+        let zero = ip::udp_frame((mac, Ipv4Addr::UNSPECIFIED, PNIO_PORT), peer, 7, b"hello");
+        let r_zero = ip::udp_to(&zero, Ipv4Addr::UNSPECIFIED, PNIO_PORT);
+        // An ARP request for 0.0.0.0, to a device that holds no address.
+        let mut ask = vec![0xFF; 6];
+        ask.extend_from_slice(&peer.0.0);
+        ask.extend_from_slice(&[0x08, 0x06, 0, 1, 0x08, 0, 6, 4, 0, 1]);
+        ask.extend_from_slice(&peer.0.0);
+        ask.extend_from_slice(&peer.1.octets());
+        ask.extend_from_slice(&[0; 6]);
+        ask.extend_from_slice(&[0, 0, 0, 0]);
+        let r_arp0 = ip::arp_reply(&ask, mac, Ipv4Addr::UNSPECIFIED);
+        // The ARP reply's fixed bytes and its padding.
+        let mut ask_me = ask.clone();
+        ask_me[38..42].copy_from_slice(&me.octets());
+        let reply = ip::arp_reply(&ask_me, mac, me).unwrap();
+        // A payload whose UDP checksum sums to 0: it must travel as 0xFFFF (RFC 768).
+        let mut found = None;
+        for x in 0..=0xFFFFu16 {
+            let p = [b'h', b'i', (x >> 8) as u8, x as u8];
+            let f = ip::udp_frame((mac, me, PNIO_PORT), peer, 7, &p);
+            let c = u16::from_be_bytes([f[14 + 20 + 6], f[14 + 20 + 7]]);
+            if c == 0xFFFF || c == 0 {
+                found = Some((x, c));
+                break;
+            }
+        }
+        note!("PROBE p11: last fragment taken: {}; 0.0.0.0 datagram taken: {}; ARP for 0.0.0.0 answered: {}; reply[12..20] {:02X?} padding zero: {}; zero-sum checksum written {:?}",
+            r_last.is_some(), r_zero.is_some(), r_arp0.is_some(), &reply[12..20], reply[42..].iter().all(|&b| b == 0), found);
+        assert!(r_last.is_none(), "a last fragment is a fragment");
+        assert!(r_zero.is_none(), "no address, no datagram");
+        assert!(r_arp0.is_none(), "no address, no ARP");
+        assert_eq!(&reply[12..20], &[0x08, 0x06, 0, 1, 0x08, 0, 6, 4]);
+        assert!(reply[42..].iter().all(|&b| b == 0));
+        assert_eq!(found.map(|f| f.1), Some(0xFFFF), "a computed 0 travels as 0xFFFF");
+    }
+
+    fn refix_ip(f: &mut [u8]) {
+        f[14 + 10] = 0;
+        f[14 + 11] = 0;
+        let mut acc: u32 = 0;
+        for c in f[14..34].chunks(2) {
+            acc += u32::from(u16::from_be_bytes([c[0], c[1]]));
+        }
+        while acc > 0xFFFF {
+            acc = (acc & 0xFFFF) + (acc >> 16);
+        }
+        let c = !(acc as u16);
+        f[14 + 10..14 + 12].copy_from_slice(&c.to_be_bytes());
+    }
+
+    /// P2b: a chassis id of another subtype (1, chassis component) with a long payload.
+    #[test]
+    fn a_long_chassis_of_another_subtype_is_written_as_hex() {
+        netns::isolated("round_1::a_long_chassis_of_another_subtype_is_written_as_hex", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = RawLink::open_with("a0", Options { ethertype: Some(ether::ETHERTYPE_LLDP), promiscuous: false, outgoing: false }).unwrap();
+            let s = socket();
+            let sw = raw.mac();
+            raw.send(&lldp::frame(sw, &LldpPdu::new(ChassisId::Other { subtype: 1, data: vec![0xAB; 100] }, PortId::Local { id: "port-003".into() }, 120)).unwrap()).unwrap();
+            assert!(wait(Duration::from_secs(2), || dev.neighbour().is_some()));
+            let (st, rec) = port_data(&s, 1);
+            assert_eq!(st, PnioStatus::OK);
+            let pd = PortDataReal::from_block(&rpc::read_blocks(&rec).0[0]).unwrap();
+            assert_eq!(pd.peers[0].chassis_id, "ab".repeat(100), "a chassis no text names, as hex");
+        });
+    }
 }
