@@ -375,7 +375,7 @@ fn a_cache_whose_type_and_text_excel_never_pairs_matches_nothing_the_engine_comp
         .into_iter()
         .find(|c| matches!(c.expected, abaco_oracle::Expected::Number(_)) && !c.shared_copy)
         .unwrap();
-    let cases: [(&str, &str); 23] = [
+    let cases: [(&str, &str); 33] = [
         (r##"<f>"#CIRC!"</f>"##, r##" t="e"><f>"#CIRC!"</f><v>#CIRC!</v>"##),
         (r##"<f>"TRUE"</f>"##, r##" t="b"><f>"TRUE"</f><v>TRUE</v>"##),
         (r##"<f>"abc"</f>"##, r##" t="b"><f>"abc"</f><v>abc</v>"##),
@@ -401,6 +401,19 @@ fn a_cache_whose_type_and_text_excel_never_pairs_matches_nothing_the_engine_comp
         // an empty type, and two values
         ("<f>5</f>", r##" t=""><f>5</f><v>5</v>"##),
         ("<f>5</f>", r##"><f>5</f><v>5</v><v>6</v>"##),
+        // two value tags in any form, the self-closing among them
+        ("", r##" t="str"><f>""</f><v/><v/>"##),
+        ("", r##" t="str"><f>""</f><v/><v />"##),
+        ("", r##" t="str"><f>"&lt;v&gt;abc"</f><v /><v>abc</v>"##),
+        // an inline string in any form beside a value
+        ("", r##" t="str"><f>"abc"</f><is/><v>abc</v>"##),
+        ("", r##" t="str"><f>"abc"</f><v>abc</v><is xml:space="preserve"><t>abc</t></is>"##),
+        ("", r##" t="str"><f>"abc"</f><v>abc</v><is ><t>abc</t></is>"##),
+        // a space XSD does not take off: part of the value
+        ("", r##"><f>5</f><v>5&#160;</v>"##),
+        ("", r##" t="b"><f>TRUE</f><v>1&#xA0;</v>"##),
+        ("", r##" t="b"><f>TRUE</f><v>&#x3000;1</v>"##),
+        ("", r##" t="e"><f>NA()</f><v>#N/A&#xA0;</v>"##),
         (r##"<f>"abc"</f>"##, r##" t="e"><f>"abc"</f><is><t>abc</t></is>"##),
         (r##"<f>"abc"</f>"##, r##"><f>"abc"</f><is><t>abc</t></is>"##),
     ];

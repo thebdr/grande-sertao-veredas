@@ -159,8 +159,17 @@ static RE_CELL: LazyLock<Regex> =
 static RE_ATTR_T: LazyLock<Regex> = LazyLock::new(|| re(r#"\st="([^"]*)""#));
 static RE_F: LazyLock<Regex> = LazyLock::new(|| re(r#"(?s)<f(\s[^>]*)?(?:/>|>(.*?)</f>)"#));
 static RE_F_SI: LazyLock<Regex> = LazyLock::new(|| re(r#"\ssi="([0-9]+)""#));
-static RE_V: LazyLock<Regex> = LazyLock::new(|| re(r#"(?s)<v(?:\s[^>]*)?>(.*?)</v>"#));
-static RE_IS: LazyLock<Regex> = LazyLock::new(|| re(r#"(?s)<is>(.*?)</is>"#));
+/// A cell's value tag, open (`<v>`, `<v xml:space="preserve">`) or self-closing (`<v/>`,
+/// `<v />`): its attributes, then `/` when it closes itself.
+static RE_V_TAG: LazyLock<Regex> = LazyLock::new(|| re(r#"<v(\s[^>]*?)?(/?)>"#));
+/// An inline string's tag in any form (`<is>`, `<is/>`, `<is xml:space="preserve">`).
+static RE_IS_TAG: LazyLock<Regex> = LazyLock::new(|| re(r#"<is[\s/>]"#));
+
+/// XSD's whitespace (space, tab, line feed, carriage return) taken off both ends, and no other
+/// character: a no-break space is part of the value.
+fn xsd_trim(s: &str) -> &str {
+    s.trim_matches([' ', '\t', '\n', '\r'])
+}
 static RE_STR: LazyLock<Regex> = LazyLock::new(|| re(r#""(?:[^"]|"")*""#));
 static RE_FN: LazyLock<Regex> = LazyLock::new(|| re(r"([A-Za-z_][A-Za-z0-9_.]*)\s*\("));
 static RE_EXT: LazyLock<Regex> = LazyLock::new(|| re(r"\[[0-9]+\]"));
@@ -313,7 +322,7 @@ fn rich_errors(archive: &mut zip::ZipArchive<fs::File>, rels: &[(String, String)
         RE_STRUCT.captures_iter(&structures).map(|c| (c[1].to_string(), RE_KEY.captures_iter(&c[2]).map(|k| k[1].to_string()).collect())).collect();
     let rvs: Vec<(usize, Vec<String>)> = RE_RV
         .captures_iter(&values)
-        .map(|c| (c[1].parse().unwrap_or(usize::MAX), RE_RV_V.captures_iter(&c[2]).map(|v| v[1].trim().to_string()).collect()))
+        .map(|c| (c[1].parse().unwrap_or(usize::MAX), RE_RV_V.captures_iter(&c[2]).map(|v| xsd_trim(&v[1]).to_string()).collect()))
         .collect();
     for (i, bk) in RE_BK.captures_iter(&section("valueMetadata")).enumerate() {
         let Some(rc) = RE_RC.captures(&bk[1]) else { continue };
@@ -484,32 +493,40 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
                 _ => (text, false),
             };
 
-            // the value's raw text: decoded as a text where the cell's type says text
-            let v_raw = RE_V.captures(inner).map(|m| m[1].to_string()).or_else(|| inner.contains("<v/>").then(String::new));
+            // the value's raw text: decoded as a text where the cell's type says text; a cell holds
+            // one value (CT_Cell), so two value tags, in any form, are no cache Excel writes
+            let tags: Vec<regex::Captures> = RE_V_TAG.captures_iter(inner).collect();
+            let values = tags.len();
+            let v_raw = match tags.first() {
+                None => None,
+                Some(tag) if &tag[2] == "/" => Some(String::new()),
+                Some(tag) => {
+                    let start = tag.get(0).map(|m| m.end()).unwrap_or(0);
+                    Some(inner[start..].find("</v>").map(|end| inner[start..start + end].to_string()).unwrap_or_default())
+                }
+            };
             let v = v_raw.as_deref().map(unescape);
-            let is = RE_IS.captures(inner).map(|m| m[1].to_string());
+            // an inline string in any form (`<is>`, `<is/>`, `<is …>`)
+            let is = RE_IS_TAG.find(inner).map(|m| inner[m.start()..].chars().take(80).collect::<String>());
             let never = |what: String| Expected::Unwritten(what);
-            // a cell holds one value (CT_Cell): two `<v>` is no cache Excel writes
-            let values = RE_V.find_iter(inner).count() + usize::from(inner.contains("<v/>"));
             let expected = match (t.as_deref(), v, is) {
                 (_, Some(v), _) if values > 1 => never(v),
                 // an inline string (`<is>`, whatever the cell's type) is a constant's: Excel writes
                 // a formula's text as `str`, never inline
-                (_, None, Some(is)) => never(format!("<is>{is}</is>")),
+                (_, _, Some(is)) => never(is),
                 // Excel writes the value every formula computed: no `<v>` is a cache it never wrote
                 (_, None, None) => Expected::Missing,
-                (_, Some(v), Some(_)) => never(v),
                 // a formula's text Excel writes `str`
                 (Some("str"), Some(_), None) => Expected::Text(xml_text(v_raw.as_deref().unwrap_or_default())),
                 // a boolean Excel writes as 1 or 0
-                (Some("b"), Some(v), None) => match v.trim() {
+                (Some("b"), Some(v), None) => match xsd_trim(&v) {
                     "1" => Expected::Bool(true),
                     "0" => Expected::Bool(false),
                     _ => never(v),
                 },
                 // an error a file holds; a `#VALUE!` with value metadata is the error the rich value
                 // names (Excel's `#SPILL!` and `#CALC!`)
-                (Some("e"), Some(v), None) => match FILE_ERRORS.iter().find(|e| **e == v.trim()) {
+                (Some("e"), Some(v), None) => match FILE_ERRORS.iter().find(|e| **e == xsd_trim(&v)) {
                     Some(e) => {
                         let vm = RE_ATTR_VM.captures(attrs).and_then(|m| m[1].parse::<usize>().ok());
                         Expected::Error(vm.and_then(|i| rich.get(&i).cloned()).filter(|_| *e == "#VALUE!").unwrap_or_else(|| e.to_string()))
@@ -518,8 +535,8 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
                 },
                 // a number Excel can cache is finite: `inf`, `NaN`, `1E+999`, a word or nothing is
                 // none
-                (None | Some("n"), Some(v), None) => match v.trim().parse::<f64>() {
-                    Ok(n) if n.is_finite() && !v.trim().is_empty() => Expected::Number(n),
+                (None | Some("n"), Some(v), None) => match xsd_trim(&v).parse::<f64>() {
+                    Ok(n) if n.is_finite() && !xsd_trim(&v).is_empty() => Expected::Number(n),
                     _ => never(v),
                 },
                 // a shared string (`s`), a date (`d`), an inline string holding `<v>`, any other
