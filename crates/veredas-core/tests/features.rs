@@ -297,54 +297,238 @@ fn main() {
     );
 }
 
-/// What the members import from core today, every path of it; the default form must hold each.
-const MEMBERS_IMPORT: &[&str] = &[
-    "Quality",
-    "Sample",
-    "SeriesRef",
-    "SeriesType",
-    "SourceError",
-    "SourceHandle",
-    "SourceId",
-    "Value",
-    "now_unix_ms",
-    "stop_flag",
-    "fieldbus",
-    "opc::NodeId",
-    "opc::OpcError",
-    "opc::StatusCode",
-    "opc::Variant",
-    "opc::WriteError",
-    "opc::run_on_own_runtime",
-    "opc::spawn",
-    "opc::error::NodeIdError",
-    "opc::spec::Auth",
-    "opc::spec::BitSpec",
-    "opc::spec::PollSpec",
-    "opc::spec::RuleSpec",
-    "opc::spec::TagSpec",
-    "opc::spec::parse_node_id",
-    "opc::worker::CONNECT_TIMEOUT",
-    "opc::worker::MAX_NODES_PER_READ",
-    "opc::worker::WriteGate",
-    "rng::Pcg32",
-    "schema::HeaderError",
-    "schema::check",
-    "schema::stamp",
-    "state::ControllerState",
-    "state::reason_entry",
-    "telegram::Catalog",
-    "telegram::ChannelSpec",
-    "telegram::Endian",
-    "telegram::Message",
-    "telegram::PeerId",
-    "telegram::Role",
-    "telegram::capture::FieldType",
-    "telegram::catalog::Catalog",
-    "telegram::catalog::load",
-    "telegram::schema::ChannelSpec",
-    "telegram::schema::load",
-];
+/// A Rust source with its comments and the contents of its string and character literals blanked
+/// out, so only code is left to read.
+fn code_only(src: &str) -> String {
+    let c: Vec<char> = src.chars().collect();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    let ident_before = |i: usize| i > 0 && (c[i - 1].is_alphanumeric() || c[i - 1] == '_');
+    while i < c.len() {
+        if c[i] == '/' && c.get(i + 1) == Some(&'/') {
+            while i < c.len() && c[i] != '\n' {
+                i += 1;
+            }
+        } else if c[i] == '/' && c.get(i + 1) == Some(&'*') {
+            let mut depth = 0;
+            while i < c.len() {
+                if c[i] == '/' && c.get(i + 1) == Some(&'*') {
+                    depth += 1;
+                    i += 2;
+                } else if c[i] == '*' && c.get(i + 1) == Some(&'/') {
+                    depth -= 1;
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            out.push(' ');
+        } else if c[i] == 'r'
+            && !ident_before(i)
+            && matches!(c.get(i + 1), Some('"') | Some('#'))
+            && c[i + 1..].iter().find(|x| **x != '#') == Some(&'"')
+        {
+            let mut j = i + 1;
+            let mut hashes = 0;
+            while c.get(j) == Some(&'#') {
+                hashes += 1;
+                j += 1;
+            }
+            j += 1;
+            while j < c.len()
+                && !(c[j] == '"'
+                    && c[j + 1..]
+                        .iter()
+                        .take(hashes)
+                        .filter(|x| **x == '#')
+                        .count()
+                        == hashes)
+            {
+                j += 1;
+            }
+            i = j + 1 + hashes;
+            out.push_str("\"\"");
+        } else if c[i] == '"' {
+            let mut j = i + 1;
+            while j < c.len() && c[j] != '"' {
+                if c[j] == '\\' {
+                    j += 1;
+                }
+                j += 1;
+            }
+            i = j + 1;
+            out.push_str("\"\"");
+        } else if c[i] == '\'' && c.get(i + 1) == Some(&'\\') {
+            let mut j = i + 2;
+            while j < c.len() && c[j] != '\'' {
+                j += 1;
+            }
+            i = j + 1;
+            out.push_str("' '");
+        } else if c[i] == '\'' && c.get(i + 2) == Some(&'\'') {
+            i += 3;
+            out.push_str("' '");
+        } else {
+            out.push(c[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Every path into core the other members' sources name, read from their files: a `use` tree
+/// expanded (`veredas_core::schema::{self, HeaderError}` is `schema` and `schema::HeaderError`), a
+/// path in an expression or a type up to its first capitalized segment (the type, never its
+/// associated items), comments skipped, globs left out. Those under a layer the default form does
+/// not hold (`opc::demo`, `opc::server`, a master's module) are left to their own forms.
+fn members_default_paths() -> BTreeSet<String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files = vec![root.join("crates"), root.join("tools")];
+    let mut text = String::new();
+    while let Some(path) = files.pop() {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if path.is_dir() {
+            if name == "veredas-core" || name == "target" || name.starts_with('.') {
+                continue;
+            }
+            files.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+        } else if name.ends_with(".rs") {
+            text.push_str(&code_only(&std::fs::read_to_string(&path).unwrap()));
+            text.push('\n');
+        }
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let ident = |i: &mut usize| -> String {
+        let start = *i;
+        while *i < chars.len() && (chars[*i].is_alphanumeric() || chars[*i] == '_') {
+            *i += 1;
+        }
+        chars[start..*i].iter().collect()
+    };
+    let skip = |i: &mut usize| {
+        while *i < chars.len() && chars[*i].is_whitespace() {
+            *i += 1;
+        }
+    };
+    fn tree(
+        chars: &[char],
+        i: &mut usize,
+        prefix: Vec<String>,
+        out: &mut Vec<Vec<String>>,
+        ident: &dyn Fn(&mut usize) -> String,
+        skip: &dyn Fn(&mut usize),
+    ) {
+        skip(i);
+        if chars.get(*i) == Some(&'{') {
+            *i += 1;
+            loop {
+                skip(i);
+                match chars.get(*i) {
+                    Some('}') => {
+                        *i += 1;
+                        return;
+                    }
+                    Some(',') => *i += 1,
+                    None => return,
+                    _ => {
+                        let before = *i;
+                        tree(chars, i, prefix.clone(), out, ident, skip);
+                        if *i == before {
+                            *i += 1;
+                        }
+                    }
+                }
+            }
+        }
+        if chars.get(*i) == Some(&'*') {
+            *i += 1;
+            return;
+        }
+        let seg = ident(i);
+        if seg.is_empty() {
+            return;
+        }
+        let path = if seg == "self" {
+            prefix
+        } else {
+            [prefix, vec![seg]].concat()
+        };
+        skip(i);
+        if chars.get(*i) == Some(&':') && chars.get(*i + 1) == Some(&':') {
+            *i += 2;
+            tree(chars, i, path, out, ident, skip);
+            return;
+        }
+        let at = *i;
+        if ident(i) == "as" {
+            skip(i);
+            let _ = ident(i);
+            if chars.get(*i) == Some(&'_') {
+                *i += 1;
+            }
+        } else {
+            *i = at;
+        }
+        out.push(path);
+    }
+    let needle: Vec<char> = "veredas_core::".chars().collect();
+    let mut paths: Vec<Vec<String>> = Vec::new();
+    let mut i = 0;
+    while i + needle.len() <= chars.len() {
+        if chars[i..i + needle.len()] != needle[..]
+            || i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_')
+        {
+            i += 1;
+            continue;
+        }
+        let before: String = chars[..i]
+            .iter()
+            .rev()
+            .take(12)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        let in_use = before.trim_end().ends_with("use");
+        i += needle.len();
+        if in_use {
+            tree(&chars, &mut i, Vec::new(), &mut paths, &ident, &skip);
+        } else {
+            let mut path = Vec::new();
+            loop {
+                let seg = ident(&mut i);
+                if seg.is_empty() {
+                    break;
+                }
+                let capital = seg.starts_with(|c: char| c.is_ascii_uppercase());
+                path.push(seg);
+                if capital || !(chars.get(i) == Some(&':') && chars.get(i + 1) == Some(&':')) {
+                    break;
+                }
+                i += 2;
+            }
+            paths.push(path);
+        }
+    }
+    paths
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .map(|p| p.join("::"))
+        .filter(|p| {
+            ![
+                "opc::demo",
+                "opc::server",
+                "fieldbus::modbus",
+                "fieldbus::enip",
+            ]
+            .iter()
+            .any(|l| p == l || p.starts_with(&format!("{l}::")))
+        })
+        .collect()
+}
 
 /// Each form a member asks for holds the layers its form promises, named by a consumer crate of
 /// the test's own and checked by cargo: the default (every plant-facing layer), the default with
@@ -399,11 +583,12 @@ fn each_form_holds_the_layers_it_promises() {
             .split(", ")
             .map(|t| format!("    let _ = std::any::type_name::<{}>();", t.trim()))
             .collect();
-        // The default form also takes every path the members import from core today (portal,
-        // supervisão, comissionador, controlador, maquinar, mestres, as `grep -rho
-        // 'veredas_core::...' crates tools` lists them), functions and constants included.
+        // The default form also takes every path into its layers the other members' sources name,
+        // read from their files at each run (`members_default_paths`).
         let uses: Vec<String> = if name == "default-form" {
-            MEMBERS_IMPORT
+            let paths = members_default_paths();
+            assert!(paths.len() > 60, "{paths:?}");
+            paths
                 .iter()
                 .map(|p| format!("use veredas_core::{p} as _;"))
                 .collect()
@@ -611,14 +796,17 @@ fn capitalized_literals(source: &str) -> Vec<String> {
 }
 
 /// The slim layer behaves the same in every form: a probe crate asking for core in each of the
-/// twelve forms alone, run, prints what the header reader answers (every stamp and check of a
-/// set of headers, refusals with their texts), the state text's tables and lookups, every state
-/// line of core's own state-text tests read and written back (or refused, with the text), and
-/// draws of the PCG32 from fixed seeds; all twelve print the same, so the form core's own tests
-/// run in (every feature) speaks for each. A gate that changes what an item does without changing
-/// what rustdoc renders of it (a constant's value, a derive's attribute, a function's body) shows
-/// here as a form that prints otherwise, for the slim layer; for the plant-facing layer and the
-/// masters, core's own tests hold their behaviour in the merged form alone.
+/// twelve forms alone, run, calls every public function and reads every public table of `schema`,
+/// `rng` and `state` (bar the PCG32's seeding from entropy) on the inputs listed here and prints
+/// what each answers. That covers every stamp and check of a set of headers with the refusals'
+/// texts; every state line of core's own state-text tests read, written back and asked its state,
+/// reasons, health and conditions; every health and maintenance request; and PCG32 draws from
+/// fixed seeds with the edges of each range. All twelve must print the same, so the form core's
+/// own tests run in (every feature) speaks for each. A gate that changes what an item does
+/// without changing what rustdoc renders of it (a constant's value, a derive's attribute, a
+/// function's body) shows here as a form that prints otherwise, for these calls and inputs. For
+/// the plant-facing layer and the masters, core's own tests hold their behaviour in the merged
+/// form alone.
 #[test]
 fn the_slim_layer_behaves_the_same_in_every_form() {
     let core = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -640,12 +828,22 @@ fn the_slim_layer_behaves_the_same_in_every_form() {
         "format = \"veredas-x\"\nversion = 1\n[[t]]\nk = 18446744073709551615\n",
         "= =",
         "",
+        "format = \"veredas-x\"\r\nversion = 1\r\n",
+        "\u{feff}format = \"veredas-x\"\nversion = 1\n",
+        "format = \"veredas-x\"\nversion = 1.0\n",
+        "format = \"\"\nversion = 1\n",
+        "format = \"veredas-x\"\nversion = 4294967295\n",
+        "format = \"veredas-x\"\nformat = \"veredas-x\"\nversion = 1\n",
+        "format = [\"veredas-x\"]\nversion = 1\n",
+        "  format   =   \"veredas-x\"  \n\n  version=1",
     ];
     let main = format!(
         r##"use std::fmt::Write;
 use veredas_core::rng::Pcg32;
 use veredas_core::schema;
-use veredas_core::state::{{self, CommandSource, ControllerState, StateWord}};
+use veredas_core::state::{{
+    self, CommandSource, ControllerState, Health, MaintenanceRequest, State, StateWord,
+}};
 
 const HEADERS: &[&str] = &{headers:?};
 const LINES: &[&str] = &[
@@ -656,7 +854,7 @@ fn main() {{
     let mut out = String::new();
     for h in HEADERS {{
         let _ = writeln!(out, "stamp {{h:?}} = {{:?}}", schema::stamp(h, "an x file").map_err(|e| (e.to_string(), e)));
-        for (f, v) in [("veredas-x", 1), ("veredas-x", 2), ("veredas-y", 1)] {{
+        for (f, v) in [("veredas-x", 1), ("veredas-x", 2), ("veredas-y", 1), ("veredas-x", 0), ("veredas-x", u32::MAX), ("", 1)] {{
             let r = schema::check(h, "an x file", f, v).map_err(|e| (e.to_string(), e));
             let _ = writeln!(out, "check {{h:?}} {{f}} {{v}} = {{r:?}}");
         }}
@@ -677,10 +875,68 @@ fn main() {{
     for w in ["RUN", "STOP", "HOLD", "FAULT", "STARTUP", "MAINTENANCE", "run", "oficina", "plc", "X", ""] {{
         let _ = writeln!(out, "word {{w:?}} {{:?}} {{:?}}", StateWord::from_word(w), CommandSource::from_word(w));
     }}
+    for w in StateWord::ALL {{
+        let _ = writeln!(out, "word {{w}} {{:?}}", StateWord::from_word(&w.to_string()));
+    }}
+    for c in CommandSource::ALL {{
+        let _ = writeln!(out, "source {{:?}}", CommandSource::from_word(c.word()));
+    }}
+    for r in state::REASONS {{
+        let _ = writeln!(out, "reason state {{:?}} {{:?}}", r, r.state());
+    }}
+    for h in [Health::Normal, Health::Failure, Health::FunctionCheck, Health::MaintenanceRequired] {{
+        let _ = writeln!(out, "health {{h:?}} {{}} {{h}}", h.device_health());
+    }}
+    for m in [
+        MaintenanceRequest::FaultOnUpdate,
+        MaintenanceRequest::Device {{ urgent: false }},
+        MaintenanceRequest::Device {{ urgent: true }},
+        MaintenanceRequest::DeviceMissing,
+        MaintenanceRequest::Overruns,
+        MaintenanceRequest::RetainReset,
+        MaintenanceRequest::User {{ urgent: false }},
+        MaintenanceRequest::User {{ urgent: true }},
+    ] {{
+        let _ = writeln!(out, "maintenance {{m:?}} {{}} {{}} {{}}", m.number(), m.word(), m.urgent());
+    }}
+    for st in [
+        State::Unknown,
+        State::Run,
+        State::Stop(None),
+        State::Startup {{ reason: None, phase: None }},
+        State::Hold(None),
+        State::Fault(None),
+    ] {{
+        let c = ControllerState::new(st.clone());
+        let _ = writeln!(out, "new {{st:?}} {{c}} {{:?}} {{:?}} {{:?}}", c.health(), st.word(), st.reason_number());
+    }}
     for l in LINES {{
         match l.parse::<ControllerState>() {{
             Ok(s) => {{
                 let _ = writeln!(out, "line {{l:?}} = {{s:?}} / {{s}} / {{:?}} / {{}}", s.health(), s.clone().normalized());
+                let st = &s.state;
+                let reason = match st {{
+                    State::Stop(r) => format!("{{:?}}", r.as_ref().map(|r| (r.number(), r.word()))),
+                    State::Startup {{ reason, phase }} => format!(
+                        "{{:?}} {{:?}}",
+                        reason.as_ref().map(|r| (r.number(), r.word())),
+                        phase.as_ref().map(|p| (p.number(), p.word()))
+                    ),
+                    State::Hold(r) => format!("{{:?}}", r.as_ref().map(|r| (r.number(), r.word()))),
+                    State::Fault(r) => format!("{{:?}}", r.as_ref().map(|r| (r.number(), r.word()))),
+                    State::Unknown | State::Run => "-".into(),
+                }};
+                let health = s.health().map(|h| (h.device_health(), h.to_string()));
+                let maintenance: Vec<_> = s.maintenance.iter().map(|m| (m.number(), m.word(), m.urgent())).collect();
+                let _ = writeln!(
+                    out,
+                    "  {{}} {{:?}} {{reason}} {{}} {{}} {{health:?}} {{maintenance:?}} {{}}",
+                    st.word(),
+                    st.reason_number(),
+                    s.conditions.force.any(),
+                    s.conditions.debug(),
+                    ControllerState::new(st.clone())
+                );
             }}
             Err(e) => {{
                 let _ = writeln!(out, "line {{l:?}} ! {{e:?}} / {{e}}");
@@ -695,6 +951,17 @@ fn main() {{
         let i: Vec<i64> = (0..6).map(|_| r.int_in(-3, 3)).collect();
         let b: Vec<bool> = (0..8).map(|_| r.flip()).collect();
         let _ = writeln!(out, "pcg {{seed}} {{stream}} {{u:?}} {{f:?}} {{g:?}} {{i:?}} {{b:?}}");
+        // The edges: bounds reversed, equal, not finite or far apart, places none or many.
+        for (lo, hi, d) in [
+            (f64::NAN, 1.0, 2), (1.0, f64::NAN, 2), (5.0, -5.0, 2), (0.0, 0.0, 2),
+            (f64::NEG_INFINITY, f64::INFINITY, 2), (-1e300, 1e300, 0), (0.0, 1.0, 0),
+            (0.0, 1.0, 20), (0.0, 1.0, 255), (-0.0, 0.0, 3),
+        ] {{
+            let _ = writeln!(out, "uniform {{lo}} {{hi}} {{d}} {{}}", r.uniform(lo, hi, d).to_bits());
+        }}
+        for (lo, hi) in [(3, -3), (i64::MIN, i64::MAX), (0, 0), (-1, 0), (i64::MAX - 1, i64::MAX), (i64::MIN, i64::MIN + 1)] {{
+            let _ = writeln!(out, "int_in {{lo}} {{hi}} {{}}", r.int_in(lo, hi));
+        }}
     }}
     print!("{{out}}");
 }}
@@ -741,19 +1008,33 @@ fn main() {{
     }
 }
 
-/// Text with its tags stripped and its whitespace collapsed.
+/// Text with its tags stripped and its whitespace collapsed, each link's title kept with its
+/// text (`‹struct core::time::Duration› Duration`): rustdoc names a type's full path there, so two
+/// types of one name are told apart.
 fn plain(html: &str) -> String {
     let mut out = String::new();
+    let mut tag = String::new();
     let mut in_tag = false;
     for c in html.chars() {
         match c {
-            '<' => in_tag = true,
-            '>' => {
+            '<' => {
+                in_tag = true;
+                tag.clear();
+            }
+            '>' if in_tag => {
                 in_tag = false;
                 out.push(' ');
+                if tag.starts_with("a ")
+                    && let Some(t) = tag
+                        .split("title=\"")
+                        .nth(1)
+                        .and_then(|t| t.split('"').next())
+                {
+                    out.push_str(&format!("‹{t}› "));
+                }
             }
-            _ if !in_tag => out.push(c),
-            _ => {}
+            _ if in_tag => tag.push(c),
+            _ => out.push(c),
         }
     }
     out.split_whitespace().collect::<Vec<_>>().join(" ")
