@@ -57,21 +57,46 @@ impl Problem {
 pub struct Lines<'a> {
     text: &'a str,
     starts: Vec<usize>,
+    /// Whether each line is ASCII: its column is then its byte's distance from the line's start.
+    ascii: Vec<bool>,
+    /// The last place counted on a line past ASCII (line, byte, column), so the next one on it is
+    /// counted on from there.
+    last: std::cell::Cell<(usize, usize, usize)>,
 }
 
 impl<'a> Lines<'a> {
     pub fn new(text: &'a str) -> Lines<'a> {
         let mut starts = vec![0];
         starts.extend(text.match_indices('\n').map(|(i, _)| i + 1));
-        Lines { text, starts }
+        let ascii = (0..starts.len())
+            .map(|i| {
+                let end = starts.get(i + 1).copied().unwrap_or(text.len());
+                text.as_bytes()[starts[i]..end].is_ascii()
+            })
+            .collect();
+        Lines { text, starts, ascii, last: std::cell::Cell::new((0, 0, 0)) }
     }
 
-    /// The place of byte `at`: its line found by a search, its column counted on that line alone.
+    /// The place of byte `at`: its line found by a search, its column counted on that line alone,
+    /// at once on an ASCII line, from the last place counted on it otherwise.
     pub fn place(&self, at: usize) -> Place {
-        let at = at.min(self.text.len());
+        let mut at = at.min(self.text.len());
+        while !self.text.is_char_boundary(at) {
+            at -= 1;
+        }
         let line = self.starts.partition_point(|&s| s <= at);
         let start = self.starts[line - 1];
-        Place { line, column: self.text[start..at].chars().count() + 1 }
+        if self.ascii[line - 1] {
+            return Place { line, column: at - start + 1 };
+        }
+        let (l, byte, col) = self.last.get();
+        let column = if l == line && byte <= at {
+            col + self.text[byte..at].chars().count()
+        } else {
+            self.text[start..at].chars().count() + 1
+        };
+        self.last.set((line, at, column));
+        Place { line, column }
     }
 
     /// A problem at byte `at`.

@@ -59,124 +59,25 @@ fn header(text: &str, file: &str, noun: &str, format: &str) -> Result<usize, Pro
     let body = body_start(text);
     let head = &text[..body];
     veredas_core::schema::check(head, noun, format, VERSION).map_err(|e| Problem::at(file, text, 0, e.to_string()))?;
-    // The header holds the stamp alone: every line that is not blank or a comment sets `format`
-    // or `version`, whatever the type of another key's value (a table, a dotted key, a number past
-    // any width all named).
-    let mut at = 0;
-    let mut inside: Option<&'static str> = None;
-    for line in head.split_inclusive('\n') {
-        let line_at = at;
-        at += line.len();
-        // A line that opens inside a multi-line string is its value's, not a key.
-        let opened_inside = inside.is_some();
-        inside = toml_line(line, inside);
-        if opened_inside {
-            continue;
-        }
-        let bom = if line_at == 0 && line.starts_with('\u{feff}') { '\u{feff}'.len_utf8() } else { 0 };
-        let line = &line[bom..];
-        let t = line.trim();
-        let lead = bom + line.len() - line.trim_start().len();
-        if !t.is_empty() && !t.starts_with('#') {
-            let key = header_key(t);
-            if key != "format" && key != "version" {
-                return Err(Problem::at(file, text, line_at + lead, format!("the header holds `format` and `version` alone, not `{key}`")));
-            }
-        }
+    // The header holds the stamp alone, as TOML itself reads it (its keys decoded, a table, a
+    // dotted key, a quoted one with its escapes, a value of any width left as text): the first
+    // top-level key that is neither `format` nor `version` is named, at its line.
+    let table = toml::de::DeTable::parse(head).map_err(|e| Problem::at(file, text, 0, format!("not {noun}: {e}")))?;
+    let other = table
+        .get_ref()
+        .iter()
+        .filter(|(k, _)| k.get_ref() != "format" && k.get_ref() != "version")
+        .min_by_key(|(k, _)| k.span().start);
+    if let Some((key, _)) = other {
+        let at = key.span().start.min(head.len());
+        let line_start = head[..at].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let line = &head[line_start..];
+        let lead = line.len() - line.trim_start_matches(['\u{feff}', ' ', '\t']).len();
+        // A control character in a key is shown by its escape, every other character as it is.
+        let name: String = key.get_ref().chars().map(|c| if c.is_control() { c.escape_default().to_string() } else { c.to_string() }).collect();
+        return Err(Problem::at(file, text, line_start + lead, format!("the header holds `format` and `version` alone, not `{name}`")));
     }
     Ok(body)
-}
-
-/// Read one TOML line as TOML does, from inside a multi-line string or not: a comment runs to the
-/// line's end, a string's text (its escapes in a basic string) is passed over, and a `"""` or a
-/// `'''` opens or closes a multi-line string. Returns the multi-line string still open at the end.
-fn toml_line(line: &str, mut inside: Option<&'static str>) -> Option<&'static str> {
-    let b = line.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        if let Some(q) = inside {
-            if q == "\"\"\"" && b[i] == b'\\' {
-                i += 2;
-                continue;
-            }
-            if b[i..].starts_with(q.as_bytes()) {
-                // A closing run may hold up to two quotes of the value before the delimiter.
-                let mut j = i + 3;
-                while j < b.len() && b[j] == q.as_bytes()[0] && j < i + 5 {
-                    j += 1;
-                }
-                inside = None;
-                i = j;
-                continue;
-            }
-            i += 1;
-            continue;
-        }
-        match b[i] {
-            b'#' => return None,
-            b'"' | b'\'' => {
-                let q: &'static str = if b[i] == b'"' { "\"\"\"" } else { "'''" };
-                if b[i..].starts_with(q.as_bytes()) {
-                    inside = Some(q);
-                    i += 3;
-                    continue;
-                }
-                // A single-line string: to its closing quote, a basic string's escapes passed over.
-                let quote = b[i];
-                i += 1;
-                while i < b.len() && b[i] != quote {
-                    if quote == b'"' && b[i] == b'\\' {
-                        i += 1;
-                    }
-                    i += 1;
-                }
-                i += 1;
-            }
-            _ => i += 1,
-        }
-    }
-    inside
-}
-
-/// What a header line sets: the key before its `=`, unquoted, or a table's header as written.
-fn header_key(line: &str) -> String {
-    if line.starts_with('[') {
-        let end = line.find(']').map(|i| i + 1).unwrap_or(line.len());
-        let end = if line[end..].starts_with(']') { end + 1 } else { end };
-        return line[..end].to_string();
-    }
-    // The key as TOML reads it: a quoted one to its closing quote (`=` inside it is the key's), a
-    // bare one to the first blank, `.` or `=`; a dotted key is named whole, never as its first part.
-    let quoted = |q: char, from: &str| -> Option<(String, usize)> {
-        let mut out = String::new();
-        let mut chars = from.char_indices().skip(1);
-        while let Some((i, c)) = chars.next() {
-            match c {
-                '\\' if q == '"' => {
-                    if let Some((_, e)) = chars.next() {
-                        out.push(e);
-                    }
-                }
-                c if c == q => return Some((out, i + c.len_utf8())),
-                c => out.push(c),
-            }
-        }
-        None
-    };
-    let (first, rest) = match line.chars().next() {
-        Some(q @ ('"' | '\'')) => match quoted(q, line) {
-            Some((k, end)) => (k, &line[end..]),
-            None => return line.to_string(),
-        },
-        _ => {
-            let end = line.find(|c: char| c.is_whitespace() || c == '.' || c == '=').unwrap_or(line.len());
-            (line[..end].to_string(), &line[end..])
-        }
-    };
-    if rest.trim_start().starts_with('.') {
-        return line.split('=').next().unwrap_or(line).trim().to_string();
-    }
-    first
 }
 
 /// What a statement may be: a script box's or a function's.

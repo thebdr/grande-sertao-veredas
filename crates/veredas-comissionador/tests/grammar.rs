@@ -899,9 +899,9 @@ fn another_header_key_is_refused_by_its_name_at_its_line_whatever_its_value() {
     };
     assert_eq!(one("owner = 99999999999999999999\n"), "3:1: the header holds `format` and `version` alone, not `owner`");
     assert_eq!(one("x = -9223372036854775809\n"), "3:1: the header holds `format` and `version` alone, not `x`");
-    assert_eq!(one("\n# a note\n  [extra]\n"), "5:3: the header holds `format` and `version` alone, not `[extra]`");
-    assert_eq!(one("[[many]]\n"), "3:1: the header holds `format` and `version` alone, not `[[many]]`");
-    assert_eq!(one("meta.x = 1\n"), "3:1: the header holds `format` and `version` alone, not `meta.x`");
+    assert_eq!(one("\n# a note\n  [extra]\n"), "5:3: the header holds `format` and `version` alone, not `extra`");
+    assert_eq!(one("[[many]]\n"), "3:1: the header holds `format` and `version` alone, not `many`");
+    assert_eq!(one("meta.x = 1\n"), "3:1: the header holds `format` and `version` alone, not `meta`");
     assert_eq!(one("\"name\" = 1\n"), "3:1: the header holds `format` and `version` alone, not `name`");
     // The stamp's own keys, quoted or commented, are the stamp.
     assert!(parse_test(&format!("\"format\" = \"veredas-test\" # the stamp\nversion = 1 # one\n{body}"), "t").is_ok());
@@ -1111,7 +1111,7 @@ fn a_quote_run_in_a_header_comment_hides_no_key() {
     };
     assert_eq!(one("format = \"veredas-test\"\nversion = 1 # it's ''' here\nextra = 2\n"), "3:1: the header holds `format` and `version` alone, not `extra`");
     assert_eq!(one("# a ''' in a comment\nformat = \"veredas-test\"\nversion = 1\nextra = 2\n"), "4:1: the header holds `format` and `version` alone, not `extra`");
-    assert_eq!(one("format = \"veredas-test\" # \"\"\"\nversion = 1\n[meta]\nx = 1\n"), "3:1: the header holds `format` and `version` alone, not `[meta]`");
+    assert_eq!(one("format = \"veredas-test\" # \"\"\"\nversion = 1\n[meta]\nx = 1\n"), "3:1: the header holds `format` and `version` alone, not `meta`");
     assert_eq!(one("format = \"\"\"\nveredas-test\"\"\" # \"\"\"\nversion = 1\nextra = 2\n"), "4:1: the header holds `format` and `version` alone, not `extra`");
     // A quote run inside a single-line string is the string's; an escaped quote stays inside it.
     assert_eq!(one("format = \"veredas-test\"\nversion = 1\nnote = \"a ''' b \\\" c\"\nextra = 2\n"), "3:1: the header holds `format` and `version` alone, not `note`");
@@ -1209,8 +1209,9 @@ fn a_quoted_header_key_is_read_to_its_closing_quote() {
     assert_eq!(one("\"format=x\" = 2\n"), "3:1: the header holds `format` and `version` alone, not `format=x`");
     assert_eq!(one("'version = 9' = 2\n"), "3:1: the header holds `format` and `version` alone, not `version = 9`");
     assert_eq!(one("\"a\\\"b\" = 2\n"), "3:1: the header holds `format` and `version` alone, not `a\"b`");
-    // A dotted key is named whole; a quoted key holding a dot is one key.
-    assert_eq!(one("stamp.format = 2\n"), "3:1: the header holds `format` and `version` alone, not `stamp.format`");
+    // A dotted key is named by its first part, the table it makes; a quoted key holding a dot is
+    // one key.
+    assert_eq!(one("stamp.format = 2\n"), "3:1: the header holds `format` and `version` alone, not `stamp`");
     assert_eq!(one("\"version.x\" = 2\n"), "3:1: the header holds `format` and `version` alone, not `version.x`");
     // A dotted key under the stamp's own name is no TOML: core's reader refuses it first.
     assert!(one("format.x = 2\n").starts_with("1:1: not a test file: TOML parse error"));
@@ -1265,6 +1266,65 @@ fn a_test_using_a_large_function_file_is_checked_at_once() {
     assert!(t0.elapsed() < std::time::Duration::from_secs(5), "10 000 duplicates: {:?}", t0.elapsed());
     assert_eq!(p.len(), 9_999);
     assert_eq!(p[9_998], format!("d.fn:{}:10: two functions are named `F`: the other is at d.fn:4:10", 4 + 3 * 9_999));
+}
+
+// ---- refute round 5 ------------------------------------------------------------------------
+
+#[test]
+fn a_header_key_is_read_with_its_escapes_as_toml_reads_it() {
+    let body = "test \"t\" {\n  id T\n  step a stop pass\n}\n";
+    let one = |head: &str| {
+        let e = parse_test(&format!("format = \"veredas-test\"\nversion = 1\n{head}{body}"), "t").unwrap_err();
+        format!("{}:{}: {}", e.line, e.column, e.message)
+    };
+    // An escape that would make the stamp's name hides no key: the key is what TOML decodes, a
+    // control character in it shown by its escape.
+    let not = |name: &str| format!("3:1: the header holds `format` and `version` alone, not `{name}`");
+    assert_eq!(one("\"\\format\" = 1\n"), not("\\u{c}ormat"));
+    assert_eq!(one("\"versio\\n\" = 1\n"), not("versio\\n"));
+    assert_eq!(one("\"forma\\t\" = { a = 1 }\n"), not("forma\\t"));
+    assert_eq!(one("\"fo\\rmat\" = [1, 2]\n"), not("fo\\rmat"));
+    assert_eq!(one("\"versio\\n\" = 18446744073709551616\n"), not("versio\\n"));
+    assert_eq!(one("\"ve\\rsion\" = \"x\"\n"), not("ve\\rsion"));
+    assert_eq!(one("\"a\\tb\" = 1\n"), not("a\\tb"));
+    // An escape of an ordinary letter is that letter: the stamp written so is the stamp.
+    for stamp in ["\"form\\u0061t\" = \"veredas-test\"\nversion = 1\n", "format = \"veredas-test\"\n\"\\u0076ersion\" = 1\n"] {
+        assert!(parse_test(&format!("{stamp}{body}"), "t").is_ok(), "{stamp}");
+    }
+    // In a used function file the same, through the test's check.
+    let f = "format = \"veredas-functions\"\nversion = 1\n\"\\format\" = 1\nfunction F() {\n}\n";
+    assert_eq!(problems_with(&test_of("  use f.fn\n  step a stop pass\n"), &[("f.fn", f)]), ["f.fn:3:1: the header holds `format` and `version` alone, not `\\u{c}ormat`"]);
+}
+
+#[test]
+fn a_dotted_or_table_key_with_quotes_is_named_as_toml_reads_it() {
+    let body = "test \"t\" {\n  id T\n  step a stop pass\n}\n";
+    let one = |head: &str| {
+        let e = parse_test(&format!("format = \"veredas-test\"\nversion = 1\n{head}{body}"), "t").unwrap_err();
+        format!("{}:{}: {}", e.line, e.column, e.message)
+    };
+    let not = |at: &str, name: &str| format!("{at}: the header holds `format` and `version` alone, not `{name}`");
+    assert_eq!(one("'a=b'.c = 2\n"), not("3:1", "a=b"));
+    assert_eq!(one("[\"a]b\"]\n"), not("3:1", "a]b"));
+    assert_eq!(one("[[\"x]]y\".z]]\n"), not("3:1", "x]]y"));
+    assert_eq!(one("  \"p.q\" . r = 2\n"), not("3:3", "p.q"));
+}
+
+#[test]
+fn problems_sharing_one_line_are_placed_at_once() {
+    // 160 000 positions for no step on one line, ASCII and past it (a comment at its end): each
+    // placed, the last at its column, in a time linear in the line.
+    for tail in ["", " # olá, ç"] {
+        let n = 160_000;
+        let line = format!("layout {{{}}}{tail}", " a 0,0".repeat(n));
+        let text = format!("{}{line}\n", test_of("  step b stop pass\n"));
+        let t0 = std::time::Instant::now();
+        let e = check_with(&text, &[]).unwrap_err();
+        assert!(t0.elapsed() < std::time::Duration::from_secs(5), "{tail:?}: {:?}", t0.elapsed());
+        assert_eq!(e.len(), n, "{tail:?}");
+        let last = e.iter().max_by_key(|p| p.column).unwrap();
+        assert_eq!((last.line, last.column), (8, 8 + 6 * (n - 1) + 2), "{tail:?}: {}", last.message);
+    }
 }
 
 // ---- the reference's text -------------------------------------------------------------------
@@ -1357,7 +1417,8 @@ line, outside a string. Blank lines and comments go anywhere.
 `function` (a function file) is the header: TOML holding `format` and `version` and nothing else
 (comments and blank lines aside). A test file's `format` is `"veredas-test"`, a function file's
 `"veredas-functions"`; this reader knows `version` 1 of each. Another key in the header is
-refused by its name.
+refused by its name as TOML reads it: a table's name, a dotted key's first part, a quoted key with
+its escapes decoded (a control character in it shown by its escape).
 
 **Names.** A name is ASCII letters, digits and `_`, not starting with a digit. These words are
 the language's own and name nothing else: `and`, `as`, `await`, `branch`, `call`, `check`,

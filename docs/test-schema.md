@@ -120,7 +120,8 @@ line, outside a string. Blank lines and comments go anywhere.
 `function` (a function file) is the header: TOML holding `format` and `version` and nothing else
 (comments and blank lines aside). A test file's `format` is `"veredas-test"`, a function file's
 `"veredas-functions"`; this reader knows `version` 1 of each. Another key in the header is
-refused by its name.
+refused by its name as TOML reads it: a table's name, a dotted key's first part, a quoted key with
+its escapes decoded (a control character in it shown by its escape).
 
 **Names.** A name is ASCII letters, digits and `_`, not starting with a digit. These words are
 the language's own and name nothing else: `and`, `as`, `await`, `branch`, `call`, `check`,
