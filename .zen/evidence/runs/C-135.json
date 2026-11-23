@@ -1,24 +1,26 @@
 {
   "clause": "C-135",
-  "command": "cargo test -p veredas-aranha --test rt",
+  "command": "cargo test -j 4 -p veredas-aranha --test rt",
   "commandArgv": [
     "cargo",
     "test",
+    "-j",
+    "4",
     "-p",
     "veredas-aranha",
     "--test",
     "rt"
   ],
   "exitCode": 0,
-  "outputSha": "fae22c4e64c99ffd2491c0eacb8bb901931b13e553acd648c1c78bb2e7de1d14",
-  "outputTail": "\nrunning 5 tests\ntest a_cyclic_frame_is_its_id_its_data_and_its_status_to_the_byte ... ok\ntest a_frame_id_is_read_by_its_range ... ok\ntest the_status_bits_are_named ... ok\ntest what_is_not_a_cyclic_frame_is_refused_both_ways ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s\n     Running tests/rt.rs (target/debug/build/veredas-aranha/97016a65fd22681b/out/rt-97016a65fd22681b)",
-  "ranAt": "2026-11-23T05:45:47.397Z",
-  "headCommit": "6e53ec868f39eccd9cb1b05103444e7a207d2dc5",
+  "outputSha": "f230b8c95fe2cbc53a2a13b2ebe23e4cf86a9c170549fa7e79ac1a06b14168b5",
+  "outputTail": "\nrunning 6 tests\ntest a_frame_id_is_read_by_its_range ... ok\ntest a_cyclic_frame_is_its_id_its_data_and_its_status_to_the_byte ... ok\ntest the_status_bits_are_named ... ok\ntest what_is_not_a_cyclic_frame_is_refused_both_ways ... ok\ntest a_frame_tshark_takes_for_a_secured_one_is_read_plain_by_the_codec ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s\n     Running tests/rt.rs (target/debug/build/veredas-aranha/97016a65fd22681b/out/rt-97016a65fd22681b)",
+  "ranAt": "2026-11-23T12:41:22.241Z",
+  "headCommit": "197e812a8848bb31c23b7f74c145f0e084ce2768",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/rt.rs",
       "file": "crates/veredas-aranha/tests/rt.rs",
-      "fileSha": "0ac945876a055384dcaaa01c2a62d36fc85568237cd44b72a5d2db4efcad8140"
+      "fileSha": "37abd1f84fc8fcce5b052ef8f6015c75f1a3086103bdf0a2083c662a96b1791c"
     },
     {
       "name": "crates/veredas-aranha/tests/common/mod.rs",
