@@ -1182,8 +1182,6 @@ fn lock_crates() -> BTreeSet<String> {
 /// `all.html` is kept as a page only: its sections mirror the pages.
 fn rustdoc_view(features: &[&str], private: bool) -> BTreeMap<String, String> {
     let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("features-check");
-    let docs = target.join("doc").join("veredas_core");
-    let _ = std::fs::remove_dir_all(&docs);
     // Rustdoc links a dependency's type, with its full path as the link's title, only when a
     // folder of that crate's name stands in the doc folder; without one it writes the bare name,
     // and two dependencies' `Error`s read the same. A folder for every crate of the lock.
@@ -1191,25 +1189,61 @@ fn rustdoc_view(features: &[&str], private: bool) -> BTreeMap<String, String> {
         std::fs::create_dir_all(target.join("doc").join(name)).unwrap();
     }
     let list = features.join(",");
-    let m = manifest();
-    let mut args = vec![
-        "doc",
-        "-p",
-        "veredas-core",
-        "--no-deps",
-        "--lib",
-        "--offline",
-        "--quiet",
-        "--no-default-features",
-        "--manifest-path",
-        m.to_str().unwrap(),
-    ];
-    if private {
-        args.push("--document-private-items");
-    }
-    if !features.is_empty() {
-        args.extend(["--features", list.as_str()]);
-    }
+    let (docs, args): (PathBuf, Vec<String>) = if private {
+        // Core's own pages, private items included: rustdoc reads core's source, under `cfg(doc)`.
+        let m = manifest();
+        let mut args: Vec<String> = [
+            "doc",
+            "-p",
+            "veredas-core",
+            "--no-deps",
+            "--lib",
+            "--offline",
+            "--quiet",
+            "--no-default-features",
+            "--document-private-items",
+            "--manifest-path",
+            m.to_str().unwrap(),
+        ]
+        .map(String::from)
+        .to_vec();
+        if !features.is_empty() {
+            args.extend(["--features".to_string(), list.clone()]);
+        }
+        (target.join("doc").join("veredas_core"), args)
+    } else {
+        // The public pages as the build holds them: a facade crate asking for core in this form
+        // re-exports all of it inlined, so rustdoc renders core's items from core's compiled
+        // metadata, where `cfg(doc)` was never set, not from its source.
+        std::fs::create_dir_all(target.join("doc").join("veredas_core")).unwrap();
+        let root = consumer("facade", features, "");
+        let lib = std::fs::read_to_string(root.join("Cargo.toml"))
+            .unwrap()
+            .replace(
+                "[dependencies]",
+                "[lib]\npath = \"src/lib.rs\"\n\n[dependencies]",
+            );
+        std::fs::write(root.join("Cargo.toml"), lib).unwrap();
+        let _ = std::fs::remove_file(root.join("src/main.rs"));
+        std::fs::write(
+            root.join("src/lib.rs"),
+            "#[doc(inline)]\npub use veredas_core::*;\n",
+        )
+        .unwrap();
+        let args: Vec<String> = [
+            "doc",
+            "--no-deps",
+            "--lib",
+            "--offline",
+            "--quiet",
+            "--manifest-path",
+            root.join("Cargo.toml").to_str().unwrap(),
+        ]
+        .map(String::from)
+        .to_vec();
+        (target.join("doc").join("facade"), args)
+    };
+    let _ = std::fs::remove_dir_all(&docs);
     let out = Command::new(env!("CARGO"))
         .args(&args)
         .env("CARGO_TARGET_DIR", &target)
@@ -1296,8 +1330,24 @@ fn public_paths(view: &BTreeMap<String, String>) -> BTreeSet<String> {
 /// consumer cannot name.
 #[test]
 fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
+    const NET_ROOT_NAMES: &[&str] = &[
+        "Quality",
+        "Sample",
+        "SeriesRef",
+        "SeriesType",
+        "SourceId",
+        "Value",
+        "now_unix_ms",
+        "SourceError",
+        "SourceHandle",
+        "stop_flag",
+    ];
     const NET_ROOT: &[&str] = &[
         "index.html#reexports",
+        // The root's table in the build's view, its re-exports inlined: their sections.
+        "index.html#enums",
+        "index.html#functions",
+        "index.html#structs",
         "index.html#reexport.Quality",
         "index.html#reexport.Sample",
         "index.html#reexport.SeriesRef",
@@ -1318,10 +1368,15 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
     let layer = |feature: &str, path: &str| -> bool {
         match feature {
             "net" => {
-                ["types/", "source/", "telegram/", "opc/"]
+                (["types/", "source/", "telegram/", "opc/"]
                     .iter()
                     .any(|d| path.starts_with(d))
-                    && !path.starts_with("opc/demo/")
+                    && !path.starts_with("opc/demo/"))
+                    // The root's re-exports, inlined as pages of the root in the build's view.
+                    || (!path.contains('/')
+                        && NET_ROOT_NAMES.iter().any(|n| {
+                            path.split('#').next().unwrap().split('.').nth(1) == Some(*n)
+                        }))
             }
             "demo-server" => path.starts_with("opc/demo/"),
             "modbus" => path.starts_with("fieldbus/modbus/"),
