@@ -517,7 +517,9 @@ const PROBES: &str = r##"
       if (c.fill !== "none" || c.stroke !== LINE[s] || c.strokeWidth !== px(w, s === "alarm" ? 2 : 1.4) || c.strokeDasharray !== dashes(w, s) || byStroke(line) <= 0.05) out.push(`a level's line in ${s}, drawn ${w}: filled ${c.fill}, stroked ${c.stroke} ${c.strokeWidth} dashed ${c.strokeDasharray}`);
     }
     const cb = getComputedStyle(body);
-    if (cb.stroke !== "none" || byFill(body) <= 0.05) out.push(`a level's body in ${s}: stroked ${cb.stroke}, filled ${cb.fill}`);
+    // Its body filled in the state's own colour: a level's fill in the same state.
+    const fill = getComputedStyle(made.find(([, x]) => x === `a fill in ${s}`)[0]).fill;
+    if (cb.stroke !== "none" || byFill(body) <= 0.05 || cb.fill !== fill) out.push(`a level's body in ${s}: stroked ${cb.stroke}, filled ${cb.fill}, a level's fill ${fill}`);
   }
   const lineSurfaces = [
     ...KINDS.filter((k) => k !== "level").flatMap((k) => LINE_WIDTHS.map(([, name]) => [`a ${name} ${k} element`, (s) => made.find(([, x]) => x === `a ${name} ${k} element in ${s}`)[0]])),
@@ -1659,6 +1661,8 @@ const NO_AREA_SVG: &str = r##"  <line id="nv-vt-o" x1="0" y1="0" x2="0" y2="20" 
   <rect id="nv-edge" x="370" y="372" width="24" height="28"/>
   <g id="nv-gpipe"><path d="M 120,336 H 150" style="fill:none;stroke:#3a3a40;stroke-width:6"/><path d="M 0,0 H 15" transform="translate(150 336) scale(2 1)" style="fill:none;stroke:#3a3a40;stroke-width:6"/></g>
   <path id="nv-walls" d="m 20,268 h 50 m -50,12 h 50" style="fill:none;stroke:#3a3a40;stroke-width:4"/>
+  <path id="na-over" d="M 320 250 C 310 245 350 265 340 260" style="fill:#cccccc;stroke:#3a3a40;stroke-width:2"/>
+  <path id="na-mirror" d="M 365 250 C 367 251 357 246 369 252 S 371 253 373 254" style="fill:#cccccc;stroke:#3a3a40;stroke-width:2"/>
   <path id="nv-ell" d="M 100,268 H 140 M 140,268 V 284" style="fill:none;stroke:#3a3a40;stroke-width:4"/>
   <g id="nv-gell"><path d="M 180,268 H 220" style="fill:none;stroke:#3a3a40;stroke-width:4"/><path d="M 220,268 V 284" style="fill:none;stroke:#3a3a40;stroke-width:4"/></g>
   <g id="nv-ghid"><path d="M 250,276 H 300" style="fill:none;stroke:#3a3a40;stroke-width:6"/><path d="M 330,276 H 380" style="display:none;fill:none;stroke:#3a3a40;stroke-width:6"/></g>
@@ -1705,11 +1709,18 @@ const NO_AREA_GROUPS: [(&str, &str); 6] = [("nv-gline", "path"), ("nv-gvline", "
 /// Elements with no area whose runs lie on more than one line, each with points of its own
 /// coordinates on its strokes (the fill over them at a full level) and off them (between two walls,
 /// inside an L's corner: no fill there): two walls Inkscape's Combine made one path, an L of two
-/// subpaths, a group of an L of two paths.
-const RUNS: [(&str, &[(f64, f64)], &[(f64, f64)]); 3] = [
+/// subpaths, a group of an L of two paths, a slanted curve whose handles reach past its ends, and a
+/// smooth one carried past its last node by its mirrored handle.
+const RUNS: [(&str, &[(f64, f64)], &[(f64, f64)]); 5] = [
     ("nv-walls", &[(45.0, 268.0), (45.0, 280.0)], &[(45.0, 274.0)]),
     ("nv-ell", &[(120.0, 268.0), (140.0, 276.0)], &[(120.0, 278.0)]),
     ("nv-gell", &[(200.0, 268.0), (220.0, 276.0)], &[(200.0, 278.0)]),
+    // A slanted curve with no area whose handles reach past its nodes along its line: filled over
+    // where it goes, never over its handles past its ends.
+    ("na-over", &[(325.0, 252.5), (335.0, 257.5)], &[(312.0, 246.0), (348.0, 264.0)]),
+    // A smooth curve (`S`) whose first handle, the one before it mirrored, carries it past its last
+    // node: filled as far as it goes.
+    ("na-mirror", &[(374.2, 254.6), (366.0, 250.5)], &[(378.0, 256.5)]),
 ];
 
 /// Each of `RUNS` filled over its strokes and nowhere between them, by what the browser hits.
@@ -2045,6 +2056,9 @@ const LINES_SVG: &str = r##"  <line id="ln-normal" x1="15" y1="240" x2="15" y2="
   <path id="la-cap-curve" d="M 80 600 c 20 0 30 10 30 40" fill="none" stroke="#3a3a40" stroke-width="6" stroke-linecap="square"/>
   <path id="la-cap-arc" d="M 140 600 a 20 20 0 0 1 20 20" fill="none" stroke="#3a3a40" stroke-width="6" stroke-linecap="square"/>
   <g id="la-cap-line"><circle cx="200" cy="615" r="12" fill="none" stroke="#3a3a40" stroke-width="6"/><line x1="230" y1="600" x2="230" y2="640" stroke="#3a3a40" stroke-width="6" stroke-linecap="square"/></g>
+  <polyline id="la-dup" points="245,600 275,600 275,640 275,640" fill="none" stroke="#3a3a40" stroke-width="6" stroke-linecap="square"/>
+  <path id="la-cusp" d="M 300 640 C 300 640 300 600 340 600" fill="none" stroke="#3a3a40" stroke-width="8" stroke-linecap="square"/>
+  <path id="la-loop" d="M 370 600 L 395 640 L 345 640 L 370 600" fill="none" stroke="#3a3a40" stroke-width="6" stroke-linecap="square" stroke-linejoin="bevel"/>
 </svg>"##;
 
 /// Each shape drawn as a line and bound to show its state: its id, its state, the width it was drawn
@@ -2081,7 +2095,7 @@ const BODY_CASES: [(&str, (f64, f64)); 3] = [("nf-zero", (205.0, 320.0)), ("nf-b
 /// on its lines below its level, on them above it, and inside what they close (off every line), in
 /// its own coordinates.
 #[allow(clippy::type_complexity)]
-const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 14] = [
+const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 17] = [
     ("la-ring", 0.35, "normal", 6.0, &[(40.0, 386.0)], &[(40.0, 354.0), (24.0, 370.0)], &[(40.0, 370.0), (40.0, 380.0)]),
     ("la-bent", 0.35, "normal", 8.0, &[(100.0, 390.0), (80.0, 385.0), (122.5, 390.0)], &[(80.0, 360.0)], &[(95.0, 380.0)]),
     ("la-hollow", 1.0, "normal", 4.0, &[(160.0, 350.0), (140.0, 370.0), (180.0, 370.0), (160.0, 390.0)], &[], &[(160.0, 370.0)]),
@@ -2098,6 +2112,12 @@ const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64,
     ("la-cap-curve", 1.0, "normal", 6.0, &[(110.0, 639.0)], &[], &[]),
     ("la-cap-arc", 1.0, "normal", 6.0, &[(160.0, 619.0)], &[], &[]),
     ("la-cap-line", 1.0, "normal", 6.0, &[(230.0, 630.0)], &[], &[(200.0, 615.0)]),
+    // An end whose next point sits on it (a point written twice; a curve's handle drawn back onto
+    // its node, as Inkscape's cusp writes it), and an open run ending on its start (no `Z`): each
+    // capped as the browser paints it, its reach hit-tested.
+    ("la-dup", 1.0, "normal", 6.0, &[], &[], &[]),
+    ("la-cusp", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-loop", 1.0, "normal", 6.0, &[], &[], &[]),
 ];
 
 /// The state's colours on a line, read from the page's own tokens as the browser computes a stroke:

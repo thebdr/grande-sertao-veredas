@@ -93,10 +93,14 @@ const CARRIED = ["stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stro
 /// a line's, a polyline's, and each subpath of a path not closed back on its start (a path with an
 /// arc read as one run, from its first point to its last unless it closes); none for a closed shape.
 function openEnds(g: SVGGeometryElement): [Pt, Pt][] {
+  // The way out of an end taken from the first point off it (a curve's handle drawn back onto its
+  // node, or a point written twice, gives none of its own).
   const ends = (pts: Pt[]): [Pt, Pt][] => {
     if (pts.length < 2) return [];
-    const [a, b, y, z] = [pts[0], pts[1], pts[pts.length - 2], pts[pts.length - 1]];
-    return a.x === z.x && a.y === z.y ? [] : [[a, { x: a.x - b.x, y: a.y - b.y }], [z, { x: z.x - y.x, y: z.y - y.y }]];
+    const [a, z] = [pts[0], pts[pts.length - 1]];
+    const b = pts.find((p) => p.x !== a.x || p.y !== a.y);
+    const y = [...pts].reverse().find((p) => p.x !== z.x || p.y !== z.y);
+    return b && y ? [[a, { x: a.x - b.x, y: a.y - b.y }], [z, { x: z.x - y.x, y: z.y - y.y }]] : [];
   };
   if (g instanceof SVGLineElement) return ends([{ x: g.x1.baseVal.value, y: g.y1.baseVal.value }, { x: g.x2.baseVal.value, y: g.y2.baseVal.value }]);
   if (g instanceof SVGPolylineElement) {
@@ -107,7 +111,7 @@ function openEnds(g: SVGGeometryElement): [Pt, Pt][] {
   if (g instanceof SVGPathElement) {
     const d = g.getAttribute("d") ?? "";
     const subs = subpaths(d);
-    if (subs) return subs.flatMap(ends);
+    if (subs) return subs.filter((s) => !s.closed).flatMap((s) => ends(s.drawn));
     if (/[zZ]/.test(d)) return [];
     const len = g.getTotalLength();
     const step = Math.min(1, len / 2);
@@ -172,15 +176,44 @@ function straight(pts: Pt[]): Run | null {
   return off <= n * 1e-6 + 1e-6 ? { box, dir: { x: dx, y: dy } } : null;
 }
 
-/// A path's subpaths as the points that make each (every end and control point, absolute), from its
-/// data; null where a subpath holds an arc (no run of its points says it is straight).
-function subpaths(d: string): Pt[][] | null {
+/// A point `t` of the way along a Bézier curve of the points `p` (de Casteljau).
+function bezier(p: Pt[], t: number): Pt {
+  let q: Pt[] = p;
+  while (q.length > 1) {
+    const r: Pt[] = q;
+    q = r.slice(1).map((b, k) => ({ x: r[k].x + (b.x - r[k].x) * t, y: r[k].y + (b.y - r[k].y) * t }));
+  }
+  return q[0];
+}
+
+/// A subpath: the points that make it (every end and control point, absolute), the points it draws
+/// (each curve followed at 32 points), and whether a `Z` closes it.
+type Sub = { pts: Pt[]; drawn: Pt[]; closed: boolean };
+
+/// A path's subpaths, from its data; null where a subpath holds an arc (no run of its points says
+/// it is straight). A subpath is closed by a `Z` alone, whatever its ends; after one, the next
+/// command starts a new subpath at the closed one's start. A smooth curve's first control (`S`, `T`)
+/// is the one before it mirrored, as the browser draws it.
+function subpaths(d: string): Sub[] | null {
   const toks = d.match(/[MmLlHhVvCcSsQqTtAaZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) ?? [];
-  const out: Pt[][] = [];
-  let cur: Pt[] = [];
-  let x = 0, y = 0, sx = 0, sy = 0, cmd = "", i = 0;
+  const out: Sub[] = [];
+  let cur: Pt[] = [], drawn: Pt[] = [];
+  let x = 0, y = 0, sx = 0, sy = 0, cmd = "", i = 0, after = false;
+  let c2: Pt | null = null, qc: Pt | null = null;
   const num = () => Number(toks[i++]);
-  const put = (px: number, py: number) => { x = px; y = py; cur.push({ x, y }); };
+  const begin = () => {
+    if (after && !cur.length) { cur.push({ x: sx, y: sy }); drawn.push({ x: sx, y: sy }); }
+    after = false;
+  };
+  const put = (px: number, py: number) => { begin(); x = px; y = py; cur.push({ x, y }); drawn.push({ x, y }); };
+  const bend = (pts: Pt[]) => {
+    begin();
+    const all = [{ x, y }, ...pts];
+    for (let k = 1; k <= 32; k++) drawn.push(bezier(all, k / 32));
+    cur.push(...pts);
+    ({ x, y } = pts[pts.length - 1]);
+  };
+  const end = (closed: boolean) => { if (cur.length) out.push({ pts: cur, drawn, closed }); cur = []; drawn = []; };
   while (i < toks.length) {
     if (/[A-Za-z]/.test(toks[i])) cmd = toks[i++];
     else if (!cmd) return null;
@@ -188,23 +221,51 @@ function subpaths(d: string): Pt[][] | null {
     const ox = rel ? x : 0, oy = rel ? y : 0;
     switch (cmd.toUpperCase()) {
       case "M": {
-        if (cur.length) out.push(cur);
-        cur = [];
+        end(false);
+        after = false;
         put(ox + num(), oy + num());
         sx = x; sy = y;
         cmd = rel ? "l" : "L";
+        c2 = qc = null;
         break;
       }
-      case "L": case "T": put(ox + num(), oy + num()); break;
-      case "H": put(ox + num(), y); break;
-      case "V": put(x, oy + num()); break;
-      case "C": { const p = [num(), num(), num(), num(), num(), num()]; cur.push({ x: ox + p[0], y: oy + p[1] }, { x: ox + p[2], y: oy + p[3] }); put(ox + p[4], oy + p[5]); break; }
-      case "S": case "Q": { const p = [num(), num(), num(), num()]; cur.push({ x: ox + p[0], y: oy + p[1] }); put(ox + p[2], oy + p[3]); break; }
-      case "Z": put(sx, sy); cmd = ""; break;
+      case "L": put(ox + num(), oy + num()); c2 = qc = null; break;
+      case "H": put(ox + num(), y); c2 = qc = null; break;
+      case "V": put(x, oy + num()); c2 = qc = null; break;
+      case "C": {
+        const p = [num(), num(), num(), num(), num(), num()];
+        const b: Pt = { x: ox + p[2], y: oy + p[3] };
+        bend([{ x: ox + p[0], y: oy + p[1] }, b, { x: ox + p[4], y: oy + p[5] }]);
+        c2 = b; qc = null;
+        break;
+      }
+      case "S": {
+        const p = [num(), num(), num(), num()];
+        const a: Pt = c2 ? { x: 2 * x - c2.x, y: 2 * y - c2.y } : { x, y };
+        const b: Pt = { x: ox + p[0], y: oy + p[1] };
+        bend([a, b, { x: ox + p[2], y: oy + p[3] }]);
+        c2 = b; qc = null;
+        break;
+      }
+      case "Q": {
+        const p = [num(), num(), num(), num()];
+        const q: Pt = { x: ox + p[0], y: oy + p[1] };
+        bend([q, { x: ox + p[2], y: oy + p[3] }]);
+        qc = q; c2 = null;
+        break;
+      }
+      case "T": {
+        const p = [num(), num()];
+        const q: Pt = qc ? { x: 2 * x - qc.x, y: 2 * y - qc.y } : { x, y };
+        bend([q, { x: ox + p[0], y: oy + p[1] }]);
+        qc = q; c2 = null;
+        break;
+      }
+      case "Z": put(sx, sy); end(true); after = true; x = sx; y = sy; cmd = ""; c2 = qc = null; break;
       default: return null;
     }
   }
-  if (cur.length) out.push(cur);
+  end(false);
   return out;
 }
 
@@ -219,7 +280,9 @@ function runsOf(el: SVGGraphicsElement, box: DOMRect): Run[] | null {
   if (el instanceof SVGPathElement) {
     const subs = subpaths(el.getAttribute("d") ?? "");
     if (!subs || !subs.length) return null;
-    const runs = subs.map(straight);
+    // Straight by the points that make it, its box where its curves go (a handle reaching past its
+    // node along the line draws nothing there).
+    const runs = subs.map((s) => { const r = straight(s.pts); return r && { ...r, box: straight(s.drawn)?.box ?? r.box }; });
     return runs.every((r) => r !== null) ? (runs as Run[]) : null;
   }
   if (el instanceof SVGPolylineElement || el instanceof SVGPolygonElement) {
