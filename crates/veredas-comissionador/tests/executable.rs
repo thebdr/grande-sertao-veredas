@@ -109,13 +109,15 @@ fn run_starts_the_session_runs_live_keeps_the_run_and_answers_by_its_verdict() {
 #[test]
 fn replay_reads_the_window_the_project_s_start_fills() {
     let dir = tempfile::tempdir().unwrap();
-    // A log of ten lines a second apart, an hour old, read whole by a start two hours back.
+    // A log of ten lines a second apart, an hour old, read whole by a start two hours back; the
+    // lines and the window's ends placed from one moment.
     std::fs::write(dir.path().join("plant.log"), "").unwrap();
+    let base = veredas_portal::serve::store_now_ms() - 3_600_000;
     for i in 0..10 {
-        log_line(dir.path(), 3_600_000 - i * 1000, &format!("{}.0", 20 + i));
+        log_line_at(dir.path(), base + i * 1000, &format!("{}.0", 20 + i));
     }
-    let t0 = veredas_comissionador::eval::time_text(veredas_portal::serve::store_now_ms() - 3_600_000 - 500);
-    let t9 = veredas_comissionador::eval::time_text(veredas_portal::serve::store_now_ms() - 3_600_000 + 9_500);
+    let t0 = veredas_comissionador::eval::time_text(base - 500);
+    let t9 = veredas_comissionador::eval::time_text(base + 9_500);
     std::fs::write(
         dir.path().join("project.toml"),
         "format = \"veredas-project\"\nversion = 1\nname = \"the log\"\n\n[session]\nstart = { last_hours = 2 }\n\n[[log]]\nid = \"plant\"\nfile = \"plant.log\"\ntimestamp = { pattern = \"^(?P<ts>\\\\S+ \\\\S+)\", formats = [\"%Y-%m-%d %H:%M:%S%.3f\"] }\n\n[[rule]]\nname = \"readings\"\npattern = \"temp=(?P<temp>[0-9.]+)\"\nscope = \"plant\"\ntypes = { temp = \"float\" }\n",
@@ -124,7 +126,7 @@ fn replay_reads_the_window_the_project_s_start_fills() {
     std::fs::write(dir.path().join("t.test"), test_of("  step w wait readings.temp >= 25.0 timeout 1min\n  step r report readings.temp\n")).unwrap();
     let (code, stdout, stderr) = out(&exe(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &t0, "--to", &t9]));
     assert_eq!(code, 0, "{stdout:?} {stderr:?}");
-    assert!(stdout[0].starts_with("w #1 pass: readings.temp >= 25.0 held after 5"), "{}", stdout[0]);
+    assert_eq!(stdout[0], "w #1 pass: readings.temp >= 25.0 held after 5500ms", "the sixth line, 5.5 s after the window's start");
     assert_eq!(stdout[2], "passed at r: the run passed its last step");
     let r = record::read(&dir.path().join("runs/t/0001")).unwrap();
     assert_eq!((r.run.mode.as_str(), r.reported[0].text.as_str()), ("replay", "readings.temp = 25"));

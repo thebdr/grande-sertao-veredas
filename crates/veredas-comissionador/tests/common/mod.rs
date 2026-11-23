@@ -170,8 +170,14 @@ pub fn tag(bench: &Bench, id: &str) -> String {
 
 /// A line of the plant's log, stamped `ago_ms` before the store's now, carrying `temp`.
 pub fn log_line(dir: &Path, ago_ms: i64, temp: &str) {
+    log_line_at(dir, veredas_portal::serve::store_now_ms() - ago_ms, temp);
+}
+
+/// A line of the plant's log, stamped `at_ms` on the store's axis, carrying `temp`: lines and a
+/// window placed from one moment taken once, so a stall between two writes moves none of them.
+pub fn log_line_at(dir: &Path, at_ms: i64, temp: &str) {
     use std::io::Write;
-    let at = chrono::DateTime::from_timestamp_millis(veredas_portal::serve::store_now_ms() - ago_ms).unwrap().naive_utc();
+    let at = chrono::DateTime::from_timestamp_millis(at_ms).unwrap().naive_utc();
     let mut f = std::fs::OpenOptions::new().append(true).open(dir.join("plant.log")).unwrap();
     writeln!(f, "{} temp={temp}", at.format("%Y-%m-%d %H:%M:%S%.3f")).unwrap();
 }
