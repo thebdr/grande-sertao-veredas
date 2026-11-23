@@ -1,0 +1,13 @@
+{
+  "clause": "C-204",
+  "verdict": "refuted",
+  "ranAt": "2026-11-23T03:16:59.143Z",
+  "headCommit": "77de1d5cc0d7623a8a05eaee87cf526f082f47e0",
+  "tests": [
+    {
+      "name": "crates/veredas-comissionador/tests/record.rs",
+      "file": "crates/veredas-comissionador/tests/record.rs",
+      "symbolSha": "b4f511f8bc4b9f361a4cd0095a63dfdaa84a37f3ce1cace4bcffb06f6d698448"
+    }
+  ]
+}
