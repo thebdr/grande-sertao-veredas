@@ -1683,24 +1683,30 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     // Each kind alone in a blank document with no policy: live (it asks the other host, or runs).
     let mut blank = Browser::open("about:blank");
     let kinds: Vec<(String, String, String)> = blank.eval(PAGE_KINDS).as_array().unwrap().iter().map(|k| (k[0].as_str().unwrap().to_string(), k[1].as_str().unwrap().to_string(), k[2].as_str().unwrap().to_string())).collect();
+    // Every kind live but the references to another document a browser may never fetch; those the
+    // browser asks nothing for even with no policy are named (and held below to asking nothing).
+    let may_be_silent = ["a style's cursor", "a paint from another document", "a filter from another document", "a mask from another document", "a clip path from another document", "a marker from another document", "a use of another document", "a manifest"];
     let mut live = std::collections::BTreeSet::new();
     let mut silent = Vec::new();
     for (kind, _, address) in &kinds {
         let (from, ran) = (other.count(), blank.eval("window.__ran.length").as_u64().unwrap());
         blank.eval(&format!("window.__probes[{}]({other_js})", serde_json::to_string(kind).unwrap()));
-        std::thread::sleep(Duration::from_millis(700));
-        let asked = other.requests_since(from);
-        let ran_now = blank.eval("window.__ran.length").as_u64().unwrap() > ran;
-        if (address != "inline" && asked.iter().any(|l| l.contains(address.as_str()))) || (address == "inline" && (ran_now || !asked.is_empty())) {
+        // Waited for its own attempt (its address asked of the other host, or its script run), not
+        // for a stretch of time: thirty seconds for a kind that must try, three for one a browser
+        // may never fetch (a machine under load fetches a video's data late).
+        let patience = Duration::from_secs(if may_be_silent.contains(&kind.as_str()) { 3 } else { 30 });
+        let tried = wait(patience, || {
+            let asked = other.requests_since(from);
+            let ran_now = blank.eval("window.__ran.length").as_u64().unwrap() > ran;
+            (address != "inline" && asked.iter().any(|l| l.contains(address.as_str()))) || (address == "inline" && (ran_now || !asked.is_empty()))
+        });
+        if tried {
             live.insert(kind.clone());
         } else {
             silent.push(kind.clone());
         }
     }
     drop(blank);
-    // Every kind live but the references to another document a browser may never fetch; those the
-    // browser asks nothing for even with no policy are named (and held below to asking nothing).
-    let may_be_silent = ["a style's cursor", "a paint from another document", "a filter from another document", "a mask from another document", "a clip path from another document", "a marker from another document", "a use of another document", "a manifest"];
     assert!(silent.iter().all(|k| may_be_silent.contains(&k.as_str())), "a probe that tried nothing with no policy: {silent:?}");
     eprintln!("kinds the browser asks nothing for even with no policy: {silent:?}");
 
@@ -1710,6 +1716,17 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     for (kind, directive, address) in &kinds {
         let (from, refused_before) = (other.count(), page.eval("window.__refused.length").as_u64().unwrap() as usize);
         page.eval(&format!("window.__probes[{}]({other_js})", serde_json::to_string(kind).unwrap()));
+        // A kind live with no policy waited for until its own refusal is reported (thirty seconds at
+        // most); one that tries nothing even then given a moment to try.
+        let own_refused = |page: &mut Browser| {
+            page.eval("window.__refused").as_array().unwrap()[refused_before..].iter().any(|r| {
+                let (d, u) = (r[0].as_str().unwrap(), r[1].as_str().unwrap());
+                d == directive && (if address == "inline" { u == "inline" } else { u.ends_with(address.as_str()) || u == other.address() })
+            })
+        };
+        if live.contains(kind) {
+            wait(Duration::from_secs(30), || own_refused(&mut page));
+        }
         std::thread::sleep(Duration::from_millis(700));
         assert_eq!(other.requests_since(from), Vec::<String>::new(), "{kind}: asked of the other host");
         assert_eq!(page.eval("window.__ran"), json!([]), "{kind}: ran");
@@ -1741,10 +1758,15 @@ fn the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to() 
     for (kind, address) in &drawing_kinds {
         let (from, ran) = (other.count(), bare.eval("window.__ran.length").as_u64().unwrap());
         bare.eval(&format!("window.__probes[{}]({other_js})", serde_json::to_string(kind).unwrap()));
-        std::thread::sleep(Duration::from_millis(700));
-        let asked = other.requests_since(from);
-        let ran_now = bare.eval("window.__ran.length").as_u64().unwrap() > ran;
-        if (address != "inline" && asked.iter().any(|l| l.contains(address.as_str()))) || (address == "inline" && ran_now) {
+        // Waited for its own attempt, as above: thirty seconds for a kind that must try, three for a
+        // reference to another document a browser may never fetch.
+        let patience = Duration::from_secs(if kind.contains("another document") { 3 } else { 30 });
+        let tried = wait(patience, || {
+            let asked = other.requests_since(from);
+            let ran_now = bare.eval("window.__ran.length").as_u64().unwrap() > ran;
+            (address != "inline" && asked.iter().any(|l| l.contains(address.as_str()))) || (address == "inline" && ran_now)
+        });
+        if tried {
             drawing_live.insert(kind.clone());
         } else {
             drawing_silent.push(kind.clone());
