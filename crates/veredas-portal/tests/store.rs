@@ -1365,6 +1365,62 @@ fn numbers_cut_out_of_a_list_are_no_reason() {
     }
 }
 
+/// A column that ends inside a number the dialect weighed reads with the decimal comma is no
+/// list: two ids glued to the integer part of `21,5` (`1;5;21` on `,`) are half a number, and
+/// leave `;` its numbers, so `,` never cuts every decimal in two, whatever the dialect given.
+#[test]
+fn a_column_ending_inside_a_decimal_is_half_a_number_and_no_list() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, body) in [("counter.csv", "Nr;Zaehler;Wert, C\n1;5;21,5\n2;6;22\n3;7;21,7\n"), ("short.csv", "id;n;T, C\n1;2;21,5\n2;3;22\n3;4;23,5\n4;5\n")] {
+        let file = csv_file(dir.path(), name, body);
+        assert!(csv_header_fits(&file, &delim(",")) && csv_header_fits(&file, &delim(";")), "{name}");
+        for given in [",", ";"] {
+            assert_eq!(csv_fitting_dialect(&file, &delim(given)).delim.as_deref(), Some(";"), "{name}, given {given}");
+        }
+    }
+}
+
+/// A file a logger is still writing to is weighed from one read of it, every dialect's fields
+/// split out of the same text: a line added between two dialects' splits never puts one's
+/// places in the other's text (it panicked there, its ranges past the other's end).
+#[test]
+fn a_file_growing_while_it_is_weighed_is_weighed_from_one_read() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let mut body = String::from("id;name;x,y,z\n");
+    for i in 0..50 {
+        body.push_str(&format!("{i};n{i};{},{},{}\n", 10 * i, 10 * i + 1, 10 * i + 2));
+    }
+    let path = csv_file(dir.path(), "growing.csv", &body);
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let logger = {
+        let (path, stop) = (path.clone(), std::sync::Arc::clone(&stop));
+        std::thread::spawn(move || {
+            let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            let mut i = 50;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                // A line written in two pieces, as a logger flushing mid-line does.
+                write!(f, "{i};n{i}").unwrap();
+                std::thread::sleep(std::time::Duration::from_micros(200));
+                writeln!(f, ";{},{},{}", 10 * i, 10 * i + 1, 10 * i + 2).unwrap();
+                std::thread::sleep(std::time::Duration::from_micros(200));
+                i += 1;
+            }
+        })
+    };
+    for round in 0..30 {
+        let given = if round % 2 == 0 { "," } else { ";" };
+        let weighed = std::panic::catch_unwind(|| csv_fitting_dialect(&path, &delim(given)));
+        let sniffed = std::panic::catch_unwind(|| sniff_csv_options(&path).is_ok());
+        if weighed.is_err() || sniffed.is_err() {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            panic!("round {round}: a panic while the file grew");
+        }
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    logger.join().unwrap();
+}
+
 /// A headerless `;` file of decimal commas, collapsed by a short row (a logger's last line cut
 /// off as it writes): on `,` it types as many numbers as on `;` with the comma (the integers and
 /// the fractions, text between them), so the fewer columns left as text decide it; a full tie

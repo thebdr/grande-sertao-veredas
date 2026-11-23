@@ -1362,25 +1362,33 @@ fn fitting(conn: &Connection, path: &str, opts: CsvOptions) -> CsvOptions {
     // `opts` first, then the others in their order.
     let all: Vec<&CsvOptions> = std::iter::once(&opts).chain(others.iter()).collect();
     let fits: Vec<bool> = all.iter().map(|c| csv_header_fits(path, c)).collect();
-    let lines: Vec<_> = all.iter().map(|c| csv_lines(path, c)).collect();
+    // Every dialect's fields split out of one read of the file, so a line a logger adds meanwhile
+    // is in all of them or in none.
+    let text = csv_text(path).unwrap_or_default();
+    let lines: Vec<_> = all.iter().map(|c| csv_split(&text, c)).collect();
     let delim_of = |c: &CsvOptions| c.delim.as_deref().and_then(|d| d.chars().next()).unwrap_or(',');
     // The columns a dialect types as numbers, by the decimal comma or not, less those it cuts out
     // of a column another dialect that fits reads as a list of numbers on its delimiter (`x,y,z`
-    // over `10,20,30` on `,`): splitting a list is no reason.
+    // over `10,20,30` on `,`): splitting a list is no reason. A column that ends inside one this
+    // dialect reads as a number is no list: its last part is half that number (`1;5;21` of `21,5`
+    // on `;`).
     let weighed: Vec<usize> = (0..all.len())
         .map(|k| {
             let typed = |o: &CsvOptions| describe_types(conn, &csv_scan_sql(path, o)).map(|cols| cols.iter().map(|(_, t)| is_numeric_type(t)).collect::<Vec<_>>()).unwrap_or_default();
             let (plain, comma) = (typed(all[k]), typed(&CsvOptions { decimal_comma: true, ..all[k].clone() }));
             let count = |v: &[bool]| v.iter().filter(|n| **n).count();
             let flags = if count(&comma) > count(&plain) { comma } else { plain };
+            let own_head = lines[k].first();
+            let inside_a_number = |at: usize| own_head.is_some_and(|h| h.iter().enumerate().any(|(i, f)| flags.get(i).copied().unwrap_or(false) && f.start < at && at < f.end));
             let cut_from_a_list = |i: usize| {
-                let Some((text, own_lines)) = &lines[k] else { return false };
-                let Some(span) = own_lines.first().and_then(|h| h.get(i)) else { return false };
+                let Some(span) = own_head.and_then(|h| h.get(i)) else { return false };
                 (0..all.len()).filter(|&e| e != k && fits[e]).any(|e| {
-                    let Some((_, other)) = &lines[e] else { return false };
+                    let other = &lines[e];
                     let quote = all[e].quote_char.as_deref().map_or(Some('"'), |q| q.chars().next());
                     other.first().is_some_and(|h| {
-                        h.iter().enumerate().any(|(j, o)| o.start <= span.start && span.end <= o.end && *o != *span && csv_number_list(text, other, j, delim_of(all[k]), quote))
+                        h.iter().enumerate().any(|(j, o)| {
+                            o.start <= span.start && span.end <= o.end && *o != *span && !inside_a_number(o.end) && csv_number_list(&text, other, j, delim_of(all[k]), quote)
+                        })
                     })
                 })
             };
@@ -1428,15 +1436,17 @@ fn fitting(conn: &Connection, path: &str, opts: CsvOptions) -> CsvOptions {
 /// The fields of each row over the first 2 048 rows, read as [`csv_is_ragged`] says; nothing for
 /// a file that cannot be read.
 fn csv_field_counts(path: &str, opts: &CsvOptions) -> Option<Vec<usize>> {
-    csv_lines(path, opts).map(|(_, lines)| lines.iter().map(Vec::len).collect())
+    csv_text(path).map(|text| csv_split(&text, opts).iter().map(Vec::len).collect())
 }
 
-/// The fields of each row over the first 2 048 rows, as byte ranges into the file's text (read
-/// lossily, returned with them), split as [`csv_is_ragged`] says; nothing for a file that cannot
-/// be read.
-fn csv_lines(path: &str, opts: &CsvOptions) -> Option<(String, Vec<Vec<std::ops::Range<usize>>>)> {
-    let Ok(text) = std::fs::read(path.trim()) else { return None };
-    let text = String::from_utf8_lossy(&text).into_owned();
+/// A CSV file's text, read once (lossily); nothing for a file that cannot be read.
+fn csv_text(path: &str) -> Option<String> {
+    std::fs::read(path.trim()).ok().map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The fields of each row of `text` over its first 2 048 rows, as byte ranges into it, split as
+/// [`csv_is_ragged`] says.
+fn csv_split(text: &str, opts: &CsvOptions) -> Vec<Vec<std::ops::Range<usize>>> {
     let char_of = |s: &Option<String>, or: Option<char>| match s.as_deref() {
         None => or,
         Some(s) => s.chars().next(),
@@ -1504,7 +1514,7 @@ fn csv_lines(path: &str, opts: &CsvOptions) -> Option<(String, Vec<Vec<std::ops:
         fields.push(start..text.len());
         lines.push(fields);
     }
-    Some((text, lines))
+    lines
 }
 
 /// Whether column `j` of a file split into `lines` is a list of numbers on `d`: every cell it
@@ -1514,7 +1524,7 @@ fn csv_lines(path: &str, opts: &CsvOptions) -> Option<(String, Vec<Vec<std::ops:
 /// out of it only where the header names parts on `d`.)
 fn csv_number_list(text: &str, lines: &[Vec<std::ops::Range<usize>>], j: usize, d: char, quote: Option<char>) -> bool {
     let field = |r: &std::ops::Range<usize>| {
-        let t = text[r.clone()].trim();
+        let t = text.get(r.clone()).unwrap_or_default().trim();
         match quote {
             Some(q) if t.len() >= 2 && t.starts_with(q) && t.ends_with(q) => &t[q.len_utf8()..t.len() - q.len_utf8()],
             _ => t,

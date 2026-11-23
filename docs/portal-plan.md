@@ -477,7 +477,10 @@ Recorded as the port meets them.
   where the rows' counts tie (round 10), the dialects that fit are weighed by their numbers. The
   numbers can lie too (round 11): a list `10,20,30` cut on `,` types its integers, so a column cut
   out of what another fitting dialect reads as a list of numbers is no number; decimal commas
-  look like lists of two, and only a cell with no comma (`3` among `2,5`) tells them apart.
+  look like lists of two, and only a cell with no comma (`3` among `2,5`) tells them apart; nor
+  is a column that ends inside a decimal the other reading keeps whole (`1;5;21` of `21,5`). A
+  file is weighed from one read of it: read once per dialect, a logger's line between two reads
+  put one read's places past the other's text (round 12).
 - **A transaction does not freeze a file** (C-041, round 11). The engine reads a CSV again at
   every statement, so a page's count and rows over a view of a log still being written were two
   reads of it, though one transaction held them. A view's window is read once into a table of the
