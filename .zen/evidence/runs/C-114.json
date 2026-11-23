@@ -10,15 +10,15 @@
     "fisica"
   ],
   "exitCode": 0,
-  "outputSha": "78692eba8c065335b418b266cb6df036bbf52c89e9e9be6150fcdf7e8491b193",
-  "outputTail": "running 9 tests\ntest every_refusal_is_named_by_its_place ... ok\ntest sensors_see_bodies_and_movers_in_order_and_a_body_taken_away_leaves_them ... ok\ntest a_free_fall_keeps_to_gravity_within_a_step_and_a_body_comes_to_rest_within_a_millimetre ... ok\ntest friction_holds_a_body_on_a_gentle_slope_and_lets_it_slide_on_a_steep_one ... ok\ntest a_mover_reaches_each_pose_at_the_next_step_and_pushes_without_being_pushed ... ok\ntest a_belt_carries_what_lies_on_it_either_way_round_and_leaves_what_touches_its_side ... ok\ntest the_documented_scene_loads_with_its_numbers_and_runs_as_the_reference_says ... ok\ntest the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene ... ok\ntest the_same_scene_and_inputs_give_the_same_run_bit_for_bit ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.71s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running tests/fisica.rs (target/debug/build/veredas-maquinar/8e43a1ffb838c9ac/out/fisica-8e43a1ffb838c9ac)",
-  "ranAt": "2026-11-22T21:53:01.145Z",
-  "headCommit": "caf5cab8a8acfe775de11aa22b2f0df656bc9a05",
+  "outputSha": "6dbc9d678131fd709c229abc64d5cb94de8e9374c2ca828bf8dffc700c567860",
+  "outputTail": "running 9 tests\ntest every_refusal_is_named_by_its_place ... ok\ntest sensors_see_bodies_and_movers_in_order_and_a_body_taken_away_leaves_them ... ok\ntest a_free_fall_keeps_to_gravity_within_a_step_and_a_body_comes_to_rest_within_a_millimetre ... ok\ntest friction_holds_a_body_on_a_gentle_slope_and_lets_it_slide_on_a_steep_one ... ok\ntest a_mover_reaches_each_pose_at_the_next_step_and_pushes_without_being_pushed ... ok\ntest a_belt_carries_what_lies_on_it_either_way_round_and_leaves_what_touches_its_side ... ok\ntest the_documented_scene_loads_with_its_numbers_and_runs_as_the_reference_says ... ok\ntest the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene ... ok\ntest the_same_scene_and_inputs_give_the_same_run_bit_for_bit ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.95s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n     Running tests/fisica.rs (target/debug/build/veredas-maquinar/8e43a1ffb838c9ac/out/fisica-8e43a1ffb838c9ac)",
+  "ranAt": "2026-11-23T00:42:50.748Z",
+  "headCommit": "343302aba5ed8c25fa5e581562f9a2d93a548c81",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/fisica.rs",
       "file": "crates/veredas-maquinar/tests/fisica.rs",
-      "fileSha": "16222b3865c38901d7abc09d97163dba89900ef9042789e2fb6b9ce9d8d453f9"
+      "fileSha": "5e73b3c0662c824b4fa4afec36f41cde8be11b00d08e5303630cd31d31b03d05"
     }
   ]
 }
