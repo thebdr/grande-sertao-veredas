@@ -10,15 +10,15 @@
     "peer"
   ],
   "exitCode": 0,
-  "outputSha": "a1082e9754fb7c22fa08c93eef4786ef4310293713f0a21b336c50a6af78ac04",
-  "outputTail": "test the_request_names_the_peer_and_encodes_its_values ... ok\ntest an_answer_is_read_by_its_framing ... ok\ntest every_bound_holds_whatever_the_framing ... ok\ntest a_value_that_is_no_finite_number_is_read_as_none_and_the_stream_goes_on ... ok\ntest a_portal_follows_another_s_stream_its_lag_its_end_and_a_fresh_hello ... ok\ntest the_stream_s_opening_is_bounded_and_every_key_is_required ... ok\ntest a_portal_reads_another_s_snapshot_listing_windows_tables_and_tags ... ok\ntest a_reader_is_bounded_in_time_size_and_shape ... ok\ntest a_stream_read_through_a_caller_s_timeouts_loses_nothing ... ok\ntest the_defaults_hold_a_dead_link_ten_seconds_and_keep_an_idle_stream_open ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.08s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running tests/peer.rs (target/debug/build/veredas-portal/622e4660e52328fc/out/peer-622e4660e52328fc)",
-  "ranAt": "2026-11-23T11:35:44.490Z",
-  "headCommit": "3bc8a79a2a76704cc995585a905a16b0f1712bec",
+  "outputSha": "61dd98febb8c08614e849634aea466149ea5ecee89063132b982cc7285f13522",
+  "outputTail": "test an_answer_is_read_by_its_framing ... ok\ntest every_bound_holds_whatever_the_framing ... ok\ntest a_value_that_is_no_finite_number_is_read_as_none_and_the_stream_goes_on ... ok\ntest the_stream_s_opening_is_bounded_and_every_key_is_required ... ok\ntest a_portal_follows_another_s_stream_its_lag_its_end_and_a_fresh_hello ... ok\ntest a_portal_reads_another_s_snapshot_listing_windows_tables_and_tags ... ok\ntest a_reader_is_bounded_in_time_size_and_shape ... ok\ntest a_stream_read_through_a_caller_s_timeouts_loses_nothing ... ok\ntest a_silence_and_the_trailers_hold_across_dropped_calls ... ok\ntest the_defaults_hold_a_dead_link_ten_seconds_and_keep_an_idle_stream_open ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.19s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s\n     Running tests/peer.rs (target/debug/build/veredas-portal/71ada7c3b21645b7/out/peer-71ada7c3b21645b7)",
+  "ranAt": "2026-11-23T15:38:10.848Z",
+  "headCommit": "83d46ef38ab8eb479891263535827418ed36a29f",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/peer.rs",
       "file": "crates/veredas-portal/tests/peer.rs",
-      "fileSha": "258d2994b10e4052bcf780b17a1e1fda91da89fb377de66cc5e0195d4b5a62db"
+      "fileSha": "81ad158d8b752fc8e29e5af914ca0277c48a6bfd08152792b6a1fb0d066edd7d"
     }
   ]
 }
