@@ -191,3 +191,76 @@ fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
     let f = faults("moved", "streamOptimized", r.machine.disk_gb, &moved, right);
     assert_eq!(f.len(), 5, "items outside VirtualHardwareSection are no hardware: {f:?}");
 }
+
+#[test]
+fn a_machine_is_built_only_from_a_cut_that_ran_to_its_end() {
+    use std::process::Command;
+    // A throwaway repository with one component and a release's bundle where a cut leaves it, its
+    // `release.toml` naming the repository's commit; the commit holds no guide, so a machine let
+    // through stops there, before any machine starts.
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    let git = |args: &[&str]| {
+        let out = Command::new("git").arg("-C").arg(root).args(["-c", "user.name=entrega", "-c", "user.email=entrega@example.invalid", "-c", "commit.gpgsign=false"]).args(args).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(root.join(".gitignore"), "/target/\n").unwrap();
+    std::fs::create_dir_all(root.join("tools/entrega/maquina")).unwrap();
+    std::fs::copy(repo_root().join("tools/entrega/maquina/maquina.toml"), root.join("tools/entrega/maquina/maquina.toml")).unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "the recipe, no guide"]);
+    let commit = git(&["rev-parse", "HEAD"]);
+    let release = "0.0.0-trial.9";
+    let target = "x86_64-unknown-linux-gnu";
+    let work = root.join("target/entrega").join(release);
+    let name = format!("veredas-{release}-{target}");
+    let text = entrega::cut::manifest_text(
+        &semver::Version::parse(release).unwrap(),
+        &commit,
+        target,
+        "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+        &[("veredas-core".to_string(), "2.0.0".to_string(), vec![])],
+        entrega::cut::NOT_RUN,
+    );
+    std::fs::create_dir_all(work.join(&name)).unwrap();
+    std::fs::write(work.join(&name).join("release.toml"), &text).unwrap();
+    entrega::bundle::pack(&work, &name, "1", &work.join(format!("{name}.tar.gz"))).unwrap();
+    std::fs::remove_dir_all(work.join(&name)).unwrap();
+    let refusal = |r: Result<maquina::Paths, entrega::vm::VmError>| match r {
+        Err(entrega::vm::VmError::Failed { program, status, stderr }) => {
+            assert_eq!((program.as_str(), status.as_str()), ("the tester machine", "refused"));
+            stderr
+        }
+        Err(e) => panic!("another error: {e}"),
+        Ok(p) => panic!("built: {}", p.ova.display()),
+    };
+    let trial = work.join(format!("{release}.toml"));
+    let real = root.join("releases").join(format!("{release}.toml"));
+
+    // The bundle a refused cut left: no manifest where a cut writes one.
+    assert_eq!(
+        refusal(maquina::from_release(root, release, target)),
+        format!(
+            "release {release} was not cut to its end: no manifest at {} or {}, and a bundle without one is what a refused cut leaves",
+            real.display(),
+            trial.display()
+        )
+    );
+    // A manifest there that is not the bundle's own, beside a trial's or a real cut's.
+    for at in [&trial, &real] {
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::write(at, text.replace(entrega::cut::NOT_RUN, "cargo nextest run --workspace")).unwrap();
+        assert_eq!(refusal(maquina::from_release(root, release, target)), format!("{} is not the bundle's own release.toml: the bundle is not that cut's", at.display()));
+        std::fs::remove_file(at).unwrap();
+    }
+    // The cut's own manifest, a trial's or a real cut's: the machine goes on to the commit's recipe
+    // and guide (none here).
+    for at in [&trial, &real] {
+        std::fs::write(at, &text).unwrap();
+        assert_eq!(refusal(maquina::from_release(root, release, target)), format!("commit {commit} holds no tools/entrega/maquina/guide.md"));
+        std::fs::remove_file(at).unwrap();
+    }
+    assert!(!work.join("maquina").exists(), "no machine was started");
+}

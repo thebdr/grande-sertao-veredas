@@ -188,7 +188,9 @@ Everything below runs as the user, without sudo, without VMware, packer or docke
 machine was found able to do is the next section). The recipe's choices that are the architect's
 (the distribution, the desktop, the user, the virtual hardware) are data in one stamped file,
 `tools/entrega/maquina/maquina.toml` (`veredas-machine`, version 1), never code, so a ruling is an
-edit of that file.
+edit of that file. A machine is built only from a cut that ran to its end: the release's manifest
+written where the cut writes it (`releases/` for a real cut, the trial's folder beside its bundle)
+and the bundle's own `release.toml` byte for byte; a bundle a refused cut left behind is refused.
 1. **The base**: the distribution's official cloud image (Debian 13, Q433), at a dated build
    named by URL in `maquina.toml` with its SHA-512 copied from the build's own list (served
    over HTTPS, not signed: the pin in the repository is what the recipe trusts),

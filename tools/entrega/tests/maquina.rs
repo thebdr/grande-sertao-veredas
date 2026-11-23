@@ -21,9 +21,10 @@ fn repo_root() -> PathBuf {
 fn the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices() {
     let root = repo_root();
     let release = "0.0.0-trial.292";
-    let out = tempfile::tempdir().unwrap();
     let work = root.join("target/entrega").join(release);
-    let cut = cut::cut(&root, &Options { release: semver::Version::parse(release).unwrap(), out: out.path().to_path_buf(), work: work.clone(), run_suite: false })
+    // Where `entrega cut --trial` writes a trial's manifest: the machine is built only from a cut
+    // that ran to its end.
+    let cut = cut::cut(&root, &Options { release: semver::Version::parse(release).unwrap(), out: work.clone(), work: work.clone(), run_suite: false })
         .unwrap_or_else(|e| panic!("the trial cut was refused: {e}"));
     assert_eq!(together::faults(&cut.report), Vec::<String>::new());
     let target = "x86_64-unknown-linux-gnu";

@@ -364,6 +364,29 @@ pub fn boot(r: &Recipe, vmdk: &Path, port: u16, qmp: Option<u16>, console: &Path
 
 /// Builds the tester machine of a release already cut: its bundle under
 /// `target/entrega/<release>/`, the recipe and the guide read at the commit its manifest names.
+/// Whether release `release`'s cut ran to its end: its manifest written where a cut writes it
+/// (`releases/<release>.toml` for a real cut, `<work>/<release>.toml` for a trial) and, wherever it
+/// is, the bundle's own `release.toml` byte for byte. A cut refused after packing (its run together
+/// failed) leaves a bundle and no manifest; a machine is never built from such a bundle.
+pub fn cut_finished(root: &Path, release: &str, work: &Path, bundle_manifest: &str) -> Result<(), VmError> {
+    let refused = |stderr: String| VmError::Failed { program: "the tester machine".into(), status: "refused".into(), stderr };
+    let places = [root.join("releases").join(format!("{release}.toml")), work.join(format!("{release}.toml"))];
+    let found: Vec<&PathBuf> = places.iter().filter(|p| p.exists()).collect();
+    if found.is_empty() {
+        return Err(refused(format!(
+            "release {release} was not cut to its end: no manifest at {} or {}, and a bundle without one is what a refused cut leaves",
+            places[0].display(),
+            places[1].display()
+        )));
+    }
+    for p in found {
+        if std::fs::read_to_string(p)? != bundle_manifest {
+            return Err(refused(format!("{} is not the bundle's own release.toml: the bundle is not that cut's", p.display())));
+        }
+    }
+    Ok(())
+}
+
 pub fn from_release(root: &Path, release: &str, target: &str) -> Result<Paths, VmError> {
     let work = root.join("target/entrega").join(release);
     let bundle_dir = format!("veredas-{release}-{target}");
@@ -372,6 +395,7 @@ pub fn from_release(root: &Path, release: &str, target: &str) -> Result<Paths, V
         return Err(VmError::Failed { program: "the tester machine".into(), status: "refused".into(), stderr: format!("{} is not there: cut the release first", bundle.display()) });
     }
     let text = vm::run("tar", &["-xzf", &bundle.display().to_string(), "-O", &format!("{bundle_dir}/release.toml")], None)?;
+    cut_finished(root, release, &work, &text)?;
     let m = crate::manifest::load(&text).map_err(|e| VmError::Failed { program: "the bundle's manifest".into(), status: "refused".into(), stderr: e.to_string() })?;
     let at = |path: &str| -> Result<String, VmError> {
         crate::git::show(root, &m.commit, path)
