@@ -10,15 +10,15 @@
     "ethercat_segment"
   ],
   "exitCode": 0,
-  "outputSha": "7c93ee9124a35334eaa4837a7eca04ce3983f14d1e36b7f391642f0713ccfcb7",
-  "outputTail": "test the_clock_latches_takes_its_offset_and_compares_in_sign_and_magnitude ... ok\ntest round_2::every_transition_etg_refuses_is_refused ... ok\ntest fmmus_map_bit_by_bit_and_a_logical_write_counts_1_or_2_in_an_lrw ... ok\ntest the_eeprom_states_its_port_and_its_size ... ok\ntest every_configuration_refusal_is_named_before_the_interface_opens ... ok\ntest every_command_reads_writes_and_counts_as_the_standard_has_it ... ok\ntest the_reference_s_segment_runs_from_its_bench_file_and_a_missing_interface_is_named ... ok\ntest the_dissectors_read_the_returned_frame_as_the_standard_has_it ... ok\ntest a_maindevice_finds_the_segment_brings_it_to_op_and_exchanges_process_data ... ok\ntest round_2::a_frame_of_another_type_is_unanswered_and_counted_unreadable ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.58s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s\n     Running tests/ethercat_segment.rs (target/debug/build/veredas-maquinar/46c1bb92f4aab7a8/out/ethercat_segment-46c1bb92f4aab7a8)",
-  "ranAt": "2026-11-23T01:37:02.299Z",
-  "headCommit": "77d4413647da3c5875152fc9ee649e5d0129ce88",
+  "outputSha": "4a0ce52fca55cacb69f4b5ec6311b95b361c098193f005f973b37c946ccd3e54",
+  "outputTail": "test fmmus_map_bit_by_bit_and_a_logical_write_counts_1_or_2_in_an_lrw ... ok\ntest round_3::an_frmw_of_32_bits_compares_across_the_wrap_as_one_of_64_does ... ok\ntest every_configuration_refusal_is_named_before_the_interface_opens ... ok\ntest round_3::a_device_faulted_in_safe_op_keeps_safe_op_flagged ... ok\ntest every_command_reads_writes_and_counts_as_the_standard_has_it ... ok\ntest the_dissectors_read_the_returned_frame_as_the_standard_has_it ... ok\ntest the_reference_s_segment_runs_from_its_bench_file_and_a_missing_interface_is_named ... ok\ntest round_3::a_silent_master_leaves_its_devices_in_op ... ok\ntest a_maindevice_finds_the_segment_brings_it_to_op_and_exchanges_process_data ... ok\ntest round_2::a_frame_of_another_type_is_unanswered_and_counted_unreadable ... ok\n\ntest result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.60s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.55s\n     Running tests/ethercat_segment.rs (target/debug/build/veredas-maquinar/104bcd6f77bce76a/out/ethercat_segment-104bcd6f77bce76a)",
+  "ranAt": "2026-11-23T11:27:36.113Z",
+  "headCommit": "eadfb208b4802f7e6a317485d66e8e2686cbd560",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/ethercat_segment.rs",
       "file": "crates/veredas-maquinar/tests/ethercat_segment.rs",
-      "fileSha": "7e76dddf187711f035cdfd6d402313cb018b7865f1db26875b800e8d1ffea889"
+      "fileSha": "c5c6357813fce3b8282f985a3c36adbb5f17a11998d4558399bf2e6459dc6403"
     }
   ]
 }
