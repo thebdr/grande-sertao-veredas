@@ -403,8 +403,13 @@ workspace/log.txt             the log, one escaped entry per line
   and a cell entry are appended among the root's own children, never inside an entry's `extLst`.
 - **The engine's value setters leave a dynamic array's spill** (C-223's sixth round): a value over
   an anchor clears the array first (`Workbook::set_value`), or its cells stay as constants.
-- **Excel's cache is the judge of implicit intersection**: a plain formula of the file is the
-  array an edit writes where its cache equals the array's value; the engine computes both alike.
+- **Excel 365's `@` is the judge of a plain formula's kind** (C-223's eighth round): a plain
+  formula of the file is the array an edit writes where Excel 365 shows it with no implicit
+  intersection (`=@INDEX(A1:A10,B1)` has one): its result, every operator's operands and every
+  one-value argument single, a name of one cell read as the value it is. A cache cannot judge it:
+  the intersected and the array value coincide on some inputs, and the edits change them.
+- **The engine stores a plain formula with its own `@`** where it cannot see a name's extent
+  (`IF(Flag,1,0)` as `@IF(Flag,1,0)`): the kind is judged on the formula's text parsed afresh.
 - **The engine has errors no file holds** (`#CIRC!`, `#N/IMPL`, `#ERROR!`): a cache that would
   hold one refuses the patch.
 - **`cm` is an index**, into the metadata part's cell metadata (fork change 22); `1` is Excel 365's
@@ -412,8 +417,9 @@ workspace/log.txt             the log, one escaped entry per line
 - **A formula's text is escaped as a cell's** (`_x005F_`; fork change 23).
 - **A shared group is expanded only where a move changes what a member derives to**; moved whole,
   it keeps its sharing and its master's `ref` moves.
-- **Excel's cache judges the kind against the engine before the edits** (C-223's seventh round):
-  an input edited first changes what the engine computes, never what Excel cached.
+- **The kind is judged on the formula as the edits left it** (C-223's seventh and eighth rounds):
+  a deletion that shrinks `SUM(A1:A3*B1:B3)` to `SUM(A1:A1*B1:B1)` leaves a formula Excel reads
+  as written, and one an earlier edit of the list wrote is the patcher's own, whatever its text.
 - **A one-cell merge is no merge**; an empty list (`<hyperlinks/>`, `<mergeCells/>`) is no list.
 - **A carriage return is `_x000D_` in text and `&#13;` in an attribute**, written in one pass.
 - **TOML has no null, and the engine's `Color::None` serialises as one** (an untagged enum's unit

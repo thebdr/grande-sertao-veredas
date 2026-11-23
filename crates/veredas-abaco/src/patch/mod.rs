@@ -896,66 +896,109 @@ fn forward(shifts: &[(String, Shift)], from: usize, sheet: &str, mut row: i32, m
     Some((row, col))
 }
 
-/// Who wrote the formula a cell holds, as far as its kind goes.
-enum Writer {
-    /// An earlier edit of the list: the file will hold it as the patcher writes that text.
-    Edit,
-    /// The source, plain, with the value Excel cached for it and where the cell was in the source.
-    Source { cache: Value, at: (i32, i32) },
-    /// Neither found (no formula of the source lands here).
-    Unknown,
-}
-
-/// Who wrote the formula now at `a` of `sheet` (through the moves so far). The source's cells are
-/// read once, the first time one is asked for.
-fn writer_of(
-    source: &Path,
-    cells: &mut Option<cached::Cells>,
-    shifts: &[(String, Shift)],
-    writes: &[PendingWrite],
-    sheet: &str,
-    a: Addr,
-) -> Result<Writer, PatchError> {
+/// Whether an earlier edit of the list wrote the cell now at `a` of `sheet` (through the moves so
+/// far): the file will hold it as the patcher writes its text.
+fn written_by_an_edit(shifts: &[(String, Shift)], writes: &[PendingWrite], sheet: &str, a: Addr) -> bool {
     let here = (a.row, a.column);
-    if writes
+    writes
         .iter()
         .any(|w| w.content.is_some() && w.sheet.eq_ignore_ascii_case(sheet) && forward(shifts, w.after, sheet, w.row, w.col) == Some(here))
-    {
-        return Ok(Writer::Edit);
-    }
-    if cells.is_none() {
-        *cells = Some(cached::read(source)?);
-    }
-    Ok(cells
-        .as_ref()
-        .and_then(|cells| {
-            cells.iter().find(|((name, r, c), cell)| {
-                name.eq_ignore_ascii_case(sheet) && (cell.formula.is_some() || cell.shared) && forward(shifts, 0, sheet, *r, *c) == Some(here)
-            })
-        })
-        .map_or(Writer::Unknown, |((_, r, c), cell)| Writer::Source { cache: cell.value.clone(), at: (*r, *c) }))
 }
 
-/// Whether the formula the cell holds (its text already found equal to `formula`'s) is, to
-/// Excel, the formula an edit writes as `formula`: both arrays, a formula the engine reads as one
-/// value (written plain, and plain or an array alike to Excel), one an earlier edit wrote (the
-/// patcher writes one text one way), or a plain one of the source that Excel computed to what the
-/// engine computed for it before the edits (its cache says implicit intersection changed nothing
-/// there: `Rate*2` with `Rate` one cell), whatever the edits since changed of its inputs. A plain
-/// one Excel cached nothing for is judged by `uncached`: an expectation holds on the text, a
-/// formula written over it is written as the array it is.
-fn same_kind(wb: &Workbook, before: &Before, sheet: u32, a: Addr, formula: &str, writer: &Writer, uncached: bool) -> bool {
-    if holds_an_array(wb, sheet, a) || !writes_as_array(wb, sheet, a, formula) {
+/// Whether a name's definition is one cell (`S!$A$1`) or a constant: no range to intersect.
+fn names_one_value(formula: &str) -> bool {
+    let body = formula.trim().trim_start_matches('=');
+    let cell = body.rsplit('!').next().unwrap_or(body).replace('$', "");
+    let letters = cell.chars().take_while(char::is_ascii_alphabetic).count();
+    let reference = letters > 0 && letters < cell.len() && cell[letters..].chars().all(|c| c.is_ascii_digit());
+    reference || !body.contains(':') && !body.contains('(') && !body.chars().next().is_some_and(char::is_alphabetic)
+}
+
+/// Whether a part of a formula is, before any evaluation, one value: a cell, a one-cell range, a
+/// name of one cell or of a constant, a literal, an operation on such, or a function the engine's
+/// static analysis finds scalar.
+fn one_value(node: &Node) -> bool {
+    use ironcalc_base::expressions::parser::static_analysis::{run_static_analysis_on_node, StaticResult};
+    match node {
+        Node::ReferenceKind { .. } | Node::NumberKind(_) | Node::StringKind(_) | Node::BooleanKind(_) | Node::ErrorKind(_) => true,
+        Node::RangeKind { row1, column1, row2, column2, .. } => row1 == row2 && column1 == column2,
+        Node::DefinedNameKind { formula, .. } => names_one_value(formula),
+        Node::OpSumKind { left, right, .. }
+        | Node::OpProductKind { left, right, .. }
+        | Node::OpPowerKind { left, right }
+        | Node::OpConcatenateKind { left, right }
+        | Node::CompareKind { left, right, .. } => one_value(left) && one_value(right),
+        Node::UnaryKind { right, .. } => one_value(right),
+        // the engine's analysis cannot see a name's extent: a name or a range of one value is read
+        // as the value it is before the analysis runs
+        _ => matches!(run_static_analysis_on_node(&as_values(node)), StaticResult::Scalar),
+    }
+}
+
+/// A formula with every name of one value and every one-cell range read as a number, the rest as
+/// it is.
+fn as_values(node: &Node) -> Node {
+    let b = |n: &Node| Box::new(as_values(n));
+    match node {
+        Node::DefinedNameKind { formula, .. } if names_one_value(formula) => Node::NumberKind(0.0),
+        Node::RangeKind { row1, column1, row2, column2, .. } if row1 == row2 && column1 == column2 => Node::NumberKind(0.0),
+        Node::OpSumKind { kind, left, right } => Node::OpSumKind { kind: kind.clone(), left: b(left), right: b(right) },
+        Node::OpProductKind { kind, left, right } => Node::OpProductKind { kind: kind.clone(), left: b(left), right: b(right) },
+        Node::OpPowerKind { left, right } => Node::OpPowerKind { left: b(left), right: b(right) },
+        Node::OpConcatenateKind { left, right } => Node::OpConcatenateKind { left: b(left), right: b(right) },
+        Node::CompareKind { kind, left, right } => Node::CompareKind { kind: kind.clone(), left: b(left), right: b(right) },
+        Node::UnaryKind { kind, right } => Node::UnaryKind { kind: kind.clone(), right: b(right) },
+        Node::FunctionKind { kind, args } => Node::FunctionKind { kind: kind.clone(), args: args.iter().map(as_values).collect() },
+        other => other.clone(),
+    }
+}
+
+/// Whether every operator of a formula, at any depth, has single-valued operands: where one does
+/// not, a legacy formula intersects it implicitly and an array formula lifts it.
+fn operators_on_one_value(node: &Node) -> bool {
+    match node {
+        Node::OpSumKind { left, right, .. }
+        | Node::OpProductKind { left, right, .. }
+        | Node::OpPowerKind { left, right }
+        | Node::OpConcatenateKind { left, right }
+        | Node::CompareKind { left, right, .. } => {
+            one_value(left) && one_value(right) && operators_on_one_value(left) && operators_on_one_value(right)
+        }
+        Node::UnaryKind { right, .. } => one_value(right) && operators_on_one_value(right),
+        Node::FunctionKind { args, .. } | Node::NamedFunctionKind { args, .. } => args.iter().all(operators_on_one_value),
+        Node::LambdaCallKind { lambda, args } => operators_on_one_value(lambda) && args.iter().all(operators_on_one_value),
+        Node::ImplicitIntersection { child, .. } | Node::SpillRangeOperator { child } => operators_on_one_value(child),
+        _ => true,
+    }
+}
+
+/// Whether a plain formula reads in Excel 365 as it is written, with no `@` of the implicit
+/// intersection Excel shows on a legacy formula where it applies (Microsoft's rule: a range or a
+/// function that can return one where a single value goes, `=@INDEX(A1:A10,B1)`): its result one
+/// value, every operator's operands one value, and the engine's own pass adding no intersection to
+/// a function's single-valued arguments. Such a formula is, to Excel, the array an edit writes of
+/// the same text, whatever the values it reads; another is not, whatever they are.
+fn reads_without_intersection(node: &Node) -> bool {
+    // the engine's pass on the formula with its one-value names and ranges read as values (it
+    // cannot see a name's extent)
+    let base = as_values(node);
+    let mut with = base.clone();
+    ironcalc_base::expressions::parser::static_analysis::add_implicit_intersection(&mut with, true);
+    with == base && one_value(node) && operators_on_one_value(node)
+}
+
+/// Whether the formula the cell holds (its text already found equal to `formula`'s) is, to Excel,
+/// the formula an edit writes as `formula`: both arrays, a formula the engine reads as one value
+/// (written plain, and plain or an array alike to Excel), one an earlier edit wrote (the patcher
+/// writes one text one way), or a plain one Excel 365 reads with no implicit intersection
+/// ([`reads_without_intersection`]), judged on the formula as it stands after the edits so far.
+/// The text is parsed afresh: the engine stores a plain formula with the intersections its own
+/// import added, where it cannot see a name's extent (`IF(Flag,1,0)` as `@IF(Flag,1,0)`).
+fn same_kind(wb: &Workbook, sheet: u32, a: Addr, formula: &str, edited: bool) -> bool {
+    if holds_an_array(wb, sheet, a) || !writes_as_array(wb, sheet, a, formula) || edited {
         return true;
     }
-    match writer {
-        Writer::Edit => true,
-        Writer::Unknown => false,
-        Writer::Source { cache: Value::Empty, .. } => uncached,
-        Writer::Source { cache, at } => {
-            before.values.get(sheet as usize).and_then(|m| m.get(at)).is_some_and(|then| cache_holds(cache, then))
-        }
-    }
+    parsed_at(wb, sheet, a, formula).is_some_and(|n| reads_without_intersection(&n))
 }
 
 /// A formula in file spelling as `wb` would write it at `a` — `None` when
@@ -1064,14 +1107,7 @@ fn describe(wb: &Workbook, sheet: u32, a: Addr) -> String {
 }
 
 /// Whether the cell holds what `expect` says; a formula of the same text judged by [`same_kind`].
-fn holds(
-    wb: &Workbook,
-    before: &Before,
-    sheet: u32,
-    a: Addr,
-    expect: &Expect,
-    writer: impl FnOnce() -> Result<Writer, String>,
-) -> Result<bool, String> {
+fn holds(wb: &Workbook, sheet: u32, a: Addr, expect: &Expect, edited: bool) -> Result<bool, String> {
     let current = current_file_formula(wb, sheet, a);
     match expect {
         Expect::Formula { formula } => {
@@ -1080,8 +1116,7 @@ fn holds(
             if current.as_deref() != Some(want.as_str()) {
                 return Ok(false);
             }
-            let writer = writer()?;
-            Ok(same_kind(wb, before, sheet, a, formula, &writer, true))
+            Ok(same_kind(wb, sheet, a, formula, edited))
         }
         Expect::Value { value } => {
             if current.is_some() {
@@ -1145,8 +1180,6 @@ pub fn patch(
     let mut set_names: Vec<(String, Option<String>)> = Vec::new();
     // the names an edit deleted and none set again since: gone from the file, a built-in one too
     let mut deleted_names: Vec<(String, Option<String>)> = Vec::new();
-    // the source's cells as the file states them, read the first time a cache is asked for
-    let mut source_cells: Option<cached::Cells> = None;
 
     for (index, edit) in edits.iter().enumerate() {
         let fail = |message: String| PatchError::Edit {
@@ -1206,8 +1239,7 @@ pub fn patch(
                     let want = file_spelling(&wb, s, a, &target)
                         .ok_or_else(|| fail(format!("the formula does not parse: {target}")))?;
                     current_file_formula(&wb, s, a).as_deref() == Some(want.as_str()) && {
-                        let writer = writer_of(source, &mut source_cells, &shifts, &writes, &canonical, a)?;
-                        same_kind(&wb, &before, s, a, &target, &writer, false)
+                        same_kind(&wb, s, a, &target, written_by_an_edit(&shifts, &writes, &canonical, a))
                     }
                 } else {
                     let v = json_value(match edit {
@@ -1225,9 +1257,7 @@ pub fn patch(
                     continue;
                 }
                 if let Some(expect) = expect
-                    && !holds(&wb, &before, s, a, expect, || {
-                        writer_of(source, &mut source_cells, &shifts, &writes, &canonical, a).map_err(|e| e.to_string())
-                    })
+                    && !holds(&wb, s, a, expect, written_by_an_edit(&shifts, &writes, &canonical, a))
                     .map_err(fail)?
                 {
                         outcome.status = Status::Conflict;

@@ -1254,12 +1254,14 @@ fn a_value_over_a_dynamic_arrays_anchor_takes_its_spill_with_it() {
 }
 
 #[test]
-fn a_plain_formula_holds_where_excel_computed_what_the_array_computes() {
-    // `Rate` one cell, `Flag` one cell: Excel computes these plain formulas as their arrays
+fn a_plain_formula_is_the_array_an_edit_writes_where_excel_365_shows_it_without_an_intersection() {
+    // `Rate` one cell, `Flag` one cell: Excel 365 shows `Rate*2` and `IF(Flag,1,0)` as written;
+    // `INDEX(A1:A3,2)`, a function that can return a range, it shows `=@INDEX(A1:A3,2)`, and
+    // `IF(Span,1,0)`, `Span` three cells, `=IF(@Span,1,0)`
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("names.xlsx");
-    let data = r#"<row r="1"><c r="A1"><v>5</v></c><c r="D1"><f>Rate*2</f><v>10</v></c><c r="E1"><f>INDEX(A1:A3,2)</f><v>6</v></c><c r="F1"><f>IF(Flag,1,0)</f><v>1</v></c><c r="G1"><f>SUM(A1:A3*B1:B3)</f><v>50</v></c></row><row r="2"><c r="A2"><v>6</v></c><c r="B2"><v>1</v></c></row><row r="3"><c r="A3"><v>7</v></c><c r="B3"><v>1</v></c></row><row r="4"><c r="A4" t="b"><v>1</v></c></row>"#;
-    let names = r#"<definedName name="Flag">S!$A$4</definedName><definedName name="Rate">S!$A$1</definedName>"#;
+    let data = r#"<row r="1"><c r="A1"><v>5</v></c><c r="D1"><f>Rate*2</f><v>10</v></c><c r="E1"><f>INDEX(A1:A3,2)</f><v>6</v></c><c r="F1"><f>IF(Flag,1,0)</f><v>1</v></c><c r="G1"><f>SUM(A1:A3*B1:B3)</f><v>50</v></c><c r="H1"><f>IF(Span,1,0)</f><v>1</v></c></row><row r="2"><c r="A2"><v>6</v></c><c r="B2"><v>1</v></c></row><row r="3"><c r="A3"><v>7</v></c><c r="B3"><v>1</v></c></row><row r="4"><c r="A4" t="b"><v>1</v></c></row>"#;
+    let names = r#"<definedName name="Flag">S!$A$4</definedName><definedName name="Rate">S!$A$1</definedName><definedName name="Span">S!$A$1:$A$3</definedName>"#;
     let data = data.replace(r#"<c r="A1"><v>5</v></c>"#, r#"<c r="A1"><v>5</v></c><c r="B1"><v>10</v></c>"#);
     plain_book(&src, &[("S", worksheet(&data, ""))], names, &[]);
     let dst = dir.path().join("out.xlsx");
@@ -1270,19 +1272,29 @@ fn a_plain_formula_holds_where_excel_computed_what_the_array_computes() {
         value: serde_json::json!(3),
         expect: Some(Expect::Formula { formula: f.into() }),
     };
-    let report =
-        patch(&src, &dst, &[expecting("D1", "=Rate*2"), expecting("E1", "=INDEX(A1:A3,2)"), expecting("F1", "=IF(Flag,1,0)")], &verified())
-            .unwrap();
-    assert!(report.outcomes.iter().all(|o| o.status == Status::Applied), "{:?}", report.outcomes);
-    // the same formulas written: already there, the file as it was
+    let statuses = |report: veredas_abaco::patch::PatchReport| -> Vec<Status> { report.outcomes.into_iter().map(|o| o.status).collect() };
+    let report = patch(
+        &src,
+        &dst,
+        &[expecting("D1", "=Rate*2"), expecting("E1", "=INDEX(A1:A3,2)"), expecting("F1", "=IF(Flag,1,0)"), expecting("H1", "=IF(Span,1,0)")],
+        &verified(),
+    )
+    .unwrap();
+    assert_eq!(statuses(report), [Status::Applied, Status::Conflict, Status::Applied, Status::Conflict]);
+    // the same formulas written: already there, the file as it was, but INDEX's, written as the
+    // array it is
     let _ = std::fs::remove_file(&dst);
     let formula = |cell: &str, f: &str| Edit::Formula { sheet: "S".into(), cell: cell.into(), formula: f.into(), expect: None };
-    let report = patch(&src, &dst, &[formula("D1", "=Rate*2"), formula("E1", "=INDEX(A1:A3,2)"), formula("F1", "=IF(Flag,1,0)")], &verified())
-        .unwrap();
-    assert!(report.outcomes.iter().all(|o| o.status == Status::AlreadyThere), "{:?}", report.outcomes);
+    let report = patch(&src, &dst, &[formula("D1", "=Rate*2"), formula("F1", "=IF(Flag,1,0)")], &verified()).unwrap();
+    assert_eq!(statuses(report), [Status::AlreadyThere, Status::AlreadyThere]);
     assert_eq!(parts(&dst), parts(&src));
-    // where Excel's cache says implicit intersection changed the value (50, A1*B1 alone), the edit
-    // writes the array (63, A1*B1+A2*B2+A3*B3) and an expectation of the formula does not hold
+    let _ = std::fs::remove_file(&dst);
+    let report = patch(&src, &dst, &[formula("E1", "=INDEX(A1:A3,2)")], &verified()).unwrap();
+    assert_eq!(statuses(report), [Status::Applied]);
+    assert!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "E1").unwrap().contains(r#"<f t="array" ref="E1">"#));
+    // a range under an operator, which Excel 365 shows intersected (`SUM(@A1:A3*@B1:B3)`, 50, A1*B1
+    // alone): the edit writes the array (63, A1*B1+A2*B2+A3*B3) and an expectation of the formula
+    // does not hold
     let _ = std::fs::remove_file(&dst);
     let report = patch(&src, &dst, &[formula("G1", "=SUM(A1:A3*B1:B3)"), expecting("G1", "=SUM(A1:A3*B1:B3)")], &verified()).unwrap();
     assert_eq!(report.outcomes[0].status, Status::Applied);
@@ -1443,9 +1455,10 @@ fn a_shared_group_moved_without_changing_what_its_members_read_is_kept() {
 // ---- refute round 7 ---------------------------------------------------------------------------
 
 #[test]
-fn a_plain_formula_is_judged_on_excel_s_cache_against_the_engine_before_the_edits() {
-    // `Rate` one cell: Excel computed `Rate*2` and `INDEX(A1:A3,2)` as their arrays; F1 holds a
-    // formula with no cache, as other writers leave one
+fn a_plain_formula_is_judged_as_it_stands_after_the_edits() {
+    // `Rate` one cell: `Rate*2` reads as written; `INDEX(A1:A3,2)` is shown `=@INDEX(…)`; F1 holds a
+    // formula with no cache, as other writers leave one; G1 a range under an operator whose
+    // intersected value happens to equal the array's (B2 and B3 zero), and stops to when B2 moves
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("inputs.xlsx");
     let data = r#"<row r="1"><c r="A1"><v>5</v></c><c r="D1"><f>Rate*2</f><v>10</v></c><c r="E1"><f>INDEX(A1:A3,2)</f><v>6</v></c><c r="F1"><f>Rate*3</f></c></row><row r="2"><c r="A2"><v>6</v></c></row><row r="3"><c r="A3"><v>7</v></c></row>"#;
@@ -1462,25 +1475,43 @@ fn a_plain_formula_is_judged_on_excel_s_cache_against_the_engine_before_the_edit
         let _ = std::fs::remove_file(&dst);
         patch(&src, &dst, edits, &verified()).unwrap().outcomes.into_iter().map(|o| o.status).collect()
     };
-    // the inputs changed first: the expectations still hold, the formulas are still there
+    // the inputs changed first: `Rate*2` still holds and is still there; INDEX's expectation does
+    // not hold, and its formula written is the array it is
     let inputs = [value("S", "A1", serde_json::json!(50)), value("S", "A2", serde_json::json!(60))];
     let mut edits = inputs.to_vec();
     edits.extend([expecting("D1", "=Rate*2"), expecting("E1", "=INDEX(A1:A3,2)")]);
-    assert_eq!(statuses(&edits), [Status::Applied; 4]);
+    assert_eq!(statuses(&edits), [Status::Applied, Status::Applied, Status::Applied, Status::Conflict]);
     let mut edits = inputs.to_vec();
     edits.extend([formula("D1", "=Rate*2"), formula("E1", "=INDEX(A1:A3,2)")]);
-    assert_eq!(statuses(&edits), [Status::Applied, Status::Applied, Status::AlreadyThere, Status::AlreadyThere]);
+    assert_eq!(statuses(&edits), [Status::Applied, Status::Applied, Status::AlreadyThere, Status::Applied]);
     let sheet = part(&dst, "xl/worksheets/sheet1.xml");
     assert_eq!(element(&sheet, "D1"), Some(r#"<c r="D1"><f>Rate*2</f><v>100</v></c>"#), "{sheet}");
-    assert_eq!(element(&sheet, "E1"), Some(r#"<c r="E1"><f>INDEX(A1:A3,2)</f><v>60</v></c>"#), "{sheet}");
-    assert!(!parts(&dst).contains_key("xl/metadata.xml"));
-    // a row deleted first: the expectation of the formula as the move left it holds
-    assert_eq!(statuses(&[Edit::DeleteRows { sheet: "S".into(), at: 2, count: 1 }, expecting("E1", "=INDEX(A1:A2,2)")]), [Status::Applied; 2]);
-    // no cache to judge by: an expectation holds on its text; the formula written over it is
-    // written as the array the engine computes
+    assert_eq!(element(&sheet, "E1"), Some(r#"<c r="E1" cm="1"><f t="array" ref="E1">INDEX(A1:A3,2)</f><v>60</v></c>"#), "{sheet}");
+    // no cache to judge by changes nothing: `Rate*3` reads as written
     assert_eq!(statuses(&[expecting("F1", "=Rate*3")]), [Status::Applied]);
-    assert_eq!(statuses(&[formula("F1", "=Rate*3")]), [Status::Applied]);
-    assert!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "F1").unwrap().contains(r#"<f t="array" ref="F1">Rate*3</f>"#));
+    assert_eq!(statuses(&[formula("F1", "=Rate*3")]), [Status::AlreadyThere]);
+    // G1, a range under an operator: its intersected value 50 and its array's 50 alike only while B2
+    // and B3 are zero; B2 moved, the formula written is the array (56), not already there
+    let src2 = dir.path().join("coincidence.xlsx");
+    let g = |b2: i32, b3: i32, cache: i32| {
+        format!(r#"<row r="1"><c r="A1"><v>5</v></c><c r="B1"><v>10</v></c><c r="G1"><f>SUM(A1:A3*B1:B3)</f><v>{cache}</v></c></row><row r="2"><c r="A2"><v>6</v></c><c r="B2"><v>{b2}</v></c></row><row r="3"><c r="A3"><v>7</v></c><c r="B3"><v>{b3}</v></c></row>"#)
+    };
+    plain_book(&src2, &[("S", worksheet(&g(0, 0, 50), ""))], "", &[]);
+    let _ = std::fs::remove_file(&dst);
+    let report = patch(&src2, &dst, &[value("S", "B2", serde_json::json!(1)), formula("G1", "=SUM(A1:A3*B1:B3)")], &verified()).unwrap();
+    assert_eq!(report.outcomes[1].status, Status::Applied, "{:?}", report.outcomes);
+    assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "G1"), Some(r#"<c r="G1" cm="1"><f t="array" ref="G1">SUM(A1:A3*B1:B3)</f><v>56</v></c>"#));
+    // rows 2:3 deleted, G1 left `SUM(A1:A1*B1:B1)`, one cell under the operator: its expectation
+    // holds, its formula is already there
+    plain_book(&src2, &[("S", worksheet(&g(1, 1, 50), ""))], "", &[]);
+    let delete = Edit::DeleteRows { sheet: "S".into(), at: 2, count: 2 };
+    let _ = std::fs::remove_file(&dst);
+    let report = patch(&src2, &dst, &[delete.clone(), expecting("G1", "=SUM(A1:A1*B1:B1)")], &verified()).unwrap();
+    assert_eq!(report.outcomes[1].status, Status::Applied, "{:?}", report.outcomes);
+    let _ = std::fs::remove_file(&dst);
+    let report = patch(&src2, &dst, &[delete, formula("G1", "=SUM(A1:A1*B1:B1)")], &verified()).unwrap();
+    assert_eq!(report.outcomes[1].status, Status::AlreadyThere, "{:?}", report.outcomes);
+    assert!(!parts(&dst).contains_key("xl/metadata.xml"));
 }
 
 #[test]
