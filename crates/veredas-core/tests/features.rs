@@ -297,6 +297,55 @@ fn main() {
     );
 }
 
+/// What the members import from core today, every path of it; the default form must hold each.
+const MEMBERS_IMPORT: &[&str] = &[
+    "Quality",
+    "Sample",
+    "SeriesRef",
+    "SeriesType",
+    "SourceError",
+    "SourceHandle",
+    "SourceId",
+    "Value",
+    "now_unix_ms",
+    "stop_flag",
+    "fieldbus",
+    "opc::NodeId",
+    "opc::OpcError",
+    "opc::StatusCode",
+    "opc::Variant",
+    "opc::WriteError",
+    "opc::run_on_own_runtime",
+    "opc::spawn",
+    "opc::error::NodeIdError",
+    "opc::spec::Auth",
+    "opc::spec::BitSpec",
+    "opc::spec::PollSpec",
+    "opc::spec::RuleSpec",
+    "opc::spec::TagSpec",
+    "opc::spec::parse_node_id",
+    "opc::worker::CONNECT_TIMEOUT",
+    "opc::worker::MAX_NODES_PER_READ",
+    "opc::worker::WriteGate",
+    "rng::Pcg32",
+    "schema::HeaderError",
+    "schema::check",
+    "schema::stamp",
+    "state::ControllerState",
+    "state::reason_entry",
+    "telegram::Catalog",
+    "telegram::ChannelSpec",
+    "telegram::Endian",
+    "telegram::Message",
+    "telegram::PeerId",
+    "telegram::Role",
+    "telegram::capture::FieldType",
+    "telegram::catalog::Catalog",
+    "telegram::catalog::load",
+    "telegram::schema::ChannelSpec",
+    "telegram::schema::load",
+];
+
 /// Each form a member asks for holds the layers its form promises, named by a consumer crate of
 /// the test's own and checked by cargo: the default (every plant-facing layer), the default with
 /// the demo plant (maquinar's form), each master alone. Every build of core inside the suite merges
@@ -350,9 +399,24 @@ fn each_form_holds_the_layers_it_promises() {
             .split(", ")
             .map(|t| format!("    let _ = std::any::type_name::<{}>();", t.trim()))
             .collect();
+        // The default form also takes every path the members import from core today (portal,
+        // supervisão, comissionador, controlador, maquinar, mestres, as `grep -rho
+        // 'veredas_core::...' crates tools` lists them), functions and constants included.
+        let uses: Vec<String> = if name == "default-form" {
+            MEMBERS_IMPORT
+                .iter()
+                .map(|p| format!("use veredas_core::{p} as _;"))
+                .collect()
+        } else {
+            Vec::new()
+        };
         std::fs::write(
             root.join("src/main.rs"),
-            format!("fn main() {{\n{}\n}}\n", names.join("\n")),
+            format!(
+                "#![allow(unused_imports)]\n{}\nfn main() {{\n{}\n}}\n",
+                uses.join("\n"),
+                names.join("\n")
+            ),
         )
         .unwrap();
         // One build folder for every consumer, the one the compile check above uses, so the
@@ -442,6 +506,241 @@ fn every_feature_gate_is_where_it_belongs() {
     assert_eq!(gates, want);
 }
 
+/// The twelve forms core can be asked for: the plant-facing layer off, on, or on with the demo
+/// plant; each master off or on. The last is every feature, the form core's own tests run in.
+fn forms() -> Vec<Vec<&'static str>> {
+    let mut forms = Vec::new();
+    for net in [&[][..], &["net"][..], &["net", "demo-server"][..]] {
+        for modbus in [&[][..], &["modbus"][..]] {
+            for enip in [&[][..], &["enip"][..]] {
+                forms.push([net, modbus, enip].concat());
+            }
+        }
+    }
+    forms
+}
+
+/// A consumer crate of the test's own asking for core in `form` alone, with `main` as its source,
+/// in the build folder every consumer here shares.
+fn consumer(name: &str, form: &[&str], main: &str) -> PathBuf {
+    let core = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("form-consumers")
+        .join(name);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    let features: Vec<String> = form.iter().map(|f| format!("{f:?}")).collect();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n\
+             [workspace]\n\n[dependencies]\nveredas-core = {{ path = {:?}, default-features = false, features = [{}] }}\n",
+            core.to_str().unwrap(),
+            features.join(", ")
+        ),
+    )
+    .unwrap();
+    std::fs::copy(core.join("../../Cargo.lock"), root.join("Cargo.lock")).unwrap();
+    std::fs::write(root.join("src/main.rs"), main).unwrap();
+    root
+}
+
+/// Every plain string literal of a Rust source that starts with a capital letter, as written
+/// (escapes kept), so it can be pasted into another source.
+fn capitalized_literals(source: &str) -> Vec<String> {
+    let chars: Vec<char> = source.chars().collect();
+    let mut found = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '/' if chars.get(i + 1) == Some(&'/') => {
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+            }
+            '\'' if chars.get(i + 1) == Some(&'\\') => {
+                i += 2;
+                while i < chars.len() && chars[i] != '\'' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            '\'' if chars.get(i + 2) == Some(&'\'') => i += 3,
+            'r' if matches!(chars.get(i + 1), Some('#') | Some('"'))
+                && !chars
+                    .get(i.wrapping_sub(1))
+                    .is_some_and(|c| c.is_alphanumeric() || *c == '_') =>
+            {
+                let mut j = i + 1;
+                let mut hashes = 0;
+                while chars.get(j) == Some(&'#') {
+                    hashes += 1;
+                    j += 1;
+                }
+                if chars.get(j) != Some(&'"') {
+                    i += 1;
+                    continue;
+                }
+                j += 1;
+                let close: Vec<char> = std::iter::once('"')
+                    .chain(std::iter::repeat_n('#', hashes))
+                    .collect();
+                while j < chars.len() && chars[j..].iter().take(close.len()).ne(close.iter()) {
+                    j += 1;
+                }
+                i = j + close.len();
+            }
+            '"' => {
+                let byte = i > 0 && chars[i - 1] == 'b';
+                let mut j = i + 1;
+                while j < chars.len() && chars[j] != '"' {
+                    if chars[j] == '\\' {
+                        j += 1;
+                    }
+                    j += 1;
+                }
+                let lit: String = chars[i..=j.min(chars.len() - 1)].iter().collect();
+                if !byte && chars.get(i + 1).is_some_and(|c| c.is_ascii_uppercase()) {
+                    found.push(lit);
+                }
+                i = j + 1;
+            }
+            _ => i += 1,
+        }
+    }
+    found
+}
+
+/// The slim layer behaves the same in every form: a probe crate asking for core in each of the
+/// twelve forms alone, run, prints what the header reader answers (every stamp and check of a
+/// set of headers, refusals with their texts), the state text's tables and lookups, every state
+/// line of core's own state-text tests read and written back (or refused, with the text), and
+/// draws of the PCG32 from fixed seeds; all twelve print the same, so the form core's own tests
+/// run in (every feature) speaks for each. A gate that changes what an item does without changing
+/// what rustdoc renders of it (a constant's value, a derive's attribute, a function's body) shows
+/// here as a form that prints otherwise, for the slim layer; for the plant-facing layer and the
+/// masters, core's own tests hold their behaviour in the merged form alone.
+#[test]
+fn the_slim_layer_behaves_the_same_in_every_form() {
+    let core = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let lines =
+        capitalized_literals(&std::fs::read_to_string(core.join("tests/state_text.rs")).unwrap());
+    assert!(lines.len() > 100, "{} state lines", lines.len());
+    let headers = [
+        "format = \"veredas-x\"\nversion = 1\n[body]\nk = 2\n",
+        "format = \"veredas-x\"\nversion = 2\n",
+        "version = 1\n",
+        "format = \"veredas-x\"\n",
+        "format = 3\nversion = 1\n",
+        "format = \"veredas-x\"\nversion = \"1\"\n",
+        "format = \"veredas-x\"\nversion = -1\n",
+        "format = \"veredas-x\"\nversion = 0\n",
+        "format = \"veredas-x\"\nversion = 4294967296\n",
+        "format = \"veredas-y\"\nversion = 1\n",
+        "[body]\nformat = \"veredas-x\"\nversion = 1\n",
+        "format = \"veredas-x\"\nversion = 1\n[[t]]\nk = 18446744073709551615\n",
+        "= =",
+        "",
+    ];
+    let main = format!(
+        r##"use std::fmt::Write;
+use veredas_core::rng::Pcg32;
+use veredas_core::schema;
+use veredas_core::state::{{self, CommandSource, ControllerState, StateWord}};
+
+const HEADERS: &[&str] = &{headers:?};
+const LINES: &[&str] = &[
+{lines}
+];
+
+fn main() {{
+    let mut out = String::new();
+    for h in HEADERS {{
+        let _ = writeln!(out, "stamp {{h:?}} = {{:?}}", schema::stamp(h, "an x file").map_err(|e| (e.to_string(), e)));
+        for (f, v) in [("veredas-x", 1), ("veredas-x", 2), ("veredas-y", 1)] {{
+            let r = schema::check(h, "an x file", f, v).map_err(|e| (e.to_string(), e));
+            let _ = writeln!(out, "check {{h:?}} {{f}} {{v}} = {{r:?}}");
+        }}
+    }}
+    let _ = writeln!(out, "words {{:?}}", StateWord::ALL.map(|w| (w, w.number(), w.word())));
+    let _ = writeln!(out, "sources {{:?}}", CommandSource::ALL.map(|c| (c, c.word())));
+    let _ = writeln!(out, "reasons {{:?}}", state::REASONS);
+    let _ = writeln!(out, "phases {{:?}}", state::PHASES);
+    let _ = writeln!(out, "maintenance {{:?}}", state::MAINTENANCE_REASONS);
+    for n in 0..=255u8 {{
+        let _ = writeln!(out, "number {{n}} {{:?}}", StateWord::from_number(n));
+    }}
+    for n in 0..1000u16 {{
+        if let Some(r) = state::reason_entry(n) {{
+            let _ = writeln!(out, "reason {{n}} {{r:?}}");
+        }}
+    }}
+    for w in ["RUN", "STOP", "HOLD", "FAULT", "STARTUP", "MAINTENANCE", "run", "oficina", "plc", "X", ""] {{
+        let _ = writeln!(out, "word {{w:?}} {{:?}} {{:?}}", StateWord::from_word(w), CommandSource::from_word(w));
+    }}
+    for l in LINES {{
+        match l.parse::<ControllerState>() {{
+            Ok(s) => {{
+                let _ = writeln!(out, "line {{l:?}} = {{s:?}} / {{s}} / {{:?}} / {{}}", s.health(), s.clone().normalized());
+            }}
+            Err(e) => {{
+                let _ = writeln!(out, "line {{l:?}} ! {{e:?}} / {{e}}");
+            }}
+        }}
+    }}
+    for (seed, stream) in [(0u64, 0u64), (1, 1), (7, 54), (42, 3), (u64::MAX, u64::MAX)] {{
+        let mut r = Pcg32::new(seed, stream);
+        let u: Vec<u32> = (0..8).map(|_| r.next_u32()).collect();
+        let f: Vec<u64> = (0..4).map(|_| r.next_f64().to_bits()).collect();
+        let g: Vec<u64> = (0..4).map(|_| r.uniform(-5.0, 5.0, 2).to_bits()).collect();
+        let i: Vec<i64> = (0..6).map(|_| r.int_in(-3, 3)).collect();
+        let b: Vec<bool> = (0..8).map(|_| r.flip()).collect();
+        let _ = writeln!(out, "pcg {{seed}} {{stream}} {{u:?}} {{f:?}} {{g:?}} {{i:?}} {{b:?}}");
+    }}
+    print!("{{out}}");
+}}
+"##,
+        lines = lines.join(",\n")
+    );
+    let forms = forms();
+    let mut printed = Vec::new();
+    for (n, form) in forms.iter().enumerate() {
+        let root = consumer(&format!("probe-{n}"), form, &main);
+        let out = Command::new(env!("CARGO"))
+            .args(["run", "--offline", "--quiet", "--manifest-path"])
+            .arg(root.join("Cargo.toml"))
+            .env(
+                "CARGO_TARGET_DIR",
+                Path::new(env!("CARGO_TARGET_TMPDIR")).join("features-check"),
+            )
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "the probe of {form:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        printed.push(String::from_utf8(out.stdout).unwrap());
+    }
+    let merged = printed.last().unwrap();
+    assert!(
+        merged.lines().count() > 400,
+        "{} lines",
+        merged.lines().count()
+    );
+    assert!(merged.contains("line \"RUN\" = ") && merged.contains("UnknownVersion"));
+    for (form, out) in forms.iter().zip(&printed) {
+        if out != merged {
+            let first = out
+                .lines()
+                .zip(merged.lines())
+                .find(|(a, b)| a != b)
+                .map(|(a, b)| format!("{a}\n  where every feature prints\n{b}"))
+                .unwrap_or_else(|| "a different number of lines".into());
+            panic!("the slim layer in {form:?} behaves otherwise:\n{first}");
+        }
+    }
+}
+
 /// Text with its tags stripped and its whitespace collapsed.
 fn plain(html: &str) -> String {
     let mut out = String::new();
@@ -464,14 +763,26 @@ fn plain(html: &str) -> String {
 /// item's anchor with what it renders (an impl's or a method's header, a field with its type, a
 /// variant, a re-export's line), and every anchor of the page's frame as a key alone;
 /// and every row of a module's table by the page it points to, with what it shows (the name and
-/// the mark of restricted visibility). Left out, as not core's: the blanket impls, the page's last
-/// section, which show whichever crates are in the graph (a master's framing brings tracing's
-/// `Instrument` onto every type), and the tooltips of notable traits.
-fn page_view(dir: &str, html: &str) -> Vec<(String, String)> {
-    let html = match html.rfind("id=\"blanket-implementations\"") {
-        Some(i) => &html[..i],
-        None => html,
+/// the mark of restricted visibility), and every other line of a table (a glob's re-export) by
+/// what it shows. Left out, as not core's: the blanket impls, the page's last section, which show
+/// whichever crates are in the graph (a master's framing brings tracing's `Instrument` onto every
+/// type), and the tooltips of notable traits. Rustdoc makes every id on a page unique and puts the
+/// blanket impls' heading only on a type's page, once; a page where either fails holds an id
+/// written in a doc comment, which could hide what follows it, and is refused.
+fn page_view(page: &str, html: &str) -> Vec<(String, String)> {
+    const BLANKET: &str = "<h2 id=\"blanket-implementations\" class=\"section-header\">";
+    let (dir, file) = page.rsplit_once('/').unwrap_or(("", page));
+    let typed = ["struct.", "enum.", "union.", "type.", "primitive."]
+        .iter()
+        .any(|k| file.starts_with(k));
+    let html = match html.matches("id=\"blanket-implementations\"").count() {
+        0 => html,
+        1 if typed && html.contains(BLANKET) => &html[..html.find(BLANKET).unwrap()],
+        n => panic!(
+            "{page}: the blanket impls' id {n} times, or not as rustdoc writes it: an id in a doc comment"
+        ),
     };
+    let mut ids = BTreeSet::new();
     let mut keys = Vec::new();
     if let Some(i) = html.find("<pre class=\"rust item-decl\">") {
         let decl = &html[i..];
@@ -483,6 +794,10 @@ fn page_view(dir: &str, html: &str) -> Vec<(String, String)> {
         let start = at + found;
         at = start + 5;
         let id = html[at..].split('"').next().unwrap().to_string();
+        assert!(
+            ids.insert(id.clone()),
+            "{page}: the id `{id}` twice: an id in a doc comment"
+        );
         if id == "notable-traits-data" {
             continue;
         }
@@ -506,13 +821,23 @@ fn page_view(dir: &str, html: &str) -> Vec<(String, String)> {
         };
         keys.push((id, text));
     }
-    // A module's table: each row by the page it points to, resolved from the module's folder.
+    // A module's table: each row by the page it points to, resolved from the module's folder;
+    // a line that points to no page of its own (a glob's re-export) by what it shows.
     let mut at = 0;
-    while let Some(found) = html[at..].find("<dt><a ") {
+    while let Some(found) = html[at..].find("<dt") {
         let start = at + found;
         let row = &html[start..];
         let end = row.find("</dt>").unwrap_or(row.len());
-        at = start + end;
+        at = start + 3;
+        if !row.starts_with("<dt>") {
+            // `<dt id=..>`: a re-export, keyed by its id above.
+            continue;
+        }
+        if !row.starts_with("<dt><a ") {
+            let text = plain(&row[..end]);
+            keys.push((format!("dt:{text}"), text));
+            continue;
+        }
         let Some(h) = row[..end].find("href=\"") else {
             continue;
         };
@@ -590,9 +915,8 @@ fn rustdoc_view(features: &[&str], private: bool) -> BTreeMap<String, String> {
                 .to_string_lossy()
                 .replace('\\', "/");
             if rel != "all.html" {
-                let dir = rel.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
                 let html = std::fs::read_to_string(&p).unwrap();
-                for (key, text) in page_view(dir, &html) {
+                for (key, text) in page_view(&rel, &html) {
                     found.insert(format!("{rel}#{key}"), text);
                 }
             }
@@ -690,15 +1014,7 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
             || (feature == "net" && NET_ROOT.contains(&entry))
             || (matches!(feature, "modbus" | "enip") && FIELDBUS_LINE.contains(&entry))
     };
-    // The twelve forms.
-    let mut forms: Vec<Vec<&str>> = Vec::new();
-    for net in [&[][..], &["net"][..], &["net", "demo-server"][..]] {
-        for modbus in [&[][..], &["modbus"][..]] {
-            for enip in [&[][..], &["enip"][..]] {
-                forms.push([net, modbus, enip].concat());
-            }
-        }
-    }
+    let forms = forms();
     for private in [true, false] {
         let views: Vec<BTreeMap<String, String>> =
             forms.iter().map(|f| rustdoc_view(f, private)).collect();
