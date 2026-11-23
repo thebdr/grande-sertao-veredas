@@ -5,9 +5,9 @@ The testing platform of Veredas 2; screens say **Comissionador**. `docs/veredas-
 (P-006, then the `C-2xx` clauses it becomes) wins on status. This file says what comissionador
 holds, how a test runs against a plant, what the engine offers Oficina, in which order it lands,
 and the traps met on the way. The test file and the function file are `docs/test-schema.md`; the
-look is `docs/design/comissionador/`. Phases 1 to 4 are built: the reading and the check (C-200,
+look is `docs/design/comissionador/`. Phases 1 to 5 are built: the reading and the check (C-200,
 C-201), the engine, live and replayed (C-202, C-203), the run record and the report (C-204,
-`docs/report-schema.md`); the executable is not.
+`docs/report-schema.md`), the executable (C-205); phase 6, for Oficina's designer, waits for it.
 
 ## The role nobody covers
 **Comissionador runs a plant's acceptance tests: a test, written as one plain-text file, drives
@@ -244,3 +244,10 @@ Recorded as the build meets them.
 - **A step is not named after an action.** The design names a step `report`; the reader refuses
   the language's words as names, so the reference's step is `summary`. A name that is an action
   would make a step's first line read two ways.
+- **A bench channel says where it listens only until a peer has come and gone** (C-205). Its wire
+  state reads `listening on <address>` while it waits for its first peer and `<n> peer(s)` after,
+  so every project text that needs the machine's port is written before the first run dials it.
+- **A hand-written TOML scan keeps losing to TOML** (C-201, rounds 1, 3, 4 and 5): an escape, a
+  quote run, a character past ASCII each hid a header key. The header is read by the `toml`
+  crate's own document reader (`toml::de::DeTable`), its keys with their spans, its values left
+  as text.
