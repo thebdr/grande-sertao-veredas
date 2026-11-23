@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(executable)"
   ],
   "exitCode": 0,
-  "outputSha": "46e199a32daa4e1c78278614986122cad34fdbd0c1e06cf93211011febf892c6",
-  "outputTail": "   Compiling ironcalc_base v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/forks/ironcalc/base)\n   Compiling ironcalc v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/forks/ironcalc/xlsx)\n   Compiling veredas-abaco v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/crates/veredas-abaco)\n   Compiling abaco-oracle v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/tools/abaco-oracle)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.11s\n────────────\n Nextest run ID acb884cf-becf-44d3-9656-188f7c353581 with nextest profile: default\n    Starting 3 tests across 1 binary (121 binaries skipped)\n        PASS [   0.042s] (1/3) veredas-comissionador::executable check_reads_a_file_and_names_its_problems\n        PASS [   1.285s] (2/3) veredas-comissionador::executable replay_reads_the_window_the_project_s_start_fills\n        PASS [  14.728s] (3/3) veredas-comissionador::executable run_starts_the_session_runs_live_keeps_the_run_and_answers_by_its_verdict\n────────────\n     Summary [  14.728s] 3 tests run: 3 passed, 0 skipped",
-  "ranAt": "2026-11-23T01:07:39.265Z",
-  "headCommit": "557b906b6958bfec12dcdb76c6a43803eb41b8e4",
+  "outputSha": "048c7738eb3db4627c9b19f72c9c5fd05bfc0f08a1fb26f38407889ee403e710",
+  "outputTail": "   Compiling ironcalc_base v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/forks/ironcalc/base)\n   Compiling ironcalc v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/forks/ironcalc/xlsx)\n   Compiling veredas-abaco v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/crates/veredas-abaco)\n   Compiling abaco-oracle v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/tools/abaco-oracle)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.08s\n────────────\n Nextest run ID 250c5ac0-d276-4a4e-98a7-6173aa827880 with nextest profile: default\n    Starting 4 tests across 1 binary (122 binaries skipped)\n        PASS [   0.124s] (1/4) veredas-comissionador::executable check_reads_a_file_and_names_its_problems\n        PASS [   3.685s] (2/4) veredas-comissionador::executable replay_reads_the_window_the_project_s_start_fills\n        PASS [  16.175s] (3/4) veredas-comissionador::executable run_starts_the_session_runs_live_keeps_the_run_and_answers_by_its_verdict\n        PASS [  19.162s] (4/4) veredas-comissionador::executable a_replay_waits_until_the_store_holds_what_the_start_reads\n────────────\n     Summary [  19.162s] 4 tests run: 4 passed, 0 skipped",
+  "ranAt": "2026-11-23T02:35:47.937Z",
+  "headCommit": "4011f01a155258e742b1c65c8c74c3a7f0c1e037",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/executable.rs",
       "file": "crates/veredas-comissionador/tests/executable.rs",
-      "fileSha": "9160d2977efb71545d91317c4e41c8b935920682eec18cb337ba164aa42e17dd"
+      "fileSha": "e62442d1186c19ae7c0b3240c27ff8c7e0cbbe89a065cb593526fe64b3620bfe"
     }
   ]
 }
