@@ -1237,12 +1237,27 @@ fn a_first_input_window_without_end_runs_and_closes() {
     let mut sp = spec(&a);
     sp.first_input = Duration::MAX;
     let s = Scanner::open(&sp).unwrap();
+    let opened = Instant::now();
     assert_eq!(s.opened().first_input, Duration::MAX);
     assert!(
         wait(Duration::from_secs(1), || a.outputs().len() > 3),
         "it produces"
     );
-    assert_eq!(s.state(), LinkState::Running);
+    // The adapter silent, past the 80 ms timeout and past the standard's 10 s: still running,
+    // still producing. No fallback, neither the timeout nor `FIRST_INPUT`, stands in for "without
+    // end".
+    for past in [
+        Duration::from_millis(300),
+        FIRST_INPUT + Duration::from_millis(500),
+    ] {
+        let produced = s.counters().produced;
+        thread::sleep(past.saturating_sub(opened.elapsed()));
+        assert_eq!(s.state(), LinkState::Running, "at {past:?}");
+        assert!(
+            s.counters().produced > produced,
+            "still producing at {past:?}"
+        );
+    }
     s.close().unwrap();
     assert!(unregistered(&a));
     let commands: Vec<u16> = a.frames().iter().map(|f| le16(f, 0)).collect();
