@@ -634,6 +634,8 @@ fn a_connection_outside_the_standards_bounds_never_reaches_the_wire() {
         refused(|s| s.rpi = Duration::ZERO),
         refused(|s| s.rpi = Duration::from_secs(4295)),
         refused(|s| s.timeout_multiplier = 8),
+        refused(|s| s.io_bind = "[::]:0".parse().unwrap()),
+        refused(|s| s.adapter = "[::1]:44818".parse().unwrap()),
     ];
     assert_eq!(
         reasons,
@@ -644,6 +646,8 @@ fn a_connection_outside_the_standards_bounds_never_reaches_the_wire() {
             "an interval of 0 µs: the standard takes 1 to 4294967295",
             "an interval of 4295000000 µs: the standard takes 1 to 4294967295",
             "a timeout multiplier of 8: the standard takes 0 to 7",
+            "the I/O socket [::]:0: EtherNet/IP's I/O addresses are IPv4",
+            "the adapter [::1]:44818: EtherNet/IP's I/O addresses are IPv4",
         ]
     );
     assert_eq!(

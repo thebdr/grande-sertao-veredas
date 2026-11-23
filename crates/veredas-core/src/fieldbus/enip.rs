@@ -12,7 +12,8 @@
 //!
 //! - a connection outside what the 16-bit Forward_Open can carry (a direction's size, data plus
 //!   the 2-byte sequence count plus the 32-bit run/idle header where the direction has one, past
-//!   511 bytes), an interval of zero or past 4294 s, or a multiplier past 7 is refused before
+//!   511 bytes), an interval of zero or past 4294 s, a multiplier past 7, or an IPv6 address for
+//!   the adapter or the I/O socket (the Sockaddr Info items carry IPv4 alone) is refused before
 //!   anything is sent;
 //! - connecting, registering the session, the Forward_Open, the Forward_Close: each bounded by
 //!   [`Timeouts`]; an adapter's refusal comes back with the standard's general and extended
@@ -234,6 +235,20 @@ impl Spec {
             return refuse(format!(
                 "a timeout multiplier of {}: the standard takes 0 to 7",
                 self.timeout_multiplier
+            ));
+        }
+        // EtherNet/IP's Sockaddr Info items carry IPv4 addresses alone, and a socket bound to an
+        // IPv6 address would see the adapter's IPv4 datagrams under another address.
+        if !self.adapter.is_ipv4() {
+            return refuse(format!(
+                "the adapter {}: EtherNet/IP's I/O addresses are IPv4",
+                self.adapter
+            ));
+        }
+        if !self.io_bind.is_ipv4() {
+            return refuse(format!(
+                "the I/O socket {}: EtherNet/IP's I/O addresses are IPv4",
+                self.io_bind
             ));
         }
         Ok((out, inp, rpi))
