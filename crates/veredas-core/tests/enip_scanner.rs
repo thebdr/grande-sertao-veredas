@@ -655,6 +655,17 @@ fn a_connection_outside_the_standards_bounds_never_reaches_the_wire() {
         0,
         "nothing sent, not even a connection"
     );
+    // An IPv6 adapter that is listening: refused before any connection reaches it.
+    let v6 = TcpListener::bind("[::1]:0").unwrap();
+    let mut s6 = spec(&a);
+    s6.adapter = v6.local_addr().unwrap();
+    assert!(matches!(Scanner::open(&s6), Err(EnipError::Refused { .. })));
+    v6.set_nonblocking(true).unwrap();
+    assert_eq!(
+        v6.accept().map(|_| ()).map_err(|e| e.kind()),
+        Err(std::io::ErrorKind::WouldBlock),
+        "no connection reached the IPv6 adapter"
+    );
     // The limits taken: 505 bytes with their count and header, multiplier 7.
     let mut s = spec(&a);
     (s.output_size, s.timeout_multiplier) = (505, 7);
@@ -1043,6 +1054,32 @@ fn inputs_come_from_the_adapters_session_or_io_address_and_no_other() {
         s.opened().sends_to,
         SocketAddr::new(a2.addr.ip(), real.port())
     );
+}
+
+/// The adapter named by the unspecified address is reached at the local host: its session's real
+/// peer is the address its inputs are judged by, and the fallback for an unspecified address in
+/// its reply (Linux: a connect to 0.0.0.0 reaches the local host).
+#[cfg(target_os = "linux")]
+#[test]
+fn an_adapter_named_by_the_unspecified_address_is_judged_by_its_sessions_peer() {
+    let a = Adapter::start(Script {
+        io_named: Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)),
+        ..Script::default()
+    });
+    let mut sp = spec(&a);
+    sp.adapter = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), a.addr.port());
+    let s = Scanner::open(&sp).unwrap();
+    assert_eq!(s.opened().session, a.addr, "the session reached 127.0.0.1");
+    assert_eq!(
+        s.opened().sends_to,
+        SocketAddr::new(a.addr.ip(), IO_PORT),
+        "the reply's 0.0.0.0 read as the session's"
+    );
+    a.set_inputs(&[0x42; 6]);
+    assert!(wait(Duration::from_secs(1), || s.inputs().data == [0x42; 6]));
+    assert!(wait(Duration::from_secs(1), || s.counters().consumed > 3));
+    assert_eq!(s.counters().stray, 0);
+    assert_eq!(s.state(), LinkState::Running);
 }
 
 /// Only this connection's inputs from the adapter keep it alive.

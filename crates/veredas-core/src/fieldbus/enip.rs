@@ -21,8 +21,8 @@
 //! - the Sockaddr Info items carry the standard's numbers: the scanner names where the adapter
 //!   sends its inputs in item 0x8001 (T→O) and reads where to send its outputs from item 0x8000
 //!   (O→T), falling back to the adapter's address and port 2222;
-//! - inputs are taken from the adapter alone (the address of its session, or the one its reply
-//!   names for the outputs), for this connection's id and size; a repeated sequence count is no
+//! - inputs are taken from the adapter alone (the address its session reached, or the one its
+//!   reply names for the outputs), for this connection's id and size; a repeated sequence count is no
 //!   new data, and nothing else resets the connection's timeout;
 //! - the connection's timeout is the adapter's actual interval times 4 shifted left by the
 //!   multiplier: an adapter silent that long has lost the connection ([`LinkState::Lost`]), the
@@ -339,6 +339,9 @@ pub struct Opened {
     /// The intervals the adapter granted.
     pub o_to_t_rpi: Duration,
     pub t_to_o_rpi: Duration,
+    /// The adapter's address as the session reached it (the stream's peer): what a name such as
+    /// the unspecified address resolves to.
+    pub session: SocketAddr,
     /// Where outputs are sent.
     pub sends_to: SocketAddr,
     /// Where inputs are received.
@@ -734,7 +737,7 @@ async fn run(
                 let Ok((n, from)) = received else { continue };
                 // From the adapter: the address of its session, or the one its reply named for the
                 // outputs (a device with an I/O interface of its own).
-                let from_adapter = from.ip() == spec.adapter.ip() || from.ip() == opened.sends_to.ip();
+                let from_adapter = from.ip() == opened.session.ip() || from.ip() == opened.sends_to.ip();
                 let frame = from_adapter
                     .then(|| decode_frame(&buf[..n], spec.input_header == Header::RunIdle).ok())
                     .flatten()
@@ -784,6 +787,10 @@ async fn open(
     };
     stream
         .set_nodelay(true)
+        .map_err(|e| not_connected(e.to_string()))?;
+    // The adapter as the session reached it, which the inputs and the fallbacks are judged by.
+    let session_addr = stream
+        .peer_addr()
         .map_err(|e| not_connected(e.to_string()))?;
     let udp = UdpSocket::bind(spec.io_bind)
         .await
@@ -861,7 +868,7 @@ async fn open(
     if reply.o_to_t_actual_rpi_us == 0 || reply.t_to_o_actual_rpi_us == 0 {
         return Err(fail("a granted interval of 0".into()));
     }
-    let adapter_ip = addr.ip();
+    let adapter_ip = session_addr.ip();
     let sends_to = match envelope.find(item::SOCKADDR_O_TO_T) {
         None => SocketAddr::new(adapter_ip, IO_PORT),
         Some(i) => {
@@ -881,6 +888,7 @@ async fn open(
         connection_serial: serial,
         o_to_t_rpi: Duration::from_micros(u64::from(reply.o_to_t_actual_rpi_us)),
         t_to_o_rpi,
+        session: session_addr,
         sends_to,
         receives_on,
         timeout: t_to_o_rpi * (4u32 << spec.timeout_multiplier),
