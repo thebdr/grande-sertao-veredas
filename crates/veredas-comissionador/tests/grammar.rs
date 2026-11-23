@@ -1045,10 +1045,8 @@ fn a_duration_s_exponent_is_read_without_a_loop_over_it() {
             Err(p) => Err(p[0].message.clone()),
         }
     };
-    let t0 = std::time::Instant::now();
     assert_eq!(one("0e-2147483648ms"), Ok(0));
     assert_eq!(one("0e99999999999999h"), Ok(0));
-    assert!(t0.elapsed() < std::time::Duration::from_secs(1), "{:?}", t0.elapsed());
     assert_eq!(one("1.0000000000000000000000000000000000000000s"), Ok(1000), "trailing zeros are no digits");
     assert_eq!(one("0001.5000s"), Ok(1500));
     assert_eq!(one("1e-99999999999s").unwrap_err(), "`1e-99999999999s` is not a whole number of milliseconds");
@@ -1068,6 +1066,38 @@ fn a_duration_s_exponent_is_read_without_a_loop_over_it() {
     // The range's end: half the largest whole number of milliseconds.
     assert_eq!(one("4611686018427387903ms"), Ok(4_611_686_018_427_387_903));
     assert_eq!(one("4611686018427387904ms").unwrap_err(), "`4611686018427387904ms` is past a duration's range");
+
+    // No loop over the exponent, against a baseline measured here, so a loaded machine slows both
+    // alike: three literals of one length, read the three ways a duration is (zero, not whole,
+    // past the range), with exponents of ten, then of a billion. Read 5 000 times each, the best of
+    // three rounds on the thread's CPU, the second costs what the first does (the exponent's text
+    // is as long; its value is never counted out), where a loop over a billion would cost
+    // thousands of times more. A round stops once past the bound, so such a loop fails in seconds.
+    use veredas_comissionador::lex::{Tok, lex};
+    let small = "0e0000000010ms 1e-0000000010ms 1e0000000030ms";
+    let large = "0e1000000000ms 1e-1000000000ms 1e1000000000ms";
+    let read = |text: &str| lex(text, 0).into_iter().map(|t| t.tok).collect::<Vec<_>>();
+    let read_as = |text: &str| {
+        let w: Vec<&str> = text.split(' ').collect();
+        vec![
+            Tok::Duration(0),
+            Tok::Bad(format!("`{}` is not a whole number of milliseconds", w[1])),
+            Tok::Bad(format!("`{}` is past a duration's range", w[2])),
+            Tok::Eof,
+        ]
+    };
+    assert_eq!((read(small), read(large)), (read_as(small), read_as(large)));
+    const TIMES: usize = 5_000;
+    const BOUND: u32 = 10;
+    let mut best: Option<(std::time::Duration, std::time::Duration)> = None;
+    for _ in 0..3 {
+        // Both sides look at the clock after every run, so the looking costs them alike.
+        let base = cost(TIMES, std::time::Duration::MAX, &|| drop(read(small))).unwrap();
+        let Some(huge) = cost(TIMES, base * BOUND, &|| drop(read(large))) else { continue };
+        best = Some(best.map_or((base, huge), |(b, h)| (b.min(base), h.min(huge))));
+    }
+    let (base, huge) = best.unwrap_or_else(|| panic!("an exponent of a billion cost over {BOUND} times one of ten in every round"));
+    assert!(huge <= base * BOUND, "an exponent of a billion: {huge:?}, of ten: {base:?}");
 }
 
 #[test]
@@ -1403,14 +1433,45 @@ fn a_function_s_inputs_reads_and_calls_are_looked_up_at_once() {
 /// How long `f` keeps this thread on a processor: its CPU time as Linux's scheduler counts it, so
 /// the machine's other work is left out; the wall clock where that count is not kept.
 fn on_cpu(f: impl FnOnce()) -> std::time::Duration {
-    let read = || std::fs::read_to_string("/proc/thread-self/schedstat").ok().and_then(|s| s.split_whitespace().next()?.parse::<u64>().ok());
-    let wall = std::time::Instant::now();
-    let start = read();
+    let spent = Spent::start();
     f();
-    match (start, read()) {
-        (Some(a), Some(b)) => std::time::Duration::from_nanos(b.saturating_sub(a)),
-        _ => wall.elapsed(),
+    spent.so_far()
+}
+
+/// The time the thread has run, from Linux's scheduler (it moves by a tick of the clock at most,
+/// a millisecond here, so what it measures is made longer than that); the wall clock's where the
+/// system keeps none.
+struct Spent {
+    cpu: Option<u64>,
+    wall: std::time::Instant,
+}
+
+impl Spent {
+    fn read() -> Option<u64> {
+        std::fs::read_to_string("/proc/thread-self/schedstat").ok().and_then(|s| s.split_whitespace().next()?.parse::<u64>().ok())
     }
+    fn start() -> Spent {
+        Spent { wall: std::time::Instant::now(), cpu: Spent::read() }
+    }
+    fn so_far(&self) -> std::time::Duration {
+        match (self.cpu, Spent::read()) {
+            (Some(a), Some(b)) => std::time::Duration::from_nanos(b.saturating_sub(a)),
+            _ => self.wall.elapsed(),
+        }
+    }
+}
+
+/// What `times` runs of `f` cost on the thread's CPU, or `None` once that passes `limit`, looked
+/// at after every run: work that would take hours is stopped at the limit, not waited for.
+fn cost(times: usize, limit: std::time::Duration, f: &dyn Fn()) -> Option<std::time::Duration> {
+    let spent = Spent::start();
+    for _ in 0..times {
+        f();
+        if spent.so_far() > limit {
+            return None;
+        }
+    }
+    Some(spent.so_far())
 }
 
 /// How a check's time grows: the best of two runs at `n` and at eight times `n`. A check linear
