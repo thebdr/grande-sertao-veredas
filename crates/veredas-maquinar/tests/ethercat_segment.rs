@@ -325,7 +325,8 @@ fn the_reference_s_segment_runs_from_its_bench_file_and_a_missing_interface_is_n
         });
         // An interface the namespace lacks is named in the refusal.
         let missing = start(&config("interface = \"nowhere0\"\ndevices = [ { name = \"d\" } ]\n")).err().expect("no such interface");
-        assert!(matches!(missing, EthercatError::Link(_)) && missing.to_string().starts_with("the interface: "), "{missing}");
+        assert!(matches!(missing, EthercatError::Link(_)), "{missing}");
+        assert_eq!(missing.to_string(), "the interface: no network interface is named \"nowhere0\"");
     });
 }
 
@@ -518,14 +519,14 @@ fn the_clock_latches_takes_its_offset_and_compares_in_sign_and_magnitude() {
 fn registers_ethercat_only_reads_keep_their_values_and_the_ram_is_the_8_kb_stated() {
     let mut l = line();
     pass(&mut l, 5_000, &[(8, 0x0900 << 16, vec![0; 4])]);
-    let before: Vec<Vec<u8>> = [(0x0000u16, 10usize), (0x0012, 2), (0x0110, 2), (0x0130, 2), (0x0134, 2), (0x0805, 1), (0x0807, 1), (0x083D, 1), (0x0904, 4), (0x0918, 8), (0x092C, 4)].iter().map(|(a, n)| get(&l, 2, *a, *n)).collect();
-    let writes: Vec<(u8, u32, Vec<u8>)> = [(0x0000u16, 10usize), (0x0012, 2), (0x0110, 2), (0x0130, 2), (0x0134, 2), (0x0805, 1), (0x0807, 1), (0x083D, 1), (0x0904, 4), (0x0918, 8), (0x092C, 4)]
+    let before: Vec<Vec<u8>> = [(0x0000u16, 10usize), (0x0012, 2), (0x0110, 2), (0x0130, 2), (0x0134, 2), (0x0805, 1), (0x0807, 1), (0x083D, 1), (0x0904, 4), (0x0908, 8), (0x0918, 8), (0x092C, 4)].iter().map(|(a, n)| get(&l, 2, *a, *n)).collect();
+    let writes: Vec<(u8, u32, Vec<u8>)> = [(0x0000u16, 10usize), (0x0012, 2), (0x0110, 2), (0x0130, 2), (0x0134, 2), (0x0805, 1), (0x0807, 1), (0x083D, 1), (0x0904, 4), (0x0908, 8), (0x0918, 8), (0x092C, 4)]
         .iter()
         .map(|(a, n)| (5u8, fp(0x1002, *a), vec![0xEE; *n]))
         .collect();
     let r = pass(&mut l, 9_000, &writes);
     assert!(r.iter().all(|x| x.1 == 1), "each write counted");
-    let after: Vec<Vec<u8>> = [(0x0000u16, 10usize), (0x0012, 2), (0x0110, 2), (0x0130, 2), (0x0134, 2), (0x0805, 1), (0x0807, 1), (0x083D, 1), (0x0904, 4), (0x0918, 8), (0x092C, 4)].iter().map(|(a, n)| get(&l, 2, *a, *n)).collect();
+    let after: Vec<Vec<u8>> = [(0x0000u16, 10usize), (0x0012, 2), (0x0110, 2), (0x0130, 2), (0x0134, 2), (0x0805, 1), (0x0807, 1), (0x083D, 1), (0x0904, 4), (0x0908, 8), (0x0918, 8), (0x092C, 4)].iter().map(|(a, n)| get(&l, 2, *a, *n)).collect();
     assert_eq!(after, before);
     assert_eq!((before[0][0], before[1].clone(), before[3][0]), (0x11, vec![0x02, 0x01], 0x01));
     // The station address and the offset are written.
@@ -802,5 +803,240 @@ mod round_2 {
         assert_eq!((r[0].2 as u16, r[1].2 as u16), (3, 3));
         let r = pass(&mut l, 0, &[(9, 0x0F80 << 16, vec![0])]);
         assert_eq!(r[0].2 as u16, 3, "a BRW's too");
+    }
+}
+
+/// C-113's third refute round: the critic's probes (`~/.cache/veredas/critic-c113-r3/probes`), kept
+/// as pins: a 32-bit system time compared across its wrap, by a write and by an FRMW; a write and an
+/// FMMU running past the RAM's end keeping the bytes inside it; an EEPROM write or reload done with
+/// no effect; the IRQ field never set; the EEPROM's FMMU usage and PDO entries; a silent master
+/// leaving its devices in OP; a fault in SAFE-OP keeping SAFE-OP.
+mod round_3 {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use ethercrab::std::ethercat_now;
+    use ethercrab::{MainDevice, MainDeviceConfig, PduStorage, Timeouts};
+    use veredas_aranha::netns;
+    use veredas_maquinar::ethercat::esc::{self, Datagram, Esc, Identity, PdoEntry};
+    use veredas_maquinar::ethercat::*;
+
+    fn line() -> Vec<Esc> {
+        (0..3u16)
+            .map(|i| {
+                let id = Identity { vendor_id: 7, product_code: u32::from(i), revision: 1, serial: 0, name: format!("d{i}"), alias: 0 };
+                let mut e = Esc::new(esc::sii_image(&id, &[], &[]), u64::from(i) * 1_000);
+                e.mem[0x10..0x12].copy_from_slice(&(0x1000 + i).to_le_bytes());
+                e.set_link(i < 2);
+                e
+            })
+            .collect()
+    }
+
+    fn dgs(dgs: &[(u8, u32, Vec<u8>)]) -> Vec<Datagram> {
+        dgs.iter().map(|(cmd, address, data)| Datagram { cmd: *cmd, idx: 0, address: *address, circulating: false, more: false, irq: 0, data: data.clone(), wkc: 0 }).collect()
+    }
+
+    fn pass(line: &mut [Esc], now: u64, d: &[(u8, u32, Vec<u8>)]) -> Vec<(Vec<u8>, u16, u32)> {
+        let mut d = dgs(d);
+        esc::process(line, &mut d, now);
+        d.into_iter().map(|x| (x.data, x.wkc, x.address)).collect()
+    }
+
+    fn fp(station: u16, ado: u16) -> u32 {
+        (u32::from(ado) << 16) | u32::from(station)
+    }
+
+    fn diff(l: &[Esc], i: usize) -> u32 {
+        u32::from_le_bytes(l[i].read(0x092C, 4).try_into().unwrap())
+    }
+
+    fn offset(l: &mut [Esc], station: u16, v: u64) {
+        pass(l, 0, &[(5, fp(station, 0x0920), v.to_le_bytes().to_vec())]);
+    }
+
+    #[test]
+    fn a_low_32_bit_system_time_is_compared_across_its_wrap() {
+        // The device at 0x1_0000_0100, the master's low half 0xFFFF_FF00: ahead by 512 across the wrap.
+        let now = 10_000u64;
+        let mut l = line();
+        offset(&mut l, 0x1000, 0x1_0000_0100 - now);
+        pass(&mut l, now, &[(5, fp(0x1000, 0x0910), 0xFFFF_FF00u32.to_le_bytes().to_vec())]);
+        assert_eq!(diff(&l, 0), 0x0000_0200);
+        // The device at 0xFFFF_FF00, the master's 0x0000_0100: behind by 512.
+        let mut l = line();
+        offset(&mut l, 0x1000, 0xFFFF_FF00 - now);
+        pass(&mut l, now, &[(5, fp(0x1000, 0x0910), 0x0000_0100u32.to_le_bytes().to_vec())]);
+        assert_eq!(diff(&l, 0), 0x8000_0200);
+        // Halfway round and past it, held to 31 bits the short way.
+        let mut l = line();
+        offset(&mut l, 0x1000, 0x8000_0000 - now);
+        pass(&mut l, now, &[(5, fp(0x1000, 0x0910), 0u32.to_le_bytes().to_vec())]);
+        assert_eq!(diff(&l, 0), 0xFFFF_FFFF, "2^31 behind or ahead: the most behind there is");
+    }
+
+    #[test]
+    fn an_frmw_of_32_bits_compares_across_the_wrap_as_one_of_64_does() {
+        // The reference at 0xFFFF_FF80, the next device 256 ns ahead of it across the wrap, the
+        // last 256 ns behind.
+        let now = 100_000u64;
+        let set = |l: &mut [Esc]| {
+            offset(l, 0x1000, 0xFFFF_FF80 - now);
+            offset(l, 0x1001, 0x1_0000_0080 - (now - 1_000));
+            offset(l, 0x1002, 0xFFFF_FE80 - (now - 2_000));
+        };
+        for bytes in [8, 4] {
+            let mut l = line();
+            set(&mut l);
+            let r = pass(&mut l, now, &[(14, fp(0x1000, 0x0910), vec![0; bytes])]);
+            assert_eq!((r[0].1, &r[0].0[..4]), (3, &0xFFFF_FF80u32.to_le_bytes()[..]), "{bytes} bytes");
+            assert_eq!((diff(&l, 1), diff(&l, 2)), (0x0000_0100, 0x8000_0100), "{bytes} bytes");
+        }
+    }
+
+    #[test]
+    fn a_write_running_past_the_ram_s_end_keeps_the_bytes_inside_it() {
+        let mut l = line();
+        let r = pass(&mut l, 0, &[(5, fp(0x1000, 0x2FFE), vec![1, 2, 3, 4])]);
+        assert_eq!((r[0].1, l[0].read(0x2FFE, 2)), (1, vec![1, 2]));
+        // Read back the same way: the bytes inside, zeros past the end.
+        let r = pass(&mut l, 0, &[(4, fp(0x1000, 0x2FFE), vec![0; 4])]);
+        assert_eq!(r[0].0, [1, 2, 0, 0]);
+    }
+
+    #[test]
+    fn an_fmmu_running_past_the_ram_s_end_writes_the_byte_inside_it() {
+        let mut l = line();
+        // FMMU 0: logical 0, 2 bytes, bits 0 to 7, physical 0x2FFF, write.
+        let mut f = 0u32.to_le_bytes().to_vec();
+        f.extend_from_slice(&2u16.to_le_bytes());
+        f.extend_from_slice(&[0, 7]);
+        f.extend_from_slice(&0x2FFFu16.to_le_bytes());
+        f.extend_from_slice(&[0, 2, 1, 0, 0, 0]);
+        pass(&mut l, 0, &[(5, fp(0x1000, 0x0600), f)]);
+        let r = pass(&mut l, 0, &[(11, 0, vec![0xAB, 0xCD])]);
+        assert_eq!((r[0].1, l[0].read(0x2FFF, 1)), (1, vec![0xAB]));
+    }
+
+    #[test]
+    fn an_eeprom_write_or_reload_is_answered_as_done_with_no_effect() {
+        let mut l = line();
+        let read8 = |l: &mut [Esc]| {
+            pass(l, 0, &[(5, fp(0x1001, 0x0502), vec![0x00, 0x01, 0x08, 0x00, 0x00, 0x00])]);
+            pass(l, 0, &[(4, fp(0x1001, 0x0502), vec![0; 2]), (4, fp(0x1001, 0x0508), vec![0; 8])])
+        };
+        let before = read8(&mut l);
+        // A write of word 8 (write enable, write command, the address, the data), then a reload.
+        pass(&mut l, 0, &[(5, fp(0x1001, 0x0502), vec![0x01, 0x02, 0x08, 0x00, 0x00, 0x00, 0x34, 0x12])]);
+        let r = pass(&mut l, 0, &[(4, fp(0x1001, 0x0502), vec![0; 2])]);
+        assert_eq!(u16::from_le_bytes([r[0].0[0], r[0].0[1]]) & 0xF800, 0, "write: done, not busy, no error");
+        pass(&mut l, 0, &[(5, fp(0x1001, 0x0502), vec![0x00, 0x04])]);
+        let r = pass(&mut l, 0, &[(4, fp(0x1001, 0x0502), vec![0; 2])]);
+        assert_eq!(u16::from_le_bytes([r[0].0[0], r[0].0[1]]) & 0xF800, 0, "reload: done, not busy, no error");
+        assert_eq!(read8(&mut l), before, "the EEPROM's words unchanged");
+    }
+
+    #[test]
+    fn the_irq_field_is_never_set() {
+        let mut l = line();
+        let mut d = dgs(&[(7, 0, vec![0]), (4, fp(0x1001, 0x0130), vec![0; 2]), (12, 0, vec![0])]);
+        d[1].irq = 0x1234;
+        esc::process(&mut l, &mut d, 0);
+        assert_eq!(d.iter().map(|x| x.irq).collect::<Vec<_>>(), [0, 0x1234, 0], "as each went");
+    }
+
+    #[test]
+    fn the_eeprom_s_fmmu_usage_and_pdo_entries_are_the_file_s() {
+        let id = Identity { vendor_id: 1, product_code: 2, revision: 3, serial: 4, name: "x".into(), alias: 0 };
+        let w = esc::sii_image(&id, &[PdoEntry { index: 0x7010, subindex: 3, bits: 8 }], &[PdoEntry { index: 0x6020, subindex: 5, bits: 16 }]);
+        let category = |kind: u16| {
+            let mut at = 0x40;
+            while w[at] != kind {
+                assert_ne!(w[at], 0xFFFF, "category {kind}");
+                at += 2 + w[at + 1] as usize;
+            }
+            w[at + 2..at + 2 + w[at + 1] as usize].iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()
+        };
+        assert_eq!(&category(40)[..2], [1, 2], "FMMU0 outputs, FMMU1 inputs");
+        let tx = category(50);
+        assert_eq!((u16::from_le_bytes([tx[0], tx[1]]), tx[2], tx[3]), (0x1A00, 1, 3), "TxPDO 0x1A00: one entry, SyncManager 3");
+        assert_eq!((u16::from_le_bytes([tx[8], tx[9]]), tx[10], tx[13]), (0x6020, 5, 16), "the input entry");
+        let rx = category(51);
+        assert_eq!((u16::from_le_bytes([rx[0], rx[1]]), rx[2], rx[3]), (0x1600, 1, 2), "RxPDO 0x1600: one entry, SyncManager 2");
+        assert_eq!((u16::from_le_bytes([rx[8], rx[9]]), rx[10], rx[13]), (0x7010, 3, 8), "the output entry");
+    }
+
+    const SEGMENT: &str = "interface = \"b0\"\ndevices = [ { name = \"d0\" }, { name = \"d1\", outputs = [ { index = 0x7000, subindex = 1, bits = 8 } ] } ]\n";
+    const MAX_PDU_DATA: usize = PduStorage::element_size(1100);
+    static PDU_STORAGE: PduStorage<16, MAX_PDU_DATA> = PduStorage::new();
+
+    #[test]
+    fn a_silent_master_leaves_its_devices_in_op() {
+        // No SyncManager watchdog: 300 ms without process data (a real ESC's default watchdog is
+        // 100 ms), every device still in OP and its exchange answered.
+        netns::isolated("round_3::a_silent_master_leaves_its_devices_in_op", &[("a0", "b0")], || {
+            let segment = start(&toml::from_str(SEGMENT).unwrap()).unwrap();
+            let (tx, rx, pdu_loop) = PDU_STORAGE.try_split().expect("split once");
+            let maindevice = Arc::new(MainDevice::new(
+                pdu_loop,
+                Timeouts { wait_loop_delay: Duration::from_millis(2), state_transition: Duration::from_secs(5), pdu: Duration::from_millis(500), ..Default::default() },
+                MainDeviceConfig::default(),
+            ));
+            std::thread::spawn(move || futures_lite::future::block_on(ethercrab::std::tx_rx_task("a0", tx, rx).expect("the raw socket")));
+            futures_lite::future::block_on(async {
+                let group = maindevice.init_single_group::<8, 16>(ethercat_now).await.expect("init");
+                let group = group.into_op(&maindevice).await.expect("OP");
+                for _ in 0..20 {
+                    group.tx_rx(&maindevice).await.expect("tx/rx");
+                }
+                std::thread::sleep(Duration::from_millis(300));
+                assert_eq!((segment.al_state("d0").unwrap(), segment.al_state("d1").unwrap()), ((8, false), (8, false)), "still in OP");
+                let r = group.tx_rx(&maindevice).await.expect("tx/rx after the silence");
+                assert!(r.all_op(), "{r:?}");
+            });
+        });
+    }
+
+    #[test]
+    fn a_device_faulted_in_safe_op_keeps_safe_op_flagged() {
+        netns::isolated("round_3::a_device_faulted_in_safe_op_keeps_safe_op_flagged", &[("a0", "b0")], || {
+            use veredas_aranha::wire::raw::{Options, RawLink};
+            let segment = start(&toml::from_str(SEGMENT).unwrap()).unwrap();
+            let link = RawLink::open_with("a0", Options { ethertype: Some(0x88A4), promiscuous: true, outgoing: false }).unwrap();
+            let me = [0x10u8; 6];
+            // One APWR, answered before the next is sent.
+            let send = |cmd: u8, address: u32, data: &[u8]| {
+                let mut body = vec![cmd, 0];
+                body.extend_from_slice(&address.to_le_bytes());
+                body.extend_from_slice(&(data.len() as u16).to_le_bytes());
+                body.extend_from_slice(&[0, 0]);
+                body.extend_from_slice(data);
+                body.extend_from_slice(&[0, 0]);
+                let mut f = vec![0xFF; 6];
+                f.extend_from_slice(&me);
+                f.extend_from_slice(&0x88A4u16.to_be_bytes());
+                f.extend_from_slice(&((body.len() as u16) | 0x1000).to_le_bytes());
+                f.extend(body);
+                f.resize(60, 0);
+                link.send(&f).unwrap();
+                let started = Instant::now();
+                while started.elapsed() < Duration::from_secs(2) {
+                    if let Some(r) = link.recv(Duration::from_millis(100)).unwrap()
+                        && r.bytes.len() > 12
+                        && r.bytes[6..12] != me
+                    {
+                        return;
+                    }
+                }
+                panic!("no answer");
+            };
+            // d1 (position 1) to PRE-OP, then SAFE-OP; faulted there, it stays, flagged.
+            let ap1 = (0x0120u32 << 16) | u32::from(0u16.wrapping_sub(1));
+            send(2, ap1, &[0x02, 0]);
+            send(2, ap1, &[0x04, 0]);
+            assert_eq!(segment.al_state("d1").unwrap(), (4, false));
+            segment.fault("d1", 0x001A).unwrap();
+            assert_eq!(segment.al_state("d1").unwrap(), (4, true));
+        });
     }
 }

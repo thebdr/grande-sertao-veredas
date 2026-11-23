@@ -135,11 +135,6 @@ impl Esc {
         self.mem[reg::AL_STATUS as usize] & 0x0F
     }
 
-    /// Whether `[at, at + len)` lies in the memory.
-    fn inside(at: u16, len: usize) -> bool {
-        at as usize + len <= MEMORY
-    }
-
     /// Bytes read at `at`, nothing past the memory (zeros there, as an ESC reads unmapped space).
     pub fn read(&self, at: u16, len: usize) -> Vec<u8> {
         let mut out = vec![0u8; len];
@@ -155,9 +150,12 @@ impl Esc {
     /// A write at `at`, then the behaviour of the registers it touched. `now_ns` is the segment's
     /// clock, for the latch of the receive times.
     pub fn write(&mut self, at: u16, data: &[u8], now_ns: u64) {
-        if !Esc::inside(at, data.len()) {
+        // An ESC writes byte by byte as the datagram passes: the bytes inside its memory are
+        // stored, those past its end are not.
+        if at as usize >= MEMORY {
             return;
         }
+        let data = &data[..data.len().min(MEMORY - at as usize)];
         // Whether the write overlaps the register `r` of width `w`.
         let touched = |r: u16, w: usize| (at as usize) < r as usize + w && (r as usize) < at as usize + data.len();
         // The registers EtherCAT only reads keep their values: the type to the features, the
@@ -198,11 +196,19 @@ impl Esc {
 
     /// The system time difference (0x092C) after the reference's time `theirs` was handed down:
     /// its own system time less theirs, as sign and magnitude (bit 31 set when its own is the
-    /// smaller), the magnitude held to 31 bits; over the low 32 bits when only those were written.
+    /// smaller), the magnitude held to 31 bits; over the low 32 bits, the short way round across
+    /// their wrap, when only those were written.
     pub fn compare_system_time(&mut self, theirs: u64, low_32: bool, now_ns: u64) {
         let mine = self.system_time(now_ns);
-        let (mine, theirs) = if low_32 { (mine & 0xFFFF_FFFF, theirs & 0xFFFF_FFFF) } else { (mine, theirs) };
-        let v = if mine >= theirs { (mine - theirs).min(0x7FFF_FFFF) as u32 } else { 0x8000_0000 | (theirs - mine).min(0x7FFF_FFFF) as u32 };
+        let v = if low_32 {
+            // A 32-bit time wraps every 4.29 s: the difference is the short way round.
+            let d = (mine as u32).wrapping_sub(theirs as u32) as i32;
+            if d >= 0 { d as u32 } else { 0x8000_0000 | d.unsigned_abs().min(0x7FFF_FFFF) }
+        } else if mine >= theirs {
+            (mine - theirs).min(0x7FFF_FFFF) as u32
+        } else {
+            0x8000_0000 | (theirs - mine).min(0x7FFF_FFFF) as u32
+        };
         let a = reg::DC_SYSTEM_TIME_DIFFERENCE as usize;
         self.mem[a..a + 4].copy_from_slice(&v.to_le_bytes());
     }
