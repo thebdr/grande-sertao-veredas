@@ -32,6 +32,38 @@ fn a_row_committed_between_the_count_and_the_page_is_in_neither() {
     assert_eq!((page.total, page.rows.len()), (102, 102));
 }
 
+/// A view over a file a logger still writes to: the file is read again at every statement, which
+/// the transaction does not freeze, so the view's window is read once for its page, and a line the
+/// logger adds between the count and the rows is in neither.
+#[test]
+fn a_line_a_logger_adds_between_the_count_and_the_page_is_in_neither() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("log.csv");
+    let mut body = String::from("t,v\n");
+    for i in 0..100 {
+        body.push_str(&format!("{i},{i}\n"));
+    }
+    std::fs::write(&path, body).unwrap();
+    let scan = super::csv_scan_sql(&path.display().to_string(), &super::CsvOptions::default());
+    let defs = [super::TableDef { name: "logv".into(), sql: format!("SELECT * FROM {scan}") }];
+    let store = DuckStore::open(&Residency::Ram, &[], &defs).unwrap();
+    let mut next = 100;
+    let mut write = || {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(f, "{next},{next}").unwrap();
+        next += 1;
+    };
+    let q = RowsQuery { limit: 20, offset: 90, ..RowsQuery::default() };
+    let page = store.query_rows_between("logv", &q, &mut write).unwrap();
+    assert_eq!((page.total, page.rows.len()), (100, 10), "the page and its total of one read of the file");
+    let q = RowsQuery { limit: 20, offset: 101, ..RowsQuery::default() };
+    let page = store.query_rows_between("logv", &q, &mut write).unwrap();
+    assert_eq!((page.total, page.rows.len()), (101, 0));
+    let page = store.query_rows("logv", &RowsQuery { limit: 500, ..RowsQuery::default() }).unwrap();
+    assert_eq!((page.total, page.rows.len()), (102, 102));
+}
+
 /// A panic inside a page's transaction (here between its count and its rows) rolls it back: the
 /// next page on the same connection reads, never "the transaction is aborted".
 #[test]

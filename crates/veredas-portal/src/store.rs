@@ -38,6 +38,9 @@ pub const SAMPLES_TABLE: &str = "samples";
 /// The most rows one page of a table may hold.
 pub const MAX_PAGE: usize = 2_000;
 
+/// The table of a page's own transaction that holds a view's window while the page reads it.
+const PAGE_HELD: &str = "\"__veredas_page\"";
+
 /// Typed store errors: no panic on any SQL or I/O path.
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -791,8 +794,9 @@ impl DuckStore {
     }
 
     /// A page and its total read in one transaction, so both see one moment of the store: a row
-    /// the ingest commits between the count and the page is in neither (C-041). `between` runs
-    /// between the two, for the test that commits there.
+    /// the ingest commits between the count and the page is in neither, and a line a logger adds
+    /// to a file a view reads as well (C-041). `between` runs between the two, for the test that
+    /// writes there.
     pub(crate) fn query_rows_between(&self, table: &str, q: &RowsQuery, between: &mut dyn FnMut()) -> Result<RowsPage, StoreError> {
         let conn = recover(self.api.lock());
         // The catalog read first, outside the transaction: describing a view over a file gone is
@@ -800,11 +804,16 @@ impl DuckStore {
         let tables = self.list_tables_on(&conn)?;
         let info = tables.iter().find(|t| t.name == table).ok_or_else(|| StoreError::UnknownTable(table.to_string()))?;
         let columns = info.columns.clone();
+        let view = info.kind == TableKind::View;
         conn.execute_batch("BEGIN TRANSACTION")?;
         // A read: the transaction ends with nothing to keep, whatever the page's outcome, a panic
         // inside it included, so the server's connection is never left in a transaction.
         let mut open = ReadTransaction { conn: &conn, open: true };
-        let page = Self::page_on(&conn, table, columns, q, between);
+        let page = if view {
+            Self::view_page_on(&conn, table, &columns, q, between)
+        } else {
+            Self::page_on(&conn, &quote_ident(table), columns, q, between)
+        };
         open.open = false;
         let ended = conn.execute_batch("ROLLBACK");
         let page = page?;
@@ -812,7 +821,21 @@ impl DuckStore {
         Ok(page)
     }
 
-    fn page_on(conn: &Connection, table: &str, columns: Vec<ColumnInfo>, q: &RowsQuery, between: &mut dyn FnMut()) -> Result<RowsPage, StoreError> {
+    /// A view reads again whatever it reads at every statement, a file a logger still writes to
+    /// among them, which a transaction does not freeze: its window is read once, into a table of
+    /// the transaction's own that its end drops, and counted and paged from there, its columns as
+    /// that one read found them.
+    fn view_page_on(conn: &Connection, table: &str, columns: &[ColumnInfo], q: &RowsQuery, between: &mut dyn FnMut()) -> Result<RowsPage, StoreError> {
+        let (_, where_sql) = Self::window_of(columns, q);
+        conn.execute_batch(&format!("CREATE TEMP TABLE {PAGE_HELD} AS SELECT * FROM {}{where_sql}", quote_ident(table)))?;
+        let held = format!("temp.main.{PAGE_HELD}");
+        let columns = describe_types(conn, &held)?.into_iter().map(|(name, data_type)| ColumnInfo { name, data_type }).collect();
+        Self::page_on(conn, &held, columns, q, between)
+    }
+
+    /// A page's time column (`index_ms`, else `ts` as milliseconds) and its window's `WHERE`, the
+    /// bounds written as integers.
+    fn window_of(columns: &[ColumnInfo], q: &RowsQuery) -> (Option<String>, String) {
         let has = |c: &str| columns.iter().any(|col| col.name == c);
         let time_col = if has("index_ms") {
             Some("index_ms".to_string())
@@ -821,21 +844,21 @@ impl DuckStore {
         } else {
             None
         };
-
         let mut where_sql = String::new();
-        let mut params: Vec<DuckValue> = Vec::new();
         if let Some(tc) = &time_col {
-            if let Some(f) = q.from_ms {
-                where_sql.push_str(if where_sql.is_empty() { " WHERE " } else { " AND " });
-                where_sql.push_str(&format!("{tc} >= ?"));
-                params.push(DuckValue::BigInt(f));
-            }
-            if let Some(t) = q.to_ms {
-                where_sql.push_str(if where_sql.is_empty() { " WHERE " } else { " AND " });
-                where_sql.push_str(&format!("{tc} <= ?"));
-                params.push(DuckValue::BigInt(t));
+            for (bound, op) in [(q.from_ms, ">="), (q.to_ms, "<=")] {
+                if let Some(ms) = bound {
+                    where_sql.push_str(if where_sql.is_empty() { " WHERE " } else { " AND " });
+                    where_sql.push_str(&format!("{tc} {op} {ms}"));
+                }
             }
         }
+        (time_col, where_sql)
+    }
+
+    /// The page of `source`: a table, quoted, or a view's window held.
+    fn page_on(conn: &Connection, source: &str, columns: Vec<ColumnInfo>, q: &RowsQuery, between: &mut dyn FnMut()) -> Result<RowsPage, StoreError> {
+        let (time_col, where_sql) = Self::window_of(&columns, q);
         let order = match &time_col {
             // Every other column breaks a tie, positionally, so a page walk sees a row once (two
             // rows identical in every cell aside): the sequence alone is per source, and a view
@@ -847,14 +870,14 @@ impl DuckStore {
             None => String::new(),
         };
         let limit = q.limit.clamp(1, MAX_PAGE);
-        let qt = quote_ident(table);
+        let qt = source;
 
         // A count that fails (a view over a file the reader refuses by its line) is the page's
         // refusal, never a total of nothing beside the rows a LIMIT read before the bad line.
         let total = {
             let sql = format!("SELECT count(*) FROM {qt}{where_sql}");
             let mut stmt = conn.prepare(&sql)?;
-            stmt.query_row(duckdb::params_from_iter(params.iter()), |r| r.get::<_, i64>(0)).map(|n| n.max(0) as u64)?
+            stmt.query_row([], |r| r.get::<_, i64>(0)).map(|n| n.max(0) as u64)?
         };
         between();
 
@@ -862,7 +885,7 @@ impl DuckStore {
         let mut stmt = conn.prepare(&sql)?;
         let ncols = columns.len();
         let mut rows_out: Vec<Vec<serde_json::Value>> = Vec::new();
-        let mut rows = stmt.query(duckdb::params_from_iter(params.iter()))?;
+        let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
             let mut cells = Vec::with_capacity(ncols);
             for i in 0..ncols {
@@ -1317,7 +1340,9 @@ pub fn csv_header_fits(path: &str, opts: &CsvOptions) -> bool {
 
 /// The dialect a file is read in (C-041), among `opts` and the delimiters with its quote and
 /// escape: of those that fit the file (above), the one typing the most columns as numbers, by the
-/// decimal comma or not; on equal numbers `opts` itself, then the widest header, then
+/// decimal comma or not, a column it cuts out of what another that fits reads as a list of
+/// numbers on its delimiter no number (a `;` file of lists `10,20,30` under `x,y,z`); on equal
+/// numbers `opts` itself, then the widest header, then
 /// `CSV_DELIMS`' order; never one typing fewer numbers than `opts` unless `opts` leaves the header
 /// one field (a `;` file whose header's units hold as many commas as its rows' decimals splits on
 /// `,` as it splits on `;`, and on `,` every number is cut in two). Where none fits, `opts`, unless
@@ -1331,14 +1356,38 @@ pub fn csv_fitting_dialect(path: &str, opts: &CsvOptions) -> CsvOptions {
 }
 
 fn fitting(conn: &Connection, path: &str, opts: CsvOptions) -> CsvOptions {
-    let numbers = |o: &CsvOptions| -> usize {
-        let typed = |o: &CsvOptions| describe_types(conn, &csv_scan_sql(path, o)).map(|cols| cols.iter().filter(|(_, t)| is_numeric_type(t)).count()).unwrap_or(0);
-        typed(o).max(typed(&CsvOptions { decimal_comma: true, ..o.clone() }))
-    };
     let header = |o: &CsvOptions| csv_field_counts(path, o).and_then(|v| v.first().copied()).unwrap_or(0);
-    let own = numbers(&opts);
     let split = header(&opts) >= 2;
     let others: Vec<CsvOptions> = CSV_DELIMS.iter().map(|d| CsvOptions { delim: Some(d.to_string()), ..opts.clone() }).filter(|c| c.delim != opts.delim).collect();
+    // `opts` first, then the others in their order.
+    let all: Vec<&CsvOptions> = std::iter::once(&opts).chain(others.iter()).collect();
+    let fits: Vec<bool> = all.iter().map(|c| csv_header_fits(path, c)).collect();
+    let lines: Vec<_> = all.iter().map(|c| csv_lines(path, c)).collect();
+    let delim_of = |c: &CsvOptions| c.delim.as_deref().and_then(|d| d.chars().next()).unwrap_or(',');
+    // The columns a dialect types as numbers, by the decimal comma or not, less those it cuts out
+    // of a column another dialect that fits reads as a list of numbers on its delimiter (`x,y,z`
+    // over `10,20,30` on `,`): splitting a list is no reason.
+    let weighed: Vec<usize> = (0..all.len())
+        .map(|k| {
+            let typed = |o: &CsvOptions| describe_types(conn, &csv_scan_sql(path, o)).map(|cols| cols.iter().map(|(_, t)| is_numeric_type(t)).collect::<Vec<_>>()).unwrap_or_default();
+            let (plain, comma) = (typed(all[k]), typed(&CsvOptions { decimal_comma: true, ..all[k].clone() }));
+            let count = |v: &[bool]| v.iter().filter(|n| **n).count();
+            let flags = if count(&comma) > count(&plain) { comma } else { plain };
+            let cut_from_a_list = |i: usize| {
+                let Some((text, own_lines)) = &lines[k] else { return false };
+                let Some(span) = own_lines.first().and_then(|h| h.get(i)) else { return false };
+                (0..all.len()).filter(|&e| e != k && fits[e]).any(|e| {
+                    let Some((_, other)) = &lines[e] else { return false };
+                    let quote = all[e].quote_char.as_deref().map_or(Some('"'), |q| q.chars().next());
+                    other.first().is_some_and(|h| {
+                        h.iter().enumerate().any(|(j, o)| o.start <= span.start && span.end <= o.end && *o != *span && csv_number_list(text, other, j, delim_of(all[k]), quote))
+                    })
+                })
+            };
+            flags.iter().enumerate().filter(|&(i, n)| *n && !cut_from_a_list(i)).count()
+        })
+        .collect();
+    let own = weighed[0];
     // (numbers, `opts` itself, header width, earlier in the order): the largest wins.
     let mut best: Option<((usize, bool, usize, usize), CsvOptions)> = None;
     let mut weigh = |key: (usize, bool, usize, usize), c: CsvOptions| {
@@ -1346,12 +1395,12 @@ fn fitting(conn: &Connection, path: &str, opts: CsvOptions) -> CsvOptions {
             best = Some((key, c));
         }
     };
-    if csv_header_fits(path, &opts) {
+    if fits[0] {
         weigh((own, true, header(&opts), usize::MAX), opts.clone());
     }
     for (i, c) in others.iter().enumerate() {
-        if csv_header_fits(path, c) {
-            let n = numbers(c);
+        if fits[i + 1] {
+            let n = weighed[i + 1];
             if !split || n >= own {
                 weigh((n, false, header(c), usize::MAX - 1 - i), c.clone());
             }
@@ -1363,7 +1412,8 @@ fn fitting(conn: &Connection, path: &str, opts: CsvOptions) -> CsvOptions {
     if !split {
         let mut alt: Option<((usize, usize, usize), CsvOptions)> = None;
         for (i, c) in others.iter().enumerate() {
-            let (n, width) = (numbers(c), header(c));
+            // Nothing fits here, so nothing is a list another fitting dialect reads.
+            let (n, width) = (weighed[i + 1], header(c));
             if width >= 2 && n > own && alt.as_ref().is_none_or(|(b, _)| (n, width, usize::MAX - i) > *b) {
                 alt = Some(((n, width, usize::MAX - i), c.clone()));
             }
@@ -1378,8 +1428,15 @@ fn fitting(conn: &Connection, path: &str, opts: CsvOptions) -> CsvOptions {
 /// The fields of each row over the first 2 048 rows, read as [`csv_is_ragged`] says; nothing for
 /// a file that cannot be read.
 fn csv_field_counts(path: &str, opts: &CsvOptions) -> Option<Vec<usize>> {
+    csv_lines(path, opts).map(|(_, lines)| lines.iter().map(Vec::len).collect())
+}
+
+/// The fields of each row over the first 2 048 rows, as byte ranges into the file's text (read
+/// lossily, returned with them), split as [`csv_is_ragged`] says; nothing for a file that cannot
+/// be read.
+fn csv_lines(path: &str, opts: &CsvOptions) -> Option<(String, Vec<Vec<std::ops::Range<usize>>>)> {
     let Ok(text) = std::fs::read(path.trim()) else { return None };
-    let text = String::from_utf8_lossy(&text);
+    let text = String::from_utf8_lossy(&text).into_owned();
     let char_of = |s: &Option<String>, or: Option<char>| match s.as_deref() {
         None => or,
         Some(s) => s.chars().next(),
@@ -1387,20 +1444,21 @@ fn csv_field_counts(path: &str, opts: &CsvOptions) -> Option<Vec<usize>> {
     let d = char_of(&opts.delim, Some(',')).unwrap_or(',');
     let quote = char_of(&opts.quote_char, Some('"'));
     let escape = char_of(&opts.escape_char, quote);
-    let mut counts: Vec<usize> = Vec::new();
-    let mut fields = 1usize;
+    let mut lines: Vec<Vec<std::ops::Range<usize>>> = Vec::new();
+    let mut fields: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut start = 0usize;
     let mut quoted = false;
     let mut field_start = true;
     let mut lead_space = false;
     let mut at_line_start = true;
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
+    let mut chars = text.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
         if quoted {
             if Some(c) == escape && escape != quote {
                 // An escaped character inside quotes is text, whatever it is.
                 chars.next();
             } else if Some(c) == quote {
-                if escape == quote && chars.peek() == Some(&c) {
+                if escape == quote && chars.peek().map(|&(_, p)| p) == Some(c) {
                     // A doubled quote is one quote, text.
                     chars.next();
                 } else {
@@ -1408,21 +1466,23 @@ fn csv_field_counts(path: &str, opts: &CsvOptions) -> Option<Vec<usize>> {
                 }
             }
         } else if c == '\n' || c == '\r' {
-            if c == '\r' && chars.peek() == Some(&'\n') {
+            if c == '\r' && chars.peek().map(|&(_, p)| p) == Some('\n') {
                 chars.next();
             }
             if !at_line_start {
-                counts.push(fields);
-                if counts.len() >= CSV_RAGGED_WINDOW {
+                fields.push(start..at);
+                lines.push(std::mem::take(&mut fields));
+                if lines.len() >= CSV_RAGGED_WINDOW {
                     break;
                 }
             }
-            fields = 1;
+            start = chars.peek().map_or(text.len(), |&(i, _)| i);
             field_start = true;
             lead_space = false;
             at_line_start = true;
         } else if c == d {
-            fields += 1;
+            fields.push(start..at);
+            start = at + c.len_utf8();
             field_start = true;
             lead_space = false;
             at_line_start = false;
@@ -1440,10 +1500,34 @@ fn csv_field_counts(path: &str, opts: &CsvOptions) -> Option<Vec<usize>> {
             at_line_start = false;
         }
     }
-    if !at_line_start && counts.len() < CSV_RAGGED_WINDOW {
-        counts.push(fields);
+    if !at_line_start && lines.len() < CSV_RAGGED_WINDOW {
+        fields.push(start..text.len());
+        lines.push(fields);
     }
-    Some(counts)
+    Some((text, lines))
+}
+
+/// Whether column `j` of a file split into `lines` is a list of numbers on `d`: every cell it
+/// holds below the header is two numbers or more on `d`, each an integer or a decimal of either
+/// point (`10,20,30`); a cell holding one (`3` among `2,5` and `4,5`) makes it decimals, or
+/// anything else. A quote around the whole of a field is no part of it. (A dialect cuts a column
+/// out of it only where the header names parts on `d`.)
+fn csv_number_list(text: &str, lines: &[Vec<std::ops::Range<usize>>], j: usize, d: char, quote: Option<char>) -> bool {
+    let field = |r: &std::ops::Range<usize>| {
+        let t = text[r.clone()].trim();
+        match quote {
+            Some(q) if t.len() >= 2 && t.starts_with(q) && t.ends_with(q) => &t[q.len_utf8()..t.len() - q.len_utf8()],
+            _ => t,
+        }
+    };
+    let number = |s: &str| {
+        let s = s.trim();
+        let s = s.strip_prefix(['-', '+']).unwrap_or(s);
+        let digits = s.chars().filter(char::is_ascii_digit).count();
+        let points = s.chars().filter(|c| *c == '.' || *c == ',').count();
+        digits > 0 && points <= 1 && digits + points == s.chars().count()
+    };
+    lines.iter().skip(1).filter_map(|l| l.get(j)).map(field).filter(|c| !c.is_empty()).all(|cell| cell.contains(d) && cell.split(d).all(number))
 }
 
 /// A page's read transaction, rolled back when it goes out of scope still open (a panic between

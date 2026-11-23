@@ -1320,6 +1320,51 @@ fn dialects_that_fit_are_weighed_by_their_numbers() {
     assert_eq!(csv_fitting_dialect(&export, &delim(",")).delim.as_deref(), Some(","));
 }
 
+/// A `;` file whose last column is a list of integers named by its parts (`x,y,z` over
+/// `10,20,30`) fits `,` as well, where it types two numbers to `;`'s one: both are cut out of the
+/// list, and splitting a list is no reason, so it reads on `;` whatever the dialect given, in four
+/// rows or in thirty with a short one among them, and so does one with an id alone (`3`), which is
+/// no list on `;`. Its mirror, a `,` file of lists on `;`, stays on `,`. The limit: a file each
+/// reading of which is a list of numbers in the other in every row (`id;x,y,z` over `1;10,20,30`)
+/// weighs alike both ways and stays on the dialect given.
+#[test]
+fn numbers_cut_out_of_a_list_are_no_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let lists = csv_file(dir.path(), "lists.csv", "id;name;x,y,z\n1;alpha;10,20,30\n2;beta;40,50,60\n3;gamma\n");
+    assert!(csv_header_fits(&lists, &delim(",")) && csv_header_fits(&lists, &delim(";")));
+    for given in [",", ";"] {
+        assert_eq!(csv_fitting_dialect(&lists, &delim(given)).delim.as_deref(), Some(";"), "given {given}");
+    }
+    let (opts, page) = read_as_sniffed(&lists);
+    assert_eq!(opts.delim.as_deref(), Some(";"), "{opts:?}");
+    assert_eq!(names(&page), ["id", "name", "x,y,z"]);
+    assert_eq!((page.total, page.rows[0].clone()), (3, vec![serde_json::json!(1), serde_json::json!("alpha"), serde_json::json!("10,20,30")]));
+    let mut body = String::from("id;name;x,y,z\n");
+    for i in 1..=30 {
+        if i == 15 {
+            body.push_str(&format!("{i};n{i}\n"));
+        } else {
+            body.push_str(&format!("{i};n{i};{},{},{}\n", 10 * i, 10 * i + 1, 10 * i + 2));
+        }
+    }
+    let thirty = csv_file(dir.path(), "lists30.csv", &body);
+    let (opts, page) = read_as_sniffed(&thirty);
+    assert_eq!((opts.delim.as_deref(), page.total), (Some(";"), 30), "{opts:?}");
+    assert_eq!(page.rows[0], vec![serde_json::json!(1), serde_json::json!("n1"), serde_json::json!("10,11,12")]);
+    let mirror = csv_file(dir.path(), "mirror.csv", "id,name,x;y;z\n1,alpha,10;20;30\n2,beta,40;50;60\n3,gamma\n");
+    for given in [",", ";"] {
+        assert_eq!(csv_fitting_dialect(&mirror, &delim(given)).delim.as_deref(), Some(","), "given {given}");
+    }
+    let alone = csv_file(dir.path(), "alone.csv", "id;x,y,z\n1;10,20,30\n2;40,50,60\n3\n");
+    for given in [",", ";"] {
+        assert_eq!(csv_fitting_dialect(&alone, &delim(given)).delim.as_deref(), Some(";"), "given {given}");
+    }
+    let both = csv_file(dir.path(), "both.csv", "id;x,y,z\n1;10,20,30\n2;40,50,60\n");
+    for given in [",", ";"] {
+        assert_eq!(csv_fitting_dialect(&both, &delim(given)).delim.as_deref(), Some(given), "the limit, given {given}");
+    }
+}
+
 /// A headerless `;` file of decimal commas, collapsed by a short row (a logger's last line cut
 /// off as it writes): on `,` it types as many numbers as on `;` with the comma (the integers and
 /// the fractions, text between them), so the fewer columns left as text decide it; a full tie
