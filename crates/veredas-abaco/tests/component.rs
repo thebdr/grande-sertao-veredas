@@ -335,6 +335,9 @@ struct Invoking {
     program: PathBuf,
     args: Vec<String>,
     env: Vec<(String, String)>,
+    /// The folder of the toolchain it compiles with: a cargo's own folder; for cargo-nextest, the
+    /// folder of the cargo that started it, which cargo hands every subcommand in `CARGO`.
+    toolchain: PathBuf,
 }
 
 /// Every cargo among the processes that started this test, read on Linux from `/proc`, up the
@@ -364,11 +367,20 @@ fn invoking_cargo() -> Vec<Invoking> {
                     .map(|a| String::from_utf8_lossy(a).to_string())
                     .collect()
             };
+            let program = std::fs::read_link(format!("/proc/{ppid}/exe")).unwrap_or_default();
+            let env: Vec<(String, String)> =
+                split("environ").into_iter().filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.to_string(), v.to_string()))).collect();
+            let toolchain = if comm.trim() == "cargo-nextest" {
+                env.iter().find(|(k, _)| k == "CARGO").and_then(|(_, v)| Path::new(v).parent().map(Path::to_path_buf)).unwrap_or_default()
+            } else {
+                program.parent().map(Path::to_path_buf).unwrap_or_default()
+            };
             out.push(Invoking {
                 folder: std::fs::read_link(format!("/proc/{ppid}/cwd")).unwrap_or_default(),
-                program: std::fs::read_link(format!("/proc/{ppid}/exe")).unwrap_or_default(),
+                program,
                 args: split("cmdline"),
-                env: split("environ").into_iter().filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.to_string(), v.to_string()))).collect(),
+                env,
+                toolchain,
             });
         }
         pid = ppid;
@@ -377,11 +389,18 @@ fn invoking_cargo() -> Vec<Invoking> {
     out
 }
 
+/// Whether compiler flags (each a token) set a `cfg` the features would not show: a `--cfg`, or an
+/// `@file` argument, which rustc expands into flags of its own.
+fn flags_set_cfg<'a>(mut tokens: impl Iterator<Item = &'a str>) -> bool {
+    tokens.any(|t| t == "--cfg" || t.starts_with("--cfg=") || t.starts_with('@'))
+}
+
 /// What an environment cargo runs in may not hold: an alias handing cargo a `--config`, a rustc
 /// wrapper, a rustc that is not the toolchain's (`RUSTC`, `CARGO_BUILD_RUSTC`, else the first on
-/// `PATH`, which must be the toolchain's own or rustup's proxy), compiler flags setting a `cfg`
-/// (`--cfg feature="mock_time"` would turn on the engine's fixed clock with no feature cargo
-/// sees). `toolchain` is the folder of that cargo's program.
+/// `PATH`: the toolchain's own, or rustup's proxy choosing the toolchain cargo is from), compiler
+/// flags setting a `cfg` (`--cfg feature="mock_time"` would turn on the engine's fixed clock with no
+/// feature cargo sees), unstable settings (which let profiles carry flags). `toolchain` is the
+/// folder of that cargo's program.
 fn check_environment(whose: &str, env: &[(String, String)], toolchain: &Path) {
     let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty());
     for (var, value) in env.iter().filter(|(k, _)| k.starts_with("CARGO_ALIAS_")) {
@@ -390,11 +409,31 @@ fn check_environment(whose: &str, env: &[(String, String)], toolchain: &Path) {
     for var in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"] {
         assert!(get(var).is_none(), "{whose}: {var} is set: something compiles crates in rustc's place");
     }
+    // stable cargo, stable settings
+    for (var, _) in env.iter().filter(|(k, v)| {
+        !v.is_empty() && (k == "RUSTC_BOOTSTRAP" || k == "__CARGO_TEST_CHANNEL_OVERRIDE_DO_NOT_USE_THIS" || k.starts_with("CARGO_UNSTABLE_"))
+    }) {
+        panic!("{whose}: {var} is set: unstable settings");
+    }
+    let toolchain = toolchain.canonicalize().unwrap_or_else(|_| toolchain.to_path_buf());
+    let beside = toolchain.join("rustc");
+    // rustup's proxy runs the toolchain RUSTUP_TOOLCHAIN names, in RUSTUP_HOME: a name, the one
+    // cargo itself is from
+    let proxy_runs_cargos_own = || {
+        let Some(name) = get("RUSTUP_TOOLCHAIN") else { return true };
+        if name.contains('/') || name.contains('\\') {
+            return false;
+        }
+        let home = get("RUSTUP_HOME").map(PathBuf::from).or_else(|| get("HOME").map(|h| Path::new(h).join(".rustup")));
+        home.and_then(|h| h.join("toolchains").join(name).join("bin").join("rustc").canonicalize().ok())
+            == beside.canonicalize().ok()
+    };
     let own = |named: &Path| {
         let real = named.canonicalize().unwrap_or_else(|_| named.to_path_buf());
-        let toolchain = toolchain.canonicalize().unwrap_or_else(|_| toolchain.to_path_buf());
-        (real.parent() == Some(toolchain.as_path()) && real.file_stem().is_some_and(|f| f == "rustc"))
-            || real.file_stem().is_some_and(|f| f == "rustup")
+        if real.file_stem().is_some_and(|f| f == "rustup") {
+            return proxy_runs_cargos_own();
+        }
+        real.parent() == Some(toolchain.as_path()) && real.file_stem().is_some_and(|f| f == "rustc")
     };
     match get("RUSTC").or(get("CARGO_BUILD_RUSTC")) {
         Some(named) => assert!(own(Path::new(named)), "{whose}: RUSTC is {named}: a rustc not the toolchain's ({})", toolchain.display()),
@@ -408,9 +447,14 @@ fn check_environment(whose: &str, env: &[(String, String)], toolchain: &Path) {
         }
     }
     for (var, value) in env.iter().filter(|(k, _)| {
-        k == "RUSTFLAGS" || k == "CARGO_ENCODED_RUSTFLAGS" || k == "CARGO_BUILD_RUSTFLAGS" || (k.starts_with("CARGO_TARGET_") && k.ends_with("_RUSTFLAGS"))
+        k == "RUSTFLAGS"
+            || k == "CARGO_ENCODED_RUSTFLAGS"
+            || k == "CARGO_BUILD_RUSTFLAGS"
+            || (k.starts_with("CARGO_TARGET_") && k.ends_with("_RUSTFLAGS"))
+            || (k.starts_with("CARGO_PROFILE_") && k.ends_with("_RUSTFLAGS"))
     }) {
-        assert!(!value.contains("--cfg"), "{whose}: {var} sets a cfg: {value}");
+        let tokens: Vec<&str> = if var == "CARGO_ENCODED_RUSTFLAGS" { value.split('\x1f').collect() } else { value.split_whitespace().collect() };
+        assert!(!flags_set_cfg(tokens.into_iter()), "{whose}: {var} sets a cfg: {value}");
     }
 }
 
@@ -501,10 +545,16 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
         .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".cargo")));
     let mut configs: BTreeSet<PathBuf> = BTreeSet::new();
     let invoking = invoking_cargo();
+    // rustup's proxy starts the toolchain's own cargo, which stands below it in the chain with the
+    // environment it was given: that cargo's environment is the one judged
+    let is_proxy = |c: &Invoking| c.program.canonicalize().ok().and_then(|p| p.file_stem().map(|f| f == "rustup")).unwrap_or(false);
+    assert!(!cfg!(target_os = "linux") || invoking.iter().any(|c| !is_proxy(c)), "no toolchain's cargo among the processes that started this test");
     for cargo in &invoking {
         let given: Vec<&String> = cargo.args.iter().filter(|a| *a == "--config" || a.starts_with("--config=")).collect();
         assert!(given.is_empty(), "the cargo that runs this test ({}) was given {given:?}", cargo.program.display());
-        check_environment(&format!("the cargo in {}", cargo.folder.display()), &cargo.env, cargo.program.parent().unwrap_or(Path::new("/")));
+        if !is_proxy(cargo) {
+            check_environment(&format!("the cargo in {}", cargo.folder.display()), &cargo.env, &cargo.toolchain);
+        }
     }
     let own_env: Vec<(String, String)> = std::env::vars().collect();
     check_environment("this test", &own_env, Path::new(env!("CARGO")).parent().unwrap());
@@ -531,6 +581,19 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
         configs.insert(home.join("config"));
         configs.insert(home.join("config.toml"));
     }
+    // a toolchain file choosing a toolchain by its path (rustup would run whatever sits there)
+    let toolchain_files: BTreeSet<PathBuf> = configs
+        .iter()
+        .filter_map(|c| c.parent()?.parent().map(Path::to_path_buf))
+        .flat_map(|dir| [dir.join("rust-toolchain"), dir.join("rust-toolchain.toml")])
+        .collect();
+    for file in toolchain_files.iter().filter(|f| f.is_file()) {
+        let text = std::fs::read_to_string(file).unwrap();
+        let by_path = toml::from_str::<toml::Table>(&text)
+            .ok()
+            .is_some_and(|t| t.get("toolchain").and_then(|c| c.get("path")).is_some());
+        assert!(!by_path, "{}: chooses a toolchain by its path", file.display());
+    }
     for config in configs.iter().filter(|c| c.is_file()) {
         let t: toml::Table = toml::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
         let foreign: Vec<&String> = t.keys().filter(|k| !CONFIG_KEYS.contains(&k.as_str())).collect();
@@ -540,11 +603,18 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
         for key in ["rustc", "rustc-wrapper", "rustc-workspace-wrapper"] {
             assert!(build.is_none_or(|b| !b.contains_key(key)), "{}: build.{key} set", config.display());
         }
-        // and no compiler flag sets a cfg (a feature cargo would not see)
-        let flags = |v: Option<&toml::Value>| v.is_some_and(|f| f.to_string().contains("--cfg"));
+        // and no compiler flag sets a cfg (a feature cargo would not see), however it is carried
+        let flags = |v: Option<&toml::Value>| match v {
+            Some(toml::Value::String(s)) => flags_set_cfg(s.split_whitespace()),
+            Some(toml::Value::Array(a)) => flags_set_cfg(a.iter().filter_map(|t| t.as_str())),
+            _ => false,
+        };
         assert!(!flags(build.and_then(|b| b.get("rustflags"))), "{}: build.rustflags sets a cfg", config.display());
         for (triple, table) in t.get("target").and_then(|t| t.as_table()).into_iter().flatten() {
             assert!(!flags(table.get("rustflags")), "{}: target.{triple}.rustflags sets a cfg", config.display());
+        }
+        for (name, table) in t.get("profile").and_then(|t| t.as_table()).into_iter().flatten() {
+            assert!(!flags(table.get("rustflags")), "{}: profile.{name}.rustflags sets a cfg", config.display());
         }
         // and no alias gives cargo a configuration of its own
         let aliases = t.get("alias").and_then(|a| a.as_table());
