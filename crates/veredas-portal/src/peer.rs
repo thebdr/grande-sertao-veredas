@@ -15,7 +15,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -84,12 +84,20 @@ pub struct PeerSnapshot {
     pub as_served: Value,
 }
 
+/// A field the interface always writes, `null` for none: read as none when `null`, refused when
+/// the key is missing (an answer out of the shape is refused, never guessed).
+fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    Option::<T>::deserialize(d)
+}
+
 #[derive(Deserialize)]
 struct SnapshotShape {
     session_name: String,
     running: bool,
     started_ms: i64,
+    #[serde(deserialize_with = "present")]
     start_ms: Option<i64>,
+    #[serde(deserialize_with = "present")]
     window_ms: Option<i64>,
     now_ms: i64,
     arrival_now_ms: i64,
@@ -126,15 +134,18 @@ pub struct PeerSeries {
     pub count: u64,
     pub keys: u64,
     pub keys_capped: bool,
+    #[serde(deserialize_with = "present")]
     pub last_ms: Option<i64>,
     /// The last value as the suite displays it.
     pub last_value: String,
 }
 
-/// A numeric window, downsampled by the peer to the budget asked.
+/// A numeric window, downsampled by the peer to the budget asked: each point its time and its
+/// value, none where the peer served no finite number (NaN or an infinity, which JSON carries as
+/// `null`).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct PeerWindow {
-    pub points: Vec<(i64, f64)>,
+    pub points: Vec<(i64, Option<f64>)>,
     pub total: u64,
     pub downsampled: bool,
 }
@@ -152,6 +163,7 @@ pub struct PeerTable {
     pub name: String,
     pub kind: String,
     pub columns: Vec<PeerColumn>,
+    #[serde(deserialize_with = "present")]
     pub rows: Option<u64>,
 }
 
@@ -173,6 +185,7 @@ pub struct PeerTagRead {
     /// The plant's status for the read is good.
     #[serde(rename = "ok")]
     pub good: bool,
+    #[serde(deserialize_with = "present")]
     pub value: Option<String>,
     pub status: String,
 }
@@ -184,13 +197,15 @@ pub struct PeerSample {
     pub source: String,
     #[serde(rename = "ser")]
     pub series: String,
-    #[serde(rename = "k")]
+    #[serde(rename = "k", deserialize_with = "present")]
     pub key: Option<String>,
     /// The store's axis: the plant's stamp, else the arrival.
     #[serde(rename = "ms")]
     pub index_ms: i64,
-    #[serde(rename = "v")]
-    pub value: f64,
+    /// None where the peer served no finite number (NaN or an infinity, which JSON carries as
+    /// `null`): the stream goes on.
+    #[serde(rename = "v", deserialize_with = "present")]
+    pub value: Option<f64>,
     /// The series' count once this sample was taken.
     #[serde(rename = "n")]
     pub count: u64,
@@ -724,6 +739,23 @@ mod tests {
         assert_eq!(parse(&[&accented[..cut], &accented[cut..]]), vec![ev("data", "Supervisão")]);
         // An event never dispatched without its blank line, nor one with no data.
         assert_eq!(parse(&[b"event: hello\n\ndata: half".as_slice()]), vec![]);
+    }
+
+    #[test]
+    fn an_event_past_its_limit_is_refused_before_it_ends() {
+        let mut p = SseParser::default();
+        let mut out = VecDeque::new();
+        p.push(b"event: data\ndata: ", &mut out).unwrap();
+        let piece = vec![b'x'; 1 << 20];
+        let mut refused = None;
+        for _ in 0..=(EVENT_LIMIT >> 20) {
+            if let Err(e) = p.push(&piece, &mut out) {
+                refused = Some(e);
+                break;
+            }
+        }
+        assert!(matches!(refused, Some(PeerError::TooLarge { limit: EVENT_LIMIT })), "{refused:?}");
+        assert!(out.is_empty());
     }
 
     #[test]

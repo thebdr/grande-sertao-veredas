@@ -112,6 +112,10 @@ fn a_portal_reads_another_s_snapshot_listing_windows_tables_and_tags() {
             [("log", "log", true), ("plc", "opc", false), ("sorter", "channel", false)]
         );
         assert!(s.started_ms > 0 && s.store_now_ms > 0 && s.arrival_now_ms >= s.started_ms, "{s:?}");
+        // Each clock the one the peer named: the store's axis and the arrival, the latter this
+        // machine's Unix clock within a few seconds.
+        assert_eq!((s.store_now_ms, s.arrival_now_ms), (s.as_served["now_ms"].as_i64().unwrap(), s.as_served["arrival_now_ms"].as_i64().unwrap()));
+        assert!((veredas_core::now_unix_ms() - s.arrival_now_ms).abs() < 5_000, "{s:?}");
 
         // The listing: the log's temperature typed, counted, keyed and last, sorted as the peer sorts.
         let series = peer.series().await.unwrap();
@@ -125,12 +129,12 @@ fn a_portal_reads_another_s_snapshot_listing_windows_tables_and_tags() {
         // A window downsampled to ten with its endpoints, a narrower one whole, a key, the budget.
         let w = peer.series_window(&SeriesWindow { source: "log", series: "temp", points: Some(10), ..Default::default() }).await.unwrap();
         assert_eq!((w.total, w.downsampled, w.points.len()), (40, true, 10));
-        assert_eq!((w.points[0], w.points[9]), ((stamp_ms(0), temp(0)), (stamp_ms(39), temp(39))));
+        assert_eq!((w.points[0], w.points[9]), ((stamp_ms(0), Some(temp(0))), (stamp_ms(39), Some(temp(39)))));
         let w = peer
             .series_window(&SeriesWindow { source: "log", series: "temp", from_ms: Some(stamp_ms(10)), to_ms: Some(stamp_ms(19)), ..Default::default() })
             .await
             .unwrap();
-        assert_eq!(w.points, (10..20).map(|i| (stamp_ms(i), temp(i))).collect::<Vec<_>>());
+        assert_eq!(w.points, (10..20).map(|i| (stamp_ms(i), Some(temp(i)))).collect::<Vec<_>>());
         assert!(!w.downsampled);
         let w = peer.series_window(&SeriesWindow { source: "log", series: "temp", key: Some("A1"), ..Default::default() }).await.unwrap();
         assert_eq!(w.total, 13, "items 1, 4, ..., 37");
@@ -155,10 +159,12 @@ fn a_portal_reads_another_s_snapshot_listing_windows_tables_and_tags() {
         assert_eq!(page.rows[0][temp_at], json!(temp(39)), "newest first");
         let page = peer.table_page(&TablePage { table: "readings", limit: Some(5), offset: Some(35), ..Default::default() }).await.unwrap();
         assert_eq!((page.truncated, page.rows.len(), page.rows[4][temp_at].clone()), (false, 5, json!(temp(0))));
+        let page = peer.table_page(&TablePage { table: "readings", from_ms: Some(stamp_ms(10)), to_ms: Some(stamp_ms(19)), limit: Some(100), ..Default::default() }).await.unwrap();
+        assert_eq!((page.total, page.truncated, page.rows[0][temp_at].clone(), page.rows[9][temp_at].clone()), (10, false, json!(temp(19)), json!(temp(10))), "a window of the time column, newest first");
         let page = peer.table_page(&TablePage { table: "warm", limit: Some(100), ..Default::default() }).await.unwrap();
         assert_eq!((page.total, page.truncated), (19, false));
         let chart = peer.table_chart(&TableChart { table: "readings", y: "temp", points: Some(10), ..Default::default() }).await.unwrap();
-        assert_eq!((chart.total, chart.points.len(), chart.points[9]), (40, 10, (stamp_ms(39), temp(39))));
+        assert_eq!((chart.total, chart.points.len(), chart.points[9]), (40, 10, (stamp_ms(39), Some(temp(39)))));
         match peer.table_page(&TablePage { table: "nope", ..Default::default() }).await {
             Err(PeerError::Status { code, text }) => assert_eq!((code, text.as_str()), (404, "unknown table `nope`")),
             other => panic!("{other:?}"),
@@ -215,7 +221,7 @@ fn a_portal_follows_another_s_stream_its_lag_its_end_and_a_fresh_hello() {
             other => panic!("{other:?}"),
         }
     }
-    assert_eq!(got, (0..5).map(|i| (stamp_ms(i), temp(i), i as u64 + 1)).collect::<Vec<_>>());
+    assert_eq!(got, (0..5).map(|i| (stamp_ms(i), Some(temp(i)), i as u64 + 1)).collect::<Vec<_>>());
 
     // A reader that does not read lags: more frames than the peer's channel holds, each larger
     // than the socket buffers absorb, pushed before it reads one. The frames it then reads and
@@ -268,10 +274,10 @@ fn the_request_names_the_peer_and_encodes_its_values() {
     let w = reader()
         .block_on(peer.series_window(&SeriesWindow { source: "plc main", series: "ns=2;s=a&b", key: Some("ç"), from_ms: Some(-5), to_ms: None, points: Some(10) }))
         .unwrap();
-    assert_eq!(w, PeerWindow { points: vec![(1, 2.5)], total: 1, downsampled: false });
+    assert_eq!(w, PeerWindow { points: vec![(1, Some(2.5))], total: 1, downsampled: false });
     let head = heads.lock().unwrap()[0].to_ascii_lowercase();
     assert!(head.starts_with("get /api/series/data?source=plc%20main&series=ns%3d2%3bs%3da%26b&key=%c3%a7&from=-5&points=10 http/1.1\r\n"), "{head}");
-    assert!(head.contains(&format!("\r\nhost: {addr}\r\n")) && head.contains("\r\naccept: application/json\r\n"), "{head}");
+    assert!(head.contains(&format!("\r\nhost: {addr}\r\n")) && head.contains("\r\naccept: application/json\r\n") && head.contains("\r\nconnection: close\r\n"), "{head}");
 }
 
 /// An answer read by HTTP/1.1's framing as a peer may send it: chunks split anywhere, an extension
@@ -281,7 +287,7 @@ fn the_request_names_the_peer_and_encodes_its_values() {
 fn an_answer_is_read_by_its_framing() {
     let rt = reader();
     let body = r#"{"points":[[1,2.5],[2,3.5]],"total":2,"downsampled":false}"#;
-    let want = PeerWindow { points: vec![(1, 2.5), (2, 3.5)], total: 2, downsampled: false };
+    let want = PeerWindow { points: vec![(1, Some(2.5)), (2, Some(3.5))], total: 2, downsampled: false };
     let w = SeriesWindow { source: "s", series: "t", ..Default::default() };
     let (addr, _) = fake_peer(move |s| {
         let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n");
@@ -342,7 +348,7 @@ fn a_reader_is_bounded_in_time_size_and_shape() {
     let (addr, _) = fake_peer(|_| std::thread::sleep(Duration::from_secs(20)));
     let started = Instant::now();
     let r = rt.block_on(PeerClient::new(addr.to_string()).with_timeout(Duration::from_millis(500)).series());
-    assert!(matches!(r, Err(PeerError::Timeout { ms: 500, .. })), "{r:?}");
+    assert!(matches!(&r, Err(e @ PeerError::Timeout { ms: 500, .. }) if e.to_string().contains(&addr.to_string())), "{r:?}");
     assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
     // A stream that opens and then says nothing, not even a comment: dead after its silence.
     let (addr, _) = fake_peer(|s| {
@@ -390,4 +396,131 @@ fn a_reader_is_bounded_in_time_size_and_shape() {
         let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}");
     });
     assert!(matches!(rt.block_on(PeerClient::new(addr.to_string()).event_stream()), Err(PeerError::Shape(_))));
+}
+
+/// A value that is no finite number (NaN, an infinity) is served as `null`: read as none, the
+/// stream going on and the window whole, the finite samples beside it kept.
+#[test]
+fn a_value_that_is_no_finite_number_is_read_as_none_and_the_stream_goes_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("faults.log");
+    std::fs::write(&log, "").unwrap();
+    let mut rule = readings_rule(None);
+    rule.pattern = r"temp=(?P<temp>\S+) item=(?P<item>\w+) state=(?P<state>\w+)".into();
+    let mut cfg = SessionConfig::new("faults");
+    cfg.logs.push(log_source("log", &log));
+    cfg.rules.push(rule);
+    let session = Session::start(cfg).unwrap();
+    let live = session.live();
+    let server = serve(Arc::clone(&live));
+    let peer = PeerClient::new(server.addr.to_string());
+    let rt = reader();
+    let mut events = rt.block_on(peer.event_stream()).unwrap();
+    assert!(matches!(rt.block_on(events.next_event()), Ok(PeerEvent::Hello(_))));
+    let values = ["20.5", "NaN", "21.0", "inf", "22.0"];
+    let text: String = values.iter().enumerate().map(|(i, v)| format!("2026-07-19 10:00:{i:02} temp={v} item=A1 state=run\n")).collect();
+    std::fs::write(&log, text).unwrap();
+    let mut got = Vec::new();
+    while got.len() < 5 {
+        match rt.block_on(events.next_event()) {
+            Ok(PeerEvent::Data(samples)) => got.extend(samples.into_iter().filter(|s| s.series == "temp").map(|s| s.value)),
+            other => panic!("{other:?} after {got:?}"),
+        }
+    }
+    assert_eq!(got, vec![Some(20.5), None, Some(21.0), None, Some(22.0)]);
+    // The stream goes on: a finite sample after them.
+    std::io::Write::write_all(&mut std::fs::OpenOptions::new().append(true).open(&log).unwrap(), b"2026-07-19 10:00:09 temp=23.5 item=A1 state=run\n").unwrap();
+    match rt.block_on(events.next_event()) {
+        Ok(PeerEvent::Data(samples)) => assert_eq!(samples.iter().map(|s| s.value).collect::<Vec<_>>(), vec![Some(23.5)]),
+        other => panic!("{other:?}"),
+    }
+    let w = rt.block_on(peer.series_window(&SeriesWindow { source: "log", series: "temp", ..Default::default() })).unwrap();
+    assert_eq!(w.points.iter().map(|(_, v)| *v).collect::<Vec<_>>(), vec![Some(20.5), None, Some(21.0), None, Some(22.0), Some(23.5)]);
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+}
+
+/// The defaults: a peer that never answers holds a call ten seconds, a stream silent fifteen,
+/// and a real portal's idle stream, kept alive by its comments every five, stays open past both.
+#[test]
+fn the_defaults_hold_a_dead_link_ten_seconds_and_keep_an_idle_stream_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("idle.log");
+    std::fs::write(&log, "").unwrap();
+    let mut cfg = SessionConfig::new("idle");
+    cfg.logs.push(log_source("log", &log));
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    let server = serve(session.live());
+    let (dead, _) = fake_peer(|_| std::thread::sleep(Duration::from_secs(30)));
+    let (mute, _) = fake_peer(|s| {
+        let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n5\r\n: hi\n\r\n");
+        std::thread::sleep(Duration::from_secs(30));
+    });
+    let rt = reader();
+    rt.block_on(async {
+        let call = async {
+            let started = Instant::now();
+            let r = PeerClient::new(dead.to_string()).series().await;
+            (r, started.elapsed())
+        };
+        let silent = async {
+            let mut events = PeerClient::new(mute.to_string()).event_stream().await.unwrap();
+            let started = Instant::now();
+            (events.next_event().await, started.elapsed())
+        };
+        let idle = async {
+            let mut events = PeerClient::new(server.addr.to_string()).event_stream().await.unwrap();
+            assert!(matches!(events.next_event().await, Ok(PeerEvent::Hello(_))));
+            tokio::time::timeout(Duration::from_secs(17), events.next_event()).await
+        };
+        let ((r, took), (silence, waited), idle) = tokio::join!(call, silent, idle);
+        assert!(matches!(r, Err(PeerError::Timeout { ms: 10_000, .. })), "{r:?}");
+        assert!(took >= Duration::from_millis(9_900) && took < Duration::from_secs(14), "{took:?}");
+        assert!(matches!(silence, Err(PeerError::Silent { ms: 15_000 })), "{silence:?}");
+        assert!(waited >= Duration::from_millis(14_900) && waited < Duration::from_secs(19), "{waited:?}");
+        assert!(idle.is_err(), "the idle stream still open after 17 s, nothing come: {idle:?}");
+    });
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+}
+
+/// The size bounds whatever the framing: an answer past its limit in chunks or to the
+/// connection's end, a head of headers past its limit together; and a snapshot missing a key the
+/// interface always writes, refused.
+#[test]
+fn every_bound_holds_whatever_the_framing() {
+    let rt = reader();
+    let big = |chunked: bool| {
+        fake_peer(move |s| {
+            let head: &[u8] = if chunked { b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" } else { b"HTTP/1.1 200 OK\r\n\r\n" };
+            let _ = s.write_all(head);
+            let block = vec![b' '; 1 << 20];
+            for _ in 0..=(ANSWER_LIMIT >> 20) {
+                let sent = if chunked { write!(s, "{:x}\r\n", block.len()).and_then(|()| s.write_all(&block)).and_then(|()| s.write_all(b"\r\n")) } else { s.write_all(&block) };
+                if sent.is_err() {
+                    return;
+                }
+            }
+        })
+        .0
+    };
+    for chunked in [true, false] {
+        let r = rt.block_on(PeerClient::new(big(chunked).to_string()).tables());
+        assert!(matches!(r, Err(PeerError::TooLarge { limit: ANSWER_LIMIT })), "chunked {chunked}: {r:?}");
+    }
+    let (addr, _) = fake_peer(|s| {
+        let _ = write!(s, "HTTP/1.1 200 OK\r\nX-One: {}\r\nX-Two: {}\r\n\r\n", "a".repeat(40 << 10), "b".repeat(40 << 10));
+    });
+    assert!(matches!(rt.block_on(PeerClient::new(addr.to_string()).tables()), Err(PeerError::TooLarge { limit: HEAD_LIMIT })));
+    let (addr, _) = fake_peer(|s| {
+        let body = r#"{"session_name":"x","running":true,"started_ms":1,"start_ms":null,"now_ms":2,"arrival_now_ms":3,"writes_armed":false,"sources":[]}"#;
+        let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+    });
+    match rt.block_on(PeerClient::new(addr.to_string()).snapshot()) {
+        Err(PeerError::Shape(text)) => assert!(text.contains("missing field `window_ms`"), "{text}"),
+        other => panic!("{other:?}"),
+    }
 }
