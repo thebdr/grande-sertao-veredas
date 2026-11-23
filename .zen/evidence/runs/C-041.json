@@ -10,15 +10,15 @@
     "store"
   ],
   "exitCode": 0,
-  "outputSha": "96af98e9f851413836d07d16fae47e5bde5aebc66969835040d24570f2202fe2",
-  "outputTail": "test the_sniffed_dialect_gives_way_to_the_decimal_comma_alone ... ok\ntest a_blank_line_moves_the_window_by_none ... ok\ntest views_join_across_sources_apply_in_any_order_and_a_broken_one_names_itself ... ok\ntest the_decimal_comma_on_the_padded_path ... ok\ntest rows_of_a_capture_rule_an_opc_rule_and_a_telegram_message_are_stored_alike_and_feed_the_narrow_surface ... ok\ntest the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves_a_single_column_alone ... ok\ntest quotes_escapes_and_line_endings_are_read_as_the_file_writes_them ... ok\ntest newest_first_pages_neither_repeat_nor_skip_rows_that_share_a_time ... ok\ntest a_dialect_fits_the_header_as_it_fits_the_rows ... ok\ntest pages_see_each_row_once_across_sources_and_on_a_view_without_a_sequence ... ok\n\ntest result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s\n     Running tests/store.rs (target/debug/build/veredas-portal/db2d7d2b0e38864e/out/store-db2d7d2b0e38864e)",
-  "ranAt": "2026-11-22T21:18:48.459Z",
-  "headCommit": "539229086650838c103379fc11ae130bbbb3bca1",
+  "outputSha": "b5523cb8f2f4f8deee70479379412cadf9de9bc3be5c3ae0f6c9d0e0639b9eed",
+  "outputTail": "test reserved_duplicate_and_empty_names_are_refused_and_type_conflicts_counted ... ok\ntest a_long_row_past_the_window_is_refused_by_its_line_never_a_total_of_nothing ... ok\ntest a_headerless_file_of_decimal_commas_cut_short_reads_on_its_own_delimiter ... ok\ntest one_space_before_a_quote_opens_it_two_or_a_tab_do_not ... ok\ntest quotes_escapes_and_line_endings_are_read_as_the_file_writes_them ... ok\ntest the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves_a_single_column_alone ... ok\ntest newest_first_pages_neither_repeat_nor_skip_rows_that_share_a_time ... ok\ntest views_join_across_sources_apply_in_any_order_and_a_broken_one_names_itself ... ok\ntest a_dialect_fits_the_header_as_it_fits_the_rows ... ok\ntest pages_see_each_row_once_across_sources_and_on_a_view_without_a_sequence ... ok\n\ntest result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.78s\n     Running tests/store.rs (target/debug/build/veredas-portal/81a02fef565707f3/out/store-81a02fef565707f3)",
+  "ranAt": "2026-11-23T02:09:50.638Z",
+  "headCommit": "0444f1839dc2749946f6a701703edd26d12b9bb1",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store.rs",
       "file": "crates/veredas-portal/tests/store.rs",
-      "fileSha": "7fd6492b65f5ae6e8a4581d060bb6d3e85d391861ff3df3cee68285cc5648f1a"
+      "fileSha": "ccd27075bc4e29e990bb9553d751c777b5c9d043a0db1cf7cb03ada213e49330"
     }
   ]
 }
