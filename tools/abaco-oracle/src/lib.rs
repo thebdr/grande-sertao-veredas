@@ -156,7 +156,7 @@ static RE_REL2: LazyLock<Regex> = LazyLock::new(|| re(r#"<Relationship\s[^>]*?Ta
 static RE_SHEET: LazyLock<Regex> = LazyLock::new(|| re(r#"<sheet\s[^>]*?name="([^"]+)"[^>]*?r:id="([^"]+)""#));
 static RE_CELL: LazyLock<Regex> =
     LazyLock::new(|| re(r#"(?s)<c r="([A-Z]+)([0-9]+)"((?:\s+[a-zA-Z0-9:]+="[^"]*")*)\s*(?:/>|>(.*?)</c>)"#));
-static RE_ATTR_T: LazyLock<Regex> = LazyLock::new(|| re(r#"\st="([^"]+)""#));
+static RE_ATTR_T: LazyLock<Regex> = LazyLock::new(|| re(r#"\st="([^"]*)""#));
 static RE_F: LazyLock<Regex> = LazyLock::new(|| re(r#"(?s)<f(\s[^>]*)?(?:/>|>(.*?)</f>)"#));
 static RE_F_SI: LazyLock<Regex> = LazyLock::new(|| re(r#"\ssi="([0-9]+)""#));
 static RE_V: LazyLock<Regex> = LazyLock::new(|| re(r#"(?s)<v(?:\s[^>]*)?>(.*?)</v>"#));
@@ -489,7 +489,10 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
             let v = v_raw.as_deref().map(unescape);
             let is = RE_IS.captures(inner).map(|m| m[1].to_string());
             let never = |what: String| Expected::Unwritten(what);
+            // a cell holds one value (CT_Cell): two `<v>` is no cache Excel writes
+            let values = RE_V.find_iter(inner).count() + usize::from(inner.contains("<v/>"));
             let expected = match (t.as_deref(), v, is) {
+                (_, Some(v), _) if values > 1 => never(v),
                 // an inline string (`<is>`, whatever the cell's type) is a constant's: Excel writes
                 // a formula's text as `str`, never inline
                 (_, None, Some(is)) => never(format!("<is>{is}</is>")),
@@ -710,6 +713,9 @@ pub enum Actual {
     Empty,
     /// The engine has no such sheet.
     NoSheet,
+    /// The engine holds the cell as a constant (the file's cache), having computed nothing there:
+    /// equal to nothing.
+    NotComputed,
 }
 
 fn fmt_expected(e: &Expected) -> String {
@@ -731,6 +737,7 @@ fn fmt_actual(a: &Actual) -> String {
         Actual::Error(e) => e.clone(),
         Actual::Empty => "(empty)".into(),
         Actual::NoSheet => "(sheet missing in the engine)".into(),
+        Actual::NotComputed => "(not computed by the engine)".into(),
     }
 }
 
@@ -880,7 +887,7 @@ pub fn classify(cell: &FormulaCell, actual: &Actual, unsupported_in_formula: boo
         }
         (E::Text(_), A::Text(_)) => Class::Text,
         (E::Bool(_), _) | (_, A::Bool(_)) => Class::Bool,
-        (E::Missing, _) | (_, A::Empty) => Class::EmptyVsValue,
+        (E::Missing, _) | (_, A::Empty) | (_, A::NotComputed) => Class::EmptyVsValue,
         (E::Number(_), A::Text(_)) | (E::Text(_), A::Number(_)) => Class::TypeNumberText,
         _ => Class::Text,
     }
@@ -913,6 +920,15 @@ impl Example {
 
 fn read_actual(model: &ironcalc_base::Model, si: u32, cell: &FormulaCell) -> Actual {
     let (row, col) = (cell.row as i32, cell.col as i32);
+    // a cell the file says is a formula that the engine holds as neither a formula nor an array's
+    // spilled cell (an empty `<f ca="1"/>` outside every array, which the importer reads as no
+    // formula): its value is the file's cache, not anything the engine computed
+    let computed = model.workbook.worksheet(si).ok().and_then(|ws| ws.cell(row, col)).is_none_or(|c| {
+        c.get_formula().is_some() || matches!(c.as_ref(), ironcalc_base::types::Cell::SpillCell { .. })
+    });
+    if !computed {
+        return Actual::NotComputed;
+    }
     let ty = model.get_cell_type(si, row, col).unwrap_or(CellType::Number);
     match model.get_cell_value_by_index(si, row, col) {
         Ok(CellValue::None) => Actual::Empty,

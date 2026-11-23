@@ -375,7 +375,7 @@ fn a_cache_whose_type_and_text_excel_never_pairs_matches_nothing_the_engine_comp
         .into_iter()
         .find(|c| matches!(c.expected, abaco_oracle::Expected::Number(_)) && !c.shared_copy)
         .unwrap();
-    let cases: [(&str, &str); 17] = [
+    let cases: [(&str, &str); 23] = [
         (r##"<f>"#CIRC!"</f>"##, r##" t="e"><f>"#CIRC!"</f><v>#CIRC!</v>"##),
         (r##"<f>"TRUE"</f>"##, r##" t="b"><f>"TRUE"</f><v>TRUE</v>"##),
         (r##"<f>"abc"</f>"##, r##" t="b"><f>"abc"</f><v>abc</v>"##),
@@ -392,6 +392,15 @@ fn a_cache_whose_type_and_text_excel_never_pairs_matches_nothing_the_engine_comp
         (r##"<f>"abc"</f>"##, r##" t="inlineStr"><f>"abc"</f><is><t>abc</t></is>"##),
         (r##"<f>"abc"</f>"##, r##" t="inlineStr"><f>"abc"</f><is><r><t>ab</t></r><r><t>c</t></r><rPh sb="0" eb="1"><t>X</t></rPh></is>"##),
         (r##"<f>""</f>"##, r##" t="inlineStr"><f>""</f><is><t></t></is>"##),
+        // an empty `<f ca="1"/>` outside every array: the engine computes nothing there, its value
+        // the cache itself
+        ("", r##"><f ca="1"/><v>999</v>"##),
+        ("", r##" t="str"><f ca="1"/><v>zzz</v>"##),
+        ("", r##" t="b"><f ca="1"/><v>1</v>"##),
+        ("", r##" t="e"><f ca="1"/><v>#N/A</v>"##),
+        // an empty type, and two values
+        ("<f>5</f>", r##" t=""><f>5</f><v>5</v>"##),
+        ("<f>5</f>", r##"><f>5</f><v>5</v><v>6</v>"##),
         (r##"<f>"abc"</f>"##, r##" t="e"><f>"abc"</f><is><t>abc</t></is>"##),
         (r##"<f>"abc"</f>"##, r##"><f>"abc"</f><is><t>abc</t></is>"##),
     ];
