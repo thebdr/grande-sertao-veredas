@@ -1,13 +1,13 @@
 {
   "clause": "C-110",
   "verdict": "refuted",
-  "ranAt": "2026-11-23T01:11:55.857Z",
-  "headCommit": "ec90b3afa581da9c3668772b7a7e378ebd836106",
+  "ranAt": "2026-11-23T07:14:09.212Z",
+  "headCommit": "868c157dc181834a35cb598a66154eb544db3b0c",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/modbus_server.rs",
       "file": "crates/veredas-maquinar/tests/modbus_server.rs",
-      "symbolSha": "c2dfef07766c5b10dfd088827e720a4c88b9253cda40d9c32b3a163632b93ceb"
+      "symbolSha": "35a0c125c79a71509673593c6dda2e0a3bc224e47345c62bd977ee1a0bc2a005"
     }
   ]
 }

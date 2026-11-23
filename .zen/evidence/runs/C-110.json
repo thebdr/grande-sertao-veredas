@@ -1,24 +1,25 @@
 {
   "clause": "C-110",
-  "command": "cargo test -p veredas-maquinar --test modbus_server",
+  "command": "cargo nextest run -p veredas-maquinar --test modbus_server",
   "commandArgv": [
     "cargo",
-    "test",
+    "nextest",
+    "run",
     "-p",
     "veredas-maquinar",
     "--test",
     "modbus_server"
   ],
   "exitCode": 0,
-  "outputSha": "fa310987adb04d2c5503ea48f355c8c2c8e413cc5d308e175ee5152bc1fb829c",
-  "outputTail": "test round_4::a_client_that_closed_during_a_delay_frees_its_place_under_the_limit ... ok\ntest pipelined_and_split_requests_are_answered_in_order_and_whole ... ok\ntest a_frame_of_another_protocol_is_dropped_and_a_length_no_frame_has_closes_the_connection ... ok\ntest round_3::each_exchange_shows_its_own_answer_when_two_delayed_ones_interleave ... ok\ntest round_3::the_delay_holds_an_exception_too ... ok\ntest a_client_that_reads_nothing_is_dropped_at_once ... ok\ntest round_3::an_answer_is_counted_as_its_write_begins_and_taken_back_when_a_drop_cuts_it ... ok\ntest round_3::an_answer_already_handed_to_its_socket_goes_out_after_silence_begins ... ok\ntest round_4::no_answer_is_handed_to_its_socket_once_silence_is_set_whatever_else_holds_the_lock ... ok\ntest the_knobs_delay_silence_and_drop_every_connection ... ok\n\ntest result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.16s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s\n     Running tests/modbus_server.rs (target/debug/build/veredas-maquinar/d6d96c695d25da40/out/modbus_server-d6d96c695d25da40)",
-  "ranAt": "2026-11-23T01:11:55.755Z",
-  "headCommit": "ec90b3afa581da9c3668772b7a7e378ebd836106",
+  "outputSha": "75b0f39c2ebe45a9f60724ea73b8ae7da64f5031825b83cdb79773964d612735",
+  "outputTail": "        PASS [   0.172s] (25/37) veredas-maquinar::modbus_server round_5::a_client_that_closes_or_resets_during_the_delay_is_gone_at_once_whatever_it_pipelined\n        PASS [   0.007s] (26/37) veredas-maquinar::modbus_server the_configuration_reads_from_toml_with_its_defaults_and_refuses_a_misspelled_key\n        PASS [   0.007s] (27/37) veredas-maquinar::modbus_server round_5::a_half_closing_client_is_answered_without_a_delay_and_taken_as_gone_with_one\n        PASS [   0.008s] (28/37) veredas-maquinar::modbus_server the_documented_drive_runs_from_its_bench_file\n        PASS [   0.008s] (29/37) veredas-maquinar::modbus_server stopping_closes_every_connection_and_frees_the_port\n        PASS [   0.010s] (30/37) veredas-maquinar::modbus_server round_5::a_client_that_pipelined_and_closed_during_a_delay_frees_its_place_under_a_limit_of_one\n        PASS [   0.121s] (31/37) veredas-maquinar::modbus_server round_5::an_answer_silence_withheld_is_counted_unanswered_whether_a_drop_or_the_client_ends_its_delay\n        PASS [   1.411s] (32/37) veredas-maquinar::modbus_server round_5::an_answer_whose_waiting_write_fails_on_the_client_s_reset_is_taken_back\n        PASS [   4.179s] (33/37) veredas-maquinar::modbus_server the_knobs_delay_silence_and_drop_every_connection\n        PASS [   0.005s] (34/37) veredas-maquinar::modbus_server values_parse_per_type_and_nonsense_is_refused\n        PASS [   0.006s] (35/37) veredas-maquinar::modbus_server the_points_lie_in_their_tables_as_their_types_and_word_orders_say\n        PASS [   0.008s] (36/37) veredas-maquinar::modbus_server the_protocol_s_own_examples_answer_byte_for_byte\n        PASS [   0.016s] (37/37) veredas-maquinar::modbus_server the_status_keeps_the_last_hundred_exchanges\n────────────\n     Summary [  13.430s] 37 tests run: 37 passed, 0 skipped",
+  "ranAt": "2026-11-23T07:15:29.156Z",
+  "headCommit": "868c157dc181834a35cb598a66154eb544db3b0c",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/modbus_server.rs",
       "file": "crates/veredas-maquinar/tests/modbus_server.rs",
-      "fileSha": "c2dfef07766c5b10dfd088827e720a4c88b9253cda40d9c32b3a163632b93ceb"
+      "fileSha": "35a0c125c79a71509673593c6dda2e0a3bc224e47345c62bd977ee1a0bc2a005"
     }
   ]
 }
