@@ -25,7 +25,8 @@ a { color: inherit; text-decoration: none; }
 /* A caption's capitals typed in the page's source, never made by the stylesheet (Q28; docs/design). */
 .caps { font: 600 10px var(--mono); letter-spacing: .08em; color: var(--label); }
 .small { margin: 10px 0 4px; }
-.error { color: var(--danger-text); font-family: var(--mono); }
+/* A refusal said in its own words, its white space as written (an engine's spans lines). */
+.error { color: var(--danger-text); font-family: var(--mono); white-space: pre-wrap; }
 
 /* ---- the top bar ---- */
 .top { display: flex; overflow: hidden; min-width: 0; align-items: center; gap: 14px; height: 40px; padding: 0 14px; background: var(--title); border-bottom: 1px solid var(--hair); white-space: nowrap; }
@@ -286,6 +287,8 @@ table.dt { width: 100%; border-collapse: collapse; }
 .list button.on { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
 .list-main { flex: 1; min-width: 0; padding: 12px 16px; overflow: auto; }
 .pager { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; }
+/* A series' last value drawn as its listing gives it, its white space as written (Q28). */
+.pager [data-points] { white-space: pre-wrap; }
 .scroll { overflow: auto; }
 .alarms { padding: 12px 16px; }
 .sessions { display: flex; flex-wrap: wrap; gap: 12px; padding: 24px; }

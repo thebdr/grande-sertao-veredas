@@ -290,7 +290,7 @@ const KEEP_ANSWERS: &str = r#"(() => {
       if (hold[2]) return new Response(JSON.stringify({ error: "probe refusal, held" }), { status: 500, headers: { "content-type": "application/json" } });
     }
     if (slow) { await new Promise((done) => setTimeout(done, 1500)); setTimeout(() => { window.__slowDone = true; }, 300); }
-    if (refuse) return new Response(JSON.stringify({ error: "probe refusal, late" }), { status: 500, headers: { "content-type": "application/json" } });
+    if (refuse) return new Response(JSON.stringify({ error: "probe  refusal,\tlate" }), { status: 500, headers: { "content-type": "application/json" } });
     if (!url.includes("/api/table/data") && !url.includes("/api/series/data")) return r;
     const j = await r.clone().json();
     if (window.__gone && url.includes("/api/table/data") && r.ok) {
@@ -475,7 +475,9 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // a window can hold one finite point among samples that are none.
     let hall_project = dir.path().join("hall/project.toml");
     let text = std::fs::read_to_string(&hall_project).unwrap();
-    std::fs::write(&hall_project, format!("{text}\n[[rule]]\nname = \"odd\"\npattern = \"ODD v=(?P<ov>[^ ]+)\"\nscope = \"sorter\"\ntypes = {{ ov = \"float\" }}\n")).unwrap();
+    // And a rule of every other type portal lists a series as: a count, a time and a word (`NOTE`),
+    // the word untyped, a text.
+    std::fs::write(&hall_project, format!("{text}\n[[rule]]\nname = \"odd\"\npattern = \"ODD v=(?P<ov>[^ ]+)\"\nscope = \"sorter\"\ntypes = {{ ov = \"float\" }}\n\n[[rule]]\nname = \"notes\"\npattern = 'NOTE n=(?P<n>\\d+) at=(?P<at>\\S+ \\S+) word=(?P<word>.*)$'\nscope = \"sorter\"\ntypes = {{ n = \"int\", at = \"time\" }}\n")).unwrap();
     let host = Host::start(config::load_file(&path).unwrap()).unwrap();
     let addr = host.addr();
     let live = host.session("loop").unwrap().live();
@@ -903,7 +905,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     page.eval(&format!(r#"(() => {{ window.__slowSent = false; window.__slowRefuse = true; window.__slow = "/api/series/data"; {}; return true; }})()"#, series_button("plc/fill1")));
     page.wait_for("window.__slowSent || null", Duration::from_secs(10));
     let refused = page.wait_for(r#"document.querySelector(".list-main > p.error")?.textContent ?? null"#, Duration::from_secs(20));
-    assert_eq!(refused, json!("Error: probe refusal, late"), "the refusal's own words");
+    assert_eq!(refused, json!("Error: probe  refusal,\tlate"), "the refusal's own words, its white space as written");
     every_mark_shown(&mut page, "a refused window");
     // A series whose samples are, for a while, no finite number (the bench writes NaN, then an
     // infinity; portal keeps them and writes each as null): the line and the axes of its finite
@@ -1147,7 +1149,7 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     page.eval(r#"(() => { window.__slowSent = false; window.__slowRefuse = true; window.__slow = "/api/tables"; document.querySelector('.list button[data-table="outlets"]').click(); return true; })()"#);
     page.wait_for("window.__slowSent || null", Duration::from_secs(10));
     let refused = page.wait_for(r#"document.querySelector(".list-main p.error")?.textContent ?? null"#, Duration::from_secs(10));
-    assert_eq!(refused, json!("Error: probe refusal, late"), "the latest pick's listing refused");
+    assert_eq!(refused, json!("Error: probe  refusal,\tlate"), "the latest pick's listing refused");
     // Shown anew, the table's window takes the rows stored since; a page portal refuses is said in
     // its place.
     pick(&mut page, "sorts");
@@ -1523,6 +1525,31 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     assert!(odd["line"] == json!(0) && dot[2] == json!(true) && (dot[0].as_f64().unwrap() - x).abs() <= 0.051 && (dot[1].as_f64().unwrap() - 94.0).abs() <= 0.051, "the one finite point drawn at {dot:?}, its place ({x:.2}, 94): {odd}");
     assert_eq!(axis_misplaced(odd["axis"].as_array().unwrap(), &points, from, to), Vec::<String>::new(), "the one finite point's labels");
     every_mark_shown(&mut page, "one finite point among samples that are no number");
+    // A series of every type portal lists (its listing's `type`: an int, a float, a text, a time;
+    // hall's `NOTE` line gives the three it had none of, the word's white space its own): each
+    // picked, its heading's last value drawn as the listing gives it, read as the browser renders it.
+    let noted = store_now() - 3 * 60_000;
+    append(&hall_log, &[format!("{} NOTE n=42 at={} word=  RUN  A\tB", stamp(noted), stamp(noted - 1_000))]);
+    assert!(wait(Duration::from_secs(20), || get(addr, "/s/hall/portal/api/series").1["series"].as_array().unwrap().iter().any(|x| x["series"] == "word")), "hall's word stored");
+    let (_, s) = get(addr, "/s/hall/portal/api/series");
+    let listed: Vec<&Value> = s["series"].as_array().unwrap().iter().collect();
+    let kinds: std::collections::BTreeSet<&str> = listed.iter().map(|x| x["type"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["float", "int", "text", "time"].into_iter().collect(), "every type portal lists a series as, met");
+    page.eval(r#"location.hash = "tables""#);
+    page.eval(r#"location.hash = "series""#);
+    page.wait_for(r#"[...document.querySelectorAll(".list button[data-series]")].some((x) => x.dataset.series === "sorter/word") || null"#, Duration::from_secs(20));
+    for x in &listed {
+        let key = format!("{}/{}", x["source"].as_str().unwrap(), x["series"].as_str().unwrap());
+        let head = format!("{} · {}", x["source"].as_str().unwrap(), x["series"].as_str().unwrap());
+        page.eval(&format!("[...document.querySelectorAll('.list button[data-series]')].find((b) => b.dataset.series === {}).click()", serde_json::to_string(&key).unwrap()));
+        let said = page.wait_for(&format!("(() => {{ const p = document.querySelector('.list-main .pager [data-points]'), h = document.querySelector('.list-main .pager strong'); return p && h && h.textContent === {} && p.dataset.points !== 'waiting' ? p.innerText : null; }})()", serde_json::to_string(&head).unwrap()), Duration::from_secs(20));
+        let last = format!(" · last {}", x["last_value"].as_str().unwrap());
+        assert!(said.as_str().unwrap().ends_with(&last), "{key} ({}): its heading {said}, its listing's last value {last:?}", x["type"]);
+        if key == "sorter/word" {
+            assert!(last.ends_with("  RUN  A\tB"), "the word as logged: {last:?}");
+            every_mark_shown(&mut page, "a text series' last value, its white space its own");
+        }
+    }
     let requests = page.requests();
     assert!(requests.iter().all(|(u, ty)| u.starts_with(&format!("http://{addr}/")) && ty != "WebSocket"), "{requests:?}");
     let paths: Vec<String> = requests.into_iter().map(|(u, _)| u).collect();
