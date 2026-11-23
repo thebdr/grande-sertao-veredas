@@ -686,37 +686,199 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
 
 #[test]
 fn its_sources_are_its_own_and_core_s_header_reader_alone() {
-    // what rustc read to compile Ábaco's library, from its dep-info: Ábaco's own files, and of a
-    // member's source only core's header reader, compiled by path while core carries its network
-    // layers (C-224, docs/questions.md Q345); no other member's code, no other file of core's
+    // what rustc read to compile each library of Ábaco's own and the engine's, from its dep-info:
+    // each crate's own files, and of a member's source only core's header reader, compiled into
+    // Ábaco by path while core carries its network layers (C-224, docs/questions.md Q345); no other
+    // member's code, no other file of core's, nothing a build script wrote
     let json = cargo(&["build", "-p", "veredas-abaco", "--lib", "--message-format=json"]);
-    let rmeta: Vec<PathBuf> = json
-        .lines()
-        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-        .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == "veredas_abaco")
-        .flat_map(|m| m["filenames"].as_array().cloned().unwrap_or_default())
-        .filter_map(|f| f.as_str().map(PathBuf::from))
-        .filter(|f| f.extension().is_some_and(|e| e == "rmeta"))
-        .collect();
-    assert_eq!(rmeta.len(), 1, "{rmeta:?}");
-    let stem = rmeta[0].file_stem().unwrap().to_string_lossy().trim_start_matches("lib").to_string();
-    let dep_info = rmeta[0].with_file_name(format!("{stem}.d"));
-    let text = std::fs::read_to_string(&dep_info).unwrap_or_else(|e| panic!("{}: {e}", dep_info.display()));
-    // each file rustc read stands on a line of its own, ending in `:`
-    let read: BTreeSet<PathBuf> = text
-        .lines()
-        .filter_map(|l| l.strip_suffix(':'))
-        .filter(|f| !f.contains(": "))
-        .map(|f| {
-            let p = Path::new(f);
-            let p = if p.is_absolute() { p.to_path_buf() } else { root().join(p) };
-            p.canonicalize().unwrap_or(p)
-        })
-        .collect();
-    let own = root().join("crates/veredas-abaco");
-    assert!(read.iter().any(|f| f.ends_with("crates/veredas-abaco/src/lib.rs")), "{read:?}");
-    let outside: Vec<&PathBuf> = read.iter().filter(|f| !f.starts_with(&own)).collect();
-    assert_eq!(outside, [&root().join("crates/veredas-core/src/schema.rs")], "files outside Ábaco's folder that its library compiles");
+    let own: [(&str, &str, &[&str]); 3] = [
+        ("veredas_abaco", "crates/veredas-abaco", &["crates/veredas-core/src/schema.rs"]),
+        ("ironcalc_base", "forks/ironcalc/base", &[]),
+        ("ironcalc", "forks/ironcalc/xlsx", &[]),
+    ];
+    for (target, folder, allowed) in own {
+        let rmeta: Vec<PathBuf> = json
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == target)
+            .flat_map(|m| m["filenames"].as_array().cloned().unwrap_or_default())
+            .filter_map(|f| f.as_str().map(PathBuf::from))
+            .filter(|f| f.extension().is_some_and(|e| e == "rmeta"))
+            .collect();
+        assert_eq!(rmeta.len(), 1, "{target}: {rmeta:?}");
+        let stem = rmeta[0].file_stem().unwrap().to_string_lossy().trim_start_matches("lib").to_string();
+        let dep_info = rmeta[0].with_file_name(format!("{stem}.d"));
+        let text = std::fs::read_to_string(&dep_info).unwrap_or_else(|e| panic!("{}: {e}", dep_info.display()));
+        // each file rustc read stands on a line of its own, ending in `:`, a space in its path
+        // written `\ `; every one resolves to a file, or the record is not read as it is
+        let read: BTreeSet<PathBuf> = text
+            .lines()
+            .filter_map(|l| l.strip_suffix(':'))
+            .filter(|f| !f.replace("\\ ", "").contains(' '))
+            .map(|f| {
+                let f = f.replace("\\ ", " ");
+                let p = Path::new(&f);
+                let p = if p.is_absolute() { p.to_path_buf() } else { root().join(p) };
+                p.canonicalize().unwrap_or_else(|e| panic!("{target}: {} in its dep-info: {e}", p.display()))
+            })
+            .collect();
+        let home = root().join(folder);
+        assert!(read.iter().any(|f| f.ends_with(format!("{folder}/src/lib.rs"))), "{target}: {read:?}");
+        let outside: Vec<PathBuf> = read.iter().filter(|f| !f.starts_with(&home)).cloned().collect();
+        let allowed: Vec<PathBuf> = allowed.iter().map(|a| root().join(a)).collect();
+        assert_eq!(outside, allowed, "{target}: files outside its folder that its library compiles");
+    }
+}
+
+#[test]
+fn no_source_reaches_outside_its_crate_by_a_path_or_an_include_on_any_platform() {
+    // the dep-info is one build's; a `#[path]` or an `include!` under another platform's `cfg`
+    // is read from the sources: every one, compiled or not, names a file of its own crate, but
+    // core's header reader in Ábaco (Q345), and no source is a link
+    let mut seen_schema = 0;
+    for (folder, allowed) in [
+        ("crates/veredas-abaco", Some("crates/veredas-core/src/schema.rs")),
+        ("forks/ironcalc/base", None),
+        ("forks/ironcalc/xlsx", None),
+    ] {
+        let home = root().join(folder);
+        let mut stack = vec![home.join("src")];
+        if home.join("build.rs").is_file() {
+            stack.push(home.join("build.rs"));
+        }
+        let mut files = Vec::new();
+        while let Some(d) = stack.pop() {
+            if d.is_dir() {
+                for e in std::fs::read_dir(&d).unwrap() {
+                    stack.push(e.unwrap().path());
+                }
+            } else if d.extension().is_some_and(|e| e == "rs") {
+                files.push(d);
+            }
+        }
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            let named = paths_and_includes(&text);
+            for name in named {
+                let name = name.unwrap_or_else(|| panic!("{}: a path or an include not written as a plain string", file.display()));
+                let target = file.parent().unwrap().join(&name);
+                let resolved = target.canonicalize().unwrap_or_else(|e| panic!("{}: {name}: {e}", file.display()));
+                if Some(resolved.clone()) == allowed.map(|a| root().join(a)) {
+                    seen_schema += 1;
+                    continue;
+                }
+                assert!(resolved.starts_with(&home), "{}: `{name}` reaches outside {folder}", file.display());
+            }
+        }
+    }
+    assert_eq!(seen_schema, 1, "core's header reader, compiled by path once");
+    let links = git(&["ls-files", "-s", "--", "crates/veredas-abaco", "forks/ironcalc"]);
+    let links: Vec<&str> = links.lines().filter(|l| l.starts_with("120000 ")).collect();
+    assert!(links.is_empty(), "links among the sources: {links:?}");
+}
+
+/// Every file a source names by a `path` attribute (`#[path = "…"]`, `#![path = "…"]`, one inside
+/// `cfg_attr`) or an include (`include!`, `include_str!`, `include_bytes!`); `None` for one whose
+/// argument is no plain string (a `concat!`, an `env!`), which no reading can follow.
+fn paths_and_includes(text: &str) -> Vec<Option<String>> {
+    let literal = |rest: &str| -> Option<String> {
+        let rest = rest.trim_start().strip_prefix('"')?;
+        rest.find('"').map(|end| rest[..end].to_string())
+    };
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let code = line.split("//").next().unwrap_or("");
+        if code.contains("#[") || code.contains("#![") {
+            let mut from = 0;
+            while let Some(at) = code[from..].find("path") {
+                let at = from + at;
+                let before = code[..at].chars().next_back();
+                let rest = code[at + 4..].trim_start();
+                if !before.is_some_and(|c| c.is_alphanumeric() || c == '_') && rest.starts_with('=') {
+                    out.push(literal(&rest[1..]));
+                }
+                from = at + 4;
+            }
+        }
+        for mac in ["include!", "include_str!", "include_bytes!"] {
+            let mut from = 0;
+            while let Some(at) = code[from..].find(mac) {
+                let at = from + at;
+                let before = code[..at].chars().next_back();
+                if !before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    let rest = code[at + mac.len()..].trim_start();
+                    out.push(rest.strip_prefix('(').and_then(literal));
+                }
+                from = at + mac.len();
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn no_socket_in_its_sources_or_the_engine_s() {
+    // no plant connection: its graph holds no network crate (`REVIEWED`), and no source of its own
+    // or of the engine's opens a socket through the standard library or libc
+    let words = ["std::net", "std::os::unix::net", "TcpStream", "TcpListener", "UdpSocket", "UnixStream", "UnixListener", "UnixDatagram", "libc::socket", "libc::connect"];
+    for folder in ["crates/veredas-abaco/src", "forks/ironcalc/base/src", "forks/ironcalc/xlsx/src"] {
+        let mut stack = vec![root().join(folder)];
+        while let Some(d) = stack.pop() {
+            if d.is_dir() {
+                for e in std::fs::read_dir(&d).unwrap() {
+                    stack.push(e.unwrap().path());
+                }
+            } else if d.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&d).unwrap();
+                let ident = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+                for w in words {
+                    for (at, _) in text.match_indices(w) {
+                        let before = text[..at].chars().next_back();
+                        let after = text[at + w.len()..].chars().next();
+                        assert!(ident(before) || ident(after), "{}: `{w}`", d.display());
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The edges (parent to child, each `name version`) of the subtrees under the engine's two crates in
+/// a `cargo tree --prefix depth --no-dedupe` listing, and every crate in them but the two.
+fn engine_graph(tree: &str) -> (BTreeSet<(String, String)>, BTreeSet<(String, String)>) {
+    let node = |l: &str| -> (usize, String, String) {
+        let depth = l.chars().take_while(char::is_ascii_digit).collect::<String>();
+        let mut w = l[depth.len()..].split_whitespace();
+        (depth.parse().unwrap(), w.next().unwrap_or("").to_string(), w.next().unwrap_or("").trim_start_matches('v').to_string())
+    };
+    let mut edges = BTreeSet::new();
+    let mut crates = BTreeSet::new();
+    // the open ancestors of the line read, by depth, and the depth of the engine crate whose
+    // subtree is being read
+    let mut ancestors: Vec<(String, String)> = Vec::new();
+    let mut root: Option<usize> = None;
+    for line in tree.lines().filter(|l| !l.trim().is_empty()) {
+        let (depth, name, version) = node(line);
+        ancestors.truncate(depth);
+        if root.is_some_and(|r| depth <= r) {
+            root = None;
+        }
+        if root.is_none() && (name == "ironcalc" || name == "ironcalc_base") {
+            root = Some(depth);
+        } else if root.is_some() {
+            if let Some(parent) = ancestors.last() {
+                edges.insert((format!("{} {}", parent.0, parent.1), format!("{name} {version}")));
+            }
+            if name != "ironcalc" && name != "ironcalc_base" {
+                crates.insert((name.clone(), version.clone()));
+            }
+        }
+        if root == Some(depth) && depth > 0 && let Some(parent) = ancestors.last().filter(|p| p.0 == "ironcalc" || p.0 == "ironcalc_base") {
+            edges.insert((format!("{} {}", parent.0, parent.1), format!("{name} {version}")));
+        }
+        ancestors.push((name, version));
+    }
+    (edges, crates)
 }
 
 #[test]
@@ -732,17 +894,26 @@ fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
     // Ábaco's own, and listed so (`ABACO_ONLY`)
     let fork_lock = locked(&root().join("forks/ironcalc/Cargo.lock"));
     let root_lock = locked(&root().join("Cargo.lock"));
-    let engine: BTreeSet<(String, String)> = cargo(&[
-        "tree", "-e", "normal", "--prefix", "none", "--format", "{p}", "-p", "ironcalc_base", "-p", "ironcalc", "--target", "all",
-    ])
-    .lines()
-    .map(|l| l.trim_end_matches(" (*)").trim_end_matches(" (proc-macro)"))
-    .filter(|l| !l.is_empty() && !paths.iter().any(|p| p == l))
-    .map(|l| {
-        let mut w = l.split_whitespace();
-        (w.next().unwrap().to_string(), w.next().unwrap().trim_start_matches('v').to_string())
-    })
-    .collect();
+    // the engine's graph, build dependencies included, as Ábaco builds it (the subtrees under its
+    // two crates in Ábaco's own tree) and as the fork's workspace builds it for the fork's suite: the
+    // same edges, parent's version to child's, so the suite tests the very versions Ábaco links
+    let abaco_tree = cargo(&["tree", "-p", "veredas-abaco", "-e", "normal,build", "--target", "all", "--no-dedupe", "--prefix", "depth", "--format", "{p}"]);
+    let fork_tree = {
+        let out = Command::new(env!("CARGO"))
+            .args(["tree", "-p", "ironcalc_base", "-p", "ironcalc", "-e", "normal,build", "--target", "all", "--no-dedupe", "--prefix", "depth", "--format", "{p}", "--locked", "--manifest-path"])
+            .arg(root().join("forks/ironcalc/Cargo.toml"))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let (abaco_edges, engine) = engine_graph(&abaco_tree);
+    let (fork_edges, _) = engine_graph(&fork_tree);
+    // the engine's build dependencies are among them (num-traits' `autocfg`)
+    assert!(abaco_edges.len() > 50 && abaco_edges.iter().any(|(_, c)| c.starts_with("autocfg ")), "{abaco_edges:?}");
+    let only_abaco: Vec<_> = abaco_edges.difference(&fork_edges).collect();
+    let only_fork: Vec<_> = fork_edges.difference(&abaco_edges).collect();
+    assert!(only_abaco.is_empty() && only_fork.is_empty(), "the engine's edges in Ábaco's build and not the fork's: {only_abaco:?}; in the fork's and not Ábaco's: {only_fork:?}");
     assert!(engine.iter().any(|(n, _)| n == "quick-xml") && engine.iter().any(|(n, _)| n == "zip"), "{engine:?}");
     let listed = |name: &str, version: &str| {
         ABACO_ONLY.iter().any(|o| match o.split_once('@') {
