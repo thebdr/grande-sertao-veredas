@@ -131,6 +131,8 @@ struct CellXml {
 
 struct SheetDataReader<'a, 'p> {
     sheet_name: &'a str,
+    /// The `cm` values that mark a dynamic array in this workbook (see `cell_metadata`).
+    dynamic_cm: &'a std::collections::HashSet<u32>,
     parser: &'a mut Parser<'p>,
     shared_strings: &'a mut SharedStringTable,
 
@@ -376,7 +378,9 @@ impl SheetDataReader<'_, '_> {
                 }
                 "s" => cell.style = value.parse::<i32>().unwrap_or(0),
                 "t" => cell.cell_type = Some(cell_type_of(&value)),
-                "cm" => cell.is_dynamic_array = &*value == "1",
+                "cm" => {
+                    cell.is_dynamic_array = value.parse::<u32>().is_ok_and(|cm| self.dynamic_cm.contains(&cm))
+                }
                 "vm" => cell.value_metadata = Some(value.into_owned()),
                 _ => {}
             }
@@ -625,6 +629,7 @@ pub(super) fn read_sheet_data<R: BufRead>(
     sheet_name: &str,
     parser: &mut Parser,
     shared_strings: &mut SharedStringTable,
+    dynamic_cm: &std::collections::HashSet<u32>,
 ) -> Result<SheetDataXml, XlsxError> {
     let mut reader = quick_xml::Reader::from_reader(reader);
     let mut tree = XmlTreeBuilder::new();
@@ -632,6 +637,7 @@ pub(super) fn read_sheet_data<R: BufRead>(
     let mut in_sheet_data = false;
     let mut state = SheetDataReader {
         sheet_name,
+        dynamic_cm,
         parser,
         shared_strings,
         sheet_data: SheetData::new(),
@@ -689,7 +695,31 @@ mod tests {
         let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>a_x0001_b</t></is></c><c r="B1" t="inlineStr"><is><t>_x005F_x0041_</t></is></c></row></sheetData></worksheet>"#;
         let mut parser = new_parser_english(vec!["Sheet1".to_string()], vec![], HashMap::new());
         let mut strings = SharedStringTable::new(Vec::new());
-        read_sheet_data(xml.as_bytes(), "Sheet1", &mut parser, &mut strings).unwrap();
+        read_sheet_data(xml.as_bytes(), "Sheet1", &mut parser, &mut strings, &std::collections::HashSet::from([1])).unwrap();
         assert_eq!(strings.into_strings(), vec!["a\u{1}b".to_string(), "_x0041_".to_string()]);
+    }
+
+    fn read(xml: &str, dynamic_cm: &[u32]) -> SheetDataXml {
+        let mut parser = new_parser_english(vec!["Sheet1".to_string()], vec![], HashMap::new());
+        let mut strings = SharedStringTable::new(Vec::new());
+        let dynamic: std::collections::HashSet<u32> = dynamic_cm.iter().copied().collect();
+        read_sheet_data(xml.as_bytes(), "Sheet1", &mut parser, &mut strings, &dynamic).unwrap()
+    }
+
+    #[test]
+    fn a_cells_cm_marks_a_dynamic_array_as_the_metadata_part_says() {
+        let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" cm="2"><f t="array" ref="A1">SUM(B1:B2*C1:C2)</f><v>0</v></c></row><row r="2"><c r="A2" cm="1"><f t="array" ref="A2">SUM(B1:B2*C1:C2)</f><v>0</v></c></row></sheetData></worksheet>"#;
+        let kind = |data: &SheetDataXml, row: i32| match data.sheet_data.cell(row, 1).map(|c| c.into_owned()) {
+            Some(ironcalc_base::types::Cell::ArrayFormula { kind, .. }) => Some(kind),
+            _ => None,
+        };
+        // a part whose dynamic-array entry is the second: cm="2" is dynamic, cm="1" (an OLAP
+        // formula's entry) is a legacy array
+        let data = read(xml, &[2]);
+        assert_eq!(kind(&data, 1), Some(ironcalc_base::types::ArrayKind::Dynamic));
+        assert_eq!(kind(&data, 2), Some(ironcalc_base::types::ArrayKind::Cse));
+        let data = read(xml, &[1]);
+        assert_eq!(kind(&data, 1), Some(ironcalc_base::types::ArrayKind::Cse));
+        assert_eq!(kind(&data, 2), Some(ironcalc_base::types::ArrayKind::Dynamic));
     }
 }

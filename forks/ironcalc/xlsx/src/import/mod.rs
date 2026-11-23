@@ -1,3 +1,4 @@
+mod cell_metadata;
 mod conditional_formatting;
 mod external_links;
 pub mod linked;
@@ -110,6 +111,8 @@ fn load_xlsx_from_reader<R: Read + std::io::Seek>(
     // stored in x14 `extLst` extensions carry inline `<x14:dxf>` formats that we
     // append to `styles.dxfs`, referencing them back by index from the rule.
     let mut styles = load_styles(&mut archive, &theme)?;
+    // which cells' `cm` marks a dynamic array, read from the metadata part
+    let dynamic_cm = cell_metadata::dynamic_array_indices(&mut archive, &rels);
     let worksheets = load_sheets(
         &mut archive,
         &rels,
@@ -118,6 +121,7 @@ fn load_xlsx_from_reader<R: Read + std::io::Seek>(
         &mut shared_strings,
         &theme,
         &mut styles.dxfs,
+        &dynamic_cm,
     )?;
     // reparse formulas in defined names, since they may refer to sheets and tables that have been loaded
     let worksheet_names = worksheets

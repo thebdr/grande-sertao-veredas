@@ -925,6 +925,7 @@ pub(super) fn load_sheet<R: Read + std::io::Seek>(
     defined_names: Vec<DefinedNameS>,
     theme: &Theme,
     dxfs: &mut Vec<Dxf>,
+    dynamic_cm: &std::collections::HashSet<u32>,
 ) -> Result<Worksheet, XlsxError> {
     let sheet_name = &settings.name;
     let sheet_id = settings.id;
@@ -946,6 +947,7 @@ pub(super) fn load_sheet<R: Read + std::io::Seek>(
         sheet_name,
         &mut parser,
         shared_strings,
+        dynamic_cm,
     )?;
     let ws = &worksheet;
 
@@ -1011,6 +1013,7 @@ pub(super) fn load_sheets<R: Read + std::io::Seek>(
     shared_strings: &mut SharedStringTable,
     theme: &Theme,
     dxfs: &mut Vec<Dxf>,
+    dynamic_cm: &std::collections::HashSet<u32>,
 ) -> Result<Vec<Worksheet>, XlsxError> {
     // load comments, tables and hyperlink relationships
     let mut sheet_rels = HashMap::new();
@@ -1068,6 +1071,7 @@ pub(super) fn load_sheets<R: Read + std::io::Seek>(
                 defined_names.clone(),
                 theme,
                 dxfs,
+                dynamic_cm,
             )?;
             sheets.push(s);
         }
