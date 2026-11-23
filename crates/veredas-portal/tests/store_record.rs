@@ -339,6 +339,12 @@ fn the_limit_stops_the_recording_at_the_first_write_that_reaches_it() {
     }
     let at_stop = status(&live);
     assert!(at_stop.stopped_why.is_some(), "{at_stop:?}");
+    // The size the stop names is the drive's once the write that reached the limit landed, the
+    // session still running (a stopped record takes no write, so the drive holds still): the
+    // write measured after its rows, so the stop falls at the first write past the limit.
+    let wal = std::path::PathBuf::from(format!("{}.wal", file.display()));
+    let drive = || std::fs::metadata(&file).unwrap().len() + std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+    assert_eq!(at_stop.written_bytes, drive(), "the size at the stop the drive's, before the session stops");
     let under: Vec<u64> = sizes.iter().filter(|(_, stopped)| !stopped).map(|(b, _)| *b).collect();
     assert!(under.iter().filter(|b| **b > 0).count() >= 2, "several writes under the limit first: {sizes:?}");
     assert!(under.iter().all(|b| *b < at_stop.limit_bytes), "every size published before the stop under the limit: {sizes:?}");
@@ -347,9 +353,7 @@ fn the_limit_stops_the_recording_at_the_first_write_that_reaches_it() {
         r.unwrap_or_else(|e| panic!("{id}: {e}"));
     }
     let end = status(&live);
-    let wal = std::path::PathBuf::from(format!("{}.wal", file.display()));
-    let on_drive = std::fs::metadata(&file).unwrap().len() + std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
-    assert_eq!(end.written_bytes, on_drive, "the size published is the drive's");
+    assert_eq!(end.written_bytes, drive(), "the size published is the drive's");
     assert!(!wal.exists() || std::fs::metadata(&wal).unwrap().len() == 0, "the log folded into the file");
     assert_eq!(recorded(&file, "readings") as u64, end.recorded_rows);
 }
