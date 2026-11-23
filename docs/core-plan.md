@@ -300,7 +300,17 @@ Recorded as the port meets them.
   `#[path]` module (C-073, round 5). rustdoc's pages and their `id` anchors, built per form with
   `--document-private-items`, show every item wherever its gate is written. Two things on a page
   are not core's: the blanket impls (a master's framing brings tracing's `Instrument` onto every
-  type) and the `notable-traits-data` tooltip script; leave both out of the comparison.
+  type) and the `notable-traits-data` tooltip script; leave both out of the comparison. Names
+  are not enough: compare what each anchor renders (a field's type, a `pub(crate)`), and check
+  the view against the build with a consumer per form, since rustdoc sets `cfg(doc)` (round 6).
+- **A copy of the tree never builds into the worktree's target.** Cargo keys a workspace
+  member's artifacts by its path relative to the workspace, and judges a path package fresh by
+  file times alone. A critic's copy built with `CARGO_TARGET_DIR` set to the worktree's target
+  overwrites the worktree's core with the copy's mutant. The worktree's older files then look
+  fresh, so its next run links the mutant and only a replayed warning shows it (C-073, round 6).
+  Give a copy a target of its own (a fresh copy of the seed is fine: the copy's files are newer
+  than the seed's artifacts). After such a mix-up, reset the target and `touch` the crate's
+  files.
 - **LNK1140 ("limit exceeded for program database") on one test binary** after a link was cut
   short: the half-written PDB is reused. Delete that test's `.pdb` under `target/debug/deps` and
   link again. Each OPC test binary carries a PDB of about 200 MB, and `-p veredas-core` and

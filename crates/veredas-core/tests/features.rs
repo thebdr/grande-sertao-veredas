@@ -4,7 +4,7 @@
 //! features as cargo reads them, the dependency graph cargo resolves without the default
 //! features, and the library cargo compiles in each form a component may ask for.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -376,9 +376,10 @@ fn each_form_holds_the_layers_it_promises() {
 
 /// Every feature gate in core's source, as it is ordinarily written, is one of the expected set:
 /// `net` on the four plant-facing modules and the crate root's two re-exports, `demo-server` on the
-/// demo plant, each master on its own module. A gate written another way (a comment inside it, a
-/// macro building it, a file pulled in by `include!` or `#[path]`) escapes a reading of the text;
-/// the compiler's own view, the next test, is what closes the class.
+/// demo plant, each master on its own module; and nothing hides an item from rustdoc. A gate
+/// written another way (a comment inside it, a macro building it, a file pulled in by `include!`
+/// or `#[path]`) escapes a reading of the text; the compiler's own view, the next test, is what
+/// closes the class for every item rustdoc sees.
 #[test]
 fn every_feature_gate_is_where_it_belongs() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -400,9 +401,15 @@ fn every_feature_gate_is_where_it_belongs() {
             .replace('\\', "/");
         let lines: Vec<&str> = text.lines().collect();
         for (n, line) in lines.iter().enumerate() {
-            // A mention of a feature in a cfg, an attribute or the macro, as ordinarily written.
+            // A mention of a feature in a cfg, an attribute or the macro, as ordinarily written;
+            // and what would hide an item from rustdoc, the compiler's view below
+            // (`doc(hidden)`, a cfg on `doc`), of which core has none.
             let squeezed: String = line.chars().filter(|c| !c.is_whitespace()).collect();
-            if squeezed.contains("feature=") || squeezed.contains("cfg!(") {
+            let hides = squeezed.contains("doc(hidden")
+                || ["cfg(doc", "(doc)", "(doc,", ",doc)", ",doc,"]
+                    .iter()
+                    .any(|p| squeezed.contains(p));
+            if squeezed.contains("feature=") || squeezed.contains("cfg!(") || hides {
                 let gated = lines[n + 1..]
                     .iter()
                     .map(|l| l.trim())
@@ -435,11 +442,103 @@ fn every_feature_gate_is_where_it_belongs() {
     assert_eq!(gates, want);
 }
 
-/// Rustdoc's view of one form of core, private items included: every page, and every anchor on
-/// a page (a method, a field, a variant, an impl, a re-export), as `page` and `page#anchor`.
-/// `all.html` is kept as a page only: its sections mirror the pages. A page's blanket impls are
-/// left out (below).
-fn rustdoc_view(features: &[&str]) -> BTreeSet<String> {
+/// Text with its tags stripped and its whitespace collapsed.
+fn plain(html: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                out.push(' ');
+            }
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// What one rustdoc page shows of core, by key: the item's declaration (`item-decl`); every
+/// item's anchor with what it renders (an impl's or a method's header, a field with its type, a
+/// variant, a re-export's line), and every anchor of the page's frame as a key alone;
+/// and every row of a module's table by the page it points to, with what it shows (the name and
+/// the mark of restricted visibility). Left out, as not core's: the blanket impls, the page's last
+/// section, which show whichever crates are in the graph (a master's framing brings tracing's
+/// `Instrument` onto every type), and the tooltips of notable traits.
+fn page_view(dir: &str, html: &str) -> Vec<(String, String)> {
+    let html = match html.rfind("id=\"blanket-implementations\"") {
+        Some(i) => &html[..i],
+        None => html,
+    };
+    let mut keys = Vec::new();
+    if let Some(i) = html.find("<pre class=\"rust item-decl\">") {
+        let decl = &html[i..];
+        let end = decl.find("</pre>").unwrap_or(decl.len());
+        keys.push(("item-decl".to_string(), plain(&decl[..end])));
+    }
+    let mut at = 0;
+    while let Some(found) = html[at..].find(" id=\"") {
+        let start = at + found;
+        at = start + 5;
+        let id = html[at..].split('"').next().unwrap().to_string();
+        if id == "notable-traits-data" {
+            continue;
+        }
+        let open = html[..start].rfind('<').unwrap();
+        let tag: String = html[open + 1..start]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect();
+        let body_start = start + html[start..].find('>').map(|i| i + 1).unwrap_or(0);
+        // An item's anchor (`method.x`, `structfield.x`, `variant.X`, `reexport.X`, `impl-..`)
+        // keeps what it renders; the page's frame (`main-content`, the contents, a section's
+        // heading) is a key alone, its prose and its lists not being declarations.
+        let item = id.contains('.') || id.starts_with("impl-");
+        let text = match tag.as_str() {
+            "section" | "span" | "dt" | "h3" | "h4" if item => {
+                let close = format!("</{tag}>");
+                let body = &html[body_start..];
+                plain(&body[..body.find(&close).unwrap_or(body.len())])
+            }
+            _ => String::new(),
+        };
+        keys.push((id, text));
+    }
+    // A module's table: each row by the page it points to, resolved from the module's folder.
+    let mut at = 0;
+    while let Some(found) = html[at..].find("<dt><a ") {
+        let start = at + found;
+        let row = &html[start..];
+        let end = row.find("</dt>").unwrap_or(row.len());
+        at = start + end;
+        let Some(h) = row[..end].find("href=\"") else {
+            continue;
+        };
+        let href = row[h + 6..].split('"').next().unwrap();
+        if href.contains("://") {
+            continue;
+        }
+        let mut parts: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
+        for seg in href.split('/') {
+            match seg {
+                ".." => {
+                    parts.pop();
+                }
+                "." | "" => {}
+                other => parts.push(other),
+            }
+        }
+        keys.push((format!("row:{}", parts.join("/")), plain(&row[..end])));
+    }
+    keys
+}
+
+/// Rustdoc's view of one form of core, with private items or without them: every page and every
+/// key a page shows ([`page_view`]), as `page` and `page#key`, each with what it renders.
+/// `all.html` is kept as a page only: its sections mirror the pages.
+fn rustdoc_view(features: &[&str], private: bool) -> BTreeMap<String, String> {
     let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("features-check");
     let docs = target.join("doc").join("veredas_core");
     let _ = std::fs::remove_dir_all(&docs);
@@ -451,13 +550,15 @@ fn rustdoc_view(features: &[&str]) -> BTreeSet<String> {
         "veredas-core",
         "--no-deps",
         "--lib",
-        "--document-private-items",
         "--offline",
         "--quiet",
         "--no-default-features",
         "--manifest-path",
         m.to_str().unwrap(),
     ];
+    if private {
+        args.push("--document-private-items");
+    }
     if !features.is_empty() {
         args.extend(["--features", list.as_str()]);
     }
@@ -471,7 +572,7 @@ fn rustdoc_view(features: &[&str]) -> BTreeSet<String> {
         "cargo {args:?}: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let mut found = BTreeSet::new();
+    let mut found = BTreeMap::new();
     let mut dirs = vec![docs.clone()];
     while let Some(d) = dirs.pop() {
         for e in std::fs::read_dir(&d).unwrap() {
@@ -489,35 +590,63 @@ fn rustdoc_view(features: &[&str]) -> BTreeSet<String> {
                 .to_string_lossy()
                 .replace('\\', "/");
             if rel != "all.html" {
+                let dir = rel.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
                 let html = std::fs::read_to_string(&p).unwrap();
-                // The blanket impls, the page's last section, are every crate's impls for every
-                // type, not core's: which of them show depends on the crates in the graph.
-                let html = match html.find("id=\"blanket-implementations\"") {
-                    Some(i) => &html[..i],
-                    None => &html[..],
-                };
-                for part in html.split(" id=\"").skip(1) {
-                    let id = part.split('"').next().unwrap();
-                    // The tooltips of notable traits: rustdoc's data, not an item.
-                    if id != "notable-traits-data" {
-                        found.insert(format!("{rel}#{id}"));
-                    }
+                for (key, text) in page_view(dir, &html) {
+                    found.insert(format!("{rel}#{key}"), text);
                 }
             }
-            found.insert(rel);
+            found.insert(rel, String::new());
         }
     }
     found
 }
 
-/// The compiler's own view of every form core can be asked for: rustdoc's pages of core and the
-/// anchors on them, private items included, built once for each of the twelve forms (the slim
-/// form, `net`, `net` with the demo plant, each with or without each master). Adding a feature to
-/// any form only adds, and only where that feature's layer lies: `net` under its four modules and
-/// the crate root's re-exports of them, the demo plant under `opc::demo`, each master under its own
-/// module and its line in `fieldbus`. However a gate is written (a comment inside it, a line break,
-/// a macro, an `include!`d file, a `#[path]` module, a cfg a build script sets), an item behind a
-/// feature other than its own's shows here as an anchor on the wrong side of some step.
+/// The paths a consumer names for every public item a view shows: each item's page
+/// (`opc/struct.Browser.html` is `opc::Browser`), each module's, and each re-export's line.
+fn public_paths(view: &BTreeMap<String, String>) -> BTreeSet<String> {
+    let mut paths = BTreeSet::new();
+    for key in view.keys() {
+        let (page, anchor) = key.split_once('#').unwrap_or((key.as_str(), ""));
+        let (dir, file) = page.rsplit_once('/').unwrap_or(("", page));
+        let module: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
+        let name = if file == "index.html" {
+            match anchor.strip_prefix("reexport.") {
+                Some(n) => Some(n),
+                None if anchor.is_empty() => None,
+                None => continue,
+            }
+        } else if anchor.is_empty() && file != "all.html" {
+            file.strip_suffix(".html")
+                .and_then(|f| f.split_once('.'))
+                .map(|(_, n)| n)
+        } else {
+            continue;
+        };
+        let mut path = module.clone();
+        if let Some(n) = name {
+            path.push(n);
+        }
+        if !path.is_empty() {
+            paths.insert(path.join("::"));
+        }
+    }
+    paths
+}
+
+/// The compiler's own view of every form core can be asked for, built for each of the twelve
+/// forms (the plant-facing layer off, on, or on with the demo plant; each master off or on):
+/// rustdoc's pages of core with private items and without them, and a consumer crate of the
+/// test's own naming every public path the form's view shows, checked by cargo against that form
+/// alone, so rustdoc's view is the build's (rustdoc sets `cfg(doc)`, a build does not). Adding a
+/// feature to any form keeps every key of the smaller form, rendered the same (an item's
+/// declaration, a header, a field's type, a row's visibility), and adds only where that feature's
+/// layer lies: `net` under its four modules and the crate root's re-exports of them and rows to
+/// them, the demo plant under `opc::demo` and its row, each master under its module and its line in
+/// `fieldbus`. However an item's gate is written (a comment inside it, a line break, a macro, an
+/// `include!`d file, a `#[path]` module, a cfg a build script sets), an item behind a feature
+/// other than its own's shows as a key on the wrong side of some step, or as a path a form's
+/// consumer cannot name.
 #[test]
 fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
     const NET_ROOT: &[&str] = &[
@@ -539,23 +668,29 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
         "fieldbus/index.html#modules",
         "fieldbus/index.html#rustdoc-toc",
     ];
-    let belongs = |feature: &str, entry: &str| -> bool {
+    let layer = |feature: &str, path: &str| -> bool {
         match feature {
             "net" => {
-                (["types/", "source/", "telegram/", "opc/"]
+                ["types/", "source/", "telegram/", "opc/"]
                     .iter()
-                    .any(|d| entry.starts_with(d))
-                    && !entry.starts_with("opc/demo/"))
-                    || NET_ROOT.contains(&entry)
+                    .any(|d| path.starts_with(d))
+                    && !path.starts_with("opc/demo/")
             }
-            "demo-server" => entry.starts_with("opc/demo/"),
-            "modbus" => entry.starts_with("fieldbus/modbus/") || FIELDBUS_LINE.contains(&entry),
-            "enip" => entry.starts_with("fieldbus/enip/") || FIELDBUS_LINE.contains(&entry),
+            "demo-server" => path.starts_with("opc/demo/"),
+            "modbus" => path.starts_with("fieldbus/modbus/"),
+            "enip" => path.starts_with("fieldbus/enip/"),
             other => panic!("{other}"),
         }
     };
-    // The twelve forms: the plant-facing layer off, on, or on with the demo plant; each master
-    // off or on.
+    let belongs = |feature: &str, entry: &str| -> bool {
+        if let Some((_, row)) = entry.split_once("#row:") {
+            return layer(feature, row);
+        }
+        layer(feature, entry)
+            || (feature == "net" && NET_ROOT.contains(&entry))
+            || (matches!(feature, "modbus" | "enip") && FIELDBUS_LINE.contains(&entry))
+    };
+    // The twelve forms.
     let mut forms: Vec<Vec<&str>> = Vec::new();
     for net in [&[][..], &["net"][..], &["net", "demo-server"][..]] {
         for modbus in [&[][..], &["modbus"][..]] {
@@ -564,50 +699,114 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
             }
         }
     }
-    let views: Vec<BTreeSet<String>> = forms.iter().map(|f| rustdoc_view(f)).collect();
-    // Every step from one form to the same form with one feature more.
-    let mut steps = 0;
-    for (a, base) in forms.iter().enumerate() {
-        for (b, more) in forms.iter().enumerate() {
-            let added: Vec<&&str> = more.iter().filter(|f| !base.contains(f)).collect();
-            let step = match added.as_slice() {
-                [f] if base.iter().all(|x| more.contains(x)) => **f,
-                _ => continue,
-            };
-            steps += 1;
-            let lost: Vec<&String> = views[a].difference(&views[b]).collect();
-            assert!(lost.is_empty(), "{base:?} + {step} loses {lost:?}");
-            let gained: Vec<&String> = views[b].difference(&views[a]).collect();
-            assert!(!gained.is_empty(), "{base:?} + {step} adds nothing");
-            let astray: Vec<&&String> = gained.iter().filter(|e| !belongs(step, e)).collect();
+    for private in [true, false] {
+        let views: Vec<BTreeMap<String, String>> =
+            forms.iter().map(|f| rustdoc_view(f, private)).collect();
+        // Every step from one form to the same form with one feature more.
+        let mut steps = 0;
+        for (a, base) in forms.iter().enumerate() {
+            for (b, more) in forms.iter().enumerate() {
+                let added: Vec<&&str> = more.iter().filter(|f| !base.contains(f)).collect();
+                let step = match added.as_slice() {
+                    [f] if base.iter().all(|x| more.contains(x)) => **f,
+                    _ => continue,
+                };
+                steps += 1;
+                let changed: Vec<String> = views[a]
+                    .iter()
+                    .filter(|(k, v)| views[b].get(*k) != Some(v))
+                    .map(|(k, v)| format!("{k} = {v:?} -> {:?}", views[b].get(k)))
+                    .collect();
+                assert!(
+                    changed.is_empty(),
+                    "{base:?} + {step} (private items {private}) loses or changes {changed:?}"
+                );
+                let gained: Vec<&String> = views[b]
+                    .keys()
+                    .filter(|k| !views[a].contains_key(*k))
+                    .collect();
+                assert!(!gained.is_empty(), "{base:?} + {step} adds nothing");
+                let astray: Vec<&&String> = gained.iter().filter(|e| !belongs(step, e)).collect();
+                assert!(
+                    astray.is_empty(),
+                    "{base:?} + {step} (private items {private}) adds outside its layer: {astray:?}"
+                );
+            }
+        }
+        assert_eq!(
+            steps, 20,
+            "four steps of net, four of the demo plant, six of each master"
+        );
+        for page in [
+            "schema/index.html",
+            "rng/index.html",
+            "state/index.html",
+            "fieldbus/index.html",
+        ] {
             assert!(
-                astray.is_empty(),
-                "{base:?} + {step} adds outside its layer: {astray:?}"
+                views[0].contains_key(page),
+                "{page} missing from the slim form"
             );
         }
-    }
-    assert_eq!(
-        steps, 20,
-        "four steps of net, four of the demo plant, six of each master"
-    );
-    // The slim form is the header reader, the PCG32, the state text and the fieldbus module; the
-    // plant-facing layer brings the OPC UA client and the telegram.
-    for page in [
-        "schema/index.html",
-        "rng/index.html",
-        "state/index.html",
-        "fieldbus/index.html",
-    ] {
-        assert!(views[0].contains(page), "{page} missing from the slim form");
-    }
-    for page in [
-        "opc/index.html",
-        "telegram/index.html",
-        "opc/struct.StatusCode.html",
-    ] {
-        assert!(
-            !views[0].contains(page) && views[4].contains(page),
-            "{page}: the plant-facing layer's"
-        );
+        for page in [
+            "opc/index.html",
+            "telegram/index.html",
+            "opc/struct.StatusCode.html",
+        ] {
+            assert!(
+                !views[0].contains_key(page) && views[4].contains_key(page),
+                "{page}: the plant-facing layer's"
+            );
+        }
+        if private {
+            continue;
+        }
+        // Each form's consumer names every public path its view shows, checked against that form.
+        let core = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("form-consumers");
+        for (n, (form, view)) in forms.iter().zip(&views).enumerate() {
+            let paths = public_paths(view);
+            assert!(paths.contains("schema::stamp") && paths.contains("state::ControllerState"));
+            let root = base.join(format!("view-{n}"));
+            std::fs::create_dir_all(root.join("src")).unwrap();
+            let features: Vec<String> = form.iter().map(|f| format!("{f:?}")).collect();
+            std::fs::write(
+                root.join("Cargo.toml"),
+                format!(
+                    "[package]\nname = \"view-{n}\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n\
+                     [workspace]\n\n[dependencies]\nveredas-core = {{ path = {:?}, default-features = false, features = [{}] }}\n",
+                    core.to_str().unwrap(),
+                    features.join(", ")
+                ),
+            )
+            .unwrap();
+            std::fs::copy(core.join("../../Cargo.lock"), root.join("Cargo.lock")).unwrap();
+            let uses: Vec<String> = paths
+                .iter()
+                .map(|p| format!("use veredas_core::{p} as _;"))
+                .collect();
+            std::fs::write(
+                root.join("src/main.rs"),
+                format!(
+                    "#![allow(unused_imports)]\n{}\nfn main() {{}}\n",
+                    uses.join("\n")
+                ),
+            )
+            .unwrap();
+            let out = Command::new(env!("CARGO"))
+                .args(["check", "--offline", "--quiet", "--manifest-path"])
+                .arg(root.join("Cargo.toml"))
+                .env(
+                    "CARGO_TARGET_DIR",
+                    Path::new(env!("CARGO_TARGET_TMPDIR")).join("features-check"),
+                )
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "the consumer of {form:?} cannot name what its view shows: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
     }
 }
