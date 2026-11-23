@@ -343,9 +343,12 @@ fn a_timer_started_off_the_cycle_grid_times_from_the_scan_s_time() {
 fn a_preset_time_of_zero_switches_on_the_same_scan() {
     let mut on = Ton::default();
     assert!(on.scan(&at(0), true, ms(0)), "on the first scan its input is on");
+    assert_eq!((on.q(), on.et()), (true, ms(0)));
     let mut off = Tof::default();
     assert!(off.scan(&at(0), true, ms(0)));
     assert!(!off.scan(&at(10), false, ms(0)), "off on the scan of the drop");
+    assert_eq!((off.q(), off.et()), (false, ms(0)));
+    assert!(!off.scan(&at(20), false, ms(100)), "and off still when its pt is raised, its input off");
 }
 
 #[test]
@@ -417,7 +420,9 @@ fn a_reset_released_with_the_input_low_counts_the_next_rising_edge() {
 
 #[test]
 fn a_pulse_at_a_preset_time_of_zero_and_an_edge_on_the_scan_its_pulse_ends() {
-    assert!(!Tp::default().scan(&at(0), true, ms(0)), "a pulse of zero length is off at once");
+    let mut zero = Tp::default();
+    assert!(!zero.scan(&at(0), true, ms(0)), "a pulse of zero length is off at once");
+    assert_eq!((zero.q(), zero.et()), (false, ms(0)));
     let pt = ms(100);
     let mut pulse = Tp::default();
     assert!(pulse.scan(&at(0), true, pt));
@@ -1069,7 +1074,11 @@ fn every_timer_at_the_longest_preset_time_waits_to_the_end_of_time_and_panics_no
 fn every_timer_is_judged_on_each_scan_against_that_scan_s_preset_time() {
     // an on-delay started at 0
     let mut on = Ton::default();
-    let mut ton = |t: u64, pt: u64| (on.scan(&at(t), true, ms(pt)), on.et());
+    let mut ton = |t: u64, pt: u64| {
+        let q = on.scan(&at(t), true, ms(pt));
+        assert_eq!(on.q(), q, "q() at {t} ms");
+        (q, on.et())
+    };
     assert_eq!(ton(0, 100), (false, ms(0)));
     assert_eq!(ton(50, 40), (true, ms(40)), "pt lowered below the elapsed time: on at once, et at the new pt");
     assert_eq!(ton(60, 100), (false, ms(60)), "pt raised past it: off again");
@@ -1080,17 +1089,26 @@ fn every_timer_is_judged_on_each_scan_against_that_scan_s_preset_time() {
     assert_eq!(ton(200, 200), (true, ms(200)));
     // an off-delay dropped at 10 ms
     let mut off = Tof::default();
-    let mut tof = |t: u64, input: bool, pt: u64| (off.scan(&at(t), input, ms(pt)), off.et());
+    let mut tof = |t: u64, input: bool, pt: u64| {
+        let q = off.scan(&at(t), input, ms(pt));
+        assert_eq!(off.q(), q, "q() at {t} ms");
+        (q, off.et())
+    };
     assert_eq!(tof(0, true, 100), (true, ms(0)));
     assert_eq!(tof(10, false, 100), (true, ms(0)));
     assert_eq!(tof(60, false, 200), (true, ms(50)), "pt raised: still on");
     assert_eq!(tof(120, false, 200), (true, ms(110)), "past the old pt: still on");
     assert_eq!(tof(130, false, 100), (false, ms(100)), "pt lowered below the elapsed time: off at once, et at the new pt");
     assert_eq!(tof(135, false, 50), (false, ms(100)), "once off, lowered: its elapsed time held at the pt it switched off at");
-    assert_eq!(tof(140, false, 300), (false, ms(100)), "once off, raised: held at it all the same");
+    assert_eq!(tof(137, false, 110), (false, ms(100)), "once off, raised below the time since its drop: held");
+    assert_eq!(tof(140, false, 300), (false, ms(100)), "once off, raised past it: held at it all the same");
     // a pulse from an edge at 0, its input held on
     let mut pulse = Tp::default();
-    let mut tp = |t: u64, input: bool, pt: u64| (pulse.scan(&at(t), input, ms(pt)), pulse.et());
+    let mut tp = |t: u64, input: bool, pt: u64| {
+        let q = pulse.scan(&at(t), input, ms(pt));
+        assert_eq!(pulse.q(), q, "q() at {t} ms");
+        (q, pulse.et())
+    };
     assert_eq!(tp(0, true, 100), (true, ms(0)));
     assert_eq!(tp(50, true, 40), (false, ms(40)), "pt lowered below the elapsed time: over at once");
     assert_eq!(tp(60, true, 100), (true, ms(60)), "raised past it, the input still on: on again (Q229)");
@@ -1100,6 +1118,18 @@ fn every_timer_is_judged_on_each_scan_against_that_scan_s_preset_time() {
     assert_eq!(tp(150, true, 200), (true, ms(150)), "raised after the pulse, the input on: on again, no new edge (Q229)");
     assert_eq!(tp(160, false, 200), (true, ms(160)), "its input off: on to the raised pt");
     assert_eq!(tp(200, false, 200), (false, ms(0)), "over, its input off: reset");
+    // a pt lowered to zero: an on-delay mid-delay on at once, a pulse mid-pulse over, each elapsed time at zero; an
+    // off-delay dropped at a zero pt off at once, and off still when its pt is raised again, its input off
+    let mut on = Ton::default();
+    on.scan(&at(0), true, ms(100));
+    assert_eq!((on.scan(&at(50), true, ms(0)), on.q(), on.et()), (true, true, ms(0)));
+    let mut pulse = Tp::default();
+    pulse.scan(&at(0), true, ms(100));
+    assert_eq!((pulse.scan(&at(50), true, ms(0)), pulse.q(), pulse.et()), (false, false, ms(0)));
+    let mut off = Tof::default();
+    off.scan(&at(0), true, ms(100));
+    assert_eq!((off.scan(&at(10), false, ms(0)), off.q(), off.et()), (false, false, ms(0)));
+    assert_eq!((off.scan(&at(20), false, ms(100)), off.q(), off.et()), (false, false, ms(0)), "off it stays");
 }
 
 #[test]
@@ -1117,4 +1147,23 @@ fn every_timer_started_after_zero_at_the_longest_preset_time_panics_none_at_the_
     let mut pulse = Tp::default();
     pulse.scan(&at(1), true, longest);
     assert_eq!((pulse.scan(&end, true, longest), pulse.et()), (true, almost));
+}
+
+// The fourteenth refute round: the counter at its top on the build programs link, where `no_std` leaves out the
+// standard prelude the unit tests' build has, so a name could resolve differently there. Counting to the top takes
+// 2^31 rising edges: 23 s in a debug build, under a second in release, which C-150's command runs.
+
+#[test]
+#[ignore = "2^31 rising edges: run in release by C-150's command"]
+fn the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link() {
+    let mut c = Ctu::default();
+    let mut q = false;
+    for _ in 0..i32::MAX {
+        c.scan(false, false, i32::MAX);
+        q = c.scan(true, false, i32::MAX);
+    }
+    assert_eq!((c.cv(), q), (i32::MAX, true), "i32::MAX edges count to the top, on at a preset of it");
+    c.scan(false, false, i32::MAX);
+    assert!(c.scan(true, false, i32::MAX), "one edge more at the top");
+    assert_eq!(c.cv(), i32::MAX, "saturating, never overflowing");
 }
