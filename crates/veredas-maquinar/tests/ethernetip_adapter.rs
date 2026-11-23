@@ -823,7 +823,10 @@ fn tshark() -> PathBuf {
 
 /// Every packet's layers as the dissectors read them (`-T ek`).
 fn dissect(frames: &[Vec<u8>]) -> Vec<Json> {
-    let dir = std::env::temp_dir().join(format!("veredas-enip-dissect-{}", std::process::id()));
+    // A folder of each call's own: tests run as threads of one process under `cargo test`.
+    static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("veredas-enip-dissect-{}-{call}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("conversation.pcap");
     let mut pcap = Vec::new();
