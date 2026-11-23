@@ -78,6 +78,11 @@ impl EtherFrame<'_> {
     pub fn is_length(&self) -> bool {
         self.ethertype <= MAX_LENGTH
     }
+
+    /// The type field is an EtherType (0x0600 and up).
+    pub fn is_ethertype(&self) -> bool {
+        self.ethertype >= MIN_ETHERTYPE
+    }
 }
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
@@ -90,11 +95,15 @@ pub enum EtherError {
     BadPriority(u8),
     #[error("a VLAN id written is 0 to 4094 (4095 is reserved), not {0}")]
     BadVlanId(u16),
+    #[error("a frame's source is one station; {0} is a group address (IEEE 802.3, 3.2.3)")]
+    GroupSource(Mac),
     #[error("{0:#06x} is not an EtherType this envelope writes (below 0x0600 is an 802.3 length or nothing; 0x8100, 0x88A8 and 0x9100 are read as tags)")]
     NotEtherType(u16),
 }
 
-/// Open the envelope. The payload is everything after the EtherType, pad included.
+/// Open the envelope. The payload is everything after the EtherType, pad included. One 802.1Q tag
+/// (0x8100) is read as the tag; a second one, or a tag of 802.1ad (0x88A8) or of 0x9100, is not:
+/// its type is the frame's type and its tag field the payload's first two bytes.
 pub fn parse(bytes: &[u8]) -> Result<EtherFrame<'_>, EtherError> {
     if bytes.len() < 14 {
         return Err(EtherError::TooShort(bytes.len()));
@@ -120,7 +129,8 @@ pub fn build(dst: Mac, src: Mac, ethertype: u16, payload: &[u8]) -> Result<Vec<u
     build_tagged(dst, src, None, ethertype, payload)
 }
 
-/// A frame with an optional 802.1Q tag, padded to 60 bytes. A payload past 1500 bytes, a
+/// A frame with an optional 802.1Q tag, padded to 60 bytes. A source that is a group address, a
+/// payload past 1500 bytes, a
 /// priority past 7, a VLAN id past 4094 (4095 is reserved), or a type that is not an EtherType
 /// (below 0x0600, or a type readers take for a tag: 0x8100, 0x88A8, 0x9100) is refused, never cut
 /// or misread.
@@ -131,6 +141,9 @@ pub fn build_tagged(
     ethertype: u16,
     payload: &[u8],
 ) -> Result<Vec<u8>, EtherError> {
+    if src.is_multicast() {
+        return Err(EtherError::GroupSource(src));
+    }
     if payload.len() > MAX_PAYLOAD {
         return Err(EtherError::TooLong(payload.len()));
     }

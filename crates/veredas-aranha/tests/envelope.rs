@@ -19,6 +19,9 @@ fn a_mac_reads_its_three_spellings_in_either_case_and_prints_one() {
         assert_eq!(s.parse::<Mac>(), Ok(m), "{s}");
     }
     assert_eq!(m.to_string(), "02:0e:cf:12:34:56");
+    // Every hex letter, in upper case and in lower.
+    assert_eq!("AB:CD:EF:AB:CD:EF".parse::<Mac>(), Ok(Mac([0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0xEF])));
+    assert_eq!("abcd.efAB.CDEF".parse::<Mac>(), Ok(Mac([0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0xEF])));
     assert_eq!(format!("{m:?}"), "Mac(02:0e:cf:12:34:56)");
     assert_eq!(m.oui(), [0x02, 0x0e, 0xcf]);
     assert!(!m.is_multicast());
@@ -35,7 +38,7 @@ fn a_mac_reads_its_three_spellings_in_either_case_and_prints_one() {
 }
 
 /// Texts that are none of the three spellings.
-const REFUSED: [&str; 23] = [
+const REFUSED: [&str; 25] = [
         "",
         "02:0e:cf:12:34",
         "02:0e:cf:12:34:56:78",
@@ -48,6 +51,8 @@ const REFUSED: [&str; 23] = [
         "02:0e:cf:12:34:5g",
         " 02:0e:cf:12:34:56",
         "02:0e:cf:12:34:56 ",
+        "02:0e:cf:12:34:56\n",
+        "\t02:0e:cf:12:34:56",
         "02:0e:cf:12:34:56:",
         "aa.bb.cc.dd.ee.ff",
         "aabb:ccdd:eeff",
@@ -92,6 +97,10 @@ fn a_mac_serialises_as_its_printed_form() {
     let m = mac("02:0e:cf:12:34:56");
     assert_eq!(serde_json::to_string(&m).unwrap(), "\"02:0e:cf:12:34:56\"");
     assert_eq!(serde_json::from_str::<Mac>("\"02-0E-CF-12-34-56\"").unwrap(), m);
+    // Read from an owned value, from a reader, and through an escape: the text, however it came.
+    assert_eq!(serde_json::from_value::<Mac>(serde_json::json!("02:0e:cf:12:34:56")).unwrap(), m);
+    assert_eq!(serde_json::from_reader::<_, Mac>(&b"\"02:0e:cf:12:34:56\""[..]).unwrap(), m);
+    assert_eq!(serde_json::from_str::<Mac>("\"02\\u003a0e:cf:12:34:56\"").unwrap(), m);
     let err = serde_json::from_str::<Mac>("\"02:0e\"").unwrap_err().to_string();
     assert!(err.starts_with("not a MAC address: \"02:0e\""), "{err}");
     // Read through serde, every refused text is refused as it was given, untrimmed.
@@ -143,6 +152,11 @@ fn a_tagged_frame_carries_its_priority_drop_bit_and_vlan() {
     let f = ether::build_tagged(dst, src, Some(drop_only), 0x0800, &[]).unwrap();
     assert_eq!(&f[14..16], &[0x10, 0x05]);
     assert_eq!(ether::parse(&f).unwrap().vlan, Some(drop_only));
+    // A tag of nothing (priority 0, VLAN 0) is a tag all the same, written and read.
+    let nothing = VlanTag { priority: 0, drop_eligible: false, id: 0 };
+    let f = ether::build_tagged(dst, src, Some(nothing), 0x8892, &[0x80, 0x00]).unwrap();
+    assert_eq!(&f[12..18], &[0x81, 0x00, 0x00, 0x00, 0x88, 0x92]);
+    assert_eq!(ether::parse(&f).unwrap().vlan, Some(nothing));
     let low_priority = VlanTag { priority: 1, drop_eligible: false, id: 5 };
     let f = ether::build_tagged(dst, src, Some(low_priority), 0x0800, &[]).unwrap();
     assert_eq!(&f[14..16], &[0x20, 0x05]);
@@ -186,6 +200,21 @@ fn what_the_wire_cannot_carry_is_refused_never_cut() {
     assert_eq!(ether::TAG_TYPES, [0x8100, 0x88A8, 0x9100]);
     assert!(ether::build(dst, src, 0x88A9, &[]).is_ok() && ether::build(dst, src, 0x9101, &[]).is_ok());
     assert_eq!(ether::build_tagged(dst, src, tag(8, 0), 0x8892, &[]), Err(EtherError::BadPriority(8)));
+    assert_eq!(EtherError::BadPriority(8).to_string(), "a VLAN priority is 0 to 7, not 8");
+    // A source is one station: a group address there is refused, tagged or not (Wireshark warns of
+    // it, after IEEE 802.3).
+    for group in [Mac::BROADCAST, Mac::DCP_MULTICAST, Mac([0x03, 0, 0, 0, 0, 2])] {
+        assert_eq!(ether::build(dst, group, 0x8892, &[1]), Err(EtherError::GroupSource(group)), "{group}");
+        assert_eq!(ether::build_tagged(dst, group, tag(6, 0), 0x8892, &[1]), Err(EtherError::GroupSource(group)), "{group}");
+    }
+    assert_eq!(
+        EtherError::GroupSource(Mac::BROADCAST).to_string(),
+        "a frame's source is one station; ff:ff:ff:ff:ff:ff is a group address (IEEE 802.3, 3.2.3)"
+    );
+    // Heard, such a frame is read as it is, for the scanner to see.
+    let mut heard = ether::build(dst, src, 0x8892, &[1]).unwrap();
+    heard[6] = 0xFF;
+    assert_eq!(ether::parse(&heard).unwrap().src, Mac([0xFF, 0, 0, 0, 0, 2]));
     assert_eq!(ether::build_tagged(dst, src, tag(0, 4096), 0x8892, &[]), Err(EtherError::BadVlanId(4096)));
     assert_eq!(EtherError::BadVlanId(4095).to_string(), "a VLAN id written is 0 to 4094 (4095 is reserved), not 4095");
     assert_eq!(EtherError::TooLong(1501).to_string(), "a payload of 1501 bytes is past Ethernet's 1500");
@@ -206,6 +235,7 @@ fn a_length_field_is_read_as_a_length_never_as_an_ethertype() {
     // At the boundaries, tagged and not: up to 0x05DC a length, from 0x0600 an EtherType, between
     // them neither; the payload whole, to the end.
     for (t, length) in [(0x05FFu16, false), (0x05DD, false), (0x05DC, true), (0x0000, true), (0x0600, false), (0x0800, false), (0x86DD, false)] {
+        let ethertype = t >= 0x0600;
         let mut untagged = vec![2, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 2];
         untagged.extend_from_slice(&t.to_be_bytes());
         untagged.resize(60, 0);
@@ -214,7 +244,7 @@ fn a_length_field_is_read_as_a_length_never_as_an_ethertype() {
         tagged.resize(60, 0);
         for f in [&untagged, &tagged] {
             let e = ether::parse(f).unwrap();
-            assert_eq!((e.ethertype, e.is_length()), (t, length), "{t:#06x} {:?}", e.vlan);
+            assert_eq!((e.ethertype, e.is_length(), e.is_ethertype()), (t, length, ethertype), "{t:#06x} {:?}", e.vlan);
             assert_eq!(e.payload, &f[if e.vlan.is_some() { 18 } else { 14 }..], "{t:#06x}");
         }
     }
@@ -293,4 +323,20 @@ fn the_dissectors_read_the_envelope_as_it_was_written() {
     assert_eq!(read[6].one("pn_dcp", "pn_dcp.service_id"), "5");
     assert_eq!((read[7].one("vlan", "vlan.priority"), read[7].one("vlan", "vlan.id"), read[7].one("vlan", "vlan.etype")), ("7".into(), "9".into(), "35020".into()));
     assert!(read[7].has("lldp"));
+}
+
+#[test]
+fn a_tag_of_another_type_is_read_as_the_frame_s_type() {
+    // One 802.1Q tag (0x8100) is read as the tag; an 802.1ad tag (0x88A8) or one of 0x9100 is not
+    // (Wireshark reads both as tags): its type is the frame's type, its tag field the payload's
+    // first two bytes. They are what this envelope never writes as a frame's type.
+    for tpid in [0x88A8u16, 0x9100] {
+        let mut f = vec![2, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 2];
+        f.extend_from_slice(&tpid.to_be_bytes());
+        f.extend_from_slice(&[0xC0, 0x05, 0x88, 0x92, 0xFE, 0xFE]);
+        f.resize(60, 0);
+        let e = ether::parse(&f).unwrap();
+        assert_eq!((e.vlan, e.ethertype, &e.payload[..4]), (None, tpid, &[0xC0, 0x05, 0x88, 0x92][..]), "{tpid:#06x}");
+        assert!(e.is_ethertype());
+    }
 }

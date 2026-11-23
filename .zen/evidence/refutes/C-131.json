@@ -1,13 +1,13 @@
 {
   "clause": "C-131",
   "verdict": "refuted",
-  "ranAt": "2026-11-23T00:38:27.821Z",
-  "headCommit": "5970d1ea8b19d72022005f1c46d279b7caaec5a1",
+  "ranAt": "2026-11-23T05:59:11.122Z",
+  "headCommit": "d0f723cae1c09cf03e2b6a521619724189be65f4",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/envelope.rs",
       "file": "crates/veredas-aranha/tests/envelope.rs",
-      "symbolSha": "e72c1e739844ef104fc2356c56ae610c576cb77fc9b6e109e4354c65da8a4a67"
+      "symbolSha": "5bacd8f98444dcbf0a56325bdd96396ff51aae5823e2207cf19bb559ca74d7f5"
     },
     {
       "name": "crates/veredas-aranha/tests/common/mod.rs",
