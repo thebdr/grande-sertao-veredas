@@ -39,6 +39,8 @@ pub(crate) struct XmlAttribute {
 pub(crate) struct XmlNode {
     /// The local name, without the prefix.
     name: String,
+    /// The element's namespace, its prefix's or the default one in scope; `None` in none.
+    namespace: Option<String>,
     attributes: Vec<XmlAttribute>,
     /// The text directly inside the element, character data and CDATA
     /// sections joined. Empty if there is none.
@@ -125,6 +127,21 @@ impl XmlNode {
     /// The first child element with the local name `name`.
     pub(crate) fn child(&self, name: &str) -> Option<&XmlNode> {
         self.children.iter().find(|n| n.has_tag_name(name))
+    }
+
+    /// Whether the element is SpreadsheetML's: in its namespace, transitional or strict, under any
+    /// prefix, or in none (a writer that declares no namespace).
+    pub(crate) fn is_main(&self) -> bool {
+        matches!(
+            self.namespace.as_deref(),
+            None | Some("http://schemas.openxmlformats.org/spreadsheetml/2006/main" | "http://purl.oclc.org/ooxml/spreadsheetml/main")
+        )
+    }
+
+    /// The child elements named `name` in SpreadsheetML's namespace (Veredas fork change 28): an
+    /// element of another namespace, or one deeper (inside an extension), is none of them.
+    pub(crate) fn main_children<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a XmlNode> {
+        self.children.iter().filter(move |n| n.has_tag_name(name) && n.is_main())
     }
 }
 
@@ -253,6 +270,10 @@ impl XmlTreeBuilder {
                 attributes.push(attribute);
             }
         }
+        // the element's own namespace, its declarations above (its own included) in scope
+        let prefix = element.name().prefix().map(|p| p.as_ref().to_string()).unwrap_or_default();
+        let element_namespace =
+            self.namespaces.iter().rev().find(|(_, p, _)| *p == prefix).map(|(_, _, namespace)| namespace.clone()).filter(|n| !n.is_empty());
         let attributes = attributes
             .into_iter()
             .map(|attribute| {
@@ -276,6 +297,7 @@ impl XmlTreeBuilder {
             .collect::<Result<Vec<_>, XlsxError>>()?;
         Ok(XmlNode {
             name,
+            namespace: element_namespace,
             attributes,
             text: String::new(),
             has_text: false,
