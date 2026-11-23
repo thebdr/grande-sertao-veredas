@@ -38,7 +38,8 @@ const AUX: &str = "\n[[opc]]\nname = \"aux\"\nport = 0\ntags = [\n  { id = \"hol
 
 /// The example with outlet 3 offering two writes no test meets by accident: a release of 7 to the
 /// controller it reads, and a hold of 3 to `aux`, a source it does not read; outlet 2 one write to
-/// `aux` under outlet 3's first label, and the infeed three.
+/// `aux` under outlet 3's first label, and the infeed three; an object the layout does not draw
+/// offering one, and a keyed marker offering one.
 fn with_aux(mut ex: Example, bench: &Bench) -> Example {
     let aux = bench.server("aux").unwrap();
     ex.project.push_str(&format!(
@@ -63,6 +64,16 @@ fn with_aux(mut ex: Example, bench: &Bench) -> Example {
         aux_ns = aux.namespace
     );
     ex.binding = ex.binding.replacen("id = \"infeed\"\n", &format!("id = \"infeed\"\n{three}\n"), 1);
+    // An object the layout does not draw, offering a write, out of normal (`fill2`, 85, above 50):
+    // selected from the attention list alone. And a keyed marker offering one, each key a clone the
+    // page draws, selected by its key.
+    let more = format!(
+        "\n[[object]]\nid = \"aux-only\"\nlabel = \"Aux only\"\nvalue = {{ source = \"plc\", series = \"fill2\" }}\nstates = [ {{ above = 50, state = \"warn\", word = \"high\" }} ]\nactions = [ {{ label = \"Nudge\", source = \"plc\", tag = \"ns={plc};s=release3\", value = \"4\" }} ]\n\n[[object]]\nid = \"tracked\"\nlabel = \"Tracked\"\nvalue = {{ source = \"sorter\", series = \"at\" }}\nshow = \"move\"\npath = \"loop\"\nactions = [ {{ label = \"Mark\", source = \"plc\", tag = \"ns={plc};s=release3\", value = \"8\" }} ]\n\n[[dashboard]]"
+    );
+    ex.binding = ex.binding.replacen("\n[[dashboard]]", &more, 1);
+    ex.project.push_str("\n[[rule]]\nname = \"positions\"\npattern = 'POS item=(?P<item>\\w+) at=(?P<at>[0-9.]+)'\nscope = \"sorter\"\ntypes = { at = \"float\" }\nkey = \"item\"\n");
+    assert!(ex.svg.contains("<circle id=\"parcel-2\" r=\"5\"/>"), "{}", ex.svg);
+    ex.svg = ex.svg.replace("<circle id=\"parcel-2\" r=\"5\"/>", "<circle id=\"parcel-2\" r=\"5\"/>\n  <circle id=\"tracked\" r=\"4\"/>");
     ex
 }
 
@@ -512,6 +523,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     let ns = bench.server("plc").unwrap().namespace;
     let aux_ns = bench.server("aux").unwrap().namespace;
     let path = write_example(dir.path(), &with_aux(live_example(&bench, false), &bench));
+    std::fs::write(dir.path().join("loop/sorts.log"), "").unwrap();
     // The project supervisão loads is portal's reading of the file, every OPC tag and whether a
     // rule marks it writable as the file says: supervisão widens no whitelist on its way in.
     let tags_of = |opc: &[veredas_portal::opc::OpcSourceConfig]| opc.iter().flat_map(|s| s.rules.iter().flat_map(move |r| r.tags.iter().map(move |t| (s.source_id.clone(), t.node_id.clone(), t.writable)))).collect::<Vec<_>>();
@@ -813,6 +825,10 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     // is the binding's action, the one pressed.
     let mut page = Browser::watched(&format!("http://{addr}/s/loop/"));
     page.wait_for(r#"document.getElementById("outlet-3") !== null && document.getElementById("outlet-3").classList.contains("sv-obj")"#, Duration::from_secs(20));
+    // Two parcels on the loop, keys of the tracked marker: its clones drawn, each selectable.
+    let now = store_now();
+    append(&dir.path().join("loop/sorts.log"), &[format!("{} POS item=A1 at=10", stamp(now)), format!("{} POS item=B2 at=50", stamp(now))]);
+    page.wait_for(r#"document.querySelectorAll('svg.plant [data-object="tracked"][data-key]').length === 2 || null"#, Duration::from_secs(20));
     page.eval(r#"(() => { window.asked = []; window.answer = true; window.confirm = (m) => { window.asked.push(m); return window.answer; }; return true; })()"#);
     page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true }))"#);
     const BUTTON: &str = r#"(() => { const b = document.querySelector('.side .actions button[data-action="Release"]'); return b ? { disabled: b.disabled, gate: document.querySelector(".side .gate-note").textContent, note: document.querySelector('.side .write-note [data-action="Release"]')?.textContent ?? "" } : null; })()"#;
@@ -823,12 +839,14 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     page.eval(r#"(() => { window.answer = true; const b = document.querySelector('.side .actions button[data-action="Release"]'); b.click(); return b.disabled; })()"#);
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(page.eval(BUTTON)["note"], json!(""), "a disabled button sends nothing");
-    page.eval(r#"(() => { const b = document.querySelector('.side .actions button[data-action="Release"]'); window.__freed = null; new MutationObserver((m, o) => { if (b.dataset.busy === undefined) { window.__freed = [b.disabled, b.classList.contains("gated")]; o.disconnect(); } }).observe(b, { attributes: true, attributeFilter: ["data-busy"] }); b.disabled = false; b.click(); return true; })()"#);
+    page.eval(r#"(() => { const b = document.querySelector('.side .actions button[data-action="Release"]'); window.__freed = []; window.__freedDone = false; const rec = () => window.__freed.push([b.disabled, b.classList.contains("gated")]); const o = new MutationObserver(rec); b.disabled = false; b.click(); o.observe(b, { attributes: true, attributeFilter: ["data-busy", "disabled"] }); setTimeout(() => { o.disconnect(); rec(); window.__freedDone = true; }, 1500); return true; })()"#);
     let b = page.wait_for(&format!("(() => {{ const b = {BUTTON}; return b && b.note !== '' ? b : null; }})()"), Duration::from_secs(10));
     assert_eq!(b["note"], json!("Release: refused, 403: writes are turned off for this project"));
-    // Freed by its answer while the switch is off, read the moment the page frees it (an observer of
-    // its `data-busy`, before any later status could gate it again): off and shown gated.
-    assert_eq!(page.wait_for("window.__freed", Duration::from_secs(10)), json!([true, true]), "the button freed while the switch is off");
+    // Freed by its answer while the switch is off, watched from the press until past the next
+    // status (an observer of its `data-busy` and `disabled`, a second and a half): off and shown
+    // gated at every change and at the end.
+    let freed = page.wait_for("window.__freedDone ? window.__freed : null", Duration::from_secs(10));
+    assert!(freed.as_array().is_some_and(|f| f.len() >= 2 && f.iter().all(|r| r == &json!([true, true]))), "the button freed while the switch is off, as it stood at each change: {freed}");
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(release(&bench), "0", "nothing reached the plant");
     host.session("loop").unwrap().set_writes_armed(true);
@@ -866,20 +884,22 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     // offers off and shown gated, whatever its place among them, the gate note saying so.
     let (_, bound) = get(addr, "/s/loop/binding");
     let mut read_off = 0;
+    let mut met = BTreeSet::new();
     for o in bound["objects"].as_array().unwrap() {
         let id = serde_json::to_string(o["id"].as_str().unwrap()).unwrap();
-        if page.eval(&format!("document.getElementById({id})?.classList.contains('sv-obj') ?? false")) != json!(true) {
-            continue;
-        }
-        page.eval(&format!("document.getElementById({id}).dispatchEvent(new MouseEvent('click', {{ bubbles: true }}))"));
-        page.wait_for(&format!("document.querySelector('.side .sel-title')?.dataset.id === {id} || null"), Duration::from_secs(10));
         let want: Vec<serde_json::Value> = o["actions"].as_array().unwrap().iter().map(|a| json!([a["label"], true, true])).collect();
-        read_off += want.len();
-        assert_eq!(page.eval(BUTTONS), json!(want), "{id}: every button off and shown gated while the switch is off");
-        if !want.is_empty() {
-            assert_eq!(page.eval(r#"document.querySelector(".side .gate-note").textContent"#), json!("Writes go through portal. Its write switch is off."), "{id}: the gate note");
+        for (way, select, key) in selections(&mut page, &id) {
+            page.eval(&format!("(() => {{ {select}; return true; }})()"));
+            page.wait_for(&format!("(() => {{ const t = document.querySelector('.side .sel-title'); return t?.dataset.id === {id} && (t.querySelector('strong')?.textContent ?? '').endsWith({}) || null; }})()", serde_json::to_string(&key.as_ref().map(|k| format!(" · {k}")).unwrap_or_default()).unwrap()), Duration::from_secs(10));
+            met.insert(way);
+            read_off += want.len();
+            assert_eq!(page.eval(BUTTONS), json!(want), "{id} selected by {way}: every button off and shown gated while the switch is off");
+            if !want.is_empty() {
+                assert_eq!(page.eval(r#"document.querySelector(".side .gate-note").textContent"#), json!("Writes go through portal. Its write switch is off."), "{id} by {way}: the gate note");
+            }
         }
     }
+    assert_eq!(met, BTreeSet::from(["its element", "the attention list", "a key"]), "every way the page selects an object, met");
     assert!(read_off > 2, "more than outlet 3's two actions read off: {read_off}");
     page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true }))"#);
     page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-3" || null"#, Duration::from_secs(10));
@@ -940,6 +960,30 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
         }
     }
     assert!(offering >= 2 && silent >= 1, "objects offering writes ({offering}) and offering none ({silent})");
+    // Selected otherwise than by its element: the object the layout does not draw from the attention
+    // list, the tracked marker by one of its keys. Each pressed, its answer said under that selection,
+    // and said again once it is selected that way again after another object.
+    for (id, label, value, select, key) in [
+        ("aux-only", "Nudge", "4", r#"document.querySelector('.side li[data-id="aux-only"]').click()"#, ""),
+        ("tracked", "Mark", "8", r#"document.querySelector('svg.plant [data-object="tracked"][data-key="A1"]').dispatchEvent(new MouseEvent("click", { bubbles: true }))"#, " · A1"),
+    ] {
+        bench.server("plc").unwrap().set("release3", 0);
+        assert!(wait(Duration::from_secs(10), || release(&bench) == "0"));
+        page.eval("window.asked = []; window.answer = true; true");
+        let chosen = format!("(() => {{ const t = document.querySelector('.side .sel-title'); return t?.dataset.id === '{id}' && (t.querySelector('strong')?.textContent ?? '').endsWith('{key}') || null; }})()");
+        page.eval(&format!("(() => {{ {select}; return true; }})()"));
+        page.wait_for(&chosen, Duration::from_secs(10));
+        page.wait_for(&format!(r#"(() => {{ const b = document.querySelector('.side .actions button[data-action="{label}"]'); return b && !b.disabled ? true : null; }})()"#), Duration::from_secs(10));
+        page.eval(&format!(r#"(() => {{ document.querySelector('.side .write-note').textContent = ''; document.querySelector('.side .actions button[data-action="{label}"]').click(); return true; }})()"#));
+        let said = format!(r#"(() => {{ const t = document.querySelector('.side .write-note [data-action="{label}"]')?.textContent ?? ""; return t.startsWith("{label}: written") ? t : null; }})()"#);
+        let note = page.wait_for(&said, Duration::from_secs(10));
+        assert!(wait(Duration::from_secs(10), || release(&bench) == value), "{id} {label}: landed: release {}", release(&bench));
+        page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+        page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-3" || null"#, Duration::from_secs(10));
+        page.eval(&format!("(() => {{ {select}; return true; }})()"));
+        page.wait_for(&chosen, Duration::from_secs(10));
+        assert_eq!(page.wait_for(&said, Duration::from_secs(10)), note, "{id} selected again by its way: its answer said again");
+    }
     // Each object pressed, selected again, says the last answer of each of its actions pressed, one
     // line each in its actions' order, whatever was pressed since.
     for (id, said) in &last_said {
@@ -1131,6 +1175,25 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
 /// written and one it does not (read-only at the plant, marked writable in the project).
 /// The page's posts to the session's write route, counted from the browser's own record of its
 /// requests.
+/// Every way the page offers to select an object `id` (a JSON string) now: its element in the
+/// drawing, its line in the attention list, each key of a keyed marker; each a way's name, the script
+/// that selects it, and the key.
+fn selections(page: &mut Browser, id: &str) -> Vec<(&'static str, String, Option<String>)> {
+    let mut out = Vec::new();
+    if page.eval(&format!("document.getElementById({id})?.classList.contains('sv-obj') ?? false")) == json!(true) {
+        out.push(("its element", format!("document.getElementById({id}).dispatchEvent(new MouseEvent('click', {{ bubbles: true }}))"), None));
+    }
+    if page.eval(&format!("document.querySelector('.side li[data-id=' + JSON.stringify({id}) + ']') !== null")) == json!(true) {
+        out.push(("the attention list", format!("document.querySelector('.side li[data-id=' + JSON.stringify({id}) + ']').click()"), None));
+    }
+    let keys = page.eval(&format!("[...document.querySelectorAll('svg.plant [data-object=' + JSON.stringify({id}) + '][data-key]')].map((c) => c.dataset.key)"));
+    for k in keys.as_array().unwrap() {
+        let k = k.as_str().unwrap().to_string();
+        out.push(("a key", format!("document.querySelector('svg.plant [data-object=' + JSON.stringify({id}) + '][data-key=' + JSON.stringify({}) + ']').dispatchEvent(new MouseEvent('click', {{ bubbles: true }}))", serde_json::to_string(&k).unwrap()), Some(k)));
+    }
+    out
+}
+
 fn writes(page: &mut Browser) -> usize {
     page.posts().iter().filter(|(u, _)| u.ends_with("/portal/api/opc/write")).count()
 }
