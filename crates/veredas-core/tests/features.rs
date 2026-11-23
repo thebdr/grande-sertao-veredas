@@ -187,14 +187,18 @@ fn without_its_default_features_core_stands_on_serde_toml_and_thiserror_alone() 
     }
 }
 
-/// The library compiles in each form: without its default features (the header reader, the
-/// PCG32, the state text) and with the fieldbus masters alone. Built in a folder of the test's
+/// The library compiles in each form: the default alone, without its default features (the
+/// header reader, the PCG32, the state text), and with each fieldbus master alone and both. Built in a folder of the test's
 /// own, so the run's build folder is not shared.
 #[test]
 fn the_library_compiles_without_its_default_features_and_with_the_masters_alone() {
     let m = manifest();
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("features-check");
     for extra in [
+        // The default form alone: every other build of core in the suite also asks for the demo
+        // plant or a master (core's own tests, maquinar, mestres), which would hide a layer of
+        // `net` standing on a crate `net` does not hold.
+        &[][..],
         &["--no-default-features"][..],
         &["--no-default-features", "--features", "modbus"][..],
         &["--no-default-features", "--features", "enip"][..],
