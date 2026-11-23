@@ -157,6 +157,9 @@ pub enum ProfinetError {
     Unsupported,
 }
 
+/// The longest interval between LLDP frames: 802.1AB's msgTxInterval tops at 3600 s.
+pub const MAX_LLDP_INTERVAL_MS: u64 = 3_600_000;
+
 /// Validate a configuration before anything opens.
 pub fn validate(cfg: &ProfinetConfig) -> Result<(), ProfinetError> {
     let bad = |m: String| ProfinetError::Config(m);
@@ -175,6 +178,9 @@ pub fn validate(cfg: &ProfinetConfig) -> Result<(), ProfinetError> {
         if !ok {
             return Err(bad(format!("profinet.alias `{alias}`: an alias is a port name, a dot and a station name (port-001.switch-1)")));
         }
+    }
+    if cfg.lldp_interval_ms > MAX_LLDP_INTERVAL_MS {
+        return Err(bad(format!("profinet.lldp_interval_ms: {}, over {MAX_LLDP_INTERVAL_MS} (an hour, 802.1AB's longest)", cfg.lldp_interval_ms)));
     }
     if cfg.vendor.is_empty() || cfg.vendor.len() > 255 {
         return Err(bad("profinet.vendor: 1 to 255 characters".into()));
@@ -423,7 +429,7 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
         let now = Instant::now();
         if cfg.lldp_interval_ms > 0 && now >= next_lldp {
             let id = shared.lock().identity.clone();
-            if let Some(f) = lldp_frame(mac, &cfg, &id, (cfg.lldp_interval_ms * 4 / 1000).clamp(1, 65535) as u16)
+            if let Some(f) = lldp_frame(mac, &cfg, &id, (cfg.lldp_interval_ms.saturating_mul(4) / 1000).clamp(1, 65535) as u16)
                 && link.send(&f).is_ok()
             {
                 shared.lock().status.lldp_sent += 1;
@@ -735,8 +741,9 @@ fn set(shared: &Shared, pdu: &DcpPdu) -> Vec<(u8, u8, u8)> {
                 error::NONE
             }
             BlockBody::ControlSignal { .. } => error::SET_NOT_POSSIBLE,
-            // A name block it holds but cannot read (not UTF-8, cut short): not possible.
-            _ if (b.option, b.suboption) == (2, 2) => error::SET_NOT_POSSIBLE,
+            // A block of a suboption it holds but cannot read (a name not UTF-8, an IP suite or a
+            // signal of the wrong length, a block cut short): not possible, never unsupported.
+            _ if matches!((b.option, b.suboption), (2, 2) | (1, 2) | (5, 3)) => error::SET_NOT_POSSIBLE,
             _ if b.option == 1 || b.option == 2 || b.option == 5 => error::SUBOPTION_UNSUPPORTED,
             _ => error::OPTION_UNSUPPORTED,
         };
