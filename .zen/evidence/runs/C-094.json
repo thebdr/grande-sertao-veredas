@@ -10,15 +10,15 @@
     "grep"
   ],
   "exitCode": 0,
-  "outputSha": "7de3751c7fe8ace682ddd69b454775a64a46d5c630777a96489516a6aada3026",
-  "outputTail": "test a_tree_by_masks_recursive_or_not_in_name_order ... ok\ntest the_size_and_binary_guards_the_caps_and_a_missing_file ... ok\ntest literal_case_and_whole_word ... ok\ntest a_file_is_decoded_as_the_tail_decodes_it_slice_by_slice ... ok\ntest a_cancel_stops_a_running_search_and_a_bad_query_starts_none ... ok\ntest a_cancel_is_heard_while_a_file_is_read ... ok\ntest a_line_past_the_limit_is_searched_in_its_first_4_mib_wherever_the_slices_fall ... ok\ntest a_search_holds_a_slice_and_a_line_whatever_the_file_s_size ... ok\ntest a_family_the_bench_wrote_is_searched_in_rotation_order_decoded ... ok\ntest a_cancel_is_heard_at_every_line_of_a_slow_scan ... ok\n\ntest result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.53s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s\n     Running tests/grep.rs (target/debug/build/veredas-portal/815cb77a34e61ce5/out/grep-815cb77a34e61ce5)",
-  "ranAt": "2026-11-23T19:06:40.451Z",
-  "headCommit": "62060cad7985de1f975c341d8a40b620f35f284d",
+  "outputSha": "0bbff3c8a9cf35fd19e27b16cd5aa85315b1fe7889b92bbe4e266fa7ae1791b7",
+  "outputTail": "test literal_case_and_whole_word ... ok\ntest the_size_and_binary_guards_the_caps_and_a_missing_file ... ok\ntest a_file_is_decoded_as_the_tail_decodes_it_slice_by_slice ... ok\ntest a_cancel_stops_a_running_search_and_a_bad_query_starts_none ... ok\ntest a_cancel_is_heard_while_a_file_is_read ... ok\ntest a_line_past_the_limit_is_searched_in_its_first_4_mib_wherever_the_slices_fall ... ok\ntest a_search_holds_a_slice_and_a_line_whatever_the_file_s_size ... ok\ntest a_family_the_bench_wrote_is_searched_in_rotation_order_decoded ... ok\ntest a_cancel_is_heard_at_every_line_of_a_slow_scan ... ok\ntest a_cancel_is_heard_at_every_slice ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.39s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running tests/grep.rs (target/debug/build/veredas-portal/815cb77a34e61ce5/out/grep-815cb77a34e61ce5)",
+  "ranAt": "2026-11-23T21:03:41.684Z",
+  "headCommit": "e135a62587e7d98a454c5f44148b5734264b16d4",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/grep.rs",
       "file": "crates/veredas-portal/tests/grep.rs",
-      "fileSha": "b1b9bb70aba9faf785e88725de65946b52911bee8397b9ef2a50ad399ea9441b"
+      "fileSha": "d9dc13e616661dc68b03678710fa4e638263056340a39e82b1483cdbdef3be61"
     }
   ]
 }
