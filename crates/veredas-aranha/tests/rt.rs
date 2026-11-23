@@ -103,15 +103,22 @@ fn what_is_not_a_cyclic_frame_is_refused_both_ways() {
     assert_eq!(CyclicFrame::decode(&long), Err(RtError::DataLength(1441)));
     assert_eq!(RtError::DataLength(39).to_string(), "a cyclic frame's data is 40 to 1440 bytes; this one is 39");
     assert_eq!(RtError::NotCyclic(0xFC01).to_string(), "frame id 0xfc01 is not a cyclic frame's");
-    // Any bytes decode or are refused, never a panic.
+    // Any bytes decode or are refused, never a panic: decoded exactly when the id is a cyclic
+    // frame's and the data is 40 to 1440 bytes, whatever the status, and written back to them.
     let mut noise = common::Noise(0xC1C);
+    let mut decoded = 0;
     for _ in 0..20_000 {
         let n = (usize::from(noise.next()) << 8 | usize::from(noise.next())) % 1600;
         let p = noise.bytes(n);
-        if let Ok(f) = CyclicFrame::decode(&p) {
+        let cyclic = n >= 2 && FrameClass::of(u16::from_be_bytes([p[0], p[1]])).is_cyclic();
+        let got = CyclicFrame::decode(&p);
+        assert_eq!(got.is_ok(), cyclic && (46..=1446).contains(&n), "{n} bytes, id {:02x?}", p.get(..2));
+        if let Ok(f) = got {
+            decoded += 1;
             assert_eq!(f.encode().unwrap(), p);
         }
     }
+    assert!(decoded > 5_000, "{decoded}");
 }
 
 #[test]
@@ -156,6 +163,17 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
     ];
     let read = common::dissect(&frames);
     let r = "pn_rt";
+    // Each frame this codec wrote, the legacy id, other statuses and the last cycle counter among
+    // them, is read back by this codec as it was written.
+    let written = [
+        frame(0x8001, (0..40).collect(), 0x35),
+        frame(0x0100, (0..40).collect(), 0x00),
+        CyclicFrame { frame_id: 0xC000, data: vec![0x80; 1440], cycle_counter: 0xFFFF, data_status: DataStatus(0x86), transfer_status: 0x00 },
+        frame(0x9000, (0..40).collect(), 0x34),
+    ];
+    for (f, w) in frames.iter().zip(&written) {
+        assert_eq!(&CyclicFrame::decode(ether::parse(f).unwrap().payload).unwrap(), w);
+    }
     for (i, (p, f)) in read.iter().zip(&frames).enumerate() {
         assert_eq!(p.complaints(), Vec::<String>::new(), "frame {i}");
         let e = ether::parse(f).unwrap();
@@ -191,6 +209,9 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
         .map(|&ds| frame(0xC001, (0..40).collect(), ds).frame(DEVICE, CONTROLLER, Some(VlanTag { priority: 5, drop_eligible: false, id: 100 })).unwrap())
         .collect();
     let read = common::dissect(&frames);
+    for (f, &ds) in frames.iter().zip(&statuses) {
+        assert_eq!(CyclicFrame::decode(ether::parse(f).unwrap().payload).unwrap(), frame(0xC001, (0..40).collect(), ds), "{ds:#04x}");
+    }
     let flag = |s: String| s == "1" || s == "true";
     for (p, &ds) in read.iter().zip(&statuses) {
         assert_eq!(p.complaints(), Vec::<String>::new(), "{ds:#04x}");
