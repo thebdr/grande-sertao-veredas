@@ -62,32 +62,56 @@ pub const STRICT_MAIN_NS: &str = "http://purl.oclc.org/ooxml/spreadsheetml/main"
 /// unprefixed root): the patcher reads tags by their literal, unprefixed names, as Excel writes
 /// them. A prefix declared and never used is no matter.
 pub fn prefixed_main_element(s: &str) -> Option<String> {
-    // the prefixes any tag binds to the main namespace
-    let mut prefixes: Vec<String> = Vec::new();
+    foreign_prefix(s, &[(MAIN_NS, ""), (STRICT_MAIN_NS, "")]).map(|(element, _)| element)
+}
+
+/// Every namespace declaration of a part (`xmlns="…"` as the prefix `""`, `xmlns:p="…"`), its value
+/// read as XML reads an attribute (`&#109;` a character, a raw tab a space).
+pub fn namespace_declarations(s: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
     let mut at = 0;
-    while let Some(i) = s[at..].find("xmlns:") {
-        let start = at + i + "xmlns:".len();
-        at = start;
-        let name: String = s[start..].chars().take_while(|c| !matches!(c, '=' | ' ' | '\t' | '\n' | '\r')).collect();
-        let rest = s[start + name.len()..].trim_start().strip_prefix('=').map(str::trim_start);
-        if let Some(rest) = rest
-            && let Some(q) = rest.chars().next().filter(|q| matches!(q, '"' | '\''))
-            && [MAIN_NS, STRICT_MAIN_NS].iter().any(|ns| rest[1..].starts_with(ns) && rest[1 + ns.len()..].starts_with(q))
-            && !prefixes.contains(&name)
-        {
-            prefixes.push(name);
+    while let Some(i) = s[at..].find("xmlns") {
+        let start = at + i;
+        at = start + "xmlns".len();
+        // a declaration's name: `xmlns` alone or `xmlns:p`, standing as an attribute's
+        if start == 0 || !s.as_bytes()[start - 1].is_ascii_whitespace() {
+            continue;
         }
+        let after = &s[at..];
+        let (prefix, rest) = match after.strip_prefix(':') {
+            Some(named) => {
+                let name: String = named.chars().take_while(|c| !matches!(c, '=' | ' ' | '\t' | '\n' | '\r' | '>' | '/')).collect();
+                (name.clone(), &named[name.len()..])
+            }
+            None => (String::new(), after),
+        };
+        let Some(rest) = rest.trim_start().strip_prefix('=').map(str::trim_start) else { continue };
+        let Some(q) = rest.chars().next().filter(|q| matches!(q, '"' | '\'')) else { continue };
+        let Some(end) = rest[1..].find(q) else { continue };
+        out.push((prefix, decode_attr(&rest[1..1 + end])));
     }
-    if prefixes.is_empty() {
+    out
+}
+
+/// The first element of a part named under a prefix its namespace is not read under: for each
+/// `(namespace, expected)`, an element bound to that namespace under any prefix but `expected` (the
+/// patcher matches Excel's own spelling, `c:f`, `xdr:row`, `x14:`; `""` for SpreadsheetML, read
+/// unprefixed), the default namespace counting as the prefix `""`. With the namespace it is in.
+pub fn foreign_prefix(s: &str, expected: &[(&str, &str)]) -> Option<(String, String)> {
+    // the prefixes bound to a listed namespace other than its own
+    let bound: Vec<(String, String)> = namespace_declarations(s)
+        .into_iter()
+        .filter(|(prefix, ns)| expected.iter().any(|(e_ns, e_prefix)| e_ns == ns && e_prefix != prefix))
+        .collect();
+    if bound.is_empty() {
         return None;
     }
     let mut pos = 0;
     while let Some(t) = next_tag(s, pos) {
         pos = t.end;
-        if let Some((prefix, _)) = t.name.split_once(':')
-            && prefixes.iter().any(|p| p == prefix)
-        {
-            return Some(t.name.to_string());
+        let prefix = t.name.split_once(':').map(|(p, _)| p).unwrap_or("");
+        if let Some((_, ns)) = bound.iter().find(|(p, _)| p == prefix) {
+            return Some((t.name.to_string(), ns.clone()));
         }
     }
     None

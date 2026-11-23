@@ -432,6 +432,15 @@ workspace/log.txt             the log, one escaped entry per line
   to the main namespace, transitional or strict (the root, or `<x:definedNames>` inside a plain
   root) refuses the patch,
   whatever its edits, naming the part and the element. A prefix declared and never used is none.
+- **A prefix is read as XML reads it, and only Excel's own are followed** (C-223's eleventh
+  round): a namespace declaration's value is decoded (`&#109;ain` is `main`); a chart's, a
+  chartEx's, a drawing's, an extension's and a form control's VML elements are matched under
+  Excel's prefixes (`c:`, `cx:`, `c15:`, `xdr:`, `x14:`, `xm:`, `x:`; a form control's properties
+  x14's in the default namespace), and a part writing them under another is refused. A part
+  declaring another encoding than UTF-8, or holding CDATA, is refused.
+- **Verification runs on a copy at a short UTF-8 path** (the engine's loader takes no other): under
+  the system's temporary folder, the model renamed to the destination's stem before comparing;
+  the new file then goes beside the destination under a short name of its own.
 - **The engine reads `IFNA(…)` and `_xlfn.IFNA(…)` alike; Excel does not** (C-223's ninth and
   tenth rounds): "already there" and a name's rewrite compare the function spellings of the file's
   own text too (`refs::function_calls`: each call's prefix, each LET or LAMBDA parameter's

@@ -2365,11 +2365,13 @@ pub fn patch(
     Ok(report)
 }
 
-/// Writes `bytes` as `dest`'s next version: into a folder of its own beside `dest`, under `dest`'s
-/// own name (the engine names a workbook after its file); runs `check` on that file; then, the
-/// source still holding `fingerprint`, keeps a `dest` already there as `<name>.bak` and renames the
-/// new file over it. A failing check or a source changed since it was read removes what was
-/// written and leaves `dest` as it was.
+/// Writes `bytes` as `dest`'s next version. `check` runs first on a copy of them in a folder of its
+/// own under the system's temporary folder (a short UTF-8 path, the engine's loader taking no other
+/// whatever `dest`'s folder and name); then, the source still holding `fingerprint`, the bytes go
+/// into a temporary file of their own beside `dest` (`.veredas-<process>-<n>.tmp`, made new), a
+/// `dest` already there is kept as `<name>.bak` (its name as the system gives it) and the new file
+/// is renamed over it. A failing check, a source changed since it was read, or any failure after
+/// leaves `dest` as it was and nothing beside it.
 fn commit(
     source: &Path,
     fingerprint: &[u8],
@@ -2377,48 +2379,62 @@ fn commit(
     bytes: &[u8],
     check: impl FnOnce(&Path) -> Result<(), PatchError>,
 ) -> Result<(), PatchError> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let next = || format!("{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
     let dir = dest.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    // the destination and its `.bak` named as the system gives the name, whatever its encoding; the
-    // scratch copy, which the engine reopens to verify (its loader takes a UTF-8 path), by the
-    // name's readable spelling, its stem the one the workbook was computed as
     let file_name = dest.file_name().ok_or_else(|| PatchError::Malformed(format!("{}: not a file path", dest.display())))?;
-    let readable = file_name.to_string_lossy().to_string();
-    let beside = |after: &str| {
-        let mut name = file_name.to_os_string();
-        name.push(after);
-        dir.join(name)
-    };
-    let scratch = dir.join(format!(".{readable}.abaco-tmp"));
-    if scratch.exists() {
-        // a previous run's, cut before it cleaned up
-        std::fs::remove_dir_all(&scratch).map_err(|e| io_err(&scratch, e))?;
-    }
-    std::fs::create_dir(&scratch).map_err(|e| io_err(&scratch, e))?;
-    let written = scratch.join(&readable);
-    let result = (|| {
-        std::fs::write(&written, bytes).map_err(|e| io_err(&written, e))?;
-        check(&written)?;
-        if crate::files::contents(source).map_err(|e| io_err(source, e))? != fingerprint {
-            return Err(PatchError::SourceMoved(source.to_path_buf()));
+    // the check, on a copy at a short UTF-8 path
+    let probe = loop {
+        let probe = std::env::temp_dir().join(format!("veredas-patch-{}", next()));
+        match std::fs::create_dir(&probe) {
+            Ok(()) => break probe,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(io_err(&probe, e)),
         }
+    };
+    let copy = probe.join("patched.xlsx");
+    let checked = std::fs::write(&copy, bytes).map_err(|e| io_err(&copy, e)).and_then(|()| check(&copy));
+    let _ = std::fs::remove_dir_all(&probe);
+    checked?;
+    if crate::files::contents(source).map_err(|e| io_err(source, e))? != fingerprint {
+        return Err(PatchError::SourceMoved(source.to_path_buf()));
+    }
+    // then beside the destination
+    let (tmp, mut file) = loop {
+        let tmp = dir.join(format!(".veredas-{}.tmp", next()));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => break (tmp, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(io_err(&tmp, e)),
+        }
+    };
+    let placed = (|| {
+        use std::io::Write as _;
+        file.write_all(bytes).and_then(|()| file.sync_all()).map_err(|e| io_err(&tmp, e))?;
+        drop(file);
         // the destination's previous version kept as `.bak` (a previous `.bak` replaced, read-only
         // or not), the destination's own permissions kept on its new version
         let permissions = dest.exists().then(|| std::fs::metadata(dest).map(|m| m.permissions())).transpose().map_err(|e| io_err(dest, e))?;
         if dest.exists() {
-            let bak = beside(".bak");
+            let mut bak = file_name.to_os_string();
+            bak.push(".bak");
+            let bak = dir.join(bak);
             if bak.exists() {
                 std::fs::remove_file(&bak).map_err(|e| io_err(&bak, e))?;
             }
             std::fs::copy(dest, &bak).map_err(|e| io_err(&bak, e))?;
         }
-        std::fs::rename(&written, dest).map_err(|e| io_err(dest, e))?;
+        std::fs::rename(&tmp, dest).map_err(|e| io_err(dest, e))?;
         if let Some(p) = permissions {
             std::fs::set_permissions(dest, p).map_err(|e| io_err(dest, e))?;
         }
         Ok(())
     })();
-    let _ = std::fs::remove_dir_all(&scratch);
-    result
+    if placed.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    placed
 }
 
 /// The cell metadata entry (its 1-based index, a cell's `cm`) of a metadata part that marks a
@@ -2936,6 +2952,12 @@ fn verify(
     fixed.reference();
     let opened = links::open(dest, LinkPolicy::AlwaysUseCached, |_| LinkChoice::UseCached)?;
     let mut back = Workbook::from_model(opened.model, crate::book::Origin::New);
+    // the copy read back is named as the workbook was computed (the destination's own stem), so a
+    // formula reading its name (`CELL("filename")`) reads what the destination will hold
+    if back.model().workbook.name != wb.model().workbook.name {
+        back.model_mut().workbook.name = wb.model().workbook.name.clone();
+        back.recalc();
+    }
     // a volatile cell (and what reads it) has a new value on every
     // evaluation: its CONTENT is compared, not its value
     let unstable = {
@@ -3062,11 +3084,10 @@ mod tests {
         let dest = dir.path().join("out.xlsx");
         std::fs::write(&source, b"source").unwrap();
         std::fs::write(&dest, b"before").unwrap();
-        // the check sees the new file under the destination's own name, and refuses it
+        // the check sees a copy of the new file at a short UTF-8 path, and refuses it
         let e = commit(&source, b"source", &dest, b"after", |written| {
             assert_eq!(std::fs::read(written).unwrap(), b"after");
-            assert_eq!(written.file_name().unwrap(), "out.xlsx");
-            assert_ne!(written, dest.as_path());
+            assert!(written.to_str().is_some() && !written.starts_with(dir.path()), "{}", written.display());
             Err(PatchError::Verify("refused".into()))
         })
         .unwrap_err();

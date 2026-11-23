@@ -16,6 +16,27 @@ use super::refs::{self, Shift};
 use super::xml::{self, attr, decode_text, escape_text, next_tag, set_attr};
 use super::PatchError;
 
+/// The namespaces whose references the patcher re-spells, each with the prefix Excel writes it under.
+const FOREIGN_PREFIXES: [(&str, &str); 7] = [
+    ("http://schemas.openxmlformats.org/drawingml/2006/chart", "c"),
+    ("http://schemas.microsoft.com/office/drawing/2014/chartex", "cx"),
+    ("http://schemas.microsoft.com/office/drawing/2012/chart", "c15"),
+    ("http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing", "xdr"),
+    ("http://schemas.microsoft.com/office/spreadsheetml/2009/9/main", "x14"),
+    ("http://schemas.microsoft.com/office/excel/2006/main", "xm"),
+    ("urn:schemas-microsoft-com:office:excel", "x"),
+];
+
+/// The encoding a part's XML declaration names (`<?xml … encoding="…"?>`), if it names one.
+fn declared_encoding(text: &str) -> Option<String> {
+    let decl = text.trim_start_matches('\u{feff}').strip_prefix("<?xml")?;
+    let decl = &decl[..decl.find("?>")?];
+    let at = decl.find("encoding")?;
+    let rest = decl[at + "encoding".len()..].trim_start().strip_prefix('=')?.trim_start();
+    let q = rest.chars().next().filter(|q| matches!(q, '"' | '\''))?;
+    rest[1..].find(q).map(|end| rest[1..1 + end].to_string())
+}
+
 /// The source package: its entries in order, read lazily.
 pub(crate) struct Package {
     archive: ZipArchive<Cursor<Vec<u8>>>,
@@ -61,6 +82,30 @@ impl Package {
             return Err(PatchError::Unsupported(format!(
                 "{name} writes SpreadsheetML under a namespace prefix (<{element}>); the patcher reads it unprefixed, as Excel writes it"
             )));
+        }
+        // the parts the patcher re-spells references in, read under Excel's own prefixes: a chart's,
+        // a chartEx's, a drawing's, an extension's, a form control's VML; any other prefix (or the
+        // default namespace) for them is refused, naming the part
+        // (a form control's properties are x14's in the default namespace, as Excel writes them, the
+        // patcher reading their attributes alone)
+        let expected: Vec<(&str, &str)> = FOREIGN_PREFIXES
+            .iter()
+            .copied()
+            .filter(|(ns, _)| !(name.starts_with("xl/ctrlProps/") && *ns == "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"))
+            .collect();
+        if let Some((element, ns)) = xml::foreign_prefix(&text, &expected) {
+            let expected = FOREIGN_PREFIXES.iter().find(|(n, _)| *n == ns).map(|(_, p)| *p).unwrap_or_default();
+            return Err(PatchError::Unsupported(format!(
+                "{name} writes {ns} elements under another prefix than Excel's `{expected}:` (<{element}>); the patcher reads them as Excel writes them"
+            )));
+        }
+        // a part declaring another encoding than UTF-8 would read the bytes the patcher writes
+        // otherwise; a CDATA section (no part Excel writes holds one) is text the patcher does not read
+        if let Some(encoding) = declared_encoding(&text).filter(|e| !e.eq_ignore_ascii_case("utf-8") && !e.eq_ignore_ascii_case("utf8")) {
+            return Err(PatchError::Unsupported(format!("{name} declares the encoding {encoding}; the patcher writes UTF-8 alone")));
+        }
+        if text.contains("<![CDATA[") {
+            return Err(PatchError::Unsupported(format!("{name} holds a CDATA section, which no part Excel writes holds and the patcher does not read")));
         }
         Ok(text)
     }

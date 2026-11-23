@@ -2049,3 +2049,155 @@ fn the_patch_keeps_a_destination_s_name_as_the_system_gives_it() {
     assert!(!names.iter().any(|n| String::from_utf8_lossy(n).contains('\u{FFFD}') && std::str::from_utf8(n).is_ok()), "{names:?}");
     assert_eq!(names.len(), 3, "{names:?}");
 }
+
+// ---- refute round 11 --------------------------------------------------------------------------
+
+#[test]
+fn a_namespace_spelled_with_a_character_reference_is_the_namespace_it_names() {
+    // `&#109;ain` is `main` to every XML reader, the engine's among them
+    let dir = tempfile::tempdir().unwrap();
+    let dst = dir.path().join("out.xlsx");
+    let data: String = (1..=5).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    for spelled in ["http://schemas.openxmlformats.org/spreadsheetml/2006/&#109;ain", "http://schemas.openxmlformats.org/spreadsheetml/2006/&#x6D;ain"] {
+        let src = dir.path().join("names.xlsx");
+        let book = workbook(&["S"], "").replace(&format!(r#"xmlns="{MAIN}""#), &format!(r#"xmlns="{MAIN}" xmlns:x="{spelled}""#)).replace(
+            "<calcPr",
+            r#"<x:definedNames><x:definedName name="Rate">S!$A$3</x:definedName></x:definedNames><calcPr"#,
+        );
+        write_package(
+            &src,
+            &[("xl/workbook.xml", book), ("xl/_rels/workbook.xml.rels", rels(&[rel("rId1", "worksheet", "worksheets/sheet1.xml")])), ("xl/worksheets/sheet1.xml", worksheet(&data, ""))],
+        );
+        let src2 = dir.path().join("merges.xlsx");
+        let sheet = worksheet(&data, r#"<x:mergeCells count="1"><x:mergeCell ref="A3:B3"/></x:mergeCells>"#)
+            .replace(&format!(r#"xmlns="{MAIN}""#), &format!(r#"xmlns="{MAIN}" xmlns:x="{spelled}""#));
+        plain_book(&src2, &[("S", sheet)], "", &[]);
+        for (src, part_name, element) in [(&src, "xl/workbook.xml", "x:definedNames"), (&src2, "xl/worksheets/sheet1.xml", "x:mergeCells")] {
+            for edits in [vec![], vec![Edit::SetName { name: "G".into(), formula: "=S!$A$1".into(), scope: None }], vec![rows("S", 1, 2)]] {
+                match patch(src, &dst, &edits, &verified()) {
+                    Err(PatchError::Unsupported(m)) => assert!(m.contains(part_name) && m.contains(&format!("<{element}>")), "{m}"),
+                    other => panic!("{spelled} {part_name}: {other:?}"),
+                }
+                assert!(!dst.exists());
+            }
+        }
+    }
+}
+
+/// Sheet Data (1, 2, 3 in A1:A3) holding a drawing whose graphic frame shows a chart of
+/// `Data!$A$1:$A$3`, the drawing and the chart parts as given.
+fn drawn_book(path: &Path, drawing: &str, chart: &str) {
+    let data: String = (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    write_package(
+        path,
+        &[
+            ("xl/workbook.xml", workbook(&["Data"], "")),
+            ("xl/_rels/workbook.xml.rels", rels(&[rel("rId1", "worksheet", "worksheets/sheet1.xml")])),
+            ("xl/worksheets/sheet1.xml", worksheet(&data, r#"<drawing r:id="rId1"/>"#)),
+            ("xl/worksheets/_rels/sheet1.xml.rels", rels(&[rel("rId1", "drawing", "../drawings/drawing1.xml")])),
+            ("xl/drawings/drawing1.xml", drawing.to_string()),
+            ("xl/drawings/_rels/drawing1.xml.rels", rels(&[rel("rId1", "chart", "../charts/chart1.xml")])),
+            ("xl/charts/chart1.xml", chart.to_string()),
+        ],
+    );
+}
+
+#[test]
+fn a_chart_a_drawing_or_an_extension_under_another_prefix_than_excel_s_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("drawn.xlsx");
+    let dst = dir.path().join("out.xlsx");
+    let drawing = |p: &str| {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><{p}:wsDr xmlns:{p}="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><{p}:twoCellAnchor><{p}:from><{p}:col>1</{p}:col><{p}:colOff>0</{p}:colOff><{p}:row>1</{p}:row><{p}:rowOff>0</{p}:rowOff></{p}:from><{p}:to><{p}:col>5</{p}:col><{p}:colOff>0</{p}:colOff><{p}:row>9</{p}:row><{p}:rowOff>0</{p}:rowOff></{p}:to><{p}:graphicFrame macro=""><{p}:nvGraphicFramePr><{p}:cNvPr id="2" name="Chart 1"/><{p}:cNvGraphicFramePr/></{p}:nvGraphicFramePr><{p}:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></{p}:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="{R}" r:id="rId1"/></a:graphicData></a:graphic></{p}:graphicFrame><{p}:clientData/></{p}:twoCellAnchor></{p}:wsDr>"#
+        )
+    };
+    let chart = |open: &str, p: &str| {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><{p}chartSpace {open}><{p}chart><{p}plotArea><{p}barChart><{p}ser><{p}idx val="0"/><{p}val><{p}numRef><{p}f>Data!$A$1:$A$3</{p}f></{p}numRef></{p}val></{p}ser></{p}barChart></{p}plotArea></{p}chart></{p}chartSpace>"#
+        )
+    };
+    let chart_ns = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+    // Excel's own spelling: moved
+    drawn_book(&src, &drawing("xdr"), &chart(&format!(r#"xmlns:c="{chart_ns}""#), "c:"));
+    patch(&src, &dst, &[rows("Data", 1, 2)], &verified()).unwrap();
+    assert!(part(&dst, "xl/charts/chart1.xml").contains("<c:f>Data!$A$3:$A$5</c:f>"));
+    assert!(part(&dst, "xl/drawings/drawing1.xml").contains("<xdr:row>3</xdr:row>"));
+    // a chart in the default namespace or under `ch:`, a drawing under `wsd:`: refused, naming the part
+    for (drawing_xml, chart_xml, part_name) in [
+        (drawing("xdr"), chart(&format!(r#"xmlns="{chart_ns}""#), ""), "xl/charts/chart1.xml"),
+        (drawing("xdr"), chart(&format!(r#"xmlns:ch="{chart_ns}""#), "ch:"), "xl/charts/chart1.xml"),
+        (drawing("wsd"), chart(&format!(r#"xmlns:c="{chart_ns}""#), "c:"), "xl/drawings/drawing1.xml"),
+    ] {
+        let _ = std::fs::remove_file(&dst);
+        drawn_book(&src, &drawing_xml, &chart_xml);
+        match patch(&src, &dst, &[rows("Data", 1, 2)], &verified()) {
+            Err(PatchError::Unsupported(m)) => assert!(m.contains(part_name) && m.contains("under another prefix than Excel's"), "{m}"),
+            other => panic!("{part_name}: {other:?}"),
+        }
+        assert!(!dst.exists());
+    }
+    // an x14 validation under other prefixes than `x14:` and `xm:`
+    let data: String = (1..=5).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    let ext = r#"<extLst><ext uri="{CCE6A557-97BC-4b89-ADB6-D9C93CAAB3DF}" xmlns:y="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><y:dataValidations count="1" xmlns:n="http://schemas.microsoft.com/office/excel/2006/main"><y:dataValidation type="list" allowBlank="1"><y:formula1><n:f>S!$A$1:$A$3</n:f></y:formula1><n:sqref>B4:B5</n:sqref></y:dataValidation></y:dataValidations></ext></extLst>"#;
+    let src3 = dir.path().join("x14.xlsx");
+    plain_book(&src3, &[("S", worksheet(&data, ext))], "", &[]);
+    let _ = std::fs::remove_file(&dst);
+    match patch(&src3, &dst, &[rows("S", 1, 2)], &verified()) {
+        Err(PatchError::Unsupported(m)) => assert!(m.contains("xl/worksheets/sheet1.xml") && m.contains("under another prefix than Excel's"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(!dst.exists());
+}
+
+#[test]
+fn a_part_in_another_encoding_or_holding_cdata_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let dst = dir.path().join("out.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f><![CDATA[A1*2]]></f><v>2</v></c></row>"#;
+    let src = dir.path().join("cdata.xlsx");
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    for verify in [true, false] {
+        let options = PatchOptions { verify, ..verified() };
+        match patch(&src, &dst, &[rows("S", 1, 1)], &options) {
+            Err(PatchError::Unsupported(m)) => assert!(m.contains("CDATA"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(!dst.exists());
+    }
+    let src = dir.path().join("latin.xlsx");
+    let sheet = worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row>"#, "").replacen(r#"encoding="UTF-8""#, r#"encoding="ISO-8859-1""#, 1);
+    plain_book(&src, &[("S", sheet)], "", &[]);
+    match patch(&src, &dst, &[value("S", "A2", serde_json::json!("café"))], &verified()) {
+        Err(PatchError::Unsupported(m)) => assert!(m.contains("ISO-8859-1"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(!dst.exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn a_destination_in_a_folder_or_with_a_name_the_engine_cannot_open_is_patched_and_verified() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src.xlsx");
+    plain_book(&src, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>CELL("filename")</f><v>x</v></c></row>"#, ""))], "", &[]);
+    let odd = dir.path().join(std::ffi::OsStr::from_bytes(b"pasta\xe7"));
+    std::fs::create_dir(&odd).unwrap();
+    let latin: Vec<u8> = (0..150).map(|i| if i % 5 == 0 && i < 140 { 0xe9 } else { b'a' }).chain(b".xlsx".iter().copied()).collect();
+    for dest in [
+        odd.join("out.xlsx"),
+        dir.path().join(format!("{}.xlsx", "n".repeat(245))),
+        dir.path().join(std::ffi::OsStr::from_bytes(&latin)),
+    ] {
+        std::fs::write(&dest, b"previous").unwrap();
+        patch(&src, &dest, &[value("S", "A1", serde_json::json!(2))], &verified()).unwrap_or_else(|e| panic!("{}: {e}", dest.display()));
+        let mut bak = dest.clone().into_os_string();
+        bak.push(".bak");
+        assert_eq!(std::fs::read(&bak).unwrap(), b"previous", "{}", dest.display());
+        assert!(std::fs::read(&dest).unwrap().starts_with(b"PK"));
+        // nothing else left beside it
+        let left: Vec<_> = std::fs::read_dir(dest.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).filter(|n| n.as_bytes().ends_with(b".tmp") || n.as_bytes().ends_with(b"-tmp")).collect();
+        assert!(left.is_empty(), "{left:?}");
+    }
+}
