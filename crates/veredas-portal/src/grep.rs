@@ -94,9 +94,10 @@ pub struct GrepOptions {
     /// Search a file that looks binary (a NUL byte in its head, a UTF-16 file aside); off, it is
     /// skipped and counted.
     pub search_binary: bool,
-    /// A file stops being read after this many matching lines (its `FileDone` says so).
+    /// A file stops being read after this many matching lines (its `FileDone` says so); 0 gives
+    /// no line of any file.
     pub max_matches_per_file: Option<u64>,
-    /// The search stops after this many matching lines in all (its `Done` says so).
+    /// The search stops after this many matching lines in all (its `Done` says so); 0 gives none.
     pub max_total_matches: Option<u64>,
 }
 
@@ -417,7 +418,8 @@ fn search_file(path: &Arc<PathBuf>, q: &Compiled, o: &GrepOptions, h: &GrepHandl
     // held is a slice and a line, whatever the file's size. A cancel is heard at every slice, so
     // within every 64 KiB of the lines scanned, or once the line a slice completes is scanned: a
     // line is scanned whole, up to 4 MiB of it.
-    let mut scan = Scan { path, q, o, h, tx, matches: 0, before: VecDeque::with_capacity(o.context_before + 1), after_left: 0, last_emitted: None, capped: false, total_cap: false, number: 0, skipping: false };
+    // A cap already reached before the file's first line (a cap of 0) gives no line of it.
+    let mut scan = Scan { path, q, o, h, tx, matches: 0, before: VecDeque::with_capacity(o.context_before + 1), after_left: 0, last_emitted: None, capped: o.max_matches_per_file == Some(0), total_cap: o.max_total_matches.is_some_and(|cap| h.matches.load(Ordering::Relaxed) >= cap), number: 0, skipping: false };
     let mut decoder = TextDecoder::new();
     let mut pending = String::new();
     decoder.feed(&buf[..first], &mut pending);
@@ -451,7 +453,8 @@ fn search_file(path: &Arc<PathBuf>, q: &Compiled, o: &GrepOptions, h: &GrepHandl
 }
 
 /// The longest line searched: a line past it is searched in its first 4 MiB, the rest of it read
-/// past to its line end, so a file of one endless line holds no more than this.
+/// past to its line end, so a file of one endless line holds no more than this. The patterns see
+/// the cut as the line's end (a limit: a word cut there stands apart, and `$` holds there).
 pub const LINE_LIMIT: usize = 4 * 1024 * 1024;
 
 /// Where a line of `len` bytes at the start of `text` is searched to: all of it, or, past

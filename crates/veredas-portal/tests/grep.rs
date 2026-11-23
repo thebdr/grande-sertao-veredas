@@ -476,15 +476,79 @@ fn a_line_past_the_limit_is_searched_in_its_first_4_mib_wherever_the_slices_fall
     write(&long, &format!("{} MID\n", "x".repeat(200_000)));
     let (events, _) = run(GrepScope::Files(vec![long]), &GrepQuery::single("MID"), GrepOptions::default());
     assert_eq!(spans_of(&events), vec![(1, 200_004, vec![200_001])]);
-    let inside = format!("{} EARLY", "x".repeat(LINE_LIMIT - 6));
+    // The limit is 4 MiB, the figure the clause names, whatever the constant says: a line one
+    // byte short of it is searched to its last bytes.
+    const FOUR_MIB: usize = 4 << 20;
+    assert_eq!(LINE_LIMIT, FOUR_MIB);
+    let under = dir.path().join("under.log");
+    write(&under, &format!("{} END
+next
+", "x".repeat(FOUR_MIB - 1 - 4)));
+    let (events, _) = run(GrepScope::Files(vec![under]), &GrepQuery::single("END"), GrepOptions::default());
+    assert_eq!(spans_of(&events), vec![(1, FOUR_MIB - 1, vec![FOUR_MIB - 4])]);
+    let inside = format!("{} EARLY", "x".repeat(FOUR_MIB - 6));
     let far = format!(" LATE {}", "y".repeat(100_000));
     for (name, rest) in [("near.log", " LATE"), ("far.log", far.as_str())] {
         let path = dir.path().join(name);
         write(&path, &format!("{inside}{rest}\nnext LATE\n"));
         let (events, summary) = run(GrepScope::Files(vec![path]), &q(&[("EARLY", false), ("LATE", false)], Combine::Or), GrepOptions::default());
-        assert_eq!(spans_of(&events), vec![(1, LINE_LIMIT, vec![LINE_LIMIT - 5]), (2, 9, vec![5])], "{name}");
+        assert_eq!(spans_of(&events), vec![(1, FOUR_MIB, vec![FOUR_MIB - 5]), (2, 9, vec![5])], "{name}");
         assert_eq!((summary.stopped, summary.stats.matches), (GrepStop::Completed, 2), "{name}");
     }
+}
+
+/// A cancel is heard at every slice: a file of lines a little longer than a slice, each
+/// matching under a slow pattern, cancelled as its line `k` arrives, gives at most the line or
+/// two the slices in hand complete (a check every few slices would give more), at two places in
+/// the file so that no period of slices falls on both.
+#[test]
+fn a_cancel_is_heard_at_every_slice() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let path = dir.path().join("every_slice.log");
+    {
+        let mut f = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+        let line = format!("{}\n", "ação válvula ".repeat(64 * 1024 / 15));
+        for _ in 0..300 {
+            std::io::Write::write_all(&mut f, line.as_bytes()).unwrap();
+        }
+    }
+    let query = GrepQuery { whole_word: true, ..q(&[(r"\d{3}", false), ("ação", false)], Combine::Or) };
+    for k in [10u64, 13] {
+        let s = search(GrepScope::Files(vec![path.clone()]), &query, GrepOptions::default()).unwrap();
+        let mut matched = 0u64;
+        for e in s.events.iter() {
+            match e {
+                GrepEvent::Line(l) if l.is_match => {
+                    matched += 1;
+                    if l.line_number == k {
+                        s.handle.cancel();
+                    }
+                }
+                GrepEvent::Done(done) => {
+                    assert_eq!(done.stopped, GrepStop::Cancelled, "{done:?}");
+                    break;
+                }
+                _ => {}
+            }
+        }
+        s.worker.join().unwrap();
+        assert!(matched >= k && matched <= k + 3, "cancelled at line {k}, {matched} lines given");
+    }
+}
+
+/// A cap of 0 gives no line: a file whose cap is 0 is capped before its first line, and a total
+/// cap of 0 ends the search before its first match (grep's `-m 0`).
+#[test]
+fn a_cap_of_zero_gives_no_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("three.log");
+    write(&file, "hit 1\nhit 2\nhit 3\n");
+    let (events, s) = run(GrepScope::Files(vec![file.clone(), file.clone()]), &GrepQuery::single("hit"), GrepOptions { max_matches_per_file: Some(0), ..GrepOptions::default() });
+    assert!(matched(&events).is_empty(), "{events:?}");
+    assert_eq!((s.stats.matches, s.stats.files_matched, s.stopped), (0, 0, GrepStop::Completed));
+    let (events, s) = run(GrepScope::Files(vec![file]), &GrepQuery::single("hit"), GrepOptions { max_total_matches: Some(0), ..GrepOptions::default() });
+    assert!(matched(&events).is_empty(), "{events:?}");
+    assert_eq!((s.stats.matches, s.stopped), (0, GrepStop::MatchCap));
 }
 
 /// With no size limit, what a search holds is a slice and a line, whatever the file: a file of
