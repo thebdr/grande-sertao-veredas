@@ -563,6 +563,11 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
     complaint(2, "length >= 0");
     complaint(3, "malformed");
     complaint(4, "Block version 2.0 not implemented");
+    // An item under an identifier the dissector names and does not decode (iParameter here) draws
+    // its "Undecoded Data", whatever the item holds.
+    let iparameter = RtaPdu::notification(Priority::High, 1, 2, 7, 6, diagnosis(Some(AlarmItem { usi: 0x8201, data: vec![0; 16] })));
+    let d = common::dissect(&[iparameter.frame(CONTROLLER, DEVICE, Some(Priority::High.tag())).unwrap()]);
+    assert!(d[0].complaints().iter().any(|c| c.contains("Undecoded Data, 16 bytes")), "{:?}", d[0].complaints());
 
     // A status the dissector does not know draws its complaint: an ErrorDecode it has no table for,
     // an ErrorCode1 it does not know under PNIO's. And a var part this codec keeps unread is not
@@ -623,18 +628,42 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
         assert_eq!(one("pn_io_pn_io_alarm_src_endpoint"), [p.src_endpoint.to_string()], "frame {i}");
         assert_eq!(one("pn_io_pn_io_send_seq_num"), [p.send_seq.to_string()], "frame {i}");
         assert_eq!(one("pn_io_pn_io_ack_seq_num"), [p.ack_seq.to_string()], "frame {i}");
+        // Every block field: the block's type, length and version, the alarm's place, the
+        // specifier's sequence and its four bits, the idents and the item's identifier, the
+        // acknowledgement's status.
+        let flag = |b: bool| u8::from(b).to_string();
+        let var = p.encode().unwrap().len() - 14;
+        let block = |want_type: u16, alarm_type: u16, api: u32, slot: u16, subslot: u16, s: AlarmSpecifier| {
+            assert_eq!(one("pn_io_pn_io_block_type"), [want_type.to_string()], "frame {i}");
+            assert_eq!(one("pn_io_pn_io_block_length"), [(var - 4).to_string()], "frame {i}");
+            assert_eq!((one("pn_io_pn_io_block_version_high"), one("pn_io_pn_io_block_version_low")), (vec!["1".to_string()], vec!["0".to_string()]), "frame {i}");
+            assert_eq!(one("pn_io_pn_io_alarm_type"), [alarm_type.to_string()], "frame {i}");
+            assert_eq!(one("pn_io_pn_io_api"), [api.to_string()], "frame {i}");
+            assert_eq!(one("pn_io_pn_io_slot_nr"), [slot.to_string()], "frame {i}");
+            assert_eq!(one("pn_io_pn_io_subslot_nr"), [subslot.to_string()], "frame {i}");
+            assert_eq!(one("pn_io_pn_io_alarm_specifier_sequence"), [s.sequence().to_string()], "frame {i}");
+            assert_eq!(one("pn_io_pn_io_alarm_specifier_channel"), [flag(s.channel_diagnosis())], "frame {i}");
+            assert_eq!(one("pn_io_pn_io_alarm_specifier_manufacturer"), [flag(s.manufacturer_diagnosis())], "frame {i}");
+            assert_eq!(one("pn_io_pn_io_alarm_specifier_submodule"), [flag(s.submodule_diagnosis())], "frame {i}");
+            assert_eq!(one("pn_io_pn_io_alarm_specifier_ardiagnosis"), [flag(s.ar_diagnosis())], "frame {i}");
+        };
         match &p.body {
             Body::Notification(n) => {
-                assert_eq!(one("pn_io_pn_io_alarm_type"), [n.alarm_type.to_string()], "frame {i}");
-                assert_eq!(one("pn_io_pn_io_api"), [n.api.to_string()], "frame {i}");
-                assert_eq!(one("pn_io_pn_io_slot_nr"), [n.slot.to_string()], "frame {i}");
-                assert_eq!(one("pn_io_pn_io_subslot_nr"), [n.subslot.to_string()], "frame {i}");
+                block(p.priority.notification_block(), n.alarm_type, n.api, n.slot, n.subslot, n.specifier);
                 assert_eq!(one("pn_io_pn_io_module_ident_number"), [n.module_ident.to_string()], "frame {i}");
-                assert_eq!(one("pn_io_pn_io_alarm_specifier_sequence"), [n.specifier.sequence().to_string()], "frame {i}");
+                assert_eq!(one("pn_io_pn_io_submodule_ident_number"), [n.submodule_ident.to_string()], "frame {i}");
                 let usi: Vec<String> = n.item.iter().map(|it| it.usi.to_string()).collect();
                 assert_eq!(one("pn_io_pn_io_user_structure_identifier"), usi, "frame {i}");
             }
-            Body::Ack(a) => assert_eq!((one("pn_io_pn_io_alarm_type"), one("pn_io_pn_io_slot_nr")), (vec![a.alarm_type.to_string()], vec![a.slot.to_string()]), "frame {i}"),
+            Body::Ack(a) => {
+                block(p.priority.ack_block(), a.alarm_type, a.api, a.slot, a.subslot, a.specifier);
+                let st = a.status;
+                assert_eq!(
+                    [one("pn_rt_pn_io_error_code"), one("pn_rt_pn_io_error_decode"), one("pn_rt_pn_io_error_code1"), one("pn_rt_pn_io_error_code2")],
+                    [[st.code], [st.decode], [st.code1], [st.code2]].map(|b| vec![b[0].to_string()]),
+                    "frame {i}"
+                );
+            }
             _ => assert!(one("pn_io_pn_io_block_type").is_empty(), "frame {i}"),
         }
     }
