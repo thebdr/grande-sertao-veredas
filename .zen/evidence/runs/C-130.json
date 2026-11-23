@@ -14,15 +14,15 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "db35c3f4b51f20a9746a9448c657d259bb5f434ca5a38f7ec465564b638862a6",
-  "outputTail": "running 8 tests\ntest aranha_is_one_library_and_at_most_its_one_executable ... ok\ntest aranha_holds_no_assembly_and_no_doctest ... ok\ntest the_check_refuses_every_target_but_the_library_and_its_one_executable ... ok\ntest the_walk_follows_what_ships_and_leaves_dev_dependencies_to_the_tests ... ok\ntest aranha_names_no_vendor_and_cites_no_vendor_document ... ok\ntest what_a_consumer_of_aranha_compiles_is_light ... ok\ntest aranha_compiles_in_no_file_from_outside_its_folder ... ok\ntest the_codecs_build_alone_and_the_rest_of_aranha_builds_on_them_as_another_crate ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 49.75s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s\n     Running tests/real_tree.rs (target/debug/build/leis/4e3fbdc8717d6bf9/out/real_tree-4e3fbdc8717d6bf9)\n     Running tests/component.rs (target/debug/build/veredas-aranha/9448db38c4316d1e/out/component-9448db38c4316d1e)",
-  "ranAt": "2026-11-23T01:31:14.599Z",
-  "headCommit": "3ce11aa56215c7917eca3b74dc2ff2617fd3dea3",
+  "outputSha": "f7e3fe57443fb215cf4a09275134850a977cbbe8feae2aa2e2169119a5376a4a",
+  "outputTail": "test aranha_is_one_library_and_at_most_its_one_executable ... ok\ntest the_check_refuses_every_target_but_the_library_and_its_one_executable ... ok\ntest aranha_names_no_vendor_and_cites_no_vendor_document ... ok\ntest the_walk_follows_what_ships_and_leaves_dev_dependencies_to_the_tests ... ok\ntest what_a_consumer_of_aranha_compiles_is_light ... ok\ntest the_proc_macros_its_builds_and_tests_use_are_named ... ok\ntest aranha_holds_no_assembly_and_no_doctest ... ok\ntest aranha_compiles_in_no_file_from_outside_its_folder ... ok\ntest the_codecs_build_alone_and_the_rest_of_aranha_builds_on_them_as_another_crate ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.70s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running tests/real_tree.rs (target/debug/build/leis/4e3fbdc8717d6bf9/out/real_tree-4e3fbdc8717d6bf9)\n     Running tests/component.rs (target/debug/build/veredas-aranha/9448db38c4316d1e/out/component-9448db38c4316d1e)",
+  "ranAt": "2026-11-23T06:57:24.686Z",
+  "headCommit": "58cddd451e2f4742d3dd2b881744ca3264426676",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/component.rs",
       "file": "crates/veredas-aranha/tests/component.rs",
-      "fileSha": "1d7249122a78f0bc74249886bb7bb022d5a8d05489001c994c5ddd1a9d3ad852"
+      "fileSha": "cf97839b9ba51b5ed876447a95da50b1478e71e5c1757fa2d715b40e91b88ed3"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",
