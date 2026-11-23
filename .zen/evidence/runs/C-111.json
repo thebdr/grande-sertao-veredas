@@ -1,24 +1,25 @@
 {
   "clause": "C-111",
-  "command": "cargo test -p veredas-maquinar --test ethernetip_adapter",
+  "command": "cargo nextest run -p veredas-maquinar --test ethernetip_adapter",
   "commandArgv": [
     "cargo",
-    "test",
+    "nextest",
+    "run",
     "-p",
     "veredas-maquinar",
     "--test",
     "ethernetip_adapter"
   ],
   "exitCode": 0,
-  "outputSha": "47716f52e91aadc3256a4fe2484c989919938045e6fde1ae83f207269e3640e3",
-  "outputTail": "test a_frame_late_from_its_originator_or_from_another_host_is_kept_out ... ok\ntest a_connection_whose_originator_falls_silent_is_closed_at_its_timeout ... ok\ntest a_connection_s_first_frame_comes_at_once_whatever_the_others_wait_for ... ok\ntest the_dissectors_read_a_whole_conversation_as_the_protocol_has_it ... ok\ntest list_identity_reaches_a_broadcast_and_names_the_address_it_answers_from ... ok\ntest produced_frames_go_to_the_originator_s_host_at_its_port_or_the_standard_one ... ok\ntest the_knobs_stall_production_silence_the_sessions_and_restart_the_device ... ok\ntest a_large_forward_open_with_unequal_rpis_is_taken_or_refused_as_a_forward_open_is ... ok\ntest a_class_1_connection_produces_at_its_rpi_and_consumes_what_its_originator_runs ... ok\ntest the_timeout_counts_the_consumed_rpi_and_the_multiplier_and_the_first_frame_waits_ten_seconds ... ok\n\ntest result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.20s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running tests/ethernetip_adapter.rs (target/debug/build/veredas-maquinar/597dd759b5076aba/out/ethernetip_adapter-597dd759b5076aba)",
-  "ranAt": "2026-11-22T21:33:21.017Z",
-  "headCommit": "88cf2709428949767edd6fc52fc35b737004a441",
+  "outputSha": "22e293abe22bc3c41c2711457297db88022ea696c61beca90f677590c147b724",
+  "outputTail": "        PASS [   0.013s] (24/36) veredas-maquinar::ethernetip_adapter round_2::the_first_frame_comes_at_once_at_a_long_rpi\n        PASS [   0.015s] (25/36) veredas-maquinar::ethernetip_adapter stopping_closes_everything_and_frees_every_port\n        PASS [   0.017s] (26/36) veredas-maquinar::ethernetip_adapter the_crate_s_own_scanner_leaves_the_sequence_count_out_and_is_refused_for_it\n        PASS [   0.018s] (27/36) veredas-maquinar::ethernetip_adapter the_configuration_reads_from_toml_with_its_defaults_and_refuses_what_cannot_serve\n        PASS [   0.019s] (28/36) veredas-maquinar::ethernetip_adapter the_identity_object_answers_its_attributes_and_refuses_the_rest\n        PASS [   0.020s] (29/36) veredas-maquinar::ethernetip_adapter the_assembly_object_reads_and_writes_the_data_the_plant_side_holds\n        PASS [   0.021s] (30/36) veredas-maquinar::ethernetip_adapter the_remaining_refusals_and_the_plant_side_by_bytes\n        PASS [   0.023s] (31/36) veredas-maquinar::ethernetip_adapter the_configured_headers_carry_the_frames_both_ways\n        PASS [   0.047s] (32/36) veredas-maquinar::ethernetip_adapter the_documented_adapter_runs_from_its_bench_file\n        PASS [   0.503s] (33/36) veredas-maquinar::ethernetip_adapter the_dissectors_read_a_whole_conversation_as_the_protocol_has_it\n        PASS [   0.833s] (34/36) veredas-maquinar::ethernetip_adapter the_knobs_stall_production_silence_the_sessions_and_restart_the_device\n        PASS [   2.891s] (35/36) veredas-maquinar::ethernetip_adapter round_2::the_refusals_read_by_the_dissectors\n        PASS [  10.199s] (36/36) veredas-maquinar::ethernetip_adapter the_timeout_counts_the_consumed_rpi_and_the_multiplier_and_the_first_frame_waits_ten_seconds\n────────────\n     Summary [  16.618s] 36 tests run: 36 passed, 0 skipped",
+  "ranAt": "2026-11-23T02:36:10.756Z",
+  "headCommit": "4113e9ef6f6528a2f876d1d445fa2ab0f6840d35",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/ethernetip_adapter.rs",
       "file": "crates/veredas-maquinar/tests/ethernetip_adapter.rs",
-      "fileSha": "00877f24cb34baf5db668a6122da0a1e464a710ea5025b85709df757d2016206"
+      "fileSha": "0b58768db36461ab9a910743aae0af917d2656386fd6179f28fb3989dd992812"
     }
   ]
 }
