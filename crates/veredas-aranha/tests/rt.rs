@@ -41,6 +41,11 @@ fn a_cyclic_frame_is_its_id_its_data_and_its_status_to_the_byte() {
     assert_eq!(&wire[12..18], &[0x81, 0x00, 0xB0, 0x64, 0x88, 0x92]);
     let e = ether::parse(&wire).unwrap();
     assert_eq!((e.dst, e.src, e.vlan), (DEVICE, CONTROLLER, Some(other)));
+    // A VLAN id past a byte, the highest one written, kept whole.
+    let high = VlanTag { priority: 1, drop_eligible: false, id: 4094 };
+    let wire = f.frame(DEVICE, CONTROLLER, Some(high)).unwrap();
+    assert_eq!(&wire[12..16], &[0x81, 0x00, 0x2F, 0xFE]);
+    assert_eq!(ether::parse(&wire).unwrap().vlan, Some(high));
     // The longest data.
     let long = frame(0x0100, vec![0xA5; 1440], 0x35);
     let back = CyclicFrame::decode(&long.encode().unwrap()).unwrap();
@@ -223,4 +228,62 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
         assert_eq!(theirs, [d.primary(), d.redundancy(), d.valid(), d.running(), d.station_ok(), d.ignore()], "{ds:#04x}");
         assert_eq!((p.one("vlan", "vlan.priority"), p.one("vlan", "vlan.id")), ("5".into(), "100".into()));
     }
+}
+
+#[test]
+fn a_frame_tshark_takes_for_a_secured_one_is_read_plain_by_the_codec() {
+    // PROFINET security travels in the frame's data, and only the connection says a frame is
+    // secured. tshark 4.6.6 reads a cyclic frame as secured when the data's bytes 6 and 7 are its
+    // length less 20 (their reserved bits clear): bytes 0 to 7 its security header, and then,
+    // authenticated (bit 0 of byte 0 clear), the status from data bytes n-16 on, or, encrypted, no
+    // status at all; with no complaint. The codec reads every such frame as written: its data the
+    // connection's, its status the last four bytes.
+    let pattern = |n: usize| -> Vec<u8> { (0..n).map(|i| (i * 7 + 3) as u8).collect() };
+    let mut frames = Vec::new();
+    let mut cases = Vec::new();
+    for id in [0x0100u16, 0x8001, 0xC000, 0xF800] {
+        for n in [40usize, 1440] {
+            for kind in ["authenticated", "encrypted", "less 19", "less 21", "bit 0x0800", "bit 0x8000"] {
+                let mut data = pattern(n);
+                data[0] &= 0xFE;
+                let word = match kind {
+                    "less 19" => n - 19,
+                    "less 21" => n - 21,
+                    "bit 0x0800" => (n - 20) | 0x0800,
+                    "bit 0x8000" => (n - 20) | 0x8000,
+                    _ => n - 20,
+                } as u16;
+                data[6..8].copy_from_slice(&word.to_be_bytes());
+                if kind == "encrypted" {
+                    data[0] |= 1;
+                }
+                let f = frame(id, data, 0x35);
+                let wire = f.frame(DEVICE, CONTROLLER, Some(rt::CYCLIC_TAG)).unwrap();
+                assert_eq!(CyclicFrame::decode(ether::parse(&wire).unwrap().payload).unwrap(), f, "{id:#06x} {n} {kind}");
+                frames.push(wire);
+                cases.push((id, n, kind, f));
+            }
+        }
+    }
+    let read = common::dissect(&frames);
+    let r = "pn_rt";
+    for (p, (id, n, kind, f)) in read.iter().zip(&cases) {
+        let what = format!("{id:#06x} {n} {kind}");
+        assert!(p.complaints().is_empty(), "{what}: {:?}", p.complaints());
+        let counter = p.values(r, "pn_rt.cycle_counter");
+        match *kind {
+            "authenticated" => {
+                let theirs = u16::from_be_bytes([f.data[n - 16], f.data[n - 15]]);
+                assert_eq!(counter, [theirs.to_string()], "{what}");
+                assert_ne!(theirs, f.cycle_counter, "{what}");
+                assert_eq!(p.one(r, "pn_rt.transfer_status"), f.data[n - 13].to_string(), "{what}");
+            }
+            "encrypted" => assert!(counter.is_empty(), "{what}: {counter:?}"),
+            _ => {
+                assert_eq!(counter, [f.cycle_counter.to_string()], "{what}");
+                assert_eq!(p.one(r, "pn_rt.transfer_status"), "0", "{what}");
+            }
+        }
+    }
+    assert_eq!(cases.len(), 48);
 }

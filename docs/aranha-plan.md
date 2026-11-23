@@ -289,6 +289,11 @@ is pinned by a test when its phase lands.
   fixture waits for a numbered probe to cross each pair each way (`netns::wait_pairs`); a test that
   raises a pair again calls it too. The raw link's tests wait on deadlines: they run one at a time
   on the machine, under the suite lock, as maquinar's timed tests do.
+- **tshark reads PROFINET security into a plain cyclic frame** (measured, 4.6.6): when the data's
+  bytes 6 and 7 are the data's length less 20, it takes bytes 0 to 7 for a security header and the
+  status from other bytes, or none, with no complaint. Only the connection says a frame is
+  secured, so the codec reads every frame plain (C-135); a test whose data meets the pattern by
+  chance reads in tshark otherwise than written (about once in 65 536 random frames).
 - **The kernel takes a frame's outer tag out on the far end, not on the sending end**, so a filter
   that counts the tags left in the frame looks one tag deeper on one end than on the other. The
   raw link's filter counts the tag the kernel took out (C-134).
