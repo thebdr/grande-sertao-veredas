@@ -788,34 +788,45 @@ fn a_stop_waits_for_a_dashboard_still_computed() {
     let a = plant(&dir.path().join("bench-a"));
     let b = plant(&dir.path().join("bench-b"));
     let path = two_plants(dir.path(), &a, &b);
-    // Read twice in each of two panels (its count, then its page), the store free between them:
-    // about six seconds on the desk alone, several times that beside the whole suite.
-    let n: u64 = 14_000;
+    // Read twice in each of two panels (its count, then its page): sized until the dashboard takes
+    // more than four seconds here, whatever the engine and the machine's load make of one size
+    // (about six seconds at the first size on the desk alone; 3.3 read here on 2026-11-23, after
+    // portal's reads of a page changed, C-041): its size raised by half and the session started
+    // afresh (its store removed) until it does.
     let project = dir.path().join("loop/project.toml");
-    let text = std::fs::read_to_string(&project).unwrap().replace("store = \"ram\"", "store = { disk = \"loop.duckdb\" }");
-    std::fs::write(&project, format!("{text}\n[[table]]\nname = \"slow\"\nsql = \"SELECT count(*) AS n FROM range({n}) a, range({n}) b WHERE (a.range * 31 + b.range) % 1000003 = 1\"\n")).unwrap();
+    let base = std::fs::read_to_string(&project).unwrap().replace("store = \"ram\"", "store = { disk = \"loop.duckdb\" }");
     let binding = dir.path().join("loop/binding.toml");
     let text = std::fs::read_to_string(&binding).unwrap();
     let slow = text.matches("\n[[dashboard]]").count();
     std::fs::write(&binding, format!("{text}\n[[dashboard]]\nname = \"Slow\"\n\n[[dashboard.panel]]\nkind = \"table\"\ntable = \"slow\"\n\n[[dashboard.panel]]\nkind = \"table\"\ntable = \"slow\"\n")).unwrap();
-    let host = Host::start(config::load_file(&path).unwrap()).unwrap();
-    let addr = host.addr();
-    // Read once whole: how long the dashboard takes to compute here (waited for as long as a
-    // loaded machine needs, beyond the twenty seconds the shared reader allows).
-    let started = std::time::Instant::now();
-    let mut s = TcpStream::connect(addr).unwrap();
-    s.set_read_timeout(Some(Duration::from_secs(300))).unwrap();
-    // (HTTP/1.0: the body comes whole, never in chunks.)
-    s.write_all(format!("GET /s/loop/dashboard/{slow} HTTP/1.0\r\nHost: {addr}\r\n\r\n").as_bytes()).unwrap();
-    let mut raw = Vec::new();
-    std::io::Read::read_to_end(&mut s, &mut raw).unwrap();
-    let takes = started.elapsed();
-    let text = String::from_utf8_lossy(&raw).into_owned();
-    let (head, body) = text.split_once("\r\n\r\n").expect("a header block");
-    let status: u16 = head.split_whitespace().nth(1).unwrap().parse().unwrap();
-    let whole: Value = serde_json::from_str(body).unwrap_or_else(|e| panic!("{e}: {head} {body}"));
-    assert_eq!((status, whole["panels"][0]["error"].clone()), (200, Value::Null), "{whole}");
-    assert!(takes > Duration::from_secs(4), "the view is read in {takes:?} here: too quick to outlast a stop's first two seconds");
+    let mut n: u64 = 14_000;
+    let (host, addr, takes) = loop {
+        std::fs::write(&project, format!("{base}\n[[table]]\nname = \"slow\"\nsql = \"SELECT count(*) AS n FROM range({n}) a, range({n}) b WHERE (a.range * 31 + b.range) % 1000003 = 1\"\n")).unwrap();
+        let host = Host::start(config::load_file(&path).unwrap()).unwrap();
+        let addr = host.addr();
+        // Read once whole: how long the dashboard takes to compute here (waited for as long as a
+        // loaded machine needs, beyond the twenty seconds the shared reader allows).
+        let started = std::time::Instant::now();
+        let mut s = TcpStream::connect(addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(300))).unwrap();
+        // (HTTP/1.0: the body comes whole, never in chunks.)
+        s.write_all(format!("GET /s/loop/dashboard/{slow} HTTP/1.0\r\nHost: {addr}\r\n\r\n").as_bytes()).unwrap();
+        let mut raw = Vec::new();
+        std::io::Read::read_to_end(&mut s, &mut raw).unwrap();
+        let takes = started.elapsed();
+        let text = String::from_utf8_lossy(&raw).into_owned();
+        let (head, body) = text.split_once("\r\n\r\n").expect("a header block");
+        let status: u16 = head.split_whitespace().nth(1).unwrap().parse().unwrap();
+        let whole: Value = serde_json::from_str(body).unwrap_or_else(|e| panic!("{e}: {head} {body}"));
+        assert_eq!((status, whole["panels"][0]["error"].clone()), (200, Value::Null), "{whole}");
+        if takes > Duration::from_secs(4) || n > 60_000 {
+            break (host, addr, takes);
+        }
+        host.stop();
+        std::fs::remove_file(dir.path().join("loop/loop.duckdb")).unwrap();
+        n = n * 3 / 2;
+    };
+    assert!(takes > Duration::from_secs(4), "the view is read in {takes:?} here at {n}: too quick to outlast a stop's first two seconds");
     // Asked again, and the host stopped a second later while it is computed.
     let asking = std::thread::spawn(move || {
         let mut s = TcpStream::connect(addr).unwrap();
