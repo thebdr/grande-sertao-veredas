@@ -245,7 +245,14 @@ pub fn keep(runs: &Path, c: &Checked, r: &RunResult, mode: &RunMode, plant: &dyn
         write(&file, &u.text)?;
         functions.push(FunctionPart { used_as: u.path.clone(), file });
     }
-    // The evidence: every row of every table the run read, stamped in its window.
+    // The evidence: every row of every table the run read, stamped in its window; a live run's
+    // read once the window's end is far enough past for its last rows to be stored, as every read
+    // of a live run is (C-202).
+    if let RunMode::Live = mode {
+        while plant.now_ms() < r.end_ms + crate::run::SETTLE_MS {
+            std::thread::sleep(crate::run::POLL);
+        }
+    }
     let tables: Vec<Table> = plant.tables().map_err(|e| RecordError::Evidence { table: String::new(), reason: e.to_string() })?;
     let mut evidence = Vec::new();
     for (i, name) in r.tables.iter().enumerate() {
