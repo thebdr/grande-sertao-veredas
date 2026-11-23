@@ -327,15 +327,24 @@ fn in_the_suites_workspace_build_its_graph_is_the_reviewed_one() {
     }
 }
 
-/// The folders of the cargo processes that started this test (cargo reads the configuration of
-/// the folder it is started in), and any `--config` they were given: read on Linux from `/proc`,
-/// up the whole chain of parent processes, cargo's own read and any other (a runner, a script)
-/// passed over; `None` off Linux.
-fn invoking_cargo() -> Option<(Vec<PathBuf>, Vec<String>)> {
-    if !Path::new("/proc/self/stat").exists() {
-        return None;
+/// A cargo process among those that started this test: the folder it was started in (cargo reads
+/// that folder's configuration), its program, its arguments and its environment, which is what
+/// cargo itself reads (a runner may give the test another).
+struct Invoking {
+    folder: PathBuf,
+    program: PathBuf,
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+}
+
+/// Every cargo among the processes that started this test, read on Linux from `/proc`, up the
+/// whole chain of parent processes, any other (a runner, a script) passed over. Off Linux, none.
+fn invoking_cargo() -> Vec<Invoking> {
+    if !cfg!(target_os = "linux") {
+        return Vec::new();
     }
-    let (mut folders, mut configs) = (Vec::new(), Vec::new());
+    assert!(Path::new("/proc/self/stat").exists(), "/proc cannot be read: the cargo that runs this test is out of sight");
+    let mut out = Vec::new();
     let mut pid = std::process::id();
     while let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         // the parent is the second field after the command, which is in parentheses
@@ -347,20 +356,62 @@ fn invoking_cargo() -> Option<(Vec<PathBuf>, Vec<String>)> {
         }
         let comm = std::fs::read_to_string(format!("/proc/{ppid}/comm")).unwrap_or_default();
         if matches!(comm.trim(), "cargo" | "cargo-nextest") {
-            if let Ok(cwd) = std::fs::read_link(format!("/proc/{ppid}/cwd")) {
-                folders.push(cwd);
-            }
-            if let Ok(cmd) = std::fs::read(format!("/proc/{ppid}/cmdline")) {
-                for arg in cmd.split(|b| *b == 0).map(String::from_utf8_lossy) {
-                    if arg == "--config" || arg.starts_with("--config=") {
-                        configs.push(arg.to_string());
-                    }
-                }
-            }
+            let split = |file: &str| -> Vec<String> {
+                std::fs::read(format!("/proc/{ppid}/{file}"))
+                    .unwrap_or_default()
+                    .split(|b| *b == 0)
+                    .filter(|a| !a.is_empty())
+                    .map(|a| String::from_utf8_lossy(a).to_string())
+                    .collect()
+            };
+            out.push(Invoking {
+                folder: std::fs::read_link(format!("/proc/{ppid}/cwd")).unwrap_or_default(),
+                program: std::fs::read_link(format!("/proc/{ppid}/exe")).unwrap_or_default(),
+                args: split("cmdline"),
+                env: split("environ").into_iter().filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.to_string(), v.to_string()))).collect(),
+            });
         }
         pid = ppid;
     }
-    Some((folders, configs))
+    assert!(!out.is_empty(), "no cargo among the processes that started this test");
+    out
+}
+
+/// What an environment cargo runs in may not hold: an alias handing cargo a `--config`, a rustc
+/// wrapper, a rustc that is not the toolchain's (`RUSTC`, `CARGO_BUILD_RUSTC`, else the first on
+/// `PATH`, which must be the toolchain's own or rustup's proxy), compiler flags setting a `cfg`
+/// (`--cfg feature="mock_time"` would turn on the engine's fixed clock with no feature cargo
+/// sees). `toolchain` is the folder of that cargo's program.
+fn check_environment(whose: &str, env: &[(String, String)], toolchain: &Path) {
+    let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty());
+    for (var, value) in env.iter().filter(|(k, _)| k.starts_with("CARGO_ALIAS_")) {
+        assert!(!value.contains("--config"), "{whose}: {var} gives cargo a --config");
+    }
+    for var in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"] {
+        assert!(get(var).is_none(), "{whose}: {var} is set: something compiles crates in rustc's place");
+    }
+    let own = |named: &Path| {
+        let real = named.canonicalize().unwrap_or_else(|_| named.to_path_buf());
+        let toolchain = toolchain.canonicalize().unwrap_or_else(|_| toolchain.to_path_buf());
+        (real.parent() == Some(toolchain.as_path()) && real.file_stem().is_some_and(|f| f == "rustc"))
+            || real.file_stem().is_some_and(|f| f == "rustup")
+    };
+    match get("RUSTC").or(get("CARGO_BUILD_RUSTC")) {
+        Some(named) => assert!(own(Path::new(named)), "{whose}: RUSTC is {named}: a rustc not the toolchain's ({})", toolchain.display()),
+        None => {
+            if let Some(path) = get("PATH") {
+                let first = std::env::split_paths(path).map(|d| d.join("rustc")).find(|r| r.is_file());
+                if let Some(first) = first {
+                    assert!(own(&first), "{whose}: the first rustc on PATH, {}, is not the toolchain's ({})", first.display(), toolchain.display());
+                }
+            }
+        }
+    }
+    for (var, value) in env.iter().filter(|(k, _)| {
+        k == "RUSTFLAGS" || k == "CARGO_ENCODED_RUSTFLAGS" || k == "CARGO_BUILD_RUSTFLAGS" || (k.starts_with("CARGO_TARGET_") && k.ends_with("_RUSTFLAGS"))
+    }) {
+        assert!(!value.contains("--cfg"), "{whose}: {var} sets a cfg: {value}");
+    }
 }
 
 /// The top-level keys a cargo configuration of this machine may hold: none of them names where a
@@ -449,20 +500,27 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".cargo")));
     let mut configs: BTreeSet<PathBuf> = BTreeSet::new();
-    let (invoked_in, given) = match invoking_cargo() {
-        Some((folders, given)) => {
-            assert!(!folders.is_empty(), "no cargo among the processes that started this test");
-            (folders, given)
+    let invoking = invoking_cargo();
+    for cargo in &invoking {
+        let given: Vec<&String> = cargo.args.iter().filter(|a| *a == "--config" || a.starts_with("--config=")).collect();
+        assert!(given.is_empty(), "the cargo that runs this test ({}) was given {given:?}", cargo.program.display());
+        check_environment(&format!("the cargo in {}", cargo.folder.display()), &cargo.env, cargo.program.parent().unwrap_or(Path::new("/")));
+    }
+    let own_env: Vec<(String, String)> = std::env::vars().collect();
+    check_environment("this test", &own_env, Path::new(env!("CARGO")).parent().unwrap());
+    // and the cargo homes each of them reads
+    for cargo in &invoking {
+        let get = |k: &str| cargo.env.iter().find(|(n, _)| n == k).map(|(_, v)| PathBuf::from(v));
+        if let Some(home) = get("CARGO_HOME").or_else(|| get("HOME").map(|h| h.join(".cargo"))) {
+            configs.insert(home.join("config"));
+            configs.insert(home.join("config.toml"));
         }
-        None => (Vec::new(), Vec::new()),
-    };
-    assert!(given.is_empty(), "the cargo that runs this test was given {given:?}");
-    // an alias expands to arguments inside cargo, unseen on its command line
-    for (var, value) in std::env::vars().filter(|(k, _)| k.starts_with("CARGO_ALIAS_")) {
-        assert!(!value.contains("--config"), "{var} gives cargo a --config");
     }
     let here = std::env::current_dir().unwrap();
-    for start in [root(), root().join("forks/ironcalc"), PathBuf::from(env!("CARGO_MANIFEST_DIR")), here].into_iter().chain(invoked_in) {
+    for start in [root(), root().join("forks/ironcalc"), PathBuf::from(env!("CARGO_MANIFEST_DIR")), here]
+        .into_iter()
+        .chain(invoking.iter().map(|c| c.folder.clone()))
+    {
         for dir in start.ancestors() {
             for file in [".cargo/config", ".cargo/config.toml"] {
                 configs.insert(dir.join(file));
@@ -482,25 +540,19 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
         for key in ["rustc", "rustc-wrapper", "rustc-workspace-wrapper"] {
             assert!(build.is_none_or(|b| !b.contains_key(key)), "{}: build.{key} set", config.display());
         }
+        // and no compiler flag sets a cfg (a feature cargo would not see)
+        let flags = |v: Option<&toml::Value>| v.is_some_and(|f| f.to_string().contains("--cfg"));
+        assert!(!flags(build.and_then(|b| b.get("rustflags"))), "{}: build.rustflags sets a cfg", config.display());
+        for (triple, table) in t.get("target").and_then(|t| t.as_table()).into_iter().flatten() {
+            assert!(!flags(table.get("rustflags")), "{}: target.{triple}.rustflags sets a cfg", config.display());
+        }
         // and no alias gives cargo a configuration of its own
         let aliases = t.get("alias").and_then(|a| a.as_table());
         for (name, value) in aliases.into_iter().flatten() {
             assert!(!value.to_string().contains("--config"), "{}: alias {name} gives cargo a --config", config.display());
         }
     }
-    for var in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"] {
-        assert!(std::env::var_os(var).is_none_or(|v| v.is_empty()), "{var} is set: something compiles crates in rustc's place");
-    }
-    // a rustc named in the environment is the toolchain's own, beside the cargo that runs this
-    let toolchain = Path::new(env!("CARGO")).parent().unwrap().to_path_buf();
-    for var in ["RUSTC", "CARGO_BUILD_RUSTC"] {
-        if let Some(v) = std::env::var_os(var).filter(|v| !v.is_empty()) {
-            let named = PathBuf::from(&v);
-            let own = named.parent() == Some(toolchain.as_path())
-                && named.file_stem().is_some_and(|f| f == "rustc");
-            assert!(own, "{var} is {}: a rustc not the toolchain's ({})", named.display(), toolchain.display());
-        }
-    }
+
     // and in what the locks say, whatever route did it: every package from crates.io, or a path
     // package of that workspace (the suite's members and the fork's two crates; the fork's two
     // alone), no patch left unused
