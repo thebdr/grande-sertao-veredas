@@ -375,7 +375,7 @@ fn a_cache_whose_type_and_text_excel_never_pairs_matches_nothing_the_engine_comp
         .into_iter()
         .find(|c| matches!(c.expected, abaco_oracle::Expected::Number(_)) && !c.shared_copy)
         .unwrap();
-    let cases: [(&str, &str); 14] = [
+    let cases: [(&str, &str); 17] = [
         (r##"<f>"#CIRC!"</f>"##, r##" t="e"><f>"#CIRC!"</f><v>#CIRC!</v>"##),
         (r##"<f>"TRUE"</f>"##, r##" t="b"><f>"TRUE"</f><v>TRUE</v>"##),
         (r##"<f>"abc"</f>"##, r##" t="b"><f>"abc"</f><v>abc</v>"##),
@@ -388,6 +388,10 @@ fn a_cache_whose_type_and_text_excel_never_pairs_matches_nothing_the_engine_comp
         ("<f>5</f>", r##" t="d"><f>5</f><v>5</v>"##),
         ("<f>5</f>", r##" t="zz"><f>5</f><v>5</v>"##),
         (r##"<f>"abc"</f>"##, r##" t="inlineStr"><f>"abc"</f><v>abc</v>"##),
+        // an inline string on a formula, plain, in runs with a phonetic run, and empty
+        (r##"<f>"abc"</f>"##, r##" t="inlineStr"><f>"abc"</f><is><t>abc</t></is>"##),
+        (r##"<f>"abc"</f>"##, r##" t="inlineStr"><f>"abc"</f><is><r><t>ab</t></r><r><t>c</t></r><rPh sb="0" eb="1"><t>X</t></rPh></is>"##),
+        (r##"<f>""</f>"##, r##" t="inlineStr"><f>""</f><is><t></t></is>"##),
         (r##"<f>"abc"</f>"##, r##" t="e"><f>"abc"</f><is><t>abc</t></is>"##),
         (r##"<f>"abc"</f>"##, r##"><f>"abc"</f><is><t>abc</t></is>"##),
     ];

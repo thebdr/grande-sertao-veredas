@@ -148,7 +148,6 @@ fn re(pattern: &str) -> Regex {
     Regex::new(pattern).expect("a constant pattern")
 }
 
-static RE_T: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)<t(?:\s[^>]*)?>(.*?)</t>"));
 static RE_REL: LazyLock<Regex> = LazyLock::new(|| re(r#"<Relationship\s[^>]*?Id="([^"]+)"[^>]*?Target="([^"]+)""#));
 static RE_TYPED_REL: LazyLock<Regex> = LazyLock::new(|| re(r#"<Relationship\s[^>]*?Type="([^"]+)"[^>]*?Target="([^"]+)""#));
 static RE_TYPED_REL2: LazyLock<Regex> = LazyLock::new(|| re(r#"<Relationship\s[^>]*?Target="([^"]+)"[^>]*?Type="([^"]+)""#));
@@ -264,7 +263,6 @@ fn decode_escapes(s: &str) -> String {
 /// (`#SPILL!`, `#CALC!`, …) as `#VALUE!` with value metadata.
 pub const FILE_ERRORS: [&str; 8] = ["#NULL!", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#GETTING_DATA"];
 
-static RE_RPH: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)<rPh\b.*?</rPh>"));
 static RE_BK: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)<bk>(.*?)</bk>"));
 static RE_RC: LazyLock<Regex> = LazyLock::new(|| re(r#"<rc\s+t="([0-9]+)"\s+v="([0-9]+)""#));
 static RE_RVB: LazyLock<Regex> = LazyLock::new(|| re(r#"<xlrd:rvb\s+i="([0-9]+)""#));
@@ -492,11 +490,8 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
             let is = RE_IS.captures(inner).map(|m| m[1].to_string());
             let never = |what: String| Expected::Unwritten(what);
             let expected = match (t.as_deref(), v, is) {
-                // an inline string's text is its `<is>`, and only an inline string's
-                (Some("inlineStr"), None, Some(is)) => {
-                    let text = RE_RPH.replace_all(&is, "");
-                    Expected::Text(RE_T.captures_iter(&text).map(|t| xml_text(&t[1])).collect())
-                }
+                // an inline string (`<is>`, whatever the cell's type) is a constant's: Excel writes
+                // a formula's text as `str`, never inline
                 (_, None, Some(is)) => never(format!("<is>{is}</is>")),
                 // Excel writes the value every formula computed: no `<v>` is a cache it never wrote
                 (_, None, None) => Expected::Missing,
