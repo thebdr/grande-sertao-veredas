@@ -716,7 +716,7 @@ fn an_edge_s_q_is_off_again_on_the_scan_after_its_edge() {
 /// or `cr` prefix and a raw string's hashes; a lifetime or a label kept whole; every other character a token of its
 /// own. Doc examples are comments, so no code of the library.
 fn code_of(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
+    let chars: Vec<char> = without_shebang(text).chars().collect();
     let is_word = |c: char| c.is_alphanumeric() || c == '_';
     let mut tokens: Vec<String> = Vec::new();
     let mut i = 0;
@@ -786,6 +786,38 @@ fn code_of(text: &str) -> String {
         }
     }
     tokens.join(" ")
+}
+
+/// A source as rustc takes it in: a byte-order mark dropped, and a first line starting `#!` dropped too when what
+/// follows the `#!`, past whitespace and comments, is not `[` (a shebang, not an inner attribute).
+fn without_shebang(text: &str) -> &str {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let Some(rest) = text.strip_prefix("#!") else { return text };
+    let mut after = rest;
+    loop {
+        after = after.trim_start();
+        if let Some(line) = after.strip_prefix("//") {
+            after = line.split_once('\n').map_or("", |(_, next)| next);
+        } else if after.starts_with("/*") {
+            let mut depth = 0;
+            let mut end = after.len();
+            for (at, _) in after.char_indices() {
+                if after[at..].starts_with("/*") {
+                    depth += 1;
+                } else if after[at..].starts_with("*/") && depth > 0 {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = at + 2;
+                        break;
+                    }
+                }
+            }
+            after = &after[end..];
+        } else {
+            break;
+        }
+    }
+    if after.starts_with('[') { text } else { text.split_once('\n').map_or("", |(_, next)| next) }
 }
 
 fn next_is(chars: &[char], at: usize, c: char) -> bool {
@@ -923,10 +955,14 @@ fn the_sources_read_as_compiled_hold_only_the_words_the_clause_allows() {
         assert_eq!(count(&all, "macro_rules"), usize::from(file == "bits.rs"), "{file}: macro_rules");
         // and that macro takes types alone, in one invocation, so it can re-emit nothing the reading did not see
         if file == "bits.rs" {
-            let matcher = "macro_rules ! impl_bits { ( $ ( $ t : ty ) , * ) = > {";
-            let invocation = "impl_bits ! ( u8 , u16 , u32 , u64 ) ;";
-            assert_eq!(code.matches(matcher).count(), 1, "bits.rs: impl_bits! takes types alone: {code}");
-            assert_eq!(code.matches(invocation).count(), 1, "bits.rs: impl_bits! invoked once, on the four widths");
+            let matcher = "macro_rules ! impl_bits { ( $ ( $ t : ty ) ,";
+            let arms = [format!("{matcher} * ) = > {{"), format!("{matcher} + ) = > {{")];
+            let found = arms.iter().map(|arm| code.matches(arm.as_str()).count()).sum::<usize>();
+            assert_eq!(found, 1, "bits.rs: impl_bits! takes types alone");
+            let widths = code.split_once("impl_bits ! ( ").and_then(|(_, rest)| rest.split_once(" ) ;"));
+            let mut widths: Vec<&str> = widths.map(|(inside, _)| inside.split(" , ").collect()).unwrap_or_default();
+            widths.sort_unstable();
+            assert_eq!(widths, ["u16", "u32", "u64", "u8"], "bits.rs: impl_bits! invoked once, on the four widths");
             assert_eq!(count(&all, "impl_bits"), 2, "bits.rs: impl_bits! defined and invoked, nothing more");
             assert_eq!(code.matches("= > {").count(), 1, "bits.rs: impl_bits! has one arm");
         }
@@ -973,6 +1009,9 @@ core::cfg_select! { debug_assertions => { fn d() {} } _ => { fn d() {} } }
     }
     assert_eq!(code.matches(TESTS_SITE).count(), 1, "cfg(test) found however spaced");
     assert_eq!((code.matches("# [ expect (").count(), code.matches(". expect (").count()), (1, 1), "an attribute, a call");
+    // a shebang is no comment: rustc drops the line and reads on, and so does the reading; an inner attribute stays
+    assert!(code_of("#!/*\nfn shown_after_a_shebang() {}\n// */\n").contains("fn shown_after_a_shebang"));
+    assert!(code_of("\u{feff}#! /* a comment */ [no_std]\nfn f() {}\n").starts_with("# ! [ no_std ]"));
     assert!(is_tests_module(&tests_module), "on the module, after another attribute");
     let module_words = words(&tests_module);
     assert!(module_words.contains(&"t") && !module_words.contains(&"after"), "the module ends at its brace");
@@ -1390,4 +1429,93 @@ fn edge_blocks_side_by_side_each_keep_their_own_memory() {
     assert!(!d.scan(false), "d low from its first scan: no fall, whatever c last saw");
     assert!(c.scan(false), "c falls");
     assert!(!d.scan(false), "d still low: no fall");
+}
+
+// The twenty-first refute round: a pulse released on the scan it ends, a `pt` raised to exactly the elapsed time, a
+// second scan at the instant an on-delay switched, the zero-preset paths that keep `q` right, blocks of one kind side
+// by side, and a scan at time zero with a non-zero cycle.
+
+#[test]
+fn a_pulse_released_on_the_scan_it_ends_resets_then_and_every_rise_pulses() {
+    let tp = |p: &mut Tp, t: u64, input: bool| (p.scan(&at(t), input, ms(100)), p.q(), p.et());
+    let mut p = Tp::default();
+    assert_eq!(tp(&mut p, 0, true), (true, true, ms(0)));
+    assert_eq!(tp(&mut p, 50, true), (true, true, ms(50)));
+    assert_eq!(tp(&mut p, 100, false), (false, false, ms(0)), "over, its input off by then: reset on that scan");
+    assert_eq!(tp(&mut p, 110, true), (true, true, ms(0)), "the next press pulses");
+    // a signal high for 100 ms and low for one 10 ms scan, a pulse of 100 ms: one pulse per rising edge
+    let mut p = Tp::default();
+    let (mut rises, mut pulses, mut last_in, mut last_q) = (0, 0, false, false);
+    for k in 0..110_u64 {
+        let input = k % 11 != 10;
+        let q = p.scan(&at(k * 10), input, ms(100));
+        rises += usize::from(input && !last_in);
+        pulses += usize::from(q && !last_q);
+        (last_in, last_q) = (input, q);
+    }
+    assert_eq!((rises, pulses), (10, 10), "every rising edge pulses");
+}
+
+#[test]
+fn an_on_delay_stays_on_at_exactly_its_pt_on_any_later_scan() {
+    let mut on = Ton::default();
+    on.scan(&at(0), true, ms(100));
+    assert!(on.scan(&at(100), true, ms(100)));
+    assert!(on.scan(&at(100), true, ms(100)), "a second scan at the instant it switched: still on");
+    assert_eq!((on.scan(&at(150), true, ms(150)), on.q(), on.et()), (true, true, ms(150)), "pt raised to exactly it");
+}
+
+#[test]
+fn a_zero_preset_keeps_every_timer_s_start_and_its_held_time() {
+    // an on-delay dropped at a zero pt restarts from zero at its next rise
+    let mut on = Ton::default();
+    let mut ton = |t: u64, input: bool, pt: u64| (on.scan(&at(t), input, ms(pt)), on.q(), on.et());
+    ton(0, true, 100);
+    assert_eq!(ton(50, true, 0), (true, true, ms(0)));
+    assert_eq!(ton(60, false, 0), (false, false, ms(0)), "its input off at a zero pt");
+    assert_eq!(ton(70, true, 100), (false, false, ms(0)), "a new rise: restarted from zero");
+    assert_eq!(ton(100, true, 100), (false, false, ms(30)));
+    assert_eq!(ton(170, true, 100), (true, true, ms(100)), "pt after the new rise");
+    // an on-delay started at a zero pt times from its rise when pt is raised
+    let mut on = Ton::default();
+    let mut ton = |t: u64, pt: u64| (on.scan(&at(t), true, ms(pt)), on.q(), on.et());
+    assert_eq!(ton(0, 0), (true, true, ms(0)));
+    assert_eq!(ton(50, 100), (false, false, ms(50)), "pt raised: 50 ms since its input rose");
+    assert_eq!(ton(100, 100), (true, true, ms(100)), "on pt after its input rose");
+    // an off-delay lowered to zero after some delay: off, its elapsed time at the new pt
+    let mut off = Tof::default();
+    let mut tof = |t: u64, input: bool, pt: u64| (off.scan(&at(t), input, ms(pt)), off.q(), off.et());
+    tof(0, true, 100);
+    tof(10, false, 100);
+    assert_eq!(tof(50, false, 100), (true, true, ms(40)));
+    assert_eq!(tof(60, false, 0), (false, false, ms(0)), "off at a pt of zero, its elapsed time held at it");
+    // an off-delay switched off holds its elapsed time when pt goes to zero
+    let mut off = Tof::default();
+    let mut tof = |t: u64, input: bool, pt: u64| (off.scan(&at(t), input, ms(pt)), off.q(), off.et());
+    tof(0, true, 100);
+    tof(10, false, 100);
+    assert_eq!(tof(110, false, 100), (false, false, ms(100)));
+    assert_eq!(tof(120, false, 0), (false, false, ms(100)), "once off, pt set to zero: held at the pt it switched off at");
+}
+
+#[test]
+fn counters_and_pulses_side_by_side_each_keep_their_own_memory() {
+    let (mut a, mut b) = (Ctu::default(), Ctu::default());
+    a.scan(true, false, 3);
+    b.scan(false, false, 3);
+    a.scan(true, false, 3);
+    b.scan(true, false, 3);
+    assert_eq!((a.cv(), b.cv()), (1, 1), "each counts its own rising edge");
+    let (mut p, mut r) = (Tp::default(), Tp::default());
+    assert!(p.scan(&at(0), true, ms(100)));
+    assert!(r.scan(&at(0), true, ms(100)), "r's own first rising edge");
+}
+
+#[test]
+fn a_scan_at_time_zero_is_time_zero_whatever_its_cycle() {
+    let zero = Scan { now: Duration::ZERO, period: ms(10), cycle: 50 };
+    let mut on = Ton::default();
+    on.scan(&zero, true, ms(100));
+    assert!(!on.scan(&at(90), true, ms(100)), "90 ms after a start at zero");
+    assert!(on.scan(&at(100), true, ms(100)));
 }
