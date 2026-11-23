@@ -553,9 +553,9 @@ fn locked(path: &Path) -> BTreeMap<String, BTreeSet<String>> {
 }
 
 /// The fork's suite, as upstream's tests and the changes' count them: upstream's 3 192 and their 8
-/// ignored at `15ecfec`, and the changes' 57 (seven of them changes 12, 14, 16, 17, 18 and 20's;
-/// four, two and one changes 22, 23 and 24's).
-const FORK_PASSED: usize = 3249;
+/// ignored at `15ecfec`, and the changes' 61 (seven of them changes 12, 14, 16, 17, 18 and 20's;
+/// four, two, one and four changes 22, 23, 24 and 25's).
+const FORK_PASSED: usize = 3253;
 const FORK_IGNORED: usize = 8;
 
 /// Upstream's ignored tests at `15ecfec`, by name.
@@ -1007,7 +1007,7 @@ fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
         .collect();
     assert_eq!(ignored_names, UPSTREAM_IGNORED.iter().copied().collect());
     // the changes' own test files ran
-    for file in ["tests/column_outline_roundtrip.rs", "tests/missing_styles_part_import.rs"] {
+    for file in ["tests/column_outline_roundtrip.rs", "tests/missing_styles_part_import.rs", "tests/excel_function_spelling.rs"] {
         assert!(stderr.contains(file), "{file} did not run:\n{stderr}");
     }
 }

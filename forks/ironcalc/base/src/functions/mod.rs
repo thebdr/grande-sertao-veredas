@@ -2125,6 +2125,10 @@ impl Function {
     /// Some functions in Excel like CONCAT are stringified as `_xlfn.CONCAT`. (known as "future functions")
     /// FILTER and SORT are stringified as `_xlfn._xlws.FILTER`. (known as "worksheet only functions")
     /// See <https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/3d025add-118d-4413-9856-ab65712ec1b0>
+    /// The functions Excel had before (CEILING, GAMMALN) and the four the grammar lists outside the
+    /// prefix (ECMA.CEILING, ISO.CEILING, NETWORKDAYS.INTL, WORKDAY.INTL) are written plain;
+    /// `test_xlsx_function_spelling` holds every function to the grammar, XlsxWriter's list and
+    /// Excel's own files.
     pub fn to_xlsx_string(&self) -> String {
         match self {
             Function::Concat => "_xlfn.CONCAT".to_string(),
@@ -2171,7 +2175,6 @@ impl Function {
             Function::Numbervalue => "_xlfn.NUMBERVALUE".to_string(),
             Function::Arraytotext => "_xlfn.ARRAYTOTEXT".to_string(),
             Function::Encodeurl => "_xlfn.ENCODEURL".to_string(),
-            Function::EcmaCeiling => "_xlfn.ECMA.CEILING".to_string(),
             Function::Rri => "_xlfn.RRI".to_string(),
             Function::Pduration => "_xlfn.PDURATION".to_string(),
             Function::Bitand => "_xlfn.BITAND".to_string(),
@@ -2197,12 +2200,10 @@ impl Function {
             Function::Sheet => "_xlfn.SHEET".to_string(),
             Function::Formulatext => "_xlfn.FORMULATEXT".to_string(),
             Function::Isoweeknum => "_xlfn.ISOWEEKNUM".to_string(),
-            Function::Ceiling => "_xlfn.CEILING".to_string(),
             Function::CeilingMath => "_xlfn.CEILING.MATH".to_string(),
             Function::CeilingPrecise => "_xlfn.CEILING.PRECISE".to_string(),
             Function::FloorMath => "_xlfn.FLOOR.MATH".to_string(),
             Function::FloorPrecise => "_xlfn.FLOOR.PRECISE".to_string(),
-            Function::IsoCeiling => "_xlfn.ISO.CEILING".to_string(),
             Function::Base => "_xlfn.BASE".to_string(),
             Function::Decimal => "_xlfn.DECIMAL".to_string(),
             Function::Arabic => "_xlfn.ARABIC".to_string(),
@@ -2219,7 +2220,6 @@ impl Function {
             Function::GammaLnPrecise => "_xlfn.GAMMALN.PRECISE".to_string(),
             Function::Gamma => "_xlfn.GAMMA".to_string(),
             Function::GammaInv => "_xlfn.GAMMA.INV".to_string(),
-            Function::GammaLn => "_xlfn.GAMMALN".to_string(),
             Function::BetaDist => "_xlfn.BETA.DIST".to_string(),
             Function::BetaInv => "_xlfn.BETA.INV".to_string(),
 
@@ -2296,6 +2296,15 @@ impl Function {
             Function::ForecastEtsConfint => "_xlfn.FORECAST.ETS.CONFINT".to_string(),
             Function::ForecastEtsSeasonality => "_xlfn.FORECAST.ETS.SEASONALITY".to_string(),
             Function::ForecastEtsStat => "_xlfn.FORECAST.ETS.STAT".to_string(),
+            Function::ForecastLinear => "_xlfn.FORECAST.LINEAR".to_string(),
+
+            Function::Days => "_xlfn.DAYS".to_string(),
+            Function::Gauss => "_xlfn.GAUSS".to_string(),
+            Function::GammaDist => "_xlfn.GAMMA.DIST".to_string(),
+            Function::Imsech => "_xlfn.IMSECH".to_string(),
+            // DECISION PENDING (Veredas 2's Q346): no Excel-saved file and neither list shows
+            // PERCENTOF's spelling; written as every function Excel added after 2010 is
+            Function::Percentof => "_xlfn.PERCENTOF".to_string(),
 
             _ => {
                 let language = get_default_language();

@@ -1430,6 +1430,34 @@ fn a_formula_or_a_name_holding_a_literal_escape_reads_back_as_written() {
 }
 
 #[test]
+fn a_function_is_written_as_excel_spells_it_in_a_formula_and_a_name() {
+    // DAYS, GAUSS, IMSECH and FORECAST.LINEAR are Excel 2013's and 2016's, prefixed in a file;
+    // CEILING, GAMMALN and ISO.CEILING Excel writes plain (fork change 25)
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("spelling.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>3</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let formula = |cell: &str, f: &str| Edit::Formula { sheet: "S".into(), cell: cell.into(), formula: f.into(), expect: None };
+    let edits = vec![
+        formula("B1", "=DAYS(DATE(2025,1,10),DATE(2025,1,1))"),
+        formula("C1", "=CEILING(2.5,1)+ISO.CEILING(2.5)+GAMMALN(1)"),
+        formula("D1", "=GAUSS(0)+IMREAL(IMSECH(0))"),
+        formula("E1", "=FORECAST.LINEAR(2,A1:A2,A1:A2)"),
+        Edit::SetName { name: "Span".into(), formula: "=DAYS(DATE(2025,1,10),DATE(2025,1,1))".into(), scope: None },
+    ];
+    patch(&src, &dst, &edits, &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert_eq!(element(&sheet, "B1"), Some(r#"<c r="B1"><f>_xlfn.DAYS(DATE(2025,1,10),DATE(2025,1,1))</f><v>9</v></c>"#), "{sheet}");
+    assert_eq!(element(&sheet, "C1"), Some(r#"<c r="C1"><f>CEILING(2.5,1)+ISO.CEILING(2.5)+GAMMALN(1)</f><v>6</v></c>"#), "{sheet}");
+    assert_eq!(element(&sheet, "D1"), Some(r#"<c r="D1"><f>_xlfn.GAUSS(0)+IMREAL(_xlfn.IMSECH(0))</f><v>1</v></c>"#), "{sheet}");
+    assert_eq!(element(&sheet, "E1"), Some(r#"<c r="E1"><f>_xlfn.FORECAST.LINEAR(2,A1:A2,A1:A2)</f><v>2</v></c>"#), "{sheet}");
+    let book = part(&dst, "xl/workbook.xml");
+    assert!(book.contains(r#"<definedName name="Span">_xlfn.DAYS(DATE(2025,1,10),DATE(2025,1,1))</definedName>"#), "{book}");
+    assert_eq!(read_back(&dst, "S", "B1"), Value::Number(9.0));
+}
+
+#[test]
 fn a_shared_group_moved_without_changing_what_its_members_read_is_kept() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("shared.xlsx");

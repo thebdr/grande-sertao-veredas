@@ -1607,6 +1607,28 @@ Options:
 **Reversible?** Yes: one line, once core's feature lands.
 ---
 
+## Q346 - How does Excel spell PERCENTOF in a file?
+
+**Raised** 2026-11-23, answering C-223's eighth refute round (fork change 25, `forks/ironcalc/VEREDAS-FORK.md`).
+
+A function Excel added after its 2007 file format is written in a file with `_xlfn.` (`_xlfn.DAYS`),
+and Excel reads one spelled otherwise as `#NAME?`. The fork now writes every function as Microsoft's
+grammar, rust_xlsxwriter's list and the Excel-saved workbooks of its tests spell it. PERCENTOF
+(Excel 365, 2024) is in none of the three.
+
+Options:
+- (a) `_xlfn.PERCENTOF`, as every function Excel added after 2010 is written.
+- (b) `PERCENTOF`, plain.
+
+The architect could settle it with one workbook saved by Excel 365 whose cell holds `=PERCENTOF(1,{1,2})`:
+its sheet XML shows the spelling, and the workbook can join the fork's tests.
+
+**Recommended**: (a). **Taken meanwhile**: (a), marked `// DECISION PENDING` in
+`forks/ironcalc/base/src/functions/mod.rs` (`to_xlsx_string`).
+
+**Reversible?** Yes: one line, and the base test's list.
+---
+
 ## Q310 - The test file's syntax
 
 **Raised** 2026-11-22, planning comissionador (P-006; `docs/comissionador-plan.md`).
