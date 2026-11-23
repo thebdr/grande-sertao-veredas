@@ -74,9 +74,31 @@ pub fn manifest_text(release: &semver::Version, commit: &str, target: &str, tool
     t
 }
 
+/// The suite's command as the cut runs it: `argv` in `root`, its temporary files in `tmp`, and every
+/// variable of `env` that would steer what cargo builds or nextest runs removed (`NEXTEST_*`,
+/// `CARGO_*` but `CARGO_HOME`, `RUSTFLAGS`, `RUSTDOCFLAGS`, `RUSTC*`, `RUSTUP_TOOLCHAIN`): the
+/// whole suite of the default profile, whatever the caller's shell holds.
+pub fn suite_command(root: &Path, tmp: &Path, argv: &[&str], env: impl Iterator<Item = (String, String)>) -> Command {
+    let mut c = Command::new(argv[0]);
+    c.args(&argv[1..]).current_dir(root).env("TMPDIR", tmp);
+    for (k, _) in env {
+        let steers = k.starts_with("NEXTEST_")
+            || (k.starts_with("CARGO_") && k != "CARGO_HOME")
+            || k == "RUSTFLAGS"
+            || k == "RUSTDOCFLAGS"
+            || k.starts_with("RUSTC")
+            || k == "RUSTUP_TOOLCHAIN";
+        if steers {
+            c.env_remove(k);
+        }
+    }
+    c
+}
+
 /// Why the working tree at `root` is not exactly `commit`, or `None`: HEAD moved, a tracked file
-/// changed, an untracked file stands (whatever `status.showUntrackedFiles` says), or a file is
-/// marked so git does not look at it (`--assume-unchanged`, `--skip-worktree`).
+/// changed, an untracked file stands (whatever `status.showUntrackedFiles` says), a file is ignored
+/// by a rule the commit does not hold, or a file is marked so git does not look at it
+/// (`--assume-unchanged`, `--skip-worktree`).
 pub fn differs_from(root: &Path, commit: &str) -> Result<Option<String>, git::GitError> {
     let head = git::text(root, &["rev-parse", "HEAD"])?.map(|t| t.trim().to_string());
     if head.as_deref() != Some(commit) {
@@ -85,6 +107,21 @@ pub fn differs_from(root: &Path, commit: &str) -> Result<Option<String>, git::Gi
     let dirty = git::text(root, &["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"])?.unwrap_or_default();
     if !dirty.trim().is_empty() {
         return Ok(Some(format!("the tree differs from HEAD ({commit}); a release is cut from a commit:\n{dirty}")));
+    }
+    // An ignored file the commit does not ignore (by `.git/info/exclude`, a global excludes file or
+    // a `.gitignore` git does not track) is a file of this tree the commit is not.
+    let ignored = git::text(root, &["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"])?.unwrap_or_default();
+    let mut stray = Vec::new();
+    for path in ignored.split('\0').filter(|p| !p.is_empty()) {
+        let rule = git::text(root, &["check-ignore", "-v", "--no-index", path])?.unwrap_or_default();
+        let source = rule.split(':').next().unwrap_or_default().to_string();
+        let tracked = source.ends_with(".gitignore") && git::run(root, &["ls-files", "--error-unmatch", &source])?.is_some();
+        if !tracked {
+            stray.push(format!("{path} (ignored by {})", if source.is_empty() { "no rule git names".to_string() } else { source }));
+        }
+    }
+    if !stray.is_empty() {
+        return Ok(Some(format!("files are ignored by rules the commit does not hold, so the tree is not HEAD's:\n{}", stray.join("\n"))));
     }
     let flagged: Vec<String> = git::text(root, &["ls-files", "-v"])?
         .unwrap_or_default()
@@ -154,19 +191,13 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
         let tmp = crate::cache::dir()?.join("tmp");
         std::fs::create_dir_all(&tmp)?;
         // Built first, so the machine's lock is held for the tests alone (CLAUDE.md).
-        let built = Command::new("cargo")
-            .args(["nextest", "run", "--workspace", "--no-run"])
-            .env("TMPDIR", &tmp)
-            .current_dir(root)
+        let built = suite_command(root, &tmp, &["cargo", "nextest", "run", "--workspace", "--profile", "default", "--no-run"], std::env::vars())
             .status()
             .map_err(|source| VmError::Spawn { program: "cargo nextest --no-run".into(), source })?;
         if !built.success() {
             return Err(refused(format!("the suite does not build at {commit} ({built}): no release is cut from it")));
         }
-        let status = Command::new("flock")
-            .args(["/tmp/veredas-suite.lock", "cargo", "nextest", "run", "--workspace"])
-            .env("TMPDIR", &tmp)
-            .current_dir(root)
+        let status = suite_command(root, &tmp, &["flock", "/tmp/veredas-suite.lock", "cargo", "nextest", "run", "--workspace", "--profile", "default"], std::env::vars())
             .status()
             .map_err(|source| VmError::Spawn { program: "flock cargo nextest".into(), source })?;
         if !status.success() {

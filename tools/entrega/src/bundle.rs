@@ -57,12 +57,14 @@ pub fn check_needs(bin: &str, needs: &BTreeMap<String, String>, r: &Recipe) -> V
 /// The files of the repository at `commit` the bundle's docs are: the README, the suite's plan,
 /// every `docs/*-schema.md`, the plans of `components` (where one exists) and `docs/design/`.
 pub fn doc_paths(root: &Path, commit: &str, components: &[String]) -> Result<Vec<String>, VmError> {
-    let all = git::text(root, &["ls-tree", "-r", "--name-only", commit])
+    // `-z`: a name with a letter outside ASCII is given as it is, not quoted.
+    let all = git::text(root, &["ls-tree", "-r", "-z", "--name-only", commit])
         .map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?
         .unwrap_or_default();
     let plans: Vec<String> = components.iter().filter_map(|c| c.strip_prefix("veredas-")).map(|n| format!("docs/{n}-plan.md")).collect();
     Ok(all
-        .lines()
+        .split('\0')
+        .filter(|p| !p.is_empty())
         .filter(|p| {
             *p == "README.md"
                 || *p == "docs/veredas-plan.md"

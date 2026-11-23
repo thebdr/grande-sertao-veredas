@@ -310,3 +310,63 @@ fn a_trials_manifest_never_goes_into_releases() {
         other => panic!("not refused: {:?}", other.map(|c| c.manifest)),
     }
 }
+
+#[test]
+fn a_file_ignored_by_a_rule_the_commit_does_not_hold_makes_the_tree_another() {
+    let c = clone();
+    let commit = String::from_utf8(Command::new("git").arg("-C").arg(c.path()).args(["rev-parse", "HEAD"]).output().unwrap().stdout).unwrap().trim().to_string();
+    // What the commit's own `.gitignore` ignores is no difference (a build folder).
+    std::fs::create_dir_all(c.path().join("target/debug")).unwrap();
+    std::fs::write(c.path().join("target/debug/x"), "built\n").unwrap();
+    assert_eq!(cut::differs_from(c.path(), &commit).unwrap(), None);
+    // A file hidden by an untracked `.gitignore` that ignores itself too.
+    std::fs::write(c.path().join("crates/veredas-core/build.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(c.path().join("crates/veredas-core/.gitignore"), ".gitignore\nbuild.rs\n").unwrap();
+    let why = cut::differs_from(c.path(), &commit).unwrap().unwrap();
+    assert!(why.starts_with("files are ignored by rules the commit does not hold") && why.contains("crates/veredas-core/build.rs"), "{why}");
+    std::fs::remove_file(c.path().join("crates/veredas-core/.gitignore")).unwrap();
+    // A file hidden by `.git/info/exclude`.
+    std::fs::write(c.path().join(".git/info/exclude"), "/crates/veredas-core/build.rs\n").unwrap();
+    let why = cut::differs_from(c.path(), &commit).unwrap().unwrap();
+    assert!(why.contains("crates/veredas-core/build.rs (ignored by .git/info/exclude)"), "{why}");
+    std::fs::remove_file(c.path().join("crates/veredas-core/build.rs")).unwrap();
+    assert_eq!(cut::differs_from(c.path(), &commit).unwrap(), None);
+}
+
+#[test]
+fn the_suite_runs_the_default_profile_whatever_the_shell_holds() {
+    let env = [
+        ("NEXTEST_PROFILE", "no-browser"),
+        ("NEXTEST_RETRIES", "5"),
+        ("CARGO_BUILD_JOBS", "16"),
+        ("CARGO_TARGET_DIR", "/elsewhere"),
+        ("RUSTFLAGS", "--cfg probe"),
+        ("RUSTC_WRAPPER", "sccache"),
+        ("RUSTUP_TOOLCHAIN", "nightly"),
+        ("CARGO_HOME", "/home/x/.cargo"),
+        ("PATH", "/usr/bin"),
+    ]
+    .map(|(k, v)| (k.to_string(), v.to_string()));
+    let c = cut::suite_command(Path::new("/repo"), Path::new("/tmpdir"), &["cargo", "nextest", "run", "--workspace", "--profile", "default"], env.into_iter());
+    let args: Vec<String> = c.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+    assert_eq!(args, ["nextest", "run", "--workspace", "--profile", "default"]);
+    let envs: std::collections::BTreeMap<String, Option<String>> =
+        c.get_envs().map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()))).collect();
+    let removed: Vec<&String> = envs.iter().filter(|(_, v)| v.is_none()).map(|(k, _)| k).collect();
+    assert_eq!(removed, ["CARGO_BUILD_JOBS", "CARGO_TARGET_DIR", "NEXTEST_PROFILE", "NEXTEST_RETRIES", "RUSTC_WRAPPER", "RUSTFLAGS", "RUSTUP_TOOLCHAIN"]);
+    assert_eq!(envs.get("TMPDIR"), Some(&Some("/tmpdir".to_string())));
+    assert!(!envs.contains_key("CARGO_HOME") && !envs.contains_key("PATH"), "left as they are");
+    assert_eq!(c.get_current_dir(), Some(Path::new("/repo")));
+}
+
+#[test]
+fn the_bundles_docs_hold_names_with_letters_outside_ascii() {
+    let r = Repo { dir: tempfile::tempdir().unwrap() };
+    r.git(&["init", "-q", "-b", "main"]);
+    for f in ["README.md", "docs/veredas-plan.md", "docs/visão-schema.md", "docs/design/README.md", "docs/design/ábaco/README.md", "docs/ábaco-plan.md", "docs/other.md"] {
+        r.write(f, "x\n");
+    }
+    let c = r.commit("docs in Portuguese");
+    let paths = bundle::doc_paths(r.dir.path(), &c, &["veredas-ábaco".to_string()]).unwrap();
+    assert_eq!(paths, ["README.md", "docs/design/README.md", "docs/design/ábaco/README.md", "docs/veredas-plan.md", "docs/visão-schema.md", "docs/ábaco-plan.md"]);
+}
