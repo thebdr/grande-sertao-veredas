@@ -1202,3 +1202,21 @@ fn a_fresh_timer_scanned_with_its_input_off_stays_off() {
     let mut pulse = Tp::default();
     assert_eq!((pulse.scan(&at(0), false, ms(100)), pulse.q(), pulse.et()), (false, false, ms(0)));
 }
+
+// The seventeenth refute round: an edge's input held for several scans is one edge, so a block that remembers its
+// output instead of its input, re-firing while its input is held, is caught.
+
+#[test]
+fn an_input_held_for_several_scans_gives_one_edge() {
+    let (t, f) = (true, false);
+    let mut rise = RTrig::default();
+    let clk = [t, t, t, t, f, f, f, t, t, t, f, f, f];
+    let seen: Vec<(bool, bool)> = clk.map(|c| (rise.scan(c), rise.q())).to_vec();
+    let want = [t, f, f, f, f, f, f, t, f, f, f, f, f];
+    assert_eq!(seen, want.map(|q| (q, q)).to_vec(), "a rising edge held for four scans and for three: one pulse each");
+    let mut fall = FTrig::default();
+    let clk = [f, f, f, t, t, t, f, f, f, t, f];
+    let seen: Vec<(bool, bool)> = clk.map(|c| (fall.scan(c), fall.q())).to_vec();
+    let want = [f, f, f, f, f, f, t, f, f, f, t];
+    assert_eq!(seen, want.map(|q| (q, q)).to_vec(), "low from the start: nothing; then one pulse per falling edge");
+}
