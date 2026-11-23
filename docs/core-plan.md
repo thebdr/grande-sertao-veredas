@@ -252,6 +252,12 @@ Recorded as the port meets them.
   adapter and Wireshark have 0x8001 for where T→O data goes (the scanner's address, in the request)
   and 0x8000 for where O→T data goes (the adapter's, in the reply). `fieldbus::enip` names the
   items by the standard's numbers and never uses the crate's constants; the dissectors check it.
+- **A test that counts the wire against the clock is a timed test.** Under the whole suite (1 300
+  tests at once) a 20 ms exchange came round less often than its interval and a 1 s bound was
+  passed by 0.2 s. A property that order or a count can judge is judged so (a blocking task still
+  running when the call returned, C-021); one that is a rate or a timeout (the masters' intervals,
+  bounds and windows) runs with the machine to itself, named in the runner's file
+  (`.config/nextest.toml`): `enip_scanner`, `modbus_client` and `tools/mestres`.
 - **A connection's size counts the sequence count.** Each direction of a Class 1 Forward_Open
   carries its data plus the 2-byte sequence count plus the 4-byte run/idle header where the
   direction has one; the crate's own scanner leaves the count out and an adapter refuses it

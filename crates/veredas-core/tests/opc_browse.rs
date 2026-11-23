@@ -625,22 +625,28 @@ async fn a_stalled_server_times_a_browse_out_and_a_drop_does_not_wait_for_it() {
 /// The browser's thread runs on `run_on_own_runtime`, which never waits for a blocking task left
 /// on its runtime (a host-name lookup is one). The lookup test below only bites where a failed
 /// lookup is slow (about 1.2 s on Windows; a Linux resolver may answer at once); this one bites
-/// on any machine, with a blocking task that is certainly still running.
+/// on any machine, with a blocking task that is certainly still running. It is judged by order,
+/// not by a clock a loaded machine can stretch: the call returns while the task still runs.
 #[test]
 fn a_blocking_task_left_on_the_runtime_does_not_hold_the_thread() {
-    let t0 = Instant::now();
-    let out = veredas_core::opc::run_on_own_runtime(async {
+    let ended = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let task_ended = ended.clone();
+    let out = veredas_core::opc::run_on_own_runtime(async move {
         let (started, running) = tokio::sync::oneshot::channel();
         let _lookup = tokio::task::spawn_blocking(move || {
             let _ = started.send(());
-            std::thread::sleep(Duration::from_secs(3));
+            std::thread::sleep(Duration::from_secs(10));
+            task_ended.store(true, std::sync::atomic::Ordering::SeqCst);
         });
         running.await.expect("the blocking task runs");
         "done"
     })
     .expect("a runtime");
     assert_eq!(out, "done");
-    assert!(t0.elapsed() < Duration::from_secs(1), "{:?}", t0.elapsed());
+    assert!(
+        !ended.load(std::sync::atomic::Ordering::SeqCst),
+        "the call returned only once the blocking task had ended"
+    );
 }
 
 #[test]
