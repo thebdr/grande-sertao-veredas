@@ -28,7 +28,8 @@ fn main() {
     for a in &args {
         match a.as_str() {
             "--check" => check = true,
-            other if other.starts_with("--") => {
+            // Any argument beginning with a dash is an option (`-` alone is a file's name).
+            other if other.starts_with('-') && other != "-" => {
                 eprintln!("unknown option `{other}`\nusage: veredas-maquinar <bench.toml> [--check] | --version");
                 std::process::exit(1);
             }
@@ -89,11 +90,16 @@ fn main() {
         });
     }
     std::thread::spawn(move || {
-        let stdin = std::io::stdin();
-        for line in stdin.lock().lines() {
-            match line {
-                Ok(l) if l.trim() == "stop" => break,
+        // Read as bytes: a line that is not UTF-8 is a line like any other, not an end.
+        let mut stdin = std::io::stdin().lock();
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            match stdin.read_until(b'\n', &mut line) {
+                Ok(0) => break,
+                Ok(_) if String::from_utf8_lossy(&line).trim() == "stop" => break,
                 Ok(_) => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(_) => break,
             }
         }

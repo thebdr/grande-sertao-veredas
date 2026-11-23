@@ -637,7 +637,7 @@ fn every_key_the_reference_lists_is_the_reader_s_and_states_what_the_reader_does
     }
     // The names the reference lists are the reader's.
     let prose = doc_prose();
-    assert!(prose.contains("Each key states in parentheses that it is required, or the value it takes when left out. Every part has a name, exact, with no surrounding whitespace and no dot (a model names a point `<part>.<point>`), and no two parts share one. A path is relative to the bench file's folder."));
+    assert!(prose.contains("Each key states in parentheses that it is required, or the value it takes when left out. Every part has a name, exact, with no surrounding whitespace, no dot (a model names a point `<part>.<point>`) and no control character (a name is one line of the plan and the status), and no two parts share one. A path is relative to the bench file's folder."));
     assert!(prose.contains("`format` (required): always `\"veredas-bench\"`."));
     assert_eq!(FORMAT, "veredas-bench");
     assert!(prose.contains("`version` (required): this reader knows `1`."));
@@ -991,7 +991,7 @@ fn the_parts_start_and_show_emitters_first_then_servers_then_channels_each_in_th
 
 #[test]
 fn the_bench_s_seed_feeds_every_part_without_a_seed_of_its_own() {
-    assert!(doc_prose().contains("each emitter without a seed of its own draws from this seed plus its index, each channel and its controller from this seed; the clock when absent."));
+    assert!(doc_prose().contains("each emitter without a seed of its own draws from this seed plus its index, each channel and its controller from this seed; absent, an emitter and a channel take the clock, and a controller its rules file's `seed`, else the clock."));
     // Two emitters without seeds: the same lines run for run, different lines from each other.
     let lines_of = |seed: u64, tag: &str| -> (Vec<String>, Vec<String>) {
         let dir = scratch(tag);
@@ -1400,8 +1400,9 @@ actuator = [ { name = "pusher", mover = "pusher", extend = "plc-io.pusher_extend
 ## Keys
 
 Each key states in parentheses that it is required, or the value it takes when left out. Every
-part has a name, exact, with no surrounding whitespace and no dot (a model names a point
-`<part>.<point>`), and no two parts share one. A path is relative to the bench file's folder.
+part has a name, exact, with no surrounding whitespace, no dot (a model names a point
+`<part>.<point>`) and no control character (a name is one line of the plan and the status), and no
+two parts share one. A path is relative to the bench file's folder.
 
 **The top level**.
 - `format` (required): always `"veredas-bench"`.
@@ -1409,8 +1410,9 @@ part has a name, exact, with no surrounding whitespace and no dot (a model names
   refused, never guessed.
 - `seed` (none): the seed of the emitters' and the channels' draws, for a run that repeats:
   each emitter without a seed of its own draws from this seed plus its index, each channel and
-  its controller from this seed; the clock when absent. An OPC UA server's draws, and a PROFINET
-  device's without a `seed` of its own, take the clock.
+  its controller from this seed; absent, an emitter and a channel take the clock, and a controller
+  its rules file's `seed`, else the clock. The bench gives an OPC UA server, and a PROFINET device
+  without a `seed` of its own, none: each takes the clock.
 - `out_dir` (`"."`): where the emitters write, created when there is an emitter.
 - `emitter` (none): `[[emitter]]` tables.
 - `opc` (none): `[[opc]]` tables.
@@ -1434,8 +1436,9 @@ part has a name, exact, with no surrounding whitespace and no dot (a model names
 - `max_lines` (`0`): rotate to the next index after this many lines; `0` never rotates on
   count.
 - `encoding` (`"utf-8"`): `"utf-8"` or `"utf-16le"`, the latter with a byte-order mark.
-- `seed` (none): a fixed seed replays the same values; absent, the bench's seed plus the
-  emitter's index, else the clock.
+- `seed` (none): a fixed seed replays the same values at the emitter's place among the file's
+  emitters (its index picks the draw's stream); absent, the bench's seed plus the emitter's index,
+  else the clock.
 
 **A value** (an entry of `values`): drawn within `[low, high]`, rendered to `decimals`.
 - `name` (required): the placeholder's name.
@@ -1941,7 +1944,7 @@ mod round_3 {
         let mut reader = std::io::BufReader::new(child.stdout.take().unwrap());
         let mut at = Vec::new();
         let mut line = String::new();
-        while at.len() < 3 {
+        while at.len() < 6 {
             line.clear();
             assert_ne!(reader.read_line(&mut line).unwrap(), 0, "the executable ended");
             if line.starts_with("opc s: ") {
@@ -1950,9 +1953,165 @@ mod round_3 {
         }
         let _ = child.stdin.take().unwrap().write_all(b"stop\n");
         child.wait().unwrap();
-        // The first at the start, then once a second.
-        let gap = at[2] - at[1];
-        assert!(gap >= Duration::from_millis(500) && gap <= Duration::from_millis(2500), "{gap:?}");
+        // The first at the start, then once a second: four gaps after the first, each under two
+        // seconds and their mean within 0.8 to 1.4 s (round 4: one every 2 s passed 0.5 to 2.5 s).
+        let gaps: Vec<Duration> = at.windows(2).skip(1).map(|w| w[1] - w[0]).collect();
+        let mean = (at[5] - at[1]) / 4;
+        assert!(gaps.iter().all(|g| *g < Duration::from_millis(1900)) && mean >= Duration::from_millis(800) && mean <= Duration::from_millis(1400), "{gaps:?}, mean {mean:?}");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+/// C-033's fourth refute round: the critic's probes (`~/.cache/veredas/critic-c033-r4/probes`), kept
+/// as pins: a control character in a name, a line on stdin that is not UTF-8, an option of one
+/// dash, and every seed's reach (the bench's plus the index, an emitter's own, the clock, a
+/// controller's rules file, a fixed seed's place).
+mod round_4 {
+    use super::*;
+
+    const EXE: &str = env!("CARGO_BIN_EXE_veredas-maquinar");
+
+    #[test]
+    fn a_control_character_in_a_name_is_refused_at_load_and_by_the_executable() {
+        let dir = scratch("control");
+        let _ = plant(&dir);
+        for (text, want) in [
+            (format!("{}[[emitter]]\nname = \"e\\u0000x\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 100\nfile = \"e.log\"\n", header()), "emitter[0]: the name \"e\\0x\" holds a control character"),
+            (format!("{}[[channel]]\nname = \"c\\u0000x\"\nrole = \"connect\"\nport = 9\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n", header()), "channel[0]: the name \"c\\0x\" holds a control character"),
+            (format!("{}[[modbus]]\nname = \"a\\nmodbus b: here\"\nport = 0\n", header()), "modbus[0]: the name \"a\\nmodbus b: here\" holds a control character"),
+            (format!("{}[[modbus]]\nname = \"a\\tb\"\nport = 0\n", header()), "modbus[0]: the name \"a\\tb\" holds a control character"),
+        ] {
+            assert_eq!(refused(&text, &dir), want);
+            let path = dir.join("bench.toml");
+            std::fs::write(&path, &text).unwrap();
+            for args in [&["--check"][..], &[]] {
+                let out = Command::new(EXE).arg(&path).args(args).stdin(Stdio::null()).output().unwrap();
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                assert_eq!(out.status.code(), Some(2), "{args:?}: {stderr}");
+                assert!(stderr.contains(want), "{args:?}: {stderr}");
+                assert!(out.stdout.is_empty(), "{args:?}: nothing started or printed");
+            }
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_line_on_stdin_that_is_not_utf8_is_read_past() {
+        let dir = scratch("utf8");
+        let path = dir.join("bench.toml");
+        std::fs::write(&path, format!("{}[[modbus]]\nname = \"drive\"\nport = 0\n", header())).unwrap();
+        let mut child = Command::new(EXE).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let mut reader = std::io::BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        while !line.starts_with("modbus drive: ") {
+            line.clear();
+            assert_ne!(reader.read_line(&mut line).unwrap(), 0, "the executable ended");
+        }
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(b"\xff\xfe weight\n").unwrap();
+        stdin.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(1500));
+        assert!(child.try_wait().unwrap().is_none(), "a line not UTF-8 ended the run");
+        stdin.write_all(b"stop\n").unwrap();
+        drop(stdin);
+        let status = child.wait().unwrap();
+        let mut rest = String::new();
+        std::io::Read::read_to_string(&mut reader, &mut rest).unwrap();
+        assert_eq!((status.code(), rest.lines().last()), (Some(0), Some("stopped")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_argument_beginning_with_a_dash_is_an_option() {
+        for opt in ["-h", "-V", "-c", "--help"] {
+            let out = Command::new(EXE).arg(opt).output().unwrap();
+            assert_eq!(out.status.code(), Some(1), "{opt}");
+            assert_eq!(String::from_utf8_lossy(&out.stderr), format!("unknown option `{opt}`\nusage: veredas-maquinar <bench.toml> [--check] | --version\n"));
+        }
+    }
+
+    /// The first five lines of each of `files`, written by the bench of `text`.
+    fn emitter_lines(tag: &str, text: &str, files: &[&str]) -> Vec<Vec<String>> {
+        let dir = scratch(tag);
+        let bench = Bench::start(load(text, &dir).unwrap()).unwrap();
+        assert!(wait(Duration::from_secs(5), || bench.emitters.iter().all(|(_, e)| e.status().total_lines >= 5)));
+        bench.stop();
+        let out = files.iter().map(|f| std::fs::read_to_string(dir.join(f)).unwrap().lines().take(5).map(String::from).collect()).collect();
+        std::fs::remove_dir_all(&dir).unwrap();
+        out
+    }
+
+    fn emitter(name: &str, seed: Option<u64>) -> String {
+        let seed = seed.map(|s| format!("seed = {s}\n")).unwrap_or_default();
+        format!("[[emitter]]\nname = \"{name}\"\ntemplate = \"{{v}}\"\nts_format = \"%H\"\nvalues = [ {{ name = \"v\", low = 0, high = 1000000 }} ]\ninterval_ms = 1\nfile = \"{name}.log\"\n{seed}\n")
+    }
+
+    #[test]
+    fn an_emitter_without_a_seed_draws_from_the_bench_s_plus_its_index() {
+        let bench = emitter_lines("plus-a", &format!("{}seed = 7\n{}{}", header(), emitter("a", None), emitter("b", None)), &["a.log", "b.log"]);
+        let own = emitter_lines("plus-b", &format!("{}{}{}", header(), emitter("a", Some(7)), emitter("b", Some(8))), &["a.log", "b.log"]);
+        assert_eq!(bench, own, "bench seed 7: the first as seed 7, the second as seed 8, at their places");
+    }
+
+    #[test]
+    fn an_emitter_s_own_seed_wins_over_the_bench_s() {
+        let seven = emitter_lines("own-a", &format!("{}seed = 7\n{}", header(), emitter("a", Some(5))), &["a.log"]);
+        let eight = emitter_lines("own-b", &format!("{}seed = 8\n{}", header(), emitter("a", Some(5))), &["a.log"]);
+        let none = emitter_lines("own-c", &format!("{}{}", header(), emitter("a", Some(5))), &["a.log"]);
+        assert_eq!((&seven, &eight), (&none, &none));
+    }
+
+    #[test]
+    fn without_a_seed_anywhere_an_emitter_takes_the_clock() {
+        let one = emitter_lines("clock-a", &format!("{}{}", header(), emitter("a", None)), &["a.log"]);
+        let two = emitter_lines("clock-b", &format!("{}{}", header(), emitter("a", None)), &["a.log"]);
+        assert_ne!(one, two);
+    }
+
+    #[test]
+    fn a_fixed_seed_replays_its_values_at_its_place_among_the_emitters() {
+        let alone = emitter_lines("place-a", &format!("{}{}", header(), emitter("x", Some(5))), &["x.log"]);
+        let after_one = emitter_lines("place-b", &format!("{}{}{}", header(), emitter("w", Some(1)), emitter("x", Some(5))), &["w.log", "x.log"]);
+        let after_two = emitter_lines("place-c", &format!("{}{}{}", header(), emitter("w", Some(2)), emitter("x", Some(5))), &["w.log", "x.log"]);
+        assert_eq!(after_one[1], after_two[1], "the same seed at the same place, whatever is before it");
+        assert_ne!(alone[0], after_one[1], "its place picks the draw's stream");
+    }
+
+    /// The machine's first two items' weights in the worked example, its bench seed and its rules
+    /// file's seed as asked.
+    fn first_weights(tag: &str, bench_seed: Option<u64>, rules_seed: bool) -> Vec<String> {
+        let dir = scratch(tag);
+        let (path, _) = plant(&dir);
+        let line = bench_seed.map(|s| format!("seed = {s}\n")).unwrap_or_default();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("seed = 7\n"));
+        std::fs::write(&path, text.replace("seed = 7\n", &line)).unwrap();
+        if !rules_seed {
+            let rules = std::fs::read_to_string(dir.join("machine.toml")).unwrap();
+            assert!(rules.contains("\nseed = 7\n"));
+            std::fs::write(dir.join("machine.toml"), rules.replace("\nseed = 7\n", "\n")).unwrap();
+        }
+        let bench = Bench::start(load_file(&path).unwrap()).unwrap();
+        let machine = bench.channel("machine").unwrap();
+        let seen = |c: &veredas_maquinar::controller::ControllerStatus, key: &str| c.awaiting.iter().chain(c.history.iter()).any(|i| i.key == key);
+        assert!(wait(Duration::from_secs(5), || machine.status().controller.is_some_and(|c| seen(&c, "1") && seen(&c, "2"))));
+        let c = machine.status().controller.unwrap();
+        let items: Vec<_> = c.awaiting.iter().chain(c.history.iter()).cloned().collect();
+        let weight = |key: &str| items.iter().find(|i| i.key == key).map(|i| i.fields["weight"].clone()).unwrap_or_default();
+        let out = vec![weight("1"), weight("2")];
+        bench.stop();
+        std::fs::remove_dir_all(&dir).unwrap();
+        out
+    }
+
+    #[test]
+    fn without_a_bench_seed_a_controller_takes_its_rules_file_s_else_the_clock() {
+        let (none1, none2) = (first_weights("rules-a", None, true), first_weights("rules-b", None, true));
+        let seven = first_weights("rules-c", Some(7), true);
+        assert_eq!((&none1, &none2), (&seven, &seven), "the rules file's seed 7 where the bench has none");
+        let eight = first_weights("rules-d", Some(8), true);
+        assert_ne!(eight, seven, "the bench's seed over the rules file's");
+        let (clock1, clock2) = (first_weights("rules-e", None, false), first_weights("rules-f", None, false));
+        assert_ne!(clock1, clock2, "the clock where neither has one");
     }
 }

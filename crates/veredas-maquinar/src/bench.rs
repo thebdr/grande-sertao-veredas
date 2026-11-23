@@ -502,6 +502,11 @@ pub fn load(text: &str, base: &Path) -> Result<BenchSpec, BenchError> {
         if n.contains('.') {
             return Err(invalid(format!("{place}: the name `{n}` holds a dot (a model names a point `<part>.<point>`)")));
         }
+        // A name is one line of the plan and of the status, and names its part's threads (which
+        // a NUL would fail): no control character, shown escaped.
+        if n.chars().any(char::is_control) {
+            return Err(invalid(format!("{place}: the name {n:?} holds a control character")));
+        }
         if let Some(other) = names.insert(n.to_string(), format!("{kind} `{n}`")) {
             return Err(invalid(format!("{place}: `{n}` is already the name of the {other}")));
         }

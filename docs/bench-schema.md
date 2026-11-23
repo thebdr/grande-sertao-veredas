@@ -213,8 +213,9 @@ actuator = [ { name = "pusher", mover = "pusher", extend = "plc-io.pusher_extend
 ## Keys
 
 Each key states in parentheses that it is required, or the value it takes when left out. Every
-part has a name, exact, with no surrounding whitespace and no dot (a model names a point
-`<part>.<point>`), and no two parts share one. A path is relative to the bench file's folder.
+part has a name, exact, with no surrounding whitespace, no dot (a model names a point
+`<part>.<point>`) and no control character (a name is one line of the plan and the status), and no
+two parts share one. A path is relative to the bench file's folder.
 
 **The top level**.
 - `format` (required): always `"veredas-bench"`.
@@ -222,8 +223,9 @@ part has a name, exact, with no surrounding whitespace and no dot (a model names
   refused, never guessed.
 - `seed` (none): the seed of the emitters' and the channels' draws, for a run that repeats:
   each emitter without a seed of its own draws from this seed plus its index, each channel and
-  its controller from this seed; the clock when absent. An OPC UA server's draws, and a PROFINET
-  device's without a `seed` of its own, take the clock.
+  its controller from this seed; absent, an emitter and a channel take the clock, and a controller
+  its rules file's `seed`, else the clock. The bench gives an OPC UA server, and a PROFINET device
+  without a `seed` of its own, none: each takes the clock.
 - `out_dir` (`"."`): where the emitters write, created when there is an emitter.
 - `emitter` (none): `[[emitter]]` tables.
 - `opc` (none): `[[opc]]` tables.
@@ -247,8 +249,9 @@ part has a name, exact, with no surrounding whitespace and no dot (a model names
 - `max_lines` (`0`): rotate to the next index after this many lines; `0` never rotates on
   count.
 - `encoding` (`"utf-8"`): `"utf-8"` or `"utf-16le"`, the latter with a byte-order mark.
-- `seed` (none): a fixed seed replays the same values; absent, the bench's seed plus the
-  emitter's index, else the clock.
+- `seed` (none): a fixed seed replays the same values at the emitter's place among the file's
+  emitters (its index picks the draw's stream); absent, the bench's seed plus the emitter's index,
+  else the clock.
 
 **A value** (an entry of `values`): drawn within `[low, high]`, rendered to `decimals`.
 - `name` (required): the placeholder's name.
