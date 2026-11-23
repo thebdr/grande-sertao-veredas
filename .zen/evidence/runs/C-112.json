@@ -1,24 +1,25 @@
 {
   "clause": "C-112",
-  "command": "cargo test -p veredas-maquinar --test profinet_device",
+  "command": "cargo nextest run -p veredas-maquinar --test profinet_device",
   "commandArgv": [
     "cargo",
-    "test",
+    "nextest",
+    "run",
     "-p",
     "veredas-maquinar",
     "--test",
     "profinet_device"
   ],
   "exitCode": 0,
-  "outputSha": "975d5afa8dacb1f1444abf39ddfbebc476b6692df859a275fc4278199e2b4ca8",
-  "outputTail": "test a_set_names_addresses_and_blinks_the_device_and_each_block_is_answered ... ok\ntest round_1::a_set_not_addressed_to_it_is_dropped ... ok\ntest round_1::lldp_comes_on_its_interval ... ok\ntest the_dissectors_read_every_frame_the_device_sends_as_the_standard_has_it ... ok\ntest round_1::the_dissectors_read_the_unnamed_device_the_refusals_the_get_and_the_shutdown ... ok\ntest round_1::a_request_under_another_service_s_frame_id_is_dropped ... ok\ntest round_1::an_unnamed_device_sends_lldp_its_mac_the_chassis_and_its_shutdown ... ok\ntest round_1::a_muted_device_sends_nothing_after_the_mute ... ok\ntest round_1::the_delay_follows_the_factor ... ok\ntest an_identify_is_answered_within_its_response_delay ... ok\n\ntest result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.10s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s\n     Running tests/profinet_device.rs (target/debug/build/veredas-maquinar/f71c064966f0b6ef/out/profinet_device-f71c064966f0b6ef)",
-  "ranAt": "2026-11-22T23:09:45.216Z",
-  "headCommit": "786ca40a6730df59618e18fc6cde051f5d95f1ed",
+  "outputSha": "5395c7e2b2428dcd8e19ccaad8b592aac5171d518aa0f4bd991d8601974bc7a8",
+  "outputTail": "        PASS [   1.370s] (18/30) veredas-maquinar::profinet_device round_1::lldp_comes_on_its_interval\n        PASS [   3.999s] (19/30) veredas-maquinar::profinet_device round_1::the_delay_follows_the_factor\n        PASS [   0.036s] (20/30) veredas-maquinar::profinet_device round_2::an_alias_s_halves_the_port_range_a_long_lldp_interval_and_a_misspelled_key_are_refused\n        PASS [   0.265s] (21/30) veredas-maquinar::profinet_device round_2::a_damaged_block_of_a_suboption_it_holds_is_refused_0x05_and_changes_nothing\n        PASS [   0.267s] (22/30) veredas-maquinar::profinet_device round_1::the_device_mac_is_the_interface_s\n        PASS [   0.298s] (23/30) veredas-maquinar::profinet_device the_documented_fresh_device_is_found_named_and_found_again_through_its_bench_file\n        PASS [   0.853s] (24/30) veredas-maquinar::profinet_device round_2::a_mute_silences_set_and_get_too\n        PASS [   0.859s] (25/30) veredas-maquinar::profinet_device round_2::a_get_under_another_frame_id_and_a_set_that_is_no_request_are_dropped\n        PASS [   0.876s] (26/30) veredas-maquinar::profinet_device round_2::an_empty_name_unnames_the_device\n        PASS [   1.077s] (27/30) veredas-maquinar::profinet_device round_2::lldp_follows_a_set_of_its_name_and_a_rename_by_hand\n        PASS [   1.621s] (28/30) veredas-maquinar::profinet_device the_dissectors_read_every_frame_the_device_sends_as_the_standard_has_it\n        PASS [   1.922s] (29/30) veredas-maquinar::profinet_device round_1::the_dissectors_read_the_unnamed_device_the_refusals_the_get_and_the_shutdown\n        PASS [   3.763s] (30/30) veredas-maquinar::profinet_device round_2::every_identify_filter_kind_is_matched_as_the_clause_says\n────────────\n     Summary [  17.906s] 30 tests run: 30 passed, 0 skipped",
+  "ranAt": "2026-11-23T09:38:52.094Z",
+  "headCommit": "a8f39a3175efe04c4e7b9cc2dee17d4b8054b770",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/profinet_device.rs",
       "file": "crates/veredas-maquinar/tests/profinet_device.rs",
-      "fileSha": "6ead08fe8006f780f1f0f4a842306e6de4ccd7112299f6ed9501f925e777bf77"
+      "fileSha": "201796e5a45e306ef5dae32a04bc372eea205c0ad0cb0e0ded3c746611f28057"
     }
   ]
 }
