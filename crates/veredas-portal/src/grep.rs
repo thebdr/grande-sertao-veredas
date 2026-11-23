@@ -415,7 +415,8 @@ fn search_file(path: &Arc<PathBuf>, q: &Compiled, o: &GrepOptions, h: &GrepHandl
     h.files_searched.fetch_add(1, Ordering::Relaxed);
     // Scanned as it is decoded, slice by slice, the line a slice cuts carried to the next: what is
     // held is a slice and a line, whatever the file's size. A cancel is heard at every slice, so
-    // within every 64 KiB of the lines scanned.
+    // within every 64 KiB of the lines scanned, or once the line a slice completes is scanned: a
+    // line is scanned whole, up to 4 MiB of it.
     let mut scan = Scan { path, q, o, h, tx, matches: 0, before: VecDeque::with_capacity(o.context_before + 1), after_left: 0, last_emitted: None, capped: false, total_cap: false, number: 0, skipping: false };
     let mut decoder = TextDecoder::new();
     let mut pending = String::new();
@@ -452,6 +453,19 @@ fn search_file(path: &Arc<PathBuf>, q: &Compiled, o: &GrepOptions, h: &GrepHandl
 /// The longest line searched: a line past it is searched in its first 4 MiB, the rest of it read
 /// past to its line end, so a file of one endless line holds no more than this.
 pub const LINE_LIMIT: usize = 4 * 1024 * 1024;
+
+/// Where a line of `len` bytes at the start of `text` is searched to: all of it, or, past
+/// [`LINE_LIMIT`], its first part up to the last character's start within the limit.
+fn within_limit(text: &str, len: usize) -> usize {
+    if len <= LINE_LIMIT {
+        return len;
+    }
+    let mut cut = LINE_LIMIT;
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    cut
+}
 
 enum Step {
     Go,
@@ -495,17 +509,16 @@ impl Scan<'_> {
             }
             match pending.find('\n') {
                 Some(i) => {
-                    let line: String = pending.drain(..=i).collect();
-                    if let Step::Stop(outcome) = self.line(line.strip_suffix('\n').unwrap_or(&line))? {
+                    // A line past the limit is searched in its first part whether its end came in
+                    // the slice that took it past the limit or in a later one.
+                    let line = pending[..within_limit(pending, i)].to_string();
+                    pending.drain(..=i);
+                    if let Step::Stop(outcome) = self.line(&line)? {
                         return Ok(Step::Stop(outcome));
                     }
                 }
                 None if pending.len() > LINE_LIMIT => {
-                    let mut cut = LINE_LIMIT;
-                    while !pending.is_char_boundary(cut) {
-                        cut -= 1;
-                    }
-                    let line: String = pending.drain(..cut).collect();
+                    let line = pending[..within_limit(pending, pending.len())].to_string();
                     pending.clear();
                     self.skipping = true;
                     if let Step::Stop(outcome) = self.line(&line)? {

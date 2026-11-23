@@ -461,6 +461,32 @@ fn a_cancel_is_heard_at_every_line_of_a_slow_scan() {
     assert!(took < Duration::from_millis(500), "the cancel heard {took:?} after it was asked");
 }
 
+/// A line past `LINE_LIMIT` is searched in its first 4 MiB and no further, wherever the 64 KiB
+/// slices fall: a match ending at the limit found, the line's text the limit's bytes exactly, a
+/// match just past it not, whether the line's end comes in the slice that took it past the limit
+/// or many slices later, and the next line numbered as the next. A line far longer than a slice
+/// and shorter than the limit is searched to its end.
+#[test]
+fn a_line_past_the_limit_is_searched_in_its_first_4_mib_wherever_the_slices_fall() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let spans_of = |events: &[GrepEvent]| -> Vec<(u64, usize, Vec<usize>)> {
+        events.iter().filter_map(|e| if let GrepEvent::Line(l) = e { Some((l.line_number, l.text.len(), l.spans.iter().map(|s| s.start).collect())) } else { None }).collect()
+    };
+    let long = dir.path().join("long.log");
+    write(&long, &format!("{} MID\n", "x".repeat(200_000)));
+    let (events, _) = run(GrepScope::Files(vec![long]), &GrepQuery::single("MID"), GrepOptions::default());
+    assert_eq!(spans_of(&events), vec![(1, 200_004, vec![200_001])]);
+    let inside = format!("{} EARLY", "x".repeat(LINE_LIMIT - 6));
+    let far = format!(" LATE {}", "y".repeat(100_000));
+    for (name, rest) in [("near.log", " LATE"), ("far.log", far.as_str())] {
+        let path = dir.path().join(name);
+        write(&path, &format!("{inside}{rest}\nnext LATE\n"));
+        let (events, summary) = run(GrepScope::Files(vec![path]), &q(&[("EARLY", false), ("LATE", false)], Combine::Or), GrepOptions::default());
+        assert_eq!(spans_of(&events), vec![(1, LINE_LIMIT, vec![LINE_LIMIT - 5]), (2, 9, vec![5])], "{name}");
+        assert_eq!((summary.stopped, summary.stats.matches), (GrepStop::Completed, 2), "{name}");
+    }
+}
+
 /// With no size limit, what a search holds is a slice and a line, whatever the file: a file of
 /// 256 MiB, nearly all of it one endless line of NULs past its text, searched whole with the next
 /// file after it, the process's peak memory far below the file's size.
