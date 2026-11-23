@@ -83,7 +83,13 @@ fn a_uuid_is_its_text_and_travels_in_the_header_s_byte_order() {
     assert_eq!(object().pnio_object_parts(), Some((0x0001, 0x0203, 0x002A)));
     assert_eq!(Uuid::pnio_object(0xFFFF, 0, 0x1234).pnio_object_parts(), Some((0xFFFF, 0, 0x1234)));
     assert_eq!(Uuid::PNIO_DEVICE.pnio_object_parts(), None);
-    for near in ["dea00000-6c98-11d1-8271-00010203002a", "dea00000-6c97-11d1-8272-00010203002a", "dea00000-6c97-11d1-8371-00010203002a", "dea00000-6c97-11d2-8271-00010203002a", "dea00001-6c97-11d1-8271-00010203002a"] {
+    for near in [
+        "dfa00000-6c97-11d1-8271-00010203002a",
+        "deb00000-6c97-11d1-8271-00010203002a",
+        "dea01000-6c97-11d1-8271-00010203002a",
+        "dea00000-7c97-11d1-8271-00010203002a",
+        "dea00000-6c97-12d1-8271-00010203002a",
+        "dea00000-6c98-11d1-8271-00010203002a", "dea00000-6c97-11d1-8272-00010203002a", "dea00000-6c97-11d1-8371-00010203002a", "dea00000-6c97-11d2-8271-00010203002a", "dea00001-6c97-11d1-8271-00010203002a"] {
         assert_eq!(near.parse::<Uuid>().unwrap().pnio_object_parts(), None, "{near}");
     }
     assert_eq!(activity().pnio_object_parts(), None);
@@ -226,6 +232,7 @@ fn a_damaged_datagram_is_an_error_that_names_it_and_trailing_bytes_are_kept() {
     assert_eq!(ByteOrder::of_drep([0x11, 0x01, 0x02]), ByteOrder::Little);
     assert_eq!(ByteOrder::of_drep([0x00, 0, 0]), ByteOrder::Big);
     assert_eq!(ByteOrder::of_drep([0xE0, 0, 0]), ByteOrder::Big);
+    assert_eq!(ByteOrder::of_drep([0x01, 0, 0]), ByteOrder::Big);
     assert_eq!((ByteOrder::Big.drep(), ByteOrder::Little.drep()), ([0, 0, 0], [0x10, 0, 0]));
 
     // A datagram past what UDP over IPv4 carries is refused both ways; 65 507 bytes are written and
@@ -273,14 +280,31 @@ fn a_damaged_datagram_is_an_error_that_names_it_and_trailing_bytes_are_kept() {
             for o in [ByteOrder::Big, ByteOrder::Little] {
                 if let Ok(a) = RequestArgs::decode(&p.body, o) {
                     assert_eq!(a.encode(o), p.body);
+                    blocks_whole(&a.data);
                 }
                 if let Ok(a) = ResponseArgs::decode(&p.body, o) {
                     assert_eq!(a.encode(o), p.body);
+                    blocks_whole(&a.data);
+                    let _ = ReadResponse::split(&a.data);
                 }
             }
+            blocks_whole(&p.body);
         }
     }
     assert!(decoded > 2_000, "{decoded} noisy datagrams decoded");
+}
+
+/// Any data read as blocks without a panic, each read as a read header or refused without one, and
+/// written back to its own bytes, what was not a whole block after them.
+fn blocks_whole(data: &[u8]) {
+    let (blocks, rest) = rpc::read_blocks(data);
+    let mut again = Vec::new();
+    for b in &blocks {
+        let _ = (ReadRequest::from_block(b), ReadResponse::from_block(b));
+        again.extend(b.encode().unwrap());
+    }
+    again.extend(&rest);
+    assert_eq!(again, data);
 }
 
 #[test]
@@ -323,6 +347,9 @@ fn blocks_are_read_in_order_and_what_is_not_a_whole_block_is_kept() {
         (hex("0020 00"), hex("0020 00")),
         (hex("0020 0009 0100 0102"), hex("0020 0009 0100 0102")),
         (hex("0020 0001 01"), hex("0020 0001 01")),
+        // A length under 2, the header whole: no block, kept.
+        (hex("0020 0001 0100"), hex("0020 0001 0100")),
+        (hex("0020 0000 0100 00"), hex("0020 0000 0100 00")),
         (hex("0020 0000"), hex("0020 0000")),
         (hex("00"), hex("00")),
     ] {
@@ -402,6 +429,19 @@ fn a_read_header_is_read_only_from_its_own_block() {
         "a read answer's data begins with its 64-byte header; this one is 63 bytes"
     );
     assert!(ReadResponse::split(&block.encode().unwrap()).is_err());
+    // A header whose length is not the header's names the block it found.
+    let mut long_header = rblock.encode().unwrap();
+    long_header[3] = 0x3D;
+    long_header.push(0);
+    assert_eq!(
+        ReadResponse::split(&long_header).unwrap_err().to_string(),
+        "a read answer's data begins with its header, a block of length 60; this one begins with block 0x8009 of length 61"
+    );
+    // A read response's refusal names the response's block.
+    assert_eq!(
+        ReadResponse::from_block(&Block { version: (1, 1), ..rblock.clone() }).unwrap_err().to_string(),
+        "a read response is block 0x8009 version 1.0 of 60 bytes with zero padding; this block is 0x8009 version 1.1 of 60 bytes"
+    );
 }
 
 fn checksum(b: &[u8]) -> u16 {
@@ -568,6 +608,13 @@ fn the_dissectors_read_an_answer_s_identity_the_status_s_order_and_every_header_
     assert_eq!(args.status, refused);
     let (header, record) = ReadResponse::split(&args.data).unwrap();
     assert_eq!((header, record), (ReadResponse { seq: 9, ar, api: 5, slot: 3, subslot: 0x8001, index: 0x802A, length: 0, add1: 0, add2: 0 }, vec![]));
+    // The answer is the request's operation, on the request's interface: a read's, and a request on
+    // the controller's interface answered on it.
+    assert_eq!((answer.opnum, answer.interface), (opnum::READ, Uuid::PNIO_DEVICE));
+    let on_controller = RpcPdu { interface: Uuid::PNIO_CONTROLLER, opnum: opnum::CONTROL, ..request.clone() };
+    let back = RpcPdu::pnio_response(&on_controller, 0, &ResponseArgs::new(PnioStatus::OK, 4096, vec![]));
+    assert_eq!((back.interface, back.opnum), (Uuid::PNIO_CONTROLLER, opnum::CONTROL));
+    assert_eq!(&back.encode().unwrap()[24..40], &Uuid::PNIO_CONTROLLER.to_wire(ByteOrder::Little));
 
     // Every header field distinct and not zero, byte for byte.
     let odd = RpcPdu {
@@ -619,6 +666,7 @@ fn the_dissectors_read_an_answer_s_identity_the_status_s_order_and_every_header_
     assert_eq!(io(1, "pn_rt_pn_io_error_decode"), ["128"]);
     assert_eq!(io(1, "pn_rt_pn_io_error_code1_pniorw"), ["176"]);
     assert_eq!(io(1, "pn_rt_pnio_error_code2_pniorw"), ["7"]);
+    assert_eq!(field(&d[1], "dcerpc", "dcerpc_dcerpc_opnum"), ["2"]);
     let rpc_field = |k: &str| field(&d[2], "dcerpc", &format!("dcerpc_dcerpc_{k}"));
     assert_eq!(rpc_field("dg_flags1"), ["40"]);
     assert_eq!(rpc_field("dg_flags2"), ["2"]);

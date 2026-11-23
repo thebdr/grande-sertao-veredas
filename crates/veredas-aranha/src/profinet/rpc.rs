@@ -771,10 +771,20 @@ impl ReadResponse {
     /// A read answer's data: its header, then the record. The header is the first block; the
     /// record is what follows it, as bytes (a record is often a block of its own, sometimes not).
     pub fn split(data: &[u8]) -> Result<(ReadResponse, Vec<u8>), RpcError> {
-        let (blocks, _) = read_blocks(data.get(..4 + 2 + READ_BODY).unwrap_or(data));
-        let first = blocks.first().ok_or_else(|| RpcError::Unfit(format!("a read answer's data begins with its 64-byte header; this one is {} bytes", data.len())))?;
-        let header = ReadResponse::from_block(first)?;
-        Ok((header, data[4 + 2 + READ_BODY..].to_vec()))
+        const HEAD: usize = 4 + 2 + READ_BODY;
+        if data.len() < HEAD {
+            return Err(RpcError::Unfit(format!("a read answer's data begins with its 64-byte header; this one is {} bytes", data.len())));
+        }
+        let declared = be16(data, 2);
+        if usize::from(declared) != 2 + READ_BODY {
+            return Err(RpcError::Unfit(format!(
+                "a read answer's data begins with its header, a block of length 60; this one begins with block {:#06x} of length {declared}",
+                be16(data, 0)
+            )));
+        }
+        let first = Block { block_type: be16(data, 0), version: (data[4], data[5]), body: data[6..HEAD].to_vec() };
+        let header = ReadResponse::from_block(&first)?;
+        Ok((header, data[HEAD..].to_vec()))
     }
 }
 
