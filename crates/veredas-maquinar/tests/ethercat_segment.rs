@@ -1040,3 +1040,294 @@ mod round_3 {
         });
     }
 }
+
+/// C-113's fourth refute round: the critic's probes (`~/.cache/veredas/critic-c113-r4/probes`), kept
+/// as pins: a working counter by device, not by FMMU; an FMMU's activation; a datagram starting or
+/// ending inside an FMMU, and ethercrab's split image at the 1024-byte bound; the downward
+/// transitions and an acknowledge in the device's own state; the system time compared when its
+/// first byte is written.
+mod round_4 {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use ethercrab::std::ethercat_now;
+    use ethercrab::{MainDevice, MainDeviceConfig, PduStorage, Timeouts};
+    use veredas_aranha::netns;
+    use veredas_maquinar::ethercat::esc::{self, Datagram, Esc, Identity};
+    use veredas_maquinar::ethercat::*;
+
+    fn line() -> Vec<Esc> {
+        (0..3u16)
+            .map(|i| {
+                let id = Identity { vendor_id: 7, product_code: u32::from(i), revision: 1, serial: 0, name: format!("d{i}"), alias: 0 };
+                let mut e = Esc::new(esc::sii_image(&id, &[], &[]), u64::from(i) * 1_000);
+                e.mem[0x10..0x12].copy_from_slice(&(0x1000 + i).to_le_bytes());
+                e.set_link(i < 2);
+                e
+            })
+            .collect()
+    }
+
+    fn pass(line: &mut [Esc], now: u64, dgs: &[(u8, u32, Vec<u8>)]) -> Vec<(Vec<u8>, u16, u32)> {
+        let mut d: Vec<Datagram> = dgs.iter().map(|(cmd, address, data)| Datagram { cmd: *cmd, idx: 0, address: *address, circulating: false, more: false, irq: 0, data: data.clone(), wkc: 0 }).collect();
+        esc::process(line, &mut d, now);
+        d.into_iter().map(|x| (x.data, x.wkc, x.address)).collect()
+    }
+
+    fn fp(station: u16, ado: u16) -> u32 {
+        (u32::from(ado) << 16) | u32::from(station)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fmmu(logical: u32, len: u16, bits: (u8, u8), physical: u16, physical_bit: u8, kind: u8, enable: u8) -> Vec<u8> {
+        let mut b = logical.to_le_bytes().to_vec();
+        b.extend_from_slice(&len.to_le_bytes());
+        b.extend_from_slice(&[bits.0, bits.1]);
+        b.extend_from_slice(&physical.to_le_bytes());
+        b.extend_from_slice(&[physical_bit, kind, enable, 0, 0, 0]);
+        b
+    }
+
+    /// P1. "the working counter the standard gives each command ... logical through its FMMUs ... a
+    /// read counted 1, a write 1, ... a logical write 1 and an LRW's write 2": counted a device, not an
+    /// FMMU (ETG.1000.4; the ESC datasheet: incremented once if at least one byte was read/written).
+    /// A device whose outputs sit in two FMMUs (two output SyncManagers, or a split image) counts once.
+    #[test]
+    fn a_device_with_two_fmmus_of_one_direction_counts_once() {
+        let mut l = line();
+        pass(
+            &mut l,
+            0,
+            &[
+                (5, fp(0x1000, 0x0600), fmmu(0, 1, (0, 7), 0x1000, 0, 2, 1)),
+                (5, fp(0x1000, 0x0610), fmmu(1, 1, (0, 7), 0x1001, 0, 2, 1)),
+                (5, fp(0x1000, 0x0620), fmmu(2, 1, (0, 7), 0x1100, 0, 1, 1)),
+                (5, fp(0x1000, 0x0630), fmmu(3, 1, (0, 7), 0x1101, 0, 1, 1)),
+            ],
+        );
+        l[0].mem[0x1100] = 0x5A;
+        l[0].mem[0x1101] = 0xA5;
+        let r = pass(&mut l, 0, &[(11, 0, vec![0x11, 0x22, 0, 0]), (10, 0, vec![0; 4]), (12, 0, vec![0x33, 0x44, 0, 0])]);
+        assert_eq!(r[0].1, 1, "LWR through two write FMMUs of one device: 1");
+        assert_eq!((r[1].0.clone(), r[1].1), (vec![0, 0, 0x5A, 0xA5], 1), "LRD through two read FMMUs of one device: 1");
+        assert_eq!((r[2].0.clone(), r[2].1), (vec![0x33, 0x44, 0x5A, 0xA5], 3), "LRW: 2 for the write and 1 for the read, once each");
+        assert_eq!(l[0].read(0x1000, 2), [0x33, 0x44]);
+    }
+
+    /// P2. "logical through its FMMUs": an FMMU maps only while activated (0x060C bit 0). A master that
+    /// deactivates an FMMU by its activation byte alone leaves its other bytes set.
+    #[test]
+    fn a_deactivated_fmmu_maps_nothing() {
+        let mut l = line();
+        l[0].mem[0x1100] = 0x5A;
+        pass(&mut l, 0, &[(5, fp(0x1000, 0x0600), fmmu(0, 1, (0, 7), 0x1000, 0, 2, 0)), (5, fp(0x1000, 0x0610), fmmu(1, 1, (0, 7), 0x1100, 0, 1, 0))]);
+        let r = pass(&mut l, 0, &[(12, 0, vec![0x77, 0x00])]);
+        assert_eq!((r[0].0.clone(), r[0].1, l[0].mem[0x1000]), (vec![0x77, 0x00], 0, 0x00), "never activated: nothing read, written or counted");
+        // Activated, then deactivated by its activation byte alone.
+        pass(&mut l, 0, &[(5, fp(0x1000, 0x060C), vec![1]), (5, fp(0x1000, 0x061C), vec![1])]);
+        let r = pass(&mut l, 0, &[(12, 0, vec![0x77, 0x00])]);
+        assert_eq!((r[0].0.clone(), r[0].1, l[0].mem[0x1000]), (vec![0x77, 0x5A], 3, 0x77), "activated");
+        pass(&mut l, 0, &[(5, fp(0x1000, 0x060C), vec![0]), (5, fp(0x1000, 0x061C), vec![0])]);
+        let r = pass(&mut l, 0, &[(12, 0, vec![0x99, 0x00])]);
+        assert_eq!((r[0].0.clone(), r[0].1, l[0].mem[0x1000]), (vec![0x99, 0x00], 0, 0x77), "deactivated again");
+    }
+
+    /// P3. "logical through its FMMUs bit by bit": a datagram that starts inside an FMMU's span (a
+    /// master splitting a process image too long for one frame, as ethercrab does) maps the FMMU's
+    /// later bytes, not its first ones.
+    #[test]
+    fn a_datagram_starting_or_ending_inside_an_fmmu_maps_its_bytes_there() {
+        let mut l = line();
+        l[0].mem[0x1000..0x1004].copy_from_slice(&[1, 2, 3, 4]);
+        l[0].mem[0x1200] = 0xAB;
+        pass(
+            &mut l,
+            0,
+            &[
+                (5, fp(0x1000, 0x0600), fmmu(0x100, 4, (0, 7), 0x1000, 0, 1, 1)),
+                (5, fp(0x1000, 0x0610), fmmu(0x200, 4, (0, 7), 0x1100, 0, 2, 1)),
+                (5, fp(0x1000, 0x0620), fmmu(0x300, 2, (4, 3), 0x1200, 0, 1, 1)),
+            ],
+        );
+        let r = pass(&mut l, 0, &[(10, 0x102, vec![0; 2])]);
+        assert_eq!((r[0].0.clone(), r[0].1), (vec![3, 4], 1), "LRD of the FMMU's bytes 2 and 3");
+        pass(&mut l, 0, &[(11, 0x202, vec![0xAA, 0xBB])]);
+        assert_eq!(l[0].read(0x1100, 4), [0, 0, 0xAA, 0xBB], "LWR onto the FMMU's bytes 2 and 3");
+        // Bit by bit: logical bits 0x300.4 to 0x301.3 onto physical 0x1200 bits 0 to 7; a read of
+        // logical byte 0x301 alone gets physical bits 4 to 7 (0xA) in its bits 0 to 3.
+        let r = pass(&mut l, 0, &[(10, 0x301, vec![0])]);
+        assert_eq!((r[0].0.clone(), r[0].1), (vec![0x0A], 1));
+        // A datagram that ends inside an FMMU (the first of the split): its first two bytes alone.
+        let r = pass(&mut l, 0, &[(10, 0x100, vec![0; 2])]);
+        assert_eq!((r[0].0.clone(), r[0].1), (vec![1, 2], 1), "LRD of the FMMU's bytes 0 and 1");
+        pass(&mut l, 0, &[(11, 0x200, vec![0xCC, 0xDD])]);
+        assert_eq!(l[0].read(0x1100, 4), [0xCC, 0xDD, 0xAA, 0xBB], "LWR onto the FMMU's bytes 0 and 1");
+    }
+
+    /// P4. "its AL state machine (a transition it refuses flagged ...)": the transitions ETG.1000.6
+    /// allows downward are taken: OP to SAFE-OP (SOEM's shutdown, ethercrab's `into_safe_op`), SAFE-OP
+    /// to PRE-OP.
+    #[test]
+    fn op_to_safe_op_and_safe_op_to_pre_op_are_taken() {
+        let mut l = line();
+        let state = |l: &[Esc]| (l[1].mem[0x0130], u16::from_le_bytes([l[1].mem[0x0134], l[1].mem[0x0135]]));
+        for c in [0x02u8, 0x04, 0x08] {
+            pass(&mut l, 0, &[(5, fp(0x1001, 0x0120), vec![c, 0])]);
+        }
+        assert_eq!(state(&l), (0x08, 0));
+        pass(&mut l, 0, &[(5, fp(0x1001, 0x0120), vec![0x04, 0])]);
+        assert_eq!(state(&l), (0x04, 0), "OP to SAFE-OP");
+        pass(&mut l, 0, &[(5, fp(0x1001, 0x0120), vec![0x02, 0])]);
+        assert_eq!(state(&l), (0x02, 0), "SAFE-OP to PRE-OP");
+    }
+
+    /// P5. "held until acknowledged": a device the plant faulted (OP to SAFE-OP, flagged, coded) is
+    /// acknowledged in its own state, as a master recovers it (SAFE-OP with the acknowledge, 0x14), and
+    /// taken back to OP; likewise in PRE-OP. Through the wire and the handle.
+    #[test]
+    fn a_faulted_device_is_acknowledged_in_its_state_and_back_in_op() {
+        netns::isolated("round_4::a_faulted_device_is_acknowledged_in_its_state_and_back_in_op", &[("a0", "b0")], || {
+            use veredas_aranha::wire::raw::{Options, RawLink};
+            let segment = start(&toml::from_str("interface = \"b0\"\ndevices = [ { name = \"d0\" }, { name = \"d1\" } ]\n").unwrap()).unwrap();
+            let link = RawLink::open_with("a0", Options { ethertype: Some(0x88A4), promiscuous: true, outgoing: false }).unwrap();
+            let me = [0x10u8; 6];
+            let send = |cmd: u8, address: u32, data: &[u8]| {
+                let mut body = vec![cmd, 0];
+                body.extend_from_slice(&address.to_le_bytes());
+                body.extend_from_slice(&(data.len() as u16).to_le_bytes());
+                body.extend_from_slice(&[0, 0]);
+                body.extend_from_slice(data);
+                body.extend_from_slice(&[0, 0]);
+                let mut f = vec![0xFF; 6];
+                f.extend_from_slice(&me);
+                f.extend_from_slice(&0x88A4u16.to_be_bytes());
+                f.extend_from_slice(&((body.len() as u16) | 0x1000).to_le_bytes());
+                f.extend(body);
+                f.resize(60, 0);
+                link.send(&f).unwrap();
+                let started = Instant::now();
+                while started.elapsed() < Duration::from_secs(2) {
+                    if let Some(r) = link.recv(Duration::from_millis(100)).unwrap()
+                        && r.bytes.len() > 12
+                        && r.bytes[6..12] != me
+                    {
+                        return;
+                    }
+                }
+                panic!("no answer");
+            };
+            let ap1 = (0x0120u32 << 16) | u32::from(0u16.wrapping_sub(1));
+            for c in [0x02u8, 0x04, 0x08] {
+                send(2, ap1, &[c, 0]);
+            }
+            assert_eq!(segment.al_state("d1").unwrap(), (8, false));
+            segment.fault("d1", 0x001B).unwrap();
+            assert_eq!(segment.al_state("d1").unwrap(), (4, true));
+            send(2, ap1, &[0x14, 0]);
+            assert_eq!(segment.al_state("d1").unwrap(), (4, false), "acknowledged in SAFE-OP");
+            send(2, ap1, &[0x08, 0]);
+            assert_eq!(segment.al_state("d1").unwrap(), (8, false), "back in OP");
+            // Faulted in PRE-OP, acknowledged there.
+            send(2, ap1, &[0x02, 0]);
+            segment.fault("d1", 0x001A).unwrap();
+            assert_eq!(segment.al_state("d1").unwrap(), (2, true));
+            send(2, ap1, &[0x12, 0]);
+            assert_eq!(segment.al_state("d1").unwrap(), (2, false), "acknowledged in PRE-OP");
+        });
+    }
+
+    const BIG_PDU: usize = PduStorage::element_size(1100);
+    static PDU_STORAGE_BIG: PduStorage<16, BIG_PDU> = PduStorage::new();
+
+    /// P3, end to end: a device at the bound the clause accepts (1024 bytes each way) brought to OP by
+    /// ethercrab, whose process image of 2048 bytes it sends in more than one LRW, the second starting
+    /// inside the device's FMMU: every output byte reaches the device and every input byte the master.
+    #[test]
+    fn a_device_of_1024_bytes_each_way_exchanges_every_byte_with_ethercrab() {
+        netns::isolated("round_4::a_device_of_1024_bytes_each_way_exchanges_every_byte_with_ethercrab", &[("a0", "b0")], || {
+            let entries = (0..128).map(|i| format!("{{ index = 0x7000, subindex = {}, bits = 64 }}", i + 1)).collect::<Vec<_>>().join(", ");
+            let ientries = entries.replace("0x7000", "0x6000");
+            let text = format!("interface = \"b0\"\ndevices = [ {{ name = \"big\", product_name = \"big\", outputs = [ {entries} ], inputs = [ {ientries} ] }} ]\n");
+            let segment = start(&toml::from_str(&text).unwrap()).unwrap();
+            let (tx, rx, pdu_loop) = PDU_STORAGE_BIG.try_split().expect("split once");
+            let maindevice = Arc::new(MainDevice::new(
+                pdu_loop,
+                Timeouts { wait_loop_delay: Duration::from_millis(2), state_transition: Duration::from_secs(5), pdu: Duration::from_millis(500), ..Default::default() },
+                MainDeviceConfig::default(),
+            ));
+            std::thread::spawn(move || futures_lite::future::block_on(ethercrab::std::tx_rx_task("a0", tx, rx).expect("the raw socket")));
+            let inputs: Vec<u8> = (0..1024u32).map(|i| (i * 7 + 3) as u8).collect();
+            let outputs: Vec<u8> = (0..1024u32).map(|i| (i * 13 + 5) as u8 ^ (i >> 8) as u8).collect();
+            futures_lite::future::block_on(async {
+                let group = maindevice.init_single_group::<4, 4096>(ethercat_now).await.expect("init");
+                let group = group.into_op(&maindevice).await.expect("OP");
+                segment.set_inputs("big", &inputs).unwrap();
+                for _ in 0..5 {
+                    {
+                        let d = group.iter(&maindevice).next().unwrap();
+                        d.outputs_raw_mut().copy_from_slice(&outputs);
+                    }
+                    group.tx_rx(&maindevice).await.expect("tx/rx");
+                }
+                let d = group.iter(&maindevice).next().unwrap();
+                let seen_in = d.inputs_raw().to_vec();
+                let bad_in = (0..1024).filter(|&i| seen_in[i] != inputs[i]).count();
+                let got_out = segment.outputs("big").unwrap();
+                let bad_out = (0..1024).filter(|&i| got_out[i] != outputs[i]).count();
+                assert_eq!((bad_in, bad_out), (0, 0), "input bytes wrong at the master, output bytes wrong in the device");
+            });
+        });
+    }
+
+    /// P6. The ESC datasheet (0x0910): a written system time is compared "if at least the
+    /// first byte (0x0910) was written". A write of the high half alone (0x0914) compares nothing.
+    #[test]
+    fn a_write_of_the_high_half_alone_compares_nothing() {
+        let mut l = line();
+        pass(&mut l, 5_000, &[(5, fp(0x1001, 0x0914), vec![0, 0, 0, 0])]);
+        assert_eq!(l[1].read(0x092C, 4), [0, 0, 0, 0]);
+    }
+
+    /// P8. An FRMW addressed to the second device: the first writes, as the standard has it.
+    #[test]
+    fn an_frmw_addressed_to_the_second_device_is_written_by_the_first() {
+        let mut l = line();
+        let r = pass(&mut l, 50_000, &[(14, fp(0x1001, 0x0910), vec![0; 8])]);
+        assert_eq!(r[0].1, 3);
+        assert_eq!(u64::from_le_bytes(r[0].0.clone().try_into().unwrap()), 49_000);
+    }
+
+    /// P6b. A write from 0x0910 running past 0x0917 writes the system time's first byte:
+    /// the datasheet compares it.
+    #[test]
+    fn a_write_of_the_system_time_running_on_is_compared() {
+        let mut l = line();
+        pass(&mut l, 5_000, &[(5, fp(0x1001, 0x0910), vec![0; 12])]);
+        assert_eq!(l[1].read(0x092C, 4), 4_000u32.to_le_bytes());
+    }
+
+    static PDU_STORAGE_DOWN: PduStorage<16, BIG_PDU> = PduStorage::new();
+
+    /// P4, end to end: ethercrab's own way down, OP to SAFE-OP to PRE-OP (`into_safe_op`, `into_pre_op`).
+    #[test]
+    fn ethercrab_takes_the_segment_down_from_op() {
+        netns::isolated("round_4::ethercrab_takes_the_segment_down_from_op", &[("a0", "b0")], || {
+            let segment = start(&toml::from_str("interface = \"b0\"\ndevices = [ { name = \"d0\" }, { name = \"d1\", outputs = [ { index = 0x7000, subindex = 1, bits = 8 } ] } ]\n").unwrap()).unwrap();
+            let (tx, rx, pdu_loop) = PDU_STORAGE_DOWN.try_split().expect("split once");
+            let maindevice = Arc::new(MainDevice::new(
+                pdu_loop,
+                Timeouts { wait_loop_delay: Duration::from_millis(2), state_transition: Duration::from_secs(2), pdu: Duration::from_millis(500), ..Default::default() },
+                MainDeviceConfig::default(),
+            ));
+            std::thread::spawn(move || futures_lite::future::block_on(ethercrab::std::tx_rx_task("a0", tx, rx).expect("the raw socket")));
+            futures_lite::future::block_on(async {
+                let group = maindevice.init_single_group::<4, 16>(ethercat_now).await.expect("init");
+                let group = group.into_op(&maindevice).await.expect("OP");
+                let group = group.into_safe_op(&maindevice).await.expect("OP to SAFE-OP");
+                assert_eq!(segment.al_state("d1").unwrap(), (4, false));
+                let _group = group.into_pre_op(&maindevice).await.expect("SAFE-OP to PRE-OP");
+                assert_eq!(segment.al_state("d1").unwrap(), (2, false));
+            });
+        });
+    }
+}

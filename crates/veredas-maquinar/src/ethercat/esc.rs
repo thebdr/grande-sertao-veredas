@@ -168,13 +168,16 @@ impl Esc {
         for (r, v) in keep {
             self.mem[r as usize..r as usize + v.len()].copy_from_slice(&v);
         }
-        if touched(reg::DC_SYSTEM_TIME, 8) && at >= reg::DC_SYSTEM_TIME && at as usize + data.len() <= reg::DC_SYSTEM_TIME as usize + 8 {
-            // A write of the system time (4 or 8 bytes) is the reference's time handed down: the
-            // device compares it with its own and keeps the difference.
+        let first = reg::DC_SYSTEM_TIME as usize;
+        if (at as usize) <= first && first < at as usize + data.len() {
+            // A write of the system time is the reference's time handed down: the device compares
+            // it with its own and keeps the difference, if at least the first byte (0x0910) was
+            // written (the ESC datasheet), over the low 32 bits when none of the high four was.
+            let from = first - at as usize;
+            let n = (data.len() - from).min(8);
             let mut theirs = [0u8; 8];
-            let from = (at - reg::DC_SYSTEM_TIME) as usize;
-            theirs[from..from + data.len()].copy_from_slice(data);
-            self.compare_system_time(u64::from_le_bytes(theirs), data.len() <= 4, now_ns);
+            theirs[..n].copy_from_slice(&data[from..from + n]);
+            self.compare_system_time(u64::from_le_bytes(theirs), n <= 4, now_ns);
         }
         if touched(reg::AL_CONTROL, 2) {
             self.al_control();
