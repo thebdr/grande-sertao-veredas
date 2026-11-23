@@ -5,8 +5,10 @@ A workbook born in Ábaco, and at the same time the session that works on other 
 and an editor. `veredas_abaco::abacofile` writes it (`write`, through a file beside the
 destination renamed into place, the file it replaces kept as `<name>.bak`; a write that fails
 leaves the destination as it was and nothing beside it; the temporary file is one of its own, made
-new, and the names are the system's whatever their encoding; two writes of one destination at once
-are not serialised, a limit) and reads it back
+new under a name of its own (`.veredas-<process>-<n>.tmp`, so a long destination name is written up
+to the file system's limit less the `.bak` four bytes), and the names are the system's whatever
+their encoding; two writes of one destination at once are not serialised, a limit) and reads it
+back
 (`read`, evaluated; nothing it carries runs). Its export to `.xlsx` is the fork's writer
 (`Workbook::export`).
 
@@ -64,10 +66,13 @@ engine's, refused by its path. A sheet part's structure is written the same way.
 Both ends hold the workbook to what the engine takes: sheet names of 1 to 31 characters with none
 of `\ / * ? : [ ]`, told apart in any case, each sheet's id its own; a row's `s` and a column's
 `style` one of the workbook's styles; a defined name that does not read as a cell (`B1`, `$B$1`,
-`R1C1`, `R[1]C[-1]`), stated once in its scope. The writer refuses, by the cell's address, what the
-reader would refuse of a cell (a style the workbook does not hold, a legacy array formula over
-merged cells, which the engine lets a merge leave but never enters), and a reference not in its
-form, so every file it writes reads back. A name local to a sheet the workbook does not hold is kept: the engine
+`R1C1`, `R[1]C[-1]`, in any case, `Sheet1!B1`, a range such as `A:A`, one with white space),
+stated once in its scope. The writer refuses, by the cell's address, what the reader would refuse
+of a cell (a style the workbook does not hold, a legacy array formula over merged cells, which the
+engine lets a merge leave but never enters, or of no size, an empty formula), and a reference not
+in its form, settings the engine refuses, a workspace part TOML's reader would not read back (a
+tool's table nested past its depth), and a part it kept that a written one would overwrite, so
+every file it writes reads back. A name local to a sheet the workbook does not hold is kept: the engine
 holds one for a chart sheet of the `.xlsx` the workbook came from, which no formula reads.
 
 ## A sheet part
@@ -107,7 +112,10 @@ keys the tool chooses. `workspace/state/<tool>.toml` holds the tool's `[state]` 
 null: a record holds none.
 
 `workspace/log.txt` holds one entry per line, oldest first, with `\`, a tab, a line feed and a
-carriage return written `\\`, `\t`, `\n`, `\r`; a backslash before anything else is refused.
+carriage return written `\\`, `\t`, `\n`, `\r`, and every other control character and Unicode
+line break (U+000B, U+000C, U+001C to U+001E, U+0085, U+2028, U+2029 among them) as `\uXXXX`, so no
+reader splits an entry; a backslash before anything else, or a `\u` without four hex digits naming
+a character, is refused.
 
 ## The worked example: a beam check
 A workbook named `Beam check`, its one sheet `Loads`: a span and a load, the moment they give
@@ -226,6 +234,7 @@ does not hold (a cell's, a row's, a column's), a number that is no finite number
 or an integer no double holds, a value of the wrong type (a date-time among them, a formula's `v`
 that is a table), a formula's `v` beside its `e`, a manifest with no sheet, a sheet whose part
 names another sheet than the manifest, a sheet name or a defined name the engine refuses, a cell's
-link stated twice (`links.1`), a linked workbook's cached cell stated twice, settings
+link stated twice (`links.1`), a linked workbook's cached cell stated twice, a cell stated inside a
+legacy array's area (but a style-only cell it spills into), settings
 the engine refuses (a time zone, a locale: the workbook part named), a reference's hash or date
 not in its form, a log line with a bad escape.

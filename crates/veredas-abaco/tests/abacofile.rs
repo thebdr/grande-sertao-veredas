@@ -374,6 +374,9 @@ fn a_file_that_is_not_what_it_should_be_is_refused_by_its_part_and_place() {
         // what the engine refuses of the settings, by the part
         ("workbook.toml", Box::new(|t| Some(t.replacen("tz = \"UTC\"", "tz = \"Mars/Olympus\"", 1))), "workbook.toml: `settings`: "),
         ("workbook.toml", Box::new(|t| Some(replace_line(t, "locale = ", "locale = \"xx-nowhere\""))), "workbook.toml: `settings`: Invalid locale"),
+        // a cell stated inside a legacy array's area, in either order of the keys
+        ("sheets/01-Loads.toml", Box::new(|t| Some(format!("{t}E1 = {{ array = \"1\", size = [1, 3] }}\nE2 = {{ n = 5 }}\n"))), "sheets/01-Loads.toml E2: a cell stated inside the array formula at E1"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(format!("{t}G2 = {{ array = \"7\", size = [1, 9] }}\nG10 = {{ array = \"7\", size = [1, 1] }}\n"))), "sheets/01-Loads.toml G10: a cell stated inside the array formula at G2"),
         ("workspace/references.toml", Box::new(|t| Some(t.replace("ba7816bf8f01cfea", "BA7816BF8F01CFEA"))), "workspace/references.toml reference 1: `sha256` is 64 lowercase hex digits"),
         ("workspace/references.toml", Box::new(|t| Some(t.replace("2026-11-23T10:04:05Z", "2026-11-23 10:04"))), "workspace/references.toml reference 1: `modified` is RFC 3339"),
         ("workspace/decisions.toml", Box::new(|t| Some(t.replace("veredas-abaco-records", "veredas-abaco-state"))), "workspace/decisions.toml: `format` is `veredas-abaco-state`, not `veredas-abaco-records`"),
@@ -560,6 +563,16 @@ fn names_the_engine_refuses_are_refused_by_the_writer_and_the_reader() {
         (Box::new(|w| w.defined_names[0].name = "B$1".into()), "workbook.toml", "name = \"Spam\"", "name = \"B$1\"", "is no name (it reads as a cell)"),
         (Box::new(|w| w.defined_names[0].name = "R[1]C[1]".into()), "workbook.toml", "name = \"Spam\"", "name = \"R[1]C[1]\"", "is no name (it reads as a cell)"),
         (Box::new(|w| w.defined_names[0].name = "RC[2]".into()), "workbook.toml", "name = \"Spam\"", "name = \"RC[2]\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "$b$1".into()), "workbook.toml", "name = \"Spam\"", "name = \"$b$1\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "b$1".into()), "workbook.toml", "name = \"Spam\"", "name = \"b$1\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "$b1".into()), "workbook.toml", "name = \"Spam\"", "name = \"$b1\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "r[1]c[1]".into()), "workbook.toml", "name = \"Spam\"", "name = \"r[1]c[1]\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "r[-1]c".into()), "workbook.toml", "name = \"Spam\"", "name = \"r[-1]c\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "Sheet1!B1".into()), "workbook.toml", "name = \"Spam\"", "name = \"Sheet1!B1\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "A1:B2".into()), "workbook.toml", "name = \"Spam\"", "name = \"A1:B2\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "A:A".into()), "workbook.toml", "name = \"Spam\"", "name = \"A:A\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "1:1".into()), "workbook.toml", "name = \"Spam\"", "name = \"1:1\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = " B1".into()), "workbook.toml", "name = \"Spam\"", "name = \" B1\"", "is no name (it reads as a cell)"),
         (Box::new(|w| w.defined_names[1].name = "SPAN".into()), "workbook.toml", "name = \"Spam\"", "name = \"SPAN\"", "is stated in its scope already, as `defined_names."),
     ];
     for (in_model, part, from, to, want) in &cases {
@@ -684,6 +697,60 @@ fn what_the_reader_refuses_the_writer_refuses_by_its_place() {
         let got = refused(&mut AbacoFile::new(book));
         assert!(got.contains(&format!("sheets/01-Sheet1.toml A1: {want}")), "{got}");
     }
+    // a legacy array of no size, which the engine's own API enters
+    for (w, h) in [(0, 1), (1, 0), (-1, 2)] {
+        let mut book = Workbook::new("Arrays").unwrap();
+        book.model_mut().set_user_array_formula(0, 1, 1, w, h, "=1").unwrap();
+        let got = refused(&mut AbacoFile::new(book));
+        assert!(got.contains(&format!("sheets/01-Sheet1.toml A1: an array formula of {w} by {h}")), "{got}");
+    }
+    // an empty formula, from a malformed `.xlsx` (`<f></f>`)
+    let xlsx = dir.path().join("empty.xlsx");
+    let mut book = Workbook::new("Empty").unwrap();
+    book.set_formula(0, Addr::parse("A1").unwrap(), "=1+1").unwrap();
+    book.export(&xlsx).unwrap();
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(&xlsx).unwrap()).unwrap();
+    let mut parts: Vec<(String, Vec<u8>)> = Vec::new();
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).unwrap();
+        let name = entry.name().unwrap().to_string();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
+        if name == "xl/worksheets/sheet1.xml" {
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(text.contains("<f>1+1</f>"), "{text}");
+            bytes = text.replace("<f>1+1</f>", "<f></f>").into_bytes();
+        }
+        parts.push((name, bytes));
+    }
+    std::fs::write(&xlsx, abacofile::zip_of(&parts).unwrap()).unwrap();
+    let got = refused(&mut AbacoFile::new(open(&xlsx)));
+    assert!(got.contains("sheets/01-Sheet1.toml A1: an empty formula"), "{got}");
+    // settings the engine refuses, set past its setters
+    let mut book = Workbook::new("Settings").unwrap();
+    book.model_mut().workbook.settings.tz = "Mars/Olympus".into();
+    let got = refused(&mut AbacoFile::new(book));
+    assert!(got.contains("workbook.toml: `settings`: "), "{got}");
+    // a tool's state nested past what TOML's reader reads
+    let mut file = worked_example();
+    let mut deep = toml::Value::Integer(1);
+    for _ in 0..200 {
+        let mut t = toml::Table::new();
+        t.insert("a".into(), deep);
+        deep = toml::Value::Table(t);
+    }
+    file.workspace.state.insert("deep".into(), deep.as_table().unwrap().clone());
+    let got = refused(&mut file);
+    assert!(got.contains("workspace/state/deep.toml: TOML's reader cannot read it back"), "{got}");
+    // a part it kept, which a sheet added since would overwrite
+    let mut parts = abacofile::parts(&worked_example()).unwrap();
+    parts.push(("sheets/02-Other.toml".into(), b"a newer Abaco's part\n".to_vec()));
+    let kept = dir.path().join("kept.abaco");
+    std::fs::write(&kept, abacofile::zip_of(&parts).unwrap()).unwrap();
+    let mut file = abacofile::read(&kept).unwrap();
+    file.book.add_sheet("Other").unwrap();
+    let got = refused(&mut file);
+    assert!(got.contains("sheets/02-Other.toml: a part this file kept without reading it has the name of one it now writes"), "{got}");
     // a reference not in its form
     for (bad, want) in [
         (Reference { role: "r".into(), path: "r.csv".into(), size: None, modified: None, sha256: Some("XYZ".into()) }, "`sha256` is 64 lowercase hex digits"),
@@ -695,6 +762,48 @@ fn what_the_reader_refuses_the_writer_refuses_by_its_place() {
         assert!(got.contains(&format!("workspace/references.toml reference 1: {want}")), "{got}");
     }
     assert!(!path.exists());
+}
+
+#[test]
+fn a_quote_prefixed_cell_an_array_spills_into_keeps_its_style() {
+    // entering the array gives its spilled cells a derived style (the quote prefix taken off): each
+    // keeps the style the file states, with and without a plain copy of it in the workbook
+    for (bold, italic) in [(true, true), (false, false)] {
+        let mut book = Workbook::new("Spill").unwrap();
+        book.model_mut().set_user_array_formula(0, 1, 1, 1, 3, "={1;2;3}").unwrap();
+        let a2 = Addr::parse("A2").unwrap();
+        let mut style = book.style(0, a2).unwrap();
+        style.quote_prefix = true;
+        style.font.b = bold;
+        style.font.i = italic;
+        book.set_style(0, a2, &style).unwrap();
+        let mut file = AbacoFile::new(book);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("spill.abaco");
+        abacofile::write(&mut file, &path).unwrap();
+        let mut back = abacofile::read(&path).unwrap();
+        assert!(differences(&file.book, &back.book).is_empty(), "{:?}", differences(&file.book, &back.book));
+        assert_eq!(back.book.style(0, a2).unwrap(), file.book.style(0, a2).unwrap());
+        let again = dir.path().join("again.abaco");
+        abacofile::write(&mut back, &again).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), std::fs::read(&again).unwrap(), "bold {bold}");
+    }
+}
+
+#[test]
+fn a_destination_named_near_the_file_system_s_limit_is_written_with_its_bak() {
+    // the temporary file's name is its own, not grown from the destination's: a name of 245 bytes
+    // (the `.bak` four more) is written, and written over
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(format!("{}.abaco", "a".repeat(239)));
+    let mut file = worked_example();
+    abacofile::write(&mut file, &path).unwrap();
+    let first = std::fs::read(&path).unwrap();
+    file.book.set_value(0, Addr::parse("B2").unwrap(), &Value::Number(13.0)).unwrap();
+    abacofile::write(&mut file, &path).unwrap();
+    let mut bak = path.clone().into_os_string();
+    bak.push(".bak");
+    assert_eq!(std::fs::read(&bak).unwrap(), first);
 }
 
 #[test]

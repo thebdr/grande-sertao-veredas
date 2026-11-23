@@ -249,7 +249,9 @@ fn quoted(s: &str) -> String {
     out
 }
 
-/// A log entry on one line: `\`, tab, line feed and carriage return escaped.
+/// A log entry on one line: `\`, tab, line feed and carriage return escaped (`\\`, `\t`, `\n`,
+/// `\r`), and every other control character and Unicode line break (U+000B, U+000C, U+001C to
+/// U+001E, U+0085, U+2028, U+2029 among them) as `\uXXXX`, so no reader splits an entry.
 pub fn escape_line(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -258,6 +260,9 @@ pub fn escape_line(s: &str) -> String {
             '\t' => out.push_str("\\t"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
+            c if c < ' ' || ('\u{7f}'..='\u{9f}').contains(&c) || c == '\u{2028}' || c == '\u{2029}' => {
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
             c => out.push(c),
         }
     }
@@ -278,6 +283,14 @@ pub fn unescape_line(s: &str) -> Result<String, String> {
             Some('t') => out.push('\t'),
             Some('n') => out.push('\n'),
             Some('r') => out.push('\r'),
+            Some('u') => {
+                let hex: String = chars.by_ref().take(4).collect();
+                let c = (hex.len() == 4)
+                    .then(|| u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32))
+                    .flatten()
+                    .ok_or_else(|| format!("`\\u{hex}` is no character"))?;
+                out.push(c);
+            }
             Some(other) => return Err(format!("`\\{other}` is no escape")),
             None => return Err("a line ends in a lone `\\`".into()),
         }
@@ -632,7 +645,16 @@ fn cells_text(book: &Workbook, sheet: u32, part: &str) -> Result<String, ModelEr
         if style as usize >= styles {
             return Err(bad(format!("style {style} is none of the workbook's {styles}")));
         }
-        if let Content::ArrayFormula { columns, rows, .. } = book.content(sheet, addr)? {
+        let content = book.content(sheet, addr)?;
+        if let Content::Formula(f) | Content::ArrayFormula { formula: f, .. } | Content::DynamicFormula(f) = &content
+            && bare(f).trim().is_empty()
+        {
+            return Err(bad("an empty formula, which the engine enters none of".into()));
+        }
+        if let Content::ArrayFormula { columns, rows, .. } = content {
+            if columns < 1 || rows < 1 {
+                return Err(bad(format!("an array formula of {columns} by {rows}, which holds no cell")));
+            }
             let (r2, c2) = (addr.row + rows - 1, addr.column + columns - 1);
             if merged.iter().any(|m| m.row <= r2 && addr.row < m.row + m.height && m.column <= c2 && addr.column < m.column + m.width) {
                 return Err(bad("an array formula over merged cells, which the engine enters none of".into()));
@@ -725,6 +747,9 @@ pub fn parts(file: &AbacoFile) -> Result<Vec<(String, Vec<u8>)>, ModelError> {
     let names: Vec<String> =
         ewb.worksheets.iter().enumerate().map(|(i, ws)| format!("sheets/{}.toml", sheet_stem(i, &ws.name))).collect();
     check_book(ewb, &names).map_err(ModelError::Engine)?;
+    // the settings the engine takes, as the reader's own model asks
+    Model::new_empty("check", &ewb.settings.locale, &ewb.settings.tz, LANGUAGE)
+        .map_err(|e| ModelError::Engine(format!("{WORKBOOK}: `settings`: {e}")))?;
     let mut out: Vec<(String, Vec<u8>)> = Vec::new();
     let mut entries = Vec::new();
     let mut sheets = Vec::new();
@@ -785,14 +810,25 @@ pub fn parts(file: &AbacoFile) -> Result<Vec<(String, Vec<u8>)>, ModelError> {
         let part = StatePart { format: STATE_FORMAT.into(), version: VERSION, state: state.clone() };
         out.push((name.clone(), toml_text(&name, &part)?.into_bytes()));
     }
+    // a tool's records and state are its own tables: each part TOML's reader reads back (a table
+    // nested past its depth would not)
+    for (name, bytes) in &out {
+        if name.starts_with("workspace/") && name.ends_with(".toml") {
+            let text = std::str::from_utf8(bytes).map_err(|e| ModelError::Engine(format!("{name}: {e}")))?;
+            toml::from_str::<toml::Table>(text).map_err(|e| ModelError::Engine(format!("{name}: TOML's reader cannot read it back: {}", e.message())))?;
+        }
+    }
     if !ws.log.is_empty() {
         let text: String = ws.log.iter().map(|l| escape_line(l) + "\n").collect();
         out.push((LOG.into(), text.into_bytes()));
     }
     for (name, bytes) in &file.kept {
-        if !out.iter().any(|(n, _)| n == name) {
-            out.push((name.clone(), bytes.clone()));
+        // a part it kept, not reading it, is written back as it came; one a written part would
+        // overwrite (a sheet or a macro added since under its name) refuses the write
+        if out.iter().any(|(n, _)| n == name) {
+            return Err(ModelError::Engine(format!("{name}: a part this file kept without reading it has the name of one it now writes")));
         }
+        out.push((name.clone(), bytes.clone()));
     }
     Ok(out)
 }
@@ -1119,6 +1155,9 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
     let mut shared_index: HashMap<String, i32> = HashMap::new();
     let mut worksheets = Vec::new();
     let mut formulas: Vec<(u32, String, Addr, Entry, i32)> = Vec::new();
+    // the cells that carry only a style (a styled cell an array spills into among them): entering an
+    // array may give its spilled cells a derived style, so theirs is set again after
+    let mut style_only: Vec<(u32, i32, i32, i32)> = Vec::new();
     if manifest.sheets.is_empty() {
         return Err(parts.bad(format!("{MANIFEST}: a workbook holds a sheet at least")));
     }
@@ -1160,6 +1199,18 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
             conditional_formatting: part.conditional_formatting,
             links: part.links.into_iter().map(|(r, c, l)| ((r, c), l)).collect(),
         };
+        // the legacy arrays' areas, so a cell stated inside one is refused whatever order the keys
+        // come in (the array's own anchor and the style-only cells it spills into aside)
+        let arrays: Vec<(Addr, i32, i32)> = cells
+            .iter()
+            .filter_map(|(k, v)| {
+                let t = v.as_table()?;
+                t.get("array")?;
+                let size = t.get("size")?.as_array()?;
+                let (w, h) = (size.first()?.as_integer()?, size.get(1)?.as_integer()?);
+                Some((Addr::parse(k).ok()?, i32::try_from(w).ok()?, i32::try_from(h).ok()?))
+            })
+            .collect();
         for (key, cell) in cells {
             let bad = |e: String| parts.bad(format!("{} {key}: {e}", sheet.part));
             let addr = Addr::parse(&key).map_err(|e| bad(e.to_string()))?;
@@ -1186,7 +1237,18 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
                 return Err(bad(format!("style {s} is none of the workbook's {styles}")));
             }
             let (row, column) = (addr.row, addr.column);
-            match entry(cell).map_err(bad)? {
+            let entry = entry(cell).map_err(bad)?;
+            if !matches!(entry, Entry::Style)
+                && let Some((anchor, ..)) = arrays.iter().find(|(a, w, h)| {
+                    *a != addr && (a.row..a.row + h).contains(&row) && (a.column..a.column + w).contains(&column)
+                })
+            {
+                return Err(bad(format!("a cell stated inside the array formula at {anchor}")));
+            }
+            if matches!(entry, Entry::Style) {
+                style_only.push((i as u32, row, column, s));
+            }
+            match entry {
                 Entry::Number(v) => ws.set_cell_with_number(row, column, v, s).map_err(bad)?,
                 Entry::Text(t) => {
                     let si = *shared_index.entry(t.clone()).or_insert_with(|| {
@@ -1248,6 +1310,10 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
         };
         restored.map_err(bad)?;
     }
+    for (sheet, row, column, style) in style_only {
+        let ws = model.workbook.worksheet_mut(sheet).map_err(|e| ModelError::file(path, e))?;
+        ws.set_cell_style(row, column, style).map_err(|e| ModelError::file(path, e))?;
+    }
     model.workbook.styles.cell_xfs.truncate(styles_in_file);
 
     let mut macros = BTreeMap::new();
@@ -1297,9 +1363,12 @@ mod tests {
 
     #[test]
     fn log_lines_round_trip_and_refuse_a_bad_escape() {
-        for s in ["", "plain", "a\tb", "line1\nline2\r\n", "back\\slash", "\\t literal"] {
+        for s in ["", "plain", "a\tb", "line1\nline2\r\n", "back\\slash", "\\t literal", "a\u{2028}b\u{85}c\u{b}d\u{c}e\u{1c}f\u{2029}", "\\u0041 literal"] {
             assert_eq!(unescape_line(&escape_line(s)).unwrap(), s);
+            assert!(!escape_line(s).contains(['\n', '\r', '\u{b}', '\u{c}', '\u{1c}', '\u{85}', '\u{2028}', '\u{2029}']), "{s:?}");
         }
+        assert_eq!(escape_line("a\u{2028}b"), "a\\u2028b");
+        assert_eq!(unescape_line("bad \\u12").unwrap_err(), "`\\u12` is no character");
         assert_eq!(escape_line("a\tb\\"), "a\\tb\\\\");
         assert_eq!(unescape_line("bad \\x").unwrap_err(), "`\\x` is no escape");
         assert_eq!(unescape_line("trailing \\").unwrap_err(), "a line ends in a lone `\\`");

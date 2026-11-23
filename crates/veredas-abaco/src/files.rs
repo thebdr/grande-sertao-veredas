@@ -7,7 +7,7 @@
 use std::path::Path;
 
 /// Writes `path` through `write`, into a temporary file of its own beside it
-/// (`<name>.<process>-<n>.tmp`, made new, so no file or link already there is followed or
+/// (`.veredas-<process>-<n>.tmp`, made new, so no file or link already there is followed or
 /// overwritten), then renames it into place; an existing `path` becomes `<name>.bak` (a previous
 /// `.bak` replaced). The names are the file name as the system gives it, whatever its encoding. Any
 /// failure (the write, the `.bak` that cannot be replaced, a rename) leaves `path` as it was and
@@ -24,7 +24,9 @@ pub fn atomic_write(path: &Path, write: impl FnOnce(std::fs::File) -> Result<(),
     };
     let bak = beside(".bak");
     let (tmp, file) = loop {
-        let tmp = beside(&format!(".{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        // a name of its own, not grown from the destination's, so a long name (up to the file
+        // system's limit less the `.bak` four) is never too long for it
+        let tmp = dir.join(format!(".veredas-{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
             Ok(file) => break (tmp, file),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
