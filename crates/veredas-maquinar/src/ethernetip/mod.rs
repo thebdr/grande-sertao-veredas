@@ -758,12 +758,15 @@ fn cip(shared: &Shared, peer: SocketAddr, frame: &[u8], t_to_o: Option<SocketAdd
         count(shared, service, general::NOT_ENOUGH_DATA);
         return (reply(service, general::NOT_ENOUGH_DATA, &[], &[]), Vec::new());
     };
+    // A request's own path names an object by logical segments alone: a port, a key or data there
+    // is a segment it cannot read, refused at its word (as OpENer does).
     let path = match parse_path(&req.path) {
-        Ok(p) => p,
-        Err(BadSegment(at)) => {
+        Ok(p) if p.first_other.is_none() => p,
+        Ok(Path { first_other: Some(at), .. }) | Err(BadSegment(at)) => {
             count(shared, req.service, general::PATH_SEGMENT_ERROR);
             return (reply(req.service, general::PATH_SEGMENT_ERROR, &[(at / 2) as u16], &[]), Vec::new());
         }
+        Ok(_) => unreachable!("a path with no other segment is taken above"),
     };
     let (general_status, additional, data, extra): Answer = match (path.class, path.instance) {
         (Some(class::CONNECTION_MANAGER), Some(1)) => connection_manager(shared, peer, &req, t_to_o),

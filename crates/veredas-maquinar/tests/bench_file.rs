@@ -878,7 +878,7 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     );
     // The closing paragraph says so.
     let prose = doc_prose();
-    assert!(prose.contains("A misspelled key in any table, a part without a name or with a name another part has, an emitter's file name or timestamp format that is bad, a value's range that is empty or not finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name the standard refuses, a port not named `port-xyz` or `port-xyz-abcde`, an alias not a port and a station, an order id or a serial number I&M0 cannot carry) or the EtherCAT segment's (an empty interface, no device, a device's name empty, padded or twice, a product name not 1 to 255 ASCII characters, an entry of 0 or over 64 bits, more than 255 entries or 1024 bytes a way), a scene file that cannot be read or does not load, a model whose scene, belt, sensor, mover or point is not there, a point of the other kind or written by two models, a ramp, a ratio, a stroke or a delay out of its range, a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that does not load against the catalog, a message the catalog lacks or whose fields leave a name unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the place named, before anything binds, opens or spawns."));
+    assert!(prose.contains("A misspelled key in any table, a part without a name or with a name another part has, an emitter's file name or timestamp format that is bad, a value's range that is empty or not finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP adapter's (an IPv6 bind, an assembly declared twice, a connection naming an assembly there is not, a point past its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name the standard refuses, a port not named `port-xyz` or `port-xyz-abcde`, an alias not a port and a station, an order id or a serial number I&M0 cannot carry) or the EtherCAT segment's (an empty interface, no device, a device's name empty, padded or twice, a product name not 1 to 255 ASCII characters, an entry of 0 or over 64 bits, more than 255 entries or 1024 bytes a way), a scene file that cannot be read or does not load, a model whose scene, belt, sensor, mover or point is not there, a point of the other kind or written by two models, a ramp, a ratio, a stroke or a delay out of its range, a file a channel points at that cannot be read or does not load, an `id_field` that does not ride in the framing, a controller file that does not load against the catalog, a message the catalog lacks or whose fields leave a name unwritten or use a source a plain channel lacks, is refused when the bench file loads, with the place named, before anything binds, opens or spawns."));
     // A part that cannot start: a server on a taken port, named; the emitter before it stopped.
     assert!(prose.contains("A part that cannot start (a port taken, a folder that cannot be created, an interface that is not there) stops the parts started before it and is named."));
     let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1531,7 +1531,8 @@ share an address.
 **An EtherNet/IP adapter** (`[[ethernetip]]`): a device's assemblies over EtherNet/IP, explicit
 messages on a TCP session and Class 1 cyclic I/O over UDP.
 - `name` (required): the part's name.
-- `bind` (`"127.0.0.1"`): the address the adapter listens on.
+- `bind` (`"127.0.0.1"`): the address the adapter listens on, IPv4 (EtherNet/IP's items carry IPv4
+  addresses alone).
 - `port` (`44818`): the encapsulation port, TCP for sessions and UDP for a ListIdentity; `0` lets
   the machine choose, the same port for both.
 - `io_port` (`2222`): the Class 1 port, UDP; `0` lets the machine choose, the port then given in
@@ -1708,7 +1709,7 @@ A misspelled key in any table, a part without a name or with a name another part
 emitter's file name or timestamp format that is bad, a value's range that is empty or not
 finite, anything the OPC UA or the Modbus server's own checks refuse (a point over another or past
 its table's end, a type its table cannot hold, a value that does not parse) or the EtherNet/IP
-adapter's (an assembly declared twice, a connection naming an assembly there is not, a point past
+adapter's (an IPv6 bind, an assembly declared twice, a connection naming an assembly there is not, a point past
 its assembly's bytes or over another) or the PROFINET device's (an empty interface, a station name
 the standard refuses, a port not named `port-xyz` or `port-xyz-abcde`, an alias not a port and a station, an order id or a serial number I&M0 cannot carry) or the EtherCAT segment's (an empty interface, no device, a device's
 name empty, padded or twice, a product name not 1 to 255 ASCII characters, an entry of 0 or over 64

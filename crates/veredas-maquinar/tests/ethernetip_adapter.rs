@@ -1066,14 +1066,16 @@ fn the_timeout_counts_the_consumed_rpi_and_the_multiplier_and_the_first_frame_wa
     assert_eq!(reply[2], 0);
     let to = env.find(0x8000).map(|i| SocketAddr::V4(ethernetip_core::cpf::decode_sockaddr_in_v4(&i.data).unwrap())).unwrap();
     let id = u32::from_le_bytes(reply[4..8].try_into().unwrap());
+    let mut last = Instant::now();
     for i in 0..10u32 {
         o.send_output(to, id, i, i as u16, true, &[0; 4]);
+        last = Instant::now();
         std::thread::sleep(Duration::from_millis(10));
     }
-    let silent = Instant::now();
     assert!(wait(Duration::from_secs(5), || adapter.status().timed_out == 1));
-    let after = silent.elapsed();
-    assert!(after >= Duration::from_millis(70) && after < Duration::from_millis(200), "{after:?}");
+    // From the last frame sent, which the adapter took no sooner: 80 ms is a floor.
+    let after = last.elapsed();
+    assert!(after >= Duration::from_millis(80) && after < Duration::from_millis(200), "{after:?}");
     // No frame at all: still open at 9 s, closed by 10 s and a little.
     let mut p = Originator::connect(&adapter);
     p.open(&adapter, &Open { rpi_us: 10_000, multiplier: 0, serial: 0x0F0F, ..open_for(4, 8) });
@@ -1246,4 +1248,239 @@ fn the_remaining_refusals_and_the_plant_side_by_bytes() {
     let mut c = Encap::connect(adapter.addr);
     let s = c.register();
     assert_eq!(c.cip(s, &[0x0E, 0x03, 0x20, 0x01, 0x24, 0x00, 0x30, 0x01]), vec![0x8E, 0, 0, 0, 1, 0]);
+}
+
+/// C-111's second refute round: the critic's probes, kept as pins (the multiplier 4 << m at 2, a
+/// Large_Forward_Open past 511 bytes, the O→T RPI alone, an equal sequence, the compatibility
+/// bit's major, the first frame at a long RPI, stale frames not feeding the watchdog, an IPv6 bind
+/// refused, a request path's port, key or data segment refused, nested misspellings, refusals read
+/// by the dissectors).
+mod round_2 {
+    use super::*;
+
+    fn dissect_log(log: &[(bool, Vec<u8>)]) -> Vec<String> {
+        let packets = dissect(&capture(log, &[]));
+        let mut out = Vec::new();
+        for p in &packets {
+            out.extend(complaints(p));
+        }
+        out
+    }
+
+    #[test]
+    fn the_refusals_read_by_the_dissectors() {
+        let adapter = start(&config(&device(120))).unwrap();
+        let mut report = Vec::new();
+        // 1. An Unconnected_Send to another route: 0x01/0x0312.
+        {
+            let mut c = Encap::connect(adapter.addr);
+            let s = c.register();
+            let r = c.cip(s, &wrap_us(&[0x0E, 0x03, 0x20, 0x01, 0x24, 0x01, 0x30, 0x01], &[0x01, 0x02]));
+            report.push(format!("unconnected_send 0x0312 reply {r:02X?}: {:?}", dissect_log(&c.log)));
+        }
+        // 2. A Forward_Open refused 0x0127 with its size.
+        {
+            let mut o = Originator::connect(&adapter);
+            let (r, _) = o.forward_open(&Open { o_to_t_size: 8, ..open_for(4, 8) });
+            report.push(format!("forward_open 0x0127 reply {r:02X?}: {:?}", dissect_log(&o.encap.log)));
+        }
+        // 3. A path segment error 0x04 with its word.
+        {
+            let mut c = Encap::connect(adapter.addr);
+            let s = c.register();
+            let r = c.cip(s, &[0x0E, 0x02, 0x20, 0x01, 0xE0, 0x01]);
+            report.push(format!("path 0x04 reply {r:02X?}: {:?}", dissect_log(&c.log)));
+        }
+        // 4. A Large_Forward_Open taken, then a Forward_Close of nothing (0x0107).
+        {
+            let mut o = Originator::connect(&adapter);
+            let SocketAddr::V4(me) = o.udp.local_addr().unwrap() else { panic!() };
+            let sockaddr = ethernetip_core::cpf::encode_sockaddr_in_v4(SocketAddr::V4(me)).unwrap();
+            let env = o.encap.rr(o.session, &large_fo(0x4444, 20_000, 20_000, 4 + 6, 8 + 2), vec![ethernetip_core::cpf::Item::new(0x8001, sockaddr)]);
+            let r = env.find(0x00B2).unwrap().data.clone();
+            let fc = o.forward_close(0x7777);
+            report.push(format!("large_forward_open reply {r:02X?} then forward_close {fc:02X?}: {:?}", dissect_log(&o.encap.log)));
+            o.forward_close(0x4444);
+        }
+        // 5. ListServices and ListInterfaces, a RegisterSession refused for its version.
+        {
+            let mut c = Encap::connect(adapter.addr);
+            c.ask(0x04, 0, &[]);
+            c.ask(0x64, 0, &[]);
+            c.ask(0x65, 0, &[2, 0, 0, 0]);
+            report.push(format!("list services/interfaces, register 0x69: {:?}", dissect_log(&c.log)));
+        }
+        // 6. A Forward_Open whose path size is short of its bytes: 0x13 with no triple.
+        {
+            let mut o = Originator::connect(&adapter);
+            let mut mr = vec![0x54, 0x02, 0x20, 0x06, 0x24, 0x01];
+            mr.extend(o.request(&open_for(4, 8)).encode());
+            mr.extend_from_slice(&[0, 0]);
+            let r = o.encap.cip(o.session, &mr);
+            report.push(format!("forward_open with 2 trailing bytes, reply {r:02X?}: {:?}", dissect_log(&o.encap.log)));
+        }
+        for l in &report {
+            eprintln!("PROBE {l}");
+        }
+        let bad: Vec<_> = report.iter().filter(|l| !l.ends_with(": []")).collect();
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
+
+    #[test]
+    fn a_multiplier_of_two_is_sixteen_rpis() {
+        let adapter = start(&config(&device(121))).unwrap();
+        let mut o = Originator::connect(&adapter);
+        // O→T 10 ms, multiplier 2: 10 ms × (4 << 2) = 160 ms; linear (4 × 3) would be 120 ms.
+        let (reply, to) = o.open(&adapter, &Open { rpi_us: 10_000, multiplier: 2, ..open_for(4, 8) });
+        let mut last = Instant::now();
+        for i in 0..10u32 {
+            o.send_output(to, reply.o_to_t_connection_id, i, i as u16, true, &[0; 4]);
+            last = Instant::now();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(wait(Duration::from_secs(5), || adapter.status().timed_out == 1));
+        // From the last frame sent: the adapter took it no sooner, so 160 ms is a floor; linear
+        // (4 × 3) would be 120.
+        let after = last.elapsed();
+        assert!(after >= Duration::from_millis(160) && after < Duration::from_millis(300), "{after:?}");
+    }
+
+    #[test]
+    fn an_o_to_t_rpi_alone_outside_the_range_is_refused() {
+        let adapter = start(&config(&device(122))).unwrap();
+        let mut o = Originator::connect(&adapter);
+        let mut req = o.request(&open_for(4, 8));
+        req.o_to_t_rpi_us = 500;
+        let mut mr = vec![0x54, 0x02, 0x20, 0x06, 0x24, 0x01];
+        mr.extend(req.encode());
+        let r = o.encap.cip(o.session, &mr);
+        eprintln!("PROBE O→T 500 us alone: {:?}", status_of(&r));
+        assert_eq!(status_of(&r), (0x01, vec![0x0111]));
+    }
+
+    #[test]
+    fn a_large_forward_open_carries_more_than_511_bytes() {
+        let text = device(123)
+            .replace("{ instance = 100, size = 8 }", "{ instance = 100, size = 600 }")
+            .replace("{ instance = 150, size = 4 }", "{ instance = 150, size = 700 }");
+        let adapter = start(&config(&text)).unwrap();
+        let mut o = Originator::connect(&adapter);
+        let SocketAddr::V4(me) = o.udp.local_addr().unwrap() else { panic!() };
+        let sockaddr = ethernetip_core::cpf::encode_sockaddr_in_v4(SocketAddr::V4(me)).unwrap();
+        let env = o.encap.rr(o.session, &large_fo(0x5555, 20_000, 20_000, 700 + 6, 600 + 2), vec![ethernetip_core::cpf::Item::new(0x8001, sockaddr)]);
+        let r = env.find(0x00B2).unwrap().data.clone();
+        eprintln!("PROBE large 700/600: {:02X?}", &r[..r.len().min(8)]);
+        assert_eq!(&r[..4], &[0xDB, 0, 0, 0], "{r:02X?}");
+        let mut buf = vec![0u8; 2000];
+        let (n, _) = o.udp.recv_from(&mut buf).unwrap();
+        let f = ethernetip_connections::decode_frame(&buf[..n], false).unwrap();
+        assert_eq!(f.data.len(), 600);
+        let to = env.find(0x8000).map(|i| SocketAddr::V4(ethernetip_core::cpf::decode_sockaddr_in_v4(&i.data).unwrap())).unwrap();
+        let id = u32::from_le_bytes(r[4..8].try_into().unwrap());
+        let mut data = vec![0u8; 700];
+        data[0] = 1;
+        data[2] = 0x21;
+        data[3] = 0x43;
+        o.send_output(to, id, 1, 1, true, &data);
+        assert!(wait(Duration::from_secs(3), || adapter.get("setpoint").unwrap() == Value::U16(0x4321)));
+    }
+
+    #[test]
+    fn an_equal_sequence_is_no_newer() {
+        let adapter = start(&config(&device(124))).unwrap();
+        let mut o = Originator::connect(&adapter);
+        let (reply, to) = o.open(&adapter, &open_for(4, 8));
+        let id = reply.o_to_t_connection_id;
+        o.send_output(to, id, 10, 10, true, &[1, 0, 0x11, 0x11]);
+        assert!(wait(Duration::from_secs(5), || adapter.get("setpoint").unwrap() == Value::U16(0x1111)));
+        // The same 32-bit sequence again, with a new count and new data: no newer, so stale.
+        o.send_output(to, id, 10, 11, true, &[1, 0, 0x22, 0x22]);
+        std::thread::sleep(Duration::from_millis(200));
+        let s = adapter.status();
+        eprintln!("PROBE equal sequence: setpoint {:?}, stale {}, consumed {}", adapter.get("setpoint").unwrap(), s.stale_frames, s.connections[0].consumed);
+        assert_eq!((adapter.get("setpoint").unwrap(), s.stale_frames), (Value::U16(0x1111), 1));
+    }
+
+    #[test]
+    fn the_compatibility_bit_still_needs_the_major() {
+        let adapter = start(&config(&device(125))).unwrap();
+        let mut o = Originator::connect(&adapter);
+        // The device is 2.5: compatible with major 3, minor 1 is not a revision it can emulate.
+        let mut k = [0x34, 0x04, 0, 0, 0, 0, 0, 0, 0x83, 1];
+        k[2..4].copy_from_slice(&9u16.to_le_bytes());
+        k[4..6].copy_from_slice(&7u16.to_le_bytes());
+        k[6..8].copy_from_slice(&3u16.to_le_bytes());
+        let (r, _) = o.forward_open(&Open { key: Some(k), ..open_for(4, 8) });
+        eprintln!("PROBE compat major 3: {:?}", status_of(&r));
+        assert_eq!(status_of(&r), (0x01, vec![0x0116]));
+    }
+
+    #[test]
+    fn the_first_frame_comes_at_once_at_a_long_rpi() {
+        let adapter = start(&config(&device(126))).unwrap();
+        let mut o = Originator::connect(&adapter);
+        let opened = Instant::now();
+        o.open(&adapter, &Open { rpi_us: 1_000_000, ..open_for(4, 8) });
+        o.next_input(false);
+        eprintln!("PROBE first frame at a 1 s RPI after {:?}", opened.elapsed());
+        assert!(opened.elapsed() < Duration::from_millis(100), "{:?}", opened.elapsed());
+    }
+
+    #[test]
+    fn stale_frames_do_not_feed_the_watchdog() {
+        let adapter = start(&config(&device(127))).unwrap();
+        let mut o = Originator::connect(&adapter);
+        let (reply, to) = o.open(&adapter, &Open { rpi_us: 10_000, multiplier: 0, ..open_for(4, 8) });
+        let id = reply.o_to_t_connection_id;
+        o.send_output(to, id, 100, 1, true, &[0; 4]);
+        std::thread::sleep(Duration::from_millis(5));
+        // Only late frames from now on: the connection must time out about 40 ms after the last fresh one.
+        let fresh = Instant::now();
+        for i in 0..30u32 {
+            o.send_output(to, id, 50 + i, 2, true, &[0; 4]);
+            std::thread::sleep(Duration::from_millis(10));
+            if adapter.status().timed_out == 1 {
+                break;
+            }
+        }
+        let timed_out = adapter.status().timed_out;
+        eprintln!("PROBE stale only: timed_out {timed_out} after {:?}, stale {}", fresh.elapsed(), adapter.status().stale_frames);
+        assert_eq!(timed_out, 1);
+    }
+
+    #[test]
+    fn an_ipv6_bind_is_refused() {
+        for bind in ["::1", "::"] {
+            let r = start(&config(&format!("bind = \"{bind}\"\nport = 0\nio_port = 0\n")));
+            assert_eq!(r.err().map(|e| e.to_string()), Some(format!("ethernetip.bind `{bind}`: EtherNet/IP is IPv4, a dotted quad")));
+        }
+    }
+
+    #[test]
+    fn a_port_key_or_data_segment_in_a_request_path_is_refused() {
+        let adapter = start(&config(&device(128))).unwrap();
+        let mut c = Encap::connect(adapter.addr);
+        let s = c.register();
+        // Get_Attribute_Single of the Identity's vendor through port 1, slot 5: the adapter routes nowhere.
+        let r = c.cip(s, &[0x0E, 0x04, 0x01, 0x05, 0x20, 0x01, 0x24, 0x01, 0x30, 0x01]);
+        // A port segment where only logical ones belong: 0x04 at its word, 0.
+        assert_eq!(&r[..6], &[0x8E, 0x00, 0x04, 0x01, 0x00, 0x00], "{r:02X?}");
+        // A key or data segment likewise, at the word it begins.
+        let r = c.cip(s, &[0x0E, 0x02, 0x20, 0x01, 0x80, 0x00]);
+        assert_eq!(&r[..6], &[0x8E, 0x00, 0x04, 0x01, 0x01, 0x00], "{r:02X?}");
+    }
+
+    #[test]
+    fn a_misspelled_key_in_a_nested_table_is_refused() {
+        for text in [
+            "identity = { vendor = 9 }",
+            "assemblies = [ { instance = 100, size = 8, sise = 9 } ]",
+            "assemblies = [ { instance = 100, size = 8 } ]\nconnections = [ { config = 100, output = 100, input = 100, output_hedaer = \"modeless\" } ]",
+            "assemblies = [ { instance = 100, size = 8 } ]\npoints = [ { name = \"a\", assembly = 100, byte = 0, tpye = \"u16\" } ]",
+        ] {
+            let r = toml::from_str::<EnipConfig>(text);
+            eprintln!("PROBE nested misspelling {text:?}: {:?}", r.as_ref().map(|_| ()).map_err(|e| e.to_string().lines().last().unwrap_or("").to_string()));
+            assert!(r.is_err(), "{text}");
+        }
+    }
 }

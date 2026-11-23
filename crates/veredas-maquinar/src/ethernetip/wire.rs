@@ -229,6 +229,9 @@ pub struct Path {
     pub data: Option<Vec<u8>>,
     /// Port segments (a route), as `(port, link)`.
     pub ports: Vec<(u16, Vec<u8>)>,
+    /// Where the first segment that is not logical (a key, data or a port) begins, in bytes: what
+    /// a request's own path may not hold.
+    pub first_other: Option<usize>,
 }
 
 /// Why a path could not be read: the byte offset of the segment that is not understood.
@@ -261,6 +264,7 @@ pub fn parse_path(b: &[u8]) -> Result<Path, BadSegment> {
             // The electronic key: format 4, ten bytes in all.
             0x34 => {
                 need(10)?;
+                p.first_other.get_or_insert(at);
                 if b[at + 1] != 0x04 {
                     return Err(BadSegment(at));
                 }
@@ -270,6 +274,7 @@ pub fn parse_path(b: &[u8]) -> Result<Path, BadSegment> {
             // A simple data segment: its length in words, then the words.
             0x80 => {
                 need(2)?;
+                p.first_other.get_or_insert(at);
                 let words = b[at + 1] as usize;
                 need(2 + 2 * words)?;
                 p.data = Some(b[at + 2..at + 2 + 2 * words].to_vec());
@@ -278,12 +283,14 @@ pub fn parse_path(b: &[u8]) -> Result<Path, BadSegment> {
             // A port segment, its link address one byte, padded to a word.
             s if s & 0xE0 == 0x00 && s & 0x10 == 0 && s & 0x0F != 0x0F => {
                 need(2)?;
+                p.first_other.get_or_insert(at);
                 p.ports.push(((s & 0x0F) as u16, vec![b[at + 1]]));
                 at += 2;
             }
             // A port segment with an extended link address: its size, the address, a pad byte.
             s if s & 0xE0 == 0x00 && s & 0x10 != 0 && s & 0x0F != 0x0F => {
                 need(2)?;
+                p.first_other.get_or_insert(at);
                 let size = b[at + 1] as usize;
                 need(2 + size)?;
                 p.ports.push(((s & 0x0F) as u16, b[at + 2..at + 2 + size].to_vec()));

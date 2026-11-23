@@ -236,6 +236,10 @@ pub(super) fn check(cfg: &EnipConfig) -> Result<(), EnipError> {
     if cfg.bind.trim().is_empty() {
         return Err(bad("ethernetip.bind is empty".into()));
     }
+    // Class 1 and the socket-address items carry IPv4 addresses alone.
+    if cfg.bind.parse::<std::net::Ipv6Addr>().is_ok() {
+        return Err(bad(format!("ethernetip.bind `{}`: EtherNet/IP is IPv4, a dotted quad", cfg.bind)));
+    }
     cfg.identity.revision_bytes().map_err(|e| bad(format!("ethernetip.identity.revision: {e}")))?;
     if cfg.identity.product_name.len() > 32 || !cfg.identity.product_name.is_ascii() {
         return Err(bad("ethernetip.identity.product_name: at most 32 ASCII characters".into()));
