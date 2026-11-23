@@ -127,7 +127,7 @@ const BUILDS: [&[&str]; 3] = [&["--all-features"], &["--all-features", "--releas
 
 /// Every file rustc read to compile the targets of the package at `manifest`, by the dep-info it
 /// wrote for each, in a check of every target with `args`, into `target_dir`.
-fn files_rustc_read(manifest: &Path, target_dir: &Path, args: &[&str]) -> BTreeSet<PathBuf> {
+fn files_rustc_read(manifest: &Path, target_dir: &Path, args: &[&str]) -> (BTreeSet<PathBuf>, BTreeSet<String>) {
     let out = Command::new(env!("CARGO"))
         .args(["check", "--offline", "--all-targets", "--message-format=json", "--manifest-path"])
         .arg(manifest)
@@ -141,6 +141,7 @@ fn files_rustc_read(manifest: &Path, target_dir: &Path, args: &[&str]) -> BTreeS
     let meta = metadata(&manifest, &["--no-deps", "--offline"]);
     let root = PathBuf::from(meta["workspace_root"].as_str().unwrap());
     let mut files = BTreeSet::new();
+    let mut names = BTreeSet::new();
     let mut units = 0;
     for line in String::from_utf8(out.stdout).unwrap().lines() {
         let Ok(msg) = serde_json::from_str::<Value>(line) else { continue };
@@ -157,10 +158,35 @@ fn files_rustc_read(manifest: &Path, target_dir: &Path, args: &[&str]) -> BTreeS
         // Spaces in a path are written `\ `.
         let inputs = inputs.replace("\\ ", "\u{0}");
         files.extend(inputs.split_whitespace().map(|p| root.join(p.replace('\u{0}', " "))));
+        names.insert(msg["target"]["name"].as_str().unwrap().to_string());
         units += 1;
     }
     assert!(units > 0, "no unit of the package was checked");
+    (files, names)
+}
+
+/// The names of the package's targets, as cargo's metadata names them.
+fn target_names(dir: &Path) -> BTreeSet<String> {
+    let meta = metadata(&dir.join("Cargo.toml"), &["--no-deps", "--offline"]);
+    let manifest = dir.join("Cargo.toml").canonicalize().unwrap();
+    let package = meta["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| Path::new(p["manifest_path"].as_str().unwrap()).canonicalize().unwrap() == manifest)
+        .unwrap()
+        .clone();
+    package["targets"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect()
+}
+
+/// The assembly in the text files of `files` that lie in `dir`, by file name and line.
+fn assembly_in(files: &BTreeSet<PathBuf>, dir: &Path) -> Vec<String> {
     files
+        .iter()
+        .filter(|f| f.canonicalize().is_ok_and(|c| c.starts_with(dir)))
+        .filter_map(|f| std::fs::read_to_string(f).ok().map(|t| (f, t)))
+        .flat_map(|(f, t)| assembly(&t).into_iter().map(move |l| format!("{}: {l}", f.file_name().unwrap().to_string_lossy())))
+        .collect()
 }
 
 /// The files of `files` that do not lie in `dir`, once every link is followed.
@@ -178,26 +204,35 @@ fn aranha_compiles_in_no_file_from_outside_its_folder() {
         assert!(found_by_cargo(&kind, &rel), "a {kind} target cargo would not find by itself: {}", rel.display());
     }
     // And the rule refuses a target declared at a path cargo would not find.
-    for (path, ok) in [("tests/x.rs", true), ("tests/x/main.rs", true), ("tests/x.txt", false), ("src/t.rs", false), ("tests/a/b/c.rs", false), ("tests/.rs", false)] {
+    for (path, ok) in [("tests/x.rs", true), ("tests/x/main.rs", true), ("tests/x/y.rs", false), ("tests/x.txt", false), ("src/t.rs", false), ("tests/a/b/c.rs", false), ("tests/.rs", false)] {
         assert_eq!(found_by_cargo("test", Path::new(path)), ok, "{path}");
     }
     assert!(found_by_cargo("lib", Path::new("src/lib.rs")) && !found_by_cargo("lib", Path::new("src/other.rs")));
     assert!(found_by_cargo("bin", Path::new("src/bin/x/main.rs")) && !found_by_cargo("bin", Path::new("bin/x.rs")));
+    assert!(found_by_cargo("bin", Path::new("src/bin/x.rs")) && found_by_cargo("bin", Path::new("src/main.rs")) && !found_by_cargo("bin", Path::new("src/cli.rs")));
     let hidden = planted("hidden", &[("Cargo.toml", manifest("[[test]]\nname = \"hidden\"\npath = \"tests/hidden.txt\"\n")), ("src/lib.rs", String::new()), ("tests/hidden.txt", String::new())]);
     let declared: Vec<(String, PathBuf)> = target_sources(&hidden).into_iter().map(|(k, p)| (k, p.strip_prefix(hidden.canonicalize().unwrap()).unwrap().to_path_buf())).collect();
     std::fs::remove_dir_all(&hidden).unwrap();
     assert!(declared.iter().any(|(k, p)| k == "test" && !found_by_cargo(k, p)), "{declared:?}");
     // Every file rustc reads for every target, in every build checked, by its own dep-info: no
     // spelling of an include, no module path, no link hides a file from it.
+    // Every target cargo names is among those checked (a target set apart, `test = false` say,
+    // is not left out), and no file rustc reads, whatever its name, holds assembly.
     let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("depinfo");
+    let (mut all_read, mut checked) = (BTreeSet::new(), BTreeSet::new());
     for args in BUILDS {
-        let read = files_rustc_read(&dir.join("Cargo.toml"), &target, args);
+        let (read, names) = files_rustc_read(&dir.join("Cargo.toml"), &target, args);
         assert!(read.iter().any(|f| f.ends_with("src/profinet/dcp.rs")) && read.iter().any(|f| f.ends_with("tests/component.rs")), "{read:?}");
         assert_eq!(outside(&read, &dir), Vec::<PathBuf>::new(), "{args:?}");
+        all_read.extend(read);
+        checked.extend(names);
     }
-    // The check can fail, in each build: a crate that pulls in a file by an include in braces behind
-    // a comment, a module that is a link to a file outside, and an include only a Windows build and
-    // only a release build reads.
+    assert_eq!(target_names(&dir).difference(&checked).cloned().collect::<Vec<_>>(), Vec::<String>::new());
+    assert_eq!(assembly_in(&all_read, &dir), Vec::<String>::new());
+    // The checks can fail, in each build: a crate that pulls in a file by an include in braces
+    // behind a comment, a module that is a link to a file outside, an include only a Windows build
+    // and only a release build reads, a module file not named `.rs` holding assembly, and a test
+    // target set apart from the checked builds.
     let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("depinfo-planted");
     let _ = std::fs::remove_dir_all(&base);
     let krate = base.join("krate");
@@ -207,23 +242,30 @@ fn aranha_compiles_in_no_file_from_outside_its_folder() {
     std::fs::write(base.join("win.txt"), "w").unwrap();
     std::fs::write(base.join("rel.txt"), "r").unwrap();
     let inc = format!("{}{}", "inclu", "de_str!");
-    std::fs::write(krate.join("Cargo.toml"), manifest("")).unwrap();
+    std::fs::write(krate.join("Cargo.toml"), manifest("[[test]]\nname = \"hidden\"\ntest = false\n")).unwrap();
+    std::fs::create_dir_all(krate.join("tests")).unwrap();
+    std::fs::write(krate.join("tests/hidden.rs"), "#[test]\nfn h() {}\n").unwrap();
+    std::fs::write(krate.join("src/carrier.in"), format!("core::arch::global_{}{}!(\"nop\");\n", "as", "m")).unwrap();
     std::fs::write(
         krate.join("src/lib.rs"),
         format!(
-            "pub const N: &str = {inc} /* c */ {{\"../../note.txt\"}};\npub mod borrowed;\n#[cfg(windows)]\npub const W: &str = {inc}(\"../../win.txt\");\n#[cfg(not(debug_assertions))]\npub const R: &str = {inc}(\"../../rel.txt\");\n"
+            "pub const N: &str = {inc} /* c */ {{\"../../note.txt\"}};\npub mod borrowed;\n#[path = \"carrier.in\"]\nmod carrier;\n#[cfg(windows)]\npub const W: &str = {inc}(\"../../win.txt\");\n#[cfg(not(debug_assertions))]\npub const R: &str = {inc}(\"../../rel.txt\");\n"
         ),
     )
     .unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(base.join("outside_mod.rs"), krate.join("src/borrowed.rs")).unwrap();
     let here = krate.canonicalize().unwrap();
-    let mut out = BTreeSet::new();
+    let (mut out, mut all_read, mut checked) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
     for args in BUILDS {
-        let read = files_rustc_read(&krate.join("Cargo.toml"), &base.join("target"), args);
+        let (read, names) = files_rustc_read(&krate.join("Cargo.toml"), &base.join("target"), args);
         out.extend(outside(&read, &here).iter().map(|p| p.file_name().unwrap().to_str().unwrap().to_string()));
+        all_read.extend(read);
+        checked.extend(names);
     }
     assert_eq!(out.into_iter().collect::<Vec<_>>(), ["borrowed.rs", "note.txt", "rel.txt", "win.txt"]);
+    assert_eq!(target_names(&krate).difference(&checked).cloned().collect::<Vec<_>>(), ["hidden"]);
+    assert_eq!(assembly_in(&all_read, &here), ["carrier.in: line 1"]);
     std::fs::remove_dir_all(&base).unwrap();
 }
 
@@ -340,6 +382,68 @@ fn reached_ids(meta: &Value, root: &str) -> BTreeSet<String> {
     seen
 }
 
+/// The proc macros a build or a test of `root` compiles: they run at compile time and may read
+/// files that rustc's dep-info does not name, so they are named here. The root's normal, build and
+/// dev dependencies are followed, and theirs normal and build.
+fn proc_macros_used(meta: &Value, root: &str) -> Vec<String> {
+    let nodes: BTreeMap<&str, &Value> = meta["resolve"]["nodes"].as_array().unwrap().iter().map(|n| (n["id"].as_str().unwrap(), n)).collect();
+    let packages: BTreeMap<&str, &Value> = meta["packages"].as_array().unwrap().iter().map(|p| (p["id"].as_str().unwrap(), p)).collect();
+    let mut seen = BTreeSet::new();
+    let mut todo = vec![(root.to_string(), true)];
+    while let Some((id, is_root)) = todo.pop() {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        for dep in nodes[id.as_str()]["deps"].as_array().unwrap() {
+            let used = dep["dep_kinds"].as_array().unwrap().iter().any(|k| k["kind"].is_null() || k["kind"] == "build" || (is_root && k["kind"] == "dev"));
+            if used {
+                todo.push((dep["pkg"].as_str().unwrap().to_string(), false));
+            }
+        }
+    }
+    let mut out: Vec<String> = seen
+        .iter()
+        .map(|id| packages[id.as_str()])
+        .filter(|p| p["targets"].as_array().unwrap().iter().any(|t| t["kind"].as_array().unwrap().iter().any(|k| k == "proc-macro")))
+        .map(|p| p["name"].as_str().unwrap().to_string())
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn the_proc_macros_its_builds_and_tests_use_are_named() {
+    // A proc macro reads what it likes at compile time, outside the dep-info proof: the ones
+    // aranha's builds and tests use are these, so a new one is seen and weighed.
+    let manifest = manifest_dir().join("Cargo.toml");
+    let meta = metadata(&manifest, &["--all-features", "--offline"]);
+    assert_eq!(
+        proc_macros_used(&meta, &root_id(&meta, &manifest)),
+        ["displaydoc", "serde_derive", "thiserror-impl", "yoke-derive", "zerofrom-derive", "zerovec-derive"]
+    );
+    // The walk sees one a test alone uses, and not one only a dependency's tests would.
+    let pkg = |name: &str, extra: &str| format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n{extra}");
+    let dir = planted(
+        "procmacros",
+        &[
+            ("Cargo.toml", "[workspace]\nmembers = [\"root\", \"a\", \"pm\", \"pm2\"]\nresolver = \"3\"\n".into()),
+            ("root/Cargo.toml", pkg("root", "[dependencies]\na = { path = \"../a\" }\n[dev-dependencies]\npm = { path = \"../pm\" }\n")),
+            ("root/src/lib.rs", String::new()),
+            ("a/Cargo.toml", pkg("a", "[dev-dependencies]\npm2 = { path = \"../pm2\" }\n")),
+            ("a/src/lib.rs", String::new()),
+            ("pm/Cargo.toml", pkg("pm", "[lib]\nproc-macro = true\n")),
+            ("pm/src/lib.rs", String::new()),
+            ("pm2/Cargo.toml", pkg("pm2", "[lib]\nproc-macro = true\n")),
+            ("pm2/src/lib.rs", String::new()),
+        ],
+    );
+    let manifest = dir.join("root/Cargo.toml");
+    let meta = metadata(&manifest, &["--all-features", "--offline"]);
+    let used = proc_macros_used(&meta, &root_id(&meta, &manifest));
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(used, ["pm"]);
+}
+
 fn root_id(meta: &Value, manifest: &Path) -> String {
     let manifest = manifest.canonicalize().unwrap();
     meta["packages"]
@@ -415,6 +519,24 @@ fn the_walk_follows_what_ships_and_leaves_dev_dependencies_to_the_tests() {
     assert_eq!(graph.into_iter().collect::<Vec<_>>(), ["a", "b", "d", "e", "f", "g", "h", "i", "root"]);
     // Every one of them a member of that workspace, named however: each reached member is named.
     assert_eq!(members, ["a", "b", "d", "e", "f", "g", "h", "i"]);
+}
+
+/// A manifest's dependencies (name, kind, platform; the codecs' crate left out) and its features.
+fn manifest_deps(manifest: &Path) -> (BTreeSet<(String, String, String)>, String) {
+    let meta = metadata(manifest, &["--no-deps", "--offline"]);
+    let id = root_id(&meta, manifest);
+    let package = meta["packages"].as_array().unwrap().iter().find(|p| p["id"] == id.as_str()).unwrap().clone();
+    let deps = package["dependencies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            let field = |k: &str| d[k].as_str().unwrap_or("").to_string();
+            (field("name"), field("kind"), field("target"))
+        })
+        .filter(|(n, _, _)| n != "codecs-alone")
+        .collect();
+    (deps, package["features"].to_string())
 }
 
 /// Copy the tree at `from` into `to`, leaving out `skip` (a folder under `from`).
@@ -507,23 +629,23 @@ fn the_codecs_build_alone_and_the_rest_of_aranha_builds_on_them_as_another_crate
     let split = Split::plant(&[]);
     // The rest's manifest names what aranha's does (each dependency with its kind and platform,
     // and the features), the codecs' crate besides.
-    let deps = |manifest: &Path| -> (BTreeSet<(String, String, String)>, String) {
-        let meta = metadata(manifest, &["--no-deps", "--offline"]);
-        let id = root_id(&meta, manifest);
-        let package = meta["packages"].as_array().unwrap().iter().find(|p| p["id"] == id.as_str()).unwrap().clone();
-        let deps = package["dependencies"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|d| {
-                let field = |k: &str| d[k].as_str().unwrap_or("").to_string();
-                (field("name"), field("kind"), field("target"))
-            })
-            .filter(|(n, _, _)| n != "codecs-alone")
-            .collect();
-        (deps, package["features"].to_string())
+    assert_eq!(manifest_deps(&split.base.join("ws/rest/Cargo.toml")), manifest_deps(&manifest_dir().join("Cargo.toml")));
+    // The comparison sees a kind, a platform and a feature apart.
+    let base = "[package]\nname = \"p\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[workspace]\n";
+    let reading = |extra: &str| {
+        let dir = planted("deps", &[("Cargo.toml", format!("{base}{extra}")), ("src/lib.rs", String::new())]);
+        let d = manifest_deps(&dir.join("Cargo.toml"));
+        std::fs::remove_dir_all(&dir).unwrap();
+        d
     };
-    assert_eq!(deps(&split.base.join("ws/rest/Cargo.toml")), deps(&manifest_dir().join("Cargo.toml")));
+    let plain = reading("[dependencies]\nlibc = \"0.2\"\nserde = \"1\"\n");
+    for other in [
+        "[target.'cfg(target_os = \"linux\")'.dependencies]\nlibc = \"0.2\"\n[dependencies]\nserde = \"1\"\n",
+        "[dependencies]\nlibc = \"0.2\"\n[build-dependencies]\nserde = \"1\"\n",
+        "[dependencies]\nlibc = \"0.2\"\nserde = \"1\"\n[features]\nextra = []\n",
+    ] {
+        assert_ne!(reading(other), plain, "{other}");
+    }
     // Every configuration a build of aranha may take: every feature on, in both profiles, and for
     // a second platform (Windows, where the plan's Npcap phase adds code to the rest).
     let checks: [&[&str]; 3] = [
@@ -537,20 +659,27 @@ fn the_codecs_build_alone_and_the_rest_of_aranha_builds_on_them_as_another_crate
     }
     let out = split.cargo(&["test", "--doc", "-p", "codecs-alone"]);
     assert!(out.status.success(), "the codecs' doctests:\n{}", String::from_utf8_lossy(&out.stderr));
-    // The codecs alone, for a 32-bit target of another architecture: no code of one platform hides
-    // in them without a `cfg`.
-    let wasm: &[&str] = &["check", "-p", "codecs-alone", "--lib", "--target", "wasm32-unknown-unknown"];
-    let out = split.cargo(wasm);
-    assert!(out.status.success(), "the codecs on wasm32:\n{}", String::from_utf8_lossy(&out.stderr));
-    for (poison, want) in [
-        ("pub fn lane() -> usize {\n    core::mem::size_of::<core::arch::x86_64::__m128i>()\n}", "x86_64"),
-        ("const _: () = assert!(usize::BITS == 64);", "E0080"),
+    // The codecs alone, their unit tests with them, for a 32-bit target of another architecture
+    // (wasm32) and for a 32-bit big-endian one without 64-bit atomics (powerpc): no code of one
+    // platform hides in them without a `cfg`.
+    let wasm: &[&str] = &["check", "-p", "codecs-alone", "--lib", "--tests", "--target", "wasm32-unknown-unknown"];
+    let ppc: &[&str] = &["check", "-p", "codecs-alone", "--lib", "--tests", "--target", "powerpc-unknown-linux-gnu"];
+    for target in [wasm, ppc] {
+        let out = split.cargo(target);
+        assert!(out.status.success(), "the codecs with {target:?}:\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+    for (poison, target, want) in [
+        ("pub fn lane() -> usize {\n    core::mem::size_of::<core::arch::x86_64::__m128i>()\n}", wasm, "x86_64"),
+        ("const _: () = assert!(usize::BITS == 64);", wasm, "E0080"),
+        ("#[cfg(test)]\nmod lane {\n    #[test]\n    fn width() {\n        assert_eq!(core::mem::size_of::<core::arch::x86_64::__m128i>(), 16);\n    }\n}", wasm, "x86_64"),
+        ("const _: () = assert!(u16::from_ne_bytes([1, 0]) == 1);", ppc, "E0080"),
+        ("pub static COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);", ppc, "AtomicU64"),
     ] {
         let bound = Split::plant(&[("codecs/src/profinet/mod.rs", poison)]);
         let native = bound.cargo(checks[0]);
         assert!(native.status.success(), "{poison}: {}", String::from_utf8_lossy(&native.stderr));
-        let out = bound.cargo(wasm);
-        assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains(want), "{poison} went unseen on wasm32: {}", String::from_utf8_lossy(&out.stderr));
+        let out = bound.cargo(target);
+        assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains(want), "{poison} went unseen with {target:?}: {}", String::from_utf8_lossy(&out.stderr));
     }
 
     // The check can fail, from either side: a codec test that reaches for the rest of the crate,
@@ -677,7 +806,7 @@ fn has_section_sign(line: &str) -> bool {
         return true;
     }
     let named = format!("&{}", "sect");
-    let percent = format!("%c2{}", "%a7");
+    let percent = format!("%c2%{}", "a7");
     let l = line.to_lowercase();
     let b = l.as_bytes();
     let hex_value = |digits: &str| u32::from_str_radix(digits, 16).ok();
@@ -702,7 +831,7 @@ fn has_section_sign(line: &str) -> bool {
             let d: String = r.chars().take(2).collect();
             d.chars().count() == 2 && hex_value(&d) == Some(0xA7)
         } else {
-            rest.starts_with(percent.as_str())
+            rest.starts_with(percent.as_str()) || rest.starts_with(&format!("%{}", "a7"))
         };
         if found {
             return true;
@@ -755,32 +884,19 @@ fn assembly(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Where a Rust text's documentation holds code rustdoc would compile (a doctest, whose files
-/// neither the dep-info check nor the split builds): a fence opened in a doc comment with any
-/// info string but `text`, a doc block comment, or a doc attribute (which could hold either).
-fn doctests(text: &str) -> Vec<String> {
-    let (fence, tilde) = (format!("{}{}", "``", "`"), format!("{}{}", "~~", "~"));
-    let mut open = false;
-    let mut out = Vec::new();
-    for (n, line) in text.lines().enumerate() {
-        let t = line.trim_start();
-        let flat: String = t.chars().filter(|c| !c.is_whitespace()).collect();
-        let doc_eq = format!("{}{}", "doc", "=");
-        let attr = flat.starts_with(&format!("#[{doc_eq}")) || flat.starts_with(&format!("#![{doc_eq}")) || (flat.contains(&format!("{}{}", "cfg_", "attr(")) && flat.contains(&doc_eq));
-        if attr || t.starts_with(&format!("{}{}", "/*", "*")) || t.starts_with(&format!("{}{}", "/*", "!")) {
-            out.push(format!("line {}", n + 1));
-            continue;
-        }
-        let Some(doc) = t.strip_prefix("///").or_else(|| t.strip_prefix("//!")) else { continue };
-        let d = doc.trim();
-        if d.starts_with(fence.as_str()) || d.starts_with(tilde.as_str()) {
-            if !open && d.trim_start_matches(['`', '~']).trim() != "text" {
-                out.push(format!("line {}", n + 1));
-            }
-            open = !open;
-        }
-    }
-    out
+/// The doctests rustdoc finds in the package at `manifest` (whose files neither the dep-info check
+/// nor the split builds), by rustdoc's own list: however a doc comment, a doc attribute or a macro
+/// writes one, and in whatever file.
+fn doctests_listed(manifest: &Path, target_dir: &Path) -> Vec<String> {
+    let out = Command::new(env!("CARGO"))
+        .args(["test", "--doc", "--offline", "--quiet", "--manifest-path"])
+        .arg(manifest)
+        .args(["--", "--list"])
+        .env("CARGO_TARGET_DIR", target_dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "rustdoc's list: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stdout).unwrap().lines().filter(|l| l.ends_with(": test")).map(str::to_string).collect()
 }
 
 #[test]
@@ -792,10 +908,31 @@ fn aranha_holds_no_assembly_and_no_doctest() {
         .filter(|f| f.extension().is_some_and(|e| e == "rs"))
         .flat_map(|f| {
             let text = std::fs::read_to_string(f).unwrap();
-            assembly(&text).into_iter().chain(doctests(&text)).map(move |l| format!("{}: {l}", f.display())).collect::<Vec<_>>()
+            assembly(&text).into_iter().map(move |l| format!("{}: {l}", f.display())).collect::<Vec<_>>()
         })
         .collect();
     assert_eq!(found, Vec::<String>::new());
+    // rustdoc finds no doctest in it.
+    let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("doclist");
+    assert_eq!(doctests_listed(&manifest_dir().join("Cargo.toml"), &target), Vec::<String>::new());
+    // And finds each of five a text check would miss: an indented block, a doc attribute after
+    // another on its line, a doc block comment mid-line, a fence opened in the comment after one
+    // left open, and a doctest in a module file not named `.rs`.
+    let (fence, txt) = (format!("{}{}", "``", "`"), "text");
+    let lib = format!(
+        "/// v1\n///\n///     let a = 1;\npub fn v1() {{}}\n\
+         #[inline] #[doc = \"{fence}\\nlet b = 2;\\n{fence}\"]\npub fn v3() {{}}\n\
+         pub const BEFORE: u8 = 0; /** {fence}\nlet c = 3;\n{fence} */ pub const V6: u8 = 0;\n\
+         /// {fence}{txt}\n/// open\npub fn v8a() {{}}\n/// {fence}\n/// let d = 4;\npub fn v8b() {{}}\n\
+         #[path = \"carrier.in\"]\npub mod carrier;\n"
+    );
+    let dir = planted("doctests", &[("Cargo.toml", manifest("")), ("src/lib.rs", lib), ("src/carrier.in", format!("/// {fence}\n/// let e = 5;\n/// {fence}\npub fn v9() {{}}\n"))]);
+    let listed = doctests_listed(&dir.join("Cargo.toml"), &Path::new(env!("CARGO_TARGET_TMPDIR")).join("doclist-planted"));
+    std::fs::remove_dir_all(&dir).unwrap();
+    for item in ["v1", "v3", "V6", "v8b", "v9"] {
+        assert!(listed.iter().any(|l| l.contains(&format!(" {item} ")) || l.contains(&format!("::{item} "))), "{item} not listed: {listed:?}");
+    }
+    assert_eq!(listed.len(), 5, "{listed:?}");
     // The checks can fail: assembly however reached, and each way a doctest is written.
     let a = format!("{}{}", "as", "m");
     for text in [
@@ -809,21 +946,6 @@ fn aranha_holds_no_assembly_and_no_doctest() {
     }
     for innocent in ["let plasma = 1;", "// asmara", "fn asm_like() {}"] {
         assert_eq!(assembly(innocent), Vec::<String>::new(), "{innocent}");
-    }
-    let f = format!("{}{}", "``", "`");
-    for (text, want) in [
-        (format!("/// {f}\n/// let x = include_str!(\"../x\");\n/// {f}"), vec!["line 1"]),
-        (format!("//! {f}rust\n//! x\n//! {f}"), vec!["line 1"]),
-        (format!("/// {f}no_run\n/// x\n/// {f}\n/// {f}text\n/// y\n/// {f}"), vec!["line 1"]),
-        ("/// ~~~\n/// x\n/// ~~~".to_string(), vec!["line 1"]),
-        ("#![doc = include_str!(\"../README.md\")]".to_string(), vec!["line 1"]),
-        ("#[ doc = \"x\" ]".to_string(), vec!["line 1"]),
-        (format!("#[{}{}(test, {} = \"x\")]", "cfg_", "attr", "doc"), vec!["line 1"]),
-        ("/** x */".to_string(), vec!["line 1"]),
-        ("/*! x */".to_string(), vec!["line 1"]),
-        (format!("/// {f}text\n/// a diagram\n/// {f}"), vec![]),
-    ] {
-        assert_eq!(doctests(&text), want, "{text}");
     }
 }
 
@@ -909,7 +1031,8 @@ fn aranha_names_no_vendor_and_cites_no_vendor_document() {
         (format!("description = \"\\{}{} 4.2\"", "u00", "A7"), 1),
         (format!("description = \"\\{}{} 4.2\"", "U000000", "A7"), 1),
         (format!("b\"\\{}{}\"", "x", "a7"), 1),
-        (format!("https://x/{}{}", "%C2", "%A7"), 1),
+        (format!("https://x/{}%{}", "%C2", "A7"), 1),
+        (format!("https://x/?q=%{}4.2", "A7"), 1),
         // The named entity before a digit, and at a line's end.
         (format!("/// clause &{}4.2 of the spec", "sect"), 1),
         (format!("/// see the clause &{}", "sect"), 1),
@@ -926,7 +1049,7 @@ fn aranha_names_no_vendor_and_cites_no_vendor_document() {
     }
     assert_eq!(vendor_mentions("// the host's own interface"), Vec::<String>::new());
     // Near the sign's spellings, but not it (a byte escape before a letter past ASCII among them).
-    for innocent in [format!("&{}", "sec;"), format!("&#{}", "168;"), format!("\\{}", "u00a8"), format!("{}{}", "%C2", "%A8"), format!("/// the escape \\{}\u{20ac} is not a byte", "xa")] {
+    for innocent in [format!("&{}", "sec;"), format!("&#{}", "168;"), format!("\\{}", "u00a8"), format!("{}{}", "%C2", "%A8"), "%A8".to_string(), format!("/// the escape \\{}\u{20ac} is not a byte", "xa")] {
         assert_eq!(vendor_mentions(&innocent), Vec::<String>::new(), "{innocent}");
     }
 }
