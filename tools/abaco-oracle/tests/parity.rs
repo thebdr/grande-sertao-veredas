@@ -221,6 +221,17 @@ fn a_package_that_only_claims_excel_is_not_in_the_corpus() {
         rewrite_part(&source, &path, part, |text| text.replacen(from, to, 1));
         assert_eq!(excel_application(&path), None, "{what}");
     }
+    // the rule's limits: version 13 refused, 14 and a workbook edited by version 5 taken
+    let edges = tempfile::tempdir().unwrap();
+    for (what, part, from, to, taken) in [
+        ("version 13", "docProps/app.xml", "<AppVersion>16.0300</AppVersion>", "<AppVersion>13.0000</AppVersion>", false),
+        ("version 14", "docProps/app.xml", "<AppVersion>16.0300</AppVersion>", "<AppVersion>14.0000</AppVersion>", true),
+        ("edited by 5", "xl/workbook.xml", "lastEdited=\"7\"", "lastEdited=\"5\"", true),
+    ] {
+        let path = edges.path().join(format!("{}.xlsx", what.replace(' ', "_")));
+        rewrite_part(&source, &path, part, |text| text.replacen(from, to, 1));
+        assert_eq!(excel_application(&path).is_some(), taken, "{what}");
+    }
     // the same package, copied with no change, is still Excel's
     let copy = dir.path().join("copy.xlsx");
     rewrite_part(&source, &copy, "docProps/app.xml", |text| format!("{text}\n"));
@@ -332,12 +343,18 @@ fn parity(links_mode: LinksMode) {
     let b = baseline();
     let dir = corpus_dir(&b);
     let mut probe = Probe::default();
-    let opts = options(links_mode);
+    // every example kept that the random array's nine draws need
+    let mut opts = options(links_mode);
+    opts.max_examples = 9;
     let mut short = Vec::new();
     let (mut base_matched, mut matched, mut formulas, mut better) = (0usize, 0usize, 0usize, Vec::new());
     let mut links: BTreeMap<String, LinkOutcome> = BTreeMap::new();
     for f in &b.file {
         let report = run_file(&dir.join(&f.path), &opts, &mut probe);
+        // the random array, measured partway through the run whose totals are pinned: seeded
+        if f.path == "DynamicArrays.xlsx" {
+            assert_eq!(draws_of(&report), seeded_draws(), "{links_mode:?}: the random array inside the run");
+        }
         if let Some(outcome) = &report.link_outcome
             && *outcome != LinkOutcome::NoLinks
         {
@@ -430,40 +447,92 @@ fn parity_under_the_linked_resolution() {
     parity(LinksMode::Linked);
 }
 
-/// The nine draws of `DynamicArrays.xlsx`'s `RANDARRAY(3,3,0,100,TRUE)` across `A19:C21`, as a
-/// measure reads them (the engine's value of each, from the mismatches its report lists: seeded
-/// with 1, none of the nine equals Excel's cache).
-fn draws(options: &Options) -> BTreeMap<String, String> {
-    let path = corpus_dir(&baseline()).join("DynamicArrays.xlsx");
-    let mut probe = Probe::default();
-    let report = run_file(&path, options, &mut probe);
+/// The cells of `DynamicArrays.xlsx`'s `RANDARRAY(3,3,0,100,TRUE)`.
+const RANDOM_CELLS: [&str; 9] = ["A19", "B19", "C19", "A20", "B20", "C20", "A21", "B21", "C21"];
+
+/// Its nine draws seeded with 1, under either resolution, on every run (none equals Excel's
+/// cached one, so each is a mismatch its report lists with the engine's value).
+fn seeded_draws() -> BTreeMap<String, String> {
+    RANDOM_CELLS.iter().zip(["80", "40", "61", "45", "53", "44", "16", "65", "82"]).map(|(c, v)| (c.to_string(), v.to_string())).collect()
+}
+
+/// The nine draws a report of `DynamicArrays.xlsx` lists (its examples, at least nine kept).
+fn draws_of(report: &abaco_oracle::FileReport) -> BTreeMap<String, String> {
     report
         .examples
         .values()
         .flatten()
-        .filter(|e| ["A19", "B19", "C19", "A20", "B20", "C20", "A21", "B21", "C21"].contains(&e.reference.as_str()))
+        .filter(|e| RANDOM_CELLS.contains(&e.reference.as_str()))
         .map(|e| (e.reference.clone(), e.actual.clone()))
         .collect()
 }
 
+fn draws(options: &Options, probe: &mut Probe) -> BTreeMap<String, String> {
+    draws_of(&run_file(&corpus_dir(&baseline()).join("DynamicArrays.xlsx"), options, probe))
+}
+
 #[test]
 fn every_measure_draws_the_same_numbers_and_an_unseeded_one_others() {
-    // the seed-1 draws, under either resolution, on every run
-    let seeded: BTreeMap<String, String> = [
-        ("A19", "80"), ("B19", "40"), ("C19", "61"), ("A20", "45"), ("B20", "53"), ("C20", "44"), ("A21", "16"), ("B21", "65"), ("C21", "82"),
-    ]
-    .iter()
-    .map(|(c, v)| (c.to_string(), v.to_string()))
-    .collect();
     for links in [LinksMode::Cached, LinksMode::Linked] {
         let mut o = options(links);
         o.max_examples = 50;
-        assert_eq!(draws(&o), seeded, "{links:?}: the first measure");
-        assert_eq!(draws(&o), seeded, "{links:?}: the second measure");
+        // inside a run: another workbook measured first, with the same probe
+        let mut probe = Probe::default();
+        run_file(&corpus_dir(&baseline()).join("calc_tests/MATH_AND_TRIGONOMETRY/ABS.xlsx"), &o, &mut probe);
+        assert_eq!(draws(&o, &mut probe), seeded_draws(), "{links:?}: the first measure of it");
+        assert_eq!(draws(&o, &mut probe), seeded_draws(), "{links:?}: the second");
         // a measure left to chance draws otherwise (all nine alike by chance: one in 101^9)
         let mut unseeded = options(links);
         unseeded.max_examples = 50;
         unseeded.random_seed = None;
-        assert_ne!(draws(&unseeded), seeded, "{links:?}: an unseeded measure drew the seeded numbers");
+        assert_ne!(draws(&unseeded, &mut probe), seeded_draws(), "{links:?}: an unseeded measure drew the seeded numbers");
     }
+}
+
+/// The oracle's binary, its exit code and its report.
+fn oracle(args: &[&str]) -> (i32, String) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_abaco-oracle")).args(args).output().unwrap();
+    (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+#[test]
+fn the_binary_seeds_its_measures_and_measures_a_baseline_on_its_day() {
+    let source = corpus_dir(&baseline()).join("DynamicArrays.xlsx");
+    let path = source.to_str().unwrap();
+    // a report: the nine draws, every run (its lines `| sheet!cell | formula | Excel's | the engine's |`)
+    for _ in 0..2 {
+        let (code, report) = oracle(&["--no-roundtrip", "--examples", "20", "--today", "2026-11-22", path]);
+        assert_eq!(code, 0, "{report}");
+        let got: BTreeMap<String, String> = report
+            .lines()
+            .filter_map(|l| {
+                let cols: Vec<&str> = l.split('|').map(str::trim).collect();
+                let cell = cols.get(1)?.strip_prefix("DynamicArrays!")?;
+                let engine = cols.get(4)?;
+                RANDOM_CELLS.contains(&cell).then(|| (cell.to_string(), engine.to_string()))
+            })
+            .collect();
+        assert_eq!(got, seeded_draws(), "{report}");
+    }
+    // a baseline: measured on the day it names, both resolutions seeded
+    let dir = tempfile::tempdir().unwrap();
+    let corpus = dir.path().join("corpus");
+    std::fs::create_dir(&corpus).unwrap();
+    std::fs::copy(&source, corpus.join("DynamicArrays.xlsx")).unwrap();
+    let out = dir.path().join("baseline.toml");
+    let (code, _) = oracle(&[
+        "--no-roundtrip", "--baseline-out", out.to_str().unwrap(), "--measured-by", "parity test", "--measured-on", "2026-11-22",
+        "--corpus", corpus.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    let written = Baseline::read(&out).unwrap();
+    assert_eq!(written.measured_on, "2026-11-22");
+    let file = written.file.iter().find(|f| f.path == "DynamicArrays.xlsx").unwrap();
+    assert_eq!((file.cached.as_ref().unwrap().matched, file.linked.as_ref().unwrap().matched), (5, 5));
+    // a baseline said to be measured on one day and clocked on another is refused
+    let (code, _) = oracle(&[
+        "--no-roundtrip", "--baseline-out", out.to_str().unwrap(), "--measured-on", "2026-11-22", "--today", "2026-11-23",
+        "--corpus", corpus.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2);
 }

@@ -7,7 +7,8 @@
 //! ```
 //!
 //! `--today` pins the engine's clock to noon UTC of that day (TODAY, NOW), so a measure compares
-//! with one taken that day; without it the system's clock is read. The random functions are always
+//! with one taken that day; without it the system's clock is read. A baseline (`--baseline-out`)
+//! is measured on the day `--measured-on` names, `--today` refused if it names another. The random functions are always
 //! seeded (1), so a run's numbers never depend on chance.
 //!
 //! ```text
@@ -87,6 +88,20 @@ fn main() -> ExitCode {
     if files.is_empty() {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
+    }
+    // a baseline says the day it was measured on: its measure reads that day's clock
+    if baseline_out.is_some() {
+        let Some(day) = abaco_oracle::noon_utc(&measured_on) else {
+            eprintln!("--baseline-out needs --measured-on YYYY-MM-DD, got `{measured_on}`\n{USAGE}");
+            return ExitCode::from(2);
+        };
+        match clock {
+            Some(other) if other != day => {
+                eprintln!("--today and --measured-on name different days: a baseline is measured on the day it says\n{USAGE}");
+                return ExitCode::from(2);
+            }
+            _ => clock = Some(day),
+        }
     }
 
     let mut probe = Probe::default();
