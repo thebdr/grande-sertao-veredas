@@ -107,8 +107,11 @@ fn the_engine_is_the_fork_at_its_folder_and_no_member() {
         let expected = format!("{name} v0.9.1 ({})", fork.join(folder).display());
         assert!(graph.contains(&expected), "{expected} not in {graph:?}");
     }
-    // no other copy of the engine anywhere in the graph, from a registry or elsewhere
-    let copies: Vec<&String> = graph.iter().filter(|p| p.starts_with("ironcalc_base ") || p.starts_with("ironcalc ")).collect();
+    // no other copy of the engine anywhere in the graph, on any platform, from a registry or
+    // elsewhere
+    let everywhere = normal_graph(true);
+    let copies: Vec<&String> =
+        everywhere.iter().filter(|p| p.starts_with("ironcalc_base ") || p.starts_with("ironcalc ")).collect();
     assert_eq!(copies.len(), 2, "{copies:?}");
     let meta = metadata();
     let members: Vec<String> = strings(&meta["workspace_members"]);
@@ -215,29 +218,42 @@ const REVIEWED: &[&str] = &[
 /// this way fails until it is reviewed and added.
 const WORKSPACE_EXTRA: &[&str] = &["adler2", "foldhash", "miniz_oxide"];
 
+/// The targets the suite is built and tested on: this machine's, the gate, and the Windows VM's.
+const SUITE_TARGETS: [&str; 2] = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"];
+
 #[test]
 fn in_the_suites_workspace_build_its_graph_is_the_reviewed_one() {
-    // every member's tree, each crate's dependencies repeated wherever it stands; Ábaco's is the
-    // block from its root to the next member's
-    let tree = cargo(&["tree", "--workspace", "-e", "normal", "--no-dedupe", "--prefix", "depth", "--format", "{p}"]);
-    let mut in_abaco = false;
-    let mut crates = BTreeSet::new();
-    for line in tree.lines() {
-        let depth_end = line.find(|c: char| !c.is_ascii_digit()).unwrap_or(line.len());
-        let (depth, rest) = line.split_at(depth_end);
-        let name = rest.split_whitespace().next().unwrap_or("").to_string();
-        if depth == "0" {
-            in_abaco = name == "veredas-abaco";
+    // the suite's build is a test build of every member: features unified with dev units on, on
+    // each target it runs on (not all at once: no build combines every platform). Every member's
+    // tree, each crate's dependencies repeated wherever it stands; Ábaco's is the block from its
+    // root to its own dev-dependencies (its tests' crates, not its graph)
+    for target in SUITE_TARGETS {
+        let tree = cargo(&[
+            "tree", "--workspace", "-e", "normal,dev", "--no-dedupe", "--prefix", "indent", "--format", "{p}", "--target", target,
+        ]);
+        let mut crates = BTreeSet::new();
+        let mut lines = tree.lines().skip_while(|l| !l.starts_with("veredas-abaco "));
+        for line in lines.by_ref() {
+            if line.is_empty() || line.starts_with("[dev-dependencies]") {
+                break;
+            }
+            let name = line.trim_start_matches(['│', '├', '└', '─', ' ']).split_whitespace().next().unwrap_or("");
+            crates.insert(name.to_string());
         }
-        if in_abaco && !name.is_empty() {
-            crates.insert(name);
-        }
+        assert!(crates.contains("veredas-abaco") && crates.contains("ironcalc_base") && crates.contains("zip"), "{target}: {crates:?}");
+        let unreviewed: Vec<&String> =
+            crates.iter().filter(|c| !REVIEWED.contains(&c.as_str()) && !WORKSPACE_EXTRA.contains(&c.as_str())).collect();
+        assert!(unreviewed.is_empty(), "{target}: in the workspace's test build, not reviewed: {unreviewed:?}");
     }
-    assert!(crates.contains("veredas-abaco") && crates.contains("ironcalc_base"), "{crates:?}");
-    let unreviewed: Vec<&String> =
-        crates.iter().filter(|c| !REVIEWED.contains(&c.as_str()) && !WORKSPACE_EXTRA.contains(&c.as_str())).collect();
-    assert!(unreviewed.is_empty(), "in the workspace build, not reviewed: {unreviewed:?}");
 }
+
+/// The top-level keys a cargo configuration of this machine may hold: none of them names where a
+/// crate comes from (`patch`, `source`, `paths`, and `include`, which would bring any of them in
+/// from another file, are not among them).
+const CONFIG_KEYS: &[&str] = &[
+    "alias", "build", "cache", "cargo-new", "credential-alias", "doc", "env", "future-incompat-report", "http", "install",
+    "net", "profile", "registries", "registry", "resolver", "target", "term",
+];
 
 /// Names that would be a plant connection, for a clearer message when one joins.
 const PLANT_STACK: &[&str] =
@@ -317,7 +333,8 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".cargo")));
     let mut configs: BTreeSet<PathBuf> = BTreeSet::new();
-    for start in [root(), root().join("forks/ironcalc"), PathBuf::from(env!("CARGO_MANIFEST_DIR"))] {
+    let here = std::env::current_dir().unwrap();
+    for start in [root(), root().join("forks/ironcalc"), PathBuf::from(env!("CARGO_MANIFEST_DIR")), here] {
         for dir in start.ancestors() {
             for file in [".cargo/config", ".cargo/config.toml"] {
                 configs.insert(dir.join(file));
@@ -330,7 +347,8 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
     }
     for config in configs.iter().filter(|c| c.is_file()) {
         let t: toml::Table = toml::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
-        assert!(t.get("patch").is_none() && t.get("source").is_none(), "{}: patches or replaces crates", config.display());
+        let foreign: Vec<&String> = t.keys().filter(|k| !CONFIG_KEYS.contains(&k.as_str())).collect();
+        assert!(foreign.is_empty(), "{}: {foreign:?} (a key that may patch or replace crates)", config.display());
     }
     // and in what the locks say, whatever route did it: every package from crates.io, or a path
     // package of that workspace (the suite's members and the fork's two crates; the fork's two
