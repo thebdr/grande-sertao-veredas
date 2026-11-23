@@ -197,14 +197,25 @@ fn a_damaged_datagram_is_an_error_that_names_it_and_trailing_bytes_are_kept() {
     assert_eq!(RpcError::NotConnectionless(5).to_string(), "RPC version 5 is not the connectionless protocol's (4)");
     assert_eq!(RpcError::Overrun { declared: 84, available: 83 }.to_string(), "the body is said to be 84 bytes and 83 follow the header");
 
-    // The serial number's two bytes travel apart; every packet type is carried.
+    // The serial number's two bytes travel apart; every packet type DCE/RPC defines is carried, and
+    // none other, either way.
     let mut odd = good.clone();
     odd[7] = 0x12;
     odd[79] = 0x34;
-    odd[1] = 11;
+    odd[1] = 10;
     let pdu = RpcPdu::decode(&odd).unwrap();
-    assert_eq!((pdu.serial, pdu.packet_type), (0x1234, PacketType::Other(11)));
+    assert_eq!((pdu.serial, pdu.packet_type), (0x1234, PacketType::CancelAck));
     assert_eq!(pdu.encode().unwrap(), odd);
+    for b in 11..=255u8 {
+        odd[1] = b;
+        let refused = RpcError::NotDceRpc { field: "packet type", value: b, allowed: "0 to 10" };
+        assert_eq!(RpcPdu::decode(&odd), Err(refused.clone()), "{b}");
+        assert_eq!(RpcPdu { packet_type: PacketType::Other(b), ..pdu.clone() }.encode(), Err(refused), "{b}");
+    }
+    assert_eq!(
+        RpcError::NotDceRpc { field: "packet type", value: 11, allowed: "0 to 10" }.to_string(),
+        "the packet type 0x0b is none DCE/RPC defines (0 to 10): no connectionless DCE/RPC datagram"
+    );
     for b in 0..=255u8 {
         assert_eq!(PacketType::of(b).byte(), b);
     }
@@ -232,17 +243,39 @@ fn a_damaged_datagram_is_an_error_that_names_it_and_trailing_bytes_are_kept() {
         (opnum::CONNECT, opnum::RELEASE, opnum::READ, opnum::WRITE, opnum::CONTROL, opnum::READ_IMPLICIT),
         (0, 1, 2, 3, 4, 5)
     );
-    // drep: only bit 4 of its first byte says the order; the rest is carried.
+    // drep: NDR's format label, its integer format saying the order (the character format, 0 or 1,
+    // and the float format, 0 to 3, carried); every other first byte, float format and second
+    // flags byte refused both ways.
     assert_eq!(ByteOrder::of_drep([0x10, 0, 0]), ByteOrder::Little);
     assert_eq!(ByteOrder::of_drep([0x11, 0x01, 0x02]), ByteOrder::Little);
     assert_eq!(ByteOrder::of_drep([0x00, 0, 0]), ByteOrder::Big);
-    assert_eq!(ByteOrder::of_drep([0xE0, 0, 0]), ByteOrder::Big);
-    assert_eq!(ByteOrder::of_drep([0x01, 0, 0]), ByteOrder::Big);
-    // Bit 4 alone decides, whatever the bits beside it.
-    for (d, o) in [(0x30, ByteOrder::Little), (0xF0, ByteOrder::Little), (0x1F, ByteOrder::Little), (0x02, ByteOrder::Big), (0x04, ByteOrder::Big), (0x08, ByteOrder::Big), (0xEF, ByteOrder::Big)] {
-        assert_eq!(ByteOrder::of_drep([d, 0, 0]), o, "{d:#04x}");
-    }
+    assert_eq!(ByteOrder::of_drep([0x01, 0x03, 0xFF]), ByteOrder::Big);
     assert_eq!((ByteOrder::Big.drep(), ByteOrder::Little.drep()), ([0, 0, 0], [0x10, 0, 0]));
+    let base = RpcPdu::decode(&good).unwrap();
+    for d0 in 0..=255u8 {
+        let pdu = RpcPdu { drep: [d0, 0, 0], ..base.clone() };
+        if [0x00, 0x01, 0x10, 0x11].contains(&d0) {
+            assert_eq!(RpcPdu::decode(&pdu.encode().unwrap()).unwrap(), pdu, "{d0:#04x}");
+        } else {
+            let refused = RpcError::NotDceRpc { field: "data representation's integer and character formats", value: d0, allowed: "0x00, 0x01, 0x10 or 0x11" };
+            assert_eq!(pdu.encode(), Err(refused.clone()), "{d0:#04x}");
+            let mut bytes = good.clone();
+            bytes[4] = d0;
+            assert_eq!(RpcPdu::decode(&bytes), Err(refused), "{d0:#04x}");
+        }
+    }
+    for (field, at, ok, allowed) in [("data representation's float format", 5usize, 3u8, "0 to 3"), ("second flags byte", 3, 3, "bits 0 and 1")] {
+        for v in 0..=255u8 {
+            let mut bytes = good.clone();
+            bytes[at] = v;
+            let read = RpcPdu::decode(&bytes);
+            if v <= ok {
+                assert_eq!(read.unwrap().encode().unwrap(), bytes, "{field} {v}");
+            } else {
+                assert_eq!(read, Err(RpcError::NotDceRpc { field, value: v, allowed }), "{field} {v}");
+            }
+        }
+    }
 
     // A datagram past what UDP over IPv4 carries is refused both ways; 65 507 bytes are written and
     // read back.
@@ -268,39 +301,63 @@ fn a_damaged_datagram_is_an_error_that_names_it_and_trailing_bytes_are_kept() {
             assert_eq!(p.encode().unwrap(), &good[..cut]);
         }
     }
+    // Most of the noise is a DCE/RPC header (its version, packet type, second flags byte and data
+    // representation DCE/RPC's), its body's length restated, the arguments' actual count no more
+    // than what follows them, and in some a read answer's header heading their data.
+    let header_block = ReadResponse::answering(&im0_read(), 0).block().encode().unwrap();
     let mut noise = common::Noise(0x5EED);
-    let mut decoded = 0;
+    let (mut decoded, mut args_read, mut splits) = (0, 0, 0);
     for i in 0..20_000 {
-        let len = 70 + (noise.next() as usize) % 60;
+        let len = 70 + (noise.next() as usize) % 200;
         let mut d = noise.bytes(len);
         if i % 2 == 0 {
             d[0] = 4;
+            if i % 10 != 0 {
+                d[1] = noise.next() % 11;
+                d[3] = noise.next() & 3;
+                d[4] = [0x00, 0x01, 0x10, 0x11][noise.next() as usize % 4];
+                d[5] = noise.next() & 3;
+            }
         }
-        if d.len() >= 80 && i % 3 == 0 {
-            let body = (d.len() - 80 - (noise.next() as usize % 3).min(d.len() - 80)) as u16;
-            let at = 74;
-            let (a, b) = if ByteOrder::of_drep([d[4], d[5], d[6]]) == ByteOrder::Little { (body as u8, (body >> 8) as u8) } else { ((body >> 8) as u8, body as u8) };
-            d[at] = a;
-            d[at + 1] = b;
+        let little = ByteOrder::of_drep([d[4], d[5], d[6]]) == ByteOrder::Little;
+        let put = |d: &mut Vec<u8>, at: usize, v: u32, n: usize| {
+            let b = if little { v.to_le_bytes() } else { v.to_be_bytes() };
+            if little { d[at..at + n].copy_from_slice(&b[..n]) } else { d[at..at + n].copy_from_slice(&b[4 - n..]) }
+        };
+        if d.len() >= 80 && i % 3 != 2 {
+            let body = d.len() - 80 - (noise.next() as usize % 3).min(d.len() - 80);
+            put(&mut d, 74, body as u32, 2);
+            if body >= 20 && i % 4 != 3 {
+                let room = body - 20;
+                if room >= header_block.len() && i % 3 == 0 {
+                    d[100..100 + header_block.len()].copy_from_slice(&header_block);
+                }
+                let count = room - (noise.next() as usize % 3).min(room);
+                put(&mut d, 96, count as u32, 4);
+            }
         }
         if let Ok(p) = RpcPdu::decode(&d) {
             decoded += 1;
             assert_eq!(p.encode().unwrap(), d);
             for o in [ByteOrder::Big, ByteOrder::Little] {
                 if let Ok(a) = RequestArgs::decode(&p.body, o) {
+                    args_read += 1;
                     assert_eq!(a.encode(o), p.body);
                     blocks_whole(&a.data);
                 }
                 if let Ok(a) = ResponseArgs::decode(&p.body, o) {
+                    args_read += 1;
                     assert_eq!(a.encode(o), p.body);
                     blocks_whole(&a.data);
-                    let _ = ReadResponse::split(&a.data);
+                    if ReadResponse::split(&a.data).is_ok() {
+                        splits += 1;
+                    }
                 }
             }
             blocks_whole(&p.body);
         }
     }
-    assert!(decoded > 2_000, "{decoded} noisy datagrams decoded");
+    assert!(decoded > 2_000 && args_read > 2_000 && splits > 200, "{decoded} noisy datagrams decoded, {args_read} arguments read, {splits} answers split");
 }
 
 /// Any data read as blocks without a panic, each read as a read header or refused without one, and
@@ -344,9 +401,20 @@ fn the_arguments_name_their_damage_and_keep_what_follows() {
         assert_eq!(ResponseArgs::decode(&body[..24], o), Err(RpcError::ArgsOverrun { declared: 5, available: 4 }));
         assert_eq!(ResponseArgs::decode(&body[..3], o), Err(RpcError::ArgsTooShort { want: 20, len: 3 }));
     }
-    // Hand-written counts are kept, but for the actual count, which is the data's length.
+    // Hand-written counts are kept, but for the actual count, which is the data's length; read, each
+    // count comes back from its own place, in either order.
     let odd = RequestArgs { args_maximum: 1, args_length: 2, max_count: 3, offset: 4, data: vec![5], trailing: vec![] };
     assert_eq!(odd.encode(ByteOrder::Big), hex("00000001 00000002 00000003 00000004 00000001 05"));
+    assert_eq!(odd.encode(ByteOrder::Little), hex("01000000 02000000 03000000 04000000 01000000 05"));
+    for o in [ByteOrder::Big, ByteOrder::Little] {
+        assert_eq!(RequestArgs::decode(&odd.encode(o), o).unwrap(), odd);
+    }
+    let res = ResponseArgs { args_length: 7, max_count: 9, offset: 11, ..ResponseArgs::new(PnioStatus { code: 0xDE, decode: 0x80, code1: 0xB0, code2: 0x01 }, 4096, vec![1, 2, 3]) };
+    assert_eq!(res.encode(ByteOrder::Big), hex("DE80B001 00000007 00000009 0000000B 00000003 010203"));
+    assert_eq!(res.encode(ByteOrder::Little), hex("01B080DE 07000000 09000000 0B000000 03000000 010203"));
+    for o in [ByteOrder::Big, ByteOrder::Little] {
+        assert_eq!(ResponseArgs::decode(&res.encode(o), o).unwrap(), res);
+    }
     assert_eq!(RpcError::ArgsTooShort { want: 20, len: 3 }.to_string(), "PNIO's arguments are 20 bytes before their data; this body is 3");
     assert_eq!(RpcError::ArgsOverrun { declared: 5, available: 4 }.to_string(), "the arguments' data is said to be 5 bytes and 4 follow");
 }
@@ -398,6 +466,20 @@ fn a_read_header_is_read_only_from_its_own_block() {
     let mut named = ReadRequest { ar: half, target_ar: Uuid::NIL, ..req.clone() }.block().unwrap();
     named.body[34] = 1;
     assert!(ReadRequest::from_block(&named).is_err());
+    // An AR with its second half zero, or one byte at either end, is an AR: no target under it, its
+    // target's place padding, no implicit read under it; and no target AR but the nil one under an
+    // AR, a single byte at either end of it set.
+    for ar in ["aabbccdd-eeff-1122-0000-000000000000", "01000000-0000-0000-0000-000000000000", "00000000-0000-0000-0000-000000000001"] {
+        let ar: Uuid = ar.parse().unwrap();
+        assert!(ReadRequest { ar, ..req.clone() }.block().is_err(), "{ar}");
+        let mut named = ReadRequest { ar, target_ar: Uuid::NIL, ..req.clone() }.block().unwrap();
+        named.body[34] = 1;
+        assert!(ReadRequest::from_block(&named).is_err(), "{ar}");
+        assert!(rpc::read_implicit(ByteOrder::Little, object(), activity(), 1, &ReadRequest { ar, target_ar: Uuid::NIL, ..req.clone() }, 4096).is_err(), "{ar}");
+        for target in ["00000000-0000-0000-0000-000000000001", "01000000-0000-0000-0000-000000000000"] {
+            assert!(ReadRequest { ar, target_ar: target.parse().unwrap(), ..req.clone() }.block().is_err(), "{ar} {target}");
+        }
+    }
     let mut padded = ublock.clone();
     padded.body[34] = 1;
     assert!(ReadRequest::from_block(&padded).is_err());
@@ -709,4 +791,50 @@ fn the_dissectors_read_an_answer_s_identity_the_status_s_order_and_every_header_
     assert_eq!(rpc_field("dg_auth_proto"), ["5"]);
     assert_eq!((io(4, "pn_io_pn_io_add_val1"), io(4, "pn_io_pn_io_add_val2")), (vec!["4386".to_string()], vec!["13124".to_string()]));
     assert!(d[6].complaints().iter().any(|c| c.contains("malformed")), "{:?}", d[6].complaints());
+}
+
+#[test]
+fn what_the_dissector_takes_for_no_dce_rpc_is_refused_and_a_status_it_does_not_know_draws_its_warning() {
+    let me = (CONTROLLER, [10, 0, 0, 1], 50_000);
+    let dev = (DEVICE, [10, 0, 0, 2], rpc::PNIO_PORT);
+    let good = rpc::read_implicit(ByteOrder::Little, object(), activity(), 7, &im0_read(), 4096).unwrap().encode().unwrap();
+    // A header value this codec refuses is one the dissector takes for no DCE/RPC at all (the
+    // datagram is UDP data to it); one it keeps, the dissector reads as DCE/RPC.
+    let cases = [
+        (1usize, 11u8, false),
+        (1, 0xFF, false),
+        (3, 0x04, false),
+        (3, 0x80, false),
+        (4, 0x30, false),
+        (4, 0x02, false),
+        (4, 0xE0, false),
+        (5, 0x04, false),
+        (1, 10, true),
+        (3, 0x03, true),
+        (4, 0x11, true),
+        (4, 0x01, true),
+        (5, 0x03, true),
+    ];
+    let mut frames = Vec::new();
+    for (at, v, dce) in cases {
+        let mut bytes = good.clone();
+        bytes[at] = v;
+        // (A label of the other order reads the rest otherwise, and may then name other damage.)
+        let refused = matches!(RpcPdu::decode(&bytes), Err(RpcError::NotDceRpc { .. }));
+        assert_eq!(refused, !dce, "byte {at} {v:#04x}");
+        frames.push(udp(dev, me, &bytes));
+    }
+    // A status the dissector does not know (an ErrorDecode it has no table for), the caller's to
+    // choose: written in the header's byte order, read as written, and warned of.
+    let req = rpc::read_implicit(ByteOrder::Little, object(), activity(), 8, &im0_read(), 4096).unwrap();
+    let unknown = PnioStatus { code: 0xDE, decode: 0x82, code1: 0, code2: 0 };
+    frames.push(udp(dev, me, &req.encode().unwrap()));
+    frames.push(udp(me, dev, &rpc::read_answer(&req, &im0_read(), unknown, &[], 0).unwrap().encode().unwrap()));
+    let d = common::dissect(&frames);
+    for (p, (at, v, dce)) in d.iter().zip(cases) {
+        assert_eq!(p.has("dcerpc"), dce, "byte {at} {v:#04x}");
+    }
+    let answer = &d[cases.len() + 1];
+    assert_eq!((field(answer, "pn_io_device", "pn_rt_pn_io_error_code"), field(answer, "pn_io_device", "pn_rt_pn_io_error_decode")), (vec!["222".to_string()], vec!["130".to_string()]));
+    assert!(answer.complaints().iter().any(|c| c.contains("Unknown ErrorDecode 0x82")), "{:?}", answer.complaints());
 }

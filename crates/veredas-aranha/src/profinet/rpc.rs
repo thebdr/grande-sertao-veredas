@@ -152,8 +152,8 @@ pub enum ByteOrder {
 }
 
 impl ByteOrder {
-    /// `drep[0]`'s high nibble: 0 big-endian, 1 little-endian (only its low bit is read, as
-    /// Wireshark reads it).
+    /// `drep[0]`'s high nibble: 0 big-endian, 1 little-endian (a datagram whose label is not NDR's
+    /// is refused before its order is read).
     pub fn of_drep(drep: [u8; 3]) -> ByteOrder {
         if drep[0] & 0x10 != 0 { ByteOrder::Little } else { ByteOrder::Big }
     }
@@ -212,7 +212,8 @@ pub enum PacketType {
     Cancel,
     Fack,
     CancelAck,
-    /// Any other value (11 to 255), carried as heard.
+    /// Any other value (11 to 255): none of DCE/RPC's, never read or written (a datagram holding
+    /// one is refused both ways).
     Other(u8),
 }
 
@@ -308,6 +309,8 @@ pub enum RpcError {
     TooShort(usize),
     #[error("RPC version {0} is not the connectionless protocol's (4)")]
     NotConnectionless(u8),
+    #[error("the {field} {value:#04x} is none DCE/RPC defines ({allowed}): no connectionless DCE/RPC datagram")]
+    NotDceRpc { field: &'static str, value: u8, allowed: &'static str },
     #[error("the body is said to be {declared} bytes and {available} follow the header")]
     Overrun { declared: usize, available: usize },
     #[error("a datagram of {0} bytes is past what UDP over IPv4 carries ({MAX_DATAGRAM})")]
@@ -326,6 +329,27 @@ fn be16(b: &[u8], at: usize) -> u16 {
     u16::from_be_bytes([b[at], b[at + 1]])
 }
 
+/// The header's values DCE/RPC defines, as Wireshark's dissector takes a datagram for one (it reads
+/// no other as DCE/RPC at all, measured over every value of each): a packet type of 0 to 10, a
+/// second flags byte with no bit but 0 and 1, and a data representation that is NDR's format label
+/// (an integer and a character format of 0 or 1 each, a float format of 0 to 3).
+fn dce_fields(packet_type: u8, flags2: u8, drep: [u8; 3]) -> Result<(), RpcError> {
+    let refuse = |field, value, allowed| Err(RpcError::NotDceRpc { field, value, allowed });
+    if packet_type > 10 {
+        return refuse("packet type", packet_type, "0 to 10");
+    }
+    if flags2 & 0xFC != 0 {
+        return refuse("second flags byte", flags2, "bits 0 and 1");
+    }
+    if drep[0] & 0xEE != 0 {
+        return refuse("data representation's integer and character formats", drep[0], "0x00, 0x01, 0x10 or 0x11");
+    }
+    if drep[1] > 3 {
+        return refuse("data representation's float format", drep[1], "0 to 3");
+    }
+    Ok(())
+}
+
 fn be32(b: &[u8], at: usize) -> u32 {
     u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
 }
@@ -342,8 +366,9 @@ impl RpcPdu {
     }
 
     /// Read one datagram (the UDP payload). A header shorter than 80 bytes, a datagram past what
-    /// UDP over IPv4 carries, a version other than 4, or a body past the datagram is an error
-    /// naming it; bytes after the body are kept.
+    /// UDP over IPv4 carries, a version other than 4, a header value DCE/RPC does not define (a
+    /// packet type past 10, reserved bits of the second flags byte, a data representation that is
+    /// not NDR's), or a body past the datagram is an error naming it; bytes after the body are kept.
     pub fn decode(d: &[u8]) -> Result<RpcPdu, RpcError> {
         if d.len() < HEADER {
             return Err(RpcError::TooShort(d.len()));
@@ -355,6 +380,7 @@ impl RpcPdu {
             return Err(RpcError::NotConnectionless(d[0]));
         }
         let drep = [d[4], d[5], d[6]];
+        dce_fields(d[1], d[3], drep)?;
         let o = ByteOrder::of_drep(drep);
         let declared = o.u16(d, 74) as usize;
         let available = d.len() - HEADER;
@@ -384,12 +410,13 @@ impl RpcPdu {
     }
 
     /// The datagram: header, body, trailing bytes. A datagram past what UDP over IPv4 carries
-    /// (65 507 bytes) is refused.
+    /// (65 507 bytes), or a header value DCE/RPC does not define, is refused.
     pub fn encode(&self) -> Result<Vec<u8>, RpcError> {
         let total = HEADER + self.body.len() + self.trailing.len();
         if total > MAX_DATAGRAM {
             return Err(RpcError::TooLong(total));
         }
+        dce_fields(self.packet_type.byte(), self.flags2, self.drep)?;
         let o = self.byte_order();
         let mut out = Vec::with_capacity(HEADER + self.body.len() + self.trailing.len());
         out.extend_from_slice(&[4, self.packet_type.byte(), self.flags1, self.flags2]);
