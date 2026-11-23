@@ -51,17 +51,76 @@ fn load_relationships<R: Read + std::io::Seek>(
         .descendants()
         .filter(|n| n.has_tag_name("Relationship"))
         .collect();
+    let names = part_names(archive);
     let mut rels = HashMap::new();
     for node in nodes {
+        // `Id` an xsd:ID, `Type` and `Target` xsd:anyURI: their whitespace collapses (Veredas fork
+        // change 27); an internal target is the part it names, as below
+        let target = collapse(get_attribute(node, "Target")?);
+        let target = if get_attribute(node, "TargetMode").ok().map(collapse).as_deref() == Some("External") {
+            target
+        } else {
+            part_target(&target, &names)
+        };
         rels.insert(
-            get_attribute(node, "Id")?.to_string(),
+            collapse(get_attribute(node, "Id")?),
             Relationship {
-                rel_type: get_attribute(node, "Type")?.to_string(),
-                target: get_attribute(node, "Target")?.to_string(),
+                rel_type: collapse(get_attribute(node, "Type")?),
+                target,
             },
         );
     }
     Ok(rels)
+}
+
+/// XSD's whitespace collapsed: the ends trimmed, every inner run one space.
+pub(crate) fn collapse(s: &str) -> String {
+    s.split([' ', '\t', '\n', '\r'])
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The names of the package's entries.
+pub(crate) fn part_names<R: Read + std::io::Seek>(archive: &zip::ZipArchive<R>) -> Vec<String> {
+    archive
+        .file_names()
+        .filter_map(|n| n.ok().map(|n| n.to_string()))
+        .collect()
+}
+
+/// The part a target of the workbook's relationships names ([`resolve_part`] from `xl`), written
+/// absolute (`/xl/worksheets/sheet1.xml`), which every reader of a target here takes as it is.
+fn part_target(target: &str, names: &[String]) -> String {
+    format!("/{}", resolve_part("xl", target, names))
+}
+
+/// The part a relationship's target names, as OPC resolves it: against the folder of the part the
+/// relationship belongs to, or the package's root when it opens with `/`, its `.` and `..` segments
+/// removed, and spelled as the package's entry of that name in any letter case (OPC compares part
+/// names so).
+pub(crate) fn resolve_part(folder: &str, target: &str, names: &[String]) -> String {
+    let joined = match target.strip_prefix('/') {
+        Some(absolute) => absolute.to_string(),
+        None => format!("{folder}/{target}"),
+    };
+    let mut segments: Vec<&str> = Vec::new();
+    for segment in joined.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            other => segments.push(other),
+        }
+    }
+    let resolved = segments.join("/");
+    names
+        .iter()
+        .find(|n| **n == resolved)
+        .or_else(|| names.iter().find(|n| n.eq_ignore_ascii_case(&resolved)))
+        .cloned()
+        .unwrap_or(resolved)
 }
 
 fn resolve_theme_path(rels: &HashMap<String, Relationship>) -> Option<String> {

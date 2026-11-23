@@ -692,15 +692,18 @@ fn load_sheet_rels<R: Read + std::io::Seek>(
     tables: &mut HashMap<String, Table>,
     sheet_name: &str,
 ) -> Result<(Vec<Comment>, HashMap<String, String>), XlsxError> {
-    // ...xl/worksheets/sheet6.xml -> xl/worksheets/_rels/sheet6.xml.rels
+    // ...xl/worksheets/sheet6.xml -> xl/worksheets/_rels/sheet6.xml.rels: a part's relationships are
+    // `_rels/<its name>.rels` in its own folder, wherever the part is
     let mut comments = Vec::new();
     // relationship id ("rId4") -> target of the hyperlink
     let mut hyperlinks = HashMap::new();
-    let v: Vec<&str> = path.split("/worksheets/").collect();
-    let mut path = v[0].to_string();
-    path.push_str("/worksheets/_rels/");
-    path.push_str(v[1]);
-    path.push_str(".rels");
+    let folder = path.rsplit_once('/').map(|(f, _)| f.to_string()).unwrap_or_default();
+    let path = match path.rsplit_once('/') {
+        Some((folder, name)) => format!("{folder}/_rels/{name}.rels"),
+        None => format!("_rels/{path}.rels"),
+    };
+    let names = super::part_names(archive);
+    let path = super::resolve_part("", &format!("/{path}"), &names);
     let file = archive.by_name(&path);
     if file.is_err() {
         return Ok((comments, hyperlinks));
@@ -712,27 +715,20 @@ fn load_sheet_rels<R: Read + std::io::Seek>(
         .filter(|n| n.has_tag_name("Relationship"))
         .collect::<Vec<&XmlNode>>();
     for rel in rels {
-        let t = get_attribute(rel, "Type")?.to_string();
+        // `Type` and `Target` collapsed, an internal target resolved against the sheet's folder
+        // (Target="../comments1.xml"), as OPC does (Veredas fork change 27)
+        let t = super::collapse(get_attribute(rel, "Type")?);
+        let part = |rel: &XmlNode| -> Result<String, XlsxError> {
+            Ok(super::resolve_part(&folder, &super::collapse(get_attribute(rel, "Target")?), &names))
+        };
         if t.ends_with("comments") {
-            let mut target = get_attribute(rel, "Target")?.to_string();
-            // Target="../comments1.xlsx"
-            target.replace_range(..2, v[0]);
-            comments = load_comments(archive, &target)?;
+            comments = load_comments(archive, &part(rel)?)?;
         } else if t.ends_with("hyperlink") {
-            let id = get_attribute(rel, "Id")?.to_string();
+            let id = super::collapse(get_attribute(rel, "Id")?);
             let target = get_attribute(rel, "Target")?.to_string();
             hyperlinks.insert(id, target);
         } else if t.ends_with("table") {
-            let mut target = get_attribute(rel, "Target")?.to_string();
-
-            let path = if let Some(p) = target.strip_prefix('/') {
-                p.to_string()
-            } else {
-                // Target="../table1.xlsx"
-                target.replace_range(..2, v[0]);
-                target
-            };
-
+            let path = part(rel)?;
             let table = load_table(archive, &path, sheet_name)?;
             tables.insert(table.name.clone(), table);
         }
@@ -776,7 +772,7 @@ fn load_hyperlinks(
         );
         let link = match rel_id {
             Some(rel_id) => {
-                let target = match hyperlink_rels.get(rel_id) {
+                let target = match hyperlink_rels.get(&super::collapse(rel_id)) {
                     Some(target) => target.clone(),
                     // dangling relationship id, skip the hyperlink
                     None => continue,
@@ -1017,8 +1013,13 @@ pub(super) fn load_sheets<R: Read + std::io::Seek>(
 ) -> Result<Vec<Worksheet>, XlsxError> {
     // load comments, tables and hyperlink relationships
     let mut sheet_rels = HashMap::new();
+    let rel_of = |id: &String| {
+        rels.get(id).ok_or_else(|| {
+            XlsxError::Xml(format!("no relationship {id:?} for a sheet of the workbook"))
+        })
+    };
     for sheet in &workbook.worksheets {
-        let rel = &rels[&sheet.id];
+        let rel = rel_of(&sheet.id)?;
         if rel.rel_type.ends_with("worksheet") {
             let path = &rel.target;
             let path = if let Some(p) = path.strip_prefix('/') {
@@ -1043,7 +1044,7 @@ pub(super) fn load_sheets<R: Read + std::io::Seek>(
         let sheet_name = &sheet.name;
         let rel_id = &sheet.id;
         let state = &sheet.state;
-        let rel = &rels[rel_id];
+        let rel = rel_of(rel_id)?;
         if rel.rel_type.ends_with("worksheet") {
             let path = &rel.target;
             let path = if let Some(p) = path.strip_prefix('/') {

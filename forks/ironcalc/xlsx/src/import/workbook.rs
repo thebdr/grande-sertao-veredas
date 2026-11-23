@@ -32,8 +32,8 @@ pub(super) fn load_workbook<R: Read + std::io::Seek>(
                 "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
                 "id",
             )
-            .ok_or_else(|| XlsxError::Xml("Missing \"r:id\" XML attribute".to_string()))?
-            .to_string();
+            .ok_or_else(|| XlsxError::Xml("Missing \"r:id\" XML attribute".to_string()))
+            .map(super::collapse)?;
         let state = match sheet.attribute("state") {
             Some("visible") | None => SheetState::Visible,
             Some("hidden") => SheetState::Hidden,
