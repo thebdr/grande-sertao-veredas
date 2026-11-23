@@ -91,6 +91,30 @@ pub fn rfc3339(secs: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rest / 3_600, rest % 3_600 / 60, rest % 60)
 }
 
+/// Whether `s` is RFC 3339 in UTC to the second, as [`rfc3339`] writes it: `YYYY-MM-DDThh:mm:ssZ`,
+/// a real day of its month.
+pub fn is_rfc3339_utc(s: &str) -> bool {
+    let b = s.as_bytes();
+    let digits = |r: std::ops::Range<usize>| b.get(r.clone()).is_some_and(|d| d.iter().all(u8::is_ascii_digit));
+    let n = |r: std::ops::Range<usize>| s.get(r).and_then(|t| t.parse::<u32>().ok()).unwrap_or(99);
+    if b.len() != 20 || !(digits(0..4) && digits(5..7) && digits(8..10) && digits(11..13) && digits(14..16) && digits(17..19)) {
+        return false;
+    }
+    if (b[4], b[7], b[10], b[13], b[16], b[19]) != (b'-', b'-', b'T', b':', b':', b'Z') {
+        return false;
+    }
+    let (year, month, day) = (n(0..4), n(5..7), n(8..10));
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days).contains(&day) && n(11..13) < 24 && n(14..16) < 60 && n(17..19) < 60
+}
+
 /// What a workspace carries besides its sheets and macros.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Workspace {
@@ -155,6 +179,13 @@ mod tests {
         assert_eq!(rfc3339(951_782_400), "2000-02-29T00:00:00Z");
         assert_eq!(rfc3339(1_795_428_245), "2026-11-23T10:04:05Z");
         assert_eq!(rfc3339(4_107_542_399), "2100-02-28T23:59:59Z");
+        for secs in [0, 951_782_400, 1_795_428_245, 4_107_542_399] {
+            assert!(is_rfc3339_utc(&rfc3339(secs)));
+        }
+        for bad in ["2026-11-23 10:04:05Z", "2026-11-23T10:04:05", "2026-02-29T00:00:00Z", "2026-13-01T00:00:00Z", "2026-11-23T24:00:00Z", "2026-11-23T10:04:05+00:00"] {
+            assert!(!is_rfc3339_utc(bad), "{bad}");
+        }
+        assert!(is_rfc3339_utc("2024-02-29T00:00:00Z"));
     }
 
     #[test]

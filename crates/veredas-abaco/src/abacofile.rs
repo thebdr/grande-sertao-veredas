@@ -144,8 +144,6 @@ struct SheetPart {
     /// Hyperlinks as `[row, column, link]`, in row-major order.
     #[serde(default)]
     links: Vec<(i32, i32, Link)>,
-    #[serde(default, skip_serializing)]
-    cells: BTreeMap<String, CellEntry>,
 }
 
 /// One cell of a sheet's `[cells]` table: exactly one of `n`, `s`, `b`, `e` (a value), `f`
@@ -159,7 +157,7 @@ struct CellEntry {
     b: Option<bool>,
     e: Option<String>,
     f: Option<String>,
-    v: Option<serde_json::Value>,
+    v: Option<toml::Value>,
     array: Option<String>,
     size: Option<(i32, i32)>,
     dynamic: Option<String>,
@@ -405,7 +403,6 @@ fn sheet_text(book: &Workbook, sheet: u32, ws: &Worksheet) -> Result<String, Mod
         comments: ws.comments.clone(),
         conditional_formatting: ws.conditional_formatting.clone(),
         links,
-        cells: BTreeMap::new(),
     };
     Ok(engine_text(&ws.name, &part)? + &cells_text(book, sheet)?)
 }
@@ -536,20 +533,56 @@ impl Parts<'_> {
 
     /// A part holding the engine's structures ([`engine_text`]): its stamp, then its body read as
     /// TOML, `nan` as the engine's none.
-    fn engine<T: DeserializeOwned>(&mut self, name: &str, format: &str) -> Result<T, ModelError> {
+    fn engine<T: DeserializeOwned + Serialize>(&mut self, name: &str, format: &str) -> Result<T, ModelError> {
+        let table = self.stamped(name, format)?;
+        self.engine_table(name, table)
+    }
+
+    /// A TOML part's table, its stamp checked first.
+    fn stamped(&mut self, name: &str, format: &str) -> Result<toml::Table, ModelError> {
         let text = self.text(name)?;
         stamp(&text, name, format).map_err(|e| self.bad(format!("{name}: {e}")))?;
-        let table: toml::Table = toml::from_str(&text).map_err(|e| self.bad(format!("{name}: {e}")))?;
+        toml::from_str(&text).map_err(|e| self.bad(format!("{name}: {e}")))
+    }
+
+    /// The engine's structures from a part's table ([`engine_text`]), `nan` as the engine's none.
+    fn engine_table<T: DeserializeOwned + Serialize>(&self, name: &str, table: toml::Table) -> Result<T, ModelError> {
         let json = toml_to_json(toml::Value::Table(table)).map_err(|e| self.bad(format!("{name}: {e}")))?;
         // the engine's structures take a key they do not know without a word: a key nothing
         // reads, at any depth, is refused by its path, as every file of the suite refuses one
         let mut unread = Vec::new();
-        let value = serde_ignored::deserialize(json, |path| unread.push(path.to_string()))
+        let value: T = serde_ignored::deserialize(json.clone(), |path| unread.push(path.to_string()))
             .map_err(|e| self.bad(format!("{name}: {e}")))?;
-        match unread.first() {
-            Some(path) => Err(self.bad(format!("{name}: `{path}` is a key nothing reads"))),
-            None => Ok(value),
+        if let Some(path) = unread.first() {
+            return Err(self.bad(format!("{name}: `{path}` is a key nothing reads")));
         }
+        // inside an internally tagged enum (an object with its `type`: a link, a format's rule)
+        // serde reads from a buffer `serde_ignored` never sees; those types skip no field when
+        // written, so a key the value written back lacks is one nothing read
+        let back = serde_json::to_value(&value).map_err(|e| self.bad(format!("{name}: {e}")))?;
+        if let Some(path) = unread_in_tagged(&json, &back, String::new()) {
+            return Err(self.bad(format!("{name}: `{path}` is a key nothing reads")));
+        }
+        Ok(value)
+    }
+}
+
+/// The first key of an object holding a `type` (an internally tagged enum) in `read` that `back`,
+/// the value read written out again, lacks, by its path.
+fn unread_in_tagged(read: &serde_json::Value, back: &serde_json::Value, path: String) -> Option<String> {
+    use serde_json::Value as J;
+    let at = |k: &str| if path.is_empty() { k.to_string() } else { format!("{path}.{k}") };
+    match (read, back) {
+        (J::Object(r), J::Object(b)) => {
+            if r.get("type").is_some_and(J::is_string)
+                && let Some(k) = r.keys().find(|k| !b.contains_key(*k))
+            {
+                return Some(at(k));
+            }
+            r.iter().find_map(|(k, v)| b.get(k).and_then(|bv| unread_in_tagged(v, bv, at(k))))
+        }
+        (J::Array(r), J::Array(b)) => r.iter().zip(b).enumerate().find_map(|(i, (v, bv))| unread_in_tagged(v, bv, at(&i.to_string()))),
+        _ => None,
     }
 }
 
@@ -567,6 +600,17 @@ mod schema;
 /// core's reader, the part named by its path.
 fn stamp(text: &str, part: &str, format: &str) -> Result<(), String> {
     schema::check(text, part, format, VERSION).map_err(|e| e.to_string())
+}
+
+/// The engine's error a cell's `e` names: in the English name its reader takes (`#N/IMPL!`) or in
+/// the spelling it shows a value in (`#N/IMPL`), which is how the writer writes every error.
+fn error_named(code: &str) -> Option<ironcalc_base::expressions::token::Error> {
+    use ironcalc_base::expressions::token::Error as E;
+    get_error_by_english_name(code).or_else(|| {
+        [E::REF, E::NAME, E::VALUE, E::DIV, E::NA, E::NUM, E::ERROR, E::NIMPL, E::SPILL, E::CALC, E::CIRC, E::NULL]
+            .into_iter()
+            .find(|e| e.to_string() == code)
+    })
 }
 
 /// One cell of a sheet as the file states it, checked.
@@ -597,7 +641,10 @@ fn entry(e: CellEntry) -> Result<Entry, String> {
     if e.size.is_some() != e.array.is_some() {
         return Err("`size` goes with `array`, and only with it".into());
     }
-    let error = |code: &str| get_error_by_english_name(code).ok_or_else(|| format!("{code:?} is no error"));
+    if e.style < 0 {
+        return Err(format!("style {} is no style", e.style));
+    }
+    let error = |code: &str| error_named(code).ok_or_else(|| format!("{code:?} is no error"));
     Ok(if let Some(n) = e.n {
         if !n.is_finite() {
             return Err(format!("{n} is no finite number"));
@@ -658,8 +705,19 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
     let mut shared_index: HashMap<String, i32> = HashMap::new();
     let mut worksheets = Vec::new();
     let mut formulas: Vec<(u32, String, Addr, Entry, i32)> = Vec::new();
+    if manifest.sheets.is_empty() {
+        return Err(parts.bad(format!("{MANIFEST}: a workbook holds a sheet at least")));
+    }
+    let styles = book.styles.cell_xfs.len();
     for (i, sheet) in manifest.sheets.iter().enumerate() {
-        let part: SheetPart = parts.engine(&sheet.part, SHEET_FORMAT)?;
+        let mut table = parts.stamped(&sheet.part, SHEET_FORMAT)?;
+        // the cells read apart, each with TOML's own types (a `nan` is a NaN), refused by address
+        let cells = match table.remove("cells") {
+            None => toml::Table::new(),
+            Some(toml::Value::Table(t)) => t,
+            Some(_) => return Err(parts.bad(format!("{}: `cells` is no table", sheet.part))),
+        };
+        let part: SheetPart = parts.engine_table(&sheet.part, table)?;
         if part.name != sheet.name {
             return Err(parts.bad(format!("{}: the sheet `{}`, where the manifest says `{}`", sheet.part, part.name, sheet.name)));
         }
@@ -681,10 +739,19 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
             conditional_formatting: part.conditional_formatting,
             links: part.links.into_iter().map(|(r, c, l)| ((r, c), l)).collect(),
         };
-        for (key, cell) in part.cells {
+        for (key, cell) in cells {
             let bad = |e: String| parts.bad(format!("{} {key}: {e}", sheet.part));
             let addr = Addr::parse(&key).map_err(|e| bad(e.to_string()))?;
+            // the address as Ábaco writes it (`B1`, never `b1` or `$B$1`), so no cell is stated
+            // twice under two spellings
+            if addr.to_string() != key {
+                return Err(bad(format!("an address is written `{addr}`")));
+            }
+            let cell: CellEntry = cell.try_into().map_err(|e: toml::de::Error| bad(e.message().to_string()))?;
             let s = cell.style;
+            if usize::try_from(s).is_ok_and(|s| s >= styles) {
+                return Err(bad(format!("style {s} is none of the workbook's {styles}")));
+            }
             let (row, column) = (addr.row, addr.column);
             match entry(cell).map_err(bad)? {
                 Entry::Number(v) => ws.set_cell_with_number(row, column, v, s).map_err(bad)?,
@@ -757,6 +824,15 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
     let mut workspace = Workspace::default();
     if parts.all.contains_key(REFERENCES) {
         workspace.references = parts.toml::<ReferencesPart>(REFERENCES, REFERENCES_FORMAT)?.reference;
+        for (i, r) in workspace.references.iter().enumerate() {
+            let place = |what: &str| parts.bad(format!("{REFERENCES} reference {}: {what}", i + 1));
+            if r.sha256.as_deref().is_some_and(|h| h.len() != 64 || !h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))) {
+                return Err(place("`sha256` is 64 lowercase hex digits"));
+            }
+            if r.modified.as_deref().is_some_and(|m| !crate::workspace::is_rfc3339_utc(m)) {
+                return Err(place("`modified` is RFC 3339 in UTC to the second (`2026-11-23T10:04:05Z`)"));
+            }
+        }
     }
     if parts.all.contains_key(DECISIONS) {
         workspace.decisions = parts.toml::<RecordsPart>(DECISIONS, RECORDS_FORMAT)?.record;

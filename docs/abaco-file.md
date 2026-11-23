@@ -75,7 +75,9 @@ table, each keyed by its address:
 
 `style` is an index into the workbook part's `styles.cell_xfs`, written when it is not 0. A cell
 states exactly one of `n`, `s`, `b`, `e`, `f`, `array` and `dynamic`, or none (a style alone); `v`
-goes only with `f`, `size` only with `array`.
+goes only with `f`, `size` only with `array`. Its key is the address as written here (`B1`, never
+`b1` or `$B$1`); its `style` one the workbook part holds. An error is written as the engine shows
+it (`#N/IMPL` among them) and read in that spelling or the engine's English name.
 
 ## The workspace parts
 `workspace/references.toml` lists `[[reference]]`: `role` (what the file is to its tool),
@@ -202,5 +204,7 @@ states and its own style), reads the macros the manifest names and the workspace
 there, keeps every other part, and evaluates the workbook. A refusal names the file, the part and,
 for a cell, its address: a part that is missing or not UTF-8, a stamp of another format or of
 another version, a misspelled key, a cell stating two kinds, `v` without `f`, an array of no size,
-an error code that is none, an address that is none, a sheet whose part names another sheet than
-the manifest, a log line with a bad escape.
+an error code that is none, an address that is none or not written as here, a style the workbook
+does not hold, a number that is no finite number (`nan`, `inf`), a value of the wrong type, a
+manifest with no sheet, a sheet whose part names another sheet than the manifest, a reference's
+hash or date not in its form, a log line with a bad escape.
