@@ -14,9 +14,11 @@ use super::scene::{self, Body, Placement, Scene};
 /// The most sensor events a world keeps unread; past it the oldest go, counted.
 pub const MAX_EVENTS: usize = 65_536;
 
-/// The penetration a contact is allowed before the solver pushes back, in metres: a millimetre,
-/// for parts measured in centimetres (Rapier's own default is 5 mm).
-const ALLOWED_PENETRATION: f32 = 0.001;
+/// A scene's time after `steps` steps of `step_ms`: counted in 64 bits, held at the most a
+/// duration holds rather than wrapped.
+pub fn time_at(step_ms: u32, steps: u64) -> Duration {
+    Duration::from_millis(u64::from(step_ms).saturating_mul(steps))
+}
 
 /// What a part of a scene is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -173,7 +175,6 @@ impl World {
         let mut w = PhysicsWorld::new();
         w.gravity = Vector::new(0.0, 0.0, -(scene.gravity as f32));
         w.integration_parameters.dt = scene.step_ms as f32 / 1000.0;
-        w.integration_parameters.normalized_allowed_linear_error = ALLOWED_PENETRATION;
         let ground = w.insert_body(RigidBodyBuilder::fixed());
         let (ctx, collisions) = channel();
         let (ftx, forces) = channel();
@@ -327,7 +328,7 @@ impl World {
 
     /// The scene's time: the steps taken times the step.
     pub fn time(&self) -> Duration {
-        Duration::from_millis(u64::from(self.step_ms).saturating_mul(self.steps))
+        time_at(self.step_ms, self.steps)
     }
 
     /// What a name is in this scene.

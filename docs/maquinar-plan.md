@@ -443,6 +443,10 @@ Recorded as the port meets them.
   `.config/nextest.toml`'s exclusive block with it. A run record of a file that holds one goes
   through `cargo nextest run`, which honours that block; `cargo test` runs a file's tests as threads
   of one process, the timed ones beside the rest (C-111's record failed so on 2026-11-23).
+- **Rapier's allowed linear error is not a deadzone.** `normalized_allowed_linear_error` reads like
+  the penetration a contact may keep; in Rapier 0.36.1 only the CCD solver uses it, and contacts
+  are corrected to zero penetration. A body on a lighter one sinks into it with the mass ratio
+  (2.6 mm at ten times). Measure a setting's effect before claiming it (C-114, round 2).
 - **A peek sees only the first byte.** The Modbus server watched a delayed answer's client with a
   one-byte peek; a request pipelined behind made the peek ready for good, and a close behind it went
   unseen till the delay ended. Read ahead into the connection's own buffer instead: the end of the

@@ -17,7 +17,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 pub use scene::{Belt, Body, Fixed, Mover, Placement, Scene, Sensor, load};
-pub use world::{BodyState, Kind, MAX_EVENTS, SensorEvent, SensorState, World};
+pub use world::{BodyState, Kind, MAX_EVENTS, SensorEvent, SensorState, World, time_at};
 
 /// Why a scene was refused, or a change to it.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

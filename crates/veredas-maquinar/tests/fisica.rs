@@ -422,7 +422,9 @@ fn the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene() {
     assert_eq!(h.time(), Duration::from_millis(4 * h.steps()));
     let s = h.status();
     assert_eq!((s.bodies, s.sensors), (1, 2));
-    assert!(s.late <= s.steps);
+    // A calm second: a step is late only past one step behind its time (refute round 2: every
+    // step counted late passed before).
+    assert!(s.late <= 5, "{} of {} steps counted late in a calm second", s.late, s.steps);
     // The handle reads and moves the scene as the world does.
     let c = h.body("carton-1").unwrap();
     assert!((c.velocity[0] - 0.5).abs() < 0.01, "{c:?}");
@@ -466,7 +468,11 @@ fn a_paused_scene_takes_no_step_till_it_runs_and_its_hooks_run_from_its_first() 
     // steps taken.
     let (calls, off) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicBool::new(false)));
     let (c, o) = (Arc::clone(&calls), Arc::clone(&off));
+    // The threads the hook ran on: one, the scene's (a second run starting another would show).
+    let threads = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+    let t = Arc::clone(&threads);
     h.add_hook(Box::new(move |w: &mut World| {
+        t.lock().unwrap().insert(format!("{:?}", std::thread::current().id()));
         if c.fetch_add(1, Ordering::SeqCst) != w.steps() {
             o.store(true, Ordering::SeqCst);
         }
@@ -481,6 +487,8 @@ fn a_paused_scene_takes_no_step_till_it_runs_and_its_hooks_run_from_its_first() 
     h.stop();
     assert!(!off.load(Ordering::SeqCst));
     assert_eq!(calls.load(Ordering::SeqCst), h.steps(), "one call before each step, a second run nothing");
+    let threads = threads.lock().unwrap().clone();
+    assert!(threads.len() == 1 && !threads.contains(&format!("{:?}", std::thread::current().id())), "{threads:?}");
     // Stopped, it never runs again; a paused scene stopped never runs.
     h.run().unwrap();
     let mut p = fisica::paused(&scene).unwrap();
@@ -543,7 +551,7 @@ mod round_1 {
         let s = scene("[[body]]\nname = \"b\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 1000.0]\n");
         let h = fisica::start(&s).unwrap();
         std::thread::sleep(Duration::from_millis(100));
-        let (first, begun) = (h.steps(), Instant::now());
+        let (first, begun, late0) = (h.steps(), Instant::now(), h.status().late);
         let mut once = false;
         h.add_hook(Box::new(move |_w| {
             if !once {
@@ -557,7 +565,9 @@ mod round_1 {
         let late = h.status().late;
         println!("P2 steps {n} due {due} late {late} in {elapsed:?}");
         assert!(n + 3 >= due && n <= due + 2, "caught up: {n} steps against {due}");
-        assert!(late >= 40, "the steps after the stall counted late: {late}");
+        // The 50 steps the stall put behind, counted late, and no more (refute round 2: a count
+        // of only steps nine behind, or of every step, passed a floor alone).
+        assert!((46..=55).contains(&(late - late0)), "the steps the stall put behind counted late: {}", late - late0);
     }
 
     /// P3: dropped while running, its thread ends: the hooks it ran stop being called and are dropped.
@@ -972,5 +982,198 @@ mod round_1 {
     fn a_body_s_mass_and_a_belt_s_speed_default_as_the_reference_says() {
         let s = scene("[[belt]]\nname = \"b\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\n[[body]]\nname = \"c\"\nsize = [1.0, 1.0, 1.0]\nat = [5.0, 0.0, 0.0]\n");
         assert_eq!((s.bodies[0].mass, s.belts[0].speed, s.bodies[0].friction, s.belts[0].friction), (1.0, 0.0, 0.6, 0.6));
+    }
+}
+
+/// C-114's second refute round: the critic's probes (`~/.cache/veredas/critic-c114-r2/probes`), kept
+/// as pins: a mover's velocity, a mover's and a sensor's angles from the file, movers in and out of a
+/// sensor, a stack on a slow belt, angles at the poles, a name freed and taken again in a sensor, a
+/// value of another kind, a part's index in a refusal, two worlds on two threads, how deep a body
+/// rests, and time in 64 bits.
+mod round_2 {
+    use veredas_maquinar::fisica::{self, Body, FisicaError, Placement, Scene, World};
+
+    fn scene(body: &str) -> Scene {
+        fisica::load(&format!("format = \"veredas-cena\"\nversion = 1\n{body}")).unwrap()
+    }
+    fn world(body: &str) -> World {
+        World::new(&scene(body)).unwrap()
+    }
+    fn steps(w: &mut World, n: u64) {
+        for _ in 0..n {
+            w.step();
+        }
+    }
+
+    #[test]
+    fn a_mover_s_velocity_is_read_while_it_moves_and_0_once_held() {
+        let mut w = world("gravity = 0\n[[mover]]\nname = \"blade\"\nsize = [0.05, 1.0, 0.4]\nat = [-1.0, 0.0, 0.2]\n");
+        steps(&mut w, 5);
+        let mut seen = Vec::new();
+        for i in 1..=50 {
+            w.place("blade", Placement::at([-1.0 + 1.5 * f64::from(i) / 250.0, 0.0, 0.2])).unwrap();
+            w.step();
+            seen.push(w.body("blade").unwrap().velocity);
+        }
+        w.step();
+        assert!(seen.iter().all(|v| (v[0] - 1.5).abs() < 1e-3 && v[1] == 0.0 && v[2] == 0.0), "{seen:?}");
+        assert_eq!(w.body("blade").unwrap().velocity, [0.0; 3]);
+    }
+
+    #[test]
+    fn a_mover_and_a_sensor_take_their_angles_from_the_file() {
+        let mut w = world("gravity = 0\n[[mover]]\nname = \"m\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 0.0]\nyaw = 30\npitch = 20\nroll = 10\n");
+        let before = w.body("m").unwrap().angles();
+        w.step();
+        for a in [before, w.body("m").unwrap().angles()] {
+            assert!((a[0] - 30.0).abs() < 1e-3 && (a[1] - 20.0).abs() < 1e-3 && (a[2] - 10.0).abs() < 1e-3, "{a:?}");
+        }
+        // A beam yawed 90°: it holds what lies along y, not along x.
+        let mut w = world(
+            "gravity = 0\n[[sensor]]\nname = \"beam\"\nsize = [2.0, 0.1, 0.1]\nat = [0.0, 0.0, 0.0]\nyaw = 90\n\
+             [[body]]\nname = \"on_y\"\nsize = [0.05, 0.05, 0.05]\nat = [0.0, 0.8, 0.0]\n\
+             [[body]]\nname = \"on_x\"\nsize = [0.05, 0.05, 0.05]\nat = [0.8, 0.0, 0.0]\n",
+        );
+        w.step();
+        assert_eq!(w.sensor("beam").unwrap().inside, ["on_y"]);
+    }
+
+    #[test]
+    fn a_mover_inside_a_sensor_is_seen_from_the_start_and_seen_leaving() {
+        let mut w = world("[[sensor]]\nname = \"s\"\nradius = 0.5\nat = [0.0, 0.0, 0.0]\n[[mover]]\nname = \"m\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 0.0]\n");
+        w.step();
+        assert_eq!((w.take_events().len(), w.sensor("s").unwrap().inside), (1, vec!["m".to_string()]));
+        // Still inside for 4 s: no leaving; then out: seen one step after it got there.
+        steps(&mut w, 1000);
+        assert!(w.take_events().is_empty());
+        w.place("m", Placement::at([3.0, 0.0, 0.0])).unwrap();
+        w.step();
+        let first = w.take_events();
+        w.step();
+        let second = w.take_events();
+        assert!(first.is_empty() && second.len() == 1 && !second[0].entered, "{first:?} {second:?}");
+    }
+
+    #[test]
+    fn a_stack_on_a_slow_belt_rides_together() {
+        let mut w = world(
+            "[[belt]]\nname = \"belt\"\nsize = [6.0, 0.6, 0.1]\nat = [0.0, 0.0, 0.75]\nspeed = 0.01\n\
+             [[body]]\nname = \"under\"\nsize = [0.3, 0.3, 0.3]\nat = [0.0, 0.0, 0.95]\nmass = 2.5\n\
+             [[body]]\nname = \"over\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 1.2005]\nmass = 1\n",
+        );
+        steps(&mut w, 50);
+        let (u0, o0) = (w.body("under").unwrap().at, w.body("over").unwrap().at);
+        steps(&mut w, 1250);
+        let (u1, o1) = (w.body("under").unwrap().at, w.body("over").unwrap().at);
+        assert!(((u1[0] - u0[0]) - 0.05).abs() < 0.002, "under {u0:?} {u1:?}");
+        assert!(((o1[0] - o0[0]) - (u1[0] - u0[0])).abs() < 0.002, "the top one left behind: {o0:?} {o1:?}");
+    }
+
+    #[test]
+    fn angles_at_the_poles_and_past_a_turn_read_back_in_range() {
+        let mut w = world("[[mover]]\nname = \"m\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 0.0]\n");
+        for (y, p, r) in [(30.0, 90.0, 0.0), (30.0, -90.0, 10.0), (0.0, 1e10, 0.0), (-1e-14, 0.0, 0.0), (0.0, 120.0, 0.0), (0.0, 0.0, 190.0), (1e300, 1e300, 1e300)] {
+            w.place("m", Placement { at: [0.0; 3], yaw: y, pitch: p, roll: r }).unwrap();
+            w.step();
+            let a = w.body("m").unwrap().angles();
+            assert!(a.iter().all(|v| v.is_finite()) && a[0].abs() <= 180.0 && a[2].abs() <= 180.0 && a[1].abs() <= 90.0, "({y}, {p}, {r}): {a:?}");
+        }
+    }
+
+    #[test]
+    fn a_name_freed_and_taken_again_inside_a_sensor_leaves_then_enters() {
+        let mut w = world("gravity = 0\n[[sensor]]\nname = \"s\"\nradius = 0.5\nat = [0.0, 0.0, 0.0]\n[[body]]\nname = \"x\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 0.0]\n");
+        w.step();
+        assert_eq!(w.take_events().len(), 1);
+        w.remove_body("x").unwrap();
+        w.add_body(&Body::new("x", [0.1; 3], [0.1, 0.0, 0.0])).unwrap();
+        assert_eq!(w.take_events().len(), 1, "the leaving at the removal");
+        w.step();
+        let next = w.take_events();
+        steps(&mut w, 5);
+        assert!(next.len() == 1 && next[0].entered && w.take_events().is_empty(), "{next:?}");
+        assert_eq!(w.sensor("s").unwrap().inside, ["x"]);
+    }
+
+    #[test]
+    fn a_value_of_another_kind_or_a_missing_key_is_refused_and_a_refusal_names_the_part_s_index() {
+        for body in ["step_ms = -1\n", "step_ms = \"4\"\n", "gravity = \"g\"\n", "[[body]]\nname = \"b\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\nmass = \"heavy\"\n"] {
+            let e = fisica::load(&format!("format = \"veredas-cena\"\nversion = 1\n{body}")).unwrap_err();
+            assert!(matches!(e, FisicaError::NotToml(_)), "{body}: {e:?}");
+        }
+        for body in ["[[body]]\nname = \"b\"\nsize = [1.0, 1.0, 1.0]\n", "[[body]]\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\n", "[[fixed]]\nname = \"f\"\nat = [0.0, 0.0, 0.0]\n"] {
+            assert!(matches!(fisica::load(&format!("format = \"veredas-cena\"\nversion = 1\n{body}")), Err(FisicaError::NotToml(_))), "{body}");
+        }
+        let e = fisica::load("format = \"veredas-cena\"\nversion = 1\n[[body]]\nname = \"a\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\n[[body]]\nname = \"b\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\nmass = 0\n").unwrap_err();
+        assert_eq!(e.to_string(), "body[1] (`b`).mass: 0 kg, not over 0 and up to 100000");
+    }
+
+    #[test]
+    fn two_worlds_on_two_threads_at_once_run_as_one_alone() {
+        let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/cena-schema.md")).unwrap();
+        let start = text.find("```toml\n").unwrap() + 8;
+        let s = fisica::load(&text[start..start + text[start..].find("```").unwrap()]).unwrap();
+        let run = |s: Scene| {
+            let mut w = World::new(&s).unwrap();
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            for i in 0..1500u32 {
+                match i {
+                    300 => w.add_body(&Body { mass: 4.0, yaw: 10.0, ..Body::new("carton-2", [0.3, 0.4, 0.2], [0.3, 0.0, 1.2]) }).unwrap(),
+                    600 => w.set_speed("infeed", 0.8).unwrap(),
+                    900 => w.remove_body("carton-1").unwrap(),
+                    1000..=1100 => w.place("pusher", Placement::at([3.5, -0.4 + 0.0065 * f64::from(i - 1000), 0.95])).unwrap(),
+                    _ => {}
+                }
+                w.step();
+                for b in w.bodies() {
+                    for f in b.at.iter().chain(b.rotation.iter()).chain(b.velocity.iter()) {
+                        h = (h ^ u64::from(f.to_bits())).wrapping_mul(0x100_0000_01b3);
+                    }
+                }
+                for e in w.take_events() {
+                    h = (h ^ (e.step << 1 | u64::from(e.entered))).wrapping_mul(0x100_0000_01b3);
+                }
+            }
+            h
+        };
+        let alone = run(s.clone());
+        let (a, b) = (s.clone(), s.clone());
+        let (t1, t2) = (std::thread::spawn(move || run(a)), std::thread::spawn(move || run(b)));
+        assert_eq!((t1.join().unwrap(), t2.join().unwrap()), (alone, alone));
+    }
+
+    #[test]
+    fn a_body_rests_on_a_fixed_part_within_a_tenth_of_a_millimetre_and_sinks_into_a_lighter_one() {
+        // On the floor, whatever its mass and size: 0.07 mm deep.
+        for (mass, size) in [(1.0, 0.2), (100000.0, 0.2), (5.0, 0.02), (100000.0, 1.0)] {
+            let half = size / 2.0;
+            let mut w = world(&format!(
+                "[[fixed]]\nname = \"floor\"\nsize = [4.0, 4.0, 0.2]\nat = [0.0, 0.0, -0.1]\n[[body]]\nname = \"box\"\nsize = [{size}, {size}, {size}]\nat = [0.0, 0.0, {}]\nmass = {mass}\n",
+                half + 0.05
+            ));
+            steps(&mut w, 500);
+            let deep = f64::from(half as f32 - w.body("box").unwrap().at[2]);
+            assert!((0.0..1e-4).contains(&deep), "{mass} kg of {size} m: {deep} m deep");
+        }
+        // On a 1 kg box: ten times its mass sinks 2.6 mm into it, a hundred times 26 mm.
+        let on_light = |top: f64| {
+            let mut w = world(&format!(
+                "[[fixed]]\nname = \"floor\"\nsize = [4.0, 4.0, 0.2]\nat = [0.0, 0.0, -0.1]\n\
+                 [[body]]\nname = \"light\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.1]\nmass = 1\n\
+                 [[body]]\nname = \"heavy\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.3005]\nmass = {top}\n"
+            ));
+            steps(&mut w, 1000);
+            let (l, h) = (w.body("light").unwrap().at[2], w.body("heavy").unwrap().at[2]);
+            f64::from(0.2 - (h - l))
+        };
+        let (ten, hundred) = (on_light(10.0), on_light(100.0));
+        assert!((0.002..0.0035).contains(&ten) && (0.02..0.035).contains(&hundred), "{ten} m, {hundred} m");
+    }
+
+    #[test]
+    fn a_scene_s_time_counts_past_2_to_the_32_steps_and_holds_at_its_most() {
+        let past = (1u64 << 32) + 1;
+        assert_eq!(fisica::time_at(4, past), std::time::Duration::from_millis(4 * past));
+        assert_eq!(fisica::time_at(100, u64::MAX), std::time::Duration::from_millis(u64::MAX));
     }
 }
