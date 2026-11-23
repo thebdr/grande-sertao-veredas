@@ -285,17 +285,45 @@ Verified by running each, not assumed:
 - That the OVA imports into each product named by Q435 (Workstation Pro, Fusion, ESXi) and the
   machine boots there; that VMware's own SCSI and network devices behave as QEMU's models of them
   do; that open-vm-tools resizes the screen and shuts down cleanly.
-- To try it, the architect installs VMware Workstation Pro 17 (free for every use since November
-  2024) on a Windows or Linux computer, or uses an existing ESXi or Fusion on an Intel Mac, opens
-  the OVA (File > Open), boots it, and opens `http://<machine>:8902/` from the host. Broadcom's
-  `ovftool` (a free download behind a Broadcom account) also validates the descriptor without
-  running it. Apple-silicon Macs run only arm64 guests in Fusion: this image is x86_64 (Q435).
+- To try it, the architect follows "The architect's trial" below. Broadcom's `ovftool` (a free
+  download behind a Broadcom account) also validates the descriptor without running it.
+  Apple-silicon Macs run only arm64 guests in Fusion: this image is x86_64 (Q435).
+
+### The architect's trial (what P-022 waits on)
+The OVA is `/home/thebdr/veredas-entrega/veredas-2.0.0-alpha.1.ova` (1.09 GB, never committed),
+its SHA-256 beside it in `veredas-2.0.0-alpha.1.ova.sha256`; the same machine `entrega prova`
+passed on 2026-11-23.
+1. **Check the copy**: `sha256sum -c veredas-2.0.0-alpha.1.ova.sha256` (Linux), or on Windows
+   `certutil -hashfile veredas-2.0.0-alpha.1.ova SHA256` against the file's first word.
+2. **Open it**: VMware Workstation Pro 17 on Windows or Linux (free), File > Open, the OVA, a name
+   and a folder, Import; the network adapter stays NAT. Fusion 13 on an Intel Mac: File > Import.
+   ESXi 7 or 8: Create / Register VM > Deploy a virtual machine from an OVF or OVA file. A warning
+   at import is worth its exact text even when Retry gets past it.
+3. **First boot** (Power on): within two minutes Debian logs in by itself as `veredas` (password
+   `veredas`, asked only by `sudo`) to an Xfce desktop, and Chromium opens full-window on the plant,
+   `http://127.0.0.1:8902/s/loop/`: parcels moving along the loop, outlets filling; "Release" is
+   offered and refused (writes are off).
+4. **Look at** (a terminal: the Applications menu > Terminal Emulator):
+   - the display: resizing VMware's window (or View > Fit Guest Now) resizes the desktop, and
+     `lsmod | grep vmwgfx` names VMware's display driver;
+   - the devices: `lsmod | grep -E 'vmw_pvscsi|vmxnet3'` names both;
+   - the guest tools: VMware's summary of the machine shows its tools running and its IP address;
+   - the boot's check: `journalctl -b -u veredas-verifica --no-pager` says `VEREDAS-SUMS-OK
+     2.0.0-alpha.1` and `ok`, `absent` or `disabled` on each of its other lines;
+   - the network: in the host's own browser, `http://<the machine's address>:8902/s/loop/` (the
+     address from the summary, or `ip -4 addr` in the machine) shows the same plant, live;
+   - the shutdown: VM > Power > Shut Down Guest powers the machine off cleanly.
+5. **If a step fails, send back**: the product and its version (Help > About), the step, a
+   screenshot, and the output of `journalctl -b --no-pager -u veredas-verifica -u veredas-bancada
+   -u veredas-supervisao`, `lsmod | grep -E 'vmwgfx|vmw_pvscsi|vmxnet3'` and `ip -4 addr`; for an
+   import or a boot that fails, the `vmware.log` in the machine's folder.
 
 ### Delivery and updates
 - **An OVA**, one file every VMware product opens, VirtualBox too: 1.09 GB for 2.0.0-alpha.1
   (the disk 16 GB to the guest, 1.09 GB stream-optimized; provisioned in about 12 minutes).
   Where it is published is Q436: a GitHub release of the repository (2 GB per file) or a share
-  the architect names. Until ruled, it is built and kept on this machine.
+  the architect names. Until ruled, it is built and kept on this machine: the one to try in
+  `/home/thebdr/veredas-entrega/`, outside the repository and every build folder.
 - **Updates** (Q437): meanwhile a new OVA per release, the machine disposable; then an update
   command in the machine that fetches a newer bundle, checks its sums and its manifest, installs it
   beside the old one under `/opt/veredas/` and moves `current`, leaving the plant's files alone.
@@ -311,7 +339,9 @@ Measured on release 2.0.0-alpha.1 (2026-11-22):
   built (160 MB), the run's copy of the plant (small).
 - **During a machine's build**: its copy-on-write disk (about 2.8 GB) and the VMDK, removed once
   the OVA is packed; **kept**: the OVA alone (1.09 GB). The proof's copy of the disk taken out of
-  the OVA (1.09 GB) is removed after `entrega prova` reports.
+  the OVA (1.09 GB) is removed after `entrega prova` reports. The proven OVA the architect tries
+  is copied, with its SHA-256, to `/home/thebdr/veredas-entrega/` (1.09 GB), which no reset of a
+  build folder touches.
 - A superseded or failed cut's folder is removed whole; a trial's, by its test when it passes.
 
 ## Rules
