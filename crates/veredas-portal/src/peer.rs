@@ -350,7 +350,7 @@ impl PeerClient {
         let _ = stream.set_nodelay(true);
         let request = format!("GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: {accept}\r\nConnection: close\r\n\r\n", self.addr);
         stream.write_all(request.as_bytes()).await.map_err(|e| PeerError::Link { addr: self.addr.clone(), text: e.to_string() })?;
-        let mut body = Body { addr: self.addr.clone(), reader: BufReader::new(stream), framing: Framing::ToEnd, left: 0, finished: false };
+        let mut body = Body { addr: self.addr.clone(), reader: BufReader::new(stream), framing: Framing::ToEnd, left: 0, finished: false, line_buf: Vec::new(), crlf_due: false, trailers: false };
         let status_line = body.line().await?;
         let mut parts = status_line.splitn(3, ' ');
         let version = parts.next().unwrap_or_default();
@@ -411,12 +411,19 @@ enum Framing {
     ToEnd,
 }
 
+/// An answer's body on its socket, read so that a call dropped midway (a caller's timeout, a
+/// `select!`) loses nothing: the bytes of a line read so far, a chunk's line end still owed and the
+/// trailers being read are kept here, and a chunk's data is handed over before its line end is
+/// waited for, so the next call goes on where the dropped one stopped.
 struct Body {
     addr: String,
     reader: BufReader<TcpStream>,
     framing: Framing,
     left: u64,
     finished: bool,
+    line_buf: Vec<u8>,
+    crlf_due: bool,
+    trailers: bool,
 }
 
 impl Body {
@@ -426,16 +433,21 @@ impl Body {
 
     /// One line, its CRLF (or LF) dropped, at most [`HEAD_LIMIT`] long.
     async fn line(&mut self) -> Result<String, PeerError> {
-        let mut raw = Vec::new();
-        let mut limited = (&mut self.reader).take(HEAD_LIMIT as u64 + 2);
-        let read = limited.read_until(b'\n', &mut raw).await;
-        let n = read.map_err(|e| self.link(e.to_string()))?;
-        if n == 0 {
-            return Err(self.link("the connection closed before the answer's end"));
+        // The line's bytes gather in `line_buf`, which outlives a dropped call.
+        let room = (HEAD_LIMIT as u64 + 2).saturating_sub(self.line_buf.len() as u64);
+        let read = (&mut self.reader).take(room).read_until(b'\n', &mut self.line_buf).await;
+        read.map_err(|e| self.link(e.to_string()))?;
+        if !self.line_buf.ends_with(b"\n") {
+            let partial = std::mem::take(&mut self.line_buf).len();
+            return Err(if partial > HEAD_LIMIT {
+                PeerError::TooLarge { limit: HEAD_LIMIT }
+            } else if partial == 0 {
+                self.link("the connection closed before the answer's end")
+            } else {
+                self.link("the connection closed inside a line")
+            });
         }
-        if !raw.ends_with(b"\n") {
-            return Err(if raw.len() > HEAD_LIMIT { PeerError::TooLarge { limit: HEAD_LIMIT } } else { self.link("the connection closed inside a line") });
-        }
+        let mut raw = std::mem::take(&mut self.line_buf);
         raw.pop();
         if raw.ends_with(b"\r") {
             raw.pop();
@@ -448,17 +460,29 @@ impl Body {
         if self.finished {
             return Ok(None);
         }
-        if self.framing == Framing::Chunked && self.left == 0 {
+        // The line end a chunk's data was handed over without.
+        if self.crlf_due {
+            if !self.line().await?.is_empty() {
+                return Err(PeerError::Shape("a chunk not ended by its line end".into()));
+            }
+            self.crlf_due = false;
+        }
+        if self.framing == Framing::Chunked && self.left == 0 && !self.trailers {
             let line = self.line().await?;
             let size = line.split(';').next().unwrap_or_default().trim();
             let size = u64::from_str_radix(size, 16).map_err(|_| PeerError::Shape(format!("a chunk's size `{line}`")))?;
             if size == 0 {
-                // The trailers, then the blank line that ends the message.
-                while !self.line().await?.is_empty() {}
-                self.finished = true;
-                return Ok(None);
+                self.trailers = true;
+            } else {
+                self.left = size;
             }
-            self.left = size;
+        }
+        if self.trailers {
+            // The trailers, then the blank line that ends the message.
+            while !self.line().await?.is_empty() {}
+            self.trailers = false;
+            self.finished = true;
+            return Ok(None);
         }
         if self.framing == Framing::Length && self.left == 0 {
             self.finished = true;
@@ -480,9 +504,9 @@ impl Body {
         buf.truncate(n);
         if self.framing != Framing::ToEnd {
             self.left -= n as u64;
-            if self.framing == Framing::Chunked && self.left == 0 && !self.line().await?.is_empty() {
-                return Err(PeerError::Shape("a chunk not ended by its line end".into()));
-            }
+            // The chunk's line end is read by the next call, so its data is never held across a
+            // wait.
+            self.crlf_due = self.framing == Framing::Chunked && self.left == 0;
         }
         Ok(Some(buf))
     }
@@ -575,7 +599,8 @@ pub struct PeerEvents {
 }
 
 impl PeerEvents {
-    /// The next event. An error ends the stream (`Closed` when the peer ended it, `Silent` when
+    /// The next event, cancel-safe: a call dropped while it waits (a caller's timeout) loses no
+    /// byte of the stream, and the next call returns what was in flight. An error ends the stream (`Closed` when the peer ended it, `Silent` when
     /// nothing came for [`STREAM_SILENCE`], `Link` when the connection broke), and every later
     /// call answers `Closed`: a reader opens a new stream, whose hello says where the peer is, and
     /// reads the gap again by window. An event of a kind this reader does not know is skipped.

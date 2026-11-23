@@ -165,6 +165,10 @@ fn a_portal_reads_another_s_snapshot_listing_windows_tables_and_tags() {
         assert_eq!((page.total, page.truncated), (19, false));
         let chart = peer.table_chart(&TableChart { table: "readings", y: "temp", points: Some(10), ..Default::default() }).await.unwrap();
         assert_eq!((chart.total, chart.points.len(), chart.points[9]), (40, 10, (stamp_ms(39), Some(temp(39)))));
+        let chart = peer.table_chart(&TableChart { table: "readings", y: "temp", from_ms: Some(stamp_ms(10)), to_ms: Some(stamp_ms(19)), ..Default::default() }).await.unwrap();
+        assert_eq!(chart.points, (10..20).map(|i| (stamp_ms(i), Some(temp(i)))).collect::<Vec<_>>(), "a chart's window");
+        let chart = peer.table_chart(&TableChart { table: "readings", y: "temp", key: Some("A1"), ..Default::default() }).await.unwrap();
+        assert_eq!(chart.total, 13, "a chart's key: items 1, 4, ..., 37");
         match peer.table_page(&TablePage { table: "nope", ..Default::default() }).await {
             Err(PeerError::Status { code, text }) => assert_eq!((code, text.as_str()), (404, "unknown table `nope`")),
             other => panic!("{other:?}"),
@@ -523,4 +527,87 @@ fn every_bound_holds_whatever_the_framing() {
         Err(PeerError::Shape(text)) => assert!(text.contains("missing field `window_ms`"), "{text}"),
         other => panic!("{other:?}"),
     }
+}
+
+/// A stream read through a caller's timeouts loses nothing: a chunk's line end held back, then
+/// the next chunk's size line cut in two, each across several dropped calls; the events come in
+/// order, then the end, never a refusal of the peer's framing.
+#[test]
+fn a_stream_read_through_a_caller_s_timeouts_loses_nothing() {
+    let event = |ms: i64| format!("event: data\ndata: {{\"samples\":[{{\"src\":\"s\",\"ser\":\"t\",\"k\":null,\"ms\":{ms},\"v\":1.5,\"n\":{ms}}}]}}\n\n");
+    let (one, two) = (event(1), event(2));
+    let (addr, _) = fake_peer(move |s| {
+        let size = format!("{:x}", two.len());
+        let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{one}", one.len());
+        let _ = s.flush();
+        std::thread::sleep(Duration::from_millis(700));
+        let _ = write!(s, "\r\n{}", &size[..1]);
+        let _ = s.flush();
+        std::thread::sleep(Duration::from_millis(700));
+        let _ = write!(s, "{}\r\n{two}\r\n0\r\n\r\n", &size[1..]);
+    });
+    let rt = reader();
+    let mut events = rt.block_on(PeerClient::new(addr.to_string()).event_stream()).unwrap();
+    let (mut got, mut dropped) = (Vec::new(), 0);
+    let end = loop {
+        match rt.block_on(async { tokio::time::timeout(Duration::from_millis(300), events.next_event()).await }) {
+            Err(_) => dropped += 1,
+            Ok(Ok(PeerEvent::Data(samples))) => got.extend(samples.iter().map(|s| s.index_ms)),
+            Ok(other) => break other,
+        }
+        assert!(dropped < 40, "the stream never came: {got:?}");
+    };
+    assert_eq!(got, vec![1, 2]);
+    assert!(dropped >= 2, "calls dropped while bytes were held back: {dropped}");
+    assert!(matches!(end, Err(PeerError::Closed)), "{end:?}");
+}
+
+/// The stream's opening is bounded by the call's time, and its refusal is the peer's own words;
+/// every key the interface always writes, missing, is refused by name, in a data event as in each
+/// typed answer.
+#[test]
+fn the_stream_s_opening_is_bounded_and_every_key_is_required() {
+    let rt = reader();
+    let (dead, _) = fake_peer(|_| std::thread::sleep(Duration::from_secs(20)));
+    let started = Instant::now();
+    let r = rt.block_on(PeerClient::new(dead.to_string()).with_timeout(Duration::from_millis(500)).event_stream());
+    assert!(matches!(&r, Err(e @ PeerError::Timeout { ms: 500, .. }) if e.to_string().contains(&dead.to_string())), "{:?}", r.as_ref().err());
+    assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+    let (busy, _) = fake_peer(|s| {
+        let _ = s.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 16\r\n\r\n{\"error\":\"busy\"}");
+    });
+    match rt.block_on(PeerClient::new(busy.to_string()).event_stream()) {
+        Err(PeerError::Status { code, text }) => assert_eq!((code, text.as_str()), (503, "busy")),
+        other => panic!("{:?}", other.err()),
+    }
+    // A data event's sample without its value, or its key.
+    for (sample, field) in [(r#"{"src":"s","ser":"t","k":null,"ms":1,"n":1}"#, "v"), (r#"{"src":"s","ser":"t","ms":1,"v":1.5,"n":1}"#, "k")] {
+        let body = format!("event: data\ndata: {{\"samples\":[{sample}]}}\n\n");
+        let (addr, _) = fake_peer(move |s| {
+            let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        });
+        let mut events = rt.block_on(PeerClient::new(addr.to_string()).event_stream()).unwrap();
+        match rt.block_on(events.next_event()) {
+            Err(PeerError::Shape(text)) => assert!(text.contains(&format!("missing field `{field}`")), "{text}"),
+            other => panic!("{field}: {other:?}"),
+        }
+    }
+    // Each typed answer without one of its always-written keys.
+    let answer = |body: &'static str| {
+        fake_peer(move |s| {
+            let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        })
+        .0
+        .to_string()
+    };
+    let shape = |r: Result<(), PeerError>, field: &str| match r {
+        Err(PeerError::Shape(text)) => assert!(text.contains(&format!("missing field `{field}`")), "{text}"),
+        other => panic!("{field}: {other:?}"),
+    };
+    let listing = answer(r#"{"series":[{"source":"s","series":"t","type":"float","count":1,"keys":0,"keys_capped":false,"last_value":"1"}]}"#);
+    shape(rt.block_on(PeerClient::new(listing).series()).map(drop), "last_ms");
+    let catalog = answer(r#"{"tables":[{"name":"t","kind":"base","columns":[]}]}"#);
+    shape(rt.block_on(PeerClient::new(catalog).tables()).map(drop), "rows");
+    let tag = answer(r#"{"source":"plc","tag":"x","ok":true,"status":"Good"}"#);
+    shape(rt.block_on(PeerClient::new(tag).tag_read("plc", "x")).map(drop), "value");
 }
