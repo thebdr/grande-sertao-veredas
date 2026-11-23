@@ -11,15 +11,15 @@
     "host"
   ],
   "exitCode": 0,
-  "outputSha": "f2da5d0eec67a1499b9ee395f7fab550bcd88164b40f96f2f29149348065368e",
-  "outputTail": "        PASS [   0.600s] ( 1/10) veredas-supervisao::host a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first\n        PASS [  14.723s] ( 2/10) veredas-supervisao::host a_stop_waits_for_a_dashboard_still_computed\n        PASS [   0.898s] ( 3/10) veredas-supervisao::host a_stream_sends_a_snapshot_on_connect_and_again_once_it_falls_behind\n        PASS [   1.368s] ( 4/10) veredas-supervisao::host every_answer_is_marked_nosniff_whatever_its_status\n        PASS [   0.184s] ( 5/10) veredas-supervisao::host nothing_starts_before_the_address_is_held_nor_under_check\n        PASS [   1.561s] ( 6/10) veredas-supervisao::host every_kind_of_store_a_project_keeps_is_the_one_its_session_runs_with\n        PASS [   2.009s] ( 7/10) veredas-supervisao::host the_executable_serves_a_file_until_stdin_closes\n        PASS [   3.511s] ( 8/10) veredas-supervisao::host one_session_at_the_root_hands_over_to_its_page_refusing_nothing\n        PASS [   9.329s] ( 9/10) veredas-supervisao::host two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal\n        SLOW [> 60.000s] (─────) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        SLOW [>120.000s] (─────) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        SLOW [>180.000s] (─────) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        PASS [ 221.591s] (10/10) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n────────────\n     Summary [ 241.383s] 10 tests run: 10 passed (1 slow), 0 skipped",
-  "ranAt": "2026-11-23T06:14:36.721Z",
-  "headCommit": "fe53acdbcbe8bb25e488dafdd8535c318ef0e42d",
+  "outputSha": "59a57d211fa03d1f85f856ed2f4d8c9eefdea733dcc3d0777f9db2fd5dd77a1a",
+  "outputTail": "        PASS [   2.139s] ( 1/10) veredas-supervisao::host a_session_that_does_not_start_is_named_and_a_bind_taken_is_refused_first\n        PASS [  16.210s] ( 2/10) veredas-supervisao::host a_stop_waits_for_a_dashboard_still_computed\n        PASS [   0.162s] ( 3/10) veredas-supervisao::host a_stream_sends_a_snapshot_on_connect_and_again_once_it_falls_behind\n        PASS [   0.696s] ( 4/10) veredas-supervisao::host every_answer_is_marked_nosniff_whatever_its_status\n        PASS [   0.315s] ( 5/10) veredas-supervisao::host nothing_starts_before_the_address_is_held_nor_under_check\n        PASS [   1.542s] ( 6/10) veredas-supervisao::host every_kind_of_store_a_project_keeps_is_the_one_its_session_runs_with\n        PASS [   2.103s] ( 7/10) veredas-supervisao::host the_executable_serves_a_file_until_stdin_closes\n        PASS [   4.187s] ( 8/10) veredas-supervisao::host one_session_at_the_root_hands_over_to_its_page_refusing_nothing\n        PASS [   9.368s] ( 9/10) veredas-supervisao::host two_sessions_are_served_side_by_side_each_under_its_name_with_its_portal\n        SLOW [> 60.000s] (─────) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        SLOW [>120.000s] (─────) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        SLOW [>180.000s] (─────) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n        PASS [ 224.610s] (10/10) veredas-supervisao::host the_page_loads_and_runs_its_own_files_alone_whatever_its_drawing_points_to\n────────────\n     Summary [ 246.769s] 10 tests run: 10 passed (1 slow), 0 skipped",
+  "ranAt": "2026-11-23T14:20:16.042Z",
+  "headCommit": "2043f4b94577c7d72760f0d5ebe3f7bcdf2535b7",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/host.rs",
       "file": "crates/veredas-supervisao/tests/host.rs",
-      "fileSha": "84c86d98ceb1fc45a1f1733b7257072708b9c571f209a2d28c344db0f9c10dbe"
+      "fileSha": "296f46539c332a3f239df997e3fe68203c9c95f63e0fa8cd1947a99daccfb1de"
     }
   ]
 }
