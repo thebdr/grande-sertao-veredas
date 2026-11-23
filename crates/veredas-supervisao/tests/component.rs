@@ -1079,6 +1079,20 @@ fn dep_info_of(text: &str) -> (Vec<PathBuf>, Vec<String>) {
     (files, envs)
 }
 
+/// The files a dep-info says the compiler wrote, each output line's path (written before its `: `),
+/// the dep-info itself among them.
+fn outputs_of(text: &str) -> Vec<String> {
+    text.lines().filter(|l| !l.starts_with('#') && l.contains(": ")).map(|l| l.split(": ").next().unwrap_or("").to_string()).collect()
+}
+
+/// Whether a dep-info is a check's (`cargo check`, clippy): one that wrote the crate's metadata
+/// alone, no library (`.rlib`) and no executable, so compiled no code into either. Clippy's records
+/// its driver's own variables (`CLIPPY_ARGS`, `CLIPPY_CONF_DIR`), which no source here reads.
+fn a_check(text: &str) -> bool {
+    let made: Vec<String> = outputs_of(text).into_iter().filter(|o| !o.ends_with(".d")).collect();
+    !made.is_empty() && made.iter().all(|o| o.ends_with(".rmeta"))
+}
+
 /// Whether the build a dep-info records is current for the files here, by cargo's own rule for
 /// reusing a build: every file it lists (relative to `workspace`, where cargo runs the compiler) is
 /// there and none is newer than the dep-info itself. A stale one cargo rebuilds before it is used.
@@ -1095,7 +1109,8 @@ fn current(dep_info: &Path, files: &[PathBuf], workspace: &Path) -> bool {
 /// reused for this test, is always read, whatever else the target directory holds: a build of
 /// another checkout sharing it, newer, is read beside it (current here too, or passed over), never
 /// in its place, and a build kept from an earlier state of the tree, which cargo would rebuild, is
-/// passed over.
+/// passed over; and so is a check's (`a_check`: it compiles no code into either), a lint run's in the
+/// same folder among them.
 fn compiled_files(workspace: &Path) -> BTreeMap<&'static str, Vec<(PathBuf, Vec<PathBuf>, Vec<String>)>> {
     let (dirs, profile) = build_dirs();
     let mut infos = BTreeSet::new();
@@ -1113,6 +1128,9 @@ fn compiled_files(workspace: &Path) -> BTreeMap<&'static str, Vec<(PathBuf, Vec<
         } else {
             continue;
         };
+        if a_check(&text) {
+            continue;
+        }
         let (files, envs) = dep_info_of(&text);
         if current(&path, &files, workspace) {
             read.entry(kind).or_default().push((path, files, envs));
@@ -1140,6 +1158,14 @@ fn a_build_is_read_while_it_is_current() {
     std::fs::remove_file(dir.join("src/lib.rs")).unwrap();
     assert!(!current(&dir.join("lib.d"), &files, &dir), "a file gone");
     std::fs::remove_dir_all(&dir).unwrap();
+    // A check (`cargo check`, clippy) writes the crate's metadata alone and compiles no code: passed
+    // over, its driver's variables with it; a library's build (its `.rlib` and `.rmeta`) and an
+    // executable's are read.
+    let check = "out/x.d: src/main.rs\nout/libx.rmeta: src/main.rs\n\nsrc/main.rs:\n\n# env-dep:CLIPPY_ARGS=__CLIPPY_HACKERY__\n# env-dep:CLIPPY_CONF_DIR\n";
+    assert!(a_check(check), "a check's dep-info");
+    assert!(!a_check("out/x.d: src/lib.rs\nout/libx.rlib: src/lib.rs\nout/libx.rmeta: src/lib.rs\n\nsrc/lib.rs:\n"), "a library's build");
+    assert!(!a_check("out/x.d: src/main.rs\nout/x: src/main.rs\n\nsrc/main.rs:\n"), "an executable's build");
+    assert!(!a_check("out/x.exe: src/main.rs\n\nsrc/main.rs:\n"), "an executable's build, on Windows");
 }
 
 /// What the crate builds and what the compiler reads for it: each target's source where the crate's
